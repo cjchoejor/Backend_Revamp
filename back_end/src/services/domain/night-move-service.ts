@@ -62,14 +62,21 @@ import {
  * nights); the same-or-new-enquiry choice is asked once and applies to every new booking (a new
  * enquiry holds them all); the desk picks a night with Alt on the house chart.
  *
+ * SEVERAL ROOMS AT ONCE (2026-10-15, operator: "hold Alt and Ctrl and select multiple individual
+ * rooms and move it"). Rulings (asked): the rooms are ONE booking's; each room carries its own run of
+ * nights, and the drag shifts every pick by the same days and rows; stays that leave the booking on
+ * the same dates are ONE booking holding all their rooms. When every room of the booking is picked
+ * their nights must be the same — the booking then keeps its earliest stay with all its rooms, as a
+ * one-room booking does; otherwise the picked rooms leave the booking with their guests.
+ *
  * Two shapes, each the governed act its step already has:
  *
  *   - **Same dates, another room** — a room change for those nights: at Negotiation the change of
- *     configuration, from Set up on the room-change walk in its per-night form.
+ *     configuration, from Set up on the room-change walk in its per-night form, one walk per room.
  *   - **Other dates** — the stays are cut apart. The original: at Negotiation the change of
  *     configuration (its dates, or its party and rooms); from Set up to Arrival the walk shortening
- *     the stay (one room) or splitting the room off (several). Each new stay: a booking made under
- *     the enquiry chosen, walked to the original's step or started at Inquiry, as a split does.
+ *     the stay (every room picked) or splitting the rooms off (some). Each new stay: a booking made
+ *     under the enquiry chosen, walked to the original's step or started at Inquiry, as a split does.
  *
  * The preview writes nothing; every refusal is said in words before anything runs.
  */
@@ -77,15 +84,23 @@ import {
 type NightPriceMode = "KEEP" | "NEW_DATES" | "NEW_TYPE";
 export type NightMoveMode = "ROOM_CHANGE" | "SPLIT";
 
+/** One room's nights in a move — the room, the run of its nights that moves, where they land. */
+export type NightMovePick = { fromRoomId: string; nights: string[]; toRoomId?: string | null };
+
+/** At most this many rooms' nights move in one go. */
+const MAX_PICKS = 8;
+
 export type NightMoveRequest = {
   entryId: string;
-  /** The room whose nights were dragged. */
-  fromRoomId: string;
+  /** The room whose nights were dragged (one room — `picks` names several). */
+  fromRoomId?: string;
   /** The nights that move, as they are now ("YYYY-MM-DD") — one run of the room's nights. */
-  nights: string[];
+  nights?: string[];
   /** Where they land; the same room when only the dates change. */
   toRoomId?: string | null;
-  /** The first moved night's new date — the same as the first night when only the room changes. */
+  /** Several rooms' nights moved together (2026-10-15) — the first is the one dragged. */
+  picks?: NightMovePick[];
+  /** The dragged room's first moved night's new date — the same as its first night when only rooms change. */
   newFirstNight: string;
   /** KEEP, or a re-price: at the new dates (other dates) or at the new room type (same dates). */
   priceMode?: NightPriceMode;
@@ -103,15 +118,29 @@ export type NightMovePreview = {
   inquiryId: string;
   stage: string;
   stageWord: string;
+  /** The room dragged — the first of `moves`. */
   from: { roomId: string; roomNumber: string; nightsLabel: string; nights: number };
   to: { roomId: string; roomNumber: string; nightsLabel: string; checkInDate: string; checkOutDate: string; nights: number; sameType: boolean };
+  /** Every room's nights that move, the dragged room first. */
+  moves: Array<{
+    fromRoomId: string;
+    fromRoomNumber: string;
+    fromLabel: string;
+    toRoomId: string;
+    toRoomNumber: string;
+    toLabel: string;
+    nights: number;
+    sameType: boolean;
+  }>;
   shiftDays: number;
   /** What the booking keeps, and its price before and after. */
   original: { words: string; guests: string; priceBefore: number | null; priceAfter: number | null; note: string | null };
   /** Every new booking the move makes (other dates only), in date order. */
   pieces: Array<{
     kind: "MOVED" | "LEFT";
+    /** "205" · "205 + 305" */
     roomNumber: string;
+    roomNumbers: string[];
     checkInDate: string;
     checkOutDate: string;
     nights: number;
@@ -137,6 +166,8 @@ export type NightMoveResult = {
   mode: NightMoveMode;
   target: SplitTarget | null;
   source: { entryId: string; route: "NEGOTIATION" | "WALK"; walk: RoomChangeOutcome | null; amendment: NegotiationAmendmentOutcome | null };
+  /** Same dates, several rooms: one walk per room, in order — a refused one stops the rest. */
+  walks: Array<{ fromRoomNumber: string; toRoomNumber: string; nightsLabel: string; walk: RoomChangeOutcome | null; error: string | null }>;
   created: Array<PieceOutcome & { kind: "MOVED" | "LEFT"; roomNumber: string }>;
   newInquiryId: string | null;
 };
@@ -171,31 +202,64 @@ async function planNightMove(prisma: PrismaClient, actor: Actor, input: NightMov
   const planRooms = Array.from(new Set(picture.flatMap((n) => n.roomIds)));
   if (!sealed || planRooms.length === 0) refusals.push("No rooms are picked for this booking yet");
 
-  const R = input.fromRoomId.trim();
-  if (!planRooms.includes(R)) throw new ValidationError("That room is not part of this booking's room plan");
-  const toRoomId = input.toRoomId?.trim() || R;
-  const roomRows = await prisma.room.findMany({ where: { id: { in: Array.from(new Set([...planRooms, toRoomId])) } }, include: { roomType: true } });
+  // The picks: one room, or several (the room dragged first).
+  const asked: NightMovePick[] = input.picks?.length
+    ? input.picks
+    : [{ fromRoomId: input.fromRoomId ?? "", nights: input.nights ?? [], toRoomId: input.toRoomId ?? null }];
+  if (asked.length > MAX_PICKS) throw new ValidationError(`Move at most ${MAX_PICKS} rooms' nights at a time`);
+  const askedIds = asked.flatMap((a) => [String(a.fromRoomId ?? "").trim(), String(a.toRoomId ?? "").trim()]).filter(Boolean);
+  const roomRows = await prisma.room.findMany({ where: { id: { in: Array.from(new Set([...planRooms, ...askedIds])) } }, include: { roomType: true } });
   const roomById = new Map(roomRows.map((r) => [r.id, r]));
   const no = (id: string) => roomById.get(id)?.roomNumber ?? "?";
-  if (!roomById.has(toRoomId)) throw new ValidationError("The room to move into is not in the house");
+  const multi = asked.length > 1;
 
-  const rNights = picture.filter((n) => n.roomIds.includes(R)).map((n) => n.date);
-  const moved = Array.from(new Set(input.nights.map((d) => String(d).slice(0, 10)))).sort();
-  if (moved.length === 0) throw new ValidationError("Name the nights that move");
-  for (const d of moved) {
-    if (!rNights.includes(d)) throw new ValidationError(`Room ${no(R)} does not hold ${fmtDay(d)} on this booking`);
+  type PickPlan = {
+    R: string;
+    to: string;
+    moved: string[];
+    movedNew: string[];
+    rNights: string[];
+    fromRoom: (typeof roomRows)[number];
+    toRoom: (typeof roomRows)[number];
+    sameType: boolean;
+  };
+  const picks: PickPlan[] = [];
+  for (const a of asked) {
+    const R = String(a.fromRoomId ?? "").trim();
+    if (!R || !planRooms.includes(R)) throw new ValidationError("That room is not part of this booking's room plan");
+    if (picks.some((p) => p.R === R)) throw new ValidationError(`Room ${no(R)} is picked twice — pick each room once`);
+    const to = String(a.toRoomId ?? "").trim() || R;
+    if (!roomById.has(to)) throw new ValidationError("The room to move into is not in the house");
+    const rNights = picture.filter((n) => n.roomIds.includes(R)).map((n) => n.date);
+    const moved = Array.from(new Set((a.nights ?? []).map((d) => String(d).slice(0, 10)))).sort();
+    if (moved.length === 0) throw new ValidationError("Name the nights that move");
+    for (const d of moved) {
+      if (!rNights.includes(d)) throw new ValidationError(`Room ${no(R)} does not hold ${fmtDay(d)} on this booking`);
+    }
+    if (runsOf(moved).length !== 1) {
+      refusals.push(
+        multi
+          ? `Room ${no(R)}'s nights that move must follow one another — move them one run at a time`
+          : "The nights that move must follow one another — move them one run at a time",
+      );
+    }
+    const fromRoom = roomById.get(R)!;
+    const toRoom = roomById.get(to)!;
+    picks.push({ R, to, moved, movedNew: [], rNights, fromRoom, toRoom, sameType: toRoom.roomTypeId === fromRoom.roomTypeId });
   }
-  if (runsOf(moved).length !== 1) refusals.push("The nights that move must follow one another — move them one run at a time");
 
+  const g = picks[0];
   const newFirst = String(input.newFirstNight ?? "").slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(newFirst)) throw new ValidationError("newFirstNight must be a date (YYYY-MM-DD)");
-  const shiftDays = Math.round((Date.parse(`${newFirst}T00:00:00.000Z`) - Date.parse(`${moved[0]}T00:00:00.000Z`)) / DAY);
+  const shiftDays = Math.round((Date.parse(`${newFirst}T00:00:00.000Z`) - Date.parse(`${g.moved[0]}T00:00:00.000Z`)) / DAY);
   const mode: NightMoveMode = shiftDays === 0 ? "ROOM_CHANGE" : "SPLIT";
-  const movedNew = moved.map((d) => shiftIsoDate(d, shiftDays));
-  const fromRoom = roomById.get(R)!;
-  const toRoom = roomById.get(toRoomId)!;
-  const sameType = toRoom.roomTypeId === fromRoom.roomTypeId;
-  if (mode === "ROOM_CHANGE" && toRoomId === R) refusals.push("Nothing moves — drop the night on another room or on other dates");
+  for (const p of picks) p.movedNew = p.moved.map((d) => shiftIsoDate(d, shiftDays));
+  const sameTypeAll = picks.every((p) => p.sameType);
+  if (mode === "ROOM_CHANGE") {
+    const idle = picks.filter((p) => p.to === p.R);
+    if (idle.length === picks.length) refusals.push("Nothing moves — drop the night on another room or on other dates");
+    else for (const p of idle) refusals.push(`Room ${no(p.R)} would stay where it is — every picked room moves by the same rows`);
+  }
 
   // The step the booking is at.
   if (entry.status === "PARKED") refusals.push("This booking is parked — resume it first");
@@ -206,37 +270,38 @@ async function planNightMove(prisma: PrismaClient, actor: Actor, input: NightMov
     refusals.push("The guest is checking in or in house — a night leaves the stay through Leaving early, not by moving it to other dates");
   }
   const todayIso = iso(hotelTodayUtc());
-  if (movedNew[0] < todayIso) refusals.push("The night would land before today at the hotel");
-  if (stage === Stage.S7 && moved[0] < todayIso) refusals.push("A night already slept does not move");
+  if (picks.some((p) => p.movedNew[0] < todayIso)) refusals.push("The night would land before today at the hotel");
+  if (stage === Stage.S7 && picks.some((p) => p.moved[0] < todayIso)) refusals.push("A night already slept does not move");
 
-  const currency = ((): string | null => {
-    const op = resolveOperativeQuotation(entry.quotations, entry.segments[0]?.id ?? null);
-    return ((op?.commercialTerms as Record<string, unknown> | null)?.currency as string | undefined) ?? null;
-  })();
   const operative = resolveOperativeQuotation(entry.quotations, entry.segments[0]?.id ?? null);
+  const currency = ((operative?.commercialTerms as Record<string, unknown> | null)?.currency as string | undefined) ?? null;
   const priceBefore = operative?.totalAmount != null ? Number(operative.totalAmount) : null;
 
   return {
-    entry, stage, isFom, guest, refusals, notes, priorIn, priorOut, picture, planRooms, R, toRoomId, roomById, no,
-    rNights, moved, movedNew, shiftDays, mode, fromRoom, toRoom, sameType, todayIso, currency, priceBefore,
+    entry, stage, isFom, guest, refusals, notes, priorIn, priorOut, picture, planRooms, roomById, no, picks, multi, sameTypeAll,
+    shiftDays, mode, todayIso, currency, priceBefore,
+    // The room dragged — what the one-room shape reads.
+    R: g.R, toRoomId: g.to, rNights: g.rNights, moved: g.moved, movedNew: g.movedNew, fromRoom: g.fromRoom, toRoom: g.toRoom, sameType: g.sameType,
   };
 }
 type Base = Awaited<ReturnType<typeof planNightMove>>;
+type PickPlan = Base["picks"][number];
 
-/** The room-change walk's per-night form for the nights that move — and the rest of the room's nights kept. */
-function roomChangeForm(b: Base): { perNight?: Array<{ date: string; roomId: string }>; toRoomId?: string } {
-  const nights = b.stage === Stage.S7 ? b.rNights.filter((d) => d >= b.todayIso) : b.rNights;
-  if (nights.every((d) => b.moved.includes(d))) return { toRoomId: b.toRoomId };
-  return { perNight: nights.map((date) => ({ date, roomId: b.moved.includes(date) ? b.toRoomId : b.R })) };
+/** The room-change walk's per-night form for one room's nights that move — and the rest of its nights kept. */
+function roomChangeForm(b: Base, p: PickPlan): { perNight?: Array<{ date: string; roomId: string }>; toRoomId?: string } {
+  const nights = b.stage === Stage.S7 ? p.rNights.filter((d) => d >= b.todayIso) : p.rNights;
+  if (nights.every((d) => p.moved.includes(d))) return { toRoomId: p.to };
+  return { perNight: nights.map((date) => ({ date, roomId: p.moved.includes(date) ? p.to : p.R })) };
 }
 
 function moveContextOf(mode: "KEEP" | "NEW_TYPE", note: string | null): RoomMoveWalkContext {
   return { moveId: null, legId: null, partnerEntryId: null, partnerLabel: null, tolerate: [], priceMode: mode, guestAgreedNote: note };
 }
 
-/** A room change's figure after the walk: the dry run's plan, priced the way the silent quote will. */
-async function priceAfterDryRun(prisma: PrismaClient, entryId: string, dry: RoomChangeOutcome): Promise<number | null> {
-  const p = dry.plan;
+type DryPlan = NonNullable<RoomChangeOutcome["plan"]>;
+
+/** A plan's figure, priced the way the silent quote will. */
+async function pricePlan(prisma: PrismaClient, entryId: string, p: DryPlan | null): Promise<number | null> {
   if (!p?.compositions) return null;
   const after = await buildQuotationPreview(
     prisma,
@@ -250,149 +315,239 @@ async function priceAfterDryRun(prisma: PrismaClient, entryId: string, dry: Room
   return after.payable;
 }
 
+/**
+ * Several rooms' room changes as ONE plan, for the figure the walks will end on: each dry run changed
+ * its own room, so the rows of a picked room and its new room come from that room's run, every other
+ * row from the first. One composition row per room is the walk's invariant, so the rows name the plan.
+ */
+function combinePlans(drys: RoomChangeOutcome[], picks: PickPlan[]): DryPlan | null {
+  const plans = drys.map((d) => d.plan ?? null);
+  if (plans.some((p) => !p?.compositions)) return null;
+  const owner = new Map<string, number>();
+  picks.forEach((p, i) => {
+    if (i === 0) return;
+    owner.set(p.R, i);
+    owner.set(p.to, i);
+  });
+  type Row = { roomId: string };
+  const rows: Row[] = [];
+  const counts: Record<string, number> = {};
+  plans.forEach((plan, i) => {
+    for (const r of plan!.compositions as unknown as Row[]) {
+      const o = owner.get(r.roomId) ?? 0;
+      if (o !== i) continue;
+      rows.push(r);
+      const c = plan!.perRoomNightCounts?.[r.roomId];
+      if (c != null) counts[r.roomId] = c;
+    }
+  });
+  const first = plans[0]!;
+  return { ...first, compositions: rows as never, planRoomIds: Array.from(new Set(rows.map((r) => r.roomId))), perRoomNightCounts: counts };
+}
+
+/** "Room 205" · "Rooms 205 + 305" */
+const roomsWords = (ids: string[], no: (id: string) => string) =>
+  ids.length === 1 ? `Room ${no(ids[0])}` : `Rooms ${ids.map(no).join(" + ")}`;
+
+type Seg = { kind: "MOVED" | "LEFT"; src: string; roomId: string; nights: string[]; srcNights: string[]; shift: number };
+type NightPiece = Piece & {
+  kind: "MOVED" | "LEFT";
+  /** A moved stay's rows priced both ways — the one price choice the move asks. */
+  alt: { keep: RoomCompositionServiceInput[]; fresh: RoomCompositionServiceInput[] } | null;
+};
+
 /** Everything the split shape needs, validated once. */
 async function planSplitNights(prisma: PrismaClient, actor: Actor, b: Base, input: NightMoveRequest) {
-  const { entry, picture, planRooms, R, toRoomId, roomById, no, rNights, moved, movedNew, shiftDays, refusals, notes, stage, isFom } = b;
-  const single = planRooms.length === 1;
-  if (moved.length === rNights.length) {
-    refusals.push(`Every night of Room ${no(R)} would move — drag it without Alt to move the whole room`);
+  const { entry, picture, planRooms, roomById, no, picks, shiftDays, refusals, notes, stage, isFom } = b;
+  const allNights = picture.map((n) => n.date);
+  const pickedSet = new Set(picks.map((p) => p.R));
+  const allPicked = planRooms.every((id) => pickedSet.has(id));
+  /** The booking as a whole keeps its earliest stay — every room picked (a one-room booking always is). */
+  const single = allPicked;
+  for (const p of picks) {
+    if (p.moved.length === p.rNights.length) refusals.push(`Every night of Room ${no(p.R)} would move — drag it without Alt to move the whole room`);
   }
   const shape = (n: { roomIds: string[] }) => [...n.roomIds].sort().join("|");
   if (picture.some((n) => shape(n) !== shape(picture[0]))) {
     refusals.push("This booking's rooms change between nights — a single night moves only when every night has the same rooms");
   }
-
-  // The stays left at their own dates, and the one the booking keeps.
-  const remainder = rNights.filter((d) => !moved.includes(d));
-  const runs = runsOf(remainder);
-  const keptNights = single ? (runs[0] ?? []) : null;
-  const leftRuns = single ? runs.slice(1) : runs;
-  /** The (room, night) pairs the original still holds after the move. */
-  const keptPairs = new Set<string>(
-    single ? (keptNights ?? []).map((d) => `${R}|${d}`) : picture.flatMap((n) => n.roomIds.filter((id) => id !== R).map((id) => `${id}|${n.date}`)),
-  );
-  const leftPairs = new Set(leftRuns.flatMap((run) => run.map((d) => `${R}|${d}`)));
-
-  // The moved nights on their new room: free, usable, and not a night the booking still holds there.
-  const clash = movedNew.filter((d) => keptPairs.has(`${toRoomId}|${d}`));
-  if (clash.length) refusals.push(`Room ${no(toRoomId)} stays with this booking on ${nightsLabel(clash)} — drop the night on another room or other dates`);
-  const clashLeft = movedNew.filter((d) => leftPairs.has(`${toRoomId}|${d}`));
-  if (clashLeft.length) refusals.push(`Room ${no(toRoomId)} already holds ${nightsLabel(clashLeft)} for this guest — drop the night on another room`);
-  const target = roomById.get(toRoomId)!;
-  if (target.isShadowInventory) refusals.push(`Room ${target.roomNumber} is shadow inventory and cannot be booked`);
-  for (const range of foldIsoNightsToRanges(movedNew)) {
-    try {
-      enforceCommittedHoldRoomPhysicallyUsable({
-        roomNumber: target.roomNumber,
-        isBlocked: target.isBlocked,
-        blockedReason: target.blockedReason,
-        isUnderMaintenance: target.isUnderMaintenance,
-        maintenanceDeadline: target.maintenanceDeadline,
-        checkIn: range.startDate,
-        checkOut: range.endDate,
-      });
-      const conflicts = await findRoomBookingConflicts(prisma, { roomIds: [toRoomId], checkIn: range.startDate, checkOut: range.endDate, excludeEntryId: entry.id });
-      enforceNoOverlappingBookingForCommittedHold({ conflicts: conflicts.map((c) => ({ ...c, roomNumber: target.roomNumber })) });
-    } catch (e) {
-      refusals.push(errorMessage(e));
-    }
+  if (single && picks.length > 1 && picks.some((p) => p.moved.join("|") !== picks[0].moved.join("|"))) {
+    refusals.push("Every room of this booking is picked — pick the same nights on each room, or leave one room out");
   }
 
-  // Who sleeps in the room — the booking's own seating decides who goes with its nights.
+  // Who sleeps in which room — the booking's own seating decides who goes with each stay.
   const basis = resolveCompositionBasis<RoomCompositionServiceInput>(entry);
   const rows = basis.compositions ?? [];
-  const rRow = rows.find((r) => r.roomId === R) ?? null;
+  const rowOf = (id: string) => rows.find((r) => r.roomId === id) ?? null;
   if (rows.length === 0) refusals.push("This booking has no record of who sleeps in which room — set the rooms' guests at Negotiation first");
-  else if (!rRow) refusals.push(`Room ${no(R)} has no guests recorded on the booking — set them at Negotiation first`);
+  else for (const p of picks) if (!rowOf(p.R)) refusals.push(`Room ${no(p.R)} has no guests recorded on the booking — set them at Negotiation first`);
   const bundle = await loadChildPolicyBundle(prisma).catch(() => null);
   const slots = derivePartySlots(entry, { youngChildMaxAge: bundle?.ageBands.youngChildMaxAge ?? 5, childMaxAge: bundle?.ageBands.childMaxAge ?? 10 });
   const seating = seatPartyRooms({ slots, rows, order: planRoomOrder(picture), nightsByRoom: nightsByRoomFromPicture(picture) });
   const childAges = entry.childAges ?? [];
-  const leaving: Party = { adultCount: 0, childCount: 0, childAges: [], guestCount: 0 };
-  const stays: Party = { adultCount: 0, childCount: 0, childAges: [], guestCount: 0 };
-  for (const slot of slots) {
-    const rooms = seating.get(slot.key) ?? [];
-    const inR = rooms.includes(R);
-    const isChild = slot.key.startsWith("K");
-    const age = isChild ? childAges[Number(slot.key.slice(1))] : null;
-    for (const side of single ? [leaving, stays] : [inR ? leaving : stays]) {
-      if (isChild && typeof age === "number") side.childAges.push(age);
-      else side.adultCount += 1;
+  const partyWhere = (keep: (rooms: string[]) => boolean): Party => {
+    const p: Party = { adultCount: 0, childCount: 0, childAges: [], guestCount: 0 };
+    for (const slot of slots) {
+      if (!keep(seating.get(slot.key) ?? [])) continue;
+      const isChild = slot.key.startsWith("K");
+      const age = isChild ? childAges[Number(slot.key.slice(1))] : null;
+      if (isChild && typeof age === "number") p.childAges.push(age);
+      else p.adultCount += 1;
     }
-  }
-  for (const p of [leaving, stays]) {
     p.childCount = p.childAges.length;
     p.guestCount = p.adultCount + p.childCount;
-  }
-  if (rows.length > 0 && leaving.guestCount === 0) refusals.push(`Nobody sleeps in Room ${no(R)} — there is no one to make a booking for`);
-  for (const [label, p] of (single ? [["The guests", leaving]] : [["The guests who leave", leaving], ["The guests who stay", stays]]) as Array<[string, Party]>) {
-    if (p.guestCount === 0) continue;
-    const { issues } = await validateCapacity(prisma, { adults: p.adultCount, childAges: p.childAges }).catch(() => ({ issues: [] as Array<{ severity: string; message: string }> }));
-    for (const i of issues) if (i.severity === "BLOCK") refusals.push(`${label}: ${i.message}`);
-  }
+    return p;
+  };
+  const whole = partyWhere(() => true);
+  /** The guests of these rooms. */
+  const partyOf = (rooms: Set<string>) => partyWhere((seated) => seated.some((id) => rooms.has(id)));
+  const leaving = single ? whole : partyOf(pickedSet);
+  const stays = single ? whole : partyWhere((seated) => !seated.some((id) => pickedSet.has(id)));
 
   // Each stay's row: the room's own, on its room and nights, priced as chosen.
   const priorTerms = (basis.terms ?? null) as Record<string, unknown> | null;
   const perRoom = ((priorTerms?.compositionTotals ?? null) as { perRoom?: Array<{ roomId?: string; roomRate?: unknown }> } | null)?.perRoom ?? [];
-  const pricedAt = (() => {
-    const v = perRoom.find((r) => r.roomId === R)?.roomRate;
+  const pricedAt = (id: string) => {
+    const v = perRoom.find((r) => r.roomId === id)?.roomRate;
     return typeof v === "number" && Number.isFinite(v) && v > 0 ? Number(v.toFixed(2)) : null;
-  })();
+  };
+  const crossType = (src: string, roomId: string) => roomId !== src && roomById.get(roomId)?.roomTypeId !== roomById.get(src)?.roomTypeId;
+  /** The rate a room keeps on another room: its negotiated rate on the same type, else the rate it was priced at. */
+  const keepRateOf = (src: string, roomId: string) => (!crossType(src, roomId) ? rowOf(src)?.negotiatedRoomRate : null) ?? pricedAt(src);
   const movedMode: PriceMode = input.priceMode === "NEW_DATES" ? "NEW_DATES" : "KEEP";
-  const crossType = toRoomId !== R && roomById.get(toRoomId)?.roomTypeId !== roomById.get(R)?.roomTypeId;
-  const keepRate = (!crossType ? rRow?.negotiatedRoomRate : null) ?? pricedAt;
-  const rowFor = (nights: string[], shift: number, roomId: string, m: PriceMode): RoomCompositionServiceInput | null => {
-    if (!rRow) return null;
-    const ct = roomId !== R && roomById.get(roomId)?.roomTypeId !== roomById.get(R)?.roomTypeId;
+  const rowFor = (src: string, nights: string[], shift: number, roomId: string, m: PriceMode): RoomCompositionServiceInput | null => {
+    const row = rowOf(src);
+    if (!row) return null;
+    const ct = crossType(src, roomId);
     const base: RoomCompositionServiceInput = {
-      ...rRow,
+      ...row,
       roomId,
       startDate: undefined,
       endDate: undefined,
-      nightMealOverrides: (rRow.nightMealOverrides ?? [])
+      nightMealOverrides: (row.nightMealOverrides ?? [])
         .filter((o) => nights.includes(String(o.date).slice(0, 10)))
         .map((o) => ({ ...o, date: shiftIsoDate(String(o.date).slice(0, 10), shift) })),
       ...(ct ? { negotiatedRoomRate: undefined } : {}),
     };
     if (m !== "KEEP") return { ...base, negotiatedRoomRate: ct ? undefined : base.negotiatedRoomRate };
-    const rate = (!ct ? rRow.negotiatedRoomRate : null) ?? pricedAt;
+    const rate = keepRateOf(src, roomId);
     return rate != null ? { ...base, negotiatedRoomRate: rate } : base;
   };
-  if (movedMode === "KEEP" && rRow && keepRate == null) {
-    refusals.push(`Keeping the price needs the rate Room ${no(R)} was priced at, and this booking has none recorded — choose "at the new dates"`);
+  for (const p of picks) {
+    if (movedMode === "KEEP" && rowOf(p.R) && keepRateOf(p.R, p.to) == null) {
+      refusals.push(`Keeping the price needs the rate Room ${no(p.R)} was priced at, and this booking has none recorded — choose "at the new dates"`);
+    }
   }
   if (movedMode === "NEW_DATES" && !input.guestAgreedNote?.trim()) notes.push("Pricing the night at the new dates needs the guest's agreement — type what they said");
-  if (rRow && pricedAt == null && rRow.negotiatedRoomRate == null && leftRuns.length) {
-    notes.push(`Room ${no(R)} has no rate recorded, so the stays left at their own dates are priced at the published rate`);
-  }
   const priorDiscount = (priorTerms?.requestedDiscount ?? null) as { discountPercent?: number; discountAmount?: number; discountBasis: string } | null;
   const carriedDiscount = priorDiscount?.discountPercent ? { discountPercent: priorDiscount.discountPercent, discountBasis: priorDiscount.discountBasis } : null;
   if (priorDiscount?.discountAmount) notes.push("The booking's flat discount stays with this booking — it was agreed on the whole stay");
 
-  const roomWord = `Room ${no(R)}`;
-  const movedPiece: Piece & { kind: "MOVED" } = {
-    kind: "MOVED",
-    picture: movedNew.map((date) => ({ date, roomIds: [toRoomId] })),
-    ...spanOf(movedNew),
-    party: leaving,
-    compositions: [rowFor(moved, shiftDays, toRoomId, movedMode)].filter(Boolean) as RoomCompositionServiceInput[],
-    rooms: [{ fromRoomId: R, fromRoomNumber: no(R), roomId: toRoomId, roomNumber: no(toRoomId), priceMode: movedMode }],
-    words: `${roomWord} (${nightsLabel(moved)})`,
-    allKept: movedMode === "KEEP",
-    guestAgreedNote: input.guestAgreedNote?.trim() || null,
+  // The stays that leave the booking: each moved run, and each run left at its own dates.
+  let keptNights: string[] | null = null;
+  const segs: Seg[] = [];
+  if (single) {
+    const runs = runsOf(allNights.filter((d) => !picks[0].moved.includes(d)));
+    keptNights = runs[0] ?? [];
+    for (const run of runs.slice(1)) for (const id of planRooms) segs.push({ kind: "LEFT", src: id, roomId: id, nights: run, srcNights: run, shift: 0 });
+  } else {
+    for (const p of picks) {
+      for (const run of runsOf(p.rNights.filter((d) => !p.moved.includes(d)))) {
+        segs.push({ kind: "LEFT", src: p.R, roomId: p.R, nights: run, srcNights: run, shift: 0 });
+      }
+    }
+  }
+  for (const p of picks) segs.push({ kind: "MOVED", src: p.R, roomId: p.to, nights: p.movedNew, srcNights: p.moved, shift: shiftDays });
+  for (const s of segs) {
+    if (s.kind === "LEFT" && rowOf(s.src) && pricedAt(s.src) == null && rowOf(s.src)?.negotiatedRoomRate == null) {
+      notes.push(`Room ${no(s.src)} has no rate recorded, so the stays left at their own dates are priced at the published rate`);
+    }
+  }
+  /** A stay left at its own dates keeps its rate, when it has one. */
+  const leftMode = (src: string): PriceMode => (keepRateOf(src, src) == null ? "NEW_DATES" : "KEEP");
+  const segMode = (s: Seg, m: PriceMode): PriceMode => (s.kind === "MOVED" ? m : leftMode(s.src));
+  const segWords = (list: Seg[]) => {
+    const same = list.every((s) => s.srcNights.join("|") === list[0].srcNights.join("|"));
+    return same
+      ? `${roomsWords(list.map((s) => s.src), no)} (${nightsLabel(list[0].srcNights)})`
+      : list.map((s) => `Room ${no(s.src)} (${nightsLabel(s.srcNights)})`).join(" + ");
   };
-  const leftPieces: Array<Piece & { kind: "LEFT" }> = leftRuns.map((run) => ({
-    kind: "LEFT",
-    picture: run.map((date) => ({ date, roomIds: [R] })),
-    ...spanOf(run),
-    party: leaving,
-    compositions: [rowFor(run, 0, R, keepRate == null ? "NEW_DATES" : "KEEP")].filter(Boolean) as RoomCompositionServiceInput[],
-    rooms: [{ fromRoomId: R, fromRoomNumber: no(R), roomId: R, roomNumber: no(R), priceMode: "KEEP" as const }],
-    words: `${roomWord} (${nightsLabel(run)})`,
-    allKept: true,
-    guestAgreedNote: null,
-  }));
-  const pieces = [movedPiece, ...leftPieces].sort((a, c) => a.checkIn.localeCompare(c.checkIn));
+
+  // Stays on the same dates are one booking holding all their rooms (ruling 2026-10-15).
+  const groups = new Map<string, Seg[]>();
+  for (const s of segs) groups.set(s.nights.join("|"), [...(groups.get(s.nights.join("|")) ?? []), s]);
+  const note = input.guestAgreedNote?.trim() || null;
+  const pieces: NightPiece[] = [...groups.values()]
+    .map((list): NightPiece => {
+      const nights = list[0].nights;
+      const kind = list.some((s) => s.kind === "MOVED") ? "MOVED" : "LEFT";
+      const comps = (m: PriceMode) => list.map((s) => rowFor(s.src, s.srcNights, s.shift, s.roomId, segMode(s, m))).filter(Boolean) as RoomCompositionServiceInput[];
+      return {
+        kind,
+        picture: nights.map((date) => ({ date, roomIds: list.map((s) => s.roomId) })),
+        ...spanOf(nights),
+        party: single ? whole : partyOf(new Set(list.map((s) => s.src))),
+        compositions: comps(movedMode),
+        rooms: list.map((s) => ({ fromRoomId: s.src, fromRoomNumber: no(s.src), roomId: s.roomId, roomNumber: no(s.roomId), priceMode: segMode(s, movedMode) })),
+        words: segWords(list),
+        allKept: kind === "MOVED" ? movedMode === "KEEP" : true,
+        guestAgreedNote: kind === "MOVED" ? note : null,
+        alt: kind === "MOVED" ? { keep: comps("KEEP"), fresh: comps("NEW_DATES") } : null,
+      };
+    })
+    .sort((a, c) => a.checkIn.localeCompare(c.checkIn));
+  const movedPieces = pieces.filter((p) => p.kind === "MOVED");
+
+  if (rows.length > 0) for (const p of pieces) if (p.party.guestCount === 0) refusals.push(`Nobody sleeps in ${p.words} — there is no one to make a booking for`);
+  const parties: Array<[string, Party]> = single
+    ? [["The guests", whole]]
+    : [...pieces.map((p): [string, Party] => [`The guests of ${p.words}`, p.party]), ["The guests who stay", stays]];
+  const checked = new Set<string>();
+  for (const [label, p] of parties) {
+    const key = `${p.adultCount}|${p.childAges.join(",")}`;
+    if (p.guestCount === 0 || checked.has(key)) continue;
+    checked.add(key);
+    const { issues } = await validateCapacity(prisma, { adults: p.adultCount, childAges: p.childAges }).catch(() => ({ issues: [] as Array<{ severity: string; message: string }> }));
+    for (const i of issues) if (i.severity === "BLOCK") refusals.push(`${label}: ${i.message}`);
+  }
+
+  // The moved nights on their new rooms: free, usable, and not a night the booking still holds there.
+  /** The (room, night) pairs the original still holds after the move. */
+  const keptPairs = new Set<string>(
+    single
+      ? (keptNights ?? []).flatMap((d) => planRooms.map((id) => `${id}|${d}`))
+      : picture.flatMap((n) => n.roomIds.filter((id) => !pickedSet.has(id)).map((id) => `${id}|${n.date}`)),
+  );
+  const leftPairs = new Set(segs.filter((s) => s.kind === "LEFT").flatMap((s) => s.nights.map((d) => `${s.roomId}|${d}`)));
+  const landed = new Map<string, string>();
+  for (const p of picks) {
+    const clash = p.movedNew.filter((d) => keptPairs.has(`${p.to}|${d}`));
+    if (clash.length) refusals.push(`Room ${no(p.to)} stays with this booking on ${nightsLabel(clash)} — drop the night on another room or other dates`);
+    const clashLeft = p.movedNew.filter((d) => leftPairs.has(`${p.to}|${d}`));
+    if (clashLeft.length) refusals.push(`Room ${no(p.to)} already holds ${nightsLabel(clashLeft)} for this guest — drop the night on another room`);
+    const twice = p.movedNew.filter((d) => landed.has(`${p.to}|${d}`));
+    if (twice.length) refusals.push(`Rooms ${no(landed.get(`${p.to}|${twice[0]}`)!)} and ${no(p.R)} would both land in Room ${no(p.to)} on ${nightsLabel(twice)}`);
+    for (const d of p.movedNew) landed.set(`${p.to}|${d}`, p.R);
+    const target = roomById.get(p.to)!;
+    if (target.isShadowInventory) refusals.push(`Room ${target.roomNumber} is shadow inventory and cannot be booked`);
+    for (const range of foldIsoNightsToRanges(p.movedNew)) {
+      try {
+        enforceCommittedHoldRoomPhysicallyUsable({
+          roomNumber: target.roomNumber,
+          isBlocked: target.isBlocked,
+          blockedReason: target.blockedReason,
+          isUnderMaintenance: target.isUnderMaintenance,
+          maintenanceDeadline: target.maintenanceDeadline,
+          checkIn: range.startDate,
+          checkOut: range.endDate,
+        });
+        const conflicts = await findRoomBookingConflicts(prisma, { roomIds: [p.to], checkIn: range.startDate, checkOut: range.endDate, excludeEntryId: entry.id });
+        enforceNoOverlappingBookingForCommittedHold({ conflicts: conflicts.map((c) => ({ ...c, roomNumber: target.roomNumber })) });
+      } catch (e) {
+        refusals.push(errorMessage(e));
+      }
+    }
+  }
 
   // Authority: at Negotiation the change of configuration's rule; from Set up on the FOM's.
   const segmentId = entry.segments[0]?.id ?? null;
@@ -416,7 +571,7 @@ async function planSplitNights(prisma: PrismaClient, actor: Actor, b: Base, inpu
 
   // The same guest over the same nights twice: with what the booking keeps, between the new
   // bookings, and with the guest's other bookings — each said, and answered by the FOM's move.
-  const keptNightSet = new Set(single ? keptNights ?? [] : picture.map((n) => n.date));
+  const keptNightSet = new Set(single ? keptNights ?? [] : allNights);
   const overlapWithOriginal = (p: Piece) => p.picture.map((n) => n.date).filter((d) => keptNightSet.has(d));
   const piecesOverlap = (p: Piece) =>
     pieces.filter((q) => q !== p && q.picture.some((n) => p.picture.some((m) => m.date === n.date))).map((q) => q.words);
@@ -457,15 +612,24 @@ async function planSplitNights(prisma: PrismaClient, actor: Actor, b: Base, inpu
   /** The kept nights overlap a new booking — the original's own walk asks Policy 13 of them. */
   const originalOverlap = pieces.some((p) => overlapWithOriginal(p).length > 0);
   /** A new enquiry is checked against the guest's bookings over the moved nights (Policy 12). */
-  const movedSpan = spanOf(movedNew);
-  const inquiryOverlap =
-    (movedSpan.checkIn < iso(b.priorOut) && movedSpan.checkOut > iso(b.priorIn)) || othersOver(movedPiece).length > 0;
+  const inquiryOverlap = movedPieces.some((mp) => (mp.checkIn < iso(b.priorOut) && mp.checkOut > iso(b.priorIn)) || othersOver(mp).length > 0);
+  /** The new enquiry's own dates: the moved nights, first to last. */
+  const movedSpan = {
+    checkIn: movedPieces.reduce((m, p) => (p.checkIn < m ? p.checkIn : m), movedPieces[0]?.checkIn ?? ""),
+    checkOut: movedPieces.reduce((m, p) => (p.checkOut > m ? p.checkOut : m), movedPieces[0]?.checkOut ?? ""),
+  };
 
   return {
-    single, keptNights, leftRuns, pieces, movedPiece, leaving, stays, rows, rRow, priorTerms, carriedDiscount, movedMode,
-    authority, overlapsOf, originalOverlap, inquiryOverlap, crossType, roomWord, rowFor,
+    single, allPicked, pickedSet, keptNights, pieces, movedPieces, movedSpan, leaving, stays, rows, priorTerms, carriedDiscount, movedMode,
+    authority, overlapsOf, originalOverlap, inquiryOverlap,
   };
 }
+
+/** "Room 206 → 305 (22 Oct)" for every room that moves, the dragged one first. */
+const movesWords = (b: Base, toNew: boolean) =>
+  b.picks
+    .map((p) => `Room ${b.no(p.R)}${p.to !== p.R ? ` → ${b.no(p.to)}` : ""} (${nightsLabel(toNew ? p.movedNew : p.moved)})`)
+    .join(" · ");
 
 export async function previewNightMove(prisma: PrismaClient, actor: Actor, input: NightMoveRequest): Promise<NightMovePreview> {
   const b = await planNightMove(prisma, actor, input);
@@ -490,71 +654,112 @@ export async function previewNightMove(prisma: PrismaClient, actor: Actor, input
       nights: b.movedNew.length,
       sameType: b.sameType,
     },
+    moves: b.picks.map((p) => ({
+      fromRoomId: p.R,
+      fromRoomNumber: no(p.R),
+      fromLabel: nightsLabel(p.moved),
+      toRoomId: p.to,
+      toRoomNumber: no(p.to),
+      toLabel: nightsLabel(p.movedNew),
+      nights: p.moved.length,
+      sameType: p.sameType,
+    })),
     shiftDays: b.shiftDays,
   };
+  /** A refusal said of one room, when several move. */
+  const ofRoom = (p: PickPlan, msg: string) => (b.multi ? `Room ${no(p.R)}: ${msg}` : msg);
 
   if (b.mode === "ROOM_CHANGE") {
     // Same dates, another room: the room change for those nights.
     const price: NightMovePreview["price"] = { currency: b.currency, choice: null };
     let priceAfter: number | null = null;
     let originalNote: string | null = null;
-    const isFomOrSame = b.sameType || b.isFom;
-    if (input.priceMode === "NEW_TYPE" && !b.sameType && !input.guestAgreedNote?.trim()) notes.push("Pricing it at the new room type needs the guest's agreement — type what they said");
+    const isFomOrSame = b.sameTypeAll || b.isFom;
+    if (input.priceMode === "NEW_TYPE" && !b.sameTypeAll && !input.guestAgreedNote?.trim()) notes.push("Pricing it at the new room type needs the guest's agreement — type what they said");
+    // The booking's rooms on each night after the move: no room twice on a night.
+    const pickOf = new Map(b.picks.map((p) => [p.R, p]));
+    for (const n of b.picture) {
+      // Who ends up in each room that night: a room the booking keeps, or the picks landing in it.
+      const into = new Map<string, string[]>();
+      for (const id of n.roomIds) {
+        const p = pickOf.get(id);
+        const dest = p && p.moved.includes(n.date) ? p.to : id;
+        into.set(dest, [...(into.get(dest) ?? []), id]);
+      }
+      for (const [dest, from] of into) {
+        if (from.length < 2) continue;
+        const kept = from.includes(dest);
+        refusals.push(
+          kept
+            ? `Room ${no(dest)} is already part of this booking on ${fmtDay(n.date)}`
+            : `Rooms ${from.map(no).join(" and ")} would both land in Room ${no(dest)} on ${fmtDay(n.date)}`,
+        );
+      }
+    }
     if (stage === Stage.S2) {
       originalNote = "At Negotiation the booking is priced again at the table — the quotation on file is retired";
-      if (b.planRooms.includes(b.toRoomId) && b.picture.some((n) => b.moved.includes(n.date) && n.roomIds.includes(b.toRoomId))) {
-        refusals.push(`Room ${no(b.toRoomId)} is already part of this booking on those nights`);
-      }
-      const target = b.toRoom;
-      for (const range of foldIsoNightsToRanges(b.moved)) {
-        try {
-          enforceCommittedHoldRoomPhysicallyUsable({
-            roomNumber: target.roomNumber,
-            isBlocked: target.isBlocked,
-            blockedReason: target.blockedReason,
-            isUnderMaintenance: target.isUnderMaintenance,
-            maintenanceDeadline: target.maintenanceDeadline,
-            checkIn: range.startDate,
-            checkOut: range.endDate,
-          });
-          const conflicts = await findRoomBookingConflicts(prisma, { roomIds: [b.toRoomId], checkIn: range.startDate, checkOut: range.endDate, excludeEntryId: entry.id });
-          enforceNoOverlappingBookingForCommittedHold({ conflicts: conflicts.map((c) => ({ ...c, roomNumber: target.roomNumber })) });
-        } catch (e) {
-          refusals.push(errorMessage(e));
+      for (const p of b.picks) {
+        if (p.to === p.R) continue;
+        const target = p.toRoom;
+        for (const range of foldIsoNightsToRanges(p.moved)) {
+          try {
+            enforceCommittedHoldRoomPhysicallyUsable({
+              roomNumber: target.roomNumber,
+              isBlocked: target.isBlocked,
+              blockedReason: target.blockedReason,
+              isUnderMaintenance: target.isUnderMaintenance,
+              maintenanceDeadline: target.maintenanceDeadline,
+              checkIn: range.startDate,
+              checkOut: range.endDate,
+            });
+            const conflicts = await findRoomBookingConflicts(prisma, { roomIds: [p.to], checkIn: range.startDate, checkOut: range.endDate, excludeEntryId: entry.id });
+            enforceNoOverlappingBookingForCommittedHold({ conflicts: conflicts.map((c) => ({ ...c, roomNumber: target.roomNumber })) });
+          } catch (e) {
+            refusals.push(errorMessage(e));
+          }
         }
       }
     } else if (refusals.length === 0) {
-      const runDry = (m: "KEEP" | "NEW_TYPE") =>
+      const runDry = (p: PickPlan, m: "KEEP" | "NEW_TYPE") =>
         changeRoomToNewSegment(prisma, actor, {
           entryId: entry.id,
-          fromRoomId: b.R,
+          fromRoomId: p.R,
           reason: input.reason?.trim() || "Preview",
-          ...roomChangeForm(b),
+          ...roomChangeForm(b, p),
           moveContext: moveContextOf(m, input.guestAgreedNote?.trim() || null),
           dryRun: true,
         });
-      try {
-        const chosen = await runDry(input.priceMode === "NEW_TYPE" ? "NEW_TYPE" : "KEEP");
-        priceAfter = await priceAfterDryRun(prisma, entry.id, chosen).catch(() => null);
-        if (!b.sameType) {
-          const keep = input.priceMode === "NEW_TYPE" ? await runDry("KEEP").then((d) => priceAfterDryRun(prisma, entry.id, d)).catch(() => null) : priceAfter;
-          const other = input.priceMode === "NEW_TYPE" ? priceAfter : await runDry("NEW_TYPE").then((d) => priceAfterDryRun(prisma, entry.id, d)).catch(() => null);
-          price.choice = { kind: "TYPE", keep, other };
+      /** Every room's walk, dry — the figure they end on, or null when one refuses. */
+      const runAll = async (m: "KEEP" | "NEW_TYPE", report: boolean): Promise<number | null> => {
+        const drys: RoomChangeOutcome[] = [];
+        for (const p of b.picks) {
+          try {
+            drys.push(await runDry(p, m));
+          } catch (e) {
+            if (report) refusals.push(ofRoom(p, errorMessage(e)));
+            return null;
+          }
         }
-      } catch (e) {
-        refusals.push(errorMessage(e));
+        const plan = drys.length === 1 ? drys[0].plan ?? null : combinePlans(drys, b.picks);
+        return pricePlan(prisma, entry.id, plan).catch(() => null);
+      };
+      const chosen: "KEEP" | "NEW_TYPE" = input.priceMode === "NEW_TYPE" ? "NEW_TYPE" : "KEEP";
+      priceAfter = await runAll(chosen, true);
+      if (!b.sameTypeAll && refusals.length === 0) {
+        const other = await runAll(chosen === "KEEP" ? "NEW_TYPE" : "KEEP", false);
+        price.choice = { kind: "TYPE", keep: chosen === "KEEP" ? priceAfter : other, other: chosen === "KEEP" ? other : priceAfter };
       }
     }
-    const nightsWord = b.moved.length === 1 ? "that night" : "those nights";
+    const nightsWord = b.multi ? "their nights" : b.moved.length === 1 ? "that night" : "those nights";
     const path =
       stage === Stage.S2
-        ? [
-            `Room ${no(b.R)} gives up ${nightsLabel(b.moved)} to Room ${no(b.toRoomId)} — the configuration changes inside the pass`,
-            "The quotation on file is retired — price the table again at Negotiation",
-          ]
+        ? [`${movesWords(b, false)} — the configuration changes inside the pass`, "The quotation on file is retired — price the table again at Negotiation"]
         : [
-            `A new pass: Room ${no(b.toRoomId)} for ${nightsWord}, Room ${no(b.R)} for the rest`,
+            b.multi
+              ? `One walk per room, in turn: ${movesWords(b, false)} — each a new pass`
+              : `A new pass: Room ${no(b.toRoomId)} for ${nightsWord}, Room ${no(b.R)} for the rest`,
             "Priced again silently, held again, re-reserved with a new voucher held for you",
+            ...(b.multi ? ["If one room's walk is refused, the rooms before it stay moved and the rest do not run — the result says which"] : []),
             `Back at ${stageWord}`,
           ];
     return {
@@ -565,10 +770,10 @@ export async function previewNightMove(prisma: PrismaClient, actor: Actor, input
       pieces: [],
       price,
       authority: {
-        needed: b.sameType ? "L1" : "L2",
+        needed: b.sameTypeAll ? "L1" : "L2",
         actorLevel: actor.actorLevel,
         ok: isFomOrSame,
-        why: b.sameType
+        why: b.sameTypeAll
           ? "The same room type — the desk changes it"
           : b.isFom
             ? "Another room type — the FOM's to do, and you can"
@@ -583,6 +788,7 @@ export async function previewNightMove(prisma: PrismaClient, actor: Actor, input
 
   // Other dates: the stays are cut apart.
   const s = await planSplitNights(prisma, actor, b, input);
+  const staying = b.planRooms.filter((id) => !s.pickedSet.has(id));
   const price: NightMovePreview["price"] = { currency: b.currency, choice: null };
   let priceAfter: number | null = null;
   let originalNote: string | null = null;
@@ -593,14 +799,14 @@ export async function previewNightMove(prisma: PrismaClient, actor: Actor, input
       const fomHand = b.isFom ? actor : { ...actor, actorLevel: "L2" as const };
       const dry = await changeRoomToNewSegment(prisma, fomHand, {
         entryId: entry.id,
-        fromRoomId: s.single ? b.R : b.planRooms.find((id) => id !== b.R)!,
+        fromRoomId: s.single ? b.R : staying[0]!,
         reason: input.reason?.trim() || "Preview",
         ...(s.single
           ? { dateShift: { newCheckInDate: new Date(`${s.keptNights![0]}T00:00:00.000Z`), priceMode: "KEEP" as const, keepNights: s.keptNights } }
-          : { splitOff: { roomIds: [b.R], party: s.stays, toLabel: "(preview)" } }),
+          : { splitOff: { roomIds: [...s.pickedSet], party: s.stays, toLabel: "(preview)" } }),
         dryRun: true,
       });
-      priceAfter = await priceAfterDryRun(prisma, entry.id, dry).catch(() => null);
+      priceAfter = await pricePlan(prisma, entry.id, dry.plan ?? null).catch(() => null);
     } catch (e) {
       refusals.push(errorMessage(e));
     }
@@ -619,9 +825,11 @@ export async function previewNightMove(prisma: PrismaClient, actor: Actor, input
   };
   const pieces: NightMovePreview["pieces"] = [];
   for (const p of s.pieces) {
+    const roomNumbers = p.rooms.map((r) => r.roomNumber);
     pieces.push({
-      kind: (p as { kind: "MOVED" | "LEFT" }).kind,
-      roomNumber: p.rooms[0]?.roomNumber ?? "?",
+      kind: p.kind,
+      roomNumber: roomNumbers.join(" + "),
+      roomNumbers,
       checkInDate: p.checkIn,
       checkOutDate: p.checkOut,
       nights: p.picture.length,
@@ -630,18 +838,22 @@ export async function previewNightMove(prisma: PrismaClient, actor: Actor, input
       total: await priceOf(p, p.compositions),
     });
   }
-  const keepComp = s.rowFor(b.moved, b.shiftDays, b.toRoomId, "KEEP");
-  const freshComp = s.rowFor(b.moved, b.shiftDays, b.toRoomId, "NEW_DATES");
-  price.choice = {
-    kind: "DATES",
-    keep: keepComp ? await priceOf(s.movedPiece, [keepComp]) : null,
-    other: freshComp ? await priceOf(s.movedPiece, [freshComp]) : null,
+  // The price choice: the moved stays kept at the agreed rate, or priced at the new dates.
+  const sumOf = async (which: "keep" | "fresh"): Promise<number | null> => {
+    let total = 0;
+    for (const p of s.movedPieces) {
+      const v = p.alt ? await priceOf(p, p.alt[which]) : null;
+      if (v == null) return null;
+      total += v;
+    }
+    return Number(total.toFixed(2));
   };
+  price.choice = { kind: "DATES", keep: await sumOf("keep"), other: await sumOf("fresh") };
 
   const keepsWords = s.single
-    ? `${s.roomWord} for ${nightsLabel(s.keptNights ?? [])}`
-    : `${b.planRooms.filter((id) => id !== b.R).map((id) => `Room ${no(id)}`).join(" + ")} for ${nightsLabel(b.picture.map((n) => n.date))}`;
-  const piecesWords = s.pieces.map((p) => `${p.rooms[0]?.roomNumber ? `Room ${p.rooms[0].roomNumber}` : p.words} on ${nightsLabel(p.picture.map((n) => n.date))}`);
+    ? `${roomsWords(b.planRooms, no)} for ${nightsLabel(s.keptNights ?? [])}`
+    : `${roomsWords(staying, no)} for ${nightsLabel(b.picture.map((n) => n.date))}`;
+  const piecesWords = s.pieces.map((p) => `${roomsWords(p.rooms.map((r) => r.roomId), no)} on ${nightsLabel(p.picture.map((n) => n.date))}`);
   const sourcePath =
     stage === Stage.S2
       ? `This booking keeps ${keepsWords} — its configuration changes inside the pass, and its quotation is retired to price again`
@@ -649,9 +861,10 @@ export async function previewNightMove(prisma: PrismaClient, actor: Actor, input
   const sameEnquiry = {
     path: [
       sourcePath,
-      `${s.pieces.length === 1 ? "A new booking" : `${s.pieces.length} new bookings`} under the same enquiry (${entry.inquiryId}) — the same guest, ${partyWords(s.leaving)}: ${piecesWords.join(" · ")}`,
+      `${s.pieces.length === 1 ? "A new booking" : `${s.pieces.length} new bookings`} under the same enquiry (${entry.inquiryId}) — the same guest: ${piecesWords.join(" · ")}`,
+      ...(b.multi ? ["Stays that leave on the same dates are one booking holding all their rooms"] : []),
       stage === Stage.S2
-        ? "Each is priced with what the room carries and waits at Negotiation"
+        ? "Each is priced with what the rooms carry and waits at Negotiation"
         : `Each is priced, set up with this booking's payer and cancellation terms, held${stage === Stage.S3 ? "" : " and reserved"} — walked to ${stage === Stage.S5 ? "Reserve, and Arrival when its window is open" : stageWord}`,
       "Where a step needs something only the desk can give — an advance to take, an answer to record — it stops there and says so",
     ],
@@ -663,13 +876,16 @@ export async function previewNightMove(prisma: PrismaClient, actor: Actor, input
       sourcePath,
       `One new enquiry with its own number — the same guest, caller, agency and rate package — holding ${s.pieces.length === 1 ? "the new booking" : `the ${s.pieces.length} new bookings`}`,
       `${s.pieces.length === 1 ? "It starts" : "Each starts"} at Inquiry, filled in: ${piecesWords.join(" · ")}`,
-      "Each step after fills itself from what the room carried — the Negotiation table with its guests, meals and rate, Set up with the payer",
+      "Each step after fills itself from what the rooms carried — the Negotiation table with its guests, meals and rate, Set up with the payer",
     ],
     papers: stage === Stage.S2 ? [] : [stage === Stage.S3 ? "This booking's new proforma — held for you" : "This booking's new voucher — held for you"],
     refusals: [] as string[],
   };
   if (s.inquiryOverlap && !b.isFom) newEnquiry.refusals.push("A new enquiry for the same guest over nights they hold needs the FOM to say it is on purpose");
-  if (!s.single) notes.push(`Room ${no(b.R)} and its guests leave ${entry.id} — a booking cannot have fewer guests on some nights than others`);
+  if (!s.single) {
+    const picked = [...s.pickedSet];
+    notes.push(`${roomsWords(picked, no)} and ${picked.length === 1 ? "its" : "their"} guests leave ${entry.id} — a booking cannot have fewer guests on some nights than others`);
+  }
 
   return {
     ok: refusals.length === 0 && s.authority.ok,
@@ -704,8 +920,20 @@ export async function executeNightMove(
 
   if (b.mode === "ROOM_CHANGE") {
     if (b.refusals.length) throw new ValidationError(b.refusals[0]);
-    if (input.priceMode === "NEW_TYPE" && !b.sameType && !input.guestAgreedNote?.trim()) {
+    if (input.priceMode === "NEW_TYPE" && !b.sameTypeAll && !input.guestAgreedNote?.trim()) {
       throw new ValidationError("Pricing it at the new room type needs the guest's agreement — type what they said");
+    }
+    const pickOf = new Map(b.picks.map((p) => [p.R, p]));
+    const newPicture = b.picture.map((n) => ({
+      date: n.date,
+      roomIds: n.roomIds.map((id) => {
+        const p = pickOf.get(id);
+        return p && p.moved.includes(n.date) ? p.to : id;
+      }),
+    }));
+    for (const n of newPicture) {
+      const twice = n.roomIds.find((id, i) => n.roomIds.indexOf(id) !== i);
+      if (twice) throw new ValidationError(`Two of this booking's rooms would be Room ${no(twice)} on ${fmtDay(n.date)} — drop them where each has its own room`);
     }
     if (stage === Stage.S2) {
       const search = (await queryAvailability(prisma, entry.id, actor.actorId, actor.actorLevel, {
@@ -714,23 +942,36 @@ export async function executeNightMove(
         guestCount: entry.guestCount ?? undefined,
       })) as { configuration: { id: string } };
       const amendment = await amendNegotiationConfiguration(prisma, entry.id, actor, {
-        rooms: {
-          configurationId: search.configuration.id,
-          perNight: b.picture.map((n) => ({ date: n.date, roomIds: n.roomIds.map((id) => (id === b.R && b.moved.includes(n.date) ? b.toRoomId : id)) })),
-        },
-        reason: `Room ${no(b.R)} → ${no(b.toRoomId)} on ${nightsLabel(b.moved)}, on the house chart: ${reason}`,
+        rooms: { configurationId: search.configuration.id, perNight: newPicture },
+        reason: `${movesWords(b, false)}, on the house chart: ${reason}`,
         expectedVersion: entry.version,
       });
-      return { mode: "ROOM_CHANGE", target: null, source: { entryId: entry.id, route: "NEGOTIATION", walk: null, amendment }, created: [], newInquiryId: null };
+      return { mode: "ROOM_CHANGE", target: null, source: { entryId: entry.id, route: "NEGOTIATION", walk: null, amendment }, walks: [], created: [], newInquiryId: null };
     }
-    const walk = await changeRoomToNewSegment(prisma, actor, {
-      entryId: entry.id,
-      fromRoomId: b.R,
-      reason,
-      ...roomChangeForm(b),
-      moveContext: moveContextOf(input.priceMode === "NEW_TYPE" ? "NEW_TYPE" : "KEEP", input.guestAgreedNote?.trim() || null),
-    });
-    return { mode: "ROOM_CHANGE", target: null, source: { entryId: entry.id, route: "WALK", walk, amendment: null }, created: [], newInquiryId: null };
+    // One walk per room, in turn. The first refused stops the rest; the rooms before it stay moved.
+    const walks: NightMoveResult["walks"] = [];
+    let last: RoomChangeOutcome | null = null;
+    for (const [i, p] of b.picks.entries()) {
+      const words = { fromRoomNumber: no(p.R), toRoomNumber: no(p.to), nightsLabel: nightsLabel(p.moved) };
+      try {
+        const walk = await changeRoomToNewSegment(prisma, actor, {
+          entryId: entry.id,
+          fromRoomId: p.R,
+          reason: b.multi ? `${reason} (${movesWords(b, false)})` : reason,
+          ...roomChangeForm(b, p),
+          moveContext: moveContextOf(input.priceMode === "NEW_TYPE" ? "NEW_TYPE" : "KEEP", input.guestAgreedNote?.trim() || null),
+        });
+        walks.push({ ...words, walk, error: null });
+        last = walk;
+        if (walk.walk.blocked) break;
+      } catch (e) {
+        if (i === 0) throw e;
+        walks.push({ ...words, walk: null, error: errorMessage(e) });
+        break;
+      }
+    }
+    for (const p of b.picks.slice(walks.length)) walks.push({ fromRoomNumber: no(p.R), toRoomNumber: no(p.to), nightsLabel: nightsLabel(p.moved), walk: null, error: "Not run — the room before it did not finish" });
+    return { mode: "ROOM_CHANGE", target: null, source: { entryId: entry.id, route: "WALK", walk: last, amendment: null }, walks, created: [], newInquiryId: null };
   }
 
   // ── Other dates ───────────────────────────────────────────────────────────────────────────────
@@ -745,18 +986,20 @@ export async function executeNightMove(
     throw new ValidationError("A new enquiry for the same guest over nights they hold needs the FOM to say it is on purpose");
   }
   const roomByIdForStamp = b.roomById as never;
+  const staying = b.planRooms.filter((id) => !s.pickedSet.has(id));
+  const movedWords = movesWords(b, false);
 
   // ── 1. Every new booking exists first (each holds nothing yet) ───────────────────────────────
   const made: Array<{ id: string; piece: (typeof s.pieces)[number] }> = [];
   let inquiryId = entry.inquiryId;
   try {
     if (target === "NEW_ENQUIRY") {
-      const span = { checkIn: s.movedPiece.checkIn, checkOut: s.movedPiece.checkOut };
+      const span = s.movedSpan;
       inquiryId = await createSplitInquiry(prisma, actor, entry, {
         proposedCheckIn: span.checkIn,
         proposedCheckOut: span.checkOut,
         duplicateReason: s.inquiryOverlap
-          ? `${s.movedPiece.words} moved off ${entry.id} to ${fmtDay(span.checkIn)} – ${fmtDay(span.checkOut)} — the guest's own nights, on purpose: ${reason}`
+          ? `${movedWords} moved off ${entry.id} to ${fmtDay(span.checkIn)} – ${fmtDay(span.checkOut)} — the guest's own nights, on purpose: ${reason}`
           : null,
       });
     }
@@ -791,7 +1034,7 @@ export async function executeNightMove(
     await abandonPieces(prisma, actor, ids, errorMessage(e));
     throw e;
   };
-  const what = `${s.roomWord}'s ${nightsLabel(b.moved)} moved to ${nightsLabel(b.movedNew)} ${toLabel}`;
+  const what = `${movedWords} moved ${b.shiftDays > 0 ? "later" : "earlier"} by ${Math.abs(b.shiftDays)} ${Math.abs(b.shiftDays) === 1 ? "day" : "days"} ${toLabel}`;
   if (stage === Stage.S2) {
     route = "NEGOTIATION";
     try {
@@ -805,7 +1048,7 @@ export async function executeNightMove(
         })) as { configuration: { id: string } };
         amendment = await amendNegotiationConfiguration(prisma, entry.id, actor, {
           dates: { checkInDate: span.checkIn, checkOutDate: span.checkOut },
-          rooms: { configurationId: search.configuration.id, perNight: kept.map((date) => ({ date, roomIds: [b.R] })) },
+          rooms: { configurationId: search.configuration.id, perNight: b.picture.filter((n) => kept.includes(n.date)) },
           reason: `${what}: ${reason}`,
           expectedVersion: entry.version,
         });
@@ -816,8 +1059,8 @@ export async function executeNightMove(
           guestCount: s.stays.guestCount || undefined,
         })) as { configuration: { id: string } };
         amendment = await amendNegotiationConfiguration(prisma, entry.id, actor, {
-          party: { adultCount: s.stays.adultCount, childCount: s.stays.childCount, childAges: s.stays.childAges, numberOfRooms: b.planRooms.length - 1 },
-          rooms: { configurationId: search.configuration.id, perNight: b.picture.map((n) => ({ date: n.date, roomIds: n.roomIds.filter((id) => id !== b.R) })) },
+          party: { adultCount: s.stays.adultCount, childCount: s.stays.childCount, childAges: s.stays.childAges, numberOfRooms: staying.length },
+          rooms: { configurationId: search.configuration.id, perNight: b.picture.map((n) => ({ date: n.date, roomIds: n.roomIds.filter((id) => !s.pickedSet.has(id)) })) },
           reason: `${what}: ${reason}`,
           expectedVersion: entry.version,
         });
@@ -852,18 +1095,18 @@ export async function executeNightMove(
       }
       walk = await changeRoomToNewSegment(prisma, actor, {
         entryId: entry.id,
-        fromRoomId: s.single ? b.R : b.planRooms.find((id) => id !== b.R)!,
+        fromRoomId: s.single ? b.R : staying[0]!,
         reason: `${what}: ${reason}`,
         ...(s.single
           ? { dateShift: { newCheckInDate: new Date(`${s.keptNights![0]}T00:00:00.000Z`), priceMode: "KEEP" as const, keepNights: s.keptNights } }
-          : { splitOff: { roomIds: [b.R], party: s.stays, toLabel } }),
+          : { splitOff: { roomIds: [...s.pickedSet], party: s.stays, toLabel } }),
       });
     } catch (e) {
       await abandon(e);
     }
   }
 
-  // ── 3. Each new booking: its room picked for its nights, then walked ─────────────────────────
+  // ── 3. Each new booking: its rooms picked for its nights, then walked ────────────────────────
   const created: NightMoveResult["created"] = [];
   for (const m of made) {
     const out = await walkPiece(prisma, actor, {
@@ -877,7 +1120,7 @@ export async function executeNightMove(
       priorTerms: s.priorTerms,
       reason,
     });
-    created.push({ ...out, kind: m.piece.kind, roomNumber: m.piece.rooms[0]?.roomNumber ?? "?" });
+    created.push({ ...out, kind: m.piece.kind, roomNumber: m.piece.rooms.map((r) => r.roomNumber).join(" + ") });
   }
 
   // ── 4. Every booking says what happened ──────────────────────────────────────────────────────
@@ -888,9 +1131,17 @@ export async function executeNightMove(
     newInquiryId: target === "NEW_ENQUIRY" ? inquiryId : null,
     room: { roomNumber: no(b.R), toRoomNumber: no(b.toRoomId) },
     nights: { from: b.moved, to: b.movedNew, label: `${nightsLabel(b.moved)} → ${nightsLabel(b.movedNew)}` },
-    kept: s.single ? { roomNumber: no(b.R), nights: s.keptNights } : null,
+    moves: b.picks.map((p) => ({ roomNumber: no(p.R), toRoomNumber: no(p.to), label: `${nightsLabel(p.moved)} → ${nightsLabel(p.movedNew)}` })),
+    kept: s.single ? { roomNumber: b.planRooms.map(no).join(" + "), nights: s.keptNights } : null,
     roomLeft: !s.single,
-    pieces: made.map((m) => ({ entryId: m.id, kind: m.piece.kind, roomNumber: m.piece.rooms[0]?.roomNumber ?? "?", checkInDate: m.piece.checkIn, checkOutDate: m.piece.checkOut })),
+    roomsLeft: s.single ? [] : [...s.pickedSet].map(no),
+    pieces: made.map((m) => ({
+      entryId: m.id,
+      kind: m.piece.kind,
+      roomNumber: m.piece.rooms.map((r) => r.roomNumber).join(" + "),
+      checkInDate: m.piece.checkIn,
+      checkOutDate: m.piece.checkOut,
+    })),
     priceMode: s.movedMode,
     reason,
   };
@@ -928,7 +1179,7 @@ export async function executeNightMove(
             target,
             nightMove: true,
             kind: m.piece.kind,
-            rooms: [{ fromRoomNumber: no(b.R), toRoomNumber: m.piece.rooms[0]?.roomNumber ?? "?" }],
+            rooms: m.piece.rooms.map((r) => ({ fromRoomNumber: r.fromRoomNumber, toRoomNumber: r.roomNumber })),
             from: { checkInDate: iso(b.priorIn), checkOutDate: iso(b.priorOut) },
             to: { checkInDate: m.piece.checkIn, checkOutDate: m.piece.checkOut },
             guests: partyWords(m.piece.party),
@@ -942,5 +1193,12 @@ export async function executeNightMove(
     })
     .catch(() => {});
 
-  return { mode: "SPLIT", target, source: { entryId: entry.id, route, walk, amendment }, created, newInquiryId: target === "NEW_ENQUIRY" ? inquiryId : null };
+  return {
+    mode: "SPLIT",
+    target,
+    source: { entryId: entry.id, route, walk, amendment },
+    walks: [],
+    created,
+    newInquiryId: target === "NEW_ENQUIRY" ? inquiryId : null,
+  };
 }

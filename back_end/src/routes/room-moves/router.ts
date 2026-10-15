@@ -157,21 +157,39 @@ roomMovesRouter.post(
 // A night (or a run of nights) of one room moved on the house chart (2026-10-14): to another room on
 // the same dates (a room change for those nights), or to other dates — the stays cut apart, each new
 // one a booking of its own on the same enquiry or a new one.
-const nightMoveSchema = z.object({
-  entryId: z.string().trim().min(1).max(64),
-  fromRoomId: z.string().trim().min(1).max(64),
-  nights: z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "nights are YYYY-MM-DD")).min(1).max(60),
-  toRoomId: z.string().trim().min(1).max(64).nullable().optional(),
-  newFirstNight: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "newFirstNight must be YYYY-MM-DD"),
-  priceMode: z.enum(["KEEP", "NEW_DATES", "NEW_TYPE"]).optional(),
-  guestAgreedNote: z.string().trim().max(1000).nullable().optional(),
-  target: z.enum(["SAME_ENQUIRY", "NEW_ENQUIRY"]).optional(),
-});
+const nightsList = z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "nights are YYYY-MM-DD")).min(1).max(60);
+// One room's nights (fromRoomId + nights), or several rooms' together (picks, the room dragged
+// first — 2026-10-15). Exactly one of the two.
+const nightMoveSchema = z
+  .object({
+    entryId: z.string().trim().min(1).max(64),
+    fromRoomId: z.string().trim().min(1).max(64).optional(),
+    nights: nightsList.optional(),
+    toRoomId: z.string().trim().min(1).max(64).nullable().optional(),
+    picks: z
+      .array(
+        z.object({
+          fromRoomId: z.string().trim().min(1).max(64),
+          nights: nightsList,
+          toRoomId: z.string().trim().min(1).max(64).nullable().optional(),
+        }),
+      )
+      .min(1)
+      .max(8)
+      .optional(),
+    newFirstNight: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "newFirstNight must be YYYY-MM-DD"),
+    priceMode: z.enum(["KEEP", "NEW_DATES", "NEW_TYPE"]).optional(),
+    guestAgreedNote: z.string().trim().max(1000).nullable().optional(),
+    target: z.enum(["SAME_ENQUIRY", "NEW_ENQUIRY"]).optional(),
+  })
+  .refine((v) => (v.picks ? !v.fromRoomId && !v.nights : !!v.fromRoomId && !!v.nights), {
+    message: "Name one room's nights (fromRoomId + nights) or several rooms' (picks) — not both",
+  });
 
 roomMovesRouter.post(
   "/date-moves/nights/preview",
   requireActorLevel("L1"),
-  validateBody(nightMoveSchema.extend({ reason: z.string().trim().max(1000).nullable().optional() })),
+  validateBody(nightMoveSchema.and(z.object({ reason: z.string().trim().max(1000).nullable().optional() }))),
   async (req, res, next) => {
     try {
       res.set("Cache-Control", "no-store");
@@ -185,7 +203,7 @@ roomMovesRouter.post(
 roomMovesRouter.post(
   "/date-moves/nights",
   requireActorLevel("L1"),
-  validateBody(nightMoveSchema.extend({ reason: z.string().trim().min(1).max(1000) })),
+  validateBody(nightMoveSchema.and(z.object({ reason: z.string().trim().min(1).max(1000) }))),
   async (req, res, next) => {
     try {
       res.status(201).json(await executeNightMove(prisma, actorOf(req), req.body));
