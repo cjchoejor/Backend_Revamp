@@ -747,7 +747,11 @@ export async function createPieceEntry(prisma: PrismaClient, actor: Actor, entry
     childCount: piece.party.childCount,
     childAges: piece.party.childAges,
     guestCount: piece.party.guestCount,
-    numberOfRooms: new Set(piece.rooms.map((r) => r.roomId)).size,
+    // The rooms it holds on its busiest night — a stay that changes rooms between nights (206 → 305)
+    // asks for one room, not two (2026-10-16).
+    numberOfRooms: piece.picture.length
+      ? Math.max(...piece.picture.map((n) => new Set(n.roomIds).size))
+      : new Set(piece.rooms.map((r) => r.roomId)).size,
     otaSource: entry.otaSource ?? undefined,
     contactPersonName: entry.contactPersonName ?? undefined,
     contactPersonPhone: entry.contactPersonPhone ?? undefined,
