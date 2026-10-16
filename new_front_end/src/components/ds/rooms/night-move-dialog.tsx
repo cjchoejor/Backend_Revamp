@@ -80,6 +80,11 @@ function ResultView({ result, tz, manyRooms }: { result: NightMoveResult; tz?: s
               ? `This booking stopped part-way at ${blockedWords(sourceBlocked)}. Finish it on the booking.`
               : `This booking is back at ${stepWord(s.walk?.walk.reachedStage)}.`}
         </p>
+        {result.followUp ? (
+          <p className="rmv-status stop" role="alert">
+            {result.followUp}
+          </p>
+        ) : null}
         {s.walk?.heldDocuments.length ? <HeldPapersCard entryId={s.entryId} onlyIds={s.walk.heldDocuments.map((h) => h.id)} tz={tz} title="This booking's new paper — send it, or not" /> : null}
         <Link className="mono sm" href={`/bookings/${s.entryId}`}>
           Open {s.entryId}

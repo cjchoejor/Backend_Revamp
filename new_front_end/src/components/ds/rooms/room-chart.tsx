@@ -937,7 +937,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
    * A press on a bar becomes a drag once the pointer moves; the picked rooms move with it when the
    * grabbed bar is one of them, else the grabbed bar alone. Escape drops it where it was.
    */
-  const beginPress = (e: React.PointerEvent, sel: Sel) => {
+  const beginPress = (e: React.PointerEvent, sel: Sel, bar?: { from: string; to: string }) => {
     if (e.button !== 0 || e.pointerType === "touch") return;
     // Ctrl and Shift clicks pick rooms; with Alt they pick nights, and an Alt press may still drag —
     // a press that never moves stays the click it was.
@@ -960,7 +960,25 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
       if (!pressNight) return;
       nightRooms = [{ roomId: sel.roomId, roomNumber: sel.roomNumber, nights: [pressNight] }];
     }
-    const items = nightRooms ? [sel] : selKeys.has(selKey(sel)) ? byRow(selected) : [sel];
+    // A bar that holds the room for only part of the stay (2026-10-16, operator: "305 on the 23rd
+    // was in 206 on the 23rd, but I can't move it back to 206 for any of the dates"): a plain drag
+    // of it to other dates, or onto another of the booking's own rooms, moves the bar's own nights —
+    // the room does not hold the rest of the stay, so moving "the room" would move nights it never
+    // had. Dropped on another booking's room on the same dates it stays the room move (a swap).
+    let barNights: NightRoom | null = null;
+    if (!nightRooms && bar && !selKeys.has(selKey(sel))) {
+      const b = bookingOf.get(sel.entryId);
+      const ci = b?.checkInDate?.slice(0, 10) ?? null;
+      const co = b?.checkOutDate?.slice(0, 10) ?? null;
+      const from = bar.from === chart?.from && ci && ci < bar.from ? ci : bar.from;
+      const to = bar.to === chart?.to && co && co > bar.to ? co : bar.to;
+      if (ci && co && (from > ci || to < co)) {
+        const nights: string[] = [];
+        for (let d = from; d < to; d = shiftDay(d, 1)) nights.push(d);
+        barNights = { roomId: sel.roomId, roomNumber: sel.roomNumber, nights };
+      }
+    }
+    const pickedItems = selKeys.has(selKey(sel)) ? byRow(selected) : [sel];
     const scroller = scrollerOf(wrap);
     // One night's width, off the header. The dates move by the pointer's sideways travel in nights,
     // rounded — so a drag up or down that wobbles a little stays a room move, and the dates move
@@ -999,9 +1017,12 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
       // the rooms as they are, and a drag up or down over them moves nothing — the same as resting
       // on the row it started from. Only a row outside the booking changes the room.
       const raw = rowAt(last.x, last.y);
+      const ontoOwn = !!raw && raw !== sel.roomId && ownRoom(sel.entryId, raw);
+      const nr = nightRooms ?? (barNights && (shift !== 0 || ontoOwn) ? [barNights] : undefined);
+      const items = nr ? [sel] : pickedItems;
       // Nights may go back into the booking's own rooms (2026-10-15) — only a whole-room drag is home there.
-      const over = !nightRooms && raw && raw !== sel.roomId && ownRoom(sel.entryId, raw) ? sel.roomId : raw;
-      current = { items, grabbed: sel, over, x: last.x, y: last.y, shift, ...(nightRooms ? { nightRooms } : {}) };
+      const over = !nr && ontoOwn ? sel.roomId : raw;
+      current = { items, grabbed: sel, over, x: last.x, y: last.y, shift, ...(nr ? { nightRooms: nr } : {}) };
       setDrag(current);
     };
     // Over the chart's own sticky header, or within 48px of its bottom, the chart keeps scrolling
@@ -1493,7 +1514,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
                               onMouseLeave={leave}
                               onFocus={(e) => point({ t: "bar", bar: s.bar, room, rect: rectOf(e) })}
                               onBlur={leave}
-                              onPointerDown={movable ? (e) => beginPress(e, sel) : undefined}
+                              onPointerDown={movable ? (e) => beginPress(e, sel, s.bar) : undefined}
                               // Shift, Ctrl and Alt clicks pick rooms and nights; they must not select text.
                               onMouseDown={(e) => (e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) && e.preventDefault()}
                               onClick={(e) => clickBar(e, sel, movable)}

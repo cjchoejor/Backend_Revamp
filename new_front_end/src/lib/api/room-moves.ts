@@ -405,6 +405,8 @@ export type NightMoveResult = {
   walks: Array<{ fromRoomNumber: string; toRoomNumber: string; nightsLabel: string; walk: RoomSplitResult["source"]["walk"]; error: string | null }>;
   created: Array<NonNullable<RoomSplitResult["created"]> & { kind: "MOVED" | "LEFT"; roomNumber: string }>;
   newInquiryId: string | null;
+  /** Something the desk still has to do — a second step refused after the first ran. */
+  followUp?: string | null;
 };
 
 export async function previewNightMove(session: Session, body: NightMoveInput & { reason?: string | null }) {
