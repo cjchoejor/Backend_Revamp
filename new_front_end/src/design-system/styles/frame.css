@@ -490,6 +490,7 @@
 .ds .rchart, .ds .rchart-hc, .ds .rchart-pick {
   --rs-line: #e2ddd5; --rs-head: #faf8f5; --rs-stay: #f3f0eb;
   --rs-prov-bg: #fffaf0; --rs-prov-line: #d9b45f; --rs-prov-tx: #7a5b20;
+  --rs-pick-line: #a99f90; --rs-pick-tx: #5f574c;
   --rs-held-bg: #fdf3dc; --rs-held-line: #c98a1a; --rs-held-tx: #7a4f0e;
   --rs-res-bg: #dbe6f1; --rs-res-tx: #24506f;
   --rs-in-bg: #3f6f99; --rs-over-bg: #8d3a33;
@@ -584,6 +585,11 @@
 .ds .rchart .seg.k-over .bar, .ds .rchart .sw.k-over { background: var(--rs-over-bg); color: #fff; }
 .ds .rchart .seg.k-out .bar, .ds .rchart .sw.k-out { background: var(--rs-out-bg); color: var(--ink-3); }
 .ds .rchart .seg.k-ooo .bar, .ds .rchart .sw.k-ooo { background: repeating-linear-gradient(45deg, var(--rs-ooo-a), var(--rs-ooo-a) 5px, var(--rs-ooo-b) 5px, var(--rs-ooo-b) 10px); color: var(--rs-ooo-tx); cursor: default; }
+/* a pick (2026-10-16): chosen by a booking that holds nothing — faint, dashed, never a fill */
+.ds .rchart .seg.k-pick .bar, .ds .rchart .sw.k-pick { background: var(--surface); color: var(--rs-pick-tx); outline: 1.5px dashed var(--rs-pick-line); outline-offset: -1.5px; font-weight: 500; }
+.ds .rchart .seg.k-pick .bar .st { font-style: italic; }
+.ds .rchart .pickbadge { position: absolute; top: -5px; right: 4px; z-index: 2; font: inherit; font-size: 10.5px; font-weight: 800; line-height: 1; padding: 2px 6px; border-radius: 9px; background: var(--surface); color: var(--rs-pick-tx); border: 1.5px dashed var(--rs-pick-line); cursor: pointer; white-space: nowrap; }
+.ds .rchart .pickbadge:hover { border-style: solid; color: var(--ink); }
 .ds .rchart .seg.k-conflict .bar, .ds .rchart .sw.k-conflict { background: var(--surface); box-shadow: inset 0 0 0 2px var(--rs-bad); color: var(--rs-bad); justify-content: center; font-weight: 800; cursor: help; }
 /* parked — a pause: the claim stands, the bar is drawn faded and striped */
 .ds .rchart .seg.parked .bar, .ds .rchart .sw.parked { background-image: repeating-linear-gradient(135deg, rgba(255, 255, 255, .6) 0 4px, transparent 4px 8px); opacity: .8; }
@@ -613,6 +619,10 @@
 .ds .e-k-ooo { --hc-edge: #9a9184; }
 .ds .e-k-conflict { --hc-edge: var(--rs-bad); --hc-name: var(--rs-bad); }
 .ds .e-k-free { --hc-edge: var(--success); }
+.ds .e-k-pick { --hc-edge: var(--rs-pick-line); --hc-name: var(--rs-pick-tx); }
+/* A new enquiry holds no rooms (2026-10-16) — said on the choice and under it, in the warning colour. */
+.ds .nmv-nothold { font-weight: 700; }
+.ds .nmv-nothold-line { margin: 8px 0 0; font-size: 13px; font-weight: 700; padding: 7px 10px; border: 1px solid var(--warning-line); background: var(--warning-soft); border-radius: 6px; }
 .ds .e-k-room { --hc-edge: var(--rs-type); }
 .ds .rchart-hc .hc-head, .ds .rchart-pick .hc-head { display: flex; align-items: center; gap: 6px; padding: 7px 12px; font-weight: 800; font-size: 12px; letter-spacing: .05em; text-transform: uppercase; }
 .ds .rchart-hc .hc-head .hc-kind, .ds .rchart-pick .hc-head .hc-kind { flex: 1; }
@@ -628,6 +638,12 @@
 .ds .rchart-hc .hc-head.k-conflict { background: var(--danger-soft); color: var(--danger); border-bottom: 2px solid var(--rs-bad); }
 .ds .rchart-hc .hc-head.k-free, .ds .rchart-pick .hc-head.k-free { background: var(--success-soft); color: var(--success); border-bottom: 2px solid var(--success); }
 .ds .rchart-hc .hc-head.k-room { background: var(--rs-type); color: #fff; }
+.ds .rchart-hc .hc-head.k-pick, .ds .rchart-pick .hc-head.k-pick { background: var(--rs-head); color: var(--rs-pick-tx); border-bottom: 2px dashed var(--rs-pick-line); }
+.ds .rchart-pick .pl-list { display: grid; gap: 6px; margin-top: 8px; }
+.ds .rchart-pick .pl-row { display: grid; gap: 1px; text-align: left; font: inherit; padding: 7px 9px; border-radius: 6px; border: 1px solid var(--line-2); background: var(--surface); cursor: pointer; }
+.ds .rchart-pick .pl-row:hover { border-color: var(--rs-pick-line); background: var(--rs-head); }
+.ds .rchart-pick .pl-row b { font-size: 13.5px; }
+.ds .rchart-pick .pl-row span { font-size: 12px; color: var(--ink-2); }
 .ds .rchart-hc .hc-head.parked { background-image: repeating-linear-gradient(135deg, rgba(255, 255, 255, .45) 0 5px, transparent 5px 10px); }
 .ds .rchart-hc .hc-body, .ds .rchart-pick .hc-body { padding: 10px 12px; }
 .ds .rchart-hc .hc-name, .ds .rchart-pick .hc-name { font-size: 16px; font-weight: 800; line-height: 1.25; }

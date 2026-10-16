@@ -98,7 +98,7 @@ function ResultView({ result, tz, manyRooms }: { result: NightMoveResult; tz?: s
             </b>
             {" — "}
             {c.newInquiry
-              ? `its booking ${c.entryId} on the new enquiry ${c.inquiryId} starts at Inquiry, filled in.`
+              ? `its booking ${c.entryId} on the new enquiry ${c.inquiryId} starts at Inquiry, filled in — its room is picked, not held, until it is reserved.`
               : c.blocked
                 ? `${c.entryId} stopped at ${stepWord(c.reachedStage)}: ${blockedWords(c.blocked)}. Finish it on the booking.`
                 : `${c.entryId} is at ${stepWord(c.reachedStage)}.`}
@@ -407,8 +407,14 @@ export function NightMoveDialog({ move, onClose, tz }: { move: NightMove | null;
                   <button type="button" role="radio" aria-checked={target === "NEW_ENQUIRY"} className={target === "NEW_ENQUIRY" ? "on" : undefined} onClick={() => setTarget("NEW_ENQUIRY")}>
                     A new enquiry
                     <small>{many ? "one new enquiry holds them all" : "its own number"} · starts at Inquiry, filled in</small>
+                    <small className="warn-ink nmv-nothold">rooms not held until reserved</small>
                   </button>
                 </div>
+              ) : null}
+              {target === "NEW_ENQUIRY" ? (
+                <p className="warn-ink nmv-nothold-line" role="status">
+                  A new enquiry starts at Inquiry, so its rooms are only picked, not held — another booking can take them until it is reserved. Take it forward from the booking.
+                </p>
               ) : null}
               {target && targetRefusals.length ? (
                 <ul className="rmv-refusals rmv-moveref" role="alert">

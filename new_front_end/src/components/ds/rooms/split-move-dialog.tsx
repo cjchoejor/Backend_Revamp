@@ -68,7 +68,7 @@ function ResultView({ result, tz }: { result: RoomSplitResult; tz?: string }) {
         <div className="spl-part">
           <p className={`rmv-status ${c.blocked ? "warn" : "ok"}`} role="status">
             {c.newInquiry
-              ? `A new enquiry, ${c.inquiryId}: its booking ${c.entryId} starts at Inquiry, filled in — ${fmtRange(c.checkInDate, c.checkOutDate)}.`
+              ? `A new enquiry, ${c.inquiryId}: its booking ${c.entryId} starts at Inquiry, filled in — ${fmtRange(c.checkInDate, c.checkOutDate)}. Its room is picked, not held, until it is reserved.`
               : c.blocked
                 ? `The new booking ${c.entryId} stopped at ${stepWord(c.reachedStage)} — ${c.blocked.message}. Finish it on the booking.`
                 : `The new booking ${c.entryId} is at ${stepWord(c.reachedStage)} — ${fmtRange(c.checkInDate, c.checkOutDate)}.`}
@@ -340,8 +340,14 @@ export function SplitMoveDialog({ move, onClose, tz }: { move: SplitMove | null;
                 >
                   A new enquiry
                   <small>its own number · starts at Inquiry, filled in</small>
+                  <small className="warn-ink nmv-nothold">rooms not held until reserved</small>
                 </button>
               </div>
+              {target === "NEW_ENQUIRY" ? (
+                <p className="warn-ink nmv-nothold-line" role="status">
+                  A new enquiry starts at Inquiry, so its rooms are only picked, not held — another booking can take them until it is reserved. Take it forward from the booking.
+                </p>
+              ) : null}
               {target && targetRefusals.length ? (
                 <ul className="rmv-refusals rmv-moveref" role="alert">
                   {targetRefusals.map((r) => (

@@ -69,6 +69,15 @@ export type RoomChartBar = {
   moveId: string | null;
 };
 
+/** Rooms a booking has chosen and does not hold (Inquiry, or Negotiation without a provisional block). */
+export type RoomChartPick = {
+  roomId: string;
+  entryId: string;
+  from: string;
+  to: string;
+  parked: boolean;
+};
+
 export type RoomChartBooking = {
   entryId: string;
   inquiryId: string;
@@ -107,6 +116,8 @@ export type RoomChart = {
   }>;
   bookings: RoomChartBooking[];
   bars: RoomChartBar[];
+  /** Chosen, not held — counted in no figure (2026-10-16). */
+  picks: RoomChartPick[];
   perNight: Array<{
     date: string;
     total: number;

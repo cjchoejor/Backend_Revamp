@@ -54,7 +54,7 @@ import { Button } from "@/design-system";
 import { Help } from "@/components/ds/help";
 import { LoadFailed, LoadingBlock } from "@/components/ds/ui";
 import { useSession } from "@/hooks/use-session";
-import { getRoomChart, type ChartBarKind, type RoomChart, type RoomChartBar, type RoomChartBooking } from "@/lib/api/rooms";
+import { getRoomChart, type ChartBarKind, type RoomChart, type RoomChartBar, type RoomChartBooking, type RoomChartPick } from "@/lib/api/rooms";
 import { fmtDateTime, fmtRange, plural } from "@/lib/ds/format";
 import { rowNameOf } from "@/lib/ds/status";
 import { STEP_NAMES, stepNoOfStage } from "@/lib/ds/steps";
@@ -108,12 +108,15 @@ type Seg =
   | { t: "free"; night: string; index: number }
   | { t: "ooo"; span: number; reason: string | null; from: string; to: string }
   | { t: "bar"; span: number; bar: RoomChartBar }
-  | { t: "conflict"; night: string; bars: RoomChartBar[] };
+  | { t: "conflict"; night: string; bars: RoomChartBar[] }
+  /** Free, but chosen by bookings that hold nothing yet (2026-10-16) — drawn faint, counted nowhere. */
+  | { t: "picks"; span: number; index: number; from: string; to: string; picks: RoomChartPick[] };
 
 /** What the hover card is about — only what is on the chart (2026-10-12). */
 type Hover =
   | { t: "bar"; bar: RoomChartBar; room: ChartRoom; rect: DOMRect }
   | { t: "conflict"; bars: RoomChartBar[]; room: ChartRoom; night: string; rect: DOMRect }
+  | { t: "picks"; picks: RoomChartPick[]; room: ChartRoom; from: string; to: string; rect: DOMRect }
   | { t: "ooo"; room: ChartRoom; reason: string | null; from: string; to: string; rect: DOMRect };
 
 /** How long the pointer rests on a booking before its card opens. */
@@ -121,6 +124,10 @@ const HOVER_DELAY_MS = 1000;
 
 /** The open "Start an inquiry" box on a free night. */
 type Pick = { room: ChartRoom; night: string; freeRun: number; reachesEnd: boolean; rect: DOMRect };
+/** The open list of the bookings that chose a room-night (2026-10-16). */
+type PickList = { room: ChartRoom; picks: RoomChartPick[]; rect: DOMRect };
+/** One entry per booking, in the order given. */
+const uniquePicks = (list: RoomChartPick[]) => list.filter((p, i) => list.findIndex((q) => q.entryId === p.entryId) === i);
 
 /** A booking's claim on one room, picked on the chart (Ctrl / Shift click) or grabbed by a drag. */
 type Sel = { entryId: string; roomId: string; roomNumber: string; name: string };
@@ -544,9 +551,11 @@ function housekeepingOf(room: ChartRoom): { cls: string; word: string } {
   return { cls: "hk-ok", word: "clean" };
 }
 
-function segmentsFor(room: ChartRoom, chart: RoomChart, bars: RoomChartBar[]): Seg[] {
+function segmentsFor(room: ChartRoom, chart: RoomChart, bars: RoomChartBar[], picks: RoomChartPick[] = []): Seg[] {
   const { nights } = chart;
   const on = nights.map((night) => bars.filter((b) => b.from <= night && night < b.to));
+  const pickedOn = nights.map((night) => uniquePicks(picks.filter((p) => p.from <= night && night < p.to)));
+  const pickKey = (i: number) => pickedOn[i].map((p) => p.entryId).sort().join("|");
   const out: Seg[] = [];
   let i = 0;
   while (i < nights.length) {
@@ -567,6 +576,13 @@ function segmentsFor(room: ChartRoom, chart: RoomChart, bars: RoomChartBar[]): S
       let j = i;
       while (j + 1 < nights.length && on[j + 1].length === 0 && room.outOfOrder.nights[j + 1]) j++;
       out.push({ t: "ooo", span: j - i + 1, reason: room.outOfOrder.reason, from: nights[i], to: shiftDay(nights[j], 1) });
+      i = j + 1;
+      continue;
+    }
+    if (pickedOn[i].length) {
+      let j = i;
+      while (j + 1 < nights.length && on[j + 1].length === 0 && !room.outOfOrder?.nights[j + 1] && pickKey(j + 1) === pickKey(i)) j++;
+      out.push({ t: "picks", span: j - i + 1, index: i, from: nights[i], to: shiftDay(nights[j], 1), picks: pickedOn[i] });
       i = j + 1;
       continue;
     }
@@ -611,6 +627,26 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
   const [hover, setHover] = useState<Hover | null>(null);
   const hoverTimer = useRef<number | null>(null);
   const [pick, setPick] = useState<Pick | null>(null);
+  const [pickList, setPickList] = useState<PickList | null>(null);
+  const pickListRef = useRef<HTMLDivElement | null>(null);
+  // Rooms chosen and not held, drawn faintly (2026-10-16) — shown unless this desk has hidden them.
+  const [showPicks, setShowPicks] = useState(true);
+  useEffect(() => {
+    try {
+      if (window.localStorage.getItem("desk:chart-picks") === "hidden") setShowPicks(false);
+    } catch {
+      /* storage unavailable — keep them shown */
+    }
+  }, []);
+  const toggleShowPicks = () =>
+    setShowPicks((v) => {
+      try {
+        window.localStorage.setItem("desk:chart-picks", v ? "hidden" : "shown");
+      } catch {
+        /* storage unavailable — the choice lasts this visit */
+      }
+      return !v;
+    });
   const [full, setFull] = useState(false);
   const [pickNights, setPickNights] = useState(1);
   const pickRef = useRef<HTMLDivElement | null>(null);
@@ -671,12 +707,34 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
     for (const b of chart?.bars ?? []) m.set(b.roomId, [...(m.get(b.roomId) ?? []), b]);
     return m;
   }, [chart]);
+  const picksByRoom = useMemo(() => {
+    const m = new Map<string, RoomChartPick[]>();
+    for (const p of chart?.picks ?? []) m.set(p.roomId, [...(m.get(p.roomId) ?? []), p]);
+    return m;
+  }, [chart]);
   /** The rooms in the order the chart draws them, top to bottom — what "keep their spacing" counts. */
   const rows = useMemo(() => {
     const have = new Set((chart?.rooms ?? []).map((r) => r.id));
     return (chart?.roomTypes ?? []).flatMap((t) => t.roomIds).filter((id) => have.has(id));
   }, [chart]);
 
+  // The list of picks closes the way the start box does.
+  useEffect(() => {
+    if (!pickList) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setPickList(null);
+    const onDown = (e: MouseEvent) => {
+      if (pickListRef.current && !pickListRef.current.contains(e.target as Node)) setPickList(null);
+    };
+    const onScroll = () => setPickList(null);
+    document.addEventListener("keydown", onKey);
+    document.addEventListener("mousedown", onDown);
+    window.addEventListener("scroll", onScroll, true);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("mousedown", onDown);
+      window.removeEventListener("scroll", onScroll, true);
+    };
+  }, [pickList]);
   // The start box closes on Escape, on a click outside it, and when the chart scrolls away.
   useEffect(() => {
     if (!pick) return;
@@ -756,7 +814,12 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
   const rectOf = (e: React.SyntheticEvent) => (e.currentTarget as HTMLElement).getBoundingClientRect();
   const openPick = (room: ChartRoom, night: string, index: number, rect: DOMRect, segs: Seg[]) => {
     // How many nights this room is free from here, on the chart.
-    const freeIdx = new Set(segs.filter((s) => s.t === "free").map((s) => (s as { index: number }).index));
+    // A night only picked is still free — nobody holds it.
+    const freeIdx = new Set<number>();
+    for (const s of segs) {
+      if (s.t === "free") freeIdx.add(s.index);
+      else if (s.t === "picks") for (let x = 0; x < s.span; x++) freeIdx.add(s.index + x);
+    }
     let run = 0;
     while (freeIdx.has(index + run)) run++;
     const reachesEnd = index + run >= chart.nights.length;
@@ -1275,6 +1338,9 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
           >
             {switching ? "Stop switching" : "Switch rooms"}
           </Button>
+          <Button kind="quiet" compact onClick={toggleShowPicks} aria-pressed={showPicks}>
+            {showPicks ? "Hide picks" : "Show picks"}
+          </Button>
           <Button kind="quiet" compact onClick={() => setFull((f) => !f)} aria-pressed={full}>
             {full ? "Exit full screen" : "Full screen"}
           </Button>
@@ -1282,6 +1348,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
             <p>Every room, night by night: who holds it and how firmly. Rest the pointer on a booking for a second to see it; click it to open the booking.</p>
             <p>Click a free night to start an inquiry for that room from that night. The room is chosen on the booking, where the house is asked.</p>
             <p>Click a room number to report a fault or review one. A room drawn free here is one the room search offers.</p>
+            <p>A faint dashed bar is a pick: a booking at Inquiry, or at Negotiation without a provisional block, has chosen the room but holds nothing — the room is still free, and whoever reserves first takes it. Several picks on one night show as &ldquo;2 picks&rdquo;; a pick on a room someone holds shows as a &ldquo;+1 pick&rdquo; badge on that booking. Hide picks clears them from the chart on this computer.</p>
             <p>Move rooms: drag a booking onto another room. Ctrl-click (Cmd on a Mac) picks more rooms, Shift-click picks a booking&apos;s rooms in between; drag one of them and they all move, the one you hold landing where you drop it and the rest keeping their spacing.</p>
             <p>Move dates: drag a booking sideways — the room you hold moves earlier or later, keeping its nights (before check-in only). Pick its other rooms first (Ctrl or Shift) to take them along; all of them moves the whole booking. A room moved alone becomes a booking of its own — on the same enquiry, or a new enquiry. Drag it down or up at the same time to change the room too.</p>
             <p>Move one night: hold Alt and drag a night of a booking — only that night moves. Alt-click picks a night first, Alt-click the next one to add it, Alt+Shift-click to take the nights in between. Dropped on another room on the same dates, the booking changes room for those nights. Dropped on other dates, the stay is cut apart: a one-room booking keeps its earliest stay and every other stay becomes a booking of its own; on a booking with other rooms, the room leaves with its guests and each of its stays becomes a booking of its own — on the same enquiry, or a new one.</p>
@@ -1416,7 +1483,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
                   const room = chart.rooms.find((r) => r.id === rid);
                   if (!room) return null;
                   const hk = housekeepingOf(room);
-                  const segs = segmentsFor(room, chart, barsByRoom.get(rid) ?? []);
+                  const segs = segmentsFor(room, chart, barsByRoom.get(rid) ?? [], showPicks ? (picksByRoom.get(rid) ?? []) : []);
                   return (
                     <tr
                       key={rid}
@@ -1439,7 +1506,49 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
                         </button>
                       </th>
                       {segs.map((s, k) => {
-                        const segFirst = chart.nights[segs.slice(0, k).reduce((n, x) => n + (x.t === "bar" || x.t === "ooo" ? x.span : 1), 0)];
+                        const segFirst = chart.nights[segs.slice(0, k).reduce((n, x) => n + (x.t === "bar" || x.t === "ooo" || x.t === "picks" ? x.span : 1), 0)];
+                        if (s.t === "picks") {
+                          const one = s.picks.length === 1 ? s.picks[0] : null;
+                          const pb = one ? bookingOf.get(one.entryId) : undefined;
+                          return (
+                            <td key={k} colSpan={s.span} className={`seg k-pick${s.picks.every((p) => p.parked) ? " parked" : ""}`}>
+                              <button
+                                type="button"
+                                className="bar"
+                                aria-label={
+                                  one
+                                    ? `Room ${room.roomNumber}: picked by ${nameOf(pb)}, not held`
+                                    : `Room ${room.roomNumber}: ${s.picks.length} bookings have picked it, none holds it`
+                                }
+                                onMouseEnter={(e) => point({ t: "picks", picks: s.picks, room, from: s.from, to: s.to, rect: rectOf(e) })}
+                                onMouseLeave={leave}
+                                onClick={(e) => {
+                                  if (dragEnded.current) return;
+                                  if (switching) {
+                                    if (!picking) toast("Click the booking to move first");
+                                    else moveSelectionTo(room.id);
+                                    return;
+                                  }
+                                  leave();
+                                  if (one) router.push(`/bookings/${one.entryId}`);
+                                  else setPickList({ room, picks: s.picks, rect: rectOf(e) });
+                                }}
+                              >
+                                {one ? (
+                                  <>
+                                    {one.parked ? <span className="pk">Parked</span> : null}
+                                    {nameOf(pb)}
+                                    <span className="st"> · picked, not held</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    {s.picks.length} picks<span className="st"> · not held</span>
+                                  </>
+                                )}
+                              </button>
+                            </td>
+                          );
+                        }
                         if (s.t === "free") {
                           const past = s.night < chart.today;
                           return (
@@ -1523,6 +1632,28 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
                               {nameOf(b)}
                               {s.span > 1 && b ? <span className="st"> · {STEP_NAMES[stepNoOfStage(b.stage) - 1]}</span> : null}
                             </button>
+                            {(() => {
+                              // Other bookings that chose this room on these nights and hold nothing (2026-10-16).
+                              if (!showPicks || !segFirst) return null;
+                              const segTo = shiftDay(segFirst, s.span);
+                              const also = uniquePicks((picksByRoom.get(room.id) ?? []).filter((p) => p.entryId !== s.bar.entryId && p.from < segTo && p.to > segFirst));
+                              if (!also.length) return null;
+                              return (
+                                <button
+                                  type="button"
+                                  className="pickbadge"
+                                  aria-label={`${plural(also.length, "booking")} also picked Room ${room.roomNumber} on these nights — none holds it`}
+                                  onPointerDown={(e) => e.stopPropagation()}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    leave();
+                                    setPickList({ room, picks: also, rect: rectOf(e) });
+                                  }}
+                                >
+                                  +{also.length} {also.length === 1 ? "pick" : "picks"}
+                                </button>
+                              );
+                            })()}
                             {(() => {
                               // The nights picked with Alt, or being dragged, marked on the bar itself.
                               const marked =
@@ -1692,9 +1823,45 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
         }}
       />
 
-      {hover && !pick && !moveLegs && !dateMove && !splitMove && !nightMove ? (
+      {hover && !pick && !pickList && !moveLegs && !dateMove && !splitMove && !nightMove ? (
         <Floating>
-          <HoverCard hover={hover} chart={chart} bookingOf={bookingOf} typeName={(id) => typeOf.get(id)?.name ?? ""} />
+          <HoverCard hover={hover} chart={chart} bookingOf={bookingOf} typeName={(id) => typeOf.get(id)?.name ?? ""} showPicks={showPicks} />
+        </Floating>
+      ) : null}
+
+      {pickList ? (
+        <Floating>
+          <div className="rchart-pick e-k-pick" ref={pickListRef} style={placeBeside(pickList.rect, 320)} role="dialog" aria-label="Bookings that picked this room">
+            <div className="hc-head k-pick">
+              <span className="hc-kind">{pickList.picks.length === 1 ? "Picked · not held" : `${pickList.picks.length} picks · not held`}</span>
+              <span className="hc-room">Room {pickList.room.roomNumber}</span>
+            </div>
+            <div className="hc-body">
+              <div className="hc-sub">None of them holds the room — whoever reserves first takes it.</div>
+              <div className="pl-list">
+                {pickList.picks.map((p) => {
+                  const b = bookingOf.get(p.entryId);
+                  return (
+                    <button key={p.entryId} type="button" className="pl-row" onClick={() => router.push(`/bookings/${p.entryId}`)}>
+                      <b>{nameOf(b)}</b>
+                      <span>
+                        {p.entryId} · {b ? STEP_NAMES[stepNoOfStage(b.stage) - 1] : ""}
+                        {p.parked ? " · parked" : ""}
+                      </span>
+                      <span>
+                        {fmtRange(p.from, p.to)} in this room{b?.checkInDate ? ` · stay ${fmtRange(b.checkInDate, b.checkOutDate)}` : ""}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="pick-acts">
+                <Button kind="quiet" compact onClick={() => setPickList(null)}>
+                  Close
+                </Button>
+              </div>
+            </div>
+          </div>
         </Floating>
       ) : null}
 
@@ -1767,11 +1934,13 @@ function HoverCard({
   chart,
   bookingOf,
   typeName,
+  showPicks = true,
 }: {
   hover: Hover;
   chart: RoomChart;
   bookingOf: Map<string, RoomChartBooking>;
   typeName: (roomTypeId: string) => string;
+  showPicks?: boolean;
 }) {
   const style = placeBeside(hover.rect, 320);
   const roomLine = (r: ChartRoom) => `Room ${r.roomNumber} · ${typeName(r.roomTypeId)}${r.bedType ? ` · ${BED_WORD[r.bedType] ?? r.bedType}` : ""}`;
@@ -1804,6 +1973,12 @@ function HoverCard({
             {fact("Booking", b ? `${b.entryId} · ${b.inquiryId}` : bar.entryId)}
             {bar.holdExpiresAt ? fact("Held until", fmtDateTime(bar.holdExpiresAt)) : null}
             {bar.moveId ? fact("Room move", bar.moveId) : null}
+            {showPicks
+              ? uniquePicks((chart.picks ?? []).filter((p) => p.roomId === room.id && p.entryId !== bar.entryId && p.from < bar.to && p.to > bar.from)).map((p) => {
+                  const pb = bookingOf.get(p.entryId);
+                  return fact("Also picked by", `${pb ? rowNameOf(pb) : "Booking"} · ${p.entryId} · ${fmtRange(p.from, p.to)}`);
+                })
+              : null}
           </div>
         </div>
         <div className="hc-foot">{bar.kind === "MOVING" ? "Being moved into this room — open the booking to see the move" : "Click to open the booking"}</div>
@@ -1828,6 +2003,32 @@ function HoverCard({
           </div>
         </div>
         <div className="hc-foot">One of them has to move — open each from the Bookings list</div>
+      </div>
+    );
+  }
+  if (hover.t === "picks") {
+    const n = hover.picks.length;
+    return (
+      <div className="rchart-hc e-k-pick" style={style} role="tooltip">
+        <div className={`hc-head k-pick${hover.picks.every((p) => p.parked) ? " parked" : ""}`}>
+          <span className="hc-kind">{n === 1 ? "Picked · not held" : `${n} picks · not held`}</span>
+        </div>
+        <div className="hc-body">
+          {n === 1 ? <div className="hc-name">{(() => { const b = bookingOf.get(hover.picks[0].entryId); return b ? rowNameOf(b) : "Booking"; })()}</div> : null}
+          <div className="hc-sub">
+            {roomLine(hover.room)} · {fmtRange(hover.from, hover.to)}
+          </div>
+          <div className="hc-facts">
+            {hover.picks.map((p) => {
+              const b = bookingOf.get(p.entryId);
+              return fact(
+                b ? STEP_NAMES[stepNoOfStage(b.stage) - 1] : "Booking",
+                `${n > 1 && b ? `${rowNameOf(b)} · ` : ""}${p.entryId}${b?.checkInDate ? ` · stay ${fmtRange(b.checkInDate, b.checkOutDate)}` : ""}${p.parked ? " · parked" : ""}`,
+              );
+            })}
+          </div>
+        </div>
+        <div className="hc-foot">Chosen, but nothing holds the room — whoever reserves first takes it. Click to open {n === 1 ? "the booking" : "the list"}</div>
       </div>
     );
   }
@@ -1866,6 +2067,7 @@ function Legend() {
     ["k-res parked", "Parked"],
     ["k-ooo", "Out of order"],
     ["k-conflict", "Two bookings"],
+    ["k-pick", "Picked · not held"],
   ];
   return (
     <div className="rslegend">
