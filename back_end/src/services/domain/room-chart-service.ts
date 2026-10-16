@@ -22,6 +22,11 @@
  * WHAT IS ADDED FOR THE CHART ONLY: bookings that have finished their stay (Closed, or at the
  * Closed step) are drawn as "checked out" on the nights they used — history, not a claim. A
  * no-show is not drawn: the guest never came.
+ *
+ * PICKS (2026-10-16, operator: a night moved to a new enquiry "isn't showing on the chart"): rooms
+ * chosen at Inquiry, or at Negotiation without a provisional block, HOLD NOTHING — the search still
+ * offers them and whoever reserves first takes them. They are listed apart (`picks`), never as bars,
+ * and no figure counts them; the desk draws them faintly so the demand is seen.
  */
 import type { EntryStatus, PrismaClient, Stage } from "@prisma/client";
 import { ValidationError } from "../../lib/errors.js";
@@ -36,6 +41,7 @@ import {
 } from "../../lib/entry-inventory-claim.js";
 import { hotelTodayUtc, ymdUtc } from "../../lib/stay-dates.js";
 import { roomMoveClaims } from "../../lib/room-move-claims.js";
+import { sealAsPerNight } from "../../lib/option-selected-reader.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 export const CHART_DEFAULT_NIGHTS = 14;
@@ -83,6 +89,15 @@ export type RoomChartBar = {
   holdExpiresAt: string | null;
   /** The room move holding it, for MOVING. */
   moveId: string | null;
+};
+
+/** Rooms a booking has chosen and does not hold — consecutive nights on one room. */
+export type RoomChartPick = {
+  roomId: string;
+  entryId: string;
+  from: string;
+  to: string;
+  parked: boolean;
 };
 
 export type RoomChartBooking = {
@@ -141,6 +156,8 @@ export type RoomChart = {
   }>;
   bookings: RoomChartBooking[];
   bars: RoomChartBar[];
+  /** Chosen, not held (Inquiry, or Negotiation without a provisional block). Counted nowhere. */
+  picks: RoomChartPick[];
   perNight: RoomChartNight[];
 };
 
@@ -480,7 +497,58 @@ export async function buildRoomChart(
     ),
   }));
 
-  const usedEntryIds = new Set(bars.map((b) => b.entryId));
+  // ---- picks: chosen at Inquiry or Negotiation, held by nothing ------------------------------
+  const pickRows = await prisma.entry.findMany({
+    where: {
+      currentStage: { in: ["S1", "S2"] },
+      status: { in: ["ACTIVE", "PARKED"] },
+      checkInDate: { lt: to },
+      checkOutDate: { gt: from },
+    },
+    select: {
+      ...entrySelect,
+      segments: { orderBy: { segmentNumber: "desc" }, take: 1, select: { id: true } },
+      availabilityConfigs: {
+        where: { sealedAt: { not: null } },
+        orderBy: { sealedAt: "desc" },
+        take: 3,
+        select: { segmentId: true, optionSelected: true },
+      },
+    },
+  });
+  const picks: RoomChartPick[] = [];
+  for (const e of pickRows) {
+    // This pass's own pick — an earlier pass's seal is history.
+    const seg = e.segments[0]?.id ?? null;
+    const cfg = e.availabilityConfigs.find((c) => c.optionSelected != null && (seg == null || c.segmentId == null || c.segmentId === seg));
+    const seal = cfg ? sealAsPerNight(cfg.optionSelected, { checkIn: e.checkInDate, checkOut: e.checkOutDate }) : null;
+    if (!seal) continue;
+    const nightsOf = new Map<string, Set<number>>();
+    for (const n of seal) {
+      const i = Math.round((Date.parse(`${n.date}T00:00:00.000Z`) - from.getTime()) / DAY_MS);
+      if (i < 0 || i >= count) continue;
+      for (const r of n.roomIds) {
+        if (!roomIds.has(r.roomId)) continue;
+        // A night its own provisional block holds is drawn as that block, not as a pick.
+        if (owner.get(r.roomId)?.get(i)?.has(e.id)) continue;
+        nightsOf.set(r.roomId, new Set([...(nightsOf.get(r.roomId) ?? []), i]));
+      }
+    }
+    if (nightsOf.size === 0) continue;
+    remember(e as unknown as EntryRow);
+    for (const [roomId, set] of nightsOf) {
+      const idx = [...set].sort((a, b) => a - b);
+      let start = idx[0];
+      for (let k = 1; k <= idx.length; k++) {
+        if (k < idx.length && idx[k] === idx[k - 1] + 1) continue;
+        picks.push({ roomId, entryId: e.id, from: nights[start], to: ymdUtc(addDays(from, idx[k - 1] + 1)), parked: e.status === "PARKED" });
+        if (k < idx.length) start = idx[k];
+      }
+    }
+  }
+  picks.sort((a, b) => a.from.localeCompare(b.from));
+
+  const usedEntryIds = new Set([...bars.map((b) => b.entryId), ...picks.map((p) => p.entryId)]);
   const bookings: RoomChartBooking[] = [...entries.values()]
     .filter((e) => usedEntryIds.has(e.id))
     .map((e) => ({
@@ -530,6 +598,7 @@ export async function buildRoomChart(
     })),
     bookings,
     bars,
+    picks,
     perNight,
   };
 }
