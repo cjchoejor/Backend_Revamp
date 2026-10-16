@@ -214,9 +214,10 @@ export function SplitMoveDialog({ move, onClose, tz }: { move: SplitMove | null;
   return (
     <DsDialog
       open
-      onClose={() => !busy && onClose()}
+      // The check with the house writes nothing — leaving during it is fine; only the move itself holds the window.
+      onClose={() => !run.isPending && onClose()}
       width={780}
-      busy={busy}
+      busy={run.isPending}
       title={result ? `${move.roomWords} moved to other dates` : `Move ${move.roomWords} to other dates`}
       footer={
         result ? (
@@ -225,7 +226,7 @@ export function SplitMoveDialog({ move, onClose, tz }: { move: SplitMove | null;
           </Button>
         ) : (
           <>
-            <Button kind="quiet" onClick={onClose} state={busy ? "inert" : "default"}>
+            <Button kind="quiet" onClick={onClose} state={run.isPending ? "inert" : "default"}>
               Leave it as it is
             </Button>
             <Button kind="primary" state={blockedBy || busy ? "inert" : "default"} onClick={() => !blockedBy && run.mutate()}>

@@ -63,6 +63,7 @@ import { RoomMoveDialog } from "./room-move-dialog";
 import { DateMoveDialog } from "./date-move-dialog";
 import { SplitMoveDialog, type SplitMove } from "./split-move-dialog";
 import { NightMoveDialog, type NightMove } from "./night-move-dialog";
+import { BookingBox, type BoxMove } from "./booking-box";
 import type { DateMoveInput } from "@/lib/api/room-moves";
 
 const KIND_WORD: Record<ChartBarKind, string> = {
@@ -666,6 +667,22 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
   const [splitMove, setSplitMove] = useState<SplitMove | null>(null);
   /** Nights picked with Alt-click, and a night move under way (2026-10-14). */
   const [nightPick, setNightPick] = useState<NightSel | null>(null);
+  // A booking's rooms in one box (2026-10-16): a single click opens it, a double click the booking.
+  const [box, setBox] = useState<string | null>(null);
+  const clickTimer = useRef<number | null>(null);
+  /** One click waits a moment for a second: one opens `single`, two open the booking. */
+  const oneOrTwo = (e: React.MouseEvent, entryId: string, single: () => void) => {
+    if (clickTimer.current) window.clearTimeout(clickTimer.current);
+    clickTimer.current = null;
+    if (e.detail >= 2) {
+      router.push(`/bookings/${entryId}`);
+      return;
+    }
+    clickTimer.current = window.setTimeout(() => {
+      clickTimer.current = null;
+      single();
+    }, 260);
+  };
   /** Where an Alt+Shift range starts: the room and night last Alt-clicked. */
   const nightAnchor = useRef<{ roomId: string; night: string } | null>(null);
   const [nightMove, setNightMove] = useState<NightMove | null>(null);
@@ -974,7 +991,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
       return;
     }
     if (!switching) {
-      router.push(`/bookings/${sel.entryId}`);
+      oneOrTwo(e, sel.entryId, () => setBox(sel.entryId));
       return;
     }
     if (selKeys.has(selKey(sel))) {
@@ -1345,7 +1362,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
             {full ? "Exit full screen" : "Full screen"}
           </Button>
           <Help label="About the house chart">
-            <p>Every room, night by night: who holds it and how firmly. Rest the pointer on a booking for a second to see it; click it to open the booking.</p>
+            <p>Every room, night by night: who holds it and how firmly. Rest the pointer on a booking for a second to see it. Click it once for a box with all its rooms night by night, where you tick what to move; double-click it to open the booking.</p>
             <p>Click a free night to start an inquiry for that room from that night. The room is chosen on the booking, where the house is asked.</p>
             <p>Click a room number to report a fault or review one. A room drawn free here is one the room search offers.</p>
             <p>A faint dashed bar is a pick: a booking at Inquiry, or at Negotiation without a provisional block, has chosen the room but holds nothing — the room is still free, and whoever reserves first takes it. Several picks on one night show as &ldquo;2 picks&rdquo;; a pick on a room someone holds shows as a &ldquo;+1 pick&rdquo; badge on that booking. Hide picks clears them from the chart on this computer.</p>
@@ -1530,8 +1547,8 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
                                     return;
                                   }
                                   leave();
-                                  if (one) router.push(`/bookings/${one.entryId}`);
-                                  else setPickList({ room, picks: s.picks, rect: rectOf(e) });
+                                  const rect = rectOf(e);
+                                  oneOrTwo(e, (one ?? s.picks[0]).entryId, () => setPickList({ room, picks: s.picks, rect }));
                                 }}
                               >
                                 {one ? (
@@ -1823,7 +1840,43 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
         }}
       />
 
-      {hover && !pick && !pickList && !moveLegs && !dateMove && !splitMove && !nightMove ? (
+      {box && bookingOf.get(box) ? (
+        <BookingBox
+          booking={bookingOf.get(box)!}
+          isMovable={(k) => MOVABLE.has(k)}
+          roomOrder={rows}
+          onClose={() => setBox(null)}
+          onOpen={() => router.push(`/bookings/${box}`)}
+          onMove={(m: BoxMove) => {
+            const entryId = box;
+            const name = nameOf(bookingOf.get(entryId));
+            setBox(null);
+            if (m.kind === "nights") setNightMove(m.move);
+            else if (m.kind === "split") setSplitMove(m.move);
+            else if (m.kind === "dates") setDateMove(m.move);
+            else if (m.kind === "rooms") setMoveLegs(m.legs);
+            else {
+              // Marked on the chart for a drag — and the chart brought to their dates when they are not on it.
+              const first = m.kind === "mark-nights" ? [...m.rooms.flatMap((r) => r.nights)].sort()[0] : bookingOf.get(entryId)?.checkInDate ?? null;
+              if (first && !chart.nights.includes(first)) setFrom(shiftDay(first, -1));
+              if (m.kind === "mark-nights") {
+                setSelected([]);
+                setNightPick({ entryId, name, rooms: m.rooms });
+                nightAnchor.current = { roomId: m.rooms[0].roomId, night: m.rooms[0].nights[0] };
+                toast("Marked on the chart — drag one of the marked nights to move them all");
+              } else {
+                setNightPick(null);
+                const sels = m.rooms.map((r) => ({ entryId, roomId: r.roomId, roomNumber: r.roomNumber, name }));
+                anchor.current = sels[0];
+                setSelected(sels);
+                toast(`Marked on the chart — drag ${sels.length === 1 ? "the room" : "one of the rooms"} to move ${sels.length === 1 ? "it" : "them all"}`);
+              }
+            }
+          }}
+        />
+      ) : null}
+
+      {hover && !box && !pick && !pickList && !moveLegs && !dateMove && !splitMove && !nightMove ? (
         <Floating>
           <HoverCard hover={hover} chart={chart} bookingOf={bookingOf} typeName={(id) => typeOf.get(id)?.name ?? ""} showPicks={showPicks} />
         </Floating>
@@ -1981,7 +2034,7 @@ function HoverCard({
               : null}
           </div>
         </div>
-        <div className="hc-foot">{bar.kind === "MOVING" ? "Being moved into this room — open the booking to see the move" : "Click to open the booking"}</div>
+        <div className="hc-foot">{bar.kind === "MOVING" ? "Being moved into this room — open the booking to see the move" : "Click for its rooms · double-click to open the booking"}</div>
       </div>
     );
   }
@@ -2028,7 +2081,7 @@ function HoverCard({
             })}
           </div>
         </div>
-        <div className="hc-foot">Chosen, but nothing holds the room — whoever reserves first takes it. Click to open {n === 1 ? "the booking" : "the list"}</div>
+        <div className="hc-foot">Chosen, but nothing holds the room — whoever reserves first takes it. Click for {n === 1 ? "the booking" : "the list"} · double-click to open {n === 1 ? "it" : "the first"}</div>
       </div>
     );
   }

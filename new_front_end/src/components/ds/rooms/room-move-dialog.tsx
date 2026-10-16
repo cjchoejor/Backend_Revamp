@@ -355,9 +355,10 @@ export function RoomMoveDialog({
   return (
     <DsDialog
       open
-      onClose={() => !busy && onClose()}
+      // The check with the house writes nothing — leaving during it is fine; only the move itself holds the window.
+      onClose={() => !run.isPending && onClose()}
       width={920}
-      busy={busy}
+      busy={run.isPending}
       title={title}
       footer={
         result ? (
@@ -366,7 +367,7 @@ export function RoomMoveDialog({
           </Button>
         ) : (
           <>
-            <Button kind="quiet" onClick={onClose} state={busy ? "inert" : "default"}>
+            <Button kind="quiet" onClick={onClose} state={run.isPending ? "inert" : "default"}>
               Leave it as it is
             </Button>
             <Button kind="primary" state={blockedBy || busy ? "inert" : "default"} onClick={() => !blockedBy && run.mutate()}>

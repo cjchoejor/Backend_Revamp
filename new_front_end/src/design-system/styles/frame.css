@@ -622,6 +622,37 @@
 .ds .e-k-pick { --hc-edge: var(--rs-pick-line); --hc-name: var(--rs-pick-tx); }
 /* A new enquiry holds no rooms (2026-10-16) — said on the choice and under it, in the warning colour. */
 .ds .nmv-nothold { font-weight: 700; }
+/* A booking's rooms in one box (2026-10-16) — tick rooms and nights, then say where they go. */
+.ds .bbox-title { display: flex; flex-direction: column; gap: 2px; }
+.ds .bbox-sub { font-size: 13px; font-weight: 500; color: var(--ink-2); }
+.ds .bbox { display: grid; gap: 12px; }
+.ds .bbox-head { display: flex; align-items: center; gap: 10px; font-size: 14px; }
+.ds .bbox-wrap { overflow: auto; max-height: 52vh; border: 1px solid var(--line-2); border-radius: 8px; }
+.ds .bbox-grid { border-collapse: separate; border-spacing: 0; font-size: 13px; }
+.ds .bbox-grid th, .ds .bbox-grid td { padding: 3px; text-align: center; border-bottom: 1px solid var(--line); }
+.ds .bbox-grid thead th { position: sticky; top: 0; z-index: 2; background: var(--surface); }
+.ds .bbox-grid .bbox-room { position: sticky; left: 0; z-index: 1; background: var(--surface); text-align: left; min-width: 150px; }
+.ds .bbox-grid thead .bbox-room { z-index: 3; font-weight: 700; color: var(--ink-2); padding-left: 10px; }
+.ds .bbox-night { display: grid; justify-items: center; gap: 0; width: 56px; padding: 3px 0; font: inherit; border: 1px solid transparent; border-radius: 6px; background: none; cursor: pointer; }
+.ds .bbox-night span { font-size: 10.5px; color: var(--ink-3); text-transform: uppercase; }
+.ds .bbox-night b { font-size: 16px; }
+.ds .bbox-night:hover:not(:disabled) { border-color: var(--accent); }
+.ds .bbox-night.on { background: var(--accent-soft); border-color: var(--accent); }
+.ds .bbox-night:disabled { opacity: .45; cursor: default; }
+.ds .bbox-rno { display: flex; align-items: baseline; gap: 8px; width: 100%; font: inherit; text-align: left; padding: 5px 8px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--surface); cursor: pointer; }
+.ds .bbox-rno b { font-size: 15px; }
+.ds .bbox-rno span { font-size: 11.5px; color: var(--ink-3); }
+.ds .bbox-rno:hover { border-color: var(--accent); }
+.ds .bbox-rno.on { background: var(--accent-soft); border-color: var(--accent); }
+.ds .bbox-cell { width: 56px; height: 30px; font: inherit; font-size: 15px; font-weight: 800; color: #fff; border: 1.5px solid var(--line-2); border-radius: 6px; background: var(--surface); cursor: pointer; }
+.ds .bbox-cell:hover { border-color: var(--accent); }
+.ds .bbox-grid .bbox-cell.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.ds .bbox-none { color: var(--ink-3); }
+.ds .bbox-to { display: grid; grid-template-columns: minmax(180px, 220px) 1fr; gap: 12px; align-items: start; }
+.ds .bbox-first small { display: block; margin-top: 3px; font-weight: 700; }
+.ds .bbox-targets { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
+.ds .bbox-why { margin: 0; font-weight: 700; font-size: 13.5px; }
+.ds .bbox-foot { display: flex; align-items: center; gap: 8px; width: 100%; flex-wrap: wrap; }
 .ds .nmv-nothold-line { margin: 8px 0 0; font-size: 13px; font-weight: 700; padding: 7px 10px; border: 1px solid var(--warning-line); background: var(--warning-soft); border-radius: 6px; }
 .ds .e-k-room { --hc-edge: var(--rs-type); }
 .ds .rchart-hc .hc-head, .ds .rchart-pick .hc-head { display: flex; align-items: center; gap: 6px; padding: 7px 12px; font-weight: 800; font-size: 12px; letter-spacing: .05em; text-transform: uppercase; }
