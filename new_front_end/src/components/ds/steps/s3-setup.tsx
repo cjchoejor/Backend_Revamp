@@ -50,7 +50,6 @@ import {
   Facts,
   Live,
   OnRecord,
-  OtherWays,
   PaperDrawer,
   ReasonDialog,
   SeeRow,
@@ -65,6 +64,10 @@ import {
   words,
   type PaperRef,
   type StepPane,
+  OtherWaysTabs,
+  InlineWay,
+  ShutWay,
+  parkTab,
 } from "./kit";
 import { RoomsTableCard } from "./rooms-table";
 import { SendToField, useSendTo } from "./s8-parts";
@@ -119,13 +122,16 @@ const ROOMS_LEAD =
 export function S3SetUp({
   entry,
   past,
-  onPark,
+  parkNow,
+  parking,
   goToStep,
   pane,
 }: {
   entry: EntryDetail;
   past: boolean;
-  onPark?: () => void;
+  /** Park with the reason typed in Other ways' own tab (2026-10-17). */
+  parkNow?: (reason: string) => void;
+  parking?: boolean;
   goToStep: (n: number) => void;
   pane?: string | null;
 }) {
@@ -209,9 +215,7 @@ export function S3SetUp({
   const isParty = entry.groupBillingMode === "GROUP_MASTER" || entry.useType === "GROUP";
 
   /* ---- the ways out ---- */
-  const [cancelOpen, setCancelOpen] = useState(false);
   const [leaving, setLeaving] = useState(false);
-  const [reentry, setReentry] = useState<null | "S2" | "S1">(null);
   // The GM may waive the disclosed charge here too, and the desk says how a refund goes back
   // (2026-09-19) — this dialog offered neither: a GM could not waive a Set-up cancellation from
   // the desk, and every refund was written down as cash.
@@ -235,7 +239,6 @@ export function S3SetUp({
         : initiateS3ReEntryToS1(session!, entry.id, { reason: v.reason }),
     onSuccess: (_res, v) => {
       toast.success(v.to === "S2" ? "A new pass is open at Negotiation" : "A new pass is open at Inquiry");
-      setReentry(null);
       refresh(extraKeys);
       goToStep(v.to === "S2" ? 2 : 1);
     },
@@ -312,74 +315,96 @@ export function S3SetUp({
 
       <CompetingClaimsCard entryId={entry.id} />
 
-      <OtherWays>
-        {entry.status === "ACTIVE" && editable ? (
-          <SeeRow
-            key="cancel"
-            label="Cancel…"
-            note="records the reason; the hold is released, the proforma withdrawn, the disclosed charge applied and the rest of the advance refunded"
-            onClick={() => setCancelOpen(true)}
-          />
-        ) : null}
-        {onPark && entry.status === "ACTIVE" ? (
-          <SeeRow key="park" label="Park…" note="a reason; the booking waits where it is, its expiry paused, until it is resumed — a long park lapses on its own" onClick={onPark} />
-        ) : null}
-        {editable ? (
-          <SeeRow
-            key="renegotiate"
-            label="Renegotiate the price…"
-            note="a new pass at Negotiation — a fresh quotation and a fresh proforma"
-            onClick={elevated ? () => setReentry("S2") : undefined}
-            reason={elevated ? undefined : "a new pass is the FOM's call"}
-          />
-        ) : null}
-        {editable ? (
-          <SeeRow
-            key="reconfigure"
-            label="Change the dates or rooms…"
-            note="a new pass at Inquiry — the house is asked again; the hold is released"
-            onClick={elevated ? () => setReentry("S1") : undefined}
-            reason={elevated ? undefined : "a new pass is the FOM's call"}
-          />
-        ) : null}
-      </OtherWays>
-
-
-      <ReasonDialog
-        open={cancelOpen}
-        danger
-        onClose={() => !leaving && setCancelOpen(false)}
-        busy={cancelM.isPending || leaving}
-        title="Cancel this booking"
-        caseLines={[entry.id, fmtRange(entry.checkInDate, entry.checkOutDate)]}
-        lead={
-          <>
-            Cancelling at Set up is final. The committed hold is released and the rooms return to sale; the proforma is withdrawn and its clocks stop;
-            the <b>disclosed cancellation charge</b>, if any, is posted and the rest of the advance is refunded. It cannot be undone.
-          </>
-        }
-        confirmLabel="Cancel the booking"
-        placeholder="guest changed their plans"
-        onConfirm={(r) => cancelM.mutate(r)}
-      >
-        <CancellationFiguresLine entryId={entry.id} waive={gm && cancelWaive} />
-        <WaiverTick checked={cancelWaive} onChange={setCancelWaive} gm={gm} />
-        {refundHow.fields}
-      </ReasonDialog>
-      <ReasonDialog
-        open={reentry !== null}
-        onClose={() => setReentry(null)}
-        busy={reentryM.isPending}
-        title={reentry === "S2" ? "Renegotiate the price" : "Change the dates or rooms"}
-        caseLines={[reentry === "S2" ? "A new pass opens at Negotiation" : "A new pass opens at Inquiry"]}
-        lead={
-          reentry === "S2"
-            ? "This pass is sealed as it stands. The committed hold is released, the proforma replaced, and a fresh quotation is made in the new pass."
-            : "This pass is sealed as it stands. The committed hold is released and the house is asked again for the new dates or rooms."
-        }
-        confirmLabel="Open a new pass"
-        placeholder={reentry === "S2" ? "agent asked for a better rate" : "guest moved the dates by a day"}
-        onConfirm={(r) => reentry && reentryM.mutate({ to: reentry, reason: r })}
+      {/* Other ways as sub-tabs (2026-10-17, operator: the Negotiation tabs "for other tabs as well,
+          all stages"). Each panel is the form its button used to open, set out in place. */}
+      <OtherWaysTabs
+        tabs={[
+          entry.status === "ACTIVE" && editable
+            ? {
+                key: "cancel",
+                label: "Cancel",
+                content: (
+                  <InlineWay
+                    render={() => (
+                      <ReasonDialog
+                        open
+                        danger
+                        onClose={() => undefined}
+                        busy={cancelM.isPending || leaving}
+                        title="Cancel this booking"
+                        caseLines={[fmtRange(entry.checkInDate, entry.checkOutDate)]}
+                        lead={
+                          <>
+                            Cancelling at Set up is final. The committed hold is released and the rooms return to sale; the proforma is withdrawn and its
+                            clocks stop; the <b>disclosed cancellation charge</b>, if any, is posted and the rest of the advance is refunded. It cannot be
+                            undone.
+                          </>
+                        }
+                        confirmLabel="Cancel the booking"
+                        placeholder="guest changed their plans"
+                        onConfirm={(r) => cancelM.mutate(r)}
+                      >
+                        <CancellationFiguresLine entryId={entry.id} waive={gm && cancelWaive} />
+                        <WaiverTick checked={cancelWaive} onChange={setCancelWaive} gm={gm} />
+                        {refundHow.fields}
+                      </ReasonDialog>
+                    )}
+                  />
+                ),
+              }
+            : null,
+          parkTab(parkNow, parking),
+          editable
+            ? {
+                key: "renegotiate",
+                label: "Renegotiate the price",
+                content: elevated ? (
+                  <InlineWay
+                    render={() => (
+                      <ReasonDialog
+                        open
+                        onClose={() => undefined}
+                        busy={reentryM.isPending}
+                        title="Renegotiate the price"
+                        caseLines={["A new pass opens at Negotiation"]}
+                        lead="This pass is sealed as it stands. The committed hold is released, the proforma replaced, and a fresh quotation is made in the new pass."
+                        confirmLabel="Open a new pass"
+                        placeholder="agent asked for a better rate"
+                        onConfirm={(r) => reentryM.mutate({ to: "S2", reason: r })}
+                      />
+                    )}
+                  />
+                ) : (
+                  <ShutWay act="Open a new pass" why="A new pass is the FOM's call." help={<p>A new pass at Negotiation: a fresh quotation and a fresh proforma.</p>} />
+                ),
+              }
+            : null,
+          editable
+            ? {
+                key: "reconfigure",
+                label: "Change the dates or rooms",
+                content: elevated ? (
+                  <InlineWay
+                    render={() => (
+                      <ReasonDialog
+                        open
+                        onClose={() => undefined}
+                        busy={reentryM.isPending}
+                        title="Change the dates or rooms"
+                        caseLines={["A new pass opens at Inquiry"]}
+                        lead="This pass is sealed as it stands. The committed hold is released and the house is asked again for the new dates or rooms."
+                        confirmLabel="Open a new pass"
+                        placeholder="guest moved the dates by a day"
+                        onConfirm={(r) => reentryM.mutate({ to: "S1", reason: r })}
+                      />
+                    )}
+                  />
+                ) : (
+                  <ShutWay act="Open a new pass" why="A new pass is the FOM's call." help={<p>A new pass at Inquiry: the house is asked again and the hold is released.</p>} />
+                ),
+              }
+            : null,
+        ]}
       />
       </div>
 

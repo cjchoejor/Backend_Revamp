@@ -38,7 +38,7 @@ import { ChangeConfiguration, DecidedConfigurationChanges, WaitingConfigurationC
 import { operativeRoomCompositions, roomNightsByRoom, roomStayRangesByRoom } from "@/lib/desk/party-rooms";
 import { fmtDateTime, fmtStamp, money, plural } from "@/lib/ds/format";
 import { optionSelectedRoomIds, preferredHoldRoomId, type EntryDetail, type QuotationSummary, type SpeculativeHoldSummary } from "@/types/api";
-import { Choice, DsDialog, Live, Notice, OtherWaysTabs, PaperDrawer, QuotationSendDialog, ReasonDialog, ReasonForm, SeeRow, StepCanvas, StepCard, Tool, atLeast, toastRefusal, type PaperRef, useBedPlan, useOpenOtherWay, useRefreshEntry, words } from "./kit";
+import { Choice, DsDialog, Live, Notice, OtherWaysTabs, PaperDrawer, QuotationSendDialog, ReasonDialog, SeeRow, StepCanvas, StepCard, Tool, atLeast, toastRefusal, type PaperRef, useBedPlan, useOpenOtherWay, useRefreshEntry, words, parkTab, declineTab } from "./kit";
 import { usePublishPriceDraft } from "@/lib/ds/stay-price";
 import { Help } from "@/components/ds/help";
 import { CompetingClaimsCard, LEVEL_WORD, passesOf, roomsWord, useCompetingClaims, useRoomNumbers } from "./s2-shared";
@@ -153,8 +153,6 @@ function canonComps(list: readonly RoomCompositionInput[] | undefined): string {
 export function S2Negotiation({
   entry,
   past,
-  onPark,
-  onDecline,
   parkNow,
   parking,
   declineNow,
@@ -162,9 +160,6 @@ export function S2Negotiation({
 }: {
   entry: EntryDetail;
   past: boolean;
-  onPark?: () => void;
-  /** The guest said no (2026-10-01) — offered while the booking can still be turned down. */
-  onDecline?: () => void;
   /** Park / turn down at once with the reason typed on the page — Other ways' own panels (2026-10-12). */
   parkNow?: (reason: string) => void;
   parking?: boolean;
@@ -747,54 +742,9 @@ export function S2Negotiation({
       <OtherWaysTabs
         tabs={[
           { key: "block", label: "Provisional block", content: blockPanel },
-          onPark && entry.status === "ACTIVE"
-            ? {
-                key: "park",
-                label: "Park",
-                content: parkNow ? (
-                  <ReasonForm
-                    label="Park"
-                    fieldLabel="Reason"
-                    placeholder="waiting on the guest to confirm the dates"
-                    busy={parking}
-                    onConfirm={parkNow}
-                    help={
-                      <>
-                        <p>Pauses the booking where it is. It keeps its place and nothing is cancelled or released.</p>
-                        <p>Its clock stops until it is resumed. A booking parked for too long lapses on its own.</p>
-                      </>
-                    }
-                  />
-                ) : (
-                  <SeeRow label="Park…" note="Pauses the booking where it is, with a reason." onClick={onPark} />
-                ),
-              }
-            : null,
+          parkTab(parkNow, parking),
           // The answer the house had no way to write down (2026-10-01) — see the Inquiry step.
-          onDecline
-            ? {
-                key: "decline",
-                label: "The guest said no",
-                content: declineNow ? (
-                  <ReasonForm
-                    danger
-                    label="Turn the booking down"
-                    fieldLabel="What did they say?"
-                    placeholder="too expensive · booked elsewhere · dates changed"
-                    busy={declining}
-                    onConfirm={declineNow}
-                    help={
-                      <>
-                        <p>Ends the booking and records what the guest said. It cannot be undone.</p>
-                        <p>The marked rooms go back on sale, any offer out is withdrawn and every clock stops. Nothing is charged.</p>
-                      </>
-                    }
-                  />
-                ) : (
-                  <SeeRow label="The guest said no…" note="Ends the booking and records what the guest said." onClick={onDecline} />
-                ),
-              }
-            : null,
+          declineTab(declineNow, declining),
           {
             key: "counter",
             label: "Counter-offer",

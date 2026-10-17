@@ -475,6 +475,11 @@
 .ds .subtab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); font-weight: 700; }
 .ds .subtab:focus-visible { outline: none; box-shadow: var(--focus); }
 .ds .way-form { display: grid; gap: var(--s2); max-width: 640px; }
+/* A dialog set out in a way's panel (2026-10-17): its heading, facts, fields and act in place. */
+.ds .way-title { font-size: 15px; font-weight: 700; color: var(--ink); }
+.ds .way-form .field { margin: 0; }
+.ds .way-acts { align-items: center; margin-top: var(--s2); }
+.ds .way-panel + .way-panel { margin-top: var(--s4); }
 /* A note written with a paper, under its row (2026-10-12). */
 .ds .papernotes { display: grid; gap: 2px; padding: 0 0 6px 18px; }
 .ds .papernote { font-size: 13px; color: var(--ink); }

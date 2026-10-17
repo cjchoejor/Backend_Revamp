@@ -40,8 +40,6 @@ import {
   FactLine,
   Facts,
   Live,
-  OtherWays,
-  SeeRow,
   StepCanvas,
   StepCard,
   Tool,
@@ -49,6 +47,8 @@ import {
   words,
   type FactState,
   type StepPane,
+  OtherWaysTabs,
+  ShutWay,
 } from "./kit";
 import { RoomsTableCard } from "./rooms-table";
 import { InlineTool, claimWord, distinctRoomRows, physicalWord, physicallyReady, revealBlock, roomLabel } from "./s6-shared";
@@ -239,26 +239,37 @@ export function S6CheckIn({
         ) : null}
       </Live>
 
-      <OtherWays>
-        {entry.status === "ACTIVE"
-          ? [
-              <SeeRow
-                key="cancel"
-                label="Cancel…"
-                state="inert"
-                reason="Cancelling is recorded at Set up or Arrival; once the guest is at the desk it is not a cancellation"
-                note="not at check-in — cancelling is recorded at Set up or at Arrival; a guest who leaves after checking in is an early departure at Stay"
-              />,
-              <SeeRow
-                key="amend"
-                label="Amend dates…"
-                state="inert"
-                reason="There is no date change from Check-in in the backend"
-                note="not from Check-in — the dates move at Stay, through Extend stay or an early departure"
-              />,
-            ]
-          : null}
-      </OtherWays>
+      {/* Other ways as sub-tabs (2026-10-17) — neither is taken at Check-in; each says where. */}
+      <OtherWaysTabs
+        tabs={
+          entry.status === "ACTIVE"
+            ? [
+                {
+                  key: "cancel",
+                  label: "Cancel",
+                  content: (
+                    <ShutWay
+                      act="Cancel the booking"
+                      why="Not at check-in — once the guest is at the desk it is not a cancellation."
+                      help={<p>Cancelling is recorded at Set up or at Arrival. A guest who leaves after checking in is an early departure, at Stay.</p>}
+                    />
+                  ),
+                },
+                {
+                  key: "amend",
+                  label: "Amend dates",
+                  content: (
+                    <ShutWay
+                      act="Amend the dates"
+                      why="Not from Check-in — the dates move at Stay."
+                      help={<p>At Stay, Extend the stay adds nights and Leaving early ends it sooner.</p>}
+                    />
+                  ),
+                },
+              ]
+            : []
+        }
+      />
       </div>
 
       <div className="pane" hidden={at("rooms")}>

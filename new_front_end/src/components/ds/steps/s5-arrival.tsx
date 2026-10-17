@@ -104,13 +104,16 @@ function useArrivalFacts(entry: EntryDetail) {
 export function S5Arrival({
   entry,
   past,
-  onPark,
+  parkNow,
+  parking,
   guestPresent,
   setGuestPresent,
 }: {
   entry: EntryDetail;
   past: boolean;
-  onPark?: () => void;
+  /** Park with the reason typed in Other ways' own tab (2026-10-17). */
+  parkNow?: (reason: string) => void;
+  parking?: boolean;
   guestPresent: boolean;
   setGuestPresent: (v: boolean) => void;
 }) {
@@ -150,7 +153,7 @@ export function S5Arrival({
         </div>
       </StepCard>
       <BillingModelCard entry={entry} />
-      <BookingOtherWays entry={entry} onPark={onPark} guestPresent={guestPresent} />
+      <BookingOtherWays entry={entry} parkNow={parkNow} parking={parking} guestPresent={guestPresent} />
     </StepCanvas>
   );
 }

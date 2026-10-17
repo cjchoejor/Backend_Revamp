@@ -99,7 +99,7 @@ import { S7Stay, S7_PANES } from "@/components/ds/steps/s7-stay";
 import { S6_PANES } from "@/components/ds/steps/s6-checkin";
 import { S8CheckOut } from "@/components/ds/steps/s8-checkout";
 import { S9Closed } from "@/components/ds/steps/s9-closed";
-import { Overlay, ReasonDialog, atLeast, useRefreshEntry } from "@/components/ds/steps/kit";
+import { Overlay, atLeast, useRefreshEntry } from "@/components/ds/steps/kit";
 import { declineEntry } from "@/lib/api/reservation-setup";
 const atLeastFom = (level?: string | null) => atLeast(level, "L2");
 
@@ -282,7 +282,6 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   );
   const [nightAuditOk, setNightAuditOk] = useState(false);
   const [parkOpen, setParkOpen] = useState(false);
-  const [declineOpen, setDeclineOpen] = useState(false);
   const [parkReason, setParkReason] = useState("");
   const [parkExitFlow, setParkExitFlow] = useState(false);
   const [exitLeaving, setExitLeaving] = useState<"park" | "plain" | null>(null);
@@ -467,7 +466,6 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
       void queryClient.invalidateQueries({ queryKey: ["entry", entry!.id] });
       void queryClient.invalidateQueries({ queryKey: ["entry-timers", entry!.id] });
       void queryClient.invalidateQueries({ queryKey: ["desk-bookings"] });
-      setDeclineOpen(false);
       toast.success(
         res.roomsReleased > 0
           ? `Turned down — ${plural(res.roomsReleased, "room")} back on the board.`
@@ -892,10 +890,9 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   }
 
   /* ---- the canvas ---- */
-  const openPark = () => {
-    setParkExitFlow(false);
-    setParkOpen(true);
-  };
+  /** Park and turn down from Other ways' own tabs, the reason typed there (2026-10-17). */
+  const parkNow = (reason: string) => parkMutation.mutate(reason);
+  const declineNow = (reason: string) => declineMutation.mutate(reason);
   /** Each step is drawn by its own canvas (components/ds/steps). */
   const nativeBody = (): ReactNode | null => {
     switch (step.key) {
@@ -904,8 +901,10 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
           <S1Inquiry
             entry={entry}
             past={viewingPast}
-            onPark={parkable ? openPark : undefined}
-            onDecline={declinable ? () => setDeclineOpen(true) : undefined}
+            parkNow={parkable ? parkNow : undefined}
+            parking={parkMutation.isPending}
+            declineNow={declinable ? declineNow : undefined}
+            declining={declineMutation.isPending}
           />
         );
       case "quote":
@@ -913,22 +912,30 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
           <S2Negotiation
             entry={entry}
             past={viewingPast}
-            onPark={parkable ? openPark : undefined}
-            onDecline={declinable ? () => setDeclineOpen(true) : undefined}
-            parkNow={parkable ? (reason) => parkMutation.mutate(reason) : undefined}
+            parkNow={parkable ? parkNow : undefined}
             parking={parkMutation.isPending}
-            declineNow={declinable ? (reason) => declineMutation.mutate(reason) : undefined}
+            declineNow={declinable ? declineNow : undefined}
             declining={declineMutation.isPending}
           />
         );
       case "setup":
-        return <S3SetUp entry={entry} past={viewingPast} onPark={parkable ? openPark : undefined} goToStep={viewingPast ? NOOP : stableSetSelected} pane={pane} />;
+        return (
+          <S3SetUp
+            entry={entry}
+            past={viewingPast}
+            parkNow={parkable ? parkNow : undefined}
+            parking={parkMutation.isPending}
+            goToStep={viewingPast ? NOOP : stableSetSelected}
+            pane={pane}
+          />
+        );
       case "confirm":
         return (
           <S4Reserve
             entry={entry}
             past={viewingPast}
-            onPark={parkable ? openPark : undefined}
+            parkNow={parkable ? parkNow : undefined}
+            parking={parkMutation.isPending}
             goToStep={gotoStep}
             reserve={confirmStepActive ? { onClick: () => setConfirmOpen(true), ready, reason: ready ? undefined : firstNote } : null}
             onOpenItems={confirmStepActive ? reportReserveExtras : undefined}
@@ -940,7 +947,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
           <S5Arrival
             entry={entry}
             past={viewingPast}
-            onPark={parkable ? openPark : undefined}
+            parkNow={parkable ? parkNow : undefined}
+            parking={parkMutation.isPending}
             guestPresent={guestPresent}
             setGuestPresent={arrivalStepActive ? setGuestPresent : NOOP}
           />
@@ -1437,26 +1445,6 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
           pending={closeMutation.isPending}
           onConfirm={() => closeMutation.mutate()}
           onClose={() => setCloseOpen(false)}
-        />
-
-        <ReasonDialog
-          open={declineOpen}
-          danger
-          onClose={() => setDeclineOpen(false)}
-          title="The guest said no"
-          caseLines={[<b key="n">{name}</b>, entry.id]}
-          lead={
-            <>
-              This ends the booking and says why. The rooms go back on the board, any offer out
-              is withdrawn and every clock on it stops. Nothing is charged — nothing has been
-              taken yet.
-            </>
-          }
-          reasonLabel="What did they say?"
-          placeholder="too expensive · booked elsewhere · dates changed"
-          confirmLabel="Turn the booking down"
-          busy={declineMutation.isPending}
-          onConfirm={(reason) => declineMutation.mutate(reason)}
         />
 
         {parkOpen ? (

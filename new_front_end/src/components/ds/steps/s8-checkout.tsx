@@ -55,7 +55,6 @@ import {
   Fact,
   Facts,
   Live,
-  OtherWays,
   PaperDrawer,
   ReasonDialog,
   SeeRow,
@@ -67,6 +66,10 @@ import {
   useRefreshEntry,
   words,
   type PaperRef,
+  OtherWaysTabs,
+  InlineWay,
+  ShutWay,
+  useOpenOtherWay,
 } from "./kit";
 import {
   BILLING_MODEL_WORD,
@@ -131,77 +134,71 @@ export function S8CheckOut({ entry, past, goToStep }: { entry: EntryDetail; past
   const settled = isSettled(folio?.state);
   // The Stay step defaults its "for" to the folio tab opened; Check-out does the same.
   const [chargeTarget, setChargeTarget] = useState("");
-  const [back, setBack] = useState<null | "stay" | "negotiation">(null);
-  const [raising, setRaising] = useState(false);
+  // Going back and raising a dispute happen in Other ways' own tabs (2026-10-17).
+  const openWay = useOpenOtherWay();
 
   const backMutation = useMutation({
     mutationFn: (v: { to: "stay" | "negotiation"; reason: string }) =>
       v.to === "stay" ? reEnterS8ToS7(session!, entry.id, entry.version, v.reason) : reEnterS8ToS2(session!, entry.id, entry.version, v.reason),
     onSuccess: (_d, v) => {
       toast.success(v.to === "stay" ? "Back at Stay — post the charge there" : "Re-opened to Negotiation — a new pass is open");
-      setBack(null);
       refresh();
       goToStep(v.to === "stay" ? 7 : 2);
     },
     onError: (e) => toastRefusal(e, "The booking could not be taken back"),
   });
 
+  const backForm = (to: "stay" | "negotiation") => (
+    <InlineWay
+      render={() => (
+        <ReasonDialog
+          open
+          onClose={() => undefined}
+          title={to === "negotiation" ? "Re-open to Negotiation" : "Back to Stay"}
+          caseLines={[folio ? `the bill is ${FOLIO_STATE_WORD[folio.state] ?? words(folio.state)}` : "no bill"]}
+          lead={
+            to === "negotiation"
+              ? "This closes the current pass and opens a new one at Negotiation for a full re-price. The live bill carries over. The history shows the new pass as such."
+              : "The booking goes back to Stay so a missed charge can be posted there. The bill stays live; bring the booking back to Check-out when it is done."
+          }
+          reasonLabel="Why · recorded on the booking"
+          placeholder={to === "negotiation" ? "the guest disputes the rate charged" : "minibar found after the bill was reviewed"}
+          confirmLabel={to === "negotiation" ? "Re-open to Negotiation" : "Back to Stay"}
+          busy={backMutation.isPending}
+          onConfirm={(reason) => backMutation.mutate({ to, reason })}
+        />
+      )}
+    />
+  );
+
   return (
     <StepCanvas past={past}>
       <DisputesCard entry={entry} tz={clock.tz} />
-      <FolioComplete entry={entry} live={live} tz={clock.tz} onBackToStay={() => setBack("stay")} goToStep={goToStep} />
+      <FolioComplete entry={entry} live={live} tz={clock.tz} onBackToStay={() => openWay("stay")} goToStep={goToStep} />
       <MasterBill entry={entry} tz={clock.tz} onTab={setChargeTarget} />
       {live && folio?.state === "LIVE" ? <AddOrCorrectCharge entry={entry} target={chargeTarget} setTarget={setChargeTarget} /> : null}
       <HowSettled entry={entry} live={live} tz={clock.tz} />
       <OverpaidCard entry={entry} live={live} />
       <Invoices entry={entry} live={live} tz={clock.tz} />
       <Departure entry={entry} live={live} />
-      <OtherWays>
-        {live && !settled ? (
-          <SeeRow
-            key="stay"
-            label="Back to Stay…"
-            note="re-opens the stay to post what was missed; the bill stays live; the FOM's, with a reason"
-            onClick={fom ? () => setBack("stay") : undefined}
-            reason={fom ? undefined : "Going back to Stay needs the FOM"}
-          />
-        ) : null}
-        {live && !settled ? (
-          <SeeRow
-            key="negotiation"
-            label="Re-open to Negotiation…"
-            note="the guest disputes the rate — a new pass from Negotiation; the live bill carries over; the FOM's"
-            onClick={fom ? () => setBack("negotiation") : undefined}
-            reason={fom ? undefined : "Re-opening the rate needs the FOM"}
-          />
-        ) : null}
-        {live && folio ? (
-          <SeeRow
-            key="dispute"
-            label="Raise a dispute…"
-            note="records what the guest queried; an open dispute keeps the booking at Check-out, with no override"
-            onClick={() => setRaising(true)}
-          />
-        ) : null}
-      </OtherWays>
-
-      <ReasonDialog
-        open={!!back}
-        onClose={() => setBack(null)}
-        title={back === "negotiation" ? "Re-open to Negotiation" : "Back to Stay"}
-        caseLines={[entry.id, folio ? `the bill is ${FOLIO_STATE_WORD[folio.state] ?? words(folio.state)}` : "no bill"]}
-        lead={
-          back === "negotiation"
-            ? "This closes the current pass and opens a new one at Negotiation for a full re-price. The live bill carries over. The history shows the new pass as such."
-            : "The booking goes back to Stay so a missed charge can be posted there. The bill stays live; bring the booking back to Check-out when it is done."
-        }
-        reasonLabel="Why · recorded on the booking"
-        placeholder={back === "negotiation" ? "the guest disputes the rate charged" : "minibar found after the bill was reviewed"}
-        confirmLabel={back === "negotiation" ? "Re-open to Negotiation" : "Back to Stay"}
-        busy={backMutation.isPending}
-        onConfirm={(reason) => back && backMutation.mutate({ to: back, reason })}
+      {/* Other ways as sub-tabs (2026-10-17), each panel the form its button used to open. */}
+      <OtherWaysTabs
+        tabs={[
+          live && !settled
+            ? { key: "stay", label: "Back to Stay", content: fom ? backForm("stay") : <ShutWay act="Back to Stay" why="Going back to Stay needs the FOM." /> }
+            : null,
+          live && !settled
+            ? {
+                key: "negotiation",
+                label: "Re-open to Negotiation",
+                content: fom ? backForm("negotiation") : <ShutWay act="Re-open to Negotiation" why="Re-opening the rate needs the FOM." />,
+              }
+            : null,
+          live && folio
+            ? { key: "dispute", label: "Raise a dispute", content: <InlineWay render={(done) => <RaiseDispute entry={entry} open onClose={done} />} /> }
+            : null,
+        ]}
       />
-      <RaiseDispute entry={entry} open={raising} onClose={() => setRaising(false)} />
     </StepCanvas>
   );
 }
@@ -1633,7 +1630,6 @@ function RaiseDispute({ entry, open, onClose }: { entry: EntryDetail; open: bool
       open={open}
       onClose={onClose}
       title="Raise a dispute"
-      caseLines={[entry.id]}
       lead="What the guest queried and what they say about it. An open dispute keeps the booking at Check-out, with no override; the FOM reviews it, the GM closes it."
       reasonLabel="The guest's words"
       placeholder="we were one cover, not two"

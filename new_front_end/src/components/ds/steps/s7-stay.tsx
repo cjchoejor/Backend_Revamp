@@ -17,7 +17,7 @@ import { IdentityProofBlock } from "@/components/desk/workspace/identity-proof";
 import { SplitSettlementBlock } from "@/components/desk/workspace/split-settlement";
 import { InterimPaymentBlock, StayExtensionBlock } from "@/components/desk/workspace/stay-money";
 import type { EntryDetail } from "@/types/api";
-import { OtherWays, SeeRow, StepCanvas, Tool, useRefreshEntry, type StepPane } from "./kit";
+import { StepCanvas, Tool, useRefreshEntry, type StepPane, OtherWaysTabs, InlineWay, ShutWay, useOpenOtherWay } from "./kit";
 import { BillingModelCard, DisputesCard, FaultsCard, HandoffsCard, RaiseDisputeDialog, TermsChangeCard } from "./s7-desk";
 import { ChitsWaitingCard, FolioCard, PostChargeCard } from "./s7-folio";
 import { NightsCard } from "./s7-nights";
@@ -67,8 +67,8 @@ export function S7Stay({
   const refresh = useRefreshEntry(entry.id);
   // An open room tab on the folio becomes the default "Room" of the next charge.
   const [chargeTarget, setChargeTarget] = useState("");
-  const [disputeOpen, setDisputeOpen] = useState(false);
-  const [faultOpen, setFaultOpen] = useState(false);
+  // A dispute and a fault are raised in Other ways' own tabs (2026-10-17) — the cards' buttons go there.
+  const openWay = useOpenOtherWay();
 
   const folioId = entry.folio?.id ?? null;
   const inHouse = entry.status === "ACTIVE" && entry.currentStage === "S7";
@@ -91,8 +91,8 @@ export function S7Stay({
         <ChitsWaitingCard />
         <KeysCard entry={entry} />
         <HandoffsCard entry={entry} tz={tz} />
-        <DisputesCard entry={entry} tz={tz} onRaise={() => setDisputeOpen(true)} />
-        <FaultsCard entry={entry} tz={tz} onFlag={() => setFaultOpen(true)} />
+        <DisputesCard entry={entry} tz={tz} onRaise={() => openWay("dispute")} />
+        <FaultsCard entry={entry} tz={tz} onFlag={() => openWay("fault")} />
         <TermsChangeCard entry={entry} />
         <BillingModelCard entry={entry} tz={tz} />
         <div id={ID.guests}>
@@ -153,36 +153,32 @@ export function S7Stay({
         </div>
       </div>
 
-      <OtherWays>
-        {/* Only what has no tab and no card of its own until it exists (2026-09-25): a dispute
-            and a fault are raised from here because their cards render only once there is one.
-            Extending, leaving early, a room change and an interim payment are tabs beside This
-            step, so they are not repeated here. */}
-        {inHouse
-          ? [
-              <SeeRow
-                key="dispute"
-                label="Raise a dispute…"
-                note="an open dispute holds the move to Check-out"
-                onClick={folioId ? () => setDisputeOpen(true) : undefined}
-                reason={folioId ? undefined : "there is no folio to dispute"}
-              />,
-              <SeeRow
-                key="fault"
-                label="Flag room deficient…"
-                note="the room leaves sale at once; the guest is offered a move; settled or acknowledged before check-out"
-                onClick={() => setFaultOpen(true)}
-              />,
-            ]
-          : null}
-      </OtherWays>
-
-      {past ? null : (
-        <>
-          <RaiseDisputeDialog entry={entry} open={disputeOpen} onClose={() => setDisputeOpen(false)} />
-          <FlagDeficientDialog entry={entry} open={faultOpen} onClose={() => setFaultOpen(false)} />
-        </>
-      )}
+      {/* Only what has no tab and no card of its own until it exists (2026-09-25): a dispute
+          and a fault are raised from here because their cards render only once there is one.
+          Extending, leaving early, a room change and an interim payment are tabs beside This
+          step, so they are not repeated here. As sub-tabs since 2026-10-17, each its form. */}
+      <OtherWaysTabs
+        tabs={
+          inHouse
+            ? [
+                {
+                  key: "dispute",
+                  label: "Raise a dispute",
+                  content: folioId ? (
+                    <InlineWay render={(done) => <RaiseDisputeDialog entry={entry} open onClose={done} />} />
+                  ) : (
+                    <ShutWay act="Raise" why="There is no folio to dispute." />
+                  ),
+                },
+                {
+                  key: "fault",
+                  label: "Flag room deficient",
+                  content: <InlineWay render={(done) => <FlagDeficientDialog entry={entry} open onClose={done} />} />,
+                },
+              ]
+            : []
+        }
+      />
     </StepCanvas>
   );
 }

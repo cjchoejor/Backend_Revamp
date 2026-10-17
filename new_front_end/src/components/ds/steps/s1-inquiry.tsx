@@ -52,9 +52,7 @@ import {
 import {
   Choice,
   Live,
-  OtherWays,
   ReasonDialog,
-  SeeRow,
   StepCanvas,
   StepCard,
   Tool,
@@ -63,6 +61,9 @@ import {
   useRefreshEntry,
   useStepFlow,
   words,
+  OtherWaysTabs,
+  parkTab,
+  declineTab,
 } from "./kit";
 import { AddReturnStay, TripStays } from "@/components/ds/workspace/return-stay";
 import { enumerateNights, useRoomSelection } from "./use-room-selection";
@@ -137,14 +138,19 @@ type InquiryRecord = {
 export function S1Inquiry({
   entry,
   past,
-  onPark,
-  onDecline,
+  parkNow,
+  parking,
+  declineNow,
+  declining,
 }: {
   entry: EntryDetail;
   past: boolean;
-  onPark?: () => void;
+  /** Park with the reason typed in Other ways' own tab (2026-10-17). */
+  parkNow?: (reason: string) => void;
+  parking?: boolean;
   /** The guest said no (2026-10-01) — offered while the booking can still be turned down. */
-  onDecline?: () => void;
+  declineNow?: (reason: string) => void;
+  declining?: boolean;
 }) {
   const { session } = useSession();
   const refresh = useRefreshEntry(entry.id);
@@ -204,27 +210,10 @@ export function S1Inquiry({
           onSaved={() => refresh([["inquiry", entry.inquiryId]])}
         />
       </div>
-      <OtherWays>
-        {onPark && entry.status === "ACTIVE" ? (
-          <SeeRow
-            key="park"
-            label="Park…"
-            note="a reason; the booking waits where it is, its expiry paused, until it is resumed — a long park lapses on its own"
-            onClick={onPark}
-          />
-        ) : null}
-        {/* The answer the house had no way to write down (2026-10-01): until this, a lead that
-            said no could only be parked or left to lapse as "Expired", which reads the same as
-            an enquiry nobody ever answered. */}
-        {onDecline ? (
-          <SeeRow
-            key="decline"
-            label="The guest said no…"
-            note="ends the booking and records why; the rooms go back on the board and nothing is charged"
-            onClick={onDecline}
-          />
-        ) : null}
-      </OtherWays>
+      {/* Other ways as sub-tabs (2026-10-17), each panel the form its button used to open. "The
+          guest said no" is the answer the house had no way to write down (2026-10-01): until it,
+          a lead that said no could only be parked or left to lapse as "Expired". */}
+      <OtherWaysTabs tabs={[parkTab(parkNow, parking), declineTab(declineNow, declining)]} />
     </StepCanvas>
   );
 }

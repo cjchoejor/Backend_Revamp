@@ -7,7 +7,7 @@
 import { useEffect, type ReactNode } from "react";
 import { Icon, type DialogRegister } from "@/design-system";
 import type { EntryDetail, RoomAssignmentSummary } from "@/types/api";
-import { Overlay, useStepMode } from "./kit";
+import { Overlay, WayBody, useInlineWay, useStepMode } from "./kit";
 
 /** A room's commercial standing, as the desk says it (never the stored code). */
 const CLAIM_WORD: Record<string, string> = {
@@ -109,15 +109,17 @@ export function WideDialog({
   width: number;
   busy?: boolean;
 }) {
+  const inline = useInlineWay();
   useEffect(() => {
-    if (!open) return;
+    if (!open || inline) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape" && !busy) onClose();
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [open, busy, onClose]);
+  }, [open, busy, onClose, inline]);
   if (!open) return null;
+  if (inline) return <WayBody register={register} title={title} caseLines={caseLines} footer={footer}>{children}</WayBody>;
   const icon = register === "commit" ? "lock" : register === "danger" ? "alert" : "check";
   return (
     <Overlay>

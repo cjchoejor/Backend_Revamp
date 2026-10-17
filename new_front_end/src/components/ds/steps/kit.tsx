@@ -976,6 +976,108 @@ export function useOpenOtherWay() {
 }
 
 /**
+ * A dialog laid out in a way's panel (2026-10-17, operator: the Negotiation sub-tabs "for other
+ * tabs as well, all stages"). Inside it, `DsDialog`, `ReasonDialog` and `WideDialog` draw in place
+ * — their fields, their consequence line and their act — with no window, no "Not now" and no
+ * Escape. So each way keeps the one form it always had, and the tab and the window cannot say
+ * the same act two ways. `render(done)` draws it open; `done` (the dialog's own close) clears it
+ * for the next use.
+ */
+const InlineWayCtx = createContext(false);
+
+export function useInlineWay() {
+  return useContext(InlineWayCtx);
+}
+
+export function InlineWay({ render }: { render: (done: () => void) => ReactNode }) {
+  const [round, setRound] = useState(0);
+  return (
+    <InlineWayCtx.Provider value>
+      <div key={round} className="way-panel">
+        {render(() => setRound((n) => n + 1))}
+      </div>
+    </InlineWayCtx.Provider>
+  );
+}
+
+/** A dialog's "Not now" — nothing to leave when the form sits in its own tab. */
+export function NotNow({ onClick, busy, label = "Not now" }: { onClick: () => void; busy?: boolean; label?: string }) {
+  const inline = useInlineWay();
+  if (inline) return null;
+  return (
+    <Button kind="quiet" state={busy ? "inert" : "default"} onClick={onClick}>
+      {label}
+    </Button>
+  );
+}
+
+/** A way that cannot be taken here: why, said as a message, and the act shown shut. */
+export function ShutWay({ act, why, help }: { act: string; why: ReactNode; help?: ReactNode }) {
+  return (
+    <div className="way-form">
+      <p className="sm warn-ink" style={{ margin: 0, fontWeight: 600 }}>
+        {why}
+      </p>
+      <div className="row-acts" style={{ alignItems: "center" }}>
+        <Button kind="quiet" className="act" state="inert">
+          {act}
+        </Button>
+        {help ? <Help label={`About ${actName(act)}`}>{help}</Help> : null}
+      </div>
+    </div>
+  );
+}
+
+/** Park, as a way of its own — the same form on every step that offers it. */
+export function parkTab(parkNow: ((reason: string) => void) | undefined, busy?: boolean): OtherWayTab | null {
+  if (!parkNow) return null;
+  return {
+    key: "park",
+    label: "Park",
+    content: (
+      <ReasonForm
+        label="Park"
+        fieldLabel="Reason"
+        placeholder="waiting on the guest to confirm the dates"
+        busy={busy}
+        onConfirm={parkNow}
+        help={
+          <>
+            <p>Pauses the booking where it is. It keeps its place and nothing is cancelled or released.</p>
+            <p>Its clock stops until it is resumed. A booking parked for too long lapses on its own.</p>
+          </>
+        }
+      />
+    ),
+  };
+}
+
+/** The guest said no (2026-10-01) — Inquiry and Negotiation only; from Set up it is a cancellation. */
+export function declineTab(declineNow: ((reason: string) => void) | undefined, busy?: boolean): OtherWayTab | null {
+  if (!declineNow) return null;
+  return {
+    key: "decline",
+    label: "The guest said no",
+    content: (
+      <ReasonForm
+        danger
+        label="Turn the booking down"
+        fieldLabel="What did they say?"
+        placeholder="too expensive · booked elsewhere · dates changed"
+        busy={busy}
+        onConfirm={declineNow}
+        help={
+          <>
+            <p>Ends the booking and records what the guest said. It cannot be undone.</p>
+            <p>The marked rooms go back on sale, any offer out is withdrawn and every clock stops. Nothing is charged.</p>
+          </>
+        }
+      />
+    ),
+  };
+}
+
+/**
  * A reason and the act it commits, inline (2026-10-12) — what a reason dialog shows, set out on
  * the page instead: the field, the button, and the explanation behind a "?". The button waits for
  * the reason.
@@ -1181,15 +1283,17 @@ export function DsDialog({
   width?: number;
   busy?: boolean;
 }) {
+  const inline = useInlineWay();
   useEffect(() => {
-    if (!open) return;
+    if (!open || inline) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape" && !busy) onClose();
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [open, busy, onClose]);
+  }, [open, busy, onClose, inline]);
   if (!open) return null;
+  if (inline) return <WayBody register={register} title={title} caseLines={caseLines} footer={footer}>{children}</WayBody>;
   return (
     <Overlay>
       <div className="scrim open" onMouseDown={(e) => e.target === e.currentTarget && !busy && onClose()}>
@@ -1200,6 +1304,40 @@ export function DsDialog({
         </div>
       </div>
     </Overlay>
+  );
+}
+
+/** A dialog's body set out in a way's panel: its heading, its facts, its fields and its act. */
+export function WayBody({
+  register,
+  title,
+  caseLines,
+  footer,
+  children,
+}: {
+  register: DialogRegister;
+  title: ReactNode;
+  caseLines?: ReactNode[];
+  footer: ReactNode;
+  children?: ReactNode;
+}) {
+  const facts = caseLines ?? [];
+  return (
+    <div className={`way-form way-${register}`}>
+      <div className="way-title">{title}</div>
+      {facts.length ? (
+        <div className="meta">
+          {facts.map((l, i) => (
+            <Fragment key={i}>
+              {i ? " · " : null}
+              {l}
+            </Fragment>
+          ))}
+        </div>
+      ) : null}
+      {children}
+      <div className="row-acts way-acts">{footer}</div>
+    </div>
   );
 }
 
@@ -1239,6 +1377,7 @@ export function ReasonDialog({
   minLength?: number;
 }) {
   const [reason, setReason] = useState("");
+  const inline = useInlineWay();
   useEffect(() => {
     if (open) setReason("");
   }, [open]);
@@ -1253,9 +1392,7 @@ export function ReasonDialog({
       busy={busy}
       footer={
         <>
-          <Button kind="quiet" state={busy ? "inert" : "default"} onClick={onClose}>
-            Not now
-          </Button>
+          <NotNow onClick={onClose} busy={busy} />
           <Button
             kind={danger ? "danger" : "primary"}
             solid={danger}
@@ -1273,7 +1410,15 @@ export function ReasonDialog({
       {children}
       <div className="field">
         <label>{reasonLabel}</label>
-        <textarea className="input" rows={2} value={reason} maxLength={500} placeholder={placeholder} onChange={(e) => setReason(e.target.value)} autoFocus />
+        <textarea
+          className="input"
+          rows={inline ? 3 : 2}
+          value={reason}
+          maxLength={500}
+          placeholder={placeholder}
+          onChange={(e) => setReason(e.target.value)}
+          autoFocus={!inline}
+        />
       </div>
     </DsDialog>
   );

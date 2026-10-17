@@ -25,7 +25,7 @@ import type { HandoffChecklistItem } from "@/lib/api/handoffs";
 import { closeDispute } from "@/lib/api/checkout";
 import { fmtStamp } from "@/lib/ds/format";
 import type { DeficientConditionSummary, DisputeSummary, EntryDetail, HandoffSummary } from "@/types/api";
-import { Choice, DsDialog, Fact, Facts, Live, ReasonDialog, StepCard, atLeast, toastRefusal, useRefreshEntry, useStepMode, words } from "./kit";
+import { Choice, DsDialog, Fact, Facts, Live, ReasonDialog, StepCard, atLeast, toastRefusal, useRefreshEntry, useStepMode, words, NotNow, useInlineWay } from "./kit";
 import { BILLING_WORD } from "./s7-folio";
 
 /* ------------------------------------------------------------------ vocabulary */
@@ -365,6 +365,7 @@ export function DisputesCard({ entry, tz, onRaise }: { entry: EntryDetail; tz: s
 
 export function RaiseDisputeDialog({ entry, open, onClose }: { entry: EntryDetail; open: boolean; onClose: () => void }) {
   const { session } = useSession();
+  const inline = useInlineWay();
   const refresh = useRefreshEntry(entry.id);
   const [title, setTitle] = useState("");
   const [detail, setDetail] = useState("");
@@ -394,9 +395,7 @@ export function RaiseDisputeDialog({ entry, open, onClose }: { entry: EntryDetai
       busy={save.isPending}
       footer={
         <>
-          <Button kind="quiet" state={save.isPending ? "inert" : "default"} onClick={onClose}>
-            Not now
-          </Button>
+          <NotNow onClick={onClose} busy={save.isPending} />
           <Button
             kind="danger"
             solid
@@ -415,7 +414,7 @@ export function RaiseDisputeDialog({ entry, open, onClose }: { entry: EntryDetai
       </p>
       <div className="field">
         <label>What is disputed</label>
-        <input className="input" value={title} placeholder="Restaurant chit R-1182 · did not order this" onChange={(e) => setTitle(e.target.value)} autoFocus />
+        <input className="input" value={title} placeholder="Restaurant chit R-1182 · did not order this" onChange={(e) => setTitle(e.target.value)} autoFocus={!inline} />
         <span className="control-note">Holding one posting out of the bill is not in the backend yet (BE-53) — name the charge here</span>
       </div>
       <div className="field" style={{ marginTop: 10 }}>

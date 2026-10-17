@@ -21,7 +21,7 @@ import { DeficiencyPanel } from "@/components/deficiency/deficiency-panel";
 import { RoomCompositionSummary, hasRoomComposition } from "@/components/desk/workspace/room-composition-summary";
 import { ExtraBedEditor, InitialSelectionCell, RoomChangeControl } from "@/components/desk/workspace/room-change-control";
 import type { EntryDetail } from "@/types/api";
-import { Choice, Live, StepCard, Tool, toastRefusal, useRefreshEntry, useStepMode } from "./kit";
+import { Choice, Live, StepCard, Tool, toastRefusal, useRefreshEntry, useStepMode, NotNow } from "./kit";
 import { InlineTool, WideDialog, claimWord, physicalWord } from "./s6-shared";
 
 /* ------------------------------------------------------------------ rooms in use */
@@ -310,11 +310,7 @@ export function FlagDeficientDialog({ entry, open, onClose }: { entry: EntryDeta
       register="report"
       title={chosen ? `Faults · Room ${chosen.roomNumber}` : "Faults"}
       width={640}
-      footer={
-        <Button kind="secondary" onClick={onClose}>
-          Close
-        </Button>
-      }
+      footer={<NotNow onClick={onClose} label="Close" />}
     >
       <p className="sm" style={{ marginTop: 0 }}>
         Report a fault, or review one already raised. The room leaves sale the moment it is reported; the FOM verifies or rejects it. The guest is offered a move, and the fault is settled or acknowledged before check-out.

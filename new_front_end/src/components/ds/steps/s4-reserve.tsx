@@ -157,7 +157,8 @@ export const S4_PANES: StepPane[] = [{ key: "rooms", label: "Rooms", cards: [] }
 export function S4Reserve({
   entry,
   past,
-  onPark,
+  parkNow,
+  parking,
   goToStep,
   reserve,
   onOpenItems,
@@ -166,7 +167,9 @@ export function S4Reserve({
   entry: EntryDetail;
   past: boolean;
   pane?: string | null;
-  onPark?: () => void;
+  /** Park with the reason typed in Other ways' own tab (2026-10-17). */
+  parkNow?: (reason: string) => void;
+  parking?: boolean;
   goToStep: (n: number) => void;
   reserve: { onClick: () => void; ready: boolean; reason?: string } | null;
   /** Open items only this canvas knows (conference verification, the desk's own words) — the
@@ -207,7 +210,7 @@ export function S4Reserve({
           <SoFar entry={entry} />
         </>
       )}
-      <BookingOtherWays entry={entry} onPark={onPark} />
+      <BookingOtherWays entry={entry} parkNow={parkNow} parking={parking} />
       </div>
 
       <div className="pane" hidden={at("rooms")}>
