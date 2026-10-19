@@ -827,6 +827,9 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .rmv-who b { font-size: 15px; }
 .ds .rmv-who .chip-step { font-size: 11.5px; font-weight: 700; padding: 1px 7px; border-radius: 999px; background: var(--surface-3); color: var(--ink-2); }
 .ds .rmv-rooms { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+/* Trading stays (2026-10-19): the dates a booking leaves and the dates it takes. */
+.ds .rmv-dates { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13.5px; }
+.ds .rmv-dates b { color: var(--accent-ink, var(--ink)); }
 .ds .rmv-room { font-weight: 800; font-size: 15px; padding: 2px 8px; border-radius: 6px; background: var(--surface-3); }
 .ds .rmv-room.to { background: var(--accent-soft); color: var(--accent-ink); outline: 1.5px solid var(--accent-line); }
 .ds .rmv-arrow { font-weight: 800; color: var(--ink-3); }

@@ -14,6 +14,11 @@ export type RoomMoveLegInput = {
   guestAgreedNote?: string | null;
   /** On a leg the server added (a booking swapped into the room left behind), sent back as it came. */
   displacedBy?: string | null;
+  /**
+   * The stay's new first night when it moves to other dates too (2026-10-19, trading stays: two
+   * bookings on different dates take each other's room and dates).
+   */
+  newCheckInDate?: string | null;
 };
 
 export type RoomMovePreviewLeg = {
@@ -31,6 +36,10 @@ export type RoomMovePreviewLeg = {
   toRoom: { roomId: string; roomNumber: string; roomTypeName: string | null } | null;
   nights: string[];
   nightsLabel: string | null;
+  /** Set when the stay moves to other dates too: its new first night and the nights it lands on. */
+  newCheckInDate: string | null;
+  toNights: string[] | null;
+  toNightsLabel: string | null;
   sameType: boolean | null;
   priceMode: "KEEP" | "NEW_TYPE";
   guestAgreedNote: string | null;
@@ -66,6 +75,9 @@ export type RoomMoveLeg = {
   toRoomNumber: string;
   nights: string[];
   nightsLabel: string | null;
+  newCheckInDate: string | null;
+  toNights: string[] | null;
+  toNightsLabel: string | null;
   originStage: string;
   priceMode: "KEEP" | "NEW_TYPE";
   guestAgreedNote: string | null;

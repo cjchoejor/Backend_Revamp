@@ -912,6 +912,56 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
     return out;
   };
   /**
+   * Trading stays (2026-10-19, operator: two bookings on different dates "should have swapped both
+   * date and room"). A one-room booking landing on another booking's stay — dragged sideways onto
+   * it, or picked in Switch rooms and the other booking clicked — trades places with it: each takes
+   * the other's room and first night. Here: the one booking in the way, when there is exactly one.
+   */
+  const bookingInWay = (grabbed: Sel, toRoomId: string, shift: number): { entryId: string; name: string; firstNight: string } | null => {
+    const mine = [...heldNights(grabbed)];
+    if (mine.length === 0) return null;
+    const landing = new Set(mine.map((n) => shiftDay(n, shift)));
+    const found = new Map<string, string>();
+    for (const b of barsByRoom.get(toRoomId) ?? []) {
+      if (b.entryId === grabbed.entryId || !MOVABLE.has(b.kind)) continue;
+      let hit = false;
+      for (let d = b.from; d < b.to && !hit; d = shiftDay(d, 1)) hit = landing.has(d);
+      if (!hit) continue;
+      const first = bookingOf.get(b.entryId)?.checkInDate ?? b.from;
+      const cur = found.get(b.entryId);
+      if (!cur || first < cur) found.set(b.entryId, first);
+    }
+    if (found.size !== 1) return null;
+    const [entryId, firstNight] = [...found][0];
+    return { entryId, name: nameOf(bookingOf.get(entryId)), firstNight };
+  };
+  /** The trade's own leg; the server adds the other booking's leg into the room and dates left. */
+  const tradeLeg = (grabbed: Sel, toRoomId: string, firstNight: string): RoomMoveLegInput => ({
+    entryId: grabbed.entryId,
+    fromRoomId: grabbed.roomId,
+    toRoomId,
+    newCheckInDate: firstNight,
+  });
+  /**
+   * Switch rooms, a free night clicked (2026-10-19): inside the picked stay's own nights it is the
+   * room move it always was; on other dates the booking moves there, room and dates — the date
+   * window asks the server. Before, the date clicked was quietly dropped and only the room changed.
+   */
+  const moveSelectionToNight = (roomId: string, night: string | null) => {
+    const one = selected.length === 1 ? selected[0] : null;
+    if (one && night && !heldNights(one).has(night) && bookingOf.get(one.entryId)?.checkInDate) {
+      setDateMove({
+        entryId: one.entryId,
+        fromRoomId: one.roomId,
+        roomMap: roomId !== one.roomId ? { [one.roomId]: roomId } : {},
+        newCheckInDate: night,
+        label: one.name,
+      });
+      return;
+    }
+    moveSelectionTo(roomId);
+  };
+  /**
    * Alt-click picks a night of a bar (2026-10-14): a night next to the ones picked adds to the run,
    * Alt+Shift-click takes the nights in between, a picked night clicked again leaves the run, and a
    * night of another bar starts a new pick. Alt+Ctrl-click (2026-10-15) adds a night of another of
@@ -1010,6 +1060,19 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
     if (selected.some((x) => x.entryId === sel.entryId)) {
       toast.error("That is the same booking — Ctrl-click to pick its room too, or click another booking or a free night");
       return;
+    }
+    // A booking on other dates (2026-10-19): the two trade places — room AND dates. Before, the
+    // pick quietly took the room on its own dates and nothing was swapped.
+    if (bookingInWay(selected[0], sel.roomId, 0)?.entryId !== sel.entryId) {
+      if (selected.length > 1) {
+        toast.error("Trading stays works one room at a time — pick one booking's room");
+        return;
+      }
+      const first = bookingOf.get(sel.entryId)?.checkInDate ?? [...heldNights(sel)].sort()[0];
+      if (first) {
+        setMoveLegs([tradeLeg(selected[0], sel.roomId, first)]);
+        return;
+      }
     }
     moveSelectionTo(sel.roomId);
   };
@@ -1164,6 +1227,15 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
         return;
       }
       if (done.shift !== 0) {
+        // Dropped on another booking's stay (2026-10-19): a one-room booking trades places with it —
+        // room and dates.
+        if (done.items.length === 1 && ownRowsOf(done.grabbed.entryId).length === 1) {
+          const inWay = bookingInWay(done.grabbed, done.over, done.shift);
+          if (inWay && !dateMoveWhy(done, bookingOf.get(done.grabbed.entryId))) {
+            setMoveLegs([tradeLeg(done.grabbed, done.over, inWay.firstNight)]);
+            return;
+          }
+        }
         // Dragged sideways: the whole stay moves to other dates (and the room grabbed may land in
         // another row on the way). The dialog asks the server what that would do.
         const booking = bookingOf.get(done.grabbed.entryId);
@@ -1248,6 +1320,11 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
   const dateSplitNow = !!dateDrag && dateMovingNow.length < dateOwnRows.length;
   const dateBlockNow = dateDrag ? dateBlock(dateDrag, rows, dateMovingNow, roomNoOf) : null;
   const dateWhy = dateDrag ? dateMoveWhy(dateDrag, dateBooking) ?? dateBlockNow?.why ?? null : null;
+  /** The booking the drop would trade places with (2026-10-19) — rooms and dates. */
+  const tradeNow =
+    dateDrag && dateDrag.over && dateDrag.items.length === 1 && dateOwnRows.length === 1 && !dateMoveWhy(dateDrag, dateBooking)
+      ? bookingInWay(dateDrag.grabbed, dateDrag.over, dateDrag.shift)
+      : null;
   const dateSpan =
     dateDrag && dateBooking?.checkInDate && dateBooking.checkOutDate
       ? { from: ymdShift(dateBooking.checkInDate, dateDrag.shift), to: ymdShift(dateBooking.checkOutDate, dateDrag.shift) }
@@ -1259,7 +1336,9 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
         ? []
         : nightPicks.map((p) => p.to)
       : dateDrag
-      ? dateWhy
+      ? tradeNow
+        ? [dateDrag.over!]
+        : dateWhy
         ? []
         : dateBlockNow?.map.size
           ? [...dateBlockNow.map.values()]
@@ -1543,7 +1622,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
                                   if (dragEnded.current) return;
                                   if (switching) {
                                     if (!picking) toast("Click the booking to move first");
-                                    else moveSelectionTo(room.id);
+                                    else moveSelectionToNight(room.id, nightAtX(e.clientX));
                                     return;
                                   }
                                   leave();
@@ -1592,7 +1671,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
                                 if (dragEnded.current) return;
                                 if (switching) {
                                   if (!picking) toast("Click the booking to move first");
-                                  else moveSelectionTo(room.id);
+                                  else moveSelectionToNight(room.id, s.night);
                                 } else if (!past) openPick(room, s.night, s.index, rectOf(e), segs);
                               }}
                             />
@@ -1772,7 +1851,15 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
                 </>
               )
             ) : dateDrag ? (
-              dateWhy ? (
+              tradeNow ? (
+                <>
+                  <span>
+                    {dateDrag.grabbed.name} ⇄ <b>{tradeNow.name}</b>
+                  </span>
+                  <span className="sub">They trade places — rooms and dates</span>
+                  <span className="sub">Let go to see what trading would do</span>
+                </>
+              ) : dateWhy ? (
                 <span>{dateWhy}</span>
               ) : (
                 <>

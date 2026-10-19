@@ -81,6 +81,9 @@ function PriceLine({ p }: { p: RoomMovePreviewLeg["pricing"] }) {
   );
 }
 
+/** The server's ask for the guest's words — the card has its own field for it, so it is not repeated. */
+const NOTE_ASK = /type what the guest agreed to|type what they said/;
+
 function PreviewLegCard({
   leg,
   priceMode,
@@ -98,8 +101,10 @@ function PreviewLegCard({
   madeBy: string | null;
 }) {
   // The note a re-price needs is asked for by its own field, not repeated as a refusal.
-  const refusals = leg.refusals.filter((r) => !/type what the guest agreed to/.test(r));
+  const refusals = leg.refusals.filter((r) => !NOTE_ASK.test(r));
   const refused = refusals.length > 0;
+  // Trading stays (2026-10-19): the dates move too, so the price is a choice on every such card.
+  const dated = !!leg.newCheckInDate;
   return (
     <div className={`rmv-leg${refused ? " refused" : ""}`}>
       <div className="rmv-who">
@@ -115,18 +120,29 @@ function PreviewLegCard({
       </div>
       {leg.displaced ? (
         <p className="rmv-displaced">
-          Swapped in: {madeBy ?? leg.displacedBy} moves into Room {leg.fromRoom?.roomNumber ?? "?"}, so this guest takes the room they leave.
+          {dated
+            ? `Swapped in: ${madeBy ?? leg.displacedBy} takes this booking's room and dates, so this guest takes theirs.`
+            : `Swapped in: ${madeBy ?? leg.displacedBy} moves into Room ${leg.fromRoom?.roomNumber ?? "?"}, so this guest takes the room they leave.`}
         </p>
       ) : null}
-      {leg.nightsLabel ? <div className="sm">Nights: <b>{leg.nightsLabel}</b></div> : null}
+      {dated ? (
+        <div className="rmv-dates">
+          <span>{leg.nightsLabel ?? "—"}</span>
+          <span className="rmv-arrow">→</span>
+          <b>{leg.toNightsLabel ?? "—"}</b>
+        </div>
+      ) : leg.nightsLabel ? (
+        <div className="sm">Nights: <b>{leg.nightsLabel}</b></div>
+      ) : null}
       {refused ? null : <div className="sm">Price: <PriceLine p={leg.pricing} /></div>}
-      {leg.sameType === false ? (
+      {leg.sameType === false || dated ? (
         <div className="rmv-pricemode" role="radiogroup" aria-label="How this guest is priced">
           <label className={priceMode === "KEEP" ? "on" : undefined}>
             <input type="radio" checked={priceMode === "KEEP"} onChange={() => onPriceMode("KEEP")} /> Keep their price
           </label>
           <label className={priceMode === "NEW_TYPE" ? "on" : undefined}>
-            <input type="radio" checked={priceMode === "NEW_TYPE"} onChange={() => onPriceMode("NEW_TYPE")} /> Price at the new room type
+            <input type="radio" checked={priceMode === "NEW_TYPE"} onChange={() => onPriceMode("NEW_TYPE")} />{" "}
+            {dated ? (leg.sameType === false ? "Price at the new dates and room type" : "Price at the new dates") : "Price at the new room type"}
           </label>
           {priceMode === "NEW_TYPE" ? (
             <label className="field">
@@ -215,7 +231,7 @@ export function RoomMoveResult({ move, tz, onChanged }: { move: RoomMove; tz?: s
               </Link>
               <span className="sm muted">
                 Room {l.fromRoomNumber} → {l.toRoomNumber}
-                {l.nightsLabel ? ` · ${l.nightsLabel}` : ""}
+                {l.toNightsLabel ? ` · ${l.nightsLabel ?? ""} → ${l.toNightsLabel}` : l.nightsLabel ? ` · ${l.nightsLabel}` : ""}
               </span>
             </div>
             <p className={`rmv-outcome ${o.cls}`}>{o.word}</p>
@@ -284,7 +300,15 @@ export function RoomMoveDialog({
     mutationFn: () => previewRoomMove(session!, { legs: asked, reason: reason.trim() || null }),
     onSuccess: (p) => {
       setPreview(p);
-      setPlan(p.legs.map((l) => ({ entryId: l.entryId, fromRoomId: l.fromRoomId, toRoomId: l.toRoomId, displacedBy: l.displacedBy })));
+      setPlan(
+        p.legs.map((l) => ({
+          entryId: l.entryId,
+          fromRoomId: l.fromRoomId,
+          toRoomId: l.toRoomId,
+          displacedBy: l.displacedBy,
+          newCheckInDate: l.newCheckInDate,
+        })),
+      );
     },
     onError: (e) => toastRefusal(e, "The move could not be checked"),
   });
@@ -333,7 +357,7 @@ export function RoomMoveDialog({
     ? "Checking the move…"
     : !preview.authority.ok
       ? `${preview.authority.why} — you are signed in as ${preview.authority.actorLevel === "L1" ? "the front desk" : preview.authority.actorLevel}`
-      : preview.refusals.length > 0 || preview.legs.some((l) => l.refusals.length > 0 && !l.refusals.every((r) => /type what the guest agreed to/.test(r)))
+      : preview.refusals.length > 0 || preview.legs.some((l) => l.refusals.length > 0 && !l.refusals.every((r) => NOTE_ASK.test(r)))
         ? "Something above refuses the move"
         : missingNote
           ? "Type what the guest agreed to"
@@ -342,9 +366,15 @@ export function RoomMoveDialog({
             : null;
 
   const bookings = new Set((preview?.legs ?? legs).map((l) => l.entryId)).size;
+  // Trading stays (2026-10-19): the rooms and the dates change hands.
+  const dated = (preview?.legs ?? []).some((l) => !!l.newCheckInDate) || legs.some((l) => !!l.newCheckInDate);
   const title = result
     ? `${result.id} · ${swap ? "Switch" : "Move"}`
-    : swap
+    : dated
+      ? swap
+        ? "Switch these two bookings' rooms and dates"
+        : "Move the booking to other dates"
+      : swap
       ? legCount === 2
         ? "Switch these two bookings' rooms"
         : `Switch rooms · ${legCount} rooms, ${bookings} bookings`
@@ -371,7 +401,7 @@ export function RoomMoveDialog({
               Leave it as it is
             </Button>
             <Button kind="primary" state={blockedBy || busy ? "inert" : "default"} onClick={() => !blockedBy && run.mutate()}>
-              {run.isPending ? "Moving…" : swap ? "Switch the rooms" : legCount > 1 ? "Move the rooms" : "Move the booking"}
+              {run.isPending ? "Moving…" : dated && swap ? "Switch rooms and dates" : swap ? "Switch the rooms" : legCount > 1 ? "Move the rooms" : "Move the booking"}
             </Button>
           </>
         )
