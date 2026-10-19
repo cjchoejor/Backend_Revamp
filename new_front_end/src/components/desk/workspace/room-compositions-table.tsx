@@ -452,6 +452,7 @@ export function RoomCompositionsTable({
   discountBasis,
   onDiscountChange,
   lockCommercial,
+  readOnly,
 }: DiscountEdit & {
   /**
    * Post-freeze, in-house (2026-08-19): the negotiated rates and the FOC / service-charge
@@ -462,6 +463,14 @@ export function RoomCompositionsTable({
    * to read what the booking is priced at even where they may not change it.
    */
   lockCommercial?: boolean;
+  /**
+   * The whole table reads and nothing can be typed (2026-10-19, operator: "in stages 3 4 5 6 ...
+   * the user can type or rewrite the table without having to click on the change configuration
+   * button"). The rooms tab from Set up on is changed only through Change configuration, which
+   * runs the governed walk; until then the cells show the booking as it is priced. The bed
+   * column is not part of the price and keeps its own control.
+   */
+  readOnly?: boolean;
   /** Set by the planner — clicking a room number opens that room alone in the guest board. */
   onOpenRoomInBoard?: (roomId: string) => void;
   /**
@@ -924,7 +933,7 @@ export function RoomCompositionsTable({
   const autoRanRef = useRef(false);
   const ready = sealedRoomIds.length > 0 && sealedRoomIds.every((id) => rows[id]);
   useEffect(() => {
-    if (autoRanRef.current || !ready) return;
+    if (autoRanRef.current || !ready || readOnly) return;
     const pristine = sealedRoomIds.every((id) => rows[id].ad === "" && rows[id].c6 === "" && rows[id].u6 === "");
     autoRanRef.current = true;
     if (pristine && (entryAdults ?? 0) + (entryChildAges?.length ?? 0) > 0) distribute();
@@ -1041,10 +1050,14 @@ export function RoomCompositionsTable({
 
   // Emit on every change. Occ is derived, so invariant (1) of Policy 79 holds by
   // construction; invariant (2) (plan pax ≤ occ) is warned inline and enforced server-side.
+  // Not before every room has its row (2026-10-19): on mount the rows are still empty, and an
+  // empty emission was written over the planner's stored copy — which then outranked the saved
+  // quotation and opened the table with no meals.
   useEffect(() => {
+    if (!ready) return;
     onChange(compositions);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [compositions]);
+  }, [compositions, ready]);
 
   // ---- Live pricing (2026-08-07) ---------------------------------------------------
   // The rate cells show `heads × rate` money and the Σ row shows column totals — all read
@@ -1291,7 +1304,8 @@ export function RoomCompositionsTable({
           className={opts?.wide ? "wide" : undefined}
           data-cell={`${rowIdx}:${col}`}
           placeholder={opts?.placeholder}
-          readOnly={opts?.readOnly}
+          readOnly={opts?.readOnly || readOnly}
+          tabIndex={readOnly ? -1 : undefined}
           style={opts?.readOnly ? { background: "var(--panel-2, transparent)", color: "var(--ink-3)", cursor: "default" } : undefined}
           value={raw}
           onKeyDown={onCellKeyDown(rowIdx, col)}
@@ -1336,7 +1350,7 @@ export function RoomCompositionsTable({
           type="checkbox"
           data-cell={`${rowIdx}:${col}`}
           checked={rows[roomId]?.[col] ?? EMPTY_ROW[col]}
-          disabled={lockCommercial}
+          disabled={lockCommercial || readOnly}
           onKeyDown={onCellKeyDown(rowIdx, col)}
           onChange={(e) => {
             const v = e.target.checked;
@@ -1358,7 +1372,7 @@ export function RoomCompositionsTable({
     );
 
   return (
-    <div className={expanded ? "rct rst-expandwrap on" : "rct"}>
+    <div className={`${expanded ? "rct rst-expandwrap on" : "rct"}${readOnly ? " ro" : ""}`}>
       {expanded && (
         <div className="rst-expandbar">
           <b>Room composition · {sealedRoomIds.length} room{sealedRoomIds.length === 1 ? "" : "s"}</b>
@@ -1382,8 +1396,11 @@ export function RoomCompositionsTable({
         discountUnit={discountUnit}
         discountBasis={discountBasis}
         onDiscountChange={onDiscountChange}
+        lockCommercial={lockCommercial || readOnly}
       />
       <div className="rce-bar">
+        {!readOnly && (
+        <>
         {partySize > 0 && (
           <button
             type="button"
@@ -1440,6 +1457,8 @@ export function RoomCompositionsTable({
             </button>
           );
         })}
+        </>
+        )}
         <span className="ln" />
         {/* Compact tallies — the long forms crowded the row until "Expand" wrapped onto its own
             orphan line. Full wording rides on hover. */}

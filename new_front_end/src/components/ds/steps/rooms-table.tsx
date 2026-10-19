@@ -272,6 +272,7 @@ export function RoomsTable({
         roomDates={roomDates}
         initialCompositions={seed}
         lockCommercial={inHouse}
+        readOnly={!editing}
         onPickRoom={past ? undefined : (id) => setPicked((cur) => (cur === id ? null : id))}
         pickedRoomId={chosen}
         onChange={editing ? setDraft : () => { /* read-first until "Change configuration" is pressed */ }}

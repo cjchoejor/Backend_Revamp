@@ -157,6 +157,7 @@ export function S2Negotiation({
   parking,
   declineNow,
   declining,
+  onOpenItems,
 }: {
   entry: EntryDetail;
   past: boolean;
@@ -165,6 +166,13 @@ export function S2Negotiation({
   parking?: boolean;
   declineNow?: (reason: string) => void;
   declining?: boolean;
+  /**
+   * What this step still needs that the workspace cannot see (2026-10-19, operator: "the 'save and
+   * price it again' button has not turned to 'saved' ... but the move to set up button is still
+   * clickable, it shouldnt be"). The table's unsaved edits live here, so the step reports them
+   * and the gate holds the move to Set up — the quotation on file is what Set up bills.
+   */
+  onOpenItems?: (items: string[]) => void;
 }) {
   const { session } = useSession();
   const refresh = useRefreshEntry(entry.id);
@@ -441,6 +449,12 @@ export function S2Negotiation({
 
   /* ---- reasons a door stays shut ---- */
   const tableOpen = editable && !accepted && !proformaLocked && !!sealedPreferred;
+  // Only once something is priced: before that, "Quote generated" already holds the move.
+  const unsavedItem = tableOpen && !changing && !!working && (tableUnsaved || validTouched) ? "Table changes saved and priced" : null;
+  useEffect(() => {
+    onOpenItems?.(unsavedItem ? [unsavedItem] : []);
+  }, [unsavedItem, onOpenItems]);
+  useEffect(() => () => onOpenItems?.([]), [onOpenItems]);
   const noRooms = !sealedPreferred || !anchorRoomId ? "choose the rooms at Inquiry first" : null;
   /** A table with a fault in it cannot be sent, marked or priced — it is the same basis. */
   const tableReason =
@@ -646,6 +660,7 @@ export function S2Negotiation({
               }
               onFaultsChange={setTableFaults}
               persistKey={entry.id}
+              persistBasis={(working ?? accepted)?.id ?? "none"}
               entryId={entry.id}
               initialCompositions={seedCompositions}
               onChange={setRoomCompositions}

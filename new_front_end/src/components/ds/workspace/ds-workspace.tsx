@@ -314,6 +314,12 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     () => (items: string[]) => setReserveExtras((prev) => (prev.join("|") === items.join("|") ? prev : items)),
     [],
   );
+  /** Negotiation's own open items — the table's changes not priced yet (2026-10-19). */
+  const [negotiationExtras, setNegotiationExtras] = useState<string[]>([]);
+  const reportNegotiationExtras = useMemo(
+    () => (items: string[]) => setNegotiationExtras((prev) => (prev.join("|") === items.join("|") ? prev : items)),
+    [],
+  );
   const [issuedKeyRooms, setIssuedKeyRooms] = useState<Record<string, boolean>>({});
   const toggleKeyRoom = useMemo(() => (roomId: string) => setIssuedKeyRooms((prev) => ({ ...prev, [roomId]: !prev[roomId] })), []);
   const setKeyRooms = useMemo(
@@ -694,7 +700,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
       : inquiryStepActive
         ? s1Readiness(entry)
         : quoteStepActive
-          ? s2Readiness(entry)
+          ? [...s2Readiness(entry), ...negotiationExtras.map((label) => ({ label, met: false, card: "quote" }))]
           : arrivalStepActive
             ? s5Readiness(entry, hotelToday, { guestPresent })
             : checkInStepActive
@@ -817,7 +823,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
       </Button>
     );
   } else if (quoteStepActive) {
-    const ok = canProgressS2(entry);
+    const ok = canProgressS2(entry) && negotiationExtras.length === 0;
     forward = (
       <Button state={advanceMutation.isPending ? "working" : ok ? "default" : "inert"} reason={ok ? undefined : firstNote} workingLabel="Moving…" onClick={() => advanceMutation.mutate({ targetStage: "S3" })}>
         Move to Set up
@@ -916,6 +922,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
             parking={parkMutation.isPending}
             declineNow={declinable ? declineNow : undefined}
             declining={declineMutation.isPending}
+            onOpenItems={quoteStepActive ? reportNegotiationExtras : undefined}
           />
         );
       case "setup":

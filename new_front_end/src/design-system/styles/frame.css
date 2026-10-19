@@ -920,3 +920,9 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .rchart .tape thead th.drop-night .mo {
   color: #fff !important;
 }
+
+/* The rooms tab from Set up on reads until Change configuration is pressed (2026-10-19): no cell
+   lights as if it took typing, and the cursor says it does not. */
+.ds .desk-root .rct.ro .rct-t td:focus-within { outline: none; background: inherit; }
+.ds .desk-root .rct.ro .rct-t td input[type="text"] { cursor: default; pointer-events: none; }
+.ds .desk-root .rct.ro .rct-t td.ck input { cursor: default; }
