@@ -810,6 +810,8 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .rmv-legs.many { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
 @media (max-width: 760px) { .ds .rmv-legs.two { grid-template-columns: 1fr; } }
 .ds .rmv-displaced { margin: 0; padding: 5px 8px; border-radius: 6px; background: var(--warning-soft); color: var(--warning); font-size: 12.5px; font-weight: 700; }
+/* The guest's other booking over the new nights (2026-10-19) — the FOM's switch says both are meant. */
+.ds .rmv-overlap { margin: 0; padding: 6px 9px; border-radius: 6px; border: 1.5px solid var(--warning); background: var(--warning-soft); color: var(--warning); font-size: 13px; font-weight: 700; }
 .ds .rmv-moveref { padding: 8px 10px 8px 26px; border-radius: 8px; border: 2px solid var(--danger); background: var(--danger-soft); }
 .ds .rmv-leg { border: 1px solid var(--line-2); border-radius: 10px; padding: 12px; display: grid; gap: 7px; background: var(--surface); min-width: 0; }
 .ds .rmv-leg.refused { border: 2px solid var(--danger); background: var(--danger-soft); }

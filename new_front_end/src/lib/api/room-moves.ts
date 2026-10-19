@@ -43,6 +43,11 @@ export type RoomMovePreviewLeg = {
   sameType: boolean | null;
   priceMode: "KEEP" | "NEW_TYPE";
   guestAgreedNote: string | null;
+  /**
+   * The guest's other booking over the nights this leg lands on (Policy 13), in the server's words
+   * — the FOM's switch acknowledges it (2026-10-19).
+   */
+  guestOverlap: string | null;
   /** Added by the server: this booking sits in a room another leg moves into. */
   displaced: boolean;
   /** The booking whose move made this one. */

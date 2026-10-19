@@ -134,6 +134,7 @@ function PreviewLegCard({
       ) : leg.nightsLabel ? (
         <div className="sm">Nights: <b>{leg.nightsLabel}</b></div>
       ) : null}
+      {leg.guestOverlap ? <p className="rmv-overlap">{leg.guestOverlap}</p> : null}
       {refused ? null : <div className="sm">Price: <PriceLine p={leg.pricing} /></div>}
       {leg.sameType === false || dated ? (
         <div className="rmv-pricemode" role="radiogroup" aria-label="How this guest is priced">
