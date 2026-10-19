@@ -89,27 +89,6 @@ function TypeTotals({ pricing }: { pricing: PickPricing }) {
   );
 }
 
-/**
- * The stay's total where it cannot be missed — above the room table (2026-10-12, operator: "can the
- * total for the stay be shown in a more appealing way, like the user should see it and not miss
- * it; also the total for each type of room"). UIappeal: the figure is the band's largest thing.
- */
-export function PickTotalBand({ pricing, loading }: { pricing: PickPricing | null; loading?: boolean }) {
-  if (!pricing || pricing.totals.roomNights === 0) return null;
-  return (
-    <div className={`pickband${loading ? " loading" : ""}`} aria-live="polite">
-      <div className="pickband-main">
-        <span className="pickband-label">Total for the stay</span>
-        <span className="pickband-total money">{money(pricing.totals.total, pricing.currency)}</span>
-        <span className="pickband-sub">
-          {plural(pricing.totals.roomNights, "room-night")} · {plural(pricing.nights.length, "night")} · incl. {pct(pricing.serviceChargeRate)} service charge + {pct(pricing.gstRate)} GST · room only
-        </span>
-      </div>
-      <TypeTotals pricing={pricing} />
-    </div>
-  );
-}
-
 export function PickBill({
   pricing,
   loading,

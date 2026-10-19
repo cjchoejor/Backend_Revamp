@@ -69,7 +69,7 @@ import { AddReturnStay, TripStays } from "@/components/ds/workspace/return-stay"
 import { enumerateNights, useRoomSelection } from "./use-room-selection";
 import { CHANNEL_OPTIONS, PartySearch, cameInAsOf, channelDef, type ChannelKey } from "./new-inquiry-parts";
 import { TheCaller, WrapUp } from "./s1-caller";
-import { PickBill, PickTotalBand, usePickPricing, type BillNight } from "./s1-bill";
+import { PickBill, usePickPricing, type BillNight } from "./s1-bill";
 import { usePublishPriceDraft } from "@/lib/ds/stay-price";
 import type { PickPricing } from "@/lib/api/availability";
 
@@ -1413,7 +1413,6 @@ function TheHouse({
                 }}
                 justSaved={seal.isSuccess}
                 bill={picked.length ? bill.pricing : null}
-                billLoading={bill.loading}
                 isGm={isGm}
                 onClose={() => setToolOpen(false)}
                 onReleased={() => ask.mutate()}
@@ -1441,7 +1440,6 @@ function WhichRooms({
   onSave,
   justSaved,
   bill,
-  billLoading,
   isGm,
   onClose,
   onReleased,
@@ -1457,9 +1455,8 @@ function WhichRooms({
   saving: boolean;
   onSave: () => void;
   justSaved: boolean;
-  /** What the picks cost — the house card's bill, in one line beside the save. */
+  /** What the picks cost — each night's figure goes under its date in the room table. */
   bill: PickPricing | null;
-  billLoading: boolean;
   isGm: boolean;
   onClose: () => void;
   onReleased: () => void;
@@ -1724,9 +1721,8 @@ function WhichRooms({
           </Button>
         </span>
       </div>
-      {/* What the picks cost, where it cannot be missed (2026-10-12, operator: "the total for the
-          stay shown in a more appealing way … and the total for each type of room"). */}
-      <PickTotalBand pricing={bill} loading={billLoading} />
+      {/* No total band here (2026-10-19, operator: "there is already a table on top to do that") —
+          the house card's bill above carries the stay's total and each room type's. */}
       <Tool>
         {board ? (
           <RoomSelectBoard
