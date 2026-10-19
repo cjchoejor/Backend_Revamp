@@ -3186,6 +3186,12 @@ model RoomMoveLeg {
   /// The ISO nights ("YYYY-MM-DD") this leg moves — the booking's nights on the from-room
   /// (in-house: from tonight).
   nights          Json
+  /// Set when the leg also moves the stay to other dates (2026-10-19): the new first night. The
+  /// stay keeps its number of nights.
+  newCheckInDate  DateTime?
+  /// The nights the leg lands on when its dates change — what its claim covers while the move
+  /// runs. Null: the same nights as `nights`.
+  toNights        Json?
   originStage     Stage
   priceMode       RoomMovePriceMode @default(KEEP)
   /// The guest's agreement, typed by the desk, when the leg is re-priced at the new type.

@@ -1526,7 +1526,8 @@ async function changeRoomToNewSegmentInner(
   // (the quotation's own per-room figure, pre-discount like every stored rate; the booking discount
   // carries separately), carried onto the new room as its negotiated rate. It is not a rate
   // revision — the guest's rate does not move — so it needs no authority beyond the move's own.
-  const keepsPrice = !!input.moveContext && input.moveContext.priceMode === "KEEP" && !sameType;
+  // A dated leg (trading stays, 2026-10-19) keeps its price through the date-move rule below.
+  const keepsPrice = !!input.moveContext && !isDateShift && input.moveContext.priceMode === "KEEP" && !sameType;
   const keptRoomRate: number | null = (() => {
     if (!keepsPrice) return null;
     const perRoom = ((priorTerms?.compositionTotals ?? null) as { perRoom?: Array<{ roomId?: string; roomRate?: unknown }> } | null)?.perRoom ?? [];

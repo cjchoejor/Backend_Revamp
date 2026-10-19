@@ -44,6 +44,14 @@ import type { RoomCompositionServiceInput } from "./s2-quotation-service.js";
  * Rulings (operator, 2026-10-12): a moved guest keeps the price they agreed unless the desk
  * re-prices them at the new room type with their agreement typed in; any two-booking switch needs
  * the FOM; two in-house guests may swap (FOM), and a refused second leg leaves the move PARTIAL.
+ *
+ * **Trading stays (2026-10-19, operator: two bookings on different dates "should have swapped both
+ * date and room").** A leg may carry a new first night (`newCheckInDate`): it is then the walk's
+ * date-move form, the stay keeping its number of nights. A booking dropped on another booking's
+ * stay on OTHER dates trades places with it — each takes the other's room and the other's first
+ * night — and the server adds the partner's leg as it adds a room-swap partner. Rules: one picked
+ * room, both bookings at Set up, Reserve or Arrival with one room for the whole stay, one booking
+ * in the way at most, and the two new stays may not share a night in one room.
  */
 
 type Actor = { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" };
@@ -60,6 +68,12 @@ export type RoomMoveLegInput = {
   guestAgreedNote?: string | null;
   /** Set on a swap partner the preview added, when the desk sends the leg back — display only. */
   displacedBy?: string | null;
+  /**
+   * The leg's new first night, "YYYY-MM-DD", when the stay moves to other dates as well
+   * (2026-10-19) — the stay keeps its number of nights. For such a leg `priceMode` reads KEEP =
+   * the agreed price, NEW_TYPE = priced anew at the new dates (and room type).
+   */
+  newCheckInDate?: string | null;
 };
 
 const STAGE_WORD: Record<string, string> = {
@@ -76,6 +90,8 @@ const STAGE_WORD: Record<string, string> = {
 };
 const IN_HOUSE = new Set<string>([Stage.S7]);
 const MOVABLE = new Set<string>([Stage.S3, Stage.S4, Stage.S5, Stage.S6, Stage.S7]);
+/** A stay moves to other dates before check-in only — the same rule as a date move. */
+const DATE_MOVABLE = new Set<string>([Stage.S3, Stage.S4, Stage.S5]);
 const ACTIVE_MOVE = ["IN_PROGRESS", "PARTIAL"] as const;
 
 function errorParts(e: unknown): { message: string; code: string | null } {
@@ -167,7 +183,15 @@ function bookingRefusals(b: LegBooking, label: string, today: Date): string[] {
 }
 
 /** What the walk will do for a booking at this step, in the desk's words. */
-function pathFor(stage: string, sameType: boolean, priceMode: "KEEP" | "NEW_TYPE"): string[] {
+function pathFor(stage: string, sameType: boolean, priceMode: "KEEP" | "NEW_TYPE", dated = false): string[] {
+  if (dated) {
+    const price = priceMode === "KEEP" ? "re-quoted on the new dates, keeping the agreed price" : "re-priced at the new dates";
+    const steps = ["a new pass opens (the old one is kept as history)", `back to Negotiation — ${price}`, "Set up — the room is held on the new nights"];
+    if (stage === Stage.S3) return [...steps, "stops at Set up with a fresh proforma"];
+    steps.push("re-confirmed at Reserve on the new dates — a new voucher");
+    if (stage === Stage.S5) return [...steps, "back to Arrival when the new dates are inside the arrival window, else it waits at Reserve until Arrival opens"];
+    return steps;
+  }
   const price = sameType ? "re-quoted at the same price" : priceMode === "KEEP" ? "re-quoted, keeping the agreed price" : "re-priced at the new room type";
   const steps = ["a new pass opens (the old one is kept as history)", `back to Negotiation — ${price}`, "Set up — the rooms are held again"];
   if (stage === Stage.S3) return [...steps, "stops at Set up with a fresh proforma"];
@@ -199,6 +223,11 @@ export type RoomMovePreviewLeg = {
   toRoom: { roomId: string; roomNumber: string; roomTypeName: string | null } | null;
   nights: string[];
   nightsLabel: string | null;
+  /** Set when the stay moves to other dates too (2026-10-19). */
+  newCheckInDate: string | null;
+  /** The nights the leg lands on when its dates change. */
+  toNights: string[] | null;
+  toNightsLabel: string | null;
   sameType: boolean | null;
   priceMode: "KEEP" | "NEW_TYPE";
   guestAgreedNote: string | null;
@@ -222,7 +251,48 @@ export type RoomMovePreview = {
   refusals: string[];
 };
 
-type PlannedLeg = RoomMoveLegInput & { priceMode: "KEEP" | "NEW_TYPE"; displaced: boolean; displacedBy: string | null };
+type PlannedLeg = RoomMoveLegInput & {
+  priceMode: "KEEP" | "NEW_TYPE";
+  displaced: boolean;
+  displacedBy: string | null;
+  newCheckInDate: string | null;
+};
+
+/** A leg's nights: the ones it leaves, and — when its dates change — the ones it lands on. */
+type LegNights = { from: string[]; to: string[]; dated: boolean };
+
+const shiftIso = (d: string, days: number) => iso(new Date(new Date(`${d}T00:00:00.000Z`).getTime() + days * 86_400_000));
+
+async function legNightsOf(prisma: PrismaClient, leg: { entryId: string; fromRoomId: string; newCheckInDate?: string | null }): Promise<LegNights> {
+  let from: string[] = [];
+  try {
+    from = (await roomChangeNights(prisma, leg.entryId, leg.fromRoomId)).map((n) => n.slice(0, 10)).sort();
+  } catch {
+    from = []; // the walk refuses this leg itself, in its own words
+  }
+  const target = leg.newCheckInDate?.slice(0, 10) ?? null;
+  if (!target || from.length === 0 || target === from[0]) return { from, to: from, dated: false };
+  const days = Math.round((Date.parse(`${target}T00:00:00.000Z`) - Date.parse(`${from[0]}T00:00:00.000Z`)) / 86_400_000);
+  return { from, to: from.map((n) => shiftIso(n, days)), dated: true };
+}
+
+/**
+ * The walk's date-move form for a dated leg: the whole stay to its new first night, the room it
+ * leaves landing in the room it takes. KEEP carries the agreed price; NEW_TYPE prices it anew at
+ * the new dates (and room type), which needs the guest's words.
+ */
+function datedWalk(
+  leg: { fromRoomId: string; toRoomId: string; priceMode: "KEEP" | "NEW_TYPE" },
+  n: LegNights,
+  guestAgreedNote: string | null | undefined,
+) {
+  return {
+    newCheckInDate: new Date(`${n.to[0]}T00:00:00.000Z`),
+    priceMode: leg.priceMode === "KEEP" ? ("KEEP" as const) : ("NEW_DATES" as const),
+    roomMap: leg.toRoomId !== leg.fromRoomId ? { [leg.fromRoomId]: leg.toRoomId } : {},
+    guestAgreedNote: guestAgreedNote?.trim() || null,
+  };
+}
 
 type DryLeg = {
   input: PlannedLeg;
@@ -251,16 +321,39 @@ async function loadRooms(prisma: PrismaClient, ids: string[]) {
  * booking moving into a room it is itself leaving in the same move (each room walks on its own,
  * one after another, so such a chain cannot be checked ahead — moved one at a time it can).
  */
-function shapeRefusals(legs: RoomMoveLegInput[], rooms: Map<string, RoomRow>): string[] {
+function shapeRefusals(legs: PlannedLeg[], rooms: Map<string, RoomRow>, nightsOf: Map<string, LegNights>): string[] {
   const no = (id: string) => rooms.get(id)?.roomNumber ?? "?";
   const out: string[] = [];
   const seenFrom = new Map<string, string>();
   const seenTo = new Map<string, string>();
   const seenKey = new Set<string>();
+  const datedOf = (l: PlannedLeg) => nightsOf.get(legKey(l))?.dated === true;
+  // Trading stays (2026-10-19): one picked room, with the booking in its way.
+  const dated = legs.filter(datedOf);
+  if (dated.length > 0) {
+    const picked = legs.filter((l) => !l.displaced);
+    if (picked.length > 1) out.push("Trading stays works one room at a time — pick one booking's room");
+    // The two new stays may not share a night in one room: passing over each other by room is safe
+    // only when they land apart.
+    for (const [i, a] of dated.entries()) {
+      for (const b of dated.slice(i + 1)) {
+        if (a.toRoomId !== b.toRoomId) continue;
+        const an = new Set(nightsOf.get(legKey(a))?.to ?? []);
+        const shared = (nightsOf.get(legKey(b))?.to ?? []).filter((n) => an.has(n));
+        if (shared.length) {
+          out.push(
+            `${a.entryId} and ${b.entryId} would both be in Room ${no(a.toRoomId)} on ${nightsLabel(shared)} — their stays overlap, so they cannot trade dates; move one of them on its own`,
+          );
+        }
+      }
+    }
+  }
   for (const l of legs) {
-    if (l.fromRoomId === l.toRoomId) out.push(`${l.entryId} already has Room ${no(l.fromRoomId)}`);
+    const isDated = datedOf(l);
+    if (l.fromRoomId === l.toRoomId && !isDated) out.push(`${l.entryId} already has Room ${no(l.fromRoomId)}`);
     if (seenKey.has(legKey(l))) out.push(`${l.entryId}'s Room ${no(l.fromRoomId)} is picked twice`);
     seenKey.add(legKey(l));
+    if (isDated) continue; // a dated leg leaves and lands on its own nights — checked above and by its walk
     const fromOwner = seenFrom.get(l.fromRoomId);
     if (fromOwner && fromOwner !== l.entryId) {
       out.push(`Two bookings are moving out of Room ${no(l.fromRoomId)} — move them one at a time`);
@@ -288,17 +381,19 @@ function shapeRefusals(legs: RoomMoveLegInput[], rooms: Map<string, RoomRow>): s
  * the move, the room that leg left, and so on. One level only: a partner moves where a leg left,
  * and anything else in that room refuses the partner's own walk, in words.
  */
-async function withSwapPartners(prisma: PrismaClient, asked: PlannedLeg[]): Promise<{ legs: PlannedLeg[]; truncated: boolean }> {
+async function withSwapPartners(
+  prisma: PrismaClient,
+  asked: PlannedLeg[],
+): Promise<{ legs: PlannedLeg[]; truncated: boolean; refusals: string[] }> {
   const legs = [...asked];
   let truncated = false;
+  const refusals: string[] = [];
   const leavingRoom = (entryId: string, roomId: string) => legs.some((l) => l.entryId === entryId && l.fromRoomId === roomId);
   for (const leg of asked) {
-    let nights: string[] = [];
-    try {
-      nights = await roomChangeNights(prisma, leg.entryId, leg.fromRoomId);
-    } catch {
-      continue; // the walk refuses this leg itself, in its own words
-    }
+    const plan = await legNightsOf(prisma, leg);
+    if (plan.from.length === 0) continue; // the walk refuses this leg itself, in its own words
+    // A leg landing on other dates is in the way of whoever holds the target on THOSE nights.
+    const nights = plan.to;
     const holders = new Set<string>();
     for (const range of foldIsoNightsToRanges(nights)) {
       const conflicts = await findRoomBookingConflicts(prisma, {
@@ -309,6 +404,32 @@ async function withSwapPartners(prisma: PrismaClient, asked: PlannedLeg[]): Prom
         ignoreRoomMoves: true,
       });
       for (const c of conflicts) holders.add(c.entryId);
+    }
+    if (plan.dated) {
+      // Trading stays (2026-10-19): the booking in the way takes this one's room and first night.
+      const inWay = [...holders].filter((h) => !leavingRoom(h, leg.toRoomId));
+      if (inWay.length > 1) {
+        const room = await prisma.room.findUnique({ where: { id: leg.toRoomId }, select: { roomNumber: true } });
+        refusals.push(`Room ${room?.roomNumber ?? "?"} is held by more than one booking over those nights — move them one at a time`);
+        continue;
+      }
+      const holder = inWay[0];
+      if (!holder) continue;
+      if (legs.length >= MAX_LEGS) {
+        truncated = true;
+        continue;
+      }
+      legs.push({
+        entryId: holder,
+        fromRoomId: leg.toRoomId,
+        toRoomId: leg.fromRoomId,
+        priceMode: "KEEP",
+        guestAgreedNote: null,
+        displaced: true,
+        displacedBy: leg.entryId,
+        newCheckInDate: plan.from[0],
+      });
+      continue;
     }
     for (const holder of holders) {
       if (leavingRoom(holder, leg.toRoomId)) continue;
@@ -334,14 +455,21 @@ async function withSwapPartners(prisma: PrismaClient, asked: PlannedLeg[]): Prom
         guestAgreedNote: null,
         displaced: true,
         displacedBy: leg.entryId,
+        newCheckInDate: null,
       });
     }
   }
-  return { legs, truncated };
+  return { legs, truncated, refusals };
 }
 
 /** Run every leg's walk as a dry run (nothing written), each passing over its partners' claims. */
-async function dryRunLegs(prisma: PrismaClient, actor: Actor, legs: PlannedLeg[], reason: string): Promise<DryLeg[]> {
+async function dryRunLegs(
+  prisma: PrismaClient,
+  actor: Actor,
+  legs: PlannedLeg[],
+  reason: string,
+  nightsOf: Map<string, LegNights>,
+): Promise<DryLeg[]> {
   const today = hotelTodayUtc();
   const out: DryLeg[] = [];
   for (const input of legs) {
@@ -352,6 +480,14 @@ async function dryRunLegs(prisma: PrismaClient, actor: Actor, legs: PlannedLeg[]
     else {
       // The "already part of another move" rule must not count this very move's own legs.
       refusals.push(...bookingRefusals(booking, label, today));
+      const n = nightsOf.get(legKey(input));
+      if (n?.dated) {
+        const stage = String(booking.currentStage);
+        if ((booking.status === "ACTIVE" || booking.status === "PARKED") && MOVABLE.has(stage) && !DATE_MOVABLE.has(stage)) {
+          refusals.push(`${label} is ${STAGE_WORD[stage]} — a stay that has begun changes its dates through Extend the stay or Leaving early, not a trade`);
+        }
+        if (n.to[0] && n.to[0] < iso(today)) refusals.push(`${label} would start on ${fmtNight(n.to[0])}, before today at the hotel`);
+      }
     }
     out.push({ input, booking, label, dry: null, refusals });
   }
@@ -374,15 +510,23 @@ async function dryRunLegs(prisma: PrismaClient, actor: Actor, legs: PlannedLeg[]
       // The preview reports the authority a move needs rather than refusing on it, so the dry run
       // is asked at FOM level at least; the real run uses the operator's own level.
       const level = atLeast(actor.actorLevel, "L2") ? actor.actorLevel : "L2";
+      const n = nightsOf.get(legKey(leg.input));
       leg.dry = await changeRoomToNewSegment(prisma, { actorId: actor.actorId, actorLevel: level }, {
         entryId: leg.input.entryId,
         fromRoomId: leg.input.fromRoomId,
-        toRoomId: leg.input.toRoomId,
+        ...(n?.dated
+          ? { dateShift: datedWalk(leg.input, n, leg.input.guestAgreedNote) }
+          : { toRoomId: leg.input.toRoomId }),
         reason: reason || "Room move preview",
         dryRun: true,
         moveContext,
       });
-      if (leg.input.priceMode === "NEW_TYPE" && !leg.dry.sameType && !leg.input.guestAgreedNote?.trim()) {
+      if (n?.dated) {
+        // Trading stays is between one-room bookings: the stay moves as a whole, room and dates.
+        if ((leg.dry.plan?.planRoomIds.length ?? 1) > 1) {
+          leg.refusals.push(`${leg.label} holds more than one room — trading stays works between one-room bookings; move its rooms on the chart one way at a time`);
+        }
+      } else if (leg.input.priceMode === "NEW_TYPE" && !leg.dry.sameType && !leg.input.guestAgreedNote?.trim()) {
         leg.refusals.push(`${leg.label} is re-priced at the new room type — type what the guest agreed to`);
       }
     } catch (e) {
@@ -461,7 +605,12 @@ async function priceLeg(prisma: PrismaClient, leg: DryLeg, roomsOfBooking: numbe
       },
     );
     const after = preview.payable;
-    const kept = !dry.sameType && leg.input.priceMode === "KEEP" ? "The guest keeps the room rate they agreed" : null;
+    const kept =
+      leg.input.newCheckInDate && leg.input.priceMode === "KEEP"
+        ? "The guest keeps the price they agreed, on the new dates"
+        : !dry.sameType && leg.input.priceMode === "KEEP"
+          ? "The guest keeps the room rate they agreed"
+          : null;
     return {
       before,
       after,
@@ -519,7 +668,11 @@ export async function previewRoomMove(
     guestAgreedNote: l.guestAgreedNote?.trim() || null,
     displaced: !!l.displacedBy,
     displacedBy: l.displacedBy ?? null,
+    newCheckInDate: l.newCheckInDate?.trim().slice(0, 10) || null,
   }));
+  for (const l of asked) {
+    if (l.newCheckInDate && !/^\d{4}-\d{2}-\d{2}$/.test(l.newCheckInDate)) throw new ValidationError("newCheckInDate must be a date (YYYY-MM-DD)");
+  }
   // Only the rooms the desk picked count; partner legs it sends back (displacedBy) were the server's.
   const selectedCount = new Set(asked.filter((l) => !l.displacedBy).map(legKey)).size;
   if (selectedCount > MAX_SELECTED) throw new ValidationError(`Pick at most ${MAX_SELECTED} rooms at a time`);
@@ -527,11 +680,16 @@ export async function previewRoomMove(
   const reason = input.reason?.trim() ?? "";
   // The swap partners — added once, by the server, whatever the desk sent (a call that already
   // names a partner leg leaves it as it is).
-  const { legs: planned, truncated } = await withSwapPartners(prisma, asked);
+  const { legs: planned, truncated, refusals: partnerRefusals } = await withSwapPartners(prisma, asked);
   // A leg the desk sent that the server would add anyway is the same leg: keep the desk's choices.
   const rooms = await loadRooms(prisma, planned.flatMap((l) => [l.fromRoomId, l.toRoomId]));
-  const shape = shapeRefusals(planned, rooms);
-  const legs = await dryRunLegs(prisma, actor, planned, reason);
+  const nightsOf = new Map<string, LegNights>();
+  for (const l of planned) nightsOf.set(legKey(l), await legNightsOf(prisma, l));
+  const shape = [
+    ...shapeRefusals(planned, rooms, nightsOf),
+    ...partnerRefusals,
+  ];
+  const legs = await dryRunLegs(prisma, actor, planned, reason, nightsOf);
 
   const roomView = (id: string) => {
     const r = rooms.get(id);
@@ -560,7 +718,9 @@ export async function previewRoomMove(
   const out: RoomMovePreviewLeg[] = [];
   for (const [i, leg] of legs.entries()) {
     const stage = String(leg.booking?.currentStage ?? "");
-    const nights = leg.dry?.toRooms.find((r) => r.roomId === leg.input.toRoomId)?.nights ?? leg.dry?.substitutionNights ?? [];
+    const n = nightsOf.get(legKey(leg.input));
+    const dated = n?.dated === true;
+    const nights = dated ? n!.from : leg.dry?.toRooms.find((r) => r.roomId === leg.input.toRoomId)?.nights ?? leg.dry?.substitutionNights ?? [];
     const roomsOfBooking = planned.filter((p) => p.entryId === leg.input.entryId).length;
     out.push({
       order: i + 1,
@@ -576,13 +736,16 @@ export async function previewRoomMove(
       toRoom: leg.dry?.toRoom ?? roomView(leg.input.toRoomId),
       nights,
       nightsLabel: nights.length ? nightsLabel(nights) : null,
+      newCheckInDate: dated ? n!.to[0] : null,
+      toNights: dated ? n!.to : null,
+      toNightsLabel: dated ? nightsLabel(n!.to) : null,
       sameType: sameTypeOf(leg),
       priceMode: leg.input.priceMode,
       guestAgreedNote: leg.input.guestAgreedNote ?? null,
       displaced: leg.input.displaced,
       displacedBy: leg.input.displacedBy,
       pricing: await priceLeg(prisma, leg, roomsOfBooking),
-      path: leg.dry ? pathFor(stage, leg.dry.sameType, leg.input.priceMode) : [],
+      path: leg.dry ? pathFor(stage, leg.dry.sameType, leg.input.priceMode, dated) : [],
       papers: leg.dry
         ? stage === Stage.S3
           ? ["A new quotation (kept on file, not sent)", "A fresh proforma — held for you to send or not"]
@@ -641,6 +804,7 @@ function viewMove(m: MoveRow) {
     legs: m.legs.map((l) => {
       const o = (l.outcome ?? null) as LegOutcome | null;
       const nights = Array.isArray(l.nights) ? (l.nights as string[]) : [];
+      const toNights = Array.isArray(l.toNights) ? (l.toNights as string[]) : null;
       return {
         id: l.id,
         order: l.order,
@@ -653,6 +817,9 @@ function viewMove(m: MoveRow) {
         toRoomNumber: l.toRoom.roomNumber,
         nights,
         nightsLabel: nights.length ? nightsLabel(nights) : null,
+        newCheckInDate: l.newCheckInDate ? iso(l.newCheckInDate) : null,
+        toNights,
+        toNightsLabel: toNights?.length ? nightsLabel(toNights) : null,
         originStage: String(l.originStage),
         priceMode: l.priceMode,
         guestAgreedNote: l.guestAgreedNote,
@@ -766,12 +933,23 @@ async function runLeg(
   let status: "DONE" | "STOPPED" | "REFUSED";
   let outcome: Record<string, unknown>;
   try {
+    const dated = !!leg.newCheckInDate;
+    const toNights = Array.isArray(leg.toNights) ? (leg.toNights as string[]) : [];
     const out = await changeRoomToNewSegment(prisma, actor, {
       entryId: leg.entryId,
       fromRoomId: leg.fromRoomId,
-      toRoomId: leg.toRoomId,
+      ...(dated
+        ? {
+            dateShift: datedWalk(
+              { fromRoomId: leg.fromRoomId, toRoomId: leg.toRoomId, priceMode: leg.priceMode },
+              { from: Array.isArray(leg.nights) ? (leg.nights as string[]) : [], to: toNights, dated: true },
+              leg.guestAgreedNote,
+            ),
+          }
+        : { toRoomId: leg.toRoomId }),
       reason,
-      ...(opts.roomCompositions?.length ? { roomCompositions: opts.roomCompositions } : {}),
+      // A walk back restores the booking's own terms; a dated walk carries its setup as it is.
+      ...(opts.roomCompositions?.length && !dated ? { roomCompositions: opts.roomCompositions } : {}),
       moveContext: {
         moveId,
         legId,
@@ -815,6 +993,7 @@ async function runLeg(
       toRoomId: leg.toRoomId,
       fromRoomNumber: nos.get(leg.fromRoomId) ?? null,
       toRoomNumber: nos.get(leg.toRoomId) ?? null,
+      ...(leg.newCheckInDate ? { newCheckInDate: iso(leg.newCheckInDate), fromNights: leg.nights, toNights: leg.toNights } : {}),
       partnerEntryId: partner?.entryId ?? null,
       compensates: opts.compensates ?? null,
       reachedStage: (outcome.walk as { reachedStage?: string } | undefined)?.reachedStage ?? null,
@@ -894,7 +1073,17 @@ async function walkBack(
   prisma: PrismaClient,
   actor: Actor,
   moveId: string,
-  done: Array<{ id: string; entryId: string; fromRoomId: string; toRoomId: string; nights: Prisma.JsonValue; originStage: Stage; priceMode: "KEEP" | "NEW_TYPE" }>,
+  done: Array<{
+    id: string;
+    entryId: string;
+    fromRoomId: string;
+    toRoomId: string;
+    nights: Prisma.JsonValue;
+    toNights: Prisma.JsonValue | null;
+    newCheckInDate: Date | null;
+    originStage: Stage;
+    priceMode: "KEEP" | "NEW_TYPE";
+  }>,
   originalComps: Map<string, RoomCompositionServiceInput[] | null>,
   because: string,
 ) {
@@ -910,7 +1099,14 @@ async function walkBack(
         entryId: l.entryId,
         fromRoomId: l.toRoomId,
         toRoomId: l.fromRoomId,
-        nights: l.nights as Prisma.InputJsonValue,
+        // A dated leg goes back to the nights it left.
+        ...(l.newCheckInDate && Array.isArray(l.toNights) && Array.isArray(l.nights)
+          ? {
+              nights: l.toNights as Prisma.InputJsonValue,
+              toNights: l.nights as Prisma.InputJsonValue,
+              newCheckInDate: new Date(`${String((l.nights as string[])[0]).slice(0, 10)}T00:00:00.000Z`),
+            }
+          : { nights: l.nights as Prisma.InputJsonValue }),
         originStage: l.originStage,
         priceMode: l.priceMode,
       },
@@ -986,6 +1182,9 @@ export async function executeRoomMove(
             fromRoomId: l.fromRoomId,
             toRoomId: l.toRoomId,
             nights: l.nights as Prisma.InputJsonValue,
+            ...(l.newCheckInDate && l.toNights
+              ? { newCheckInDate: new Date(`${l.newCheckInDate}T00:00:00.000Z`), toNights: l.toNights as Prisma.InputJsonValue }
+              : {}),
             originStage: l.stage as Stage,
             priceMode: l.priceMode,
             guestAgreedNote: l.guestAgreedNote,
@@ -1007,6 +1206,7 @@ export async function executeRoomMove(
       toRoomId: l.toRoomId,
       fromRoomNumber: startNos.get(l.fromRoomId) ?? null,
       toRoomNumber: startNos.get(l.toRoomId) ?? null,
+      ...(l.newCheckInDate ? { newCheckInDate: iso(l.newCheckInDate), fromNights: l.nights, toNights: l.toNights } : {}),
       partnerEntryId: partner?.entryId ?? null,
       legs: legs.length,
       reason,
@@ -1092,7 +1292,7 @@ export async function resolveRoomMove(prisma: PrismaClient, actor: Actor, moveId
   const clashes: string[] = [];
   for (const l of m.legs) {
     if (l.status === "CANCELLED" || l.status === "REVERTED") continue;
-    const nights = Array.isArray(l.nights) ? (l.nights as string[]) : [];
+    const nights = Array.isArray(l.toNights) ? (l.toNights as string[]) : Array.isArray(l.nights) ? (l.nights as string[]) : [];
     for (const range of foldIsoNightsToRanges(nights)) {
       const conflicts = await findRoomBookingConflicts(prisma, {
         roomIds: [l.toRoomId],

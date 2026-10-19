@@ -36,6 +36,13 @@ const legSchema = z.object({
   priceMode: z.enum(["KEEP", "NEW_TYPE"]).optional(),
   guestAgreedNote: z.string().trim().max(1000).nullable().optional(),
   displacedBy: z.string().trim().max(64).nullable().optional(),
+  // The stay's new first night when it moves to other dates too (2026-10-19, trading stays).
+  newCheckInDate: z
+    .string()
+    .trim()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, "newCheckInDate must be a date (YYYY-MM-DD)")
+    .nullable()
+    .optional(),
 });
 const legsSchema = z.array(legSchema).min(1).max(12);
 

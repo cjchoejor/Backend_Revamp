@@ -21,6 +21,11 @@ import { foldIsoNightsToRanges } from "./entry-inventory-claim.js";
  *         at every walk, and the partner's claim on such a room must not refuse that.
  *     Nothing else is tolerated: not another room, not another booking, not a finished or cancelled
  *     move.
+ *   - **Other dates (2026-10-19).** A leg that also moves the stay to other dates (two bookings
+ *     trading their stays: each takes the other's room AND dates) claims its target room over the
+ *     nights it LANDS on (`toNights`), not the nights it leaves. The move refuses a trade whose two
+ *     new stays would share a night in one room, so passing over the partner by room alone cannot
+ *     leave a double booking behind.
  *
  * Read by `findRoomBookingConflicts` (the walk's pre-check and Policy 26 inside the hold),
  * `detectOverbookingForSpans` (Policy 41 inside the re-confirmation), the S1 search and the house
@@ -52,6 +57,7 @@ type ActiveLeg = {
   fromRoomId: string;
   toRoomId: string;
   nights: Prisma.JsonValue;
+  toNights: Prisma.JsonValue | null;
   status: string;
   entry: { inquiryId: string | null; guestProfile: { firstName: string | null; lastName: string | null } | null };
 };
@@ -66,6 +72,7 @@ async function activeLegs(db: Db): Promise<ActiveLeg[]> {
       fromRoomId: true,
       toRoomId: true,
       nights: true,
+      toNights: true,
       status: true,
       entry: { select: { inquiryId: true, guestProfile: { select: { firstName: true, lastName: true } } } },
     },
@@ -88,7 +95,9 @@ export async function roomMoveClaims(
   for (const leg of await activeLegs(db)) {
     if (!CLAIMING_LEG.has(leg.status)) continue;
     if (input.excludeEntryId && leg.entryId === input.excludeEntryId) continue;
-    for (const range of foldIsoNightsToRanges(legNights(leg.nights))) {
+    // A leg that moves the stay to other dates claims the nights it lands on.
+    const landing = leg.toNights != null ? legNights(leg.toNights) : legNights(leg.nights);
+    for (const range of foldIsoNightsToRanges(landing)) {
       if (range.startDate >= input.checkOut || range.endDate <= input.checkIn) continue;
       out.push({
         moveId: leg.moveId,
