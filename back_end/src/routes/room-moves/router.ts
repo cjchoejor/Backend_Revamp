@@ -36,6 +36,8 @@ const legSchema = z.object({
   priceMode: z.enum(["KEEP", "NEW_TYPE"]).optional(),
   guestAgreedNote: z.string().trim().max(1000).nullable().optional(),
   displacedBy: z.string().trim().max(64).nullable().optional(),
+  // The desk's answer: the guest also holds another booking over the new nights, and both are meant.
+  guestOverlapConfirmed: z.boolean().optional(),
   // The stay's new first night when it moves to other dates too (2026-10-19, trading stays).
   newCheckInDate: z
     .string()

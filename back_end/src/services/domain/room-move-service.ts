@@ -70,6 +70,13 @@ export type RoomMoveLegInput = {
   /** Set on a swap partner the preview added, when the desk sends the leg back — display only. */
   displacedBy?: string | null;
   /**
+   * The desk's answer when the guest also holds another booking over the nights this leg lands on
+   * (2026-10-19, operator: "the amber line is easy to miss" — make it a question). True = both
+   * bookings are meant, and the FOM's switch records it. Absent = not answered: the preview asks,
+   * and the move does not run. "Entered twice by mistake" is answered on the desk by not switching.
+   */
+  guestOverlapConfirmed?: boolean;
+  /**
    * The leg's new first night, "YYYY-MM-DD", when the stay moves to other dates as well
    * (2026-10-19) — the stay keeps its number of nights. For such a leg `priceMode` reads KEEP =
    * the agreed price, NEW_TYPE = priced anew at the new dates (and room type).
@@ -233,10 +240,15 @@ export type RoomMovePreviewLeg = {
   priceMode: "KEEP" | "NEW_TYPE";
   guestAgreedNote: string | null;
   /**
-   * The guest's other booking over the nights this leg lands on (Policy 13), in words — the FOM's
-   * move acknowledges it, so it is stated, not refused (2026-10-19).
+   * The guest's other booking over the nights this leg lands on (Policy 13), in words
+   * (2026-10-19). Not yet acknowledged, the desk must answer whether both are meant
+   * (`guestOverlapConfirmed`) before the move runs.
    */
   guestOverlap: string | null;
+  /** That other booking, for the desk's link to it. */
+  guestOverlapEntryId: string | null;
+  /** True when the question is already answered on the booking — nothing to ask. */
+  guestOverlapAcknowledged: boolean;
   /** True when the leg was added because the booking sits in a room another leg moves into. */
   displaced: boolean;
   /** The booking whose leg made this one ("moves into the room ENT-… leaves"). */
@@ -262,6 +274,7 @@ type PlannedLeg = RoomMoveLegInput & {
   displaced: boolean;
   displacedBy: string | null;
   newCheckInDate: string | null;
+  guestOverlapConfirmed: boolean;
 };
 
 /** A leg's nights: the ones it leaves, and — when its dates change — the ones it lands on. */
@@ -364,7 +377,7 @@ async function acknowledgeGuestOverlap(
       entryId: args.entryId,
       payload: {
         entryId: args.entryId,
-        note: `Room move ${args.moveId} — the guest also holds ${args.other} over the new nights, on purpose: ${args.reason}`,
+        note: `Room move ${args.moveId} — the guest also holds ${args.other} over the new nights; the FOM answered that both bookings are meant: ${args.reason}`,
         via: "ROOM_MOVE",
         moveId: args.moveId,
         legId: args.legId,
@@ -510,6 +523,7 @@ async function withSwapPartners(
         displaced: true,
         displacedBy: leg.entryId,
         newCheckInDate: plan.from[0],
+        guestOverlapConfirmed: false,
       });
       continue;
     }
@@ -538,6 +552,7 @@ async function withSwapPartners(
         displaced: true,
         displacedBy: leg.entryId,
         newCheckInDate: null,
+        guestOverlapConfirmed: false,
       });
     }
   }
@@ -586,6 +601,10 @@ async function dryRunLegs(
       const others = new Map([...landsOn].filter(([id]) => id !== leg.input.entryId));
       const o = await guestOverlapOf(prisma, leg.input.entryId, landsOn.get(leg.input.entryId) ?? [], others);
       leg.overlap = o ? { ...o, acknowledged: await isMultiBookingAcknowledged(prisma, leg.input.entryId) } : null;
+      // A question, not a note (2026-10-19): the desk answers it on the card before the move runs.
+      if (leg.overlap && !leg.overlap.acknowledged && !leg.input.guestOverlapConfirmed) {
+        leg.refusals.push(`${leg.label} also holds ${leg.overlap.words} over the new nights — say whether both bookings are meant`);
+      }
     }
     // Every other booking's leg leaving the room this one enters — the one claim passed over.
     const leaving = out.filter((p) => p.input.entryId !== leg.input.entryId && p.input.fromRoomId === leg.input.toRoomId);
@@ -770,6 +789,7 @@ export async function previewRoomMove(
     displaced: !!l.displacedBy,
     displacedBy: l.displacedBy ?? null,
     newCheckInDate: l.newCheckInDate?.trim().slice(0, 10) || null,
+    guestOverlapConfirmed: l.guestOverlapConfirmed === true,
   }));
   for (const l of asked) {
     if (l.newCheckInDate && !/^\d{4}-\d{2}-\d{2}$/.test(l.newCheckInDate)) throw new ValidationError("newCheckInDate must be a date (YYYY-MM-DD)");
@@ -849,9 +869,11 @@ export async function previewRoomMove(
       guestAgreedNote: leg.input.guestAgreedNote ?? null,
       guestOverlap: leg.overlap
         ? leg.overlap.acknowledged
-          ? `${guestName(leg.booking?.guestProfile ?? null) || "This guest"} also holds ${leg.overlap.words} over the new nights — already acknowledged as meant`
-          : `${guestName(leg.booking?.guestProfile ?? null) || "This guest"} also holds ${leg.overlap.words} over the new nights — switching records, as the FOM, that both bookings are meant`
+          ? `${guestName(leg.booking?.guestProfile ?? null) || "This guest"} also holds ${leg.overlap.words} over the new nights — already recorded as meant`
+          : `${guestName(leg.booking?.guestProfile ?? null) || "This guest"} also holds ${leg.overlap.words} over the new nights`
         : null,
+      guestOverlapEntryId: leg.overlap?.entryId ?? null,
+      guestOverlapAcknowledged: leg.overlap?.acknowledged ?? false,
       displaced: leg.input.displaced,
       displacedBy: leg.input.displacedBy,
       pricing: await priceLeg(prisma, leg, roomsOfBooking),
@@ -1020,7 +1042,7 @@ async function runLeg(
   moveId: string,
   legId: string,
   reason: string,
-  opts: { roomCompositions?: RoomCompositionServiceInput[] | null; compensates?: string | null } = {},
+  opts: { roomCompositions?: RoomCompositionServiceInput[] | null; compensates?: string | null; retry?: boolean } = {},
 ): Promise<"DONE" | "STOPPED" | "REFUSED"> {
   const leg = await prisma.roomMoveLeg.findUniqueOrThrow({ where: { id: legId } });
   const others = await prisma.roomMoveLeg.findMany({
@@ -1057,6 +1079,13 @@ async function runLeg(
         stillToLand.set(p.entryId, [...(stillToLand.get(p.entryId) ?? []), ...lands]);
       }
       const overlap = await guestOverlapOf(prisma, leg.entryId, toNights, stillToLand);
+      // The move's own run was answered on the switch window (the preview refuses it unanswered).
+      // A retry was not: an overlap that is new since then is the desk's question, not ours.
+      if (overlap && opts.retry && !(await isMultiBookingAcknowledged(prisma, leg.entryId))) {
+        throw new ValidationError(
+          `The guest also holds ${overlap.words} over the new nights — say whether both bookings are meant by switching again from the house chart`,
+        );
+      }
       if (overlap) {
         await acknowledgeGuestOverlap(prisma, actor, {
           entryId: leg.entryId,
@@ -1406,7 +1435,7 @@ export async function retryRoomMoveLeg(prisma: PrismaClient, actor: Actor, moveI
   }
   await trace(prisma, actor, "ROOM_MOVE.LEG_RETRIED", leg.entryId, String(leg.originStage), { moveId, legId });
   await prisma.roomMoveLeg.update({ where: { id: legId }, data: { status: "PLANNED", outcome: Prisma.JsonNull, startedAt: null, finishedAt: null } });
-  await runLeg(prisma, actor, moveId, legId, reason?.trim() || m.reason);
+  await runLeg(prisma, actor, moveId, legId, reason?.trim() || m.reason, { retry: true });
   await settleMoveStatus(prisma, actor, moveId);
   return getRoomMove(prisma, moveId);
 }
