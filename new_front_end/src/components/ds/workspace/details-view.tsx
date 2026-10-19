@@ -21,6 +21,7 @@ import { heldRoomIds } from "@/lib/desk/party-rooms";
 import { useRoomsList } from "@/hooks/use-desk-data";
 import { Fact, FactBox, Facts, StepCard } from "@/components/ds/steps/kit";
 import { TripCard } from "@/components/ds/workspace/return-stay";
+import { GuestBookingsCard } from "@/components/ds/workspace/guest-bookings";
 import type { EntryDetail } from "@/types/api";
 
 const BILLING_WORD: Record<string, string> = {
@@ -144,6 +145,7 @@ export function DetailsView({
         </StepCard>
 
         <TripCard entry={entry} />
+        <GuestBookingsCard entry={entry} />
 
         <StepCard title="Numbers">
           <Facts wide>

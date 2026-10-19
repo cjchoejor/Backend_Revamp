@@ -83,6 +83,12 @@ function PriceLine({ p }: { p: RoomMovePreviewLeg["pricing"] }) {
 
 /** The server's ask for the guest's words — the card has its own field for it, so it is not repeated. */
 const NOTE_ASK = /type what the guest agreed to|type what they said/;
+/** The server's question about the guest's other booking — the card asks it in its own words. */
+const OVERLAP_ASK = /say whether both bookings are meant/;
+const ASKED_ON_CARD = (r: string) => NOTE_ASK.test(r) || OVERLAP_ASK.test(r);
+
+/** "Both are meant" or "entered twice by mistake" — the answer the switch needs (2026-10-19). */
+type OverlapAnswer = "BOTH" | "MISTAKE";
 
 function PreviewLegCard({
   leg,
@@ -91,6 +97,8 @@ function PreviewLegCard({
   onPriceMode,
   onNote,
   madeBy,
+  overlapAnswer,
+  onOverlapAnswer,
 }: {
   leg: RoomMovePreviewLeg;
   priceMode: "KEEP" | "NEW_TYPE";
@@ -99,9 +107,13 @@ function PreviewLegCard({
   onNote: (n: string) => void;
   /** The guest whose move pushes this booking out of its room, when it was added for that. */
   madeBy: string | null;
+  overlapAnswer: OverlapAnswer | null;
+  onOverlapAnswer: (a: OverlapAnswer) => void;
 }) {
-  // The note a re-price needs is asked for by its own field, not repeated as a refusal.
-  const refusals = leg.refusals.filter((r) => !NOTE_ASK.test(r));
+  // The note a re-price needs, and the question about the guest's other booking, are asked by
+  // their own fields, not repeated as refusals.
+  const refusals = leg.refusals.filter((r) => !ASKED_ON_CARD(r));
+  const asks = !!leg.guestOverlap && !leg.guestOverlapAcknowledged;
   const refused = refusals.length > 0;
   // Trading stays (2026-10-19): the dates move too, so the price is a choice on every such card.
   const dated = !!leg.newCheckInDate;
@@ -134,7 +146,30 @@ function PreviewLegCard({
       ) : leg.nightsLabel ? (
         <div className="sm">Nights: <b>{leg.nightsLabel}</b></div>
       ) : null}
-      {leg.guestOverlap ? <p className="rmv-overlap">{leg.guestOverlap}</p> : null}
+      {leg.guestOverlap && !asks ? <p className="rmv-overlap done">{leg.guestOverlap}</p> : null}
+      {asks ? (
+        <div className={`rmv-overlap ask${overlapAnswer ? "" : " open"}`} role="radiogroup" aria-label="The guest's other booking">
+          <b>{leg.guestOverlap}</b>
+          <span>Are both bookings meant?</span>
+          <label className={overlapAnswer === "BOTH" ? "on" : undefined}>
+            <input type="radio" checked={overlapAnswer === "BOTH"} onChange={() => onOverlapAnswer("BOTH")} /> Both are meant — the guest keeps two bookings on these nights
+          </label>
+          <label className={overlapAnswer === "MISTAKE" ? "on" : undefined}>
+            <input type="radio" checked={overlapAnswer === "MISTAKE"} onChange={() => onOverlapAnswer("MISTAKE")} /> Entered twice by mistake
+          </label>
+          {overlapAnswer === "MISTAKE" ? (
+            <p className="rmv-overlap-then">
+              {"Then don't switch — cancel the duplicate on its own page"}
+              {leg.guestOverlapEntryId ? (
+                <>
+                  {": "}
+                  <Link href={`/bookings/${leg.guestOverlapEntryId}`}>{leg.guestOverlapEntryId}</Link>
+                </>
+              ) : null}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
       {refused ? null : <div className="sm">Price: <PriceLine p={leg.pricing} /></div>}
       {leg.sameType === false || dated ? (
         <div className="rmv-pricemode" role="radiogroup" aria-label="How this guest is priced">
@@ -280,6 +315,8 @@ export function RoomMoveDialog({
   const qc = useQueryClient();
   const [priceModes, setPriceModes] = useState<Record<string, "KEEP" | "NEW_TYPE">>({});
   const [notes, setNotes] = useState<Record<string, string>>({});
+  /** The desk's answer about each guest's other booking over the new nights. */
+  const [overlapAnswers, setOverlapAnswers] = useState<Record<string, OverlapAnswer>>({});
   const [reason, setReason] = useState("");
   const [preview, setPreview] = useState<RoomMovePreview | null>(null);
   const [result, setResult] = useState<RoomMove | null>(null);
@@ -291,11 +328,16 @@ export function RoomMoveDialog({
     () =>
       (plan ?? legs ?? []).map((l) => {
         const mode = priceModes[legKey(l)] ?? "KEEP";
-        return { ...l, priceMode: mode, guestAgreedNote: mode === "NEW_TYPE" ? notes[legKey(l)]?.trim() || null : null };
+        return {
+          ...l,
+          priceMode: mode,
+          guestAgreedNote: mode === "NEW_TYPE" ? notes[legKey(l)]?.trim() || null : null,
+          guestOverlapConfirmed: overlapAnswers[legKey(l)] === "BOTH",
+        };
       }),
-    [plan, legs, priceModes, notes],
+    [plan, legs, priceModes, notes, overlapAnswers],
   );
-  const modesKey = JSON.stringify(priceModes);
+  const modesKey = JSON.stringify([priceModes, overlapAnswers]);
 
   const previewMut = useMutation({
     mutationFn: () => previewRoomMove(session!, { legs: asked, reason: reason.trim() || null }),
@@ -324,6 +366,7 @@ export function RoomMoveDialog({
     if (legs) return;
     setPriceModes({});
     setNotes({});
+    setOverlapAnswers({});
     setReason("");
     setPreview(null);
     setResult(null);
@@ -353,18 +396,25 @@ export function RoomMoveDialog({
   const swap = preview ? preview.kind === "SWAP" : new Set(legs.map((l) => l.entryId)).size > 1;
   const busy = previewMut.isPending || run.isPending;
   const missingNote = asked.some((l) => l.priceMode === "NEW_TYPE" && !l.guestAgreedNote);
+  const asking = (preview?.legs ?? []).filter((l) => !!l.guestOverlap && !l.guestOverlapAcknowledged);
+  const unanswered = asking.some((l) => !overlapAnswers[l.key]);
+  const mistaken = asking.some((l) => overlapAnswers[l.key] === "MISTAKE");
   const nameOfEntry = (entryId: string | null) => (entryId ? (preview?.legs.find((x) => x.entryId === entryId)?.guestName ?? entryId) : null);
   const blockedBy = !preview
     ? "Checking the move…"
     : !preview.authority.ok
       ? `${preview.authority.why} — you are signed in as ${preview.authority.actorLevel === "L1" ? "the front desk" : preview.authority.actorLevel}`
-      : preview.refusals.length > 0 || preview.legs.some((l) => l.refusals.length > 0 && !l.refusals.every((r) => NOTE_ASK.test(r)))
+      : preview.refusals.length > 0 || preview.legs.some((l) => l.refusals.length > 0 && !l.refusals.every(ASKED_ON_CARD))
         ? "Something above refuses the move"
-        : missingNote
-          ? "Type what the guest agreed to"
-          : !reason.trim()
-            ? "Say why the room is being moved"
-            : null;
+        : mistaken
+          ? "Entered twice by mistake — cancel the duplicate instead of switching"
+          : unanswered
+            ? "Say whether both of the guest's bookings are meant"
+            : missingNote
+              ? "Type what the guest agreed to"
+              : !reason.trim()
+                ? "Say why the room is being moved"
+                : null;
 
   const bookings = new Set((preview?.legs ?? legs).map((l) => l.entryId)).size;
   // Trading stays (2026-10-19): the rooms and the dates change hands.
@@ -436,6 +486,8 @@ export function RoomMoveDialog({
                 onPriceMode={(m) => setPriceModes((p) => ({ ...p, [l.key]: m }))}
                 onNote={(n) => setNotes((p) => ({ ...p, [l.key]: n }))}
                 madeBy={nameOfEntry(l.displacedBy)}
+                overlapAnswer={overlapAnswers[l.key] ?? null}
+                onOverlapAnswer={(a) => setOverlapAnswers((p) => ({ ...p, [l.key]: a }))}
               />
             ))}
           </div>

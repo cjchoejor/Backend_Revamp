@@ -14,6 +14,8 @@ export type RoomMoveLegInput = {
   guestAgreedNote?: string | null;
   /** On a leg the server added (a booking swapped into the room left behind), sent back as it came. */
   displacedBy?: string | null;
+  /** The desk's answer: the guest also holds another booking over the new nights, and both are meant. */
+  guestOverlapConfirmed?: boolean;
   /**
    * The stay's new first night when it moves to other dates too (2026-10-19, trading stays: two
    * bookings on different dates take each other's room and dates).
@@ -48,6 +50,10 @@ export type RoomMovePreviewLeg = {
    * — the FOM's switch acknowledges it (2026-10-19).
    */
   guestOverlap: string | null;
+  /** That other booking — the link when it was entered twice by mistake. */
+  guestOverlapEntryId: string | null;
+  /** Already recorded as meant on the booking — nothing to ask. */
+  guestOverlapAcknowledged: boolean;
   /** Added by the server: this booking sits in a room another leg moves into. */
   displaced: boolean;
   /** The booking whose move made this one. */

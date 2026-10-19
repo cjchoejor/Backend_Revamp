@@ -42,6 +42,10 @@ const WORDS: Record<string, string> = {
   "ENTRY.ROOMS_SPLIT_OFF": "Rooms split off to a booking of their own",
   "ENTRY.NIGHTS_SPLIT_OFF": "A night moved — the stay cut apart into bookings of their own",
   "ENTRY.CREATED_FROM_SPLIT": "Made from rooms split off another booking",
+  // One guest's two bookings (2026-10-19).
+  "ENTRY.BOOKINGS_COMBINED": "The guest's other booking combined into this one",
+  "ENTRY.COMBINED_INTO": "Combined into the guest's other booking",
+  "MULTI_BOOKING.ACKNOWLEDGED": "Recorded that the guest means to keep both bookings over these nights",
   // Room moves from the house chart, and the papers a walk holds for the desk (2026-10-12).
   "ROOM_MOVE.STARTED": "Room move started",
   "ROOM_MOVE.LEG_COMPLETED": "Moved to the new room",
@@ -370,6 +374,17 @@ export function traceDetail(ev: TraceEvent, names?: Partial<HistoryNames>): stri
     if (no) bits.push(no);
     if (p.emailedWithThatFile === true) bits.push("the guest had been emailed the earlier voucher's file");
   }
+  // One guest's two bookings combined (2026-10-19): from which booking, and what it holds now.
+  if (ev.eventType === "ENTRY.BOOKINGS_COMBINED") {
+    if (typeof p.combinedFrom === "string") bits.push(`from ${p.combinedFrom}`);
+    const after = (p.after ?? null) as { adults?: number; children?: number; numberOfRooms?: number; nights?: Array<{ rooms?: string[] }> } | null;
+    if (after?.adults != null) bits.push(`${after.adults} adult${after.adults === 1 ? "" : "s"}${after.children ? ` · ${after.children} children` : ""}`);
+    const rooms = [...new Set((after?.nights ?? []).flatMap((n) => n.rooms ?? []))];
+    if (rooms.length) bits.push(`Room ${rooms.join(", ")}`);
+    if (typeof p.reason === "string" && p.reason) bits.push(p.reason);
+  }
+  if (ev.eventType === "ENTRY.COMBINED_INTO" && typeof p.combinedInto === "string") bits.push(`into ${p.combinedInto}`);
+  if (ev.eventType === "MULTI_BOOKING.ACKNOWLEDGED" && typeof p.note === "string" && p.note) bits.push(p.note);
   // Rooms split off to other dates (2026-10-14): which rooms, to which booking, its nights and guests.
   if (ev.eventType === "ENTRY.ROOMS_SPLIT_OFF" || ev.eventType === "ENTRY.CREATED_FROM_SPLIT") {
     const moved = Array.isArray(p.rooms) ? (p.rooms as Array<{ fromRoomNumber?: string; toRoomNumber?: string }>) : [];

@@ -63,6 +63,7 @@ export const ENDING_WORDS: Record<string, { word: string; qualifier: string }> =
   DECLINED: { word: "Turned down", qualifier: "the guest said no" },
   CANCELLED: { word: "Cancelled", qualifier: "" },
   WALKED_OUT: { word: "Walked out", qualifier: "left without checking out" },
+  COMBINED: { word: "Combined", qualifier: "into the guest's other booking" },
 };
 
 /** The ending's words, or null when the row does not record one. */
