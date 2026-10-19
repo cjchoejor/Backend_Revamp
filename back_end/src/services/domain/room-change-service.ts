@@ -989,6 +989,15 @@ export type RoomMoveWalkContext = {
    * guest now in it keeps it OCCUPIED.
    */
   fromRoomEnteredByPartner?: boolean;
+  /**
+   * A dated leg (trading stays, 2026-10-19): the move has already asked Policy 13 over the nights
+   * this booking lands on — of the house as it will stand once every leg has run, since a partner
+   * still on its old nights is about to leave them — and, where the guest really does hold another
+   * booking over them, the FOM's move recorded the acknowledgement on this booking first. The walk
+   * does not ask again, before the re-entry or at the re-freeze: asked mid-move it would see the
+   * partner where it is about to leave.
+   */
+  guestOverlapSettled?: boolean;
 };
 
 /**
@@ -2239,7 +2248,7 @@ async function changeRoomToNewSegmentInner(
   });
   // An extension or a date move changes the nights, so the re-freeze asks again whether the guest
   // holds another booking over them (Policy 13) — asked here instead, before anything changes.
-  if (isExtension || isDateShift) {
+  if ((isExtension || isDateShift) && !input.moveContext?.guestOverlapSettled) {
     await enforceMultiBookingAcknowledgedForNewDates(prisma, {
       entryId: input.entryId,
       guestProfileId: (entry as { guestProfileId?: string | null }).guestProfileId ?? null,
@@ -3027,7 +3036,8 @@ async function changeRoomToNewSegmentInner(
       // held, and the desk answers it afterwards.
       holdGuestEmail: true,
       // Same dates, same question already answered — only an extension re-asks it (asked above).
-      carryMultiBookingAcknowledgement: !isExtension && !isDateShift,
+      // A room move's dated leg asked it itself, of the house after the move (moveContext).
+      carryMultiBookingAcknowledgement: !isExtension && (!isDateShift || !!input.moveContext?.guestOverlapSettled),
       // The advance was settled at the first freeze (money or the FOM's credit); the walk does
       // not reopen it — the hold re-placement above skips the same gate for the same reason.
       carryAdvanceCondition: true,

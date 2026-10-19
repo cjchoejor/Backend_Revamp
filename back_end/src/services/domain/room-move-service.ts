@@ -3,13 +3,14 @@ import { AppError, NotFoundError, PolicyGateBlockedError, ValidationError } from
 import { allocateReadableId } from "../../lib/readable-id.js";
 import { findRoomBookingConflicts } from "../../lib/room-booking-conflicts.js";
 import { applyRoomFlagRepairs, planRoomFlagRepairs } from "../../lib/room-flag-repair.js";
-import { foldIsoNightsToRanges } from "../../lib/entry-inventory-claim.js";
+import { currentReservationOnly, foldIsoNightsToRanges, stillHoldsInventory } from "../../lib/entry-inventory-claim.js";
 import { resolveCompositionBasis } from "../../lib/party-seating.js";
 import { effectiveCheckOutDate, hotelTodayUtc } from "../../lib/stay-dates.js";
 import type { ToleratedClaim } from "../../lib/room-move-claims.js";
 import { changeRoomToNewSegment, roomChangeNights, type RoomChangeOutcome, type RoomMoveWalkContext } from "./room-change-service.js";
 import { buildQuotationPreview } from "./quotation-preview-service.js";
 import type { RoomCompositionServiceInput } from "./s2-quotation-service.js";
+import { describeGuestOverlap, isMultiBookingAcknowledged } from "../../policies/04-duplicate-detection/p13-multi-booking-ack-required.js";
 
 /**
  * ROOM MOVES FROM THE HOUSE CHART (2026-10-12, operator request: "switch rooms between two
@@ -231,6 +232,11 @@ export type RoomMovePreviewLeg = {
   sameType: boolean | null;
   priceMode: "KEEP" | "NEW_TYPE";
   guestAgreedNote: string | null;
+  /**
+   * The guest's other booking over the nights this leg lands on (Policy 13), in words — the FOM's
+   * move acknowledges it, so it is stated, not refused (2026-10-19).
+   */
+  guestOverlap: string | null;
   /** True when the leg was added because the booking sits in a room another leg moves into. */
   displaced: boolean;
   /** The booking whose leg made this one ("moves into the room ENT-… leaves"). */
@@ -294,10 +300,86 @@ function datedWalk(
   };
 }
 
+/**
+ * Policy 13's question for a leg whose dates change (2026-10-19, operator report: a trade was
+ * refused on Switch with "This guest already holds ENT-… over these nights" — the preview had not
+ * said so). Does the guest hold ANOTHER live booking over the nights the leg lands on? Asked of the
+ * house as it will stand once the move is done: a booking that is itself a leg still to run counts
+ * on the nights it lands on, not the ones it is about to leave — otherwise two stays of one guest
+ * trading dates would each find the other where it stands now. The same reservations Policy 13
+ * reads (the current pass of a booking that still holds inventory), checkout exclusive.
+ */
+async function guestOverlapOf(
+  prisma: PrismaClient,
+  entryId: string,
+  landing: string[],
+  stillToLand: Map<string, string[]>,
+): Promise<{ entryId: string; words: string } | null> {
+  if (landing.length === 0) return null;
+  const me = await prisma.entry.findUnique({ where: { id: entryId }, select: { guestProfileId: true } });
+  if (!me?.guestProfileId) return null;
+  const mine = new Set(landing);
+  const from = landing[0];
+  const to = shiftIso(landing[landing.length - 1], 1);
+  const others = await prisma.reservation.findMany({
+    where: { entryId: { not: entryId }, entry: { guestProfileId: me.guestProfileId, ...stillHoldsInventory }, ...currentReservationOnly } as Prisma.ReservationWhereInput,
+    orderBy: { confirmedAt: "desc" },
+    select: { entryId: true, frozenCheckInDate: true, frozenCheckOutDate: true },
+  });
+  for (const r of others) {
+    const lands = stillToLand.get(r.entryId);
+    if (lands) {
+      if (lands.some((n) => mine.has(n))) return { entryId: r.entryId, words: `${r.entryId} (${nightsLabel(lands)}, where this move puts it)` };
+      continue;
+    }
+    if (iso(r.frozenCheckInDate) < to && iso(r.frozenCheckOutDate) > from) {
+      return { entryId: r.entryId, words: describeGuestOverlap(r) };
+    }
+  }
+  return null;
+}
+
+/**
+ * Record the FOM's acknowledgement on the booking, as the split does (2026-10-14): a move is the
+ * FOM's act, and moving this guest onto nights they also hold under another booking says both are
+ * meant. Written before the leg's walk, so the walk and its re-freeze read it.
+ */
+async function acknowledgeGuestOverlap(
+  prisma: PrismaClient,
+  actor: Actor,
+  args: { entryId: string; other: string; moveId: string; legId: string; reason: string; stage: string | null },
+) {
+  const already = await isMultiBookingAcknowledged(prisma, args.entryId);
+  if (already) return;
+  await prisma.traceEvent.create({
+    data: {
+      eventType: "MULTI_BOOKING.ACKNOWLEDGED",
+      actorId: actor.actorId,
+      actorLevel: actor.actorLevel,
+      entityType: "Entry",
+      entityId: args.entryId,
+      operation: "ACK",
+      timestamp: new Date(),
+      ...(args.stage && args.stage in Stage ? { stageContext: args.stage as Stage } : {}),
+      entryId: args.entryId,
+      payload: {
+        entryId: args.entryId,
+        note: `Room move ${args.moveId} — the guest also holds ${args.other} over the new nights, on purpose: ${args.reason}`,
+        via: "ROOM_MOVE",
+        moveId: args.moveId,
+        legId: args.legId,
+      } as Prisma.InputJsonValue,
+      createdBy: actor.actorId,
+    },
+  });
+}
+
 type DryLeg = {
   input: PlannedLeg;
   booking: LegBooking | null;
   label: string;
+  /** Policy 13 over the nights it lands on (dated legs only) — see guestOverlapOf. */
+  overlap: { entryId: string; words: string; acknowledged: boolean } | null;
   dry: RoomChangeOutcome | null;
   refusals: string[];
 };
@@ -489,10 +571,22 @@ async function dryRunLegs(
         if (n.to[0] && n.to[0] < iso(today)) refusals.push(`${label} would start on ${fmtNight(n.to[0])}, before today at the hotel`);
       }
     }
-    out.push({ input, booking, label, dry: null, refusals });
+    out.push({ input, booking, label, overlap: null, dry: null, refusals });
+  }
+  // Where each dated leg's booking will be once the move is done — for Policy 13's question.
+  const landsOn = new Map<string, string[]>();
+  for (const leg of out) {
+    const n = nightsOf.get(legKey(leg.input));
+    if (n?.dated) landsOn.set(leg.input.entryId, [...(landsOn.get(leg.input.entryId) ?? []), ...n.to]);
   }
   for (const leg of out) {
     if (leg.refusals.length > 0) continue;
+    const dated = nightsOf.get(legKey(leg.input))?.dated === true;
+    if (dated) {
+      const others = new Map([...landsOn].filter(([id]) => id !== leg.input.entryId));
+      const o = await guestOverlapOf(prisma, leg.input.entryId, landsOn.get(leg.input.entryId) ?? [], others);
+      leg.overlap = o ? { ...o, acknowledged: await isMultiBookingAcknowledged(prisma, leg.input.entryId) } : null;
+    }
     // Every other booking's leg leaving the room this one enters — the one claim passed over.
     const leaving = out.filter((p) => p.input.entryId !== leg.input.entryId && p.input.fromRoomId === leg.input.toRoomId);
     const tolerate: ToleratedClaim[] = leaving.map((p) => ({ entryId: p.input.entryId, roomId: leg.input.toRoomId }));
@@ -505,7 +599,14 @@ async function dryRunLegs(
       tolerate,
       priceMode: leg.input.priceMode,
       guestAgreedNote: leg.input.guestAgreedNote?.trim() || null,
+      // A dated leg's overlap question is asked above, of the house after the move.
+      ...(dated ? { guestOverlapSettled: true } : {}),
     };
+    // Pricing at the new dates needs the guest's words; the card asks for them in its own field,
+    // so the dry run goes on without them — and says so — rather than stopping at the first gate
+    // and hiding everything after it (the overlap above was found only on Switch, 2026-10-19).
+    const missingNote = dated && leg.input.priceMode === "NEW_TYPE" && !leg.input.guestAgreedNote?.trim();
+    if (missingNote) leg.refusals.push(`${leg.label} is priced at the new dates — type what the guest agreed to`);
     try {
       // The preview reports the authority a move needs rather than refusing on it, so the dry run
       // is asked at FOM level at least; the real run uses the operator's own level.
@@ -515,7 +616,7 @@ async function dryRunLegs(
         entryId: leg.input.entryId,
         fromRoomId: leg.input.fromRoomId,
         ...(n?.dated
-          ? { dateShift: datedWalk(leg.input, n, leg.input.guestAgreedNote) }
+          ? { dateShift: datedWalk(leg.input, n, missingNote ? "(preview — the guest's words to follow)" : leg.input.guestAgreedNote) }
           : { toRoomId: leg.input.toRoomId }),
         reason: reason || "Room move preview",
         dryRun: true,
@@ -703,7 +804,9 @@ export async function previewRoomMove(
   const bookings = new Set(planned.map((l) => l.entryId));
   const kind: "MOVE" | "SWAP" = bookings.size > 1 ? "SWAP" : "MOVE";
   const sameTypeAll = legs.every((l) => sameTypeOf(l) !== false);
-  const needed: "L1" | "L2" = kind === "SWAP" || !sameTypeAll ? "L2" : "L1";
+  // A guest moved onto nights they also hold under another booking: only the FOM says both are meant.
+  const overlapNeedsFom = legs.some((l) => l.overlap && !l.overlap.acknowledged);
+  const needed: "L1" | "L2" = kind === "SWAP" || !sameTypeAll || overlapNeedsFom ? "L2" : "L1";
   const authority = {
     needed,
     actorLevel: actor.actorLevel,
@@ -711,9 +814,11 @@ export async function previewRoomMove(
     why:
       kind === "SWAP"
         ? "Moving more than one booking moves a guest who did not ask — it needs the FOM"
-        : needed === "L2"
+        : !sameTypeAll
           ? "A different room type is an upgrade or downgrade — it needs the FOM"
-          : "A move into a free room of the same type is desk work",
+          : overlapNeedsFom
+            ? "The guest holds another booking over the new nights — only the FOM says both are meant"
+            : "A move into a free room of the same type is desk work",
   };
   const out: RoomMovePreviewLeg[] = [];
   for (const [i, leg] of legs.entries()) {
@@ -742,6 +847,11 @@ export async function previewRoomMove(
       sameType: sameTypeOf(leg),
       priceMode: leg.input.priceMode,
       guestAgreedNote: leg.input.guestAgreedNote ?? null,
+      guestOverlap: leg.overlap
+        ? leg.overlap.acknowledged
+          ? `${guestName(leg.booking?.guestProfile ?? null) || "This guest"} also holds ${leg.overlap.words} over the new nights — already acknowledged as meant`
+          : `${guestName(leg.booking?.guestProfile ?? null) || "This guest"} also holds ${leg.overlap.words} over the new nights — switching records, as the FOM, that both bookings are meant`
+        : null,
       displaced: leg.input.displaced,
       displacedBy: leg.input.displacedBy,
       pricing: await priceLeg(prisma, leg, roomsOfBooking),
@@ -935,6 +1045,29 @@ async function runLeg(
   try {
     const dated = !!leg.newCheckInDate;
     const toNights = Array.isArray(leg.toNights) ? (leg.toNights as string[]) : [];
+    if (dated) {
+      // Policy 13 of the house after the move: a leg still to run counts where it lands.
+      const pending = await prisma.roomMoveLeg.findMany({
+        where: { moveId, id: { not: legId }, entryId: { not: leg.entryId }, status: "PLANNED" },
+        select: { entryId: true, nights: true, toNights: true },
+      });
+      const stillToLand = new Map<string, string[]>();
+      for (const p of pending) {
+        const lands = (Array.isArray(p.toNights) ? p.toNights : p.nights) as string[];
+        stillToLand.set(p.entryId, [...(stillToLand.get(p.entryId) ?? []), ...lands]);
+      }
+      const overlap = await guestOverlapOf(prisma, leg.entryId, toNights, stillToLand);
+      if (overlap) {
+        await acknowledgeGuestOverlap(prisma, actor, {
+          entryId: leg.entryId,
+          other: overlap.words,
+          moveId,
+          legId,
+          reason,
+          stage: String(leg.originStage),
+        });
+      }
+    }
     const out = await changeRoomToNewSegment(prisma, actor, {
       entryId: leg.entryId,
       fromRoomId: leg.fromRoomId,
@@ -959,6 +1092,7 @@ async function runLeg(
         priceMode: leg.priceMode,
         guestAgreedNote: leg.guestAgreedNote,
         fromRoomEnteredByPartner,
+        ...(dated ? { guestOverlapSettled: true } : {}),
       },
     });
     status = out.walk.blocked ? "STOPPED" : "DONE";
