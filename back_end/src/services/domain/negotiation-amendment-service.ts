@@ -392,6 +392,16 @@ async function amendNegotiationConfigurationInner(
       actor.actorLevel,
       {
         ...(input.party ?? {}),
+        // The guest total follows the party (2026-10-19, found while building the combine): the
+        // intake update writes guestCount only when it is sent, so a party changed here left the
+        // booking reading its old total.
+        ...(input.party && (input.party.adultCount != null || input.party.childCount != null || input.party.childAges != null)
+          ? {
+              guestCount:
+                (input.party.adultCount ?? entry.adultCount ?? 0) +
+                (input.party.childCount ?? input.party.childAges?.length ?? entry.childCount ?? 0),
+            }
+          : {}),
         ...(newStay ? { checkInDate: ymdUtc(newStay.checkIn), checkOutDate: ymdUtc(newStay.checkOut) } : {}),
       },
       { allowAtNegotiation: true },

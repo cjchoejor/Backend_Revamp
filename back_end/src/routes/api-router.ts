@@ -33,6 +33,7 @@ import { identityCaptureRouter } from "./identity-capture/router.js";
 import { deskRouter } from "./desk/router.js";
 import { bookingNotesRouter } from "./booking-notes/router.js";
 import { roomMovesRouter } from "./room-moves/router.js";
+import { guestBookingsRouter } from "./guest-bookings/router.js";
 
 export const apiRouter = Router();
 
@@ -93,6 +94,7 @@ apiRouter.use(backflowsRouter);
 apiRouter.use(documentsRouter);
 apiRouter.use(bookingNotesRouter);
 apiRouter.use(roomMovesRouter);
+apiRouter.use(guestBookingsRouter);
 apiRouter.use("/desk", deskRouter);
 apiRouter.use("/admin", adminRouter);
 
