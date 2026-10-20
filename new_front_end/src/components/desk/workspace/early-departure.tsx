@@ -12,6 +12,7 @@ import { runNightAudit } from "@/lib/api/in-stay";
 import { departureWouldBeEarly, money } from "@/lib/desk/workspace";
 import { DeskConfirmModal } from "./confirm-modal";
 import type { EntryDetail } from "@/types/api";
+import { Help } from "@/components/ds/help";
 
 /**
  * Early departure on the Stay step (2026-08-22, SIG-S8 §1.2 / Policy 36).
@@ -114,9 +115,7 @@ export function EarlyDepartureBlock({ entry, setSelected }: { entry: EntryDetail
       <div className="block-h">
         <LogOut style={{ width: 13, height: 13 }} />
         Leaving early
-        <span className="ln" />
-      </div>
-      <p style={{ fontSize: 12, color: "var(--ink-2)", marginTop: 0, lineHeight: 1.5 }}>
+        <Help label="About leaving early">
         The booked checkout is <b>{shortDay(fig?.bookedCheckOut ?? entry.reservation?.frozenCheckOutDate)}</b>. Leaving today shortens
         the stay:{" "}
         {fig && fig.sleptNights === 0
@@ -124,7 +123,9 @@ export function EarlyDepartureBlock({ entry, setSelected }: { entry: EntryDetail
           : `the ${fig ? fig.sleptNights : "…"} night${fig?.sleptNights === 1 ? "" : "s"} slept stay${fig?.sleptNights === 1 ? "s" : ""} billed exactly as audited`}
         , the {fig ? fig.unstayedNights : "…"} unstayed night{fig?.unstayedNights === 1 ? " is" : "s are"} not billed, and the booking moves to
         Check-out for settlement. The rate is never renegotiated (Policy 36).
-      </p>
+        </Help>
+        <span className="ln" />
+      </div>
 
       {fig && (
         <div className="fact b-transit" style={{ padding: "7px 11px", fontSize: 12.5, width: "100%", display: "block" }}>

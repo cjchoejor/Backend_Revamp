@@ -35,6 +35,7 @@ import { DeskConfirmModal } from "./confirm-modal";
 import { PdfButton } from "./pdf-button";
 import { ProformaPreview } from "./quotation-preview";
 import { RoomCompositionPlanner } from "./room-compositions-board";
+import { Help } from "@/components/ds/help";
 
 /**
  * Mid-stay money on the Stay step (2026-08-21, operator ruling):
@@ -517,7 +518,9 @@ function InterimRequestPanel({
                 <button type="button" className="btn btn-primary btn-sm" disabled={!dueDraft || dueM.isPending} onClick={() => dueM.mutate()}>
                   {dueM.isPending ? "Saving…" : "Save due date"}
                 </button>
-                <span style={{ ...hint, paddingBottom: 9 }}>The reminder clock moves with it.</span>
+                <span style={{ paddingBottom: 9 }}>
+                  <Help label="About the due date">The reminder clock moves with it.</Help>
+                </span>
               </div>
             )}
           </div>
@@ -557,10 +560,10 @@ function InterimRequestPanel({
           </button>
         )}
       </div>
-      <p style={hint}>
+      <Help label="About the promise">
         A dated promise moves the reminder clock to that moment and the bill prints it. &ldquo;Paying at the desk&rdquo; keeps the default reminder
         {dueBy ? ` (${fmtWhen(dueBy)})` : ""} in case it slips.
-      </p>
+      </Help>
     </>
   );
   const promiseStep: StepItem = paid
@@ -622,8 +625,11 @@ function InterimRequestPanel({
               <button type="button" className="btn btn-primary btn-sm" disabled={sendM.isPending || !request.invoiceId} onClick={() => sendM.mutate()}>
                 {sendM.isPending ? "Sending…" : "Send interim invoice"}
               </button>
+              <Help label="About sending">
+                Emails the bill with the PDF attached. Money is taken only against a bill the guest received, so the answer and the payment come
+                after this.
+              </Help>
             </div>
-            <p style={hint}>Emails the bill with the PDF attached. Money is taken only against a bill the guest received, so the answer and the payment come after this.</p>
           </>
         ),
       };
@@ -748,16 +754,16 @@ export function InterimPaymentBlock({ entry, onChanged }: { entry: EntryDetail; 
       <BlockH expanded={expanded} onToggle={() => setExpanded((v) => !v)}>
         <Receipt style={{ width: 13, height: 13 }} />
         Interim payment
+        <Help label="About interim payments">
+          A part payment during a long stay: ask for a share of the projected total, send the bill, record the guest&rsquo;s answer, then log the
+          money. The night audit raises a prompt here every few nights on its own.
+        </Help>
         {suggested && <span className="tag warn">Due</span>}
         {open && !suggested && <span className={STATE_TAG[open.state]?.cls ?? "tag"}>{STATE_TAG[open.state]?.label ?? open.state}</span>}
         {open && !suggested && open.reminder?.overdue && <span className="tag stop">Payment overdue</span>}
       </BlockH>
       {expanded && (
       <>
-      <p style={{ ...hint, fontSize: 12, color: "var(--ink-2)", marginBottom: 8 }}>
-        A part payment during a long stay: ask for a share of the <b>projected total</b>, send the bill, record the guest&rsquo;s
-        answer, then log the money. The night audit raises a prompt here every few nights on its own.
-      </p>
       {figures && (
         <Ledger
           rows={[
@@ -818,8 +824,11 @@ export function InterimPaymentBlock({ entry, onChanged }: { entry: EntryDetail; 
             >
               {createM.isPending ? "Generating…" : "Generate interim bill"}
             </button>
+            <Help label="About the bill">
+              Money already received is netted off the ask — the bill states what is due now. Next you note when the guest will pay, then send
+              the bill.
+            </Help>
           </div>
-          <p style={hint}>Money already received is netted off the ask — the bill states what is due now. Next you note when the guest will pay, then send the bill.</p>
         </div>
       )}
       {open && !suggested && (
@@ -1108,7 +1117,7 @@ export function StayExtensionBlock({ entry, onChanged }: { entry: EntryDetail; o
                 >
                   {overlapAckM.isPending ? "Recording…" : `Acknowledge the overlap with ${preview!.guestOverlap.entryId}`}
                 </button>
-                <span style={hint}>Only when both bookings are meant — a duplicate should be cancelled instead.</span>
+                <Help label="About the overlap">Only when both bookings are meant — a duplicate should be cancelled instead.</Help>
               </div>
             )}
           </>
@@ -1181,7 +1190,7 @@ export function StayExtensionBlock({ entry, onChanged }: { entry: EntryDetail; o
               <button type="button" className={`btn btn-ghost btn-sm${negotiate ? " on" : ""}`} onClick={() => setNegotiate((v) => !v)}>
                 {negotiate ? "Hide the rate table" : "Negotiate the extra nights' rates"}
               </button>
-              <span style={hint}>Optional · same room keeps its negotiated rate, a different room type starts at its published rate.</span>
+              <Help label="About the rates">Optional. The same room keeps its negotiated rate; a different room type starts at its published rate.</Help>
             </div>
             {negotiate && extensionRoomIds.length > 0 && (
               <RoomCompositionPlanner
@@ -1218,9 +1227,11 @@ export function StayExtensionBlock({ entry, onChanged }: { entry: EntryDetail; o
           </button>
         </div>
         <p style={hint}>
-          {reason.trim().length === 0 ? "Type the reason to continue. " : ""}
-          Holds the extra nights for the guest{holdHours ? ` for ${holdHours} h` : ""} and generates the interim bill. Nothing on the booking changes until the bill is paid and
-          you commit the extension.
+          {reason.trim().length === 0 ? "Type the reason to continue." : null}
+          <Help label="About holding the nights">
+            Holds the extra nights for the guest{holdHours ? ` for ${holdHours} h` : ""} and generates the interim bill. Nothing on the booking
+            changes until the bill is paid and you commit the extension.
+          </Help>
         </p>
       </>
     ) : undefined,
@@ -1255,7 +1266,13 @@ export function StayExtensionBlock({ entry, onChanged }: { entry: EntryDetail; o
               >
                 {commitM.isPending ? "Committing…" : "Commit extension"}
               </button>
-              <span style={hint}>{isFom ? "Re-freezes the booking with the new checkout and brings it back to the Stay step. Nothing is sent to the guest." : "Needs FOM (L2+)."}</span>
+              {isFom ? (
+                <Help label="About committing">
+                  Re-freezes the booking with the new checkout and brings it back to the Stay step. Nothing is sent to the guest.
+                </Help>
+              ) : (
+                <span style={hint}>Needs the FOM.</span>
+              )}
             </div>
           ),
         }
@@ -1267,15 +1284,15 @@ export function StayExtensionBlock({ entry, onChanged }: { entry: EntryDetail; o
       <BlockH expanded={expanded} onToggle={() => setExpanded((v) => !v)}>
         <CalendarPlus style={{ width: 13, height: 13 }} />
         Extend the stay
+        <Help label="About extending">
+          More nights for an in-house guest. Check the rooms, bill the guest for a share of the stay, take that payment, then commit — the
+          checkout moves only at the commit. The FOM&rsquo;s act.
+        </Help>
         {active && <span className={EXT_TAG[active.state]?.cls ?? "tag"}>{EXT_TAG[active.state]?.label ?? active.state}</span>}
         {activeOverdue && <span className="tag stop">Payment overdue</span>}
       </BlockH>
       {expanded && (
       <>
-      <p style={{ ...hint, fontSize: 12, color: "var(--ink-2)", marginBottom: 8 }}>
-        More nights for an in-house guest. Check the rooms, bill the guest for a share of the stay, take that payment, then commit —
-        the checkout moves only at the commit. FOM (L2+).
-      </p>
 
       {active ? (
         <div style={{ display: "grid", gap: 8 }}>

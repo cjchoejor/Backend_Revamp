@@ -169,7 +169,18 @@ export function NightsCard({
   };
 
   return (
-    <StepCard flow="nights" title="The nights" icon="clock">
+    <StepCard
+      flow="nights"
+      title="The nights"
+      icon="clock"
+      meta={
+        <>
+          The hotel&rsquo;s night audit runs on its own each morning and posts every guest&rsquo;s night. From here the FOM posts a night
+          for <b>this booking only</b> — a night the hotel&rsquo;s run missed, or tonight, for a guest settling before the morning run.
+          Every night of the stay must be on the bill before check-out.
+        </>
+      }
+    >
       {nights.length === 0 ? (
         <span className="meta">No stay dates on record.</span>
       ) : (
@@ -210,11 +221,6 @@ export function NightsCard({
           </tbody>
         </table>
       )}
-      <div className="meta" style={{ marginTop: 6 }}>
-        The hotel&rsquo;s night audit runs on its own at 08:00 and posts every guest&rsquo;s night. From here the FOM posts a night for{" "}
-        <b>this booking only</b> — a night the hotel&rsquo;s run missed, or tonight, for a guest settling before the morning run. Every night of
-        the stay must be on the bill before check-out.
-      </div>
       <Live>
         <div className="row-acts" style={{ marginTop: 12, alignItems: "flex-end" }}>
           {elevated ? (

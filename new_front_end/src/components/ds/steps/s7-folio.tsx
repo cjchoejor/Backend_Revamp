@@ -190,6 +190,7 @@ export function FolioCard({
       flow="folio"
       title={`The folio · ${FOLIO_WORD[folio?.state ?? ""] ?? "not open"}`}
       right={f ? <Chip tone="quiet">{plural(f.lineCount, "line")}</Chip> : null}
+      meta="Nothing posted is edited — a correction adds an offsetting line beside the original, and its service charge and GST move with it. Service charge and GST post alongside every charge."
     >
       {!folio ? (
         <span className="meta">No folio on this booking.</span>
@@ -259,9 +260,6 @@ export function FolioCard({
               </Button>
             </Live>
           </div>
-          <div className="meta" style={{ marginTop: 8 }}>
-            Nothing posted is edited — a correction adds an offsetting line beside the original, and its service charge and GST move with it. Service charge and GST post alongside every charge.
-          </div>
         </>
       )}
       <PaperDrawer paper={paper} onClose={() => setPaper(null)} />
@@ -291,7 +289,10 @@ export function PostChargeCard({
   if (past) return null;
   const folioLive = entry.folio?.state === "LIVE";
   return (
-    <StepCard title="Post a charge">
+    <StepCard
+      title="Post a charge"
+      meta="Each opens the same form, shaped as a till's message: outlet · chit · when it was consumed · room · amount. Routing follows the billing model."
+    >
       <div className="row-acts">
         {OUTLETS.map((o) => (
           <Button
@@ -307,9 +308,6 @@ export function PostChargeCard({
         ))}
       </div>
       {folioLive ? null : <span className="control-note">Charges post once the folio is live — at check-in</span>}
-      <div className="meta" style={{ marginTop: 6 }}>
-        Each opens the same form, shaped as a till&rsquo;s message: outlet · chit · when it was consumed · room · amount. Routing follows the billing model.
-      </div>
       <PostChargeDialog entry={entry} outlet={outlet} setOutlet={setOutlet} target={target} setTarget={setTarget} />
     </StepCard>
   );
@@ -408,6 +406,7 @@ function PostChargeDialog({
         register="commit"
         title="Post a charge"
         width={720}
+        help="This is the shape a till will send: the outlet, its chit, when it was consumed, the room, the amount. Until then the desk keys it from the paper chit — the folio and this screen are the same either way." 
         busy={post.isPending}
         footer={
           <>
@@ -421,24 +420,27 @@ function PostChargeDialog({
         }
       >
         <Choice options={OUTLETS.map((x) => [x.id, x.label] as const)} value={outlet} onChange={(v) => setOutlet(v)} />
-        <p className="meta" style={{ margin: "8px 0" }}>
-          This is the shape a till will send: the outlet, its chit, when it was consumed, the room, the amount. Until then the desk keys it from the paper chit — the folio and this screen are the same either way.
-        </p>
-        <div className="form2">
+        <div className="form2" style={{ marginTop: 8 }}>
           <div className="field">
-            <label>Chit number{needsChit ? "" : " · optional"}</label>
+            <label>
+              Chit number{needsChit ? "" : " · optional"}
+              <Help label="About the chit">The paper chit today; the till&rsquo;s own number later. A chit posts once.</Help>
+            </label>
             <input className="input" value={chit} placeholder={o ? `${o.prefix}-1182` : ""} onChange={(e) => setChit(e.target.value)} />
-            <span className={`hint${chitSeen ? " warn-ink" : ""}`}>
-              {chitSeen ? "a chit with this number is already on the folio — a chit posts once" : "the paper chit today · the till's own number later"}
-            </span>
+            {chitSeen ? <span className="hint warn-ink">a chit with this number is already on the folio — a chit posts once</span> : null}
           </div>
           <div className="field">
-            <label>Room</label>
+            <label>
+              Room
+              <Help label="About the room">A till posts by room; the room finds the booking.</Help>
+            </label>
             <TargetSelect value={target} onChange={setTarget} targets={targets} />
-            <span className="hint">a till posts by room; the room finds the booking</span>
           </div>
           <div className="field">
-            <label>Consumed on</label>
+            <label>
+              Consumed on
+              <Help label="About the date">When it was consumed, not when it is typed. A night already sealed posts to the open date.</Help>
+            </label>
             <input
               className="input"
               type="date"
@@ -448,9 +450,7 @@ function PostChargeDialog({
               title={hotelToday ? undefined : "checking today's date at the hotel…"}
               onChange={(e) => setConsumedOn(e.target.value)}
             />
-            <span className="hint">
-              not when it is typed{consumedOn ? ` · ${fmtDay(consumedOn)}` : ""} · a sealed night posts to the open date
-            </span>
+            {consumedOn ? <span className="hint">{fmtDay(consumedOn)}</span> : null}
           </div>
           <div className="field">
             <label>At · optional</label>
@@ -458,42 +458,50 @@ function PostChargeDialog({
           </div>
           {o?.id === "other" ? (
             <div className="wide field">
-              <label>Kind of charge</label>
+              <label>
+                Kind of charge
+                <Help label="About the kind">One of the kinds a tax invoice carries.</Help>
+              </label>
               <Choice options={KINDS} value={kind} onChange={setKind} />
-              <span className="hint">one of the kinds a tax invoice carries</span>
             </div>
           ) : null}
           <div className="wide field">
-            <label>{o?.id === "minibar" ? "What was taken" : "What"}</label>
+            <label>
+              {o?.id === "minibar" ? "What was taken" : "What"}
+              {o?.id === "minibar" ? (
+                <Help label="About the minibar">
+                  Counted in the room. The item list with its prices is not in the backend yet, so the total is typed below.
+                </Help>
+              ) : null}
+            </label>
             <input
               className="input"
               value={what}
               placeholder={o?.id === "minibar" ? "2 × Mineral water 1L, 1 × Beer · Druk 11000" : "dinner · 2 covers"}
               onChange={(e) => setWhat(e.target.value)}
             />
-            {o?.id === "minibar" ? (
-              <span className="hint">
-                counted in the room · the item list with its prices is not in the backend yet, so the total is typed below
-              </span>
-            ) : null}
           </div>
           <div className="field">
-            <label>Net amount · Nu.</label>
+            <label>
+              Net amount · Nu.
+              <Help label="About the amount">Before service charge and GST — they post alongside, at the rates the hotel has set.</Help>
+            </label>
             <input className="input money" inputMode="decimal" value={amount} placeholder="1,250.00" onChange={(e) => setAmount(e.target.value.replace(/[^\d.]/g, ""))} />
-            <span className="hint">before service charge and GST — they post alongside</span>
           </div>
           <div className="field">
             <label>Served by · optional</label>
             <input className="input" value={servedBy} placeholder="optional" onChange={(e) => setServedBy(e.target.value)} />
           </div>
           <div className="wide field">
-            <label>Goes to</label>
+            <label>
+              Goes to
+              <Help label="About who pays">
+                It follows the booking&rsquo;s billing model. Sending one charge to a different payer is not in the backend yet (BE-41, BE-55).
+              </Help>
+            </label>
             <select className="input" disabled value="model">
               <option value="model">{billingModel ? BILLING_WORD[billingModel] ?? "as the billing model says" : "as the billing model says"}</option>
             </select>
-            <span className="control-note">
-              Sending one charge to a different payer is not in the backend yet (BE-41, BE-55) — it follows the booking&rsquo;s billing model
-            </span>
           </div>
         </div>
         <div className="meta" style={{ marginTop: 8 }}>
@@ -522,9 +530,6 @@ function PostChargeDialog({
             <Fact k="Dated">{fmtDay(receipt.chargeDate)}</Fact>
           </Facts>
         ) : null}
-        <p className="meta" style={{ marginTop: 8 }}>
-          Service charge and GST post alongside, at the rates the hotel has set.
-        </p>
       </DsDialog>
     </>
   );
@@ -625,6 +630,7 @@ function CorrectionDialog({ entry, open, onClose }: { entry: EntryDetail; open: 
       register="commit"
       title="Correct a charge"
       caseLines={picked ? [`${picked.description} · ${money(picked.amount, picked.currency)}`] : undefined}
+      help="Nothing posted can be edited or deleted. The correction adds a second line beside the original, so the bill shows both the mistake and the fix; the charge's service charge and GST move with it, at the rates it was taxed at." 
       width={780}
       busy={save.isPending}
       footer={
@@ -638,9 +644,6 @@ function CorrectionDialog({ entry, open, onClose }: { entry: EntryDetail; open: 
         </>
       }
     >
-      <p className="sm" style={{ marginTop: 0 }}>
-        Nothing posted can be edited or deleted. The correction adds a second line beside the original, so the bill shows both the mistake and the fix; the charge&rsquo;s service charge and GST move with it, at the rates it was taxed at.
-      </p>
       {tabs.length > 1 ? <Choice options={tabs} value={tab} onChange={pickTab} /> : null}
       <div style={{ maxHeight: 280, overflow: "auto", marginTop: 8 }}>
         <table className="table compact">
@@ -750,6 +753,7 @@ function CreditNoteDialog({ entry, open, onClose }: { entry: EntryDetail; open: 
       register="commit"
       title="Post a credit note"
       busy={save.isPending}
+      help="A credit reduces what the guest owes and stays on the folio as its own line — its service charge and GST come off beside it, on their own lines. The FOM's act." 
       footer={
         <>
           <Button kind="quiet" state={save.isPending ? "inert" : "default"} onClick={onClose}>
@@ -761,10 +765,6 @@ function CreditNoteDialog({ entry, open, onClose }: { entry: EntryDetail; open: 
         </>
       }
     >
-      <p className="sm" style={{ marginTop: 0 }}>
-        A credit reduces what the guest owes and stays on the folio as its own line — its service charge and GST come off beside it,
-        on their own lines. The FOM&rsquo;s act.
-      </p>
       <div className="form2">
         <div className="wide field">
           <label>What it is for</label>
@@ -793,7 +793,10 @@ export function ChitsWaitingCard() {
   if (past) return null;
   return (
     <StepCard title="Chits waiting">
-      <span className="meta">Nothing waiting. When a till is integrated, its postings arrive here and the desk only accepts them.</span>
+      <span className="sm">
+        Nothing waiting.
+        <Help label="About chits">When a till is integrated, its postings arrive here and the desk only accepts them.</Help>
+      </span>
       <div className="row-acts" style={{ marginTop: 8 }}>
         <Button kind="quiet" compact state="inert">
           Key it in

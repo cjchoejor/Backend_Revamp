@@ -310,11 +310,9 @@ export function FlagDeficientDialog({ entry, open, onClose }: { entry: EntryDeta
       register="report"
       title={chosen ? `Faults · Room ${chosen.roomNumber}` : "Faults"}
       width={640}
+      help="Report a fault, or review one already raised. The room leaves sale the moment it is reported; the FOM verifies or rejects it. The guest is offered a move, and the fault is settled or acknowledged before check-out." 
       footer={<NotNow onClick={onClose} label="Close" />}
     >
-      <p className="sm" style={{ marginTop: 0 }}>
-        Report a fault, or review one already raised. The room leaves sale the moment it is reported; the FOM verifies or rejects it. The guest is offered a move, and the fault is settled or acknowledged before check-out.
-      </p>
       {rooms.length > 1 ? (
         <Choice options={rooms.map((r) => [r.roomId, `Room ${r.roomNumber}`] as const)} value={chosen?.roomId ?? null} onChange={setRoomId} />
       ) : null}

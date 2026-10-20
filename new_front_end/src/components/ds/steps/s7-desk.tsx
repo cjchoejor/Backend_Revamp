@@ -27,6 +27,7 @@ import { fmtStamp } from "@/lib/ds/format";
 import type { DeficientConditionSummary, DisputeSummary, EntryDetail, HandoffSummary } from "@/types/api";
 import { Choice, DsDialog, Fact, Facts, Live, ReasonDialog, StepCard, atLeast, toastRefusal, useRefreshEntry, useStepMode, words, NotNow, useInlineWay } from "./kit";
 import { BILLING_WORD } from "./s7-folio";
+import { Help } from "@/components/ds/help";
 
 /* ------------------------------------------------------------------ vocabulary */
 
@@ -393,6 +394,7 @@ export function RaiseDisputeDialog({ entry, open, onClose }: { entry: EntryDetai
       register="danger"
       title="Raise a dispute"
       busy={save.isPending}
+      help="An open dispute holds the move to Check-out until it is reviewed and settled." 
       footer={
         <>
           <NotNow onClick={onClose} busy={save.isPending} />
@@ -409,9 +411,6 @@ export function RaiseDisputeDialog({ entry, open, onClose }: { entry: EntryDetai
         </>
       }
     >
-      <p className="sm" style={{ marginTop: 0 }}>
-        An open dispute holds the move to Check-out until it is reviewed and settled.
-      </p>
       <div className="field">
         <label>What is disputed</label>
         <input className="input" value={title} placeholder="Restaurant chit R-1182 · did not order this" onChange={(e) => setTitle(e.target.value)} autoFocus={!inline} />
@@ -563,7 +562,10 @@ export function BillingModelCard({ entry, tz }: { entry: EntryDetail; tz: string
   const known = MODELS.some(([v]) => v === model);
   const history = [...(folio?.billingModelTransitions ?? [])].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   return (
-    <StepCard title="Billing model">
+    <StepCard
+      title="Billing model"
+      meta="Set at Set up, before the folio existed. A change now opens a new pass through Re-enter · Change billing model, with the FOM's authority and a reason."
+    >
       {known ? (
         <Choice options={MODELS} value={model as (typeof MODELS)[number][0]} disabled />
       ) : (
@@ -575,9 +577,6 @@ export function BillingModelCard({ entry, tz }: { entry: EntryDetail; tz: string
           {BILLING_WORD[t.toModel] ?? words(t.toModel)} · {fmtStamp(t.createdAt, tz)}
         </div>
       ))}
-      <div className="meta" style={{ marginTop: 6 }}>
-        Set at Set up, before the folio existed. A change now opens a new pass through Re-enter · Change billing model, with the FOM&rsquo;s authority and a reason.
-      </div>
     </StepCard>
   );
 }
