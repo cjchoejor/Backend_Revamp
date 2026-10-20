@@ -36,6 +36,7 @@ import { useSession } from "@/hooks/use-session";
 import { useHotelDay } from "@/hooks/use-hotel-day";
 import { listRooms } from "@/lib/api/rooms";
 import { DsDialog, StepCard, Tool, toastRefusal, useBedPlan, useRefreshEntry, useStepMode } from "./kit";
+import { Help } from "@/components/ds/help";
 
 /**
  * The room registry. Deliberately NOT imported from s5-rooms: Arrival imports this module, so
@@ -204,9 +205,19 @@ export function RoomsTable({
 
   if (ids.length === 0) return <span className="meta">No rooms on the plan yet — they are chosen at Inquiry.</span>;
 
+  // What the table is and how it is used — one "?" in the acts line, not three grey lines.
+  const about = (
+    <>
+      {lead ? <>{lead} </> : null}
+      Click a room in the table to see what can be done with it.{" "}
+      {inHouse
+        ? "In-house the rates and waivers are read-only — a mid-stay rate revision is the GM's call, and nights already posted are corrected on the folio."
+        : "This is what the booking is priced on today. A change here runs the full journey behind the scenes and is recorded against the booking."}
+    </>
+  );
+
   return (
     <>
-      {lead ? <p className="sm" style={{ marginTop: 0 }}>{lead}</p> : null}
 
       {/* The chosen room's own acts, above the table they belong to. */}
       {!past ? (
@@ -223,13 +234,15 @@ export function RoomsTable({
                   Done with this room
                 </Button>
               </>
-            ) : (
-              <span className="meta">Click a room in the table to see what can be done with it.</span>
-            )}
+            ) : null}
             <span style={{ marginLeft: "auto", display: "flex", gap: "var(--s2)", alignItems: "center" }}>
+              <Help label="About this table">{about}</Help>
               {editing ? (
                 <>
-                  <span className="meta">Editing — meals, beds and guests. Save prices it again.</span>
+                  <span className="sm" style={{ fontWeight: 600 }}>
+                    Editing
+                    <Help label="About editing">Meals, beds and guests. Save prices it again.</Help>
+                  </span>
                   <Button
                     kind="quiet"
                     compact
@@ -287,9 +300,9 @@ export function RoomsTable({
           `.desk-root` in desk-theme.css, and `legacy-bridge.css` re-colours it there. Rendered
           bare it had no styling at all (2026-10-06, operator: "this looks very broken in s7"). */}
       {roomChangeOpen ? (
-        <p className="meta" style={{ margin: "var(--s2) 0 0" }}>
-          The booking&apos;s own table is put away while Room {chosen ? numberOf(chosen) : ""} is being changed — it comes back when you
-          move the room or press Cancel change.
+        <p className="sm" style={{ margin: "var(--s2) 0 0" }}>
+          The booking&apos;s own table is put away while Room {chosen ? numberOf(chosen) : ""} is being changed.
+          <Help label="About the table">It comes back when you move the room or press Cancel change.</Help>
         </p>
       ) : (
       <Tool inert={past}>
@@ -356,11 +369,6 @@ export function RoomsTable({
         </div>
       </DsDialog>
 
-      <div className="meta" style={{ marginTop: 8 }}>
-        {inHouse
-          ? "In-house the rates and waivers are read-only — a mid-stay rate revision is the GM's call, and nights already posted are corrected on the folio."
-          : "What the booking is priced on today. A change here runs the full journey behind the scenes and is recorded against the booking."}
-      </div>
     </>
   );
 }

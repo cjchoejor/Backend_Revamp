@@ -1272,6 +1272,7 @@ export function DsDialog({
   footer,
   width,
   busy,
+  help,
 }: {
   open: boolean;
   onClose: () => void;
@@ -1282,8 +1283,18 @@ export function DsDialog({
   footer: ReactNode;
   width?: number;
   busy?: boolean;
+  /** What the dialog is for, behind a "?" beside its title. Its consequences stay in the body. */
+  help?: ReactNode;
 }) {
   const inline = useInlineWay();
+  const shownTitle = help ? (
+    <>
+      {title}
+      <Help label="About this">{help}</Help>
+    </>
+  ) : (
+    title
+  );
   useEffect(() => {
     if (!open || inline) return;
     const onKey = (e: KeyboardEvent) => {
@@ -1293,12 +1304,12 @@ export function DsDialog({
     return () => document.removeEventListener("keydown", onKey);
   }, [open, busy, onClose, inline]);
   if (!open) return null;
-  if (inline) return <WayBody register={register} title={title} caseLines={caseLines} footer={footer}>{children}</WayBody>;
+  if (inline) return <WayBody register={register} title={shownTitle} caseLines={caseLines} footer={footer}>{children}</WayBody>;
   return (
     <Overlay>
       <div className="scrim open" onMouseDown={(e) => e.target === e.currentTarget && !busy && onClose()}>
         <div style={width ? { width, maxWidth: "100%" } : undefined} className="dialog-holder">
-          <Dialog register={register} title={title} caseLines={caseLines} footer={footer}>
+          <Dialog register={register} title={shownTitle} caseLines={caseLines} footer={footer}>
             {children}
           </Dialog>
         </div>

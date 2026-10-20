@@ -33,6 +33,7 @@ import { STEP_NAMES, stepNoOfStage } from "@/lib/ds/steps";
 import type { AdvancePaymentPlanSummary, EntryDetail, InvoiceSummary, PaymentStatusSummary } from "@/types/api";
 import { ActionRow, Choice, DsDialog, Fact, Facts, Live, SeeRow, StepCard, toastRefusal } from "./kit";
 import { hotelLocalToIso, isoToHotelLocal } from "./s2-shared";
+import { Help, HelpHere } from "@/components/ds/help";
 
 /* ------------------------------------------------------------------ words */
 
@@ -310,9 +311,9 @@ export function PaymentPlanCard({
             </table>
           ) : null}
           {status.installments?.length ? (
-            <div className="meta" style={{ marginTop: 4 }}>
-              The money is on the booking&rsquo;s record · a receipt as a paper is not in the backend yet (BE-43)
-            </div>
+            <HelpHere label="About receipts">
+              The money is on the booking&rsquo;s record. A receipt as a paper is not in the backend yet (BE-43).
+            </HelpHere>
           ) : null}
           {shortWithPlan ? (
             <div className="sm warn-ink" style={{ marginTop: 8 }}>
@@ -451,7 +452,14 @@ function RequirementDialog({
         <Choice options={REQUIREMENT_MODES} value={mode} onChange={setMode} />
       </div>
       <div className="field">
-        <label>{mode === "PERCENT" ? "Percent of the quotation" : "Amount"}</label>
+        <label>
+          {mode === "PERCENT" ? "Percent of the quotation" : "Amount"}
+          <Help label="About the amount">
+            {mode === "PERCENT"
+              ? "The house works the figure out from the quotation now — if the quotation changes, set it again."
+              : "For this booking only — the hotel's minimum is untouched."}
+          </Help>
+        </label>
         {mode === "AMOUNT" ? (
           <MoneyInput value={value} onChange={(e) => /^\d*\.?\d{0,2}$/.test(e.target.value) && setValue(e.target.value)} autoFocus />
         ) : (
@@ -464,11 +472,6 @@ function RequirementDialog({
             autoFocus
           />
         )}
-        <span className="hint">
-          {mode === "PERCENT"
-            ? "the house works the figure out from the quotation now — if the quotation changes, set it again"
-            : "for this booking only — the hotel's minimum is untouched"}
-        </span>
       </div>
       <p className="meta">A changed amount replaces the proforma with a new version; it has to be sent again.</p>
     </DsDialog>
@@ -592,11 +595,14 @@ function PlanDialog({
       </div>
       {due === "BEFORE_CHECKIN" ? (
         <div className="field">
-          <label>Promised by · on the hotel&rsquo;s clock</label>
+          <label>
+            Promised by
+            <Help label="About the promise">
+              On the hotel&rsquo;s clock. A countdown runs to it and the booking is flagged if the money has not come. A date after check-in is
+              taken as check-in.
+            </Help>
+          </label>
           <input className="input" type="datetime-local" value={promised} min={nowLocal || undefined} onChange={(e) => setPromised(e.target.value)} />
-          <span className="hint">
-            a countdown runs to it and the booking is flagged if the money has not come · a date after check-in is taken as check-in
-          </span>
         </div>
       ) : null}
       <div className="field">
@@ -697,33 +703,34 @@ function PaymentDialog({
       }
     >
       <div className="field">
-        <label>Amount received · the gross the guest paid</label>
+        <label>
+          Amount received
+          <Help label="About the amount">The gross the guest paid.{prefilled ? " Filled with what is still owed on the advance — change it if they paid a different amount." : ""}</Help>
+        </label>
         <MoneyInput value={amount} onChange={(e) => /^\d*\.?\d{0,2}$/.test(e.target.value) && setAmount(e.target.value)} autoFocus />
-        {status && status.shortfall > 0 ? (
+        {status && status.shortfall > 0 && !prefilled ? (
           <span className="hint">
-            {prefilled ? (
-              "what is still owed on the advance — change it if they paid a different amount"
-            ) : (
-              <>
-                still owed {money(status.shortfall, currency)} ·{" "}
-                <a
-                  href="#use"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    setAmount(String(status.shortfall));
-                  }}
-                >
-                  use that
-                </a>
-              </>
-            )}
+            still owed {money(status.shortfall, currency)} ·{" "}
+            <a
+              href="#use"
+              onClick={(e) => {
+                e.preventDefault();
+                setAmount(String(status.shortfall));
+              }}
+            >
+              use that
+            </a>
           </span>
         ) : null}
       </div>
       <div className="field">
-        <label>How it was paid</label>
+        <label>
+          How it was paid
+          <Help label="About the payment">
+            The slip&rsquo;s reference goes in the note. The payment is dated today (a back-dated receipt is BE-13); the receipt as a paper is BE-43.
+          </Help>
+        </label>
         <Choice options={ADVANCE_PAYMENT_MODES} value={mode} onChange={setMode} />
-        <span className="hint">the slip&rsquo;s reference goes in the note; the payment is dated today (a back-dated receipt is BE-13)</span>
       </div>
       <div className="field">
         <label>Note</label>
@@ -734,8 +741,7 @@ function PaymentDialog({
           ? "The rooms are already held."
           : entry.cancellationDisclosure
             ? "A payment — even part of the advance — holds the rooms automatically."
-            : "A payment holds the rooms automatically only once the terms are disclosed — record the disclosure first, or place the hold by hand after."}{" "}
-        The receipt as a paper is BE-43.
+            : "A payment holds the rooms automatically only once the terms are disclosed — record the disclosure first, or place the hold by hand after."}
       </p>
     </DsDialog>
   );
@@ -809,12 +815,14 @@ function CreditDialog({
         </>
       }
     >
-      <p className="sm">
-        The booking can go on without the advance, up to the ceiling. With a time limit it stops counting when the time runs out — the advance is due
-        again.
-      </p>
       <div className="field">
-        <label>Ceiling</label>
+        <label>
+          Ceiling
+          <Help label="About the credit">
+            The booking can go on without the advance, up to the ceiling. With a time limit it stops counting when the time runs out — the advance
+            is due again.
+          </Help>
+        </label>
         <MoneyInput value={ceiling} onChange={(e) => /^\d*\.?\d{0,2}$/.test(e.target.value) && setCeiling(e.target.value)} />
         {status && status.shortfall > 0 && ceiling !== String(status.shortfall) ? (
           <span className="hint">
@@ -842,7 +850,10 @@ function CreditDialog({
         />
       </div>
       <div className="field">
-        <label>Counts until</label>
+        <label>
+          Counts until
+          <Help label="About the time limit">Follows the guest&rsquo;s plan until you choose otherwise.</Help>
+        </label>
         <select className="input" value={choice.mode} onChange={(e) => setChoice({ ...choice, mode: e.target.value as CreditExpiryChoice["mode"] })}>
           <option value="NONE">No time limit</option>
           {anchors.promisedBy ? <option value="PROMISE">The date the guest promised · {fmtDateTime(anchors.promisedBy, tz)}</option> : null}
@@ -850,7 +861,6 @@ function CreditDialog({
           {anchors.checkOutDate ? <option value="CHECKOUT">Check-out · {fmtDate(anchors.checkOutDate)}</option> : null}
           <option value="HOURS">A number of hours…</option>
         </select>
-        <span className="hint">follows the guest&rsquo;s plan until you choose otherwise</span>
       </div>
       {choice.mode === "HOURS" ? (
         <div className="field">

@@ -74,6 +74,7 @@ import { SendToField, useSendTo } from "./s8-parts";
 import { CancellationFiguresLine, WaiverTick, useRefundHow } from "./cancel-figures";
 import { CompetingClaimsCard, passesOf, roomsWord, useRoomNumbers } from "./s2-shared";
 import { PaymentPlanCard } from "./s3-money";
+import { Help, HelpHere } from "@/components/ds/help";
 
 /* ------------------------------------------------------------------ vocabulary */
 
@@ -528,16 +529,25 @@ function BillingModelCard({
   const groupLock =
     group && !GROUP_FRIENDLY.has(model) && !gm ? "for a group, only the account or the voucher — anything else is the GM's call" : null;
   return (
-    <StepCard flow="billing-model" title="Billing model" right={savedModel && !dirty ? <OnRecord /> : null}>
+    <StepCard
+      flow="billing-model"
+      title="Billing model"
+      right={savedModel && !dirty ? <OnRecord /> : null}
+      meta={
+        <>
+          Set here, before the bill goes live; a change afterwards is a recorded transition.
+          {preselectedWhy ? ` Pre-selected — ${preselectedWhy}; change it if they settle differently.` : ""}
+          {group ? " A group bills to one master folio." : ""}
+          {folio ? "" : " The provisional bill opens with this choice, and the proforma with it."}
+        </>
+      }
+    >
       <Choice options={options} value={model} onChange={editable ? setModel : undefined} disabled={!editable} />
-      <div className="meta" style={{ marginTop: 6 }}>
-        Set here, before the bill goes live; a change afterwards is a recorded transition.{" "}
-        {preselectedWhy ? `Pre-selected — ${preselectedWhy}; change it if they settle differently. ` : ""}
-        {group ? "A group bills to one master folio. " : ""}
-        {folio
-          ? (FOLIO_WORD[folio.state] ?? `The bill is ${words(folio.state).toLowerCase()}.`)
-          : "The provisional bill opens with this choice, and the proforma with it."}
-      </div>
+      {folio ? (
+        <div className="sm" style={{ marginTop: 6 }}>
+          {FOLIO_WORD[folio.state] ?? `The bill is ${words(folio.state).toLowerCase()}.`}
+        </div>
+      ) : null}
       <Live>
         {editable && dirty ? (
           <div className="row-acts" style={{ marginTop: 10 }}>
@@ -735,7 +745,13 @@ function HoldCard({
               ? `The earlier hold was placed ${fmtStamp(carried.placedAt, tz)}.`
               : raw
               ? `The last hold ${raw.state === "EXPIRED" ? "ran out" : "was released"} — place it again before Reserve.`
-              : `Not placed yet. Recording an advance payment — even part of it — holds ${count === 1 ? "the room" : `all ${count} rooms`} automatically; place it by hand when the rooms should be pinned before any money arrives.`}
+              : "Not placed yet."}
+            {!carried && !raw ? (
+              <Help label="How the hold is placed">
+                Recording an advance payment — even part of it — holds {count === 1 ? "the room" : `all ${count} rooms`} automatically. Place it by
+                hand when the rooms should be pinned before any money arrives.
+              </Help>
+            ) : null}
           </span>
           {ownTime ? (
             <div className="sm" style={{ marginTop: 6 }}>
@@ -770,13 +786,13 @@ function HoldCard({
             </>
           }
         >
-          <p className="sm">
-            The rooms are taken from anyone else&rsquo;s marker for the hold time the settings give. The first committed hold wins.
-          </p>
+          <p className="sm">The rooms are taken from anyone else&rsquo;s marker. The first committed hold wins.</p>
           <div className="field">
-            <label>Why these rooms are held for this booking</label>
+            <label>
+              Why these rooms are held for this booking
+              <Help label="About the reason">The commercial justification recorded against the hold. The hold runs for the time the settings give.</Help>
+            </label>
             <textarea className="input" rows={2} value={why} onChange={(e) => setWhy(e.target.value)} autoFocus />
-            <span className="hint">the commercial justification recorded against the hold</span>
           </div>
         </DsDialog>
       ) : null}
@@ -888,20 +904,24 @@ function HoldTimeDialog({
         </>
       }
     >
-      <p className="sm">
-        The guest who says they will confirm by six gets until six. This booking remembers the time, so a hold placed
-        again later runs to it{holdLive ? " — and the hold standing now moves to it" : ""}. It cannot run past the day
-        they arrive.
-      </p>
-      <div className="form2" style={{ marginTop: 10 }}>
+      {holdLive ? <p className="sm">The hold standing now moves to this time.</p> : null}
+      <div className="form2" style={{ marginTop: holdLive ? 10 : 0 }}>
         <div className="field">
-          <label>Held until · day</label>
+          <label>
+            Held until · day
+            <Help label="About the hold time">
+              The guest who says they will confirm by six gets until six. This booking remembers the time, so a hold placed again later runs to
+              it. It cannot run past the day they arrive.
+            </Help>
+          </label>
           <input className="input" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
         </div>
         <div className="field">
-          <label>Held until · time</label>
+          <label>
+            Held until · time
+            <Help label="About the time">On the hotel&rsquo;s clock.</Help>
+          </label>
           <input className="input" type="time" value={time} onChange={(e) => setTime(e.target.value)} />
-          <span className="hint">the hotel&rsquo;s clock</span>
         </div>
         <div className="wide field">
           <label>Why, if it is worth saying · optional</label>
@@ -963,7 +983,8 @@ function TermsCard({ entry, editable, tz, onChanged }: { entry: EntryDetail; edi
             </Chip>
           ) : (
             <>
-              <Chip tone="warning">not yet</Chip> <span className="meta">the booking keeps a disclosure record before Reserve</span>
+              <Chip tone="warning">not yet</Chip>
+              <Help label="About the disclosure">The booking keeps a disclosure record before Reserve.</Help>
             </>
           )}
         </Fact>
@@ -975,6 +996,7 @@ function TermsCard({ entry, editable, tz, onChanged }: { entry: EntryDetail; edi
           busy={record.isPending}
           title="Terms disclosed"
           caseLines={["Cancellation · the hotel's standard terms"]}
+          help="The record keeps the words, who recorded them, and when." 
           footer={
             <>
               <Button kind="quiet" state={record.isPending ? "inert" : "default"} onClick={() => setOpen(false)}>
@@ -995,7 +1017,6 @@ function TermsCard({ entry, editable, tz, onChanged }: { entry: EntryDetail; edi
             <label>The no-show treatment, as the guest was told</label>
             <textarea className="input" rows={2} value={statement} onChange={(e) => setStatement(e.target.value)} autoFocus />
           </div>
-          <p className="meta">The record keeps the words, who recorded them, and when.</p>
         </DsDialog>
       ) : null}
     </StepCard>
@@ -1053,10 +1074,14 @@ function ProformaCard({
 
   if (proformas.length === 0) {
     return (
-      <StepCard flow="proforma" flowAfter="terms" title="Proforma" icon="file">
-        <span className="meta">
-          Generated together with the provisional bill — set the billing model above. Not a tax invoice; the tax invoice is issued at check-out.
-        </span>
+      <StepCard
+        flow="proforma"
+        flowAfter="terms"
+        title="Proforma"
+        icon="file"
+        meta="Generated together with the provisional bill. Not a tax invoice; the tax invoice is issued at check-out."
+      >
+        <span className="sm">Set the billing model above — the proforma is generated with it.</span>
       </StepCard>
     );
   }
@@ -1101,6 +1126,7 @@ function ProformaCard({
       title={`Proforma · ${no}${(shown.versionNumber ?? 1) > 1 ? ` · v${shown.versionNumber}` : ""}`}
       icon="file"
       right={asks ? <Chip tone="quiet">{asks}</Chip> : null}
+      meta="Not a tax invoice — the tax invoice is issued at check-out. Sending is optional, unless money is to be taken against it: a payment is logged against the bill the guest received."
       acts={
         <>
           <Button kind="secondary" compact icon="eye" onClick={() => setPaper(docRef(shown))}>
@@ -1128,15 +1154,12 @@ function ProformaCard({
         Generated {fmtStamp(shown.createdAt, tz)}
         {shown.dispatchedAt ? ` · sent ${fmtStamp(shown.dispatchedAt, tz)}${shown.dispatchedTo ? ` to ${shown.dispatchedTo}` : ""}` : " · not sent"}
       </div>
-      <div className="sm" style={{ marginTop: 8, display: "grid", gap: 3 }}>
-        <span>Not a tax invoice · the tax invoice is issued at check-out</span>
-        <span className="meta">
-          Sending is optional — unless money is to be taken against it: a payment is logged against the bill the guest received.
-        </span>
-      </div>
 
       <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid var(--line)", display: "grid", gap: 6 }}>
-        <span className="meta">The guest&rsquo;s answer · needed before Reserve once it has been sent</span>
+        <span className="sm" style={{ fontWeight: 600 }}>
+          The guest&rsquo;s answer
+          <Help label="About the answer">Needed before Reserve once the proforma has been sent.</Help>
+        </span>
         <AnswerLine entryId={entry.id} type="PROFORMA_INVOICE" sinceIso={passStart} what="the proforma" tz={tz} />
       </div>
 
@@ -1263,9 +1286,10 @@ function CoordinatorCard({ entry, editable, inq, onChanged }: { entry: EntryDeta
         )
       }
     >
-      <span className="meta">
-        Who answers for this {entry.useType === "CONFERENCE" ? "conference" : entry.useType === "CORPORATE" ? "company's booking" : "group"} — the booking asks for a name before Reserve.
-      </span>
+      <HelpHere label="About the coordinator">
+        Who answers for this {entry.useType === "CONFERENCE" ? "conference" : entry.useType === "CORPORATE" ? "company's booking" : "group"} — the
+        booking asks for a name before Reserve.
+      </HelpHere>
       {open ? (
         <DsDialog
           open
@@ -1342,9 +1366,12 @@ function FocCard({ entry, editable, gm, onChanged }: { entry: EntryDetail; edita
         )
       }
     >
-      <div className="sm">A free room is still a room out of the house&rsquo;s inventory — a group&rsquo;s free rooms need the GM.</div>
-      <div className="meta" style={{ marginTop: 4 }}>
-        {plural(entry.numberOfRooms ?? 1, "room")} in the group · the approval is kept on the booking&rsquo;s history
+      <div className="sm">
+        {plural(entry.numberOfRooms ?? 1, "room")} in the group
+        <Help label="About free rooms">
+          A free room is still a room out of the house&rsquo;s inventory, so a group&rsquo;s free rooms need the GM. The approval is kept on the
+          booking&rsquo;s history.
+        </Help>
       </div>
     </StepCard>
   );
@@ -1404,7 +1431,10 @@ function MilestonesCard({ entry, editable, onChanged }: { entry: EntryDetail; ed
       }
     >
       <div className="field" style={{ maxWidth: 360 }}>
-        <label>Template</label>
+        <label>
+          Template
+          <Help label="About payment stages">A company or conference booking pays in stages.</Help>
+        </label>
         {noTemplates ? (
           <span className="meta">No templates are set up yet — the admin adds them in the configuration.</span>
         ) : (
@@ -1416,7 +1446,6 @@ function MilestonesCard({ entry, editable, onChanged }: { entry: EntryDetail; ed
             ))}
           </select>
         )}
-        <span className="hint">a company or conference booking pays in stages</span>
       </div>
     </StepCard>
   );
@@ -1460,10 +1489,10 @@ function PartyBlock({ entry }: { entry: EntryDetail }) {
           </table>
         </StepCard>
       </div>
-      <div className="meta" style={{ padding: "6px 12px" }}>
-        <Icon name="info" /> Drawn in full, not yet recordable — roles, free-of-charge rooms and the rooming list are BE-34 and BE-35. Rooms stay
-        blank until allocation.
-      </div>
+      <HelpHere label="About this roster">
+        Drawn in full, not yet recordable — roles, free-of-charge rooms and the rooming list are BE-34 and BE-35. Rooms stay blank until
+        allocation.
+      </HelpHere>
     </div>
   );
 }

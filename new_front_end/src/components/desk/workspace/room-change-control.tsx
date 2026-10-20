@@ -22,6 +22,7 @@ import type { EntryDetail } from "@/types/api";
 import { DeskConfirmModal } from "./confirm-modal";
 import { RoomCompositionPlanner } from "./room-compositions-board";
 import { NegotiationDiscountBar, type DiscountUnit } from "./room-compositions-table";
+import { Help } from "@/components/ds/help";
 
 /**
  * In-place room change (2026-08-12, operator ruling): every room row on S5/S6/S7 carries a
@@ -755,17 +756,15 @@ export function RoomChangeControl({
               Move Room {fromRoomNumber}
               {atS7 ? " — from tonight onward" : ""}
               {nights.length > 0 ? ` · ${nights.length} night${nights.length === 1 ? "" : "s"} (${shortDate(nights[0])} – ${shortDate(nights[nights.length - 1])})` : ""}
+              <Help label="How a room change works">
+                Pick a room for each night, exactly like the S1 table — the same room for the whole stay (row “All”), or different rooms on
+                different nights{atS7 ? "" : ", or keep the current room for some nights"}. Guests, payments and paperwork carry unchanged; the
+                backend re-checks availability and re-prices as if the booking were set up fresh, and comes straight back to this step. Nothing
+                is sent to the guest unless you send it.
+                {atS7 ? " In-house the guest moves once — one room for all remaining nights; nights already slept stay billed on the current room." : ""}
+                {" "}A same-type swap needs no approval; any different-type room (upgrade or downgrade) needs the FOM.
+              </Help>
             </div>
-          )}
-          {!expanded && (
-            <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "0 0 8px", lineHeight: 1.5 }}>
-              Pick a room for each night, exactly like the S1 table — the same room for the whole stay (row&nbsp;“All”), or
-              different rooms on different nights{atS7 ? "" : ", or keep the current room for some nights"}. Guests, payments
-              and paperwork carry unchanged; the backend re-checks availability and re-prices as if the booking were set up
-              fresh, and comes straight back to this step. Nothing is sent to the guest unless you send it.
-              {atS7 ? " In-house the guest moves once — one room for all remaining nights; nights already slept stay billed on the current room." : ""}
-              {" "}A same-type swap needs no approval; any different-type room (upgrade or downgrade) needs FOM (L2+).
-            </p>
           )}
 
           {/* What the room is set up as today — the baseline the setup grid carries from. */}
@@ -965,7 +964,8 @@ export function RoomChangeControl({
           {selectedNewRooms.length > 0 && fromComp && (
             <div style={{ border: "1px dashed var(--line-2)", borderRadius: 8, padding: "8px 10px", marginBottom: 8, flex: "0 0 auto" }}>
               <div style={{ fontSize: 11.5, fontWeight: 600, marginBottom: 6 }}>
-                Set up the new room{selectedNewRooms.length === 1 ? "" : "s"} — carried from Room {fromRoomNumber}, change anything the guest wants
+                Set up the new room{selectedNewRooms.length === 1 ? "" : "s"}
+                <Help label="About the setup">Carried from Room {fromRoomNumber} — change anything the guest wants.</Help>
               </div>
               {lockCommercial && (
                 <p style={{ fontSize: 11, color: "var(--warn)", margin: "0 0 8px", lineHeight: 1.5 }}>
