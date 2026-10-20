@@ -1050,6 +1050,13 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   );
   // Before Arrival assigns them, the rooms the booking holds are named from its newest pick — a
   // room move re-seals it, so the header follows the move (2026-10-13).
+  // "held" only when something holds them — a committed hold or a live provisional block
+  // (2026-10-19, operator: a booking whose rooms another guest reserved first read "206 · held").
+  // An UPGRADED block holds nothing of its own: its claim passed to the committed hold.
+  const roomsActuallyHeld =
+    entry.committedHold?.state === "PLACED" ||
+    entry.committedHold?.state === "CONFIRMED" ||
+    (entry.speculativeHolds ?? []).some((h) => h.state === "PLACED");
   const heldRoomNumbers = roomNumbers.length
     ? []
     : heldRoomIds(entry)
@@ -1121,7 +1128,11 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
               </span>
               <span>
                 Rooms <b>{roomNumbers.length || entry.numberOfRooms || "—"}</b>
-                {roomNumbers.length ? ` · ${roomNumbers.join(", ")}` : heldRoomNumbers.length ? ` · ${heldRoomNumbers.join(", ")} · held` : " · not yet assigned"}
+                {roomNumbers.length
+                  ? ` · ${roomNumbers.join(", ")}`
+                  : heldRoomNumbers.length
+                    ? ` · ${heldRoomNumbers.join(", ")} · ${roomsActuallyHeld ? "held" : "picked, not held"}`
+                    : " · not yet assigned"}
               </span>
               <span>
                 {channelWord(entry.inquiry?.sourceChannel)}

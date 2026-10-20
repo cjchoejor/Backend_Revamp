@@ -917,6 +917,8 @@ export type RoomChangeCandidates = {
   originStage: string;
   fromRoom: { roomId: string; roomNumber: string; roomTypeId: string; roomTypeName: string | null };
   substitutionNights: string[];
+  /** The current room's own standing over those nights, this booking left out — a night another booking holds cannot be kept. */
+  fromRoomStanding?: RoomChangeCandidate | null;
   candidates: RoomChangeCandidate[];
 };
 

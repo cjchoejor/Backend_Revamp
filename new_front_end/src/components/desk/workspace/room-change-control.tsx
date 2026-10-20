@@ -195,6 +195,18 @@ export function RoomChangeControl({
   const nights = useMemo(() => candidatesQuery.data?.substitutionNights ?? [], [candidatesQuery.data]);
   const candidates = candidatesQuery.data?.candidates ?? [];
   const candidateById = useMemo(() => new Map(candidates.map((c) => [c.roomId, c])), [candidates]);
+  /**
+   * Nights another booking holds the CURRENT room (2026-10-19, operator: two bookings picked
+   * Room 206 for the same nights; the other reserved it first, and this row still read
+   * "Current" on every night). Those nights cannot be kept — the hold or the re-confirmation
+   * would refuse them — so the row says who holds them and does not offer them.
+   */
+  const fromStanding = candidatesQuery.data?.fromRoomStanding ?? null;
+  const fromTakenOn = (date: string) => {
+    const n = fromStanding?.perNight.find((p) => p.date === date);
+    return n && n.status !== "FREE" ? n : null;
+  };
+  const fromTakenNights = nights.filter((d) => !!fromTakenOn(d));
   const sameTypeCandidates = candidates.filter((c) => c.sameType);
   const otherTypeCandidates = candidates.filter((c) => !c.sameType);
 
@@ -343,7 +355,7 @@ export function RoomChangeControl({
   const selectWholeRow = (roomId: string) => {
     const isFrom = roomId === fromRoomId;
     const c = candidateById.get(roomId);
-    const takable = nights.filter((d) => (isFrom ? true : c ? freeOnNight(c, d) : false));
+    const takable = nights.filter((d) => (isFrom ? !fromTakenOn(d) : c ? freeOnNight(c, d) : false));
     if (atS7 && !isFrom && takable.length < nights.length) return; // S7: one room, all nights
     setNightSel((prev) => {
       const holdsAll = takable.length > 0 && takable.every((d) => prev[d] === roomId);
@@ -725,6 +737,20 @@ export function RoomChangeControl({
             </p>
           )}
 
+          {fromTakenNights.length > 0 && (
+            <p className="rct-refusal" role="alert" style={{ margin: "0 0 8px" }}>
+              <span className="ic" aria-hidden>!</span>
+              <span>
+                Room {fromRoomNumber} is {nightWord(fromTakenOn(fromTakenNights[0])!.status)}
+                {fromStanding?.claimedBy?.guestName ? ` for ${fromStanding.claimedBy.guestName}` : " by another booking"}
+                {fromStanding?.claimedBy?.bookingRef ? ` (${fromStanding.claimedBy.bookingRef})` : ""} on{" "}
+                {fromTakenNights.length === nights.length
+                  ? "every night — this booking cannot keep it. Pick another room for each night."
+                  : `${fromTakenNights.map(shortDate).join(", ")} — this booking cannot keep it on those nights. Pick another room for them.`}
+              </span>
+            </p>
+          )}
+
           {candidates.length > 0 && nights.length > 0 && (
             <div style={{ marginBottom: 8, flex: "0 1 auto", minHeight: 0, display: "flex", flexDirection: "column" }}>
               {!expanded && (
@@ -776,33 +802,69 @@ export function RoomChangeControl({
                       <td style={stickyCol}>
                         {roomLabel(fromRoomNumber, candidatesQuery.data?.fromRoom.roomTypeName, fromCatalog?.bedType ?? null, false)}
                         <span style={{ marginLeft: 6, fontSize: 10, color: "var(--ink-3)" }}>current room</span>
-                        {!atS7 && allButton(fromRoomId, true, "Keep the current room for every night (then nothing changes)")}
+                        {fromTakenNights.length > 0 && (
+                          <span className="tag stop" style={{ marginLeft: 6, fontSize: 9.5 }}>
+                            {fromTakenNights.length === nights.length ? "taken by another booking" : `taken ${fromTakenNights.length} of ${nights.length} nights`}
+                          </span>
+                        )}
+                        {!atS7 &&
+                          allButton(
+                            fromRoomId,
+                            fromTakenNights.length < nights.length,
+                            fromTakenNights.length === nights.length
+                              ? `Room ${fromRoomNumber} is held by another booking on every night — it cannot be kept`
+                              : fromTakenNights.length > 0
+                                ? `Keep the current room on every night it is still free`
+                                : "Keep the current room for every night (then nothing changes)",
+                          )}
                       </td>
                       {nights.map((date) => {
                         const selected = nightSel[date] === fromRoomId;
+                        const taken = fromTakenOn(date);
+                        const keepable = !atS7 && !taken;
+                        const text = selected
+                          ? "✓ keep"
+                          : taken
+                            ? showNames && taken.claimedBy?.guestName
+                              ? holderShort(taken.claimedBy.guestName)
+                              : CELL_LABEL[taken.status]
+                            : "Current";
                         return (
-                          <td key={date} style={{ ...cellBase, background: selected ? "#7d9a63" : "rgba(76,138,92,0.06)" }}>
+                          <td
+                            key={date}
+                            style={{
+                              ...cellBase,
+                              background: selected ? "#7d9a63" : taken ? (CELL_TINT[taken.status] ?? "rgba(179,38,30,0.08)") : "rgba(76,138,92,0.06)",
+                            }}
+                          >
                             <button
                               type="button"
-                              disabled={atS7}
+                              disabled={!keepable}
                               onClick={() => toggleCell(fromRoomId, date)}
                               title={
-                                atS7
-                                  ? "In-house the guest moves once — keeping some nights isn't available mid-stay"
-                                  : `${shortDate(date)} — the guest's current room${selected ? " · kept (click to unpick)" : " · click to KEEP this night"}`
+                                taken
+                                  ? `${shortDate(date)} — the guest's current room, but ${nightWord(taken.status)}${
+                                      taken.claimedBy?.guestName ? ` for ${taken.claimedBy.guestName}` : " by another booking"
+                                    }${taken.claimedBy?.bookingRef ? ` (${taken.claimedBy.bookingRef})` : ""} — it cannot be kept on this night`
+                                  : atS7
+                                    ? "In-house the guest moves once — keeping some nights isn't available mid-stay"
+                                    : `${shortDate(date)} — the guest's current room${selected ? " · kept (click to unpick)" : " · click to KEEP this night"}`
                               }
                               style={{
                                 width: "100%",
                                 height: "100%",
                                 border: "none",
                                 background: "transparent",
-                                cursor: atS7 ? "default" : "pointer",
-                                color: selected ? "#fff" : "var(--ink-3)",
+                                cursor: keepable ? "pointer" : "default",
+                                color: selected ? "#fff" : taken ? (CELL_INK[taken.status] ?? "var(--stop)") : "var(--ink-3)",
                                 fontSize: 10,
-                                fontWeight: selected ? 700 : 400,
+                                fontWeight: selected || taken ? 700 : 400,
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                                whiteSpace: "nowrap",
                               }}
                             >
-                              {selected ? "✓ keep" : "Current"}
+                              {text}
                             </button>
                           </td>
                         );
