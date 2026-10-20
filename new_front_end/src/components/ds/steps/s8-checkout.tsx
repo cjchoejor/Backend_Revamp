@@ -566,7 +566,8 @@ function AddOrCorrectCharge({ entry, target, setTarget }: { entry: EntryDetail; 
   return (
     <StepCard
       title="Add or correct a charge"
-      meta={`Dated the check-out day${checkoutDate ? `, ${fmtDate(checkoutDate)}` : ""} — the last night is already audited · until the bill is settled`}
+      status={`Dated the check-out day${checkoutDate ? `, ${fmtDate(checkoutDate)}` : ""}`}
+      meta="The last night is already audited. Charges can be added or corrected until the bill is settled." 
     >
       <div className="form2">
         <div className="field">

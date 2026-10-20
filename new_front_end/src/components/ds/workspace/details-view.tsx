@@ -23,6 +23,7 @@ import { Fact, FactBox, Facts, StepCard } from "@/components/ds/steps/kit";
 import { TripCard } from "@/components/ds/workspace/return-stay";
 import { GuestBookingsCard } from "@/components/ds/workspace/guest-bookings";
 import type { EntryDetail } from "@/types/api";
+import { HelpHere } from "@/components/ds/help";
 
 const BILLING_WORD: Record<string, string> = {
   TOUR_OPERATOR_VOUCHER: "The package to the account · anything beyond it to the guest",
@@ -141,7 +142,7 @@ export function DetailsView({
             </Fact>
             <Fact k="Guests">{party}</Fact>
           </Facts>
-          <p className="meta" style={{ marginTop: 8 }}>The price and the money are in Charges &amp; payments.</p>
+          <HelpHere label="Where the money is">The price and the money are in Charges &amp; payments.</HelpHere>
         </StepCard>
 
         <TripCard entry={entry} />

@@ -45,7 +45,7 @@ import type { EntryDetail, InvoiceSummary, QuotationSummary } from "@/types/api"
 import { getEntryBedPlan, setEntryBedPlan } from "@/lib/api/rooms";
 import { addBookingNote, listBookingNotes } from "@/lib/api/booking-notes";
 import type { BedAskSummary, BedPlanCell } from "@/components/desk/workspace/room-compositions-table";
-import { Help, useQuietScreen } from "@/components/ds/help";
+import { Help, HelpHere, useQuietScreen } from "@/components/ds/help";
 
 /** How a paper leaves the desk. WhatsApp is a RECORD of a hand-over, not a send. */
 const CHANNELS = [
@@ -391,6 +391,7 @@ export function StepCard({
   sealed,
   quiet,
   meta,
+  status,
   children,
   id,
   style,
@@ -407,8 +408,13 @@ export function StepCard({
   acts?: ReactNode;
   sealed?: boolean;
   quiet?: boolean;
-  /** One grey line under the title. */
+  /** What the card is for — one grey line under the title, or behind a "?" beside it on a quiet screen. */
   meta?: ReactNode;
+  /**
+   * A fact or a state about the card — who pays, how many are open, which figure is shown. Unlike
+   * `meta` it is a message, so it stays on screen under the title even on a quiet screen.
+   */
+  status?: ReactNode;
   children?: ReactNode;
   id?: string;
   style?: React.CSSProperties;
@@ -467,6 +473,7 @@ export function StepCard({
   const canDone = !!flow && !!summary && !!met && !waiting && !folded && !!ctx.fold;
   const body = (
     <>
+      {status ? <div className="meta" style={{ marginBottom: 8 }}>{status}</div> : null}
       {meta && !metaInHelp ? <div className="meta" style={{ marginBottom: 8 }}>{meta}</div> : null}
       {children}
       {acts ? (
@@ -1756,10 +1763,10 @@ export function PapersCard({
         </div>
       ) : null}
 
-      <div className="meta" style={{ marginTop: 8 }}>
-        Every version is kept. A replaced paper prints the figures that were on the table when it
-        was replaced, never today&rsquo;s · preview never sends anything.
-      </div>
+      <HelpHere label="About the papers">
+        Every version is kept. A replaced paper prints the figures that were on the table when it was replaced, never today&rsquo;s. A
+        preview never sends anything.
+      </HelpHere>
       <PaperDrawer paper={open} onClose={() => setOpen(null)} />
       <QuotationSendDialog entry={entry} target={sendQuote} onClose={() => setSendQuote(null)} onSent={() => { setSendQuote(null); refresh(); }} />
       <InvoiceSendDialog entry={entry} target={sendInvoice} onClose={() => setSendInvoice(null)} onSent={() => { setSendInvoice(null); refresh(); }} />
@@ -1950,17 +1957,17 @@ export function QuotationSendDialog({
         <label className="sm" style={{ display: "flex", gap: 8, alignItems: "center", cursor: "pointer" }}>
           <input type="checkbox" checked={hidePrices} onChange={(e) => setHidePrices(e.target.checked)} />
           Send it without prices
+          <Help label="About sending without prices">
+            The guest gets the rooms, the nights and the meal plans — no rates, no taxes, no total. The record keeps the priced quotation
+            either way.
+          </Help>
         </label>
-        {/* One sentence, ticked or not — a hint that changed length made the dialog jump as the
-            box was clicked (2026-10-06, operator: "I don't get why checking that increases the
-            box"). */}
-        <span className="hint">
-          the guest gets the rooms, the nights and the meal plans — no rates, no taxes, no total.
-          The record keeps the priced quotation either way.
-        </span>
       </div>
       <div className="field">
-        <label>Internal note · optional</label>
+        <label>
+          Internal note · optional
+          <Help label="About the internal note">Kept in Notes with this quotation, and shown beside it in Documents — never sent.</Help>
+        </label>
         <textarea
           className="input"
           style={{ height: 64, paddingTop: 8 }}
@@ -1969,7 +1976,6 @@ export function QuotationSendDialog({
           onChange={(e) => setNote(e.target.value)}
           placeholder="only staff see this — e.g. agent prefers WhatsApp"
         />
-        <span className="hint">kept in Notes with this quotation, and shown beside it in Documents — never sent</span>
       </div>
     </DsDialog>
   );
@@ -2030,12 +2036,14 @@ function InvoiceSendDialog({
       }
     >
       <div className="field">
-        <label>Send to</label>
+        <label>
+          Send to
+          <Help label="About the address">
+            {recipient.party ? `${recipient.party} booked — the bill carries their rates.` : "The guest's email on file."} WhatsApp is not
+            recorded for a bill yet; hand it over and it stays on the booking either way.
+          </Help>
+        </label>
         <input className="input" value={to} onChange={(e) => { setTouched(true); setTo(e.target.value); }} placeholder="email address" />
-        <span className="hint">
-          {recipient.party ? `${recipient.party} booked — the bill carries their rates` : "the guest's email on file"} · WhatsApp is not
-          recorded for a bill yet; hand it over and it stays on the booking either way
-        </span>
       </div>
     </DsDialog>
   );

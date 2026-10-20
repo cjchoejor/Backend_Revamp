@@ -24,6 +24,7 @@ import { groupWalks, type HistoryItem, type HistoryNames } from "@/lib/ds/histor
 import { useRoomsList } from "@/hooks/use-desk-data";
 import { SegmentHistoryPanel } from "@/components/desk/workspace/segment-history";
 import type { EntryDetail } from "@/types/api";
+import { Help, HelpHere } from "@/components/ds/help";
 
 type Lens = "all" | "changes" | "money" | "approvals" | "notes";
 
@@ -176,7 +177,11 @@ export function HistoryView({
               ))}
             </div>
             <span className="meta">
-              {shownActs} of {plural(all.length, "act")} · newest first · nothing here is ever edited
+              {shownActs} of {plural(all.length, "act")} · newest first
+              <Help label="About the history">
+                Nothing here is ever edited. The system&rsquo;s own bookkeeping — timers set, documents printed, checks run — is left out;
+                Under the hood shows every line.
+              </Help>
             </span>
           </div>
           {trace.isLoading ? (
@@ -260,20 +265,25 @@ export function HistoryView({
               );
             })
           )}
-          <div className="meta" style={{ marginTop: 8 }}>
-            The system&rsquo;s own bookkeeping — timers set, documents printed, checks run — is left out here; Under the hood shows every line.
-            {all.length >= 300 ? " The newest 300 acts are shown." : ""}
-          </div>
+          {all.length >= 300 ? (
+            <div className="meta" style={{ marginTop: 8 }}>
+              The newest 300 acts are shown.
+            </div>
+          ) : null}
         </div>
 
         <div className="card">
           <div className="card-top">
-            <h4>Every pass, in full</h4>
+            <h4>
+              Every pass, in full
+              <Help label="About passes">
+                A change after reserving closes the current pass and opens a new one; what a closed pass decided stays as it was.
+              </Help>
+            </h4>
             <Button kind="quiet" compact onClick={() => setShowPasses((v) => !v)}>
               {showPasses ? "Hide" : "Show"}
             </Button>
           </div>
-          <div className="meta">A change after reserving closes the current pass and opens a new one; what a closed pass decided stays as it was.</div>
           {showPasses ? (
             <div className="desk-root tool">
               <SegmentHistoryPanel entryId={entry.id} currentStage={entry.currentStage} onSegmentOpened={onOpenedPass} />

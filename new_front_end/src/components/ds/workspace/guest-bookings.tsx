@@ -47,7 +47,8 @@ export function GuestBookingsCard({ entry }: { entry: EntryDetail }) {
   return (
     <StepCard
       title="This guest's other bookings"
-      meta={`${q.data?.guestName ?? "The guest"} — matched on the guest's record, not the name. ${plural(rows.length, "booking")}${overlapping ? `, ${overlapping} over these nights` : ""}.`}
+      status={`${q.data?.guestName ?? "The guest"} · ${plural(rows.length, "booking")}${overlapping ? `, ${overlapping} over these nights` : ""}`}
+      meta="Matched on the guest's record, not the name." 
     >
       <div className="gb-rows">
         {rows.map((b) => (

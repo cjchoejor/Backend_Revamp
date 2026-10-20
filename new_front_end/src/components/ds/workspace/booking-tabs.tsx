@@ -48,6 +48,7 @@ import { FolioDocumentsBlock } from "@/components/desk/workspace/folio-documents
 import { HeldPapersCard } from "@/components/ds/workspace/held-papers";
 import { useStayPrice, type StayPrice } from "@/lib/ds/stay-price";
 import type { EntryDetail } from "@/types/api";
+import { Help, HelpHere } from "@/components/ds/help";
 
 export type BookingTab = "money" | "requests" | "notes" | "docs" | "history";
 
@@ -140,7 +141,7 @@ export function ChargesView({
               label: "The price",
               content: (
                 <>
-        <StepCard title="The price" meta={sp.source === "QUOTE" ? (tag ?? undefined) : sp.kind || undefined}>
+        <StepCard title="The price" status={sp.source === "QUOTE" ? (tag ?? undefined) : sp.kind || undefined}>
           {sp.source === "TABLE" ? (
             <TablePrice sp={sp} />
           ) : sp.source === "PICKS" ? (
@@ -203,11 +204,13 @@ export function ChargesView({
                   </tbody>
                 </table>
               ) : null}
-              <p className="meta" style={{ marginTop: 6 }}>
-                Room, meals and bed are before tax; each room&rsquo;s total adds the 10% service charge and the 5% GST.
+              {st.segmentNumber != null && (entry.segmentNumber ?? 1) > 1 ? (
+                <p className="meta" style={{ marginTop: 6 }}>Priced on pass {st.segmentNumber}.</p>
+              ) : null}
+              <HelpHere label="About these figures">
+                Room, meals and bed are before tax; each room&rsquo;s total adds the service charge and the GST.
                 {billing?.rooms?.some((r) => r.componentsPreDiscount) ? " The parts are before the booking discount; the totals after it." : ""}
-                {st.segmentNumber != null && (entry.segmentNumber ?? 1) > 1 ? ` Priced on pass ${st.segmentNumber}.` : ""}
-              </p>
+              </HelpHere>
             </>
           )}
         </StepCard>
@@ -222,9 +225,12 @@ export function ChargesView({
                 </>,
               content: (
                 <>
-        <StepCard title="The bill" meta={entry.folio?.billingModel ? BILLING_WORD[entry.folio.billingModel] ?? entry.folio.billingModel : "who pays is chosen at Set up"}>
+        <StepCard title="The bill" status={entry.folio?.billingModel ? BILLING_WORD[entry.folio.billingModel] ?? entry.folio.billingModel : "who pays is chosen at Set up"}>
           {!fo ? (
-            <p className="meta">No bill yet — it starts at Set up, and charges post on it from check-in.</p>
+            <p className="meta">
+              No bill yet.
+              <Help label="About the bill">It starts at Set up, and charges post on it from check-in.</Help>
+            </p>
           ) : (
             <>
               <Facts wide>
@@ -416,9 +422,9 @@ function TablePrice({ sp }: { sp: StayPrice }) {
           </Fact>
         ) : null}
       </Facts>
-      <p className="meta" style={{ marginTop: 6 }}>
+      <HelpHere label="About these figures">
         The figures follow the negotiation table as it is changed — priced by the hotel server, the same way the quotation will be.
-      </p>
+      </HelpHere>
     </>
   );
 }
@@ -572,13 +578,16 @@ export function RequestsView({ entry, sealed, tz }: { entry: EntryDetail; sealed
                 <>
         <StepCard
           title="Requests"
-          meta={
-            items.length
-              ? open
-                ? <span className="warn-ink"><b>{plural(open, "request")} still to arrange</b></span>
-                : <span className="ok-ink"><b>everything asked is arranged</b></span>
-              : "something to arrange — a pickup, a cake, an early room; taken at any step"
+          status={
+            items.length ? (
+              open ? (
+                <span className="warn-ink"><b>{plural(open, "request")} still to arrange</b></span>
+              ) : (
+                <span className="ok-ink"><b>everything asked is arranged</b></span>
+              )
+            ) : undefined
           }
+          meta="Something to arrange — a pickup, a cake, an early room; taken at any step." 
         >
           {q.isLoading ? (
             <p className="meta">Reading the requests…</p>
@@ -645,14 +654,18 @@ export function RequestsView({ entry, sealed, tz }: { entry: EntryDetail; sealed
                 <input className="input" value={what} maxLength={1000} placeholder="e.g. pickup at Paro airport, flight KB 540" onChange={(e) => setWhat(e.target.value)} />
               </div>
               <div className="field">
-                <label>For which day · optional</label>
+                <label>
+                  For which day · optional
+                  <Help label="About the day">From today to the day they leave.</Help>
+                </label>
                 <input className="input" type="date" value={forDate} min={minDate} max={maxDate} onChange={(e) => setForDate(e.target.value)} />
-                <span className="hint">from today to the day they leave</span>
               </div>
               <div className="field">
-                <label>Time · optional</label>
+                <label>
+                  Time · optional
+                  <Help label="About the time">On the hotel&rsquo;s clock.</Help>
+                </label>
                 <input className="input" type="time" value={forTime} onChange={(e) => setForTime(e.target.value)} />
-                <span className="hint">the hotel&rsquo;s clock</span>
               </div>
             </div>
             <div className="row-acts" style={{ marginTop: 10 }}>
@@ -932,7 +945,10 @@ export function NotesView({ entry, tz }: { entry: EntryDetail; tz: string }) {
                 <Choice options={NOTE_ASSIGNEES} value={who} onChange={setWho} />
               </div>
               <div className="field">
-                <label>By when</label>
+                <label>
+                  By when
+                  <Help label="About the time">On the hotel&rsquo;s clock.</Help>
+                </label>
                 <select className="input" value={due} onChange={(e) => setDue(e.target.value as DueChoice)}>
                   {dueOptions.map(([k, l]) => (
                     <option key={k} value={k}>
@@ -940,7 +956,6 @@ export function NotesView({ entry, tz }: { entry: EntryDetail; tz: string }) {
                     </option>
                   ))}
                 </select>
-                <span className="hint">the hotel&rsquo;s clock</span>
               </div>
               {due === "PICK" ? (
                 <div className="field">
@@ -957,7 +972,7 @@ export function NotesView({ entry, tz }: { entry: EntryDetail; tz: string }) {
         {todos.length ? (
           <StepCard
             title="To-dos"
-            meta={
+            status={
               q.data?.counts.overdueTodos ? (
                 <span className="stop-ink">
                   <b>{plural(q.data.counts.overdueTodos, "to-do")} past its time</b>
@@ -1005,7 +1020,7 @@ export function NotesView({ entry, tz }: { entry: EntryDetail; tz: string }) {
             </div>
           </StepCard>
         ) : null}
-        <StepCard title="Notes" meta={notes.length + termNotes.length ? plural(notes.length + termNotes.length, "note") : undefined}>
+        <StepCard title="Notes" status={notes.length + termNotes.length ? plural(notes.length + termNotes.length, "note") : undefined}>
           {q.isLoading ? (
             <p className="meta">Reading the notes…</p>
           ) : notes.length === 0 && termNotes.length === 0 ? (
