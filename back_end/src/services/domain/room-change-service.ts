@@ -230,6 +230,14 @@ export type RoomChangeCandidatesResult = {
   fromRoom: { roomId: string; roomNumber: string; roomTypeId: string; roomTypeName: string | null };
   /** ISO nights the substitution would cover — the from-room's claimed nights (S7: from tonight). */
   substitutionNights: string[];
+  /**
+   * The CURRENT room's own standing over those nights, this booking's claims left out
+   * (2026-10-19, operator: two bookings picked Room 206 for the same nights and the other one
+   * reserved it first; the table drew 206 as "Current" with no word that someone else holds
+   * it). A night another booking holds cannot be kept — the hold or the re-confirmation would
+   * refuse it — so the desk says so on the row instead of offering it.
+   */
+  fromRoomStanding: RoomChangeCandidate;
   candidates: RoomChangeCandidate[];
 };
 
@@ -502,6 +510,12 @@ export async function listRoomChangeCandidates(
     excludeEntryId: entryId,
     fromRoomTypeId: ctx.fromRoom.roomTypeId,
   });
+  const [fromRoomStanding] = await standingForPool(prisma, {
+    pool: [ctx.fromRoom],
+    nights: ctx.substitutionNights,
+    excludeEntryId: entryId,
+    fromRoomTypeId: ctx.fromRoom.roomTypeId,
+  });
   return {
     entryId,
     originStage: String(ctx.stage),
@@ -512,6 +526,7 @@ export async function listRoomChangeCandidates(
       roomTypeName: ctx.fromRoom.roomType?.name ?? null,
     },
     substitutionNights: ctx.substitutionNights,
+    fromRoomStanding,
     candidates,
   };
 }
