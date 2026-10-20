@@ -98,6 +98,7 @@ import {
   useSettlementShares,
   type SettleMethod,
 } from "./s8-shares";
+import { Help } from "@/components/ds/help";
 
 /* ------------------------------------------------------------------ vocabulary */
 
@@ -397,7 +398,7 @@ function MasterBill({ entry, tz, onTab }: { entry: EntryDetail; tz: string; onTa
           >
             {frozen ? "Print a copy" : "Print master bill"}
           </Button>
-          <span className="meta">what a guest gets who wants paper before paying, or who pays nothing here</span>
+          <Help label="About the master bill">What a guest gets who wants paper before paying, or who pays nothing here.</Help>
         </>
       }
     >
@@ -627,14 +628,16 @@ function AddOrCorrectCharge({ entry, target, setTarget }: { entry: EntryDetail; 
         >
           Post a credit note
         </Button>
-        <span className="meta">service charge and GST post beside it on their own lines</span>
+        <Help label="About the credit note">Its service charge and GST post beside it on their own lines.</Help>
       </div>
 
       {correctable.length ? (
         <div className="form2" style={{ marginTop: 12 }}>
           <div className="rule-above">
             <b className="sm">Correct a charge</b>
-            <span className="meta"> · the bill only grows — a correction is a new line beside the original, and its service charge and GST move with it</span>
+            <Help label="About corrections">
+              The bill only grows — a correction is a new line beside the original, and its service charge and GST move with it.
+            </Help>
           </div>
           <div className="wide field">
             <label>Which charge is wrong</label>
@@ -701,8 +704,8 @@ function AddOrCorrectCharge({ entry, target, setTarget }: { entry: EntryDetail; 
           <>
             <p className="sm">
               {CHARGE_TYPES.find(([v]) => v === posted.lineType)?.[1] ?? words(posted.lineType)} · for {targetLabel(posted)} · line {posted.id.split("-").pop()}
+              <Help label="About the charge">Service charge and GST posted beside it on their own lines.</Help>
             </p>
-            <p className="meta">Service charge and GST posted beside it on their own lines.</p>
           </>
         ) : null}
       </DsDialog>
@@ -863,7 +866,11 @@ function HowSettled({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz
               : undefined;
 
   return (
-    <StepCard flow="settle" title="How the bill is settled">
+    <StepCard
+      flow="settle"
+      title="How the bill is settled"
+      meta="One bill by the model; part by part when each room or hall pays its own; free to change until the bill is settled — after that, the tax invoice decides."
+    >
       <div className="row-acts">
         <Chip tone="accent">by the billing model · {model ? BILLING_MODEL_WORD[model] ?? words(model) : "not set"}</Chip>
         {entry.groupBillingMode === "GROUP_MASTER" ? <Chip tone="quiet">one bill for the party</Chip> : null}
@@ -881,9 +888,6 @@ function HowSettled({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz
             reason="Settlement by share is not in the backend yet (BE-70)"
           />
         </Live>
-      </div>
-      <div className="meta" style={{ marginTop: 6 }}>
-        One bill by the model; part by part when each room or hall pays its own; free to change until the bill is settled — after that, the tax invoice decides.
       </div>
 
       {planShort && plan ? (
@@ -968,7 +972,12 @@ function HowSettled({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz
           <Live>
             <div className="form2" style={{ marginTop: 12 }}>
               <div className="field">
-                <label>How they pay</label>
+                <label>
+                  How they pay
+                  {model === "DIRECT_BILL" ? (
+                    <Help label="About a direct bill">A direct-bill stay settles only by invoicing {booked.payer}.</Help>
+                  ) : null}
+                </label>
                 <select className="input" value={method} onChange={(e) => setMethod(e.target.value as typeof method)}>
                   {methods.map(([v, l]) => (
                     <option key={v} value={v}>
@@ -976,23 +985,27 @@ function HowSettled({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz
                     </option>
                   ))}
                 </select>
-                {model === "DIRECT_BILL" ? <span className="hint">a direct-bill stay settles only by invoicing {booked.payer}</span> : null}
               </div>
               {method === "DIRECT_BILL" ? null : (
                 <div className="field">
-                  <label>{method === "VOUCHER" ? "Voucher number" : "Payment reference"}</label>
+                  <label>
+                    {method === "VOUCHER" ? "Voucher number" : "Payment reference"}
+                    <Help label="About the reference">{method === "VOUCHER" ? "As printed on the voucher." : "Cash and QR need one."}</Help>
+                  </label>
                   <input
                     className="input"
                     value={ref}
                     placeholder={method === "VOUCHER" ? "the agency's voucher number" : "the transaction reference"}
                     onChange={(e) => setRef(e.target.value)}
                   />
-                  <span className="hint">{method === "VOUCHER" ? "as printed on the voucher" : "cash and QR need one"}</span>
                 </div>
               )}
               {method === "VOUCHER" ? (
                 <div className="field">
-                  <label>The voucher covers · Nu.</label>
+                  <label>
+                    The voucher covers · Nu.
+                    <Help label="About the voucher">Anything it leaves of the {money(balance, cur)} balance is invoiced to {booked.payer}.</Help>
+                  </label>
                   <input
                     className="input money"
                     inputMode="decimal"
@@ -1002,7 +1015,6 @@ function HowSettled({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz
                       setVoucherCovers(e.target.value);
                     }}
                   />
-                  <span className="hint">anything it leaves of the {money(balance, cur)} balance is invoiced to {booked.payer}</span>
                 </div>
               ) : method === "DIRECT_BILL" ? null : (
                 <div className="field">
@@ -1017,9 +1029,9 @@ function HowSettled({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz
                       setPaidNow(e.target.value);
                     }}
                   />
-                  <span className={`hint${partial ? " warn-ink" : ""}`}>
-                    {partial ? `less than the ${money(balance, cur)} balance — the rest stays owed, collected after the stay` : "the whole balance, unless you type less"}
-                  </span>
+                  {partial ? (
+                    <span className="hint warn-ink">less than the {money(balance, cur)} balance — the rest stays owed, collected after the stay</span>
+                  ) : null}
                 </div>
               )}
               {invoicesParty ? <SendToField entry={entry} value={invoiceTo} onChange={setInvoiceTo} label="Send the invoice to" /> : null}
@@ -1054,7 +1066,10 @@ function HowSettled({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz
               <div className="form2" style={{ marginTop: 14 }}>
                 <div className="rule-above">
                   <b className="sm">Let the guest leave owing — a credit extension</b>
-                  <span className="meta"> · the FOM&rsquo;s approval covers what is left, so a part-payment (even nothing) can settle and the rest is collected after the stay</span>
+                  <Help label="About the credit extension">
+                    The FOM&rsquo;s approval covers what is left, so a part-payment (even nothing) can settle and the rest is collected after the
+                    stay.
+                  </Help>
                 </div>
                 <div className="field">
                   <label>Covers up to · Nu.</label>
@@ -1069,9 +1084,11 @@ function HowSettled({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz
                   />
                 </div>
                 <div className="field">
-                  <label>Pay within · days · optional</label>
+                  <label>
+                    Pay within · days · optional
+                    <Help label="About the time limit">Past it the cover lapses and the balance reads overdue. Empty means no time limit.</Help>
+                  </label>
                   <input className="input narrow" inputMode="numeric" value={payWithin} placeholder="7" onChange={(e) => setPayWithin(e.target.value.replace(/[^\d.]/g, ""))} />
-                  <span className="hint">past it the cover lapses and the balance reads overdue · empty = no time limit</span>
                 </div>
                 <div className="wide field">
                   <label>Why</label>
@@ -1195,6 +1212,7 @@ function Invoices({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz: 
     <StepCard
       title={`Tax invoice · ${booked.payer}`}
       right={stateChip}
+      meta={`${tax?.purpose ?? "A draft until the bill is settled — its particulars become the one original."}${issued ? "" : ` Issuing it sends it to ${booked.payer} in the same act — no invoice exists unsent.`}`}
       acts={
         <>
           {issued ? (
@@ -1240,7 +1258,7 @@ function Invoices({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz: 
         </>
       }
     >
-      <div className="meta">{booked.kind} · {tax?.purpose ?? "a draft until the bill is settled — its particulars become the one original"}</div>
+      <div className="meta">{booked.kind}</div>
       <div className="sm" style={{ display: "grid", gap: 4, marginTop: 8 }}>
         <div className="row-acts" style={{ justifyContent: "space-between" }}>
           <span>Billed so far{fo ? ` · ${plural(fo.lineCount, "line")}` : ""}</span>
@@ -1295,9 +1313,6 @@ function Invoices({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz: 
           <div className="form2" style={{ marginTop: 8 }}>
             <SendToField entry={entry} value={sendTo} onChange={setSendTo} />
           </div>
-          <p className="meta" style={{ marginTop: 8 }}>
-            → issues the tax invoice and sends it to {booked.payer} in the same act — no invoice exists unsent
-          </p>
         </Live>
       )}
       <PaperDrawer paper={paper} onClose={() => setPaper(null)} />
@@ -1310,9 +1325,12 @@ function Invoices({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz: 
   return (
     <div className="grid2">
       {main}
-      <StepCard title={`Extras · ${booked.guest}`} right={<Chip tone="quiet">not a separate invoice yet</Chip>}>
-        <div className="meta">A tax invoice of the guest&rsquo;s own extras — food, laundry, the minibar — apart from the rooms billed to {booked.party}.</div>
-        <p className="sm" style={{ marginTop: 8 }}>
+      <StepCard
+        title={`Extras · ${booked.guest}`}
+        right={<Chip tone="quiet">not a separate invoice yet</Chip>}
+        meta={`A tax invoice of the guest's own extras — food, laundry, the minibar — apart from the rooms billed to ${booked.party ?? "the account"}. Money in, the invoice issued, receipt and invoice sent in one act is BE-41 · BE-69.`}
+      >
+        <p className="sm">
           Today the bill issues <b>one</b> tax invoice to {booked.payer}. Until the split exists, take the guest&rsquo;s part with <b>Settle part by part…</b> above.
         </p>
         <Live>
@@ -1324,9 +1342,6 @@ function Invoices({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz: 
               Record payment · issue · send
             </Button>
           </div>
-          <p className="meta" style={{ marginTop: 6 }}>
-            → money in, invoice issued, receipt and invoice sent — one act · BE-41 · BE-69
-          </p>
         </Live>
       </StepCard>
     </div>
@@ -1479,7 +1494,7 @@ function Departure({ entry, live }: { entry: EntryDetail; live: boolean }) {
           ) : (
             <div style={{ display: "grid", gap: 6 }}>
               <span>
-                {keysIssued} out <span className="meta">· handed over at check-in</span>
+                {keysIssued} out <span className="meta">· from check-in</span>
               </span>
               <Live>
                 <div className="row-acts">
@@ -1593,10 +1608,7 @@ function Departure({ entry, live }: { entry: EntryDetail; live: boolean }) {
           ) : (
             <>their tax invoice, sent — and printed if they want paper</>
           )}
-          <span className="meta" title="A money receipt as a paper is not in the backend yet (BE-43)">
-            {" "}
-            · a receipt as a paper is not built yet
-          </span>
+          <Help label="About the receipt">A money receipt as a paper is not in the backend yet (BE-43).</Help>
         </Fact>
         <Fact k="The record">
           the stay stays on {booked.guest}&rsquo;s record; closing the booking seals it
