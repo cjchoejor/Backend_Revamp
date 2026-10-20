@@ -116,6 +116,14 @@ export function RoomsTable({
    */
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<RoomCompositionInput[] | null>(null);
+  /**
+   * A room change is open above (2026-10-19, operator: "when we do change configuration I don't
+   * get why there are two tables showing"). The change panel carries its own table — the rooms
+   * being moved into, which is what the move saves — so this one, the booking as it stands, is
+   * put away until the change is made or cancelled. Two tables of one booking read as two
+   * answers, and only one of them is being worked.
+   */
+  const [roomChangeOpen, setRoomChangeOpen] = useState(false);
   const [faults, setFaults] = useState<string[]>([]);
   const [reasonOpen, setReasonOpen] = useState(false);
   const [reason, setReason] = useState("");
@@ -234,7 +242,13 @@ export function RoomsTable({
                   </Button>
                 </>
               ) : (
-                <Button kind="quiet" compact onClick={() => setEditing(true)}>
+                <Button
+                  kind="quiet"
+                  compact
+                  state={roomChangeOpen ? "inert" : "default"}
+                  reason={roomChangeOpen ? "finish or cancel the room change first" : undefined}
+                  onClick={() => !roomChangeOpen && setEditing(true)}
+                >
                   Change configuration…
                 </Button>
               )}
@@ -247,7 +261,23 @@ export function RoomsTable({
               (2026-10-06, operator: "after selecting a room from change rooms, the UI breaks"). */}
           {chosen ? (
             <Tool>
-              <RoomChangeControl entry={entry} fromRoomId={chosen} fromRoomNumber={numberOf(chosen)} onChanged={changed} compact />
+              <RoomChangeControl
+                entry={entry}
+                fromRoomId={chosen}
+                fromRoomNumber={numberOf(chosen)}
+                onChanged={changed}
+                compact
+                onOpenChange={(isOpen) => {
+                  setRoomChangeOpen(isOpen);
+                  // A room change and an edit of this table are two different acts, and the
+                  // move does not carry the edit — so opening one leaves the other.
+                  if (isOpen && editing) {
+                    if (unsaved) toast.info("The table's unsaved changes were left — the room change starts from the booking as it stands.");
+                    setEditing(false);
+                    setDraft(null);
+                  }
+                }}
+              />
             </Tool>
           ) : null}
         </div>
@@ -256,6 +286,12 @@ export function RoomsTable({
       {/* The planner is one of the old tools: every rule that lays its grid out is scoped under
           `.desk-root` in desk-theme.css, and `legacy-bridge.css` re-colours it there. Rendered
           bare it had no styling at all (2026-10-06, operator: "this looks very broken in s7"). */}
+      {roomChangeOpen ? (
+        <p className="meta" style={{ margin: "var(--s2) 0 0" }}>
+          The booking&apos;s own table is put away while Room {chosen ? numberOf(chosen) : ""} is being changed — it comes back when you
+          move the room or press Cancel change.
+        </p>
+      ) : (
       <Tool inert={past}>
       <RoomCompositionPlanner
         key={plannerKey}
@@ -283,6 +319,7 @@ export function RoomsTable({
         unsaved={unsaved}
       />
       </Tool>
+      )}
 
       <DsDialog
         open={reasonOpen}

@@ -117,6 +117,7 @@ export function RoomChangeControl({
   fromRoomNumber,
   onChanged,
   compact,
+  onOpenChange,
 }: {
   entry: EntryDetail;
   fromRoomId: string;
@@ -125,10 +126,18 @@ export function RoomChangeControl({
   onChanged: () => void;
   /** Renders the trigger as a small inline link-button (for dense room rows). */
   compact?: boolean;
+  /** Told when the panel opens and closes, so the page can put its own table away meanwhile. */
+  onOpenChange?: (open: boolean) => void;
 }) {
   const { session } = useSession();
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
+  useEffect(() => {
+    onOpenChange?.(open);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => () => onOpenChange?.(false), []);
   const [reason, setReason] = useState("");
   /** night ISO date → roomId holding it (the from-room itself = keep that night). */
   const [nightSel, setNightSel] = useState<Record<string, string>>({});
