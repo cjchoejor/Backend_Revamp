@@ -840,8 +840,9 @@ export type EntryRateReference = {
   roomTypes: RoomTypeRateReference[];
 };
 
-export async function getRateReference(session: Session, entryId: string) {
-  return apiRequest<EntryRateReference>(`/api/entries/${entryId}/rate-reference`, { session });
+export async function getRateReference(session: Session, entryId: string, roomIds?: string[]) {
+  const q = roomIds?.length ? `?rooms=${encodeURIComponent(roomIds.join(","))}` : "";
+  return apiRequest<EntryRateReference>(`/api/entries/${entryId}/rate-reference${q}`, { session });
 }
 
 /**

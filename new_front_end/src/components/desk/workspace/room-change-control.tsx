@@ -14,6 +14,7 @@ import {
   type RoomChangeCandidate,
 } from "@/lib/api/entries";
 import { listRooms, setRoomBedType } from "@/lib/api/rooms";
+import { getChildPolicy } from "@/lib/api/child-policy";
 import { foldNightsToRangesLabel, mealPlanSummary, operativeRoomCompositions, roomNightsByRoom } from "@/lib/desk/party-rooms";
 import { money } from "@/lib/desk/workspace";
 import type { RoomCompositionInput } from "@/lib/api/quotations";
@@ -191,6 +192,35 @@ export function RoomChangeControl({
     fromComp?.occupantCount ??
     (fromComp ? (fromComp.adultCount ?? 0) + (fromComp.cnb6To10Count ?? 0) + (fromComp.cnbUnder6Count ?? 0) : null);
   const fromCatalog = catalogById.get(fromRoomId) ?? null;
+  /**
+   * The guests who move are the ones in THIS room, not the whole booking — on a booking with
+   * other rooms the table would otherwise ask for everyone and cap no one (2026-10-19). Ages are
+   * taken from the booking's children in each band the room holds; a band with no age on file
+   * gets one from inside it.
+   */
+  const childPolicyQuery = useQuery({
+    queryKey: ["lookup", "child-policy"],
+    queryFn: () => getChildPolicy(session!),
+    enabled: !!session && open,
+    staleTime: 10 * 60_000,
+  });
+  const movingParty = useMemo(() => {
+    if (!fromComp) return { adults: entry.adultCount ?? entry.guestCount ?? null, childAges: entry.childAges ?? null };
+    const youngMax = childPolicyQuery.data?.ageBands.youngChildMaxAge ?? 5;
+    const childMax = childPolicyQuery.data?.ageBands.childMaxAge ?? 10;
+    const ages = [...(entry.childAges ?? [])];
+    const take = (n: number, inBand: (a: number) => boolean, fallback: number) => {
+      const out: number[] = [];
+      for (let i = 0; i < n; i++) {
+        const at = ages.findIndex(inBand);
+        out.push(at >= 0 ? ages.splice(at, 1)[0] : fallback);
+      }
+      return out;
+    };
+    const c6 = take(fromComp.cnb6To10Count ?? 0, (a) => a > youngMax && a <= childMax, childMax);
+    const u6 = take(fromComp.cnbUnder6Count ?? 0, (a) => a <= youngMax, 0);
+    return { adults: fromComp.adultCount ?? 0, childAges: [...c6, ...u6] };
+  }, [fromComp, entry.adultCount, entry.guestCount, entry.childAges, childPolicyQuery.data]);
 
   const nights = useMemo(() => candidatesQuery.data?.substitutionNights ?? [], [candidatesQuery.data]);
   const candidates = candidatesQuery.data?.candidates ?? [];
@@ -231,6 +261,20 @@ export function RoomChangeControl({
     return seen;
   }, [nights, nightSel, fromRoomId]);
   const nothingChanges = allAssigned && selectedNewRooms.length === 0;
+  /**
+   * The nights each picked room takes, for the table's Dates column and its night-by-night
+   * check (2026-10-19, operator: "I can choose different rooms for different nights, but the
+   * table below doesn't have the dates column and doesn't allow me to allocate the person").
+   * On a split the rooms are used one after another, so the same guests sleep in each.
+   */
+  const pickedRoomDates = useMemo(() => {
+    const out: Record<string, { label: string; nights: number; dates: string[] }> = {};
+    for (const id of selectedNewRooms) {
+      const ds = nights.filter((d) => nightSel[d] === id);
+      out[id] = { label: foldNightsToRangesLabel(ds), nights: ds.length, dates: ds };
+    }
+    return out;
+  }, [selectedNewRooms, nights, nightSel]);
   const crossTypeLocked = selectedNewRooms.some((id) => !(candidateById.get(id)?.sameType ?? true)) && !canCrossType;
 
   // ── The negotiation table's scope ──────────────────────────────────────────────────────────
@@ -936,8 +980,9 @@ export function RoomChangeControl({
                 sealedRoomIds={selectedNewRooms}
                 entryCheckIn={entry.checkInDate ?? null}
                 entryCheckOut={entry.checkOutDate ?? null}
-                entryAdults={entry.adultCount ?? entry.guestCount ?? null}
-                entryChildAges={entry.childAges ?? null}
+                entryAdults={movingParty.adults}
+                entryChildAges={movingParty.childAges}
+                roomDates={pickedRoomDates}
                 entryId={entry.id}
                 lockCommercial={lockCommercial}
                 initialCompositions={seedComps}

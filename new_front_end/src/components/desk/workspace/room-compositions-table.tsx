@@ -440,6 +440,7 @@ export function RoomCompositionsTable({
   saveAside,
   onFaultsChange,
   initial,
+  initialCompositions,
   onChange,
   onOpenRoomInBoard,
   onPickRoom,
@@ -547,6 +548,13 @@ export function RoomCompositionsTable({
   /** Snapshot from the other planner mode — mount-time seed so switching modes resumes
    *  from the same data. Read once on mount; later prop changes are ignored. */
   initial?: RoomCompositionInput[];
+  /**
+   * What each room is priced on as the caller sees it NOW — the seed for a room added after the
+   * table mounted (2026-10-19, operator: in the room-change panel, picking 202 and 203 for later
+   * nights added rows with nobody in them, because `initial` is read once at mount and knew only
+   * the first room). A room already in `initial` keeps that seed.
+   */
+  initialCompositions?: RoomCompositionInput[];
   onChange: (compositions: RoomCompositionInput[]) => void;
 }) {
   const { session } = useSession();
@@ -573,9 +581,12 @@ export function RoomCompositionsTable({
    * text: an empty negotiated cell is not "no rate", it is "price at this", and the operator had
    * no way to see which figure that was without leaving the grid.
    */
+  // The table's own rooms ride along, so a room the booking does not hold yet (the room-change
+  // panel) is anchored at its OWN type's rate, not at the booking's (2026-10-19).
+  const rateRefRoomsKey = sealedRoomIds.join(",");
   const rateRefQuery = useQuery({
-    queryKey: ["rate-reference", entryId],
-    queryFn: () => getRateReference(session!, entryId!),
+    queryKey: ["rate-reference", entryId, rateRefRoomsKey],
+    queryFn: () => getRateReference(session!, entryId!, sealedRoomIds),
     enabled: !!session && !!entryId,
     staleTime: 5 * 60_000,
   });
@@ -648,6 +659,9 @@ export function RoomCompositionsTable({
 
   // Mount-time copy of the seed snapshot — deliberately not reactive.
   const initialRef = useRef(initial);
+  // The caller's latest seed, read only for rooms added after mount (see `initialCompositions`).
+  const lateSeedRef = useRef(initialCompositions);
+  lateSeedRef.current = initialCompositions;
   const [rows, setRows] = useState<Record<string, RowState>>({});
   const [ratesOpen, setRatesOpen] = useState(
     () => (initial ?? []).some((c) =>
@@ -688,7 +702,9 @@ export function RoomCompositionsTable({
   useEffect(() => {
     setRows((prev) => {
       if (sealedRoomIds.every((id) => prev[id])) return prev;
-      const seedById = new Map((initialRef.current ?? []).map((c) => [c.roomId, c]));
+      const seedById = new Map(
+        [...(lateSeedRef.current ?? []), ...(initialRef.current ?? [])].map((c) => [c.roomId, c] as const),
+      );
       const next = { ...prev };
       for (const id of sealedRoomIds) {
         if (!next[id]) {
@@ -787,12 +803,29 @@ export function RoomCompositionsTable({
       }
     }
     if (partyBound) {
-      const others = sealedRoomIds.reduce((s, id) => (id === roomId ? s : s + cnt(rows[id]?.[col] ?? "0")), 0);
+      // The rooms that share a night with this one (2026-10-19, operator: a stay moving from 201
+      // to 202 to 203 night by night could not put its one guest in 202 — the cap counted the
+      // guest already in 201 on ANOTHER night). Without dates every room shares every night.
+      const datesOf = (id: string) => roomDates?.[id]?.dates ?? null;
+      const mine = datesOf(roomId);
+      const sameNights = !!mine && mine.length > 0;
+      const others = sameNights
+        ? Math.max(
+            0,
+            ...mine!.map((night) =>
+              sealedRoomIds.reduce((s, id) => {
+                if (id === roomId) return s;
+                const theirs = datesOf(id);
+                return !theirs || theirs.includes(night) ? s + cnt(rows[id]?.[col] ?? "0") : s;
+              }, 0),
+            ),
+          )
+        : sealedRoomIds.reduce((s, id) => (id === roomId ? s : s + cnt(rows[id]?.[col] ?? "0")), 0);
       const remaining = Math.max(0, partyBands[col] - others);
       if (n > remaining) {
         flashLimit(
           `This booking has ${partyBands[col]} ${bandLabel(col, partyBands[col])}${
-            others > 0 ? ` and ${others} ${others === 1 ? "is" : "are"} already in other rooms` : ""
+            others > 0 ? ` and ${others} ${others === 1 ? "is" : "are"} already in other rooms${sameNights ? " on the same nights" : ""}` : ""
           } — capped at ${remaining}. Reduce the other room first to move someone here, or change the party at the Inquiry step.`,
         );
         n = remaining;
@@ -1068,7 +1101,19 @@ export function RoomCompositionsTable({
   const [previewBody, setPreviewBody] = useState<{
     roomCompositions: RoomCompositionInput[];
     discount: { percent?: number; amount?: number } | null;
+    roomNights?: Record<string, number>;
   } | null>(null);
+  // The nights each row is priced for, from the caller's dates — on the room-change panel the
+  // rooms are picked night by night and the booking does not hold them yet (2026-10-19).
+  const previewRoomNights = useMemo(() => {
+    const out: Record<string, number> = {};
+    for (const id of sealedRoomIds) {
+      const n = roomDates?.[id]?.dates?.length ?? 0;
+      if (n > 0) out[id] = n;
+    }
+    return Object.keys(out).length ? out : undefined;
+  }, [sealedRoomIds, roomDates]);
+  const previewRoomNightsKey = JSON.stringify(previewRoomNights ?? null);
   // The preview runs whether or not the rate columns are open (2026-09-30, operator report:
   // the sum row's SC and GST "can be left unseen ... they show when Rates + is clicked, and after
   // clicking Rates + once and Rates - again they keep showing"). That was this query: it was
@@ -1083,9 +1128,13 @@ export function RoomCompositionsTable({
           ? { percent: discNum }
           : { amount: discNum }
         : null;
-    const t = setTimeout(() => setPreviewBody({ roomCompositions: compositions, discount }), 450);
+    const t = setTimeout(
+      () => setPreviewBody({ roomCompositions: compositions, discount, ...(previewRoomNights ? { roomNights: previewRoomNights } : {}) }),
+      450,
+    );
     return () => clearTimeout(t);
-  }, [compositions, entryId, discNum, discUnitNow]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [compositions, entryId, discNum, discUnitNow, previewRoomNightsKey]);
   const previewQuery = useQuery({
     queryKey: ["quotation-live-preview", entryId, previewBody],
     queryFn: () => previewQuotationPricing(session!, entryId!, previewBody!),
@@ -1389,7 +1438,7 @@ export function RoomCompositionsTable({
           layer is a flex column in which only `.rct-scroll` scrolls, so this strip, the close bar
           and the toolbar are held at the top structurally rather than by sticky positioning. */}
       {bedAsk && bedsShown && <BedAskStrip ask={bedAsk} />}
-      {entryId && <RateReferenceStrip entryId={entryId} compact />}
+      {entryId && <RateReferenceStrip entryId={entryId} compact roomIds={sealedRoomIds} />}
       {/* Discount rides with the rates, inside the panel — one negotiation surface. */}
       <NegotiationDiscountBar
         discountValue={discountValue}

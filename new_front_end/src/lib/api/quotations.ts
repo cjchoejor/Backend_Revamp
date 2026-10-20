@@ -131,6 +131,8 @@ export async function previewQuotationPricing(
     roomCompositions: RoomCompositionInput[];
     /** Percent or flat amount off the grand total — at most one. */
     discount?: { percent?: number | null; amount?: number | null } | null;
+    /** The nights each room is priced for, when the table knows better than the booking (a room change). */
+    roomNights?: Record<string, number>;
   },
 ) {
   return apiRequest<QuotationLivePreview>(`/api/entries/${entryId}/quotation-preview`, {

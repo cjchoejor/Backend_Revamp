@@ -48,12 +48,13 @@ const ADD_ON_COLS = [
   ["dinnerRate", "Dinner"],
 ] as const;
 
-export function RateReferenceStrip({ entryId, compact }: { entryId: string; compact?: boolean }) {
+export function RateReferenceStrip({ entryId, compact, roomIds }: { entryId: string; compact?: boolean; roomIds?: string[] }) {
   const { session } = useSession();
   const quiet = useQuietScreen();
+  const roomsKey = (roomIds ?? []).join(",");
   const query = useQuery({
-    queryKey: ["rate-reference", entryId],
-    queryFn: () => getRateReference(session!, entryId),
+    queryKey: roomsKey ? ["rate-reference", entryId, roomsKey] : ["rate-reference", entryId],
+    queryFn: () => getRateReference(session!, entryId, roomIds),
     enabled: !!session,
     staleTime: 5 * 60_000,
   });
