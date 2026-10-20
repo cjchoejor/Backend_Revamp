@@ -232,10 +232,10 @@ export function S6CheckIn({
               <Button icon="lock" state={checkIn.ready ? "default" : "inert"} title={checkIn.ready ? undefined : checkIn.reason} onClick={checkIn.onClick}>
                 Check in · keys and the live folio
               </Button>
+              <Help label="About checking in">
+                One act: the folio goes live, the rooms become occupied, the keys are handed over, and housekeeping and the kitchen are told.
+              </Help>
             </div>
-            <span className="meta" style={{ textAlign: "right" }}>
-              One act: the folio goes live, the rooms become occupied, the keys are handed over, and housekeeping and the kitchen are told.
-            </span>
           </div>
         ) : null}
       </Live>
@@ -576,6 +576,7 @@ function DocumentCard({
       <StepCard
         flow="identity"
         title="The document, at the desk"
+        meta="Typed once, in the lead's row of the guest table below — choose the guest type there and record the verification under the table; it records that row's document. Date of birth and gender are what the TRS asks for. An ID photo is uploaded, or taken on a phone, from the same row."
         acts={
           past ? null : (
             <>
@@ -599,9 +600,6 @@ function DocumentCard({
             {verifiedAt ? fmtStamp(verifiedAt, tz) : <span className="warn-ink">not yet</span>}
           </Fact>
         </Facts>
-        <div className="meta" style={{ marginTop: 8 }}>
-          Typed once, in the lead&rsquo;s row of the guest table below — choose the guest type there and record the verification under the table; it records that row&rsquo;s document. Date of birth and gender are what the TRS asks for. An ID photo is uploaded, or taken on a phone, from the same row.
-        </div>
       </StepCard>
     </div>
   );
@@ -948,7 +946,8 @@ function RoomRow({
               </>
             ) : (
               <Fact k="Composition">
-                <span className="meta">not recorded at Negotiation — occupants and meals were set on the guest board there</span>
+                <span className="meta">not recorded at Negotiation</span>
+                <Help label="About the composition">Occupants and meals were set on the guest board there.</Help>
               </Fact>
             )}
           </Facts>
