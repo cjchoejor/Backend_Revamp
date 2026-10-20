@@ -56,6 +56,7 @@ import { BILLING_CHOICES, billingWord } from "./s4-reserve";
 import { BookingOtherWays } from "./s4-other-ways";
 import { PreArrivalTasksCard } from "./s5-pre-arrival-tasks";
 import { AssignRoomsCard, ROOMS_CARD_ID, roomReady, useRoomsCatalog } from "./s5-rooms";
+import { Help } from "@/components/ds/help";
 
 type EntryScalars = { contactPersonName?: string | null; contactPersonPhone?: string | null };
 
@@ -146,11 +147,8 @@ export function S5Arrival({
           after them, where the list has it (2026-09-25). */}
       <FrontDeskHandoff entry={entry} facts={facts} />
       <GuestHereCard guestPresent={guestPresent} setGuestPresent={setGuestPresent} />
-      <StepCard title="Pre-arrival message · what they said">
+      <StepCard title="Pre-arrival message · what they said" meta="Evidence only — check-in does not wait for it.">
         <AnswerLine entryId={entry.id} type="PRE_ARRIVAL_REMINDER" sinceIso={since} what="the pre-arrival message" tz={clock.tz} />
-        <div className="meta" style={{ marginTop: 6 }}>
-          Evidence only — check-in does not wait for it.
-        </div>
       </StepCard>
       <BillingModelCard entry={entry} />
       <BookingOtherWays entry={entry} parkNow={parkNow} parking={parking} guestPresent={guestPresent} />
@@ -350,9 +348,10 @@ function ReadyTheRoom({
             <>
               {numbers.join(", ")}{" "}
               <span className="meta">
-                · assigned{numbers.length > 1 ? " together" : ""} · a claim on the rooms, no step moved
+                · assigned{numbers.length > 1 ? " together" : ""}
                 {numbers.length < needed ? ` · ${needed - numbers.length} more needed` : ""}
               </span>
+              <Help label="About assigning">An assignment is a claim on the rooms — no step moves.</Help>
             </>
           ) : (
             <>
@@ -362,13 +361,13 @@ function ReadyTheRoom({
         </Fact>
         <Fact k="Housekeeping">
           {distinct.length === 0 ? (
-            <span className="meta">read from the rooms once they are assigned</span>
+            <span className="dash">—</span>
           ) : notReady.length === 0 ? (
             <>
               <Chip tone="success" icon="check">
                 clean and ready
               </Chip>{" "}
-              <span className="meta">housekeeping&rsquo;s word, from the room board — not ticked here</span>
+              <Help label="About room readiness">Housekeeping&rsquo;s word, from the room board — not ticked here.</Help>
             </>
           ) : (
             <>
@@ -398,7 +397,8 @@ function ReadyTheRoom({
             `${contact.contactPersonName}${contact.contactPersonPhone ? ` · ${contact.contactPersonPhone}` : ""}`
           ) : (
             <>
-              <span className="warn-ink">not on file</span> <span className="meta">· the move to Arrival asks for it</span>
+              <span className="warn-ink">not on file</span>
+              <Help label="About the contact person">The move to Arrival asks for it.</Help>
             </>
           )}
         </Fact>
@@ -417,10 +417,12 @@ function ReadyTheRoom({
           )}
         </Fact>
         <Fact k="Registration form">
-          <span className="meta">pre-filled from the record and signed at Check-in · BE-45</span>
+          signed at Check-in
+          <Help label="About the registration form">Pre-filled from the record and signed at Check-in. The card on a tablet is BE-45.</Help>
         </Fact>
         <Fact k="Keys">
-          <span className="meta">handed over per room at Check-in — not needed to leave Arrival</span>
+          at Check-in
+          <Help label="About the keys">Handed over per room at Check-in — not needed to leave Arrival.</Help>
         </Fact>
       </Facts>
     </StepCard>
@@ -593,7 +595,7 @@ function FrontDeskHandoff({ entry, facts }: { entry: EntryDetail; facts: Facts_ 
               >
                 Record it fulfilled
               </Button>
-              <span className="meta">it records itself the moment every line above is on record — no need to come back up here</span>
+              <Help label="About the handoff">It records itself the moment every line above is on record — no need to come back up here.</Help>
             </div>
           </Live>
         </div>
@@ -662,7 +664,10 @@ function BillingModelCard({ entry }: { entry: EntryDetail }) {
   const known = BILLING_CHOICES.some(([v]) => v === model);
   const log = entry.folio?.billingModelTransitions ?? [];
   return (
-    <StepCard title="Billing model">
+    <StepCard
+      title="Billing model"
+      meta="Set at Set up and frozen by Reserve. From Arrival it changes only through a new pass, with the FOM — and once an invoice exists, through the amended-invoice path."
+    >
       {known ? (
         <Choice options={BILLING_CHOICES} value={model as (typeof BILLING_CHOICES)[number][0]} disabled />
       ) : (
@@ -675,10 +680,6 @@ function BillingModelCard({ entry }: { entry: EntryDetail }) {
             changed from {billingWord(l.fromModel)} to {billingWord(l.toModel)} · {fmtStamp(l.createdAt, clock.tz)}
           </div>
         ))}
-      <div className="meta" style={{ marginTop: 6 }}>
-        Set at Set up and frozen by Reserve. From Arrival it changes only through a new pass, with the FOM — and once an invoice
-        exists, through the amended-invoice path.
-      </div>
     </StepCard>
   );
 }

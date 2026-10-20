@@ -37,6 +37,7 @@ import { DeskConfirmModal } from "./confirm-modal";
 import { StepAction } from "./step-action";
 import type { EntryDetail } from "@/types/api";
 import { fmtDateTime, fmtTime, HOTEL_TZ_DEFAULT } from "@/lib/ds/format";
+import { Help, HelpHere } from "@/components/ds/help";
 
 /**
  * Guest-detail table on Arrival (2026-08-10, operator request — "store ID proof of every
@@ -813,12 +814,13 @@ export function IdentityProofBlock({
       </div>
 
       {!open && (
-        <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: 0 }}>
+        <p style={{ fontSize: 11.5, margin: 0 }}>
           {coverage
             ? `${coverage.filledSlots} of ${coverage.totalSlots} guest${coverage.totalSlots === 1 ? "" : "s"} recorded`
-            : "Guest documents & details"}{" "}
-          — click the header to open.{" "}
-          {inHouse ? "Correct anything that was mis-recorded." : "Everything here carries to Check-in."}
+            : "Guest documents & details"}
+          <Help label="About the guest details">
+            Click the header to open. {inHouse ? "Correct anything that was mis-recorded." : "Everything here carries to Check-in."}
+          </Help>
         </p>
       )}
 
@@ -1273,11 +1275,10 @@ export function IdentityProofBlock({
                 <Lock style={{ width: 13, height: 13 }} />
                 Confirm guest details
               </button>
-              <span style={{ fontSize: 11.5, color: "var(--ink-3)" }}>
-                {confirmedSlotCount > 0
-                  ? `${confirmedSlotCount} of ${slots.length} confirmed — press to lock the rest`
-                  : "Locks every row as recorded; “Make changes” reopens them."}
-              </span>
+              {confirmedSlotCount > 0 ? (
+                <span style={{ fontSize: 11.5 }}>{`${confirmedSlotCount} of ${slots.length} confirmed — press to lock the rest`}</span>
+              ) : null}
+              <Help label="About confirming">Locks every row as recorded; &ldquo;Make changes&rdquo; reopens them.</Help>
             </>
           )}
         </div>
@@ -1321,16 +1322,16 @@ export function IdentityProofBlock({
               </p>
             ) : null)}
           {!identityVerified && (
-            <p style={{ fontSize: 11, color: "var(--ink-4)", margin: 0, lineHeight: 1.5 }}>
-              The verification vouches that a human checked the documents against the guests — it is
-              required for check-in and is not the same as confirming the details above.
-            </p>
+            <HelpHere label="About the verification">
+              The verification vouches that a human checked the documents against the guests — it is required for check-in and is
+              not the same as confirming the details above.
+            </HelpHere>
           )}
           {identityVerified && editMode && !pathChanged && (
-            <p style={{ fontSize: 11, color: "var(--ink-4)", margin: 0, lineHeight: 1.5 }}>
-              To change the recorded guest type, pick a different one above — the verification is
-              then re-recorded under the new type.
-            </p>
+            <HelpHere label="About the guest type">
+              To change the recorded guest type, pick a different one above — the verification is then re-recorded under the new
+              type.
+            </HelpHere>
           )}
           {/* Re-recording under a different guest type (2026-08-21): the backend simply re-stamps
               the path, so "update" is the same call with the new pick. Only offered in edit mode
@@ -1367,7 +1368,7 @@ export function IdentityProofBlock({
 
       {listQuery.isLoading && <p style={{ fontSize: 12, color: "var(--ink-3)", margin: "8px 0 0" }}>Loading stored details…</p>}
 
-      <p style={{ fontSize: 11, color: "var(--ink-3)", margin: "8px 0 0", lineHeight: 1.5 }}>
+      <HelpHere label="About this table">
         Details save as you leave each field. One ID per guest — upload a scan or hand capture to a
         phone with the QR button; taking or uploading a new one replaces the current ID. Photos are
         stored privately on the hotel server (never in a public link) and kept per the ID retention
@@ -1390,7 +1391,7 @@ export function IdentityProofBlock({
         )}{" "}
         <b>Confirm guest details</b> locks the table as recorded — it stays locked at every later
         stage until someone chooses <b>Make changes</b>.
-      </p>
+      </HelpHere>
         </>
       )}
 
@@ -1464,12 +1465,15 @@ export function IdentityProofBlock({
                 <QRCodeSVG value={phoneCapture.url} size={196} marginSize={0} />
               </div>
             </div>
-            <p style={{ fontSize: 12, color: "var(--ink-3)", margin: 0, lineHeight: 1.5 }}>
-              {phoneCapture.slot
-                ? "Scan with the phone's camera (same Wi-Fi as the desk). The page that opens takes the photo, offers a retake, and sends it straight here — no login needed on the phone."
-                : "Scan with the phone's camera (same Wi-Fi as the desk). The page lists every guest on this booking — photograph each one and every photo lands on the right row here. No login needed on the phone."}{" "}
-              If the ID carries a QR code (Aadhaar, work permit…) or a passport strip, the phone reads the
-              details off it automatically and they arrive here as a suggestion.
+            <p style={{ fontSize: 12, margin: 0, lineHeight: 1.5 }}>
+              Scan with the phone&rsquo;s camera — same Wi-Fi as the desk.
+              <Help label="About the phone">
+                {phoneCapture.slot
+                  ? "The page that opens takes the photo, offers a retake, and sends it straight here — no login needed on the phone."
+                  : "The page lists every guest on this booking — photograph each one and every photo lands on the right row here. No login needed on the phone."}{" "}
+                If the ID carries a QR code (Aadhaar, work permit…) or a passport strip, the phone reads the details off it automatically
+                and they arrive here as a suggestion.
+              </Help>
             </p>
             <div
               style={{

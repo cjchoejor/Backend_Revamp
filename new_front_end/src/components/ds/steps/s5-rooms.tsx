@@ -44,6 +44,7 @@ import { ExtraBedEditor, InitialSelectionCell } from "@/components/desk/workspac
 import { Choice, DsDialog, Fact, Facts, Live, StepCard, toastRefusal, useRefreshEntry, useStepMode } from "./kit";
 import { enumerateNights } from "./use-room-selection";
 import { RoomsTable } from "./rooms-table";
+import { Help } from "@/components/ds/help";
 
 export const ROOMS_CARD_ID = "arrival-rooms";
 
@@ -325,7 +326,7 @@ export function AssignRoomsCard({ entry }: { entry: EntryDetail }) {
                 <Button state={assignAll.isPending ? "working" : canWork ? "default" : "inert"} workingLabel="Assigning…" onClick={() => assignAll.mutate()}>
                   Assign all {planRoomCount} rooms
                 </Button>
-                <span className="meta">the rooms chosen at Inquiry, each for its own nights · a room above can be changed first</span>
+                <Help label="About assigning">The rooms chosen at Inquiry, each for its own nights. A room above can be changed first.</Help>
               </div>
             ) : (
               <div style={{ marginTop: 12 }}>
@@ -364,7 +365,10 @@ export function AssignRoomsCard({ entry }: { entry: EntryDetail }) {
                     </div>
                   ) : null}
                   <div className="field">
-                    <label>Room</label>
+                    <label>
+                      Room
+                      <Help label="About the room">The room is checked for these dates when you assign it.</Help>
+                    </label>
                     <select className="input" value={roomId} onChange={(e) => setRoomId(e.target.value)}>
                       <option value="">Choose a room…</option>
                       {visibleOptions.map((r) => (
@@ -374,7 +378,6 @@ export function AssignRoomsCard({ entry }: { entry: EntryDetail }) {
                         </option>
                       ))}
                     </select>
-                    <span className="hint">the room is checked for these dates when you assign it</span>
                   </div>
                   <div className="wide field">
                     <label>Note · optional</label>
