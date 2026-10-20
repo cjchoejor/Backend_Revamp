@@ -56,6 +56,7 @@ import {
 import { RoomsTableCard } from "./rooms-table";
 import { BookingOtherWays } from "./s4-other-ways";
 import { PreArrivalTasksCard, RESERVE_PREP_TASKS } from "./s5-pre-arrival-tasks";
+import { Help } from "@/components/ds/help";
 
 /* ------------------------------------------------------------------ vocabulary */
 
@@ -512,24 +513,23 @@ function BeforeYouReserve({
 
   return (
     <>
-      <StepCard title="Before you reserve · read these, then press Reserve">
-        <div className="meta" style={{ marginBottom: 8 }}>
-          Each line is a fact already on record, with who recorded it and when. Nothing to tick — if a line is wrong or missing,
-          Fix takes you to it. Reserve is your signature on the set.
-        </div>
+      <StepCard
+        title="Before you reserve · read these, then press Reserve"
+        meta="Each line is a fact already on record, with who recorded it and when. Nothing to tick — if a line is wrong or missing, Fix takes you to it. Reserve is your signature on the set."
+      >
         {missing.map(renderLine)}
         {done.map(renderLine)}
         {asked.items.map((w) => (
           <WordRow key={w.id} item={w} saved={asked.saved[w.id]} onRecord={(word) => asked.record(w.id, word)} onUndo={() => asked.undo(w.id)} tz={tz} />
         ))}
-        {asked.items.length ? (
-          <div className="meta" style={{ marginTop: 4 }}>
-            What was arranged here is kept on this desk only — the guest&rsquo;s own requests, and what was arranged for each, are
-            in the Guest requests tab.
-          </div>
-        ) : null}
         <div className="meta" style={{ marginTop: 12 }}>
           Done by the system, without you
+          {asked.items.length ? (
+            <Help label="About what was arranged">
+              What was arranged above is kept on this desk only — the guest&rsquo;s own requests, and what was arranged for each, are in the
+              Guest requests tab.
+            </Help>
+          ) : null}
         </div>
         <div className="row-acts" style={{ marginTop: 4 }}>
           {sys.map(([t, w]) => (
@@ -763,6 +763,7 @@ function ConferenceVerifyDialog({ entry, open, onClose }: { entry: EntryDetail; 
       busy={run.isPending}
       title="Verify the conference"
       caseLines={[entry.id]}
+      help="Reserve refuses a conference booking until the FOM has checked the three below." 
       footer={
         <>
           <Button kind="quiet" state={run.isPending ? "inert" : "default"} onClick={onClose}>
@@ -774,7 +775,6 @@ function ConferenceVerifyDialog({ entry, open, onClose }: { entry: EntryDetail; 
         </>
       }
     >
-      <p className="sm">Reserve refuses a conference booking until the FOM has checked the three below.</p>
       <div style={{ display: "grid", gap: 6 }}>
         {tick("The venue is confirmed", venue, setVenue)}
         {tick("Catering is confirmed", catering, setCatering)}
@@ -811,6 +811,7 @@ function OverlapDialog({ entry, open, onClose }: { entry: EntryDetail; open: boo
       busy={run.isPending}
       title="This guest already holds a booking over these nights"
       caseLines={[entry.id]}
+      help="Most bookings never need this. Only when Reserve says the guest already has a live booking over the same nights does the FOM say whether this is a deliberate second booking or a duplicate." 
       footer={
         <>
           <Button kind="quiet" state={run.isPending ? "inert" : "default"} onClick={onClose}>
@@ -822,10 +823,7 @@ function OverlapDialog({ entry, open, onClose }: { entry: EntryDetail; open: boo
         </>
       }
     >
-      <p className="sm">
-        Most bookings never need this. Only when Reserve says the guest already has a live booking over the same nights does the FOM
-        say whether this is a deliberate second booking or a duplicate. A duplicate should be cancelled instead.
-      </p>
+      <p className="sm">A duplicate should be cancelled instead.</p>
       <div className="field">
         <label>Note · optional</label>
         <input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. a second room for the driver, booked separately" />
@@ -861,21 +859,22 @@ function WhoReceives({ entry }: { entry: EntryDetail }) {
   const email = guest?.email?.trim() || null;
   const booker = journey?.s1Inquiry.commercialContext.partyName ?? null;
   return (
-    <StepCard title="Who receives the confirmation, and how">
+    <StepCard
+      title="Who receives the confirmation, and how"
+      meta="Reserve sends it by email in the same click — one email, in the booking's thread, to the email on the booking's record. WhatsApp, print, and telling them by phone with the words written down are not in the backend yet (BE-65); the booking still shows whether the voucher went out."
+    >
       <FactBox
         k="Going to"
         v={email ? <><b>{email}</b> · the confirmation voucher, PDF attached</> : <span className="warn-ink">no email on file</span>}
         meta={
           email
-            ? `the email on the booking's record${booker ? ` · booked by ${booker}` : ""} · one email, in the booking's thread`
+            ? booker
+              ? `booked by ${booker}`
+              : undefined
             : "nothing will be emailed — after Reserve, share the voucher another way and record their answer"
         }
       />
       <ChannelChoice />
-      <div className="meta" style={{ marginTop: 6 }}>
-        Reserve sends it by email in the same click. WhatsApp, print, and telling them by phone with the words written down are not in
-        the backend yet (BE-65) — the booking still shows whether the voucher went out.
-      </div>
     </StepCard>
   );
 }
@@ -937,7 +936,10 @@ function WhatReserveDecided({ entry }: { entry: EntryDetail }) {
   const sent = emailEvents.some((t) => t.eventType.endsWith(".SENT"));
   const disc = entry.cancellationDisclosure ?? null;
   return (
-    <StepCard title={`What Reserve decided · ${fmtDateTime(res.confirmedAt, tz)}${by ? ` · ${by}` : ""}`}>
+    <StepCard
+      title={`What Reserve decided · ${fmtDateTime(res.confirmedAt, tz)}${by ? ` · ${by}` : ""}`}
+      meta="This is the record of Reserve. Any change from here is a governed new pass."
+    >
       <Facts wide>
         <Fact k="Reservation">
           <b>{res.id}</b> · dates frozen {fmtRange(res.frozenCheckInDate, res.frozenCheckOutDate)}
@@ -985,9 +987,6 @@ function WhatReserveDecided({ entry }: { entry: EntryDetail }) {
           {plural(tasks.length, "task")} opened for {fmtDate(res.frozenCheckInDate)} · {tasks.filter((t) => t.status === "PENDING").length} open
         </Fact>
       </Facts>
-      <div className="meta" style={{ marginTop: 8 }}>
-        This is the record of Reserve. Any change from here is a governed new pass.
-      </div>
     </StepCard>
   );
 }
@@ -1094,9 +1093,10 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
             Send…
           </Button>
         </Live>
-        <Button kind="quiet" compact state="inert" reason="Re-issue with the amendment advice is BE-42, BE-52">
+        <Button kind="quiet" compact state="inert">
           Re-issue as v2
         </Button>
+        <Help label="Not available yet">Re-issue with the amendment advice is BE-42, BE-52.</Help>
       </div>
       {failed && !answered && !afterReserve ? (
         <div style={{ marginTop: 10 }}>
@@ -1108,8 +1108,9 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
         </div>
       ) : null}
       <div className="rule-above" style={{ borderTop: "1px solid var(--line)", marginTop: 12, paddingTop: 10 }}>
-        <div className="meta" style={{ marginBottom: 4 }}>
-          What they said about it · Arrival waits for their answer
+        <div className="sm" style={{ marginBottom: 4, fontWeight: 600 }}>
+          What they said about it
+          <Help label="About the answer">Arrival waits for the guest&rsquo;s answer to the voucher.</Help>
         </div>
         <AnswerLine
           entryId={entry.id}
@@ -1127,6 +1128,7 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
         busy={send.isPending}
         title="Send the confirmation voucher"
         caseLines={[res.id]}
+        help="The same email and PDF Reserve sent, recorded as a new send with a fresh reply window." 
         footer={
           <>
             <Button kind="quiet" state={send.isPending ? "inert" : "default"} onClick={() => setSendOpen(false)}>
@@ -1138,11 +1140,12 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
           </>
         }
       >
-        <p className="sm">The same email and PDF Reserve sent, recorded as a new send with a fresh reply window.</p>
         <div className="field">
-          <label>To</label>
+          <label>
+            To
+            <Help label="About the address">Prefilled from the guest&rsquo;s record — change it to correct a wrong address.</Help>
+          </label>
           <input className="input" type="email" value={sendTo} onChange={(e) => setSendTo(e.target.value)} placeholder="guest@example.com" />
-          <span className="hint">prefilled from the guest&rsquo;s record · change it to correct a wrong address</span>
         </div>
         <ChannelChoice />
       </DsDialog>

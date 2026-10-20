@@ -73,6 +73,7 @@ import {
   useSendInvoice,
   useSendTo,
 } from "./s8-parts";
+import { Help } from "@/components/ds/help";
 
 /* ------------------------------------------------------------------ vocabulary */
 
@@ -1054,14 +1055,10 @@ function OneDoorBackIn() {
       title="One door back in"
       acts={
         <Live>
-          <Button
-            kind="quiet"
-            compact
-            state="inert"
-            reason="Re-entry after Closed is the FOM's · opens a new pass · not in the backend yet (the prototype files it under BE-42)"
-          >
+          <Button kind="quiet" compact state="inert">
             Re-enter…
           </Button>
+          <Help label="Not available yet">Re-entry after Closed is the FOM's · opens a new pass · not in the backend yet (the prototype files it under BE-42).</Help>
         </Live>
       }
     >

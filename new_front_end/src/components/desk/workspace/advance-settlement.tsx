@@ -20,6 +20,7 @@ import { countdownTo } from "@/lib/desk/timers";
 import { fmtDateTime, HOTEL_TZ_DEFAULT } from "@/lib/ds/format";
 import { hotelLocalToIso, isoToHotelLocal } from "@/components/ds/steps/s2-shared";
 import type { AdvancePaymentPlanSummary, EntryDetail, PaymentStatusSummary } from "@/types/api";
+import { Help } from "@/components/ds/help";
 
 /**
  * The advance-payment settlement surface (2026-08-07, operator request).
@@ -590,8 +591,8 @@ export function AdvanceSettlementBlock({
       <BlockH>
         <Banknote style={{ width: 13, height: 13 }} />
         {title}
+        {intro ? <Help label="About the advance">{intro}</Help> : null}
       </BlockH>
-      {intro && <p style={{ fontSize: 12, color: "var(--ink-3)", marginTop: 0, lineHeight: 1.5 }}>{intro}</p>}
 
       {status && (
         <div className="fact b-transit" style={{ marginBottom: 9, padding: "7px 11px", fontSize: 12.5, width: "100%", justifyContent: "space-between" }}>

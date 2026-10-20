@@ -48,6 +48,7 @@ import {
   type PaperRef,
 } from "./kit";
 import { WideDialog } from "./s6-shared";
+import { Help } from "@/components/ds/help";
 
 /* ------------------------------------------------------------------ vocabulary */
 
@@ -794,9 +795,10 @@ export function ChitsWaitingCard() {
     <StepCard title="Chits waiting">
       <span className="meta">Nothing waiting. When a till is integrated, its postings arrive here and the desk only accepts them.</span>
       <div className="row-acts" style={{ marginTop: 8 }}>
-        <Button kind="quiet" compact state="inert" reason="A tray of chits and till postings awaiting acceptance is not in the backend yet (BE-68) — key the paper chit through Post a charge">
+        <Button kind="quiet" compact state="inert">
           Key it in
         </Button>
+        <Help label="Not available yet">A tray of chits and till postings awaiting acceptance is not in the backend yet (BE-68) — key the paper chit through Post a charge.</Help>
       </div>
     </StepCard>
   );

@@ -52,6 +52,7 @@ import {
 } from "./kit";
 import { RoomsTableCard } from "./rooms-table";
 import { InlineTool, claimWord, distinctRoomRows, physicalWord, physicallyReady, revealBlock, roomLabel } from "./s6-shared";
+import { Help } from "@/components/ds/help";
 
 /* ------------------------------------------------------------------ vocabulary */
 
@@ -432,9 +433,10 @@ function useCheckInFacts({
           <Button kind="secondary" compact onClick={() => setRegistrationConfirmed(true)}>
             Confirm at the desk
           </Button>
-          <Button kind="quiet" compact state="inert" reason="the tablet card is not in the backend yet (BE-45)">
+          <Button kind="quiet" compact state="inert">
             Send to the tablet
           </Button>
+          <Help label="Not available yet">The tablet card is not in the backend yet (BE-45).</Help>
         </span>
       ) : undefined,
     });
@@ -653,17 +655,22 @@ function RegistrationCard({
             </label>
           )}
           <div className="row-acts" style={{ marginTop: 10 }}>
-            <Button kind="secondary" compact state="inert" reason="The registration card on a tablet is not in the backend yet (BE-45) — confirm it at the desk above">
+            <Button kind="secondary" compact state="inert">
               Send to the tablet
             </Button>
+            <Help label="Not available yet">The registration card on a tablet is not in the backend yet (BE-45) — confirm it at the desk above.</Help>
             {party > 1 ? (
-              <Button kind="quiet" compact state="inert" reason="One card per guest comes with the tablet card (BE-45)">
-                Next person
-              </Button>
+              <>
+                <Button kind="quiet" compact state="inert">
+                  Next person
+                </Button>
+                <Help label="Not available yet">One card per guest comes with the tablet card (BE-45).</Help>
+              </>
             ) : null}
-            <Button kind="quiet" compact icon="eye" state="inert" reason="The signed card as a paper is not in the backend yet (BE-45)">
+            <Button kind="quiet" compact icon="eye" state="inert">
               Preview the signed card
             </Button>
+            <Help label="Not available yet">The signed card as a paper is not in the backend yet (BE-45).</Help>
           </div>
         </Live>
       </StepCard>

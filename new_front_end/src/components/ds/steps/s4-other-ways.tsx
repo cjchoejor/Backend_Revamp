@@ -23,6 +23,7 @@ import { cancelEntryAtS3, cancelEntryAtS5, initiateS3ReEntryToS1 } from "@/lib/a
 import { fmtDay, fmtStamp, money } from "@/lib/ds/format";
 import type { EntryDetail } from "@/types/api";
 import { DsDialog, ReasonDialog, atLeast, toastRefusal, useRefreshEntry, OtherWaysTabs, InlineWay, ShutWay, NotNow, parkTab, type OtherWayTab } from "./kit";
+import { Help } from "@/components/ds/help";
 
 
 type EntryScalars = { noShowCutoffReachedAt?: string | null };
@@ -370,9 +371,11 @@ function NoShowDialog({ entry, cutoffAt, onClose }: { entry: EntryDetail; cutoff
           </select>
         </div>
         <div className="wide field">
-          <label>What they said · optional</label>
+          <label>
+            What they said · optional
+            <Help label="About the attempt">The attempt is stamped with the time you add it.</Help>
+          </label>
           <input className="input" value={response} onChange={(e) => setResponse(e.target.value)} placeholder="'we missed the flight'" />
-          <span className="hint">the attempt is stamped with the time you add it</span>
         </div>
       </div>
       <div className="row-acts">
