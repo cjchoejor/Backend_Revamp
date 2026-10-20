@@ -368,14 +368,17 @@ function MasterBill({ entry, tz, onTab }: { entry: EntryDetail; tz: string; onTa
       .then(() => refresh())
       .catch((e) => toastRefusal(e, "The master bill could not be printed"));
   };
-  const meta = frozen
-    ? `Statement — not a tax invoice · frozen when the bill was settled${doc?.frozenAt ? `, ${fmtStamp(doc.frozenAt, tz)}` : ""}${doc?.reprintCount != null ? ` · printed ${plural(doc.reprintCount, "time")}` : ""}`
-    : `Statement — not a tax invoice · as at ${index.data ? fmtStamp(index.data.asAt, tz) : "now"}`;
+  // The facts stay on screen; what the paper is goes behind the card's "?".
+  const status = frozen
+    ? `Frozen when the bill was settled${doc?.frozenAt ? `, ${fmtStamp(doc.frozenAt, tz)}` : ""}${doc?.reprintCount != null ? ` · printed ${plural(doc.reprintCount, "time")}` : ""}`
+    : `As at ${index.data ? fmtStamp(index.data.asAt, tz) : "now"}`;
+  const meta = "A statement — not a tax invoice.";
 
   return (
     <StepCard
       title="Master bill · reviewed with the guest"
       meta={meta}
+      status={status}
       acts={
         <>
           <Button
