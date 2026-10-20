@@ -501,7 +501,10 @@ entriesRouter.get("/:id/billing-summary", requireActorLevel("L1"), async (req, r
  */
 entriesRouter.get("/:id/rate-reference", requireActorLevel("L1"), async (req, res, next) => {
   try {
-    res.json(await buildEntryRateReference(prisma, req.params.id));
+    // `?rooms=a,b` adds rooms the booking does not hold yet, so their own types' rates are named
+    // (2026-10-19: the room-change panel's table listed only the booking's current type).
+    const rooms = typeof req.query.rooms === "string" ? req.query.rooms.split(",").map((s) => s.trim()).filter(Boolean).slice(0, 50) : [];
+    res.json(await buildEntryRateReference(prisma, req.params.id, rooms.length ? { planRoomIds: rooms } : undefined));
   } catch (e) {
     next(e);
   }
@@ -531,13 +534,27 @@ entriesRouter.get("/:id/competing-claims", requireActorLevel("L1"), async (req, 
  */
 entriesRouter.post("/:id/quotation-preview", requireActorLevel("L1"), async (req, res, next) => {
   try {
-    const body = req.body as { roomCompositions?: unknown; discount?: unknown };
+    const body = req.body as { roomCompositions?: unknown; discount?: unknown; roomNights?: unknown };
     res.setHeader("Cache-Control", "no-store");
+    const roomCompositions = Array.isArray(body?.roomCompositions) ? (body.roomCompositions as Array<{ roomId?: unknown }>) : [];
+    // Each room prices at its own type's rate even when the booking does not hold it yet (the
+    // room-change panel), and for the nights the desk says it takes — a count from 1 to 366.
+    const roomNights = new Map<string, number>();
+    if (body?.roomNights && typeof body.roomNights === "object" && !Array.isArray(body.roomNights)) {
+      for (const [rid, n] of Object.entries(body.roomNights as Record<string, unknown>)) {
+        if (typeof n === "number" && Number.isInteger(n) && n >= 1 && n <= 366) roomNights.set(rid, n);
+      }
+    }
     res.json(
-      await buildQuotationPreview(prisma, req.params.id, {
-        roomCompositions: Array.isArray(body?.roomCompositions) ? (body.roomCompositions as never[]) : [],
-        discount: (body?.discount ?? null) as never,
-      }),
+      await buildQuotationPreview(
+        prisma,
+        req.params.id,
+        { roomCompositions: roomCompositions as never[], discount: (body?.discount ?? null) as never },
+        {
+          planRoomIds: roomCompositions.map((c) => c.roomId).filter((id): id is string => typeof id === "string"),
+          ...(roomNights.size ? { roomNights } : {}),
+        },
+      ),
     );
   } catch (e) {
     next(e);

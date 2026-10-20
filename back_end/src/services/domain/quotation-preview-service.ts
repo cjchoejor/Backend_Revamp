@@ -200,6 +200,12 @@ export async function buildQuotationPreview(
     stayOverride?: { checkIn: Date; checkOut: Date; perRoomNightCounts: Map<string, number> };
     /** Rooms the booking does not hold yet whose rates must resolve (a room move, 2026-10-12). */
     planRoomIds?: string[];
+    /**
+     * The nights each listed room is priced for, over the booking's own (2026-10-19): the
+     * room-change panel prices rooms picked night by night that the booking does not hold yet,
+     * which otherwise priced for the whole stay each.
+     */
+    roomNights?: Map<string, number>;
   },
 ): Promise<QuotationPreview> {
   const entry = await prisma.entry.findUnique({
@@ -279,6 +285,7 @@ export async function buildQuotationPreview(
       }
     }
   }
+  for (const [rid, n] of opts?.roomNights ?? []) perRoomNightCounts.set(rid, n);
 
   const dec = (v: number | null | undefined): Prisma.Decimal => new Prisma.Decimal(v ?? 0);
 
