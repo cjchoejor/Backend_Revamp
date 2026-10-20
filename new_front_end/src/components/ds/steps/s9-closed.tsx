@@ -200,8 +200,10 @@ function WhatTheStayWas({ entry }: { entry: EntryDetail }) {
       <div style={{ marginTop: 12 }}>
         <BillByPart billing={billing.data} loading={billing.isLoading} totalOnly />
       </div>
-      <p className="meta" style={{ marginTop: 6 }}>
-        By category — rooms, food and drink, services — the master bill shows it; the figures by category are not served to the desk yet ·{" "}
+      <p className="sm" style={{ marginTop: 6 }}>
+        <Help label="About the bill by category">
+          By category — rooms, food and drink, services — the master bill shows it; the figures by category are not served to the desk yet.
+        </Help>{" "}
         {entry.folio ? (
           <a
             href="#"
@@ -367,10 +369,7 @@ function AfterTheStay({ entry, tz, close }: { entry: EntryDetail; tz: string; cl
           {ps.creditExtensionExpired && !ps.creditExtensionActive ? " — the date has passed" : ""}
         </span>
       ) : null}
-      <span className="meta" title="The account's own payment terms and ageing are not in the backend yet (BE-71)">
-        {" "}
-        · terms not tracked yet
-      </span>
+      <Help label="About payment terms">The account&rsquo;s own payment terms and ageing are not in the backend yet (BE-71).</Help>
     </>
   ) : (
     FOLIO_STATE_WORD[folio.state] ?? words(folio.state)
@@ -496,13 +495,26 @@ function AfterTheStay({ entry, tz, close }: { entry: EntryDetail; tz: string; cl
           </Fact>
         ) : null}
         <Fact k="Set off by the close">
-          {noShow
-            ? sealed
-              ? "the record sealed read-only · the no-show charge invoiced · retention handed to the system — a no-show is not asked for feedback"
-              : "closing seals the record read-only and invoices the no-show charge, unless a tax invoice was issued and sent first — issue and send one below to email it"
-            : sealed
-              ? "the record sealed read-only · the rooms released to housekeeping · feedback, payment follow-up and retention handed to the system"
-              : "closing seals the record read-only and hands feedback, payment follow-up and retention to the system"}
+          {noShow ? (
+            sealed ? (
+              "the record sealed read-only · the no-show charge invoiced · retention handed to the system — a no-show is not asked for feedback"
+            ) : (
+              <>
+                the seal · the no-show charge&rsquo;s invoice
+                <Help label="About closing">
+                  Closing seals the record read-only and invoices the no-show charge, unless a tax invoice was issued and sent first — issue and
+                  send one below to email it.
+                </Help>
+              </>
+            )
+          ) : sealed ? (
+            "the record sealed read-only · the rooms released to housekeeping · feedback, payment follow-up and retention handed to the system"
+          ) : (
+            <>
+              the seal · feedback · payment follow-up · retention
+              <Help label="About closing">Closing seals the record read-only and hands feedback, payment follow-up and retention to the system.</Help>
+            </>
+          )}
         </Fact>
         {commissions.length || followUps.length ? (
           <Fact k="Follow-up">
@@ -527,7 +539,8 @@ function AfterTheStay({ entry, tz, close }: { entry: EntryDetail; tz: string; cl
             {h5Open ? (
               <div style={{ display: "grid", gap: 6 }}>
                 <span>
-                  {HANDOFF_STATE_WORD[h5.state] ?? words(h5.state)} <span className="meta">· done once the money is matched, written off, or nothing is left to do</span>
+                  {HANDOFF_STATE_WORD[h5.state] ?? words(h5.state)}
+                  <Help label="About the last handoff">Done once the money is matched, written off, or nothing is left to do.</Help>
                 </span>
                 <Live>
                   <div className="row-acts">
@@ -819,6 +832,7 @@ function RecordPayment({
       onClose={onClose}
       title="Record a payment"
       caseLines={[<b key="p">{payer}</b>, outstanding != null ? `${money(outstanding, currency)} still owed` : entry.id]}
+      help="Reconciled means the invoice's money is matched and nothing more is chased." 
       busy={busy}
       footer={
         <>
@@ -861,7 +875,10 @@ function RecordPayment({
           </select>
         </div>
         <div className="field">
-          <label>Received · Nu.</label>
+          <label>
+            Received · Nu.
+            <Help label="About the amount">What is still owed, unless you type less.</Help>
+          </label>
           <input
             className="input money"
             inputMode="decimal"
@@ -872,7 +889,6 @@ function RecordPayment({
               setAmount(e.target.value);
             }}
           />
-          <span className="hint">what is still owed, unless you type less</span>
         </div>
         <div className="field">
           <label>How it came in</label>
@@ -889,7 +905,6 @@ function RecordPayment({
           <input className="input" value={ref} disabled={answerPending} placeholder="the transaction reference" onChange={(e) => setRef(e.target.value)} />
         </div>
       </div>
-      <p className="meta">Reconciled means the invoice&rsquo;s money is matched and nothing more is chased.</p>
     </DsDialog>
   );
 }
@@ -1002,6 +1017,7 @@ function LateCharge({ entry, open, onClose }: { entry: EntryDetail; open: boolea
       onClose={onClose}
       title="A charge found after departure"
       caseLines={[entry.id]}
+      help="A late chit, a minibar count, damage found after the room was turned. It posts to the bill with its service charge and GST, and a notice is emailed to whoever pays it; the record is not re-opened." 
       busy={run.isPending}
       footer={
         <>
@@ -1019,10 +1035,6 @@ function LateCharge({ entry, open, onClose }: { entry: EntryDetail; open: boolea
         </>
       }
     >
-      <p className="sm">
-        A late chit, a minibar count, damage found after the room was turned. It posts to the bill with its service charge and GST, and a notice is
-        emailed to whoever pays it; the record is not re-opened.
-      </p>
       <div className="form2">
         <div className="field">
           <label>What it is</label>
@@ -1053,6 +1065,7 @@ function OneDoorBackIn() {
   return (
     <StepCard
       title="One door back in"
+      meta="Anything else — a correction, a dispute raised weeks later, a change of dates for a return — is a governed re-entry: the FOM's authority, a reason, and a new pass the history shows as such. The rail's Re-enter menu lists what the backend allows at each step; after Check-out it offers nothing yet."
       acts={
         <Live>
           <Button kind="quiet" compact state="inert">
@@ -1062,10 +1075,7 @@ function OneDoorBackIn() {
         </Live>
       }
     >
-      <p className="sm">
-        Anything else — a correction, a dispute raised weeks later, a change of dates for a return — is a <b>governed re-entry</b>: the FOM&rsquo;s authority, a reason, and a new pass the history shows as such. Nothing on a closed booking is ever edited in place.
-      </p>
-      <p className="meta">The rail&rsquo;s Re-enter menu lists what the backend allows at each step; after Check-out it offers nothing yet.</p>
+      <p className="sm">Nothing on a closed booking is ever edited in place.</p>
     </StepCard>
   );
 }
