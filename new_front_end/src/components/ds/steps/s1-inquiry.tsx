@@ -71,6 +71,7 @@ import { CHANNEL_OPTIONS, PartySearch, cameInAsOf, channelDef, type ChannelKey }
 import { TheCaller, WrapUp } from "./s1-caller";
 import { PickBill, usePickPricing, type BillNight } from "./s1-bill";
 import { usePublishPriceDraft } from "@/lib/ds/stay-price";
+import { Help, HelpHere } from "@/components/ds/help";
 import type { PickPricing } from "@/lib/api/availability";
 
 /* ------------------------------------------------------------------ vocabulary */
@@ -354,9 +355,11 @@ function WhoIsAsking({
     >
       <div className="form2">
         <div className="wide field">
-          <label>Came in as</label>
+          <label>
+            Came in as
+            <Help label="About Came in as">It decides what the rest of this section asks for.</Help>
+          </label>
           <Choice options={CHANNEL_OPTIONS} value={d.came} disabled={!editable || save.isPending} onChange={pickCame} />
-          <span className="hint">{editable ? "it decides what the rest of this section asks for" : "as recorded"}</span>
         </div>
         {partyKind ? (
           editable ? (
@@ -395,7 +398,12 @@ function WhoIsAsking({
           </>
         ) : null}
         <div className="field">
-          <label>Rate package</label>
+          <label>
+            Rate package
+            <Help label="About the rate package">
+              {d.party ? "The party's own rates — the room and the meal plans." : "A walk-in is priced from the house's published rates."}
+            </Help>
+          </label>
           {editable && d.party && pkgItems.length ? (
             <select className="input" value={d.pkg ?? ""} onChange={(e) => setD((x) => ({ ...x, pkg: e.target.value || null }))}>
               {pkgOnRecordListed ? null : <option value={d.pkg ?? ""}>a package no longer listed (on record)</option>}
@@ -410,22 +418,25 @@ function WhoIsAsking({
           ) : (
             <input className="input" readOnly value={pkgWord} />
           )}
-          <span className="hint">{d.party ? "the party's rates — the room and the meal plans" : "a walk-in is priced from the house's published rates"}</span>
         </div>
         <div className="field">
-          <label>Meal plans priced</label>
+          <label>
+            Meal plans priced
+            <Help label="About meal plans">Each room&rsquo;s plan is chosen at Negotiation.</Help>
+          </label>
           <input className="input" readOnly value={plans || (d.party ? "none in the package" : "from the house tariff")} />
-          <span className="hint">each room&rsquo;s plan is chosen at Negotiation</span>
         </div>
         <div className="wide field">
-          <label>What kind of stay</label>
+          <label>
+            What kind of stay
+            {editable ? <Help label="About the kind of stay">Saved as soon as it is picked.</Help> : null}
+          </label>
           <Choice
             options={KINDS_OF_STAY}
             value={entry.useType as (typeof KINDS_OF_STAY)[number][0] | null}
             disabled={!editable || setUse.isPending}
             onChange={(v) => v !== entry.useType && setUse.mutate(v)}
           />
-          {editable ? <span className="hint">saved as soon as it is picked</span> : null}
         </div>
       </div>
       {editable ? (
@@ -668,7 +679,14 @@ function TheStay({
           />
         </div>
         <div className="field">
-          <label>Rooms</label>
+          <label>
+            Rooms
+            <Help label="About the room count">
+              {env
+                ? `A count — at least ${env.allowedRoomCounts.min}, at most ${env.allowedRoomCounts.max} for ${plural(env.chargeableOccupants, "chargeable guest")}. The room type is ours to pick.`
+                : "A count — the room type is ours to pick."}
+            </Help>
+          </label>
           <input
             className="input"
             inputMode="numeric"
@@ -676,19 +694,23 @@ function TheStay({
             readOnly={ro}
             onChange={(e) => set({ rooms: e.target.value.replace(/\D/g, "") })}
           />
-          <span
-            className={`hint${env && roomsN < env.allowedRoomCounts.min ? " warn-ink" : ""}`}
-          >
-            {env
-              ? env.exceedsHotelCapacity
+          {env && (env.exceedsHotelCapacity || roomsN < env.allowedRoomCounts.min) ? (
+            <span className="hint warn-ink">
+              {env.exceedsHotelCapacity
                 ? `${plural(env.chargeableOccupants, "chargeable guest")} — more than the hotel can sleep`
-                : `a count · at least ${env.allowedRoomCounts.min}, at most ${env.allowedRoomCounts.max} for ${plural(env.chargeableOccupants, "chargeable guest")}`
-              : "a count · the category is ours to pick"}
-          </span>
+                : `at least ${plural(env.allowedRoomCounts.min, "room")} for ${plural(env.chargeableOccupants, "chargeable guest")}`}
+            </span>
+          ) : null}
         </div>
         {childN > 0 ? (
           <div className="wide field">
-            <label>Their age{childN === 1 ? "" : "s"}</label>
+            <label>
+              Their age{childN === 1 ? "" : "s"}
+              <Help label="About children's ages">
+                The age decides the bed and the rate: under {young + 1} free, {young + 1}–{childMax} at the child rate,{" "}
+                {childMax + 1}–{minAdult - 1} charged as adults.
+              </Help>
+            </label>
             <div className="row-acts">
               {ages.map((a, i) => (
                 <input
@@ -706,26 +728,25 @@ function TheStay({
                 />
               ))}
             </div>
-            <span
-              className={`hint${agesNum.some((n) => n > childMax) ? " warn-ink" : ""}`}
-            >
-              the age decides the bed and the rate · under {young + 1} free ·{" "}
-              {young + 1}–{childMax} at the child rate · {childMax + 1}–
-              {minAdult - 1} charged as adults
-              {agesNum.some((n) => n > childMax)
-                ? ` — ${ages
-                    .map((x, i) =>
-                      Number(x) > childMax ? `child ${i + 1}` : null,
-                    )
-                    .filter(Boolean)
-                    .join(", ")} at the adult rate`
-                : ""}
-            </span>
+            {agesNum.some((n) => n > childMax) ? (
+              <span className="hint warn-ink">
+                {ages
+                  .map((x, i) => (Number(x) > childMax ? `Child ${i + 1}` : null))
+                  .filter(Boolean)
+                  .join(", ")}{" "}
+                at the adult rate
+              </span>
+            ) : null}
           </div>
         ) : null}
         {bedTypes.length ? (
           <div className="wide field">
-            <label>Beds asked for · optional</label>
+            <label>
+              Beds asked for · optional
+              <Help label="About the beds asked for">
+                A tally — which room is which is settled on the table at Negotiation. Here the house secures enough rooms that can take them.
+              </Help>
+            </label>
             <div className="row-acts">
               {bedTypes.map((t) => (
                 <span key={t} className="chip count-in">
@@ -748,10 +769,6 @@ function TheStay({
                 </span>
               ))}
             </div>
-            <span className="hint">
-              a tally — which room is which is settled on the table at Negotiation; here the house
-              secures enough rooms that can take them
-            </span>
           </div>
         ) : null}
       </div>
@@ -810,7 +827,7 @@ function TheStay({
           <Button kind="quiet" onClick={() => setF(seed())}>
             Undo
           </Button>
-          <span className="meta">the house is asked again after a change</span>
+          <Help label="About saving the stay">The house is asked again after a change.</Help>
         </div>
       ) : null}
     </StepCard>
@@ -1200,6 +1217,7 @@ function TheHouse({
         title={
           hasResults || entry.checkInDate ? `The house · ${range}` : "The house"
         }
+        meta="Ask the house — the free rooms for these dates, and what they cost, appear here while you are still on the phone."
         acts={
           editable ? (
             hasResults ? (
@@ -1255,11 +1273,7 @@ function TheHouse({
         }
       >
         {!hasResults ? (
-          <span className="meta">
-            {entry.checkInDate
-              ? "Ask the house — the free rooms for these dates appear here while you are still on the phone."
-              : "Put in the dates and the rooms — the answer appears here."}
-          </span>
+          entry.checkInDate ? null : <span className="meta">Put in the dates and the rooms first.</span>
         ) : (
           <>
             {chartNote ? (
@@ -1306,11 +1320,8 @@ function TheHouse({
                 pricing={bill.pricing}
                 loading={bill.loading}
                 title={billTitle}
-                caption={
-                  picked.length && !pickedSaved
-                    ? "Save the rooms to keep this choice — the figures follow every pick."
-                    : "Indicative, not a quote · meals, extra beds and any agreed rate are set at Negotiation."
-                }
+                caption={picked.length && !pickedSaved ? "Save the rooms to keep this choice — the figures follow every pick." : undefined}
+                help="Indicative, not a quote. Meals, extra beds and any agreed rate are set at Negotiation." 
               />
             ) : chosenPricing ? (
               <div style={{ marginTop: 10 }}>
@@ -1362,9 +1373,10 @@ function TheHouse({
               </div>
             ) : (
               <div className="meta" style={{ marginTop: 8 }}>
-                No rooms chosen yet · Take it chooses{" "}
-                {plural(numberOfRooms, "room")} of the marked type, free on
-                every night
+                No rooms chosen yet
+                <Help label="About Take it">
+                  Take it chooses {plural(numberOfRooms, "room")} of the marked type, free on every night.
+                </Help>
               </div>
             )}
             {duplicates > 0 ? (
@@ -1803,22 +1815,17 @@ function WhichRooms({
               {r.blockedReason ? ` — ${r.blockedReason}` : ""}
             </span>
           ))}
-          <span className="meta">
-            {isGm
-              ? "Double-click a held or blocked night to release it."
-              : "A GM can release a held or blocked room."}
-          </span>
+          <HelpHere label="About releasing a room">
+            {isGm ? "Double-click a held or blocked night to release it." : "A GM can release a held or blocked room."}
+          </HelpHere>
         </div>
       ) : null}
       {!full ? (
-        <p className="meta" style={{ marginTop: 10 }}>
+        <HelpHere label="How to pick rooms in this table">
           Click a room&rsquo;s number to use it for the whole stay
-          {displayNights.length > 1
-            ? "; click one night to change only that night"
-            : ""}
-          . Nothing is recorded until you save. A room with a fault can be
-          chosen — the acknowledgement is recorded with the save.
-        </p>
+          {displayNights.length > 1 ? "; click one night to change only that night" : ""}. Nothing is recorded until you save. A room
+          with a fault can be chosen — the acknowledgement is recorded with the save.
+        </HelpHere>
       ) : null}
       <ReleaseDialog
         target={release}

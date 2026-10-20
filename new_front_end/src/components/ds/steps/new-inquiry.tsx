@@ -67,6 +67,7 @@ import {
   type GateLine,
   type UseTypeKey,
 } from "./new-inquiry-parts";
+import { Help } from "@/components/ds/help";
 
 /**
  * The prototype's final pass draws this screen without the journey rail (`ws-body norail`, and
@@ -622,10 +623,10 @@ export function NewInquiryCanvas() {
             <Icon name="chev" /> Back to Bookings
           </Link>
           <div className="who">
-            <h2 className="ink-2">New inquiry</h2>
-          </div>
-          <div className="facts">
-            <span className="meta">There is no other way to see whether rooms are free: looking is recording. The lead is kept — taken or not.</span>
+            <h2 className="ink-2">
+              New inquiry
+              <Help label="About a new inquiry">There is no other way to see whether rooms are free: looking is recording. The lead is kept — taken or not.</Help>
+            </h2>
           </div>
         </div>
         <div className="total">
@@ -705,25 +706,34 @@ export function NewInquiryCanvas() {
                           }}
                         />
                         <b>OTA booking</b>
-                        <span className="meta">— it comes through the OTA, so the phone and email can wait</span>
+                        <Help label="About an OTA booking">It comes through the OTA, so the phone and email can wait.</Help>
                       </label>
                       <div className="field">
-                        <label>Phone</label>
+                        <label>
+                          Phone
+                          <Help label="About the phone">Typing it finds a guest already on file.</Help>
+                        </label>
                         <PhoneInput code={phoneCode} setCode={setPhoneCode} number={phoneNumber} setNumber={setPhoneNumber} />
-                        <span className={`hint${!callerReachable ? " warn-ink" : ""}`}>
-                          {callerReachable ? "typing it finds a guest already on file" : "a phone or an email is needed to start"}
-                        </span>
+                        {!callerReachable ? <span className="hint warn-ink">a phone or an email is needed to start</span> : null}
                       </div>
                       <div className="field">
-                        <label>Email</label>
+                        <label>
+                          Email
+                          <Help label="About the email">Optional when there is a phone.</Help>
+                        </label>
                         <input className="input" type="email" value={email} placeholder="name@example.com" onChange={(e) => setEmail(e.target.value)} />
-                        <span className={`hint${emailBad ? " stop-ink" : !callerReachable ? " warn-ink" : ""}`}>
-                          {emailBad ? "that does not read as an email address" : callerReachable ? "optional when there is a phone" : "or the email"}
-                        </span>
+                        {emailBad ? (
+                          <span className="hint stop-ink">that does not read as an email address</span>
+                        ) : !callerReachable ? (
+                          <span className="hint warn-ink">or the email</span>
+                        ) : null}
                       </div>
                       {fullPhone ? (
                         <div className="wide field">
-                          <label>On WhatsApp?</label>
+                          <label>
+                            On WhatsApp?
+                            <Help label="About WhatsApp">The quote and the confirmation can go there.</Help>
+                          </label>
                           <Choice
                             options={[
                               ["YES", "Yes"],
@@ -732,9 +742,7 @@ export function NewInquiryCanvas() {
                             value={onWhatsApp === null ? null : onWhatsApp ? "YES" : "NO"}
                             onChange={(v) => setOnWhatsApp(v === "YES")}
                           />
-                          <span className={`hint${onWhatsApp === null ? " warn-ink" : ""}`}>
-                            {onWhatsApp === null ? "ask — the quote and the confirmation can go there" : "the quote and the confirmation can go there"}
-                          </span>
+                          {onWhatsApp === null ? <span className="hint warn-ink">ask them</span> : null}
                         </div>
                       ) : null}
                       {phoneMatches.length > 0 ? (
@@ -751,7 +759,8 @@ export function NewInquiryCanvas() {
                             <Icon name="check" /> <GuestLine guest={selectedGuest} />
                           </span>
                           <div className="row-acts">
-                            <span className="meta">on file — taken as the guest staying; Wrap up can name someone else</span>
+                            <span className="meta">on file — taken as the guest staying</span>
+                            <Help label="About the guest on file">Wrap up can name someone else.</Help>
                             <Button kind="quiet" compact onClick={() => setSelectedGuest(null)}>
                               Not this guest
                             </Button>
@@ -799,13 +808,12 @@ export function NewInquiryCanvas() {
                 >
                   <div className="form2">
                     <div className="wide field">
-                      <label>Came in as</label>
+                      <label>
+                        Came in as
+                        <Help label="About Came in as">It decides what the rest of this form asks for.</Help>
+                      </label>
                       <Choice options={CHANNEL_OPTIONS} value={channelKey} onChange={pickChannel} />
-                      <span className={`hint${!channelKey ? " warn-ink" : ""}`}>
-                        {channelKey
-                            ? "it decides what the rest of this form asks for"
-                            : "pick one — it decides what the rest of this form asks for"}
-                      </span>
+                      {!channelKey ? <span className="hint warn-ink">pick one</span> : null}
                     </div>
 
                     {partyKind ? (
@@ -856,7 +864,10 @@ export function NewInquiryCanvas() {
                         </span>
                       </div>
                       <div className="field">
-                        <label>Meal plans priced</label>
+                        <label>
+                          Meal plans priced
+                          <Help label="About meal plans">Each room&rsquo;s plan is chosen at Negotiation.</Help>
+                        </label>
                         <input
                           className="input"
                           readOnly
@@ -875,7 +886,6 @@ export function NewInquiryCanvas() {
                                 : "from the house tariff"
                           }
                         />
-                        <span className="hint">each room&rsquo;s plan is chosen at Negotiation</span>
                       </div>
                       </>
                     ) : null}
@@ -883,7 +893,10 @@ export function NewInquiryCanvas() {
                     {needsCorp ? (
                       <>
                         <div className="field">
-                          <label>Their PO or authorisation</label>
+                          <label>
+                            Their PO or authorisation
+                            <Help label="About the PO">The company is billed on it.</Help>
+                          </label>
                           {party && (party.contractRefs ?? []).length > 0 ? (
                             <select className="input" value={corpRef} onChange={(e) => setCorpRef(e.target.value)}>
                               <option value="">— pick their reference —</option>
@@ -896,10 +909,17 @@ export function NewInquiryCanvas() {
                           ) : (
                             <input className="input" value={corpRef} placeholder="PO, account or authorisation" onChange={(e) => setCorpRef(e.target.value)} />
                           )}
-                          <span className={`hint${corpRef.trim() ? "" : " warn-ink"}`}>needed — the company is billed on it</span>
+                          {corpRef.trim() ? null : <span className="hint warn-ink">needed</span>}
                         </div>
                         <div className="field">
-                          <label>Their coordinator</label>
+                          <label>
+                            Their coordinator
+                            <Help label="About the coordinator">
+                              {party && ((party.contractRefs ?? []).length > 0 || (party.coordinators ?? []).length > 0)
+                                ? `From ${party.displayName}'s account — kept there by Admin.`
+                                : "Who books for them."}
+                            </Help>
+                          </label>
                           {party && (party.coordinators ?? []).length > 0 ? (
                             <select className="input" value={corpCoordinator} onChange={(e) => setCorpCoordinator(e.target.value)}>
                               <option value="">— pick their coordinator —</option>
@@ -916,11 +936,7 @@ export function NewInquiryCanvas() {
                           ) : (
                             <input className="input" value={corpCoordinator} placeholder="who books for them" onChange={(e) => setCorpCoordinator(e.target.value)} />
                           )}
-                          <span className={`hint${corpCoordinator.trim() ? "" : " warn-ink"}`}>
-                            {party && ((party.contractRefs ?? []).length > 0 || (party.coordinators ?? []).length > 0)
-                              ? `from ${party.displayName}'s account · kept there by Admin`
-                              : "needed — who books for them"}
-                          </span>
+                          {corpCoordinator.trim() ? null : <span className="hint warn-ink">needed</span>}
                         </div>
                       </>
                     ) : null}
@@ -935,7 +951,7 @@ export function NewInquiryCanvas() {
                       {useType === "APARTMENT" ? (
                         <span className="hint warn-ink">an apartment needs its nights and rate tier before Negotiation — those are not on the desk yet</span>
                       ) : useType === "CONFERENCE" ? (
-                        <span className="hint">the hall and its seating are added on the booking</span>
+                        <Help label="About a conference">The hall and its seating are added on the booking.</Help>
                       ) : null}
                     </div>
                   </div>
@@ -976,13 +992,18 @@ export function NewInquiryCanvas() {
                           if (today && checkIn && checkIn < today) setCheckIn(today);
                         }}
                       />
-                      <span className={`hint${dateProblem ? " warn-ink" : ""}`}>
-                        {dateProblem ?? (today ? "from today at the hotel" : "checking today's date at the hotel…")}
-                      </span>
+                      {dateProblem ? (
+                        <span className="hint warn-ink">{dateProblem}</span>
+                      ) : !today ? (
+                        <span className="hint">checking today&rsquo;s date at the hotel…</span>
+                      ) : null}
                     </div>
                     {/* The nights sit between the two dates, as on the boss's mockup (2026-10-10). */}
                     <div className="field">
-                      <label>Nights</label>
+                      <label>
+                        Nights
+                        <Help label="About nights">The check-out follows.</Help>
+                      </label>
                       <input
                         className="input"
                         inputMode="numeric"
@@ -990,7 +1011,6 @@ export function NewInquiryCanvas() {
                         placeholder="1"
                         onChange={(e) => setNights(digits(e.target.value))}
                       />
-                      <span className="hint">the check-out follows</span>
                     </div>
                     <div className="field">
                       <label>Check-out</label>
@@ -1017,17 +1037,26 @@ export function NewInquiryCanvas() {
                       {adultsN < 1 ? <span className="error">at least one adult</span> : null}
                     </div>
                     <div className="field">
-                      <label>Children</label>
+                      <label>
+                        Children
+                        <Help label="About children">Under {policy ? minAdult : "the adult age"}.</Help>
+                      </label>
                       <input
                         className="input"
                         inputMode="numeric"
                         value={children}
                         onChange={(e) => setChildren(digits(e.target.value, 2))}
                       />
-                      <span className="hint">under {policy ? minAdult : "the adult age"}</span>
                     </div>
                     <div className="field">
-                      <label>Rooms</label>
+                      <label>
+                        Rooms
+                        <Help label="About the room count">
+                          {envelope
+                            ? `A count — ${roomRange.min === roomRange.max ? roomRange.min : `${roomRange.min}–${roomRange.max}`} for ${plural(envelope.chargeableOccupants, "chargeable guest")}, up to ${envelope.maxCapacityUsed} a room. The room type is ours to pick.`
+                            : "A count — the room type is ours to pick."}
+                        </Help>
+                      </label>
                       <select
                         className="input"
                         value={rooms}
@@ -1051,15 +1080,11 @@ export function NewInquiryCanvas() {
                           {plural(envelope.hotelRoomCount, "room")} sleep at most {envelope.hotelMaxOccupants}. Make the party smaller or split the booking.
                         </span>
                       ) : (
-                        <span className="hint">
-                          {envelope
-                            ? `a count · ${roomRange.min === roomRange.max ? roomRange.min : `${roomRange.min}–${roomRange.max}`} for ${plural(envelope.chargeableOccupants, "chargeable guest")}, up to ${envelope.maxCapacityUsed} a room · the category is ours to pick`
-                            : adultsN < 1
-                              ? "a count · put in the adults first"
-                              : !agesComplete
-                                ? "a count · put in every child's age first"
-                                : "a count · the category is ours to pick"}
-                        </span>
+                        envelope ? null : adultsN < 1 ? (
+                          <span className="hint">put in the adults first</span>
+                        ) : !agesComplete ? (
+                          <span className="hint">put in every child&rsquo;s age first</span>
+                        ) : null
                       )}
                     </div>
                     {childN > 0 ? (
@@ -1112,7 +1137,12 @@ export function NewInquiryCanvas() {
                     </div>
                     {bedOptions.length ? (
                       <div className="wide field">
-                        <label>Beds asked for · optional</label>
+                        <label>
+                          Beds asked for · optional
+                          <Help label="About the beds asked for">
+                            A tally — which room is which is settled on the table at Negotiation, where it is shared out from this ask.
+                          </Help>
+                        </label>
                         <div className="row-acts">
                           {bedOptions.map(({ type, count }) => (
                             <span
@@ -1146,21 +1176,21 @@ export function NewInquiryCanvas() {
                             <Icon name="alert" />
                             The beds add up to {plural(bedSum, "room")}, and the party allows at most {roomRange.max} — take some off or grow the party.
                           </span>
-                        ) : (
+                        ) : bedSum > 0 ? (
                           <span className="hint">
-                            {bedSum > 0
-                              ? bedSum === roomsN
-                                ? `adds up to ${plural(bedSum, "room")} — the room count · `
-                                : `${bedSum} of the ${plural(roomsN, "room")} have a bed setup asked; the rest are ours to pick · `
-                              : ""}
-                            a tally — which room is which is settled on the table at Negotiation, where it is shared out from this ask
+                            {bedSum === roomsN
+                              ? `adds up to ${plural(bedSum, "room")} — the room count`
+                              : `${bedSum} of the ${plural(roomsN, "room")} have a bed setup asked; the rest are ours to pick`}
                           </span>
-                        )}
+                        ) : null}
                       </div>
                     ) : null}
                   </div>
                   <div className="field" style={{ marginTop: 12 }}>
-                    <label>The guest&rsquo;s preference · optional</label>
+                    <label>
+                      The guest&rsquo;s preference · optional
+                      <Help label="About the preference">Kept on the booking, under Guest requests. Notes and to-dos go in its Notes tab.</Help>
+                    </label>
                     <textarea
                       className="input"
                       rows={2}
@@ -1169,7 +1199,6 @@ export function NewInquiryCanvas() {
                       placeholder="e.g. high floor, quiet room, honeymoon — allergic to nuts"
                       onChange={(e) => setNotes(e.target.value)}
                     />
-                    <span className="hint">kept on the booking, under Guest requests — notes and to-dos go in its Notes tab</span>
                   </div>
                   <div className="row-acts" style={{ marginTop: 10 }}>
                     <Button
@@ -1198,12 +1227,12 @@ export function NewInquiryCanvas() {
                 <StepCard
                   flow="house"
                   title={datesSet ? `The house · ${fmtRange(checkIn, checkOut)}` : "The house"}
+                  meta="The house is asked on the booking, where the free rooms for these dates and what they cost, night by night and for the stay, appear while you are still on the phone."
                   heldFor={
                     <>
-                      <b>{primaryLabel}</b> — the house is asked on the booking, where the free rooms for these dates and what they cost,
-                      night by night and for the stay, appear while you are still on the phone.
+                      <b>{primaryLabel}</b>
                       {nextUp ? (
-                        <span className="warn-ink"> Still to fill: {flowItems.filter((i) => !i.met).map((i) => `${i.n} ${i.label}`).join(" · ")}.</span>
+                        <span className="warn-ink"> · still to fill: {flowItems.filter((i) => !i.met).map((i) => `${i.n} ${i.label}`).join(" · ")}</span>
                       ) : null}
                     </>
                   }
@@ -1212,27 +1241,27 @@ export function NewInquiryCanvas() {
                 {/* ------------------------------------------------ wrap up */}
                 <StepCard
                   title="Wrap up"
-                  heldFor={
-                    <>
-                      the rooms are chosen on the booking — then it names the guest who is staying (the caller, or someone else), takes the
-                      caller&rsquo;s name if it was not given here, and who is arriving. A booking moves on to Negotiation only once the guest
-                      staying is named.
-                    </>
-                  }
+                  meta="Once the rooms are chosen on the booking, it names the guest who is staying (the caller, or someone else), takes the caller's name if it was not given here, and who is arriving. A booking moves on to Negotiation only once the guest staying is named."
+                  heldFor="the rooms are chosen on the booking" 
                 >
                   <div className="form2 rule-above">
                     <div className="field">
-                      <label>Who is arriving · name</label>
+                      <label>
+                        Who is arriving · name
+                        <Help label="About who is arriving">Who leads the party on the day.</Help>
+                      </label>
                       <input
                         className="input"
                         value={arrivingName}
                         placeholder={`blank — ${arrivingFallbackWord}`}
                         onChange={(e) => setArrivingName(e.target.value)}
                       />
-                      <span className="hint">who leads the party on the day</span>
                     </div>
                     <div className="field">
-                      <label>Their phone</label>
+                      <label>
+                        Their phone
+                        <Help label="About their phone">Needed before arrival.</Help>
+                      </label>
                       <input
                         className="input"
                         inputMode="tel"
@@ -1240,7 +1269,6 @@ export function NewInquiryCanvas() {
                         placeholder={arrivingFallbackPhone ? `blank — ${arrivingFallbackPhone}` : "+975 …"}
                         onChange={(e) => setArrivingPhone(e.target.value)}
                       />
-                      <span className="hint">needed before arrival</span>
                     </div>
                   </div>
                 </StepCard>

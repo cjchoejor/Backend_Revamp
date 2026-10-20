@@ -18,6 +18,7 @@
  * desk mirrors it only to say before the click what the click would be refused for.
  */
 import Link from "next/link";
+import { Help, HelpHere } from "@/components/ds/help";
 import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -116,29 +117,35 @@ export function TheCaller({ entry, editable }: { entry: EntryDetail; editable: b
           {inq.callerOnWhatsApp === true ? " · on WhatsApp" : inq.callerOnWhatsApp === false ? " · not on WhatsApp" : null}
           {email ? <> · {email}</> : null}
           {!phone && !email && isOta ? <> · OTA booking</> : null}
-          {name ? null : <span className="meta"> · the name is asked at Wrap up</span>}
+          {name ? null : <span className="meta"> · no name yet</span>}
         </>
       }
     >
       {old ? (
-        <p className="meta" style={{ marginBottom: 8 }}>
+        <HelpHere label="About this caller">
           Recorded before callers were kept — the guest&rsquo;s own details are shown; saving records them as the caller.
-        </p>
+        </HelpHere>
       ) : null}
       <div className="form2">
         <div className="field">
-          <label>Phone</label>
+          <label>
+            Phone
+            {reachable ? (
+              <Help label="About the phone">{isOta && !fullPhone ? "An OTA booking — the phone is optional." : "Where the caller can be rung back."}</Help>
+            ) : null}
+          </label>
           {editable ? (
             <PhoneInput code={f.code} setCode={(v) => set({ code: v })} number={f.number} setNumber={(v) => set({ number: v })} />
           ) : (
             <input className="input" readOnly value={phone ?? ""} placeholder="none given" />
           )}
-          <span className={`hint${!reachable ? " warn-ink" : ""}`}>
-            {reachable ? (isOta && !fullPhone ? "an OTA booking — optional" : "where the caller can be rung back") : "a phone or an email is needed"}
-          </span>
+          {!reachable ? <span className="hint warn-ink">a phone or an email is needed</span> : null}
         </div>
         <div className="field">
-          <label>Email</label>
+          <label>
+            Email
+            <Help label="About the email">Optional when there is a phone.</Help>
+          </label>
           <input
             className={`input${emailBad ? " invalid" : ""}`}
             type="email"
@@ -147,7 +154,7 @@ export function TheCaller({ entry, editable }: { entry: EntryDetail; editable: b
             placeholder="name@example.com"
             onChange={(e) => set({ email: e.target.value })}
           />
-          <span className={`hint${emailBad ? " stop-ink" : ""}`}>{emailBad ? "that does not read as an email address" : "optional when there is a phone"}</span>
+          {emailBad ? <span className="hint stop-ink">that does not read as an email address</span> : null}
         </div>
         {fullPhone ? (
           <div className="wide field">
@@ -395,12 +402,12 @@ export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; edita
             {choice === "CALLER" ? (
               <div className="form2" style={{ marginTop: 10 }}>
                 <div className="field">
-                  <label>Nationality</label>
+                  <label>
+                    Nationality
+                    <Help label="About the guest record">The guest record is made from the caller&rsquo;s name, phone and email.</Help>
+                  </label>
                   <PresetOrCustom presets={NATIONALITIES} value={nationality} onChange={setNationality} placeholder="type the nationality" otherLabel="Other…" ariaLabel="Nationality" />
                 </div>
-                <span className="hint" style={{ alignSelf: "end" }}>
-                  the guest record is made from the caller&rsquo;s name, phone and email
-                </span>
               </div>
             ) : choice === "FOUND" ? (
               <div style={{ display: "grid", gap: 8, marginTop: 10 }}>
@@ -478,9 +485,11 @@ export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; edita
           <input className="input" value={arrName} readOnly={!editable} placeholder="who leads the party on the day" onChange={(e) => setArrName(e.target.value)} />
         </div>
         <div className="field">
-          <label>Their phone</label>
+          <label>
+            Their phone
+            <Help label="About their phone">Needed before arrival.</Help>
+          </label>
           <input className="input" value={arrPhone} readOnly={!editable} placeholder="+975 …" onChange={(e) => setArrPhone(e.target.value)} />
-          <span className="hint">needed before arrival</span>
         </div>
       </div>
 

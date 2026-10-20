@@ -926,3 +926,7 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .desk-root .rct.ro .rct-t td:focus-within { outline: none; background: inherit; }
 .ds .desk-root .rct.ro .rct-t td input[type="text"] { cursor: default; pointer-events: none; }
 .ds .desk-root .rct.ro .rct-t td.ck input { cursor: default; }
+
+/* A lone "?" where an explanation paragraph used to be (2026-10-20). */
+.ds .help-here { display: flex; justify-content: flex-end; margin: 6px 0 0; }
+.ds label .help-q, .ds .field > label .help-q { margin-left: 6px; vertical-align: 1px; }

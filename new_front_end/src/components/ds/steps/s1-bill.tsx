@@ -11,6 +11,7 @@
  * also where the quotation prices it exactly.
  */
 import type { ReactNode } from "react";
+import { Help } from "@/components/ds/help";
 import { useQuery } from "@tanstack/react-query";
 import { useSession } from "@/hooks/use-session";
 import { pricePick, type PickPricing } from "@/lib/api/availability";
@@ -94,18 +95,25 @@ export function PickBill({
   loading,
   title,
   caption,
+  help,
 }: {
   pricing: PickPricing;
   loading?: boolean;
   title: ReactNode;
+  /** A message under the bill — something to act on. */
   caption?: ReactNode;
+  /** What the bill is, behind a "?" beside its title. */
+  help?: ReactNode;
 }) {
   const c = pricing.currency;
   const t = pricing.totals;
   return (
     <div className={`pickbill${loading ? " loading" : ""}`} aria-busy={loading || undefined}>
       <div className="pb-head">
-        <span className="pb-title">{title}</span>
+        <span className="pb-title">
+          {title}
+          {help ? <Help label="About this bill">{help}</Help> : null}
+        </span>
         <span className="pb-total money">{money(t.total, c)}</span>
         <span className="pb-sub">
           {plural(t.roomNights, "room-night")} · {plural(pricing.nights.length, "night")} · incl. {pct(pricing.serviceChargeRate)} service charge +{" "}

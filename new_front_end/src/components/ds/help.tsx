@@ -23,7 +23,10 @@
 import { createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
-const QuietCtx = createContext(false);
+// On by default since 2026-10-20 (operator: "make all of them into small question mark icons like
+// before, keep only the alerts and messages — all the sections, all the tabs, all the stages").
+// `QuietScreen on={false}` still turns it off for a part of the desk that needs the old form.
+const QuietCtx = createContext(true);
 
 /** Explanations behind a "?" for everything inside; only messages stay on screen. */
 export function QuietScreen({ on = true, children }: { on?: boolean; children: ReactNode }) {
@@ -33,6 +36,20 @@ export function QuietScreen({ on = true, children }: { on?: boolean; children: R
 /** Is this part of the desk showing explanations on request only? */
 export function useQuietScreen(): boolean {
   return useContext(QuietCtx);
+}
+
+/**
+ * An explanation with no title, label or button beside it (2026-10-20): a lone "?" at the right
+ * edge where the grey paragraph used to be. Outside a quiet screen it is the paragraph again.
+ */
+export function HelpHere({ children, label = "About this" }: { children: ReactNode; label?: string }) {
+  const quiet = useQuietScreen();
+  if (!quiet) return <p className="meta">{children}</p>;
+  return (
+    <div className="help-here">
+      <Help label={label}>{children}</Help>
+    </div>
+  );
 }
 
 const POP_WIDTH = 320;
