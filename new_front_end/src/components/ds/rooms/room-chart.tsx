@@ -155,10 +155,19 @@ type NightRoom = { roomId: string; roomNumber: string; nights: string[] };
 /** Nights picked with Alt-click — one booking; Alt+Ctrl-click adds another of its rooms (2026-10-15). */
 type NightSel = { entryId: string; name: string; rooms: NightRoom[] };
 /** "A night picked — Room 206 · 21 → 22 Oct" · "2 rooms' nights picked — 205 · 22 → 23 Oct · 206 · 22 → 23 Oct" */
-const nightRunWords = (r: NightRoom) => {
-  const n = [...r.nights].sort();
-  return fmtRange(n[0], shiftDay(n[n.length - 1], 1));
+/** Nights in runs that follow one another (2026-10-22: a room's picked nights may have gaps). */
+const nightRuns = (nights: string[]): string[][] => {
+  const out: string[][] = [];
+  for (const n of [...new Set(nights)].sort()) {
+    const last = out[out.length - 1];
+    if (last && shiftDay(last[last.length - 1], 1) === n) last.push(n);
+    else out.push([n]);
+  }
+  return out;
 };
+/** "21 → 22 Oct" · "25 → 26 Oct · 27 → 28 Oct" */
+const runsWords = (nights: string[]) => nightRuns(nights).map((run) => fmtRange(run[0], shiftDay(run[run.length - 1], 1))).join(" · ");
+const nightRunWords = (r: NightRoom) => runsWords(r.nights);
 const nightPickWords = (rooms: NightRoom[]) =>
   rooms.length === 1
     ? `${rooms[0].nights.length === 1 ? "A night" : `${rooms[0].nights.length} nights`} picked — Room ${rooms[0].roomNumber} · ${nightRunWords(rooms[0])}`
@@ -393,40 +402,42 @@ function landingBoxes(
     for (const p of plan.picks) {
       const row = wrap.querySelector<HTMLElement>(`tr[data-room-id="${p.to}"]`);
       if (!row) continue;
-      const moved = [...p.nights].sort().map((n) => shiftDay(n, shift));
-      const first = moved[0] < chart.from ? chart.from : moved[0];
-      const last = moved[moved.length - 1] > lastNightN ? lastNightN : moved[moved.length - 1];
-      if (first > last) continue;
-      const a = nightRectN.get(first);
-      const z = nightRectN.get(last);
-      if (!a || !z) continue;
+      // One copy per run of the room's nights — a gap between picked nights is not drawn as taken.
       const rr = row.getBoundingClientRect();
-      let left = a.left + 2;
-      let right = z.right - 2;
-      let cutL = moved[0] < chart.from;
-      let cutR = moved[moved.length - 1] > lastNightN;
-      if (left < clipLN) {
-        left = clipLN;
-        cutL = true;
-      }
-      if (right > clipRN) {
-        right = clipRN;
-        cutR = true;
-      }
-      const top = Math.max(rr.top + 3, clipTN);
-      const bottom = Math.min(rr.bottom - 3, clipBN);
-      if (right - left < 6 || bottom - top < 6) continue;
-      outN.push({
-        key: `night|${d.grabbed.entryId}|${p.roomId}`,
-        left,
-        top,
-        width: right - left,
-        height: bottom - top,
-        name: booking ? rowNameOf(booking) : "Booking",
-        note: shift !== 0 ? `${fmtRange(moved[0], shiftDay(moved[moved.length - 1], 1))}${p.to !== p.roomId ? ` · Room ${roomNoN(p.to)}` : ""}` : `Room ${roomNoN(p.to)}`,
-        cutL,
-        cutR,
-        swapped: false,
+      nightRuns(p.nights.map((n) => shiftDay(n, shift))).forEach((moved, ri) => {
+        const first = moved[0] < chart.from ? chart.from : moved[0];
+        const last = moved[moved.length - 1] > lastNightN ? lastNightN : moved[moved.length - 1];
+        if (first > last) return;
+        const a = nightRectN.get(first);
+        const z = nightRectN.get(last);
+        if (!a || !z) return;
+        let left = a.left + 2;
+        let right = z.right - 2;
+        let cutL = moved[0] < chart.from;
+        let cutR = moved[moved.length - 1] > lastNightN;
+        if (left < clipLN) {
+          left = clipLN;
+          cutL = true;
+        }
+        if (right > clipRN) {
+          right = clipRN;
+          cutR = true;
+        }
+        const top = Math.max(rr.top + 3, clipTN);
+        const bottom = Math.min(rr.bottom - 3, clipBN);
+        if (right - left < 6 || bottom - top < 6) return;
+        outN.push({
+          key: `night|${d.grabbed.entryId}|${p.roomId}|${ri}`,
+          left,
+          top,
+          width: right - left,
+          height: bottom - top,
+          name: booking ? rowNameOf(booking) : "Booking",
+          note: shift !== 0 ? `${fmtRange(moved[0], shiftDay(moved[moved.length - 1], 1))}${p.to !== p.roomId ? ` · Room ${roomNoN(p.to)}` : ""}` : `Room ${roomNoN(p.to)}`,
+          cutL,
+          cutR,
+          swapped: false,
+        });
       });
     }
     return outN;
@@ -962,10 +973,11 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
     moveSelectionTo(roomId);
   };
   /**
-   * Alt-click picks a night of a bar (2026-10-14): a night next to the ones picked adds to the run,
-   * Alt+Shift-click takes the nights in between, a picked night clicked again leaves the run, and a
+   * Alt-click picks a night of a bar (2026-10-14): another night of the same bar is added — next to
+   * the ones picked or not (2026-10-22, operator: "305 on the 25th and then 305 on the 27th") —
+   * Alt+Shift-click takes the nights in between, a picked night clicked again leaves the pick, and a
    * night of another bar starts a new pick. Alt+Ctrl-click (2026-10-15) adds a night of another of
-   * the same booking's rooms — each room keeps its own run, and they move together.
+   * the same booking's rooms — each room keeps its own nights, and they move together.
    */
   const pickNight = (sel: Sel, night: string, range: boolean, add: boolean) => {
     const own = heldNights(sel);
@@ -1004,17 +1016,12 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
       return;
     }
     if (cur.includes(night)) {
-      // Clicked again: it leaves the run (the earlier part stays when it was in the middle).
-      const next = cur.filter((d) => d < night);
-      put(next.length ? next : cur.filter((d) => d > night));
-      return;
-    }
-    if (night === shiftDay(cur[0], -1) || night === shiftDay(cur[cur.length - 1], 1)) {
-      put([...cur, night].sort());
+      // Clicked again: that night leaves the pick.
+      put(cur.filter((d) => d !== night));
       return;
     }
     nightAnchor.current = { roomId: sel.roomId, night };
-    put([night]);
+    put([...cur, night].sort());
   };
   const clickBar = (e: React.MouseEvent, sel: Sel, movable: boolean) => {
     if (dragEnded.current) return;
@@ -1831,7 +1838,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
                         Room {nightDrag.grabbed.roomNumber} → <b>{roomNoOf(nightTo)}</b>
                       </>
                     )}{" "}
-                    · {fmtRange(nightNew[0], shiftDay(nightNew[nightNew.length - 1], 1))}
+                    · {runsWords(nightNew)}
                   </span>
                   <span className="sub">
                     Let go to see the room change for {nightMany ? "their nights" : nightNew.length === 1 ? "that night" : "those nights"}
@@ -1842,7 +1849,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
                   <span>
                     {nightMany ? `Rooms ${nightPicks.map((p) => p.roomNumber).join(" + ")}` : `Room ${nightDrag.grabbed.roomNumber}`}
                     {nightPicks.some((p) => p.to !== p.roomId) ? ` → ${nightPicks.map((p) => roomNoOf(p.to)).join(" + ")}` : ""} ·{" "}
-                    <b>{fmtRange(nightNew[0], shiftDay(nightNew[nightNew.length - 1], 1))}</b>
+                    <b>{runsWords(nightNew)}</b>
                   </span>
                   <span className="sub">
                     {Math.abs(nightDrag.shift)} {Math.abs(nightDrag.shift) === 1 ? "day" : "days"} {nightDrag.shift > 0 ? "later" : "earlier"} · the stay is cut apart, each part a booking of its own

@@ -37,8 +37,6 @@ const MONTH = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "O
 const longDay = (ymd: string) => `${WEEKDAY[new Date(`${ymd}T00:00:00Z`).getUTCDay()]} ${Number(ymd.slice(8, 10))} ${MONTH[Number(ymd.slice(5, 7)) - 1]}`;
 const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
 const roomsWords = (nos: string[]) => (nos.length === 1 ? `Room ${nos[0]}` : `Rooms ${nos.join(" + ")}`);
-/** Nights that follow one another. */
-const oneRun = (nights: string[]) => nights.every((n, i) => i === 0 || daysBetween(nights[i - 1], n) === 1);
 
 /** What the box hands the chart: a move to show, or picks to mark for dragging. */
 export type BoxMove =
@@ -125,17 +123,16 @@ export function BookingBox({
   const wholeStayRoom = (r: string) => heldNights(r).length === nights.length && (ticked.get(r)?.size ?? 0) === heldNights(r).length;
   const allWhole = tickedRooms.length > 0 && tickedRooms.every((t) => wholeStayRoom(t.roomId));
   const everyRoom = allWhole && tickedRooms.length === rooms.length;
-  const patchy = tickedRooms.filter((t) => !oneRun(t.nights));
   const moves = days !== 0 || tickedRooms.some((t) => toOf(t.roomId) !== t.roomId);
 
   const why = !tickedRooms.length
     ? "Tick the nights to move, or a room's number for all its nights"
-    : patchy.length
-      ? `${roomsWords(patchy.map((p) => p.roomNumber))}: tick nights that follow one another`
-      : !moves
-        ? "Choose a new first night, or another room"
-        : null;
-  const markWhy = !tickedRooms.length ? "Tick something to mark" : patchy.length ? why : null;
+    : !moves
+      ? "Choose a new first night, or another room"
+      : null;
+  // A room's ticked nights may have gaps (2026-10-22, operator: "305 on the 25th and the 27th"):
+  // each run moves by the same days, and each run that lands apart is a stay of its own.
+  const markWhy = !tickedRooms.length ? "Tick something to mark" : null;
 
   const label = rowNameOf(booking);
   const show = () => {
