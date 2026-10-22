@@ -90,7 +90,11 @@ import {
 type NightPriceMode = "KEEP" | "NEW_DATES" | "NEW_TYPE";
 export type NightMoveMode = "ROOM_CHANGE" | "SPLIT";
 
-/** One room's nights in a move — the room, the run of its nights that moves, where they land. */
+/**
+ * One room's nights in a move — the room, the nights of it that move, where they land. The nights
+ * need not follow one another (2026-10-22, operator: "305 on the 25th and 305 on the 27th"): each
+ * run of them moves by the same days, and each run that lands apart is a stay of its own.
+ */
 export type NightMovePick = { fromRoomId: string; nights: string[]; toRoomId?: string | null };
 
 /** At most this many rooms' nights move in one go. */
@@ -100,7 +104,7 @@ export type NightMoveRequest = {
   entryId: string;
   /** The room whose nights were dragged (one room — `picks` names several). */
   fromRoomId?: string;
-  /** The nights that move, as they are now ("YYYY-MM-DD") — one run of the room's nights. */
+  /** The nights that move, as they are now ("YYYY-MM-DD") — any of the room's nights. */
   nights?: string[];
   /** Where they land; the same room when only the dates change. */
   toRoomId?: string | null;
@@ -243,13 +247,6 @@ async function planNightMove(prisma: PrismaClient, actor: Actor, input: NightMov
     if (moved.length === 0) throw new ValidationError("Name the nights that move");
     for (const d of moved) {
       if (!rNights.includes(d)) throw new ValidationError(`Room ${no(R)} does not hold ${fmtDay(d)} on this booking`);
-    }
-    if (runsOf(moved).length !== 1) {
-      refusals.push(
-        multi
-          ? `Room ${no(R)}'s nights that move must follow one another — move them one run at a time`
-          : "The nights that move must follow one another — move them one run at a time",
-      );
     }
     const fromRoom = roomById.get(R)!;
     const toRoom = roomById.get(to)!;
@@ -547,7 +544,11 @@ async function planSplitNights(prisma: PrismaClient, actor: Actor, b: Base, inpu
       for (const run of runsOf(p.rNights.filter((d) => !p.moved.includes(d)))) {
         segs.push({ kind: "LEFT", src: p.R, roomId: p.R, nights: run, srcNights: run, shift: 0 });
       }
-      segs.push({ kind: "MOVED", src: p.R, roomId: p.to, nights: p.movedNew, srcNights: p.moved, shift: shiftDays });
+      // Each run of the moved nights is a stay of its own — nights with a gap between them do not
+      // become one booking that sleeps nowhere on the gap (2026-10-22).
+      for (const run of runsOf(p.movedNew)) {
+        segs.push({ kind: "MOVED", src: p.R, roomId: p.to, nights: run, srcNights: run.map((d) => shiftIsoDate(d, -shiftDays)), shift: shiftDays });
+      }
     }
     const byDates = new Map<string, Seg[]>();
     for (const s of segs) byDates.set(s.nights.join("|"), [...(byDates.get(s.nights.join("|")) ?? []), s]);
