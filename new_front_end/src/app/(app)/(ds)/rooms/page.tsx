@@ -161,23 +161,23 @@ function RoomsPageBody() {
 
   return (
     <div className="page">
-      <div className="page-head">
+      {/* The two sections sit beside the title, so the chart has the height below (2026-10-22). */}
+      <div className="page-head lead-tabs">
         <div>
           <h2>Rooms</h2>
           <div className="meta">
             Tonight · {occupied} of {items.length} occupied · for knowing, not choosing
           </div>
         </div>
+        <Tabs
+          items={[
+            { id: "tonight", label: "Tonight" },
+            { id: "chart", label: "Chart · night by night" },
+          ]}
+          selected={view}
+          onSelect={pickView}
+        />
       </div>
-
-      <Tabs
-        items={[
-          { id: "tonight", label: "Tonight" },
-          { id: "chart", label: "Chart · night by night" },
-        ]}
-        selected={view}
-        onSelect={pickView}
-      />
 
       {view === "chart" ? (
         <RoomChartView onOpenRoom={(r) => setTarget({ kind: "room", id: r.id, label: `Room ${r.roomNumber}` })} />

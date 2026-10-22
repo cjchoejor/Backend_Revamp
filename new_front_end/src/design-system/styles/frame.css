@@ -936,3 +936,8 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .inq-summary { display: grid; gap: 16px; max-height: 64vh; overflow: auto; padding-right: 4px; }
 .ds .inq-summary section { display: grid; gap: 6px; }
 .ds .inq-summary .cfg-n { font-size: 13px; }
+
+/* A page whose sections sit beside its title (Rooms, 2026-10-22): the tabs follow the title on
+   its row, their selected underline kept, the full-width rule dropped. */
+.ds .page-head.lead-tabs { justify-content: flex-start; gap: var(--s7); }
+.ds .page-head.lead-tabs .tabs { border-bottom: 0; }
