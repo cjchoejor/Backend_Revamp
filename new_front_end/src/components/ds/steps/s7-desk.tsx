@@ -37,6 +37,7 @@ const HANDOFF_WORD: Record<string, string> = {
   FULFILLED: "done",
   CLOSED: "closed",
   CANCELLED: "withdrawn",
+  ESCALATED: "not accepted in time — passed to the FOM",
 };
 
 const FINAL_FAULT = [
@@ -247,8 +248,13 @@ export function HandoffsCard({ entry, tz }: { entry: EntryDetail; tz: string }) 
             </Button>
           </div>
         </div>
-      ) : before.state === "ACCEPTED" ? (
+      ) : before.state === "ACCEPTED" || before.state === "ESCALATED" ? (
         <div className="bind provisional" style={{ marginTop: 10, display: "grid", gap: 8 }}>
+          {before.state === "ESCALATED" ? (
+            <span className="sm warn-ink" style={{ fontWeight: 600 }}>
+              Nobody accepted it in time. Mark it done once the room is checked — the move to Check-out waits for it.
+            </span>
+          ) : null}
           <div className="field">
             <label>Any fault in the room, at the end</label>
             <Choice options={FINAL_FAULT} value={fault} onChange={setFault} />
