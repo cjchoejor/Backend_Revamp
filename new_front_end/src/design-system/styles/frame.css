@@ -938,6 +938,30 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .inq-summary .cfg-n { font-size: 13px; }
 
 /* A page whose sections sit beside its title (Rooms, 2026-10-22): the tabs follow the title on
-   its row, their selected underline kept, the full-width rule dropped. */
+   its row and read as tabs, after Atlassian's (operator: "it looks like it's just text rather than
+   a clickable button") — a light line under the row, each tab a quiet flat edge and fill at rest so
+   it reads as clickable, the others in lighter text, medium weight, a darker surface and a grey
+   underline on hover, darker again pressed, the selected tab white with the accent text and a 2px
+   accent underline sitting on the line. No gradient, no shadow; the focus ring stays the
+   keyboard's (:focus-visible). */
 .ds .page-head.lead-tabs { justify-content: flex-start; gap: var(--s7); }
-.ds .page-head.lead-tabs .tabs { border-bottom: 0; }
+.ds .page-head.lead-tabs .tabs { gap: var(--s1); border-bottom: 2px solid var(--line); }
+.ds .page-head.lead-tabs .tab {
+  height: 36px;
+  padding: 0 var(--s4);
+  font-weight: 500;
+  color: var(--ink-2);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-bottom: 2px solid transparent;
+  border-radius: var(--r-control) var(--r-control) 0 0;
+  margin-bottom: -2px;
+  transition: background-color 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+.ds .page-head.lead-tabs .tab:hover { background: var(--surface-3); color: var(--ink); border-bottom-color: var(--line-2); }
+.ds .page-head.lead-tabs .tab:active { background: var(--line); }
+.ds .page-head.lead-tabs .tab[aria-selected="true"] { color: var(--accent); font-weight: 600; background: var(--surface); border-color: var(--line-2); border-bottom-color: var(--accent); }
+.ds .page-head.lead-tabs .tab[aria-selected="true"]:hover { background: var(--accent-soft); }
+@media (prefers-reduced-motion: reduce) {
+  .ds .page-head.lead-tabs .tab { transition: none; }
+}

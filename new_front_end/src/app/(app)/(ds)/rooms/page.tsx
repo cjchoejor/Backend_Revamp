@@ -3,7 +3,7 @@
 /**
  * Rooms (Surface Spec 00 §2) — for knowing, not choosing. Two sections (2026-10-12, operator):
  *
- * - **Tonight** — what the page always showed: every room's commercial standing and its physical
+ * - **Room cards** (named "Tonight" until 2026-10-22) — what the page always showed: every room's commercial standing and its physical
  *   state, kept apart (FIG 1.14), and every hall. A tile opens the fault record: the desk reports,
  *   the FOM verifies, and a room or hall with a fault leaves the pool the moment it is reported.
  * - **Chart** — the house night by night, as on the boss's journey mockup: rooms down the side,
@@ -171,8 +171,8 @@ function RoomsPageBody() {
         </div>
         <Tabs
           items={[
-            { id: "tonight", label: "Tonight" },
-            { id: "chart", label: "Chart · night by night" },
+            { id: "tonight", label: "Room cards" },
+            { id: "chart", label: "Chart" },
           ]}
           selected={view}
           onSelect={pickView}
