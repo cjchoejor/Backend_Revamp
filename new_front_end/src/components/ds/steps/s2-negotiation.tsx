@@ -33,6 +33,7 @@ import {
   type RoomCompositionInput,
 } from "@/lib/api/quotations";
 import { RoomCompositionPlanner } from "@/components/desk/workspace/room-compositions-board";
+import { nightOverridesCanon } from "@/components/desk/workspace/room-compositions-table";
 import { PriceResolutionPanel } from "@/components/desk/workspace/price-resolution";
 import { ChangeConfiguration, DecidedConfigurationChanges, WaitingConfigurationChange } from "./s2-configuration";
 import { operativeRoomCompositions, roomNightsByRoom, roomStayRangesByRoom } from "@/lib/desk/party-rooms";
@@ -140,9 +141,7 @@ function canonComps(list: readonly RoomCompositionInput[] | undefined): string {
         c.serviceChargeApplies === false ? "0" : "1",
         c.gstApplies === false ? "0" : "1",
         c.isFoc === true ? "1" : "0",
-        JSON.stringify(
-          [...(c.nightMealOverrides ?? [])].sort((a, b) => String(a.date).localeCompare(String(b.date))),
-        ),
+        nightOverridesCanon(c.nightMealOverrides),
       ].join("~"),
     )
     .sort()

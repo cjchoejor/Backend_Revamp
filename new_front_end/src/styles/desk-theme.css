@@ -2921,6 +2921,21 @@
     color: var(--ink-2);
     font-family: inherit;
   }
+  /* A meal or bed set for one night only (2026-10-22): a mark on the cell, so a night that differs
+     from the room's other nights is seen at a glance. */
+  & .rct-t td.own {
+    background: var(--green-t);
+    box-shadow: inset 0 -2px 0 var(--green-d);
+  }
+  /* Over the whole stay, a cell whose nights disagree reads "varies" — typing sets every night. */
+  & .rct-t td.varies {
+    background: #fff4dc;
+  }
+  & .rct-t td.varies input::placeholder {
+    color: var(--warn);
+    font-weight: 700;
+    opacity: 1;
+  }
   /* The night picker beside Expand. */
   & .rce-night {
     display: inline-flex;

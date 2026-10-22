@@ -28,6 +28,7 @@ import { Button, Chip } from "@/design-system/components/primitives";
 import { changeBookingRoom } from "@/lib/api/entries";
 import type { RoomCompositionInput } from "@/lib/api/quotations";
 import { RoomCompositionPlanner } from "@/components/desk/workspace/room-compositions-board";
+import { nightOverridesCanon } from "@/components/desk/workspace/room-compositions-table";
 import { RoomChangeControl } from "@/components/desk/workspace/room-change-control";
 import { operativeRoomCompositions, roomNightsByRoom, roomStayRangesByRoom, roomsInUseFor } from "@/lib/desk/party-rooms";
 import { optionSelectedRoomIds, type EntryDetail } from "@/types/api";
@@ -145,7 +146,11 @@ export function RoomsTable({
         [
           c.roomId, n(c.adultCount ?? 0), n(c.cnb6To10Count ?? 0), n(c.cnbUnder6Count ?? 0), n(c.extraBedCount ?? 0),
           n(c.mealPlanCpCount ?? 0), n(c.mealPlanMaplCount ?? 0), n(c.mealPlanMapdCount ?? 0), n(c.mealPlanApCount ?? 0),
+          n(c.mealPlanOthersCount ?? 0), n(c.othersBreakfastPax), n(c.othersLunchPax), n(c.othersDinnerPax),
           n(c.negotiatedRoomRate), n(c.negotiatedExtraBedRate),
+          n(c.negotiatedBreakfastRate), n(c.negotiatedLunchRate), n(c.negotiatedDinnerRate),
+          // A meal or an extra bed changed on one night is a change too (2026-10-22).
+          nightOverridesCanon(c.nightMealOverrides),
           c.serviceChargeApplies === false ? "0" : "1", c.gstApplies === false ? "0" : "1", c.isFoc === true ? "1" : "0",
         ].join("~"),
       )
