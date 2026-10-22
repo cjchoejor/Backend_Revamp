@@ -930,3 +930,9 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 /* A lone "?" where an explanation paragraph used to be (2026-10-20). */
 .ds .help-here { display: flex; justify-content: flex-end; margin: 6px 0 0; }
 .ds label .help-q, .ds .field > label .help-q { margin-left: 6px; vertical-align: 1px; }
+
+/* The look back before Negotiation (2026-10-22) — who, the stay, and the rooms' bill, in one
+   scrolling body so a long stay's bill never pushes the buttons off the screen. */
+.ds .inq-summary { display: grid; gap: 16px; max-height: 64vh; overflow: auto; padding-right: 4px; }
+.ds .inq-summary section { display: grid; gap: 6px; }
+.ds .inq-summary .cfg-n { font-size: 13px; }

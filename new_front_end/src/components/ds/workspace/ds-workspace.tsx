@@ -90,6 +90,7 @@ import { listBookingNotes, listGuestRequests } from "@/lib/api/booking-notes";
 import { useStayPrice } from "@/lib/ds/stay-price";
 import { SideTimer, StepDwell } from "@/components/ds/workspace/side-timer";
 import { S1Inquiry } from "@/components/ds/steps/s1-inquiry";
+import { InquirySummaryDialog } from "@/components/ds/steps/s1-summary";
 import { S2Negotiation } from "@/components/ds/steps/s2-negotiation";
 import { S3SetUp, S3_PANES } from "@/components/ds/steps/s3-setup";
 import { S4Reserve, S4_PANES } from "@/components/ds/steps/s4-reserve";
@@ -402,6 +403,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     },
     onError: fail("Closing failed"),
   });
+  /** The look back before Negotiation (2026-10-22): Continue opens it, its Confirm moves the booking. */
+  const [summaryOpen, setSummaryOpen] = useState(false);
   const advanceMutation = useMutation({
     mutationFn: (vars: { targetStage: string; guestPhysicallyPresent?: boolean }) =>
       progressStage(session!, entry!.id, { targetStage: vars.targetStage, version: entry!.version, guestPhysicallyPresent: vars.guestPhysicallyPresent }),
@@ -818,8 +821,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   } else if (inquiryStepActive) {
     const ok = canProgressS1(entry);
     forward = (
-      <Button state={advanceMutation.isPending ? "working" : ok ? "default" : "inert"} reason={ok ? undefined : firstNote} workingLabel="Moving…" onClick={() => advanceMutation.mutate({ targetStage: "S2" })}>
-        Move to Negotiation
+      <Button state={ok ? "default" : "inert"} reason={ok ? undefined : firstNote} onClick={() => setSummaryOpen(true)}>
+        Continue
       </Button>
     );
   } else if (quoteStepActive) {
@@ -1443,6 +1446,13 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
           pending={checkInMutation.isPending}
           onConfirm={() => checkInMutation.mutate()}
           onClose={() => setCheckInOpen(false)}
+        />
+        <InquirySummaryDialog
+          entry={entry}
+          open={summaryOpen && inquiryStepActive}
+          busy={advanceMutation.isPending}
+          onClose={() => setSummaryOpen(false)}
+          onConfirm={() => advanceMutation.mutate({ targetStage: "S2" }, { onSuccess: () => setSummaryOpen(false) })}
         />
         <CommitDialog
           open={closeOpen}

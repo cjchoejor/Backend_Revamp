@@ -2121,7 +2121,8 @@ export function RoomCompositionsTable({
                 Pick one night beside Expand, or All nights, to set meals and extra beds night by night — under a
                 night a change is that night&rsquo;s only. Who sleeps in a room, its rates and its charges are the
                 room&rsquo;s for every night it is held. Whole stay sets every night at once; a cell reading
-                &ldquo;varies&rdquo; differs between nights. Copy row 1 and Everyone on… work on the rows on screen.
+                &ldquo;varies&rdquo; differs between nights. A small amber corner on a cell: that night differs from
+                most of the room&rsquo;s nights. Copy row 1 and Everyone on… work on the rows on screen.
               </p>
             )}
             <p>Every figure is priced by the hotel&rsquo;s server, the same way the quotation will be.</p>
