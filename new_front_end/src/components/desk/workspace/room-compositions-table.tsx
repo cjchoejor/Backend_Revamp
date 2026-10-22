@@ -925,37 +925,119 @@ export function RoomCompositionsTable({
     }
   };
 
-  /** Party spread — adults evenly with the remainder on the first row, children all on
-   *  the first row so a family shares a room. CNB 11+ retired: declared children above
-   *  the child band join the adult pool. */
+  /**
+   * Party spread (rewritten 2026-10-22, operator report on ENT-20261022-0001/0002: "I can't fill
+   * the table even when Distribute party is clicked"). It used to put every child in the first
+   * room of each night and re-seat every room on every night, so a room's row ended up
+   * describing whichever night came last, and a room with two adults and two small children read
+   * red (four guests in a room that sleeps three) with no way for the button to put it right.
+   *
+   * Now it seats the party so the table it leaves is one the fault list accepts whenever the
+   * party fits:
+   *  - **Night by night, each room once.** A room keeps one row for all its nights, so it is
+   *    seated on the first night it appears and stays as it is; each later night shares out only
+   *    what that night's rooms have not already taken. On a booking whose rooms are the same
+   *    every night there is one night-group and this is a plain spread.
+   *  - **Adult-rate guests evenly**, the remainder on the first rooms, never past what a room can
+   *    sleep (its capacity + the extra beds its type allows).
+   *  - **Each child in a room with an adult and space for them** — inside the room's capacity and
+   *    the bed its adults already need, and within its type's limit on children. When no room has
+   *    space it may take an extra bed (up to the type's limit); when the type limits are what
+   *    stand in the way, the room with the most space takes the child and the operator decides.
+   * CNB 11+ retired: declared children above the child band join the adult pool.
+   */
   const distribute = () => {
     if (sealedRoomIds.length === 0) return;
     const ages = entryChildAges ?? [];
-    const under6 = ages.filter((a) => a <= youngMax).length;
-    const c6to10 = ages.filter((a) => a > youngMax && a <= childMax).length;
-    const adults = Math.max(0, entryAdults ?? 0) + ages.filter((a) => a > childMax).length;
+    const party = {
+      ad: Math.max(0, entryAdults ?? 0) + ages.filter((a) => a > childMax).length,
+      c6: ages.filter((a) => a > youngMax && a <= childMax).length,
+      u6: ages.filter((a) => a <= youngMax).length,
+    };
     // The party is seated NIGHT BY NIGHT. On a booking that moves rooms mid-stay the rooms are
     // not in use together, so spreading the party once across every row would leave each night
-    // holding a fraction of it (2026-10-06). On a plain booking there is one night-group and
-    // this is the old behaviour exactly.
+    // holding a fraction of it (2026-10-06).
     const groups: string[][] = busiestNight
       ? allNights.map((n) => roomsOn(n)).filter((g, i, all) => g.length > 0 && all.findIndex((h) => h.join(",") === g.join(",")) === i)
       : [sealedRoomIds];
+    type Seat = { ad: number; c6: number; u6: number; bed: number };
+    const seats = new Map<string, Seat>();
+    const focOf = (id: string) => rows[id]?.foc ?? false;
+    const capNum = (id: string) => capOf(id) ?? Number.POSITIVE_INFINITY;
+    const adultCeil = (id: string) => capNum(id) + bedMaxOf(id);
+    const kidsMax = (id: string) => roomById.get(id)?.roomType?.maxChildren ?? Number.POSITIVE_INFINITY;
+    const adultsNeeded = (id: string) => Math.max(1, roomById.get(id)?.roomType?.requiredAccompanyingAdults ?? 1);
+    for (const ids of groups) {
+      const fresh = ids.filter((id) => !seats.has(id));
+      if (fresh.length === 0) continue;
+      const taken = ids.filter((id) => seats.has(id)).map((id) => seats.get(id)!);
+      const left = {
+        ad: Math.max(0, party.ad - taken.reduce((s, x) => s + x.ad, 0)),
+        c6: Math.max(0, party.c6 - taken.reduce((s, x) => s + x.c6, 0)),
+        u6: Math.max(0, party.u6 - taken.reduce((s, x) => s + x.u6, 0)),
+      };
+      const w = new Map<string, Seat>(fresh.map((id) => [id, { ad: 0, c6: 0, u6: 0, bed: 0 }]));
+      // Adult-rate guests: evenly, the remainder on the first rooms, each room up to what it sleeps.
+      const base = Math.floor(left.ad / fresh.length);
+      const rem = left.ad % fresh.length;
+      let over = 0;
+      fresh.forEach((id, i) => {
+        const want = base + (i < rem ? 1 : 0);
+        const got = Math.min(want, adultCeil(id));
+        w.get(id)!.ad = got;
+        over += want - got;
+      });
+      for (const id of fresh) {
+        if (over === 0) break;
+        const s = w.get(id)!;
+        const more = Math.min(over, adultCeil(id) - s.ad);
+        if (more > 0) { s.ad += more; over -= more; }
+      }
+      if (over > 0) w.get(fresh[0])!.ad += over; // nowhere fits them — the fault list says so
+      for (const id of fresh) {
+        const s = w.get(id)!;
+        s.bed = bedsNeeded(id, s.ad, focOf(id));
+      }
+      // Children, one at a time, into the first room that can take them, in order of preference.
+      const occ = (s: Seat) => s.ad + s.c6 + s.u6;
+      const kids = (s: Seat) => s.c6 + s.u6;
+      const tiers: Array<(id: string, s: Seat) => boolean> = [
+        (id, s) => s.ad >= adultsNeeded(id) && kids(s) < kidsMax(id) && occ(s) + 1 <= capNum(id) + s.bed,
+        (id, s) => s.ad >= adultsNeeded(id) && kids(s) < kidsMax(id) && occ(s) + 1 <= capNum(id) + bedMaxOf(id),
+        (id, s) => s.ad >= 1 && occ(s) + 1 <= capNum(id) + s.bed,
+        (id, s) => s.ad >= 1 && occ(s) + 1 <= capNum(id) + bedMaxOf(id),
+      ];
+      const placeChild = (band: "c6" | "u6") => {
+        for (const fits of tiers) {
+          const id = fresh.find((r) => fits(r, w.get(r)!));
+          if (id) {
+            const s = w.get(id)!;
+            s[band] += 1;
+            if (occ(s) > capNum(id) + s.bed) s.bed = occ(s) - capNum(id);
+            return;
+          }
+        }
+        // No room can take them — the one with the most space does, and the fault list names it.
+        const id = fresh.reduce((best, r) => {
+          const room = (x: string) => capNum(x) + bedMaxOf(x) - occ(w.get(x)!);
+          return w.get(r)!.ad > 0 && room(r) > room(best) ? r : best;
+        }, fresh[0]);
+        w.get(id)![band] += 1;
+      };
+      for (let k = 0; k < left.c6; k++) placeChild("c6");
+      for (let k = 0; k < left.u6; k++) placeChild("u6");
+      for (const id of fresh) seats.set(id, w.get(id)!);
+    }
     setRows((prev) => {
       const next = { ...prev };
-      for (const ids of groups) {
-        const n = ids.length;
-        if (n === 0) continue;
-        const base = Math.floor(adults / n);
-        const rem = adults % n;
-        ids.forEach((id, i) => {
-          next[id] = withAutoBed(id, {
-            ...(next[id] ?? { ...EMPTY_ROW }),
-            ad: String(base + (i < rem ? 1 : 0)),
-            c6: String(i === 0 ? c6to10 : 0),
-            u6: String(i === 0 ? under6 : 0),
-          });
-        });
+      for (const [id, s] of seats) {
+        next[id] = {
+          ...(next[id] ?? { ...EMPTY_ROW }),
+          ad: String(s.ad),
+          c6: String(s.c6),
+          u6: String(s.u6),
+          bed: String(s.bed),
+        };
       }
       return next;
     });
