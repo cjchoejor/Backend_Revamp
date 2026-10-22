@@ -2864,51 +2864,81 @@
     font-size: 12.5px;
     font-weight: 600;
   }
-  /* Which nights each room is for (2026-09-30, operator) — the leading column, pinned like the
-     room number beside it, because the two together are the row's identity. */
-  & .rct-t .dates {
-    position: sticky;
-    left: 0;
-    z-index: 1;
-    background: var(--cream);
+  /* The table night by night (2026-10-22, operator) — on a stay whose rooms change between
+     nights each night sits under its own band, which is where the date changes, so it reads as
+     a break: dark, the date large, the night's guest tally green or red. The Dates column it
+     replaced is gone. */
+  & .rct-t tbody tr.nightband td {
+    background: var(--ink);
+    color: #fff;
     text-align: left;
-    padding: 3px 6px;
-    /* Held to exactly its content (2026-09-30, operator: "see how much extra space the dates
-       column is taking uselessly"). The table is width:100% on auto layout, so the surplus was
-       being shared out by content width and this column — the only one with prose in it — took
-       the lion's share. Fixing all three widths keeps it at the span it prints, and the trailing
-       column below takes the slack instead, as it did before this column existed. It must also
-       equal `.has-dates .room`'s offset, or the pinned room number slides over it on a
-       sideways scroll. */
-    width: 98px;
-    min-width: 98px;
-    max-width: 98px;
-    white-space: nowrap;
-    font-size: 11px;
-    line-height: 1.35;
+    padding: 7px 10px;
+  }
+  & .rct-t tbody tr.nightband:not(:first-child) td {
+    border-top: 10px solid #fff;
+  }
+  & .rct-t tbody tr.nightband .nb-in {
+    position: sticky;
+    left: 10px;
+    display: inline-flex;
+    align-items: baseline;
+    gap: 12px;
+  }
+  & .rct-t tbody tr.nightband .nb-date {
+    font-size: 14px;
+    font-weight: 800;
+    letter-spacing: 0.01em;
+  }
+  & .rct-t tbody tr.nightband .nb-meta {
+    font-size: 11.5px;
+    color: rgba(255, 255, 255, 0.78);
+  }
+  & .rct-t tbody tr.nightband .nb-tally {
+    font-size: 12px;
+    font-weight: 800;
+    padding: 1px 9px;
+    border-radius: 999px;
+    background: var(--ok);
+    color: #fff;
+  }
+  & .rct-t tbody tr.nightband .nb-tally.off {
+    background: var(--stop);
+  }
+  /* The stay's own band, over a plan whose rooms do not change: the dates once, quietly. */
+  & .rct-t tbody tr.nightband.stay td {
+    background: var(--cream-3);
+    color: var(--ink);
+  }
+  & .rct-t tbody tr.nightband.stay .nb-meta {
     color: var(--ink-2);
   }
-  & .rct-t thead .dates {
-    background: var(--cream-3);
-  }
-  /* With the Dates column present the room number pins beside it, not at the edge. */
-  & .rct-t.has-dates .room {
-    left: 98px;
-  }
-  /* Nothing claims the surplus (2026-09-30, second pass — operator: "now the rate+ column is
-     too big, see how the old table looked like"). Pinning it to the trailing column swapped one
-     over-wide column for another; the table shared the spare width across every column before
-     the Dates column arrived, and it does again now that Dates is fixed and can no longer take
-     the lion's share. */
-  /* A room held for only part of the stay — the case the column exists for. */
-  & .rct-t td.dates.part {
-    color: var(--warn);
-    font-weight: 600;
-  }
-  & .rct-t td.dates .n {
+  /* How many nights a room's one row covers, under its number. */
+  & .rct-t tbody .room span.nn {
     display: block;
+    margin-left: 0;
     font-size: 10.5px;
     font-weight: 600;
+    color: var(--ink-2);
+    font-family: inherit;
+  }
+  /* The night picker beside Expand. */
+  & .rce-night {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  & .rce-night select {
+    font-size: 12px;
+    font-weight: 700;
+    padding: 4px 8px;
+    border: 1.5px solid var(--ink-2);
+    border-radius: var(--r-sm);
+    background: #fff;
+    color: var(--ink);
+  }
+  & .rce-night.off select {
+    border-color: var(--stop);
+    color: var(--stop);
   }
   /* Derived occupancy cell — read-only, mono, visually "computed". */
   & .rct-t .occ {
