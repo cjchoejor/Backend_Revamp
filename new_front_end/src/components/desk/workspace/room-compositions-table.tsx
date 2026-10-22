@@ -1780,22 +1780,28 @@ export function RoomCompositionsTable({
   ) => {
     const night = opts?.night ?? null;
     const varies = !night && isNightCol(col) && variesOn(roomId, col);
-    // Marked against the room's USUAL night (the value most of its nights share), so a change
-    // made on every night alike marks nothing and the one night that differs stands out.
-    const usual = (() => {
+    // Marked against the room's USUAL night (the value more of its nights share than any other),
+    // so a change made on every night alike marks nothing and the one night that differs stands
+    // out. When the nights split evenly there is no usual night, and every night is marked —
+    // picking one would be arbitrary (2026-10-22, operator: a two-night room marked only on its
+    // second night).
+    const mark = (() => {
       if (!night || !isNightCol(col)) return null;
       const ns = nightListOf(roomId);
       if (ns.length < 2) return null;
-      const tally = new Map<number, { k: number; first: number }>();
-      ns.forEach((n, i) => {
+      const tally = new Map<number, number>();
+      for (const n of ns) {
         const v = cnt(valAt(roomId, n, col));
-        const e = tally.get(v);
-        if (e) e.k += 1;
-        else tally.set(v, { k: 1, first: i });
-      });
-      return [...tally.entries()].sort((a, b) => b[1].k - a[1].k || a[1].first - b[1].first)[0][0];
+        tally.set(v, (tally.get(v) ?? 0) + 1);
+      }
+      if (tally.size < 2) return null;
+      const ranked = [...tally.entries()].sort((a, b) => b[1] - a[1]);
+      const usual = ranked[0][1] > ranked[1][1] ? ranked[0][0] : null;
+      const here = cnt(valAt(roomId, night, col));
+      if (usual != null && here === usual) return null;
+      return { usual, nights: ns };
     })();
-    const ownNight = usual != null && cnt(valAt(roomId, night, col)) !== usual;
+    const ownNight = mark != null;
     const raw = varies ? "" : valAt(roomId, night, col);
     const cls = [opts?.stop ? "stop" : opts?.warn ? "warn" : "", varies ? "varies" : "", ownNight ? "own" : ""]
       .filter(Boolean)
@@ -1804,8 +1810,10 @@ export function RoomCompositionsTable({
       ? `Differs by night — ${nightListOf(roomId)
           .map((n) => `${shortNight(n)}: ${cnt(valAt(roomId, n, col))}`)
           .join(" · ")}. Typing here sets every night.`
-      : ownNight
-        ? `${shortNight(night!)} only — most of this room's nights have ${usual}`
+      : mark
+        ? mark.usual != null
+          ? `${shortNight(night!)} only — most of this room's nights have ${mark.usual}`
+          : `This room's nights differ — ${mark.nights.map((n) => `${shortNight(n)}: ${cnt(valAt(roomId, n, col))}`).join(" · ")}`
         : opts?.title;
     return (
       <td key={col} className={cls || undefined} title={title}>
@@ -2121,8 +2129,8 @@ export function RoomCompositionsTable({
                 Pick one night beside Expand, or All nights, to set meals and extra beds night by night — under a
                 night a change is that night&rsquo;s only. Who sleeps in a room, its rates and its charges are the
                 room&rsquo;s for every night it is held. Whole stay sets every night at once; a cell reading
-                &ldquo;varies&rdquo; differs between nights. A small amber corner on a cell: that night differs from
-                most of the room&rsquo;s nights. Copy row 1 and Everyone on… work on the rows on screen.
+                &ldquo;varies&rdquo; differs between nights. A small amber corner on a cell: that night is not like
+                the room&rsquo;s other nights (when its nights split evenly, each one is marked). Copy row 1 and Everyone on… work on the rows on screen.
               </p>
             )}
             <p>Every figure is priced by the hotel&rsquo;s server, the same way the quotation will be.</p>
