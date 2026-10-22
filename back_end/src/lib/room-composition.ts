@@ -53,6 +53,13 @@ export type RoomCompositionInput = {
    * rather than guessed at.
    */
   nightMealOverrides?: RoomNightMealOverride[] | null;
+  /**
+   * The room's OWN nights, as day keys, when it is not held for one run from `startDate`
+   * (2026-10-22): on a stay that changes rooms between nights a room may be held on the 22nd
+   * and the 25th only, and its per-night meals and beds belong to those two nights. Taken from
+   * the booking's sealed pick by the pricing callers; absent, the nights run from `startDate`.
+   */
+  nightDates?: string[] | null;
   // meal-plan distribution
   mealPlanCpCount?: number | null;
   mealPlanMaplCount?: number | null;
@@ -174,6 +181,9 @@ export function dayKey(d: Date): string {
  * Empty when the start date is unknown — callers then have no way to place an override.
  */
 export function nightKeys(input: RoomCompositionInput, nights: number): string[] {
+  if (input.nightDates && input.nightDates.length > 0) {
+    return [...new Set(input.nightDates.map((d) => String(d).slice(0, 10)))].sort();
+  }
   if (!input.startDate) return [];
   const start = Date.UTC(
     input.startDate.getUTCFullYear(),

@@ -534,7 +534,7 @@ entriesRouter.get("/:id/competing-claims", requireActorLevel("L1"), async (req, 
  */
 entriesRouter.post("/:id/quotation-preview", requireActorLevel("L1"), async (req, res, next) => {
   try {
-    const body = req.body as { roomCompositions?: unknown; discount?: unknown; roomNights?: unknown };
+    const body = req.body as { roomCompositions?: unknown; discount?: unknown; roomNights?: unknown; roomNightDates?: unknown };
     res.setHeader("Cache-Control", "no-store");
     const roomCompositions = Array.isArray(body?.roomCompositions) ? (body.roomCompositions as Array<{ roomId?: unknown }>) : [];
     // Each room prices at its own type's rate even when the booking does not hold it yet (the
@@ -545,6 +545,15 @@ entriesRouter.post("/:id/quotation-preview", requireActorLevel("L1"), async (req
         if (typeof n === "number" && Number.isInteger(n) && n >= 1 && n <= 366) roomNights.set(rid, n);
       }
     }
+    // And which nights, as YYYY-MM-DD, so a room's per-night meals and beds price on them (2026-10-22).
+    const roomNightDates = new Map<string, string[]>();
+    if (body?.roomNightDates && typeof body.roomNightDates === "object" && !Array.isArray(body.roomNightDates)) {
+      for (const [rid, ds] of Object.entries(body.roomNightDates as Record<string, unknown>)) {
+        if (!Array.isArray(ds) || ds.length < 1 || ds.length > 366) continue;
+        if (!ds.every((d) => typeof d === "string" && /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(d))) continue;
+        roomNightDates.set(rid, ds as string[]);
+      }
+    }
     res.json(
       await buildQuotationPreview(
         prisma,
@@ -553,6 +562,7 @@ entriesRouter.post("/:id/quotation-preview", requireActorLevel("L1"), async (req
         {
           planRoomIds: roomCompositions.map((c) => c.roomId).filter((id): id is string => typeof id === "string"),
           ...(roomNights.size ? { roomNights } : {}),
+          ...(roomNightDates.size ? { roomNightDates } : {}),
         },
       ),
     );

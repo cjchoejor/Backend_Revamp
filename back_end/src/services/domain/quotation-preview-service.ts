@@ -206,6 +206,8 @@ export async function buildQuotationPreview(
      * which otherwise priced for the whole stay each.
      */
     roomNights?: Map<string, number>;
+    /** And which nights those are, so per-night meals and beds land on them (2026-10-22). */
+    roomNightDates?: Map<string, string[]>;
   },
 ): Promise<QuotationPreview> {
   const entry = await prisma.entry.findUnique({
@@ -277,15 +279,25 @@ export async function buildQuotationPreview(
   // a room covering 3 of 4 nights previews ×3, not ×4. Whole-stay seals leave the map empty.
   // A stay override (extension projection) supplies its own per-room counts.
   const perRoomNightCounts = new Map<string, number>(opts?.stayOverride?.perRoomNightCounts ?? []);
+  const perRoomNightDates = new Map<string, string[]>();
   const sealedSel = !opts?.stayOverride && sealedCfg ? readOptionSelected(sealedCfg.optionSelected) : null;
   if (sealedSel?.perNight) {
     for (const night of sealedSel.perNight) {
       for (const rid of night.roomIds) {
         perRoomNightCounts.set(rid, (perRoomNightCounts.get(rid) ?? 0) + 1);
+        perRoomNightDates.set(rid, [...(perRoomNightDates.get(rid) ?? []), String(night.date).slice(0, 10)]);
       }
     }
   }
-  for (const [rid, n] of opts?.roomNights ?? []) perRoomNightCounts.set(rid, n);
+  for (const [rid, n] of opts?.roomNights ?? []) {
+    perRoomNightCounts.set(rid, n);
+    // A count given without its nights says the seal's nights no longer apply to this room.
+    if (!opts?.roomNightDates?.has(rid)) perRoomNightDates.delete(rid);
+  }
+  for (const [rid, ds] of opts?.roomNightDates ?? []) {
+    perRoomNightDates.set(rid, ds);
+    perRoomNightCounts.set(rid, ds.length);
+  }
 
   const dec = (v: number | null | undefined): Prisma.Decimal => new Prisma.Decimal(v ?? 0);
 
@@ -296,6 +308,7 @@ export async function buildQuotationPreview(
     const ref = (room?.roomTypeId ? refByType.get(room.roomTypeId) : undefined) ?? fallbackRef;
     const compositionInput: RoomCompositionInput = {
       nightMealOverrides: (c.nightMealOverrides ?? []).map((o) => ({ ...o, date: new Date(o.date) })),
+      nightDates: perRoomNightDates.get(c.roomId) ?? null,
       occupantCount: c.occupantCount,
       adultCount: c.adultCount,
       cnb6To10Count: c.cnb6To10Count,

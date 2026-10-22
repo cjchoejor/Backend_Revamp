@@ -201,10 +201,13 @@ export function enforceRoomCompositionsPriceable(
     stayCheckIn: Date | null;
     stayCheckOut: Date | null;
     nights: number;
+    /** Each room's own nights on a stay that changes rooms between nights (2026-10-22). */
+    nightDatesByRoom?: Map<string, string[]>;
   },
 ): void {
   for (const c of compositions) {
     const roomNumber = ctx.numberByRoomId.get(c.roomId) ?? null;
+    const ownNights = ctx.nightDatesByRoom?.get(c.roomId) ?? null;
     const nightOverrides = (c.nightMealOverrides ?? []).map((o) => ({ ...o, date: new Date(o.date) }));
     enforceExtraBedForThirdAdult({
       roomNumber,
@@ -233,8 +236,9 @@ export function enforceRoomCompositionsPriceable(
         nightMealOverrides: nightOverrides,
         startDate: c.startDate ? new Date(c.startDate) : ctx.stayCheckIn,
         endDate: c.endDate ? new Date(c.endDate) : ctx.stayCheckOut,
+        nightDates: ownNights,
       },
-      ctx.nights,
+      ownNights?.length ?? ctx.nights,
     );
   }
 }
@@ -669,10 +673,13 @@ async function prepareQuotationDraft(
      * every room keeps the booking-wide figure — nothing moves for uniform bookings.
      */
     const perRoomNightCounts = new Map<string, number>();
+    /** And WHICH nights (2026-10-22) — a room's per-night meals and beds are placed on these. */
+    const perRoomNightDates = new Map<string, string[]>();
     if (sealed.perNight) {
       for (const night of sealed.perNight) {
         for (const rid of night.roomIds) {
           perRoomNightCounts.set(rid, (perRoomNightCounts.get(rid) ?? 0) + 1);
+          perRoomNightDates.set(rid, [...(perRoomNightDates.get(rid) ?? []), String(night.date).slice(0, 10)]);
         }
       }
     }
@@ -685,11 +692,13 @@ async function prepareQuotationDraft(
       stayCheckIn: stay?.checkIn ?? null,
       stayCheckOut: stay?.checkOut ?? null,
       nights: nightsForPricing,
+      nightDatesByRoom: perRoomNightDates,
     });
 
     const rooms = input.roomCompositions.map((c) => {
       const compositionInput: RoomCompositionInput = {
         nightMealOverrides: (c.nightMealOverrides ?? []).map((o) => ({ ...o, date: new Date(o.date) })),
+        nightDates: perRoomNightDates.get(c.roomId) ?? null,
         occupantCount: c.occupantCount,
         adultCount: c.adultCount,
         cnb6To10Count: c.cnb6To10Count,
