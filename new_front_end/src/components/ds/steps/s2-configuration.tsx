@@ -283,7 +283,12 @@ export function ChangeConfiguration({
   const picked = sel.allPicked;
   const dropped = priorRoomIds.filter((id) => !picked.includes(id));
   const added = picked.filter((id) => !priorRoomIds.includes(id));
-  const roomsMoved = dropped.length > 0 || added.length > 0;
+  /**
+   * Whether the rooms moved is read NIGHT BY NIGHT (2026-10-22): the same rooms arranged over the
+   * nights differently is a change too, and comparing only which rooms the booking uses said
+   * "nothing has changed" for it. A pick never sealed reads as moved whenever anything is ticked.
+   */
+  const roomsMoved = sel.currentCanon !== sel.savedCanon && (sel.currentCanon != null || sel.savedCanon != null);
   const partyMoved =
     adultCount !== (entry.adultCount ?? 0) ||
     childCount !== (entry.childCount ?? 0) ||
@@ -296,9 +301,15 @@ export function ChangeConfiguration({
    * below prices the seal. So a changed count must be answered with a fresh pick of exactly that
    * many rooms; the save says so rather than writing the two into disagreement.
    */
-  const countMoved = roomCount !== priorRoomIds.length;
-  const pickComplete = picked.length === roomCount;
-  const needsRepick = countMoved && (!configId || !pickComplete);
+  /**
+   * The count is the rooms the booking asks for ON EACH NIGHT, and the pick is complete when every
+   * night holds exactly that many (2026-10-22, operator: "8 of 5 rooms chosen" and a Save that
+   * never opened). On a stay that changes rooms the booking uses more rooms in all than it holds
+   * on any one night, so the old test — every room it uses against the count — could never pass.
+   */
+  const countMoved = roomCount !== (entry.numberOfRooms ?? priorRoomIds.length);
+  const pickComplete = sel.ready;
+  const needsRepick = (countMoved || roomsMoved) && !datesMoved && (!configId || !pickComplete);
   /** New dates are only saved with rooms picked for every new night, from a search for them. */
   const needsNightPick = datesMoved && (!configId || !sel.ready);
 
@@ -549,13 +560,16 @@ export function ChangeConfiguration({
           <>
             <div className="row-acts" style={{ margin: "8px 0" }}>
               <span className={pickComplete ? "ok-ink" : "stop-ink"} style={{ fontWeight: 700 }}>
-                {picked.length} of {plural(roomCount, "room")} chosen
+                {sel.nightsDiffer
+                  ? `${sel.nightsReady} of ${plural(displayNights.length, "night")} ${sel.nightsReady === 1 ? "has" : "have"} ${plural(roomCount, "room")}`
+                  : `${sel.commonPlan.length} of ${plural(roomCount, "room")} chosen`}
               </span>
               {roomsMoved ? (
                 <span className="sm">
                   {dropped.length ? `dropping ${dropped.map(roomNo).join(", ")}` : ""}
                   {dropped.length && added.length ? " · " : ""}
                   {added.length ? `adding ${added.map(roomNo).join(", ")}` : ""}
+                  {!dropped.length && !added.length ? "the same rooms, on different nights" : ""}
                 </span>
               ) : (
                 <span className="sm">the same rooms as now</span>
@@ -610,8 +624,12 @@ export function ChangeConfiguration({
                       : `Pick the rooms for every new night — ${sel.nightsReady} of ${plural(stayNights.length, "night")} ready`
                     : needsRepick
                   ? !configId
-                    ? `The rooms asked for changed to ${roomCount} — ask the house and pick them`
-                    : `Pick ${plural(roomCount, "room")} below — ${picked.length} ${picked.length === 1 ? "is" : "are"} ticked`
+                    ? countMoved
+                      ? `The rooms asked for changed to ${roomCount} — ask the house and pick them`
+                      : "Ask the house before saving rooms"
+                    : sel.nightsDiffer
+                      ? `Every night needs ${plural(roomCount, "room")} — ${sel.nightsReady} of ${plural(displayNights.length, "night")} ${sel.nightsReady === 1 ? "has" : "have"} them`
+                      : `Pick ${plural(roomCount, "room")} below — ${sel.commonPlan.length} ${sel.commonPlan.length === 1 ? "is" : "are"} ticked`
                   : !reason.trim()
                     ? "Type why the configuration is changing"
                     : !agesReady

@@ -244,7 +244,16 @@ export function useRoomSelection({
   }, [nightsDiffer, overrides, displayNights, base, stayNights, commonPlan]);
   const submittedRef = useRef<string | null>(null);
 
-  const allPicked = useMemo(() => [...new Set([...base, ...Object.values(overrides).flat()])], [base, overrides]);
+  // What is ticked on the nights the table shows. The base is only the plan for a night with no
+  // list of its own, so once every night has one it holds nothing — counting it anyway read
+  // "1 of 5 rooms chosen" on a table with every cell cleared (2026-10-22, operator).
+  const allPicked = useMemo(
+    () =>
+      displayNights.length > 0
+        ? [...new Set(displayNights.flatMap((n) => overrides[n] ?? base))]
+        : [...new Set([...base, ...Object.values(overrides).flat()])],
+    [displayNights, base, overrides],
+  );
 
   return {
     base,
