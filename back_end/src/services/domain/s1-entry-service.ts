@@ -1,7 +1,7 @@
 import type { ActorLevel, PrismaClient } from "@prisma/client";
 import { EntryStatus, Prisma, Stage, StageDwellMode } from "@prisma/client";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
-import { getActiveConfigEntry, requireActiveConfigValue } from "../../lib/config-store.js";
+import { getActiveConfigEntry } from "../../lib/config-store.js";
 import { getRegistryPolicy } from "../../lib/policy-registry-runtime.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import { validateCapacity } from "./capacity-validation-service.js";
@@ -25,6 +25,7 @@ import {
 import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.js";
 import { scheduleS1StageDwellWarningMonitor } from "../../lib/schedule-s1-dwell-warning-monitor.js";
 import { armNegotiationExpiryTx, lapseNegotiationRecordsTx } from "../../lib/negotiation-expiry.js";
+import { armInquiryExpiryTx, hasBeenToSetup } from "../../lib/inquiry-expiry.js";
 import { ENTRY_ENDINGS } from "../../lib/entry-ending.js";
 import { ROOM_BED_TYPES, checkBedRequestAgainstRooms, loadRoomBedOptions } from "./room-bed-type-service.js";
 
@@ -242,38 +243,10 @@ export async function createEntry(
       createdBy: actorId,
     });
 
-    // Policy registry override: `registry.s1Expiry.minutes` takes precedence over the legacy
-    // `expiry.s1.defaultTtlSeconds.DEFAULT` ConfigurationEntry. Set `enabled: false` to revert.
-    const s1ExpiryPolicy = await getRegistryPolicy(tx as any, "registry.s1Expiry.minutes");
-    const registryS1Seconds =
-      s1ExpiryPolicy && s1ExpiryPolicy.enabled !== false && typeof s1ExpiryPolicy.minutes === "number"
-        ? (s1ExpiryPolicy.minutes as number) * 60
-        : null;
-    let ttlSeconds: number;
-    if (registryS1Seconds !== null) {
-      ttlSeconds = registryS1Seconds;
-    } else {
-      const ttl = await requireActiveConfigValue<{ DEFAULT: number }>(tx as any, "expiry.s1.defaultTtlSeconds");
-      ttlSeconds = Number(ttl.DEFAULT ?? 3600);
-    }
-    const dueAt = new Date(Date.now() + ttlSeconds * 1000);
-    const engine = await getTimerEngine();
-    const jobId = await engine.schedule("ENTRY_EXPIRY", { entryId: entry.id }, { startAfter: dueAt });
-    await tx.timerRecord.create({
-      data: {
-        entryId: entry.id,
-        entityType: "Entry",
-        entityId: entry.id,
-        timerType: "ENTRY_EXPIRY",
-        stageContext: Stage.S1,
-        firesAt: dueAt,
-        dueAt,
-        status: "SCHEDULED",
-        payload: { entryId: entry.id },
-        pgBossJobId: jobId,
-        createdBy: actorId,
-      },
-    });
+    // The Inquiry clock — `registry.s1Expiry.minutes` when enabled, else
+    // `expiry.s1.defaultTtlSeconds.DEFAULT` (lib/inquiry-expiry.ts, shared with unpark and the
+    // way back to Inquiry).
+    await armInquiryExpiryTx(tx as any, await getTimerEngine(), { entryId: entry.id, actorId });
 
     return entry;
   });
@@ -395,35 +368,9 @@ async function restoreStageExpiryTimersTx(
     await armNegotiationExpiryTx(tx, engine, { entryId, actorId });
     return;
   }
-  const s1ExpiryPolicy = await getRegistryPolicy(tx, "registry.s1Expiry.minutes");
-  const registryS1Seconds =
-    s1ExpiryPolicy && s1ExpiryPolicy.enabled !== false && typeof s1ExpiryPolicy.minutes === "number"
-      ? (s1ExpiryPolicy.minutes as number) * 60
-      : null;
-  let ttlSeconds: number;
-  if (registryS1Seconds !== null) {
-    ttlSeconds = registryS1Seconds;
-  } else {
-    const ttl = await requireActiveConfigValue<{ DEFAULT: number }>(tx, "expiry.s1.defaultTtlSeconds");
-    ttlSeconds = Number(ttl.DEFAULT ?? 3600);
-  }
-  const dueAt = new Date(Date.now() + ttlSeconds * 1000);
-  const jobId = await engine.schedule("ENTRY_EXPIRY", { entryId }, { startAfter: dueAt });
-  await tx.timerRecord.create({
-    data: {
-      entryId,
-      entityType: "Entry",
-      entityId: entryId,
-      timerType: "ENTRY_EXPIRY",
-      stageContext,
-      firesAt: dueAt,
-      dueAt,
-      status: "SCHEDULED",
-      payload: { entryId },
-      pgBossJobId: jobId,
-      createdBy: actorId,
-    },
-  });
+  // A fresh Inquiry window from the unpark — none for a booking that has been to Set up
+  // (lib/inquiry-expiry.ts, 2026-10-22).
+  await armInquiryExpiryTx(tx, engine, { entryId, actorId });
 }
 
 /**
@@ -845,6 +792,9 @@ export async function expireEntry(
       }
     } else if (!fromParkFollowUp && fresh.currentStage !== Stage.S1) {
       return { skipped: true as const, reason: "STAGE_CLOCK_MISMATCH" };
+    } else if (!fromParkFollowUp && (await hasBeenToSetup(tx, entryId))) {
+      // Back at Inquiry after Set up (2026-10-22): it may hold money, so the desk ends it, not a clock.
+      return { skipped: true as const, reason: "BEEN_TO_SETUP" };
     }
 
     // Which clock ran out, so the desk can say so rather than printing a bare "Expired"

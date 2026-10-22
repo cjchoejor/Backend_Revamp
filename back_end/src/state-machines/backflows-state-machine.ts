@@ -35,6 +35,7 @@ import { freezeUnrenderedProformasForEntry } from "../services/domain/invoice-pd
 import { generateOrLoadQuotationPdf } from "../services/domain/quotation-pdf-service.js";
 import { registerNightAuditTimers } from "../services/domain/pre-arrival-service.js";
 import { getTimerEngine } from "../services/infrastructure/timer-management-service.js";
+import { armInquiryExpiryTx } from "../lib/inquiry-expiry.js";
 import {
   enforceS2ToS1BackflowAuthority,
   enforceS4ToS1BackflowAuthority,
@@ -148,6 +149,10 @@ async function runBackflow(
 
   const now = new Date();
   const nextSegmentNumber = Number(entry.segmentNumber ?? 1) + 1;
+  // Back at Inquiry the inquiry window runs again (2026-10-22) — the move to Negotiation had
+  // cancelled it, and nothing re-armed it, so a booking sent back for new dates or rooms ran no
+  // clock at all. A booking that has been to Set up gets none (lib/inquiry-expiry.ts).
+  const inquiryEngine = input.toStage === Stage.S1 ? await getTimerEngine() : null;
 
   const result = await prisma.$transaction(async (tx) => {
     // 1. Compute consequences (writes REENTRY.CONSEQUENCES_COMPUTED trace).
@@ -217,6 +222,11 @@ async function runBackflow(
       },
     });
 
+    // 6b. The Inquiry clock, when the booking lands at Inquiry.
+    const inquiryClock = inquiryEngine
+      ? await armInquiryExpiryTx(tx, inquiryEngine, { entryId: entry.id, actorId: input.actor.actorId, now })
+      : null;
+
     // 7. Emit backflow trace (mode + from + to + segment metadata).
     await tx.traceEvent.create({
       data: {
@@ -238,6 +248,7 @@ async function runBackflow(
           toStage: input.toStage,
           segmentNumber: nextSegmentNumber,
           reason: input.reason,
+          ...(inquiryEngine ? { inquiryClockFiresAt: inquiryClock?.firesAt ?? null } : {}),
         },
         createdBy: input.actor.actorId,
       },
