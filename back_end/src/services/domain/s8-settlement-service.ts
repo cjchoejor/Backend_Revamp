@@ -18,6 +18,7 @@ import {
   findIncompleteStayNightAuditDatesUtc,
   listStayNightOperatingDatesUtc,
 } from "../../policies/24-night-audit/p61-night-audits-complete-for-stay-before-settlement.js";
+import { isBookingNightPosted } from "../application/s7-night-audit-service.js";
 import {
   enforceApprovedAmendmentChainForSettlement,
   enforceRoomChargeSumMatchesFrozenRateBasis,
@@ -254,6 +255,15 @@ export async function initiateSettlement(
       entry.reservation.frozenCheckInDate,
       settlementCheckOut,
     );
+    // A night posted for THIS booking by the desk's own run counts, as it does at the move to
+    // Check-out (2026-09-25 ruling). The manual run writes no hotel-wide record, so a night the
+    // hotel's run never reached — the backend was down that morning — refused settlement for a
+    // booking whose bill already carried it (ENT-20260925-0022, 2026-10-22).
+    const stillIncomplete: string[] = [];
+    for (const iso of incompleteNightAuditDates) {
+      if (!(await isBookingNightPosted(prisma, entry.id, new Date(`${iso.slice(0, 10)}T00:00:00.000Z`)))) stillIncomplete.push(iso);
+    }
+    incompleteNightAuditDates = stillIncomplete;
   }
   enforceNightAuditsCompleteForStayBeforeSettlement({
     incompleteOperatingDateIsoList: incompleteNightAuditDates,
