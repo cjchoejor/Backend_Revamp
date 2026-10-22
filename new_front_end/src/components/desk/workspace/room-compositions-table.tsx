@@ -980,6 +980,9 @@ export function RoomCompositionsTable({
    */
   const applyBandChange = (roomId: string, col: "ad" | "c6" | "u6", v: string) => {
     let n = cnt(v);
+    /** What was typed — named in a refusal, since a caret left after "2" makes a typed 3 read "23"
+     *  (2026-10-22, operator: the cell showed 3 under a message about capping it at 3). */
+    const typed = n;
     let display = v; // keep the raw string (e.g. "") when nothing clamps
     if (col === "ad") {
       const cap = capOf(roomId);
@@ -987,7 +990,7 @@ export function RoomCompositionsTable({
         const ceil = cap + bedMaxOf(roomId);
         if (n > ceil) {
           flashLimit(
-            `Room ${roomNoOf(roomId)} sleeps at most ${ceil} adult-rate guests (${cap} + ${bedMaxOf(roomId)} extra bed${bedMaxOf(roomId) === 1 ? "" : "s"}) — capped.`,
+            `You typed ${typed} — Room ${roomNoOf(roomId)} sleeps at most ${ceil} adult-rate guests (${cap} + ${bedMaxOf(roomId)} extra bed${bedMaxOf(roomId) === 1 ? "" : "s"}), so it is set to ${ceil}.`,
           );
           n = ceil;
           display = String(n);
@@ -1016,9 +1019,9 @@ export function RoomCompositionsTable({
       const remaining = Math.max(0, partyBands[col] - others);
       if (n > remaining) {
         flashLimit(
-          `This booking has ${partyBands[col]} ${bandLabel(col, partyBands[col])}${
+          `You typed ${typed} — Room ${roomNoOf(roomId)} can take ${remaining} ${bandLabel(col, remaining)}, so it is set to ${remaining}. This booking has ${partyBands[col]}${
             others > 0 ? ` and ${others} ${others === 1 ? "is" : "are"} already in other rooms${sameNights ? " on the same nights" : ""}` : ""
-          } — capped at ${remaining}. Reduce the other room first to move someone here, or change the party at the Inquiry step.`,
+          }. To move someone here, reduce another room first, or change the party at the Inquiry step.`,
         );
         n = remaining;
         display = String(n);
