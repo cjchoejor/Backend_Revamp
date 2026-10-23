@@ -17,6 +17,7 @@ import { enforceAcceptedIdentityDocumentType } from "../../policies/06-guest-ide
 import { loadChildPolicyBundle } from "./child-policy-service.js";
 import { findEntryIdentityVerification, resolveVerificationPaths } from "../../lib/identity-verification-path.js";
 import { partyAgeChecker } from "../../lib/party-age-check.js";
+import { adultSubjectKeys, isLeadDocumentRow, LEAD_ROW_ENTRY_SELECT, resolveLeadSubjectKey } from "../../lib/lead-guest.js";
 
 /**
  * Guest identity PROOF files (2026-08-10, operator request): a photo or scan of the guest's
@@ -964,14 +965,16 @@ export async function guestDetailsCoverageForEntry(prisma: PrismaClient, entryId
 export async function listIdentityProofsForEntry(prisma: PrismaClient, entryId: string) {
   const entry = await prisma.entry.findUnique({
     where: { id: entryId },
-    select: { id: true, guestProfileId: true },
+    select: { id: true, guestProfileId: true, leadGuestSubjectKey: true, adultCount: true, childAges: true, guestCount: true },
   });
   if (!entry) throw new NotFoundError("Entry");
+  // Which row is the lead (2026-10-23) — the desk's mark, else the first adult row.
+  const leadSubjectKey = resolveLeadSubjectKey(entry);
   const [documentTypes, coverage] = await Promise.all([
     listIdentityDocumentTypeOptions(prisma),
     guestDetailsCoverageForEntry(prisma, entryId),
   ]);
-  if (!entry.guestProfileId) return { items: [], documentTypes, coverage, returningGuest: null, verificationPaths: null, verification: null };
+  if (!entry.guestProfileId) return { items: [], documentTypes, coverage, returningGuest: null, verificationPaths: null, verification: null, leadSubjectKey };
 
   const [items, returningRow] = await Promise.all([
     prisma.guestIdentityDocument.findMany({
@@ -1008,18 +1011,22 @@ export async function listIdentityProofsForEntry(prisma: PrismaClient, entryId: 
     // row or an S6 typed-verification record — so the desk pre-fills the primary row instead
     // of re-asking a known number. Restricted to slot "A0" or slot-less rows: a companion's
     // number from an earlier booking must never seed this booking's primary guest.
-    prisma.guestIdentityDocument.findFirst({
-      where: {
-        guestProfileId: entry.guestProfileId,
-        documentNumber: { not: null },
-        AND: [
-          { OR: [{ entryId: null }, { entryId: { not: entry.id } }] },
-          { OR: [{ subjectKey: null }, { subjectKey: "A0" }] },
-        ],
-      },
-      orderBy: { capturedAt: "desc" },
-      select: { documentType: true, documentNumber: true, dateOfBirth: true, gender: true, capturedAt: true },
-    }),
+    // Since 2026-10-23 "the primary row" of an earlier booking is ITS lead's row (lib/lead-guest).
+    prisma.guestIdentityDocument
+      .findMany({
+        where: {
+          guestProfileId: entry.guestProfileId,
+          documentNumber: { not: null },
+          AND: [
+            { OR: [{ entryId: null }, { entryId: { not: entry.id } }] },
+            { OR: [{ subjectKey: null }, { subjectKey: { startsWith: "A" } }] },
+          ],
+        },
+        orderBy: { capturedAt: "desc" },
+        take: 50,
+        select: { documentType: true, documentNumber: true, dateOfBirth: true, gender: true, capturedAt: true, subjectKey: true, entry: LEAD_ROW_ENTRY_SELECT },
+      })
+      .then((rows) => rows.find(isLeadDocumentRow) ?? null),
   ]);
   const returningGuest = returningRow
     ? {
@@ -1054,7 +1061,82 @@ export async function listIdentityProofsForEntry(prisma: PrismaClient, entryId: 
     returningGuest,
     verificationPaths: { suggested: standing.suggested, allowed: standing.allowed, refused: standing.refused },
     verification,
+    leadSubjectKey,
   };
+}
+
+/**
+ * Mark one adult of the party as the lead (2026-10-23, operator: "add a lead mark"). The lead is
+ * the guest whose document the Check-in verification vouches for, whose row the returning guest's
+ * number is pulled into, and whose name the Check-in step shows (lib/lead-guest).
+ *
+ * - Only an adult row: a child is never the lead.
+ * - Refused while the outgoing or the incoming lead's details are confirmed — "Make changes" first.
+ * - A verification recorded for the earlier lead stops counting (it vouched for their document),
+ *   so the stay needs it recorded again; the answer says so (`verificationReset`).
+ */
+export async function setLeadGuest(prisma: PrismaClient, entryId: string, actorId: string, input: { subjectKey: string }) {
+  const entry = await prisma.entry.findUnique({
+    where: { id: entryId },
+    select: {
+      id: true,
+      status: true,
+      currentStage: true,
+      inquiryId: true,
+      guestProfileId: true,
+      leadGuestSubjectKey: true,
+      adultCount: true,
+      childAges: true,
+      guestCount: true,
+    },
+  });
+  if (!entry) throw new NotFoundError("Entry");
+  enforceEntryNotSealedForWorkingAction({ status: entry.status });
+  const key = input.subjectKey.trim();
+  const slots = derivePartySlots(entry);
+  const slot = slots.find((s) => s.key === key);
+  if (!slot) throw new ValidationError(`Not part of this booking's party: ${key}`);
+  if (!adultSubjectKeys(entry).includes(key)) throw new ValidationError(`${slot.label} is a child — the lead is an adult`);
+
+  const previous = resolveLeadSubjectKey(entry);
+  const rows = await prisma.guestIdentityDocument.findMany({
+    where: { entryId: entry.id, subjectKey: { in: [previous, key] }, storageKey: null },
+    select: { subjectKey: true, subjectLabel: true, detailsConfirmedAt: true },
+  });
+  const nameOf = (k: string) => rows.find((r) => r.subjectKey === k)?.subjectLabel?.trim() || slots.find((s) => s.key === k)?.label || k;
+  if (previous === key) return { subjectKey: key, label: nameOf(key), previous, changed: false, verificationReset: false };
+  const locked = rows.find((r) => r.detailsConfirmedAt);
+  if (locked) {
+    throw new PolicyGateBlockedError(
+      "GUEST_DETAILS_CONFIRMED",
+      `${nameOf(locked.subjectKey!)}'s details are confirmed — use "Make changes" to unlock them before moving the lead`,
+      { subjectKey: locked.subjectKey },
+    );
+  }
+
+  const before = await findEntryIdentityVerification(prisma, { entryId: entry.id, guestProfileId: entry.guestProfileId });
+  const now = new Date();
+  await prisma.$transaction(async (tx) => {
+    await tx.entry.update({ where: { id: entry.id }, data: { leadGuestSubjectKey: key } });
+    await tx.traceEvent.create({
+      data: {
+        eventType: "GUEST.LEAD_SET",
+        actorId,
+        actorLevel: "L1",
+        entityType: "Entry",
+        entityId: entry.id,
+        operation: "UPDATE",
+        timestamp: now,
+        stageContext: entry.currentStage,
+        inquiryId: entry.inquiryId,
+        entryId: entry.id,
+        payload: { entryId: entry.id, from: previous, fromLabel: nameOf(previous), to: key, toLabel: nameOf(key) },
+        createdBy: actorId,
+      },
+    });
+  });
+  const after = before ? await findEntryIdentityVerification(prisma, { entryId: entry.id, guestProfileId: entry.guestProfileId }) : null;
+  return { subjectKey: key, label: nameOf(key), previous, changed: true, verificationReset: !!before && !after };
 }
 
 /** Stream-ready bytes for one stored proof, integrity-checked against the recorded SHA-256. */

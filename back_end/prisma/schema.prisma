@@ -1082,6 +1082,10 @@ model Entry {
   /// It is a PLAN, not the room's state: `Room.bedType` is how a room is made up now, and a
   /// booking whose stay is weeks away must not change it under tonight's guest.
   bedPlan                        Json?
+  /// The guest-table row marked as the LEAD (2026-10-23, operator: "add a lead mark") — an adult
+  /// slot key ("A0".."An"). Null, or a row the party no longer has, means the first adult row.
+  /// Read through lib/lead-guest.ts `resolveLeadSubjectKey`, never directly.
+  leadGuestSubjectKey            String?
   otaSource                      Boolean           @default(false)
   otaReference                   String?
   groupBillingMode               GroupBillingMode?

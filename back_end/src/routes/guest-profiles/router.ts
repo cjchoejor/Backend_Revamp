@@ -7,6 +7,7 @@ import {
   mintIdentityCapturePhoneTokenRequestSchema,
   confirmGuestIdentityDetailsRequestSchema,
   clearGuestIdentitySlotRequestSchema,
+  setLeadGuestRequestSchema,
   saveGuestIdentityDetailRequestSchema,
   applyIdentityOcrSuggestionRequestSchema,
   searchGuestProfilesQuerySchema,
@@ -194,6 +195,20 @@ guestProfilesRouter.post(
         req.body,
       );
       res.json(outcome);
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+/** Mark one adult of the party as the lead (2026-10-23). */
+guestProfilesRouter.post(
+  "/entries/:id/identity-details/lead",
+  requireActorLevel("L1"),
+  validateBody(setLeadGuestRequestSchema),
+  async (req, res, next) => {
+    try {
+      res.json(await identityProofService.setLeadGuest(prisma, req.params.id, req.actor!.actorId, req.body));
     } catch (e) {
       next(e);
     }
