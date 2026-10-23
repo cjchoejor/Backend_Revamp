@@ -185,6 +185,11 @@ export function AppShell({ children }: { children: ReactNode }) {
                   </div>
                 )}
                 <p className="meta" style={{ marginTop: 10 }}>Routine work never lands here — only what is overdue or due within the next hours.</p>
+                {/* The whole list, grouped by kind of work, and the alerts the system sent (2026-10-23). */}
+                <Link href="/notifications" className="btn btn-secondary ntf-all" onClick={() => bell.setOpen(false)}>
+                  See all notifications
+                  {urgent.length > 20 ? <span className="meta"> · {urgent.length - 20} more here</span> : null}
+                </Link>
               </div>
             ) : null}
           </div>
