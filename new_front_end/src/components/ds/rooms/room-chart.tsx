@@ -325,6 +325,36 @@ const MAX_PICK = 8;
 const MOVABLE = new Set<ChartBarKind>(["RESERVED", "HELD", "IN_HOUSE", "PROVISIONAL", "OVERSTAY"]);
 
 /**
+ * Guest colours (2026-10-23, operator: "all reservations almost look the same"): with the switch on,
+ * every booking takes its own colour — pale while reserved or held, deep once in house — and its
+ * edge still says how it is held (dashed held, dotted provisional). Ten colours, none red (a
+ * problem) or the accent (a selection). The warning kinds keep their own look.
+ */
+const GUEST_COLOURS: ReadonlyArray<{ bg: string; line: string; tx: string }> = [
+  { bg: "#c9dbf2", line: "#3b6fb0", tx: "#1f4572" },
+  { bg: "#c2e6e1", line: "#2a8c84", tx: "#145550" },
+  { bg: "#cde7c4", line: "#4a8f3f", tx: "#2b5a24" },
+  { bg: "#f2dfa6", line: "#c38f1e", tx: "#6e4f0c" },
+  { bg: "#f6cba9", line: "#d0702e", tx: "#7a3c12" },
+  { bg: "#f2c6dc", line: "#c2508a", tx: "#73284f" },
+  { bg: "#dfe3b0", line: "#8a8a2c", tx: "#4f4f16" },
+  { bg: "#c1e3f3", line: "#2f8fbf", tx: "#18506e" },
+  { bg: "#e0cdbb", line: "#8a6346", tx: "#553823" },
+  { bg: "#d3d8e2", line: "#5f6b80", tx: "#353c4a" },
+];
+const GUEST_KINDS = new Set<ChartBarKind>(["RESERVED", "HELD", "PROVISIONAL", "IN_HOUSE"]);
+const guestStyle = (i: number) => {
+  const c = GUEST_COLOURS[i % GUEST_COLOURS.length];
+  return { "--g-bg": c.bg, "--g-line": c.line, "--g-tx": c.tx } as React.CSSProperties;
+};
+/** A booking's first-choice colour, the same every time the chart is drawn. */
+const colourHash = (id: string) => {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+  return h % GUEST_COLOURS.length;
+};
+
+/**
  * Where a drop sends the picked rooms: the grabbed one lands on the row dropped on and the others
  * keep their spacing from it (operator ruling 2026-10-12, "keep their order"). Rows run down the
  * chart as drawn, across room types.
@@ -663,6 +693,24 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
       }
       return !v;
     });
+  // Guest colours, remembered on this computer like the picks (2026-10-23).
+  const [byGuest, setByGuest] = useState(false);
+  useEffect(() => {
+    try {
+      if (window.localStorage.getItem("desk:chart-colours") === "guest") setByGuest(true);
+    } catch {
+      /* storage unavailable — colour by state */
+    }
+  }, []);
+  const toggleByGuest = () =>
+    setByGuest((v) => {
+      try {
+        window.localStorage.setItem("desk:chart-colours", v ? "state" : "guest");
+      } catch {
+        /* storage unavailable — the choice lasts this visit */
+      }
+      return !v;
+    });
   const [full, setFull] = useState(false);
   const [pickNights, setPickNights] = useState(1);
   const pickRef = useRef<HTMLDivElement | null>(null);
@@ -749,6 +797,52 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
     const have = new Set((chart?.rooms ?? []).map((r) => r.id));
     return (chart?.roomTypes ?? []).flatMap((t) => t.roomIds).filter((id) => have.has(id));
   }, [chart]);
+  /**
+   * Each booking's colour when the chart is coloured by guest. Bookings that touch — the same room
+   * on nights that meet or overlap, or the next row on a shared night — never share a colour; each
+   * starts from its own first choice, so a booking mostly keeps its colour as the window moves.
+   */
+  const guestColour = useMemo(() => {
+    const out = new Map<string, number>();
+    if (!byGuest || !chart) return out;
+    const rowIx = new Map(rows.map((id, i) => [id, i]));
+    const spans = chart.bars
+      .filter((b) => GUEST_KINDS.has(b.kind) && rowIx.has(b.roomId))
+      .map((b) => ({ e: b.entryId, r: rowIx.get(b.roomId)!, from: b.from, to: b.to }));
+    const near = new Map<string, Set<string>>();
+    const link = (a: string, b: string) => {
+      near.set(a, (near.get(a) ?? new Set<string>()).add(b));
+      near.set(b, (near.get(b) ?? new Set<string>()).add(a));
+    };
+    for (let i = 0; i < spans.length; i++)
+      for (let j = i + 1; j < spans.length; j++) {
+        const a = spans[i];
+        const b = spans[j];
+        if (a.e === b.e) continue;
+        const apart = Math.abs(a.r - b.r);
+        if ((apart === 0 && a.from <= b.to && b.from <= a.to) || (apart === 1 && a.from < b.to && b.from < a.to)) link(a.e, b.e);
+      }
+    const first = new Map<string, { r: number; from: string }>();
+    for (const x of spans) {
+      const f = first.get(x.e);
+      if (!f || x.r < f.r || (x.r === f.r && x.from < f.from)) first.set(x.e, { r: x.r, from: x.from });
+    }
+    const order = [...first.keys()].sort((a, b) => first.get(a)!.r - first.get(b)!.r || first.get(a)!.from.localeCompare(first.get(b)!.from));
+    const used = new Array<number>(GUEST_COLOURS.length).fill(0);
+    for (const e of order) {
+      const taken = new Set([...(near.get(e) ?? [])].map((n) => out.get(n)).filter((c): c is number => c != null));
+      const start = colourHash(e);
+      let pick = -1;
+      for (let k = 0; k < GUEST_COLOURS.length && pick < 0; k++) {
+        const c = (start + k) % GUEST_COLOURS.length;
+        if (!taken.has(c)) pick = c;
+      }
+      if (pick < 0) pick = used.indexOf(Math.min(...used));
+      out.set(e, pick);
+      used[pick]++;
+    }
+    return out;
+  }, [byGuest, chart, rows]);
 
   // The list of picks closes the way the start box does.
   useEffect(() => {
@@ -1389,7 +1483,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
   };
 
   const body = (
-    <div className={`rchart${full ? " is-full" : ""}${drag ? " is-dragging" : ""}`}>
+    <div className={`rchart${full ? " is-full" : ""}${drag ? " is-dragging" : ""}${byGuest ? " by-guest" : ""}`}>
       <div className="rchart-bar">
         <div className="rchart-nav">
           <Button kind="quiet" compact onClick={() => setFrom(shiftDay(chart.from, -7))}>
@@ -1465,6 +1559,9 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
           <Button kind="quiet" compact onClick={toggleShowPicks} aria-pressed={showPicks}>
             {showPicks ? "Hide picks" : "Show picks"}
           </Button>
+          <Button kind="quiet" compact onClick={toggleByGuest} aria-pressed={byGuest}>
+            {byGuest ? "Colour by state" : "Colour by guest"}
+          </Button>
           <Button kind="quiet" compact onClick={() => setFull((f) => !f)} aria-pressed={full}>
             {full ? "Exit full screen" : "Full screen"}
           </Button>
@@ -1473,6 +1570,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
             <p>Click a free night to start an inquiry for that room from that night. The room is chosen on the booking, where the house is asked.</p>
             <p>Click a room number to report a fault or review one. A room drawn free here is one the room search offers.</p>
             <p>A faint dashed bar is a pick: a booking at Inquiry, or at Negotiation without a provisional block, has chosen the room but holds nothing — the room is still free, and whoever reserves first takes it. Several picks on one night show as &ldquo;2 picks&rdquo;; a pick on a room someone holds shows as a &ldquo;+1 pick&rdquo; badge on that booking. Hide picks clears them from the chart on this computer.</p>
+            <p>Colour by guest gives every booking its own colour, so its rooms read as one and the booking beside it never matches — pale while reserved or held, deep once in house; a dashed edge is still held, a dotted edge a provisional block. Colour by state goes back to one colour per state. The choice is kept on this computer.</p>
             <p>Move rooms: drag a booking onto another room. Ctrl-click (Cmd on a Mac) picks more rooms, Shift-click picks a booking&apos;s rooms in between; drag one of them and they all move, the one you hold landing where you drop it and the rest keeping their spacing.</p>
             <p>Move dates: drag a booking sideways — the room you hold moves earlier or later, keeping its nights (before check-in only). Pick its other rooms first (Ctrl or Shift) to take them along; all of them moves the whole booking. A room moved alone becomes a booking of its own — on the same enquiry, or a new enquiry. Drag it down or up at the same time to change the room too.</p>
             <p>Move one night: hold Alt and drag a night of a booking — only that night moves. Alt-click picks a night first, Alt-click the next one to add it, Alt+Shift-click to take the nights in between. Dropped on another room on the same dates, the booking changes room for those nights. Dropped on other dates, the stay is cut apart: a one-room booking keeps its earliest stay and every other stay becomes a booking of its own; on a booking with other rooms, the room leaves with its guests and each of its stays becomes a booking of its own — on the same enquiry, or a new one.</p>
@@ -1533,7 +1631,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
             ) : null}
           </div>
         ) : null}
-        <Legend />
+        <Legend byGuest={byGuest} />
       </div>
 
       <div className="rchart-wrap" ref={wrapRef} onScroll={leave}>
@@ -1737,6 +1835,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
                             </td>
                           );
                         const b = bookingOf.get(s.bar.entryId);
+                        const gi = byGuest && GUEST_KINDS.has(s.bar.kind) ? guestColour.get(s.bar.entryId) : undefined;
                         const sel: Sel = { entryId: s.bar.entryId, roomId: room.id, roomNumber: room.roomNumber, name: nameOf(b) };
                         const movable = MOVABLE.has(s.bar.kind);
                         const contL = s.bar.from === chart.from && !!b?.checkInDate && b.checkInDate < chart.from;
@@ -1745,7 +1844,8 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
                           <td
                             key={k}
                             colSpan={s.span}
-                            className={`seg ${KIND_CLASS[s.bar.kind]}${s.bar.parked ? " parked" : ""}${s.bar.paymentPending ? " paypend" : ""}${contL ? " cont-l" : ""}${contR ? " cont-r" : ""}${selKeys.has(selKey(sel)) ? " marked" : ""}${dragged.has(selKey(sel)) ? " dragging" : ""}`}
+                            style={gi != null ? guestStyle(gi) : undefined}
+                            className={`seg ${KIND_CLASS[s.bar.kind]}${gi != null ? " g" : ""}${s.bar.parked ? " parked" : ""}${s.bar.paymentPending ? " paypend" : ""}${contL ? " cont-l" : ""}${contR ? " cont-r" : ""}${selKeys.has(selKey(sel)) ? " marked" : ""}${dragged.has(selKey(sel)) ? " dragging" : ""}`}
                           >
                             <button
                               type="button"
@@ -2285,15 +2385,17 @@ function HoverCard({
   return null;
 }
 
-function Legend() {
+function Legend({ byGuest }: { byGuest: boolean }) {
+  // Coloured by guest, the held kinds show one sample colour with their edges (2026-10-23).
+  const g = byGuest ? "g " : "";
   const items: Array<[string, string]> = [
     ["free", "Free"],
-    ["k-prov", "Provisional block"],
-    ["k-held", "Held · not confirmed"],
+    [`${g}k-prov`, "Provisional block"],
+    [`${g}k-held`, "Held · not confirmed"],
     ["k-move", "Moving in"],
-    ["k-res", "Reserved"],
-    ["k-res paypend", "Reserved · advance short"],
-    ["k-in", "In house"],
+    [`${g}k-res`, "Reserved"],
+    [`${g}k-res paypend`, "Reserved · advance short"],
+    [`${g}k-in`, "In house"],
     ["k-over", "Due out · still in"],
     ["k-out", "Checked out"],
     ["k-res parked", "Parked"],
@@ -2302,7 +2404,8 @@ function Legend() {
     ["k-pick", "Picked · not held"],
   ];
   return (
-    <div className="rslegend">
+    <div className={`rslegend${byGuest ? " by-guest" : ""}`}>
+      {byGuest ? <b className="rslegend-lead">Each booking its own colour ·</b> : null}
       {items.map(([cls, word]) => (
         <span key={word}>
           <i className={`sw ${cls}`} />
