@@ -611,8 +611,10 @@ function derivePartySlots(entry: {
 export type PhoneCaptureRoom = { roomNumber: string; bedType: string | null; roomTypeName: string | null };
 
 /**
- * slot key → PRIMARY roomId, per the booking's composition. The derivation lives in ONE place
- * since 2026-08-21 — `lib/party-seating.ts` (`resolveCompositionBasis` for WHICH composition,
+ * slot key → every room that guest sleeps in, the first night's room first (the PRIMARY room the
+ * phone files them under), plus each room's nights, per the booking's composition. The
+ * derivation lives in ONE place since 2026-08-21 — `lib/party-seating.ts`
+ * (`resolveCompositionBasis` for WHICH composition,
  * `seatPartyRooms` for who sits where; night-aware, sealed order, adults → 6–10s → under-6s) —
  * mirrored by the desk's `seatPartyByComposition`, so the phone and the desk table can never
  * disagree about who sleeps where. Before this the phone picked "any ACCEPTED quote with
@@ -634,10 +636,10 @@ function seatPartyByCompositionServer(
   },
   youngMax: number,
   childMax: number,
-): Map<string, string> {
-  const out = new Map<string, string>();
+): { rooms: Map<string, string[]>; nightsByRoom: Map<string, string[]> } {
+  const out = new Map<string, string[]>();
   const basis = resolveCompositionBasis(entry);
-  if (!basis.compositions) return out;
+  if (!basis.compositions) return { rooms: out, nightsByRoom: new Map() };
   const slots = derivePartySeatingSlots(entry, { youngChildMaxAge: youngMax, childMaxAge: childMax });
   const checkIn = entry.reservation?.frozenCheckInDate ?? entry.checkInDate;
   const checkOut = entry.reservation?.frozenCheckOutDate ?? entry.checkOutDate;
@@ -653,14 +655,15 @@ function seatPartyByCompositionServer(
     fallbackRoomIds: Array.from(new Set(entry.roomAssignments.map((a) => a.roomId))),
     nightsIso: nightsIso.length > 0 ? nightsIso : ["stay"],
   });
+  const nightsByRoom = nightsByRoomFromPicture(picture);
   const seating = seatPartyRooms({
     slots,
     rows: basis.compositions,
     order: planRoomOrder(picture),
-    nightsByRoom: nightsByRoomFromPicture(picture),
+    nightsByRoom,
   });
-  for (const [slot, rooms] of seating) if (rooms.length > 0) out.set(slot, rooms[0]);
-  return out;
+  for (const [slot, rooms] of seating) if (rooms.length > 0) out.set(slot, rooms);
+  return { rooms: out, nightsByRoom };
 }
 
 /**
@@ -710,7 +713,7 @@ export async function phoneCaptureRoster(prisma: PrismaClient, entryId: string) 
     bundle?.ageBands.youngChildMaxAge ?? 5,
     bundle?.ageBands.childMaxAge ?? 10,
   );
-  const seatedRoomIds = Array.from(new Set(seating.values()));
+  const seatedRoomIds = Array.from(new Set([...seating.rooms.values()].flat()));
   const roomsById = new Map<string, PhoneCaptureRoom>();
   if (seatedRoomIds.length > 0) {
     const roomRows = await prisma.room.findMany({
@@ -726,12 +729,26 @@ export async function phoneCaptureRoster(prisma: PrismaClient, entryId: string) 
     const typedName = rows
       .find((r) => r.subjectKey === s.key && !r.storageKey && r.subjectLabel?.trim())
       ?.subjectLabel?.trim();
-    const roomId = seating.get(s.key);
+    const roomIds = seating.rooms.get(s.key) ?? [];
+    const roomId = roomIds[0];
+    // A guest who changes rooms between nights is still ONE guest with one ID (2026-10-23): they
+    // are filed under the room they start in, and the phone says where they move — each later
+    // room with the first night they sleep there that an earlier room did not already cover.
+    const covered = new Set(roomId ? (seating.nightsByRoom.get(roomId) ?? []) : []);
+    const laterRooms: { room: PhoneCaptureRoom; fromNight: string }[] = [];
+    for (const id of roomIds.slice(1)) {
+      const nights = seating.nightsByRoom.get(id) ?? [];
+      const fromNight = nights.find((n) => !covered.has(n));
+      for (const n of nights) covered.add(n);
+      const room = roomsById.get(id);
+      if (fromNight && room) laterRooms.push({ room, fromNight });
+    }
     return {
       key: s.key,
       label: typedName || s.label,
       photoCount: rows.filter((r) => r.subjectKey === s.key && r.storageKey).length,
       room: (roomId ? roomsById.get(roomId) : null) ?? null,
+      laterRooms,
     };
   });
 }
