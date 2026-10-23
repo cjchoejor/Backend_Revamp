@@ -1009,23 +1009,21 @@ function TheHouse({
     ),
   ];
   const [pickedType, setPickedType] = useState<string | null>(null);
-  const chosenType =
-    pickedType ??
-    (savedTypes.length === 1
-      ? savedTypes[0]!
-      : (byType.find((t) => t.full.length >= numberOfRooms)?.name ?? null));
+  // Nothing is marked until the desk marks it (2026-10-23, operator: a type chosen by itself, and
+  // rooms already ticked, confused the user). Rooms already saved on the booking still mark their type.
+  const chosenType = pickedType ?? (savedTypes.length === 1 ? savedTypes[0]! : null);
   const chosenRow = byType.find((t) => t.name === chosenType) ?? null;
   // The MARKED type's own indicative figure (2026-09-19): every room carries its type's chip, while
   // the search-wide one is a single plan's rate — it read the same for a Suite and a Standard Single.
   const chosenPricing = useMemo(() => {
-    if (!chosenType) return pricing;
+    if (!chosenType) return null;
     const room = [...available, ...deficient].find((r) => r.roomTypeName === chosenType);
     return readPricing(room?.pricingIndicative) ?? pricing;
   }, [chosenType, available, deficient, pricing]);
 
   // A room suggested by the house chart (2026-10-12): "Start an inquiry" on a free night opens the
-  // new booking with `?room=305`. The house is asked once on arrival and, when the room is free on
-  // every night, it is picked and Take it keeps it — said in words either way. The address loses
+  // new booking with `?room=305`. The house is asked once on arrival and the card says whether the
+  // room is free on every night — it is not picked for the desk (2026-10-23). The address loses
   // `room=` once it is read, so a reload does not do it again.
   const searchParams = useSearchParams();
   const pathname = usePathname();
@@ -1141,24 +1139,25 @@ function TheHouse({
       return;
     }
     if (!hasResults) {
-      if (!chartAsked.current && entry.checkInDate && entry.checkOutDate) {
+      if (chartAsked.current || !entry.checkInDate || !entry.checkOutDate) return;
+      // Started once the effect has settled, never inside it (2026-10-23): in development React runs
+      // an effect twice, and a search started on the first run left the button cut off from it —
+      // "Asking…" for ever, though the house had answered.
+      const t = setTimeout(() => {
         chartAsked.current = true;
         ask.mutate();
-      }
-      return;
+      }, 0);
+      return () => clearTimeout(t);
     }
     chartRead.current = true;
     const row = rows.find((r) => r.roomNumber === chartRoom);
     if (row && row.bucket === "available") {
-      sel.setWholeStay([row.roomId]);
-      setPickedType(row.roomTypeName);
+      // Named, not picked: the desk picks it (or another) itself. Take it puts it first when its
+      // type is the one marked.
       setChartPick(row.roomId);
       setChartNote({
         ok: true,
-        text:
-          numberOfRooms > 1
-            ? `Room ${chartRoom} from the house chart is free on every night and picked — Take it adds ${plural(numberOfRooms - 1, "more room")} of its type.`
-            : `Room ${chartRoom} from the house chart is free on every night — press Take it to keep it.`,
+        text: `Room ${chartRoom} (${row.roomTypeName}) from the house chart is free on every night — not picked yet.`,
       });
     } else {
       setChartNote({

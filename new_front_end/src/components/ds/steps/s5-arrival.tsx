@@ -496,8 +496,13 @@ function FrontDeskHandoff({ entry, facts }: { entry: EntryDetail; facts: Facts_ 
   const tried = useRef(false);
   useEffect(() => {
     if (past || !canFulfil || tried.current || autoFulfil.isPending || fulfil.isPending) return;
-    tried.current = true;
-    autoFulfil.mutate();
+    // Started once the effect has settled (2026-10-23): a mutation started on the first of
+    // development's two effect runs leaves its button spinning for ever.
+    const t = setTimeout(() => {
+      tried.current = true;
+      autoFulfil.mutate();
+    }, 0);
+    return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canFulfil, past]);
 

@@ -644,12 +644,18 @@ export function IdentityProofBlock({
     const row = detailRow("A0");
     if (row?.documentNumber) return;
     if (lockedFor("A0")) return; // confirmed row — nothing may write to it unasked
-    autoPullRef.current = true;
     const draft: DetailDraft = { ...draftFromRow(row), num: returning.documentNumber };
-    setDrafts((prev) => ({ ...prev, A0: draft }));
-    setPulledFromFile(true);
-    saveM.mutate({ slot, draft });
-    toast.info(`Document number on file (${returning.documentNumber}) pulled into ${slot.label} — confirm it belongs to this guest`);
+    const documentNumber = returning.documentNumber;
+    // Started once the effect has settled (2026-10-23): a save started on the first of
+    // development's two effect runs never reports back, and Confirm stays shut behind it.
+    const t = setTimeout(() => {
+      autoPullRef.current = true;
+      setDrafts((prev) => ({ ...prev, A0: draft }));
+      setPulledFromFile(true);
+      saveM.mutate({ slot, draft });
+      toast.info(`Document number on file (${documentNumber}) pulled into ${slot.label} — confirm it belongs to this guest`);
+    }, 0);
+    return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot, keyed on the fetched snapshot
   }, [listQuery.data, session]);
 
