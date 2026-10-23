@@ -98,6 +98,13 @@ ID photo. Details save on field blur; a typed name replaces the generic label li
 - The desk row has **upload + phone-QR buttons only** (single-file input). The desk camera
   button was removed — photographing happens on the QR-handoff phone.
 - Phone page wording follows: covered rows read "ID on file" with a **Retake** button.
+- **A row can be cleared (2026-10-23)** — the typed details, the ID photo, or both, from the
+  eraser button on the row (`POST /api/entries/:id/identity-details/clear`). A cleared photo
+  leaves the row and stops counting (coverage, phone counts, readings) but its **file stays in
+  the store** (`clearedAt` on the row); a confirmed row must be unlocked first. At Reserve or
+  Arrival the guest-details checklist task opens again when the party is no longer covered.
+- **Where the files are**: `back_end/storage/documents/YYYY/MM/identity-proof/`, named
+  `<entryId>-<stamp>-<rand>.<ext>` (the default `STORAGE_ROOT_DIR`).
 
 ### 1.4 Phone capture handoff (QR)
 
