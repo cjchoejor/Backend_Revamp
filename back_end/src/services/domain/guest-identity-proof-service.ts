@@ -464,7 +464,7 @@ export async function setGuestIdentityDetailConfirmation(
   }
 
   const rows = await prisma.guestIdentityDocument.findMany({
-    where: { entryId: entry.id, subjectKey: { in: keys } },
+    where: { entryId: entry.id, subjectKey: { in: keys }, clearedAt: null },
     select: {
       id: true,
       subjectKey: true,
@@ -576,6 +576,148 @@ export async function setGuestIdentityDetailConfirmation(
   });
 
   return { confirmed: input.confirmed, changed, skipped };
+}
+
+/**
+ * Clear one guest's row (2026-10-23, operator: "a clear option for both image and text") — the
+ * details typed on it, its ID photo, or both, when they were put on the wrong row or are wrong.
+ *
+ * - **Details**: the row's typed fields go back to empty (the type, number, name, date of birth
+ *   and gender); the name falls back to the generic "Adult 2".
+ * - **Photo**: every photo this booking holds for the guest is taken off the row
+ *   (`clearedAt`). The files stay in the write-once store — that is the record, and the
+ *   retention purge is how they go — but the row stops showing them and they stop counting
+ *   towards the check-in coverage, the phone's counts and the readings.
+ * - **A confirmed row is refused**, as an edit is: "Make changes" first.
+ * - **The Arrival checklist follows**: a guest-details task that ticked itself is opened again
+ *   at Reserve or Arrival when the party is no longer covered (a waived one stays waived).
+ */
+export async function clearGuestIdentitySlot(
+  prisma: PrismaClient,
+  entryId: string,
+  actorId: string,
+  input: { subjectKey: string; details?: boolean; photo?: boolean },
+) {
+  const entry = await prisma.entry.findUnique({
+    where: { id: entryId },
+    select: { id: true, status: true, currentStage: true, inquiryId: true, guestProfileId: true, adultCount: true, childAges: true, guestCount: true },
+  });
+  if (!entry) throw new NotFoundError("Entry");
+  enforceEntryNotSealedForWorkingAction({ status: entry.status });
+  const key = input.subjectKey.trim();
+  const slot = derivePartySlots(entry).find((s) => s.key === key);
+  if (!slot) throw new ValidationError(`Not part of this booking's party: ${key}`);
+  if (!input.details && !input.photo) throw new ValidationError("Say what to clear: the details, the photo, or both");
+
+  const rows = await prisma.guestIdentityDocument.findMany({
+    where: { entryId: entry.id, subjectKey: key, clearedAt: null },
+    select: { id: true, subjectLabel: true, documentType: true, documentNumber: true, dateOfBirth: true, gender: true, storageKey: true, detailsConfirmedAt: true },
+  });
+  const detail = rows.find((r) => !r.storageKey);
+  const photos = rows.filter((r) => r.storageKey);
+  const who = detail?.subjectLabel?.trim() || slot.label;
+  if (detail?.detailsConfirmedAt) {
+    throw new PolicyGateBlockedError(
+      "GUEST_DETAILS_CONFIRMED",
+      `${who}'s details are confirmed — use "Make changes" to unlock them before clearing`,
+      { subjectKey: key, confirmedAt: detail.detailsConfirmedAt },
+    );
+  }
+
+  // Which typed fields hold something — named on the trace (names only, never the values).
+  const filledFields = detail
+    ? [
+        detail.documentType && detail.documentType !== UNTYPED_DOC_TYPE && detail.documentType !== "PHOTO_PROOF" ? "documentType" : null,
+        detail.documentNumber?.trim() ? "documentNumber" : null,
+        detail.subjectLabel?.trim() ? "name" : null,
+        detail.dateOfBirth ? "dateOfBirth" : null,
+        detail.gender?.trim() ? "gender" : null,
+      ].filter((f): f is string => !!f)
+    : [];
+  const clearDetails = !!input.details && filledFields.length > 0;
+  const clearPhotos = input.photo ? photos : [];
+  if (!clearDetails && !clearPhotos.length) {
+    throw new ValidationError(
+      input.details && input.photo
+        ? `Nothing is recorded for ${who} to clear`
+        : input.details
+          ? `No details are typed for ${who}`
+          : `${who} has no ID photo on this booking`,
+    );
+  }
+
+  const now = new Date();
+  await prisma.$transaction(async (tx) => {
+    if (clearDetails && detail) {
+      await tx.guestIdentityDocument.update({
+        where: { id: detail.id },
+        data: { subjectLabel: null, documentType: UNTYPED_DOC_TYPE, documentNumber: null, dateOfBirth: null, gender: null },
+      });
+    }
+    for (const p of clearPhotos) {
+      await tx.guestIdentityDocument.update({ where: { id: p.id }, data: { clearedAt: now, clearedBy: actorId } });
+    }
+    await tx.traceEvent.create({
+      data: {
+        eventType: "GUEST.IDENTITY_SLOT_CLEARED",
+        actorId,
+        actorLevel: "L1",
+        entityType: "Entry",
+        entityId: entry.id,
+        operation: "UPDATE",
+        timestamp: now,
+        stageContext: entry.currentStage,
+        inquiryId: entry.inquiryId,
+        entryId: entry.id,
+        payload: {
+          entryId: entry.id,
+          subjectKey: key,
+          label: who,
+          detailsCleared: clearDetails ? filledFields : [],
+          photosCleared: clearPhotos.map((p) => p.id),
+        },
+        createdBy: actorId,
+      },
+    });
+  });
+
+  const taskReopened = await reopenGuestDetailsTaskIfUncovered(prisma, entry.id, entry.currentStage, actorId);
+  return { subjectKey: key, label: who, detailsCleared: clearDetails, photosCleared: clearPhotos.length, taskReopened };
+}
+
+/** The Arrival checklist's guest-details task, opened again when a clear left the party short. */
+async function reopenGuestDetailsTaskIfUncovered(prisma: PrismaClient, entryId: string, stage: string | null, actorId: string) {
+  if (stage !== "S4" && stage !== "S5") return false;
+  try {
+    const done = await prisma.preArrivalTask.findFirst({
+      where: { entryId, taskType: PreArrivalTaskType.GUEST_DETAILS_CAPTURED, status: TaskStatus.COMPLETE },
+      select: { id: true },
+    });
+    if (!done) return false;
+    const coverage = await guestDetailsCoverageForEntry(prisma, entryId);
+    if (coverage.satisfied || coverage.vipExempt) return false;
+    const now = new Date();
+    await prisma.$transaction([
+      prisma.preArrivalTask.update({ where: { id: done.id }, data: { status: TaskStatus.PENDING, completedAt: null, completedBy: null } }),
+      prisma.traceEvent.create({
+        data: {
+          eventType: "PRE_ARRIVAL_TASK.REOPENED",
+          actorId,
+          actorLevel: "L1",
+          entityType: "PreArrivalTask",
+          entityId: done.id,
+          operation: "UPDATE",
+          timestamp: now,
+          entryId,
+          payload: { entryId, taskType: "GUEST_DETAILS_CAPTURED", cause: "GUEST_DETAILS_CLEARED", missing: coverage.missing.map((m) => m.label) },
+          createdBy: actorId,
+        },
+      }),
+    ]);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -702,7 +844,7 @@ export async function phoneCaptureRoster(prisma: PrismaClient, entryId: string) 
   const slots = derivePartySlots(entry);
   const rows = entry.guestProfileId
     ? await prisma.guestIdentityDocument.findMany({
-        where: { entryId: entry.id, subjectKey: { not: null } },
+        where: { entryId: entry.id, subjectKey: { not: null }, clearedAt: null },
         select: { subjectKey: true, subjectLabel: true, storageKey: true },
       })
     : [];
@@ -782,7 +924,7 @@ export async function guestDetailsCoverageForEntry(prisma: PrismaClient, entryId
 
   const rows = entry.guestProfileId
     ? await prisma.guestIdentityDocument.findMany({
-        where: { entryId: entry.id, subjectKey: { not: null } },
+        where: { entryId: entry.id, subjectKey: { not: null }, clearedAt: null },
         select: { subjectKey: true, subjectLabel: true, documentNumber: true, storageKey: true },
       })
     : [];
@@ -835,6 +977,8 @@ export async function listIdentityProofsForEntry(prisma: PrismaClient, entryId: 
     prisma.guestIdentityDocument.findMany({
       where: {
         guestProfileId: entry.guestProfileId,
+        // A photo taken off its row (2026-10-23) is kept in the store, not shown.
+        clearedAt: null,
         OR: [{ storageKey: { not: null } }, { entryId: entry.id, subjectKey: { not: null } }],
       },
       orderBy: { capturedAt: "desc" },

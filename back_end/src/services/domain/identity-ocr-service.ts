@@ -87,7 +87,7 @@ async function sanitiseFields(
 async function loadPhoto(prisma: PrismaClient, photoDocumentId: string) {
   const photo = await prisma.guestIdentityDocument.findUnique({
     where: { id: photoDocumentId },
-    select: { id: true, entryId: true, subjectKey: true, storageKey: true, mimeType: true },
+    select: { id: true, entryId: true, subjectKey: true, storageKey: true, mimeType: true, clearedAt: true },
   });
   if (!photo || !photo.storageKey) throw new NotFoundError("Identity proof photo");
   if (!photo.entryId) throw new ValidationError("This photo is not attached to a booking");
@@ -325,6 +325,8 @@ export async function runServerExtractionForPhoto(
 ) {
   const photo = await loadPhoto(prisma, photoDocumentId);
   const existing = await prisma.identityOcrSuggestion.findUnique({ where: { photoDocumentId: photo.id } });
+  // Taken off its row (2026-10-23): nothing to read it for.
+  if (photo.clearedAt) return { skipped: true as const, reason: "PHOTO_CLEARED", suggestion: existing };
   if (
     !opts.force &&
     existing &&
@@ -559,7 +561,8 @@ export type OcrSuggestionView = {
 const STALLED_AFTER_MS = 5 * 60_000;
 
 export async function listOcrSuggestionsForEntry(prisma: PrismaClient, entryId: string): Promise<OcrSuggestionView[]> {
-  const rows = await prisma.identityOcrSuggestion.findMany({ where: { entryId }, orderBy: { updatedAt: "desc" } });
+  // A photo taken off its row (2026-10-23) takes its reading with it.
+  const rows = await prisma.identityOcrSuggestion.findMany({ where: { entryId, photo: { clearedAt: null } }, orderBy: { updatedAt: "desc" } });
   // A date of birth read off the photo that does not fit the guest's row is said before Apply.
   const ageOf = await partyAgeChecker(prisma, entryId);
   const now = Date.now();

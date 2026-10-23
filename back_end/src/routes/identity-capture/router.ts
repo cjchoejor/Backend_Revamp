@@ -56,7 +56,7 @@ identityCaptureRouter.get("/identity-capture/context", async (req, res, next) =>
       ? roster.reduce((n, s) => n + s.photoCount, 0)
       : payload.subjectKey
         ? await prisma.guestIdentityDocument.count({
-            where: { entryId: entry.id, subjectKey: payload.subjectKey, storageKey: { not: null } },
+            where: { entryId: entry.id, subjectKey: payload.subjectKey, storageKey: { not: null }, clearedAt: null },
           })
         : 0;
     res.json({

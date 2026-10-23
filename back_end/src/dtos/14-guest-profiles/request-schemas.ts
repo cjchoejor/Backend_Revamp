@@ -62,6 +62,16 @@ export const confirmGuestIdentityDetailsRequestSchema = z.object({
 });
 export type ConfirmGuestIdentityDetailsRequestDto = z.infer<typeof confirmGuestIdentityDetailsRequestSchema>;
 
+/** Clear one guest's row (2026-10-23): the typed details, the ID photo, or both. */
+export const clearGuestIdentitySlotRequestSchema = z
+  .object({
+    subjectKey: z.string().trim().min(1).max(16),
+    details: z.boolean().optional(),
+    photo: z.boolean().optional(),
+  })
+  .refine((b) => b.details || b.photo, { message: "Say what to clear: the details, the photo, or both" });
+export type ClearGuestIdentitySlotRequestDto = z.infer<typeof clearGuestIdentitySlotRequestSchema>;
+
 /** Mint a phone identity-capture token (2026-08-12): one party slot, or the WHOLE party
  *  (`allSlots` — the phone page lists every guest and files each photo under the slot the
  *  phone user picks, server-validated). */

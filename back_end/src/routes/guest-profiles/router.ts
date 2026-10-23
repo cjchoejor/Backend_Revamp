@@ -6,6 +6,7 @@ import {
   createGuestProfileRequestSchema,
   mintIdentityCapturePhoneTokenRequestSchema,
   confirmGuestIdentityDetailsRequestSchema,
+  clearGuestIdentitySlotRequestSchema,
   saveGuestIdentityDetailRequestSchema,
   applyIdentityOcrSuggestionRequestSchema,
   searchGuestProfilesQuerySchema,
@@ -193,6 +194,20 @@ guestProfilesRouter.post(
         req.body,
       );
       res.json(outcome);
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+/** Clear one guest's row — the typed details, the ID photo, or both (2026-10-23). */
+guestProfilesRouter.post(
+  "/entries/:id/identity-details/clear",
+  requireActorLevel("L1"),
+  validateBody(clearGuestIdentitySlotRequestSchema),
+  async (req, res, next) => {
+    try {
+      res.json(await identityProofService.clearGuestIdentitySlot(prisma, req.params.id, req.actor!.actorId, req.body));
     } catch (e) {
       next(e);
     }

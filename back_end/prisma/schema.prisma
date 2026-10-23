@@ -871,6 +871,13 @@ model GuestIdentityDocument {
   detailsConfirmedAt DateTime?
   detailsConfirmedBy String?
 
+  /// Taken off its guest's row (2026-10-23, operator: "a clear option for both image and text") —
+  /// a photo put on the wrong row, or the wrong photo. Photo rows only. The bytes stay in the
+  /// write-once store as the record, but the row no longer shows the photo and it no longer
+  /// counts towards the check-in coverage, the phone's counts or the readings.
+  clearedAt DateTime?
+  clearedBy String?
+
   capturedAt         DateTime
   capturedBy         String
   retentionPeriod    Int
