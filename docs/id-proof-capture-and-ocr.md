@@ -103,6 +103,9 @@ ID photo. Details save on field blur; a typed name replaces the generic label li
   leaves the row and stops counting (coverage, phone counts, readings) but its **file stays in
   the store** (`clearedAt` on the row); a confirmed row must be unlocked first. At Reserve or
   Arrival the guest-details checklist task opens again when the party is no longer covered.
+- **The date of birth is typed in three boxes, Day · Month · Year (2026-10-23)** — the browser's
+  own calendar made the desk scroll back year by year; a half or impossible date is outlined and
+  not saved.
 - **Where the files are**: `back_end/storage/documents/YYYY/MM/identity-proof/`, named
   `<entryId>-<stamp>-<rand>.<ext>` (the default `STORAGE_ROOT_DIR`).
 
