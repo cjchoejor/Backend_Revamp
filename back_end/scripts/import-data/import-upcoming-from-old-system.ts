@@ -667,12 +667,26 @@ async function main() {
           const v = stay.visit;
           const comps = stay.comps;
           const roomIds = [...new Set(comps.map((c) => c.roomId))];
-          // One row per room decides the head count — a room cut into two runs (its agreed
-          // figures changed mid-stay) must not have its guests counted twice.
-          const leadPerRoom = roomIds.map((id) => comps.filter((c) => c.roomId === id).reduce((a, c) => ((c.occupantCount ?? 0) > (a.occupantCount ?? 0) ? c : a)));
-          const adults = leadPerRoom.reduce((s, c) => s + (c.adultCount ?? 0), 0);
-          const kids6to10 = leadPerRoom.reduce((s, c) => s + (c.cnb6To10Count ?? 0), 0);
-          const kidsUnder6 = leadPerRoom.reduce((s, c) => s + (c.cnbUnder6Count ?? 0), 0);
+          // The party is the busiest NIGHT's head count: the rooms held on one night, added up.
+          // Adding up every room the stay ever used counted a guest moved to another room for a
+          // night or two as more guests in more rooms — Arura Academy, 2 adults in one room who
+          // sleep in 504 on two nights of the month, read as 4 adults in 2 rooms (2026-10-23).
+          // A room cut into two runs (its agreed figures changed mid-stay) is still one room on
+          // any night, so it is not counted twice either; rooms held side by side still add up.
+          const byNight = nightsOf(v.checkIn, v.checkOut).map((night) => {
+            const here = comps.filter((c) => covers(c, night));
+            const add = (pick: (c: (typeof comps)[number]) => number | null | undefined) => here.reduce((s, c) => s + (pick(c) ?? 0), 0);
+            const adults = add((c) => c.adultCount);
+            const kids6to10 = add((c) => c.cnb6To10Count);
+            const kidsUnder6 = add((c) => c.cnbUnder6Count);
+            return { rooms: new Set(here.map((c) => c.roomId)).size, adults, kids6to10, kidsUnder6, heads: adults + kids6to10 + kidsUnder6 };
+          });
+          const busiest = byNight.reduce(
+            (a, n) => (n.heads > a.heads || (n.heads === a.heads && n.adults > a.adults) ? n : a),
+            { rooms: 0, adults: 0, kids6to10: 0, kidsUnder6: 0, heads: 0 },
+          );
+          const { adults, kids6to10, kidsUnder6 } = busiest;
+          const roomsPerNight = Math.max(1, ...byNight.map((n) => n.rooms));
           // The old system records children by BAND, never by age. One representative age per
           // band keeps this system's banding identical without inventing precision.
           const childAges = [...Array(kids6to10).fill(8), ...Array(kidsUnder6).fill(3)];
@@ -690,7 +704,7 @@ async function main() {
               checkInDate: utc(v.checkIn), checkOutDate: utc(v.checkOut),
               guestCount: Math.max(1, adults + kids6to10 + kidsUnder6),
               adultCount: adults, childCount: kids6to10 + kidsUnder6, childAges,
-              numberOfRooms: roomIds.length,
+              numberOfRooms: roomsPerNight,
               bedTypeRequest: v.index === 1 && Object.keys(bedRequest).length ? bedRequest : undefined,
               segmentNumber: 1, currentStage: stage, status: EntryStatus.ACTIVE, otaSource: false,
               contactPersonName: clean(b.inquiry.contact_person),
@@ -725,7 +739,7 @@ async function main() {
           const anchorRoom = roomsDb.find((r) => r.id === mostNights(comps))!;
           const commercialTerms = {
             roomTypeId: anchorRoom.roomTypeId, useType: "LEISURE", currency: "BTN",
-            roomCount: roomIds.length,
+            roomCount: roomsPerNight,
             roomCompositions,
             compositionTotals: serialise(stay.totals),
             importedFrom: { system: "old PMS", reference: b.ref, visit: v.index, agencyAsEntered: b.agencyDetail },
