@@ -267,6 +267,22 @@ export function AssignRoomsCard({ entry }: { entry: EntryDetail }) {
   const assigned = assignedIds.length > 0;
   const canWork = !past && entry.currentStage === "S5" && entry.status === "ACTIVE";
   const seatingProblem = !!comps && !issues.ok;
+  // Housekeeping's word on the assigned rooms (moved here from the "Ready the room" overview,
+  // 2026-10-23) — read from the room board, not ticked here.
+  const notReady = Array.from(new Map(assignments.map((a) => [a.roomId, a])).values()).filter((a) => !roomReady(a));
+  const readiness = !assigned ? null : notReady.length ? (
+    <span className="warn-ink">
+      {notReady
+        .map((a) => {
+          const r = byId.get(a.roomId);
+          return `Room ${numberOf(a.roomId)}${r ? ` · ${ROOM_STATUS[deriveRoomStatus(r)].label.toLowerCase()}` : " · not ready"}`;
+        })
+        .join(" · ")}{" "}
+      — housekeeping&rsquo;s to clear
+    </span>
+  ) : (
+    <span className="ok-ink">clean and ready</span>
+  );
 
   return (
     <StepCard
@@ -288,6 +304,7 @@ export function AssignRoomsCard({ entry }: { entry: EntryDetail }) {
         </>
       }
       meta="Who sleeps where, on what plan, with what beds — the table the price was negotiated on. Click a room to change it; every night is checked again and the price follows."
+      status={readiness}
     >
       {/* The rooms ARE the S2 table now (2026-10-06, operator: "instead of these cards ... I
           would love the table to be shown here"). The party card, the room bins and the

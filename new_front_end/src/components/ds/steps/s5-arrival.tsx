@@ -11,7 +11,7 @@
  * message sit below, then the billing model as it was frozen, and the other ways out of Arrival:
  * they told us they're not coming, they never came, park, new dates.
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button, Chip } from "@/design-system";
@@ -28,9 +28,8 @@ import {
   setExpectedArrival,
   type HandoffChecklistItem,
 } from "@/lib/api/pre-arrival";
-import { deriveRoomStatus, ROOM_STATUS } from "@/lib/desk/rooms";
 import { s5Readiness } from "@/lib/desk/workspace";
-import { fmtStamp, fmtTime, instantYmd, money, plural } from "@/lib/ds/format";
+import { fmtStamp, fmtTime, instantYmd, money } from "@/lib/ds/format";
 import { AdvanceSettlementBlock } from "@/components/desk/workspace/advance-settlement";
 import { IdentityProofBlock } from "@/components/desk/workspace/identity-proof";
 import type { EntryDetail } from "@/types/api";
@@ -55,7 +54,7 @@ import {
 import { BILLING_CHOICES, billingWord } from "./s4-reserve";
 import { BookingOtherWays } from "./s4-other-ways";
 import { PreArrivalTasksCard } from "./s5-pre-arrival-tasks";
-import { AssignRoomsCard, ROOMS_CARD_ID, roomReady, useRoomsCatalog } from "./s5-rooms";
+import { AssignRoomsCard, roomReady } from "./s5-rooms";
 import { Help } from "@/components/ds/help";
 
 type EntryScalars = { contactPersonName?: string | null; contactPersonPhone?: string | null };
@@ -121,12 +120,9 @@ export function S5Arrival({
   const facts = useArrivalFacts(entry);
   const since = currentPassStart(entry);
   const clock = useHotelClock(60_000);
-  // The rooms card is always open now that it IS the table (2026-10-06) — nothing to unfold first.
-  const openRooms = () =>
-    requestAnimationFrame(() => document.getElementById(ROOMS_CARD_ID)?.scrollIntoView({ behavior: "smooth", block: "start" }));
   return (
     <StepCanvas past={past}>
-      <ReadyTheRoom entry={entry} facts={facts} onAssign={openRooms} />
+      <WhenTheyArrive entry={entry} />
       <AssignRoomsCard entry={entry} />
       <StepCard>
         <Tool>
@@ -158,7 +154,7 @@ export function S5Arrival({
 
 type Facts_ = ReturnType<typeof useArrivalFacts>;
 
-/* ------------------------------------------------------------------ ready the room */
+/* ------------------------------------------------------------------ when they arrive */
 
 /**
  * When the guest is expected, and when they become a no-show (2026-09-18). The hotel's check-in
@@ -295,103 +291,18 @@ function GuestHereCard({ guestPresent, setGuestPresent }: { guestPresent: boolea
   );
 }
 
-function ReadyTheRoom({
-  entry,
-  facts,
-  onAssign,
-}: {
-  entry: EntryDetail;
-  facts: Facts_;
-  onAssign: () => void;
-}) {
-  const catalog = useRoomsCatalog().data?.items ?? [];
-  const byId = useMemo(() => new Map(catalog.map((r) => [r.id, r])), [catalog]);
-  const { pay, assignments, reconciled } = facts;
-  const cur = entry.folio?.lines?.[0]?.currency ?? "BTN";
-  const distinct = Array.from(new Map(assignments.map((a) => [a.roomId, a])).values());
-  const numbers = distinct.map((a) => a.room?.roomNumber ?? byId.get(a.roomId)?.roomNumber ?? a.roomId.slice(0, 6)).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-  const needed = entry.numberOfRooms ?? 1;
-  const notReady = distinct.filter((a) => !roomReady(a));
+/**
+ * When they arrive (2026-10-23): the one part of the old "Ready the room" overview no other card
+ * carries — the expected time, its no-show cut-off, and who to call before it. The rooms, the
+ * advance, the handoff, the registration and the keys each have their own card or step, so the
+ * overview only said them twice (operator: "remove this part, it is repetitive").
+ */
+function WhenTheyArrive({ entry }: { entry: EntryDetail }) {
   const contact = entry as EntryDetail & EntryScalars;
-  const h1 = (entry.handoffs ?? []).find((h) => h.handoffType === "H1") ?? null;
-
-  const advance = reconciled ? (
-    <Chip tone="success" icon="check">
-      reconciled
-    </Chip>
-  ) : !pay ? (
-    <span className="meta">reading the payment position…</span>
-  ) : pay.paidInFull ? (
-    <Chip tone="warning">paid · not yet reconciled</Chip>
-  ) : pay.satisfied ? (
-    <Chip tone="warning">covered by credit · not yet reconciled</Chip>
-  ) : pay.requiredAmount > 0 ? (
-    <Chip tone="warning">not in</Chip>
-  ) : (
-    <Chip tone="warning">not yet reconciled</Chip>
-  );
-
   return (
-    <StepCard
-      title="Ready the room"
-      acts={
-        <Live>
-          <Button kind="secondary" compact onClick={onAssign}>
-            Assign rooms
-          </Button>
-        </Live>
-      }
-    >
+    <StepCard title="When they arrive">
       <Facts wide>
-        <Fact k="Rooms">
-          {numbers.length ? (
-            <>
-              {numbers.join(", ")}{" "}
-              <span className="meta">
-                · assigned{numbers.length > 1 ? " together" : ""}
-                {numbers.length < needed ? ` · ${needed - numbers.length} more needed` : ""}
-              </span>
-              <Help label="About assigning">An assignment is a claim on the rooms — no step moves.</Help>
-            </>
-          ) : (
-            <>
-              <span className="dash">—</span> <span className="meta">not yet assigned · {plural(needed, "room")} needed</span>
-            </>
-          )}
-        </Fact>
-        <Fact k="Housekeeping">
-          {distinct.length === 0 ? (
-            <span className="dash">—</span>
-          ) : notReady.length === 0 ? (
-            <>
-              <Chip tone="success" icon="check">
-                clean and ready
-              </Chip>{" "}
-              <Help label="About room readiness">Housekeeping&rsquo;s word, from the room board — not ticked here.</Help>
-            </>
-          ) : (
-            <>
-              <Chip tone="warning">{notReady.length === distinct.length && distinct.length === 1 ? "not ready" : `${notReady.length} of ${distinct.length} not ready`}</Chip>{" "}
-              <span className="meta">
-                {notReady
-                  .map((a) => {
-                    const r = byId.get(a.roomId);
-                    return `Room ${a.room?.roomNumber ?? r?.roomNumber ?? "?"}${r ? ` · ${ROOM_STATUS[deriveRoomStatus(r)].label.toLowerCase()}` : ""}`;
-                  })
-                  .join(" · ")}{" "}
-                · housekeeping&rsquo;s to clear
-              </span>
-            </>
-          )}
-        </Fact>
-        <Fact k="Advance">
-          {advance}{" "}
-          {pay && (pay.requiredAmount > 0 || pay.totalReceived > 0) ? (
-            <span className="meta">
-              {money(pay.totalReceived, cur)} received of {money(pay.requiredAmount, cur)}
-            </span>
-          ) : null}
-        </Fact>
+        <ExpectedArrivalFact entry={entry} />
         <Fact k="Contact person">
           {contact.contactPersonName ? (
             `${contact.contactPersonName}${contact.contactPersonPhone ? ` · ${contact.contactPersonPhone}` : ""}`
@@ -401,28 +312,6 @@ function ReadyTheRoom({
               <Help label="About the contact person">The move to Arrival asks for it.</Help>
             </>
           )}
-        </Fact>
-        <ExpectedArrivalFact entry={entry} />
-        <Fact k="Front-desk handoff">
-          {h1 ? (
-            h1.state === "FULFILLED" ? (
-              <Chip tone="success" icon="check">
-                fulfilled
-              </Chip>
-            ) : (
-              <Chip tone="warning">{h1.state === "CREATED" ? "to accept" : h1.state === "ACCEPTED" ? "accepted" : words(h1.state)}</Chip>
-            )
-          ) : (
-            <span className="meta">none on record</span>
-          )}
-        </Fact>
-        <Fact k="Registration form">
-          signed at Check-in
-          <Help label="About the registration form">Pre-filled from the record and signed at Check-in. The card on a tablet is BE-45.</Help>
-        </Fact>
-        <Fact k="Keys">
-          at Check-in
-          <Help label="About the keys">Handed over per room at Check-in — not needed to leave Arrival.</Help>
         </Fact>
       </Facts>
     </StepCard>
