@@ -34,6 +34,8 @@
  */
 import { readFileSync } from "node:fs";
 import pg from "pg";
+import { PrismaClient } from "@prisma/client";
+import { applyRoomFlagRepairs, planRoomFlagRepairs } from "../src/lib/room-flag-repair.js";
 
 const ARGV = process.argv.slice(2);
 const COMMIT = ARGV.includes("--commit");
@@ -206,7 +208,20 @@ async function main() {
          FROM rooms r WHERE r.id IN (
            SELECT "roomId" FROM room_assignments WHERE "entryId" = ANY($1::text[])
            UNION SELECT "roomId" FROM committed_holds WHERE "entryId" = ANY($1::text[]) AND "roomId" IS NOT NULL
-           UNION SELECT "roomId" FROM speculative_holds WHERE "entryId" = ANY($1::text[]) AND "roomId" IS NOT NULL)
+           UNION SELECT "roomId" FROM speculative_holds WHERE "entryId" = ANY($1::text[]) AND "roomId" IS NOT NULL
+           -- Every room a hold covers, not only its primary: a multi-room booking at Reserve has no
+           -- assignments yet, and its other rooms live only in the hold's night-by-night picture
+           -- (2026-10-13 — a three-room test booking left 301 and 306 reading CONFIRMED).
+           UNION SELECT COALESCE(rid->>'roomId', rid #>> '{}')
+                   FROM committed_holds h,
+                        jsonb_array_elements(CASE WHEN jsonb_typeof(h."perNightBreakdown"::jsonb) = 'array' THEN h."perNightBreakdown"::jsonb ELSE '[]'::jsonb END) AS night,
+                        jsonb_array_elements(COALESCE(night->'roomIds', '[]'::jsonb)) AS rid
+                  WHERE h."entryId" = ANY($1::text[])
+           UNION SELECT COALESCE(rid->>'roomId', rid #>> '{}')
+                   FROM speculative_holds h,
+                        jsonb_array_elements(CASE WHEN jsonb_typeof(h."perNightBreakdown"::jsonb) = 'array' THEN h."perNightBreakdown"::jsonb ELSE '[]'::jsonb END) AS night,
+                        jsonb_array_elements(COALESCE(night->'roomIds', '[]'::jsonb)) AS rid
+                  WHERE h."entryId" = ANY($1::text[]))
          ORDER BY r."roomNumber"`,
       [ENTRY_IDS],
     );
@@ -257,6 +272,7 @@ async function main() {
 
     if (!COMMIT) {
       console.log(`\nDry run — nothing deleted. Re-run with --commit to apply.`);
+      console.log(`(after the delete, the flag of each room left alone is set to what the bookings still holding it say)`);
       return;
     }
 
@@ -294,6 +310,22 @@ async function main() {
         `${deletedInquiries} inquir${deletedInquiries === 1 ? "y" : "ies"}, ${removed} dependent rows; ` +
         `${jobs} queued job(s) cancelled; ${toFree.length} room(s) freed.`,
     );
+
+    // The rooms left alone above because another booking still claims them (2026-10-12): this
+    // booking's own OCCUPIED or "needs cleaning" flag stayed on them — and its claim-event history
+    // was just erased with it — so 202 read "needs cleaning" and 203 "occupied" with nobody in
+    // either. Put each back to what the bookings still holding it say (`room-flag-repair`).
+    const leftAlone = claimed.map((r) => r.id as string).filter((id) => !toFree.includes(id));
+    if (leftAlone.length) {
+      const db = new PrismaClient({ datasources: { db: { url: connectionString() } } });
+      try {
+        const { today, plan } = await planRoomFlagRepairs(db, { roomIds: leftAlone });
+        await applyRoomFlagRepairs(db, plan, today);
+        for (const p of plan) console.log(`   ${p.roomNumber}  ${p.from} -> ${p.to}  (${p.why})`);
+      } finally {
+        await db.$disconnect();
+      }
+    }
   } catch (err) {
     await c.query("ROLLBACK").catch(() => {});
     throw err;

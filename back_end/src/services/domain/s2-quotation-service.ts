@@ -54,6 +54,7 @@ import {
 } from "../../policies/34-room-composition/p79-composition-counts-consistent.js";
 import { invalidateQuotationPdfArtifact } from "../../lib/invalidate-quotation-pdf.js";
 import { resolveActiveHouseTariff } from "../../lib/house-tariff.js";
+import { retireSupersededReplyWaitsBestEffort } from "../../lib/reply-waits.js";
 
 /**
  * Phase C — look up the inquiry's linked TravelAgent or CorporateAccount (if any), then call
@@ -200,10 +201,13 @@ export function enforceRoomCompositionsPriceable(
     stayCheckIn: Date | null;
     stayCheckOut: Date | null;
     nights: number;
+    /** Each room's own nights on a stay that changes rooms between nights (2026-10-22). */
+    nightDatesByRoom?: Map<string, string[]>;
   },
 ): void {
   for (const c of compositions) {
     const roomNumber = ctx.numberByRoomId.get(c.roomId) ?? null;
+    const ownNights = ctx.nightDatesByRoom?.get(c.roomId) ?? null;
     const nightOverrides = (c.nightMealOverrides ?? []).map((o) => ({ ...o, date: new Date(o.date) }));
     enforceExtraBedForThirdAdult({
       roomNumber,
@@ -232,8 +236,9 @@ export function enforceRoomCompositionsPriceable(
         nightMealOverrides: nightOverrides,
         startDate: c.startDate ? new Date(c.startDate) : ctx.stayCheckIn,
         endDate: c.endDate ? new Date(c.endDate) : ctx.stayCheckOut,
+        nightDates: ownNights,
       },
-      ctx.nights,
+      ownNights?.length ?? ctx.nights,
     );
   }
 }
@@ -668,10 +673,13 @@ async function prepareQuotationDraft(
      * every room keeps the booking-wide figure — nothing moves for uniform bookings.
      */
     const perRoomNightCounts = new Map<string, number>();
+    /** And WHICH nights (2026-10-22) — a room's per-night meals and beds are placed on these. */
+    const perRoomNightDates = new Map<string, string[]>();
     if (sealed.perNight) {
       for (const night of sealed.perNight) {
         for (const rid of night.roomIds) {
           perRoomNightCounts.set(rid, (perRoomNightCounts.get(rid) ?? 0) + 1);
+          perRoomNightDates.set(rid, [...(perRoomNightDates.get(rid) ?? []), String(night.date).slice(0, 10)]);
         }
       }
     }
@@ -684,11 +692,13 @@ async function prepareQuotationDraft(
       stayCheckIn: stay?.checkIn ?? null,
       stayCheckOut: stay?.checkOut ?? null,
       nights: nightsForPricing,
+      nightDatesByRoom: perRoomNightDates,
     });
 
     const rooms = input.roomCompositions.map((c) => {
       const compositionInput: RoomCompositionInput = {
         nightMealOverrides: (c.nightMealOverrides ?? []).map((o) => ({ ...o, date: new Date(o.date) })),
+        nightDates: perRoomNightDates.get(c.roomId) ?? null,
         occupantCount: c.occupantCount,
         adultCount: c.adultCount,
         cnb6To10Count: c.cnb6To10Count,
@@ -1103,7 +1113,7 @@ async function armDraftValidityTimerTx(
   });
 }
 
-export async function createQuotation(
+async function createQuotationInner(
   prisma: PrismaClient,
   entryId: string,
   actorId: string,
@@ -1493,7 +1503,7 @@ function diffQuotationTerms(
  * The new DRAFT then goes through the normal send flow — fresh QUO-… reference number, fresh
  * PDF render, fresh email + acknowledgement window.
  */
-export async function supersedeQuotationWithNewDraft(
+async function supersedeQuotationWithNewDraftInner(
   prisma: PrismaClient,
   quotationId: string,
   actorId: string,
@@ -1973,7 +1983,7 @@ export async function expireQuotation(
   return { skipped: false, quotationId } as const;
 }
 
-export async function sendQuotation(
+async function sendQuotationInner(
   prisma: PrismaClient,
   quotationId: string,
   actorId: string,
@@ -2404,3 +2414,35 @@ export async function resolveAckOpenLoop(
   return { ok: true, quotationId };
 }
 
+/**
+ * createQuotation, then stop waiting for replies to the papers it replaced — a guest's reply is awaited only
+ * for the paper in force (2026-10-13; lib/reply-waits.ts).
+ */
+export async function createQuotation(...args: Parameters<typeof createQuotationInner>): ReturnType<typeof createQuotationInner> {
+  const out = await createQuotationInner(...args);
+  const entryId = args[1];
+  if (entryId) await retireSupersededReplyWaitsBestEffort(args[0], entryId, args[2]);
+  return out;
+}
+
+/**
+ * supersedeQuotationWithNewDraft, then stop waiting for replies to the papers it replaced — a guest's reply is awaited only
+ * for the paper in force (2026-10-13; lib/reply-waits.ts).
+ */
+export async function supersedeQuotationWithNewDraft(...args: Parameters<typeof supersedeQuotationWithNewDraftInner>): ReturnType<typeof supersedeQuotationWithNewDraftInner> {
+  const out = await supersedeQuotationWithNewDraftInner(...args);
+  const entryId = (await args[0].quotation.findUnique({ where: { id: args[1] }, select: { entryId: true } }))?.entryId;
+  if (entryId) await retireSupersededReplyWaitsBestEffort(args[0], entryId, args[2]);
+  return out;
+}
+
+/**
+ * sendQuotation, then stop waiting for replies to the papers it replaced — a guest's reply is awaited only
+ * for the paper in force (2026-10-13; lib/reply-waits.ts).
+ */
+export async function sendQuotation(...args: Parameters<typeof sendQuotationInner>): ReturnType<typeof sendQuotationInner> {
+  const out = await sendQuotationInner(...args);
+  const entryId = (await args[0].quotation.findUnique({ where: { id: args[1] }, select: { entryId: true } }))?.entryId;
+  if (entryId) await retireSupersededReplyWaitsBestEffort(args[0], entryId, args[2]);
+  return out;
+}

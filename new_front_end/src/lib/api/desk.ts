@@ -46,6 +46,11 @@ export type DeskListRow = {
     cameInAs: string | null;
     defaultCustodianId: string;
     notes: string | null;
+    callerTitle?: string | null;
+    callerFirstName?: string | null;
+    callerLastName?: string | null;
+    callerPhone?: string | null;
+    callerEmail?: string | null;
     travelAgent: { id: string; displayName: string } | null;
     corporateAccount: { id: string; displayName: string } | null;
   } | null;

@@ -249,8 +249,16 @@ export function resolveCompositionBasis<T extends SeatingRow = SeatingRow>(entry
 export function successorChainFromConfigs(configs: Array<{ optionSelected: unknown }>): Map<string, string[]> {
   const successorOf = new Map<string, string[]>();
   for (const cfg of configs) {
-    const marker = (cfg.optionSelected as { roomChange?: { fromRoomId?: unknown; toRoomId?: unknown; toRoomIds?: unknown } } | null)
+    const marker = (cfg.optionSelected as { roomChange?: { fromRoomId?: unknown; toRoomId?: unknown; toRoomIds?: unknown; pairs?: unknown } } | null)
       ?.roomChange;
+    // A date move's block (2026-10-13) names every room that changed row, each to one room.
+    const pairs = Array.isArray(marker?.pairs) ? (marker!.pairs as Array<{ fromRoomId?: unknown; toRoomId?: unknown }>) : [];
+    if (pairs.length > 0) {
+      for (const p of pairs) {
+        if (typeof p?.fromRoomId === "string" && typeof p?.toRoomId === "string" && p.fromRoomId !== p.toRoomId) successorOf.set(p.fromRoomId, [p.toRoomId]);
+      }
+      continue;
+    }
     const from = typeof marker?.fromRoomId === "string" ? marker.fromRoomId : null;
     const toIds = Array.isArray(marker?.toRoomIds)
       ? (marker!.toRoomIds as unknown[]).filter((v): v is string => typeof v === "string")

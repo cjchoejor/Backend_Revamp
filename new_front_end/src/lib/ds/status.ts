@@ -63,6 +63,7 @@ export const ENDING_WORDS: Record<string, { word: string; qualifier: string }> =
   DECLINED: { word: "Turned down", qualifier: "the guest said no" },
   CANCELLED: { word: "Cancelled", qualifier: "" },
   WALKED_OUT: { word: "Walked out", qualifier: "left without checking out" },
+  COMBINED: { word: "Combined", qualifier: "into the guest's other booking" },
 };
 
 /** The ending's words, or null when the row does not record one. */
@@ -276,6 +277,30 @@ export function guestNameOf(g?: { firstName?: string | null; lastName?: string |
   if (!g) return "to come from the agent";
   const full = g.displayName?.trim() || [g.firstName, g.lastName].filter(Boolean).join(" ").trim();
   return full || "to come from the agent";
+}
+
+/** The caller's name as recorded on the enquiry, or null (2026-10-12). */
+export function callerNameOf(inq?: { callerTitle?: string | null; callerFirstName?: string | null; callerLastName?: string | null } | null): string | null {
+  const full = [inq?.callerTitle, inq?.callerFirstName, inq?.callerLastName].filter((x) => x?.trim()).join(" ").trim();
+  return full || null;
+}
+
+/**
+ * The name a booking is listed under (2026-10-12): the guest staying once named; until then the
+ * caller, said as such; else "guest to be named". A booking now starts with whoever rang and the
+ * guest is named at Wrap up, so a row with no guest is normal at Inquiry.
+ */
+export function rowNameOf(r: {
+  guestProfile?: { firstName?: string | null; lastName?: string | null; displayName?: string | null } | null;
+  inquiry?: { callerTitle?: string | null; callerFirstName?: string | null; callerLastName?: string | null; callerPhone?: string | null; callerEmail?: string | null } | null;
+}): string {
+  if (isNamed(r.guestProfile)) return guestNameOf(r.guestProfile);
+  const caller = callerNameOf(r.inquiry) ?? r.inquiry?.callerPhone?.trim() ?? r.inquiry?.callerEmail?.trim() ?? null;
+  return caller ? `${caller} · caller` : "guest to be named";
+}
+
+export function rowNamed(r: { guestProfile?: { firstName?: string | null; lastName?: string | null; displayName?: string | null } | null }): boolean {
+  return isNamed(r.guestProfile);
 }
 
 export function isNamed(g?: { firstName?: string | null; lastName?: string | null; displayName?: string | null } | null): boolean {

@@ -22,6 +22,7 @@ import { money } from "@/lib/ds/format";
 import type { EntryDetail } from "@/types/api";
 import { DsDialog, Live, atLeast, toastRefusal, useRefreshEntry, words } from "./kit";
 import { SendToField, useBookedBy, useSendTo } from "./s8-parts";
+import { Help } from "@/components/ds/help";
 
 export const SETTLE_METHODS = [
   ["CASH", "Cash"],
@@ -99,9 +100,11 @@ export function PayerShares({ entry, shares, live, currency }: { entry: EntryDet
   return (
     <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
       <p className="sm" style={{ margin: 0 }}>
-        This bill has more than one payer. Each settles their own share — the guest their own charges at the desk,{" "}
-        {booked.party ?? "the account"} the stay it booked. The rooms are released when the last share is settled; what a share leaves owing is collected
-        after the stay.
+        This bill has more than one payer — each settles their own share.
+        <Help label="About the shares">
+          The guest pays their own charges at the desk, {booked.party ?? "the account"} the stay it booked. The rooms are released when the last
+          share is settled; what a share leaves owing is collected after the stay.
+        </Help>
       </p>
       {shares.map((s) => (
         <ShareRow key={s.billingModel} entry={entry} share={s} live={live} currency={currency} />
@@ -239,7 +242,10 @@ function ShareRow({ entry, share, live, currency }: { entry: EntryDetail; share:
             )}
             {method === "VOUCHER" ? (
               <div className="field">
-                <label>The voucher covers · Nu.</label>
+                <label>
+                  The voucher covers · Nu.
+                  <Help label="About the voucher">Anything it leaves of this share is invoiced to {payer}.</Help>
+                </label>
                 <input
                   className="input money"
                   inputMode="decimal"
@@ -249,7 +255,6 @@ function ShareRow({ entry, share, live, currency }: { entry: EntryDetail; share:
                     setVoucherCovers(e.target.value);
                   }}
                 />
-                <span className="hint">anything it leaves of this share is invoiced to {payer}</span>
               </div>
             ) : method === "DIRECT_BILL" ? null : (
               <div className="field">
@@ -264,9 +269,9 @@ function ShareRow({ entry, share, live, currency }: { entry: EntryDetail; share:
                     setPaidNow(e.target.value);
                   }}
                 />
-                <span className={`hint${partial ? " warn-ink" : ""}`}>
-                  {partial ? `less than the ${money(owes, currency)} share — the rest stays owed, collected after the stay` : "the whole share, unless you type less"}
-                </span>
+                {partial ? (
+                  <span className="hint warn-ink">less than the {money(owes, currency)} share — the rest stays owed, collected after the stay</span>
+                ) : null}
               </div>
             )}
             {method === "DIRECT_BILL" || method === "VOUCHER" ? (

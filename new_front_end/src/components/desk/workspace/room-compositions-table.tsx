@@ -1,14 +1,15 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowDownToLine, Maximize2, Minimize2, Wand2 } from "lucide-react";
+import { ArrowDownToLine, ChevronLeft, ChevronRight, Maximize2, Minimize2, Wand2 } from "lucide-react";
 import { RateReferenceStrip } from "./rate-reference-strip";
 import { useSession } from "@/hooks/use-session";
 import { listRooms } from "@/lib/api/rooms";
 import { getAllowedRoomCounts, getChildPolicy } from "@/lib/api/child-policy";
 import { getRateReference } from "@/lib/api/entries";
-import { previewQuotationPricing, type RoomCompositionInput } from "@/lib/api/quotations";
+import { previewQuotationPricing, type RoomCompositionInput, type RoomNightMealOverrideInput } from "@/lib/api/quotations";
+import { Help, useQuietScreen } from "@/components/ds/help";
 
 /**
  * Spreadsheet-style composition table (2026-07-28) — the pure-tabular alternative to the
@@ -150,6 +151,7 @@ export function NegotiationDiscountBar({
   onDiscountChange,
   lockCommercial,
 }: DiscountEdit & { lockCommercial?: boolean }) {
+  const quiet = useQuietScreen();
   if (!onDiscountChange) return null;
   const unit: DiscountUnit = discountUnit ?? "percent";
   const n = Number(discountValue ?? "");
@@ -224,17 +226,27 @@ export function NegotiationDiscountBar({
           −{unit === "percent" ? `${n}%` : `Nu ${n.toLocaleString()}`} off the total
         </span>
       )}
-      <span className="ln" />
       {/* States the CURRENT model (operator ruling 2026-08-04, applyBookingDiscountToTotals):
           the deduction comes off the grand total, meals and beds included — the earlier
-          "room rate only" wording described the superseded 2026-08-03 model. */}
-      <span
-        className="rct-neg-note"
-        style={{ textAlign: "right", flex: "0 1 auto" }}
-        title="Percent or flat amount — both come off the booking's grand total, meals and extra beds included. Service charge and GST follow the discounted figure, and a discount larger than the bill settles it (never a refund). Priced by the backend when you create or regenerate the quote."
-      >
-        Comes off the grand total — meals &amp; beds included
-      </span>
+          "room rate only" wording described the superseded 2026-08-03 model. In a quiet screen
+          it is behind a "?" beside the fields it explains. */}
+      {quiet ? (
+        <Help label="About the discount">
+          <p>A percentage or a flat amount in Nu. Either way it comes off the booking&rsquo;s grand total, meals and extra beds included.</p>
+          <p>Service charge and GST follow the discounted figure. A discount larger than the bill brings it to zero — it is never a refund.</p>
+          <p>The basis is why the discount is given; it is recorded on the quotation.</p>
+        </Help>
+      ) : null}
+      <span className="ln" />
+      {quiet ? null : (
+        <span
+          className="rct-neg-note"
+          style={{ textAlign: "right", flex: "0 1 auto" }}
+          title="Percent or flat amount — both come off the booking's grand total, meals and extra beds included. Service charge and GST follow the discounted figure, and a discount larger than the bill settles it (never a refund). Priced by the backend when you create or regenerate the quote."
+        >
+          Comes off the grand total — meals &amp; beds included
+        </span>
+      )}
     </div>
   );
 }
@@ -243,6 +255,96 @@ function numOrUndef(v: string): number | undefined {
   if (v === "") return undefined;
   const n = Number(v);
   return Number.isFinite(n) ? n : undefined;
+}
+
+/**
+ * What a room may hold differently NIGHT BY NIGHT (2026-10-22, operator: "if the guest doesn't
+ * want a meal plan on the late date, I can't do that"): its meals and its extra beds. Who
+ * sleeps in the room, its negotiated rates and its charges stay the room's for every night it
+ * is held — a composition row has one set of guests, and the backend stores the rest per night
+ * (`nightMealOverrides`).
+ */
+type NightCol = "bed" | "cp" | "ml" | "md" | "ap" | "ot" | "obf" | "olu" | "odi";
+const NIGHT_COLS: NightCol[] = ["bed", "cp", "ml", "md", "ap", "ot", "obf", "olu", "odi"];
+type NightVals = Pick<RowState, NightCol>;
+function isNightCol(c: string): c is NightCol {
+  return (NIGHT_COLS as string[]).includes(c);
+}
+function pickNight(r: RowState): NightVals {
+  return { bed: r.bed, cp: r.cp, ml: r.ml, md: r.md, ap: r.ap, ot: r.ot, obf: r.obf, olu: r.olu, odi: r.odi };
+}
+function nightKeyOf(v: NightVals): string {
+  return NIGHT_COLS.map((c) => cnt(v[c] ?? "")).join(",");
+}
+function sameNight(a: NightVals, b: NightVals): boolean {
+  return nightKeyOf(a) === nightKeyOf(b);
+}
+/** As typed — a cleared cell is not yet the room's "0", so it must not snap back to it while
+ *  the operator types (the counts compare equal; the strings do not). */
+function sameNightExact(a: NightVals, b: NightVals): boolean {
+  return NIGHT_COLS.every((c) => (a[c] ?? "") === (b[c] ?? ""));
+}
+/** A stored per-night override read back as that night's own values — the backend's reading:
+ *  an override naming no meal leaves the night's meals at the room's. */
+function nightValsFromOverride(o: RoomNightMealOverrideInput, row: RowState): NightVals {
+  const carriesMeals = [
+    o.mealPlanCpCount,
+    o.mealPlanMaplCount,
+    o.mealPlanMapdCount,
+    o.mealPlanApCount,
+    o.mealPlanOthersCount,
+    o.othersBreakfastPax,
+    o.othersLunchPax,
+    o.othersDinnerPax,
+  ].some((v) => v != null);
+  const s = (v?: number | null) => String(v ?? 0);
+  const blankable = (v?: number | null) => (v == null ? "" : String(v));
+  return {
+    bed: o.extraBedCount != null ? String(o.extraBedCount) : row.bed,
+    ...(carriesMeals
+      ? {
+          cp: s(o.mealPlanCpCount),
+          ml: s(o.mealPlanMaplCount),
+          md: s(o.mealPlanMapdCount),
+          ap: s(o.mealPlanApCount),
+          ot: s(o.mealPlanOthersCount),
+          obf: blankable(o.othersBreakfastPax),
+          olu: blankable(o.othersLunchPax),
+          odi: blankable(o.othersDinnerPax),
+        }
+      : { cp: row.cp, ml: row.ml, md: row.md, ap: row.ap, ot: row.ot, obf: row.obf, olu: row.olu, odi: row.odi }),
+  };
+}
+/** Every night of a stay, as YYYY-MM-DD (check-in inclusive, check-out exclusive). */
+function stayNightsOf(checkIn?: string | null, checkOut?: string | null): string[] {
+  if (!checkIn || !checkOut) return [];
+  const a = new Date(`${checkIn.slice(0, 10)}T00:00:00Z`).getTime();
+  const b = new Date(`${checkOut.slice(0, 10)}T00:00:00Z`).getTime();
+  if (!Number.isFinite(a) || !Number.isFinite(b) || b <= a) return [];
+  const out: string[] = [];
+  for (let t = a; t < b && out.length < 366; t += 86_400_000) out.push(new Date(t).toISOString().slice(0, 10));
+  return out;
+}
+/** A room's per-night overrides as one comparable string — for "is the table saved?" checks
+ *  that must notice a meal changed on one night (2026-10-22). */
+export function nightOverridesCanon(list?: readonly RoomNightMealOverrideInput[] | null): string {
+  return [...(list ?? [])]
+    .map((o) =>
+      [
+        String(o.date).slice(0, 10),
+        o.mealPlanCpCount ?? 0,
+        o.mealPlanMaplCount ?? 0,
+        o.mealPlanMapdCount ?? 0,
+        o.mealPlanApCount ?? 0,
+        o.mealPlanOthersCount ?? 0,
+        o.othersBreakfastPax ?? 0,
+        o.othersLunchPax ?? 0,
+        o.othersDinnerPax ?? 0,
+        o.extraBedCount ?? "",
+      ].join(","),
+    )
+    .sort()
+    .join(";");
 }
 
 /** Normalise an entry date to a midnight-UTC ISO string (entry dates arrive as full
@@ -359,6 +461,14 @@ function BedAskStrip({ ask }: { ask: BedAskSummary }) {
   );
 }
 
+/** "Thu 22 Oct" — a night's band in the table, and its name in the night picker. */
+function nightLabel(iso: string): string {
+  const d = new Date(`${iso.slice(0, 10)}T00:00:00Z`);
+  return Number.isNaN(d.getTime())
+    ? iso
+    : d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" });
+}
+
 /** "6 Oct" — the night a fault belongs to, on a booking that moves rooms mid-stay. */
 function shortNight(iso: string): string {
   const d = new Date(`${iso}T00:00:00Z`);
@@ -428,6 +538,7 @@ export function RoomCompositionsTable({
   saveAside,
   onFaultsChange,
   initial,
+  initialCompositions,
   onChange,
   onOpenRoomInBoard,
   onPickRoom,
@@ -440,6 +551,7 @@ export function RoomCompositionsTable({
   discountBasis,
   onDiscountChange,
   lockCommercial,
+  readOnly,
 }: DiscountEdit & {
   /**
    * Post-freeze, in-house (2026-08-19): the negotiated rates and the FOC / service-charge
@@ -450,6 +562,14 @@ export function RoomCompositionsTable({
    * to read what the booking is priced at even where they may not change it.
    */
   lockCommercial?: boolean;
+  /**
+   * The whole table reads and nothing can be typed (2026-10-19, operator: "in stages 3 4 5 6 ...
+   * the user can type or rewrite the table without having to click on the change configuration
+   * button"). The rooms tab from Set up on is changed only through Change configuration, which
+   * runs the governed walk; until then the cells show the booking as it is priced. The bed
+   * column is not part of the price and keeps its own control.
+   */
+  readOnly?: boolean;
   /** Set by the planner — clicking a room number opens that room alone in the guest board. */
   onOpenRoomInBoard?: (roomId: string) => void;
   /**
@@ -526,6 +646,13 @@ export function RoomCompositionsTable({
   /** Snapshot from the other planner mode — mount-time seed so switching modes resumes
    *  from the same data. Read once on mount; later prop changes are ignored. */
   initial?: RoomCompositionInput[];
+  /**
+   * What each room is priced on as the caller sees it NOW — the seed for a room added after the
+   * table mounted (2026-10-19, operator: in the room-change panel, picking 202 and 203 for later
+   * nights added rows with nobody in them, because `initial` is read once at mount and knew only
+   * the first room). A room already in `initial` keeps that seed.
+   */
+  initialCompositions?: RoomCompositionInput[];
   onChange: (compositions: RoomCompositionInput[]) => void;
 }) {
   const { session } = useSession();
@@ -552,9 +679,12 @@ export function RoomCompositionsTable({
    * text: an empty negotiated cell is not "no rate", it is "price at this", and the operator had
    * no way to see which figure that was without leaving the grid.
    */
+  // The table's own rooms ride along, so a room the booking does not hold yet (the room-change
+  // panel) is anchored at its OWN type's rate, not at the booking's (2026-10-19).
+  const rateRefRoomsKey = sealedRoomIds.join(",");
   const rateRefQuery = useQuery({
-    queryKey: ["rate-reference", entryId],
-    queryFn: () => getRateReference(session!, entryId!),
+    queryKey: ["rate-reference", entryId, rateRefRoomsKey],
+    queryFn: () => getRateReference(session!, entryId!, sealedRoomIds),
     enabled: !!session && !!entryId,
     staleTime: 5 * 60_000,
   });
@@ -627,7 +757,19 @@ export function RoomCompositionsTable({
 
   // Mount-time copy of the seed snapshot — deliberately not reactive.
   const initialRef = useRef(initial);
+  // The caller's latest seed, read only for rooms added after mount (see `initialCompositions`).
+  const lateSeedRef = useRef(initialCompositions);
+  lateSeedRef.current = initialCompositions;
   const [rows, setRows] = useState<Record<string, RowState>>({});
+  /** A room's meals and extra beds on a night where they differ from its own row (2026-10-22). */
+  const [nightVals, setNightVals] = useState<Record<string, Record<string, NightVals>>>({});
+  /** The nights each room is held for — the caller's dates, else the whole stay. */
+  const stayNightList = useMemo(() => stayNightsOf(entryCheckIn, entryCheckOut), [entryCheckIn, entryCheckOut]);
+  const nightListOf = (id: string): string[] => {
+    const ds = roomDates?.[id]?.dates;
+    if (ds && ds.length > 0) return ds.map((d) => d.slice(0, 10));
+    return roomDates ? stayNightList : [];
+  };
   const [ratesOpen, setRatesOpen] = useState(
     () => (initial ?? []).some((c) =>
       [c.negotiatedRoomRate, c.negotiatedExtraBedRate, c.negotiatedBreakfastRate, c.negotiatedLunchRate, c.negotiatedDinnerRate].some((v) => v != null),
@@ -637,6 +779,11 @@ export function RoomCompositionsTable({
   // is wider than the canvas column, so reading rooms against their rates meant scrolling
   // sideways. Reuses the .rst-expandwrap / .rst-expandbar styles.
   const [expanded, setExpanded] = useState(false);
+  /** Which night the table shows on a stay whose rooms change between nights — "all" sets every
+   *  night out in turn, one under the other (2026-10-22, operator). */
+  const [nightView, setNightView] = useState<string>("");
+  /** Explanations behind a "?" — only messages on screen (2026-10-12). */
+  const quiet = useQuietScreen();
   useEffect(() => {
     if (!expanded) return;
     const onKey = (e: KeyboardEvent) => {
@@ -665,7 +812,9 @@ export function RoomCompositionsTable({
   useEffect(() => {
     setRows((prev) => {
       if (sealedRoomIds.every((id) => prev[id])) return prev;
-      const seedById = new Map((initialRef.current ?? []).map((c) => [c.roomId, c]));
+      const seedById = new Map(
+        [...(lateSeedRef.current ?? []), ...(initialRef.current ?? [])].map((c) => [c.roomId, c] as const),
+      );
       const next = { ...prev };
       for (const id of sealedRoomIds) {
         if (!next[id]) {
@@ -677,8 +826,90 @@ export function RoomCompositionsTable({
     });
   }, [sealedRoomIds]);
 
+  // Per-night values come with the seed, once per room (a room added later reads the caller's
+  // latest seed, as its row does).
+  const nightSeededRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const seedById = new Map(
+      [...(lateSeedRef.current ?? []), ...(initialRef.current ?? [])].map((c) => [c.roomId, c] as const),
+    );
+    const add: Record<string, Record<string, NightVals>> = {};
+    for (const id of sealedRoomIds) {
+      if (nightSeededRef.current.has(id)) continue;
+      nightSeededRef.current.add(id);
+      const seed = seedById.get(id);
+      if (!seed?.nightMealOverrides?.length) continue;
+      const row = rowFromComposition(seed);
+      const m: Record<string, NightVals> = {};
+      for (const o of seed.nightMealOverrides) {
+        const v = nightValsFromOverride(o, row);
+        if (!sameNight(v, pickNight(row))) m[String(o.date).slice(0, 10)] = v;
+      }
+      if (Object.keys(m).length) add[id] = m;
+    }
+    if (Object.keys(add).length) setNightVals((prev) => ({ ...add, ...prev }));
+  }, [sealedRoomIds]);
+
   const setCell = (roomId: string, patch: Partial<RowState>) =>
     setRows((prev) => ({ ...prev, [roomId]: { ...(prev[roomId] ?? EMPTY_ROW), ...patch } }));
+  /** The value a cell shows: the night's own when it has one, else the room's. */
+  const valAt = (id: string, night: string | null, col: NumCol): string => {
+    if (night && isNightCol(col)) {
+      const o = nightVals[id]?.[night];
+      if (o) return o[col];
+    }
+    return (rows[id] ?? EMPTY_ROW)[col];
+  };
+  const rowAt = (id: string, night: string | null): RowState => {
+    const r = rows[id] ?? EMPTY_ROW;
+    const o = night ? nightVals[id]?.[night] : undefined;
+    return o ? { ...r, ...o } : r;
+  };
+  /** Whether a room's nights disagree on a column — the whole-stay view says so. */
+  const variesOn = (id: string, col: NightCol): boolean => {
+    const ns = nightListOf(id);
+    if (ns.length < 2 || !nightVals[id]) return false;
+    return new Set(ns.map((n) => cnt(valAt(id, n, col)))).size > 1;
+  };
+  /** One night's meals or beds for one room. Back to the room's own figures, it drops away. */
+  const writeNight = (id: string, night: string, patch: Partial<NightVals>) =>
+    setNightVals((prev) => {
+      const base = pickNight(rows[id] ?? EMPTY_ROW);
+      const cur = prev[id]?.[night] ?? base;
+      const nextV = { ...cur, ...patch };
+      const forRoom = { ...(prev[id] ?? {}) };
+      if (sameNightExact(nextV, base)) delete forRoom[night];
+      else forRoom[night] = nextV;
+      return { ...prev, [id]: forRoom };
+    });
+  /** The same change on every night the room is held — its row and every night of its own. */
+  const writeAllNights = (id: string, patch: Partial<NightVals>) => {
+    setRows((prev) => ({ ...prev, [id]: { ...(prev[id] ?? EMPTY_ROW), ...patch } }));
+    setNightVals((prev) => {
+      const forRoom = prev[id];
+      if (!forRoom) return prev;
+      const base = { ...pickNight(rows[id] ?? EMPTY_ROW), ...patch };
+      const kept: Record<string, NightVals> = {};
+      for (const [n, v] of Object.entries(forRoom)) {
+        const nv = { ...v, ...patch };
+        if (!sameNightExact(nv, base)) kept[n] = nv;
+      }
+      return { ...prev, [id]: kept };
+    });
+  };
+  /** Extra beds follow the adults on every night (the auto-bed rule), not only on the row. */
+  const syncNightBeds = (id: string, bed: number) =>
+    setNightVals((prev) => {
+      const forRoom = prev[id];
+      if (!forRoom) return prev;
+      const base = { ...pickNight(rows[id] ?? EMPTY_ROW), bed: String(bed) };
+      const kept: Record<string, NightVals> = {};
+      for (const [n, v] of Object.entries(forRoom)) {
+        const nv = { ...v, bed: String(Math.max(bed, Math.min(cnt(v.bed), bedMaxOf(id)))) };
+        if (!sameNightExact(nv, base)) kept[n] = nv;
+      }
+      return { ...prev, [id]: kept };
+    });
 
   // ---- Input bounds (2026-08-01) --------------------------------------------------
   // The grid used to accept ANY number in the people cells; the Σ footer only warned.
@@ -749,6 +980,9 @@ export function RoomCompositionsTable({
    */
   const applyBandChange = (roomId: string, col: "ad" | "c6" | "u6", v: string) => {
     let n = cnt(v);
+    /** What was typed — named in a refusal, since a caret left after "2" makes a typed 3 read "23"
+     *  (2026-10-22, operator: the cell showed 3 under a message about capping it at 3). */
+    const typed = n;
     let display = v; // keep the raw string (e.g. "") when nothing clamps
     if (col === "ad") {
       const cap = capOf(roomId);
@@ -756,7 +990,7 @@ export function RoomCompositionsTable({
         const ceil = cap + bedMaxOf(roomId);
         if (n > ceil) {
           flashLimit(
-            `Room ${roomNoOf(roomId)} sleeps at most ${ceil} adult-rate guests (${cap} + ${bedMaxOf(roomId)} extra bed${bedMaxOf(roomId) === 1 ? "" : "s"}) — capped.`,
+            `You typed ${typed} — Room ${roomNoOf(roomId)} sleeps at most ${ceil} adult-rate guests (${cap} + ${bedMaxOf(roomId)} extra bed${bedMaxOf(roomId) === 1 ? "" : "s"}), so it is set to ${ceil}.`,
           );
           n = ceil;
           display = String(n);
@@ -764,13 +998,30 @@ export function RoomCompositionsTable({
       }
     }
     if (partyBound) {
-      const others = sealedRoomIds.reduce((s, id) => (id === roomId ? s : s + cnt(rows[id]?.[col] ?? "0")), 0);
+      // The rooms that share a night with this one (2026-10-19, operator: a stay moving from 201
+      // to 202 to 203 night by night could not put its one guest in 202 — the cap counted the
+      // guest already in 201 on ANOTHER night). Without dates every room shares every night.
+      const datesOf = (id: string) => roomDates?.[id]?.dates ?? null;
+      const mine = datesOf(roomId);
+      const sameNights = !!mine && mine.length > 0;
+      const others = sameNights
+        ? Math.max(
+            0,
+            ...mine!.map((night) =>
+              sealedRoomIds.reduce((s, id) => {
+                if (id === roomId) return s;
+                const theirs = datesOf(id);
+                return !theirs || theirs.includes(night) ? s + cnt(rows[id]?.[col] ?? "0") : s;
+              }, 0),
+            ),
+          )
+        : sealedRoomIds.reduce((s, id) => (id === roomId ? s : s + cnt(rows[id]?.[col] ?? "0")), 0);
       const remaining = Math.max(0, partyBands[col] - others);
       if (n > remaining) {
         flashLimit(
-          `This booking has ${partyBands[col]} ${bandLabel(col, partyBands[col])}${
-            others > 0 ? ` and ${others} ${others === 1 ? "is" : "are"} already in other rooms` : ""
-          } — capped at ${remaining}. Reduce the other room first to move someone here, or change the party at the Inquiry step.`,
+          `You typed ${typed} — Room ${roomNoOf(roomId)} can take ${remaining} ${bandLabel(col, remaining)}, so it is set to ${remaining}. This booking has ${partyBands[col]}${
+            others > 0 ? ` and ${others} ${others === 1 ? "is" : "are"} already in other rooms${sameNights ? " on the same nights" : ""}` : ""
+          }. To move someone here, reduce another room first, or change the party at the Inquiry step.`,
         );
         n = remaining;
         display = String(n);
@@ -783,6 +1034,7 @@ export function RoomCompositionsTable({
       next[roomId] = mine;
       return next;
     });
+    if (col === "ad") syncNightBeds(roomId, bedsNeeded(roomId, n, rows[roomId]?.foc ?? false));
   };
 
   /** Extra beds: floored at what the room's adults need, capped at the type's max.
@@ -805,10 +1057,15 @@ export function RoomCompositionsTable({
     return v;
   };
   /** Meal-plan pax: a room can't feed more people than it sleeps (Policy 79 rule 2). */
-  const clampMeal = (roomId: string, col: NumCol, v: string): string => {
+  const clampMeal = (roomId: string, col: NumCol, v: string, night: string | null = null): string => {
     const r = rows[roomId] ?? EMPTY_ROW;
     const occ = cnt(r.ad) + cnt(r.c6) + cnt(r.u6);
-    const otherMeals = MEAL_COLS.reduce((s, c) => (c === col ? s : s + cnt(r[c] ?? "0")), 0);
+    // On one night, that night's other plans; for the whole stay, the fullest night's.
+    const nights: (string | null)[] = night ? [night] : nightListOf(roomId).length ? nightListOf(roomId) : [null];
+    const otherMeals = Math.max(
+      0,
+      ...nights.map((n) => MEAL_COLS.reduce((s, c) => (c === col ? s : s + cnt(valAt(roomId, n, c))), 0)),
+    );
     const allowed = Math.max(0, occ - otherMeals);
     if (cnt(v) <= allowed) return v;
     const roomNo = roomById.get(roomId)?.roomNumber ?? "";
@@ -820,15 +1077,20 @@ export function RoomCompositionsTable({
     return String(allowed);
   };
 
-  const visibleMeals = MEAL_COLS.filter(
-    (c) => activePlans.has(c) || sealedRoomIds.some((id) => cnt(rows[id]?.[c] ?? "0") > 0),
-  );
+  /** Pax for a column on any night of any room — a column with data never silently hides. */
+  const paxAnywhere = (col: NumCol) =>
+    sealedRoomIds.some(
+      (id) =>
+        cnt(rows[id]?.[col] ?? "0") > 0 ||
+        (isNightCol(col) && Object.values(nightVals[id] ?? {}).some((v) => cnt(v[col]) > 0)),
+    );
+  const visibleMeals = MEAL_COLS.filter((c) => activePlans.has(c) || paxAnywhere(c));
 
   // ---- Which rate columns exist (2026-08-07) ---------------------------------------
   // Room + Bed are the default pair; a meal's rate column exists only while that meal is in
   // play somewhere — via a plan that includes it (chip on or pax present, i.e. the plan
   // column is visible) or via à-la-carte pax. No plan with dinner → no Dinner column.
-  const anyPax = (col: NumCol) => sealedRoomIds.some((id) => cnt(rows[id]?.[col] ?? "0") > 0);
+  const anyPax = paxAnywhere;
   const bfInPlay = ["cp", "ml", "md", "ap"].some((c) => visibleMeals.includes(c as NumCol)) || anyPax("obf");
   const luInPlay = ["ml", "ap"].some((c) => visibleMeals.includes(c as NumCol)) || anyPax("olu");
   const diInPlay = ["md", "ap"].some((c) => visibleMeals.includes(c as NumCol)) || anyPax("odi");
@@ -846,6 +1108,19 @@ export function RoomCompositionsTable({
     rLu: cnt(r.ml) + cnt(r.ap) + cnt(r.olu) > 0,
     rDi: cnt(r.md) + cnt(r.ap) + cnt(r.odi) > 0,
   });
+  /** A room's rates are the room's, so a meal's rate opens when ANY night of it buys that meal. */
+  const roomConsumes = (id: string): Record<"rBf" | "rLu" | "rDi", boolean> => {
+    const ns = nightListOf(id);
+    const list = ns.length ? ns.map((n) => rowAt(id, n)) : [rows[id] ?? EMPTY_ROW];
+    const out = { rBf: false, rLu: false, rDi: false };
+    for (const rr of list) {
+      const c = rowConsumes(rr);
+      out.rBf ||= c.rBf;
+      out.rLu ||= c.rLu;
+      out.rDi ||= c.rDi;
+    }
+    return out;
+  };
 
   /** Chip toggle for a plan column. Switching a visible plan OFF zeroes its column
    *  (and the Others à-la-carte pax when it's `ot`) — a hidden column must not keep
@@ -857,60 +1132,146 @@ export function RoomCompositionsTable({
         n.delete(c);
         return n;
       });
-      setRows((prev) => {
-        const next = { ...prev };
-        for (const id of sealedRoomIds) {
-          next[id] = { ...(next[id] ?? EMPTY_ROW), [c]: "0", ...(c === "ot" ? { obf: "", olu: "", odi: "" } : {}) };
-        }
-        return next;
-      });
+      for (const id of sealedRoomIds) {
+        writeAllNights(id, { [c]: "0", ...(c === "ot" ? { obf: "", olu: "", odi: "" } : {}) } as Partial<NightVals>);
+      }
     } else {
       setActivePlans((prev) => new Set(prev).add(c));
     }
   };
 
-  /** Party spread — adults evenly with the remainder on the first row, children all on
-   *  the first row so a family shares a room. CNB 11+ retired: declared children above
-   *  the child band join the adult pool. */
+  /**
+   * Party spread (rewritten 2026-10-22, operator report on ENT-20261022-0001/0002: "I can't fill
+   * the table even when Distribute party is clicked"). It used to put every child in the first
+   * room of each night and re-seat every room on every night, so a room's row ended up
+   * describing whichever night came last, and a room with two adults and two small children read
+   * red (four guests in a room that sleeps three) with no way for the button to put it right.
+   *
+   * Now it seats the party so the table it leaves is one the fault list accepts whenever the
+   * party fits:
+   *  - **Night by night, each room once.** A room keeps one row for all its nights, so it is
+   *    seated on the first night it appears and stays as it is; each later night shares out only
+   *    what that night's rooms have not already taken. On a booking whose rooms are the same
+   *    every night there is one night-group and this is a plain spread.
+   *  - **Adult-rate guests evenly**, the remainder on the first rooms, never past what a room can
+   *    sleep (its capacity + the extra beds its type allows).
+   *  - **Each child in a room with an adult and space for them** — inside the room's capacity and
+   *    the bed its adults already need, and within its type's limit on children. When no room has
+   *    space it may take an extra bed (up to the type's limit); when the type limits are what
+   *    stand in the way, the room with the most space takes the child and the operator decides.
+   * CNB 11+ retired: declared children above the child band join the adult pool.
+   */
   const distribute = () => {
     if (sealedRoomIds.length === 0) return;
     const ages = entryChildAges ?? [];
-    const under6 = ages.filter((a) => a <= youngMax).length;
-    const c6to10 = ages.filter((a) => a > youngMax && a <= childMax).length;
-    const adults = Math.max(0, entryAdults ?? 0) + ages.filter((a) => a > childMax).length;
+    const party = {
+      ad: Math.max(0, entryAdults ?? 0) + ages.filter((a) => a > childMax).length,
+      c6: ages.filter((a) => a > youngMax && a <= childMax).length,
+      u6: ages.filter((a) => a <= youngMax).length,
+    };
     // The party is seated NIGHT BY NIGHT. On a booking that moves rooms mid-stay the rooms are
     // not in use together, so spreading the party once across every row would leave each night
-    // holding a fraction of it (2026-10-06). On a plain booking there is one night-group and
-    // this is the old behaviour exactly.
+    // holding a fraction of it (2026-10-06).
     const groups: string[][] = busiestNight
       ? allNights.map((n) => roomsOn(n)).filter((g, i, all) => g.length > 0 && all.findIndex((h) => h.join(",") === g.join(",")) === i)
       : [sealedRoomIds];
+    type Seat = { ad: number; c6: number; u6: number; bed: number };
+    const seats = new Map<string, Seat>();
+    const focOf = (id: string) => rows[id]?.foc ?? false;
+    const capNum = (id: string) => capOf(id) ?? Number.POSITIVE_INFINITY;
+    const adultCeil = (id: string) => capNum(id) + bedMaxOf(id);
+    const kidsMax = (id: string) => roomById.get(id)?.roomType?.maxChildren ?? Number.POSITIVE_INFINITY;
+    const adultsNeeded = (id: string) => Math.max(1, roomById.get(id)?.roomType?.requiredAccompanyingAdults ?? 1);
+    for (const ids of groups) {
+      const fresh = ids.filter((id) => !seats.has(id));
+      if (fresh.length === 0) continue;
+      const taken = ids.filter((id) => seats.has(id)).map((id) => seats.get(id)!);
+      const left = {
+        ad: Math.max(0, party.ad - taken.reduce((s, x) => s + x.ad, 0)),
+        c6: Math.max(0, party.c6 - taken.reduce((s, x) => s + x.c6, 0)),
+        u6: Math.max(0, party.u6 - taken.reduce((s, x) => s + x.u6, 0)),
+      };
+      const w = new Map<string, Seat>(fresh.map((id) => [id, { ad: 0, c6: 0, u6: 0, bed: 0 }]));
+      // Adult-rate guests: evenly, the remainder on the first rooms, each room up to what it sleeps.
+      const base = Math.floor(left.ad / fresh.length);
+      const rem = left.ad % fresh.length;
+      let over = 0;
+      fresh.forEach((id, i) => {
+        const want = base + (i < rem ? 1 : 0);
+        const got = Math.min(want, adultCeil(id));
+        w.get(id)!.ad = got;
+        over += want - got;
+      });
+      for (const id of fresh) {
+        if (over === 0) break;
+        const s = w.get(id)!;
+        const more = Math.min(over, adultCeil(id) - s.ad);
+        if (more > 0) { s.ad += more; over -= more; }
+      }
+      if (over > 0) w.get(fresh[0])!.ad += over; // nowhere fits them — the fault list says so
+      for (const id of fresh) {
+        const s = w.get(id)!;
+        s.bed = bedsNeeded(id, s.ad, focOf(id));
+      }
+      // Children, one at a time, into the first room that can take them, in order of preference.
+      const occ = (s: Seat) => s.ad + s.c6 + s.u6;
+      const kids = (s: Seat) => s.c6 + s.u6;
+      const tiers: Array<(id: string, s: Seat) => boolean> = [
+        (id, s) => s.ad >= adultsNeeded(id) && kids(s) < kidsMax(id) && occ(s) + 1 <= capNum(id) + s.bed,
+        (id, s) => s.ad >= adultsNeeded(id) && kids(s) < kidsMax(id) && occ(s) + 1 <= capNum(id) + bedMaxOf(id),
+        (id, s) => s.ad >= 1 && occ(s) + 1 <= capNum(id) + s.bed,
+        (id, s) => s.ad >= 1 && occ(s) + 1 <= capNum(id) + bedMaxOf(id),
+      ];
+      const placeChild = (band: "c6" | "u6") => {
+        for (const fits of tiers) {
+          const id = fresh.find((r) => fits(r, w.get(r)!));
+          if (id) {
+            const s = w.get(id)!;
+            s[band] += 1;
+            if (occ(s) > capNum(id) + s.bed) s.bed = occ(s) - capNum(id);
+            return;
+          }
+        }
+        // No room can take them — the one with the most space does, and the fault list names it.
+        const id = fresh.reduce((best, r) => {
+          const room = (x: string) => capNum(x) + bedMaxOf(x) - occ(w.get(x)!);
+          return w.get(r)!.ad > 0 && room(r) > room(best) ? r : best;
+        }, fresh[0]);
+        w.get(id)![band] += 1;
+      };
+      for (let k = 0; k < left.c6; k++) placeChild("c6");
+      for (let k = 0; k < left.u6; k++) placeChild("u6");
+      for (const id of fresh) seats.set(id, w.get(id)!);
+    }
     setRows((prev) => {
       const next = { ...prev };
-      for (const ids of groups) {
-        const n = ids.length;
-        if (n === 0) continue;
-        const base = Math.floor(adults / n);
-        const rem = adults % n;
-        ids.forEach((id, i) => {
-          next[id] = withAutoBed(id, {
-            ...(next[id] ?? { ...EMPTY_ROW }),
-            ad: String(base + (i < rem ? 1 : 0)),
-            c6: String(i === 0 ? c6to10 : 0),
-            u6: String(i === 0 ? under6 : 0),
-          });
-        });
+      for (const [id, s] of seats) {
+        next[id] = {
+          ...(next[id] ?? { ...EMPTY_ROW }),
+          ad: String(s.ad),
+          c6: String(s.c6),
+          u6: String(s.u6),
+          bed: String(s.bed),
+        };
       }
       return next;
     });
+    for (const [id, s] of seats) syncNightBeds(id, s.bed);
   };
 
   // First-open distribute, once, while the band columns are untouched — the operator
   // lands on a filled grid instead of a wall of zeros. Ref-guarded against re-renders.
   const autoRanRef = useRef(false);
-  const ready = sealedRoomIds.length > 0 && sealedRoomIds.every((id) => rows[id]);
+  // It waits for the room list and the child policy (2026-10-22): the spread reads each room's
+  // capacity, extra beds and child limit, and run before they arrive it saw rooms with no limit
+  // and put every child in the first room of the night.
+  const ready =
+    sealedRoomIds.length > 0 &&
+    sealedRoomIds.every((id) => rows[id]) &&
+    roomsQuery.isFetched &&
+    policyQuery.isFetched;
   useEffect(() => {
-    if (autoRanRef.current || !ready) return;
+    if (autoRanRef.current || !ready || readOnly) return;
     const pristine = sealedRoomIds.every((id) => rows[id].ad === "" && rows[id].c6 === "" && rows[id].u6 === "");
     autoRanRef.current = true;
     if (pristine && (entryAdults ?? 0) + (entryChildAges?.length ?? 0) > 0) distribute();
@@ -921,16 +1282,19 @@ export function RoomCompositionsTable({
    *  case in a single pick. Also collapses the visible plan columns to just that one. */
   const everyoneOn = (col: NumCol | "none") => {
     setActivePlans(col === "none" ? new Set() : new Set([col as NumCol]));
-    setRows((prev) => {
-      const next = { ...prev };
-      for (const id of sealedRoomIds) {
-        const r = next[id] ?? { ...EMPTY_ROW };
+    // The rows on screen (2026-10-22): one night shown sets that night; every night, every night.
+    for (const sec of sections) {
+      for (const id of sec.ids) {
+        const r = rows[id] ?? EMPTY_ROW;
         const occ = cnt(r.ad) + cnt(r.c6) + cnt(r.u6);
-        const meals = Object.fromEntries(MEAL_COLS.map((c) => [c, c === col ? String(occ) : "0"]));
-        next[id] = { ...r, ...(meals as Partial<RowState>), ...(col === "ot" ? {} : { obf: "", olu: "", odi: "" }) };
+        const meals = {
+          ...Object.fromEntries(MEAL_COLS.map((c) => [c, c === col ? String(occ) : "0"])),
+          ...(col === "ot" ? {} : { obf: "", olu: "", odi: "" }),
+        } as Partial<NightVals>;
+        if (sec.night) writeNight(id, sec.night, meals);
+        else writeAllNights(id, meals);
       }
-      return next;
-    });
+    }
   };
 
   /** Clone row 1's meals / beds / toggles / rates / others pax onto every other row —
@@ -938,31 +1302,47 @@ export function RoomCompositionsTable({
    *  are clamped per target row (its own bed limit / its own occupancy), so the copy
    *  can't write what typing wouldn't have allowed. */
   const copyFirstDown = () => {
-    const first = rows[sealedRoomIds[0]];
-    if (!first) return;
-    const { ad: _a, c6: _c, u6: _u, ...rest } = first;
-    setRows((prev) => {
-      const next = { ...prev };
-      for (const id of sealedRoomIds.slice(1)) {
-        const target = next[id] ?? EMPTY_ROW;
-        const merged = { ...target, ...rest };
-        // Bed bounds per target room: capped at its type's max, floored at what its own
-        // adults need (the copy must not strip beds a fuller room depends on).
-        const bedMax = bedMaxOf(id);
-        const needed = bedsNeeded(id, cnt(target.ad), merged.foc);
-        merged.bed = String(Math.max(needed, Math.min(cnt(merged.bed), bedMax)));
-        // Meal pax ≤ the TARGET row's occupancy (it keeps its own guest bands).
-        const occ = cnt(target.ad) + cnt(target.c6) + cnt(target.u6);
-        let left = occ;
-        for (const c of MEAL_COLS) {
-          const take = Math.min(cnt(merged[c] ?? "0"), left);
-          merged[c] = String(take);
-          left -= take;
-        }
-        next[id] = merged;
+    // The first row ON SCREEN onto every other row on screen (2026-10-22, operator: "if only one
+    // date is picked, copy row should only happen for the rooms for that date"). Meals and extra
+    // beds go to the night each row stands under. Rates and the charges belong to the room for
+    // every night it is held, so they are copied only when every night is on screen.
+    const order = sections.flatMap((s) => s.ids.map((id) => ({ id, night: s.night })));
+    if (order.length < 2) return;
+    const src = order[0];
+    const srcVals = pickNight(rowAt(src.id, src.night));
+    const srcRow = rows[src.id] ?? EMPTY_ROW;
+    const roomLevel = !viewNight;
+    const roomDone = new Set<string>([src.id]);
+    for (const t of order.slice(1)) {
+      const target = rows[t.id] ?? EMPTY_ROW;
+      const v: NightVals = { ...srcVals };
+      // Bed bounds per target room: capped at its type's max, floored at what its own adults
+      // need (the copy must not strip beds a fuller room depends on).
+      const needed = bedsNeeded(t.id, cnt(target.ad), roomLevel ? srcRow.foc : target.foc);
+      v.bed = String(Math.max(needed, Math.min(cnt(v.bed), bedMaxOf(t.id))));
+      // Meal pax ≤ the TARGET row's occupancy (it keeps its own guest bands).
+      let left = cnt(target.ad) + cnt(target.c6) + cnt(target.u6);
+      for (const c of MEAL_COLS as NightCol[]) {
+        const take = Math.min(cnt(v[c]), left);
+        v[c] = String(take);
+        left -= take;
       }
-      return next;
-    });
+      if (t.night) writeNight(t.id, t.night, v);
+      else writeAllNights(t.id, v);
+      if (roomLevel && !roomDone.has(t.id)) {
+        roomDone.add(t.id);
+        setCell(t.id, {
+          rRoom: srcRow.rRoom,
+          rBed: srcRow.rBed,
+          rBf: srcRow.rBf,
+          rLu: srcRow.rLu,
+          rDi: srcRow.rDi,
+          sc: srcRow.sc,
+          gst: srcRow.gst,
+          foc: srcRow.foc,
+        });
+      }
+    }
   };
 
   // Per-night overrides carried in from the board, keyed by room. Read from the mount-time
@@ -984,8 +1364,41 @@ export function RoomCompositionsTable({
       sealedRoomIds
         .filter((id) => rows[id])
         .map((id) => {
-        const r = rows[id];
-        const occ = cnt(r.ad) + cnt(r.c6) + cnt(r.u6);
+        const r0 = rows[id];
+        const occ = cnt(r0.ad) + cnt(r0.c6) + cnt(r0.u6);
+        // The room's usual night is the one most of its nights share; the others are sent as
+        // that night's own meals and beds (2026-10-22).
+        const ns = nightListOf(id);
+        const own = nightVals[id];
+        let r = r0;
+        let overrides: RoomNightMealOverrideInput[] | undefined;
+        if (ns.length > 0 && own && Object.keys(own).length > 0) {
+          const per = ns.map((n) => ({ n, v: own[n] ?? pickNight(r0) }));
+          const tally = new Map<string, { v: NightVals; k: number; first: number }>();
+          per.forEach((p, i) => {
+            const key = nightKeyOf(p.v);
+            const e = tally.get(key);
+            if (e) e.k += 1;
+            else tally.set(key, { v: p.v, k: 1, first: i });
+          });
+          const usual = [...tally.values()].sort((a, b) => b.k - a.k || a.first - b.first)[0].v;
+          r = { ...r0, ...usual };
+          const differ = per.filter((p) => !sameNight(p.v, usual));
+          if (differ.length) {
+            overrides = differ.map(({ n, v }) => ({
+              date: `${n}T00:00:00.000Z`,
+              mealPlanCpCount: cnt(v.cp),
+              mealPlanMaplCount: cnt(v.ml),
+              mealPlanMapdCount: cnt(v.md),
+              mealPlanApCount: cnt(v.ap),
+              mealPlanOthersCount: cnt(v.ot),
+              othersBreakfastPax: cnt(v.obf),
+              othersLunchPax: cnt(v.olu),
+              othersDinnerPax: cnt(v.odi),
+              extraBedCount: cnt(v.bed),
+            }));
+          }
+        }
         return {
           roomId: id,
           startDate: dayToIso(entryCheckIn),
@@ -1016,21 +1429,29 @@ export function RoomCompositionsTable({
           // them. Carry the seed's through untouched so a board → table → board round trip
           // doesn't quietly delete the operator's per-date plans. The board re-derives them
           // from chip placement on its next emit, so a stale carry-through can't win.
-          ...(nightOverridesBySeedRoom.get(id)?.length
-            ? { nightMealOverrides: nightOverridesBySeedRoom.get(id) }
-            : {}),
+          // A room with nights of its own sends them; one the table cannot place by night (no
+          // dates known) carries the seed's untouched, as before.
+          ...(overrides
+            ? { nightMealOverrides: overrides }
+            : ns.length === 0 && nightOverridesBySeedRoom.get(id)?.length
+              ? { nightMealOverrides: nightOverridesBySeedRoom.get(id) }
+              : {}),
         };
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [rows, sealedRoomIds, entryCheckIn, entryCheckOut],
+    [rows, nightVals, sealedRoomIds, entryCheckIn, entryCheckOut, roomDates],
   );
 
   // Emit on every change. Occ is derived, so invariant (1) of Policy 79 holds by
   // construction; invariant (2) (plan pax ≤ occ) is warned inline and enforced server-side.
+  // Not before every room has its row (2026-10-19): on mount the rows are still empty, and an
+  // empty emission was written over the planner's stored copy — which then outranked the saved
+  // quotation and opened the table with no meals.
   useEffect(() => {
+    if (!ready) return;
     onChange(compositions);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [compositions]);
+  }, [compositions, ready]);
 
   // ---- Live pricing (2026-08-07) ---------------------------------------------------
   // The rate cells show `heads × rate` money and the Σ row shows column totals — all read
@@ -1041,7 +1462,28 @@ export function RoomCompositionsTable({
   const [previewBody, setPreviewBody] = useState<{
     roomCompositions: RoomCompositionInput[];
     discount: { percent?: number; amount?: number } | null;
+    roomNights?: Record<string, number>;
+    roomNightDates?: Record<string, string[]>;
   } | null>(null);
+  // The nights each row is priced for, from the caller's dates — on the room-change panel the
+  // rooms are picked night by night and the booking does not hold them yet (2026-10-19).
+  const previewRoomNights = useMemo(() => {
+    const out: Record<string, number> = {};
+    for (const id of sealedRoomIds) {
+      const n = roomDates?.[id]?.dates?.length ?? 0;
+      if (n > 0) out[id] = n;
+    }
+    return Object.keys(out).length ? out : undefined;
+  }, [sealedRoomIds, roomDates]);
+  const previewRoomNightDates = useMemo(() => {
+    const out: Record<string, string[]> = {};
+    for (const id of sealedRoomIds) {
+      const ds = roomDates?.[id]?.dates;
+      if (ds && ds.length > 0) out[id] = ds.map((d) => d.slice(0, 10));
+    }
+    return Object.keys(out).length ? out : undefined;
+  }, [sealedRoomIds, roomDates]);
+  const previewRoomNightsKey = JSON.stringify([previewRoomNights ?? null, previewRoomNightDates ?? null]);
   // The preview runs whether or not the rate columns are open (2026-09-30, operator report:
   // the sum row's SC and GST "can be left unseen ... they show when Rates + is clicked, and after
   // clicking Rates + once and Rates - again they keep showing"). That was this query: it was
@@ -1056,9 +1498,19 @@ export function RoomCompositionsTable({
           ? { percent: discNum }
           : { amount: discNum }
         : null;
-    const t = setTimeout(() => setPreviewBody({ roomCompositions: compositions, discount }), 450);
+    const t = setTimeout(
+      () =>
+        setPreviewBody({
+          roomCompositions: compositions,
+          discount,
+          ...(previewRoomNights ? { roomNights: previewRoomNights } : {}),
+          ...(previewRoomNightDates ? { roomNightDates: previewRoomNightDates } : {}),
+        }),
+      450,
+    );
     return () => clearTimeout(t);
-  }, [compositions, entryId, discNum, discUnitNow]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [compositions, entryId, discNum, discUnitNow, previewRoomNightsKey]);
   const previewQuery = useQuery({
     queryKey: ["quotation-live-preview", entryId, previewBody],
     queryFn: () => previewQuotationPricing(session!, entryId!, previewBody!),
@@ -1074,7 +1526,7 @@ export function RoomCompositionsTable({
     n == null ? "—" : n.toLocaleString("en-IN", { maximumFractionDigits: 2 });
 
   // Others à-la-carte columns appear only once someone is on the Others plan.
-  const othersVisible = sealedRoomIds.some((id) => cnt(rows[id]?.ot ?? "0") > 0);
+  const othersVisible = paxAnywhere("ot");
 
   // ---- Which nights each room is for (2026-09-30) ----------------------------------
   // Operator: "the reservation is from 30 Sept to 3 Oct but we don't know which dates the rooms
@@ -1134,7 +1586,7 @@ export function RoomCompositionsTable({
       (input.selectionStart === input.value.length && input.selectionEnd === input.value.length);
     if (e.key === "ArrowDown" || e.key === "Enter") {
       e.preventDefault();
-      focusCell(Math.min(sealedRoomIds.length - 1, rowIdx + 1), col);
+      focusCell(Math.min(displayRowCount - 1, rowIdx + 1), col);
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
       focusCell(Math.max(0, rowIdx - 1), col);
@@ -1182,6 +1634,53 @@ export function RoomCompositionsTable({
     ? allNights.filter((n) => guestsOver(roomsOn(n)) !== partySize)
     : [];
 
+  // ---- The table, night by night (2026-10-22, operator) -------------------------------
+  // "The dates column causes the confusion ... when it has a range and others have a single
+  // date it's hard to allocate." On a stay whose rooms change between nights the table is set
+  // out NIGHT BY NIGHT instead: each night under a band naming it, holding the rooms in use that
+  // night — or one night alone, picked beside Expand. A room held on several nights is still ONE
+  // row (its figures are the same every night it is held), so it appears under each of its
+  // nights and an edit to it on one changes them all; its cell says how many nights it covers.
+  // Any stay of more than one night may be read night by night (2026-10-22): meals and extra
+  // beds can differ by night on any stay, not only on one that changes rooms. A stay with the
+  // same rooms every night opens on the whole stay; one that changes rooms, on every night.
+  const pickerNights = splitStay ? allNights : stayNightList;
+  const nightsEditable = datesShown && pickerNights.length > 1;
+  const viewKey = nightView || (splitStay ? "all" : "stay");
+  const roomsOnNight = (n: string) => sealedRoomIds.filter((id) => nightListOf(id).includes(n));
+  const viewNight = nightsEditable && pickerNights.includes(viewKey) ? viewKey : null;
+  const wholeStay = !nightsEditable || (!splitStay && !viewNight && viewKey !== "all");
+  const sections: { night: string | null; ids: string[] }[] = wholeStay
+    ? [{ night: null, ids: sealedRoomIds }]
+    : (viewNight ? [viewNight] : pickerNights).map((n) => ({ night: n, ids: roomsOnNight(n) }));
+  /** Each section's first row in the keyboard walk — a room shown under two nights is two stops. */
+  const sectionStarts = sections.map((_, i) => sections.slice(0, i).reduce((s, x) => s + x.ids.length, 0));
+  const displayRowCount = sections.reduce((s, x) => s + x.ids.length, 0);
+  /** The Σ row reads the night on screen, else the busiest night (or the whole plan). */
+  const footIds = viewNight ? roomsOnNight(viewNight) : idsForTotals;
+  const footSum = (col: NumCol) => sumOver(footIds, col);
+  const footGuests = guestsOver(footIds);
+  /** How many nights a room's one row covers — stated where it is not obvious. */
+  const nightsChip = (id: string): { text: string; title: string } | null => {
+    const ns = nightsOf(id);
+    if (!ns || ns.length === 0) return null;
+    const show = splitStay ? ns.length > 1 : stayNights != null && ns.length !== stayNights;
+    if (!show) return null;
+    const list = ns.map(shortNight).join(", ");
+    const no = roomById.get(id)?.roomNumber ?? "This room";
+    return {
+      text:
+        stayNights != null && ns.length === stayNights
+          ? "every night"
+          : stayNights != null
+            ? `${ns.length} of ${stayNights} nights`
+            : `${ns.length} nights`,
+      title: splitStay
+        ? `Room ${no} is held on ${list}. It has one row for all of those nights, so a change to it here changes every one of them.`
+        : `Room ${no} is held on ${list} only.`,
+    };
+  };
+
   /**
    * Everything wrong with the table right now, named room by room (2026-09-30). This is the ONE
    * definition of "sound enough to price": the red cells above are its symptoms, and the Save
@@ -1205,11 +1704,20 @@ export function RoomCompositionsTable({
       if (fault) out.push(`Room ${roomNoOf(id)} — ${fault}`);
       const room = roomById.get(id);
       const cap = room?.roomType?.maxCapacity ?? room?.roomType?.standardCapacity;
-      if (cap != null && occ > cap + cnt(r.bed)) {
-        out.push(`Room ${roomNoOf(id)} — ${occ} guests in a room that sleeps ${cap}${cnt(r.bed) > 0 ? ` + ${cnt(r.bed)} extra bed(s)` : ""}`);
+      // Meals and extra beds may differ night by night (2026-10-22), so each night is judged on its own.
+      const checkNights: (string | null)[] = nightListOf(id).length ? nightListOf(id) : [null];
+      const onNights = (ns: (string | null)[]) =>
+        ns.length === checkNights.length ? "" : ` on ${ns.map((n) => shortNight(n ?? "")).join(", ")}`;
+      const capNights = cap == null ? [] : checkNights.filter((n) => occ > cap + cnt(valAt(id, n, "bed")));
+      if (cap != null && capNights.length) {
+        const bed = cnt(valAt(id, capNights[0], "bed"));
+        out.push(
+          `Room ${roomNoOf(id)} — ${occ} guests in a room that sleeps ${cap}${bed > 0 ? ` + ${bed} extra bed(s)` : ""}${onNights(capNights)}`,
+        );
       }
-      if (MEAL_COLS.reduce((s2, c) => s2 + cnt(r[c]), 0) > occ) {
-        out.push(`Room ${roomNoOf(id)} — more meal-plan pax than guests in the room`);
+      const mealNights = checkNights.filter((n) => MEAL_COLS.reduce((s2, c) => s2 + cnt(valAt(id, n, c)), 0) > occ);
+      if (mealNights.length) {
+        out.push(`Room ${roomNoOf(id)} — more meal-plan pax than guests in the room${onNights(mealNights)}`);
       }
       if (belowFloor(id, "rRoom")) {
         out.push(`Room ${roomNoOf(id)} — priced below the house floor of ${floorOf(id)}, which needs the GM's waiver`);
@@ -1236,7 +1744,7 @@ export function RoomCompositionsTable({
     }
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sealedRoomIds, rows, roomMin, partySize, totalGuests, roomById, rateRef, splitStay, nightsShort.join(",")]);
+  }, [sealedRoomIds, rows, nightVals, roomDates, roomMin, partySize, totalGuests, roomById, rateRef, splitStay, nightsShort.join(",")]);
 
   useEffect(() => {
     onFaultsChange?.(faults);
@@ -1266,18 +1774,57 @@ export function RoomCompositionsTable({
       sub?: string | null;
       /** Reads, never writes — the value and its sub-line still show. */
       readOnly?: boolean;
+      /** The night the row stands under — its meals and beds are that night's (2026-10-22). */
+      night?: string | null;
     },
   ) => {
-    const raw = rows[roomId]?.[col] ?? "";
+    const night = opts?.night ?? null;
+    const varies = !night && isNightCol(col) && variesOn(roomId, col);
+    // Marked against the room's USUAL night (the value more of its nights share than any other),
+    // so a change made on every night alike marks nothing and the one night that differs stands
+    // out. When the nights split evenly there is no usual night, and every night is marked —
+    // picking one would be arbitrary (2026-10-22, operator: a two-night room marked only on its
+    // second night).
+    const mark = (() => {
+      if (!night || !isNightCol(col)) return null;
+      const ns = nightListOf(roomId);
+      if (ns.length < 2) return null;
+      const tally = new Map<number, number>();
+      for (const n of ns) {
+        const v = cnt(valAt(roomId, n, col));
+        tally.set(v, (tally.get(v) ?? 0) + 1);
+      }
+      if (tally.size < 2) return null;
+      const ranked = [...tally.entries()].sort((a, b) => b[1] - a[1]);
+      const usual = ranked[0][1] > ranked[1][1] ? ranked[0][0] : null;
+      const here = cnt(valAt(roomId, night, col));
+      if (usual != null && here === usual) return null;
+      return { usual, nights: ns };
+    })();
+    const ownNight = mark != null;
+    const raw = varies ? "" : valAt(roomId, night, col);
+    const cls = [opts?.stop ? "stop" : opts?.warn ? "warn" : "", varies ? "varies" : "", ownNight ? "own" : ""]
+      .filter(Boolean)
+      .join(" ");
+    const title = varies
+      ? `Differs by night — ${nightListOf(roomId)
+          .map((n) => `${shortNight(n)}: ${cnt(valAt(roomId, n, col))}`)
+          .join(" · ")}. Typing here sets every night.`
+      : mark
+        ? mark.usual != null
+          ? `${shortNight(night!)} only — most of this room's nights have ${mark.usual}`
+          : `This room's nights differ — ${mark.nights.map((n) => `${shortNight(n)}: ${cnt(valAt(roomId, n, col))}`).join(" · ")}`
+        : opts?.title;
     return (
-      <td key={col} className={opts?.stop ? "stop" : opts?.warn ? "warn" : undefined} title={opts?.title}>
+      <td key={col} className={cls || undefined} title={title}>
         <input
           type="text"
           inputMode={opts?.decimal ? "decimal" : "numeric"}
           className={opts?.wide ? "wide" : undefined}
           data-cell={`${rowIdx}:${col}`}
-          placeholder={opts?.placeholder}
-          readOnly={opts?.readOnly}
+          placeholder={varies ? "varies" : opts?.placeholder}
+          readOnly={opts?.readOnly || readOnly}
+          tabIndex={readOnly ? -1 : undefined}
           style={opts?.readOnly ? { background: "var(--panel-2, transparent)", color: "var(--ink-3)", cursor: "default" } : undefined}
           value={raw}
           onKeyDown={onCellKeyDown(rowIdx, col)}
@@ -1293,8 +1840,14 @@ export function RoomCompositionsTable({
               return;
             }
             if (col === "bed") v = clampBed(roomId, v);
-            else if ((MEAL_COLS as string[]).includes(col)) v = clampMeal(roomId, col, v);
-            setCell(roomId, { [col]: v });
+            else if ((MEAL_COLS as string[]).includes(col)) v = clampMeal(roomId, col, v, night);
+            // Meals and beds under a night are that night's; over the whole stay, every night's.
+            if (isNightCol(col)) {
+              if (night) writeNight(roomId, night, { [col]: v } as Partial<NightVals>);
+              else writeAllNights(roomId, { [col]: v } as Partial<NightVals>);
+            } else {
+              setCell(roomId, { [col]: v });
+            }
           }}
         />
         {/* Backend-priced `heads × rate` line under the rate input — display only. */}
@@ -1302,6 +1855,57 @@ export function RoomCompositionsTable({
       </td>
     );
   };
+  /** Every column of a row, so a band spans the table whatever is open. */
+  const colCount =
+    1 + (bedsShown ? 1 : 0) + 2 + (childColsVisible ? 2 : 0) + 1 + visibleMeals.length + (othersVisible ? 3 : 0) +
+    (ratesOpen ? rateCols.length : 0) + 3 + 1;
+  /** A night's band — where the date changes, so it reads as a break ("UIappeal"): the date at
+   *  the table's largest size, and the night's own guest tally, green when the rooms that night
+   *  hold the whole party and red while they do not. */
+  const nightBand = (night: string, ids: string[]) => {
+    const g = guestsOver(ids);
+    const short = partySize > 0 && g !== partySize;
+    return (
+      <tr className="nightband">
+        <td colSpan={colCount}>
+          <div className="nb-in">
+            <b className="nb-date">{nightLabel(night)}</b>
+            <span className="nb-meta">
+              night {pickerNights.indexOf(night) + 1} of {pickerNights.length} · {ids.length} room{ids.length === 1 ? "" : "s"}
+            </span>
+            {partySize > 0 && (
+              <span
+                className={`nb-tally${short ? " off" : ""}`}
+                title={short ? `The rooms that night hold ${g} of the booking's ${partySize} guests` : "Every guest has a room that night"}
+              >
+                {g} of {partySize} guests
+              </span>
+            )}
+          </div>
+        </td>
+      </tr>
+    );
+  };
+  /** One band over a stay whose rooms run night to night unchanged — the dates once, not on
+   *  every row. */
+  const everyRoomEveryNight =
+    stayNights != null && sealedRoomIds.every((id) => (nightsOf(id)?.length ?? stayNights) === stayNights);
+  const stayBand =
+    ciIso && coIso && stayNights ? (
+      <tr className="nightband stay">
+        <td colSpan={colCount}>
+          <div className="nb-in">
+            <b className="nb-date">
+              {nightLabel(ciIso)} → {nightLabel(coIso)}
+            </b>
+            <span className="nb-meta">
+              {stayNights} night{stayNights === 1 ? "" : "s"}
+              {everyRoomEveryNight ? " · the same rooms every night" : ""}
+            </span>
+          </div>
+        </td>
+      </tr>
+    ) : null;
   const boolCell = (rowIdx: number, roomId: string, col: "sc" | "gst" | "foc") =>
     col === "gst" ? (
       // GST is statutory — not an option (2026-08-01 operator ruling). Always on, always sent.
@@ -1322,7 +1926,7 @@ export function RoomCompositionsTable({
           type="checkbox"
           data-cell={`${rowIdx}:${col}`}
           checked={rows[roomId]?.[col] ?? EMPTY_ROW[col]}
-          disabled={lockCommercial}
+          disabled={lockCommercial || readOnly}
           onKeyDown={onCellKeyDown(rowIdx, col)}
           onChange={(e) => {
             const v = e.target.checked;
@@ -1335,6 +1939,10 @@ export function RoomCompositionsTable({
                 if (cnt(r.bed) < needed) r.bed = String(needed);
                 return { ...prev, [roomId]: r };
               });
+              {
+                const r = rows[roomId] ?? EMPTY_ROW;
+                syncNightBeds(roomId, Math.max(cnt(r.bed), bedsNeeded(roomId, cnt(r.ad), v)));
+              }
             } else {
               setCell(roomId, { [col]: v });
             }
@@ -1344,7 +1952,7 @@ export function RoomCompositionsTable({
     );
 
   return (
-    <div className={expanded ? "rct rst-expandwrap on" : "rct"}>
+    <div className={`${expanded ? "rct rst-expandwrap on" : "rct"}${readOnly ? " ro" : ""}`}>
       {expanded && (
         <div className="rst-expandbar">
           <b>Room composition · {sealedRoomIds.length} room{sealedRoomIds.length === 1 ? "" : "s"}</b>
@@ -1361,15 +1969,18 @@ export function RoomCompositionsTable({
           layer is a flex column in which only `.rct-scroll` scrolls, so this strip, the close bar
           and the toolbar are held at the top structurally rather than by sticky positioning. */}
       {bedAsk && bedsShown && <BedAskStrip ask={bedAsk} />}
-      {entryId && <RateReferenceStrip entryId={entryId} compact />}
+      {entryId && <RateReferenceStrip entryId={entryId} compact roomIds={sealedRoomIds} />}
       {/* Discount rides with the rates, inside the panel — one negotiation surface. */}
       <NegotiationDiscountBar
         discountValue={discountValue}
         discountUnit={discountUnit}
         discountBasis={discountBasis}
         onDiscountChange={onDiscountChange}
+        lockCommercial={lockCommercial || readOnly}
       />
       <div className="rce-bar">
+        {!readOnly && (
+        <>
         {partySize > 0 && (
           <button
             type="button"
@@ -1402,7 +2013,7 @@ export function RoomCompositionsTable({
             type="button"
             className="rcb-mini"
             onClick={copyFirstDown}
-            title="Copy row 1's meals, beds, toggles and rates onto every other row (guest counts stay put)"
+            title="Copy the first row on screen onto every other row on screen — meals and extra beds for the night each stands under; rates and charges too when every night is shown (guest counts stay put)"
           >
             <ArrowDownToLine style={{ width: 11, height: 11 }} /> Copy row 1 ↓
           </button>
@@ -1426,6 +2037,8 @@ export function RoomCompositionsTable({
             </button>
           );
         })}
+        </>
+        )}
         <span className="ln" />
         {/* Compact tallies — the long forms crowded the row until "Expand" wrapped onto its own
             orphan line. Full wording rides on hover. */}
@@ -1450,6 +2063,51 @@ export function RoomCompositionsTable({
             {totalGuests}/{partySize} placed
           </span>
         )}
+        {nightsEditable && (() => {
+          const idx = viewNight ? pickerNights.indexOf(viewNight) : -1;
+          return (
+            <span className={`rce-night${nightsShort.length ? " off" : ""}`}>
+              <button
+                type="button"
+                className="rcb-mini"
+                aria-label="Previous night"
+                title={idx === 0 ? "Every night" : "Previous night"}
+                disabled={idx === -1}
+                onClick={() => setNightView(idx <= 0 ? (splitStay ? "all" : "stay") : pickerNights[idx - 1])}
+              >
+                <ChevronLeft style={{ width: 12, height: 12 }} />
+              </button>
+              <select
+                value={viewNight ?? (wholeStay ? "stay" : "all")}
+                onChange={(e) => setNightView(e.target.value)}
+                aria-label="Night shown"
+                title={nightsShort.length ? `Short of guests on ${nightsShort.map(shortNight).join(", ")}` : "Every night holds the whole party"}
+              >
+                {!splitStay && <option value="stay">Whole stay · {pickerNights.length} nights</option>}
+                <option value="all">All nights · {pickerNights.length}</option>
+                {pickerNights.map((n, i) => {
+                  const ids = roomsOnNight(n);
+                  const short = partySize > 0 && guestsOver(ids) !== partySize;
+                  return (
+                    <option key={n} value={n}>
+                      {`Night ${i + 1} · ${nightLabel(n)} · ${ids.length} room${ids.length === 1 ? "" : "s"}${short ? " · short" : ""}`}
+                    </option>
+                  );
+                })}
+              </select>
+              <button
+                type="button"
+                className="rcb-mini"
+                aria-label="Next night"
+                title="Next night"
+                disabled={idx === pickerNights.length - 1}
+                onClick={() => setNightView(pickerNights[idx + 1])}
+              >
+                <ChevronRight style={{ width: 12, height: 12 }} />
+              </button>
+            </span>
+          );
+        })()}
         {!expanded && (
           <button
             type="button"
@@ -1459,6 +2117,24 @@ export function RoomCompositionsTable({
           >
             <Maximize2 style={{ width: 13, height: 13 }} /> Expand
           </button>
+        )}
+        {quiet && (
+          <Help label="How this table works">
+            <p>One row per room: who sleeps there by age, their meal plans and any extra bed. Occ adds itself up from the guest columns.</p>
+            <p>Arrow keys and Enter move between cells. Distribute party spreads the guests over the rooms; Everyone on… puts every room on one meal plan.</p>
+            <p>Rates + opens the negotiated rates. A meal&rsquo;s rate opens for a room once its plan includes that meal; with no plan (EP) only the room and the extra bed are negotiated.</p>
+            <p>Count children on the meal plans — under 6 eat free, 6 to 10 at the child rate.</p>
+            {nightsEditable && (
+              <p>
+                Pick one night beside Expand, or All nights, to set meals and extra beds night by night — under a
+                night a change is that night&rsquo;s only. Who sleeps in a room, its rates and its charges are the
+                room&rsquo;s for every night it is held. Whole stay sets every night at once; a cell reading
+                &ldquo;varies&rdquo; differs between nights. A small amber corner on a cell: that night is not like
+                the room&rsquo;s other nights (when its nights split evenly, each one is marked). Copy row 1 and Everyone on… work on the rows on screen.
+              </p>
+            )}
+            <p>Every figure is priced by the hotel&rsquo;s server, the same way the quotation will be.</p>
+          </Help>
         )}
       </div>
       {/* A refusal of what was just typed — the loudest thing on the table while it shows
@@ -1482,10 +2158,9 @@ export function RoomCompositionsTable({
       )}
 
       <div className="rct-scroll" ref={wrapRef}>
-        <table className={`rct-t${datesShown ? " has-dates" : ""}`}>
+        <table className="rct-t">
           <thead>
             <tr className="grp">
-              {datesShown && <th className="dates" />}
               <th className="room" />
               {bedsShown && <th />}
               <th />
@@ -1513,7 +2188,6 @@ export function RoomCompositionsTable({
               </th>
             </tr>
             <tr>
-              {datesShown && <th className="dates">Dates</th>}
               <th className="room">Room</th>
               {bedsShown && (
                 <th className="bedcol" title="How the room is made up for this stay">
@@ -1562,205 +2236,215 @@ export function RoomCompositionsTable({
             </tr>
           </thead>
           <tbody>
-            {sealedRoomIds.map((id, rowIdx) => {
-              const r = rows[id] ?? EMPTY_ROW;
-              const room = roomById.get(id);
-              const occ = cnt(r.ad) + cnt(r.c6) + cnt(r.u6);
-              const planSum = MEAL_COLS.reduce((s, c) => s + cnt(r[c]), 0);
-              const plansOver = planSum > occ;
-              const cap = room?.roomType?.maxCapacity ?? room?.roomType?.standardCapacity;
-              const overCap = cap != null && occ > cap + cnt(r.bed);
-              const dates = roomDates?.[id] ?? null;
-              return (
-                <tr key={id} className={r.foc ? "foc" : undefined}>
-                  {datesShown && (
-                    <td
-                      className={`dates${dates && stayNights != null && dates.nights !== stayNights ? " part" : ""}`}
-                      title={
-                        dates
-                          ? `This room is held for ${dates.nights} night${dates.nights === 1 ? "" : "s"}${
-                              stayNights != null && dates.nights !== stayNights ? ` of the stay's ${stayNights}` : ""
-                            }`
-                          : "No nights recorded for this room"
-                      }
-                    >
-                      {dates ? dates.label : "—"}
-                      {dates && stayNights != null && dates.nights !== stayNights && (
-                        <span className="n">
-                          {dates.nights} of {stayNights} nights
-                        </span>
+            {sections.map((sec, si) => (
+              <Fragment key={sec.night ?? "stay"}>
+                {sec.night ? nightBand(sec.night, sec.ids) : datesShown ? stayBand : null}
+                {sec.ids.map((id, k) => {
+                  const rowIdx = sectionStarts[si] + k;
+                  const r = rows[id] ?? EMPTY_ROW;
+                  const room = roomById.get(id);
+                  const occ = cnt(r.ad) + cnt(r.c6) + cnt(r.u6);
+                  // Meals and beds are judged on the night shown — over the whole stay, on every night.
+                  const nightsHere: (string | null)[] = sec.night
+                    ? [sec.night]
+                    : nightListOf(id).length
+                      ? nightListOf(id)
+                      : [null];
+                  const plansOver = nightsHere.some(
+                    (n) => MEAL_COLS.reduce((s, c) => s + cnt(valAt(id, n, c)), 0) > occ,
+                  );
+                  const cap = room?.roomType?.maxCapacity ?? room?.roomType?.standardCapacity;
+                  const bedHere = Math.min(...nightsHere.map((n) => cnt(valAt(id, n, "bed"))));
+                  const overCap = cap != null && occ > cap + bedHere;
+                  const chip = nightsChip(id);
+                  return (
+                    <tr key={`${sec.night ?? "stay"}|${id}`} className={r.foc ? "foc" : undefined}>
+                      {/* The room cell doubles as "open this room in the guest board". Deliberately
+                          the room cell and not the whole row: a row-level handler would fire on
+                          every cell click and fight the grid's own editing/navigation. */}
+                      <td
+                        className={`room${onPickRoom || onOpenRoomInBoard ? " opens" : ""}${onPickRoom && pickedRoomId === id ? " picked" : ""}`}
+                        onClick={onPickRoom ? () => onPickRoom(id) : onOpenRoomInBoard ? () => onOpenRoomInBoard(id) : undefined}
+                        title={
+                          onPickRoom
+                            ? pickedRoomId === id
+                              ? "Chosen — its acts are above the table"
+                              : "Choose this room to see what can be done with it"
+                            : onOpenRoomInBoard
+                              ? "Open this room on its own in the guest board"
+                              : undefined
+                        }
+                      >
+                        <b>{room?.roomNumber ?? id.slice(0, 6)}</b>
+                        {room?.roomType?.code && <span>{room.roomType.code}</span>}
+                        {chip && (
+                          <span className="nn" title={chip.title}>
+                            {chip.text}
+                          </span>
+                        )}
+                      </td>
+                      {bedsShown && <BedCell roomId={id} cell={bedPlan?.[id]} onChange={onBedChange} />}
+                      {/* Occ is the row's own reconciliation: over the room's capacity it reads RED,
+                          not a quiet amber — the figure the operator must not miss (2026-09-29). */}
+                      <td
+                        className={`occ${overCap || occ === 0 ? " over" : ""}`}
+                        title={
+                          occ === 0
+                            ? "Nobody is in this room — every room in the plan must hold someone, or drop the room at Inquiry"
+                            : overCap
+                              ? `Over capacity — ${occ} guests in a room that sleeps ${cap}${bedHere > 0 ? ` + ${bedHere} extra bed(s)` : ""}`
+                              : cap != null
+                                ? `Capacity ${cap}`
+                                : undefined
+                        }
+                      >
+                        {occ}
+                      </td>
+                      {/* A room with no adult in it is refused downstream, so the cell says so here
+                          (2026-09-30, "UIappeal") — red, not a quiet blank. */}
+                      {numCell(rowIdx, id, "ad", {
+                        stop: cnt(r.ad) === 0,
+                        title:
+                          occ === 0
+                            ? "Nobody is in this room yet"
+                            : cnt(r.ad) === 0
+                              ? "Every room needs at least one adult — children cannot be booked into a room on their own"
+                              : undefined,
+                      })}
+                      {childColsVisible && (
+                        <>
+                          {numCell(rowIdx, id, "c6")}
+                          {numCell(rowIdx, id, "u6")}
+                        </>
                       )}
-                    </td>
-                  )}
-                  {/* The room cell doubles as "open this room in the guest board". Deliberately
-                      the room cell and not the whole row: a row-level handler would fire on
-                      every cell click and fight the grid's own editing/navigation. */}
-                  <td
-                    className={`room${onPickRoom || onOpenRoomInBoard ? " opens" : ""}${onPickRoom && pickedRoomId === id ? " picked" : ""}`}
-                    onClick={onPickRoom ? () => onPickRoom(id) : onOpenRoomInBoard ? () => onOpenRoomInBoard(id) : undefined}
-                    title={
-                      onPickRoom
-                        ? pickedRoomId === id
-                          ? "Chosen — its acts are above the table"
-                          : "Choose this room to see what can be done with it"
-                        : onOpenRoomInBoard
-                          ? "Open this room on its own in the guest board"
-                          : undefined
-                    }
-                  >
-                    <b>{room?.roomNumber ?? id.slice(0, 6)}</b>
-                    {room?.roomType?.code && <span>{room.roomType.code}</span>}
-                  </td>
-                  {bedsShown && <BedCell roomId={id} cell={bedPlan?.[id]} onChange={onBedChange} />}
-                  {/* Occ is the row's own reconciliation: over the room's capacity it reads RED,
-                      not a quiet amber — the figure the operator must not miss (2026-09-29). */}
-                  <td
-                    className={`occ${overCap || occ === 0 ? " over" : ""}`}
-                    title={
-                      occ === 0
-                        ? "Nobody is in this room — every room in the plan must hold someone, or drop the room at Inquiry"
-                        : overCap
-                          ? `Over capacity — ${occ} guests in a room that sleeps ${cap}${cnt(r.bed) > 0 ? ` + ${cnt(r.bed)} extra bed(s)` : ""}`
-                          : cap != null
-                            ? `Capacity ${cap}`
-                            : undefined
-                    }
-                  >
-                    {occ}
-                  </td>
-                  {/* A room with no adult in it is refused downstream, so the cell says so here
-                      (2026-09-30, "UIappeal") — red, not a quiet blank. */}
-                  {numCell(rowIdx, id, "ad", {
-                    stop: cnt(r.ad) === 0,
-                    title:
-                      occ === 0
-                        ? "Nobody is in this room yet"
-                        : cnt(r.ad) === 0
-                          ? "Every room needs at least one adult — children cannot be booked into a room on their own"
-                          : undefined,
-                  })}
-                  {childColsVisible && (
-                    <>
-                      {numCell(rowIdx, id, "c6")}
-                      {numCell(rowIdx, id, "u6")}
-                    </>
-                  )}
-                  {numCell(rowIdx, id, "bed")}
-                  {visibleMeals.map((c) => numCell(rowIdx, id, c, { warn: plansOver }))}
-                  {othersVisible && (
-                    <>
-                      {numCell(rowIdx, id, "obf")}
-                      {numCell(rowIdx, id, "olu")}
-                      {numCell(rowIdx, id, "odi")}
-                    </>
-                  )}
-                  {/* Each rate cell shows the figure it would price at when left empty, as the
-                      placeholder — so the column reads as rates rather than as blanks, and a
-                      negotiation is entered against a visible anchor. Typing overrides it.
-                      A meal's cell is editable only for rooms whose plan includes that meal —
-                      the others get a dash (nothing to negotiate); same for Bed with no extra
-                      beds. Under each active input, the backend-priced `heads × rate` line. */}
-                  {ratesOpen &&
-                    rateCols.map((col) => {
-                      const consumes = rowConsumes(r);
-                      const active =
-                        col === "rRoom" ? true : col === "rBed" ? cnt(r.bed) > 0 : consumes[col];
-                      if (!active) {
-                        return (
-                          <td
-                            key={col}
-                            className="mut"
-                            title={
-                              col === "rBed"
-                                ? "No extra beds in this room — nothing to negotiate"
-                                : `Room ${roomNoOf(id)}'s meal plan doesn't include ${RATE_META[col].meal} — put someone on a plan that does (or à-la-carte pax) to unlock this rate`
-                            }
-                          >
-                            —
-                          </td>
-                        );
-                      }
-                      const ref = refFor(id, col);
-                      const l = pvByRoom.get(id);
-                      const nn = l ? `${l.nights}n` : "";
-                      const sub = !l
-                        ? null
-                        : col === "rRoom"
-                          ? `${nn} · ${fmtNu(l.roomSubtotal)}`
-                          : col === "rBed"
-                            ? `${l.extraBedCount}×${nn} · ${fmtNu(l.extraBedSubtotal)}`
-                            : col === "rBf"
-                              ? l.hasNightMealOverrides
-                                ? `varies · ${fmtNu(l.breakfastSubtotal)}`
-                                : `${l.breakfastPax}×${nn} · ${fmtNu(l.breakfastSubtotal)}`
-                              : col === "rLu"
-                                ? l.hasNightMealOverrides
-                                  ? `varies · ${fmtNu(l.lunchSubtotal)}`
-                                  : `${l.lunchPax}×${nn} · ${fmtNu(l.lunchSubtotal)}`
-                                : l.hasNightMealOverrides
-                                  ? `varies · ${fmtNu(l.dinnerSubtotal)}`
-                                  : `${l.dinnerPax}×${nn} · ${fmtNu(l.dinnerSubtotal)}`;
-                      return numCell(rowIdx, id, col, {
-                        decimal: true,
-                        wide: true,
-                        readOnly: lockCommercial,
-                        stop: belowFloor(id, col),
-                        placeholder: ref != null ? String(ref) : "—",
-                        sub,
-                        title: belowFloor(id, col)
-                          ? `Below the floor for this room type — ${floorOf(id)} ${rateRef?.currency ?? ""} is the house's minimum sellable rate. A booking priced under it needs the GM's waiver.`
-                          : lockCommercial
-                          ? "The guest is in-house — a rate change mid-stay is a GM re-price, not a desk edit. The figures here are what the booking is priced at."
-                          : (ref != null
-                            ? `Prices at ${ref} ${rateRef?.currency ?? ""} unless you type a negotiated rate`
-                            : "No rate on file for this room type — leave empty and it prices at zero") +
-                          (RATE_META[col].meal
-                            ? ". Below: covers × nights · stay amount (children priced by age band)"
-                            : sub
-                              ? ". Below: the stay amount this rate produces"
-                              : ""),
-                      });
-                    })}
-                  {/* The charges follow the rates, beside the total they change (2026-09-29). */}
-                  {boolCell(rowIdx, id, "sc")}
-                  {boolCell(rowIdx, id, "gst")}
-                  {boolCell(rowIdx, id, "foc")}
-                  {ratesOpen && preview ? (
-                    <td
-                      className="rowtot"
-                      title="This room's stay total including service charge & GST — priced by the backend"
-                    >
-                      {fmtNu(pvByRoom.get(id)?.total)}
-                    </td>
-                  ) : (
-                    <td />
-                  )}
-                </tr>
-              );
-            })}
+                      {numCell(rowIdx, id, "bed", { night: sec.night })}
+                      {visibleMeals.map((c) => numCell(rowIdx, id, c, { warn: plansOver, night: sec.night }))}
+                      {othersVisible && (
+                        <>
+                          {numCell(rowIdx, id, "obf", { night: sec.night })}
+                          {numCell(rowIdx, id, "olu", { night: sec.night })}
+                          {numCell(rowIdx, id, "odi", { night: sec.night })}
+                        </>
+                      )}
+                      {/* Each rate cell shows the figure it would price at when left empty, as the
+                          placeholder — so the column reads as rates rather than as blanks, and a
+                          negotiation is entered against a visible anchor. Typing overrides it.
+                          A meal's cell is editable only for rooms whose plan includes that meal —
+                          the others get a dash (nothing to negotiate); same for Bed with no extra
+                          beds. Under each active input, the backend-priced `heads × rate` line. */}
+                      {ratesOpen &&
+                        rateCols.map((col) => {
+                          const consumes = roomConsumes(id);
+                          const active =
+                            col === "rRoom" ? true : col === "rBed" ? cnt(r.bed) > 0 : consumes[col];
+                          if (!active) {
+                            return (
+                              <td
+                                key={col}
+                                className="mut"
+                                title={
+                                  col === "rBed"
+                                    ? "No extra beds in this room — nothing to negotiate"
+                                    : `Room ${roomNoOf(id)}'s meal plan doesn't include ${RATE_META[col].meal} — put someone on a plan that does (or à-la-carte pax) to unlock this rate`
+                                }
+                              >
+                                —
+                              </td>
+                            );
+                          }
+                          const ref = refFor(id, col);
+                          const l = pvByRoom.get(id);
+                          const nn = l ? `${l.nights}n` : "";
+                          const sub = !l
+                            ? null
+                            : col === "rRoom"
+                              ? `${nn} · ${fmtNu(l.roomSubtotal)}`
+                              : col === "rBed"
+                                ? `${l.extraBedCount}×${nn} · ${fmtNu(l.extraBedSubtotal)}`
+                                : col === "rBf"
+                                  ? l.hasNightMealOverrides
+                                    ? `varies · ${fmtNu(l.breakfastSubtotal)}`
+                                    : `${l.breakfastPax}×${nn} · ${fmtNu(l.breakfastSubtotal)}`
+                                  : col === "rLu"
+                                    ? l.hasNightMealOverrides
+                                      ? `varies · ${fmtNu(l.lunchSubtotal)}`
+                                      : `${l.lunchPax}×${nn} · ${fmtNu(l.lunchSubtotal)}`
+                                    : l.hasNightMealOverrides
+                                      ? `varies · ${fmtNu(l.dinnerSubtotal)}`
+                                      : `${l.dinnerPax}×${nn} · ${fmtNu(l.dinnerSubtotal)}`;
+                          return numCell(rowIdx, id, col, {
+                            decimal: true,
+                            wide: true,
+                            readOnly: lockCommercial,
+                            stop: belowFloor(id, col),
+                            placeholder: ref != null ? String(ref) : "—",
+                            sub,
+                            title: belowFloor(id, col)
+                              ? `Below the floor for this room type — ${floorOf(id)} ${rateRef?.currency ?? ""} is the house's minimum sellable rate. A booking priced under it needs the GM's waiver.`
+                              : lockCommercial
+                              ? "The guest is in-house — a rate change mid-stay is a GM re-price, not a desk edit. The figures here are what the booking is priced at."
+                              : (ref != null
+                                ? `Prices at ${ref} ${rateRef?.currency ?? ""} unless you type a negotiated rate`
+                                : "No rate on file for this room type — leave empty and it prices at zero") +
+                              (RATE_META[col].meal
+                                ? ". Below: covers × nights · stay amount (children priced by age band)"
+                                : sub
+                                  ? ". Below: the stay amount this rate produces"
+                                  : ""),
+                          });
+                        })}
+                      {/* The charges follow the rates, beside the total they change (2026-09-29). */}
+                      {boolCell(rowIdx, id, "sc")}
+                      {boolCell(rowIdx, id, "gst")}
+                      {boolCell(rowIdx, id, "foc")}
+                      {ratesOpen && preview ? (
+                        <td
+                          className="rowtot"
+                          title="This room's stay total including service charge & GST — priced by the backend"
+                        >
+                          {fmtNu(pvByRoom.get(id)?.total)}
+                        </td>
+                      ) : (
+                        <td />
+                      )}
+                    </tr>
+                  );
+                })}
+              </Fragment>
+            ))}
           </tbody>
           <tfoot>
             <tr>
-              {datesShown && <td className="dates" />}
-              <td className="room">Σ</td>
+              <td
+                className="room"
+                title={
+                  viewNight
+                    ? `${nightLabel(viewNight)} — the rooms in use that night`
+                    : busiestNight
+                      ? `${nightLabel(busiestNight)} — the night holding the most guests`
+                      : undefined
+                }
+              >
+                Σ
+              </td>
               {bedsShown && <td className="bedcol" />}
-              <td className={`occ${partySize > 0 && totalGuests !== partySize ? " off" : ""}`}>{totalGuests}</td>
-              <td>{sum("ad")}</td>
+              <td className={`occ${partySize > 0 && footGuests !== partySize ? " off" : ""}`}>{footGuests}</td>
+              <td>{footSum("ad")}</td>
               {childColsVisible && (
                 <>
-                  <td>{sum("c6")}</td>
-                  <td>{sum("u6")}</td>
+                  <td>{footSum("c6")}</td>
+                  <td>{footSum("u6")}</td>
                 </>
               )}
-              <td>{sum("bed")}</td>
+              <td>{footSum("bed")}</td>
               {visibleMeals.map((c) => (
-                <td key={c}>{sum(c)}</td>
+                <td key={c}>{footSum(c)}</td>
               ))}
               {othersVisible && (
                 <>
-                  <td>{sum("obf")}</td>
-                  <td>{sum("olu")}</td>
-                  <td>{sum("odi")}</td>
+                  <td>{footSum("obf")}</td>
+                  <td>{footSum("olu")}</td>
+                  <td>{footSum("odi")}</td>
                 </>
               )}
               {/* Column money totals (2026-08-07, operator request): each rate column's whole-stay
@@ -1838,7 +2522,7 @@ export function RoomCompositionsTable({
             </span>
           )}
           <span className="ln" />
-          <span className="src">priced by the backend — the quote will match</span>
+          {!quiet && <span className="src">priced by the backend — the quote will match</span>}
         </div>
       )}
 
@@ -1899,8 +2583,12 @@ export function RoomCompositionsTable({
             </ul>
           ) : unsaved ? (
             <span className="stop-ink" style={{ fontWeight: 700 }} role="status">
-              Changed since it was priced — save it, or the quotation still says the old figures.
+              {quiet
+                ? "Changed since it was priced — save it"
+                : "Changed since it was priced — save it, or the quotation still says the old figures."}
             </span>
+          ) : quiet ? (
+            <span />
           ) : (
             <span className="ok-ink" style={{ fontWeight: 700 }} role="status">
               Saved — the quotation is priced on exactly this table.
@@ -1929,13 +2617,13 @@ export function RoomCompositionsTable({
       {/* One line. The old version also warned that child meal discounts were "pending a backend
           update" — stale since 2026-08-04: computeRoomComposition now prices covers by age band
           (under-6 free, 6–10 at the child share), so children SHOULD be counted on the plans. */}
-      <p className="rce-hint">
+      {!quiet && <p className="rce-hint">
         Occ is derived from the guest columns · arrow keys / Enter move between cells · every figure is
         priced by the backend. Rate columns follow the meal plans in use — no plan (EP) negotiates room
         &amp; bed only, and a meal&rsquo;s rate unlocks per room once its plan includes that meal. Count
         children on the meal plans — child pricing applies automatically (under-6 free, 6–10 at the
         child rate).
-      </p>
+      </p>}
     </div>
   );
 }

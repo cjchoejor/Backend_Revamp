@@ -19,7 +19,11 @@ export async function createInquiry(
   actorId: string,
   actorLevel: ActorLevel,
   input: {
-    guestProfileId: string;
+    /** The guest STAYING, when already known (a returning caller found on file). Optional since
+     *  2026-10-12 — the guest is usually named at Wrap up. */
+    guestProfileId?: string | null;
+    /** Who called. A phone or an email is needed unless the booking came from an OTA. */
+    caller?: CallerInput | null;
     sourceChannel?: string;
     /** How the guest came in — the channel follows from it (lib/inquiry-came-in-as). */
     cameInAs?: string;
@@ -40,49 +44,21 @@ export async function createInquiry(
     ratePackageId?: string | null;
   },
 ) {
-  if (!input.guestProfileId?.trim()) throw new ValidationError("guestProfileId is required");
   // The channel and the finer came-in-as, validated together; an old-style caller sending only
   // the channel (+ the notes marker) still gets the column filled.
   const channel = resolveInquiryChannel({ cameInAs: input.cameInAs, sourceChannel: input.sourceChannel, notes: input.notes });
+  const guestProfileId = input.guestProfileId?.trim() || null;
+  if (guestProfileId) {
+    const g = await prisma.guestProfile.findUnique({ where: { id: guestProfileId }, select: { id: true } });
+    if (!g) throw new ValidationError(`Guest profile ${guestProfileId} not found`);
+  }
+  // The caller (2026-10-12): someone must be reachable from the first call — a phone or an
+  // email — except on an OTA booking, which comes through the OTA. A booking with a known guest
+  // and no caller block is the older API shape and stays accepted.
+  const caller = normaliseCaller(input.caller);
+  if (input.caller || !guestProfileId) assertCallerReachable(caller, channel.sourceChannel);
 
-  const travelAgentId = input.travelAgentId?.trim() || null;
-  const corporateAccountId = input.corporateAccountId?.trim() || null;
-  if (travelAgentId && corporateAccountId) {
-    throw new ValidationError("An inquiry can be linked to a travel agent OR a corporate account, not both");
-  }
-  if (travelAgentId) {
-    const agent = await prisma.travelAgent.findUnique({ where: { id: travelAgentId } });
-    if (!agent) throw new ValidationError(`Travel agent ${travelAgentId} not found`);
-    if (!agent.isActive) throw new ValidationError(`Travel agent ${travelAgentId} is inactive`);
-  }
-  if (corporateAccountId) {
-    const corp = await prisma.corporateAccount.findUnique({ where: { id: corporateAccountId } });
-    if (!corp) throw new ValidationError(`Corporate account ${corporateAccountId} not found`);
-    if (!corp.isActive) throw new ValidationError(`Corporate account ${corporateAccountId} is inactive`);
-  }
-
-  // A package must belong to the party it is being quoted for. Without this check a booking
-  // could carry another agency's package and be priced on their negotiated rate.
-  const ratePackageId = input.ratePackageId?.trim() || null;
-  if (ratePackageId) {
-    const pkg = await prisma.ratePackage.findUnique({
-      where: { id: ratePackageId },
-      select: { id: true, name: true, travelAgentId: true, corporateAccountId: true, scope: true, effectiveTo: true },
-    });
-    if (!pkg) throw new ValidationError(`Rate package ${ratePackageId} not found`);
-    if (pkg.effectiveTo && pkg.effectiveTo <= new Date()) {
-      throw new ValidationError(`Rate package "${pkg.name}" is no longer active`);
-    }
-    if (!travelAgentId && !corporateAccountId) {
-      throw new ValidationError("A rate package can only be chosen for a travel agent or corporate booking");
-    }
-    const belongs =
-      (travelAgentId && pkg.travelAgentId === travelAgentId) ||
-      (corporateAccountId && pkg.corporateAccountId === corporateAccountId);
-    if (!belongs) {
-      throw new ValidationError(`Rate package "${pkg.name}" does not belong to the selected party`);
-    }
-  }
+  const { travelAgentId, corporateAccountId, ratePackageId } = await validateInquiryParty(prisma, input);
 
   // Policy 12 (SIG-S1 §6.1): a confirmed duplicate blocks creation until the FOM resolves it —
   // the operator sees the conflicting booking, and the FOM either goes ahead with a recorded
@@ -99,8 +75,8 @@ export async function createInquiry(
   }
   let resolvedConflict: { conflictingInquiryId: string | null; conflictingEntryId: string | null } | null = null;
   try {
-    await duplicateDetectionService.assertInquiryNotConfirmedDuplicateForCreation(prisma, {
-      guestProfileId: input.guestProfileId.trim(),
+    if (guestProfileId) await duplicateDetectionService.assertInquiryNotConfirmedDuplicateForCreation(prisma, {
+      guestProfileId,
       proposedCheckIn: input.proposedCheckIn,
       proposedCheckOut: input.proposedCheckOut,
     });
@@ -119,7 +95,8 @@ export async function createInquiry(
       data: {
         id,
         referenceNumber: id,
-        guestProfileId: input.guestProfileId,
+        guestProfileId,
+        ...callerColumns(caller),
         sourceChannel: channel.sourceChannel,
         cameInAs: channel.cameInAs,
         defaultCustodianId: custodian,
@@ -185,6 +162,108 @@ export async function createInquiry(
     return created;
   });
 }
+
+/**
+ * Who booked, checked: at most one of an agency or a company, active, and a package that belongs
+ * to that party. Shared by the intake and by a change to "who is asking" at Inquiry (2026-10-12).
+ */
+export async function validateInquiryParty(
+  prisma: PrismaClient,
+  input: { travelAgentId?: string | null; corporateAccountId?: string | null; ratePackageId?: string | null },
+) {
+  const travelAgentId = input.travelAgentId?.trim() || null;
+  const corporateAccountId = input.corporateAccountId?.trim() || null;
+  if (travelAgentId && corporateAccountId) {
+    throw new ValidationError("An inquiry can be linked to a travel agent OR a corporate account, not both");
+  }
+  if (travelAgentId) {
+    const agent = await prisma.travelAgent.findUnique({ where: { id: travelAgentId } });
+    if (!agent) throw new ValidationError(`Travel agent ${travelAgentId} not found`);
+    if (!agent.isActive) throw new ValidationError(`Travel agent ${travelAgentId} is inactive`);
+  }
+  if (corporateAccountId) {
+    const corp = await prisma.corporateAccount.findUnique({ where: { id: corporateAccountId } });
+    if (!corp) throw new ValidationError(`Corporate account ${corporateAccountId} not found`);
+    if (!corp.isActive) throw new ValidationError(`Corporate account ${corporateAccountId} is inactive`);
+  }
+
+  // A package must belong to the party it is being quoted for. Without this check a booking
+  // could carry another agency's package and be priced on their negotiated rate.
+  const ratePackageId = input.ratePackageId?.trim() || null;
+  if (ratePackageId) {
+    const pkg = await prisma.ratePackage.findUnique({
+      where: { id: ratePackageId },
+      select: { id: true, name: true, travelAgentId: true, corporateAccountId: true, scope: true, effectiveTo: true },
+    });
+    if (!pkg) throw new ValidationError(`Rate package ${ratePackageId} not found`);
+    if (pkg.effectiveTo && pkg.effectiveTo <= new Date()) {
+      throw new ValidationError(`Rate package "${pkg.name}" is no longer active`);
+    }
+    if (!travelAgentId && !corporateAccountId) {
+      throw new ValidationError("A rate package can only be chosen for a travel agent or corporate booking");
+    }
+    const belongs =
+      (travelAgentId && pkg.travelAgentId === travelAgentId) ||
+      (corporateAccountId && pkg.corporateAccountId === corporateAccountId);
+    if (!belongs) {
+      throw new ValidationError(`Rate package "${pkg.name}" does not belong to the selected party`);
+    }
+  }
+
+  return { travelAgentId, corporateAccountId, ratePackageId };
+}
+
+/* ------------------------------------------------------------------ the caller */
+
+export type CallerInput = {
+  title?: string | null;
+  firstName?: string | null;
+  lastName?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  onWhatsApp?: boolean | null;
+};
+type Caller = { title: string | null; firstName: string | null; lastName: string | null; phone: string | null; email: string | null; onWhatsApp: boolean | null };
+
+function normaliseCaller(c: CallerInput | null | undefined): Caller {
+  const t = (v: string | null | undefined) => v?.trim() || null;
+  const phone = t(c?.phone);
+  return {
+    title: t(c?.title),
+    firstName: t(c?.firstName),
+    lastName: t(c?.lastName),
+    phone,
+    email: t(c?.email),
+    // "On WhatsApp?" is a question about a number; with no number it has no answer.
+    onWhatsApp: phone ? (c?.onWhatsApp ?? null) : null,
+  };
+}
+
+/** A phone or an email (not on an OTA booking), and "on WhatsApp?" answered for a phone. */
+export function assertCallerReachable(c: Caller, sourceChannel: string | null | undefined) {
+  if (c.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(c.email)) {
+    throw new ValidationError("The caller's email does not read as an email address");
+  }
+  if (!c.phone && !c.email && sourceChannel !== "OTA") {
+    throw new ValidationError("Take the caller's phone or email — one of the two is needed to start the inquiry");
+  }
+  if (c.phone && c.onWhatsApp == null) {
+    throw new ValidationError("Ask whether the caller's number is on WhatsApp");
+  }
+}
+
+function callerColumns(c: Caller) {
+  return {
+    callerTitle: c.title,
+    callerFirstName: c.firstName,
+    callerLastName: c.lastName,
+    callerPhone: c.phone,
+    callerEmail: c.email,
+    callerOnWhatsApp: c.onWhatsApp,
+  };
+}
+
+export { normaliseCaller, callerColumns };
 
 export async function assignInquiryCustodian(
   prisma: PrismaClient,

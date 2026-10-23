@@ -53,7 +53,16 @@ export async function declineEntryBeforeSetup(
   prisma: PrismaClient,
   entryId: string,
   actorId: string,
-  opts: { reason: string; actorLevel?: RequestActorLevel },
+  opts: {
+    reason: string;
+    actorLevel?: RequestActorLevel;
+    /**
+     * INTERNAL ONLY — never on the HTTP route (2026-10-19). Set by the combine act: this booking's
+     * guests and rooms were just added to the same guest's other booking, so it ends COMBINED, not
+     * turned down — the guest said no to nothing. Everything else is the decline's own release.
+     */
+    combinedInto?: string;
+  },
 ) {
   const reason = opts.reason?.trim();
   if (!reason) throw new ValidationError("Say why the booking is being turned down — it is the whole point of recording it.");
@@ -98,7 +107,7 @@ export async function declineEntryBeforeSetup(
         status: EntryStatus.CANCELLED,
         closedAt: now,
         closedBy: actorId,
-        closedAs: ENTRY_ENDINGS.DECLINED,
+        closedAs: opts.combinedInto ? ENTRY_ENDINGS.COMBINED : ENTRY_ENDINGS.DECLINED,
         closedReason: reason,
         version: { increment: 1 },
       },
@@ -110,7 +119,7 @@ export async function declineEntryBeforeSetup(
     const lapsed = await lapseNegotiationRecordsTx(tx, engine, { entryId, now, cause: "DECLINED" });
 
     await auditService.emit(tx as any, { actorId, actorLevel: (opts.actorLevel ?? "L1") as any }, {
-      eventType: "ENTRY.DECLINED",
+      eventType: opts.combinedInto ? "ENTRY.COMBINED_INTO" : "ENTRY.DECLINED",
       entityType: "Entry",
       entityId: entryId,
       operation: "TRANSITION",
@@ -122,6 +131,7 @@ export async function declineEntryBeforeSetup(
         toStatus: "CANCELLED",
         declinedAt: entry.currentStage,
         reason,
+        ...(opts.combinedInto ? { combinedInto: opts.combinedInto } : {}),
         roomsReleased: rooms.transitioned,
         ...lapsed,
       },

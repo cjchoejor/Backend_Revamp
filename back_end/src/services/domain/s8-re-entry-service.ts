@@ -6,6 +6,7 @@ import { cancelEntryTimersByCode } from "../../lib/cancel-entry-timers-by-code.j
 import { loadEntryDetail } from "../../lib/entry-detail-include.js";
 import { collectRoomsHeldByEntry, transitionRoomClaimState } from "../../lib/room-claim-state.js";
 import { enforceEntryActiveForStageTransition } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
+import { retireSupersededReplyWaitsBestEffort } from "../../lib/reply-waits.js";
 
 /**
  * SIG-S8 §3.7 — S8→S7 re-entry (additional charge path).
@@ -102,7 +103,7 @@ export async function reEnterS8ToS7(
  * SIG-S8 §3.7 — S8→S2 re-entry (rate dispute / full renegotiation).
  * **FOM+** authority is enforced at the router. Requires **folio LIVE**.
  */
-export async function reEnterS8ToS2(prisma: PrismaClient, entryId: string, actorId: string, clientVersion: number | undefined, reason: string) {
+async function reEnterS8ToS2Inner(prisma: PrismaClient, entryId: string, actorId: string, clientVersion: number | undefined, reason: string) {
   if (clientVersion == null) throw new ValidationError("version is required");
   if (!reason?.trim()) throw new ValidationError("reason is required");
 
@@ -185,4 +186,15 @@ export async function reEnterS8ToS2(prisma: PrismaClient, entryId: string, actor
   });
 
   return loadEntryDetail(prisma, entryId);
+}
+
+/**
+ * reEnterS8ToS2, then stop waiting for replies to the papers it replaced — a guest's reply is awaited only
+ * for the paper in force (2026-10-13; lib/reply-waits.ts).
+ */
+export async function reEnterS8ToS2(...args: Parameters<typeof reEnterS8ToS2Inner>): ReturnType<typeof reEnterS8ToS2Inner> {
+  const out = await reEnterS8ToS2Inner(...args);
+  const entryId = args[1];
+  if (entryId) await retireSupersededReplyWaitsBestEffort(args[0], entryId, args[2]);
+  return out;
 }

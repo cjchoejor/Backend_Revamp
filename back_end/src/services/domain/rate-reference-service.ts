@@ -66,6 +66,19 @@ export type EntryRateReference = {
 export async function buildEntryRateReference(
   prisma: PrismaClient,
   entryId: string,
+  opts?: {
+    /**
+     * Rooms the booking does NOT hold yet whose types must be priced too (2026-10-12, a room
+     * move's preview): a booking moving to a Suite needs the Suite's rate, which the sealed rooms
+     * alone would never resolve. Added to the sealed rooms, never instead of them.
+     */
+    planRoomIds?: string[];
+    /**
+     * The stay to price for, when it is not the booking's own (2026-10-13, a date move's preview):
+     * a season on the new nights changes the published rate.
+     */
+    stay?: { checkIn: Date; checkOut: Date };
+  },
 ): Promise<EntryRateReference> {
   const entry = await prisma.entry.findUnique({
     where: { id: entryId },
@@ -91,9 +104,10 @@ export async function buildEntryRateReference(
       : null;
 
   const stay =
-    entry.checkInDate && entry.checkOutDate
+    opts?.stay ??
+    (entry.checkInDate && entry.checkOutDate
       ? { checkIn: entry.checkInDate, checkOut: entry.checkOutDate }
-      : undefined;
+      : undefined);
   const nights = stay
     ? Math.max(1, Math.round((stay.checkOut.getTime() - stay.checkIn.getTime()) / 86_400_000))
     : null;
@@ -102,7 +116,7 @@ export async function buildEntryRateReference(
 
   const sealedCfg = entry.availabilityConfigs.find((c) => c.sealedAt != null && c.optionSelected != null) ?? null;
   const sealed = sealedCfg ? readOptionSelected(sealedCfg.optionSelected) : null;
-  const roomIds = sealed?.distinctRoomIds ?? [];
+  const roomIds = Array.from(new Set([...(sealed?.distinctRoomIds ?? []), ...(opts?.planRoomIds ?? [])]));
 
   const rooms = roomIds.length
     ? await prisma.room.findMany({

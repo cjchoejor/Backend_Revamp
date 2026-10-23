@@ -53,4 +53,21 @@ export const selectAvailabilityOptionRequestSchema = z
       (Array.isArray(v.perNight) && v.perNight.length > 0),
     { message: "One of roomId, roomIds, or perNight must be provided" },
   );
+/** The rooms on the table, priced night by night (2026-10-10) — nothing is saved. */
+export const priceRoomPickRequestSchema = z
+  .object({
+    roomIds: z.array(z.string().min(1)).max(100).optional(),
+    perNight: z
+      .array(
+        z.object({
+          date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "date must be YYYY-MM-DD"),
+          roomIds: z.array(z.string().min(1)).max(100),
+        }),
+      )
+      .max(366)
+      .optional(),
+  })
+  .refine((v) => !(v.roomIds?.length && v.perNight?.length), { message: "Send roomIds or perNight, not both" });
+export type PriceRoomPickRequestDto = z.infer<typeof priceRoomPickRequestSchema>;
+
 export type SelectAvailabilityOptionRequestDto = z.infer<typeof selectAvailabilityOptionRequestSchema>;

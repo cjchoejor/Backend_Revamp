@@ -25,8 +25,9 @@ import type { HandoffChecklistItem } from "@/lib/api/handoffs";
 import { closeDispute } from "@/lib/api/checkout";
 import { fmtStamp } from "@/lib/ds/format";
 import type { DeficientConditionSummary, DisputeSummary, EntryDetail, HandoffSummary } from "@/types/api";
-import { Choice, DsDialog, Fact, Facts, Live, ReasonDialog, StepCard, atLeast, toastRefusal, useRefreshEntry, useStepMode, words } from "./kit";
+import { Choice, DsDialog, Fact, Facts, Live, ReasonDialog, StepCard, atLeast, toastRefusal, useRefreshEntry, useStepMode, words, NotNow, useInlineWay } from "./kit";
 import { BILLING_WORD } from "./s7-folio";
+import { Help } from "@/components/ds/help";
 
 /* ------------------------------------------------------------------ vocabulary */
 
@@ -36,6 +37,7 @@ const HANDOFF_WORD: Record<string, string> = {
   FULFILLED: "done",
   CLOSED: "closed",
   CANCELLED: "withdrawn",
+  ESCALATED: "not accepted in time — passed to the FOM",
 };
 
 const FINAL_FAULT = [
@@ -246,8 +248,13 @@ export function HandoffsCard({ entry, tz }: { entry: EntryDetail; tz: string }) 
             </Button>
           </div>
         </div>
-      ) : before.state === "ACCEPTED" ? (
+      ) : before.state === "ACCEPTED" || before.state === "ESCALATED" ? (
         <div className="bind provisional" style={{ marginTop: 10, display: "grid", gap: 8 }}>
+          {before.state === "ESCALATED" ? (
+            <span className="sm warn-ink" style={{ fontWeight: 600 }}>
+              Nobody accepted it in time. Mark it done once the room is checked — the move to Check-out waits for it.
+            </span>
+          ) : null}
           <div className="field">
             <label>Any fault in the room, at the end</label>
             <Choice options={FINAL_FAULT} value={fault} onChange={setFault} />
@@ -365,6 +372,7 @@ export function DisputesCard({ entry, tz, onRaise }: { entry: EntryDetail; tz: s
 
 export function RaiseDisputeDialog({ entry, open, onClose }: { entry: EntryDetail; open: boolean; onClose: () => void }) {
   const { session } = useSession();
+  const inline = useInlineWay();
   const refresh = useRefreshEntry(entry.id);
   const [title, setTitle] = useState("");
   const [detail, setDetail] = useState("");
@@ -392,11 +400,10 @@ export function RaiseDisputeDialog({ entry, open, onClose }: { entry: EntryDetai
       register="danger"
       title="Raise a dispute"
       busy={save.isPending}
+      help="An open dispute holds the move to Check-out until it is reviewed and settled." 
       footer={
         <>
-          <Button kind="quiet" state={save.isPending ? "inert" : "default"} onClick={onClose}>
-            Not now
-          </Button>
+          <NotNow onClick={onClose} busy={save.isPending} />
           <Button
             kind="danger"
             solid
@@ -410,12 +417,9 @@ export function RaiseDisputeDialog({ entry, open, onClose }: { entry: EntryDetai
         </>
       }
     >
-      <p className="sm" style={{ marginTop: 0 }}>
-        An open dispute holds the move to Check-out until it is reviewed and settled.
-      </p>
       <div className="field">
         <label>What is disputed</label>
-        <input className="input" value={title} placeholder="Restaurant chit R-1182 · did not order this" onChange={(e) => setTitle(e.target.value)} autoFocus />
+        <input className="input" value={title} placeholder="Restaurant chit R-1182 · did not order this" onChange={(e) => setTitle(e.target.value)} autoFocus={!inline} />
         <span className="control-note">Holding one posting out of the bill is not in the backend yet (BE-53) — name the charge here</span>
       </div>
       <div className="field" style={{ marginTop: 10 }}>
@@ -564,7 +568,10 @@ export function BillingModelCard({ entry, tz }: { entry: EntryDetail; tz: string
   const known = MODELS.some(([v]) => v === model);
   const history = [...(folio?.billingModelTransitions ?? [])].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   return (
-    <StepCard title="Billing model">
+    <StepCard
+      title="Billing model"
+      meta="Set at Set up, before the folio existed. A change now opens a new pass through Re-enter · Change billing model, with the FOM's authority and a reason."
+    >
       {known ? (
         <Choice options={MODELS} value={model as (typeof MODELS)[number][0]} disabled />
       ) : (
@@ -576,9 +583,6 @@ export function BillingModelCard({ entry, tz }: { entry: EntryDetail; tz: string
           {BILLING_WORD[t.toModel] ?? words(t.toModel)} · {fmtStamp(t.createdAt, tz)}
         </div>
       ))}
-      <div className="meta" style={{ marginTop: 6 }}>
-        Set at Set up, before the folio existed. A change now opens a new pass through Re-enter · Change billing model, with the FOM&rsquo;s authority and a reason.
-      </div>
     </StepCard>
   );
 }

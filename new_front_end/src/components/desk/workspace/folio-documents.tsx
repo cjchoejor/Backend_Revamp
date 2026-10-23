@@ -18,6 +18,7 @@ import { dispatchInvoice } from "@/lib/api/reservation-setup";
 import { PdfButton } from "./pdf-button";
 import { FolioDocumentPreview, IssuedInvoicePreview } from "./quotation-preview";
 import type { EntryDetail } from "@/types/api";
+import { Help } from "@/components/ds/help";
 
 /**
  * Bills & statements (2026-08-22, operator request: "tentative invoice, tax invoice, master
@@ -144,11 +145,10 @@ export function FolioDocumentsBlock({ entry, stage }: { entry: EntryDetail; stag
       <BlockH>
         <FileText style={{ width: 13, height: 13 }} />
         {stage === "S8" ? "Bills for check-out" : "Bills & statements"}
-      </BlockH>
-      <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "0 0 9px", lineHeight: 1.55 }}>
+        <Help label="About these bills">
         {stage === "S7" ? (
           <>
-            Every bill here is a <b>view of the live folio above</b> — nothing is numbered or stored, each print is a
+            Every bill here is a <b>view of the live folio</b> — nothing is numbered or stored, each print is a
             snapshot as at now. Hand the guest the <b>tentative invoice</b>; the tax invoice stays a draft until
             settlement issues the one original at check-out.
           </>
@@ -163,7 +163,8 @@ export function FolioDocumentsBlock({ entry, stage }: { entry: EntryDetail; stag
             invoice <b>draft</b> — its particulars become the one original at settlement.
           </>
         )}
-      </p>
+        </Help>
+      </BlockH>
 
       {index.isLoading && <p style={{ fontSize: 11.5, color: "var(--ink-3)" }}>Reading the folio…</p>}
       {index.isError && (
@@ -196,6 +197,7 @@ export function FolioDocumentsBlock({ entry, stage }: { entry: EntryDetail; stag
                   <b>{d.title}</b>
                   {issued && <span className="mono">{d.invoice!.invoiceNumber}</span>}
                   <span style={{ color: "var(--ink-3)" }}>{d.subtitle}</span>
+                  {d.available && d.purpose ? <Help label={`About the ${d.title.toLowerCase()}`}>{d.purpose}</Help> : null}
                 </span>
                 <span style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                   <span className={`tag${tag.ok ? " ok" : tag.warn ? " warn" : ""}`}>{tag.label}</span>
@@ -235,9 +237,9 @@ export function FolioDocumentsBlock({ entry, stage }: { entry: EntryDetail; stag
                   )}
                 </span>
               </div>
-              <p style={{ fontSize: 11, color: "var(--ink-3)", margin: "3px 0 0 4px", lineHeight: 1.5 }}>
-                {d.available ? d.purpose : d.unavailableReason}
-              </p>
+              {!d.available && d.unavailableReason ? (
+                <p style={{ fontSize: 11, margin: "3px 0 0 4px", lineHeight: 1.5 }}>{d.unavailableReason}</p>
+              ) : null}
               {isOpen && d.available && (issued ? (
                 <IssuedInvoicePreview invoiceId={d.invoice!.id} />
               ) : (

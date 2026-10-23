@@ -7,7 +7,8 @@
 import { useEffect, type ReactNode } from "react";
 import { Icon, type DialogRegister } from "@/design-system";
 import type { EntryDetail, RoomAssignmentSummary } from "@/types/api";
-import { Overlay, useStepMode } from "./kit";
+import { Overlay, WayBody, useInlineWay, useStepMode } from "./kit";
+import { Help } from "@/components/ds/help";
 
 /** A room's commercial standing, as the desk says it (never the stored code). */
 const CLAIM_WORD: Record<string, string> = {
@@ -98,6 +99,7 @@ export function WideDialog({
   footer,
   width,
   busy,
+  help,
 }: {
   open: boolean;
   onClose: () => void;
@@ -108,16 +110,28 @@ export function WideDialog({
   footer: ReactNode;
   width: number;
   busy?: boolean;
+  /** What the dialog is for, behind a "?" beside its title. Its consequences stay in the body. */
+  help?: ReactNode;
 }) {
+  const inline = useInlineWay();
+  const shownTitle = help ? (
+    <>
+      {title}
+      <Help label="About this">{help}</Help>
+    </>
+  ) : (
+    title
+  );
   useEffect(() => {
-    if (!open) return;
+    if (!open || inline) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape" && !busy) onClose();
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [open, busy, onClose]);
+  }, [open, busy, onClose, inline]);
   if (!open) return null;
+  if (inline) return <WayBody register={register} title={shownTitle} caseLines={caseLines} footer={footer}>{children}</WayBody>;
   const icon = register === "commit" ? "lock" : register === "danger" ? "alert" : "check";
   return (
     <Overlay>
@@ -126,7 +140,7 @@ export function WideDialog({
           <div className="body">
             <h3>
               <Icon name={icon} size="lg" />
-              {title}
+              {shownTitle}
             </h3>
             {caseLines?.length ? (
               <div className="case">

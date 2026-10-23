@@ -1113,6 +1113,14 @@ export function RoomCompositionPlanner(props: DiscountEdit & {
   /** When set, in-progress edits persist per booking (sessionStorage) and survive leaving
    *  the workspace — without it the grid reset to the auto-distributed default on return. */
   persistKey?: string;
+  /**
+   * What the table was priced on when the copy was written — the live quotation's id, or
+   * "none" (2026-10-19). A stored copy is restored only onto the same basis: once the table is
+   * saved, or another screen saves it, the quotation wins over this browser's copy.
+   */
+  persistBasis?: string;
+  /** Every cell reads, nothing can be typed — see RoomCompositionsTable. */
+  readOnly?: boolean;
   /** When set, the reference-rate strip (per-type room/bed/meal rates from the backend)
    *  renders below the active editor as the anchor for the negotiated-rate cells. */
   entryId?: string;
@@ -1154,6 +1162,8 @@ export function RoomCompositionPlanner(props: DiscountEdit & {
   // component only ever renders client-side (behind the entry fetch), so no SSR risk.
   const storeKey = props.persistKey ? `desk:rcomp:${props.persistKey}` : null;
   const snapshotRef = useRef<RoomCompositionInput[] | null>(null);
+  /** The last table this screen wrote (or restored) — a re-render with the same table writes nothing. */
+  const lastWrittenRef = useRef<string | null>(null);
   if (snapshotRef.current === null) {
     // `initialCompositions` is what the booking is priced on TODAY (2026-08-19) — the post-freeze
     // re-price panel opens on the terms in force, not on an auto-distributed default that would
@@ -1161,21 +1171,32 @@ export function RoomCompositionPlanner(props: DiscountEdit & {
     // still wins over it: that is the operator's own unfinished work.
     snapshotRef.current = props.initialCompositions ?? [];
     if (storeKey && typeof window !== "undefined") {
+      // Restored only when it was written on the SAME quotation, holds a row for every room the
+      // booking has now, and is not empty (2026-10-19, operator: the table "switched to ... no meal
+      // plans" after work on another screen). A copy in the old shape (a bare array) is ignored:
+      // an empty or out-of-date one outranked the saved quotation and opened the grid with no meals.
       try {
         const raw = localStorage.getItem(storeKey);
-        const v = raw ? (JSON.parse(raw) as RoomCompositionInput[]) : null;
-        if (Array.isArray(v)) snapshotRef.current = v;
+        const v = raw ? (JSON.parse(raw) as { v?: number; basis?: string; compositions?: RoomCompositionInput[] }) : null;
+        const comps = v && !Array.isArray(v) && v.v === 2 && v.basis === (props.persistBasis ?? "none") ? v.compositions : null;
+        const rooms = new Set((comps ?? []).map((c) => c.roomId));
+        if (comps && comps.length > 0 && rooms.size === props.sealedRoomIds.length && props.sealedRoomIds.every((id) => rooms.has(id))) {
+          snapshotRef.current = comps;
+          lastWrittenRef.current = JSON.stringify(comps);
+        }
       } catch {
-        /* corrupt / private mode — start fresh as before */
+        /* corrupt / private mode — start from the quotation */
       }
     }
   }
   const { onChange } = props;
   const handleChange = (compositions: RoomCompositionInput[]) => {
     snapshotRef.current = compositions;
-    if (storeKey) {
+    const json = JSON.stringify(compositions);
+    if (storeKey && compositions.length > 0 && json !== lastWrittenRef.current) {
+      lastWrittenRef.current = json;
       try {
-        localStorage.setItem(storeKey, JSON.stringify(compositions));
+        localStorage.setItem(storeKey, JSON.stringify({ v: 2, basis: props.persistBasis ?? "none", compositions }));
       } catch {
         /* non-fatal — the edits just won't survive navigation */
       }

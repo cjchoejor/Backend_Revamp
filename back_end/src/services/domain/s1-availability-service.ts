@@ -17,6 +17,7 @@ import {
   keepStandingReservations,
   reservedClaimEndDate,
 } from "../../lib/entry-inventory-claim.js";
+import { roomMoveClaims } from "../../lib/room-move-claims.js";
 import { annotateDeficientRoomSurface } from "../../policies/19-deficient-condition/p02-deficient-condition-surface-policy.js";
 import {
   createQuotedSpaceAllocationForAvailabilityQuery,
@@ -340,10 +341,23 @@ export async function runAvailabilityEngineForEntry(
     entryReferenceNumber: x.entry?.inquiryId ?? null,
     ...contextFromEntry(x.entry as Parameters<typeof contextFromEntry>[0]),
   }));
+  // A room move from the house chart (2026-10-12): while it runs, each leg's target room is the
+  // moving booking's — no search may offer it to anyone else (lib/room-move-claims.ts).
+  const moveSpans = (await roomMoveClaims(prisma, { checkIn, checkOut, excludeEntryId: entry.id })).map((x) => ({
+    roomId: x.roomId,
+    startDate: x.startDate,
+    endDate: x.endDate,
+    source: "HOLD" as const,
+    holdKind: "COMMITTED" as const,
+    entryId: x.entryId,
+    entryReferenceNumber: x.entry?.inquiryId ?? null,
+    ...contextFromEntry(x.entry as Parameters<typeof contextFromEntry>[0]),
+  }));
   const roomBlockages = [
     ...reservedBlockages,
     ...committedSpans,
     ...extensionSpans,
+    ...moveSpans,
     // Weakest claim, so it is added last and skipped wherever a stronger one already covers the
     // same room: a reservation or committed hold on the entry supersedes its speculative one.
     // Spans resolve like committed holds (2026-08-06): the per-night snapshot when present —
@@ -714,6 +728,17 @@ export async function selectOption(
     perNight?: Array<{ date: string; roomIds: string[] }>;
     deficientAcknowledgements?: unknown;
   },
+  /**
+   * INTERNAL ONLY — the Negotiation amendment (2026-10-12). `validateOnly` runs every check and
+   * writes nothing; `stay` judges a per-night pick against the stay it is ABOUT to have (new dates,
+   * a new room count) instead of the one stored. Together they let the amendment prove the rooms
+   * hold for the new nights BEFORE it moves the booking's dates, so a refused pick can never leave
+   * a booking on new dates with rooms sealed for the old ones.
+   */
+  opts?: {
+    validateOnly?: boolean;
+    stay?: { checkInDate: Date | null; checkOutDate: Date | null; numberOfRooms: number | null };
+  },
 ) {
   const cfg = await prisma.availabilityConfiguration.findUnique({ where: { id: configId } });
   if (!cfg) throw new NotFoundError("AvailabilityConfiguration");
@@ -859,10 +884,12 @@ export async function selectOption(
   // across nights (guest staying in room 201 all week) but not within one night (that would
   // be a duplicate assignment).
   if (normalisedPerNight.length > 0) {
-    const entry = await prisma.entry.findUnique({
-      where: { id: cfg.entryId },
-      select: { numberOfRooms: true, checkInDate: true, checkOutDate: true },
-    });
+    const entry =
+      opts?.stay ??
+      (await prisma.entry.findUnique({
+        where: { id: cfg.entryId },
+        select: { numberOfRooms: true, checkInDate: true, checkOutDate: true },
+      }));
     if (!entry) throw new NotFoundError("Entry");
     const requiredRooms = entry.numberOfRooms ?? normalisedPerNight[0].roomIds.length;
     for (const n of normalisedPerNight) {
@@ -890,6 +917,8 @@ export async function selectOption(
       }
     }
   }
+
+  if (opts?.validateOnly) return null;
 
   return prisma.$transaction(async (tx) => {
     // Storage shape picked from richest → simplest:

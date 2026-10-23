@@ -49,6 +49,11 @@ export type DispatchConfirmationVoucherTxInput = {
   voucherRef: string;
   templateKey: string;
   contentSummary?: string;
+  /**
+   * The voucher is held for the desk to send or not (a walk's re-confirmation): its reply clock
+   * starts only when it actually goes out (2026-10-13) — `armVoucherReplyWindow`.
+   */
+  holdReplyWindow?: boolean;
 };
 
 /**
@@ -66,7 +71,7 @@ export async function dispatchConfirmationVoucherTx(tx: Prisma.TransactionClient
       direction: "OUTBOUND",
       sendStatus: "DISPATCHED",
       acknowledgementStatus: input.otaSource ? "RECEIVED" : "PENDING",
-      acknowledgementTimeoutAt: input.otaSource ? null : new Date(Date.now() + input.voucherAckSeconds * 1000),
+      acknowledgementTimeoutAt: input.otaSource || input.holdReplyWindow ? null : new Date(Date.now() + input.voucherAckSeconds * 1000),
       actorId: input.actorId,
       contentSummary: input.contentSummary ?? "Confirmation voucher dispatched",
       payload: { reservationId: input.reservationId, voucherRef: input.voucherRef, templateKey: input.templateKey },
@@ -74,7 +79,7 @@ export async function dispatchConfirmationVoucherTx(tx: Prisma.TransactionClient
     },
   });
 
-  if (!input.otaSource) {
+  if (!input.otaSource && !input.holdReplyWindow) {
     const engine = await getTimerEngine();
     const ackAt = new Date(Date.now() + input.voucherAckSeconds * 1000);
     const ackJobId = await engine.schedule("ACKNOWLEDGEMENT_WINDOW_W22", { communicationRecordId: comm.id }, { startAfter: ackAt });
@@ -97,6 +102,53 @@ export async function dispatchConfirmationVoucherTx(tx: Prisma.TransactionClient
   }
 
   return comm;
+}
+
+/**
+ * Start the reply clock of a voucher that was held and has now gone out another way (the desk
+ * recorded it as sent on WhatsApp). Only a voucher still waiting for its answer, with no clock
+ * running, gets one; anything else is left as it is.
+ */
+export async function armVoucherReplyWindow(
+  prisma: Prisma.TransactionClient | import("@prisma/client").PrismaClient,
+  input: { reservationId: string; actorId: string; voucherAckSeconds: number },
+): Promise<string | null> {
+  const comm = await prisma.communicationRecord.findFirst({
+    where: {
+      commType: CommunicationType.CONFIRMATION_VOUCHER,
+      direction: "OUTBOUND",
+      acknowledgementStatus: "PENDING",
+      payload: { path: ["reservationId"], equals: input.reservationId },
+    },
+    orderBy: { createdAt: "desc" },
+    select: { id: true, entryId: true, acknowledgementTimeoutAt: true },
+  });
+  if (!comm || comm.acknowledgementTimeoutAt) return null;
+  const running = await prisma.timerRecord.count({
+    where: { entityType: "CommunicationRecord", entityId: comm.id, timerType: "ACKNOWLEDGEMENT_WINDOW_W22", status: "SCHEDULED" },
+  });
+  if (running) return null;
+  const ackAt = new Date(Date.now() + input.voucherAckSeconds * 1000);
+  const engine = await getTimerEngine();
+  const jobId = await engine.schedule("ACKNOWLEDGEMENT_WINDOW_W22", { communicationRecordId: comm.id }, { startAfter: ackAt });
+  await prisma.communicationRecord.update({ where: { id: comm.id }, data: { acknowledgementTimeoutAt: ackAt } });
+  await prisma.timerRecord.create({
+    data: {
+      entryId: comm.entryId,
+      entityType: "CommunicationRecord",
+      entityId: comm.id,
+      timerType: "ACKNOWLEDGEMENT_WINDOW_W22",
+      timerCode: "ACKNOWLEDGEMENT_WINDOW_W22",
+      stageContext: Stage.S4,
+      dueAt: ackAt,
+      firesAt: ackAt,
+      status: "SCHEDULED",
+      createdBy: input.actorId,
+      pgBossJobId: jobId,
+      payload: { communicationRecordId: comm.id },
+    },
+  });
+  return comm.id;
 }
 
 export type DispatchPreArrivalOutboundTxInput = {

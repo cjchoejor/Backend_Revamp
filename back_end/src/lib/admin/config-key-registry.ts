@@ -179,6 +179,7 @@ export const CONFIG_KEY_REGISTRY: Record<string, ConfigKeyMeta> = {
   // Generic surfaces owned by ConfigurationService
   "stageDwell.thresholds": own("ConfigurationService", isObject),
   "deficientResolution.deadlineHours": own("ConfigurationService", positiveInt),
+  "guestRequest.kinds": own("ConfigurationService", isArray),
   "lostFound.retention.warningOffsetDays": own("ConfigurationService", nonNegativeInt),
   "availability.staleness.ttlSeconds": own("ConfigurationService", positiveInt),
   "availability.bookablePhysicalStates": own("ConfigurationService", isArray),

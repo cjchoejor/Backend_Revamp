@@ -67,6 +67,13 @@ export function enforceCommunicationDispatchedForAcknowledgement(input: { sendSt
 
 /** Policy 52 — acknowledgement is captured once; a second capture would overwrite the evidence. */
 export function enforceAcknowledgementNotAlreadyReceived(input: { acknowledgementStatus: string | null }) {
+  // A replaced paper awaits no reply (2026-10-13): the answer belongs to the one in force.
+  if (input.acknowledgementStatus === "SUPERSEDED") {
+    throw new StateTransitionError(
+      "That paper was replaced by a newer one — record the guest's answer against the paper in force",
+      "PAPER_REPLACED",
+    );
+  }
   if (input.acknowledgementStatus !== "RECEIVED") return;
   throw new StateTransitionError(
     "Acknowledgement is already recorded for this communication",

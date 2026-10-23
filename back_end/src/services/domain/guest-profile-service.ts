@@ -72,6 +72,69 @@ export async function createGuestProfile(
   });
 }
 
+/**
+ * Fill in a phone or an email the guest did not give at the inquiry (2026-10-10, operator: "while
+ * inquiring the guest doesn't always give our number or emails, but if they're booking and rooms
+ * are selected we have to ask them"). The Inquiry step's Wrap up asks for them once rooms are
+ * chosen, and this is where they land.
+ *
+ * FILL ONLY, deliberately: a field already on file is never replaced. The guest's record is shared
+ * by every booking they have ever made, so changing a number from one booking's desk would quietly
+ * change where every other booking's papers go — that is a correction to the guest's record, which
+ * has no desk route. A value equal to the one on file is a no-op; a different one is refused,
+ * naming what is there.
+ */
+export async function addGuestProfileContact(
+  prisma: PrismaClient,
+  actorId: string,
+  actorLevel: string,
+  guestProfileId: string,
+  input: { phone?: string | null; email?: string | null; entryId?: string | null },
+) {
+  const phone = input.phone?.trim() || null;
+  const email = input.email?.trim() || null;
+  if (!phone && !email) throw new ValidationError("Give the phone, the email, or both");
+
+  return prisma.$transaction(async (tx) => {
+    const current = await tx.guestProfile.findUnique({ where: { id: guestProfileId }, select: guestProfileSelect });
+    if (!current) throw new NotFoundError("GuestProfile");
+
+    const digits = (v: string) => v.replace(/\D/g, "");
+    const data: { phone?: string; email?: string } = {};
+    const refused: string[] = [];
+    if (phone) {
+      if (!current.phone?.trim()) data.phone = phone;
+      else if (digits(current.phone) !== digits(phone)) refused.push(`a phone (${current.phone})`);
+    }
+    if (email) {
+      if (!current.email?.trim()) data.email = email;
+      else if (current.email.trim().toLowerCase() !== email.toLowerCase()) refused.push(`an email (${current.email})`);
+    }
+    if (refused.length) {
+      throw new PolicyGateBlockedError(
+        "GUEST_CONTACT_ON_FILE",
+        `The guest already has ${refused.join(" and ")} on file — it is not changed from a booking`,
+        { guestProfileId },
+      );
+    }
+    if (!data.phone && !data.email) return { profile: current, added: [] as string[] };
+
+    const profile = await tx.guestProfile.update({ where: { id: guestProfileId }, data, select: guestProfileSelect });
+    const added = Object.keys(data);
+    await auditService.emit(tx as any, { actorId, actorLevel: actorLevel as any }, {
+      eventType: "GUEST_PROFILE.CONTACT_ADDED",
+      entityType: "GuestProfile",
+      entityId: guestProfileId,
+      operation: "UPDATE",
+      timestamp: new Date(),
+      // Field names only — the values are on the record itself.
+      payload: { guestProfileId, added, entryId: input.entryId ?? null },
+      createdBy: actorId,
+    });
+    return { profile, added };
+  });
+}
+
 export async function searchGuestProfiles(
   prisma: PrismaClient,
   query: { q?: string; limit: number },

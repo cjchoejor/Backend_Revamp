@@ -2,7 +2,7 @@ import type { PrismaClient } from "@prisma/client";
 import { releaseRoomClaimIfOwnedTx } from "../../lib/room-claim-state.js";
 import { EntryStatus, HoldState, InventoryClaimState, Prisma, Stage } from "@prisma/client";
 import { MissingConfigurationError, NotFoundError, PolicyGateBlockedError, ValidationError } from "../../lib/errors.js";
-import { firstRoomId, readOptionSelected } from "../../lib/option-selected-reader.js";
+import { firstRoomId, readOptionSelected, sealAsPerNight } from "../../lib/option-selected-reader.js";
 
 /**
  * Enumerate every room a `CommittedHold` is holding. Reads the (Phase-D) `perNightBreakdown`
@@ -133,6 +133,13 @@ export async function placeCommittedHold(
     trigger?: "ADVANCE_PAYMENT" | "ROOM_CHANGE";
     /** The payment whose recording fired the auto-placement — recorded on the trace. */
     triggerPaymentId?: string;
+    /**
+     * ROOM_CHANGE only (2026-10-12): the moment the hold this placement replaces was due to run
+     * out. A room-change walk from Set up releases the hold and places a new one on the new rooms;
+     * without this it would get a fresh window, so moving a room would quietly lengthen how long
+     * the rooms are held. A moment already passed is ignored (the window applies as usual).
+     */
+    expiresAtCarry?: Date | null;
   },
 ) {
   if (!input.roomId?.trim()) throw new ValidationError("roomId is required");
@@ -161,14 +168,15 @@ export async function placeCommittedHold(
   const segmentId = entry.segments[0]?.id;
   if (!segmentId) throw new ValidationError("Entry has no segment");
 
-  // Extract perNight breakdown from the sealed AvailabilityConfiguration, if it's a
-  // per-night seal. Legacy single-room and whole-stay seals return null (no breakdown to
-  // preserve). Store on the hold so downstream services can reconstruct the intent.
+  // The sealed selection, night by night, stored on the hold so downstream services can
+  // reconstruct the intent. A whole-stay or single-room seal is spelled out over the stay too
+  // (2026-10-12): stored as nothing, the hold counted only its anchor room, and between the
+  // freeze and pre-arrival the reservation claimed only that one room as well.
   const sealedConfig = entry.availabilityConfigs[0];
   const opt = (sealedConfig?.optionSelected ?? null) as
     | { perNight?: Array<{ date: string; roomIds: Array<{ roomId: string; isDeficient: boolean }> }> }
     | null;
-  const perNightBreakdown = opt && Array.isArray(opt.perNight) ? opt.perNight : null;
+  const perNightBreakdown = sealAsPerNight(opt, { checkIn: entry.checkInDate, checkOut: entry.checkOutDate });
 
   enforceCancellationDisclosurePresent({ hasCancellationDisclosure: !!entry.cancellationDisclosure });
 
@@ -202,7 +210,14 @@ export async function placeCommittedHold(
 
   const now = new Date();
   // The desk's own hold time for this booking when it set one, else the house window.
-  const window = await resolveHoldExpiry(prisma, entry, now);
+  const resolvedWindow = await resolveHoldExpiry(prisma, entry, now);
+  const carried =
+    input.trigger === "ROOM_CHANGE" && input.expiresAtCarry && input.expiresAtCarry.getTime() > now.getTime() + 60_000
+      ? input.expiresAtCarry
+      : null;
+  const window = carried
+    ? { ...resolvedWindow, expiresAt: carried, ttlSeconds: Math.max(60, Math.round((carried.getTime() - now.getTime()) / 1000)) }
+    : resolvedWindow;
   const { expiresAt, ttlSeconds } = window;
 
   // Multi-room support: the sealed AvailabilityConfiguration is the source of truth for
@@ -770,10 +785,10 @@ export async function setCommittedHoldExpiry(
   const now = new Date();
   const house = await resolveHouseHoldWindow(prisma);
   const houseWindowMinutes = Math.round(house.seconds / 60);
-  const liveHold =
-    entry.committedHold && entry.committedHold.state !== HoldState.RELEASED && entry.committedHold.state !== HoldState.EXPIRED
-      ? entry.committedHold
-      : null;
+  // Only a hold still running on its clock is moved. A CONFIRMED hold at Set up was confirmed at
+  // Reserve in an earlier pass — its clock stopped there, and the rooms stand on that pass's
+  // reservation until this pass places its own hold (2026-10-13).
+  const liveHold = entry.committedHold && entry.committedHold.state === HoldState.PLACED ? entry.committedHold : null;
 
   let target: Date | null = null;
   if (!input.clear) {
@@ -999,7 +1014,13 @@ export async function releaseCommittedHoldByAuthority(
 
   const entry = await prisma.entry.findUnique({
     where: { id: entryId },
-    select: { id: true, inquiryId: true, currentStage: true, reservations: { select: { id: true }, take: 1 } },
+    select: {
+      id: true,
+      inquiryId: true,
+      currentStage: true,
+      reservations: { select: { id: true, segmentId: true }, take: 1 },
+      segments: { orderBy: { segmentNumber: "desc" }, take: 1, select: { id: true } },
+    },
   });
   if (!entry) throw new NotFoundError("Entry");
 
@@ -1009,9 +1030,14 @@ export async function releaseCommittedHoldByAuthority(
     throw new ValidationError("That hold is already released");
   }
   if (entry.reservations.length > 0) {
+    // Back at Set up after a re-entry, the reservation is an earlier pass's and still binds the
+    // rooms until this pass reserves again — say so, rather than "this booking is confirmed".
+    const earlierPass = entry.reservations[0]!.segmentId !== entry.segments[0]?.id;
     throw new PolicyGateBlockedError(
       "HOLD_UNDER_CONFIRMED_RESERVATION",
-      "This booking is confirmed — its rooms are bound to the reservation. Cancel the booking or run a room change instead of releasing the hold.",
+      earlierPass
+        ? "The rooms are still bound to the reservation from an earlier pass, so releasing the hold would not free them. To give the rooms up, go back to Inquiry and search again, or cancel the booking."
+        : "This booking is confirmed — its rooms are bound to the reservation. Cancel the booking or run a room change instead of releasing the hold.",
     );
   }
 

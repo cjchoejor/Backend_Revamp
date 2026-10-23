@@ -13,6 +13,24 @@ export async function runNightAuditStayNightWorker(prisma: PrismaClient, input: 
   const entry = await prisma.entry.findUnique({ where: { id: entryId } });
   if (!entry) return { skipped: true, reason: "ENTRY_NOT_FOUND" } as const;
 
+  // A reminder about a stay night means something only from Arrival to Check-out. A booking that
+  // went back to an earlier step, or has ended, writes nothing — its clock is closed off instead
+  // (2026-10-13).
+  const atStay = ["S5", "S6", "S7", "S8"].includes(String(entry.currentStage));
+  const ended = entry.status === "CANCELLED" || entry.status === "EXPIRED" || entry.status === "CLOSED";
+  if (!atStay || ended) {
+    await prisma.timerRecord.updateMany({
+      where: {
+        entryId,
+        timerCode: "NIGHT_AUDIT_STAY_NIGHT_W37",
+        status: "SCHEDULED",
+        ...(operatingDateIso ? { payload: { equals: { entryId, operatingDateIso } } } : {}),
+      },
+      data: { status: "CANCELLED", cancelledAt: now, cancelledBy: "SYSTEM", cancelledReason: ended ? "BOOKING_ENDED" : "NOT_AT_STAY_STEP" },
+    });
+    return { skipped: true, reason: ended ? "BOOKING_ENDED" : "NOT_AT_STAY_STEP" } as const;
+  }
+
   const timer =
     operatingDateIso != null
       ? await prisma.timerRecord.findFirst({

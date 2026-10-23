@@ -6,6 +6,7 @@ import * as preArrivalService from "../services/domain/pre-arrival-service.js";
 import { armNoShowCutoff, noShowCutoffFor, resolveExpectedArrival, resolveNoShowGraceMinutes } from "../lib/expected-arrival.js";
 import { enforceReservationSnapshotPresentForS5Activation } from "../policies/01-availability/p01-reservation-snapshot-required-for-s5-activation.js";
 import { scheduleS5StageDwellWarningMonitor } from "../lib/schedule-s5-dwell-warning-monitor.js";
+import { latestDispatchedInForce } from "../lib/reply-waits.js";
 
 export async function runPreArrivalWindowActivationWorker(
   prisma: PrismaClient,
@@ -84,16 +85,11 @@ export async function runPreArrivalWindowActivationWorker(
   // late answer (p52 allows it), then activate. Skip (not throw): this is also the automatic
   // W4 path, and pg-boss must not retry-and-fail forever; the manual /activate-pre-arrival
   // route surfaces the message.
-  const voucherComm = await prisma.communicationRecord.findFirst({
-    where: {
-      entryId,
-      commType: "CONFIRMATION_VOUCHER",
-      direction: "OUTBOUND",
-      sendStatus: "DISPATCHED",
-      ...(activationSince ? { createdAt: { gte: activationSince } } : {}),
-    },
-    orderBy: { createdAt: "desc" },
-    select: { acknowledgementStatus: true },
+  // The voucher in force — a replaced one's answer is never demanded (2026-10-13).
+  const voucherComm = await latestDispatchedInForce(prisma, {
+    entryId,
+    commType: "CONFIRMATION_VOUCHER",
+    since: activationSince ?? null,
   });
   if (!voucherComm || voucherComm.acknowledgementStatus !== "RECEIVED") {
     return {

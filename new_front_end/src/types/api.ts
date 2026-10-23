@@ -369,6 +369,8 @@ export type CommittedHoldSummary = {
 export type ReservationSummary = {
   id: string;
   entryId: string;
+  /** The voucher's own number, VOU-YYYYMMDD-NNNN (2026-10-13). */
+  confirmationVoucherNumber?: string | null;
   /** The pass this reservation froze — one per pass. */
   segmentId?: string | null;
   frozenRate: string | number;
@@ -566,7 +568,29 @@ export type NoShowDeterminationSummary = {
   createdAt: string;
 };
 
+/**
+ * What a booking split off another carried (2026-10-14): read by each step to fill itself in as the
+ * booking reaches it — never enforced; every step still asks and checks as for any booking.
+ */
+export type EntryCarryOver = {
+  fromEntryId: string;
+  fromInquiryId: string;
+  at: string;
+  reason: string;
+  target: "SAME_ENQUIRY" | "NEW_ENQUIRY";
+  rooms: Array<{ fromRoomId: string; fromRoomNumber: string; roomId: string; roomNumber: string; priceMode: "KEEP" | "NEW_DATES" }>;
+  /** The rooms' rows, on their new rooms — the Negotiation table's starting point. */
+  compositions: unknown[];
+  discount: { discountPercent?: number; discountBasis?: string } | null;
+  billingModel: string | null;
+  cancellation: { noShowTreatmentStatement: string; disclosedTerms?: unknown } | null;
+  guestAgreedNote?: string | null;
+};
+
 export type EntryDetail = EntryListItem & {
+  /** The booking these rooms were split off (2026-10-14) — a soft link. */
+  splitFromEntryId?: string | null;
+  carryOver?: EntryCarryOver | null;
   /** Who is arriving / who booked it — the booking's own contact (the agency's person on an agency booking). */
   contactPersonName?: string | null;
   contactPersonPhone?: string | null;
@@ -586,6 +610,14 @@ export type EntryDetail = EntryListItem & {
    * by this system" and never moves again.
    */
   communications?: { id: string; createdAt: string; acknowledgementStatus: string | null }[];
+  /** Every confirmation's voucher, newest first — each re-confirmation is a new voucher (2026-10-13). */
+  reservations?: Array<{
+    id: string;
+    segmentId: string | null;
+    confirmedAt: string;
+    confirmationVoucherNumber: string | null;
+    confirmationVoucherStorageKey: string | null;
+  }>;
   folio?: FolioDetail | null;
   cancellationDisclosure?: CancellationDisclosureSummary | null;
   committedHold?: CommittedHoldSummary | null;
@@ -633,6 +665,14 @@ export type EntryDetail = EntryListItem & {
      * the same enquiry, so this is how each booking knows about the other.
      */
     entries?: TripStaySummary[] | null;
+    /** Who called (2026-10-12): the caller is recorded on the enquiry; the guest is named at Wrap up. */
+    callerTitle?: string | null;
+    callerFirstName?: string | null;
+    callerLastName?: string | null;
+    callerPhone?: string | null;
+    callerEmail?: string | null;
+    callerOnWhatsApp?: boolean | null;
+    guestProfileId?: string | null;
     /** Full Inquiry scalars come through the entry include; declared as needed. */
     sourceChannel?: string | null;
     /** How the guest came in (WALK_IN · DIRECT_VOICE · DIRECT_ONLINE · OTA · TRAVEL_AGENT · CORPORATE · GROUP_MICE). */

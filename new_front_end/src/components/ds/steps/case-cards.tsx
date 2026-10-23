@@ -168,7 +168,11 @@ export function CaseCards({
   // that was not in force (2026-09-18). Shown only while it still applies.
   if (inHouse && ps && !ps.paidInFull && (ps.creditExtensionActive || ps.creditExtensionExpired)) {
     cards.push(
-      <StepCard key="credit" title="Credit ceiling">
+      <StepCard
+        key="credit"
+        title="Credit ceiling"
+        meta="The FOM's extension. The desk is warned near the ceiling, and postings stop at it until credit is extended again or an interim payment is taken."
+      >
         <Facts wide>
           <Fact k="Extended up to">{ps.ceilingAmount != null ? money(ps.ceilingAmount, cur) : null}</Fact>
           <Fact k="Until">
@@ -183,9 +187,6 @@ export function CaseCards({
           </Fact>
           <Fact k="Still owed">{entry.folio?.outstandingBalance != null ? money(entry.folio.outstandingBalance, cur) : null}</Fact>
         </Facts>
-        <div className="meta" style={{ marginTop: 6 }}>
-          The FOM&rsquo;s extension · the desk is warned near the ceiling, and postings stop at it until credit is extended again or an interim payment is taken
-        </div>
       </StepCard>,
     );
   }

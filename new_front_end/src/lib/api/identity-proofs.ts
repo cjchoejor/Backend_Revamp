@@ -206,8 +206,15 @@ export async function mintPhoneCaptureToken(
 export type PhoneCaptureRoom = { roomNumber: string; bedType: string | null; roomTypeName: string | null };
 
 /** One party member on the all-guests phone page: best label the desk holds (typed name or
- *  "Adult 2"), how many photos this booking already stores for them, and their room. */
-export type PhoneCaptureRosterItem = { key: string; label: string; photoCount: number; room: PhoneCaptureRoom | null };
+ *  "Adult 2"), how many photos this booking already stores for them, and their room — the one
+ *  they start in, with `laterRooms` naming where they move on later nights (2026-10-23). */
+export type PhoneCaptureRosterItem = {
+  key: string;
+  label: string;
+  photoCount: number;
+  room: PhoneCaptureRoom | null;
+  laterRooms?: Array<{ room: PhoneCaptureRoom; fromNight: string }>;
+};
 
 export type PhoneCaptureContext = {
   entryId: string;

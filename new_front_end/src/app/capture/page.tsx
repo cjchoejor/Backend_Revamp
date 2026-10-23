@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Camera, Check, ImagePlus, RefreshCcw, ScanLine, ShieldCheck, Upload } from "lucide-react";
+import { BedDouble, Camera, Check, ImagePlus, RefreshCcw, ScanLine, ShieldCheck, Upload, X } from "lucide-react";
 import {
   analyzePhoneCapture,
   fetchPhoneCaptureContext,
@@ -92,6 +92,19 @@ function roomText(room: PhoneCaptureRoom | null | undefined, compact = false): s
   return [`Room ${room.roomNumber}`, bed, compact ? null : room.roomTypeName].filter(Boolean).join(" · ");
 }
 
+/** "25 Oct" from a night's YYYY-MM-DD — a stay date, read on its own calendar. */
+function dayMonth(ymd: string): string {
+  const d = new Date(`${ymd}T00:00:00Z`);
+  return Number.isNaN(d.getTime()) ? ymd : d.toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
+}
+
+/** "then Room 305 from 25 Oct" — where a guest who changes rooms moves on later nights. */
+function laterText(s: PhoneCaptureRosterItem): string | null {
+  const later = s.laterRooms ?? [];
+  if (!later.length) return null;
+  return "then " + later.map((l) => `Room ${l.room.roomNumber} from ${dayMonth(l.fromNight)}`).join(", then ");
+}
+
 const inputStyle: React.CSSProperties = {
   width: "100%",
   padding: "10px 12px",
@@ -163,6 +176,10 @@ export default function PhoneCapturePage() {
   // nothing — changes the "couldn't read" copy from "the desk will read it" to honesty.
   const [serverTried, setServerTried] = useState(false);
   const readSeq = useRef(0);
+  // A big party (2026-10-23, operator: "if there are a lot of rooms the list is a burden"):
+  // one button walks guest to guest, and a side drawer lists the rooms to jump between.
+  const [skipped, setSkipped] = useState<string[]>([]);
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   // The token travels in the hash so it never appears in server request logs.
   useEffect(() => {
@@ -350,6 +367,15 @@ export default function PhoneCapturePage() {
     }
     roomGroups.sort((a, b) => (a.key === "unassigned" ? 1 : 0) - (b.key === "unassigned" ? 1 : 0));
   }
+  // The next guest still without an ID, in the list's own order; skipped ones wait at the back.
+  const waiting = roomGroups.flatMap((g) => g.items).filter((s) => s.photoCount === 0);
+  const next = waiting.find((s) => !skipped.includes(s.key)) ?? null;
+  const skippedWaiting = waiting.filter((s) => skipped.includes(s.key));
+  const roomsDone = roomGroups.filter((g) => g.items.every((s) => s.photoCount > 0)).length;
+  const jumpTo = (key: string) => {
+    setDrawerOpen(false);
+    requestAnimationFrame(() => document.getElementById(`cap-${key}`)?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  };
 
   return (
     <div
@@ -418,6 +444,49 @@ export default function PhoneCapturePage() {
               )}
             </div>
 
+            {/* The next guest (2026-10-23): one button that always points at whoever still needs an
+                ID, so nobody scrolls a long list to find them. After a photo is sent the card names
+                the following guest by itself. Skip leaves someone not here yet for later. */}
+            {phase === "ready" && allMode && waiting.length > 0 && (
+              <div style={{ background: palette.card, border: `2px solid ${palette.green}`, borderRadius: 16, padding: "14px 16px", display: "grid", gap: 10 }}>
+                <div style={{ fontSize: 12.5, color: palette.ink3, fontWeight: 600 }}>
+                  Next guest · {waiting.length} still to photograph
+                </div>
+                {next ? (
+                  <>
+                    <div>
+                      <div style={{ fontSize: 21, fontWeight: 700, lineHeight: 1.2 }}>{next.label}</div>
+                      <div style={{ fontSize: 13, color: palette.ink3, marginTop: 3 }}>
+                        {[roomText(next.room) ?? "No room assigned yet", laterText(next)].filter(Boolean).join(" · ")}
+                      </div>
+                    </div>
+                    <button type="button" style={btnPrimary} onClick={() => openPicker(cameraRef.current, next)}>
+                      <Camera style={{ width: 20, height: 20 }} />
+                      Photograph {next.label}
+                    </button>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <button type="button" style={{ ...btnBase, padding: "11px 12px", fontSize: 14.5 }} onClick={() => openPicker(galleryRef.current, next)}>
+                        <ImagePlus style={{ width: 17, height: 17 }} />
+                        From gallery
+                      </button>
+                      <button type="button" style={{ ...btnBase, padding: "11px 12px", fontSize: 14.5 }} onClick={() => setSkipped((p) => [...p, next.key])}>
+                        Skip for now
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div style={{ fontSize: 15, fontWeight: 600 }}>
+                      {skippedWaiting.length} skipped guest{skippedWaiting.length === 1 ? "" : "s"} still need an ID
+                    </div>
+                    <button type="button" style={btnPrimary} onClick={() => setSkipped([])}>
+                      Go back to the skipped guests
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+
             {/* The reader is invisible until it fires — say it exists BEFORE the first shot, or
                 nobody frames the QR code / passport strip on purpose. */}
             {phase === "ready" && (
@@ -463,7 +532,9 @@ export default function PhoneCapturePage() {
                     return (
                       <div
                         key={g.key}
+                        id={`cap-${g.key}`}
                         style={{
+                          scrollMarginTop: 12,
                           background: palette.card,
                           border: `1px solid ${allDone ? palette.green : palette.line}`,
                           borderRadius: 16,
@@ -526,6 +597,7 @@ export default function PhoneCapturePage() {
                               </div>
                               <div style={{ fontSize: 12, color: palette.ink3 }}>
                                 {s.photoCount > 0 ? "ID on file" : "No ID yet"}
+                                {laterText(s) ? ` · ${laterText(s)}` : ""}
                               </div>
                             </div>
                             {/* One ID per guest — capturing again REPLACES the one on file. */}
@@ -748,6 +820,109 @@ export default function PhoneCapturePage() {
                   >
                     Back to the guest list
                   </button>
+                )}
+              </>
+            )}
+
+            {/* The rooms drawer (2026-10-23, operator: "a side tab which can collapse and open, and it
+                contains the rooms"): a tab on the right edge opens the list of rooms with how many
+                IDs each has; a tap jumps to that room. Only for a party in more than one room. */}
+            {phase === "ready" && allMode && roomGroups.length > 1 && (
+              <>
+                <button
+                  type="button"
+                  aria-expanded={drawerOpen}
+                  aria-label={`Rooms — ${roomsDone} of ${roomGroups.length} done`}
+                  onClick={() => setDrawerOpen(true)}
+                  style={{
+                    position: "fixed",
+                    right: 0,
+                    top: "50%",
+                    transform: "translateY(-50%)",
+                    zIndex: 20,
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    gap: 6,
+                    padding: "12px 7px",
+                    border: `1px solid ${palette.greenDark}`,
+                    borderRight: "none",
+                    borderRadius: "12px 0 0 12px",
+                    background: palette.green,
+                    color: "#fff",
+                    fontSize: 13,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                  }}
+                >
+                  <BedDouble style={{ width: 17, height: 17 }} />
+                  <span style={{ writingMode: "vertical-rl", letterSpacing: 0.5 }}>Rooms · {roomsDone}/{roomGroups.length}</span>
+                </button>
+                {drawerOpen && (
+                  <div
+                    role="dialog"
+                    aria-label="Rooms"
+                    onClick={() => setDrawerOpen(false)}
+                    style={{ position: "fixed", inset: 0, zIndex: 30, background: "rgba(20, 18, 14, 0.35)", display: "flex", justifyContent: "flex-end" }}
+                  >
+                    <div
+                      onClick={(e) => e.stopPropagation()}
+                      style={{
+                        width: "min(320px, 84vw)",
+                        height: "100dvh",
+                        overflowY: "auto",
+                        background: palette.bg,
+                        borderLeft: `1px solid ${palette.line}`,
+                        padding: "18px 14px 28px",
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 10,
+                      }}
+                    >
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <span style={{ fontSize: 18, fontWeight: 700 }}>Rooms</span>
+                        <button
+                          type="button"
+                          aria-label="Close the rooms"
+                          onClick={() => setDrawerOpen(false)}
+                          style={{ ...btnBase, width: "auto", marginLeft: "auto", padding: "8px 10px", borderRadius: 10 }}
+                        >
+                          <X style={{ width: 17, height: 17 }} />
+                        </button>
+                      </div>
+                      <div style={{ fontSize: 13, color: palette.ink3 }}>
+                        {rosterCovered} of {roster!.length} guests · {roomsDone} of {roomGroups.length} rooms done
+                      </div>
+                      {roomGroups.map((g) => {
+                        const covered = g.items.filter((s) => s.photoCount > 0).length;
+                        const done = covered === g.items.length;
+                        return (
+                          <button
+                            key={g.key}
+                            type="button"
+                            onClick={() => jumpTo(g.key)}
+                            style={{
+                              ...btnBase,
+                              justifyContent: "flex-start",
+                              padding: "12px 14px",
+                              fontSize: 15,
+                              borderColor: done ? palette.green : palette.line,
+                            }}
+                          >
+                            {done ? (
+                              <Check style={{ width: 17, height: 17, color: palette.green, flexShrink: 0 }} />
+                            ) : (
+                              <span style={{ width: 15, height: 15, borderRadius: 999, border: `2px solid ${palette.line}`, flexShrink: 0 }} />
+                            )}
+                            <span>{g.room ? `Room ${g.room.roomNumber}` : "No room yet"}</span>
+                            <span style={{ marginLeft: "auto", fontSize: 13, fontWeight: 700, color: done ? palette.green : palette.ink3 }}>
+                              {covered}/{g.items.length}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
                 )}
               </>
             )}

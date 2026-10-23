@@ -33,6 +33,9 @@ import {
 import { z } from "zod";
 import { entryDetailInclude } from "../../lib/entry-detail-include.js";
 import { addReturnStay } from "../../services/domain/return-stay-service.js";
+import { setEntryGuest, updateEntryCaller, updateEntrySource } from "../../services/domain/inquiry-caller-service.js";
+import { CAME_IN_AS_VALUES } from "../../lib/inquiry-came-in-as.js";
+import { callerRequestSchema } from "../../dtos/02-inquiries/request-schemas.js";
 import { runPostCheckoutInspectionWorker } from "../../workers/w9-post-checkout-inspection-worker.js";
 import { getEntryTrace } from "../../services/infrastructure/trace-query-service.js";
 import { buildBookingJourneySummary } from "../../services/domain/booking-journey-summary-service.js";
@@ -76,6 +79,62 @@ export const entriesRouter = Router();
  * made up as right now, and whether a choice takes effect immediately (from Arrival, once the
  * room is assigned) or is only recorded for later.
  */
+/**
+ * The caller and the guest staying (2026-10-12). L1 — the desk on the phone. The caller's details
+ * can be filled in or corrected while the booking is live; the guest staying is named at Inquiry.
+ */
+entriesRouter.post("/:id/caller", requireActorLevel("L1"), validateBody(callerRequestSchema), async (req, res, next) => {
+  try {
+    res.json(await updateEntryCaller(prisma, { actorId: req.actor!.actorId, level: req.actor!.level }, req.params.id, req.body));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** Who is asking, changed at Inquiry (2026-10-12) — channel, party, package, a company's reference. */
+const sourceSchema = z
+  .object({
+    cameInAs: z.enum(CAME_IN_AS_VALUES).nullable().optional(),
+    sourceChannel: z.string().min(1).nullable().optional(),
+    travelAgentId: z.string().min(1).nullable().optional(),
+    corporateAccountId: z.string().min(1).nullable().optional(),
+    ratePackageId: z.string().min(1).nullable().optional(),
+    corporateClientRef: z.string().trim().max(200).nullable().optional(),
+    corporateCoordinator: z.string().trim().max(200).nullable().optional(),
+  })
+  .refine((v) => !!(v.cameInAs || v.sourceChannel), { message: "Say how the booking came in", path: ["cameInAs"] })
+  .refine((v) => !(v.travelAgentId && v.corporateAccountId), { message: "A travel agent OR a company, not both", path: ["travelAgentId"] });
+
+entriesRouter.post("/:id/source", requireActorLevel("L1"), validateBody(sourceSchema), async (req, res, next) => {
+  try {
+    res.json(await updateEntrySource(prisma, { actorId: req.actor!.actorId, level: req.actor!.level }, req.params.id, req.body));
+  } catch (e) {
+    next(e);
+  }
+});
+
+const setGuestSchema = z.discriminatedUnion("mode", [
+  z.object({ mode: z.literal("CALLER"), nationality: z.string().trim().max(80).nullable().optional() }),
+  z.object({ mode: z.literal("EXISTING"), guestProfileId: z.string().min(1) }),
+  z.object({
+    mode: z.literal("NEW"),
+    title: z.string().trim().max(20).nullable().optional(),
+    firstName: z.string().trim().min(1).max(80),
+    lastName: z.string().trim().min(1).max(80),
+    nationality: z.string().trim().max(80).nullable().optional(),
+    phone: z.string().trim().max(40).nullable().optional(),
+    email: z.string().trim().max(200).nullable().optional(),
+  }),
+]);
+
+entriesRouter.post("/:id/guest", requireActorLevel("L1"), validateBody(setGuestSchema), async (req, res, next) => {
+  try {
+    res.json(await setEntryGuest(prisma, { actorId: req.actor!.actorId, level: req.actor!.level }, req.params.id, req.body));
+  } catch (e) {
+    next(e);
+  }
+});
+
 entriesRouter.get("/:id/bed-plan", requireActorLevel("L1"), async (req, res, next) => {
   try {
     res.json(await buildEntryBedPlan(prisma, req.params.id));
@@ -442,7 +501,10 @@ entriesRouter.get("/:id/billing-summary", requireActorLevel("L1"), async (req, r
  */
 entriesRouter.get("/:id/rate-reference", requireActorLevel("L1"), async (req, res, next) => {
   try {
-    res.json(await buildEntryRateReference(prisma, req.params.id));
+    // `?rooms=a,b` adds rooms the booking does not hold yet, so their own types' rates are named
+    // (2026-10-19: the room-change panel's table listed only the booking's current type).
+    const rooms = typeof req.query.rooms === "string" ? req.query.rooms.split(",").map((s) => s.trim()).filter(Boolean).slice(0, 50) : [];
+    res.json(await buildEntryRateReference(prisma, req.params.id, rooms.length ? { planRoomIds: rooms } : undefined));
   } catch (e) {
     next(e);
   }
@@ -472,13 +534,37 @@ entriesRouter.get("/:id/competing-claims", requireActorLevel("L1"), async (req, 
  */
 entriesRouter.post("/:id/quotation-preview", requireActorLevel("L1"), async (req, res, next) => {
   try {
-    const body = req.body as { roomCompositions?: unknown; discount?: unknown };
+    const body = req.body as { roomCompositions?: unknown; discount?: unknown; roomNights?: unknown; roomNightDates?: unknown };
     res.setHeader("Cache-Control", "no-store");
+    const roomCompositions = Array.isArray(body?.roomCompositions) ? (body.roomCompositions as Array<{ roomId?: unknown }>) : [];
+    // Each room prices at its own type's rate even when the booking does not hold it yet (the
+    // room-change panel), and for the nights the desk says it takes — a count from 1 to 366.
+    const roomNights = new Map<string, number>();
+    if (body?.roomNights && typeof body.roomNights === "object" && !Array.isArray(body.roomNights)) {
+      for (const [rid, n] of Object.entries(body.roomNights as Record<string, unknown>)) {
+        if (typeof n === "number" && Number.isInteger(n) && n >= 1 && n <= 366) roomNights.set(rid, n);
+      }
+    }
+    // And which nights, as YYYY-MM-DD, so a room's per-night meals and beds price on them (2026-10-22).
+    const roomNightDates = new Map<string, string[]>();
+    if (body?.roomNightDates && typeof body.roomNightDates === "object" && !Array.isArray(body.roomNightDates)) {
+      for (const [rid, ds] of Object.entries(body.roomNightDates as Record<string, unknown>)) {
+        if (!Array.isArray(ds) || ds.length < 1 || ds.length > 366) continue;
+        if (!ds.every((d) => typeof d === "string" && /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(d))) continue;
+        roomNightDates.set(rid, ds as string[]);
+      }
+    }
     res.json(
-      await buildQuotationPreview(prisma, req.params.id, {
-        roomCompositions: Array.isArray(body?.roomCompositions) ? (body.roomCompositions as never[]) : [],
-        discount: (body?.discount ?? null) as never,
-      }),
+      await buildQuotationPreview(
+        prisma,
+        req.params.id,
+        { roomCompositions: roomCompositions as never[], discount: (body?.discount ?? null) as never },
+        {
+          planRoomIds: roomCompositions.map((c) => c.roomId).filter((id): id is string => typeof id === "string"),
+          ...(roomNights.size ? { roomNights } : {}),
+          ...(roomNightDates.size ? { roomNightDates } : {}),
+        },
+      ),
     );
   } catch (e) {
     next(e);

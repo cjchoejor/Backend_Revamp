@@ -22,115 +22,109 @@ import { backflows } from "@/lib/api/backflows";
 import { cancelEntryAtS3, cancelEntryAtS5, initiateS3ReEntryToS1 } from "@/lib/api/reservation-setup";
 import { fmtDay, fmtStamp, money } from "@/lib/ds/format";
 import type { EntryDetail } from "@/types/api";
-import { DsDialog, OtherWays, ReasonDialog, SeeRow, atLeast, toastRefusal, useRefreshEntry } from "./kit";
+import { DsDialog, ReasonDialog, atLeast, toastRefusal, useRefreshEntry, OtherWaysTabs, InlineWay, ShutWay, NotNow, parkTab, type OtherWayTab } from "./kit";
+import { Help } from "@/components/ds/help";
 
 
 type EntryScalars = { noShowCutoffReachedAt?: string | null };
 
-type Open = "cancel" | "noshow" | "amend" | null;
-
 export function BookingOtherWays({
   entry,
-  onPark,
+  parkNow,
+  parking,
   guestPresent = false,
 }: {
   entry: EntryDetail;
-  onPark?: () => void;
+  /** Park with the reason typed in Other ways' own tab (2026-10-17). */
+  parkNow?: (reason: string) => void;
+  parking?: boolean;
   guestPresent?: boolean;
 }) {
   const { session } = useSession();
-  const [open, setOpen] = useState<Open>(null);
   const stage = entry.currentStage;
   const active = entry.status === "ACTIVE";
   const fom = atLeast(session?.actorLevel, "L2");
   const cutoffAt = (entry as EntryDetail & EntryScalars).noShowCutoffReachedAt ?? null;
   const checkIn = entry.reservation?.frozenCheckInDate ?? entry.checkInDate ?? null;
   const reserved = reservedThisPass(entry);
+  const here = active && (stage === "S3" || stage === "S4" || stage === "S5");
 
-  const rows: React.ReactNode[] = [];
+  // Cancel. A reserved booking is cancelled at Reserve or at Arrival (2026-09-18) — it used to be
+  // Arrival only, a day before the stay, so a booking further out could not be cancelled.
+  const cancel: OtherWayTab | null = !here
+    ? null
+    : {
+        key: "cancel",
+        label: "Cancel",
+        content:
+          stage === "S3" ? (
+            <InlineWay render={(done) => <CancelAtSetupDialog entry={entry} onClose={done} />} />
+          ) : fom ? (
+            <InlineWay render={(done) => <CancelAtArrivalDialog entry={entry} onClose={done} />} />
+          ) : (
+            <ShutWay
+              act="Cancel the booking"
+              why="Needs the FOM — cancelling a reserved booking."
+              help={<p>They told us they&rsquo;re not coming. The charge follows the disclosed terms and the rooms are released.</p>}
+            />
+          ),
+      };
 
-  if (active && (stage === "S3" || stage === "S4" || stage === "S5")) {
-    // Cancel
-    if (stage === "S3") {
-      rows.push(
-        <SeeRow key="cancel" label="Cancel…" note="records the reason; the charge follows the disclosed terms — the rooms and the hold are released" onClick={() => setOpen("cancel")} />,
-      );
-    } else {
-      // A reserved booking is cancelled at Reserve or at Arrival (2026-09-18) — it used to be
-      // Arrival only, a day before the stay, so a booking further out could not be cancelled.
-      rows.push(
-        <SeeRow
-          key="cancel"
-          label="Cancel…"
-          note="they told us they're not coming — the charge follows the disclosed terms; the rooms are released"
-          onClick={fom ? () => setOpen("cancel") : undefined}
-          reason={fom ? undefined : "Needs the FOM — cancelling a reserved booking"}
-        />,
-      );
-    }
-
-    // No-show
-    if (stage === "S5") {
-      const done = !!entry.noShowDetermination;
-      const why = done
-        ? "A no-show is already on record for this booking"
-        : guestPresent
-          ? "The guest is marked present — a present guest is not a no-show"
-          : !cutoffAt
-            ? `Not yet — a no-show is determined only after the cut-off on ${fmtDay(checkIn)}`
-            : !fom
-              ? "Needs the FOM — determining a no-show"
-              : undefined;
-      rows.push(
-        <SeeRow
-          key="noshow"
-          label="No-show…"
-          note={`they never came — after the cut-off on ${fmtDay(checkIn)} · the disclosed no-show charge · the rooms released`}
-          onClick={why ? undefined : () => setOpen("noshow")}
-          reason={why}
-        />,
-      );
-    } else {
-      rows.push(
-        <SeeRow
-          key="noshow"
-          label="No-show…"
-          note={`after the cut-off on ${fmtDay(checkIn)} · the disclosed no-show charge · the rooms released`}
-          reason="Not at this step — a no-show is determined at Arrival, after the cut-off on the arrival day"
-        />,
-      );
-    }
+  // No-show — only at Arrival, after the cut-off.
+  let noShow: OtherWayTab | null = null;
+  if (here) {
+    const done = !!entry.noShowDetermination;
+    const why =
+      stage !== "S5"
+        ? "Not at this step — a no-show is determined at Arrival, after the cut-off on the arrival day."
+        : done
+          ? "A no-show is already on record for this booking."
+          : guestPresent
+            ? "The guest is marked present — a present guest is not a no-show."
+            : !cutoffAt
+              ? `Not yet — a no-show is determined only after the cut-off on ${fmtDay(checkIn)}.`
+              : !fom
+                ? "Needs the FOM — determining a no-show."
+                : null;
+    noShow = {
+      key: "noshow",
+      label: "No-show",
+      content: why ? (
+        <ShutWay
+          act="Record the no-show"
+          why={why}
+          help={<p>They never came. After the cut-off on {fmtDay(checkIn)} the disclosed no-show charge is taken and the rooms are released.</p>}
+        />
+      ) : (
+        <InlineWay render={(close) => <NoShowDialog entry={entry} cutoffAt={cutoffAt} onClose={close} />} />
+      ),
+    };
   }
 
-  if (active && onPark) {
-    rows.push(<SeeRow key="park" label="Park…" note="a reason and a follow-up date; it keeps its place and returns to Today" onClick={onPark} />);
-  }
+  const amend: OtherWayTab | null = !here
+    ? null
+    : {
+        key: "amend",
+        label: "Amend dates",
+        content: fom ? (
+          <InlineWay render={(done) => <AmendDatesDialog entry={entry} onClose={done} />} />
+        ) : (
+          <ShutWay
+            act="Open a new pass"
+            why="Needs the FOM — a change of dates opens a new pass."
+            help={
+              <p>
+                {reserved
+                  ? "A governed new pass: back to Inquiry for the new dates, the rooms released, re-quoted and reserved again."
+                  : "Re-quote on the new dates — back to Inquiry in a new pass; the held rooms are released."}
+              </p>
+            }
+          />
+        ),
+      };
 
-  if (active && (stage === "S3" || stage === "S4" || stage === "S5")) {
-    rows.push(
-      <SeeRow
-        key="amend"
-        label="Amend dates…"
-        note={
-          reserved
-            ? "a governed new pass: back to Inquiry for the new dates, the rooms released, re-quoted and reserved again — FOM"
-            : "re-quote on the new dates — back to Inquiry in a new pass; the held rooms are released — FOM"
-        }
-        onClick={fom ? () => setOpen("amend") : undefined}
-        reason={fom ? undefined : "Needs the FOM — a change of dates opens a new pass"}
-      />,
-    );
-  }
-
-  return (
-    <>
-      <OtherWays>{rows}</OtherWays>
-      {open === "cancel" && stage === "S3" ? <CancelAtSetupDialog entry={entry} onClose={() => setOpen(null)} /> : null}
-      {open === "cancel" && (stage === "S4" || stage === "S5") ? <CancelAtArrivalDialog entry={entry} onClose={() => setOpen(null)} /> : null}
-      {open === "noshow" ? <NoShowDialog entry={entry} cutoffAt={cutoffAt} onClose={() => setOpen(null)} /> : null}
-      {open === "amend" ? <AmendDatesDialog entry={entry} onClose={() => setOpen(null)} /> : null}
-    </>
-  );
+  // Other ways as sub-tabs (2026-10-17), each panel the form its button used to open.
+  return <OtherWaysTabs tabs={[cancel, noShow, active ? parkTab(parkNow, parking) : null, amend]} />;
 }
 
 /* ------------------------------------------------------------------ cancel */
@@ -167,7 +161,6 @@ function CancelAtSetupDialog({ entry, onClose }: { entry: EntryDetail; onClose: 
       onClose={onClose}
       busy={run.isPending}
       title="Cancel this booking"
-      caseLines={[entry.id]}
       lead={
         <>
           This cannot be undone. The held rooms return to the house, the timers stop, the proforma is withdrawn, the charge
@@ -212,7 +205,6 @@ function CancelAtArrivalDialog({ entry, onClose }: { entry: EntryDetail; onClose
       onClose={onClose}
       busy={run.isPending}
       title="They told us they're not coming"
-      caseLines={[entry.id]}
       lead={
         <>
           This cannot be undone. The held rooms return to the house;{" "}
@@ -302,12 +294,10 @@ function NoShowDialog({ entry, cutoffAt, onClose }: { entry: EntryDetail; cutoff
       busy={run.isPending}
       width={560}
       title="They never came"
-      caseLines={[entry.id, cutoffAt ? `the cut-off passed ${fmtStamp(cutoffAt, clock.tz)}` : "after the cut-off"]}
+      caseLines={[cutoffAt ? `the cut-off passed ${fmtStamp(cutoffAt, clock.tz)}` : "after the cut-off"]}
       footer={
         <>
-          <Button kind="quiet" state={run.isPending ? "inert" : "default"} onClick={onClose}>
-            Not now
-          </Button>
+          <NotNow onClick={onClose} busy={run.isPending} />
           <Button
             kind="danger"
             solid
@@ -381,9 +371,11 @@ function NoShowDialog({ entry, cutoffAt, onClose }: { entry: EntryDetail; cutoff
           </select>
         </div>
         <div className="wide field">
-          <label>What they said · optional</label>
+          <label>
+            What they said · optional
+            <Help label="About the attempt">The attempt is stamped with the time you add it.</Help>
+          </label>
           <input className="input" value={response} onChange={(e) => setResponse(e.target.value)} placeholder="'we missed the flight'" />
-          <span className="hint">the attempt is stamped with the time you add it</span>
         </div>
       </div>
       <div className="row-acts">
@@ -424,7 +416,6 @@ function AmendDatesDialog({ entry, onClose }: { entry: EntryDetail; onClose: () 
       onClose={onClose}
       busy={run.isPending}
       title="Amend the dates"
-      caseLines={[entry.id]}
       lead={
         <>
           The booking goes back to Inquiry in a new pass. What was decided stays as a read-only record of this pass; the held rooms

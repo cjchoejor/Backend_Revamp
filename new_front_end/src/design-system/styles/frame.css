@@ -14,6 +14,16 @@
 .ds .panel-row:hover { background: var(--surface-2); text-decoration: none; }
 .ds .shell { min-height: 100vh; }
 
+/* Pages use the screen they are on (2026-10-13, operator: two monitors, and the wider one showed
+   the page stopping short with an empty strip on the right). The prototype capped every list page
+   at 1600px and the booking's middle column at 1280px, both pinned to the left, so a 1920px
+   window kept ~300px blank and a booking left a gap before its side panel. Tables and the house
+   chart are what these pages are for, and they read better wider; lines of prose keep their own
+   caps where they have them (`.actrow .cap`, `.way-form`). Same selectors as components.css, so
+   this sheet, loaded after it, wins. */
+.ds .page:not(.desk-root *) { max-width: none; }
+.ds .canvas:not(.desk-root *) { max-width: none; }
+
 /* a page that is a list: the title line with its one primary button */
 .ds .page-title { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--s4); flex-wrap: wrap; }
 .ds .page-title h2 { font-family: var(--font-head); }
@@ -160,6 +170,19 @@
 .ds .trip-stay { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .ds .trip-stay > .meta { min-width: 52px; }
 .ds .trip-stay > :last-child { margin-left: auto; }
+/* This guest's other bookings (2026-10-19) — one row each; the ones over these nights stand out. */
+.ds .gb-rows { display: grid; gap: 6px; }
+.ds .gb-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 8px; border-radius: var(--r-control); border: 1px solid var(--line); }
+.ds .gb-row.overlap { border: 1.5px solid var(--warning); background: var(--warning-soft); }
+.ds .gb-row.ended { opacity: .7; }
+.ds .gb-row .gb-dates { flex: 1 1 260px; }
+.ds .gb-why { display: inline-flex; align-items: center; gap: 4px; font-size: var(--t-meta); color: var(--ink-2); }
+/* Combine two bookings — the two sides, what follows, and what it does. */
+.ds .cmb { display: grid; gap: 12px; }
+.ds .cmb-sides { display: flex; align-items: stretch; gap: 10px; flex-wrap: wrap; }
+.ds .cmb-side, .ds .cmb-after { display: grid; gap: 2px; padding: 8px 10px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--surface); flex: 1 1 200px; }
+.ds .cmb-after { border: 1.5px solid var(--accent-line); background: var(--accent-soft); }
+.ds .cmb-cons { margin: 0; padding-left: 18px; display: grid; gap: 3px; font-size: 13px; }
 
 /* A quiet button still reads as a CONTROL, not as words (2026-09-25, operator report: "most of
    the clickable components don't look clickable — the user only knows when they hover"). The
@@ -177,6 +200,19 @@
 .ds .btn-quiet:not(.desk-root *):not(.topbar *):not(.rail *) { background: var(--surface); border-color: var(--line-2); color: var(--ink); font-weight: 500; }
 .ds .btn-quiet:hover:not(.desk-root *):not(.topbar *):not(.rail *) { background: var(--surface-3); border-color: var(--ink-3); }
 .ds .btn-quiet.inert:not(.desk-root *):not(.topbar *):not(.rail *) { color: var(--ink-4); border-color: var(--line); background: var(--surface-2); font-weight: 400; }
+/* A button at work keeps its own colours (2026-10-14, operator: "I don't see it here" on the voucher's
+   Sending…). The generated sheet styles a working button like an unavailable one — pale grey, light ink —
+   and the primary spinner was drawn white, so the spin vanished into the grey and only the words were left.
+   Busy is not unavailable: the button stays as it was pressed, and the spinner draws in its own ink.
+   The same holds for a pressed button a step turns inert while its request runs ([data-pending], set by
+   PendingButtons) — the ring before its label would otherwise be drawn pale on pale. */
+.ds .btn:is(.working, [data-pending]):not(.desk-root *) { cursor: progress; }
+.ds .btn.btn-primary:is(.working, [data-pending]):not(.desk-root *) { background: var(--ink); color: #fff; border-color: var(--ink); }
+.ds .btn.btn-secondary:is(.working, [data-pending]):not(.desk-root *) { background: var(--surface); color: var(--ink); border-color: var(--line-2); }
+.ds .btn.btn-danger:is(.working, [data-pending]):not(.desk-root *) { background: var(--surface); color: var(--danger); border-color: var(--danger-line); }
+.ds .btn.btn-danger.solid:is(.working, [data-pending]):not(.desk-root *) { background: var(--danger); color: #fff; border-color: var(--danger); }
+.ds .btn.btn-quiet[data-pending]:not(.desk-root *):not(.topbar *):not(.rail *) { background: var(--surface); border-color: var(--line-2); color: var(--ink); font-weight: 500; }
+.ds .btn.working .spin:not(.desk-root *) { border-color: color-mix(in srgb, currentColor 30%, transparent); border-top-color: currentColor; }
 /* "Change configuration" (2026-09-30) — the rooms and the party, changed at Negotiation. It
    takes over its card, so it reads as a short numbered form rather than a second panel. */
 .ds .cfg-change:not(.desk-root *) { display: grid; gap: var(--s4); border: 1px solid var(--line-2); border-radius: var(--r-card); padding: var(--s4); background: var(--surface-2); }
@@ -186,6 +222,9 @@
 .ds .cfg-change section + section:not(.desk-root *) { border-top: 1px solid var(--line); padding-top: var(--s3); }
 /* A refusal of the party just typed — the same loud treatment the negotiation table uses. */
 .ds .cfg-stop:not(.desk-root *) { margin: 8px 0 0; padding: 6px 10px; border: 1px solid var(--danger); border-radius: var(--r-control); background: var(--danger-soft); color: var(--danger); font-size: var(--t-sm); font-weight: 600; }
+/* A stay being moved (2026-10-12) — the old dates and the new, said where the dates are typed. */
+.ds .cfg-move:not(.desk-root *) { margin: 8px 0 0; padding: 6px 10px; border: 1px solid var(--warning-line); border-radius: var(--r-control); background: var(--warning-soft); font-size: var(--t-sm); }
+.ds .cfg-move b:not(.desk-root *) { color: var(--warning); }
 
 /* A configuration change waiting for the FOM (2026-09-30) — it has to catch the eye of the
    person who can decide it, so it reads as a standing notice rather than another quiet row. */
@@ -208,6 +247,54 @@
 .ds .card.flow-waiting { background: transparent; border-style: dashed; }
 .ds .card.flow-waiting h4 { color: var(--ink-2); }
 .ds .flow-wait { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+/* The section being worked (2026-10-10, the boss's journey mockup): a ring, never a thicker
+   border, so nothing below moves — and its number filled, with "you are here" beside the title.
+   A finished section folds to one line and an Edit; a reopened one closes again with Done. */
+.ds .flow-scope { display: contents; }
+.ds .card.flow-current:not(.desk-root *) { box-shadow: 0 0 0 2px var(--ink), 0 2px 10px rgba(43, 39, 36, .08); border-color: var(--ink); }
+.ds .card.flow-current .cardno:not(.done) { background: var(--ink); border-color: var(--ink); color: var(--surface); }
+.ds .card .flow-here { display: inline-block; margin-left: 10px; padding: 1px 8px; border-radius: 999px; background: var(--ink); color: var(--surface); font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; vertical-align: 2px; }
+.ds .card.flow-folded .card-top { margin-bottom: 4px; }
+.ds .card .flow-summary { display: flex; align-items: center; gap: 12px; }
+.ds .card .flow-summary .sum { flex: 1; min-width: 0; color: var(--ink); font-size: var(--t-sm); line-height: 1.4; }
+.ds .card .flow-closebar { display: flex; justify-content: flex-end; margin-top: 12px; }
+.ds .card .flow-body { display: contents; }
+.ds .card .flow-body[hidden] { display: none; }
+
+/* The stay, three to a row (2026-10-10): check-in · nights · check-out, then adults · children
+   · rooms — the nights between the two dates, as on the boss's journey mockup. */
+.ds .form3:not(.desk-root *) { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, .7fr) minmax(0, 1fr); gap: var(--s3) var(--s4); }
+.ds .form3 .wide:not(.desk-root *) { grid-column: 1 / -1; }
+@media (max-width: 760px) { .ds .form3:not(.desk-root *) { grid-template-columns: 1fr; } }
+
+/* The bill for the rooms on the table (2026-10-10): the stay's total is the figure the guest
+   asks for on the phone, so it leads, large; each night and each room type sit beneath it. Every
+   figure is the server's. */
+.ds .pickbill { margin-top: var(--s3); border: 1px solid var(--line-2); border-radius: var(--r-card); background: var(--surface-2); padding: var(--s3) var(--s4); transition: opacity .15s; }
+.ds .pickbill.loading { opacity: .65; }
+.ds .pickbill .pb-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; margin-bottom: var(--s2); }
+.ds .pickbill .pb-title { flex-basis: 100%; font-weight: 700; font-size: var(--t-sm); }
+.ds .pickbill .pb-total { font-size: var(--t-figure); font-weight: 800; color: var(--ink); font-variant-numeric: tabular-nums; }
+.ds .pickbill .pb-sub { font-size: var(--t-meta); color: var(--ink-2); }
+.ds .pickbill .table { background: var(--surface); }
+.ds .pickbill .num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ds .pickbill .pb-night { white-space: nowrap; font-weight: 600; }
+.ds .pickbill .pb-night .meta { display: block; font-weight: 400; }
+.ds .pickbill .pb-rooms { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.ds .pickbill .pb-room { display: inline-flex; align-items: baseline; gap: 4px; padding: 1px 7px; border: 1px solid var(--line-2); border-radius: 999px; background: var(--surface-2); font-weight: 700; font-size: var(--t-meta); }
+.ds .pickbill .pb-room small { font-weight: 400; color: var(--ink-2); }
+.ds .pickbill .pb-byroom { margin: var(--s2) 0; line-height: 1.5; }
+.ds .pickbill .pb-ladder { margin-top: var(--s2); }
+.ds .pickbill .pb-ladder .pb-step td { border-top: 1px solid var(--line-2); font-weight: 600; }
+.ds .pickbill .pb-ladder .pb-grand td { border-top: 2px solid var(--ink); font-weight: 800; font-size: var(--t-sm); }
+.ds .pickbill .pb-caption { margin-top: var(--s2); }
+/* Each room type's total, taxes included (2026-10-12). */
+.ds .pb-types { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 var(--s2); }
+.ds .pb-type { display: inline-flex; align-items: baseline; gap: 8px; padding: 4px 10px; border: 1px solid var(--line-2); border-radius: var(--r-control); background: var(--surface); }
+.ds .pb-type-name { font-weight: 700; }
+.ds .pb-type-n { font-size: var(--t-meta); color: var(--ink-2); }
+.ds .pb-type .money { font-variant-numeric: tabular-nums; }
 
 /* The side panel's to-do: what this step still needs, in the order it is done. */
 .ds .side .todo { display: grid; gap: 2px; }
@@ -284,3 +371,651 @@
 .ds .list-band.today td:not(.desk-root *) { background: var(--accent-soft); color: var(--accent-ink); border-bottom-color: var(--accent-line); }
 .ds .list-band .n:not(.desk-root *) { margin-left: 10px; font-weight: 600; color: var(--ink-3); }
 .ds .bookings-page .date-cell:not(.desk-root *) { white-space: nowrap; }
+/* A grid item grows to its widest content unless told otherwise, so a wide table inside a
+   step (the S1 rooms-by-night grid over many nights) pushed the middle column under the side
+   panel. The column and the step's cards stay their own width; the table scrolls in its box. */
+.ds .canvas > *, .ds .steps-canvas > *, .ds .steps-canvas > .pane > * { min-width: 0; }
+/* The S1 rooms table in the full view: the card takes the whole window and the table fills
+   what is left under its heading, at its normal size — the old "dense" shrink made the words
+   tiny while the base 560px cap left the bottom of the screen empty. */
+.ds .fullscreen-layer > .card { display: flex; flex-direction: column; height: calc(100vh - 2 * var(--s4)); min-height: 0; }
+.ds .fullscreen-layer > .card > * { flex: 0 0 auto; }
+.ds .fullscreen-layer > .card > .tool { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.ds .fullscreen-layer > .card > .tool > .rst-wrap { flex: 1 1 auto; min-height: 0; max-height: none; }
+/* …and larger than the inline table, since the full view has the room for it. */
+.ds .fullscreen-layer .rst th, .ds .fullscreen-layer .rst td { font-size: 14px; padding-top: 7px; padding-bottom: 7px; }
+.ds .fullscreen-layer .rst .rst-no { font-size: 15px; }
+.ds .fullscreen-layer .rst .rst-chip { font-size: 13.5px; padding: 4px 14px; min-width: 84px; }
+.ds .fullscreen-layer .rst .rst-selall-btn { font-size: 13px; padding: 4px 11px; }
+.ds .fullscreen-layer .rst .rst-nightcount { font-size: 14px; }
+
+/* ---- The booking's five tabs (2026-10-12) ----
+   This step › the step's own tabs › Other ways · Booking details | the booking's tabs. The bar
+   wraps rather than running off the canvas on Stay, which carries the most tabs. */
+.ds .canvas-tabs:not(.desk-root *) { flex-wrap: wrap; row-gap: 2px; column-gap: 10px; }
+.ds .canvas-tabs .tabgroup { display: flex; gap: 2px; flex-wrap: nowrap; }
+.ds .canvas-tabs .tabgroup.booking { padding-left: 10px; border-left: 1px solid var(--line-2); }
+.ds .tab .tab-n { display: inline-block; min-width: 18px; padding: 0 6px; border-radius: 9px; font-size: 11.5px; font-weight: 700; line-height: 18px; text-align: center; background: var(--surface-2, #efe9dd); color: var(--ink-2); }
+.ds .tab .tab-n.warn { background: var(--warning); color: #fff; }
+.ds .tab .tab-n.stop { background: var(--danger); color: #fff; }
+
+/* Charges & payments: the stay total is the figure the card exists for (UIappeal). */
+.ds .bigfig { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.ds .bigfig b { font-size: 26px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.ds .balance-line { display: flex; justify-content: space-between; align-items: baseline; margin-top: 10px; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--line-2); }
+.ds .balance-line span { font-weight: 600; }
+.ds .balance-line b { font-size: 20px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.ds .balance-line.due { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 7%, transparent); }
+.ds .balance-line.due b { color: var(--danger); }
+.ds .balance-line.clear { border-color: var(--success); background: color-mix(in srgb, var(--success) 7%, transparent); }
+.ds .balance-line.clear b { color: var(--success); }
+
+/* Guest requests, to-dos and notes: one row each, its state on the right. */
+.ds .reqlist { display: grid; gap: 0; }
+.ds .reqrow { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding: 9px 0; border-top: 1px solid var(--line); }
+.ds .reqrow:first-child { border-top: 0; }
+.ds .reqrow .req-main { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.ds .reqrow .req-main .meta { margin-top: 2px; }
+.ds .reqrow.asked { box-shadow: inset 3px 0 0 var(--warning); padding-left: 10px; }
+.ds .reqrow.late { box-shadow: inset 3px 0 0 var(--danger); padding-left: 10px; }
+.ds .reqrow.withdrawn .req-main > b,
+.ds .reqrow.withdrawn .req-main { color: var(--ink-3, #8c8478); }
+.ds .reqrow.sys .req-main > span { color: var(--ink-2); }
+.ds .notes-input { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.ds .notes-input .input { flex: 1; min-width: 260px; }
+.ds .notes-input .tick { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; cursor: pointer; }
+
+/* The header total says when the figure is not saved yet (2026-10-12) — in the state colour. */
+.ds .ws-head .total .kind.warn-ink:not(.desk-root *) { color: var(--warning); font-weight: 600; }
+
+/* ------------------------------------------------------------------
+   Explanations on request (2026-10-12, operator: "keep the button with few lines and a small
+   question mark icon, where when the user clicks it shows the details"). The "?" works inside the
+   old tools (.desk-root) too, so it is not excluded from them; its box is rendered at the root.
+   ------------------------------------------------------------------ */
+.ds button.help-q {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 20px; height: 20px; min-width: 0; padding: 0; margin: 0 0 0 6px;
+  border-radius: 50%; border: 1px solid var(--line-2); background: var(--surface, #fff);
+  color: var(--ink-2); font: 700 12px/1 var(--font, system-ui); cursor: pointer; vertical-align: middle;
+  box-shadow: none;
+}
+.ds button.help-q:hover, .ds button.help-q[aria-expanded="true"] { background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent-ink); }
+.ds button.help-q:focus-visible { outline: none; box-shadow: var(--focus); }
+.ds .help-pop {
+  position: fixed; z-index: 1000; width: max-content; max-width: min(320px, calc(100vw - 16px));
+  padding: 10px 12px; background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--r-card);
+  box-shadow: var(--shadow-pop); color: var(--ink); font: 400 14px/1.45 var(--font); text-align: left; white-space: normal;
+}
+.ds .help-pop p { margin: 0; }
+.ds .help-pop p + p { margin-top: 6px; }
+.ds .help-pop .why { color: var(--warning); font-weight: 600; }
+.ds .card-top h4 .help-q { margin-left: 8px; }
+
+/* A proper button (2026-10-12, operator: "it doesn't look like a proper button"): the quiet act
+   is a filled, raised control at full height, so it reads as something to press, not a field. */
+.ds .btn.act:not(.desk-root *):not(.topbar *):not(.rail *) {
+  height: var(--control-h); padding: 0 var(--s4); font-size: var(--t-sm); font-weight: 700;
+  background: var(--surface-3); border: 1px solid var(--line-2); color: var(--ink);
+  box-shadow: 0 1px 0 rgba(30, 28, 25, .14);
+}
+.ds .btn.act:hover:not(.desk-root *):not(.topbar *):not(.rail *) { background: #E4D9C6; border-color: var(--ink-3); }
+.ds .btn.act:active:not(.desk-root *):not(.topbar *):not(.rail *) { box-shadow: none; transform: translateY(1px); }
+.ds .btn.act.inert:not(.desk-root *):not(.topbar *):not(.rail *) { background: var(--surface-2); color: var(--ink-4); border-color: var(--line); box-shadow: none; font-weight: 600; }
+
+/* An act and its "?" on one line; a reason it is held stays on screen, as a message. */
+.ds .seerow.plain:not(.desk-root *) { align-items: center; gap: var(--s2); padding: 2px 0; }
+.ds .seerow.plain .why, .ds .actrow.plain .why { font-size: 13px; font-weight: 600; color: var(--warning); overflow-wrap: anywhere; }
+.ds .actrow.plain .actline { display: inline-flex; align-items: center; justify-self: start; }
+
+/* Other ways as sub-tabs (2026-10-12): a tab per way, its panel is what the button used to open. */
+.ds .subtabs { display: flex; gap: var(--s1); flex-wrap: wrap; border-bottom: 1px solid var(--line); margin: var(--s2) 0 var(--s4); }
+.ds .subtab {
+  appearance: none; background: transparent; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px;
+  padding: var(--s2) var(--s3); font: 600 var(--t-sm)/1.2 var(--font); color: var(--ink-2); cursor: pointer;
+}
+.ds .subtab:hover { color: var(--ink); background: var(--surface-2); }
+.ds .subtab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); font-weight: 700; }
+.ds .subtab:focus-visible { outline: none; box-shadow: var(--focus); }
+.ds .way-form { display: grid; gap: var(--s2); max-width: 640px; }
+/* A dialog set out in a way's panel (2026-10-17): its heading, facts, fields and act in place. */
+.ds .way-title { font-size: 15px; font-weight: 700; color: var(--ink); }
+.ds .way-form .field { margin: 0; }
+.ds .way-acts { align-items: center; margin-top: var(--s2); }
+.ds .way-panel + .way-panel { margin-top: var(--s4); }
+/* A note written with a paper, under its row (2026-10-12). */
+.ds .papernotes { display: grid; gap: 2px; padding: 0 0 6px 18px; }
+.ds .papernote { font-size: 13px; color: var(--ink); }
+.ds .papernote .ic { color: var(--ink-3); }
+.ds .papernote .who { color: var(--ink-3); }
+.ds .subtab .n { display: inline-block; min-width: 18px; margin-left: 6px; padding: 0 5px; border-radius: 9px; background: var(--surface-3); color: var(--ink-2); font-size: 11.5px; font-weight: 700; text-align: center; }
+.ds .subtab .n.warn { background: var(--warning-soft); color: var(--warning); }
+.ds .subtab .n.stop { background: var(--danger-soft); color: var(--danger); }
+.ds .papernote-tag { font-size: 12px; font-weight: 600; color: var(--accent-ink); background: var(--accent-soft); border-radius: 3px; padding: 0 5px; margin-right: 6px; }
+
+/* ===== The house chart — Rooms › Chart (2026-10-12, after the boss's journey mockup) =====
+   Colour = how firmly a booking holds the room; room types carry no colour, their row names them. */
+.ds .rchart, .ds .rchart-hc, .ds .rchart-pick {
+  --rs-line: #e2ddd5; --rs-head: #faf8f5; --rs-stay: #f3f0eb;
+  --rs-prov-bg: #fffaf0; --rs-prov-line: #d9b45f; --rs-prov-tx: #7a5b20;
+  --rs-pick-line: #a99f90; --rs-pick-tx: #5f574c;
+  --rs-held-bg: #fdf3dc; --rs-held-line: #c98a1a; --rs-held-tx: #7a4f0e;
+  --rs-res-bg: #dbe6f1; --rs-res-tx: #24506f;
+  --rs-in-bg: #3f6f99; --rs-over-bg: #8d3a33;
+  --rs-out-bg: #ebe7e1; --rs-ooo-a: #f1eeea; --rs-ooo-b: #e0dad1; --rs-ooo-tx: #5b554e;
+  --rs-bad: #b4473b;
+  --rs-type: #2b2722; --rs-type-band: #ece6dc; --rs-today: #2b2722; --rs-today-col: #f6efe2; --rs-we: #f8f5f0;
+}
+.ds .rchart {
+  margin-top: var(--s3);
+  /* A grid item grows to its content unless told otherwise — without this a 28-night table
+     widened the whole page instead of scrolling inside its own box (2026-10-12). */
+  min-width: 0;
+  max-width: 100%;
+}
+.ds .rchart-bar { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.ds .rchart-nav { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ds .rchart-nav select.rchart-len:not(.desk-root *) { width: 130px; flex: 0 0 auto; height: var(--control-h-compact); padding: 0 8px; }
+.ds .rchart-span { font-size: var(--t-base); color: var(--ink-2); margin-left: 2px; }
+.ds .rchart-date { display: inline-flex; align-items: center; gap: 6px; font-size: var(--t-sm); color: var(--ink-2); }
+.ds .rchart-date input.input:not(.desk-root *) { width: 150px; height: var(--control-h-compact); padding: 0 8px; }
+.ds .rchart-wrap { overflow: auto; max-height: 70vh; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--surface); }
+/* fixed layout: every night the same width, the room column and the total column their own */
+.ds .rchart .tape { border-collapse: separate; border-spacing: 0; font-size: 13px; width: 100%; table-layout: fixed; }
+.ds .rchart .tape th, .ds .rchart .tape td { border-right: 1px solid #eee8df; border-bottom: 1px solid #eee8df; padding: 0; }
+.ds .rchart .tape .rc { position: sticky; left: 0; z-index: 2; background: var(--surface); text-align: left; min-width: 190px; max-width: 190px; padding: 5px 8px; border-right: 2px solid var(--line); font-weight: 400; }
+.ds .rchart .tape thead tr > * { position: sticky; background: var(--rs-head); z-index: 4; }
+.ds .rchart .tape thead .rc { z-index: 6; left: 0; }
+.ds .rchart .tape thead tr.h1 > * { top: 0; height: 56px; }
+.ds .rchart .tape thead tr.h2 > * { top: 56px; height: 26px; }
+.ds .rchart .tape thead tr.h3 > * { top: 82px; height: 26px; }
+.ds .rchart .tape thead tr.h1 th { color: var(--ink-2); font-weight: 400; text-align: center; line-height: 1.05; font-size: 12px; vertical-align: middle; }
+.ds .rchart .tape thead tr.h1 th .wd { display: block; font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); }
+.ds .rchart .tape thead tr.h1 th .dn { display: block; font-size: 19px; font-weight: 800; color: var(--ink); margin: 1px 0; }
+.ds .rchart .tape thead tr.h1 th .mo { display: inline-block; font-size: 10px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: var(--accent-ink); background: var(--accent-soft); border-radius: 3px; padding: 0 4px; }
+.ds .rchart .tape thead tr.h1 th .mo.hidden { visibility: hidden; }
+/* The weekend is named in the weekday, never filled — a filled column read as taken (2026-10-12). */
+.ds .rchart .tape thead tr.h1 th.we .wd { color: var(--accent-ink); }
+.ds .rchart .tape thead tr.h1 th.m1 { box-shadow: inset 2px 0 0 var(--ink-3); }
+.ds .rchart .tape thead tr.h1 th.rc { width: 190px; }
+.ds .rchart .tape thead tr.h1 th.tc { width: 64px; }
+.ds .rchart .tape thead tr.h1 th.today { background: var(--rs-today); }
+.ds .rchart .tape thead tr.h1 th.today .wd, .ds .rchart .tape thead tr.h1 th.today .dn { color: #fff; }
+.ds .rchart .tape thead tr.h1 th.today .mo { background: rgba(255, 255, 255, .18); color: #fff; }
+.ds .rchart .tape thead tr.h1 th.past .dn, .ds .rchart .tape thead tr.h1 th.past .wd { color: var(--ink-4); }
+.ds .rchart .tape thead th.rc { font-size: 12.5px; color: var(--ink-3); font-weight: 700; }
+/* the two figures the desk reads first ("UIappeal") */
+.ds .rchart .tape td.need { text-align: center; font-weight: 800; font-size: 13.5px; }
+.ds .rchart .tape td.need.ok { background: var(--success-soft); color: var(--success); }
+.ds .rchart .tape td.need.short { background: var(--warning-soft); color: var(--warning); }
+.ds .rchart .tape td.need.none { background: var(--danger-soft); color: var(--danger); }
+.ds .rchart .tape td.hb { text-align: center; font-weight: 800; font-size: 13.5px; color: var(--ink); background: var(--rs-head); }
+.ds .rchart .tape .tc { min-width: 58px; text-align: center; font-size: 12px; color: var(--ink-3); }
+/* a room type's own row */
+.ds .rchart .tape tr.trow > * { background: var(--rs-type-band); border-top: 2px solid var(--rs-type); border-bottom: 1px solid #d8d0c3; }
+.ds .rchart .tape tr.trow .rc { background: var(--rs-type); color: #fff; border-right: 2px solid var(--rs-type); padding: 6px 10px; }
+.ds .rchart .tape tr.trow .rc .tname { display: block; font-size: 13.5px; font-weight: 800; letter-spacing: .01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ds .rchart .tape tr.trow .rc .tcount { display: block; font-size: 11px; font-weight: 600; opacity: .75; }
+.ds .rchart .tape td.fc { text-align: center; font-size: 12px; font-weight: 700; color: var(--ink-2); padding: 3px 2px; }
+.ds .rchart .tape td.fc.none { color: var(--danger); font-weight: 800; }
+.ds .rchart .tape tr.rrow .rno { box-shadow: inset 5px 0 0 var(--rs-type); }
+.ds .rchart .tape tr.rrow.last > * { border-bottom: 2px solid #d8d0c3; }
+/* a room's row */
+.ds .rchart .tape .rno { padding: 3px 6px 3px 16px; }
+.ds .rchart .rno-btn { display: inline-flex; align-items: center; gap: 7px; background: none; border: 0; padding: 0; font: inherit; color: var(--ink); cursor: pointer; text-align: left; }
+.ds .rchart .rno-btn .rnum { display: inline-block; min-width: 44px; text-align: center; font-size: 14px; font-weight: 800; font-variant-numeric: tabular-nums; color: var(--ink); background: #fff; border: 1.5px solid var(--ink-3); border-radius: 5px; padding: 1px 6px; }
+.ds .rchart .rno-btn:hover .rnum, .ds .rchart .rno-btn:focus-visible .rnum { border-color: var(--ink); background: var(--rs-type); color: #fff; }
+.ds .rchart .rno-btn .bed { color: var(--ink-2); font-size: 11.5px; font-weight: 700; border: 1px solid var(--line-2); border-radius: 3px; padding: 0 4px; }
+.ds .rchart .rno-btn .fault { font-size: 11px; font-weight: 700; color: var(--danger); background: var(--danger-soft); border: 1px solid var(--danger-line); border-radius: var(--r-chip); padding: 0 5px; }
+.ds .rchart .hkdot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; vertical-align: 1px; }
+.ds .rchart .hkdot.hk-ok { background: #2f7a4b; }
+.ds .rchart .hkdot.hk-warn { background: #d39a2c; }
+.ds .rchart .hkdot.hk-bad { background: var(--rs-bad); }
+.ds .rchart .tape td.cell { height: 30px; }
+.ds .rchart .tape td.cell.free { background: var(--surface); box-shadow: inset 0 0 0 1px var(--rs-line); }
+/* A free night is white whatever its day: today is a thin edge down the column, not a fill. */
+.ds .rchart .tape td.cell.tday { box-shadow: inset 2px 0 0 rgba(43, 39, 34, .35), inset -2px 0 0 rgba(43, 39, 34, .35); }
+.ds .rchart .tape td.cell.past { cursor: default; }
+.ds .rchart .tape td.cell.pick { cursor: pointer; position: relative; }
+.ds .rchart .tape td.cell.pick:hover { background: var(--success-soft); box-shadow: inset 0 0 0 2px var(--success); }
+.ds .rchart .tape td.cell.pick:hover::after { content: "+"; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 18px; font-weight: 800; color: var(--success); }
+.ds .rchart .tape td.seg { height: 30px; padding: 3px 2px; vertical-align: middle; }
+.ds .rchart .tape .seg .bar { width: 100%; height: 24px; border-radius: 4px; padding: 0 7px; display: flex; align-items: center; gap: 4px; font: inherit; font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border: 0; text-align: left; cursor: pointer; }
+.ds .rchart .tape .seg .bar .st { font-weight: 400; opacity: .85; }
+.ds .rchart .tape .seg.cont-l .bar { border-top-left-radius: 0; border-bottom-left-radius: 0; }
+.ds .rchart .tape .seg.cont-r .bar { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+/* the kinds — the legend draws the same swatches */
+.ds .rchart .k-prov.bar, .ds .rchart .seg.k-prov .bar, .ds .rchart .sw.k-prov { background: var(--rs-prov-bg); color: var(--rs-prov-tx); outline: 1.5px dotted var(--rs-prov-line); outline-offset: -1.5px; }
+.ds .rchart .seg.k-held .bar, .ds .rchart .sw.k-held { background: var(--rs-held-bg); color: var(--rs-held-tx); outline: 1.5px dashed var(--rs-held-line); outline-offset: -1.5px; }
+.ds .rchart .seg.k-res .bar, .ds .rchart .sw.k-res { background: var(--rs-res-bg); color: var(--rs-res-tx); }
+.ds .rchart .seg.k-res.paypend .bar, .ds .rchart .sw.k-res.paypend { box-shadow: inset 4px 0 0 var(--rs-held-line); }
+.ds .rchart .seg.k-in .bar, .ds .rchart .sw.k-in { background: var(--rs-in-bg); color: #fff; }
+.ds .rchart .seg.k-over .bar, .ds .rchart .sw.k-over { background: var(--rs-over-bg); color: #fff; }
+.ds .rchart .seg.k-out .bar, .ds .rchart .sw.k-out { background: var(--rs-out-bg); color: var(--ink-3); }
+.ds .rchart .seg.k-ooo .bar, .ds .rchart .sw.k-ooo { background: repeating-linear-gradient(45deg, var(--rs-ooo-a), var(--rs-ooo-a) 5px, var(--rs-ooo-b) 5px, var(--rs-ooo-b) 10px); color: var(--rs-ooo-tx); cursor: default; }
+/* a pick (2026-10-16): chosen by a booking that holds nothing — faint, dashed, never a fill */
+.ds .rchart .seg.k-pick .bar, .ds .rchart .sw.k-pick { background: var(--surface); color: var(--rs-pick-tx); outline: 1.5px dashed var(--rs-pick-line); outline-offset: -1.5px; font-weight: 500; }
+.ds .rchart .seg.k-pick .bar .st { font-style: italic; }
+.ds .rchart .pickbadge { position: absolute; top: -5px; right: 4px; z-index: 2; font: inherit; font-size: 10.5px; font-weight: 800; line-height: 1; padding: 2px 6px; border-radius: 9px; background: var(--surface); color: var(--rs-pick-tx); border: 1.5px dashed var(--rs-pick-line); cursor: pointer; white-space: nowrap; }
+.ds .rchart .pickbadge:hover { border-style: solid; color: var(--ink); }
+.ds .rchart .seg.k-conflict .bar, .ds .rchart .sw.k-conflict { background: var(--surface); box-shadow: inset 0 0 0 2px var(--rs-bad); color: var(--rs-bad); justify-content: center; font-weight: 800; cursor: help; }
+/* parked — a pause: the claim stands, the bar is drawn faded and striped */
+.ds .rchart .seg.parked .bar, .ds .rchart .sw.parked { background-image: repeating-linear-gradient(135deg, rgba(255, 255, 255, .6) 0 4px, transparent 4px 8px); opacity: .8; }
+.ds .rchart .seg .bar .pk { font-size: 10.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .03em; background: rgba(0, 0, 0, .1); border-radius: 3px; padding: 0 4px; }
+.ds .rchart .rslegend { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: center; font-size: 12.5px; color: var(--ink-2); }
+.ds .rchart .rslegend .sw { display: inline-block; width: 18px; height: 12px; border-radius: 3px; vertical-align: -1px; margin-right: 5px; }
+.ds .rchart .rslegend .sw.free { background: var(--surface); box-shadow: inset 0 0 0 1px #cfc8bd; }
+.ds .rchart .rslegend .hkdot { margin-right: 4px; }
+
+/* The hover card and the start box — at the desk's root, in the chart's colours (2026-10-12,
+   operator: "it shows in a black box — can it show with more colour and distinction"). */
+.ds .rchart-hc, .ds .rchart-pick { z-index: 90; background: var(--surface); border: 1px solid var(--line-2); border-radius: 10px; box-shadow: 0 12px 32px rgba(43, 39, 34, .22), 0 2px 6px rgba(43, 39, 34, .12); overflow: hidden; font-size: 13px; color: var(--ink); }
+.ds .rchart-hc { pointer-events: none; }
+/* Full screen (2026-10-12): the chart over the whole window; only the table scrolls. */
+.ds .rchart-full { position: fixed; inset: 0; z-index: 80; background: var(--paper); padding: 12px 16px; display: flex; flex-direction: column; }
+.ds .rchart-full .rchart { margin: 0; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.ds .rchart-full .rchart-wrap { max-height: none; flex: 1; min-height: 0; }
+/* The edge and the name take the booking's own colour, so the card reads as that kind at a glance. */
+.ds .rchart-hc, .ds .rchart-pick { border-left: 6px solid var(--hc-edge, var(--line-2)); }
+.ds .rchart-hc .hc-name { color: var(--hc-name, var(--ink)); }
+.ds .e-k-prov { --hc-edge: var(--rs-prov-line); --hc-name: var(--rs-prov-tx); }
+.ds .e-k-held { --hc-edge: var(--rs-held-line); --hc-name: var(--rs-held-tx); }
+.ds .e-k-res { --hc-edge: #6f97bd; --hc-name: var(--rs-res-tx); }
+.ds .e-k-in { --hc-edge: var(--rs-in-bg); --hc-name: var(--rs-in-bg); }
+.ds .e-k-over { --hc-edge: var(--rs-over-bg); --hc-name: var(--rs-over-bg); }
+.ds .e-k-out { --hc-edge: #b8b0a5; }
+.ds .e-k-ooo { --hc-edge: #9a9184; }
+.ds .e-k-conflict { --hc-edge: var(--rs-bad); --hc-name: var(--rs-bad); }
+.ds .e-k-free { --hc-edge: var(--success); }
+.ds .e-k-pick { --hc-edge: var(--rs-pick-line); --hc-name: var(--rs-pick-tx); }
+/* A new enquiry holds no rooms (2026-10-16) — said on the choice and under it, in the warning colour. */
+.ds .nmv-nothold { font-weight: 700; }
+/* A booking's rooms in one box (2026-10-16) — tick rooms and nights, then say where they go. */
+.ds .bbox-title { display: flex; flex-direction: column; gap: 2px; }
+.ds .bbox-sub { font-size: 13px; font-weight: 500; color: var(--ink-2); }
+.ds .bbox { display: grid; gap: 12px; }
+.ds .bbox-head { display: flex; align-items: center; gap: 10px; font-size: 14px; }
+.ds .bbox-wrap { overflow: auto; max-height: 52vh; border: 1px solid var(--line-2); border-radius: 8px; }
+.ds .bbox-grid { border-collapse: separate; border-spacing: 0; font-size: 13px; }
+.ds .bbox-grid th, .ds .bbox-grid td { padding: 3px; text-align: center; border-bottom: 1px solid var(--line); }
+.ds .bbox-grid thead th { position: sticky; top: 0; z-index: 2; background: var(--surface); }
+.ds .bbox-grid .bbox-room { position: sticky; left: 0; z-index: 1; background: var(--surface); text-align: left; min-width: 150px; }
+.ds .bbox-grid thead .bbox-room { z-index: 3; font-weight: 700; color: var(--ink-2); padding-left: 10px; }
+.ds .bbox-night { display: grid; justify-items: center; gap: 0; width: 56px; padding: 3px 0; font: inherit; border: 1px solid transparent; border-radius: 6px; background: none; cursor: pointer; }
+.ds .bbox-night span { font-size: 10.5px; color: var(--ink-3); text-transform: uppercase; }
+.ds .bbox-night b { font-size: 16px; }
+.ds .bbox-night:hover:not(:disabled) { border-color: var(--accent); }
+.ds .bbox-night.on { background: var(--accent-soft); border-color: var(--accent); }
+.ds .bbox-night:disabled { opacity: .45; cursor: default; }
+.ds .bbox-rno { display: flex; align-items: baseline; gap: 8px; width: 100%; font: inherit; text-align: left; padding: 5px 8px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--surface); cursor: pointer; }
+.ds .bbox-rno b { font-size: 15px; }
+.ds .bbox-rno span { font-size: 11.5px; color: var(--ink-3); }
+.ds .bbox-rno:hover { border-color: var(--accent); }
+.ds .bbox-rno.on { background: var(--accent-soft); border-color: var(--accent); }
+.ds .bbox-cell { width: 56px; height: 30px; font: inherit; font-size: 15px; font-weight: 800; color: #fff; border: 1.5px solid var(--line-2); border-radius: 6px; background: var(--surface); cursor: pointer; }
+.ds .bbox-cell:hover { border-color: var(--accent); }
+.ds .bbox-grid .bbox-cell.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.ds .bbox-none { color: var(--ink-3); }
+.ds .bbox-to { display: grid; grid-template-columns: minmax(180px, 220px) 1fr; gap: 12px; align-items: start; }
+.ds .bbox-first small { display: block; margin-top: 3px; font-weight: 700; }
+.ds .bbox-targets { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
+.ds .bbox-why { margin: 0; font-weight: 700; font-size: 13.5px; }
+.ds .bbox-foot { display: flex; align-items: center; gap: 8px; width: 100%; flex-wrap: wrap; }
+.ds .nmv-nothold-line { margin: 8px 0 0; font-size: 13px; font-weight: 700; padding: 7px 10px; border: 1px solid var(--warning-line); background: var(--warning-soft); border-radius: 6px; }
+.ds .e-k-room { --hc-edge: var(--rs-type); }
+.ds .rchart-hc .hc-head, .ds .rchart-pick .hc-head { display: flex; align-items: center; gap: 6px; padding: 7px 12px; font-weight: 800; font-size: 12px; letter-spacing: .05em; text-transform: uppercase; }
+.ds .rchart-hc .hc-head .hc-kind, .ds .rchart-pick .hc-head .hc-kind { flex: 1; }
+.ds .rchart-hc .hc-head .hc-tag { font-size: 10.5px; letter-spacing: .03em; background: rgba(0, 0, 0, .14); border-radius: 3px; padding: 1px 5px; }
+.ds .rchart-pick .hc-head .hc-room { font-size: 12px; }
+.ds .rchart-hc .hc-head.k-prov { background: var(--rs-prov-bg); color: var(--rs-prov-tx); border-bottom: 2px dotted var(--rs-prov-line); }
+.ds .rchart-hc .hc-head.k-held { background: var(--rs-held-bg); color: var(--rs-held-tx); border-bottom: 2px dashed var(--rs-held-line); }
+.ds .rchart-hc .hc-head.k-res { background: var(--rs-res-bg); color: var(--rs-res-tx); border-bottom: 2px solid #9fb7cf; }
+.ds .rchart-hc .hc-head.k-in { background: var(--rs-in-bg); color: #fff; }
+.ds .rchart-hc .hc-head.k-over { background: var(--rs-over-bg); color: #fff; }
+.ds .rchart-hc .hc-head.k-out { background: var(--rs-out-bg); color: var(--ink-2); }
+.ds .rchart-hc .hc-head.k-ooo { background: repeating-linear-gradient(45deg, var(--rs-ooo-a), var(--rs-ooo-a) 6px, var(--rs-ooo-b) 6px, var(--rs-ooo-b) 12px); color: var(--rs-ooo-tx); }
+.ds .rchart-hc .hc-head.k-conflict { background: var(--danger-soft); color: var(--danger); border-bottom: 2px solid var(--rs-bad); }
+.ds .rchart-hc .hc-head.k-free, .ds .rchart-pick .hc-head.k-free { background: var(--success-soft); color: var(--success); border-bottom: 2px solid var(--success); }
+.ds .rchart-hc .hc-head.k-room { background: var(--rs-type); color: #fff; }
+.ds .rchart-hc .hc-head.k-pick, .ds .rchart-pick .hc-head.k-pick { background: var(--rs-head); color: var(--rs-pick-tx); border-bottom: 2px dashed var(--rs-pick-line); }
+.ds .rchart-pick .pl-list { display: grid; gap: 6px; margin-top: 8px; }
+.ds .rchart-pick .pl-row { display: grid; gap: 1px; text-align: left; font: inherit; padding: 7px 9px; border-radius: 6px; border: 1px solid var(--line-2); background: var(--surface); cursor: pointer; }
+.ds .rchart-pick .pl-row:hover { border-color: var(--rs-pick-line); background: var(--rs-head); }
+.ds .rchart-pick .pl-row b { font-size: 13.5px; }
+.ds .rchart-pick .pl-row span { font-size: 12px; color: var(--ink-2); }
+.ds .rchart-hc .hc-head.parked { background-image: repeating-linear-gradient(135deg, rgba(255, 255, 255, .45) 0 5px, transparent 5px 10px); }
+.ds .rchart-hc .hc-body, .ds .rchart-pick .hc-body { padding: 10px 12px; }
+.ds .rchart-hc .hc-name, .ds .rchart-pick .hc-name { font-size: 16px; font-weight: 800; line-height: 1.25; }
+.ds .rchart-hc .hc-sub, .ds .rchart-pick .hc-sub { font-size: 12.5px; color: var(--ink-2); margin-top: 2px; }
+.ds .rchart-hc .hc-facts { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin-top: 8px; }
+.ds .rchart-hc .hc-fact { display: contents; }
+.ds .rchart-hc .hc-fact > span { color: var(--ink-3); font-size: 12px; white-space: nowrap; }
+.ds .rchart-hc .hc-fact > b { font-weight: 600; font-size: 12.5px; }
+.ds .rchart-hc .hc-step { display: inline-block; font-weight: 800; color: var(--accent-ink); background: var(--accent-soft); border-radius: 3px; padding: 0 6px; }
+.ds .rchart-hc .hc-foot { padding: 6px 12px; background: var(--rs-head); border-top: 1px solid var(--line); font-size: 11.5px; font-weight: 700; color: var(--ink-2); }
+.ds .rchart-hc.small .hc-name { font-size: 14px; }
+.ds .rchart-pick .pick-row { display: flex; align-items: center; gap: 10px; margin-top: 10px; font-size: 13px; }
+.ds .rchart-pick .pick-row > span:first-child { width: 48px; color: var(--ink-3); font-size: 12px; }
+.ds .rchart-pick .stepper { display: inline-flex; align-items: center; border: 1px solid var(--line-2); border-radius: 6px; overflow: hidden; }
+.ds .rchart-pick .stepper button { width: 30px; height: 28px; border: 0; background: var(--rs-head); font: inherit; font-size: 16px; font-weight: 800; cursor: pointer; color: var(--ink); }
+.ds .rchart-pick .stepper button:disabled { color: var(--ink-4); cursor: default; }
+.ds .rchart-pick .stepper b { min-width: 34px; text-align: center; font-size: 15px; }
+.ds .rchart-pick .pick-out { font-size: 12px; color: var(--ink-2); }
+.ds .rchart-pick .pick-note { margin: 8px 0 0; font-size: 12px; font-weight: 600; color: var(--warning); }
+.ds .rchart-pick .pick-acts { display: flex; gap: 8px; margin-top: 12px; }
+/* "From the house chart" — on the intake's stay card and the Inquiry step's house card. */
+.ds .chart-from { margin: 0 0 10px; padding: 7px 10px; border-radius: 6px; font-size: 13px; color: var(--success); background: var(--success-soft); border: 1px solid var(--success); }
+.ds .chart-from b { font-weight: 800; }
+.ds .chart-from span { color: var(--ink-2); }
+.ds .chart-from.warn { color: var(--warning); background: var(--warning-soft); border-color: var(--warning); font-weight: 600; }
+.ds .card .chart-from { margin-top: 0; }
+
+/* ── Dialogs over full-screen layers (2026-10-12) ─────────────────────────────────────────────
+   A dialog opened from a full-screen layer (the house chart's, an expanded table's) sat beneath it:
+   open dialogs now stand above both layers (60, 80) and below the chart's hover cards (90). */
+.ds .scrim.open:not(.desk-root *) { z-index: 85; }
+
+/* ── Switch rooms on the house chart (2026-10-12) ─────────────────────────────────────────── */
+.ds .rchart .seg.k-move .bar, .ds .rchart .sw.k-move { background: var(--accent-soft); color: var(--accent-ink); outline: 2px dashed var(--accent); outline-offset: -2px; font-weight: 700; }
+.ds .e-k-move { --hc-edge: var(--accent); --hc-name: var(--accent-ink); }
+.ds .rchart-hc .hc-head.k-move { background: var(--accent-soft); color: var(--accent-ink); border-bottom: 2px dashed var(--accent); }
+.ds .rchart .seg.marked .bar { outline: 3px solid var(--accent); outline-offset: -3px; box-shadow: 0 0 0 3px var(--accent-line); position: relative; z-index: 3; }
+.ds .rchart td.cell.free.moveto { cursor: copy; }
+.ds .rchart td.cell.free.moveto:hover { background: var(--accent-soft); box-shadow: inset 0 0 0 2px var(--accent); }
+.ds .rchart-switch { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 8px 12px; border-radius: 8px; background: var(--accent-soft); border: 2px solid var(--accent); color: var(--accent-ink); font-size: 13.5px; }
+.ds .rchart-switch b { font-size: 14.5px; font-weight: 800; }
+.ds .rchart-switch span { color: var(--ink); }
+/* Drag and drop on the house chart (2026-10-12): a grabbable bar, the rows a drop lands on, the
+   label that follows the pointer. A drop that cannot land is red. */
+.ds .rchart .seg .bar.grab { cursor: grab; touch-action: none; }
+body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user-select: none !important; }
+.ds .rchart .seg.dragging .bar { opacity: .45; }
+/* A night picked with Alt, marked on its bar (2026-10-14) — and the night in the hand while dragged. */
+.ds .rchart .tape td.seg { position: relative; }
+.ds .rchart .seg .npick { position: absolute; top: 3px; bottom: 3px; border-radius: 4px; pointer-events: none; z-index: 4; outline: 3px solid var(--accent); outline-offset: -3px; background: color-mix(in srgb, var(--accent) 22%, transparent); }
+.ds .rchart .seg .npick.moving { background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--surface) 70%, transparent) 0 5px, transparent 5px 10px); outline-style: dashed; }
+/* The night-move window: what the booking keeps, and each booking of its own. */
+.ds .rchart-nightbar { position: fixed; z-index: 93; left: 50%; bottom: 22px; transform: translateX(-50%); display: flex; align-items: center; gap: 14px; max-width: calc(100vw - 32px); padding: 10px 12px 10px 16px; border-radius: 8px; background: var(--ink); color: #fff; box-shadow: 0 10px 28px rgba(0, 0, 0, .28); font-size: 13.5px; }
+.ds .rchart-nightbar b { font-weight: 800; white-space: nowrap; }
+.ds .rchart-nightbar span { color: color-mix(in srgb, #fff 72%, transparent); font-size: 12.5px; }
+.ds .rchart-nightbar button { flex: none; height: 30px; padding: 0 12px; border-radius: 5px; border: 1px solid color-mix(in srgb, #fff 40%, transparent); background: transparent; color: #fff; font: inherit; font-weight: 700; cursor: pointer; }
+.ds .rchart-nightbar button:hover { background: color-mix(in srgb, #fff 12%, transparent); }
+.ds .nmv-pieces { display: grid; gap: 6px; margin: 2px 0 4px; }
+.ds .nmv-walks { list-style: none; margin: 0 0 4px; padding: 0; display: grid; gap: 6px; }
+.ds .nmv-walks li { padding: 8px 12px; border-radius: 6px; border: 1px solid var(--line-2); font-size: 13.5px; }
+.ds .nmv-walks li.ok { border-color: var(--success-line); background: var(--success-soft); }
+.ds .nmv-walks li.warn { border-color: var(--warning-line); background: var(--warning-soft); }
+.ds .nmv-walks li.stop { border-color: var(--danger-line); background: var(--danger-soft); color: var(--danger); font-weight: 600; }
+.ds .nmv-keeps { font-size: 13.5px; }
+.ds .nmv-k { font-size: 11.5px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: var(--ink-3); margin-right: 8px; }
+.ds .nmv-piece { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding: 8px 10px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--surface); font-size: 13.5px; }
+.ds .nmv-piece.moved { border-color: var(--accent); box-shadow: inset 4px 0 0 var(--accent); }
+.ds .nmv-piece .nmv-total { margin-left: auto; font-weight: 800; }
+/* A drag is short-lived and must read over every cell state (free, today, picked), hence !important. */
+.ds .rchart .tape tr.drop-to > th, .ds .rchart .tape tr.drop-to > td { background-color: var(--accent-soft) !important; box-shadow: inset 0 3px 0 var(--accent), inset 0 -3px 0 var(--accent) !important; }
+.ds .rchart .tape tr.drop-to > th.rc { box-shadow: inset 5px 0 0 var(--accent), inset 0 3px 0 var(--accent), inset 0 -3px 0 var(--accent) !important; }
+.ds .rchart .tape tr.drop-bad > th, .ds .rchart .tape tr.drop-bad > td { background-color: var(--danger-soft) !important; box-shadow: inset 0 3px 0 var(--danger), inset 0 -3px 0 var(--danger) !important; }
+.ds .rchart.is-dragging .tape td.cell.pick:hover::after { content: none; }
+.ds .rchart.is-dragging .tape td.cell.pick:hover { background: none; box-shadow: none; }
+/* Where the dragged bars would land (2026-10-13, operator: "visually show the selected rooms move
+   like greyed ghost of it"): a grey copy of each bar on its new row and nights, measured off the
+   table's cells and cut at the chart's visible box, solid so the bar beneath does not read through it. Pointer events pass through, so the row
+   under it still answers the drop. A booking swapped into the room left behind is drawn the same,
+   with a lighter fill. */
+.ds .rchart-land { position: fixed; z-index: 94; pointer-events: none; display: flex; align-items: center; gap: 0; padding: 0 8px; border-radius: 4px; background: color-mix(in srgb, var(--ink) 22%, var(--surface)); border: 2px dashed color-mix(in srgb, var(--ink) 62%, var(--surface)); color: var(--ink); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-shadow: 0 4px 14px rgba(0, 0, 0, .16); }
+.ds .rchart-land b { flex: 0 0 auto; max-width: 100%; font-weight: 800; overflow: hidden; text-overflow: ellipsis; }
+.ds .rchart-land span { flex: 1 1 auto; min-width: 0; margin-left: .35em; font-weight: 600; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; }
+.ds .rchart-land.swap { background: color-mix(in srgb, var(--ink) 11%, var(--surface)); }
+.ds .rchart-land.cut-l { border-left-style: solid; border-top-left-radius: 0; border-bottom-left-radius: 0; }
+.ds .rchart-land.cut-r { border-right-style: solid; border-top-right-radius: 0; border-bottom-right-radius: 0; }
+/* The date move's rooms (2026-10-13, operator: "ask if I want to keep the price same or different
+   for each room"): one line per room — where it goes, its new nights — and its price choice, each
+   choice with what it costs. */
+.ds .dmv-rooms { display: grid; gap: 6px; margin: 4px 0; }
+.ds .dmv-room { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 6px 12px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.ds .dmv-room .where { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; font-size: 13.5px; min-width: 0; }
+.ds .dmv-room .where b { font-weight: 800; }
+.ds .dmv-room .where .nights { font-size: 12.5px; color: var(--ink-3); }
+.ds .dmv-room .where .other { font-size: 11px; font-weight: 700; color: var(--accent-ink); background: var(--accent-soft); border-radius: 4px; padding: 0 5px; }
+.ds .dmv-choice { display: inline-flex; border: 1px solid var(--line-2); border-radius: 8px; overflow: hidden; background: var(--surface); }
+.ds .dmv-choice button { all: unset; box-sizing: border-box; cursor: pointer; display: grid; padding: 4px 11px; font-size: 11.5px; font-weight: 600; color: var(--ink-3); text-align: left; min-width: 104px; }
+.ds .dmv-choice button + button { border-left: 1px solid var(--line-2); }
+.ds .dmv-choice button b { font-size: 13.5px; font-weight: 800; color: var(--ink-2); }
+.ds .dmv-choice button.on { background: var(--accent-soft); color: var(--accent-ink); box-shadow: inset 0 0 0 2px var(--accent); }
+.ds .dmv-choice button.on b { color: var(--accent-ink); }
+.ds .dmv-choice button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.ds .dmv-choice button[aria-disabled="true"] { cursor: not-allowed; opacity: .55; }
+.ds .dmv-what { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink-2); }
+/* Splitting rooms off to other dates (2026-10-14): where they go is a real choice, made here —
+   two large options, nothing chosen until the desk picks one. */
+.ds .spl-where { display: grid; grid-template-columns: auto 1fr 1fr; align-items: stretch; gap: 8px; margin-top: 4px; }
+.ds .spl-where .spl-q { align-self: center; font-size: 13px; font-weight: 700; color: var(--ink-2); }
+.ds .spl-where button { all: unset; box-sizing: border-box; cursor: pointer; display: grid; gap: 2px; padding: 9px 12px; border: 1px solid var(--line-2); border-radius: 9px; background: var(--surface); font-size: 14px; font-weight: 700; color: var(--ink); }
+.ds .spl-where button small { font-size: 12px; font-weight: 500; color: var(--ink-3); }
+.ds .spl-where button:hover { border-color: var(--accent); }
+.ds .spl-where button.on { background: var(--accent-soft); color: var(--accent-ink); box-shadow: inset 0 0 0 2px var(--accent); border-color: var(--accent); }
+.ds .spl-where button.on small { color: var(--accent-ink); }
+.ds .spl-where button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ds .spl-stays { margin: 0; color: var(--ink-3); }
+.ds .spl-part { display: grid; gap: 6px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+.ds .spl-part:last-child { border-bottom: 0; padding-bottom: 0; }
+@media (max-width: 560px) {
+  .ds .spl-where { grid-template-columns: 1fr; }
+}
+.ds .dmv-help ol { margin: 4px 0 6px 18px; padding: 0; display: grid; gap: 2px; }
+.ds .dmv-total { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; font-size: 14px; }
+.ds .dmv-total b { font-weight: 800; }
+@media (max-width: 560px) {
+  .ds .dmv-room { grid-template-columns: 1fr; }
+}
+.ds .rchart-ghost { position: fixed; z-index: 95; pointer-events: none; display: grid; gap: 2px; max-width: 340px; padding: 8px 11px; border-radius: 9px; background: var(--surface); color: var(--ink); border: 2px solid var(--accent); box-shadow: 0 8px 24px rgba(0, 0, 0, .22); font-size: 13.5px; font-weight: 700; }
+.ds .rchart-ghost b { color: var(--accent-ink); font-weight: 800; }
+.ds .rchart-ghost .sub { font-size: 12px; font-weight: 600; color: var(--ink-3); }
+.ds .rchart-ghost.bad { border-color: var(--danger); color: var(--danger); background: var(--danger-soft); }
+
+/* The move dialog — both bookings side by side, every figure the server's. */
+.ds .rmv { display: grid; gap: 12px; }
+.ds .rmv-auth { margin: 0; padding: 7px 10px; border-radius: 6px; font-size: 13px; font-weight: 600; }
+.ds .rmv-auth.ok { color: var(--success); background: var(--success-soft); }
+.ds .rmv-auth.stop { color: var(--danger); background: var(--danger-soft); border: 1px solid var(--danger); font-weight: 700; }
+.ds .rmv-legs { display: grid; gap: 12px; }
+.ds .rmv-legs.two { grid-template-columns: 1fr 1fr; }
+.ds .rmv-legs.many { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
+@media (max-width: 760px) { .ds .rmv-legs.two { grid-template-columns: 1fr; } }
+.ds .rmv-displaced { margin: 0; padding: 5px 8px; border-radius: 6px; background: var(--warning-soft); color: var(--warning); font-size: 12.5px; font-weight: 700; }
+/* The guest's other booking over the new nights (2026-10-19) — the FOM's switch says both are meant. */
+.ds .rmv-overlap { margin: 0; padding: 6px 9px; border-radius: 6px; border: 1.5px solid var(--warning); background: var(--warning-soft); color: var(--warning); font-size: 13px; font-weight: 700; }
+/* The question it asks (2026-10-19): both meant, or entered twice — the switch waits for the answer. */
+.ds .rmv-overlap.ask { display: grid; gap: 4px; color: var(--ink); font-weight: 500; }
+.ds .rmv-overlap.ask > b { color: var(--warning); }
+.ds .rmv-overlap.ask.open { border-width: 2px; }
+.ds .rmv-overlap.ask label { display: flex; align-items: center; gap: 6px; padding: 3px 6px; border-radius: 6px; cursor: pointer; }
+.ds .rmv-overlap.ask label.on { background: var(--surface); font-weight: 700; }
+.ds .rmv-overlap-then { margin: 2px 0 0; color: var(--danger); font-weight: 700; }
+.ds .rmv-overlap.done { color: var(--ink-2); border-color: var(--line-2); background: var(--surface-2); font-weight: 500; }
+.ds .rmv-moveref { padding: 8px 10px 8px 26px; border-radius: 8px; border: 2px solid var(--danger); background: var(--danger-soft); }
+.ds .rmv-leg { border: 1px solid var(--line-2); border-radius: 10px; padding: 12px; display: grid; gap: 7px; background: var(--surface); min-width: 0; }
+.ds .rmv-leg.refused { border: 2px solid var(--danger); background: var(--danger-soft); }
+.ds .rmv-who { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
+.ds .rmv-who b { font-size: 15px; }
+.ds .rmv-who .chip-step { font-size: 11.5px; font-weight: 700; padding: 1px 7px; border-radius: 999px; background: var(--surface-3); color: var(--ink-2); }
+.ds .rmv-rooms { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+/* Trading stays (2026-10-19): the dates a booking leaves and the dates it takes. */
+.ds .rmv-dates { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13.5px; }
+.ds .rmv-dates b { color: var(--accent-ink, var(--ink)); }
+.ds .rmv-room { font-weight: 800; font-size: 15px; padding: 2px 8px; border-radius: 6px; background: var(--surface-3); }
+.ds .rmv-room.to { background: var(--accent-soft); color: var(--accent-ink); outline: 1.5px solid var(--accent-line); }
+.ds .rmv-arrow { font-weight: 800; color: var(--ink-3); }
+.ds .rmv-type { font-size: 12px; color: var(--warning); font-weight: 700; }
+.ds .rmv-price b { font-size: 14px; }
+.ds .rmv-pricemode { display: grid; gap: 6px; padding: 8px; border-radius: 8px; background: var(--surface-2); border: 1px solid var(--line); }
+.ds .rmv-pricemode label { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+.ds .rmv-pricemode label.on { font-weight: 700; }
+.ds .rmv-refusals { margin: 0; padding-left: 18px; color: var(--danger); font-weight: 700; font-size: 13px; }
+.ds .rmv-path { margin: 0; padding-left: 20px; font-size: 12.5px; color: var(--ink-2); }
+.ds .rmv-follow { margin: 0; padding-left: 18px; font-size: 12.5px; color: var(--warning); font-weight: 600; }
+.ds .rmv-result { display: grid; gap: 12px; }
+.ds .rmv-status { margin: 0; padding: 8px 12px; border-radius: 8px; font-weight: 800; font-size: 15px; }
+.ds .rmv-status.ok { color: var(--success); background: var(--success-soft); border: 1px solid var(--success); }
+.ds .rmv-status.warn { color: var(--warning); background: var(--warning-soft); border: 1px solid var(--warning); }
+.ds .rmv-status.stop { color: var(--danger); background: var(--danger-soft); border: 2px solid var(--danger); }
+.ds .rmv-outcome { margin: 0; font-weight: 700; font-size: 13.5px; }
+.ds .rmv-outcome.ok { color: var(--success); }
+.ds .rmv-outcome.warn { color: var(--warning); }
+.ds .rmv-outcome.stop { color: var(--danger); }
+.ds .rmv-resolve { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; }
+.ds .rmv-resolve .field { flex: 1 1 320px; }
+
+/* ── Papers a walk held for the desk — send or not (2026-10-12) ───────────────────────────── */
+.ds .heldp { border: 2px solid var(--warning); background: var(--warning-soft); border-radius: 10px; padding: 10px 12px; display: grid; gap: 10px; margin: 0 0 12px; }
+.ds .heldp-head { display: flex; align-items: center; gap: 8px; }
+.ds .heldp-head b { color: var(--warning); font-size: 14.5px; font-weight: 800; }
+.ds .heldp-row { background: var(--surface); border: 1px solid var(--line-2); border-radius: 8px; padding: 8px 10px; display: grid; gap: 8px; }
+.ds .heldp-what { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+.ds .heldp-what b { font-size: 14px; }
+.ds .heldp-choices { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 13px; }
+.ds .heldp-choices label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+.ds .heldp-choices label.on { font-weight: 700; color: var(--accent-ink); }
+.ds .heldp-fields { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; }
+.ds .heldp-fields .field { flex: 1 1 220px; margin: 0; }
+
+/* A room move still running or part-done, on each of its bookings. */
+.ds .rmv-card { border: 2px solid var(--danger); background: var(--danger-soft); border-radius: 10px; padding: 10px 12px; display: grid; gap: 8px; margin: 0 0 12px; }
+.ds .rmv-card-head b { color: var(--danger); font-size: 14.5px; font-weight: 800; }
+
+/* History: a room change is one line with its steps under it (2026-10-13). */
+.ds .hist-walk:not(.desk-root *) {
+  border-left: 3px solid var(--accent);
+  background: var(--accent-soft);
+  border-radius: 0 var(--r-control) var(--r-control) 0;
+  padding: 2px 8px 6px 7px;
+  margin: 4px 0;
+}
+.ds .hist-walk-toggle:not(.desk-root *) {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: 0;
+  padding: 2px 0;
+  cursor: pointer;
+  color: var(--accent-ink);
+  font-weight: 600;
+  font-size: var(--t-sm);
+}
+.ds .hist-walk-steps:not(.desk-root *) {
+  border-left: 1px solid var(--accent-line);
+  margin: 4px 0 2px -74px;
+  padding-left: 8px;
+}
+
+/* House chart: a bar dragged sideways lights the nights the stay would move to (2026-10-13). */
+.ds .rchart .tape thead th.drop-night {
+  background: var(--accent) !important;
+  color: #fff !important;
+  box-shadow: inset 0 -3px 0 var(--accent-ink) !important;
+}
+.ds .rchart .tape thead th.drop-night .wd,
+.ds .rchart .tape thead th.drop-night .dn,
+.ds .rchart .tape thead th.drop-night .mo {
+  color: #fff !important;
+}
+
+/* The rooms tab from Set up on reads until Change configuration is pressed (2026-10-19): no cell
+   lights as if it took typing, and the cursor says it does not. */
+.ds .desk-root .rct.ro .rct-t td:focus-within { outline: none; background: inherit; }
+.ds .desk-root .rct.ro .rct-t td input[type="text"] { cursor: default; pointer-events: none; }
+.ds .desk-root .rct.ro .rct-t td.ck input { cursor: default; }
+
+/* A lone "?" where an explanation paragraph used to be (2026-10-20). */
+.ds .help-here { display: flex; justify-content: flex-end; margin: 6px 0 0; }
+.ds label .help-q, .ds .field > label .help-q { margin-left: 6px; vertical-align: 1px; }
+
+/* The look back before Negotiation (2026-10-22) — who, the stay, and the rooms' bill, in one
+   scrolling body so a long stay's bill never pushes the buttons off the screen. */
+.ds .inq-summary { display: grid; gap: 16px; max-height: 64vh; overflow: auto; padding-right: 4px; }
+.ds .inq-summary section { display: grid; gap: 6px; }
+.ds .inq-summary .cfg-n { font-size: 13px; }
+
+/* A page whose sections sit beside its title (Rooms, 2026-10-22): the tabs follow the title on
+   its row and read as tabs, after Atlassian's (operator: "it looks like it's just text rather than
+   a clickable button") — a light line under the row, each tab a quiet flat edge and fill at rest so
+   it reads as clickable, the others in lighter text, medium weight, a darker surface and a grey
+   underline on hover, darker again pressed, the selected tab white with the accent text and a 2px
+   accent underline sitting on the line. No gradient, no shadow; the focus ring stays the
+   keyboard's (:focus-visible). */
+.ds .page-head.lead-tabs { justify-content: flex-start; gap: var(--s7); }
+.ds .page-head.lead-tabs .tabs { gap: var(--s1); border-bottom: 2px solid var(--line); }
+.ds .page-head.lead-tabs .tab {
+  height: 36px;
+  padding: 0 var(--s4);
+  font-weight: 500;
+  color: var(--ink-2);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-bottom: 2px solid transparent;
+  border-radius: var(--r-control) var(--r-control) 0 0;
+  margin-bottom: -2px;
+  transition: background-color 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+.ds .page-head.lead-tabs .tab:hover { background: var(--surface-3); color: var(--ink); border-bottom-color: var(--line-2); }
+.ds .page-head.lead-tabs .tab:active { background: var(--line); }
+.ds .page-head.lead-tabs .tab[aria-selected="true"] { color: var(--accent); font-weight: 600; background: var(--surface); border-color: var(--line-2); border-bottom-color: var(--accent); }
+.ds .page-head.lead-tabs .tab[aria-selected="true"]:hover { background: var(--accent-soft); }
+@media (prefers-reduced-motion: reduce) {
+  .ds .page-head.lead-tabs .tab { transition: none; }
+}
+
+/* The side panel folds to a thin bar (2026-10-23, operator): a ring for the soonest clock, the
+   to-do as its numbered circles, and the middle takes the room. `components/ds/workspace/side-panel.tsx`. */
+.ds .ws-body:not(.desk-root *) { transition: grid-template-columns 0.2s ease; }
+.ds .ws-body.side-folded:not(.desk-root *) { grid-template-columns: 200px 1fr 56px; }
+.ds .ws-body.norail.side-folded:not(.desk-root *) { grid-template-columns: minmax(0, 1fr) 56px; }
+/* One toggle, the same box open or folded, at the panel's head. */
+.ds .side > .side-fold, .ds .side-fold-ic {
+  display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px;
+  border: 1px solid var(--line-2); border-radius: var(--r-control); background: var(--surface); color: var(--ink-2);
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+.ds .side > .side-fold { position: absolute; top: var(--s3); right: var(--s3); cursor: pointer; padding: 0; }
+.ds .side > .side-fold:hover, .ds .side-open:hover .side-fold-ic { background: var(--surface-3); color: var(--ink); }
+.ds .side > .side-fold:active, .ds .side-open:active .side-fold-ic { background: var(--line); }
+.ds .side > .side-fold:focus-visible, .ds .side-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ds .side-fold-ic .flip { transform: rotate(180deg); }
+.ds .side.folded:not(.desk-root *) { padding: 0; gap: 0; }
+.ds .side-open {
+  display: flex; flex-direction: column; align-items: center; gap: var(--s3); width: 100%;
+  padding: var(--s3) 0 var(--s4); border: 0; background: transparent; color: var(--ink-2); font: inherit; cursor: pointer;
+}
+.ds .side-open:hover { background: var(--surface-3); }
+/* The ring: it fills from when the clock was armed to when it fires, in the bar's colours. */
+.ds .side-ring { position: relative; width: 44px; height: 44px; display: inline-flex; align-items: center; justify-content: center; flex: none; }
+.ds .side-ring svg { position: absolute; inset: 0; width: 44px; height: 44px; }
+.ds .side-ring .track { fill: none; stroke: var(--line); stroke-width: 4; }
+.ds .side-ring .fill { fill: none; stroke: var(--success); stroke-width: 4; transition: stroke-dashoffset 1s linear; }
+.ds .side-ring.warn .fill { stroke: var(--warning); }
+.ds .side-ring.crit .fill, .ds .side-ring.due .fill { stroke: var(--danger); }
+.ds .side-ring b { position: relative; font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--ink); }
+.ds .side-ring.warn b { color: var(--warning); }
+.ds .side-ring.crit b, .ds .side-ring.due b { color: var(--danger); }
+.ds .side-ring.none { border: 4px solid var(--line); border-radius: 999px; color: var(--ink-3); }
+.ds .side-more { margin-top: calc(-1 * var(--s2)); font-size: var(--t-meta); font-weight: 500; color: var(--ink-3); }
+.ds .side-dots { display: flex; flex-direction: column; align-items: center; gap: 6px; width: 32px; padding-top: var(--s3); border-top: 1px solid var(--line); }
+.ds .side-dots .n {
+  width: 22px; height: 22px; border-radius: 999px; border: 1px solid var(--line-2); background: var(--surface);
+  display: inline-flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; color: var(--ink-2);
+}
+.ds .side-dots .n .ic { width: 12px; height: 12px; }
+.ds .side-dots .n.done { background: var(--success-soft); border-color: var(--success); color: var(--success); }
+.ds .side-dots .n.next { border: 2px solid var(--accent); color: var(--accent); }
+/* Half a monitor: the panel sits under the canvas, so the folded bar runs across. */
+@container (max-width: 1000px) {
+  .ds .ws-body.side-folded:not(.desk-root *), .ds .ws-body.norail.side-folded:not(.desk-root *) { grid-template-columns: 1fr; }
+  .ds .side.folded:not(.desk-root *) { grid-template-columns: 1fr; }
+  .ds .side-open { flex-direction: row; justify-content: flex-start; padding: var(--s2) var(--s4); }
+  .ds .side-more { margin-top: 0; }
+  .ds .side-dots { flex-direction: row; width: auto; padding: 0 0 0 var(--s3); border-top: 0; border-left: 1px solid var(--line); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ds .ws-body:not(.desk-root *), .ds .side-ring .fill { transition: none; }
+}

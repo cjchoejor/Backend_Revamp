@@ -3,48 +3,49 @@
 /**
  * History — "how it got here" (the 14 Sep storyboards HISTORY-1…4).
  *
- * "As it stands" first: the stay, the rate, the rooms, who pays, the advance, the position, the
- * disputes and papers — each the backend's own figure. Then every act, newest first, in chapters
- * by step (the booking's current step open), each chapter under day headings, each act time
- * first with who did it. The lenses narrow the same record: Money, Papers, Requests, Changes,
- * Approvals, Messages. Nothing here is ever edited; the system's own bookkeeping is left to
- * Under the hood.
+ * Every act, newest first, in chapters by step (the booking's current step open), each chapter
+ * under day headings, each act time first with who did it. The inner tabs narrow the same record
+ * (2026-10-12, operator): All · Changes · Price & payments · Approvals · Desk notes. Nothing here
+ * is ever edited; the system's own bookkeeping is left to Under the hood.
+ *
+ * "As it stands" left on 2026-10-12: it restated Booking details and Charges & payments, and the
+ * operator's rule for that pass was that nothing on the booking shows twice.
  */
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Button, EmptyState, Icon } from "@/design-system";
 import { useSession } from "@/hooks/use-session";
-import { usePaymentStatus } from "@/hooks/use-payment-status";
-import { getEntryTrace, type EntryBillingSummary } from "@/lib/api/entries";
+import { getEntryTrace } from "@/lib/api/entries";
 import type { TraceEvent } from "@/lib/trace/humanize";
-import { fmtInstantDate, fmtRange, fmtTime, money, nightsOf, plural } from "@/lib/ds/format";
-import { rateWords } from "@/lib/ds/rates";
+import { fmtInstantDate, fmtTime, plural } from "@/lib/ds/format";
 import { STEP_NAMES, stepNoOfStage } from "@/lib/ds/steps";
 import { isHousekeeping, traceDetail, traceWords } from "@/lib/ds/trace-words";
-import { reservedThisPass } from "@/lib/desk/workspace";
+import { groupWalks, type HistoryItem, type HistoryNames } from "@/lib/ds/history-walks";
+import { useRoomsList } from "@/hooks/use-desk-data";
 import { SegmentHistoryPanel } from "@/components/desk/workspace/segment-history";
 import type { EntryDetail } from "@/types/api";
+import { Help, HelpHere } from "@/components/ds/help";
 
-type Lens = "all" | "money" | "papers" | "requests" | "changes" | "approvals" | "messages";
+type Lens = "all" | "changes" | "money" | "approvals" | "notes";
 
 const LENSES: ReadonlyArray<readonly [Lens, string]> = [
-  ["all", "Everything"],
-  ["money", "Money"],
-  ["papers", "Papers"],
-  ["requests", "Requests"],
+  ["all", "All"],
   ["changes", "Changes"],
+  ["money", "Price & payments"],
   ["approvals", "Approvals"],
-  ["messages", "Messages"],
+  ["notes", "Desk notes"],
 ];
 
 const LENS_TEST: Record<Exclude<Lens, "all">, RegExp> = {
-  money: /PAYMENT|CHARGE|CORRECTION|CREDIT_NOTE|WRITE_OFF|WRITEOFF|SETTLE|REFUND|INTERIM|ADVANCE|NIGHT_AUDIT\.|RECONCIL|PENALT/,
-  papers: /QUOTATION\.(CREATED|SENT|SUPERSEDED|EXPIRED)|INVOICE\.|PROFORMA|VOUCHER|CONFIRMATION_CONFIRMATION|MASTER_BILL|STATEMENT|CANCELLATION_CONFIRMATION|RESERVATION\.CONFIRMATION/,
-  requests: /PREFERENCE|REQUEST|SPECIAL/,
-  changes: /TRANSITION|BACKFLOW|REENTRY|AMEND|ROOM_CHANGE|BED_TYPE|EXTENSION|EARLY_DEPARTURE|BILLING_MODEL|INTAKE|CONFIGURATION_SELECTED|HOLD|PARK|CANCELLED|EXPIRED|CLOSED|ROOM_KEY|CHECK_IN|ACTIVATION|ASSIGN/,
+  changes:
+    /TRANSITION|BACKFLOW|REENTRY|AMEND|ROOM_CHANGE|ROOM_MOVE|STAY_DATES|BED_TYPE|EXTENSION|EARLY_DEPARTURE|BILLING_MODEL|INTAKE|CONFIGURATION_SELECTED|HOLD|PARK|CANCELLED|EXPIRED|CLOSED|ROOM_KEY|CHECK_IN|ACTIVATION|ASSIGN|CALLER|SOURCE_CHANGED|GUEST_NAMED|GUEST_REQUEST|PREFERENCE|DECLINED/,
+  money:
+    /PAYMENT|CHARGE|CORRECTION|CREDIT_NOTE|WRITE_OFF|WRITEOFF|SETTLE|REFUND|INTERIM|ADVANCE|NIGHT_AUDIT\.|RECONCIL|PENALT|DISCOUNT|REPRICE|QUOTATION\.(CREATED|SUPERSEDED|ACCEPTED)|INVOICE\.(CREATED|ISSUED)/,
   approvals: /APPROV|OVERRIDE|AUTHORITY|WAIV|CREDIT_EXTENSION|VERIFIED|ESCALAT|ACCEPTED|CONFIRMED|DETERMIN/,
-  messages: /EMAIL|ACKNOWLEDGEMENT|COMMUNICATION|REMINDER|MESSAGE/,
+  notes: /^BOOKING_NOTE\./,
 };
+
+const isLens = (v: string | null | undefined): v is Lens => !!v && LENSES.some(([k]) => k === v);
 
 const inLens = (ev: TraceEvent, lens: Lens) => lens === "all" || LENS_TEST[lens].test(ev.eventType);
 
@@ -61,21 +62,59 @@ function chapterOf(ev: TraceEvent): number {
   return code && /^S[1-9]$/.test(code) ? stepNoOfStage(code) : 0;
 }
 
-const BILLING_WORD: Record<string, string> = {
-  TOUR_OPERATOR_VOUCHER: "The package to the account · anything beyond it to the guest",
-  DIRECT_BILL: "Everything to the account",
-  GUEST_PAY: "Everything to the guest",
-};
+const itemAt = (it: HistoryItem) => (it.kind === "event" ? it.ev : it.at);
+
+/** One act: its time, its words with the readable part of what it carried, and who did it. */
+function ActLine({
+  ev,
+  at,
+  tz,
+  names,
+  strong,
+  withSeconds,
+}: {
+  ev: TraceEvent;
+  /** The line it stands for in time and authorship, when that is another (a walk's head). */
+  at?: TraceEvent;
+  tz: string;
+  names: HistoryNames;
+  strong?: boolean;
+  /** A walk's steps are seconds apart; the seconds keep their order readable. */
+  withSeconds?: boolean;
+}) {
+  const when = at ?? ev;
+  const detail = traceDetail(ev, names);
+  const time = withSeconds
+    ? new Intl.DateTimeFormat("en-GB", { timeZone: tz, hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true }).format(new Date(when.timestamp))
+    : fmtTime(when.timestamp, tz);
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "72px 1fr auto", gap: "0 10px", padding: "5px 0", alignItems: "baseline" }}>
+      <span className="meta">{time}</span>
+      <span>
+        <span style={strong ? { fontWeight: 700 } : undefined}>{traceWords(ev)}</span>
+        {detail ? (
+          <span className="meta" style={{ display: "block" }}>
+            {detail}
+          </span>
+        ) : null}
+      </span>
+      <span className="meta" style={{ textAlign: "right" }}>
+        {whoDid(when)}
+      </span>
+    </div>
+  );
+}
 
 export function HistoryView({
   entry,
-  billing,
   tz,
+  initialLens,
   onOpenedPass,
 }: {
   entry: EntryDetail;
-  billing: EntryBillingSummary | null;
   tz: string;
+  /** Opened from another tab on one of the inner tabs — Charges & payments opens Price & payments. */
+  initialLens?: string | null;
   onOpenedPass: (stage: string) => void;
 }) {
   const { session } = useSession();
@@ -84,70 +123,40 @@ export function HistoryView({
     queryFn: () => getEntryTrace(session!, entry.id, 300),
     enabled: !!session,
   });
-  const pay = usePaymentStatus(entry.id, { enabled: !!entry.folio });
-  const [lens, setLens] = useState<Lens>("all");
+  const [lens, setLens] = useState<Lens>(isLens(initialLens) ? initialLens : "all");
   const [showPasses, setShowPasses] = useState(false);
 
+  // Rooms and vouchers are named by number, also on lines written before they carried one.
+  const rooms = useRoomsList().data?.items;
+  const names = useMemo<HistoryNames>(() => {
+    const roomById = new Map((rooms ?? []).map((r) => [r.id, r.roomNumber]));
+    const voucherById = new Map((entry.reservations ?? []).map((r) => [r.id, r.confirmationVoucherNumber]));
+    return {
+      roomNo: (id) => (id ? roomById.get(id) ?? null : null),
+      voucherNo: (id) => (id ? voucherById.get(id) ?? null : null),
+    };
+  }, [rooms, entry.reservations]);
+
   const all = useMemo(() => (trace.data?.items ?? []).filter((e) => !isHousekeeping(e.eventType)), [trace.data]);
-  const shown = useMemo(() => all.filter((e) => inLens(e, lens)), [all, lens]);
+  // A room change is one line with its steps under it, not a dozen lines over four chapters.
+  const items = useMemo(() => groupWalks(all, names), [all, names]);
+  const shown = useMemo(
+    () => items.filter((it) => (it.kind === "event" ? inLens(it.ev, lens) : inLens(it.head, lens) || it.steps.some((e) => inLens(e, lens)))),
+    [items, lens],
+  );
+  const shownActs = shown.reduce((n, it) => n + (it.kind === "event" ? 1 : it.steps.length + (it.headIsAct ? 1 : 0)), 0);
   const chapters = useMemo(() => {
-    const m = new Map<number, TraceEvent[]>();
-    for (const ev of shown) m.set(chapterOf(ev), [...(m.get(chapterOf(ev)) ?? []), ev]);
-    return [...m.entries()].sort((a, b) => (b[1][0]?.timestamp ?? "").localeCompare(a[1][0]?.timestamp ?? ""));
+    const m = new Map<number, HistoryItem[]>();
+    for (const it of shown) {
+      const n = chapterOf(itemAt(it));
+      m.set(n, [...(m.get(n) ?? []), it]);
+    }
+    return [...m.entries()].sort((a, b) => (itemAt(b[1][0]!).timestamp ?? "").localeCompare(itemAt(a[1][0]!).timestamp ?? ""));
   }, [shown]);
+  const [openWalk, setOpenWalk] = useState<Record<string, boolean>>({});
   const current = stepNoOfStage(entry.currentStage);
   const [open, setOpen] = useState<Record<number, boolean>>({});
   const isOpen = (n: number, i: number) => open[n] ?? (n === current || (i === 0 && !chapters.some(([k]) => k === current)));
-
-  /* ---- as it stands ---- */
-  const co = entry.actualCheckOutDate ?? entry.checkOutDate;
-  const nights = nightsOf(entry.checkInDate, co);
-  const rooms = Array.from(new Set((entry.roomAssignments ?? []).map((a) => a.room?.roomNumber).filter((x): x is string => !!x))).sort((a, b) =>
-    a.localeCompare(b, "en", { numeric: true }),
-  );
-  const res = reservedThisPass(entry) ? entry.reservation : null;
-  const cur = billing?.currency ?? "BTN";
-  const moves = Math.max(0, (entry.folio?.billingModelTransitions ?? []).length - 1);
-  const openDisputes = (entry.disputes ?? []).filter((d) => !/CLOSED|RESOLVED/.test(String((d as { state?: string }).state ?? ""))).length;
-  const voucherSent = !!entry.reservation?.confirmationVoucherSent;
-
-  const stands: Array<{ k: string; v: React.ReactNode; meta?: React.ReactNode }> = [
-    {
-      k: "Stay",
-      v: `${fmtRange(entry.checkInDate, co)}${nights ? ` · ${plural(nights, "night")}` : ""}`,
-      meta: (entry.segmentNumber ?? 1) > 1 ? `pass ${entry.segmentNumber} · changed along the way` : "as booked",
-    },
-    {
-      k: "Rate",
-      v: res ? rateWords(billing, res.frozenRate, cur) ?? "—" : billing?.stayTotal?.amount != null ? money(billing.stayTotal.amount, cur) : "—",
-      meta: res ? "as reserved" : billing?.stayTotal?.amount != null ? "the stay, as quoted" : "no quotation yet",
-    },
-    {
-      k: "Rooms",
-      v: rooms.length ? `${rooms.length} · ${rooms.join(", ")}` : `${entry.numberOfRooms ?? "—"}`,
-      meta: rooms.length ? "assigned" : "not yet assigned",
-    },
-    {
-      k: "Billing",
-      v: entry.folio?.billingModel ? BILLING_WORD[entry.folio.billingModel] ?? entry.folio.billingModel : "not set yet",
-      meta: moves > 0 ? `changed ${plural(moves, "time")}, with a reason` : undefined,
-    },
-    {
-      k: "Advance",
-      v: pay.data ? `${money(pay.data.totalReceived, cur)} received` : "—",
-      meta: pay.data?.paymentPlan ? "a payment plan is on record" : pay.data?.creditExtensionActive ? "credit extended by the FOM" : undefined,
-    },
-    {
-      k: "Position",
-      v: billing?.folio?.outstandingBalance != null ? `${money(billing.folio.outstandingBalance, cur)} owing` : "—",
-      meta:
-        billing?.folio?.billedSoFar != null
-          ? `${money(billing.folio.paymentsReceived ?? 0, cur)} received · ${money(billing.folio.billedSoFar, cur)} posted`
-          : undefined,
-    },
-    { k: "Requests", v: "not tracked yet", meta: "requests as records are BE-64" },
-    { k: "Disputes · papers", v: `${openDisputes} open · voucher ${voucherSent ? "sent" : "not sent"}` },
-  ];
 
   return (
     <>
@@ -157,22 +166,7 @@ export function HistoryView({
       <div className="steps-canvas">
         <div className="card">
           <div className="card-top">
-            <h4>As it stands</h4>
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "var(--s4)" }}>
-            {stands.map((s) => (
-              <div key={s.k} style={{ display: "grid", gap: 2 }}>
-                <span className="meta">{s.k}</span>
-                <b>{s.v}</b>
-                {s.meta ? <span className="meta">{s.meta}</span> : null}
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="card">
-          <div className="card-top">
-            <h4>History</h4>
+            <h4>Everything that happened</h4>
           </div>
           <div className="row-acts" style={{ marginBottom: 8 }}>
             <div className="filters choice">
@@ -183,7 +177,11 @@ export function HistoryView({
               ))}
             </div>
             <span className="meta">
-              {shown.length} of {plural(all.length, "act")} · newest first · nothing here is ever edited
+              {shownActs} of {plural(all.length, "act")} · newest first
+              <Help label="About the history">
+                Nothing here is ever edited. The system&rsquo;s own bookkeeping — timers set, documents printed, checks run — is left out;
+                Under the hood shows every line.
+              </Help>
             </span>
           </div>
           {trace.isLoading ? (
@@ -192,14 +190,15 @@ export function HistoryView({
             <EmptyState title={lens === "all" ? "Nothing recorded yet" : "Nothing of this kind yet"} />
           ) : (
             chapters.map(([n, evs], i) => {
-              const people = [...new Set(evs.map(whoDid).filter((w) => w !== "system" && w !== "night audit"))];
-              const first = evs[evs.length - 1];
-              const last = evs[0];
+              const people = [...new Set(evs.map((it) => whoDid(itemAt(it))).filter((w) => w !== "system" && w !== "night audit"))];
+              const first = itemAt(evs[evs.length - 1]!);
+              const last = itemAt(evs[0]!);
               const openNow = isOpen(n, i);
-              const days = new Map<string, TraceEvent[]>();
-              for (const ev of evs) {
-                const d = fmtInstantDate(ev.timestamp, tz);
-                days.set(d, [...(days.get(d) ?? []), ev]);
+              const acts = evs.reduce((k, it) => k + (it.kind === "event" ? 1 : it.steps.length + (it.headIsAct ? 1 : 0)), 0);
+              const days = new Map<string, HistoryItem[]>();
+              for (const it of evs) {
+                const d = fmtInstantDate(itemAt(it).timestamp, tz);
+                days.set(d, [...(days.get(d) ?? []), it]);
               }
               return (
                 <div key={n} style={{ borderTop: "1px solid var(--line)" }}>
@@ -213,7 +212,7 @@ export function HistoryView({
                       <b style={{ fontSize: "var(--t-lead)" }}>{n ? STEP_NAMES[n - 1] : "Around the booking"}</b>
                       <span className="meta">
                         {" "}
-                        · {plural(evs.length, "act")} · {fmtInstantDate(first.timestamp, tz)}
+                        · {plural(acts, "act")} · {fmtInstantDate(first.timestamp, tz)}
                         {fmtInstantDate(first.timestamp, tz) !== fmtInstantDate(last.timestamp, tz) ? ` → ${fmtInstantDate(last.timestamp, tz)}` : ""}
                         {people.length ? ` · ${people.join(", ")}` : ""}
                       </span>
@@ -229,25 +228,35 @@ export function HistoryView({
                           <div className="sm" style={{ fontWeight: 700, color: "var(--ink-2)", margin: "8px 0 4px" }}>
                             {day}
                           </div>
-                          {list.map((ev) => {
-                            const detail = traceDetail(ev);
-                            return (
-                              <div key={ev.id} style={{ display: "grid", gridTemplateColumns: "72px 1fr auto", gap: "0 10px", padding: "5px 0", alignItems: "baseline" }}>
-                                <span className="meta">{fmtTime(ev.timestamp, tz)}</span>
-                                <span>
-                                  <span>{traceWords(ev)}</span>
-                                  {detail ? (
-                                    <span className="meta" style={{ display: "block" }}>
-                                      {detail}
+                          {list.map((it) =>
+                            it.kind === "event" ? (
+                              <ActLine key={it.ev.id} ev={it.ev} tz={tz} names={names} />
+                            ) : (
+                              <div key={it.head.id} className="hist-walk">
+                                <ActLine ev={it.head} at={it.at} tz={tz} names={names} strong />
+                                <div style={{ paddingLeft: 82 }}>
+                                  <button
+                                    type="button"
+                                    className="hist-walk-toggle"
+                                    aria-expanded={!!openWalk[it.head.id]}
+                                    onClick={() => setOpenWalk((o) => ({ ...o, [it.head.id]: !o[it.head.id] }))}
+                                  >
+                                    <span style={{ display: "inline-flex", transform: openWalk[it.head.id] ? "rotate(90deg)" : undefined, transition: "transform .15s" }}>
+                                      <Icon name="chev" />
                                     </span>
+                                    What happened with it · {plural(it.steps.length, "step")}
+                                  </button>
+                                  {openWalk[it.head.id] ? (
+                                    <div className="hist-walk-steps">
+                                      {it.steps.map((ev) => (
+                                        <ActLine key={ev.id} ev={ev} tz={tz} names={names} withSeconds />
+                                      ))}
+                                    </div>
                                   ) : null}
-                                </span>
-                                <span className="meta" style={{ textAlign: "right" }}>
-                                  {whoDid(ev)}
-                                </span>
+                                </div>
                               </div>
-                            );
-                          })}
+                            ),
+                          )}
                         </div>
                       ))}
                     </div>
@@ -256,20 +265,25 @@ export function HistoryView({
               );
             })
           )}
-          <div className="meta" style={{ marginTop: 8 }}>
-            The system&rsquo;s own bookkeeping — timers set, documents printed, checks run — is left out here; Under the hood shows every line.
-            {all.length >= 300 ? " The newest 300 acts are shown." : ""}
-          </div>
+          {all.length >= 300 ? (
+            <div className="meta" style={{ marginTop: 8 }}>
+              The newest 300 acts are shown.
+            </div>
+          ) : null}
         </div>
 
         <div className="card">
           <div className="card-top">
-            <h4>Every pass, in full</h4>
+            <h4>
+              Every pass, in full
+              <Help label="About passes">
+                A change after reserving closes the current pass and opens a new one; what a closed pass decided stays as it was.
+              </Help>
+            </h4>
             <Button kind="quiet" compact onClick={() => setShowPasses((v) => !v)}>
               {showPasses ? "Hide" : "Show"}
             </Button>
           </div>
-          <div className="meta">A change after reserving closes the current pass and opens a new one; what a closed pass decided stays as it was.</div>
           {showPasses ? (
             <div className="desk-root tool">
               <SegmentHistoryPanel entryId={entry.id} currentStage={entry.currentStage} onSegmentOpened={onOpenedPass} />

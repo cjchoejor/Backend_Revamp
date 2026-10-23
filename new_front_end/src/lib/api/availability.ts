@@ -166,3 +166,48 @@ export async function selectAvailabilityOption(
     body,
   });
 }
+
+/**
+ * What the rooms on the S1 table cost — night by night and for the whole stay (2026-10-10).
+ * The SERVER's figures (room only, at the rate the quotation defaults to, taxes compound): the
+ * desk prints them and never adds anything up. Nothing is saved by asking.
+ */
+export type PickPricing = {
+  entryId: string;
+  currency: string;
+  serviceChargeRate: number;
+  gstRate: number;
+  party: { type: "TRAVEL_AGENT" | "CORPORATE"; name: string } | null;
+  stayNights: number;
+  nights: Array<{
+    date: string;
+    nightNo: number;
+    rooms: Array<{ roomId: string; roomNumber: string; roomTypeId: string | null; roomTypeName: string | null; rate: number | null }>;
+    net: number;
+    serviceCharge: number;
+    gst: number;
+    total: number;
+    unpricedRooms: number;
+  }>;
+  byType: Array<{
+    roomTypeId: string;
+    code: string | null;
+    name: string;
+    roomNights: number;
+    rate: number | null;
+    rateSource: "AGENT_RATE_PACKAGE" | "STANDARD_RATE_PLAN" | null;
+    packageName: string | null;
+    net: number | null;
+    /** The type's share of the stay's taxes, and its total — the types add up to the stay. */
+    serviceCharge: number | null;
+    gst: number | null;
+    total: number | null;
+  }>;
+  byRoom: Array<{ roomId: string; roomNumber: string; roomTypeName: string | null; dates: string[] }>;
+  totals: { roomNights: number; net: number; serviceCharge: number; gst: number; total: number };
+  unpricedTypes: Array<{ roomTypeId: string; name: string }>;
+};
+
+export function pricePick(session: Session, entryId: string, body: { perNight: Array<{ date: string; roomIds: string[] }> }) {
+  return apiRequest<PickPricing>(`/api/entries/${entryId}/availability/price-pick`, { method: "POST", session, body });
+}

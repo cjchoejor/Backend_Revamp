@@ -40,10 +40,6 @@ import {
   FactLine,
   Facts,
   Live,
-  OtherWays,
-  PapersCard,
-  RequestsCard,
-  SeeRow,
   StepCanvas,
   StepCard,
   Tool,
@@ -51,9 +47,12 @@ import {
   words,
   type FactState,
   type StepPane,
+  OtherWaysTabs,
+  ShutWay,
 } from "./kit";
 import { RoomsTableCard } from "./rooms-table";
 import { InlineTool, claimWord, distinctRoomRows, physicalWord, physicallyReady, revealBlock, roomLabel } from "./s6-shared";
+import { Help } from "@/components/ds/help";
 
 /* ------------------------------------------------------------------ vocabulary */
 
@@ -116,6 +115,9 @@ export function S6CheckIn({
   const at = (k: string | null) => ((pane ?? null) === k ? undefined : true);
   const { session } = useSession();
   const { tz } = useHotelClock(60_000);
+  const advancePay = usePaymentStatus(entry.id, { enabled: !!entry.folio }).data;
+  // Paid in full and signed off: nothing to collect here — Money received carries it (2026-10-23).
+  const advanceSettled = entry.folio?.advancePaymentReconciliationComplete === true && advancePay?.paidInFull === true;
 
   const proofs = useQuery({
     queryKey: ["identity-proofs", entry.id],
@@ -194,6 +196,7 @@ export function S6CheckIn({
         setConfirmed={setRegistrationConfirmed}
       />
 
+      {advanceSettled ? null : (
       <div id={ID.advance}>
         <StepCard flow="advance">
           <Tool>
@@ -205,6 +208,7 @@ export function S6CheckIn({
           </Tool>
         </StepCard>
       </div>
+      )}
 
       {isVip ? <VipCard entry={entry} tz={tz} /> : null}
 
@@ -233,36 +237,45 @@ export function S6CheckIn({
               <Button icon="lock" state={checkIn.ready ? "default" : "inert"} title={checkIn.ready ? undefined : checkIn.reason} onClick={checkIn.onClick}>
                 Check in · keys and the live folio
               </Button>
+              <Help label="About checking in">
+                One act: the folio goes live, the rooms become occupied, the keys are handed over, and housekeeping and the kitchen are told.
+              </Help>
             </div>
-            <span className="meta" style={{ textAlign: "right" }}>
-              One act: the folio goes live, the rooms become occupied, the keys are handed over, and housekeeping and the kitchen are told.
-            </span>
           </div>
         ) : null}
       </Live>
 
-      <RequestsCard />
-      <OtherWays>
-        {entry.status === "ACTIVE"
-          ? [
-              <SeeRow
-                key="cancel"
-                label="Cancel…"
-                state="inert"
-                reason="Cancelling is recorded at Set up or Arrival; once the guest is at the desk it is not a cancellation"
-                note="not at check-in — cancelling is recorded at Set up or at Arrival; a guest who leaves after checking in is an early departure at Stay"
-              />,
-              <SeeRow
-                key="amend"
-                label="Amend dates…"
-                state="inert"
-                reason="There is no date change from Check-in in the backend"
-                note="not from Check-in — the dates move at Stay, through Extend stay or an early departure"
-              />,
-            ]
-          : null}
-      </OtherWays>
-      <PapersCard entry={entry} />
+      {/* Other ways as sub-tabs (2026-10-17) — neither is taken at Check-in; each says where. */}
+      <OtherWaysTabs
+        tabs={
+          entry.status === "ACTIVE"
+            ? [
+                {
+                  key: "cancel",
+                  label: "Cancel",
+                  content: (
+                    <ShutWay
+                      act="Cancel the booking"
+                      why="Not at check-in — once the guest is at the desk it is not a cancellation."
+                      help={<p>Cancelling is recorded at Set up or at Arrival. A guest who leaves after checking in is an early departure, at Stay.</p>}
+                    />
+                  ),
+                },
+                {
+                  key: "amend",
+                  label: "Amend dates",
+                  content: (
+                    <ShutWay
+                      act="Amend the dates"
+                      why="Not from Check-in — the dates move at Stay."
+                      help={<p>At Stay, Extend the stay adds nights and Leaving early ends it sooner.</p>}
+                    />
+                  ),
+                },
+              ]
+            : []
+        }
+      />
       </div>
 
       <div className="pane" hidden={at("rooms")}>
@@ -425,9 +438,10 @@ function useCheckInFacts({
           <Button kind="secondary" compact onClick={() => setRegistrationConfirmed(true)}>
             Confirm at the desk
           </Button>
-          <Button kind="quiet" compact state="inert" reason="the tablet card is not in the backend yet (BE-45)">
+          <Button kind="quiet" compact state="inert">
             Send to the tablet
           </Button>
+          <Help label="Not available yet">The tablet card is not in the backend yet (BE-45).</Help>
         </span>
       ) : undefined,
     });
@@ -567,6 +581,7 @@ function DocumentCard({
       <StepCard
         flow="identity"
         title="The document, at the desk"
+        meta="Typed once, in the lead's row of the guest table below — choose the guest type there and record the verification under the table; it records that row's document. Date of birth and gender are what the TRS asks for. An ID photo is uploaded, or taken on a phone, from the same row."
         acts={
           past ? null : (
             <>
@@ -590,9 +605,6 @@ function DocumentCard({
             {verifiedAt ? fmtStamp(verifiedAt, tz) : <span className="warn-ink">not yet</span>}
           </Fact>
         </Facts>
-        <div className="meta" style={{ marginTop: 8 }}>
-          Typed once, in the lead&rsquo;s row of the guest table below — choose the guest type there and record the verification under the table; it records that row&rsquo;s document. Date of birth and gender are what the TRS asks for. An ID photo is uploaded, or taken on a phone, from the same row.
-        </div>
       </StepCard>
     </div>
   );
@@ -646,17 +658,22 @@ function RegistrationCard({
             </label>
           )}
           <div className="row-acts" style={{ marginTop: 10 }}>
-            <Button kind="secondary" compact state="inert" reason="The registration card on a tablet is not in the backend yet (BE-45) — confirm it at the desk above">
+            <Button kind="secondary" compact state="inert">
               Send to the tablet
             </Button>
+            <Help label="Not available yet">The registration card on a tablet is not in the backend yet (BE-45) — confirm it at the desk above.</Help>
             {party > 1 ? (
-              <Button kind="quiet" compact state="inert" reason="One card per guest comes with the tablet card (BE-45)">
-                Next person
-              </Button>
+              <>
+                <Button kind="quiet" compact state="inert">
+                  Next person
+                </Button>
+                <Help label="Not available yet">One card per guest comes with the tablet card (BE-45).</Help>
+              </>
             ) : null}
-            <Button kind="quiet" compact icon="eye" state="inert" reason="The signed card as a paper is not in the backend yet (BE-45)">
+            <Button kind="quiet" compact icon="eye" state="inert">
               Preview the signed card
             </Button>
+            <Help label="Not available yet">The signed card as a paper is not in the backend yet (BE-45).</Help>
           </div>
         </Live>
       </StepCard>
@@ -934,7 +951,8 @@ function RoomRow({
               </>
             ) : (
               <Fact k="Composition">
-                <span className="meta">not recorded at Negotiation — occupants and meals were set on the guest board there</span>
+                <span className="meta">not recorded at Negotiation</span>
+                <Help label="About the composition">Occupants and meals were set on the guest board there.</Help>
               </Fact>
             )}
           </Facts>

@@ -33,6 +33,10 @@ export const READABLE_ID_DEFAULT_PREFIXES = {
   COMMUNICATION: "MSG",
   // Early departure (2026-08-22, Policy 36) - the one record of a stay shortened at the desk.
   EARLY_DEPARTURE: "ED",
+  // Room move from the house chart (2026-10-12) - one booking into a free room, or two swapped.
+  ROOM_MOVE: "MOVE",
+  // The confirmation voucher's own number (2026-10-13) - one per confirmation, on Reservation.
+  VOUCHER: "VOU",
   // Phase B — travel agents, corporate accounts, rate cards
   TRAVEL_AGENT: "TA",
   CORPORATE_ACCOUNT: "CORP",
@@ -69,6 +73,8 @@ export const READABLE_ID_ENTITIES: ReadableIdEntity[] = [
   "ROOM_INSPECTION",
   "WORK_ORDER",
   "EARLY_DEPARTURE",
+  "ROOM_MOVE",
+  "VOUCHER",
   // Phase B
   "TRAVEL_AGENT",
   "CORPORATE_ACCOUNT",

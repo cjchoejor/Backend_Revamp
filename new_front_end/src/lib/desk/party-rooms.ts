@@ -329,6 +329,16 @@ export function roomsInUseFor<T extends { endDate?: string | null }>(
   return live.length ? live : [...rows];
 }
 
+/**
+ * The rooms this booking holds before any is assigned — the newest room pick (2026-10-13,
+ * operator: "the booking details' rooms are not updated" after a room move). Until Arrival
+ * assigns them, the rooms live only on the pick the hold and the reservation were made from; a
+ * room move re-seals that pick, so this follows it. Empty when nothing has been picked.
+ */
+export function heldRoomIds(entry: EntryDetail): string[] {
+  return [...roomNightsByRoom(entry).keys()];
+}
+
 export function roomStayRangesByRoom(entry: EntryDetail): Map<string, RoomStayRanges> {
   const out = new Map<string, RoomStayRanges>();
   for (const [roomId, nights] of roomNightsByRoom(entry)) {

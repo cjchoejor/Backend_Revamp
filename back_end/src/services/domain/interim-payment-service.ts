@@ -14,6 +14,7 @@ import {
 import { buildEntryBillingSummary } from "./entry-billing-summary-service.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import { hotelTodayUtc } from "../../lib/stay-dates.js";
+import { latestDispatchedInForce, retireSupersededReplyWaitsBestEffort } from "../../lib/reply-waits.js";
 
 type Tx = Prisma.TransactionClient;
 type Db = PrismaClient | Tx;
@@ -582,7 +583,7 @@ export async function createInterimPaymentRequestTx(
 }
 
 /** Manual LONG_STAY ask from the Stay step. */
-export async function createInterimPaymentRequest(
+async function createInterimPaymentRequestInner(
   prisma: PrismaClient,
   actor: Actor,
   entryId: string,
@@ -641,16 +642,11 @@ export async function recordInterimPayment(
     if (req.state === "SUGGESTED") throw new ValidationError("Put a figure on the interim payment first — no bill has been generated yet");
     enforceInterimPaymentStage({ currentStage: req.entry.currentStage, folioState: req.folio.state });
     enforceInterimInvoiceDispatchedBeforePayment({ invoice: req.invoice ? { state: req.invoice.state, dispatchedAt: req.invoice.dispatchedAt } : null });
-    const latestComm = await tx.communicationRecord.findFirst({
-      where: {
-        entryId: req.entryId,
-        commType: "INTERIM_INVOICE",
-        direction: "OUTBOUND",
-        sendStatus: "DISPATCHED",
-        createdAt: { gte: req.requestedAt },
-      },
-      orderBy: { createdAt: "desc" },
-      select: { acknowledgementStatus: true },
+    // The interim bill in force — a replaced one's answer is never demanded (2026-10-13).
+    const latestComm = await latestDispatchedInForce(tx, {
+      entryId: req.entryId,
+      commType: "INTERIM_INVOICE",
+      since: req.requestedAt,
     });
     // The interim invoice is always dispatched through `dispatchInvoice`, which mints the
     // communication — a missing one means the bill never went out (caught above).
@@ -733,7 +729,7 @@ export async function recordInterimPayment(
   return out;
 }
 
-export async function withdrawInterimPaymentRequest(prisma: PrismaClient, actor: Actor, requestId: string, reason?: string | null) {
+async function withdrawInterimPaymentRequestInner(prisma: PrismaClient, actor: Actor, requestId: string, reason?: string | null) {
   const out = await prisma.$transaction(async (tx) => {
     const req = await tx.interimPaymentRequest.findUnique({ where: { id: requestId }, include: { entry: { select: { inquiryId: true } } } });
     if (!req) throw new NotFoundError("InterimPaymentRequest");
@@ -934,4 +930,26 @@ export async function listInterimPayments(prisma: PrismaClient, entryId: string)
       invoice: r.invoice ? { ...r.invoice, totalAmount: r.invoice.totalAmount != null ? Number(r.invoice.totalAmount) : null } : null,
     })),
   };
+}
+
+/**
+ * createInterimPaymentRequest, then stop waiting for replies to the papers it replaced — a guest's reply is awaited only
+ * for the paper in force (2026-10-13; lib/reply-waits.ts).
+ */
+export async function createInterimPaymentRequest(...args: Parameters<typeof createInterimPaymentRequestInner>): ReturnType<typeof createInterimPaymentRequestInner> {
+  const out = await createInterimPaymentRequestInner(...args);
+  const entryId = args[2];
+  if (entryId) await retireSupersededReplyWaitsBestEffort(args[0], entryId, args[1].actorId);
+  return out;
+}
+
+/**
+ * withdrawInterimPaymentRequest, then stop waiting for replies to the papers it replaced — a guest's reply is awaited only
+ * for the paper in force (2026-10-13; lib/reply-waits.ts).
+ */
+export async function withdrawInterimPaymentRequest(...args: Parameters<typeof withdrawInterimPaymentRequestInner>): ReturnType<typeof withdrawInterimPaymentRequestInner> {
+  const out = await withdrawInterimPaymentRequestInner(...args);
+  const entryId = (await args[0].interimPaymentRequest.findUnique({ where: { id: args[2] }, select: { entryId: true } }))?.entryId;
+  if (entryId) await retireSupersededReplyWaitsBestEffort(args[0], entryId, args[1].actorId);
+  return out;
 }

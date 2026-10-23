@@ -9,6 +9,7 @@ import {
   keepStandingReservations,
   reservedClaimEndDate,
 } from "./entry-inventory-claim.js";
+import { isTolerated, roomMoveClaims, roomMoveTolerance, type ToleratedClaim } from "./room-move-claims.js";
 
 /**
  * A booking that already owns a room across some date range.
@@ -67,7 +68,23 @@ function guestNameOf(g: { firstName?: string | null; lastName?: string | null } 
  */
 export async function findRoomBookingConflicts(
   db: PrismaClient | Prisma.TransactionClient,
-  input: { roomIds: string[]; checkIn: Date; checkOut: Date; excludeEntryId: string },
+  input: {
+    roomIds: string[];
+    checkIn: Date;
+    checkOut: Date;
+    excludeEntryId: string;
+    /**
+     * Claims the asking booking may pass over — a room move's dry run names its partner here
+     * before the move exists. A running move is read from its own record (`roomMoveTolerance`),
+     * so no other caller passes anything.
+     */
+    tolerate?: ToleratedClaim[];
+    /**
+     * Real bookings only — leave room moves out entirely (their claims and their tolerance). Asked
+     * by a move's own resolve check: "does any real double booking remain once the move lets go?"
+     */
+    ignoreRoomMoves?: boolean;
+  },
 ): Promise<RoomBookingConflict[]> {
   if (input.roomIds.length === 0) return [];
 
@@ -259,5 +276,24 @@ export async function findRoomBookingConflicts(
     });
   }
 
-  return conflicts;
+  // A room move from the house chart (2026-10-12): while it runs, each leg's target is claimed for
+  // its booking, so no third booking can take a room mid-swap (lib/room-move-claims.ts).
+  for (const m of input.ignoreRoomMoves ? [] : await roomMoveClaims(db, { checkIn: input.checkIn, checkOut: input.checkOut, excludeEntryId: input.excludeEntryId })) {
+    if (!roomIdSet.has(m.roomId)) continue;
+    conflicts.push({
+      roomId: m.roomId,
+      source: "HOLD",
+      holdKind: "COMMITTED",
+      entryId: m.entryId,
+      entryReferenceNumber: m.entry.inquiryId ?? null,
+      guestName: guestNameOf(m.entry.guestProfile),
+      startDate: m.startDate,
+      endDate: m.endDate,
+    });
+  }
+
+  // …and the one exception a move makes: a leg's own booking passes over its partner's claim on
+  // exactly the room the partner is leaving. Nothing else is tolerated.
+  const tolerated = [...(input.tolerate ?? []), ...(input.ignoreRoomMoves ? [] : await roomMoveTolerance(db, input.excludeEntryId))];
+  return tolerated.length > 0 ? conflicts.filter((c) => !isTolerated(tolerated, c)) : conflicts;
 }

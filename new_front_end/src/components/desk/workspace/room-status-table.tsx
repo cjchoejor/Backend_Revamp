@@ -191,7 +191,9 @@ export function RoomStatusTable({
   onCappedClick,
   disabled,
   dense,
+  large,
   showNames,
+  nightTotals,
 }: {
   rows: RoomStatusRow[];
   /** ISO YYYY-MM-DD for every night of the stay (check-in inclusive, check-out exclusive). */
@@ -224,8 +226,16 @@ export function RoomStatusTable({
   disabled?: boolean;
   /** Compact rows so the whole room list fits one screen (used by the expanded view). */
   dense?: boolean;
+  /** The full view: larger text, so the pinned columns widen to keep their words whole. */
+  large?: boolean;
   /** Print the holder's name in the cell itself rather than only on hover. */
   showNames?: boolean;
+  /**
+   * What each night comes to for the rooms picked, printed under its date (2026-10-12, operator:
+   * "in the table can you show the price that night"). Already-formatted money from the SERVER's
+   * bill — the table adds nothing up.
+   */
+  nightTotals?: Record<string, string>;
 }) {
   // night → roomId → who holds it that night. Keeps the whole occupancy context, not just the
   // id, so each cell can name the holder. The engine includes CLAIMED rooms in `perDate`, so
@@ -301,10 +311,10 @@ export function RoomStatusTable({
   // which room the row belongs to. Widths are fixed here (not measured) so each column's `left`
   // offset is just the sum of the ones before it. Ext. Beds is pinned too when present: it sits
   // between Type and Booked by, and leaving a gap in the middle would let it slide underneath.
-  const pinWidths: number[] = [dense ? 54 : 64, dense ? 92 : 110];
-  if (anyBedTypes) pinWidths.push(dense ? 48 : 58);
-  if (anyExtBeds) pinWidths.push(dense ? 48 : 58);
-  if (showSelectAll) pinWidths.push(dense ? 84 : 96);
+  const pinWidths: number[] = large ? [100, 184] : [dense ? 54 : 64, dense ? 92 : 110];
+  if (anyBedTypes) pinWidths.push(large ? 76 : dense ? 48 : 58);
+  if (anyExtBeds) pinWidths.push(large ? 104 : dense ? 48 : 58);
+  if (showSelectAll) pinWidths.push(large ? 120 : dense ? 84 : 96);
   // Column indexes shift with the optional columns — computed once so header and body agree.
   const colBed = anyBedTypes ? 2 : -1;
   const colExt = anyExtBeds ? 2 + (anyBedTypes ? 1 : 0) : -1;
@@ -321,7 +331,7 @@ export function RoomStatusTable({
   const pinCls = (i: number) => `rst-pin${i === lastPin ? " rst-pin-edge" : ""}`;
 
   return (
-    <div className={`rst-wrap${dense ? " dense" : ""}`}>
+    <div className={`rst-wrap${dense ? " dense" : ""}${large ? " large" : ""}`}>
       <table className="rst">
         <thead>
           <tr>
@@ -375,6 +385,11 @@ export function RoomStatusTable({
                       {count}/{maxSelect} picked
                     </span>
                   )}
+                  {nightTotals?.[n] ? (
+                    <span className="rst-nightprice" title="This night, for the rooms picked — incl. service charge and GST, room only">
+                      {nightTotals[n]}
+                    </span>
+                  ) : null}
                 </th>
               );
             })}

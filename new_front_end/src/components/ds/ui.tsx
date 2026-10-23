@@ -10,7 +10,7 @@ import { useState, type ReactNode } from "react";
 import { Button, Chip, Icon } from "@/design-system";
 import type { DeskListRow } from "@/lib/api/desk";
 import type { WaitingText } from "@/lib/ds/attention";
-import { bookerOfRow, factsFromRow, guestNameOf, isNamed, standingOf, type Standing } from "@/lib/ds/status";
+import { bookerOfRow, factsFromRow, guestNameOf, isNamed, rowNameOf, standingOf, type Standing } from "@/lib/ds/status";
 import { BOUNDARY_STEPS, stepName, type StepNo } from "@/lib/ds/steps";
 
 export function bookingHref(entryId: string, step?: number) {
@@ -37,7 +37,7 @@ export function RowStanding({ row, hotelToday, balance }: { row: DeskListRow; ho
 
 /** The guest's name as the row's link; italic when the agent has not named them yet. */
 export function GuestLink({ row, step }: { row: DeskListRow; step?: number }) {
-  const name = guestNameOf(row.guestProfile);
+  const name = rowNameOf(row);
   return (
     <Link className={`row-link${isNamed(row.guestProfile) ? "" : " name-i"}`} href={bookingHref(row.id, step)} aria-label={`Open ${row.id}`} onClick={(e) => e.stopPropagation()}>
       {name}

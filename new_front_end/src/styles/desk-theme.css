@@ -2761,30 +2761,96 @@
   & .rct-save-act {
     margin-left: auto;
     display: flex;
-    align-items: flex-end;
-    gap: 12px;
+    align-items: center;
+    gap: 16px;
     flex-wrap: wrap;
   }
+  /* The quote's validity as a field that reads as one (2026-10-12, operator: "doesn't seem like
+     something that can be edited at first glance"): a label, a bordered box with − and + around
+     the number, and the end date it gives — the rule is behind its "?". */
   & .rct-valid {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 10px;
     flex-wrap: wrap;
-    font-size: 12.5px;
   }
-  & .rct-valid .k {
+  & .rct-valid .lbl {
+    font-size: 13.5px;
+    font-weight: 700;
+    color: var(--ink);
+    white-space: nowrap;
+  }
+  & .rct-valid .stepper {
+    display: inline-flex;
+    align-items: stretch;
+    height: 36px;
+    border: 1px solid var(--line-3);
+    border-radius: 6px;
+    background: #fff;
+    overflow: hidden;
+  }
+  & .rct-valid .stepper:focus-within {
+    border-color: var(--ink-2);
+    box-shadow: 0 0 0 2px rgba(109, 46, 140, 0.18);
+  }
+  & .rct-valid .stepper.bad {
+    border-color: var(--stop);
+  }
+  & .rct-valid .stepper button {
+    width: 32px;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: var(--cream);
+    color: var(--ink);
+    font-size: 17px;
+    font-weight: 700;
+    line-height: 1;
+    cursor: pointer;
+  }
+  & .rct-valid .stepper button:first-child {
+    border-right: 1px solid var(--line-2);
+  }
+  & .rct-valid .stepper button:last-child {
+    border-left: 1px solid var(--line-2);
+  }
+  & .rct-valid .stepper button:hover:not(:disabled) {
+    background: var(--cream-3);
+  }
+  & .rct-valid .stepper button:disabled {
+    color: var(--ink-4);
+    cursor: not-allowed;
+  }
+  & .rct-valid .stepper input {
+    width: 40px;
+    height: auto;
+    min-height: 0;
+    padding: 0 2px 0 8px;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    outline: none;
+    text-align: right;
+    font-family: var(--deskmono);
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--ink);
+  }
+  & .rct-valid .stepper .unit {
+    display: flex;
+    align-items: center;
+    padding: 0 10px 0 4px;
+    font-size: 13.5px;
+    color: var(--ink-2);
+  }
+  & .rct-valid .until {
+    font-size: 13.5px;
     color: var(--ink-2);
     white-space: nowrap;
   }
-  & .rct-valid input {
-    width: 58px;
-    text-align: center;
-    font-family: var(--deskmono);
-  }
-  & .rct-valid-h {
-    flex-basis: 100%;
-    font-size: 11.5px;
-    color: var(--ink-3);
+  & .rct-valid .until b {
+    color: var(--ink);
   }
   & .rct-save-btn {
     flex: none;
@@ -2798,51 +2864,105 @@
     font-size: 12.5px;
     font-weight: 600;
   }
-  /* Which nights each room is for (2026-09-30, operator) — the leading column, pinned like the
-     room number beside it, because the two together are the row's identity. */
-  & .rct-t .dates {
-    position: sticky;
-    left: 0;
-    z-index: 1;
-    background: var(--cream);
+  /* The table night by night (2026-10-22, operator) — on a stay whose rooms change between
+     nights each night sits under its own band, which is where the date changes, so it reads as
+     a break: dark, the date large, the night's guest tally green or red. The Dates column it
+     replaced is gone. */
+  & .rct-t tbody tr.nightband td {
+    background: var(--ink);
+    color: #fff;
     text-align: left;
-    padding: 3px 6px;
-    /* Held to exactly its content (2026-09-30, operator: "see how much extra space the dates
-       column is taking uselessly"). The table is width:100% on auto layout, so the surplus was
-       being shared out by content width and this column — the only one with prose in it — took
-       the lion's share. Fixing all three widths keeps it at the span it prints, and the trailing
-       column below takes the slack instead, as it did before this column existed. It must also
-       equal `.has-dates .room`'s offset, or the pinned room number slides over it on a
-       sideways scroll. */
-    width: 98px;
-    min-width: 98px;
-    max-width: 98px;
-    white-space: nowrap;
-    font-size: 11px;
-    line-height: 1.35;
+    padding: 7px 10px;
+  }
+  & .rct-t tbody tr.nightband:not(:first-child) td {
+    border-top: 10px solid #fff;
+  }
+  & .rct-t tbody tr.nightband .nb-in {
+    position: sticky;
+    left: 10px;
+    display: inline-flex;
+    align-items: baseline;
+    gap: 12px;
+  }
+  & .rct-t tbody tr.nightband .nb-date {
+    font-size: 14px;
+    font-weight: 800;
+    letter-spacing: 0.01em;
+  }
+  & .rct-t tbody tr.nightband .nb-meta {
+    font-size: 11.5px;
+    color: rgba(255, 255, 255, 0.78);
+  }
+  & .rct-t tbody tr.nightband .nb-tally {
+    font-size: 12px;
+    font-weight: 800;
+    padding: 1px 9px;
+    border-radius: 999px;
+    background: var(--ok);
+    color: #fff;
+  }
+  & .rct-t tbody tr.nightband .nb-tally.off {
+    background: var(--stop);
+  }
+  /* The stay's own band, over a plan whose rooms do not change: the dates once, quietly. */
+  & .rct-t tbody tr.nightband.stay td {
+    background: var(--cream-3);
+    color: var(--ink);
+  }
+  & .rct-t tbody tr.nightband.stay .nb-meta {
     color: var(--ink-2);
   }
-  & .rct-t thead .dates {
-    background: var(--cream-3);
-  }
-  /* With the Dates column present the room number pins beside it, not at the edge. */
-  & .rct-t.has-dates .room {
-    left: 98px;
-  }
-  /* Nothing claims the surplus (2026-09-30, second pass — operator: "now the rate+ column is
-     too big, see how the old table looked like"). Pinning it to the trailing column swapped one
-     over-wide column for another; the table shared the spare width across every column before
-     the Dates column arrived, and it does again now that Dates is fixed and can no longer take
-     the lion's share. */
-  /* A room held for only part of the stay — the case the column exists for. */
-  & .rct-t td.dates.part {
-    color: var(--warn);
-    font-weight: 600;
-  }
-  & .rct-t td.dates .n {
+  /* How many nights a room's one row covers, under its number. */
+  & .rct-t tbody .room span.nn {
     display: block;
+    margin-left: 0;
     font-size: 10.5px;
     font-weight: 600;
+    color: var(--ink-2);
+    font-family: inherit;
+  }
+  /* A meal or bed set for one night only (2026-10-22): a small amber corner, as a spreadsheet
+     marks a note — a tint and an underline read as the selected cell (operator, same day). */
+  & .rct-t td.own {
+    position: relative;
+  }
+  & .rct-t td.own::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    right: 0;
+    border-style: solid;
+    border-width: 0 10px 10px 0;
+    border-color: transparent var(--warn) transparent transparent;
+    pointer-events: none;
+  }
+  /* Over the whole stay, a cell whose nights disagree reads "varies" — typing sets every night. */
+  & .rct-t td.varies {
+    background: #fff4dc;
+  }
+  & .rct-t td.varies input::placeholder {
+    color: var(--warn);
+    font-weight: 700;
+    opacity: 1;
+  }
+  /* The night picker beside Expand. */
+  & .rce-night {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  & .rce-night select {
+    font-size: 12px;
+    font-weight: 700;
+    padding: 4px 8px;
+    border: 1.5px solid var(--ink-2);
+    border-radius: var(--r-sm);
+    background: #fff;
+    color: var(--ink);
+  }
+  & .rce-night.off select {
+    border-color: var(--stop);
+    color: var(--stop);
   }
   /* Derived occupancy cell — read-only, mono, visually "computed". */
   & .rct-t .occ {
@@ -3417,6 +3537,18 @@
   }
   & .rst .rst-nightcount.done {
     color: var(--ok);
+  }
+  /* What the night comes to for the rooms picked (2026-10-12) — the server's figure, under the
+     tally it prices. */
+  & .rst .rst-nightprice {
+    display: block;
+    margin-top: 2px;
+    font-size: 12.5px;
+    font-weight: 800;
+    letter-spacing: 0;
+    text-transform: none;
+    color: var(--ink);
+    font-variant-numeric: tabular-nums;
   }
 
   & .gatebar {

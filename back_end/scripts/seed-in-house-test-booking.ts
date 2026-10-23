@@ -8,7 +8,7 @@
  *   npx tsx scripts/seed-in-house-test-booking.ts --commit        # write (re-runnable: clears its own prior seed first)
  *   npx tsx scripts/seed-in-house-test-booking.ts --clean --commit  # remove it
  *
- * Options: --slept N (nights already slept, default 2) · --ahead N (nights still booked, default 4)
+ * Options: --tag X (a second fixture beside the first) · --slept N (nights already slept, default 2) · --ahead N (nights still booked, default 4)
  *          · --rate R (frozen NET per-night room figure, default 2000) · --room NNN (room number)
  *          · --rooms N (how many rooms, default 1 — a MULTI-room booking, added 2026-09-09 for
  *            PMS-237's one-room-leaves-early path, which by definition cannot be exercised on a
@@ -24,6 +24,7 @@
  */
 import { PrismaClient, Prisma } from "@prisma/client";
 import { hotelTodayUtc } from "../src/lib/stay-dates.js";
+import { applyRoomFlagRepairs, planRoomFlagRepairs } from "../src/lib/room-flag-repair.js";
 
 const prisma = new PrismaClient();
 const argv = process.argv.slice(2);
@@ -38,7 +39,10 @@ const AHEAD = Math.max(1, Number(arg("--ahead", "4")));
 const RATE = Number(arg("--rate", "2000"));
 const ROOM = arg("--room", "");
 const ROOM_COUNT = Math.max(1, Number(arg("--rooms", "1")));
-const P = "TEST-ED-";
+// --tag X seeds a SECOND fixture beside the first (ids `TEST-ED-X-…`), e.g. two in-house guests
+// for a room switch (2026-10-12). Without a tag the script seeds / cleans every `TEST-ED-` row.
+const TAG = arg("--tag", "").replace(/[^A-Za-z0-9]/g, "").toUpperCase();
+const P = TAG ? `TEST-ED-${TAG}-` : "TEST-ED-";
 
 const dayStart = (offsetDays: number): Date => {
   // The HOTEL's day — the UTC date is still yesterday in Bhutan until 06:00.
@@ -53,7 +57,13 @@ async function clean() {
   const ids = entries.map((e) => e.id);
   const folios = await prisma.folio.findMany({ where: { entryId: { in: ids } }, select: { id: true } });
   const folioIds = folios.map((f) => f.id);
-  const occupied = await prisma.roomAssignment.findMany({ where: { entryId: { in: ids } }, select: { roomId: true } });
+  // Every room the fixture touched — its own rows, and every room a room change or a release
+  // moved its flag on (2026-10-12: freeing only the rows' rooms left 202 "needs cleaning" and 203
+  // "occupied" behind after a room change, with nobody in either).
+  const touched = new Set([
+    ...(await prisma.roomAssignment.findMany({ where: { entryId: { in: ids } }, select: { roomId: true } })).map((r) => r.roomId),
+    ...(await prisma.roomClaimStateEvent.findMany({ where: { entryId: { in: ids } }, select: { roomId: true } })).map((r) => r.roomId),
+  ]);
   console.log(`removing ${ids.length} test entries and their rows`);
   if (!COMMIT) return;
   await prisma.earlyDepartureRecord.deleteMany({ where: { entryId: { in: ids } } });
@@ -93,13 +103,19 @@ async function clean() {
   // A walk back through Set up and Reserve seeds the pre-arrival task set (2026-10-06).
   await prisma.preArrivalTask.deleteMany({ where: { entryId: { in: ids } } });
   await prisma.handoffRecord.deleteMany({ where: { entryId: { in: ids } } });
+  // A room move records a leg per booking, and every walk files the papers it held (2026-10-12).
+  // A move left with no legs is removed; one that still names another booking stays as its history.
+  await prisma.heldDocument.deleteMany({ where: { entryId: { in: ids } } });
+  const moveIds = [...new Set((await prisma.roomMoveLeg.findMany({ where: { entryId: { in: ids } }, select: { moveId: true } })).map((l) => l.moveId))];
+  await prisma.roomMoveLeg.deleteMany({ where: { entryId: { in: ids } } });
+  await prisma.roomMove.deleteMany({ where: { id: { in: moveIds }, legs: { none: {} } } });
   await prisma.entry.deleteMany({ where: { id: { in: ids } } });
   await prisma.inquiry.deleteMany({ where: { id: { startsWith: P } } });
   await prisma.guestProfile.deleteMany({ where: { id: { startsWith: P } } });
-  for (const r of occupied) {
-    await prisma.room.update({ where: { id: r.roomId }, data: { currentClaimState: "FREE" } });
-  }
-  console.log(`clean complete (${occupied.length} room(s) back to FREE)`);
+  // Each touched room's flag back to what the remaining bookings say (`room-flag-repair`).
+  const { today, plan } = await planRoomFlagRepairs(prisma, { roomIds: [...touched] });
+  await applyRoomFlagRepairs(prisma, plan, today);
+  console.log(`clean complete (${plan.map((p) => `${p.roomNumber} ${p.from}→${p.to}`).join(", ") || "no room flag to correct"})`);
 }
 
 async function main() {

@@ -14,6 +14,7 @@ import {
   type RoomChangeCandidate,
 } from "@/lib/api/entries";
 import { listRooms, setRoomBedType } from "@/lib/api/rooms";
+import { getChildPolicy } from "@/lib/api/child-policy";
 import { foldNightsToRangesLabel, mealPlanSummary, operativeRoomCompositions, roomNightsByRoom } from "@/lib/desk/party-rooms";
 import { money } from "@/lib/desk/workspace";
 import type { RoomCompositionInput } from "@/lib/api/quotations";
@@ -21,6 +22,7 @@ import type { EntryDetail } from "@/types/api";
 import { DeskConfirmModal } from "./confirm-modal";
 import { RoomCompositionPlanner } from "./room-compositions-board";
 import { NegotiationDiscountBar, type DiscountUnit } from "./room-compositions-table";
+import { Help } from "@/components/ds/help";
 
 /**
  * In-place room change (2026-08-12, operator ruling): every room row on S5/S6/S7 carries a
@@ -116,6 +118,7 @@ export function RoomChangeControl({
   fromRoomNumber,
   onChanged,
   compact,
+  onOpenChange,
 }: {
   entry: EntryDetail;
   fromRoomId: string;
@@ -124,10 +127,18 @@ export function RoomChangeControl({
   onChanged: () => void;
   /** Renders the trigger as a small inline link-button (for dense room rows). */
   compact?: boolean;
+  /** Told when the panel opens and closes, so the page can put its own table away meanwhile. */
+  onOpenChange?: (open: boolean) => void;
 }) {
   const { session } = useSession();
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
+  useEffect(() => {
+    onOpenChange?.(open);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => () => onOpenChange?.(false), []);
   const [reason, setReason] = useState("");
   /** night ISO date → roomId holding it (the from-room itself = keep that night). */
   const [nightSel, setNightSel] = useState<Record<string, string>>({});
@@ -191,10 +202,51 @@ export function RoomChangeControl({
     fromComp?.occupantCount ??
     (fromComp ? (fromComp.adultCount ?? 0) + (fromComp.cnb6To10Count ?? 0) + (fromComp.cnbUnder6Count ?? 0) : null);
   const fromCatalog = catalogById.get(fromRoomId) ?? null;
+  /**
+   * The guests who move are the ones in THIS room, not the whole booking — on a booking with
+   * other rooms the table would otherwise ask for everyone and cap no one (2026-10-19). Ages are
+   * taken from the booking's children in each band the room holds; a band with no age on file
+   * gets one from inside it.
+   */
+  const childPolicyQuery = useQuery({
+    queryKey: ["lookup", "child-policy"],
+    queryFn: () => getChildPolicy(session!),
+    enabled: !!session && open,
+    staleTime: 10 * 60_000,
+  });
+  const movingParty = useMemo(() => {
+    if (!fromComp) return { adults: entry.adultCount ?? entry.guestCount ?? null, childAges: entry.childAges ?? null };
+    const youngMax = childPolicyQuery.data?.ageBands.youngChildMaxAge ?? 5;
+    const childMax = childPolicyQuery.data?.ageBands.childMaxAge ?? 10;
+    const ages = [...(entry.childAges ?? [])];
+    const take = (n: number, inBand: (a: number) => boolean, fallback: number) => {
+      const out: number[] = [];
+      for (let i = 0; i < n; i++) {
+        const at = ages.findIndex(inBand);
+        out.push(at >= 0 ? ages.splice(at, 1)[0] : fallback);
+      }
+      return out;
+    };
+    const c6 = take(fromComp.cnb6To10Count ?? 0, (a) => a > youngMax && a <= childMax, childMax);
+    const u6 = take(fromComp.cnbUnder6Count ?? 0, (a) => a <= youngMax, 0);
+    return { adults: fromComp.adultCount ?? 0, childAges: [...c6, ...u6] };
+  }, [fromComp, entry.adultCount, entry.guestCount, entry.childAges, childPolicyQuery.data]);
 
   const nights = useMemo(() => candidatesQuery.data?.substitutionNights ?? [], [candidatesQuery.data]);
   const candidates = candidatesQuery.data?.candidates ?? [];
   const candidateById = useMemo(() => new Map(candidates.map((c) => [c.roomId, c])), [candidates]);
+  /**
+   * Nights another booking holds the CURRENT room (2026-10-19, operator: two bookings picked
+   * Room 206 for the same nights; the other reserved it first, and this row still read
+   * "Current" on every night). Those nights cannot be kept — the hold or the re-confirmation
+   * would refuse them — so the row says who holds them and does not offer them.
+   */
+  const fromStanding = candidatesQuery.data?.fromRoomStanding ?? null;
+  const fromTakenOn = (date: string) => {
+    const n = fromStanding?.perNight.find((p) => p.date === date);
+    return n && n.status !== "FREE" ? n : null;
+  };
+  const fromTakenNights = nights.filter((d) => !!fromTakenOn(d));
   const sameTypeCandidates = candidates.filter((c) => c.sameType);
   const otherTypeCandidates = candidates.filter((c) => !c.sameType);
 
@@ -219,6 +271,20 @@ export function RoomChangeControl({
     return seen;
   }, [nights, nightSel, fromRoomId]);
   const nothingChanges = allAssigned && selectedNewRooms.length === 0;
+  /**
+   * The nights each picked room takes, for the table's Dates column and its night-by-night
+   * check (2026-10-19, operator: "I can choose different rooms for different nights, but the
+   * table below doesn't have the dates column and doesn't allow me to allocate the person").
+   * On a split the rooms are used one after another, so the same guests sleep in each.
+   */
+  const pickedRoomDates = useMemo(() => {
+    const out: Record<string, { label: string; nights: number; dates: string[] }> = {};
+    for (const id of selectedNewRooms) {
+      const ds = nights.filter((d) => nightSel[d] === id);
+      out[id] = { label: foldNightsToRangesLabel(ds), nights: ds.length, dates: ds };
+    }
+    return out;
+  }, [selectedNewRooms, nights, nightSel]);
   const crossTypeLocked = selectedNewRooms.some((id) => !(candidateById.get(id)?.sameType ?? true)) && !canCrossType;
 
   // ── The negotiation table's scope ──────────────────────────────────────────────────────────
@@ -343,7 +409,7 @@ export function RoomChangeControl({
   const selectWholeRow = (roomId: string) => {
     const isFrom = roomId === fromRoomId;
     const c = candidateById.get(roomId);
-    const takable = nights.filter((d) => (isFrom ? true : c ? freeOnNight(c, d) : false));
+    const takable = nights.filter((d) => (isFrom ? !fromTakenOn(d) : c ? freeOnNight(c, d) : false));
     if (atS7 && !isFrom && takable.length < nights.length) return; // S7: one room, all nights
     setNightSel((prev) => {
       const holdsAll = takable.length > 0 && takable.every((d) => prev[d] === roomId);
@@ -690,17 +756,15 @@ export function RoomChangeControl({
               Move Room {fromRoomNumber}
               {atS7 ? " — from tonight onward" : ""}
               {nights.length > 0 ? ` · ${nights.length} night${nights.length === 1 ? "" : "s"} (${shortDate(nights[0])} – ${shortDate(nights[nights.length - 1])})` : ""}
+              <Help label="How a room change works">
+                Pick a room for each night, exactly like the S1 table — the same room for the whole stay (row “All”), or different rooms on
+                different nights{atS7 ? "" : ", or keep the current room for some nights"}. Guests, payments and paperwork carry unchanged; the
+                backend re-checks availability and re-prices as if the booking were set up fresh, and comes straight back to this step. Nothing
+                is sent to the guest unless you send it.
+                {atS7 ? " In-house the guest moves once — one room for all remaining nights; nights already slept stay billed on the current room." : ""}
+                {" "}A same-type swap needs no approval; any different-type room (upgrade or downgrade) needs the FOM.
+              </Help>
             </div>
-          )}
-          {!expanded && (
-            <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "0 0 8px", lineHeight: 1.5 }}>
-              Pick a room for each night, exactly like the S1 table — the same room for the whole stay (row&nbsp;“All”), or
-              different rooms on different nights{atS7 ? "" : ", or keep the current room for some nights"}. Guests, payments
-              and paperwork carry unchanged; the backend re-checks availability and re-prices as if the booking were set up
-              fresh, and comes straight back to this step. Nothing is sent to the guest unless you send it.
-              {atS7 ? " In-house the guest moves once — one room for all remaining nights; nights already slept stay billed on the current room." : ""}
-              {" "}A same-type swap needs no approval; any different-type room (upgrade or downgrade) needs FOM (L2+).
-            </p>
           )}
 
           {/* What the room is set up as today — the baseline the setup grid carries from. */}
@@ -722,6 +786,20 @@ export function RoomChangeControl({
           {candidatesQuery.isError && (
             <p style={{ fontSize: 12, color: "var(--stop)" }}>
               {candidatesQuery.error instanceof ApiError ? candidatesQuery.error.message : "Could not load the available rooms"}
+            </p>
+          )}
+
+          {fromTakenNights.length > 0 && (
+            <p className="rct-refusal" role="alert" style={{ margin: "0 0 8px" }}>
+              <span className="ic" aria-hidden>!</span>
+              <span>
+                Room {fromRoomNumber} is {nightWord(fromTakenOn(fromTakenNights[0])!.status)}
+                {fromStanding?.claimedBy?.guestName ? ` for ${fromStanding.claimedBy.guestName}` : " by another booking"}
+                {fromStanding?.claimedBy?.bookingRef ? ` (${fromStanding.claimedBy.bookingRef})` : ""} on{" "}
+                {fromTakenNights.length === nights.length
+                  ? "every night — this booking cannot keep it. Pick another room for each night."
+                  : `${fromTakenNights.map(shortDate).join(", ")} — this booking cannot keep it on those nights. Pick another room for them.`}
+              </span>
             </p>
           )}
 
@@ -776,33 +854,69 @@ export function RoomChangeControl({
                       <td style={stickyCol}>
                         {roomLabel(fromRoomNumber, candidatesQuery.data?.fromRoom.roomTypeName, fromCatalog?.bedType ?? null, false)}
                         <span style={{ marginLeft: 6, fontSize: 10, color: "var(--ink-3)" }}>current room</span>
-                        {!atS7 && allButton(fromRoomId, true, "Keep the current room for every night (then nothing changes)")}
+                        {fromTakenNights.length > 0 && (
+                          <span className="tag stop" style={{ marginLeft: 6, fontSize: 9.5 }}>
+                            {fromTakenNights.length === nights.length ? "taken by another booking" : `taken ${fromTakenNights.length} of ${nights.length} nights`}
+                          </span>
+                        )}
+                        {!atS7 &&
+                          allButton(
+                            fromRoomId,
+                            fromTakenNights.length < nights.length,
+                            fromTakenNights.length === nights.length
+                              ? `Room ${fromRoomNumber} is held by another booking on every night — it cannot be kept`
+                              : fromTakenNights.length > 0
+                                ? `Keep the current room on every night it is still free`
+                                : "Keep the current room for every night (then nothing changes)",
+                          )}
                       </td>
                       {nights.map((date) => {
                         const selected = nightSel[date] === fromRoomId;
+                        const taken = fromTakenOn(date);
+                        const keepable = !atS7 && !taken;
+                        const text = selected
+                          ? "✓ keep"
+                          : taken
+                            ? showNames && taken.claimedBy?.guestName
+                              ? holderShort(taken.claimedBy.guestName)
+                              : CELL_LABEL[taken.status]
+                            : "Current";
                         return (
-                          <td key={date} style={{ ...cellBase, background: selected ? "#7d9a63" : "rgba(76,138,92,0.06)" }}>
+                          <td
+                            key={date}
+                            style={{
+                              ...cellBase,
+                              background: selected ? "#7d9a63" : taken ? (CELL_TINT[taken.status] ?? "rgba(179,38,30,0.08)") : "rgba(76,138,92,0.06)",
+                            }}
+                          >
                             <button
                               type="button"
-                              disabled={atS7}
+                              disabled={!keepable}
                               onClick={() => toggleCell(fromRoomId, date)}
                               title={
-                                atS7
-                                  ? "In-house the guest moves once — keeping some nights isn't available mid-stay"
-                                  : `${shortDate(date)} — the guest's current room${selected ? " · kept (click to unpick)" : " · click to KEEP this night"}`
+                                taken
+                                  ? `${shortDate(date)} — the guest's current room, but ${nightWord(taken.status)}${
+                                      taken.claimedBy?.guestName ? ` for ${taken.claimedBy.guestName}` : " by another booking"
+                                    }${taken.claimedBy?.bookingRef ? ` (${taken.claimedBy.bookingRef})` : ""} — it cannot be kept on this night`
+                                  : atS7
+                                    ? "In-house the guest moves once — keeping some nights isn't available mid-stay"
+                                    : `${shortDate(date)} — the guest's current room${selected ? " · kept (click to unpick)" : " · click to KEEP this night"}`
                               }
                               style={{
                                 width: "100%",
                                 height: "100%",
                                 border: "none",
                                 background: "transparent",
-                                cursor: atS7 ? "default" : "pointer",
-                                color: selected ? "#fff" : "var(--ink-3)",
+                                cursor: keepable ? "pointer" : "default",
+                                color: selected ? "#fff" : taken ? (CELL_INK[taken.status] ?? "var(--stop)") : "var(--ink-3)",
                                 fontSize: 10,
-                                fontWeight: selected ? 700 : 400,
+                                fontWeight: selected || taken ? 700 : 400,
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                                whiteSpace: "nowrap",
                               }}
                             >
-                              {selected ? "✓ keep" : "Current"}
+                              {text}
                             </button>
                           </td>
                         );
@@ -850,7 +964,8 @@ export function RoomChangeControl({
           {selectedNewRooms.length > 0 && fromComp && (
             <div style={{ border: "1px dashed var(--line-2)", borderRadius: 8, padding: "8px 10px", marginBottom: 8, flex: "0 0 auto" }}>
               <div style={{ fontSize: 11.5, fontWeight: 600, marginBottom: 6 }}>
-                Set up the new room{selectedNewRooms.length === 1 ? "" : "s"} — carried from Room {fromRoomNumber}, change anything the guest wants
+                Set up the new room{selectedNewRooms.length === 1 ? "" : "s"}
+                <Help label="About the setup">Carried from Room {fromRoomNumber} — change anything the guest wants.</Help>
               </div>
               {lockCommercial && (
                 <p style={{ fontSize: 11, color: "var(--warn)", margin: "0 0 8px", lineHeight: 1.5 }}>
@@ -874,8 +989,9 @@ export function RoomChangeControl({
                 sealedRoomIds={selectedNewRooms}
                 entryCheckIn={entry.checkInDate ?? null}
                 entryCheckOut={entry.checkOutDate ?? null}
-                entryAdults={entry.adultCount ?? entry.guestCount ?? null}
-                entryChildAges={entry.childAges ?? null}
+                entryAdults={movingParty.adults}
+                entryChildAges={movingParty.childAges}
+                roomDates={pickedRoomDates}
                 entryId={entry.id}
                 lockCommercial={lockCommercial}
                 initialCompositions={seedComps}

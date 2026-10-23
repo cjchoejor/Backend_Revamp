@@ -248,6 +248,10 @@ export async function releaseRoomClaimIfOwnedTx(
     checkIn: today,
     checkOut: new Date(Date.UTC(today.getUTCFullYear() + 10, 0, 1)),
     excludeEntryId: input.entryId,
+    // Does another BOOKING still hold the room? A running room move is not a booking, and the
+    // passing-over its legs allow one another is for validating a booking's own claim — here it would
+    // read a partner's real reservation as nobody's (2026-10-12).
+    ignoreRoomMoves: true,
   });
   if (others.length > 0) return { transitioned: false, fromState, toState: InventoryClaimState.FREE };
   return release();

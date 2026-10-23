@@ -66,6 +66,13 @@ export type EntryCommunication = {
   createdBy: string;
   canAcknowledge: boolean;
   isOverdue: boolean;
+  /** The paper was replaced by a newer one — no reply is awaited for it (2026-10-13). */
+  superseded?: boolean;
+  /** The paper it carried is the one in force — what the "answer recorded" gates read. */
+  inForce?: boolean;
+  /** A voucher a walk made that the desk has not yet sent or not — it has not reached the guest. */
+  held?: boolean;
+  replacedBy?: string | null;
 };
 
 export async function listEntryCommunications(session: Session, entryId: string) {
@@ -833,8 +840,9 @@ export type EntryRateReference = {
   roomTypes: RoomTypeRateReference[];
 };
 
-export async function getRateReference(session: Session, entryId: string) {
-  return apiRequest<EntryRateReference>(`/api/entries/${entryId}/rate-reference`, { session });
+export async function getRateReference(session: Session, entryId: string, roomIds?: string[]) {
+  const q = roomIds?.length ? `?rooms=${encodeURIComponent(roomIds.join(","))}` : "";
+  return apiRequest<EntryRateReference>(`/api/entries/${entryId}/rate-reference${q}`, { session });
 }
 
 /**
@@ -910,11 +918,15 @@ export type RoomChangeCandidates = {
   originStage: string;
   fromRoom: { roomId: string; roomNumber: string; roomTypeId: string; roomTypeName: string | null };
   substitutionNights: string[];
+  /** The current room's own standing over those nights, this booking left out — a night another booking holds cannot be kept. */
+  fromRoomStanding?: RoomChangeCandidate | null;
   candidates: RoomChangeCandidate[];
 };
 
 export type RoomChangeOutcome = {
   entryId: string;
+  /** Papers the walk made and held for the desk to send or not (2026-10-12). */
+  heldDocuments?: Array<{ id: string; kind: "CONFIRMATION_VOUCHER" | "PROFORMA"; documentId: string }>;
   originStage: string;
   newSegmentNumber: number;
   fromRoom: { roomId: string; roomNumber: string; roomTypeName: string | null };
@@ -1172,6 +1184,16 @@ export type NegotiationAmendmentOutcome = {
   amendmentId: string | null;
   partyChanged: boolean;
   roomsChanged: boolean;
+  /** The stay's dates moved (2026-10-12) — `priorDates` / `newDates` are "YYYY-MM-DD". */
+  datesChanged: boolean;
+  priorDates: { checkInDate: string | null; checkOutDate: string | null };
+  newDates: { checkInDate: string | null; checkOutDate: string | null };
+  /** The booking's own hold time the new dates made impossible, cleared back to the house window. */
+  holdTimeCleared: string | null;
+  /** Requests dated inside the old stay and outside the new one — named, not withdrawn. */
+  requestsOutsideStay: Array<{ id: string; kind: string; what: string; forDate: string }>;
+  /** The guest's other live booking over the new nights, as the desk names it. */
+  guestOverlap: string | null;
   priorRoomIds: string[];
   newRoomIds: string[];
   quotationsInvalidated: Array<{ id: string; referenceNumber: string; priorState: string }>;
@@ -1212,6 +1234,8 @@ export async function amendNegotiationConfiguration(
   session: Session,
   entryId: string,
   body: {
+    /** New dates need `rooms` picked from a search for exactly these dates. */
+    dates?: { checkInDate: string; checkOutDate: string };
     party?: {
       adultCount?: number;
       childCount?: number;

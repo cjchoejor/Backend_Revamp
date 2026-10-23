@@ -10,8 +10,9 @@ import { computeReEntryConsequences } from "../engines/re-entry-consequence-engi
 import { enforceS3ReEntryAuthority } from "../policies/01-availability/p01-reentry-authority.js";
 import { enforceEntryAtS3ForS3DomainOperations } from "../policies/01-availability/p01-entry-at-s3-for-s3-domain-operations.js";
 import { enforceEntryActiveForStageTransition } from "../policies/01-availability/p01-entry-progression-stage-gates.js";
+import { retireSupersededReplyWaitsBestEffort } from "../lib/reply-waits.js";
 
-export async function initiateS3ToS2Backflow(prisma: PrismaClient, entryId: string, actor: { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" }, input?: { reason?: string }) {
+async function initiateS3ToS2BackflowInner(prisma: PrismaClient, entryId: string, actor: { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" }, input?: { reason?: string }) {
   enforceS3ReEntryAuthority({ actorLevel: actor.actorLevel });
   const existingEntry = await prisma.entry.findUnique({ where: { id: entryId }, include: { segments: { orderBy: { segmentNumber: "desc" }, take: 1 }, committedHold: true } as any });
   if (!existingEntry) throw new NotFoundError("Entry");
@@ -110,7 +111,7 @@ export async function initiateS3ToS2Backflow(prisma: PrismaClient, entryId: stri
   };
 }
 
-export async function initiateS3ToS1Backflow(prisma: PrismaClient, entryId: string, actor: { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" }, input?: { reason?: string }) {
+async function initiateS3ToS1BackflowInner(prisma: PrismaClient, entryId: string, actor: { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" }, input?: { reason?: string }) {
   enforceS3ReEntryAuthority({ actorLevel: actor.actorLevel });
   const entry = await prisma.entry.findUnique({ where: { id: entryId }, include: { segments: { orderBy: { segmentNumber: "desc" }, take: 1 } } as any });
   if (!entry) throw new NotFoundError("Entry");
@@ -149,4 +150,26 @@ export async function initiateS3ToS1Backflow(prisma: PrismaClient, entryId: stri
     });
     return tx.entry.findUniqueOrThrow({ where: { id: entryId } });
   });
+}
+
+/**
+ * initiateS3ToS1Backflow, then stop waiting for replies to the papers it replaced — a guest's reply is awaited only
+ * for the paper in force (2026-10-13; lib/reply-waits.ts).
+ */
+export async function initiateS3ToS1Backflow(...args: Parameters<typeof initiateS3ToS1BackflowInner>): ReturnType<typeof initiateS3ToS1BackflowInner> {
+  const out = await initiateS3ToS1BackflowInner(...args);
+  const entryId = args[1];
+  if (entryId) await retireSupersededReplyWaitsBestEffort(args[0], entryId, args[2].actorId);
+  return out;
+}
+
+/**
+ * initiateS3ToS2Backflow, then stop waiting for replies to the papers it replaced — a guest's reply is awaited only
+ * for the paper in force (2026-10-13; lib/reply-waits.ts).
+ */
+export async function initiateS3ToS2Backflow(...args: Parameters<typeof initiateS3ToS2BackflowInner>): ReturnType<typeof initiateS3ToS2BackflowInner> {
+  const out = await initiateS3ToS2BackflowInner(...args);
+  const entryId = args[1];
+  if (entryId) await retireSupersededReplyWaitsBestEffort(args[0], entryId, args[2].actorId);
+  return out;
 }

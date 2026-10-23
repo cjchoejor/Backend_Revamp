@@ -97,3 +97,47 @@ export function readOptionSelected(opt: unknown): OptionSelectedNormalised {
 export function firstRoomId(normalised: OptionSelectedNormalised): string | undefined {
   return normalised.distinctRoomIds[0];
 }
+
+export type SealNight = { date: string; roomIds: Array<{ roomId: string; isDeficient: boolean }> };
+
+/**
+ * The seal spelled out night by night, in the holds' snapshot shape (2026-10-12).
+ *
+ * A per-night seal is copied as it is. A whole-stay or single-room seal — the same rooms every
+ * night — is spelled out over the stay's nights. Without that, a hold placed on such a seal kept
+ * no snapshot, and a hold with no snapshot counts only its anchor room (`committedHoldSpans`), so
+ * the seal's other rooms stayed sellable to anyone while the screen said they were marked. Null
+ * when there is no seal, or no stay to spell a whole-stay seal over.
+ */
+export function sealAsPerNight(opt: unknown, stay: { checkIn: Date | null | undefined; checkOut: Date | null | undefined }): SealNight[] | null {
+  if (!opt || typeof opt !== "object" || Array.isArray(opt)) return null;
+  const o = opt as Record<string, unknown>;
+  const asRoom = (r: unknown) => {
+    const x = r as { roomId?: unknown; isDeficient?: unknown } | null;
+    return typeof x?.roomId === "string" ? { roomId: x.roomId, isDeficient: x.isDeficient === true } : null;
+  };
+  if (Array.isArray(o.perNight)) {
+    const out: SealNight[] = [];
+    for (const n of o.perNight as Array<{ date?: unknown; roomIds?: unknown }>) {
+      if (typeof n?.date !== "string" || !Array.isArray(n.roomIds)) continue;
+      out.push({ date: n.date.slice(0, 10), roomIds: (n.roomIds as unknown[]).map(asRoom).filter((r): r is { roomId: string; isDeficient: boolean } => !!r) });
+    }
+    return out.length ? out : null;
+  }
+  const rooms = Array.isArray(o.roomIds)
+    ? (o.roomIds as unknown[]).map(asRoom).filter((r): r is { roomId: string; isDeficient: boolean } => !!r)
+    : typeof o.roomId === "string"
+      ? [{ roomId: o.roomId, isDeficient: o.isDeficient === true }]
+      : [];
+  if (rooms.length === 0 || !stay.checkIn || !stay.checkOut) return null;
+  const out: SealNight[] = [];
+  const end = Date.UTC(stay.checkOut.getUTCFullYear(), stay.checkOut.getUTCMonth(), stay.checkOut.getUTCDate());
+  for (
+    let t = Date.UTC(stay.checkIn.getUTCFullYear(), stay.checkIn.getUTCMonth(), stay.checkIn.getUTCDate()), i = 0;
+    t < end && i < 366;
+    t += 86_400_000, i++
+  ) {
+    out.push({ date: new Date(t).toISOString().slice(0, 10), roomIds: rooms.map((r) => ({ ...r })) });
+  }
+  return out.length ? out : null;
+}

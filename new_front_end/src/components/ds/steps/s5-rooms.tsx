@@ -44,6 +44,7 @@ import { ExtraBedEditor, InitialSelectionCell } from "@/components/desk/workspac
 import { Choice, DsDialog, Fact, Facts, Live, StepCard, toastRefusal, useRefreshEntry, useStepMode } from "./kit";
 import { enumerateNights } from "./use-room-selection";
 import { RoomsTable } from "./rooms-table";
+import { Help } from "@/components/ds/help";
 
 export const ROOMS_CARD_ID = "arrival-rooms";
 
@@ -266,6 +267,22 @@ export function AssignRoomsCard({ entry }: { entry: EntryDetail }) {
   const assigned = assignedIds.length > 0;
   const canWork = !past && entry.currentStage === "S5" && entry.status === "ACTIVE";
   const seatingProblem = !!comps && !issues.ok;
+  // Housekeeping's word on the assigned rooms (moved here from the "Ready the room" overview,
+  // 2026-10-23) — read from the room board, not ticked here.
+  const notReady = Array.from(new Map(assignments.map((a) => [a.roomId, a])).values()).filter((a) => !roomReady(a));
+  const readiness = !assigned ? null : notReady.length ? (
+    <span className="warn-ink">
+      {notReady
+        .map((a) => {
+          const r = byId.get(a.roomId);
+          return `Room ${numberOf(a.roomId)}${r ? ` · ${ROOM_STATUS[deriveRoomStatus(r)].label.toLowerCase()}` : " · not ready"}`;
+        })
+        .join(" · ")}{" "}
+      — housekeeping&rsquo;s to clear
+    </span>
+  ) : (
+    <span className="ok-ink">clean and ready</span>
+  );
 
   return (
     <StepCard
@@ -287,6 +304,7 @@ export function AssignRoomsCard({ entry }: { entry: EntryDetail }) {
         </>
       }
       meta="Who sleeps where, on what plan, with what beds — the table the price was negotiated on. Click a room to change it; every night is checked again and the price follows."
+      status={readiness}
     >
       {/* The rooms ARE the S2 table now (2026-10-06, operator: "instead of these cards ... I
           would love the table to be shown here"). The party card, the room bins and the
@@ -325,7 +343,7 @@ export function AssignRoomsCard({ entry }: { entry: EntryDetail }) {
                 <Button state={assignAll.isPending ? "working" : canWork ? "default" : "inert"} workingLabel="Assigning…" onClick={() => assignAll.mutate()}>
                   Assign all {planRoomCount} rooms
                 </Button>
-                <span className="meta">the rooms chosen at Inquiry, each for its own nights · a room above can be changed first</span>
+                <Help label="About assigning">The rooms chosen at Inquiry, each for its own nights. A room above can be changed first.</Help>
               </div>
             ) : (
               <div style={{ marginTop: 12 }}>
@@ -364,7 +382,10 @@ export function AssignRoomsCard({ entry }: { entry: EntryDetail }) {
                     </div>
                   ) : null}
                   <div className="field">
-                    <label>Room</label>
+                    <label>
+                      Room
+                      <Help label="About the room">The room is checked for these dates when you assign it.</Help>
+                    </label>
                     <select className="input" value={roomId} onChange={(e) => setRoomId(e.target.value)}>
                       <option value="">Choose a room…</option>
                       {visibleOptions.map((r) => (
@@ -374,7 +395,6 @@ export function AssignRoomsCard({ entry }: { entry: EntryDetail }) {
                         </option>
                       ))}
                     </select>
-                    <span className="hint">the room is checked for these dates when you assign it</span>
                   </div>
                   <div className="wide field">
                     <label>Note · optional</label>

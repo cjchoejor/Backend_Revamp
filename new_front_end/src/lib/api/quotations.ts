@@ -51,6 +51,8 @@ export type RoomNightMealOverrideInput = {
   othersBreakfastPax?: number;
   othersLunchPax?: number;
   othersDinnerPax?: number;
+  /** Extra beds on this night when it differs from the room's own count (2026-08-19). */
+  extraBedCount?: number;
 };
 
 /** One room's line in the live pricing preview — every figure priced by the backend. */
@@ -131,6 +133,10 @@ export async function previewQuotationPricing(
     roomCompositions: RoomCompositionInput[];
     /** Percent or flat amount off the grand total — at most one. */
     discount?: { percent?: number | null; amount?: number | null } | null;
+    /** The nights each room is priced for, when the table knows better than the booking (a room change). */
+    roomNights?: Record<string, number>;
+    /** And which nights those are (YYYY-MM-DD), so per-night meals and beds price on them. */
+    roomNightDates?: Record<string, string[]>;
   },
 ) {
   return apiRequest<QuotationLivePreview>(`/api/entries/${entryId}/quotation-preview`, {

@@ -1,14 +1,20 @@
 "use client";
 
 /**
- * Rooms (Surface Spec 00 §2) — for knowing, not choosing. Every room's commercial standing and its
- * physical state, kept apart (FIG 1.14), and every hall. A tile opens the fault record: the desk
- * reports, the FOM verifies, and a room or hall with a fault leaves the pool the moment it is
- * reported.
+ * Rooms (Surface Spec 00 §2) — for knowing, not choosing. Two sections (2026-10-12, operator):
+ *
+ * - **Room cards** (named "Tonight" until 2026-10-22) — what the page always showed: every room's commercial standing and its physical
+ *   state, kept apart (FIG 1.14), and every hall. A tile opens the fault record: the desk reports,
+ *   the FOM verifies, and a room or hall with a fault leaves the pool the moment it is reported.
+ * - **Chart** — the house night by night, as on the boss's journey mockup: rooms down the side,
+ *   nights across, "Free that night" and "House booked 8/27" on top, and every booking as a bar
+ *   styled by how firmly it holds the room (`components/ds/rooms/room-chart.tsx`).
  */
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
-import { Button, Dialog, EmptyState, RoomTile, type RoomPhysical, type RoomStanding } from "@/design-system";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useMemo, useState } from "react";
+import { Button, Dialog, EmptyState, RoomTile, Tabs, type RoomPhysical, type RoomStanding } from "@/design-system";
+import { RoomChartView } from "@/components/ds/rooms/room-chart";
 import { LoadFailed, LoadingBlock } from "@/components/ds/ui";
 import { DeficiencyPanel } from "@/components/deficiency/deficiency-panel";
 import { useDeskBookings, useRoomsList } from "@/hooks/use-desk-data";
@@ -50,7 +56,19 @@ const BED_WORD: Record<string, string> = { KING: "King", TWIN: "Twin", QUEEN: "Q
 
 type Target = { kind: "room"; id: string; label: string } | { kind: "space"; id: string; label: string };
 
+type RoomsView = "tonight" | "chart";
+const VIEW_KEY = "desk:rooms-view";
+
+// The view lives in the address, so the page reads search params — Next wants that under Suspense.
 export default function RoomsPage() {
+  return (
+    <Suspense fallback={null}>
+      <RoomsPageBody />
+    </Suspense>
+  );
+}
+
+function RoomsPageBody() {
   const { session, isLoading } = useSession();
   const queryClient = useQueryClient();
   const rooms = useRoomsList();
@@ -61,6 +79,34 @@ export default function RoomsPage() {
     enabled: !!session && !isLoading,
   });
   const [target, setTarget] = useState<Target | null>(null);
+
+  // Which section — in the address (`?view=chart`), and remembered for this desk.
+  const params = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  const [remembered, setRemembered] = useState<RoomsView | null>(null);
+  useEffect(() => {
+    try {
+      const v = localStorage.getItem(VIEW_KEY);
+      if (v === "chart" || v === "tonight") setRemembered(v);
+    } catch {
+      /* private mode — the address decides */
+    }
+  }, []);
+  const asked = params.get("view");
+  const view: RoomsView = asked === "chart" || asked === "tonight" ? asked : (remembered ?? "tonight");
+  const pickView = (v: string) => {
+    const next = v === "chart" ? "chart" : "tonight";
+    try {
+      localStorage.setItem(VIEW_KEY, next);
+    } catch {
+      /* non-fatal */
+    }
+    setRemembered(next);
+    const p = new URLSearchParams(params.toString());
+    p.set("view", next);
+    router.replace(`${pathname}?${p.toString()}`, { scroll: false });
+  };
 
   useEffect(() => {
     if (!target) return;
@@ -115,16 +161,27 @@ export default function RoomsPage() {
 
   return (
     <div className="page">
-      <div className="page-head">
+      {/* The two sections sit beside the title, so the chart has the height below (2026-10-22). */}
+      <div className="page-head lead-tabs">
         <div>
           <h2>Rooms</h2>
           <div className="meta">
             Tonight · {occupied} of {items.length} occupied · for knowing, not choosing
           </div>
         </div>
+        <Tabs
+          items={[
+            { id: "tonight", label: "Room cards" },
+            { id: "chart", label: "Chart" },
+          ]}
+          selected={view}
+          onSelect={pickView}
+        />
       </div>
 
-      {rooms.error && !rooms.data ? (
+      {view === "chart" ? (
+        <RoomChartView onOpenRoom={(r) => setTarget({ kind: "room", id: r.id, label: `Room ${r.roomNumber}` })} />
+      ) : rooms.error && !rooms.data ? (
         <LoadFailed what="the rooms" onRetry={() => void rooms.refetch()} />
       ) : rooms.isLoading ? (
         <LoadingBlock />
@@ -220,6 +277,7 @@ export default function RoomsPage() {
               targetLabel={target.label}
               onChanged={() => {
                 void queryClient.invalidateQueries({ queryKey: target.kind === "room" ? ["rooms"] : ["spaces"] });
+                void queryClient.invalidateQueries({ queryKey: ["room-chart"] });
               }}
             />
           </Dialog>

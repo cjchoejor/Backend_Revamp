@@ -28,6 +28,7 @@ import { Button, Chip } from "@/design-system/components/primitives";
 import { changeBookingRoom } from "@/lib/api/entries";
 import type { RoomCompositionInput } from "@/lib/api/quotations";
 import { RoomCompositionPlanner } from "@/components/desk/workspace/room-compositions-board";
+import { nightOverridesCanon } from "@/components/desk/workspace/room-compositions-table";
 import { RoomChangeControl } from "@/components/desk/workspace/room-change-control";
 import { operativeRoomCompositions, roomNightsByRoom, roomStayRangesByRoom, roomsInUseFor } from "@/lib/desk/party-rooms";
 import { optionSelectedRoomIds, type EntryDetail } from "@/types/api";
@@ -36,6 +37,7 @@ import { useSession } from "@/hooks/use-session";
 import { useHotelDay } from "@/hooks/use-hotel-day";
 import { listRooms } from "@/lib/api/rooms";
 import { DsDialog, StepCard, Tool, toastRefusal, useBedPlan, useRefreshEntry, useStepMode } from "./kit";
+import { Help } from "@/components/ds/help";
 
 /**
  * The room registry. Deliberately NOT imported from s5-rooms: Arrival imports this module, so
@@ -116,6 +118,14 @@ export function RoomsTable({
    */
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<RoomCompositionInput[] | null>(null);
+  /**
+   * A room change is open above (2026-10-19, operator: "when we do change configuration I don't
+   * get why there are two tables showing"). The change panel carries its own table — the rooms
+   * being moved into, which is what the move saves — so this one, the booking as it stands, is
+   * put away until the change is made or cancelled. Two tables of one booking read as two
+   * answers, and only one of them is being worked.
+   */
+  const [roomChangeOpen, setRoomChangeOpen] = useState(false);
   const [faults, setFaults] = useState<string[]>([]);
   const [reasonOpen, setReasonOpen] = useState(false);
   const [reason, setReason] = useState("");
@@ -136,7 +146,11 @@ export function RoomsTable({
         [
           c.roomId, n(c.adultCount ?? 0), n(c.cnb6To10Count ?? 0), n(c.cnbUnder6Count ?? 0), n(c.extraBedCount ?? 0),
           n(c.mealPlanCpCount ?? 0), n(c.mealPlanMaplCount ?? 0), n(c.mealPlanMapdCount ?? 0), n(c.mealPlanApCount ?? 0),
+          n(c.mealPlanOthersCount ?? 0), n(c.othersBreakfastPax), n(c.othersLunchPax), n(c.othersDinnerPax),
           n(c.negotiatedRoomRate), n(c.negotiatedExtraBedRate),
+          n(c.negotiatedBreakfastRate), n(c.negotiatedLunchRate), n(c.negotiatedDinnerRate),
+          // A meal or an extra bed changed on one night is a change too (2026-10-22).
+          nightOverridesCanon(c.nightMealOverrides),
           c.serviceChargeApplies === false ? "0" : "1", c.gstApplies === false ? "0" : "1", c.isFoc === true ? "1" : "0",
         ].join("~"),
       )
@@ -196,9 +210,19 @@ export function RoomsTable({
 
   if (ids.length === 0) return <span className="meta">No rooms on the plan yet — they are chosen at Inquiry.</span>;
 
+  // What the table is and how it is used — one "?" in the acts line, not three grey lines.
+  const about = (
+    <>
+      {lead ? <>{lead} </> : null}
+      Click a room in the table to see what can be done with it.{" "}
+      {inHouse
+        ? "In-house the rates and waivers are read-only — a mid-stay rate revision is the GM's call, and nights already posted are corrected on the folio."
+        : "This is what the booking is priced on today. A change here runs the full journey behind the scenes and is recorded against the booking."}
+    </>
+  );
+
   return (
     <>
-      {lead ? <p className="sm" style={{ marginTop: 0 }}>{lead}</p> : null}
 
       {/* The chosen room's own acts, above the table they belong to. */}
       {!past ? (
@@ -215,13 +239,15 @@ export function RoomsTable({
                   Done with this room
                 </Button>
               </>
-            ) : (
-              <span className="meta">Click a room in the table to see what can be done with it.</span>
-            )}
+            ) : null}
             <span style={{ marginLeft: "auto", display: "flex", gap: "var(--s2)", alignItems: "center" }}>
+              <Help label="About this table">{about}</Help>
               {editing ? (
                 <>
-                  <span className="meta">Editing — meals, beds and guests. Save prices it again.</span>
+                  <span className="sm" style={{ fontWeight: 600 }}>
+                    Editing
+                    <Help label="About editing">Meals, beds and guests. Save prices it again.</Help>
+                  </span>
                   <Button
                     kind="quiet"
                     compact
@@ -234,7 +260,13 @@ export function RoomsTable({
                   </Button>
                 </>
               ) : (
-                <Button kind="quiet" compact onClick={() => setEditing(true)}>
+                <Button
+                  kind="quiet"
+                  compact
+                  state={roomChangeOpen ? "inert" : "default"}
+                  reason={roomChangeOpen ? "finish or cancel the room change first" : undefined}
+                  onClick={() => !roomChangeOpen && setEditing(true)}
+                >
                   Change configuration…
                 </Button>
               )}
@@ -247,7 +279,23 @@ export function RoomsTable({
               (2026-10-06, operator: "after selecting a room from change rooms, the UI breaks"). */}
           {chosen ? (
             <Tool>
-              <RoomChangeControl entry={entry} fromRoomId={chosen} fromRoomNumber={numberOf(chosen)} onChanged={changed} compact />
+              <RoomChangeControl
+                entry={entry}
+                fromRoomId={chosen}
+                fromRoomNumber={numberOf(chosen)}
+                onChanged={changed}
+                compact
+                onOpenChange={(isOpen) => {
+                  setRoomChangeOpen(isOpen);
+                  // A room change and an edit of this table are two different acts, and the
+                  // move does not carry the edit — so opening one leaves the other.
+                  if (isOpen && editing) {
+                    if (unsaved) toast.info("The table's unsaved changes were left — the room change starts from the booking as it stands.");
+                    setEditing(false);
+                    setDraft(null);
+                  }
+                }}
+              />
             </Tool>
           ) : null}
         </div>
@@ -256,6 +304,12 @@ export function RoomsTable({
       {/* The planner is one of the old tools: every rule that lays its grid out is scoped under
           `.desk-root` in desk-theme.css, and `legacy-bridge.css` re-colours it there. Rendered
           bare it had no styling at all (2026-10-06, operator: "this looks very broken in s7"). */}
+      {roomChangeOpen ? (
+        <p className="sm" style={{ margin: "var(--s2) 0 0" }}>
+          The booking&apos;s own table is put away while Room {chosen ? numberOf(chosen) : ""} is being changed.
+          <Help label="About the table">It comes back when you move the room or press Cancel change.</Help>
+        </p>
+      ) : (
       <Tool inert={past}>
       <RoomCompositionPlanner
         key={plannerKey}
@@ -272,6 +326,7 @@ export function RoomsTable({
         roomDates={roomDates}
         initialCompositions={seed}
         lockCommercial={inHouse}
+        readOnly={!editing}
         onPickRoom={past ? undefined : (id) => setPicked((cur) => (cur === id ? null : id))}
         pickedRoomId={chosen}
         onChange={editing ? setDraft : () => { /* read-first until "Change configuration" is pressed */ }}
@@ -282,6 +337,7 @@ export function RoomsTable({
         unsaved={unsaved}
       />
       </Tool>
+      )}
 
       <DsDialog
         open={reasonOpen}
@@ -318,11 +374,6 @@ export function RoomsTable({
         </div>
       </DsDialog>
 
-      <div className="meta" style={{ marginTop: 8 }}>
-        {inHouse
-          ? "In-house the rates and waivers are read-only — a mid-stay rate revision is the GM's call, and nights already posted are corrected on the folio."
-          : "What the booking is priced on today. A change here runs the full journey behind the scenes and is recorded against the booking."}
-      </div>
     </>
   );
 }

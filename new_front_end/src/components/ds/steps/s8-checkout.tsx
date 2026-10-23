@@ -31,6 +31,7 @@ import {
   recordRoomInspection,
 } from "@/lib/api/checkout";
 import { getNightAuditRecord, openDispute, postCreditNote } from "@/lib/api/in-stay";
+import { listGuestRequests } from "@/lib/api/booking-notes";
 import { recordCreditExtension } from "@/lib/api/reservation-setup";
 import { openFolioDocumentPdf, openInvoicePdf } from "@/lib/api/documents";
 import { deriveFinancials, effectiveCheckOutIso } from "@/lib/desk/workspace";
@@ -54,11 +55,8 @@ import {
   Fact,
   Facts,
   Live,
-  OtherWays,
   PaperDrawer,
-  PapersCard,
   ReasonDialog,
-  RequestsCard,
   SeeRow,
   StepCanvas,
   StepCard,
@@ -68,6 +66,10 @@ import {
   useRefreshEntry,
   words,
   type PaperRef,
+  OtherWaysTabs,
+  InlineWay,
+  ShutWay,
+  useOpenOtherWay,
 } from "./kit";
 import {
   BILLING_MODEL_WORD,
@@ -96,6 +98,7 @@ import {
   useSettlementShares,
   type SettleMethod,
 } from "./s8-shares";
+import { Help } from "@/components/ds/help";
 
 /* ------------------------------------------------------------------ vocabulary */
 
@@ -132,79 +135,71 @@ export function S8CheckOut({ entry, past, goToStep }: { entry: EntryDetail; past
   const settled = isSettled(folio?.state);
   // The Stay step defaults its "for" to the folio tab opened; Check-out does the same.
   const [chargeTarget, setChargeTarget] = useState("");
-  const [back, setBack] = useState<null | "stay" | "negotiation">(null);
-  const [raising, setRaising] = useState(false);
+  // Going back and raising a dispute happen in Other ways' own tabs (2026-10-17).
+  const openWay = useOpenOtherWay();
 
   const backMutation = useMutation({
     mutationFn: (v: { to: "stay" | "negotiation"; reason: string }) =>
       v.to === "stay" ? reEnterS8ToS7(session!, entry.id, entry.version, v.reason) : reEnterS8ToS2(session!, entry.id, entry.version, v.reason),
     onSuccess: (_d, v) => {
       toast.success(v.to === "stay" ? "Back at Stay — post the charge there" : "Re-opened to Negotiation — a new pass is open");
-      setBack(null);
       refresh();
       goToStep(v.to === "stay" ? 7 : 2);
     },
     onError: (e) => toastRefusal(e, "The booking could not be taken back"),
   });
 
+  const backForm = (to: "stay" | "negotiation") => (
+    <InlineWay
+      render={() => (
+        <ReasonDialog
+          open
+          onClose={() => undefined}
+          title={to === "negotiation" ? "Re-open to Negotiation" : "Back to Stay"}
+          caseLines={[folio ? `the bill is ${FOLIO_STATE_WORD[folio.state] ?? words(folio.state)}` : "no bill"]}
+          lead={
+            to === "negotiation"
+              ? "This closes the current pass and opens a new one at Negotiation for a full re-price. The live bill carries over. The history shows the new pass as such."
+              : "The booking goes back to Stay so a missed charge can be posted there. The bill stays live; bring the booking back to Check-out when it is done."
+          }
+          reasonLabel="Why · recorded on the booking"
+          placeholder={to === "negotiation" ? "the guest disputes the rate charged" : "minibar found after the bill was reviewed"}
+          confirmLabel={to === "negotiation" ? "Re-open to Negotiation" : "Back to Stay"}
+          busy={backMutation.isPending}
+          onConfirm={(reason) => backMutation.mutate({ to, reason })}
+        />
+      )}
+    />
+  );
+
   return (
     <StepCanvas past={past}>
       <DisputesCard entry={entry} tz={clock.tz} />
-      <FolioComplete entry={entry} live={live} tz={clock.tz} onBackToStay={() => setBack("stay")} goToStep={goToStep} />
+      <FolioComplete entry={entry} live={live} tz={clock.tz} onBackToStay={() => openWay("stay")} goToStep={goToStep} />
       <MasterBill entry={entry} tz={clock.tz} onTab={setChargeTarget} />
       {live && folio?.state === "LIVE" ? <AddOrCorrectCharge entry={entry} target={chargeTarget} setTarget={setChargeTarget} /> : null}
       <HowSettled entry={entry} live={live} tz={clock.tz} />
       <OverpaidCard entry={entry} live={live} />
       <Invoices entry={entry} live={live} tz={clock.tz} />
       <Departure entry={entry} live={live} />
-      <RequestsCard />
-      <OtherWays>
-        {live && !settled ? (
-          <SeeRow
-            key="stay"
-            label="Back to Stay…"
-            note="re-opens the stay to post what was missed; the bill stays live; the FOM's, with a reason"
-            onClick={fom ? () => setBack("stay") : undefined}
-            reason={fom ? undefined : "Going back to Stay needs the FOM"}
-          />
-        ) : null}
-        {live && !settled ? (
-          <SeeRow
-            key="negotiation"
-            label="Re-open to Negotiation…"
-            note="the guest disputes the rate — a new pass from Negotiation; the live bill carries over; the FOM's"
-            onClick={fom ? () => setBack("negotiation") : undefined}
-            reason={fom ? undefined : "Re-opening the rate needs the FOM"}
-          />
-        ) : null}
-        {live && folio ? (
-          <SeeRow
-            key="dispute"
-            label="Raise a dispute…"
-            note="records what the guest queried; an open dispute keeps the booking at Check-out, with no override"
-            onClick={() => setRaising(true)}
-          />
-        ) : null}
-      </OtherWays>
-      <PapersCard entry={entry} />
-
-      <ReasonDialog
-        open={!!back}
-        onClose={() => setBack(null)}
-        title={back === "negotiation" ? "Re-open to Negotiation" : "Back to Stay"}
-        caseLines={[entry.id, folio ? `the bill is ${FOLIO_STATE_WORD[folio.state] ?? words(folio.state)}` : "no bill"]}
-        lead={
-          back === "negotiation"
-            ? "This closes the current pass and opens a new one at Negotiation for a full re-price. The live bill carries over. The history shows the new pass as such."
-            : "The booking goes back to Stay so a missed charge can be posted there. The bill stays live; bring the booking back to Check-out when it is done."
-        }
-        reasonLabel="Why · recorded on the booking"
-        placeholder={back === "negotiation" ? "the guest disputes the rate charged" : "minibar found after the bill was reviewed"}
-        confirmLabel={back === "negotiation" ? "Re-open to Negotiation" : "Back to Stay"}
-        busy={backMutation.isPending}
-        onConfirm={(reason) => back && backMutation.mutate({ to: back, reason })}
+      {/* Other ways as sub-tabs (2026-10-17), each panel the form its button used to open. */}
+      <OtherWaysTabs
+        tabs={[
+          live && !settled
+            ? { key: "stay", label: "Back to Stay", content: fom ? backForm("stay") : <ShutWay act="Back to Stay" why="Going back to Stay needs the FOM." /> }
+            : null,
+          live && !settled
+            ? {
+                key: "negotiation",
+                label: "Re-open to Negotiation",
+                content: fom ? backForm("negotiation") : <ShutWay act="Re-open to Negotiation" why="Re-opening the rate needs the FOM." />,
+              }
+            : null,
+          live && folio
+            ? { key: "dispute", label: "Raise a dispute", content: <InlineWay render={(done) => <RaiseDispute entry={entry} open onClose={done} />} /> }
+            : null,
+        ]}
       />
-      <RaiseDispute entry={entry} open={raising} onClose={() => setRaising(false)} />
     </StepCanvas>
   );
 }
@@ -235,6 +230,13 @@ function FolioComplete({
     enabled: !!session && !!lastNight,
   });
   const audited = audit.data?.runStatus === "COMPLETE";
+  // The guest's requests (BE-64, 2026-10-12) — one still to arrange is worth a look before they go.
+  const requests = useQuery({
+    queryKey: ["guest-requests", entry.id],
+    queryFn: () => listGuestRequests(session!, entry.id),
+    enabled: !!session,
+  });
+  const openRequests = requests.data?.counts.open ?? 0;
   const lines = entry.folio?.lines ?? [];
   const open = (entry.disputes ?? []).filter(isOpenDispute);
   // The entry payload lists handoffs newest first — the departure handoff is the newest H4.
@@ -274,8 +276,16 @@ function FolioComplete({
         <span title="Chits as records — keyed, waiting, swept by the night audit — are not in the backend yet (BE-68)">
           <Chip tone="quiet">chits · not tracked yet</Chip>
         </span>
-        <span title="Requests as records — asked, arranged, done — are not in the backend yet (BE-64)">
-          <Chip tone="quiet">requests · not tracked yet</Chip>
+        <span title="The guest's requests are in the Guest requests tab">
+          <Chip tone={openRequests ? "warning" : "success"} icon={openRequests ? undefined : "check"}>
+            {requests.isLoading
+              ? "reading the requests…"
+              : openRequests
+                ? `${plural(openRequests, "request")} still to arrange`
+                : requests.data?.counts.total
+                  ? "every request arranged"
+                  : "no requests"}
+          </Chip>
         </span>
       </div>
       {problems.length ? (
@@ -358,14 +368,17 @@ function MasterBill({ entry, tz, onTab }: { entry: EntryDetail; tz: string; onTa
       .then(() => refresh())
       .catch((e) => toastRefusal(e, "The master bill could not be printed"));
   };
-  const meta = frozen
-    ? `Statement — not a tax invoice · frozen when the bill was settled${doc?.frozenAt ? `, ${fmtStamp(doc.frozenAt, tz)}` : ""}${doc?.reprintCount != null ? ` · printed ${plural(doc.reprintCount, "time")}` : ""}`
-    : `Statement — not a tax invoice · as at ${index.data ? fmtStamp(index.data.asAt, tz) : "now"}`;
+  // The facts stay on screen; what the paper is goes behind the card's "?".
+  const status = frozen
+    ? `Frozen when the bill was settled${doc?.frozenAt ? `, ${fmtStamp(doc.frozenAt, tz)}` : ""}${doc?.reprintCount != null ? ` · printed ${plural(doc.reprintCount, "time")}` : ""}`
+    : `As at ${index.data ? fmtStamp(index.data.asAt, tz) : "now"}`;
+  const meta = "A statement — not a tax invoice.";
 
   return (
     <StepCard
       title="Master bill · reviewed with the guest"
       meta={meta}
+      status={status}
       acts={
         <>
           <Button
@@ -388,7 +401,7 @@ function MasterBill({ entry, tz, onTab }: { entry: EntryDetail; tz: string; onTa
           >
             {frozen ? "Print a copy" : "Print master bill"}
           </Button>
-          <span className="meta">what a guest gets who wants paper before paying, or who pays nothing here</span>
+          <Help label="About the master bill">What a guest gets who wants paper before paying, or who pays nothing here.</Help>
         </>
       }
     >
@@ -556,7 +569,8 @@ function AddOrCorrectCharge({ entry, target, setTarget }: { entry: EntryDetail; 
   return (
     <StepCard
       title="Add or correct a charge"
-      meta={`Dated the check-out day${checkoutDate ? `, ${fmtDate(checkoutDate)}` : ""} — the last night is already audited · until the bill is settled`}
+      status={`Dated the check-out day${checkoutDate ? `, ${fmtDate(checkoutDate)}` : ""}`}
+      meta="The last night is already audited. Charges can be added or corrected until the bill is settled." 
     >
       <div className="form2">
         <div className="field">
@@ -618,14 +632,16 @@ function AddOrCorrectCharge({ entry, target, setTarget }: { entry: EntryDetail; 
         >
           Post a credit note
         </Button>
-        <span className="meta">service charge and GST post beside it on their own lines</span>
+        <Help label="About the credit note">Its service charge and GST post beside it on their own lines.</Help>
       </div>
 
       {correctable.length ? (
         <div className="form2" style={{ marginTop: 12 }}>
           <div className="rule-above">
             <b className="sm">Correct a charge</b>
-            <span className="meta"> · the bill only grows — a correction is a new line beside the original, and its service charge and GST move with it</span>
+            <Help label="About corrections">
+              The bill only grows — a correction is a new line beside the original, and its service charge and GST move with it.
+            </Help>
           </div>
           <div className="wide field">
             <label>Which charge is wrong</label>
@@ -692,8 +708,8 @@ function AddOrCorrectCharge({ entry, target, setTarget }: { entry: EntryDetail; 
           <>
             <p className="sm">
               {CHARGE_TYPES.find(([v]) => v === posted.lineType)?.[1] ?? words(posted.lineType)} · for {targetLabel(posted)} · line {posted.id.split("-").pop()}
+              <Help label="About the charge">Service charge and GST posted beside it on their own lines.</Help>
             </p>
-            <p className="meta">Service charge and GST posted beside it on their own lines.</p>
           </>
         ) : null}
       </DsDialog>
@@ -854,7 +870,11 @@ function HowSettled({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz
               : undefined;
 
   return (
-    <StepCard flow="settle" title="How the bill is settled">
+    <StepCard
+      flow="settle"
+      title="How the bill is settled"
+      meta="One bill by the model; part by part when each room or hall pays its own; free to change until the bill is settled — after that, the tax invoice decides."
+    >
       <div className="row-acts">
         <Chip tone="accent">by the billing model · {model ? BILLING_MODEL_WORD[model] ?? words(model) : "not set"}</Chip>
         {entry.groupBillingMode === "GROUP_MASTER" ? <Chip tone="quiet">one bill for the party</Chip> : null}
@@ -872,9 +892,6 @@ function HowSettled({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz
             reason="Settlement by share is not in the backend yet (BE-70)"
           />
         </Live>
-      </div>
-      <div className="meta" style={{ marginTop: 6 }}>
-        One bill by the model; part by part when each room or hall pays its own; free to change until the bill is settled — after that, the tax invoice decides.
       </div>
 
       {planShort && plan ? (
@@ -959,7 +976,12 @@ function HowSettled({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz
           <Live>
             <div className="form2" style={{ marginTop: 12 }}>
               <div className="field">
-                <label>How they pay</label>
+                <label>
+                  How they pay
+                  {model === "DIRECT_BILL" ? (
+                    <Help label="About a direct bill">A direct-bill stay settles only by invoicing {booked.payer}.</Help>
+                  ) : null}
+                </label>
                 <select className="input" value={method} onChange={(e) => setMethod(e.target.value as typeof method)}>
                   {methods.map(([v, l]) => (
                     <option key={v} value={v}>
@@ -967,23 +989,27 @@ function HowSettled({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz
                     </option>
                   ))}
                 </select>
-                {model === "DIRECT_BILL" ? <span className="hint">a direct-bill stay settles only by invoicing {booked.payer}</span> : null}
               </div>
               {method === "DIRECT_BILL" ? null : (
                 <div className="field">
-                  <label>{method === "VOUCHER" ? "Voucher number" : "Payment reference"}</label>
+                  <label>
+                    {method === "VOUCHER" ? "Voucher number" : "Payment reference"}
+                    <Help label="About the reference">{method === "VOUCHER" ? "As printed on the voucher." : "Cash and QR need one."}</Help>
+                  </label>
                   <input
                     className="input"
                     value={ref}
                     placeholder={method === "VOUCHER" ? "the agency's voucher number" : "the transaction reference"}
                     onChange={(e) => setRef(e.target.value)}
                   />
-                  <span className="hint">{method === "VOUCHER" ? "as printed on the voucher" : "cash and QR need one"}</span>
                 </div>
               )}
               {method === "VOUCHER" ? (
                 <div className="field">
-                  <label>The voucher covers · Nu.</label>
+                  <label>
+                    The voucher covers · Nu.
+                    <Help label="About the voucher">Anything it leaves of the {money(balance, cur)} balance is invoiced to {booked.payer}.</Help>
+                  </label>
                   <input
                     className="input money"
                     inputMode="decimal"
@@ -993,7 +1019,6 @@ function HowSettled({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz
                       setVoucherCovers(e.target.value);
                     }}
                   />
-                  <span className="hint">anything it leaves of the {money(balance, cur)} balance is invoiced to {booked.payer}</span>
                 </div>
               ) : method === "DIRECT_BILL" ? null : (
                 <div className="field">
@@ -1008,9 +1033,9 @@ function HowSettled({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz
                       setPaidNow(e.target.value);
                     }}
                   />
-                  <span className={`hint${partial ? " warn-ink" : ""}`}>
-                    {partial ? `less than the ${money(balance, cur)} balance — the rest stays owed, collected after the stay` : "the whole balance, unless you type less"}
-                  </span>
+                  {partial ? (
+                    <span className="hint warn-ink">less than the {money(balance, cur)} balance — the rest stays owed, collected after the stay</span>
+                  ) : null}
                 </div>
               )}
               {invoicesParty ? <SendToField entry={entry} value={invoiceTo} onChange={setInvoiceTo} label="Send the invoice to" /> : null}
@@ -1045,7 +1070,10 @@ function HowSettled({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz
               <div className="form2" style={{ marginTop: 14 }}>
                 <div className="rule-above">
                   <b className="sm">Let the guest leave owing — a credit extension</b>
-                  <span className="meta"> · the FOM&rsquo;s approval covers what is left, so a part-payment (even nothing) can settle and the rest is collected after the stay</span>
+                  <Help label="About the credit extension">
+                    The FOM&rsquo;s approval covers what is left, so a part-payment (even nothing) can settle and the rest is collected after the
+                    stay.
+                  </Help>
                 </div>
                 <div className="field">
                   <label>Covers up to · Nu.</label>
@@ -1060,9 +1088,11 @@ function HowSettled({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz
                   />
                 </div>
                 <div className="field">
-                  <label>Pay within · days · optional</label>
+                  <label>
+                    Pay within · days · optional
+                    <Help label="About the time limit">Past it the cover lapses and the balance reads overdue. Empty means no time limit.</Help>
+                  </label>
                   <input className="input narrow" inputMode="numeric" value={payWithin} placeholder="7" onChange={(e) => setPayWithin(e.target.value.replace(/[^\d.]/g, ""))} />
-                  <span className="hint">past it the cover lapses and the balance reads overdue · empty = no time limit</span>
                 </div>
                 <div className="wide field">
                   <label>Why</label>
@@ -1186,6 +1216,7 @@ function Invoices({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz: 
     <StepCard
       title={`Tax invoice · ${booked.payer}`}
       right={stateChip}
+      meta={`${tax?.purpose ?? "A draft until the bill is settled — its particulars become the one original."}${issued ? "" : ` Issuing it sends it to ${booked.payer} in the same act — no invoice exists unsent.`}`}
       acts={
         <>
           {issued ? (
@@ -1231,7 +1262,7 @@ function Invoices({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz: 
         </>
       }
     >
-      <div className="meta">{booked.kind} · {tax?.purpose ?? "a draft until the bill is settled — its particulars become the one original"}</div>
+      <div className="meta">{booked.kind}</div>
       <div className="sm" style={{ display: "grid", gap: 4, marginTop: 8 }}>
         <div className="row-acts" style={{ justifyContent: "space-between" }}>
           <span>Billed so far{fo ? ` · ${plural(fo.lineCount, "line")}` : ""}</span>
@@ -1286,9 +1317,6 @@ function Invoices({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz: 
           <div className="form2" style={{ marginTop: 8 }}>
             <SendToField entry={entry} value={sendTo} onChange={setSendTo} />
           </div>
-          <p className="meta" style={{ marginTop: 8 }}>
-            → issues the tax invoice and sends it to {booked.payer} in the same act — no invoice exists unsent
-          </p>
         </Live>
       )}
       <PaperDrawer paper={paper} onClose={() => setPaper(null)} />
@@ -1301,9 +1329,12 @@ function Invoices({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz: 
   return (
     <div className="grid2">
       {main}
-      <StepCard title={`Extras · ${booked.guest}`} right={<Chip tone="quiet">not a separate invoice yet</Chip>}>
-        <div className="meta">A tax invoice of the guest&rsquo;s own extras — food, laundry, the minibar — apart from the rooms billed to {booked.party}.</div>
-        <p className="sm" style={{ marginTop: 8 }}>
+      <StepCard
+        title={`Extras · ${booked.guest}`}
+        right={<Chip tone="quiet">not a separate invoice yet</Chip>}
+        meta={`A tax invoice of the guest's own extras — food, laundry, the minibar — apart from the rooms billed to ${booked.party ?? "the account"}. Money in, the invoice issued, receipt and invoice sent in one act is BE-41 · BE-69.`}
+      >
+        <p className="sm">
           Today the bill issues <b>one</b> tax invoice to {booked.payer}. Until the split exists, take the guest&rsquo;s part with <b>Settle part by part…</b> above.
         </p>
         <Live>
@@ -1315,9 +1346,6 @@ function Invoices({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz: 
               Record payment · issue · send
             </Button>
           </div>
-          <p className="meta" style={{ marginTop: 6 }}>
-            → money in, invoice issued, receipt and invoice sent — one act · BE-41 · BE-69
-          </p>
         </Live>
       </StepCard>
     </div>
@@ -1470,7 +1498,7 @@ function Departure({ entry, live }: { entry: EntryDetail; live: boolean }) {
           ) : (
             <div style={{ display: "grid", gap: 6 }}>
               <span>
-                {keysIssued} out <span className="meta">· handed over at check-in</span>
+                {keysIssued} out <span className="meta">· from check-in</span>
               </span>
               <Live>
                 <div className="row-acts">
@@ -1584,10 +1612,7 @@ function Departure({ entry, live }: { entry: EntryDetail; live: boolean }) {
           ) : (
             <>their tax invoice, sent — and printed if they want paper</>
           )}
-          <span className="meta" title="A money receipt as a paper is not in the backend yet (BE-43)">
-            {" "}
-            · a receipt as a paper is not built yet
-          </span>
+          <Help label="About the receipt">A money receipt as a paper is not in the backend yet (BE-43).</Help>
         </Fact>
         <Fact k="The record">
           the stay stays on {booked.guest}&rsquo;s record; closing the booking seals it
@@ -1621,7 +1646,6 @@ function RaiseDispute({ entry, open, onClose }: { entry: EntryDetail; open: bool
       open={open}
       onClose={onClose}
       title="Raise a dispute"
-      caseLines={[entry.id]}
       lead="What the guest queried and what they say about it. An open dispute keeps the booking at Check-out, with no override; the FOM reviews it, the GM closes it."
       reasonLabel="The guest's words"
       placeholder="we were one cover, not two"

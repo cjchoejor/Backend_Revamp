@@ -28,12 +28,14 @@ import { requireActiveMode, isTransitionAllowedByMode } from "../lib/mode-regist
 import { evaluateAutoFulfilment, type EntryFacts } from "../lib/mode-auto-fulfilment.js";
 import { getRegistryPolicy } from "../lib/policy-registry-runtime.js";
 import { cancelEntryTimersByCode } from "../lib/cancel-entry-timers-by-code.js";
+import { retireSupersededReplyWaitsBestEffort } from "../lib/reply-waits.js";
 import * as s3HoldService from "../services/domain/s3-hold-service.js";
 import { supersedePendingInvoicesTx } from "../services/domain/s3-folio-service.js";
 import { freezeUnrenderedProformasForEntry } from "../services/domain/invoice-pdf-service.js";
 import { generateOrLoadQuotationPdf } from "../services/domain/quotation-pdf-service.js";
 import { registerNightAuditTimers } from "../services/domain/pre-arrival-service.js";
 import { getTimerEngine } from "../services/infrastructure/timer-management-service.js";
+import { armInquiryExpiryTx } from "../lib/inquiry-expiry.js";
 import {
   enforceS2ToS1BackflowAuthority,
   enforceS4ToS1BackflowAuthority,
@@ -147,8 +149,12 @@ async function runBackflow(
 
   const now = new Date();
   const nextSegmentNumber = Number(entry.segmentNumber ?? 1) + 1;
+  // Back at Inquiry the inquiry window runs again (2026-10-22) — the move to Negotiation had
+  // cancelled it, and nothing re-armed it, so a booking sent back for new dates or rooms ran no
+  // clock at all. A booking that has been to Set up gets none (lib/inquiry-expiry.ts).
+  const inquiryEngine = input.toStage === Stage.S1 ? await getTimerEngine() : null;
 
-  return prisma.$transaction(async (tx) => {
+  const result = await prisma.$transaction(async (tx) => {
     // 1. Compute consequences (writes REENTRY.CONSEQUENCES_COMPUTED trace).
     await computeReEntryConsequences(tx, {
       entryId: entry.id,
@@ -216,6 +222,11 @@ async function runBackflow(
       },
     });
 
+    // 6b. The Inquiry clock, when the booking lands at Inquiry.
+    const inquiryClock = inquiryEngine
+      ? await armInquiryExpiryTx(tx, inquiryEngine, { entryId: entry.id, actorId: input.actor.actorId, now })
+      : null;
+
     // 7. Emit backflow trace (mode + from + to + segment metadata).
     await tx.traceEvent.create({
       data: {
@@ -237,6 +248,7 @@ async function runBackflow(
           toStage: input.toStage,
           segmentNumber: nextSegmentNumber,
           reason: input.reason,
+          ...(inquiryEngine ? { inquiryClockFiresAt: inquiryClock?.firesAt ?? null } : {}),
         },
         createdBy: input.actor.actorId,
       },
@@ -279,6 +291,10 @@ async function runBackflow(
     }
     return updated;
   });
+  // The sealed pass's papers are replaced by whatever the new pass makes: stop waiting for their
+  // replies (2026-10-13).
+  await retireSupersededReplyWaitsBestEffort(prisma, entry.id, input.actor.actorId);
+  return result;
 }
 
 /**
@@ -685,8 +701,12 @@ export async function backflowRoomChangeToS2(
   },
 ) {
   if (!input.reason?.trim()) throw new ValidationError("reason is required");
-  if (input.fromStage !== Stage.S5 && input.fromStage !== Stage.S6 && input.fromStage !== Stage.S7) {
-    throw new ValidationError(`Room-change re-entry runs from S5, S6 or S7 — got ${input.fromStage}`);
+  // From Set up and Reserve too since 2026-10-12 (a room move from the house chart): the rooms are
+  // committed there as well, and the governed way to change them is the same walk back through
+  // Negotiation and forward again.
+  const ROOM_CHANGE_ORIGINS: Stage[] = [Stage.S3, Stage.S4, Stage.S5, Stage.S6, Stage.S7];
+  if (!ROOM_CHANGE_ORIGINS.includes(input.fromStage)) {
+    throw new ValidationError(`Room-change re-entry runs from S3 to S7 — got ${input.fromStage}`);
   }
   return runBackflow(prisma, {
     entryId,
@@ -732,6 +752,15 @@ export async function backflowComplaintToS2(
     actor,
     reason: `COMPLAINT_RESOLUTION: ${input.reason.trim()}`,
     modeKey: "COMPLAINT_RESOLUTION",
+    // The step clocks of where the booking was stop with it, as every other way back stops them
+    // (2026-10-13: a booking sent back from Check-in kept three "Night audit" clocks ticking at
+    // Set up). From Reserve, the countdown to Arrival; from Arrival or Check-in, the no-show
+    // cut-off and the per-night reminders — the guest is not in yet, and they start again when the
+    // booking next reaches Arrival. From Stay or Check-out the guest's nights are real and stand.
+    cancelTimerCodes: [
+      ...(entry.currentStage === Stage.S4 ? ["PRE_ARRIVAL_COUNTDOWN_W4"] : []),
+      ...(entry.currentStage === Stage.S5 || entry.currentStage === Stage.S6 ? ["NO_SHOW_CUTOFF_W5", "NIGHT_AUDIT_STAY_NIGHT_W37"] : []),
+    ],
     hooks: async () => {
       // Complaint resolution is a commercial-adjustment path. Folio continues; downstream code
       // (quotation service under COMPLAINT_RESOLUTION mode) writes the goodwill adjustment.

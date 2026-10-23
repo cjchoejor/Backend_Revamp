@@ -9,8 +9,9 @@
  * Markup follows the prototype's own helpers (`card`, `docCard`, `V16.fact`, `V16.seeRow`), so
  * the generated components.css and frame.css style it without anything added per screen.
  */
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { Fragment, createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button, Chip, Dialog, Icon, type ButtonProps, type DialogRegister, type IconName } from "@/design-system";
@@ -42,7 +43,9 @@ import { sendQuotation } from "@/lib/api/quotations";
 import { dispatchInvoice } from "@/lib/api/reservation-setup";
 import type { EntryDetail, InvoiceSummary, QuotationSummary } from "@/types/api";
 import { getEntryBedPlan, setEntryBedPlan } from "@/lib/api/rooms";
+import { addBookingNote, listBookingNotes } from "@/lib/api/booking-notes";
 import type { BedAskSummary, BedPlanCell } from "@/components/desk/workspace/room-compositions-table";
+import { Help, HelpHere, useQuietScreen } from "@/components/ds/help";
 
 /** How a paper leaves the desk. WhatsApp is a RECORD of a hand-over, not a send. */
 const CHANNELS = [
@@ -94,21 +97,192 @@ export type FlowItem = { n: number; label: string; met: boolean; card?: string }
  */
 export type StepPane = { key: string; label: string; cards: string[] };
 
-const FlowCtx = createContext<{ items: FlowItem[]; on: boolean }>({ items: [], on: false });
+/**
+ * How a finished section folds (2026-10-10, the boss's journey mockup: "a section opens when the
+ * required things of the previous are input").
+ * - `"on-move"` — a finished section folds to its one-line summary once the operator works in
+ *   another one (the intake: the guest, then who is asking, then the stay).
+ * - `"done"` — every finished section is folded unless it is opened (the booking's Inquiry step,
+ *   where the first three were settled when the lead was kept and the house is the work).
+ * Only a card that passes a `summary` ever folds. A folded card keeps its contents mounted,
+ * hidden, so nothing half-typed is lost; Edit opens it again.
+ */
+export type FlowFold = "on-move" | "done";
 
-/** The card-bearing items of a step's checklist, numbered in the order they are worked. */
-export function numberFlow(items: ReadonlyArray<{ label: string; met: boolean; card?: string }>): FlowItem[] {
-  let n = 0;
-  return items.filter((p) => !!p.card).map((p) => ({ n: ++n, label: p.label, met: p.met, card: p.card }));
+type FlowCtxValue = {
+  items: FlowItem[];
+  on: boolean;
+  fold: FlowFold | null;
+  /** The section being worked: the one last clicked or typed in, else the first not done. */
+  current: string | null;
+  active: string | null;
+  visited: ReadonlySet<string>;
+  opened: ReadonlySet<string>;
+  open: (card: string) => void;
+  /**
+   * Fold an opened or finished section and go to the next one still to do. `reveal: false`
+   * marks the next one current without scrolling to it — after Take it the bill above stays in
+   * view while Wrap up below is where the work has moved.
+   */
+  done: (card: string, opts?: { reveal?: boolean }) => void;
+};
+const FlowCtx = createContext<FlowCtxValue>({
+  items: [],
+  on: false,
+  fold: null,
+  current: null,
+  active: null,
+  visited: new Set(),
+  opened: new Set(),
+  open: () => {},
+  done: () => {},
+});
+
+/** The cards of a flow in page order, each once. */
+function flowCards(items: FlowItem[]): string[] {
+  const out: string[] = [];
+  for (const i of items) if (i.card && !out.includes(i.card)) out.push(i.card);
+  return out;
 }
 
-export function StepFlow({ items, on, children }: { items: FlowItem[]; on: boolean; children: ReactNode }) {
+/**
+ * The card-bearing items of a step's checklist, numbered in the order they are worked.
+ * `bySection` numbers the SECTIONS instead — every item of one card shares its number — so a
+ * step laid out as numbered sections (Stage 1, after the boss's journey mockup: 1 the guest …
+ * 5 wrap up) reads 1 to 5 on the page and on the list alike.
+ */
+export function numberFlow(
+  items: ReadonlyArray<{ label: string; met: boolean; card?: string }>,
+  opts?: { bySection?: boolean },
+): FlowItem[] {
+  let n = 0;
+  const sections = new Map<string, number>();
+  return items
+    .filter((p) => !!p.card)
+    .map((p) => {
+      if (!opts?.bySection) return { n: ++n, label: p.label, met: p.met, card: p.card };
+      if (!sections.has(p.card!)) sections.set(p.card!, sections.size + 1);
+      return { n: sections.get(p.card!)!, label: p.label, met: p.met, card: p.card };
+    });
+}
+
+export function StepFlow({
+  items,
+  on,
+  fold = null,
+  children,
+}: {
+  items: FlowItem[];
+  on: boolean;
+  /** Whether finished sections fold, and when — see `FlowFold`. Off when omitted. */
+  fold?: FlowFold | null;
+  children: ReactNode;
+}) {
+  const [active, setActive] = useState<string | null>(null);
+  // The sections the operator has worked in. In "on-move" mode only these fold: a section that is
+  // complete only because of its defaults (the stay opens on today, one night, one adult) is not
+  // one the desk has finished, and folding it would hide it before it was ever read.
+  const [visited, setVisited] = useState<ReadonlySet<string>>(() => new Set());
+  const [opened, setOpened] = useState<ReadonlySet<string>>(() => new Set());
+  // The section the operator is in stays where it was on screen when one above it folds — the
+  // mockup's own rule ("keep the box being worked on where it was").
+  const anchor = useRef<{ card: string; top: number } | null>(null);
+  const activate = (el: HTMLElement) => {
+    const card = el.dataset.flow;
+    if (!card) return;
+    setVisited((prev) => (prev.has(card) ? prev : new Set(prev).add(card)));
+    setActive((cur) => {
+      if (cur === card) return cur;
+      anchor.current = { card, top: el.getBoundingClientRect().top };
+      return card;
+    });
+  };
+  const cardOf = (target: EventTarget | null) =>
+    target instanceof Element ? (target.closest("[data-flow]") as HTMLElement | null) : null;
+  // A press moves the work to another section only once it is over: folding the section above
+  // on pointer-down would slide the button away before the click lands (found driving it).
+  const pressed = useRef<HTMLElement | null>(null);
+  // Done (or Take it) moves the work on by itself; the press that triggered it must not then
+  // put the work back on the section it was pressed in.
+  const skipPress = useRef(false);
+  const onPointerDown = (e: React.PointerEvent) => {
+    pressed.current = cardOf(e.target);
+  };
+  const onPointerUp = () => {
+    const el = pressed.current;
+    if (!el) return;
+    window.setTimeout(() => {
+      if (pressed.current === el) pressed.current = null;
+      if (skipPress.current) {
+        skipPress.current = false;
+        return;
+      }
+      activate(el);
+    }, 0);
+  };
+  // Keyboard focus (Tab) moves at once; focus that comes with a press waits for the press.
+  const onFocus = (e: React.FocusEvent) => {
+    if (pressed.current) return;
+    const el = cardOf(e.target);
+    if (el) activate(el);
+  };
+  useLayoutEffect(() => {
+    const a = anchor.current;
+    anchor.current = null;
+    if (!a || a.card !== active) return;
+    const el = document.querySelector<HTMLElement>(`[data-flow="${a.card}"]`);
+    if (!el) return;
+    const d = el.getBoundingClientRect().top - a.top;
+    if (Math.abs(d) > 1) window.scrollBy(0, d);
+  }, [active]);
+
+  const cards = flowCards(items);
+  const firstOpen = cards.find((c) => items.some((i) => i.card === c && !i.met)) ?? null;
+  const current = on ? (active && cards.includes(active) ? active : firstOpen) : null;
+
+  const open = useCallback((card: string) => {
+    setOpened((prev) => new Set(prev).add(card));
+    setVisited((prev) => new Set(prev).add(card));
+    setActive(card);
+  }, []);
+  const done = useCallback(
+    (card: string, opts?: { reveal?: boolean }) => {
+      if (pressed.current) skipPress.current = true;
+      setVisited((prev) => new Set(prev).add(card));
+      setOpened((prev) => {
+        const next = new Set(prev);
+        next.delete(card);
+        return next;
+      });
+      // On to the next section still to do; if every one is done, simply leave this one folded.
+      const after = cards.slice(cards.indexOf(card) + 1);
+      const target = after.find((c) => items.some((i) => i.card === c && !i.met)) ?? after[0] ?? null;
+      setActive(target);
+      if (target && opts?.reveal !== false) {
+        window.requestAnimationFrame(() => {
+          const el = document.getElementById(anchorFor(target));
+          if (!el) return;
+          revealCard(el);
+          el.querySelector<HTMLElement>("input.input:not([disabled]):not([readonly]), select.input:not([disabled]), textarea.input:not([readonly])")?.focus({ preventScroll: true });
+        });
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [cards.join("|"), items.map((i) => `${i.card}${i.met ? 1 : 0}`).join("|")],
+  );
+
   // The list is rebuilt on every render of the workspace; hold one identity per unchanged list so
   // a card only re-renders when its own number or standing moves.
-  const key = `${on}|${items.map((i) => `${i.n}${i.met ? "1" : "0"}${i.card}`).join("~")}`;
+  const key = `${on}|${fold}|${current}|${active}|${[...opened].join(",")}|${[...visited].join(",")}|${items.map((i) => `${i.n}${i.met ? "1" : "0"}${i.card}`).join("~")}`;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const value = useMemo(() => ({ items, on }), [key]);
-  return <FlowCtx.Provider value={value}>{children}</FlowCtx.Provider>;
+  const value = useMemo<FlowCtxValue>(() => ({ items, on, fold: on ? fold : null, current, active, visited, opened, open, done }), [key, open, done]);
+  return (
+    <FlowCtx.Provider value={value}>
+      <div className="flow-scope" onFocusCapture={onFocus} onPointerDownCapture={onPointerDown} onPointerUpCapture={onPointerUp}>
+        {children}
+      </div>
+    </FlowCtx.Provider>
+  );
 }
 
 /**
@@ -144,6 +318,12 @@ export function useFlowCard(
     if (last >= 0) waitsFor = items.slice(0, last + 1).find((x) => !x.met && (!afterOnly || x.card === after));
   }
   return { n: mine?.n, met: mine ? allMet : undefined, waitsFor };
+}
+
+/** The step's flow, for a section that moves the work on by itself (Take it → Wrap up). */
+export function useStepFlow() {
+  const { on, done } = useContext(FlowCtx);
+  return { on, done };
 }
 
 export function anchorFor(card: string) {
@@ -183,7 +363,7 @@ export function FlowTodo({
       <h4>To do here</h4>
       <div className="todo">
         {items.map((i) => (
-          <button key={`${i.n}-${i.card}`} type="button" className={`row-todo${i.met ? " done" : ""}`} onClick={() => onGo(i.card)} title={`Go to ${i.label}`}>
+          <button key={`${i.n}-${i.card}-${i.label}`} type="button" className={`row-todo${i.met ? " done" : ""}`} onClick={() => onGo(i.card)} title={`Go to ${i.label}`}>
             <span className="n">{i.met ? <Icon name="check" /> : i.n}</span>
             <span className="t">{i.label}</span>
           </button>
@@ -211,6 +391,7 @@ export function StepCard({
   sealed,
   quiet,
   meta,
+  status,
   children,
   id,
   style,
@@ -218,6 +399,8 @@ export function StepCard({
   flowAfter,
   flowAfterOnly,
   heldFor,
+  summary,
+  doneAction,
 }: {
   title?: ReactNode;
   icon?: IconName;
@@ -225,8 +408,13 @@ export function StepCard({
   acts?: ReactNode;
   sealed?: boolean;
   quiet?: boolean;
-  /** One grey line under the title. */
+  /** What the card is for — one grey line under the title, or behind a "?" beside it on a quiet screen. */
   meta?: ReactNode;
+  /**
+   * A fact or a state about the card — who pays, how many are open, which figure is shown. Unlike
+   * `meta` it is a message, so it stays on screen under the title even on a quiet screen.
+   */
+  status?: ReactNode;
   children?: ReactNode;
   id?: string;
   style?: React.CSSProperties;
@@ -246,17 +434,71 @@ export function StepCard({
    * says so, with no "Show it anyway": what it waits for cannot be done from inside it.
    */
   heldFor?: ReactNode;
+  /**
+   * What this section holds, in one line — the line it folds to once it is done (2026-10-10).
+   * A card without one never folds.
+   */
+  summary?: ReactNode;
+  /**
+   * What the section's Done does instead of folding — the intake's stay ends with "Done · Start
+   * the inquiry" (2026-10-12, operator: the start button sat at the foot of the page and broke the
+   * flow). Shown whenever the section is open; inert, with its reason, until it can be pressed.
+   */
+  doneAction?: { label: string; onClick: () => void; state?: "default" | "inert" | "working"; title?: string; workingLabel?: string };
 }) {
   const { n, met, waitsFor } = useFlowCard(flow, flowAfter, flowAfterOnly);
+  const ctx = useContext(FlowCtx);
+  // In a quiet screen the grey line under the title is an explanation, so it moves behind a "?"
+  // beside the title (2026-10-12). A card with no title keeps it where it is.
+  const metaInHelp = useQuietScreen() && !!meta && !!title;
   const [anyway, setAnyway] = useState(false);
   const held = !!heldFor;
   const waiting = held || (!!waitsFor && !anyway);
+  const isCurrent = !!flow && ctx.on && ctx.current === flow && !waiting;
+  const isOpened = !!flow && ctx.opened.has(flow);
+  // A finished section folds to its line: in "done" mode unless it is opened or being worked in,
+  // in "on-move" mode once the operator is working in another section.
+  const folded =
+    !!flow &&
+    !!summary &&
+    !!met &&
+    !waiting &&
+    !isOpened &&
+    (ctx.fold === "done"
+      ? ctx.active !== flow
+      : ctx.fold === "on-move"
+        ? !!ctx.active && ctx.active !== flow && ctx.visited.has(flow)
+        : false);
+  // A finished, unfolded section offers Done: fold it and go on to the next one.
+  const canDone = !!flow && !!summary && !!met && !waiting && !folded && !!ctx.fold;
+  const body = (
+    <>
+      {status ? <div className="meta" style={{ marginBottom: 8 }}>{status}</div> : null}
+      {meta && !metaInHelp ? <div className="meta" style={{ marginBottom: 8 }}>{meta}</div> : null}
+      {children}
+      {acts ? (
+        <div className="row-acts" style={{ marginTop: 12 }}>
+          {acts}
+        </div>
+      ) : null}
+    </>
+  );
   return (
     <div
-      className={["card", sealed ? "sealed" : "", quiet ? "quiet" : "", n ? "flowed" : "", met ? "flow-done" : "", waiting ? "flow-waiting" : ""]
+      className={[
+        "card",
+        sealed ? "sealed" : "",
+        quiet ? "quiet" : "",
+        n ? "flowed" : "",
+        met ? "flow-done" : "",
+        waiting ? "flow-waiting" : "",
+        isCurrent ? "flow-current" : "",
+        folded ? "flow-folded" : "",
+      ]
         .filter(Boolean)
         .join(" ")}
       id={flow ? anchorFor(flow) : id}
+      data-flow={flow}
       style={style}
     >
       {title ? (
@@ -265,8 +507,18 @@ export function StepCard({
             {n ? <span className={`cardno${met ? " done" : ""}`}>{met ? <Icon name="check" /> : n}</span> : null}
             {icon ? <Icon name={icon} /> : null}
             {title}
+            {metaInHelp ? <Help label="About this section">{meta}</Help> : null}
+            {isCurrent ? <span className="flow-here">you are here</span> : null}
           </h4>
-          {waiting ? null : right ? <div className="row-acts">{right}</div> : null}
+          {waiting || folded ? null : right ? <div className="row-acts">{right}</div> : null}
+        </div>
+      ) : null}
+      {folded ? (
+        <div className="flow-summary">
+          <span className="sum">{summary}</span>
+          <Button kind="quiet" compact onClick={() => ctx.open(flow!)}>
+            Edit
+          </Button>
         </div>
       ) : null}
       {waiting ? (
@@ -284,16 +536,33 @@ export function StepCard({
             </>
           )}
         </div>
-      ) : (
-        <>
-          {meta ? <div className="meta" style={{ marginBottom: 8 }}>{meta}</div> : null}
-          {children}
-          {acts ? (
-            <div className="row-acts" style={{ marginTop: 12 }}>
-              {acts}
+      ) : summary ? (
+        // A card that can fold keeps its contents in one box, mounted and hidden while folded,
+        // so a half-typed field survives the fold. (Only these: other cards keep their children
+        // directly under the card, where `.card > .tool` and friends expect them.)
+        <div className="flow-body" hidden={folded}>
+          {body}
+          {doneAction ? (
+            <div className="flow-closebar">
+              {doneAction.state === "inert" && doneAction.title ? (
+                <span className="meta warn-ink" style={{ alignSelf: "center", marginRight: 10 }}>
+                  {doneAction.title}
+                </span>
+              ) : null}
+              <Button state={doneAction.state ?? "default"} title={doneAction.title} workingLabel={doneAction.workingLabel} onClick={doneAction.onClick}>
+                {doneAction.label}
+              </Button>
+            </div>
+          ) : canDone ? (
+            <div className="flow-closebar">
+              <Button kind="secondary" compact onClick={() => ctx.done(flow!)}>
+                Done
+              </Button>
             </div>
           ) : null}
-        </>
+        </div>
+      ) : (
+        body
       )}
     </div>
   );
@@ -471,12 +740,31 @@ export function ActionRow({
   goToLabel?: string;
 }) {
   const held = !!heldBy;
+  const quiet = useQuietScreen();
+  const button = (
+    <Button
+      kind={kind}
+      state={state ?? (onClick ? "default" : "inert")}
+      onClick={onClick}
+      title={heldBy ?? undefined}
+      className={quiet && (kind === "quiet" || kind === "secondary") ? "act" : undefined}
+    >
+      {label}
+    </Button>
+  );
   return (
-    <div className="actrow">
-      <Button kind={kind} state={state ?? (onClick ? "default" : "inert")} onClick={onClick} title={heldBy ?? undefined}>
-        {label}
-      </Button>
-      <span className="cap">{caption}</span>
+    <div className={`actrow${quiet ? " plain" : ""}`}>
+      {quiet ? (
+        <span className="actline">
+          {button}
+          <Help label={`About ${actName(label)}`}>{caption}</Help>
+        </span>
+      ) : (
+        <>
+          {button}
+          <span className="cap">{caption}</span>
+        </>
+      )}
       {held ? (
         <span className="held">
           <span className="why">{heldBy}</span>
@@ -506,6 +794,31 @@ export function SeeRow({
   reason?: string;
   kind?: ButtonProps["kind"];
 }) {
+  const quiet = useQuietScreen();
+  if (quiet) {
+    const shut = state === "inert" || !onClick;
+    // A reason naming a backend item (BE-39) says the act is not built yet — that belongs with
+    // the explanation. Any other reason is the booking's own state, a message, so it stays out.
+    const soon = !!reason && /\bBE-\d+/.test(reason);
+    return (
+      <div className="seerow plain">
+        <Button
+          kind={kind}
+          state={state ?? (onClick ? "default" : "inert")}
+          onClick={onClick}
+          title={reason}
+          className={kind === "quiet" || kind === "secondary" ? "act" : undefined}
+        >
+          {label}
+        </Button>
+        <Help label={`About ${actName(label)}`}>
+          <p>{sentence(note)}</p>
+          {shut && soon ? <p className="why">{reason!.replace(/\s*\(BE-\d+\)/, "")}</p> : null}
+        </Help>
+        {shut && reason && !soon ? <span className="why">{reason}</span> : null}
+      </div>
+    );
+  }
   return (
     <div className="seerow">
       <Button kind={kind} compact state={state ?? (onClick ? "default" : "inert")} onClick={onClick} title={reason}>
@@ -515,6 +828,18 @@ export function SeeRow({
       {reason && (state === "inert" || !onClick) ? <span className="meta warn-ink">· {reason}</span> : null}
     </div>
   );
+}
+
+/** "Park…" → "Park" — the name a "?" is about. */
+function actName(label: string): string {
+  return label.replace(/[…:.]+$/, "").trim();
+}
+
+/** A note written to follow "→" reads as a sentence on its own: capital first, full stop last. */
+function sentence(note: ReactNode): ReactNode {
+  if (typeof note !== "string" || !note) return note;
+  const t = note.charAt(0).toUpperCase() + note.slice(1);
+  return /[.!?]$/.test(t) ? t : `${t}.`;
 }
 
 /**
@@ -553,26 +878,261 @@ export function OtherWays({ children }: { children: ReactNode }) {
   );
 }
 
-/** Requests at any step (R2) — the list and its kinds are backend item BE-64. */
-export function RequestsCard() {
+/**
+ * The step's other ways as sub-tabs (2026-10-12, operator: "in the other ways ... the buttons look
+ * like they were not fit in properly — make sub tabs inside; below them show what the button shows
+ * when clicked"). Each way is a tab, and its panel IS what its button used to open — the reason
+ * field and the act itself, not a button that opens a dialog. Every panel stays mounted, so a
+ * half-typed reason survives a look at another tab. The open tab lives in the address
+ * (`?way=`), so This step can send the operator straight to one (`useOpenOtherWay`).
+ */
+export type OtherWayTab = { key: string; label: string; content: ReactNode };
+
+export function OtherWaysTabs({ tabs }: { tabs: ReadonlyArray<OtherWayTab | null | false | undefined> }) {
+  const { past } = useStepMode();
   const slot = useContext(OtherWaysSlotCtx);
+  const params = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  const live = tabs.filter((t): t is OtherWayTab => !!t);
+  if (past || live.length === 0) return null;
+  const want = params.get("way");
+  const current = live.find((t) => t.key === want) ?? live[0];
+  const pick = (key: string) => {
+    const p = new URLSearchParams(params.toString());
+    p.set("way", key);
+    router.replace(`${pathname}?${p.toString()}`, { scroll: false });
+  };
   return beside(
-    <StepCard title="Requests">
-      <p className="meta">Nothing asked yet — a request can be added at any step, and the form asks the questions that kind needs.</p>
-      <Live>
-        <div style={{ marginTop: 10, maxWidth: 420 }}>
-          <Button
-            kind="secondary"
-            state="inert"
-            reason="Requests by kind — asked, arranged, done — are not in the backend yet (BE-64). A preference goes in the line above the steps."
-            style={{ width: "100%" }}
+    <StepCard title="Other ways this booking can go" quiet>
+      <div className="subtabs" role="tablist" aria-label="Other ways">
+        {live.map((t) => (
+          <button
+            key={t.key}
+            type="button"
+            role="tab"
+            className="subtab"
+            aria-selected={t.key === current.key}
+            onClick={() => pick(t.key)}
           >
-            Add a request…
-          </Button>
+            {t.label}
+          </button>
+        ))}
+      </div>
+      {live.map((t) => (
+        <div key={t.key} role="tabpanel" className="subtab-panel" hidden={t.key !== current.key}>
+          {t.content}
         </div>
-      </Live>
+      ))}
     </StepCard>,
     slot,
+  );
+}
+
+/**
+ * Sub-tabs inside a tab (2026-10-12, operator: "charges and payments, guest requests, notes and
+ * documents can be made into sub tabs"). The open one lives in the address (`?sub=`), and every
+ * panel stays mounted, so a half-typed field survives a look at another sub-tab. A tab with
+ * nothing in it is left out by the caller.
+ */
+export type SubTab = { key: string; label: ReactNode; content: ReactNode };
+
+export function SubTabs({ tabs, label, param = "sub" }: { tabs: ReadonlyArray<SubTab | null | false | undefined>; label: string; param?: string }) {
+  const params = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  const live = tabs.filter((t): t is SubTab => !!t);
+  if (live.length === 0) return null;
+  const want = params.get(param);
+  const current = live.find((t) => t.key === want) ?? live[0];
+  const pick = (key: string) => {
+    const p = new URLSearchParams(params.toString());
+    p.set(param, key);
+    router.replace(`${pathname}?${p.toString()}`, { scroll: false });
+  };
+  return (
+    <>
+      <div className="subtabs" role="tablist" aria-label={label}>
+        {live.map((t) => (
+          <button key={t.key} type="button" role="tab" className="subtab" aria-selected={t.key === current.key} onClick={() => pick(t.key)}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+      {live.map((t) => (
+        <div key={t.key} role="tabpanel" className="subtab-panel" hidden={t.key !== current.key}>
+          {t.content}
+        </div>
+      ))}
+    </>
+  );
+}
+
+/** Open the step's Other ways tab on one of its ways — from a button on This step. */
+export function useOpenOtherWay() {
+  const params = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  return (key: string) => {
+    const p = new URLSearchParams(params.toString());
+    p.set("view", "other");
+    p.set("way", key);
+    router.replace(`${pathname}?${p.toString()}`, { scroll: false });
+    if (typeof window !== "undefined") window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }));
+  };
+}
+
+/**
+ * A dialog laid out in a way's panel (2026-10-17, operator: the Negotiation sub-tabs "for other
+ * tabs as well, all stages"). Inside it, `DsDialog`, `ReasonDialog` and `WideDialog` draw in place
+ * — their fields, their consequence line and their act — with no window, no "Not now" and no
+ * Escape. So each way keeps the one form it always had, and the tab and the window cannot say
+ * the same act two ways. `render(done)` draws it open; `done` (the dialog's own close) clears it
+ * for the next use.
+ */
+const InlineWayCtx = createContext(false);
+
+export function useInlineWay() {
+  return useContext(InlineWayCtx);
+}
+
+export function InlineWay({ render }: { render: (done: () => void) => ReactNode }) {
+  const [round, setRound] = useState(0);
+  return (
+    <InlineWayCtx.Provider value>
+      <div key={round} className="way-panel">
+        {render(() => setRound((n) => n + 1))}
+      </div>
+    </InlineWayCtx.Provider>
+  );
+}
+
+/** A dialog's "Not now" — nothing to leave when the form sits in its own tab. */
+export function NotNow({ onClick, busy, label = "Not now" }: { onClick: () => void; busy?: boolean; label?: string }) {
+  const inline = useInlineWay();
+  if (inline) return null;
+  return (
+    <Button kind="quiet" state={busy ? "inert" : "default"} onClick={onClick}>
+      {label}
+    </Button>
+  );
+}
+
+/** A way that cannot be taken here: why, said as a message, and the act shown shut. */
+export function ShutWay({ act, why, help }: { act: string; why: ReactNode; help?: ReactNode }) {
+  return (
+    <div className="way-form">
+      <p className="sm warn-ink" style={{ margin: 0, fontWeight: 600 }}>
+        {why}
+      </p>
+      <div className="row-acts" style={{ alignItems: "center" }}>
+        <Button kind="quiet" className="act" state="inert">
+          {act}
+        </Button>
+        {help ? <Help label={`About ${actName(act)}`}>{help}</Help> : null}
+      </div>
+    </div>
+  );
+}
+
+/** Park, as a way of its own — the same form on every step that offers it. */
+export function parkTab(parkNow: ((reason: string) => void) | undefined, busy?: boolean): OtherWayTab | null {
+  if (!parkNow) return null;
+  return {
+    key: "park",
+    label: "Park",
+    content: (
+      <ReasonForm
+        label="Park"
+        fieldLabel="Reason"
+        placeholder="waiting on the guest to confirm the dates"
+        busy={busy}
+        onConfirm={parkNow}
+        help={
+          <>
+            <p>Pauses the booking where it is. It keeps its place and nothing is cancelled or released.</p>
+            <p>Its clock stops until it is resumed. A booking parked for too long lapses on its own.</p>
+          </>
+        }
+      />
+    ),
+  };
+}
+
+/** The guest said no (2026-10-01) — Inquiry and Negotiation only; from Set up it is a cancellation. */
+export function declineTab(declineNow: ((reason: string) => void) | undefined, busy?: boolean): OtherWayTab | null {
+  if (!declineNow) return null;
+  return {
+    key: "decline",
+    label: "The guest said no",
+    content: (
+      <ReasonForm
+        danger
+        label="Turn the booking down"
+        fieldLabel="What did they say?"
+        placeholder="too expensive · booked elsewhere · dates changed"
+        busy={busy}
+        onConfirm={declineNow}
+        help={
+          <>
+            <p>Ends the booking and records what the guest said. It cannot be undone.</p>
+            <p>The marked rooms go back on sale, any offer out is withdrawn and every clock stops. Nothing is charged.</p>
+          </>
+        }
+      />
+    ),
+  };
+}
+
+/**
+ * A reason and the act it commits, inline (2026-10-12) — what a reason dialog shows, set out on
+ * the page instead: the field, the button, and the explanation behind a "?". The button waits for
+ * the reason.
+ */
+export function ReasonForm({
+  label,
+  fieldLabel,
+  placeholder,
+  help,
+  onConfirm,
+  busy,
+  danger,
+}: {
+  label: string;
+  fieldLabel: string;
+  placeholder?: string;
+  help?: ReactNode;
+  onConfirm: (reason: string) => void;
+  busy?: boolean;
+  danger?: boolean;
+}) {
+  const [reason, setReason] = useState("");
+  const ready = reason.trim().length > 0;
+  return (
+    <div className="way-form">
+      <div className="field">
+        <label>{fieldLabel}</label>
+        <textarea
+          className="input"
+          style={{ height: 72, paddingTop: 8 }}
+          value={reason}
+          placeholder={placeholder}
+          maxLength={500}
+          onChange={(e) => setReason(e.target.value)}
+        />
+      </div>
+      <div className="row-acts" style={{ alignItems: "center", marginTop: 10 }}>
+        <Button
+          kind={danger ? "danger" : "primary"}
+          state={busy ? "working" : ready ? "default" : "inert"}
+          title={ready ? undefined : "Type the reason first"}
+          onClick={() => onConfirm(reason.trim())}
+        >
+          {label}
+        </Button>
+        {help ? <Help label={`About ${label}`}>{help}</Help> : null}
+      </div>
+    </div>
   );
 }
 
@@ -719,6 +1279,7 @@ export function DsDialog({
   footer,
   width,
   busy,
+  help,
 }: {
   open: boolean;
   onClose: () => void;
@@ -729,26 +1290,72 @@ export function DsDialog({
   footer: ReactNode;
   width?: number;
   busy?: boolean;
+  /** What the dialog is for, behind a "?" beside its title. Its consequences stay in the body. */
+  help?: ReactNode;
 }) {
+  const inline = useInlineWay();
+  const shownTitle = help ? (
+    <>
+      {title}
+      <Help label="About this">{help}</Help>
+    </>
+  ) : (
+    title
+  );
   useEffect(() => {
-    if (!open) return;
+    if (!open || inline) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape" && !busy) onClose();
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [open, busy, onClose]);
+  }, [open, busy, onClose, inline]);
   if (!open) return null;
+  if (inline) return <WayBody register={register} title={shownTitle} caseLines={caseLines} footer={footer}>{children}</WayBody>;
   return (
     <Overlay>
       <div className="scrim open" onMouseDown={(e) => e.target === e.currentTarget && !busy && onClose()}>
         <div style={width ? { width, maxWidth: "100%" } : undefined} className="dialog-holder">
-          <Dialog register={register} title={title} caseLines={caseLines} footer={footer}>
+          <Dialog register={register} title={shownTitle} caseLines={caseLines} footer={footer}>
             {children}
           </Dialog>
         </div>
       </div>
     </Overlay>
+  );
+}
+
+/** A dialog's body set out in a way's panel: its heading, its facts, its fields and its act. */
+export function WayBody({
+  register,
+  title,
+  caseLines,
+  footer,
+  children,
+}: {
+  register: DialogRegister;
+  title: ReactNode;
+  caseLines?: ReactNode[];
+  footer: ReactNode;
+  children?: ReactNode;
+}) {
+  const facts = caseLines ?? [];
+  return (
+    <div className={`way-form way-${register}`}>
+      <div className="way-title">{title}</div>
+      {facts.length ? (
+        <div className="meta">
+          {facts.map((l, i) => (
+            <Fragment key={i}>
+              {i ? " · " : null}
+              {l}
+            </Fragment>
+          ))}
+        </div>
+      ) : null}
+      {children}
+      <div className="row-acts way-acts">{footer}</div>
+    </div>
   );
 }
 
@@ -788,6 +1395,7 @@ export function ReasonDialog({
   minLength?: number;
 }) {
   const [reason, setReason] = useState("");
+  const inline = useInlineWay();
   useEffect(() => {
     if (open) setReason("");
   }, [open]);
@@ -802,9 +1410,7 @@ export function ReasonDialog({
       busy={busy}
       footer={
         <>
-          <Button kind="quiet" state={busy ? "inert" : "default"} onClick={onClose}>
-            Not now
-          </Button>
+          <NotNow onClick={onClose} busy={busy} />
           <Button
             kind={danger ? "danger" : "primary"}
             solid={danger}
@@ -822,7 +1428,15 @@ export function ReasonDialog({
       {children}
       <div className="field">
         <label>{reasonLabel}</label>
-        <textarea className="input" rows={2} value={reason} maxLength={500} placeholder={placeholder} onChange={(e) => setReason(e.target.value)} autoFocus />
+        <textarea
+          className="input"
+          rows={inline ? 3 : 2}
+          value={reason}
+          maxLength={500}
+          placeholder={placeholder}
+          onChange={(e) => setReason(e.target.value)}
+          autoFocus={!inline}
+        />
       </div>
     </DsDialog>
   );
@@ -947,9 +1561,32 @@ const INVOICE_WORD: Record<string, string> = {
  * handed over on WhatsApp; a bill is dispatched by email. Where the backend has no WhatsApp
  * record for a paper, the row says so rather than offering a button that would do nothing.
  */
-export function PapersCard({ entry }: { entry: EntryDetail }) {
+/** Which papers a card shows — Documents splits them by kind (2026-10-12). */
+export type PaperShelf = "all" | "quotes" | "proformas" | "bills" | "others";
+
+export function PapersCard({
+  entry,
+  withFolioDocs = true,
+  show = "all",
+  title = "Papers",
+}: {
+  entry: EntryDetail;
+  withFolioDocs?: boolean;
+  show?: PaperShelf;
+  title?: string;
+}) {
   const { session } = useSession();
-  const slot = useContext(OtherWaysSlotCtx);
+  // The notes written with a paper sit beside it (2026-10-12, operator: "in documents it should
+  // show the note beside the paper if it is present"). The same read the Notes tab uses.
+  const notesQ = useQuery({
+    queryKey: ["booking-notes", entry.id],
+    queryFn: () => listBookingNotes(session!, entry.id),
+    enabled: !!session,
+  });
+  const notesFor = (paperId: string) => [
+    ...(notesQ.data?.items ?? []).filter((n) => n.paper?.id === paperId).map((n) => ({ key: n.id, text: n.text, who: n.createdByName, at: n.createdAt })),
+    ...(notesQ.data?.quotationNotes ?? []).filter((n) => n.quotationId === paperId).map((n) => ({ key: `t:${n.quotationId}`, text: n.text, who: n.createdByName, at: n.createdAt })),
+  ];
   const [open, setOpen] = useState<PaperRef | null>(null);
   const [sendQuote, setSendQuote] = useState<QuotationSummary | null>(null);
   const [sendInvoice, setSendInvoice] = useState<InvoiceSummary | null>(null);
@@ -966,34 +1603,69 @@ export function PapersCard({ entry }: { entry: EntryDetail }) {
     () => [...(entry.quotations ?? [])].sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? "")),
     [entry.quotations],
   );
-  const invoices = useMemo(
+  const allInvoices = useMemo(
     () => [...(entry.folio?.invoices ?? [])].sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? "")),
     [entry.folio?.invoices],
   );
+  const proformas = allInvoices.filter((i) => i.invoiceType === "PROFORMA");
+  const bills = allInvoices.filter((i) => i.invoiceType !== "PROFORMA");
+  const quotesShown = show === "all" || show === "quotes" ? quotes : [];
+  const invoiceGroups: Array<[string, InvoiceSummary[]]> =
+    show === "all"
+      ? [["Bills", allInvoices]]
+      : show === "proformas"
+        ? [["Proforma invoices", proformas]]
+        : show === "bills"
+          ? [["Bills", bills]]
+          : [];
+
+  /**
+   * Every confirmation is a voucher of its own, with its own VOU number (2026-10-13): a room move,
+   * a re-entry or an extension re-confirms the booking and makes a new one. Newest first; the
+   * current reservation's is the one in force.
+   */
+  const vouchers = useMemo(() => {
+    const list =
+      entry.reservations && entry.reservations.length
+        ? entry.reservations.map((r) => ({ id: r.id, confirmedAt: r.confirmedAt, number: r.confirmationVoucherNumber }))
+        : entry.reservation?.id
+          ? [{ id: entry.reservation.id, confirmedAt: entry.reservation.confirmedAt, number: entry.reservation.confirmationVoucherNumber ?? null }]
+          : [];
+    return [...list].sort((a, b) => (b.confirmedAt ?? "").localeCompare(a.confirmedAt ?? ""));
+  }, [entry.reservations, entry.reservation]);
 
   const others = useMemo<PaperRef[]>(() => {
     const out: PaperRef[] = [];
-    if (entry.reservation?.id) out.push({ kind: "voucher", reservationId: entry.reservation.id, label: "Confirmation voucher" });
-    for (const d of folioDocs.data?.documents ?? []) {
+    for (const d of withFolioDocs ? folioDocs.data?.documents ?? [] : []) {
       if (!d.available || d.kind === "tax-invoice") continue;
       out.push({ kind: "folio", entryId: entry.id, doc: d.kind, label: d.title, refreshKey: `${entry.updatedAt}` });
     }
     if (entry.status === "CANCELLED") out.push({ kind: "cancellation", entryId: entry.id, label: "Cancellation confirmation" });
     return out;
-  }, [entry, folioDocs.data]);
+  }, [entry, folioDocs.data, withFolioDocs]);
 
-  if (quotes.length === 0 && invoices.length === 0 && others.length === 0) return null;
+  const othersShown = show === "all" || show === "others" ? others : [];
+  const vouchersShown = show === "all" || show === "others" ? vouchers : [];
+  if (
+    quotesShown.length === 0 &&
+    invoiceGroups.every(([, list]) => list.length === 0) &&
+    othersShown.length === 0 &&
+    vouchersShown.length === 0
+  ) {
+    return null;
+  }
 
   const liveQuote = (q: QuotationSummary) => q.state === "DRAFT" || q.state === "SENT" || q.state === "ACCEPTED";
   const liveInvoice = (i: InvoiceSummary) => i.state !== "SUPERSEDED";
 
-  return beside(
-    <StepCard title="Papers">
-      {quotes.length ? (
+  return (
+    <StepCard title={title}>
+      {quotesShown.length ? (
         <div className="papergrp">
-          <div className="h">Quotations</div>
-          {quotes.map((q) => (
-            <div className="paperrow" key={q.id}>
+          {show === "all" ? <div className="h">Quotations</div> : null}
+          {quotesShown.map((q) => (
+            <Fragment key={q.id}>
+            <div className="paperrow">
               <span className="nm">
                 <b>{q.referenceNumber}</b>
                 {(q.versionNumber ?? 1) > 1 ? <span className="v"> · v{q.versionNumber}</span> : null}
@@ -1013,15 +1685,19 @@ export function PapersCard({ entry }: { entry: EntryDetail }) {
                 </Live>
               </span>
             </div>
+            <PaperNotes notes={notesFor(q.id)} />
+            </Fragment>
           ))}
         </div>
       ) : null}
 
-      {invoices.length ? (
-        <div className="papergrp">
-          <div className="h">Bills</div>
+      {invoiceGroups.map(([groupName, invoices]) =>
+        invoices.length ? (
+        <div className="papergrp" key={groupName}>
+          {show === "all" ? <div className="h">{groupName}</div> : null}
           {invoices.map((i) => (
-            <div className="paperrow" key={i.id}>
+            <Fragment key={i.id}>
+            <div className="paperrow">
               <span className="nm">
                 <b>{i.invoiceNumber ?? i.id}</b>
                 <span className="v"> · {INVOICE_WORD[i.invoiceType] ?? "Invoice"}</span>
@@ -1042,15 +1718,43 @@ export function PapersCard({ entry }: { entry: EntryDetail }) {
                 </Live>
               </span>
             </div>
+            <PaperNotes notes={notesFor(i.id)} />
+            </Fragment>
           ))}
+        </div>
+        ) : null,
+      )}
+
+      {vouchersShown.length ? (
+        <div className="papergrp">
+          {show === "all" ? <div className="h">Confirmation vouchers</div> : null}
+          {vouchersShown.map((v) => {
+            const inForce = v.id === entry.reservation?.id;
+            const label = `Confirmation voucher ${v.number ?? v.id}`;
+            return (
+              <div className="paperrow" key={v.id}>
+                <span className="nm">
+                  <b>{v.number ?? v.id}</b>
+                  <span className="v"> · {v.id}</span>
+                </span>
+                <Chip tone={inForce ? "success" : "quiet"}>{inForce ? "in force" : "replaced"}</Chip>
+                <span className="when">{v.confirmedAt ? `confirmed ${fmtStamp(v.confirmedAt)}` : ""}</span>
+                <span className="acts">
+                  <Button kind="quiet" compact icon="eye" onClick={() => setOpen({ kind: "voucher", reservationId: v.id, label })}>
+                    Preview
+                  </Button>
+                </span>
+              </div>
+            );
+          })}
         </div>
       ) : null}
 
-      {others.length ? (
+      {othersShown.length ? (
         <div className="papergrp">
-          <div className="h">Other papers</div>
+          {show === "all" ? <div className="h">Other papers</div> : null}
           <div className="row-acts">
-            {others.map((pp) => (
+            {othersShown.map((pp) => (
               <Button key={`${pp.kind}:${pp.label}`} kind="quiet" compact icon="file" onClick={() => setOpen(pp)}>
                 {pp.label}
               </Button>
@@ -1059,15 +1763,31 @@ export function PapersCard({ entry }: { entry: EntryDetail }) {
         </div>
       ) : null}
 
-      <div className="meta" style={{ marginTop: 8 }}>
-        Every version is kept. A replaced paper prints the figures that were on the table when it
-        was replaced, never today&rsquo;s · preview never sends anything.
-      </div>
+      <HelpHere label="About the papers">
+        Every version is kept. A replaced paper prints the figures that were on the table when it was replaced, never today&rsquo;s. A
+        preview never sends anything.
+      </HelpHere>
       <PaperDrawer paper={open} onClose={() => setOpen(null)} />
       <QuotationSendDialog entry={entry} target={sendQuote} onClose={() => setSendQuote(null)} onSent={() => { setSendQuote(null); refresh(); }} />
       <InvoiceSendDialog entry={entry} target={sendInvoice} onClose={() => setSendInvoice(null)} onSent={() => { setSendInvoice(null); refresh(); }} />
-    </StepCard>,
-    slot,
+    </StepCard>
+  );
+}
+
+/** The notes written with a paper, under its row. */
+function PaperNotes({ notes }: { notes: Array<{ key: string; text: string; who: string | null; at: string }> }) {
+  if (notes.length === 0) return null;
+  return (
+    <div className="papernotes">
+      {notes.map((n) => (
+        <div key={n.key} className="papernote">
+          <Icon name="pen" /> <span className="t">&ldquo;{n.text}&rdquo;</span>
+          <span className="who">
+            {n.who ? ` — ${n.who}` : ""}, {fmtStamp(n.at)}
+          </span>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -1110,6 +1830,16 @@ export function QuotationSendDialog({
   // not change — same quotation, same number, same validity, and the stored PDF is still the
   // priced one; only the copy the guest receives has the money taken off.
   const [hidePrices, setHidePrices] = useState(false);
+  /**
+   * The internal note goes with the send (2026-10-12, operator: "keep the internal note in the pop
+   * up so that there is only one send button"). It is kept as a note on the booking, filed against
+   * this quotation — so it shows in Notes naming the quotation, and beside it in Documents.
+   */
+  const [note, setNote] = useState("");
+  const qc = useQueryClient();
+  useEffect(() => {
+    setNote("");
+  }, [target?.id]);
   useEffect(() => {
     if (!target || touched) return;
     setTo(channel === "EMAIL" ? recipient.defaultTo : phoneOnFile);
@@ -1124,8 +1854,17 @@ export function QuotationSendDialog({
         sentTo: typed,
         hidePrices,
       }),
-    onSuccess: () => {
+    onSuccess: async () => {
       const face = hidePrices ? " · without prices" : "";
+      const text = note.trim();
+      if (text && target) {
+        try {
+          await addBookingNote(session!, entry.id, { kind: "NOTE", text, paperKind: "QUOTATION", paperId: target.id });
+          void qc.invalidateQueries({ queryKey: ["booking-notes", entry.id] });
+        } catch (e) {
+          toastRefusal(e, "The quotation went out, but the note could not be kept");
+        }
+      }
       toast.success(
         channel === "WHATSAPP"
           ? `${target?.referenceNumber} recorded as sent on WhatsApp to ${typed}${face}`
@@ -1218,14 +1957,25 @@ export function QuotationSendDialog({
         <label className="sm" style={{ display: "flex", gap: 8, alignItems: "center", cursor: "pointer" }}>
           <input type="checkbox" checked={hidePrices} onChange={(e) => setHidePrices(e.target.checked)} />
           Send it without prices
+          <Help label="About sending without prices">
+            The guest gets the rooms, the nights and the meal plans — no rates, no taxes, no total. The record keeps the priced quotation
+            either way.
+          </Help>
         </label>
-        {/* One sentence, ticked or not — a hint that changed length made the dialog jump as the
-            box was clicked (2026-10-06, operator: "I don't get why checking that increases the
-            box"). */}
-        <span className="hint">
-          the guest gets the rooms, the nights and the meal plans — no rates, no taxes, no total.
-          The record keeps the priced quotation either way.
-        </span>
+      </div>
+      <div className="field">
+        <label>
+          Internal note · optional
+          <Help label="About the internal note">Kept in Notes with this quotation, and shown beside it in Documents — never sent.</Help>
+        </label>
+        <textarea
+          className="input"
+          style={{ height: 64, paddingTop: 8 }}
+          maxLength={2000}
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          placeholder="only staff see this — e.g. agent prefers WhatsApp"
+        />
       </div>
     </DsDialog>
   );
@@ -1286,12 +2036,14 @@ function InvoiceSendDialog({
       }
     >
       <div className="field">
-        <label>Send to</label>
+        <label>
+          Send to
+          <Help label="About the address">
+            {recipient.party ? `${recipient.party} booked — the bill carries their rates.` : "The guest's email on file."} WhatsApp is not
+            recorded for a bill yet; hand it over and it stays on the booking either way.
+          </Help>
+        </label>
         <input className="input" value={to} onChange={(e) => { setTouched(true); setTo(e.target.value); }} placeholder="email address" />
-        <span className="hint">
-          {recipient.party ? `${recipient.party} booked — the bill carries their rates` : "the guest's email on file"} · WhatsApp is not
-          recorded for a bill yet; hand it over and it stays on the booking either way
-        </span>
       </div>
     </DsDialog>
   );
@@ -1312,7 +2064,8 @@ export function useCommunications(entryId: string) {
 /** The newest dispatched paper of one kind within the current pass. */
 export function latestDispatched(items: EntryCommunication[] | undefined, type: EntryCommunicationType, sinceIso?: string | null) {
   return (items ?? [])
-    .filter((c) => c.commType === type && c.sendStatus === "DISPATCHED" && (!sinceIso || c.createdAt >= sinceIso))
+    // Only the paper in force (2026-10-13): a replaced paper's answer is never asked for.
+    .filter((c) => c.commType === type && c.sendStatus === "DISPATCHED" && c.inForce !== false && (!sinceIso || c.createdAt >= sinceIso))
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
 }
 
@@ -1433,6 +2186,8 @@ export function useRefreshEntry(entryId: string) {
       ["folio-documents", entryId],
       ["journey-summary", entryId],
       ["closure-readiness", entryId],
+      ["held-documents", entryId],
+      ["room-chart"],
       ...extra,
     ];
     for (const k of keys) void qc.invalidateQueries({ queryKey: k as unknown[] });

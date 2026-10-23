@@ -19,6 +19,7 @@ import { listIdentityProofs } from "@/lib/api/identity-proofs";
 import { fmtStamp, plural } from "@/lib/ds/format";
 import type { EntryDetail, PreArrivalTaskSummary } from "@/types/api";
 import { ReasonDialog, StepCard, toastRefusal, useRefreshEntry, useStepMode, words } from "./kit";
+import { Help } from "@/components/ds/help";
 
 /** The task list in the desk's words, with whose job each one is (prototype `V16.PREARRIVAL`). */
 export const PRE_ARRIVAL_TASKS: Record<string, { label: string; whose: string }> = {
@@ -111,6 +112,9 @@ export function PreArrivalTasksCard({
   const canAct = (t: PreArrivalTaskSummary) =>
     !past && t.status === "PENDING" && (actionable === "all" || actionable.has(t.taskType));
   const open = tasks.filter((t) => t.status === "PENDING").length;
+  // Every task done or waived: the card folds to its heading (2026-10-23, operator) — Show opens it.
+  const [shown, setShown] = useState(false);
+  const folded = tasks.length > 0 && open === 0 && !shown;
 
   return (
     <StepCard
@@ -118,9 +122,22 @@ export function PreArrivalTasksCard({
       flowAfter={flowAfter}
       title={title}
       id={id}
-      right={tasks.length ? <Chip tone={open ? "warning" : "success"}>{open ? `${open} open` : "all done or waived"}</Chip> : undefined}
+      meta={meta}
+      right={
+        tasks.length ? (
+          <>
+            <Chip tone={open ? "warning" : "success"}>{open ? `${open} open` : "all done or waived"}</Chip>
+            {open === 0 ? (
+              <Button kind="quiet" compact aria-expanded={!folded} onClick={() => setShown((v) => !v)}>
+                {folded ? "Show" : "Hide"}
+              </Button>
+            ) : null}
+          </>
+        ) : undefined
+      }
     >
-      {meta ? <div className="meta" style={{ marginBottom: 8 }}>{meta}</div> : null}
+      {folded ? null : (
+      <>
       {movedOn && open > 0 ? (
         <div className="row-acts" style={{ justifyContent: "space-between", marginBottom: 8 }}>
           <span className="sm warn-ink">
@@ -132,8 +149,9 @@ export function PreArrivalTasksCard({
         </div>
       ) : null}
       {tasks.length === 0 ? (
-        <p className="meta">
-          No tasks on record yet — Reserve opens them; a booking reserved before the list existed gets them when Arrival opens.
+        <p className="sm">
+          No tasks on record yet.
+          <Help label="About the tasks">Reserve opens them; a booking reserved before the list existed gets them when Arrival opens.</Help>
         </p>
       ) : (
         <table className="table compact">
@@ -155,8 +173,9 @@ export function PreArrivalTasksCard({
                   {guestDetailsHint && t.taskType === "GUEST_DETAILS_CAPTURED" && coverage ? (
                     <span className={`sub${t.status === "PENDING" ? " warn-ink" : ""}`}>
                       {coverage.vipExempt
-                        ? "a VIP booking — guest details are not required; it ticks itself"
-                        : `${coverage.filledSlots} of ${plural(coverage.totalSlots, "guest")} in the guest table — it ticks itself when everyone is in`}
+                        ? "a VIP booking — guest details are not required"
+                        : `${coverage.filledSlots} of ${plural(coverage.totalSlots, "guest")} in the guest table`}
+                      <Help label="About this task">It ticks itself {coverage.vipExempt ? "for a VIP booking" : "when everyone is in the guest table"}.</Help>
                     </span>
                   ) : null}
                 </td>
@@ -188,6 +207,8 @@ export function PreArrivalTasksCard({
             ))}
           </tbody>
         </table>
+      )}
+      </>
       )}
       <ReasonDialog
         open={!!waiving}

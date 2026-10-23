@@ -12,6 +12,7 @@ import { getRegistryPolicy } from "../../lib/policy-registry-runtime.js";
 import { maxZeroSub, pctOf, round2, sumMoneyBy, toDecimal } from "../../lib/money.js";
 import { resolveOperativeQuotation } from "../../lib/operative-quotation.js";
 import { hotelCalendarYmd, hotelDayEndUtc } from "../../lib/stay-dates.js";
+import { retireSupersededReplyWaitsBestEffort } from "../../lib/reply-waits.js";
 
 function toNumber(v: any): number {
   if (typeof v === "number") return v;
@@ -313,7 +314,171 @@ async function computeAdvancePaymentEvaluation(
  * configured `advancePayment.thresholds`. The resolved amount overrides config + group boost
  * in the payment evaluation and prints as "Advance due now" on the proforma.
  */
-export async function setAdvanceRequirement(
+/**
+ * The STAY's total a quotation states (2026-09-18). A composition quote's total is the stay; a flat
+ * quote's is one night × rooms (the billing summary multiplies it by the nights), so 25% of a flat
+ * quote asked for a quarter of ONE night — a two-night group was asked Nu 1,575 of a Nu 12,600 stay.
+ * Shared by the requirement setter and the carry across a new pass, so a % reads the same in both.
+ */
+function quotationStayTotal(
+  operative: { totalAmount: unknown; commercialTerms: unknown },
+  entry: { checkInDate: Date | null; checkOutDate: Date | null } | null | undefined,
+): Prisma.Decimal {
+  const opTerms = (operative.commercialTerms ?? null) as Record<string, unknown> | null;
+  const flatQuote =
+    !(Array.isArray(opTerms?.roomCompositions) && (opTerms!.roomCompositions as unknown[]).length > 0) && opTerms?.compositionTotals == null;
+  const flatNights =
+    Number((opTerms?.pricingBreakdown as { nights?: unknown } | null)?.nights) ||
+    (entry?.checkInDate && entry?.checkOutDate
+      ? Math.max(1, Math.round((entry.checkOutDate.getTime() - entry.checkInDate.getTime()) / 86_400_000))
+      : 1);
+  return flatQuote
+    ? toDecimal(operative.totalAmount as unknown as string).mul(flatNights)
+    : toDecimal(operative.totalAmount as unknown as string);
+}
+
+/**
+ * The W38 promise clock for a dated "before check-in" promise — one live clock per booking (the
+ * caller cancels what was armed before). Shared by the plan setter and the carry across a new pass.
+ */
+async function armAdvancePromiseDeadlineTx(
+  tx: Prisma.TransactionClient,
+  input: { entryId: string; folioId: string; promisedBy: string; stage: Stage; actorId: string },
+) {
+  const firesAt = new Date(input.promisedBy);
+  const timerRecordId = randomUUID();
+  const engine = await getTimerEngine();
+  const jobId = await engine.schedule(
+    "ADVANCE_PROMISE_DEADLINE_W38",
+    { entryId: input.entryId, folioId: input.folioId, timerRecordId },
+    { startAfter: firesAt },
+  );
+  await tx.timerRecord.create({
+    data: {
+      id: timerRecordId,
+      entryId: input.entryId,
+      entityType: "Folio",
+      entityId: input.folioId,
+      timerType: "ADVANCE_PROMISE_DEADLINE_W38",
+      timerCode: "ADVANCE_PROMISE_DEADLINE_W38",
+      stageContext: input.stage,
+      firesAt,
+      dueAt: firesAt,
+      status: "SCHEDULED",
+      payload: { entryId: input.entryId, folioId: input.folioId, promisedBy: input.promisedBy },
+      pgBossJobId: jobId,
+      createdBy: input.actorId,
+    },
+  });
+}
+
+/**
+ * Carry the desk's advance decisions across a NEW PASS that is not a renegotiation (2026-10-12).
+ *
+ * The pinned advance requirement and the guest's payment plan are segment-scoped on purpose — a
+ * re-entry that RENEGOTIATES starts from the house default. But a room-change walk (room change,
+ * room move, stay extension, setup change, seating repair) also opens a pass, and there the money
+ * question was never reopened: the walk's re-freeze carries the advance condition for that very
+ * reason. Without this carry the pins silently fell back to the house default after every walk,
+ * so the advance asked of the guest could change because a room did.
+ *
+ * Re-stamps whatever was in force in the pass the walk left: an AMOUNT stays as it was; a PERCENT
+ * is re-resolved against the new pass's quotation (that is what "30%" means); a dated "before
+ * check-in" promise gets its W38 clock back (`runBackflow` cancelled it). Nothing is carried that
+ * was not in force, and nothing is touched when the pass did not change.
+ */
+export async function carryAdvancePinsAcrossNewPass(
+  prisma: PrismaClient,
+  input: { entryId: string; priorSegmentStartedAt: Date; actor: { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" }; cause: string },
+): Promise<{ requirementCarried: boolean; planCarried: boolean; requiredAmount: number | null }> {
+  const none = { requirementCarried: false, planCarried: false, requiredAmount: null };
+  const entry = await prisma.entry.findUnique({
+    where: { id: input.entryId },
+    include: { folio: true, segments: { orderBy: { segmentNumber: "desc" }, take: 1 }, quotations: true },
+  });
+  const folio = entry?.folio;
+  const newSegment = entry?.segments[0];
+  if (!entry || !folio || !newSegment) return none;
+  if (newSegment.startedAt.getTime() <= input.priorSegmentStartedAt.getTime()) return none;
+
+  const requirementInForce = resolveOperatorAdvanceRequirement(folio, input.priorSegmentStartedAt) != null;
+  const requirementNow = resolveOperatorAdvanceRequirement(folio, newSegment.startedAt) != null;
+  const planInForce = resolveAdvancePaymentPlan(folio, input.priorSegmentStartedAt);
+  const planNow = resolveAdvancePaymentPlan(folio, newSegment.startedAt);
+  const carryRequirement = requirementInForce && !requirementNow;
+  const carryPlan = !!planInForce && !planNow;
+  if (!carryRequirement && !carryPlan) return none;
+
+  const now = new Date();
+  const stampAt = newSegment.startedAt.toISOString();
+  const data: Prisma.FolioUpdateInput = {};
+  let requiredAmount: Prisma.Decimal | null = null;
+  let basisOut: Record<string, unknown> | null = null;
+  if (carryRequirement) {
+    basisOut = {
+      ...((folio.advanceRequiredBasis ?? {}) as Record<string, unknown>),
+      setAt: stampAt,
+      carriedAt: now.toISOString(),
+      carriedCause: input.cause,
+    };
+    requiredAmount = folio.advanceRequiredAmount ? toDecimal(folio.advanceRequiredAmount.toString()) : null;
+    const percent = typeof basisOut.percent === "number" ? basisOut.percent : null;
+    if (basisOut.mode === "PERCENT" && percent != null) {
+      const operative = resolveOperativeQuotation(entry.quotations, newSegment.id);
+      if (operative) {
+        const base = quotationStayTotal(operative, entry);
+        requiredAmount = round2(pctOf(base, percent));
+        basisOut.baseTotal = Number(base.toFixed(2));
+        basisOut.quotationId = operative.id;
+      }
+    }
+    data.advanceRequiredAmount = requiredAmount;
+    data.advanceRequiredBasis = basisOut as Prisma.InputJsonValue;
+  }
+  const planOut = carryPlan
+    ? { ...((folio.advancePaymentPlan ?? {}) as Record<string, unknown>), setAt: stampAt, carriedAt: now.toISOString(), carriedCause: input.cause }
+    : null;
+  if (planOut) data.advancePaymentPlan = planOut as Prisma.InputJsonValue;
+
+  await prisma.$transaction(async (tx) => {
+    await tx.folio.update({ where: { id: folio.id }, data });
+    if (planOut && planInForce?.balanceDueAt === "BEFORE_CHECKIN" && planInForce.promisedBy && new Date(planInForce.promisedBy).getTime() > now.getTime()) {
+      await cancelScheduledAdvancePromiseDeadlinesForEntry(tx, input.entryId, input.actor.actorId, "PLAN_CARRIED_TO_NEW_PASS");
+      await armAdvancePromiseDeadlineTx(tx, {
+        entryId: input.entryId,
+        folioId: folio.id,
+        promisedBy: planInForce.promisedBy,
+        stage: entry.currentStage,
+        actorId: input.actor.actorId,
+      });
+    }
+    for (const [eventType, payload] of [
+      ...(carryRequirement
+        ? [["ADVANCE_PAYMENT.REQUIREMENT_CARRIED", { requiredAmount: requiredAmount ? Number(requiredAmount.toFixed(2)) : null, basis: basisOut }] as const]
+        : []),
+      ...(planOut ? [["ADVANCE_PAYMENT.PLAN_CARRIED", { plan: planInForce }] as const] : []),
+    ]) {
+      await tx.traceEvent.create({
+        data: {
+          eventType,
+          actorId: input.actor.actorId,
+          actorLevel: input.actor.actorLevel,
+          entityType: "Folio",
+          entityId: folio.id,
+          operation: "UPDATE",
+          timestamp: now,
+          stageContext: entry.currentStage,
+          entryId: input.entryId,
+          payload: { entryId: input.entryId, folioId: folio.id, cause: input.cause, segmentNumber: newSegment.segmentNumber, ...payload } as Prisma.InputJsonValue,
+          createdBy: input.actor.actorId,
+        },
+      });
+    }
+  });
+  return { requirementCarried: carryRequirement, planCarried: carryPlan, requiredAmount: requiredAmount ? Number(requiredAmount.toFixed(2)) : null };
+}
+
+async function setAdvanceRequirementInner(
   prisma: PrismaClient,
   input: { entryId: string; folioId: string; mode: "AMOUNT" | "PERCENT" | "CLEAR"; amount?: number; percent?: number },
   actor: { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" },
@@ -344,16 +509,7 @@ export async function setAdvanceRequirement(
     if (!operative) {
       throw new ValidationError("No quotation to base a percentage on — create the quote first, or set a flat amount");
     }
-    // The STAY's total (2026-09-18). A composition quote's total is the stay; a flat quote's is
-    // one night × rooms (the billing summary multiplies it by the nights), so 25% of a flat quote
-    // asked for a quarter of ONE night — a two-night group was asked Nu 1,575 of a Nu 12,600 stay.
-    const opTerms = (operative.commercialTerms ?? null) as Record<string, unknown> | null;
-    const flatQuote = !(Array.isArray(opTerms?.roomCompositions) && (opTerms!.roomCompositions as unknown[]).length > 0) && opTerms?.compositionTotals == null;
-    const flatNights = Number((opTerms?.pricingBreakdown as { nights?: unknown } | null)?.nights) ||
-      (entry?.checkInDate && entry?.checkOutDate ? Math.max(1, Math.round((entry.checkOutDate.getTime() - entry.checkInDate.getTime()) / 86_400_000)) : 1);
-    const baseTotalDec = flatQuote
-      ? toDecimal(operative.totalAmount as unknown as string).mul(flatNights)
-      : toDecimal(operative.totalAmount as unknown as string);
+    const baseTotalDec = quotationStayTotal(operative, entry);
     requiredDec = round2(pctOf(baseTotalDec, input.percent!));
     basis = {
       mode: "PERCENT",
@@ -689,7 +845,7 @@ export async function autoCompletePaymentReconciliationTaskTx(
  * extension to pass S5/S6, exactly as before. CLEAR wipes the plan (guest changed their mind).
  * Segment-scoped by `setAt` — a re-entry starts with no plan.
  */
-export async function setAdvancePaymentPlan(
+async function setAdvancePaymentPlanInner(
   prisma: PrismaClient,
   input: {
     entryId: string;
@@ -834,30 +990,12 @@ export async function setAdvancePaymentPlan(
     );
 
     if (stored?.balanceDueAt === "BEFORE_CHECKIN" && stored.promisedBy) {
-      const firesAt = new Date(stored.promisedBy);
-      const timerRecordId = randomUUID();
-      const engine = await getTimerEngine();
-      const jobId = await engine.schedule(
-        "ADVANCE_PROMISE_DEADLINE_W38",
-        { entryId: input.entryId, folioId: input.folioId, timerRecordId },
-        { startAfter: firesAt },
-      );
-      await tx.timerRecord.create({
-        data: {
-          id: timerRecordId,
-          entryId: input.entryId,
-          entityType: "Folio",
-          entityId: input.folioId,
-          timerType: "ADVANCE_PROMISE_DEADLINE_W38",
-          timerCode: "ADVANCE_PROMISE_DEADLINE_W38",
-          stageContext: entry.currentStage,
-          firesAt,
-          dueAt: firesAt,
-          status: "SCHEDULED",
-          payload: { entryId: input.entryId, folioId: input.folioId, promisedBy: stored.promisedBy },
-          pgBossJobId: jobId,
-          createdBy: actor.actorId,
-        },
+      await armAdvancePromiseDeadlineTx(tx, {
+        entryId: input.entryId,
+        folioId: input.folioId,
+        promisedBy: stored.promisedBy,
+        stage: entry.currentStage,
+        actorId: actor.actorId,
       });
     }
 
@@ -1129,3 +1267,24 @@ export async function markAdvancePaymentReconciled(
   });
 }
 
+/**
+ * setAdvanceRequirement, then stop waiting for replies to the papers it replaced — a guest's reply is awaited only
+ * for the paper in force (2026-10-13; lib/reply-waits.ts).
+ */
+export async function setAdvanceRequirement(...args: Parameters<typeof setAdvanceRequirementInner>): ReturnType<typeof setAdvanceRequirementInner> {
+  const out = await setAdvanceRequirementInner(...args);
+  const entryId = args[1].entryId;
+  if (entryId) await retireSupersededReplyWaitsBestEffort(args[0], entryId, args[2].actorId);
+  return out;
+}
+
+/**
+ * setAdvancePaymentPlan, then stop waiting for replies to the papers it replaced — a guest's reply is awaited only
+ * for the paper in force (2026-10-13; lib/reply-waits.ts).
+ */
+export async function setAdvancePaymentPlan(...args: Parameters<typeof setAdvancePaymentPlanInner>): ReturnType<typeof setAdvancePaymentPlanInner> {
+  const out = await setAdvancePaymentPlanInner(...args);
+  const entryId = args[1].entryId;
+  if (entryId) await retireSupersededReplyWaitsBestEffort(args[0], entryId, args[2].actorId);
+  return out;
+}

@@ -47,6 +47,97 @@ export async function releaseRoomBlock(session: Session, roomId: string, body: {
   });
 }
 
+/**
+ * The house chart (2026-10-12) — every room, night by night, from `GET /api/rooms/chart`. Built
+ * by the backend from the same claim rules the room search reads, so a room drawn free here is a
+ * room the search offers. Read-only.
+ */
+export type ChartBarKind = "OVERSTAY" | "IN_HOUSE" | "CHECKED_OUT" | "RESERVED" | "HELD" | "MOVING" | "EXTENSION_HELD" | "PROVISIONAL";
+
+export type RoomChartBar = {
+  roomId: string;
+  entryId: string;
+  /** First night. */
+  from: string;
+  /** The morning after the last night (exclusive). */
+  to: string;
+  kind: ChartBarKind;
+  parked: boolean;
+  paymentPending: boolean;
+  holdExpiresAt: string | null;
+  /** The room move holding it, for MOVING (2026-10-12). */
+  moveId: string | null;
+};
+
+/** Rooms a booking has chosen and does not hold (Inquiry, or Negotiation without a provisional block). */
+export type RoomChartPick = {
+  roomId: string;
+  entryId: string;
+  from: string;
+  to: string;
+  parked: boolean;
+};
+
+export type RoomChartBooking = {
+  entryId: string;
+  inquiryId: string;
+  stage: string;
+  status: string;
+  checkInDate: string | null;
+  checkOutDate: string | null;
+  guestProfile: { firstName: string | null; lastName: string | null } | null;
+  inquiry: {
+    callerTitle: string | null;
+    callerFirstName: string | null;
+    callerLastName: string | null;
+    callerPhone: string | null;
+    callerEmail: string | null;
+  } | null;
+  partyName: string | null;
+};
+
+export type RoomChart = {
+  from: string;
+  to: string;
+  today: string;
+  nights: string[];
+  roomTypes: Array<{ id: string; code: string; name: string; roomIds: string[]; freePerNight: number[] }>;
+  rooms: Array<{
+    id: string;
+    roomNumber: string;
+    floorNumber: number | null;
+    roomTypeId: string;
+    bedType: string | null;
+    physicalState: string;
+    currentClaimState: string;
+    outOfOrder: { reason: string | null; until: string | null; nights: boolean[] } | null;
+    faultOpen: boolean;
+    nightsTaken: number;
+  }>;
+  bookings: RoomChartBooking[];
+  bars: RoomChartBar[];
+  /** Chosen, not held — counted in no figure (2026-10-16). */
+  picks: RoomChartPick[];
+  perNight: Array<{
+    date: string;
+    total: number;
+    booked: number;
+    inHouse: number;
+    reserved: number;
+    held: number;
+    outOfOrder: number;
+    free: number;
+  }>;
+};
+
+export async function getRoomChart(session: Session, q: { from?: string; nights?: number } = {}) {
+  const p = new URLSearchParams();
+  if (q.from) p.set("from", q.from);
+  if (q.nights) p.set("nights", String(q.nights));
+  const qs = p.toString();
+  return apiRequest<RoomChart>(`/api/rooms/chart${qs ? `?${qs}` : ""}`, { session });
+}
+
 export async function listRooms(session: Session) {
   // `bedTypes` = the backend's allowed bed vocabulary (KING/QUEEN/TWIN/SINGLE) — the source
   // for any bed-type dropdown, never hardcoded client-side.

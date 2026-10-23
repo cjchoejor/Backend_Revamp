@@ -9,6 +9,7 @@ import { ApiError } from "@/lib/api/client";
 import { getSettlementTargets, recordTargetPayment, type SettlementTargetRow } from "@/lib/api/split-settlement";
 import { money } from "@/lib/desk/workspace";
 import type { EntryDetail } from "@/types/api";
+import { Help } from "@/components/ds/help";
 
 /**
  * "Who's paying for what" — one row per room and space, and what each still owes (PMS-237,
@@ -185,6 +186,10 @@ export function SplitSettlementBlock({
       >
         <Split style={{ width: 13, height: 13 }} />
         Who&apos;s paying for what
+        <Help label="About who pays for what">
+          Each room and space carries its own share of the bill. Taking money here records who paid for which part — it does not check the
+          guest out or close the folio.
+        </Help>
         {data && (
           <span style={{ fontWeight: 500, color: "var(--ink-3)", fontSize: 11 }}>
             · {tally}
@@ -198,10 +203,6 @@ export function SplitSettlementBlock({
 
       {open && (
         <>
-          <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "0 0 8px" }}>
-            Each room and space carries its own share of the bill. Taking money here records{" "}
-            <b>who paid for which part</b> — it does not check the guest out or close the folio.
-          </p>
 
           {q.isLoading && <div style={{ fontSize: 12, color: "var(--ink-3)" }}>Reading the bill…</div>}
 
@@ -384,10 +385,12 @@ export function SplitSettlementBlock({
                     />
                   )}
                   {advMode && (
-                    <p style={{ fontSize: 11, color: "var(--ink-3)", margin: "4px 0 0" }}>
-                      {money(data?.unappliedPayments ?? 0, cur)} of advance is unapplied. Using it moves no money —
-                      it records that this part of the bill is answered by what the guest already paid, so the
-                      booking&apos;s balance stays as it is. You will be told how much was used and how much is left.
+                    <p style={{ fontSize: 11, margin: "4px 0 0" }}>
+                      {money(data?.unappliedPayments ?? 0, cur)} of advance is unapplied.
+                      <Help label="About using the advance">
+                        Using it moves no money — it records that this part of the bill is answered by what the guest already paid, so the
+                        booking&apos;s balance stays as it is. You will be told how much was used and how much is left.
+                      </Help>
                     </p>
                   )}
                 </div>
@@ -413,10 +416,12 @@ export function SplitSettlementBlock({
                         onChange={(e) => setDepartureReason(e.target.value)}
                         placeholder="Why is the room being released?"
                       />
-                      <p style={{ fontSize: 11, color: "var(--ink-3)", margin: "4px 0 0" }}>
-                        The room&apos;s nights stop being billed from today and it goes to housekeeping. The rest of
-                        the booking carries on. Giving up nights still booked needs the GM — if it is refused, the
-                        money is still recorded.
+                      <p style={{ fontSize: 11, margin: "4px 0 0" }}>
+                        The room&apos;s nights stop being billed from today.
+                        <Help label="About releasing the room">
+                          It goes to housekeeping and the rest of the booking carries on. Giving up nights still booked needs the GM — if it
+                          is refused, the money is still recorded.
+                        </Help>
                       </p>
                     </>
                   )}

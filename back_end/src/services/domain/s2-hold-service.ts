@@ -14,7 +14,7 @@ import {
 import { enforceCommittedHoldRoomPhysicallyUsable } from "../../policies/11-committed-hold/p26-committed-hold-inventory-availability.js";
 import { findRoomBookingConflicts } from "../../lib/room-booking-conflicts.js";
 import { foldIsoNightsToRanges, heldRoomIds } from "../../lib/entry-inventory-claim.js";
-import { readOptionSelected } from "../../lib/option-selected-reader.js";
+import { readOptionSelected, sealAsPerNight } from "../../lib/option-selected-reader.js";
 import { enforceEntryAtS2ForSpeculativeHoldPlacement } from "../../policies/10-speculative-hold/p25-s2-stage-for-speculative-hold-placement.js";
 import { enforceSpeculativeHoldPlacedForRelease } from "../../policies/10-speculative-hold/p25-speculative-hold-placed-for-release.js";
 import { enforceEntryNotSealedForWorkingAction } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
@@ -66,11 +66,17 @@ export async function placeSpeculativeHold(
       ? [input.roomId, ...sealed.distinctRoomIds.filter((id) => id !== input.roomId)]
       : [input.roomId]
     : [];
-  /** The snapshot to store — the seal's per-night list in CommittedHold's shape, when covering it. */
-  const perNightBreakdown =
-    sealCoversInput && sealed.perNight && sealed.perNight.length > 0
-      ? sealed.perNight.map((n) => ({ date: n.date, roomIds: n.roomIds.map((roomId) => ({ roomId })) }))
-      : null;
+  /**
+   * The snapshot to store — the seal's per-night list in CommittedHold's shape, when covering it.
+   * A whole-stay seal (the same rooms every night) is spelled out over the stay too (2026-10-12):
+   * stored as nothing, the hold counted only its anchor room and left the others sellable.
+   */
+  const perNightBreakdown = sealCoversInput
+    ? (sealAsPerNight(sealedCfg?.optionSelected, { checkIn: entry.checkInDate, checkOut: entry.checkOutDate })?.map((n) => ({
+        date: n.date,
+        roomIds: n.roomIds.map((r) => ({ roomId: r.roomId })),
+      })) ?? null)
+    : null;
 
   const placementThresholds = await requireActiveConfigValue<PlacementThresholds>(prisma, "speculativeHold.placementThresholds").catch(() => {
     throw new MissingConfigurationError("speculativeHold.placementThresholds");

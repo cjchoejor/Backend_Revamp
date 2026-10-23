@@ -42,7 +42,7 @@ export interface ButtonProps extends Omit<React.ButtonHTMLAttributes<HTMLButtonE
 }
 
 export function Button({ kind = "primary", solid, compact, iconOnly, icon, state = "default", reason, unlockRole, onWhy, workingLabel, className = "", children, onClick, type, ...rest }: ButtonProps) {
-  const cls = ["btn", `btn-${kind}`, solid ? "solid" : "", compact ? "compact" : "", iconOnly ? "icon-only" : "", state === "inert" ? "inert" : "", state === "faulty" ? "faulty" : "", className].filter(Boolean).join(" ");
+  const cls = ["btn", `btn-${kind}`, solid ? "solid" : "", compact ? "compact" : "", iconOnly ? "icon-only" : "", state === "inert" ? "inert" : "", state === "faulty" ? "faulty" : "", state === "working" ? "working" : "", className].filter(Boolean).join(" ");
   // Inert stays focusable (aria-disabled, not disabled) so its reason can be read by keyboard;
   // the click is swallowed so nothing executes (DSS §6).
   const inert = state === "inert" || state === "faulty" || state === "working";
@@ -55,7 +55,7 @@ export function Button({ kind = "primary", solid, compact, iconOnly, icon, state
       {...rest}
       onClick={inert ? (e: React.MouseEvent<HTMLButtonElement>) => { e.preventDefault(); e.stopPropagation(); } : onClick}
     >
-      {state === "working" ? <span className="spin" style={kind === "primary" ? { borderTopColor: "#fff", borderColor: "rgba(255,255,255,.35)" } : undefined} /> : state === "faulty" ? <Icon name="alert" /> : icon ? <Icon name={icon} /> : null}
+      {state === "working" ? <span className="spin" aria-hidden="true" /> : state === "faulty" ? <Icon name="alert" /> : icon ? <Icon name={icon} /> : null}
       {state === "working" ? (workingLabel ?? children) : children}
     </button>
   );

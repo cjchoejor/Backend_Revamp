@@ -56,6 +56,13 @@ const listSelect = {
       cameInAs: true,
       defaultCustodianId: true,
       notes: true,
+      // The caller (2026-10-12): an inquiry has no guest named until Wrap up, so the lists name
+      // whoever rang until then.
+      callerTitle: true,
+      callerFirstName: true,
+      callerLastName: true,
+      callerPhone: true,
+      callerEmail: true,
       travelAgent: { select: { id: true, displayName: true } },
       corporateAccount: { select: { id: true, displayName: true } },
     },

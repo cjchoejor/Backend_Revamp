@@ -26,6 +26,12 @@ export const ENTRY_ENDINGS = {
   CANCELLED: "CANCELLED",
   /** Checked in, then left for good without settling through check-out. */
   WALKED_OUT: "WALKED_OUT",
+  /**
+   * Its guests and rooms were added to the same guest's other booking (2026-10-19) — allowed only
+   * while both were at Inquiry or Negotiation, before anything was stamped. The desk's act, with
+   * its words; `closedReason` names the booking it went into.
+   */
+  COMBINED: "COMBINED",
 } as const;
 
 export type EntryEnding = (typeof ENTRY_ENDINGS)[keyof typeof ENTRY_ENDINGS];

@@ -160,6 +160,7 @@ function ReturnStayDialog({ entry, onClose }: { entry: EntryDetail; onClose: () 
       busy={add.isPending}
       width={560}
       title="They are coming back"
+      help="A second booking under the same enquiry: it holds its own rooms for its own nights and carries its own bill, so the room is free to sell in between. It starts at Inquiry with the rooms still to choose."
       caseLines={[entry.inquiry?.id ?? entry.id, `${plural(trip.stays.length, "stay")} so far`]}
       footer={
         <>
@@ -178,11 +179,7 @@ function ReturnStayDialog({ entry, onClose }: { entry: EntryDetail; onClose: () 
         </>
       }
     >
-      <p className="sm">
-        A second booking under the same enquiry: it holds its own rooms for its own nights and carries its own bill, so
-        the room is free to sell in between. It starts at Inquiry with the rooms still to choose.
-      </p>
-      <div className="form2" style={{ marginTop: 10 }}>
+      <div className="form2">
         <div className="field">
           <label>Coming back on</label>
           <input
@@ -223,10 +220,11 @@ export function TripCard({ entry }: { entry: EntryDetail }) {
     <StepCard
       title="This trip"
       right={<AddReturnStay entry={entry} />}
+      status={many ? `${plural(trip.stays.length, "stay")} on enquiry ${entry.inquiry?.id ?? "—"}` : `One stay, on enquiry ${entry.inquiry?.id ?? "—"}`}
       meta={
         many
-          ? `${plural(trip.stays.length, "stay")} on enquiry ${entry.inquiry?.id ?? "—"} — each one holds its own rooms and carries its own bill.`
-          : `One stay, on enquiry ${entry.inquiry?.id ?? "—"}. If the guest leaves and comes back, add the return stay here rather than starting again.`
+          ? "Each stay holds its own rooms and carries its own bill."
+          : "If the guest leaves and comes back, add the return stay here rather than starting again."
       }
     >
       {many ? <TripStays entry={entry} /> : null}

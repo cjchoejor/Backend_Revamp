@@ -225,6 +225,7 @@ async function main() {
     // --- SIG-S2 required keys (Section 9) ---
     { configKey: "expiry.s2.quotationValidityDays", configValue: 2, notes: "S2 quotation validity (days)" },
     { configKey: "expiry.s2.negotiationTtlSeconds", configValue: 86400, notes: "S2 Negotiation window (seconds) — W20 lapses a booking that stalls at Negotiation; a live quote stretches it to its validity (2026-09-29, SIG-S2 §7.6)" },
+    { configKey: "guestRequest.kinds", configValue: ["Airport pickup", "Airport drop", "Early check-in", "Late check-out", "Celebration (cake, flowers)", "Room set-up", "Food and drink", "Something else"], notes: "Guest requests (BE-64, 2026-10-12) — the kinds the desk picks from; order is the order on the desk" },
     { configKey: "expiry.s2.speculativeHoldTtlSeconds", configValue: 900, notes: "S2 speculative hold default TTL seconds" },
     { configKey: "discount.fom.maxPercentage", configValue: 10, notes: "Front desk discount threshold (percent)" },
     { configKey: "discount.gm.maxPercentage", configValue: 25, notes: "FOM discount threshold; above requires GM (percent)" },

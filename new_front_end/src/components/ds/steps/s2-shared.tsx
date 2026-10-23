@@ -189,10 +189,10 @@ export function CompetingClaimsCard({ entryId }: { entryId: string }) {
           ))}
         </tbody>
       </table>
-      <p className="meta" style={{ marginTop: 8 }}>
+      <p className={anyHard ? "stop-ink sm" : "sm"} style={{ marginTop: 8 }}>
         {anyHard
-          ? "A hold or a reservation already stands on these nights — this booking will be refused at the committed hold. Change the rooms at Inquiry, or ask the GM to release theirs."
-          : "Nobody holds these nights yet. Whoever places the committed hold first takes the rooms — the other booking is refused then, not before."}
+          ? "These nights are already held — this booking will be refused at the hold. Change the rooms, or ask the GM to release theirs."
+          : "Nobody holds these nights yet — whoever places the hold first takes the rooms."}
       </p>
     </StepCard>
   );

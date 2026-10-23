@@ -24,6 +24,7 @@ import {
 } from "@/lib/api/inquiries";
 import { plural } from "@/lib/ds/format";
 import { toastRefusal } from "./kit";
+import { Help, HelpHere } from "@/components/ds/help";
 
 /* ------------------------------------------------------------------ vocabulary */
 
@@ -455,14 +456,16 @@ export function PartySearch({
   if (party) {
     return (
       <div className="wide field">
-        <label>{label}</label>
+        <label>
+          {label}
+          <Help label={`About ${label}`}>The record carries the rates and the terms.</Help>
+        </label>
         <span style={{ display: "flex", gap: 6 }}>
           <input className="input" readOnly style={{ flex: 1, minWidth: 0 }} value={party.contactEmail ? `${party.displayName} · ${party.contactEmail}` : party.displayName} />
           <Button kind="secondary" compact onClick={() => setParty(null)}>
             Change
           </Button>
         </span>
-        <span className="hint">the record carries the rates and the terms</span>
       </div>
     );
   }
@@ -473,7 +476,10 @@ export function PartySearch({
   const atCap = cap !== undefined && matches.length >= cap;
   return (
     <div className="wide field" ref={wrap}>
-      <label>{label}</label>
+      <label>
+        {label}
+        <Help label={`About ${label}`}>Optional. Pick the {noun} and its rates follow — the record carries the rates and the terms.</Help>
+      </label>
       <input
         className="input"
         placeholder="start typing — the record carries the rates and the terms"
@@ -519,9 +525,7 @@ export function PartySearch({
           </span>
           {filingBlock}
         </>
-      ) : (
-        <span className="hint">optional · pick the {noun} and its rates follow</span>
-      )}
+      ) : null}
     </div>
   );
 }
@@ -608,7 +612,7 @@ export function PartyContacts({
         <Button kind="quiet" compact onClick={() => setAdding(false)}>
           Not now
         </Button>
-        <span className="meta">kept on {party.displayName}, so it is here the next time they book</span>
+        <Help label="About filing a contact">Kept on {party.displayName}, so it is here the next time they book.</Help>
       </div>
     </div>
   ) : (
@@ -646,13 +650,9 @@ export function PartyContacts({
               value={contact.email ?? ""}
               onChange={(e) => setContact({ ...contact, email: e.target.value })}
             />
-            <span className="hint">
-              {contacts.length === 0
-                ? `No contact person on file — these are ${party.displayName}'s own details; type over them if someone else is calling.`
-                : contacts.length > 1
-                  ? `Taken from ${party.displayName} — ${contacts.length} people are on file, so check it is the right one.`
-                  : `Taken from ${party.displayName} — change it if someone else is calling.`}
-            </span>
+            {contacts.length > 1 ? (
+              <span className="hint warn-ink">{contacts.length} people are on file for {party.displayName} — check it is the right one.</span>
+            ) : null}
           </div>
         </div>
         {contacts.length > 1 || (contacts.length > 0 && !pickedIsOnFile) ? (
@@ -725,6 +725,17 @@ export function ChildChargeNote({
       .join(" · ");
   const red = named(overAge);
   const amber = named(new Set([...adultBand].filter((i) => !overAge.has(i))));
+  // The bands are an explanation — behind a "?" (2026-10-20); a child charged as an adult or
+  // entered too old is a message, and stays on screen.
+  const bands = loaded ? (
+    <>
+      Everyone under {minAdult} is a child, and the age sets the charge: under {youngMax + 1} stay and eat free · {youngMax + 1}–{childMax} at child
+      rates{childMealPercent !== null ? ` (${childMealPercent}% of meals)` : ""} · {childMax + 1}–{minAdult - 1} charged as adults (own bed, full room
+      share, {adultMealPercent !== null ? `${adultMealPercent}% of meals` : "full meals"}) while still minors for supervision. {minAdult} and over go under
+      Adults.
+    </>
+  ) : null;
+  if (!red && !amber) return bands ? <HelpHere label="How children are charged">{bands}</HelpHere> : null;
   return (
     <div className={red ? "refusal rule" : "notice inert"} style={{ display: "grid", gap: 4 }}>
       {red ? (
@@ -738,19 +749,7 @@ export function ChildChargeNote({
           <b>{amber.charAt(0).toUpperCase() + amber.slice(1)}</b> — charged at the adult rate.
         </span>
       ) : null}
-      {loaded ? (
-        <span className="sm ink-2">
-          Everyone under {minAdult} is a child, and the age sets the charge: under {youngMax + 1} stay and eat free · {youngMax + 1}–{childMax} at child
-          rates{childMealPercent !== null ? ` (${childMealPercent}% of meals)` : ""} ·{" "}
-          <b>
-            {childMax + 1}–{minAdult - 1} charged as adults
-          </b>{" "}
-          (own bed, full room share, {adultMealPercent !== null ? `${adultMealPercent}% of meals` : "full meals"}) while still minors for supervision. {minAdult}{" "}
-          and over go under Adults.
-        </span>
-      ) : (
-        <span className="meta">Reading the hotel&rsquo;s child charge bands…</span>
-      )}
+      {bands ? <Help label="How children are charged">{bands}</Help> : null}
     </div>
   );
 }

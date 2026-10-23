@@ -15,6 +15,20 @@ export const createGuestProfileRequestSchema = z
   });
 export type CreateGuestProfileRequestDto = z.infer<typeof createGuestProfileRequestSchema>;
 
+/** Wrap up at Inquiry (2026-10-10): a phone or email the guest gave once rooms were chosen. */
+export const addGuestProfileContactRequestSchema = z
+  .object({
+    phone: z.string().trim().max(40).optional().nullable(),
+    email: z.string().trim().max(200).optional().nullable(),
+    entryId: z.string().trim().max(64).optional().nullable(),
+  })
+  .refine((d) => !!d.phone || !!d.email, { message: "Give the phone, the email, or both" })
+  .refine((d) => !d.email || z.string().email().safeParse(d.email).success, {
+    message: "Invalid email address",
+    path: ["email"],
+  });
+export type AddGuestProfileContactRequestDto = z.infer<typeof addGuestProfileContactRequestSchema>;
+
 export const searchGuestProfilesQuerySchema = z.object({
   q: z.string().trim().min(1).optional(),
   limit: z.coerce.number().int().min(1).max(50).optional().default(20),
