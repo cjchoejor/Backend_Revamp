@@ -120,6 +120,8 @@ async function writeSuggestion(
       raw: (data.raw ?? undefined) as Prisma.InputJsonValue | undefined,
       error: data.error ?? null,
       extractedAt: now,
+      stage: null,
+      stageAt: null,
     },
     update: {
       engine: data.engine,
@@ -133,6 +135,8 @@ async function writeSuggestion(
       appliedBy: null,
       dismissedAt: null,
       dismissedBy: null,
+      stage: null,
+      stageAt: null,
     },
   });
   await prisma.traceEvent.create({
@@ -210,9 +214,9 @@ export async function previewPhoneExtraction(
  * phone preview can too.
  */
 /** The four layouts the printed-text reader anchors on; any other type gives no layout hint. */
-type LayoutKind = "CID" | "VOTER_CARD" | "BIRTH_CERTIFICATE" | "WORK_PERMIT";
+type LayoutKind = "CID" | "VOTER_CARD" | "BIRTH_CERTIFICATE" | "WORK_PERMIT" | "PASSPORT";
 const asLayoutKind = (t: string | null | undefined): LayoutKind | null =>
-  t === "CID" || t === "VOTER_CARD" || t === "BIRTH_CERTIFICATE" || t === "WORK_PERMIT" ? t : null;
+  t === "CID" || t === "VOTER_CARD" || t === "BIRTH_CERTIFICATE" || t === "WORK_PERMIT" || t === "PASSPORT" ? t : null;
 
 export async function analyzeIdentityImage(
   prisma: PrismaClient,
@@ -235,8 +239,7 @@ export async function analyzeIdentityImage(
       where: { entryId: opts.entryId, subjectKey: opts.subjectKey, storageKey: null },
       select: { documentType: true },
     });
-    const t = detail?.documentType;
-    if (t === "CID" || t === "VOTER_CARD" || t === "BIRTH_CERTIFICATE" || t === "WORK_PERMIT") kindHint = t;
+    kindHint = asLayoutKind(detail?.documentType);
   }
   const result = await extractIdentityFromImage(bytes, { kindHint });
   if (!result) return { available: true, engine: null, fields: {}, fieldConfidence: {}, source: null };
@@ -331,11 +334,33 @@ export async function runServerExtractionForPhoto(
   if (serverOcrDisabled()) {
     return { skipped: true as const, reason: "OCR_DISABLED", suggestion: existing };
   }
-  if (!existing) {
-    await prisma.identityOcrSuggestion.create({
-      data: { photoDocumentId: photo.id, entryId: photo.entryId, subjectKey: photo.subjectKey, engine: "SERVER_QR", status: "PENDING" },
-    });
-  }
+  // Reading now: PENDING, and the time it was asked for kept when it waited in the queue.
+  const startedAt = new Date();
+  await prisma.identityOcrSuggestion.upsert({
+    where: { photoDocumentId: photo.id },
+    create: {
+      photoDocumentId: photo.id,
+      entryId: photo.entryId,
+      subjectKey: photo.subjectKey,
+      engine: "SERVER_QR",
+      status: "PENDING",
+      stage: "QR",
+      stageAt: startedAt,
+      readingSince: startedAt,
+    },
+    update: {
+      status: "PENDING",
+      stage: "QR",
+      stageAt: startedAt,
+      ...(existing?.status === "PENDING" && existing.readingSince ? {} : { readingSince: startedAt }),
+      error: null,
+    },
+  });
+  const onStage = async (stage: string) => {
+    await prisma.identityOcrSuggestion
+      .update({ where: { photoDocumentId: photo.id }, data: { stage, stageAt: new Date() } })
+      .catch(() => {});
+  };
   try {
     const { extractIdentityFromImage } = await import("../../lib/identity-ocr/server-extract.js");
     const file = await readIdentityProofFile(prisma, photo.id);
@@ -350,10 +375,9 @@ export async function runServerExtractionForPhoto(
         where: { entryId: photo.entryId, subjectKey: photo.subjectKey, storageKey: null },
         select: { documentType: true },
       });
-      const t = detail?.documentType;
-      if (t === "CID" || t === "VOTER_CARD" || t === "BIRTH_CERTIFICATE" || t === "WORK_PERMIT") kindHint = t;
+      kindHint = asLayoutKind(detail?.documentType);
     }
-    const result = await extractIdentityFromImage(file.bytes, { kindHint });
+    const result = await extractIdentityFromImage(file.bytes, { kindHint, onStage });
     if (!result) {
       // Nothing read — but the type the person picked is still worth suggesting to the desk.
       const picked = opts.documentType ? await sanitiseFields(prisma, { documentType: opts.documentType }, { documentType: "READ" }) : null;
@@ -392,10 +416,36 @@ export async function runServerExtractionForPhoto(
   }
 }
 
+/**
+ * A reading has been asked for (an upload, or Scan again — 2026-10-23): the photo's suggestion
+ * reads PENDING · QUEUED from this moment, so the desk shows it waiting and polls for the result.
+ * Before, a re-read of a photo that already had a suggestion left it as it was until the worker
+ * started, and the desk had nothing to wait on — the result only showed after a reload.
+ */
+export async function markOcrQueued(prisma: PrismaClient, photoDocumentId: string): Promise<void> {
+  const photo = await loadPhoto(prisma, photoDocumentId);
+  const now = new Date();
+  await prisma.identityOcrSuggestion.upsert({
+    where: { photoDocumentId: photo.id },
+    create: {
+      photoDocumentId: photo.id,
+      entryId: photo.entryId,
+      subjectKey: photo.subjectKey,
+      engine: "SERVER_QR",
+      status: "PENDING",
+      stage: "QUEUED",
+      stageAt: now,
+      readingSince: now,
+    },
+    update: { status: "PENDING", stage: "QUEUED", stageAt: now, readingSince: now, error: null },
+  });
+}
+
 /** Queue the W39 server extraction for a freshly stored photo (best-effort, never throws). */
-export async function enqueueServerExtraction(photoDocumentId: string, actorId: string): Promise<void> {
+export async function enqueueServerExtraction(prisma: PrismaClient, photoDocumentId: string, actorId: string): Promise<void> {
   if (serverOcrDisabled()) return;
   try {
+    await markOcrQueued(prisma, photoDocumentId);
     const engine = await getTimerEngine();
     await engine.schedule("IDENTITY_OCR_W39", { photoDocumentId, actorId }, { startAfter: new Date() });
   } catch (err) {
@@ -487,10 +537,28 @@ export type OcrSuggestionView = {
   error: string | null;
   extractedAt: Date | null;
   appliedAt: Date | null;
+  /** While PENDING: QUEUED · QR · STRIP · TEXT. */
+  stage: string | null;
+  stageAt: Date | null;
+  readingSince: Date | null;
+  /** PENDING with a stage that has not moved for minutes — the reading stopped; Scan again. */
+  stalled: boolean;
+  /** How long the last reading took, once it ended. */
+  readSeconds: number | null;
+  /** Measured on the server's clock when this answer was made — the desk counts on from its arrival,
+   *  so a desk machine whose clock disagrees still shows the right seconds. */
+  readingForSeconds: number | null;
+  stageForSeconds: number | null;
+  endedForSeconds: number | null;
 };
+
+/** A stage that has not moved in this long belongs to a reading that died. */
+const STALLED_AFTER_MS = 5 * 60_000;
 
 export async function listOcrSuggestionsForEntry(prisma: PrismaClient, entryId: string): Promise<OcrSuggestionView[]> {
   const rows = await prisma.identityOcrSuggestion.findMany({ where: { entryId }, orderBy: { updatedAt: "desc" } });
+  const now = Date.now();
+  const secsSince = (d: Date | null) => (d ? Math.max(0, Math.round((now - d.getTime()) / 100) / 10) : null);
   return rows.map((r) => ({
     id: r.id,
     photoDocumentId: r.photoDocumentId,
@@ -503,5 +571,16 @@ export async function listOcrSuggestionsForEntry(prisma: PrismaClient, entryId: 
     error: r.error,
     extractedAt: r.extractedAt,
     appliedAt: r.appliedAt,
+    stage: r.status === "PENDING" ? r.stage : null,
+    stageAt: r.status === "PENDING" ? r.stageAt : null,
+    readingSince: r.readingSince,
+    stalled: r.status === "PENDING" && Date.now() - (r.stageAt ?? r.updatedAt).getTime() > STALLED_AFTER_MS,
+    readSeconds:
+      r.status !== "PENDING" && r.readingSince && r.extractedAt && r.extractedAt >= r.readingSince
+        ? Math.round((r.extractedAt.getTime() - r.readingSince.getTime()) / 100) / 10
+        : null,
+    readingForSeconds: r.status === "PENDING" ? secsSince(r.readingSince) : null,
+    stageForSeconds: r.status === "PENDING" ? secsSince(r.stageAt) : null,
+    endedForSeconds: r.status !== "PENDING" ? secsSince(r.extractedAt) : null,
   }));
 }

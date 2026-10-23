@@ -15,20 +15,30 @@ import { ocrWithFlorence, ocrWithTesseractPage, warmFlorence } from "./layout-oc
 /** A read, or (2026-10-23) a warm-up that only loads the model. */
 type Req = { id: number; bytesB64?: string; engine?: "florence2" | "tesseract"; warm?: boolean };
 
-process.on("message", async (msg: Req) => {
-  if (!msg || typeof msg.id !== "number") return;
+async function handle(msg: Req): Promise<void> {
   try {
     if (msg.warm) {
       await warmFlorence();
       process.send?.({ id: msg.id, lines: [] });
       return;
     }
+    // Load first, then say the read has begun — the parent times the READ, not the load.
+    if (msg.engine === "florence2") await warmFlorence();
+    process.send?.({ id: msg.id, started: true });
     const bytes = Buffer.from(msg.bytesB64 ?? "", "base64");
     const lines = msg.engine === "florence2" ? await ocrWithFlorence(bytes) : await ocrWithTesseractPage(bytes);
     process.send?.({ id: msg.id, lines });
   } catch (err) {
     process.send?.({ id: msg.id, error: err instanceof Error ? err.message : String(err) });
   }
+}
+
+// One read at a time (2026-10-23): two photos read at once on the CPU each took longer than the
+// two one after the other, and pushed the second past its time limit.
+let queue: Promise<void> = Promise.resolve();
+process.on("message", (msg: Req) => {
+  if (!msg || typeof msg.id !== "number") return;
+  queue = queue.then(() => handle(msg));
 });
 
 process.send?.({ ready: true });

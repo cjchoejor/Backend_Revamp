@@ -909,6 +909,12 @@ model IdentityOcrSuggestion {
   appliedBy       String?
   dismissedAt     DateTime?
   dismissedBy     String?
+  /// The reading under way (2026-10-23): QUEUED · QR · STRIP · TEXT while PENDING, null once it ends.
+  stage           String?
+  /// When the reading entered that stage — a stage that stops moving for minutes is a stalled read.
+  stageAt         DateTime?
+  /// When the current reading was asked for (upload or Scan again); the desk shows how long it runs.
+  readingSince    DateTime?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 

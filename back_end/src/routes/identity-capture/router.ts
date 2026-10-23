@@ -130,6 +130,8 @@ identityCaptureRouter.post(
       void (async () => {
         if (identityOcrService.serverOcrDisabled()) return;
         try {
+          // The desk shows the photo waiting to be read from the moment it lands.
+          await identityOcrService.markOcrQueued(prisma, created.id);
           const engine = await (await import("../../services/infrastructure/timer-management-service.js")).getTimerEngine();
           await engine.schedule(
             "IDENTITY_OCR_W39",

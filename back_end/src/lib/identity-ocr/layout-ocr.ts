@@ -132,7 +132,12 @@ export async function ocrWithFlorence(bytes: Buffer): Promise<LayoutOcrLine[]> {
 /** Whole-page tesseract (generic `eng`), used only as the fallback engine. */
 export async function ocrWithTesseractPage(bytes: Buffer): Promise<LayoutOcrLine[]> {
   const { createWorker, PSM } = await import("tesseract.js");
-  const worker = await createWorker("eng", 1, { cachePath: process.env.OCR_TESSDATA_DIR ?? "./storage/tessdata", logger: () => {} });
+  const worker = await createWorker("eng", 1, {
+    cachePath: process.env.OCR_TESSDATA_DIR ?? "./storage/tessdata",
+    logger: () => {},
+    // A failed job rejects its promise instead of throwing where nothing can catch it.
+    errorHandler: (e: unknown) => console.warn("[identity-ocr] page tesseract failed:", String(e).slice(0, 200)),
+  });
   try {
     await worker.setParameters({ tessedit_pageseg_mode: PSM.AUTO });
     const png = await sharp(bytes, { failOn: "none" }).rotate().resize({ width: 2000, withoutEnlargement: false }).grayscale().normalise().png().toBuffer();
@@ -153,8 +158,11 @@ export async function ocrWithTesseractPage(bytes: Buffer): Promise<LayoutOcrLine
 // runs it in this process instead (the spike script, tests).
 // ---------------------------------------------------------------------------------------
 const IDLE_MS = 10 * 60_000;
+/** A read that has begun (the model loaded) and not finished in this time is stuck. */
 const REQUEST_TIMEOUT_MS = 180_000;
-type Pending = { resolve: (lines: LayoutOcrLine[]) => void; reject: (e: Error) => void; timer: NodeJS.Timeout };
+/** Waiting in the child's line, or for a first download of the model, before a read begins. */
+const START_TIMEOUT_MS = 15 * 60_000;
+type Pending = { resolve: (lines: LayoutOcrLine[]) => void; reject: (e: Error) => void; timer: NodeJS.Timeout; onStart?: () => void };
 let child: ChildProcess | null = null;
 let childReady: Promise<void> | null = null;
 let idleTimer: NodeJS.Timeout | null = null;
@@ -214,6 +222,10 @@ async function ensureChild(): Promise<ChildProcess> {
     if (typeof m?.id !== "number") return;
     const p = pending.get(m.id);
     if (!p) return;
+    if (m.started) {
+      p.onStart?.();
+      return;
+    }
     pending.delete(m.id);
     clearTimeout(p.timer);
     if (m.error) p.reject(new Error(String(m.error)));
@@ -231,12 +243,19 @@ async function ocrInChild(bytes: Buffer, engine: "florence2" | "tesseract"): Pro
   touchIdle();
   const id = ++seq;
   return new Promise<LayoutOcrLine[]>((resolve, reject) => {
-    const timer = setTimeout(() => {
+    const stuck = (what: string) => () => {
       pending.delete(id);
-      stopChild("timed out");
-      reject(new Error("layout OCR timed out"));
-    }, REQUEST_TIMEOUT_MS);
-    pending.set(id, { resolve, reject, timer });
+      stopChild(what);
+      reject(new Error(`layout OCR ${what}`));
+    };
+    const entry: Pending = { resolve, reject, timer: setTimeout(stuck("never started"), START_TIMEOUT_MS) };
+    // The read's own clock starts when the child begins it — not while it waits its turn or loads.
+    entry.onStart = () => {
+      clearTimeout(entry.timer);
+      entry.timer = setTimeout(stuck("timed out"), REQUEST_TIMEOUT_MS);
+      touchIdle();
+    };
+    pending.set(id, entry);
     c.send({ id, bytesB64: bytes.toString("base64"), engine });
   });
 }
