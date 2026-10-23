@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Check, ChevronDown, ChevronRight, FileText, Fingerprint, Lock, ScanLine, Smartphone, Upload, X } from "lucide-react";
+import { AlertTriangle, Check, ChevronDown, ChevronRight, Eraser, FileText, Fingerprint, Lock, ScanLine, Smartphone, Upload, X } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
@@ -26,6 +26,7 @@ import {
   mintPhoneCaptureToken,
   rerunPhotoOcr,
   confirmGuestIdentityDetails,
+  clearGuestIdentitySlot,
   saveGuestIdentityDetail,
   uploadIdentityProof,
   type IdentityProofSummary,
@@ -38,6 +39,8 @@ import { StepAction } from "./step-action";
 import type { EntryDetail } from "@/types/api";
 import { fmtDateTime, fmtTime, HOTEL_TZ_DEFAULT } from "@/lib/ds/format";
 import { Help, HelpHere } from "@/components/ds/help";
+import { DsDialog, NotNow } from "@/components/ds/steps/kit";
+import { Button } from "@/design-system";
 
 /**
  * Guest-detail table on Arrival (2026-08-10, operator request — "store ID proof of every
@@ -392,6 +395,10 @@ export function IdentityProofBlock({
   const [touched, setTouched] = useState<Record<string, boolean>>({});
   const [savedFlash, setSavedFlash] = useState<string | null>(null);
   const [busySlot, setBusySlot] = useState<string | null>(null);
+  // Clearing a guest's row (2026-10-23): which guest, and what of theirs goes.
+  const [clearFor, setClearFor] = useState<PartySlot | null>(null);
+  const [clearDetails, setClearDetails] = useState(false);
+  const [clearPhoto, setClearPhoto] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   // Which guest the open picker is capturing for — set at button-click time, read on change.
   const pendingSlotRef = useRef<PartySlot | null>(null);
@@ -694,6 +701,45 @@ export function IdentityProofBlock({
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["identity-proofs", entryId] }),
     onError: (e) => toast.error(e instanceof Error ? e.message : "Could not queue the read"),
   });
+
+  // Clear a guest's row (2026-10-23, operator: "a clear option for both image and text"). What is
+  // only typed here and never saved is just emptied on the desk; what is saved goes through the
+  // server, which also opens the Arrival checklist's guest-details task again when it must.
+  const clearM = useMutation({
+    mutationFn: async (args: { slot: PartySlot; details: boolean; photo: boolean }) => {
+      const savedHasDetails = !sameDraft(draftFromRow(detailRow(args.slot.key)), EMPTY_DRAFT);
+      const hasPhoto = photosFor(args.slot.key).length > 0;
+      const details = args.details && savedHasDetails;
+      const photo = args.photo && hasPhoto;
+      if (!details && !photo) return null;
+      return clearGuestIdentitySlot(session!, entryId, { subjectKey: args.slot.key, details, photo });
+    },
+    onSuccess: (outcome, args) => {
+      if (args.details) {
+        setTouched((prev) => ({ ...prev, [args.slot.key]: false }));
+        setDrafts((prev) => ({ ...prev, [args.slot.key]: EMPTY_DRAFT }));
+      }
+      const name = outcome?.label ?? args.slot.label;
+      const what = [args.details ? "details" : null, outcome?.photosCleared ? (outcome.photosCleared > 1 ? "ID photos" : "ID photo") : null]
+        .filter(Boolean)
+        .join(" and ");
+      toast.success(`${name}'s ${what || "details"} cleared`);
+      if (outcome?.taskReopened) toast.warning("The Arrival checklist's guest-details task is open again — this guest needs their details");
+      setClearFor(null);
+      void queryClient.invalidateQueries({ queryKey: ["identity-proofs", entryId] });
+      void queryClient.invalidateQueries({ queryKey: ["entry", entryId] });
+      void queryClient.invalidateQueries({ queryKey: ["entry-trace", entryId] });
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Could not clear the guest's row"),
+  });
+  const openClear = (slot: PartySlot) => {
+    const draft = drafts[slot.key] ?? EMPTY_DRAFT;
+    const hasDetails = !sameDraft(draft, EMPTY_DRAFT) || !sameDraft(draftFromRow(detailRow(slot.key)), EMPTY_DRAFT);
+    const hasPhoto = photosFor(slot.key).length > 0;
+    setClearDetails(hasDetails);
+    setClearPhoto(hasPhoto);
+    setClearFor(slot);
+  };
 
   /** Blur handler — persists the row when anything actually changed. */
   const saveIfChanged = (slot: PartySlot) => {
@@ -1324,6 +1370,22 @@ export function IdentityProofBlock({
                             <ScanLine style={{ width: 13, height: 13 }} />
                           </button>
                         )}
+                        {(covered || !sameDraft(draft, EMPTY_DRAFT)) && (
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-sm"
+                            disabled={locked || clearM.isPending}
+                            onClick={() => openClear(slot)}
+                            aria-label={`Clear ${displayName}'s row`}
+                            title={
+                              locked
+                                ? 'These details are confirmed — choose "Make changes" first'
+                                : `Clear ${displayName}'s details, ID photo or both`
+                            }
+                          >
+                            <Eraser style={{ width: 13, height: 13 }} />
+                          </button>
+                        )}
                       </div>
                     </div>
                   </td>
@@ -1498,6 +1560,68 @@ export function IdentityProofBlock({
       </HelpHere>
         </>
       )}
+
+      {clearFor &&
+        (() => {
+          const draft = drafts[clearFor.key] ?? EMPTY_DRAFT;
+          const name = draft.name.trim() || clearFor.label;
+          const typeName = draft.docType ? (docTypes.find((d) => d.code === draft.docType)?.name ?? draft.docType) : null;
+          const facts = [typeName, draft.num.trim() || null, draft.name.trim() || null, draft.dob || null, draft.gender ? (({ MALE: "Male", FEMALE: "Female", OTHER: "Other" } as Record<string, string>)[draft.gender] ?? draft.gender) : null].filter(Boolean);
+          const hasDetails = facts.length > 0;
+          const photoCount = photosFor(clearFor.key).length;
+          const any = (clearDetails && hasDetails) || (clearPhoto && photoCount > 0);
+          return (
+            <DsDialog
+              open
+              onClose={() => !clearM.isPending && setClearFor(null)}
+              register="danger"
+              title={`Clear ${name}'s row`}
+              busy={clearM.isPending}
+              help={
+                <>
+                  Cleared details go back to empty. A cleared photo leaves this row and stops counting for check-in;
+                  the file itself stays in the hotel&rsquo;s records, and a new photo can be taken straight away.
+                </>
+              }
+              footer={
+                <>
+                  <NotNow onClick={() => setClearFor(null)} busy={clearM.isPending} />
+                  <Button
+                    kind="danger"
+                    solid
+                    state={clearM.isPending ? "working" : any ? "default" : "inert"}
+                    workingLabel="Clearing…"
+                    title={any ? undefined : "tick what to clear"}
+                    onClick={() => clearM.mutate({ slot: clearFor, details: clearDetails && hasDetails, photo: clearPhoto && photoCount > 0 })}
+                  >
+                    Clear
+                  </Button>
+                </>
+              }
+            >
+              <div className="field">
+                <label style={{ display: "flex", gap: 8, alignItems: "flex-start", cursor: hasDetails ? "pointer" : "default", opacity: hasDetails ? 1 : 0.55 }}>
+                  <input type="checkbox" checked={clearDetails && hasDetails} disabled={!hasDetails} onChange={(e) => setClearDetails(e.target.checked)} />
+                  <span>
+                    <b>The details</b>
+                    <span className="sm" style={{ display: "block", color: "var(--ink-2)" }}>{hasDetails ? facts.join(" · ") : "nothing typed"}</span>
+                  </span>
+                </label>
+              </div>
+              <div className="field">
+                <label style={{ display: "flex", gap: 8, alignItems: "flex-start", cursor: photoCount ? "pointer" : "default", opacity: photoCount ? 1 : 0.55 }}>
+                  <input type="checkbox" checked={clearPhoto && photoCount > 0} disabled={!photoCount} onChange={(e) => setClearPhoto(e.target.checked)} />
+                  <span>
+                    <b>The ID photo</b>
+                    <span className="sm" style={{ display: "block", color: "var(--ink-2)" }}>
+                      {photoCount ? (photoCount > 1 ? `${photoCount} photos on this row` : "the photo on this row") : "no photo"}
+                    </span>
+                  </span>
+                </label>
+              </div>
+            </DsDialog>
+          );
+        })()}
 
       <DeskConfirmModal
         open={seatingOpen}

@@ -131,6 +131,19 @@ export async function confirmGuestIdentityDetails(
   }>(`/api/entries/${entryId}/identity-details/confirm`, { method: "POST", session, body });
 }
 
+/** Clear one guest's row (2026-10-23): the typed details, the ID photo, or both. A cleared
+ *  photo leaves the row and stops counting; its file stays in the hotel's store. */
+export async function clearGuestIdentitySlot(
+  session: Session,
+  entryId: string,
+  body: { subjectKey: string; details?: boolean; photo?: boolean },
+) {
+  return apiRequest<{ subjectKey: string; label: string; detailsCleared: boolean; photosCleared: number; taskReopened: boolean }>(
+    `/api/entries/${entryId}/identity-details/clear`,
+    { method: "POST", session, body },
+  );
+}
+
 /** Every stored proof for this booking's guest — including ones captured on earlier stays
  *  (`entryId` says which booking each was taken on) — plus the document-type vocabulary and
  *  the check-in coverage verdict. */
