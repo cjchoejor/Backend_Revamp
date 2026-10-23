@@ -598,7 +598,9 @@
 .ds .rchart .seg.k-pick .bar .st { font-style: italic; }
 .ds .rchart .pickbadge { position: absolute; top: -5px; right: 4px; z-index: 2; font: inherit; font-size: 10.5px; font-weight: 800; line-height: 1; padding: 2px 6px; border-radius: 9px; background: var(--surface); color: var(--rs-pick-tx); border: 1.5px dashed var(--rs-pick-line); cursor: pointer; white-space: nowrap; }
 .ds .rchart .pickbadge:hover { border-style: solid; color: var(--ink); }
-.ds .rchart .seg.k-conflict .bar, .ds .rchart .sw.k-conflict { background: var(--surface); box-shadow: inset 0 0 0 2px var(--rs-bad); color: var(--rs-bad); justify-content: center; font-weight: 800; cursor: help; }
+.ds .rchart .seg.k-conflict .bar, .ds .rchart .sw.k-conflict { background: var(--surface); box-shadow: inset 0 0 0 2px var(--rs-bad); color: var(--rs-bad); justify-content: center; font-weight: 800; cursor: pointer; }
+/* Two bookings on one night open from a click (2026-10-23) — the cell is a control, so it says so on hover. */
+.ds .rchart .seg.k-conflict .bar:hover { background: var(--danger-soft); }
 /* parked — a pause: the claim stands, the bar is drawn faded and striped */
 .ds .rchart .seg.parked .bar, .ds .rchart .sw.parked { background-image: repeating-linear-gradient(135deg, rgba(255, 255, 255, .6) 0 4px, transparent 4px 8px); opacity: .8; }
 .ds .rchart .seg .bar .pk { font-size: 10.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .03em; background: rgba(0, 0, 0, .1); border-radius: 3px; padding: 0 4px; }
@@ -674,7 +676,7 @@
 .ds .rchart-hc .hc-head.k-over { background: var(--rs-over-bg); color: #fff; }
 .ds .rchart-hc .hc-head.k-out { background: var(--rs-out-bg); color: var(--ink-2); }
 .ds .rchart-hc .hc-head.k-ooo { background: repeating-linear-gradient(45deg, var(--rs-ooo-a), var(--rs-ooo-a) 6px, var(--rs-ooo-b) 6px, var(--rs-ooo-b) 12px); color: var(--rs-ooo-tx); }
-.ds .rchart-hc .hc-head.k-conflict { background: var(--danger-soft); color: var(--danger); border-bottom: 2px solid var(--rs-bad); }
+.ds .rchart-hc .hc-head.k-conflict, .ds .rchart-pick .hc-head.k-conflict { background: var(--danger-soft); color: var(--danger); border-bottom: 2px solid var(--rs-bad); }
 .ds .rchart-hc .hc-head.k-free, .ds .rchart-pick .hc-head.k-free { background: var(--success-soft); color: var(--success); border-bottom: 2px solid var(--success); }
 .ds .rchart-hc .hc-head.k-room { background: var(--rs-type); color: #fff; }
 .ds .rchart-hc .hc-head.k-pick, .ds .rchart-pick .hc-head.k-pick { background: var(--rs-head); color: var(--rs-pick-tx); border-bottom: 2px dashed var(--rs-pick-line); }
@@ -683,6 +685,9 @@
 .ds .rchart-pick .pl-row:hover { border-color: var(--rs-pick-line); background: var(--rs-head); }
 .ds .rchart-pick .pl-row b { font-size: 13.5px; }
 .ds .rchart-pick .pl-row span { font-size: 12px; color: var(--ink-2); }
+.ds .rchart-pick .pl-row.static { cursor: default; }
+.ds .rchart-pick .pl-row.static:hover { border-color: var(--line-2); background: var(--surface); }
+.ds .rchart-pick .pl-row .pl-acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .ds .rchart-hc .hc-head.parked { background-image: repeating-linear-gradient(135deg, rgba(255, 255, 255, .45) 0 5px, transparent 5px 10px); }
 .ds .rchart-hc .hc-body, .ds .rchart-pick .hc-body { padding: 10px 12px; }
 .ds .rchart-hc .hc-name, .ds .rchart-pick .hc-name { font-size: 16px; font-weight: 800; line-height: 1.25; }
