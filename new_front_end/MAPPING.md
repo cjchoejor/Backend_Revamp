@@ -42,6 +42,7 @@ on :4000.
 | Reports | `/reports` | list | Counts only: where the business comes from, inquiry to stay, demand lost, top agents. Occupancy and revenue wait for the backend (see gaps). |
 | Guests | `/guests`, `/guests/:id` | `GET /api/guest-profiles?q=`, `GET /api/guest-profiles/:id`, `GET /api/desk/bookings?guestProfileId=` | Built. Search and the guest record with their bookings. The record is read-only. |
 | Audit | `/audit` | `GET /api/desk/activity` (FOM and above) | Built. One hotel day, filtered by person or booking. The front desk sees why it is closed to them. |
+| Notifications | `/notifications?view=now|sent` | the bookings list (as the bell), `GET /api/desk/alerts?days=` | Built (2026-10-23), opened from the bell's **See all notifications**. **Needs a person**: the bell's whole list — overdue, due soon, waiting — grouped by kind of work (money · arrivals · departures and closing · quotes, holds and papers · follow-ups; `WORK_KINDS` in `lib/ds/attention.ts`), filtered by urgency. **Alerts sent**: what the system sent (`NOTIFICATION.*` traces) by hotel day, one row per booking and step with its earlier alerts folded under it (`lib/ds/alerts.ts`), who each was for (front desk · FOM · GM, filterable), and how the booking stands now; Today / 7 / 14 / 31 days. |
 | Handoffs · Disputes · Messages | `/handoffs`, `/disputes`, `/messages` | — | "Not available yet". Each item is still worked from its booking. |
 | Console | `/admin/**` | unchanged | Copied as it was. Reached from the user panel (administrators only). |
 
@@ -79,6 +80,7 @@ All read-only, in `back_end/src/routes/desk/router.ts` and `services/domain/desk
 | `POST /api/desk/bookings/money` | desk | Each booking header's own billing summary, for up to 100 bookings in one call. |
 | `GET /api/desk/staff` | desk | Staff names, for "who did it" lines. |
 | `GET /api/desk/activity?date=` | FOM+ | One hotel day of the trace, newest first, with the actor's name. |
+| `GET /api/desk/alerts?days=` | desk | The alerts the system sent (`NOTIFICATION.*`) over the last 1–31 hotel days, newest first, at most 400: kind, who it was for, severity, the step and how long, the payment figures, and the booking as it stands now. |
 
 Also for Stage 1 (2026-10-10), outside the desk router: `POST /api/entries/:id/availability/price-pick` (desk, read-only — the bill for the rooms on the table) and `POST /api/guest-profiles/:id/contact` (desk — fills a guest's empty phone or email from Wrap up; never replaces one on file).
 
