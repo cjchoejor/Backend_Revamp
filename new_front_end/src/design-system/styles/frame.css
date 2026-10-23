@@ -1045,3 +1045,18 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .ntf-sev { font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; color: var(--ink-2); }
 .ds .ntf-sev.s-escalation { color: var(--danger); }
 .ds .ntf-sev.s-critical { color: var(--warning); }
+
+/* Colour by guest (2026-10-23) — every booking its own colour, set on its cells as --g-bg / --g-line /
+   --g-tx (room-chart.tsx GUEST_COLOURS); the edge still says how it is held. */
+.ds .rchart.by-guest .seg.g .bar { background-color: var(--g-bg); color: var(--g-tx); box-shadow: inset 4px 0 0 var(--g-line); }
+.ds .rchart.by-guest .seg.g.k-in .bar { background-color: var(--g-tx); color: #fff; }
+.ds .rchart.by-guest .seg.g.k-held .bar, .ds .rchart.by-guest .seg.g.k-prov .bar { outline-color: var(--g-line); }
+.ds .rchart.by-guest .seg.g.k-res.paypend .bar { box-shadow: inset 4px 0 0 var(--g-line), inset 0 -3px 0 var(--rs-held-line); }
+.ds .rchart.by-guest .seg.g.marked .bar { outline-color: var(--accent); box-shadow: inset 4px 0 0 var(--g-line), 0 0 0 3px var(--accent-line); }
+/* The legend shows one sample colour with each held kind's edge. */
+.ds .rchart .rslegend.by-guest { --g-bg: #c9dbf2; --g-line: #3b6fb0; --g-tx: #1f4572; }
+.ds .rchart .rslegend.by-guest .sw.g { background-color: var(--g-bg); box-shadow: inset 3px 0 0 var(--g-line); }
+.ds .rchart .rslegend.by-guest .sw.g.k-in { background-color: var(--g-tx); }
+.ds .rchart .rslegend.by-guest .sw.g.k-held, .ds .rchart .rslegend.by-guest .sw.g.k-prov { outline-color: var(--g-line); }
+.ds .rchart .rslegend.by-guest .sw.g.k-res.paypend { box-shadow: inset 3px 0 0 var(--g-line), inset 0 -3px 0 var(--rs-held-line); }
+.ds .rchart .rslegend-lead { font-weight: 600; color: var(--ink); }
