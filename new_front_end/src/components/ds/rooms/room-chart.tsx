@@ -127,6 +127,8 @@ const HOVER_DELAY_MS = 1000;
 type Pick = { room: ChartRoom; night: string; freeRun: number; reachesEnd: boolean; rect: DOMRect };
 /** The open list of the bookings that chose a room-night (2026-10-16). */
 type PickList = { room: ChartRoom; picks: RoomChartPick[]; rect: DOMRect };
+/** The open list of two bookings that hold one room-night (2026-10-23) — each opens from here. */
+type ClashList = { room: ChartRoom; night: string; bars: RoomChartBar[]; rect: DOMRect };
 /** One entry per booking, in the order given. */
 const uniquePicks = (list: RoomChartPick[]) => list.filter((p, i) => list.findIndex((q) => q.entryId === p.entryId) === i);
 
@@ -641,6 +643,8 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
   const [pick, setPick] = useState<Pick | null>(null);
   const [pickList, setPickList] = useState<PickList | null>(null);
   const pickListRef = useRef<HTMLDivElement | null>(null);
+  const [clash, setClash] = useState<ClashList | null>(null);
+  const clashRef = useRef<HTMLDivElement | null>(null);
   // Rooms chosen and not held, drawn faintly (2026-10-16) — shown unless this desk has hidden them.
   const [showPicks, setShowPicks] = useState(true);
   useEffect(() => {
@@ -763,6 +767,23 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
       window.removeEventListener("scroll", onScroll, true);
     };
   }, [pickList]);
+  // …and so does the list of two bookings on one night.
+  useEffect(() => {
+    if (!clash) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setClash(null);
+    const onDown = (e: MouseEvent) => {
+      if (clashRef.current && !clashRef.current.contains(e.target as Node)) setClash(null);
+    };
+    const onScroll = () => setClash(null);
+    document.addEventListener("keydown", onKey);
+    document.addEventListener("mousedown", onDown);
+    window.addEventListener("scroll", onScroll, true);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("mousedown", onDown);
+      window.removeEventListener("scroll", onScroll, true);
+    };
+  }, [clash]);
   // The start box closes on Escape, on a click outside it, and when the chart scrolls away.
   useEffect(() => {
     if (!pick) return;
@@ -1698,13 +1719,21 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
                           );
                         if (s.t === "conflict")
                           return (
-                            <td
-                              key={k}
-                              className="seg k-conflict"
-                              onMouseEnter={(e) => point({ t: "conflict", bars: s.bars, room, night: s.night, rect: rectOf(e) })}
-                              onMouseLeave={leave}
-                            >
-                              <div className="bar">{s.bars.length}×</div>
+                            <td key={k} className="seg k-conflict">
+                              <button
+                                type="button"
+                                className="bar"
+                                aria-label={`${s.bars.length} bookings hold Room ${room.roomNumber} on ${longDay(s.night)} — click to open them`}
+                                onMouseEnter={(e) => point({ t: "conflict", bars: s.bars, room, night: s.night, rect: rectOf(e) })}
+                                onMouseLeave={leave}
+                                onClick={(e) => {
+                                  if (dragEnded.current) return;
+                                  leave();
+                                  setClash({ room, night: s.night, bars: s.bars, rect: rectOf(e) });
+                                }}
+                              >
+                                {s.bars.length}×
+                              </button>
                             </td>
                           );
                         const b = bookingOf.get(s.bar.entryId);
@@ -1970,7 +1999,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
         />
       ) : null}
 
-      {hover && !box && !pick && !pickList && !moveLegs && !dateMove && !splitMove && !nightMove ? (
+      {hover && !box && !pick && !pickList && !clash && !moveLegs && !dateMove && !splitMove && !nightMove ? (
         <Floating>
           <HoverCard hover={hover} chart={chart} bookingOf={bookingOf} typeName={(id) => typeOf.get(id)?.name ?? ""} showPicks={showPicks} />
         </Floating>
@@ -2004,6 +2033,62 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
               </div>
               <div className="pick-acts">
                 <Button kind="quiet" compact onClick={() => setPickList(null)}>
+                  Close
+                </Button>
+              </div>
+            </div>
+          </div>
+        </Floating>
+      ) : null}
+
+      {clash ? (
+        <Floating>
+          <div className="rchart-pick e-k-conflict" ref={clashRef} style={placeBeside(clash.rect, 340)} role="dialog" aria-label="Bookings that hold this room on one night">
+            <div className="hc-head k-conflict">
+              <span className="hc-kind">{clash.bars.length === 2 ? "Two bookings on one night" : `${clash.bars.length} bookings on one night`}</span>
+              <span className="hc-room">Room {clash.room.roomNumber}</span>
+            </div>
+            <div className="hc-body">
+              <div className="hc-sub">
+                {longDay(clash.night)} · one of them has to move
+              </div>
+              <div className="pl-list">
+                {clash.bars.map((x) => {
+                  const b = bookingOf.get(x.entryId);
+                  return (
+                    <div key={x.entryId} className="pl-row static">
+                      <b>{nameOf(b)}</b>
+                      <span>
+                        {KIND_WORD[x.kind]} · {x.entryId}
+                        {b ? ` · ${STEP_NAMES[stepNoOfStage(b.stage) - 1]}` : ""}
+                        {x.parked ? " · parked" : ""}
+                      </span>
+                      <span>
+                        {fmtRange(x.from, x.to)} in this room{b?.checkInDate ? ` · stay ${fmtRange(b.checkInDate, b.checkOutDate)}` : ""}
+                      </span>
+                      <span className="pl-acts">
+                        <Button kind="secondary" compact onClick={() => router.push(`/bookings/${x.entryId}`)}>
+                          Open the booking
+                        </Button>
+                        {MOVABLE.has(x.kind) ? (
+                          <Button
+                            kind="quiet"
+                            compact
+                            onClick={() => {
+                              setClash(null);
+                              setBox(x.entryId);
+                            }}
+                          >
+                            Its rooms…
+                          </Button>
+                        ) : null}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="pick-acts">
+                <Button kind="quiet" compact onClick={() => setClash(null)}>
                   Close
                 </Button>
               </div>
@@ -2149,7 +2234,7 @@ function HoverCard({
             })}
           </div>
         </div>
-        <div className="hc-foot">One of them has to move — open each from the Bookings list</div>
+        <div className="hc-foot">One of them has to move — click to open either booking</div>
       </div>
     );
   }
