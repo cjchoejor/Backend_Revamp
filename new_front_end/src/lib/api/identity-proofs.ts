@@ -91,6 +91,8 @@ export type IdentityProofsResponse = {
    * it is recorded at this booking; the guest profile's own stamp may be from an earlier stay.
    */
   verification?: { verifiedAt: string; verifiedBy: string | null; path: VerificationPathCode | null } | null;
+  /** The row marked as the lead (2026-10-23) — the desk's mark, else the first adult row. */
+  leadSubjectKey?: string;
 };
 
 export type VerificationPathCode = "FIRST_TIME" | "RETURNING_VALID" | "RETURNING_EXPIRED" | "VIP";
@@ -129,6 +131,15 @@ export async function confirmGuestIdentityDetails(
     changed: { subjectKey: string; label: string }[];
     skipped: { subjectKey: string; label: string; reason: string; message: string }[];
   }>(`/api/entries/${entryId}/identity-details/confirm`, { method: "POST", session, body });
+}
+
+/** Mark one adult as the lead (2026-10-23). A verification recorded for the earlier lead stops
+ *  counting — `verificationReset` says so. */
+export async function setLeadGuest(session: Session, entryId: string, subjectKey: string) {
+  return apiRequest<{ subjectKey: string; label: string; previous: string; changed: boolean; verificationReset: boolean }>(
+    `/api/entries/${entryId}/identity-details/lead`,
+    { method: "POST", session, body: { subjectKey } },
+  );
 }
 
 /** Clear one guest's row (2026-10-23): the typed details, the ID photo, or both. A cleared

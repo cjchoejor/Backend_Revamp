@@ -139,7 +139,11 @@ export function S6CheckIn({
 
   // The lead's row of the guest table — where the document is typed, and what verification records.
   const lead = useMemo(
-    () => (proofs.data?.items ?? []).find((p) => p.entryId === entry.id && !p.hasFile && p.subjectKey === "A0") ?? null,
+    () => {
+      // The row marked as the lead (2026-10-23), else the first adult row — the server says which.
+      const key = proofs.data?.leadSubjectKey ?? "A0";
+      return (proofs.data?.items ?? []).find((p) => p.entryId === entry.id && !p.hasFile && p.subjectKey === key) ?? null;
+    },
     [proofs.data, entry.id],
   );
   const docName = (code?: string | null) =>

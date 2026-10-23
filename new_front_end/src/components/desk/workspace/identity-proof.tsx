@@ -28,6 +28,7 @@ import {
   confirmGuestIdentityDetails,
   clearGuestIdentitySlot,
   saveGuestIdentityDetail,
+  setLeadGuest,
   uploadIdentityProof,
   type IdentityProofSummary,
   type OcrSuggestion,
@@ -553,6 +554,8 @@ export function IdentityProofBlock({
       return pending ? 1500 : false;
     },
   });
+  // Which row is the lead (2026-10-23) — the desk's mark, else the first adult row; the server decides.
+  const leadKey = listQuery.data?.leadSubjectKey ?? "A0";
   const items = listQuery.data?.items ?? [];
   // OCR / QR suggestions per photo (2026-08-18) — rendered under the guest's row while
   // unapplied; Apply writes through the same detail save the row's inputs use.
@@ -862,6 +865,21 @@ export function IdentityProofBlock({
     },
     onError: (e) => toast.error(e instanceof Error ? e.message : "Could not clear the guest's row"),
   });
+  // Mark another adult as the lead (2026-10-23, operator: "add a lead mark").
+  const leadM = useMutation({
+    mutationFn: (slot: PartySlot) => setLeadGuest(session!, entryId, slot.key),
+    onSuccess: (r) => {
+      if (r.changed) toast.success(`${r.label} is now the lead`);
+      if (r.verificationReset) {
+        toast.warning(`The identity verification was for the earlier lead — record it again for ${r.label} before check-in`);
+      }
+      void queryClient.invalidateQueries({ queryKey: ["identity-proofs", entryId] });
+      void queryClient.invalidateQueries({ queryKey: ["entry", entryId] });
+      void queryClient.invalidateQueries({ queryKey: ["entry-trace", entryId] });
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Could not move the lead"),
+  });
+
   const openClear = (slot: PartySlot) => {
     const draft = drafts[slot.key] ?? EMPTY_DRAFT;
     const hasDetails = !sameDraft(draft, EMPTY_DRAFT) || !sameDraft(draftFromRow(detailRow(slot.key)), EMPTY_DRAFT);
@@ -895,18 +913,18 @@ export function IdentityProofBlock({
   useEffect(() => {
     if (autoPullRef.current || !session || !listQuery.data) return;
     if (!returning?.documentNumber) return;
-    const slot = slots.find((s) => s.key === "A0");
+    const slot = slots.find((s) => s.key === leadKey);
     if (!slot) return;
-    const row = detailRow("A0");
+    const row = detailRow(leadKey);
     if (row?.documentNumber) return;
-    if (lockedFor("A0")) return; // confirmed row — nothing may write to it unasked
+    if (lockedFor(leadKey)) return; // confirmed row — nothing may write to it unasked
     const draft: DetailDraft = { ...draftFromRow(row), num: returning.documentNumber };
     const documentNumber = returning.documentNumber;
     // Started once the effect has settled (2026-10-23): a save started on the first of
     // development's two effect runs never reports back, and Confirm stays shut behind it.
     const t = setTimeout(() => {
       autoPullRef.current = true;
-      setDrafts((prev) => ({ ...prev, A0: draft }));
+      setDrafts((prev) => ({ ...prev, [slot.key]: draft }));
       setPulledFromFile(true);
       saveM.mutate({ slot, draft });
       toast.info(`Document number on file (${documentNumber}) pulled into ${slot.label} — confirm it belongs to this guest`);
@@ -919,8 +937,8 @@ export function IdentityProofBlock({
   // ruling — the guest-detail table below is the ONLY place document type/number are typed).
   // Paths that need a document read it off the MAIN GUEST's row (A0); the button stays
   // locked until that row holds what the chosen path requires.
-  const primaryDraft = drafts["A0"] ?? EMPTY_DRAFT;
-  const primaryLabel = primaryDraft.name.trim() || slots.find((s) => s.key === "A0")?.label || "the main guest";
+  const primaryDraft = drafts[leadKey] ?? EMPTY_DRAFT;
+  const primaryLabel = primaryDraft.name.trim() || slots.find((s) => s.key === leadKey)?.label || "the lead";
   const verifyNeedsDocument = verificationPath === "FIRST_TIME" || verificationPath === "RETURNING_EXPIRED";
   const verifyMissing =
     verifyNeedsDocument && (!primaryDraft.docType || (verificationPath === "FIRST_TIME" && !primaryDraft.num.trim()));
@@ -1371,6 +1389,51 @@ export function IdentityProofBlock({
                       {displayName}
                       {typedName && slot.sub && <span style={{ color: "var(--ink-3)", fontWeight: 400 }}> · {slot.sub}</span>}
                     </span>
+                    {/* The lead mark (2026-10-23): one adult row is the lead — the guest the
+                        check-in verification is for. A child row never carries it. */}
+                    {slot.key.startsWith("A") &&
+                      (() => {
+                        const isLead = slot.key === leadKey;
+                        const blocked = !isLead && (lockedFor(leadKey) || lockedFor(slot.key));
+                        return (
+                          <label
+                            title={
+                              isLead
+                                ? "The lead — the guest the check-in verification is for"
+                                : blocked
+                                  ? 'Confirmed — choose "Make changes" first'
+                                  : `Make ${displayName} the lead`
+                            }
+                            style={{
+                              marginLeft: 8,
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: 4,
+                              padding: "1px 6px 1px 4px",
+                              borderRadius: 4,
+                              border: `1px solid ${isLead ? "var(--ok)" : "var(--line-2)"}`,
+                              background: isLead ? "var(--green-t)" : "transparent",
+                              color: isLead ? "var(--ok)" : "var(--ink-3)",
+                              fontSize: 10.5,
+                              fontWeight: isLead ? 700 : 500,
+                              cursor: isLead ? "default" : blocked ? "not-allowed" : "pointer",
+                              opacity: blocked ? 0.55 : 1,
+                              verticalAlign: "middle",
+                            }}
+                          >
+                            <input
+                              type="radio"
+                              name={`lead-${entryId}`}
+                              aria-label={`${displayName} is the lead`}
+                              checked={isLead}
+                              disabled={blocked || leadM.isPending}
+                              onChange={() => leadM.mutate(slot)}
+                              style={{ margin: 0, width: 11, height: 11, accentColor: "var(--ok)" }}
+                            />
+                            Lead
+                          </label>
+                        );
+                      })()}
                     {savedFlash === slot.key && (
                       <span style={{ marginLeft: 6, fontSize: 10, color: "var(--ok)", fontWeight: 600 }}>saved</span>
                     )}
