@@ -124,11 +124,24 @@ export async function shutdownIdentityOcr(): Promise<void> {
   if (w) await (await w).worker.terminate().catch(() => {});
 }
 
+/**
+ * One strip read at a time (2026-10-23). Two photos are read side by side now, and the page
+ * segmentation is a setting on the one shared worker: without this, one photo's "one line" could
+ * be applied to the other's block read between its setting and its read.
+ */
+let stripQueue: Promise<unknown> = Promise.resolve();
+function recogniseStrip(png: Buffer, psm: PSM = PSM.SINGLE_BLOCK): Promise<string> {
+  const run = stripQueue.then(() => recogniseStripNow(png, psm));
+  stripQueue = run.catch(() => {});
+  return run;
+}
+
 /** OCR an image with the strip reader; a failing model is set aside and the read retried once. */
-async function recogniseStrip(png: Buffer): Promise<string> {
+async function recogniseStripNow(png: Buffer, psm: PSM): Promise<string> {
   for (let attempt = 0; attempt < 2; attempt++) {
     const t = await getTesseract();
     try {
+      await t.worker.setParameters({ tessedit_pageseg_mode: psm });
       const { data } = await t.worker.recognize(png);
       return data.text ?? "";
     } catch (err) {
@@ -148,6 +161,10 @@ async function recogniseStrip(png: Buffer): Promise<string> {
  * cost seconds each, and none of them reads better above this size.
  */
 async function workingCopy(bytes: Buffer): Promise<Buffer> {
+  // Already upright and small enough (the phone sends 1800 px): the photo itself — re-encoding it
+  // changed enough pixels for Florence-2 to miss the printed number on one photo and read it on another.
+  const meta = await sharp(bytes, { failOn: "none" }).metadata();
+  if ((meta.orientation ?? 1) === 1 && (meta.width ?? 0) <= 2400 && (meta.height ?? 0) <= 2400 && meta.format === "jpeg") return bytes;
   return sharp(bytes, { failOn: "none" })
     .rotate()
     .resize({ width: 2400, height: 2400, fit: "inside", withoutEnlargement: true })
@@ -174,8 +191,8 @@ async function preprocessForMrz(work: Buffer, region: "bottom" | "full"): Promis
 }
 
 /** The strip read off the image: the strict parse when it holds, and the raw lines either way. */
-async function readStrip(png: Buffer): Promise<{ parsed: IdentityExtraction | null; lines: string[] }> {
-  const text = await recogniseStrip(png);
+async function readStrip(png: Buffer, psm: PSM = PSM.SINGLE_BLOCK): Promise<{ parsed: IdentityExtraction | null; lines: string[] }> {
+  const text = await recogniseStrip(png, psm);
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   const mrz = extractMrzLines(text);
   const parsed = mrz ? parseMrzLines(mrz) : null;
@@ -225,7 +242,113 @@ async function readStripAt(work: Buffer, boxes: Array<[number, number, number, n
     if (r.parsed) return { parsed: r.parsed, lines: r.lines };
     lines.push(...r.lines);
   }
+  // Line by line (2026-10-23): on a blurred photo the block read came back as noise while each line
+  // read alone gave the strip nearly whole. Three treatments, since each misreads different letters.
+  const rows: string[][] = [];
+  for (const b of [...boxes].sort((p, q) => p[1] - q[1])) {
+    const ly0 = b[1] / scale;
+    const ly1 = b[3] / scale;
+    const lpad = Math.max((ly1 - ly0) * 0.3, 6);
+    const lt = Math.max(0, Math.floor(ly0 - lpad));
+    const lh = Math.min(H - lt, Math.ceil(ly1 - ly0 + 2 * lpad));
+    if (lh < 8) continue;
+    const reads: string[] = [];
+    for (const treat of LINE_TREATMENTS) {
+      const png = await treat(sharp(work).extract({ left, top: lt, width, height: lh })).png().toBuffer();
+      const text = (await recogniseStrip(png, PSM.SINGLE_LINE)).replace(/\s+/g, " ").trim();
+      if (text) reads.push(text);
+    }
+    rows.push(reads);
+    lines.push(...reads);
+  }
+  // Every pairing of a first-line read with a second-line read, through the strict parser.
+  if (rows.length >= 2) {
+    for (const a of rows[rows.length - 2]) {
+      for (const b of rows[rows.length - 1]) {
+        const mrz = extractMrzLines(`${a}\n${b}`);
+        const parsed = mrz ? parseMrzLines(mrz) : null;
+        if (parsed && parsed.fieldConfidence.documentNumber === "VERIFIED" && parsed.fieldConfidence.dateOfBirth === "VERIFIED") return { parsed, lines };
+      }
+    }
+  }
   return { parsed: null, lines };
+}
+
+/**
+ * The text pass over the whole page (2026-10-23). Florence-2 writes at most 768 tokens, and a long
+ * run of misread script (a passport's Hindi labels) can use them all up: on one photo it stopped
+ * after the surname, and the given name, the dates and the strip were never read. When its lines
+ * end well above the foot of the page, the rest is read on its own and joined on, its boxes put back
+ * into the first pass's frame.
+ */
+async function layoutWholePage(work: Buffer): Promise<Awaited<ReturnType<typeof layoutOcr>>> {
+  const first = await layoutOcr(work);
+  if (!first || !first.lines.length) return first;
+  const meta = await sharp(work).metadata();
+  const W = meta.width ?? 0;
+  const H = meta.height ?? 0;
+  if (!W || !H) return first;
+  const scale = Math.min(1, 1600 / W, 1600 / H);
+  const reached = Math.max(...first.lines.map((l) => l.box?.[3] ?? 0));
+  if (reached >= H * scale * 0.8) return first;
+  const top = Math.max(0, Math.floor(reached / scale) - 20);
+  if (H - top < 60) return first;
+  const crop = await sharp(work).extract({ left: 0, top, width: W, height: H - top }).jpeg({ quality: 92 }).toBuffer();
+  const rest = await layoutOcr(crop);
+  if (!rest?.lines.length) return first;
+  const cropScale = Math.min(1, 1600 / W, 1600 / (H - top));
+  const back = (b: [number, number, number, number]): [number, number, number, number] => [
+    (b[0] / cropScale) * scale,
+    (b[1] / cropScale + top) * scale,
+    (b[2] / cropScale) * scale,
+    (b[3] / cropScale + top) * scale,
+  ];
+  return { engine: first.engine, lines: [...first.lines, ...rest.lines.map((l) => ({ text: l.text, box: l.box ? back(l.box) : undefined }))], ms: first.ms + rest.ms };
+}
+
+/** How a single strip line is prepared for tesseract — each misreads different characters. */
+const LINE_TREATMENTS: Array<(img: sharp.Sharp) => sharp.Sharp> = [
+  (i) => i.resize({ width: 1200 }).grayscale().normalise(),
+  (i) => i.resize({ width: 1800 }).grayscale().median(3).normalise(),
+  (i) => i.resize({ width: 1800 }).grayscale().normalise(),
+];
+
+/**
+ * The page above the strip, read again at twice the detail (2026-10-23): Florence-2 reads the whole
+ * page at 768 px, and on one photo it missed the passport number printed at the top — clear to a
+ * person. Run only for a passport whose number is still not proven.
+ */
+async function readPageAbove(work: Buffer, lines: Array<{ box?: [number, number, number, number] }>, stripTop: number | null): Promise<string[]> {
+  const meta = await sharp(work).metadata();
+  const W = meta.width ?? 0;
+  const H = meta.height ?? 0;
+  const boxes = lines.map((l) => l.box).filter((b): b is [number, number, number, number] => !!b && (stripTop == null || b[3] <= stripTop));
+  if (!W || !H || boxes.length < 3) return [];
+  const scale = Math.min(1, 1600 / W, 1600 / H);
+  const x0 = Math.max(0, Math.floor(Math.min(...boxes.map((b) => b[0])) / scale) - 10);
+  const y0 = Math.max(0, Math.floor(Math.min(...boxes.map((b) => b[1])) / scale) - 10);
+  const x1 = Math.min(W, Math.ceil(Math.max(...boxes.map((b) => b[2])) / scale) + 10);
+  const y1 = Math.min(H, Math.ceil(Math.max(...boxes.map((b) => b[3])) / scale) + 10);
+  // The upper half of that area, where the type, the code and the number print.
+  const h = Math.floor((y1 - y0) / 2);
+  if (x1 - x0 < 100 || h < 60) return [];
+  const crop = await sharp(work).extract({ left: x0, top: y0, width: x1 - x0, height: h }).jpeg({ quality: 92 }).toBuffer();
+  const r = await layoutOcr(crop);
+  return (r?.lines ?? []).map((l) => l.text);
+}
+
+/**
+ * The strip's boxes: the LOWEST strip-like line and its neighbours within a couple of line heights
+ * — the two lines of a passport's strip sit together at the foot of the page, and a stray line
+ * higher up must not stretch the crop over the whole page.
+ */
+function stripRegion(lines: Array<{ text: string; box?: [number, number, number, number] }>): Array<[number, number, number, number]> {
+  const hits = lines.filter((l) => l.box && looksLikeStrip(l.text)).map((l) => l.box!);
+  if (!hits.length) return [];
+  hits.sort((a, b) => b[3] - a[3]);
+  const lowest = hits[0];
+  const h = Math.max(8, lowest[3] - lowest[1]);
+  return hits.filter((b) => lowest[1] - b[3] <= h * 2.5);
 }
 
 /** Where a reading has got to — the desk draws it (2026-10-23). */
@@ -281,13 +404,19 @@ export async function extractIdentityFromImage(
   const bottomComplete = bottom.parsed && bottom.parsed.fieldConfidence.documentNumber === "VERIFIED" && bottom.parsed.fieldConfidence.dateOfBirth === "VERIFIED";
   if (bottomComplete && bottom.parsed) return { engine: "SERVER_MRZ", extraction: bottom.parsed };
   await opts.onStage?.("TEXT");
-  const layout = await layoutOcr(work);
+  const layout = await layoutWholePage(work);
   const lines = layout?.lines ?? [];
   const texts = lines.map((l) => l.text);
-  const stripBoxes = lines.filter((l) => l.box && looksLikeStrip(l.text)).map((l) => l.box!);
+  const stripBoxes = stripRegion(lines);
   const close = stripBoxes.length ? await readStripAt(work, stripBoxes) : { parsed: bottom.parsed, lines: [] as string[] };
   const kind = detectLayoutDocKind(texts.join("\n")) ?? opts.kindHint ?? null;
-  const passport = readPassportFromText([...close.lines, ...bottom.lines], texts, { isPassport: kind === "PASSPORT" || !!close.parsed });
+  let passport = readPassportFromText([...close.lines, ...bottom.lines], texts, { isPassport: kind === "PASSPORT" || !!close.parsed });
+  const numberProven = close.parsed?.fieldConfidence.documentNumber === "VERIFIED" || passport?.fieldConfidence.documentNumber === "VERIFIED";
+  if (passport && !numberProven) {
+    const stripTop = stripBoxes.length ? Math.min(...stripBoxes.map((b) => b[1])) : null;
+    const above = await readPageAbove(work, lines, stripTop);
+    if (above.length) passport = readPassportFromText([...close.lines, ...bottom.lines], [...texts, ...above], { isPassport: true }) ?? passport;
+  }
   const layoutParsed = texts.length ? parseLayoutText(texts, opts.kindHint ?? null) : null;
   const via = layout ? ` via ${layout.engine} (${layout.ms} ms)` : "";
   if (close.parsed) {

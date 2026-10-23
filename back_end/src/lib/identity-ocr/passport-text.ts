@@ -69,6 +69,9 @@ export type MrzLine2 = {
   expiry: string;
   /** Set only when its own check digit passed. */
   number: string | null;
+  /** The digit just before the nationality — the number's check digit, even when the number
+   *  itself came back misread; a printed number that agrees with it is proven. */
+  numberCheck: number | null;
 };
 
 /** Find the strip's second line in any of the given lines (see the module comment); a reading
@@ -95,7 +98,9 @@ function line2In(raw: string): MrzLine2 | null {
     const exp = digits(s.slice(i + 11, i + 17));
     const ec = digits(s[i + 17]);
     if (!/^\d{6}$/.test(dob) || !/^\d$/.test(dc) || !/^\d{6}$/.test(exp) || !/^\d$/.test(ec)) continue;
-    if (!"MFX<".includes(sex)) continue;
+    // The sex is read but not trusted to anchor the line (a blurred M comes back R or N): the two
+    // check-digited dates already pin it.
+    if (!/^[A-Z<]$/.test(sex)) continue;
     if (mrzCheckDigit(dob) !== Number(dc) || mrzCheckDigit(exp) !== Number(ec)) continue;
     if (!realYYMMDD(dob) || !realYYMMDD(exp)) continue;
     let number: string | null = null;
@@ -105,7 +110,8 @@ function line2In(raw: string): MrzLine2 | null {
       const c = digits(prefix[9]);
       if (/^\d$/.test(c) && mrzCheckDigit(n) === Number(c) && /[0-9]/.test(n)) number = n.replace(/<+$/, "");
     }
-    return { line: s, nationality: nat.replace(/<+$/, ""), birth: dob, sex, expiry: exp, number };
+    const cd = i > 0 ? digits(s[i - 1]) : "";
+    return { line: s, nationality: nat.replace(/<+$/, ""), birth: dob, sex, expiry: exp, number, numberCheck: /^\d$/.test(cd) ? Number(cd) : null };
   }
   return null;
 }
@@ -202,6 +208,10 @@ function namesFromStrip(line1: string, printedLines: string[]): string | null {
     kept.push(f);
   }
   if (kept.length < 2) return null; // a surname alone, or a given name alone, is not a name to suggest
+  // No surname: the strip opens the names with the separator itself ("P<IND<<DEV<DUTT") — every
+  // name is a given name, in the strip's order.
+  const sep = text.indexOf("<<");
+  if (sep >= 0 && sep <= 5 && kept.every((k) => k.start > sep)) return kept.map((k) => titleCase(k.word)).join(" ");
   const [surname, ...given] = kept.map((k) => titleCase(k.word));
   return [...given, surname].join(" ");
 }
@@ -271,8 +281,13 @@ export function readPassportFromText(
     if (n) put("nationality", n, "READ");
   }
   if (!fields.documentNumber) {
-    const n = clean.find((l) => /^[A-Z][0-9]{7}$/.test(l.replace(/\s/g, "")));
-    if (n) put("documentNumber", n.replace(/\s/g, ""), "READ");
+    // A number printed on the page — an Indian-format one (a letter and seven digits) anywhere on a
+    // line, since it prints beside its label as often as on a line of its own. One that agrees with
+    // the strip's check digit is proven even when the strip's own copy of it came back misread.
+    const printed = printedNumbers(clean);
+    const agreed = line2?.numberCheck != null ? printed.find((n) => mrzCheckDigit(n.padEnd(9, "<")) === line2.numberCheck) : undefined;
+    if (agreed) put("documentNumber", agreed, "VERIFIED");
+    else if (printed[0]) put("documentNumber", printed[0], "READ");
   }
   if (!Object.keys(fields).length) return null;
   fields.documentType = "PASSPORT";
@@ -285,9 +300,26 @@ export function readPassportFromText(
   };
 }
 
+/** Passport numbers printed on the page (a letter and seven digits), in reading order. */
+export function printedNumbers(lines: string[]): string[] {
+  const out: string[] = [];
+  for (const l of lines) {
+    for (const m of l.matchAll(/(?:^|[^A-Z0-9])([A-Z][0-9]{7})(?![A-Z0-9])/g)) if (!out.includes(m[1])) out.push(m[1]);
+  }
+  return out;
+}
+
 /** True when a line looks like part of the strip (worth a closer read). */
 export function looksLikeStrip(text: string): boolean {
+  // The strip is Latin capitals, digits and fillers — a line with Devanagari (the passport's
+  // bilingual labels) or mostly lowercase letters is the page, however many brackets it holds
+  // (found: "RAJEVEV (ज) (प) (Cov) (Namens)" passed for the strip and the real one was missed).
+  if (/[\u0900-\u097F]/.test(text)) return false;
+  const letters = text.replace(/[^A-Za-z]/g, "");
+  if (letters.length && (text.replace(/[^a-z]/g, "").length / letters.length) > 0.4) return false;
   const s = cleanMrzLine(text);
-  if (s.length < 20) return false;
-  return (s.match(/</g)?.length ?? 0) >= 3 || findMrzLine2([s]) !== null;
+  if (s.length < 15) return false;
+  // The filler and what OCR reads it as — not `/`, which printed labels use ("BUXAR/BIHAR").
+  const fillers = text.match(/[<«(\[{]/g)?.length ?? 0;
+  return fillers >= 1 || findMrzLine2([s]) !== null || (s.length >= 28 && /\d{6}/.test(s));
 }

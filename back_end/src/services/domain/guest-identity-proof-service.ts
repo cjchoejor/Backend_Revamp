@@ -16,6 +16,7 @@ import { enforceEntryNotSealedForWorkingAction } from "../../policies/01-availab
 import { enforceAcceptedIdentityDocumentType } from "../../policies/06-guest-identity/p16-accepted-document-types.js";
 import { loadChildPolicyBundle } from "./child-policy-service.js";
 import { findEntryIdentityVerification, resolveVerificationPaths } from "../../lib/identity-verification-path.js";
+import { partyAgeChecker } from "../../lib/party-age-check.js";
 
 /**
  * Guest identity PROOF files (2026-08-10, operator request): a photo or scan of the guest's
@@ -894,9 +895,16 @@ export async function listIdentityProofsForEntry(prisma: PrismaClient, entryId: 
   // This stay's verification — what the check-in gate reads — never the profile's stamp, which a
   // returning guest carries over from an earlier stay (2026-09-18).
   const verification = await findEntryIdentityVerification(prisma, { entryId: entry.id, guestProfileId: entry.guestProfileId });
+  // Whether each of this booking's typed dates of birth fits the row it is on (2026-10-23) — a
+  // warning the desk shows under the date, never a refusal.
+  const ageOf = await partyAgeChecker(prisma, entry.id);
   // The storage key itself is server-internal — expose only whether a file exists.
   return {
-    items: items.map(({ storageKey, ...rest }) => ({ ...rest, hasFile: !!storageKey })),
+    items: items.map(({ storageKey, ...rest }) => ({
+      ...rest,
+      hasFile: !!storageKey,
+      ageCheck: !storageKey && rest.entryId === entry.id ? ageOf(rest.subjectKey, rest.dateOfBirth) : null,
+    })),
     documentTypes,
     coverage,
     returningGuest,

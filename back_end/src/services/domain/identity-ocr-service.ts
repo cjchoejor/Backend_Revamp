@@ -20,6 +20,7 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import { extractMrzLines, parseMrzLines } from "../../lib/identity-ocr/mrz.js";
+import { partyAgeChecker, type AgeCheck } from "../../lib/party-age-check.js";
 import { parseIdentityQrText } from "../../lib/identity-ocr/aadhaar-qr.js";
 import type {
   FieldConfidence,
@@ -550,6 +551,8 @@ export type OcrSuggestionView = {
   readingForSeconds: number | null;
   stageForSeconds: number | null;
   endedForSeconds: number | null;
+  /** Whether the date of birth read fits the guest's row (2026-10-23); null with no date. */
+  ageCheck: AgeCheck | null;
 };
 
 /** A stage that has not moved in this long belongs to a reading that died. */
@@ -557,6 +560,8 @@ const STALLED_AFTER_MS = 5 * 60_000;
 
 export async function listOcrSuggestionsForEntry(prisma: PrismaClient, entryId: string): Promise<OcrSuggestionView[]> {
   const rows = await prisma.identityOcrSuggestion.findMany({ where: { entryId }, orderBy: { updatedAt: "desc" } });
+  // A date of birth read off the photo that does not fit the guest's row is said before Apply.
+  const ageOf = await partyAgeChecker(prisma, entryId);
   const now = Date.now();
   const secsSince = (d: Date | null) => (d ? Math.max(0, Math.round((now - d.getTime()) / 100) / 10) : null);
   return rows.map((r) => ({
@@ -582,5 +587,6 @@ export async function listOcrSuggestionsForEntry(prisma: PrismaClient, entryId: 
     readingForSeconds: r.status === "PENDING" ? secsSince(r.readingSince) : null,
     stageForSeconds: r.status === "PENDING" ? secsSince(r.stageAt) : null,
     endedForSeconds: r.status !== "PENDING" ? secsSince(r.extractedAt) : null,
+    ageCheck: ageOf(r.subjectKey, (r.fields as IdentitySuggestedFields | null)?.dateOfBirth ?? null),
   }));
 }
