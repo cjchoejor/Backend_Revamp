@@ -229,6 +229,9 @@ export type PhoneCaptureContext = {
   room: PhoneCaptureRoom | null;
   /** Config-driven document-type vocabulary for the phone's detected-fields form. */
   documentTypes?: IdentityDocumentTypeOption[];
+  /** When the code stops working, and the server's clock at this answer (2026-10-23). */
+  expiresAt?: string | null;
+  serverNow?: string;
 };
 
 /** What the phone page shows before the camera opens. Token-authenticated, no session. */
@@ -248,11 +251,14 @@ export async function uploadPhoneCapture(
   subjectKey?: string,
   /** The phone will post its own reading right after — the server pass waits for it. */
   extractionFollows?: boolean,
+  /** Sent before the phone read it (2026-10-23): the type picked guides the server's reading. */
+  documentType?: string,
 ): Promise<{ id: string; subjectLabel: string | null; capturedAt: string }> {
   const params = new URLSearchParams({ token });
   if (fileName?.trim()) params.set("fileName", fileName.trim());
   if (subjectKey?.trim()) params.set("subjectKey", subjectKey.trim());
   if (extractionFollows) params.set("extractionFollows", "1");
+  if (documentType?.trim()) params.set("documentType", documentType.trim());
   const res = await fetch(`/api/identity-capture/upload?${params}`, {
     method: "POST",
     headers: { "Content-Type": file.type || "application/octet-stream" },
@@ -361,9 +367,10 @@ export type PhoneAnalyzeResult = {
  * the fields back — the pass that reads label documents (CID, work permit, birth
  * certificate) the phone can't read locally. Nothing is stored; slow (~10–20 s) is normal.
  */
-export async function analyzePhoneCapture(token: string, file: Blob, subjectKey?: string): Promise<PhoneAnalyzeResult> {
+export async function analyzePhoneCapture(token: string, file: Blob, subjectKey?: string, documentType?: string): Promise<PhoneAnalyzeResult> {
   const params = new URLSearchParams({ token });
   if (subjectKey) params.set("subjectKey", subjectKey);
+  if (documentType) params.set("documentType", documentType);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 90_000);
   try {

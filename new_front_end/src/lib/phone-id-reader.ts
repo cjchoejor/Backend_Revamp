@@ -164,7 +164,12 @@ export function warmPhoneReader(): void {
  * raw payload was found — QR text first (cheap, exact), else the OCR dump of the MRZ area.
  * `onStage` reports progress for the UI.
  */
-export async function readIdOnPhone(file: File, onStage?: (s: "decoding" | "qr" | "mrz") => void): Promise<PhoneReading | null> {
+export async function readIdOnPhone(
+  file: File,
+  onStage?: (s: "decoding" | "qr" | "mrz") => void,
+  /** The shrunk JPEG, as soon as it exists — a photo sent before the reading ends goes small. */
+  onShrunk?: (blob: Blob) => void,
+): Promise<PhoneReading | null> {
   const t0 = performance.now();
   if (!file.type.startsWith("image/")) return null;
   onStage?.("decoding");
@@ -175,6 +180,7 @@ export async function readIdOnPhone(file: File, onStage?: (s: "decoding" | "qr" 
   if (!canvas) return null;
   const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.88));
   if (!blob) return null;
+  onShrunk?.(blob);
   onStage?.("qr");
   const qrText = await readQr(canvas);
   let ocrText: string | null = null;

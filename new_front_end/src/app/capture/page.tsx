@@ -175,6 +175,16 @@ export default function PhoneCapturePage() {
   // Whether the server's full reader (layout OCR) already looked at THIS photo and found
   // nothing — changes the "couldn't read" copy from "the desk will read it" to honesty.
   const [serverTried, setServerTried] = useState(false);
+  // The shrunk JPEG of the photo on screen, ready before the reading ends (2026-10-23), so a photo
+  // sent early goes small; and whether the person picked the document type themselves — a pick
+  // the machine reading must not overwrite.
+  const shrunkRef = useRef<Blob | null>(null);
+  const typePicked = useRef(false);
+  const typeRef = useRef<string | undefined>(undefined);
+  const [lastSentAtDesk, setLastSentAtDesk] = useState(false);
+  // How long the code works (2026-10-23): counted from the server's clock, not the phone's.
+  const clockOffset = useRef(0);
+  const [nowMs, setNowMs] = useState(() => Date.now());
   const readSeq = useRef(0);
   // A big party (2026-10-23, operator: "if there are a lot of rooms the list is a burden"):
   // one button walks guest to guest, and a side drawer lists the rooms to jump between.
@@ -192,6 +202,7 @@ export default function PhoneCapturePage() {
     setToken(t);
     fetchPhoneCaptureContext(t)
       .then((c) => {
+        if (c.serverNow) clockOffset.current = Date.parse(c.serverNow) - Date.now();
         setCtx(c);
         setRoster(c.roster);
         if (c.sealed) {
@@ -208,6 +219,20 @@ export default function PhoneCapturePage() {
         setError(e instanceof Error ? e.message : "This capture link is invalid or has expired.");
       });
   }, []);
+
+  // The time left on the code, ticking each second; at the end the page says so and stops.
+  useEffect(() => {
+    const t = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const expiresMs = ctx?.expiresAt ? Date.parse(ctx.expiresAt) : null;
+  const leftMs = expiresMs != null ? expiresMs - (nowMs + clockOffset.current) : null;
+  useEffect(() => {
+    if (leftMs != null && leftMs <= 0 && phase !== "invalid" && phase !== "checking") {
+      setPhase("invalid");
+      setError("This code has ended. Everything already sent is on the desk — ask the desk for a fresh code to send more.");
+    }
+  }, [leftMs, phase]);
 
   // Object-URL lifecycle for the preview image.
   useEffect(() => {
@@ -241,12 +266,21 @@ export default function PhoneCapturePage() {
     setFields({});
     setDetailsOpen(false);
     setServerTried(false);
+    shrunkRef.current = null;
+    typePicked.current = false;
+    typeRef.current = undefined;
     setReadStage("decoding");
     void (async () => {
       try {
-        const r = await readIdOnPhone(file, (st) => {
-          if (readSeq.current === seq) setReadStage(st);
-        });
+        const r = await readIdOnPhone(
+          file,
+          (st) => {
+            if (readSeq.current === seq) setReadStage(st);
+          },
+          (blob) => {
+            if (readSeq.current === seq) shrunkRef.current = blob;
+          },
+        );
         if (readSeq.current !== seq) return;
         setReading(r);
         let gotFields = false;
@@ -257,7 +291,7 @@ export default function PhoneCapturePage() {
           setParsed(pv);
           if (pv.engine) {
             gotFields = true;
-            setFields({ ...pv.fields });
+            setFields((f) => ({ ...pv.fields, ...(typePicked.current ? { documentType: f.documentType } : {}) }));
             setDetailsOpen(true);
           }
         }
@@ -268,12 +302,17 @@ export default function PhoneCapturePage() {
         if (!gotFields && token) {
           setReadStage("server");
           try {
-            const az = await analyzePhoneCapture(token, r?.blob ?? file, allMode ? activeSlot?.key : (ctx?.subjectKey ?? undefined));
+            const az = await analyzePhoneCapture(
+              token,
+              r?.blob ?? file,
+              allMode ? activeSlot?.key : (ctx?.subjectKey ?? undefined),
+              typePicked.current ? typeRef.current : undefined,
+            );
             if (readSeq.current !== seq) return;
             setServerTried(az.available);
             if (az.engine && Object.keys(az.fields).length) {
               setParsed({ engine: az.engine, fields: az.fields, fieldConfidence: az.fieldConfidence, raw: az.source ? { source: az.source } : null });
-              setFields({ ...az.fields });
+              setFields((f) => ({ ...az.fields, ...(typePicked.current ? { documentType: f.documentType } : {}) }));
               setDetailsOpen(true);
             }
           } catch {
@@ -302,11 +341,28 @@ export default function PhoneCapturePage() {
       const typed = Object.fromEntries(
         Object.entries(fields).filter(([, v]) => typeof v === "string" && v.trim()),
       ) as IdentitySuggestedFields;
-      const hasReading = !!(reading?.qrText || parsed?.raw?.mrzLines?.length || Object.keys(typed).length);
-      // Upload the downscaled JPEG when the phone could decode the image (smaller, same content).
-      const fileToSend: Blob = reading?.blob ?? pendingFile;
-      const fileName = reading?.blob ? pendingFile.name.replace(/\.[^.]+$/, "") + ".jpg" : pendingFile.name;
-      const created = await uploadPhoneCapture(token, fileToSend, fileName, allMode ? activeSlot!.key : undefined, hasReading);
+      // Sending does not wait for the reading (2026-10-23). With nothing read and nothing typed
+      // but the document type, the photo goes with the type as a hint and the server reads it at
+      // once — a reading of only the type must not count as "already read", or it never would.
+      const typedBeyondType = Object.keys(typed).some((k) => k !== "documentType");
+      const hasReading = !!(reading?.qrText || parsed?.raw?.mrzLines?.length || parsed?.engine || typedBeyondType);
+      // The shrunk JPEG when the phone has made it (smaller, same content) — waiting a moment
+      // for it when the photo is sent the instant it was taken.
+      let small: Blob | null = reading?.blob ?? shrunkRef.current;
+      for (let i = 0; !small && i < 15; i++) {
+        await new Promise((r) => setTimeout(r, 200));
+        small = shrunkRef.current;
+      }
+      const fileToSend: Blob = small ?? pendingFile;
+      const fileName = small ? pendingFile.name.replace(/\.[^.]+$/, "") + ".jpg" : pendingFile.name;
+      const created = await uploadPhoneCapture(
+        token,
+        fileToSend,
+        fileName,
+        allMode ? activeSlot!.key : undefined,
+        hasReading,
+        hasReading ? undefined : typed.documentType,
+      );
       if (hasReading) {
         // Best-effort: the photo is already stored; a failed details post just leaves the
         // server-side pass to read the bytes.
@@ -328,6 +384,7 @@ export default function PhoneCapturePage() {
       setReadStage("idle");
       setSentCount((n) => n + 1);
       setLastSentFor(allMode ? activeSlot!.label : null);
+      setLastSentAtDesk(!hasReading);
       setPendingFile(null);
       setPhase("ready");
       if (allMode) {
@@ -444,6 +501,20 @@ export default function PhoneCapturePage() {
               )}
             </div>
 
+            {/* How long the code works (2026-10-23): quiet while there is time, amber in the last
+                five minutes, red in the last two. */}
+            {leftMs != null && leftMs > 0 ? (
+              leftMs <= 2 * 60_000 ? (
+                <div role="alert" style={{ background: palette.errBg, border: `1px solid ${palette.errLine}`, borderRadius: 12, padding: "10px 14px", fontSize: 14, fontWeight: 700, lineHeight: 1.45 }}>
+                  This code ends in {Math.floor(leftMs / 60_000)}:{String(Math.floor((leftMs % 60_000) / 1000)).padStart(2, "0")} — send what you have, then ask the desk for a fresh code.
+                </div>
+              ) : (
+                <div style={{ fontSize: 13, fontWeight: 600, textAlign: "center", color: leftMs <= 5 * 60_000 ? "#9a6a12" : palette.ink3 }}>
+                  This code works for {Math.ceil(leftMs / 60_000)} more minutes
+                </div>
+              )
+            ) : null}
+
             {/* The next guest (2026-10-23): one button that always points at whoever still needs an
                 ID, so nobody scrolls a long list to find them. After a photo is sent the card names
                 the following guest by itself. Skip leaves someone not here yet for later. */}
@@ -508,8 +579,8 @@ export default function PhoneCapturePage() {
                 <span>
                   <strong style={{ color: palette.ink }}>The details fill themselves in after the photo.</strong>{" "}
                   QR codes and passports read instantly; other IDs (CID, work permit, birth certificate…) take
-                  a little longer while the printed text is read. Keep the whole document sharp in the shot —
-                  you&rsquo;ll check what was read before anything is sent.
+                  a little longer while the printed text is read. Keep the whole document sharp in the shot.
+                  No need to wait for it — send the photo and the desk finishes reading it.
                 </span>
               </div>
             )}
@@ -522,7 +593,7 @@ export default function PhoneCapturePage() {
                 {lastSentFor && (
                   <div style={{ display: "flex", alignItems: "center", gap: 8, background: palette.card, border: `1px solid ${palette.line}`, borderRadius: 12, padding: "10px 14px", fontSize: 13.5, color: palette.green, fontWeight: 600 }}>
                     <Check style={{ width: 15, height: 15 }} />
-                    Sent for {lastSentFor} — it&rsquo;s on the desk screen now
+                    Sent for {lastSentFor} — {lastSentAtDesk ? "the details are read at the desk" : "it\u2019s on the desk screen now"}
                   </div>
                 )}
                 <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -677,6 +748,34 @@ export default function PhoneCapturePage() {
                   Readable and glare-free? Every detail on the document should be legible.
                 </p>
 
+                {/* The document type, always in view (2026-10-23, operator): picked here it guides the
+                    reading and travels with the photo; a type the reading finds fills it in. */}
+                <label style={{ display: "flex", alignItems: "center", gap: 10, background: palette.card, border: `1px solid ${palette.line}`, borderRadius: 12, padding: "8px 12px" }}>
+                  <span style={{ fontSize: 13, fontWeight: 700, whiteSpace: "nowrap" }}>Document</span>
+                  <select
+                    aria-label="Document type"
+                    value={fields.documentType ?? ""}
+                    disabled={phase === "uploading"}
+                    onChange={(e) => {
+                      const v = e.target.value || undefined;
+                      typePicked.current = !!v;
+                      typeRef.current = v;
+                      setFields((f) => ({ ...f, documentType: v }));
+                    }}
+                    style={{ ...inputStyle, padding: "8px 10px", fontSize: 14.5 }}
+                  >
+                    <option value="">— pick the type —</option>
+                    {(ctx.documentTypes ?? []).map((d) => (
+                      <option key={d.code} value={d.code}>
+                        {d.name}
+                      </option>
+                    ))}
+                  </select>
+                  {parsed?.fieldConfidence?.documentType === "VERIFIED" && !typePicked.current ? (
+                    <span style={{ color: palette.green, fontWeight: 700, fontSize: 12, whiteSpace: "nowrap" }}>✓ read</span>
+                  ) : null}
+                </label>
+
                 {/* Detected details (2026-08-18): read on this phone, interpreted by the server,
                     confirmed here — sent with the photo as a suggestion the desk applies. */}
                 <div style={{ background: palette.card, border: `1px solid ${palette.line}`, borderRadius: 16, padding: "12px 14px", display: "flex", flexDirection: "column", gap: 10 }}>
@@ -734,7 +833,7 @@ export default function PhoneCapturePage() {
                       >
                         <span>{detailsOpen ? "Hide details" : parsed?.engine ? "Check the details" : "Type the details"}</span>
                         <span style={{ fontSize: 12.5, color: palette.ink3, fontWeight: 500 }}>
-                          {Object.values(fields).filter((v) => v && String(v).trim()).length} filled
+                          {Object.entries(fields).filter(([k, v]) => k !== "documentType" && v && String(v).trim()).length} filled
                         </span>
                       </button>
                       {detailsOpen && (
@@ -745,20 +844,6 @@ export default function PhoneCapturePage() {
                               full number from the card if you can.
                             </div>
                           )}
-                          <FieldRow label="Document" verified={parsed?.fieldConfidence?.documentType === "VERIFIED"}>
-                            <select
-                              value={fields.documentType ?? ""}
-                              onChange={(e) => setFields((f) => ({ ...f, documentType: e.target.value || undefined }))}
-                              style={inputStyle}
-                            >
-                              <option value="">— pick —</option>
-                              {(ctx.documentTypes ?? []).map((d) => (
-                                <option key={d.code} value={d.code}>
-                                  {d.name}
-                                </option>
-                              ))}
-                            </select>
-                          </FieldRow>
                           <FieldRow label="Number" verified={parsed?.fieldConfidence?.documentNumber === "VERIFIED" && fields.documentNumber === parsed?.fields.documentNumber}>
                             <input
                               value={fields.documentNumber ?? ""}
@@ -801,9 +886,14 @@ export default function PhoneCapturePage() {
                   {phase === "uploading"
                     ? "Sending…"
                     : readStage === "decoding" || readStage === "qr" || readStage === "mrz" || readStage === "parsing" || readStage === "server"
-                      ? "Send to the desk (reading…)"
+                      ? "Send now — the desk finishes reading it"
                       : "Use this photo — send to the desk"}
                 </button>
+                {(readStage === "decoding" || readStage === "qr" || readStage === "mrz" || readStage === "parsing" || readStage === "server") && phase !== "uploading" ? (
+                  <p style={{ fontSize: 12.5, color: palette.ink3, textAlign: "center", margin: "-4px 0 0", lineHeight: 1.45 }}>
+                    No need to wait — send it and photograph the next guest; the details appear on the desk when they are read.
+                  </p>
+                ) : null}
                 <button type="button" style={btnBase} disabled={phase === "uploading"} onClick={() => openPicker(cameraRef.current, activeSlot)}>
                   <RefreshCcw style={{ width: 17, height: 17 }} />
                   Retake
@@ -929,8 +1019,10 @@ export default function PhoneCapturePage() {
 
             <p style={{ fontSize: 12.5, color: palette.ink3, textAlign: "center", margin: "6px 0 0", lineHeight: 1.5 }}>
               One ID per guest — taking a new photo replaces the previous one. The photo goes straight
-              to the hotel&rsquo;s own system — nothing is posted anywhere public. This link works for
-              about 15 minutes; ask the desk for a fresh code if it expires.
+              to the hotel&rsquo;s own system — nothing is posted anywhere public.
+              {expiresMs != null
+                ? ` This code works until ${new Date(expiresMs).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}; ask the desk for a fresh code after that.`
+                : " Ask the desk for a fresh code if it stops working."}
             </p>
           </>
         )}
