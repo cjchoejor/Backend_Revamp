@@ -37,8 +37,8 @@ export function StepDwell({ since }: { since: string }) {
   );
 }
 
-export function SideTimer({ timer, label }: { timer: TimerRecordSummary; label: string }) {
-  const { now, tz } = useHotelClock(1000);
+/** Where a clock stands: time left, how much of its run has gone (0–100), and its colour. */
+function timerProgress(timer: TimerRecordSummary, now: number) {
   const fires = new Date(timer.firesAt).getTime();
   const start = new Date(timer.createdAt).getTime();
   const ms = fires - now;
@@ -47,6 +47,40 @@ export function SideTimer({ timer, label }: { timer: TimerRecordSummary; label: 
   const warnAt = timer.warningAt ? new Date(timer.warningAt).getTime() : fires - 6 * HOUR;
   const critAt = timer.criticalAt ? new Date(timer.criticalAt).getTime() : fires - HOUR;
   const level = ms <= 0 ? "due" : now >= critAt ? "crit" : now >= warnAt ? "warn" : "ok";
+  return { ms, pct, level };
+}
+
+/** The one unit that fits inside the ring: "2d" · "5h" · "42m" · "due". */
+function shortLeft(ms: number): string {
+  if (ms <= 0) return "due";
+  if (ms < HOUR) return `${Math.max(1, Math.ceil(ms / 60_000))}m`;
+  const h = Math.floor(ms / HOUR);
+  return h < 48 ? `${h}h` : `${Math.floor(h / 24)}d`;
+}
+
+/**
+ * The folded side panel's clock (2026-10-23): a ring that fills from when the clock was armed to
+ * when it fires, in the bar's own colours, with the time left inside it.
+ */
+export function TimerRing({ timer, label }: { timer: TimerRecordSummary; label: string }) {
+  const { now } = useHotelClock(1000);
+  const { ms, pct, level } = timerProgress(timer, now);
+  const r = 19;
+  const c = 2 * Math.PI * r;
+  return (
+    <span className={`side-ring ${level}`} role="img" aria-label={`${label} · ${countdown(ms)}`} title={`${label} · ${countdown(ms)}`}>
+      <svg viewBox="0 0 44 44" aria-hidden="true">
+        <circle className="track" cx="22" cy="22" r={r} />
+        <circle className="fill" cx="22" cy="22" r={r} strokeDasharray={c} strokeDashoffset={c * (1 - pct / 100)} transform="rotate(-90 22 22)" />
+      </svg>
+      <b>{shortLeft(ms)}</b>
+    </span>
+  );
+}
+
+export function SideTimer({ timer, label }: { timer: TimerRecordSummary; label: string }) {
+  const { now, tz } = useHotelClock(1000);
+  const { ms, pct, level } = timerProgress(timer, now);
 
   return (
     <div className="row side-timer" title={`${label} · ${fmtDateTime(timer.firesAt, tz)}`}>

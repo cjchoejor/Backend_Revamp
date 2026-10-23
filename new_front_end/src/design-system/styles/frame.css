@@ -965,3 +965,57 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 @media (prefers-reduced-motion: reduce) {
   .ds .page-head.lead-tabs .tab { transition: none; }
 }
+
+/* The side panel folds to a thin bar (2026-10-23, operator): a ring for the soonest clock, the
+   to-do as its numbered circles, and the middle takes the room. `components/ds/workspace/side-panel.tsx`. */
+.ds .ws-body:not(.desk-root *) { transition: grid-template-columns 0.2s ease; }
+.ds .ws-body.side-folded:not(.desk-root *) { grid-template-columns: 200px 1fr 56px; }
+.ds .ws-body.norail.side-folded:not(.desk-root *) { grid-template-columns: minmax(0, 1fr) 56px; }
+/* One toggle, the same box open or folded, at the panel's head. */
+.ds .side > .side-fold, .ds .side-fold-ic {
+  display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px;
+  border: 1px solid var(--line-2); border-radius: var(--r-control); background: var(--surface); color: var(--ink-2);
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+.ds .side > .side-fold { position: absolute; top: var(--s3); right: var(--s3); cursor: pointer; padding: 0; }
+.ds .side > .side-fold:hover, .ds .side-open:hover .side-fold-ic { background: var(--surface-3); color: var(--ink); }
+.ds .side > .side-fold:active, .ds .side-open:active .side-fold-ic { background: var(--line); }
+.ds .side > .side-fold:focus-visible, .ds .side-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ds .side-fold-ic .flip { transform: rotate(180deg); }
+.ds .side.folded:not(.desk-root *) { padding: 0; gap: 0; }
+.ds .side-open {
+  display: flex; flex-direction: column; align-items: center; gap: var(--s3); width: 100%;
+  padding: var(--s3) 0 var(--s4); border: 0; background: transparent; color: var(--ink-2); font: inherit; cursor: pointer;
+}
+.ds .side-open:hover { background: var(--surface-3); }
+/* The ring: it fills from when the clock was armed to when it fires, in the bar's colours. */
+.ds .side-ring { position: relative; width: 44px; height: 44px; display: inline-flex; align-items: center; justify-content: center; flex: none; }
+.ds .side-ring svg { position: absolute; inset: 0; width: 44px; height: 44px; }
+.ds .side-ring .track { fill: none; stroke: var(--line); stroke-width: 4; }
+.ds .side-ring .fill { fill: none; stroke: var(--success); stroke-width: 4; transition: stroke-dashoffset 1s linear; }
+.ds .side-ring.warn .fill { stroke: var(--warning); }
+.ds .side-ring.crit .fill, .ds .side-ring.due .fill { stroke: var(--danger); }
+.ds .side-ring b { position: relative; font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--ink); }
+.ds .side-ring.warn b { color: var(--warning); }
+.ds .side-ring.crit b, .ds .side-ring.due b { color: var(--danger); }
+.ds .side-ring.none { border: 4px solid var(--line); border-radius: 999px; color: var(--ink-3); }
+.ds .side-more { margin-top: calc(-1 * var(--s2)); font-size: var(--t-meta); font-weight: 500; color: var(--ink-3); }
+.ds .side-dots { display: flex; flex-direction: column; align-items: center; gap: 6px; width: 32px; padding-top: var(--s3); border-top: 1px solid var(--line); }
+.ds .side-dots .n {
+  width: 22px; height: 22px; border-radius: 999px; border: 1px solid var(--line-2); background: var(--surface);
+  display: inline-flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; color: var(--ink-2);
+}
+.ds .side-dots .n .ic { width: 12px; height: 12px; }
+.ds .side-dots .n.done { background: var(--success-soft); border-color: var(--success); color: var(--success); }
+.ds .side-dots .n.next { border: 2px solid var(--accent); color: var(--accent); }
+/* Half a monitor: the panel sits under the canvas, so the folded bar runs across. */
+@container (max-width: 1000px) {
+  .ds .ws-body.side-folded:not(.desk-root *), .ds .ws-body.norail.side-folded:not(.desk-root *) { grid-template-columns: 1fr; }
+  .ds .side.folded:not(.desk-root *) { grid-template-columns: 1fr; }
+  .ds .side-open { flex-direction: row; justify-content: flex-start; padding: var(--s2) var(--s4); }
+  .ds .side-more { margin-top: 0; }
+  .ds .side-dots { flex-direction: row; width: auto; padding: 0 0 0 var(--s3); border-top: 0; border-left: 1px solid var(--line); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ds .ws-body:not(.desk-root *), .ds .side-ring .fill { transition: none; }
+}

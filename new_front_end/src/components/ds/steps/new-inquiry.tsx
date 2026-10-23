@@ -68,6 +68,7 @@ import {
   type UseTypeKey,
 } from "./new-inquiry-parts";
 import { Help } from "@/components/ds/help";
+import { FoldingSide, useSideFolded } from "@/components/ds/workspace/side-panel";
 
 /**
  * The prototype's final pass draws this screen without the journey rail (`ws-body norail`, and
@@ -101,6 +102,7 @@ export function NewInquiryCanvas() {
   const { session } = useSession();
   // The hotel's day, from the server — never the machine's. Null until it answers.
   const today = useHotelDay()?.today ?? null;
+  const [sideFolded, setSideFolded] = useSideFolded();
 
   /* ---------------------------------------------------------------- who is asking */
   // No default: the operator says how the booking reached us (the old form made it the first pick).
@@ -637,7 +639,7 @@ export function NewInquiryCanvas() {
         </div>
       </div>
 
-      <div className={`ws-body${WITH_RAIL ? "" : " norail"}`}>
+      <div className={`ws-body${WITH_RAIL ? "" : " norail"}${sideFolded ? " side-folded" : ""}`}>
         {WITH_RAIL ? (
           <nav className="rail" aria-label="Journey">
             {PHASES.map(([phase, steps]) => (
@@ -1277,7 +1279,7 @@ export function NewInquiryCanvas() {
           </StepCanvas>
         </div>
 
-        <aside className="side">
+        <FoldingSide folded={sideFolded} onFold={setSideFolded} clocks={[]} todo={flowItems} also={flowAlso}>
           <div>
             <h4>Timers</h4>
             <div className="list">
@@ -1285,7 +1287,7 @@ export function NewInquiryCanvas() {
             </div>
           </div>
           <FlowTodo items={flowItems} also={flowAlso} onGo={goToCard} />
-        </aside>
+        </FoldingSide>
       </div>
 
       {dupe ? (

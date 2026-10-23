@@ -89,6 +89,7 @@ import { BOOKING_TABS, ChargesView, DocumentsView, NotesView, RequestsView, type
 import { listBookingNotes, listGuestRequests } from "@/lib/api/booking-notes";
 import { useStayPrice } from "@/lib/ds/stay-price";
 import { SideTimer, StepDwell } from "@/components/ds/workspace/side-timer";
+import { FoldingSide, useSideFolded } from "@/components/ds/workspace/side-panel";
 import { S1Inquiry } from "@/components/ds/steps/s1-inquiry";
 import { InquirySummaryDialog } from "@/components/ds/steps/s1-summary";
 import { S2Negotiation } from "@/components/ds/steps/s2-negotiation";
@@ -122,6 +123,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const refreshEntry = useRefreshEntry(entryId);
   const hotelToday = useHotelDay()?.today ?? null;
   const clock = useHotelClock(30_000);
+  const [sideFolded, setSideFolded] = useSideFolded();
 
   const entryQuery = useQuery({
     queryKey: ["entry", entryId],
@@ -1172,7 +1174,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
           </div>
         </div>
 
-        <div className="ws-body">
+        <div className={`ws-body${sideFolded ? " side-folded" : ""}`}>
           {/* The column carries the ink down to the gate bar; the nav inside it sticks (2026-09-29). */}
           <div className="rail-col">
           <nav className="rail" aria-label="Journey">
@@ -1381,6 +1383,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
             todoInherited={view === "step" && !viewingPast && !sealed ? inherited : []}
             onGoToCard={goToCard}
             timers={timersQuery.data?.items ?? []}
+            folded={sideFolded}
+            onFold={setSideFolded}
           />
         </div>
 
@@ -1604,6 +1608,8 @@ function SidePanel({
   todoInherited,
   onGoToCard,
   timers,
+  folded,
+  onFold,
 }: {
   entry: EntryDetail;
   sealed: boolean;
@@ -1612,6 +1618,8 @@ function SidePanel({
   todoInherited: Precondition[];
   onGoToCard: (card?: string) => void;
   timers: TimerRecordSummary[];
+  folded: boolean;
+  onFold: (folded: boolean) => void;
 }) {
   // The housekeeping (H2) and kitchen (H3) handoffs share one clock code; name them apart by
   // the handoff each clock is on, or both read "Housekeeping to accept".
@@ -1643,7 +1651,7 @@ function SidePanel({
     .slice(0, 8);
   const dwell = entry.stageDwellRecords?.[0];
   return (
-    <aside className="side">
+    <FoldingSide folded={folded} onFold={onFold} clocks={running} todo={todo} also={todoInherited}>
       <div>
         <h4>Timers</h4>
         <div className="list">
@@ -1656,7 +1664,7 @@ function SidePanel({
         </div>
       </div>
       <FlowTodo items={todo} also={todoInherited} onGo={onGoToCard} />
-    </aside>
+    </FoldingSide>
   );
 }
 
