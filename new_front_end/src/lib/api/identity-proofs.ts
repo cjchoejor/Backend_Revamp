@@ -37,7 +37,13 @@ export type IdentityProofSummary = {
   detailsConfirmedBy?: string | null;
   /** True on photo/scan rows; false on the per-guest typed DETAIL rows. */
   hasFile: boolean;
+  /** Detail rows: whether the recorded date of birth fits this guest's row (2026-10-23). */
+  ageCheck?: AgeCheck | null;
 };
+
+/** The server's check of a date of birth against the guest's row — a child of the age the booking
+ *  states, an adult of the legal age — said as a warning, never a refusal. */
+export type AgeCheck = { ageAtCheckIn: number; ok: boolean; message: string | null };
 
 /** Config-driven document-type vocabulary (`identity.documentTypes`) — the guest-detail
  *  table's dropdown AND the S6 verification select read this, never a hardcoded list. */
@@ -85,6 +91,8 @@ export type IdentityProofsResponse = {
    * it is recorded at this booking; the guest profile's own stamp may be from an earlier stay.
    */
   verification?: { verifiedAt: string; verifiedBy: string | null; path: VerificationPathCode | null } | null;
+  /** The row marked as the lead (2026-10-23) — the desk's mark, else the first adult row. */
+  leadSubjectKey?: string;
 };
 
 export type VerificationPathCode = "FIRST_TIME" | "RETURNING_VALID" | "RETURNING_EXPIRED" | "VIP";
@@ -123,6 +131,28 @@ export async function confirmGuestIdentityDetails(
     changed: { subjectKey: string; label: string }[];
     skipped: { subjectKey: string; label: string; reason: string; message: string }[];
   }>(`/api/entries/${entryId}/identity-details/confirm`, { method: "POST", session, body });
+}
+
+/** Mark one adult as the lead (2026-10-23). A verification recorded for the earlier lead stops
+ *  counting — `verificationReset` says so. */
+export async function setLeadGuest(session: Session, entryId: string, subjectKey: string) {
+  return apiRequest<{ subjectKey: string; label: string; previous: string; changed: boolean; verificationReset: boolean }>(
+    `/api/entries/${entryId}/identity-details/lead`,
+    { method: "POST", session, body: { subjectKey } },
+  );
+}
+
+/** Clear one guest's row (2026-10-23): the typed details, the ID photo, or both. A cleared
+ *  photo leaves the row and stops counting; its file stays in the hotel's store. */
+export async function clearGuestIdentitySlot(
+  session: Session,
+  entryId: string,
+  body: { subjectKey: string; details?: boolean; photo?: boolean },
+) {
+  return apiRequest<{ subjectKey: string; label: string; detailsCleared: boolean; photosCleared: number; taskReopened: boolean }>(
+    `/api/entries/${entryId}/identity-details/clear`,
+    { method: "POST", session, body },
+  );
 }
 
 /** Every stored proof for this booking's guest — including ones captured on earlier stays
@@ -229,6 +259,9 @@ export type PhoneCaptureContext = {
   room: PhoneCaptureRoom | null;
   /** Config-driven document-type vocabulary for the phone's detected-fields form. */
   documentTypes?: IdentityDocumentTypeOption[];
+  /** When the code stops working, and the server's clock at this answer (2026-10-23). */
+  expiresAt?: string | null;
+  serverNow?: string;
 };
 
 /** What the phone page shows before the camera opens. Token-authenticated, no session. */
@@ -248,11 +281,14 @@ export async function uploadPhoneCapture(
   subjectKey?: string,
   /** The phone will post its own reading right after — the server pass waits for it. */
   extractionFollows?: boolean,
+  /** Sent before the phone read it (2026-10-23): the type picked guides the server's reading. */
+  documentType?: string,
 ): Promise<{ id: string; subjectLabel: string | null; capturedAt: string }> {
   const params = new URLSearchParams({ token });
   if (fileName?.trim()) params.set("fileName", fileName.trim());
   if (subjectKey?.trim()) params.set("subjectKey", subjectKey.trim());
   if (extractionFollows) params.set("extractionFollows", "1");
+  if (documentType?.trim()) params.set("documentType", documentType.trim());
   const res = await fetch(`/api/identity-capture/upload?${params}`, {
     method: "POST",
     headers: { "Content-Type": file.type || "application/octet-stream" },
@@ -301,6 +337,21 @@ export type OcrSuggestion = {
   error: string | null;
   extractedAt: string | null;
   appliedAt: string | null;
+  /** While PENDING (2026-10-23): QUEUED · QR · STRIP · TEXT. */
+  stage?: "QUEUED" | "QR" | "STRIP" | "TEXT" | null;
+  stageAt?: string | null;
+  /** When the current reading was asked for. */
+  readingSince?: string | null;
+  /** PENDING with a stage that stopped moving — the reading died; scan again. */
+  stalled?: boolean;
+  /** How long the last reading took, once it ended. */
+  readSeconds?: number | null;
+  /** Seconds on the server's clock when the list was answered (the desk counts on locally). */
+  readingForSeconds?: number | null;
+  stageForSeconds?: number | null;
+  endedForSeconds?: number | null;
+  /** Whether the date of birth read off the photo fits the guest's row. */
+  ageCheck?: AgeCheck | null;
 };
 
 /** Desk: apply a suggestion (optionally with corrections) — writes through the detail save. */
@@ -361,9 +412,10 @@ export type PhoneAnalyzeResult = {
  * the fields back — the pass that reads label documents (CID, work permit, birth
  * certificate) the phone can't read locally. Nothing is stored; slow (~10–20 s) is normal.
  */
-export async function analyzePhoneCapture(token: string, file: Blob, subjectKey?: string): Promise<PhoneAnalyzeResult> {
+export async function analyzePhoneCapture(token: string, file: Blob, subjectKey?: string, documentType?: string): Promise<PhoneAnalyzeResult> {
   const params = new URLSearchParams({ token });
   if (subjectKey) params.set("subjectKey", subjectKey);
+  if (documentType) params.set("documentType", documentType);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 90_000);
   try {

@@ -46,6 +46,12 @@ correction surface for details captured earlier, per the operator's "sometimes g
 can be put in S5 and later made changes in S7 or S6"). Columns: Document type · Document no · Name · DOB · Gender ·
 ID photo. Details save on field blur; a typed name replaces the generic label live.
 
+- **A date of birth is checked against its row (2026-10-23)**: a child's row against the age the
+  booking states (that age at some moment between booking and check-in), an adult's row against
+  the legal adult age (18), any row against a future date or an age over 120. A warning in red
+  under the row, and on a suggestion before Apply — never a refusal
+  ([party-age-check.ts](../back_end/src/lib/party-age-check.ts)).
+
 - **Grouped BY ROOM**: each room is a cream band row ("**Room 205** · Twin · Deluxe Double ·
   3/4 IDs", count green when all covered) with its guests beneath. Unseated guests gather
   under "No room assigned yet"; a booking with no composition keeps a flat table. Seating is
@@ -92,6 +98,20 @@ ID photo. Details save on field blur; a typed name replaces the generic label li
 - The desk row has **upload + phone-QR buttons only** (single-file input). The desk camera
   button was removed — photographing happens on the QR-handoff phone.
 - Phone page wording follows: covered rows read "ID on file" with a **Retake** button.
+- **A row can be cleared (2026-10-23)** — the typed details, the ID photo, or both, from the
+  eraser button on the row (`POST /api/entries/:id/identity-details/clear`). A cleared photo
+  leaves the row and stops counting (coverage, phone counts, readings) but its **file stays in
+  the store** (`clearedAt` on the row); a confirmed row must be unlocked first. At Reserve or
+  Arrival the guest-details checklist task opens again when the party is no longer covered.
+- **The date of birth is typed in three boxes, Day · Month · Year (2026-10-23)** — the browser's
+  own calendar made the desk scroll back year by year; a half or impossible date is outlined and
+  not saved.
+- **The lead is marked (2026-10-23)** — a **Lead** mark on each adult row; the lead is the guest
+  the check-in verification vouches for and whose row a returning guest's number fills. Unmarked,
+  it is the first adult row. Moving the lead makes a verification recorded for the earlier lead
+  stop counting (except the VIP path). Rule in `back_end/src/lib/lead-guest.ts`.
+- **Where the files are**: `back_end/storage/documents/YYYY/MM/identity-proof/`, named
+  `<entryId>-<stamp>-<rand>.<ext>` (the default `STORAGE_ROOT_DIR`).
 
 ### 1.4 Phone capture handoff (QR)
 
@@ -100,7 +120,8 @@ photographs IDs with no staff login. Verified end-to-end (API + Puppeteer as a s
 
 **Token** ([identity-capture-token.ts](../back_end/src/lib/identity-capture-token.ts)):
 signed JWT, same `JWT_SECRET` as staff sessions but a `purpose: "IDENTITY_PROOF_UPLOAD"`
-discriminator means neither token kind can ever pass as the other. ~15 min TTL. Grants
+discriminator means neither token kind can ever pass as the other. 15 min for one guest,
+30 min for a whole-party code (since 2026-10-23); the phone shows the time left. Grants
 **upload-only, one entry**, attributed to the minting operator. Worst case for a leaked QR:
 a junk image lands on one booking, traced to the operator.
 
@@ -127,12 +148,16 @@ construction**.
 - Token travels in the URL **hash** (never reaches server logs). Public route — the token is
   the whole credential; invalid/expired shows "ask the desk for a fresh code".
 - Native camera via `<input capture="environment">` — **deliberately not getUserMedia**, which
-  requires a secure context and black-screens over plain-HTTP LAN IPs. Preview + Retake happen
-  before anything uploads; gallery upload as fallback.
+  requires a secure context and black-screens over plain-HTTP LAN IPs; gallery upload as fallback.
+- **Sent at once, read at the desk (since 2026-10-23)**: no preview and no reading on the phone.
+  A photo is shrunk (upright, 2,000 px JPEG) and uploaded the moment it is taken, and the next
+  guest comes up straight away. Each photo keeps its own line (sending · sent · didn't send with
+  Retry); several may be on their way at once. The document type is picked before the shot and
+  travels with the photo as `documentType`.
 - **All-guests mode** renders the party **grouped by room** — the room is the card ("Room 205"
   + bed/type + covered/total, green when complete) with its guests inside; per-guest
-  Photo/Retake + gallery buttons; "Sent for Adult 5" receipts; counts resync from the server
-  after each upload.
+  Photo/Retake + gallery buttons; each guest's own sending/sent/didn't-send line; counts resync
+  from the server after each upload.
 - Rooms come from the roster: `seatPartyByCompositionServer` in the identity-proof service is
   a **deliberate mirror** of the desk's `seatPartyByComposition`
   ([party-rooms.ts](../front_end/src/lib/desk/party-rooms.ts)) — operative comps-bearing quote
@@ -392,6 +417,31 @@ day 10–15 real cards are photographed at the desk (rule §2.3.3 below).
   fields exact) + CID/WP/voter regressions, and image-level through Florence-2 on a synthetic
   Form-5 (kind + DOB + gender right; name/number fidelity tracks OCR quality of the photo).
 
+- **Send now, the model warmed, the type picked, the code's clock** (2026-10-23, operator: the
+  capture "takes a very long time"). The send button no longer waits for the reading — the photo
+  goes and W39 reads it on the server. A type picked on the phone's new **Document** dropdown
+  rides on the upload as `documentType` (W39's kind hint), never as a phone extraction, which
+  would make W39 skip the photo. Opening the code warms Florence-2 (`warmLayoutOcr`), so the
+  first read takes ~3 s instead of timing out cold. A whole-party code lasts 30 minutes, and
+  the phone warns in red for the last two. Details in CLAUDE.md, "Phone capture, faster".
+- **Passports read from a phone photo; the reading shown as it runs** (2026-10-23, same evening,
+  operator: "the fields are not being detected"). Florence-2 had read the passport strip with its
+  check digits, but only the strict MRZ parser looked at strips. Now Florence's boxes locate the
+  strip, OCR-B reads that spot closely, and `passport-text.ts` finds line 2 wherever it sits by its
+  two check-digited dates (the number only with its own check digit), the names by matching the
+  page's printed words in line 1. Only the number, birth and expiry are VERIFIED — names, sex and
+  nationality have no check digit. The OCR-B model is the integer build (`ocrb_int`): the float
+  one aborts the relaxed-SIMD engine and, with no `errorHandler`, the process. Each reading records
+  its stage (QUEUED · QR · STRIP · TEXT) and the desk draws it over the Scan-again button. Details in
+  CLAUDE.md, "Passports read from a phone photo".
+- **The number off the page; two photos read at once** (2026-10-23, later the same evening). A
+  passport number printed on the page that agrees with the strip's check digit is proven even
+  when the strip's own copy was misread. When Florence-2 stops early (its 768 tokens used up by
+  misread Hindi), the unread rest of the page is read again; for a passport whose number is still
+  unproven, the upper half is read again at twice the detail; and an upright phone JPEG is read
+  as it is, not re-encoded. W39 reads two photos at a time, the strip reader one job at a time.
+  The phone no longer reads anything itself. Details in CLAUDE.md, "The number off the page".
+
 ### 2.4 Cloud option — explicitly gated
 
 AWS Textract AnalyzeID / Azure Document Intelligence / Claude vision would all extract more
@@ -405,10 +455,10 @@ in as an accuracy upgrade behind the same suggestions-only contract.
 - **HEIC**: the phone page decodes via `createImageBitmap` and uploads a JPEG; iPhones hand
   JPEG to a file input by default. A HEIC that reaches the server is stored (write-once) but
   sharp without libheif can't read it — the suggestion lands FAILED and the desk types.
-- **Model files are gitignored** (11 MB OCR-B + the WASM cores): run
+- **Model files are gitignored** (the 1.5 MB integer OCR-B model + the WASM cores): run
   `npx tsx scripts/fetch-ocrb-traineddata.ts` from `back_end/` once per machine (writes both
-  `back_end/storage/tessdata/` and `front_end/public/tessdata/`); `npm install` in
-  `front_end/` copies the tesseract worker/cores into `public/`.
+  `back_end/storage/tessdata/` and `new_front_end/public/tessdata/` — the server too); `npm install` in
+  `new_front_end/` copies the tesseract worker/cores into `public/`.
 - **Env**: `OCR_DISABLE`, `OCR_TESSDATA_DIR`, `OCR_MRZ_LANG` — see `.env.example`.
 - Aadhaar Secure QR signature verification (UIDAI certificate) is NOT performed — hence READ,
   not VERIFIED, on QR fields.

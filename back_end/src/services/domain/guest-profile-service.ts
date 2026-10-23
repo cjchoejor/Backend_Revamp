@@ -4,6 +4,7 @@ import { resolveVerificationPaths } from "../../lib/identity-verification-path.j
 import * as auditService from "../infrastructure/audit-service.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { enforceAcceptedIdentityDocumentType } from "../../policies/06-guest-identity/p16-accepted-document-types.js";
+import { resolveLeadSubjectKey } from "../../lib/lead-guest.js";
 
 type VerificationPath = "FIRST_TIME" | "RETURNING_VALID" | "RETURNING_EXPIRED" | "VIP";
 
@@ -282,7 +283,14 @@ export async function recordVerification(
       stageContext: entry.currentStage,
       inquiryId: entry.inquiryId,
       entryId: body.entryId,
-      payload: { entryId: body.entryId, guestProfileId, verificationPath: body.verificationPath, documentType: body.documentType ?? null },
+      // Whose row the verification vouched for (2026-10-23) — a later lead change voids it.
+      payload: {
+        entryId: body.entryId,
+        guestProfileId,
+        verificationPath: body.verificationPath,
+        documentType: body.documentType ?? null,
+        leadSubjectKey: resolveLeadSubjectKey(entry),
+      },
       createdBy: actorId,
     },
   });

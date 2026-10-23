@@ -1,5 +1,6 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { NotFoundError } from "./errors.js";
+import { isLeadDocumentRow, LEAD_ROW_ENTRY_SELECT, resolveLeadSubjectKey } from "./lead-guest.js";
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
 
@@ -47,18 +48,21 @@ export async function resolveVerificationPaths(
   if (!profile) throw new NotFoundError("GuestProfile");
   if (!entry) throw new NotFoundError("Entry");
 
-  const prior = await db.guestIdentityDocument.findFirst({
+  // The lead's row of each earlier booking (or a slot-less verification record) — see lib/lead-guest.
+  const candidates = await db.guestIdentityDocument.findMany({
     where: {
       guestProfileId: input.guestProfileId,
       documentNumber: { not: null },
       AND: [
         { OR: [{ entryId: { not: input.entryId } }, { entryId: null, capturedAt: { lt: entry.createdAt } }] },
-        { OR: [{ subjectKey: null }, { subjectKey: "A0" }] },
+        { OR: [{ subjectKey: null }, { subjectKey: { startsWith: "A" } }] },
       ],
     },
     orderBy: { capturedAt: "desc" },
-    select: { documentType: true, documentNumber: true, expiryDate: true, capturedAt: true },
+    take: 50,
+    select: { documentType: true, documentNumber: true, expiryDate: true, capturedAt: true, subjectKey: true, entry: LEAD_ROW_ENTRY_SELECT },
   });
+  const prior = candidates.find(isLeadDocumentRow) ?? null;
 
   const vip = !!profile.vipTier;
   const priorDocumentExpired = !!prior?.expiryDate && prior.expiryDate.getTime() <= now.getTime();
@@ -120,7 +124,20 @@ export async function findEntryIdentityVerification(
     select: { timestamp: true, actorId: true, payload: true },
   });
   if (!ev) return null;
-  const raw = (ev.payload as { verificationPath?: unknown } | null)?.verificationPath;
+  const payload = (ev.payload as { verificationPath?: unknown; leadSubjectKey?: unknown } | null) ?? {};
+  const raw = payload.verificationPath;
   const path = raw === "FIRST_TIME" || raw === "RETURNING_VALID" || raw === "RETURNING_EXPIRED" || raw === "VIP" ? raw : null;
+  // A verification vouches for the lead's document (2026-10-23): once the desk marks another
+  // adult as the lead it no longer speaks for them, and the stay needs it recorded again. The VIP
+  // path vouches for the booking's guest record, not a row, so it stands. A verification written
+  // before the lead mark existed was for the first adult row.
+  if (path !== "VIP") {
+    const entry = await db.entry.findUnique({
+      where: { id: input.entryId },
+      select: { leadGuestSubjectKey: true, adultCount: true, childAges: true, guestCount: true },
+    });
+    const vouchedFor = typeof payload.leadSubjectKey === "string" ? payload.leadSubjectKey : "A0";
+    if (entry && vouchedFor !== resolveLeadSubjectKey(entry)) return null;
+  }
   return { verifiedAt: ev.timestamp, verifiedBy: ev.actorId ?? null, path };
 }

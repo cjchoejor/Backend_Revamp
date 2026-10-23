@@ -12,13 +12,15 @@ import { runServerExtractionForPhoto } from "../services/domain/identity-ocr-ser
  */
 export async function runIdentityOcrWorker(
   prisma: PrismaClient,
-  input: { photoDocumentId?: string; actorId?: string; force?: boolean },
+  input: { photoDocumentId?: string; actorId?: string; force?: boolean; documentType?: string },
 ) {
   const photoDocumentId = typeof input.photoDocumentId === "string" ? input.photoDocumentId : undefined;
   if (!photoDocumentId) return { skipped: true, reason: "MISSING_PHOTO_ID" } as const;
   const actorId = typeof input.actorId === "string" && input.actorId ? input.actorId : "SYSTEM";
   try {
-    const r = await runServerExtractionForPhoto(prisma, actorId, photoDocumentId, { force: input.force === true });
+    // The type picked on the phone, when the photo was sent before the phone had read it.
+    const documentType = typeof input.documentType === "string" && input.documentType.trim() ? input.documentType.trim().slice(0, 40) : null;
+    const r = await runServerExtractionForPhoto(prisma, actorId, photoDocumentId, { force: input.force === true, documentType });
     return { skipped: r.skipped, reason: "reason" in r ? r.reason : undefined, status: r.suggestion?.status ?? null } as const;
   } catch (err) {
     console.warn(`[W39] identity OCR failed for ${photoDocumentId}:`, err instanceof Error ? err.message : err);

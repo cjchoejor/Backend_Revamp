@@ -110,12 +110,25 @@ export function parseMrzLines(lines: string[], now = new Date()): IdentityExtrac
   }
   put("documentNumber", f.documentNumber ?? undefined, ["documentNumber", "documentNumberCheckDigit"]);
   const name = [f.firstName, f.lastName].filter(Boolean).join(" ");
-  put("fullName", name ? titleCase(name) : undefined, ["firstName", "lastName"]);
+  // No check digit covers the names (2026-10-23): a misread name parsed "valid" and was shown as
+  // proven. They are READ like any other OCR'd text.
+  if (name) {
+    fields.fullName = titleCase(name);
+    conf.fullName = "READ";
+  }
   put("dateOfBirth", isoFromYYMMDD(f.birthDate, "birth", now), ["birthDate", "birthDateCheckDigit"]);
   put("expiryDate", isoFromYYMMDD(f.expirationDate, "expiry", now), ["expirationDate", "expirationDateCheckDigit"]);
+  // The sex and the nationality carry no check digit either (2026-10-23: a strip read "NBD" for
+  // IND and it showed as proven) — READ.
   const sex = f.sex === "male" ? "M" : f.sex === "female" ? "F" : f.sex ? "X" : undefined;
-  put("gender", sex, ["sex"]);
-  put("nationality", f.nationality ?? undefined, ["nationality"]);
+  if (sex) {
+    fields.gender = sex;
+    conf.gender = "READ";
+  }
+  if (f.nationality) {
+    fields.nationality = f.nationality;
+    conf.nationality = "READ";
+  }
 
   const empty = Object.keys(fields).length === 0;
   return { fields, fieldConfidence: conf, raw: { mrzLines: lines, source: `MRZ ${result.format}` }, empty };

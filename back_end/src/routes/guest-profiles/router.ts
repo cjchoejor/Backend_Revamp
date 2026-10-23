@@ -6,6 +6,8 @@ import {
   createGuestProfileRequestSchema,
   mintIdentityCapturePhoneTokenRequestSchema,
   confirmGuestIdentityDetailsRequestSchema,
+  clearGuestIdentitySlotRequestSchema,
+  setLeadGuestRequestSchema,
   saveGuestIdentityDetailRequestSchema,
   applyIdentityOcrSuggestionRequestSchema,
   searchGuestProfilesQuerySchema,
@@ -110,7 +112,7 @@ guestProfilesRouter.post(
       });
       // Server-side OCR/QR extraction (2026-08-18) — the desk has no phone-side reading, so
       // the W39 worker suggests fields off the stored bytes; best-effort, never blocks the upload.
-      void identityOcrService.enqueueServerExtraction(created.id, req.actor!.actorId);
+      void identityOcrService.enqueueServerExtraction(prisma, created.id, req.actor!.actorId);
       res.status(201).json(created);
     } catch (e) {
       next(e);
@@ -199,6 +201,34 @@ guestProfilesRouter.post(
   },
 );
 
+/** Mark one adult of the party as the lead (2026-10-23). */
+guestProfilesRouter.post(
+  "/entries/:id/identity-details/lead",
+  requireActorLevel("L1"),
+  validateBody(setLeadGuestRequestSchema),
+  async (req, res, next) => {
+    try {
+      res.json(await identityProofService.setLeadGuest(prisma, req.params.id, req.actor!.actorId, req.body));
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+/** Clear one guest's row — the typed details, the ID photo, or both (2026-10-23). */
+guestProfilesRouter.post(
+  "/entries/:id/identity-details/clear",
+  requireActorLevel("L1"),
+  validateBody(clearGuestIdentitySlotRequestSchema),
+  async (req, res, next) => {
+    try {
+      res.json(await identityProofService.clearGuestIdentitySlot(prisma, req.params.id, req.actor!.actorId, req.body));
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
 guestProfilesRouter.get("/entries/:id/identity-proofs", requireActorLevel("L1"), async (req, res, next) => {
   try {
     const [list, suggestions] = await Promise.all([
@@ -220,6 +250,8 @@ guestProfilesRouter.post("/identity-proofs/:id/ocr", requireActorLevel("L1"), as
       res.status(409).json({ error: "OCR_DISABLED", message: "Server-side OCR is switched off (OCR_DISABLE=true)" });
       return;
     }
+    // Marked queued before the answer, so the desk's next read shows the reading under way.
+    await identityOcrService.markOcrQueued(prisma, req.params.id);
     const engine = await (await import("../../services/infrastructure/timer-management-service.js")).getTimerEngine();
     await engine.schedule("IDENTITY_OCR_W39", { photoDocumentId: req.params.id, actorId: req.actor!.actorId, force: true }, { startAfter: new Date() });
     res.status(202).json({ queued: true, photoDocumentId: req.params.id });

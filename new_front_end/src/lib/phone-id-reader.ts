@@ -39,10 +39,10 @@ function nextPaint(): Promise<void> {
   });
 }
 
-async function decodeToCanvas(file: Blob): Promise<HTMLCanvasElement | null> {
+async function decodeToCanvas(file: Blob, longEdge = MAX_LONG_EDGE): Promise<HTMLCanvasElement | null> {
   try {
     const bitmap = await createImageBitmap(file);
-    const scale = Math.min(1, MAX_LONG_EDGE / Math.max(bitmap.width, bitmap.height));
+    const scale = Math.min(1, longEdge / Math.max(bitmap.width, bitmap.height));
     const canvas = document.createElement("canvas");
     canvas.width = Math.round(bitmap.width * scale);
     canvas.height = Math.round(bitmap.height * scale);
@@ -140,6 +140,9 @@ async function getTesseract() {
         corePath: "/tesseract-core/tesseract-core-simd-lstm.wasm.js",
         ...langOpts,
         logger: () => {},
+        // A failed job rejects its own promise (caught below) instead of throwing in the worker's
+        // listener, where nothing catches it and the reading never ends (2026-10-23).
+        errorHandler: () => {},
       });
       await w.setParameters({
         tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<",
@@ -154,6 +157,23 @@ async function getTesseract() {
   return tesseractWorker;
 }
 
+/** The long edge of a photo as it is sent (2026-10-23). */
+const UPLOAD_LONG_EDGE = 2000;
+
+/**
+ * The photo as it is sent (2026-10-23, operator: "just send the compressed photo and let the
+ * website analyse it"): turned upright and shrunk to 2000 px on its long edge as a JPEG. A camera
+ * original is 3–8 MB; this is well under 1 MB and reads the same at the desk. A file that is not an
+ * image (a PDF from the gallery), or one the browser cannot decode, goes as it is.
+ */
+export async function shrinkForUpload(file: File): Promise<{ blob: Blob; fileName: string }> {
+  if (!file.type.startsWith("image/")) return { blob: file, fileName: file.name };
+  const canvas = await decodeToCanvas(file, UPLOAD_LONG_EDGE);
+  const blob = canvas ? await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.9)) : null;
+  if (!blob) return { blob: file, fileName: file.name };
+  return { blob, fileName: (file.name || "id-photo").replace(/\.[^.]+$/, "") + ".jpg" };
+}
+
 /** Warm the OCR worker while the person is still framing the shot. */
 export function warmPhoneReader(): void {
   void getTesseract().catch(() => {});
@@ -164,7 +184,12 @@ export function warmPhoneReader(): void {
  * raw payload was found — QR text first (cheap, exact), else the OCR dump of the MRZ area.
  * `onStage` reports progress for the UI.
  */
-export async function readIdOnPhone(file: File, onStage?: (s: "decoding" | "qr" | "mrz") => void): Promise<PhoneReading | null> {
+export async function readIdOnPhone(
+  file: File,
+  onStage?: (s: "decoding" | "qr" | "mrz") => void,
+  /** The shrunk JPEG, as soon as it exists — a photo sent before the reading ends goes small. */
+  onShrunk?: (blob: Blob) => void,
+): Promise<PhoneReading | null> {
   const t0 = performance.now();
   if (!file.type.startsWith("image/")) return null;
   onStage?.("decoding");
@@ -175,6 +200,7 @@ export async function readIdOnPhone(file: File, onStage?: (s: "decoding" | "qr" 
   if (!canvas) return null;
   const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.88));
   if (!blob) return null;
+  onShrunk?.(blob);
   onStage?.("qr");
   const qrText = await readQr(canvas);
   let ocrText: string | null = null;

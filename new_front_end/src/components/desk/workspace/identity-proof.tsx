@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Check, ChevronDown, ChevronRight, FileText, Fingerprint, Lock, ScanLine, Smartphone, Upload, X } from "lucide-react";
+import { AlertTriangle, Check, ChevronDown, ChevronRight, Eraser, FileText, Fingerprint, Lock, ScanLine, Smartphone, Upload, X } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
@@ -26,7 +26,9 @@ import {
   mintPhoneCaptureToken,
   rerunPhotoOcr,
   confirmGuestIdentityDetails,
+  clearGuestIdentitySlot,
   saveGuestIdentityDetail,
+  setLeadGuest,
   uploadIdentityProof,
   type IdentityProofSummary,
   type OcrSuggestion,
@@ -38,6 +40,8 @@ import { StepAction } from "./step-action";
 import type { EntryDetail } from "@/types/api";
 import { fmtDateTime, fmtTime, HOTEL_TZ_DEFAULT } from "@/lib/ds/format";
 import { Help, HelpHere } from "@/components/ds/help";
+import { DsDialog, NotNow } from "@/components/ds/steps/kit";
+import { Button } from "@/design-system";
 
 /**
  * Guest-detail table on Arrival (2026-08-10, operator request — "store ID proof of every
@@ -189,6 +193,136 @@ const lockedCell: React.CSSProperties = {
   borderStyle: "dashed",
   cursor: "not-allowed",
 };
+const DOB_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+type DobParts = { d: string; m: string; y: string };
+
+function dobSplit(v: string): DobParts {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
+  return m ? { d: String(Number(m[3])), m: String(Number(m[2])), y: m[1] } : { d: "", m: "", y: "" };
+}
+
+/** "YYYY-MM-DD" when the three boxes make a real date, "" when all three are empty, null otherwise. */
+function dobCompose(p: DobParts): string | null {
+  if (!p.d && !p.m && !p.y) return "";
+  const d = Number(p.d);
+  const mo = Number(p.m);
+  const y = Number(p.y);
+  if (!/^\d{4}$/.test(p.y) || !d || !mo) return null;
+  const at = new Date(Date.UTC(y, mo - 1, d));
+  if (at.getUTCFullYear() !== y || at.getUTCMonth() !== mo - 1 || at.getUTCDate() !== d) return null;
+  return `${p.y}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+}
+
+/**
+ * A date of birth as three boxes — day, month, year (2026-10-23, operator: the browser's own
+ * calendar made the desk scroll back year by year to reach 1950). The year is typed, so nothing
+ * scrolls; the day moves on to the month and the month to the year by themselves. A date is
+ * handed up only once the three make a real one ("" when all three are emptied); a half-typed
+ * date stays in the boxes, outlined, until it is finished.
+ */
+function DobField({
+  value,
+  onChange,
+  onDone,
+  disabled,
+  boxStyle,
+  warn,
+  label,
+}: {
+  value: string;
+  onChange: (ymd: string) => void;
+  /** Focus left the three boxes. */
+  onDone: () => void;
+  disabled?: boolean;
+  boxStyle: React.CSSProperties;
+  /** The age check's message, when the date does not fit the row. */
+  warn?: string | null;
+  label: string;
+}) {
+  const [parts, setParts] = useState<DobParts>(() => dobSplit(value));
+  const monthRef = useRef<HTMLSelectElement>(null);
+  const yearRef = useRef<HTMLInputElement>(null);
+  // A date from outside (the saved row, Apply) replaces the boxes; a half-typed one is not a date yet.
+  useEffect(() => {
+    setParts((cur) => (dobCompose(cur) === value ? cur : dobSplit(value)));
+  }, [value]);
+  const update = (patch: Partial<DobParts>) => {
+    const next = { ...parts, ...patch };
+    setParts(next);
+    const v = dobCompose(next);
+    if (v !== null && v !== value) onChange(v);
+  };
+  const incomplete = dobCompose(parts) === null;
+  const bad = incomplete || !!warn;
+  const look: React.CSSProperties = bad ? { ...boxStyle, borderColor: "var(--stop)", boxShadow: "0 0 0 1px var(--stop)" } : boxStyle;
+  const title = incomplete ? "Not a full date yet — the day, the month and the year" : (warn ?? undefined);
+  return (
+    <div
+      role="group"
+      aria-label={`${label} — date of birth`}
+      aria-invalid={bad ? true : undefined}
+      title={title}
+      style={{ display: "flex", gap: 3 }}
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) onDone();
+      }}
+    >
+      <input
+        className="dinput"
+        aria-label="Day"
+        inputMode="numeric"
+        maxLength={2}
+        placeholder="DD"
+        disabled={disabled}
+        // A click selects what is there, so the next keystroke replaces it rather than editing half of it.
+        onFocus={(e) => e.currentTarget.select()}
+        value={parts.d}
+        style={{ ...look, width: 34, textAlign: "center", padding: "5px 2px" }}
+        onChange={(e) => {
+          const d = e.target.value.replace(/\D/g, "").slice(0, 2);
+          update({ d });
+          // Two digits, or a first digit that cannot start a two-digit day, and the month is next.
+          if (d.length === 2 || (d.length === 1 && Number(d) > 3)) monthRef.current?.focus();
+        }}
+      />
+      <select
+        ref={monthRef}
+        aria-label="Month"
+        disabled={disabled}
+        value={parts.m}
+        style={{ ...look, width: 62, padding: "5px 2px" }}
+        onChange={(e) => {
+          update({ m: e.target.value });
+          if (e.target.value) yearRef.current?.focus();
+        }}
+      >
+        <option value="">Mon</option>
+        {DOB_MONTHS.map((name, i) => (
+          <option key={name} value={String(i + 1)}>
+            {name}
+          </option>
+        ))}
+      </select>
+      <input
+        ref={yearRef}
+        className="dinput"
+        aria-label="Year"
+        inputMode="numeric"
+        maxLength={4}
+        placeholder="YYYY"
+        disabled={disabled}
+        onFocus={(e) => e.currentTarget.select()}
+        value={parts.y}
+        style={{ ...look, width: 50, textAlign: "center", padding: "5px 2px" }}
+        onChange={(e) => update({ y: e.target.value.replace(/\D/g, "").slice(0, 4) })}
+        onKeyDown={(e) => {
+          if (e.key === "Backspace" && !parts.y) monthRef.current?.focus();
+        }}
+      />
+    </div>
+  );
+}
+
 const th: React.CSSProperties = {
   textAlign: "left",
   fontSize: 10.5,
@@ -203,6 +337,82 @@ const th: React.CSSProperties = {
 const td: React.CSSProperties = { padding: "6px 6px", borderBottom: "1px dashed var(--line)", verticalAlign: "middle" };
 
 const GENDER_WORD: Record<string, string> = { M: "Male", F: "Female", X: "Other" };
+
+/** Where a reading is, in words, and how far along the bar it sits when the stage begins. */
+const READ_STAGES: Record<string, { words: string; from: number; to: number; usual: number }> = {
+  QUEUED: { words: "Waiting its turn", from: 4, to: 14, usual: 4 },
+  QR: { words: "Looking for a QR code", from: 14, to: 30, usual: 2 },
+  STRIP: { words: "Reading the passport strip", from: 30, to: 45, usual: 3 },
+  TEXT: { words: "Reading the printed text", from: 45, to: 94, usual: 12 },
+};
+
+/**
+ * The reading of one ID photo, over its Scan-again button (2026-10-23, operator: "a small progress
+ * bar showing the image is being read and done"). While it runs: the stage in words, the seconds,
+ * and a bar that moves through the stages the server reports (it never claims the end before the
+ * server does). When it ends: green with what was found, amber when nothing could be read (the
+ * row stays as it was, so this line is the only sign), red when the reading failed or stopped.
+ */
+function OcrProgress({ suggestion, fetchedAt }: { suggestion: OcrSuggestion; fetchedAt: number }) {
+  // Seconds come from the server's answer; this machine only adds the time since it arrived.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 500);
+    return () => clearInterval(t);
+  }, []);
+  const since = Math.max(0, (now - fetchedAt) / 1000);
+  const later = (s: number | null | undefined) => (s == null ? null : s + since);
+  const shell = (tone: string, fill: number, label: React.ReactNode, title?: string, live = false) => (
+    <div role={live ? "status" : undefined} aria-live={live ? "polite" : undefined} title={title} style={{ width: 150, display: "grid", gap: 3 }}>
+      <div style={{ fontSize: 11.5, fontWeight: 600, color: tone, display: "flex", alignItems: "center", gap: 4, lineHeight: 1.25 }}>{label}</div>
+      <div style={{ height: 5, borderRadius: 3, background: "var(--line)", overflow: "hidden" }}>
+        <div className="ocr-fill" style={{ height: "100%", width: `${Math.max(3, Math.min(100, fill))}%`, background: tone, borderRadius: 3 }} />
+      </div>
+    </div>
+  );
+  if (suggestion.status === "PENDING") {
+    if (suggestion.stalled) {
+      return shell("var(--stop)", 100, <><AlertTriangle style={{ width: 12, height: 12 }} /> The reading stopped — scan again</>, "No progress for several minutes.", true);
+    }
+    const st = READ_STAGES[suggestion.stage ?? "QUEUED"] ?? READ_STAGES.QUEUED;
+    const inStage = later(suggestion.stageForSeconds) ?? 0;
+    // Moves within the stage as time passes, slowing as it nears the stage's end — never past it.
+    const within = 1 - Math.exp(-inStage / st.usual);
+    const fill = st.from + (st.to - st.from) * within;
+    const reading = later(suggestion.readingForSeconds);
+    const secs = reading == null ? null : Math.round(reading);
+    return shell(
+      "var(--accent, #2f6fdf)",
+      fill,
+      <>
+        <ScanLine style={{ width: 12, height: 12 }} /> {st.words}
+        {secs != null ? <span style={{ fontWeight: 400, color: "var(--ink-3)" }}>· {secs}s</span> : null}
+      </>,
+      undefined,
+      true,
+    );
+  }
+  const ended = later(suggestion.endedForSeconds);
+  const endedMs = ended == null ? Number.POSITIVE_INFINITY : ended * 1000;
+  const took = suggestion.readSeconds != null ? ` in ${Math.round(suggestion.readSeconds)}s` : "";
+  if (suggestion.status === "READY" && endedMs < 20_000) {
+    const n = Object.values(suggestion.fields ?? {}).filter(Boolean).length;
+    return shell("var(--ok)", 100, <><Check style={{ width: 12, height: 12 }} /> Read{took} · {n} detail{n === 1 ? "" : "s"} below</>, undefined, true);
+  }
+  if (suggestion.status === "EMPTY") {
+    return shell(
+      "var(--warn)",
+      100,
+      <><AlertTriangle style={{ width: 12, height: 12 }} /> Nothing could be read{took}</>,
+      "Retake the photo flat, in good light, with the whole page in the frame — or type the details.",
+      endedMs < 20_000,
+    );
+  }
+  if (suggestion.status === "FAILED") {
+    return shell("var(--stop)", 100, <><AlertTriangle style={{ width: 12, height: 12 }} /> The reading failed — scan again</>, suggestion.error ?? undefined, endedMs < 20_000);
+  }
+  return null;
+}
 
 /** Amber "Detected from the ID photo" strip — the machine's read, never mistaken for verified data. */
 function SuggestionStrip({
@@ -280,6 +490,13 @@ function SuggestionStrip({
       <span style={{ display: "inline-flex", gap: 10, flexWrap: "wrap" }}>
         {parts.length ? parts.map((p, i) => <span key={i}>{p}</span>) : <span style={{ color: "var(--ink-3)" }}>nothing usable</span>}
       </span>
+      {/* A date of birth that does not fit this guest's row is said before Apply (2026-10-23). */}
+      {suggestion.ageCheck && !suggestion.ageCheck.ok && suggestion.ageCheck.message && (
+        <div role="alert" className="rct-refusal" style={{ flexBasis: "100%", margin: "2px 0 0", fontSize: 12.5 }}>
+          <span className="ic">!</span>
+          <span>{suggestion.ageCheck.message}</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -309,6 +526,10 @@ export function IdentityProofBlock({
   const [touched, setTouched] = useState<Record<string, boolean>>({});
   const [savedFlash, setSavedFlash] = useState<string | null>(null);
   const [busySlot, setBusySlot] = useState<string | null>(null);
+  // Clearing a guest's row (2026-10-23): which guest, and what of theirs goes.
+  const [clearFor, setClearFor] = useState<PartySlot | null>(null);
+  const [clearDetails, setClearDetails] = useState(false);
+  const [clearPhoto, setClearPhoto] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   // Which guest the open picker is capturing for — set at button-click time, read on change.
   const pendingSlotRef = useRef<PartySlot | null>(null);
@@ -329,10 +550,12 @@ export function IdentityProofBlock({
     // Also poll while a server-side OCR read is PENDING so the suggestion lands on screen.
     refetchInterval: (q) => {
       if (phoneCapture) return 3000;
-      const pending = (q.state.data?.suggestions ?? []).some((x) => x.status === "PENDING");
-      return pending ? 3000 : false;
+      const pending = (q.state.data?.suggestions ?? []).some((x) => x.status === "PENDING" && !x.stalled);
+      return pending ? 1500 : false;
     },
   });
+  // Which row is the lead (2026-10-23) — the desk's mark, else the first adult row; the server decides.
+  const leadKey = listQuery.data?.leadSubjectKey ?? "A0";
   const items = listQuery.data?.items ?? [];
   // OCR / QR suggestions per photo (2026-08-18) — rendered under the guest's row while
   // unapplied; Apply writes through the same detail save the row's inputs use.
@@ -608,12 +831,63 @@ export function IdentityProofBlock({
   });
   const rerunOcrM = useMutation({
     mutationFn: (photoId: string) => rerunPhotoOcr(session!, photoId),
-    onSuccess: () => {
-      toast.info("Reading the ID photo again…");
-      void queryClient.invalidateQueries({ queryKey: ["identity-proofs", entryId] });
-    },
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["identity-proofs", entryId] }),
     onError: (e) => toast.error(e instanceof Error ? e.message : "Could not queue the read"),
   });
+
+  // Clear a guest's row (2026-10-23, operator: "a clear option for both image and text"). What is
+  // only typed here and never saved is just emptied on the desk; what is saved goes through the
+  // server, which also opens the Arrival checklist's guest-details task again when it must.
+  const clearM = useMutation({
+    mutationFn: async (args: { slot: PartySlot; details: boolean; photo: boolean }) => {
+      const savedHasDetails = !sameDraft(draftFromRow(detailRow(args.slot.key)), EMPTY_DRAFT);
+      const hasPhoto = photosFor(args.slot.key).length > 0;
+      const details = args.details && savedHasDetails;
+      const photo = args.photo && hasPhoto;
+      if (!details && !photo) return null;
+      return clearGuestIdentitySlot(session!, entryId, { subjectKey: args.slot.key, details, photo });
+    },
+    onSuccess: (outcome, args) => {
+      if (args.details) {
+        setTouched((prev) => ({ ...prev, [args.slot.key]: false }));
+        setDrafts((prev) => ({ ...prev, [args.slot.key]: EMPTY_DRAFT }));
+      }
+      const name = outcome?.label ?? args.slot.label;
+      const what = [args.details ? "details" : null, outcome?.photosCleared ? (outcome.photosCleared > 1 ? "ID photos" : "ID photo") : null]
+        .filter(Boolean)
+        .join(" and ");
+      toast.success(`${name}'s ${what || "details"} cleared`);
+      if (outcome?.taskReopened) toast.warning("The Arrival checklist's guest-details task is open again — this guest needs their details");
+      setClearFor(null);
+      void queryClient.invalidateQueries({ queryKey: ["identity-proofs", entryId] });
+      void queryClient.invalidateQueries({ queryKey: ["entry", entryId] });
+      void queryClient.invalidateQueries({ queryKey: ["entry-trace", entryId] });
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Could not clear the guest's row"),
+  });
+  // Mark another adult as the lead (2026-10-23, operator: "add a lead mark").
+  const leadM = useMutation({
+    mutationFn: (slot: PartySlot) => setLeadGuest(session!, entryId, slot.key),
+    onSuccess: (r) => {
+      if (r.changed) toast.success(`${r.label} is now the lead`);
+      if (r.verificationReset) {
+        toast.warning(`The identity verification was for the earlier lead — record it again for ${r.label} before check-in`);
+      }
+      void queryClient.invalidateQueries({ queryKey: ["identity-proofs", entryId] });
+      void queryClient.invalidateQueries({ queryKey: ["entry", entryId] });
+      void queryClient.invalidateQueries({ queryKey: ["entry-trace", entryId] });
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Could not move the lead"),
+  });
+
+  const openClear = (slot: PartySlot) => {
+    const draft = drafts[slot.key] ?? EMPTY_DRAFT;
+    const hasDetails = !sameDraft(draft, EMPTY_DRAFT) || !sameDraft(draftFromRow(detailRow(slot.key)), EMPTY_DRAFT);
+    const hasPhoto = photosFor(slot.key).length > 0;
+    setClearDetails(hasDetails);
+    setClearPhoto(hasPhoto);
+    setClearFor(slot);
+  };
 
   /** Blur handler — persists the row when anything actually changed. */
   const saveIfChanged = (slot: PartySlot) => {
@@ -639,18 +913,18 @@ export function IdentityProofBlock({
   useEffect(() => {
     if (autoPullRef.current || !session || !listQuery.data) return;
     if (!returning?.documentNumber) return;
-    const slot = slots.find((s) => s.key === "A0");
+    const slot = slots.find((s) => s.key === leadKey);
     if (!slot) return;
-    const row = detailRow("A0");
+    const row = detailRow(leadKey);
     if (row?.documentNumber) return;
-    if (lockedFor("A0")) return; // confirmed row — nothing may write to it unasked
+    if (lockedFor(leadKey)) return; // confirmed row — nothing may write to it unasked
     const draft: DetailDraft = { ...draftFromRow(row), num: returning.documentNumber };
     const documentNumber = returning.documentNumber;
     // Started once the effect has settled (2026-10-23): a save started on the first of
     // development's two effect runs never reports back, and Confirm stays shut behind it.
     const t = setTimeout(() => {
       autoPullRef.current = true;
-      setDrafts((prev) => ({ ...prev, A0: draft }));
+      setDrafts((prev) => ({ ...prev, [slot.key]: draft }));
       setPulledFromFile(true);
       saveM.mutate({ slot, draft });
       toast.info(`Document number on file (${documentNumber}) pulled into ${slot.label} — confirm it belongs to this guest`);
@@ -663,8 +937,8 @@ export function IdentityProofBlock({
   // ruling — the guest-detail table below is the ONLY place document type/number are typed).
   // Paths that need a document read it off the MAIN GUEST's row (A0); the button stays
   // locked until that row holds what the chosen path requires.
-  const primaryDraft = drafts["A0"] ?? EMPTY_DRAFT;
-  const primaryLabel = primaryDraft.name.trim() || slots.find((s) => s.key === "A0")?.label || "the main guest";
+  const primaryDraft = drafts[leadKey] ?? EMPTY_DRAFT;
+  const primaryLabel = primaryDraft.name.trim() || slots.find((s) => s.key === leadKey)?.label || "the lead";
   const verifyNeedsDocument = verificationPath === "FIRST_TIME" || verificationPath === "RETURNING_EXPIRED";
   const verifyMissing =
     verifyNeedsDocument && (!primaryDraft.docType || (verificationPath === "FIRST_TIME" && !primaryDraft.num.trim()));
@@ -1059,17 +1333,12 @@ export function IdentityProofBlock({
               const cell = locked ? { ...cellInput, ...lockedCell } : cellInput;
               const suggestion = suggestionFor(slot.key);
               // Suggestion strip under the row (2026-08-18): READY → amber "Detected from the ID
-              // photo … Apply / Dismiss"; PENDING → muted "reading"; else nothing.
+              // photo … Apply / Dismiss"; the reading itself shows in the photo cell (2026-10-23).
               const suggestionRow =
-                suggestion && (suggestion.status === "READY" || suggestion.status === "PENDING") ? (
+                suggestion && suggestion.status === "READY" ? (
                   <tr key={`${slot.key}-ocr`}>
                     <td colSpan={7} style={{ padding: "0 6px 6px", borderBottom: "1px dashed var(--line)" }}>
-                      {suggestion.status === "PENDING" ? (
-                        <div style={{ fontSize: 11.5, color: "var(--ink-3)", display: "flex", alignItems: "center", gap: 6, padding: "2px 4px" }}>
-                          <ScanLine style={{ width: 12, height: 12 }} /> Reading the ID photo…
-                        </div>
-                      ) : (
-                        <SuggestionStrip
+                      <SuggestionStrip
                           suggestion={suggestion}
                           docTypeName={(code) => docTypes.find((d) => d.code === code)?.name ?? code}
                           busy={applySuggestionM.isPending || dismissSuggestionM.isPending}
@@ -1081,10 +1350,29 @@ export function IdentityProofBlock({
                               : null
                           }
                         />
-                      )}
                     </td>
                   </tr>
                 ) : null;
+              // A date of birth that does not fit the row (2026-10-23, operator: "so the user doesn't
+              // put a child in an adult's row") — the server's check of the SAVED date, shown while the
+              // field still holds it; a warning, the date stays saved.
+              const savedDetail = detailRow(slot.key);
+              const ageWarn =
+                savedDetail?.ageCheck && !savedDetail.ageCheck.ok && draft.dob === (savedDetail.dateOfBirth?.slice(0, 10) ?? "")
+                  ? savedDetail.ageCheck.message
+                  : null;
+              const ageRow = ageWarn ? (
+                <tr key={`${slot.key}-age`}>
+                  <td colSpan={7} style={{ padding: "0 6px 6px" }}>
+                    <div role="alert" className="rct-refusal" style={{ margin: 0, fontSize: 12.5 }}>
+                      <span className="ic">!</span>
+                      <span>
+                        {slot.label}: {ageWarn}
+                      </span>
+                    </div>
+                  </td>
+                </tr>
+              ) : null;
               // A typed name replaces the generic "Adult 2" label live (the age stays as a
               // muted suffix on child rows so the band is never hidden by a name).
               const typedName = draft.name.trim();
@@ -1101,6 +1389,51 @@ export function IdentityProofBlock({
                       {displayName}
                       {typedName && slot.sub && <span style={{ color: "var(--ink-3)", fontWeight: 400 }}> · {slot.sub}</span>}
                     </span>
+                    {/* The lead mark (2026-10-23): one adult row is the lead — the guest the
+                        check-in verification is for. A child row never carries it. */}
+                    {slot.key.startsWith("A") &&
+                      (() => {
+                        const isLead = slot.key === leadKey;
+                        const blocked = !isLead && (lockedFor(leadKey) || lockedFor(slot.key));
+                        return (
+                          <label
+                            title={
+                              isLead
+                                ? "The lead — the guest the check-in verification is for"
+                                : blocked
+                                  ? 'Confirmed — choose "Make changes" first'
+                                  : `Make ${displayName} the lead`
+                            }
+                            style={{
+                              marginLeft: 8,
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: 4,
+                              padding: "1px 6px 1px 4px",
+                              borderRadius: 4,
+                              border: `1px solid ${isLead ? "var(--ok)" : "var(--line-2)"}`,
+                              background: isLead ? "var(--green-t)" : "transparent",
+                              color: isLead ? "var(--ok)" : "var(--ink-3)",
+                              fontSize: 10.5,
+                              fontWeight: isLead ? 700 : 500,
+                              cursor: isLead ? "default" : blocked ? "not-allowed" : "pointer",
+                              opacity: blocked ? 0.55 : 1,
+                              verticalAlign: "middle",
+                            }}
+                          >
+                            <input
+                              type="radio"
+                              name={`lead-${entryId}`}
+                              aria-label={`${displayName} is the lead`}
+                              checked={isLead}
+                              disabled={blocked || leadM.isPending}
+                              onChange={() => leadM.mutate(slot)}
+                              style={{ margin: 0, width: 11, height: 11, accentColor: "var(--ok)" }}
+                            />
+                            Lead
+                          </label>
+                        );
+                      })()}
                     {savedFlash === slot.key && (
                       <span style={{ marginLeft: 6, fontSize: 10, color: "var(--ok)", fontWeight: 600 }}>saved</span>
                     )}
@@ -1158,15 +1491,15 @@ export function IdentityProofBlock({
                       onBlur={() => saveIfChanged(slot)}
                     />
                   </td>
-                  <td style={{ ...td, minWidth: 128 }}>
-                    <input
-                      className="dinput"
-                      style={cell}
-                      type="date"
-                      disabled={locked}
+                  <td style={{ ...td, minWidth: 154 }}>
+                    <DobField
+                      label={displayName}
                       value={draft.dob}
-                      onChange={(e) => setDraft(slot.key, { dob: e.target.value })}
-                      onBlur={() => saveIfChanged(slot)}
+                      disabled={locked}
+                      boxStyle={cell}
+                      warn={ageWarn}
+                      onChange={(dob) => setDraft(slot.key, { dob })}
+                      onDone={() => saveIfChanged(slot)}
                     />
                   </td>
                   <td style={{ ...td, minWidth: 92 }}>
@@ -1192,6 +1525,7 @@ export function IdentityProofBlock({
                         Thumb above; the two buttons stay one horizontal row. */}
                     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                       {photos.length > 0 && photoChips(photos.slice(0, 1))}
+                      {covered && suggestion && <OcrProgress suggestion={suggestion} fetchedAt={listQuery.dataUpdatedAt} />}
                       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                         <button
                           type="button"
@@ -1216,7 +1550,7 @@ export function IdentityProofBlock({
                         >
                           <Smartphone style={{ width: 13, height: 13 }} />
                         </button>
-                        {covered && suggestion?.status !== "PENDING" && (
+                        {covered && (suggestion?.status !== "PENDING" || suggestion.stalled) && (
                           <button
                             type="button"
                             className="btn btn-ghost btn-sm"
@@ -1227,12 +1561,29 @@ export function IdentityProofBlock({
                             <ScanLine style={{ width: 13, height: 13 }} />
                           </button>
                         )}
+                        {(covered || !sameDraft(draft, EMPTY_DRAFT)) && (
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-sm"
+                            disabled={locked || clearM.isPending}
+                            onClick={() => openClear(slot)}
+                            aria-label={`Clear ${displayName}'s row`}
+                            title={
+                              locked
+                                ? 'These details are confirmed — choose "Make changes" first'
+                                : `Clear ${displayName}'s details, ID photo or both`
+                            }
+                          >
+                            <Eraser style={{ width: 13, height: 13 }} />
+                          </button>
+                        )}
                       </div>
                     </div>
                   </td>
                 </tr>
               );
               const rowsForSlot: React.ReactNode[] = [row];
+              if (ageRow) rowsForSlot.push(ageRow);
               if (suggestionRow) rowsForSlot.push(suggestionRow);
               return rowsForSlot;
               });
@@ -1400,6 +1751,68 @@ export function IdentityProofBlock({
       </HelpHere>
         </>
       )}
+
+      {clearFor &&
+        (() => {
+          const draft = drafts[clearFor.key] ?? EMPTY_DRAFT;
+          const name = draft.name.trim() || clearFor.label;
+          const typeName = draft.docType ? (docTypes.find((d) => d.code === draft.docType)?.name ?? draft.docType) : null;
+          const facts = [typeName, draft.num.trim() || null, draft.name.trim() || null, draft.dob || null, draft.gender ? (({ MALE: "Male", FEMALE: "Female", OTHER: "Other" } as Record<string, string>)[draft.gender] ?? draft.gender) : null].filter(Boolean);
+          const hasDetails = facts.length > 0;
+          const photoCount = photosFor(clearFor.key).length;
+          const any = (clearDetails && hasDetails) || (clearPhoto && photoCount > 0);
+          return (
+            <DsDialog
+              open
+              onClose={() => !clearM.isPending && setClearFor(null)}
+              register="danger"
+              title={`Clear ${name}'s row`}
+              busy={clearM.isPending}
+              help={
+                <>
+                  Cleared details go back to empty. A cleared photo leaves this row and stops counting for check-in;
+                  the file itself stays in the hotel&rsquo;s records, and a new photo can be taken straight away.
+                </>
+              }
+              footer={
+                <>
+                  <NotNow onClick={() => setClearFor(null)} busy={clearM.isPending} />
+                  <Button
+                    kind="danger"
+                    solid
+                    state={clearM.isPending ? "working" : any ? "default" : "inert"}
+                    workingLabel="Clearing…"
+                    title={any ? undefined : "tick what to clear"}
+                    onClick={() => clearM.mutate({ slot: clearFor, details: clearDetails && hasDetails, photo: clearPhoto && photoCount > 0 })}
+                  >
+                    Clear
+                  </Button>
+                </>
+              }
+            >
+              <div className="field">
+                <label style={{ display: "flex", gap: 8, alignItems: "flex-start", cursor: hasDetails ? "pointer" : "default", opacity: hasDetails ? 1 : 0.55 }}>
+                  <input type="checkbox" checked={clearDetails && hasDetails} disabled={!hasDetails} onChange={(e) => setClearDetails(e.target.checked)} />
+                  <span>
+                    <b>The details</b>
+                    <span className="sm" style={{ display: "block", color: "var(--ink-2)" }}>{hasDetails ? facts.join(" · ") : "nothing typed"}</span>
+                  </span>
+                </label>
+              </div>
+              <div className="field">
+                <label style={{ display: "flex", gap: 8, alignItems: "flex-start", cursor: photoCount ? "pointer" : "default", opacity: photoCount ? 1 : 0.55 }}>
+                  <input type="checkbox" checked={clearPhoto && photoCount > 0} disabled={!photoCount} onChange={(e) => setClearPhoto(e.target.checked)} />
+                  <span>
+                    <b>The ID photo</b>
+                    <span className="sm" style={{ display: "block", color: "var(--ink-2)" }}>
+                      {photoCount ? (photoCount > 1 ? `${photoCount} photos on this row` : "the photo on this row") : "no photo"}
+                    </span>
+                  </span>
+                </label>
+              </div>
+            </DsDialog>
+          );
+        })()}
 
       <DeskConfirmModal
         open={seatingOpen}
