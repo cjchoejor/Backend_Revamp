@@ -115,6 +115,9 @@ export function S6CheckIn({
   const at = (k: string | null) => ((pane ?? null) === k ? undefined : true);
   const { session } = useSession();
   const { tz } = useHotelClock(60_000);
+  const advancePay = usePaymentStatus(entry.id, { enabled: !!entry.folio }).data;
+  // Paid in full and signed off: nothing to collect here — Money received carries it (2026-10-23).
+  const advanceSettled = entry.folio?.advancePaymentReconciliationComplete === true && advancePay?.paidInFull === true;
 
   const proofs = useQuery({
     queryKey: ["identity-proofs", entry.id],
@@ -193,6 +196,7 @@ export function S6CheckIn({
         setConfirmed={setRegistrationConfirmed}
       />
 
+      {advanceSettled ? null : (
       <div id={ID.advance}>
         <StepCard flow="advance">
           <Tool>
@@ -204,6 +208,7 @@ export function S6CheckIn({
           </Tool>
         </StepCard>
       </div>
+      )}
 
       {isVip ? <VipCard entry={entry} tz={tz} /> : null}
 

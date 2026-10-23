@@ -112,6 +112,9 @@ export function PreArrivalTasksCard({
   const canAct = (t: PreArrivalTaskSummary) =>
     !past && t.status === "PENDING" && (actionable === "all" || actionable.has(t.taskType));
   const open = tasks.filter((t) => t.status === "PENDING").length;
+  // Every task done or waived: the card folds to its heading (2026-10-23, operator) — Show opens it.
+  const [shown, setShown] = useState(false);
+  const folded = tasks.length > 0 && open === 0 && !shown;
 
   return (
     <StepCard
@@ -120,8 +123,21 @@ export function PreArrivalTasksCard({
       title={title}
       id={id}
       meta={meta}
-      right={tasks.length ? <Chip tone={open ? "warning" : "success"}>{open ? `${open} open` : "all done or waived"}</Chip> : undefined}
+      right={
+        tasks.length ? (
+          <>
+            <Chip tone={open ? "warning" : "success"}>{open ? `${open} open` : "all done or waived"}</Chip>
+            {open === 0 ? (
+              <Button kind="quiet" compact aria-expanded={!folded} onClick={() => setShown((v) => !v)}>
+                {folded ? "Show" : "Hide"}
+              </Button>
+            ) : null}
+          </>
+        ) : undefined
+      }
     >
+      {folded ? null : (
+      <>
       {movedOn && open > 0 ? (
         <div className="row-acts" style={{ justifyContent: "space-between", marginBottom: 8 }}>
           <span className="sm warn-ink">
@@ -191,6 +207,8 @@ export function PreArrivalTasksCard({
             ))}
           </tbody>
         </table>
+      )}
+      </>
       )}
       <ReasonDialog
         open={!!waiving}

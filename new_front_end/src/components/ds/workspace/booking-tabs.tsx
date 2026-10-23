@@ -46,6 +46,7 @@ import type { TraceEvent } from "@/lib/trace/humanize";
 import { Choice, DsDialog, Fact, Facts, PapersCard, ReasonDialog, StepCard, SubTabs, Tool, atLeast, toastRefusal, useRefreshEntry } from "@/components/ds/steps/kit";
 import { FolioDocumentsBlock } from "@/components/desk/workspace/folio-documents";
 import { HeldPapersCard } from "@/components/ds/workspace/held-papers";
+import { PLAN_LABEL, dueLabel } from "@/components/desk/workspace/advance-settlement";
 import { useStayPrice, type StayPrice } from "@/lib/ds/stay-price";
 import type { EntryDetail } from "@/types/api";
 import { Help, HelpHere } from "@/components/ds/help";
@@ -118,6 +119,7 @@ export function ChargesView({
           ? "as confirmed"
           : "indicative — not a promise until it is agreed";
   const payments = ((entry.folio?.payments ?? []) as PaymentRow[]).slice().sort((a, b) => (b.receivedAt ?? "").localeCompare(a.receivedAt ?? ""));
+  const paymentsIn = payments.filter((x) => x.paymentDirection !== "OUT").length;
   const balance = fo?.outstandingBalance ?? null;
   const parts = [
     ...(fo?.perRoomCharges ?? []).map((r) => ({ key: `r:${r.roomId}`, label: `Room ${r.roomNumber ?? "—"}`, b: r })),
@@ -306,16 +308,52 @@ export function ChargesView({
               <Fact k="Advance asked" meta={p.requirementSource === "OPERATOR" ? "set for this booking" : "the house's rule"}>
                 {p.requiredAmount > 0 ? money(p.requiredAmount, cur) : "none asked"}
               </Fact>
-              <Fact k="Received">{money(p.totalReceived, cur)}</Fact>
+              {/* The standing words from Arrival's old Advance and credit card live here now
+                  (2026-10-23): paid in full, the guest's plan and whether it was kept, the sign-off. */}
+              <Fact k="Received">
+                {money(p.totalReceived, cur)}
+                {p.requiredAmount > 0 ? (
+                  <span className="meta">
+                    {" "}
+                    of {money(p.requiredAmount, cur)}
+                    {paymentsIn ? ` · ${plural(paymentsIn, "payment")}` : ""}
+                  </span>
+                ) : null}
+                {p.requiredAmount > 0 && p.paidInFull ? (
+                  <>
+                    {" "}
+                    <Chip tone="success" icon="check">
+                      Paid in full
+                    </Chip>
+                  </>
+                ) : null}
+              </Fact>
               {p.shortfall > 0.005 ? <Fact k="Still to come">{money(p.shortfall, cur)}</Fact> : null}
               {p.paymentPlan ? (
-                <Fact k="What they said" meta={p.paymentPlan.promiseOverdue ? "the promised time has passed" : undefined}>
-                  {p.paymentPlan.promisedBy ? `by ${fmtDateTime(p.paymentPlan.promisedBy, tz)}` : p.paymentPlan.balanceDueAt === "AT_CHECKIN" ? "at check-in" : "paying now"}
+                <Fact k="Guest's plan">
+                  {PLAN_LABEL[p.paymentPlan.plan]}
+                  {dueLabel(p.paymentPlan.plan, p.paymentPlan.balanceDueAt) ? ` · ${dueLabel(p.paymentPlan.plan, p.paymentPlan.balanceDueAt)}` : ""}
+                  {p.paymentPlan.promisedBy ? ` · by ${fmtDateTime(p.paymentPlan.promisedBy, tz)}` : ""}{" "}
+                  {p.paidInFull ? (
+                    <Chip tone="success" icon="check">
+                      Kept — paid in full
+                    </Chip>
+                  ) : p.paymentPlan.promiseOverdue ? (
+                    <Chip tone="danger">Promise lapsed</Chip>
+                  ) : null}
+                  {p.paymentPlan.note ? <span className="meta"> · &ldquo;{p.paymentPlan.note}&rdquo;</span> : null}
                 </Fact>
               ) : null}
               {p.creditExtensionActive ? (
                 <Fact k="Credit extended" meta={p.creditExtensionExpiresAt ? `until ${fmtDateTime(p.creditExtensionExpiresAt, tz)}` : undefined}>
                   {money(p.ceilingAmount, cur)}
+                </Fact>
+              ) : null}
+              {entry.folio?.advancePaymentReconciliationComplete ? (
+                <Fact k="Signed off">
+                  <Chip tone="success" icon="check">
+                    {p.paidInFull ? "Advance settled in full · reconciled" : "Reconciled — the money position is accepted"}
+                  </Chip>
                 </Fact>
               ) : null}
             </Facts>

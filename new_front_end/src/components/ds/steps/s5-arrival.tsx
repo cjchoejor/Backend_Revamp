@@ -138,7 +138,9 @@ export function S5Arrival({
         flow="tasks"
         flowAfter="rooms"
       />
-      <AdvanceAndCredit entry={entry} facts={facts} />
+      {/* Gone once the advance is paid in full and signed off (2026-10-23) — its words are on
+          Charges & payments › Money received; while something is left, its acts are needed here. */}
+      {facts.reconciled && facts.pay?.paidInFull && !facts.creditNeedsAck ? null : <AdvanceAndCredit entry={entry} facts={facts} />}
       {/* The handoff records itself once the room, the tasks and the money are done — so it sits
           after them, where the list has it (2026-09-25). */}
       <FrontDeskHandoff entry={entry} facts={facts} />
