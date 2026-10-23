@@ -262,8 +262,17 @@ async function main() {
 
     // A9/A10 — room lines whose tax exists only at render time (the ledger-view legacy rule).
     const auditRunsWithCompanions = new Set(companions.map((l) => l.nightAuditRecordId).filter((id): id is string => !!id));
+    // Same two tests as lib/folio-ledger-view.ts — keep them in step: a companion from the same
+    // audit run, OR one that names this line (same room, same night) — the per-booking audit
+    // writes no hotel-wide record, so its companions carry no run id.
+    const namedKey = (roomId: string | null, chargeDate: Date, description: string) => `${roomId ?? ""}|${chargeDate.toISOString().slice(0, 10)}|${description}`;
+    const chargesNamedByCompanion = new Set(
+      companions.map((c) => { const base = companionBaseDescription(c.description); return base == null ? null : namedKey(c.roomId, c.chargeDate, base); }).filter((k): k is string => k != null),
+    );
     const legacyRoomLines = charges.filter(
-      (l) => (l.lineType === "ROOM_CHARGE" || l.lineType === "STAY") && !(l.nightAuditRecordId && auditRunsWithCompanions.has(l.nightAuditRecordId)),
+      (l) => (l.lineType === "ROOM_CHARGE" || l.lineType === "STAY")
+        && !(l.nightAuditRecordId && auditRunsWithCompanions.has(l.nightAuditRecordId))
+        && !chargesNamedByCompanion.has(namedKey(l.roomId, l.chargeDate, l.description)),
     );
     if (legacyRoomLines.length > 0) {
       const legacyNet = sumMoney(legacyRoomLines.map((l) => l.amount));

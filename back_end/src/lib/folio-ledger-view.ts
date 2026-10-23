@@ -200,6 +200,17 @@ export function buildFolioLedgerView<L extends LedgerLineLike, P extends LedgerP
   const auditRunsWithCompanions = new Set(
     [...scLines, ...gstLines].map((l) => l.nightAuditRecordId).filter((id): id is string => !!id),
   );
+  // …or when a companion rides on THIS line by name: same room, same night, its description the
+  // charge's own. A night posted for one booking ("Post it" at Stay, or the slept nights of a stay
+  // brought across from the old PMS) writes no hotel-wide audit record, so its companions carry no
+  // run id — and without this the documents taxed those nights a second time at render (found
+  // 2026-10-23 on the go-live import). A genuinely untaxed old room line has no such companion.
+  const companionKey = (roomId: string | null, chargeDate: Date, description: string) => `${roomId ?? ""}|${ymd(chargeDate)}|${description}`;
+  const chargesNamedByCompanion = new Set(
+    [...scLines, ...gstLines]
+      .map((c) => { const base = companionBaseDescription(c.description); return base == null ? null : companionKey(c.roomId, c.chargeDate, base); })
+      .filter((k): k is string => k != null),
+  );
   // …and a folio carrying an imported tax line is covered outright: computing tax on its room
   // line as well is what made every imported bill overstate itself by exactly that line.
   const taxAlreadyOnLedger = combinedTax.gt(0);
@@ -229,7 +240,8 @@ export function buildFolioLedgerView<L extends LedgerLineLike, P extends LedgerP
       legacyTaxAtRender:
         isRoom &&
         !taxAlreadyOnLedger &&
-        !(!!line.nightAuditRecordId && auditRunsWithCompanions.has(line.nightAuditRecordId)),
+        !(!!line.nightAuditRecordId && auditRunsWithCompanions.has(line.nightAuditRecordId)) &&
+        !chargesNamedByCompanion.has(companionKey(line.roomId, line.chargeDate, line.description)),
     };
   });
 
