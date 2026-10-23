@@ -1385,6 +1385,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
             timers={timersQuery.data?.items ?? []}
             folded={sideFolded}
             onFold={setSideFolded}
+            promiseIsForTheRest={(paymentStatusQuery.data?.paymentPlan?.plan ?? "FULL") !== "FULL"}
           />
         </div>
 
@@ -1610,6 +1611,7 @@ function SidePanel({
   timers,
   folded,
   onFold,
+  promiseIsForTheRest,
 }: {
   entry: EntryDetail;
   sealed: boolean;
@@ -1620,6 +1622,8 @@ function SidePanel({
   timers: TimerRecordSummary[];
   folded: boolean;
   onFold: (folded: boolean) => void;
+  /** The payment plan is part now, the rest later (or instalments): the promise clock is the rest's. */
+  promiseIsForTheRest: boolean;
 }) {
   // The housekeeping (H2) and kitchen (H3) handoffs share one clock code; name them apart by
   // the handoff each clock is on, or both read "Housekeeping to accept".
@@ -1630,6 +1634,9 @@ function SidePanel({
       if (kind === "H3") return "Kitchen to accept";
       if (kind === "H2") return "Housekeeping to accept";
     }
+    // On a part-now plan the clock runs until the REST is in — a part payment does not stop it
+    // (2026-10-23, operator: "I paid the advance, why didn't the timer stop").
+    if (t.timerCode === "ADVANCE_PROMISE_DEADLINE_W38" && promiseIsForTheRest) return "Rest of the advance promised by";
     return timerLabel(t);
   };
   const sorted = timers
