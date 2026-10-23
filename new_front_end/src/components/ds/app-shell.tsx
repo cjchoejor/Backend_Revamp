@@ -167,7 +167,14 @@ export function AppShell({ children }: { children: ReactNode }) {
             </button>
             {bell.open ? (
               <div className="drawer open panel-from-bar" role="dialog" aria-label="Notifications">
-                <h4>What needs a person now</h4>
+                {/* The whole list, grouped by kind of work, and the alerts the system sent (2026-10-23) — on
+                    the heading row, so it is in view however long the list below runs. */}
+                <div className="ntf-head">
+                  <h4>What needs a person now</h4>
+                  <Link href="/notifications" className="btn btn-secondary compact" onClick={() => bell.setOpen(false)}>
+                    See all notifications
+                  </Link>
+                </div>
                 {urgent.length === 0 ? (
                   <p className="meta" style={{ marginTop: 6 }}>Nothing is overdue or due in the next hours.</p>
                 ) : (
@@ -185,11 +192,6 @@ export function AppShell({ children }: { children: ReactNode }) {
                   </div>
                 )}
                 <p className="meta" style={{ marginTop: 10 }}>Routine work never lands here — only what is overdue or due within the next hours.</p>
-                {/* The whole list, grouped by kind of work, and the alerts the system sent (2026-10-23). */}
-                <Link href="/notifications" className="btn btn-secondary ntf-all" onClick={() => bell.setOpen(false)}>
-                  See all notifications
-                  {urgent.length > 20 ? <span className="meta"> · {urgent.length - 20} more here</span> : null}
-                </Link>
               </div>
             ) : null}
           </div>
