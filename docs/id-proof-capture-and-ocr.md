@@ -106,6 +106,10 @@ ID photo. Details save on field blur; a typed name replaces the generic label li
 - **The date of birth is typed in three boxes, Day · Month · Year (2026-10-23)** — the browser's
   own calendar made the desk scroll back year by year; a half or impossible date is outlined and
   not saved.
+- **The lead is marked (2026-10-23)** — a **Lead** mark on each adult row; the lead is the guest
+  the check-in verification vouches for and whose row a returning guest's number fills. Unmarked,
+  it is the first adult row. Moving the lead makes a verification recorded for the earlier lead
+  stop counting (except the VIP path). Rule in `back_end/src/lib/lead-guest.ts`.
 - **Where the files are**: `back_end/storage/documents/YYYY/MM/identity-proof/`, named
   `<entryId>-<stamp>-<rand>.<ext>` (the default `STORAGE_ROOT_DIR`).
 
