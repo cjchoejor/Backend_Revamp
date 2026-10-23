@@ -192,6 +192,136 @@ const lockedCell: React.CSSProperties = {
   borderStyle: "dashed",
   cursor: "not-allowed",
 };
+const DOB_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+type DobParts = { d: string; m: string; y: string };
+
+function dobSplit(v: string): DobParts {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
+  return m ? { d: String(Number(m[3])), m: String(Number(m[2])), y: m[1] } : { d: "", m: "", y: "" };
+}
+
+/** "YYYY-MM-DD" when the three boxes make a real date, "" when all three are empty, null otherwise. */
+function dobCompose(p: DobParts): string | null {
+  if (!p.d && !p.m && !p.y) return "";
+  const d = Number(p.d);
+  const mo = Number(p.m);
+  const y = Number(p.y);
+  if (!/^\d{4}$/.test(p.y) || !d || !mo) return null;
+  const at = new Date(Date.UTC(y, mo - 1, d));
+  if (at.getUTCFullYear() !== y || at.getUTCMonth() !== mo - 1 || at.getUTCDate() !== d) return null;
+  return `${p.y}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+}
+
+/**
+ * A date of birth as three boxes — day, month, year (2026-10-23, operator: the browser's own
+ * calendar made the desk scroll back year by year to reach 1950). The year is typed, so nothing
+ * scrolls; the day moves on to the month and the month to the year by themselves. A date is
+ * handed up only once the three make a real one ("" when all three are emptied); a half-typed
+ * date stays in the boxes, outlined, until it is finished.
+ */
+function DobField({
+  value,
+  onChange,
+  onDone,
+  disabled,
+  boxStyle,
+  warn,
+  label,
+}: {
+  value: string;
+  onChange: (ymd: string) => void;
+  /** Focus left the three boxes. */
+  onDone: () => void;
+  disabled?: boolean;
+  boxStyle: React.CSSProperties;
+  /** The age check's message, when the date does not fit the row. */
+  warn?: string | null;
+  label: string;
+}) {
+  const [parts, setParts] = useState<DobParts>(() => dobSplit(value));
+  const monthRef = useRef<HTMLSelectElement>(null);
+  const yearRef = useRef<HTMLInputElement>(null);
+  // A date from outside (the saved row, Apply) replaces the boxes; a half-typed one is not a date yet.
+  useEffect(() => {
+    setParts((cur) => (dobCompose(cur) === value ? cur : dobSplit(value)));
+  }, [value]);
+  const update = (patch: Partial<DobParts>) => {
+    const next = { ...parts, ...patch };
+    setParts(next);
+    const v = dobCompose(next);
+    if (v !== null && v !== value) onChange(v);
+  };
+  const incomplete = dobCompose(parts) === null;
+  const bad = incomplete || !!warn;
+  const look: React.CSSProperties = bad ? { ...boxStyle, borderColor: "var(--stop)", boxShadow: "0 0 0 1px var(--stop)" } : boxStyle;
+  const title = incomplete ? "Not a full date yet — the day, the month and the year" : (warn ?? undefined);
+  return (
+    <div
+      role="group"
+      aria-label={`${label} — date of birth`}
+      aria-invalid={bad ? true : undefined}
+      title={title}
+      style={{ display: "flex", gap: 3 }}
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) onDone();
+      }}
+    >
+      <input
+        className="dinput"
+        aria-label="Day"
+        inputMode="numeric"
+        maxLength={2}
+        placeholder="DD"
+        disabled={disabled}
+        // A click selects what is there, so the next keystroke replaces it rather than editing half of it.
+        onFocus={(e) => e.currentTarget.select()}
+        value={parts.d}
+        style={{ ...look, width: 34, textAlign: "center", padding: "5px 2px" }}
+        onChange={(e) => {
+          const d = e.target.value.replace(/\D/g, "").slice(0, 2);
+          update({ d });
+          // Two digits, or a first digit that cannot start a two-digit day, and the month is next.
+          if (d.length === 2 || (d.length === 1 && Number(d) > 3)) monthRef.current?.focus();
+        }}
+      />
+      <select
+        ref={monthRef}
+        aria-label="Month"
+        disabled={disabled}
+        value={parts.m}
+        style={{ ...look, width: 62, padding: "5px 2px" }}
+        onChange={(e) => {
+          update({ m: e.target.value });
+          if (e.target.value) yearRef.current?.focus();
+        }}
+      >
+        <option value="">Mon</option>
+        {DOB_MONTHS.map((name, i) => (
+          <option key={name} value={String(i + 1)}>
+            {name}
+          </option>
+        ))}
+      </select>
+      <input
+        ref={yearRef}
+        className="dinput"
+        aria-label="Year"
+        inputMode="numeric"
+        maxLength={4}
+        placeholder="YYYY"
+        disabled={disabled}
+        onFocus={(e) => e.currentTarget.select()}
+        value={parts.y}
+        style={{ ...look, width: 50, textAlign: "center", padding: "5px 2px" }}
+        onChange={(e) => update({ y: e.target.value.replace(/\D/g, "").slice(0, 4) })}
+        onKeyDown={(e) => {
+          if (e.key === "Backspace" && !parts.y) monthRef.current?.focus();
+        }}
+      />
+    </div>
+  );
+}
+
 const th: React.CSSProperties = {
   textAlign: "left",
   fontSize: 10.5,
@@ -1298,17 +1428,15 @@ export function IdentityProofBlock({
                       onBlur={() => saveIfChanged(slot)}
                     />
                   </td>
-                  <td style={{ ...td, minWidth: 128 }}>
-                    <input
-                      className="dinput"
-                      style={ageWarn ? { ...cell, borderColor: "var(--stop)", boxShadow: "0 0 0 1px var(--stop)" } : cell}
-                      aria-invalid={ageWarn ? true : undefined}
-                      title={ageWarn ?? undefined}
-                      type="date"
-                      disabled={locked}
+                  <td style={{ ...td, minWidth: 154 }}>
+                    <DobField
+                      label={displayName}
                       value={draft.dob}
-                      onChange={(e) => setDraft(slot.key, { dob: e.target.value })}
-                      onBlur={() => saveIfChanged(slot)}
+                      disabled={locked}
+                      boxStyle={cell}
+                      warn={ageWarn}
+                      onChange={(dob) => setDraft(slot.key, { dob })}
+                      onDone={() => saveIfChanged(slot)}
                     />
                   </td>
                   <td style={{ ...td, minWidth: 92 }}>
