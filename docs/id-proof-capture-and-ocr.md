@@ -46,6 +46,12 @@ correction surface for details captured earlier, per the operator's "sometimes g
 can be put in S5 and later made changes in S7 or S6"). Columns: Document type · Document no · Name · DOB · Gender ·
 ID photo. Details save on field blur; a typed name replaces the generic label live.
 
+- **A date of birth is checked against its row (2026-10-23)**: a child's row against the age the
+  booking states (that age at some moment between booking and check-in), an adult's row against
+  the legal adult age (18), any row against a future date or an age over 120. A warning in red
+  under the row, and on a suggestion before Apply — never a refusal
+  ([party-age-check.ts](../back_end/src/lib/party-age-check.ts)).
+
 - **Grouped BY ROOM**: each room is a cream band row ("**Room 205** · Twin · Deluxe Double ·
   3/4 IDs", count green when all covered) with its guests beneath. Unseated guests gather
   under "No room assigned yet"; a booking with no composition keeps a flat table. Seating is
@@ -128,12 +134,16 @@ construction**.
 - Token travels in the URL **hash** (never reaches server logs). Public route — the token is
   the whole credential; invalid/expired shows "ask the desk for a fresh code".
 - Native camera via `<input capture="environment">` — **deliberately not getUserMedia**, which
-  requires a secure context and black-screens over plain-HTTP LAN IPs. Preview + Retake happen
-  before anything uploads; gallery upload as fallback.
+  requires a secure context and black-screens over plain-HTTP LAN IPs; gallery upload as fallback.
+- **Sent at once, read at the desk (since 2026-10-23)**: no preview and no reading on the phone.
+  A photo is shrunk (upright, 2,000 px JPEG) and uploaded the moment it is taken, and the next
+  guest comes up straight away. Each photo keeps its own line (sending · sent · didn't send with
+  Retry); several may be on their way at once. The document type is picked before the shot and
+  travels with the photo as `documentType`.
 - **All-guests mode** renders the party **grouped by room** — the room is the card ("Room 205"
   + bed/type + covered/total, green when complete) with its guests inside; per-guest
-  Photo/Retake + gallery buttons; "Sent for Adult 5" receipts; counts resync from the server
-  after each upload.
+  Photo/Retake + gallery buttons; each guest's own sending/sent/didn't-send line; counts resync
+  from the server after each upload.
 - Rooms come from the roster: `seatPartyByCompositionServer` in the identity-proof service is
   a **deliberate mirror** of the desk's `seatPartyByComposition`
   ([party-rooms.ts](../front_end/src/lib/desk/party-rooms.ts)) — operative comps-bearing quote
@@ -410,6 +420,13 @@ day 10–15 real cards are photographed at the desk (rule §2.3.3 below).
   one aborts the relaxed-SIMD engine and, with no `errorHandler`, the process. Each reading records
   its stage (QUEUED · QR · STRIP · TEXT) and the desk draws it over the Scan-again button. Details in
   CLAUDE.md, "Passports read from a phone photo".
+- **The number off the page; two photos read at once** (2026-10-23, later the same evening). A
+  passport number printed on the page that agrees with the strip's check digit is proven even
+  when the strip's own copy was misread. When Florence-2 stops early (its 768 tokens used up by
+  misread Hindi), the unread rest of the page is read again; for a passport whose number is still
+  unproven, the upper half is read again at twice the detail; and an upright phone JPEG is read
+  as it is, not re-encoded. W39 reads two photos at a time, the strip reader one job at a time.
+  The phone no longer reads anything itself. Details in CLAUDE.md, "The number off the page".
 
 ### 2.4 Cloud option — explicitly gated
 
