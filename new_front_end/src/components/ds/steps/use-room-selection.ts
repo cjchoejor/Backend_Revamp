@@ -73,16 +73,21 @@ export function useRoomSelection({
   const [base, setBase] = useState<string[]>(() => seed().base);
   const [overrides, setOverrides] = useState<Record<string, string[]>>(() => seed().overrides);
 
-  // In-progress picks survive leaving the booking (same key as the old desk, so nothing is lost).
+  // In-progress picks survive leaving the booking. The copy is tied to the selection SAVED when it
+  // was written (2026-10-23): once the rooms are saved, here or on another screen, the saved
+  // selection wins. Copies written before that (no `v: 2`) are ignored — among them the room the
+  // chart once ticked for the desk on arrival, which came back on every visit as if picked.
   const storeKey = `desk:rst-sel:${entryId}`;
+  const basis = JSON.stringify(savedOption ?? null);
   useEffect(() => {
     try {
       const raw = localStorage.getItem(storeKey);
       if (!raw) return;
-      const v = JSON.parse(raw) as { base?: string[]; overrides?: Record<string, string[]>; tableSel?: string[]; varySel?: Record<string, string[]> };
-      const rawBase = Array.isArray(v.base) ? v.base : Array.isArray(v.tableSel) ? v.tableSel : [];
+      const v = JSON.parse(raw) as { v?: number; basis?: string; base?: string[]; overrides?: Record<string, string[]> };
+      if (v.v !== 2 || v.basis !== basis) return;
+      const rawBase = Array.isArray(v.base) ? v.base : [];
       const clean = rawBase.filter((x) => typeof x === "string").slice(0, numberOfRooms);
-      const rawOv = v.overrides ?? v.varySel;
+      const rawOv = v.overrides;
       const ov: Record<string, string[]> = {};
       if (rawOv && typeof rawOv === "object") {
         for (const [night, ids] of Object.entries(rawOv)) {
@@ -97,13 +102,24 @@ export function useRoomSelection({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storeKey]);
+  // Rooms saved while this screen is open — here or on another screen — replace the picks on it.
+  // A new search does not count: the saved selection only moves when rooms are saved.
+  const basisSeen = useRef(basis);
+  useEffect(() => {
+    if (basis === basisSeen.current) return;
+    basisSeen.current = basis;
+    const s = seed();
+    setBase(s.base);
+    setOverrides(s.overrides);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [basis]);
   useEffect(() => {
     try {
-      localStorage.setItem(storeKey, JSON.stringify({ base, overrides }));
+      localStorage.setItem(storeKey, JSON.stringify({ v: 2, basis, base, overrides }));
     } catch {
       /* non-fatal */
     }
-  }, [storeKey, base, overrides]);
+  }, [storeKey, basis, base, overrides]);
 
   // A lowered room count trims the picks rather than leaving "3 of 2" standing.
   useEffect(() => {
