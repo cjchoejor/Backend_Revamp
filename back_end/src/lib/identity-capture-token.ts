@@ -30,21 +30,28 @@ export type IdentityCaptureTokenPayload = {
 };
 
 export const IDENTITY_CAPTURE_TOKEN_TTL_MINUTES = 15;
+/** One code for the whole party lasts longer (2026-10-23, operator) — a family's IDs, read one by
+ *  one, take more than fifteen minutes. A single guest's code keeps the shorter life. */
+export const IDENTITY_CAPTURE_ALL_GUESTS_TTL_MINUTES = 30;
 
 export function signIdentityCaptureToken(
   payload: Omit<IdentityCaptureTokenPayload, "purpose">,
 ): { token: string; expiresAt: Date } {
-  const expiresAt = new Date(Date.now() + IDENTITY_CAPTURE_TOKEN_TTL_MINUTES * 60_000);
+  const minutes = payload.allSlots ? IDENTITY_CAPTURE_ALL_GUESTS_TTL_MINUTES : IDENTITY_CAPTURE_TOKEN_TTL_MINUTES;
+  const expiresAt = new Date(Date.now() + minutes * 60_000);
   const token = jwt.sign(
     { purpose: "IDENTITY_PROOF_UPLOAD", ...payload } satisfies IdentityCaptureTokenPayload,
     jwtSigningSecret(),
-    { expiresIn: `${IDENTITY_CAPTURE_TOKEN_TTL_MINUTES}m` } as jwt.SignOptions,
+    { expiresIn: `${minutes}m` } as jwt.SignOptions,
   );
   return { token, expiresAt };
 }
 
+/** A verified token, with the moment it stops working (the phone shows the time left). */
+export type VerifiedIdentityCaptureToken = IdentityCaptureTokenPayload & { expiresAt: Date | null };
+
 /** Verify a capture token and return its payload, or null if missing/invalid/expired/wrong-kind. */
-export function verifyIdentityCaptureToken(token: string | null | undefined): IdentityCaptureTokenPayload | null {
+export function verifyIdentityCaptureToken(token: string | null | undefined): VerifiedIdentityCaptureToken | null {
   if (!token) return null;
   try {
     const decoded = jwt.verify(token, jwtSigningSecret());
@@ -60,6 +67,7 @@ export function verifyIdentityCaptureToken(token: string | null | undefined): Id
       subjectLabel: typeof p.subjectLabel === "string" && p.subjectLabel ? p.subjectLabel : null,
       allSlots: p.allSlots === true,
       mintedBy: p.mintedBy,
+      expiresAt: typeof p.exp === "number" ? new Date(p.exp * 1000) : null,
     };
   } catch {
     return null;

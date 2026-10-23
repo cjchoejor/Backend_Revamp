@@ -209,10 +209,15 @@ export async function previewPhoneExtraction(
  * `extractIdentityFromImage` pipeline as W39, so a document the worker could read, the
  * phone preview can too.
  */
+/** The four layouts the printed-text reader anchors on; any other type gives no layout hint. */
+type LayoutKind = "CID" | "VOTER_CARD" | "BIRTH_CERTIFICATE" | "WORK_PERMIT";
+const asLayoutKind = (t: string | null | undefined): LayoutKind | null =>
+  t === "CID" || t === "VOTER_CARD" || t === "BIRTH_CERTIFICATE" || t === "WORK_PERMIT" ? t : null;
+
 export async function analyzeIdentityImage(
   prisma: PrismaClient,
   bytes: Buffer,
-  opts: { entryId?: string; subjectKey?: string | null } = {},
+  opts: { entryId?: string; subjectKey?: string | null; documentType?: string | null } = {},
 ): Promise<{
   available: boolean;
   engine: OcrEngine | null;
@@ -222,9 +227,10 @@ export async function analyzeIdentityImage(
 }> {
   if (serverOcrDisabled()) return { available: false, engine: null, fields: {}, fieldConfidence: {}, source: null };
   const { extractIdentityFromImage } = await import("../../lib/identity-ocr/server-extract.js");
-  // Same kind hint the W39 pass uses: a desk row that already names the document type.
-  let kindHint: "CID" | "VOTER_CARD" | "BIRTH_CERTIFICATE" | "WORK_PERMIT" | null = null;
-  if (opts.entryId && opts.subjectKey) {
+  // The type picked on the phone first (2026-10-23); else the W39 pass's hint, a desk row that
+  // already names the document type.
+  let kindHint: LayoutKind | null = asLayoutKind(opts.documentType);
+  if (!kindHint && opts.entryId && opts.subjectKey) {
     const detail = await prisma.guestIdentityDocument.findFirst({
       where: { entryId: opts.entryId, subjectKey: opts.subjectKey, storageKey: null },
       select: { documentType: true },
@@ -234,6 +240,10 @@ export async function analyzeIdentityImage(
   }
   const result = await extractIdentityFromImage(bytes, { kindHint });
   if (!result) return { available: true, engine: null, fields: {}, fieldConfidence: {}, source: null };
+  if (opts.documentType && !result.extraction.fields.documentType) {
+    result.extraction.fields.documentType = opts.documentType;
+    result.extraction.fieldConfidence.documentType = "READ";
+  }
   const clean = await sanitiseFields(prisma, result.extraction.fields, result.extraction.fieldConfidence);
   return {
     available: true,
@@ -307,7 +317,7 @@ export async function runServerExtractionForPhoto(
   prisma: PrismaClient,
   actorId: string,
   photoDocumentId: string,
-  opts: { force?: boolean } = {},
+  opts: { force?: boolean; documentType?: string | null } = {},
 ) {
   const photo = await loadPhoto(prisma, photoDocumentId);
   const existing = await prisma.identityOcrSuggestion.findUnique({ where: { photoDocumentId: photo.id } });
@@ -332,8 +342,10 @@ export async function runServerExtractionForPhoto(
     // Phase B hint: when the desk row already names the document (CID / voter card / birth
     // certificate / work permit), the layout pass anchors on that layout instead of guessing
     // from keywords.
-    let kindHint: "CID" | "VOTER_CARD" | "BIRTH_CERTIFICATE" | "WORK_PERMIT" | null = null;
-    if (photo.subjectKey) {
+    // The type picked on the phone when the photo was sent before it was read (2026-10-23)
+    // comes first.
+    let kindHint: LayoutKind | null = asLayoutKind(opts.documentType);
+    if (!kindHint && photo.subjectKey) {
       const detail = await prisma.guestIdentityDocument.findFirst({
         where: { entryId: photo.entryId, subjectKey: photo.subjectKey, storageKey: null },
         select: { documentType: true },
@@ -343,8 +355,25 @@ export async function runServerExtractionForPhoto(
     }
     const result = await extractIdentityFromImage(file.bytes, { kindHint });
     if (!result) {
+      // Nothing read — but the type the person picked is still worth suggesting to the desk.
+      const picked = opts.documentType ? await sanitiseFields(prisma, { documentType: opts.documentType }, { documentType: "READ" }) : null;
+      if (picked && Object.keys(picked.fields).length) {
+        const row = await writeSuggestion(prisma, photo, {
+          engine: "PHONE_MANUAL",
+          status: "READY",
+          fields: picked.fields,
+          fieldConfidence: picked.fieldConfidence,
+          raw: { source: "SERVER_NONE" },
+          actorId,
+        });
+        return { skipped: false as const, suggestion: row };
+      }
       const row = await writeSuggestion(prisma, photo, { engine: "SERVER_MRZ", status: "EMPTY", actorId, raw: { source: "SERVER_NONE" } });
       return { skipped: false as const, suggestion: row };
+    }
+    if (opts.documentType && !result.extraction.fields.documentType) {
+      result.extraction.fields.documentType = opts.documentType;
+      result.extraction.fieldConfidence.documentType = "READ";
     }
     const clean = await sanitiseFields(prisma, result.extraction.fields, result.extraction.fieldConfidence);
     const row = await writeSuggestion(prisma, photo, {

@@ -10,14 +10,20 @@
  * restarts it on the next photo. A crash here (bad image, OOM) is a FAILED suggestion, not a
  * dead API.
  */
-import { ocrWithFlorence, ocrWithTesseractPage } from "./layout-ocr.js";
+import { ocrWithFlorence, ocrWithTesseractPage, warmFlorence } from "./layout-ocr.js";
 
-type Req = { id: number; bytesB64: string; engine: "florence2" | "tesseract" };
+/** A read, or (2026-10-23) a warm-up that only loads the model. */
+type Req = { id: number; bytesB64?: string; engine?: "florence2" | "tesseract"; warm?: boolean };
 
 process.on("message", async (msg: Req) => {
   if (!msg || typeof msg.id !== "number") return;
   try {
-    const bytes = Buffer.from(msg.bytesB64, "base64");
+    if (msg.warm) {
+      await warmFlorence();
+      process.send?.({ id: msg.id, lines: [] });
+      return;
+    }
+    const bytes = Buffer.from(msg.bytesB64 ?? "", "base64");
     const lines = msg.engine === "florence2" ? await ocrWithFlorence(bytes) : await ocrWithTesseractPage(bytes);
     process.send?.({ id: msg.id, lines });
   } catch (err) {

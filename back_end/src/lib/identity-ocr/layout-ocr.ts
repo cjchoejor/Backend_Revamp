@@ -74,6 +74,11 @@ async function getFlorence(): Promise<Florence> {
   return florence;
 }
 
+/** Load the model without reading anything — the child's answer to a warm-up (2026-10-23). */
+export async function warmFlorence(): Promise<void> {
+  await getFlorence();
+}
+
 /** Sort regions into reading order: by row (quad top), then left → right. */
 function orderRegions(labels: string[], quads: number[][]): LayoutOcrLine[] {
   const rows = labels.map((text, i) => {
@@ -234,6 +239,36 @@ async function ocrInChild(bytes: Buffer, engine: "florence2" | "tesseract"): Pro
     pending.set(id, { resolve, reject, timer });
     c.send({ id, bytesB64: bytes.toString("base64"), engine });
   });
+}
+
+/**
+ * Load the layout model now, ahead of the first photo (2026-10-23, operator: the first read after
+ * a pause waited a minute for the model). The phone page calls this through its context read, so
+ * the model is in memory by the time a photo arrives, and each call holds the idle release off for
+ * another ten minutes. One warm-up runs at a time; a slow load (or a first download) is left to
+ * finish — a timeout here does not kill the child, unlike a stuck read.
+ */
+let warming: Promise<void> | null = null;
+export function warmLayoutOcr(): Promise<void> {
+  if (layoutEngineChoice() !== "florence2") return Promise.resolve();
+  if (process.env.OCR_LAYOUT_INPROCESS === "true") return warmFlorence();
+  if (warming) return warming;
+  warming = (async () => {
+    const c = await ensureChild();
+    touchIdle();
+    const id = ++seq;
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        pending.delete(id);
+        reject(new Error("layout OCR warm-up still loading"));
+      }, REQUEST_TIMEOUT_MS);
+      pending.set(id, { resolve: () => resolve(), reject, timer });
+      c.send({ id, warm: true });
+    });
+  })().finally(() => {
+    warming = null;
+  });
+  return warming;
 }
 
 /** Stop the child (graceful shutdown / tests). */

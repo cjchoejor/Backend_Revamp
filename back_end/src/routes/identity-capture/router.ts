@@ -39,6 +39,14 @@ identityCaptureRouter.get("/identity-capture/context", async (req, res, next) =>
     });
     if (!entry) throw new AuthorizationError("This capture link points at a booking that no longer exists");
     const sealed = entry.status === "EXPIRED" || entry.status === "CANCELLED" || entry.status === "CLOSED";
+    // A phone has opened the code: load the printed-text model now, so the first photo does not
+    // wait for it (2026-10-23). Every context read (after each photo too) keeps it in memory for
+    // another ten minutes. Never holds the answer up; a failure is the first read's problem.
+    if (!sealed && !identityOcrService.serverOcrDisabled()) {
+      void import("../../lib/identity-ocr/layout-ocr.js")
+        .then((m) => m.warmLayoutOcr())
+        .catch((err) => console.warn("[identity-capture] layout model warm-up:", err instanceof Error ? err.message : err));
+    }
     // The roster carries per-slot labels, photo counts and the seated room; single-slot
     // tokens use it too, just reduced to their one pinned guest.
     const fullRoster = await identityProofService.phoneCaptureRoster(prisma, entry.id).catch(() => null);
@@ -65,6 +73,10 @@ identityCaptureRouter.get("/identity-capture/context", async (req, res, next) =>
       // config-driven list the desk table offers, so the phone can never suggest a code the
       // hotel does not accept.
       documentTypes: await identityProofService.listIdentityDocumentTypeOptions(prisma).catch(() => []),
+      /** When the code stops working, and the server's clock now — the phone counts down from
+       *  these rather than from its own clock (2026-10-23). */
+      expiresAt: payload.expiresAt,
+      serverNow: new Date(),
     });
   } catch (e) {
     next(e);
@@ -112,13 +124,16 @@ identityCaptureRouter.post(
       // photo that already carries a phone suggestion. A phone that can't extract (old browser,
       // no model) says nothing and the server reads the bytes right away.
       const extractionFollows = q.extractionFollows === "1" || q.extractionFollows === "true";
+      // Sent before the phone had read it (2026-10-23): the type picked on the phone guides the
+      // server's reading, and lands on the suggestion when the reading names none.
+      const documentType = typeof q.documentType === "string" && q.documentType.trim() ? q.documentType.trim().slice(0, 40) : undefined;
       void (async () => {
         if (identityOcrService.serverOcrDisabled()) return;
         try {
           const engine = await (await import("../../services/infrastructure/timer-management-service.js")).getTimerEngine();
           await engine.schedule(
             "IDENTITY_OCR_W39",
-            { photoDocumentId: created.id, actorId: payload.mintedBy },
+            { photoDocumentId: created.id, actorId: payload.mintedBy, ...(documentType ? { documentType } : {}) },
             { startAfter: new Date(Date.now() + (extractionFollows ? 45_000 : 0)) },
           );
         } catch (err) {
@@ -195,9 +210,11 @@ identityCaptureRouter.post(
       // subjectKey is only a kind HINT here (which layout to anchor first) — the upload
       // route is where slot claims are validated.
       const subjectKey = payload.subjectKey ?? (typeof req.query.subjectKey === "string" ? req.query.subjectKey : null);
+      const documentType = typeof req.query.documentType === "string" && req.query.documentType.trim() ? req.query.documentType.trim().slice(0, 40) : null;
       const result = await identityOcrService.analyzeIdentityImage(prisma, req.body, {
         entryId: payload.entryId,
         subjectKey,
+        documentType,
       });
       res.json(result);
     } catch (e) {

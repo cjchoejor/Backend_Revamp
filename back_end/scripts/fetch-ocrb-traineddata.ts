@@ -3,7 +3,8 @@
  *
  * The generic `eng` model confuses the MRZ filler `<` with K/L; OCR-B is the MRZ typeface.
  * Drops `ocrb.traineddata` into the backend tessdata dir (server-side W39 extraction) and,
- * uncompressed, into `front_end/public/tessdata/` (on-phone extraction on the capture page).
+ * uncompressed, into `new_front_end/public/tessdata/` (on-phone extraction on the capture page —
+ * the phone loads it from the desk instead of fetching a general model from the internet).
  * Both locations are gitignored — run this once per machine. Re-run to refresh.
  *
  *   npx tsx scripts/fetch-ocrb-traineddata.ts
@@ -14,7 +15,7 @@ import path from "node:path";
 const URL = "https://github.com/Shreeshrii/tessdata_ocrb/raw/master/ocrb.traineddata";
 const targets = [
   process.env.OCR_TESSDATA_DIR ?? "./storage/tessdata",
-  path.resolve("../front_end/public/tessdata"),
+  path.resolve("../new_front_end/public/tessdata"),
 ];
 const res = await fetch(URL);
 if (!res.ok) throw new Error(`fetch failed: ${res.status}`);
