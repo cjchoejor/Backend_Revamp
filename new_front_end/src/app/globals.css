@@ -139,6 +139,16 @@ html {
 
 /* A button waiting on the server (2026-10-14, operator: "show a loading icon"): PendingButtons marks
    the button pressed while its request runs. A ring before the label, the label kept; no second press. */
+/* An ID photo's reading (2026-10-23): the bar follows the server's stages smoothly. */
+.ocr-fill {
+  transition: width 0.45s ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ocr-fill {
+    transition: none;
+  }
+}
+
 [data-pending] {
   cursor: progress !important;
   pointer-events: none;

@@ -204,6 +204,82 @@ const td: React.CSSProperties = { padding: "6px 6px", borderBottom: "1px dashed 
 
 const GENDER_WORD: Record<string, string> = { M: "Male", F: "Female", X: "Other" };
 
+/** Where a reading is, in words, and how far along the bar it sits when the stage begins. */
+const READ_STAGES: Record<string, { words: string; from: number; to: number; usual: number }> = {
+  QUEUED: { words: "Waiting its turn", from: 4, to: 14, usual: 4 },
+  QR: { words: "Looking for a QR code", from: 14, to: 30, usual: 2 },
+  STRIP: { words: "Reading the passport strip", from: 30, to: 45, usual: 3 },
+  TEXT: { words: "Reading the printed text", from: 45, to: 94, usual: 12 },
+};
+
+/**
+ * The reading of one ID photo, over its Scan-again button (2026-10-23, operator: "a small progress
+ * bar showing the image is being read and done"). While it runs: the stage in words, the seconds,
+ * and a bar that moves through the stages the server reports (it never claims the end before the
+ * server does). When it ends: green with what was found, amber when nothing could be read (the
+ * row stays as it was, so this line is the only sign), red when the reading failed or stopped.
+ */
+function OcrProgress({ suggestion, fetchedAt }: { suggestion: OcrSuggestion; fetchedAt: number }) {
+  // Seconds come from the server's answer; this machine only adds the time since it arrived.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 500);
+    return () => clearInterval(t);
+  }, []);
+  const since = Math.max(0, (now - fetchedAt) / 1000);
+  const later = (s: number | null | undefined) => (s == null ? null : s + since);
+  const shell = (tone: string, fill: number, label: React.ReactNode, title?: string, live = false) => (
+    <div role={live ? "status" : undefined} aria-live={live ? "polite" : undefined} title={title} style={{ width: 150, display: "grid", gap: 3 }}>
+      <div style={{ fontSize: 11.5, fontWeight: 600, color: tone, display: "flex", alignItems: "center", gap: 4, lineHeight: 1.25 }}>{label}</div>
+      <div style={{ height: 5, borderRadius: 3, background: "var(--line)", overflow: "hidden" }}>
+        <div className="ocr-fill" style={{ height: "100%", width: `${Math.max(3, Math.min(100, fill))}%`, background: tone, borderRadius: 3 }} />
+      </div>
+    </div>
+  );
+  if (suggestion.status === "PENDING") {
+    if (suggestion.stalled) {
+      return shell("var(--stop)", 100, <><AlertTriangle style={{ width: 12, height: 12 }} /> The reading stopped — scan again</>, "No progress for several minutes.", true);
+    }
+    const st = READ_STAGES[suggestion.stage ?? "QUEUED"] ?? READ_STAGES.QUEUED;
+    const inStage = later(suggestion.stageForSeconds) ?? 0;
+    // Moves within the stage as time passes, slowing as it nears the stage's end — never past it.
+    const within = 1 - Math.exp(-inStage / st.usual);
+    const fill = st.from + (st.to - st.from) * within;
+    const reading = later(suggestion.readingForSeconds);
+    const secs = reading == null ? null : Math.round(reading);
+    return shell(
+      "var(--accent, #2f6fdf)",
+      fill,
+      <>
+        <ScanLine style={{ width: 12, height: 12 }} /> {st.words}
+        {secs != null ? <span style={{ fontWeight: 400, color: "var(--ink-3)" }}>· {secs}s</span> : null}
+      </>,
+      undefined,
+      true,
+    );
+  }
+  const ended = later(suggestion.endedForSeconds);
+  const endedMs = ended == null ? Number.POSITIVE_INFINITY : ended * 1000;
+  const took = suggestion.readSeconds != null ? ` in ${Math.round(suggestion.readSeconds)}s` : "";
+  if (suggestion.status === "READY" && endedMs < 20_000) {
+    const n = Object.values(suggestion.fields ?? {}).filter(Boolean).length;
+    return shell("var(--ok)", 100, <><Check style={{ width: 12, height: 12 }} /> Read{took} · {n} detail{n === 1 ? "" : "s"} below</>, undefined, true);
+  }
+  if (suggestion.status === "EMPTY") {
+    return shell(
+      "var(--warn)",
+      100,
+      <><AlertTriangle style={{ width: 12, height: 12 }} /> Nothing could be read{took}</>,
+      "Retake the photo flat, in good light, with the whole page in the frame — or type the details.",
+      endedMs < 20_000,
+    );
+  }
+  if (suggestion.status === "FAILED") {
+    return shell("var(--stop)", 100, <><AlertTriangle style={{ width: 12, height: 12 }} /> The reading failed — scan again</>, suggestion.error ?? undefined, endedMs < 20_000);
+  }
+  return null;
+}
+
 /** Amber "Detected from the ID photo" strip — the machine's read, never mistaken for verified data. */
 function SuggestionStrip({
   suggestion,
@@ -329,8 +405,8 @@ export function IdentityProofBlock({
     // Also poll while a server-side OCR read is PENDING so the suggestion lands on screen.
     refetchInterval: (q) => {
       if (phoneCapture) return 3000;
-      const pending = (q.state.data?.suggestions ?? []).some((x) => x.status === "PENDING");
-      return pending ? 3000 : false;
+      const pending = (q.state.data?.suggestions ?? []).some((x) => x.status === "PENDING" && !x.stalled);
+      return pending ? 1500 : false;
     },
   });
   const items = listQuery.data?.items ?? [];
@@ -608,10 +684,7 @@ export function IdentityProofBlock({
   });
   const rerunOcrM = useMutation({
     mutationFn: (photoId: string) => rerunPhotoOcr(session!, photoId),
-    onSuccess: () => {
-      toast.info("Reading the ID photo again…");
-      void queryClient.invalidateQueries({ queryKey: ["identity-proofs", entryId] });
-    },
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["identity-proofs", entryId] }),
     onError: (e) => toast.error(e instanceof Error ? e.message : "Could not queue the read"),
   });
 
@@ -1059,17 +1132,12 @@ export function IdentityProofBlock({
               const cell = locked ? { ...cellInput, ...lockedCell } : cellInput;
               const suggestion = suggestionFor(slot.key);
               // Suggestion strip under the row (2026-08-18): READY → amber "Detected from the ID
-              // photo … Apply / Dismiss"; PENDING → muted "reading"; else nothing.
+              // photo … Apply / Dismiss"; the reading itself shows in the photo cell (2026-10-23).
               const suggestionRow =
-                suggestion && (suggestion.status === "READY" || suggestion.status === "PENDING") ? (
+                suggestion && suggestion.status === "READY" ? (
                   <tr key={`${slot.key}-ocr`}>
                     <td colSpan={7} style={{ padding: "0 6px 6px", borderBottom: "1px dashed var(--line)" }}>
-                      {suggestion.status === "PENDING" ? (
-                        <div style={{ fontSize: 11.5, color: "var(--ink-3)", display: "flex", alignItems: "center", gap: 6, padding: "2px 4px" }}>
-                          <ScanLine style={{ width: 12, height: 12 }} /> Reading the ID photo…
-                        </div>
-                      ) : (
-                        <SuggestionStrip
+                      <SuggestionStrip
                           suggestion={suggestion}
                           docTypeName={(code) => docTypes.find((d) => d.code === code)?.name ?? code}
                           busy={applySuggestionM.isPending || dismissSuggestionM.isPending}
@@ -1081,7 +1149,6 @@ export function IdentityProofBlock({
                               : null
                           }
                         />
-                      )}
                     </td>
                   </tr>
                 ) : null;
@@ -1192,6 +1259,7 @@ export function IdentityProofBlock({
                         Thumb above; the two buttons stay one horizontal row. */}
                     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                       {photos.length > 0 && photoChips(photos.slice(0, 1))}
+                      {covered && suggestion && <OcrProgress suggestion={suggestion} fetchedAt={listQuery.dataUpdatedAt} />}
                       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                         <button
                           type="button"
@@ -1216,7 +1284,7 @@ export function IdentityProofBlock({
                         >
                           <Smartphone style={{ width: 13, height: 13 }} />
                         </button>
-                        {covered && suggestion?.status !== "PENDING" && (
+                        {covered && (suggestion?.status !== "PENDING" || suggestion.stalled) && (
                           <button
                             type="button"
                             className="btn btn-ghost btn-sm"

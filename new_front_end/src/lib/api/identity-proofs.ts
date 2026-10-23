@@ -307,6 +307,19 @@ export type OcrSuggestion = {
   error: string | null;
   extractedAt: string | null;
   appliedAt: string | null;
+  /** While PENDING (2026-10-23): QUEUED · QR · STRIP · TEXT. */
+  stage?: "QUEUED" | "QR" | "STRIP" | "TEXT" | null;
+  stageAt?: string | null;
+  /** When the current reading was asked for. */
+  readingSince?: string | null;
+  /** PENDING with a stage that stopped moving — the reading died; scan again. */
+  stalled?: boolean;
+  /** How long the last reading took, once it ended. */
+  readSeconds?: number | null;
+  /** Seconds on the server's clock when the list was answered (the desk counts on locally). */
+  readingForSeconds?: number | null;
+  stageForSeconds?: number | null;
+  endedForSeconds?: number | null;
 };
 
 /** Desk: apply a suggestion (optionally with corrections) — writes through the detail save. */

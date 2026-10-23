@@ -140,6 +140,9 @@ async function getTesseract() {
         corePath: "/tesseract-core/tesseract-core-simd-lstm.wasm.js",
         ...langOpts,
         logger: () => {},
+        // A failed job rejects its own promise (caught below) instead of throwing in the worker's
+        // listener, where nothing catches it and the reading never ends (2026-10-23).
+        errorHandler: () => {},
       });
       await w.setParameters({
         tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<",
