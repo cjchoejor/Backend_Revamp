@@ -19,9 +19,12 @@
  *
  * WHAT COMES ACROSS (operator's answers, 2026-09-25)
  *   - every confirmed booking whose stay reaches today or later, to July 2027;
- *   - the guests already in the hotel, landing in-house at Stay, billed from tonight onward
- *     (nights already slept stay billed in the old system);
- *   - the prices AGREED in the old system — room, meals, extra beds, per room;
+ *   - the guests already in the hotel, landing in-house at Stay with their WHOLE stay from the
+ *     real arrival (2026-10-23 go-live ruling); the nights already slept are billed afterwards by
+ *     `bill-slept-nights-of-imported-stays.ts`, which runs this system's own night audit for each;
+ *   - the prices AGREED in the old system — room, meals, extra beds, per room, to the cent: where
+ *     this system's pricing (its child policy, or a per-meal reference price) comes out
+ *     differently, the room's meal rates are set so the old price stands (`honourOldMealPrice`);
  *   - a return trip as TWO bookings under ONE enquiry, per the 2026-09-25 return-stay ruling;
  *   - agencies missing from this system are created, with their old rate list as a package.
  *   - rooms held out of sale ("National Day block") are NOT bookings and are skipped.
@@ -160,13 +163,14 @@ function buildVisits(inq: OldRow, rows: OldRow[], regs: OldRow[], today: string)
   const visits: Visit[] = [];
   for (const w of windows) {
     if (w.checkOut <= today) continue;                       // that visit is over
-    // The check-in record belongs to the visit whose window contains its arrival date; a guest
-    // already in the hotel keeps only the nights STILL TO COME. The nights they have slept are
-    // billed in the old system, and importing them would either bill them a second time here or
-    // leave two systems claiming the same money.
+    // The check-in record belongs to the visit whose window contains its arrival date. A guest
+    // already in the hotel comes across with their WHOLE stay, from the real arrival (operator
+    // ruling 2026-10-23, the go-live: this system keeps the bill from now on, so the nights
+    // already slept are billed here too — by running the night audit for each of them after the
+    // import, exactly as the desk would have, rather than by posting a lump sum).
     const reg = regs.find((r) => { const d = ymd(r.arrival_date); return d != null && d >= w.checkIn && d < w.checkOut; }) ?? null;
     const inHouse = !!reg && w.checkIn <= today && today < w.checkOut;
-    const from = inHouse ? today : w.checkIn;
+    const from = w.checkIn;
     const mine = rows.filter((r) => { const d = ymd(r.reserved_date)!; return d >= from && d < w.checkOut; });
     if (mine.length === 0) continue;
     const byRoom = new Map<string, OldRow[]>();
@@ -234,7 +238,7 @@ function planRatesOf(r: OldRow): { cp: number | null; mapl: number | null; mapd:
 }
 
 /** One composition row per (room, contiguous run), from the old per-night rows. */
-function compositionFor(room: VisitRoom, run: { from: string; to: string; nights: string[] }, roomId: string): RoomCompositionInput & { roomId: string } {
+function compositionFor(room: VisitRoom, run: { from: string; to: string; nights: string[] }, roomId: string): ImportComp {
   const rows = run.nights.map((n) => room.rows.find((r) => ymd(r.reserved_date) === n)!).filter(Boolean);
   const first = rows[0];
   // The night that carries the most people decides the room-level composition; nights that
@@ -285,7 +289,62 @@ function compositionFor(room: VisitRoom, run: { from: string; to: string; nights
     isFoc: num(lead.total_without_tax) === 0,
     nightMealOverrides: overrides.length ? overrides : undefined,
     planRates: planRatesOf(lead),
-  } as RoomCompositionInput & { roomId: string; planRates: ReturnType<typeof planRatesOf> };
+    // What the old system CHARGED for this run, night by night (one row per night). Its net is
+    // always room + the meal-plan TOTALS + extra beds × their rate — checked on all 1,296
+    // room-nights in scope on 2026-10-23 — so the plan columns, not the per-meal reference
+    // prices beside them, are what the guest agreed to pay for meals.
+    oldFigures: {
+      net: rows.reduce((s, r) => s + num(r.total_without_tax), 0),
+      gross: rows.reduce((s, r) => s + num(r.total_room_amount), 0),
+      meals: rows.reduce((s, r) => s + num(r.cp_rate) + num(r.map_lunch_rate) + num(r.map_dinner_rate) + num(r.ap_rate), 0),
+    },
+  } as unknown as ImportComp;
+}
+
+type ImportComp = RoomCompositionInput & {
+  roomId: string;
+  planRates: ReturnType<typeof planRatesOf>;
+  oldFigures: { net: number; gross: number; meals: number };
+};
+
+/**
+ * Make a run's meals cost exactly what the old system charged for them (operator ruling
+ * 2026-10-23: "the prices listed in the old system are the real prices — room, extra bed,
+ * meals, meal plans").
+ *
+ * This system prices meals from the per-meal rates and then applies the hotel's child policy
+ * (6–10 at 70%, under-6 free). The old system charged each room a plan TOTAL it agreed, which
+ * sometimes left a child free, and sometimes disagreed with its own per-meal reference prices.
+ * Where the two differ, the run's per-meal rates are scaled by one factor so that this system's
+ * own pricing — child policy included — lands on the old total. Scaling the RATES (rather than
+ * the head count, or switching the policy off) keeps every guest on the plan the kitchen needs
+ * to know about, and means a later re-price at Arrival or Stay carries the same figure.
+ *
+ * Returns how the run was settled, so every adjustment is said out loud.
+ */
+function honourOldMealPrice(comp: ImportComp, priced: { subtotal: Prisma.Decimal; mealsSubtotal: Prisma.Decimal }):
+  | { kind: "exact" }
+  | { kind: "scaled"; from: number; to: number; factor: number }
+  | { kind: "unresolved"; why: string } {
+  const net = Number(priced.subtotal.toFixed(2));
+  if (Math.abs(net - comp.oldFigures.net) < 0.005) return { kind: "exact" };
+  const meals = Number(priced.mealsSubtotal);
+  const roomAndBeds = net - meals;
+  const oldRoomAndBeds = comp.oldFigures.net - comp.oldFigures.meals;
+  if (Math.abs(roomAndBeds - oldRoomAndBeds) >= 0.005) {
+    return { kind: "unresolved", why: `room + extra beds differ (${roomAndBeds.toFixed(2)} here, ${oldRoomAndBeds.toFixed(2)} there)` };
+  }
+  if (meals <= 0) {
+    return { kind: "unresolved", why: `the old system charged ${comp.oldFigures.meals.toFixed(2)} for meals but this room has no priced meals to scale` };
+  }
+  // Exact decimal arithmetic for the factor; the rates stay plain numbers (as the importer has
+  // always written them) so the stored quotation keeps numbers, not strings.
+  const factor = D(comp.oldFigures.meals.toFixed(2)).div(priced.mealsSubtotal);
+  const scale = (v: unknown) => (v == null ? null : Number(D(v as Prisma.Decimal.Value).mul(factor))) as unknown as Prisma.Decimal | null;
+  comp.negotiatedBreakfastRate = scale(comp.negotiatedBreakfastRate);
+  comp.negotiatedLunchRate = scale(comp.negotiatedLunchRate);
+  comp.negotiatedDinnerRate = scale(comp.negotiatedDinnerRate);
+  return { kind: "scaled", from: meals, to: comp.oldFigures.meals, factor: Number(factor) };
 }
 
 /* ----------------------------------------------------------------- the script */
@@ -404,14 +463,17 @@ async function main() {
     nights,
   });
 
-  type PricedStay = { booking: Booking; visit: Visit; comps: (RoomCompositionInput & { roomId: string; planRates: ReturnType<typeof planRatesOf> })[]; totals: ReturnType<typeof computeQuotationCompositionTotals>; oldTotal: number; oldTotalRaw: number; skippedRooms: string[] };
+  type PricedStay = { booking: Booking; visit: Visit; comps: ImportComp[]; totals: ReturnType<typeof computeQuotationCompositionTotals>; oldTotal: number; oldTotalRaw: number; skippedRooms: string[] };
   const priced: PricedStay[] = [];
   const problems: string[] = [];
+  /** Rooms whose meals were brought to the old system's price, and rooms that could not be. */
+  const adjusted: string[] = [];
+  const unresolved: string[] = [];
 
   for (const b of bookings) {
     if (doneRefs.has(b.ref)) continue;
     for (const v of b.visits) {
-      const comps: (RoomCompositionInput & { roomId: string; planRates: ReturnType<typeof planRatesOf> })[] = [];
+      const comps: ImportComp[] = [];
       const skippedRooms: string[] = [];
       for (const room of v.rooms) {
         const dbRoom = roomByNo.get(room.roomNo);
@@ -421,14 +483,35 @@ async function main() {
       if (comps.length === 0) { problems.push(`${b.ref} visit ${v.index}: no rooms could be matched`); continue; }
       // Each room is priced over ITS OWN nights, not the visit's. A room taken for 15 nights of
       // a 30-night stay must not be charged for 30 — that was a straight doubling.
-      const totals = computeQuotationCompositionTotals(comps.map((input) => ({
+      const priceAll = () => computeQuotationCompositionTotals(comps.map((input) => ({
         input, roomId: input.roomId,
         roomNumber: roomsDb.find((r) => r.id === input.roomId)?.roomNumber ?? null,
         ctx: ctxFor(
           Math.max(1, Math.round(((input.endDate as Date).getTime() - (input.startDate as Date).getTime()) / 86_400_000)),
-          (input as unknown as { planRates: { cp: number | null; mapl: number | null; mapd: number | null; ap: number | null } }).planRates,
+          input.planRates,
         ),
       })));
+      let totals = priceAll();
+      // The old system's price is the agreed price: any room whose meals came out differently is
+      // brought to it, then the stay is priced again.
+      let anyScaled = false;
+      for (const [i, c] of comps.entries()) {
+        const outcome = honourOldMealPrice(c, totals.perRoom[i]);
+        const label = `${b.ref} visit ${v.index} · room ${totals.perRoom[i].roomNumber ?? c.roomId} ${(c.startDate as Date).toISOString().slice(0, 10)}`;
+        if (outcome.kind === "scaled") {
+          anyScaled = true;
+          adjusted.push(`${label}: meals ${outcome.from.toFixed(2)} → ${outcome.to.toFixed(2)} (the old system's plan price)`);
+        } else if (outcome.kind === "unresolved") {
+          unresolved.push(`${label}: ${outcome.why}`);
+        }
+      }
+      if (anyScaled) totals = priceAll();
+      for (const [i, c] of comps.entries()) {
+        const net = Number(totals.perRoom[i].subtotal.toFixed(2));
+        if (Math.abs(net - c.oldFigures.net) >= 0.005 && !unresolved.some((u) => u.startsWith(`${b.ref} visit ${v.index} · room ${totals.perRoom[i].roomNumber ?? c.roomId} `))) {
+          unresolved.push(`${b.ref} visit ${v.index} · room ${totals.perRoom[i].roomNumber ?? c.roomId}: net ${net.toFixed(2)} here vs ${c.oldFigures.net.toFixed(2)} there after adjusting`);
+        }
+      }
       // What the old system charged — counting each room-night ONCE. It sometimes holds the same
       // room twice on a night, and summing its rows raw would make its own total the thing that
       // looks wrong. `oldTotalRaw` keeps the unfiltered figure so the duplicates are still named.
@@ -461,9 +544,19 @@ async function main() {
     console.log();
   }
 
-  const tolerance = 1;
-  const mismatched = priced.filter((p) => Math.abs(Number(p.totals.total) - p.oldTotal) > tolerance);
+  // Per room, the NET must equal the old system's to the cent (checked above). The stay's
+  // tax-inclusive total may still differ by a few paise, because the old system rounds the tax on
+  // every NIGHT and the quotation taxes the whole run at once; the night audit here also taxes
+  // night by night, so what is actually billed matches the old system night for night.
+  const roundingAllowance = (p: PricedStay) => 0.01 * p.comps.reduce((s, c) => s + Math.max(1, Math.round(((c.endDate as Date).getTime() - (c.startDate as Date).getTime()) / 86_400_000)), 0);
+  const mismatched = priced.filter((p) => Math.abs(Number(p.totals.total) - p.oldTotal) > roundingAllowance(p));
   console.log(`priced ${priced.length} stay(s) · totals matching the old system: ${priced.length - mismatched.length} · differing: ${mismatched.length}`);
+  console.log(`rooms whose meals were set to the old system's price: ${adjusted.length}`);
+  for (const a of adjusted) console.log(`  ${a}`);
+  if (unresolved.length) {
+    console.log(`\nROOMS THAT DO NOT MATCH THE OLD PRICE — check before committing: ${unresolved.length}`);
+    for (const u of unresolved) console.log(`  ${u}`);
+  }
   /**
    * Every difference found on 25 Sep 2026 was one of three things, and each is named rather
    * than left as a number: the first two are the old data or the hotel's own policy, and only
@@ -735,7 +828,7 @@ async function main() {
 
           /* the priced quotation, accepted — the commercial basis every later stage reads */
           const quoId = await allocateReadableId(tx, "QUOTATION", reservedAt);
-          const roomCompositions = comps.map(({ planRates: _p, ...c }) => c);
+          const roomCompositions = comps.map(({ planRates: _p, oldFigures: _o, ...c }) => c);
           const anchorRoom = roomsDb.find((r) => r.id === mostNights(comps))!;
           const commercialTerms = {
             roomTypeId: anchorRoom.roomTypeId, useType: "LEISURE", currency: "BTN",
@@ -810,7 +903,9 @@ async function main() {
                 notes: `${IMPORT_TAG} · old reference ${b.ref}`,
               },
             });
-            if (v.inHouse) live.push({ roomId: c.roomId, entryId });
+            // Only a room the guest is in TONIGHT is occupied — the stay now starts at the real
+            // arrival, so a room they moved out of earlier is part of it too.
+            if (v.inHouse && covers(c, today)) live.push({ roomId: c.roomId, entryId });
           }
 
           /* the folio — money only. NOTHING is charged here: the night audit bills each night as
@@ -854,7 +949,7 @@ async function main() {
                 checkIn: v.checkIn, checkOut: v.checkOut,
                 stayTotal: money(stay.totals.total), oldSystemTotal: stay.oldTotal.toFixed(2),
                 advanceReceived: (advance?.amount ?? 0).toFixed(2),
-                inHouse: v.inHouse, billedFrom: v.inHouse ? today : v.checkIn,
+                inHouse: v.inHouse, billedFrom: v.checkIn,
                 roomsNotInThisSystem: stay.skippedRooms,
               },
             },
