@@ -37,7 +37,13 @@ export type IdentityProofSummary = {
   detailsConfirmedBy?: string | null;
   /** True on photo/scan rows; false on the per-guest typed DETAIL rows. */
   hasFile: boolean;
+  /** Detail rows: whether the recorded date of birth fits this guest's row (2026-10-23). */
+  ageCheck?: AgeCheck | null;
 };
+
+/** The server's check of a date of birth against the guest's row — a child of the age the booking
+ *  states, an adult of the legal age — said as a warning, never a refusal. */
+export type AgeCheck = { ageAtCheckIn: number; ok: boolean; message: string | null };
 
 /** Config-driven document-type vocabulary (`identity.documentTypes`) — the guest-detail
  *  table's dropdown AND the S6 verification select read this, never a hardcoded list. */
@@ -320,6 +326,8 @@ export type OcrSuggestion = {
   readingForSeconds?: number | null;
   stageForSeconds?: number | null;
   endedForSeconds?: number | null;
+  /** Whether the date of birth read off the photo fits the guest's row. */
+  ageCheck?: AgeCheck | null;
 };
 
 /** Desk: apply a suggestion (optionally with corrections) — writes through the detail save. */

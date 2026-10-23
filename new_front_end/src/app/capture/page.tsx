@@ -1,20 +1,15 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { BedDouble, Camera, Check, ImagePlus, RefreshCcw, ScanLine, ShieldCheck, Upload, X } from "lucide-react";
+import { AlertTriangle, BedDouble, Camera, Check, ImagePlus, RefreshCcw, ShieldCheck, X } from "lucide-react";
 import {
-  analyzePhoneCapture,
   fetchPhoneCaptureContext,
-  parsePhoneReading,
-  sendPhoneExtraction,
   uploadPhoneCapture,
-  type IdentitySuggestedFields,
   type PhoneCaptureContext,
   type PhoneCaptureRoom,
   type PhoneCaptureRosterItem,
-  type PhoneParsePreview,
 } from "@/lib/api/identity-proofs";
-import { readIdOnPhone, warmPhoneReader, type PhoneReading } from "@/lib/phone-id-reader";
+import { shrinkForUpload } from "@/lib/phone-id-reader";
 
 /**
  * Phone ID-capture page (2026-08-12) — what opens when a phone scans the QR code the desk
@@ -30,18 +25,17 @@ import { readIdOnPhone, warmPhoneReader, type PhoneReading } from "@/lib/phone-i
  *
  * Deliberately built on a plain `<input type="file" capture>` rather than getUserMedia: the
  * native camera works over plain HTTP on a LAN IP, where getUserMedia requires a secure
- * context and would show a black screen. The native camera app also gives the guest-facing
- * retake loop for free; the page adds its own preview + Retake before anything uploads.
+ * context and would show a black screen. The native camera app also gives the retake loop.
+ *
+ * Send at once, read at the desk (2026-10-23, operator: "just send the compressed photo
+ * directly to the website and let it start analysing there"): the phone no longer reads the
+ * document itself. A photo is shrunk and sent the moment it is taken, the next guest comes up
+ * straight away, and several photos may be on their way at once — each with its own line saying
+ * whether it is sending, sent or did not send (with Retry). The server reads every photo it
+ * receives (W39, two at a time) and the desk shows each one's progress. The document type is
+ * picked BEFORE the shot and travels with the photo to guide the reading.
  *
  * Standalone surface — not under the desk shell, no session, self-contained styles.
- *
- * On-phone reading (2026-08-18): once a photo is taken the phone decodes any QR (Aadhaar's
- * signed Secure QR = name/DOB/gender without OCR) or OCRs the passport MRZ locally, hands the
- * RAW result to the server's parse route (the server interprets — check digits, document-type
- * allowlist), and shows the fields for the person to confirm or correct BEFORE sending. The
- * confirmed fields travel with the photo and land on the desk as a SUGGESTION the operator
- * applies (never a direct write). Photos with no readable zone can still have the details
- * typed here. If the phone can't read at all, the desk's server-side pass reads the bytes.
  */
 
 const palette = {
@@ -57,6 +51,7 @@ const palette = {
   warnLine: "#d9a441",
   errBg: "#faeae6",
   errLine: "#c0603f",
+  errInk: "#a8341c",
 };
 
 const btnBase: React.CSSProperties = {
@@ -69,7 +64,10 @@ const btnBase: React.CSSProperties = {
   borderRadius: 14,
   fontSize: 16,
   fontWeight: 600,
-  border: `1px solid ${palette.line}`,
+  // Longhands, not `border`: a button switches between this and btnPrimary, which sets the colour.
+  borderWidth: 1,
+  borderStyle: "solid",
+  borderColor: palette.line,
   background: palette.card,
   color: palette.ink,
   cursor: "pointer",
@@ -82,7 +80,25 @@ const btnPrimary: React.CSSProperties = {
   color: "#fff",
 };
 
-type Phase = "checking" | "invalid" | "ready" | "preview" | "uploading";
+type Phase = "checking" | "invalid" | "ready";
+
+/** One photo on its way to the desk, or already there. */
+type SendTask = {
+  id: number;
+  /** The party slot it files under; null on a single-guest link (the token names the slot). */
+  slotKey: string | null;
+  label: string;
+  file: File;
+  /** The shrunk JPEG, once made — kept so Retry sends the same bytes. */
+  blob: Blob | null;
+  fileName: string;
+  thumbUrl: string | null;
+  documentType: string;
+  status: "preparing" | "sending" | "sent" | "failed";
+  error: string | null;
+};
+
+const isBusy = (t: SendTask | undefined) => !!t && (t.status === "preparing" || t.status === "sending");
 
 /** "Room 205 · Twin · Deluxe Double" — the guest's seated room per the booking's quote.
  *  `compact` drops the room-type name so list rows keep space for the photo count. */
@@ -115,7 +131,7 @@ const inputStyle: React.CSSProperties = {
   color: palette.ink,
 };
 
-/** Small rotating spinner for the analysing state (standalone page — no desk stylesheet). */
+/** Small rotating spinner for a photo on its way (standalone page — no desk stylesheet). */
 function Spin({ size = 15 }: { size?: number }) {
   return (
     <span
@@ -134,20 +150,38 @@ function Spin({ size = 15 }: { size?: number }) {
   );
 }
 
-/** One row of the phone's detected-details form; a green tick marks a value the document itself proved. */
-function FieldRow({ label, verified, children }: { label: string; verified?: boolean; children: React.ReactNode }) {
-  return (
-    <label style={{ display: "grid", gap: 4 }}>
-      <span style={{ fontSize: 12, color: palette.ink3, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>
-        {label}
-        {verified && (
-          <span style={{ color: palette.green, fontWeight: 700 }} title="Proven by the document's check digit">
-            ✓ verified
-          </span>
-        )}
+/** The photo's small copy beside its line, or an empty square while it is still being made. */
+function Thumb({ url, size = 44 }: { url: string | null; size?: number }) {
+  return url ? (
+    // eslint-disable-next-line @next/next/no-img-element -- local object-URL thumbnail
+    <img src={url} alt="" style={{ width: size, height: size, objectFit: "cover", borderRadius: 8, border: `1px solid ${palette.line}`, flexShrink: 0 }} />
+  ) : (
+    <span style={{ width: size, height: size, borderRadius: 8, background: palette.cream, border: `1px solid ${palette.line}`, flexShrink: 0 }} />
+  );
+}
+
+/** What a photo's line says about it. */
+function TaskStatus({ task, docName, compact = false }: { task: SendTask; docName: string | null; compact?: boolean }) {
+  const doc = docName ? ` · ${docName}` : "";
+  if (task.status === "failed") {
+    return (
+      <span style={{ color: palette.errInk, fontWeight: 700 }}>
+        Didn&rsquo;t send{task.error && !compact ? ` — ${task.error}` : ""}
       </span>
-      {children}
-    </label>
+    );
+  }
+  if (task.status === "sent") {
+    return (
+      <span style={{ color: palette.green, fontWeight: 600 }}>
+        Sent{doc}{compact ? "" : " · the desk is reading it"}
+      </span>
+    );
+  }
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 6, color: palette.ink3, fontWeight: 600 }}>
+      <Spin size={12} />
+      Sending{doc}…
+    </span>
   );
 }
 
@@ -157,35 +191,19 @@ export default function PhoneCapturePage() {
   const [roster, setRoster] = useState<PhoneCaptureRosterItem[] | null>(null);
   const [phase, setPhase] = useState<Phase>("checking");
   const [error, setError] = useState<string | null>(null);
-  const [pendingFile, setPendingFile] = useState<File | null>(null);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [sentCount, setSentCount] = useState(0);
-  const [lastSentFor, setLastSentFor] = useState<string | null>(null);
   // All-guests mode: which party member the open camera is capturing for.
   const [activeSlot, setActiveSlot] = useState<PhoneCaptureRosterItem | null>(null);
   const cameraRef = useRef<HTMLInputElement>(null);
   const galleryRef = useRef<HTMLInputElement>(null);
-  // On-phone reading of the pending photo (2026-08-18): the raw sensor result, the server's
-  // interpretation of it, and the fields as the person confirmed/corrected them.
-  const [reading, setReading] = useState<PhoneReading | null>(null);
-  const [readStage, setReadStage] = useState<"idle" | "decoding" | "qr" | "mrz" | "parsing" | "server" | "done" | "failed">("idle");
-  const [parsed, setParsed] = useState<PhoneParsePreview | null>(null);
-  const [fields, setFields] = useState<IdentitySuggestedFields>({});
-  const [detailsOpen, setDetailsOpen] = useState(false);
-  // Whether the server's full reader (layout OCR) already looked at THIS photo and found
-  // nothing — changes the "couldn't read" copy from "the desk will read it" to honesty.
-  const [serverTried, setServerTried] = useState(false);
-  // The shrunk JPEG of the photo on screen, ready before the reading ends (2026-10-23), so a photo
-  // sent early goes small; and whether the person picked the document type themselves — a pick
-  // the machine reading must not overwrite.
-  const shrunkRef = useRef<Blob | null>(null);
-  const typePicked = useRef(false);
-  const typeRef = useRef<string | undefined>(undefined);
-  const [lastSentAtDesk, setLastSentAtDesk] = useState(false);
+  // The photos taken on this phone, newest first; one line per guest (a retake replaces it).
+  const [tasks, setTasks] = useState<SendTask[]>([]);
+  const taskSeq = useRef(0);
+  const thumbUrls = useRef<string[]>([]);
+  // The document type for the next photo — usually the same for a whole party, so it stays picked.
+  const [docType, setDocType] = useState("");
   // How long the code works (2026-10-23): counted from the server's clock, not the phone's.
   const clockOffset = useRef(0);
   const [nowMs, setNowMs] = useState(() => Date.now());
-  const readSeq = useRef(0);
   // A big party (2026-10-23, operator: "if there are a lot of rooms the list is a burden"):
   // one button walks guest to guest, and a side drawer lists the rooms to jump between.
   const [skipped, setSkipped] = useState<string[]>([]);
@@ -210,8 +228,6 @@ export default function PhoneCapturePage() {
           setError("This booking has been closed — nothing more can be added to it.");
         } else {
           setPhase("ready");
-          // Load the OCR worker while the person is still framing the shot.
-          warmPhoneReader();
         }
       })
       .catch((e) => {
@@ -234,16 +250,20 @@ export default function PhoneCapturePage() {
     }
   }, [leftMs, phase]);
 
-  // Object-URL lifecycle for the preview image.
+  // Closing the page while a photo is still on its way would lose it — the browser asks first.
+  const anyBusy = tasks.some(isBusy);
   useEffect(() => {
-    if (!pendingFile) {
-      setPreviewUrl(null);
-      return;
-    }
-    const url = URL.createObjectURL(pendingFile);
-    setPreviewUrl(url);
-    return () => URL.revokeObjectURL(url);
-  }, [pendingFile]);
+    if (!anyBusy) return;
+    const warn = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [anyBusy]);
+
+  // The thumbnails' object URLs go when the page does.
+  useEffect(() => () => thumbUrls.current.forEach((u) => URL.revokeObjectURL(u)), []);
 
   const allMode = !!roster;
 
@@ -252,161 +272,79 @@ export default function PhoneCapturePage() {
     input?.click();
   };
 
-  const onPicked = (files: FileList | null) => {
-    const file = files?.[0];
-    if (!file) return;
-    setError(null);
-    setPendingFile(file);
-    setPhase("preview");
-    // Read the document on the phone (QR → MRZ), then let the server interpret it. Sequence
-    // guard: a retake mid-read must not let the earlier photo's result land on the new one.
-    const seq = ++readSeq.current;
-    setReading(null);
-    setParsed(null);
-    setFields({});
-    setDetailsOpen(false);
-    setServerTried(false);
-    shrunkRef.current = null;
-    typePicked.current = false;
-    typeRef.current = undefined;
-    setReadStage("decoding");
-    void (async () => {
-      try {
-        const r = await readIdOnPhone(
-          file,
-          (st) => {
-            if (readSeq.current === seq) setReadStage(st);
-          },
-          (blob) => {
-            if (readSeq.current === seq) shrunkRef.current = blob;
-          },
-        );
-        if (readSeq.current !== seq) return;
-        setReading(r);
-        let gotFields = false;
-        if (r && (r.qrText || r.ocrText) && token) {
-          setReadStage("parsing");
-          const pv = await parsePhoneReading(token, { qrText: r.qrText, ocrText: r.ocrText });
-          if (readSeq.current !== seq) return;
-          setParsed(pv);
-          if (pv.engine) {
-            gotFields = true;
-            setFields((f) => ({ ...pv.fields, ...(typePicked.current ? { documentType: f.documentType } : {}) }));
-            setDetailsOpen(true);
-          }
-        }
-        // The phone only reads QR + MRZ locally. Anything else — CID, work permit, birth
-        // certificate — is read by the SERVER's full pipeline on the previewed photo, so
-        // the fields fill in here BEFORE sending (operator ruling: the phone acts like an
-        // OCR machine). Nothing is stored by this call; W39 still covers the uploaded copy.
-        if (!gotFields && token) {
-          setReadStage("server");
-          try {
-            const az = await analyzePhoneCapture(
-              token,
-              r?.blob ?? file,
-              allMode ? activeSlot?.key : (ctx?.subjectKey ?? undefined),
-              typePicked.current ? typeRef.current : undefined,
-            );
-            if (readSeq.current !== seq) return;
-            setServerTried(az.available);
-            if (az.engine && Object.keys(az.fields).length) {
-              setParsed({ engine: az.engine, fields: az.fields, fieldConfidence: az.fieldConfidence, raw: az.source ? { source: az.source } : null });
-              setFields((f) => ({ ...az.fields, ...(typePicked.current ? { documentType: f.documentType } : {}) }));
-              setDetailsOpen(true);
-            }
-          } catch {
-            /* offline / OCR busy — the W39 pass reads the uploaded copy instead */
-          }
-        }
-        if (readSeq.current === seq) setReadStage("done");
-      } catch {
-        if (readSeq.current === seq) setReadStage("failed");
-      }
-    })();
-    // Allow re-picking the same file (retake produces a same-named capture on some phones).
-    if (cameraRef.current) cameraRef.current.value = "";
-    if (galleryRef.current) galleryRef.current.value = "";
-  };
+  const patchTask = (id: number, patch: Partial<SendTask>) =>
+    setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
 
-  const upload = async () => {
-    if (!token || !pendingFile) return;
-    if (allMode && !activeSlot) return;
-    setPhase("uploading");
-    setError(null);
-    // A read still running for this photo must not repopulate the form after we send.
-    readSeq.current += 1;
+  /** Shrink (once) and send one photo; the line follows it. */
+  const send = async (task: SendTask) => {
+    if (!token) return;
+    patchTask(task.id, { status: task.blob ? "sending" : "preparing", error: null });
     try {
-      // What the person confirmed on the phone: the server's parse plus any edits here.
-      const typed = Object.fromEntries(
-        Object.entries(fields).filter(([, v]) => typeof v === "string" && v.trim()),
-      ) as IdentitySuggestedFields;
-      // Sending does not wait for the reading (2026-10-23). With nothing read and nothing typed
-      // but the document type, the photo goes with the type as a hint and the server reads it at
-      // once — a reading of only the type must not count as "already read", or it never would.
-      const typedBeyondType = Object.keys(typed).some((k) => k !== "documentType");
-      const hasReading = !!(reading?.qrText || parsed?.raw?.mrzLines?.length || parsed?.engine || typedBeyondType);
-      // The shrunk JPEG when the phone has made it (smaller, same content) — waiting a moment
-      // for it when the photo is sent the instant it was taken.
-      let small: Blob | null = reading?.blob ?? shrunkRef.current;
-      for (let i = 0; !small && i < 15; i++) {
-        await new Promise((r) => setTimeout(r, 200));
-        small = shrunkRef.current;
+      let blob = task.blob;
+      let fileName = task.fileName;
+      if (!blob) {
+        const shrunk = await shrinkForUpload(task.file);
+        blob = shrunk.blob;
+        fileName = shrunk.fileName;
+        const thumbUrl = blob.type.startsWith("image/") ? URL.createObjectURL(blob) : null;
+        if (thumbUrl) thumbUrls.current.push(thumbUrl);
+        patchTask(task.id, { blob, fileName, thumbUrl, status: "sending" });
       }
-      const fileToSend: Blob = small ?? pendingFile;
-      const fileName = small ? pendingFile.name.replace(/\.[^.]+$/, "") + ".jpg" : pendingFile.name;
-      const created = await uploadPhoneCapture(
-        token,
-        fileToSend,
-        fileName,
-        allMode ? activeSlot!.key : undefined,
-        hasReading,
-        hasReading ? undefined : typed.documentType,
-      );
-      if (hasReading) {
-        // Best-effort: the photo is already stored; a failed details post just leaves the
-        // server-side pass to read the bytes.
-        try {
-          await sendPhoneExtraction(token, {
-            photoDocumentId: created.id,
-            mrzLines: parsed?.raw?.mrzLines ?? null,
-            qrText: reading?.qrText ?? null,
-            fields: typed,
-          });
-        } catch {
-          /* server pass covers it */
-        }
-      }
-      setReading(null);
-      setParsed(null);
-      setFields({});
-      setServerTried(false);
-      setReadStage("idle");
-      setSentCount((n) => n + 1);
-      setLastSentFor(allMode ? activeSlot!.label : null);
-      setLastSentAtDesk(!hasReading);
-      setPendingFile(null);
-      setPhase("ready");
-      if (allMode) {
-        // Bump the row immediately, then resync counts (and any typed names) from the server.
-        setRoster((prev) =>
-          prev?.map((s) => (s.key === activeSlot!.key ? { ...s, photoCount: s.photoCount + 1 } : s)) ?? prev,
-        );
+      await uploadPhoneCapture(token, blob, fileName, task.slotKey ?? undefined, false, task.documentType || undefined);
+      patchTask(task.id, { status: "sent" });
+      if (task.slotKey) {
+        // Bump the row at once, then resync counts (and any typed names) from the server.
+        setRoster((prev) => prev?.map((s) => (s.key === task.slotKey ? { ...s, photoCount: s.photoCount + 1 } : s)) ?? prev);
         fetchPhoneCaptureContext(token)
           .then((c) => setRoster(c.roster))
           .catch(() => {
-            /* keep the optimistic counts — the next upload resyncs */
+            /* keep the optimistic counts — the next send resyncs */
           });
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Upload failed — try again.");
-      setPhase("preview");
+      // A fetch that never reached the server says it in browser words ("Failed to fetch", "Load
+      // failed", "NetworkError…"); the person needs to hear that the connection dropped.
+      const msg = e instanceof Error ? e.message : "";
+      const offline = e instanceof TypeError || /failed to fetch|load failed|networkerror|network/i.test(msg);
+      patchTask(task.id, { status: "failed", error: offline || !msg ? "no connection, check the Wi-Fi" : msg });
     }
   };
 
-  const guestLabel = allMode ? (activeSlot?.label ?? "this guest") : (ctx?.subjectLabel?.trim() || "this guest");
+  const onPicked = (files: FileList | null) => {
+    const file = files?.[0];
+    // Allow re-picking the same file (a retake produces a same-named capture on some phones).
+    if (cameraRef.current) cameraRef.current.value = "";
+    if (galleryRef.current) galleryRef.current.value = "";
+    if (!file || !token) return;
+    if (allMode && !activeSlot) return;
+    setError(null);
+    const slotKey = allMode ? activeSlot!.key : null;
+    const task: SendTask = {
+      id: ++taskSeq.current,
+      slotKey,
+      label: allMode ? activeSlot!.label : ctx?.subjectLabel?.trim() || "this guest",
+      file,
+      blob: null,
+      fileName: file.name,
+      thumbUrl: null,
+      documentType: docType,
+      status: "preparing",
+      error: null,
+    };
+    // One ID per guest: the new photo's line replaces the earlier one's, as the desk shows only the newest.
+    setTasks((prev) => [task, ...prev.filter((t) => t.slotKey !== slotKey)]);
+    void send(task);
+  };
+
+  const taskFor = (slotKey: string | null) => tasks.find((t) => t.slotKey === slotKey);
+  const docName = (code: string) => (code ? (ctx?.documentTypes ?? []).find((d) => d.code === code)?.name ?? code : null);
+
   const storedBefore = ctx?.uploadedCount ?? 0;
-  const rosterCovered = roster?.filter((s) => s.photoCount > 0).length ?? 0;
+  const sentCount = tasks.filter((t) => t.status === "sent").length;
+  const sendingCount = tasks.filter(isBusy).length;
+  const failed = tasks.filter((t) => t.status === "failed");
+  const hasId = (s: PhoneCaptureRosterItem) => s.photoCount > 0 || taskFor(s.key)?.status === "sent";
+  const rosterCovered = roster?.filter(hasId).length ?? 0;
 
   // All-guests list grouped BY ROOM — the room is the primary heading and its guests sit
   // inside the card, rather than repeating "Room 205" under every name. Roster order is
@@ -424,15 +362,19 @@ export default function PhoneCapturePage() {
     }
     roomGroups.sort((a, b) => (a.key === "unassigned" ? 1 : 0) - (b.key === "unassigned" ? 1 : 0));
   }
-  // The next guest still without an ID, in the list's own order; skipped ones wait at the back.
-  const waiting = roomGroups.flatMap((g) => g.items).filter((s) => s.photoCount === 0);
+  // The next guest still without an ID, in the list's own order; a guest whose photo is on its way
+  // (or did not send — that one has its own Retry above) is not asked for again; skipped ones wait.
+  const waiting = roomGroups.flatMap((g) => g.items).filter((s) => s.photoCount === 0 && !taskFor(s.key));
   const next = waiting.find((s) => !skipped.includes(s.key)) ?? null;
   const skippedWaiting = waiting.filter((s) => skipped.includes(s.key));
-  const roomsDone = roomGroups.filter((g) => g.items.every((s) => s.photoCount > 0)).length;
+  const roomsDone = roomGroups.filter((g) => g.items.every(hasId)).length;
   const jumpTo = (key: string) => {
     setDrawerOpen(false);
     requestAnimationFrame(() => document.getElementById(`cap-${key}`)?.scrollIntoView({ behavior: "smooth", block: "start" }));
   };
+  // The lines shown under the next guest: every photo that did not send, then the newest few.
+  const recent = [...failed, ...tasks.filter((t) => t.status !== "failed")].slice(0, Math.max(4, failed.length));
+  const singleTask = taskFor(null);
 
   return (
     <div
@@ -466,7 +408,7 @@ export default function PhoneCapturePage() {
           </div>
         )}
 
-        {ctx && phase !== "invalid" && phase !== "checking" && (
+        {ctx && phase === "ready" && (
           <>
             <div style={{ background: palette.card, border: `1px solid ${palette.line}`, borderRadius: 16, padding: "16px 18px" }}>
               {allMode ? (
@@ -479,22 +421,21 @@ export default function PhoneCapturePage() {
                   <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 10, fontSize: 13.5, color: rosterCovered === roster!.length ? palette.green : palette.ink3, fontWeight: 600 }}>
                     <Check style={{ width: 15, height: 15 }} />
                     {rosterCovered} of {roster!.length} guests have a photo
+                    {sendingCount > 0 ? <span style={{ color: palette.ink3 }}> · {sendingCount} sending</span> : null}
                   </div>
                 </>
               ) : (
                 <>
                   <div style={{ fontSize: 13, color: palette.ink3, marginBottom: 2 }}>Photographing the ID of</div>
-                  <div style={{ fontSize: 20, fontWeight: 700 }}>{guestLabel}</div>
+                  <div style={{ fontSize: 20, fontWeight: 700 }}>{ctx.subjectLabel?.trim() || "this guest"}</div>
                   <div style={{ fontSize: 12.5, color: palette.ink3, marginTop: 4 }}>
                     Booking {ctx.entryId}
                     {roomText(ctx.room) ? ` · ${roomText(ctx.room)}` : ""}
                   </div>
-                  {(storedBefore > 0 || sentCount > 0) && (
+                  {storedBefore > 0 && !singleTask && (
                     <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 10, fontSize: 13.5, color: palette.green, fontWeight: 600 }}>
                       <Check style={{ width: 15, height: 15 }} />
-                      {sentCount > 0
-                        ? "ID sent — it's on the desk screen now"
-                        : "An ID is already on file — retaking replaces it"}
+                      An ID is already on file — retaking replaces it
                     </div>
                   )}
                 </>
@@ -515,10 +456,33 @@ export default function PhoneCapturePage() {
               )
             ) : null}
 
+            {/* Photos that did not send — on screen until each is sent again or retaken. */}
+            {failed.length > 0 && (
+              <div role="alert" style={{ display: "flex", alignItems: "center", gap: 10, background: palette.errBg, border: `1px solid ${palette.errLine}`, borderRadius: 12, padding: "10px 14px", fontSize: 14, fontWeight: 700, color: palette.errInk }}>
+                <AlertTriangle style={{ width: 18, height: 18, flexShrink: 0 }} />
+                {failed.length === 1 ? `${failed[0].label}'s photo didn't send` : `${failed.length} photos didn't send`} — press Retry below
+              </div>
+            )}
+
+            {/* The document type, picked before the shot (2026-10-23): it guides the desk's reading
+                and stays picked for the next guest — a party usually carries one kind. */}
+            <label style={{ display: "flex", alignItems: "center", gap: 10, background: palette.card, border: `1px solid ${palette.line}`, borderRadius: 12, padding: "8px 12px" }}>
+              <span style={{ fontSize: 13, fontWeight: 700, whiteSpace: "nowrap" }}>Document</span>
+              <select aria-label="Document type for the next photo" value={docType} onChange={(e) => setDocType(e.target.value)} style={{ ...inputStyle, padding: "8px 10px", fontSize: 14.5 }}>
+                <option value="">Not sure — the desk works it out</option>
+                {(ctx.documentTypes ?? []).map((d) => (
+                  <option key={d.code} value={d.code}>
+                    {d.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+
             {/* The next guest (2026-10-23): one button that always points at whoever still needs an
-                ID, so nobody scrolls a long list to find them. After a photo is sent the card names
-                the following guest by itself. Skip leaves someone not here yet for later. */}
-            {phase === "ready" && allMode && waiting.length > 0 && (
+                ID, so nobody scrolls a long list to find them. The moment a photo is taken the card
+                names the following guest — the photo goes on sending below. Skip leaves someone not
+                here yet for later. */}
+            {allMode && waiting.length > 0 && (
               <div style={{ background: palette.card, border: `2px solid ${palette.green}`, borderRadius: 16, padding: "14px 16px", display: "grid", gap: 10 }}>
                 <div style={{ fontSize: 12.5, color: palette.ink3, fontWeight: 600 }}>
                   Next guest · {waiting.length} still to photograph
@@ -558,47 +522,73 @@ export default function PhoneCapturePage() {
               </div>
             )}
 
-            {/* The reader is invisible until it fires — say it exists BEFORE the first shot, or
-                nobody frames the QR code / passport strip on purpose. */}
-            {phase === "ready" && (
-              <div
-                style={{
-                  display: "flex",
-                  gap: 10,
-                  alignItems: "flex-start",
-                  background: palette.card,
-                  border: `1px solid ${palette.line}`,
-                  borderRadius: 14,
-                  padding: "12px 14px",
-                  fontSize: 13,
-                  color: palette.ink3,
-                  lineHeight: 1.5,
-                }}
-              >
-                <ScanLine style={{ width: 18, height: 18, color: palette.green, flexShrink: 0, marginTop: 1 }} />
-                <span>
-                  <strong style={{ color: palette.ink }}>The details fill themselves in after the photo.</strong>{" "}
-                  QR codes and passports read instantly; other IDs (CID, work permit, birth certificate…) take
-                  a little longer while the printed text is read. Keep the whole document sharp in the shot.
-                  No need to wait for it — send the photo and the desk finishes reading it.
-                </span>
+            {!allMode && (
+              <>
+                <button
+                  type="button"
+                  style={{ ...btnPrimary, opacity: isBusy(singleTask) ? 0.6 : 1 }}
+                  disabled={isBusy(singleTask)}
+                  onClick={() => openPicker(cameraRef.current, null)}
+                >
+                  <Camera style={{ width: 20, height: 20 }} />
+                  {isBusy(singleTask) ? "Sending the photo…" : singleTask || storedBefore > 0 ? "Retake the ID photo" : "Take photo of the ID"}
+                </button>
+                <button type="button" style={btnBase} disabled={isBusy(singleTask)} onClick={() => openPicker(galleryRef.current, null)}>
+                  <ImagePlus style={{ width: 18, height: 18 }} />
+                  Choose from gallery
+                </button>
+              </>
+            )}
+
+            {/* Each photo's own line — several can be on their way at once. */}
+            {recent.length > 0 && (
+              <div style={{ background: palette.card, border: `1px solid ${palette.line}`, borderRadius: 16, overflow: "hidden" }}>
+                <div style={{ padding: "10px 14px", fontSize: 12.5, color: palette.ink3, fontWeight: 600, borderBottom: `1px solid ${palette.line}`, background: palette.cream }}>
+                  {allMode ? "Photos from this phone" : "The photo"}
+                  {[
+                    sendingCount > 0 ? `${sendingCount} on the way` : null,
+                    sentCount > 0 ? (allMode ? `${sentCount} on the desk` : "on the desk") : null,
+                    failed.length > 0 ? (allMode ? `${failed.length} didn’t send` : "didn’t send") : null,
+                  ]
+                    .filter(Boolean)
+                    .map((w) => ` · ${w}`)
+                    .join("")}
+                </div>
+                {recent.map((t, i) => (
+                  <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", borderTop: i > 0 ? `1px dashed ${palette.line}` : "none", background: t.status === "failed" ? palette.errBg : undefined }}>
+                    <Thumb url={t.thumbUrl} />
+                    <div style={{ minWidth: 0, flex: 1, fontSize: 13 }}>
+                      <div style={{ fontSize: 15, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.label}</div>
+                      <TaskStatus task={t} docName={docName(t.documentType)} />
+                    </div>
+                    {t.status === "failed" && (
+                      <button type="button" style={{ ...btnPrimary, width: "auto", padding: "9px 12px", fontSize: 14, borderRadius: 12 }} onClick={() => void send(t)}>
+                        <RefreshCcw style={{ width: 15, height: 15 }} />
+                        Retry
+                      </button>
+                    )}
+                  </div>
+                ))}
+                {allMode && tasks.length > recent.length && (
+                  <div style={{ padding: "8px 14px", fontSize: 12.5, color: palette.ink3, borderTop: `1px dashed ${palette.line}` }}>
+                    and {tasks.length - recent.length} more in the rooms below
+                  </div>
+                )}
               </div>
             )}
+
+            <div style={{ fontSize: 13, color: palette.ink3, lineHeight: 1.5, textAlign: "center" }}>
+              Each photo goes straight to the desk — no need to wait for it. Keep the whole document flat, sharp and free of glare.
+            </div>
 
             <input ref={cameraRef} type="file" accept="image/*" capture="environment" hidden onChange={(e) => onPicked(e.target.files)} />
             <input ref={galleryRef} type="file" accept="image/*,application/pdf" hidden onChange={(e) => onPicked(e.target.files)} />
 
-            {phase === "ready" && allMode && (
+            {allMode && (
               <>
-                {lastSentFor && (
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, background: palette.card, border: `1px solid ${palette.line}`, borderRadius: 12, padding: "10px 14px", fontSize: 13.5, color: palette.green, fontWeight: 600 }}>
-                    <Check style={{ width: 15, height: 15 }} />
-                    Sent for {lastSentFor} — {lastSentAtDesk ? "the details are read at the desk" : "it\u2019s on the desk screen now"}
-                  </div>
-                )}
                 <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                   {roomGroups.map((g) => {
-                    const covered = g.items.filter((s) => s.photoCount > 0).length;
+                    const covered = g.items.filter(hasId).length;
                     const allDone = covered === g.items.length;
                     return (
                       <div
@@ -646,278 +636,105 @@ export default function PhoneCapturePage() {
                             {covered}/{g.items.length}
                           </span>
                         </div>
-                        {g.items.map((s, i) => (
-                          <div
-                            key={s.key}
-                            style={{
-                              display: "flex",
-                              alignItems: "center",
-                              gap: 10,
-                              padding: "11px 14px",
-                              borderTop: i > 0 ? `1px dashed ${palette.line}` : "none",
-                            }}
-                          >
-                            {s.photoCount > 0 ? (
-                              <Check style={{ width: 18, height: 18, color: palette.green, flexShrink: 0 }} />
-                            ) : (
-                              <span style={{ width: 16, height: 16, borderRadius: 999, border: `2px solid ${palette.line}`, flexShrink: 0 }} />
-                            )}
-                            <div style={{ minWidth: 0, flex: 1 }}>
-                              <div style={{ fontSize: 15, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                {s.label}
+                        {g.items.map((s, i) => {
+                          const t = taskFor(s.key);
+                          const busy = isBusy(t);
+                          return (
+                            <div
+                              key={s.key}
+                              style={{
+                                display: "flex",
+                                alignItems: "center",
+                                gap: 10,
+                                padding: "11px 14px",
+                                borderTop: i > 0 ? `1px dashed ${palette.line}` : "none",
+                                background: t?.status === "failed" ? palette.errBg : undefined,
+                              }}
+                            >
+                              {t ? (
+                                <Thumb url={t.thumbUrl} size={34} />
+                              ) : s.photoCount > 0 ? (
+                                <Check style={{ width: 18, height: 18, color: palette.green, flexShrink: 0 }} />
+                              ) : (
+                                <span style={{ width: 16, height: 16, borderRadius: 999, border: `2px solid ${palette.line}`, flexShrink: 0 }} />
+                              )}
+                              <div style={{ minWidth: 0, flex: 1 }}>
+                                <div style={{ fontSize: 15, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                  {s.label}
+                                </div>
+                                <div style={{ fontSize: 12 }}>
+                                  {t ? (
+                                    <TaskStatus task={t} docName={null} compact />
+                                  ) : (
+                                    <span style={{ color: palette.ink3 }}>{s.photoCount > 0 ? "ID on file" : "No ID yet"}</span>
+                                  )}
+                                  {laterText(s) ? <span style={{ color: palette.ink3 }}> · {laterText(s)}</span> : null}
+                                </div>
                               </div>
-                              <div style={{ fontSize: 12, color: palette.ink3 }}>
-                                {s.photoCount > 0 ? "ID on file" : "No ID yet"}
-                                {laterText(s) ? ` · ${laterText(s)}` : ""}
-                              </div>
+                              {t?.status === "failed" && (
+                                <button
+                                  type="button"
+                                  style={{ ...btnPrimary, width: "auto", padding: "10px 12px", fontSize: 14, borderRadius: 12 }}
+                                  onClick={() => void send(t)}
+                                >
+                                  <RefreshCcw style={{ width: 15, height: 15 }} />
+                                  Retry
+                                </button>
+                              )}
+                              {/* One ID per guest — capturing again REPLACES the one on file. Not while
+                                  the last one is still on its way: the two would reach the desk out of order. */}
+                              <button
+                                type="button"
+                                disabled={busy}
+                                aria-label={`${hasId(s) || t ? "Retake" : "Photograph"} ${s.label}`}
+                                title={hasId(s) || t ? `Retake ${s.label}'s ID` : `Photograph ${s.label}'s ID`}
+                                style={{
+                                  ...(t?.status === "failed" ? btnBase : btnPrimary),
+                                  width: "auto",
+                                  padding: t?.status === "failed" ? "10px 12px" : "10px 14px",
+                                  fontSize: 14,
+                                  borderRadius: 12,
+                                  opacity: busy ? 0.5 : 1,
+                                }}
+                                onClick={() => openPicker(cameraRef.current, s)}
+                              >
+                                <Camera style={{ width: 17, height: 17 }} />
+                                {t?.status === "failed" ? null : hasId(s) || t ? "Retake" : "Photo"}
+                              </button>
+                              <button
+                                type="button"
+                                disabled={busy}
+                                style={{ ...btnBase, width: "auto", padding: "10px 12px", borderRadius: 12, opacity: busy ? 0.5 : 1 }}
+                                title={hasId(s) ? `Upload a saved image for ${s.label} — replaces the current ID` : `Upload a saved image for ${s.label}`}
+                                onClick={() => openPicker(galleryRef.current, s)}
+                              >
+                                <ImagePlus style={{ width: 17, height: 17 }} />
+                              </button>
                             </div>
-                            {/* One ID per guest — capturing again REPLACES the one on file. */}
-                            <button
-                              type="button"
-                              style={{ ...btnPrimary, width: "auto", padding: "10px 14px", fontSize: 14, borderRadius: 12 }}
-                              onClick={() => openPicker(cameraRef.current, s)}
-                            >
-                              <Camera style={{ width: 17, height: 17 }} />
-                              {s.photoCount > 0 ? "Retake" : "Photo"}
-                            </button>
-                            <button
-                              type="button"
-                              style={{ ...btnBase, width: "auto", padding: "10px 12px", borderRadius: 12 }}
-                              title={
-                                s.photoCount > 0
-                                  ? `Upload a saved image for ${s.label} — replaces the current ID`
-                                  : `Upload a saved image for ${s.label}`
-                              }
-                              onClick={() => openPicker(galleryRef.current, s)}
-                            >
-                              <ImagePlus style={{ width: 17, height: 17 }} />
-                            </button>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     );
                   })}
                 </div>
-                {rosterCovered === roster!.length && (
+                {rosterCovered === roster!.length && !anyBusy && (
                   <p style={{ fontSize: 13.5, color: palette.ink3, textAlign: "center", margin: "4px 0 0", lineHeight: 1.5 }}>
-                    Everyone&rsquo;s covered — you can close this page. Everything sent is already showing at the desk.
+                    Everyone&rsquo;s covered — you can close this page. Everything sent is already at the desk.
                   </p>
                 )}
               </>
             )}
 
-            {phase === "ready" && !allMode && (
-              <>
-                <button type="button" style={btnPrimary} onClick={() => openPicker(cameraRef.current, null)}>
-                  <Camera style={{ width: 20, height: 20 }} />
-                  {sentCount > 0 || storedBefore > 0 ? "Retake the ID photo" : "Take photo of the ID"}
-                </button>
-                <button type="button" style={btnBase} onClick={() => openPicker(galleryRef.current, null)}>
-                  <ImagePlus style={{ width: 18, height: 18 }} />
-                  Choose from gallery
-                </button>
-                {sentCount > 0 && (
-                  <p style={{ fontSize: 13.5, color: palette.ink3, textAlign: "center", margin: "4px 0 0", lineHeight: 1.5 }}>
-                    Done? You can close this page — everything sent is already showing at the desk.
-                  </p>
-                )}
-              </>
-            )}
-
-            {(phase === "preview" || phase === "uploading") && (
-              <>
-                {allMode && (
-                  <div style={{ fontSize: 14.5, fontWeight: 700, textAlign: "center" }}>
-                    For: {guestLabel}
-                    {roomText(activeSlot?.room) ? (
-                      <span style={{ fontWeight: 500, color: palette.ink3 }}> · {roomText(activeSlot?.room)}</span>
-                    ) : null}
-                  </div>
-                )}
-                {previewUrl && pendingFile?.type.startsWith("image/") ? (
-                  <div style={{ borderRadius: 16, overflow: "hidden", border: `1px solid ${palette.line}`, background: "#000" }}>
-                    {/* eslint-disable-next-line @next/next/no-img-element -- local object-URL preview */}
-                    <img src={previewUrl} alt="ID preview" decoding="async" style={{ width: "100%", maxHeight: "48dvh", objectFit: "contain", display: "block" }} />
-                  </div>
-                ) : (
-                  <div style={{ background: palette.cream, border: `1px solid ${palette.line}`, borderRadius: 16, padding: 20, fontSize: 14.5, color: palette.ink3 }}>
-                    {pendingFile?.name ?? "File selected"}
-                  </div>
-                )}
-                <p style={{ fontSize: 14, color: palette.ink3, textAlign: "center", margin: 0, lineHeight: 1.45 }}>
-                  Readable and glare-free? Every detail on the document should be legible.
-                </p>
-
-                {/* The document type, always in view (2026-10-23, operator): picked here it guides the
-                    reading and travels with the photo; a type the reading finds fills it in. */}
-                <label style={{ display: "flex", alignItems: "center", gap: 10, background: palette.card, border: `1px solid ${palette.line}`, borderRadius: 12, padding: "8px 12px" }}>
-                  <span style={{ fontSize: 13, fontWeight: 700, whiteSpace: "nowrap" }}>Document</span>
-                  <select
-                    aria-label="Document type"
-                    value={fields.documentType ?? ""}
-                    disabled={phase === "uploading"}
-                    onChange={(e) => {
-                      const v = e.target.value || undefined;
-                      typePicked.current = !!v;
-                      typeRef.current = v;
-                      setFields((f) => ({ ...f, documentType: v }));
-                    }}
-                    style={{ ...inputStyle, padding: "8px 10px", fontSize: 14.5 }}
-                  >
-                    <option value="">— pick the type —</option>
-                    {(ctx.documentTypes ?? []).map((d) => (
-                      <option key={d.code} value={d.code}>
-                        {d.name}
-                      </option>
-                    ))}
-                  </select>
-                  {parsed?.fieldConfidence?.documentType === "VERIFIED" && !typePicked.current ? (
-                    <span style={{ color: palette.green, fontWeight: 700, fontSize: 12, whiteSpace: "nowrap" }}>✓ read</span>
-                  ) : null}
-                </label>
-
-                {/* Detected details (2026-08-18): read on this phone, interpreted by the server,
-                    confirmed here — sent with the photo as a suggestion the desk applies. */}
-                <div style={{ background: palette.card, border: `1px solid ${palette.line}`, borderRadius: 16, padding: "12px 14px", display: "flex", flexDirection: "column", gap: 10 }}>
-                  {(() => {
-                    const readBusy =
-                      readStage === "decoding" || readStage === "qr" || readStage === "mrz" || readStage === "parsing" || readStage === "server";
-                    const qrUnrecognised = !parsed?.engine && parsed?.raw?.source === "QR_UNRECOGNISED";
-                    return (
-                      <>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 700 }}>
-                          {readBusy ? <Spin /> : <ScanLine style={{ width: 17, height: 17, color: palette.green }} />}
-                          {readBusy
-                            ? "Analysing the document…"
-                            : parsed?.engine
-                              ? parsed.engine === "PHONE_QR" || parsed.engine === "SERVER_QR"
-                                ? "Read from the card's QR code"
-                                : parsed.engine === "SERVER_LAYOUT"
-                                  ? "Read from the document's printed text"
-                                  : "Read from the passport strip"
-                              : qrUnrecognised && !serverTried
-                                ? "QR code found — no guest details inside it"
-                                : readStage === "failed"
-                                  ? "Couldn't read this on the phone"
-                                  : "Couldn't read this document automatically"}
-                          {readBusy && (
-                            <span style={{ marginLeft: "auto", fontSize: 12, color: palette.ink3, fontWeight: 500 }}>
-                              {readStage === "server"
-                                ? "reading the printed text — takes a moment"
-                                : readStage === "mrz"
-                                  ? "reading the passport strip"
-                                  : readStage === "parsing"
-                                    ? "checking what was read"
-                                    : "looking for a QR code"}
-                            </span>
-                          )}
-                        </div>
-                        {(readStage === "done" || readStage === "failed") && !parsed?.engine && (
-                          <div style={{ fontSize: 13, color: palette.ink3, lineHeight: 1.45 }}>
-                            {serverTried
-                              ? "The QR, passport strip and printed text were all tried. Type the details below so the desk doesn't have to — the photo still goes to the desk either way."
-                              : qrUnrecognised
-                                ? "The QR code was read, but it doesn't carry the guest's details in a form the system knows. Type the details below — or just send the photo: the desk's reader also studies the printed text."
-                                : "No QR code or passport strip could be read in this photo. If the ID has a QR code, retake with it sharp and flat. You can type the details below — or just send the photo: the desk's reader studies the printed text too."}
-                          </div>
-                        )}
-                      </>
-                    );
-                  })()}
-                  {(readStage === "done" || readStage === "failed" || parsed) && (
-                    <>
-                      <button
-                        type="button"
-                        onClick={() => setDetailsOpen((o) => !o)}
-                        style={{ ...btnBase, padding: "10px 12px", fontSize: 14, justifyContent: "space-between" }}
-                      >
-                        <span>{detailsOpen ? "Hide details" : parsed?.engine ? "Check the details" : "Type the details"}</span>
-                        <span style={{ fontSize: 12.5, color: palette.ink3, fontWeight: 500 }}>
-                          {Object.entries(fields).filter(([k, v]) => k !== "documentType" && v && String(v).trim()).length} filled
-                        </span>
-                      </button>
-                      {detailsOpen && (
-                        <div style={{ display: "grid", gap: 8 }}>
-                          {parsed?.fields.documentNumberLast4 && !fields.documentNumber && (
-                            <div style={{ fontSize: 12.5, color: palette.ink3, background: palette.cream, borderRadius: 10, padding: "8px 10px" }}>
-                              The card&rsquo;s QR carries only the last four digits (…{parsed.fields.documentNumberLast4}) — type the
-                              full number from the card if you can.
-                            </div>
-                          )}
-                          <FieldRow label="Number" verified={parsed?.fieldConfidence?.documentNumber === "VERIFIED" && fields.documentNumber === parsed?.fields.documentNumber}>
-                            <input
-                              value={fields.documentNumber ?? ""}
-                              onChange={(e) => setFields((f) => ({ ...f, documentNumber: e.target.value }))}
-                              placeholder="As printed on the document"
-                              autoCapitalize="characters"
-                              style={inputStyle}
-                            />
-                          </FieldRow>
-                          <FieldRow label="Name" verified={parsed?.fieldConfidence?.fullName === "VERIFIED" && fields.fullName === parsed?.fields.fullName}>
-                            <input value={fields.fullName ?? ""} onChange={(e) => setFields((f) => ({ ...f, fullName: e.target.value }))} placeholder="Full name" style={inputStyle} />
-                          </FieldRow>
-                          <FieldRow label="Date of birth" verified={parsed?.fieldConfidence?.dateOfBirth === "VERIFIED" && fields.dateOfBirth === parsed?.fields.dateOfBirth}>
-                            <input type="date" value={fields.dateOfBirth ?? ""} onChange={(e) => setFields((f) => ({ ...f, dateOfBirth: e.target.value }))} style={inputStyle} />
-                          </FieldRow>
-                          <FieldRow label="Gender" verified={parsed?.fieldConfidence?.gender === "VERIFIED" && fields.gender === parsed?.fields.gender}>
-                            <select value={fields.gender ?? ""} onChange={(e) => setFields((f) => ({ ...f, gender: e.target.value || undefined }))} style={inputStyle}>
-                              <option value="">—</option>
-                              <option value="M">Male</option>
-                              <option value="F">Female</option>
-                              <option value="X">Other</option>
-                            </select>
-                          </FieldRow>
-                          <div style={{ fontSize: 12, color: palette.ink3, lineHeight: 1.45 }}>
-                            <span style={{ color: palette.green, fontWeight: 700 }}>✓</span> = proven by the document itself (passport
-                            check digit). Everything here goes to the desk as a suggestion the receptionist confirms.
-                          </div>
-                        </div>
-                      )}
-                    </>
-                  )}
-                </div>
-                {error && (
-                  <div style={{ background: palette.errBg, border: `1px solid ${palette.errLine}`, borderRadius: 12, padding: "10px 14px", fontSize: 13.5 }}>
-                    {error}
-                  </div>
-                )}
-                <button type="button" style={{ ...btnPrimary, opacity: phase === "uploading" ? 0.7 : 1 }} disabled={phase === "uploading"} onClick={() => void upload()}>
-                  <Upload style={{ width: 18, height: 18 }} />
-                  {phase === "uploading"
-                    ? "Sending…"
-                    : readStage === "decoding" || readStage === "qr" || readStage === "mrz" || readStage === "parsing" || readStage === "server"
-                      ? "Send now — the desk finishes reading it"
-                      : "Use this photo — send to the desk"}
-                </button>
-                {(readStage === "decoding" || readStage === "qr" || readStage === "mrz" || readStage === "parsing" || readStage === "server") && phase !== "uploading" ? (
-                  <p style={{ fontSize: 12.5, color: palette.ink3, textAlign: "center", margin: "-4px 0 0", lineHeight: 1.45 }}>
-                    No need to wait — send it and photograph the next guest; the details appear on the desk when they are read.
-                  </p>
-                ) : null}
-                <button type="button" style={btnBase} disabled={phase === "uploading"} onClick={() => openPicker(cameraRef.current, activeSlot)}>
-                  <RefreshCcw style={{ width: 17, height: 17 }} />
-                  Retake
-                </button>
-                {allMode && (
-                  <button
-                    type="button"
-                    style={{ ...btnBase, padding: "12px 16px", fontSize: 14.5 }}
-                    disabled={phase === "uploading"}
-                    onClick={() => {
-                      setPendingFile(null);
-                      setPhase("ready");
-                    }}
-                  >
-                    Back to the guest list
-                  </button>
-                )}
-              </>
+            {!allMode && singleTask?.status === "sent" && (
+              <p style={{ fontSize: 13.5, color: palette.ink3, textAlign: "center", margin: "4px 0 0", lineHeight: 1.5 }}>
+                Done? You can close this page — the photo is already at the desk.
+              </p>
             )}
 
             {/* The rooms drawer (2026-10-23, operator: "a side tab which can collapse and open, and it
                 contains the rooms"): a tab on the right edge opens the list of rooms with how many
                 IDs each has; a tap jumps to that room. Only for a party in more than one room. */}
-            {phase === "ready" && allMode && roomGroups.length > 1 && (
+            {allMode && roomGroups.length > 1 && (
               <>
                 <button
                   type="button"
@@ -984,7 +801,7 @@ export default function PhoneCapturePage() {
                         {rosterCovered} of {roster!.length} guests · {roomsDone} of {roomGroups.length} rooms done
                       </div>
                       {roomGroups.map((g) => {
-                        const covered = g.items.filter((s) => s.photoCount > 0).length;
+                        const covered = g.items.filter(hasId).length;
                         const done = covered === g.items.length;
                         return (
                           <button

@@ -39,10 +39,10 @@ function nextPaint(): Promise<void> {
   });
 }
 
-async function decodeToCanvas(file: Blob): Promise<HTMLCanvasElement | null> {
+async function decodeToCanvas(file: Blob, longEdge = MAX_LONG_EDGE): Promise<HTMLCanvasElement | null> {
   try {
     const bitmap = await createImageBitmap(file);
-    const scale = Math.min(1, MAX_LONG_EDGE / Math.max(bitmap.width, bitmap.height));
+    const scale = Math.min(1, longEdge / Math.max(bitmap.width, bitmap.height));
     const canvas = document.createElement("canvas");
     canvas.width = Math.round(bitmap.width * scale);
     canvas.height = Math.round(bitmap.height * scale);
@@ -155,6 +155,23 @@ async function getTesseract() {
     });
   }
   return tesseractWorker;
+}
+
+/** The long edge of a photo as it is sent (2026-10-23). */
+const UPLOAD_LONG_EDGE = 2000;
+
+/**
+ * The photo as it is sent (2026-10-23, operator: "just send the compressed photo and let the
+ * website analyse it"): turned upright and shrunk to 2000 px on its long edge as a JPEG. A camera
+ * original is 3–8 MB; this is well under 1 MB and reads the same at the desk. A file that is not an
+ * image (a PDF from the gallery), or one the browser cannot decode, goes as it is.
+ */
+export async function shrinkForUpload(file: File): Promise<{ blob: Blob; fileName: string }> {
+  if (!file.type.startsWith("image/")) return { blob: file, fileName: file.name };
+  const canvas = await decodeToCanvas(file, UPLOAD_LONG_EDGE);
+  const blob = canvas ? await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.9)) : null;
+  if (!blob) return { blob: file, fileName: file.name };
+  return { blob, fileName: (file.name || "id-photo").replace(/\.[^.]+$/, "") + ".jpg" };
 }
 
 /** Warm the OCR worker while the person is still framing the shot. */

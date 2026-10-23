@@ -356,6 +356,13 @@ function SuggestionStrip({
       <span style={{ display: "inline-flex", gap: 10, flexWrap: "wrap" }}>
         {parts.length ? parts.map((p, i) => <span key={i}>{p}</span>) : <span style={{ color: "var(--ink-3)" }}>nothing usable</span>}
       </span>
+      {/* A date of birth that does not fit this guest's row is said before Apply (2026-10-23). */}
+      {suggestion.ageCheck && !suggestion.ageCheck.ok && suggestion.ageCheck.message && (
+        <div role="alert" className="rct-refusal" style={{ flexBasis: "100%", margin: "2px 0 0", fontSize: 12.5 }}>
+          <span className="ic">!</span>
+          <span>{suggestion.ageCheck.message}</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -1152,6 +1159,26 @@ export function IdentityProofBlock({
                     </td>
                   </tr>
                 ) : null;
+              // A date of birth that does not fit the row (2026-10-23, operator: "so the user doesn't
+              // put a child in an adult's row") — the server's check of the SAVED date, shown while the
+              // field still holds it; a warning, the date stays saved.
+              const savedDetail = detailRow(slot.key);
+              const ageWarn =
+                savedDetail?.ageCheck && !savedDetail.ageCheck.ok && draft.dob === (savedDetail.dateOfBirth?.slice(0, 10) ?? "")
+                  ? savedDetail.ageCheck.message
+                  : null;
+              const ageRow = ageWarn ? (
+                <tr key={`${slot.key}-age`}>
+                  <td colSpan={7} style={{ padding: "0 6px 6px" }}>
+                    <div role="alert" className="rct-refusal" style={{ margin: 0, fontSize: 12.5 }}>
+                      <span className="ic">!</span>
+                      <span>
+                        {slot.label}: {ageWarn}
+                      </span>
+                    </div>
+                  </td>
+                </tr>
+              ) : null;
               // A typed name replaces the generic "Adult 2" label live (the age stays as a
               // muted suffix on child rows so the band is never hidden by a name).
               const typedName = draft.name.trim();
@@ -1228,7 +1255,9 @@ export function IdentityProofBlock({
                   <td style={{ ...td, minWidth: 128 }}>
                     <input
                       className="dinput"
-                      style={cell}
+                      style={ageWarn ? { ...cell, borderColor: "var(--stop)", boxShadow: "0 0 0 1px var(--stop)" } : cell}
+                      aria-invalid={ageWarn ? true : undefined}
+                      title={ageWarn ?? undefined}
                       type="date"
                       disabled={locked}
                       value={draft.dob}
@@ -1301,6 +1330,7 @@ export function IdentityProofBlock({
                 </tr>
               );
               const rowsForSlot: React.ReactNode[] = [row];
+              if (ageRow) rowsForSlot.push(ageRow);
               if (suggestionRow) rowsForSlot.push(suggestionRow);
               return rowsForSlot;
               });
