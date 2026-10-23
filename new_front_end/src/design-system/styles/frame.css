@@ -1027,7 +1027,10 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 
 /* Notifications (2026-10-23) — the bell's full page: what needs a person by kind of work, and the
    alerts the system sent by day. Page: notifications/page.tsx under the (ds) routes. */
-.ds .ntf-all { display: flex; justify-content: center; width: 100%; margin-top: var(--s3); }
+/* The bell panel: its heading and See all notifications on one row, the button at the right. */
+.ds .ntf-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s3); }
+.ds .ntf-head h4 { margin: 0; }
+.ds .ntf-head .btn { flex-shrink: 0; }
 .ds .ntf-group { scroll-margin-top: 72px; }
 .ds .ntf-jump { margin-left: auto; }
 .ds .ntf-jump a { color: var(--ink-2); text-decoration: none; font-weight: 500; }
