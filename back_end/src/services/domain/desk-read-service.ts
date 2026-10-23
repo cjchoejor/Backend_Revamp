@@ -348,3 +348,83 @@ export async function listDeskActivity(
   const names = new Map(staff.map((s) => [s.id, s.fullName]));
   return rows.map((r) => ({ ...r, actorName: names.get(r.actorId) ?? null }));
 }
+
+/* ---------- the alerts the system sent ---------- */
+
+export const DESK_ALERTS_MAX = 400;
+
+/** What a sent alert was about (2026-10-23) — one word per writer in notification-service / W14. */
+export type DeskAlertKind = "STAGE_DWELL" | "EXPIRED" | "PAYMENT_REMINDER" | "VIP_ARRIVAL" | "OTHER";
+/** Who an alert was routed to — the tiers `notification.routing.*` names. */
+export type DeskAlertTarget = "OPERATOR" | "FOM" | "GM";
+
+const ALERT_KIND: Record<string, DeskAlertKind> = {
+  "NOTIFICATION.STAGE_DWELL_DISPATCHED": "STAGE_DWELL",
+  "NOTIFICATION.OPERATOR_EXPIRY_DISPATCHED": "EXPIRED",
+  "NOTIFICATION.INTERIM_PAYMENT_REMINDER_DISPATCHED": "PAYMENT_REMINDER",
+  "NOTIFICATION.VIP_ARRIVAL_W14_PROCESSED": "VIP_ARRIVAL",
+};
+const TARGETS = new Set<DeskAlertTarget>(["OPERATOR", "FOM", "GM"]);
+
+const str = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v : null);
+const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : typeof v === "string" && v.trim() && Number.isFinite(Number(v)) ? Number(v) : null);
+
+/**
+ * The alerts the system sent — the `NOTIFICATION.*` traces — newest first, each read into one
+ * shape the desk can word: what it was about, who it was routed to, how severe, and the booking
+ * it concerns as that booking stands NOW (so the desk can say whether it has moved on). Read-only;
+ * the trace is the record and nothing here changes it.
+ */
+export async function listDeskAlerts(prisma: Db, q: { from: Date; to: Date; limit?: number }) {
+  const limit = Math.min(Math.max(Math.trunc(q.limit ?? DESK_ALERTS_MAX), 1), DESK_ALERTS_MAX);
+  const rows = await prisma.traceEvent.findMany({
+    where: { eventType: { startsWith: "NOTIFICATION." }, timestamp: { gte: q.from, lt: q.to } },
+    orderBy: { timestamp: "desc" },
+    take: limit,
+    select: { id: true, eventType: true, entityType: true, entityId: true, entryId: true, stageContext: true, payload: true, timestamp: true },
+  });
+  const entryIdOf = (r: (typeof rows)[number]) => {
+    const p = (r.payload ?? {}) as Record<string, unknown>;
+    return r.entryId ?? str(p.entryId) ?? (r.entityType === "Entry" ? r.entityId : null);
+  };
+  const ids = [...new Set(rows.map(entryIdOf).filter((x): x is string => !!x))];
+  const entries = ids.length
+    ? await prisma.entry.findMany({
+        where: { id: { in: ids } },
+        select: {
+          id: true,
+          currentStage: true,
+          status: true,
+          closedAs: true,
+          checkInDate: true,
+          checkOutDate: true,
+          guestProfile: { select: { firstName: true, lastName: true } },
+          inquiry: { select: { callerTitle: true, callerFirstName: true, callerLastName: true, callerPhone: true, callerEmail: true } },
+        },
+      })
+    : [];
+  const byId = new Map(entries.map((e) => [e.id, e]));
+  return rows.map((r) => {
+    const p = (r.payload ?? {}) as Record<string, unknown>;
+    const entryId = entryIdOf(r);
+    const targets = (Array.isArray(p.targets) ? p.targets : []).filter((t): t is DeskAlertTarget => typeof t === "string" && TARGETS.has(t as DeskAlertTarget));
+    const severity = str(p.severity);
+    return {
+      id: r.id,
+      at: r.timestamp,
+      kind: ALERT_KIND[r.eventType] ?? ("OTHER" as DeskAlertKind),
+      eventType: r.eventType,
+      entryId,
+      stage: str(p.stage) ?? r.stageContext ?? null,
+      severity: severity === "WARNING" || severity === "CRITICAL" || severity === "ESCALATION" ? severity : null,
+      targets,
+      secondsInStage: num(p.secondsInStage),
+      reason: str(p.reason),
+      payment:
+        r.eventType === "NOTIFICATION.INTERIM_PAYMENT_REMINDER_DISPATCHED"
+          ? { kind: str(p.kind), remaining: num(p.remaining), remindersSent: num(p.remindersSent), dueBy: str(p.dueBy), billed: p.billed === true }
+          : null,
+      booking: entryId ? (byId.get(entryId) ?? null) : null,
+    };
+  });
+}

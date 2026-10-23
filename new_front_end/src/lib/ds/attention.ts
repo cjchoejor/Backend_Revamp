@@ -11,6 +11,16 @@ import { stepNoOfStage, type StepNo } from "./steps";
 
 export type Band = "overdue" | "soon" | "waiting";
 
+/** What kind of work an item is (2026-10-23) — how the notifications page groups it. */
+export type WorkKind = "money" | "arrivals" | "departures" | "holds" | "followups";
+export const WORK_KINDS: ReadonlyArray<{ id: WorkKind; title: string }> = [
+  { id: "money", title: "Money" },
+  { id: "arrivals", title: "Arrivals" },
+  { id: "departures", title: "Departures and closing" },
+  { id: "holds", title: "Quotes, holds and papers" },
+  { id: "followups", title: "Follow-ups" },
+];
+
 export type AttentionItem = {
   key: string;
   entryId: string;
@@ -21,6 +31,7 @@ export type AttentionItem = {
   step: StepNo;
   need: string;
   band: Band;
+  work: WorkKind;
   /** What runs out, and when (instant ms) — shown as a countdown / "overdue". */
   deadline?: { label: string; at: number };
   /** How long it has waited (instant ms). */
@@ -74,7 +85,7 @@ export function attentionItems(rows: DeskListRow[], now: number, hotelToday: str
     if (r.status === "PARKED") {
       if (r.parkFollowUpAt && new Date(r.parkFollowUpAt).getTime() <= now) {
         const days = r.parkedAt ? Math.floor((now - new Date(r.parkedAt).getTime()) / DAY) : null;
-        push(r, { need: `Follow up · parked${days != null ? ` ${days} day${days === 1 ? "" : "s"}` : ""}`, band: "soon", since: r.parkedAt ? new Date(r.parkedAt).getTime() : undefined });
+        push(r, { need: `Follow up · parked${days != null ? ` ${days} day${days === 1 ? "" : "s"}` : ""}`, band: "soon", work: "followups", since: r.parkedAt ? new Date(r.parkedAt).getTime() : undefined });
       }
       continue;
     }
@@ -85,53 +96,53 @@ export function attentionItems(rows: DeskListRow[], now: number, hotelToday: str
       if (!ip.dueBy) continue;
       const at = new Date(ip.dueBy).getTime();
       const what = ip.kind === "EXTENSION" ? "Extension payment" : "Mid-stay payment";
-      if (at <= now) push(r, { need: `${what} overdue`, band: "overdue", deadline: { label: "Due", at } });
-      else if (at - now < DAY) push(r, { need: `${what} due`, band: "soon", deadline: { label: "Due", at } });
+      if (at <= now) push(r, { need: `${what} overdue`, band: "overdue", work: "money", deadline: { label: "Due", at } });
+      else if (at - now < DAY) push(r, { need: `${what} due`, band: "soon", work: "money", deadline: { label: "Due", at } });
     }
 
     // An arrival date that has passed before check-in
     if (ci && ci < hotelToday && step >= 3 && step <= 6) {
-      push(r, { need: "Arrival date passed — check in, or record what happened", band: "overdue", deadline: { label: "Arrival was", at: ymdStart(ci) } });
+      push(r, { need: "Arrival date passed — check in, or record what happened", band: "overdue", work: "arrivals", deadline: { label: "Arrival was", at: ymdStart(ci) } });
       continue;
     }
 
     // The advance still owed on a booking that arrives today or tomorrow
     if (r.reservationPaymentPending && ci && (ci === hotelToday || ci === tomorrow) && step >= 4 && step <= 5) {
-      push(r, { need: `Advance not in · arrives ${ci === hotelToday ? "today" : "tomorrow"}`, band: "overdue" });
+      push(r, { need: `Advance not in · arrives ${ci === hotelToday ? "today" : "tomorrow"}`, band: "overdue", work: "money" });
     }
 
     if (step === 2) {
       const marker = r.speculativeHolds[0]?.expiresAt;
       const q = r.quotations[0];
       if (marker && new Date(marker).getTime() - now < DAY) {
-        push(r, { need: "Agent deciding", band: "soon", deadline: { label: "Marker ends", at: new Date(marker).getTime() } });
+        push(r, { need: "Agent deciding", band: "soon", work: "holds", deadline: { label: "Marker ends", at: new Date(marker).getTime() } });
       } else if (q?.state === "SENT" && q.validUntil && new Date(q.validUntil).getTime() - now < DAY) {
-        push(r, { need: "The quote is running out", band: "soon", deadline: { label: "Quote valid", at: new Date(q.validUntil).getTime() } });
+        push(r, { need: "The quote is running out", band: "soon", work: "holds", deadline: { label: "Quote valid", at: new Date(q.validUntil).getTime() } });
       } else if (ci && ci >= hotelToday && now - new Date(r.updatedAt).getTime() > 2 * DAY) {
-        push(r, { need: "No answer recorded", band: "waiting", since: new Date(r.updatedAt).getTime() });
+        push(r, { need: "No answer recorded", band: "waiting", work: "followups", since: new Date(r.updatedAt).getTime() });
       }
     } else if (step === 1) {
       if (ci && ci >= hotelToday && now - new Date(r.updatedAt).getTime() > 2 * DAY) {
-        push(r, { need: "No answer recorded", band: "waiting", since: new Date(r.updatedAt).getTime() });
+        push(r, { need: "No answer recorded", band: "waiting", work: "followups", since: new Date(r.updatedAt).getTime() });
       }
     } else if (step === 3) {
       const hold = r.committedHold;
       if (hold && (hold.state === "PLACED") && new Date(hold.expiresAt).getTime() - now < DAY) {
         const at = new Date(hold.expiresAt).getTime();
-        push(r, { need: at <= now ? "The block ran out" : "The block is running out", band: at <= now ? "overdue" : "soon", deadline: { label: "Block ends", at } });
+        push(r, { need: at <= now ? "The block ran out" : "The block is running out", band: at <= now ? "overdue" : "soon", work: "holds", deadline: { label: "Block ends", at } });
       } else if (!hold) {
-        push(r, { need: "Not yet blocked", band: "waiting", since: new Date(r.updatedAt).getTime() });
+        push(r, { need: "Not yet blocked", band: "waiting", work: "holds", since: new Date(r.updatedAt).getTime() });
       }
     } else if (step === 4) {
-      if (r.reservation && !r.voucherSent) push(r, { need: "Reserved · voucher not sent", band: "soon" });
+      if (r.reservation && !r.voucherSent) push(r, { need: "Reserved · voucher not sent", band: "soon", work: "holds" });
     } else if (step === 7) {
-      if (co && co < hotelToday) push(r, { need: "Check-out date passed", band: "overdue", deadline: { label: "Check-out was", at: ymdStart(co) } });
+      if (co && co < hotelToday) push(r, { need: "Check-out date passed", band: "overdue", work: "departures", deadline: { label: "Check-out was", at: ymdStart(co) } });
     } else if (step === 8) {
-      push(r, { need: "Settle the bill and close the stay", band: "soon", since: new Date(r.updatedAt).getTime() });
+      push(r, { need: "Settle the bill and close the stay", band: "soon", work: "departures", since: new Date(r.updatedAt).getTime() });
     } else if (step === 9) {
-      if (r.folio?.state === "OUTSTANDING") push(r, { need: "Money still owed after the stay", band: "waiting", since: new Date(r.updatedAt).getTime() });
+      if (r.folio?.state === "OUTSTANDING") push(r, { need: "Money still owed after the stay", band: "waiting", work: "money", since: new Date(r.updatedAt).getTime() });
       // A no-show waits at Closed for its seal (2026-09-18) — nothing else would bring it back.
-      else if (r.folio?.state === "NO_SHOW_CLOSED" && r.status === "ACTIVE") push(r, { need: "A no-show to seal", band: "waiting", since: new Date(r.updatedAt).getTime() });
+      else if (r.folio?.state === "NO_SHOW_CLOSED" && r.status === "ACTIVE") push(r, { need: "A no-show to seal", band: "waiting", work: "departures", since: new Date(r.updatedAt).getTime() });
     }
     void tz;
   }

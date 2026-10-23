@@ -12,10 +12,12 @@ import { ValidationError } from "../../lib/errors.js";
 import { hotelDayEndUtc } from "../../lib/stay-dates.js";
 import {
   DESK_ACTIVITY_MAX,
+  DESK_ALERTS_MAX,
   DESK_LIST_MAX,
   deskMoneyFor,
   deskTimersFor,
   listDeskActivity,
+  listDeskAlerts,
   listDeskBookings,
   listStaffNames,
 } from "../../services/domain/desk-read-service.js";
@@ -97,6 +99,29 @@ deskRouter.get("/activity", requireActorLevel("L2"), async (req, res, next) => {
     const from = new Date(to.getTime() - 86_400_000);
     const items = await listDeskActivity(prisma, { ...parsed.data, from, to });
     res.set("Cache-Control", "no-store").json({ items, count: items.length, from, to });
+  } catch (e) {
+    next(e);
+  }
+});
+
+const alertsQuery = z.object({
+  days: z.coerce.number().int().min(1).max(31).optional().default(7),
+  limit: z.coerce.number().int().min(1).max(DESK_ALERTS_MAX).optional(),
+});
+
+/**
+ * The alerts the system sent over the last `days` hotel days, today included (2026-10-23) — the
+ * notifications page's second tab. Front desk and up: these alerts are routed to the front desk as
+ * well as the FOM and GM, and each says who it was for.
+ */
+deskRouter.get("/alerts", L1, async (req, res, next) => {
+  try {
+    const parsed = alertsQuery.safeParse(req.query);
+    if (!parsed.success) throw new ValidationError("Invalid query parameters", parsed.error.flatten());
+    const to = hotelDayEndUtc(new Date());
+    const from = new Date(to.getTime() - parsed.data.days * 86_400_000);
+    const items = await listDeskAlerts(prisma, { from, to, limit: parsed.data.limit });
+    res.set("Cache-Control", "no-store").json({ items, count: items.length, from, to, limit: parsed.data.limit ?? DESK_ALERTS_MAX });
   } catch (e) {
     next(e);
   }

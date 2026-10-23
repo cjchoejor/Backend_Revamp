@@ -151,3 +151,40 @@ export async function listDeskActivity(session: Session, q: { date: string; acto
   if (q.limit) p.set("limit", String(q.limit));
   return apiRequest<{ items: DeskActivityRow[]; count: number; from: string; to: string }>(`/api/desk/activity?${p}`, { session });
 }
+
+/* ---------- the alerts the system sent (2026-10-23) ---------- */
+
+export type DeskAlertKind = "STAGE_DWELL" | "EXPIRED" | "PAYMENT_REMINDER" | "VIP_ARRIVAL" | "OTHER";
+export type DeskAlertTarget = "OPERATOR" | "FOM" | "GM";
+
+export type DeskAlert = {
+  id: string;
+  at: string;
+  kind: DeskAlertKind;
+  eventType: string;
+  entryId: string | null;
+  /** The step the booking was at when the alert was sent ("S6"). */
+  stage: string | null;
+  severity: "WARNING" | "CRITICAL" | "ESCALATION" | null;
+  /** Who it was routed to. */
+  targets: DeskAlertTarget[];
+  secondsInStage: number | null;
+  reason: string | null;
+  payment: { kind: string | null; remaining: number | null; remindersSent: number | null; dueBy: string | null; billed: boolean } | null;
+  /** The booking as it stands NOW. */
+  booking: {
+    id: string;
+    currentStage: string;
+    status: string;
+    closedAs: string | null;
+    checkInDate: string | null;
+    checkOutDate: string | null;
+    guestProfile: { firstName: string | null; lastName: string | null } | null;
+    inquiry: { callerTitle: string | null; callerFirstName: string | null; callerLastName: string | null; callerPhone: string | null; callerEmail: string | null } | null;
+  } | null;
+};
+
+/** The alerts sent over the last `days` hotel days, today included — newest first. */
+export async function listDeskAlerts(session: Session, q: { days: number }) {
+  return apiRequest<{ items: DeskAlert[]; count: number; from: string; to: string; limit: number }>(`/api/desk/alerts?days=${q.days}`, { session });
+}

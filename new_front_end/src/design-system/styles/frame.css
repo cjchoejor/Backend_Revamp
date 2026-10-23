@@ -1024,3 +1024,21 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 @media (prefers-reduced-motion: reduce) {
   .ds .ws-body:not(.desk-root *), .ds .side-ring .fill { transition: none; }
 }
+
+/* Notifications (2026-10-23) — the bell's full page: what needs a person by kind of work, and the
+   alerts the system sent by day. Page: notifications/page.tsx under the (ds) routes. */
+.ds .ntf-all { display: flex; justify-content: center; width: 100%; margin-top: var(--s3); }
+.ds .ntf-group { scroll-margin-top: 72px; }
+.ds .ntf-jump { margin-left: auto; }
+.ds .ntf-jump a { color: var(--ink-2); text-decoration: none; font-weight: 500; }
+.ds .ntf-jump a:hover { color: var(--ink); text-decoration: underline; }
+.ds .ntf-table td { vertical-align: top; }
+/* Every section keeps the same columns, so a page of groups reads as one table. */
+.ds .ntf-table { table-layout: fixed; width: 100%; }
+.ds .ntf-now th:nth-child(1) { width: 44%; } .ds .ntf-now th:nth-child(2) { width: 26%; } .ds .ntf-now th:nth-child(3) { width: 12%; } .ds .ntf-now th:nth-child(4) { width: 18%; }
+.ds .ntf-sent th:nth-child(1) { width: 9%; } .ds .ntf-sent th:nth-child(2) { width: 39%; } .ds .ntf-sent th:nth-child(3) { width: 15%; } .ds .ntf-sent th:nth-child(4) { width: 17%; } .ds .ntf-sent th:nth-child(5) { width: 20%; }
+.ds .ntf-table td { overflow-wrap: anywhere; }
+.ds .ntf-need { display: inline-flex; align-items: center; gap: var(--s2); flex-wrap: wrap; }
+.ds .ntf-sev { font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; color: var(--ink-2); }
+.ds .ntf-sev.s-escalation { color: var(--danger); }
+.ds .ntf-sev.s-critical { color: var(--warning); }
