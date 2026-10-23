@@ -35,7 +35,6 @@ import { IdentityProofBlock } from "@/components/desk/workspace/identity-proof";
 import type { EntryDetail } from "@/types/api";
 import {
   AnswerLine,
-  Choice,
   Fact,
   FactLine,
   Facts,
@@ -49,9 +48,10 @@ import {
   useRefreshEntry,
   useStepMode,
   words,
+  latestDispatched,
+  useCommunications,
   type FactState,
 } from "./kit";
-import { BILLING_CHOICES, billingWord } from "./s4-reserve";
 import { BookingOtherWays } from "./s4-other-ways";
 import { PreArrivalTasksCard } from "./s5-pre-arrival-tasks";
 import { AssignRoomsCard, roomReady } from "./s5-rooms";
@@ -145,10 +145,7 @@ export function S5Arrival({
           after them, where the list has it (2026-09-25). */}
       <FrontDeskHandoff entry={entry} facts={facts} />
       <GuestHereCard guestPresent={guestPresent} setGuestPresent={setGuestPresent} />
-      <StepCard title="Pre-arrival message · what they said" meta="Evidence only — check-in does not wait for it.">
-        <AnswerLine entryId={entry.id} type="PRE_ARRIVAL_REMINDER" sinceIso={since} what="the pre-arrival message" tz={clock.tz} />
-      </StepCard>
-      <BillingModelCard entry={entry} />
+      <PreArrivalAnswerCard entryId={entry.id} since={since} tz={clock.tz} />
       <BookingOtherWays entry={entry} parkNow={parkNow} parking={parking} guestPresent={guestPresent} />
     </StepCanvas>
   );
@@ -552,30 +549,22 @@ function AdvanceAndCredit({ entry, facts }: { entry: EntryDetail; facts: Facts_ 
   );
 }
 
-/* ------------------------------------------------------------------ billing model */
+/* ------------------------------------------------------------------ what they said */
 
-function BillingModelCard({ entry }: { entry: EntryDetail }) {
-  const clock = useHotelClock(60_000);
-  const model = entry.folio?.billingModel ?? entry.reservation?.frozenBillingModel ?? null;
-  const known = BILLING_CHOICES.some(([v]) => v === model);
-  const log = entry.folio?.billingModelTransitions ?? [];
+/**
+ * The guest's answer to the pre-arrival message — shown only once they have answered (2026-10-23,
+ * operator: "show the pre-arrival message section only if the guest has actually said something").
+ * Until then it is a paper waiting in Documents › Sent & answers, where the answer is recorded.
+ * The Billing model card that stood beside it went the same day: Charges & payments › The bill
+ * names who pays.
+ */
+function PreArrivalAnswerCard({ entryId, since, tz }: { entryId: string; since: string | null; tz: string }) {
+  const comms = useCommunications(entryId);
+  const sent = latestDispatched(comms.data?.items, "PRE_ARRIVAL_REMINDER", since);
+  if (sent?.acknowledgementStatus !== "RECEIVED") return null;
   return (
-    <StepCard
-      title="Billing model"
-      meta="Set at Set up and frozen by Reserve. From Arrival it changes only through a new pass, with the FOM — and once an invoice exists, through the amended-invoice path."
-    >
-      {known ? (
-        <Choice options={BILLING_CHOICES} value={model as (typeof BILLING_CHOICES)[number][0]} disabled />
-      ) : (
-        <div className="sm">{model ? billingWord(model) : <span className="dash">—</span>}</div>
-      )}
-      {log
-        .filter((l) => l.fromModel)
-        .map((l) => (
-          <div key={l.id} className="meta" style={{ marginTop: 6 }}>
-            changed from {billingWord(l.fromModel)} to {billingWord(l.toModel)} · {fmtStamp(l.createdAt, clock.tz)}
-          </div>
-        ))}
+    <StepCard title="Pre-arrival message · what they said" meta="Evidence only — check-in does not wait for it.">
+      <AnswerLine entryId={entryId} type="PRE_ARRIVAL_REMINDER" sinceIso={since} what="the pre-arrival message" tz={tz} />
     </StepCard>
   );
 }
