@@ -400,6 +400,16 @@ day 10–15 real cards are photographed at the desk (rule §2.3.3 below).
   would make W39 skip the photo. Opening the code warms Florence-2 (`warmLayoutOcr`), so the
   first read takes ~3 s instead of timing out cold. A whole-party code lasts 30 minutes, and
   the phone warns in red for the last two. Details in CLAUDE.md, "Phone capture, faster".
+- **Passports read from a phone photo; the reading shown as it runs** (2026-10-23, same evening,
+  operator: "the fields are not being detected"). Florence-2 had read the passport strip with its
+  check digits, but only the strict MRZ parser looked at strips. Now Florence's boxes locate the
+  strip, OCR-B reads that spot closely, and `passport-text.ts` finds line 2 wherever it sits by its
+  two check-digited dates (the number only with its own check digit), the names by matching the
+  page's printed words in line 1. Only the number, birth and expiry are VERIFIED — names, sex and
+  nationality have no check digit. The OCR-B model is the integer build (`ocrb_int`): the float
+  one aborts the relaxed-SIMD engine and, with no `errorHandler`, the process. Each reading records
+  its stage (QUEUED · QR · STRIP · TEXT) and the desk draws it over the Scan-again button. Details in
+  CLAUDE.md, "Passports read from a phone photo".
 
 ### 2.4 Cloud option — explicitly gated
 
@@ -414,7 +424,7 @@ in as an accuracy upgrade behind the same suggestions-only contract.
 - **HEIC**: the phone page decodes via `createImageBitmap` and uploads a JPEG; iPhones hand
   JPEG to a file input by default. A HEIC that reaches the server is stored (write-once) but
   sharp without libheif can't read it — the suggestion lands FAILED and the desk types.
-- **Model files are gitignored** (11 MB OCR-B + the WASM cores): run
+- **Model files are gitignored** (the 1.5 MB integer OCR-B model + the WASM cores): run
   `npx tsx scripts/fetch-ocrb-traineddata.ts` from `back_end/` once per machine (writes both
   `back_end/storage/tessdata/` and `new_front_end/public/tessdata/` — the server too); `npm install` in
   `new_front_end/` copies the tesseract worker/cores into `public/`.
