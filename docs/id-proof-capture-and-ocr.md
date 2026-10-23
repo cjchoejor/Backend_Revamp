@@ -100,7 +100,8 @@ photographs IDs with no staff login. Verified end-to-end (API + Puppeteer as a s
 
 **Token** ([identity-capture-token.ts](../back_end/src/lib/identity-capture-token.ts)):
 signed JWT, same `JWT_SECRET` as staff sessions but a `purpose: "IDENTITY_PROOF_UPLOAD"`
-discriminator means neither token kind can ever pass as the other. ~15 min TTL. Grants
+discriminator means neither token kind can ever pass as the other. 15 min for one guest,
+30 min for a whole-party code (since 2026-10-23); the phone shows the time left. Grants
 **upload-only, one entry**, attributed to the minting operator. Worst case for a leaked QR:
 a junk image lands on one booking, traced to the operator.
 
@@ -392,6 +393,14 @@ day 10–15 real cards are photographed at the desk (rule §2.3.3 below).
   fields exact) + CID/WP/voter regressions, and image-level through Florence-2 on a synthetic
   Form-5 (kind + DOB + gender right; name/number fidelity tracks OCR quality of the photo).
 
+- **Send now, the model warmed, the type picked, the code's clock** (2026-10-23, operator: the
+  capture "takes a very long time"). The send button no longer waits for the reading — the photo
+  goes and W39 reads it on the server. A type picked on the phone's new **Document** dropdown
+  rides on the upload as `documentType` (W39's kind hint), never as a phone extraction, which
+  would make W39 skip the photo. Opening the code warms Florence-2 (`warmLayoutOcr`), so the
+  first read takes ~3 s instead of timing out cold. A whole-party code lasts 30 minutes, and
+  the phone warns in red for the last two. Details in CLAUDE.md, "Phone capture, faster".
+
 ### 2.4 Cloud option — explicitly gated
 
 AWS Textract AnalyzeID / Azure Document Intelligence / Claude vision would all extract more
@@ -407,8 +416,8 @@ in as an accuracy upgrade behind the same suggestions-only contract.
   sharp without libheif can't read it — the suggestion lands FAILED and the desk types.
 - **Model files are gitignored** (11 MB OCR-B + the WASM cores): run
   `npx tsx scripts/fetch-ocrb-traineddata.ts` from `back_end/` once per machine (writes both
-  `back_end/storage/tessdata/` and `front_end/public/tessdata/`); `npm install` in
-  `front_end/` copies the tesseract worker/cores into `public/`.
+  `back_end/storage/tessdata/` and `new_front_end/public/tessdata/` — the server too); `npm install` in
+  `new_front_end/` copies the tesseract worker/cores into `public/`.
 - **Env**: `OCR_DISABLE`, `OCR_TESSDATA_DIR`, `OCR_MRZ_LANG` — see `.env.example`.
 - Aadhaar Secure QR signature verification (UIDAI certificate) is NOT performed — hence READ,
   not VERIFIED, on QR fields.
