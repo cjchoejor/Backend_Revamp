@@ -399,7 +399,16 @@ function RequirementDialog({
 }) {
   const { session } = useSession();
   const [mode, setMode] = useState<RequirementMode>(status?.requirementBasis?.mode === "AMOUNT" ? "AMOUNT" : "PERCENT");
-  const [value, setValue] = useState("");
+  // The box opens on the figure set for this booking, never on a grey example (2026-10-23: a
+  // placeholder "50" read as the value already there).
+  const pinned = status?.requirementSource === "OPERATOR" ? status.requirementBasis : null;
+  const [value, setValue] = useState(
+    pinned?.mode === "PERCENT" && pinned.percent != null
+      ? String(pinned.percent)
+      : pinned?.mode === "AMOUNT" && status?.requiredAmount != null
+        ? String(status.requiredAmount)
+        : "",
+  );
   const set = useMutation({
     mutationFn: (body: { mode: "AMOUNT"; amount: number } | { mode: "PERCENT"; percent: number } | { mode: "CLEAR" }) =>
       setAdvanceRequirement(session!, entry.id, body),
@@ -449,7 +458,14 @@ function RequirementDialog({
     >
       <div className="field">
         <label>Ask for</label>
-        <Choice options={REQUIREMENT_MODES} value={mode} onChange={setMode} />
+        <Choice
+          options={REQUIREMENT_MODES}
+          value={mode}
+          onChange={(m) => {
+            setMode(m);
+            setValue(""); // 20 percent is not Nu 20
+          }}
+        />
       </div>
       <div className="field">
         <label>
@@ -467,7 +483,6 @@ function RequirementDialog({
             className="input narrow"
             inputMode="decimal"
             value={value}
-            placeholder="50"
             onChange={(e) => /^\d*\.?\d{0,2}$/.test(e.target.value) && setValue(e.target.value)}
             autoFocus
           />
