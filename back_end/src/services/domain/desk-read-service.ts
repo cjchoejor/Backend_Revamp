@@ -124,9 +124,24 @@ export type DeskListRow = Prisma.EntryGetPayload<{ select: typeof listSelect }> 
 };
 
 /**
- * Every booking the desk may need to find, newest activity first. `status` / `stage` narrow it;
- * the screens search and filter by date in memory (SS02-P2 moves that here when the list grows
- * past what one read carries).
+ * Bookings still in play — live or parked, or ended with money still owed. The desk lists every
+ * one of them whatever their age (2026-10-24): the go-live brought the old system's finished stays
+ * across, ~2,500 of them, and the newest-500 window would have dropped the ones still owing off
+ * the Billing page, and in time the live bookings off Today.
+ */
+const IN_PLAY: Prisma.EntryWhereInput = {
+  OR: [{ status: { in: ["ACTIVE", "PARKED"] } }, { folio: { is: { state: "OUTSTANDING" } } }],
+};
+/** A ceiling on the in-play read, far above any real day — it only stops a runaway. */
+export const DESK_IN_PLAY_MAX = 3000;
+/** How much ended history rides along with them, newest first. Older stays are on the guest's page. */
+export const DESK_HISTORY_MAX = 200;
+
+/**
+ * Every booking the desk may need to find, newest activity first: everything still in play, plus
+ * the most recent ended bookings. `status` / `stage` / `guestProfileId` narrow it instead, newest
+ * first up to `limit`; the screens search and filter by date in memory (SS02-P2 moves that here
+ * when the list grows past what one read carries).
  */
 export async function listDeskBookings(
   prisma: Db,
@@ -136,13 +151,27 @@ export async function listDeskBookings(
   if (query.status) where.status = query.status;
   if (query.stage) where.currentStage = query.stage;
   if (query.guestProfileId) where.guestProfileId = query.guestProfileId;
+  const narrowed = !!(query.status || query.stage || query.guestProfileId);
 
-  const rows = await prisma.entry.findMany({
-    where,
-    orderBy: { updatedAt: "desc" },
-    take: Math.min(DESK_LIST_MAX, Math.max(1, query.limit)),
-    select: listSelect,
-  });
+  const rows = narrowed
+    ? await prisma.entry.findMany({
+        where,
+        orderBy: { updatedAt: "desc" },
+        take: Math.min(DESK_LIST_MAX, Math.max(1, query.limit)),
+        select: listSelect,
+      })
+    : await (async () => {
+        const [inPlay, history] = await Promise.all([
+          prisma.entry.findMany({ where: IN_PLAY, orderBy: { updatedAt: "desc" }, take: DESK_IN_PLAY_MAX, select: listSelect }),
+          prisma.entry.findMany({
+            where: { NOT: IN_PLAY },
+            orderBy: { updatedAt: "desc" },
+            take: Math.min(DESK_HISTORY_MAX, Math.max(1, query.limit)),
+            select: listSelect,
+          }),
+        ]);
+        return [...inPlay, ...history].sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+      })();
 
   // Names, not ids: the custodians and the park reasons, each in one query.
   const custodianIds = [...new Set(rows.map((r) => r.inquiry?.defaultCustodianId).filter((x): x is string => !!x))];
