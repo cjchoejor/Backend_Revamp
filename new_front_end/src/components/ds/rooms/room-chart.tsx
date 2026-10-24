@@ -46,8 +46,8 @@
  * (the server adds that leg). Each room is its own governed walk.
  */
 import { useQuery } from "@tanstack/react-query";
-import { useRouter } from "next/navigation";
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import { Button } from "@/design-system";
@@ -91,6 +91,22 @@ const BED_LETTER: Record<string, string> = { KING: "K", TWIN: "T", QUEEN: "Q", S
 const WEEKDAY = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MONTH = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const WINDOWS = [7, 14, 21, 28];
+/** The window's length when the address names none. */
+const DEFAULT_NIGHTS = 14;
+/** Where the desk was in the chart, kept for this browser tab (see `RoomChartView`). */
+const PLACE_KEY = "desk:chart-place";
+type ChartPlace = { key: string; left: number; top: number; pageY: number; full: boolean };
+
+function readPlace(key: string): ChartPlace | null {
+  try {
+    const v = JSON.parse(window.sessionStorage.getItem(PLACE_KEY) ?? "null") as Partial<ChartPlace> | null;
+    if (!v || v.key !== key) return null;
+    const n = (x: unknown) => (typeof x === "number" && Number.isFinite(x) && x > 0 ? x : 0);
+    return { key, left: n(v.left), top: n(v.top), pageY: n(v.pageY), full: v.full === true };
+  } catch {
+    return null;
+  }
+}
 /** The longest window the backend draws (`CHART_MAX_NIGHTS`). */
 const MAX_NIGHTS = 62;
 /** How far an inquiry started from a free night may run past the chart's own nights. */
@@ -667,8 +683,30 @@ function Floating({ children }: { children: ReactNode }) {
 export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string; roomNumber: string }) => void }) {
   const { session, isLoading } = useSession();
   const router = useRouter();
-  const [from, setFrom] = useState<string | undefined>(undefined);
-  const [nightsAsked, setNightsAsked] = useState(14);
+  // The window — its first night and its length — lives in the address (2026-10-24, operator: "when
+  // I go back it doesn't hold the last state of the screen on the charts"), so Back, a reload and the
+  // Room cards · Chart tabs all come back to the same nights. No `from` means today.
+  const params = useSearchParams();
+  const pathname = usePathname();
+  const askedFrom = params.get("from");
+  const from = askedFrom && isYmd(askedFrom) ? askedFrom : undefined;
+  const askedNights = Number(params.get("nights"));
+  const nightsAsked = Number.isInteger(askedNights) && askedNights >= 1 && askedNights <= MAX_NIGHTS ? askedNights : DEFAULT_NIGHTS;
+  const setWindow = (patch: { from?: string | null; nights?: number }) => {
+    const next = new URLSearchParams(window.location.search);
+    if (patch.from !== undefined) {
+      if (patch.from) next.set("from", patch.from);
+      else next.delete("from");
+    }
+    if (patch.nights !== undefined) {
+      if (patch.nights === DEFAULT_NIGHTS) next.delete("nights");
+      else next.set("nights", String(patch.nights));
+    }
+    const qs = next.toString();
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+  };
+  const setFrom = (v: string | undefined) => setWindow({ from: v ?? null });
+  const setNightsAsked = (n: number) => setWindow({ nights: n });
   const q = useQuery({
     queryKey: ["room-chart", from ?? "today", nightsAsked],
     queryFn: () => getRoomChart(session!, { from, nights: nightsAsked }),
@@ -953,6 +991,79 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
     }
     setLands(landingBoxes(drag, { wrap, chart, bookingOf, barsByRoom, rows }));
   }, [drag, chart, bookingOf, barsByRoom, rows]);
+
+  // Where the desk was — the chart's own scroll, the page's, and full screen — kept for this browser
+  // tab (2026-10-24), so a booking opened from the chart and left with Back comes back to the same
+  // rooms and nights. It belongs to its window: other nights start at the top.
+  const placeKey = `${from ?? "today"}|${nightsAsked}`;
+  const place = useRef({ left: 0, top: 0, pageY: 0 });
+  const placeKeyRef = useRef(placeKey);
+  placeKeyRef.current = placeKey;
+  const fullRef = useRef(full);
+  fullRef.current = full;
+  /** The place read back on arrival: undefined until read, null once applied or when there is none. */
+  const restoring = useRef<ChartPlace | null | undefined>(undefined);
+  const saveTimer = useRef<number | null>(null);
+  const savePlace = () => {
+    if (saveTimer.current) window.clearTimeout(saveTimer.current);
+    saveTimer.current = null;
+    if (restoring.current) return; // not yet back where it was — keep what was saved
+    try {
+      const v: ChartPlace = { key: placeKeyRef.current, full: fullRef.current, ...place.current };
+      window.sessionStorage.setItem(PLACE_KEY, JSON.stringify(v));
+    } catch {
+      /* storage unavailable — the chart starts at the top next time */
+    }
+  };
+  const notePlace = () => {
+    if (saveTimer.current) window.clearTimeout(saveTimer.current);
+    saveTimer.current = window.setTimeout(savePlace, 150);
+  };
+  const readPlaceOnce = () => {
+    if (restoring.current === undefined) restoring.current = readPlace(placeKeyRef.current);
+    return restoring.current;
+  };
+  // The place is put back the moment the chart's box is drawn — inline, or in the full-screen layer,
+  // which draws a beat later at the desk's root. Stable, so a re-render never re-applies it.
+  const attachWrap = useCallback((el: HTMLDivElement | null) => {
+    wrapRef.current = el;
+    if (!el) return;
+    const want = readPlaceOnce();
+    if (want) {
+      if (want.full !== fullRef.current) return; // full screen is switched on below; its box comes back here
+      el.scrollLeft = want.left;
+      el.scrollTop = want.top;
+      if (!fullRef.current) window.scrollTo(0, want.pageY);
+      place.current = { left: want.left, top: want.top, pageY: want.pageY };
+      restoring.current = null;
+      return;
+    }
+    // A box drawn afresh — full screen switched on or off — keeps the place it had.
+    el.scrollLeft = place.current.left;
+    el.scrollTop = place.current.top;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reads refs only
+  }, []);
+  useLayoutEffect(() => {
+    if (readPlaceOnce()?.full && !full) setFull(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once, on arrival
+  }, []);
+  useEffect(() => {
+    notePlace();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- a new window or full screen is a new place
+  }, [placeKey, full]);
+  useEffect(() => {
+    const onScroll = () => {
+      if (fullRef.current) return;
+      place.current.pageY = window.scrollY;
+      notePlace();
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      if (saveTimer.current) savePlace();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once; reads refs
+  }, []);
 
   if (q.error && !chart) return <LoadFailed what="the house chart" onRetry={() => void q.refetch()} />;
   if (!chart) return <LoadingBlock />;
@@ -1650,7 +1761,16 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
         <Legend byGuest={byGuest} />
       </div>
 
-      <div className="rchart-wrap" ref={wrapRef} onScroll={leave}>
+      <div
+        className="rchart-wrap"
+        ref={attachWrap}
+        onScroll={(e) => {
+          leave();
+          place.current.left = e.currentTarget.scrollLeft;
+          place.current.top = e.currentTarget.scrollTop;
+          notePlace();
+        }}
+      >
         {/* At least 70px a night; wider screens share the rest evenly. */}
         <table className="tape" style={{ minWidth: 190 + 64 + 70 * chart.nights.length }}>
           <thead>
