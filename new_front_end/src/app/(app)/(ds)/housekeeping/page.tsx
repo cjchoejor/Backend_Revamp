@@ -12,10 +12,11 @@
  */
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Button, Chip, EmptyState, Icon } from "@/design-system";
 import { Help } from "@/components/ds/help";
+import { DsDialog, ReasonDialog } from "@/components/ds/steps/kit";
 import { LoadFailed, LoadingBlock } from "@/components/ds/ui";
 import { useHousekeepingBoard } from "@/hooks/use-housekeeping";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
@@ -247,23 +248,23 @@ function instantDay(iso: string | null, tz: string, today: string | null): strin
 
 const OTHER_WORD: Record<string, string> = { OCCUPIED: "guest in", READY: "ready", OUT_OF_ORDER: "out of order" };
 
+/** The room as the pop-up's top lines: its type and bed, where it stands, an open fault. */
+function roomFacts(r: HousekeepingRoom): string[] {
+  const lines = [[r.roomTypeName, r.bedType ? BED[r.bedType] ?? r.bedType : null, OTHER_WORD[r.state]].filter(Boolean).join(" · ")];
+  if (r.openFault) lines.push(`Fault open · ${r.openFault.description}`);
+  return lines;
+}
+
 function OtherRooms({ rooms }: { rooms: HousekeepingRoom[] }) {
   const { session } = useSession();
   const qc = useQueryClient();
   const [open, setOpen] = useState<string | null>(null);
-  const [reason, setReason] = useState("");
   const room = rooms.find((r) => r.roomId === open) ?? null;
-  const panelRef = useRef<HTMLDivElement | null>(null);
-  // The form opens under the groups — bring it into view when it is off screen.
-  useEffect(() => {
-    if (open) panelRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  }, [open]);
   const dirty = useMutation({
-    mutationFn: () => markRoomNeedsCleaning(session!, room!.roomId, reason.trim()),
+    mutationFn: (reason: string) => markRoomNeedsCleaning(session!, room!.roomId, reason),
     onSuccess: (r) => {
       toast.success(`Room ${r.roomNumber} is back on the list to clean`);
       setOpen(null);
-      setReason("");
       void qc.invalidateQueries({ queryKey: ["housekeeping-board"] });
       void qc.invalidateQueries({ queryKey: ["rooms-catalog"] });
       void qc.invalidateQueries({ queryKey: ["room-chart"] });
@@ -302,12 +303,9 @@ function OtherRooms({ rooms }: { rooms: HousekeepingRoom[] }) {
                   key={r.roomId}
                   type="button"
                   className={`hk-tile ${r.state.toLowerCase()}${open === r.roomId ? " sel" : ""}`}
-                  aria-expanded={open === r.roomId}
+                  aria-haspopup="dialog"
                   title={r.openFault ? `Fault open · ${r.openFault.description}` : undefined}
-                  onClick={() => {
-                    setOpen((o) => (o === r.roomId ? null : r.roomId));
-                    setReason("");
-                  }}
+                  onClick={() => setOpen(r.roomId)}
                 >
                   <b>{r.roomNumber}</b>
                   <span>{OTHER_WORD[r.state] ?? r.state}</span>
@@ -318,38 +316,36 @@ function OtherRooms({ rooms }: { rooms: HousekeepingRoom[] }) {
         );
       })}
       </div>
-      {room ? (
-        <div className="hk-panel wide" ref={panelRef}>
-          <div className="hk-panel-who">
-            <b>Room {room.roomNumber}</b>
-            <span className="meta">
-              {[room.roomTypeName, room.bedType ? BED[room.bedType] ?? room.bedType : null, OTHER_WORD[room.state]].filter(Boolean).join(" · ")}
-            </span>
-          </div>
-          {room.state === "OCCUPIED" ? (
-            <p className="meta hk-panel-grow">A guest is in this room — it is cleaned as a stay-over, not put on the list.</p>
-          ) : (
-            <>
-              <label className="field hk-panel-grow">
-                <span>Why does it need cleaning again?</span>
-                <input className="input" value={reason} maxLength={500} onChange={(e) => setReason(e.target.value)} placeholder="e.g. a spill found on inspection" />
-              </label>
-              <Button
-                kind="secondary"
-                state={dirty.isPending ? "working" : reason.trim() ? "default" : "inert"}
-                reason={reason.trim() ? undefined : "Say why first"}
-                workingLabel="Putting it back…"
-                onClick={() => dirty.mutate()}
-              >
-                Needs cleaning again
-              </Button>
-            </>
-          )}
-          <Button kind="quiet" onClick={() => setOpen(null)}>
-            Close
-          </Button>
-        </div>
+      {/* A room's form opens in a pop-up box (2026-10-26, operator) — a panel under the tiles sat
+          out of sight below a long list. */}
+      {room && room.state === "OCCUPIED" ? (
+        <DsDialog
+          open
+          onClose={() => setOpen(null)}
+          register="report"
+          title={`Room ${room.roomNumber}`}
+          caseLines={roomFacts(room)}
+          footer={
+            <Button kind="secondary" onClick={() => setOpen(null)}>
+              Close
+            </Button>
+          }
+        >
+          <p>A guest is in this room. It is cleaned as a stay-over, not put on the list.</p>
+        </DsDialog>
       ) : null}
+      <ReasonDialog
+        open={!!room && room.state !== "OCCUPIED"}
+        onClose={() => setOpen(null)}
+        title={room ? `Room ${room.roomNumber} needs cleaning again` : ""}
+        caseLines={room ? roomFacts(room) : undefined}
+        lead="The room goes back on the list to clean. No guest can be checked into it until it is marked clean."
+        reasonLabel="Why does it need cleaning again?"
+        placeholder="e.g. a spill found on inspection"
+        confirmLabel="Needs cleaning again"
+        busy={dirty.isPending}
+        onConfirm={(reason) => dirty.mutate(reason)}
+      />
     </div>
   );
 }

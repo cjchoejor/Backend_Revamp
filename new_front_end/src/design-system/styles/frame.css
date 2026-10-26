@@ -1176,7 +1176,6 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .hk-tile.out_of_order { background: var(--warning-soft); border-color: var(--warning-line); }
 .ds .hk-tile.out_of_order span { color: var(--warning); }
 .ds .hk-tile.sel { border-color: var(--accent); box-shadow: inset 0 -3px 0 var(--accent); }
-.ds .hk-panel { display: grid; gap: var(--s2); padding: var(--s3); border: 1px solid var(--line-2); border-radius: var(--r-card, 6px); max-width: 560px; }
 /* The bell's housekeeping line. */
 .ds .panel-row.hk-bell { border-left: 3px solid var(--danger); }
 
@@ -1238,6 +1237,3 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .type-groups.flow > .floor > .tiles:not(.desk-root *) { display: flex; flex-wrap: wrap; gap: 10px; }
 .ds .type-groups.flow > .floor > .tiles > * { width: 150px; }
 /* The open room's form, once, under the groups — one line across. */
-.ds .hk-panel.wide { max-width: none; display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--s3); border-color: var(--accent); }
-.ds .hk-panel.wide .hk-panel-who { display: grid; gap: 2px; min-width: 180px; }
-.ds .hk-panel.wide .hk-panel-grow { flex: 1 1 280px; margin: 0; }

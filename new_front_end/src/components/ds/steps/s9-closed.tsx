@@ -148,7 +148,6 @@ export function S9Closed({
         <WhatTheStayWas entry={entry} />
         {entry.folio ? <OverpaidCard entry={entry} live={!readOnly} /> : null}
         {entry.folio ? <AfterTheStay entry={entry} tz={clock.tz} close={readOnly ? null : close} openPane={tail ? openPane : undefined} /> : null}
-        <ChangingAClosedBooking />
         <SealedPapers entry={entry} tz={clock.tz} />
         {entry.status === "CANCELLED" ? <Cancellation entry={entry} /> : null}
       </div>
@@ -1095,15 +1094,6 @@ function LateCharge({ entry, open, onClose }: { entry: EntryDetail; open: boolea
 }
 
 /* ------------------------------------------------------------------ changing a closed booking (Z2) */
-
-function ChangingAClosedBooking() {
-  return (
-    <StepCard
-      title="Changing a closed booking"
-      status="A closed booking isn't changed. A payment, a late charge, a new tax invoice and a write-off are still recorded above; anything else isn't possible here."
-    />
-  );
-}
 
 /* ------------------------------------------------------------------ sealed papers */
 
