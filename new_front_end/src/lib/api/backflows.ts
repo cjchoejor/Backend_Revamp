@@ -88,4 +88,5 @@ export const BACKFLOWS_BY_STAGE: Record<string, BackflowDescriptor[]> = {
 
 /** Complaint resolution is applicable from any active stage except S2 (already there) and S9 (closed). */
 // Not from Stay (2026-10-26) — it strands the in-house guest like the two re-entries above.
-export const COMPLAINT_APPLICABLE_STAGES = new Set(["S1", "S3", "S4", "S5", "S6", "S8"]);
+// Not from Stay or Check-out (2026-10-26): the guest is in, and the booking could never come back.
+export const COMPLAINT_APPLICABLE_STAGES = new Set(["S1", "S3", "S4", "S5", "S6"]);

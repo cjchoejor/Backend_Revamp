@@ -27,7 +27,6 @@ import {
   fulfilHandoff,
   initiateSettlement,
   postFolioCharge,
-  reEnterS8ToS2,
   reEnterS8ToS7,
   recordKeyReturn,
   recordRoomInspection,
@@ -160,35 +159,33 @@ export function S8CheckOut({
   // Going back and raising a dispute happen in Other ways' own tabs (2026-10-17).
   const openWay = useOpenOtherWay();
 
+  // One way back from Check-out: to Stay. "Re-open to Negotiation" was taken off (2026-10-26) — the
+  // guest is still in, and from Negotiation the booking could never reach Check-out again. A price is
+  // put right here: a credit note, a correction, or a dispute.
   const backMutation = useMutation({
-    mutationFn: (v: { to: "stay" | "negotiation"; reason: string }) =>
-      v.to === "stay" ? reEnterS8ToS7(session!, entry.id, entry.version, v.reason) : reEnterS8ToS2(session!, entry.id, entry.version, v.reason),
-    onSuccess: (_d, v) => {
-      toast.success(v.to === "stay" ? "Back at Stay — post the charge there" : "Re-opened to Negotiation — a new pass is open");
+    mutationFn: (reason: string) => reEnterS8ToS7(session!, entry.id, entry.version, reason),
+    onSuccess: () => {
+      toast.success("Back at Stay — post the charge there");
       refresh();
-      goToStep(v.to === "stay" ? 7 : 2);
+      goToStep(7);
     },
     onError: (e) => toastRefusal(e, "The booking could not be taken back"),
   });
 
-  const backForm = (to: "stay" | "negotiation") => (
+  const backForm = () => (
     <InlineWay
       render={() => (
         <ReasonDialog
           open
           onClose={() => undefined}
-          title={to === "negotiation" ? "Re-open to Negotiation" : "Back to Stay"}
+          title="Back to Stay"
           caseLines={[folio ? `the bill is ${FOLIO_STATE_WORD[folio.state] ?? words(folio.state)}` : "no bill"]}
-          lead={
-            to === "negotiation"
-              ? "This closes the current pass and opens a new one at Negotiation for a full re-price. The live bill carries over. The history shows the new pass as such."
-              : "The booking goes back to Stay so a missed charge can be posted there. The bill stays live; bring the booking back to Check-out when it is done."
-          }
+          lead="The booking goes back to Stay so a missed charge can be posted there. The bill stays open; bring the booking back to Check-out when it is done."
           reasonLabel="Why · recorded on the booking"
-          placeholder={to === "negotiation" ? "the guest disputes the rate charged" : "minibar found after the bill was reviewed"}
-          confirmLabel={to === "negotiation" ? "Re-open to Negotiation" : "Back to Stay"}
+          placeholder="minibar found after the bill was reviewed"
+          confirmLabel="Back to Stay"
           busy={backMutation.isPending}
-          onConfirm={(reason) => backMutation.mutate({ to, reason })}
+          onConfirm={(reason) => backMutation.mutate(reason)}
         />
       )}
     />
@@ -239,14 +236,7 @@ export function S8CheckOut({
       <OtherWaysTabs
         tabs={[
           live && !settled
-            ? { key: "stay", label: "Back to Stay", content: fom ? backForm("stay") : <ShutWay act="Back to Stay" why="Going back to Stay needs the FOM." /> }
-            : null,
-          live && !settled
-            ? {
-                key: "negotiation",
-                label: "Re-open to Negotiation",
-                content: fom ? backForm("negotiation") : <ShutWay act="Re-open to Negotiation" why="Re-opening the rate needs the FOM." />,
-              }
+            ? { key: "stay", label: "Back to Stay", content: fom ? backForm() : <ShutWay act="Back to Stay" why="Going back to Stay needs the FOM." /> }
             : null,
           live && folio
             ? { key: "dispute", label: "Raise a dispute", content: <InlineWay render={(done) => <RaiseDispute entry={entry} open onClose={done} />} /> }
