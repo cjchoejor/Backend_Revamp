@@ -3,6 +3,8 @@ import { CommissionDueStatus, EntryStatus, FolioLineType, FolioState, InvoiceSta
 import { allocateReadableId, READABLE_ID_PREFIXES, allocateFolioLineId } from "../../lib/readable-id.js";
 import { AppError, MissingConfigurationError, NotFoundError, ValidationError } from "../../lib/errors.js";
 import { describeBookingInspections, readBookingInspectionStanding } from "../../lib/room-inspection-standing.js";
+import { readBookingDamages, undecidedDamageRooms } from "../../lib/damage-standing.js";
+import { enforceDamageDecidedForS9Closure } from "../../policies/36-damage-assessment/p81-damage-assessment-gates.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { getRegistryPolicy } from "../../lib/policy-registry-runtime.js";
 import { randomUUID } from "node:crypto";
@@ -833,6 +835,11 @@ async function ensureInspectionResolved(db: DbClient, entryId: string) {
   });
 }
 
+/** Every damage found is charged or waived before the booking is sealed (2026-10-26, Policy 81). */
+async function ensureDamagesDecided(db: DbClient, entryId: string) {
+  enforceDamageDecidedForS9Closure({ undecidedRooms: undecidedDamageRooms(await readBookingDamages(db, entryId)) });
+}
+
 async function ensureH5NotOpen(db: DbClient, entryId: string) {
   const h5 = await db.handoffRecord.findFirst({ where: { entryId, handoffType: "H5" }, orderBy: { createdAt: "desc" } });
   enforceH5NotBlockingS9Closure({ h5 });
@@ -1058,6 +1065,7 @@ export async function closeEntryAtS9(prisma: PrismaClient, entryId: string, acto
   await ensureInvoicesDispatched(prisma, entryId, entry.folio.id);
   if (!noShow) await ensurePaymentsMatched(prisma, entryId, entry.folio.id);
   if (!noShow) await ensureInspectionResolved(prisma, entryId);
+  if (!noShow) await ensureDamagesDecided(prisma, entryId);
   await ensureH5NotOpen(prisma, entryId);
   await ensureEquipmentReturnResolved(prisma, entryId);
   await ensureApartmentDepositResolved(prisma, { id: entryId, useType: entry.useType }, entry.folio.id);
@@ -1233,6 +1241,9 @@ export async function buildS9ClosureReadiness(prisma: PrismaClient, entryId: str
   }
   if (!noShow) {
     await run("INSPECTION", "The room inspected, or its inspection window closed", () => ensureInspectionResolved(prisma, entryId));
+    if ((await readBookingDamages(prisma, entryId)).length) {
+      await run("DAMAGE", "Every damage charged or waived", () => ensureDamagesDecided(prisma, entryId));
+    }
   }
   await run("H5", "The after-stay handoff done", () => ensureH5NotOpen(prisma, entryId));
   if (await prisma.equipmentAllocation.findFirst({ where: { entryId }, select: { id: true } })) {
@@ -1305,6 +1316,16 @@ export async function postStayCharge(
   folioId: string,
   actorId: string,
   input: { entryId: string; lineType: string; description: string; amount: number; currency?: string; postedAt: string; isPostStay: boolean },
+  /**
+   * Internal only — never from a request body (2026-10-26, the damage charge): the room the charge
+   * belongs to, the desk's choice of service charge and GST (recorded on the line), and a step run
+   * inside the posting's own transaction once the charge is on the ledger.
+   */
+  internal?: {
+    roomId?: string;
+    taxes?: { serviceCharge: boolean; gst: boolean };
+    onPostedTx?: (tx: Prisma.TransactionClient, line: { id: string }) => Promise<void>;
+  },
 ) {
   if (input.isPostStay !== true) throw new ValidationError("isPostStay must be true for S9 post-stay charge");
   const postedAt = new Date(input.postedAt);
@@ -1357,6 +1378,8 @@ export async function postStayCharge(
         isPostStay: true,
         postedAt,
         billingModel,
+        roomId: internal?.roomId ?? null,
+        ...(internal?.taxes ? { withServiceCharge: internal.taxes.serviceCharge, withGst: internal.taxes.gst } : {}),
       },
     });
     const taxes = await postChargeTaxCompanionsTx(tx, {
@@ -1369,8 +1392,12 @@ export async function postStayCharge(
       actorId,
       billingModel,
       postStay: { postedAt },
+      roomId: internal?.roomId ?? null,
+      serviceCharge: internal?.taxes?.serviceCharge,
+      gst: internal?.taxes?.gst,
     });
     await recomputeFolioOutstandingBalance(tx, folioId);
+    if (internal?.onPostedTx) await internal.onPostedTx(tx, line);
     const after = await tx.folio.findUniqueOrThrow({ where: { id: folioId }, select: { state: true, outstandingBalance: true } });
     // Money owed again: the bill is open for follow-up, whatever it read before.
     let folioState = after.state;

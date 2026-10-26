@@ -8,6 +8,8 @@ import { listStayChargeGapsForCompleteAuditStayNightsS8ToS9 } from "../policies/
 import { peekH4S8ExitFailure } from "../policies/25-handoff/p63-handoff-lifecycle-gates.js";
 import { getEntryWithRoom } from "../services/domain/s8-checkout-service.js";
 import { readBookingInspectionStanding, roomListWords } from "./room-inspection-standing.js";
+import { readBookingDamages, unansweredDamageRooms } from "./damage-standing.js";
+import { damageNotAnsweredForS8Exit } from "../policies/36-damage-assessment/p81-damage-assessment-gates.js";
 
 export type EntryWithFolioReservation = Prisma.EntryGetPayload<{
   include: { folio: true; reservation: true };
@@ -90,6 +92,10 @@ export async function collectS8ToS9ReadOnlyFailures(
         : "Room inspection not complete or deferred",
     });
   }
+
+  // A damage found is answered — charged, waived, or left to decide after departure (2026-10-26).
+  const damageFail = damageNotAnsweredForS8Exit({ unansweredRooms: unansweredDamageRooms(await readBookingDamages(prisma, entryId)) });
+  if (damageFail) failures.push(damageFail);
 
   const gate = await disputeGateEngine.canProgressStage(prisma, entryId, Stage.S9);
   if (gate.result !== "CLEAR") {

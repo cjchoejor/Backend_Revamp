@@ -142,6 +142,9 @@ export type RoomInspectionView = {
   inspectorAssessment: string | null;
   damageFound: boolean;
   damageNotes: string | null;
+  /** How the damage was answered (2026-10-26): CHARGED · WAIVED · LATER, null while unanswered. */
+  damageAnswer: string | null;
+  damageFaultId: string | null;
   windowEndsAt: Date | null;
   windowCanBeClosed: boolean;
   lapsedAt: Date | null;
@@ -170,6 +173,8 @@ export async function describeBookingInspections(db: DbClient, entryId: string) 
       inspectorAssessment: insp?.inspectorAssessment ?? null,
       damageFound: insp?.damageFound ?? false,
       damageNotes: insp?.damageNotes ?? null,
+      damageAnswer: insp && !insp.isDeferred && insp.damageFound ? insp.damageAnswer : null,
+      damageFaultId: insp?.damageFaultId ?? null,
       windowEndsAt: s.state === "PUT_OFF" ? s.windowEndsAt : null,
       windowCanBeClosed: s.state === "PUT_OFF" && s.windowTimerScheduled,
       lapsedAt: s.state === "LAPSED" ? s.lapsedAt : null,

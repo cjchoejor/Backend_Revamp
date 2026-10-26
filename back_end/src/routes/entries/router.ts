@@ -12,6 +12,8 @@ import {
   recordKeyReturnRequestSchema,
   recordRoomInspectionRequestSchema,
   recordRoomInspectionsBulkRequestSchema,
+  answerDamageRequestSchema,
+  previewDamageChargeRequestSchema,
   setExpectedArrivalRequestSchema,
   decideNegotiationAmendmentRequestSchema,
   negotiationAmendmentRequestSchema,
@@ -24,6 +26,7 @@ import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import * as s1EntryService from "../../services/domain/s1-entry-service.js";
 import { switchStay } from "../../services/domain/trip-switch-service.js";
 import * as s8CheckoutService from "../../services/domain/s8-checkout-service.js";
+import * as damageAssessmentService from "../../services/domain/damage-assessment-service.js";
 import * as s9Service from "../../services/domain/s9-service.js";
 import { setGroupBillingModeManually } from "../../services/admin/group-billing-mode-admin-service.js";
 import {
@@ -873,6 +876,41 @@ entriesRouter.post(
     }
   },
 );
+
+/** The damage the inspections found and how each was answered (2026-10-26). */
+entriesRouter.get("/:id/damages", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    res.json(await damageAssessmentService.listBookingDamages(prisma, req.params.id));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** What a damage charge comes to with the taxes chosen — server figures, nothing written. */
+entriesRouter.post("/:id/damages/preview", requireActorLevel("L1"), validateBody(previewDamageChargeRequestSchema), async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    res.json(await damageAssessmentService.previewDamageCharge(prisma, req.body));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** Answer one room's damage: charge · waive (the FOM's) · decide after departure. The service
+ *  holds the levels (a charge after departure and a waiver are the FOM's). */
+entriesRouter.post("/:id/damages/:inspectionId/answer", requireActorLevel("L1"), validateBody(answerDamageRequestSchema), async (req, res, next) => {
+  try {
+    res.json(
+      await damageAssessmentService.answerDamage(prisma, req.params.id, req.params.inspectionId, {
+        actorId: req.actor!.actorId,
+        actorLevel: req.actor!.level,
+      }, req.body),
+    );
+  } catch (e) {
+    next(e);
+  }
+});
 
 /** Each room's inspection, as the desk reads it (2026-10-26 — one inspection per room). */
 entriesRouter.get("/:id/room-inspections", requireActorLevel("L1"), async (req, res, next) => {

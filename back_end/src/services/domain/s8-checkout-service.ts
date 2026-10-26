@@ -26,6 +26,7 @@ import {
 import { enforceRoomOccupiedForCheckoutCompletion } from "../../policies/01-availability/p01-s8-checkout-room-occupied-gate.js";
 import { countOutstandingKeys } from "./room-key-service.js";
 import { resetRoomBedToUsualTx } from "./room-bed-type-service.js";
+import { reportDeficiency } from "./deficient-condition-service.js";
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
 
@@ -181,6 +182,9 @@ export async function recordInspection(
     inspectorAssessment?: string;
     damageFound: boolean;
     damageNotes?: string;
+    /** A damage found stops the room being sold — a fault report is raised (2026-10-26, asked each time). */
+    damageStopsSale?: boolean;
+    damageFaultCategory?: "HOUSEKEEPING" | "MAINTENANCE" | "SOFT_FURNISHING" | "OTHER";
   },
   opts?: {
     actorLevel?: ActorLevel;
@@ -191,7 +195,11 @@ export async function recordInspection(
   if (typeof input.isDeferred !== "boolean") throw new ValidationError("isDeferred is required");
   if (!input.deficientFlagStatus) throw new ValidationError("deficientFlagStatus is required");
   if (typeof input.damageFound !== "boolean") throw new ValidationError("damageFound is required");
-  if (input.damageFound === true && !input.damageNotes?.trim()) throw new ValidationError("damageNotes is required when damageFound = true");
+  if (input.damageFound === true && !input.damageNotes?.trim()) throw new ValidationError("Say what the damage is");
+  // Asked each time (2026-10-26, operator ruling): a damage may or may not stop the room being sold.
+  if (input.damageFound === true && !input.isDeferred && typeof input.damageStopsSale !== "boolean") {
+    throw new ValidationError("Say whether the damage stops the room being sold");
+  }
   if (input.deficientFlagStatus !== "NOT_APPLICABLE" && !input.deficientConditionId?.trim()) {
     throw new ValidationError("deficientConditionId is required when deficientFlagStatus is not NOT_APPLICABLE");
   }
@@ -236,6 +244,14 @@ export async function recordInspection(
   if (!row) throw new ValidationError("This booking has no room to inspect");
   const room = await prisma.room.findUnique({ where: { id: row.roomId } });
   if (!room) throw new NotFoundError("Room");
+  // A damage already charged or waived stands: inspecting the room again would leave that charge,
+  // or that waiver, with no damage on record behind it (2026-10-26).
+  const prior = row.standing.inspection;
+  if (prior?.damageAnswer === "CHARGED" || prior?.damageAnswer === "WAIVED") {
+    throw new ValidationError(
+      `Room ${room.roomNumber}'s damage was already ${prior.damageAnswer === "CHARGED" ? "charged" : "waived"} — its inspection stands; a charge is put right on the bill`,
+    );
+  }
   const completing = atS9 && row.standing.state === "PUT_OFF" ? row.standing.inspection : null;
 
   // If there is any active deficient record for the room, NOT_APPLICABLE is forbidden.
@@ -252,6 +268,19 @@ export async function recordInspection(
   const seg = await prisma.segment.findFirst({ where: { entryId }, orderBy: { segmentNumber: "desc" } });
   if (!seg) throw new NotFoundError("Segment");
 
+  // The damage stops the room being sold: report the fault — the room leaves service now, and the
+  // inspection records which report it raised (2026-10-26).
+  let damageFaultId: string | null = null;
+  if (input.damageFound && !input.isDeferred && input.damageStopsSale === true) {
+    const fault = await reportDeficiency(
+      prisma,
+      { roomId: room.id },
+      { category: input.damageFaultCategory ?? "MAINTENANCE", description: `Damage found at the inspection — ${input.damageNotes!.trim()}` },
+      { actorId, actorLevel: (opts?.actorLevel === "SYSTEM" ? "L1" : opts?.actorLevel ?? "L1") as "L1" | "L2" | "L3" | "L4" },
+    );
+    damageFaultId = fault.id;
+  }
+
   const inspectionId = await allocateReadableId(prisma, "ROOM_INSPECTION" as const);
   const created = await prisma.roomInspectionRecord.create({
     data: {
@@ -267,6 +296,7 @@ export async function recordInspection(
       inspectorAssessment: input.inspectorAssessment?.trim() ?? null,
       damageFound: input.damageFound,
       damageNotes: input.damageFound ? input.damageNotes?.trim() : null,
+      damageFaultId,
     },
   });
 

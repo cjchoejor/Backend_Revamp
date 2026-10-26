@@ -20,6 +20,10 @@
  *                              folio of an ACTIVE entry (the 2026-08-18 backfill should cover these)
  *      A10 LEGACY_RENDER_TAX   room nights whose SC/GST exists only at document render time —
  *                              quantifies how far printed documents exceed the ledger's own billed
+ *      A11 TAX_CHOICE          a charge posted with the desk's own choice of service charge and GST
+ *                              (2026-10-26, the damage charge) carries a tax it was posted without
+ *                              (CRITICAL — the guest is charged what they were told they would not
+ *                              be), or lacks one it was posted with; its corrections included
  *   B. Payments: non-positive amounts; refunds exceeding receipts
  *   C. Frozen layer: frozenTotal vs frozenSubtotal × (era tax multipliers); audit per-night posts
  *      vs frozenSubtotal ÷ nights; frozen rows with null dates
@@ -237,6 +241,36 @@ async function main() {
       }
       if (famGstRate != null && !near(gstSum, round2(famNet.add(scSum).mul(famGstRate)), tol)) {
         add("WARN", "A6_FAMILY_TAX", tag, `"${orig.description}" family: net+SC ${money(famNet.add(scSum))} but ΣGST ${money(gstSum)} ≠ ${money(round2(famNet.add(scSum).mul(famGstRate)))}`);
+      }
+    }
+
+    // A11 — a charge's own tax choice (2026-10-26). The FACT tested: a line that says it carries no
+    // service charge (or no GST) has none naming it — its corrections' tax lines included — and a
+    // line that says it carries one has one, unless that rate is 0 at the hotel.
+    for (const ch of charges) {
+      if (ch.withServiceCharge == null && ch.withGst == null) continue;
+      if (ch.description.startsWith(CORRECTION_LINE_PREFIX)) continue;
+      const named = companions.filter(
+        (c) => companionBaseDescription(c.description) === ch.description && (c.roomId ?? null) === (ch.roomId ?? null),
+      );
+      const own = named.filter((c) => !isCorrectionCompanionDescription(c.description) && ymd(c.chargeDate) === ymd(ch.chargeDate));
+      // Two charges of one description, room and day share their companions; judge the family only
+      // when every member made the same choice.
+      const fam = charges.filter((o) => o.description === ch.description && (o.roomId ?? null) === (ch.roomId ?? null) && ymd(o.chargeDate) === ymd(ch.chargeDate));
+      const sameChoice = fam.every((o) => o.withServiceCharge === ch.withServiceCharge && o.withGst === ch.withGst);
+      const scLines = named.filter((c) => classifyFolioLine(c) === "SERVICE_CHARGE");
+      const gstLines = named.filter((c) => classifyFolioLine(c) === "GST");
+      if (ch.withServiceCharge === false && sameChoice && scLines.some((c) => !D(c.amount).isZero())) {
+        add("CRITICAL", "A11_TAX_CHOICE", tag, `"${ch.description}" (${ch.id}) was posted without service charge, yet ${money(sumMoney(scLines.map((c) => c.amount)))} of it is on the ledger`);
+      }
+      if (ch.withGst === false && sameChoice && gstLines.some((c) => !D(c.amount).isZero())) {
+        add("CRITICAL", "A11_TAX_CHOICE", tag, `"${ch.description}" (${ch.id}) was posted without GST, yet ${money(sumMoney(gstLines.map((c) => c.amount)))} of it is on the ledger`);
+      }
+      if (ch.withServiceCharge === true && scRate > 0 && !own.some((c) => classifyFolioLine(c) === "SERVICE_CHARGE")) {
+        add("WARN", "A11_TAX_CHOICE", tag, `"${ch.description}" (${ch.id}) was posted with service charge, but none names it`);
+      }
+      if (ch.withGst === true && gstRate > 0 && !own.some((c) => classifyFolioLine(c) === "GST")) {
+        add("WARN", "A11_TAX_CHOICE", tag, `"${ch.description}" (${ch.id}) was posted with GST, but none names it`);
       }
     }
 

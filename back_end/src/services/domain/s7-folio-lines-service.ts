@@ -151,6 +151,18 @@ export async function maybeWriteCreditCeilingEvents(db: DbClient, args: { entryI
  * Decimal-safe: `Math.round(x*100)/100` on floats compounds through (subTotal + serviceCharge) ×
  * gstRate and mismatches guest-facing quotes vs the invoice.
  */
+/**
+ * A charge's service charge and GST (2026-10-26 — extracted so a preview and the posting can never
+ * differ). GST is compound: on the charge plus its service charge. A rate of 0 leaves that tax off.
+ * Decimal throughout; a credit note's negative base gives negative taxes.
+ */
+export function chargeTaxFigures(baseAmount: number | Prisma.Decimal, rates: { serviceChargeRate: number; gstRate: number }) {
+  const base = toDecimal(baseAmount);
+  const serviceCharge = rates.serviceChargeRate > 0 ? round2(mulMoney(base, rates.serviceChargeRate)) : ZERO;
+  const gst = rates.gstRate > 0 ? round2(mulMoney(base.add(serviceCharge), rates.gstRate)) : ZERO;
+  return { base, serviceCharge, gst, total: base.add(serviceCharge).add(gst) };
+}
+
 export async function postChargeTaxCompanionsTx(
   tx: Prisma.TransactionClient,
   input: {
@@ -166,10 +178,18 @@ export async function postChargeTaxCompanionsTx(
     spaceId?: string | null;
     /** A charge posted after the stay (S9): its companions carry the same flag and instant. */
     postStay?: { postedAt: Date };
+    /**
+     * The desk's choice (2026-10-26): false leaves that tax off. Omitted = on, as every charge has
+     * always been taxed. GST is still compound — on the charge plus whatever service charge it carries.
+     */
+    serviceCharge?: boolean;
+    gst?: boolean;
   },
 ): Promise<{ serviceCharge: Prisma.Decimal; gst: Prisma.Decimal; serviceChargeRate: number; gstRate: number }> {
-  const { gstRate, serviceChargeRate } = await resolveChargeRates(tx as unknown as PrismaClient);
-  const subTotalDec = toDecimal(input.baseAmount);
+  const rates = await resolveChargeRates(tx as unknown as PrismaClient);
+  const serviceChargeRate = input.serviceCharge === false ? 0 : rates.serviceChargeRate;
+  const gstRate = input.gst === false ? 0 : rates.gstRate;
+  const figures = chargeTaxFigures(input.baseAmount, { serviceChargeRate, gstRate });
   const common = {
     folioId: input.folioId,
     currency: input.currency,
@@ -182,7 +202,7 @@ export async function postChargeTaxCompanionsTx(
     ...(input.postStay ? { isPostStay: true, postedAt: input.postStay.postedAt } : {}),
   };
 
-  const serviceCharge = serviceChargeRate > 0 ? round2(mulMoney(subTotalDec, serviceChargeRate)) : ZERO;
+  const serviceCharge = figures.serviceCharge;
   // A credit note's base is negative, and so are its companions — the tax comes off with it.
   if (!serviceCharge.isZero()) {
     await tx.folioLine.create({
@@ -197,8 +217,7 @@ export async function postChargeTaxCompanionsTx(
   }
 
   // GST is compound — applied to (subTotal + serviceCharge), kept in Decimal through the base.
-  const gstBase = subTotalDec.add(serviceCharge);
-  const gst = gstRate > 0 ? round2(mulMoney(gstBase, gstRate)) : ZERO;
+  const gst = figures.gst;
   if (!gst.isZero()) {
     await tx.folioLine.create({
       data: {
@@ -240,6 +259,17 @@ export async function postCharge(
      * agency or company booking).
      */
     billingModelOverride?: string;
+  },
+  /**
+   * Internal only — never from a request body (2026-10-26, the damage charge).
+   *  - `taxes`: the desk's choice of service charge and GST, recorded on the line
+   *    (`withServiceCharge` / `withGst`) so a later correction moves only the taxes it carries.
+   *  - `onPostedTx`: runs inside the posting's own transaction once the line and its taxes are on
+   *    the ledger, so whatever the caller records about the charge commits — or fails — with it.
+   */
+  internal?: {
+    taxes?: { serviceCharge: boolean; gst: boolean };
+    onPostedTx?: (tx: Prisma.TransactionClient, line: { id: string }) => Promise<void>;
   },
 ) {
   if (!input.entryId?.trim()) throw new ValidationError("entryId is required");
@@ -387,6 +417,7 @@ export async function postCharge(
         roomId: chargeRoomId,
 
         spaceId: chargeSpaceId,
+        ...(internal?.taxes ? { withServiceCharge: internal.taxes.serviceCharge, withGst: internal.taxes.gst } : {}),
       },
     });
 
@@ -408,10 +439,13 @@ export async function postCharge(
         billingModel: primaryBillingModel,
         roomId: chargeRoomId,
         spaceId: chargeSpaceId,
+        serviceCharge: internal?.taxes?.serviceCharge,
+        gst: internal?.taxes?.gst,
       });
     }
 
     await recomputeFolioOutstandingBalance(tx, folioId);
+    if (internal?.onPostedTx) await internal.onPostedTx(tx, line);
     const updatedFolio = await tx.folio.findUniqueOrThrow({ where: { id: folioId } });
 
     if (ceiling != null) {
@@ -589,6 +623,9 @@ export async function correctCharge(
         // A correction adjusts a charge already attributed to a room — the delta stays there.
         roomId: original.roomId,
         spaceId: original.spaceId,
+        // …and so does the charge's own choice of taxes (2026-10-26).
+        withServiceCharge: original.withServiceCharge,
+        withGst: original.withGst,
       },
     });
 
@@ -612,9 +649,12 @@ export async function correctCharge(
       const rateFrom = (ls: typeof related) =>
         ls.map((l) => companionRateFromDescription(l.description)).find((r): r is number => r != null && r > 0) ?? null;
       const { gstRate: cfgGst, serviceChargeRate: cfgSc } = await resolveChargeRates(tx as unknown as PrismaClient);
-      const legacy = scLines.length === 0 && gstLines.length === 0;
-      const scApplies = scLines.length > 0;
-      const gstApplies = gstLines.length > 0 || legacy;
+      // A charge posted with the desk's own tax choice (2026-10-26) says what it carries — read
+      // first, so a charge posted without GST is never corrected as a legacy line (which gains GST).
+      const chosen = original.withServiceCharge != null || original.withGst != null;
+      const legacy = !chosen && scLines.length === 0 && gstLines.length === 0;
+      const scApplies = chosen ? original.withServiceCharge === true : scLines.length > 0;
+      const gstApplies = chosen ? original.withGst === true : gstLines.length > 0 || legacy;
       const scRate = scApplies ? rateFrom(scLines) ?? cfgSc : 0;
       const gstRate = gstApplies ? rateFrom(gstLines) ?? (legacy ? await resolveSalesTaxRate(tx) : cfgGst) : 0;
 
