@@ -25,6 +25,7 @@ import {
 } from "@/components/ds/ui";
 import { useDeskBookings, useDeskMoney, useRoomsList } from "@/hooks/use-desk-data";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
+import { useHousekeepingBoard } from "@/hooks/use-housekeeping";
 import { useHotelDay } from "@/hooks/use-hotel-day";
 import type { DeskListRow } from "@/lib/api/desk";
 import {
@@ -37,7 +38,7 @@ import {
   type AttentionItem,
   type Fold,
 } from "@/lib/ds/attention";
-import { fmtDay, fmtInstantDay, fmtLongDate, fmtRange, money, plural } from "@/lib/ds/format";
+import { fmtDay, fmtInstantDay, fmtLongDate, fmtRange, fmtTime, money, plural, span } from "@/lib/ds/format";
 import { stepNoOfStage } from "@/lib/ds/steps";
 
 const BANDS_OVER = 15;
@@ -295,6 +296,7 @@ export default function TodayPage() {
                   );
                 }}
               </DayList>
+              <RoomsToClean now={clock.now} tz={clock.tz} />
               <DayList title="In-house" rows={lists.inHouse} more="/bookings?group=In-house" empty={["Nobody in-house", ""]}>
                 {(r) => (
                   <OpenRow key={r.id} entryId={r.id}>
@@ -395,6 +397,54 @@ function WeekTable({ rows, today, href }: { rows: DeskListRow[]; today: string |
         <MoreRow more={paged.more} onMore={paged.showMore} href={href} />
       </tbody>
     </table>
+  );
+}
+
+/** The rooms a guest has left, waiting to be cleaned (2026-10-26) — late ones first, in red. */
+function RoomsToClean({ now, tz }: { now: number; tz: string }) {
+  const board = useHousekeepingBoard();
+  const rooms = (board.data?.rooms ?? []).filter((r) => r.state === "TO_CLEAN");
+  const paged = usePaged(rooms);
+  return (
+    <div className="day-list">
+      <h4>
+        Rooms to clean <span className="meta">{rooms.length}</span>
+      </h4>
+      {rooms.length ? (
+        <table className="table compact">
+          <tbody>
+            {paged.shown.map((r) => {
+              const due = r.toClean?.cleanBy ? new Date(r.toClean.cleanBy).getTime() : null;
+              const late = r.toClean?.overdue || (due != null && due <= now);
+              return (
+                <tr key={r.roomId}>
+                  <td>
+                    <Link href="/housekeeping">
+                      <b>Room {r.roomNumber}</b>
+                    </Link>
+                    <div className="meta">
+                      {r.nextGuest?.arrivesToday ? `next guest today · ${r.nextGuest.guestName ?? r.nextGuest.entryId}` : r.roomTypeName ?? ""}
+                    </div>
+                  </td>
+                  <td>
+                    {due == null ? (
+                      "—"
+                    ) : late ? (
+                      <b className="stop-ink">late {span(now - due)}</b>
+                    ) : (
+                      <span className="ink-2">by {fmtTime(r.toClean!.cleanBy, tz)}</span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+            <MoreRow more={paged.more} onMore={paged.showMore} href="/housekeeping" colSpan={2} />
+          </tbody>
+        </table>
+      ) : (
+        <EmptyState title={board.data ? "Every room is clean" : "Checking the rooms…"} />
+      )}
+    </div>
   );
 }
 
