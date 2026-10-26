@@ -180,6 +180,12 @@ export const recordRoomInspectionRequestSchema = z.object({
 });
 export type RecordRoomInspectionRequestDto = z.infer<typeof recordRoomInspectionRequestSchema>;
 
+/** Every room still to inspect in one act (2026-10-26) — nothing found, or put off; rooms optional. */
+export const recordRoomInspectionsBulkRequestSchema = z.object({
+  mode: z.enum(["CLEAR", "PUT_OFF"]),
+  roomIds: z.array(z.string().min(1)).max(200).optional(),
+});
+
 /**
  * S9 terminal close.
  * Body is intentionally empty today; validation middleware expects a JSON object.

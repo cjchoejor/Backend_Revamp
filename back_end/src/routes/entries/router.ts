@@ -11,6 +11,7 @@ import {
   reassignEntryCustodianRequestSchema,
   recordKeyReturnRequestSchema,
   recordRoomInspectionRequestSchema,
+  recordRoomInspectionsBulkRequestSchema,
   setExpectedArrivalRequestSchema,
   decideNegotiationAmendmentRequestSchema,
   negotiationAmendmentRequestSchema,
@@ -849,6 +850,24 @@ entriesRouter.post(
         actorLevel: req.actor!.level,
       });
       res.status(201).json(rec);
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+/** Every room still to inspect, in one act — nothing found, or put off (2026-10-26). */
+entriesRouter.post(
+  "/:id/room-inspections/bulk",
+  requireActorLevel("L1"),
+  validateBody(recordRoomInspectionsBulkRequestSchema),
+  async (req, res, next) => {
+    try {
+      res.status(201).json(
+        await s8CheckoutService.recordInspectionsInBulk(prisma, req.params.id, req.actor!.actorId, req.body, {
+          actorLevel: req.actor!.level,
+        }),
+      );
     } catch (e) {
       next(e);
     }

@@ -16,7 +16,12 @@ import {
   enforceEntryStageForRoomInspection,
 } from "../../policies/01-availability/p01-entry-at-s8-for-checkout-progression.js";
 import { enforceEntryNotSealedForWorkingAction } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
-import { readBookingInspectionStanding, roomListWords, scheduledInspectionTimers } from "../../lib/room-inspection-standing.js";
+import {
+  readBookingInspectionStanding,
+  roomListWords,
+  scheduledInspectionTimers,
+  type BookingInspectionStanding,
+} from "../../lib/room-inspection-standing.js";
 import { enforceRoomOccupiedForCheckoutCompletion } from "../../policies/01-availability/p01-s8-checkout-room-occupied-gate.js";
 import { countOutstandingKeys } from "./room-key-service.js";
 import { resetRoomBedToUsualTx } from "./room-bed-type-service.js";
@@ -176,7 +181,11 @@ export async function recordInspection(
     damageFound: boolean;
     damageNotes?: string;
   },
-  opts?: { actorLevel?: ActorLevel },
+  opts?: {
+    actorLevel?: ActorLevel;
+    /** The booking's standing, read once by the bulk act (each room is independent of the others). */
+    precomputedStanding?: BookingInspectionStanding;
+  },
 ) {
   if (typeof input.isDeferred !== "boolean") throw new ValidationError("isDeferred is required");
   if (!input.deficientFlagStatus) throw new ValidationError("deficientFlagStatus is required");
@@ -198,7 +207,7 @@ export async function recordInspection(
   // check-out. A booking with a single such room may leave it unnamed. At S9 an inspection is
   // still taken for a room that owes one — put off at check-out, or (a booking that left Check-out
   // before rooms were inspected one by one) never recorded — and never put off again.
-  const standing = await readBookingInspectionStanding(prisma, entryId);
+  const standing = opts?.precomputedStanding ?? (await readBookingInspectionStanding(prisma, entryId));
   const atS9 = entry.currentStage === Stage.S9;
   const owes = (r: (typeof standing.rooms)[number]) => r.standing.state === "PUT_OFF" || r.standing.state === "NOT_RECORDED";
   const candidates = atS9 ? standing.rooms.filter(owes) : standing.rooms;
@@ -333,6 +342,100 @@ export async function recordInspection(
   }
 
   return created;
+}
+
+/**
+ * Every room still to inspect, in one act (2026-10-26, operator: a booking can have more than 20
+ * rooms). CLEAR records "nothing found" — no fault, no damage — for each; PUT_OFF puts each off to
+ * after departure (Check-out only). Deliberately partial and vocal: a room with an open fault
+ * report is skipped and named (its fault must be answered on its own), a room already inspected
+ * or put off is left as recorded, and a room that refuses is named with the refusal. Each room is
+ * recorded through `recordInspection`, so every rule of the single act holds for each.
+ */
+export async function recordInspectionsInBulk(
+  prisma: PrismaClient,
+  entryId: string,
+  actorId: string,
+  input: { mode: "CLEAR" | "PUT_OFF"; roomIds?: string[] },
+  opts?: { actorLevel?: ActorLevel },
+) {
+  const { entry } = await getEntryWithRoom(prisma, entryId);
+  enforceEntryNotSealedForWorkingAction({ status: entry.status });
+  const putOff = input.mode === "PUT_OFF";
+  enforceEntryStageForRoomInspection({ currentStage: entry.currentStage, isDeferred: putOff, inspectionOwed: true });
+  const atS9 = entry.currentStage === Stage.S9;
+
+  const standing = await readBookingInspectionStanding(prisma, entryId);
+  if (input.roomIds?.length) {
+    const unknown = input.roomIds.filter((id) => !standing.rooms.some((r) => r.roomId === id));
+    if (unknown.length) {
+      throw new ValidationError(
+        `Not a room this booking leaves at check-out — the rooms inspected are ${roomListWords(standing.rooms.map((r) => r.roomNumber))}`,
+      );
+    }
+  }
+  const named = input.roomIds?.length ? new Set(input.roomIds) : null;
+  // At Check-out a bulk act never overwrites a room already recorded; at Closed it finishes the
+  // rooms that still owe one.
+  const owes = (s: string) => (atS9 ? s === "PUT_OFF" || s === "NOT_RECORDED" : s === "NOT_RECORDED");
+  const candidates = standing.rooms.filter((r) => owes(r.standing.state) && (!named || named.has(r.roomId)));
+  if (!candidates.length) {
+    throw new ValidationError(
+      atS9 ? "No room is waiting for an inspection" : "Every room is already inspected or put off — record one again on its own",
+    );
+  }
+
+  const recorded: Array<{ roomId: string; roomNumber: string }> = [];
+  const skipped: Array<{ roomId: string; roomNumber: string; reason: "OPEN_FAULT" | "REFUSED"; message: string }> = [];
+  for (const r of candidates) {
+    const fault = await prisma.deficientConditionRecord.findFirst({
+      where: { roomId: r.roomId, status: { in: ["UNRESOLVED", "DEFICIENT_UNRESOLVED_AT_CHECKOUT"] } as any },
+      select: { id: true },
+    });
+    if (fault) {
+      skipped.push({ roomId: r.roomId, roomNumber: r.roomNumber, reason: "OPEN_FAULT", message: `Room ${r.roomNumber} has an open fault — answer it on its own` });
+      continue;
+    }
+    try {
+      await recordInspection(
+        prisma,
+        entryId,
+        actorId,
+        { roomId: r.roomId, isDeferred: putOff, deficientFlagStatus: "NOT_APPLICABLE", damageFound: false },
+        { actorLevel: opts?.actorLevel, precomputedStanding: standing },
+      );
+      recorded.push({ roomId: r.roomId, roomNumber: r.roomNumber });
+    } catch (e) {
+      skipped.push({
+        roomId: r.roomId,
+        roomNumber: r.roomNumber,
+        reason: "REFUSED",
+        message: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+
+  await prisma.traceEvent.create({
+    data: {
+      eventType: "ROOM_INSPECTION.RECORDED_IN_BULK",
+      actorId,
+      actorLevel: opts?.actorLevel ?? "L1",
+      entityType: "Entry",
+      entityId: entryId,
+      operation: "CREATE",
+      timestamp: new Date(),
+      stageContext: entry.currentStage,
+      inquiryId: entry.inquiryId,
+      entryId,
+      payload: {
+        mode: input.mode,
+        recordedRooms: recorded.map((r) => r.roomNumber),
+        skippedRooms: skipped.map((s) => ({ roomNumber: s.roomNumber, reason: s.reason })),
+      },
+      createdBy: actorId,
+    },
+  });
+  return { mode: input.mode, recorded, skipped };
 }
 
 export async function completeCheckoutPhysicalDeparture(db: DbClient, entryId: string, actorId: string) {
