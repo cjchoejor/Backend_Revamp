@@ -2186,6 +2186,7 @@ export function useRefreshEntry(entryId: string) {
       ["folio-documents", entryId],
       ["journey-summary", entryId],
       ["closure-readiness", entryId],
+      ["room-inspections", entryId],
       ["held-documents", entryId],
       ["room-chart"],
       ...extra,

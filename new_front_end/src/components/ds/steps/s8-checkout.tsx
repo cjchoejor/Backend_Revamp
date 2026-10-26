@@ -20,7 +20,7 @@ import { useHotelClock } from "@/hooks/use-hotel-clock";
 import { useHotelDay } from "@/hooks/use-hotel-day";
 import { usePaymentStatus } from "@/hooks/use-payment-status";
 import { useRoomInspections } from "@/hooks/use-room-inspections";
-import type { RoomInspectionView } from "@/lib/api/post-stay";
+import { RoomInspectionGrid } from "./room-inspections";
 import {
   buildH4FulfilmentEvidence,
   correctFolioCharge,
@@ -1732,7 +1732,7 @@ function Departure({ entry, live }: { entry: EntryDetail; live: boolean }) {
                 <>released to housekeeping when the bill is settled</>
               )}
             </span>
-            <RoomInspections entry={entry} live={live} />
+            <RoomInspectionGrid entry={entry} live={live} />
           </div>
         </Fact>
 
@@ -1755,177 +1755,6 @@ function Departure({ entry, live }: { entry: EntryDetail; live: boolean }) {
 }
 
 /* ------------------------------------------------------------------ raise a dispute */
-
-/* ------------------------------------------------------------------ the room inspections */
-
-type FaultAnswer = "RESOLVED" | "UNRESOLVED_AT_CHECKOUT" | "NOT_APPLICABLE";
-
-/** Every room the guest leaves, inspected one by one (2026-10-26, operator: "do one inspection per
- *  room" — it had been one per booking, filed against whichever room the newest assignment named,
- *  so a party's other rooms were never looked at). The backend says which rooms and where each
- *  stands; the count reads red until every room is inspected or put off. */
-function RoomInspections({ entry, live }: { entry: EntryDetail; live: boolean }) {
-  const q = useRoomInspections(entry);
-  const data = q.data;
-  if (!data) return <span className="meta">{q.isError ? "The inspections could not be read" : "Reading the inspections…"}</span>;
-  const n = data.rooms.length;
-  return (
-    <div style={{ display: "grid", gap: 8 }}>
-      <span className="sm">
-        {n > 1 ? (
-          <b className={data.allRecorded ? "ok-ink" : "stop-ink"}>
-            {data.inspectedCount} of {n} rooms inspected or put off
-          </b>
-        ) : (
-          <>The room inspection</>
-        )}
-        <Help label="Which rooms are inspected">
-          Each room the guest leaves at check-out is inspected, or its inspection put off to after
-          departure. A room the guest left earlier in the stay was handed to housekeeping the day it
-          was left, so it is not inspected here.
-        </Help>
-      </span>
-      {data.rooms.map((r) => (
-        <RoomInspectionRow key={r.roomId} entry={entry} row={r} live={live} />
-      ))}
-    </div>
-  );
-}
-
-function RoomInspectionRow({ entry, row, live }: { entry: EntryDetail; row: RoomInspectionView; live: boolean }) {
-  const { session } = useSession();
-  const refresh = useRefreshEntry(entry.id);
-  const fault = row.openFault;
-  const recorded = row.state !== "NOT_RECORDED";
-  const [editing, setEditing] = useState(false);
-  const [deferred, setDeferred] = useState(false);
-  const [flag, setFlag] = useState<FaultAnswer>(fault ? "UNRESOLVED_AT_CHECKOUT" : "NOT_APPLICABLE");
-  useEffect(() => {
-    setFlag(fault ? "UNRESOLVED_AT_CHECKOUT" : "NOT_APPLICABLE");
-  }, [fault?.id]); // eslint-disable-line react-hooks/exhaustive-deps
-  const [assessment, setAssessment] = useState("");
-  const [damage, setDamage] = useState(false);
-  const [damageNotes, setDamageNotes] = useState("");
-  const inspect = useMutation({
-    mutationFn: () => {
-      if (flag !== "NOT_APPLICABLE" && !fault?.id) throw new Error(`Room ${row.roomNumber} has no open fault report`);
-      if (flag === "UNRESOLVED_AT_CHECKOUT" && !assessment.trim()) throw new Error("Write what the inspector found");
-      if (damage && !damageNotes.trim()) throw new Error("Say what is damaged");
-      return recordRoomInspection(session!, entry.id, {
-        roomId: row.roomId,
-        isDeferred: deferred,
-        deficientFlagStatus: flag,
-        deficientConditionId: flag !== "NOT_APPLICABLE" ? fault!.id : undefined,
-        inspectorAssessment: flag === "UNRESOLVED_AT_CHECKOUT" ? assessment.trim() : undefined,
-        damageFound: damage,
-        damageNotes: damage ? damageNotes.trim() : undefined,
-      });
-    },
-    onSuccess: () => {
-      toast.success(deferred ? `Room ${row.roomNumber}'s inspection is put off to after departure` : `Room ${row.roomNumber}'s inspection is on record`);
-      setEditing(false);
-      refresh();
-    },
-    onError: (e) => toastRefusal(e, `Room ${row.roomNumber}'s inspection could not be recorded`),
-  });
-  const showForm = live && (!recorded || editing);
-  const stateMark =
-    row.state === "DONE" ? (
-      <Chip tone="success" icon="check">
-        inspected
-      </Chip>
-    ) : row.state === "PUT_OFF" ? (
-      <Chip tone="warning">put off to after departure</Chip>
-    ) : row.state === "LAPSED" ? (
-      <Chip tone="warning">window closed, nothing found</Chip>
-    ) : (
-      <b className="stop-ink">{live ? "not inspected yet" : "not inspected"}</b>
-    );
-
-  return (
-    <div className={showForm ? "bind provisional" : undefined} style={{ display: "grid", gap: 8 }} aria-label={`Room ${row.roomNumber}'s inspection`}>
-      <div className="row-acts" style={{ justifyContent: "space-between", alignItems: "center" }}>
-        <span className="sm">
-          <b>Room {row.roomNumber}</b> {stateMark}
-          {/* What the inspection found — only once one has looked; a put-off room has found nothing yet. */}
-          {row.state === "DONE" ? (
-            <span className="meta">
-              {" "}
-              · {DEFICIENCY_WORD[row.deficientFlagStatus ?? ""] ?? words(row.deficientFlagStatus ?? "")}
-              {row.damageFound ? ` · damage noted${row.damageNotes ? `: ${row.damageNotes}` : ""}` : " · no damage"}
-            </span>
-          ) : null}
-        </span>
-        {live && recorded ? (
-          <Button kind="quiet" compact onClick={() => setEditing((v) => !v)}>
-            {editing ? "Leave it" : "Record it again"}
-          </Button>
-        ) : null}
-      </div>
-      {showForm ? (
-        <>
-          {fault ? (
-            <span className="sm warn-ink">
-              Room {row.roomNumber} has an open fault — {words(fault.category)}: {fault.description}. Say how the inspection leaves it.
-            </span>
-          ) : null}
-          <label className="sm" style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
-            <input type="checkbox" checked={deferred} onChange={(e) => setDeferred(e.target.checked)} />
-            Put this room&rsquo;s inspection off to after departure
-          </label>
-          <div className="form2">
-            {fault ? (
-              <div className="wide field">
-                <label>Room {row.roomNumber}&rsquo;s fault, at check-out</label>
-                <Choice
-                  options={[
-                    ["RESOLVED", "Put right at inspection"],
-                    ["UNRESOLVED_AT_CHECKOUT", "Still there at departure"],
-                  ]}
-                  value={flag === "NOT_APPLICABLE" ? "UNRESOLVED_AT_CHECKOUT" : flag}
-                  onChange={setFlag}
-                />
-              </div>
-            ) : (
-              <div className="wide field">
-                <span className="sm">
-                  Room {row.roomNumber} has <b>no open fault report</b>
-                  <Help label="About fault reports">
-                    A fault report is a fault flagged on the room — from Stay&rsquo;s Other ways (Flag room deficient) or the Rooms page. The folio&rsquo;s charges are not read here.
-                  </Help>
-                </span>
-              </div>
-            )}
-            {flag === "UNRESOLVED_AT_CHECKOUT" ? (
-              <div className="field">
-                <label>What the inspector found</label>
-                <input className="input" value={assessment} onChange={(e) => setAssessment(e.target.value)} />
-              </div>
-            ) : null}
-            <div className="wide field">
-              <label className="sm" style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
-                <input type="checkbox" checked={damage} onChange={(e) => setDamage(e.target.checked)} />
-                Damage found in Room {row.roomNumber}
-              </label>
-              {damage ? <input className="input" value={damageNotes} placeholder="what is damaged" onChange={(e) => setDamageNotes(e.target.value)} /> : null}
-            </div>
-          </div>
-          <div className="row-acts">
-            <Button
-              kind="secondary"
-              compact
-              state={inspect.isPending ? "working" : "default"}
-              workingLabel="Recording…"
-              onClick={() => inspect.mutate()}
-            >
-              Record Room {row.roomNumber}&rsquo;s inspection
-            </Button>
-          </div>
-        </>
-      ) : null}
-    </div>
-  );
-}
 
 function RaiseDispute({ entry, open, onClose }: { entry: EntryDetail; open: boolean; onClose: () => void }) {
   const { session } = useSession();

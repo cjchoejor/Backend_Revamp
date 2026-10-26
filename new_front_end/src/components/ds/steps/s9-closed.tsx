@@ -21,7 +21,7 @@ import { useHotelDay } from "@/hooks/use-hotel-day";
 import { usePaymentStatus } from "@/hooks/use-payment-status";
 import { useClosureReadiness } from "@/hooks/use-closure-readiness";
 import { recordRoomInspection } from "@/lib/api/checkout";
-import type { RoomInspectionView } from "@/lib/api/post-stay";
+import { RoomInspectionGrid } from "./room-inspections";
 import {
   expirePostCheckoutInspectionWindow,
   fulfilHandoff,
@@ -531,7 +531,16 @@ function AfterTheStay({ entry, tz, close }: { entry: EntryDetail; tz: string; cl
             )}
           </Fact>
         ) : null}
-        <AfterDepartureInspections entry={entry} rooms={inspRooms} fom={fom} tz={tz} />
+        {/* The rooms put off at check-out (or never inspected), as tiles, each finished here or its
+            window closed by the FOM (2026-10-26). Nothing shows when every room was inspected at
+            check-out. */}
+        {inspRooms.some((r) => r.state !== "DONE" || (entry.roomInspectionRecords ?? []).some((i) => i.roomId === r.roomId && i.isDeferred)) ? (
+          <Fact k={inspRooms.length > 1 ? "The inspections" : "The inspection"}>
+            <Live>
+              <RoomInspectionGrid entry={entry} live={!sealed && entry.currentStage === "S9"} atClosed fom={fom} />
+            </Live>
+          </Fact>
+        ) : null}
       </Facts>
 
       <Live>
@@ -1089,168 +1098,3 @@ function Cancellation({ entry }: { entry: EntryDetail }) {
   );
 }
 
-/* ------------------------------------------------------------------ the inspections after departure */
-
-/** The rooms whose inspection was put off at check-out (or, for a booking that left Check-out before
- *  rooms were inspected one by one, never recorded) — each finished here, or its window closed by the
- *  FOM (2026-10-26 — one inspection per room). A room inspected at check-out is not shown. */
-function AfterDepartureInspections({
-  entry,
-  rooms,
-  fom,
-  tz,
-}: {
-  entry: EntryDetail;
-  rooms: RoomInspectionView[];
-  fom: boolean;
-  tz: string;
-}) {
-  const putOffEver = (roomId: string) => (entry.roomInspectionRecords ?? []).some((i) => i.roomId === roomId && i.isDeferred);
-  const shown = rooms.filter((r) => r.state !== "DONE" || putOffEver(r.roomId));
-  if (!shown.length) return null;
-  return (
-    <Fact k={shown.length > 1 ? "The inspections" : "The inspection"}>
-      <div style={{ display: "grid", gap: 10 }}>
-        {shown.map((r) => (
-          <AfterDepartureInspection key={r.roomId} entry={entry} row={r} fom={fom} tz={tz} />
-        ))}
-      </div>
-    </Fact>
-  );
-}
-
-function AfterDepartureInspection({ entry, row, fom, tz }: { entry: EntryDetail; row: RoomInspectionView; fom: boolean; tz: string }) {
-  const { session } = useSession();
-  const refresh = useRefreshEntry(entry.id);
-  const [faultFlag, setFaultFlag] = useState<"RESOLVED" | "UNRESOLVED_AT_CHECKOUT">("UNRESOLVED_AT_CHECKOUT");
-  const [assessment, setAssessment] = useState("");
-  const [damage, setDamage] = useState(false);
-  const [damageNotes, setDamageNotes] = useState("");
-  const fault = row.openFault;
-  const missing =
-    fault && faultFlag === "UNRESOLVED_AT_CHECKOUT" && !assessment.trim()
-      ? "write what the inspector found"
-      : damage && !damageNotes.trim()
-        ? "say what is damaged"
-        : null;
-  const complete = useMutation({
-    mutationFn: () =>
-      recordRoomInspection(session!, entry.id, {
-        roomId: row.roomId,
-        isDeferred: false,
-        deficientFlagStatus: fault ? faultFlag : "NOT_APPLICABLE",
-        deficientConditionId: fault ? fault.id : undefined,
-        inspectorAssessment: fault && faultFlag === "UNRESOLVED_AT_CHECKOUT" ? assessment.trim() : undefined,
-        damageFound: damage,
-        damageNotes: damage ? damageNotes.trim() : undefined,
-      }),
-    onSuccess: () => {
-      toast.success(
-        damage
-          ? `Room ${row.roomNumber}'s inspection is on record — post the damage as a late charge below`
-          : `Room ${row.roomNumber}'s inspection is on record`,
-      );
-      refresh();
-    },
-    onError: (e) => toastRefusal(e, `Room ${row.roomNumber}'s inspection could not be recorded`),
-  });
-  const expire = useMutation({
-    mutationFn: () => expirePostCheckoutInspectionWindow(session!, entry.id, row.roomId),
-    onSuccess: () => {
-      toast.success(`Room ${row.roomNumber}'s inspection window is closed`);
-      refresh();
-    },
-    onError: (e) => toastRefusal(e, "The inspection window could not be closed"),
-  });
-
-  if (row.state === "LAPSED") {
-    return (
-      <span>
-        <b>Room {row.roomNumber}</b> · put off at check-out · the window closed{row.lapsedAt ? ` ${fmtDateTime(row.lapsedAt, tz)}` : ""} with nothing
-        recorded
-      </span>
-    );
-  }
-  if (row.state === "DONE") {
-    return (
-      <span>
-        <b>Room {row.roomNumber}</b> · inspected after departure
-        <span className="meta">
-          {row.inspectedAt ? ` · ${fmtDateTime(row.inspectedAt, tz)}` : ""}
-          {row.damageFound ? ` · damage noted${row.damageNotes ? `: ${row.damageNotes}` : ""}` : " · no damage"}
-        </span>
-      </span>
-    );
-  }
-
-  return (
-    <div style={{ display: "grid", gap: 8 }}>
-      <span>
-        <b>Room {row.roomNumber}</b> ·{" "}
-        {row.state === "PUT_OFF" ? (
-          <>put off at check-out, not yet done</>
-        ) : (
-          <b className="stop-ink">not inspected at check-out</b>
-        )}
-        {row.windowEndsAt ? <span className="meta"> · the window closes {fmtDateTime(row.windowEndsAt, tz)}</span> : null}
-      </span>
-      <Live>
-        <div className="bind provisional" style={{ display: "grid", gap: 8 }}>
-          {fault ? (
-            <span className="sm warn-ink">
-              Room {row.roomNumber} has an open fault — {words(fault.category)}: {fault.description}. Say how the inspection leaves it.
-            </span>
-          ) : null}
-          <div className="form2">
-            {fault ? (
-              <div className="wide field">
-                <label>Room {row.roomNumber}&rsquo;s fault</label>
-                <Choice
-                  options={[
-                    ["RESOLVED", "Put right at inspection"],
-                    ["UNRESOLVED_AT_CHECKOUT", "Still there"],
-                  ]}
-                  value={faultFlag}
-                  onChange={setFaultFlag}
-                />
-              </div>
-            ) : null}
-            {fault && faultFlag === "UNRESOLVED_AT_CHECKOUT" ? (
-              <div className="field">
-                <label>What the inspector found</label>
-                <input className="input" value={assessment} onChange={(e) => setAssessment(e.target.value)} />
-              </div>
-            ) : null}
-            <div className="wide field">
-              <label className="sm" style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
-                <input type="checkbox" checked={damage} onChange={(e) => setDamage(e.target.checked)} />
-                Damage found in Room {row.roomNumber}
-              </label>
-              {damage ? <input className="input" value={damageNotes} placeholder="what is damaged" onChange={(e) => setDamageNotes(e.target.value)} /> : null}
-            </div>
-          </div>
-          <div className="row-acts">
-            <Button
-              kind="secondary"
-              compact
-              state={complete.isPending ? "working" : missing ? "inert" : "default"}
-              title={missing ?? undefined}
-              workingLabel="Recording…"
-              onClick={() => complete.mutate()}
-            >
-              Record Room {row.roomNumber}&rsquo;s inspection
-            </Button>
-          </div>
-        </div>
-        {row.windowCanBeClosed ? (
-          <SeeRow
-            label={`Close Room ${row.roomNumber}'s inspection window`}
-            note="only when nobody inspected the room in time — it records that nothing was found; the FOM's"
-            onClick={fom && !expire.isPending ? () => expire.mutate() : undefined}
-            reason={fom ? undefined : "Closing the inspection window needs the FOM"}
-          />
-        ) : null}
-      </Live>
-    </div>
-  );
-}

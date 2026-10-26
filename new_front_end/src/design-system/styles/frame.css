@@ -1110,3 +1110,34 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .subtab:hover { background: var(--surface-2); border-color: var(--ink-3); }
 .ds .subtab[aria-selected="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-ink); font-weight: 700; box-shadow: inset 0 -3px 0 var(--accent); }
 .ds .subtab:focus-visible { box-shadow: var(--focus); }
+
+/* The room inspections as tiles (2026-10-26, operator: a booking can have 20+ rooms — the
+   per-room rows took a screen for two). One small tile per room, coloured by where it stands;
+   one click opens its form under the tiles. */
+.ds .insp-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); }
+.ds .insp-bulk { margin-left: auto; display: flex; flex-wrap: wrap; gap: var(--s2); }
+.ds .insp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(78px, 1fr)); gap: 6px; }
+.ds .insp-tile {
+  display: grid; gap: 1px; justify-items: start; text-align: left;
+  padding: 6px 8px; min-height: 40px;
+  background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--r-control);
+  color: var(--ink); font: inherit; cursor: pointer;
+}
+.ds .insp-tile b { font-size: 14px; line-height: 1.15; font-weight: 700; }
+.ds .insp-tile span { font-size: 11.5px; line-height: 1.2; font-weight: 600; color: var(--ink-3); }
+.ds .insp-tile:hover { background: var(--surface-2); border-color: var(--ink-3); }
+.ds .insp-tile:focus-visible { outline: none; box-shadow: var(--focus); }
+.ds .insp-tile.todo span { color: var(--danger); }
+.ds .insp-tile.fault { background: var(--warning-soft); border-color: var(--warning-line); }
+.ds .insp-tile.fault span { color: var(--warning); }
+.ds .insp-tile.clear { background: var(--success-soft); border-color: var(--success-line); }
+.ds .insp-tile.clear span { color: var(--success); }
+.ds .insp-tile.damage { background: var(--warning-soft); border-color: var(--warning-line); }
+.ds .insp-tile.damage span { color: var(--warning); }
+.ds .insp-tile.off { border-style: dashed; border-color: var(--warning-line); }
+.ds .insp-tile.off span { color: var(--warning); }
+.ds .insp-tile.lapsed { background: var(--surface-2); }
+.ds .insp-tile.sel { border-color: var(--accent); box-shadow: inset 0 -3px 0 var(--accent); }
+.ds .insp-panel { display: grid; gap: var(--s2); padding: var(--s3); }
+.ds .insp-ticks { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s4); }
+.ds .insp-ticks label { display: inline-flex; align-items: center; gap: 6px; }

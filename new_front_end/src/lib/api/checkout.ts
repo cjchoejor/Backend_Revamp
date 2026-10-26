@@ -51,6 +51,19 @@ export async function recordRoomInspection(
   });
 }
 
+/** Every room still to inspect, in one act — nothing found, or put off (2026-10-26). */
+export async function recordRoomInspectionsBulk(
+  session: Session,
+  entryId: string,
+  body: { mode: "CLEAR" | "PUT_OFF"; roomIds?: string[] },
+) {
+  return apiRequest<{
+    mode: "CLEAR" | "PUT_OFF";
+    recorded: Array<{ roomId: string; roomNumber: string }>;
+    skipped: Array<{ roomId: string; roomNumber: string; reason: "OPEN_FAULT" | "REFUSED"; message: string }>;
+  }>(`/api/entries/${entryId}/room-inspections/bulk`, { method: "POST", session, body });
+}
+
 export async function initiateSettlement(
   session: Session,
   folioId: string,
