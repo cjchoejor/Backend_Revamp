@@ -60,6 +60,9 @@ export type RoomInspectionView = {
   inspectorAssessment: string | null;
   damageFound: boolean;
   damageNotes: string | null;
+  /** How the damage was answered (2026-10-26): CHARGED · WAIVED · LATER, null while unanswered. */
+  damageAnswer: "CHARGED" | "WAIVED" | "LATER" | null;
+  damageFaultId: string | null;
   windowEndsAt: string | null;
   windowCanBeClosed: boolean;
   lapsedAt: string | null;

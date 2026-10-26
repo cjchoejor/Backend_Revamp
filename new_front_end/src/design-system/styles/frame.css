@@ -1237,3 +1237,16 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .type-groups.flow > .floor > .tiles:not(.desk-root *) { display: flex; flex-wrap: wrap; gap: 10px; }
 .ds .type-groups.flow > .floor > .tiles > * { width: 150px; }
 /* The open room's form, once, under the groups — one line across. */
+
+/* Damage found (2026-10-26) — one row per room: what was found, where it stands, its acts.
+   A damage still to answer carries a red edge ("UIappeal"). */
+.ds .dmg-list { display: grid; gap: var(--s2); margin-top: var(--s2); }
+.ds .dmg-row { display: grid; grid-template-columns: minmax(200px, 1.4fr) minmax(180px, 1fr) auto; gap: var(--s3); align-items: center; padding: var(--s3); border: 1px solid var(--line-2); border-radius: var(--r-card, 6px); background: var(--surface); }
+.ds .dmg-row.todo { box-shadow: inset 3px 0 0 var(--danger); background: var(--danger-soft); border-color: var(--danger); }
+.ds .dmg-row .dmg-what { display: grid; gap: 2px; min-width: 0; }
+.ds .dmg-row .dmg-what > b { font-size: 15px; }
+.ds .dmg-row .dmg-state { font-size: 14px; }
+.ds .dmg-row .dmg-acts { justify-content: flex-end; margin: 0; flex-wrap: wrap; }
+.ds .dmg-ticks { display: flex; flex-wrap: wrap; gap: var(--s4); }
+.ds .dmg-ticks label { display: inline-flex; align-items: center; gap: 6px; font-weight: 500; }
+@media (max-width: 760px) { .ds .dmg-row { grid-template-columns: 1fr; } .ds .dmg-row .dmg-acts { justify-content: flex-start; } }

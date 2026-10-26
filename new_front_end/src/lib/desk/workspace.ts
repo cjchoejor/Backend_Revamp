@@ -652,7 +652,11 @@ export function canProgressS7(entry: EntryDetail, nightAuditOk: boolean, hotelTo
 /** S8 exit readiness (SIG-S8) — gates before settlement & close (S9). H5 is auto-created on progress. */
 export function s8Readiness(
   entry: EntryDetail,
-  opts: { inspections?: { allRecorded: boolean; inspectedCount: number; rooms: unknown[] } | null } = {},
+  opts: {
+    inspections?: { allRecorded: boolean; inspectedCount: number; rooms: unknown[] } | null;
+    /** The damage the inspections found (2026-10-26): listed only when there is some. */
+    damage?: { any: boolean; unanswered: string[] } | null;
+  } = {},
 ): Precondition[] {
   const folio = entry.folio;
   const keyReturn = (entry.keyReturnRecords ?? [])[0];
@@ -695,6 +699,7 @@ export function s8Readiness(
       met: roomsReleased,
     },
     inspectionLine,
+    ...(opts.damage?.any ? [{ label: "Damage answered", met: opts.damage.unanswered.length === 0, card: "damage" } as Precondition] : []),
     { label: "Departure handoff done", met: !!h4 && (h4.state === "FULFILLED" || h4.isAutoFulfilled === true), card: "handoff" },
     { label: "No open disputes", met: openDisputes.length === 0 },
   ];

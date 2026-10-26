@@ -45,6 +45,7 @@ import {
 import { closeEntryAtS9 } from "@/lib/api/post-stay";
 import { useClosureReadiness } from "@/hooks/use-closure-readiness";
 import { useRoomInspections } from "@/hooks/use-room-inspections";
+import { useUnansweredDamage } from "@/components/ds/steps/damage-card";
 import { activatePreArrival } from "@/lib/api/pre-arrival";
 import { completeCheckInToS7 } from "@/lib/api/check-in";
 import { listIdentityProofs } from "@/lib/api/identity-proofs";
@@ -213,6 +214,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const closure = closureQuery.data ?? null;
   // Each room's inspection at Check-out (2026-10-26 — one inspection per room).
   const inspections = useRoomInspections(entry, entry?.currentStage === "S8").data ?? null;
+  const damage = useUnansweredDamage(entry, entry?.currentStage === "S8");
 
   const parked = entry?.status === "PARKED";
   const parkTimer = findParkTimer(timersQuery.data?.items);
@@ -728,7 +730,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
               : stayStepActive
                 ? [...s7Readiness(entry, hotelToday), { label: "Night audit complete", met: nightAuditOk, card: "nights" }]
                 : checkOutStepActive
-                  ? s8Readiness(entry, { inspections })
+                  ? s8Readiness(entry, { inspections, damage })
                   : closedStepActive
                     ? closure
                       ? [...closure.checks.map((c) => ({ label: c.label, met: c.met })), { label: "Sealing needs the FOM", met: atLeastFom(session?.actorLevel) }]
@@ -886,7 +888,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
       </Button>
     );
   } else if (checkOutStepActive) {
-    const ok = canProgressS8(entry, { inspections });
+    const ok = canProgressS8(entry, { inspections, damage });
     forward = (
       <Button state={advanceMutation.isPending ? "working" : ok ? "default" : "inert"} reason={ok ? undefined : firstNote} workingLabel="Moving…" onClick={() => advanceMutation.mutate({ targetStage: "S9" })}>
         Move to Closed

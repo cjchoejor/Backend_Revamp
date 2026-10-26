@@ -42,6 +42,9 @@ export async function recordRoomInspection(
     inspectorAssessment?: string;
     damageFound: boolean;
     damageNotes?: string;
+    /** Asked each time a damage is found (2026-10-26): yes raises a fault report. */
+    damageStopsSale?: boolean;
+    damageFaultCategory?: "HOUSEKEEPING" | "MAINTENANCE" | "SOFT_FURNISHING" | "OTHER";
   },
 ) {
   return apiRequest<RoomInspectionSummary>(`/api/entries/${entryId}/room-inspection`, {

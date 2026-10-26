@@ -21,6 +21,7 @@ import { useHotelDay } from "@/hooks/use-hotel-day";
 import { usePaymentStatus } from "@/hooks/use-payment-status";
 import { useRoomInspections } from "@/hooks/use-room-inspections";
 import { RoomInspectionGrid } from "./room-inspections";
+import { DamageCard, useUnansweredDamage } from "./damage-card";
 import {
   buildH4FulfilmentEvidence,
   correctFolioCharge,
@@ -205,6 +206,8 @@ export function S8CheckOut({
           onTab={setChargeTarget}
           onAddCharge={chargeable && openPane ? () => openPane("charges") : undefined}
         />
+        {/* A damage found is answered before the bill is settled (2026-10-26). */}
+        <DamageCard entry={entry} live={live} />
         <HowSettled entry={entry} live={live} tz={clock.tz} onBackToStay={() => openWay("stay")} goToStep={goToStep} />
         <OverpaidCard entry={entry} live={live} />
         <Invoices entry={entry} live={live} tz={clock.tz} />
@@ -275,6 +278,9 @@ function UnauditedLastNight({
   });
   if (!live || !lastNight || !audit.isFetched || audit.data?.runStatus === "COMPLETE") return null;
   if (isSettled(entry.folio?.state)) return null;
+  // A night posted for this booking alone counts, as settlement counts it (2026-09-25) — the Stay
+  // step's nights card reads it the same way: the booking's room charge for that night is on the bill.
+  if ((entry.folio?.lines ?? []).some((l) => l.lineType === "ROOM_CHARGE" && l.chargeDate?.slice(0, 10) === lastNight)) return null;
   return (
     <div style={{ marginBottom: 10 }}>
       <Refusal
@@ -862,6 +868,11 @@ function HowSettled({
   const creditActive = !!ps?.creditExtensionActive;
   const creditExpired = !!ps?.creditExtensionExpired && !creditActive;
   const [byPart, setByPart] = useState(false);
+  // The bill waits for every damage found to have an answer (Policy 81, 2026-10-26).
+  const damage = useUnansweredDamage(entry);
+  const damageWhy = damage.unanswered.length
+    ? `answer the damage found in ${damage.unanswered.length > 1 ? `Rooms ${damage.unanswered.join(", ")}` : `Room ${damage.unanswered[0]}`} first`
+    : undefined;
 
   // More than one payer still to settle → the bill settles share by share (2026-09-18).
   const sharesQ = useSettlementShares(entry, !!folio);
@@ -993,7 +1004,9 @@ function HowSettled({
   const takesMoney = guestPays && (Number.isFinite(typed) ? typed > 0 : balanceNum > 0);
   const settleReason = !folioLive
     ? "the bill must be live to settle"
-    : partialLocked
+    : damageWhy
+      ? damageWhy
+      : partialLocked
       ? "a part-payment needs the FOM or a credit extension"
       : !folio?.billingModel
         ? "the bill has no billing model"

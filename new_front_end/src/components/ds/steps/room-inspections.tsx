@@ -52,7 +52,10 @@ function tileOf(r: RoomInspectionView): { tone: string; word: string } {
     case "LAPSED":
       return { tone: "lapsed", word: "window closed" };
     default:
-      if (r.damageFound) return { tone: "damage", word: "damage" };
+      if (r.damageFound) {
+        const how = r.damageAnswer === "CHARGED" ? "charged" : r.damageAnswer === "WAIVED" ? "waived" : r.damageAnswer === "LATER" ? "later" : "to answer";
+        return { tone: "damage", word: `damage · ${how}` };
+      }
       if (r.deficientFlagStatus === "UNRESOLVED_AT_CHECKOUT") return { tone: "damage", word: "fault stays" };
       if (r.deficientFlagStatus === "RESOLVED") return { tone: "clear", word: "put right" };
       return { tone: "clear", word: "clear" };
@@ -214,12 +217,18 @@ function RoomInspectionPanel({
   const [assessment, setAssessment] = useState("");
   const [damage, setDamage] = useState(false);
   const [damageNotes, setDamageNotes] = useState("");
+  // Asked each time a damage is found (2026-10-26, operator ruling): does it stop the room being sold?
+  const [stopsSale, setStopsSale] = useState<"yes" | "no" | null>(null);
+  const [faultCategory, setFaultCategory] = useState<"HOUSEKEEPING" | "MAINTENANCE" | "SOFT_FURNISHING" | "OTHER">("MAINTENANCE");
+  const putOff = !atClosed && deferred;
   const missing =
     fault && flag === "UNRESOLVED_AT_CHECKOUT" && !assessment.trim()
       ? "write what the inspector found"
       : damage && !damageNotes.trim()
         ? "say what is damaged"
-        : null;
+        : damage && !putOff && !stopsSale
+          ? "say whether the damage stops the room being sold"
+          : null;
   const inspect = useMutation({
     mutationFn: () =>
       recordRoomInspection(session!, entry.id, {
@@ -230,13 +239,15 @@ function RoomInspectionPanel({
         inspectorAssessment: fault && flag === "UNRESOLVED_AT_CHECKOUT" ? assessment.trim() : undefined,
         damageFound: damage,
         damageNotes: damage ? damageNotes.trim() : undefined,
+        damageStopsSale: damage && !putOff ? stopsSale === "yes" : undefined,
+        damageFaultCategory: damage && !putOff && stopsSale === "yes" ? faultCategory : undefined,
       }),
     onSuccess: () => {
       toast.success(
         !atClosed && deferred
           ? `Room ${row.roomNumber}'s inspection is put off to after departure`
-          : damage && atClosed
-            ? `Room ${row.roomNumber}'s inspection is on record — post the damage as a late charge below`
+          : damage
+            ? `Room ${row.roomNumber}'s inspection is on record${stopsSale === "yes" ? " and the room is out of service" : ""} — answer the damage under Damage found`
             : `Room ${row.roomNumber}'s inspection is on record`,
       );
       setEditing(false);
@@ -326,6 +337,30 @@ function RoomInspectionPanel({
           </div>
           {damage ? (
             <input className="input" value={damageNotes} placeholder={`what is damaged in Room ${row.roomNumber}`} onChange={(e) => setDamageNotes(e.target.value)} />
+          ) : null}
+          {damage && !putOff ? (
+            <div className="field">
+              <label>Does the damage stop the room being sold?</label>
+              <Choice
+                options={[
+                  ["no", "No — it can still be sold"],
+                  ["yes", "Yes — take it out of service"],
+                ]}
+                value={stopsSale ?? ("" as "no")}
+                onChange={setStopsSale}
+              />
+            </div>
+          ) : null}
+          {damage && !putOff && stopsSale === "yes" ? (
+            <div className="field">
+              <label>Who puts it right</label>
+              <select className="input" value={faultCategory} onChange={(e) => setFaultCategory(e.target.value as typeof faultCategory)}>
+                <option value="MAINTENANCE">Maintenance</option>
+                <option value="HOUSEKEEPING">Housekeeping</option>
+                <option value="SOFT_FURNISHING">Soft furnishing</option>
+                <option value="OTHER">Other</option>
+              </select>
+            </div>
           ) : null}
           <div className="row-acts">
             <Button

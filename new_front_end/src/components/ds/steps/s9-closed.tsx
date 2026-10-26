@@ -22,6 +22,7 @@ import { usePaymentStatus } from "@/hooks/use-payment-status";
 import { useClosureReadiness } from "@/hooks/use-closure-readiness";
 import { recordRoomInspection } from "@/lib/api/checkout";
 import { RoomInspectionGrid } from "./room-inspections";
+import { DamageCard } from "./damage-card";
 import {
   expirePostCheckoutInspectionWindow,
   fulfilHandoff,
@@ -146,6 +147,8 @@ export function S9Closed({
       <div className="pane" hidden={at(null)}>
         <DisputesCard entry={entry} tz={clock.tz} />
         <WhatTheStayWas entry={entry} />
+        {/* The record is sealed once every damage is charged or waived (2026-10-26). */}
+        <DamageCard entry={entry} live={!readOnly && entry.status !== "CLOSED" && entry.currentStage === "S9"} atClosed />
         {entry.folio ? <OverpaidCard entry={entry} live={!readOnly} /> : null}
         {entry.folio ? <AfterTheStay entry={entry} tz={clock.tz} close={readOnly ? null : close} openPane={tail ? openPane : undefined} /> : null}
         <SealedPapers entry={entry} tz={clock.tz} />
