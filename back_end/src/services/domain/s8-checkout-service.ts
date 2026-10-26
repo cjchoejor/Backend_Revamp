@@ -16,8 +16,7 @@ import {
   enforceEntryStageForRoomInspection,
 } from "../../policies/01-availability/p01-entry-at-s8-for-checkout-progression.js";
 import { enforceEntryNotSealedForWorkingAction } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
-import { readRoomInspectionStanding } from "../../lib/room-inspection-standing.js";
-import { cancelEntryTimersByCode } from "../../lib/cancel-entry-timers-by-code.js";
+import { readBookingInspectionStanding, roomListWords, scheduledInspectionTimers } from "../../lib/room-inspection-standing.js";
 import { enforceRoomOccupiedForCheckoutCompletion } from "../../policies/01-availability/p01-s8-checkout-room-occupied-gate.js";
 import { countOutstandingKeys } from "./room-key-service.js";
 import { resetRoomBedToUsualTx } from "./room-bed-type-service.js";
@@ -167,6 +166,9 @@ export async function recordInspection(
   entryId: string,
   actorId: string,
   input: {
+    /** The room inspected (2026-10-26 — one inspection per room). Optional when the booking
+     *  leaves a single room at check-out. */
+    roomId?: string;
     isDeferred: boolean;
     deficientFlagStatus: "RESOLVED" | "UNRESOLVED_AT_CHECKOUT" | "NOT_APPLICABLE";
     deficientConditionId?: string;
@@ -187,21 +189,44 @@ export async function recordInspection(
     throw new ValidationError("inspectorAssessment is required when deficientFlagStatus = UNRESOLVED_AT_CHECKOUT");
   }
 
-  const { entry, room: latestRoom } = await getEntryWithRoom(prisma, entryId);
+  const { entry } = await getEntryWithRoom(prisma, entryId);
   enforceEntryNotSealedForWorkingAction({ status: entry.status });
-  // At S9 the only inspection taken is the completion of one put off at check-out (2026-09-18).
-  const standing = entry.currentStage === Stage.S9 ? await readRoomInspectionStanding(prisma, entryId) : null;
-  const completing = standing?.state === "PUT_OFF" ? standing.inspection : null;
+  // The step first (not at Check-out or Closed / a put-off at Closed), before the room is chosen.
+  enforceEntryStageForRoomInspection({ currentStage: entry.currentStage, isDeferred: input.isDeferred, inspectionOwed: true });
+
+  // ONE INSPECTION PER ROOM (2026-10-26): the room is named, and it must be one the guest leaves at
+  // check-out. A booking with a single such room may leave it unnamed. At S9 an inspection is
+  // still taken for a room that owes one — put off at check-out, or (a booking that left Check-out
+  // before rooms were inspected one by one) never recorded — and never put off again.
+  const standing = await readBookingInspectionStanding(prisma, entryId);
+  const atS9 = entry.currentStage === Stage.S9;
+  const owes = (r: (typeof standing.rooms)[number]) => r.standing.state === "PUT_OFF" || r.standing.state === "NOT_RECORDED";
+  const candidates = atS9 ? standing.rooms.filter(owes) : standing.rooms;
+  let row: (typeof standing.rooms)[number] | undefined;
+  if (input.roomId) {
+    row = standing.rooms.find((r) => r.roomId === input.roomId);
+    if (!row) {
+      throw new ValidationError(
+        `That room is not one this booking leaves at check-out — the rooms inspected are ${roomListWords(standing.rooms.map((r) => r.roomNumber)) || "none"}`,
+      );
+    }
+  } else if (candidates.length === 1) {
+    row = candidates[0];
+  } else if (candidates.length > 1) {
+    throw new ValidationError(
+      `This booking has ${candidates.length} rooms to inspect (${roomListWords(candidates.map((r) => r.roomNumber))}) — name the room inspected`,
+    );
+  }
   enforceEntryStageForRoomInspection({
     currentStage: entry.currentStage,
     isDeferred: input.isDeferred,
-    deferredInspectionOpen: !!completing,
+    inspectionOwed: !!row && owes(row),
+    roomNumber: row?.roomNumber ?? null,
   });
-  // Completing a put-off inspection inspects the room that was put off, not whichever room the
-  // booking's newest assignment names.
-  const room = completing
-    ? ((await prisma.room.findUnique({ where: { id: completing.roomId } })) ?? latestRoom)
-    : latestRoom;
+  if (!row) throw new ValidationError("This booking has no room to inspect");
+  const room = await prisma.room.findUnique({ where: { id: row.roomId } });
+  if (!room) throw new NotFoundError("Room");
+  const completing = atS9 && row.standing.state === "PUT_OFF" ? row.standing.inspection : null;
 
   // If there is any active deficient record for the room, NOT_APPLICABLE is forbidden.
   // AC-S7-14: UNRESOLVED at S7 exit becomes DEFICIENT_UNRESOLVED_AT_CHECKOUT at S8 entry.
@@ -235,12 +260,29 @@ export async function recordInspection(
     },
   });
 
+  // One clock per room: a newer record of the room — put off again, or inspected — replaces the
+  // room's own clock and leaves every other room's alone.
+  const priorClocks = await scheduledInspectionTimers(prisma, entryId, room.id);
+  if (priorClocks.length) {
+    const engine = await getTimerEngine();
+    await Promise.all(priorClocks.map((t) => (t.pgBossJobId ? engine.cancel(t.pgBossJobId) : Promise.resolve())));
+    await prisma.timerRecord.updateMany({
+      where: { id: { in: priorClocks.map((t) => t.id) }, status: "SCHEDULED" },
+      data: {
+        status: "CANCELLED",
+        cancelledAt: new Date(),
+        cancelledBy: actorId,
+        cancelledReason: input.isDeferred ? `Room ${room.roomNumber}'s inspection put off again` : `Room ${room.roomNumber} inspected`,
+      },
+    });
+  }
+
   if (input.isDeferred) {
     const windowMs = await resolvePostCheckoutInspectionWindowMs(prisma);
     const dueAt = new Date(Date.now() + windowMs);
     const timerRecordId = randomUUID();
     const engine = await getTimerEngine();
-    const pgBossJobId = await engine.schedule("POST_CHECKOUT_INSPECTION_W9", { entryId, timerRecordId }, { startAfter: dueAt });
+    const pgBossJobId = await engine.schedule("POST_CHECKOUT_INSPECTION_W9", { entryId, timerRecordId, roomId: room.id }, { startAfter: dueAt });
     await prisma.timerRecord.create({
       data: {
         id: timerRecordId,
@@ -259,16 +301,10 @@ export async function recordInspection(
     });
   }
 
-  if (completing) {
-    // The window no longer needs to lapse: stop its clock, and record the completion under the
-    // event name SIG-S8 §595 gives it (the W9 worker also finds the newest record non-deferred
-    // and skips on its own, so the cancel is belt and braces).
-    await cancelEntryTimersByCode(prisma, {
-      entryId,
-      timerCodes: ["POST_CHECKOUT_INSPECTION_W9"],
-      cancelledBy: actorId,
-      cancelledReason: "Post-checkout inspection completed",
-    });
+  if (atS9) {
+    // Recorded under the event name SIG-S8 §595 gives the completion of a put-off inspection; the
+    // room's clock was stopped above (the W9 worker also finds the room's newest record
+    // non-deferred and skips on its own).
     await prisma.traceEvent.create({
       data: {
         eventType: "POST_CHECKOUT_INSPECTION.INSPECTION_COMPLETED",
@@ -283,8 +319,11 @@ export async function recordInspection(
         entryId,
         payload: {
           inspectionId: created.id,
-          deferredInspectionId: completing.id,
+          deferredInspectionId: completing?.id ?? null,
+          // A room the booking left Check-out without an inspection for (before 2026-10-26).
+          recordedAfterDepartureWithoutPutOff: !completing,
           roomId: room.id,
+          roomNumber: room.roomNumber,
           deficientFlagStatus: created.deficientFlagStatus,
           damageFound: created.damageFound,
         },

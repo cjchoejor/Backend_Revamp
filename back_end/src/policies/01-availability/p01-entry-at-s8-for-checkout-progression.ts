@@ -34,11 +34,16 @@ export function enforceEntryAtS8ForRoomInspection(input: { currentStage: Stage }
  * AC-S9-020 close S9 on "completed OR lapsed". Refusing it here left the lapse, which records
  * that nothing was found, as the only way to seal. A new deferral is never taken at S9, and
  * nothing is accepted once the inspection is done or its window has lapsed.
+ *
+ * One inspection per ROOM since 2026-10-26: `inspectionOwed` is the room's own — put off and still
+ * open, or (a booking that left Check-out before rooms were inspected one by one) never recorded,
+ * which S9 takes too so such a booking can still be sealed.
  */
 export function enforceEntryStageForRoomInspection(input: {
   currentStage: Stage;
   isDeferred: boolean;
-  deferredInspectionOpen: boolean;
+  inspectionOwed: boolean;
+  roomNumber?: string | null;
 }) {
   if (input.currentStage === Stage.S8) return;
   if (input.currentStage === Stage.S9) {
@@ -48,9 +53,10 @@ export function enforceEntryStageForRoomInspection(input: {
         "INSPECTION_DEFER_ONLY_AT_S8",
       );
     }
-    if (!input.deferredInspectionOpen) {
+    if (!input.inspectionOwed) {
+      const room = input.roomNumber ? `Room ${input.roomNumber}` : "the room";
       throw new StateTransitionError(
-        "No put-off inspection is waiting — the room was inspected at check-out, or its inspection window has already closed",
+        `No inspection is waiting for ${room} — it was inspected at check-out, or its inspection window has already closed`,
         "NO_DEFERRED_INSPECTION_OPEN",
       );
     }

@@ -2,7 +2,7 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 import { CommissionDueStatus, EntryStatus, FolioLineType, FolioState, InvoiceState, InvoiceType, Stage } from "@prisma/client";
 import { allocateReadableId, READABLE_ID_PREFIXES, allocateFolioLineId } from "../../lib/readable-id.js";
 import { AppError, MissingConfigurationError, NotFoundError, ValidationError } from "../../lib/errors.js";
-import { readRoomInspectionStanding } from "../../lib/room-inspection-standing.js";
+import { describeBookingInspections, readBookingInspectionStanding } from "../../lib/room-inspection-standing.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { getRegistryPolicy } from "../../lib/policy-registry-runtime.js";
 import { randomUUID } from "node:crypto";
@@ -826,23 +826,10 @@ async function ensureOutstandingHasW8OrWrittenOff(db: DbClient, entryId: string,
 }
 
 async function ensureInspectionResolved(db: DbClient, entryId: string) {
-  const insp = await db.roomInspectionRecord.findFirst({ where: { entryId }, orderBy: { createdAt: "desc" } });
-  let hasNonDeferredCompleted = false;
-  if (insp?.isDeferred) {
-    const hasCompleted = await db.roomInspectionRecord.findFirst({
-      where: { entryId, isDeferred: false },
-      orderBy: { createdAt: "desc" },
-    });
-    hasNonDeferredCompleted = !!hasCompleted;
-  }
-  const lapsed = await (db as any).traceEvent.findFirst({
-    where: { entryId, eventType: "POST_CHECKOUT_INSPECTION.WINDOW_EXPIRED" },
-    orderBy: { createdAt: "desc" },
-  });
+  // Every room the guest left at check-out, each by its own standing (2026-10-26).
+  const standing = await readBookingInspectionStanding(db, entryId);
   enforceInspectionResolvedForS9Closure({
-    latestInspection: insp ?? undefined,
-    hasNonDeferredCompletedInspection: hasNonDeferredCompleted,
-    hasPostCheckoutInspectionWindowExpiredTrace: !!lapsed,
+    rooms: standing.rooms.map((r) => ({ roomNumber: r.roomNumber, state: r.standing.state })),
   });
 }
 
@@ -1257,17 +1244,13 @@ export async function buildS9ClosureReadiness(prisma: PrismaClient, entryId: str
     );
   }
 
-  const standing = await readRoomInspectionStanding(prisma, entryId);
-  const insp = standing.inspection;
-  const room = insp ? await prisma.room.findUnique({ where: { id: insp.roomId }, select: { roomNumber: true } }) : null;
-  const fault =
-    standing.state === "PUT_OFF" && insp
-      ? await prisma.deficientConditionRecord.findFirst({
-          where: { roomId: insp.roomId, status: { in: ["UNRESOLVED", "DEFICIENT_UNRESOLVED_AT_CHECKOUT"] } as any },
-          orderBy: { detectedAt: "desc" },
-          select: { id: true, category: true, description: true },
-        })
-      : null;
+  // Each room's inspection (2026-10-26). `inspection` stays for the readers of one: the first room
+  // that still owes one, else the first room.
+  const inspections = await describeBookingInspections(prisma, entryId);
+  const lead =
+    (["NOT_RECORDED", "PUT_OFF", "LAPSED"] as const).map((s) => inspections.rooms.find((r) => r.state === s)).find(Boolean) ??
+    inspections.rooms[0] ??
+    null;
 
   const atS9 = entry.currentStage === Stage.S9;
   const closed = entry.status === EntryStatus.CLOSED;
@@ -1280,19 +1263,20 @@ export async function buildS9ClosureReadiness(prisma: PrismaClient, entryId: str
     closeRequiresLevel: "L2" as const,
     checks,
     inspection: {
-      state: standing.state,
-      inspectionId: insp?.id ?? null,
-      roomId: insp?.roomId ?? null,
-      roomNumber: room?.roomNumber ?? null,
-      inspectedAt: insp?.inspectedAt ?? null,
-      deficientFlagStatus: insp?.deficientFlagStatus ?? null,
-      damageFound: insp?.damageFound ?? false,
-      damageNotes: insp?.damageNotes ?? null,
-      windowEndsAt: standing.state === "PUT_OFF" ? standing.windowEndsAt : null,
-      windowCanBeClosed: standing.state === "PUT_OFF" && standing.windowTimerScheduled,
-      lapsedAt: standing.state === "LAPSED" ? standing.lapsedAt : null,
-      openFault: fault,
+      state: inspections.state,
+      inspectionId: lead?.inspectionId ?? null,
+      roomId: lead?.roomId ?? null,
+      roomNumber: lead?.roomNumber ?? null,
+      inspectedAt: lead?.inspectedAt ?? null,
+      deficientFlagStatus: lead?.deficientFlagStatus ?? null,
+      damageFound: lead?.damageFound ?? false,
+      damageNotes: lead?.damageNotes ?? null,
+      windowEndsAt: lead?.windowEndsAt ?? null,
+      windowCanBeClosed: lead?.windowCanBeClosed ?? false,
+      lapsedAt: lead?.lapsedAt ?? null,
+      openFault: lead && (lead.state === "PUT_OFF" || lead.state === "NOT_RECORDED") ? lead.openFault : null,
     },
+    inspections,
   };
 }
 

@@ -169,6 +169,8 @@ export const recordKeyReturnRequestSchema = z.object({
 export type RecordKeyReturnRequestDto = z.infer<typeof recordKeyReturnRequestSchema>;
 
 export const recordRoomInspectionRequestSchema = z.object({
+  /** One inspection per room (2026-10-26); optional when the booking leaves a single room. */
+  roomId: z.string().min(1).optional(),
   isDeferred: z.boolean(),
   deficientFlagStatus: z.enum(["RESOLVED", "UNRESOLVED_AT_CHECKOUT", "NOT_APPLICABLE"]),
   deficientConditionId: z.string().optional(),
