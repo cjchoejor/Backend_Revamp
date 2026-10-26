@@ -187,6 +187,18 @@ async function cancellationFigures(
     now: Date;
   },
 ): Promise<CancellationFigures> {
+  // A bill with charges on it is a stay, not a booking to cancel (2026-10-26, found on
+  // ENT-20260912-0001: sent back from Stay to Set up, its cancel screen offered to refund the
+  // advance to a guest who still owed Nu 3,753.75 for what they had eaten — only the "no SETTLED
+  // with a balance" guard stopped it, with a message nobody could act on). Nothing posts charges
+  // before Stay, so any line here came from a stay; refuse before a figure is shown.
+  const charged = await prisma.folioLine.aggregate({ where: { folioId: input.folioId }, _sum: { amount: true }, _count: true });
+  if (charged._count > 0) {
+    const sum = toDecimal(charged._sum.amount ?? 0).toFixed(2);
+    throw new ValidationError(
+      `This bill already has charges from the stay on it (Nu ${Number(sum).toLocaleString("en-US", { minimumFractionDigits: 2 })}), so the booking can't be cancelled — cancelling would hand back money the guest owes. The bill has to be settled instead.`,
+    );
+  }
   const advanceReceived = await sumAdvancePaymentInTotalForFolio(prisma, input.folioId);
   // Arrival bubbles a config-store failure (never a silent zero charge); Set up falls back to the
   // disclosed terms alone, as it always has.

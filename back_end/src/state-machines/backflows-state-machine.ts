@@ -532,6 +532,10 @@ export async function backflowS5ToS1(
 // 6. S7 → S2 · mid-stay rate revision / full renegotiation (GM only)
 // ============================================================================
 
+/** Why a re-entry from Stay back to an earlier step is refused (2026-10-26). */
+const STRANDED_FROM_STAY = (what: string) =>
+  `While the guest is staying, ${what} can't send the booking back to an earlier step — it left the guest with no way back to Stay. A credit note or a charge correction on the bill puts a price right in the meantime.`;
+
 export async function backflowS7ToS2(
   prisma: PrismaClient,
   entryId: string,
@@ -540,6 +544,9 @@ export async function backflowS7ToS2(
 ) {
   enforceS7ToS2BackflowAuthority({ actorLevel: actor.actorLevel });
   if (!input.reason?.trim()) throw new ValidationError("reason is required");
+  // Refused since 2026-10-26 (operator ruling): it left an in-house guest's booking at Negotiation
+  // with no way back to Stay except Reserve, Arrival and Check-in all over again.
+  throw new ValidationError(STRANDED_FROM_STAY("renegotiating the rate"));
   return runBackflow(prisma, {
     entryId,
     fromStage: Stage.S7,
@@ -572,6 +579,11 @@ export async function backflowS7ToS3(
 ) {
   enforceS7ToS3BackflowAuthority({ actorLevel: actor.actorLevel });
   if (!input.reason?.trim()) throw new ValidationError("reason is required");
+  // Refused since 2026-10-26 (operator ruling, after ENT-20260912-0001 sat at Set up for 43 days
+  // with its guest's charges unsettled): changing who pays is done in place on the Stay step.
+  throw new ValidationError(
+    "Changing who pays is done on the Stay step itself — sending an in-house booking back to Set up left the guest with no way back to Stay.",
+  );
   return runBackflow(prisma, {
     entryId,
     fromStage: Stage.S7,
@@ -743,6 +755,10 @@ export async function backflowComplaintToS2(
   }
   if (entry.currentStage === Stage.S2 || entry.currentStage === Stage.S9) {
     throw new ValidationError(`Complaint resolution from ${entry.currentStage} is redundant — use in-stage adjustment instead`);
+  }
+  // From Stay it strands the guest the same way the two re-entries above did (2026-10-26).
+  if (entry.currentStage === Stage.S7) {
+    throw new ValidationError(STRANDED_FROM_STAY("putting a complaint right with a fresh quote"));
   }
 
   return runBackflow(prisma, {

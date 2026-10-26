@@ -165,6 +165,30 @@ export function legacyTaxOn(
   return { serviceCharge, gst };
 }
 
+/**
+ * The charge a tax line (service charge or GST, or their corrections) belongs to: same room, same
+ * charge date, the exact base description it names; the nearest posting on ties. A correction's
+ * delta names the ORIGINAL charge but is dated with the correction, so it matches the correction
+ * row posted with it. Null when no charge on the folio matches. One rule, read by the ledger view
+ * (which component a tax line counts in) and by the mid-stay payer change (which payer it follows).
+ */
+export function parentChargeOf<L extends LedgerLineLike, C extends { line: L; isCorrection: boolean }>(
+  companion: Pick<LedgerLineLike, "description" | "roomId" | "chargeDate" | "postedAt">,
+  charges: readonly C[],
+): C | null {
+  const base = companionBaseDescription(companion.description);
+  const isCorr = isCorrectionCompanionDescription(companion.description);
+  const cands = charges.filter(
+    (ch) =>
+      (ch.line.roomId ?? null) === (companion.roomId ?? null) &&
+      ymd(ch.line.chargeDate) === ymd(companion.chargeDate) &&
+      (isCorr ? ch.isCorrection : base == null || ch.line.description === base),
+  );
+  if (cands.length === 0) return null;
+  const ct = companion.postedAt.getTime();
+  return [...cands].sort((a, b) => Math.abs(a.line.postedAt.getTime() - ct) - Math.abs(b.line.postedAt.getTime() - ct))[0];
+}
+
 function ymd(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
@@ -263,19 +287,8 @@ export function buildFolioLedgerView<L extends LedgerLineLike, P extends LedgerP
   // Falls back structurally — an audit-stamped companion is a room night's; anything else that
   // names no parent lands in Services & other. (Same rule as the desk's FolioLinesTable fold.)
   const attribute = (c: L): LedgerComponentKey => {
-    const base = companionBaseDescription(c.description);
-    const isCorr = isCorrectionCompanionDescription(c.description);
-    const cands = charges.filter(
-      (ch) =>
-        (ch.line.roomId ?? null) === (c.roomId ?? null) &&
-        ymd(ch.line.chargeDate) === ymd(c.chargeDate) &&
-        (isCorr ? ch.isCorrection : base == null || ch.line.description === base),
-    );
-    if (cands.length > 0) {
-      const ct = c.postedAt.getTime();
-      cands.sort((a, b) => Math.abs(a.line.postedAt.getTime() - ct) - Math.abs(b.line.postedAt.getTime() - ct));
-      return cands[0].component;
-    }
+    const parent = parentChargeOf(c, charges);
+    if (parent) return parent.component;
     return c.nightAuditRecordId ? "ROOM" : "SERVICES";
   };
   const companions: Array<LedgerCompanion<L>> = [

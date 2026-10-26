@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { z } from "zod";
 import { prisma } from "../../db.js";
 import {
   collectableForTarget,
@@ -37,6 +38,7 @@ import * as s8SettlementService from "../../services/domain/s8-settlement-servic
 import { recordFolioRefund } from "../../services/domain/folio-refund-service.js";
 import * as s9Service from "../../services/domain/s9-service.js";
 import * as splitBillingService from "../../services/domain/split-billing-service.js";
+import * as payerChangeService from "../../services/domain/payer-change-service.js";
 import {
   createInterimPaymentRequest,
   listInterimPayments,
@@ -593,3 +595,44 @@ foliosRouter.patch(
     }
   },
 );
+
+/**
+ * Who pays, changed while the guest is staying (2026-10-26) — in place on the Stay step, never by
+ * sending the booking back to Set up. The FOM; the desk picks whether the charges already on the
+ * bill move too; money already received stays with whoever paid it. See payer-change-service.
+ */
+const payerChangeBody = z.object({
+  billingModel: z.string().trim().min(1).max(40),
+  moveExisting: z.boolean(),
+  reason: z.string().trim().max(1000).nullable().optional(),
+});
+const payerActor = (req: { actor?: { actorId: string; level: unknown } }) => ({
+  actorId: req.actor!.actorId,
+  actorLevel: String(req.actor!.level) as "L1" | "L2" | "L3" | "L4",
+});
+
+foliosRouter.get("/entries/:id/payer", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    res.json(await payerChangeService.readPayer(prisma, req.params.id));
+  } catch (e) {
+    next(e);
+  }
+});
+
+foliosRouter.post("/entries/:id/payer-change/preview", requireActorLevel("L1"), validateBody(payerChangeBody), async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    res.json(await payerChangeService.previewPayerChange(prisma, req.params.id, payerActor(req), req.body));
+  } catch (e) {
+    next(e);
+  }
+});
+
+foliosRouter.post("/entries/:id/payer-change", requireActorLevel("L2"), validateBody(payerChangeBody), async (req, res, next) => {
+  try {
+    res.json(await payerChangeService.changePayerInStay(prisma, req.params.id, payerActor(req), req.body));
+  } catch (e) {
+    next(e);
+  }
+});
