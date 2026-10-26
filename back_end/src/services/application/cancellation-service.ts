@@ -228,8 +228,13 @@ export async function previewCancellation(prisma: PrismaClient, entryId: string,
     include: { folio: true, reservation: true, cancellationDisclosure: true },
   });
   if (!entry) throw new NotFoundError("Entry");
-  if (entry.currentStage !== Stage.S3 && entry.currentStage !== Stage.S4 && entry.currentStage !== Stage.S5) {
-    throw new ValidationError("A booking is cancelled at Set up, Reserve or Arrival — this one is at none of them");
+  if (
+    entry.currentStage !== Stage.S3 &&
+    entry.currentStage !== Stage.S4 &&
+    entry.currentStage !== Stage.S5 &&
+    entry.currentStage !== Stage.S6
+  ) {
+    throw new ValidationError("A booking is cancelled at Set up, Reserve, Arrival or Check-in — this one is at none of them");
   }
   if (!entry.folio) throw new ValidationError("No folio on the booking — nothing to charge or refund");
   const now = new Date();
@@ -552,7 +557,7 @@ export async function cancelEntryAtS5(
 ) {
   const entry = await prisma.entry.findUnique({
     where: { id: entryId },
-    include: { folio: true, reservation: true, committedHold: true, inquiry: true },
+    include: { folio: true, reservation: true, committedHold: true, inquiry: true, roomAssignments: { select: { roomId: true } } },
   });
   if (!entry) throw new NotFoundError("Entry");
   if (entry.status === EntryStatus.CANCELLED) {
@@ -564,8 +569,11 @@ export async function cancelEntryAtS5(
 
   enforceEntryConfirmedForPreArrivalCancellation({ currentStage: entry.currentStage });
   enforceReservationPresentForS5CancellationPolicy35({ reservation: entry.reservation });
-  // Reserve (S4) or Arrival (S5) — the step the booking is cancelled at, for its lines and trace.
-  const cancelStage = entry.currentStage === Stage.S4 ? Stage.S4 : Stage.S5;
+  // Reserve (S4), Arrival (S5) or Check-in (S6, 2026-10-26) — the step the booking is cancelled
+  // at, for its lines, its release reason and its trace.
+  const cancelStage = entry.currentStage === Stage.S4 ? Stage.S4 : entry.currentStage === Stage.S6 ? Stage.S6 : Stage.S5;
+  const atCheckIn = cancelStage === Stage.S6;
+  const releaseReason = atCheckIn ? "S6_CHECK_IN_CANCELLATION" : `${cancelStage}_PRE_ARRIVAL_CANCELLATION`;
   enforceFolioPresentForS5CancellationPolicy35({ folio: entry.folio });
 
   const folio = entry.folio!;
@@ -618,7 +626,7 @@ export async function cancelEntryAtS5(
           id: await allocateFolioLineId(tx, folio.id),
           folioId: folio.id,
           lineType: FolioLineType.SERVICE,
-          description: "Pre-arrival cancellation penalty",
+          description: atCheckIn ? "Cancellation penalty — at check-in" : "Pre-arrival cancellation penalty",
           amount: penalty,
           currency: "BTN",
           chargeDate: now,
@@ -641,7 +649,7 @@ export async function cancelEntryAtS5(
           paymentMethod: await resolveRefundMethod(tx, folio.id, opts?.refundMethod),
           recordedBy: actorId,
           stage: cancelStage,
-          notes: `Refund obligation after pre-arrival cancellation${opts?.refundReference?.trim() ? ` · ${opts.refundReference.trim()}` : ""}`,
+          notes: `Refund obligation after ${atCheckIn ? "a cancellation at check-in" : "pre-arrival cancellation"}${opts?.refundReference?.trim() ? ` · ${opts.refundReference.trim()}` : ""}`,
         },
       });
     }
@@ -673,9 +681,13 @@ export async function cancelEntryAtS5(
       },
     });
 
+    // From Arrival the rooms are assigned too, and a room change at Arrival or Check-in can leave an
+    // assigned room the hold does not name — every one is released (only the flags this booking
+    // owns, as below).
+    const assignedRoomIds = new Set(entry.roomAssignments.map((a) => a.roomId));
     const hold = entry.committedHold;
     if (hold && hold.state !== HoldState.RELEASED && hold.state !== HoldState.EXPIRED) {
-      const heldRoomIds = new Set<string>();
+      const heldRoomIds = new Set<string>(assignedRoomIds);
       if (hold.roomId) heldRoomIds.add(hold.roomId);
       const breakdown = (hold.perNightBreakdown ?? null) as
         | Array<{ date?: string; roomIds?: Array<{ roomId?: string }> }>
@@ -690,7 +702,7 @@ export async function cancelEntryAtS5(
       for (const roomId of heldRoomIds) {
         // Only the flags this booking owns (2026-09-18): cancelling an October booking set a room
         // FREE while another guest slept in it tonight. See releaseRoomClaimIfOwnedTx.
-        await releaseRoomClaimIfOwnedTx(tx, { roomId, entryId, actorId, reason: `${cancelStage}_PRE_ARRIVAL_CANCELLATION`, now });
+        await releaseRoomClaimIfOwnedTx(tx, { roomId, entryId, actorId, reason: releaseReason, now });
       }
       await tx.committedHold.update({
         where: { id: hold.id },
@@ -698,9 +710,13 @@ export async function cancelEntryAtS5(
           state: HoldState.RELEASED,
           releasedAt: now,
           releasedBy: actorId,
-          releaseReason: `${cancelStage}_PRE_ARRIVAL_CANCELLATION`,
+          releaseReason,
         },
       });
+    } else {
+      for (const roomId of assignedRoomIds) {
+        await releaseRoomClaimIfOwnedTx(tx, { roomId, entryId, actorId, reason: releaseReason, now });
+      }
     }
 
     if (timers.length > 0) {

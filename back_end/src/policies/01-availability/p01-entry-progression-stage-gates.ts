@@ -36,10 +36,16 @@ export function enforceEntryAtS7ForS7ToS8Progression(input: { currentStage: Stag
  * forbids releasing confirmed inventory without a governed cancellation; this is that cancellation,
  * priced on the terms frozen at confirmation exactly as at Arrival.
  */
+/**
+ * Policy 1 — where a confirmed booking is cancelled: Reserve (S4), Arrival (S5), and Check-in (S6)
+ * since 2026-10-26 (SIG-S6 §8.6 / Policy 35 — the same `POST /entries/:id/cancel`, the FOM's, the
+ * penalty per the terms the guest agreed, a waiver the GM's). Once the guest is checked in it is
+ * an early departure, not a cancellation.
+ */
 export function enforceEntryConfirmedForPreArrivalCancellation(input: { currentStage: Stage }) {
-  if (input.currentStage === Stage.S4 || input.currentStage === Stage.S5) return;
+  if (input.currentStage === Stage.S4 || input.currentStage === Stage.S5 || input.currentStage === Stage.S6) return;
   throw new StageGateBlockedError(
-    "A confirmed booking is cancelled at Reserve or at Arrival — this one is at neither",
+    "A confirmed booking is cancelled at Reserve, Arrival or Check-in — once the guest is checked in it is an early departure",
     "NOT_AT_S4_OR_S5",
   );
 }
