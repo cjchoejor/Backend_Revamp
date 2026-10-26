@@ -167,7 +167,7 @@ export function EmptyState({ title, children, style }: { title: React.ReactNode;
 
 /** The one wording for a screen ahead of its backend. */
 export function NotAvailableYet({ what }: { what: React.ReactNode }) {
-  return <EmptyState title="Not available yet">{what} will appear here once the backend reports it.</EmptyState>;
+  return <EmptyState title="Not available yet">{what} can&rsquo;t be shown yet — it will appear here when the hotel&rsquo;s system can report it.</EmptyState>;
 }
 
 export function Spinner() { return <span className="spin" aria-hidden="true" />; }

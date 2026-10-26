@@ -23,6 +23,7 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { Stage } from "@prisma/client";
 import { NotFoundError, ValidationError } from "../lib/errors.js";
+import { strandedInHouse } from "../lib/stranded-in-house.js";
 import { computeReEntryConsequences } from "../engines/re-entry-consequence-engine.js";
 import { requireActiveMode, isTransitionAllowedByMode } from "../lib/mode-registry-runtime.js";
 import { evaluateAutoFulfilment, type EntryFacts } from "../lib/mode-auto-fulfilment.js";
@@ -532,6 +533,8 @@ export async function backflowS5ToS1(
 // 6. S7 → S2 · mid-stay rate revision / full renegotiation (GM only)
 // ============================================================================
 
+const STRANDED_FROM_STAY = (what: string) => strandedInHouse("Stay", what);
+
 export async function backflowS7ToS2(
   prisma: PrismaClient,
   entryId: string,
@@ -540,6 +543,9 @@ export async function backflowS7ToS2(
 ) {
   enforceS7ToS2BackflowAuthority({ actorLevel: actor.actorLevel });
   if (!input.reason?.trim()) throw new ValidationError("reason is required");
+  // Refused since 2026-10-26 (operator ruling): it left an in-house guest's booking at Negotiation
+  // with no way back to Stay except Reserve, Arrival and Check-in all over again.
+  throw new ValidationError(STRANDED_FROM_STAY("renegotiating the rate"));
   return runBackflow(prisma, {
     entryId,
     fromStage: Stage.S7,
@@ -572,6 +578,11 @@ export async function backflowS7ToS3(
 ) {
   enforceS7ToS3BackflowAuthority({ actorLevel: actor.actorLevel });
   if (!input.reason?.trim()) throw new ValidationError("reason is required");
+  // Refused since 2026-10-26 (operator ruling, after ENT-20260912-0001 sat at Set up for 43 days
+  // with its guest's charges unsettled): changing who pays is done in place on the Stay step.
+  throw new ValidationError(
+    "Changing who pays is done on the Stay step itself — sending an in-house booking back to Set up left the guest with no way back to Stay.",
+  );
   return runBackflow(prisma, {
     entryId,
     fromStage: Stage.S7,
@@ -600,6 +611,15 @@ export async function backflowS7ToS4(
   if (!input.newCheckOutDate?.trim()) throw new ValidationError("newCheckOutDate is required (ISO)");
   const newCheckOut = new Date(input.newCheckOutDate);
   if (Number.isNaN(newCheckOut.getTime())) throw new ValidationError("newCheckOutDate must be a valid ISO date");
+  // Refused since 2026-10-26 while the folio is LIVE (the guest is in): it strands the guest like the
+  // re-entries above. Extend the stay walks the booking in place and brings it back to Stay
+  // (stay-extension-service).
+  const folioNow = await prisma.folio.findUnique({ where: { entryId }, select: { state: true } });
+  if (folioNow?.state === "LIVE") {
+    throw new ValidationError(
+      strandedInHouse("Stay", "changing the dates this way", "To give the guest more nights, use Extend the stay on the Stay step — the booking stays at Stay."),
+    );
+  }
 
   // Pre-load the current dates so we can validate + detect the extra-night range before the tx.
   const priorReservation = await prisma.reservation.findFirst({
@@ -743,6 +763,13 @@ export async function backflowComplaintToS2(
   }
   if (entry.currentStage === Stage.S2 || entry.currentStage === Stage.S9) {
     throw new ValidationError(`Complaint resolution from ${entry.currentStage} is redundant — use in-stage adjustment instead`);
+  }
+  // From Stay or Check-out it strands the guest the same way the re-entries above did (2026-10-26).
+  if (entry.currentStage === Stage.S7) {
+    throw new ValidationError(STRANDED_FROM_STAY("putting a complaint right with a fresh quote"));
+  }
+  if (entry.currentStage === Stage.S8) {
+    throw new ValidationError(strandedInHouse("Check-out", "putting a complaint right with a fresh quote"));
   }
 
   return runBackflow(prisma, {

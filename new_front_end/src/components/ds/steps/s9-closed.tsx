@@ -21,6 +21,8 @@ import { useHotelDay } from "@/hooks/use-hotel-day";
 import { usePaymentStatus } from "@/hooks/use-payment-status";
 import { useClosureReadiness } from "@/hooks/use-closure-readiness";
 import { recordRoomInspection } from "@/lib/api/checkout";
+import { RoomInspectionGrid } from "./room-inspections";
+import { DamageCard } from "./damage-card";
 import {
   expirePostCheckoutInspectionWindow,
   fulfilHandoff,
@@ -38,15 +40,18 @@ import type { EntryDetail, InvoiceSummary } from "@/types/api";
 import { sentWords } from "@/hooks/use-invoice-recipient";
 import { OverpaidCard } from "./refund-card";
 import {
+  ActTiles,
   AnswerLine,
   DocCard,
   DsDialog,
   Fact,
   Facts,
+  InlineWay,
   Live,
+  NotNow,
   PaperDrawer,
   ReasonDialog,
-  SeeRow,
+  ShutWay,
   StepCanvas,
   StepCard,
   Tool,
@@ -57,7 +62,9 @@ import {
   useRefreshEntry,
   words,
   type PaperRef,
+  type StepPane,
 } from "./kit";
+import { BillFigures, BillLines } from "./s8-checkout";
 import {
   BillByPart,
   DisputesCard,
@@ -103,28 +110,60 @@ function invoiceLabel(inv: InvoiceSummary) {
 
 /* ------------------------------------------------------------------ the step */
 
+/**
+ * The Closed step's tabs (2026-10-26, operator: "a charge found after departure, make it into a
+ * proper tab in this stage", and the tax invoice beside it). Like Stay's and Check-out's, a pane is
+ * hidden, never unmounted, so a half-typed charge survives a look at This step. Only while the
+ * tail is open: a cancelled or expired booking is a record and has none.
+ */
+export const S9_PANES: StepPane[] = [
+  { key: "late", label: "Late charge", cards: [] },
+  { key: "invoice", label: "Tax invoice", cards: [] },
+];
+
 export function S9Closed({
   entry,
   past,
   close,
+  pane = null,
+  openPane,
 }: {
   entry: EntryDetail;
   past: boolean;
   close: { onClick: () => void; ready: boolean; reason?: string } | null;
+  /** Which pane is open — null is This step. */
+  pane?: string | null;
+  openPane?: (key: string | null) => void;
 }) {
   const clock = useHotelClock(60_000);
   // A cancelled or expired booking reaching this page is only a record. A CLOSED one keeps its
   // tail open (Z4): money, a late chit and a write-off are not changes to what was sealed.
   const readOnly = past || entry.status === "CANCELLED" || entry.status === "EXPIRED";
+  const tail = !readOnly && !!entry.folio;
+  const shown = tail ? (pane ?? null) : null;
+  const at = (k: string | null) => (shown === k ? undefined : true);
   return (
     <StepCanvas past={readOnly}>
-      <DisputesCard entry={entry} tz={clock.tz} />
-      <WhatTheStayWas entry={entry} />
-      {entry.folio ? <OverpaidCard entry={entry} live={!readOnly} /> : null}
-      {entry.folio ? <AfterTheStay entry={entry} tz={clock.tz} close={readOnly ? null : close} /> : null}
-      <OneDoorBackIn />
-      <SealedPapers entry={entry} tz={clock.tz} />
-      {entry.status === "CANCELLED" ? <Cancellation entry={entry} /> : null}
+      <div className="pane" hidden={at(null)}>
+        <DisputesCard entry={entry} tz={clock.tz} />
+        <WhatTheStayWas entry={entry} />
+        {/* The record is sealed once every damage is charged or waived (2026-10-26). */}
+        <DamageCard entry={entry} live={!readOnly && entry.status !== "CLOSED" && entry.currentStage === "S9"} atClosed />
+        {entry.folio ? <OverpaidCard entry={entry} live={!readOnly} /> : null}
+        {entry.folio ? <AfterTheStay entry={entry} tz={clock.tz} close={readOnly ? null : close} openPane={tail ? openPane : undefined} /> : null}
+        <SealedPapers entry={entry} tz={clock.tz} />
+        {entry.status === "CANCELLED" ? <Cancellation entry={entry} /> : null}
+      </div>
+      {tail ? (
+        <>
+          <div className="pane" hidden={at("late")}>
+            <LateChargePane entry={entry} />
+          </div>
+          <div className="pane" hidden={at("invoice")}>
+            <TaxInvoicePane entry={entry} tz={clock.tz} />
+          </div>
+        </>
+      ) : null}
     </StepCanvas>
   );
 }
@@ -201,9 +240,7 @@ function WhatTheStayWas({ entry }: { entry: EntryDetail }) {
         <BillByPart billing={billing.data} loading={billing.isLoading} totalOnly />
       </div>
       <p className="sm" style={{ marginTop: 6 }}>
-        <Help label="About the bill by category">
-          By category — rooms, food and drink, services — the master bill shows it; the figures by category are not served to the desk yet.
-        </Help>{" "}
+        <Help label="About the bill by category">The bill split into rooms, food and drink, and services is on the master bill, under Sealed papers.</Help>{" "}
         {entry.folio ? (
           <a
             href="#"
@@ -236,12 +273,40 @@ function WhatTheStayWas({ entry }: { entry: EntryDetail }) {
   );
 }
 
+/* ------------------------------------------------------------------ the invoices, read once */
+
+/** The tax invoices on the bill and what they cover — read by This step and the Tax invoice tab. */
+function useInvoiceFacts(entry: EntryDetail, tz: string) {
+  const day = useHotelDay();
+  const folio = entry.folio;
+  const invoices = useMemo(() => [...(folio?.invoices ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt)), [folio?.invoices]);
+  const finals = invoices.filter((i) => i.invoiceType === "FINAL" && i.state !== "SUPERSEDED");
+  const lastSent = finals.filter((i) => i.dispatchedAt).sort((a, b) => (b.dispatchedAt ?? "").localeCompare(a.dispatchedAt ?? ""))[0] ?? null;
+  // Days since the tax invoice went out, on the hotel's calendar — day counting, not money.
+  const sentYmd = lastSent?.dispatchedAt ? instantYmd(lastSent.dispatchedAt, tz) : null;
+  const ageDays = sentYmd && day ? nightsOf(sentYmd, day.today) : null;
+  // A charge found after departure, posted after the last tax invoice went out — that invoice
+  // does not carry it (2026-09-18).
+  const lateSinceInvoice =
+    !!lastSent?.dispatchedAt && (folio?.lines ?? []).some((l) => l.isPostStay && (l.postedAt ?? "") > (lastSent.dispatchedAt ?? ""));
+  return { invoices, finals, lastSent, ageDays, lateSinceInvoice };
+}
+
 /* ------------------------------------------------------------------ after the stay (Z3, Z4) */
 
-function AfterTheStay({ entry, tz, close }: { entry: EntryDetail; tz: string; close: { onClick: () => void; ready: boolean; reason?: string } | null }) {
+function AfterTheStay({
+  entry,
+  tz,
+  close,
+  openPane,
+}: {
+  entry: EntryDetail;
+  tz: string;
+  close: { onClick: () => void; ready: boolean; reason?: string } | null;
+  openPane?: (key: string | null) => void;
+}) {
   const { session } = useSession();
   const refresh = useRefreshEntry(entry.id);
-  const day = useHotelDay();
   const fom = atLeast(session?.actorLevel, "L2");
   const gm = atLeast(session?.actorLevel, "L3");
   const folio = entry.folio!;
@@ -250,9 +315,7 @@ function AfterTheStay({ entry, tz, close }: { entry: EntryDetail; tz: string; cl
   const billing = useBilling(entry);
   const booked = useBookedBy(entry);
   const comms = useCommunications(entry.id);
-  const issueSend = useIssueAndSend(entry, "final-v1");
-  const send = useSendInvoice(entry);
-  const [sendTo, setSendTo] = useSendTo(entry);
+  const inv = useInvoiceFacts(entry, tz);
   const ps = pay.data;
   const cur = billing.data?.currency ?? fin.currency;
   const outstanding = fin.outstanding;
@@ -261,18 +324,7 @@ function AfterTheStay({ entry, tz, close }: { entry: EntryDetail; tz: string; cl
   const noShow = folio.state === "NO_SHOW_CLOSED";
   const writtenOff = folio.state === "WRITTEN_OFF";
   const owed = outstanding != null && outstanding > 0 && !writtenOff;
-
-  const invoices = useMemo(() => [...(folio.invoices ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt)), [folio.invoices]);
-  const finals = invoices.filter((i) => i.invoiceType === "FINAL" && i.state !== "SUPERSEDED");
-  const lastSent = finals.filter((i) => i.dispatchedAt).sort((a, b) => (b.dispatchedAt ?? "").localeCompare(a.dispatchedAt ?? ""))[0] ?? null;
-  // Days since the tax invoice went out, on the hotel's calendar — day counting, not money.
-  const sentYmd = lastSent?.dispatchedAt ? instantYmd(lastSent.dispatchedAt, tz) : null;
-  const ageDays = sentYmd && day ? nightsOf(sentYmd, day.today) : null;
   const writeOff = (folio.writeOffRecords ?? [])[0] ?? null;
-  // A charge found after departure, posted after the last tax invoice went out — that invoice
-  // does not carry it, so "sent · not yet paid" would point at the wrong paper (2026-09-18).
-  const lateSinceInvoice =
-    !!lastSent?.dispatchedAt && (folio.lines ?? []).some((l) => l.isPostStay && (l.postedAt ?? "") > (lastSent.dispatchedAt ?? ""));
 
   // Answer before money (the backend refuses a payment while the tax invoice's answer is open).
   const finalComm = latestDispatched(comms.data?.items, "FINAL_INVOICE");
@@ -282,16 +334,13 @@ function AfterTheStay({ entry, tz, close }: { entry: EntryDetail; tz: string; cl
   const h5Open = !!h5 && (h5.state === "CREATED" || h5.state === "ASSIGNED" || h5.state === "ACCEPTED");
   // Where the room inspection stands, read from the backend's closure checks (2026-09-18).
   const closure = useClosureReadiness(entry.id, !sealed && entry.currentStage === "S9");
-  const insp = closure.data?.inspection ?? null;
-  const wasPutOff = (entry.roomInspectionRecords ?? []).some((i) => i.isDeferred);
+  // Each room's inspection (2026-10-26 — one per room).
+  const inspRooms = closure.data?.inspections?.rooms ?? [];
   const commissions = entry.commissionDueRecords ?? [];
   const followUps = entry.followUpTasks ?? [];
 
-  const [paper, setPaper] = useState<PaperRef | null>(null);
   const [paying, setPaying] = useState(false);
   const [writing, setWriting] = useState(false);
-  const [late, setLate] = useState(false);
-  const [issuing, setIssuing] = useState(false);
   const [byPart, setByPart] = useState(false);
   const [h5Basis, setH5Basis] = useState("Nothing left to settle");
 
@@ -303,41 +352,8 @@ function AfterTheStay({ entry, tz, close }: { entry: EntryDetail; tz: string; cl
     },
     onError: (e) => toastRefusal(e, "The after-stay handoff could not be completed"),
   });
-  const [faultFlag, setFaultFlag] = useState<"RESOLVED" | "UNRESOLVED_AT_CHECKOUT">("UNRESOLVED_AT_CHECKOUT");
-  const [assessment, setAssessment] = useState("");
-  const [damage, setDamage] = useState(false);
-  const [damageNotes, setDamageNotes] = useState("");
-  const fault = insp?.openFault ?? null;
-  const inspectionMissing = fault && faultFlag === "UNRESOLVED_AT_CHECKOUT" && !assessment.trim()
-    ? "write what the inspector found"
-    : damage && !damageNotes.trim()
-      ? "say what is damaged"
-      : null;
-  const completeInspection = useMutation({
-    mutationFn: () =>
-      recordRoomInspection(session!, entry.id, {
-        isDeferred: false,
-        deficientFlagStatus: fault ? faultFlag : "NOT_APPLICABLE",
-        deficientConditionId: fault ? fault.id : undefined,
-        inspectorAssessment: fault && faultFlag === "UNRESOLVED_AT_CHECKOUT" ? assessment.trim() : undefined,
-        damageFound: damage,
-        damageNotes: damage ? damageNotes.trim() : undefined,
-      }),
-    onSuccess: () => {
-      toast.success(damage ? "The inspection is on record — post the damage as a late charge below" : "The inspection is on record");
-      refresh();
-    },
-    onError: (e) => toastRefusal(e, "The inspection could not be recorded"),
-  });
-  const expireInspection = useMutation({
-    mutationFn: () => expirePostCheckoutInspectionWindow(session!, entry.id),
-    onSuccess: () => {
-      toast.success("The inspection window is closed");
-      refresh();
-    },
-    onError: (e) => toastRefusal(e, "The inspection window could not be closed"),
-  });
 
+  const { finals, lastSent, ageDays, lateSinceInvoice } = inv;
   const whereItSits = writtenOff ? (
     <>
       written off
@@ -354,14 +370,16 @@ function AfterTheStay({ entry, tz, close }: { entry: EntryDetail; tz: string; cl
     "settled"
   ) : folio.state === "OUTSTANDING" ? (
     <>
-      {lateSinceInvoice
-        ? `a charge after departure is not on the tax invoice sent ${fmtInstantDate(lastSent!.dispatchedAt, tz)} — issue one for the bill as it stands`
-        : lastSent
-          ? `tax invoice sent ${fmtInstantDate(lastSent.dispatchedAt, tz)} · not yet paid`
-          : finals.length
-            ? "tax invoice issued, not yet sent"
-            : "not yet invoiced"}
-      {ageDays ? ` · ${plural(ageDays, "day")}` : ""}
+      {lateSinceInvoice ? (
+        <span className="warn-ink">a charge found after departure isn&rsquo;t on the tax invoice sent {fmtInstantDate(lastSent!.dispatchedAt, tz)} — issue a new one on the Tax invoice tab</span>
+      ) : lastSent ? (
+        `tax invoice sent ${fmtInstantDate(lastSent.dispatchedAt, tz)} · not yet paid`
+      ) : finals.length ? (
+        "tax invoice issued, not yet sent"
+      ) : (
+        "no tax invoice yet"
+      )}
+      {ageDays ? ` · ${plural(ageDays, "day")} ago` : ""}
       {ps?.creditExtensionExpiresAt ? (
         <span className={ps.creditExtensionExpired && !ps.creditExtensionActive ? "warn-ink" : "meta"}>
           {" "}
@@ -369,24 +387,82 @@ function AfterTheStay({ entry, tz, close }: { entry: EntryDetail; tz: string; cl
           {ps.creditExtensionExpired && !ps.creditExtensionActive ? " — the date has passed" : ""}
         </span>
       ) : null}
-      <Help label="About payment terms">The account&rsquo;s own payment terms and ageing are not in the backend yet (BE-71).</Help>
     </>
   ) : (
     FOLIO_STATE_WORD[folio.state] ?? words(folio.state)
   );
 
-  const owingChip = writtenOff ? (
-    <Chip tone="success">nothing owing · written off</Chip>
-  ) : owed ? (
-    <Chip tone={ps?.creditExtensionExpired && !ps?.creditExtensionActive ? "danger" : "warning"}>
-      {money(outstanding, cur)} outstanding on {booked.payer}&rsquo;s account
-    </Chip>
-  ) : outstanding != null ? (
-    <Chip tone="success">nothing owing</Chip>
-  ) : null;
-
   return (
-    <StepCard title="After the stay">
+    <StepCard
+      title="After the stay"
+      meta="Money that comes in after the guest has left, a charge found later and a write-off are all recorded here — the booking is not reopened for any of them."
+      status={
+        writtenOff ? (
+          <span className="ok-ink">Nothing owing — written off</span>
+        ) : owed ? (
+          <span className={ps?.creditExtensionExpired && !ps?.creditExtensionActive ? "stop-ink" : "warn-ink"}>Owed by {booked.payer}</span>
+        ) : outstanding != null ? (
+          <span className="ok-ink">Nothing owing</span>
+        ) : undefined
+      }
+    >
+      <BillFigures fo={billing.data?.folio ?? null} cur={cur} />
+      <Live>
+        <ActTiles
+          label="What can be done after the stay"
+          items={[
+            {
+              key: "pay",
+              label: "Record a payment",
+              primary: owed,
+              icon: "check",
+              sub: owed ? `${money(outstanding, cur)} still owed` : "nothing owed",
+              tone: owed ? "danger" : "success",
+              onClick: fom && inv.invoices.length ? () => setPaying(true) : undefined,
+              reason: !fom ? "the FOM records payments after the stay" : !inv.invoices.length ? "issue a tax invoice first — the payment is matched to it" : undefined,
+            },
+            {
+              key: "parts",
+              label: byPart ? "Hide who owes what" : "Who owes what",
+              sub: "each room or hall's share",
+              pressed: byPart,
+              onClick: () => setByPart((v) => !v),
+            },
+            {
+              key: "late",
+              label: "Late charge",
+              sub: "a charge found after the guest left",
+              onClick: openPane && fom && !noShow ? () => openPane("late") : undefined,
+              reason: noShow ? "a no-show never stayed" : !fom ? "needs the FOM" : undefined,
+            },
+            {
+              key: "invoice",
+              label: "Tax invoice",
+              sub: lateSinceInvoice ? "a late charge isn't on it yet" : lastSent ? `${invoiceLabel(lastSent)} sent` : finals.length ? "issued, not sent" : "none yet",
+              tone: lateSinceInvoice || (!lastSent && !noShow) ? "warning" : undefined,
+              onClick: openPane ? () => openPane("invoice") : undefined,
+            },
+            {
+              key: "writeoff",
+              label: "Write off",
+              sub: "money that won't be collected",
+              onClick: gm && folio.state === "OUTSTANDING" ? () => setWriting(true) : undefined,
+              reason: !gm ? "only the GM can write off" : folio.state !== "OUTSTANDING" ? "nothing is owed to write off" : undefined,
+            },
+            {
+              key: "credit",
+              label: "Credit note",
+              reason: "not possible once the bill is settled",
+            },
+          ]}
+        />
+        {byPart ? (
+          <Tool>
+            <SplitSettlementBlock entry={entry} folioId={folio.id} defaultOpen />
+          </Tool>
+        ) : null}
+      </Live>
+
       <Facts wide>
         <Fact k="Sealed">
           <span>
@@ -398,69 +474,10 @@ function AfterTheStay({ entry, tz, close }: { entry: EntryDetail; tz: string; cl
                 ? "cancelled — the record is read-only"
                 : entry.status === "EXPIRED"
                   ? "expired — the record is read-only"
-                  : "not yet — the record is still open"} {owingChip ? <>· {owingChip}</> : null}
+                  : "not yet — the record is still open"}
           </span>
         </Fact>
-        <Fact k="Where it sits">{whereItSits}</Fact>
-        <Fact k="Invoices">
-          {invoices.length ? (
-            <div style={{ display: "grid", gap: 4 }}>
-              {invoices.map((inv) => (
-                <div key={inv.id} className="row-acts sm">
-                  <span className={inv.state === "SUPERSEDED" ? "meta" : undefined}>
-                    {invoiceLabel(inv)} · {INVOICE_TYPE_WORD[inv.invoiceType] ?? words(inv.invoiceType)} · {INVOICE_STATE_WORD[inv.state] ?? words(inv.state)}
-                    {inv.dispatchedAt ? (
-                      <span className="meta">
-                        {" "}
-                        · {inv.metadata?.issuedAtNoShowClosure
-                          ? `issued at the seal for the no-show charge ${fmtInstantDate(inv.dispatchedAt, tz)} · not emailed — the no-show notice told them`
-                          : `sent ${fmtInstantDate(inv.dispatchedAt, tz)} · ${sentWords(inv.dispatchedTo, entry, booked.party)}`}
-                      </span>
-                    ) : null}
-                  </span>
-                  <Button
-                    kind="quiet"
-                    compact
-                    icon="eye"
-                    onClick={() =>
-                      setPaper(
-                        inv.invoiceType === "FINAL"
-                          ? { kind: "invoice", id: inv.id, issued: true, label: `Tax invoice ${invoiceLabel(inv)}` }
-                          : { kind: "invoice", id: inv.id, frozen: !!inv.pdfStorageKey, label: `${words(INVOICE_TYPE_WORD[inv.invoiceType] ?? inv.invoiceType)} ${invoiceLabel(inv)}` },
-                      )
-                    }
-                  >
-                    Preview
-                  </Button>
-                  <Button kind="quiet" compact icon="file" onClick={() => session && openInvoicePdf(session, inv.id).catch((e) => toastRefusal(e, "The PDF could not be opened"))}>
-                    PDF
-                  </Button>
-                  {/* Only a tax invoice is sent after the stay. A proforma or an interim bill
-                      that never went out is history — sending a pre-arrival bill to a guest who
-                      has already paid and left would only confuse them (2026-09-18). */}
-                  {inv.state === "DRAFT" && inv.invoiceType === "FINAL" ? (
-                    <Live>
-                      <Button compact icon="send" state={send.isPending ? "working" : "default"} workingLabel="Sending…" onClick={() => send.mutate({ invoiceId: inv.id, to: sendTo })}>
-                        Send it
-                      </Button>
-                    </Live>
-                  ) : inv.state === "DRAFT" ? (
-                    <span className="meta">never sent — not needed after the stay</span>
-                  ) : null}
-                </div>
-              ))}
-              {finals.some((i) => i.state === "DRAFT") ? (
-                <Live>
-                  <div className="form2" style={{ marginTop: 4 }}>
-                    <SendToField entry={entry} value={sendTo} onChange={setSendTo} />
-                  </div>
-                </Live>
-              ) : null}
-            </div>
-          ) : (
-            "none issued"
-          )}
-        </Fact>
+        <Fact k="The bill">{whereItSits}</Fact>
         {finalComm ? (
           <Fact k="Their answer">
             <AnswerLine entryId={entry.id} type="FINAL_INVOICE" what="the tax invoice" tz={tz} />
@@ -469,11 +486,6 @@ function AfterTheStay({ entry, tz, close }: { entry: EntryDetail; tz: string; cl
         <Fact k="Payments">
           {(folio.payments ?? []).length ? (
             <div style={{ display: "grid", gap: 2 }}>
-              {fin.advanceReceived != null ? (
-                <span className="sm">
-                  <b className="money">{money(fin.advanceReceived, cur)}</b> <span className="meta">received in all</span>
-                </span>
-              ) : null}
               {(folio.payments ?? []).map((p) => (
                 <span key={p.id} className="sm">
                   <span className="money">{money(p.amount, p.currency)}</span>
@@ -486,33 +498,38 @@ function AfterTheStay({ entry, tz, close }: { entry: EntryDetail; tz: string; cl
                 </span>
               ))}
             </div>
-          ) : null}
+          ) : (
+            "none"
+          )}
         </Fact>
         {owed && ps?.creditExtensionActive ? (
           <Fact k="Credit">
-            extended at check-out — up to <span className="money">{money(ps.ceilingAmount, cur)}</span>
-            <span className="meta">{ps.creditExtensionExpiresAt ? ` · pay by ${fmtDateTime(ps.creditExtensionExpiresAt, tz)}` : " · no time limit"}</span>
+            allowed at check-out — up to <span className="money">{money(ps.ceilingAmount, cur)}</span>
+            <span className="meta">{ps.creditExtensionExpiresAt ? ` · pay by ${fmtDateTime(ps.creditExtensionExpiresAt, tz)}` : " · no date set"}</span>
           </Fact>
         ) : null}
-        <Fact k="Set off by the close">
+        <Fact k="What closing does">
           {noShow ? (
             sealed ? (
-              "the record sealed read-only · the no-show charge invoiced · retention handed to the system — a no-show is not asked for feedback"
+              "the record is locked · the no-show charge was invoiced · a no-show is not asked for feedback"
             ) : (
               <>
-                the seal · the no-show charge&rsquo;s invoice
+                locks the record · invoices the no-show charge
                 <Help label="About closing">
-                  Closing seals the record read-only and invoices the no-show charge, unless a tax invoice was issued and sent first — issue and
-                  send one below to email it.
+                  Closing locks the record so nothing on it can be changed, and invoices the no-show charge — unless a tax invoice was already
+                  issued and sent on the Tax invoice tab.
                 </Help>
               </>
             )
           ) : sealed ? (
-            "the record sealed read-only · the rooms released to housekeeping · feedback, payment follow-up and retention handed to the system"
+            "the record is locked · the rooms went to housekeeping · the feedback request, any payment reminders and record keeping are handled by the system"
           ) : (
             <>
-              the seal · feedback · payment follow-up · retention
-              <Help label="About closing">Closing seals the record read-only and hands feedback, payment follow-up and retention to the system.</Help>
+              locks the record · feedback · payment reminders · record keeping
+              <Help label="About closing">
+                Closing locks the record so nothing on it can be changed. After that the system sends the guest a feedback request, reminds
+                about any money still owed, and keeps the record for as long as the hotel must.
+              </Help>
             </>
           )}
         </Fact>
@@ -540,7 +557,7 @@ function AfterTheStay({ entry, tz, close }: { entry: EntryDetail; tz: string; cl
               <div style={{ display: "grid", gap: 6 }}>
                 <span>
                   {HANDOFF_STATE_WORD[h5.state] ?? words(h5.state)}
-                  <Help label="About the last handoff">Done once the money is matched, written off, or nothing is left to do.</Help>
+                  <Help label="About the last handoff">It is done once the money is all in, written off, or there is nothing left to do.</Help>
                 </span>
                 <Live>
                   <div className="row-acts">
@@ -563,171 +580,193 @@ function AfterTheStay({ entry, tz, close }: { entry: EntryDetail; tz: string; cl
             )}
           </Fact>
         ) : null}
-        {insp?.state === "PUT_OFF" ? (
-          <Fact k="The inspection">
-            <div style={{ display: "grid", gap: 8 }}>
-              <span>
-                {insp.roomNumber ? `Room ${insp.roomNumber} · ` : ""}put off at check-out, not yet done
-                {insp.windowEndsAt ? <span className="meta"> · the window closes {fmtDateTime(insp.windowEndsAt, tz)}</span> : null}
-              </span>
-              <Live>
-                <div className="bind provisional" style={{ display: "grid", gap: 8 }}>
-                  {fault ? (
-                    <span className="sm warn-ink">
-                      The room has an open fault — {words(fault.category)}: {fault.description}. Say how the inspection leaves it.
-                    </span>
-                  ) : null}
-                  <div className="form2">
-                    {fault ? (
-                      <div className="field">
-                        <label>The room&rsquo;s fault</label>
-                        <select className="input" value={faultFlag} onChange={(e) => setFaultFlag(e.target.value as typeof faultFlag)}>
-                          <option value="RESOLVED">Put right at inspection</option>
-                          <option value="UNRESOLVED_AT_CHECKOUT">Still there</option>
-                        </select>
-                      </div>
-                    ) : null}
-                    {fault && faultFlag === "UNRESOLVED_AT_CHECKOUT" ? (
-                      <div className="field">
-                        <label>What the inspector found</label>
-                        <input className="input" value={assessment} onChange={(e) => setAssessment(e.target.value)} />
-                      </div>
-                    ) : null}
-                    <div className="wide field">
-                      <label className="sm" style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
-                        <input type="checkbox" checked={damage} onChange={(e) => setDamage(e.target.checked)} />
-                        Damage found
-                      </label>
-                      {damage ? <input className="input" value={damageNotes} placeholder="what is damaged" onChange={(e) => setDamageNotes(e.target.value)} /> : null}
-                    </div>
-                  </div>
-                  <div className="row-acts">
-                    <Button
-                      kind="secondary"
-                      compact
-                      state={completeInspection.isPending ? "working" : inspectionMissing ? "inert" : "default"}
-                      title={inspectionMissing ?? undefined}
-                      workingLabel="Recording…"
-                      onClick={() => completeInspection.mutate()}
-                    >
-                      Record the inspection
-                    </Button>
-                  </div>
-                </div>
-                {insp.windowCanBeClosed ? (
-                  <SeeRow
-                    label="Close the inspection window"
-                    note="only when nobody inspected the room in time — it records that nothing was found; the FOM's"
-                    onClick={fom && !expireInspection.isPending ? () => expireInspection.mutate() : undefined}
-                    reason={fom ? undefined : "Closing the inspection window needs the FOM"}
-                  />
-                ) : null}
-              </Live>
-            </div>
-          </Fact>
-        ) : insp?.state === "LAPSED" ? (
-          <Fact k="The inspection">
-            put off at check-out · the window closed{insp.lapsedAt ? ` ${fmtDateTime(insp.lapsedAt, tz)}` : ""} with nothing recorded
-          </Fact>
-        ) : insp?.state === "DONE" && wasPutOff ? (
-          <Fact k="The inspection">
-            inspected after departure
-            <span className="meta">
-              {insp.inspectedAt ? ` · ${fmtDateTime(insp.inspectedAt, tz)}` : ""}
-              {insp.damageFound ? ` · damage noted${insp.damageNotes ? `: ${insp.damageNotes}` : ""}` : " · no damage"}
-            </span>
+        {/* The rooms put off at check-out (or never inspected), as tiles, each finished here or its
+            window closed by the FOM (2026-10-26). Nothing shows when every room was inspected at
+            check-out. */}
+        {inspRooms.some((r) => r.state !== "DONE" || (entry.roomInspectionRecords ?? []).some((i) => i.roomId === r.roomId && i.isDeferred)) ? (
+          <Fact k={inspRooms.length > 1 ? "The inspections" : "The inspection"}>
+            <Live>
+              <RoomInspectionGrid entry={entry} live={!sealed && entry.currentStage === "S9"} atClosed fom={fom} />
+            </Live>
           </Fact>
         ) : null}
       </Facts>
 
-      <Live>
-        <div className="stack sm" style={{ display: "grid", gap: 6, marginTop: 14 }}>
-          <SeeRow
-            kind="primary"
-            label="Record a payment"
-            note="money arriving is not a change to the record — no re-entry"
-            onClick={fom && invoices.length ? () => setPaying(true) : undefined}
-            reason={!fom ? "Recording a payment after the stay needs the FOM" : !invoices.length ? "there is no invoice to record it against — issue one first" : undefined}
-          />
-          <SeeRow
-            label={byPart ? "Hide the parts" : "Who still owes what…"}
-            note="each room or space and what it still owes — take a payment against one part; the bill stays one"
-            onClick={() => setByPart((v) => !v)}
-          />
-          <SeeRow
-            label="Write off…"
-            note="the GM, with the amount and a reason; the configured threshold refuses anything above the GM's band"
-            onClick={gm && folio.state === "OUTSTANDING" ? () => setWriting(true) : undefined}
-            reason={!gm ? "A write-off is the GM's" : folio.state !== "OUTSTANDING" ? "only a bill with money still owed can be written off" : undefined}
-          />
-          <SeeRow
-            label="A charge found after departure…"
-            note="the post-stay charge: it posts to the bill and the guest is told — no re-entry"
-            onClick={fom && !noShow ? () => setLate(true) : undefined}
-            reason={noShow ? "A no-show never stayed — its bill closed with the no-show charge" : fom ? undefined : "A charge after departure needs the FOM"}
-          />
-          <SeeRow
-            label="Issue and send a tax invoice…"
-            note="for the bill as it stands now — issued and sent in one act"
-            onClick={() => setIssuing(true)}
-          />
-          <SeeRow
-            label="Credit note…"
-            note="a credit on a settled bill is an adjustment note"
-            reason="After settlement a credit is an adjustment note — not in the backend yet (BE-47 · BE-51); the bill takes credit notes only while it is live"
-          />
-        </div>
-        {byPart ? (
-          <Tool>
-            <SplitSettlementBlock entry={entry} folioId={folio.id} defaultOpen />
-          </Tool>
-        ) : null}
-        {close && !sealed ? (
+      {close && !sealed ? (
+        <Live>
           <div className="row-acts" style={{ marginTop: 14, borderTop: "1px solid var(--line)", paddingTop: 12 }}>
             <Button icon="lock" state={close.ready ? "default" : "inert"} reason={close.ready ? undefined : close.reason} onClick={close.onClick}>
               Close &amp; seal the record
             </Button>
           </div>
-        ) : null}
-      </Live>
+        </Live>
+      ) : null}
 
-      <PaperDrawer paper={paper} onClose={() => setPaper(null)} />
-      <RecordPayment entry={entry} open={paying} onClose={() => setPaying(false)} invoices={invoices} outstanding={outstanding} answerPending={answerPending} currency={cur} payer={booked.payer} />
+      <RecordPayment entry={entry} open={paying} onClose={() => setPaying(false)} invoices={inv.invoices} outstanding={outstanding} answerPending={answerPending} currency={cur} payer={booked.payer} />
       <WriteOff entry={entry} open={writing} onClose={() => setWriting(false)} outstanding={outstanding} currency={cur} payer={booked.payer} />
-      <LateCharge entry={entry} open={late} onClose={() => setLate(false)} />
-      <DsDialog
-        open={issuing}
-        onClose={() => setIssuing(false)}
-        title="Issue and send a tax invoice"
-        caseLines={[<b key="p">{booked.payer}</b>, entry.id]}
-        busy={issueSend.isPending}
-        footer={
-          <>
-            <Button kind="quiet" state={issueSend.isPending ? "inert" : "default"} onClick={() => setIssuing(false)}>
-              Not now
-            </Button>
-            <Button
-              icon="lock"
-              state={issueSend.isPending ? "working" : "default"}
-              workingLabel="Issuing…"
-              onClick={() => issueSend.mutate(sendTo, { onSettled: () => setIssuing(false) })}
-            >
-              Issue and send
-            </Button>
-          </>
+    </StepCard>
+  );
+}
+
+/* ------------------------------------------------------------------ the Late charge tab */
+
+function LateChargePane({ entry }: { entry: EntryDetail }) {
+  const { session } = useSession();
+  const fom = atLeast(session?.actorLevel, "L2");
+  const billing = useBilling(entry);
+  const fo = billing.data?.folio ?? null;
+  const cur = billing.data?.currency ?? entry.folio?.lines?.[0]?.currency ?? "BTN";
+  const noShow = entry.folio?.state === "NO_SHOW_CLOSED";
+  return (
+    <>
+      <StepCard title="The bill" status={fo ? `${plural(fo.lineCount, "line")} on the bill` : undefined}>
+        <BillFigures fo={fo} cur={cur} />
+        <div style={{ marginTop: 12 }}>
+          <BillLines entry={entry} onTab={() => undefined} />
+        </div>
+      </StepCard>
+      {noShow ? (
+        <StepCard
+          title="A charge found after departure"
+          status={<span className="warn-ink">A no-show never stayed — its bill closed with the no-show charge, so nothing more can be added.</span>}
+        />
+      ) : !fom ? (
+        <ShutWay act="Post the charge" why="Adding a charge after the guest has left needs the FOM." />
+      ) : (
+        <InlineWay render={(done) => <LateCharge entry={entry} open onClose={done} />} />
+      )}
+    </>
+  );
+}
+
+/* ------------------------------------------------------------------ the Tax invoice tab */
+
+function TaxInvoicePane({ entry, tz }: { entry: EntryDetail; tz: string }) {
+  const { session } = useSession();
+  const booked = useBookedBy(entry);
+  const send = useSendInvoice(entry);
+  const [sendTo, setSendTo] = useSendTo(entry);
+  const [paper, setPaper] = useState<PaperRef | null>(null);
+  const { invoices, finals, lastSent, lateSinceInvoice } = useInvoiceFacts(entry, tz);
+  const others = invoices.filter((i) => i.invoiceType !== "FINAL");
+  const row = (inv: InvoiceSummary) => (
+    <div key={inv.id} className="row-acts sm">
+      <span className={inv.state === "SUPERSEDED" ? "meta" : undefined}>
+        <b>{invoiceLabel(inv)}</b> · {INVOICE_TYPE_WORD[inv.invoiceType] ?? words(inv.invoiceType)} · {INVOICE_STATE_WORD[inv.state] ?? words(inv.state)}
+        {inv.dispatchedAt ? (
+          <span className="meta">
+            {" "}
+            · {inv.metadata?.issuedAtNoShowClosure
+              ? `issued at closing for the no-show charge ${fmtInstantDate(inv.dispatchedAt, tz)} · not emailed — the no-show notice told them`
+              : `sent ${fmtInstantDate(inv.dispatchedAt, tz)} · ${sentWords(inv.dispatchedTo, entry, booked.party)}`}
+          </span>
+        ) : null}
+      </span>
+      <Button
+        kind="quiet"
+        compact
+        icon="eye"
+        onClick={() =>
+          setPaper(
+            inv.invoiceType === "FINAL"
+              ? { kind: "invoice", id: inv.id, issued: true, label: `Tax invoice ${invoiceLabel(inv)}` }
+              : { kind: "invoice", id: inv.id, frozen: !!inv.pdfStorageKey, label: `${words(INVOICE_TYPE_WORD[inv.invoiceType] ?? inv.invoiceType)} ${invoiceLabel(inv)}` },
+          )
         }
       >
-        <p className="sm">This cannot be undone. What becomes binding:</p>
-        <ul className="plain-list sm" style={{ margin: 0, paddingLeft: 18, display: "grid", gap: 4 }}>
-          <li>A tax invoice is issued for the bill as it stands — its number is allocated now.</li>
-          <li>It is sent in the same act; its answer is awaited like any paper.</li>
-          <li>An invoice already sent stays as it was — the guest received that file.</li>
-        </ul>
-        <div className="form2" style={{ marginTop: 10 }}>
-          <SendToField entry={entry} value={sendTo} onChange={setSendTo} />
-        </div>
-      </DsDialog>
-    </StepCard>
+        Preview
+      </Button>
+      <Button kind="quiet" compact icon="file" onClick={() => session && openInvoicePdf(session, inv.id).catch((e) => toastRefusal(e, "The PDF could not be opened"))}>
+        PDF
+      </Button>
+      {/* Only a tax invoice is sent after the stay. A proforma or an interim bill that never went
+          out is history (2026-09-18). */}
+      {inv.state === "DRAFT" && inv.invoiceType === "FINAL" ? (
+        <Live>
+          <Button compact icon="send" state={send.isPending ? "working" : "default"} workingLabel="Sending…" onClick={() => send.mutate({ invoiceId: inv.id, to: sendTo })}>
+            Send it
+          </Button>
+        </Live>
+      ) : null}
+    </div>
+  );
+  return (
+    <>
+      <StepCard
+        title="Tax invoice"
+        meta="The tax invoice is the official bill, with its own number, that whoever pays keeps for tax (GST). It is made once for the bill as it stands and never changes afterwards. A new one is needed only when the bill changed after the last one went out — for example a charge found after departure — or when none was issued at check-out."
+        status={
+          lateSinceInvoice ? (
+            <span className="warn-ink">
+              A charge was added after {invoiceLabel(lastSent!)} went out — it isn&rsquo;t on that invoice. Issue a new one below.
+            </span>
+          ) : lastSent ? (
+            <span className="ok-ink">
+              {invoiceLabel(lastSent)} covers the bill as it stands · sent {fmtInstantDate(lastSent.dispatchedAt, tz)}
+            </span>
+          ) : finals.length ? (
+            <span className="warn-ink">Issued but not sent yet — send it from its row.</span>
+          ) : (
+            <span className="warn-ink">No tax invoice yet — issue one below.</span>
+          )
+        }
+      >
+        {finals.length ? <div style={{ display: "grid", gap: 4 }}>{finals.map(row)}</div> : null}
+        {finals.some((i) => i.state === "DRAFT") ? (
+          <Live>
+            <div className="form2" style={{ marginTop: 6 }}>
+              <SendToField entry={entry} value={sendTo} onChange={setSendTo} />
+            </div>
+          </Live>
+        ) : null}
+        {others.length ? (
+          <details className="fold" style={{ marginTop: 10 }}>
+            <summary>Earlier bills · {others.length}</summary>
+            <div className="fold-body" style={{ display: "grid", gap: 4 }}>
+              {others.map(row)}
+            </div>
+          </details>
+        ) : null}
+      </StepCard>
+      <Live>
+        <InlineWay render={(done) => <IssueTaxInvoice entry={entry} onDone={done} hasOne={!!lastSent && !lateSinceInvoice} />} />
+      </Live>
+      <PaperDrawer paper={paper} onClose={() => setPaper(null)} />
+    </>
+  );
+}
+
+function IssueTaxInvoice({ entry, onDone, hasOne }: { entry: EntryDetail; onDone: () => void; hasOne: boolean }) {
+  const booked = useBookedBy(entry);
+  const issueSend = useIssueAndSend(entry, "final-v1");
+  const [sendTo, setSendTo] = useSendTo(entry);
+  return (
+    <DsDialog
+      open
+      onClose={onDone}
+      title="Issue and send a new tax invoice"
+      caseLines={[<b key="p">{booked.payer}</b>, entry.id]}
+      busy={issueSend.isPending}
+      footer={
+        <>
+          <NotNow onClick={onDone} busy={issueSend.isPending} />
+          <Button icon="lock" state={issueSend.isPending ? "working" : "default"} workingLabel="Issuing…" onClick={() => issueSend.mutate(sendTo, { onSettled: onDone })}>
+            Issue and send
+          </Button>
+        </>
+      }
+    >
+      {hasOne ? <p className="sm warn-ink">The last tax invoice already covers the bill as it stands — a new one would show the same figures.</p> : null}
+      <p className="sm">This cannot be undone:</p>
+      <ul className="plain-list sm" style={{ margin: 0, paddingLeft: 18, display: "grid", gap: 4 }}>
+        <li>A tax invoice is made for the bill as it stands now, with a new number.</li>
+        <li>It is emailed straight away, and their answer is waited for like any paper.</li>
+        <li>An invoice sent before stays exactly as it was — that is the file they received.</li>
+      </ul>
+      <div className="form2" style={{ marginTop: 10 }}>
+        <SendToField entry={entry} value={sendTo} onChange={setSendTo} />
+      </div>
+    </DsDialog>
   );
 }
 
@@ -832,7 +871,7 @@ function RecordPayment({
       onClose={onClose}
       title="Record a payment"
       caseLines={[<b key="p">{payer}</b>, outstanding != null ? `${money(outstanding, currency)} still owed` : entry.id]}
-      help="Reconciled means the invoice's money is matched and nothing more is chased." 
+      help="Mark it reconciled once all the money for this invoice is in — nothing more is chased for it."
       busy={busy}
       footer={
         <>
@@ -953,7 +992,7 @@ function WriteOff({
       danger
       title="Write off"
       caseLines={[<b key="p">{payer}</b>, outstanding != null ? `${money(outstanding, currency)} still owed` : entry.id]}
-      lead="The GM writes off what will not be collected. The configured threshold refuses anything above the GM's band. Recorded with the amount, the reason, who and when."
+      lead="Only the GM writes off money that won't be collected, up to the limit the hotel has set for one write-off. The amount, the reason, who and when are kept."
       reasonLabel="Why"
       placeholder="the agency ceased trading"
       confirmLabel="Write off"
@@ -1017,16 +1056,14 @@ function LateCharge({ entry, open, onClose }: { entry: EntryDetail; open: boolea
       onClose={onClose}
       title="A charge found after departure"
       caseLines={[entry.id]}
-      help="A late chit, a minibar count, damage found after the room was turned. It posts to the bill with its service charge and GST, and a notice is emailed to whoever pays it; the record is not re-opened." 
+      help="A late bill from the restaurant, a minibar count, or damage found after the room was cleaned. It is added to the bill with its service charge and GST, and whoever pays is emailed a notice. The booking stays closed."
       busy={run.isPending}
       footer={
         <>
-          <Button kind="quiet" state={run.isPending ? "inert" : "default"} onClick={onClose}>
-            Not now
-          </Button>
+          <NotNow onClick={onClose} busy={run.isPending} />
           <Button
             state={run.isPending ? "working" : ok ? "default" : "inert"}
-            title={ok ? undefined : amount.trim() !== "" && !amountOk ? "a charge is a positive amount — a credit here is an adjustment note" : "what it was and the amount first"}
+            reason={ok ? undefined : amount.trim() !== "" && !amountOk ? "a charge must be more than zero" : "say what it was and the amount first"}
             workingLabel="Posting…"
             onClick={() => run.mutate()}
           >
@@ -1059,26 +1096,7 @@ function LateCharge({ entry, open, onClose }: { entry: EntryDetail; open: boolea
   );
 }
 
-/* ------------------------------------------------------------------ one door back in (Z2) */
-
-function OneDoorBackIn() {
-  return (
-    <StepCard
-      title="One door back in"
-      meta="Anything else — a correction, a dispute raised weeks later, a change of dates for a return — is a governed re-entry: the FOM's authority, a reason, and a new pass the history shows as such. The rail's Re-enter menu lists what the backend allows at each step; after Check-out it offers nothing yet."
-      acts={
-        <Live>
-          <Button kind="quiet" compact state="inert">
-            Re-enter…
-          </Button>
-          <Help label="Not available yet">Re-entry after Closed is the FOM's · opens a new pass · not in the backend yet (the prototype files it under BE-42).</Help>
-        </Live>
-      }
-    >
-      <p className="sm">Nothing on a closed booking is ever edited in place.</p>
-    </StepCard>
-  );
-}
+/* ------------------------------------------------------------------ changing a closed booking (Z2) */
 
 /* ------------------------------------------------------------------ sealed papers */
 
@@ -1119,7 +1137,7 @@ function SealedPapers({ entry, tz }: { entry: EntryDetail; tz: string }) {
           {issued ? (
             <span className="row-acts sm">
               <span>
-                {issued.invoiceNumber ?? issued.id} <span className="meta">· {INVOICE_STATE_WORD[issued.state] ?? words(issued.state)} · served from the stored original</span>
+                {issued.invoiceNumber ?? issued.id} <span className="meta">· {INVOICE_STATE_WORD[issued.state] ?? words(issued.state)} · the copy that was sent</span>
               </span>
               <Button kind="quiet" compact icon="eye" onClick={() => setPaper({ kind: "invoice", id: issued.id, issued: true, label: `Tax invoice ${issued.invoiceNumber ?? issued.id}` })}>
                 Preview
@@ -1194,3 +1212,4 @@ function Cancellation({ entry }: { entry: EntryDetail }) {
     </DocCard>
   );
 }
+

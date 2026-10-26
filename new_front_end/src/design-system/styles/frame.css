@@ -1060,3 +1060,193 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .rchart .rslegend.by-guest .sw.g.k-held, .ds .rchart .rslegend.by-guest .sw.g.k-prov { outline-color: var(--g-line); }
 .ds .rchart .rslegend.by-guest .sw.g.k-res.paypend { box-shadow: inset 3px 0 0 var(--g-line), inset 0 -3px 0 var(--rs-held-line); }
 .ds .rchart .rslegend-lead { font-weight: 600; color: var(--ink); }
+
+/* The bill's figures at Check-out (2026-10-26, "UIappeal"): billed, received and what is still
+   owed are what the master bill is for, so they read across the desk. A flat bordered band; the
+   "still owed" cell carries its state — red while money is due, green when nothing is, amber
+   when the guest has paid more than the bill. */
+.ds .bill-band { display: flex; flex-wrap: wrap; gap: 0; margin-top: var(--s3); border: 1px solid var(--line-2); border-radius: var(--r-card); background: var(--surface); overflow: hidden; }
+.ds .bill-band .bb-cell { flex: 1 1 140px; display: grid; gap: 2px; padding: var(--s3) var(--s4); border-right: 1px solid var(--line); }
+.ds .bill-band .bb-cell:last-child { border-right: 0; }
+.ds .bill-band .bb-k { font-size: 12px; font-weight: 600; color: var(--ink-3); }
+.ds .bill-band .bb-v { font-size: 18px; font-weight: 700; color: var(--ink); font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+.ds .bill-band .bb-cell.owed { flex-basis: 180px; }
+.ds .bill-band .bb-cell.owed .bb-v { font-size: 22px; font-weight: 800; }
+.ds .bill-band .bb-cell.owed.due { background: var(--danger-soft); box-shadow: inset 3px 0 0 var(--danger); }
+.ds .bill-band .bb-cell.owed.due .bb-k, .ds .bill-band .bb-cell.owed.due .bb-v { color: var(--danger); }
+.ds .bill-band .bb-cell.owed.clear { background: var(--success-soft); box-shadow: inset 3px 0 0 var(--success); }
+.ds .bill-band .bb-cell.owed.clear .bb-k, .ds .bill-band .bb-cell.owed.clear .bb-v { color: var(--success); }
+.ds .bill-band .bb-cell.owed.over { background: var(--warning-soft); box-shadow: inset 3px 0 0 var(--warning); }
+.ds .bill-band .bb-cell.owed.over .bb-k, .ds .bill-band .bb-cell.owed.over .bb-v { color: var(--warning); }
+.ds .bill-lines-row { display: flex; align-items: center; justify-content: space-between; gap: var(--s2); margin-top: var(--s3); }
+.ds .bill-lines-row .bl-n { font-size: 13px; font-weight: 600; color: var(--ink-2); }
+
+/* Tabs look like things to click (2026-10-26, operator: "these tabs need to look more like things
+   that can be clicked rather than just words, or else the user may miss it — do it for all
+   stages"). Each tab is a bordered control at rest and fills on hover; the open one carries the
+   accent with a second cue — a heavier underline and bold — never colour alone (the Atlassian
+   rule). The step's tabs and the booking's five keep their two groups; a group wraps inside itself. */
+.ds .canvas-tabs:not(.desk-root *) { row-gap: var(--s2); column-gap: var(--s3); padding-bottom: var(--s2); margin: -8px 0 var(--s3); }
+.ds .canvas-tabs .tabgroup { gap: var(--s1); flex-wrap: wrap; }
+.ds .canvas-tabs .tabgroup.booking { padding-left: var(--s3); }
+.ds .canvas-tabs .tab:not(.desk-root *) {
+  height: 32px; padding: 0 var(--s3); margin-bottom: 0;
+  background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--r-control);
+  color: var(--ink); font-size: 14px; font-weight: 500;
+}
+.ds .canvas-tabs .tab:hover:not(.desk-root *) { background: var(--surface-2); border-color: var(--ink-3); }
+.ds .canvas-tabs .tab:active:not(.desk-root *) { background: var(--surface-3); }
+.ds .canvas-tabs .tab[aria-selected="true"]:not(.desk-root *) {
+  background: var(--accent-soft); border-color: var(--accent); color: var(--accent-ink); font-weight: 700;
+  box-shadow: inset 0 -3px 0 var(--accent);
+}
+.ds .canvas-tabs .tab:focus-visible:not(.desk-root *) { outline: none; box-shadow: var(--focus); }
+.ds .subtabs { gap: var(--s2); border-bottom: 0; }
+.ds .subtab {
+  margin-bottom: 0; padding: 6px var(--s3);
+  background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--r-control);
+  color: var(--ink); font-weight: 500;
+}
+.ds .subtab:hover { background: var(--surface-2); border-color: var(--ink-3); }
+.ds .subtab[aria-selected="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-ink); font-weight: 700; box-shadow: inset 0 -3px 0 var(--accent); }
+.ds .subtab:focus-visible { box-shadow: var(--focus); }
+
+/* The room inspections as tiles (2026-10-26, operator: a booking can have 20+ rooms — the
+   per-room rows took a screen for two). One small tile per room, coloured by where it stands;
+   one click opens its form under the tiles. */
+.ds .insp-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); }
+.ds .insp-bulk { margin-left: auto; display: flex; flex-wrap: wrap; gap: var(--s2); }
+.ds .insp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(78px, 1fr)); gap: 6px; }
+.ds .insp-tile {
+  display: grid; gap: 1px; justify-items: start; text-align: left;
+  padding: 6px 8px; min-height: 40px;
+  background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--r-control);
+  color: var(--ink); font: inherit; cursor: pointer;
+}
+.ds .insp-tile b { font-size: 14px; line-height: 1.15; font-weight: 700; }
+.ds .insp-tile span { font-size: 11.5px; line-height: 1.2; font-weight: 600; color: var(--ink-3); }
+.ds .insp-tile:hover { background: var(--surface-2); border-color: var(--ink-3); }
+.ds .insp-tile:focus-visible { outline: none; box-shadow: var(--focus); }
+.ds .insp-tile.todo span { color: var(--danger); }
+.ds .insp-tile.fault { background: var(--warning-soft); border-color: var(--warning-line); }
+.ds .insp-tile.fault span { color: var(--warning); }
+.ds .insp-tile.clear { background: var(--success-soft); border-color: var(--success-line); }
+.ds .insp-tile.clear span { color: var(--success); }
+.ds .insp-tile.damage { background: var(--warning-soft); border-color: var(--warning-line); }
+.ds .insp-tile.damage span { color: var(--warning); }
+.ds .insp-tile.off { border-style: dashed; border-color: var(--warning-line); }
+.ds .insp-tile.off span { color: var(--warning); }
+.ds .insp-tile.lapsed { background: var(--surface-2); }
+.ds .insp-tile.sel { border-color: var(--accent); box-shadow: inset 0 -3px 0 var(--accent); }
+.ds .insp-panel { display: grid; gap: var(--s2); padding: var(--s3); }
+.ds .insp-ticks { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s4); }
+.ds .insp-ticks label { display: inline-flex; align-items: center; gap: 6px; }
+
+/* Housekeeping (2026-10-26) — the rooms a guest has left, one card each with its clean-by time and
+   Mark clean; then every other room as small tiles. A late room is red, one due within half an
+   hour amber, a guest due in today marked in the accent ("UIappeal"). */
+.ds .hk-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: var(--s3); }
+.ds .hk-card {
+  display: grid; gap: 6px; align-content: start;
+  padding: var(--s3); background: var(--surface);
+  border: 1px solid var(--line-2); border-radius: var(--r-card, 6px);
+}
+.ds .hk-card.soon { border-color: var(--warning-line); }
+.ds .hk-card.late { border-color: var(--danger); box-shadow: inset 4px 0 0 var(--danger); }
+.ds .hk-card-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: var(--s2); }
+.ds .hk-room { font-size: 18px; line-height: 1.2; font-weight: 700; }
+.ds .hk-due { display: flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 700; }
+.ds .hk-due.stop-ink { color: var(--danger); }
+.ds .hk-line { font-size: 13px; color: var(--ink-2); }
+.ds .hk-line.hk-next-today { color: var(--accent); }
+.ds .hk-act { margin-top: 4px; }
+.ds .hk-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(78px, 1fr)); gap: 6px; }
+.ds .hk-tile {
+  display: grid; gap: 1px; justify-items: start; text-align: left;
+  padding: 6px 8px; min-height: 40px;
+  background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--r-control);
+  color: var(--ink); font: inherit; cursor: pointer;
+}
+.ds .hk-tile b { font-size: 14px; line-height: 1.15; font-weight: 700; }
+.ds .hk-tile span { font-size: 11.5px; line-height: 1.2; font-weight: 600; color: var(--ink-3); }
+.ds .hk-tile:hover { background: var(--surface-2); border-color: var(--ink-3); }
+.ds .hk-tile:focus-visible { outline: none; box-shadow: var(--focus); }
+.ds .hk-tile.ready span { color: var(--success); }
+.ds .hk-tile.occupied { background: var(--surface-2); }
+.ds .hk-tile.out_of_order { background: var(--warning-soft); border-color: var(--warning-line); }
+.ds .hk-tile.out_of_order span { color: var(--warning); }
+.ds .hk-tile.sel { border-color: var(--accent); box-shadow: inset 0 -3px 0 var(--accent); }
+/* The bell's housekeeping line. */
+.ds .panel-row.hk-bell { border-left: 3px solid var(--danger); }
+
+/* Who pays (2026-10-26) — each payer's share before → after, in the bill band's shape. */
+.ds .payer-shares { display: flex; flex-wrap: wrap; margin-top: var(--s3); border: 1px solid var(--line-2); border-radius: var(--r-card, 6px); background: var(--surface); overflow: hidden; }
+.ds .payer-shares .ps-cell { flex: 1 1 200px; display: grid; gap: 2px; padding: var(--s3) var(--s4); border-right: 1px solid var(--line); }
+.ds .payer-shares .ps-cell:last-child { border-right: 0; }
+.ds .payer-shares .ps-k { font-size: 12px; font-weight: 600; color: var(--ink-3); }
+.ds .payer-shares .ps-v { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.ds .payer-shares .ps-v b { font-size: 18px; font-weight: 800; }
+.ds .payer-shares .ps-arrow { color: var(--ink-3); font-weight: 400; }
+.ds .payer-shares .ps-note { font-size: 12px; color: var(--ink-3); }
+
+/* Action tiles (2026-10-26, operator on the Closed step's stacked buttons: "make it better,
+   UIappeal"). One bordered tile per act, clickable at rest, its state on its second line; a tile
+   that can't be used is dashed and says why. */
+.ds .act-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: var(--s2); margin-top: var(--s3); }
+.ds .act-tile {
+  display: grid; gap: 3px; align-content: start; justify-items: start; text-align: left;
+  min-height: 60px; padding: 10px 12px;
+  background: var(--surface); color: var(--ink);
+  border: 1px solid var(--line-2); border-radius: var(--r-card, 6px);
+  box-shadow: 0 1px 0 var(--line);
+  font: inherit; cursor: pointer;
+}
+.ds .act-tile .at-label { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 600; line-height: 1.25; }
+.ds .act-tile .at-sub { font-size: 12.5px; line-height: 1.3; font-weight: 500; color: var(--ink-3); }
+.ds .act-tile .at-sub.danger { color: var(--danger); font-weight: 700; }
+.ds .act-tile .at-sub.warning { color: var(--warning); font-weight: 600; }
+.ds .act-tile .at-sub.success { color: var(--success); font-weight: 600; }
+.ds .act-tile:hover { background: var(--surface-2); border-color: var(--ink-3); }
+.ds .act-tile:active { background: var(--line); }
+.ds .act-tile:focus-visible { outline: none; box-shadow: var(--focus); }
+.ds .act-tile.primary { background: var(--ink); border-color: var(--ink); color: #fff; }
+.ds .act-tile.primary .at-sub { color: rgba(255, 255, 255, 0.82); }
+.ds .act-tile.primary .at-sub.danger { color: #ffd6cf; }
+.ds .act-tile.primary:hover { background: var(--ink-2); border-color: var(--ink-2); }
+.ds .act-tile.on { background: var(--accent-soft); border-color: var(--accent); box-shadow: inset 0 -3px 0 var(--accent); }
+.ds .act-tile.shut, .ds .act-tile.shut:hover, .ds .act-tile.shut:active { cursor: default; background: var(--surface-2); border-style: dashed; border-color: var(--line-2); color: var(--ink-3); box-shadow: none; }
+.ds .act-tile.shut .at-sub { color: var(--warning); font-weight: 600; }
+
+/* Rooms grouped by room type (2026-10-26) — on the Rooms cards and Housekeeping. A heading per
+   type with its counts, the tiles beneath. */
+.ds .type-groups { display: grid; gap: var(--s4); }
+.ds .type-group { display: grid; gap: var(--s2); }
+.ds .type-group .tg-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s2); padding-bottom: 4px; border-bottom: 1px solid var(--line-2); }
+.ds .type-group .tg-head b { font-size: 14.5px; font-weight: 700; color: var(--ink); }
+.ds .stack > .type-group + .type-group { margin-top: var(--s2); }
+/* Side by side (2026-10-26, operator: "wasting a lot of space on the right, be efficient"):
+   each room type a box as wide as its rooms; the boxes fill each row and wrap. */
+.ds .type-groups.flow { display: flex; flex-wrap: wrap; gap: var(--s3); align-items: stretch; }
+.ds .type-groups.flow > .type-group {
+  flex: 1 1 auto; align-content: start; gap: var(--s2);
+  padding: var(--s2) var(--s3) var(--s3); border: 1px solid var(--line); border-radius: var(--r-card, 6px); background: var(--surface);
+}
+.ds .type-groups.flow > .type-group .tg-head { border-bottom: 0; padding-bottom: 0; }
+.ds .type-groups.flow .hk-tiles { display: flex; flex-wrap: wrap; gap: 6px; }
+.ds .type-groups.flow .hk-tile { width: 78px; }
+.ds .type-groups.flow > .floor > .tiles:not(.desk-root *) { display: flex; flex-wrap: wrap; gap: 10px; }
+.ds .type-groups.flow > .floor > .tiles > * { width: 150px; }
+/* The open room's form, once, under the groups — one line across. */
+
+/* Damage found (2026-10-26) — one row per room: what was found, where it stands, its acts.
+   A damage still to answer carries a red edge ("UIappeal"). */
+.ds .dmg-list { display: grid; gap: var(--s2); margin-top: var(--s2); }
+.ds .dmg-row { display: grid; grid-template-columns: minmax(200px, 1.4fr) minmax(180px, 1fr) auto; gap: var(--s3); align-items: center; padding: var(--s3); border: 1px solid var(--line-2); border-radius: var(--r-card, 6px); background: var(--surface); }
+.ds .dmg-row.todo { box-shadow: inset 3px 0 0 var(--danger); background: var(--danger-soft); border-color: var(--danger); }
+.ds .dmg-row .dmg-what { display: grid; gap: 2px; min-width: 0; }
+.ds .dmg-row .dmg-what > b { font-size: 15px; }
+.ds .dmg-row .dmg-state { font-size: 14px; }
+.ds .dmg-row .dmg-acts { justify-content: flex-end; margin: 0; flex-wrap: wrap; }
+.ds .dmg-ticks { display: flex; flex-wrap: wrap; gap: var(--s4); }
+.ds .dmg-ticks label { display: inline-flex; align-items: center; gap: 6px; font-weight: 500; }
+@media (max-width: 760px) { .ds .dmg-row { grid-template-columns: 1fr; } .ds .dmg-row .dmg-acts { justify-content: flex-start; } }

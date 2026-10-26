@@ -1,4 +1,4 @@
-import { InventoryClaimState, Prisma } from "@prisma/client";
+import { InventoryClaimState, Prisma, RoomPhysicalState } from "@prisma/client";
 import { claimFlagReportsPhysicalState } from "./room-claim-flag.js";
 import { findRoomBookingConflicts } from "./room-booking-conflicts.js";
 import { hotelTodayUtc } from "./stay-dates.js";
@@ -76,6 +76,20 @@ export type TransitionInput = {
  * When `onlyFromStates` doesn't match, returns `{ transitioned: false }` without erroring —
  * the caller decides whether that's noteworthy.
  */
+/**
+ * A guest has left the room: it is DIRTY until housekeeping marks it clean (2026-10-26). The claim
+ * flag already read "departed, dirty", but the check-in and arrival gates read the room's PHYSICAL
+ * state, which a departure never touched — so the next guest could be checked into a room nobody had
+ * cleaned. Only a room reading clean is changed; a room under maintenance keeps that state.
+ * Housekeeping's Mark clean puts it back to AVAILABLE_CLEAN (housekeeping-service).
+ */
+export async function markRoomDirtyOnDepartureTx(tx: TxClient, roomId: string, now: Date = new Date()): Promise<void> {
+  await tx.room.updateMany({
+    where: { id: roomId, physicalState: { in: [RoomPhysicalState.AVAILABLE_CLEAN, RoomPhysicalState.AVAILABLE_INSPECTED] } },
+    data: { physicalState: RoomPhysicalState.DIRTY, updatedAt: now },
+  });
+}
+
 export async function transitionRoomClaimState(tx: TxClient, input: TransitionInput): Promise<ClaimTransitionResult> {
   const now = input.now ?? new Date();
   const row = await tx.room.findUnique({ where: { id: input.roomId }, select: { currentClaimState: true } });
@@ -104,6 +118,7 @@ export async function transitionRoomClaimState(tx: TxClient, input: TransitionIn
       effectiveFrom: now,
     },
   });
+  if (input.toState === InventoryClaimState.DEPARTED_DIRTY) await markRoomDirtyOnDepartureTx(tx, input.roomId, now);
   // A booking letting go of the room puts its beds back to the usual setup (2026-09-19) — only
   // undoing a change made for THIS booking; see `resetRoomBedToUsualTx`.
   if (

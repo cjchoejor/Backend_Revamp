@@ -1,32 +1,60 @@
 import type { PrismaClient } from "@prisma/client";
-import { Stage } from "@prisma/client";
+import { InventoryClaimState, RoomPhysicalState, Stage } from "@prisma/client";
 
 /**
- * W24 — Housekeeping SLA after checkout.
+ * W24 — the room's cleaning clock after a guest leaves it.
  *
- * This slice records the SLA breach as a TraceEvent and marks the TimerRecord FIRED (if timerRecordId provided).
- * Full escalation/notification logic can be layered on later.
+ * Armed at check-out (and when one room of a party is released early), one clock per room, for
+ * `housekeeping.sla.windowMinutes`. Housekeeping marking the room clean (`markRoomCleaned`) stops
+ * it. When it fires on a room still waiting to be cleaned it writes `HOUSEKEEPING_SLA.BREACHED`,
+ * which the desk reads as an overdue room.
+ *
+ * Fixed 2026-10-26: the breach was idempotent per ROOM for ever — once a room had one breach, every
+ * later departure from it fired silently — and it fired on a room already cleaned. It is now
+ * idempotent per clock, and a clock on a room that no longer needs cleaning is closed with no breach.
  */
 export async function runHousekeepingSlaWorker(prisma: PrismaClient, input: { entryId?: string; roomId?: string; timerRecordId?: string }) {
   const now = new Date();
   const roomId = typeof input.roomId === "string" ? input.roomId : undefined;
   if (!roomId) return { skipped: true, reason: "MISSING_ROOM_ID" } as const;
+  const timerRecordId = typeof input.timerRecordId === "string" ? input.timerRecordId : null;
 
   const room = await prisma.room.findUnique({ where: { id: roomId } });
   if (!room) return { skipped: true, reason: "ROOM_NOT_FOUND" } as const;
 
-  // Idempotency: if breach already recorded, skip.
-  const existing = await prisma.traceEvent.findFirst({
-    where: { entityType: "Room", entityId: roomId, eventType: "HOUSEKEEPING_SLA.BREACHED" },
-    orderBy: { createdAt: "desc" },
-  });
-  if (existing) return { skipped: true, reason: "IDEMPOTENT_TRACE_EXISTS" } as const;
+  if (timerRecordId) {
+    const timer = await prisma.timerRecord.findUnique({ where: { id: timerRecordId }, select: { status: true } });
+    // Cancelled (the room was cleaned) or already handled — nothing to do.
+    if (timer && timer.status !== "SCHEDULED") return { skipped: true, reason: `TIMER_${timer.status}` } as const;
+    const already = await prisma.traceEvent.findFirst({
+      where: {
+        entityType: "Room",
+        entityId: roomId,
+        eventType: "HOUSEKEEPING_SLA.BREACHED",
+        payload: { path: ["timerRecordId"], equals: timerRecordId },
+      },
+      select: { id: true },
+    });
+    if (already) return { skipped: true, reason: "IDEMPOTENT_TRACE_EXISTS" } as const;
+  }
+
+  const stillToClean =
+    room.currentClaimState === InventoryClaimState.DEPARTED_DIRTY || room.physicalState === RoomPhysicalState.DIRTY;
+  if (!stillToClean) {
+    if (timerRecordId) {
+      await prisma.timerRecord.updateMany({
+        where: { id: timerRecordId, status: "SCHEDULED" },
+        data: { status: "CANCELLED", cancelledAt: now, cancelledBy: "SYSTEM", cancelledReason: "Room no longer waiting to be cleaned" },
+      });
+    }
+    return { skipped: true, reason: "ROOM_NOT_WAITING_FOR_CLEANING" } as const;
+  }
 
   await prisma.$transaction(async (tx) => {
-    if (typeof input.timerRecordId === "string") {
+    if (timerRecordId) {
       await tx.timerRecord.updateMany({
-        where: { id: input.timerRecordId, status: "SCHEDULED" },
-        data: { status: "FIRED", firedAt: now } as any,
+        where: { id: timerRecordId, status: "SCHEDULED" },
+        data: { status: "FIRED", firedAt: now },
       });
     }
 
@@ -44,9 +72,11 @@ export async function runHousekeepingSlaWorker(prisma: PrismaClient, input: { en
         entryId: typeof input.entryId === "string" ? input.entryId : null,
         payload: {
           roomId,
+          roomNumber: room.roomNumber,
+          timerRecordId,
           entryId: typeof input.entryId === "string" ? input.entryId : null,
-          currentClaimState: (room as any).currentClaimState ?? null,
-          physicalState: (room as any).physicalState ?? null,
+          currentClaimState: room.currentClaimState,
+          physicalState: room.physicalState,
         },
         createdBy: "SYSTEM",
       },
@@ -55,4 +85,3 @@ export async function runHousekeepingSlaWorker(prisma: PrismaClient, input: { en
 
   return { skipped: false, roomId } as const;
 }
-

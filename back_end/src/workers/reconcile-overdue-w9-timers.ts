@@ -21,7 +21,7 @@ export async function reconcileOverduePostCheckoutInspectionTimers(prisma: Prism
   for (const t of overdue) {
     const entryId = t.entryId;
     if (!entryId) continue;
-    const result = await runPostCheckoutInspectionWorker(prisma, { entryId });
+    const result = await runPostCheckoutInspectionWorker(prisma, { entryId, timerRecordId: t.id });
     if (!result.skipped) fired += 1;
   }
   return { checked: overdue.length, fired };

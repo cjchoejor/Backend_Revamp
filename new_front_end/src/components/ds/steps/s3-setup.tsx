@@ -531,13 +531,13 @@ function BillingModelCard({
   return (
     <StepCard
       flow="billing-model"
-      title="Billing model"
+      title="Who pays"
       right={savedModel && !dirty ? <OnRecord /> : null}
       meta={
         <>
-          Set here, before the bill goes live; a change afterwards is a recorded transition.
+          Who the bill is made out to. It is chosen here, and can still be changed on the Stay step while the guest is staying.
           {preselectedWhy ? ` Pre-selected — ${preselectedWhy}; change it if they settle differently.` : ""}
-          {group ? " A group bills to one master folio." : ""}
+          {group ? " A group has one bill for everyone." : ""}
           {folio ? "" : " The provisional bill opens with this choice, and the proforma with it."}
         </>
       }
@@ -1463,7 +1463,7 @@ function PartyBlock({ entry }: { entry: EntryDetail }) {
     <div
       className="notice inert"
       style={{ padding: 0 }}
-      title="Party roles, free-of-charge rooms and the rooming list are not in the backend yet (BE-34, BE-35)"
+      title="Not possible yet — guests' roles, free rooms and the rooming list can't be recorded here"
     >
       <div inert>
         <StepCard title="Party" icon="person" quiet>
@@ -1490,8 +1490,8 @@ function PartyBlock({ entry }: { entry: EntryDetail }) {
         </StepCard>
       </div>
       <HelpHere label="About this roster">
-        Drawn in full, not yet recordable — roles, free-of-charge rooms and the rooming list are BE-34 and BE-35. Rooms stay blank until
-        allocation.
+        Who is in the party. It can&rsquo;t be filled in yet — guests&rsquo; roles, free-of-charge rooms and the rooming list come later.
+        The Room column fills in when rooms are given out at Arrival.
       </HelpHere>
     </div>
   );

@@ -7,6 +7,8 @@ import { enforceBillingModelConfirmationMatches } from "../../policies/13-billin
 import { enforceSettlementMethodCompatibility } from "../../policies/13-billing-model/p33-billing-model-settlement-method-compatibility.js";
 import { enforceFolioLiveForS8Settlement } from "../../policies/13-billing-model/p31-folio-live-required-for-s8-settlement.js";
 import { enforceEntryAtS8ForSettlementOperations } from "../../policies/01-availability/p01-entry-at-s8-for-checkout-progression.js";
+import { enforceDamageAnsweredBeforeSettlement } from "../../policies/36-damage-assessment/p81-damage-assessment-gates.js";
+import { readBookingDamages, unansweredDamageRooms } from "../../lib/damage-standing.js";
 import { recomputeFolioOutstandingBalance } from "../../lib/folio-outstanding-from-payment.js";
 import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.js";
 import {
@@ -229,6 +231,8 @@ export async function initiateSettlement(
   const entry = await prisma.entry.findUnique({ where: { id: folio.entryId }, include: { reservation: true } });
   if (!entry) throw new NotFoundError("Entry");
   enforceEntryAtS8ForSettlementOperations({ currentStage: entry.currentStage });
+  // A damage found at an inspection is answered before the bill is settled (2026-10-26, Policy 81).
+  enforceDamageAnsweredBeforeSettlement({ unansweredRooms: unansweredDamageRooms(await readBookingDamages(prisma, entry.id)) });
 
   // Outstanding scope: whole-folio when settling everything, per-bucket when settling a
   // specific `input.billingModel`. Both paths must be Decimal-safe (never Number() drift).

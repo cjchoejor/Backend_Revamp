@@ -515,7 +515,7 @@ export function FolioLinesTable({
           <button
             type="button"
             onClick={() => setShowTax((v) => !v)}
-            title="Service-charge and GST companion lines are folded under the charge they belong to — toggle to list every ledger line on its own row"
+            title="Each charge's service charge and GST are shown on its own row — press to list every line of the bill separately"
             style={{
               border: "none",
               background: "rgba(255,255,255,0.16)",
@@ -536,7 +536,7 @@ export function FolioLinesTable({
           <button
             type="button"
             onClick={() => setExpanded(true)}
-            title="Expand the folio to the full screen (Esc closes)"
+            title="Show the bill on the whole screen (Esc closes it)"
             style={{
               border: "none",
               background: "rgba(255,255,255,0.16)",
@@ -723,7 +723,7 @@ export function FolioLinesTable({
           }}
           title={
             tab === "ALL"
-              ? "The whole ledger, split into charges, service charge and GST — summed on the server"
+              ? "The whole bill, split into charges, service charge and GST"
               : tab === "WHOLE"
                 ? "Charges with no room and no space named, with their own service charge and GST — summed on the server"
                 : "spaceId" in tab

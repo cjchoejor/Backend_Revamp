@@ -7,6 +7,9 @@ import * as disputeGateEngine from "../engines/dispute-gate-engine.js";
 import { listStayChargeGapsForCompleteAuditStayNightsS8ToS9 } from "../policies/24-night-audit/p62-room-charge-present-for-complete-audit-s8-to-s9.js";
 import { peekH4S8ExitFailure } from "../policies/25-handoff/p63-handoff-lifecycle-gates.js";
 import { getEntryWithRoom } from "../services/domain/s8-checkout-service.js";
+import { readBookingInspectionStanding, roomListWords } from "./room-inspection-standing.js";
+import { readBookingDamages, unansweredDamageRooms } from "./damage-standing.js";
+import { damageNotAnsweredForS8Exit } from "../policies/36-damage-assessment/p81-damage-assessment-gates.js";
 
 export type EntryWithFolioReservation = Prisma.EntryGetPayload<{
   include: { folio: true; reservation: true };
@@ -77,13 +80,22 @@ export async function collectS8ToS9ReadOnlyFailures(
     });
   }
 
-  const insp = await prisma.roomInspectionRecord.findFirst({ where: { entryId }, orderBy: { createdAt: "desc" } });
-  if (!insp) {
+  // Every room the guest leaves is inspected, or its inspection put off (2026-10-26 — one
+  // inspection per room; it had been one per booking).
+  const inspections = await readBookingInspectionStanding(prisma, entryId);
+  if (!inspections.allRecorded) {
+    const missing = inspections.rooms.filter((r) => r.standing.state === "NOT_RECORDED").map((r) => r.roomNumber);
     failures.push({
       blockingCondition: "INSPECTION_NOT_COMPLETE_OR_DEFERRED",
-      message: "Room inspection not complete or deferred",
+      message: missing.length
+        ? `${roomListWords(missing)} not inspected — inspect ${missing.length > 1 ? "each" : "it"}, or put the inspection off to after departure`
+        : "Room inspection not complete or deferred",
     });
   }
+
+  // A damage found is answered — charged, waived, or left to decide after departure (2026-10-26).
+  const damageFail = damageNotAnsweredForS8Exit({ unansweredRooms: unansweredDamageRooms(await readBookingDamages(prisma, entryId)) });
+  if (damageFail) failures.push(damageFail);
 
   const gate = await disputeGateEngine.canProgressStage(prisma, entryId, Stage.S9);
   if (gate.result !== "CLEAR") {

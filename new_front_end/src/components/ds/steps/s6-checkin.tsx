@@ -49,8 +49,11 @@ import {
   type StepPane,
   OtherWaysTabs,
   ShutWay,
+  InlineWay,
+  atLeast,
 } from "./kit";
 import { RoomsTableCard } from "./rooms-table";
+import { CancelAtArrivalDialog } from "./s4-other-ways";
 import { InlineTool, claimWord, distinctRoomRows, physicalWord, physicallyReady, revealBlock, roomLabel } from "./s6-shared";
 import { Help } from "@/components/ds/help";
 
@@ -179,7 +182,7 @@ export function S6CheckIn({
       <div className="pane" hidden={at(null)}>
       <StepCard
         title={past || folioLive ? "Checked in · what was on record" : "Before you check in · read these, then press Check in"}
-        meta="The code needs every one of these before the folio goes live. Two of them happen at the counter: the document, and the keys."
+        meta="Check-in needs every one of these before the guest's bill opens. Two of them happen at the counter: the document, and the keys."
       >
         {facts.map((f) => (
           <FactLine key={f.label} label={f.label} value={f.value} who={f.who} state={f.state} action={f.action} />
@@ -239,10 +242,10 @@ export function S6CheckIn({
                 </span>
               ) : null}
               <Button icon="lock" state={checkIn.ready ? "default" : "inert"} title={checkIn.ready ? undefined : checkIn.reason} onClick={checkIn.onClick}>
-                Check in · keys and the live folio
+                Check in · keys and the bill
               </Button>
               <Help label="About checking in">
-                One act: the folio goes live, the rooms become occupied, the keys are handed over, and housekeeping and the kitchen are told.
+                One click: the guest&rsquo;s bill opens, the rooms are marked occupied, the keys are handed over, and housekeeping and the kitchen are told.
               </Help>
             </div>
           </div>
@@ -257,11 +260,20 @@ export function S6CheckIn({
                 {
                   key: "cancel",
                   label: "Cancel",
-                  content: (
+                  // The guest is at the desk but is not staying (2026-10-26, SIG-S6 §8.6 / Policy 35):
+                  // the same cancel as Reserve and Arrival — the FOM's, the agreed charge, the GM waives.
+                  content: atLeast(session?.actorLevel, "L2") ? (
+                    <InlineWay render={(done) => <CancelAtArrivalDialog entry={entry} onClose={done} />} />
+                  ) : (
                     <ShutWay
                       act="Cancel the booking"
-                      why="Not at check-in — once the guest is at the desk it is not a cancellation."
-                      help={<p>Cancelling is recorded at Set up or at Arrival. A guest who leaves after checking in is an early departure, at Stay.</p>}
+                      why="Needs the FOM — cancelling a reserved booking."
+                      help={
+                        <p>
+                          The guest is at the desk but is not staying. The charge follows the terms they agreed to, the rest of the
+                          advance goes back, and the rooms are released. Once they are checked in, leaving is an early departure, at Stay.
+                        </p>
+                      }
                     />
                   ),
                 },
@@ -404,7 +416,7 @@ function useCheckInFacts({
           <Button kind="secondary" compact onClick={() => revealBlock(ID.guests, false)}>
             Fill the rows
           </Button>
-          <Button kind="quiet" compact state="inert" reason="not in the backend — check-in asks for every guest now">
+          <Button kind="quiet" compact state="inert" reason="Not possible yet — every guest's details are needed at check-in">
             By the first night
           </Button>
         </span>
@@ -445,7 +457,7 @@ function useCheckInFacts({
           <Button kind="quiet" compact state="inert">
             Send to the tablet
           </Button>
-          <Help label="Not available yet">The tablet card is not in the backend yet (BE-45).</Help>
+          <Help label="Not available yet">Not possible yet — there is no tablet for the guest to sign on. Confirm the registration at the desk.</Help>
         </span>
       ) : undefined,
     });
@@ -665,19 +677,19 @@ function RegistrationCard({
             <Button kind="secondary" compact state="inert">
               Send to the tablet
             </Button>
-            <Help label="Not available yet">The registration card on a tablet is not in the backend yet (BE-45) — confirm it at the desk above.</Help>
+            <Help label="Not available yet">Not possible yet — there is no tablet for the guest to sign on. Confirm the registration at the desk, above.</Help>
             {party > 1 ? (
               <>
                 <Button kind="quiet" compact state="inert">
                   Next person
                 </Button>
-                <Help label="Not available yet">One card per guest comes with the tablet card (BE-45).</Help>
+                <Help label="Not available yet">Not possible yet — this comes with the tablet.</Help>
               </>
             ) : null}
             <Button kind="quiet" compact icon="eye" state="inert">
               Preview the signed card
             </Button>
-            <Help label="Not available yet">The signed card as a paper is not in the backend yet (BE-45).</Help>
+            <Help label="Not available yet">Not possible yet — a signed card can&rsquo;t be printed yet.</Help>
           </div>
         </Live>
       </StepCard>

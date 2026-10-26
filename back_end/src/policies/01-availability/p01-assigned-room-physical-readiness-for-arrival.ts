@@ -7,8 +7,18 @@ import { StageGateBlockedError } from "../../lib/errors.js";
  * SIG-S5 exit condition uses the same physical-readiness model:
  * room must be AVAILABLE_CLEAN / AVAILABLE_INSPECTED, or UNDER_MAINTENANCE with expectedReadyAt <= arrival.
  */
+function notReadyWords(physicalState: RoomPhysicalState, roomNumber?: string | null): string {
+  const room = roomNumber ? `Room ${roomNumber}` : "The room";
+  if (physicalState === RoomPhysicalState.DIRTY) {
+    return `${room} hasn't been cleaned since the last guest left — housekeeping marks it clean on the Housekeeping page, then check in.`;
+  }
+  if (physicalState === RoomPhysicalState.UNDER_MAINTENANCE) return `${room} is under maintenance and not ready for a guest.`;
+  return `${room} is not ready for a guest.`;
+}
+
 export function enforceAssignedRoomPhysicalReadinessForArrival(input: {
   physicalState: RoomPhysicalState;
+  roomNumber?: string | null;
   expectedReadyAt: Date | null | undefined;
   arrivalAt: Date | null | undefined;
 }) {
@@ -21,6 +31,6 @@ export function enforceAssignedRoomPhysicalReadinessForArrival(input: {
       input.expectedReadyAt <= input.arrivalAt);
 
   if (ok) return;
-  throw new StageGateBlockedError("Assigned room is not in a valid physical state for arrival", "ROOM_NOT_READY");
+  throw new StageGateBlockedError(notReadyWords(input.physicalState, input.roomNumber), "ROOM_NOT_READY");
 }
 

@@ -80,10 +80,13 @@ export const BACKFLOWS_BY_STAGE: Record<string, BackflowDescriptor[]> = {
   S7: [
     // "Extend stay" moved to the Stay step's own block (2026-08-21): payment-before-commit,
     // availability-checked, run through the governed room-change journey — not this backflow.
-    { key: "s7ToS3", label: "Change billing model", toStage: "S3", minLevel: "L2" },
-    { key: "s7ToS2", label: "Renegotiate rate (GM only)", toStage: "S2", minLevel: "L3" },
+    // "Change billing model" (→ Set up) and "Renegotiate rate" (→ Negotiation) were removed
+    // (2026-10-26, operator ruling): both left an in-house guest with no way back to Stay. Who
+    // pays is changed on the Stay step itself; the backend refuses the two re-entries.
   ],
 };
 
 /** Complaint resolution is applicable from any active stage except S2 (already there) and S9 (closed). */
-export const COMPLAINT_APPLICABLE_STAGES = new Set(["S1", "S3", "S4", "S5", "S6", "S7", "S8"]);
+// Not from Stay (2026-10-26) — it strands the in-house guest like the two re-entries above.
+// Not from Stay or Check-out (2026-10-26): the guest is in, and the booking could never come back.
+export const COMPLAINT_APPLICABLE_STAGES = new Set(["S1", "S3", "S4", "S5", "S6"]);

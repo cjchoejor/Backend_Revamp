@@ -66,7 +66,7 @@ export const entryDetailInclude = {
   committedHold: true,
   vipArrivalNotifications: { orderBy: { createdAt: "desc" as const }, take: 3 },
   keyReturnRecords: { orderBy: { createdAt: "desc" as const }, take: 3 },
-  roomInspectionRecords: { orderBy: { createdAt: "desc" as const }, take: 3 },
+  roomInspectionRecords: { orderBy: { createdAt: "desc" as const }, take: 30 },
   commissionDueRecords: { orderBy: { createdAt: "desc" as const }, take: 5 },
   followUpTasks: { orderBy: { createdAt: "desc" as const }, take: 5 },
   noShowDetermination: true,

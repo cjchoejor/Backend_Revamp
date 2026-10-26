@@ -162,18 +162,55 @@ export const recordKeyReturnRequestSchema = z.object({
    *  the rooms whose key actually came back; their assignment rows are stamped returned in
    *  the same transaction as the KeyReturnRecord. */
   returnedRoomIds: z.array(z.string().min(1)).max(60).optional(),
+  /** Keys declared LOST (2026-10-26, ported from 4e36b65): the count, and room by room which. */
+  keyCountLost: z.coerce.number().int().min(0).optional(),
+  lostRoomIds: z.array(z.string().min(1)).max(60).optional(),
 });
 export type RecordKeyReturnRequestDto = z.infer<typeof recordKeyReturnRequestSchema>;
 
 export const recordRoomInspectionRequestSchema = z.object({
+  /** One inspection per room (2026-10-26); optional when the booking leaves a single room. */
+  roomId: z.string().min(1).optional(),
   isDeferred: z.boolean(),
   deficientFlagStatus: z.enum(["RESOLVED", "UNRESOLVED_AT_CHECKOUT", "NOT_APPLICABLE"]),
   deficientConditionId: z.string().optional(),
   inspectorAssessment: z.string().optional(),
   damageFound: z.boolean(),
   damageNotes: z.string().optional(),
+  /** A damage found: does it stop the room being sold? (2026-10-26 — asked each time.) Yes raises a
+   *  fault report and takes the room out of service. Required with a damage found. */
+  damageStopsSale: z.boolean().optional(),
+  damageFaultCategory: z.enum(["HOUSEKEEPING", "MAINTENANCE", "SOFT_FURNISHING", "OTHER"]).optional(),
 });
 export type RecordRoomInspectionRequestDto = z.infer<typeof recordRoomInspectionRequestSchema>;
+
+/** Answering a damage (2026-10-26): charge it — with or without service charge and GST — waive it
+ *  (the FOM's, with the reason), or decide it after departure. */
+export const answerDamageRequestSchema = z.discriminatedUnion("answer", [
+  z.object({
+    answer: z.literal("CHARGE"),
+    amount: z.number().positive().max(10_000_000),
+    serviceCharge: z.boolean(),
+    gst: z.boolean(),
+    description: z.string().max(300).optional(),
+    note: z.string().max(1000).optional(),
+  }),
+  z.object({ answer: z.literal("WAIVE"), note: z.string().trim().min(1, "Say why the damage is waived").max(1000) }),
+  z.object({ answer: z.literal("LATER"), note: z.string().max(1000).optional() }),
+]);
+
+/** What a damage charge comes to with the taxes chosen (nothing written). */
+export const previewDamageChargeRequestSchema = z.object({
+  amount: z.number().positive().max(10_000_000),
+  serviceCharge: z.boolean(),
+  gst: z.boolean(),
+});
+
+/** Every room still to inspect in one act (2026-10-26) — nothing found, or put off; rooms optional. */
+export const recordRoomInspectionsBulkRequestSchema = z.object({
+  mode: z.enum(["CLEAR", "PUT_OFF"]),
+  roomIds: z.array(z.string().min(1)).max(200).optional(),
+});
 
 /**
  * S9 terminal close.

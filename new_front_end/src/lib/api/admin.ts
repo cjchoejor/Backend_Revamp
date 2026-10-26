@@ -1313,3 +1313,26 @@ export async function listHouseTariffVersions(session: Session) {
 export async function saveHouseTariff(session: Session, body: HouseTariffInput) {
   return apiRequest<HouseTariffAdmin>("/api/admin/house-tariff", { method: "POST", session, body });
 }
+
+/** System health: a timer job that failed every retry, and what the hourly sweep did about it. */
+export type TimerFailureAdmin = {
+  id: string;
+  queue: string;
+  data: Record<string, unknown> | null;
+  error: string | null;
+  attempts: number;
+  dueAt: string;
+  failedAt: string | null;
+  entryId: string | null;
+  handled: {
+    outcome: "RESENT" | "GAVE_UP" | "LEFT";
+    reason: string;
+    at: string;
+    newJobId: string | null;
+    newJobState: string | null;
+  } | null;
+};
+
+export async function getTimerFailures(session: Session) {
+  return apiRequest<{ lookbackDays: number; failures: TimerFailureAdmin[] }>("/api/admin/timer-failures", { session });
+}

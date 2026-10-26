@@ -11,6 +11,9 @@ import {
   reassignEntryCustodianRequestSchema,
   recordKeyReturnRequestSchema,
   recordRoomInspectionRequestSchema,
+  recordRoomInspectionsBulkRequestSchema,
+  answerDamageRequestSchema,
+  previewDamageChargeRequestSchema,
   setExpectedArrivalRequestSchema,
   decideNegotiationAmendmentRequestSchema,
   negotiationAmendmentRequestSchema,
@@ -23,6 +26,7 @@ import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import * as s1EntryService from "../../services/domain/s1-entry-service.js";
 import { switchStay } from "../../services/domain/trip-switch-service.js";
 import * as s8CheckoutService from "../../services/domain/s8-checkout-service.js";
+import * as damageAssessmentService from "../../services/domain/damage-assessment-service.js";
 import * as s9Service from "../../services/domain/s9-service.js";
 import { setGroupBillingModeManually } from "../../services/admin/group-billing-mode-admin-service.js";
 import {
@@ -37,6 +41,7 @@ import { setEntryGuest, updateEntryCaller, updateEntrySource } from "../../servi
 import { CAME_IN_AS_VALUES } from "../../lib/inquiry-came-in-as.js";
 import { callerRequestSchema } from "../../dtos/02-inquiries/request-schemas.js";
 import { runPostCheckoutInspectionWorker } from "../../workers/w9-post-checkout-inspection-worker.js";
+import { describeBookingInspections, roomListWords } from "../../lib/room-inspection-standing.js";
 import { getEntryTrace } from "../../services/infrastructure/trace-query-service.js";
 import { buildBookingJourneySummary } from "../../services/domain/booking-journey-summary-service.js";
 import { buildEntryBillingSummary } from "../../services/domain/entry-billing-summary-service.js";
@@ -854,14 +859,93 @@ entriesRouter.post(
   },
 );
 
-/** FOM: mark deferred inspection window lapsed (runs W9 worker — same as timer expiry). */
+/** Every room still to inspect, in one act — nothing found, or put off (2026-10-26). */
+entriesRouter.post(
+  "/:id/room-inspections/bulk",
+  requireActorLevel("L1"),
+  validateBody(recordRoomInspectionsBulkRequestSchema),
+  async (req, res, next) => {
+    try {
+      res.status(201).json(
+        await s8CheckoutService.recordInspectionsInBulk(prisma, req.params.id, req.actor!.actorId, req.body, {
+          actorLevel: req.actor!.level,
+        }),
+      );
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+/** The damage the inspections found and how each was answered (2026-10-26). */
+entriesRouter.get("/:id/damages", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    res.json(await damageAssessmentService.listBookingDamages(prisma, req.params.id));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** What a damage charge comes to with the taxes chosen — server figures, nothing written. */
+entriesRouter.post("/:id/damages/preview", requireActorLevel("L1"), validateBody(previewDamageChargeRequestSchema), async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    res.json(await damageAssessmentService.previewDamageCharge(prisma, req.body));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** Answer one room's damage: charge · waive (the FOM's) · decide after departure. The service
+ *  holds the levels (a charge after departure and a waiver are the FOM's). */
+entriesRouter.post("/:id/damages/:inspectionId/answer", requireActorLevel("L1"), validateBody(answerDamageRequestSchema), async (req, res, next) => {
+  try {
+    res.json(
+      await damageAssessmentService.answerDamage(prisma, req.params.id, req.params.inspectionId, {
+        actorId: req.actor!.actorId,
+        actorLevel: req.actor!.level,
+      }, req.body),
+    );
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** Each room's inspection, as the desk reads it (2026-10-26 — one inspection per room). */
+entriesRouter.get("/:id/room-inspections", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    res.json(await describeBookingInspections(prisma, req.params.id));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** FOM: mark deferred inspection window lapsed (runs W9 worker — same as timer expiry). One room's
+ *  window (body `roomId`); may be left out when only one room's inspection is put off. */
 entriesRouter.post("/:id/post-checkout-inspection/expire-window", requireActorLevel("L2"), async (req, res, next) => {
   try {
-    const result = await runPostCheckoutInspectionWorker(prisma, { entryId: req.params.id });
+    let roomId: string | undefined = typeof req.body?.roomId === "string" && req.body.roomId ? req.body.roomId : undefined;
+    if (!roomId) {
+      const open = (await describeBookingInspections(prisma, req.params.id)).rooms.filter((r) => r.windowCanBeClosed);
+      if (open.length > 1) {
+        next(new ValidationError(`${roomListWords(open.map((r) => r.roomNumber))} each have an inspection window open — name the room`));
+        return;
+      }
+      roomId = open[0]?.roomId;
+    }
+    const result = await runPostCheckoutInspectionWorker(prisma, { entryId: req.params.id, roomId });
     if (result.skipped) {
+      const words: Record<string, string> = {
+        NO_W9_TIMER: "no inspection window is open for that room",
+        NO_DEFERRED_INSPECTION: "that room's inspection is not put off",
+        TIMER_ALREADY_CLAIMED_OR_CANCELLED: "the window has just closed",
+        ENTRY_NOT_FOUND: "the booking was not found",
+      };
       res.status(409).json({
         error: "StateTransitionError",
-        message: `Cannot expire window: ${result.reason ?? "skipped"}`,
+        message: `Cannot close the window: ${words[result.reason] ?? result.reason ?? "skipped"}`,
       });
       return;
     }

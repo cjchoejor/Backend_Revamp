@@ -31,7 +31,7 @@ function Section({ n, title, auto, children }: { n: number; title: string; auto:
   );
 }
 
-const WAITS = "the backend has no shift yet — nothing typed here could be kept";
+const WAITS = "shifts can't be recorded yet — nothing typed here would be kept";
 
 export default function ShiftPage() {
   const { session } = useSession();

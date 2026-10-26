@@ -120,9 +120,9 @@ export function EarlyDepartureBlock({ entry, setSelected }: { entry: EntryDetail
         the stay:{" "}
         {fig && fig.sleptNights === 0
           ? "no night has been slept yet, so no room night is billed"
-          : `the ${fig ? fig.sleptNights : "…"} night${fig?.sleptNights === 1 ? "" : "s"} slept stay${fig?.sleptNights === 1 ? "s" : ""} billed exactly as audited`}
+          : `the ${fig ? fig.sleptNights : "…"} night${fig?.sleptNights === 1 ? "" : "s"} slept stay${fig?.sleptNights === 1 ? "s" : ""} billed as already charged`}
         , the {fig ? fig.unstayedNights : "…"} unstayed night{fig?.unstayedNights === 1 ? " is" : "s are"} not billed, and the booking moves to
-        Check-out for settlement. The rate is never renegotiated (Policy 36).
+        Check-out to pay the bill. The price per night doesn't change.
         </Help>
         <span className="ln" />
       </div>
@@ -200,7 +200,7 @@ export function EarlyDepartureBlock({ entry, setSelected }: { entry: EntryDetail
       </button>
       {!isGm && (
         <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: "6px 0 0" }}>
-          Recording an early departure needs <b>GM authority</b> (Policy 36) — ask a GM to record it.
+          Recording an early departure needs <b>the GM</b> — ask a GM to record it.
         </p>
       )}
       {isGm && !ready && (

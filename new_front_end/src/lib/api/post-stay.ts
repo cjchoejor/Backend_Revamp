@@ -39,12 +39,46 @@ export type FollowUpTaskSummary = {
   createdAt: string;
 };
 
-export async function expirePostCheckoutInspectionWindow(session: Session, entryId: string) {
+export async function expirePostCheckoutInspectionWindow(session: Session, entryId: string, roomId?: string) {
   return apiRequest<EntryDetail>(`/api/entries/${entryId}/post-checkout-inspection/expire-window`, {
     method: "POST",
     session,
-    body: {},
+    body: roomId ? { roomId } : {},
   });
+}
+
+/** One room's inspection (2026-10-26 — one inspection per room, the rooms the guest leaves at
+ *  check-out). `openFault` is the room's open fault report, which the inspection answers. */
+export type RoomInspectionView = {
+  roomId: string;
+  roomNumber: string;
+  state: "NOT_RECORDED" | "DONE" | "PUT_OFF" | "LAPSED";
+  inspectionId: string | null;
+  inspectedAt: string | null;
+  isDeferred: boolean;
+  deficientFlagStatus: string | null;
+  inspectorAssessment: string | null;
+  damageFound: boolean;
+  damageNotes: string | null;
+  /** How the damage was answered (2026-10-26): CHARGED · WAIVED · LATER, null while unanswered. */
+  damageAnswer: "CHARGED" | "WAIVED" | "LATER" | null;
+  damageFaultId: string | null;
+  windowEndsAt: string | null;
+  windowCanBeClosed: boolean;
+  lapsedAt: string | null;
+  openFault: { id: string; category: string; description: string } | null;
+};
+
+export type BookingInspections = {
+  state: RoomInspectionView["state"];
+  allRecorded: boolean;
+  allResolved: boolean;
+  inspectedCount: number;
+  rooms: RoomInspectionView[];
+};
+
+export async function getRoomInspections(session: Session, entryId: string) {
+  return apiRequest<BookingInspections>(`/api/entries/${entryId}/room-inspections`, { session });
 }
 
 /**
@@ -73,6 +107,8 @@ export type ClosureReadiness = {
     lapsedAt: string | null;
     openFault: { id: string; category: string; description: string } | null;
   };
+  /** Every room's inspection; `inspection` above is the first that still owes one. */
+  inspections?: BookingInspections;
 };
 
 export async function getClosureReadiness(session: Session, entryId: string) {

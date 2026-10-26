@@ -2103,6 +2103,12 @@ model FolioLine {
   /// expressed. Mutually exclusive with `roomId` (DB check `folio_line_target_xor`): a charge
   /// belongs to one place or to the booking as a whole, never both.
   spaceId            String?
+  /// The desk's own choice of tax on this charge (2026-10-26 — a damage charge may go on with or
+  /// without service charge and GST). NULL on every other line: its taxes are whatever its own
+  /// companion lines are. A correction reads these first, so a charge posted without GST never
+  /// gains a GST correction (a charge with no companions is otherwise read as a legacy import).
+  withServiceCharge  Boolean?
+  withGst            Boolean?
 
   folio                   Folio                          @relation(fields: [folioId], references: [id])
   nightAuditRecord        NightAuditRecord?              @relation(fields: [nightAuditRecordId], references: [id], onUpdate: Cascade)
@@ -2355,6 +2361,10 @@ model RoomAssignment {
   /// S7 swap so a new room's key can gate on the old one being back.
   keyReturnedAt DateTime?
   keyReturnedBy String?
+  /// THIS room's key declared LOST at the S8 key return (2026-10-26, operator: "tell the system
+  /// which room's key exactly is missing"). A lost key is no longer out with the guest.
+  keyLostAt     DateTime?
+  keyLostBy     String?
 
   entry          Entry               @relation(fields: [entryId], references: [id])
   room           Room                @relation(fields: [roomId], references: [id])
@@ -2432,6 +2442,17 @@ model RoomInspectionRecord {
   inspectorAssessment  String?
   damageFound          Boolean  @default(false)
   damageNotes          String?
+  /// How a damage found here was answered (2026-10-26, SIG-S8 §253 "damage assessment complete or
+  /// governed-deferred"): CHARGED · WAIVED · LATER (decide after departure). NULL = not answered.
+  /// Settlement waits for an answer; the seal waits for CHARGED or WAIVED.
+  damageAnswer         String?
+  damageAnswerNote     String?
+  damageAnsweredBy     String?
+  damageAnsweredAt     DateTime?
+  /// The charge posted for the damage (the folio line's id).
+  damageFolioLineId    String?
+  /// The fault report raised when the damage stops the room being sold.
+  damageFaultId        String?
   createdAt            DateTime @default(now())
 
   entry Entry @relation(fields: [entryId], references: [id])
@@ -2448,6 +2469,10 @@ model KeyReturnRecord {
   returnedAt         DateTime
   keyCountIssued     Int
   keyCountReturned   Int
+  /// Keys declared LOST (ported from 4e36b65, 2026-10-26). DB check: returned + lost <= issued.
+  keyCountLost       Int      @default(0)
+  /// WHICH rooms' keys were lost — room by room when the keys are stamped per room.
+  lostRoomIds        String[] @default([])
   countReconciled    Boolean
   reconciliationNote String?
   createdAt          DateTime @default(now())

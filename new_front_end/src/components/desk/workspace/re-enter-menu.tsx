@@ -161,7 +161,7 @@ export function ReEnterMenu({ entry }: { entry: EntryDetail }) {
         }}
         aria-haspopup="menu"
         aria-expanded={open}
-        title="Go back to an earlier step to fix dates, rate, billing model, or resolve a complaint"
+        title="Send the booking back to an earlier step — to change the dates, the price or who pays, or to put a complaint right"
       >
         <CornerUpLeft />
         Re-enter

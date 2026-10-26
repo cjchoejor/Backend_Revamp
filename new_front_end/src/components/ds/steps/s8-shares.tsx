@@ -22,6 +22,7 @@ import { money } from "@/lib/ds/format";
 import type { EntryDetail } from "@/types/api";
 import { DsDialog, Live, atLeast, toastRefusal, useRefreshEntry, words } from "./kit";
 import { SendToField, useBookedBy, useSendTo } from "./s8-parts";
+import { useUnansweredDamage } from "./damage-card";
 import { Help } from "@/components/ds/help";
 
 export const SETTLE_METHODS = [
@@ -151,10 +152,13 @@ function ShareRow({ entry, share, live, currency }: { entry: EntryDetail; share:
   const voucherValid = Number.isFinite(voucherTyped) && voucherTyped >= 0;
   const takesMoney = guestPays && (!Number.isFinite(typed) || typed > 0);
   const needsRef = (method === "CASH" || method === "MOBILE_PAYMENT") && takesMoney && !ref.trim();
+  const damage = useUnansweredDamage(entry);
 
   const reason = !live
     ? "only while the booking is at Check-out"
-    : partialLocked
+    : damage.unanswered.length
+      ? `answer the damage found in ${damage.unanswered.length > 1 ? `Rooms ${damage.unanswered.join(", ")}` : `Room ${damage.unanswered[0]}`} first`
+      : partialLocked
       ? "a part-payment needs the FOM or a credit extension"
       : method === "VOUCHER" && !voucherValid
         ? "put in what the voucher covers"

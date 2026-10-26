@@ -1196,7 +1196,7 @@ export function IdentityProofBlock({
                 className="btn btn-primary btn-sm"
                 disabled={repairSeatingM.isPending}
                 onClick={() => setSeatingOpen(true)}
-                title="Seat every guest in a room and fill every empty room — the backend decides where, and says so"
+                title="Put every guest in a room and fill every empty room — the system decides where, and tells you"
               >
                 {repairSeatingM.isPending ? "Seating…" : "Seat everyone in a room"}
               </button>

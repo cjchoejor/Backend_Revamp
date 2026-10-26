@@ -111,12 +111,12 @@ export function BookingOtherWays({
         ) : (
           <ShutWay
             act="Open a new pass"
-            why="Needs the FOM — a change of dates opens a new pass."
+            why="Needs the FOM — changing the dates sends the booking back to Inquiry."
             help={
               <p>
                 {reserved
-                  ? "A governed new pass: back to Inquiry for the new dates, the rooms released, re-quoted and reserved again."
-                  : "Re-quote on the new dates — back to Inquiry in a new pass; the held rooms are released."}
+                  ? "The booking goes back to Inquiry for the new dates: the rooms are let go, a new quotation is made, and it is reserved again."
+                  : "The booking goes back to Inquiry for the new dates and is priced again; the held rooms are let go."}
               </p>
             }
           />
@@ -178,10 +178,13 @@ function CancelAtSetupDialog({ entry, onClose }: { entry: EntryDetail; onClose: 
   );
 }
 
-function CancelAtArrivalDialog({ entry, onClose }: { entry: EntryDetail; onClose: () => void }) {
+/** The cancel of a reserved booking — Reserve, Arrival and, since 2026-10-26, Check-in (SIG-S6
+ *  §8.6 / Policy 35: the guest is at the desk but is not staying). One form for the three steps. */
+export function CancelAtArrivalDialog({ entry, onClose }: { entry: EntryDetail; onClose: () => void }) {
   const { session } = useSession();
   // Reserve (S4) or Arrival (S5): the no-show clock and the arrival tasks exist only at Arrival.
   const atArrival = entry.currentStage === "S5";
+  const atCheckIn = entry.currentStage === "S6";
   const after = useAfterTerminal(entry.id);
   const gm = atLeast(session?.actorLevel, "L3");
   const [waive, setWaive] = useState(false);
@@ -192,7 +195,13 @@ function CancelAtArrivalDialog({ entry, onClose }: { entry: EntryDetail; onClose
     mutationFn: (reason: string) =>
       cancelEntryAtS5(session!, entry.id, { reason, ...(gm && waive ? { penaltyWaiverRequested: true } : {}), ...refund.body }),
     onSuccess: () => {
-      toast.success(atArrival ? "Cancelled — the rooms are released and the no-show clock is stopped" : "Cancelled — the rooms are released");
+      toast.success(
+        atArrival
+          ? "Cancelled — the rooms are released and the no-show clock is stopped"
+          : atCheckIn
+            ? "Cancelled at check-in — the rooms are released"
+            : "Cancelled — the rooms are released",
+      );
       onClose();
       after();
     },
@@ -204,10 +213,10 @@ function CancelAtArrivalDialog({ entry, onClose }: { entry: EntryDetail; onClose
       danger
       onClose={onClose}
       busy={run.isPending}
-      title="They told us they're not coming"
+      title={atCheckIn ? "They are not staying after all" : "They told us they're not coming"}
       lead={
         <>
-          This cannot be undone. The held rooms return to the house;{" "}
+          This cannot be undone. {atCheckIn ? "The rooms" : "The held rooms"} return to the house;{" "}
           {atArrival ? "the no-show clock and the open pre-arrival tasks stop;" : "the booking's clocks stop;"}{" "}
           the disclosed cancellation charge is posted{waive ? " — waived by the GM" : ""} and the rest of the advance is
           refunded; the booking closes as cancelled, with its cancellation confirmation under Papers.

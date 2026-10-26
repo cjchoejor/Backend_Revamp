@@ -18,6 +18,9 @@ export async function recordKeyReturn(
     /** Room-wise return (2026-08-17): the rooms whose key actually came back — their
      *  assignment rows are stamped returned with the ceremony. */
     returnedRoomIds?: string[];
+    /** Keys declared lost (2026-10-26): the count, and room by room which. A loss needs the note. */
+    keyCountLost?: number;
+    lostRoomIds?: string[];
   },
 ) {
   return apiRequest<KeyReturnSummary>(`/api/entries/${entryId}/key-return`, {
@@ -31,12 +34,17 @@ export async function recordRoomInspection(
   session: Session,
   entryId: string,
   body: {
+    /** The room inspected — one inspection per room (2026-10-26). */
+    roomId?: string;
     isDeferred: boolean;
     deficientFlagStatus: "RESOLVED" | "UNRESOLVED_AT_CHECKOUT" | "NOT_APPLICABLE";
     deficientConditionId?: string;
     inspectorAssessment?: string;
     damageFound: boolean;
     damageNotes?: string;
+    /** Asked each time a damage is found (2026-10-26): yes raises a fault report. */
+    damageStopsSale?: boolean;
+    damageFaultCategory?: "HOUSEKEEPING" | "MAINTENANCE" | "SOFT_FURNISHING" | "OTHER";
   },
 ) {
   return apiRequest<RoomInspectionSummary>(`/api/entries/${entryId}/room-inspection`, {
@@ -44,6 +52,19 @@ export async function recordRoomInspection(
     session,
     body,
   });
+}
+
+/** Every room still to inspect, in one act — nothing found, or put off (2026-10-26). */
+export async function recordRoomInspectionsBulk(
+  session: Session,
+  entryId: string,
+  body: { mode: "CLEAR" | "PUT_OFF"; roomIds?: string[] },
+) {
+  return apiRequest<{
+    mode: "CLEAR" | "PUT_OFF";
+    recorded: Array<{ roomId: string; roomNumber: string }>;
+    skipped: Array<{ roomId: string; roomNumber: string; reason: "OPEN_FAULT" | "REFUSED"; message: string }>;
+  }>(`/api/entries/${entryId}/room-inspections/bulk`, { method: "POST", session, body });
 }
 
 export async function initiateSettlement(

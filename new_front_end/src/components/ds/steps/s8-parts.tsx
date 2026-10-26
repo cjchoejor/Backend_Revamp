@@ -382,7 +382,7 @@ export function DisputesCard({ entry, tz }: { entry: EntryDetail; tz: string }) 
     <StepCard
       title="Disputes"
       right={open.length ? <Chip tone="warning">{open.length} still open</Chip> : <Chip tone="success" icon="check">every one answered</Chip>}
-      meta="The booking cannot move on until every dispute is answered, and there is no override."
+      meta="The booking can't move on until every dispute is answered — nobody can skip this."
     >
       <table className="table compact">
         <thead>

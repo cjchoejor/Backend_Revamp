@@ -745,7 +745,7 @@ export function RoomCompositionsBoard({
         {roomMin != null && (
           <span
             className={`rce-tally${sealedRoomIds.length < roomMin ? " off" : ""}`}
-            title="Backend capacity envelope: chargeable guests vs the largest room capacity"
+            title="How many rooms the party needs: the guests who count, against the largest room"
           >
             needs ≥ {roomMin} room{roomMin === 1 ? "" : "s"} · {sealedRoomIds.length} saved
           </span>
@@ -1060,9 +1060,8 @@ export function RoomCompositionsBoard({
         </p>
       )}
       <p className="rce-hint">
-        Totals are priced by the backend when you create the draft — figures appear on the quote below.
-        Child meal discounts on per-room plans are pending a backend update; until then every counted
-        guest is charged the full plan rate (leave infants on <i>EP</i> if they eat free).
+        The figures are worked out when the quote is saved. Count children on the meal plans — under-6s
+        eat free and 6–10s pay the child rate, automatically.
       </p>
     </div>
   );

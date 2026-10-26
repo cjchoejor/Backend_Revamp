@@ -41,7 +41,7 @@ const LABELS: Record<string, string | null> = {
   COMMISSION_RATE_MISSING_W11: "Commission rate missing",
   CREDIT_CEILING_MONITORING_W12: null,
   PAYMENT_MILESTONE_W21: "Payment milestone",
-  HOUSEKEEPING_SLA_W24: "Housekeeping by",
+  HOUSEKEEPING_SLA_W24: "Room cleaned by",
   CHECKOUT_TIME_W26: "Checkout time",
   DISPUTE_SLA_W27: "Dispute to be answered by",
   FEEDBACK_SOLICITATION_W28: null,

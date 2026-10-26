@@ -101,7 +101,13 @@ const _ext = _base.$extends({
       },
     },
     folioLine: {
-      async update() {
+      // A line's money never changes once posted. The one carve-out is WHO it is billed to
+      // (`billingModel`) — the payer label, not the amount — so a change of payer mid-stay can
+      // move charges between payers (2026-10-26, payer-change-service; each move is audited by a
+      // BillingModelTransitionRecord). Any other field still throws.
+      async update({ args, query }) {
+        const keys = Object.keys((args.data ?? {}) as Record<string, unknown>);
+        if (keys.length > 0 && keys.every((k) => k === "billingModel")) return query(args);
         throwFolioLineMutationForbidden();
       },
       async updateMany() {

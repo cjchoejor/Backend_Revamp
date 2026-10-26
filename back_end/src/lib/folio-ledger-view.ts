@@ -147,6 +147,13 @@ export type FolioLedgerView<L extends LedgerLineLike = LedgerLineLike, P extends
   };
 };
 
+/**
+ * From this moment every posting path writes a charge's SC/GST beside it on the ledger (the night
+ * audit began on 18–19 Aug 2026; a day's margin so a night audited before the change keeps its
+ * read-time tax). A room night posted since then is never taxed again at render.
+ */
+export const LEDGER_TAX_LINES_SINCE = new Date("2026-08-20T00:00:00Z");
+
 /** SC then compound GST on (net + SC), each rounded once on the aggregate — the legacy room-line rule. */
 export function legacyTaxOn(
   net: Prisma.Decimal,
@@ -156,6 +163,30 @@ export function legacyTaxOn(
   const serviceCharge = svcRate > 0 ? round2(net.mul(svcRate)) : ZERO;
   const gst = gstRate > 0 ? round2(net.add(serviceCharge).mul(gstRate)) : ZERO;
   return { serviceCharge, gst };
+}
+
+/**
+ * The charge a tax line (service charge or GST, or their corrections) belongs to: same room, same
+ * charge date, the exact base description it names; the nearest posting on ties. A correction's
+ * delta names the ORIGINAL charge but is dated with the correction, so it matches the correction
+ * row posted with it. Null when no charge on the folio matches. One rule, read by the ledger view
+ * (which component a tax line counts in) and by the mid-stay payer change (which payer it follows).
+ */
+export function parentChargeOf<L extends LedgerLineLike, C extends { line: L; isCorrection: boolean }>(
+  companion: Pick<LedgerLineLike, "description" | "roomId" | "chargeDate" | "postedAt">,
+  charges: readonly C[],
+): C | null {
+  const base = companionBaseDescription(companion.description);
+  const isCorr = isCorrectionCompanionDescription(companion.description);
+  const cands = charges.filter(
+    (ch) =>
+      (ch.line.roomId ?? null) === (companion.roomId ?? null) &&
+      ymd(ch.line.chargeDate) === ymd(companion.chargeDate) &&
+      (isCorr ? ch.isCorrection : base == null || ch.line.description === base),
+  );
+  if (cands.length === 0) return null;
+  const ct = companion.postedAt.getTime();
+  return [...cands].sort((a, b) => Math.abs(a.line.postedAt.getTime() - ct) - Math.abs(b.line.postedAt.getTime() - ct))[0];
 }
 
 function ymd(d: Date): string {
@@ -195,22 +226,31 @@ export function buildFolioLedgerView<L extends LedgerLineLike, P extends LedgerP
   const combinedTaxLines = covered.filter((l) => classifyFolioLine(l) === "LEGACY_COMBINED_TAX");
   const combinedTax = sumMoney(combinedTaxLines.map((l) => l.amount));
 
-  // A room line is "covered" by ledger tax when a companion exists for the same night-audit run —
-  // the structural pairing the audit writes (mirrors buildFinalInvoiceFigures' original rule).
+  // A room line is "covered" by ledger tax — its SC/GST must NOT be computed again — when:
+  //   1. a companion names it: same room, same night, its exact description (how postCharge and
+  //      the night audit both write them), or
+  //   2. it carries an audit-run stamp and that run carries companions (the original rule), or
+  //   3. it was posted after the night audit began writing companions: from then on every posting
+  //      path writes its tax beside the charge, and a room night posted without any is one that
+  //      was deliberately not taxed (a waived or FOC room).
+  // The run stamp alone missed every night the per-booking audit posts — it writes no hotel-wide
+  // record, so its lines carry no stamp — and the master bill, the tax invoice and the final
+  // invoice email taxed those nights a SECOND time (2026-10-26, ENT-20261023-0001: Nu 13,083 on
+  // the bill against Nu 11,781 on the ledger). A document must always equal the ledger it reads.
   const auditRunsWithCompanions = new Set(
     [...scLines, ...gstLines].map((l) => l.nightAuditRecordId).filter((id): id is string => !!id),
   );
-  // …or when a companion rides on THIS line by name: same room, same night, its description the
-  // charge's own. A night posted for one booking ("Post it" at Stay, or the slept nights of a stay
-  // brought across from the old PMS) writes no hotel-wide audit record, so its companions carry no
-  // run id — and without this the documents taxed those nights a second time at render (found
-  // 2026-10-23 on the go-live import). A genuinely untaxed old room line has no such companion.
   const companionKey = (roomId: string | null, chargeDate: Date, description: string) => `${roomId ?? ""}|${ymd(chargeDate)}|${description}`;
-  const chargesNamedByCompanion = new Set(
-    [...scLines, ...gstLines]
-      .map((c) => { const base = companionBaseDescription(c.description); return base == null ? null : companionKey(c.roomId, c.chargeDate, base); })
-      .filter((k): k is string => k != null),
+  const namedByCompanion = new Set(
+    [...scLines, ...gstLines].flatMap((c) => {
+      const base = companionBaseDescription(c.description);
+      return base ? [companionKey(c.roomId ?? null, c.chargeDate, base)] : [];
+    }),
   );
+  const taxCoveredOnLedger = (line: L) =>
+    namedByCompanion.has(companionKey(line.roomId ?? null, line.chargeDate, line.description)) ||
+    (!!line.nightAuditRecordId && auditRunsWithCompanions.has(line.nightAuditRecordId)) ||
+    line.postedAt.getTime() >= LEDGER_TAX_LINES_SINCE.getTime();
   // …and a folio carrying an imported tax line is covered outright: computing tax on its room
   // line as well is what made every imported bill overstate itself by exactly that line.
   const taxAlreadyOnLedger = combinedTax.gt(0);
@@ -237,11 +277,7 @@ export function buildFolioLedgerView<L extends LedgerLineLike, P extends LedgerP
       component,
       isRoom,
       isCorrection: (line.description ?? "").startsWith(CORRECTION_LINE_PREFIX),
-      legacyTaxAtRender:
-        isRoom &&
-        !taxAlreadyOnLedger &&
-        !(!!line.nightAuditRecordId && auditRunsWithCompanions.has(line.nightAuditRecordId)) &&
-        !chargesNamedByCompanion.has(companionKey(line.roomId, line.chargeDate, line.description)),
+      legacyTaxAtRender: isRoom && !taxAlreadyOnLedger && !taxCoveredOnLedger(line),
     };
   });
 
@@ -251,19 +287,8 @@ export function buildFolioLedgerView<L extends LedgerLineLike, P extends LedgerP
   // Falls back structurally — an audit-stamped companion is a room night's; anything else that
   // names no parent lands in Services & other. (Same rule as the desk's FolioLinesTable fold.)
   const attribute = (c: L): LedgerComponentKey => {
-    const base = companionBaseDescription(c.description);
-    const isCorr = isCorrectionCompanionDescription(c.description);
-    const cands = charges.filter(
-      (ch) =>
-        (ch.line.roomId ?? null) === (c.roomId ?? null) &&
-        ymd(ch.line.chargeDate) === ymd(c.chargeDate) &&
-        (isCorr ? ch.isCorrection : base == null || ch.line.description === base),
-    );
-    if (cands.length > 0) {
-      const ct = c.postedAt.getTime();
-      cands.sort((a, b) => Math.abs(a.line.postedAt.getTime() - ct) - Math.abs(b.line.postedAt.getTime() - ct));
-      return cands[0].component;
-    }
+    const parent = parentChargeOf(c, charges);
+    if (parent) return parent.component;
     return c.nightAuditRecordId ? "ROOM" : "SERVICES";
   };
   const companions: Array<LedgerCompanion<L>> = [

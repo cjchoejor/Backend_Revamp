@@ -3,8 +3,8 @@
 /**
  * The app shell (Surface Spec 00, locked 10 Sep 2026).
  *
- * One ink bar, always visible: the mark and the product name · the five items in the order of the
- * day · the hotel clock · the one notification count · the signed-in person with their role · the
+ * One ink bar, always visible: the mark and the product name · the six items in the order of the
+ * day (Housekeeping joined after Rooms on 2026-10-26) · the hotel clock · the one notification count · the signed-in person with their role · the
  * overflow that opens the second row. The console sits under the user's name, for administrators
  * only. Panels hang from the control that opened them and close on an outside click, Escape, or
  * the control again.
@@ -18,6 +18,7 @@ import { useSession, redirectToLogin } from "@/hooks/use-session";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
 import { useHotelDay } from "@/hooks/use-hotel-day";
 import { useDeskBookings } from "@/hooks/use-desk-data";
+import { useHousekeepingBoard } from "@/hooks/use-housekeeping";
 import { lockSession, logoutSession } from "@/lib/api/auth";
 import { ApiError } from "@/lib/api/client";
 import { attentionItems, waitingText } from "@/lib/ds/attention";
@@ -27,6 +28,7 @@ const MAIN = [
   { href: "/today", label: "Today" },
   { href: "/bookings", label: "Bookings" },
   { href: "/rooms", label: "Rooms" },
+  { href: "/housekeeping", label: "Housekeeping" },
   { href: "/billing", label: "Billing" },
   { href: "/shift", label: "Shift" },
 ] as const;
@@ -76,6 +78,10 @@ export function AppShell({ children }: { children: ReactNode }) {
   const clock = useHotelClock(15_000);
   const hotelDay = useHotelDay();
   const bookings = useDeskBookings();
+  // Rooms a guest left that are past their clean-by time (2026-10-26) — the bell carries them, since
+  // a late room holds up the next guest.
+  const housekeeping = useHousekeepingBoard();
+  const lateRooms = (housekeeping.data?.rooms ?? []).filter((r) => r.state === "TO_CLEAN" && r.toClean?.overdue);
   const secondPage = SECOND.some((s) => isOn(pathname, s.href));
   const [secondOpen, setSecondOpen] = useState(false);
   const bell = usePanel();
@@ -161,9 +167,9 @@ export function AppShell({ children }: { children: ReactNode }) {
           </span>
 
           <div ref={bell.ref} style={{ position: "relative" }}>
-            <button type="button" className="notif" aria-label={`${urgent.length} notifications`} aria-expanded={bell.open} onClick={() => bell.setOpen((o) => !o)}>
+            <button type="button" className="notif" aria-label={`${urgent.length + (lateRooms.length ? 1 : 0)} notifications`} aria-expanded={bell.open} onClick={() => bell.setOpen((o) => !o)}>
               <Icon name="bell" size="lg" />
-              <span className={`count${urgent.length === 0 ? " zero" : ""}`}>{urgent.length}</span>
+              <span className={`count${urgent.length + (lateRooms.length ? 1 : 0) === 0 ? " zero" : ""}`}>{urgent.length + (lateRooms.length ? 1 : 0)}</span>
             </button>
             {bell.open ? (
               <div className="drawer open panel-from-bar" role="dialog" aria-label="Notifications">
@@ -175,9 +181,16 @@ export function AppShell({ children }: { children: ReactNode }) {
                     See all notifications
                   </Link>
                 </div>
-                {urgent.length === 0 ? (
+                {lateRooms.length ? (
+                  <Link href="/housekeeping" className="panel-row hk-bell" style={{ marginTop: 8 }} onClick={() => bell.setOpen(false)}>
+                    <b>{lateRooms.length === 1 ? `Room ${lateRooms[0].roomNumber}` : `Rooms ${lateRooms.map((r) => r.roomNumber).join(", ")}`}</b>
+                    <span className="sm">past {lateRooms.length === 1 ? "its" : "their"} clean-by time · housekeeping</span>
+                    <span className="timer overdue"><Icon name="alert" />late</span>
+                  </Link>
+                ) : null}
+                {urgent.length === 0 && !lateRooms.length ? (
                   <p className="meta" style={{ marginTop: 6 }}>Nothing is overdue or due in the next hours.</p>
-                ) : (
+                ) : urgent.length === 0 ? null : (
                   <div className="stack" style={{ marginTop: 8 }}>
                     {urgent.slice(0, 20).map((it) => {
                       const w = waitingText(it, clock.now, clock.tz);

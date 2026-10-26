@@ -20,6 +20,10 @@
  *                              folio of an ACTIVE entry (the 2026-08-18 backfill should cover these)
  *      A10 LEGACY_RENDER_TAX   room nights whose SC/GST exists only at document render time —
  *                              quantifies how far printed documents exceed the ledger's own billed
+ *      A11 TAX_CHOICE          a charge posted with the desk's own choice of service charge and GST
+ *                              (2026-10-26, the damage charge) carries a tax it was posted without
+ *                              (CRITICAL — the guest is charged what they were told they would not
+ *                              be), or lacks one it was posted with; its corrections included
  *   B. Payments: non-positive amounts; refunds exceeding receipts
  *   C. Frozen layer: frozenTotal vs frozenSubtotal × (era tax multipliers); audit per-night posts
  *      vs frozenSubtotal ÷ nights; frozen rows with null dates
@@ -41,6 +45,7 @@ import {
   isCorrectionCompanionDescription,
 } from "../src/lib/folio-tax-lines.js";
 import { effectiveCheckOutDate } from "../src/lib/stay-dates.js";
+import { buildFolioLedgerView } from "../src/lib/folio-ledger-view.js";
 import { buildEntryBillingSummary } from "../src/services/domain/entry-billing-summary-service.js";
 
 const prisma = new PrismaClient();
@@ -239,6 +244,36 @@ async function main() {
       }
     }
 
+    // A11 — a charge's own tax choice (2026-10-26). The FACT tested: a line that says it carries no
+    // service charge (or no GST) has none naming it — its corrections' tax lines included — and a
+    // line that says it carries one has one, unless that rate is 0 at the hotel.
+    for (const ch of charges) {
+      if (ch.withServiceCharge == null && ch.withGst == null) continue;
+      if (ch.description.startsWith(CORRECTION_LINE_PREFIX)) continue;
+      const named = companions.filter(
+        (c) => companionBaseDescription(c.description) === ch.description && (c.roomId ?? null) === (ch.roomId ?? null),
+      );
+      const own = named.filter((c) => !isCorrectionCompanionDescription(c.description) && ymd(c.chargeDate) === ymd(ch.chargeDate));
+      // Two charges of one description, room and day share their companions; judge the family only
+      // when every member made the same choice.
+      const fam = charges.filter((o) => o.description === ch.description && (o.roomId ?? null) === (ch.roomId ?? null) && ymd(o.chargeDate) === ymd(ch.chargeDate));
+      const sameChoice = fam.every((o) => o.withServiceCharge === ch.withServiceCharge && o.withGst === ch.withGst);
+      const scLines = named.filter((c) => classifyFolioLine(c) === "SERVICE_CHARGE");
+      const gstLines = named.filter((c) => classifyFolioLine(c) === "GST");
+      if (ch.withServiceCharge === false && sameChoice && scLines.some((c) => !D(c.amount).isZero())) {
+        add("CRITICAL", "A11_TAX_CHOICE", tag, `"${ch.description}" (${ch.id}) was posted without service charge, yet ${money(sumMoney(scLines.map((c) => c.amount)))} of it is on the ledger`);
+      }
+      if (ch.withGst === false && sameChoice && gstLines.some((c) => !D(c.amount).isZero())) {
+        add("CRITICAL", "A11_TAX_CHOICE", tag, `"${ch.description}" (${ch.id}) was posted without GST, yet ${money(sumMoney(gstLines.map((c) => c.amount)))} of it is on the ledger`);
+      }
+      if (ch.withServiceCharge === true && scRate > 0 && !own.some((c) => classifyFolioLine(c) === "SERVICE_CHARGE")) {
+        add("WARN", "A11_TAX_CHOICE", tag, `"${ch.description}" (${ch.id}) was posted with service charge, but none names it`);
+      }
+      if (ch.withGst === true && gstRate > 0 && !own.some((c) => classifyFolioLine(c) === "GST")) {
+        add("WARN", "A11_TAX_CHOICE", tag, `"${ch.description}" (${ch.id}) was posted with GST, but none names it`);
+      }
+    }
+
     // A7 — duplicate room nights (same day, same description, positive, not corrections).
     for (const [k, f] of chargeFamilies) {
       const [, day, desc] = k.split("|");
@@ -260,37 +295,69 @@ async function main() {
       }
     }
 
-    // A9/A10 — room lines whose tax exists only at render time (the ledger-view legacy rule).
-    const auditRunsWithCompanions = new Set(companions.map((l) => l.nightAuditRecordId).filter((id): id is string => !!id));
-    // Same two tests as lib/folio-ledger-view.ts — keep them in step: a companion from the same
-    // audit run, OR one that names this line (same room, same night) — the per-booking audit
-    // writes no hotel-wide record, so its companions carry no run id.
-    const namedKey = (roomId: string | null, chargeDate: Date, description: string) => `${roomId ?? ""}|${chargeDate.toISOString().slice(0, 10)}|${description}`;
-    const chargesNamedByCompanion = new Set(
-      companions.map((c) => { const base = companionBaseDescription(c.description); return base == null ? null : namedKey(c.roomId, c.chargeDate, base); }).filter((k): k is string => k != null),
+    // A9/A10 — what the DOCUMENTS print, read through the very ledger view the master bill, the
+    // tax invoice and the final-invoice email print from (2026-10-26). This check used to carry
+    // its own copy of the view's rule; when the view went wrong (room nights taxed a second time
+    // because the per-booking audit leaves no run stamp) the copy went wrong with it and the audit
+    // stayed quiet. Reading the real view means a document that disagrees with the ledger is seen.
+    const view = buildFolioLedgerView({
+      lines: lines.map((l) => ({ ...l, room: null })),
+      payments,
+      invoiceBucket: null,
+      primaryModel: folio.billingModel,
+      gstRate,
+      svcRate: scRate,
+    });
+    const ledgerBilled = sumMoney(lines.map((l) => l.amount));
+    const printedOver = view.ladder.total.sub(ledgerBilled);
+    // The fact itself, not a copy of the rule: a room night whose own SC/GST lines are on the
+    // ledger (a companion names it — same room, same night, its description) must never be taxed
+    // again at render. Comparing totals alone cannot tell such a night from a genuinely old one.
+    const namedByCompanion = new Set(
+      companions.flatMap((c) => {
+        const base = companionBaseDescription(c.description);
+        return base ? [`${c.roomId ?? ""}|${ymd(c.chargeDate)}|${base}`] : [];
+      }),
     );
-    const legacyRoomLines = charges.filter(
-      (l) => (l.lineType === "ROOM_CHARGE" || l.lineType === "STAY")
-        && !(l.nightAuditRecordId && auditRunsWithCompanions.has(l.nightAuditRecordId))
-        && !chargesNamedByCompanion.has(namedKey(l.roomId, l.chargeDate, l.description)),
+    const taxedTwice = view.charges.filter(
+      (c) => c.legacyTaxAtRender && namedByCompanion.has(`${c.line.roomId ?? ""}|${ymd(c.line.chargeDate)}|${c.line.description}`),
     );
-    if (legacyRoomLines.length > 0) {
-      const legacyNet = sumMoney(legacyRoomLines.map((l) => l.amount));
-      const legSc = round2(legacyNet.mul(scRate));
-      const legGst = round2(legacyNet.add(legSc).mul(gstRate));
-      legacyTaxTotal = legacyTaxTotal.add(legSc).add(legGst);
-      legacyFolios += 1;
-      const activeGap = entry.status === "ACTIVE" && (folio.state === "LIVE" || folio.state === "OUTSTANDING");
-      const stamped = legacyRoomLines.filter((l) => l.nightAuditRecordId).length;
-      if (activeGap && stamped > 0) {
-        add("WARN", "A9_UNTAXED_ACTIVE_ROOM", tag, `${stamped} audit-stamped room line(s) with no SC/GST companions on an active folio — backfill gap`);
-      }
+    if (taxedTwice.length > 0) {
       add(
-        activeGap ? "WARN" : "INFO",
-        "A10_LEGACY_RENDER_TAX",
+        "CRITICAL",
+        "A10_TAXED_TWICE",
         tag,
-        `${legacyRoomLines.length} room line(s), net ${money(legacyNet)} — documents add SC ${money(legSc)} + GST ${money(legGst)} at render that the ledger/balance never charged${payments.length ? ` (folio HAS payments: printed total − payments ≠ payable)` : ""}`,
+        `${taxedTwice.length} room night(s) carry their SC/GST on the ledger AND the bills add it again — the bills print ${money(view.ladder.total)} against a ledger of ${money(ledgerBilled)}`,
       );
+    } else if (!near(view.ladder.total, ledgerBilled)) {
+      const legacyOnly = view.legacyRoomNet.gt(0) && near(printedOver, view.legacyServiceCharge.add(view.legacyGst));
+      if (legacyOnly) {
+        // Room nights audited before the night audit wrote tax lines: the documents add their
+        // SC/GST at render, as they always have. Old folios only.
+        legacyTaxTotal = legacyTaxTotal.add(printedOver);
+        legacyFolios += 1;
+        const activeGap = entry.status === "ACTIVE" && (folio.state === "LIVE" || folio.state === "OUTSTANDING");
+        add(
+          activeGap ? "WARN" : "INFO",
+          "A10_LEGACY_RENDER_TAX",
+          tag,
+          `room nights net ${money(view.legacyRoomNet)} — documents add SC ${money(view.legacyServiceCharge)} + GST ${money(view.legacyGst)} at render that the ledger/balance never charged${payments.length ? ` (folio HAS payments: printed total − payments ≠ payable)` : ""}`,
+        );
+      } else {
+        add(
+          "CRITICAL",
+          "A10_DOCUMENT_NOT_LEDGER",
+          tag,
+          `the bills print ${money(view.ladder.total)} but the ledger holds ${money(ledgerBilled)} (${printedOver.gt(0) ? "+" : ""}${money(printedOver)})`,
+        );
+      }
+    }
+    const auditRunsWithCompanions = new Set(companions.map((l) => l.nightAuditRecordId).filter((id): id is string => !!id));
+    const stampedUntaxed = charges.filter(
+      (l) => (l.lineType === "ROOM_CHARGE" || l.lineType === "STAY") && !!l.nightAuditRecordId && !auditRunsWithCompanions.has(l.nightAuditRecordId),
+    ).length;
+    if (stampedUntaxed > 0 && entry.status === "ACTIVE" && (folio.state === "LIVE" || folio.state === "OUTSTANDING")) {
+      add("WARN", "A9_UNTAXED_ACTIVE_ROOM", tag, `${stampedUntaxed} audit-stamped room line(s) with no SC/GST companions on an active folio — backfill gap`);
     }
 
     // B — payments.

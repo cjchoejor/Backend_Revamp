@@ -199,7 +199,7 @@ export function S4Reserve({
               <AdvanceSettlementBlock
                 entry={entry}
                 title="The advance"
-                intro="The booking is frozen; the rest of the advance can still come in here before Arrival. Money the guest sends now is logged against the same folio the proforma billed."
+                intro="The booking is reserved; the rest of the advance can still be paid here before Arrival. It goes on the same bill as the advance already paid."
               />
             </Tool>
           </StepCard>
@@ -239,7 +239,7 @@ type Line = {
 
 const KNOWN = [
   "Quote generated",
-  "Provisional folio & billing model",
+  "Who pays chosen",
   "Cancellation terms recorded",
   "Proforma invoice generated",
   "Proforma sent to guest",
@@ -343,14 +343,14 @@ function BeforeYouReserve({
   const lastModelChange = folio?.billingModelTransitions?.[0] ?? null;
   lines.push({
     key: "billing",
-    label: "Billing model",
+    label: "Who pays",
     value: folio?.billingModel ? billingWord(folio.billingModel) : "not set — Set up",
     who: folio?.billingModel
       ? lastModelChange
-        ? `set ${fmtStamp(lastModelChange.createdAt, tz)} · on the provisional folio`
-        : "on the provisional folio"
+        ? `set ${fmtStamp(lastModelChange.createdAt, tz)}`
+        : "set at Set up"
       : undefined,
-    state: metOr("Provisional folio & billing model") ? "on" : "missing",
+    state: metOr("Who pays chosen") ? "on" : "missing",
     fix: 3,
   });
 
@@ -836,9 +836,9 @@ function OverlapDialog({ entry, open, onClose }: { entry: EntryDetail; open: boo
 
 const CHANNELS: Array<[string, string, string | null]> = [
   ["email", "Email · in the thread", null],
-  ["whatsapp", "WhatsApp", "Sending the confirmation by WhatsApp is not in the backend yet (BE-65)"],
-  ["print", "Print", "Choosing print as the way the booker is told is not in the backend yet (BE-65) — the PDF prints from Papers"],
-  ["phone", "Tell them by phone", "A phone confirmation with the words written down is not in the backend yet (BE-65)"],
+  ["whatsapp", "WhatsApp", "Not possible yet — the voucher goes by email. If you send it on WhatsApp yourself, record their answer under Documents"],
+  ["print", "Print", "Not possible yet as a choice here — print the voucher from Documents"],
+  ["phone", "Tell them by phone", "Not possible yet — if you tell them by phone, write what was said in Notes"],
 ];
 
 function ChannelChoice() {
@@ -861,7 +861,7 @@ function WhoReceives({ entry }: { entry: EntryDetail }) {
   return (
     <StepCard
       title="Who receives the confirmation, and how"
-      meta="Reserve sends it by email in the same click — one email, in the booking's thread, to the email on the booking's record. WhatsApp, print, and telling them by phone with the words written down are not in the backend yet (BE-65); the booking still shows whether the voucher went out."
+      meta="Reserve emails the voucher to the guest in the same click, with the PDF attached. WhatsApp, printing or phoning can't be chosen here yet. The booking shows whether the email went out."
     >
       <FactBox
         k="Going to"
@@ -938,7 +938,7 @@ function WhatReserveDecided({ entry }: { entry: EntryDetail }) {
   return (
     <StepCard
       title={`What Reserve decided · ${fmtDateTime(res.confirmedAt, tz)}${by ? ` · ${by}` : ""}`}
-      meta="This is the record of Reserve. Any change from here is a governed new pass."
+      meta="This is what was reserved. A change from here makes the booking's papers again — the quotation and the voucher — and keeps these as they were."
     >
       <Facts wide>
         <Fact k="Reservation">
@@ -966,7 +966,7 @@ function WhatReserveDecided({ entry }: { entry: EntryDetail }) {
         <Fact k="Quotation" meta={quoteAnswer ?? undefined}>
           {quoteRef ? `${quoteRef}${journey?.s2Quote.state ? ` · ${QUOTE_WORD[journey.s2Quote.state] ?? words(journey.s2Quote.state)}` : ""}` : null}
         </Fact>
-        <Fact k="Billing model">{billingWord(res.frozenBillingModel) || null}</Fact>
+        <Fact k="Who pays">{billingWord(res.frozenBillingModel) || null}</Fact>
         <Fact k="Rooms" meta={held ? "the advance is not fully paid — the rooms read Reserved once it is" : undefined}>
           {held ? <Chip tone="warning">Held · not yet Reserved</Chip> : <Chip tone="success">Reserved</Chip>}{" "}
           {rooms.length
@@ -1085,7 +1085,7 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
         <Button kind="secondary" compact icon="eye" onClick={() => setPaper({ kind: "voucher", reservationId: res.id, label: `Confirmation voucher · ${res.id}` })}>
           Preview · full
         </Button>
-        <Button kind="quiet" compact icon="eye" state="inert" title="A rate-silent guest copy of the voucher is not in the backend yet (BE-42)">
+        <Button kind="quiet" compact icon="eye" state="inert" title="Not possible yet — a copy of the voucher without the prices can't be made yet">
           Preview · guest copy
         </Button>
         <Live>
@@ -1096,7 +1096,7 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
         <Button kind="quiet" compact state="inert">
           Re-issue as v2
         </Button>
-        <Help label="Not available yet">Re-issue with the amendment advice is BE-42, BE-52.</Help>
+        <Help label="Not available yet">Not possible by hand. A new version of the voucher is made by itself whenever the booking&rsquo;s rooms, dates or price change.</Help>
       </div>
       {failed && !answered && !afterReserve ? (
         <div style={{ marginTop: 10 }}>

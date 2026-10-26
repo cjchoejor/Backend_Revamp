@@ -216,8 +216,8 @@ export function RoomsTable({
       {lead ? <>{lead} </> : null}
       Click a room in the table to see what can be done with it.{" "}
       {inHouse
-        ? "In-house the rates and waivers are read-only — a mid-stay rate revision is the GM's call, and nights already posted are corrected on the folio."
-        : "This is what the booking is priced on today. A change here runs the full journey behind the scenes and is recorded against the booking."}
+        ? "A night already charged at the wrong price is put right with a correction on the bill."
+        : "This is what the booking is priced on today. A change made here prices the booking again, brings it back to this step and is kept in its history."}
     </>
   );
 
@@ -363,8 +363,8 @@ export function RoomsTable({
         }
       >
         <p className="sm">
-          The booking goes back through Negotiation and forward again on this table — re-quoted, re-held and re-frozen —
-          and lands back on this step. <b>Nobody moves rooms.</b> The quotation is saved against the booking; it reaches
+          The booking is priced again on this table, its rooms are held again and its reservation is made again —
+          and it comes back to this step. <b>Nobody moves rooms.</b> The quotation is saved against the booking; it reaches
           the guest only if you send it.
           {inHouse ? " The nights already slept keep the setup they were billed on." : ""}
         </p>

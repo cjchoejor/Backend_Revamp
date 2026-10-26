@@ -44,6 +44,8 @@ import {
 } from "@/lib/api/entries";
 import { closeEntryAtS9 } from "@/lib/api/post-stay";
 import { useClosureReadiness } from "@/hooks/use-closure-readiness";
+import { useRoomInspections } from "@/hooks/use-room-inspections";
+import { useUnansweredDamage } from "@/components/ds/steps/damage-card";
 import { activatePreArrival } from "@/lib/api/pre-arrival";
 import { completeCheckInToS7 } from "@/lib/api/check-in";
 import { listIdentityProofs } from "@/lib/api/identity-proofs";
@@ -98,9 +100,10 @@ import { S4Reserve, S4_PANES } from "@/components/ds/steps/s4-reserve";
 import { S5Arrival } from "@/components/ds/steps/s5-arrival";
 import { S6CheckIn } from "@/components/ds/steps/s6-checkin";
 import { S7Stay, S7_PANES } from "@/components/ds/steps/s7-stay";
+import { keysDue, keysDueWords } from "@/components/ds/steps/s7-rooms";
 import { S6_PANES } from "@/components/ds/steps/s6-checkin";
-import { S8CheckOut } from "@/components/ds/steps/s8-checkout";
-import { S9Closed } from "@/components/ds/steps/s9-closed";
+import { S8CheckOut, S8_PANES } from "@/components/ds/steps/s8-checkout";
+import { S9Closed, S9_PANES } from "@/components/ds/steps/s9-closed";
 import { Overlay, atLeast, useRefreshEntry } from "@/components/ds/steps/kit";
 import { declineEntry } from "@/lib/api/reservation-setup";
 const atLeastFom = (level?: string | null) => atLeast(level, "L2");
@@ -209,6 +212,9 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   // The seal's own checks, from the backend (2026-09-18) — the desk's copy had drifted from them.
   const closureQuery = useClosureReadiness(entryId, entry?.currentStage === "S9" && entry?.status !== "CLOSED");
   const closure = closureQuery.data ?? null;
+  // Each room's inspection at Check-out (2026-10-26 — one inspection per room).
+  const inspections = useRoomInspections(entry, entry?.currentStage === "S8").data ?? null;
+  const damage = useUnansweredDamage(entry, entry?.currentStage === "S8");
 
   const parked = entry?.status === "PARKED";
   const parkTimer = findParkTimer(timersQuery.data?.items);
@@ -724,7 +730,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
               : stayStepActive
                 ? [...s7Readiness(entry, hotelToday), { label: "Night audit complete", met: nightAuditOk, card: "nights" }]
                 : checkOutStepActive
-                  ? s8Readiness(entry)
+                  ? s8Readiness(entry, { inspections, damage })
                   : closedStepActive
                     ? closure
                       ? [...closure.checks.map((c) => ({ label: c.label, met: c.met })), { label: "Sealing needs the FOM", met: atLeastFom(session?.actorLevel) }]
@@ -768,19 +774,24 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const viewingPast = (viewing < currentOrder || (sealed && step.key !== "closed")) && !confirmStepActive;
   // The panes this step declares — Stay's Night audit, Room change, … — and which one is open.
   // Check-in gained a Rooms tab of its own (2026-10-06) — the rooms moved out of the Room card.
-  const panes: StepPane[] =
-    viewingPast || sealed
-      ? []
-      : step.key === "stay"
-        ? S7_PANES
-        : step.key === "checkin"
-          ? S6_PANES
-          : step.key === "setup"
-            ? S3_PANES
-            : step.key === "confirm"
-              ? S4_PANES
-              : [];
+  // The Closed step keeps its tail open on a sealed booking (a payment, a late charge, a tax
+  // invoice), so its tabs show on a CLOSED record too — never on a cancelled or expired one.
+  const panes: StepPane[] = (() => {
+    if (viewingPast) return [];
+    if (step.key === "closed") return entry.folio && entry.status !== "CANCELLED" && entry.status !== "EXPIRED" ? S9_PANES : [];
+    if (sealed) return [];
+    if (step.key === "stay") return S7_PANES;
+    if (step.key === "checkin") return S6_PANES;
+    if (step.key === "setup") return S3_PANES;
+    if (step.key === "confirm") return S4_PANES;
+    if (step.key === "checkout") return S8_PANES;
+    return [];
+  })();
   const pane = panes.some((p) => p.key === paneParam) ? paneParam : null;
+  // The keys owed today on a move day — counted on Stay's Keys tab (2026-10-26).
+  const keysOwedNow = step.key === "stay" && !viewingPast ? keysDue(entry, hotelToday) : { collect: [], handOver: [] };
+  const keysOwedCount = keysOwedNow.collect.length + keysOwedNow.handOver.length;
+  const keysOwed = keysDueWords(keysOwedNow);
 
   const gotoStep = (n: number) => {
     if (n > maxReach) {
@@ -877,7 +888,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
       </Button>
     );
   } else if (checkOutStepActive) {
-    const ok = canProgressS8(entry);
+    const ok = canProgressS8(entry, { inspections, damage });
     forward = (
       <Button state={advanceMutation.isPending ? "working" : ok ? "default" : "inert"} reason={ok ? undefined : firstNote} workingLabel="Moving…" onClick={() => advanceMutation.mutate({ targetStage: "S9" })}>
         Move to Closed
@@ -992,7 +1003,15 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
           />
         );
       case "checkout":
-        return <S8CheckOut entry={entry} past={viewingPast} goToStep={viewingPast ? NOOP : stableSetSelected} />;
+        return (
+          <S8CheckOut
+            entry={entry}
+            past={viewingPast}
+            goToStep={viewingPast ? NOOP : stableSetSelected}
+            pane={pane}
+            openPane={setPane}
+          />
+        );
       case "closed": {
         const canClose = !!closure?.canClose && atLeastFom(session?.actorLevel);
         const closeReason = canClose ? undefined : !atLeastFom(session?.actorLevel) ? "closing needs the FOM" : firstNote;
@@ -1001,6 +1020,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
             entry={entry}
             past={viewingPast}
             close={closedStepActive ? { onClick: () => setCloseOpen(true), ready: canClose, reason: closeReason } : null}
+            pane={pane}
+            openPane={setPane}
           />
         );
       }
@@ -1262,8 +1283,17 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                 This step
               </button>
               {panes.map((p) => (
-                <button key={p.key} type="button" className="tab" role="tab" aria-selected={view === "step" && pane === p.key} onClick={() => setPane(p.key)}>
+                <button
+                  key={p.key}
+                  type="button"
+                  className="tab"
+                  role="tab"
+                  aria-selected={view === "step" && pane === p.key}
+                  title={p.key === "keys" && keysOwed.length ? keysOwed.join(" · ") : undefined}
+                  onClick={() => setPane(p.key)}
+                >
                   {p.label}
+                  {p.key === "keys" && keysOwedCount ? <span className="tab-n stop">{keysOwedCount}</span> : null}
                 </button>
               ))}
               {viewingPast || sealed ? null : (
@@ -1341,7 +1371,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                     <span className="sm">
                       {sealed
                         ? sealedOutcome
-                        : `This step was passed on the way to ${STEP_NAMES[currentOrder - 1]} — what it shows is what was decided then; nothing here can be changed. Any change is a governed re-entry.`}
+                        : `This step was passed on the way to ${STEP_NAMES[currentOrder - 1]} — what it shows is what was decided then; nothing here can be changed. To change it, work from the step the booking is at now.`}
                     </span>
                   </div>
                 ) : null}
@@ -1648,13 +1678,37 @@ function SidePanel({
   // is the night audit timer showing for all the days, instead of just the upcoming date").
   const nightClocks = sorted.filter((x) => x.t.timerCode === "NIGHT_AUDIT_STAY_NIGHT_W37");
   const laterNights = nightClocks.length - 1;
+  // One housekeeping clock per room released at check-out, all with one label — they read as the
+  // same clock three times (2026-10-26, operator). Each names its room, and rooms due at the same
+  // moment share one row: "Rooms 302, 303, 304 cleaned by".
+  const roomNumberById = new Map((entry.roomAssignments ?? []).map((a) => [a.roomId, a.room?.roomNumber ?? a.roomId.slice(0, 6)]));
+  const cleanGroups = new Map<string, string[]>();
+  for (const x of sorted) {
+    if (x.t.timerCode !== "HOUSEKEEPING_SLA_W24") continue;
+    const at = x.t.firesAt.slice(0, 16);
+    const room = (x.t.entityId && roomNumberById.get(x.t.entityId)) || null;
+    cleanGroups.set(at, [...(cleanGroups.get(at) ?? []), ...(room ? [room] : [])]);
+  }
+  const cleanSeen = new Set<string>();
   const running = sorted
     .filter((x) => x.t.timerCode !== "NIGHT_AUDIT_STAY_NIGHT_W37" || x === nightClocks[0])
-    .map((x) =>
-      x === nightClocks[0] && laterNights > 0
-        ? { ...x, label: `${x.label} · then ${laterNights} more ${laterNights === 1 ? "night" : "nights"}` }
-        : x,
-    )
+    .filter((x) => {
+      if (x.t.timerCode !== "HOUSEKEEPING_SLA_W24") return true;
+      const at = x.t.firesAt.slice(0, 16);
+      if (cleanSeen.has(at)) return false;
+      cleanSeen.add(at);
+      return true;
+    })
+    .map((x) => {
+      if (x === nightClocks[0] && laterNights > 0) {
+        return { ...x, label: `${x.label} · then ${laterNights} more ${laterNights === 1 ? "night" : "nights"}` };
+      }
+      if (x.t.timerCode === "HOUSEKEEPING_SLA_W24") {
+        const rooms = [...new Set(cleanGroups.get(x.t.firesAt.slice(0, 16)) ?? [])].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+        return { ...x, label: rooms.length ? `${rooms.length > 1 ? "Rooms" : "Room"} ${rooms.join(", ")} cleaned by` : "Room cleaned by" };
+      }
+      return x;
+    })
     .slice(0, 8);
   const dwell = entry.stageDwellRecords?.[0];
   return (

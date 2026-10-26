@@ -19,19 +19,20 @@ import { useSession } from "@/hooks/use-session";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
 import { useHotelDay } from "@/hooks/use-hotel-day";
 import { usePaymentStatus } from "@/hooks/use-payment-status";
+import { useRoomInspections } from "@/hooks/use-room-inspections";
+import { RoomInspectionGrid } from "./room-inspections";
+import { DamageCard, useUnansweredDamage } from "./damage-card";
 import {
   buildH4FulfilmentEvidence,
   correctFolioCharge,
   fulfilHandoff,
   initiateSettlement,
   postFolioCharge,
-  reEnterS8ToS2,
   reEnterS8ToS7,
   recordKeyReturn,
   recordRoomInspection,
 } from "@/lib/api/checkout";
 import { getNightAuditRecord, openDispute, postCreditNote } from "@/lib/api/in-stay";
-import { listGuestRequests } from "@/lib/api/booking-notes";
 import { recordCreditExtension } from "@/lib/api/reservation-setup";
 import { openFolioDocumentPdf, openInvoicePdf } from "@/lib/api/documents";
 import { deriveFinancials, effectiveCheckOutIso } from "@/lib/desk/workspace";
@@ -70,6 +71,7 @@ import {
   InlineWay,
   ShutWay,
   useOpenOtherWay,
+  type StepPane,
 } from "./kit";
 import {
   BILLING_MODEL_WORD,
@@ -80,7 +82,6 @@ import {
   HANDOFF_STATE_WORD,
   INVOICE_STATE_WORD,
   ON_ACCOUNT_MODELS,
-  isOpenDispute,
   lastStayNight,
   useBilling,
   useBookedBy,
@@ -125,7 +126,28 @@ function distinctRooms(entry: EntryDetail) {
 
 /* ------------------------------------------------------------------ the step */
 
-export function S8CheckOut({ entry, past, goToStep }: { entry: EntryDetail; past: boolean; goToStep: (n: number) => void }) {
+/**
+ * Check-out's pane (2026-10-26, operator: "add this add or correct a charge as a tab in stage 8,
+ * it can also show the folio table again in that tab"). The last-morning charges and corrections
+ * have a tab of their own, the bill's lines above the form. Like Stay's, the pane is hidden,
+ * never unmounted, so a half-typed charge survives a look at This step.
+ */
+export const S8_PANES: StepPane[] = [{ key: "charges", label: "Add a charge", cards: [] }];
+
+export function S8CheckOut({
+  entry,
+  past,
+  goToStep,
+  pane = null,
+  openPane,
+}: {
+  entry: EntryDetail;
+  past: boolean;
+  goToStep: (n: number) => void;
+  /** Which pane is open — null is This step. */
+  pane?: string | null;
+  openPane?: (key: string | null) => void;
+}) {
   const { session } = useSession();
   const clock = useHotelClock(60_000);
   const refresh = useRefreshEntry(entry.id);
@@ -138,62 +160,86 @@ export function S8CheckOut({ entry, past, goToStep }: { entry: EntryDetail; past
   // Going back and raising a dispute happen in Other ways' own tabs (2026-10-17).
   const openWay = useOpenOtherWay();
 
+  // One way back from Check-out: to Stay. "Re-open to Negotiation" was taken off (2026-10-26) — the
+  // guest is still in, and from Negotiation the booking could never reach Check-out again. A price is
+  // put right here: a credit note, a correction, or a dispute.
   const backMutation = useMutation({
-    mutationFn: (v: { to: "stay" | "negotiation"; reason: string }) =>
-      v.to === "stay" ? reEnterS8ToS7(session!, entry.id, entry.version, v.reason) : reEnterS8ToS2(session!, entry.id, entry.version, v.reason),
-    onSuccess: (_d, v) => {
-      toast.success(v.to === "stay" ? "Back at Stay — post the charge there" : "Re-opened to Negotiation — a new pass is open");
+    mutationFn: (reason: string) => reEnterS8ToS7(session!, entry.id, entry.version, reason),
+    onSuccess: () => {
+      toast.success("Back at Stay — post the charge there");
       refresh();
-      goToStep(v.to === "stay" ? 7 : 2);
+      goToStep(7);
     },
     onError: (e) => toastRefusal(e, "The booking could not be taken back"),
   });
 
-  const backForm = (to: "stay" | "negotiation") => (
+  const backForm = () => (
     <InlineWay
       render={() => (
         <ReasonDialog
           open
           onClose={() => undefined}
-          title={to === "negotiation" ? "Re-open to Negotiation" : "Back to Stay"}
+          title="Back to Stay"
           caseLines={[folio ? `the bill is ${FOLIO_STATE_WORD[folio.state] ?? words(folio.state)}` : "no bill"]}
-          lead={
-            to === "negotiation"
-              ? "This closes the current pass and opens a new one at Negotiation for a full re-price. The live bill carries over. The history shows the new pass as such."
-              : "The booking goes back to Stay so a missed charge can be posted there. The bill stays live; bring the booking back to Check-out when it is done."
-          }
+          lead="The booking goes back to Stay so a missed charge can be posted there. The bill stays open; bring the booking back to Check-out when it is done."
           reasonLabel="Why · recorded on the booking"
-          placeholder={to === "negotiation" ? "the guest disputes the rate charged" : "minibar found after the bill was reviewed"}
-          confirmLabel={to === "negotiation" ? "Re-open to Negotiation" : "Back to Stay"}
+          placeholder="minibar found after the bill was reviewed"
+          confirmLabel="Back to Stay"
           busy={backMutation.isPending}
-          onConfirm={(reason) => backMutation.mutate({ to, reason })}
+          onConfirm={(reason) => backMutation.mutate(reason)}
         />
       )}
     />
   );
 
+  const chargeable = live && folio?.state === "LIVE";
+  // A pane is hidden, never unmounted — see S8_PANES.
+  const at = (k: string | null) => ((pane ?? null) === k ? undefined : true);
+
   return (
     <StepCanvas past={past}>
-      <DisputesCard entry={entry} tz={clock.tz} />
-      <FolioComplete entry={entry} live={live} tz={clock.tz} onBackToStay={() => openWay("stay")} goToStep={goToStep} />
-      <MasterBill entry={entry} tz={clock.tz} onTab={setChargeTarget} />
-      {live && folio?.state === "LIVE" ? <AddOrCorrectCharge entry={entry} target={chargeTarget} setTarget={setChargeTarget} /> : null}
-      <HowSettled entry={entry} live={live} tz={clock.tz} />
-      <OverpaidCard entry={entry} live={live} />
-      <Invoices entry={entry} live={live} tz={clock.tz} />
-      <Departure entry={entry} live={live} />
+      <div className="pane" hidden={at(null)}>
+        <DisputesCard entry={entry} tz={clock.tz} />
+        <MasterBill
+          entry={entry}
+          tz={clock.tz}
+          onTab={setChargeTarget}
+          onAddCharge={chargeable && openPane ? () => openPane("charges") : undefined}
+        />
+        {/* A damage found is answered before the bill is settled (2026-10-26). */}
+        <DamageCard entry={entry} live={live} />
+        <HowSettled entry={entry} live={live} tz={clock.tz} onBackToStay={() => openWay("stay")} goToStep={goToStep} />
+        <OverpaidCard entry={entry} live={live} />
+        <Invoices entry={entry} live={live} tz={clock.tz} />
+        <Departure entry={entry} live={live} />
+        <DepartureHandoff entry={entry} live={live} tz={clock.tz} />
+      </div>
+
+      <div className="pane" hidden={at("charges")}>
+        <FolioTableCard entry={entry} onTab={setChargeTarget} />
+        {chargeable ? (
+          <AddOrCorrectCharge entry={entry} target={chargeTarget} setTarget={setChargeTarget} />
+        ) : (
+          <StepCard
+            title="Add or correct a charge"
+            status={
+              <span className="warn-ink">
+                {!folio
+                  ? "There is no bill on this booking."
+                  : isSettled(folio.state)
+                    ? "The bill is settled — a charge found now is posted on the Closed step, as a late charge."
+                    : `The bill is ${FOLIO_STATE_WORD[folio.state] ?? words(folio.state)} — charges can be added only while it is open.`}
+              </span>
+            }
+          />
+        )}
+      </div>
+
       {/* Other ways as sub-tabs (2026-10-17), each panel the form its button used to open. */}
       <OtherWaysTabs
         tabs={[
           live && !settled
-            ? { key: "stay", label: "Back to Stay", content: fom ? backForm("stay") : <ShutWay act="Back to Stay" why="Going back to Stay needs the FOM." /> }
-            : null,
-          live && !settled
-            ? {
-                key: "negotiation",
-                label: "Re-open to Negotiation",
-                content: fom ? backForm("negotiation") : <ShutWay act="Re-open to Negotiation" why="Re-opening the rate needs the FOM." />,
-              }
+            ? { key: "stay", label: "Back to Stay", content: fom ? backForm() : <ShutWay act="Back to Stay" why="Going back to Stay needs the FOM." /> }
             : null,
           live && folio
             ? { key: "dispute", label: "Raise a dispute", content: <InlineWay render={(done) => <RaiseDispute entry={entry} open onClose={done} />} /> }
@@ -204,142 +250,157 @@ export function S8CheckOut({ entry, past, goToStep }: { entry: EntryDetail; past
   );
 }
 
-/* ------------------------------------------------------------------ is the folio complete */
+/* ------------------------------------------------------------------ the last night's audit */
 
-function FolioComplete({
+/**
+ * Settlement refuses while the last night is unaudited, so the warning sits on the settle card
+ * (2026-10-26 — "Is the folio complete?" is gone; Back to Stay lives in Other ways). The Stay
+ * step reads the final night's audit with the same query key.
+ */
+function UnauditedLastNight({
   entry,
   live,
-  tz,
   onBackToStay,
   goToStep,
 }: {
   entry: EntryDetail;
   live: boolean;
-  tz: string;
   onBackToStay: () => void;
   goToStep: (n: number) => void;
 }) {
   const { session } = useSession();
-  const refresh = useRefreshEntry(entry.id);
   const fom = atLeast(session?.actorLevel, "L2");
-  // The Stay step reads the final night's audit the same way (one query key for both).
   const lastNight = useMemo(() => lastStayNight(effectiveCheckOutIso(entry)), [entry]);
   const audit = useQuery({
     queryKey: ["night-audit", lastNight],
     queryFn: () => getNightAuditRecord(session!, lastNight!),
-    enabled: !!session && !!lastNight,
+    enabled: !!session && !!lastNight && live,
   });
-  const audited = audit.data?.runStatus === "COMPLETE";
-  // The guest's requests (BE-64, 2026-10-12) — one still to arrange is worth a look before they go.
-  const requests = useQuery({
-    queryKey: ["guest-requests", entry.id],
-    queryFn: () => listGuestRequests(session!, entry.id),
-    enabled: !!session,
-  });
-  const openRequests = requests.data?.counts.open ?? 0;
-  const lines = entry.folio?.lines ?? [];
-  const open = (entry.disputes ?? []).filter(isOpenDispute);
+  if (!live || !lastNight || !audit.isFetched || audit.data?.runStatus === "COMPLETE") return null;
+  if (isSettled(entry.folio?.state)) return null;
+  // A night posted for this booking alone counts, as settlement counts it (2026-09-25) — the Stay
+  // step's nights card reads it the same way: the booking's room charge for that night is on the bill.
+  if ((entry.folio?.lines ?? []).some((l) => l.lineType === "ROOM_CHARGE" && l.chargeDate?.slice(0, 10) === lastNight)) return null;
+  return (
+    <div style={{ marginBottom: 10 }}>
+      <Refusal
+        kind="state"
+        message={`The last night (${fmtDate(lastNight)}) is not audited — the bill cannot be settled until it is.`}
+        guidance={fom ? "Take the booking back to Stay and post the night there." : "The FOM takes the booking back to Stay to post the night."}
+        actions={
+          fom ? (
+            <Button kind="secondary" compact onClick={onBackToStay}>
+              Back to Stay…
+            </Button>
+          ) : (
+            <Button kind="quiet" compact onClick={() => goToStep(7)}>
+              Look at the Stay step
+            </Button>
+          )
+        }
+      />
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ the departure handoff */
+
+const capFirst = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);
+
+/** The H4 handoff, a card of its own (2026-10-26) — it was a box inside "Is the folio complete?". */
+function DepartureHandoff({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz: string }) {
+  const { session } = useSession();
+  const refresh = useRefreshEntry(entry.id);
   // The entry payload lists handoffs newest first — the departure handoff is the newest H4.
   const h4 = (entry.handoffs ?? []).find((h) => h.handoffType === "H4") ?? null;
-  const h4Done = !!h4 && (h4.state === "FULFILLED" || h4.isAutoFulfilled === true);
-  const [flag, setFlag] = useState<(typeof H4_FLAGS)[number][0]>("RECORDED");
+  const done = !!h4 && (h4.state === "FULFILLED" || h4.isAutoFulfilled === true);
+  // The room's fault is asked ONCE, at the inspection (2026-10-26, operator: "isn't these the
+  // same?"). The inspection's answer is the record the backend checks — a fault still there needs
+  // what the inspector found — so the handoff carries it rather than asking again and possibly
+  // disagreeing. One inspection per ROOM since 2026-10-26: the handoff waits for every room the
+  // guest leaves, and the most serious answer across them stands.
+  const inspQ = useRoomInspections(entry, !done);
+  const inspRooms = inspQ.data?.rooms ?? [];
+  const allIn = !!inspQ.data?.allRecorded;
+  const SEVERITY = ["UNRESOLVED_AT_CHECKOUT", "RESOLVED", "NOT_APPLICABLE"];
+  const rank = (f: string) => (SEVERITY.includes(f) ? SEVERITY.indexOf(f) : SEVERITY.length);
+  const answers = inspRooms.map((r) => r.deficientFlagStatus).filter((f): f is string => !!f);
+  const flag = allIn && answers.length ? [...answers].sort((a, b) => rank(a) - rank(b))[0] : null;
+  const putOffRooms = inspRooms.filter((r) => r.state === "PUT_OFF").map((r) => r.roomNumber);
+  const flagWords = flag ? (H4_FLAGS.find(([v]) => v === flag)?.[1] ?? words(flag)) : null;
+  const many = inspRooms.length > 1;
   const fulfil = useMutation({
-    mutationFn: () => fulfilHandoff(session!, h4!.id, buildH4FulfilmentEvidence(flag)),
+    mutationFn: () => {
+      if (!flag) throw new Error(many ? "Inspect every room first — their answer is the handoff's" : "Record the inspection first — its answer is the handoff's");
+      return fulfilHandoff(session!, h4!.id, buildH4FulfilmentEvidence(flag));
+    },
     onSuccess: () => {
       toast.success("The departure handoff is done");
       refresh();
     },
     onError: (e) => toastRefusal(e, "The departure handoff could not be completed"),
   });
-
-  // Said only while the booking is here — on a passed step the chips already tell the story.
-  const problems = (live ? [
-    audit.isFetched && lastNight && !audited ? `the last night (${fmtDate(lastNight)}) is not audited` : null,
-    open.length ? `${plural(open.length, "dispute")} open` : null,
-  ] : []).filter(Boolean) as string[];
+  const doneAt = h4?.fulfilledAt ?? null;
+  const reason = !live
+    ? "only while the booking is at Check-out"
+    : !flag
+      ? many
+        ? "inspect every room in The departure first"
+        : "record the inspection in The departure first"
+      : undefined;
 
   return (
-    <StepCard title="Is the folio complete?">
-      <div className="row-acts">
-        <Chip tone={audit.isLoading ? "quiet" : audited ? "success" : "warning"} icon={audited ? "check" : undefined}>
-          {audit.isLoading ? "reading the night audit…" : audited ? "the last night audited" : "the last night not audited"}
-        </Chip>
-        <Chip tone={lines.length ? "success" : "warning"} icon={lines.length ? "check" : undefined}>
-          {lines.length ? `${plural(lines.length, "line")} on the bill` : "nothing posted yet"}
-        </Chip>
-        <Chip tone={open.length ? "warning" : "success"} icon={open.length ? undefined : "check"}>
-          {open.length ? `${plural(open.length, "dispute")} open` : "nothing in dispute"}
-        </Chip>
-        <Chip tone={h4Done ? "success" : "warning"} icon={h4Done ? "check" : undefined}>
-          {h4Done ? "departure handoff done" : h4 ? `departure handoff ${HANDOFF_STATE_WORD[h4.state] ?? words(h4.state)}` : "departure handoff not raised"}
-        </Chip>
-        <span title="Chits as records — keyed, waiting, swept by the night audit — are not in the backend yet (BE-68)">
-          <Chip tone="quiet">chits · not tracked yet</Chip>
-        </span>
-        <span title="The guest's requests are in the Guest requests tab">
-          <Chip tone={openRequests ? "warning" : "success"} icon={openRequests ? undefined : "check"}>
-            {requests.isLoading
-              ? "reading the requests…"
-              : openRequests
-                ? `${plural(openRequests, "request")} still to arrange`
-                : requests.data?.counts.total
-                  ? "every request arranged"
-                  : "no requests"}
-          </Chip>
-        </span>
-      </div>
-      {problems.length ? (
-        <div style={{ marginTop: 10 }}>
-          <Refusal
-            kind="state"
-            message={`The bill cannot be right yet — ${problems.join(" · ")}.`}
-            guidance="Fix these on the Stay step; settlement refuses until every night is audited, and the booking stays here while a dispute is open."
-            actions={
-              fom && !isSettled(entry.folio?.state) ? (
-                <Button kind="secondary" compact onClick={onBackToStay}>
-                  Back to Stay…
-                </Button>
-              ) : (
-                <Button kind="quiet" compact onClick={() => goToStep(7)}>
-                  Look at the Stay step
-                </Button>
-              )
-            }
-          />
+    <StepCard
+      flow="handoff"
+      title="The departure handoff"
+      status={
+        done ? (
+          <span className="ok-ink">
+            Done{doneAt ? ` · ${fmtStamp(doneAt, tz)}` : ""}
+            {h4?.isAutoFulfilled ? " · recorded by itself, a same-day departure" : ""}
+          </span>
+        ) : h4 ? (
+          <span className="warn-ink">
+            {flag
+              ? `${capFirst(HANDOFF_STATE_WORD[h4.state] ?? words(h4.state))} — ready to mark done`
+              : many
+                ? `Waiting for every room's inspection in The departure — ${inspQ.data?.inspectedCount ?? 0} of ${inspRooms.length} done`
+                : "Waiting for the inspection in The departure — its answer is carried here"}
+          </span>
+        ) : (
+          <span className="warn-ink">Not raised — it is raised when the booking leaves Stay</span>
+        )
+      }
+      meta="Charges posted, every room inspected or put off, any damage assessed — the last check before the booking closes. The fault is the inspections' own answer: the most serious one across the rooms."
+    >
+      {h4 && !done ? (
+        <div className="row-acts" style={{ justifyContent: "space-between", alignItems: "center" }}>
+          <span className="sm">
+            {flagWords ? (
+              <>
+                {many ? <>The rooms&rsquo; fault, from the inspections: </> : <>The room&rsquo;s fault, from the inspection: </>}
+                <b>{flagWords}</b>
+                {putOffRooms.length ? (
+                  <span className="meta">
+                    {" "}
+                    · put off to after departure{many ? `: Room ${putOffRooms.join(", ")}` : ""}
+                  </span>
+                ) : null}
+              </>
+            ) : (
+              <span className="warn-ink">The inspection is not recorded yet.</span>
+            )}
+          </span>
+          <Button
+            compact
+            state={fulfil.isPending ? "working" : reason ? "inert" : "default"}
+            title={reason}
+            workingLabel="Recording…"
+            onClick={() => fulfil.mutate()}
+          >
+            Mark the handoff done
+          </Button>
         </div>
-      ) : null}
-      {h4 && !h4Done ? (
-        <Live>
-          <div className="bind provisional" style={{ marginTop: 10, display: "grid", gap: 8 }}>
-            <span className="sm">
-              <b>The departure handoff</b> — charges posted, the room inspected or put off, any damage assessed. Say where the room&rsquo;s fault stands and mark it done.
-            </span>
-            <div className="form2">
-              <div className="field">
-                <label>The room&rsquo;s fault, at departure</label>
-                <select className="input" value={flag} onChange={(e) => setFlag(e.target.value as typeof flag)} disabled={!live}>
-                  {H4_FLAGS.map(([v, l]) => (
-                    <option key={v} value={v}>
-                      {l}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="field" style={{ alignSelf: "end" }}>
-                <Button
-                  kind="secondary"
-                  compact
-                  state={fulfil.isPending ? "working" : live ? "default" : "inert"}
-                  title={live ? undefined : "only while the booking is at Check-out"}
-                  workingLabel="Recording…"
-                  onClick={() => fulfil.mutate()}
-                >
-                  Mark the handoff done
-                </Button>
-              </div>
-            </div>
-          </div>
-        </Live>
       ) : null}
     </StepCard>
   );
@@ -347,7 +408,101 @@ function FolioComplete({
 
 /* ------------------------------------------------------------------ the master bill */
 
-function MasterBill({ entry, tz, onTab }: { entry: EntryDetail; tz: string; onTab: (target: string) => void }) {
+/** The bill's lines, its room / space tabs and their server-summed footers — shown on the master
+ * bill and again on the Add a charge tab. A tab opened here becomes the next charge's "For". */
+export function BillLines({ entry, onTab }: { entry: EntryDetail; onTab: (target: string) => void }) {
+  const billing = useBilling(entry);
+  const fo = billing.data?.folio ?? null;
+  const cur = billing.data?.currency ?? entry.folio?.lines?.[0]?.currency ?? "BTN";
+  const roomNumberById = useMemo(
+    () => new Map((entry.roomAssignments ?? []).map((a) => [a.roomId, a.room?.roomNumber ?? a.roomId.slice(0, 6)])),
+    [entry.roomAssignments],
+  );
+  return (
+    <Tool inert={false}>
+      <FolioLinesTable
+        lines={entry.folio?.lines ?? []}
+        roomNumberById={roomNumberById}
+        perRoomCharges={fo?.perRoomCharges ?? null}
+        perSpaceCharges={fo?.perSpaceCharges ?? null}
+        spaceNameById={spaceNamesFromAllocations(entry.spaceAllocations)}
+        unassignedCharges={fo?.unassignedCharges ?? null}
+        chargeBreakdown={fo?.chargeBreakdown ?? null}
+        balance={fo?.outstandingBalance ?? entry.folio?.outstandingBalance ?? null}
+        currency={cur}
+        emptyText="No charges on this bill"
+        onTabChange={(t) => onTab(typeof t === "string" ? "" : "spaceId" in t ? `space:${t.spaceId}` : `room:${t.roomId}`)}
+      />
+    </Tool>
+  );
+}
+
+type BillFolio = NonNullable<NonNullable<ReturnType<typeof useBilling>["data"]>["folio"]>;
+
+/** Billed · received · still owed, read across the desk ("UIappeal", 2026-10-26). Every figure is
+ * the billing summary's; the "still owed" cell takes its colour from the balance it shows. */
+export function BillFigures({ fo, cur }: { fo: BillFolio | null; cur: string }) {
+  if (!fo) return null;
+  const owed = Number(fo.outstandingBalance);
+  const tone = owed > 0 ? "due" : owed < 0 ? "over" : "clear";
+  const owedLabel = owed > 0 ? "Still owed" : owed < 0 ? "Paid over the bill" : "Nothing owed";
+  return (
+    <div className="bill-band" role="group" aria-label="The bill's figures">
+      <div className="bb-cell">
+        <span className="bb-k">Billed</span>
+        <span className="bb-v money">{money(fo.billedSoFar, cur)}</span>
+      </div>
+      <div className="bb-cell">
+        <span className="bb-k">Received</span>
+        <span className="bb-v money">{money(fo.paymentsReceived, cur)}</span>
+      </div>
+      {fo.refunded != null && Number(fo.refunded) !== 0 ? (
+        <div className="bb-cell">
+          <span className="bb-k">Refunded</span>
+          <span className="bb-v money">{money(fo.refunded, cur)}</span>
+        </div>
+      ) : null}
+      {fo.writtenOff != null && Number(fo.writtenOff) !== 0 ? (
+        <div className="bb-cell">
+          <span className="bb-k">Written off</span>
+          <span className="bb-v money">{money(fo.writtenOff, cur)}</span>
+        </div>
+      ) : null}
+      <div className={`bb-cell owed ${tone}`} role={owed > 0 ? "status" : undefined}>
+        <span className="bb-k">{owedLabel}</span>
+        <span className="bb-v money">{money(fo.outstandingBalance, cur)}</span>
+      </div>
+    </div>
+  );
+}
+
+/** The folio again, on the Add a charge tab — so a charge is posted with the bill in view. */
+function FolioTableCard({ entry, onTab }: { entry: EntryDetail; onTab: (target: string) => void }) {
+  const billing = useBilling(entry);
+  const fo = billing.data?.folio ?? null;
+  const cur = billing.data?.currency ?? entry.folio?.lines?.[0]?.currency ?? "BTN";
+  return (
+    <StepCard title="The folio" status={fo ? `${plural(fo.lineCount, "line")} on the bill` : undefined}>
+      <BillFigures fo={fo} cur={cur} />
+      <div style={{ marginTop: 12 }}>
+        <BillLines entry={entry} onTab={onTab} />
+      </div>
+    </StepCard>
+  );
+}
+
+function MasterBill({
+  entry,
+  tz,
+  onTab,
+  onAddCharge,
+}: {
+  entry: EntryDetail;
+  tz: string;
+  onTab: (target: string) => void;
+  /** Opens the Add a charge tab — only while the bill is open at Check-out. */
+  onAddCharge?: () => void;
+}) {
   const { session } = useSession();
   const refresh = useRefreshEntry(entry.id);
   const billing = useBilling(entry);
@@ -357,10 +512,6 @@ function MasterBill({ entry, tz, onTab }: { entry: EntryDetail; tz: string; onTa
   const doc = index.data?.documents.find((d) => d.kind === "master-bill") ?? null;
   const fo = billing.data?.folio ?? null;
   const cur = billing.data?.currency ?? entry.folio?.lines?.[0]?.currency ?? "BTN";
-  const roomNumberById = useMemo(
-    () => new Map((entry.roomAssignments ?? []).map((a) => [a.roomId, a.room?.roomNumber ?? a.roomId.slice(0, 6)])),
-    [entry.roomAssignments],
-  );
   const frozen = doc?.state === "FROZEN";
   const print = () => {
     if (!session) return;
@@ -401,57 +552,24 @@ function MasterBill({ entry, tz, onTab }: { entry: EntryDetail; tz: string; onTa
           >
             {frozen ? "Print a copy" : "Print master bill"}
           </Button>
+          {onAddCharge ? (
+            <Button kind="secondary" compact onClick={onAddCharge}>
+              Add or correct a charge
+            </Button>
+          ) : null}
           <Help label="About the master bill">What a guest gets who wants paper before paying, or who pays nothing here.</Help>
         </>
       }
     >
       <BillByPart billing={billing.data} loading={billing.isLoading} />
-      <div className="row-acts" style={{ justifyContent: "space-between", marginTop: 8 }}>
-        <span className="meta">
-          {fo ? plural(fo.lineCount, "line") : "—"} ·{" "}
-          <a
-            href="#"
-            onClick={(e) => {
-              e.preventDefault();
-              setShowLines((v) => !v);
-            }}
-          >
-            {showLines ? "hide the lines" : "show every line"}
-          </a>
-        </span>
-        <b className="money">{money(fo?.billedSoFar, cur)}</b>
+      <BillFigures fo={fo} cur={cur} />
+      <div className="bill-lines-row">
+        <span className="bl-n">{fo ? `${plural(fo.lineCount, "line")} on the bill` : "—"}</span>
+        <Button kind="quiet" compact onClick={() => setShowLines((v) => !v)}>
+          {showLines ? "Hide the lines" : "Show the lines"}
+        </Button>
       </div>
-      <Facts wide style={{ marginTop: 8 }}>
-        <Fact k="Received">{fo ? <span className="money">{money(fo.paymentsReceived, cur)}</span> : null}</Fact>
-        {fo?.refunded != null && fo.refunded !== 0 ? (
-          <Fact k="Refunded">
-            <span className="money">{money(fo.refunded, cur)}</span>
-          </Fact>
-        ) : null}
-        {fo?.writtenOff != null && fo.writtenOff !== 0 ? (
-          <Fact k="Written off">
-            <span className="money">{money(fo.writtenOff, cur)}</span>
-          </Fact>
-        ) : null}
-        <Fact k="Still owed">{fo ? <b className="money">{money(fo.outstandingBalance, cur)}</b> : null}</Fact>
-      </Facts>
-      {showLines ? (
-        <Tool inert={false}>
-          <FolioLinesTable
-            lines={entry.folio?.lines ?? []}
-            roomNumberById={roomNumberById}
-            perRoomCharges={fo?.perRoomCharges ?? null}
-            perSpaceCharges={fo?.perSpaceCharges ?? null}
-            spaceNameById={spaceNamesFromAllocations(entry.spaceAllocations)}
-            unassignedCharges={fo?.unassignedCharges ?? null}
-            chargeBreakdown={fo?.chargeBreakdown ?? null}
-            balance={fo?.outstandingBalance ?? entry.folio?.outstandingBalance ?? null}
-            currency={cur}
-            emptyText="No charges on this bill"
-            onTabChange={(t) => onTab(typeof t === "string" ? "" : "spaceId" in t ? `space:${t.spaceId}` : `room:${t.roomId}`)}
-          />
-        </Tool>
-      ) : null}
+      {showLines ? <BillLines entry={entry} onTab={onTab} /> : null}
       <PaperDrawer paper={paper} onClose={() => setPaper(null)} />
     </StepCard>
   );
@@ -719,7 +837,19 @@ function AddOrCorrectCharge({ entry, target, setTarget }: { entry: EntryDetail; 
 
 /* ------------------------------------------------------------------ how the bill is settled */
 
-function HowSettled({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz: string }) {
+function HowSettled({
+  entry,
+  live,
+  tz,
+  onBackToStay,
+  goToStep,
+}: {
+  entry: EntryDetail;
+  live: boolean;
+  tz: string;
+  onBackToStay: () => void;
+  goToStep: (n: number) => void;
+}) {
   const { session } = useSession();
   const refresh = useRefreshEntry(entry.id);
   const fom = atLeast(session?.actorLevel, "L2");
@@ -738,6 +868,11 @@ function HowSettled({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz
   const creditActive = !!ps?.creditExtensionActive;
   const creditExpired = !!ps?.creditExtensionExpired && !creditActive;
   const [byPart, setByPart] = useState(false);
+  // The bill waits for every damage found to have an answer (Policy 81, 2026-10-26).
+  const damage = useUnansweredDamage(entry);
+  const damageWhy = damage.unanswered.length
+    ? `answer the damage found in ${damage.unanswered.length > 1 ? `Rooms ${damage.unanswered.join(", ")}` : `Room ${damage.unanswered[0]}`} first`
+    : undefined;
 
   // More than one payer still to settle → the bill settles share by share (2026-09-18).
   const sharesQ = useSettlementShares(entry, !!folio);
@@ -794,6 +929,18 @@ function HowSettled({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz
   const partial = guestPays && Number.isFinite(typed) && typed >= 0 && balanceNum > 0 && typed < balanceNum;
   const creditCovers = partial && creditActive && ps?.ceilingAmount != null && ps.ceilingAmount >= balanceNum - typed;
   const partialLocked = partial && !fom && !creditCovers;
+  // The FOM's sign-off is asked only where the backend asks for it (Policy 46): the booking was
+  // reserved on the FOM's credit for an advance still not paid in full, the balance is now above
+  // that credit, and nobody signed it off at Arrival. Server figures compared, nothing shown derived.
+  const ceilingRaw = entry.reservation?.creditCeilingIfExtended;
+  const ceilingNum = ceilingRaw == null ? null : Number(ceilingRaw);
+  const overCeiling =
+    ceilingNum != null &&
+    Number.isFinite(ceilingNum) &&
+    ceilingNum > 0 &&
+    ps?.paidInFull !== true &&
+    balanceNum > ceilingNum &&
+    !entry.creditCeilingTier2AcknowledgedAt;
 
   const voucherTyped = voucherCovers.trim() === "" ? Number.NaN : Number.parseFloat(voucherCovers);
   const voucherValid = Number.isFinite(voucherTyped) && voucherTyped >= 0;
@@ -857,7 +1004,9 @@ function HowSettled({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz
   const takesMoney = guestPays && (Number.isFinite(typed) ? typed > 0 : balanceNum > 0);
   const settleReason = !folioLive
     ? "the bill must be live to settle"
-    : partialLocked
+    : damageWhy
+      ? damageWhy
+      : partialLocked
       ? "a part-payment needs the FOM or a credit extension"
       : !folio?.billingModel
         ? "the bill has no billing model"
@@ -867,7 +1016,11 @@ function HowSettled({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz
             ? "this billing model does not settle that way"
             : (method === "CASH" || method === "MOBILE_PAYMENT") && takesMoney && !ref.trim()
               ? "cash and QR need a payment reference"
-              : undefined;
+              : overCeiling && !fom
+                ? "the balance is above the credit the FOM allowed — the FOM settles this one"
+                : overCeiling && !fomAck.trim()
+                  ? "the balance is above the credit allowed — write the FOM's sign-off"
+                  : undefined;
 
   return (
     <StepCard
@@ -875,6 +1028,7 @@ function HowSettled({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz
       title="How the bill is settled"
       meta="One bill by the model; part by part when each room or hall pays its own; free to change until the bill is settled — after that, the tax invoice decides."
     >
+      <UnauditedLastNight entry={entry} live={live} onBackToStay={onBackToStay} goToStep={goToStep} />
       <div className="row-acts">
         <Chip tone="accent">by the billing model · {model ? BILLING_MODEL_WORD[model] ?? words(model) : "not set"}</Chip>
         {entry.groupBillingMode === "GROUP_MASTER" ? <Chip tone="quiet">one bill for the party</Chip> : null}
@@ -889,7 +1043,8 @@ function HowSettled({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz
           <SeeRow
             label="Settle by proportion…"
             note="whatever split was agreed — 60 / 40 — each invoice its share of everything"
-            reason="Settlement by share is not in the backend yet (BE-70)"
+            reason="Not possible yet — use Settle part by part instead"
+            notYet
           />
         </Live>
       </div>
@@ -1039,10 +1194,18 @@ function HowSettled({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz
                 </div>
               )}
               {invoicesParty ? <SendToField entry={entry} value={invoiceTo} onChange={setInvoiceTo} label="Send the invoice to" /> : null}
-              {fom ? (
+              {overCeiling && fom ? (
                 <div className="field">
-                  <label>FOM acknowledgement · only over the credit ceiling</label>
-                  <input className="input" value={fomAck} onChange={(e) => setFomAck(e.target.value)} />
+                  <label>
+                    FOM&rsquo;s sign-off · the balance is above the credit allowed
+                    <Help label="About the sign-off">
+                      The booking was reserved on the FOM&rsquo;s credit, the advance was never paid in full, and the balance is now above that credit. Write a reference for the sign-off — it is kept on the settlement.
+                    </Help>
+                  </label>
+                  <input className="input" value={fomAck} placeholder="e.g. approved by the FOM on the phone" onChange={(e) => setFomAck(e.target.value)} />
+                  <span className="hint warn-ink">
+                    Balance {money(balance, cur)} · credit allowed {money(ceilingNum, cur)}
+                  </span>
                 </div>
               ) : null}
             </div>
@@ -1332,17 +1495,17 @@ function Invoices({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz: 
       <StepCard
         title={`Extras · ${booked.guest}`}
         right={<Chip tone="quiet">not a separate invoice yet</Chip>}
-        meta={`A tax invoice of the guest's own extras — food, laundry, the minibar — apart from the rooms billed to ${booked.party ?? "the account"}. Money in, the invoice issued, receipt and invoice sent in one act is BE-41 · BE-69.`}
+        meta={`A tax invoice of the guest's own extras — food, laundry, the minibar — apart from the rooms billed to ${booked.party ?? "the account"}. It can't be made yet.`}
       >
         <p className="sm">
           Today the bill issues <b>one</b> tax invoice to {booked.payer}. Until the split exists, take the guest&rsquo;s part with <b>Settle part by part…</b> above.
         </p>
         <Live>
           <div className="row-acts" style={{ marginTop: 10 }}>
-            <Button kind="secondary" compact icon="eye" state="inert" title="A tax invoice per payer is not in the backend yet (BE-41 · BE-69)">
+            <Button kind="secondary" compact icon="eye" state="inert" title="Not possible yet — there is one tax invoice for the whole bill">
               Preview draft
             </Button>
-            <Button state="inert" title="Money in, the guest's invoice issued, receipt and invoice sent in one act — per-payer invoices are not in the backend yet (BE-41 · BE-69 · BE-43)">
+            <Button state="inert" title="Not possible yet — take the guest's part with Settle part by part, above">
               Record payment · issue · send
             </Button>
           </div>
@@ -1360,7 +1523,6 @@ function Departure({ entry, live }: { entry: EntryDetail; live: boolean }) {
   const booked = useBookedBy(entry);
   const rooms = useMemo(() => distinctRooms(entry), [entry]);
   const keyReturn = (entry.keyReturnRecords ?? [])[0] ?? null;
-  const inspection = (entry.roomInspectionRecords ?? [])[0] ?? null;
   const keysIssued = entry.keysIssuedCount ?? 0;
 
   /* ---- keys, room by room when the stamps exist ---- */
@@ -1371,33 +1533,59 @@ function Departure({ entry, live }: { entry: EntryDetail; live: boolean }) {
       .map(([roomId, rs]) => ({
         roomId,
         roomNumber: rs[0].room?.roomNumber ?? roomId.slice(0, 6),
-        outstanding: rs.some((r) => r.keyIssuedAt && !r.keyReturnedAt),
-        backEarlier: rs.some((r) => r.keyReturnedAt) && !rs.some((r) => r.keyIssuedAt && !r.keyReturnedAt),
+        outstanding: rs.some((r) => r.keyIssuedAt && !r.keyReturnedAt && !r.keyLostAt),
+        backEarlier: rs.some((r) => r.keyReturnedAt) && !rs.some((r) => r.keyIssuedAt && !r.keyReturnedAt && !r.keyLostAt),
+        lost: rs.some((r) => r.keyLostAt),
       }))
-      .filter((k) => k.outstanding || k.backEarlier)
+      .filter((k) => k.outstanding || k.backEarlier || k.lost)
       .sort((a, b) => a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true }));
   }, [entry.roomAssignments]);
   const roomWise = keyPlan.length > 0;
   const outstandingKeys = keyPlan.filter((k) => k.outstanding);
-  const [back, setBack] = useState<Record<string, boolean>>({});
-  const marked = outstandingKeys.filter((k) => back[k.roomId]);
+  // Each room's key is BACK or LOST (2026-10-26, operator: "tell the system which room's key
+  // exactly is missing"); a room not answered has not come back. A loss needs the note.
+  const [keyState, setKeyState] = useState<Record<string, "back" | "lost">>({});
+  const marked = outstandingKeys.filter((k) => keyState[k.roomId] === "back");
+  const lostKeys = outstandingKeys.filter((k) => keyState[k.roomId] === "lost");
+  const unanswered = outstandingKeys.filter((k) => !keyState[k.roomId]);
+  const toggleKey = (roomId: string, v: "back" | "lost") =>
+    setKeyState((p) => {
+      const next = { ...p };
+      if (next[roomId] === v) delete next[roomId];
+      else next[roomId] = v;
+      return next;
+    });
   const [count, setCount] = useState(String(keysIssued || 1));
+  const [lostCount, setLostCount] = useState("0");
+  const lostN = Number.parseInt(lostCount || "0", 10) || 0;
   const [keyNote, setKeyNote] = useState("");
   const countN = Number.parseInt(count, 10);
-  const short = roomWise ? marked.length !== outstandingKeys.length : countN !== keysIssued;
+  const anyLost = roomWise ? lostKeys.length > 0 : lostN > 0;
+  const short = (roomWise ? marked.length !== outstandingKeys.length : countN !== keysIssued) || anyLost;
+  const notePrompt = anyLost
+    ? roomWise
+      ? `what happened to ${lostKeys.length > 1 ? "the keys of Rooms" : "the key of Room"} ${lostKeys.map((k) => k.roomNumber).join(", ")}`
+      : "what happened to the lost key"
+    : "a key has not come back — say what happened";
 
   const keys = useMutation({
     mutationFn: () => {
       if (roomWise) {
         const ids = marked.map((k) => k.roomId);
+        const lostIds = lostKeys.map((k) => k.roomId);
         return recordKeyReturn(session!, entry.id, {
           keyCountReturned: ids.length,
           ...(ids.length ? { returnedRoomIds: ids } : {}),
+          ...(lostIds.length ? { lostRoomIds: lostIds, keyCountLost: lostIds.length } : {}),
           ...(short ? { reconciliationNote: keyNote.trim() } : {}),
         });
       }
       if (!Number.isInteger(countN) || countN < 0) throw new Error("Put in how many keys came back");
-      return recordKeyReturn(session!, entry.id, { keyCountReturned: countN, ...(short ? { reconciliationNote: keyNote.trim() } : {}) });
+      return recordKeyReturn(session!, entry.id, {
+        keyCountReturned: countN,
+        ...(lostN > 0 ? { keyCountLost: lostN } : {}),
+        ...(short ? { reconciliationNote: keyNote.trim() } : {}),
+      });
     },
     onSuccess: () => {
       toast.success("The keys are on record");
@@ -1406,36 +1594,6 @@ function Departure({ entry, live }: { entry: EntryDetail; live: boolean }) {
     onError: (e) => toastRefusal(e, "The key return could not be recorded"),
   });
 
-  /* ---- the room inspection ---- */
-  const firstRoom = entry.roomAssignments?.[0]?.room;
-  const activeFault = (firstRoom?.deficientConditionRecords ?? []).find((d) => d.status === "UNRESOLVED" || d.status === "DEFICIENT_UNRESOLVED_AT_CHECKOUT") ?? null;
-  const [deferred, setDeferred] = useState(false);
-  const [flag, setFlag] = useState<"RESOLVED" | "UNRESOLVED_AT_CHECKOUT" | "NOT_APPLICABLE">(activeFault ? "UNRESOLVED_AT_CHECKOUT" : "NOT_APPLICABLE");
-  useEffect(() => {
-    setFlag(activeFault ? "UNRESOLVED_AT_CHECKOUT" : "NOT_APPLICABLE");
-  }, [activeFault?.id]); // eslint-disable-line react-hooks/exhaustive-deps
-  const [assessment, setAssessment] = useState("");
-  const [damage, setDamage] = useState(false);
-  const [damageNotes, setDamageNotes] = useState("");
-  const inspect = useMutation({
-    mutationFn: () => {
-      if (flag !== "NOT_APPLICABLE" && !activeFault?.id) throw new Error("There is no open fault on the room — choose 'no fault on the room'");
-      if (flag === "UNRESOLVED_AT_CHECKOUT" && !assessment.trim()) throw new Error("Write what the inspector found");
-      return recordRoomInspection(session!, entry.id, {
-        isDeferred: deferred,
-        deficientFlagStatus: flag,
-        deficientConditionId: flag !== "NOT_APPLICABLE" ? activeFault!.id : undefined,
-        inspectorAssessment: flag === "UNRESOLVED_AT_CHECKOUT" ? assessment.trim() : undefined,
-        damageFound: damage,
-        damageNotes: damage ? damageNotes.trim() : undefined,
-      });
-    },
-    onSuccess: () => {
-      toast.success(deferred ? "The inspection is put off to after departure" : "The room inspection is on record");
-      refresh();
-    },
-    onError: (e) => toastRefusal(e, "The inspection could not be recorded"),
-  });
 
   const released = rooms.length > 0 && rooms.every((r) => r.room?.currentClaimState === "DEPARTED_DIRTY" || r.room?.currentClaimState === "DEPARTED_CLEAN");
   const onAccount = !!entry.folio?.billingModel && ON_ACCOUNT_MODELS.has(entry.folio.billingModel);
@@ -1446,30 +1604,68 @@ function Departure({ entry, live }: { entry: EntryDetail; live: boolean }) {
         <Fact k="Keys">
           {keyReturn ? (
             <span>
-              <Chip tone="success" icon="check">
-                returned
-              </Chip>{" "}
-              {keyReturn.keyCountReturned} of {keyReturn.keyCountIssued}
-              <span className="meta">{keyReturn.countReconciled ? " · all accounted for" : keyReturn.reconciliationNote ? ` · “${keyReturn.reconciliationNote}”` : ""}</span>
+              {keyReturn.keyCountLost ? (
+                <Chip tone="warning" icon="key">
+                  {keyReturn.keyCountLost === 1 ? "a key lost" : `${keyReturn.keyCountLost} keys lost`}
+                </Chip>
+              ) : (
+                <Chip tone="success" icon="check">
+                  returned
+                </Chip>
+              )}{" "}
+              {keyReturn.keyCountReturned} of {keyReturn.keyCountIssued} back
+              {keyReturn.lostRoomIds?.length ? (
+                <b className="warn-ink">
+                  {" "}
+                  · lost: {keyReturn.lostRoomIds.map((id) => `Room ${keyPlan.find((k) => k.roomId === id)?.roomNumber ?? "?"}`).join(", ")}
+                </b>
+              ) : null}
+              <span className="meta">
+                {keyReturn.countReconciled && !keyReturn.keyCountLost ? " · all accounted for" : keyReturn.reconciliationNote ? ` · “${keyReturn.reconciliationNote}”` : ""}
+              </span>
             </span>
           ) : roomWise ? (
             <div style={{ display: "grid", gap: 6 }}>
               <span>
                 {outstandingKeys.length} out
-                <span className="meta"> · {marked.length} of {outstandingKeys.length} back</span>
+                <span className="meta">
+                  {" "}
+                  · {marked.length} back{lostKeys.length ? ` · ${lostKeys.length} lost` : ""}
+                  {unanswered.length ? ` · ${unanswered.length} not answered` : ""}
+                </span>
               </span>
               {keyPlan.map((k) => (
                 <div key={k.roomId} className="row-acts sm">
                   <span style={{ minWidth: 90 }}>Room {k.roomNumber}</span>
                   {k.outstanding ? (
                     live ? (
-                      <label style={{ display: "inline-flex", gap: 6, alignItems: "center", cursor: "pointer" }}>
-                        <input type="checkbox" checked={!!back[k.roomId]} onChange={() => setBack((p) => ({ ...p, [k.roomId]: !p[k.roomId] }))} />
-                        its key is back
-                      </label>
+                      <span className="row-acts" role="group" aria-label={`Room ${k.roomNumber}'s key`}>
+                        <Button
+                          kind={keyState[k.roomId] === "back" ? "primary" : "secondary"}
+                          compact
+                          icon={keyState[k.roomId] === "back" ? "check" : undefined}
+                          aria-pressed={keyState[k.roomId] === "back"}
+                          onClick={() => toggleKey(k.roomId, "back")}
+                        >
+                          Back
+                        </Button>
+                        <Button
+                          kind={keyState[k.roomId] === "lost" ? "danger" : "secondary"}
+                          compact
+                          icon={keyState[k.roomId] === "lost" ? "check" : undefined}
+                          aria-pressed={keyState[k.roomId] === "lost"}
+                          onClick={() => toggleKey(k.roomId, "lost")}
+                        >
+                          Lost
+                        </Button>
+                      </span>
                     ) : (
                       <span className="meta">key out</span>
                     )
+                  ) : k.lost ? (
+                    <Chip tone="warning" icon="key">
+                      lost
+                    </Chip>
                   ) : (
                     <Chip tone="quiet" icon="check">
                       back earlier
@@ -1479,18 +1675,18 @@ function Departure({ entry, live }: { entry: EntryDetail; live: boolean }) {
               ))}
               <Live>
                 {short && live ? (
-                  <input className="input" value={keyNote} placeholder="a key is missing — say what happened" onChange={(e) => setKeyNote(e.target.value)} />
+                  <input className="input" value={keyNote} placeholder={notePrompt} onChange={(e) => setKeyNote(e.target.value)} />
                 ) : null}
                 <div className="row-acts">
                   <Button
                     kind="secondary"
                     compact
                     state={keys.isPending ? "working" : live && (!short || keyNote.trim()) ? "default" : "inert"}
-                    title={!live ? "only while the booking is at Check-out" : short && !keyNote.trim() ? "a key is missing — write what happened first" : undefined}
+                    title={!live ? "only while the booking is at Check-out" : short && !keyNote.trim() ? `${notePrompt} — write it first` : undefined}
                     workingLabel="Recording…"
                     onClick={() => keys.mutate()}
                   >
-                    Keys returned
+                    Record the keys
                   </Button>
                 </div>
               </Live>
@@ -1506,8 +1702,12 @@ function Departure({ entry, live }: { entry: EntryDetail; live: boolean }) {
                     back
                     <input className="input" inputMode="numeric" value={count} onChange={(e) => setCount(e.target.value.replace(/\D/g, ""))} disabled={!live} />
                   </span>
+                  <span className="count-in sm">
+                    lost
+                    <input className="input" inputMode="numeric" value={lostCount} onChange={(e) => setLostCount(e.target.value.replace(/\D/g, ""))} disabled={!live} />
+                  </span>
                   {short && live ? (
-                    <input className="input" style={{ flex: 1, minWidth: 200 }} value={keyNote} placeholder="a key is missing — say what happened" onChange={(e) => setKeyNote(e.target.value)} />
+                    <input className="input" style={{ flex: 1, minWidth: 200 }} value={keyNote} placeholder={notePrompt} onChange={(e) => setKeyNote(e.target.value)} />
                   ) : null}
                   <Button
                     kind="secondary"
@@ -1536,71 +1736,7 @@ function Departure({ entry, live }: { entry: EntryDetail; live: boolean }) {
                 <>released to housekeeping when the bill is settled</>
               )}
             </span>
-            {inspection ? (
-              <span>
-                {inspection.isDeferred ? "Inspection put off to after departure" : "Inspected"}
-                <span className="meta">
-                  {" "}
-                  · {DEFICIENCY_WORD[inspection.deficientFlagStatus] ?? words(inspection.deficientFlagStatus)}
-                  {inspection.damageFound ? ` · damage noted${inspection.damageNotes ? `: ${inspection.damageNotes}` : ""}` : " · no damage"}
-                </span>
-              </span>
-            ) : (
-              <Live>
-                <div className="bind provisional" style={{ display: "grid", gap: 8 }}>
-                  {activeFault ? (
-                    <span className="sm warn-ink">
-                      The room has an open fault — {words(activeFault.category)}: {activeFault.description}. Say how the inspection leaves it.
-                    </span>
-                  ) : null}
-                  <label className="sm" style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
-                    <input type="checkbox" checked={deferred} onChange={(e) => setDeferred(e.target.checked)} />
-                    Put the inspection off to after departure
-                  </label>
-                  <div className="form2">
-                    <div className="field">
-                      <label>The room&rsquo;s fault, at check-out</label>
-                      <select className="input" value={flag} onChange={(e) => setFlag(e.target.value as typeof flag)}>
-                        {activeFault ? (
-                          <>
-                            <option value="RESOLVED">Put right at inspection</option>
-                            <option value="UNRESOLVED_AT_CHECKOUT">Still there at departure</option>
-                          </>
-                        ) : (
-                          <option value="NOT_APPLICABLE">No fault on the room</option>
-                        )}
-                      </select>
-                    </div>
-                    {flag === "UNRESOLVED_AT_CHECKOUT" ? (
-                      <div className="field">
-                        <label>What the inspector found</label>
-                        <input className="input" value={assessment} onChange={(e) => setAssessment(e.target.value)} />
-                      </div>
-                    ) : null}
-                    <div className="wide field">
-                      <label className="sm" style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
-                        <input type="checkbox" checked={damage} onChange={(e) => setDamage(e.target.checked)} />
-                        Damage found
-                      </label>
-                      {damage ? <input className="input" value={damageNotes} placeholder="what is damaged" onChange={(e) => setDamageNotes(e.target.value)} /> : null}
-                    </div>
-                  </div>
-                  <div className="row-acts">
-                    <Button
-                      kind="secondary"
-                      compact
-                      state={inspect.isPending ? "working" : live ? "default" : "inert"}
-                      title={live ? undefined : "only while the booking is at Check-out"}
-                      workingLabel="Recording…"
-                      onClick={() => inspect.mutate()}
-                    >
-                      Record the inspection
-                    </Button>
-                  </div>
-                </div>
-              </Live>
-            )}
-            {!inspection && !live ? <span className="meta">not inspected</span> : null}
+            <RoomInspectionGrid entry={entry} live={live} />
           </div>
         </Fact>
 
@@ -1612,7 +1748,7 @@ function Departure({ entry, live }: { entry: EntryDetail; live: boolean }) {
           ) : (
             <>their tax invoice, sent — and printed if they want paper</>
           )}
-          <Help label="About the receipt">A money receipt as a paper is not in the backend yet (BE-43).</Help>
+          <Help label="About the receipt">A printed receipt for the payment can&rsquo;t be made yet — the tax invoice shows what was paid.</Help>
         </Fact>
         <Fact k="The record">
           the stay stays on {booked.guest}&rsquo;s record; closing the booking seals it

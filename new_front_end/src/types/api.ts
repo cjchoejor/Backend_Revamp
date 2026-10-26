@@ -298,6 +298,10 @@ export type FolioDetail = {
     fromModel?: string | null;
     toModel: string;
     createdAt: string;
+    /** Set when the row moved ONE line; null for a change of the whole bill's payer. */
+    folioLineId?: string | null;
+    reason?: string | null;
+    changeSource?: string | null;
   }>;
 };
 
@@ -475,6 +479,9 @@ export type RoomAssignmentSummary = {
   keyIssuedBy?: string | null;
   keyReturnedAt?: string | null;
   keyReturnedBy?: string | null;
+  /** Declared lost at the S8 key return — no longer out with the guest. */
+  keyLostAt?: string | null;
+  keyLostBy?: string | null;
   room?: {
     id: string;
     roomNumber: string;
@@ -516,6 +523,9 @@ export type KeyReturnSummary = {
   roomId: string;
   keyCountIssued: number;
   keyCountReturned: number;
+  /** Keys declared lost at the return (2026-10-26), and which rooms' they were. */
+  keyCountLost?: number;
+  lostRoomIds?: string[];
   countReconciled: boolean;
   reconciliationNote?: string | null;
   returnedAt: string;

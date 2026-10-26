@@ -1,6 +1,7 @@
 import type { PrismaClient } from "@prisma/client";
-import { InventoryClaimState, Stage } from "@prisma/client";
+import { FolioState, InventoryClaimState, Stage } from "@prisma/client";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
+import { strandedInHouse } from "../../lib/stranded-in-house.js";
 import { computeReEntryConsequences } from "../../engines/re-entry-consequence-engine.js";
 import {
   enforceEntryActiveForStageTransition,
@@ -80,11 +81,19 @@ export async function roomChangeReEntryToS1(
     include: {
       roomAssignments: { orderBy: { createdAt: "desc" }, take: 1, include: { room: true } },
       reservation: true,
+      folio: { select: { state: true } },
     },
   });
   if (!entry) throw new NotFoundError("Entry");
   enforceEntryAtS7ForRoomChangeReEntry({ currentStage: entry.currentStage });
   enforceEntryActiveForStageTransition({ status: entry.status });
+  // Refused since 2026-10-26 while the folio is LIVE: back to Inquiry strands the guest. The room change
+  // on the Stay step walks the booking in place and brings it back to Stay (room-change-service).
+  if (entry.folio?.state === FolioState.LIVE) {
+    throw new ValidationError(
+      strandedInHouse("Stay", "changing the room this way", "Change the room from the Stay step's Rooms tab — the booking stays at Stay."),
+    );
+  }
   const currentAssignment = entry.roomAssignments[0];
   if (!currentAssignment) throw new ValidationError("Entry has no current room assignment");
 

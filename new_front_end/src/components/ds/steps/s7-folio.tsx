@@ -190,7 +190,7 @@ export function FolioCard({
       flow="folio"
       title={`The folio · ${FOLIO_WORD[folio?.state ?? ""] ?? "not open"}`}
       right={f ? <Chip tone="quiet">{plural(f.lineCount, "line")}</Chip> : null}
-      meta="Nothing posted is edited — a correction adds an offsetting line beside the original, and its service charge and GST move with it. Service charge and GST post alongside every charge."
+      meta="A charge on the bill is never edited — a correction adds a line beside it that puts it right, and its service charge and GST move with it. Every charge gets its service charge and GST on lines of their own."
     >
       {!folio ? (
         <span className="meta">No folio on this booking.</span>
@@ -291,7 +291,7 @@ export function PostChargeCard({
   return (
     <StepCard
       title="Post a charge"
-      meta="Each opens the same form, shaped as a till's message: outlet · chit · when it was consumed · room · amount. Routing follows the billing model."
+      meta="Each opens the same form: where it's from, the bill's number, when it was had, the room and the amount. Who it's billed to follows Who pays."
     >
       <div className="row-acts">
         {OUTLETS.map((o) => (
@@ -406,7 +406,7 @@ function PostChargeDialog({
         register="commit"
         title="Post a charge"
         width={720}
-        help="This is the shape a till will send: the outlet, its chit, when it was consumed, the room, the amount. Until then the desk keys it from the paper chit — the folio and this screen are the same either way." 
+        help="Type it in from the paper bill (the chit): where it's from, its number, when it was had, the room and the amount." 
         busy={post.isPending}
         footer={
           <>
@@ -439,7 +439,7 @@ function PostChargeDialog({
           <div className="field">
             <label>
               Consumed on
-              <Help label="About the date">When it was consumed, not when it is typed. A night already sealed posts to the open date.</Help>
+              <Help label="About the date">The day it was had, not the day you type it. A day the night audit has already closed can&rsquo;t take new charges.</Help>
             </label>
             <input
               className="input"
@@ -470,7 +470,7 @@ function PostChargeDialog({
               {o?.id === "minibar" ? "What was taken" : "What"}
               {o?.id === "minibar" ? (
                 <Help label="About the minibar">
-                  Counted in the room. The item list with its prices is not in the backend yet, so the total is typed below.
+                  Count what was taken in the room. There is no minibar price list yet, so type the total below.
                 </Help>
               ) : null}
             </label>
@@ -496,7 +496,7 @@ function PostChargeDialog({
             <label>
               Goes to
               <Help label="About who pays">
-                It follows the booking&rsquo;s billing model. Sending one charge to a different payer is not in the backend yet (BE-41, BE-55).
+                Each kind of charge goes to the payer set under Who pays. One charge on its own can&rsquo;t be sent to a different payer yet.
               </Help>
             </label>
             <select className="input" disabled value="model">
@@ -630,7 +630,7 @@ function CorrectionDialog({ entry, open, onClose }: { entry: EntryDetail; open: 
       register="commit"
       title="Correct a charge"
       caseLines={picked ? [`${picked.description} · ${money(picked.amount, picked.currency)}`] : undefined}
-      help="Nothing posted can be edited or deleted. The correction adds a second line beside the original, so the bill shows both the mistake and the fix; the charge's service charge and GST move with it, at the rates it was taxed at." 
+      help="A charge on the bill can't be edited or deleted. The correction adds a second line beside it, so the bill shows both the mistake and the fix; the charge's service charge and GST move with it, at the rates it was charged at." 
       width={780}
       busy={save.isPending}
       footer={
@@ -753,7 +753,7 @@ function CreditNoteDialog({ entry, open, onClose }: { entry: EntryDetail; open: 
       register="commit"
       title="Post a credit note"
       busy={save.isPending}
-      help="A credit reduces what the guest owes and stays on the folio as its own line — its service charge and GST come off beside it, on their own lines. The FOM's act." 
+      help="A credit takes money off what the guest owes and stays on the bill as its own line — its service charge and GST come off beside it. Only the FOM can give one." 
       footer={
         <>
           <Button kind="quiet" state={save.isPending ? "inert" : "default"} onClick={onClose}>
@@ -780,7 +780,7 @@ function CreditNoteDialog({ entry, open, onClose }: { entry: EntryDetail; open: 
         </div>
       </div>
       <p className="control-note" style={{ marginTop: 8 }}>
-        The credit note as a paper is not in the backend yet (BE-47)
+        The credit comes off the bill. A separate credit-note paper can&rsquo;t be printed yet.
       </p>
     </DsDialog>
   );
@@ -795,13 +795,13 @@ export function ChitsWaitingCard() {
     <StepCard title="Chits waiting">
       <span className="sm">
         Nothing waiting.
-        <Help label="About chits">When a till is integrated, its postings arrive here and the desk only accepts them.</Help>
+        <Help label="About chits">When the restaurant or bar till is connected, its bills arrive here and the desk only accepts them.</Help>
       </span>
       <div className="row-acts" style={{ marginTop: 8 }}>
         <Button kind="quiet" compact state="inert">
           Key it in
         </Button>
-        <Help label="Not available yet">A tray of chits and till postings awaiting acceptance is not in the backend yet (BE-68) — key the paper chit through Post a charge.</Help>
+        <Help label="Not available yet">Not possible yet — no till is connected. Type a paper chit in through Post a charge.</Help>
       </div>
     </StepCard>
   );
