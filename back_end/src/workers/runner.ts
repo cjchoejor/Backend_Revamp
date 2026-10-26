@@ -23,6 +23,7 @@ import { runNightAuditStayNightWorker } from "./w37-night-audit-stay-night-worke
 import { runHandoffAcceptanceWorker } from "./w25-handoff-acceptance-worker.js";
 import { runNightAuditWorker } from "./w6-night-audit-worker.js";
 import { catchUpMissedNightAudits } from "../services/application/night-audit-catch-up-service.js";
+import { sweepFailedTimerJobs } from "../services/infrastructure/timer-failure-sweep-service.js";
 import { runPaymentFollowUpWorker } from "./w8-payment-follow-up-worker.js";
 import { runPostCheckoutInspectionWorker } from "./w9-post-checkout-inspection-worker.js";
 import { runDeficientResolutionDeadlineWorker } from "./w10-deficient-resolution-deadline-worker.js";
@@ -145,6 +146,23 @@ export async function startWorkers() {
   };
   await catchUp("start-up");
   setInterval(() => void catchUp("hourly"), 60 * 60_000).unref();
+
+  // A timer whose job failed every retry is sent once more, and one that fails again is recorded
+  // as given up for System health (2026-10-26; timer-failure-sweep-service.ts). Best-effort too.
+  const sweep = async (when: string) => {
+    try {
+      const results = await sweepFailedTimerJobs(prisma, engine);
+      for (const r of results) {
+        // eslint-disable-next-line no-console
+        console.log(`[workers] Failed timer sweep (${when}): ${r.queue} ${r.jobId} ${r.outcome} — ${r.reason}`);
+      }
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error("[workers] Failed timer sweep failed:", e);
+    }
+  };
+  await sweep("start-up");
+  setInterval(() => void sweep("hourly"), 60 * 60_000).unref();
 
   return engine;
 }

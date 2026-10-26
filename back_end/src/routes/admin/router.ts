@@ -32,6 +32,7 @@ import { adminTravelAgentRouter } from "./travel-agent-router.js";
 import { adminCorporateAccountRouter } from "./corporate-account-router.js";
 import { adminRatePackageRouter } from "./rate-package-router.js";
 import { adminHouseTariffRouter } from "./house-tariff-router.js";
+import { adminTimerHealthRouter } from "./timer-health-router.js";
 
 export const adminRouter = Router();
 
@@ -64,6 +65,7 @@ adminRouter.use(adminTravelAgentRouter);
 adminRouter.use(adminCorporateAccountRouter);
 adminRouter.use(adminRatePackageRouter);
 adminRouter.use(adminHouseTariffRouter);
+adminRouter.use(adminTimerHealthRouter);
 
 /** Dev helper — enqueue a timer job (L4). */
 adminRouter.post("/enqueue", requireActorLevel("L4"), validateBody(adminEnqueueRequestSchema), async (req, res, next) => {
