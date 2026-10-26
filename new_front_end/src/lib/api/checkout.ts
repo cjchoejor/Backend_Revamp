@@ -34,6 +34,8 @@ export async function recordRoomInspection(
   session: Session,
   entryId: string,
   body: {
+    /** The room inspected — one inspection per room (2026-10-26). */
+    roomId?: string;
     isDeferred: boolean;
     deficientFlagStatus: "RESOLVED" | "UNRESOLVED_AT_CHECKOUT" | "NOT_APPLICABLE";
     deficientConditionId?: string;

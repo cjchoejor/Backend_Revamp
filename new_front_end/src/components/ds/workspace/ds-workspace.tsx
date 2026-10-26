@@ -44,6 +44,7 @@ import {
 } from "@/lib/api/entries";
 import { closeEntryAtS9 } from "@/lib/api/post-stay";
 import { useClosureReadiness } from "@/hooks/use-closure-readiness";
+import { useRoomInspections } from "@/hooks/use-room-inspections";
 import { activatePreArrival } from "@/lib/api/pre-arrival";
 import { completeCheckInToS7 } from "@/lib/api/check-in";
 import { listIdentityProofs } from "@/lib/api/identity-proofs";
@@ -210,6 +211,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   // The seal's own checks, from the backend (2026-09-18) — the desk's copy had drifted from them.
   const closureQuery = useClosureReadiness(entryId, entry?.currentStage === "S9" && entry?.status !== "CLOSED");
   const closure = closureQuery.data ?? null;
+  // Each room's inspection at Check-out (2026-10-26 — one inspection per room).
+  const inspections = useRoomInspections(entry, entry?.currentStage === "S8").data ?? null;
 
   const parked = entry?.status === "PARKED";
   const parkTimer = findParkTimer(timersQuery.data?.items);
@@ -725,7 +728,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
               : stayStepActive
                 ? [...s7Readiness(entry, hotelToday), { label: "Night audit complete", met: nightAuditOk, card: "nights" }]
                 : checkOutStepActive
-                  ? s8Readiness(entry)
+                  ? s8Readiness(entry, { inspections })
                   : closedStepActive
                     ? closure
                       ? [...closure.checks.map((c) => ({ label: c.label, met: c.met })), { label: "Sealing needs the FOM", met: atLeastFom(session?.actorLevel) }]
@@ -884,7 +887,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
       </Button>
     );
   } else if (checkOutStepActive) {
-    const ok = canProgressS8(entry);
+    const ok = canProgressS8(entry, { inspections });
     forward = (
       <Button state={advanceMutation.isPending ? "working" : ok ? "default" : "inert"} reason={ok ? undefined : firstNote} workingLabel="Moving…" onClick={() => advanceMutation.mutate({ targetStage: "S9" })}>
         Move to Closed

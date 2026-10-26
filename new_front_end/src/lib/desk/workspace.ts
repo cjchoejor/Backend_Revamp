@@ -650,10 +650,23 @@ export function canProgressS7(entry: EntryDetail, nightAuditOk: boolean, hotelTo
 }
 
 /** S8 exit readiness (SIG-S8) — gates before settlement & close (S9). H5 is auto-created on progress. */
-export function s8Readiness(entry: EntryDetail): Precondition[] {
+export function s8Readiness(
+  entry: EntryDetail,
+  opts: { inspections?: { allRecorded: boolean; inspectedCount: number; rooms: unknown[] } | null } = {},
+): Precondition[] {
   const folio = entry.folio;
   const keyReturn = (entry.keyReturnRecords ?? [])[0];
   const inspection = (entry.roomInspectionRecords ?? [])[0];
+  // One inspection per room (2026-10-26): the backend's own list when it has answered, else the
+  // booking's rows as before (the line waits for the answer rather than guessing a room count).
+  const insp = opts.inspections;
+  const inspectionLine: Precondition = insp
+    ? {
+        label: insp.rooms.length > 1 ? `Rooms inspected or put off (${insp.inspectedCount}/${insp.rooms.length})` : "Room inspection recorded",
+        met: insp.allRecorded,
+        card: "departure",
+      }
+    : { label: "Room inspection recorded", met: !!inspection, card: "departure" };
   const h4 = (entry.handoffs ?? []).find((h) => h.handoffType === "H4");
   const openDisputes = (entry.disputes ?? []).filter((d) => d.status === "OPEN" || d.status === "IN_PROGRESS");
   // EVERY distinct room must be released (2026-08-17 — the old check read only the first
@@ -681,14 +694,14 @@ export function s8Readiness(entry: EntryDetail): Precondition[] {
         distinctRooms.length > 1 ? "Rooms released to housekeeping" : "Room released to housekeeping",
       met: roomsReleased,
     },
-    { label: "Room inspection recorded", met: !!inspection, card: "departure" },
+    inspectionLine,
     { label: "Departure handoff done", met: !!h4 && (h4.state === "FULFILLED" || h4.isAutoFulfilled === true), card: "handoff" },
     { label: "No open disputes", met: openDisputes.length === 0 },
   ];
 }
 
-export function canProgressS8(entry: EntryDetail): boolean {
-  return entry.currentStage === "S8" && s8Readiness(entry).every((c) => c.met);
+export function canProgressS8(entry: EntryDetail, opts: Parameters<typeof s8Readiness>[1] = {}): boolean {
+  return entry.currentStage === "S8" && s8Readiness(entry, opts).every((c) => c.met);
 }
 
 // The seal's checks are the backend's own: GET /api/entries/:id/closure-readiness (useClosureReadiness).
