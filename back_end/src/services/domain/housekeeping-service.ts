@@ -90,6 +90,7 @@ async function windowMinutes(prisma: PrismaClient): Promise<number> {
 }
 
 function needsCleaning(r: { currentClaimState: InventoryClaimState; physicalState: RoomPhysicalState }) {
+  if (r.currentClaimState === InventoryClaimState.OCCUPIED) return false;
   return r.currentClaimState === InventoryClaimState.DEPARTED_DIRTY || r.physicalState === RoomPhysicalState.DIRTY;
 }
 

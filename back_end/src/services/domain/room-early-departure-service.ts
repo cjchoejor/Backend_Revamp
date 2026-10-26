@@ -2,6 +2,7 @@ import { InventoryClaimState, Prisma, Stage } from "@prisma/client";
 import type { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { AuthorizationError, NotFoundError, ValidationError } from "../../lib/errors.js";
+import { markRoomDirtyOnDepartureTx } from "../../lib/room-claim-state.js";
 import { round2, toDecimal } from "../../lib/money.js";
 import { hotelTodayUtc, nightsBetweenUtc, ymdUtc } from "../../lib/stay-dates.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
@@ -176,6 +177,7 @@ export async function departRoomEarly(
     }
 
     await tx.room.update({ where: { id: room.id }, data: { currentClaimState: InventoryClaimState.DEPARTED_DIRTY } });
+    await markRoomDirtyOnDepartureTx(tx, room.id);
     await tx.roomClaimStateEvent.create({
       data: {
         roomId: room.id,

@@ -1,6 +1,7 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { FolioState, HandoffType, InventoryClaimState, Stage, type ActorLevel } from "@prisma/client";
 import { MissingConfigurationError, NotFoundError, ValidationError } from "../../lib/errors.js";
+import { markRoomDirtyOnDepartureTx } from "../../lib/room-claim-state.js";
 import { resolvePostCheckoutInspectionWindowMs } from "../../lib/post-checkout-inspection-window.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import * as disputeGateEngine from "../../engines/dispute-gate-engine.js";
@@ -498,6 +499,7 @@ export async function completeCheckoutPhysicalDeparture(db: DbClient, entryId: s
     const ids: string[] = [];
     for (const a of assignmentsToCheckOut) {
       await tx.room.update({ where: { id: a.room.id }, data: { currentClaimState: InventoryClaimState.DEPARTED_DIRTY } });
+      await markRoomDirtyOnDepartureTx(tx, a.room.id);
       await tx.roomClaimStateEvent.create({
         data: {
           roomId: a.room.id,

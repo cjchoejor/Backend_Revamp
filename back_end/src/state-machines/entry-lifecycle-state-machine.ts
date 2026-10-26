@@ -114,6 +114,7 @@ export async function progressStageS5ToS6(
   for (const a of distinctAssignments) {
     enforceAssignedRoomPhysicalReadinessForArrival({
       physicalState: a.room.physicalState,
+      roomNumber: a.room.roomNumber,
       expectedReadyAt: a.room.expectedReadyAt,
       arrivalAt: arrival,
     });

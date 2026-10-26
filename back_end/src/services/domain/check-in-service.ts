@@ -135,7 +135,7 @@ export async function completeCheckInToS7(
   // the operator has to make them all ready before batched check-in (otherwise we'd have
   // partial success with confusing state).
   for (const a of assignmentsToCheckIn) {
-    enforceRoomPhysicalReadyForS6CheckInCompletion({ physicalState: a.room.physicalState });
+    enforceRoomPhysicalReadyForS6CheckInCompletion({ physicalState: a.room.physicalState, roomNumber: a.room.roomNumber });
   }
 
   const h1 = entry.handoffs.find((h) => h.handoffType === HandoffType.H1);

@@ -1,6 +1,7 @@
 import type { PrismaClient } from "@prisma/client";
 import { FolioState, HandoffState, HandoffType, InventoryClaimState, Prisma, Stage } from "@prisma/client";
 import { NotFoundError, StateTransitionError, ValidationError } from "../../lib/errors.js";
+import { strandedInHouse } from "../../lib/stranded-in-house.js";
 import { computeReEntryConsequences } from "../../engines/re-entry-consequence-engine.js";
 import { cancelEntryTimersByCode } from "../../lib/cancel-entry-timers-by-code.js";
 import { loadEntryDetail } from "../../lib/entry-detail-include.js";
@@ -116,6 +117,12 @@ async function reEnterS8ToS2Inner(prisma: PrismaClient, entryId: string, actorId
   }
   if (!entry.folio || entry.folio.state !== FolioState.LIVE) {
     throw new ValidationError("S8→S2 re-entry requires folio in LIVE state (settlement not yet completed)");
+  }
+  // Refused since 2026-10-26: with the folio LIVE the guest is still in, and the way forward from
+  // Negotiation needs a provisional folio at check-in — the guest could never get back to Check-out.
+  // A price is put right at Check-out itself (a credit note, a correction, a dispute).
+  if (entry.folio.state === FolioState.LIVE) {
+    throw new ValidationError(strandedInHouse("Check-out", "re-opening the price at Negotiation"));
   }
 
   // W22 too (2026-08-02): the re-entry opens a new segment, and a prior segment's reply
