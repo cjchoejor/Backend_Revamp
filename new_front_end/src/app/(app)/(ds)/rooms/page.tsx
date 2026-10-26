@@ -23,6 +23,7 @@ import { useSession } from "@/hooks/use-session";
 import { listSpaces, type RoomListItem, type SpaceListItem } from "@/lib/api/rooms";
 import { guestNameOf } from "@/lib/ds/status";
 import { stepNoOfStage } from "@/lib/ds/steps";
+import { groupByRoomType } from "@/lib/ds/group-by-type";
 
 function standingOfRoom(r: RoomListItem): RoomStanding {
   if (r.isUnderMaintenance || r.isBlocked) return "ooo";
@@ -203,31 +204,46 @@ function RoomsPageBody() {
             ))}
           </div>
 
-          <div className="floor">
-            <h4>The house</h4>
-            <div className="tiles">
-              {items.map((r) => {
-                const standing = standingOfRoom(r);
-                const bed = r.bedType ? BED_WORD[r.bedType] ?? r.bedType : null;
-                return (
-                  <RoomTile
-                    key={r.id}
-                    number={r.roomNumber}
-                    standing={standing}
-                    occupant={standing === "free" ? undefined : (occupant.get(r.roomNumber) ?? (standing === "occupied" ? "in-house" : standing === "ooo" || standing === "deficient" ? "out of service" : "held"))}
-                    physical={physicalOfRoom(r)}
-                    qualifier={r.isDeficient && standing !== "deficient" ? "fault reported" : undefined}
-                    note={[r.roomType?.name, bed].filter(Boolean).join(" · ")}
-                    onSelect={() => setTarget({ kind: "room", id: r.id, label: `Room ${r.roomNumber}` })}
-                  />
-                );
-              })}
-            </div>
-            <p className="meta">
-              {items.length} rooms · select one to report a fault or review one already raised. Room status changes come from each room&apos;s own work — check-out,
-              housekeeping, inspection — not from this board.
-            </p>
+          {/* Grouped by room type (2026-10-26, operator: "show rooms here in room types category"),
+              each type in the order of its lowest room number, as on the chart. */}
+          <div className="type-groups flow">
+            {groupByRoomType(items, (r) => r.roomType?.name, (r) => r.roomNumber).map((g) => {
+              const busy = g.rooms.filter((r) => standingOfRoom(r) === "occupied").length;
+              const freeHere = g.rooms.filter((r) => standingOfRoom(r) === "free").length;
+              return (
+                <div key={g.name} className="floor type-group">
+                  <div className="tg-head">
+                    <b>{g.name}</b>
+                    <span className="meta">
+                      {g.rooms.length} {g.rooms.length === 1 ? "room" : "rooms"} · {freeHere} free · {busy} occupied
+                    </span>
+                  </div>
+                  <div className="tiles">
+                    {g.rooms.map((r) => {
+                      const standing = standingOfRoom(r);
+                      const bed = r.bedType ? BED_WORD[r.bedType] ?? r.bedType : null;
+                      return (
+                        <RoomTile
+                          key={r.id}
+                          number={r.roomNumber}
+                          standing={standing}
+                          occupant={standing === "free" ? undefined : (occupant.get(r.roomNumber) ?? (standing === "occupied" ? "in-house" : standing === "ooo" || standing === "deficient" ? "out of service" : "held"))}
+                          physical={physicalOfRoom(r)}
+                          qualifier={r.isDeficient && standing !== "deficient" ? "fault reported" : undefined}
+                          note={bed ?? undefined}
+                          onSelect={() => setTarget({ kind: "room", id: r.id, label: `Room ${r.roomNumber}` })}
+                        />
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
           </div>
+          <p className="meta">
+            {items.length} rooms · select one to report a fault or see one already reported. A room&apos;s status changes through its own work — check-out,
+            housekeeping, inspection — not from this board.
+          </p>
 
           <section className="block">
             <div className="block-head">

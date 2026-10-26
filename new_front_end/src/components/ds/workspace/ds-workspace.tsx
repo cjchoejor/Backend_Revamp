@@ -102,7 +102,7 @@ import { S7Stay, S7_PANES } from "@/components/ds/steps/s7-stay";
 import { keysDue, keysDueWords } from "@/components/ds/steps/s7-rooms";
 import { S6_PANES } from "@/components/ds/steps/s6-checkin";
 import { S8CheckOut, S8_PANES } from "@/components/ds/steps/s8-checkout";
-import { S9Closed } from "@/components/ds/steps/s9-closed";
+import { S9Closed, S9_PANES } from "@/components/ds/steps/s9-closed";
 import { Overlay, atLeast, useRefreshEntry } from "@/components/ds/steps/kit";
 import { declineEntry } from "@/lib/api/reservation-setup";
 const atLeastFom = (level?: string | null) => atLeast(level, "L2");
@@ -772,20 +772,19 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const viewingPast = (viewing < currentOrder || (sealed && step.key !== "closed")) && !confirmStepActive;
   // The panes this step declares — Stay's Night audit, Room change, … — and which one is open.
   // Check-in gained a Rooms tab of its own (2026-10-06) — the rooms moved out of the Room card.
-  const panes: StepPane[] =
-    viewingPast || sealed
-      ? []
-      : step.key === "stay"
-        ? S7_PANES
-        : step.key === "checkin"
-          ? S6_PANES
-          : step.key === "setup"
-            ? S3_PANES
-            : step.key === "confirm"
-              ? S4_PANES
-              : step.key === "checkout"
-                ? S8_PANES
-                : [];
+  // The Closed step keeps its tail open on a sealed booking (a payment, a late charge, a tax
+  // invoice), so its tabs show on a CLOSED record too — never on a cancelled or expired one.
+  const panes: StepPane[] = (() => {
+    if (viewingPast) return [];
+    if (step.key === "closed") return entry.folio && entry.status !== "CANCELLED" && entry.status !== "EXPIRED" ? S9_PANES : [];
+    if (sealed) return [];
+    if (step.key === "stay") return S7_PANES;
+    if (step.key === "checkin") return S6_PANES;
+    if (step.key === "setup") return S3_PANES;
+    if (step.key === "confirm") return S4_PANES;
+    if (step.key === "checkout") return S8_PANES;
+    return [];
+  })();
   const pane = panes.some((p) => p.key === paneParam) ? paneParam : null;
   // The keys owed today on a move day — counted on Stay's Keys tab (2026-10-26).
   const keysOwedNow = step.key === "stay" && !viewingPast ? keysDue(entry, hotelToday) : { collect: [], handOver: [] };
@@ -1019,6 +1018,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
             entry={entry}
             past={viewingPast}
             close={closedStepActive ? { onClick: () => setCloseOpen(true), ready: canClose, reason: closeReason } : null}
+            pane={pane}
+            openPane={setPane}
           />
         );
       }

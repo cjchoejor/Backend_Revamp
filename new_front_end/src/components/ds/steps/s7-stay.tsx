@@ -18,7 +18,7 @@ import { SplitSettlementBlock } from "@/components/desk/workspace/split-settleme
 import { InterimPaymentBlock, StayExtensionBlock } from "@/components/desk/workspace/stay-money";
 import type { EntryDetail } from "@/types/api";
 import { StepCanvas, Tool, useRefreshEntry, type StepPane, OtherWaysTabs, InlineWay, ShutWay, useOpenOtherWay } from "./kit";
-import { BillingModelCard, DisputesCard, FaultsCard, HandoffsCard, RaiseDisputeDialog, TermsChangeCard } from "./s7-desk";
+import { WhoPaysCard, DisputesCard, FaultsCard, HandoffsCard, RaiseDisputeDialog, TermsChangeCard } from "./s7-desk";
 import { ChitsWaitingCard, FolioCard, PostChargeCard } from "./s7-folio";
 import { NightsCard } from "./s7-nights";
 import { FlagDeficientDialog, KeysCard, KeysDueNotice, RoomsInUseCard } from "./s7-rooms";
@@ -97,7 +97,7 @@ export function S7Stay({
         <DisputesCard entry={entry} tz={tz} onRaise={() => openWay("dispute")} />
         <FaultsCard entry={entry} tz={tz} onFlag={() => openWay("fault")} />
         <TermsChangeCard entry={entry} />
-        <BillingModelCard entry={entry} tz={tz} />
+        <WhoPaysCard entry={entry} tz={tz} />
         <div id={ID.guests}>
           <Tool>
             <IdentityProofBlock entry={entry} collapsible />

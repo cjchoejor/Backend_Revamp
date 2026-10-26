@@ -12,7 +12,7 @@
  */
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button, Chip, EmptyState, Icon } from "@/design-system";
 import { Help } from "@/components/ds/help";
@@ -24,6 +24,7 @@ import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
 import { markRoomCleaned, markRoomNeedsCleaning, type HousekeepingRoom } from "@/lib/api/housekeeping";
 import { fmtDate, fmtTime, plural, span } from "@/lib/ds/format";
+import { groupByRoomType } from "@/lib/ds/group-by-type";
 
 const BED: Record<string, string> = { KING: "King", QUEEN: "Queen", TWIN: "Twin", SINGLE: "Single" };
 
@@ -252,6 +253,11 @@ function OtherRooms({ rooms }: { rooms: HousekeepingRoom[] }) {
   const [open, setOpen] = useState<string | null>(null);
   const [reason, setReason] = useState("");
   const room = rooms.find((r) => r.roomId === open) ?? null;
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  // The form opens under the groups — bring it into view when it is off screen.
+  useEffect(() => {
+    if (open) panelRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [open]);
   const dirty = useMutation({
     mutationFn: () => markRoomNeedsCleaning(session!, room!.roomId, reason.trim()),
     onSuccess: (r) => {
@@ -268,51 +274,80 @@ function OtherRooms({ rooms }: { rooms: HousekeepingRoom[] }) {
   if (!rooms.length) return <EmptyState title="No other rooms" />;
   return (
     <div className="stack">
-      <div className="hk-tiles">
-        {rooms.map((r) => (
-          <button
-            key={r.roomId}
-            type="button"
-            className={`hk-tile ${r.state.toLowerCase()}${open === r.roomId ? " sel" : ""}`}
-            aria-expanded={open === r.roomId}
-            title={r.openFault ? `Fault open · ${r.openFault.description}` : undefined}
-            onClick={() => {
-              setOpen((o) => (o === r.roomId ? null : r.roomId));
-              setReason("");
-            }}
-          >
-            <b>{r.roomNumber}</b>
-            <span>{OTHER_WORD[r.state] ?? r.state}</span>
-          </button>
-        ))}
+      {/* The room types sit side by side and fill the row (2026-10-26, operator: "wasting a lot of space on the right"). */}
+      <div className="type-groups flow">
+      {groupByRoomType(rooms, (r) => r.roomTypeName, (r) => r.roomNumber).map((g) => {
+        const counts = (
+          [
+            ["ready", g.rooms.filter((r) => r.state === "READY").length],
+            ["guest in", g.rooms.filter((r) => r.state === "OCCUPIED").length],
+            ["out of order", g.rooms.filter((r) => r.state === "OUT_OF_ORDER").length],
+          ] as const
+        )
+          .filter(([, n]) => n > 0)
+          .map(([w, n]) => `${n} ${w}`)
+          .join(" · ");
+        return (
+          <div key={g.name} className="type-group">
+            <div className="tg-head">
+              <b>{g.name}</b>
+              <span className="meta">
+                {plural(g.rooms.length, "room")}
+                {counts ? ` · ${counts}` : ""}
+              </span>
+            </div>
+            <div className="hk-tiles">
+              {g.rooms.map((r) => (
+                <button
+                  key={r.roomId}
+                  type="button"
+                  className={`hk-tile ${r.state.toLowerCase()}${open === r.roomId ? " sel" : ""}`}
+                  aria-expanded={open === r.roomId}
+                  title={r.openFault ? `Fault open · ${r.openFault.description}` : undefined}
+                  onClick={() => {
+                    setOpen((o) => (o === r.roomId ? null : r.roomId));
+                    setReason("");
+                  }}
+                >
+                  <b>{r.roomNumber}</b>
+                  <span>{OTHER_WORD[r.state] ?? r.state}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        );
+      })}
       </div>
       {room ? (
-        <div className="hk-panel">
-          <b>Room {room.roomNumber}</b>
-          <span className="meta">
-            {[room.roomTypeName, room.bedType ? BED[room.bedType] ?? room.bedType : null, OTHER_WORD[room.state]].filter(Boolean).join(" · ")}
-          </span>
+        <div className="hk-panel wide" ref={panelRef}>
+          <div className="hk-panel-who">
+            <b>Room {room.roomNumber}</b>
+            <span className="meta">
+              {[room.roomTypeName, room.bedType ? BED[room.bedType] ?? room.bedType : null, OTHER_WORD[room.state]].filter(Boolean).join(" · ")}
+            </span>
+          </div>
           {room.state === "OCCUPIED" ? (
-            <p className="meta">A guest is in this room — it is cleaned as a stay-over, not put on the list.</p>
+            <p className="meta hk-panel-grow">A guest is in this room — it is cleaned as a stay-over, not put on the list.</p>
           ) : (
             <>
-              <label className="field">
+              <label className="field hk-panel-grow">
                 <span>Why does it need cleaning again?</span>
                 <input className="input" value={reason} maxLength={500} onChange={(e) => setReason(e.target.value)} placeholder="e.g. a spill found on inspection" />
               </label>
-              <div>
-                <Button
-                  kind="secondary"
-                  state={dirty.isPending ? "working" : reason.trim() ? "default" : "inert"}
-                  reason={reason.trim() ? undefined : "Say why first"}
-                  workingLabel="Putting it back…"
-                  onClick={() => dirty.mutate()}
-                >
-                  Needs cleaning again
-                </Button>
-              </div>
+              <Button
+                kind="secondary"
+                state={dirty.isPending ? "working" : reason.trim() ? "default" : "inert"}
+                reason={reason.trim() ? undefined : "Say why first"}
+                workingLabel="Putting it back…"
+                onClick={() => dirty.mutate()}
+              >
+                Needs cleaning again
+              </Button>
             </>
           )}
+          <Button kind="quiet" onClick={() => setOpen(null)}>
+            Close
+          </Button>
         </div>
       ) : null}
     </div>

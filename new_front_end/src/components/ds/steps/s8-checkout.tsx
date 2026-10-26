@@ -414,7 +414,7 @@ function DepartureHandoff({ entry, live, tz }: { entry: EntryDetail; live: boole
 
 /** The bill's lines, its room / space tabs and their server-summed footers — shown on the master
  * bill and again on the Add a charge tab. A tab opened here becomes the next charge's "For". */
-function BillLines({ entry, onTab }: { entry: EntryDetail; onTab: (target: string) => void }) {
+export function BillLines({ entry, onTab }: { entry: EntryDetail; onTab: (target: string) => void }) {
   const billing = useBilling(entry);
   const fo = billing.data?.folio ?? null;
   const cur = billing.data?.currency ?? entry.folio?.lines?.[0]?.currency ?? "BTN";
@@ -445,7 +445,7 @@ type BillFolio = NonNullable<NonNullable<ReturnType<typeof useBilling>["data"]>[
 
 /** Billed · received · still owed, read across the desk ("UIappeal", 2026-10-26). Every figure is
  * the billing summary's; the "still owed" cell takes its colour from the balance it shows. */
-function BillFigures({ fo, cur }: { fo: BillFolio | null; cur: string }) {
+export function BillFigures({ fo, cur }: { fo: BillFolio | null; cur: string }) {
   if (!fo) return null;
   const owed = Number(fo.outstandingBalance);
   const tone = owed > 0 ? "due" : owed < 0 ? "over" : "clear";

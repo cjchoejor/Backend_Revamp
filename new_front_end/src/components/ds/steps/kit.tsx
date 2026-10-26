@@ -830,6 +830,59 @@ export function SeeRow({
   );
 }
 
+/** One act on an action tile — its name and one short line of state, never an explanation. */
+export type ActTile = {
+  key: string;
+  label: string;
+  /** The state under the name: "Nu 6,031.41 still owed", "nothing owed". */
+  sub?: ReactNode;
+  tone?: "danger" | "warning" | "success";
+  primary?: boolean;
+  /** A tile that toggles something open below it, while it is open. */
+  pressed?: boolean;
+  icon?: IconName;
+  onClick?: () => void;
+  /** Why it can't be used here — shown in place of `sub`, and the tile is drawn shut. */
+  reason?: string;
+};
+
+/**
+ * Acts as tiles (2026-10-26, operator on the Closed step's stacked buttons, each with a "?":
+ * "make it better, UIappeal"). A grid of bordered tiles of one size, clickable at rest, each with
+ * its state on a second line; one that can't be used is dashed and says why in amber.
+ */
+export function ActTiles({ items, label }: { items: ReadonlyArray<ActTile | null | false | undefined>; label?: string }) {
+  const list = items.filter((t): t is ActTile => !!t);
+  if (!list.length) return null;
+  return (
+    <div className="act-tiles" role="group" aria-label={label}>
+      {list.map((t) => {
+        const shut = !t.onClick;
+        return (
+          <button
+            key={t.key}
+            type="button"
+            className={["act-tile", t.primary && !shut ? "primary" : "", shut ? "shut" : "", t.pressed ? "on" : ""].filter(Boolean).join(" ")}
+            aria-disabled={shut || undefined}
+            aria-pressed={t.pressed === undefined ? undefined : t.pressed}
+            onClick={shut ? undefined : t.onClick}
+          >
+            <span className="at-label">
+              {t.icon ? <Icon name={t.icon} /> : null}
+              {t.label}
+            </span>
+            {shut && t.reason ? (
+              <span className="at-sub">{t.reason}</span>
+            ) : t.sub ? (
+              <span className={`at-sub${t.tone ? ` ${t.tone}` : ""}`}>{t.sub}</span>
+            ) : null}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 /** "Park…" → "Park" — the name a "?" is about. */
 function actName(label: string): string {
   return label.replace(/[…:.]+$/, "").trim();

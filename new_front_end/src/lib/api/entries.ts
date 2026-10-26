@@ -772,7 +772,7 @@ export const DUPLICATE_ROUTES: Record<string, string[]> = {
   S3: ["S1", "S2"],
   S4: ["S1", "S2", "S3"],
   S5: ["S1"],
-  S7: ["S2", "S3"],
+  // Not from Stay (2026-10-26): it strands the in-house guest — the backend refuses.
 };
 
 export async function duplicateSegment(

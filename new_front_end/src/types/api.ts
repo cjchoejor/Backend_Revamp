@@ -298,6 +298,10 @@ export type FolioDetail = {
     fromModel?: string | null;
     toModel: string;
     createdAt: string;
+    /** Set when the row moved ONE line; null for a change of the whole bill's payer. */
+    folioLineId?: string | null;
+    reason?: string | null;
+    changeSource?: string | null;
   }>;
 };
 

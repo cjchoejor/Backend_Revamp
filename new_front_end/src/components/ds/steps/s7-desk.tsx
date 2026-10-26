@@ -23,7 +23,10 @@ import {
 } from "@/lib/api/in-stay";
 import type { HandoffChecklistItem } from "@/lib/api/handoffs";
 import { closeDispute } from "@/lib/api/checkout";
-import { fmtStamp } from "@/lib/ds/format";
+import { fmtStamp, money, plural } from "@/lib/ds/format";
+import { changePayer, getPayer, previewPayerChange } from "@/lib/api/payer";
+import { refusalText } from "@/lib/ds/translate";
+import { useBookedBy } from "./s8-parts";
 import type { DeficientConditionSummary, DisputeSummary, EntryDetail, HandoffSummary } from "@/types/api";
 import { Choice, DsDialog, Fact, Facts, Live, ReasonDialog, StepCard, atLeast, toastRefusal, useRefreshEntry, useStepMode, words, NotNow, useInlineWay } from "./kit";
 import { BILLING_WORD } from "./s7-folio";
@@ -554,35 +557,198 @@ export function TermsChangeCard({ entry }: { entry: EntryDetail }) {
   );
 }
 
-/* ------------------------------------------------------------------ billing model */
+/* ------------------------------------------------------------------ who pays */
 
-const MODELS = [
-  ["TOUR_OPERATOR_VOUCHER", BILLING_WORD.TOUR_OPERATOR_VOUCHER],
-  ["DIRECT_BILL", BILLING_WORD.DIRECT_BILL],
-  ["GUEST_PAY", BILLING_WORD.GUEST_PAY],
-] as const;
+/** The kinds of charge, in the words of a bill. */
+const KIND_WORDS: Array<[string, string]> = [
+  ["ROOM_CHARGE", "Room nights"],
+  ["F_AND_B", "Food and drink"],
+  ["SERVICE", "Services"],
+  ["OTHER", "Other charges"],
+];
 
-export function BillingModelCard({ entry, tz }: { entry: EntryDetail; tz: string }) {
+/** Who a payer is, in words — the agency or company by name when there is one. */
+export function payerWord(model: string, party: string | null): string {
+  if (model === "GUEST_PAY") return "the guest";
+  if (model === "DIRECT_BILL") return party ? `${party}, on account` : "the account";
+  if (model === "TOUR_OPERATOR_VOUCHER") return party ? `${party}, by voucher` : "the agent, by voucher";
+  if (model === "GOVERNMENT") return "the government account";
+  return words(model);
+}
+
+/** "Room nights → the guest · Food and drink, services → the guest", grouped by payer. */
+function splitWords(map: Record<string, string> | null, fallback: string | null, party: string | null): string {
+  const byPayer = new Map<string, string[]>();
+  for (const [kind, label] of KIND_WORDS) {
+    const m = map?.[kind] ?? fallback;
+    if (!m) continue;
+    byPayer.set(m, [...(byPayer.get(m) ?? []), label]);
+  }
+  if (byPayer.size === 0) return "not set";
+  if (byPayer.size === 1) return `Everything to ${payerWord([...byPayer.keys()][0], party)}`;
+  return [...byPayer].map(([m, kinds]) => `${kinds.join(", ")} → ${payerWord(m, party)}`).join(" · ");
+}
+
+/**
+ * Who pays (2026-10-26, operator ruling) — changed here, while the guest is staying. It replaced
+ * the Re-enter item that sent the booking back to Set up with no way back to Stay. The FOM picks
+ * the new payer and whether the charges already on the bill move with it; the server's preview
+ * says what each payer owes before and after; money already received stays with whoever paid it.
+ */
+export function WhoPaysCard({ entry, tz }: { entry: EntryDetail; tz: string }) {
+  const { session } = useSession();
+  const refresh = useRefreshEntry(entry.id);
+  const booked = useBookedBy(entry);
+  const fom = atLeast(session?.actorLevel, "L2");
   const folio = entry.folio ?? null;
-  const model = folio?.billingModel ?? null;
-  const known = MODELS.some(([v]) => v === model);
-  const history = [...(folio?.billingModelTransitions ?? [])].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  const read = useQuery({
+    queryKey: ["payer", entry.id, entry.updatedAt],
+    queryFn: () => getPayer(session!, entry.id),
+    enabled: !!session && !!folio,
+  });
+  const [open, setOpen] = useState(false);
+  const [to, setTo] = useState<string | null>(null);
+  const [move, setMove] = useState<"move" | "keep" | null>(null);
+  const [reason, setReason] = useState("");
+  const current = read.data?.current ?? folio?.billingModel ?? null;
+  const cur = folio?.lines?.[0]?.currency ?? "BTN";
+  const preview = useQuery({
+    queryKey: ["payer-preview", entry.id, entry.updatedAt, to, move],
+    queryFn: () => previewPayerChange(session!, entry.id, { billingModel: to!, moveExisting: move === "move" }),
+    enabled: open && !!session && !!to && !!move,
+    retry: false,
+  });
+  const run = useMutation({
+    mutationFn: () => changePayer(session!, entry.id, { billingModel: to!, moveExisting: move === "move", reason: reason.trim() }),
+    onSuccess: (r) => {
+      toast.success(
+        `Now billed to ${payerWord(r.to, booked.party)}${
+          r.linesMoved ? ` — ${plural(r.linesMoved, "line")} already on the bill moved with it` : " — the charges already on the bill stay where they were"
+        }`,
+      );
+      setOpen(false);
+      setTo(null);
+      setMove(null);
+      setReason("");
+      refresh([["payer", entry.id], ["settlement-targets"]]);
+    },
+    onError: (e) => toastRefusal(e, "Who pays could not be changed"),
+  });
+  const history = [...(folio?.billingModelTransitions ?? [])]
+    .filter((t) => !t.folioLineId)
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  const allowed = read.data?.allowed ?? [];
+  const canChange = !!read.data?.canChange;
+  const lines = read.data?.linesOnBill ?? folio?.lines?.length ?? 0;
+  const pv = preview.data ?? null;
+  const pvError = preview.error ? refusalText(preview.error) : null;
+  const ready = !!to && !!move && !!pv && !preview.isFetching && reason.trim().length > 0;
+
   return (
     <StepCard
-      title="Billing model"
-      meta="Set at Set up, before the folio existed. A change now opens a new pass through Re-enter · Change billing model, with the FOM's authority and a reason."
+      title="Who pays"
+      meta="Who each kind of charge on the bill goes to. It is set at Set up and can be changed here while the guest is staying — the booking stays on this step."
+      status={<span>{splitWords(read.data?.map ?? null, current, booked.party)}</span>}
+      acts={
+        canChange && !open ? (
+          <Live>
+            <Button
+              kind="secondary"
+              compact
+              state={fom ? "default" : "inert"}
+              reason={fom ? undefined : "Changing who pays needs the FOM"}
+              onClick={() => setOpen(true)}
+            >
+              Change who pays…
+            </Button>
+          </Live>
+        ) : null
+      }
     >
-      {known ? (
-        <Choice options={MODELS} value={model as (typeof MODELS)[number][0]} disabled />
-      ) : (
-        <span className="sm">{model ? BILLING_WORD[model] ?? words(model) : <span className="dash">not set</span>}</span>
-      )}
-      {history.map((t) => (
-        <div key={t.id} className="meta" style={{ marginTop: 6 }}>
-          {t.fromModel ? `${BILLING_WORD[t.fromModel] ?? words(t.fromModel)} → ` : "set to "}
-          {BILLING_WORD[t.toModel] ?? words(t.toModel)} · {fmtStamp(t.createdAt, tz)}
+      {open ? (
+        <Live>
+          <div className="form2" style={{ marginTop: 4 }}>
+            <div className="wide field">
+              <label>Bill it to</label>
+              <Choice
+                options={allowed.map((m) => [m, payerWord(m, booked.party)] as const)}
+                value={to}
+                onChange={(v) => setTo(v)}
+              />
+            </div>
+            <div className="wide field">
+              <label>
+                The {plural(lines, "charge")} already on the bill
+                <Help label="About the charges already on the bill">
+                  Moving them bills every charge so far to the new payer as well — each with its service charge and GST. Keeping them leaves
+                  them with whoever they are billed to now; only charges from now on go to the new payer. Money already paid always stays with
+                  whoever paid it.
+                </Help>
+              </label>
+              <Choice
+                options={[
+                  ["move", "Move them to the new payer too"],
+                  ["keep", "Keep them where they are · only new charges move"],
+                ] as const}
+                value={move}
+                onChange={(v) => setMove(v)}
+              />
+            </div>
+          </div>
+          {pvError ? (
+            <p className="sm stop-ink" role="alert">
+              {pvError}
+            </p>
+          ) : pv ? (
+            <div className="payer-shares" role="group" aria-label="What each payer owes">
+              {pv.byPayer.map((s) => {
+                const before = Number(s.before);
+                const after = Number(s.after);
+                return (
+                  <div key={s.billingModel} className="ps-cell">
+                    <span className="ps-k">{payerWord(s.billingModel, booked.party)}</span>
+                    <span className="ps-v money">
+                      <span className={before < 0 ? "warn-ink" : undefined}>{money(Math.abs(before), cur)}</span> <span className="ps-arrow">→</span>{" "}
+                      <b className={after < 0 ? "warn-ink" : after > before ? "stop-ink" : undefined}>{money(Math.abs(after), cur)}</b>
+                    </span>
+                    <span className="ps-note">{after < 0 ? "paid over — refunded or used at check-out" : after > 0 ? "to pay" : "nothing to pay"}</span>
+                  </div>
+                );
+              })}
+            </div>
+          ) : to && move ? (
+            <p className="sm meta">Working it out…</p>
+          ) : null}
+          {pv ? <p className="sm">{pv.linesMoving ? `${plural(pv.linesMoving, "line")} on the bill move to the new payer.` : "No line on the bill moves."}</p> : null}
+          <div className="field" style={{ marginTop: 8 }}>
+            <label>Why · kept with the change</label>
+            <input className="input" value={reason} maxLength={1000} placeholder="the company agreed to cover the stay" onChange={(e) => setReason(e.target.value)} />
+          </div>
+          <div className="row-acts" style={{ marginTop: 10 }}>
+            <Button
+              state={run.isPending ? "working" : ready ? "default" : "inert"}
+              reason={ready ? undefined : !to ? "Choose who pays" : !move ? "Say what happens to the charges already on the bill" : !reason.trim() ? "Say why" : undefined}
+              workingLabel="Changing…"
+              onClick={() => run.mutate()}
+            >
+              Change who pays
+            </Button>
+            <Button kind="quiet" state={run.isPending ? "inert" : "default"} onClick={() => setOpen(false)}>
+              Not now
+            </Button>
+          </div>
+        </Live>
+      ) : null}
+      {history.length ? (
+        <div style={{ marginTop: 8, display: "grid", gap: 2 }}>
+          {history.map((t) => (
+            <div key={t.id} className="sm">
+              {t.fromModel ? `${payerWord(t.fromModel, booked.party)} → ` : "Set to "}
+              {payerWord(t.toModel, booked.party)} <span className="meta">· {fmtStamp(t.createdAt, tz)}{t.reason ? ` · “${t.reason}”` : ""}</span>
+            </div>
+          ))}
         </div>
-      ))}
+      ) : null}
     </StepCard>
   );
 }

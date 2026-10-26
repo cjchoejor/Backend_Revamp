@@ -1179,3 +1179,65 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .hk-panel { display: grid; gap: var(--s2); padding: var(--s3); border: 1px solid var(--line-2); border-radius: var(--r-card, 6px); max-width: 560px; }
 /* The bell's housekeeping line. */
 .ds .panel-row.hk-bell { border-left: 3px solid var(--danger); }
+
+/* Who pays (2026-10-26) — each payer's share before → after, in the bill band's shape. */
+.ds .payer-shares { display: flex; flex-wrap: wrap; margin-top: var(--s3); border: 1px solid var(--line-2); border-radius: var(--r-card, 6px); background: var(--surface); overflow: hidden; }
+.ds .payer-shares .ps-cell { flex: 1 1 200px; display: grid; gap: 2px; padding: var(--s3) var(--s4); border-right: 1px solid var(--line); }
+.ds .payer-shares .ps-cell:last-child { border-right: 0; }
+.ds .payer-shares .ps-k { font-size: 12px; font-weight: 600; color: var(--ink-3); }
+.ds .payer-shares .ps-v { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.ds .payer-shares .ps-v b { font-size: 18px; font-weight: 800; }
+.ds .payer-shares .ps-arrow { color: var(--ink-3); font-weight: 400; }
+.ds .payer-shares .ps-note { font-size: 12px; color: var(--ink-3); }
+
+/* Action tiles (2026-10-26, operator on the Closed step's stacked buttons: "make it better,
+   UIappeal"). One bordered tile per act, clickable at rest, its state on its second line; a tile
+   that can't be used is dashed and says why. */
+.ds .act-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: var(--s2); margin-top: var(--s3); }
+.ds .act-tile {
+  display: grid; gap: 3px; align-content: start; justify-items: start; text-align: left;
+  min-height: 60px; padding: 10px 12px;
+  background: var(--surface); color: var(--ink);
+  border: 1px solid var(--line-2); border-radius: var(--r-card, 6px);
+  box-shadow: 0 1px 0 var(--line);
+  font: inherit; cursor: pointer;
+}
+.ds .act-tile .at-label { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 600; line-height: 1.25; }
+.ds .act-tile .at-sub { font-size: 12.5px; line-height: 1.3; font-weight: 500; color: var(--ink-3); }
+.ds .act-tile .at-sub.danger { color: var(--danger); font-weight: 700; }
+.ds .act-tile .at-sub.warning { color: var(--warning); font-weight: 600; }
+.ds .act-tile .at-sub.success { color: var(--success); font-weight: 600; }
+.ds .act-tile:hover { background: var(--surface-2); border-color: var(--ink-3); }
+.ds .act-tile:active { background: var(--line); }
+.ds .act-tile:focus-visible { outline: none; box-shadow: var(--focus); }
+.ds .act-tile.primary { background: var(--ink); border-color: var(--ink); color: #fff; }
+.ds .act-tile.primary .at-sub { color: rgba(255, 255, 255, 0.82); }
+.ds .act-tile.primary .at-sub.danger { color: #ffd6cf; }
+.ds .act-tile.primary:hover { background: var(--ink-2); border-color: var(--ink-2); }
+.ds .act-tile.on { background: var(--accent-soft); border-color: var(--accent); box-shadow: inset 0 -3px 0 var(--accent); }
+.ds .act-tile.shut, .ds .act-tile.shut:hover, .ds .act-tile.shut:active { cursor: default; background: var(--surface-2); border-style: dashed; border-color: var(--line-2); color: var(--ink-3); box-shadow: none; }
+.ds .act-tile.shut .at-sub { color: var(--warning); font-weight: 600; }
+
+/* Rooms grouped by room type (2026-10-26) — on the Rooms cards and Housekeeping. A heading per
+   type with its counts, the tiles beneath. */
+.ds .type-groups { display: grid; gap: var(--s4); }
+.ds .type-group { display: grid; gap: var(--s2); }
+.ds .type-group .tg-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s2); padding-bottom: 4px; border-bottom: 1px solid var(--line-2); }
+.ds .type-group .tg-head b { font-size: 14.5px; font-weight: 700; color: var(--ink); }
+.ds .stack > .type-group + .type-group { margin-top: var(--s2); }
+/* Side by side (2026-10-26, operator: "wasting a lot of space on the right, be efficient"):
+   each room type a box as wide as its rooms; the boxes fill each row and wrap. */
+.ds .type-groups.flow { display: flex; flex-wrap: wrap; gap: var(--s3); align-items: stretch; }
+.ds .type-groups.flow > .type-group {
+  flex: 1 1 auto; align-content: start; gap: var(--s2);
+  padding: var(--s2) var(--s3) var(--s3); border: 1px solid var(--line); border-radius: var(--r-card, 6px); background: var(--surface);
+}
+.ds .type-groups.flow > .type-group .tg-head { border-bottom: 0; padding-bottom: 0; }
+.ds .type-groups.flow .hk-tiles { display: flex; flex-wrap: wrap; gap: 6px; }
+.ds .type-groups.flow .hk-tile { width: 78px; }
+.ds .type-groups.flow > .floor > .tiles:not(.desk-root *) { display: flex; flex-wrap: wrap; gap: 10px; }
+.ds .type-groups.flow > .floor > .tiles > * { width: 150px; }
+/* The open room's form, once, under the groups — one line across. */
+.ds .hk-panel.wide { max-width: none; display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--s3); border-color: var(--accent); }
+.ds .hk-panel.wide .hk-panel-who { display: grid; gap: 2px; min-width: 180px; }
+.ds .hk-panel.wide .hk-panel-grow { flex: 1 1 280px; margin: 0; }
