@@ -43,11 +43,11 @@ Endpoints that show the pattern:
 
 Both `UI-experiment3` and `integration-prod-frontend` are fully pushed. **Nothing is merged between them automatically** — a plain merge would be 119 conflicting backend files (see below), so work is ported deliberately, piece by piece.
 
-## Porting the user's own backend work into this branch — 1 of 8 left
+## Porting the user's own backend work into this branch — all 8 closed (2026-10-26)
 
 The user's 16 commits on `integration-prod-frontend` were not in this branch and are being brought across **without breaking his code**. A straight merge was never viable: 119 backend files were edited independently on both sides, so each theme is ported deliberately and verified before the next.
 
-**Status as of 2026-09-01: seven themes closed, one left.**
+**Status as of 2026-10-26: all eight themes closed.** The S3 billing-model recommendation that rode on the same commit as the key loss is still separate (below).
 
 | Theme | Status |
 |---|---|
@@ -58,7 +58,7 @@ The user's 16 commits on `integration-prod-frontend` were not in this branch and
 | **Availability 500 fix** (stale `contactNumber` select) | ✅ **not applicable** — the bug was self-inflicted on the other branch by its own `contactNumbers` rename. Fixed here as part of the RatePackage port, where the same rename happens. |
 | **Confirmed holds never expire; a hold blocks every room it holds** | ✅ **already fixed here**, differently: `roomsClaimedByReservedEntry` in [entry-inventory-claim.ts](back_end/src/lib/entry-inventory-claim.ts) falls back to the hold's rooms with NO expiry check, so a confirmed booking stays blocked regardless of TTL. The flat `expiresAt > now` in the availability hold query is therefore redundant, not dangerous. Do not port `07a2c98`. |
 | **S3→S2 backflow retires the accepted quotation** | ⏸ **deferred by the operator** — logged in [docs/bug.md](docs/bug.md). Real in code (`s3-reentry-state-machine.ts` never touches quotations) but defused here, because `resolveOperativeQuotation` is segment-scoped so a stale accepted quote from a sealed segment is invisible to every gate. 0 affected bookings on `legphel_pms_dev2`. |
-| **S8 key loss** (`keyCountLost` + required comment) | ⬜ **the one left — and the only real collision.** |
+| **S8 key loss** (`keyCountLost` + required comment) | ✅ ported 2026-10-26 (`0003d6e` backend, `5eadfc4` desk) and made **room-wise** at the operator's ask ("tell the system which room's key exactly is missing"): both changes survive, as planned below. |
 
 ### The remaining collision: `recordKeyReturn`
 
@@ -68,6 +68,8 @@ Both branches rewrote the same function and the two changes are **complementary,
 - **The user's** (commit `4e36b65` on the other branch): `KeyReturnRecord.keyCountLost` with a DB check that returned + lost never exceeds issued, a required comment on any declared loss, and a three-way trace (`KEY_RETURN.KEYS_LOST` / `.DISCREPANCY` / `.RECORDED`). Answers *was it lost*.
 
 A lost key deliberately does NOT block S8→S9 and posts no automatic charge — no damage rate list exists to price one against.
+
+**How the two were joined (2026-10-26)**: the desk marks each room's key **Back** or **Lost**; `recordKeyReturn` takes `returnedRoomIds` + `lostRoomIds` (and `keyCountLost` for a booking keyed by count), stamps `RoomAssignment.keyReturnedAt` / the new `keyLostAt` in one transaction with the record, keeps `KeyReturnRecord.keyCountLost` + the new `lostRoomIds` under the user's DB check (returned + lost ≤ issued; migration `20261026100000_key_return_lost_keys`), refuses a room both back and lost, a lost room with no key out, a count that disagrees with the rooms named, and a loss with no note (kept even when the counts reconcile), and traces `KEY_RETURN.KEYS_LOST` / `.DISCREPANCY` / `.RECORDED` with the rooms. `countOutstandingKeys` leaves a lost key out. Still no hold on S8→S9 and no charge. Verified over HTTP on a throwaway two-room booking at Check-out (the five refusals, nothing recorded by them) and through the desk (201 back, 202 lost, the note naming Room 202, the record and stamps, the trace).
 
 The same commit also carried the **S3 billing-model recommendation** (`services/domain/billing-model-recommendation.ts`, `scripts/add-agent-billing-models.ts`), which is independent of the key work and can be ported on its own.
 
