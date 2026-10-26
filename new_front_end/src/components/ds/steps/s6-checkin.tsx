@@ -49,8 +49,11 @@ import {
   type StepPane,
   OtherWaysTabs,
   ShutWay,
+  InlineWay,
+  atLeast,
 } from "./kit";
 import { RoomsTableCard } from "./rooms-table";
+import { CancelAtArrivalDialog } from "./s4-other-ways";
 import { InlineTool, claimWord, distinctRoomRows, physicalWord, physicallyReady, revealBlock, roomLabel } from "./s6-shared";
 import { Help } from "@/components/ds/help";
 
@@ -257,11 +260,20 @@ export function S6CheckIn({
                 {
                   key: "cancel",
                   label: "Cancel",
-                  content: (
+                  // The guest is at the desk but is not staying (2026-10-26, SIG-S6 §8.6 / Policy 35):
+                  // the same cancel as Reserve and Arrival — the FOM's, the agreed charge, the GM waives.
+                  content: atLeast(session?.actorLevel, "L2") ? (
+                    <InlineWay render={(done) => <CancelAtArrivalDialog entry={entry} onClose={done} />} />
+                  ) : (
                     <ShutWay
                       act="Cancel the booking"
-                      why="Not at check-in — once the guest is at the desk it is not a cancellation."
-                      help={<p>Cancelling is recorded at Set up or at Arrival. A guest who leaves after checking in is an early departure, at Stay.</p>}
+                      why="Needs the FOM — cancelling a reserved booking."
+                      help={
+                        <p>
+                          The guest is at the desk but is not staying. The charge follows the terms they agreed to, the rest of the
+                          advance goes back, and the rooms are released. Once they are checked in, leaving is an early departure, at Stay.
+                        </p>
+                      }
                     />
                   ),
                 },

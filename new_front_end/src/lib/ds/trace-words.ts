@@ -148,6 +148,7 @@ const WORDS: Record<string, string> = {
   "ENTRY.S3.CANCELLED": "Cancelled",
   "ENTRY.S4.CANCELLED": "Cancelled",
   "ENTRY.S5.CANCELLED": "Cancelled",
+  "ENTRY.S6.CANCELLED": "Cancelled at check-in",
   "ROOM.DEFICIENCY_REPORTED": "Room fault reported",
   "SPACE.DEFICIENCY_REPORTED": "Hall fault reported",
   "DEFICIENCY.VERIFIED": "Fault confirmed",
