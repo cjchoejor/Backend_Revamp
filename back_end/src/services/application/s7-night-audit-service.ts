@@ -15,7 +15,12 @@ import { maybeWriteCreditCeilingEvents } from "../domain/s7-folio-lines-service.
 import { resolveBillingModelForNewLine } from "../../lib/billing-model-defaults.js";
 import { resolveChargeRates } from "../infrastructure/compute-stay-charges.js";
 import { mulMoney, round2, toDecimal, ZERO } from "../../lib/money.js";
-import { gstLineDescription, serviceChargeLineDescription } from "../../lib/folio-tax-lines.js";
+import {
+  NIGHT_AUDIT_MEAL_PLAN_DESCRIPTION_PREFIX,
+  NIGHT_AUDIT_ROOM_CHARGE_DESCRIPTION_PREFIX,
+  gstLineDescription,
+  serviceChargeLineDescription,
+} from "../../lib/folio-tax-lines.js";
 
 function operatingDateUtc(date: Date): Date {
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 0, 0, 0, 0));
@@ -277,7 +282,7 @@ async function planNightForEntries(
           roomNumber,
           amount: accommodationPerNight,
           lineType: FolioLineType.ROOM_CHARGE,
-          description: `Night audit room charge · Room ${roomNumber}`,
+          description: `${NIGHT_AUDIT_ROOM_CHARGE_DESCRIPTION_PREFIX} · Room ${roomNumber}`,
           // An FOC room prices to 0 already; a room negotiated SC- or GST-exempt at S2 keeps
           // that exemption on the ledger, exactly as its frozenTotal was computed.
           serviceChargeApplies: a.isFoc ? false : a.serviceChargeApplies !== false,
@@ -293,7 +298,7 @@ async function planNightForEntries(
             roomNumber,
             amount: mealsPerNight,
             lineType: FolioLineType.F_AND_B,
-            description: `Night audit meal plan · Room ${roomNumber}`,
+            description: `${NIGHT_AUDIT_MEAL_PLAN_DESCRIPTION_PREFIX} · Room ${roomNumber}`,
             serviceChargeApplies: a.isFoc ? false : a.serviceChargeApplies !== false,
             gstApplies: a.isFoc ? false : a.gstApplies !== false,
           });

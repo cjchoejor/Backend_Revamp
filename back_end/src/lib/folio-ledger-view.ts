@@ -147,6 +147,13 @@ export type FolioLedgerView<L extends LedgerLineLike = LedgerLineLike, P extends
   };
 };
 
+/**
+ * From this moment every posting path writes a charge's SC/GST beside it on the ledger (the night
+ * audit began on 18–19 Aug 2026; a day's margin so a night audited before the change keeps its
+ * read-time tax). A room night posted since then is never taxed again at render.
+ */
+export const LEDGER_TAX_LINES_SINCE = new Date("2026-08-20T00:00:00Z");
+
 /** SC then compound GST on (net + SC), each rounded once on the aggregate — the legacy room-line rule. */
 export function legacyTaxOn(
   net: Prisma.Decimal,
@@ -195,11 +202,31 @@ export function buildFolioLedgerView<L extends LedgerLineLike, P extends LedgerP
   const combinedTaxLines = covered.filter((l) => classifyFolioLine(l) === "LEGACY_COMBINED_TAX");
   const combinedTax = sumMoney(combinedTaxLines.map((l) => l.amount));
 
-  // A room line is "covered" by ledger tax when a companion exists for the same night-audit run —
-  // the structural pairing the audit writes (mirrors buildFinalInvoiceFigures' original rule).
+  // A room line is "covered" by ledger tax — its SC/GST must NOT be computed again — when:
+  //   1. a companion names it: same room, same night, its exact description (how postCharge and
+  //      the night audit both write them), or
+  //   2. it carries an audit-run stamp and that run carries companions (the original rule), or
+  //   3. it was posted after the night audit began writing companions: from then on every posting
+  //      path writes its tax beside the charge, and a room night posted without any is one that
+  //      was deliberately not taxed (a waived or FOC room).
+  // The run stamp alone missed every night the per-booking audit posts — it writes no hotel-wide
+  // record, so its lines carry no stamp — and the master bill, the tax invoice and the final
+  // invoice email taxed those nights a SECOND time (2026-10-26, ENT-20261023-0001: Nu 13,083 on
+  // the bill against Nu 11,781 on the ledger). A document must always equal the ledger it reads.
   const auditRunsWithCompanions = new Set(
     [...scLines, ...gstLines].map((l) => l.nightAuditRecordId).filter((id): id is string => !!id),
   );
+  const companionKey = (roomId: string | null, chargeDate: Date, description: string) => `${roomId ?? ""}|${ymd(chargeDate)}|${description}`;
+  const namedByCompanion = new Set(
+    [...scLines, ...gstLines].flatMap((c) => {
+      const base = companionBaseDescription(c.description);
+      return base ? [companionKey(c.roomId ?? null, c.chargeDate, base)] : [];
+    }),
+  );
+  const taxCoveredOnLedger = (line: L) =>
+    namedByCompanion.has(companionKey(line.roomId ?? null, line.chargeDate, line.description)) ||
+    (!!line.nightAuditRecordId && auditRunsWithCompanions.has(line.nightAuditRecordId)) ||
+    line.postedAt.getTime() >= LEDGER_TAX_LINES_SINCE.getTime();
   // …and a folio carrying an imported tax line is covered outright: computing tax on its room
   // line as well is what made every imported bill overstate itself by exactly that line.
   const taxAlreadyOnLedger = combinedTax.gt(0);
@@ -226,10 +253,7 @@ export function buildFolioLedgerView<L extends LedgerLineLike, P extends LedgerP
       component,
       isRoom,
       isCorrection: (line.description ?? "").startsWith(CORRECTION_LINE_PREFIX),
-      legacyTaxAtRender:
-        isRoom &&
-        !taxAlreadyOnLedger &&
-        !(!!line.nightAuditRecordId && auditRunsWithCompanions.has(line.nightAuditRecordId)),
+      legacyTaxAtRender: isRoom && !taxAlreadyOnLedger && !taxCoveredOnLedger(line),
     };
   });
 

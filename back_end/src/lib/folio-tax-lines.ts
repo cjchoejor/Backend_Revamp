@@ -29,6 +29,15 @@ export const SALES_TAX_CORRECTION_DESCRIPTION_PREFIX = "Sales tax correction on:
 /** `Service charge correction on: <base description>` — the SC delta a charge correction posts (2026-08-21). */
 export const SERVICE_CHARGE_CORRECTION_DESCRIPTION_PREFIX = "Service charge correction on:";
 
+/**
+ * The night audit's own lines for one room-night (2026-09-11: the meal plan is its own line).
+ * Together with their SC/GST they are the posted part of the quoted stay — readers that weigh the
+ * posted stay against the quotation (the interim figures) recognise them by these words, never by
+ * the audit-run stamp: the per-booking audit writes no hotel-wide record, so its lines carry none.
+ */
+export const NIGHT_AUDIT_ROOM_CHARGE_DESCRIPTION_PREFIX = "Night audit room charge";
+export const NIGHT_AUDIT_MEAL_PLAN_DESCRIPTION_PREFIX = "Night audit meal plan";
+
 /** `Service charge (10.00%) on: <base description>` */
 export function serviceChargeLineDescription(rate: number, baseDescription: string): string {
   return `${SERVICE_CHARGE_DESCRIPTION_PREFIX}${(rate * 100).toFixed(2)}%) on: ${baseDescription}`;

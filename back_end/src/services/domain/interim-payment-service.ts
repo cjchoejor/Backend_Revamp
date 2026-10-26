@@ -4,7 +4,7 @@ import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { allocateReadableId } from "../../lib/readable-id.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { applyInboundPaymentToFolioOutstanding } from "../../lib/folio-outstanding-from-payment.js";
-import { classifyFolioLine } from "../../lib/folio-tax-lines.js";
+import { NIGHT_AUDIT_MEAL_PLAN_DESCRIPTION_PREFIX, classifyFolioLine, companionBaseDescription } from "../../lib/folio-tax-lines.js";
 import { round2, sumMoney, toDecimal, ZERO } from "../../lib/money.js";
 import {
   enforceInterimGuestAnswerRecordedBeforePayment,
@@ -360,20 +360,33 @@ export async function computeInterimFigures(
   const nightsSlept = checkIn ? Math.max(0, Math.min(nightsTotal, Math.round((today.getTime() - checkIn.getTime()) / DAY_MS))) : 0;
   const nightsToCome = Math.max(0, nightsTotal - nightsSlept);
 
-  // Room nights posted so far = the ROOM_CHARGE lines + the SC/GST companions the night audit
-  // wrote beside them (stamped with the audit run). Everything else on the ledger is "other
-  // charges" — F&B, services, extras and their own tax — which the projection carries as-is.
+  // The posted part of the quoted stay = what the night audit posted for each night — the room
+  // charge, the meal plan's own line (since 2026-09-11) — and the SC/GST beside each. The quoted
+  // stay total already holds all of it, so none of it may count again as "other charges".
+  // Everything else on the ledger — F&B ordered, services, extras and their own tax — is carried
+  // as-is. (2026-10-26: this read the audit-run stamp to find the tax, which the per-booking audit
+  // does not write, and counted the meal-plan line as an extra; both pushed the projected total —
+  // and so the ask — above what the stay costs.)
   const lines = entry.folio?.lines ?? [];
   const roomLineTypes = new Set<string>(["ROOM_CHARGE", "STAY"]);
+  const dayOf = (d: Date) => d.toISOString().slice(0, 10);
+  const stayKey = (roomId: string | null, chargeDate: Date, description: string) => `${roomId ?? ""}|${dayOf(chargeDate)}|${description}`;
+  const isStayCharge = (l: (typeof lines)[number]) =>
+    classifyFolioLine(l) === "CHARGE" &&
+    (roomLineTypes.has(String(l.lineType)) ||
+      (String(l.lineType) === "F_AND_B" && l.description.startsWith(NIGHT_AUDIT_MEAL_PLAN_DESCRIPTION_PREFIX)));
+  const stayKeys = new Set(lines.filter(isStayCharge).map((l) => stayKey(l.roomId ?? null, l.chargeDate, l.description)));
   let roomPosted = ZERO;
   let billed = ZERO;
   for (const l of lines) {
     const amt = toDecimal(l.amount);
     billed = billed.add(amt);
     const cls = classifyFolioLine(l);
-    const isRoom = roomLineTypes.has(String(l.lineType)) && cls === "CHARGE";
-    const isRoomTax = (cls === "SERVICE_CHARGE" || cls === "GST") && !!l.nightAuditRecordId;
-    if (isRoom || isRoomTax) roomPosted = roomPosted.add(amt);
+    const base = cls === "SERVICE_CHARGE" || cls === "GST" ? companionBaseDescription(l.description) : null;
+    const isStayTax =
+      (cls === "SERVICE_CHARGE" || cls === "GST") &&
+      ((!!base && stayKeys.has(stayKey(l.roomId ?? null, l.chargeDate, base))) || !!l.nightAuditRecordId);
+    if (isStayCharge(l) || isStayTax) roomPosted = roomPosted.add(amt);
   }
   const otherCharges = billed.sub(roomPosted);
 
