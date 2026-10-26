@@ -31,7 +31,6 @@ import {
   recordRoomInspection,
 } from "@/lib/api/checkout";
 import { getNightAuditRecord, openDispute, postCreditNote } from "@/lib/api/in-stay";
-import { listGuestRequests } from "@/lib/api/booking-notes";
 import { recordCreditExtension } from "@/lib/api/reservation-setup";
 import { openFolioDocumentPdf, openInvoicePdf } from "@/lib/api/documents";
 import { deriveFinancials, effectiveCheckOutIso } from "@/lib/desk/workspace";
@@ -70,6 +69,7 @@ import {
   InlineWay,
   ShutWay,
   useOpenOtherWay,
+  type StepPane,
 } from "./kit";
 import {
   BILLING_MODEL_WORD,
@@ -80,7 +80,6 @@ import {
   HANDOFF_STATE_WORD,
   INVOICE_STATE_WORD,
   ON_ACCOUNT_MODELS,
-  isOpenDispute,
   lastStayNight,
   useBilling,
   useBookedBy,
@@ -125,7 +124,28 @@ function distinctRooms(entry: EntryDetail) {
 
 /* ------------------------------------------------------------------ the step */
 
-export function S8CheckOut({ entry, past, goToStep }: { entry: EntryDetail; past: boolean; goToStep: (n: number) => void }) {
+/**
+ * Check-out's pane (2026-10-26, operator: "add this add or correct a charge as a tab in stage 8,
+ * it can also show the folio table again in that tab"). The last-morning charges and corrections
+ * have a tab of their own, the bill's lines above the form. Like Stay's, the pane is hidden,
+ * never unmounted, so a half-typed charge survives a look at This step.
+ */
+export const S8_PANES: StepPane[] = [{ key: "charges", label: "Add a charge", cards: [] }];
+
+export function S8CheckOut({
+  entry,
+  past,
+  goToStep,
+  pane = null,
+  openPane,
+}: {
+  entry: EntryDetail;
+  past: boolean;
+  goToStep: (n: number) => void;
+  /** Which pane is open — null is This step. */
+  pane?: string | null;
+  openPane?: (key: string | null) => void;
+}) {
   const { session } = useSession();
   const clock = useHotelClock(60_000);
   const refresh = useRefreshEntry(entry.id);
@@ -172,16 +192,47 @@ export function S8CheckOut({ entry, past, goToStep }: { entry: EntryDetail; past
     />
   );
 
+  const chargeable = live && folio?.state === "LIVE";
+  // A pane is hidden, never unmounted — see S8_PANES.
+  const at = (k: string | null) => ((pane ?? null) === k ? undefined : true);
+
   return (
     <StepCanvas past={past}>
-      <DisputesCard entry={entry} tz={clock.tz} />
-      <FolioComplete entry={entry} live={live} tz={clock.tz} onBackToStay={() => openWay("stay")} goToStep={goToStep} />
-      <MasterBill entry={entry} tz={clock.tz} onTab={setChargeTarget} />
-      {live && folio?.state === "LIVE" ? <AddOrCorrectCharge entry={entry} target={chargeTarget} setTarget={setChargeTarget} /> : null}
-      <HowSettled entry={entry} live={live} tz={clock.tz} />
-      <OverpaidCard entry={entry} live={live} />
-      <Invoices entry={entry} live={live} tz={clock.tz} />
-      <Departure entry={entry} live={live} />
+      <div className="pane" hidden={at(null)}>
+        <DisputesCard entry={entry} tz={clock.tz} />
+        <MasterBill
+          entry={entry}
+          tz={clock.tz}
+          onTab={setChargeTarget}
+          onAddCharge={chargeable && openPane ? () => openPane("charges") : undefined}
+        />
+        <HowSettled entry={entry} live={live} tz={clock.tz} onBackToStay={() => openWay("stay")} goToStep={goToStep} />
+        <OverpaidCard entry={entry} live={live} />
+        <Invoices entry={entry} live={live} tz={clock.tz} />
+        <Departure entry={entry} live={live} />
+        <DepartureHandoff entry={entry} live={live} tz={clock.tz} />
+      </div>
+
+      <div className="pane" hidden={at("charges")}>
+        <FolioTableCard entry={entry} onTab={setChargeTarget} />
+        {chargeable ? (
+          <AddOrCorrectCharge entry={entry} target={chargeTarget} setTarget={setChargeTarget} />
+        ) : (
+          <StepCard
+            title="Add or correct a charge"
+            status={
+              <span className="warn-ink">
+                {!folio
+                  ? "There is no bill on this booking."
+                  : isSettled(folio.state)
+                    ? "The bill is settled — a charge found now is posted on the Closed step, as a late charge."
+                    : `The bill is ${FOLIO_STATE_WORD[folio.state] ?? words(folio.state)} — charges can be added only while it is open.`}
+              </span>
+            }
+          />
+        )}
+      </div>
+
       {/* Other ways as sub-tabs (2026-10-17), each panel the form its button used to open. */}
       <OtherWaysTabs
         tabs={[
@@ -204,44 +255,67 @@ export function S8CheckOut({ entry, past, goToStep }: { entry: EntryDetail; past
   );
 }
 
-/* ------------------------------------------------------------------ is the folio complete */
+/* ------------------------------------------------------------------ the last night's audit */
 
-function FolioComplete({
+/**
+ * Settlement refuses while the last night is unaudited, so the warning sits on the settle card
+ * (2026-10-26 — "Is the folio complete?" is gone; Back to Stay lives in Other ways). The Stay
+ * step reads the final night's audit with the same query key.
+ */
+function UnauditedLastNight({
   entry,
   live,
-  tz,
   onBackToStay,
   goToStep,
 }: {
   entry: EntryDetail;
   live: boolean;
-  tz: string;
   onBackToStay: () => void;
   goToStep: (n: number) => void;
 }) {
   const { session } = useSession();
-  const refresh = useRefreshEntry(entry.id);
   const fom = atLeast(session?.actorLevel, "L2");
-  // The Stay step reads the final night's audit the same way (one query key for both).
   const lastNight = useMemo(() => lastStayNight(effectiveCheckOutIso(entry)), [entry]);
   const audit = useQuery({
     queryKey: ["night-audit", lastNight],
     queryFn: () => getNightAuditRecord(session!, lastNight!),
-    enabled: !!session && !!lastNight,
+    enabled: !!session && !!lastNight && live,
   });
-  const audited = audit.data?.runStatus === "COMPLETE";
-  // The guest's requests (BE-64, 2026-10-12) — one still to arrange is worth a look before they go.
-  const requests = useQuery({
-    queryKey: ["guest-requests", entry.id],
-    queryFn: () => listGuestRequests(session!, entry.id),
-    enabled: !!session,
-  });
-  const openRequests = requests.data?.counts.open ?? 0;
-  const lines = entry.folio?.lines ?? [];
-  const open = (entry.disputes ?? []).filter(isOpenDispute);
+  if (!live || !lastNight || !audit.isFetched || audit.data?.runStatus === "COMPLETE") return null;
+  if (isSettled(entry.folio?.state)) return null;
+  return (
+    <div style={{ marginBottom: 10 }}>
+      <Refusal
+        kind="state"
+        message={`The last night (${fmtDate(lastNight)}) is not audited — the bill cannot be settled until it is.`}
+        guidance={fom ? "Take the booking back to Stay and post the night there." : "The FOM takes the booking back to Stay to post the night."}
+        actions={
+          fom ? (
+            <Button kind="secondary" compact onClick={onBackToStay}>
+              Back to Stay…
+            </Button>
+          ) : (
+            <Button kind="quiet" compact onClick={() => goToStep(7)}>
+              Look at the Stay step
+            </Button>
+          )
+        }
+      />
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ the departure handoff */
+
+const capFirst = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);
+
+/** The H4 handoff, a card of its own (2026-10-26) — it was a box inside "Is the folio complete?". */
+function DepartureHandoff({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz: string }) {
+  const { session } = useSession();
+  const refresh = useRefreshEntry(entry.id);
   // The entry payload lists handoffs newest first — the departure handoff is the newest H4.
   const h4 = (entry.handoffs ?? []).find((h) => h.handoffType === "H4") ?? null;
-  const h4Done = !!h4 && (h4.state === "FULFILLED" || h4.isAutoFulfilled === true);
+  const done = !!h4 && (h4.state === "FULFILLED" || h4.isAutoFulfilled === true);
   const [flag, setFlag] = useState<(typeof H4_FLAGS)[number][0]>("RECORDED");
   const fulfil = useMutation({
     mutationFn: () => fulfilHandoff(session!, h4!.id, buildH4FulfilmentEvidence(flag)),
@@ -251,95 +325,52 @@ function FolioComplete({
     },
     onError: (e) => toastRefusal(e, "The departure handoff could not be completed"),
   });
-
-  // Said only while the booking is here — on a passed step the chips already tell the story.
-  const problems = (live ? [
-    audit.isFetched && lastNight && !audited ? `the last night (${fmtDate(lastNight)}) is not audited` : null,
-    open.length ? `${plural(open.length, "dispute")} open` : null,
-  ] : []).filter(Boolean) as string[];
+  const doneAt = h4?.fulfilledAt ?? null;
 
   return (
-    <StepCard title="Is the folio complete?">
-      <div className="row-acts">
-        <Chip tone={audit.isLoading ? "quiet" : audited ? "success" : "warning"} icon={audited ? "check" : undefined}>
-          {audit.isLoading ? "reading the night audit…" : audited ? "the last night audited" : "the last night not audited"}
-        </Chip>
-        <Chip tone={lines.length ? "success" : "warning"} icon={lines.length ? "check" : undefined}>
-          {lines.length ? `${plural(lines.length, "line")} on the bill` : "nothing posted yet"}
-        </Chip>
-        <Chip tone={open.length ? "warning" : "success"} icon={open.length ? undefined : "check"}>
-          {open.length ? `${plural(open.length, "dispute")} open` : "nothing in dispute"}
-        </Chip>
-        <Chip tone={h4Done ? "success" : "warning"} icon={h4Done ? "check" : undefined}>
-          {h4Done ? "departure handoff done" : h4 ? `departure handoff ${HANDOFF_STATE_WORD[h4.state] ?? words(h4.state)}` : "departure handoff not raised"}
-        </Chip>
-        <span title="Chits as records — keyed, waiting, swept by the night audit — are not in the backend yet (BE-68)">
-          <Chip tone="quiet">chits · not tracked yet</Chip>
-        </span>
-        <span title="The guest's requests are in the Guest requests tab">
-          <Chip tone={openRequests ? "warning" : "success"} icon={openRequests ? undefined : "check"}>
-            {requests.isLoading
-              ? "reading the requests…"
-              : openRequests
-                ? `${plural(openRequests, "request")} still to arrange`
-                : requests.data?.counts.total
-                  ? "every request arranged"
-                  : "no requests"}
-          </Chip>
-        </span>
-      </div>
-      {problems.length ? (
-        <div style={{ marginTop: 10 }}>
-          <Refusal
-            kind="state"
-            message={`The bill cannot be right yet — ${problems.join(" · ")}.`}
-            guidance="Fix these on the Stay step; settlement refuses until every night is audited, and the booking stays here while a dispute is open."
-            actions={
-              fom && !isSettled(entry.folio?.state) ? (
-                <Button kind="secondary" compact onClick={onBackToStay}>
-                  Back to Stay…
-                </Button>
-              ) : (
-                <Button kind="quiet" compact onClick={() => goToStep(7)}>
-                  Look at the Stay step
-                </Button>
-              )
-            }
-          />
-        </div>
-      ) : null}
-      {h4 && !h4Done ? (
-        <Live>
-          <div className="bind provisional" style={{ marginTop: 10, display: "grid", gap: 8 }}>
-            <span className="sm">
-              <b>The departure handoff</b> — charges posted, the room inspected or put off, any damage assessed. Say where the room&rsquo;s fault stands and mark it done.
-            </span>
-            <div className="form2">
-              <div className="field">
-                <label>The room&rsquo;s fault, at departure</label>
-                <select className="input" value={flag} onChange={(e) => setFlag(e.target.value as typeof flag)} disabled={!live}>
-                  {H4_FLAGS.map(([v, l]) => (
-                    <option key={v} value={v}>
-                      {l}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="field" style={{ alignSelf: "end" }}>
-                <Button
-                  kind="secondary"
-                  compact
-                  state={fulfil.isPending ? "working" : live ? "default" : "inert"}
-                  title={live ? undefined : "only while the booking is at Check-out"}
-                  workingLabel="Recording…"
-                  onClick={() => fulfil.mutate()}
-                >
-                  Mark the handoff done
-                </Button>
-              </div>
-            </div>
+    <StepCard
+      flow="handoff"
+      title="The departure handoff"
+      status={
+        done ? (
+          <span className="ok-ink">
+            Done{doneAt ? ` · ${fmtStamp(doneAt, tz)}` : ""}
+            {h4?.isAutoFulfilled ? " · recorded by itself, a same-day departure" : ""}
+          </span>
+        ) : h4 ? (
+          <span className="warn-ink">
+            {capFirst(HANDOFF_STATE_WORD[h4.state] ?? words(h4.state))} — say where the room&rsquo;s fault stands and mark it done
+          </span>
+        ) : (
+          <span className="warn-ink">Not raised — it is raised when the booking leaves Stay</span>
+        )
+      }
+      meta="Charges posted, the room inspected or put off, any damage assessed — the last check before the booking closes."
+    >
+      {h4 && !done ? (
+        <div className="form2">
+          <div className="field">
+            <label>The room&rsquo;s fault, at departure</label>
+            <select className="input" value={flag} onChange={(e) => setFlag(e.target.value as typeof flag)} disabled={!live}>
+              {H4_FLAGS.map(([v, l]) => (
+                <option key={v} value={v}>
+                  {l}
+                </option>
+              ))}
+            </select>
           </div>
-        </Live>
+          <div className="field" style={{ alignSelf: "end" }}>
+            <Button
+              compact
+              state={fulfil.isPending ? "working" : live ? "default" : "inert"}
+              title={live ? undefined : "only while the booking is at Check-out"}
+              workingLabel="Recording…"
+              onClick={() => fulfil.mutate()}
+            >
+              Mark the handoff done
+            </Button>
+          </div>
+        </div>
       ) : null}
     </StepCard>
   );
@@ -347,7 +378,101 @@ function FolioComplete({
 
 /* ------------------------------------------------------------------ the master bill */
 
-function MasterBill({ entry, tz, onTab }: { entry: EntryDetail; tz: string; onTab: (target: string) => void }) {
+/** The bill's lines, its room / space tabs and their server-summed footers — shown on the master
+ * bill and again on the Add a charge tab. A tab opened here becomes the next charge's "For". */
+function BillLines({ entry, onTab }: { entry: EntryDetail; onTab: (target: string) => void }) {
+  const billing = useBilling(entry);
+  const fo = billing.data?.folio ?? null;
+  const cur = billing.data?.currency ?? entry.folio?.lines?.[0]?.currency ?? "BTN";
+  const roomNumberById = useMemo(
+    () => new Map((entry.roomAssignments ?? []).map((a) => [a.roomId, a.room?.roomNumber ?? a.roomId.slice(0, 6)])),
+    [entry.roomAssignments],
+  );
+  return (
+    <Tool inert={false}>
+      <FolioLinesTable
+        lines={entry.folio?.lines ?? []}
+        roomNumberById={roomNumberById}
+        perRoomCharges={fo?.perRoomCharges ?? null}
+        perSpaceCharges={fo?.perSpaceCharges ?? null}
+        spaceNameById={spaceNamesFromAllocations(entry.spaceAllocations)}
+        unassignedCharges={fo?.unassignedCharges ?? null}
+        chargeBreakdown={fo?.chargeBreakdown ?? null}
+        balance={fo?.outstandingBalance ?? entry.folio?.outstandingBalance ?? null}
+        currency={cur}
+        emptyText="No charges on this bill"
+        onTabChange={(t) => onTab(typeof t === "string" ? "" : "spaceId" in t ? `space:${t.spaceId}` : `room:${t.roomId}`)}
+      />
+    </Tool>
+  );
+}
+
+type BillFolio = NonNullable<NonNullable<ReturnType<typeof useBilling>["data"]>["folio"]>;
+
+/** Billed · received · still owed, read across the desk ("UIappeal", 2026-10-26). Every figure is
+ * the billing summary's; the "still owed" cell takes its colour from the balance it shows. */
+function BillFigures({ fo, cur }: { fo: BillFolio | null; cur: string }) {
+  if (!fo) return null;
+  const owed = Number(fo.outstandingBalance);
+  const tone = owed > 0 ? "due" : owed < 0 ? "over" : "clear";
+  const owedLabel = owed > 0 ? "Still owed" : owed < 0 ? "Paid over the bill" : "Nothing owed";
+  return (
+    <div className="bill-band" role="group" aria-label="The bill's figures">
+      <div className="bb-cell">
+        <span className="bb-k">Billed</span>
+        <span className="bb-v money">{money(fo.billedSoFar, cur)}</span>
+      </div>
+      <div className="bb-cell">
+        <span className="bb-k">Received</span>
+        <span className="bb-v money">{money(fo.paymentsReceived, cur)}</span>
+      </div>
+      {fo.refunded != null && Number(fo.refunded) !== 0 ? (
+        <div className="bb-cell">
+          <span className="bb-k">Refunded</span>
+          <span className="bb-v money">{money(fo.refunded, cur)}</span>
+        </div>
+      ) : null}
+      {fo.writtenOff != null && Number(fo.writtenOff) !== 0 ? (
+        <div className="bb-cell">
+          <span className="bb-k">Written off</span>
+          <span className="bb-v money">{money(fo.writtenOff, cur)}</span>
+        </div>
+      ) : null}
+      <div className={`bb-cell owed ${tone}`} role={owed > 0 ? "status" : undefined}>
+        <span className="bb-k">{owedLabel}</span>
+        <span className="bb-v money">{money(fo.outstandingBalance, cur)}</span>
+      </div>
+    </div>
+  );
+}
+
+/** The folio again, on the Add a charge tab — so a charge is posted with the bill in view. */
+function FolioTableCard({ entry, onTab }: { entry: EntryDetail; onTab: (target: string) => void }) {
+  const billing = useBilling(entry);
+  const fo = billing.data?.folio ?? null;
+  const cur = billing.data?.currency ?? entry.folio?.lines?.[0]?.currency ?? "BTN";
+  return (
+    <StepCard title="The folio" status={fo ? `${plural(fo.lineCount, "line")} on the bill` : undefined}>
+      <BillFigures fo={fo} cur={cur} />
+      <div style={{ marginTop: 12 }}>
+        <BillLines entry={entry} onTab={onTab} />
+      </div>
+    </StepCard>
+  );
+}
+
+function MasterBill({
+  entry,
+  tz,
+  onTab,
+  onAddCharge,
+}: {
+  entry: EntryDetail;
+  tz: string;
+  onTab: (target: string) => void;
+  /** Opens the Add a charge tab — only while the bill is open at Check-out. */
+  onAddCharge?: () => void;
+}) {
   const { session } = useSession();
   const refresh = useRefreshEntry(entry.id);
   const billing = useBilling(entry);
@@ -357,10 +482,6 @@ function MasterBill({ entry, tz, onTab }: { entry: EntryDetail; tz: string; onTa
   const doc = index.data?.documents.find((d) => d.kind === "master-bill") ?? null;
   const fo = billing.data?.folio ?? null;
   const cur = billing.data?.currency ?? entry.folio?.lines?.[0]?.currency ?? "BTN";
-  const roomNumberById = useMemo(
-    () => new Map((entry.roomAssignments ?? []).map((a) => [a.roomId, a.room?.roomNumber ?? a.roomId.slice(0, 6)])),
-    [entry.roomAssignments],
-  );
   const frozen = doc?.state === "FROZEN";
   const print = () => {
     if (!session) return;
@@ -401,57 +522,24 @@ function MasterBill({ entry, tz, onTab }: { entry: EntryDetail; tz: string; onTa
           >
             {frozen ? "Print a copy" : "Print master bill"}
           </Button>
+          {onAddCharge ? (
+            <Button kind="secondary" compact onClick={onAddCharge}>
+              Add or correct a charge
+            </Button>
+          ) : null}
           <Help label="About the master bill">What a guest gets who wants paper before paying, or who pays nothing here.</Help>
         </>
       }
     >
       <BillByPart billing={billing.data} loading={billing.isLoading} />
-      <div className="row-acts" style={{ justifyContent: "space-between", marginTop: 8 }}>
-        <span className="meta">
-          {fo ? plural(fo.lineCount, "line") : "—"} ·{" "}
-          <a
-            href="#"
-            onClick={(e) => {
-              e.preventDefault();
-              setShowLines((v) => !v);
-            }}
-          >
-            {showLines ? "hide the lines" : "show every line"}
-          </a>
-        </span>
-        <b className="money">{money(fo?.billedSoFar, cur)}</b>
+      <BillFigures fo={fo} cur={cur} />
+      <div className="bill-lines-row">
+        <span className="bl-n">{fo ? `${plural(fo.lineCount, "line")} on the bill` : "—"}</span>
+        <Button kind="quiet" compact onClick={() => setShowLines((v) => !v)}>
+          {showLines ? "Hide the lines" : "Show the lines"}
+        </Button>
       </div>
-      <Facts wide style={{ marginTop: 8 }}>
-        <Fact k="Received">{fo ? <span className="money">{money(fo.paymentsReceived, cur)}</span> : null}</Fact>
-        {fo?.refunded != null && fo.refunded !== 0 ? (
-          <Fact k="Refunded">
-            <span className="money">{money(fo.refunded, cur)}</span>
-          </Fact>
-        ) : null}
-        {fo?.writtenOff != null && fo.writtenOff !== 0 ? (
-          <Fact k="Written off">
-            <span className="money">{money(fo.writtenOff, cur)}</span>
-          </Fact>
-        ) : null}
-        <Fact k="Still owed">{fo ? <b className="money">{money(fo.outstandingBalance, cur)}</b> : null}</Fact>
-      </Facts>
-      {showLines ? (
-        <Tool inert={false}>
-          <FolioLinesTable
-            lines={entry.folio?.lines ?? []}
-            roomNumberById={roomNumberById}
-            perRoomCharges={fo?.perRoomCharges ?? null}
-            perSpaceCharges={fo?.perSpaceCharges ?? null}
-            spaceNameById={spaceNamesFromAllocations(entry.spaceAllocations)}
-            unassignedCharges={fo?.unassignedCharges ?? null}
-            chargeBreakdown={fo?.chargeBreakdown ?? null}
-            balance={fo?.outstandingBalance ?? entry.folio?.outstandingBalance ?? null}
-            currency={cur}
-            emptyText="No charges on this bill"
-            onTabChange={(t) => onTab(typeof t === "string" ? "" : "spaceId" in t ? `space:${t.spaceId}` : `room:${t.roomId}`)}
-          />
-        </Tool>
-      ) : null}
+      {showLines ? <BillLines entry={entry} onTab={onTab} /> : null}
       <PaperDrawer paper={paper} onClose={() => setPaper(null)} />
     </StepCard>
   );
@@ -719,7 +807,19 @@ function AddOrCorrectCharge({ entry, target, setTarget }: { entry: EntryDetail; 
 
 /* ------------------------------------------------------------------ how the bill is settled */
 
-function HowSettled({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz: string }) {
+function HowSettled({
+  entry,
+  live,
+  tz,
+  onBackToStay,
+  goToStep,
+}: {
+  entry: EntryDetail;
+  live: boolean;
+  tz: string;
+  onBackToStay: () => void;
+  goToStep: (n: number) => void;
+}) {
   const { session } = useSession();
   const refresh = useRefreshEntry(entry.id);
   const fom = atLeast(session?.actorLevel, "L2");
@@ -794,6 +894,18 @@ function HowSettled({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz
   const partial = guestPays && Number.isFinite(typed) && typed >= 0 && balanceNum > 0 && typed < balanceNum;
   const creditCovers = partial && creditActive && ps?.ceilingAmount != null && ps.ceilingAmount >= balanceNum - typed;
   const partialLocked = partial && !fom && !creditCovers;
+  // The FOM's sign-off is asked only where the backend asks for it (Policy 46): the booking was
+  // reserved on the FOM's credit for an advance still not paid in full, the balance is now above
+  // that credit, and nobody signed it off at Arrival. Server figures compared, nothing shown derived.
+  const ceilingRaw = entry.reservation?.creditCeilingIfExtended;
+  const ceilingNum = ceilingRaw == null ? null : Number(ceilingRaw);
+  const overCeiling =
+    ceilingNum != null &&
+    Number.isFinite(ceilingNum) &&
+    ceilingNum > 0 &&
+    ps?.paidInFull !== true &&
+    balanceNum > ceilingNum &&
+    !entry.creditCeilingTier2AcknowledgedAt;
 
   const voucherTyped = voucherCovers.trim() === "" ? Number.NaN : Number.parseFloat(voucherCovers);
   const voucherValid = Number.isFinite(voucherTyped) && voucherTyped >= 0;
@@ -867,7 +979,11 @@ function HowSettled({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz
             ? "this billing model does not settle that way"
             : (method === "CASH" || method === "MOBILE_PAYMENT") && takesMoney && !ref.trim()
               ? "cash and QR need a payment reference"
-              : undefined;
+              : overCeiling && !fom
+                ? "the balance is above the credit the FOM allowed — the FOM settles this one"
+                : overCeiling && !fomAck.trim()
+                  ? "the balance is above the credit allowed — write the FOM's sign-off"
+                  : undefined;
 
   return (
     <StepCard
@@ -875,6 +991,7 @@ function HowSettled({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz
       title="How the bill is settled"
       meta="One bill by the model; part by part when each room or hall pays its own; free to change until the bill is settled — after that, the tax invoice decides."
     >
+      <UnauditedLastNight entry={entry} live={live} onBackToStay={onBackToStay} goToStep={goToStep} />
       <div className="row-acts">
         <Chip tone="accent">by the billing model · {model ? BILLING_MODEL_WORD[model] ?? words(model) : "not set"}</Chip>
         {entry.groupBillingMode === "GROUP_MASTER" ? <Chip tone="quiet">one bill for the party</Chip> : null}
@@ -1039,10 +1156,18 @@ function HowSettled({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz
                 </div>
               )}
               {invoicesParty ? <SendToField entry={entry} value={invoiceTo} onChange={setInvoiceTo} label="Send the invoice to" /> : null}
-              {fom ? (
+              {overCeiling && fom ? (
                 <div className="field">
-                  <label>FOM acknowledgement · only over the credit ceiling</label>
-                  <input className="input" value={fomAck} onChange={(e) => setFomAck(e.target.value)} />
+                  <label>
+                    FOM&rsquo;s sign-off · the balance is above the credit allowed
+                    <Help label="About the sign-off">
+                      The booking was reserved on the FOM&rsquo;s credit, the advance was never paid in full, and the balance is now above that credit. Write a reference for the sign-off — it is kept on the settlement.
+                    </Help>
+                  </label>
+                  <input className="input" value={fomAck} placeholder="e.g. approved by the FOM on the phone" onChange={(e) => setFomAck(e.target.value)} />
+                  <span className="hint warn-ink">
+                    Balance {money(balance, cur)} · credit allowed {money(ceilingNum, cur)}
+                  </span>
                 </div>
               ) : null}
             </div>

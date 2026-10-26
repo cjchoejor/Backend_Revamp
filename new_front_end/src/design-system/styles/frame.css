@@ -1060,3 +1060,23 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .rchart .rslegend.by-guest .sw.g.k-held, .ds .rchart .rslegend.by-guest .sw.g.k-prov { outline-color: var(--g-line); }
 .ds .rchart .rslegend.by-guest .sw.g.k-res.paypend { box-shadow: inset 3px 0 0 var(--g-line), inset 0 -3px 0 var(--rs-held-line); }
 .ds .rchart .rslegend-lead { font-weight: 600; color: var(--ink); }
+
+/* The bill's figures at Check-out (2026-10-26, "UIappeal"): billed, received and what is still
+   owed are what the master bill is for, so they read across the desk. A flat bordered band; the
+   "still owed" cell carries its state — red while money is due, green when nothing is, amber
+   when the guest has paid more than the bill. */
+.ds .bill-band { display: flex; flex-wrap: wrap; gap: 0; margin-top: var(--s3); border: 1px solid var(--line-2); border-radius: var(--r-card); background: var(--surface); overflow: hidden; }
+.ds .bill-band .bb-cell { flex: 1 1 140px; display: grid; gap: 2px; padding: var(--s3) var(--s4); border-right: 1px solid var(--line); }
+.ds .bill-band .bb-cell:last-child { border-right: 0; }
+.ds .bill-band .bb-k { font-size: 12px; font-weight: 600; color: var(--ink-3); }
+.ds .bill-band .bb-v { font-size: 18px; font-weight: 700; color: var(--ink); font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+.ds .bill-band .bb-cell.owed { flex-basis: 180px; }
+.ds .bill-band .bb-cell.owed .bb-v { font-size: 22px; font-weight: 800; }
+.ds .bill-band .bb-cell.owed.due { background: var(--danger-soft); box-shadow: inset 3px 0 0 var(--danger); }
+.ds .bill-band .bb-cell.owed.due .bb-k, .ds .bill-band .bb-cell.owed.due .bb-v { color: var(--danger); }
+.ds .bill-band .bb-cell.owed.clear { background: var(--success-soft); box-shadow: inset 3px 0 0 var(--success); }
+.ds .bill-band .bb-cell.owed.clear .bb-k, .ds .bill-band .bb-cell.owed.clear .bb-v { color: var(--success); }
+.ds .bill-band .bb-cell.owed.over { background: var(--warning-soft); box-shadow: inset 3px 0 0 var(--warning); }
+.ds .bill-band .bb-cell.owed.over .bb-k, .ds .bill-band .bb-cell.owed.over .bb-v { color: var(--warning); }
+.ds .bill-lines-row { display: flex; align-items: center; justify-content: space-between; gap: var(--s2); margin-top: var(--s3); }
+.ds .bill-lines-row .bl-n { font-size: 13px; font-weight: 600; color: var(--ink-2); }

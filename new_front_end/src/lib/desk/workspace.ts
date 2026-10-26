@@ -682,7 +682,7 @@ export function s8Readiness(entry: EntryDetail): Precondition[] {
       met: roomsReleased,
     },
     { label: "Room inspection recorded", met: !!inspection, card: "departure" },
-    { label: "Pre-checkout handoff fulfilled", met: !!h4 && (h4.state === "FULFILLED" || h4.isAutoFulfilled === true) },
+    { label: "Departure handoff done", met: !!h4 && (h4.state === "FULFILLED" || h4.isAutoFulfilled === true), card: "handoff" },
     { label: "No open disputes", met: openDisputes.length === 0 },
   ];
 }

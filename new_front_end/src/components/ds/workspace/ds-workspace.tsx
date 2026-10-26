@@ -99,7 +99,7 @@ import { S5Arrival } from "@/components/ds/steps/s5-arrival";
 import { S6CheckIn } from "@/components/ds/steps/s6-checkin";
 import { S7Stay, S7_PANES } from "@/components/ds/steps/s7-stay";
 import { S6_PANES } from "@/components/ds/steps/s6-checkin";
-import { S8CheckOut } from "@/components/ds/steps/s8-checkout";
+import { S8CheckOut, S8_PANES } from "@/components/ds/steps/s8-checkout";
 import { S9Closed } from "@/components/ds/steps/s9-closed";
 import { Overlay, atLeast, useRefreshEntry } from "@/components/ds/steps/kit";
 import { declineEntry } from "@/lib/api/reservation-setup";
@@ -779,7 +779,9 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
             ? S3_PANES
             : step.key === "confirm"
               ? S4_PANES
-              : [];
+              : step.key === "checkout"
+                ? S8_PANES
+                : [];
   const pane = panes.some((p) => p.key === paneParam) ? paneParam : null;
 
   const gotoStep = (n: number) => {
@@ -992,7 +994,15 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
           />
         );
       case "checkout":
-        return <S8CheckOut entry={entry} past={viewingPast} goToStep={viewingPast ? NOOP : stableSetSelected} />;
+        return (
+          <S8CheckOut
+            entry={entry}
+            past={viewingPast}
+            goToStep={viewingPast ? NOOP : stableSetSelected}
+            pane={pane}
+            openPane={setPane}
+          />
+        );
       case "closed": {
         const canClose = !!closure?.canClose && atLeastFom(session?.actorLevel);
         const closeReason = canClose ? undefined : !atLeastFom(session?.actorLevel) ? "closing needs the FOM" : firstNote;
