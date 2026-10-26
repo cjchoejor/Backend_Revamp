@@ -39,18 +39,16 @@ const CLAIM: InventoryClaimState[] = ["SPECULATIVELY_HELD", "COMMITTED_HELD", "C
 
 export type RoomFlagRepair = { roomId: string; roomNumber: string; from: InventoryClaimState; to: InventoryClaimState; why: string };
 
-export async function planRoomFlagRepairs(
+/**
+ * What each room's flag SHOULD read, from the bookings that hold it (2026-10-26 — shared by the
+ * repair below and by housekeeping's "room cleaned", so the two cannot read a room two ways):
+ * OCCUPIED when a guest is in it tonight, else the strongest live claim from today on, else FREE.
+ */
+export async function readExpectedRoomFlags(
   prisma: PrismaClient,
-  opts: { roomIds?: string[]; except?: Set<string>; now?: Date } = {},
-): Promise<{ today: Date; guestsIn: number; plan: RoomFlagRepair[]; skipped: string[] }> {
-  const today = hotelTodayUtc(opts.now);
-  const except = opts.except ?? new Set<string>();
-  const rooms = await prisma.room.findMany({
-    where: opts.roomIds ? { id: { in: opts.roomIds } } : undefined,
-    select: { id: true, roomNumber: true, currentClaimState: true },
-  });
-  rooms.sort((a, b) => a.roomNumber.localeCompare(b.roomNumber, "en", { numeric: true }));
-  if (rooms.length === 0) return { today, guestsIn: 0, plan: [], skipped: [] };
+  rooms: Array<{ id: string; currentClaimState: InventoryClaimState }>,
+  today: Date,
+): Promise<{ guestIn: Map<string, string>; claimFlag: Map<string, InventoryClaimState>; expected: Map<string, InventoryClaimState> }> {
   const flagOf = new Map(rooms.map((r) => [r.id, r.currentClaimState]));
 
   // ---- who is in each room tonight ---------------------------------------------------
@@ -115,6 +113,25 @@ export async function planRoomFlagRepairs(
     const cur = claimFlag.get(c.roomId);
     if (!cur || rank[f] > rank[cur]) claimFlag.set(c.roomId, f);
   }
+
+  const expected = new Map<string, InventoryClaimState>();
+  for (const r of rooms) expected.set(r.id, guestIn.has(r.id) ? "OCCUPIED" : (claimFlag.get(r.id) ?? "FREE"));
+  return { guestIn, claimFlag, expected };
+}
+
+export async function planRoomFlagRepairs(
+  prisma: PrismaClient,
+  opts: { roomIds?: string[]; except?: Set<string>; now?: Date } = {},
+): Promise<{ today: Date; guestsIn: number; plan: RoomFlagRepair[]; skipped: string[] }> {
+  const today = hotelTodayUtc(opts.now);
+  const except = opts.except ?? new Set<string>();
+  const rooms = await prisma.room.findMany({
+    where: opts.roomIds ? { id: { in: opts.roomIds } } : undefined,
+    select: { id: true, roomNumber: true, currentClaimState: true },
+  });
+  rooms.sort((a, b) => a.roomNumber.localeCompare(b.roomNumber, "en", { numeric: true }));
+  if (rooms.length === 0) return { today, guestsIn: 0, plan: [], skipped: [] };
+  const { guestIn, claimFlag } = await readExpectedRoomFlags(prisma, rooms, today);
 
   // ---- decide, room by room ------------------------------------------------------------
   const plan: RoomFlagRepair[] = [];
