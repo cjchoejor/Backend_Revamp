@@ -65,7 +65,7 @@ Each step is its own canvas in `src/components/ds/steps/`, built from the protot
 | Arrival | Ready the room · Assign the rooms · Guest details · The front-desk handoff · Pre-arrival tasks · Advance and credit · the pre-arrival answer · Billing model | the per-room editors, the guest table, the advance block |
 | Check-in | Before you check in · The document, at the desk · Registration card · the remaining advance · Rooms with their keys · Check in | the guest table, the per-room editors, the advance block |
 | Stay | The folio · live · Post a charge (by outlet) · Chits waiting (BE-68) · The nights · Rooms in use · Keys · the departments · disputes · faults · a change to the terms · Billing model | the folio lines, interim payment, extension, split settlement, bills and statements, leaving early, the guest table |
-| Check-out | Is the folio complete? · Master bill · Add or correct a charge · How the bill is settled · Tax invoice, by payer · The departure | the folio lines, split settlement |
+| Check-out | Master bill (Billed · Received · Still owed as a band) · How the bill is settled (the last night unaudited warned here) · Tax invoice, by payer · The departure · The departure handoff; an **Add a charge** tab (`?pane=charges`, 2026-10-26): the folio and its table again, then Add or correct a charge | the folio lines, split settlement |
 | Closed | What the stay was · After the stay · One door back in · Sealed papers | the folio lines, split settlement |
 
 "Frozen" means **reserved in this pass** (`reservedThisPass`). The quote readiness lines count only this pass's quotations, as the backend's gates do.
