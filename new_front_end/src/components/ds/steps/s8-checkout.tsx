@@ -1696,19 +1696,28 @@ function Departure({ entry, live }: { entry: EntryDetail; live: boolean }) {
                     Put the inspection off to after departure
                   </label>
                   <div className="form2">
-                    <div className="field">
-                      <label>The room&rsquo;s fault, at check-out</label>
-                      <select className="input" value={flag} onChange={(e) => setFlag(e.target.value as typeof flag)}>
-                        {activeFault ? (
-                          <>
-                            <option value="RESOLVED">Put right at inspection</option>
-                            <option value="UNRESOLVED_AT_CHECKOUT">Still there at departure</option>
-                          </>
-                        ) : (
-                          <option value="NOT_APPLICABLE">No fault on the room</option>
-                        )}
-                      </select>
-                    </div>
+                    {/* A question only when there is something to answer (2026-10-26, operator: a
+                        dropdown with one option): with no fault on record the room's fault is a fact;
+                        with one open, the two answers are buttons. */}
+                    {activeFault ? (
+                      <div className="wide field">
+                        <label>The room&rsquo;s fault, at check-out</label>
+                        <Choice
+                          options={[
+                            ["RESOLVED", "Put right at inspection"],
+                            ["UNRESOLVED_AT_CHECKOUT", "Still there at departure"],
+                          ]}
+                          value={flag === "NOT_APPLICABLE" ? "UNRESOLVED_AT_CHECKOUT" : flag}
+                          onChange={setFlag}
+                        />
+                      </div>
+                    ) : (
+                      <div className="wide field">
+                        <span className="sm">
+                          The room&rsquo;s fault: <b>none on record</b>
+                        </span>
+                      </div>
+                    )}
                     {flag === "UNRESOLVED_AT_CHECKOUT" ? (
                       <div className="field">
                         <label>What the inspector found</label>
