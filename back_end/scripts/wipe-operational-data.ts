@@ -1,128 +1,173 @@
 /**
  * Wipe all operational / transactional data while preserving seeded reference data,
- * inventory, staff, configuration, and registries.
+ * inventory, staff, configuration, parties and registries.
  *
  * Usage:
  *   npx tsx scripts/wipe-operational-data.ts            # dry-run (counts only, no deletes)
  *   npx tsx scripts/wipe-operational-data.ts --confirm  # actually delete
  *
- * Strategy: wrap all DELETEs in a single transaction with `SET session_replication_role = replica`
- * to disable foreign-key triggers for the wipe. This avoids the ordering puzzle (and the partial-wipe
- * cleanup that follows when an FK violation aborts mid-script). Postgres-only.
+ * EVERY TABLE IS CLASSIFIED (2026-10-26). The earlier version named the tables it wiped and
+ * silently kept everything else, so each table added since (booking notes, guest requests, held
+ * papers, room moves, interim payments, stay extensions, OCR readings, …) survived a wipe as rows
+ * pointing at bookings that no longer exist. Now a model must be in WIPE, KEEP or PARTIAL, and the
+ * script refuses to run — naming it — when the schema holds one that is in none of them. A new
+ * table forces a decision instead of being left behind.
  *
- * Preserved tables:
- *   HotelProfile, Department, Role, RolePermissionMapping, RoleSessionConfig
- *   StaffUser, SessionRecord, SessionEventRecord
- *   RoomType, Room, Space
- *   ConfigurationEntry, AiActorIdentity
- *   RatePlanRegistry, SeasonCalendar, PackageRegistry, CancellationPolicyRegistry
- *   PolicyRegistry, ModeConfiguration
- *   CommunicationTemplate, HandoffChecklistTemplate, InvoiceTemplate,
- *   WorkOrderTemplate, FeedbackSurveyTemplate, VipNotificationRoutingConfig
+ * ONE TRANSACTION. Foreign-key triggers are switched off with `SET LOCAL
+ * session_replication_role = replica` inside a single interactive transaction, so every DELETE
+ * runs on the connection that has them off (the earlier version set it on Prisma's pool and could
+ * run later deletes on a different connection, failing part-way) and a failure leaves nothing
+ * deleted.
  *
- * Wiped: all entry/inquiry/folio/handoff/communication operational records, plus operational
- * trace events. Admin-only trace events (no inquiry/entry reference) are kept.
- * ReadableIdSequence is reset so the next inquiry/reservation starts from 1.
+ * KEPT: hotel profile, departments, roles, staff and their sessions; room types, rooms, spaces and
+ * their open faults (a fault is a fact about the room, not a booking); configuration, policies,
+ * modes, templates; rate plans, seasons, packages, cancellation policies, the house tariff; travel
+ * agencies, companies, their rate packages and cards; admin version snapshots.
+ * PARTIAL: trace events (operational ones go, admin-only ones stay); readable-ID counters (reset,
+ * except the prefixes kept tables use, so a new agency cannot be given an id one already has).
+ * The queued pg-boss job of every scheduled timer is deleted with it, as delete-booking.ts does.
  */
 
-import { PrismaClient } from "@prisma/client";
+import { Prisma, PrismaClient } from "@prisma/client";
 
 const prisma = new PrismaClient();
 const CONFIRM = process.argv.includes("--confirm");
 
-type Op = {
-  label: string;
-  count: () => Promise<number>;
-  del: () => Promise<{ count: number }>;
-};
-
-const operationalTraceFilter = { OR: [{ inquiryId: { not: null } }, { entryId: { not: null } }] };
-
-const ops: Op[] = [
-  { label: "TraceEvent (operational)", count: () => prisma.traceEvent.count({ where: operationalTraceFilter }), del: () => prisma.traceEvent.deleteMany({ where: operationalTraceFilter }) },
-  { label: "HumanDecisionRecord", count: () => (prisma as any).humanDecisionRecord.count(), del: () => (prisma as any).humanDecisionRecord.deleteMany() },
-  { label: "AiDraftRecord", count: () => (prisma as any).aiDraftRecord.count(), del: () => (prisma as any).aiDraftRecord.deleteMany() },
-  { label: "CommunicationRecord", count: () => prisma.communicationRecord.count(), del: () => prisma.communicationRecord.deleteMany() },
-  { label: "FollowUpTaskRecord", count: () => prisma.followUpTaskRecord.count(), del: () => prisma.followUpTaskRecord.deleteMany() },
-  { label: "ProcessingLockRecord", count: () => prisma.processingLockRecord.count(), del: () => prisma.processingLockRecord.deleteMany() },
-  { label: "RevalidationDeltaRecord", count: () => prisma.revalidationDeltaRecord.count(), del: () => prisma.revalidationDeltaRecord.deleteMany() },
-  { label: "WorkOrderAmendmentEvent", count: () => prisma.workOrderAmendmentEvent.count(), del: () => prisma.workOrderAmendmentEvent.deleteMany() },
-  { label: "WorkOrderConsumptionRecord", count: () => prisma.workOrderConsumptionRecord.count(), del: () => prisma.workOrderConsumptionRecord.deleteMany() },
-  { label: "WorkOrderToDoItem", count: () => prisma.workOrderToDoItem.count(), del: () => prisma.workOrderToDoItem.deleteMany() },
-  { label: "WorkOrder", count: () => prisma.workOrder.count(), del: () => prisma.workOrder.deleteMany() },
-  { label: "DisputeGateOverrideRecord", count: () => prisma.disputeGateOverrideRecord.count(), del: () => prisma.disputeGateOverrideRecord.deleteMany() },
-  { label: "DisputeRecord", count: () => prisma.disputeRecord.count(), del: () => prisma.disputeRecord.deleteMany() },
-  { label: "AmendmentEventRecord", count: () => prisma.amendmentEventRecord.count(), del: () => prisma.amendmentEventRecord.deleteMany() },
-  { label: "VIPArrivalNotificationEvent", count: () => prisma.vIPArrivalNotificationEvent.count(), del: () => prisma.vIPArrivalNotificationEvent.deleteMany() },
-  { label: "LostAndFoundRecord", count: () => prisma.lostAndFoundRecord.count(), del: () => prisma.lostAndFoundRecord.deleteMany() },
-  { label: "EquipmentAllocation", count: () => prisma.equipmentAllocation.count(), del: () => prisma.equipmentAllocation.deleteMany() },
-  { label: "CommissionDueRecord", count: () => prisma.commissionDueRecord.count(), del: () => prisma.commissionDueRecord.deleteMany() },
-  { label: "AgentProfile", count: () => prisma.agentProfile.count(), del: () => prisma.agentProfile.deleteMany() },
-  { label: "NightAuditAnomaly", count: () => prisma.nightAuditAnomaly.count(), del: () => prisma.nightAuditAnomaly.deleteMany() },
-  { label: "NightAuditRecord", count: () => prisma.nightAuditRecord.count(), del: () => prisma.nightAuditRecord.deleteMany() },
-  { label: "WriteOffRecord", count: () => prisma.writeOffRecord.count(), del: () => prisma.writeOffRecord.deleteMany() },
-  { label: "Invoice", count: () => prisma.invoice.count(), del: () => prisma.invoice.deleteMany() },
-  { label: "FolioLine", count: () => prisma.folioLine.count(), del: () => prisma.folioLine.deleteMany() },
-  { label: "PaymentRecord", count: () => prisma.paymentRecord.count(), del: () => prisma.paymentRecord.deleteMany() },
-  { label: "BillingModelTransitionRecord", count: () => prisma.billingModelTransitionRecord.count(), del: () => prisma.billingModelTransitionRecord.deleteMany() },
-  { label: "CreditExtensionCeilingRecord", count: () => prisma.creditExtensionCeilingRecord.count(), del: () => prisma.creditExtensionCeilingRecord.deleteMany() },
-  { label: "CreditCeilingThresholdEvent", count: () => prisma.creditCeilingThresholdEvent.count(), del: () => prisma.creditCeilingThresholdEvent.deleteMany() },
-  { label: "Folio", count: () => prisma.folio.count(), del: () => prisma.folio.deleteMany() },
-  { label: "RoomInspectionRecord", count: () => prisma.roomInspectionRecord.count(), del: () => prisma.roomInspectionRecord.deleteMany() },
-  { label: "KeyReturnRecord", count: () => prisma.keyReturnRecord.count(), del: () => prisma.keyReturnRecord.deleteMany() },
-  { label: "NoShowDeterminationRecord", count: () => prisma.noShowDeterminationRecord.count(), del: () => prisma.noShowDeterminationRecord.deleteMany() },
-  { label: "RoomAssignment", count: () => prisma.roomAssignment.count(), del: () => prisma.roomAssignment.deleteMany() },
-  { label: "PreArrivalTask", count: () => prisma.preArrivalTask.count(), del: () => prisma.preArrivalTask.deleteMany() },
-  { label: "HandoffRecord", count: () => prisma.handoffRecord.count(), del: () => prisma.handoffRecord.deleteMany() },
-  { label: "Reservation", count: () => prisma.reservation.count(), del: () => prisma.reservation.deleteMany() },
-  { label: "CancellationDisclosureRecord", count: () => prisma.cancellationDisclosureRecord.count(), del: () => prisma.cancellationDisclosureRecord.deleteMany() },
-  { label: "CommittedHold", count: () => prisma.committedHold.count(), del: () => prisma.committedHold.deleteMany() },
-  { label: "SpeculativeHold", count: () => prisma.speculativeHold.count(), del: () => prisma.speculativeHold.deleteMany() },
-  { label: "Quotation", count: () => prisma.quotation.count(), del: () => prisma.quotation.deleteMany() },
-  { label: "TimerRecord", count: () => prisma.timerRecord.count(), del: () => prisma.timerRecord.deleteMany() },
-  { label: "StageDwellRecord", count: () => prisma.stageDwellRecord.count(), del: () => prisma.stageDwellRecord.deleteMany() },
-  { label: "RoomClaimStateEvent", count: () => prisma.roomClaimStateEvent.count(), del: () => prisma.roomClaimStateEvent.deleteMany() },
-  { label: "DeficientConditionRecord", count: () => prisma.deficientConditionRecord.count(), del: () => prisma.deficientConditionRecord.deleteMany() },
-  { label: "AvailabilityConfiguration", count: () => prisma.availabilityConfiguration.count(), del: () => prisma.availabilityConfiguration.deleteMany() },
-  { label: "SpaceAllocation", count: () => prisma.spaceAllocation.count(), del: () => prisma.spaceAllocation.deleteMany() },
-  { label: "Segment", count: () => prisma.segment.count(), del: () => prisma.segment.deleteMany() },
-  { label: "Entry", count: () => prisma.entry.count(), del: () => prisma.entry.deleteMany() },
-  { label: "DuplicateDetectionFlag", count: () => prisma.duplicateDetectionFlag.count(), del: () => prisma.duplicateDetectionFlag.deleteMany() },
-  { label: "Inquiry", count: () => prisma.inquiry.count(), del: () => prisma.inquiry.deleteMany() },
-  { label: "GuestIdentityDocument", count: () => prisma.guestIdentityDocument.count(), del: () => prisma.guestIdentityDocument.deleteMany() },
-  { label: "GuestProfile", count: () => prisma.guestProfile.count(), del: () => prisma.guestProfile.deleteMany() },
-  { label: "OtaConflictOverbookingRecord", count: () => prisma.otaConflictOverbookingRecord.count(), del: () => prisma.otaConflictOverbookingRecord.deleteMany() },
-  { label: "ReadableIdSequence (reset counters)", count: () => prisma.readableIdSequence.count(), del: () => prisma.readableIdSequence.deleteMany() },
+/** Bookings and everything hanging off them — deleted in this order (children first, for readability). */
+const WIPE = [
+  "HumanDecisionRecord", "AiDraftRecord", "CommunicationRecord", "HeldDocument", "FollowUpTaskRecord",
+  "ProcessingLockRecord", "RevalidationDeltaRecord",
+  "WorkOrderAmendmentEvent", "WorkOrderConsumptionRecord", "WorkOrderToDoItem", "WorkOrder",
+  "DisputeGateOverrideRecord", "DisputeRecord", "AmendmentEventRecord", "NegotiationAmendmentRequest",
+  "VIPArrivalNotificationEvent", "LostAndFoundRecord", "EquipmentAllocation", "CommissionDueRecord", "AgentProfile",
+  "BookingNote", "GuestRequest",
+  "RoomMoveLeg", "RoomMove",
+  "NightAuditAnomaly", "NightAuditRecord",
+  "WriteOffRecord", "InvoiceIntegrityCheck", "InvoiceLine", "Invoice",
+  "AdvanceApplication", "InterimPaymentRequest", "StayExtensionRequest", "EarlyDepartureRecord",
+  "FolioLine", "PaymentRecord", "BillingModelTransitionRecord", "CreditExtensionCeilingRecord",
+  "CreditCeilingThresholdEvent", "Folio",
+  "RoomInspectionRecord", "KeyReturnRecord", "NoShowDeterminationRecord",
+  "RoomNightMealPlan", "RoomAssignment", "PreArrivalTask", "HandoffRecord",
+  "Reservation", "CancellationDisclosureRecord", "CommittedHold", "SpeculativeHold",
+  "QuotationLine", "Quotation", "TimerRecord", "StageDwellRecord", "RoomClaimStateEvent",
+  "AvailabilityConfiguration", "SpaceAllocation", "Segment", "Entry",
+  "DuplicateDetectionFlag", "Inquiry",
+  "IdentityOcrSuggestion", "GuestIdentityDocument", "GuestProfile", "OtaConflictOverbookingRecord",
 ];
+
+/** Reference data, configuration, inventory, people and parties — never touched. */
+const KEEP = [
+  "HotelProfile", "Department", "Role", "RolePermissionMapping", "RoleSessionConfig",
+  "StaffUser", "SessionRecord", "SessionEventRecord",
+  "RoomType", "Room", "Space", "DeficientConditionRecord",
+  "ConfigurationEntry", "AiActorIdentity", "PolicyRegistry", "ModeConfiguration",
+  "RatePlanRegistry", "SeasonCalendar", "PackageRegistry", "CancellationPolicyRegistry", "HouseTariff",
+  "CommunicationTemplate", "HandoffChecklistTemplate", "InvoiceTemplate", "WorkOrderTemplate",
+  "FeedbackSurveyTemplate", "VipNotificationRoutingConfig",
+  "TravelAgent", "CorporateAccount", "RatePackage", "RoomTypePackageOverride", "RateCard", "RoomTypeRateOverride",
+  "EntityVersionSnapshot",
+];
+
+/** Wiped in part — handled below. */
+const PARTIAL = ["TraceEvent", "ReadableIdSequence"];
+
+const models = new Map(Prisma.dmmf.datamodel.models.map((m) => [m.name, m.dbName ?? m.name]));
+const table = (model: string) => `"${models.get(model)}"`;
+
+function classify() {
+  const listed = new Set([...WIPE, ...KEEP, ...PARTIAL]);
+  const unknownListed = [...listed].filter((m) => !models.has(m));
+  const unclassified = [...models.keys()].filter((m) => !listed.has(m));
+  const twice = WIPE.filter((m) => KEEP.includes(m) || PARTIAL.includes(m));
+  if (unknownListed.length || unclassified.length || twice.length) {
+    if (unclassified.length) console.error(`Tables in the schema that this script does not classify: ${unclassified.join(", ")}`);
+    if (unknownListed.length) console.error(`Listed here but not in the schema: ${unknownListed.join(", ")}`);
+    if (twice.length) console.error(`Listed as both wiped and kept: ${twice.join(", ")}`);
+    console.error("Add each to WIPE, KEEP or PARTIAL in scripts/wipe-operational-data.ts first. Nothing was deleted.");
+    process.exit(1);
+  }
+}
+
+/** Readable-id prefixes the KEPT tables use (e.g. TA- agencies, CORP- companies) — their counters stay. */
+async function keptPrefixes(db: Prisma.TransactionClient | PrismaClient): Promise<string[]> {
+  const prefixes = new Set<string>();
+  for (const model of KEEP) {
+    const m = Prisma.dmmf.datamodel.models.find((x) => x.name === model)!;
+    const idField = m.fields.find((f) => f.isId);
+    if (!idField || idField.type !== "String") continue;
+    const rows = await db.$queryRawUnsafe<{ p: string }[]>(
+      `SELECT DISTINCT substring("${idField.dbName ?? idField.name}" from '^([A-Z]{2,4})-[0-9]{8}-[0-9]{4}') AS p FROM ${table(model)}`,
+    );
+    for (const r of rows) if (r.p) prefixes.add(r.p);
+  }
+  return [...prefixes].sort();
+}
+
+const OPERATIONAL_TRACE = `WHERE "inquiryId" IS NOT NULL OR "entryId" IS NOT NULL`;
+
+async function count(db: Prisma.TransactionClient | PrismaClient, sql: string): Promise<number> {
+  return Number((await db.$queryRawUnsafe<{ n: bigint }[]>(`SELECT count(*)::bigint AS n FROM ${sql}`))[0].n);
+}
 
 async function dryRun() {
   console.log("DRY RUN — counting rows that would be deleted (nothing persisted).\n");
   let total = 0;
-  for (const op of ops) {
-    const count = await op.count();
-    if (count > 0) console.log(`  ${count.toString().padStart(6)}  ${op.label}`);
-    total += count;
+  for (const m of WIPE) {
+    const n = await count(prisma, table(m));
+    if (n > 0) console.log(`  ${String(n).padStart(7)}  ${m}`);
+    total += n;
   }
+  const traces = await count(prisma, `${table("TraceEvent")} ${OPERATIONAL_TRACE}`);
+  if (traces) console.log(`  ${String(traces).padStart(7)}  TraceEvent (operational)`);
+  const kept = await keptPrefixes(prisma);
+  const seqs = await count(prisma, `${table("ReadableIdSequence")} WHERE prefix <> ALL(ARRAY[${kept.map((p) => `'${p}'`).join(",") || "''"}]::text[])`);
+  if (seqs) console.log(`  ${String(seqs).padStart(7)}  ReadableIdSequence (counters reset; kept: ${kept.join(", ") || "none"})`);
+  const jobs = await count(prisma, `${table("TimerRecord")} WHERE status = 'SCHEDULED' AND "pgBossJobId" IS NOT NULL`);
+  if (jobs) console.log(`  ${String(jobs).padStart(7)}  queued pg-boss jobs of scheduled timers`);
+  total += traces + seqs;
   console.log(`\nTotal rows that would be deleted: ${total}`);
   console.log(`\nTo actually wipe, re-run with --confirm`);
 }
 
 async function wipe() {
-  console.log("DELETING operational data (FK triggers disabled for this session)...\n");
-  // Disable FK enforcement for THIS session only. Affects only the current Postgres connection.
-  await prisma.$executeRawUnsafe(`SET session_replication_role = 'replica'`);
-  try {
-    let total = 0;
-    for (const op of ops) {
-      const { count } = await op.del();
-      if (count > 0) console.log(`  -${count.toString().padStart(6)}  ${op.label}`);
-      total += count;
-    }
-    console.log(`\nDone. Deleted ${total} rows.`);
-  } finally {
-    await prisma.$executeRawUnsafe(`SET session_replication_role = 'origin'`);
-  }
+  console.log("DELETING operational data in one transaction (FK triggers off inside it)...\n");
+  await prisma.$transaction(
+    async (tx) => {
+      await tx.$executeRawUnsafe(`SET LOCAL session_replication_role = 'replica'`);
+      // pg-boss creates its schema at the first worker start, so a database never run with workers has none.
+      const hasBoss = (await tx.$queryRawUnsafe<{ t: string | null }[]>(`SELECT to_regclass('pgboss.job')::text AS t`))[0].t;
+      const jobs = hasBoss
+        ? await tx.$executeRawUnsafe(
+            `DELETE FROM pgboss.job WHERE id::text IN (SELECT "pgBossJobId" FROM ${table("TimerRecord")} WHERE status = 'SCHEDULED' AND "pgBossJobId" IS NOT NULL)`,
+          )
+        : 0;
+      if (jobs) console.log(`  -${String(jobs).padStart(7)}  queued pg-boss jobs of scheduled timers`);
+      let total = 0;
+      for (const m of WIPE) {
+        const n = await tx.$executeRawUnsafe(`DELETE FROM ${table(m)}`);
+        if (n > 0) console.log(`  -${String(n).padStart(7)}  ${m}`);
+        total += n;
+      }
+      const traces = await tx.$executeRawUnsafe(`DELETE FROM ${table("TraceEvent")} ${OPERATIONAL_TRACE}`);
+      if (traces) console.log(`  -${String(traces).padStart(7)}  TraceEvent (operational)`);
+      const kept = await keptPrefixes(tx);
+      const seqs = await tx.$executeRawUnsafe(
+        `DELETE FROM ${table("ReadableIdSequence")} WHERE prefix <> ALL($1::text[])`,
+        kept,
+      );
+      if (seqs) console.log(`  -${String(seqs).padStart(7)}  ReadableIdSequence (counters reset; kept: ${kept.join(", ") || "none"})`);
+      // A room's bed setup may have been made up for a booking that is gone; it is how the room
+      // is made up now, so it stays — only the link to the erased booking goes.
+      await tx.$executeRawUnsafe(`UPDATE ${table("Room")} SET "bedTypeSetForEntryId" = NULL WHERE "bedTypeSetForEntryId" IS NOT NULL`);
+      total += traces + seqs;
+      console.log(`\nDone. Deleted ${total} rows.`);
+    },
+    { timeout: 30 * 60_000, maxWait: 60_000 },
+  );
+  console.log("\nRoom claim flags still describe the bookings that were wiped: run scripts/repair-stuck-room-states.ts --commit once the new data is in.");
 }
 
+classify();
 await (CONFIRM ? wipe() : dryRun());
 await prisma.$disconnect();
