@@ -316,9 +316,21 @@ function DepartureHandoff({ entry, live, tz }: { entry: EntryDetail; live: boole
   // The entry payload lists handoffs newest first — the departure handoff is the newest H4.
   const h4 = (entry.handoffs ?? []).find((h) => h.handoffType === "H4") ?? null;
   const done = !!h4 && (h4.state === "FULFILLED" || h4.isAutoFulfilled === true);
-  const [flag, setFlag] = useState<(typeof H4_FLAGS)[number][0]>("RECORDED");
+  // The room's fault is asked ONCE, at the inspection (2026-10-26, operator: "isn't these the
+  // same?"). The inspection's answer is the record the backend checks — a fault still there needs
+  // what the inspector found — so the handoff carries it rather than asking again and possibly
+  // disagreeing. Across rooms the most serious answer stands.
+  const inspections = entry.roomInspectionRecords ?? [];
+  const SEVERITY = ["UNRESOLVED_AT_CHECKOUT", "RESOLVED", "NOT_APPLICABLE"];
+  const rank = (f: string) => (SEVERITY.includes(f) ? SEVERITY.indexOf(f) : SEVERITY.length);
+  const flag = inspections.length ? [...inspections].map((i) => i.deficientFlagStatus).sort((a, b) => rank(a) - rank(b))[0] : null;
+  const putOff = inspections.length > 0 && inspections.every((i) => i.isDeferred);
+  const flagWords = flag ? (H4_FLAGS.find(([v]) => v === flag)?.[1] ?? words(flag)) : null;
   const fulfil = useMutation({
-    mutationFn: () => fulfilHandoff(session!, h4!.id, buildH4FulfilmentEvidence(flag)),
+    mutationFn: () => {
+      if (!flag) throw new Error("Record the inspection first — its answer is the handoff's");
+      return fulfilHandoff(session!, h4!.id, buildH4FulfilmentEvidence(flag));
+    },
     onSuccess: () => {
       toast.success("The departure handoff is done");
       refresh();
@@ -326,6 +338,7 @@ function DepartureHandoff({ entry, live, tz }: { entry: EntryDetail; live: boole
     onError: (e) => toastRefusal(e, "The departure handoff could not be completed"),
   });
   const doneAt = h4?.fulfilledAt ?? null;
+  const reason = !live ? "only while the booking is at Check-out" : !flag ? "record the inspection in The departure first" : undefined;
 
   return (
     <StepCard
@@ -339,37 +352,37 @@ function DepartureHandoff({ entry, live, tz }: { entry: EntryDetail; live: boole
           </span>
         ) : h4 ? (
           <span className="warn-ink">
-            {capFirst(HANDOFF_STATE_WORD[h4.state] ?? words(h4.state))} — say where the room&rsquo;s fault stands and mark it done
+            {flag
+              ? `${capFirst(HANDOFF_STATE_WORD[h4.state] ?? words(h4.state))} — ready to mark done`
+              : "Waiting for the inspection in The departure — its answer is carried here"}
           </span>
         ) : (
           <span className="warn-ink">Not raised — it is raised when the booking leaves Stay</span>
         )
       }
-      meta="Charges posted, the room inspected or put off, any damage assessed — the last check before the booking closes."
+      meta="Charges posted, the room inspected or put off, any damage assessed — the last check before the booking closes. The room's fault is the inspection's own answer."
     >
       {h4 && !done ? (
-        <div className="form2">
-          <div className="field">
-            <label>The room&rsquo;s fault, at departure</label>
-            <select className="input" value={flag} onChange={(e) => setFlag(e.target.value as typeof flag)} disabled={!live}>
-              {H4_FLAGS.map(([v, l]) => (
-                <option key={v} value={v}>
-                  {l}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="field" style={{ alignSelf: "end" }}>
-            <Button
-              compact
-              state={fulfil.isPending ? "working" : live ? "default" : "inert"}
-              title={live ? undefined : "only while the booking is at Check-out"}
-              workingLabel="Recording…"
-              onClick={() => fulfil.mutate()}
-            >
-              Mark the handoff done
-            </Button>
-          </div>
+        <div className="row-acts" style={{ justifyContent: "space-between", alignItems: "center" }}>
+          <span className="sm">
+            {flagWords ? (
+              <>
+                The room&rsquo;s fault, from the inspection: <b>{flagWords}</b>
+                {putOff ? <span className="meta"> · the inspection is put off to after departure</span> : null}
+              </>
+            ) : (
+              <span className="warn-ink">The inspection is not recorded yet.</span>
+            )}
+          </span>
+          <Button
+            compact
+            state={fulfil.isPending ? "working" : reason ? "inert" : "default"}
+            title={reason}
+            workingLabel="Recording…"
+            onClick={() => fulfil.mutate()}
+          >
+            Mark the handoff done
+          </Button>
         </div>
       ) : null}
     </StepCard>

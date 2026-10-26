@@ -98,6 +98,7 @@ import { S4Reserve, S4_PANES } from "@/components/ds/steps/s4-reserve";
 import { S5Arrival } from "@/components/ds/steps/s5-arrival";
 import { S6CheckIn } from "@/components/ds/steps/s6-checkin";
 import { S7Stay, S7_PANES } from "@/components/ds/steps/s7-stay";
+import { keysDue, keysDueWords } from "@/components/ds/steps/s7-rooms";
 import { S6_PANES } from "@/components/ds/steps/s6-checkin";
 import { S8CheckOut, S8_PANES } from "@/components/ds/steps/s8-checkout";
 import { S9Closed } from "@/components/ds/steps/s9-closed";
@@ -783,6 +784,10 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                 ? S8_PANES
                 : [];
   const pane = panes.some((p) => p.key === paneParam) ? paneParam : null;
+  // The keys owed today on a move day — counted on Stay's Keys tab (2026-10-26).
+  const keysOwedNow = step.key === "stay" && !viewingPast ? keysDue(entry, hotelToday) : { collect: [], handOver: [] };
+  const keysOwedCount = keysOwedNow.collect.length + keysOwedNow.handOver.length;
+  const keysOwed = keysDueWords(keysOwedNow);
 
   const gotoStep = (n: number) => {
     if (n > maxReach) {
@@ -1272,8 +1277,17 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                 This step
               </button>
               {panes.map((p) => (
-                <button key={p.key} type="button" className="tab" role="tab" aria-selected={view === "step" && pane === p.key} onClick={() => setPane(p.key)}>
+                <button
+                  key={p.key}
+                  type="button"
+                  className="tab"
+                  role="tab"
+                  aria-selected={view === "step" && pane === p.key}
+                  title={p.key === "keys" && keysOwed.length ? keysOwed.join(" · ") : undefined}
+                  onClick={() => setPane(p.key)}
+                >
                   {p.label}
+                  {p.key === "keys" && keysOwedCount ? <span className="tab-n stop">{keysOwedCount}</span> : null}
                 </button>
               ))}
               {viewingPast || sealed ? null : (
@@ -1658,13 +1672,37 @@ function SidePanel({
   // is the night audit timer showing for all the days, instead of just the upcoming date").
   const nightClocks = sorted.filter((x) => x.t.timerCode === "NIGHT_AUDIT_STAY_NIGHT_W37");
   const laterNights = nightClocks.length - 1;
+  // One housekeeping clock per room released at check-out, all with one label — they read as the
+  // same clock three times (2026-10-26, operator). Each names its room, and rooms due at the same
+  // moment share one row: "Rooms 302, 303, 304 cleaned by".
+  const roomNumberById = new Map((entry.roomAssignments ?? []).map((a) => [a.roomId, a.room?.roomNumber ?? a.roomId.slice(0, 6)]));
+  const cleanGroups = new Map<string, string[]>();
+  for (const x of sorted) {
+    if (x.t.timerCode !== "HOUSEKEEPING_SLA_W24") continue;
+    const at = x.t.firesAt.slice(0, 16);
+    const room = (x.t.entityId && roomNumberById.get(x.t.entityId)) || null;
+    cleanGroups.set(at, [...(cleanGroups.get(at) ?? []), ...(room ? [room] : [])]);
+  }
+  const cleanSeen = new Set<string>();
   const running = sorted
     .filter((x) => x.t.timerCode !== "NIGHT_AUDIT_STAY_NIGHT_W37" || x === nightClocks[0])
-    .map((x) =>
-      x === nightClocks[0] && laterNights > 0
-        ? { ...x, label: `${x.label} · then ${laterNights} more ${laterNights === 1 ? "night" : "nights"}` }
-        : x,
-    )
+    .filter((x) => {
+      if (x.t.timerCode !== "HOUSEKEEPING_SLA_W24") return true;
+      const at = x.t.firesAt.slice(0, 16);
+      if (cleanSeen.has(at)) return false;
+      cleanSeen.add(at);
+      return true;
+    })
+    .map((x) => {
+      if (x === nightClocks[0] && laterNights > 0) {
+        return { ...x, label: `${x.label} · then ${laterNights} more ${laterNights === 1 ? "night" : "nights"}` };
+      }
+      if (x.t.timerCode === "HOUSEKEEPING_SLA_W24") {
+        const rooms = [...new Set(cleanGroups.get(x.t.firesAt.slice(0, 16)) ?? [])].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+        return { ...x, label: rooms.length ? `${rooms.length > 1 ? "Rooms" : "Room"} ${rooms.join(", ")} cleaned by` : "Room cleaned by" };
+      }
+      return x;
+    })
     .slice(0, 8);
   const dwell = entry.stageDwellRecords?.[0];
   return (

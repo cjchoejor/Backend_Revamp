@@ -21,7 +21,7 @@ import { StepCanvas, Tool, useRefreshEntry, type StepPane, OtherWaysTabs, Inline
 import { BillingModelCard, DisputesCard, FaultsCard, HandoffsCard, RaiseDisputeDialog, TermsChangeCard } from "./s7-desk";
 import { ChitsWaitingCard, FolioCard, PostChargeCard } from "./s7-folio";
 import { NightsCard } from "./s7-nights";
-import { FlagDeficientDialog, KeysCard, RoomsInUseCard } from "./s7-rooms";
+import { FlagDeficientDialog, KeysCard, KeysDueNotice, RoomsInUseCard } from "./s7-rooms";
 import { RoomsTableCard } from "./rooms-table";
 
 const ID = {
@@ -42,6 +42,9 @@ const ID = {
 export const S7_PANES: StepPane[] = [
   { key: "nights", label: "Night audit", cards: ["nights"] },
   { key: "rooms", label: "Rooms", cards: [] },
+  // Keys have their own tab (2026-10-26, operator: room 304's key was never handed over on the
+  // move day — the card sat low on This step). The tab counts the keys owed today.
+  { key: "keys", label: "Keys", cards: [] },
   { key: "interim", label: "Interim payment", cards: [] },
   { key: "extend", label: "Extend the stay", cards: [] },
   { key: "early", label: "Leaving early", cards: [] },
@@ -86,10 +89,10 @@ export function S7Stay({
             <EarlyDepartureFacts entry={entry} />
           </Tool>
         ) : null}
+        <KeysDueNotice entry={entry} onOpen={() => go("keys")} />
         <FolioCard entry={entry} onTab={setChargeTarget} onInterimPayment={() => go("interim")} />
         <PostChargeCard entry={entry} target={chargeTarget} setTarget={setChargeTarget} />
         <ChitsWaitingCard />
-        <KeysCard entry={entry} />
         <HandoffsCard entry={entry} tz={tz} />
         <DisputesCard entry={entry} tz={tz} onRaise={() => openWay("dispute")} />
         <FaultsCard entry={entry} tz={tz} onFlag={() => openWay("fault")} />
@@ -115,6 +118,10 @@ export function S7Stay({
           lead="In-house the rates and waivers are read-only. A change takes effect from tonight; the nights already slept stay billed as they were audited."
         />
         <RoomsInUseCard entry={entry} id={ID.rooms} />
+      </div>
+
+      <div className="pane" hidden={at("keys")}>
+        <KeysCard entry={entry} emptyNote />
       </div>
 
       <div className="pane" hidden={at("interim")}>

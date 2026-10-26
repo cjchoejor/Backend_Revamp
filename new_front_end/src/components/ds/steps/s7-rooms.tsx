@@ -97,41 +97,95 @@ type KeyRow = {
   movesInLater: boolean;
 };
 
-export function KeysCard({ entry }: { entry: EntryDetail }) {
+/** Every room of the plan with where its key stands — vacated rooms included while their key is
+ * still out. The one reading the Keys tab, its count and This step's reminder all use. */
+export function keyPlan(entry: EntryDetail, hotelToday: string | null): KeyRow[] {
+  const stayByRoom = roomStayRangesByRoom(entry);
+  const rows = entry.roomAssignments ?? [];
+  const byRoom = new Map<string, typeof rows>();
+  for (const a of rows) byRoom.set(a.roomId, [...(byRoom.get(a.roomId) ?? []), a]);
+  const items = Array.from(byRoom.entries()).map(([roomId, rs]) => {
+    const stay = stayByRoom.get(roomId);
+    const keyOut = rs.some((r) => r.keyIssuedAt && !r.keyReturnedAt);
+    const keyReturned = !keyOut && rs.some((r) => r.keyReturnedAt);
+    // Vacated only once every range of the room has reached its move-out morning; never on a guess.
+    const vacated = !!hotelToday && rs.length > 0 && rs.every((r) => r.endDate && String(r.endDate).slice(0, 10) <= hotelToday);
+    return {
+      roomId,
+      roomNumber: rs[0].room?.roomNumber ?? roomId.slice(0, 8),
+      stay,
+      keyOut,
+      keyReturned,
+      vacated,
+      movesInToday: !!hotelToday && stay?.firstNight === hotelToday,
+      movesInLater: !!hotelToday && !!stay?.firstNight && stay.firstNight > hotelToday,
+    };
+  });
+  items.sort(
+    (x, y) =>
+      (x.stay?.firstNight ?? "9999").localeCompare(y.stay?.firstNight ?? "9999") || (y.stay?.nightCount ?? 0) - (x.stay?.nightCount ?? 0),
+  );
+  return items;
+}
+
+/**
+ * The keys the desk owes a move today (2026-10-26, operator: room 304's key was never handed over
+ * because the guest moved into it after check-in): a room the guest has left whose key is still
+ * out, and a room the guest is in by now whose key never went out. Only on bookings whose keys
+ * are kept room by room — one checked in before that kept a count alone, and reads nothing here.
+ */
+export function keysDue(entry: EntryDetail, hotelToday: string | null): { collect: string[]; handOver: string[] } {
+  if (!hotelToday || entry.currentStage !== "S7") return { collect: [], handOver: [] };
+  const stamped = (entry.roomAssignments ?? []).some((a) => a.keyIssuedAt);
+  if (!stamped) return { collect: [], handOver: [] };
+  const plan = keyPlan(entry, hotelToday);
+  return {
+    collect: plan.filter((k) => k.keyOut && k.vacated).map((k) => k.roomNumber),
+    handOver: plan
+      .filter((k) => !k.keyOut && !k.keyReturned && !k.vacated && !!k.stay?.firstNight && k.stay.firstNight <= hotelToday)
+      .map((k) => k.roomNumber),
+  };
+}
+
+/** What the desk owes, in words — the reminder on This step and the tab's hover. */
+export function keysDueWords(due: { collect: string[]; handOver: string[] }): string[] {
+  const rooms = (r: string[]) => `${r.length > 1 ? "Rooms" : "Room"} ${r.join(", ")}`;
+  return [
+    due.collect.length ? `${rooms(due.collect)} — the guest has moved out; take the key back` : null,
+    due.handOver.length ? `${rooms(due.handOver)} — the guest is in it now; hand over the key` : null,
+  ].filter(Boolean) as string[];
+}
+
+/** On This step only while a key is owed, so a move day is not missed (2026-10-26). */
+export function KeysDueNotice({ entry, onOpen }: { entry: EntryDetail; onOpen: () => void }) {
+  const hotelToday = useHotelDay()?.today ?? null;
+  const due = useMemo(() => keysDue(entry, hotelToday), [entry, hotelToday]);
+  const lines = keysDueWords(due);
+  if (!lines.length) return null;
+  return (
+    <StepCard
+      title="Keys to swap today"
+      icon="key"
+      status={
+        <span className="stop-ink" role="status">
+          {lines.join(" · ")}
+        </span>
+      }
+      acts={
+        <Button kind="secondary" compact icon="key" onClick={onOpen}>
+          Open Keys
+        </Button>
+      }
+    />
+  );
+}
+
+export function KeysCard({ entry, emptyNote = false }: { entry: EntryDetail; /** Say so, rather than draw nothing, when there are no room keys to show (the Keys tab). */ emptyNote?: boolean }) {
   const { session } = useSession();
   const { past } = useStepMode();
   const refresh = useRefreshEntry(entry.id);
   const hotelToday = useHotelDay()?.today ?? null;
-  const stayByRoom = useMemo(() => roomStayRangesByRoom(entry), [entry]);
-
-  // Every room of the plan, vacated ones included while their key is still out.
-  const plan = useMemo<KeyRow[]>(() => {
-    const rows = entry.roomAssignments ?? [];
-    const byRoom = new Map<string, typeof rows>();
-    for (const a of rows) byRoom.set(a.roomId, [...(byRoom.get(a.roomId) ?? []), a]);
-    const items = Array.from(byRoom.entries()).map(([roomId, rs]) => {
-      const stay = stayByRoom.get(roomId);
-      const keyOut = rs.some((r) => r.keyIssuedAt && !r.keyReturnedAt);
-      const keyReturned = !keyOut && rs.some((r) => r.keyReturnedAt);
-      // Vacated only once every range of the room has reached its move-out morning; never on a guess.
-      const vacated = !!hotelToday && rs.length > 0 && rs.every((r) => r.endDate && String(r.endDate).slice(0, 10) <= hotelToday);
-      return {
-        roomId,
-        roomNumber: rs[0].room?.roomNumber ?? roomId.slice(0, 8),
-        stay,
-        keyOut,
-        keyReturned,
-        vacated,
-        movesInToday: !!hotelToday && stay?.firstNight === hotelToday,
-        movesInLater: !!hotelToday && !!stay?.firstNight && stay.firstNight > hotelToday,
-      };
-    });
-    items.sort(
-      (x, y) =>
-        (x.stay?.firstNight ?? "9999").localeCompare(y.stay?.firstNight ?? "9999") || (y.stay?.nightCount ?? 0) - (x.stay?.nightCount ?? 0),
-    );
-    return items;
-  }, [entry.roomAssignments, stayByRoom, hotelToday]);
+  const plan = useMemo<KeyRow[]>(() => keyPlan(entry, hotelToday), [entry, hotelToday]);
 
   // Mirror of the backend's gate: rooms with no night in common are one party's sequential rooms,
   // so a key still out on any of them holds this room's key back — both ways.
@@ -192,7 +246,8 @@ export function KeysCard({ entry }: { entry: EntryDetail }) {
   });
 
   const show = plan.length > 1 || plan.some((k) => k.keyOut || k.keyReturned);
-  if (!show) return null;
+  if (!show)
+    return emptyNote ? <StepCard title="Keys" icon="key" status="No room keys are kept room by room on this booking — they were counted at check-in." /> : null;
   const bulk = plan.filter((k) => !k.keyOut && !k.movesInLater && blockersFor(k.roomId).length === 0);
   const busy = issue.isPending || giveBack.isPending || issueAll.isPending;
 

@@ -1080,3 +1080,33 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .bill-band .bb-cell.owed.over .bb-k, .ds .bill-band .bb-cell.owed.over .bb-v { color: var(--warning); }
 .ds .bill-lines-row { display: flex; align-items: center; justify-content: space-between; gap: var(--s2); margin-top: var(--s3); }
 .ds .bill-lines-row .bl-n { font-size: 13px; font-weight: 600; color: var(--ink-2); }
+
+/* Tabs look like things to click (2026-10-26, operator: "these tabs need to look more like things
+   that can be clicked rather than just words, or else the user may miss it — do it for all
+   stages"). Each tab is a bordered control at rest and fills on hover; the open one carries the
+   accent with a second cue — a heavier underline and bold — never colour alone (the Atlassian
+   rule). The step's tabs and the booking's five keep their two groups; a group wraps inside itself. */
+.ds .canvas-tabs:not(.desk-root *) { row-gap: var(--s2); column-gap: var(--s3); padding-bottom: var(--s2); margin: -8px 0 var(--s3); }
+.ds .canvas-tabs .tabgroup { gap: var(--s1); flex-wrap: wrap; }
+.ds .canvas-tabs .tabgroup.booking { padding-left: var(--s3); }
+.ds .canvas-tabs .tab:not(.desk-root *) {
+  height: 32px; padding: 0 var(--s3); margin-bottom: 0;
+  background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--r-control);
+  color: var(--ink); font-size: 14px; font-weight: 500;
+}
+.ds .canvas-tabs .tab:hover:not(.desk-root *) { background: var(--surface-2); border-color: var(--ink-3); }
+.ds .canvas-tabs .tab:active:not(.desk-root *) { background: var(--surface-3); }
+.ds .canvas-tabs .tab[aria-selected="true"]:not(.desk-root *) {
+  background: var(--accent-soft); border-color: var(--accent); color: var(--accent-ink); font-weight: 700;
+  box-shadow: inset 0 -3px 0 var(--accent);
+}
+.ds .canvas-tabs .tab:focus-visible:not(.desk-root *) { outline: none; box-shadow: var(--focus); }
+.ds .subtabs { gap: var(--s2); border-bottom: 0; }
+.ds .subtab {
+  margin-bottom: 0; padding: 6px var(--s3);
+  background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--r-control);
+  color: var(--ink); font-weight: 500;
+}
+.ds .subtab:hover { background: var(--surface-2); border-color: var(--ink-3); }
+.ds .subtab[aria-selected="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-ink); font-weight: 700; box-shadow: inset 0 -3px 0 var(--accent); }
+.ds .subtab:focus-visible { box-shadow: var(--focus); }
