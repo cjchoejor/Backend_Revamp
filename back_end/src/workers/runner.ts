@@ -22,6 +22,7 @@ import { runRoomReadinessSlaWorker } from "./w23-room-readiness-sla-worker.js";
 import { runNightAuditStayNightWorker } from "./w37-night-audit-stay-night-worker.js";
 import { runHandoffAcceptanceWorker } from "./w25-handoff-acceptance-worker.js";
 import { runNightAuditWorker } from "./w6-night-audit-worker.js";
+import { catchUpMissedNightAudits } from "../services/application/night-audit-catch-up-service.js";
 import { runPaymentFollowUpWorker } from "./w8-payment-follow-up-worker.js";
 import { runPostCheckoutInspectionWorker } from "./w9-post-checkout-inspection-worker.js";
 import { runDeficientResolutionDeadlineWorker } from "./w10-deficient-resolution-deadline-worker.js";
@@ -126,6 +127,24 @@ export async function startWorkers() {
     // eslint-disable-next-line no-console
     console.error("[workers] Failed to register night audit recurring schedule:", e);
   }
+
+  // A night whose scheduled run was missed — the server off at that minute (pg-boss does not
+  // re-send a missed schedule) or the run failing — is caught up now and every hour after
+  // (2026-10-26; night-audit-catch-up-service.ts). Best-effort: it never stops the workers.
+  const catchUp = async (when: string) => {
+    try {
+      const results = await catchUpMissedNightAudits(prisma);
+      for (const r of results) {
+        // eslint-disable-next-line no-console
+        console.log(`[workers] Night audit catch-up (${when}): ${r.night} ${r.outcome}${r.runStatus ? ` ${r.runStatus}` : ""}${r.error ? ` — ${r.error}` : ""}`);
+      }
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error("[workers] Night audit catch-up failed:", e);
+    }
+  };
+  await catchUp("start-up");
+  setInterval(() => void catchUp("hourly"), 60 * 60_000).unref();
 
   return engine;
 }

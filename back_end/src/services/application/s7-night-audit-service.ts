@@ -202,7 +202,7 @@ export async function runNightAuditForEntry(
   };
 }
 
-async function planNightForEntries(
+export async function planNightForEntries(
   prisma: PrismaClient,
   operatingDate: Date,
   entryWhere: Prisma.EntryWhereInput = {},
