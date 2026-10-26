@@ -1,6 +1,7 @@
 "use client";
 
 import { S5ApiHealth } from "@/components/s5/s5-api-health";
+import { TimerFailuresPanel } from "@/components/admin/timer-failures-panel";
 
 export default function AdminHealthPage() {
   return (
@@ -13,6 +14,7 @@ export default function AdminHealthPage() {
       <div className="admin-panel max-w-lg p-6">
         <S5ApiHealth />
       </div>
+      <TimerFailuresPanel />
     </div>
   );
 }
