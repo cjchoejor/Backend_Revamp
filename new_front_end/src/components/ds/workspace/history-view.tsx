@@ -277,7 +277,7 @@ export function HistoryView({
             <h4>
               Every pass, in full
               <Help label="About passes">
-                A change after reserving closes the current pass and opens a new one; what a closed pass decided stays as it was.
+                Each time the booking is changed after it was reserved, it starts a new round — a pass. What earlier passes decided is kept as it was.
               </Help>
             </h4>
             <Button kind="quiet" compact onClick={() => setShowPasses((v) => !v)}>

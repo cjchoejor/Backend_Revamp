@@ -1369,7 +1369,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                     <span className="sm">
                       {sealed
                         ? sealedOutcome
-                        : `This step was passed on the way to ${STEP_NAMES[currentOrder - 1]} — what it shows is what was decided then; nothing here can be changed. Any change is a governed re-entry.`}
+                        : `This step was passed on the way to ${STEP_NAMES[currentOrder - 1]} — what it shows is what was decided then; nothing here can be changed. To change it, work from the step the booking is at now.`}
                     </span>
                   </div>
                 ) : null}

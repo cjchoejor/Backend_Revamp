@@ -1211,7 +1211,7 @@ export function NewInquiryCanvas() {
                     >
                       Travelling as a party
                     </Button>
-                    <Button kind="quiet" compact state="inert" title="Separate bills for each guest are not in the backend yet">
+                    <Button kind="quiet" compact state="inert" title="Not possible yet — a booking has one bill. At check-out it can be paid room by room.">
                       One bill each
                     </Button>
                     <Button

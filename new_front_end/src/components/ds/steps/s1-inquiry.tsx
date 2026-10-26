@@ -64,6 +64,7 @@ import {
   OtherWaysTabs,
   parkTab,
   declineTab,
+  useOpenOtherWay,
 } from "./kit";
 import { AddReturnStay, TripStays } from "@/components/ds/workspace/return-stay";
 import { enumerateNights, useRoomSelection } from "./use-room-selection";
@@ -795,7 +796,7 @@ function TheStay({
             kind="quiet"
             compact
             state="inert"
-            title="Separate bills for each guest are not in the backend yet"
+            title="Not possible yet — a booking has one bill. At check-out it can be paid room by room."
           >
             One bill each
           </Button>
@@ -879,6 +880,7 @@ function TheHouse({
   const { session } = useSession();
   const refresh = useRefreshEntry(entry.id);
   const flow = useStepFlow();
+  const openWay = useOpenOtherWay();
   const isGm = atLeast(session?.actorLevel, "L3");
 
   // This pass's searches only — a new pass searches its dates again (2026-09-18).
@@ -1239,15 +1241,15 @@ function TheHouse({
                   kind="secondary"
                   compact
                   state="inert"
-                  title="Recording an offer of what we have is not in the backend yet (BE-36)"
+                  title="Not possible yet — to offer other dates or rooms, change the stay above and ask the house again"
                 >
                   Offer what we have
                 </Button>
                 <Button
                   kind="quiet"
                   compact
-                  state="inert"
-                  title="Recording a decline with its reason is not in the backend yet (BE-36)"
+                  title="Record it under Other ways › The guest said no — say that nothing was free"
+                  onClick={() => openWay("decline")}
                 >
                   Nothing available
                 </Button>

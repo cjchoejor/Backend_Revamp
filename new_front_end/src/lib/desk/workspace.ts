@@ -243,7 +243,7 @@ export function s3Readiness(
       met: hasAnyContact(entry),
       card: "parties",
     },
-    { label: "Provisional folio & billing model", met: !!folio?.billingModel && folio?.state === "PROVISIONAL", card: "billing-model" },
+    { label: "Who pays chosen", met: !!folio?.billingModel && folio?.state === "PROVISIONAL", card: "billing-model" },
     { label: "Cancellation terms recorded", met: !!entry.cancellationDisclosure, card: "terms" },
     // GENERATING the proforma is mandatory; SENDING it is not (operator ruling — only when an
     // advance is demanded or the guest asks). So "generated" is the standing item, and the

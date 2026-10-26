@@ -318,8 +318,8 @@ function RoomInspectionPanel({
               <span className="sm meta">
                 no open fault report
                 <Help label="About fault reports">
-                  A fault report is a fault flagged on the room — from Stay&rsquo;s Other ways (Flag room deficient) or the Rooms page. The
-                  folio&rsquo;s charges are not read here.
+                  A fault report is a fault flagged on the room — from Stay&rsquo;s Other ways (Flag room deficient) or the Rooms page. Charges
+                  on the bill aren&rsquo;t counted here.
                 </Help>
               </span>
             ) : null}

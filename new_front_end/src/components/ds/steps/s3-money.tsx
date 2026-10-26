@@ -312,7 +312,7 @@ export function PaymentPlanCard({
           ) : null}
           {status.installments?.length ? (
             <HelpHere label="About receipts">
-              The money is on the booking&rsquo;s record. A receipt as a paper is not in the backend yet (BE-43).
+              Every payment is kept on the booking. A printed receipt can&rsquo;t be made yet.
             </HelpHere>
           ) : null}
           {shortWithPlan ? (
@@ -742,7 +742,7 @@ function PaymentDialog({
         <label>
           How it was paid
           <Help label="About the payment">
-            The slip&rsquo;s reference goes in the note. The payment is dated today (a back-dated receipt is BE-13); the receipt as a paper is BE-43.
+            Put the bank slip&rsquo;s or the transfer&rsquo;s reference in the note. The payment is recorded with today&rsquo;s date — if it was paid on another day, say so in the note. A printed receipt can&rsquo;t be made yet.
           </Help>
         </label>
         <Choice options={ADVANCE_PAYMENT_MODES} value={mode} onChange={setMode} />

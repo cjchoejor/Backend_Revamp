@@ -239,7 +239,7 @@ export default function TodayPage() {
                     <Button kind="secondary" compact onClick={() => router.push("/bookings?view=nooutcome")}>
                       Open the list
                     </Button>
-                    <span className="meta">recording a decline with its reason is not in the backend yet</span>
+                    <span className="meta">turn each down under Other ways › The guest said no, so the reason is kept</span>
                   </div>
                 </div>
                 <div>

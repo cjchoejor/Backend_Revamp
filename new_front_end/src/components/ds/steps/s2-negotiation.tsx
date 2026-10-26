@@ -563,7 +563,8 @@ export function S2Negotiation({
             label="Extend"
             note="Gives the marked rooms more time — once by the desk, then by the FOM. It never re-prices the quotation."
             state="inert"
-            reason="Extending a marker or a quotation's validity can't be done yet (BE-59)."
+            reason="Not possible yet — the marked rooms are held until the time shown above."
+            notYet
           />
         </div>
       </Live>
@@ -1211,7 +1212,7 @@ function QuoteHistoryCard({ entry, quotations, tz }: { entry: EntryDetail; quota
   return (
     <StepCard
       title="Every version of the quotation"
-      meta={`Each version shows the total it was priced at. A replaced version opens exactly as it was sent.${passes.many ? " Versions from an earlier pass are kept for the record — view only." : ""}`}
+      meta={`Each version shows the total it was priced at. A replaced version opens exactly as it was sent.${passes.many ? " Versions from before the booking was last changed are kept for the record — view only." : ""}`}
     >
       <table className="table compact">
         <thead>

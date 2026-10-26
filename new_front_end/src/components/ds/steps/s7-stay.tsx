@@ -115,7 +115,7 @@ export function S7Stay({
         <RoomsTableCard
           entry={entry}
           title="The rooms"
-          lead="In-house the rates and waivers are read-only. A change takes effect from tonight; the nights already slept stay billed as they were audited."
+          lead="While the guest is staying the prices can't be changed here. A change takes effect from tonight; the nights already slept stay as they were charged."
         />
         <RoomsInUseCard entry={entry} id={ID.rooms} />
       </div>

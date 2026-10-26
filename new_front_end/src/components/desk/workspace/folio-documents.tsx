@@ -148,19 +148,19 @@ export function FolioDocumentsBlock({ entry, stage }: { entry: EntryDetail; stag
         <Help label="About these bills">
         {stage === "S7" ? (
           <>
-            Every bill here is a <b>view of the live folio</b> — nothing is numbered or stored, each print is a
-            snapshot as at now. Hand the guest the <b>tentative invoice</b>; the tax invoice stays a draft until
-            settlement issues the one original at check-out.
+            Each of these shows the bill <b>as it stands right now</b> — nothing is numbered or kept, and a print
+            shows the moment it was printed. Give the guest the <b>tentative invoice</b>; the tax invoice stays a
+            draft until the bill is settled at check-out.
           </>
         ) : sealed ? (
           <>
-            Settlement sealed the folio: the <b>master bill</b> is frozen (reprints carry an ordinal) and the{" "}
-            <b>tax invoice</b> is issued once, then served only from its stored original.
+            The bill is settled: the <b>master bill</b> no longer changes (each reprint is numbered), and the{" "}
+            <b>tax invoice</b> was issued once — every copy is the same original.
           </>
         ) : (
           <>
             Before money is taken: print the <b>master bill</b> for the guest&rsquo;s signature and check the tax
-            invoice <b>draft</b> — its particulars become the one original at settlement.
+            invoice <b>draft</b> — what it says becomes the real tax invoice when the bill is settled.
           </>
         )}
         </Help>

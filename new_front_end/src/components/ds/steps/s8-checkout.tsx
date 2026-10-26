@@ -1040,7 +1040,8 @@ function HowSettled({
           <SeeRow
             label="Settle by proportion…"
             note="whatever split was agreed — 60 / 40 — each invoice its share of everything"
-            reason="Settlement by share is not in the backend yet (BE-70)"
+            reason="Not possible yet — use Settle part by part instead"
+            notYet
           />
         </Live>
       </div>
@@ -1491,17 +1492,17 @@ function Invoices({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz: 
       <StepCard
         title={`Extras · ${booked.guest}`}
         right={<Chip tone="quiet">not a separate invoice yet</Chip>}
-        meta={`A tax invoice of the guest's own extras — food, laundry, the minibar — apart from the rooms billed to ${booked.party ?? "the account"}. Money in, the invoice issued, receipt and invoice sent in one act is BE-41 · BE-69.`}
+        meta={`A tax invoice of the guest's own extras — food, laundry, the minibar — apart from the rooms billed to ${booked.party ?? "the account"}. It can't be made yet.`}
       >
         <p className="sm">
           Today the bill issues <b>one</b> tax invoice to {booked.payer}. Until the split exists, take the guest&rsquo;s part with <b>Settle part by part…</b> above.
         </p>
         <Live>
           <div className="row-acts" style={{ marginTop: 10 }}>
-            <Button kind="secondary" compact icon="eye" state="inert" title="A tax invoice per payer is not in the backend yet (BE-41 · BE-69)">
+            <Button kind="secondary" compact icon="eye" state="inert" title="Not possible yet — there is one tax invoice for the whole bill">
               Preview draft
             </Button>
-            <Button state="inert" title="Money in, the guest's invoice issued, receipt and invoice sent in one act — per-payer invoices are not in the backend yet (BE-41 · BE-69 · BE-43)">
+            <Button state="inert" title="Not possible yet — take the guest's part with Settle part by part, above">
               Record payment · issue · send
             </Button>
           </div>
@@ -1744,7 +1745,7 @@ function Departure({ entry, live }: { entry: EntryDetail; live: boolean }) {
           ) : (
             <>their tax invoice, sent — and printed if they want paper</>
           )}
-          <Help label="About the receipt">A money receipt as a paper is not in the backend yet (BE-43).</Help>
+          <Help label="About the receipt">A printed receipt for the payment can&rsquo;t be made yet — the tax invoice shows what was paid.</Help>
         </Fact>
         <Fact k="The record">
           the stay stays on {booked.guest}&rsquo;s record; closing the booking seals it

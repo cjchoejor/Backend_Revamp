@@ -188,7 +188,7 @@ export function SplitSettlementBlock({
         Who&apos;s paying for what
         <Help label="About who pays for what">
           Each room and space carries its own share of the bill. Taking money here records who paid for which part — it does not check the
-          guest out or close the folio.
+          guest out or close the bill.
         </Help>
         {data && (
           <span style={{ fontWeight: 500, color: "var(--ink-3)", fontSize: 11 }}>

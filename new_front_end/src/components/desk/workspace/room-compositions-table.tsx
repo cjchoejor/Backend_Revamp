@@ -242,7 +242,7 @@ export function NegotiationDiscountBar({
         <span
           className="rct-neg-note"
           style={{ textAlign: "right", flex: "0 1 auto" }}
-          title="Percent or flat amount — both come off the booking's grand total, meals and extra beds included. Service charge and GST follow the discounted figure, and a discount larger than the bill settles it (never a refund). Priced by the backend when you create or regenerate the quote."
+          title="Percent or flat amount — both come off the booking's grand total, meals and extra beds included. Service charge and GST follow the discounted figure, and a discount larger than the bill settles it (never a refund). The hotel's system works out the figures when the quote is saved."
         >
           Comes off the grand total — meals &amp; beds included
         </span>
@@ -2045,7 +2045,7 @@ export function RoomCompositionsTable({
         {roomMin != null && (
           <span
             className={`rce-tally${sealedRoomIds.length < roomMin ? " off" : ""}`}
-            title={`Backend capacity envelope: this party needs at least ${roomMin} room${roomMin === 1 ? "" : "s"} — ${sealedRoomIds.length} sealed at Inquiry`}
+            title={`This party needs at least ${roomMin} room${roomMin === 1 ? "" : "s"} — ${sealedRoomIds.length} chosen`}
           >
             {sealedRoomIds.length} room{sealedRoomIds.length === 1 ? "" : "s"} · needs ≥{roomMin}
           </span>
@@ -2400,7 +2400,7 @@ export function RoomCompositionsTable({
                       {ratesOpen && preview ? (
                         <td
                           className="rowtot"
-                          title="This room's stay total including service charge & GST — priced by the backend"
+                          title="This room's stay total, with service charge and GST"
                         >
                           {fmtNu(pvByRoom.get(id)?.total)}
                         </td>
@@ -2522,7 +2522,7 @@ export function RoomCompositionsTable({
             </span>
           )}
           <span className="ln" />
-          {!quiet && <span className="src">priced by the backend — the quote will match</span>}
+          {!quiet && <span className="src">the quote will show the same figures</span>}
         </div>
       )}
 
@@ -2566,8 +2566,8 @@ export function RoomCompositionsTable({
         return MEAL_COLS.reduce((s, c) => s + cnt(r[c]), 0) > cnt(r.ad) + cnt(r.c6) + cnt(r.u6);
       }) && (
         <p className="rce-warns" style={{ marginBottom: 0 }}>
-          A row has more meal-plan pax than occupants — one plan per guest; the backend will reject the
-          draft until it fits.
+          A room has more guests on meal plans than guests in it — one plan per guest. The quote can't be
+          saved until it fits.
         </p>
       )}
       {/* Saving the table IS pricing it — there is nowhere else a composition lives (2026-09-30).
@@ -2618,8 +2618,8 @@ export function RoomCompositionsTable({
           update" — stale since 2026-08-04: computeRoomComposition now prices covers by age band
           (under-6 free, 6–10 at the child share), so children SHOULD be counted on the plans. */}
       {!quiet && <p className="rce-hint">
-        Occ is derived from the guest columns · arrow keys / Enter move between cells · every figure is
-        priced by the backend. Rate columns follow the meal plans in use — no plan (EP) negotiates room
+        Occ adds itself up from the guest columns · arrow keys and Enter move between cells · every figure is
+        worked out by the hotel's system. Rate columns follow the meal plans in use — no plan (EP) negotiates room
         &amp; bed only, and a meal&rsquo;s rate unlocks per room once its plan includes that meal. Count
         children on the meal plans — child pricing applies automatically (under-6 free, 6–10 at the
         child rate).

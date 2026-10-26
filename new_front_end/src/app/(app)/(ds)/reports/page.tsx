@@ -50,8 +50,9 @@ export default function ReportsPage() {
       ["Stayed", rows.filter((r) => live(r) && stepNoOfStage(r.currentStage) >= 7).length],
     ];
     const lost: Array<[string, number]> = [
-      ["Outcome never recorded", rows.filter((r) => r.status === "EXPIRED" && !r.noShowDetermination).length],
-      ["Cancelled", rows.filter((r) => r.status === "CANCELLED").length],
+      ["Turned down by the guest", rows.filter((r) => r.status === "CANCELLED" && r.closedAs === "DECLINED").length],
+      ["Lapsed — no answer recorded", rows.filter((r) => r.status === "EXPIRED" && !r.noShowDetermination).length],
+      ["Cancelled", rows.filter((r) => r.status === "CANCELLED" && r.closedAs !== "DECLINED").length],
       ["No-show", rows.filter((r) => !!r.noShowDetermination).length],
       ["No dates on file", rows.filter((r) => r.status === "ACTIVE" && !r.checkInDate).length],
       [
@@ -124,7 +125,7 @@ export default function ReportsPage() {
             {data.lost.map(([k, n]) => (
               <Bar key={k} label={k} value={n} max={lostMax} text={String(n)} />
             ))}
-            <p className="meta">Recording a decline with its reason is not in the backend yet, so an inquiry that went elsewhere reads as an outcome never recorded.</p>
+            <p className="meta">A guest&rsquo;s no is kept with their words when the desk records it under Other ways › The guest said no. A lead left to lapse has nothing written down.</p>
           </section>
           <section className="block">
             <div className="block-head">

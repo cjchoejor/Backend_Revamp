@@ -171,7 +171,7 @@ export function CaseCards({
       <StepCard
         key="credit"
         title="Credit ceiling"
-        meta="The FOM's extension. The desk is warned near the ceiling, and postings stop at it until credit is extended again or an interim payment is taken."
+        meta="How much the guest may owe, set by the FOM. The desk is warned as the bill gets near it, and no more charges go on once it is reached — until the FOM allows more or the guest pays part of the bill."
       >
         <Facts wide>
           <Fact k="Extended up to">{ps.ceilingAmount != null ? money(ps.ceilingAmount, cur) : null}</Fact>

@@ -709,7 +709,7 @@ export function RoomChangeControl({
           setOpen((v) => !v);
           setExpanded(false);
         }}
-        title="Swap only this room — the rest of the booking carries. The backend re-checks availability night by night and re-prices as if the booking were re-made, without leaving this page."
+        title="Change only this room — the rest of the booking stays as it is. The room is checked as free night by night and the stay is priced again, without leaving this page."
       >
         <ArrowLeftRight style={{ width: 11, height: 11 }} />
         {open ? "Cancel change" : `Change room ${fromRoomNumber}`}
@@ -757,9 +757,9 @@ export function RoomChangeControl({
               {atS7 ? " — from tonight onward" : ""}
               {nights.length > 0 ? ` · ${nights.length} night${nights.length === 1 ? "" : "s"} (${shortDate(nights[0])} – ${shortDate(nights[nights.length - 1])})` : ""}
               <Help label="How a room change works">
-                Pick a room for each night, exactly like the S1 table — the same room for the whole stay (row “All”), or different rooms on
-                different nights{atS7 ? "" : ", or keep the current room for some nights"}. Guests, payments and paperwork carry unchanged; the
-                backend re-checks availability and re-prices as if the booking were set up fresh, and comes straight back to this step. Nothing
+                Pick a room for each night, as on the Inquiry step — the same room for the whole stay (row “All”), or different rooms on
+                different nights{atS7 ? "" : ", or keep the current room for some nights"}. Guests, payments and papers stay as they are; the
+                new room is checked as free and the stay is priced again, and the booking comes straight back to this step. Nothing
                 is sent to the guest unless you send it.
                 {atS7 ? " In-house the guest moves once — one room for all remaining nights; nights already slept stay billed on the current room." : ""}
                 {" "}A same-type swap needs no approval; any different-type room (upgrade or downgrade) needs the FOM.

@@ -786,6 +786,7 @@ export function SeeRow({
   state,
   reason,
   kind = "quiet",
+  notYet,
 }: {
   label: string;
   note: ReactNode;
@@ -793,13 +794,15 @@ export function SeeRow({
   state?: ButtonProps["state"];
   reason?: string;
   kind?: ButtonProps["kind"];
+  /** The act is not possible yet at all — its reason belongs with the explanation behind the "?". */
+  notYet?: boolean;
 }) {
   const quiet = useQuietScreen();
   if (quiet) {
     const shut = state === "inert" || !onClick;
-    // A reason naming a backend item (BE-39) says the act is not built yet — that belongs with
-    // the explanation. Any other reason is the booking's own state, a message, so it stays out.
-    const soon = !!reason && /\bBE-\d+/.test(reason);
+    // A not-possible-yet reason goes behind the "?" with the explanation. Any other reason is the
+    // booking's own state, a message, so it stays on screen.
+    const soon = !!reason && !!notYet;
     return (
       <div className="seerow plain">
         <Button
@@ -813,7 +816,7 @@ export function SeeRow({
         </Button>
         <Help label={`About ${actName(label)}`}>
           <p>{sentence(note)}</p>
-          {shut && soon ? <p className="why">{reason!.replace(/\s*\(BE-\d+\)/, "")}</p> : null}
+          {shut && soon ? <p className="why">{reason}</p> : null}
         </Help>
         {shut && reason && !soon ? <span className="why">{reason}</span> : null}
       </div>

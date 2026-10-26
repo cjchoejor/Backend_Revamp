@@ -423,7 +423,7 @@ export function RaiseDisputeDialog({ entry, open, onClose }: { entry: EntryDetai
       <div className="field">
         <label>What is disputed</label>
         <input className="input" value={title} placeholder="Restaurant chit R-1182 · did not order this" onChange={(e) => setTitle(e.target.value)} autoFocus={!inline} />
-        <span className="control-note">Holding one posting out of the bill is not in the backend yet (BE-53) — name the charge here</span>
+        <span className="control-note">Name the charge here. It stays on the bill while the dispute is open.</span>
       </div>
       <div className="field" style={{ marginTop: 10 }}>
         <label>The guest&rsquo;s words · optional</label>
@@ -533,7 +533,7 @@ export function TermsChangeCard({ entry }: { entry: EntryDetail }) {
   if (past || !atLeast(session?.actorLevel, "L2")) return null;
   const missing = !reason.trim() ? "the reason" : !terms.trim() ? "the new terms, in a sentence" : null;
   return (
-    <StepCard title="A change to the terms · the FOM" icon="pen" meta="Recorded against this pass with the FOM's authority. A room of another type is the room's own Change room, above.">
+    <StepCard title="A change to the terms · the FOM" icon="pen" meta="Recorded by the FOM. To move the guest to a room of another type, use Change room on that room, above.">
       <div className="form2">
         <div className="wide field">
           <label>What changes</label>

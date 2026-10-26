@@ -111,12 +111,12 @@ export function BookingOtherWays({
         ) : (
           <ShutWay
             act="Open a new pass"
-            why="Needs the FOM — a change of dates opens a new pass."
+            why="Needs the FOM — changing the dates sends the booking back to Inquiry."
             help={
               <p>
                 {reserved
-                  ? "A governed new pass: back to Inquiry for the new dates, the rooms released, re-quoted and reserved again."
-                  : "Re-quote on the new dates — back to Inquiry in a new pass; the held rooms are released."}
+                  ? "The booking goes back to Inquiry for the new dates: the rooms are let go, a new quotation is made, and it is reserved again."
+                  : "The booking goes back to Inquiry for the new dates and is priced again; the held rooms are let go."}
               </p>
             }
           />

@@ -1341,9 +1341,9 @@ export function StayExtensionBlock({ entry, onChanged }: { entry: EntryDetail; o
             open={commitOpen}
             title="Commit the stay extension"
             subtitle={`Checkout ${fmtDay(active.priorCheckOutDate)} → ${fmtDay(active.newCheckOutDate)}`}
-            why="The interim payment is in. Committing runs the governed journey — a new pass, a silent re-quote over the extended stay, a re-freeze with the new checkout — and brings the booking back to the Stay step."
+            why="The payment is in. Committing makes the booking's papers again for the longer stay — a new quotation and a new reservation with the new check-out date — and brings the booking back to the Stay step."
             consequences={[
-              "The reservation is re-frozen with the new checkout date (a new immutable record); the extra nights get their night-audit clocks.",
+              "A new reservation is made with the new check-out date; the earlier one is kept as it was. The extra nights are added to the night audit.",
               active.pricingPreview?.moves?.length
                 ? `On ${fmtDay(active.priorCheckOutDate)} the guest moves room — execute it that day from the Rooms block (key swap).`
                 : "Nobody moves rooms; the current room runs on to the new checkout.",
