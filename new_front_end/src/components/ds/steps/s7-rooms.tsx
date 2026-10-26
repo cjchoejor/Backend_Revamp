@@ -106,7 +106,7 @@ export function keyPlan(entry: EntryDetail, hotelToday: string | null): KeyRow[]
   for (const a of rows) byRoom.set(a.roomId, [...(byRoom.get(a.roomId) ?? []), a]);
   const items = Array.from(byRoom.entries()).map(([roomId, rs]) => {
     const stay = stayByRoom.get(roomId);
-    const keyOut = rs.some((r) => r.keyIssuedAt && !r.keyReturnedAt);
+    const keyOut = rs.some((r) => r.keyIssuedAt && !r.keyReturnedAt && !r.keyLostAt);
     const keyReturned = !keyOut && rs.some((r) => r.keyReturnedAt);
     // Vacated only once every range of the room has reached its move-out morning; never on a guess.
     const vacated = !!hotelToday && rs.length > 0 && rs.every((r) => r.endDate && String(r.endDate).slice(0, 10) <= hotelToday);

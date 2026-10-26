@@ -1509,33 +1509,59 @@ function Departure({ entry, live }: { entry: EntryDetail; live: boolean }) {
       .map(([roomId, rs]) => ({
         roomId,
         roomNumber: rs[0].room?.roomNumber ?? roomId.slice(0, 6),
-        outstanding: rs.some((r) => r.keyIssuedAt && !r.keyReturnedAt),
-        backEarlier: rs.some((r) => r.keyReturnedAt) && !rs.some((r) => r.keyIssuedAt && !r.keyReturnedAt),
+        outstanding: rs.some((r) => r.keyIssuedAt && !r.keyReturnedAt && !r.keyLostAt),
+        backEarlier: rs.some((r) => r.keyReturnedAt) && !rs.some((r) => r.keyIssuedAt && !r.keyReturnedAt && !r.keyLostAt),
+        lost: rs.some((r) => r.keyLostAt),
       }))
-      .filter((k) => k.outstanding || k.backEarlier)
+      .filter((k) => k.outstanding || k.backEarlier || k.lost)
       .sort((a, b) => a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true }));
   }, [entry.roomAssignments]);
   const roomWise = keyPlan.length > 0;
   const outstandingKeys = keyPlan.filter((k) => k.outstanding);
-  const [back, setBack] = useState<Record<string, boolean>>({});
-  const marked = outstandingKeys.filter((k) => back[k.roomId]);
+  // Each room's key is BACK or LOST (2026-10-26, operator: "tell the system which room's key
+  // exactly is missing"); a room not answered has not come back. A loss needs the note.
+  const [keyState, setKeyState] = useState<Record<string, "back" | "lost">>({});
+  const marked = outstandingKeys.filter((k) => keyState[k.roomId] === "back");
+  const lostKeys = outstandingKeys.filter((k) => keyState[k.roomId] === "lost");
+  const unanswered = outstandingKeys.filter((k) => !keyState[k.roomId]);
+  const toggleKey = (roomId: string, v: "back" | "lost") =>
+    setKeyState((p) => {
+      const next = { ...p };
+      if (next[roomId] === v) delete next[roomId];
+      else next[roomId] = v;
+      return next;
+    });
   const [count, setCount] = useState(String(keysIssued || 1));
+  const [lostCount, setLostCount] = useState("0");
+  const lostN = Number.parseInt(lostCount || "0", 10) || 0;
   const [keyNote, setKeyNote] = useState("");
   const countN = Number.parseInt(count, 10);
-  const short = roomWise ? marked.length !== outstandingKeys.length : countN !== keysIssued;
+  const anyLost = roomWise ? lostKeys.length > 0 : lostN > 0;
+  const short = (roomWise ? marked.length !== outstandingKeys.length : countN !== keysIssued) || anyLost;
+  const notePrompt = anyLost
+    ? roomWise
+      ? `what happened to ${lostKeys.length > 1 ? "the keys of Rooms" : "the key of Room"} ${lostKeys.map((k) => k.roomNumber).join(", ")}`
+      : "what happened to the lost key"
+    : "a key has not come back — say what happened";
 
   const keys = useMutation({
     mutationFn: () => {
       if (roomWise) {
         const ids = marked.map((k) => k.roomId);
+        const lostIds = lostKeys.map((k) => k.roomId);
         return recordKeyReturn(session!, entry.id, {
           keyCountReturned: ids.length,
           ...(ids.length ? { returnedRoomIds: ids } : {}),
+          ...(lostIds.length ? { lostRoomIds: lostIds, keyCountLost: lostIds.length } : {}),
           ...(short ? { reconciliationNote: keyNote.trim() } : {}),
         });
       }
       if (!Number.isInteger(countN) || countN < 0) throw new Error("Put in how many keys came back");
-      return recordKeyReturn(session!, entry.id, { keyCountReturned: countN, ...(short ? { reconciliationNote: keyNote.trim() } : {}) });
+      return recordKeyReturn(session!, entry.id, {
+        keyCountReturned: countN,
+        ...(lostN > 0 ? { keyCountLost: lostN } : {}),
+        ...(short ? { reconciliationNote: keyNote.trim() } : {}),
+      });
     },
     onSuccess: () => {
       toast.success("The keys are on record");
@@ -1545,7 +1571,13 @@ function Departure({ entry, live }: { entry: EntryDetail; live: boolean }) {
   });
 
   /* ---- the room inspection ---- */
-  const firstRoom = entry.roomAssignments?.[0]?.room;
+  // ONE inspection per booking today, and the backend files it against the room of the NEWEST
+  // assignment (getEntryWithRoom). The desk read the first room in the list, so the two could
+  // look at different rooms (2026-10-26). Read the same room, and name it on the line.
+  const inspectedRow = [...(entry.roomAssignments ?? [])].sort((a, b) =>
+    String((b as { createdAt?: string }).createdAt ?? "").localeCompare(String((a as { createdAt?: string }).createdAt ?? "")),
+  )[0];
+  const firstRoom = inspectedRow?.room;
   const activeFault = (firstRoom?.deficientConditionRecords ?? []).find((d) => d.status === "UNRESOLVED" || d.status === "DEFICIENT_UNRESOLVED_AT_CHECKOUT") ?? null;
   const [deferred, setDeferred] = useState(false);
   const [flag, setFlag] = useState<"RESOLVED" | "UNRESOLVED_AT_CHECKOUT" | "NOT_APPLICABLE">(activeFault ? "UNRESOLVED_AT_CHECKOUT" : "NOT_APPLICABLE");
@@ -1584,30 +1616,68 @@ function Departure({ entry, live }: { entry: EntryDetail; live: boolean }) {
         <Fact k="Keys">
           {keyReturn ? (
             <span>
-              <Chip tone="success" icon="check">
-                returned
-              </Chip>{" "}
-              {keyReturn.keyCountReturned} of {keyReturn.keyCountIssued}
-              <span className="meta">{keyReturn.countReconciled ? " · all accounted for" : keyReturn.reconciliationNote ? ` · “${keyReturn.reconciliationNote}”` : ""}</span>
+              {keyReturn.keyCountLost ? (
+                <Chip tone="warning" icon="key">
+                  {keyReturn.keyCountLost === 1 ? "a key lost" : `${keyReturn.keyCountLost} keys lost`}
+                </Chip>
+              ) : (
+                <Chip tone="success" icon="check">
+                  returned
+                </Chip>
+              )}{" "}
+              {keyReturn.keyCountReturned} of {keyReturn.keyCountIssued} back
+              {keyReturn.lostRoomIds?.length ? (
+                <b className="warn-ink">
+                  {" "}
+                  · lost: {keyReturn.lostRoomIds.map((id) => `Room ${keyPlan.find((k) => k.roomId === id)?.roomNumber ?? "?"}`).join(", ")}
+                </b>
+              ) : null}
+              <span className="meta">
+                {keyReturn.countReconciled && !keyReturn.keyCountLost ? " · all accounted for" : keyReturn.reconciliationNote ? ` · “${keyReturn.reconciliationNote}”` : ""}
+              </span>
             </span>
           ) : roomWise ? (
             <div style={{ display: "grid", gap: 6 }}>
               <span>
                 {outstandingKeys.length} out
-                <span className="meta"> · {marked.length} of {outstandingKeys.length} back</span>
+                <span className="meta">
+                  {" "}
+                  · {marked.length} back{lostKeys.length ? ` · ${lostKeys.length} lost` : ""}
+                  {unanswered.length ? ` · ${unanswered.length} not answered` : ""}
+                </span>
               </span>
               {keyPlan.map((k) => (
                 <div key={k.roomId} className="row-acts sm">
                   <span style={{ minWidth: 90 }}>Room {k.roomNumber}</span>
                   {k.outstanding ? (
                     live ? (
-                      <label style={{ display: "inline-flex", gap: 6, alignItems: "center", cursor: "pointer" }}>
-                        <input type="checkbox" checked={!!back[k.roomId]} onChange={() => setBack((p) => ({ ...p, [k.roomId]: !p[k.roomId] }))} />
-                        its key is back
-                      </label>
+                      <span className="row-acts" role="group" aria-label={`Room ${k.roomNumber}'s key`}>
+                        <Button
+                          kind={keyState[k.roomId] === "back" ? "primary" : "secondary"}
+                          compact
+                          icon={keyState[k.roomId] === "back" ? "check" : undefined}
+                          aria-pressed={keyState[k.roomId] === "back"}
+                          onClick={() => toggleKey(k.roomId, "back")}
+                        >
+                          Back
+                        </Button>
+                        <Button
+                          kind={keyState[k.roomId] === "lost" ? "danger" : "secondary"}
+                          compact
+                          icon={keyState[k.roomId] === "lost" ? "check" : undefined}
+                          aria-pressed={keyState[k.roomId] === "lost"}
+                          onClick={() => toggleKey(k.roomId, "lost")}
+                        >
+                          Lost
+                        </Button>
+                      </span>
                     ) : (
                       <span className="meta">key out</span>
                     )
+                  ) : k.lost ? (
+                    <Chip tone="warning" icon="key">
+                      lost
+                    </Chip>
                   ) : (
                     <Chip tone="quiet" icon="check">
                       back earlier
@@ -1617,18 +1687,18 @@ function Departure({ entry, live }: { entry: EntryDetail; live: boolean }) {
               ))}
               <Live>
                 {short && live ? (
-                  <input className="input" value={keyNote} placeholder="a key is missing — say what happened" onChange={(e) => setKeyNote(e.target.value)} />
+                  <input className="input" value={keyNote} placeholder={notePrompt} onChange={(e) => setKeyNote(e.target.value)} />
                 ) : null}
                 <div className="row-acts">
                   <Button
                     kind="secondary"
                     compact
                     state={keys.isPending ? "working" : live && (!short || keyNote.trim()) ? "default" : "inert"}
-                    title={!live ? "only while the booking is at Check-out" : short && !keyNote.trim() ? "a key is missing — write what happened first" : undefined}
+                    title={!live ? "only while the booking is at Check-out" : short && !keyNote.trim() ? `${notePrompt} — write it first` : undefined}
                     workingLabel="Recording…"
                     onClick={() => keys.mutate()}
                   >
-                    Keys returned
+                    Record the keys
                   </Button>
                 </div>
               </Live>
@@ -1644,8 +1714,12 @@ function Departure({ entry, live }: { entry: EntryDetail; live: boolean }) {
                     back
                     <input className="input" inputMode="numeric" value={count} onChange={(e) => setCount(e.target.value.replace(/\D/g, ""))} disabled={!live} />
                   </span>
+                  <span className="count-in sm">
+                    lost
+                    <input className="input" inputMode="numeric" value={lostCount} onChange={(e) => setLostCount(e.target.value.replace(/\D/g, ""))} disabled={!live} />
+                  </span>
                   {short && live ? (
-                    <input className="input" style={{ flex: 1, minWidth: 200 }} value={keyNote} placeholder="a key is missing — say what happened" onChange={(e) => setKeyNote(e.target.value)} />
+                    <input className="input" style={{ flex: 1, minWidth: 200 }} value={keyNote} placeholder={notePrompt} onChange={(e) => setKeyNote(e.target.value)} />
                   ) : null}
                   <Button
                     kind="secondary"
@@ -1688,7 +1762,7 @@ function Departure({ entry, live }: { entry: EntryDetail; live: boolean }) {
                 <div className="bind provisional" style={{ display: "grid", gap: 8 }}>
                   {activeFault ? (
                     <span className="sm warn-ink">
-                      The room has an open fault — {words(activeFault.category)}: {activeFault.description}. Say how the inspection leaves it.
+                      Room {firstRoom?.roomNumber ?? "?"} has an open fault — {words(activeFault.category)}: {activeFault.description}. Say how the inspection leaves it.
                     </span>
                   ) : null}
                   <label className="sm" style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
@@ -1701,7 +1775,7 @@ function Departure({ entry, live }: { entry: EntryDetail; live: boolean }) {
                         with one open, the two answers are buttons. */}
                     {activeFault ? (
                       <div className="wide field">
-                        <label>The room&rsquo;s fault, at check-out</label>
+                        <label>Room {firstRoom?.roomNumber ?? "?"}&rsquo;s fault, at check-out</label>
                         <Choice
                           options={[
                             ["RESOLVED", "Put right at inspection"],
@@ -1714,7 +1788,10 @@ function Departure({ entry, live }: { entry: EntryDetail; live: boolean }) {
                     ) : (
                       <div className="wide field">
                         <span className="sm">
-                          The room&rsquo;s fault: <b>none on record</b>
+                          Room {firstRoom?.roomNumber ?? "?"} has <b>no open fault report</b>
+                          <Help label="About fault reports">
+                            A fault report is a fault flagged on the room — from Stay&rsquo;s Other ways (Flag room deficient) or the Rooms page. The folio&rsquo;s charges are not read here.
+                          </Help>
                         </span>
                       </div>
                     )}

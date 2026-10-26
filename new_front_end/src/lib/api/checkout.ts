@@ -18,6 +18,9 @@ export async function recordKeyReturn(
     /** Room-wise return (2026-08-17): the rooms whose key actually came back — their
      *  assignment rows are stamped returned with the ceremony. */
     returnedRoomIds?: string[];
+    /** Keys declared lost (2026-10-26): the count, and room by room which. A loss needs the note. */
+    keyCountLost?: number;
+    lostRoomIds?: string[];
   },
 ) {
   return apiRequest<KeyReturnSummary>(`/api/entries/${entryId}/key-return`, {
