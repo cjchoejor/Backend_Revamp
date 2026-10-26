@@ -417,7 +417,8 @@ export async function countOutstandingKeys(prisma: PrismaClient, entryId: string
   if (anyStamped === 0) return null;
   // Outstanding per ROOM (a room's key is one physical object even if it spans two ranges).
   const rows = await prisma.roomAssignment.findMany({
-    where: { entryId, keyIssuedAt: { not: null }, keyReturnedAt: null },
+    // A key declared lost at the S8 return is no longer out with the guest (2026-10-26).
+    where: { entryId, keyIssuedAt: { not: null }, keyReturnedAt: null, keyLostAt: null },
     select: { roomId: true },
   });
   return new Set(rows.map((r) => r.roomId)).size;

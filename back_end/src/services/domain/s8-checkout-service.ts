@@ -41,7 +41,7 @@ export async function recordKeyReturn(
   prisma: PrismaClient,
   entryId: string,
   actorId: string,
-  input: { keyCountReturned: number; reconciliationNote?: string; returnedRoomIds?: string[] },
+  input: { keyCountReturned: number; reconciliationNote?: string; returnedRoomIds?: string[]; keyCountLost?: number; lostRoomIds?: string[] },
 ) {
   if (!Number.isInteger(input.keyCountReturned) || input.keyCountReturned < 0) throw new ValidationError("keyCountReturned must be a non-negative integer");
   const { entry, room } = await getEntryWithRoom(prisma, entryId);
@@ -51,8 +51,24 @@ export async function recordKeyReturn(
   // not be counted again here. Legacy bookings with no stamps fall back to the frozen
   // check-in count (historically equal, since no mid-stay key machinery existed).
   const issued = (await countOutstandingKeys(prisma, entryId)) ?? entry.keysIssuedCount ?? 0;
+  // Lost keys (2026-10-26 — the user's 4e36b65, made room-wise): which room's key is lost is a
+  // fact, not prose in the note. Room by room when named; a count on a booking keyed by count.
+  const lostRoomIds = [...new Set(input.lostRoomIds ?? [])];
+  const lost = lostRoomIds.length > 0 ? lostRoomIds.length : input.keyCountLost ?? 0;
+  if (!Number.isInteger(lost) || lost < 0) throw new ValidationError("keyCountLost must be a non-negative integer");
+  if (lostRoomIds.length > 0 && input.keyCountLost != null && input.keyCountLost !== lostRoomIds.length) {
+    throw new ValidationError("keyCountLost must equal the number of rooms named in lostRoomIds");
+  }
+  if (input.keyCountReturned + lost > issued) {
+    throw new ValidationError(`Keys back (${input.keyCountReturned}) and keys lost (${lost}) cannot be more than the ${issued} out with the guest`);
+  }
   const reconciled = input.keyCountReturned === issued;
-  if (!reconciled && !input.reconciliationNote?.trim()) {
+  const note = input.reconciliationNote?.trim();
+  // A declared loss with no word of what happened records nothing (SIG-S8 §2.5: the note carries
+  // what was lost and any charge assessed). A lost key does NOT hold the booking and posts no
+  // charge — there is no price list to charge one against.
+  if (lost > 0 && !note) throw new ValidationError("Say what happened to the lost key — the note is required when a key is lost");
+  if (!reconciled && !note) {
     throw new ValidationError("reconciliationNote is required when keyCountReturned differs from keysIssuedCount");
   }
 
@@ -61,7 +77,23 @@ export async function recordKeyReturn(
   // in the SAME transaction as the KeyReturnRecord, so the ceremony and the per-room truth
   // can never disagree. Count-only callers behave exactly as before.
   const returnedRoomIds = [...new Set(input.returnedRoomIds ?? [])];
+  const both = returnedRoomIds.filter((r) => lostRoomIds.includes(r));
+  if (both.length > 0) throw new ValidationError("A room's key cannot be both back and lost");
   let rowsToStamp: Array<{ id: string }> = [];
+  const lostRowsToStamp: Array<{ id: string }> = [];
+  if (lostRoomIds.length > 0) {
+    const lostRows = await prisma.roomAssignment.findMany({
+      where: { entryId, roomId: { in: lostRoomIds } },
+      include: { room: { select: { roomNumber: true } } },
+    });
+    for (const rid of lostRoomIds) {
+      const rs = lostRows.filter((r) => r.roomId === rid);
+      if (rs.length === 0) throw new ValidationError("lostRoomIds contains a room that is not part of this booking");
+      const outstanding = rs.filter((r) => r.keyIssuedAt && !r.keyReturnedAt && !r.keyLostAt);
+      if (outstanding.length === 0) throw new ValidationError(`Room ${rs[0].room.roomNumber} has no key out to lose`);
+      lostRowsToStamp.push(...outstanding.map((r) => ({ id: r.id })));
+    }
+  }
   if (returnedRoomIds.length > 0) {
     const keyRows = await prisma.roomAssignment.findMany({
       where: { entryId, roomId: { in: returnedRoomIds } },
@@ -70,7 +102,7 @@ export async function recordKeyReturn(
     for (const rid of returnedRoomIds) {
       const rs = keyRows.filter((r) => r.roomId === rid);
       if (rs.length === 0) throw new ValidationError(`returnedRoomIds contains a room that is not part of this booking`);
-      const outstanding = rs.filter((r) => r.keyIssuedAt && !r.keyReturnedAt);
+      const outstanding = rs.filter((r) => r.keyIssuedAt && !r.keyReturnedAt && !r.keyLostAt);
       if (outstanding.length === 0) {
         throw new ValidationError(`Room ${rs[0].room.roomNumber} has no key out to return`);
       }
@@ -87,6 +119,12 @@ export async function recordKeyReturn(
         data: { keyReturnedAt: now, keyReturnedBy: actorId },
       });
     }
+    for (const r of lostRowsToStamp) {
+      await tx.roomAssignment.update({
+        where: { id: r.id },
+        data: { keyLostAt: now, keyLostBy: actorId },
+      });
+    }
     const keyReturnId = await allocateReadableId(tx, "KEY_RETURN" as const, now);
     const created = await tx.keyReturnRecord.create({
       data: {
@@ -97,13 +135,16 @@ export async function recordKeyReturn(
         returnedAt: now,
         keyCountIssued: issued,
         keyCountReturned: input.keyCountReturned,
+        keyCountLost: lost,
+        lostRoomIds,
         countReconciled: reconciled,
-        reconciliationNote: reconciled ? null : input.reconciliationNote?.trim(),
+        // A note explaining a loss is kept even when the counts happen to reconcile.
+        reconciliationNote: reconciled && lost === 0 ? null : note,
       },
     });
     await tx.traceEvent.create({
       data: {
-        eventType: reconciled ? "KEY_RETURN.RECORDED" : "KEY_RETURN.DISCREPANCY",
+        eventType: lost > 0 ? "KEY_RETURN.KEYS_LOST" : reconciled ? "KEY_RETURN.RECORDED" : "KEY_RETURN.DISCREPANCY",
         actorId,
         actorLevel: "L1",
         entityType: "KeyReturnRecord",
@@ -113,7 +154,7 @@ export async function recordKeyReturn(
         stageContext: entry.currentStage,
         inquiryId: entry.inquiryId,
         entryId,
-        payload: { entryId, roomId: room.id, keyCountIssued: issued, keyCountReturned: input.keyCountReturned, reconciled, reconciliationNote: reconciled ? null : input.reconciliationNote?.trim() ?? null, returnedRoomIds: returnedRoomIds.length > 0 ? returnedRoomIds : null },
+        payload: { entryId, roomId: room.id, keyCountIssued: issued, keyCountReturned: input.keyCountReturned, keyCountLost: lost, reconciled, reconciliationNote: reconciled && lost === 0 ? null : note ?? null, returnedRoomIds: returnedRoomIds.length > 0 ? returnedRoomIds : null, lostRoomIds: lostRoomIds.length > 0 ? lostRoomIds : null },
         createdBy: actorId,
       },
     });

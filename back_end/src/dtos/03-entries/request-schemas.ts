@@ -162,6 +162,9 @@ export const recordKeyReturnRequestSchema = z.object({
    *  the rooms whose key actually came back; their assignment rows are stamped returned in
    *  the same transaction as the KeyReturnRecord. */
   returnedRoomIds: z.array(z.string().min(1)).max(60).optional(),
+  /** Keys declared LOST (2026-10-26, ported from 4e36b65): the count, and room by room which. */
+  keyCountLost: z.coerce.number().int().min(0).optional(),
+  lostRoomIds: z.array(z.string().min(1)).max(60).optional(),
 });
 export type RecordKeyReturnRequestDto = z.infer<typeof recordKeyReturnRequestSchema>;
 

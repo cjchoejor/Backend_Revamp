@@ -2355,6 +2355,10 @@ model RoomAssignment {
   /// S7 swap so a new room's key can gate on the old one being back.
   keyReturnedAt DateTime?
   keyReturnedBy String?
+  /// THIS room's key declared LOST at the S8 key return (2026-10-26, operator: "tell the system
+  /// which room's key exactly is missing"). A lost key is no longer out with the guest.
+  keyLostAt     DateTime?
+  keyLostBy     String?
 
   entry          Entry               @relation(fields: [entryId], references: [id])
   room           Room                @relation(fields: [roomId], references: [id])
@@ -2448,6 +2452,10 @@ model KeyReturnRecord {
   returnedAt         DateTime
   keyCountIssued     Int
   keyCountReturned   Int
+  /// Keys declared LOST (ported from 4e36b65, 2026-10-26). DB check: returned + lost <= issued.
+  keyCountLost       Int      @default(0)
+  /// WHICH rooms' keys were lost — room by room when the keys are stamped per room.
+  lostRoomIds        String[] @default([])
   countReconciled    Boolean
   reconciliationNote String?
   createdAt          DateTime @default(now())
