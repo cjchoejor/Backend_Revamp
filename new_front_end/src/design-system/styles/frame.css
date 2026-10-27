@@ -1340,19 +1340,22 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .flow-chip:focus-visible { outline: none; box-shadow: var(--focus); }
 .ds .flow-count { font-size: var(--t-sm); font-weight: 700; color: var(--ink-2); margin-left: 4px; }
 
-/* the step on the left, the booking file on the right */
-.ds .ws-top .ws-split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 460px); gap: var(--s4); align-items: start; padding: var(--s2) var(--s5) var(--s5); }
+/* the step on the left, the booking file on the right — the file always runs from under the head to
+   just above the bar (2026-10-27, operator: "even on my big screen it seems small"), its contents
+   scrolling inside it, so a short list does not leave the column empty; its width follows the screen
+   too, 28% of it between 360 and 680px ("it should be auto adjusting to the screen aspect") */
+.ds .ws-top .ws-split { display: grid; grid-template-columns: minmax(0, 1fr) clamp(360px, 28vw, 680px); gap: var(--s4); align-items: start; padding: var(--s2) var(--s5); }
 .ds .ws-top .ws-split > .canvas:not(.desk-root *) { padding: 0; max-width: none; }
 .ds .ws-top .todo-h, .ds .ws-top .file .ftitle, .ds .ws-top .before-move h4 { font-size: var(--t-meta); font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); }
 .ds .ws-top .todo-h { margin-bottom: calc(-1 * var(--s3)); }
-.ds .ws-top .file { position: sticky; top: calc(53px + var(--ws-head-h, 0px) + var(--s2)); max-height: calc(100vh - 53px - var(--ws-head-h, 0px) - var(--ws-bar-h, 56px) - 2 * var(--s2)); display: flex; flex-direction: column; min-width: 0; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-card); }
+.ds .ws-top .file { position: sticky; top: calc(53px + var(--ws-head-h, 0px) + var(--s2)); height: calc(100vh - 53px - var(--ws-head-h, 0px) - var(--ws-bar-h, 56px) - 2 * var(--s2)); min-height: 200px; display: flex; flex-direction: column; min-width: 0; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-card); }
 .ds .ws-top .file .ftitle { padding: var(--s3) var(--s4) 0; }
 .ds .ws-top .file .ftabs { display: flex; flex-wrap: wrap; gap: 2px var(--s1); padding: var(--s2) var(--s3) 0; border-bottom: 1px solid var(--line); }
 .ds .ws-top .file .ftab { padding: 6px 10px; border: 0; border-bottom: 3px solid transparent; background: none; font: inherit; font-size: var(--t-sm); font-weight: 500; color: var(--ink-2); cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
 .ds .ws-top .file .ftab:hover { color: var(--ink); background: var(--surface-2); }
 .ds .ws-top .file .ftab[aria-selected="true"] { color: var(--accent-ink); font-weight: 700; border-bottom-color: var(--accent); }
 .ds .ws-top .file .ftab:focus-visible { outline: none; box-shadow: var(--focus); }
-.ds .ws-top .file .fbody { padding: var(--s3) var(--s4); overflow: auto; min-width: 0; display: grid; gap: var(--s3); align-content: start; }
+.ds .ws-top .file .fbody { flex: 1 1 auto; min-height: 0; padding: var(--s3) var(--s4); overflow: auto; min-width: 0; display: grid; gap: var(--s3); align-content: start; }
 
 /* what the move checks */
 .ds .ws-top .before-move:not(.desk-root *) { display: grid; gap: var(--s2); }
@@ -1378,7 +1381,7 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 
 @media (max-width: 1100px) {
   .ds .ws-top .ws-split { grid-template-columns: minmax(0, 1fr); }
-  .ds .ws-top .file { position: static; max-height: none; }
+  .ds .ws-top .file { position: static; height: auto; min-height: 0; }
   .ds .ws-top .gatebar.top:not(.desk-root *) { grid-template-columns: minmax(0, 1fr); }
 }
 
