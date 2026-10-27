@@ -205,7 +205,7 @@ export function TheCaller({ entry, editable }: { entry: EntryDetail; editable: b
       </div>
       {editable && dirty ? (
         <div className="row-acts" style={{ marginTop: 10 }}>
-          <Button compact state={save.isPending ? "working" : reason ? "inert" : "default"} title={reason ?? undefined} workingLabel="Saving…" onClick={() => save.mutate()}>
+          <Button className="go" compact state={save.isPending ? "working" : reason ? "inert" : "default"} title={reason ?? undefined} workingLabel="Saving…" onClick={() => save.mutate()}>
             Save the caller
           </Button>
           <Button kind="quiet" compact onClick={() => setF(seed())}>
@@ -565,6 +565,7 @@ export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; edita
       {editable && dirty ? (
         <div className="row-acts" style={{ marginTop: 10 }}>
           <Button
+            className="go"
             state={save.isPending ? "working" : guestReason ? "inert" : "default"}
             title={guestReason ?? undefined}
             workingLabel="Saving…"

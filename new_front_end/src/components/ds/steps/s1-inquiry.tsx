@@ -454,7 +454,7 @@ function WhoIsAsking({
               Put it back
             </Button>
           ) : null}
-          <Button state={save.isPending ? "working" : saveBlock ? "inert" : "default"} reason={saveBlock ?? undefined} workingLabel="Saving…" onClick={() => save.mutate()}>
+          <Button className="go" state={save.isPending ? "working" : saveBlock ? "inert" : "default"} reason={saveBlock ?? undefined} workingLabel="Saving…" onClick={() => save.mutate()}>
             Save who is asking
           </Button>
         </div>
@@ -1289,6 +1289,7 @@ function TheHouse({
             hasResults ? (
               <>
                 <Button
+                  className="go"
                   state={
                     seal.isPending
                       ? "working"
@@ -1778,6 +1779,7 @@ function WhichRooms({
         <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "baseline", gap: 12 }}>
           <Button
             compact
+            className="go"
             kind={showSaved ? "secondary" : "primary"}
             icon={showSaved ? "check" : undefined}
             state={

@@ -543,13 +543,17 @@ export function StepCard({
         <div className="flow-body" hidden={folded}>
           {body}
           {doneAction ? (
-            <div className="flow-closebar">
+            <div className={`flow-closebar${doneAction.state === "inert" ? "" : " ready"}`}>
               {doneAction.state === "inert" && doneAction.title ? (
                 <span className="meta warn-ink" style={{ alignSelf: "center", marginRight: 10 }}>
                   {doneAction.title}
                 </span>
+              ) : doneAction.state !== "inert" ? (
+                <span className="flow-ready ok-ink" role="status">
+                  <Icon name="check" /> All in
+                </span>
               ) : null}
-              <Button state={doneAction.state ?? "default"} title={doneAction.title} workingLabel={doneAction.workingLabel} onClick={doneAction.onClick}>
+              <Button className="go" state={doneAction.state ?? "default"} title={doneAction.title} workingLabel={doneAction.workingLabel} onClick={doneAction.onClick}>
                 {doneAction.label}
               </Button>
             </div>
@@ -561,7 +565,7 @@ export function StepCard({
               <span className="flow-ready ok-ink" role="status">
                 <Icon name="check" /> All in — press Done to go on
               </span>
-              <Button onClick={() => ctx.done(flow!)}>Done</Button>
+              <Button className="go" onClick={() => ctx.done(flow!)}>Done</Button>
             </div>
           ) : null}
         </div>

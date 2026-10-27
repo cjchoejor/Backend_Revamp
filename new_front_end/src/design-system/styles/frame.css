@@ -263,17 +263,20 @@
    sits where the eye lands after reading it, and both arrive with one short flash. */
 .ds .card .flow-closebar.ready { align-items: center; gap: var(--s3); padding-top: var(--s3); border-top: 1px solid var(--line); }
 .ds .card .flow-closebar .flow-ready { display: inline-flex; align-items: center; gap: 6px; font-size: var(--t-sm); font-weight: 700; }
-.ds .card .flow-closebar.ready > .btn { min-width: 112px; animation: ds-done-arrive .9s ease-out 1; }
-/* Green, the colour of the state it closes (same day, operator: "instead of black, it should be
-   green"). */
-.ds .card .flow-closebar.ready > .btn-primary { background: var(--success); border-color: var(--success); color: #fff; }
-.ds .card .flow-closebar.ready > .btn-primary:hover { background: #18663F; border-color: #18663F; }
-.ds .card .flow-closebar.ready > .btn-primary:active { background: #10502F; border-color: #10502F; }
+.ds .card .flow-closebar.ready > .btn { min-width: 112px; }
+/* The act that finishes a Stage 1 section, once it can be pressed, is green — the colour of the
+   state it closes (same day, operator: "instead of black, it should be green"; then "do it
+   everywhere in this stage"). `go` on the button; it pulses once when it turns on, stays green
+   while its request runs, and an unavailable one keeps the plain unavailable look. */
+.ds .btn.btn-primary.go:not(.inert):not(.faulty):not(.desk-root *) { background: var(--success); border-color: var(--success); color: #fff; animation: ds-done-arrive .9s ease-out 1; }
+.ds .btn.btn-primary.go:not(.inert):not(.faulty):hover:not(.desk-root *) { background: #18663F; border-color: #18663F; }
+.ds .btn.btn-primary.go:not(.inert):not(.faulty):active:not(.desk-root *) { background: #10502F; border-color: #10502F; }
+.ds .btn.btn-primary.go:is(.working, [data-pending]):not(.desk-root *) { background: var(--success); border-color: var(--success); color: #fff; }
 @keyframes ds-done-arrive {
   0% { box-shadow: 0 0 0 0 rgba(30, 122, 79, .55); }
   100% { box-shadow: 0 0 0 10px rgba(30, 122, 79, 0); }
 }
-@media (prefers-reduced-motion: reduce) { .ds .card .flow-closebar.ready > .btn { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .ds .btn.btn-primary.go { animation: none !important; } }
 .ds .card .flow-body { display: contents; }
 .ds .card .flow-body[hidden] { display: none; }
 
