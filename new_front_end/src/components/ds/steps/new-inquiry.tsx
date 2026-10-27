@@ -21,10 +21,10 @@
  */
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Button, Chip, Icon } from "@/design-system";
+import { Button, Icon } from "@/design-system";
 import { useSession } from "@/hooks/use-session";
 import { useHotelDay } from "@/hooks/use-hotel-day";
 import { usePageTitle } from "@/hooks/use-page-title";
@@ -43,10 +43,10 @@ import { checkBedRequest, listRooms } from "@/lib/api/rooms";
 import { bookingHref } from "@/components/ds/ui";
 import { fmtRange, money, plural } from "@/lib/ds/format";
 import { StayDates } from "@/components/ds/stay-dates";
-import { BOUNDARY_STEPS, PHASES, STEP_NAMES, STEP_NEEDS } from "@/lib/ds/steps";
+import { STEP_NAMES, STEP_NEEDS } from "@/lib/ds/steps";
 import type { EntryDetail } from "@/types/api";
 import { Choice, FlowChips, StepCanvas, StepCard, StepFlow, anchorFor, atLeast, numberFlow, revealCard, toastRefusal, useFlowStanding } from "./kit";
-import { useCompactOnScroll, useMeasuredVar } from "@/hooks/use-stage-head";
+import { useMeasuredVar } from "@/hooks/use-stage-head";
 import { ApiError } from "@/lib/api/client";
 import {
   BED_ORDER,
@@ -80,7 +80,14 @@ import { DateInput } from "@/components/ds/date-input";
 // the booking once the lead is kept.
 const INTAKE_SECTIONS: Record<string, string> = { caller: "The caller", asking: "Who is asking", stay: "The stay" };
 // The booking file's tabs, as the booking shows them; only the first has anything before the lead is kept.
-const INTAKE_FILE_TABS = ["Booking", "Charges & payments", "Guest requests", "Notes", "Documents", "History"];
+const INTAKE_FILE_TABS: ReadonlyArray<[string, string]> = [
+  ["Booking", "Booking"],
+  ["Charges & payments", "Charges"],
+  ["Guest requests", "Requests"],
+  ["Notes", "Notes"],
+  ["Documents", "Papers"],
+  ["History", "History"],
+];
 
 // The guest card is a flow card, so its anchor is the flow's (the focus helper below reads it).
 const GUEST_CARD_ID = anchorFor("caller");
@@ -107,11 +114,9 @@ export function NewInquiryCanvas() {
   const { session } = useSession();
   // The hotel's day, from the server — never the machine's. Null until it answers.
   const today = useHotelDay()?.today ?? null;
-  // The head and the bar, measured onto the screen so the booking file between them takes every
-  // pixel left; the head goes compact once the page is scrolled.
+  // The head and the bar, measured onto the screen so a card scrolled to lands between them.
   const headRef = useMeasuredVar("--ws-head-h");
   const barRef = useMeasuredVar("--ws-bar-h");
-  const compactHead = useCompactOnScroll();
 
   /* ---------------------------------------------------------------- who is asking */
   // No default: the operator says how the booking reached us (the old form made it the first pick).
@@ -722,8 +727,11 @@ export function NewInquiryCanvas() {
   const useTypeWord = useType ? (USE_TYPES.find(([k]) => k === useType)?.[1] ?? useType) : null;
   return (
     <StepFlow items={flowItems} on fold="on-move" confirm>
-    <div className="ws ws-top theme-blue">
-      <div className={`ws-topstick${compactHead ? " compact" : ""}`} ref={headRef}>
+    <div className="ws ws-top ws-cols theme-blue">
+      {/* Two columns from the topbar down, as on the booking (2026-10-27): the work on the left with
+          its head and its bar, the file on the right with the stay's facts above its tabs. */}
+      <div className="ws-main">
+      <div className="ws-topstick" ref={headRef}>
         <div className="ws-head">
           <div>
             <Link href="/bookings" className="backlink">
@@ -734,76 +742,18 @@ export function NewInquiryCanvas() {
                 New inquiry
                 <Help label="About a new inquiry">There is no other way to see whether rooms are free: looking is recording. The lead is kept — taken or not.</Help>
               </h2>
-              <Chip tone="quiet">not kept yet</Chip>
-              {/* What stays in sight once the head goes compact on scroll (2026-10-27). */}
-              <span className="mini-facts">
-                {datesSet ? (
-                  <>
-                    <StayDates checkIn={checkIn} checkOut={checkOut} />
-                    <b>{plural(stayNights, "night")}</b>
-                  </>
-                ) : (
-                  <span>No dates yet</span>
-                )}
-                <span>
-                  Rooms <b>{roomsN || "—"}</b>
-                </span>
-                <span>{channel ? channel.label : "How they came in · not said yet"}{party ? ` · ${party.displayName}` : ""}</span>
+              <span className="refno">
+                Enquiry <b className="ink-3">not kept yet</b>
               </span>
             </div>
             <div className="facts">
               <span>
-                {datesSet ? (
-                  <>
-                    <StayDates checkIn={checkIn} checkOut={checkOut} /> · <b>{plural(stayNights, "night")}</b>
-                  </>
-                ) : (
-                  "No dates yet"
-                )}
-              </span>
-              <span>
                 Guests <b>{adultsN + childN}</b>
                 {childN ? ` · ${plural(adultsN, "adult")}, ${plural(childN, "child", "children")}` : ""}
               </span>
-              <span>
-                Rooms <b>{roomsN || "—"}</b>
-              </span>
-              <span>
-                {channel ? channel.label : "How they came in · not said yet"}
-                {party ? ` · ${party.displayName}` : ""}
-              </span>
-            </div>
-          </div>
-          <div className="total">
-            <div className="figure money" style={{ cursor: "default" }}>
-              <span className="dash">—</span>
-            </div>
-            <div className="kind">{datesSet ? "no total until the house is asked" : "no dates, no total"}</div>
-          </div>
-          <div className="hrow">
-            <div className="hclocks">
-              <span className="meta">No clock running · the inquiry&rsquo;s clock starts once the lead is kept</span>
             </div>
           </div>
         </div>
-        <nav className="journey" aria-label="Journey">
-          {PHASES.map(([phase, steps]) => (
-            <Fragment key={phase}>
-              <span className="jgrp">{phase}</span>
-              {steps.map((n) => (
-                <span
-                  key={n}
-                  className={["jst", n === 1 ? "cur" : "later", BOUNDARY_STEPS.has(n) ? "boundary" : ""].filter(Boolean).join(" ")}
-                  aria-current={n === 1 ? "step" : undefined}
-                  title={n === 1 ? undefined : "Comes later"}
-                >
-                  <span className="n">{n}</span>
-                  {STEP_NAMES[n - 1]}
-                </span>
-              ))}
-            </Fragment>
-          ))}
-        </nav>
         <div className="stagebar">
           <h3>1 · {STEP_NAMES[0]}</h3>
           <span className="verb">{STEP_NEEDS[1]}</span>
@@ -811,7 +761,6 @@ export function NewInquiryCanvas() {
         </div>
       </div>
 
-      <div className="ws-split">
         <div className="canvas">
           <div className="todo-h">To do now</div>
           <StepCanvas past={false}>
@@ -1470,11 +1419,41 @@ export function NewInquiryCanvas() {
           <IntakeBeforeMove items={flowItems} also={flowAlso} onGo={goToCard} startLabel={primaryLabel} />
         </div>
 
-        {/* The booking file: nothing is kept yet, so it shows what has been put in so far. */}
+      <div className="gatebar top" ref={barRef}>
+        {/* The bar says what is next and takes you to it; the start is The stay's Done. */}
+        <div className="gate-status">
+          <IntakeGateLine items={flowItems} also={flowAlso} onGo={goToCard} startLabel={primaryLabel} />
+        </div>
+      </div>
+      </div>
+
+        {/* The booking file: nothing is kept yet, so it shows what has been put in so far — the
+            stay's facts at its head, as on the booking. */}
         <aside className="file" aria-label="Booking file">
-          <div className="ftitle">Booking file · not kept yet</div>
+          <div className="fhead">
+            <div className="fclocks">
+              <span className="meta">No clock running · the inquiry&rsquo;s clock starts once the lead is kept</span>
+            </div>
+            <div className="fstay">
+              {datesSet ? <StayDates checkIn={checkIn} checkOut={checkOut} /> : <span className="meta">No dates yet</span>}
+              <div className="ffacts-line">
+                {datesSet ? (
+                  <span>
+                    <b>{plural(stayNights, "night")}</b>
+                  </span>
+                ) : null}
+                <span>
+                  <b>{roomsN ? plural(roomsN, "room") : "Rooms not set"}</b>
+                </span>
+                <span className="camein">
+                  {channel ? channel.label : "How they came in · not said yet"}
+                  {party ? ` · ${party.displayName}` : ""}
+                </span>
+              </div>
+            </div>
+          </div>
           <div className="ftabs" role="tablist">
-            {INTAKE_FILE_TABS.map((label, i) => (
+            {INTAKE_FILE_TABS.map(([label, short], i) => (
               <button
                 key={label}
                 type="button"
@@ -1482,9 +1461,10 @@ export function NewInquiryCanvas() {
                 className="ftab"
                 aria-selected={i === 0}
                 disabled={i > 0}
-                title={i > 0 ? "Opens once the inquiry is kept" : undefined}
+                title={i > 0 ? `${label} · opens once the inquiry is kept` : label}
               >
-                {label}
+                <span className="ft-long">{label}</span>
+                <span className="ft-short">{short}</span>
               </button>
             ))}
           </div>
@@ -1537,14 +1517,6 @@ export function NewInquiryCanvas() {
             </dl>
           </div>
         </aside>
-      </div>
-
-      <div className="gatebar top" ref={barRef}>
-        {/* The bar says what is next and takes you to it; the start is The stay's Done. */}
-        <div className="gate-status">
-          <IntakeGateLine items={flowItems} also={flowAlso} onGo={goToCard} startLabel={primaryLabel} />
-        </div>
-      </div>
     </div>
     </StepFlow>
   );

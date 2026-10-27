@@ -18,7 +18,7 @@
  */
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button, Chip, Dialog, EmptyState, Icon } from "@/design-system";
@@ -91,7 +91,7 @@ import { BOOKING_TABS, ChargesView, DocumentsView, NotesView, RequestsView, type
 import { listBookingNotes, listGuestRequests } from "@/lib/api/booking-notes";
 import { useStayPrice } from "@/lib/ds/stay-price";
 import { HeaderClock, HeaderDwell, SideTimer, StepDwell } from "@/components/ds/workspace/side-timer";
-import { useCompactOnScroll, useMeasuredVar } from "@/hooks/use-stage-head";
+import { useMeasuredVar } from "@/hooks/use-stage-head";
 import { FoldingSide, useSideFolded } from "@/components/ds/workspace/side-panel";
 import { S1Inquiry } from "@/components/ds/steps/s1-inquiry";
 import { InquirySummaryDialog } from "@/components/ds/steps/s1-summary";
@@ -349,9 +349,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     ro.observe(head);
     headObserver.current = ro;
   }, []);
-  // The Stage 1 layout's bar, measured like the head, and its compact head once scrolled (2026-10-27).
+  // The Stage 1 layout's bar, measured like the head (2026-10-27).
   const barRef = useMeasuredVar("--ws-bar-h");
-  const compactHead = useCompactOnScroll();
   const [railSlot, setRailSlot] = useState<HTMLElement | null>(null);
   // Where the step's "other ways" render — the tab beside This step (2026-09-25).
   const [otherSlot, setOtherSlot] = useState<HTMLElement | null>(null);
@@ -1212,10 +1211,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const headline = fromScreen ? stayPrice.amount : billing ? billing.headline.amount : fin.frozen ? null : fin.indicativeTotal;
   const booker = listRow ? bookerName(listRow) : null;
 
-  // The rooms the header names — the same reading for the full facts line and the compact one.
+  // How many rooms, and how the booking came in — the stage layout's file head reads them too.
   const roomsCount = roomNumbers.length || entry.numberOfRooms || null;
-  const roomsNamed = roomNumbers.length ? roomNumbers : heldRoomNumbers;
-  const roomsShort = roomsNamed.length > 4 ? `${roomsNamed.slice(0, 4).join(", ")} +${roomsNamed.length - 4}` : roomsNamed.join(", ");
   const cameInAs = `${channelWord(entry.inquiry?.sourceChannel)}${booker ? ` · ${booker}` : ""}`;
   const headInner = (
     <>
@@ -1240,19 +1237,6 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                 </Chip>
               ) : null}
               {entry.groupBillingMode === "GROUP_MASTER" ? <Chip>Group</Chip> : null}
-              {/* What stays in sight once the head goes compact on scroll (2026-10-27, operator: "on the
-                  minimized version, on the side, show the entry number, the dates, the nights, the
-                  rooms and whether it is a walk-in, a travel agent, a company"). Hidden until then. */}
-              <span className="mini-facts">
-                <span className="mf-id">{entry.id}</span>
-                <StayDates checkIn={entry.checkInDate} checkOut={co} />
-                {nights ? <b>{plural(nights, "night")}</b> : null}
-                <span>
-                  Rooms <b>{roomsCount ?? "—"}</b>
-                  {roomsShort ? ` · ${roomsShort}` : ""}
-                </span>
-                <span>{cameInAs}</span>
-              </span>
             </div>
             <div className="facts">
               <span>
@@ -1502,23 +1486,71 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     const dwell = entry.stageDwellRecords?.[0];
     const fileTab: "details" | BookingTab = view === "step" || view === "other" ? "details" : view;
     const sectionsLeft = flowItems.filter((i) => !i.met).length;
+    // With the journey line gone (2026-10-27), a look back is one button on the step's line, and a
+    // step looked back at offers the way back to the step the booking is at.
+    const lookBack = !viewingPast && !sealed && viewing > 1 && viewing - 1 <= maxReach ? viewing - 1 : null;
+    const backTo = viewingPast && viewing !== currentOrder ? currentOrder : null;
     return (
       <BackendRailSlotContext.Provider value={railSlot}>
         <StepFlow items={flowItems} on={!viewingPast && !sealed} fold={sectioned ? "done" : null}>
-          <div className="ws ws-top theme-blue">
-            {/* The header, the journey and the step's sections stay put under the topbar; their
-                height is measured onto --ws-head-h so the file on the right sticks below them. */}
-            <div className={`ws-topstick${compactHead ? " compact" : ""}`} ref={headRef}>
-              <div className={`ws-head${endedEarly ? " ended" : ""}`}>
-                {headInner}
-                <div className="hrow">
-                  <div className="hclocks">
-                    {headerClocks.length ? (
-                      headerClocks.map(({ t, label }) => <HeaderClock key={t.id} timer={t} label={label} />)
-                    ) : (
-                      <span className="meta">No clock running</span>
-                    )}
-                    {dwell && !sealed ? <HeaderDwell since={dwell.enteredAt} /> : null}
+          {/* Two columns from the topbar down (2026-10-27, operator and the boss, after the template: the
+              screen divided in two — the work, its head and its bar on the left, with the bell and the
+              signed-in person at the left's top right and the move at its foot on the right; the
+              booking file on the right from under the date and time to the foot, its clocks first,
+              then the stay's dates, nights, rooms and how it came in, then its tabs). */}
+          <div className="ws ws-top ws-cols theme-blue">
+            <div className="ws-main">
+              {/* The head and the step's line stay put under the topbar, at full size; their height is
+                  measured onto --ws-head-h so a card scrolled to lands below them. */}
+              <div className="ws-topstick" ref={headRef}>
+                <div className={`ws-head${endedEarly ? " ended" : ""}`}>
+                  <div>
+                    <a
+                      href="/bookings"
+                      className="backlink"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        handleExit();
+                      }}
+                    >
+                      <Icon name="chev" /> Back to Bookings
+                    </a>
+                    <div className="who">
+                      <h2 className={nameIsGuest ? undefined : "name-i"}>{name}</h2>
+                      {/* The enquiry's number where the standing chip was — the step's line already
+                          says where the booking stands (2026-10-27). */}
+                      <span className="refno">
+                        Enquiry <b>{entry.inquiry?.id ?? "—"}</b>
+                      </span>
+                      {entry.guestProfile?.vipTier ? (
+                        <Chip tone="accent" tier>
+                          VIP
+                        </Chip>
+                      ) : null}
+                      {entry.groupBillingMode === "GROUP_MASTER" ? <Chip>Group</Chip> : null}
+                    </div>
+                    <div className="facts">
+                      <span>
+                        Booking <b>{entry.id}</b>
+                        {trip.stays.length > 1 ? ` · stay ${trip.position} of ${trip.stays.length}` : ""}
+                      </span>
+                      {trip.others.length ? (
+                        <span>
+                          Also this trip{" "}
+                          {trip.others.slice(0, 2).map((s, i) => (
+                            <span key={s.id}>
+                              {i ? ", " : ""}
+                              <Link href={bookingHref(s.id)}>{fmtRange(s.checkInDate, s.checkOutDate)}</Link>
+                            </span>
+                          ))}
+                          {trip.others.length > 2 ? ` and ${trip.others.length - 2} more` : ""}
+                        </span>
+                      ) : null}
+                      <span>
+                        Custodian <b>{listRow?.custodianName ?? "—"}</b>
+                      </span>
+                    </div>
                   </div>
                   <div className="hacts">
                     {parked ? (
@@ -1541,50 +1573,20 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                     ) : null}
                   </div>
                 </div>
+                <div className="stagebar">
+                  <h3>
+                    {viewing} · {STEP_NAMES[viewing - 1]}
+                  </h3>
+                  <span className="verb">{STEP_NEEDS[viewing as StepNo]}</span>
+                  {viewingPast || sealed ? null : <FlowChips names={sections} onGo={goToCard} />}
+                  {lookBack ? (
+                    <Button kind="quiet" compact className="lookback" onClick={() => gotoStep(lookBack)}>
+                      <Icon name="chev" /> Look back at {STEP_NAMES[lookBack - 1]}
+                    </Button>
+                  ) : null}
+                </div>
               </div>
-              <nav className="journey" aria-label="Journey">
-                {PHASES.map(([phase, steps]) => (
-                  <Fragment key={phase}>
-                    <span className="jgrp">{phase}</span>
-                    {steps.map((n) => {
-                      const reach = n <= atStep || n <= maxReach;
-                      // An ending without a stay does not tick Closed: it reads red, with its lock.
-                      const stopped = n === 9 && sealed && endedEarly;
-                      const done = !stopped && (n < currentOrder || (n === 9 && sealed));
-                      const cls = ["jst", done ? "done" : "", stopped ? "stopped" : "", n === viewing ? "cur" : "", reach ? "" : "later", BOUNDARY_STEPS.has(n) ? "boundary" : ""]
-                        .filter(Boolean)
-                        .join(" ");
-                      return (
-                        <a
-                          key={n}
-                          className={cls}
-                          href={`${bookingHref(entry.id)}?step=${n}`}
-                          aria-current={n === viewing ? "step" : undefined}
-                          aria-disabled={reach ? undefined : true}
-                          title={stopped ? sealedHead : reach ? (BOUNDARY_STEPS.has(n) ? "Cannot be undone once passed" : undefined) : "Comes later"}
-                          onClick={(e) => {
-                            e.preventDefault();
-                            if (reach) gotoStep(n);
-                          }}
-                        >
-                          <span className="n">{done ? <Icon name="check" /> : stopped ? <Icon name="lock" /> : n}</span>
-                          {STEP_NAMES[n - 1]}
-                        </a>
-                      );
-                    })}
-                  </Fragment>
-                ))}
-              </nav>
-              <div className="stagebar">
-                <h3>
-                  {viewing} · {STEP_NAMES[viewing - 1]}
-                </h3>
-                <span className="verb">{STEP_NEEDS[viewing as StepNo]}</span>
-                {viewingPast || sealed ? null : <FlowChips names={sections} onGo={goToCard} />}
-              </div>
-            </div>
 
-            <div className="ws-split">
               <div className="canvas">
                 {entry.earlyDeparture ? (
                   <div className="notice inert">
@@ -1604,6 +1606,13 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                         </span>
                       </div>
                     )
+                  ) : null}
+                  {backTo ? (
+                    <div className="backto">
+                      <Button kind="secondary" compact onClick={() => setSelected(backTo)}>
+                        Back to {STEP_NAMES[backTo - 1]}
+                      </Button>
+                    </div>
                   ) : null}
                   {!sealed ? <ActiveRoomMoves entryId={entry.id} tz={clock.tz} /> : null}
                   {!sealed ? <HeldPapersCard entryId={entry.id} tz={clock.tz} /> : null}
@@ -1663,57 +1672,82 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                 <div ref={setRailSlot} hidden />
               </div>
 
-              <aside className="file" aria-label="Booking file">
-                <div className="ftitle">Booking file · the record</div>
-                <div className="ftabs" role="tablist">
-                  {FILE_TABS.map(([k, label]) => (
-                    <button key={k} type="button" role="tab" className="ftab" title={label} aria-selected={fileTab === k} onClick={() => setView(k, viewing)}>
-                      <span className="ft-long">{label}</span>
-                      <span className="ft-short">{FILE_TAB_SHORT[k]}</span>
-                      {k === "details" ? null : tabCount(k)}
-                    </button>
-                  ))}
+              {/* The fixed bar, the left column's foot: what else is possible here, where the step
+                  stands, and the move at its right end. */}
+              <div className="gatebar top" ref={barRef}>
+                <div className="also-panel-slot" ref={setAlsoPanel} />
+                <div className="also">
+                  <span className="also-h">Also possible here</span>
+                  <div className="also-btns" ref={setAlsoButtons} />
                 </div>
-                <div className="fbody">
-                  {fileTab === "details" ? (
-                    <DetailsView
-                      entry={entry}
-                      booker={booker}
-                      custodian={listRow?.custodianName ?? null}
-                      onEdit={entry.currentStage === "S1" && !sealed ? () => setSelected(1) : null}
-                    />
-                  ) : fileTab === "money" ? (
-                    <ChargesView entry={entry} billing={billing ?? null} tz={clock.tz} onPaymentHistory={() => setView("history", viewing, "money")} />
-                  ) : fileTab === "requests" ? (
-                    <RequestsView entry={entry} sealed={sealed} tz={clock.tz} />
-                  ) : fileTab === "notes" ? (
-                    <NotesView entry={entry} tz={clock.tz} />
-                  ) : fileTab === "docs" ? (
-                    <DocumentsView entry={entry} communications={communications ?? []} tz={clock.tz} sealed={sealed} onGo={(n) => gotoStep(n)} />
-                  ) : (
-                    <HistoryView
-                      key={lensParam ?? "all"}
-                      entry={entry}
-                      tz={clock.tz}
-                      initialLens={lensParam}
-                      onOpenedPass={(stage) => setSelected(stepNoOfStage(stage))}
-                    />
-                  )}
-                </div>
-              </aside>
+                <div className="gate-status">{gateStatus}</div>
+                <div className="acts">{forward}</div>
+              </div>
+              {dialogs}
             </div>
 
-            {/* The fixed bar: what else is possible here on the left, the move on the right. */}
-            <div className="gatebar top" ref={barRef}>
-              <div className="also-panel-slot" ref={setAlsoPanel} />
-              <div className="also">
-                <span className="also-h">Also possible here</span>
-                <div className="also-btns" ref={setAlsoButtons} />
+            <aside className="file" aria-label="Booking file">
+              {/* The file's head: the clocks under the date and time, then the stay — the two dates,
+                  the nights, how many rooms, how it came in. No price here (2026-10-27, operator: "remove
+                  the indicative price on the top right corner"): it is under Charges › The price. */}
+              <div className="fhead">
+                <div className="fclocks">
+                  {headerClocks.length ? (
+                    headerClocks.map(({ t, label }) => <HeaderClock key={t.id} timer={t} label={label} />)
+                  ) : (
+                    <span className="meta">No clock running</span>
+                  )}
+                  {dwell && !sealed ? <HeaderDwell since={dwell.enteredAt} /> : null}
+                </div>
+                <div className="fstay">
+                  <StayDates checkIn={entry.checkInDate} checkOut={co} />
+                  <div className="ffacts-line">
+                    <span>
+                      <b>{nights ? plural(nights, "night") : "No dates yet"}</b>
+                    </span>
+                    <span>
+                      <b>{roomsCount ? plural(roomsCount, "room") : "Rooms not set"}</b>
+                    </span>
+                    <span className="camein">{cameInAs}</span>
+                  </div>
+                </div>
               </div>
-              <div className="gate-status">{gateStatus}</div>
-              <div className="acts">{forward}</div>
-            </div>
-            {dialogs}
+              <div className="ftabs" role="tablist">
+                {FILE_TABS.map(([k, label]) => (
+                  <button key={k} type="button" role="tab" className="ftab" title={label} aria-selected={fileTab === k} onClick={() => setView(k, viewing)}>
+                    <span className="ft-long">{label}</span>
+                    <span className="ft-short">{FILE_TAB_SHORT[k]}</span>
+                    {k === "details" ? null : tabCount(k)}
+                  </button>
+                ))}
+              </div>
+              <div className="fbody">
+                {fileTab === "details" ? (
+                  <DetailsView
+                    entry={entry}
+                    booker={booker}
+                    custodian={listRow?.custodianName ?? null}
+                    onEdit={entry.currentStage === "S1" && !sealed ? () => setSelected(1) : null}
+                  />
+                ) : fileTab === "money" ? (
+                  <ChargesView entry={entry} billing={billing ?? null} tz={clock.tz} onPaymentHistory={() => setView("history", viewing, "money")} />
+                ) : fileTab === "requests" ? (
+                  <RequestsView entry={entry} sealed={sealed} tz={clock.tz} />
+                ) : fileTab === "notes" ? (
+                  <NotesView entry={entry} tz={clock.tz} />
+                ) : fileTab === "docs" ? (
+                  <DocumentsView entry={entry} communications={communications ?? []} tz={clock.tz} sealed={sealed} onGo={(n) => gotoStep(n)} />
+                ) : (
+                  <HistoryView
+                    key={lensParam ?? "all"}
+                    entry={entry}
+                    tz={clock.tz}
+                    initialLens={lensParam}
+                    onOpenedPass={(stage) => setSelected(stepNoOfStage(stage))}
+                  />
+                )}
+              </div>
+            </aside>
           </div>
         </StepFlow>
       </BackendRailSlotContext.Provider>

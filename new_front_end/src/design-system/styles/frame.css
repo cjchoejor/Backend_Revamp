@@ -1280,15 +1280,14 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .rchart-date .date-input { width: 150px; }
 .ds .rchart-date .date-input input.input:not(.desk-root *) { width: 100%; }
 
-/* ===== Stage 1 in the stage-template layout (2026-10-27, the operator's docs/PMS Stage Template.html;
-   Stage 1 first, "we'll see"): the header carries the clocks, the journey and the step's sections run
-   under it as lines, the step is always on the left and the booking file always on the right, and the
-   step's other ways sit in the fixed bar at the foot with the move. Light mode only. ===== */
+/* ===== Stage 1 and 2 in the stage-template layout (2026-10-27, the operator's docs/PMS Stage Template.html):
+   the step's sections run under the head as a line, the step is always on the left and the booking
+   file always on the right — its head carrying the clocks and the stay's facts — and the step's other
+   ways sit in the fixed bar at the foot of the left column with the move. Light mode only. ===== */
 .ds .ws.ws-top:not(.desk-root *) { display: block; min-height: 0; background: var(--paper); }
 .ds .ws-top .ws-topstick:not(.desk-root *) { position: sticky; top: 53px; z-index: 35; background: var(--paper); padding: var(--s3) var(--s5) var(--s2); display: grid; gap: var(--s2); }
 .ds .ws-top .ws-head:not(.desk-root *) { position: static; border: 1px solid var(--line-2); border-radius: var(--r-card); }
-.ds .ws-top .ws-head .hrow { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: var(--s2) var(--s3); align-items: center; justify-content: space-between; border-top: 1px solid var(--line-2); padding-top: var(--s2); }
-.ds .ws-top .hclocks, .ds .ws-top .hacts { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: center; }
+.ds .ws-top .hacts { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: center; }
 
 /* a clock in the header: a ring that fills as the time runs out, then what runs out and when */
 .ds .hclock { display: inline-flex; align-items: center; gap: 6px; padding: 3px 12px 3px 5px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); font-size: var(--t-sm); color: var(--ink-2); }
@@ -1305,22 +1304,6 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .hdwell { font-size: var(--t-meta); color: var(--ink-3); }
 .ds .hdwell b { color: var(--ink-2); font-weight: 600; }
 @media (prefers-reduced-motion: reduce) { .ds .hclock .fill { transition: none; } }
-
-/* the journey, one line under the header */
-.ds .ws-top .journey { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s1) 6px; }
-.ds .ws-top .journey .jgrp { font-size: 12.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); margin: 0 2px 0 var(--s2); }
-.ds .ws-top .journey .jgrp:first-child { margin-left: 0; }
-.ds .ws-top .journey .jst { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px 4px 5px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--ink-2); font-size: var(--t-sm); font-weight: 500; text-decoration: none; }
-.ds .ws-top .journey .jst .n { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; border: 1px solid var(--line); font-size: 12.5px; color: var(--ink-2); }
-.ds .ws-top .journey .jst .n .ic { width: 12px; height: 12px; }
-.ds .ws-top .journey .jst:hover { background: var(--surface-2); border-color: var(--ink-3); }
-.ds .ws-top .journey .jst.done { color: var(--ink); }
-.ds .ws-top .journey .jst.done .n { background: var(--success); border-color: var(--success); color: #fff; }
-.ds .ws-top .journey .jst.cur { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 700; }
-.ds .ws-top .journey .jst.cur .n { background: transparent; border-color: #fff; color: #fff; }
-.ds .ws-top .journey .jst.later { color: var(--ink-3); cursor: default; opacity: .75; }
-.ds .ws-top .journey .jst.later:hover { background: var(--surface); border-color: var(--line); }
-.ds .ws-top .journey .jst.boundary { box-shadow: inset 0 -3px 0 var(--line-2); }
 
 /* the step's line: its name, what it is for, then its sections as chips */
 .ds .ws-top .stagebar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s3); padding: var(--s2) var(--s4); background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--r-card); }
@@ -1340,16 +1323,67 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .flow-chip:focus-visible { outline: none; box-shadow: var(--focus); }
 .ds .flow-count { font-size: var(--t-sm); font-weight: 700; color: var(--ink-2); margin-left: 4px; }
 
-/* the step on the left, the booking file on the right — the file always runs from under the head to
-   just above the bar (2026-10-27, operator: "even on my big screen it seems small"), its contents
-   scrolling inside it, so a short list does not leave the column empty; its width follows the screen
-   too, 28% of it between 360 and 680px ("it should be auto adjusting to the screen aspect") */
-.ds .ws-top .ws-split { display: grid; grid-template-columns: minmax(0, 1fr) clamp(360px, 28vw, 680px); gap: var(--s4); align-items: start; padding: var(--s2) var(--s5); }
-.ds .ws-top .ws-split > .canvas:not(.desk-root *) { padding: 0; max-width: none; }
-.ds .ws-top .todo-h, .ds .ws-top .file .ftitle, .ds .ws-top .before-move h4 { font-size: var(--t-meta); font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); }
+/* Two columns from the topbar down (2026-10-27, operator and the boss: "divide the screen that way"):
+   on the left the work — its head and the step's line staying put under the topbar, the sections,
+   and the bar at its foot with the move at its right end; on the right the booking file, from just
+   under the topbar to the foot of the screen, its contents scrolling inside it. The file's width
+   follows the screen, 30% of it between 380 and 700px, and the topbar's date and time sit over it
+   (--file-w is shared with the topbar). Earlier the file sat between the head and the bar. */
+.ds:has(.ws-cols) { --file-w: clamp(380px, 30vw, 700px); }
+.ds .ws-top.ws-cols:not(.desk-root *) { display: grid; grid-template-columns: minmax(0, 1fr) var(--file-w); grid-template-rows: auto; align-items: start; }
+.ds .ws-cols > .ws-main { min-width: 0; display: flex; flex-direction: column; min-height: calc(100vh - 53px); }
+.ds .ws-cols > .ws-main > .canvas:not(.desk-root *) { flex: 1 0 auto; padding: var(--s2) var(--s5) var(--s4); max-width: none; }
+.ds .ws-top .todo-h, .ds .ws-top .before-move h4 { font-size: var(--t-meta); font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); }
 .ds .ws-top .todo-h { margin-bottom: calc(-1 * var(--s3)); }
-.ds .ws-top .file { position: sticky; top: calc(53px + var(--ws-head-h, 0px) + var(--s2)); height: calc(100vh - 53px - var(--ws-head-h, 0px) - var(--ws-bar-h, 56px) - 2 * var(--s2)); min-height: 200px; display: flex; flex-direction: column; min-width: 0; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-card); }
-.ds .ws-top .file .ftitle { padding: var(--s3) var(--s4) 0; }
+.ds .ws-top .file { position: sticky; top: 53px; height: calc(100vh - 53px); min-height: 320px; display: flex; flex-direction: column; min-width: 0; background: var(--surface); border-left: 1px solid var(--line-2); }
+
+/* the file's head: the clocks, then the stay — check-in and check-out, the nights, the rooms, how it
+   came in — then the tabs. No price here (2026-10-27, operator): it is under Charges › The price. */
+.ds .ws-top .file .fhead { display: grid; gap: var(--s3); padding: var(--s3) var(--s4); border-bottom: 1px solid var(--line-2); }
+.ds .ws-top .file .fclocks { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: center; min-height: 28px; }
+.ds .ws-top .file .fstay { display: grid; gap: 6px; justify-items: start; min-width: 0; }
+.ds .ws-top .file .ffacts-line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px var(--s3); font-size: var(--t-sm); color: var(--ink-2); }
+.ds .ws-top .file .ffacts-line b { color: var(--ink); font-weight: 700; }
+.ds .ws-top .file .ffacts-line .camein { padding: 1px 8px; border: 1px solid var(--line-2); border-radius: var(--r-control); background: var(--surface-2); color: var(--ink); font-weight: 600; }
+
+/* the enquiry's number beside the name, where the standing chip was (2026-10-27) */
+.ds .ws-top .ws-head .refno { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border: 1px solid var(--line-2); border-radius: var(--r-control); background: var(--surface-2); font-size: var(--t-sm); color: var(--ink-2); }
+.ds .ws-top .ws-head .refno b { color: var(--ink); font-weight: 700; font-variant-numeric: tabular-nums; }
+.ds .ws-top .ws-head .refno b.ink-3 { color: var(--ink-3); font-weight: 600; }
+/* a look back from the step's line, and the way back from a step looked back at */
+.ds .ws-top .stagebar .lookback:not(.desk-root *) { margin-left: auto; }
+.ds .ws-top .stagebar .lookback .ic { transform: rotate(180deg); }
+.ds .ws-top .backto { display: flex; }
+
+/* the bar at the left column's foot: one line while it fits; when it does not, the ways keep a row of
+   their own and where the step stands goes under them with the move, rather than the step's words
+   being squeezed into three lines */
+.ds .ws-cols .gatebar.top:not(.desk-root *) { display: flex; flex-wrap: wrap; align-items: center; row-gap: 6px; }
+.ds .ws-cols .gatebar.top .also { flex: 0 1 auto; }
+.ds .ws-cols .gatebar.top .gate-status { flex: 1 1 160px; min-width: 160px; }
+.ds .ws-cols .gatebar.top .acts { flex: 0 0 auto; margin-left: auto; }
+@media (max-width: 1800px) {
+  .ds .ws-top.ws-cols .gatebar.top .also-btns .btn:not(.desk-root *) { padding: 0 var(--s3); }
+  .ds .ws-cols .gatebar.top .also-h { max-width: 74px; line-height: 1.25; }
+}
+/* a smaller screen (a left column under about 1,050px): the ways lose their heading and some padding
+   so the bar keeps to one line, and the topbar keeps the mark without the name, the person on one line */
+@media (max-width: 1500px) {
+  .ds .ws-cols .gatebar.top .also-h { display: none; }
+  .ds .ws-cols .gatebar.top .also { padding-right: var(--s3); }
+  .ds .ws-top.ws-cols .gatebar.top .also-btns .btn:not(.desk-root *) { padding: 0 var(--s2); }
+  .ds .ws-top.ws-cols .gatebar.top .acts .btn:not(.desk-root *) { min-width: 140px; padding: 0 var(--s4); }
+  .ds .ws-cols .gatebar.top .gate-status { flex-basis: 140px; min-width: 140px; }
+  .ds:has(.ws-cols) .topbar .mark .name:not(.desk-root *) { display: none; }
+}
+.ds:has(.ws-cols) .topbar .user:not(.desk-root *) { white-space: nowrap; }
+
+/* the topbar over the two columns: the bell and the signed-in person end the left part, the date
+   and time stand over the file */
+@media (min-width: 1101px) {
+  .ds:has(.ws-cols) .topbar:not(.desk-root *) { padding-right: 0; }
+  .ds:has(.ws-cols) .topbar .clock:not(.desk-root *) { order: 1; flex: 0 0 var(--file-w); align-self: stretch; display: flex; align-items: center; gap: 4px; padding: 0 var(--s4); border-left: 1px solid rgba(255, 255, 255, .22); white-space: nowrap; }
+}
 .ds .ws-top .file .ftabs { display: flex; flex-wrap: wrap; gap: 2px var(--s1); padding: var(--s2) var(--s3) 0; border-bottom: 1px solid var(--line); }
 .ds .ws-top .file .ftab { padding: 6px 10px; border: 0; border-bottom: 3px solid transparent; background: none; font: inherit; font-size: var(--t-sm); font-weight: 500; color: var(--ink-2); cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
 .ds .ws-top .file .ftab:hover { color: var(--ink); background: var(--surface-2); }
@@ -1380,8 +1414,8 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .also-panel-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s3); }
 
 @media (max-width: 1100px) {
-  .ds .ws-top .ws-split { grid-template-columns: minmax(0, 1fr); }
-  .ds .ws-top .file { position: static; height: auto; min-height: 0; }
+  .ds .ws-top.ws-cols:not(.desk-root *) { grid-template-columns: minmax(0, 1fr); }
+  .ds .ws-top .file { position: static; height: auto; min-height: 0; border-left: 0; border-top: 1px solid var(--line-2); }
   .ds .ws-top .gatebar.top:not(.desk-root *) { grid-template-columns: minmax(0, 1fr); }
 }
 
@@ -1467,27 +1501,6 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .notice.ended .rest { color: var(--ink-2); }
 .ds .notice.ended .ended-mark { flex: none; width: 26px; height: 26px; border-radius: 50%; background: var(--danger); color: #fff; display: grid; place-items: center; font-weight: 800; font-size: 15px; }
 .ds .ws-top .ws-head.ended:not(.desk-root *) { border-color: var(--danger-line); box-shadow: inset 5px 0 0 var(--danger); }
-.ds .ws-top .journey .jst.stopped { border-color: var(--danger-line); background: var(--danger-soft); color: var(--danger); font-weight: 600; }
-.ds .ws-top .journey .jst.stopped .n { background: var(--danger); border-color: var(--danger); color: #fff; }
-
-/* ===== The head goes compact once the page is scrolled (2026-10-27, operator: "why does the booking
-   file have so little space"), as the template's does: the back link, the facts line, the total's
-   note and the journey's phase names go; the rest tightens. With the bar's real height measured
-   (--ws-bar-h) the file runs from under the head to just above the bar. ===== */
-.ds .ws-top .ws-topstick.compact:not(.desk-root *) { padding: var(--s2) var(--s5) var(--s1); gap: var(--s1); }
-.ds .ws-top .ws-topstick.compact .ws-head:not(.desk-root *) { padding: 6px var(--s4); row-gap: 6px; }
-.ds .ws-top .ws-topstick.compact .ws-head .backlink,
-.ds .ws-top .ws-topstick.compact .ws-head .facts:not(.desk-root *),
-.ds .ws-top .ws-topstick.compact .ws-head .total .kind:not(.desk-root *),
-.ds .ws-top .ws-topstick.compact .journey .jgrp { display: none; }
-.ds .ws-top .ws-topstick.compact .ws-head .who h2 { font-size: var(--t-h3); }
-.ds .ws-top .ws-topstick.compact .ws-head .total .figure { font-size: var(--t-lead); }
-.ds .ws-top .ws-topstick.compact .ws-head .hrow { padding-top: 4px; }
-.ds .ws-top .ws-topstick.compact .journey .jst { padding: 2px 10px 2px 3px; font-size: var(--t-meta); }
-.ds .ws-top .ws-topstick.compact .journey .jst .n { width: 18px; height: 18px; font-size: 11px; }
-.ds .ws-top .ws-topstick.compact .stagebar:not(.desk-root *) { padding: 4px var(--s4); }
-.ds .ws-top .ws-topstick.compact .stagebar h3 { font-size: var(--t-lead); }
-.ds .ws-top .ws-topstick.compact .flow-chip { padding: 1px 10px 1px 3px; }
 
 /* ===== The fixed bar, one slim line (2026-10-27, operator: "minimise the height of the bar, it's too
    inefficient"): compact controls, less padding, and the move's reason beside its button instead
@@ -1504,7 +1517,7 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .rooms-saverow:not(.desk-root *) { align-items: center; margin: var(--s3) 0 var(--s3); padding: var(--s2) 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .ds .rooms-saverow .rooms-count { font-size: var(--t-base); font-weight: 700; }
 .ds .rooms-saverow .btn.btn-primary:not(.desk-root *) { min-width: 160px; }
-.ds .ws-top .ws-split * { scroll-margin-top: calc(53px + var(--ws-head-h, 0px) + var(--s2)); scroll-margin-bottom: calc(var(--ws-bar-h, 56px) + var(--s2)); }
+.ds .ws-cols .ws-main * { scroll-margin-top: calc(53px + var(--ws-head-h, 0px) + var(--s2)); scroll-margin-bottom: calc(var(--ws-bar-h, 56px) + var(--s2)); }
 
 /* The house card's bill in one line (2026-10-27): the stay's figure and the way to the bill, which
    lives in the booking file under Charges & payments › The price — each night, its rooms, the taxes. */
@@ -1593,13 +1606,6 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .staydates .sd.in .lbl { background: var(--success); }
 .ds .staydates .sd.out .lbl { background: var(--ink-2); }
 .ds .staydates .sd b { display: inline-flex; align-items: center; padding: 2px 8px; color: var(--ink); font-weight: 700; font-variant-numeric: tabular-nums; }
-
-/* What stays in sight when the head goes compact (2026-10-27): the booking, its two dates, the
-   nights, the rooms and how it came in, on the name's line. Hidden while the full facts line shows. */
-.ds .ws-head .mini-facts { display: none; }
-.ds .ws-top .ws-topstick.compact .ws-head .mini-facts { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px var(--s3); margin-left: var(--s3); padding-left: var(--s3); border-left: 1px solid var(--line-2); font-size: var(--t-sm); color: var(--ink-2); }
-.ds .ws-top .ws-topstick.compact .ws-head .mini-facts b { color: var(--ink); font-weight: 700; }
-.ds .ws-top .ws-topstick.compact .ws-head .mini-facts .mf-id { font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
 
 /* The bar at the foot reads as its own band, not as part of the page (2026-10-27, operator: "it merges
    into the UI"; the dark navy tried first "isn't doing justice"). A soft tint of the page's own blue,
