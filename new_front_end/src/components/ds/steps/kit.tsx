@@ -506,6 +506,7 @@ export function StepCard({
   flowAfterOnly,
   heldFor,
   summary,
+  noDoneBar = false,
   doneAction,
 }: {
   title?: ReactNode;
@@ -545,6 +546,12 @@ export function StepCard({
    * A card without one never folds.
    */
   summary?: ReactNode;
+  /**
+   * The section's own act finishes it, so it draws no Done bar (2026-10-27, operator, on the
+   * Negotiation table: "remove the extra Done button and merge it into Save & price it"). The act
+   * calls `useStepFlow().done(card, …)` itself.
+   */
+  noDoneBar?: boolean;
   /**
    * What the section's Done does instead of folding — the intake's stay ends with "Done · Start
    * the inquiry" (2026-10-12, operator: the start button sat at the foot of the page and broke the
@@ -586,7 +593,7 @@ export function StepCard({
         ? !!ctx.active && ctx.active !== flow && ctx.visited.has(flow)
         : false);
   // A finished, unfolded section offers Done: fold it and go on to the next one.
-  const canDone = !!flow && !!summary && !!met && !waiting && !folded && !!ctx.fold;
+  const canDone = !!flow && !!summary && !!met && !waiting && !folded && !!ctx.fold && !noDoneBar;
   const body = (
     <>
       {status ? <div className="meta" style={{ marginBottom: 8 }}>{status}</div> : null}
@@ -1125,6 +1132,19 @@ function AlsoBarWays({ live, slots }: { live: OtherWayTab[]; slots: AlsoBarSlots
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
+  // While the pop-up is open the page behind holds still (the page's gutter is reserved, so nothing
+  // shifts sideways), and the keyboard starts inside it.
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    const html = document.documentElement;
+    const before = html.style.overflow;
+    html.style.overflow = "hidden";
+    panelRef.current?.focus({ preventScroll: true });
+    return () => {
+      html.style.overflow = before;
+    };
+  }, [open]);
   const current = live.find((t) => t.key === open) ?? null;
   return (
     <>
@@ -1140,25 +1160,34 @@ function AlsoBarWays({ live, slots }: { live: OtherWayTab[]; slots: AlsoBarSlots
             slots.buttons,
           )
         : null}
-      {slots.panel
-        ? createPortal(
-            // Every way stays mounted, so a half-typed reason survives closing the panel.
-            <div className="also-panel" hidden={!current} role="dialog" aria-label={current?.label}>
-              <div className="also-panel-head">
-                <b>{current?.label}</b>
-                <Button kind="quiet" compact onClick={() => go(null)}>
-                  Close
-                </Button>
+      {/* The way pressed opens in the middle of the screen over a dimmed, blurred page (2026-10-27,
+          operator: "when clicked on the buttons in the bottom bar, show it as a pop-up in the middle of
+          the screen blurring the background"). It is drawn at the desk's root, outside the step,
+          and every way stays mounted, so a half-typed reason survives closing it. Close, Escape or a
+          press outside closes it. */}
+      <Overlay>
+        <div
+          className="also-scrim"
+          hidden={!current}
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) go(null);
+          }}
+        >
+          <div className="also-panel" role="dialog" aria-modal="true" aria-label={current?.label} tabIndex={-1} ref={panelRef}>
+            <div className="also-panel-head">
+              <h3>{current?.label}</h3>
+              <Button kind="quiet" compact onClick={() => go(null)}>
+                Close
+              </Button>
+            </div>
+            {live.map((t) => (
+              <div key={t.key} hidden={t.key !== open}>
+                {t.content}
               </div>
-              {live.map((t) => (
-                <div key={t.key} hidden={t.key !== open}>
-                  {t.content}
-                </div>
-              ))}
-            </div>,
-            slots.panel,
-          )
-        : null}
+            ))}
+          </div>
+        </div>
+      </Overlay>
     </>
   );
 }

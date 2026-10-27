@@ -14,7 +14,8 @@ import { useState } from "react";
 import { Button } from "@/design-system";
 import { JourneySummaryBlock } from "@/components/desk/workspace/journey-summary";
 import { channelWord } from "@/lib/ds/status";
-import { fmtRange, nightsOf, plural } from "@/lib/ds/format";
+import { nightsOf, plural } from "@/lib/ds/format";
+import { StayDates } from "@/components/ds/stay-dates";
 import { guestName } from "@/lib/desk/model";
 import { reservedThisPass } from "@/lib/desk/workspace";
 import { heldRoomIds } from "@/lib/desk/party-rooms";
@@ -132,7 +133,11 @@ export function DetailsView({
 
         <StepCard title="The stay">
           <Facts wide>
-            <Fact k="Dates">{`${fmtRange(entry.checkInDate, co)}${nights ? ` · ${plural(nights, "night")}` : ""}`}</Fact>
+            {/* Check-in and Check-out by name, as in the header (2026-10-27). */}
+            <Fact k="Dates">
+              <StayDates checkIn={entry.checkInDate} checkOut={co} />
+              {nights ? <> · {plural(nights, "night")}</> : null}
+            </Fact>
             <Fact k="Rooms" meta={beds ? `asked for ${beds}` : undefined}>
               {rooms.length
                 ? `${rooms.length} · ${rooms.join(", ")}${types.length ? ` · ${types.join(", ")}` : ""}`

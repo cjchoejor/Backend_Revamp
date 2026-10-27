@@ -13,7 +13,7 @@
  * the paper's total comes from the billing summary. Nothing is added up here.
  */
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { BindingBox, Button, Chip, Icon } from "@/design-system";
 import { useSession } from "@/hooks/use-session";
@@ -39,7 +39,7 @@ import { ChangeConfiguration, DecidedConfigurationChanges, WaitingConfigurationC
 import { operativeRoomCompositions, roomNightsByRoom, roomStayRangesByRoom } from "@/lib/desk/party-rooms";
 import { fmtDateTime, fmtStamp, money, plural } from "@/lib/ds/format";
 import { optionSelectedRoomIds, preferredHoldRoomId, type EntryDetail, type QuotationSummary, type SpeculativeHoldSummary } from "@/types/api";
-import { Choice, DsDialog, Live, Notice, OtherWaysTabs, PaperDrawer, QuotationSendDialog, ReasonDialog, SeeRow, StepCanvas, StepCard, Tool, atLeast, toastRefusal, type PaperRef, useBedPlan, useOpenFileTab, useOpenOtherWay, useRefreshEntry, words, parkTab, declineTab } from "./kit";
+import { Choice, DsDialog, Live, Notice, OtherWaysTabs, PaperDrawer, QuotationSendDialog, ReasonDialog, SeeRow, StepCanvas, StepCard, Tool, atLeast, toastRefusal, type PaperRef, useBedPlan, useOpenFileTab, useOpenOtherWay, useRefreshEntry, useStepFlow, useFlowCard, anchorFor, revealCard, words, parkTab, declineTab } from "./kit";
 import { usePublishPriceDraft } from "@/lib/ds/stay-price";
 import { Help } from "@/components/ds/help";
 import { CompetingClaimsCard, LEVEL_WORD, passesOf, roomsWord, useCompetingClaims, useRoomNumbers } from "./s2-shared";
@@ -398,16 +398,44 @@ export function S2Negotiation({
   });
 
   /* ---- the acts ---- */
+  // Save & price it is also the table's Done (2026-10-27, operator: "when I click Save, or Save &
+  // price it again, it should take me to the quotation section"): once the booking is read again
+  // with its new quotation, the table folds to its line and the page goes to the quotation. It
+  // waits for the table to read as done (its own "changes saved" item clears a render later) and
+  // then for the fold itself, so the page moves to where the quotation sits once the table above it
+  // is one line — moving first left the card off the top of the screen (found driving it).
+  const qc = useQueryClient();
+  const flow = useStepFlow();
+  const flowRef = useRef(flow);
+  flowRef.current = flow;
+  const tableFlow = useFlowCard("table");
+  const tableMetRef = useRef(false);
+  tableMetRef.current = !!tableFlow.met;
+  const waitFor = async (test: () => boolean, ms: number) => {
+    const end = Date.now() + ms;
+    while (!test() && Date.now() < end) await new Promise((r) => window.setTimeout(r, 40));
+    return test();
+  };
+  const goToQuotation = async () => {
+    await qc.invalidateQueries({ queryKey: ["entry", entry.id] });
+    await waitFor(() => tableMetRef.current, 3000);
+    if (!flowRef.current.on) return;
+    flowRef.current.done("table", { next: "quotation", reveal: false });
+    await waitFor(() => !!document.querySelector('[data-flow="table"].flow-folded'), 1500);
+    const el = document.getElementById(anchorFor("quotation"));
+    if (el) revealCard(el);
+  };
   const [sendTarget, setSendTarget] = useState<QuotationSummary | null>(null);
   const [releaseOpen, setReleaseOpen] = useState(false);
   const createdRef = useRef(false);
 
   const generateM = useMutation({
     mutationFn: () => createQuotation(session!, entry.id, createBody()),
-    onSuccess: (q) => {
+    onSuccess: async (q) => {
       toast.success(`Quotation ${q.referenceNumber} generated — nothing sent, no rooms marked`);
       setValidTouched(false);
       refresh(extraKeys);
+      await goToQuotation();
     },
     onError: (e) => toastRefusal(e, "The quotation could not be generated"),
   });
@@ -420,10 +448,11 @@ export function S2Negotiation({
         roomCompositions: roomCompositions.length > 0 ? roomCompositions : undefined,
       });
     },
-    onSuccess: (q) => {
+    onSuccess: async (q) => {
       toast.success(`Version ${q.versionNumber} generated — the earlier one is kept`);
       setValidTouched(false);
       refresh(extraKeys);
+      await goToQuotation();
     },
     onError: (e) => toastRefusal(e, "The quotation could not be generated again"),
   });
@@ -625,6 +654,7 @@ export function S2Negotiation({
         // quotation existed re-mounted the table on the save and lost what it held. It can only
         // fold once the table is priced (its item is the quotation), so the placeholder never shows.
         summary={tableSummary ?? "Not priced yet"}
+        noDoneBar
         title="Who sleeps where, and their meals"
         meta="One row per room: the guests by age, their meal plans, extra beds, any negotiated rate and the booking's discount. Saving the table prices it — that is the quotation."
       >

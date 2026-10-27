@@ -1584,3 +1584,44 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 @keyframes step-moved-in { from { opacity: 0; transform: translateY(8px) scale(.98); } to { opacity: 1; transform: none; } }
 @keyframes step-moved-bar { from { transform: scaleX(1); } to { transform: scaleX(0); } }
 @media (prefers-reduced-motion: reduce) { .ds .step-moved, .ds .step-moved .sm-bar i { animation: none; } }
+
+/* The stay's two dates, told apart (2026-10-27, operator: "Check-in 27/10/2026, Check-out 30/10/2026 —
+   hotel people prefer the words; make them distinguishable"). */
+.ds .staydates { display: inline-flex; align-items: center; gap: var(--s2); flex-wrap: wrap; vertical-align: middle; }
+.ds .staydates .sd { display: inline-flex; align-items: stretch; border: 1px solid var(--line-2); border-radius: var(--r-control); overflow: hidden; background: var(--surface); line-height: 1.2; }
+.ds .staydates .sd .lbl { display: inline-flex; align-items: center; padding: 2px 7px; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: #FFFFFF; }
+.ds .staydates .sd.in .lbl { background: var(--success); }
+.ds .staydates .sd.out .lbl { background: var(--ink-2); }
+.ds .staydates .sd b { display: inline-flex; align-items: center; padding: 2px 8px; color: var(--ink); font-weight: 700; font-variant-numeric: tabular-nums; }
+
+/* What stays in sight when the head goes compact (2026-10-27): the booking, its two dates, the
+   nights, the rooms and how it came in, on the name's line. Hidden while the full facts line shows. */
+.ds .ws-head .mini-facts { display: none; }
+.ds .ws-top .ws-topstick.compact .ws-head .mini-facts { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px var(--s3); margin-left: var(--s3); padding-left: var(--s3); border-left: 1px solid var(--line-2); font-size: var(--t-sm); color: var(--ink-2); }
+.ds .ws-top .ws-topstick.compact .ws-head .mini-facts b { color: var(--ink); font-weight: 700; }
+.ds .ws-top .ws-topstick.compact .ws-head .mini-facts .mf-id { font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
+
+/* The bar at the foot is dark, so it cannot be read as part of the page (2026-10-27, operator: "can it
+   look a little dark in colour, it merges into the UI"). Its acts stay full buttons on it. */
+.ds .ws-top .gatebar.top:not(.desk-root *) { background: #1F2A36; color: #EEF1EC; border-top: 0; box-shadow: 0 -4px 16px rgba(20, 24, 22, .22); }
+.ds .ws-top .gatebar.top .also-h { color: rgba(238, 241, 236, .66); }
+.ds .ws-top .gatebar.top .gate .item:not(.desk-root *),
+.ds .ws-top .gatebar.top .gate .item.met:not(.desk-root *) { color: #EEF1EC; }
+.ds .ws-top .gatebar.top .ink-2,
+.ds .ws-top .gatebar.top .meta { color: rgba(238, 241, 236, .78); }
+.ds .ws-top .gatebar.top .stop-ink { color: #FF9C90; }
+.ds .ws-top .gatebar.top .ok-ink { color: #8FDDAE; }
+.ds .ws-top .gatebar.top .warn-ink { color: #F5C46C; }
+.ds .ws-top .gatebar.top .control-note:not(.desk-root *) { color: #F5C46C; }
+.ds .ws-top .gatebar.top .gate .item .ic { color: currentColor; }
+
+/* The bar's ways in the middle of the screen, over a dimmed, blurred page (2026-10-27). Below a
+   dialog opened from inside a way (85), above everything on the page. */
+.ds .also-scrim { position: fixed; inset: 0; z-index: 84; display: grid; place-items: center; padding: var(--s4); background: rgba(20, 24, 22, .38); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); }
+.ds .also-scrim[hidden] { display: none; }
+.ds .also-scrim .also-panel { width: min(680px, 100%); max-height: min(84vh, 780px); overflow: auto; overscroll-behavior: contain; padding: var(--s4) var(--s5) var(--s5); box-shadow: var(--shadow-dialog); animation: also-in .18s ease-out; }
+.ds .also-scrim .also-panel:focus { outline: none; }
+.ds .also-scrim .also-panel-head { padding-bottom: var(--s2); border-bottom: 1px solid var(--line); }
+.ds .also-scrim .also-panel-head h3 { margin: 0; font-size: var(--t-h3); }
+@keyframes also-in { from { opacity: 0; transform: translateY(6px) scale(.985); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .ds .also-scrim .also-panel { animation: none; } }

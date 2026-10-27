@@ -96,6 +96,7 @@ import { FoldingSide, useSideFolded } from "@/components/ds/workspace/side-panel
 import { S1Inquiry } from "@/components/ds/steps/s1-inquiry";
 import { InquirySummaryDialog } from "@/components/ds/steps/s1-summary";
 import { StepMoved, type StepMovedNote } from "@/components/ds/workspace/step-moved";
+import { StayDates } from "@/components/ds/stay-dates";
 import { S2Negotiation } from "@/components/ds/steps/s2-negotiation";
 import { S3SetUp, S3_PANES } from "@/components/ds/steps/s3-setup";
 import { S4Reserve, S4_PANES } from "@/components/ds/steps/s4-reserve";
@@ -1211,6 +1212,11 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const headline = fromScreen ? stayPrice.amount : billing ? billing.headline.amount : fin.frozen ? null : fin.indicativeTotal;
   const booker = listRow ? bookerName(listRow) : null;
 
+  // The rooms the header names — the same reading for the full facts line and the compact one.
+  const roomsCount = roomNumbers.length || entry.numberOfRooms || null;
+  const roomsNamed = roomNumbers.length ? roomNumbers : heldRoomNumbers;
+  const roomsShort = roomsNamed.length > 4 ? `${roomsNamed.slice(0, 4).join(", ")} +${roomsNamed.length - 4}` : roomsNamed.join(", ");
+  const cameInAs = `${channelWord(entry.inquiry?.sourceChannel)}${booker ? ` · ${booker}` : ""}`;
   const headInner = (
     <>
           <div>
@@ -1234,6 +1240,19 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                 </Chip>
               ) : null}
               {entry.groupBillingMode === "GROUP_MASTER" ? <Chip>Group</Chip> : null}
+              {/* What stays in sight once the head goes compact on scroll (2026-10-27, operator: "on the
+                  minimized version, on the side, show the entry number, the dates, the nights, the
+                  rooms and whether it is a walk-in, a travel agent, a company"). Hidden until then. */}
+              <span className="mini-facts">
+                <span className="mf-id">{entry.id}</span>
+                <StayDates checkIn={entry.checkInDate} checkOut={co} />
+                {nights ? <b>{plural(nights, "night")}</b> : null}
+                <span>
+                  Rooms <b>{roomsCount ?? "—"}</b>
+                  {roomsShort ? ` · ${roomsShort}` : ""}
+                </span>
+                <span>{cameInAs}</span>
+              </span>
             </div>
             <div className="facts">
               <span>
@@ -1256,8 +1275,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                 </span>
               ) : null}
               <span>
-                <b>{fmtRange(entry.checkInDate, co)}</b>
-                {nights ? ` · ${plural(nights, "night")}` : ""}
+                <StayDates checkIn={entry.checkInDate} checkOut={co} />
+                {nights ? <> · <b>{plural(nights, "night")}</b></> : null}
               </span>
               <span>
                 Rooms <b>{roomNumbers.length || entry.numberOfRooms || "—"}</b>
@@ -1267,10 +1286,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                     ? ` · ${heldRoomNumbers.join(", ")} · ${roomsActuallyHeld ? "held" : "picked, not held"}`
                     : " · not yet assigned"}
               </span>
-              <span>
-                {channelWord(entry.inquiry?.sourceChannel)}
-                {booker ? ` · ${booker}` : ""}
-              </span>
+              <span>{cameInAs}</span>
               <span>
                 Custodian <b>{listRow?.custodianName ?? "—"}</b>
               </span>

@@ -42,6 +42,7 @@ import {
 import { checkBedRequest, listRooms } from "@/lib/api/rooms";
 import { bookingHref } from "@/components/ds/ui";
 import { fmtRange, money, plural } from "@/lib/ds/format";
+import { StayDates } from "@/components/ds/stay-dates";
 import { BOUNDARY_STEPS, PHASES, STEP_NAMES, STEP_NEEDS } from "@/lib/ds/steps";
 import type { EntryDetail } from "@/types/api";
 import { Choice, FlowChips, StepCanvas, StepCard, StepFlow, anchorFor, atLeast, numberFlow, revealCard, toastRefusal, useFlowStanding } from "./kit";
@@ -734,12 +735,27 @@ export function NewInquiryCanvas() {
                 <Help label="About a new inquiry">There is no other way to see whether rooms are free: looking is recording. The lead is kept — taken or not.</Help>
               </h2>
               <Chip tone="quiet">not kept yet</Chip>
+              {/* What stays in sight once the head goes compact on scroll (2026-10-27). */}
+              <span className="mini-facts">
+                {datesSet ? (
+                  <>
+                    <StayDates checkIn={checkIn} checkOut={checkOut} />
+                    <b>{plural(stayNights, "night")}</b>
+                  </>
+                ) : (
+                  <span>No dates yet</span>
+                )}
+                <span>
+                  Rooms <b>{roomsN || "—"}</b>
+                </span>
+                <span>{channel ? channel.label : "How they came in · not said yet"}{party ? ` · ${party.displayName}` : ""}</span>
+              </span>
             </div>
             <div className="facts">
               <span>
                 {datesSet ? (
                   <>
-                    <b>{fmtRange(checkIn, checkOut)}</b> · {plural(stayNights, "night")}
+                    <StayDates checkIn={checkIn} checkOut={checkOut} /> · <b>{plural(stayNights, "night")}</b>
                   </>
                 ) : (
                   "No dates yet"
@@ -1494,7 +1510,7 @@ export function NewInquiryCanvas() {
               <dd>
                 {datesSet ? (
                   <>
-                    {fmtRange(checkIn, checkOut)} · {plural(stayNights, "night")}
+                    <StayDates checkIn={checkIn} checkOut={checkOut} /> · {plural(stayNights, "night")}
                   </>
                 ) : (
                   <span className="warn-ink">no dates yet</span>

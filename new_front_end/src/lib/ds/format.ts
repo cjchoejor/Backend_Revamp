@@ -38,6 +38,12 @@ export function fmtDate(value?: string | null, dash = "—"): string {
   return p ? `${p.d} ${MON[p.m - 1]} ${p.y}` : dash;
 }
 
+/** `27/10/2026` — a stay date written the way the desk types it (DD/MM/YYYY); a dash when absent. */
+export function fmtDmy(value?: string | null, dash = "—"): string {
+  const p = ymdOf(value);
+  return p ? `${String(p.d).padStart(2, "0")}/${String(p.m).padStart(2, "0")}/${p.y}` : dash;
+}
+
 /** `20 Oct` — a day header, or a date where the year is obvious. */
 export function fmtDay(value?: string | null, dash = "—"): string {
   const p = ymdOf(value);
