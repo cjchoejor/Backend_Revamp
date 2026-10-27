@@ -32,7 +32,7 @@ import { fmtDay } from "@/lib/ds/format";
 import { hasAnyContact } from "@/lib/desk/workspace";
 import type { EntryDetail } from "@/types/api";
 import { Choice, StepCard, toastRefusal, useRefreshEntry } from "./kit";
-import { GuestLine, NATIONALITIES, PHONE_CODES, PhoneInput, PickList, PresetOrCustom, ReqMark, joinPhone, splitStoredPhone } from "./new-inquiry-parts";
+import { GuestLine, NATIONALITIES, PHONE_CODES, PhoneInput, PickList, PresetOrCustom, ReqMark, callerIsTheParty, joinPhone, splitStoredPhone } from "./new-inquiry-parts";
 
 export const CALLER_TITLES = ["", "Mr", "Ms", "Mrs", "Dr", "Dasho", "Lyonpo", "Aum"];
 
@@ -228,12 +228,16 @@ export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; edita
   const inq = (entry.inquiry ?? {}) as Inq;
   const named = entry.guestProfile ?? null;
   const contact = entry as EntryDetail & { contactPersonName?: string | null; contactPersonPhone?: string | null };
-  const callerHasName = !!(inq.callerFirstName?.trim() && inq.callerLastName?.trim());
+  // A caller who is the agency or the company itself (2026-10-27) has a name already, and is never
+  // the guest staying: Wrap up neither asks for a caller's name nor offers "The caller".
+  const partyName = inq.travelAgent?.displayName ?? inq.corporateAccount?.displayName ?? null;
+  const callerIsParty = callerIsTheParty(inq, partyName);
+  const callerHasName = callerIsParty || !!(inq.callerFirstName?.trim() && inq.callerLastName?.trim());
 
   // The guest staying: the caller by default; once named, shown as named until "Change".
   const [changing, setChanging] = useState(false);
   const choosing = editable && (!named || changing);
-  const [choice, setChoice] = useState<GuestChoice>("CALLER");
+  const [choice, setChoice] = useState<GuestChoice>(callerIsParty ? "NEW" : "CALLER");
   const [nationality, setNationality] = useState(NATIONALITIES[0]);
   // The caller's name, when it was not taken at the start.
   const [cTitle, setCTitle] = useState("");
@@ -441,11 +445,18 @@ export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; edita
               </div>
             ) : null}
             <Choice
-              options={[
-                ["CALLER", callerWord ? `The caller — ${callerWord}` : "The caller"],
-                ["FOUND", "Someone on file"],
-                ["NEW", "Someone else, new"],
-              ]}
+              options={
+                callerIsParty
+                  ? [
+                      ["NEW", "A guest, new"],
+                      ["FOUND", "Someone on file"],
+                    ]
+                  : [
+                      ["CALLER", callerWord ? `The caller — ${callerWord}` : "The caller"],
+                      ["FOUND", "Someone on file"],
+                      ["NEW", "Someone else, new"],
+                    ]
+              }
               value={choice}
               onChange={(v) => setChoice(v)}
             />

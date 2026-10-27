@@ -57,6 +57,7 @@ import {
   PhoneInput,
   PickList,
   ReqMark,
+  partyPersonOf,
   USE_TYPES,
   addNightsIso,
   bedWord,
@@ -440,10 +441,15 @@ export function NewInquiryCanvas() {
   const adoptCaller = (m: CallerMatch) => {
     beforePick.current = { callerTitle, firstName, lastName, phoneCode, phoneNumber, email, onWhatsApp, channelKey, party, partyContact };
     setSelectedCaller(m);
-    setCallerTitle(m.title ?? "");
-    setFirstName(m.firstName ?? "");
-    setLastName(m.lastName ?? "");
-    if (m.email) setEmail(m.email);
+    // An agency's or a company's caller is the party itself (2026-10-27, operator: "in the first
+    // name it should be naming it as Bhutan INC, because that's the caller … the contact person is
+    // filled below in Who is asking").
+    const person = partyPersonOf(m);
+    setCallerTitle(m.party ? "" : (m.title ?? ""));
+    setFirstName(m.party ? m.party.displayName : (m.firstName ?? ""));
+    setLastName(m.party ? "" : (m.lastName ?? ""));
+    const mail = m.party ? (m.party.contactEmail ?? m.email) : m.email;
+    if (mail) setEmail(mail);
     if (m.onWhatsApp != null) setOnWhatsApp(m.onWhatsApp);
     // The number on record replaces the fragment typed to find them; one kept without its dialling
     // code keeps the code the desk had.
@@ -455,10 +461,11 @@ export function NewInquiryCanvas() {
     // Ringing for an agency or a company: "Who is asking" is that party, with the caller as its
     // contact person.
     if (m.party) {
-      const p = { party: m.party, contact: m.partyContact };
+      // The person at the party; for its own line, the first person on its list.
+      const p = { party: m.party, contact: person ?? defaultContactFor(m.party) };
       const key: ChannelKey = m.party.kind === "TRAVEL_AGENT" ? "AGENT" : "CORPORATE";
       if (partyKind === m.party.kind) {
-        if (party?.id === m.party.id) setPartyContact(m.partyContact ?? defaultContactFor(m.party));
+        if (party?.id === m.party.id) setPartyContact(p.contact);
         else {
           pendingParty.current = p;
           setParty(m.party);
@@ -850,7 +857,7 @@ export function NewInquiryCanvas() {
                           </span>
                           <div className="row-acts">
                             <span className="meta">
-                              {selectedCaller.party ? `the caller, for ${selectedCaller.party.displayName}` : "the caller, as they rang before"}
+                              {selectedCaller.party ? `${selectedCaller.party.displayName} is the caller — its contact person is under Who is asking` : "the caller, as they rang before"}
                             </span>
                             <Help label="About the caller found">
                               Only the caller is filled in. The guest staying is named at Wrap up, where the guests this caller brought before come first.

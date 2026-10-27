@@ -360,14 +360,34 @@ export function ReqMark({ title = "needed" }: { title?: string }) {
  * themselves), the number and email, how often they have rung, and under it the guests they
  * brought before — shown, not picked; the guest staying is named at Wrap up.
  */
+const sameName = (a: string | null | undefined, b: string | null | undefined) =>
+  (a ?? "").toLowerCase().replace(/\s+/g, " ").trim() === (b ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+
+/**
+ * The person at the party a caller-list row names, or null when the row is the party's own line
+ * (or a caller recorded as the party itself).
+ */
+export function partyPersonOf(caller: CallerMatch): CoordinatorContact | null {
+  if (!caller.party || caller.foundAs === "PARTY_NUMBER") return null;
+  const c = caller.partyContact;
+  return c && c.name && !sameName(c.name, caller.party.displayName) ? c : null;
+}
+
+/** Whether a booking's caller is the agency or company itself — never a guest of the hotel. */
+export function callerIsTheParty(
+  inq: { callerFirstName?: string | null; callerLastName?: string | null } | null | undefined,
+  partyName: string | null | undefined,
+): boolean {
+  if (!inq || !partyName) return false;
+  return sameName(`${inq.callerFirstName ?? ""} ${inq.callerLastName ?? ""}`, partyName);
+}
+
 export function CallerLine({ caller }: { caller: CallerMatch }) {
-  const name = [caller.title, caller.firstName, caller.lastName].filter(Boolean).join(" ");
-  const tag =
-    caller.party && caller.kind === "TRAVEL_AGENT"
-      ? `Travel agent · ${caller.party.displayName}`
-      : caller.party && caller.kind === "CORPORATE"
-        ? `Company · ${caller.party.displayName}`
-        : "Direct";
+  // An agency's or a company's caller IS the party (2026-10-27, operator): the row leads with the
+  // party; the person at it, when known, is its contact.
+  const person = partyPersonOf(caller);
+  const name = caller.party ? caller.party.displayName : [caller.title, caller.firstName, caller.lastName].filter(Boolean).join(" ");
+  const tag = caller.party ? (caller.kind === "TRAVEL_AGENT" ? "Travel agent" : "Company") : "Direct";
   const where =
     caller.foundAs === "PARTY_NUMBER"
       ? "the office line"
@@ -387,6 +407,7 @@ export function CallerLine({ caller }: { caller: CallerMatch }) {
         {caller.email ? <span className="meta"> · {caller.email}</span> : null}
         {where ? <span className="meta"> · {where}</span> : null}
       </span>
+      {person ? <span className="meta">Contact person: {person.name}</span> : null}
       {caller.guests.length > 0 ? (
         <span className="meta">
           Brought before:{" "}
