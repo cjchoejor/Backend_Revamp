@@ -670,7 +670,10 @@ export function S2Negotiation({
         ) : tableOpen ? (
           <Tool>
             <div onPointerDownCapture={markHandEdit} onKeyDownCapture={markHandEdit} onInputCapture={markHandEdit}>
+            {/* The grid alone (2026-10-27, operator: "remove the guest board option, that way you
+                don't have to keep the table option as well") — as at Arrival, Check-in and Stay. */}
             <RoomCompositionPlanner
+              tableOnly
               bedPlan={beds.byRoom}
               onBedChange={beds.set}
               bedAsk={beds.ask}

@@ -90,7 +90,7 @@ import { DetailsView } from "@/components/ds/workspace/details-view";
 import { BOOKING_TABS, ChargesView, DocumentsView, NotesView, RequestsView, type BookingTab } from "@/components/ds/workspace/booking-tabs";
 import { listBookingNotes, listGuestRequests } from "@/lib/api/booking-notes";
 import { useStayPrice } from "@/lib/ds/stay-price";
-import { HeaderClock, HeaderDwell, SideTimer, StepDwell } from "@/components/ds/workspace/side-timer";
+import { HeaderClock, SideTimer, StepDwell } from "@/components/ds/workspace/side-timer";
 import { useMeasuredVar } from "@/hooks/use-stage-head";
 import { FoldingSide, useSideFolded } from "@/components/ds/workspace/side-panel";
 import { S1Inquiry } from "@/components/ds/steps/s1-inquiry";
@@ -1483,12 +1483,10 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
 
   if (topLayout) {
     const headerClocks = runningClocks(entry, timersQuery.data?.items ?? [], (paymentStatusQuery.data?.paymentPlan?.plan ?? "FULL") !== "FULL");
-    const dwell = entry.stageDwellRecords?.[0];
     const fileTab: "details" | BookingTab = view === "step" || view === "other" ? "details" : view;
     const sectionsLeft = flowItems.filter((i) => !i.met).length;
-    // With the journey line gone (2026-10-27), a look back is one button on the step's line, and a
-    // step looked back at offers the way back to the step the booking is at.
-    const lookBack = !viewingPast && !sealed && viewing > 1 && viewing - 1 <= maxReach ? viewing - 1 : null;
+    // A step looked back at (from a later step's rail, or a closed booking's) offers the way back to
+    // the step the booking is at — the journey line that did this is gone (2026-10-27).
     const backTo = viewingPast && viewing !== currentOrder ? currentOrder : null;
     return (
       <BackendRailSlotContext.Provider value={railSlot}>
@@ -1504,53 +1502,25 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                   measured onto --ws-head-h so a card scrolled to lands below them. */}
               <div className="ws-topstick" ref={headRef}>
                 <div className={`ws-head${endedEarly ? " ended" : ""}`}>
-                  <div>
-                    <a
-                      href="/bookings"
-                      className="backlink"
-                      onClick={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        handleExit();
-                      }}
-                    >
-                      <Icon name="chev" /> Back to Bookings
-                    </a>
-                    <div className="who">
-                      <h2 className={nameIsGuest ? undefined : "name-i"}>{name}</h2>
-                      {/* The enquiry's number where the standing chip was — the step's line already
-                          says where the booking stands (2026-10-27). */}
-                      <span className="refno">
-                        Enquiry <b>{entry.inquiry?.id ?? "—"}</b>
-                      </span>
-                      {entry.guestProfile?.vipTier ? (
-                        <Chip tone="accent" tier>
-                          VIP
-                        </Chip>
-                      ) : null}
-                      {entry.groupBillingMode === "GROUP_MASTER" ? <Chip>Group</Chip> : null}
-                    </div>
-                    <div className="facts">
-                      <span>
-                        Booking <b>{entry.id}</b>
-                        {trip.stays.length > 1 ? ` · stay ${trip.position} of ${trip.stays.length}` : ""}
-                      </span>
-                      {trip.others.length ? (
-                        <span>
-                          Also this trip{" "}
-                          {trip.others.slice(0, 2).map((s, i) => (
-                            <span key={s.id}>
-                              {i ? ", " : ""}
-                              <Link href={bookingHref(s.id)}>{fmtRange(s.checkInDate, s.checkOutDate)}</Link>
-                            </span>
-                          ))}
-                          {trip.others.length > 2 ? ` and ${trip.others.length - 2} more` : ""}
-                        </span>
-                      ) : null}
-                      <span>
-                        Custodian <b>{listRow?.custodianName ?? "—"}</b>
-                      </span>
-                    </div>
+                  {/* One line (2026-10-27, operator's picture): the name, the enquiry's number in the box
+                      where the standing chip was, then the booking's number. Leaving goes by the topbar's
+                      Bookings tab or Back, which ask about parking as the link here did; the trip's
+                      other stays are on the Booking tab. */}
+                  <div className="who">
+                    <h2 className={nameIsGuest ? undefined : "name-i"}>{name}</h2>
+                    <span className="refno" title="The enquiry's number">
+                      <b>{entry.inquiry?.id ?? "—"}</b>
+                    </span>
+                    <span className="refid" title="The booking's number">
+                      {entry.id}
+                      {trip.stays.length > 1 ? <span className="meta"> · stay {trip.position} of {trip.stays.length}</span> : null}
+                    </span>
+                    {entry.guestProfile?.vipTier ? (
+                      <Chip tone="accent" tier>
+                        VIP
+                      </Chip>
+                    ) : null}
+                    {entry.groupBillingMode === "GROUP_MASTER" ? <Chip>Group</Chip> : null}
                   </div>
                   <div className="hacts">
                     {parked ? (
@@ -1579,11 +1549,6 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                   </h3>
                   <span className="verb">{STEP_NEEDS[viewing as StepNo]}</span>
                   {viewingPast || sealed ? null : <FlowChips names={sections} onGo={goToCard} />}
-                  {lookBack ? (
-                    <Button kind="quiet" compact className="lookback" onClick={() => gotoStep(lookBack)}>
-                      <Icon name="chev" /> Look back at {STEP_NAMES[lookBack - 1]}
-                    </Button>
-                  ) : null}
                 </div>
               </div>
 
@@ -1626,7 +1591,6 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                     resuming={unparkMutation.isPending}
                     onHistory={() => setView("history", viewing)}
                   />
-                  {!viewingPast && !sealed ? <div className="todo-h">To do now</div> : null}
                   <AlsoBar buttons={alsoButtons} panel={alsoPanel}>
                     <OtherWaysSlot node={null}>{native}</OtherWaysSlot>
                   </AlsoBar>
@@ -1697,7 +1661,6 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                   ) : (
                     <span className="meta">No clock running</span>
                   )}
-                  {dwell && !sealed ? <HeaderDwell since={dwell.enteredAt} /> : null}
                 </div>
                 <div className="fstay">
                   <StayDates checkIn={entry.checkInDate} checkOut={co} />

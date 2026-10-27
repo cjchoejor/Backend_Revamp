@@ -1333,8 +1333,7 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .ws-top.ws-cols:not(.desk-root *) { display: grid; grid-template-columns: minmax(0, 1fr) var(--file-w); grid-template-rows: auto; align-items: start; }
 .ds .ws-cols > .ws-main { min-width: 0; display: flex; flex-direction: column; min-height: calc(100vh - 53px); }
 .ds .ws-cols > .ws-main > .canvas:not(.desk-root *) { flex: 1 0 auto; padding: var(--s2) var(--s5) var(--s4); max-width: none; }
-.ds .ws-top .todo-h, .ds .ws-top .before-move h4 { font-size: var(--t-meta); font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); }
-.ds .ws-top .todo-h { margin-bottom: calc(-1 * var(--s3)); }
+.ds .ws-top .before-move h4 { font-size: var(--t-meta); font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); }
 .ds .ws-top .file { position: sticky; top: 53px; height: calc(100vh - 53px); min-height: 320px; display: flex; flex-direction: column; min-width: 0; background: var(--surface); border-left: 1px solid var(--line-2); }
 
 /* the file's head: the clocks, then the stay — check-in and check-out, the nights, the rooms, how it
@@ -1346,13 +1345,16 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .ws-top .file .ffacts-line b { color: var(--ink); font-weight: 700; }
 .ds .ws-top .file .ffacts-line .camein { padding: 1px 8px; border: 1px solid var(--line-2); border-radius: var(--r-control); background: var(--surface-2); color: var(--ink); font-weight: 600; }
 
-/* the enquiry's number beside the name, where the standing chip was (2026-10-27) */
-.ds .ws-top .ws-head .refno { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border: 1px solid var(--line-2); border-radius: var(--r-control); background: var(--surface-2); font-size: var(--t-sm); color: var(--ink-2); }
+/* the head is one line (2026-10-27, operator's picture): the name, the enquiry's number in the box
+   where the standing chip was, a line, then the booking's number */
+.ds .ws-top .ws-head:not(.desk-root *) { align-items: center; padding: var(--s2) var(--s4); }
+.ds .ws-top .ws-head .who:not(.desk-root *) { gap: var(--s2) var(--s3); }
+.ds .ws-top .ws-head .refno { display: inline-flex; align-items: center; padding: 2px 10px; border: 1px solid var(--line-2); border-radius: var(--r-control); background: var(--surface-2); font-size: var(--t-sm); color: var(--ink-2); }
 .ds .ws-top .ws-head .refno b { color: var(--ink); font-weight: 700; font-variant-numeric: tabular-nums; }
 .ds .ws-top .ws-head .refno b.ink-3 { color: var(--ink-3); font-weight: 600; }
-/* a look back from the step's line, and the way back from a step looked back at */
-.ds .ws-top .stagebar .lookback:not(.desk-root *) { margin-left: auto; }
-.ds .ws-top .stagebar .lookback .ic { transform: rotate(180deg); }
+.ds .ws-top .ws-head .refid { padding-left: var(--s3); border-left: 1px solid var(--line-2); font-size: var(--t-base); font-weight: 700; color: var(--ink); font-variant-numeric: tabular-nums; }
+.ds .ws-top .ws-head .refid .meta { font-weight: 500; }
+/* the way back from a step looked back at */
 .ds .ws-top .backto { display: flex; }
 
 /* the bar at the left column's foot: one line while it fits; when it does not, the ways keep a row of

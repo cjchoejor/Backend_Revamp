@@ -733,25 +733,15 @@ export function NewInquiryCanvas() {
       <div className="ws-main">
       <div className="ws-topstick" ref={headRef}>
         <div className="ws-head">
-          <div>
-            <Link href="/bookings" className="backlink">
-              <Icon name="chev" /> Back to Bookings
-            </Link>
-            <div className="who">
-              <h2 className="ink-2">
-                New inquiry
-                <Help label="About a new inquiry">There is no other way to see whether rooms are free: looking is recording. The lead is kept — taken or not.</Help>
-              </h2>
-              <span className="refno">
-                Enquiry <b className="ink-3">not kept yet</b>
-              </span>
-            </div>
-            <div className="facts">
-              <span>
-                Guests <b>{adultsN + childN}</b>
-                {childN ? ` · ${plural(adultsN, "adult")}, ${plural(childN, "child", "children")}` : ""}
-              </span>
-            </div>
+          {/* One line, as on the booking: the enquiry's number comes once the lead is kept. */}
+          <div className="who">
+            <h2 className="ink-2">
+              New inquiry
+              <Help label="About a new inquiry">There is no other way to see whether rooms are free: looking is recording. The lead is kept — taken or not.</Help>
+            </h2>
+            <span className="refno" title="The enquiry's number is given once the lead is kept">
+              <b className="ink-3">not kept yet</b>
+            </span>
           </div>
         </div>
         <div className="stagebar">
@@ -762,7 +752,6 @@ export function NewInquiryCanvas() {
       </div>
 
         <div className="canvas">
-          <div className="todo-h">To do now</div>
           <StepCanvas past={false}>
               <div className="stack">
                 {fromChart.room || fromChart.checkIn ? (
