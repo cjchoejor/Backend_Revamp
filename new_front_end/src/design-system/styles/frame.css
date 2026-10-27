@@ -1279,3 +1279,119 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 /* The DD/MM/YYYY date box (2026-10-27) is a wrapper around its text box; narrow places size it. */
 .ds .rchart-date .date-input { width: 150px; }
 .ds .rchart-date .date-input input.input:not(.desk-root *) { width: 100%; }
+
+/* ===== Stage 1 in the stage-template layout (2026-10-27, the operator's docs/PMS Stage Template.html;
+   Stage 1 first, "we'll see"): the header carries the clocks, the journey and the step's sections run
+   under it as lines, the step is always on the left and the booking file always on the right, and the
+   step's other ways sit in the fixed bar at the foot with the move. Light mode only. ===== */
+.ds .ws.ws-top:not(.desk-root *) { display: block; min-height: 0; background: var(--paper); }
+.ds .ws-top .ws-topstick:not(.desk-root *) { position: sticky; top: 53px; z-index: 35; background: var(--paper); padding: var(--s3) var(--s5) var(--s2); display: grid; gap: var(--s2); }
+.ds .ws-top .ws-head:not(.desk-root *) { position: static; border: 1px solid var(--line-2); border-radius: var(--r-card); }
+.ds .ws-top .ws-head .hrow { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: var(--s2) var(--s3); align-items: center; justify-content: space-between; border-top: 1px solid var(--line-2); padding-top: var(--s2); }
+.ds .ws-top .hclocks, .ds .ws-top .hacts { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: center; }
+
+/* a clock in the header: a ring that fills as the time runs out, then what runs out and when */
+.ds .hclock { display: inline-flex; align-items: center; gap: 6px; padding: 3px 12px 3px 5px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); font-size: var(--t-sm); color: var(--ink-2); }
+.ds .hclock svg { width: 20px; height: 20px; flex: none; }
+.ds .hclock .track { fill: none; stroke: var(--line-2); stroke-width: 3; }
+.ds .hclock .fill { fill: none; stroke: var(--success); stroke-width: 3; stroke-linecap: round; transition: stroke-dashoffset 1s linear; }
+.ds .hclock b { color: var(--ink); font-weight: 700; font-variant-numeric: tabular-nums; }
+.ds .hclock.warn { border-color: var(--warning-line); color: var(--warning); }
+.ds .hclock.warn .fill { stroke: var(--warning); }
+.ds .hclock.warn b { color: var(--warning); }
+.ds .hclock.crit, .ds .hclock.due { border-color: var(--danger-line); background: var(--danger-soft); color: var(--danger); }
+.ds .hclock.crit .fill, .ds .hclock.due .fill { stroke: var(--danger); }
+.ds .hclock.crit b, .ds .hclock.due b { color: var(--danger); }
+.ds .hdwell { font-size: var(--t-meta); color: var(--ink-3); }
+.ds .hdwell b { color: var(--ink-2); font-weight: 600; }
+@media (prefers-reduced-motion: reduce) { .ds .hclock .fill { transition: none; } }
+
+/* the journey, one line under the header */
+.ds .ws-top .journey { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s1) 6px; }
+.ds .ws-top .journey .jgrp { font-size: 12.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); margin: 0 2px 0 var(--s2); }
+.ds .ws-top .journey .jgrp:first-child { margin-left: 0; }
+.ds .ws-top .journey .jst { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px 4px 5px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--ink-2); font-size: var(--t-sm); font-weight: 500; text-decoration: none; }
+.ds .ws-top .journey .jst .n { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; border: 1px solid var(--line); font-size: 12.5px; color: var(--ink-2); }
+.ds .ws-top .journey .jst .n .ic { width: 12px; height: 12px; }
+.ds .ws-top .journey .jst:hover { background: var(--surface-2); border-color: var(--ink-3); }
+.ds .ws-top .journey .jst.done { color: var(--ink); }
+.ds .ws-top .journey .jst.done .n { background: var(--success); border-color: var(--success); color: #fff; }
+.ds .ws-top .journey .jst.cur { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 700; }
+.ds .ws-top .journey .jst.cur .n { background: transparent; border-color: #fff; color: #fff; }
+.ds .ws-top .journey .jst.later { color: var(--ink-3); cursor: default; opacity: .75; }
+.ds .ws-top .journey .jst.later:hover { background: var(--surface); border-color: var(--line); }
+.ds .ws-top .journey .jst.boundary { box-shadow: inset 0 -3px 0 var(--line-2); }
+
+/* the step's line: its name, what it is for, then its sections as chips */
+.ds .ws-top .stagebar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s3); padding: var(--s2) var(--s4); background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--r-card); }
+.ds .ws-top .stagebar h3 { font-size: var(--t-h3); font-family: var(--font-head); margin: 0; }
+.ds .ws-top .stagebar .verb { color: var(--ink-2); }
+.ds .flow-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.ds .flow-chips .sep { color: var(--ink-3); }
+.ds .flow-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 12px 3px 4px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--ink-2); font: inherit; font-size: var(--t-sm); font-weight: 500; cursor: pointer; }
+.ds .flow-chip .n { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; border: 1px solid var(--line); font-size: 12px; }
+.ds .flow-chip .n .ic { width: 11px; height: 11px; }
+.ds .flow-chip:hover { background: var(--surface-2); border-color: var(--ink-3); }
+.ds .flow-chip.done { border-color: var(--success-line); color: var(--success); }
+.ds .flow-chip.done .n { background: var(--success); border-color: var(--success); color: #fff; }
+.ds .flow-chip.cur { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 700; }
+.ds .flow-chip.cur .n { border-color: #fff; color: #fff; background: transparent; }
+.ds .flow-chip.cur.done .n { background: #fff; color: var(--accent); }
+.ds .flow-chip:focus-visible { outline: none; box-shadow: var(--focus); }
+.ds .flow-count { font-size: var(--t-sm); font-weight: 700; color: var(--ink-2); margin-left: 4px; }
+
+/* the step on the left, the booking file on the right */
+.ds .ws-top .ws-split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 460px); gap: var(--s4); align-items: start; padding: var(--s2) var(--s5) var(--s5); }
+.ds .ws-top .ws-split > .canvas:not(.desk-root *) { padding: 0; max-width: none; }
+.ds .ws-top .todo-h, .ds .ws-top .file .ftitle, .ds .ws-top .before-move h4 { font-size: var(--t-meta); font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); }
+.ds .ws-top .todo-h { margin-bottom: calc(-1 * var(--s3)); }
+.ds .ws-top .file { position: sticky; top: calc(53px + var(--ws-head-h, 0px) + var(--s2)); max-height: calc(100vh - 53px - var(--ws-head-h, 0px) - 96px); display: flex; flex-direction: column; min-width: 0; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-card); }
+.ds .ws-top .file .ftitle { padding: var(--s3) var(--s4) 0; }
+.ds .ws-top .file .ftabs { display: flex; flex-wrap: wrap; gap: 2px var(--s1); padding: var(--s2) var(--s3) 0; border-bottom: 1px solid var(--line); }
+.ds .ws-top .file .ftab { padding: 6px 10px; border: 0; border-bottom: 3px solid transparent; background: none; font: inherit; font-size: var(--t-sm); font-weight: 500; color: var(--ink-2); cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
+.ds .ws-top .file .ftab:hover { color: var(--ink); background: var(--surface-2); }
+.ds .ws-top .file .ftab[aria-selected="true"] { color: var(--accent-ink); font-weight: 700; border-bottom-color: var(--accent); }
+.ds .ws-top .file .ftab:focus-visible { outline: none; box-shadow: var(--focus); }
+.ds .ws-top .file .fbody { padding: var(--s3) var(--s4); overflow: auto; min-width: 0; display: grid; gap: var(--s3); align-content: start; }
+
+/* what the move checks */
+.ds .ws-top .before-move:not(.desk-root *) { display: grid; gap: var(--s2); }
+.ds .ws-top .before-move table td:first-child { width: 28px; font-weight: 700; }
+.ds .ws-top .before-move tr.pick { cursor: pointer; }
+.ds .ws-top .before-move tr.pick:hover td { background: var(--surface-2); }
+.ds .ws-top .before-move-foot { padding: var(--s2) var(--s3); border-radius: var(--r-control); font-weight: 700; }
+.ds .ws-top .before-move-foot.wait { background: var(--surface-2); color: var(--ink-2); }
+.ds .ws-top .before-move-foot.ready { background: var(--success-soft); color: var(--success); }
+
+/* the fixed bar: also possible here, where the step stands, the move */
+.ds .ws-top .gatebar.top:not(.desk-root *) { position: sticky; bottom: 0; z-index: 30; grid-template-columns: auto minmax(0, 1fr) auto; box-shadow: 0 -2px 10px rgba(30, 28, 25, .06); }
+.ds .ws-top .gatebar.top .also { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); }
+.ds .ws-top .gatebar.top .also:has(.also-btns:empty) { display: none; }
+.ds .ws-top .gatebar.top .also-h { font-size: var(--t-meta); font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); }
+.ds .ws-top .gatebar.top .also-btns { display: flex; flex-wrap: wrap; gap: var(--s2); }
+.ds .ws-top .gatebar.top .also-btns .btn.on { border-color: var(--accent); color: var(--accent-ink); box-shadow: inset 0 -3px 0 var(--accent); }
+.ds .ws-top .gatebar.top .gate-status { min-width: 0; }
+.ds .ws-top .gatebar.top .also-panel-slot { position: absolute; left: var(--s5); bottom: calc(100% + var(--s2)); width: min(640px, calc(100% - 2 * var(--s5))); }
+.ds .also-panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-dialog); box-shadow: var(--shadow-pop); padding: var(--s3) var(--s4) var(--s4); display: grid; gap: var(--s3); max-height: 60vh; overflow: auto; }
+.ds .also-panel[hidden] { display: none; }
+.ds .also-panel-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s3); }
+
+@media (max-width: 1100px) {
+  .ds .ws-top .ws-split { grid-template-columns: minmax(0, 1fr); }
+  .ds .ws-top .file { position: static; max-height: none; }
+  .ds .ws-top .gatebar.top:not(.desk-root *) { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* the views inside the file: its tab names the view, so the view's own heading goes, and what was
+   laid out side by side for the wide canvas stacks in the narrower column */
+.ds .ws-top .file .fbody > h3 { display: none; }
+.ds .ws-top .file .grid3:not(.desk-root *), .ds .ws-top .file .grid2:not(.desk-root *) { grid-template-columns: minmax(0, 1fr); gap: var(--s3); }
+.ds .ws-top .file dl.pv:not(.desk-root *) { grid-template-columns: 108px minmax(0, 1fr) !important; }
+.ds .ws-top .file .steps-canvas { gap: var(--s3); }
+.ds .ws-top .file .card:not(.desk-root *) { padding: var(--s3); }
+/* where the step stands, in the bar: one line, read from the left */
+.ds .ws-top .gatebar.top .gate:not(.desk-root *) { display: flex; flex-wrap: wrap; gap: 4px var(--s4); }
+.ds .ws-top .gatebar.top .gate .item:not(.desk-root *) { display: inline-flex; align-items: center; gap: var(--s2); text-align: left; background: none; border: 0; padding: 0; font: inherit; font-size: var(--t-sm); }
+.ds .ws-top .gatebar.top .gate button.item:not(.desk-root *) { cursor: pointer; }
+.ds .ws-top .gatebar.top .gate button.item:hover span { text-decoration: underline; }
+.ds .ws-top .gatebar.top .gate .item .ic:not(.desk-root *) { margin-top: 0; }

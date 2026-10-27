@@ -37,6 +37,16 @@ export function StepDwell({ since }: { since: string }) {
   );
 }
 
+/** The same fact on the header's clock line (2026-10-27). */
+export function HeaderDwell({ since }: { since: string }) {
+  const { now } = useHotelClock(30_000);
+  return (
+    <span className="hdwell">
+      At this step <b>{span(now - new Date(since).getTime())}</b>
+    </span>
+  );
+}
+
 /** Where a clock stands: time left, how much of its run has gone (0–100), and its colour. */
 function timerProgress(timer: TimerRecordSummary, now: number) {
   const fires = new Date(timer.firesAt).getTime();
@@ -74,6 +84,29 @@ export function TimerRing({ timer, label }: { timer: TimerRecordSummary; label: 
         <circle className="fill" cx="22" cy="22" r={r} strokeDasharray={c} strokeDashoffset={c * (1 - pct / 100)} transform="rotate(-90 22 22)" />
       </svg>
       <b>{shortLeft(ms)}</b>
+    </span>
+  );
+}
+
+/**
+ * A clock in the booking header (2026-10-27, after the operator's stage template: "the timer is now
+ * on the top bar … with a circular indicator showing time flow"): what runs out and when, with a
+ * small ring that fills from when the clock was armed to when it fires, in the same colours.
+ */
+export function HeaderClock({ timer, label }: { timer: TimerRecordSummary; label: string }) {
+  const { now, tz } = useHotelClock(1000);
+  const { ms, pct, level } = timerProgress(timer, now);
+  const r = 8;
+  const c = 2 * Math.PI * r;
+  return (
+    <span className={`hclock ${level}`} title={`${label} · ${fmtDateTime(timer.firesAt, tz)}`}>
+      <svg viewBox="0 0 20 20" aria-hidden="true">
+        <circle className="track" cx="10" cy="10" r={r} />
+        <circle className="fill" cx="10" cy="10" r={r} strokeDasharray={c} strokeDashoffset={c * (1 - pct / 100)} transform="rotate(-90 10 10)" />
+      </svg>
+      <span>
+        {label} <b>{countdown(ms)}</b>
+      </span>
     </span>
   );
 }

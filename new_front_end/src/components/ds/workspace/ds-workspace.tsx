@@ -18,7 +18,7 @@
  */
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button, Chip, Dialog, EmptyState, Icon } from "@/design-system";
@@ -51,7 +51,7 @@ import { completeCheckInToS7 } from "@/lib/api/check-in";
 import { listIdentityProofs } from "@/lib/api/identity-proofs";
 import { ApiError } from "@/lib/api/client";
 import { DESK_STEPS, guestName } from "@/lib/desk/model";
-import { FlowTodo, OtherWaysSlot, StepFlow, anchorFor, numberFlow, revealCard, type FlowItem, type StepPane } from "@/components/ds/steps/kit";
+import { AlsoBar, FlowChips, FlowTodo, OtherWaysSlot, StepFlow, anchorFor, numberFlow, revealCard, type FlowItem, type StepPane } from "@/components/ds/steps/kit";
 import { QuietScreen } from "@/components/ds/help";
 import { findParkTimer } from "@/lib/desk/timers";
 import {
@@ -90,7 +90,7 @@ import { DetailsView } from "@/components/ds/workspace/details-view";
 import { BOOKING_TABS, ChargesView, DocumentsView, NotesView, RequestsView, type BookingTab } from "@/components/ds/workspace/booking-tabs";
 import { listBookingNotes, listGuestRequests } from "@/lib/api/booking-notes";
 import { useStayPrice } from "@/lib/ds/stay-price";
-import { SideTimer, StepDwell } from "@/components/ds/workspace/side-timer";
+import { HeaderClock, HeaderDwell, SideTimer, StepDwell } from "@/components/ds/workspace/side-timer";
 import { FoldingSide, useSideFolded } from "@/components/ds/workspace/side-panel";
 import { S1Inquiry } from "@/components/ds/steps/s1-inquiry";
 import { InquirySummaryDialog } from "@/components/ds/steps/s1-summary";
@@ -113,6 +113,18 @@ const atLeastFom = (level?: string | null) => atLeast(level, "L2");
 const NOOP = () => {};
 
 type View = "step" | "other" | "details" | BookingTab;
+
+/** Inquiry's five sections, by the cards the readiness list names (Stage 1 since 2026-10-10). */
+const INQUIRY_SECTIONS: Record<string, string> = {
+  caller: "The caller",
+  asking: "Who is asking",
+  stay: "The stay",
+  house: "The house",
+  wrap: "Wrap up",
+};
+
+/** The booking file's tabs on the right in the stage-template layout — Booking first. */
+const FILE_TABS: ReadonlyArray<readonly ["details" | BookingTab, string]> = [["details", "Booking"], ...BOOKING_TABS];
 
 
 /* ------------------------------------------------------------------ */
@@ -316,6 +328,9 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const [railSlot, setRailSlot] = useState<HTMLElement | null>(null);
   // Where the step's "other ways" render — the tab beside This step (2026-09-25).
   const [otherSlot, setOtherSlot] = useState<HTMLElement | null>(null);
+  // Stage 1's fixed bar (2026-10-27): where its other ways' buttons and their open form render.
+  const [alsoButtons, setAlsoButtons] = useState<HTMLElement | null>(null);
+  const [alsoPanel, setAlsoPanel] = useState<HTMLElement | null>(null);
 
   /* ---- the per-room key checklist (survives a refresh until check-in stamps it) ---- */
   const [reserveExtras, setReserveExtras] = useState<string[]>([]);
@@ -750,12 +765,19 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const flowItems: FlowItem[] = numberFlow(preconds, { bySection: inquiryStepActive });
   const inherited = preconds.filter((p) => !p.card);
   const nextUp = flowItems.find((i) => !i.met) ?? null;
+  // Stage 1 in the stage-template layout (2026-10-27, operator: "do the changes for stage one only
+  // and we'll see"): the clocks in the header, the journey and the step's sections as lines under
+  // it, the step always on the left, the booking file — Booking · Charges & payments · Guest
+  // requests · Notes · Documents · History — always on the right, and the step's other ways in
+  // the fixed bar at the foot. The other steps keep the rail, the tabs and the side panel.
+  const topLayout = viewing === 1;
   const goToCard = (card?: string) => {
     if (!card) return;
     // The card may live in one of the step's panes: open that pane first, then scroll once the
-    // card is actually on screen (the pane arrives with the next render).
+    // card is actually on screen (the pane arrives with the next render). In the stage-template
+    // layout the step is always on screen, so the file on the right keeps its tab.
     const owner = panes.find((p) => p.cards.includes(card))?.key ?? null;
-    if (view !== "step" || owner !== pane) {
+    if (!topLayout && (view !== "step" || owner !== pane)) {
       if (owner !== pane) setPane(owner);
       else setView("step", viewing);
     }
@@ -1102,10 +1124,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const headline = fromScreen ? stayPrice.amount : billing ? billing.headline.amount : fin.frozen ? null : fin.indicativeTotal;
   const booker = listRow ? bookerName(listRow) : null;
 
-  return (
-    <BackendRailSlotContext.Provider value={railSlot}>
-      <div className="ws">
-        <div className="ws-head" ref={headRef}>
+  const headInner = (
+    <>
           <div>
             <a
               href="/bookings"
@@ -1193,6 +1213,381 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
               · charges &amp; payments
             </div>
           </div>
+    </>
+  );
+  const gateStatus = (
+    <>
+          {parked ? (
+            <div className="sm ink-2">
+              Parked · <b>Resume to continue</b>
+            </div>
+          ) : sealed ? (
+            <div className="sm ink-2">{sealedOutcome}</div>
+          ) : preconds.length ? (
+            // The full list lives in the side panel, numbered (2026-09-25) — the bar says what is
+            // next and takes you to it, so the move and the reason for waiting sit together.
+            <div className="gate">
+              {nextUp ? (
+                <button type="button" className="item unmet" onClick={() => goToCard(nextUp.card)}>
+                  <Icon name="circle" />
+                  <span>
+                    Next · <b>{nextUp.n}</b> {nextUp.label}
+                  </span>
+                </button>
+              ) : unmet > 0 ? (
+                <div className="item unmet">
+                  <Icon name="circle" />
+                  <span>{preconds.find((p) => !p.met)?.label}</span>
+                </div>
+              ) : (
+                <div className="item met">
+                  <Icon name="check" />
+                  <span>everything this step needs is done</span>
+                </div>
+              )}
+            </div>
+          ) : viewing < currentOrder ? (
+            <span className="meta">a step already passed · the booking is at {STEP_NAMES[currentOrder - 1]}</span>
+          ) : (
+            <span />
+          )}
+    </>
+  );
+  const dialogs = (
+    <>
+
+        <CommitDialog
+          open={confirmOpen}
+          title="Reserve the booking"
+          caseLines={[<b key="n">{name}</b>, `${entry.id} · ${fmtRange(entry.checkInDate, entry.checkOutDate)}`]}
+          lines={[
+            fin.indicativeTotal !== null ? `The price freezes at ${money(fin.indicativeTotal, fin.currency)} — the guest is held to it.` : "The price freezes — the guest is held to it.",
+            "The rooms lock — no longer offerable to anyone else.",
+            "The confirmation voucher goes to whoever booked.",
+            "Any later change opens a new pass; it never edits what is frozen.",
+          ]}
+          confirmLabel="Reserve"
+          pending={confirmMutation.isPending}
+          onConfirm={() => confirmMutation.mutate()}
+          onClose={() => setConfirmOpen(false)}
+        />
+        <CommitDialog
+          open={checkInOpen}
+          title="Check in and open the folio"
+          caseLines={[<b key="n">{name}</b>, `${entry.id} · ${roomNumbers.length ? `Rooms ${roomNumbers.join(", ")}` : ""}`]}
+          lines={["The folio goes live — from here it can only grow.", "The rooms become occupied and the keys are handed over.", "Charges begin posting against the live folio."]}
+          confirmLabel="Check in & go live"
+          pending={checkInMutation.isPending}
+          onConfirm={() => checkInMutation.mutate()}
+          onClose={() => setCheckInOpen(false)}
+        />
+        <InquirySummaryDialog
+          entry={entry}
+          open={summaryOpen && inquiryStepActive}
+          busy={advanceMutation.isPending}
+          onClose={() => setSummaryOpen(false)}
+          onConfirm={() => advanceMutation.mutate({ targetStage: "S2" }, { onSuccess: () => setSummaryOpen(false) })}
+        />
+        <CommitDialog
+          open={closeOpen}
+          title="Close and seal the record"
+          caseLines={[<b key="n">{name}</b>, entry.id]}
+          lines={[
+            "The booking is closed — the record becomes read-only.",
+            "A later correction is added as a new layer, never a change to what is sealed.",
+            "Post-stay follow-up passes to the system (feedback, payment follow-up, retention).",
+          ]}
+          confirmLabel="Close & seal"
+          pending={closeMutation.isPending}
+          onConfirm={() => closeMutation.mutate()}
+          onClose={() => setCloseOpen(false)}
+        />
+
+        {parkOpen ? (
+          <Overlay>
+            <div
+              className="scrim open"
+              onClick={(e) => {
+                if (e.target !== e.currentTarget || parkMutation.isPending || exitLeaving) return;
+                pendingExitRef.current = null;
+                setParkOpen(false);
+              }}
+            >
+              <Dialog
+                register="commit"
+                title={parkExitFlow ? "Park this booking before you leave?" : "Park this booking"}
+                caseLines={[<b key="n">{name}</b>, entry.id]}
+                footer={
+                  <>
+                    {parkExitFlow ? (
+                      <Button
+                        kind="quiet"
+                        state={exitLeaving === "plain" ? "working" : parkMutation.isPending || exitLeaving ? "inert" : "default"}
+                        workingLabel="Leaving…"
+                        onClick={() => {
+                          setExitLeaving("plain");
+                          const dest = pendingExitRef.current ?? "/bookings";
+                          pendingExitRef.current = null;
+                          router.push(dest);
+                        }}
+                      >
+                        Leave without parking
+                      </Button>
+                    ) : (
+                      <Button kind="quiet" onClick={() => setParkOpen(false)}>
+                        Not now
+                      </Button>
+                    )}
+                    <Button
+                      state={parkMutation.isPending || exitLeaving === "park" ? "working" : !parkReason.trim() || exitLeaving ? "inert" : "default"}
+                      workingLabel={exitLeaving === "park" ? "Leaving…" : "Parking…"}
+                      onClick={() => parkMutation.mutate(undefined)}
+                    >
+                      {parkExitFlow ? "Park & leave" : "Park"}
+                    </Button>
+                  </>
+                }
+              >
+                <p className="sm">
+                  Parking pauses the booking without losing its place — it stays at {STEP_NAMES[atStep - 1]}, its expiry waits, and it can be resumed any time. Nothing is
+                  cancelled or released.
+                </p>
+                <div className="field">
+                  <label htmlFor="park-reason">Reason</label>
+                  <textarea
+                    id="park-reason"
+                    className="input"
+                    style={{ height: 72, paddingTop: 8 }}
+                    value={parkReason}
+                    onChange={(e) => setParkReason(e.target.value)}
+                    placeholder="e.g. waiting on the guest to confirm dates"
+                    maxLength={500}
+                  />
+                </div>
+              </Dialog>
+            </div>
+          </Overlay>
+        ) : null}
+    </>
+  );
+
+  if (topLayout) {
+    const headerClocks = runningClocks(entry, timersQuery.data?.items ?? [], (paymentStatusQuery.data?.paymentPlan?.plan ?? "FULL") !== "FULL");
+    const dwell = entry.stageDwellRecords?.[0];
+    const fileTab: "details" | BookingTab = view === "step" || view === "other" ? "details" : view;
+    const sectionsLeft = flowItems.filter((i) => !i.met).length;
+    return (
+      <BackendRailSlotContext.Provider value={railSlot}>
+        <StepFlow items={flowItems} on={!viewingPast && !sealed} fold={inquiryStepActive ? "done" : null}>
+          <div className="ws ws-top">
+            {/* The header, the journey and the step's sections stay put under the topbar; their
+                height is measured onto --ws-head-h so the file on the right sticks below them. */}
+            <div className="ws-topstick" ref={headRef}>
+              <div className="ws-head">
+                {headInner}
+                <div className="hrow">
+                  <div className="hclocks">
+                    {headerClocks.length ? (
+                      headerClocks.map(({ t, label }) => <HeaderClock key={t.id} timer={t} label={label} />)
+                    ) : (
+                      <span className="meta">No clock running</span>
+                    )}
+                    {dwell && !sealed ? <HeaderDwell since={dwell.enteredAt} /> : null}
+                  </div>
+                  <div className="hacts">
+                    {parked ? (
+                      <Button kind="secondary" state={unparkMutation.isPending ? "working" : "default"} workingLabel="Resuming…" onClick={() => unparkMutation.mutate()}>
+                        Resume
+                      </Button>
+                    ) : null}
+                    {parked && parkTimer ? <span className="meta">parked · expires {fmtDateTime(parkTimer.firesAt, clock.tz)}</span> : null}
+                    <span className="desk-root">
+                      <ReEnterMenu entry={entry} />
+                    </span>
+                    <Button kind="quiet" compact onClick={() => router.push(`${bookingHref(entry.id)}/backend`)}>
+                      Under the hood
+                    </Button>
+                  </div>
+                </div>
+              </div>
+              <nav className="journey" aria-label="Journey">
+                {PHASES.map(([phase, steps]) => (
+                  <Fragment key={phase}>
+                    <span className="jgrp">{phase}</span>
+                    {steps.map((n) => {
+                      const reach = n <= atStep || n <= maxReach;
+                      const done = n < currentOrder || (n === 9 && sealed);
+                      const cls = ["jst", done ? "done" : "", n === viewing ? "cur" : "", reach ? "" : "later", BOUNDARY_STEPS.has(n) ? "boundary" : ""]
+                        .filter(Boolean)
+                        .join(" ");
+                      return (
+                        <a
+                          key={n}
+                          className={cls}
+                          href={`${bookingHref(entry.id)}?step=${n}`}
+                          aria-current={n === viewing ? "step" : undefined}
+                          aria-disabled={reach ? undefined : true}
+                          title={reach ? (BOUNDARY_STEPS.has(n) ? "Cannot be undone once passed" : undefined) : "Comes later"}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            if (reach) gotoStep(n);
+                          }}
+                        >
+                          <span className="n">{done ? <Icon name="check" /> : n === 9 && sealed ? <Icon name="lock" /> : n}</span>
+                          {STEP_NAMES[n - 1]}
+                        </a>
+                      );
+                    })}
+                  </Fragment>
+                ))}
+              </nav>
+              <div className="stagebar">
+                <h3>
+                  {viewing} · {STEP_NAMES[viewing - 1]}
+                </h3>
+                <span className="verb">{STEP_NEEDS[viewing as StepNo]}</span>
+                {viewingPast || sealed ? null : <FlowChips names={INQUIRY_SECTIONS} onGo={goToCard} />}
+              </div>
+            </div>
+
+            <div className="ws-split">
+              <div className="canvas">
+                {entry.earlyDeparture ? (
+                  <div className="notice inert">
+                    <span className="sm">
+                      <b>Left early on {fmtDay(entry.earlyDeparture.departureDate)}</b>
+                    </span>
+                  </div>
+                ) : null}
+                <QuietScreen>
+                  {viewingPast ? (
+                    <div className="notice inert">
+                      <span className="sm">
+                        {sealed
+                          ? sealedOutcome
+                          : `This step was passed on the way to ${STEP_NAMES[currentOrder - 1]} — what it shows is what was decided then; nothing here can be changed. To change it, work from the step the booking is at now.`}
+                      </span>
+                    </div>
+                  ) : null}
+                  {!sealed ? <ActiveRoomMoves entryId={entry.id} tz={clock.tz} /> : null}
+                  {!sealed ? <HeldPapersCard entryId={entry.id} tz={clock.tz} /> : null}
+                  <CaseCards
+                    entry={entry}
+                    step={viewing}
+                    events={traceQuery.data?.items ?? []}
+                    tz={clock.tz}
+                    park={parked ? { reason: listRow?.parkReason ?? null, followUpAt: listRow?.parkFollowUpAt ?? null, lapsesAt: parkTimer?.firesAt ?? null } : null}
+                    onResume={parked ? () => unparkMutation.mutate() : undefined}
+                    resuming={unparkMutation.isPending}
+                    onHistory={() => setView("history", viewing)}
+                  />
+                  {!viewingPast && !sealed ? <div className="todo-h">To do now</div> : null}
+                  <AlsoBar buttons={alsoButtons} panel={alsoPanel}>
+                    <OtherWaysSlot node={null}>{native}</OtherWaysSlot>
+                  </AlsoBar>
+                  {!viewingPast && !sealed && preconds.length ? (
+                    // What the move checks, in one place (the stage template's "Before you move on"):
+                    // each section, then what the system does when the booking moves on. The move
+                    // itself is in the bar at the foot.
+                    <div className="card before-move">
+                      <h4>Before you move on</h4>
+                      <table className="compact">
+                        <tbody>
+                          {Object.entries(INQUIRY_SECTIONS).map(([card, title]) => {
+                            const own = flowItems.filter((i) => i.card === card);
+                            if (!own.length) return null;
+                            const met = own.every((i) => i.met);
+                            return (
+                              <tr key={card} className="pick" onClick={() => goToCard(card)}>
+                                <td className={met ? "ok-ink" : "warn-ink"}>{met ? <Icon name="check" /> : "●"}</td>
+                                <td>{title}</td>
+                                <td className="meta">{met ? "done" : own.filter((i) => !i.met).map((i) => i.label).join(" · ")}</td>
+                              </tr>
+                            );
+                          })}
+                          {inherited.map((p) => (
+                            <tr key={p.label}>
+                              <td className={p.met ? "ok-ink" : "warn-ink"}>{p.met ? <Icon name="check" /> : "→"}</td>
+                              <td colSpan={2} className="meta">
+                                {p.label}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      <div className={`before-move-foot ${sectionsLeft ? "wait" : "ready"}`}>
+                        {sectionsLeft
+                          ? `${plural(sectionsLeft, "thing")} still to do`
+                          : `${STEP_NAMES[viewing - 1]} is done · next: ${STEP_NAMES[viewing] ?? ""}`}
+                      </div>
+                    </div>
+                  ) : null}
+                </QuietScreen>
+                {/* the old side column's "what runs here" target — kept mounted, not shown */}
+                <div ref={setRailSlot} hidden />
+              </div>
+
+              <aside className="file" aria-label="Booking file">
+                <div className="ftitle">Booking file · the record</div>
+                <div className="ftabs" role="tablist">
+                  {FILE_TABS.map(([k, label]) => (
+                    <button key={k} type="button" role="tab" className="ftab" aria-selected={fileTab === k} onClick={() => setView(k, viewing)}>
+                      {label}
+                      {k === "details" ? null : tabCount(k)}
+                    </button>
+                  ))}
+                </div>
+                <div className="fbody">
+                  {fileTab === "details" ? (
+                    <DetailsView
+                      entry={entry}
+                      booker={booker}
+                      custodian={listRow?.custodianName ?? null}
+                      onEdit={entry.currentStage === "S1" && !sealed ? () => setSelected(1) : null}
+                    />
+                  ) : fileTab === "money" ? (
+                    <ChargesView entry={entry} billing={billing ?? null} tz={clock.tz} onPaymentHistory={() => setView("history", viewing, "money")} />
+                  ) : fileTab === "requests" ? (
+                    <RequestsView entry={entry} sealed={sealed} tz={clock.tz} />
+                  ) : fileTab === "notes" ? (
+                    <NotesView entry={entry} tz={clock.tz} />
+                  ) : fileTab === "docs" ? (
+                    <DocumentsView entry={entry} communications={communications ?? []} tz={clock.tz} sealed={sealed} onGo={(n) => gotoStep(n)} />
+                  ) : (
+                    <HistoryView
+                      key={lensParam ?? "all"}
+                      entry={entry}
+                      tz={clock.tz}
+                      initialLens={lensParam}
+                      onOpenedPass={(stage) => setSelected(stepNoOfStage(stage))}
+                    />
+                  )}
+                </div>
+              </aside>
+            </div>
+
+            {/* The fixed bar: what else is possible here on the left, the move on the right. */}
+            <div className="gatebar top">
+              <div className="also-panel-slot" ref={setAlsoPanel} />
+              <div className="also">
+                <span className="also-h">Also possible here</span>
+                <div className="also-btns" ref={setAlsoButtons} />
+              </div>
+              <div className="gate-status">{gateStatus}</div>
+              <div className="acts">{forward}</div>
+            </div>
+            {dialogs}
+          </div>
+        </StepFlow>
+      </BackendRailSlotContext.Provider>
+    );
+  }
+
+  return (
+    <BackendRailSlotContext.Provider value={railSlot}>
+      <div className="ws">
+        <div className="ws-head" ref={headRef}>
+          {headInner}
         </div>
 
         <div className={`ws-body${sideFolded ? " side-folded" : ""}`}>
@@ -1420,155 +1815,10 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
         </div>
 
         <div className="gatebar">
-          {parked ? (
-            <div className="sm ink-2">
-              Parked · <b>Resume to continue</b>
-            </div>
-          ) : sealed ? (
-            <div className="sm ink-2">{sealedOutcome}</div>
-          ) : preconds.length ? (
-            // The full list lives in the side panel, numbered (2026-09-25) — the bar says what is
-            // next and takes you to it, so the move and the reason for waiting sit together.
-            <div className="gate">
-              {nextUp ? (
-                <button type="button" className="item unmet" onClick={() => goToCard(nextUp.card)}>
-                  <Icon name="circle" />
-                  <span>
-                    Next · <b>{nextUp.n}</b> {nextUp.label}
-                  </span>
-                </button>
-              ) : unmet > 0 ? (
-                <div className="item unmet">
-                  <Icon name="circle" />
-                  <span>{preconds.find((p) => !p.met)?.label}</span>
-                </div>
-              ) : (
-                <div className="item met">
-                  <Icon name="check" />
-                  <span>everything this step needs is done</span>
-                </div>
-              )}
-            </div>
-          ) : viewing < currentOrder ? (
-            <span className="meta">a step already passed · the booking is at {STEP_NAMES[currentOrder - 1]}</span>
-          ) : (
-            <span />
-          )}
+          {gateStatus}
           <div className="acts">{forward}</div>
         </div>
-
-        <CommitDialog
-          open={confirmOpen}
-          title="Reserve the booking"
-          caseLines={[<b key="n">{name}</b>, `${entry.id} · ${fmtRange(entry.checkInDate, entry.checkOutDate)}`]}
-          lines={[
-            fin.indicativeTotal !== null ? `The price freezes at ${money(fin.indicativeTotal, fin.currency)} — the guest is held to it.` : "The price freezes — the guest is held to it.",
-            "The rooms lock — no longer offerable to anyone else.",
-            "The confirmation voucher goes to whoever booked.",
-            "Any later change opens a new pass; it never edits what is frozen.",
-          ]}
-          confirmLabel="Reserve"
-          pending={confirmMutation.isPending}
-          onConfirm={() => confirmMutation.mutate()}
-          onClose={() => setConfirmOpen(false)}
-        />
-        <CommitDialog
-          open={checkInOpen}
-          title="Check in and open the folio"
-          caseLines={[<b key="n">{name}</b>, `${entry.id} · ${roomNumbers.length ? `Rooms ${roomNumbers.join(", ")}` : ""}`]}
-          lines={["The folio goes live — from here it can only grow.", "The rooms become occupied and the keys are handed over.", "Charges begin posting against the live folio."]}
-          confirmLabel="Check in & go live"
-          pending={checkInMutation.isPending}
-          onConfirm={() => checkInMutation.mutate()}
-          onClose={() => setCheckInOpen(false)}
-        />
-        <InquirySummaryDialog
-          entry={entry}
-          open={summaryOpen && inquiryStepActive}
-          busy={advanceMutation.isPending}
-          onClose={() => setSummaryOpen(false)}
-          onConfirm={() => advanceMutation.mutate({ targetStage: "S2" }, { onSuccess: () => setSummaryOpen(false) })}
-        />
-        <CommitDialog
-          open={closeOpen}
-          title="Close and seal the record"
-          caseLines={[<b key="n">{name}</b>, entry.id]}
-          lines={[
-            "The booking is closed — the record becomes read-only.",
-            "A later correction is added as a new layer, never a change to what is sealed.",
-            "Post-stay follow-up passes to the system (feedback, payment follow-up, retention).",
-          ]}
-          confirmLabel="Close & seal"
-          pending={closeMutation.isPending}
-          onConfirm={() => closeMutation.mutate()}
-          onClose={() => setCloseOpen(false)}
-        />
-
-        {parkOpen ? (
-          <Overlay>
-            <div
-              className="scrim open"
-              onClick={(e) => {
-                if (e.target !== e.currentTarget || parkMutation.isPending || exitLeaving) return;
-                pendingExitRef.current = null;
-                setParkOpen(false);
-              }}
-            >
-              <Dialog
-                register="commit"
-                title={parkExitFlow ? "Park this booking before you leave?" : "Park this booking"}
-                caseLines={[<b key="n">{name}</b>, entry.id]}
-                footer={
-                  <>
-                    {parkExitFlow ? (
-                      <Button
-                        kind="quiet"
-                        state={exitLeaving === "plain" ? "working" : parkMutation.isPending || exitLeaving ? "inert" : "default"}
-                        workingLabel="Leaving…"
-                        onClick={() => {
-                          setExitLeaving("plain");
-                          const dest = pendingExitRef.current ?? "/bookings";
-                          pendingExitRef.current = null;
-                          router.push(dest);
-                        }}
-                      >
-                        Leave without parking
-                      </Button>
-                    ) : (
-                      <Button kind="quiet" onClick={() => setParkOpen(false)}>
-                        Not now
-                      </Button>
-                    )}
-                    <Button
-                      state={parkMutation.isPending || exitLeaving === "park" ? "working" : !parkReason.trim() || exitLeaving ? "inert" : "default"}
-                      workingLabel={exitLeaving === "park" ? "Leaving…" : "Parking…"}
-                      onClick={() => parkMutation.mutate(undefined)}
-                    >
-                      {parkExitFlow ? "Park & leave" : "Park"}
-                    </Button>
-                  </>
-                }
-              >
-                <p className="sm">
-                  Parking pauses the booking without losing its place — it stays at {STEP_NAMES[atStep - 1]}, its expiry waits, and it can be resumed any time. Nothing is
-                  cancelled or released.
-                </p>
-                <div className="field">
-                  <label htmlFor="park-reason">Reason</label>
-                  <textarea
-                    id="park-reason"
-                    className="input"
-                    style={{ height: 72, paddingTop: 8 }}
-                    value={parkReason}
-                    onChange={(e) => setParkReason(e.target.value)}
-                    placeholder="e.g. waiting on the guest to confirm dates"
-                    maxLength={500}
-                  />
-                </div>
-              </Dialog>
-            </div>
-          </Overlay>
-        ) : null}
+        {dialogs}
       </div>
     </BackendRailSlotContext.Provider>
   );
@@ -1655,6 +1905,31 @@ function SidePanel({
   /** The payment plan is part now, the rest later (or instalments): the promise clock is the rest's. */
   promiseIsForTheRest: boolean;
 }) {
+  const running = runningClocks(entry, timers, promiseIsForTheRest);
+  const dwell = entry.stageDwellRecords?.[0];
+  return (
+    <FoldingSide folded={folded} onFold={onFold} clocks={running} todo={todo} also={todoInherited}>
+      <div>
+        <h4>Timers</h4>
+        <div className="list">
+          {running.length ? (
+            running.map(({ t, label }) => <SideTimer key={t.id} timer={t} label={label} />)
+          ) : (
+            <span className="meta">nothing running</span>
+          )}
+          {dwell && !sealed ? <StepDwell since={dwell.enteredAt} /> : null}
+        </div>
+      </div>
+      <FlowTodo items={todo} also={todoInherited} onGo={onGoToCard} />
+    </FoldingSide>
+  );
+}
+
+/**
+ * The booking's running clocks as the desk names them, soonest first — one list for the side panel
+ * and the header (2026-10-27), so the two cannot read a clock differently.
+ */
+function runningClocks(entry: EntryDetail, timers: TimerRecordSummary[], promiseIsForTheRest: boolean): Array<{ t: TimerRecordSummary; label: string }> {
   // The housekeeping (H2) and kitchen (H3) handoffs share one clock code; name them apart by
   // the handoff each clock is on, or both read "Housekeeping to accept".
   const handoffTypeById = new Map((entry.handoffs ?? []).map((h) => [h.id, h.handoffType]));
@@ -1690,7 +1965,7 @@ function SidePanel({
     cleanGroups.set(at, [...(cleanGroups.get(at) ?? []), ...(room ? [room] : [])]);
   }
   const cleanSeen = new Set<string>();
-  const running = sorted
+  return sorted
     .filter((x) => x.t.timerCode !== "NIGHT_AUDIT_STAY_NIGHT_W37" || x === nightClocks[0])
     .filter((x) => {
       if (x.t.timerCode !== "HOUSEKEEPING_SLA_W24") return true;
@@ -1710,23 +1985,6 @@ function SidePanel({
       return x;
     })
     .slice(0, 8);
-  const dwell = entry.stageDwellRecords?.[0];
-  return (
-    <FoldingSide folded={folded} onFold={onFold} clocks={running} todo={todo} also={todoInherited}>
-      <div>
-        <h4>Timers</h4>
-        <div className="list">
-          {running.length ? (
-            running.map(({ t, label }) => <SideTimer key={t.id} timer={t} label={label} />)
-          ) : (
-            <span className="meta">nothing running</span>
-          )}
-          {dwell && !sealed ? <StepDwell since={dwell.enteredAt} /> : null}
-        </div>
-      </div>
-      <FlowTodo items={todo} also={todoInherited} onGo={onGoToCard} />
-    </FoldingSide>
-  );
 }
 
 

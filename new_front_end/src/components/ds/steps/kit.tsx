@@ -320,6 +320,54 @@ export function useFlowCard(
   return { n: mine?.n, met: mine ? allMet : undefined, waitsFor };
 }
 
+/**
+ * The step's sections as one line of chips, for the stage bar under the journey (2026-10-27, the
+ * operator's stage template): each section's number — a tick once everything in it is done — and
+ * its name, the one being worked filled; "N of M done" at the end. A chip opens its section (a
+ * finished one unfolds, as Edit does) and `onGo` takes the page there.
+ */
+export function FlowChips({ names, onGo }: { names: Record<string, string>; onGo: (card: string) => void }) {
+  const ctx = useContext(FlowCtx);
+  if (!ctx.on) return null;
+  const cards = flowCards(ctx.items);
+  if (!cards.length) return null;
+  const doneOf = (c: string) => ctx.items.filter((i) => i.card === c).every((i) => i.met);
+  const doneN = cards.filter(doneOf).length;
+  return (
+    <div className="flow-chips" aria-label="This step's sections">
+      {cards.map((c, i) => {
+        const met = doneOf(c);
+        const cur = ctx.current === c;
+        const n = ctx.items.find((x) => x.card === c)?.n;
+        return (
+          <Fragment key={c}>
+            {i ? (
+              <span className="sep" aria-hidden="true">
+                ›
+              </span>
+            ) : null}
+            <button
+              type="button"
+              className={`flow-chip${met ? " done" : ""}${cur ? " cur" : ""}`}
+              aria-current={cur ? "step" : undefined}
+              onClick={() => {
+                ctx.open(c);
+                onGo(c);
+              }}
+            >
+              <span className="n">{met ? <Icon name="check" /> : n}</span>
+              {names[c] ?? c}
+            </button>
+          </Fragment>
+        );
+      })}
+      <span className={`flow-count${doneN === cards.length ? " ok-ink" : ""}`}>
+        {doneN} of {cards.length} done
+      </span>
+    </div>
+  );
+}
+
 /** The step's flow, for a section that moves the work on by itself (Take it → Wrap up). */
 export function useStepFlow() {
   const { on, done } = useContext(FlowCtx);
@@ -952,14 +1000,97 @@ export function OtherWays({ children }: { children: ReactNode }) {
  */
 export type OtherWayTab = { key: string; label: string; content: ReactNode };
 
+/**
+ * "Also possible here" as the fixed bar at the foot of the page (2026-10-27, the operator's stage
+ * template, Stage 1 first): the step's other ways become buttons in the bar, and the one pressed
+ * opens its form in a panel that rises above it. The workspace hands the two places to render
+ * into; with none, Other ways stays a tab beside This step.
+ */
+type AlsoBarSlots = { buttons: HTMLElement | null; panel: HTMLElement | null };
+const AlsoBarCtx = createContext<AlsoBarSlots | null>(null);
+
+export function AlsoBar({ buttons, panel, children }: AlsoBarSlots & { children: ReactNode }) {
+  const value = useMemo(() => ({ buttons, panel }), [buttons, panel]);
+  return <AlsoBarCtx.Provider value={value}>{children}</AlsoBarCtx.Provider>;
+}
+
+function AlsoBarWays({ live, slots }: { live: OtherWayTab[]; slots: AlsoBarSlots }) {
+  const params = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  // Open when a bar button was pressed (`also`), or a button on This step sent the desk to a way
+  // (`view=other`, `useOpenOtherWay`).
+  const wantOpen = params.get("also") === "1" || params.get("view") === "other";
+  const want = params.get("way");
+  const open = wantOpen ? (live.find((t) => t.key === want) ?? live[0]).key : null;
+  const go = (key: string | null) => {
+    const p = new URLSearchParams(params.toString());
+    if (key) {
+      p.set("way", key);
+      p.set("also", "1");
+    } else {
+      p.delete("also");
+      if (p.get("view") === "other") p.delete("view");
+    }
+    router.replace(`${pathname}?${p.toString()}`, { scroll: false });
+  };
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") go(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+  const current = live.find((t) => t.key === open) ?? null;
+  return (
+    <>
+      {slots.buttons
+        ? createPortal(
+            <>
+              {live.map((t) => (
+                <Button key={t.key} kind="secondary" className={open === t.key ? "on" : undefined} aria-pressed={open === t.key} onClick={() => go(open === t.key ? null : t.key)}>
+                  {t.label}
+                </Button>
+              ))}
+            </>,
+            slots.buttons,
+          )
+        : null}
+      {slots.panel
+        ? createPortal(
+            // Every way stays mounted, so a half-typed reason survives closing the panel.
+            <div className="also-panel" hidden={!current} role="dialog" aria-label={current?.label}>
+              <div className="also-panel-head">
+                <b>{current?.label}</b>
+                <Button kind="quiet" compact onClick={() => go(null)}>
+                  Close
+                </Button>
+              </div>
+              {live.map((t) => (
+                <div key={t.key} hidden={t.key !== open}>
+                  {t.content}
+                </div>
+              ))}
+            </div>,
+            slots.panel,
+          )
+        : null}
+    </>
+  );
+}
+
 export function OtherWaysTabs({ tabs }: { tabs: ReadonlyArray<OtherWayTab | null | false | undefined> }) {
   const { past } = useStepMode();
   const slot = useContext(OtherWaysSlotCtx);
+  const bar = useContext(AlsoBarCtx);
   const params = useSearchParams();
   const router = useRouter();
   const pathname = usePathname();
   const live = tabs.filter((t): t is OtherWayTab => !!t);
   if (past || live.length === 0) return null;
+  if (bar) return <AlsoBarWays live={live} slots={bar} />;
   const want = params.get("way");
   const current = live.find((t) => t.key === want) ?? live[0];
   const pick = (key: string) => {
