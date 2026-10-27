@@ -39,7 +39,7 @@ import { ChangeConfiguration, DecidedConfigurationChanges, WaitingConfigurationC
 import { operativeRoomCompositions, roomNightsByRoom, roomStayRangesByRoom } from "@/lib/desk/party-rooms";
 import { fmtDateTime, fmtStamp, money, plural } from "@/lib/ds/format";
 import { optionSelectedRoomIds, preferredHoldRoomId, type EntryDetail, type QuotationSummary, type SpeculativeHoldSummary } from "@/types/api";
-import { Choice, DsDialog, Live, Notice, OtherWaysTabs, PaperDrawer, QuotationSendDialog, ReasonDialog, SeeRow, StepCanvas, StepCard, Tool, atLeast, toastRefusal, type PaperRef, useBedPlan, useOpenOtherWay, useRefreshEntry, words, parkTab, declineTab } from "./kit";
+import { Choice, DsDialog, Live, Notice, OtherWaysTabs, PaperDrawer, QuotationSendDialog, ReasonDialog, SeeRow, StepCanvas, StepCard, Tool, atLeast, toastRefusal, type PaperRef, useBedPlan, useOpenFileTab, useOpenOtherWay, useRefreshEntry, words, parkTab, declineTab } from "./kit";
 import { usePublishPriceDraft } from "@/lib/ds/stay-price";
 import { Help } from "@/components/ds/help";
 import { CompetingClaimsCard, LEVEL_WORD, passesOf, roomsWord, useCompetingClaims, useRoomNumbers } from "./s2-shared";
@@ -309,6 +309,26 @@ export function S2Negotiation({
   const tableUnsaved =
     !working || canonComps(roomCompositions) !== canonComps(pricedCompositions) || discountMoved;
 
+  // The table edited by hand opens the booking file on the price (2026-10-27, as the rooms picked
+  // at Inquiry do): Charges & payments › The price, room by room, beside the grid. The seed and a
+  // background re-read do not, and the page never moves — only the file's tab changes.
+  const openFile = useOpenFileTab();
+  const handEditAt = useRef(0);
+  const markHandEdit = () => {
+    handEditAt.current = Date.now();
+  };
+  const tableKey = `${canonComps(roomCompositions)}|${discountValue}|${discountUnit}`;
+  const lastTableKey = useRef(tableKey);
+  useEffect(() => {
+    if (tableKey === lastTableKey.current) return;
+    lastTableKey.current = tableKey;
+    if (!editable || past || Date.now() - handEditAt.current > 2000) return;
+    // Only where the file sits beside the step — in the old layout the tab would replace the step.
+    if (typeof document !== "undefined" && !document.querySelector(".ws-top")) return;
+    openFile("money", "price");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tableKey]);
+
   // What the table holds, saved or not, for the Charges & payments tab and the header total.
   usePublishPriceDraft(
     entry.id,
@@ -483,6 +503,31 @@ export function S2Negotiation({
             .join(" ") || "no time at all"
         }`;
 
+  /* ---- the line the table folds to once it is priced ---- */
+  const billingNow = useQuery({
+    queryKey: ["billing-summary", entry.id, entry.updatedAt ?? ""],
+    queryFn: () => getBillingSummary(session!, entry.id),
+    enabled: !!session,
+  });
+  const pricedQuote = accepted ?? working ?? null;
+  const pricedStay = billingNow.data?.stayTotal;
+  const partyWords = [
+    entry.adultCount != null ? plural(entry.adultCount, "adult") : entry.guestCount != null ? plural(entry.guestCount, "guest") : null,
+    entry.childCount ? plural(entry.childCount, "child", "children") : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const tableSummary = pricedQuote
+    ? [
+        sealedRoomIds.length ? roomsWord(sealedRoomIds, roomNos) : null,
+        partyWords || null,
+        `priced as ${pricedQuote.referenceNumber} · v${pricedQuote.versionNumber}`,
+        pricedStay && pricedStay.quotationId === pricedQuote.id ? money(pricedStay.amount, pricedQuote.currency) : null,
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : undefined;
+
   const competing = useCompetingClaims(entry.id);
   const otherMarkers = (competing.data?.items ?? []).filter((i) => i.kind === "SPECULATIVE_HOLD");
   const openWay = useOpenOtherWay();
@@ -575,7 +620,11 @@ export function S2Negotiation({
     <StepCanvas past={past}>
 
       <StepCard
-        flow="quote"
+        flow="table"
+        // Always a line, so the card's inside keeps one shape: a summary appearing only once the
+        // quotation existed re-mounted the table on the save and lost what it held. It can only
+        // fold once the table is priced (its item is the quotation), so the placeholder never shows.
+        summary={tableSummary ?? "Not priced yet"}
         title="Who sleeps where, and their meals"
         meta="One row per room: the guests by age, their meal plans, extra beds, any negotiated rate and the booking's discount. Saving the table prices it — that is the quotation."
       >
@@ -590,6 +639,7 @@ export function S2Negotiation({
           />
         ) : tableOpen ? (
           <Tool>
+            <div onPointerDownCapture={markHandEdit} onKeyDownCapture={markHandEdit} onInputCapture={markHandEdit}>
             <RoomCompositionPlanner
               bedPlan={beds.byRoom}
               onBedChange={beds.set}
@@ -673,6 +723,7 @@ export function S2Negotiation({
                 if (patch.basis !== undefined) setDiscountBasis(patch.basis);
               }}
             />
+            </div>
           </Tool>
         ) : (
           <>
@@ -744,6 +795,11 @@ export function S2Negotiation({
           onSend={() => setSendTarget(shown)}
           refreshKeys={extraKeys}
         />
+      ) : !past ? (
+        // Section 2 before anything is priced: it waits for the table's Save (2026-10-27).
+        <StepCard flow="quotation" flowAfter="table" title="The quotation" icon="file">
+          <span className="sm">Nothing is priced yet — the table&rsquo;s Save makes the quotation.</span>
+        </StepCard>
       ) : null}
 
 
@@ -1009,6 +1065,7 @@ function QuotationCard({
 
   return (
     <StepCard
+      flow="quotation"
       title={`Quotation · ${q.referenceNumber} · v${q.versionNumber}`}
       icon="file"
       right={
@@ -1071,6 +1128,7 @@ function QuotationCard({
           <span className={lapsed && q.state !== "ACCEPTED" ? "warn-ink" : undefined}>
             <Icon name="clock" /> {lapsed && q.state !== "ACCEPTED" ? "The price lapsed on" : "Price valid until"}{" "}
             <b>{fmtDateTime(q.validUntil, tz)}</b>
+            {lapsed && q.state !== "ACCEPTED" && editable ? " — set how long it is valid under the table and save it again" : ""}
           </span>
         ) : null}
         {q.sentAt ? (

@@ -125,6 +125,15 @@ const INQUIRY_SECTIONS: Record<string, string> = {
   wrap: "Wrap up",
 };
 
+/** Negotiation's two sections (2026-10-27): the table, whose Save prices it, then the quotation. */
+const NEGOTIATION_SECTIONS: Record<string, string> = {
+  table: "Who sleeps where",
+  quotation: "The quotation",
+};
+/** The steps drawn in the stage-template layout, with their sections (Inquiry, then Negotiation). */
+const STEP_SECTIONS: Partial<Record<number, Record<string, string>>> = { 1: INQUIRY_SECTIONS, 2: NEGOTIATION_SECTIONS };
+const isTopLayoutStep = (n: number) => !!STEP_SECTIONS[n];
+
 /** The booking file's tabs on the right in the stage-template layout — Booking first. */
 // The Stage 1 header's Re-enter and Under the hood buttons, hidden for now (2026-10-27).
 const HEAD_TOOLS = false;
@@ -555,7 +564,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   useEffect(() => {
     const prev = lastPlace.current;
     lastPlace.current = { viewing, view };
-    if (prev.viewing === viewing && viewing === 1) return;
+    if (prev.viewing === viewing && isTopLayoutStep(viewing)) return;
     window.scrollTo({ top: 0 });
   }, [viewing, view]);
 
@@ -778,7 +787,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
       : inquiryStepActive
         ? s1Readiness(entry)
         : quoteStepActive
-          ? [...s2Readiness(entry), ...negotiationExtras.map((label) => ({ label, met: false, card: "quote" }))]
+          ? [...s2Readiness(entry), ...negotiationExtras.map((label) => ({ label, met: false, card: "table" }))]
           : arrivalStepActive
             ? s5Readiness(entry, hotelToday, { guestPresent })
             : checkInStepActive
@@ -813,8 +822,10 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const unmet = preconds.filter((p) => !p.met).length;
   // The step's numbered to-do: the items that have a section on this page, in the order they are
   // done. The rail prints it, and each card takes its own number from it (2026-09-25).
-  // Stage 1 is laid out as five numbered sections (2026-10-10), so it numbers by section.
-  const flowItems: FlowItem[] = numberFlow(preconds, { bySection: inquiryStepActive });
+  // Stage 1 is laid out as five numbered sections (2026-10-10), so it numbers by section; so does
+  // Negotiation, in its two (2026-10-27).
+  const sectioned = inquiryStepActive || quoteStepActive;
+  const flowItems: FlowItem[] = numberFlow(preconds, { bySection: sectioned });
   const inherited = preconds.filter((p) => !p.card);
   const nextUp = flowItems.find((i) => !i.met) ?? null;
   // Stage 1 in the stage-template layout (2026-10-27, operator: "do the changes for stage one only
@@ -822,7 +833,9 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   // it, the step always on the left, the booking file — Booking · Charges & payments · Guest
   // requests · Notes · Documents · History — always on the right, and the step's other ways in
   // the fixed bar at the foot. The other steps keep the rail, the tabs and the side panel.
-  const topLayout = viewing === 1;
+  // Negotiation joined it on 2026-10-27 (operator: "lets move on to stage 2 and do the same changes").
+  const topLayout = isTopLayoutStep(viewing);
+  const sections = STEP_SECTIONS[viewing] ?? {};
   const goToCard = (card?: string) => {
     if (!card) return;
     // The card may live in one of the step's panes: open that pane first, then scroll once the
@@ -914,8 +927,30 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     );
   } else if (quoteStepActive) {
     const ok = canProgressS2(entry) && negotiationExtras.length === 0;
+    // Green once it can be pressed, and the move is said in the middle of the screen, as at
+    // Inquiry (2026-10-27).
     forward = (
-      <Button state={advanceMutation.isPending ? "working" : ok ? "default" : "inert"} reason={ok ? undefined : firstNote} workingLabel="Moving…" onClick={() => advanceMutation.mutate({ targetStage: "S3" })}>
+      <Button
+        className="go"
+        state={advanceMutation.isPending ? "working" : ok ? "default" : "inert"}
+        reason={ok ? undefined : firstNote}
+        workingLabel="Moving…"
+        onClick={() =>
+          advanceMutation.mutate(
+            { targetStage: "S3", announce: true },
+            {
+              onSuccess: () =>
+                setMoved({
+                  title: "Negotiation is done",
+                  from: "Negotiation",
+                  to: "Set up",
+                  who: [name, entry.id].filter(Boolean).join(" · "),
+                  next: "Next: who pays, the cancellation terms, the proforma and the advance.",
+                }),
+            },
+          )
+        }
+      >
         Move to Set up
       </Button>
     );
@@ -1453,7 +1488,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     const sectionsLeft = flowItems.filter((i) => !i.met).length;
     return (
       <BackendRailSlotContext.Provider value={railSlot}>
-        <StepFlow items={flowItems} on={!viewingPast && !sealed} fold={inquiryStepActive ? "done" : null}>
+        <StepFlow items={flowItems} on={!viewingPast && !sealed} fold={sectioned ? "done" : null}>
           <div className="ws ws-top theme-blue">
             {/* The header, the journey and the step's sections stay put under the topbar; their
                 height is measured onto --ws-head-h so the file on the right sticks below them. */}
@@ -1529,7 +1564,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                   {viewing} · {STEP_NAMES[viewing - 1]}
                 </h3>
                 <span className="verb">{STEP_NEEDS[viewing as StepNo]}</span>
-                {viewingPast || sealed ? null : <FlowChips names={INQUIRY_SECTIONS} onGo={goToCard} />}
+                {viewingPast || sealed ? null : <FlowChips names={sections} onGo={goToCard} />}
               </div>
             </div>
 
@@ -1578,7 +1613,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                       <h4>Before you move on</h4>
                       <table className="compact">
                         <tbody>
-                          {Object.entries(INQUIRY_SECTIONS).map(([card, title]) => {
+                          {Object.entries(sections).map(([card, title]) => {
                             const own = flowItems.filter((i) => i.card === card);
                             if (!own.length) return null;
                             const met = own.every((i) => i.met);

@@ -413,11 +413,16 @@ export function s2Readiness(entry: EntryDetail, now: number = Date.now()): Preco
     (h) => h.state === "PLACED" || h.state === "UPGRADED" || h.state === "RELEASED" || h.state === "EXPIRED",
   );
   const validOk = !operative?.validUntil || new Date(operative.validUntil).getTime() > now;
+  // Two sections on the page (2026-10-27, the stage layout at Negotiation): the table, whose Save
+  // prices it, and the quotation it produced. "Still valid" asks for a quotation to exist — with
+  // none, the table's item already holds the move, so this changes nothing about what may move on;
+  // it only keeps the quotation's section from reading as done before there is one. The marker
+  // (the provisional block) lives in the bar's Other ways, so its line has no section here.
   return [
     { label: "Availability sealed from Inquiry", met: sealed },
-    { label: "Quote generated", met: live.length > 0, card: "quote" },
-    { label: "Quote still valid", met: !operative || validOk, card: "quote" },
-    { label: "Any holds still healthy", met: holdsOk, card: "quote" },
+    { label: "Quote generated", met: live.length > 0, card: "table" },
+    { label: "Quote still valid", met: !!operative && validOk, card: "quotation" },
+    { label: "Any holds still healthy", met: holdsOk },
   ];
 }
 
