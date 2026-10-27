@@ -24,6 +24,14 @@
 import { Prisma, type PrismaClient, type QuotationLine } from "@prisma/client";
 import { NotFoundError } from "../../lib/errors.js";
 import { labelRoomNights, roomNightsForEntry, roomNightsVary } from "../../lib/room-nights-for-entry.js";
+import {
+  buildRoomPriceLines,
+  mealPlanParts,
+  priceLinesToCents,
+  roomOccupantsLabel,
+  type PriceLine,
+  type PriceLineComposition,
+} from "../../lib/quotation-price-lines.js";
 import { buildStorageKey, hashSha256, readDocument, writeDocument } from "../../lib/document-storage.js";
 import { formatMoney, loadHotelProfileForRender } from "../../lib/pdf-render-context.js";
 import { renderHtmlToPdf } from "../infrastructure/pdf-render-service.js";
@@ -106,18 +114,7 @@ async function loadQuotationForRender(prisma: PrismaClient, quotationId: string)
  * the arithmetic has to be checkable. The legacy flat path is unchanged and still prints
  * tax-inclusive per-night rows — see the fallback branch.
  */
-type PrintLine = {
-  /** The nights this room is held for — only on a booking whose rooms differ (2026-10-06). */
-  dates?: string | null;
-  description: string;
-  /** The multiplier as printed: "3 nights", "2 pax × 3 nights". */
-  qty: string;
-  /** Unit rate, or null when the row has no single one (meals that vary night to night). */
-  rate: number | null;
-  amount: number;
-  /** Sub-line of the room above it. */
-  indent?: boolean;
-};
+type PrintLine = PriceLine;
 
 /**
  * One row per room (composition path) or per night (flat path), carrying the tax-INCLUSIVE
@@ -135,8 +132,29 @@ type SnapshotLine = {
 };
 
 /** Everything the PDF path persists plus the composed HTML — shared with the preview path. */
+/** What the quotation prints under its rows, as figures — the desk's Charges tab reads these. */
+export type QuotationPriceFigures = {
+  lines: PriceLine[];
+  /** True when a Nights column is printed (the rooms differ from night to night). */
+  datesShown: boolean;
+  /** True when the rows are before tax (composition path); false on the legacy flat path. */
+  rowsAreNet: boolean;
+  net: number;
+  serviceChargeLabel: string;
+  serviceCharge: number;
+  gstLabel: string;
+  gst: number;
+  discountLabel: string | null;
+  /** The deduction as money, when the rows print originals. */
+  discountAmount: number | null;
+  /** An older discounted quote with no original to print: the rate movement in words. */
+  discountNote: string | null;
+  total: number;
+};
+
 type QuotationDocRender = {
   html: string;
+  figures: QuotationPriceFigures;
   linesForTemplate: PrintLine[];
   snapshotLines: SnapshotLine[];
   nights: number;
@@ -332,25 +350,16 @@ async function buildQuotationDocRender(
     // The component rates stored on a composition quote are pre-discount, so these rows ARE the
     // originals — the deduction row below says by how much they were cut.
     if (compDiscountApplies) originalsPrinted = true;
-    const nightsWord = (n: number) => `${n} night${n === 1 ? "" : "s"}`;
     for (const r of compositionPerRoom) {
-      const raw = inputsByRoomId.get(r.roomId) as any;
+      const raw = inputsByRoomId.get(r.roomId) as (PriceLineComposition & { negotiatedRoomRate?: number | null }) | undefined;
       const roomNights = Math.max(1, Number(r.nights ?? nights));
-      const adults = raw?.adultCount ?? 0;
-      const cnb = (raw?.cnb6To10Count ?? 0) + (raw?.cnbUnder6Count ?? 0);
-      const roomOccupants = `${adults} adult${adults === 1 ? "" : "s"}${cnb > 0 ? `, ${cnb} child${cnb === 1 ? "" : "ren"}` : ""}`;
-      const planParts: string[] = [];
-      if (raw?.mealPlanCpCount) planParts.push(`${raw.mealPlanCpCount} CP`);
-      if (raw?.mealPlanMaplCount) planParts.push(`${raw.mealPlanMaplCount} MAP+L`);
-      if (raw?.mealPlanMapdCount) planParts.push(`${raw.mealPlanMapdCount} MAP+D`);
-      if (raw?.mealPlanApCount) planParts.push(`${raw.mealPlanApCount} AP`);
-      if (raw?.mealPlanOthersCount) planParts.push(`${raw.mealPlanOthersCount} Others`);
+      const roomOccupants = roomOccupantsLabel(raw);
+      const planParts = mealPlanParts(raw);
       const eb =
         raw?.extraBedCount && raw.extraBedCount > 0
           ? `${raw.extraBedCount} extra bed${raw.extraBedCount === 1 ? "" : "s"}`
           : "None";
 
-      // ── Room row ────────────────────────────────────────────────────────────────
       // Under a discount the ORIGINAL rate is printed and the deduction gets its own row
       // (2026-08-02 ruling). A room carrying its own negotiated rate is exempt: the pricing
       // ignores the default rate for it, so it costs the same discounted or not.
@@ -358,144 +367,31 @@ async function buildQuotationDocRender(
       const printedRoomRate =
         rateMoved && negotiatedRoomRate == null ? preDiscountRate : Number(r.roomRate ?? 0);
       if (printedRoomRate > Number(r.roomRate ?? 0)) originalsPrinted = true;
-      const roomAmount = printedRoomRate * roomNights;
-      const push = (line: PrintLine) => {
-        linesForTemplate.push(line);
-        printedRowsTotal += line.amount;
-      };
-      const roomRowIndex = linesForTemplate.length;
-      push({
-        dates: nightsLabelFor(r.roomId),
-        description: [
-          r.roomNumber ? `Room ${r.roomNumber}` : `Room ${r.roomId.slice(0, 6)}`,
-          typeNameByRoomId.get(r.roomId) ?? null,
-          roomOccupants,
-          raw?.isFoc ? "FOC" : null,
-        ]
-          .filter(Boolean)
-          .join(" · "),
-        qty: nightsWord(roomNights),
-        rate: printedRoomRate,
-        amount: roomAmount,
-      });
-
-      // ── Extra beds ──────────────────────────────────────────────────────────────
-      const bedCount = Number(raw?.extraBedCount ?? 0);
-      const bedRate = Number(r.extraBedRate ?? 0);
-      if (r.extraBedsVaryByNight === true && Number(r.extraBedSubtotal ?? 0) > 0) {
-        // The bed count changed part-way through the stay (in-house setup change, 2026-08-19) —
-        // one multiplication can't describe it, so print the stored night-by-night figure.
-        push({
-          description: `Extra bed · varies by night`,
-          qty: nightsWord(roomNights),
-          rate: null,
-          amount: Number(r.extraBedSubtotal),
-        });
-      } else if (bedCount > 0 && bedRate > 0) {
-        push({
-          description: `Extra bed`,
-          qty: `${bedCount} × ${nightsWord(roomNights)}`,
-          rate: bedRate,
-          amount: bedRate * bedCount * roomNights,
-        });
-      }
-
-      // ── Meals, one row per plan ─────────────────────────────────────────────────
-      // A plan's per-head nightly rate is the sum of the meals it includes, which is exactly
-      // how `paxFromMealPlanCounts` prices it — so `planRate × pax × nights` summed over the
-      // plans reproduces the stored `mealsSubtotal` to the cent.
-      const bf = Number(r.breakfastRate ?? 0);
-      const lu = Number(r.lunchRate ?? 0);
-      const di = Number(r.dinnerRate ?? 0);
-      const mealsSubtotal = Number((r as unknown as { mealsSubtotal?: number | string }).mealsSubtotal ?? 0);
       const nightBreakdown =
         (r as unknown as { perNightMealBreakdown?: Array<{ overridden?: boolean }> }).perNightMealBreakdown ?? [];
-      const varyingNights = nightBreakdown.some((n) => n.overridden);
-      if (varyingNights && mealsSubtotal > 0) {
-        // Per-date plans: no single rate × qty describes the stay, so state the stay total and
-        // say why rather than printing a multiplication that doesn't hold.
-        push({
-          description: `Meals · varies by night${planParts.length ? ` (usually ${planParts.join(" · ")})` : ""}`,
-          qty: nightsWord(roomNights),
-          rate: null,
-          amount: mealsSubtotal,
-        });
-      } else {
-        const planRows: Array<{ label: string; pax: number; rate: number }> = [
-          { label: "CP (breakfast)", pax: Number(raw?.mealPlanCpCount ?? 0), rate: bf },
-          { label: "MAP+L (breakfast, lunch)", pax: Number(raw?.mealPlanMaplCount ?? 0), rate: bf + lu },
-          { label: "MAP+D (breakfast, dinner)", pax: Number(raw?.mealPlanMapdCount ?? 0), rate: bf + di },
-          { label: "AP (all meals)", pax: Number(raw?.mealPlanApCount ?? 0), rate: bf + lu + di },
-        ];
-        // The room's own `mealsSubtotal` is the truth; splitting it into one row per plan is a
-        // courtesy that has to add up to it. It does not always: the stored per-room meal RATES
-        // are only populated on the first room of a composition, so on a multi-room booking
-        // rooms 2..n priced their meals at a rate the document could not see and printed NO meal
-        // row at all — the rows then under-summed by the missing meals and, once the deduction
-        // was measured as rows-minus-net, the discount came out NEGATIVE (2026-10-06, operator:
-        // "I did a Nu 1000 discount, but it's now showing more"). So: print the split when it
-        // reconciles, and one honest row at the stored figure when it cannot.
-        const split = planRows
-          .filter((pl) => pl.pax > 0 && pl.rate > 0)
-          .map((pl) => ({ ...pl, amount: pl.rate * pl.pax * roomNights }));
-        const alaCarteTotal =
-          (Number(raw?.othersBreakfastPax ?? 0) * bf + Number(raw?.othersLunchPax ?? 0) * lu + Number(raw?.othersDinnerPax ?? 0) * di) *
-          roomNights;
-        const splitTotal = split.reduce((t, pl) => t + pl.amount, 0) + alaCarteTotal;
-        const splitReconciles = mealsSubtotal <= 0 || Math.abs(splitTotal - mealsSubtotal) < 0.01;
-        if (!splitReconciles) {
-          // The pax ARE stored even when the rates are not, so a room on a single plan still
-          // prints the row every other room prints — same words, same "N pax × N nights", and
-          // the per-head rate worked back from the room's own figure. Without this the one room
-          // that happened to carry rates read differently from its neighbours on the guest's
-          // copy (2026-10-06, operator: "why does the first row show differently in the qty
-          // column ... just below that room, not the others"). A room on several plans cannot
-          // be split from one subtotal, so it keeps one row with no unit rate.
-          const withPax = planRows.filter((pl) => pl.pax > 0);
-          const alaCartePax =
-            Number(raw?.othersBreakfastPax ?? 0) + Number(raw?.othersLunchPax ?? 0) + Number(raw?.othersDinnerPax ?? 0);
-          const only = withPax.length === 1 && alaCartePax === 0 ? withPax[0] : null;
-          const covers = only ? only.pax * roomNights : 0;
-          push({
-            description: only
-              ? `Meals · ${only.label}`
-              : `Meals${planParts.length ? ` · ${planParts.join(" · ")}` : ""}`,
-            qty: only ? `${only.pax} pax × ${nightsWord(roomNights)}` : nightsWord(roomNights),
-            rate: only && covers > 0 ? Number((mealsSubtotal / covers).toFixed(2)) : null,
-            amount: mealsSubtotal,
-          });
-        }
-        for (const p of splitReconciles ? split : []) {
-          push({
-            description: `Meals · ${p.label}`,
-            qty: `${p.pax} pax × ${nightsWord(roomNights)}`,
-            rate: p.rate,
-            amount: p.amount,
-          });
-        }
-        // "Others" guests order à la carte, so their meals are priced per meal taken rather
-        // than by a plan — one row per meal that actually has pax on it.
-        const alaCarte: Array<{ label: string; pax: number; rate: number }> = splitReconciles
-          ? [
-              { label: "breakfast", pax: Number(raw?.othersBreakfastPax ?? 0), rate: bf },
-              { label: "lunch", pax: Number(raw?.othersLunchPax ?? 0), rate: lu },
-              { label: "dinner", pax: Number(raw?.othersDinnerPax ?? 0), rate: di },
-            ]
-          : [];
-        for (const a of alaCarte) {
-          if (a.pax > 0 && a.rate > 0) {
-            push({
-              description: `Meals · à la carte ${a.label}`,
-              qty: `${a.pax} pax × ${nightsWord(roomNights)}`,
-              rate: a.rate,
-              amount: a.rate * a.pax * roomNights,
-            });
-          }
-        }
-      }
 
-      // Everything pushed after this room's own row is a sub-line of it.
-      for (let i = roomRowIndex + 1; i < linesForTemplate.length; i++) linesForTemplate[i].indent = true;
+      // The room, its extra beds and its meals — the shared reading the desk's Charges tab and the
+      // live negotiation preview print too (lib/quotation-price-lines.ts).
+      for (const line of buildRoomPriceLines({
+        roomId: r.roomId,
+        roomNumber: r.roomNumber,
+        roomTypeName: typeNameByRoomId.get(r.roomId) ?? null,
+        nights: roomNights,
+        composition: raw,
+        printedRoomRate,
+        extraBedRate: Number(r.extraBedRate ?? 0),
+        breakfastRate: Number(r.breakfastRate ?? 0),
+        lunchRate: Number(r.lunchRate ?? 0),
+        dinnerRate: Number(r.dinnerRate ?? 0),
+        mealsSubtotal: Number((r as unknown as { mealsSubtotal?: number | string }).mealsSubtotal ?? 0),
+        extraBedSubtotal: r.extraBedSubtotal ?? null,
+        extraBedsVaryByNight: r.extraBedsVaryByNight === true,
+        mealsVaryByNight: nightBreakdown.some((n) => n.overridden),
+        datesLabel: nightsLabelFor(r.roomId),
+      })) {
+        linesForTemplate.push(line);
+        printedRowsTotal += line.amount;
+      }
 
       // The archival snapshot keeps its one-row-per-room, tax-inclusive shape.
       snapshotLines.push({
@@ -626,6 +522,23 @@ async function buildQuotationDocRender(
       ? `− ${formatMoney(discountAmount)}`
       : `${formatMoney(preDiscountRate)} → ${formatMoney(postDiscountRate)} / room / night`;
 
+  const serviceChargeLabel = scRate > 0 ? `Service charge ${formatRate(scRate)} of net value` : "Service charge";
+  const gstLabel = gstRate > 0 ? `GST @ ${formatRate(gstRate)} of net + service charge` : "GST";
+  const figures: QuotationPriceFigures = {
+    lines: linesForTemplate,
+    datesShown,
+    rowsAreNet,
+    net: shownNet,
+    serviceChargeLabel,
+    serviceCharge: shownService,
+    gstLabel,
+    gst: shownGst,
+    discountLabel,
+    discountAmount: discountApplied && originalsPrinted ? discountAmount : null,
+    discountNote: discountApplied && !originalsPrinted ? discountValue : null,
+    total: totalAmount,
+  };
+
   const html = renderLegphelQuotationHtml({
     hidePrices,
     datesShown,
@@ -650,11 +563,11 @@ async function buildQuotationDocRender(
     discountLabel,
     discountValue,
     netValue: formatMoney(shownNet),
-    serviceChargeLabel: scRate > 0 ? `Service charge ${formatRate(scRate)} of net value` : "Service charge",
+    serviceChargeLabel,
     serviceCharge: formatMoney(shownService),
     // GST is compound, so the label says what it is charged ON — otherwise "5%" next to a figure
     // that is not 5% of net value reads as an error to anyone checking the sums.
-    gstLabel: gstRate > 0 ? `GST @ ${formatRate(gstRate)} of net + service charge` : "GST",
+    gstLabel,
     gst: formatMoney(shownGst),
     total: formatMoney(totalAmount),
     closingNote: hidePrices
@@ -673,6 +586,7 @@ async function buildQuotationDocRender(
 
   return {
     html,
+    figures,
     linesForTemplate,
     snapshotLines,
     nights,
@@ -710,6 +624,28 @@ export async function renderQuotationPreviewHtml(
   const q = await loadQuotationForRender(prisma, quotationId);
   const model = await buildQuotationDocRender(prisma, q, opts);
   return { html: model.html, referenceNumber: q.referenceNumber };
+}
+
+/**
+ * The quotation's rows and the figures under them, as data (2026-10-27) — for the booking file's
+ * Charges tab, which sets the price out as the quotation does: each room, its extra beds and its
+ * meals beneath it, then net, service charge, GST, any discount and the total. Composed by the
+ * same build as the document, so the two cannot differ. Pure read.
+ */
+export async function quotationPriceLines(
+  prisma: PrismaClient,
+  quotationId: string,
+): Promise<{ quotationId: string; referenceNumber: string; versionNumber: number; state: string } & QuotationPriceFigures> {
+  const q = await loadQuotationForRender(prisma, quotationId);
+  const model = await buildQuotationDocRender(prisma, q);
+  return {
+    quotationId: q.id,
+    referenceNumber: q.referenceNumber,
+    versionNumber: q.versionNumber,
+    state: q.state,
+    ...model.figures,
+    lines: priceLinesToCents(model.figures.lines),
+  };
 }
 
 /**

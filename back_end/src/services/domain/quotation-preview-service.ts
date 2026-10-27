@@ -27,6 +27,8 @@ import {
 import { buildEntryRateReference } from "./rate-reference-service.js";
 import { loadChildPolicyBundle } from "./child-policy-service.js";
 import { readOptionSelected, firstRoomId } from "../../lib/option-selected-reader.js";
+import { buildRoomPriceLines, priceLinesToCents, type PriceLine } from "../../lib/quotation-price-lines.js";
+import { labelRoomNights, roomNightsVary } from "../../lib/room-nights-for-entry.js";
 
 const ZERO = new Prisma.Decimal(0);
 
@@ -127,6 +129,14 @@ export type QuotationPreview = {
   gstRate: number;
   serviceChargeRate: number;
   rooms: PreviewRoomLine[];
+  /**
+   * The table as the quotation would print it (2026-10-27): each room, then its extra beds and
+   * its meals beneath it — the same rows `buildRoomPriceLines` gives the document. They add up to
+   * `subtotal` (before the discount, which comes off the total).
+   */
+  lines: PriceLine[];
+  /** True when the rooms are held for different nights, so each row says its nights. */
+  datesShown: boolean;
   /**
    * Per-column stay totals across every room (2026-08-07) — the Σ row under the negotiation
    * table's rate columns. All NET of tax (they sum to `subtotal`); the discount does not touch
@@ -252,7 +262,7 @@ export async function buildQuotationPreview(
   const rooms = roomIds.length
     ? await prisma.room.findMany({
         where: { id: { in: roomIds } },
-        select: { id: true, roomNumber: true, roomTypeId: true, roomType: { select: { maxExtraBeds: true } } },
+        select: { id: true, roomNumber: true, roomTypeId: true, roomType: { select: { maxExtraBeds: true, name: true } } },
       })
     : [];
   const roomById = new Map(rooms.map((r) => [r.id, r]));
@@ -398,6 +408,38 @@ export async function buildQuotationPreview(
     };
   });
 
+  // The rows the quotation would print for this table — the same builder the document uses.
+  const nightsByRoom = new Map<string, string[]>();
+  for (const c of input.roomCompositions) {
+    const ds = perRoomNightDates.get(c.roomId);
+    if (ds && ds.length) nightsByRoom.set(c.roomId, [...new Set(ds)].sort());
+  }
+  const datesShown = roomNightsVary(nightsByRoom);
+  const lines: PriceLine[] = [];
+  totals.perRoom.forEach((r, i) => {
+    const c = input.roomCompositions[i];
+    const ds = nightsByRoom.get(r.roomId);
+    lines.push(
+      ...buildRoomPriceLines({
+        roomId: r.roomId,
+        roomNumber: r.roomNumber,
+        roomTypeName: roomById.get(r.roomId)?.roomType?.name ?? null,
+        nights: r.nights,
+        composition: c,
+        printedRoomRate: n2(r.roomRate),
+        extraBedRate: n2(r.extraBedRate),
+        breakfastRate: n2(r.breakfastRate),
+        lunchRate: n2(r.lunchRate),
+        dinnerRate: n2(r.dinnerRate),
+        mealsSubtotal: n2(r.mealsSubtotal),
+        extraBedSubtotal: n2(r.extraBedSubtotal),
+        extraBedsVaryByNight: r.extraBedsVaryByNight === true,
+        mealsVaryByNight: r.perNightMealBreakdown.some((b) => b.overridden),
+        datesLabel: datesShown && ds ? labelRoomNights(ds) : null,
+      }),
+    );
+  });
+
   // The discount is measured against the grand total, in whichever way the operator expressed it.
   // Exactly the helper the draft applies, so a previewed discount and a generated one cannot
   // come out differently.
@@ -413,6 +455,8 @@ export async function buildQuotationPreview(
     gstRate: reference.gstRate,
     serviceChargeRate: reference.serviceChargeRate,
     rooms: roomsOut,
+    lines: priceLinesToCents(lines),
+    datesShown,
     columns: {
       room: n2(colRoom),
       extraBed: n2(colExtraBed),

@@ -12,7 +12,7 @@ import { prisma } from "../../db.js";
 import { requireActorLevel } from "../../middleware/auth.js";
 import { NotFoundError } from "../../lib/errors.js";
 import { readDocument } from "../../lib/document-storage.js";
-import { generateOrLoadQuotationPdf, renderQuotationPdfWithoutPrices, renderQuotationPreviewHtml } from "../../services/domain/quotation-pdf-service.js";
+import { generateOrLoadQuotationPdf, quotationPriceLines, renderQuotationPdfWithoutPrices, renderQuotationPreviewHtml } from "../../services/domain/quotation-pdf-service.js";
 import { generateOrLoadInvoicePdf, renderInvoicePreviewHtml } from "../../services/domain/invoice-pdf-service.js";
 import { generateOrLoadConfirmationVoucherPdf } from "../../services/domain/confirmation-voucher-pdf-service.js";
 import { generateCancellationConfirmationPdf } from "../../services/domain/cancellation-confirmation-pdf-service.js";
@@ -87,6 +87,20 @@ documentsRouter.get("/quotations/:id/preview-html", requireActorLevel("L1"), asy
     // Never cache — the preview must track live edits to the draft terms.
     res.setHeader("Cache-Control", "no-store");
     res.send(html);
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
+ * GET /api/quotations/:id/price-lines — the quotation's rows and the figures under them, as data
+ * (2026-10-27): the booking file's Charges tab sets the price out the way the quotation does.
+ * Same build as the document; nothing written. Staff-only (L1+).
+ */
+documentsRouter.get("/quotations/:id/price-lines", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    res.json(await quotationPriceLines(prisma, req.params.id));
   } catch (e) {
     next(e);
   }
