@@ -21,10 +21,10 @@
  */
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Button, Icon } from "@/design-system";
+import { Button, Chip, Icon } from "@/design-system";
 import { useSession } from "@/hooks/use-session";
 import { useHotelDay } from "@/hooks/use-hotel-day";
 import { usePageTitle } from "@/hooks/use-page-title";
@@ -44,7 +44,7 @@ import { bookingHref } from "@/components/ds/ui";
 import { fmtRange, money, plural } from "@/lib/ds/format";
 import { BOUNDARY_STEPS, PHASES, STEP_NAMES, STEP_NEEDS } from "@/lib/ds/steps";
 import type { EntryDetail } from "@/types/api";
-import { Choice, FlowTodo, StepCanvas, StepCard, StepFlow, anchorFor, atLeast, numberFlow, revealCard, toastRefusal } from "./kit";
+import { Choice, FlowChips, StepCanvas, StepCard, StepFlow, anchorFor, atLeast, numberFlow, revealCard, toastRefusal } from "./kit";
 import { ApiError } from "@/lib/api/client";
 import {
   BED_ORDER,
@@ -72,15 +72,13 @@ import {
   type UseTypeKey,
 } from "./new-inquiry-parts";
 import { Help } from "@/components/ds/help";
-import { FoldingSide, useSideFolded } from "@/components/ds/workspace/side-panel";
 import { DateInput } from "@/components/ds/date-input";
 
-/**
- * The prototype's final pass draws this screen without the journey rail (`ws-body norail`, and
- * the generated stylesheet names "the no-rail new inquiry"). The rail below is kept for the day
- * that changes: step 1 current, the rest unreachable.
- */
-const WITH_RAIL = false;
+// The sections the intake asks, as the step's line names them; the house and Wrap up are asked on
+// the booking once the lead is kept.
+const INTAKE_SECTIONS: Record<string, string> = { caller: "The caller", asking: "Who is asking", stay: "The stay" };
+// The booking file's tabs, as the booking shows them; only the first has anything before the lead is kept.
+const INTAKE_FILE_TABS = ["Booking", "Charges & payments", "Guest requests", "Notes", "Documents", "History"];
 
 // The guest card is a flow card, so its anchor is the flow's (the focus helper below reads it).
 const GUEST_CARD_ID = anchorFor("caller");
@@ -107,7 +105,21 @@ export function NewInquiryCanvas() {
   const { session } = useSession();
   // The hotel's day, from the server — never the machine's. Null until it answers.
   const today = useHotelDay()?.today ?? null;
-  const [sideFolded, setSideFolded] = useSideFolded();
+  // The header's height, measured onto the screen as --ws-head-h so the booking file sticks under it.
+  const headObserver = useRef<ResizeObserver | null>(null);
+  const headRef = useCallback((head: HTMLDivElement | null) => {
+    headObserver.current?.disconnect();
+    headObserver.current = null;
+    if (!head) return;
+    const ws = head.closest<HTMLElement>(".ws");
+    if (!ws) return;
+    const apply = () => ws.style.setProperty("--ws-head-h", `${head.offsetHeight}px`);
+    apply();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(apply);
+    ro.observe(head);
+    headObserver.current = ro;
+  }, []);
 
   /* ---------------------------------------------------------------- who is asking */
   // No default: the operator says how the booking reached us (the old form made it the first pick).
@@ -710,57 +722,93 @@ export function NewInquiryCanvas() {
   const saveReason = saveBlockers.length ? `first: ${saveBlockers.join(" · ")}` : null;
 
   /* ---------------------------------------------------------------- render */
+  // The stage-template layout, as the booking's Inquiry step has it (2026-10-27, operator: "I
+  // refreshed and it turned back to the old UI" — this screen still had the side panel): the clocks
+  // and the facts in the header, the journey and the sections as lines under it, the sections on the
+  // left, the booking file on the right, and where the step stands in the bar at the foot.
+  const sectionsLeft = flowItems.filter((i) => !i.met).length;
+  const callerName = `${callerTitle ? `${callerTitle} ` : ""}${typedGuestName}`.trim();
+  const useTypeWord = useType ? (USE_TYPES.find(([k]) => k === useType)?.[1] ?? useType) : null;
   return (
-    <div className="ws">
-      <div className="ws-head">
-        <div>
-          <Link href="/bookings" className="backlink">
-            <Icon name="chev" /> Back to Bookings
-          </Link>
-          <div className="who">
-            <h2 className="ink-2">
-              New inquiry
-              <Help label="About a new inquiry">There is no other way to see whether rooms are free: looking is recording. The lead is kept — taken or not.</Help>
-            </h2>
+    <StepFlow items={flowItems} on fold="on-move">
+    <div className="ws ws-top theme-blue">
+      <div className="ws-topstick" ref={headRef}>
+        <div className="ws-head">
+          <div>
+            <Link href="/bookings" className="backlink">
+              <Icon name="chev" /> Back to Bookings
+            </Link>
+            <div className="who">
+              <h2 className="ink-2">
+                New inquiry
+                <Help label="About a new inquiry">There is no other way to see whether rooms are free: looking is recording. The lead is kept — taken or not.</Help>
+              </h2>
+              <Chip tone="quiet">not kept yet</Chip>
+            </div>
+            <div className="facts">
+              <span>
+                {datesSet ? (
+                  <>
+                    <b>{fmtRange(checkIn, checkOut)}</b> · {plural(stayNights, "night")}
+                  </>
+                ) : (
+                  "No dates yet"
+                )}
+              </span>
+              <span>
+                Guests <b>{adultsN + childN}</b>
+                {childN ? ` · ${plural(adultsN, "adult")}, ${plural(childN, "child", "children")}` : ""}
+              </span>
+              <span>
+                Rooms <b>{roomsN || "—"}</b>
+              </span>
+              <span>
+                {channel ? channel.label : "How they came in · not said yet"}
+                {party ? ` · ${party.displayName}` : ""}
+              </span>
+            </div>
+          </div>
+          <div className="total">
+            <div className="figure money" style={{ cursor: "default" }}>
+              <span className="dash">—</span>
+            </div>
+            <div className="kind">{datesSet ? "no total until the house is asked" : "no dates, no total"}</div>
+          </div>
+          <div className="hrow">
+            <div className="hclocks">
+              <span className="meta">No clock running · the inquiry&rsquo;s clock starts once the lead is kept</span>
+            </div>
           </div>
         </div>
-        <div className="total">
-          <div className="figure money" style={{ cursor: "default" }}>
-            <span className="dash">—</span>
-          </div>
-          <div className="kind">{datesSet ? "no total until the house is asked" : "no dates, no total"}</div>
+        <nav className="journey" aria-label="Journey">
+          {PHASES.map(([phase, steps]) => (
+            <Fragment key={phase}>
+              <span className="jgrp">{phase}</span>
+              {steps.map((n) => (
+                <span
+                  key={n}
+                  className={["jst", n === 1 ? "cur" : "later", BOUNDARY_STEPS.has(n) ? "boundary" : ""].filter(Boolean).join(" ")}
+                  aria-current={n === 1 ? "step" : undefined}
+                  title={n === 1 ? undefined : "Comes later"}
+                >
+                  <span className="n">{n}</span>
+                  {STEP_NAMES[n - 1]}
+                </span>
+              ))}
+            </Fragment>
+          ))}
+        </nav>
+        <div className="stagebar">
+          <h3>1 · {STEP_NAMES[0]}</h3>
+          <span className="verb">{STEP_NEEDS[1]}</span>
+          <FlowChips names={INTAKE_SECTIONS} onGo={goToCard} />
         </div>
       </div>
 
-      <div className={`ws-body${WITH_RAIL ? "" : " norail"}${sideFolded ? " side-folded" : ""}`}>
-        {WITH_RAIL ? (
-          <nav className="rail" aria-label="Journey">
-            {PHASES.map(([phase, steps]) => (
-              <div key={phase} style={{ display: "contents" }}>
-                <div className={`phase${steps.includes(1) ? " current" : ""}`}>{phase}</div>
-                {steps.map((n) => (
-                  <span key={n} className={["step", n === 1 ? "current" : "unreachable", BOUNDARY_STEPS.has(n) ? "boundary" : ""].filter(Boolean).join(" ")}>
-                    <span className="n">{n}</span>
-                    <span>{STEP_NAMES[n - 1]}</span>
-                  </span>
-                ))}
-              </div>
-            ))}
-            <div className="legend">
-              <span>
-                <i />
-                cannot be undone
-              </span>
-            </div>
-          </nav>
-        ) : null}
-
+      <div className="ws-split">
         <div className="canvas">
-          <h3>
-            {STEP_NAMES[0]} <span className="need">{STEP_NEEDS[1]}</span>
-          </h3>
+          <div className="todo-h">To do now</div>
           <StepCanvas past={false}>
-            <StepFlow items={flowItems} on fold="on-move">
               <div className="stack">
                 {fromChart.room || fromChart.checkIn ? (
                   <p className="chart-from">
@@ -1372,23 +1420,10 @@ export function NewInquiryCanvas() {
                   </div>
                 </StepCard>
               </div>
-            </StepFlow>
           </StepCanvas>
-        </div>
-
-        <FoldingSide folded={sideFolded} onFold={setSideFolded} clocks={[]} todo={flowItems} also={flowAlso}>
-          <div>
-            <h4>Timers</h4>
-            <div className="list">
-              <span className="meta">nothing running</span>
-            </div>
-          </div>
-          <FlowTodo items={flowItems} also={flowAlso} onGo={goToCard} />
-        </FoldingSide>
-      </div>
 
       {dupe ? (
-        <section className="card" style={{ margin: "0 20px 12px" }}>
+        <section className="card">
           <h4>This guest already holds a booking over these nights</h4>
           <p className="sm" style={{ marginTop: 6 }}>
             {dupe.entryId ? <Link href={`/bookings/${dupe.entryId}`}>{dupe.entryId}</Link> : "Another booking"} overlaps these dates for the
@@ -1424,8 +1459,110 @@ export function NewInquiryCanvas() {
         </section>
       ) : null}
 
-      <div className="gatebar">
-        {/* The list is in the side panel, numbered; the bar says what is next and takes you to it. */}
+          {/* What the start checks, in one place — each section, then what the system does on save. */}
+          <div className="card before-move">
+            <h4>Before you move on</h4>
+            <table className="compact">
+              <tbody>
+                {Object.entries(INTAKE_SECTIONS).map(([card, title]) => {
+                  const own = flowItems.filter((i) => i.card === card);
+                  if (!own.length) return null;
+                  const met = own.every((i) => i.met);
+                  return (
+                    <tr key={card} className="pick" onClick={() => goToCard(card)}>
+                      <td className={met ? "ok-ink" : "warn-ink"}>{met ? <Icon name="check" /> : "●"}</td>
+                      <td>{title}</td>
+                      <td className="meta">{met ? "done" : own.filter((i) => !i.met).map((i) => i.label).join(" · ")}</td>
+                    </tr>
+                  );
+                })}
+                {flowAlso.map((p) => (
+                  <tr key={p.label}>
+                    <td className={p.met ? "ok-ink" : "warn-ink"}>{p.met ? <Icon name="check" /> : "→"}</td>
+                    <td colSpan={2} className="meta">
+                      {p.label}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div className={`before-move-foot ${sectionsLeft ? "wait" : "ready"}`}>
+              {sectionsLeft ? `${plural(sectionsLeft, "thing")} still to do` : `Everything is here · press ${primaryLabel} on The stay`}
+            </div>
+          </div>
+        </div>
+
+        {/* The booking file: nothing is kept yet, so it shows what has been put in so far. */}
+        <aside className="file" aria-label="Booking file">
+          <div className="ftitle">Booking file · not kept yet</div>
+          <div className="ftabs" role="tablist">
+            {INTAKE_FILE_TABS.map((label, i) => (
+              <button
+                key={label}
+                type="button"
+                role="tab"
+                className="ftab"
+                aria-selected={i === 0}
+                disabled={i > 0}
+                title={i > 0 ? "Opens once the inquiry is kept" : undefined}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="fbody">
+            <p className="meta">The other tabs open once the inquiry is kept.</p>
+            <dl className="pv">
+              <dt>The caller</dt>
+              <dd>
+                {callerName || <span className="meta">no name yet</span>}
+                {fullPhone ? <div>{fullPhone}{onWhatsApp ? " · on WhatsApp" : ""}</div> : null}
+                {email.trim() ? <div>{email.trim()}</div> : null}
+                {!fullPhone && !email.trim() ? <div className={isOta ? "meta" : "warn-ink"}>{isOta ? "an OTA booking" : "no phone or email yet"}</div> : null}
+              </dd>
+              <dt>Came in as</dt>
+              <dd>
+                {channel ? channel.label : <span className="warn-ink">not said yet</span>}
+                {party ? <div>{party.displayName}</div> : null}
+                {partyContact?.name ? <div className="meta">contact · {partyContact.name}</div> : null}
+              </dd>
+              <dt>Kind of stay</dt>
+              <dd>{useTypeWord ?? <span className="warn-ink">not said yet</span>}</dd>
+              <dt>The stay</dt>
+              <dd>
+                {datesSet ? (
+                  <>
+                    {fmtRange(checkIn, checkOut)} · {plural(stayNights, "night")}
+                  </>
+                ) : (
+                  <span className="warn-ink">no dates yet</span>
+                )}
+              </dd>
+              <dt>Guests</dt>
+              <dd>
+                {plural(adultsN, "adult")}
+                {childN ? `, ${plural(childN, "child", "children")}` : ""}
+                {childN && ages.some((a) => a.trim()) ? <div className="meta">ages {ages.map((a) => a.trim() || "?").join(", ")}</div> : null}
+              </dd>
+              <dt>Rooms</dt>
+              <dd>
+                {roomsN || "—"}
+                {bedSum > 0 ? <div className="meta">{Object.entries(bedRequest).map(([t, n]) => `${n} ${bedWord(t)}`).join(" + ")} asked</div> : null}
+              </dd>
+              {fromChart.room ? (
+                <>
+                  <dt>From the chart</dt>
+                  <dd>Room {fromChart.room}</dd>
+                </>
+              ) : null}
+            </dl>
+          </div>
+        </aside>
+      </div>
+
+      <div className="gatebar top">
+        {/* The bar says what is next and takes you to it; the start is The stay's Done. */}
+        <div className="gate-status">
         <div className="gate">
           {nextUp ? (
             <button type="button" className="item unmet" onClick={() => goToCard(nextUp.card)}>
@@ -1446,7 +1583,9 @@ export function NewInquiryCanvas() {
             </button>
           )}
         </div>
+        </div>
       </div>
     </div>
+    </StepFlow>
   );
 }

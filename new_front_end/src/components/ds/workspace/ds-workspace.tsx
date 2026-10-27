@@ -715,6 +715,29 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
         : entry.status === "EXPIRED" || entry.currentStage === "TERMINAL"
           ? `${entry.currentStage === "S2" ? "The negotiation lapsed" : entry.currentStage === "S1" ? "The inquiry lapsed" : "Expired"} — a read-only record`
           : "Closed and sealed — a read-only record";
+  // An ending without a stay is said in red, on the step and in the bar (2026-10-27, operator: "if it
+  // is lapsed it should show in red or prominent way"). A booking closed after its stay stays quiet,
+  // and so does one folded into the guest's other booking.
+  const endedEarly =
+    (entry.status === "CANCELLED" || entry.status === "EXPIRED" || entry.folio?.state === "NO_SHOW_CLOSED") && entry.closedAs !== "COMBINED";
+  const sealedHead = sealedOutcome.replace(/ — a read-only record$/, "");
+  const sealedNotice = endedEarly ? (
+    <div className="notice ended" role="status">
+      <span className="ended-mark" aria-hidden="true">
+        !
+      </span>
+      <span>
+        <b>{sealedHead}</b>
+        <span className="rest">
+          {entry.closedAt ? ` · ${fmtDateTime(entry.closedAt, clock.tz)}` : ""} · a read-only record — nothing on it can be changed
+        </span>
+      </span>
+    </div>
+  ) : (
+    <div className="notice inert">
+      <span className="sm">{sealedOutcome}</span>
+    </div>
+  );
 
   const preconds0: Precondition[] = sealed
     ? []
@@ -1222,7 +1245,13 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
               Parked · <b>Resume to continue</b>
             </div>
           ) : sealed ? (
-            <div className="sm ink-2">{sealedOutcome}</div>
+            endedEarly ? (
+              <div className="sm stop-ink">
+                <b>{sealedHead}</b> — a read-only record
+              </div>
+            ) : (
+              <div className="sm ink-2">{sealedOutcome}</div>
+            )
           ) : preconds.length ? (
             // The full list lives in the side panel, numbered (2026-09-25) — the bar says what is
             // next and takes you to it, so the move and the reason for waiting sit together.
@@ -1379,11 +1408,11 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     return (
       <BackendRailSlotContext.Provider value={railSlot}>
         <StepFlow items={flowItems} on={!viewingPast && !sealed} fold={inquiryStepActive ? "done" : null}>
-          <div className="ws ws-top">
+          <div className="ws ws-top theme-blue">
             {/* The header, the journey and the step's sections stay put under the topbar; their
                 height is measured onto --ws-head-h so the file on the right sticks below them. */}
             <div className="ws-topstick" ref={headRef}>
-              <div className="ws-head">
+              <div className={`ws-head${endedEarly ? " ended" : ""}`}>
                 {headInner}
                 <div className="hrow">
                   <div className="hclocks">
@@ -1416,8 +1445,10 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                     <span className="jgrp">{phase}</span>
                     {steps.map((n) => {
                       const reach = n <= atStep || n <= maxReach;
-                      const done = n < currentOrder || (n === 9 && sealed);
-                      const cls = ["jst", done ? "done" : "", n === viewing ? "cur" : "", reach ? "" : "later", BOUNDARY_STEPS.has(n) ? "boundary" : ""]
+                      // An ending without a stay does not tick Closed: it reads red, with its lock.
+                      const stopped = n === 9 && sealed && endedEarly;
+                      const done = !stopped && (n < currentOrder || (n === 9 && sealed));
+                      const cls = ["jst", done ? "done" : "", stopped ? "stopped" : "", n === viewing ? "cur" : "", reach ? "" : "later", BOUNDARY_STEPS.has(n) ? "boundary" : ""]
                         .filter(Boolean)
                         .join(" ");
                       return (
@@ -1427,13 +1458,13 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                           href={`${bookingHref(entry.id)}?step=${n}`}
                           aria-current={n === viewing ? "step" : undefined}
                           aria-disabled={reach ? undefined : true}
-                          title={reach ? (BOUNDARY_STEPS.has(n) ? "Cannot be undone once passed" : undefined) : "Comes later"}
+                          title={stopped ? sealedHead : reach ? (BOUNDARY_STEPS.has(n) ? "Cannot be undone once passed" : undefined) : "Comes later"}
                           onClick={(e) => {
                             e.preventDefault();
                             if (reach) gotoStep(n);
                           }}
                         >
-                          <span className="n">{done ? <Icon name="check" /> : n === 9 && sealed ? <Icon name="lock" /> : n}</span>
+                          <span className="n">{done ? <Icon name="check" /> : stopped ? <Icon name="lock" /> : n}</span>
                           {STEP_NAMES[n - 1]}
                         </a>
                       );
@@ -1461,13 +1492,15 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                 ) : null}
                 <QuietScreen>
                   {viewingPast ? (
-                    <div className="notice inert">
-                      <span className="sm">
-                        {sealed
-                          ? sealedOutcome
-                          : `This step was passed on the way to ${STEP_NAMES[currentOrder - 1]} — what it shows is what was decided then; nothing here can be changed. To change it, work from the step the booking is at now.`}
-                      </span>
-                    </div>
+                    sealed ? (
+                      sealedNotice
+                    ) : (
+                      <div className="notice inert">
+                        <span className="sm">
+                          {`This step was passed on the way to ${STEP_NAMES[currentOrder - 1]} — what it shows is what was decided then; nothing here can be changed. To change it, work from the step the booking is at now.`}
+                        </span>
+                      </div>
+                    )
                   ) : null}
                   {!sealed ? <ActiveRoomMoves entryId={entry.id} tz={clock.tz} /> : null}
                   {!sealed ? <HeldPapersCard entryId={entry.id} tz={clock.tz} /> : null}
@@ -1762,13 +1795,15 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                   </span>
                 </h3>
                 {viewingPast ? (
-                  <div className="notice inert">
-                    <span className="sm">
-                      {sealed
-                        ? sealedOutcome
-                        : `This step was passed on the way to ${STEP_NAMES[currentOrder - 1]} — what it shows is what was decided then; nothing here can be changed. To change it, work from the step the booking is at now.`}
-                    </span>
-                  </div>
+                  sealed ? (
+                    sealedNotice
+                  ) : (
+                    <div className="notice inert">
+                      <span className="sm">
+                        {`This step was passed on the way to ${STEP_NAMES[currentOrder - 1]} — what it shows is what was decided then; nothing here can be changed. To change it, work from the step the booking is at now.`}
+                      </span>
+                    </div>
+                  )
                 ) : null}
                 <div hidden={view !== "step"}>
                 {/* Papers a walk re-issued and held — whichever walk ran, the send-or-not question is here. */}

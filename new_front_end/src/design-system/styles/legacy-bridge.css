@@ -84,7 +84,7 @@
 /* a block is a card */
 .ds .desk-root .block {
   background: #FFFFFF;
-  border: 1px solid #DED4C4;
+  border: 1px solid var(--line);
   border-radius: 6px;
   padding: 16px;
   margin-bottom: 20px;
@@ -96,7 +96,7 @@
   font-weight: 700;
   letter-spacing: 0;
   text-transform: none;
-  color: #1E1C19;
+  color: var(--ink);
   margin-bottom: 10px;
 }
 .ds .desk-root .block-h .ln { display: none; }
@@ -114,7 +114,7 @@
   box-shadow: none;
 }
 .ds .desk-root .btn-sm { height: 30px; padding: 0 12px; font-size: 15px; }
-.ds .desk-root .btn-primary { background: #1E1C19; color: #FFFFFF; border-color: #1E1C19; }
+.ds .desk-root .btn-primary { background: var(--ink); color: #FFFFFF; border-color: var(--ink); }
 .ds .desk-root .btn-primary:hover:not(:disabled) { background: #33302B; }
 /* The negotiation table's Save carries its own state as its colour (2026-09-30, "UIappeal"):
    RED while the table and the quotation disagree, GREEN once they match. It lives here rather
@@ -125,16 +125,16 @@
 .ds .desk-root .rct-save-btn.dirty:hover:not(:disabled) { background: #961F18; border-color: #961F18; }
 .ds .desk-root .rct-save-btn.clean,
 .ds .desk-root .rct-save-btn.clean:disabled { background: var(--ok-t, #E7F3EC); border-color: var(--ok, #1E7A4F); color: var(--ok, #1E7A4F); opacity: 1; cursor: default; }
-.ds .desk-root .btn-ghost { background: #FFFFFF; color: #1E1C19; border-color: #C2B49E; }
-.ds .desk-root .btn-ghost:hover:not(:disabled) { background: #F9F5EE; border-color: #706A61; }
+.ds .desk-root .btn-ghost { background: #FFFFFF; color: var(--ink); border-color: var(--line-2); }
+.ds .desk-root .btn-ghost:hover:not(:disabled) { background: var(--cream); border-color: var(--ink-3); }
 .ds .desk-root .btn:disabled,
-.ds .desk-root .btn[disabled] { background: #EEE6D8; color: #A39C92; border-color: #EEE6D8; opacity: 1; cursor: not-allowed; }
+.ds .desk-root .btn[disabled] { background: var(--cream-2); color: var(--ink-4); border-color: var(--cream-2); opacity: 1; cursor: not-allowed; }
 /* A pressed button waiting on the server keeps the colours it was pressed in (2026-10-14): these old
    tools disable the button while their request runs, which painted it the pale "unavailable" grey and
    drew the waiting ring (PendingButtons' [data-pending]) pale on pale. */
 .ds .desk-root .btn[data-pending]:disabled { cursor: progress; }
-.ds .desk-root .btn.btn-primary[data-pending]:disabled { background: #1E1C19; color: #FFFFFF; border-color: #1E1C19; }
-.ds .desk-root .btn.btn-ghost[data-pending]:disabled { background: #FFFFFF; color: #1E1C19; border-color: #C2B49E; }
+.ds .desk-root .btn.btn-primary[data-pending]:disabled { background: var(--ink); color: #FFFFFF; border-color: var(--ink); }
+.ds .desk-root .btn.btn-ghost[data-pending]:disabled { background: #FFFFFF; color: var(--ink); border-color: var(--line-2); }
 .ds .desk-root .btn.rct-save-btn.dirty[data-pending]:disabled { background: var(--stop, #B3261E); border-color: var(--stop, #B3261E); color: #fff; }
 .ds .desk-root .btn svg { width: 16px; height: 16px; }
 
@@ -145,9 +145,9 @@
   border-radius: 3px;
   font-size: 13px;
   font-weight: 700;
-  border-color: #DED4C4;
+  border-color: var(--line);
   background: #FFFFFF;
-  color: #514C45;
+  color: var(--ink-2);
 }
 .ds .desk-root .tag.ok, .ds .desk-root .tag.good, .ds .desk-root .tag.green { background: #E6F3EC; border-color: #A6D4BC; color: #1E7A4F; }
 .ds .desk-root .tag.warn { background: #FBF1DF; border-color: #E6C48A; color: #8F5300; }
@@ -156,7 +156,7 @@
 /* a fact strip is a bound box */
 .ds .desk-root .fact {
   border-radius: 6px;
-  border: 1px solid #DED4C4;
+  border: 1px solid var(--line);
   font-size: 15px;
   padding: 6px 10px;
 }
@@ -166,7 +166,7 @@
 .ds .desk-root label.lbl {
   font-size: 15px;
   font-weight: 700;
-  color: #514C45;
+  color: var(--ink-2);
   text-transform: none;
   letter-spacing: 0;
 }
@@ -176,21 +176,21 @@
   font-family: "Carlito", "Calibri", "Segoe UI", system-ui, sans-serif;
   font-size: 16px;
   border-radius: 4px;
-  border-color: #C2B49E;
+  border-color: var(--line-2);
 }
 .ds .desk-root input:focus-visible,
 .ds .desk-root select:focus-visible,
-.ds .desk-root textarea:focus-visible { outline: none; border-color: #6D2E8C; box-shadow: 0 0 0 3px #F1E7F6; }
+.ds .desk-root textarea:focus-visible { outline: none; border-color: var(--green); box-shadow: 0 0 0 3px var(--green-t); }
 .ds .desk-root .val { border-radius: 4px; border-width: 1px; font-size: 16px; }
 .ds .desk-root .mono { font-family: "Carlito", "Calibri", "Segoe UI", system-ui, sans-serif; }
 
 /* dialogs */
 .ds .desk-root .scrim { background: rgba(30, 28, 25, .3); }
-.ds .desk-root .modal { border-radius: 8px; border: 1px solid #DED4C4; box-shadow: 0 16px 40px rgba(30, 28, 25, .22); background: #FFFFFF; }
-.ds .desk-root .modal-top { background: #FFFFFF; border-bottom: 1px solid #DED4C4; }
+.ds .desk-root .modal { border-radius: 8px; border: 1px solid var(--line); box-shadow: 0 16px 40px rgba(30, 28, 25, .22); background: #FFFFFF; }
+.ds .desk-root .modal-top { background: #FFFFFF; border-bottom: 1px solid var(--line); }
 .ds .desk-root .modal-top h3 { font-family: "Poppins", "Carlito", sans-serif; font-weight: 500; font-size: 21px; }
-.ds .desk-root .modal-ic { background: #1E1C19 !important; border-radius: 4px; }
-.ds .desk-root .modal-foot { background: #F9F5EE; }
+.ds .desk-root .modal-ic { background: var(--ink) !important; border-radius: 4px; }
+.ds .desk-root .modal-foot { background: var(--cream); }
 
 /* tables the old tools draw */
 .ds .desk-root table { font-variant-numeric: tabular-nums lining-nums; }
