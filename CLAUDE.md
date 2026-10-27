@@ -6,7 +6,7 @@ This file is the operating reference for Claude when working in this repo. Updat
 
 The second developer has **resigned**. cjchoejor now owns the whole system, backend and frontend.
 
-For his final stretch he worked the project alone, so **his branch carries far more than the user's own backend did**: since the two split at `e5693b6`, he made **240 commits** to the user's **16**. His final state was `UI-experiment2`, copied verbatim to **`UI-experiment3`** — the branch work continues on from now.
+For his final stretch he worked the project alone, so **his branch carries far more than the user's own backend did**: since the two split at `e5693b6`, he made **240 commits** to the user's **16**. His final state was `UI-experiment2`, copied verbatim to **`UI-experiment3`**, where work continued until 2026-10-27; it continues on **`UI-experiment5`** (see the branch table below).
 
 What this changes:
 
@@ -35,13 +35,16 @@ Endpoints that show the pattern:
 
 | Branch | Contains | Status |
 |---|---|---|
-| `UI-experiment3` | `back_end/` + `front_end/` (his final work) | **The working branch.** Copy of his final `UI-experiment2`. |
+| `UI-experiment5` | `back_end/` + `new_front_end/` + the retired `front_end/` | **The working branch since 2026-10-27** (operator: "we will be working on that branch now for new UI changes"). Cut from `UI-experiment3` at `e0a8760`, an exact copy at the time. |
+| `UI-experiment3` | the same, up to `e0a8760` | Parked at `e0a8760`, fully pushed. All work from 2026-09-01 to 2026-10-27 is here. Do not commit here. |
+| `UI-experiment4` | a side experiment from 2026-10-07 | Parked. The "second screen" (a live read-only board for a second monitor) and an availability preview for dates still being typed: 21 commits that are **not** on `UI-experiment3`/`5`, cut at `90cf626`. Work went back to `UI-experiment3` after it; nothing from it was merged. |
+| `deployment_branch` | what runs on the server | Merging the UI work into it is **paused by the operator**; whether its own commits come back here is an open question. Ask before touching it. |
 | `UI-experiment2` | his final state | Frozen. His last push; `UI-experiment3` was cut from it. Do not commit here. |
 | `integration-prod-frontend` | the user's own `back_end/` + `my_front_end/` + `front_end/` | **Frozen, but not finished** — holds 16 commits of the user's work not yet ported here (see below). |
 | `main` | older daily branch | Stale; predates both. |
 | `UI-experiment` | his older branch | Superseded by `UI-experiment2`. |
 
-Both `UI-experiment3` and `integration-prod-frontend` are fully pushed. **Nothing is merged between them automatically** — a plain merge would be 119 conflicting backend files (see below), so work is ported deliberately, piece by piece.
+`UI-experiment5`, `UI-experiment3` and `integration-prod-frontend` are fully pushed. **Nothing is merged between them automatically** — a plain merge would be 119 conflicting backend files (see below), so work is ported deliberately, piece by piece.
 
 ## Porting the user's own backend work into this branch — all 8 closed (2026-10-26)
 
