@@ -259,6 +259,16 @@
 .ds .card .flow-summary { display: flex; align-items: center; gap: 12px; }
 .ds .card .flow-summary .sum { flex: 1; min-width: 0; color: var(--ink); font-size: var(--t-sm); line-height: 1.4; }
 .ds .card .flow-closebar { display: flex; justify-content: flex-end; margin-top: 12px; }
+/* A section with everything in (2026-10-27, "UIappeal"): the green line says it, the filled Done
+   sits where the eye lands after reading it, and both arrive with one short flash. */
+.ds .card .flow-closebar.ready { align-items: center; gap: var(--s3); padding-top: var(--s3); border-top: 1px solid var(--line); }
+.ds .card .flow-closebar .flow-ready { display: inline-flex; align-items: center; gap: 6px; font-size: var(--t-sm); font-weight: 700; }
+.ds .card .flow-closebar.ready > .btn { min-width: 112px; animation: ds-done-arrive .9s ease-out 1; }
+@keyframes ds-done-arrive {
+  0% { box-shadow: 0 0 0 0 rgba(30, 122, 79, .55); }
+  100% { box-shadow: 0 0 0 10px rgba(30, 122, 79, 0); }
+}
+@media (prefers-reduced-motion: reduce) { .ds .card .flow-closebar.ready > .btn { animation: none; } }
 .ds .card .flow-body { display: contents; }
 .ds .card .flow-body[hidden] { display: none; }
 

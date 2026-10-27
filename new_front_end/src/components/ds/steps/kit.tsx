@@ -554,10 +554,14 @@ export function StepCard({
               </Button>
             </div>
           ) : canDone ? (
-            <div className="flow-closebar">
-              <Button kind="secondary" compact onClick={() => ctx.done(flow!)}>
-                Done
-              </Button>
+            // Everything the section asks for is in, so Done is the next press: it says so, in
+            // green, and the button is the filled one (2026-10-27, operator: "the Done button
+            // should look more prominent so the user knows where to click").
+            <div className="flow-closebar ready">
+              <span className="flow-ready ok-ink" role="status">
+                <Icon name="check" /> All in — press Done to go on
+              </span>
+              <Button onClick={() => ctx.done(flow!)}>Done</Button>
             </div>
           ) : null}
         </div>
