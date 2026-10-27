@@ -13,13 +13,14 @@ import { normalizeCoordinators, type CoordinatorContact } from "../../lib/admin/
  *
  *  - **earlier enquiries' callers** (Inquiry.caller*) — an enquiry recorded before callers were
  *    kept (every caller field empty) counts its guest as the caller, the same reading the desk's
- *    caller card makes;
+ *    caller card makes — but only on a direct booking: on an agency's or a company's, the party rang;
  *  - **an agency's or a company's contact persons** (coordinators[]) — filed on the admin console or
  *    from the desk;
  *  - **an agency's or a company's own numbers** (contactNumbers / contactEmail) — the office line.
  *
  * One row per person: the same number (its last eight digits — a number kept with and without its
- * dialling code is one number) or the same email is one caller. A caller who rang for an agency or
+ * dialling code is one number) or the same email, the same name, ringing for the same party. A
+ * person on a party's contact list comes first. A caller who rang for an agency or
  * a company carries that party, so the desk can fill "Who is asking". Under each, the guests that
  * caller brought before — shown, never picked for the desk (the guest staying is named at Wrap
  * up, which offers them first). Read-only.
@@ -104,7 +105,9 @@ export async function lookupCallers(
     ? await prisma.$queryRawUnsafe<Array<{ id: string }>>(
         `SELECT i.id FROM inquiries i LEFT JOIN guest_profiles g ON g.id = i."guestProfileId"
           WHERE i.id <> $2 AND (lower(coalesce(i."callerEmail", '')) LIKE '%' || $1 || '%'
-             OR (${legacy} AND lower(coalesce(g.email, '')) LIKE '%' || $1 || '%'))
+             OR (${legacy} AND lower(coalesce(g.email, '')) LIKE '%' || $1 || '%')
+             OR (${legacy} AND EXISTS (SELECT 1 FROM entries e WHERE e."inquiryId" = i.id
+                  AND lower(coalesce(e."contactPersonEmail", '')) LIKE '%' || $1 || '%')))
           ORDER BY i."createdAt" DESC LIMIT 300`,
         email,
         exclude,
@@ -112,7 +115,9 @@ export async function lookupCallers(
     : await prisma.$queryRawUnsafe<Array<{ id: string }>>(
         `SELECT i.id FROM inquiries i LEFT JOIN guest_profiles g ON g.id = i."guestProfileId"
           WHERE i.id <> $2 AND (regexp_replace(coalesce(i."callerPhone", ''), '\\D', '', 'g') LIKE '%' || $1 || '%'
-             OR (${legacy} AND regexp_replace(coalesce(g.phone, ''), '\\D', '', 'g') LIKE '%' || $1 || '%'))
+             OR (${legacy} AND regexp_replace(coalesce(g.phone, ''), '\\D', '', 'g') LIKE '%' || $1 || '%')
+             OR (${legacy} AND EXISTS (SELECT 1 FROM entries e WHERE e."inquiryId" = i.id
+                  AND regexp_replace(coalesce(e."contactPersonPhone", ''), '\\D', '', 'g') LIKE '%' || $1 || '%')))
           ORDER BY i."createdAt" DESC LIMIT 300`,
         digits,
         exclude,
@@ -143,17 +148,45 @@ export async function lookupCallers(
           guestProfile: { select: guestSelect },
           travelAgent: { select: { ...partySelect, isActive: true } },
           corporateAccount: { select: { ...partySelect, gstNumber: true, contractRefs: true, isActive: true } },
-          entries: { select: { checkInDate: true, guestProfile: { select: guestSelect } } },
+          entries: {
+            select: {
+              checkInDate: true,
+              contactPersonName: true,
+              contactPersonPhone: true,
+              contactPersonEmail: true,
+              guestProfile: { select: guestSelect },
+            },
+          },
         },
       })
     : [];
 
-  type Acc = CallerMatch & { guestMap: Map<string, CallerGuest> };
+  const matchesQuery = (phone: string | null | undefined, mail: string | null | undefined) =>
+    isEmail ? !!mail && mail.toLowerCase().includes(email!) : digitsOf(phone).includes(digits);
+  type Acc = CallerMatch & { guestMap: Map<string, CallerGuest>; onList: boolean };
   const rows = new Map<string, Acc>();
-  const keyFor = (phone: string | null, mail: string | null) => {
+  const norm = (v: string) => v.toLowerCase().replace(/\s+/g, " ").trim();
+  // The number (or the email) a person is reached on.
+  const baseOf = (phone: string | null | undefined, mail: string | null | undefined) => {
     const pk = phoneKey(phone);
     if (pk) return `p:${pk}`;
     if (mail?.trim()) return `e:${mail.trim().toLowerCase()}`;
+    return null;
+  };
+  // One person (2026-10-27, operator: Bhutan INC's contact's number listed a Gemini guest instead):
+  // the number, the NAME and who they ring for. A number alone lumped together different people
+  // who shared it — the old system's imports carry one number on many guests.
+  const keyOf = (base: string, first: string | null | undefined, last: string | null | undefined, partyId: string | null) =>
+    `${base}|${norm(`${first ?? ""} ${last ?? ""}`)}|${partyId ?? "direct"}`;
+  const partyOf = (inq: (typeof inquiries)[number]): CallerPartyMatch | null => {
+    if (inq.travelAgent?.isActive) {
+      const { isActive: _a, ...p } = inq.travelAgent;
+      return { kind: "TRAVEL_AGENT", ...p, coordinators: normalizeCoordinators(p.coordinators) };
+    }
+    if (inq.corporateAccount?.isActive) {
+      const { isActive: _a, ...p } = inq.corporateAccount;
+      return { kind: "CORPORATE", ...p, coordinators: normalizeCoordinators(p.coordinators) };
+    }
     return null;
   };
 
@@ -166,46 +199,50 @@ export async function lookupCallers(
       inq.callerTitle == null &&
       inq.callerOnWhatsApp == null;
     const g = inq.guestProfile;
-    const phone = isLegacy ? (g?.phone ?? null) : inq.callerPhone;
-    const mail = isLegacy ? (g?.email ?? null) : inq.callerEmail;
-    const key = keyFor(phone, mail);
-    if (!key) continue;
+    // An enquiry from before callers were kept: on a direct booking its guest rang; on an
+    // agency's or a company's, the party's person did — the booking's contact person, which the
+    // intake filled from the party's list.
+    const viaParty = isLegacy && !!(inq.travelAgent || inq.corporateAccount);
+    const cp = viaParty
+      ? (inq.entries.find((e) => matchesQuery(e.contactPersonPhone, e.contactPersonEmail)) ??
+        inq.entries.find((e) => e.contactPersonPhone || e.contactPersonEmail))
+      : undefined;
+    if (viaParty && !cp) continue;
+    const cpName = cp?.contactPersonName ? splitName(cp.contactPersonName) : { firstName: null, lastName: null };
+    const phone = viaParty ? (cp!.contactPersonPhone ?? null) : isLegacy ? (g?.phone ?? null) : inq.callerPhone;
+    const mail = viaParty ? (cp!.contactPersonEmail ?? null) : isLegacy ? (g?.email ?? null) : inq.callerEmail;
+    if (!matchesQuery(phone, mail)) continue;
+    const base = baseOf(phone, mail);
+    if (!base) continue;
+    const first = viaParty ? cpName.firstName : isLegacy ? (g?.firstName ?? null) : inq.callerFirstName;
+    const last = viaParty ? cpName.lastName : isLegacy ? (g?.lastName ?? null) : inq.callerLastName;
+    const party = partyOf(inq);
+    const key = keyOf(base, first, last, party?.id ?? null);
     let row = rows.get(key);
     if (!row) {
       // Inquiries come newest first: the first one seen gives the caller's details.
       row = {
         key,
-        kind: "DIRECT",
+        kind: party?.kind ?? "DIRECT",
         foundAs: "EARLIER_CALLER",
         title: isLegacy ? null : inq.callerTitle,
-        firstName: isLegacy ? (g?.firstName ?? null) : inq.callerFirstName,
-        lastName: isLegacy ? (g?.lastName ?? null) : inq.callerLastName,
+        firstName: first,
+        lastName: last,
         phone,
         email: mail,
         onWhatsApp: isLegacy ? null : inq.callerOnWhatsApp,
-        party: null,
+        party,
         partyContact: null,
         calls: 0,
         lastCalledAt: inq.createdAt.toISOString(),
         lastInquiryId: inq.id,
         guests: [],
         guestMap: new Map(),
+        onList: false,
       };
       rows.set(key, row);
     }
     row.calls += 1;
-    // The party they rang for most recently names what they are.
-    if (!row.party) {
-      if (inq.travelAgent?.isActive) {
-        const { isActive: _a, ...p } = inq.travelAgent;
-        row.party = { kind: "TRAVEL_AGENT", ...p, coordinators: normalizeCoordinators(p.coordinators) };
-        row.kind = "TRAVEL_AGENT";
-      } else if (inq.corporateAccount?.isActive) {
-        const { isActive: _a, ...p } = inq.corporateAccount;
-        row.party = { kind: "CORPORATE", ...p, coordinators: normalizeCoordinators(p.coordinators) };
-        row.kind = "CORPORATE";
-      }
-    }
     // The guests they brought: the enquiry's guest and each stay's.
     const brought: Array<{ g: typeof g; stay: Date | null }> = [{ g, stay: null }];
     for (const e of inq.entries) brought.push({ g: e.guestProfile, stay: e.checkInDate });
@@ -223,8 +260,7 @@ export async function lookupCallers(
     prisma.travelAgent.findMany({ where: { isActive: true }, select: partySelect }),
     prisma.corporateAccount.findMany({ where: { isActive: true }, select: { ...partySelect, gstNumber: true, contractRefs: true } }),
   ]);
-  const matches = (phone: string | null | undefined, mail: string | null | undefined) =>
-    isEmail ? !!mail && mail.toLowerCase().includes(email!) : digitsOf(phone).includes(digits);
+  const matches = matchesQuery;
 
   const parties: CallerPartyMatch[] = [
     ...agencies.map((a) => ({ kind: "TRAVEL_AGENT" as const, ...a, coordinators: normalizeCoordinators(a.coordinators) })),
@@ -233,22 +269,30 @@ export async function lookupCallers(
   for (const party of parties) {
     const found: Array<{ contact: CoordinatorContact; foundAs: CallerMatch["foundAs"] }> = [];
     for (const c of party.coordinators) if (matches(c.phone, c.email)) found.push({ contact: c, foundAs: "PARTY_CONTACT" });
+    // The party's own line, unless a person on its list already answers on that number.
+    const personBases = new Set(found.map((f) => baseOf(f.contact.phone, f.contact.email)));
     for (const n of party.contactNumbers ?? []) {
-      if (!isEmail && matches(n, null)) found.push({ contact: { name: party.displayName, phone: n, email: party.contactEmail }, foundAs: "PARTY_NUMBER" });
+      if (!isEmail && matches(n, null) && !personBases.has(baseOf(n, null))) {
+        found.push({ contact: { name: party.displayName, phone: n, email: party.contactEmail }, foundAs: "PARTY_NUMBER" });
+      }
     }
     if (isEmail && matches(null, party.contactEmail)) {
       found.push({ contact: { name: party.displayName, phone: party.contactNumbers?.[0] ?? null, email: party.contactEmail }, foundAs: "PARTY_NUMBER" });
     }
     for (const f of found) {
-      const key = keyFor(f.contact.phone ?? null, f.contact.email ?? null) ?? `party:${party.id}`;
-      const existing = rows.get(key);
+      const base = baseOf(f.contact.phone, f.contact.email) ?? `party:${party.id}`;
       const person = f.foundAs === "PARTY_CONTACT" ? splitName(f.contact.name) : { firstName: null, lastName: null };
+      const key = keyOf(base, person.firstName, person.lastName, party.id);
+      // The same person who rang for this party before — or rang for it without giving a name —
+      // is one row, now known to be on its list.
+      const unnamed = keyOf(base, null, null, party.id);
+      const existing = rows.get(key) ?? (key !== unnamed ? rows.get(unnamed) : undefined);
       if (existing) {
-        // Someone who rang before AND is on the party's list: the party names what they are.
-        if (existing.foundAs === "EARLIER_CALLER" && (!existing.party || existing.party.id === party.id)) {
-          existing.kind = party.kind;
-          existing.party = party;
-          existing.partyContact = f.contact;
+        existing.onList = existing.onList || f.foundAs === "PARTY_CONTACT";
+        existing.partyContact = existing.partyContact ?? f.contact;
+        if (!existing.firstName && !existing.lastName) {
+          existing.firstName = person.firstName;
+          existing.lastName = person.lastName;
         }
         continue;
       }
@@ -269,6 +313,7 @@ export async function lookupCallers(
         lastInquiryId: null,
         guests: [],
         guestMap: new Map(),
+        onList: f.foundAs === "PARTY_CONTACT",
       });
     }
   }
@@ -290,12 +335,15 @@ export async function lookupCallers(
     .sort((a, b) => {
       const e = exactness(b) - exactness(a);
       if (e) return e;
+      // Someone on an agency's or a company's contact list is a known caller: first.
+      const l = Number(b.onList) - Number(a.onList);
+      if (l) return l;
       const t = (b.lastCalledAt ?? "").localeCompare(a.lastCalledAt ?? "");
       if (t) return t;
       return `${a.firstName ?? ""}${a.lastName ?? ""}`.localeCompare(`${b.firstName ?? ""}${b.lastName ?? ""}`);
     })
     .slice(0, ROW_LIMIT)
-    .map(({ guestMap, ...r }) => ({
+    .map(({ guestMap, onList: _l, ...r }) => ({
       ...r,
       guests: [...guestMap.values()]
         .sort((a, b) => (b.lastStay ?? "").localeCompare(a.lastStay ?? ""))
