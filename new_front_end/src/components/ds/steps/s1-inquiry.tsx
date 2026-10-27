@@ -537,6 +537,15 @@ function TheStay({
   });
   const env = envelope.data ?? null;
   const roomsN = Math.max(1, parseInt(f.rooms || "1", 10) || 1);
+  // The room counts the party allows, as the new inquiry offers them (2026-10-27, operator: "the
+  // rooms no longer give a dropdown like before"). The booking's own count stays on the list even
+  // when it falls outside, so a stored figure is never silently changed.
+  const range = env?.allowedRoomCounts ?? null;
+  const roomOptions = useMemo(() => {
+    const out = range && range.min > 0 && range.max >= range.min ? Array.from({ length: range.max - range.min + 1 }, (_, i) => range.min + i) : [];
+    if (!out.includes(roomsN)) out.push(roomsN);
+    return out.sort((a, b) => a - b);
+  }, [range?.min, range?.max, roomsN]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const bedTypes = useMemo(() => {
     const s = new Set<string>();
@@ -561,6 +570,14 @@ function TheStay({
       .map(([k, v]) => [k, parseInt(v, 10) || 0])
       .filter(([, v]) => (v as number) > 0),
   ) as Record<string, number>;
+  // A party changed here can make the room count impossible — snap it to the first count allowed,
+  // as the new inquiry does. Only after the desk changed the party: a stored count is left alone.
+  const partyEdited = f.adults !== saved.adults || String(childN) !== saved.children || ages.join(",") !== saved.ages.join(",");
+  useEffect(() => {
+    if (!range || !partyEdited) return;
+    if (roomsN < range.min || roomsN > range.max) set({ rooms: String(range.min) });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [range?.min, range?.max, partyEdited]);
   const dirty =
     f.checkIn !== saved.checkIn ||
     f.nights !== saved.nights ||
@@ -590,10 +607,14 @@ function TheStay({
         "The stay is updated — ask the house again for these dates",
       );
       refresh();
+      // Done saved it; the work moves on, as a plain Done does.
+      flowDone("stay");
     },
     onError: (e) => toastRefusal(e, "The stay could not be updated"),
   });
 
+  const { done: flowDone } = useStepFlow();
+  const invalid = !f.checkIn ? "put in the check-in date" : childN > 0 && !agesOk ? "put in every child's age" : null;
   const cp = policy.data;
   const young = cp?.ageBands.youngChildMaxAge ?? 5;
   const childMax = cp?.ageBands.childMaxAge ?? 10;
@@ -606,6 +627,26 @@ function TheStay({
       flow="stay"
       flowAfter="caller"
       title="The stay"
+      // One Done (2026-10-27, operator: "remove Save the stay and merge it with Done, and bring
+      // Undo beside Done"): with a change on the stay, Done saves it and moves on; Undo puts the
+      // fields back. Without a change, the card's own Done simply folds it.
+      doneAction={
+        editable && dirty
+          ? {
+              label: "Done",
+              state: save.isPending ? "working" : invalid ? "inert" : "default",
+              title: invalid ?? undefined,
+              workingLabel: "Saving…",
+              note: <span className="warn-ink">Changed — Done saves it</span>,
+              extra: (
+                <Button kind="quiet" state={save.isPending ? "inert" : "default"} onClick={() => setF(seed())}>
+                  Undo
+                </Button>
+              ),
+              onClick: () => save.mutate(),
+            }
+          : undefined
+      }
       summary={
         <>
           <b>{entry.checkInDate ? fmtRange(entry.checkInDate, entry.checkOutDate) : "no dates"}</b>
@@ -687,13 +728,14 @@ function TheStay({
                 : "A count — the room type is ours to pick."}
             </Help>
           </label>
-          <input
-            className="input"
-            inputMode="numeric"
-            value={f.rooms}
-            readOnly={ro}
-            onChange={(e) => set({ rooms: e.target.value.replace(/\D/g, "") })}
-          />
+          <select className="input" value={String(roomsN)} disabled={ro} onChange={(e) => set({ rooms: e.target.value })}>
+            {roomOptions.map((n) => (
+              <option key={n} value={String(n)}>
+                {plural(n, "room")}
+                {range && n < range.min ? " · too few" : range && n > range.max ? " · more than the guests" : ""}
+              </option>
+            ))}
+          </select>
           {env && (env.exceedsHotelCapacity || roomsN < env.allowedRoomCounts.min) ? (
             <span className="hint warn-ink">
               {env.exceedsHotelCapacity
@@ -802,34 +844,6 @@ function TheStay({
           <AddReturnStay entry={entry} />
         </Live>
       </div>
-      {editable && dirty ? (
-        <div className="row-acts" style={{ marginTop: 12 }}>
-          <Button
-            state={
-              save.isPending
-                ? "working"
-                : !f.checkIn || (childN > 0 && !agesOk)
-                  ? "inert"
-                  : "default"
-            }
-            title={
-              !f.checkIn
-                ? "put in the check-in date"
-                : childN > 0 && !agesOk
-                  ? "put in every child's age"
-                  : undefined
-            }
-            workingLabel="Saving…"
-            onClick={() => save.mutate()}
-          >
-            Save the stay
-          </Button>
-          <Button kind="quiet" onClick={() => setF(seed())}>
-            Undo
-          </Button>
-          <Help label="About saving the stay">The house is asked again after a change.</Help>
-        </div>
-      ) : null}
     </StepCard>
   );
 }
