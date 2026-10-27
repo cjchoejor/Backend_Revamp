@@ -217,7 +217,11 @@ export async function lookupCallers(
     const first = viaParty ? cpName.firstName : isLegacy ? (g?.firstName ?? null) : inq.callerFirstName;
     const last = viaParty ? cpName.lastName : isLegacy ? (g?.lastName ?? null) : inq.callerLastName;
     const party = partyOf(inq);
-    const key = keyOf(base, first, last, party?.id ?? null);
+    // A caller recorded as the agency or company itself (2026-10-27, operator: "the caller is the
+    // travel agent, not the contact person") is the party's line, not a person: keyed with no name,
+    // so it is one row with the party's own number.
+    const isPartyItself = !!party && norm(`${first ?? ""} ${last ?? ""}`) === norm(party.displayName);
+    const key = keyOf(base, isPartyItself ? null : first, isPartyItself ? null : last, party?.id ?? null);
     let row = rows.get(key);
     if (!row) {
       // Inquiries come newest first: the first one seen gives the caller's details.
