@@ -21,7 +21,7 @@
  */
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button, Chip, Icon } from "@/design-system";
@@ -44,7 +44,8 @@ import { bookingHref } from "@/components/ds/ui";
 import { fmtRange, money, plural } from "@/lib/ds/format";
 import { BOUNDARY_STEPS, PHASES, STEP_NAMES, STEP_NEEDS } from "@/lib/ds/steps";
 import type { EntryDetail } from "@/types/api";
-import { Choice, FlowChips, StepCanvas, StepCard, StepFlow, anchorFor, atLeast, numberFlow, revealCard, toastRefusal } from "./kit";
+import { Choice, FlowChips, StepCanvas, StepCard, StepFlow, anchorFor, atLeast, numberFlow, revealCard, toastRefusal, useFlowStanding } from "./kit";
+import { useCompactOnScroll, useMeasuredVar } from "@/hooks/use-stage-head";
 import { ApiError } from "@/lib/api/client";
 import {
   BED_ORDER,
@@ -105,21 +106,11 @@ export function NewInquiryCanvas() {
   const { session } = useSession();
   // The hotel's day, from the server — never the machine's. Null until it answers.
   const today = useHotelDay()?.today ?? null;
-  // The header's height, measured onto the screen as --ws-head-h so the booking file sticks under it.
-  const headObserver = useRef<ResizeObserver | null>(null);
-  const headRef = useCallback((head: HTMLDivElement | null) => {
-    headObserver.current?.disconnect();
-    headObserver.current = null;
-    if (!head) return;
-    const ws = head.closest<HTMLElement>(".ws");
-    if (!ws) return;
-    const apply = () => ws.style.setProperty("--ws-head-h", `${head.offsetHeight}px`);
-    apply();
-    if (typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(apply);
-    ro.observe(head);
-    headObserver.current = ro;
-  }, []);
+  // The head and the bar, measured onto the screen so the booking file between them takes every
+  // pixel left; the head goes compact once the page is scrolled.
+  const headRef = useMeasuredVar("--ws-head-h");
+  const barRef = useMeasuredVar("--ws-bar-h");
+  const compactHead = useCompactOnScroll();
 
   /* ---------------------------------------------------------------- who is asking */
   // No default: the operator says how the booking reached us (the old form made it the first pick).
@@ -726,13 +717,12 @@ export function NewInquiryCanvas() {
   // refreshed and it turned back to the old UI" — this screen still had the side panel): the clocks
   // and the facts in the header, the journey and the sections as lines under it, the sections on the
   // left, the booking file on the right, and where the step stands in the bar at the foot.
-  const sectionsLeft = flowItems.filter((i) => !i.met).length;
   const callerName = `${callerTitle ? `${callerTitle} ` : ""}${typedGuestName}`.trim();
   const useTypeWord = useType ? (USE_TYPES.find(([k]) => k === useType)?.[1] ?? useType) : null;
   return (
-    <StepFlow items={flowItems} on fold="on-move">
+    <StepFlow items={flowItems} on fold="on-move" confirm>
     <div className="ws ws-top theme-blue">
-      <div className="ws-topstick" ref={headRef}>
+      <div className={`ws-topstick${compactHead ? " compact" : ""}`} ref={headRef}>
         <div className="ws-head">
           <div>
             <Link href="/bookings" className="backlink">
@@ -1110,7 +1100,8 @@ export function NewInquiryCanvas() {
                 <StepCard
                   title="The stay"
                   flow="stay"
-                  flowAfter="caller"
+                  flowAfter="asking"
+                  flowAfterOnly
                   doneAction={{
                     label: primaryLabel,
                     onClick: () => run.mutate(),
@@ -1460,36 +1451,7 @@ export function NewInquiryCanvas() {
       ) : null}
 
           {/* What the start checks, in one place — each section, then what the system does on save. */}
-          <div className="card before-move">
-            <h4>Before you move on</h4>
-            <table className="compact">
-              <tbody>
-                {Object.entries(INTAKE_SECTIONS).map(([card, title]) => {
-                  const own = flowItems.filter((i) => i.card === card);
-                  if (!own.length) return null;
-                  const met = own.every((i) => i.met);
-                  return (
-                    <tr key={card} className="pick" onClick={() => goToCard(card)}>
-                      <td className={met ? "ok-ink" : "warn-ink"}>{met ? <Icon name="check" /> : "●"}</td>
-                      <td>{title}</td>
-                      <td className="meta">{met ? "done" : own.filter((i) => !i.met).map((i) => i.label).join(" · ")}</td>
-                    </tr>
-                  );
-                })}
-                {flowAlso.map((p) => (
-                  <tr key={p.label}>
-                    <td className={p.met ? "ok-ink" : "warn-ink"}>{p.met ? <Icon name="check" /> : "→"}</td>
-                    <td colSpan={2} className="meta">
-                      {p.label}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <div className={`before-move-foot ${sectionsLeft ? "wait" : "ready"}`}>
-              {sectionsLeft ? `${plural(sectionsLeft, "thing")} still to do` : `Everything is here · press ${primaryLabel} on The stay`}
-            </div>
-          </div>
+          <IntakeBeforeMove items={flowItems} also={flowAlso} onGo={goToCard} startLabel={primaryLabel} />
         </div>
 
         {/* The booking file: nothing is kept yet, so it shows what has been put in so far. */}
@@ -1560,32 +1522,108 @@ export function NewInquiryCanvas() {
         </aside>
       </div>
 
-      <div className="gatebar top">
+      <div className="gatebar top" ref={barRef}>
         {/* The bar says what is next and takes you to it; the start is The stay's Done. */}
         <div className="gate-status">
-        <div className="gate">
-          {nextUp ? (
-            <button type="button" className="item unmet" onClick={() => goToCard(nextUp.card)}>
-              <Icon name="circle" />
-              <span>
-                Next · <b>{nextUp.n}</b> {nextUp.label}
-              </span>
-            </button>
-          ) : flowAlso.some((p) => !p.met) ? (
-            <div className="item unmet">
-              <Icon name="circle" />
-              <span>{flowAlso.find((p) => !p.met)?.label}</span>
-            </div>
-          ) : (
-            <button type="button" className="item met" onClick={() => goToCard("stay")}>
-              <Icon name="check" />
-              <span>everything the inquiry needs is here — start it from The stay</span>
-            </button>
-          )}
-        </div>
+          <IntakeGateLine items={flowItems} also={flowAlso} onGo={goToCard} startLabel={primaryLabel} />
         </div>
       </div>
     </div>
     </StepFlow>
+  );
+}
+
+type IntakeFlowProps = {
+  items: ReturnType<typeof numberFlow>;
+  also: ReadonlyArray<{ label: string; met: boolean }>;
+  onGo: (card?: string) => void;
+  startLabel: string;
+};
+
+/**
+ * "Before you move on" on the new inquiry: each section, done only once its Done is pressed
+ * (2026-10-27, operator: the list filled itself as fields were typed), then what the system does
+ * on save. The stay's Done is the start itself.
+ */
+function IntakeBeforeMove({ items, also, onGo, startLabel }: IntakeFlowProps) {
+  const standing = useFlowStanding();
+  const cards = Object.keys(INTAKE_SECTIONS).filter((c) => items.some((i) => i.card === c));
+  const toFill = cards.filter((c) => items.some((i) => i.card === c && !i.met));
+  const toPress = cards.find((c) => c !== "stay" && standing.awaitsDone(c));
+  const ready = toFill.length === 0 && !toPress;
+  return (
+    <div className="card before-move">
+      <h4>Before you move on</h4>
+      <table className="compact">
+        <tbody>
+          {cards.map((card) => {
+            const own = items.filter((i) => i.card === card);
+            const done = standing.isDone(card);
+            const awaits = standing.awaitsDone(card);
+            return (
+              <tr key={card} className="pick" onClick={() => onGo(card)}>
+                <td className={done ? "ok-ink" : "warn-ink"}>{done ? <Icon name="check" /> : "●"}</td>
+                <td>{INTAKE_SECTIONS[card]}</td>
+                <td className={awaits ? "warn-ink" : "meta"}>
+                  {done ? "done" : awaits ? (card === "stay" ? `all in — press ${startLabel}` : "all in — press Done") : own.filter((i) => !i.met).map((i) => i.label).join(" · ")}
+                </td>
+              </tr>
+            );
+          })}
+          {also.map((p) => (
+            <tr key={p.label}>
+              <td className={p.met ? "ok-ink" : "warn-ink"}>{p.met ? <Icon name="check" /> : "→"}</td>
+              <td colSpan={2} className="meta">
+                {p.label}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className={`before-move-foot ${ready ? "ready" : "wait"}`}>
+        {toFill.length
+          ? `${plural(toFill.length, "section")} still to fill`
+          : toPress
+            ? `Press Done on ${INTAKE_SECTIONS[toPress]}`
+            : `Everything is in · press ${startLabel} on The stay`}
+      </div>
+    </div>
+  );
+}
+
+/** The bar's line on the new inquiry: the next thing to fill, or the Done still to press. */
+function IntakeGateLine({ items, also, onGo, startLabel }: IntakeFlowProps) {
+  const standing = useFlowStanding();
+  const cards = Object.keys(INTAKE_SECTIONS).filter((c) => items.some((i) => i.card === c));
+  const first = cards.find((c) => !standing.isDone(c));
+  const unmet = first ? items.find((i) => i.card === first && !i.met) : undefined;
+  return (
+    <div className="gate">
+      {unmet ? (
+        <button type="button" className="item unmet" onClick={() => onGo(unmet.card)}>
+          <Icon name="circle" />
+          <span>
+            Next · <b>{unmet.n}</b> {unmet.label}
+          </span>
+        </button>
+      ) : first && first !== "stay" ? (
+        <button type="button" className="item unmet" onClick={() => onGo(first)}>
+          <Icon name="circle" />
+          <span>
+            Next · press Done on <b>{items.find((i) => i.card === first)?.n}</b> {INTAKE_SECTIONS[first]}
+          </span>
+        </button>
+      ) : also.some((p) => !p.met) ? (
+        <div className="item unmet">
+          <Icon name="circle" />
+          <span>{also.find((p) => !p.met)?.label}</span>
+        </div>
+      ) : (
+        <button type="button" className="item met" onClick={() => onGo("stay")}>
+          <Icon name="check" />
+          <span>everything the inquiry needs is in — press {startLabel} on The stay</span>
+        </button>
+      )}
+    </div>
   );
 }

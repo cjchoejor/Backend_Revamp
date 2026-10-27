@@ -91,6 +91,7 @@ import { BOOKING_TABS, ChargesView, DocumentsView, NotesView, RequestsView, type
 import { listBookingNotes, listGuestRequests } from "@/lib/api/booking-notes";
 import { useStayPrice } from "@/lib/ds/stay-price";
 import { HeaderClock, HeaderDwell, SideTimer, StepDwell } from "@/components/ds/workspace/side-timer";
+import { useCompactOnScroll, useMeasuredVar } from "@/hooks/use-stage-head";
 import { FoldingSide, useSideFolded } from "@/components/ds/workspace/side-panel";
 import { S1Inquiry } from "@/components/ds/steps/s1-inquiry";
 import { InquirySummaryDialog } from "@/components/ds/steps/s1-summary";
@@ -325,6 +326,9 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     ro.observe(head);
     headObserver.current = ro;
   }, []);
+  // The Stage 1 layout's bar, measured like the head, and its compact head once scrolled (2026-10-27).
+  const barRef = useMeasuredVar("--ws-bar-h");
+  const compactHead = useCompactOnScroll();
   const [railSlot, setRailSlot] = useState<HTMLElement | null>(null);
   // Where the step's "other ways" render — the tab beside This step (2026-09-25).
   const [otherSlot, setOtherSlot] = useState<HTMLElement | null>(null);
@@ -1411,7 +1415,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
           <div className="ws ws-top theme-blue">
             {/* The header, the journey and the step's sections stay put under the topbar; their
                 height is measured onto --ws-head-h so the file on the right sticks below them. */}
-            <div className="ws-topstick" ref={headRef}>
+            <div className={`ws-topstick${compactHead ? " compact" : ""}`} ref={headRef}>
               <div className={`ws-head${endedEarly ? " ended" : ""}`}>
                 {headInner}
                 <div className="hrow">
@@ -1600,7 +1604,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
             </div>
 
             {/* The fixed bar: what else is possible here on the left, the move on the right. */}
-            <div className="gatebar top">
+            <div className="gatebar top" ref={barRef}>
               <div className="also-panel-slot" ref={setAlsoPanel} />
               <div className="also">
                 <span className="also-h">Also possible here</span>

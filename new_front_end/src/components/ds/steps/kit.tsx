@@ -113,6 +113,9 @@ type FlowCtxValue = {
   items: FlowItem[];
   on: boolean;
   fold: FlowFold | null;
+  /** A section counts as done only once its Done is pressed — see `StepFlow`'s `confirm`. */
+  confirm: boolean;
+  confirmed: ReadonlySet<string>;
   /** The section being worked: the one last clicked or typed in, else the first not done. */
   current: string | null;
   active: string | null;
@@ -130,6 +133,8 @@ const FlowCtx = createContext<FlowCtxValue>({
   items: [],
   on: false,
   fold: null,
+  confirm: false,
+  confirmed: new Set(),
   current: null,
   active: null,
   visited: new Set(),
@@ -143,6 +148,14 @@ function flowCards(items: FlowItem[]): string[] {
   const out: string[] = [];
   for (const i of items) if (i.card && !out.includes(i.card)) out.push(i.card);
   return out;
+}
+
+/**
+ * Whether one item counts as done: its value is in, and — when the flow asks for it — the Done of
+ * the section it belongs to has been pressed.
+ */
+function itemDone(i: FlowItem, confirm: boolean, confirmed: ReadonlySet<string>) {
+  return i.met && (!confirm || !i.card || confirmed.has(i.card));
 }
 
 /**
@@ -170,15 +183,27 @@ export function StepFlow({
   items,
   on,
   fold = null,
+  confirm = false,
   children,
 }: {
   items: FlowItem[];
   on: boolean;
   /** Whether finished sections fold, and when — see `FlowFold`. Off when omitted. */
   fold?: FlowFold | null;
+  /**
+   * A section counts as done only once the desk presses its Done, not as soon as its fields are
+   * valid (2026-10-27, operator, on the new inquiry: "as soon as I click Yes for On WhatsApp it
+   * opens Who is asking and The stay — it should wait for the user to click Done, and because of
+   * that the to-do list is getting filled on its own"). The sections after it wait for that Done,
+   * the step's line and the card's number tick only then, and a section complete only by its
+   * defaults (the stay opens on today, one night, one adult) is not counted as done.
+   */
+  confirm?: boolean;
   children: ReactNode;
 }) {
   const [active, setActive] = useState<string | null>(null);
+  // The sections whose Done the desk has pressed (only read when `confirm` is on).
+  const [confirmed, setConfirmed] = useState<ReadonlySet<string>>(() => new Set());
   // The sections the operator has worked in. In "on-move" mode only these fold: a section that is
   // complete only because of its defaults (the stay opens on today, one night, one adult) is not
   // one the desk has finished, and folding it would hide it before it was ever read.
@@ -237,7 +262,7 @@ export function StepFlow({
   }, [active]);
 
   const cards = flowCards(items);
-  const firstOpen = cards.find((c) => items.some((i) => i.card === c && !i.met)) ?? null;
+  const firstOpen = cards.find((c) => items.some((i) => i.card === c && !itemDone(i, confirm, confirmed))) ?? null;
   const current = on ? (active && cards.includes(active) ? active : firstOpen) : null;
 
   const open = useCallback((card: string) => {
@@ -248,6 +273,8 @@ export function StepFlow({
   const done = useCallback(
     (card: string, opts?: { reveal?: boolean }) => {
       if (pressed.current) skipPress.current = true;
+      const nowConfirmed = new Set(confirmed).add(card);
+      setConfirmed(nowConfirmed);
       setVisited((prev) => new Set(prev).add(card));
       setOpened((prev) => {
         const next = new Set(prev);
@@ -256,7 +283,7 @@ export function StepFlow({
       });
       // On to the next section still to do; if every one is done, simply leave this one folded.
       const after = cards.slice(cards.indexOf(card) + 1);
-      const target = after.find((c) => items.some((i) => i.card === c && !i.met)) ?? after[0] ?? null;
+      const target = after.find((c) => items.some((i) => i.card === c && !itemDone(i, confirm, nowConfirmed))) ?? after[0] ?? null;
       setActive(target);
       if (target && opts?.reveal !== false) {
         window.requestAnimationFrame(() => {
@@ -268,14 +295,17 @@ export function StepFlow({
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [cards.join("|"), items.map((i) => `${i.card}${i.met ? 1 : 0}`).join("|")],
+    [cards.join("|"), items.map((i) => `${i.card}${i.met ? 1 : 0}`).join("|"), confirm, [...confirmed].join(",")],
   );
 
   // The list is rebuilt on every render of the workspace; hold one identity per unchanged list so
   // a card only re-renders when its own number or standing moves.
-  const key = `${on}|${fold}|${current}|${active}|${[...opened].join(",")}|${[...visited].join(",")}|${items.map((i) => `${i.n}${i.met ? "1" : "0"}${i.card}`).join("~")}`;
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const value = useMemo<FlowCtxValue>(() => ({ items, on, fold: on ? fold : null, current, active, visited, opened, open, done }), [key, open, done]);
+  const key = `${on}|${fold}|${confirm}|${[...confirmed].join(",")}|${current}|${active}|${[...opened].join(",")}|${[...visited].join(",")}|${items.map((i) => `${i.n}${i.met ? "1" : "0"}${i.card}`).join("~")}`;
+  const value = useMemo<FlowCtxValue>(
+    () => ({ items, on, fold: on ? fold : null, confirm, confirmed, current, active, visited, opened, open, done }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [key, open, done],
+  );
   return (
     <FlowCtx.Provider value={value}>
       <div className="flow-scope" onFocusCapture={onFocus} onPointerDownCapture={onPointerDown} onPointerUpCapture={onPointerUp}>
@@ -300,8 +330,8 @@ export function useFlowCard(
   after?: string,
   /** Wait on the named card's own items only, not on everything numbered before it. */
   afterOnly?: boolean,
-): { n?: number; met?: boolean; waitsFor?: FlowItem } {
-  const { items, on } = useContext(FlowCtx);
+): { n?: number; met?: boolean; done?: boolean; waitsFor?: FlowItem } {
+  const { items, on, confirm, confirmed } = useContext(FlowCtx);
   if (!on) return {};
   // A card may hold several items (Check-in's room card: assigned & ready, then the key). It
   // carries the number of the first still open, and ticks only once every one of them is done —
@@ -315,9 +345,12 @@ export function useFlowCard(
     items.forEach((x, k) => {
       if (x.card === after) last = k;
     });
-    if (last >= 0) waitsFor = items.slice(0, last + 1).find((x) => !x.met && (!afterOnly || x.card === after));
+    if (last >= 0) waitsFor = items.slice(0, last + 1).find((x) => !itemDone(x, confirm, confirmed) && (!afterOnly || x.card === after));
   }
-  return { n: mine?.n, met: mine ? allMet : undefined, waitsFor };
+  // `met`: everything the section asks for is in. `done`: and, where the flow asks for it, its
+  // Done has been pressed — what ticks the card and lets the next one open.
+  const done = allMet && (!confirm || (!!card && confirmed.has(card)));
+  return { n: mine?.n, met: mine ? allMet : undefined, done: mine ? done : undefined, waitsFor };
 }
 
 /**
@@ -331,7 +364,7 @@ export function FlowChips({ names, onGo }: { names: Record<string, string>; onGo
   if (!ctx.on) return null;
   const cards = flowCards(ctx.items);
   if (!cards.length) return null;
-  const doneOf = (c: string) => ctx.items.filter((i) => i.card === c).every((i) => i.met);
+  const doneOf = (c: string) => ctx.items.filter((i) => i.card === c).every((i) => itemDone(i, ctx.confirm, ctx.confirmed));
   const doneN = cards.filter(doneOf).length;
   return (
     <div className="flow-chips" aria-label="This step's sections">
@@ -372,6 +405,24 @@ export function FlowChips({ names, onGo }: { names: Record<string, string>; onGo
 export function useStepFlow() {
   const { on, done } = useContext(FlowCtx);
   return { on, done };
+}
+
+/**
+ * Where a section stands, for a list that reports on the sections (the new inquiry's "Before you
+ * move on"): done — in and, where asked, its Done pressed — or in but still waiting for its Done.
+ */
+export function useFlowStanding() {
+  const { items, confirm, confirmed } = useContext(FlowCtx);
+  return {
+    isDone: (card: string) => {
+      const own = items.filter((i) => i.card === card);
+      return own.length > 0 && own.every((i) => itemDone(i, confirm, confirmed));
+    },
+    awaitsDone: (card: string) => {
+      const own = items.filter((i) => i.card === card);
+      return confirm && own.length > 0 && own.every((i) => i.met) && !confirmed.has(card);
+    },
+  };
 }
 
 export function anchorFor(card: string) {
@@ -494,7 +545,7 @@ export function StepCard({
    */
   doneAction?: { label: string; onClick: () => void; state?: "default" | "inert" | "working"; title?: string; workingLabel?: string };
 }) {
-  const { n, met, waitsFor } = useFlowCard(flow, flowAfter, flowAfterOnly);
+  const { n, met, done, waitsFor } = useFlowCard(flow, flowAfter, flowAfterOnly);
   const ctx = useContext(FlowCtx);
   // In a quiet screen the grey line under the title is an explanation, so it moves behind a "?"
   // beside the title (2026-10-12). A card with no title keeps it where it is.
@@ -509,7 +560,7 @@ export function StepCard({
   const folded =
     !!flow &&
     !!summary &&
-    !!met &&
+    !!done &&
     !waiting &&
     !isOpened &&
     (ctx.fold === "done"
@@ -538,7 +589,7 @@ export function StepCard({
         sealed ? "sealed" : "",
         quiet ? "quiet" : "",
         n ? "flowed" : "",
-        met ? "flow-done" : "",
+        done ? "flow-done" : "",
         waiting ? "flow-waiting" : "",
         isCurrent ? "flow-current" : "",
         folded ? "flow-folded" : "",
@@ -552,7 +603,7 @@ export function StepCard({
       {title ? (
         <div className="card-top">
           <h4>
-            {n ? <span className={`cardno${met ? " done" : ""}`}>{met ? <Icon name="check" /> : n}</span> : null}
+            {n ? <span className={`cardno${done ? " done" : ""}`}>{done ? <Icon name="check" /> : n}</span> : null}
             {icon ? <Icon name={icon} /> : null}
             {title}
             {metaInHelp ? <Help label="About this section">{meta}</Help> : null}
@@ -576,7 +627,16 @@ export function StepCard({
           ) : (
             <>
               <span className="meta">
-                after <b>{waitsFor!.n}</b> · {waitsFor!.label}
+                {waitsFor!.met ? (
+                  // Its fields are in; what it waits for is the Done of that section.
+                  <>
+                    waits for Done on section <b>{waitsFor!.n}</b>
+                  </>
+                ) : (
+                  <>
+                    after <b>{waitsFor!.n}</b> · {waitsFor!.label}
+                  </>
+                )}
               </span>
               <Button kind="quiet" compact onClick={() => setAnyway(true)}>
                 Show it anyway

@@ -1345,7 +1345,7 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .ws-top .ws-split > .canvas:not(.desk-root *) { padding: 0; max-width: none; }
 .ds .ws-top .todo-h, .ds .ws-top .file .ftitle, .ds .ws-top .before-move h4 { font-size: var(--t-meta); font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); }
 .ds .ws-top .todo-h { margin-bottom: calc(-1 * var(--s3)); }
-.ds .ws-top .file { position: sticky; top: calc(53px + var(--ws-head-h, 0px) + var(--s2)); max-height: calc(100vh - 53px - var(--ws-head-h, 0px) - 96px); display: flex; flex-direction: column; min-width: 0; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-card); }
+.ds .ws-top .file { position: sticky; top: calc(53px + var(--ws-head-h, 0px) + var(--s2)); max-height: calc(100vh - 53px - var(--ws-head-h, 0px) - var(--ws-bar-h, 56px) - 2 * var(--s2)); display: flex; flex-direction: column; min-width: 0; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-card); }
 .ds .ws-top .file .ftitle { padding: var(--s3) var(--s4) 0; }
 .ds .ws-top .file .ftabs { display: flex; flex-wrap: wrap; gap: 2px var(--s1); padding: var(--s2) var(--s3) 0; border-bottom: 1px solid var(--line); }
 .ds .ws-top .file .ftab { padding: 6px 10px; border: 0; border-bottom: 3px solid transparent; background: none; font: inherit; font-size: var(--t-sm); font-weight: 500; color: var(--ink-2); cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
@@ -1466,3 +1466,22 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .ws-top .ws-head.ended:not(.desk-root *) { border-color: var(--danger-line); box-shadow: inset 5px 0 0 var(--danger); }
 .ds .ws-top .journey .jst.stopped { border-color: var(--danger-line); background: var(--danger-soft); color: var(--danger); font-weight: 600; }
 .ds .ws-top .journey .jst.stopped .n { background: var(--danger); border-color: var(--danger); color: #fff; }
+
+/* ===== The head goes compact once the page is scrolled (2026-10-27, operator: "why does the booking
+   file have so little space"), as the template's does: the back link, the facts line, the total's
+   note and the journey's phase names go; the rest tightens. With the bar's real height measured
+   (--ws-bar-h) the file runs from under the head to just above the bar. ===== */
+.ds .ws-top .ws-topstick.compact:not(.desk-root *) { padding: var(--s2) var(--s5) var(--s1); gap: var(--s1); }
+.ds .ws-top .ws-topstick.compact .ws-head:not(.desk-root *) { padding: 6px var(--s4); row-gap: 6px; }
+.ds .ws-top .ws-topstick.compact .ws-head .backlink,
+.ds .ws-top .ws-topstick.compact .ws-head .facts:not(.desk-root *),
+.ds .ws-top .ws-topstick.compact .ws-head .total .kind:not(.desk-root *),
+.ds .ws-top .ws-topstick.compact .journey .jgrp { display: none; }
+.ds .ws-top .ws-topstick.compact .ws-head .who h2 { font-size: var(--t-h3); }
+.ds .ws-top .ws-topstick.compact .ws-head .total .figure { font-size: var(--t-lead); }
+.ds .ws-top .ws-topstick.compact .ws-head .hrow { padding-top: 4px; }
+.ds .ws-top .ws-topstick.compact .journey .jst { padding: 2px 10px 2px 3px; font-size: var(--t-meta); }
+.ds .ws-top .ws-topstick.compact .journey .jst .n { width: 18px; height: 18px; font-size: 11px; }
+.ds .ws-top .ws-topstick.compact .stagebar:not(.desk-root *) { padding: 4px var(--s4); }
+.ds .ws-top .ws-topstick.compact .stagebar h3 { font-size: var(--t-lead); }
+.ds .ws-top .ws-topstick.compact .flow-chip { padding: 1px 10px 1px 3px; }
