@@ -128,6 +128,8 @@ type FlowCtxValue = {
    * view while Wrap up below is where the work has moved.
    */
   done: (card: string, opts?: { reveal?: boolean; next?: string }) => void;
+  /** Sections made from another one — see `StepFlow`'s `derived`. */
+  derived: Readonly<Record<string, string>>;
 };
 const FlowCtx = createContext<FlowCtxValue>({
   items: [],
@@ -141,6 +143,7 @@ const FlowCtx = createContext<FlowCtxValue>({
   opened: new Set(),
   open: () => {},
   done: () => {},
+  derived: {},
 });
 
 /** The cards of a flow in page order, each once. */
@@ -156,6 +159,71 @@ function flowCards(items: FlowItem[]): string[] {
  */
 function itemDone(i: FlowItem, confirm: boolean, confirmed: ReadonlySet<string>) {
   return i.met && (!confirm || !i.card || confirmed.has(i.card));
+}
+
+/**
+ * Whether a section is done (2026-10-27, operator: "when I make changes [to the table], should the
+ * quotation remove its tick? The same happens for others"): every item of its own is done, AND the
+ * section it is made from — `derived`, e.g. the quotation from the table, the rooms from the stay —
+ * is done too. A section made from one that has changed and is not saved does not read as done.
+ * One reading for the chips, the cards' ticks and "Before you move on".
+ */
+export function flowSectionDone(
+  items: ReadonlyArray<{ card?: string; met: boolean }>,
+  card: string,
+  derived: Readonly<Record<string, string>> = {},
+  isDone: (i: { card?: string; met: boolean }) => boolean = (i) => i.met,
+  seen: Set<string> = new Set(),
+): boolean {
+  const own = items.filter((i) => i.card === card);
+  if (!own.length || !own.every(isDone)) return false;
+  const from = derived[card];
+  if (!from || seen.has(from) || !items.some((i) => i.card === from)) return true;
+  seen.add(card);
+  return flowSectionDone(items, from, derived, isDone, seen);
+}
+
+/** The section a derived one is waiting on, when that section is not done. */
+export function flowSectionWaitsOn(
+  items: ReadonlyArray<{ card?: string; met: boolean }>,
+  card: string,
+  derived: Readonly<Record<string, string>> = {},
+  isDone: (i: { card?: string; met: boolean }) => boolean = (i) => i.met,
+): string | null {
+  const from = derived[card];
+  if (!from || !items.some((i) => i.card === from)) return null;
+  return flowSectionDone(items, from, derived, isDone) ? null : from;
+}
+
+/**
+ * Changes on screen not saved yet, section by section (2026-10-27). A section reports it with
+ * `useFlowUnsaved`; the workspace counts such a section as not done (when what is saved would
+ * otherwise read as done) and holds the move until it is saved — the Negotiation table's rule,
+ * now every section's.
+ */
+export type UnsavedSection = { card: string; label: string };
+const UnsavedCtx = createContext<((card: string, label: string | null) => void) | null>(null);
+
+export function UnsavedReport({ onChange, children }: { onChange: (items: UnsavedSection[]) => void; children: ReactNode }) {
+  const map = useRef(new Map<string, string>());
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+  const report = useCallback((card: string, label: string | null) => {
+    const had = map.current.get(card) ?? null;
+    if (had === label) return;
+    if (label) map.current.set(card, label);
+    else map.current.delete(card);
+    onChangeRef.current([...map.current].map(([c, l]) => ({ card: c, label: l })));
+  }, []);
+  return <UnsavedCtx.Provider value={report}>{children}</UnsavedCtx.Provider>;
+}
+
+export function useFlowUnsaved(card: string, unsaved: boolean, label: string) {
+  const report = useContext(UnsavedCtx);
+  useEffect(() => {
+    report?.(card, unsaved ? label : null);
+  }, [report, card, unsaved, label]);
+  useEffect(() => () => report?.(card, null), [report, card]);
 }
 
 /**
@@ -179,15 +247,23 @@ export function numberFlow(
     });
 }
 
+const NO_DERIVED: Readonly<Record<string, string>> = {};
+
 export function StepFlow({
   items,
   on,
   fold = null,
   confirm = false,
+  derived = NO_DERIVED,
   children,
 }: {
   items: FlowItem[];
   on: boolean;
+  /**
+   * Sections made from another one: `{ quotation: "table" }` — the quotation is the table priced, so
+   * it does not read as done while the table has changes not saved (2026-10-27).
+   */
+  derived?: Readonly<Record<string, string>>;
   /** Whether finished sections fold, and when — see `FlowFold`. Off when omitted. */
   fold?: FlowFold | null;
   /**
@@ -307,9 +383,9 @@ export function StepFlow({
 
   // The list is rebuilt on every render of the workspace; hold one identity per unchanged list so
   // a card only re-renders when its own number or standing moves.
-  const key = `${on}|${fold}|${confirm}|${[...confirmed].join(",")}|${current}|${active}|${[...opened].join(",")}|${[...visited].join(",")}|${items.map((i) => `${i.n}${i.met ? "1" : "0"}${i.card}`).join("~")}`;
+  const key = `${on}|${fold}|${confirm}|${Object.entries(derived).join(",")}|${[...confirmed].join(",")}|${current}|${active}|${[...opened].join(",")}|${[...visited].join(",")}|${items.map((i) => `${i.n}${i.met ? "1" : "0"}${i.card}`).join("~")}`;
   const value = useMemo<FlowCtxValue>(
-    () => ({ items, on, fold: on ? fold : null, confirm, confirmed, current, active, visited, opened, open, done }),
+    () => ({ items, on, fold: on ? fold : null, confirm, confirmed, current, active, visited, opened, open, done, derived }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [key, open, done],
   );
@@ -337,8 +413,8 @@ export function useFlowCard(
   after?: string,
   /** Wait on the named card's own items only, not on everything numbered before it. */
   afterOnly?: boolean,
-): { n?: number; met?: boolean; done?: boolean; waitsFor?: FlowItem } {
-  const { items, on, confirm, confirmed } = useContext(FlowCtx);
+): { n?: number; met?: boolean; done?: boolean; ticked?: boolean; waitsOn?: string | null; waitsFor?: FlowItem } {
+  const { items, on, confirm, confirmed, derived } = useContext(FlowCtx);
   if (!on) return {};
   // A card may hold several items (Check-in's room card: assigned & ready, then the key). It
   // carries the number of the first still open, and ticks only once every one of them is done —
@@ -357,7 +433,12 @@ export function useFlowCard(
   // `met`: everything the section asks for is in. `done`: and, where the flow asks for it, its
   // Done has been pressed — what ticks the card and lets the next one open.
   const done = allMet && (!confirm || (!!card && confirmed.has(card)));
-  return { n: mine?.n, met: mine ? allMet : undefined, done: mine ? done : undefined, waitsFor };
+  // `ticked`: done, and the section it is made from done too — what the card's tick shows. Folding
+  // keeps reading `done`, so a folded section does not open by itself while one above it is edited.
+  const isDone = (x: { card?: string; met: boolean }) => itemDone(x as FlowItem, confirm, confirmed);
+  const waitsOn = card ? flowSectionWaitsOn(items, card, derived, isDone) : null;
+  const ticked = done && !waitsOn;
+  return { n: mine?.n, met: mine ? allMet : undefined, done: mine ? done : undefined, ticked: mine ? ticked : undefined, waitsOn, waitsFor };
 }
 
 /**
@@ -371,7 +452,7 @@ export function FlowChips({ names, onGo }: { names: Record<string, string>; onGo
   if (!ctx.on) return null;
   const cards = flowCards(ctx.items);
   if (!cards.length) return null;
-  const doneOf = (c: string) => ctx.items.filter((i) => i.card === c).every((i) => itemDone(i, ctx.confirm, ctx.confirmed));
+  const doneOf = (c: string) => flowSectionDone(ctx.items, c, ctx.derived, (i) => itemDone(i as FlowItem, ctx.confirm, ctx.confirmed));
   const doneN = cards.filter(doneOf).length;
   return (
     <div className="flow-chips" aria-label="This step's sections">
@@ -569,7 +650,7 @@ export function StepCard({
     extra?: ReactNode;
   };
 }) {
-  const { n, met, done, waitsFor } = useFlowCard(flow, flowAfter, flowAfterOnly);
+  const { n, met, done, ticked, waitsFor } = useFlowCard(flow, flowAfter, flowAfterOnly);
   const ctx = useContext(FlowCtx);
   // In a quiet screen the grey line under the title is an explanation, so it moves behind a "?"
   // beside the title (2026-10-12). A card with no title keeps it where it is.
@@ -613,7 +694,7 @@ export function StepCard({
         sealed ? "sealed" : "",
         quiet ? "quiet" : "",
         n ? "flowed" : "",
-        done ? "flow-done" : "",
+        ticked ? "flow-done" : "",
         waiting ? "flow-waiting" : "",
         isCurrent ? "flow-current" : "",
         folded ? "flow-folded" : "",
@@ -627,7 +708,7 @@ export function StepCard({
       {title ? (
         <div className="card-top">
           <h4>
-            {n ? <span className={`cardno${done ? " done" : ""}`}>{done ? <Icon name="check" /> : n}</span> : null}
+            {n ? <span className={`cardno${ticked ? " done" : ""}`}>{ticked ? <Icon name="check" /> : n}</span> : null}
             {icon ? <Icon name={icon} /> : null}
             {title}
             {metaInHelp ? <Help label="About this section">{meta}</Help> : null}

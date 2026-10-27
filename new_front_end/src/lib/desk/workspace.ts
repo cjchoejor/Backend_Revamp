@@ -730,7 +730,13 @@ export function stepStateFor(order: number, currentOrder: number): StepState {
  * waiting for. An item with no card is one the step inherits from an earlier step; it is listed
  * apart rather than numbered, since there is nothing here to press.
  */
-export type Precondition = { label: string; met: boolean; card?: string };
+export type Precondition = {
+  label: string;
+  met: boolean;
+  card?: string;
+  /** A section's changes on screen, not saved yet (2026-10-27) — holds the move until saved. */
+  unsaved?: boolean;
+};
 
 /** Real-state preconditions surfaced in the gate bar for each step. */
 export function preconditionsFor(entry: EntryDetail, step: DeskStep, hotelToday: string | null = null): Precondition[] {

@@ -51,7 +51,22 @@ import { completeCheckInToS7 } from "@/lib/api/check-in";
 import { listIdentityProofs } from "@/lib/api/identity-proofs";
 import { ApiError } from "@/lib/api/client";
 import { DESK_STEPS, guestName } from "@/lib/desk/model";
-import { AlsoBar, FlowChips, FlowTodo, OtherWaysSlot, StepFlow, anchorFor, numberFlow, revealCard, type FlowItem, type StepPane } from "@/components/ds/steps/kit";
+import {
+  AlsoBar,
+  FlowChips,
+  FlowTodo,
+  OtherWaysSlot,
+  StepFlow,
+  UnsavedReport,
+  anchorFor,
+  flowSectionDone,
+  flowSectionWaitsOn,
+  numberFlow,
+  revealCard,
+  type FlowItem,
+  type StepPane,
+  type UnsavedSection,
+} from "@/components/ds/steps/kit";
 import { QuietScreen } from "@/components/ds/help";
 import { findParkTimer } from "@/lib/desk/timers";
 import {
@@ -117,6 +132,21 @@ const NOOP = () => {};
 
 type View = "step" | "other" | "details" | BookingTab;
 
+/**
+ * A section's changes not saved, as an open item of the checklist (2026-10-27) — only for a section
+ * that would otherwise read as done on what is saved: a section still being filled in for the first
+ * time is open already, and saying it twice would count it twice.
+ */
+function withUnsaved(base: Precondition[], unsaved: UnsavedSection[]): Precondition[] {
+  const extra = unsaved
+    .filter((u) => {
+      const own = base.filter((p) => p.card === u.card);
+      return own.length > 0 && own.every((p) => p.met);
+    })
+    .map((u) => ({ label: u.label, met: false, card: u.card, unsaved: true }));
+  return [...base, ...extra];
+}
+
 /** Inquiry's five sections, by the cards the readiness list names (Stage 1 since 2026-10-10). */
 const INQUIRY_SECTIONS: Record<string, string> = {
   caller: "The caller",
@@ -134,6 +164,11 @@ const NEGOTIATION_SECTIONS: Record<string, string> = {
 /** The steps drawn in the stage-template layout, with their sections (Inquiry, then Negotiation). */
 const STEP_SECTIONS: Partial<Record<number, Record<string, string>>> = { 1: INQUIRY_SECTIONS, 2: NEGOTIATION_SECTIONS };
 const isTopLayoutStep = (n: number) => !!STEP_SECTIONS[n];
+/**
+ * Sections made from another one (2026-10-27): the rooms are chosen for the stay, the quotation is the
+ * table priced. While the one it is made from has changes not saved, it does not read as done.
+ */
+const STEP_DERIVED: Partial<Record<number, Record<string, string>>> = { 1: { house: "stay" }, 2: { quotation: "table" } };
 
 /** The booking file's tabs on the right in the stage-template layout — Booking first. */
 // The Stage 1 header's Re-enter and Under the hood buttons, hidden for now (2026-10-27).
@@ -364,6 +399,13 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const [reserveExtras, setReserveExtras] = useState<string[]>([]);
   const reportReserveExtras = useMemo(
     () => (items: string[]) => setReserveExtras((prev) => (prev.join("|") === items.join("|") ? prev : items)),
+    [],
+  );
+  /** Inquiry's sections with changes on screen not saved yet (2026-10-27) — see `useFlowUnsaved`. */
+  const [unsavedSections, setUnsavedSections] = useState<UnsavedSection[]>([]);
+  const reportUnsaved = useMemo(
+    () => (items: UnsavedSection[]) =>
+      setUnsavedSections((prev) => (JSON.stringify(prev) === JSON.stringify(items) ? prev : items)),
     [],
   );
   /** Negotiation's own open items — the table's changes not priced yet (2026-10-19). */
@@ -787,7 +829,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
           ...(confirmStepActive ? reserveExtras.map((label) => ({ label, met: false })) : []),
         ]
       : inquiryStepActive
-        ? s1Readiness(entry)
+        ? withUnsaved(s1Readiness(entry), unsavedSections)
         : quoteStepActive
           ? [...s2Readiness(entry), ...negotiationExtras.map((label) => ({ label, met: false, card: "table" }))]
           : arrivalStepActive
@@ -827,6 +869,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   // Stage 1 is laid out as five numbered sections (2026-10-10), so it numbers by section; so does
   // Negotiation, in its two (2026-10-27).
   const sectioned = inquiryStepActive || quoteStepActive;
+  const derived = STEP_DERIVED[viewing] ?? {};
   const flowItems: FlowItem[] = numberFlow(preconds, { bySection: sectioned });
   const inherited = preconds.filter((p) => !p.card);
   const nextUp = flowItems.find((i) => !i.met) ?? null;
@@ -921,7 +964,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
       </Button>
     );
   } else if (inquiryStepActive) {
-    const ok = canProgressS1(entry);
+    // A section with changes not saved holds the move, as the Negotiation table's do (2026-10-27).
+    const ok = canProgressS1(entry) && !preconds.some((p) => p.unsaved);
     forward = (
       <Button className="go" state={ok ? "default" : "inert"} reason={ok ? undefined : firstNote} onClick={() => setSummaryOpen(true)}>
         Continue
@@ -1140,7 +1184,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
         return null;
     }
   };
-  const native = nativeBody();
+  const native = <UnsavedReport onChange={reportUnsaved}>{nativeBody()}</UnsavedReport>;
 
   /* ---- the five tabs' counts ---- */
   const tabCount = (k: BookingTab): ReactNode => {
@@ -1492,7 +1536,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     const backTo = viewingPast && viewing !== currentOrder ? currentOrder : null;
     return (
       <BackendRailSlotContext.Provider value={railSlot}>
-        <StepFlow items={flowItems} on={!viewingPast && !sealed} fold={sectioned ? "done" : null}>
+        <StepFlow items={flowItems} on={!viewingPast && !sealed} fold={sectioned ? "done" : null} derived={derived}>
           {/* Two columns from the topbar down (2026-10-27, operator and the boss, after the template: the
               screen divided in two — the work, its head and its bar on the left, with the bell and the
               signed-in person at the left's top right and the move at its foot on the right; the
@@ -1608,12 +1652,20 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                           {Object.entries(sections).map(([card, title]) => {
                             const own = flowItems.filter((i) => i.card === card);
                             if (!own.length) return null;
-                            const met = own.every((i) => i.met);
+                            // A section made from one with changes not saved waits on it (2026-10-27).
+                            const met = flowSectionDone(flowItems, card, derived);
+                            const waitsOn = own.every((i) => i.met) ? flowSectionWaitsOn(flowItems, card, derived) : null;
                             return (
                               <tr key={card} className="pick" onClick={() => goToCard(card)}>
                                 <td className={met ? "ok-ink" : "warn-ink"}>{met ? <Icon name="check" /> : "●"}</td>
                                 <td>{title}</td>
-                                <td className="meta">{met ? "done" : own.filter((i) => !i.met).map((i) => i.label).join(" · ")}</td>
+                                <td className="meta">
+                                  {met
+                                    ? "done"
+                                    : waitsOn
+                                      ? `waits for ${sections[waitsOn] ?? waitsOn} to be saved`
+                                      : own.filter((i) => !i.met).map((i) => i.label).join(" · ")}
+                                </td>
                               </tr>
                             );
                           })}
@@ -1924,7 +1976,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                     onHistory={() => setView("history", viewing)}
                   />
                 </div>
-                <StepFlow items={flowItems} on={!viewingPast && !sealed} fold={inquiryStepActive ? "done" : null}>
+                <StepFlow items={flowItems} on={!viewingPast && !sealed} fold={inquiryStepActive ? "done" : null} derived={derived}>
                   <OtherWaysSlot node={otherSlot}>
                     <div hidden={view !== "step"}>{native}</div>
                   </OtherWaysSlot>

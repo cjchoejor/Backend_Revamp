@@ -66,6 +66,7 @@ import {
   declineTab,
   useOpenOtherWay,
   useOpenFileTab,
+  useFlowUnsaved,
 } from "./kit";
 import { AddReturnStay, TripStays } from "@/components/ds/workspace/return-stay";
 import { enumerateNights, useRoomSelection } from "./use-room-selection";
@@ -307,6 +308,7 @@ function WhoIsAsking({
     (d.party?.id ?? null) !== (recParty?.id ?? null) ||
     (d.party ? d.pkg : null) !== (recParty ? recPkg : null) ||
     (isCorp && (d.ref.trim() !== recRef || d.coord.trim() !== recCoord));
+  useFlowUnsaved("asking", editable && dirty, "Changes to who is asking saved");
   const save = useMutation({
     mutationFn: () =>
       updateEntrySource(session!, entry.id, {
@@ -589,6 +591,7 @@ function TheStay({
     String(childN) !== saved.children ||
     ages.join(",") !== saved.ages.join(",") ||
     JSON.stringify(bedMap) !== JSON.stringify(savedBedMap);
+  useFlowUnsaved("stay", editable && dirty, "Changes to the stay saved");
 
   const save = useMutation({
     mutationFn: () =>
@@ -1181,6 +1184,8 @@ function TheHouse({
   const billFor = picked.length ? picked : candidate;
   const bill = usePickPricing(entry.id, billFor, hasResults);
   const pickedSaved = sel.savedCanon != null && sel.savedCanon === sel.currentCanon;
+  // Picks changed and not saved: the house does not read as done (2026-10-27).
+  useFlowUnsaved("house", editable && !past && sel.currentCanon !== sel.savedCanon, "The rooms picked saved");
   // The bill lives in the booking file (2026-10-27, operator: "when rooms are picked, show this on
   // the right, in Charges & payments › The price, with the nights and the rooms"). A pick made by
   // hand opens it there; picks restored on arrival or a background re-read do not, and the page

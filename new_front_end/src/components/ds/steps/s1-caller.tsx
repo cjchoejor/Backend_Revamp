@@ -31,7 +31,7 @@ import { callerNameOf } from "@/lib/ds/status";
 import { fmtDay } from "@/lib/ds/format";
 import { hasAnyContact } from "@/lib/desk/workspace";
 import type { EntryDetail } from "@/types/api";
-import { Choice, StepCard, toastRefusal, useRefreshEntry } from "./kit";
+import { Choice, StepCard, toastRefusal, useFlowUnsaved, useRefreshEntry } from "./kit";
 import { GuestLine, NATIONALITIES, PHONE_CODES, PhoneInput, PickList, PresetOrCustom, ReqMark, callerIsTheParty, joinPhone, splitStoredPhone } from "./new-inquiry-parts";
 
 export const CALLER_TITLES = ["", "Mr", "Ms", "Mrs", "Dr", "Dasho", "Lyonpo", "Aum"];
@@ -87,6 +87,7 @@ export function TheCaller({ entry, editable }: { entry: EntryDetail; editable: b
   const reachable = !!fullPhone || !!f.email.trim() || isOta;
   const waAnswered = !fullPhone || f.onWhatsApp !== null;
   const dirty = JSON.stringify(f) !== JSON.stringify(saved);
+  useFlowUnsaved("caller", editable && dirty, "Changes to the caller saved");
   const reason = emailBad
     ? "the email does not read as one"
     : !reachable
@@ -310,6 +311,7 @@ export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; edita
             : null;
   const arrivingDirty = arrName.trim() !== (contact.contactPersonName ?? "") || arrPhone.trim() !== (contact.contactPersonPhone ?? "");
   const dirty = choosing || callerNameDirty || arrivingDirty;
+  useFlowUnsaved("wrap", editable && dirty, "Changes to wrap up saved");
 
   const save = useMutation({
     mutationFn: async () => {
