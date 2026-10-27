@@ -19,19 +19,20 @@
  */
 import Link from "next/link";
 import { Help, HelpHere } from "@/components/ds/help";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button } from "@/design-system";
 import { useSession } from "@/hooks/use-session";
 import { updateEntryIntake } from "@/lib/api/entries";
 import { guestFullName, searchGuestProfiles, type GuestProfileSummary } from "@/lib/api/guest-profiles";
-import { setEntryGuest, updateEntryCaller, type SetGuestBody } from "@/lib/api/inquiries";
+import { lookupCallers, setEntryGuest, updateEntryCaller, type SetGuestBody } from "@/lib/api/inquiries";
 import { callerNameOf } from "@/lib/ds/status";
+import { fmtDay } from "@/lib/ds/format";
 import { hasAnyContact } from "@/lib/desk/workspace";
 import type { EntryDetail } from "@/types/api";
 import { Choice, StepCard, toastRefusal, useRefreshEntry } from "./kit";
-import { GuestLine, NATIONALITIES, PHONE_CODES, PhoneInput, PickList, PresetOrCustom, splitStoredPhone } from "./new-inquiry-parts";
+import { GuestLine, NATIONALITIES, PHONE_CODES, PhoneInput, PickList, PresetOrCustom, ReqMark, joinPhone, splitStoredPhone } from "./new-inquiry-parts";
 
 export const CALLER_TITLES = ["", "Mr", "Ms", "Mrs", "Dr", "Dasho", "Lyonpo", "Aum"];
 
@@ -68,12 +69,20 @@ export function TheCaller({ entry, editable }: { entry: EntryDetail; editable: b
     };
   };
   const [f, setF] = useState(seed);
-  const stamp = `${entry.version}|${inq.callerPhone}|${inq.callerEmail}|${inq.callerFirstName}|${inq.callerLastName}|${inq.callerTitle}|${inq.callerOnWhatsApp}`;
-  useEffect(() => setF(seed()), [stamp]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Re-read only when the CALLER on record changes (2026-10-27): keyed on the booking's version, it
+  // threw away an unsaved edit here — the dialling code with it — whenever a section below saved.
+  // An edit in progress is kept even then; only an untouched form follows the record.
+  const stamp = `${inq.callerPhone}|${inq.callerEmail}|${inq.callerFirstName}|${inq.callerLastName}|${inq.callerTitle}|${inq.callerOnWhatsApp}|${old}`;
+  const lastSeed = useRef(JSON.stringify(f));
+  useEffect(() => {
+    const next = seed();
+    setF((cur) => (JSON.stringify(cur) === lastSeed.current ? next : cur));
+    lastSeed.current = JSON.stringify(next);
+  }, [stamp]); // eslint-disable-line react-hooks/exhaustive-deps
   const set = (patch: Partial<ReturnType<typeof seed>>) => setF((p) => ({ ...p, ...patch }));
 
   const saved = seed();
-  const fullPhone = f.number.trim() ? `${f.code}${f.number.trim()}` : "";
+  const fullPhone = joinPhone(f.code, f.number);
   const emailBad = f.email.trim() !== "" && !EMAIL_RE.test(f.email.trim());
   const reachable = !!fullPhone || !!f.email.trim() || isOta;
   const waAnswered = !fullPhone || f.onWhatsApp !== null;
@@ -130,6 +139,7 @@ export function TheCaller({ entry, editable }: { entry: EntryDetail; editable: b
         <div className="field">
           <label>
             Phone
+            {!isOta && editable ? <ReqMark /> : null}
             {reachable ? (
               <Help label="About the phone">{isOta && !fullPhone ? "An OTA booking — the phone is optional." : "Where the caller can be rung back."}</Help>
             ) : null}
@@ -139,11 +149,12 @@ export function TheCaller({ entry, editable }: { entry: EntryDetail; editable: b
           ) : (
             <input className="input" readOnly value={phone ?? ""} placeholder="none given" />
           )}
-          {!reachable ? <span className="hint warn-ink">a phone or an email is needed</span> : null}
+          {!reachable ? <span className="hint stop-ink">a phone or an email is needed</span> : null}
         </div>
         <div className="field">
           <label>
             Email
+            {!isOta && editable ? <ReqMark /> : null}
             <Help label="About the email">Optional when there is a phone.</Help>
           </label>
           <input
@@ -248,6 +259,25 @@ export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; edita
     queryFn: () => searchGuestProfiles(session!, term, 12),
     enabled: !!session && choosing && choice === "FOUND" && term.length >= 2,
   });
+  // The guests this caller brought before (2026-10-27): one click names one of them, rather than
+  // making a second record of a guest already on file. Read from the caller list, this enquiry
+  // left out; the caller's own row is the one with the same number (or email).
+  const callerDigits = (inq.callerPhone ?? "").replace(/D/g, "");
+  const callerQ = callerDigits.length >= 4 ? callerDigits.slice(-8) : inq.callerEmail?.includes("@") ? inq.callerEmail.trim() : "";
+  const history = useQuery({
+    queryKey: ["desk-callers", callerQ, inq.id],
+    queryFn: () => lookupCallers(session!, callerQ, inq.id),
+    enabled: !!session && choosing && !!callerQ,
+  });
+  const ownRow = (history.data?.matches ?? []).find((m) =>
+    callerDigits.length >= 4
+      ? (m.phone ?? "").replace(/D/g, "").slice(-8) === callerDigits.slice(-8)
+      : (m.email ?? "").toLowerCase() === (inq.callerEmail ?? "").trim().toLowerCase(),
+  );
+  const broughtBefore: GuestProfileSummary[] = (ownRow?.guests ?? [])
+    .filter((g) => g.id !== named?.id)
+    .map((g) => ({ ...g, vipTier: null, clientTier: null, isActive: true, createdAt: "", updatedAt: "" }));
+  const lastStayOf = new Map((ownRow?.guests ?? []).map((g) => [g.id, g.lastStay]));
 
   const [arrName, setArrName] = useState(contact.contactPersonName ?? "");
   const [arrPhone, setArrPhone] = useState(contact.contactPersonPhone ?? "");
@@ -296,7 +326,7 @@ export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; edita
                   firstName: nFirst.trim(),
                   lastName: nLast.trim(),
                   nationality,
-                  phone: nNumber.trim() ? `${nCode}${nNumber.trim()}` : null,
+                  phone: joinPhone(nCode, nNumber) || null,
                   email: nEmail.trim() || null,
                 };
         const r = await setEntryGuest(session!, entry.id, body);
@@ -390,6 +420,26 @@ export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; edita
           )
         ) : (
           <>
+            {broughtBefore.length > 0 ? (
+              <div style={{ marginBottom: 10 }}>
+                <PickList
+                  head={`${callerWord ?? "This caller"} brought before`}
+                  action="Name them"
+                  rows={broughtBefore.map((g) => {
+                    const last = lastStayOf.get(g.id);
+                    return {
+                      key: g.id,
+                      main: <GuestLine guest={g} />,
+                      sub: last ? `stayed ${fmtDay(last)}` : undefined,
+                      onPick: () => {
+                        setChoice("FOUND");
+                        setFound(g);
+                      },
+                    };
+                  })}
+                />
+              </div>
+            ) : null}
             <Choice
               options={[
                 ["CALLER", callerWord ? `The caller — ${callerWord}` : "The caller"],

@@ -14,6 +14,7 @@ import { useHotelDay } from "@/hooks/use-hotel-day";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
 import { listDeskActivity, listStaffNames } from "@/lib/api/desk";
 import { fmtTime } from "@/lib/ds/format";
+import { DateInput } from "@/components/ds/date-input";
 import { traceWords } from "@/lib/ds/trace-words";
 import type { TraceEvent } from "@/lib/trace/humanize";
 
@@ -58,7 +59,7 @@ export default function AuditPage() {
         {allowed ? (
           <div className="row-acts" style={{ alignItems: "flex-end" }}>
             <Field label="Date">
-              <Input type="date" value={date} max={today ?? undefined} onChange={(e) => setDate(e.target.value)} />
+              <span style={{ display: "block", width: 170 }}><DateInput className="input" value={date} max={today ?? undefined} onChange={(e) => setDate(e.target.value)} /></span>
             </Field>
             <Field label="Who">
               <Select value={actorId} onChange={(e) => setActorId(e.target.value)}>

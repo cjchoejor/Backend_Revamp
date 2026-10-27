@@ -21,6 +21,7 @@ import { fmtDateTime, HOTEL_TZ_DEFAULT } from "@/lib/ds/format";
 import { hotelLocalToIso, isoToHotelLocal } from "@/components/ds/steps/s2-shared";
 import type { AdvancePaymentPlanSummary, EntryDetail, PaymentStatusSummary } from "@/types/api";
 import { Help } from "@/components/ds/help";
+import { DateTimeInput } from "@/components/ds/date-input";
 
 /**
  * The advance-payment settlement surface (2026-08-07, operator request).
@@ -404,7 +405,7 @@ export function AdvancePlanCapture({
             {balanceDueAt === "BEFORE_CHECKIN" && (
               <div className="field">
                 <label>Promised by</label>
-                <input type="datetime-local" value={promisedBy} onChange={(e) => setPromisedBy(e.target.value)} disabled={disabled} />
+                <DateTimeInput className="dinput" value={promisedBy} onChange={(e) => setPromisedBy(e.target.value)} disabled={disabled} />
               </div>
             )}
           </div>

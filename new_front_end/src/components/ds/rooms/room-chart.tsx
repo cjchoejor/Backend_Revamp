@@ -65,6 +65,7 @@ import { SplitMoveDialog, type SplitMove } from "./split-move-dialog";
 import { NightMoveDialog, type NightMove } from "./night-move-dialog";
 import { BookingBox, type BoxMove } from "./booking-box";
 import type { DateMoveInput } from "@/lib/api/room-moves";
+import { DateInput } from "@/components/ds/date-input";
 
 const KIND_WORD: Record<ChartBarKind, string> = {
   OVERSTAY: "Due out · still in",
@@ -1627,9 +1628,8 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
               lengths move or stretch the same window. */}
           <label className="rchart-date">
             <span>From</span>
-            <input
+            <DateInput
               className="input"
-              type="date"
               value={chart.from}
               onChange={(e) => {
                 if (!isYmd(e.target.value)) return;
@@ -1640,9 +1640,8 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
           </label>
           <label className="rchart-date">
             <span>To</span>
-            <input
+            <DateInput
               className="input"
-              type="date"
               value={lastNight}
               min={chart.from}
               max={shiftDay(chart.from, MAX_NIGHTS - 1)}

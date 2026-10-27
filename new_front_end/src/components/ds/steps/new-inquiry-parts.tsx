@@ -19,10 +19,11 @@ import {
   createTravelAgentLookup,
   searchCorporateAccountsLookup,
   searchTravelAgentsLookup,
+  type CallerMatch,
   type CoordinatorContact,
   type LookupPartyMatch,
 } from "@/lib/api/inquiries";
-import { plural } from "@/lib/ds/format";
+import { fmtDay, fmtInstantDate, plural } from "@/lib/ds/format";
 import { toastRefusal } from "./kit";
 import { Help, HelpHere } from "@/components/ds/help";
 
@@ -121,6 +122,19 @@ export function splitStoredPhone(full: string | null | undefined): { code: strin
   if (m) return { code: m[1], number: strip(m[2]) };
   // Most imported numbers carry no dialling code; leave it blank rather than assume one.
   return { code: "", number: v };
+}
+
+/**
+ * The code and the number as one stored phone. A listed code is joined straight on ("+97517…"),
+ * as numbers always were; any other code keeps a space after it ("+66 812…"), because without one
+ * "+66812…" reads back as the code "+6681" and the desk's next visit shows the wrong code.
+ */
+export function joinPhone(code: string, number: string): string {
+  const n = number.trim();
+  if (!n) return "";
+  const c = code.trim();
+  if (!c) return n;
+  return PHONE_CODES.includes(c) ? `${c}${n}` : `${c} ${n}`;
 }
 
 /** The calendar day `n` nights after `iso` (a stay date, UTC-safe). */
@@ -329,6 +343,59 @@ export function PickList({ head, rows, empty, action = "Use" }: { head?: ReactNo
         </tbody>
       </table>
     </div>
+  );
+}
+
+/** A red asterisk on a label — the field (or, with its partner, one of the two) is needed. */
+export function ReqMark({ title = "needed" }: { title?: string }) {
+  return (
+    <span className="stop-ink" aria-hidden title={title} style={{ fontWeight: 700, marginLeft: 2 }}>
+      *
+    </span>
+  );
+}
+
+/**
+ * One caller in the caller list (2026-10-27): the name, who they ring for (an agency, a company, or
+ * themselves), the number and email, how often they have rung, and under it the guests they
+ * brought before — shown, not picked; the guest staying is named at Wrap up.
+ */
+export function CallerLine({ caller }: { caller: CallerMatch }) {
+  const name = [caller.title, caller.firstName, caller.lastName].filter(Boolean).join(" ");
+  const tag =
+    caller.party && caller.kind === "TRAVEL_AGENT"
+      ? `Travel agent · ${caller.party.displayName}`
+      : caller.party && caller.kind === "CORPORATE"
+        ? `Company · ${caller.party.displayName}`
+        : "Direct";
+  const where =
+    caller.foundAs === "PARTY_NUMBER"
+      ? "the office line"
+      : caller.foundAs === "PARTY_CONTACT" && caller.calls === 0
+        ? "on their contact list"
+        : caller.calls > 0
+          ? `rang ${caller.calls === 1 ? "once" : `${caller.calls} times`}${caller.lastCalledAt ? ` · last ${fmtInstantDate(caller.lastCalledAt)}` : ""}`
+          : null;
+  return (
+    <span style={{ display: "grid", gap: 2 }}>
+      <span>
+        <b>{name || (caller.party ? caller.party.displayName : "No name on record")}</b>{" "}
+        <span className={`chip${caller.party ? " accent" : ""}`} style={{ marginLeft: 4 }}>
+          {tag}
+        </span>
+        {caller.phone ? <span className="money ink-2"> · {caller.phone}</span> : null}
+        {caller.email ? <span className="meta"> · {caller.email}</span> : null}
+        {where ? <span className="meta"> · {where}</span> : null}
+      </span>
+      {caller.guests.length > 0 ? (
+        <span className="meta">
+          Brought before:{" "}
+          {caller.guests
+            .map((g) => `${guestFullName(g)}${g.lastStay ? ` (${fmtDay(g.lastStay)})` : ""}`)
+            .join(" · ")}
+        </span>
+      ) : null}
+    </span>
   );
 }
 
@@ -565,7 +632,7 @@ export function PartyContacts({
     mutationFn: () =>
       addPartyContact(session!, kind, party.id, {
         name: name.trim(),
-        phone: phone.trim() ? `${code}${phone.trim()}` : null,
+        phone: joinPhone(code, phone) || null,
       }),
     onSuccess: (res) => {
       setParty({ ...party, coordinators: res.coordinators });

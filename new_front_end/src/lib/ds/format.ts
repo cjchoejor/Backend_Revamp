@@ -1,8 +1,11 @@
 /**
  * How dates, times and money read on every screen (DSS §8, amended 11 Sep 2026).
  *
- *  - Dates `20 Oct 2026`; ranges `20 → 23 Oct 2026`; day headers `20 Oct`. Never dd/mm/yyyy on
- *    screen — digits transpose, letters do not.
+ *  - Dates `20 Oct 2026`; ranges `20 → 23 Oct 2026`; day headers `20 Oct`. Written dates keep the
+ *    month in letters — digits transpose, letters do not.
+ *  - A date the desk TYPES is DD/MM/YYYY on every terminal (2026-10-27, operator) —
+ *    `components/ds/date-input.tsx`, never a bare `<input type="date">`, which draws in the
+ *    browser's order (10/27/2026 on a US-set machine). Nothing is ever shown month first.
  *  - Times 12-hour with AM/PM, hotel time.
  *  - Money `Nu.1,828.47` — the prefix without a space, international grouping, always two
  *    decimals. A missing figure is a dash. This module formats; it never adds anything up

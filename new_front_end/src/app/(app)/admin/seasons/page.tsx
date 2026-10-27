@@ -7,6 +7,7 @@ import { createSeason, deactivateSeason, listSeasons, reactivateSeason, type Sea
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
 import { useConfirm } from "@/components/providers/dialog-provider";
+import { DateInput } from "@/components/ds/date-input";
 
 const EMPTY = { name: "", startDate: "", endDate: "", rateMultiplier: "", priority: "0" };
 
@@ -72,8 +73,8 @@ export default function AdminSeasonsPage() {
 
       <div className="admin-panel grid gap-4 p-5 md:grid-cols-3">
         <input className="admin-input" placeholder="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-        <label className="admin-muted text-xs">Start<input className="admin-input mt-1" type="date" value={form.startDate} onChange={(e) => setForm({ ...form, startDate: e.target.value })} /></label>
-        <label className="admin-muted text-xs">End<input className="admin-input mt-1" type="date" value={form.endDate} onChange={(e) => setForm({ ...form, endDate: e.target.value })} /></label>
+        <label className="admin-muted text-xs">Start<DateInput className="admin-input mt-1" value={form.startDate} onChange={(e) => setForm({ ...form, startDate: e.target.value })} /></label>
+        <label className="admin-muted text-xs">End<DateInput className="admin-input mt-1" value={form.endDate} onChange={(e) => setForm({ ...form, endDate: e.target.value })} /></label>
         <input className="admin-input" placeholder="Rate multiplier (e.g. 1.25)" type="number" step="0.01" value={form.rateMultiplier} onChange={(e) => setForm({ ...form, rateMultiplier: e.target.value })} />
         <input className="admin-input" placeholder="Priority" type="number" value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })} />
         <button type="button" className="admin-btn col-span-full w-fit" disabled={createMutation.isPending || !form.name || !form.startDate || !form.endDate} onClick={() => createMutation.mutate()}>

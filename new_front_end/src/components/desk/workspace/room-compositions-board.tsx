@@ -106,7 +106,7 @@ function stayNights(checkIn?: string | null, checkOut?: string | null): string[]
 function nightLabel(key: string): string {
   const d = new Date(key + "T00:00:00.000Z");
   if (Number.isNaN(d.getTime())) return key;
-  return d.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" });
+  return d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" });
 }
 
 type RoomExtras = {

@@ -50,6 +50,7 @@ import { PLAN_LABEL, dueLabel } from "@/components/desk/workspace/advance-settle
 import { useStayPrice, type StayPrice } from "@/lib/ds/stay-price";
 import type { EntryDetail } from "@/types/api";
 import { Help, HelpHere } from "@/components/ds/help";
+import { DateInput } from "@/components/ds/date-input";
 
 export type BookingTab = "money" | "requests" | "notes" | "docs" | "history";
 
@@ -696,7 +697,7 @@ export function RequestsView({ entry, sealed, tz }: { entry: EntryDetail; sealed
                   For which day · optional
                   <Help label="About the day">From today to the day they leave.</Help>
                 </label>
-                <input className="input" type="date" value={forDate} min={minDate} max={maxDate} onChange={(e) => setForDate(e.target.value)} />
+                <DateInput className="input" value={forDate} min={minDate} max={maxDate} onChange={(e) => setForDate(e.target.value)} />
               </div>
               <div className="field">
                 <label>
@@ -999,7 +1000,7 @@ export function NotesView({ entry, tz }: { entry: EntryDetail; tz: string }) {
                 <div className="field">
                   <label>Day and time</label>
                   <div className="row-acts">
-                    <input className="input" type="date" min={day?.today} value={pickDate} onChange={(e) => setPickDate(e.target.value)} />
+                    <DateInput className="input" min={day?.today} value={pickDate} onChange={(e) => setPickDate(e.target.value)} />
                     <input className="input" type="time" value={pickTime} onChange={(e) => setPickTime(e.target.value)} />
                   </div>
                 </div>

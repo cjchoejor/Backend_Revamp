@@ -49,6 +49,7 @@ import {
 } from "./kit";
 import { WideDialog } from "./s6-shared";
 import { Help } from "@/components/ds/help";
+import { DateInput } from "@/components/ds/date-input";
 
 /* ------------------------------------------------------------------ vocabulary */
 
@@ -441,9 +442,8 @@ function PostChargeDialog({
               Consumed on
               <Help label="About the date">The day it was had, not the day you type it. A day the night audit has already closed can&rsquo;t take new charges.</Help>
             </label>
-            <input
+            <DateInput
               className="input"
-              type="date"
               value={consumedOn}
               max={hotelToday ?? undefined}
               disabled={!hotelToday}

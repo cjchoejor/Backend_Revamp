@@ -143,6 +143,47 @@ export type LookupPartyMatch = {
  */
 type PartyLookupResult = { matches: LookupPartyMatch[]; limit?: number };
 
+/** A guest a caller booked for before — shown under the caller, offered first at Wrap up. */
+export type CallerGuest = {
+  id: string;
+  firstName: string;
+  lastName: string;
+  phone: string | null;
+  email: string | null;
+  nationality: string | null;
+  lastStay: string | null;
+};
+
+/**
+ * Someone who has rung before with this number or email (2026-10-27): an earlier enquiry's caller,
+ * or an agency's or a company's contact person or own line. `party` is the agency or company they
+ * ring for (the same shape the party search returns), so the desk can fill "Who is asking".
+ */
+export type CallerMatch = {
+  key: string;
+  kind: "DIRECT" | "TRAVEL_AGENT" | "CORPORATE";
+  foundAs: "EARLIER_CALLER" | "PARTY_CONTACT" | "PARTY_NUMBER";
+  title: string | null;
+  firstName: string | null;
+  lastName: string | null;
+  phone: string | null;
+  email: string | null;
+  onWhatsApp: boolean | null;
+  party: (LookupPartyMatch & { kind: "TRAVEL_AGENT" | "CORPORATE" }) | null;
+  partyContact: CoordinatorContact | null;
+  calls: number;
+  lastCalledAt: string | null;
+  lastInquiryId: string | null;
+  guests: CallerGuest[];
+};
+
+/** `q` is a phone (4+ digits) or an email; `exclude` leaves an enquiry out (the booking's own). */
+export async function lookupCallers(session: Session, q: string, exclude?: string | null) {
+  const qs = new URLSearchParams({ q });
+  if (exclude) qs.set("exclude", exclude);
+  return apiRequest<{ mode: "PHONE" | "EMAIL" | "NONE"; matches: CallerMatch[] }>(`/api/lookups/callers?${qs}`, { session });
+}
+
 export async function searchTravelAgentsLookup(session: Session, q: string) {
   const qs = new URLSearchParams({ q });
   return apiRequest<PartyLookupResult>(`/api/lookups/travel-agents/search?${qs}`, { session });

@@ -42,7 +42,7 @@ import {
   type RoomStatusRow,
 } from "@/components/desk/workspace/room-status-table";
 import { RoomSelectBoard } from "@/components/desk/workspace/room-select-board";
-import { fmtRange, money, plural } from "@/lib/ds/format";
+import { fmtDay, fmtRange, money, plural } from "@/lib/ds/format";
 import { currentPassConfigs } from "@/lib/desk/workspace";
 import {
   optionSelectedRoomIds,
@@ -74,6 +74,7 @@ import { PickBill, usePickPricing, type BillNight } from "./s1-bill";
 import { usePublishPriceDraft } from "@/lib/ds/stay-price";
 import { Help, HelpHere } from "@/components/ds/help";
 import type { PickPricing } from "@/lib/api/availability";
+import { DateInput } from "@/components/ds/date-input";
 
 /* ------------------------------------------------------------------ vocabulary */
 
@@ -623,9 +624,8 @@ function TheStay({
       <div className="form3">
         <div className="field">
           <label>Check-in</label>
-          <input
+          <DateInput
             className="input"
-            type="date"
             value={f.checkIn}
             readOnly={ro}
             onChange={(e) => set({ checkIn: e.target.value })}
@@ -645,9 +645,8 @@ function TheStay({
         </div>
         <div className="field">
           <label>Check-out</label>
-          <input
+          <DateInput
             className="input"
-            type="date"
             value={checkOut}
             min={f.checkIn || undefined}
             readOnly={ro}
@@ -1002,6 +1001,30 @@ function TheHouse({
     );
   }, [rows, perDate, displayNights]);
 
+  // Too few rooms for the ask (2026-10-27, operator: "the guest asked for 3 rooms and the house has
+  // only 2 — show it on top, in red"). Counted night by night off the house's own answer: the
+  // tightest night decides. With enough rooms every night but no one type holding them all, the
+  // rooms have to be mixed across types — said in amber, since it can still be done.
+  const houseShort = useMemo(() => {
+    if (!hasResults) return null;
+    const nights = stayNights.length ? stayNights : displayNights;
+    let free = byType.reduce((s, t) => s + t.full.length + t.deficient, 0);
+    let night: string | null = null;
+    if (perDate?.length && nights.length) {
+      free = Infinity;
+      for (const n of nights) {
+        const count = perDate.find((p) => p.date === n)?.availableRoomIds.length ?? 0;
+        if (count < free) {
+          free = count;
+          night = n;
+        }
+      }
+    }
+    if (free < numberOfRooms) return { kind: "SHORT" as const, free, night };
+    if (!byType.some((t) => t.full.length >= numberOfRooms)) return { kind: "MIX" as const, free, night: null };
+    return null;
+  }, [hasResults, stayNights, displayNights, perDate, byType, numberOfRooms]);
+
   const savedIds = optionSelectedRoomIds(savedOption);
   const savedTypes = [
     ...new Set(
@@ -1173,6 +1196,35 @@ function TheHouse({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chartRoom, editable, past, session, savedOption, hasResults, rows]);
 
+  // Started from the intake (2026-10-27, operator: "ask the house directly as soon as I click
+  // Start the inquiry"): the new booking opens with `?ask=1` and the house is asked once on
+  // arrival, the same way the chart's room is. A booking already asked, or with rooms chosen, is
+  // left as it is; the flag leaves the address once read.
+  const askOnArrival = searchParams.get("ask") === "1";
+  const arrivalRead = useRef(false);
+  useEffect(() => {
+    if (!askOnArrival || arrivalRead.current || chartRoom || !editable || past || !session) return;
+    const clearAddress = () => {
+      const p = new URLSearchParams(searchParams.toString());
+      p.delete("ask");
+      const qs = p.toString();
+      router.replace(`${pathname}${qs ? `?${qs}` : ""}`, { scroll: false });
+    };
+    if (hasResults || savedOption || !entry.checkInDate || !entry.checkOutDate) {
+      arrivalRead.current = true;
+      clearAddress();
+      return;
+    }
+    // Started once the effect has settled — see the chart's ask above.
+    const t = setTimeout(() => {
+      arrivalRead.current = true;
+      ask.mutate();
+      clearAddress();
+    }, 0);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [askOnArrival, chartRoom, editable, past, session, savedOption, hasResults]);
+
   const [toolOpen, setToolOpen] = useState(false);
   const toolRef = useRef<HTMLDivElement | null>(null);
   const openTool = () => {
@@ -1216,7 +1268,20 @@ function TheHouse({
         flowAfter="stay"
         flowAfterOnly
         title={
-          hasResults || entry.checkInDate ? `The house · ${range}` : "The house"
+          <>
+            {hasResults || entry.checkInDate ? `The house · ${range}` : "The house"}
+            {houseShort?.kind === "SHORT" ? (
+              <span className="house-short" role="alert">
+                Not enough rooms · {numberOfRooms} asked,{" "}
+                {houseShort.free === 0 ? "none" : `only ${houseShort.free}`} free
+                {houseShort.night && stayNights.length > 1 ? ` on ${fmtDay(houseShort.night)}` : ""}
+              </span>
+            ) : houseShort?.kind === "MIX" ? (
+              <span className="house-short mix" role="status">
+                No one type has {numberOfRooms} free — mix types
+              </span>
+            ) : null}
+          </>
         }
         meta="Ask the house — the free rooms for these dates, and what they cost, appear here while you are still on the phone."
         acts={
@@ -1298,8 +1363,12 @@ function TheHouse({
                   >
                     <td>{t.name}</td>
                     <td>
-                      {t.full.length > 0 ? (
+                      {t.full.length >= numberOfRooms ? (
                         <Chip tone="success">{t.full.length} free</Chip>
+                      ) : t.full.length > 0 ? (
+                        <Chip tone="warning" title={`fewer than the ${numberOfRooms} rooms asked`}>
+                          {t.full.length} free · fewer than {numberOfRooms}
+                        </Chip>
                       ) : t.partial > 0 ? (
                         <Chip tone="warning">{t.partial} on some nights</Chip>
                       ) : (

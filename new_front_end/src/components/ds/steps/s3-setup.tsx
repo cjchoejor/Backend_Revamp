@@ -75,6 +75,7 @@ import { CancellationFiguresLine, WaiverTick, useRefundHow } from "./cancel-figu
 import { CompetingClaimsCard, passesOf, roomsWord, useRoomNumbers } from "./s2-shared";
 import { PaymentPlanCard } from "./s3-money";
 import { Help, HelpHere } from "@/components/ds/help";
+import { DateInput } from "@/components/ds/date-input";
 
 /* ------------------------------------------------------------------ vocabulary */
 
@@ -914,7 +915,7 @@ function HoldTimeDialog({
               it. It cannot run past the day they arrive.
             </Help>
           </label>
-          <input className="input" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+          <DateInput className="input" value={date} onChange={(e) => setDate(e.target.value)} />
         </div>
         <div className="field">
           <label>

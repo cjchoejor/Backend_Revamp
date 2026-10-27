@@ -30,11 +30,12 @@ import { useHotelDay } from "@/hooks/use-hotel-day";
 import { usePageTitle } from "@/hooks/use-page-title";
 import { getAllowedRoomCounts, getChildPolicy } from "@/lib/api/child-policy";
 import { createEntry, getEntry } from "@/lib/api/entries";
-import { guestFullName, searchGuestProfiles, type GuestProfileSummary } from "@/lib/api/guest-profiles";
 import {
   captureCorporateContext,
   createInquiry,
   listRatePackagesLookup,
+  lookupCallers,
+  type CallerMatch,
   type CoordinatorContact,
   type LookupPartyMatch,
 } from "@/lib/api/inquiries";
@@ -49,12 +50,13 @@ import {
   BED_ORDER,
   CHANNEL_OPTIONS,
   ChildChargeNote,
-  GuestLine,
+  CallerLine,
   PHONE_CODES,
   PartyContacts,
   PartySearch,
   PhoneInput,
   PickList,
+  ReqMark,
   USE_TYPES,
   addNightsIso,
   bedWord,
@@ -62,6 +64,7 @@ import {
   defaultContactFor,
   diffNightsIso,
   digits,
+  joinPhone,
   splitStoredPhone,
   type ChannelKey,
   type GateLine,
@@ -69,6 +72,7 @@ import {
 } from "./new-inquiry-parts";
 import { Help } from "@/components/ds/help";
 import { FoldingSide, useSideFolded } from "@/components/ds/workspace/side-panel";
+import { DateInput } from "@/components/ds/date-input";
 
 /**
  * The prototype's final pass draws this screen without the journey rail (`ws-body norail`, and
@@ -130,7 +134,21 @@ export function NewInquiryCanvas() {
   // Wrap up; a phone or an email cannot (an OTA booking needs neither).
   const [callerTitle, setCallerTitle] = useState("");
   const [onWhatsApp, setOnWhatsApp] = useState<boolean | null>(null);
-  const [selectedGuest, setSelectedGuest] = useState<GuestProfileSummary | null>(null);
+  // A caller found in the caller list (2026-10-27) — never a guest: the guest staying is named at
+  // Wrap up. `beforePick` is the form as it stood, so "Not this caller" puts it back.
+  const [selectedCaller, setSelectedCaller] = useState<CallerMatch | null>(null);
+  const beforePick = useRef<{
+    callerTitle: string;
+    firstName: string;
+    lastName: string;
+    phoneCode: string;
+    phoneNumber: string;
+    email: string;
+    onWhatsApp: boolean | null;
+    channelKey: ChannelKey | null;
+    party: LookupPartyMatch | null;
+    partyContact: CoordinatorContact | null;
+  } | null>(null);
   // Who leads the party on the day. Blank → the agency's contact person, else the guest.
   const [arrivingName, setArrivingName] = useState("");
   const [arrivingPhone, setArrivingPhone] = useState("");
@@ -171,14 +189,31 @@ export function NewInquiryCanvas() {
     focusNext.current = "who";
   };
 
+  // A caller picked from the list who rings for an agency or a company brings that party and
+  // themselves as its contact (2026-10-27) — held here across the two effects below, which
+  // otherwise clear the party on a change of kind and reset the contact on a change of party.
+  const pendingParty = useRef<{ party: LookupPartyMatch; contact: CoordinatorContact | null } | null>(null);
+
   // A party belongs to one kind — a travel agent must never ride into a company booking.
   useEffect(() => {
+    const p = pendingParty.current;
+    if (p && partyKind) {
+      setParty(p.party);
+      return;
+    }
     setParty(null);
     setPartyContact(null);
   }, [partyKind]);
 
-  // A new party brings its own contact: the first person on file, else the party's own details.
+  // A new party brings its own contact: the first person on file, else the party's own details —
+  // or the caller, when the caller's pick brought the party.
   useEffect(() => {
+    const p = pendingParty.current;
+    if (p && party && p.party.id === party.id) {
+      pendingParty.current = null;
+      setPartyContact(p.contact ?? defaultContactFor(party));
+      return;
+    }
     setPartyContact(party ? defaultContactFor(party) : null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [party?.id]);
@@ -384,37 +419,87 @@ export function NewInquiryCanvas() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bedSum, allowedRooms]);
 
-  /* ---------------------------------------------------------------- guest lookups */
-  // Typing a known number surfaces the guest already on file.
+  /* ---------------------------------------------------------------- the caller list */
+  // Typing a number (or, with no number, an email) lists who has rung with it before — earlier
+  // callers and the agencies' and companies' people — never guests (2026-10-27, operator).
   const phoneDigits = phoneNumber.replace(/\D/g, "");
-  const [phoneTerm, setPhoneTerm] = useState("");
+  const callerQ = phoneDigits.length >= 4 ? phoneDigits : email.trim().includes("@") ? email.trim() : "";
+  const [callerTerm, setCallerTerm] = useState("");
   useEffect(() => {
-    const t = setTimeout(() => setPhoneTerm(phoneDigits), 350);
+    const t = setTimeout(() => setCallerTerm(callerQ), 350);
     return () => clearTimeout(t);
-  }, [phoneDigits]);
-  const phoneLookupOn = !selectedGuest && phoneTerm.length >= 4;
-  const phoneMatch = useQuery({
-    queryKey: ["desk-guest-phone", phoneTerm],
-    queryFn: () => searchGuestProfiles(session!, phoneTerm, 5),
-    enabled: !!session && phoneLookupOn,
+  }, [callerQ]);
+  const callerLookupOn = !selectedCaller && callerTerm.length >= 4;
+  const callerQuery = useQuery({
+    queryKey: ["desk-callers", callerTerm],
+    queryFn: () => lookupCallers(session!, callerTerm),
+    enabled: !!session && callerLookupOn,
   });
-  const phoneMatches = phoneLookupOn ? (phoneMatch.data?.items ?? []) : [];
+  const callerMatches = callerLookupOn ? (callerQuery.data?.matches ?? []) : [];
 
-  const adoptGuest = (g: GuestProfileSummary) => {
-    setSelectedGuest(g);
-    setFirstName(g.firstName);
-    setLastName(g.lastName);
-    setEmail(g.email ?? "");
-    // The stored number replaces the fragment typed to find them.
-    if (g.phone) {
-      const { code, number } = splitStoredPhone(g.phone);
-      setPhoneCode(code);
+  const adoptCaller = (m: CallerMatch) => {
+    beforePick.current = { callerTitle, firstName, lastName, phoneCode, phoneNumber, email, onWhatsApp, channelKey, party, partyContact };
+    setSelectedCaller(m);
+    setCallerTitle(m.title ?? "");
+    setFirstName(m.firstName ?? "");
+    setLastName(m.lastName ?? "");
+    if (m.email) setEmail(m.email);
+    if (m.onWhatsApp != null) setOnWhatsApp(m.onWhatsApp);
+    // The number on record replaces the fragment typed to find them; one kept without its dialling
+    // code keeps the code the desk had.
+    if (m.phone) {
+      const { code, number } = splitStoredPhone(m.phone);
+      setPhoneCode(code || phoneCode);
       setPhoneNumber(number);
     }
-    toast.success(`${guestFullName(g)} is on file — taken as the guest staying; Wrap up can change that`);
+    // Ringing for an agency or a company: "Who is asking" is that party, with the caller as its
+    // contact person.
+    if (m.party) {
+      const p = { party: m.party, contact: m.partyContact };
+      const key: ChannelKey = m.party.kind === "TRAVEL_AGENT" ? "AGENT" : "CORPORATE";
+      if (partyKind === m.party.kind) {
+        if (party?.id === m.party.id) setPartyContact(m.partyContact ?? defaultContactFor(m.party));
+        else {
+          pendingParty.current = p;
+          setParty(m.party);
+        }
+      } else {
+        pendingParty.current = p;
+        setChannelKey(key);
+      }
+      toast.success(`${m.kind === "TRAVEL_AGENT" ? "Travel agent" : "Company"} caller — Who is asking is filled in as ${m.party.displayName}`);
+    } else {
+      toast.success("The caller is filled in from the last time they rang");
+    }
+  };
+  const notThisCaller = () => {
+    const b = beforePick.current;
+    setSelectedCaller(null);
+    if (!b) return;
+    beforePick.current = null;
+    setCallerTitle(b.callerTitle);
+    setFirstName(b.firstName);
+    setLastName(b.lastName);
+    setPhoneCode(b.phoneCode);
+    setPhoneNumber(b.phoneNumber);
+    setEmail(b.email);
+    setOnWhatsApp(b.onWhatsApp);
+    // What the pick filled in "Who is asking" goes back too — through the same hand-over the pick
+    // used, since a change of kind would otherwise clear the party being put back.
+    if (b.channelKey !== channelKey) {
+      pendingParty.current = b.party ? { party: b.party, contact: b.partyContact } : null;
+      setChannelKey(b.channelKey);
+    } else if (b.party && b.party.id !== party?.id) {
+      pendingParty.current = { party: b.party, contact: b.partyContact };
+      setParty(b.party);
+    } else {
+      pendingParty.current = null;
+      setParty(b.party);
+      setPartyContact(b.partyContact);
+    }
   };
 
-  const fullPhone = phoneCode && phoneNumber.trim() ? `${phoneCode}${phoneNumber.trim()}` : "";
+  const fullPhone = phoneCode ? joinPhone(phoneCode, phoneNumber) : "";
   // The caller's name (title left off — it reads as a salutation, not a name).
   const typedGuestName = `${firstName.trim()} ${lastName.trim()}`.trim();
   // A typed email the backend would refuse is a blocker here, not a "bad request" after the click.
@@ -491,9 +576,9 @@ export function NewInquiryCanvas() {
       const agesOut = c > 0 && parsedAges.length === c ? parsedAges : undefined;
 
       if (!channel) throw new Error("Say how they came in first");
-      // The guest staying is named at Wrap up (2026-10-12) — unless the caller's number found a
-      // guest already on file, who is taken as the guest until Wrap up says otherwise.
-      const guestProfileId = selectedGuest?.id ?? null;
+      // The guest staying is named at Wrap up (2026-10-12). The caller list finds callers, never a
+      // guest (2026-10-27), so nothing names one here.
+      const guestProfileId: string | null = null;
       const inquiryBody = {
         guestProfileId,
         caller: {
@@ -559,7 +644,8 @@ export function NewInquiryCanvas() {
       if (session) void queryClient.prefetchQuery({ queryKey: ["entry", id], queryFn: () => getEntry(session, id) });
       toast.success(`${id} kept · the lead is on record`);
       setNavigating(true);
-      router.push(fromChart.room ? `${bookingHref(id, 1)}&room=${encodeURIComponent(fromChart.room)}` : bookingHref(id));
+      // The house is asked as the booking opens — no second press of Ask the house.
+      router.push(fromChart.room ? `${bookingHref(id, 1)}&room=${encodeURIComponent(fromChart.room)}` : `${bookingHref(id, 1)}&ask=1`);
     },
     onError: (e) => {
       const body = e instanceof ApiError ? e.body : undefined;
@@ -691,7 +777,7 @@ export function NewInquiryCanvas() {
                         {fullPhone ? <> · {fullPhone}{onWhatsApp === true ? " · on WhatsApp" : onWhatsApp === false ? " · not on WhatsApp" : ""}</> : null}
                         {email.trim() ? <> · {email.trim()}</> : null}
                         {isOta && !fullPhone && !email.trim() ? <> · OTA booking</> : null}
-                        {selectedGuest ? <> · on file as {guestFullName(selectedGuest)}</> : null}
+                        {selectedCaller?.party ? <> · for {selectedCaller.party.displayName}</> : selectedCaller ? <> · rang before</> : null}
                       </>
                     )
                   }
@@ -713,21 +799,23 @@ export function NewInquiryCanvas() {
                       <div className="field">
                         <label>
                           Phone
-                          <Help label="About the phone">Typing it finds a guest already on file.</Help>
+                          {!isOta ? <ReqMark /> : null}
+                          <Help label="About the phone">Typing it finds who has rung with it before — a caller, or an agency&rsquo;s or a company&rsquo;s person.</Help>
                         </label>
                         <PhoneInput code={phoneCode} setCode={setPhoneCode} number={phoneNumber} setNumber={setPhoneNumber} />
-                        {!callerReachable ? <span className="hint warn-ink">a phone or an email is needed to start</span> : null}
+                        {!callerReachable ? <span className="hint stop-ink">a phone or an email is needed to start</span> : null}
                       </div>
                       <div className="field">
                         <label>
                           Email
-                          <Help label="About the email">Optional when there is a phone.</Help>
+                          {!isOta ? <ReqMark /> : null}
+                          <Help label="About the email">Optional when there is a phone. With no phone, typing it finds who has rung with it before.</Help>
                         </label>
                         <input className="input" type="email" value={email} placeholder="name@example.com" onChange={(e) => setEmail(e.target.value)} />
                         {emailBad ? (
                           <span className="hint stop-ink">that does not read as an email address</span>
                         ) : !callerReachable ? (
-                          <span className="hint warn-ink">or the email</span>
+                          <span className="hint stop-ink">or the email</span>
                         ) : null}
                       </div>
                       {fullPhone ? (
@@ -747,24 +835,28 @@ export function NewInquiryCanvas() {
                           {onWhatsApp === null ? <span className="hint warn-ink">ask them</span> : null}
                         </div>
                       ) : null}
-                      {phoneMatches.length > 0 ? (
+                      {callerMatches.length > 0 ? (
                         <div className="wide">
                           <PickList
-                            head={`${phoneMatches.length === 1 ? "A guest" : "Guests"} on file with this number`}
-                            rows={phoneMatches.map((g) => ({ key: g.id, main: <GuestLine guest={g} />, onPick: () => adoptGuest(g) }))}
+                            head={`${callerMatches.length === 1 ? "Someone has" : "People have"} rung with this ${callerTerm.includes("@") ? "email" : "number"} before`}
+                            rows={callerMatches.map((m) => ({ key: m.key, main: <CallerLine caller={m} />, onPick: () => adoptCaller(m) }))}
                           />
                         </div>
                       ) : null}
-                      {selectedGuest ? (
+                      {selectedCaller ? (
                         <div className="wide bind bound" style={{ display: "grid", gap: 6 }}>
-                          <span className="sm">
-                            <Icon name="check" /> <GuestLine guest={selectedGuest} />
+                          <span className="sm" style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
+                            <Icon name="check" /> <CallerLine caller={selectedCaller} />
                           </span>
                           <div className="row-acts">
-                            <span className="meta">on file — taken as the guest staying</span>
-                            <Help label="About the guest on file">Wrap up can name someone else.</Help>
-                            <Button kind="quiet" compact onClick={() => setSelectedGuest(null)}>
-                              Not this guest
+                            <span className="meta">
+                              {selectedCaller.party ? `the caller, for ${selectedCaller.party.displayName}` : "the caller, as they rang before"}
+                            </span>
+                            <Help label="About the caller found">
+                              Only the caller is filled in. The guest staying is named at Wrap up, where the guests this caller brought before come first.
+                            </Help>
+                            <Button kind="quiet" compact onClick={notThisCaller}>
+                              Not this caller
                             </Button>
                           </div>
                         </div>
@@ -984,9 +1076,8 @@ export function NewInquiryCanvas() {
                   <div className="form3">
                     <div className="field">
                       <label>Check-in</label>
-                      <input
+                      <DateInput
                         className={`input${checkInPast ? " invalid" : ""}`}
-                        type="date"
                         value={checkIn}
                         min={today ?? undefined}
                         onChange={(e) => setCheckIn(e.target.value)}
@@ -1016,9 +1107,8 @@ export function NewInquiryCanvas() {
                     </div>
                     <div className="field">
                       <label>Check-out</label>
-                      <input
+                      <DateInput
                         className="input"
-                        type="date"
                         value={checkOut}
                         min={checkOutMin}
                         onChange={(e) => onCheckOut(e.target.value)}

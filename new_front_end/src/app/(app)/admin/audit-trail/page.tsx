@@ -5,6 +5,7 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { queryAuditEvents, type AuditEventFilters } from "@/lib/api/admin";
 import { useSession } from "@/hooks/use-session";
 import { TraceEventRow } from "@/components/trace/trace-event-row";
+import { DateTimeInput } from "@/components/ds/date-input";
 
 const PAGE_SIZE = 50;
 const EMPTY: AuditEventFilters = { actorId: "", entityType: "", entityId: "", eventType: "", from: "", to: "" };
@@ -64,10 +65,10 @@ export default function AdminAuditTrailPage() {
           <input className="admin-input mt-1" placeholder="exact record id" value={draft.entityId} onChange={(e) => setDraft({ ...draft, entityId: e.target.value })} />
         </label>
         <label className="admin-muted text-xs">From
-          <input className="admin-input mt-1" type="datetime-local" value={draft.from} onChange={(e) => setDraft({ ...draft, from: e.target.value })} />
+          <DateTimeInput className="admin-input mt-1" value={draft.from} onChange={(e) => setDraft({ ...draft, from: e.target.value })} />
         </label>
         <label className="admin-muted text-xs">To
-          <input className="admin-input mt-1" type="datetime-local" value={draft.to} onChange={(e) => setDraft({ ...draft, to: e.target.value })} />
+          <DateTimeInput className="admin-input mt-1" value={draft.to} onChange={(e) => setDraft({ ...draft, to: e.target.value })} />
         </label>
         <div className="col-span-full flex gap-2">
           <button type="button" className="admin-btn w-fit" onClick={apply}>Apply filters</button>

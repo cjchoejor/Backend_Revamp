@@ -36,6 +36,7 @@ import { PdfButton } from "./pdf-button";
 import { ProformaPreview } from "./quotation-preview";
 import { RoomCompositionPlanner } from "./room-compositions-board";
 import { Help } from "@/components/ds/help";
+import { DateInput, DateTimeInput } from "@/components/ds/date-input";
 
 /**
  * Mid-stay money on the Stay step (2026-08-21, operator ruling):
@@ -65,12 +66,12 @@ const LEVEL_RANK: Record<string, number> = { L1: 1, L2: 2, L3: 3, L4: 4 };
 const fmtDay = (iso: string | null | undefined) => {
   if (!iso) return "—";
   const d = new Date(`${iso.slice(0, 10)}T00:00:00`);
-  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
 };
 const fmtWhen = (iso: string | null | undefined) => {
   if (!iso) return "";
   const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 };
 const addDaysIso = (iso: string, n: number) => {
   const d = new Date(`${iso.slice(0, 10)}T00:00:00Z`);
@@ -513,7 +514,7 @@ function InterimRequestPanel({
               <div style={row}>
                 <div className="field" style={fieldTight}>
                   <label>Payment due by</label>
-                  <input type="datetime-local" value={dueDraft} onChange={(e) => setDueDraft(e.target.value)} />
+                  <DateTimeInput className="dinput" value={dueDraft} onChange={(e) => setDueDraft(e.target.value)} />
                 </div>
                 <button type="button" className="btn btn-primary btn-sm" disabled={!dueDraft || dueM.isPending} onClick={() => dueM.mutate()}>
                   {dueM.isPending ? "Saving…" : "Save due date"}
@@ -542,7 +543,7 @@ function InterimRequestPanel({
         {pKind === "BY_DATE" && (
           <div className="field" style={fieldTight}>
             <label>Promised by</label>
-            <input type="datetime-local" value={pWhen} onChange={(e) => setPWhen(e.target.value)} />
+            <DateTimeInput className="dinput" value={pWhen} onChange={(e) => setPWhen(e.target.value)} />
           </div>
         )}
       </div>
@@ -1013,8 +1014,7 @@ export function StayExtensionBlock({ entry, onChanged }: { entry: EntryDetail; o
       <div style={{ ...row, gap: 10 }}>
         <div className="field" style={fieldTight}>
           <label>New checkout date</label>
-          <input
-            type="date"
+          <DateInput className="dinput"
             value={newDate}
             min={currentCheckOut ? addDaysIso(currentCheckOut, 1) : undefined}
             onChange={(e) => {

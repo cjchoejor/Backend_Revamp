@@ -34,6 +34,7 @@ import type { AdvancePaymentPlanSummary, EntryDetail, InvoiceSummary, PaymentSta
 import { ActionRow, Choice, DsDialog, Fact, Facts, Live, SeeRow, StepCard, toastRefusal } from "./kit";
 import { hotelLocalToIso, isoToHotelLocal } from "./s2-shared";
 import { Help, HelpHere } from "@/components/ds/help";
+import { DateTimeInput } from "@/components/ds/date-input";
 
 /* ------------------------------------------------------------------ words */
 
@@ -617,7 +618,7 @@ function PlanDialog({
               taken as check-in.
             </Help>
           </label>
-          <input className="input" type="datetime-local" value={promised} min={nowLocal || undefined} onChange={(e) => setPromised(e.target.value)} />
+          <DateTimeInput className="input" value={promised} min={nowLocal || undefined} onChange={(e) => setPromised(e.target.value)} />
         </div>
       ) : null}
       <div className="field">

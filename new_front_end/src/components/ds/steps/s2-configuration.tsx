@@ -50,6 +50,7 @@ import { optionSelectedRoomIds, type AvailabilityOptionSelected, type EntryDetai
 import { Tool, atLeast, toastRefusal, useRefreshEntry } from "./kit";
 import { Help } from "@/components/ds/help";
 import { enumerateNights, useRoomSelection } from "./use-room-selection";
+import { DateInput } from "@/components/ds/date-input";
 
 /**
  * A count field that may be emptied while typing — "0" and "" are different answers. A keystroke
@@ -428,9 +429,8 @@ export function ChangeConfiguration({
         <div className="form3" style={{ marginTop: 8 }}>
           <div className="field">
             <label>Check-in</label>
-            <input
+            <DateInput
               className="input"
-              type="date"
               value={checkIn}
               min={hotelDay?.today}
               onChange={(e) => setCheckIn(e.target.value)}
@@ -444,9 +444,8 @@ export function ChangeConfiguration({
           <Count label="Nights" value={nights} onChange={setNights} min={1} max={90} />
           <div className="field">
             <label>Check-out</label>
-            <input
+            <DateInput
               className="input"
-              type="date"
               value={checkOut}
               min={checkIn || undefined}
               onChange={(e) => {
