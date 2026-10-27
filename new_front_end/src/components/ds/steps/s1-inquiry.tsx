@@ -65,12 +65,13 @@ import {
   parkTab,
   declineTab,
   useOpenOtherWay,
+  useOpenFileTab,
 } from "./kit";
 import { AddReturnStay, TripStays } from "@/components/ds/workspace/return-stay";
 import { enumerateNights, useRoomSelection } from "./use-room-selection";
 import { CHANNEL_OPTIONS, PartySearch, cameInAsOf, channelDef, type ChannelKey } from "./new-inquiry-parts";
 import { TheCaller, WrapUp } from "./s1-caller";
-import { PickBill, usePickPricing, type BillNight } from "./s1-bill";
+import { cleanPicks, usePickPricing, type BillNight } from "./s1-bill";
 import { usePublishPriceDraft } from "@/lib/ds/stay-price";
 import { Help, HelpHere } from "@/components/ds/help";
 import type { PickPricing } from "@/lib/api/availability";
@@ -603,10 +604,17 @@ function TheStay({
         expectedVersion: entry.version,
       }),
     onSuccess: () => {
-      toast.success(
-        "The stay is updated — ask the house again for these dates",
-      );
+      toast.success("The stay is updated — the house is asked again for these dates");
       refresh();
+      // The house is asked again by itself (2026-10-27, operator: "when I make edits to the stay
+      // and click Done, can it ask the house directly, so we can remove the Ask again button").
+      // The saved figures ride on the event, since the entry on screen is still the old one.
+      if (f.checkIn && checkOut)
+        window.dispatchEvent(
+          new CustomEvent(STAY_SAVED_EVENT, {
+            detail: { entryId: entry.id, checkInDate: f.checkIn, checkOutDate: checkOut, guestCount: adultsN + childN },
+          }),
+        );
       // Done saved it; the work moves on, as a plain Done does.
       flowDone("stay");
     },
@@ -1074,15 +1082,16 @@ function TheHouse({
   const chartRead = useRef(false);
 
   const ask = useMutation({
-    mutationFn: async () => {
-      const ci = entry.checkInDate?.slice(0, 10);
-      const co = entry.checkOutDate?.slice(0, 10);
+    // `over` carries the stay just saved — the entry on screen is re-read a moment later.
+    mutationFn: async (over: StaySaved | void) => {
+      const ci = over ? over.checkInDate : entry.checkInDate?.slice(0, 10);
+      const co = over ? over.checkOutDate : entry.checkOutDate?.slice(0, 10);
       if (!ci || !co)
         throw new Error("Put in the check-in and check-out first");
       return queryAvailabilityByEntry(session!, entry.id, {
         checkInDate: ci,
         checkOutDate: co,
-        guestCount: entry.guestCount ?? undefined,
+        guestCount: (over ? over.guestCount : entry.guestCount) ?? undefined,
         useType: entry.useType ?? undefined,
       });
     },
@@ -1144,6 +1153,24 @@ function TheHouse({
   const billFor = picked.length ? picked : candidate;
   const bill = usePickPricing(entry.id, billFor, hasResults);
   const pickedSaved = sel.savedCanon != null && sel.savedCanon === sel.currentCanon;
+  // The bill lives in the booking file (2026-10-27, operator: "when rooms are picked, show this on
+  // the right, in Charges & payments › The price, with the nights and the rooms"). A pick made by
+  // hand opens it there; picks restored on arrival or a background re-read do not, and the page
+  // never moves — only the file's tab changes.
+  const openFile = useOpenFileTab();
+  const handPickedAt = useRef(0);
+  const markHandPick = () => {
+    handPickedAt.current = Date.now();
+  };
+  const pickKey = picked.length ? JSON.stringify(cleanPicks(picked)) : "";
+  const lastPickKey = useRef(pickKey);
+  useEffect(() => {
+    if (pickKey === lastPickKey.current) return;
+    lastPickKey.current = pickKey;
+    if (!pickKey || !editable || past || Date.now() - handPickedAt.current > 2000) return;
+    openFile("money", "price");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pickKey]);
   // What is picked, saved or not, for the Charges & payments tab and the header total.
   usePublishPriceDraft(entry.id, editable ? { kind: "PICKS", perNight: picked, saved: pickedSaved } : null);
   const billTitle = picked.length
@@ -1154,6 +1181,7 @@ function TheHouse({
 
   const takeIt = () => {
     if (!chosenRow) return;
+    markHandPick();
     const ids = takeIds;
     sel.setWholeStay(ids);
     const perNight = stayNights.length
@@ -1239,6 +1267,40 @@ function TheHouse({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [askOnArrival, chartRoom, editable, past, session, savedOption, hasResults]);
 
+  // The stay's Done asks the house again (2026-10-27) — with the dates it just saved.
+  const askRef = useRef(ask);
+  askRef.current = ask;
+  const autoAsked = useRef<string | null>(null);
+  useEffect(() => {
+    if (!editable || past) return;
+    const on = (e: Event) => {
+      const d = (e as CustomEvent<StaySaved & { entryId: string }>).detail;
+      if (!d || d.entryId !== entry.id || !d.checkInDate || !d.checkOutDate) return;
+      autoAsked.current = `${d.checkInDate}|${d.checkOutDate}|${d.guestCount ?? ""}`;
+      askRef.current.mutate({ checkInDate: d.checkInDate, checkOutDate: d.checkOutDate, guestCount: d.guestCount });
+    };
+    window.addEventListener(STAY_SAVED_EVENT, on);
+    return () => window.removeEventListener(STAY_SAVED_EVENT, on);
+  }, [entry.id, editable, past]);
+  // With no Ask again button, an answer gone old (the house's clock marks it so) or one for dates
+  // the booking no longer has — the stay changed on another screen — is asked again, once.
+  const bookingKey = `${entry.checkInDate?.slice(0, 10) ?? ""}|${entry.checkOutDate?.slice(0, 10) ?? ""}|${entry.guestCount ?? ""}`;
+  const otherDates =
+    !!searched.checkIn &&
+    !!entry.checkInDate &&
+    (searched.checkIn !== entry.checkInDate.slice(0, 10) || (!!searched.checkOut && !!entry.checkOutDate && searched.checkOut !== entry.checkOutDate.slice(0, 10)));
+  const reask = !hasResults || !editable || past ? null : stale ? `stale:${configId}` : otherDates ? bookingKey : null;
+  useEffect(() => {
+    if (!reask || autoAsked.current === reask || ask.isPending || !session || !entry.checkInDate || !entry.checkOutDate) return;
+    // Started once the effect has settled — see the chart's ask above.
+    const t = setTimeout(() => {
+      autoAsked.current = reask;
+      ask.mutate();
+    }, 0);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reask, ask.isPending, session]);
+
   const [toolOpen, setToolOpen] = useState(false);
   const toolRef = useRef<HTMLDivElement | null>(null);
   const openTool = () => {
@@ -1256,7 +1318,7 @@ function TheHouse({
     : !configId
       ? "ask the house first"
       : stale
-        ? "the answer is old — ask again first"
+        ? "the house is being asked again"
         : !chosenRow
           ? "choose a type in the table"
           : chosenRow.full.length < numberOfRooms
@@ -1401,13 +1463,22 @@ function TheHouse({
               </tbody>
             </table>
             {bill.pricing ? (
-              <PickBill
-                pricing={bill.pricing}
-                loading={bill.loading}
-                title={billTitle}
-                caption={picked.length && !pickedSaved ? "Save the rooms to keep this choice — the figures follow every pick." : undefined}
-                help="Indicative, not a quote. Meals, extra beds and any agreed rate are set at Negotiation." 
-              />
+              <div className={`pb-line${bill.loading ? " loading" : ""}`}>
+                <span className="pb-line-k">{billTitle}</span>
+                <b className="money">{money(bill.pricing.totals.total, bill.pricing.currency)}</b>
+                <span className="meta">
+                  {plural(bill.pricing.totals.roomNights, "room-night")} · room only, taxes included
+                </span>
+                {picked.length ? (
+                  <Button kind="quiet" compact onClick={() => openFile("money", "price")}>
+                    The bill, night by night
+                  </Button>
+                ) : null}
+                <Help label="About this figure">
+                  Indicative, not a quote. Meals, extra beds and any agreed rate are set at Negotiation.
+                  {picked.length ? " The bill for the rooms picked — each night, its rooms and the taxes — is in the booking file, under Charges & payments." : ""}
+                </Help>
+              </div>
             ) : chosenPricing ? (
               <div style={{ marginTop: 10 }}>
                 <b className="money">
@@ -1428,9 +1499,13 @@ function TheHouse({
                 </span>
               </div>
             ) : null}
-            {stale ? (
+            {ask.isPending ? (
+              <div className="sm meta" style={{ marginTop: 8 }} role="status">
+                Asking the house for these dates…
+              </div>
+            ) : stale ? (
               <div className="sm warn-ink" style={{ marginTop: 8 }}>
-                This answer is old — ask the house again before choosing.
+                This answer is old — the house is asked again.
               </div>
             ) : null}
             {savedIds.length ? (
@@ -1472,15 +1547,13 @@ function TheHouse({
             ) : null}
             {editable ? (
               <div className="row-acts" style={{ marginTop: 10 }}>
-                <Button
-                  kind="quiet"
-                  compact
-                  state={ask.isPending ? "working" : "default"}
-                  workingLabel="Asking…"
-                  onClick={() => ask.mutate()}
-                >
-                  Ask again
-                </Button>
+                {/* No Ask again (2026-10-27): the house is asked by itself after the stay's
+                    Done, and when its answer goes old. Only a failed ask offers it once more. */}
+                {ask.isError && !ask.isPending ? (
+                  <Button kind="quiet" compact onClick={() => ask.mutate()}>
+                    Try asking the house again
+                  </Button>
+                ) : null}
                 <Button kind="quiet" compact onClick={openTool}>
                   Choose the rooms…
                 </Button>
@@ -1492,7 +1565,7 @@ function TheHouse({
 
       {showTool && toolSlot
         ? createPortal(
-            <div ref={toolRef}>
+            <div ref={toolRef} onPointerDownCapture={markHandPick} onClickCapture={markHandPick} onKeyDownCapture={markHandPick}>
               <WhichRooms
                 entry={entry}
                 rows={rows}
@@ -1712,7 +1785,7 @@ function WhichRooms({
   const saveWord = showSaved
     ? "Saved"
     : stale
-      ? "Ask again to save"
+      ? "Waiting for the house"
       : sel.nightsDiffer
         ? "Save the rooms by night"
         : numberOfRooms === 1
@@ -2015,3 +2088,7 @@ function ReleaseDialog({
     </ReasonDialog>
   );
 }
+
+/** The stay saved on the Inquiry step — the house card asks the house again with these figures. */
+const STAY_SAVED_EVENT = "desk:stay-saved";
+type StaySaved = { checkInDate: string; checkOutDate: string; guestCount?: number | null };

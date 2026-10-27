@@ -1248,7 +1248,29 @@ export function useOpenOtherWay() {
     p.set("view", "other");
     p.set("way", key);
     router.replace(`${pathname}?${p.toString()}`, { scroll: false });
-    if (typeof window !== "undefined") window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }));
+    // The old layout's Other ways is a tab at the top of the step. In the stage layout it opens in
+    // the fixed bar, so the page stays where it is (2026-10-27 — the page never moves on its own).
+    if (typeof window !== "undefined" && !document.querySelector(".ws-top"))
+      window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }));
+  };
+}
+
+/**
+ * Open a tab of the booking file (the stage layout's right-hand side) — and a sub-tab inside it —
+ * without moving the page (2026-10-27, operator: "when rooms are picked … automatically switch
+ * to Charges & payments, on the sub-tab The price"). Nothing happens when it is already open.
+ */
+export function useOpenFileTab() {
+  const params = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  return (view: string, sub?: string) => {
+    if (params.get("view") === view && (!sub || params.get("sub") === sub)) return;
+    const p = new URLSearchParams(params.toString());
+    p.set("view", view);
+    if (sub) p.set("sub", sub);
+    p.delete("lens");
+    router.replace(`${pathname}?${p.toString()}`, { scroll: false });
   };
 }
 

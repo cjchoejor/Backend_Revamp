@@ -48,6 +48,7 @@ import { FolioDocumentsBlock } from "@/components/desk/workspace/folio-documents
 import { HeldPapersCard } from "@/components/ds/workspace/held-papers";
 import { PLAN_LABEL, dueLabel } from "@/components/desk/workspace/advance-settlement";
 import { useStayPrice, type StayPrice } from "@/lib/ds/stay-price";
+import { PickBill } from "@/components/ds/steps/s1-bill";
 import type { EntryDetail } from "@/types/api";
 import { Help, HelpHere } from "@/components/ds/help";
 import { DateInput } from "@/components/ds/date-input";
@@ -144,7 +145,7 @@ export function ChargesView({
               label: "The price",
               content: (
                 <>
-        <StepCard title="The price" status={sp.source === "QUOTE" ? (tag ?? undefined) : sp.kind || undefined}>
+        <StepCard title="The price" status={sp.source === "QUOTE" ? (tag ?? undefined) : sp.source === "PICKS" ? undefined : sp.kind || undefined}>
           {sp.source === "TABLE" ? (
             <TablePrice sp={sp} />
           ) : sp.source === "PICKS" ? (
@@ -172,7 +173,7 @@ export function ChargesView({
                 </p>
               ) : null}
               {billing?.rooms?.length ? (
-                <table className="table compact" style={{ marginTop: 8 }}>
+                <table className="table compact resp" style={{ marginTop: 8 }}>
                   <thead>
                     <tr>
                       <th>Room</th>
@@ -194,12 +195,12 @@ export function ChargesView({
                             {r.isFoc ? " · free of charge" : ""}
                           </span>
                         </td>
-                        <td>{r.nights ?? "—"}</td>
-                        <td className="num">{money(r.roomSubtotal, cur)}</td>
-                        <td className="num">{(r.mealsSubtotal ?? 0) > 0 ? money(r.mealsSubtotal, cur) : "—"}</td>
-                        <td className="num">{r.extraBedCount > 0 ? money(r.extraBedSubtotal, cur) : "—"}</td>
-                        <td className="num">{r.serviceCharge != null || r.gst != null ? money((r.serviceCharge ?? 0) + (r.gst ?? 0), cur) : "—"}</td>
-                        <td className="num">
+                        <td data-label="Nights">{r.nights ?? "—"}</td>
+                        <td className="num" data-label="Room">{money(r.roomSubtotal, cur)}</td>
+                        <td className="num" data-label="Meals">{(r.mealsSubtotal ?? 0) > 0 ? money(r.mealsSubtotal, cur) : "—"}</td>
+                        <td className="num" data-label="Extra bed">{r.extraBedCount > 0 ? money(r.extraBedSubtotal, cur) : "—"}</td>
+                        <td className="num" data-label="Service + GST">{r.serviceCharge != null || r.gst != null ? money((r.serviceCharge ?? 0) + (r.gst ?? 0), cur) : "—"}</td>
+                        <td className="num" data-label="Total">
                           <b>{money(r.total, cur)}</b>
                         </td>
                       </tr>
@@ -257,7 +258,7 @@ export function ChargesView({
                 <b>{money(balance, cur)}</b>
               </div>
               {parts.length > 1 ? (
-                <table className="table compact" style={{ marginTop: 10 }}>
+                <table className="table compact resp" style={{ marginTop: 10 }}>
                   <thead>
                     <tr>
                       <th>Part of the bill</th>
@@ -271,10 +272,10 @@ export function ChargesView({
                     {parts.map((x) => (
                       <tr key={x.key}>
                         <td>{x.label}</td>
-                        <td className="num">{money(x.b.base, cur)}</td>
-                        <td className="num">{money(x.b.serviceCharge, cur)}</td>
-                        <td className="num">{money(x.b.gst, cur)}</td>
-                        <td className="num">
+                        <td className="num" data-label="Charges">{money(x.b.base, cur)}</td>
+                        <td className="num" data-label="Service">{money(x.b.serviceCharge, cur)}</td>
+                        <td className="num" data-label="GST">{money(x.b.gst, cur)}</td>
+                        <td className="num" data-label="Total">
                           <b>{money(x.b.charges, cur)}</b>
                         </td>
                       </tr>
@@ -420,7 +421,7 @@ function TablePrice({ sp }: { sp: StayPrice }) {
           <b>The quotation on file says {money(sp.savedQuoteAmount, cur)}</b> — save the table at Negotiation to bring it up to date.
         </p>
       ) : null}
-      <table className="table compact" style={{ marginTop: 8 }}>
+      <table className="table compact resp" style={{ marginTop: 8 }}>
         <thead>
           <tr>
             <th>Room</th>
@@ -439,12 +440,12 @@ function TablePrice({ sp }: { sp: StayPrice }) {
                 <b>Room {r.roomNumber ?? "—"}</b>
                 {r.isFoc ? <span className="meta"> · free of charge</span> : null}
               </td>
-              <td>{r.nights}</td>
-              <td className="num">{money(r.roomSubtotal, cur)}</td>
-              <td className="num">{r.mealsSubtotal > 0 ? money(r.mealsSubtotal, cur) : "—"}</td>
-              <td className="num">{r.extraBedCount > 0 ? money(r.extraBedSubtotal, cur) : "—"}</td>
-              <td className="num">{money(r.serviceCharge + r.gst, cur)}</td>
-              <td className="num">
+              <td data-label="Nights">{r.nights}</td>
+              <td className="num" data-label="Room">{money(r.roomSubtotal, cur)}</td>
+              <td className="num" data-label="Meals">{r.mealsSubtotal > 0 ? money(r.mealsSubtotal, cur) : "—"}</td>
+              <td className="num" data-label="Extra bed">{r.extraBedCount > 0 ? money(r.extraBedSubtotal, cur) : "—"}</td>
+              <td className="num" data-label="Service + GST">{money(r.serviceCharge + r.gst, cur)}</td>
+              <td className="num" data-label="Total">
                 <b>{money(r.total, cur)}</b>
               </td>
             </tr>
@@ -468,54 +469,26 @@ function TablePrice({ sp }: { sp: StayPrice }) {
   );
 }
 
-/** The rooms picked at Inquiry, priced rooms only by the server. */
+/**
+ * The rooms picked at Inquiry, priced rooms only by the server — the same bill the house card
+ * carried (2026-10-27, moved here): each night with its rooms, each room's nights, room-nights ×
+ * rate per type, the net, the service charge, the GST and the stay's total.
+ */
 function PicksPrice({ sp }: { sp: StayPrice }) {
   const p = sp.pick;
-  const cur = sp.currency;
   if (!p) return null;
   return (
-    <>
-      <div className="bigfig">
-        <span className="meta">Stay total · rooms only</span>
-        <b>{money(p.totals.total, cur)}</b>
-        {sp.loading ? <span className="meta">updating…</span> : null}
-      </div>
-      <table className="table compact" style={{ marginTop: 8 }}>
-        <thead>
-          <tr>
-            <th>Room type</th>
-            <th>Room-nights</th>
-            <th className="num">Rate a night</th>
-            <th className="num">Net</th>
-            <th className="num">Total</th>
-          </tr>
-        </thead>
-        <tbody>
-          {p.byType.map((t) => (
-            <tr key={t.roomTypeId}>
-              <td>
-                <b>{t.name}</b>
-                {t.packageName ? <span className="meta"> · {t.packageName}</span> : null}
-              </td>
-              <td>{t.roomNights}</td>
-              <td className="num">{t.rate != null ? money(t.rate, cur) : "no rate"}</td>
-              <td className="num">{money(t.net, cur)}</td>
-              <td className="num">
-                <b>{money(t.total, cur)}</b>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      <Facts wide style={{ marginTop: 8 }}>
-        <Fact k="Net">{money(p.totals.net, cur)}</Fact>
-        <Fact k="Service charge">{money(p.totals.serviceCharge, cur)}</Fact>
-        <Fact k="GST">{money(p.totals.gst, cur)}</Fact>
-      </Facts>
-      {p.unpricedTypes.length ? (
-        <p className="warn-ink sm">No rate on file for {p.unpricedTypes.map((t) => t.name).join(", ")} — not counted above.</p>
-      ) : null}
-    </>
+    <PickBill
+      pricing={p}
+      loading={sp.loading}
+      title={sp.unsaved ? "The rooms picked · not saved yet" : "The rooms chosen"}
+      caption={
+        sp.unsaved ? (
+          <span className="warn-ink">Save the rooms on the Inquiry step to keep this choice — the figures follow every pick.</span>
+        ) : undefined
+      }
+      help="Indicative, not a quote — rooms only. Meals, extra beds and any agreed rate are added at Negotiation, where the quotation prices them."
+    />
   );
 }
 

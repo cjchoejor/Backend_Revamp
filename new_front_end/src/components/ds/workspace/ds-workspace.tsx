@@ -128,6 +128,16 @@ const INQUIRY_SECTIONS: Record<string, string> = {
 // The Stage 1 header's Re-enter and Under the hood buttons, hidden for now (2026-10-27).
 const HEAD_TOOLS = false;
 const FILE_TABS: ReadonlyArray<readonly ["details" | BookingTab, string]> = [["details", "Booking"], ...BOOKING_TABS];
+// What each tab reads as when the file is narrow (2026-10-27, operator: on a smaller screen the
+// tabs ran onto two rows). The full name stays on hover.
+const FILE_TAB_SHORT: Record<"details" | BookingTab, string> = {
+  details: "Booking",
+  money: "Charges",
+  requests: "Requests",
+  notes: "Notes",
+  docs: "Papers",
+  history: "History",
+};
 
 
 /* ------------------------------------------------------------------ */
@@ -1584,8 +1594,9 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                 <div className="ftitle">Booking file · the record</div>
                 <div className="ftabs" role="tablist">
                   {FILE_TABS.map(([k, label]) => (
-                    <button key={k} type="button" role="tab" className="ftab" aria-selected={fileTab === k} onClick={() => setView(k, viewing)}>
-                      {label}
+                    <button key={k} type="button" role="tab" className="ftab" title={label} aria-selected={fileTab === k} onClick={() => setView(k, viewing)}>
+                      <span className="ft-long">{label}</span>
+                      <span className="ft-short">{FILE_TAB_SHORT[k]}</span>
                       {k === "details" ? null : tabCount(k)}
                     </button>
                   ))}
