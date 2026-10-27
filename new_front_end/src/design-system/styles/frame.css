@@ -1497,3 +1497,11 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .ws-top .gatebar.top .acts:not(.desk-root *) { flex-direction: row; align-items: center; }
 .ds .ws-top .gatebar.top .control-wrap { display: inline-flex; flex-direction: row-reverse; align-items: center; gap: var(--s2); }
 .ds .ws-top .gatebar.top .control-note:not(.desk-root *) { margin-top: 0; white-space: nowrap; }
+
+/* ===== Stage 1's rooms table: the count and the save on a band of their own (2026-10-27), and a
+   card scrolled to lands below the sticky head, not under it ("Choose the rooms scrolls down too
+   much"). ===== */
+.ds .rooms-saverow:not(.desk-root *) { align-items: center; margin: var(--s3) 0 var(--s3); padding: var(--s2) 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.ds .rooms-saverow .rooms-count { font-size: var(--t-base); font-weight: 700; }
+.ds .rooms-saverow .btn.btn-primary:not(.desk-root *) { min-width: 160px; }
+.ds .ws-top .ws-split * { scroll-margin-top: calc(53px + var(--ws-head-h, 0px) + var(--s2)); scroll-margin-bottom: calc(var(--ws-bar-h, 56px) + var(--s2)); }

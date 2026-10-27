@@ -1756,8 +1756,10 @@ function WhichRooms({
         </>
       }
     >
-      <div className="row-acts" style={{ marginBottom: 10 }}>
-        <span className={`sm ${sel.ready ? "ok-ink" : "stop-ink"}`}>{counter}</span>
+      {/* The count and the save on a band of their own under the card's buttons (2026-10-27,
+          operator: "make Save the room prominent — it looks misaligned, too close to the button on top"). */}
+      <div className="row-acts rooms-saverow">
+        <span className={`rooms-count ${sel.ready ? "ok-ink" : "stop-ink"}`}>{counter}</span>
         {tally.map((t) => (
           <Chip
             key={t.parts.join("+")}
@@ -1790,9 +1792,8 @@ function WhichRooms({
         ) : null}
         {/* The save sits at the right end of the row, apart from the tallies it acts on
             (operator, 2026-09-29): the eye reads the counts left to right and lands on the act. */}
-        <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "baseline", gap: 12 }}>
+        <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 12 }}>
           <Button
-            compact
             className="go"
             kind={showSaved ? "secondary" : "primary"}
             icon={showSaved ? "check" : undefined}
