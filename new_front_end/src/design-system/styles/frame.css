@@ -1488,3 +1488,12 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .ws-top .ws-topstick.compact .stagebar:not(.desk-root *) { padding: 4px var(--s4); }
 .ds .ws-top .ws-topstick.compact .stagebar h3 { font-size: var(--t-lead); }
 .ds .ws-top .ws-topstick.compact .flow-chip { padding: 1px 10px 1px 3px; }
+
+/* ===== The fixed bar, one slim line (2026-10-27, operator: "minimise the height of the bar, it's too
+   inefficient"): compact controls, less padding, and the move's reason beside its button instead
+   of on a line under it. ===== */
+.ds .ws-top .gatebar.top:not(.desk-root *) { --control-h: 32px; padding: 6px var(--s5); gap: var(--s3); }
+.ds .ws-top .gatebar.top .btn:not(.desk-root *) { font-size: var(--t-sm); padding: 0 var(--s3); }
+.ds .ws-top .gatebar.top .acts:not(.desk-root *) { flex-direction: row; align-items: center; }
+.ds .ws-top .gatebar.top .control-wrap { display: inline-flex; flex-direction: row-reverse; align-items: center; gap: var(--s2); }
+.ds .ws-top .gatebar.top .control-note:not(.desk-root *) { margin-top: 0; white-space: nowrap; }

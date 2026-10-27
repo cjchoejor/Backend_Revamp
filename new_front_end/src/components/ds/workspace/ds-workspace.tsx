@@ -125,6 +125,8 @@ const INQUIRY_SECTIONS: Record<string, string> = {
 };
 
 /** The booking file's tabs on the right in the stage-template layout — Booking first. */
+// The Stage 1 header's Re-enter and Under the hood buttons, hidden for now (2026-10-27).
+const HEAD_TOOLS = false;
 const FILE_TABS: ReadonlyArray<readonly ["details" | BookingTab, string]> = [["details", "Booking"], ...BOOKING_TABS];
 
 
@@ -528,9 +530,17 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entry, selected, readyToConfirm]);
 
-  // Every step view starts at the top.
+  // Every step view starts at the top. A booking tab does too on the rail layout, where it replaces
+  // the canvas — but not on the Stage 1 layout, where it opens in the booking file BESIDE the work
+  // (and the bar's other ways open above the bar): there the page stays exactly where it is
+  // (2026-10-27, operator: "the working screen was scrolled down, and when I clicked Charges &
+  // payments in the booking file, the working screen scrolled").
   const viewing = selected ?? currentOrder;
+  const lastPlace = useRef({ viewing, view });
   useEffect(() => {
+    const prev = lastPlace.current;
+    lastPlace.current = { viewing, view };
+    if (prev.viewing === viewing && viewing === 1) return;
     window.scrollTo({ top: 0 });
   }, [viewing, view]);
 
@@ -1434,12 +1444,18 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                       </Button>
                     ) : null}
                     {parked && parkTimer ? <span className="meta">parked · expires {fmtDateTime(parkTimer.firesAt, clock.tz)}</span> : null}
-                    <span className="desk-root">
-                      <ReEnterMenu entry={entry} />
-                    </span>
-                    <Button kind="quiet" compact onClick={() => router.push(`${bookingHref(entry.id)}/backend`)}>
-                      Under the hood
-                    </Button>
+                    {/* Hidden for now (2026-10-27, operator: "hide these buttons, I don't think we need it
+                        anyway") — Re-enter and Under the hood; flip HEAD_TOOLS to bring them back. */}
+                    {HEAD_TOOLS ? (
+                      <>
+                        <span className="desk-root">
+                          <ReEnterMenu entry={entry} />
+                        </span>
+                        <Button kind="quiet" compact onClick={() => router.push(`${bookingHref(entry.id)}/backend`)}>
+                          Under the hood
+                        </Button>
+                      </>
+                    ) : null}
                   </div>
                 </div>
               </div>
