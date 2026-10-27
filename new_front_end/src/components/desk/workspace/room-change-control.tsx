@@ -986,6 +986,7 @@ export function RoomChangeControl({
                 }}
               />
               <RoomCompositionPlanner
+                tableOnly
                 sealedRoomIds={selectedNewRooms}
                 entryCheckIn={entry.checkInDate ?? null}
                 entryCheckOut={entry.checkOutDate ?? null}

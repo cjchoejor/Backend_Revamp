@@ -48,6 +48,8 @@ import { FolioDocumentsBlock } from "@/components/desk/workspace/folio-documents
 import { HeldPapersCard } from "@/components/ds/workspace/held-papers";
 import { PLAN_LABEL, dueLabel } from "@/components/desk/workspace/advance-settlement";
 import { useStayPrice, type StayPrice } from "@/lib/ds/stay-price";
+import { getQuotationPriceLines, type QuotationLivePreview } from "@/lib/api/quotations";
+import { PriceLinesTable, type PriceLinesFigures } from "@/components/ds/workspace/price-lines";
 import { PickBill } from "@/components/ds/steps/s1-bill";
 import type { EntryDetail } from "@/types/api";
 import { Help, HelpHere } from "@/components/ds/help";
@@ -172,7 +174,9 @@ export function ChargesView({
                   Shortened: {st.earlyDeparture.sleptNights} nights slept · {money(st.earlyDeparture.forgoneRoomTotal, cur)} not charged
                 </p>
               ) : null}
-              {billing?.rooms?.length ? (
+              {st.quotationId ? (
+                <QuotePriceLines quotationId={st.quotationId} stayTotal={st.amount} currency={cur} />
+              ) : billing?.rooms?.length ? (
                 <table className="table compact resp" style={{ marginTop: 8 }}>
                   <thead>
                     <tr>
@@ -212,8 +216,9 @@ export function ChargesView({
                 <p className="meta" style={{ marginTop: 6 }}>Priced on pass {st.segmentNumber}.</p>
               ) : null}
               <HelpHere label="About these figures">
-                Room, meals and bed are before tax; each room&rsquo;s total adds the service charge and the GST.
-                {billing?.rooms?.some((r) => r.componentsPreDiscount) ? " The parts are before the booking discount; the totals after it." : ""}
+                {st.quotationId
+                  ? "Set out as the quotation is: each room, with its extra beds and meals beneath it, all before tax and before any discount. The service charge, the GST and the discount follow, then the total."
+                  : "Room, meals and bed are before tax; each room’s total adds the service charge and the GST."}
               </HelpHere>
             </>
           )}
@@ -404,6 +409,61 @@ export function ChargesView({
   );
 }
 
+/** "10%" — a rate as the quotation's labels print it. */
+const pctWord = (rate: number) => `${Number((rate * 100).toFixed(2))}%`;
+
+/**
+ * The live preview's figures in the quotation's shape — the rows are the server's, and so is every
+ * figure; only the labels are worded here, exactly as the quotation words them.
+ */
+function previewFigures(p: QuotationLivePreview): PriceLinesFigures {
+  const d = p.discount;
+  return {
+    lines: p.lines,
+    datesShown: p.datesShown,
+    net: p.subtotal,
+    serviceChargeLabel: p.serviceChargeRate > 0 ? `Service charge ${pctWord(p.serviceChargeRate)} of net value` : "Service charge",
+    serviceCharge: p.serviceCharge,
+    gstLabel: p.gstRate > 0 ? `GST @ ${pctWord(p.gstRate)} of net + service charge` : "GST",
+    gst: p.gst,
+    discountLabel: !d
+      ? null
+      : d.requestedPercent != null
+        ? `Discount ${Number(d.requestedPercent.toFixed(2))}%`
+        : `Discount · ${(d.requestedAmount ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} off the total`,
+    discountAmount: d ? d.amountOffTotal : null,
+    discountNote: null,
+    total: p.payable,
+  };
+}
+
+/** The saved quotation's own rows, read from the server — the paper set out on the tab. */
+function QuotePriceLines({ quotationId, stayTotal, currency }: { quotationId: string; stayTotal: number | null; currency: string }) {
+  const { session } = useSession();
+  const q = useQuery({
+    queryKey: ["quotation-price-lines", quotationId],
+    queryFn: () => getQuotationPriceLines(session!, quotationId),
+    enabled: !!session,
+  });
+  if (q.isLoading) return <p className="meta">Reading the quotation…</p>;
+  if (!q.data) return <p className="meta">The quotation&rsquo;s rows could not be read.</p>;
+  const f = q.data;
+  return (
+    <>
+      <p className="meta" style={{ margin: "8px 0 4px" }}>
+        As quoted · {f.referenceNumber}
+        {f.versionNumber > 1 ? ` · v${f.versionNumber}` : ""}
+      </p>
+      <PriceLinesTable f={f} currency={currency} />
+      {stayTotal != null && Math.abs(stayTotal - f.total) > 0.005 ? (
+        <p className="meta" style={{ marginTop: 6 }}>
+          The quotation&rsquo;s total is for the stay as booked; the stay total above is what this stay comes to.
+        </p>
+      ) : null}
+    </>
+  );
+}
+
 /** The Negotiation table, priced by the server as it stands — saved or not. */
 function TablePrice({ sp }: { sp: StayPrice }) {
   const p = sp.preview;
@@ -421,49 +481,10 @@ function TablePrice({ sp }: { sp: StayPrice }) {
           <b>The quotation on file says {money(sp.savedQuoteAmount, cur)}</b> — save the table at Negotiation to bring it up to date.
         </p>
       ) : null}
-      <table className="table compact resp" style={{ marginTop: 8 }}>
-        <thead>
-          <tr>
-            <th>Room</th>
-            <th>Nights</th>
-            <th className="num">Room</th>
-            <th className="num">Meals</th>
-            <th className="num">Extra bed</th>
-            <th className="num">Service + GST</th>
-            <th className="num">Total</th>
-          </tr>
-        </thead>
-        <tbody>
-          {p.rooms.map((r) => (
-            <tr key={r.roomId}>
-              <td>
-                <b>Room {r.roomNumber ?? "—"}</b>
-                {r.isFoc ? <span className="meta"> · free of charge</span> : null}
-              </td>
-              <td data-label="Nights">{r.nights}</td>
-              <td className="num" data-label="Room">{money(r.roomSubtotal, cur)}</td>
-              <td className="num" data-label="Meals">{r.mealsSubtotal > 0 ? money(r.mealsSubtotal, cur) : "—"}</td>
-              <td className="num" data-label="Extra bed">{r.extraBedCount > 0 ? money(r.extraBedSubtotal, cur) : "—"}</td>
-              <td className="num" data-label="Service + GST">{money(r.serviceCharge + r.gst, cur)}</td>
-              <td className="num" data-label="Total">
-                <b>{money(r.total, cur)}</b>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      <Facts wide style={{ marginTop: 8 }}>
-        <Fact k="Net">{money(p.payableSubtotal, cur)}</Fact>
-        <Fact k="Service charge">{money(p.payableServiceCharge, cur)}</Fact>
-        <Fact k="GST">{money(p.payableGst, cur)}</Fact>
-        {p.discount ? (
-          <Fact k="Discount" meta={p.discount.requestedPercent != null ? `${p.discount.requestedPercent}% asked` : "a set amount"}>
-            − {money(p.discount.amountOffTotal, cur)}
-          </Fact>
-        ) : null}
-      </Facts>
+      {p.lines ? <PriceLinesTable f={previewFigures(p)} currency={cur} /> : null}
       <HelpHere label="About these figures">
-        The figures follow the negotiation table as it is changed — priced by the hotel server, the same way the quotation will be.
+        The figures follow the negotiation table as it is changed — priced by the hotel server, the same way the quotation will be,
+        and set out as the quotation will set them out.
       </HelpHere>
     </>
   );

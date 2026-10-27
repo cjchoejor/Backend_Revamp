@@ -92,6 +92,43 @@ export type QuotationLivePreviewRoom = {
   hasNightMealOverrides: boolean;
 };
 
+/**
+ * One row as the quotation prints it (2026-10-27): a room, or — indented — its extra beds and
+ * meals. Built by the server's `buildRoomPriceLines`, the same code that writes the paper.
+ */
+export type QuotationPriceLine = {
+  dates?: string | null;
+  description: string;
+  qty: string;
+  rate: number | null;
+  amount: number;
+  indent?: boolean;
+};
+
+/** `GET /api/quotations/:id/price-lines` — the quotation's rows and the figures under them. */
+export type QuotationPriceLines = {
+  quotationId: string;
+  referenceNumber: string;
+  versionNumber: number;
+  state: string;
+  lines: QuotationPriceLine[];
+  datesShown: boolean;
+  rowsAreNet: boolean;
+  net: number;
+  serviceChargeLabel: string;
+  serviceCharge: number;
+  gstLabel: string;
+  gst: number;
+  discountLabel: string | null;
+  discountAmount: number | null;
+  discountNote: string | null;
+  total: number;
+};
+
+export async function getQuotationPriceLines(session: Session, quotationId: string) {
+  return apiRequest<QuotationPriceLines>(`/api/quotations/${quotationId}/price-lines`, { session });
+}
+
 /** `POST /api/entries/:id/quotation-preview` — the quote's own arithmetic, nothing persisted. */
 export type QuotationLivePreview = {
   entryId: string;
@@ -100,6 +137,9 @@ export type QuotationLivePreview = {
   gstRate: number;
   serviceChargeRate: number;
   rooms: QuotationLivePreviewRoom[];
+  /** The table as the quotation would print it — rooms, then their beds and meals (2026-10-27). */
+  lines: QuotationPriceLine[];
+  datesShown: boolean;
   /** Per-column stay totals across every room (net of tax) — the Σ row under the rate columns. */
   columns: { room: number; extraBed: number; breakfast: number; lunch: number; dinner: number; meals: number };
   subtotal: number;

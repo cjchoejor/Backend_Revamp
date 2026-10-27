@@ -3,9 +3,8 @@
 /**
  * Step 2 · Negotiation — "shape the price" (SS03 §5, prototype `stepCanvas[2]`, Storyboard 02).
  *
- * The rate with its basis, the counter-offer line (not in the backend yet), who sleeps where and
- * their meals (the per-room table — the old planner, kept whole), the two doors — provisional
- * block or send the quote — the quotation as a paper with the guest's answer, earlier versions,
+ * Who sleeps where and their meals (the per-room table — the old planner, kept whole), the two
+ * doors — provisional block or send the quote — the quotation as a paper with the guest's answer, earlier versions,
  * and the race with another booking.
  *
  * Generating the quotation is what the gate needs; sending it is not (operator ruling
@@ -849,25 +848,8 @@ export function S2Negotiation({
           parkTab(parkNow, parking),
           // The answer the house had no way to write down (2026-10-01) — see the Inquiry step.
           declineTab(declineNow, declining),
-          {
-            key: "counter",
-            label: "Counter-offer",
-            content: (
-              <div className="way-form">
-                <p className="sm" style={{ margin: 0 }}>
-                  Counter-offers can&rsquo;t be recorded yet. For now, set the discount in the table on This step.
-                </p>
-                <div className="row-acts" style={{ alignItems: "center" }}>
-                  <Button kind="quiet" className="act" state="inert">
-                    Record a counter-offer
-                  </Button>
-                  <Help label="About counter-offers">
-                    <p>Records what the guest or agent asked for, by whom, and how it ended — it adds to the agent&rsquo;s record.</p>
-                  </Help>
-                </div>
-              </div>
-            ),
-          },
+          // The Counter-offer way was taken off (2026-10-27, operator: "remove the counter offer") —
+          // it could record nothing; the discount on the table is how a counter-offer is met.
         ]}
       />
 

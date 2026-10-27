@@ -1194,6 +1194,7 @@ export function StayExtensionBlock({ entry, onChanged }: { entry: EntryDetail; o
             </div>
             {negotiate && extensionRoomIds.length > 0 && (
               <RoomCompositionPlanner
+                tableOnly
                 sealedRoomIds={extensionRoomIds}
                 entryCheckIn={entry.checkInDate ?? null}
                 entryCheckOut={preview!.newCheckOut}

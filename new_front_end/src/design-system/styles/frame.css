@@ -420,6 +420,32 @@
 /* Charges & payments: the stay total is the figure the card exists for (UIappeal). */
 .ds .bigfig { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
 .ds .bigfig b { font-size: 26px; font-weight: 800; font-variant-numeric: tabular-nums; }
+
+/* The price as the quotation sets it out (2026-10-27): each room a row, its extra beds and meals
+   indented beneath it, then the foot — net, service charge, GST, any discount, the total. In the
+   narrow booking file the Qty and Rate columns fold under the description (media rule below). */
+.ds .plines-wrap { margin-top: var(--s2); }
+.ds .plines:not(.desk-root *) { width: 100%; }
+.ds .plines td:not(.desk-root *), .ds .plines th:not(.desk-root *) { vertical-align: top; border-bottom: 0; }
+.ds .plines thead th:not(.desk-root *) { border-bottom: 1px solid var(--line-2); }
+.ds .plines tbody tr:not(.desk-root *) { cursor: default; }
+.ds .plines tbody tr:hover:not(.desk-root *) { background: transparent; }
+.ds .plines .num:not(.desk-root *) { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ds .plines .pl-qty:not(.desk-root *), .ds .plines .pl-dates:not(.desk-root *) { white-space: nowrap; }
+.ds .plines .pl-dates:not(.desk-root *) { color: var(--ink-2); }
+.ds table.plines tr.pl-room td:not(.desk-root *) { border-top: 1px solid var(--line-2); }
+.ds table.plines tbody tr.pl-room:first-child td:not(.desk-root *) { border-top: 0; }
+.ds .plines tr.pl-room .pl-what { font-weight: 600; color: var(--ink); }
+.ds .plines tr.pl-room td.num:last-child:not(.desk-root *) { font-weight: 600; }
+.ds table.plines tr.pl-sub td:not(.desk-root *) { border-top: 0; color: var(--ink-2); padding-top: 2px; }
+/* Beats the narrow file's own cell padding (the media rule below), so the indent survives. */
+.ds table.plines tr.pl-sub td.pl-desc:not(.desk-root *) { padding-left: 22px; }
+.ds .plines .pl-fold { display: none; }
+.ds .pl-foot { display: grid; grid-template-columns: 1fr auto; gap: 4px var(--s4); margin-top: var(--s2); padding: var(--s2) 13px 0 0; border-top: 1px solid var(--line-2); text-align: right; }
+.ds .pl-foot span { color: var(--ink-2); }
+.ds .pl-foot b { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ds .pl-foot .total { margin-top: 2px; padding-top: var(--s2); border-top: 2px solid var(--ink); color: var(--ink); font-weight: 800; }
+.ds .pl-foot b.total { font-size: 17px; }
 .ds .balance-line { display: flex; justify-content: space-between; align-items: baseline; margin-top: 10px; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--line-2); }
 .ds .balance-line span { font-weight: 600; }
 .ds .balance-line b { font-size: 20px; font-weight: 800; font-variant-numeric: tabular-nums; }
@@ -1543,6 +1569,7 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 }
 @media (min-width: 1101px) and (max-width: 1860px) {
   .ds .ws-top .file .fbody { padding: var(--s3); }
+  .ds .ws-top .file .pl-foot { padding-right: 8px; } /* under the Amount column: the cells are 7px + the border */
   .ds .ws-top .file .table th:not(.desk-root *), .ds .ws-top .file .table td:not(.desk-root *) { padding: 5px 7px; }
   .ds .ws-top .file .pickbill { padding: var(--s2) var(--s3); }
   .ds .ws-top .file .pickbill .pb-ladder td.meta { white-space: normal; }
@@ -1554,6 +1581,12 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
   .ds .ws-top .file .table.resp td:not(.desk-root *) { display: block; padding: 0; border: 0; text-align: left; }
   .ds .ws-top .file .table.resp td:first-child:not(.desk-root *) { grid-column: 1 / -1; }
   .ds .ws-top .file .table.resp td[data-label]::before { content: attr(data-label); display: block; font-size: var(--t-meta); font-weight: 600; color: var(--ink-3); }
+}
+/* The price table folds its Qty and Rate columns under the description until the file is wide
+   enough for all four (about 640px, a 2,140px window) — measured: four columns need ~540px of card. */
+@media (min-width: 1101px) and (max-width: 2140px) {
+  .ds .ws-top .file .plines .pl-qty, .ds .ws-top .file .plines .pl-rate, .ds .ws-top .file .plines .pl-dates { display: none; }
+  .ds .ws-top .file .plines .pl-fold { display: block; margin-top: 1px; font-size: var(--t-meta); color: var(--ink-3); font-weight: 400; }
 }
 @media (min-width: 1101px) and (max-width: 1440px) {
   .ds .ws-top .file .ftab { padding: 6px 6px; font-size: var(--t-meta); }
