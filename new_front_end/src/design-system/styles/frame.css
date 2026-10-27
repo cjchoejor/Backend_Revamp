@@ -1512,7 +1512,6 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .pb-line.loading { opacity: .65; }
 .ds .pb-line .pb-line-k { flex-basis: 100%; font-weight: 700; font-size: var(--t-sm); }
 .ds .pb-line > .money { font-size: var(--t-figure); font-weight: 800; color: var(--ink); font-variant-numeric: tabular-nums; }
-.ds .pb-line > .btn:not(.desk-root *) { margin-left: auto; }
 
 /* The booking file on a smaller screen (2026-10-27, operator: "it works well on my bigger screen;
    on a small one the tabs run onto two rows and the table runs off the side"). The file is 28% of

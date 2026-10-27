@@ -1469,11 +1469,6 @@ function TheHouse({
                 <span className="meta">
                   {plural(bill.pricing.totals.roomNights, "room-night")} · room only, taxes included
                 </span>
-                {picked.length ? (
-                  <Button kind="quiet" compact onClick={() => openFile("money", "price")}>
-                    The bill, night by night
-                  </Button>
-                ) : null}
                 <Help label="About this figure">
                   Indicative, not a quote. Meals, extra beds and any agreed rate are set at Negotiation.
                   {picked.length ? " The bill for the rooms picked — each night, its rooms and the taxes — is in the booking file, under Charges & payments." : ""}
