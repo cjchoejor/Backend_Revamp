@@ -38,7 +38,7 @@ import { ChangeConfiguration, DecidedConfigurationChanges, WaitingConfigurationC
 import { operativeRoomCompositions, roomNightsByRoom, roomStayRangesByRoom } from "@/lib/desk/party-rooms";
 import { fmtDateTime, fmtStamp, money, plural } from "@/lib/ds/format";
 import { optionSelectedRoomIds, preferredHoldRoomId, type EntryDetail, type QuotationSummary, type SpeculativeHoldSummary } from "@/types/api";
-import { Choice, DsDialog, Live, Notice, OtherWaysTabs, PaperDrawer, QuotationSendDialog, ReasonDialog, SeeRow, StepCanvas, StepCard, Tool, atLeast, toastRefusal, type PaperRef, useBedPlan, useOpenFileTab, useOpenOtherWay, useRefreshEntry, useStepFlow, useFlowCard, anchorFor, revealCard, words, parkTab, declineTab } from "./kit";
+import { Choice, DsDialog, Live, Notice, OtherWaysTabs, PaperDrawer, QuotationSendDialog, ReasonDialog, SeeRow, StepCanvas, StepCard, Tool, atLeast, toastRefusal, type PaperRef, useBedPlan, useOpenFileTab, useRefreshEntry, useStepFlow, useFlowCard, anchorFor, revealCard, words, parkTab, declineTab } from "./kit";
 import { usePublishPriceDraft } from "@/lib/ds/stay-price";
 import { Help } from "@/components/ds/help";
 import { CompetingClaimsCard, LEVEL_WORD, passesOf, roomsWord, useCompetingClaims, useRoomNumbers } from "./s2-shared";
@@ -558,7 +558,6 @@ export function S2Negotiation({
 
   const competing = useCompetingClaims(entry.id);
   const otherMarkers = (competing.data?.items ?? []).filter((i) => i.kind === "SPECULATIVE_HOLD");
-  const openWay = useOpenOtherWay();
 
   /**
    * The provisional block, as Other ways' first panel (2026-10-12, operator: "this section can be
@@ -791,16 +790,9 @@ export function S2Negotiation({
                 </Help>
               </>
             ) : null}
-            {/* The provisional block lives under Other ways (2026-10-12, operator: "leave a small
-                button there ... when they click it, it takes them to Other ways and opens the
-                provisional block"). A marker in place is a state, so it is said here too. */}
-            <Button kind="quiet" className="act" onClick={() => openWay("block")}>
-              Provisional block…
-            </Button>
-            <Help label="About the provisional block">
-              <p>Marks the rooms so nobody else sells them while the guest decides. Nothing is sent to the guest.</p>
-              <p>It opens under Other ways.</p>
-            </Help>
+            {/* The provisional block is placed from the bar at the foot only (2026-10-27, operator:
+                "remove the provisional block button here"). A marker in place is a state, so it is
+                still said here. */}
             {activeHold ? (
               <span className="sm">
                 <Icon name="clock" /> {roomsWord(holdRoomIds(activeHold), roomNos)} marked until <b>{fmtDateTime(activeHold.expiresAt, tz)}</b>
