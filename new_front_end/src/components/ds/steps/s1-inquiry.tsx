@@ -43,7 +43,7 @@ import {
 } from "@/components/desk/workspace/room-status-table";
 import { RoomSelectBoard } from "@/components/desk/workspace/room-select-board";
 import { fmtDay, fmtRange, money, plural } from "@/lib/ds/format";
-import { currentPassConfigs } from "@/lib/desk/workspace";
+import { currentPassConfigs, pickFitsStay } from "@/lib/desk/workspace";
 import {
   optionSelectedRoomIds,
   type AvailabilityOptionSelected,
@@ -78,6 +78,8 @@ import type { PickPricing } from "@/lib/api/availability";
 import { DateInput } from "@/components/ds/date-input";
 
 /* ------------------------------------------------------------------ vocabulary */
+
+const WEEKDAY = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 const CAME_IN_AS = [
   ["WALK_IN", "Walk-in"],
@@ -615,8 +617,10 @@ function TheStay({
             detail: { entryId: entry.id, checkInDate: f.checkIn, checkOutDate: checkOut, guestCount: adultsN + childN },
           }),
         );
-      // Done saved it; the work moves on, as a plain Done does.
-      flowDone("stay");
+      // Done saved it; the work moves on to the house, which is being asked again for the stay as
+      // it is now (2026-10-27, operator: "it took me to Wrap up, when it should ask the house again
+      // and take me to the house section").
+      flowDone("stay", { next: "house" });
     },
     onError: (e) => toastRefusal(e, "The stay could not be updated"),
   });
@@ -986,6 +990,9 @@ function TheHouse({
   const numberOfRooms = entry.numberOfRooms ?? 1;
   const savedOption = preferred?.optionSelected as
     AvailabilityOptionSelected | null | undefined;
+  // The rooms saved may no longer fit the stay — its dates or room count changed after they were
+  // chosen. The move to Negotiation refuses it on the same rule (2026-10-27).
+  const pickMisfit = savedOption ? pickFitsStay(savedOption, entry, preferred?.searchCriteria) : null;
   const sel = useRoomSelection({
     entryId: entry.id,
     numberOfRooms,
@@ -1022,6 +1029,27 @@ function TheHouse({
       (a, b) => b.full.length - a.full.length || a.name.localeCompare(b.name),
     );
   }, [rows, perDate, displayNights]);
+
+  // Each type's free rooms night by night (2026-10-27, operator: "how does it handle a room free on
+  // the first night, not on the second, and free on the third?"). The Free column counts only the
+  // rooms free on EVERY night; these columns show each night on its own, from the house's own
+  // answer, so a night a type runs short on is plain to see. Up to two weeks of nights.
+  const typeOfRoom = useMemo(() => new Map(rows.map((r) => [r.roomId, r.roomTypeName])), [rows]);
+  const nightCols = perDate?.length && displayNights.length > 1 && displayNights.length <= 14 ? displayNights : [];
+  const freeByTypeNight = useMemo(() => {
+    const m = new Map<string, Map<string, number>>();
+    for (const p of perDate ?? []) {
+      const night = String(p.date).slice(0, 10);
+      for (const id of p.availableRoomIds) {
+        const t = typeOfRoom.get(id);
+        if (!t) continue;
+        const tm = m.get(t) ?? new Map<string, number>();
+        tm.set(night, (tm.get(night) ?? 0) + 1);
+        m.set(t, tm);
+      }
+    }
+    return m;
+  }, [perDate, typeOfRoom]);
 
   // Too few rooms for the ask (2026-10-27, operator: "the guest asked for 3 rooms and the house has
   // only 2 — show it on top, in red"). Counted night by night off the house's own answer: the
@@ -1424,11 +1452,26 @@ function TheHouse({
                 {chartNote.text}
               </p>
             ) : null}
-            <table className="table compact">
+            <table className="table compact house-types">
               <thead>
                 <tr>
                   <th>Type</th>
-                  <th>Free</th>
+                  <th>
+                    Free every night
+                    {nightCols.length ? (
+                      <Help label="About the nights">
+                        A room counts as free only when it is free on every night of the stay. Each night&rsquo;s column says how many of
+                        that type are free that night — a room free on some nights only can still be chosen for those nights in
+                        Choose the rooms.
+                      </Help>
+                    ) : null}
+                  </th>
+                  {nightCols.map((n) => (
+                    <th key={n} className="hn">
+                      {WEEKDAY[new Date(`${n}T00:00:00Z`).getUTCDay()]}
+                      <small>{fmtDay(n)}</small>
+                    </th>
+                  ))}
                 </tr>
               </thead>
               <tbody>
@@ -1451,6 +1494,7 @@ function TheHouse({
                       ) : (
                         <Chip tone="quiet">none</Chip>
                       )}
+                      {t.full.length > 0 && t.partial > 0 ? <span className="meta"> · {t.partial} more on some nights</span> : null}
                       {t.deficient > 0 ? (
                         <span className="meta">
                           {" "}
@@ -1458,6 +1502,18 @@ function TheHouse({
                         </span>
                       ) : null}
                     </td>
+                    {nightCols.map((n) => {
+                      const free = freeByTypeNight.get(t.name)?.get(n) ?? 0;
+                      return (
+                        <td
+                          key={n}
+                          className={`hn${free === 0 ? " none" : free < numberOfRooms ? " low" : ""}`}
+                          title={`${plural(free, "room")} of this type free on ${fmtDay(n)}`}
+                        >
+                          {free}
+                        </td>
+                      );
+                    })}
                   </tr>
                 ))}
               </tbody>
@@ -1503,6 +1559,12 @@ function TheHouse({
                 This answer is old — the house is asked again.
               </div>
             ) : null}
+            {pickMisfit ? (
+              <p className="pick-misfit" role="alert">
+                <span className="mark" aria-hidden>!</span>
+                The rooms chosen no longer fit the stay — {pickMisfit}. Choose the rooms again.
+              </p>
+            ) : null}
             {savedIds.length ? (
               <div
                 className="sm"
@@ -1514,8 +1576,8 @@ function TheHouse({
                   flexWrap: "wrap",
                 }}
               >
-                <Chip tone="success" icon="check">
-                  chosen
+                <Chip tone={pickMisfit ? "warning" : "success"} icon={pickMisfit ? undefined : "check"}>
+                  {pickMisfit ? "chosen for the stay before" : "chosen"}
                 </Chip>
                 Room{savedNumbers.length === 1 ? "" : "s"}{" "}
                 {savedNumbers.join(", ")}

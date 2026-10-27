@@ -1543,3 +1543,14 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 @media (min-width: 1101px) and (max-width: 1440px) {
   .ds .ws-top .file .ftab { padding: 6px 6px; font-size: var(--t-meta); }
 }
+
+/* The rooms saved no longer fit the stay (2026-10-27) — an alert, in the house card. */
+.ds .pick-misfit:not(.desk-root *) { display: flex; align-items: flex-start; gap: var(--s2); margin: var(--s3) 0 0; padding: var(--s2) var(--s3); border: 1px solid var(--danger); border-radius: var(--r-control); background: var(--danger-soft); color: var(--danger); font-size: var(--t-sm); font-weight: 700; animation: house-short-in .5s ease-out; }
+.ds .pick-misfit .mark { flex: none; width: 18px; height: 18px; border-radius: 50%; background: var(--danger); color: #fff; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; line-height: 1; margin-top: 1px; }
+@media (prefers-reduced-motion: reduce) { .ds .pick-misfit:not(.desk-root *) { animation: none; } }
+/* The house's free rooms, night by night (2026-10-27) */
+.ds .house-types th.hn:not(.desk-root *), .ds .house-types td.hn:not(.desk-root *) { text-align: center; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ds .house-types th.hn small { display: block; font-weight: 500; color: var(--ink-3); }
+.ds .house-types td.hn:not(.desk-root *) { font-weight: 600; }
+.ds .house-types td.hn.low:not(.desk-root *) { color: var(--warning); font-weight: 700; }
+.ds .house-types td.hn.none:not(.desk-root *) { color: var(--danger); font-weight: 700; background: var(--danger-soft); }

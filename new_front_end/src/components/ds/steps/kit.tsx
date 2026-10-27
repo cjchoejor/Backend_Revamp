@@ -127,7 +127,7 @@ type FlowCtxValue = {
    * marks the next one current without scrolling to it — after Take it the bill above stays in
    * view while Wrap up below is where the work has moved.
    */
-  done: (card: string, opts?: { reveal?: boolean }) => void;
+  done: (card: string, opts?: { reveal?: boolean; next?: string }) => void;
 };
 const FlowCtx = createContext<FlowCtxValue>({
   items: [],
@@ -271,19 +271,26 @@ export function StepFlow({
     setActive(card);
   }, []);
   const done = useCallback(
-    (card: string, opts?: { reveal?: boolean }) => {
+    (card: string, opts?: { reveal?: boolean; next?: string }) => {
       if (pressed.current) skipPress.current = true;
       const nowConfirmed = new Set(confirmed).add(card);
       setConfirmed(nowConfirmed);
       setVisited((prev) => new Set(prev).add(card));
+      // A named next section is opened even when it reads as done — the stay's Done after a change
+      // goes to the house, which is asked again (2026-10-27).
       setOpened((prev) => {
         const next = new Set(prev);
         next.delete(card);
+        if (opts?.next) next.add(opts.next);
         return next;
       });
       // On to the next section still to do; if every one is done, simply leave this one folded.
       const after = cards.slice(cards.indexOf(card) + 1);
-      const target = after.find((c) => items.some((i) => i.card === c && !itemDone(i, confirm, nowConfirmed))) ?? after[0] ?? null;
+      const target =
+        (opts?.next && cards.includes(opts.next) ? opts.next : null) ??
+        after.find((c) => items.some((i) => i.card === c && !itemDone(i, confirm, nowConfirmed))) ??
+        after[0] ??
+        null;
       setActive(target);
       if (target && opts?.reveal !== false) {
         window.requestAnimationFrame(() => {
