@@ -95,6 +95,7 @@ import { useCompactOnScroll, useMeasuredVar } from "@/hooks/use-stage-head";
 import { FoldingSide, useSideFolded } from "@/components/ds/workspace/side-panel";
 import { S1Inquiry } from "@/components/ds/steps/s1-inquiry";
 import { InquirySummaryDialog } from "@/components/ds/steps/s1-summary";
+import { StepMoved, type StepMovedNote } from "@/components/ds/workspace/step-moved";
 import { S2Negotiation } from "@/components/ds/steps/s2-negotiation";
 import { S3SetUp, S3_PANES } from "@/components/ds/steps/s3-setup";
 import { S4Reserve, S4_PANES } from "@/components/ds/steps/s4-reserve";
@@ -444,14 +445,18 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   });
   /** The look back before Negotiation (2026-10-22): Continue opens it, its Confirm moves the booking. */
   const [summaryOpen, setSummaryOpen] = useState(false);
+  /** A move said in the middle of the screen (2026-10-27) — the Inquiry's move to Negotiation. */
+  const [moved, setMoved] = useState<StepMovedNote | null>(null);
+  const closeMoved = useCallback(() => setMoved(null), []);
   const advanceMutation = useMutation({
-    mutationFn: (vars: { targetStage: string; guestPhysicallyPresent?: boolean }) =>
+    mutationFn: (vars: { targetStage: string; guestPhysicallyPresent?: boolean; announce?: boolean }) =>
       progressStage(session!, entry!.id, { targetStage: vars.targetStage, version: entry!.version, guestPhysicallyPresent: vars.guestPhysicallyPresent }),
-    onSuccess: (updated) => {
+    onSuccess: (updated, vars) => {
       afterMove(updated);
       const n = currentStepOrder(updated);
       setSelected(n);
-      toast.success(`Moved to ${STEP_NAMES[n - 1]}.`);
+      // A move announced in the middle of the screen needs no toast as well.
+      if (!vars.announce) toast.success(`Moved to ${STEP_NAMES[n - 1]}.`);
     },
     onError: fail("Couldn't move forward"),
   });
@@ -903,7 +908,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   } else if (inquiryStepActive) {
     const ok = canProgressS1(entry);
     forward = (
-      <Button state={ok ? "default" : "inert"} reason={ok ? undefined : firstNote} onClick={() => setSummaryOpen(true)}>
+      <Button className="go" state={ok ? "default" : "inert"} reason={ok ? undefined : firstNote} onClick={() => setSummaryOpen(true)}>
         Continue
       </Button>
     );
@@ -1308,6 +1313,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   );
   const dialogs = (
     <>
+        <StepMoved note={moved} onClose={closeMoved} />
 
         <CommitDialog
           open={confirmOpen}
@@ -1339,7 +1345,23 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
           open={summaryOpen && inquiryStepActive}
           busy={advanceMutation.isPending}
           onClose={() => setSummaryOpen(false)}
-          onConfirm={() => advanceMutation.mutate({ targetStage: "S2" }, { onSuccess: () => setSummaryOpen(false) })}
+          onConfirm={() =>
+            advanceMutation.mutate(
+              { targetStage: "S2", announce: true },
+              {
+                onSuccess: () => {
+                  setSummaryOpen(false);
+                  setMoved({
+                    title: "The inquiry is made",
+                    from: "Inquiry",
+                    to: "Negotiation",
+                    who: [name, entry.id].filter(Boolean).join(" · "),
+                    next: "Next: set who sleeps where, price the rooms and send the quotation.",
+                  });
+                },
+              },
+            )
+          }
         />
         <CommitDialog
           open={closeOpen}

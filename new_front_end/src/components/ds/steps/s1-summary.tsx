@@ -83,7 +83,7 @@ export function InquirySummaryDialog({
           <Button kind="quiet" onClick={onClose} state={busy ? "inert" : "default"}>
             Go back and edit
           </Button>
-          <Button kind="primary" onClick={onConfirm} state={busy ? "working" : "default"} workingLabel="Moving…">
+          <Button kind="primary" className="go" onClick={onConfirm} state={busy ? "working" : "default"} workingLabel="Moving…">
             Confirm and move to Negotiation
           </Button>
         </>

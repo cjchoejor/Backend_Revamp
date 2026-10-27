@@ -1554,3 +1554,33 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .house-types td.hn:not(.desk-root *) { font-weight: 600; }
 .ds .house-types td.hn.low:not(.desk-root *) { color: var(--warning); font-weight: 700; }
 .ds .house-types td.hn.none:not(.desk-root *) { color: var(--danger); font-weight: 700; background: var(--danger-soft); }
+
+/* The bar's acts read as acts (2026-10-27, operator: "make Park and The guest said no prominent,
+   and the Continue button"): full-size buttons with a firm edge and the weight of a control;
+   The guest said no ends the lead, so it carries the danger colour; the move is the big one,
+   green once it can be pressed, and the reason it waits is said in amber beside it. */
+.ds .ws-top .gatebar.top .also-btns .btn:not(.desk-root *) { height: 38px; padding: 0 var(--s4); font-size: var(--t-base); font-weight: 600; border: 1px solid var(--ink-3); background: var(--surface); color: var(--ink); }
+.ds .ws-top .gatebar.top .also-btns .btn:hover:not(.desk-root *) { background: var(--surface-2); border-color: var(--ink-2); }
+.ds .ws-top .gatebar.top .also-btns .btn[data-way="decline"]:not(.desk-root *) { color: var(--danger); border-color: var(--danger); }
+.ds .ws-top .gatebar.top .also-btns .btn[data-way="decline"]:hover:not(.desk-root *) { background: var(--danger-soft); }
+.ds .ws-top .gatebar.top .also-btns .btn.on:not(.desk-root *) { box-shadow: inset 0 -3px 0 var(--accent); }
+.ds .ws-top .gatebar.top .acts .btn:not(.desk-root *) { height: 42px; min-width: 168px; padding: 0 var(--s5); font-size: var(--t-base); font-weight: 700; }
+.ds .ws-top .gatebar.top .control-note:not(.desk-root *) { font-size: var(--t-sm); font-weight: 700; color: var(--warning); }
+
+/* A step reached, in the middle of the screen (2026-10-27) */
+.ds .step-moved-scrim { position: fixed; inset: 0; z-index: 95; display: grid; place-items: center; padding: var(--s4); background: rgba(20, 22, 21, .32); }
+.ds .step-moved { width: min(480px, 100%); display: grid; justify-items: center; gap: var(--s3); padding: var(--s6) var(--s6) var(--s5); background: var(--surface); border-top: 4px solid var(--success); border-radius: var(--r-dialog, 8px); box-shadow: var(--shadow-pop); text-align: center; animation: step-moved-in .25s ease-out; }
+.ds .step-moved .sm-mark { width: 60px; height: 60px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: var(--success-soft); color: var(--success); }
+.ds .step-moved .sm-mark svg { width: 32px; height: 32px; }
+.ds .step-moved h2 { margin: 0; font-size: 24px; font-weight: 700; color: var(--ink); }
+.ds .step-moved .sm-path { display: flex; align-items: center; gap: var(--s2); font-size: var(--t-base); font-weight: 600; color: var(--ink-2); }
+.ds .step-moved .sm-path .sm-from { color: var(--success); }
+.ds .step-moved .sm-path .sm-to { padding: 2px 10px; border-radius: var(--r-control); background: var(--accent-soft); border: 1px solid var(--accent); color: var(--accent-ink); font-weight: 700; }
+.ds .step-moved .sm-who { margin: 0; font-weight: 600; color: var(--ink); }
+.ds .step-moved .sm-next { margin: 0; color: var(--ink-2); }
+.ds .step-moved .sm-bar { width: 100%; height: 4px; overflow: hidden; border-radius: 2px; background: var(--surface-3); }
+.ds .step-moved .sm-bar i { display: block; height: 100%; background: var(--success); transform-origin: left center; animation: step-moved-bar linear forwards; }
+.ds .step-moved .btn:not(.desk-root *) { min-width: 140px; height: 40px; font-size: var(--t-base); font-weight: 700; }
+@keyframes step-moved-in { from { opacity: 0; transform: translateY(8px) scale(.98); } to { opacity: 1; transform: none; } }
+@keyframes step-moved-bar { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+@media (prefers-reduced-motion: reduce) { .ds .step-moved, .ds .step-moved .sm-bar i { animation: none; } }

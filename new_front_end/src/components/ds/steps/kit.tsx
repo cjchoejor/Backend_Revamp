@@ -1132,7 +1132,7 @@ function AlsoBarWays({ live, slots }: { live: OtherWayTab[]; slots: AlsoBarSlots
         ? createPortal(
             <>
               {live.map((t) => (
-                <Button key={t.key} kind="secondary" className={open === t.key ? "on" : undefined} aria-pressed={open === t.key} onClick={() => go(open === t.key ? null : t.key)}>
+                <Button key={t.key} kind="secondary" className={open === t.key ? "on" : undefined} data-way={t.key} aria-pressed={open === t.key} onClick={() => go(open === t.key ? null : t.key)}>
                   {t.label}
                 </Button>
               ))}
