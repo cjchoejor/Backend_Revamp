@@ -1601,19 +1601,18 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .ws-top .ws-topstick.compact .ws-head .mini-facts b { color: var(--ink); font-weight: 700; }
 .ds .ws-top .ws-topstick.compact .ws-head .mini-facts .mf-id { font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
 
-/* The bar at the foot is dark, so it cannot be read as part of the page (2026-10-27, operator: "can it
-   look a little dark in colour, it merges into the UI"). Its acts stay full buttons on it. */
-.ds .ws-top .gatebar.top:not(.desk-root *) { background: #1F2A36; color: #EEF1EC; border-top: 0; box-shadow: 0 -4px 16px rgba(20, 24, 22, .22); }
-.ds .ws-top .gatebar.top .also-h { color: rgba(238, 241, 236, .66); }
-.ds .ws-top .gatebar.top .gate .item:not(.desk-root *),
-.ds .ws-top .gatebar.top .gate .item.met:not(.desk-root *) { color: #EEF1EC; }
-.ds .ws-top .gatebar.top .ink-2,
-.ds .ws-top .gatebar.top .meta { color: rgba(238, 241, 236, .78); }
-.ds .ws-top .gatebar.top .stop-ink { color: #FF9C90; }
-.ds .ws-top .gatebar.top .ok-ink { color: #8FDDAE; }
-.ds .ws-top .gatebar.top .warn-ink { color: #F5C46C; }
-.ds .ws-top .gatebar.top .control-note:not(.desk-root *) { color: #F5C46C; }
-.ds .ws-top .gatebar.top .gate .item .ic { color: currentColor; }
+/* The bar at the foot reads as its own band, not as part of the page (2026-10-27, operator: "it merges
+   into the UI"; the dark navy tried first "isn't doing justice"). A soft tint of the page's own blue,
+   a firm blue line along its top and a light lift: the white buttons stand out on it, and the white
+   cards above cannot be mistaken for it. The step's other ways sit in their own group, set off by a
+   line from where the step stands and the move. */
+.ds .ws-top .gatebar.top:not(.desk-root *) { background: #E7EEF8; border-top: 2px solid var(--accent); box-shadow: 0 -6px 18px rgba(29, 79, 145, .12); }
+.ds .ws-top .gatebar.top .also-h { color: var(--accent-ink); }
+.ds .ws-top .gatebar.top .also { padding-right: var(--s4); border-right: 1px solid var(--accent-line); }
+.ds .ws-top .gatebar.top .also-btns .btn:not(.desk-root *) { box-shadow: 0 1px 2px rgba(27, 30, 28, .08); }
+/* a move that waits is still a visible button on the tint, not a grey shape that sinks into it */
+.ds .ws-top .gatebar.top .acts .btn.inert:not(.desk-root *) { background: var(--surface); border: 1px dashed var(--line-2); color: var(--ink-4); }
+@media (max-width: 1100px) { .ds .ws-top .gatebar.top .also { padding-right: 0; border-right: 0; } }
 
 /* The bar's ways in the middle of the screen, over a dimmed, blurred page (2026-10-27). Below a
    dialog opened from inside a way (85), above everything on the page. */

@@ -136,8 +136,8 @@ export function DetailsView({
             {/* Check-in and Check-out by name, as in the header (2026-10-27). */}
             <Fact k="Dates">
               <StayDates checkIn={entry.checkInDate} checkOut={co} />
-              {nights ? <> · {plural(nights, "night")}</> : null}
             </Fact>
+            <Fact k="Nights">{nights ? plural(nights, "night") : "—"}</Fact>
             <Fact k="Rooms" meta={beds ? `asked for ${beds}` : undefined}>
               {rooms.length
                 ? `${rooms.length} · ${rooms.join(", ")}${types.length ? ` · ${types.join(", ")}` : ""}`

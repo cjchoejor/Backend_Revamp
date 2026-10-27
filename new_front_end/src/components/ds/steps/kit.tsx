@@ -1111,8 +1111,15 @@ function AlsoBarWays({ live, slots }: { live: OtherWayTab[]; slots: AlsoBarSlots
   // (`view=other`, `useOpenOtherWay`).
   const wantOpen = params.get("also") === "1" || params.get("view") === "other";
   const want = params.get("way");
-  const open = wantOpen ? (live.find((t) => t.key === want) ?? live[0]).key : null;
+  const urlOpen = wantOpen ? (live.find((t) => t.key === want) ?? live[0]).key : null;
+  // A press opens or closes the pop-up at once; the address follows. Read from the address alone, a
+  // quick press could land before the address had caught up and be undone by it (found driving it).
+  const [pressed, setPressed] = useState<{ key: string | null } | null>(null);
+  const paramsKey = params.toString();
+  useEffect(() => setPressed(null), [paramsKey]);
+  const open = pressed ? pressed.key : urlOpen;
   const go = (key: string | null) => {
+    setPressed({ key });
     const p = new URLSearchParams(params.toString());
     if (key) {
       p.set("way", key);

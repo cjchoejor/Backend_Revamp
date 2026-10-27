@@ -1510,7 +1510,8 @@ export function NewInquiryCanvas() {
               <dd>
                 {datesSet ? (
                   <>
-                    <StayDates checkIn={checkIn} checkOut={checkOut} /> · {plural(stayNights, "night")}
+                    <StayDates checkIn={checkIn} checkOut={checkOut} />
+                    <div>{plural(stayNights, "night")}</div>
                   </>
                 ) : (
                   <span className="warn-ink">no dates yet</span>
