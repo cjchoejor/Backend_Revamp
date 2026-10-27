@@ -410,8 +410,8 @@ export function FlowChips({ names, onGo }: { names: Record<string, string>; onGo
 
 /** The step's flow, for a section that moves the work on by itself (Take it → Wrap up). */
 export function useStepFlow() {
-  const { on, done } = useContext(FlowCtx);
-  return { on, done };
+  const { on, done, open } = useContext(FlowCtx);
+  return { on, done, open };
 }
 
 /**
@@ -1087,7 +1087,13 @@ export function OtherWays({ children }: { children: ReactNode }) {
  * half-typed reason survives a look at another tab. The open tab lives in the address
  * (`?way=`), so This step can send the operator straight to one (`useOpenOtherWay`).
  */
-export type OtherWayTab = { key: string; label: string; content: ReactNode };
+export type OtherWayTab = {
+  key: string;
+  label: string;
+  content: ReactNode;
+  /** false: no button of its own in the bar — it opens from elsewhere (the step line's "Change booking"). */
+  inBar?: boolean;
+};
 
 /**
  * "Also possible here" as the fixed bar at the foot of the page (2026-10-27, the operator's stage
@@ -1095,12 +1101,126 @@ export type OtherWayTab = { key: string; label: string; content: ReactNode };
  * opens its form in a panel that rises above it. The workspace hands the two places to render
  * into; with none, Other ways stays a tab beside This step.
  */
-type AlsoBarSlots = { buttons: HTMLElement | null; panel: HTMLElement | null };
+type AlsoBarSlots = {
+  buttons: HTMLElement | null;
+  panel: HTMLElement | null;
+  /** The right-hand end of the step's line, where "Change booking" sits (2026-10-27). */
+  stage?: HTMLElement | null;
+};
 const AlsoBarCtx = createContext<AlsoBarSlots | null>(null);
 
-export function AlsoBar({ buttons, panel, children }: AlsoBarSlots & { children: ReactNode }) {
-  const value = useMemo(() => ({ buttons, panel }), [buttons, panel]);
+export function AlsoBar({ buttons, panel, stage = null, children }: AlsoBarSlots & { children: ReactNode }) {
+  const value = useMemo(() => ({ buttons, panel, stage }), [buttons, panel, stage]);
   return <AlsoBarCtx.Provider value={value}>{children}</AlsoBarCtx.Provider>;
+}
+
+/** What a step puts at the right-hand end of its line — nothing where the layout has no such place. */
+export function StageActs({ children }: { children: ReactNode }) {
+  const bar = useContext(AlsoBarCtx);
+  return bar?.stage ? createPortal(children, bar.stage) : null;
+}
+
+/** Open one of the bar's ways in its pop-up — from anywhere on the step (the step line's menu). */
+export function useOpenAlsoWay() {
+  const params = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  return (key: string) => {
+    const p = new URLSearchParams(params.toString());
+    p.set("way", key);
+    p.set("also", "1");
+    router.replace(`${pathname}?${p.toString()}`, { scroll: false });
+  };
+}
+
+export type ChangeBookingItem = {
+  key: string;
+  label: string;
+  /** What it does, in a line under its name. */
+  note: string;
+  onSelect?: () => void;
+  /** Why it cannot be done now — the item is shown shut, with this said. */
+  reason?: string;
+  danger?: boolean;
+};
+
+/**
+ * "Change booking" (2026-10-27, operator: "merge it into a new button named Change booking … on the
+ * right side here; the guest said no is actually cancel booking, which changes the booking, so
+ * clicking Change booking can show these two options together"). One button at the end of the step's
+ * line opening a short menu — each choice with what it does under its name. The menu is drawn at the
+ * desk's root so the sticky head never clips it; Escape, a press outside or a choice closes it.
+ */
+export function ChangeBookingMenu({ items, label = "Change booking" }: { items: ChangeBookingItem[]; label?: string }) {
+  const [open, setOpen] = useState(false);
+  const [at, setAt] = useState<{ top: number; right: number } | null>(null);
+  const btnRef = useRef<HTMLSpanElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const place = useCallback(() => {
+    const b = btnRef.current?.getBoundingClientRect();
+    if (b) setAt({ top: Math.round(b.bottom + 6), right: Math.round(window.innerWidth - b.right) });
+  }, []);
+  useEffect(() => {
+    if (!open) return;
+    place();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (menuRef.current?.contains(t) || btnRef.current?.contains(t)) return;
+      setOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    window.requestAnimationFrame(() => menuRef.current?.querySelector<HTMLButtonElement>("button:not([disabled])")?.focus({ preventScroll: true }));
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }, [open, place]);
+  if (items.length === 0) return null;
+  return (
+    <>
+      <span ref={btnRef} className="cb-btn">
+        <Button kind="secondary" aria-haspopup="menu" aria-expanded={open} className={open ? "on" : undefined} onClick={() => setOpen((v) => !v)}>
+          {label}
+          <Icon name="chev" className="cb-chev" />
+        </Button>
+      </span>
+      {open && at ? (
+        <Overlay>
+          <div className="cb-menu" role="menu" aria-label={label} ref={menuRef} style={{ top: at.top, right: at.right }}>
+            {items.map((it) => {
+              const shut = !!it.reason || !it.onSelect;
+              return (
+                <button
+                  key={it.key}
+                  type="button"
+                  role="menuitem"
+                  className={`cb-item${it.danger ? " danger" : ""}`}
+                  data-item={it.key}
+                  disabled={shut}
+                  onClick={() => {
+                    setOpen(false);
+                    it.onSelect?.();
+                  }}
+                >
+                  <span className="cb-label">{it.label}</span>
+                  <span className="cb-note">{it.note}</span>
+                  {it.reason ? <span className="cb-why">{it.reason}</span> : null}
+                </button>
+              );
+            })}
+          </div>
+        </Overlay>
+      ) : null}
+    </>
+  );
 }
 
 function AlsoBarWays({ live, slots }: { live: OtherWayTab[]; slots: AlsoBarSlots }) {
@@ -1158,11 +1278,13 @@ function AlsoBarWays({ live, slots }: { live: OtherWayTab[]; slots: AlsoBarSlots
       {slots.buttons
         ? createPortal(
             <>
-              {live.map((t) => (
-                <Button key={t.key} kind="secondary" className={open === t.key ? "on" : undefined} data-way={t.key} aria-pressed={open === t.key} onClick={() => go(open === t.key ? null : t.key)}>
-                  {t.label}
-                </Button>
-              ))}
+              {live
+                .filter((t) => t.inBar !== false)
+                .map((t) => (
+                  <Button key={t.key} kind="secondary" className={open === t.key ? "on" : undefined} data-way={t.key} aria-pressed={open === t.key} onClick={() => go(open === t.key ? null : t.key)}>
+                    {t.label}
+                  </Button>
+                ))}
             </>,
             slots.buttons,
           )
@@ -1395,15 +1517,21 @@ export function parkTab(parkNow: ((reason: string) => void) | undefined, busy?: 
 }
 
 /** The guest said no (2026-10-01) — Inquiry and Negotiation only; from Set up it is a cancellation. */
-export function declineTab(declineNow: ((reason: string) => void) | undefined, busy?: boolean): OtherWayTab | null {
+export function declineTab(
+  declineNow: ((reason: string) => void) | undefined,
+  busy?: boolean,
+  /** Negotiation names it Cancel booking and opens it from Change booking (2026-10-27). */
+  opts?: { label?: string; act?: string; inBar?: boolean },
+): OtherWayTab | null {
   if (!declineNow) return null;
   return {
     key: "decline",
-    label: "The guest said no",
+    label: opts?.label ?? "The guest said no",
+    inBar: opts?.inBar,
     content: (
       <ReasonForm
         danger
-        label="Turn the booking down"
+        label={opts?.act ?? "Turn the booking down"}
         fieldLabel="What did they say?"
         placeholder="too expensive · booked elsewhere · dates changed"
         busy={busy}

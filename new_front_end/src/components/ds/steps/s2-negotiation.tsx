@@ -38,9 +38,10 @@ import { ChangeConfiguration, DecidedConfigurationChanges, WaitingConfigurationC
 import { operativeRoomCompositions, roomNightsByRoom, roomStayRangesByRoom } from "@/lib/desk/party-rooms";
 import { fmtDateTime, fmtStamp, money, plural } from "@/lib/ds/format";
 import { optionSelectedRoomIds, preferredHoldRoomId, type EntryDetail, type QuotationSummary, type SpeculativeHoldSummary } from "@/types/api";
-import { Choice, DsDialog, Live, Notice, OtherWaysTabs, PaperDrawer, QuotationSendDialog, ReasonDialog, SeeRow, StepCanvas, StepCard, Tool, atLeast, toastRefusal, type PaperRef, useBedPlan, useOpenFileTab, useRefreshEntry, useStepFlow, useFlowCard, anchorFor, revealCard, words, parkTab, declineTab } from "./kit";
+import { Choice, DsDialog, Live, Notice, OtherWaysTabs, ChangeBookingMenu, StageActs, useOpenAlsoWay, PaperDrawer, QuotationSendDialog, ReasonDialog, SeeRow, StepCanvas, StepCard, Tool, atLeast, toastRefusal, type PaperRef, useBedPlan, useOpenFileTab, useRefreshEntry, useStepFlow, useFlowCard, anchorFor, revealCard, words, parkTab, declineTab } from "./kit";
 import { usePublishPriceDraft } from "@/lib/ds/stay-price";
 import { Help } from "@/components/ds/help";
+import type { ChangeBookingItem } from "./kit";
 import { CompetingClaimsCard, LEVEL_WORD, passesOf, roomsWord, useCompetingClaims, useRoomNumbers } from "./s2-shared";
 import { useInvoiceRecipient } from "@/hooks/use-invoice-recipient";
 
@@ -643,8 +644,46 @@ export function S2Negotiation({
     </div>
   );
 
+  /** Change booking — the two ways the booking itself is changed, from the end of the step's line. */
+  const openAlsoWay = useOpenAlsoWay();
+  const openChange = () => {
+    setChanging(true);
+    flow.open("table");
+    window.requestAnimationFrame(() =>
+      window.requestAnimationFrame(() => {
+        const el = document.getElementById(anchorFor("table"));
+        if (el) revealCard(el);
+      }),
+    );
+  };
+  const changeItems: ChangeBookingItem[] = past
+    ? []
+    : [
+        {
+          key: "configuration",
+          label: "Change configuration",
+          note: "The dates, the rooms, the adults, the children and their ages. A quotation priced on the old configuration is retired.",
+          onSelect: editable ? openChange : undefined,
+          reason: editable ? undefined : entry.status === "PARKED" ? "Resume the booking first" : "Not possible on this booking now",
+        },
+        ...(declineNow
+          ? [
+              {
+                key: "cancel",
+                label: "Cancel booking",
+                note: "The guest said no. The booking ends, the marked rooms go back on sale and nothing is charged.",
+                onSelect: () => openAlsoWay("decline"),
+                danger: true,
+              },
+            ]
+          : []),
+      ];
+
   return (
     <StepCanvas past={past}>
+      <StageActs>
+        <ChangeBookingMenu items={changeItems} />
+      </StageActs>
 
       <StepCard
         flow="table"
@@ -777,27 +816,14 @@ export function S2Negotiation({
             operator ruling). It sits under the table it changes, and closes while the change is
             being made so there is only ever one plan on screen. */}
         {!changing ? <WaitingConfigurationChange entry={entry} /> : null}
-        {!changing && !past ? (
+        {/* Change configuration moved into "Change booking" at the end of the step's line, beside
+            Cancel booking (2026-10-27, operator). The provisional block is placed from the bar at the
+            foot. A marker in place is a state, so it is still said here. */}
+        {!changing && !past && activeHold ? (
           <div className="row-acts" style={{ marginTop: 12, alignItems: "center", gap: 10 }}>
-            {editable ? (
-              <>
-                <Button kind="quiet" className="act" onClick={() => setChanging(true)}>
-                  Change configuration…
-                </Button>
-                <Help label="About changing the configuration">
-                  <p>Move the dates, add or drop rooms, or change the adults, the children and their ages.</p>
-                  <p>Any quotation priced on the old configuration is retired, and the change is kept in the history.</p>
-                </Help>
-              </>
-            ) : null}
-            {/* The provisional block is placed from the bar at the foot only (2026-10-27, operator:
-                "remove the provisional block button here"). A marker in place is a state, so it is
-                still said here. */}
-            {activeHold ? (
-              <span className="sm">
-                <Icon name="clock" /> {roomsWord(holdRoomIds(activeHold), roomNos)} marked until <b>{fmtDateTime(activeHold.expiresAt, tz)}</b>
-              </span>
-            ) : null}
+            <span className="sm">
+              <Icon name="clock" /> {roomsWord(holdRoomIds(activeHold), roomNos)} marked until <b>{fmtDateTime(activeHold.expiresAt, tz)}</b>
+            </span>
           </div>
         ) : null}
         {!changing ? <DecidedConfigurationChanges entry={entry} /> : null}
@@ -839,7 +865,8 @@ export function S2Negotiation({
           { key: "block", label: "Provisional block", content: blockPanel },
           parkTab(parkNow, parking),
           // The answer the house had no way to write down (2026-10-01) — see the Inquiry step.
-          declineTab(declineNow, declining),
+          // The guest said no is Cancel booking here, opened from Change booking (2026-10-27, operator).
+          declineTab(declineNow, declining, { label: "Cancel booking", act: "Cancel the booking", inBar: false }),
           // The Counter-offer way was taken off (2026-10-27, operator: "remove the counter offer") —
           // it could record nothing; the discount on the table is how a counter-offer is met.
         ]}

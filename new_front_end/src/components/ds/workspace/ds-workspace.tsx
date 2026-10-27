@@ -357,6 +357,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   // Stage 1's fixed bar (2026-10-27): where its other ways' buttons and their open form render.
   const [alsoButtons, setAlsoButtons] = useState<HTMLElement | null>(null);
   const [alsoPanel, setAlsoPanel] = useState<HTMLElement | null>(null);
+  // The right-hand end of the step's line — where the step's "Change booking" sits (2026-10-27).
+  const [stageActs, setStageActs] = useState<HTMLElement | null>(null);
 
   /* ---- the per-room key checklist (survives a refresh until check-in stamps it) ---- */
   const [reserveExtras, setReserveExtras] = useState<string[]>([]);
@@ -1549,6 +1551,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                   </h3>
                   <span className="verb">{STEP_NEEDS[viewing as StepNo]}</span>
                   {viewingPast || sealed ? null : <FlowChips names={sections} onGo={goToCard} />}
+                  <span className="stage-acts" ref={setStageActs} />
                 </div>
               </div>
 
@@ -1591,7 +1594,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                     resuming={unparkMutation.isPending}
                     onHistory={() => setView("history", viewing)}
                   />
-                  <AlsoBar buttons={alsoButtons} panel={alsoPanel}>
+                  <AlsoBar buttons={alsoButtons} panel={alsoPanel} stage={stageActs}>
                     <OtherWaysSlot node={null}>{native}</OtherWaysSlot>
                   </AlsoBar>
                   {!viewingPast && !sealed && preconds.length ? (
