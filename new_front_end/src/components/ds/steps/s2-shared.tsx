@@ -14,6 +14,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Chip } from "@/design-system";
 import { bookingHref } from "@/components/ds/ui";
 import { useSession } from "@/hooks/use-session";
+import type { RoomByType } from "@/hooks/use-booking-rooms";
 import { getCompetingClaims, type CompetingClaimItem } from "@/lib/api/entries";
 import { listRooms } from "@/lib/api/rooms";
 import { STEP_NAMES, stepNoOfStage } from "@/lib/ds/steps";
@@ -41,14 +42,28 @@ export function useRoomNumbers(): Map<string, string> {
   return useMemo(() => new Map((rooms.data?.items ?? []).map((r) => [r.id, r.roomNumber])), [rooms.data]);
 }
 
-/** "Room 201" · "Rooms 201, 202" — numbers sorted the way the house counts them. */
-export function roomsWord(ids: string[], numbers: Map<string, string>): string {
-  const nos = ids
+/**
+ * "Room 201" · "Rooms 201, 202" — numbers sorted the way the house counts them. A room the system
+ * chose and may still move before Arrival (`named`, from `useBookingRooms`) is named by its type
+ * instead — "Deluxe Double · rooms 1, 2 · Room 206" — since its number is not a promise yet.
+ */
+export function roomsWord(ids: string[], numbers: Map<string, string>, named?: Map<string, RoomByType>): string {
+  const byType = new Map<string, number[]>();
+  const plain: string[] = [];
+  for (const id of ids) {
+    const q = named?.get(id);
+    if (q && q.ordinal != null) byType.set(q.typeName, [...(byType.get(q.typeName) ?? []), q.ordinal]);
+    else plain.push(id);
+  }
+  const typed = [...byType].map(([t, ns]) =>
+    ns.length === 1 ? `${t} · room ${ns[0]}` : `${t} · rooms ${[...ns].sort((a, b) => a - b).join(", ")}`,
+  );
+  const nos = plain
     .map((id) => numbers.get(id))
     .filter((n): n is string => !!n)
     .sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
-  if (nos.length === 0) return ids.length === 1 ? "1 room" : `${ids.length} rooms`;
-  return `${nos.length === 1 ? "Room" : "Rooms"} ${nos.join(", ")}`;
+  if (nos.length === 0 && typed.length === 0) return ids.length === 1 ? "1 room" : `${ids.length} rooms`;
+  return [...typed, nos.length ? `${nos.length === 1 ? "Room" : "Rooms"} ${nos.join(", ")}` : null].filter(Boolean).join(" · ");
 }
 
 /* ------------------------------------------------------------------ passes */

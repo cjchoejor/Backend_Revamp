@@ -531,6 +531,7 @@ export function RoomCompositionsTable({
   entryAdults,
   entryChildAges,
   roomDates,
+  roomLabels,
   onSave,
   saveLabel,
   saving,
@@ -636,6 +637,12 @@ export function RoomCompositionsTable({
    * allocate the same people").
    */
   roomDates?: Record<string, { label: string; nights: number; dates?: string[] }>;
+  /**
+   * A room the system chose and may still move before Arrival, named the way the desk names it —
+   * "Deluxe Double · room 1" (2026-10-28, docs/room-types-until-arrival.md). Its number is not a
+   * promise yet, so the row and every message use this instead.
+   */
+  roomLabels?: Map<string, string>;
   /** Enables the reference-rate placeholders in the negotiated-rate cells. */
   entryId?: string;
   sealedRoomIds: string[];
@@ -942,6 +949,8 @@ export function RoomCompositionsTable({
         ? `child${n === 1 ? "" : "ren"} ${youngMax + 1}–${childMax}`
         : `child${n === 1 ? "" : "ren"} under ${youngMax + 1}`;
   const roomNoOf = (id: string) => roomById.get(id)?.roomNumber ?? id.slice(0, 6);
+  /** "Room 204", or "Deluxe Double · room 1" for a room the system may still move. */
+  const nameOf = (id: string) => roomLabels?.get(id) ?? `Room ${roomNoOf(id)}`;
   const capOf = (id: string): number | null => {
     const rt = roomById.get(id)?.roomType;
     return rt?.maxCapacity ?? rt?.standardCapacity ?? null;
@@ -990,7 +999,7 @@ export function RoomCompositionsTable({
         const ceil = cap + bedMaxOf(roomId);
         if (n > ceil) {
           flashLimit(
-            `You typed ${typed} — Room ${roomNoOf(roomId)} sleeps at most ${ceil} adult-rate guests (${cap} + ${bedMaxOf(roomId)} extra bed${bedMaxOf(roomId) === 1 ? "" : "s"}), so it is set to ${ceil}.`,
+            `You typed ${typed} — ${nameOf(roomId)} sleeps at most ${ceil} adult-rate guests (${cap} + ${bedMaxOf(roomId)} extra bed${bedMaxOf(roomId) === 1 ? "" : "s"}), so it is set to ${ceil}.`,
           );
           n = ceil;
           display = String(n);
@@ -1019,7 +1028,7 @@ export function RoomCompositionsTable({
       const remaining = Math.max(0, partyBands[col] - others);
       if (n > remaining) {
         flashLimit(
-          `You typed ${typed} — Room ${roomNoOf(roomId)} can take ${remaining} ${bandLabel(col, remaining)}, so it is set to ${remaining}. This booking has ${partyBands[col]}${
+          `You typed ${typed} — ${nameOf(roomId)} can take ${remaining} ${bandLabel(col, remaining)}, so it is set to ${remaining}. This booking has ${partyBands[col]}${
             others > 0 ? ` and ${others} ${others === 1 ? "is" : "are"} already in other rooms${sameNights ? " on the same nights" : ""}` : ""
           }. To move someone here, reduce another room first, or change the party at the Inquiry step.`,
         );
@@ -1045,12 +1054,12 @@ export function RoomCompositionsTable({
     const needed = bedsNeeded(roomId, cnt(row?.ad ?? "0"), row?.foc ?? false);
     const n = cnt(v);
     if (n > max) {
-      flashLimit(`Room ${roomNoOf(roomId)} allows at most ${max} extra bed${max === 1 ? "" : "s"} — capped.`);
+      flashLimit(`${nameOf(roomId)} allows at most ${max} extra bed${max === 1 ? "" : "s"} — capped.`);
       return String(max);
     }
     if (n < needed) {
       flashLimit(
-        `Room ${roomNoOf(roomId)} needs ${needed} extra bed${needed === 1 ? "" : "s"} for its adults (3+ adults always need one) — it can't go lower while they're in the room.`,
+        `${nameOf(roomId)} needs ${needed} extra bed${needed === 1 ? "" : "s"} for its adults (3+ adults always need one) — it can't go lower while they're in the room.`,
       );
       return String(needed);
     }
@@ -1068,9 +1077,8 @@ export function RoomCompositionsTable({
     );
     const allowed = Math.max(0, occ - otherMeals);
     if (cnt(v) <= allowed) return v;
-    const roomNo = roomById.get(roomId)?.roomNumber ?? "";
     flashLimit(
-      `Room ${roomNo} has ${occ} guest${occ === 1 ? "" : "s"}${
+      `${nameOf(roomId)} has ${occ} guest${occ === 1 ? "" : "s"}${
         otherMeals > 0 ? ` (${otherMeals} already on other plans)` : ""
       } — meal-plan pax can't exceed the people in the room; capped at ${allowed}.`,
     );
@@ -1667,7 +1675,7 @@ export function RoomCompositionsTable({
     const show = splitStay ? ns.length > 1 : stayNights != null && ns.length !== stayNights;
     if (!show) return null;
     const list = ns.map(shortNight).join(", ");
-    const no = roomById.get(id)?.roomNumber ?? "This room";
+    const no = roomById.get(id)?.roomNumber ? nameOf(id) : "This room";
     return {
       text:
         stayNights != null && ns.length === stayNights
@@ -1676,8 +1684,8 @@ export function RoomCompositionsTable({
             ? `${ns.length} of ${stayNights} nights`
             : `${ns.length} nights`,
       title: splitStay
-        ? `Room ${no} is held on ${list}. It has one row for all of those nights, so a change to it here changes every one of them.`
-        : `Room ${no} is held on ${list} only.`,
+        ? `${no} is held on ${list}. It has one row for all of those nights, so a change to it here changes every one of them.`
+        : `${no} is held on ${list} only.`,
     };
   };
 
@@ -1701,7 +1709,7 @@ export function RoomCompositionsTable({
       const r = rows[id] ?? EMPTY_ROW;
       const occ = cnt(r.ad) + cnt(r.c6) + cnt(r.u6);
       const fault = rowFault(id);
-      if (fault) out.push(`Room ${roomNoOf(id)} — ${fault}`);
+      if (fault) out.push(`${nameOf(id)} — ${fault}`);
       const room = roomById.get(id);
       const cap = room?.roomType?.maxCapacity ?? room?.roomType?.standardCapacity;
       // Meals and extra beds may differ night by night (2026-10-22), so each night is judged on its own.
@@ -1712,15 +1720,15 @@ export function RoomCompositionsTable({
       if (cap != null && capNights.length) {
         const bed = cnt(valAt(id, capNights[0], "bed"));
         out.push(
-          `Room ${roomNoOf(id)} — ${occ} guests in a room that sleeps ${cap}${bed > 0 ? ` + ${bed} extra bed(s)` : ""}${onNights(capNights)}`,
+          `${nameOf(id)} — ${occ} guests in a room that sleeps ${cap}${bed > 0 ? ` + ${bed} extra bed(s)` : ""}${onNights(capNights)}`,
         );
       }
       const mealNights = checkNights.filter((n) => MEAL_COLS.reduce((s2, c) => s2 + cnt(valAt(id, n, c)), 0) > occ);
       if (mealNights.length) {
-        out.push(`Room ${roomNoOf(id)} — more meal-plan pax than guests in the room${onNights(mealNights)}`);
+        out.push(`${nameOf(id)} — more meal-plan pax than guests in the room${onNights(mealNights)}`);
       }
       if (belowFloor(id, "rRoom")) {
-        out.push(`Room ${roomNoOf(id)} — priced below the house floor of ${floorOf(id)}, which needs the GM's waiver`);
+        out.push(`${nameOf(id)} — priced below the house floor of ${floorOf(id)}, which needs the GM's waiver`);
       }
     }
     if (partySize > 0) {
@@ -1744,7 +1752,7 @@ export function RoomCompositionsTable({
     }
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sealedRoomIds, rows, nightVals, roomDates, roomMin, partySize, totalGuests, roomById, rateRef, splitStay, nightsShort.join(",")]);
+  }, [sealedRoomIds, rows, nightVals, roomDates, roomMin, partySize, totalGuests, roomById, rateRef, splitStay, nightsShort.join(","), roomLabels]);
 
   useEffect(() => {
     onFaultsChange?.(faults);
@@ -2275,8 +2283,16 @@ export function RoomCompositionsTable({
                               : undefined
                         }
                       >
-                        <b>{room?.roomNumber ?? id.slice(0, 6)}</b>
-                        {room?.roomType?.code && <span>{room.roomType.code}</span>}
+                        {roomLabels?.has(id) ? (
+                          <b className="quiet-room" title="Not chosen yet — the system keeps a room of this type and may move it until Arrival, where the room number is chosen">
+                            {roomLabels.get(id)}
+                          </b>
+                        ) : (
+                          <>
+                            <b>{room?.roomNumber ?? id.slice(0, 6)}</b>
+                            {room?.roomType?.code && <span>{room.roomType.code}</span>}
+                          </>
+                        )}
                         {chip && (
                           <span className="nn" title={chip.title}>
                             {chip.text}
@@ -2345,7 +2361,7 @@ export function RoomCompositionsTable({
                                 title={
                                   col === "rBed"
                                     ? "No extra beds in this room — nothing to negotiate"
-                                    : `Room ${roomNoOf(id)}'s meal plan doesn't include ${RATE_META[col].meal} — put someone on a plan that does (or à-la-carte pax) to unlock this rate`
+                                    : `${nameOf(id)}'s meal plan doesn't include ${RATE_META[col].meal} — put someone on a plan that does (or à-la-carte pax) to unlock this rate`
                                 }
                               >
                                 —
@@ -2537,7 +2553,7 @@ export function RoomCompositionsTable({
           <span>
             {sealedRoomIds
               .filter((id) => rowFault(id))
-              .map((id) => `Room ${roomNoOf(id)} — ${rowFault(id)}`)
+              .map((id) => `${nameOf(id)} — ${rowFault(id)}`)
               .join(" · ")}
             . The quote is refused while this stands.
           </span>
@@ -2554,7 +2570,7 @@ export function RoomCompositionsTable({
           <span>
             {sealedRoomIds
               .filter((id) => belowFloor(id, "rRoom"))
-              .map((id) => `Room ${roomNoOf(id)} (floor ${floorOf(id)})`)
+              .map((id) => `${nameOf(id)} (floor ${floorOf(id)})`)
               .join(" · ")}{" "}
             — priced below the house&rsquo;s minimum sellable rate. A booking under the floor needs the GM&rsquo;s waiver
             before the quote can be generated.

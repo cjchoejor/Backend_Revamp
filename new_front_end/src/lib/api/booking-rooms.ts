@@ -43,6 +43,8 @@ export type SealByTypeAnswer = {
 export type BookingRoomsView = {
   byType: boolean;
   movable: boolean;
+  /** At Arrival the system's rooms are a proposal, named by number for the desk to confirm. */
+  atArrival?: boolean;
   rooms: Array<{
     roomId: string;
     roomNumber: string | null;
@@ -50,6 +52,8 @@ export type BookingRoomsView = {
     typeName: string;
     nights: string[];
     quiet: boolean;
+    /** The room's number within its type, for a room the system chose — "room 2". */
+    ordinal: number | null;
     label: string;
   }>;
   bookingRooms?: BookingRoom[];
@@ -80,17 +84,23 @@ export function chooseBookingRoom(session: Session, entryId: string, body: { fro
   return apiRequest<{ moved: boolean; othersMoved: number }>(`/api/entries/${entryId}/booking-rooms/choose`, { method: "POST", session, body });
 }
 
-/** "Deluxe Double · room 2" for each room, in the order of the booking rooms (key order). */
+/**
+ * "Deluxe Double · room 2" for each room the system chose, in the order of the booking rooms (key
+ * order). Every room of a type takes its place in the count — a guest's own room too, though it is
+ * named by its number — so a label stays put when another room is fixed. The server counts the same
+ * way (`describeBookingRooms`).
+ */
 export function labelsForBookingRooms(rooms: BookingRoom[], typeName: (id: string) => string): Map<string, string> {
   const out = new Map<string, string>();
+  const counted = new Set<string>();
   const perType = new Map<string, number>();
   for (const r of [...rooms].sort((a, b) => (Number(a.key.slice(1)) || 0) - (Number(b.key.slice(1)) || 0))) {
     for (const n of r.nights) {
-      if (!n.roomId || out.has(n.roomId)) continue;
-      if (n.fixed) continue;
+      if (!n.roomId || counted.has(n.roomId)) continue;
+      counted.add(n.roomId);
       const k = (perType.get(n.roomTypeId) ?? 0) + 1;
       perType.set(n.roomTypeId, k);
-      out.set(n.roomId, `${typeName(n.roomTypeId)} · room ${k}`);
+      if (!n.fixed) out.set(n.roomId, `${typeName(n.roomTypeId)} · room ${k}`);
     }
   }
   return out;

@@ -20,6 +20,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button, Chip, Refusal, type ChipTone } from "@/design-system";
 import { useSession } from "@/hooks/use-session";
+import { useBookingRooms } from "@/hooks/use-booking-rooms";
 import { roomsFromResultSet } from "@/lib/api/availability";
 import { getChildPolicy } from "@/lib/api/child-policy";
 import { listRoomChangeCandidates, repairPartySeating, type RoomChangeCandidate } from "@/lib/api/entries";
@@ -99,6 +100,10 @@ export function AssignRoomsCard({ entry }: { entry: EntryDetail }) {
   });
   const youngMax = policy.data?.ageBands.youngChildMaxAge ?? 5;
   const childMax = policy.data?.ageBands.childMaxAge ?? 10;
+  // The rooms the system chose before Arrival: here they are its proposal, by number, for the
+  // desk to confirm or change (2026-10-28, docs/room-types-until-arrival.md).
+  const bookingRooms = useBookingRooms(entry);
+  const proposals = bookingRooms.proposals;
   const proofs = useQuery({
     queryKey: ["identity-proofs", entry.id],
     queryFn: () => listIdentityProofs(session!, entry.id),
@@ -113,6 +118,7 @@ export function AssignRoomsCard({ entry }: { entry: EntryDetail }) {
       ["room-change-candidates", entry.id],
       ["identity-proofs", entry.id],
       ["journey-summary", entry.id],
+      ["booking-rooms", entry.id],
     ]);
 
   /* ---- the plan ---- */
@@ -333,6 +339,16 @@ export function AssignRoomsCard({ entry }: { entry: EntryDetail }) {
         </div>
       ) : null}
 
+      {!assigned && proposals.length > 0 ? (
+        <div className="notice next" role="status">
+          <span>
+            <b>The system&apos;s rooms for this booking:</b>{" "}
+            {proposals.map((r) => `${r.label} — Room ${r.roomNumber ?? "?"}`).join(" · ")}.{" "}
+            {multi ? "Assign them to confirm" : "Assign it to confirm"}, or click a room below to give it another of its type.
+          </span>
+        </div>
+      ) : null}
+
       <RoomsTable entry={entry} />
 
       <Live>
@@ -341,7 +357,7 @@ export function AssignRoomsCard({ entry }: { entry: EntryDetail }) {
             sealed ? (
               <div className="row-acts" style={{ marginTop: 12, alignItems: "center" }}>
                 <Button state={assignAll.isPending ? "working" : canWork ? "default" : "inert"} workingLabel="Assigning…" onClick={() => assignAll.mutate()}>
-                  Assign all {planRoomCount} rooms
+                  {proposals.length ? `Confirm and assign the ${planRoomCount} rooms` : `Assign all ${planRoomCount} rooms`}
                 </Button>
                 <Help label="About assigning">The rooms chosen at Inquiry, each for its own nights. A room above can be changed first.</Help>
               </div>

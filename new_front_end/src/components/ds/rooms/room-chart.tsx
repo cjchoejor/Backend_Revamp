@@ -60,6 +60,7 @@ import { rowNameOf } from "@/lib/ds/status";
 import { STEP_NAMES, stepNoOfStage } from "@/lib/ds/steps";
 import type { RoomMoveLegInput } from "@/lib/api/room-moves";
 import { RoomMoveDialog } from "./room-move-dialog";
+import { QuietRoomDialog, type QuietPick } from "./quiet-room-dialog";
 import { DateMoveDialog } from "./date-move-dialog";
 import { SplitMoveDialog, type SplitMove } from "./split-move-dialog";
 import { NightMoveDialog, type NightMove } from "./night-move-dialog";
@@ -775,6 +776,8 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
   const dragEnded = useRef(false);
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const [moveLegs, setMoveLegs] = useState<RoomMoveLegInput[] | null>(null);
+  /** A room the system chose, given another room of its type on the same nights — no room move. */
+  const [quietPick, setQuietPick] = useState<QuietPick | null>(null);
   /** A bar dragged sideways: the booking's stay moving to other dates (2026-10-13). */
   const [dateMove, setDateMove] = useState<(DateMoveInput & { label: string }) | null>(null);
   /** Some of a booking's rooms dragged to other dates — a booking of their own (2026-10-14). */
@@ -1100,6 +1103,28 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
   };
   const pickMax = pick ? (pick.reachesEnd ? Math.max(pick.freeRun, START_MAX_NIGHTS) : pick.freeRun) : 1;
   const roomNoOf = (id: string) => chart.rooms.find((r) => r.id === id)?.roomNumber ?? "?";
+  /**
+   * Where a drop goes (2026-10-28, docs/room-types-until-arrival.md). One room the system chose,
+   * moved onto another room of its type on the same nights with nobody in the way, is the desk
+   * choosing which room of the type the guest gets: it is given and fixed, with no new pass. Every
+   * other drop is the room move as before.
+   */
+  const openMove = (legs: RoomMoveLegInput[]) => {
+    if (legs.length === 1 && !legs[0].newCheckInDate) {
+      const l = legs[0];
+      const own = (barsByRoom.get(l.fromRoomId) ?? []).filter((b) => b.entryId === l.entryId);
+      const fromRoom = chart.rooms.find((r) => r.id === l.fromRoomId);
+      const toRoom = chart.rooms.find((r) => r.id === l.toRoomId);
+      const first = own.reduce((m, b) => (b.from < m ? b.from : m), "9999-12-31");
+      const last = own.reduce((m, b) => (b.to > m ? b.to : m), "0000-01-01");
+      const inWay = (barsByRoom.get(l.toRoomId) ?? []).some((b) => b.entryId !== l.entryId && b.from < last && first < b.to);
+      if (own.length && own.every((b) => b.quiet) && fromRoom && toRoom && fromRoom.roomTypeId === toRoom.roomTypeId && !inWay) {
+        setQuietPick({ entryId: l.entryId, fromRoomId: l.fromRoomId, toRoomId: l.toRoomId, toRoomNumber: toRoom.roomNumber, guest: nameOf(bookingOf.get(l.entryId)) });
+        return;
+      }
+    }
+    setMoveLegs(legs);
+  };
   const ownRoom = ownRoomOf(barsByRoom, roomNoOf);
   /** The rows a booking holds on the chart, top to bottom. */
   const ownRowsOf = (entryId: string) => rows.filter((rid) => ownRoom(entryId, rid) != null);
@@ -1144,7 +1169,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
       if (plan.why) toast.error(plan.why);
       return;
     }
-    setMoveLegs(plan.legs);
+    openMove(plan.legs);
   };
   /** The night whose column is under the pointer, read off the header. */
   const nightAtX = (x: number): string | null => {
@@ -1524,7 +1549,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
         if (plan.why) toast.error(plan.why);
         return;
       }
-      setMoveLegs(plan.legs);
+      openMove(plan.legs);
     };
     const onMove = (ev: PointerEvent) => {
       last = { x: ev.clientX, y: ev.clientY };
@@ -2057,6 +2082,19 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
           </tbody>
         </table>
       </div>
+
+      <QuietRoomDialog
+        pick={quietPick}
+        onClose={() => {
+          setQuietPick(null);
+          stopSwitching();
+        }}
+        onDone={() => {
+          setQuietPick(null);
+          stopSwitching();
+          void q.refetch();
+        }}
+      />
 
       <RoomMoveDialog
         legs={moveLegs}

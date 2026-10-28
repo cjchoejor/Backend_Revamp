@@ -28,6 +28,8 @@ import { useSession } from "@/hooks/use-session";
 import { useHotelDay } from "@/hooks/use-hotel-day";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
 import { usePaymentStatus } from "@/hooks/use-payment-status";
+import { useBookingRooms } from "@/hooks/use-booking-rooms";
+import { roomsWord } from "@/components/ds/steps/s2-shared";
 import { usePageTitle } from "@/hooks/use-page-title";
 import { useDeskBookings, useRoomsList } from "@/hooks/use-desk-data";
 import {
@@ -233,6 +235,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const listRow = useDeskBookings().data?.items.find((r) => r.id === entryId) ?? null;
   // The room registry, to name the rooms a booking holds before Arrival assigns them.
   const roomList = useRoomsList().data?.items;
+  // A room the system chose and may still move reads "Deluxe Double · room 1" until Arrival.
+  const bookingRoomNames = useBookingRooms(entry);
 
   const paymentStatusQuery = usePaymentStatus(entryId, { enabled: !!entry?.folio });
   const paymentSatisfied = paymentStatusQuery.data?.satisfied;
@@ -1299,12 +1303,11 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     entry.committedHold?.state === "PLACED" ||
     entry.committedHold?.state === "CONFIRMED" ||
     (entry.speculativeHolds ?? []).some((h) => h.state === "PLACED");
-  const heldRoomNumbers = roomNumbers.length
-    ? []
-    : heldRoomIds(entry)
-        .map((id) => roomList?.find((r) => r.id === id)?.roomNumber)
-        .filter((x): x is string => !!x)
-        .sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
+  // A room the system chose and may still move is named by its type, not its number.
+  const heldIds = roomNumbers.length ? [] : heldRoomIds(entry).filter((id) => roomList?.some((r) => r.id === id));
+  const heldRoomsWord = heldIds.length
+    ? roomsWord(heldIds, new Map((roomList ?? []).map((r) => [r.id, r.roomNumber])), bookingRoomNames.named).replace(/^Rooms? /, "")
+    : "";
   const cur = billing?.currency ?? fin.currency;
   const totalKind =
     billing?.headline.kind === "BILLED_SO_FAR"
@@ -1373,8 +1376,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                 Rooms <b>{roomNumbers.length || entry.numberOfRooms || "—"}</b>
                 {roomNumbers.length
                   ? ` · ${roomNumbers.join(", ")}`
-                  : heldRoomNumbers.length
-                    ? ` · ${heldRoomNumbers.join(", ")} · ${roomsActuallyHeld ? "held" : "picked, not held"}`
+                  : heldRoomsWord
+                    ? ` · ${heldRoomsWord} · ${roomsActuallyHeld ? "held" : "picked, not held"}`
                     : " · not yet assigned"}
               </span>
               <span>{cameInAs}</span>

@@ -25,7 +25,9 @@ import { useMemo, useState, type ReactNode } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button, Chip } from "@/design-system/components/primitives";
-import { changeBookingRoom } from "@/lib/api/entries";
+import { changeBookingRoom, listRoomChangeCandidates } from "@/lib/api/entries";
+import { chooseBookingRoom } from "@/lib/api/booking-rooms";
+import { useBookingRooms } from "@/hooks/use-booking-rooms";
 import type { RoomCompositionInput } from "@/lib/api/quotations";
 import { RoomCompositionPlanner } from "@/components/desk/workspace/room-compositions-board";
 import { nightOverridesCanon } from "@/components/desk/workspace/room-compositions-table";
@@ -105,6 +107,10 @@ export function RoomsTable({
 
   const [picked, setPicked] = useState<string | null>(null);
   const chosen = picked && ids.includes(picked) ? picked : null;
+  // A room the system chose and may still move reads "Deluxe Double · room 1" until Arrival
+  // (2026-10-28, docs/room-types-until-arrival.md) — its number is not a promise yet.
+  const roomNames = useBookingRooms(entry);
+  const quietName = (id: string) => roomNames.labels.get(id) ?? null;
 
   /**
    * Changing the setup in place (2026-10-06, operator: "it should be editable in that as well,
@@ -131,6 +137,7 @@ export function RoomsTable({
   const [reason, setReason] = useState("");
   const numberOf = (id: string) =>
     (entry.roomAssignments ?? []).find((a) => a.roomId === id)?.room?.roomNumber ?? byId.get(id)?.roomNumber ?? id.slice(0, 6);
+  const nameOf = (id: string) => quietName(id) ?? `Room ${numberOf(id)}`;
 
   /**
    * In-house the rates, the waivers and the discount are read-only — changing a rate mid-stay is
@@ -181,6 +188,7 @@ export function RoomsTable({
       ["identity-proofs", entry.id],
       ["billing-summary", entry.id],
       ["entry-timers", entry.id],
+      ["booking-rooms", entry.id],
     ]);
 
   const saveM = useMutation({
@@ -231,9 +239,11 @@ export function RoomsTable({
             {chosen ? (
               <>
                 <span className="who">
-                  Room <b>{numberOf(chosen)}</b>
+                  {quietName(chosen) ? <b>{quietName(chosen)}</b> : <>Room <b>{numberOf(chosen)}</b></>}
+                  {roomNames.atArrival && roomNames.quietIds.has(chosen) ? <span className="meta"> · proposed by the system</span> : null}
                   {roomDates[chosen] ? <span className="meta"> · {roomDates[chosen].label}</span> : null}
                 </span>
+                {roomNames.quietIds.has(chosen) ? <QuietRoomChoice entry={entry} fromRoomId={chosen} name={nameOf(chosen)} onChanged={changed} /> : null}
                 {roomActions?.(chosen, numberOf(chosen))}
                 <Button kind="quiet" compact onClick={() => setPicked(null)}>
                   Done with this room
@@ -283,6 +293,8 @@ export function RoomsTable({
                 entry={entry}
                 fromRoomId={chosen}
                 fromRoomNumber={numberOf(chosen)}
+                fromRoomName={quietName(chosen) ?? undefined}
+                typeChangeOnly={roomNames.quietIds.has(chosen)}
                 onChanged={changed}
                 compact
                 onOpenChange={(isOpen) => {
@@ -306,7 +318,7 @@ export function RoomsTable({
           bare it had no styling at all (2026-10-06, operator: "this looks very broken in s7"). */}
       {roomChangeOpen ? (
         <p className="sm" style={{ margin: "var(--s2) 0 0" }}>
-          The booking&apos;s own table is put away while Room {chosen ? numberOf(chosen) : ""} is being changed.
+          The booking&apos;s own table is put away while {chosen ? nameOf(chosen) : "the room"} is being changed.
           <Help label="About the table">It comes back when you move the room or press Cancel change.</Help>
         </p>
       ) : (
@@ -324,6 +336,7 @@ export function RoomsTable({
         entryChildAges={entry.childAges ?? null}
         entryId={entry.id}
         roomDates={roomDates}
+        roomLabels={roomNames.labels}
         initialCompositions={seed}
         lockCommercial={inHouse}
         readOnly={!editing}
@@ -375,6 +388,80 @@ export function RoomsTable({
       </DsDialog>
 
     </>
+  );
+}
+
+/**
+ * A room the system chose, given a particular room of its own type (2026-10-28,
+ * docs/room-types-until-arrival.md). Before Arrival this is no room change: the booking's setup, its
+ * price and its papers stay as they are, and nothing reaches the guest. The room chosen is FIXED —
+ * the system will not move it again. A room of another type is the room change beside it.
+ */
+function QuietRoomChoice({
+  entry,
+  fromRoomId,
+  name,
+  onChanged,
+}: {
+  entry: EntryDetail;
+  fromRoomId: string;
+  name: string;
+  onChanged: () => void;
+}) {
+  const { session } = useSession();
+  const [to, setTo] = useState("");
+  const q = useQuery({
+    queryKey: ["room-change-candidates", entry.id, fromRoomId],
+    queryFn: () => listRoomChangeCandidates(session!, entry.id, fromRoomId),
+    enabled: !!session,
+    staleTime: 30_000,
+  });
+  const options = (q.data?.candidates ?? []).filter((c) => c.sameType && c.selectable);
+  const toNo = options.find((c) => c.roomId === to)?.roomNumber ?? null;
+  const m = useMutation({
+    mutationFn: () => chooseBookingRoom(session!, entry.id, { fromRoomId, toRoomId: to }),
+    onSuccess: (res) => {
+      toast.success(`${name} → Room ${toNo ?? ""}, kept for the guest. Nothing else changed.`);
+      if (res?.othersMoved) toast.info(`${res.othersMoved === 1 ? "Another booking's room" : `${res.othersMoved} other bookings' rooms`} moved to make way — those guests were not told, nothing of theirs changed.`);
+      setTo("");
+      onChanged();
+    },
+    onError: (e) => toastRefusal(e, "That room could not be given"),
+  });
+  return (
+    <span className="quiet-choice" style={{ display: "inline-flex", gap: "var(--s2)", alignItems: "center" }}>
+      <select
+        className="input"
+        aria-label={`A room for ${name}`}
+        value={to}
+        disabled={m.isPending || q.isLoading}
+        onChange={(e) => setTo(e.target.value)}
+        style={{ height: 32, minWidth: 180 }}
+      >
+        <option value="">{q.isLoading ? "Reading the free rooms…" : options.length ? "Give it a room of this type" : "No other room of this type is free"}</option>
+        {options.map((c) => (
+          <option key={c.roomId} value={c.roomId}>
+            Room {c.roomNumber}
+            {c.bedType ? ` · ${c.bedType.charAt(0) + c.bedType.slice(1).toLowerCase()}` : ""}
+          </option>
+        ))}
+      </select>
+      <Button
+        compact
+        className={to ? "go" : undefined}
+        state={m.isPending ? "working" : to ? "default" : "inert"}
+        workingLabel="Giving it the room…"
+        reason={to ? undefined : "pick the room first"}
+        onClick={() => to && m.mutate()}
+      >
+        Give it this room
+      </Button>
+      <Help label="About giving it a room">
+        The system chose this room and may move it to another of its type until the rooms are assigned at Arrival, so
+        that other bookings fit. Giving it a particular room fixes it there — the system will not move it again. The setup, the price and the
+        papers stay as they are, and nothing is sent to the guest.
+      </Help>
+    </span>
   );
 }
 

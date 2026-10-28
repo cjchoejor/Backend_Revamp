@@ -18,6 +18,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { BindingBox, Button, Chip, Icon } from "@/design-system";
 import { useSession } from "@/hooks/use-session";
+import { useBookingRooms } from "@/hooks/use-booking-rooms";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
 import { usePaymentStatus } from "@/hooks/use-payment-status";
 import { openInvoicePdf } from "@/lib/api/documents";
@@ -697,6 +698,8 @@ function HoldCard({
    * card, to block the rooms by hand.
    */
   const flow = useStepFlow();
+  // A room the system chose and may still move reads "Deluxe Double · room 1" until Arrival.
+  const roomNames = useBookingRooms(entry).named;
   const [blockedUntil, setBlockedUntil] = useState<string | null>(null);
   /**
    * Once the block time is settled, the middle of the screen says so (2026-10-28, operator: "after
@@ -767,7 +770,7 @@ function HoldCard({
         : moneyLock
           ? "the advance, or part of it, has to come in first — or the FOM extends credit"
           : null;
-  const rooms = roomsWord(roomIds.length ? roomIds : hold?.roomId ? [hold.roomId] : [], roomNos);
+  const rooms = roomsWord(roomIds.length ? roomIds : hold?.roomId ? [hold.roomId] : [], roomNos, roomNames);
   const houseWords = house ? (house.minutes % 60 === 0 && house.minutes >= 60 ? plural(house.minutes / 60, "hour") : plural(house.minutes, "minute")) : null;
   const count = roomIds.length || 1;
   const lapsing = hold ? new Date(hold.expiresAt).getTime() < nowMs : false;

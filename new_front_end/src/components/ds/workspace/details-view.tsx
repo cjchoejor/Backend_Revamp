@@ -20,6 +20,8 @@ import { guestName } from "@/lib/desk/model";
 import { reservedThisPass } from "@/lib/desk/workspace";
 import { heldRoomIds } from "@/lib/desk/party-rooms";
 import { useRoomsList } from "@/hooks/use-desk-data";
+import { useBookingRooms } from "@/hooks/use-booking-rooms";
+import { roomsWord } from "@/components/ds/steps/s2-shared";
 import { Fact, FactBox, Facts, StepCard } from "@/components/ds/steps/kit";
 import { TripCard } from "@/components/ds/workspace/return-stay";
 import { GuestBookingsCard } from "@/components/ds/workspace/guest-bookings";
@@ -56,6 +58,8 @@ export function DetailsView({
   const nights = nightsOf(entry.checkInDate, co);
   // Before Arrival assigns them, the rooms the booking holds are named from its newest pick.
   const roomList = useRoomsList().data?.items;
+  // A room the system chose and may still move reads "Deluxe Double · room 1" until Arrival.
+  const bookingRoomNames = useBookingRooms(entry);
   const held = (entry.roomAssignments ?? []).length
     ? []
     : heldRoomIds(entry)
@@ -142,7 +146,7 @@ export function DetailsView({
               {rooms.length
                 ? `${rooms.length} · ${rooms.join(", ")}${types.length ? ` · ${types.join(", ")}` : ""}`
                 : held.length
-                  ? `${held.length} · ${held.map((r) => r.roomNumber).join(", ")} · held for the guest, assigned at Arrival`
+                  ? `${held.length} · ${roomsWord(held.map((r) => r.id), new Map(held.map((r) => [r.id, r.roomNumber])), bookingRoomNames.named).replace(/^Rooms? /, "")} · held for the guest, assigned at Arrival`
                   : `${entry.numberOfRooms ?? "—"} · not yet assigned`}
             </Fact>
             <Fact k="Guests">{party}</Fact>

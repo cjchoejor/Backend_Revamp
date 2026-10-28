@@ -17,6 +17,7 @@ import { toast } from "sonner";
 import { BindingBox, Button, Chip, Icon } from "@/design-system";
 import { useSession } from "@/hooks/use-session";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
+import { useBookingRooms } from "@/hooks/use-booking-rooms";
 import { getChildPolicy } from "@/lib/api/child-policy";
 import { openQuotationPdf } from "@/lib/api/documents";
 import { getBillingSummary } from "@/lib/api/entries";
@@ -178,6 +179,8 @@ export function S2Negotiation({
   const clock = useHotelClock(30_000);
   const tz = clock.tz;
   const roomNos = useRoomNumbers();
+  // A room the system chose and may still move reads "Deluxe Double · room 1" (2026-10-28).
+  const bookingRooms = useBookingRooms(entry);
   const passes = useMemo(() => passesOf(entry), [entry.segments]); // eslint-disable-line react-hooks/exhaustive-deps
   const passId = passes.current?.id ?? null;
   const editable = !past && entry.currentStage === "S2" && entry.status === "ACTIVE";
@@ -548,7 +551,7 @@ export function S2Negotiation({
     .join(" · ");
   const tableSummary = pricedQuote
     ? [
-        sealedRoomIds.length ? roomsWord(sealedRoomIds, roomNos) : null,
+        sealedRoomIds.length ? roomsWord(sealedRoomIds, roomNos, bookingRooms.named) : null,
         partyWords || null,
         `priced as ${pricedQuote.referenceNumber} · v${pricedQuote.versionNumber}`,
         pricedStay && pricedStay.quotationId === pricedQuote.id ? money(pricedStay.amount, pricedQuote.currency) : null,
@@ -602,7 +605,7 @@ export function S2Negotiation({
       {activeHold ? (
         <BindingBox family="provisional" stateWord={new Date(activeHold.expiresAt).getTime() < clock.now ? "expired" : "marked"} style={{ marginTop: 4 }}>
           <div className="sm" style={{ paddingRight: 80 }}>
-            {roomsWord(holdRoomIds(activeHold), roomNos)} marked until <b>{fmtDateTime(activeHold.expiresAt, tz)}</b> · others can still be sold
+            {roomsWord(holdRoomIds(activeHold), roomNos, bookingRooms.named)} marked until <b>{fmtDateTime(activeHold.expiresAt, tz)}</b> · others can still be sold
             if someone commits first
           </div>
         </BindingBox>
@@ -720,6 +723,7 @@ export function S2Negotiation({
               entryAdults={entry.adultCount ?? entry.guestCount ?? null}
               entryChildAges={entry.childAges ?? null}
               roomDates={roomDates}
+              roomLabels={bookingRooms.labels}
               onSave={() => (working ? regenerateM.mutate() : generateM.mutate())}
               saveLabel={working ? "Save & price it again" : "Save & price it"}
               saving={generateM.isPending || regenerateM.isPending}
@@ -822,7 +826,7 @@ export function S2Negotiation({
         {!changing && !past && activeHold ? (
           <div className="row-acts" style={{ marginTop: 12, alignItems: "center", gap: 10 }}>
             <span className="sm">
-              <Icon name="clock" /> {roomsWord(holdRoomIds(activeHold), roomNos)} marked until <b>{fmtDateTime(activeHold.expiresAt, tz)}</b>
+              <Icon name="clock" /> {roomsWord(holdRoomIds(activeHold), roomNos, bookingRooms.named)} marked until <b>{fmtDateTime(activeHold.expiresAt, tz)}</b>
             </span>
           </div>
         ) : null}
@@ -887,7 +891,7 @@ export function S2Negotiation({
         onClose={() => setReleaseOpen(false)}
         busy={releaseM.isPending}
         title="Release the rooms"
-        caseLines={activeHold ? [`${roomsWord(holdRoomIds(activeHold), roomNos)} marked until ${fmtDateTime(activeHold.expiresAt, tz)}`] : undefined}
+        caseLines={activeHold ? [`${roomsWord(holdRoomIds(activeHold), roomNos, bookingRooms.named)} marked until ${fmtDateTime(activeHold.expiresAt, tz)}`] : undefined}
         lead="The marker is removed. The quotation stands and can still be accepted if the rooms are free then."
         confirmLabel="Release"
         placeholder="agent went elsewhere"
@@ -911,6 +915,7 @@ const PLAN_SHORT: Array<[keyof MealCounts, string]> = [
 /** The table as the backend priced it — for a passed step, an accepted quote, or a final one. */
 function CompositionSummary({ entry }: { entry: EntryDetail }) {
   const { session } = useSession();
+  const { labels } = useBookingRooms(entry);
   const billing = useQuery({
     queryKey: ["billing-summary", entry.id, entry.updatedAt ?? ""],
     queryFn: () => getBillingSummary(session!, entry.id),
@@ -947,8 +952,8 @@ function CompositionSummary({ entry }: { entry: EntryDetail }) {
             return (
               <tr key={r.roomId ?? i} className="static">
                 <td>
-                  {r.roomNumber ? `Room ${r.roomNumber}` : "—"}
-                  {r.roomTypeName ? <span className="sub">{r.roomTypeName}</span> : null}
+                  {r.roomId && labels.has(r.roomId) ? labels.get(r.roomId) : r.roomNumber ? `Room ${r.roomNumber}` : "—"}
+                  {r.roomTypeName && !(r.roomId && labels.has(r.roomId)) ? <span className="sub">{r.roomTypeName}</span> : null}
                 </td>
                 <td>
                   {o ? (

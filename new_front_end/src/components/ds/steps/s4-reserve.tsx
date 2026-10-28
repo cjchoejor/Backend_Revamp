@@ -17,6 +17,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button, Chip, Refusal } from "@/design-system";
 import { useSession } from "@/hooks/use-session";
+import { useBookingRooms } from "@/hooks/use-booking-rooms";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
 import { usePaymentStatus } from "@/hooks/use-payment-status";
 import { useStaffNames } from "@/hooks/use-desk-data";
@@ -260,6 +261,8 @@ function BeforeYouReserve({
   reserve: { onClick: () => void; ready: boolean; reason?: string } | null;
   onOpenItems?: (items: string[]) => void;
 }) {
+  // A room the system chose and may still move reads "Deluxe Double · room 1" until Arrival.
+  const roomByNo = useBookingRooms(entry).byNumber;
   const { session } = useSession();
   const { past } = useStepMode();
   const clock = useHotelClock(60_000);
@@ -357,7 +360,10 @@ function BeforeYouReserve({
   /* the rooms held */
   const hold = entry.committedHold ?? null;
   const holdJ = journey?.s3Setup.committedHold ?? null;
-  const holdRooms = (holdJ?.rooms ?? []).map((r) => r.roomNumber).filter(Boolean);
+  const holdRooms = (holdJ?.rooms ?? [])
+    .map((r) => r.roomNumber)
+    .filter((n): n is string => !!n)
+    .map((n) => roomByNo.get(n) ?? n);
   const holdOk = metOr("Rooms blocked");
   lines.push({
     key: "hold",
@@ -903,6 +909,8 @@ function SoFar({ entry }: { entry: EntryDetail }) {
 /* ------------------------------------------------------------------ after the click */
 
 function WhatReserveDecided({ entry }: { entry: EntryDetail }) {
+  // A room the system chose and may still move reads "Deluxe Double · room 1" until Arrival.
+  const roomByNo = useBookingRooms(entry).byNumber;
   const clock = useHotelClock(60_000);
   const tz = clock.tz;
   const staff = useStaffNames();
@@ -950,8 +958,8 @@ function WhatReserveDecided({ entry }: { entry: EntryDetail }) {
             <div style={{ display: "grid", gap: 2 }}>
               {roomRates.map((r) => (
                 <span key={r.roomNumber ?? r.roomTypeName ?? String(r.rate)}>
-                  Room {r.roomNumber ?? "—"}
-                  {r.roomTypeName ? <span className="meta"> · {r.roomTypeName}</span> : null} ·{" "}
+                  {r.roomNumber && roomByNo.has(r.roomNumber) ? roomByNo.get(r.roomNumber) : `Room ${r.roomNumber ?? "—"}`}
+                  {r.roomTypeName && !(r.roomNumber && roomByNo.has(r.roomNumber)) ? <span className="meta"> · {r.roomTypeName}</span> : null} ·{" "}
                   <span className="money">{money(r.rate, cur)}</span> / night
                 </span>
               ))}
@@ -970,7 +978,7 @@ function WhatReserveDecided({ entry }: { entry: EntryDetail }) {
         <Fact k="Rooms" meta={held ? "the advance is not fully paid — the rooms read Reserved once it is" : undefined}>
           {held ? <Chip tone="warning">Held · not yet Reserved</Chip> : <Chip tone="success">Reserved</Chip>}{" "}
           {rooms.length
-            ? `${rooms.join(", ")}`
+            ? `${rooms.map((n) => roomByNo.get(n) ?? n).join(", ")}`
             : `${plural(entry.numberOfRooms ?? 1, "room")} · numbers assigned at Arrival`}
         </Fact>
         <Fact k="Terms disclosed" meta={disc ? fmtStamp(disc.disclosedAt, tz) : undefined}>
