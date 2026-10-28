@@ -245,7 +245,7 @@ function ExpectedArrivalFact({ entry }: { entry: EntryDetail }) {
                     setEditing(true);
                   }}
                 >
-                  {d.guestTime ? "Change the time" : "The guest gave a time…"}
+                  {d.guestTime ? "Change the time" : "The guest gave a time"}
                 </Button>
               </div>
             ) : null}

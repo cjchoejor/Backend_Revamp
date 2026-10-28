@@ -181,13 +181,15 @@ export function PaymentPlanCard({
         ? { why: "Record the guest's answer to the proforma first.", card: "proforma", cta: "Go to the proforma" }
         : null;
   const payLock = payHold?.why ?? null;
+  // The proforma went out, the guest answered, and the advance is still short: money is next.
+  const payDue = !payHold && !!status && status.requiredAmount > 0 && !status.paidInFull && status.shortfall > 0;
   const reconcilable = received > 0 || inPayments.length > 0 || ["DIRECT_BILL", "GOVERNMENT"].includes(folio?.billingModel ?? "");
   const reconcileLock = !folio
     ? "open the provisional bill first"
     : reconciled
       ? "already signed off"
       : !reconcilable
-        ? "log a payment first — with nothing received there is nothing to sign off (a direct-bill booking is the exception)"
+        ? "nothing received yet"
         : null;
 
   const nothingAsked = !!status && status.requiredAmount === 0 && received === 0 && !status.creditExtensionActive;
@@ -376,16 +378,29 @@ export function PaymentPlanCard({
       )}
 
       <Live>
+        {editable && folio && payDue ? (
+          <div className="notice next" role="status" style={{ marginTop: 12, marginBottom: 0 }}>
+            <span>
+              <b>Record the payment now.</b> The guest has the proforma and their answer is on record — {money(status!.shortfall, cur)} of the
+              advance is still to come.
+            </span>
+          </div>
+        ) : null}
         {editable && folio ? (
-          <div className="stack sm" style={{ marginTop: 12 }}>
+          // The acts side by side, not one per line (2026-10-28, operator: "the buttons are taking
+          // needless space by being arranged vertically, make it horizontal").
+          <div className="actbar">
             <ActionRow
-              label={status?.requirementSource === "OPERATOR" || plan ? "Change the advance…" : "Set the advance…"}
+              label={status?.requirementSource === "OPERATOR" || plan ? "Change the advance" : "Set the advance"}
               caption="How much the guest pays, and how and when. The proforma prints both, so a change issues it again."
               onClick={() => setOpen("advance")}
             />
             <ActionRow
               kind="primary"
-              label="Record payment…"
+              // Green and full size once it is time (2026-10-28, operator: "more prominent than just a
+              // black button, so the user knows it's time to record the payment now").
+              className={payDue ? "go big" : undefined}
+              label="Record payment"
               caption="The rooms are blocked automatically when money comes in — even part of it."
               onClick={() => setOpen("pay")}
               state={payHold ? "inert" : "default"}
@@ -395,13 +410,13 @@ export function PaymentPlanCard({
             />
             <ActionRow
               label="Mark reconciled"
-              caption="Signs off the money position — ticks the arrival checklist and stops the chasing."
+              caption="Signs off the money position — ticks the arrival checklist and stops the chasing. It needs money received first; a direct-bill booking is the exception."
               onClick={() => reconcileM.mutate()}
               state={reconcileM.isPending ? "working" : reconcileLock ? "inert" : "default"}
               heldBy={reconcileLock}
             />
             <ActionRow
-              label="Extend credit…"
+              label="Extend credit"
               caption="Lets the booking go on without the advance, up to a ceiling and for a time."
               onClick={elevated ? () => setOpen("credit") : undefined}
               state={elevated ? "default" : "inert"}

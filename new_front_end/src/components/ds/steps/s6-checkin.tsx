@@ -605,7 +605,7 @@ function DocumentCard({
                 {verifiedAt ? "Open the guest table" : "Verify identity"}
               </Button>
               <Button kind="quiet" compact onClick={() => revealBlock(ID.guests, false)}>
-                ID photo…
+                ID photo
               </Button>
             </>
           )

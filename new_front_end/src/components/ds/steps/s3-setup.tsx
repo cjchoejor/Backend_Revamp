@@ -773,7 +773,7 @@ function HoldCard({
         past ? undefined : (
           <Live>
             <SeeRow
-              label="Set block time…"
+              label="Set block time"
               note={
                 ownTime
                   ? `blocked to ${fmtDateTime(ownTime, tz)} — set for this booking`
@@ -784,7 +784,7 @@ function HoldCard({
             />
             {hold ? (
               <SeeRow
-                label="Release…"
+                label="Release"
                 note="frees the rooms with a reason — they return to sale"
                 onClick={editable && gm ? () => setReleaseOpen(true) : undefined}
                 reason={!editable ? "not at this step" : gm ? undefined : "releasing a committed hold is the GM's call"}
@@ -792,7 +792,7 @@ function HoldCard({
             ) : (
               <SeeRow
                 kind="secondary"
-                label="Block the rooms…"
+                label="Block the rooms"
                 note="with the reason these rooms are blocked — a block needs one"
                 onClick={editable && !placeLock ? () => setPlaceOpen(true) : undefined}
                 reason={!editable ? "not at this step" : (placeLock ?? undefined)}
@@ -909,7 +909,7 @@ function HoldCard({
                   setTimeOpen(true);
                 }}
               >
-                Set block time…
+                Set block time
               </Button>
             </>
           }
@@ -1116,7 +1116,7 @@ function TermsCard({
           <Live>
             <SeeRow
               kind="secondary"
-              label="Record that the terms were disclosed…"
+              label="Record that the terms were disclosed"
               note="the no-show treatment in the words the guest was given — Reserve is refused without it"
               onClick={editable ? () => setOpen(true) : undefined}
               reason={editable ? undefined : "not at this step"}
@@ -1360,7 +1360,7 @@ function ProformaCard({
               title={sendLock ?? undefined}
               onClick={() => setSendOpen(true)}
             >
-              {shown.dispatchedAt && draft ? "Send the new version…" : "Send…"}
+              {shown.dispatchedAt && draft ? "Send the new version" : "Send"}
             </Button>
           </Live>
           <Button kind="quiet" compact icon="file" onClick={() => pdf(shown.id)}>
@@ -1396,7 +1396,16 @@ function ProformaCard({
               ? `The advance of ${money(status!.requiredAmount)} can be recorded only after it.`
               : "The booking cannot be reserved until it is recorded."}
           </span>
-          <AnswerLine entryId={entry.id} type="PROFORMA_INVOICE" sinceIso={passStart} what="the proforma" tz={tz} prominent onAnswered={finish} />
+          <AnswerLine
+            entryId={entry.id}
+            type="PROFORMA_INVOICE"
+            sinceIso={passStart}
+            what="the proforma"
+            tz={tz}
+            prominent
+            // With an advance asked the money is next, so the page goes to the payment plan.
+            onAnswered={() => finish(advanceAsked ? { next: "money" } : undefined)}
+          />
         </div>
       ) : (
         <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid var(--line)", display: "grid", gap: 6 }}>
@@ -1514,7 +1523,7 @@ function CoordinatorCard({ entry, editable, inq, onChanged }: { entry: EntryDeta
           <Live>
             <SeeRow
               kind={confirmed ? "quiet" : "secondary"}
-              label={confirmed ? "Change the coordinator…" : "Confirm the coordinator…"}
+              label={confirmed ? "Change the coordinator" : "Confirm the coordinator"}
               note="their name, and the authority they carry for this booking"
               onClick={
                 editable

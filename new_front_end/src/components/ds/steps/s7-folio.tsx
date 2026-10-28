@@ -247,7 +247,7 @@ export function FolioCard({
                 title={folioLive ? undefined : "the folio takes corrections while it is live"}
                 onClick={() => setCorrecting(true)}
               >
-                Correct a charge…
+                Correct a charge
               </Button>
               <Button
                 kind="quiet"
@@ -257,7 +257,7 @@ export function FolioCard({
                 title={folioLive ? undefined : "the folio takes credit notes while it is live"}
                 onClick={() => setCrediting(true)}
               >
-                Credit note…
+                Credit note
               </Button>
             </Live>
           </div>

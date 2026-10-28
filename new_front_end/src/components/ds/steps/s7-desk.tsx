@@ -313,7 +313,7 @@ export function DisputesCard({ entry, tz, onRaise }: { entry: EntryDetail; tz: s
         acts={
           <Live>
             <Button kind="quiet" compact onClick={onRaise}>
-              Raise another…
+              Raise another
             </Button>
           </Live>
         }
@@ -349,7 +349,7 @@ export function DisputesCard({ entry, tz, onRaise }: { entry: EntryDetail; tz: s
                     unlockRole={gm ? undefined : "GM"}
                     onClick={() => setClosing(d)}
                   >
-                    Close…
+                    Close
                   </Button>
                 </Live>
               ) : null}
@@ -466,7 +466,7 @@ export function FaultsCard({ entry, tz, onFlag }: { entry: EntryDetail; tz: stri
       acts={
         <Live>
           <Button kind="quiet" compact onClick={onFlag}>
-            Report another…
+            Report another
           </Button>
         </Live>
       }
@@ -659,7 +659,7 @@ export function WhoPaysCard({ entry, tz }: { entry: EntryDetail; tz: string }) {
               reason={fom ? undefined : "Changing who pays needs the FOM"}
               onClick={() => setOpen(true)}
             >
-              Change who pays…
+              Change who pays
             </Button>
           </Live>
         ) : null

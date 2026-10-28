@@ -1643,7 +1643,7 @@ function TheHouse({
                   </Button>
                 ) : null}
                 <Button kind="quiet" compact onClick={openTool}>
-                  Choose the rooms…
+                  Choose the rooms
                 </Button>
               </div>
             ) : null}

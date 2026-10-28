@@ -290,7 +290,7 @@ function UnauditedLastNight({
         actions={
           fom ? (
             <Button kind="secondary" compact onClick={onBackToStay}>
-              Back to Stay…
+              Back to Stay
             </Button>
           ) : (
             <Button kind="quiet" compact onClick={() => goToStep(7)}>
@@ -1034,14 +1034,14 @@ function HowSettled({
         {entry.groupBillingMode === "GROUP_MASTER" ? <Chip tone="quiet">one bill for the party</Chip> : null}
         {folio ? (
           <SeeRow
-            label={byPart ? "Hide the parts" : "Settle part by part…"}
+            label={byPart ? "Hide the parts" : "Settle part by part"}
             note="each room or space pays its own part — the money is filed against it; the bill stays one"
             onClick={() => setByPart((v) => !v)}
           />
         ) : null}
         <Live>
           <SeeRow
-            label="Settle by proportion…"
+            label="Settle by proportion"
             note="whatever split was agreed — 60 / 40 — each invoice its share of everything"
             reason="Not possible yet — use Settle part by part instead"
             notYet
@@ -1498,7 +1498,7 @@ function Invoices({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz: 
         meta={`A tax invoice of the guest's own extras — food, laundry, the minibar — apart from the rooms billed to ${booked.party ?? "the account"}. It can't be made yet.`}
       >
         <p className="sm">
-          Today the bill issues <b>one</b> tax invoice to {booked.payer}. Until the split exists, take the guest&rsquo;s part with <b>Settle part by part…</b> above.
+          Today the bill issues <b>one</b> tax invoice to {booked.payer}. Until the split exists, take the guest&rsquo;s part with <b>Settle part by part</b> above.
         </p>
         <Live>
           <div className="row-acts" style={{ marginTop: 10 }}>

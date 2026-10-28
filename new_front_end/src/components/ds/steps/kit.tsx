@@ -382,12 +382,19 @@ export function StepFlow({
         null;
       setActive(target);
       if (target && opts?.reveal !== false) {
-        window.requestAnimationFrame(() => {
-          const el = document.getElementById(anchorFor(target));
-          if (!el) return;
-          revealCard(el);
-          el.querySelector<HTMLElement>("input.input:not([disabled]):not([readonly]), select.input:not([disabled]), textarea.input:not([readonly])")?.focus({ preventScroll: true });
-        });
+        // Wait for the section left behind to fold and the next one to open out before going there:
+        // aimed at mid-change, the page landed partway down the next card (2026-10-28, operator:
+        // "after recording the guest's reply it moved the page like this … very inconsistent").
+        window.requestAnimationFrame(() =>
+          window.requestAnimationFrame(() =>
+            window.setTimeout(() => {
+              const el = document.getElementById(anchorFor(target));
+              if (!el) return;
+              revealCard(el);
+              el.querySelector<HTMLElement>("input.input:not([disabled]):not([readonly]), select.input:not([disabled]), textarea.input:not([readonly])")?.focus({ preventScroll: true });
+            }, 150),
+          ),
+        );
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -641,7 +648,10 @@ export function anchorFor(card: string) {
  * box had moved).
  */
 export function revealCard(el: HTMLElement) {
-  el.scrollIntoView({ behavior: "smooth", block: "center" });
+  // A tall section is shown from its top (under the sticky head) — centred, its top ran off the
+  // screen and only its last buttons showed (2026-10-28).
+  const tall = el.getBoundingClientRect().height > window.innerHeight * 0.55;
+  el.scrollIntoView({ behavior: "smooth", block: tall ? "start" : "center" });
   el.classList.remove("flash");
   void el.offsetWidth;
   el.classList.add("flash");
@@ -1071,6 +1081,7 @@ export function ActionRow({
   heldBy,
   goTo,
   goToLabel,
+  className,
 }: {
   label: string;
   caption: ReactNode;
@@ -1082,6 +1093,8 @@ export function ActionRow({
   /** The card on this step that would release it. */
   goTo?: string;
   goToLabel?: string;
+  /** Extra classes for the button — "go big" when it is the next thing to do. */
+  className?: string;
 }) {
   const held = !!heldBy;
   const quiet = useQuietScreen();
@@ -1098,7 +1111,7 @@ export function ActionRow({
       state={state ?? (onClick ? "default" : "inert")}
       onClick={onClick}
       title={heldBy ?? undefined}
-      className={quiet && (kind === "quiet" || kind === "secondary") ? "act" : undefined}
+      className={[quiet && (kind === "quiet" || kind === "secondary") ? "act" : "", className ?? ""].filter(Boolean).join(" ") || undefined}
     >
       {label}
     </Button>
@@ -2350,7 +2363,7 @@ export function PapersCard({
                 <Live>
                   {liveQuote(q) ? (
                     <Button kind="quiet" compact icon="send" onClick={() => setSendQuote(q)}>
-                      Send…
+                      Send
                     </Button>
                   ) : null}
                 </Live>
@@ -2383,7 +2396,7 @@ export function PapersCard({
                 <Live>
                   {liveInvoice(i) ? (
                     <Button kind="quiet" compact icon="send" onClick={() => setSendInvoice(i)}>
-                      {i.dispatchedAt ? "Send again…" : "Send…"}
+                      {i.dispatchedAt ? "Send again" : "Send"}
                     </Button>
                   ) : null}
                 </Live>

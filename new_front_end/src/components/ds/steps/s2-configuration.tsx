@@ -726,7 +726,7 @@ export function WaitingConfigurationChange({ entry }: { entry: EntryDetail }) {
               Approve &amp; apply
             </Button>
             <Button kind="quiet" compact onClick={() => setRejecting((v) => !v)}>
-              {rejecting ? "Keep it waiting" : "Turn it down…"}
+              {rejecting ? "Keep it waiting" : "Turn it down"}
             </Button>
           </div>
           {rejecting && (

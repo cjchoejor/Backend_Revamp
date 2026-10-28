@@ -83,6 +83,8 @@ const WORDS: Record<string, string> = {
   "ADVANCE_PAYMENT.RECORDED": "Advance received",
   "ADVANCE_PAYMENT.REQUIREMENT_SET": "Advance asked for",
   "ADVANCE_PAYMENT.PLAN_RECORDED": "Payment plan recorded",
+  "ADVANCE_PAYMENT.RECONCILED": "Money position signed off",
+  "ADVANCE_PAYMENT.RECONCILIATION_UNDONE": "Money sign-off taken back — pressed by mistake",
   "ADVANCE_PAYMENT.PROMISE_LAPSED": "Promised advance did not arrive",
   "FOLIO.PAYMENT_RECORDED": "Payment received",
   "FOLIO.CHARGE_POSTED": "Charge posted",

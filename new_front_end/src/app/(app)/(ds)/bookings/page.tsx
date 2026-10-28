@@ -345,7 +345,7 @@ function BookingsScreen() {
             <h2>Bookings</h2>
             <div className="meta">
               {rows.length.toLocaleString("en-IN")} shown
-              {!q && !from && !to && !view ? " · the last twelve months and everything ahead · older through Date… or the search" : ""} · sorted by{" "}
+              {!q && !from && !to && !view ? " · the last twelve months and everything ahead · older through Date or the search" : ""} · sorted by{" "}
               <b>{sortWords(sort)}</b>
               {chosenSort ? "" : " (the usual for this list)"} · click a row to preview, double-click to open
             </div>
@@ -360,7 +360,7 @@ function BookingsScreen() {
           <details className="calwrap" ref={calRef}>
             <summary className="btn btn-secondary compact">
               <Icon name="clock" />
-              {from || to ? (from && to && from !== to ? fmtRange(from, to) : `On ${fmtDate(from || to)}`) : "Date…"}
+              {from || to ? (from && to && from !== to ? fmtRange(from, to) : `On ${fmtDate(from || to)}`) : "Date"}
             </summary>
             <div className="pop-cal" style={{ width: 400 }}>
               <div className="cal-range">

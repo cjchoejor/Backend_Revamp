@@ -267,7 +267,7 @@ export function RoomsTable({
                   reason={roomChangeOpen ? "finish or cancel the room change first" : undefined}
                   onClick={() => !roomChangeOpen && setEditing(true)}
                 >
-                  Change configuration…
+                  Change configuration
                 </Button>
               )}
             </span>

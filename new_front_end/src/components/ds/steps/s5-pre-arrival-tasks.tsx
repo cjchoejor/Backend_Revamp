@@ -197,7 +197,7 @@ export function PreArrivalTasksCard({
                           Done
                         </Button>
                         <Button kind="quiet" compact onClick={() => setWaiving(t)}>
-                          Waive…
+                          Waive
                         </Button>
                       </span>
                     ) : null}

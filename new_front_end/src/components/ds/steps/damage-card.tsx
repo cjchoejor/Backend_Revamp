@@ -146,14 +146,14 @@ function DamageRow({ entry, data, d, live }: { entry: EntryDetail; data: Booking
       {live && !decided ? (
         <div className="row-acts dmg-acts">
           <Button kind="primary" compact state={chargeWhy ? "inert" : "default"} reason={chargeWhy} onClick={() => setOpen("charge")}>
-            Charge it…
+            Charge it
           </Button>
           <Button kind="secondary" compact state={waiveWhy ? "inert" : "default"} reason={waiveWhy} onClick={() => setOpen("waive")}>
-            Waive it…
+            Waive it
           </Button>
           {laterOpen ? (
             <Button kind="quiet" compact onClick={() => setOpen("later")}>
-              Decide after departure…
+              Decide after departure
             </Button>
           ) : null}
         </div>

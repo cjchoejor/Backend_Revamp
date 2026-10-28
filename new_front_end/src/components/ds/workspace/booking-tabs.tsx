@@ -666,7 +666,7 @@ export function RequestsView({ entry, sealed, tz }: { entry: EntryDetail; sealed
                     ) : null}
                     {!sealed && r.state !== "WITHDRAWN" ? (
                       <Button kind="quiet" compact onClick={() => setWithdrawing(r)}>
-                        Take back…
+                        Take back
                       </Button>
                     ) : null}
                   </div>

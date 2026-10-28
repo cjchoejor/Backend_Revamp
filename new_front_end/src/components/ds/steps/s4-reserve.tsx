@@ -456,7 +456,7 @@ function BeforeYouReserve({
       state: conferenceDone ? "on" : "missing",
       action: conferenceDone || past ? undefined : (
         <Button kind="secondary" compact state={fom ? "default" : "inert"} title={fom ? undefined : "needs the FOM"} onClick={() => setVerifyOpen(true)}>
-          Verify…
+          Verify
         </Button>
       ),
     });
@@ -546,7 +546,7 @@ function BeforeYouReserve({
                 title={fom ? "only when Reserve says this guest already holds a booking over the same nights" : "needs the FOM"}
                 onClick={() => setOverlapOpen(true)}
               >
-                Acknowledge an overlap…
+                Acknowledge an overlap
               </Button>
             )}
           </Live>
@@ -1090,7 +1090,7 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
         </Button>
         <Live>
           <Button kind="quiet" compact icon="send" onClick={() => setSendOpen(true)}>
-            Send…
+            Send
           </Button>
         </Live>
         <Button kind="quiet" compact state="inert">
@@ -1118,7 +1118,7 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
           sinceIso={since}
           what="the voucher"
           tz={tz}
-          lockedHint={locked ? "The voucher email hasn't gone out yet — Send… it first, then record their answer here." : null}
+          lockedHint={locked ? "The voucher email hasn't gone out yet — send it first, then record their answer here." : null}
         />
       </div>
       <PaperDrawer paper={paper} onClose={() => setPaper(null)} />

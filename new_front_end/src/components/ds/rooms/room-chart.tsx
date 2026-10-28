@@ -2315,7 +2315,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
                               setBox(x.entryId);
                             }}
                           >
-                            Its rooms…
+                            Its rooms
                           </Button>
                         ) : null}
                       </span>

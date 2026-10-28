@@ -325,7 +325,7 @@ export function AssignRoomsCard({ entry }: { entry: EntryDetail }) {
             actions={
               canWork ? (
                 <Button kind="secondary" compact onClick={() => setSeatOpen(true)}>
-                  Seat everyone in a room…
+                  Seat everyone in a room
                 </Button>
               ) : undefined
             }

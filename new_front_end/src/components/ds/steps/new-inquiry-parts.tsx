@@ -623,7 +623,7 @@ export function PartySearch({
               : null}
             {kind === "TRAVEL_AGENT" && !filing ? (
               <Button kind="quiet" compact onClick={startFiling}>
-                {term ? `New agency “${term}”…` : "New agency…"}
+                {term ? `New agency “${term}”` : "New agency"}
               </Button>
             ) : null}
           </span>

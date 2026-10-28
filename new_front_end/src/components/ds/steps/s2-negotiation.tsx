@@ -617,7 +617,7 @@ export function S2Negotiation({
         <div style={{ marginTop: 6, display: "grid", gap: 6 }}>
           {activeHold ? (
             <SeeRow
-              label="Release…"
+              label="Release"
               note="Frees the rooms, with a reason. The quotation stands."
               onClick={editable && elevated ? () => setReleaseOpen(true) : undefined}
               reason={!editable ? "not at this step" : elevated ? undefined : "releasing a marker early is the FOM's call"}
@@ -801,11 +801,11 @@ export function S2Negotiation({
               <Notice>Choose the rooms at Inquiry first — the table needs them.</Notice>
             ) : accepted && !past ? (
               <Notice>
-                The guest accepted these terms, so the table is closed. To change the price, use <b>Renegotiate the price…</b> at Set up.
+                The guest accepted these terms, so the table is closed. To change the price, use <b>Renegotiate the price</b> at Set up.
               </Notice>
             ) : proformaLocked && !past ? (
               <Notice>
-                A proforma has been issued on these terms, so they are final. To change the price, use <b>Renegotiate the price…</b> at Set up.
+                A proforma has been issued on these terms, so they are final. To change the price, use <b>Renegotiate the price</b> at Set up.
               </Notice>
             ) : null}
             <CompositionSummary entry={entry} />
@@ -1141,7 +1141,7 @@ function QuotationCard({
               }
               onClick={onSend}
             >
-              Send…
+              Send
             </Button>
           </Live>
           <Button kind="quiet" compact icon="file" onClick={pdf}>
@@ -1220,13 +1220,13 @@ function QuotationCard({
                 <div style={{ display: "grid", gap: 4 }}>
                   <SeeRow
                     kind="secondary"
-                    label="Record the answer…"
+                    label="Record the answer"
                     note="Records how the guest accepted and the words they used. A spoken answer counts once it is written down."
                     onClick={editable ? () => setAnswerOpen(true) : undefined}
                     reason={editable ? undefined : "not at this step"}
                   />
                   <SeeRow
-                    label="No answer — the FOM decides…"
+                    label="No answer — the FOM decides"
                     note="Closes the reply window as the FOM's decision, with a reason."
                     onClick={editable && elevated ? () => setCloseLoopOpen(true) : undefined}
                     reason={!editable ? "not at this step" : elevated ? undefined : "closing the reply window is the FOM's call"}
