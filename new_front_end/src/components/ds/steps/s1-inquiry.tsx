@@ -67,6 +67,8 @@ import {
   useOpenFileTab,
   useFlowUnsaved,
   WorkPopup,
+  anchorFor,
+  revealCard,
 } from "./kit";
 import { AddReturnStay, TripStays } from "@/components/ds/workspace/return-stay";
 import { enumerateNights, useRoomSelection } from "./use-room-selection";
@@ -1322,9 +1324,23 @@ function TheHouse({
       const qs = p.toString();
       router.replace(`${pathname}${qs ? `?${qs}` : ""}`, { scroll: false });
     };
+    // The stay's "Done · Start the inquiry" goes on to the house (2026-10-28, operator: "after the
+    // stay is done it should scroll to the house section, but it's still showing the stay on top"):
+    // the booking opens with the house's top just under the head, kept there while its answer
+    // arrives. This finishes the move the desk pressed for; it does not happen on any other visit.
+    const goToHouse = () =>
+      window.requestAnimationFrame(() =>
+        window.requestAnimationFrame(() =>
+          window.setTimeout(() => {
+            const el = document.getElementById(anchorFor("house"));
+            if (el) revealCard(el);
+          }, 150),
+        ),
+      );
     if (hasResults || savedOption || !entry.checkInDate || !entry.checkOutDate) {
       arrivalRead.current = true;
       clearAddress();
+      goToHouse();
       return;
     }
     // Started once the effect has settled — see the chart's ask above.
@@ -1332,6 +1348,7 @@ function TheHouse({
       arrivalRead.current = true;
       ask.mutate();
       clearAddress();
+      goToHouse();
     }, 0);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps

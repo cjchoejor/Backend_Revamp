@@ -665,7 +665,7 @@ export function revealCard(el: HTMLElement) {
 
 /**
  * A card the desk was taken to may still be filling in — the house's answer arriving, a section
- * opening out — and the page could not yet scroll far enough to put it in place. For a few seconds
+ * opening out — and the page could not yet scroll far enough to put it in place. For up to ten seconds
  * it is put back where it was taken whenever it changes size, which finishes the move the desk asked
  * for; the moment the operator scrolls, clicks or types the page is theirs again (the page never
  * moves on its own, 2026-10-27).
@@ -690,7 +690,7 @@ function keepPlacedWhileSettling(el: HTMLElement, place: () => void) {
   });
   for (const t of events) window.addEventListener(t, stop, { capture: true, passive: true });
   ro.observe(el);
-  const end = window.setTimeout(stop, 6000);
+  const end = window.setTimeout(stop, 10000);
 }
 
 /**
