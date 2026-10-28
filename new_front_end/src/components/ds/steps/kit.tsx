@@ -2835,7 +2835,8 @@ export function AnswerLine({
           </div>
           <div className="row-acts">
             <Button
-              compact
+              compact={!prominent}
+              className={prominent ? "go" : undefined}
               state={save.isPending ? "working" : !method || (method === "VERBAL" && !words.trim()) ? "inert" : "default"}
               title={!method ? "say how the answer came" : method === "VERBAL" && !words.trim() ? "write what they said first" : undefined}
               onClick={() => save.mutate()}
