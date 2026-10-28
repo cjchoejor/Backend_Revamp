@@ -149,15 +149,15 @@ Read-only. Nothing on the desk, the holds or the bills changed.
 **2 Inquiry.** The house card asks how many rooms of each type, night by night (`RoomsByType` in [s1-by-type.tsx](../new_front_end/src/components/ds/steps/s1-by-type.tsx)):
 - one row per type (33px), its count picked from a **dropdown**, never typed;
 - in every box, first **how many of that type are free**, coloured by what it means: green — enough for the whole booking, amber — some but fewer than the rooms asked, red — none (under Every night, the rooms free for the whole stay);
-- a dropdown offers only counts that can stand: never more than the type has free that night, never more than the rooms the booking still needs that night, never fewer than the rooms the guest asked for by number. Once a night has all its rooms, the other types show a dash saying why ("23 Sep already has its 3 rooms — lower another type first");
+- a key above the grid says what the colours mean, in words (green, amber, red, the box beside it is how many to take, under Every night the rooms free for the whole stay);
+- a dropdown offers only counts that can stand: never more than the type has free that night, never more than the rooms the booking still needs that night, never fewer than a room kept for the guest. Once a night has all its rooms, the other types show a dash saying why ("23 Sep already has its 3 rooms — lower another type first");
 - by default one dropdown per type, for every night; **Night by night** opens one per night, and the grid opens that way by itself when the nights already differ (**Same every night** folds it back once they agree);
 - a type with nothing free on any night, and nothing asked of it, is named in one line under the grid instead of a row;
 - a tally per night, red while short and green with a tick once complete;
-- **A room the guest asked for** — one room added by number, which is fixed; the rest stay by type. Its list shuts a type that can take no more rooms on some night;
-- the pick checked by the server as it changes (`POST /api/entries/:id/availability/by-type/seal` with `preview`), refusals in words and other bookings it would move named;
+- the pick checked by the server as it changes (`POST /api/entries/:id/availability/by-type/seal` with `preview`), refusals in words and other bookings it would move named. Only the answer for the counts on screen is shown: while the counts settle and the house is asked it reads "Checking…" (the previous answer, for other counts, used to flash for a moment — "29 Oct has 1 room" over a grid reading 3/3);
 - then **Save the rooms** (green), and the page goes on to Wrap up.
 
-**Pick every room by number instead** leaves picking by type for the room-number table, where every room is chosen by hand and fixed. It is not the same as asking for one room: that keeps the other rooms by type.
+**Pick every room by number instead** leaves picking by type for the room-number table, where every room is chosen by hand and fixed. The picker that added one room by number beside the types was taken off (operator: "I don't think it'll be used much"); a room kept for a guest earlier still shows as "Kept for the guest" and can be let go. "Offer what we have" (never possible) was taken off the house card.
 
 **3 Negotiation.** A quiet room reads "Deluxe Double · room 1" in:
 - the negotiation table and the guest board — the row, the room's tab, every message about it;
@@ -168,15 +168,15 @@ Every room of a type is numbered in booking order, a guest's own room included (
 
 **4 Set up and Reserve.** The holds keep the quiet rooms and may still move them.
 - The hold card reads "Deluxe Double · rooms 1, 2 blocked until …"; the booking header, Booking details and Reserve's facts name them the same way.
-- On the Rooms tab a quiet room offers **Give it this room**: a free room of its type, chosen in place and then fixed (`POST /api/entries/:id/booking-rooms/choose`, L1). It is refused in words for another type, a room someone holds on those nights, or a fixed or assigned room.
+- On the Rooms tab a quiet room offers **Give it this room**: another room of its type, chosen in place and then fixed (`POST /api/entries/:id/booking-rooms/choose`, L1). Its list (`GET /api/entries/:id/booking-rooms/choices?fromRoomId=`, L1, `listQuietRoomChoices`) is every other room of the type with what giving it does — "free", "Pema Penjor moves to make way" (a room another booking holds only as the system's choice: that booking is moved to another room of the type, and the line under the list names the move), or why not ("held for … on these nights", out of order). It is refused in words for another type, a room someone holds for certain, or a fixed or assigned room.
 - The room change beside it offers only **Another room type**, as today.
 - The voucher prints "2 × Deluxe Double", and a room the guest asked for by its number.
 
-**5 Arrival.** The rooms are the system's proposal, by number: "The system's rooms for this booking: Deluxe Double · room 1 — Room 204 · Deluxe Double · room 2 — Room 205", with **Confirm and assign the 2 rooms**. A room can be given another of its type first, as at Set up; a change of type is the room change. Once assigned the rooms are fixed and everything is as before.
+**5 Arrival.** The rooms are the system's proposal, by number: "The system's rooms for this booking: Deluxe Double · room 1 — Room 204 · Deluxe Double · room 2 — Room 205", with **Confirm and assign the 2 rooms**. The assignment names what it handed out (`roomNumbers`), and when the house changed since the proposal was shown — another booking took one — it says which room the guest has instead (`movedSinceProposal`, "The system gave Room 207 instead of Room 205 (same type)"). A room can be given another of its type first, as at Set up; a change of type is the room change. Once assigned the rooms are fixed and everything is as before.
 
 **6 The rest.**
 - The chart draws a quiet room faded with a dashed edge, and its card says the room is not chosen yet.
-- Dropping a quiet room onto another room of its type on the same nights, with nobody in the way, asks **Give Deluxe Double · room 2 Room 204?** instead of opening a room move ([quiet-room-dialog.tsx](../new_front_end/src/components/ds/rooms/quiet-room-dialog.tsx)).
+- Dropping quiet rooms onto other rooms of their type on the same nights asks **Give Deluxe Double · room 2 Room 204?** — or, for several, **Give these rooms Room 206 and Room 305?** with a line per room — instead of opening a room move ([quiet-room-dialog.tsx](../new_front_end/src/components/ds/rooms/quiet-room-dialog.tsx)). A target another booking holds only as the system's choice is fine: the dialog says that booking is moved to another room of the type. The rooms are placed together (`chooseQuietRooms`, `{picks: [...]}` on the same route), so a booking's rooms moved along by one row work. Other dates, another type, or a room someone holds for certain still run the room move.
 - The "another booking is working these rooms" box leaves out a clash the system settles by moving a quiet room, this booking's or another's. It asks the same check the holds run; when the booking does not fit, every clash stays.
 
 **Reads**: `GET /api/entries/:id/booking-rooms` (L1) gives `byType`, `movable`, `atArrival`, and per room its label, its number within the type (`ordinal`) and whether it is quiet. The desk's `useBookingRooms(entry)` ([use-booking-rooms.ts](../new_front_end/src/hooks/use-booking-rooms.ts)) gives the labels before Arrival and the proposal at Arrival.
@@ -200,11 +200,12 @@ Every room of a type is numbered in booking order, a guest's own room included (
 - the earlier quiet-move test (17) and the Inquiry desk test (18) again;
 - the money audit at 0 critical before and after; no room flag wrong. Test data removed.
 
+**The walks keep the system's rooms (built 2026-10-28)**: a room change (including a change of type), a setup change, a seating repair, a date move, the rooms left after a split, and Change configuration at Negotiation now write the booking rooms on their new seal (`carryBookingRooms` in [lib/booking-rooms.ts](../back_end/src/lib/booking-rooms.ts), called by the room-change walk and `amendNegotiationConfiguration`). A room stays the system's choice when it was before and the change did not name it; a room the change brought in or named is fixed. Rooms keep their order, so "Deluxe Double · room 2" keeps its number.
+
+**Verified** (2026-10-28) over HTTP on throwaway bookings (21 checks: the Negotiation change keeping the ticked room the system's and fixing the new one; a meal change at Set up keeping both rooms the system's, its seal carrying them; a change of type fixing the new room and keeping the other; Give it this room listing another booking's quiet room with the move named, taking it, that booking moved to another Deluxe Double and its hold following, the room then refused to others in words; two rooms given at once, one into the other's room; another type refused; a date move keeping the room the system's; Arrival naming the two rooms) and on the desk (12 checks: the key's words, no add-a-room picker and no Offer what we have, no refusal flashing once both nights read 3/3, the list's "ZZTest DeskC2 moves to make way" and the line naming the move, the room given; two quiet rooms dropped together on the chart asking "Give these rooms Room 206 and Room 305?" and given, fixed, no new pass; no page errors). Test data removed; no room flag wrong.
+
 **Not built, said plainly**:
-- **Any governed walk re-seals the rooms without booking rooms**: a room change (including a change of type), Change configuration at Negotiation (still by number), an extension, a date move, a split, a setup change, a seating repair. Afterwards the booking reads as fixed rooms. Nothing is lost or mis-priced; the system just stops moving its rooms.
-- **Give it this room** lists only rooms free over the room's nights. A room another booking holds as the system's choice is not offered, though the server could move that booking.
-- **The proposal at Arrival** is the quiet rooms as they stand. Assigning places them again first. If another booking took one meanwhile, the room assigned can differ from the one shown, and the assignment's own message does not name the rooms.
-- **On the chart**, only one quiet room dropped on the same nights onto a free room of its type is given in place. A swap, several rooms or other dates still run the room move.
+- A booking made from a split or a night move, and a booking combined into another, are picked by number (fixed rooms).
 - The chart's "room not chosen yet" look is to be looked at again with the operator.
 - A voucher already rendered is write-once and keeps its wording.
 
