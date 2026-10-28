@@ -14,7 +14,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { createPortal } from "react-dom";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button, Chip, Icon } from "@/design-system";
 import { useSession } from "@/hooks/use-session";
@@ -1156,14 +1156,27 @@ function TheHouse({
           : undefined,
       });
     },
-    onSuccess: () => {
+    onSuccess: async () => {
       toast.success("The rooms are chosen and on record");
       refresh();
-      // The rooms are chosen: the work moves on to Wrap up, the bill staying in view.
-      if (flow.on) flow.done("house", { reveal: false });
+      await goToWrap();
     },
     onError: (e) => toastRefusal(e, "The rooms could not be recorded"),
   });
+  // Saving the rooms (the table's Save, or Take it) goes straight to Wrap up (2026-10-28, operator:
+  // "when I click Save the room in the choose room table, can it directly take me to the wrap
+  // section"). The bill lives in the booking file now, so nothing here has to stay in view. Wrap up
+  // waits for the rooms until the booking is read again, so the page moves once it has opened.
+  const qc = useQueryClient();
+  const flowRef = useRef(flow);
+  flowRef.current = flow;
+  const goToWrap = async () => {
+    await qc.invalidateQueries({ queryKey: ["entry", entry.id] });
+    const opened = () => !!document.querySelector('[data-flow="wrap"]:not(.flow-waiting)');
+    const end = Date.now() + 3000;
+    while (!opened() && Date.now() < end) await new Promise((r) => window.setTimeout(r, 40));
+    if (flowRef.current.on) flowRef.current.done("house", { next: "wrap" });
+  };
 
   // The bill (2026-10-10): what the rooms on the table cost, night by night and for the stay —
   // the picks as they stand, saved or not; with none, what Take it would hold.
