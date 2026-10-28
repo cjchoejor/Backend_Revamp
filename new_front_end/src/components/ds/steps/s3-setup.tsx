@@ -72,12 +72,12 @@ import {
   goToStepCard,
   revealCard,
   useOpenAlsoWay,
+  useStepPane,
   OtherWaysTabs,
   InlineWay,
   ShutWay,
   parkTab,
 } from "./kit";
-import { RoomsTableCard } from "./rooms-table";
 import { SendToField, useSendTo } from "./s8-parts";
 import { CancellationFiguresLine, WaiverTick, useRefundHow } from "./cancel-figures";
 import { CompetingClaimsCard, passesOf, roomsWord, useRoomNumbers } from "./s2-shared";
@@ -121,7 +121,7 @@ type EntryContact = { contactPersonName?: string | null; contactPersonPhone?: st
 
 /* ------------------------------------------------------------------ the step */
 
-const ROOMS_LEAD =
+export const ROOMS_LEAD =
   "Who sleeps where, on what plan, with what beds. Click a room to change it — every night is checked again, the booking walks back through Negotiation and the price follows.";
 
 export function S3SetUp({
@@ -256,6 +256,7 @@ export function S3SetUp({
    * the stage layout has no tab for; it opens in the middle of the screen.
    */
   const openAlsoWay = useOpenAlsoWay();
+  const stepPane = useStepPane();
   const notNow = entry.status === "PARKED" ? "Resume the booking first" : "Not possible on this booking now";
   const changeItems: ChangeBookingItem[] = past
     ? []
@@ -264,7 +265,8 @@ export function S3SetUp({
           key: "rooms",
           label: "Move a room",
           note: "Into another free room on the same dates. Every night is checked again and the price follows.",
-          onSelect: editable ? () => openAlsoWay("rooms") : undefined,
+          // In the page, as the Rooms tab was (2026-10-28) — not a pop-up.
+          onSelect: editable ? () => stepPane.open("rooms") : undefined,
           reason: editable ? undefined : notNow,
         },
         {
@@ -466,9 +468,6 @@ export function S3SetUp({
                 ),
               }
             : null,
-          // The Rooms tab's table (2026-10-13), opened from Change booking's "Move a room" — wide,
-          // since the change opens a rooms-by-night table and the room's price table inside it.
-          editable ? { key: "rooms", label: "Move a room", inBar: false, wide: true, content: <RoomsTableCard entry={entry} title="The rooms" lead={ROOMS_LEAD} /> } : null,
         ]}
       />
     </StepCanvas>

@@ -1341,6 +1341,47 @@ export function StageActs({ children }: { children: ReactNode }) {
   return bar?.stage ? createPortal(children, bar.stage) : null;
 }
 
+/**
+ * A step's own view in the page (2026-10-28, operator: "it should just show in the current page like
+ * how we had in the rooms tab in our previous UI") — Set up's rooms, opened from Change booking's
+ * "Move a room". The view lives in the address (`?pane=`); the place on the page is kept, so the way
+ * back returns to it.
+ */
+let paneReturnY: number | null = null;
+export function useStepPane() {
+  const params = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  const go = (key: string | null) => {
+    const p = new URLSearchParams(params.toString());
+    p.delete("also");
+    p.delete("way");
+    if (key) p.set("pane", key);
+    else p.delete("pane");
+    router.replace(`${pathname}?${p.toString()}`, { scroll: false });
+  };
+  return {
+    open: (key: string) => {
+      paneReturnY = window.scrollY;
+      go(key);
+      window.requestAnimationFrame(() => window.scrollTo({ top: 0 }));
+    },
+    close: () => {
+      const y = paneReturnY;
+      paneReturnY = null;
+      go(null);
+      if (y == null) return;
+      // The sections come back with the next render; try until the page is drawn tall enough.
+      let tries = 0;
+      const attempt = () => {
+        window.scrollTo({ top: y });
+        if (Math.abs(window.scrollY - y) > 2 && tries++ < 20) window.setTimeout(attempt, 50);
+      };
+      window.setTimeout(attempt, 30);
+    },
+  };
+}
+
 /** Open one of the bar's ways in its pop-up — from anywhere on the step (the step line's menu). */
 export function useOpenAlsoWay() {
   const params = useSearchParams();
@@ -1452,7 +1493,10 @@ function AlsoBarWays({ live, slots }: { live: OtherWayTab[]; slots: AlsoBarSlots
   // (`view=other`, `useOpenOtherWay`).
   const wantOpen = params.get("also") === "1" || params.get("view") === "other";
   const want = params.get("way");
-  const urlOpen = wantOpen ? (live.find((t) => t.key === want) ?? live[0]).key : null;
+  // A way named in the address that this step does not have opens nothing (2026-10-28): a way left
+  // there from another step — Set up's "Change the dates, rooms or guests" sending the booking back
+  // to Inquiry — opened Inquiry's first way, Park, by itself.
+  const urlOpen = wantOpen ? (want ? (live.find((t) => t.key === want)?.key ?? null) : (live[0]?.key ?? null)) : null;
   // A press opens or closes the pop-up at once; the address follows. Read from the address alone, a
   // quick press could land before the address had caught up and be undone by it (found driving it).
   const [pressed, setPressed] = useState<{ key: string | null } | null>(null);

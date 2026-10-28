@@ -112,7 +112,8 @@ import { InquirySummaryDialog } from "@/components/ds/steps/s1-summary";
 import { StepMoved, type StepMovedNote } from "@/components/ds/workspace/step-moved";
 import { StayDates } from "@/components/ds/stay-dates";
 import { S2Negotiation } from "@/components/ds/steps/s2-negotiation";
-import { S3SetUp } from "@/components/ds/steps/s3-setup";
+import { S3SetUp, ROOMS_LEAD } from "@/components/ds/steps/s3-setup";
+import { RoomsTableCard } from "@/components/ds/steps/rooms-table";
 import { S4Reserve, S4_PANES } from "@/components/ds/steps/s4-reserve";
 import { S5Arrival } from "@/components/ds/steps/s5-arrival";
 import { S6CheckIn } from "@/components/ds/steps/s6-checkin";
@@ -121,7 +122,7 @@ import { keysDue, keysDueWords } from "@/components/ds/steps/s7-rooms";
 import { S6_PANES } from "@/components/ds/steps/s6-checkin";
 import { S8CheckOut, S8_PANES } from "@/components/ds/steps/s8-checkout";
 import { S9Closed, S9_PANES } from "@/components/ds/steps/s9-closed";
-import { Overlay, atLeast, useRefreshEntry } from "@/components/ds/steps/kit";
+import { Overlay, atLeast, useRefreshEntry, useStepPane } from "@/components/ds/steps/kit";
 import { declineEntry } from "@/lib/api/reservation-setup";
 const atLeastFom = (level?: string | null) => atLeast(level, "L2");
 
@@ -321,6 +322,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   };
   // A step's own pane — Stay's Night audit, Room change, … (2026-09-25). Null is This step.
   const paneParam = params.get("pane");
+  const stepPane = useStepPane();
   const setPane = (key: string | null) => {
     const p = new URLSearchParams(params.toString());
     p.delete("view");
@@ -333,6 +335,10 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     const p = new URLSearchParams(params.toString());
     p.set("step", String(n));
     p.delete("view");
+    // A pane or a way belongs to the step it was opened on (2026-10-28).
+    p.delete("pane");
+    p.delete("way");
+    p.delete("also");
     router.replace(`${pathname}?${p.toString()}`, { scroll: false });
   };
   // The step tools call setSelected with a plain number; keep the reference stable for memo.
@@ -614,6 +620,29 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   // (2026-10-27, operator: "the working screen was scrolled down, and when I clicked Charges &
   // payments in the booking file, the working screen scrolled").
   const viewing = selected ?? currentOrder;
+  // A pane or a way left in the address belongs to the step it was opened on: when the step changes —
+  // a re-entry sending the booking back, the booking moving on — it goes (2026-10-28: Set up's way
+  // left in the address opened Park on Inquiry by itself).
+  const lastViewing = useRef(viewing);
+  useEffect(() => {
+    if (lastViewing.current === viewing) return;
+    lastViewing.current = viewing;
+    // The address may not yet show the change of step (setSelected's own write lands later on a
+    // heavy page), so this write carries the step as it now is — one that left the old step in it
+    // replaced setSelected's and put Set up back in the address after a re-entry to Inquiry.
+    const t = window.setTimeout(() => {
+      const p = new URLSearchParams(window.location.search);
+      if (!p.has("pane") && !p.has("way") && !p.has("also")) return;
+      p.delete("pane");
+      p.delete("way");
+      p.delete("also");
+      p.delete("view");
+      p.set("step", String(viewing));
+      router.replace(`${pathname}?${p.toString()}`, { scroll: false });
+    }, 80);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewing]);
   const lastPlace = useRef({ viewing, view });
   useEffect(() => {
     const prev = lastPlace.current;
@@ -894,6 +923,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const sections = STEP_SECTIONS[viewing] ?? {};
   const goToCard = (card?: string) => {
     if (!card) return;
+    // A section asked for from the step line leaves Set up's rooms view first (2026-10-28).
+    if (topLayout && paneParam) setPane(null);
     // The card may live in one of the step's panes: open that pane first, then scroll once the
     // card is actually on screen (the pane arrives with the next render). In the stage-template
     // layout the step is always on screen, so the file on the right keeps its tab.
@@ -930,6 +961,10 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     return [];
   })();
   const pane = panes.some((p) => p.key === paneParam) ? paneParam : null;
+  // Set up's rooms in the page (2026-10-28, operator: "it should just show in the current page like how
+  // we had in the rooms tab in our previous UI") — opened from Change booking's "Move a room"; the
+  // step's sections stay mounted, hidden, so nothing half-typed is lost.
+  const roomsInPage = topLayout && setupStepActive && !sealed && paneParam === "rooms";
   // The keys owed today on a move day — counted on Stay's Keys tab (2026-10-26).
   const keysOwedNow = step.key === "stay" && !viewingPast ? keysDue(entry, hotelToday) : { collect: [], handOver: [] };
   const keysOwedCount = keysOwedNow.collect.length + keysOwedNow.handOver.length;
@@ -1672,10 +1707,22 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                     resuming={unparkMutation.isPending}
                     onHistory={() => setView("history", viewing)}
                   />
-                  <AlsoBar buttons={alsoButtons} panel={null} stage={stageActs}>
-                    <OtherWaysSlot node={null}>{native}</OtherWaysSlot>
-                  </AlsoBar>
-                  {!viewingPast && !sealed && preconds.length ? (
+                  {roomsInPage ? (
+                    <div className="rooms-in-page">
+                      <div className="backto">
+                        <Button kind="secondary" compact onClick={() => stepPane.close()}>
+                          Back to {STEP_NAMES[viewing - 1]}
+                        </Button>
+                      </div>
+                      <RoomsTableCard entry={entry} title="The rooms" lead={ROOMS_LEAD} />
+                    </div>
+                  ) : null}
+                  <div hidden={roomsInPage}>
+                    <AlsoBar buttons={alsoButtons} panel={null} stage={stageActs}>
+                      <OtherWaysSlot node={null}>{native}</OtherWaysSlot>
+                    </AlsoBar>
+                  </div>
+                  {!viewingPast && !sealed && !roomsInPage && preconds.length ? (
                     // What the move checks, in one place (the stage template's "Before you move on"):
                     // each section, then what the system does when the booking moves on. The move
                     // itself is in the bar at the foot.
