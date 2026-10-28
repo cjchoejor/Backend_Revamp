@@ -70,6 +70,21 @@ function usePanel() {
   return { open, setOpen, ref };
 }
 
+/**
+ * The hotel's clock in the topbar, to the second (2026-10-28, operator). It ticks on its own, so the
+ * rest of the topbar — the bell's list, the menus — is not drawn again every second.
+ */
+function TopbarClock() {
+  const clock = useHotelClock(1000);
+  const { date, time } = clockParts(clock.now, clock.tz, { seconds: true });
+  return (
+    <span className="clock" title={clock.known ? `Hotel time · ${clock.tz}` : "Hotel time — checking with the server"}>
+      <span className="date">{date} · </span>
+      <b>{time}</b>
+    </span>
+  );
+}
+
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname() ?? "";
   const router = useRouter();
@@ -119,7 +134,6 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   const name = session.displayName ?? session.username ?? session.userId;
   const role = ROLE_WORD[session.actorLevel] ?? session.actorLevel;
-  const { date, time } = clockParts(clock.now, clock.tz);
   const showSecond = secondPage || secondOpen;
 
   const signOut = async () => {
@@ -161,10 +175,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             ))}
           </nav>
           <span className="spacer" />
-          <span className="clock" title={clock.known ? `Hotel time · ${clock.tz}` : "Hotel time — checking with the server"}>
-            <span className="date">{date} · </span>
-            <b>{time}</b>
-          </span>
+          <TopbarClock />
 
           <div ref={bell.ref} style={{ position: "relative" }}>
             <button type="button" className="notif" aria-label={`${urgent.length + (lateRooms.length ? 1 : 0)} notifications`} aria-expanded={bell.open} onClick={() => bell.setOpen((o) => !o)}>

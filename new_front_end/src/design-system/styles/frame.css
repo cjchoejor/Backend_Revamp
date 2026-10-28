@@ -1724,3 +1724,8 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .also-scrim .also-panel-head h3 { margin: 0; font-size: var(--t-h3); }
 @keyframes also-in { from { opacity: 0; transform: translateY(6px) scale(.985); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .ds .also-scrim .also-panel { animation: none; } }
+
+
+/* The topbar clock reads to the second (2026-10-28): figures of one width, so the time does not
+   shift sideways as the seconds change. */
+.ds .topbar .clock b:not(.desk-root *) { font-variant-numeric: tabular-nums; }

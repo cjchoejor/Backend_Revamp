@@ -86,13 +86,14 @@ function partsIn(instant: Date, tz: string) {
     day: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
+    second: "2-digit",
     hour12: false,
     weekday: "short",
   });
   const o: Record<string, string> = {};
   for (const p of f.formatToParts(instant)) o[p.type] = p.value;
   const hour = Number(o.hour) % 24;
-  return { y: Number(o.year), m: Number(o.month), d: Number(o.day), hour, minute: Number(o.minute), weekday: o.weekday };
+  return { y: Number(o.year), m: Number(o.month), d: Number(o.day), hour, minute: Number(o.minute), second: Number(o.second), weekday: o.weekday };
 }
 
 function toDate(value?: string | number | Date | null): Date | null {
@@ -161,10 +162,19 @@ export function hotelFormParts(value?: string | number | Date | null, tz = HOTEL
 }
 
 /** `Sat 12 Sep 2026` and `2:32 PM` — the clock in the bar. */
-export function clockParts(value: string | number | Date, tz = HOTEL_TZ_DEFAULT): { date: string; time: string } {
+export function clockParts(
+  value: string | number | Date,
+  tz = HOTEL_TZ_DEFAULT,
+  opts?: { seconds?: boolean },
+): { date: string; time: string } {
   const d = toDate(value) ?? new Date();
   const p = partsIn(d, tz);
-  return { date: `${p.weekday} ${p.d} ${MON[p.m - 1]} ${p.y}`, time: fmtTime(d, tz) };
+  const h12 = p.hour % 12 === 0 ? 12 : p.hour % 12;
+  // The topbar's clock reads to the second (2026-10-28); everywhere else a time stays to the minute.
+  const time = opts?.seconds
+    ? `${h12}:${String(p.minute).padStart(2, "0")}:${String(p.second).padStart(2, "0")} ${p.hour < 12 ? "AM" : "PM"}`
+    : fmtTime(d, tz);
+  return { date: `${p.weekday} ${p.d} ${MON[p.m - 1]} ${p.y}`, time };
 }
 
 /** `Saturday 12 September 2026` — the date written out, for page titles. */
