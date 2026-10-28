@@ -245,6 +245,15 @@ type NameAsk = {
 
 const matchWords = (m: GuestOnFile) =>
   m.matchedBy.length === 2 ? "phone and email" : m.matchedBy[0] === "PHONE" ? "phone" : "email";
+/** The dialog's one fact line: which contact is on file, and for whom (or for how many). */
+const askLine = (matches: GuestOnFile[]) => {
+  const by = new Set(matches.flatMap((m) => m.matchedBy));
+  const what = by.size === 2 ? "phone and email" : by.has("PHONE") ? "phone" : "email";
+  const verb = by.size === 2 ? "are" : "is";
+  return matches.length === 1
+    ? `The ${matchWords(matches[0])} ${matches[0].matchedBy.length === 2 ? "are" : "is"} on file for ${titledName(matches[0])}`
+    : `This ${what} ${verb} on file for ${matches.length} guests`;
+};
 const titledName = (g: { title?: string | null; firstName: string; lastName: string }) =>
   [g.title, g.firstName, g.lastName].filter((x) => x && String(x).trim()).join(" ");
 const asSummary = (g: GuestOnFile): GuestProfileSummary => ({
@@ -718,7 +727,8 @@ export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; edita
           onClose={() => setNameAsk(null)}
           busy={save.isPending}
           title="Already on file under another name"
-          caseLines={nameAsk.matches.map((m) => `The ${matchWords(m)} ${m.matchedBy.length === 2 ? "are" : "is"} on file for ${titledName(m)}`)}
+          width={nameAsk.matches.length > 1 ? 640 : undefined}
+          caseLines={[askLine(nameAsk.matches)]}
           help="One person has one guest record, shared by every booking they make. Use the guest on file when it is the same person; keep the typed name when it is someone else who shares the phone or email."
           footer={
             <>
@@ -728,17 +738,32 @@ export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; edita
               <Button kind="secondary" onClick={() => answerNameAsk(null)}>
                 Keep {typedNameNow} — a new guest
               </Button>
-              {nameAsk.matches.map((m) => (
-                <Button key={m.id} className="go" onClick={() => answerNameAsk(m)}>
-                  Use {titledName(m)} — on file
+              {/* One guest on file: its own button. Several (an old number shared by many records): picked from the list above. */}
+              {nameAsk.matches.length === 1 ? (
+                <Button className="go" onClick={() => answerNameAsk(nameAsk.matches[0])}>
+                  Use {titledName(nameAsk.matches[0])} — on file
                 </Button>
-              ))}
+              ) : null}
             </>
           }
         >
           <p className="sm" style={{ margin: 0 }}>
-            You typed <b>{typedNameNow}</b>. Is this the guest on file, or someone else?
+            You typed <b>{typedNameNow}</b>.{" "}
+            {nameAsk.matches.length === 1 ? "Is this the guest on file, or someone else?" : "Is it one of these guests, or someone else?"}
           </p>
+          {nameAsk.matches.length > 1 ? (
+            <div className="onfile-ask" style={{ marginTop: 10 }}>
+              <PickList
+                action="Use them"
+                rows={nameAsk.matches.map((m) => ({
+                  key: m.id,
+                  main: <GuestLine guest={asSummary(m)} />,
+                  sub: `same ${matchWords(m)}`,
+                  onPick: () => answerNameAsk(m),
+                }))}
+              />
+            </div>
+          ) : null}
         </DsDialog>
       ) : null}
     </StepCard>
