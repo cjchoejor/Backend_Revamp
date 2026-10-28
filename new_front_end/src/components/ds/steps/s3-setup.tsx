@@ -1324,6 +1324,19 @@ function ProformaCard({
     openInvoicePdf(session, id).catch((e) => toastRefusal(e, "The PDF could not be opened"));
   };
 
+  const sentLive = proformas.some((i) => i.state !== "SUPERSEDED" && i.dispatchedAt != null);
+  // Once it has gone out the guest's answer is owed whether or not an advance is asked — Reserve
+  // waits for it too (Policy 40) — so the answer box stands out from then on (2026-10-28).
+  const answerDue = editable && sentLive && !answered;
+  // After a send the page goes to the answer box and it flashes, so the next act is seen.
+  const answerRef = useRef<HTMLDivElement | null>(null);
+  const [justSent, setJustSent] = useState(false);
+  useEffect(() => {
+    if (!justSent || !answerDue || !answerRef.current) return;
+    setJustSent(false);
+    revealCard(answerRef.current);
+  }, [justSent, answerDue]);
+
   if (proformas.length === 0) {
     return (
       <StepCard
@@ -1350,19 +1363,7 @@ function ProformaCard({
   // bill-before-money and answer-before-money rules): while an advance is asked, the card says
   // which comes first, and Send is the main act (2026-10-28).
   const advanceAsked = !!status && status.requiredAmount > 0 && !status.paidInFull;
-  const sentLive = proformas.some((i) => i.state !== "SUPERSEDED" && i.dispatchedAt != null);
-  // Once it has gone out the guest's answer is owed whether or not an advance is asked — Reserve
-  // waits for it too (Policy 40) — so the answer box stands out from then on (2026-10-28).
-  const answerDue = editable && sentLive && !answered;
   const nextUp = !editable ? null : advanceAsked && !sentLive ? "send" : answerDue ? "answer" : null;
-  // After a send the page goes to the answer box and it flashes, so the next act is seen.
-  const answerRef = useRef<HTMLDivElement | null>(null);
-  const [justSent, setJustSent] = useState(false);
-  useEffect(() => {
-    if (!justSent || !answerDue || !answerRef.current) return;
-    setJustSent(false);
-    revealCard(answerRef.current);
-  }, [justSent, answerDue]);
   const sendLock = !editable
     ? "not at this step"
     : !draft
