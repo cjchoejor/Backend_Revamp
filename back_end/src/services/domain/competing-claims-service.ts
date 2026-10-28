@@ -75,6 +75,25 @@ function roomNightMap(opt: unknown, checkIn: Date | null, checkOut: Date | null)
   return map;
 }
 
+/**
+ * What the placement check settles by moving rooms the system chose: this booking's own rooms it
+ * would put elsewhere, and other bookings' rooms it would move (`entryId|roomId`). Null when the
+ * booking does not fit, or the check cannot be asked — then nothing is left out.
+ */
+async function settledByQuietMoves(prisma: PrismaClient, entryId: string): Promise<{ mine: Set<string>; theirs: Set<string> } | null> {
+  try {
+    const { answerHouseByType } = await import("./room-placement-service.js");
+    const b = (await answerHouseByType(prisma, entryId)).booking;
+    if (!b || !b.fits) return null;
+    const mine = new Set<string>();
+    for (const r of b.rooms)
+      for (const run of r.runs) if (!run.fixed && run.roomId && run.placedRoomId && run.placedRoomId !== run.roomId) mine.add(run.roomId);
+    return { mine, theirs: new Set(b.moves.map((m) => `${m.entryId}|${m.fromRoomId}`)) };
+  } catch {
+    return null;
+  }
+}
+
 export async function buildCompetingClaims(prisma: PrismaClient, entryId: string): Promise<CompetingClaims> {
   const entry = await prisma.entry.findUnique({
     where: { id: entryId },
@@ -206,6 +225,25 @@ export async function buildCompetingClaims(prisma: PrismaClient, entryId: string
     if (contested.size === 0) continue;
     const guest = [o.guestProfile?.firstName, o.guestProfile?.lastName].filter(Boolean).join(" ").trim() || null;
     paper.push({ entryId: o.id, ref: o.inquiryId, guest, stage: o.currentStage, rooms: contested, quote, proforma });
+  }
+
+  // ---- Rooms by type (2026-10-28): a claim the system settles itself is not in the way ------
+  // A room the system chose — another booking's, or this booking's own — moves within its type
+  // when this booking is held, so a clash on it is no competition. Asked of the same check the
+  // holds run; when this booking does not fit, every claim stays (docs/room-types-until-arrival.md).
+  const settled = await settledByQuietMoves(prisma, entryId);
+  if (settled) {
+    const clear = (otherId: string, rooms: Set<string>) => {
+      for (const r of [...rooms]) if (settled.mine.has(r) || settled.theirs.has(`${otherId}|${r}`)) rooms.delete(r);
+    };
+    for (const [id, h] of [...hardByEntry]) {
+      clear(id, h.rooms);
+      if (h.rooms.size === 0) hardByEntry.delete(id);
+    }
+    for (let i = paper.length - 1; i >= 0; i--) {
+      clear(paper[i].entryId, paper[i].rooms);
+      if (paper[i].rooms.size === 0) paper.splice(i, 1);
+    }
   }
 
   // ---- Resolve room numbers + assemble, strongest claims first ------------------------------

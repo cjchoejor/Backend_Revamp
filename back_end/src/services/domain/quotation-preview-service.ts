@@ -415,6 +415,9 @@ export async function buildQuotationPreview(
     if (ds && ds.length) nightsByRoom.set(c.roomId, [...new Set(ds)].sort());
   }
   const datesShown = roomNightsVary(nightsByRoom);
+  // A room the system chose and may still move before Arrival reads "Deluxe Double · room 1".
+  const { quietRoomLabels } = await import("./quiet-rooms-service.js");
+  const roomLabels = await quietRoomLabels(prisma, entryId);
   const lines: PriceLine[] = [];
   totals.perRoom.forEach((r, i) => {
     const c = input.roomCompositions[i];
@@ -436,6 +439,7 @@ export async function buildQuotationPreview(
         extraBedsVaryByNight: r.extraBedsVaryByNight === true,
         mealsVaryByNight: r.perNightMealBreakdown.some((b) => b.overridden),
         datesLabel: datesShown && ds ? labelRoomNights(ds) : null,
+        roomLabel: roomLabels.get(r.roomId) ?? null,
       }),
     );
   });

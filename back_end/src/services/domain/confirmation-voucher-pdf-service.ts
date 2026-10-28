@@ -135,6 +135,8 @@ export async function generateOrLoadConfirmationVoucherPdf(
   // assignment's own occupants, meal-plan distribution, and extra beds. Falls back to
   // entry-level totals for assignments with no composition.
   const bookingRows: ConfirmationVoucherLine[] = [];
+  /** Rooms the system chose, named by type on this paper: type name → the rooms behind it. */
+  const typedRooms = new Map<string, Set<string>>();
   const fallbackAdults = entry.adultCount ?? Number(entry.guestCount ?? 1) ?? 1;
   const fallbackChildren = entry.childCount ?? 0;
   const fallbackOccupants = `${fallbackAdults} adult${fallbackAdults === 1 ? "" : "s"}, ${fallbackChildren} child${fallbackChildren === 1 ? "" : "ren"}`;
@@ -194,8 +196,20 @@ export async function generateOrLoadConfirmationVoucherPdf(
     }>;
     if (Array.isArray(comps) && comps.length) {
       const roomIds = comps.map((c) => c.roomId).filter((x): x is string => !!x);
-      const roomNo = new Map(
-        (await prisma.room.findMany({ where: { id: { in: roomIds } }, select: { id: true, roomNumber: true } })).map((r) => [r.id, r.roomNumber]),
+      const roomRows = await prisma.room.findMany({ where: { id: { in: roomIds } }, select: { id: true, roomNumber: true, roomType: { select: { name: true } } } });
+      const roomNo = new Map(roomRows.map((r) => [r.id, r.roomNumber]));
+      // A room the system chose and may still move is named by its type: its number is no promise
+      // to the guest before Arrival (2026-10-28, docs/room-types-until-arrival.md). A room the guest
+      // asked for keeps its number. The frozen terms name the rooms as they were at Reserve, and the
+      // system may have moved one since — on a booking picked by type, any room not fixed by the desk
+      // is named by its type.
+      const { describeBookingRooms } = await import("./quiet-rooms-service.js");
+      const described = await describeBookingRooms(prisma, entry.id).catch(() => null);
+      const fixedIds = new Set((described?.rooms ?? []).filter((r) => !r.quiet).map((r) => r.roomId));
+      const quietType = new Map(
+        described?.byType && described.movable
+          ? roomRows.filter((r) => !fixedIds.has(r.id)).map((r) => [r.id, r.roomType?.name ?? "Room"] as const)
+          : [],
       );
       const heldNights = await roomNightsForEntry(prisma, entry.id, { segmentId: reservation.segmentId, asOf: reservation.confirmedAt });
       const stayNights = Array.from({ length: nights }, (_, i) => new Date(checkIn.getTime() + i * 86_400_000).toISOString().slice(0, 10));
@@ -213,10 +227,12 @@ export async function generateOrLoadConfirmationVoucherPdf(
           mealPlanOthersCount: c.mealPlanOthersCount ?? 0,
           extraBedCount: c.extraBedCount ?? 0,
         } as unknown as (typeof entry.roomAssignments)[number];
+        const typeName = quietType.get(c.roomId);
+        if (typeName) typedRooms.set(typeName, (typedRooms.get(typeName) ?? new Set<string>()).add(c.roomId));
         for (const night of heldNights.get(c.roomId) ?? stayNights) {
           bookingRows.push({
             date: new Date(`${night}T00:00:00.000Z`),
-            roomNo: roomNo.get(c.roomId) ?? "",
+            roomNo: typeName ?? roomNo.get(c.roomId) ?? "",
             occupants: describeOccupants(asRow),
             mealPlan: describeMealPlan(asRow),
             extraBeds: describeExtraBeds(asRow),
@@ -246,13 +262,18 @@ export async function generateOrLoadConfirmationVoucherPdf(
   // Each room once (the rows are one per room per night), and the plan only when the rooms share it.
   // When the rooms are not all held for the same nights (a stay that moves rooms), each room says
   // its nights — "302 · 13–15 Oct" — as the quotation's Nights column does.
-  const roomsOnce = [...new Set(bookingRows.map((r) => r.roomNo).filter(Boolean))].sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
+  // A room the system chose reads by its type, counted: "2 × Deluxe Double" (2026-10-28).
+  const typedWords = [...typedRooms].map(([t, ids]) => (ids.size === 1 ? t : `${ids.size} × ${t}`));
+  const roomsOnce = [...new Set(bookingRows.map((r) => r.roomNo).filter(Boolean))]
+    .filter((no) => !typedRooms.has(no))
+    .sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
   const nightsOf = new Map(roomsOnce.map((no) => [no, bookingRows.filter((r) => r.roomNo === no).map((r) => r.date.toISOString().slice(0, 10))]));
   const nightsVary = new Set([...nightsOf.values()].map((n) => [...new Set(n)].sort().join(","))).size > 1;
   const roomWords = roomsOnce.map((no) => (nightsVary ? `${no} · ${labelRoomNights(nightsOf.get(no) ?? [])}` : no));
   const plans = [...new Set(bookingRows.map((r) => r.mealPlan).filter(Boolean))];
   const roomsSummary = bookingRows.length
     ? [
+        typedWords.length ? typedWords.join(", ") : null,
         roomsOnce.length ? `${roomsOnce.length === 1 ? "Room" : "Rooms"} ${roomWords.join(", ")}` : null,
         plans.length === 1 ? plans[0] : plans.length > 1 ? "meal plans per room" : null,
         `${nights} night${nights === 1 ? "" : "s"} total`,

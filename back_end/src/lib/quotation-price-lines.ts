@@ -62,6 +62,12 @@ export type PriceLineRoom = {
   datesLabel?: string | null;
   /** Name the room by its type alone — the guest's papers (2026-10-28). */
   hideRoomNumber?: boolean;
+  /**
+   * How the desk names a room the system chose and may still move before Arrival — "Deluxe Double ·
+   * room 1" (2026-10-28, docs/room-types-until-arrival.md). Printed in place of the room number, which
+   * is not a promise yet.
+   */
+  roomLabel?: string | null;
   /** How many identical rooms these rows stand for (default 1) — see `buildPaperPriceLines`. */
   roomCount?: number;
 };
@@ -108,12 +114,14 @@ export function buildRoomPriceLines(r: PriceLineRoom): PriceLine[] {
     dates: r.datesLabel ?? null,
     description: (r.hideRoomNumber
       ? [r.roomTypeName ?? "Room", many ? `${k} rooms` : null, `${roomOccupantsLabel(raw)}${many ? " each" : ""}`, raw?.isFoc ? "FOC" : null]
-      : [
-          r.roomNumber ? `Room ${r.roomNumber}` : `Room ${r.roomId.slice(0, 6)}`,
-          r.roomTypeName ?? null,
-          roomOccupantsLabel(raw),
-          raw?.isFoc ? "FOC" : null,
-        ]
+      : r.roomLabel
+        ? [r.roomLabel, roomOccupantsLabel(raw), raw?.isFoc ? "FOC" : null]
+        : [
+            r.roomNumber ? `Room ${r.roomNumber}` : `Room ${r.roomId.slice(0, 6)}`,
+            r.roomTypeName ?? null,
+            roomOccupantsLabel(raw),
+            raw?.isFoc ? "FOC" : null,
+          ]
     )
       .filter(Boolean)
       .join(" · "),

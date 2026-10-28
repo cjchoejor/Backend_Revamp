@@ -193,11 +193,13 @@ type QuotationDocRender = {
  *
  * `roomNumbers` keeps one row per room, numbered — the desk's Charges tab. The paper names rooms
  * by their type alone and sets identical rooms out once (2026-10-28, `buildPaperPriceLines`).
+ * `roomLabels` names a room the system chose and may still move ("Deluxe Double · room 1") on the
+ * desk's numbered rows, in place of its number.
  */
 async function buildQuotationDocRender(
   prisma: PrismaClient,
   q: LoadedQuotation,
-  opts?: { hidePrices?: boolean; roomNumbers?: boolean },
+  opts?: { hidePrices?: boolean; roomNumbers?: boolean; roomLabels?: Map<string, string> },
 ): Promise<QuotationDocRender> {
   const hidePrices = opts?.hidePrices === true;
   const roomNumbers = opts?.roomNumbers === true;
@@ -397,6 +399,7 @@ async function buildQuotationDocRender(
         extraBedsVaryByNight: r.extraBedsVaryByNight === true,
         mealsVaryByNight: nightBreakdown.some((n) => n.overridden),
         datesLabel: nightsLabelFor(r.roomId),
+        roomLabel: opts?.roomLabels?.get(r.roomId) ?? null,
       };
       if (roomNumbers) {
         for (const line of buildRoomPriceLines(priceRoom)) {
@@ -656,8 +659,11 @@ export async function quotationPriceLines(
   quotationId: string,
 ): Promise<{ quotationId: string; referenceNumber: string; versionNumber: number; state: string } & QuotationPriceFigures> {
   const q = await loadQuotationForRender(prisma, quotationId);
-  // The desk keeps each room's own row and number (2026-10-28 — only the paper names types).
-  const model = await buildQuotationDocRender(prisma, q, { roomNumbers: true });
+  // The desk keeps each room's own row and number (2026-10-28 — only the paper names types); a
+  // room the system chose and may still move is named "Deluxe Double · room 1" instead.
+  const { quietRoomLabels } = await import("./quiet-rooms-service.js");
+  const roomLabels = await quietRoomLabels(prisma, q.entryId);
+  const model = await buildQuotationDocRender(prisma, q, { roomNumbers: true, roomLabels });
   return {
     quotationId: q.id,
     referenceNumber: q.referenceNumber,

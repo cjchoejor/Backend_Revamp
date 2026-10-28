@@ -74,7 +74,7 @@ export async function relabelEntryRoomsTx(
   });
   if (!entry) throw new NotFoundError("Entry");
   const segId = entry.segments[0]?.id ?? null;
-  const swap = <T>(v: T): T => relabelJson(v, map) as T;
+  const swap = <T>(v: T): T => relabelJson(v, map, meta.roomNumbers) as T;
 
   // The pick in force (the pass's newest sealed one).
   const seal = await tx.availabilityConfiguration.findFirst({
@@ -487,14 +487,20 @@ export async function describeBookingRooms(prisma: PrismaClient, entryId: string
   const seal = currentPassSeal(e);
   const byType = sealHasBookingRooms(seal);
   const movable = byType && QUIET_STAGES.includes(e.currentStage) && e.roomAssignments.length === 0 && (e.status === "ACTIVE" || e.status === "PARKED");
-  if (!e.checkInDate || !e.checkOutDate) return { byType, movable, rooms: [] };
+  // At Arrival the system's rooms are a PROPOSAL the desk confirms, so they are named by number
+  // there; before it they are named by type (docs/room-types-until-arrival.md).
+  const atArrival = e.currentStage === "S5";
+  if (!e.checkInDate || !e.checkOutDate) return { byType, movable, atArrival, rooms: [] };
   const checkIn = utcDateOnly(e.checkInDate);
   const checkOut = utcDateOnly(e.checkOutDate);
   const roomRows = await prisma.room.findMany({ select: { id: true, roomNumber: true, roomTypeId: true, roomType: { select: { name: true } } } });
   const info = new Map(roomRows.map((r) => [r.id, r] as const));
   const rooms = readBookingRooms(seal, { checkIn, checkOut }, (id) => info.get(id)?.roomTypeId);
-  // "Deluxe Double · room 2": a type's rooms numbered in the order of their booking rooms, so the
-  // label stays put when the system moves a room.
+  // "Deluxe Double · room 2": every room of a type numbered in the order of its booking rooms, so a
+  // label stays put when the system moves a room AND when the desk fixes another one — the meal
+  // plan agreed for "room 2" must still read "room 2" after room 1 is given 206. A guest's own
+  // (fixed) room is named by its number but keeps its place in the count; the desk's live labels
+  // (`labelsForBookingRooms`) count the same way.
   const keyNo = (roomId: string) =>
     Math.min(...rooms.filter((r) => r.nights.some((n) => n.roomId === roomId)).map((r) => Number(r.key.slice(1)) || 999));
   const units = roomUnitsOf(rooms);
@@ -502,20 +508,40 @@ export async function describeBookingRooms(prisma: PrismaClient, entryId: string
   const out = units
     .sort((a, b) => keyNo(a.roomId) - keyNo(b.roomId) || a.nights[0].localeCompare(b.nights[0]))
     .map((u) => {
-      const n = (perType.get(u.roomTypeId) ?? 0) + 1;
-      perType.set(u.roomTypeId, n);
       const typeName = info.get(u.roomId)?.roomType?.name ?? "Room";
+      const named = byType && u.quiet;
+      const k = (perType.get(u.roomTypeId) ?? 0) + 1;
+      perType.set(u.roomTypeId, k);
+      const n = named ? k : null;
       return {
         roomId: u.roomId,
         roomNumber: info.get(u.roomId)?.roomNumber ?? null,
         roomTypeId: u.roomTypeId,
         typeName,
         nights: u.nights,
-        quiet: byType && u.quiet && movable,
-        label: byType && u.quiet ? `${typeName} · room ${n}` : `Room ${info.get(u.roomId)?.roomNumber ?? "?"}`,
+        quiet: named && movable,
+        ordinal: n,
+        label: n != null ? `${typeName} · room ${n}` : `Room ${info.get(u.roomId)?.roomNumber ?? "?"}`,
       };
     });
-  return { byType, movable, rooms: out, bookingRooms: rooms };
+  return { byType, movable, atArrival, rooms: out, bookingRooms: rooms };
+}
+
+/**
+ * The desk's name for each room the system chose and may still move — "Deluxe Double · room 1" —
+ * keyed by the room behind it. Empty for a booking picked by number, and from Arrival on, where the
+ * system's rooms are proposed by number for the desk to confirm. A room number is not a promise before then (docs/room-types-until-arrival.md).
+ */
+export async function quietRoomLabels(prisma: PrismaClient, entryId: string): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  try {
+    const d = await describeBookingRooms(prisma, entryId);
+    if (d.atArrival) return out; // the proposal is named by number
+    for (const r of d.rooms) if (r.quiet) out.set(r.roomId, r.label);
+  } catch {
+    // An unknown booking names no rooms by type; the caller prints numbers as before.
+  }
+  return out;
 }
 
 function dayWords(ymd: string): string {

@@ -279,12 +279,18 @@ export function bookingRoomsFromCounts(input: {
 /** Every string (and object key) that names a room in `map`, swapped for its new room — the
  *  relabel a quiet move makes in a booking's own records. Room ids are uuids, so nothing else
  *  can match. */
-export function relabelJson(value: unknown, map: Map<string, string>): unknown {
+export function relabelJson(value: unknown, map: Map<string, string>, roomNumbers?: Map<string, string>): unknown {
   if (typeof value === "string") return map.get(value) ?? value;
-  if (Array.isArray(value)) return value.map((v) => relabelJson(v, map));
+  if (Array.isArray(value)) return value.map((v) => relabelJson(v, map, roomNumbers));
   if (value && typeof value === "object" && !(value instanceof Date)) {
+    const src = value as Record<string, unknown>;
     const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) out[map.get(k) ?? k] = relabelJson(v, map);
+    for (const [k, v] of Object.entries(src)) out[map.get(k) ?? k] = relabelJson(v, map, roomNumbers);
+    // A record that names its room's NUMBER beside its id (a quotation's priced rooms) follows
+    // the room too — the id moving and the number staying would print the old room (2026-10-28).
+    if (roomNumbers && typeof src.roomId === "string" && map.has(src.roomId) && "roomNumber" in src) {
+      out.roomNumber = roomNumbers.get(map.get(src.roomId)!) ?? src.roomNumber;
+    }
     return out;
   }
   return value;
