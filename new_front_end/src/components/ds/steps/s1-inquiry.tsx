@@ -73,6 +73,8 @@ import { enumerateNights, useRoomSelection } from "./use-room-selection";
 import { CHANNEL_OPTIONS, PartySearch, cameInAsOf, channelDef, moreRoomsNeedGuests, type ChannelKey } from "./new-inquiry-parts";
 import { TheCaller, WrapUp } from "./s1-caller";
 import { cleanPicks, usePickPricing, type BillNight } from "./s1-bill";
+import { RoomsByType, savedBookingRooms } from "./s1-by-type";
+import { useBookingRooms } from "@/hooks/use-booking-rooms";
 import { usePublishPriceDraft } from "@/lib/ds/stay-price";
 import { Help, HelpHere } from "@/components/ds/help";
 import type { PickPricing } from "@/lib/api/availability";
@@ -1017,6 +1019,16 @@ function TheHouse({
     stayNights,
   });
 
+  // Rooms by type (2026-10-28, docs/room-types-until-arrival.md): the desk says how many of each
+  // type each night and the system chooses the rooms. Particular rooms by number stay one press
+  // away, and a pick already saved by number opens as it was.
+  const savedByType = !!savedBookingRooms(entry);
+  const savedByNumber = !!savedOption && !savedByType;
+  const [mode, setMode] = useState<"TYPE" | "NUMBER">(savedByNumber ? "NUMBER" : "TYPE");
+  const byTypeMode = mode === "TYPE";
+  const [typePicks, setTypePicks] = useState<{ perNight: BillNight[]; labels: Map<string, string>; saved: boolean } | null>(null);
+  const bookingRoomsView = useBookingRooms(entry);
+
   /* free rooms by type, over every night of the answer */
   const byType = useMemo<TypeRow[]>(() => {
     const freeOn = (roomId: string, night: string) =>
@@ -1194,11 +1206,12 @@ function TheHouse({
   // The bill (2026-10-10): what the rooms on the table cost, night by night and for the stay —
   // the picks as they stand, saved or not; with none, what Take it would hold.
   const stayNightSet = useMemo(() => new Set(stayNights), [stayNights]);
-  const picked: BillNight[] = sel.allPicked.length
+  const numberPicked: BillNight[] = sel.allPicked.length
     ? displayNights
         .filter((d) => stayNightSet.has(d))
         .map((date) => ({ date, roomIds: sel.effectiveByNight[date] ?? [] }))
     : [];
+  const picked: BillNight[] = byTypeMode ? (typePicks?.perNight ?? []).filter((n) => stayNightSet.has(n.date)) : numberPicked;
   // Take it takes the marked type's rooms free on every night — the chart's room first, when it is one.
   const takeIds = chosenRow
     ? (chartPick && chosenRow.full.includes(chartPick) ? [chartPick, ...chosenRow.full.filter((id) => id !== chartPick)] : chosenRow.full).slice(0, numberOfRooms)
@@ -1209,9 +1222,9 @@ function TheHouse({
       : [];
   const billFor = picked.length ? picked : candidate;
   const bill = usePickPricing(entry.id, billFor, hasResults);
-  const pickedSaved = sel.savedCanon != null && sel.savedCanon === sel.currentCanon;
+  const pickedSaved = byTypeMode ? !!typePicks?.saved : sel.savedCanon != null && sel.savedCanon === sel.currentCanon;
   // Picks changed and not saved: the house does not read as done (2026-10-27).
-  useFlowUnsaved("house", editable && !past && sel.currentCanon !== sel.savedCanon, "The rooms picked saved");
+  useFlowUnsaved("house", editable && !past && !byTypeMode && sel.currentCanon !== sel.savedCanon, "The rooms picked saved");
   // The bill lives in the booking file (2026-10-27, operator: "when rooms are picked, show this on
   // the right, in Charges & payments › The price, with the nights and the rooms"). A pick made by
   // hand opens it there; picks restored on arrival or a background re-read do not, and the page
@@ -1231,7 +1244,11 @@ function TheHouse({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pickKey]);
   // What is picked, saved or not, for the Charges & payments tab and the header total.
-  usePublishPriceDraft(entry.id, editable ? { kind: "PICKS", perNight: picked, saved: pickedSaved } : null);
+  const pickLabels = byTypeMode ? (typePicks?.labels ?? bookingRoomsView.labels) : bookingRoomsView.labels;
+  usePublishPriceDraft(
+    entry.id,
+    editable ? { kind: "PICKS", perNight: picked, saved: pickedSaved, labels: Object.fromEntries(pickLabels) } : null,
+  );
   const billTitle = picked.length
     ? pickedSaved
       ? "The rooms chosen"
@@ -1370,7 +1387,7 @@ function TheHouse({
   };
   const variedSaved =
     !!savedOption && "perNight" in savedOption && sel.nightsDiffer;
-  const showTool = hasResults && !past && (toolOpen || variedSaved);
+  const showTool = hasResults && !past && !byTypeMode && (toolOpen || variedSaved);
 
   const takeReason = !editable
     ? null
@@ -1423,6 +1440,7 @@ function TheHouse({
           editable ? (
             hasResults ? (
               <>
+                {byTypeMode ? null : (
                 <Button
                   className="go"
                   state={
@@ -1438,6 +1456,7 @@ function TheHouse({
                 >
                   Take it
                 </Button>
+                )}
                 <Button
                   kind="secondary"
                   compact
@@ -1483,6 +1502,26 @@ function TheHouse({
                 {chartNote.text}
               </p>
             ) : null}
+            {byTypeMode ? (
+              <RoomsByType
+                entry={entry}
+                configId={configId}
+                stale={stale}
+                nights={stayNights}
+                numberOfRooms={numberOfRooms}
+                catalog={catalog}
+                editable={editable && !past}
+                onPicks={setTypePicks}
+                onSaved={() => {
+                  refresh();
+                  void goToWrap();
+                }}
+                onParticular={() => {
+                  setMode("NUMBER");
+                  openTool();
+                }}
+              />
+            ) : (
             <table className="table compact house-types">
               <thead>
                 <tr>
@@ -1549,6 +1588,7 @@ function TheHouse({
                 ))}
               </tbody>
             </table>
+            )}
             {bill.pricing ? (
               <div className={`pb-line${bill.loading ? " loading" : ""}`}>
                 <span className="pb-line-k">{billTitle}</span>
@@ -1610,8 +1650,9 @@ function TheHouse({
                 <Chip tone={pickMisfit ? "warning" : "success"} icon={pickMisfit ? undefined : "check"}>
                   {pickMisfit ? "chosen for the stay before" : "chosen"}
                 </Chip>
-                Room{savedNumbers.length === 1 ? "" : "s"}{" "}
-                {savedNumbers.join(", ")}
+                {savedByType
+                  ? savedIds.map((id) => bookingRoomsView.labels.get(id) ?? `Room ${rows.find((r) => r.roomId === id)?.roomNumber ?? catalog.find((r) => r.id === id)?.roomNumber ?? "?"}`).join(", ")
+                  : `Room${savedNumbers.length === 1 ? "" : "s"} ${savedNumbers.join(", ")}`}
                 {savedTypes.length ? (
                   <span className="meta"> · {savedTypes.join(", ")}</span>
                 ) : null}
@@ -1642,9 +1683,16 @@ function TheHouse({
                     Try asking the house again
                   </Button>
                 ) : null}
-                <Button kind="quiet" compact onClick={openTool}>
-                  Choose the rooms
-                </Button>
+                {byTypeMode ? null : (
+                  <>
+                    <Button kind="quiet" compact onClick={openTool}>
+                      Choose the rooms
+                    </Button>
+                    <Button kind="quiet" compact onClick={() => { setMode("TYPE"); setToolOpen(false); }}>
+                      Pick by room type instead
+                    </Button>
+                  </>
+                )}
               </div>
             ) : null}
           </>

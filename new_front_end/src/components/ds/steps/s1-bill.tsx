@@ -96,7 +96,10 @@ export function PickBill({
   title,
   caption,
   help,
+  roomLabels,
 }: {
+  /** A room the system chose quietly is named by its type, not its number (2026-10-28). */
+  roomLabels?: Record<string, string> | null;
   pricing: PickPricing;
   loading?: boolean;
   title: ReactNode;
@@ -144,8 +147,8 @@ export function PickBill({
                   <span className="pb-rooms">
                     {n.rooms.map((r) => (
                       <span key={r.roomId} className="pb-room">
-                        {r.roomNumber}
-                        {r.roomTypeName ? <small>{r.roomTypeName}</small> : null}
+                        {roomLabels?.[r.roomId] ?? r.roomNumber}
+                        {r.roomTypeName && !roomLabels?.[r.roomId] ? <small>{r.roomTypeName}</small> : null}
                       </span>
                     ))}
                   </span>
@@ -164,7 +167,7 @@ export function PickBill({
           {pricing.byRoom.map((r, i) => (
             <span key={r.roomId}>
               {i ? " · " : ""}
-              <b>{r.roomNumber}</b> {spansLabel(r.dates)} ({plural(r.dates.length, "night")})
+              <b>{roomLabels?.[r.roomId] ?? r.roomNumber}</b> {spansLabel(r.dates)} ({plural(r.dates.length, "night")})
             </span>
           ))}
         </div>

@@ -67,6 +67,8 @@ export type RoomChartBar = {
   holdExpiresAt: string | null;
   /** The room move holding it, for MOVING (2026-10-12). */
   moveId: string | null;
+  /** The system chose this room and may still move it within its type until Arrival (2026-10-28). */
+  quiet?: boolean;
 };
 
 /** Rooms a booking has chosen and does not hold (Inquiry, or Negotiation without a provisional block). */

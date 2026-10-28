@@ -1729,3 +1729,35 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 /* The topbar clock reads to the second (2026-10-28): figures of one width, so the time does not
    shift sideways as the seconds change. */
 .ds .topbar .clock b:not(.desk-root *) { font-variant-numeric: tabular-nums; }
+
+/* Rooms by type (2026-10-28, docs/room-types-until-arrival.md): how many of each type, each night.
+   A night's tally is the indicator the desk works to — red while short, green once full; a count
+   above what is free reads red where it is typed. */
+.ds .by-type-grid td.every:not(.desk-root *), .ds .by-type-grid th.every:not(.desk-root *) { text-align: center; white-space: nowrap; }
+.ds .by-type-grid .bt-count:not(.desk-root *) { width: 52px; height: 32px; text-align: center; font: inherit; font-weight: 700; font-variant-numeric: tabular-nums; border: 1px solid var(--line-2); border-radius: var(--r-control); background: #fff; color: var(--ink); }
+.ds .by-type-grid .bt-count:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ds .by-type-grid .bt-count:disabled { background: var(--paper); color: var(--ink-2); }
+.ds .by-type-grid .bt-count::placeholder { color: var(--ink-3); font-weight: 500; }
+.ds .by-type-grid td.hn small:not(.desk-root *) { display: block; font-size: 11px; font-weight: 500; color: var(--ink-3); margin-top: 2px; }
+.ds .by-type-grid td.hn small.none:not(.desk-root *) { color: var(--danger); font-weight: 700; }
+.ds .by-type-grid td.hn.over:not(.desk-root *) { background: var(--danger-soft); }
+.ds .by-type-grid td.hn.over .bt-count { border-color: var(--danger); color: var(--danger); }
+.ds .by-type-grid td.hn small.over:not(.desk-root *) { color: var(--danger); font-weight: 700; }
+.ds .by-type-grid .bt-tally:not(.desk-root *) { display: block; margin-top: 3px; font-size: 13px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.ds .by-type-grid .bt-tally.short:not(.desk-root *) { color: var(--danger); }
+.ds .by-type-grid .bt-tally.done:not(.desk-root *) { color: var(--success); }
+.ds .bt-fixed:not(.desk-root *) { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); margin-top: var(--s3); }
+.ds .bt-fixed .bt-k { font-weight: 600; }
+.ds .bt-chip:not(.desk-root *) { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 4px 0 10px; border: 1px solid var(--accent); border-radius: var(--r-control); background: var(--accent-soft); font-weight: 600; }
+.ds .bt-chip small { font-weight: 500; color: var(--ink-2); }
+.ds .bt-chip button { width: 22px; height: 22px; border: 0; border-radius: 3px; background: transparent; color: var(--ink-2); font-size: 15px; cursor: pointer; }
+.ds .bt-chip button:hover { background: rgba(0,0,0,.08); color: var(--ink); }
+.ds .bt-add:not(.desk-root *) { height: 30px; padding: 0 8px; border: 1px solid var(--line-2); border-radius: var(--r-control); background: #fff; font: inherit; font-weight: 500; cursor: pointer; }
+.ds .bt-refusals:not(.desk-root *) { display: flex; align-items: flex-start; gap: var(--s2); margin-top: var(--s3); padding: var(--s2) var(--s3); border: 1px solid var(--danger); border-radius: var(--r-control); background: var(--danger-soft); color: var(--danger); font-size: var(--t-sm); font-weight: 700; animation: house-short-in .5s ease-out; }
+.ds .bt-refusals .mark { flex: none; width: 18px; height: 18px; border-radius: 50%; background: var(--danger); color: #fff; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; line-height: 1; margin-top: 1px; }
+@media (prefers-reduced-motion: reduce) { .ds .bt-refusals:not(.desk-root *) { animation: none; } }
+.ds .bt-moves:not(.desk-root *) { margin-top: var(--s2); }
+.ds .bt-state:not(.desk-root *) { font-weight: 800; font-size: var(--t-md, 15px); }
+
+/* A room the system chose and may still move, before Arrival — "room not chosen yet". */
+.ds .rchart .seg.quiet:not(.desk-root *) { opacity: .72; outline: 1.5px dashed currentColor; outline-offset: -3px; }

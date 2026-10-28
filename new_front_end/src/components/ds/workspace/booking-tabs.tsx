@@ -501,6 +501,7 @@ function PicksPrice({ sp }: { sp: StayPrice }) {
   return (
     <PickBill
       pricing={p}
+      roomLabels={sp.labels}
       loading={sp.loading}
       title={sp.unsaved ? "The rooms picked · not saved yet" : "The rooms chosen"}
       caption={

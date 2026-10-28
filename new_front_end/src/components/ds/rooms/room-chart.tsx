@@ -1981,7 +1981,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
                             colSpan={s.span}
                             style={gi ? guestStyle(gi) : undefined}
                             data-entry={s.bar.entryId}
-                            className={`seg ${KIND_CLASS[s.bar.kind]}${gi ? " g" : ""}${s.bar.parked ? " parked" : ""}${s.bar.paymentPending ? " paypend" : ""}${contL ? " cont-l" : ""}${contR ? " cont-r" : ""}${selKeys.has(selKey(sel)) ? " marked" : ""}${dragged.has(selKey(sel)) ? " dragging" : ""}`}
+                            className={`seg ${KIND_CLASS[s.bar.kind]}${gi ? " g" : ""}${s.bar.parked ? " parked" : ""}${s.bar.quiet ? " quiet" : ""}${s.bar.paymentPending ? " paypend" : ""}${contL ? " cont-l" : ""}${contR ? " cont-r" : ""}${selKeys.has(selKey(sel)) ? " marked" : ""}${dragged.has(selKey(sel)) ? " dragging" : ""}`}
                           >
                             <button
                               type="button"
@@ -2440,6 +2440,7 @@ function HoverCard({
             {b ? fact("Step", <span className="hc-step">{STEP_NAMES[stepNoOfStage(b.stage) - 1]}</span>) : null}
             {fact("Booking", b ? `${b.entryId} · ${b.inquiryId}` : bar.entryId)}
             {bar.holdExpiresAt ? fact("Held until", fmtDateTime(bar.holdExpiresAt)) : null}
+            {bar.quiet ? fact("Room", "not chosen yet — the system keeps a room of this type and may move it until Arrival") : null}
             {bar.moveId ? fact("Room move", bar.moveId) : null}
             {showPicks
               ? uniquePicks((chart.picks ?? []).filter((p) => p.roomId === room.id && p.entryId !== bar.entryId && p.from < bar.to && p.to > bar.from)).map((p) => {
