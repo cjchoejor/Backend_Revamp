@@ -40,7 +40,6 @@ import {
   roomStatusRows,
   type RoomStatusRow,
 } from "@/components/desk/workspace/room-status-table";
-import { RoomSelectBoard } from "@/components/desk/workspace/room-select-board";
 import { fmtDay, fmtRange, money, plural } from "@/lib/ds/format";
 import { currentPassConfigs, pickFitsStay } from "@/lib/desk/workspace";
 import {
@@ -1707,18 +1706,6 @@ function TheHouse({
         open={showTool}
         title={`Pick every room by number · ${plural(numberOfRooms, "room")} for ${plural(displayNights.length, "night")}`}
         onClose={closeTool}
-        acts={
-          <Button
-            kind="quiet"
-            compact
-            onClick={() => {
-              setToolOpen(false);
-              setMode("TYPE");
-            }}
-          >
-            Pick by room type instead
-          </Button>
-        }
       >
         <div onPointerDownCapture={markHandPick} onClickCapture={markHandPick} onKeyDownCapture={markHandPick}>
           <WhichRooms
@@ -1788,18 +1775,9 @@ function WhichRooms({
   /** Drawn inside the work-column pop-up: no card of its own, no full screen, the pop-up closes it. */
   popup?: boolean;
 }) {
-  const [view, setView] = useState<"table" | "board">("table");
   const [names, setNames] = useState(false);
   const [full, setFull] = useState(false);
   const [release, setRelease] = useState<ReleaseTarget | null>(null);
-  const canBoard =
-    (entry.adultCount ?? 0) > 0 || (entry.childAges ?? []).length > 0;
-  const board = view === "board" && canBoard;
-  const boardBase = useRef<string[]>([]);
-  const boardEcho = useRef(false);
-  useEffect(() => {
-    if (board) boardEcho.current = true;
-  }, [board]);
   useEffect(() => {
     if (!full) return;
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && setFull(false);
@@ -1811,28 +1789,6 @@ function WhichRooms({
       document.body.style.overflow = prev;
     };
   }, [full]);
-
-  const capacity = useMemo(
-    () =>
-      new Map(
-        catalog
-          .map((r) => [
-            r.id,
-            r.roomType?.maxCapacity ?? r.roomType?.standardCapacity ?? 0,
-          ])
-          .filter(([, c]) => (c as number) > 0) as Array<[string, number]>,
-      ),
-    [catalog],
-  );
-  const maxChildren = useMemo(
-    () =>
-      new Map(
-        catalog
-          .filter((r) => typeof r.roomType?.maxChildren === "number")
-          .map((r) => [r.id, r.roomType!.maxChildren!]),
-      ),
-    [catalog],
-  );
 
   const showSaved =
     !saving &&
@@ -1949,29 +1905,19 @@ function WhichRooms({
           ? "Save the room"
           : `Save ${numberOfRooms} rooms`;
 
+  // The rooms by night only (2026-10-28, operator: "remove place the guests option, that way rooms
+  // by night option is also not needed") — the guests are placed at Negotiation, room by room.
   const right = (
         <>
-          {canBoard ? (
-            <Choice
-              options={[
-                ["table", "Rooms by night"],
-                ["board", "Place the guests"],
-              ]}
-              value={board ? "board" : "table"}
-              onChange={setView}
-            />
-          ) : null}
-          {!board ? (
-            <Button
-              kind="quiet"
-              compact
-              icon="person"
-              aria-pressed={names}
-              onClick={() => setNames((v) => !v)}
-            >
-              {names ? "Names shown" : "Show names"}
-            </Button>
-          ) : null}
+          <Button
+            kind="quiet"
+            compact
+            icon="person"
+            aria-pressed={names}
+            onClick={() => setNames((v) => !v)}
+          >
+            {names ? "Names shown" : "Show names"}
+          </Button>
           {popup ? null : (
             <Button kind="quiet" compact onClick={() => setFull((v) => !v)}>
               {full ? "Close the full view" : "Full screen"}
@@ -2053,41 +1999,6 @@ function WhichRooms({
       {/* No total band here (2026-10-19, operator: "there is already a table on top to do that") —
           the house card's bill above carries the stay's total and each room type's. */}
       <Tool>
-        {board ? (
-          <RoomSelectBoard
-            rows={rows}
-            nights={displayNights}
-            perDate={perDate}
-            entryAdults={entry.adultCount}
-            entryChildAges={entry.childAges}
-            maxRooms={numberOfRooms}
-            selectedRoomIds={sel.base}
-            initialPerNight={sel.effectiveByNight}
-            onSelectionChange={(ids) => {
-              boardBase.current = ids;
-              sel.setBase(ids);
-            }}
-            onPerNightChange={(pn, diffs) => {
-              const b = boardBase.current;
-              if (diffs) {
-                boardEcho.current = false;
-                sel.setOverrides(
-                  Object.fromEntries(
-                    pn
-                      .filter((p) => !sel.sameSet(p.roomIds, b))
-                      .map((p) => [p.date, p.roomIds]),
-                  ),
-                );
-              } else if (boardEcho.current) {
-                boardEcho.current = false;
-              } else sel.setOverrides({});
-            }}
-            capacityByRoomId={capacity}
-            maxChildrenByRoomId={maxChildren}
-            capacitiesReady={catalog.length > 0}
-            disabled={saving}
-          />
-        ) : (
           <RoomStatusTable
             rows={rows}
             nights={displayNights}
@@ -2114,7 +2025,6 @@ function WhichRooms({
             large={full}
             nightTotals={bill ? Object.fromEntries(bill.nights.map((n) => [n.date, money(n.total, bill.currency)])) : undefined}
           />
-        )}
       </Tool>
       {!full && (held.length || blocked.length) ? (
         <div className="sm" style={{ marginTop: 10, display: "grid", gap: 4 }}>

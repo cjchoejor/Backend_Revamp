@@ -27,7 +27,7 @@ import { fmtDay, plural } from "@/lib/ds/format";
 import { currentPassConfigs } from "@/lib/desk/workspace";
 import type { EntryDetail } from "@/types/api";
 import { Help } from "@/components/ds/help";
-import { useFlowUnsaved } from "./kit";
+import { Choice, useFlowUnsaved } from "./kit";
 
 const WEEKDAY = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -304,6 +304,24 @@ export function RoomsByType({
 
   return (
     <div className="by-type">
+      {/* Same rooms every night, or a box per night — a choice of its own above the grid
+          (2026-10-28, operator: "night by night button needs to be more prominent"). Night by
+          night opens by itself when the nights already differ, and Same every night waits until
+          they agree again. */}
+      {oneNight ? null : (
+        <div className="bt-modebar">
+          <Choice
+            options={[
+              ["same", "Same every night"],
+              ["night", "Night by night"],
+            ] as const}
+            value={byNight ? "night" : "same"}
+            disabled={varies}
+            onChange={(v) => setByNightAsked(v === "night")}
+          />
+          {varies ? <span className="bt-modebar-note">The nights differ, so each night has its own box</span> : null}
+        </div>
+      )}
       <div className="bt-scroll">
       <table className="table compact house-types by-type-grid">
         <thead>
@@ -319,22 +337,7 @@ export function RoomsByType({
                 confirmed.
               </Help>
             </th>
-            {oneNight ? null : (
-              <th className="every">
-                Every night
-                {byNight ? (
-                  varies ? null : (
-                    <button type="button" className="bt-mode" onClick={() => setByNightAsked(false)}>
-                      Same every night
-                    </button>
-                  )
-                ) : (
-                  <button type="button" className="bt-mode" onClick={() => setByNightAsked(true)}>
-                    Night by night
-                  </button>
-                )}
-              </th>
-            )}
+            {oneNight ? null : <th className="every">Every night</th>}
             {nights.map((d) => {
               const tot = totalOn(d);
               const left = numberOfRooms - tot;

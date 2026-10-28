@@ -1752,9 +1752,9 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .by-type-grid:not(.desk-root *) { width: auto; }
 .ds .table.compact.by-type-grid th:not(.desk-root *), .ds .table.compact.by-type-grid td:not(.desk-root *) { padding: 3px 10px; vertical-align: middle; }
 .ds .table.compact.by-type-grid thead th:not(.desk-root *) { padding-top: 4px; padding-bottom: 4px; }
-.ds .by-type-grid .bt-mode:not(.desk-root *) { display: block; margin: 2px auto 0; padding: 1px 8px; border: 1px solid var(--line-2); border-radius: 3px; background: #fff; font: inherit; font-size: 12px; font-weight: 500; color: var(--ink-2); cursor: pointer; }
-.ds .by-type-grid .bt-mode:hover:not(.desk-root *) { border-color: var(--ink-3); color: var(--ink); }
-.ds .by-type-grid .bt-mode:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ds .bt-modebar:not(.desk-root *) { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s3); margin: 0 0 var(--s3); }
+.ds .bt-modebar .filters.choice:not(.desk-root *) { margin: 0; }
+.ds .bt-modebar-note:not(.desk-root *) { font-size: var(--t-sm); font-weight: 600; color: var(--ink-2); }
 .ds .by-type-grid td.every:not(.desk-root *), .ds .by-type-grid th.every:not(.desk-root *) { text-align: center; white-space: nowrap; border-right: 1px solid var(--line-2); }
 .ds .by-type-grid td.bt-type:not(.desk-root *) { font-weight: 600; white-space: nowrap; }
 .ds .by-type-grid .bt-day:not(.desk-root *) { display: block; font-size: 12px; font-weight: 600; color: var(--ink-2); }
