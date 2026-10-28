@@ -649,13 +649,48 @@ export function anchorFor(card: string) {
  */
 export function revealCard(el: HTMLElement) {
   // A tall section is shown from its top (under the sticky head) — centred, its top ran off the
-  // screen and only its last buttons showed (2026-10-28).
-  const tall = el.getBoundingClientRect().height > window.innerHeight * 0.55;
-  el.scrollIntoView({ behavior: "smooth", block: tall ? "start" : "center" });
+  // screen and only its last buttons showed (2026-10-28). A card marked to land at the top always
+  // does (StepCard `revealAtTop`).
+  const place = () => {
+    const top = el.dataset.reveal === "top" || el.getBoundingClientRect().height > window.innerHeight * 0.55;
+    el.scrollIntoView({ behavior: "smooth", block: top ? "start" : "center" });
+  };
+  place();
   el.classList.remove("flash");
   void el.offsetWidth;
   el.classList.add("flash");
   window.setTimeout(() => el.classList.remove("flash"), 1900);
+  keepPlacedWhileSettling(el, place);
+}
+
+/**
+ * A card the desk was taken to may still be filling in — the house's answer arriving, a section
+ * opening out — and the page could not yet scroll far enough to put it in place. For a few seconds
+ * it is put back where it was taken whenever it changes size, which finishes the move the desk asked
+ * for; the moment the operator scrolls, clicks or types the page is theirs again (the page never
+ * moves on its own, 2026-10-27).
+ */
+function keepPlacedWhileSettling(el: HTMLElement, place: () => void) {
+  if (typeof ResizeObserver === "undefined") return;
+  let height = el.getBoundingClientRect().height;
+  let pending = 0;
+  const events = ["wheel", "touchstart", "keydown", "pointerdown"] as const;
+  const stop = () => {
+    ro.disconnect();
+    window.clearTimeout(pending);
+    window.clearTimeout(end);
+    for (const t of events) window.removeEventListener(t, stop, true);
+  };
+  const ro = new ResizeObserver(() => {
+    const h = el.getBoundingClientRect().height;
+    if (Math.abs(h - height) < 4) return;
+    height = h;
+    window.clearTimeout(pending);
+    pending = window.setTimeout(place, 80);
+  });
+  for (const t of events) window.addEventListener(t, stop, { capture: true, passive: true });
+  ro.observe(el);
+  const end = window.setTimeout(stop, 6000);
 }
 
 /**
@@ -717,6 +752,7 @@ export function StepCard({
   summary,
   noDoneBar = false,
   doneAction,
+  revealAtTop = false,
 }: {
   title?: ReactNode;
   icon?: IconName;
@@ -777,6 +813,12 @@ export function StepCard({
     /** A button beside Done, before it (e.g. Undo). */
     extra?: ReactNode;
   };
+  /**
+   * When the work moves to this section it lands with its top just under the sticky head, however
+   * short it is at that moment — the house is still asking when the stay's Done goes there, and
+   * centred it grew down the page with the stay still showing above it (2026-10-28).
+   */
+  revealAtTop?: boolean;
 }) {
   const { n, met, done, ticked, waitsFor } = useFlowCard(flow, flowAfter, flowAfterOnly);
   const ctx = useContext(FlowCtx);
@@ -831,6 +873,7 @@ export function StepCard({
         .join(" ")}
       id={flow ? anchorFor(flow) : id}
       data-flow={flow}
+      data-reveal={revealAtTop ? "top" : undefined}
       style={style}
     >
       {title ? (
@@ -1995,6 +2038,67 @@ export function Overlay({ children }: { children: ReactNode }) {
     setHost(document.querySelector<HTMLElement>("[data-ds-overlays]") ?? document.body);
   }, []);
   return host ? createPortal(children, host) : null;
+}
+
+/**
+ * A pop-up over the work column only (2026-10-28, operator: "a pop up which blurs the screen on the
+ * left and not the right side, show the page there"). The booking file on the right stays clear and
+ * live — a room picked by hand opens its bill there — while the page on the left is dimmed and
+ * blurred and holds still. Close, Escape or a press on the blurred page closes it; a dialog opened
+ * from inside it stands above it and takes Escape first.
+ */
+export function WorkPopup({
+  open,
+  title,
+  onClose,
+  acts,
+  children,
+}: {
+  open: boolean;
+  title: ReactNode;
+  onClose: () => void;
+  acts?: ReactNode;
+  children: ReactNode;
+}) {
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      if (document.querySelector(".scrim.open")) return;
+      closeRef.current();
+    };
+    window.addEventListener("keydown", onKey);
+    const html = document.documentElement;
+    const before = html.style.overflow;
+    html.style.overflow = "hidden";
+    panelRef.current?.focus({ preventScroll: true });
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      html.style.overflow = before;
+    };
+  }, [open]);
+  if (!open) return null;
+  return (
+    <Overlay>
+      <div className="work-scrim" onMouseDown={(e) => e.target === e.currentTarget && closeRef.current()}>
+        <div className="work-panel" role="dialog" aria-modal="true" aria-label={typeof title === "string" ? title : undefined} tabIndex={-1} ref={panelRef}>
+          <div className="work-panel-head">
+            <h3>{title}</h3>
+            <span className="work-panel-acts">
+              {acts}
+              <Button kind="quiet" compact icon="x" onClick={() => closeRef.current()}>
+                Close
+              </Button>
+            </span>
+          </div>
+          {children}
+        </div>
+      </div>
+    </Overlay>
+  );
 }
 
 export function DsDialog({

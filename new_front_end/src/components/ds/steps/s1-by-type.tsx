@@ -212,6 +212,12 @@ export function RoomsByType({
   const span = (lo: number, hi: number) => (hi < lo ? [] : Array.from({ length: hi - lo + 1 }, (_, i) => lo + i));
   /** green — the type alone covers the booking; amber — some, fewer than asked; red — none. */
   const freeTone = (n: number) => (n <= 0 ? "none" : n < numberOfRooms ? "few" : "plenty");
+  // The words sit on the number itself (2026-10-28, operator: "the words on top is not something the
+  // user will see, keep the words near the numbers short but understandable"): "6 free", "only 1
+  // free" when the type alone cannot cover the booking, "none free".
+  const freeWords = (n: number) => (n <= 0 ? "none free" : n < numberOfRooms ? `only ${n} free` : `${n} free`);
+  const freeMeans = (n: number) =>
+    n <= 0 ? "" : n < numberOfRooms ? ` — fewer than the ${plural(numberOfRooms, "room")} this booking needs` : ` — enough for all ${plural(numberOfRooms, "room")}`;
   const shut = (name: string, t: string, d: string) =>
     freeOn(t, d) === 0
       ? `No ${name} free on ${fmtDay(d)}`
@@ -262,9 +268,10 @@ export function RoomsByType({
     const canChoose = editable && (choices.length > 1 || (o.value == null && choices.length > 0));
     return (
       <div className={`bt-cell${o.value ? " picked" : ""}${over ? " over" : ""}`}>
-        <span className={`bt-free ${freeTone(o.free)}`} title={o.freeTitle}>
-          {o.free}
+        <span className={`bt-free ${freeTone(o.free)}`} title={`${o.freeTitle}${freeMeans(o.free)}`}>
+          {freeWords(o.free)}
         </span>
+        {o.freeOnly ? null : <span className="bt-take">take</span>}
         {o.freeOnly ? null : canChoose ? (
           <select
             className={`bt-pick${o.value == null ? " varies" : ""}`}
@@ -297,22 +304,6 @@ export function RoomsByType({
 
   return (
     <div className="by-type">
-      <p className="bt-key">
-        <span>
-          <b className="bt-free plenty">6</b> how many of that type are free:
-        </span>
-        <span>
-          <b className="ok-ink">green</b> enough for all {plural(numberOfRooms, "room")}
-        </span>
-        <span>
-          <b className="warn-ink">amber</b> fewer than {numberOfRooms}
-        </span>
-        <span>
-          <b className="stop-ink">red</b> none
-        </span>
-        <span className="bt-key-sep">The box beside it is how many to take.</span>
-        {oneNight ? null : <span>Under Every night, free for the whole stay.</span>}
-      </p>
       <div className="bt-scroll">
       <table className="table compact house-types by-type-grid">
         <thead>
@@ -320,8 +311,10 @@ export function RoomsByType({
             <th>
               Type
               <Help label="About the counts">
-                Pick how many rooms of each type the guests need — for every night at once, or night by night. A box offers only what
-                can stand: never more than is free, and never more than the rooms the booking still needs that night. The system
+                Pick how many rooms of each type the guests need — for every night at once, or night by night. Beside each type is how
+                many are free: green when that type alone has enough for the booking, amber (&ldquo;only&rdquo;) when it has fewer, red
+                when none are free; under Every night, free for the whole stay. A box offers only what can stand: never more than is
+                free, and never more than the rooms the booking still needs that night. The system
                 chooses the rooms, one room for each guest&rsquo;s whole stay, and keeps them until Arrival, where the room numbers are
                 confirmed.
               </Help>
@@ -355,7 +348,7 @@ export function RoomsByType({
                     title={left === 0 ? "Every room this night is picked" : left > 0 ? `${plural(left, "room")} still to pick` : `${-left} too many`}
                   >
                     {tot === numberOfRooms ? "✓ " : ""}
-                    {tot}/{numberOfRooms}
+                    {tot} of {numberOfRooms} picked
                   </span>
                 </th>
               );
@@ -409,7 +402,7 @@ export function RoomsByType({
       </div>
       {full.length ? (
         <p className="bt-full">
-          <span className="bt-free none">0</span> Nothing free on these nights: {full.map((t) => t.name).join(" · ")}
+          <span className="bt-free none">none free</span> on these nights: {full.map((t) => t.name).join(" · ")}
         </p>
       ) : null}
 

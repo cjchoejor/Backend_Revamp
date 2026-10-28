@@ -13,7 +13,6 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button, Chip, Icon } from "@/design-system";
@@ -67,6 +66,7 @@ import {
   useOpenOtherWay,
   useOpenFileTab,
   useFlowUnsaved,
+  WorkPopup,
 } from "./kit";
 import { AddReturnStay, TripStays } from "@/components/ds/workspace/return-stay";
 import { enumerateNights, useRoomSelection } from "./use-room-selection";
@@ -183,8 +183,6 @@ export function S1Inquiry({
     queryFn: () => listRooms(session!),
     enabled: !!session,
   });
-  // The room tool spans the canvas under the form; the house card (right column) renders into it.
-  const [toolSlot, setToolSlot] = useState<HTMLElement | null>(null);
 
   return (
     <StepCanvas past={past}>
@@ -209,10 +207,7 @@ export function S1Inquiry({
           editable={editable}
           duplicates={(inquiryRec?.duplicateFlags ?? []).length}
           catalog={rooms.data?.items ?? []}
-          toolSlot={toolSlot}
         />
-        {/* The room table lands here, right under the house that opens it. */}
-        <div ref={setToolSlot} style={{ display: "contents" }} />
         <WrapUp
           entry={entry}
           editable={editable}
@@ -911,14 +906,12 @@ function TheHouse({
   editable,
   duplicates,
   catalog,
-  toolSlot,
 }: {
   entry: EntryDetail;
   past: boolean;
   editable: boolean;
   duplicates: number;
   catalog: Catalog;
-  toolSlot: HTMLElement | null;
 }) {
   const { session } = useSession();
   const refresh = useRefreshEntry(entry.id);
@@ -1183,6 +1176,7 @@ function TheHouse({
     },
     onSuccess: async () => {
       toast.success("The rooms are chosen and on record");
+      setToolOpen(false);
       refresh();
       await goToWrap();
     },
@@ -1377,17 +1371,17 @@ function TheHouse({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reask, ask.isPending, session]);
 
+  // The room-number table opens as a pop-up over the work column, the booking file left clear
+  // (2026-10-28, operator: "a pop up which blurs the screen on the left and not the right side, show
+  // the page there") — a room picked by hand opens its bill in the file beside it.
   const [toolOpen, setToolOpen] = useState(false);
-  const toolRef = useRef<HTMLDivElement | null>(null);
-  const openTool = () => {
-    setToolOpen(true);
-    requestAnimationFrame(() =>
-      toolRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }),
-    );
+  const openTool = () => setToolOpen(true);
+  // Closing it without a pick saved by number goes back to picking by type, where it came from.
+  const closeTool = () => {
+    setToolOpen(false);
+    if (!savedByNumber) setMode("TYPE");
   };
-  const variedSaved =
-    !!savedOption && "perNight" in savedOption && sel.nightsDiffer;
-  const showTool = hasResults && !past && !byTypeMode && (toolOpen || variedSaved);
+  const showTool = hasResults && !past && !byTypeMode && toolOpen;
 
   const takeReason = !editable
     ? null
@@ -1419,6 +1413,7 @@ function TheHouse({
         flow="house"
         flowAfter="stay"
         flowAfterOnly
+        revealAtTop
         title={
           <>
             {hasResults || entry.checkInDate ? `The house · ${range}` : "The house"}
@@ -1691,34 +1686,48 @@ function TheHouse({
         )}
       </StepCard>
 
-      {showTool && toolSlot
-        ? createPortal(
-            <div ref={toolRef} onPointerDownCapture={markHandPick} onClickCapture={markHandPick} onKeyDownCapture={markHandPick}>
-              <WhichRooms
-                entry={entry}
-                rows={rows}
-                perDate={perDate}
-                displayNights={displayNights}
-                numberOfRooms={numberOfRooms}
-                sel={sel}
-                catalog={catalog}
-                stale={stale}
-                saving={seal.isPending}
-                onSave={() => {
-                  const p = sel.payload();
-                  sel.submittedRef.current = sel.currentCanon;
-                  seal.mutate(p);
-                }}
-                justSaved={seal.isSuccess}
-                bill={picked.length ? bill.pricing : null}
-                isGm={isGm}
-                onClose={() => setToolOpen(false)}
-                onReleased={() => ask.mutate()}
-              />
-            </div>,
-            toolSlot,
-          )
-        : null}
+      <WorkPopup
+        open={showTool}
+        title={`Pick every room by number · ${plural(numberOfRooms, "room")} for ${plural(displayNights.length, "night")}`}
+        onClose={closeTool}
+        acts={
+          <Button
+            kind="quiet"
+            compact
+            onClick={() => {
+              setToolOpen(false);
+              setMode("TYPE");
+            }}
+          >
+            Pick by room type instead
+          </Button>
+        }
+      >
+        <div onPointerDownCapture={markHandPick} onClickCapture={markHandPick} onKeyDownCapture={markHandPick}>
+          <WhichRooms
+            entry={entry}
+            rows={rows}
+            perDate={perDate}
+            displayNights={displayNights}
+            numberOfRooms={numberOfRooms}
+            sel={sel}
+            catalog={catalog}
+            stale={stale}
+            saving={seal.isPending}
+            onSave={() => {
+              const p = sel.payload();
+              sel.submittedRef.current = sel.currentCanon;
+              seal.mutate(p);
+            }}
+            justSaved={seal.isSuccess}
+            bill={picked.length ? bill.pricing : null}
+            isGm={isGm}
+            onClose={closeTool}
+            popup
+            onReleased={() => ask.mutate()}
+          />
+        </div>
+      </WorkPopup>
     </>
   );
 }
@@ -1741,6 +1750,7 @@ function WhichRooms({
   isGm,
   onClose,
   onReleased,
+  popup = false,
 }: {
   entry: EntryDetail;
   rows: RoomStatusRow[];
@@ -1758,6 +1768,8 @@ function WhichRooms({
   isGm: boolean;
   onClose: () => void;
   onReleased: () => void;
+  /** Drawn inside the work-column pop-up: no card of its own, no full screen, the pop-up closes it. */
+  popup?: boolean;
 }) {
   const [view, setView] = useState<"table" | "board">("table");
   const [names, setNames] = useState(false);
@@ -1920,10 +1932,7 @@ function WhichRooms({
           ? "Save the room"
           : `Save ${numberOfRooms} rooms`;
 
-  const body = (
-    <StepCard
-      title={`Which rooms · ${plural(numberOfRooms, "room")} for ${plural(displayNights.length, "night")}`}
-      right={
+  const right = (
         <>
           {canBoard ? (
             <Choice
@@ -1946,17 +1955,20 @@ function WhichRooms({
               {names ? "Names shown" : "Show names"}
             </Button>
           ) : null}
-          <Button kind="quiet" compact onClick={() => setFull((v) => !v)}>
-            {full ? "Close the full view" : "Full screen"}
-          </Button>
-          {!full ? (
+          {popup ? null : (
+            <Button kind="quiet" compact onClick={() => setFull((v) => !v)}>
+              {full ? "Close the full view" : "Full screen"}
+            </Button>
+          )}
+          {!full && !popup ? (
             <Button kind="quiet" compact icon="x" onClick={onClose}>
               Hide
             </Button>
           ) : null}
         </>
-      }
-    >
+  );
+  const inner = (
+    <>
       {/* The count and the save on a band of their own under the card's buttons (2026-10-27,
           operator: "make Save the room prominent — it looks misaligned, too close to the button on top"). */}
       <div className="row-acts rooms-saverow">
@@ -2120,6 +2132,18 @@ function WhichRooms({
         onClose={() => setRelease(null)}
         onDone={onReleased}
       />
+    </>
+  );
+  if (popup)
+    return (
+      <div className="which-rooms-pop">
+        <div className="which-rooms-tools">{right}</div>
+        {inner}
+      </div>
+    );
+  const body = (
+    <StepCard title={`Which rooms · ${plural(numberOfRooms, "room")} for ${plural(displayNights.length, "night")}`} right={right}>
+      {inner}
     </StepCard>
   );
   return full ? <div className="fullscreen-layer">{body}</div> : body;
