@@ -1,6 +1,6 @@
-# Room types until Arrival — the plan
+# Room types until Arrival
 
-**Status: stage 1 (the engine) built 2026-10-28 — see "Stage 1, as built" below. Stages 2–6 are still a plan.** Written 2026-10-28 for the operator to check before any of it is built.
+**Status: all six stages built 2026-10-28 — see "Stage 1, as built" and "Stages 2–6, as built" below, with what is not built at the end of the second.** Written 2026-10-28 as a plan, then built the same day.
 
 ## In one paragraph
 
@@ -137,6 +137,72 @@ Read-only. Nothing on the desk, the holds or the bills changed.
   - the example above built on 503 and 504 with throwaway bookings: refused while A and B are fixed, then — A's suite written as a quiet one — C fits by moving A from 503 to 504; A asking about itself stays in 503; the chart unchanged by asking;
   - the money audit at 0 critical. Test data removed.
 - **Today no seal carries booking rooms**, so every answer is the chart's. Quiet rooms begin when stage 2 writes them.
+
+### Stages 2–6, as built (2026-10-28)
+
+**How the rooms are kept.** A booking picked by type carries its booking rooms on the sealed pick (`optionSelected.bookingRooms`), beside the plain per-night room list every other reader uses. Each booking room has a real room behind it on every night. A room is **quiet** — the system's choice, which it may move within its type — while the booking is at Inquiry to Arrival (S1–S5), has no rooms assigned yet, is not in a room move, and is active or parked. Everything else is **fixed**: a room the guest asked for, a room the desk gave, every room of a booking picked by number, and every booking from before today.
+
+**A quiet move** ([quiet-rooms-service.ts](../back_end/src/services/domain/quiet-rooms-service.ts) `relabelEntryRoomsTx`, `applyQuietMoves`) swaps one room id for another, in one transaction, in that booking's pick, its provisional block, its committed hold, its live quotations of the pass (with the room's number inside their priced rooms), its bed plan and its carried-over setup. Traced `BOOKING_ROOMS.QUIET_MOVED`; the room flags are put right afterwards. No new pass, no new quotation, nothing sent. The reservation's frozen terms are not rewritten (reservations are immutable): the voucher names a by-type booking's rooms by type, so they do not show there, and the price is read from the quotation.
+
+**When the rooms are placed**: on every save of a pick by type (`sealBookingRoomsByType`), before every provisional block and committed hold (`ensureQuietPlacement` — the room asked for is followed if it moved), and when the rooms are assigned at Arrival (placed, assigned, then fixed).
+
+**2 Inquiry.** The house card asks how many rooms of each type, night by night (`RoomsByType` in [s1-by-type.tsx](../new_front_end/src/components/ds/steps/s1-by-type.tsx)):
+- one row per type, an "every night" box and one box per night with what is free;
+- a tally per night, red while short and green once complete;
+- a guest's own room added by number, which is fixed;
+- the pick checked by the server as it is typed (`POST /api/entries/:id/availability/by-type/seal` with `preview`), refusals in words and other bookings it would move named;
+- then **Save the rooms** (green), and the page goes on to Wrap up.
+
+"Choose particular rooms instead" keeps the room-number table.
+
+**3 Negotiation.** A quiet room reads "Deluxe Double · room 1" in:
+- the negotiation table and the guest board — the row, the room's tab, every message about it;
+- the folded line, the marked rooms and the priced summary;
+- the booking file's price rows (`GET /api/quotations/:id/price-lines`) and the live preview (`POST …/quotation-preview`).
+
+Every room of a type is numbered in booking order, a guest's own room included (named by its number), so "room 2" stays "room 2" when another room is fixed. The money is unchanged: rates are per type, and the quotation's rows follow their room through a quiet move.
+
+**4 Set up and Reserve.** The holds keep the quiet rooms and may still move them.
+- The hold card reads "Deluxe Double · rooms 1, 2 blocked until …"; the booking header, Booking details and Reserve's facts name them the same way.
+- On the Rooms tab a quiet room offers **Give it this room**: a free room of its type, chosen in place and then fixed (`POST /api/entries/:id/booking-rooms/choose`, L1). It is refused in words for another type, a room someone holds on those nights, or a fixed or assigned room.
+- The room change beside it offers only **Another room type**, as today.
+- The voucher prints "2 × Deluxe Double", and a room the guest asked for by its number.
+
+**5 Arrival.** The rooms are the system's proposal, by number: "The system's rooms for this booking: Deluxe Double · room 1 — Room 204 · Deluxe Double · room 2 — Room 205", with **Confirm and assign the 2 rooms**. A room can be given another of its type first, as at Set up; a change of type is the room change. Once assigned the rooms are fixed and everything is as before.
+
+**6 The rest.**
+- The chart draws a quiet room faded with a dashed edge, and its card says the room is not chosen yet.
+- Dropping a quiet room onto another room of its type on the same nights, with nobody in the way, asks **Give Deluxe Double · room 2 Room 204?** instead of opening a room move ([quiet-room-dialog.tsx](../new_front_end/src/components/ds/rooms/quiet-room-dialog.tsx)).
+- The "another booking is working these rooms" box leaves out a clash the system settles by moving a quiet room, this booking's or another's. It asks the same check the holds run; when the booking does not fit, every clash stays.
+
+**Reads**: `GET /api/entries/:id/booking-rooms` (L1) gives `byType`, `movable`, `atArrival`, and per room its label, its number within the type (`ordinal`) and whether it is quiet. The desk's `useBookingRooms(entry)` ([use-booking-rooms.ts](../new_front_end/src/hooks/use-booking-rooms.ts)) gives the labels before Arrival and the proposal at Arrival.
+
+**Verified** on throwaway bookings on `legphel_pms_dev2`:
+- over HTTP (17 checks):
+  - the labels and their numbers;
+  - the price rows and the live preview by type, the preview's total equal to the quotation's;
+  - a booking holding a quiet room by number being no competition, while two held suites are still a clash;
+  - the voucher's own text: "2 × Deluxe Double · 2 CP · 2 nights total";
+  - a room given at Reserve: fixed, with the priced rooms, the hold, the price and the pass following;
+  - the proposal at Arrival, its confirmation, and no quiet room afterwards;
+- on the desk (22 checks):
+  - Negotiation showing no room number of its rooms, on the step or in the file;
+  - Set up's hold line;
+  - the Rooms tab's choice, its toast, and the page staying put;
+  - the chart's dashed bar, and the drop asking to give the room;
+  - Reserve's names;
+  - Arrival's proposal and confirmation;
+  - no page errors;
+- the earlier quiet-move test (17) and the Inquiry desk test (18) again;
+- the money audit at 0 critical before and after; no room flag wrong. Test data removed.
+
+**Not built, said plainly**:
+- **Any governed walk re-seals the rooms without booking rooms**: a room change (including a change of type), Change configuration at Negotiation (still by number), an extension, a date move, a split, a setup change, a seating repair. Afterwards the booking reads as fixed rooms. Nothing is lost or mis-priced; the system just stops moving its rooms.
+- **Give it this room** lists only rooms free over the room's nights. A room another booking holds as the system's choice is not offered, though the server could move that booking.
+- **The proposal at Arrival** is the quiet rooms as they stand. Assigning places them again first. If another booking took one meanwhile, the room assigned can differ from the one shown, and the assignment's own message does not name the rooms.
+- **On the chart**, only one quiet room dropped on the same nights onto a free room of its type is given in place. A swap, several rooms or other dates still run the room move.
+- The chart's "room not chosen yet" look is to be looked at again with the operator.
+- A voucher already rendered is write-once and keeps its wording.
 
 ### For whoever builds it — where it lands
 
