@@ -63,7 +63,11 @@ import {
   useStepMode,
   words,
   type PaperRef,
-  type StepPane,
+  type ChangeBookingItem,
+  ChangeBookingMenu,
+  StageActs,
+  useFlowUnsaved,
+  useOpenAlsoWay,
   OtherWaysTabs,
   InlineWay,
   ShutWay,
@@ -112,12 +116,6 @@ type EntryContact = { contactPersonName?: string | null; contactPersonPhone?: st
 
 /* ------------------------------------------------------------------ the step */
 
-/**
- * Set up's own tab (2026-10-13, operator: "in stage 3 and 4 can you add the rooms tab we have in s5
- * s6 s7"): the same rooms table, with the same governed change behind a click on a room.
- */
-export const S3_PANES: StepPane[] = [{ key: "rooms", label: "Rooms", cards: [] }];
-
 const ROOMS_LEAD =
   "Who sleeps where, on what plan, with what beds. Click a room to change it — every night is checked again, the booking walks back through Negotiation and the price follows.";
 
@@ -127,7 +125,6 @@ export function S3SetUp({
   parkNow,
   parking,
   goToStep,
-  pane,
 }: {
   entry: EntryDetail;
   past: boolean;
@@ -135,10 +132,7 @@ export function S3SetUp({
   parkNow?: (reason: string) => void;
   parking?: boolean;
   goToStep: (n: number) => void;
-  pane?: string | null;
 }) {
-  // A pane is hidden, never unmounted — a half-typed reason survives a look at the rooms.
-  const at = (k: string | null) => ((pane ?? null) === k ? undefined : true);
   const { session } = useSession();
   const router = useRouter();
   const refresh = useRefreshEntry(entry.id);
@@ -247,9 +241,52 @@ export function S3SetUp({
     onError: (e) => toastRefusal(e, "A new pass could not be opened"),
   });
 
+  /**
+   * Change booking (2026-10-28, Set up in the stage layout — as at Negotiation): the ways the booking
+   * itself is changed, from the end of the step's line. Moving a room is the Rooms tab's table, which
+   * the stage layout has no tab for; it opens in the middle of the screen.
+   */
+  const openAlsoWay = useOpenAlsoWay();
+  const notNow = entry.status === "PARKED" ? "Resume the booking first" : "Not possible on this booking now";
+  const changeItems: ChangeBookingItem[] = past
+    ? []
+    : [
+        {
+          key: "rooms",
+          label: "Move a room",
+          note: "Into another free room on the same dates. Every night is checked again and the price follows.",
+          onSelect: editable ? () => openAlsoWay("rooms") : undefined,
+          reason: editable ? undefined : notNow,
+        },
+        {
+          key: "renegotiate",
+          label: "Renegotiate the price",
+          note: "Back to Negotiation for a fresh quotation. The hold is released and the proforma replaced.",
+          onSelect: editable && elevated ? () => openAlsoWay("renegotiate") : undefined,
+          reason: !editable ? notNow : elevated ? undefined : "The FOM's call",
+        },
+        {
+          key: "reconfigure",
+          label: "Change the dates, rooms or guests",
+          note: "Back to Inquiry to ask the house again. The hold is released and the rooms are chosen again.",
+          onSelect: editable && elevated ? () => openAlsoWay("reconfigure") : undefined,
+          reason: !editable ? notNow : elevated ? undefined : "The FOM's call",
+        },
+        {
+          key: "cancel",
+          label: "Cancel booking",
+          note: "The booking ends. The hold is released, the proforma withdrawn, the disclosed charge kept and the rest of the advance refunded.",
+          onSelect: entry.status === "ACTIVE" && editable ? () => openAlsoWay("cancel") : undefined,
+          reason: entry.status === "ACTIVE" && editable ? undefined : notNow,
+          danger: true,
+        },
+      ];
+
   return (
     <StepCanvas past={past}>
-      <div className="pane" hidden={at(null)}>
+      <StageActs>
+        <ChangeBookingMenu items={changeItems} />
+      </StageActs>
       <PartiesCard entry={entry} inq={inq} partyName={partyName} model={savedModel ?? model} modelSaved={!!savedModel} status={status} />
 
       <BillingModelCard
@@ -281,6 +318,7 @@ export function S3SetUp({
         current={currentProforma}
         status={status}
         passStart={passStart}
+        answered={answered}
         onChanged={changed}
       />
 
@@ -324,7 +362,8 @@ export function S3SetUp({
           entry.status === "ACTIVE" && editable
             ? {
                 key: "cancel",
-                label: "Cancel",
+                label: "Cancel booking",
+                inBar: false,
                 content: (
                   <InlineWay
                     render={() => (
@@ -360,6 +399,7 @@ export function S3SetUp({
             ? {
                 key: "renegotiate",
                 label: "Renegotiate the price",
+                inBar: false,
                 content: elevated ? (
                   <InlineWay
                     render={() => (
@@ -384,7 +424,8 @@ export function S3SetUp({
           editable
             ? {
                 key: "reconfigure",
-                label: "Change the dates or rooms",
+                label: "Change the dates, rooms or guests",
+                inBar: false,
                 content: elevated ? (
                   <InlineWay
                     render={() => (
@@ -392,7 +433,7 @@ export function S3SetUp({
                         open
                         onClose={() => undefined}
                         busy={reentryM.isPending}
-                        title="Change the dates or rooms"
+                        title="Change the dates, rooms or guests"
                         caseLines={["A new pass opens at Inquiry"]}
                         lead="This pass is sealed as it stands. The committed hold is released and the house is asked again for the new dates or rooms."
                         confirmLabel="Open a new pass"
@@ -406,13 +447,11 @@ export function S3SetUp({
                 ),
               }
             : null,
+          // The Rooms tab's table (2026-10-13), opened from Change booking's "Move a room" — wide,
+          // since the change opens a rooms-by-night table and the room's price table inside it.
+          editable ? { key: "rooms", label: "Move a room", inBar: false, wide: true, content: <RoomsTableCard entry={entry} title="The rooms" lead={ROOMS_LEAD} /> } : null,
         ]}
       />
-      </div>
-
-      <div className="pane" hidden={at("rooms")}>
-        <RoomsTableCard entry={entry} title="The rooms" lead={ROOMS_LEAD} />
-      </div>
     </StepCanvas>
   );
 }
@@ -457,7 +496,11 @@ function PartiesCard({
   const billedTo =
     model === "GUEST_PAY" ? guest : model === "DIRECT_BILL" || model === "TOUR_OPERATOR_VOUCHER" ? (account ?? "the account") : words(model);
   return (
-    <StepCard flow="parties" title="The three parties">
+    <StepCard
+      flow="parties"
+      title="The three parties"
+      summary={`${guest} · booked by ${partyName ?? (bookerKind === "Walk-in" ? "walk-in" : "the guest, direct")} · billed to ${billedTo}`}
+    >
       <div className="grid3">
         <FactBox
           k="Guest"
@@ -527,12 +570,15 @@ function BillingModelCard({
     onError: (e) => toastRefusal(e, "The billing model could not be set"),
   });
   const dirty = !savedModel || model !== savedModel;
+  // A payer changed and not saved keeps the section open, and holds the move (2026-10-28).
+  useFlowUnsaved("billing-model", editable && !!savedModel && model !== savedModel, "Changes to who pays saved");
   const groupLock =
     group && !GROUP_FRIENDLY.has(model) && !gm ? "for a group, only the account or the voucher — anything else is the GM's call" : null;
   return (
     <StepCard
       flow="billing-model"
       title="Who pays"
+      summary={savedModel ? (BILLING_WORD[savedModel] ?? words(savedModel)) : undefined}
       right={savedModel && !dirty ? <OnRecord /> : null}
       meta={
         <>
@@ -554,6 +600,8 @@ function BillingModelCard({
           <div className="row-acts" style={{ marginTop: 10 }}>
             <Button
               compact
+              // Green once it can be pressed — the act that finishes the section (2026-10-28, as at Inquiry).
+              className={groupLock ? undefined : "go"}
               state={save.isPending ? "working" : groupLock ? "inert" : "default"}
               title={groupLock ?? undefined}
               workingLabel="Saving…"
@@ -676,6 +724,7 @@ function HoldCard({
       flow="hold"
       flowAfter="proforma"
       title="The committed hold"
+      summary={hold ? `${rooms} held until ${fmtDateTime(hold.expiresAt, tz)}` : undefined}
       acts={
         past ? undefined : (
           <Live>
@@ -960,6 +1009,7 @@ function TermsCard({ entry, editable, tz, onChanged }: { entry: EntryDetail; edi
       flow="terms"
       flowAfter="billing-model"
       title="Terms disclosed"
+      summary={d ? `The hotel's standard terms · disclosed ${fmtStamp(d.disclosedAt, tz)}` : undefined}
       acts={
         d || past ? undefined : (
           <Live>
@@ -1034,6 +1084,7 @@ function ProformaCard({
   current,
   status,
   passStart,
+  answered,
   onChanged,
 }: {
   entry: EntryDetail;
@@ -1043,6 +1094,8 @@ function ProformaCard({
   current: InvoiceSummary | null;
   status: PaymentStatusSummary | undefined;
   passStart: string | null;
+  /** The guest's answer to this pass's proforma is on record. */
+  answered: boolean;
   onChanged: () => void;
 }) {
   const { session } = useSession();
@@ -1124,6 +1177,14 @@ function ProformaCard({
       // nothing to scroll to (2026-10-06). The empty-state card above always had it.
       flow="proforma"
       flowAfter="terms"
+      // The number is in the title; the line says where the bill stands.
+      summary={[
+        asks,
+        shown.dispatchedAt ? `sent ${fmtStamp(shown.dispatchedAt, tz)}` : "not sent",
+        shown.dispatchedAt ? (answered ? "the guest's answer recorded" : "the guest's answer awaited") : null,
+      ]
+        .filter(Boolean)
+        .join(" · ")}
       title={`Proforma · ${no}${(shown.versionNumber ?? 1) > 1 ? ` · v${shown.versionNumber}` : ""}`}
       icon="file"
       right={asks ? <Chip tone="quiet">{asks}</Chip> : null}

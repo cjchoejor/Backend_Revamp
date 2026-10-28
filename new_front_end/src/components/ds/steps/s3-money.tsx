@@ -166,13 +166,23 @@ export function PaymentPlanCard({
     <Chip tone="warning">not received</Chip>
   );
 
+  // The line the section folds to once the advance is settled (2026-10-28) — the server's figures.
+  const summary = !status
+    ? undefined
+    : status.requiredAmount === 0 && received === 0
+      ? "No advance asked"
+      : status.paidInFull
+        ? `Received ${money(received, cur)} of ${money(status.requiredAmount, cur)}`
+        : status.satisfied
+          ? `Covered by credit · received ${money(received, cur)} of ${money(status.requiredAmount, cur)}`
+          : `Received ${money(received, cur)} of ${money(status.requiredAmount, cur)}`;
   const basis = status?.requirementBasis ?? null;
   const advWindow = status?.advanceWindow ?? null;
   const shortWithPlan =
     !!status && !status.paidInFull && received > 0 && !!plan && (plan.plan !== "FULL" || !!plan.balanceDueAt) && !status.creditExtensionActive;
 
   return (
-    <StepCard flow="money" flowAfter="proforma" title="The payment plan" right={stateChip}>
+    <StepCard flow="money" flowAfter="proforma" title="The payment plan" right={stateChip} summary={summary}>
       {!folio ? (
         <span className="meta">The plan is set once the provisional bill exists — choose the billing model above.</span>
       ) : !status ? (

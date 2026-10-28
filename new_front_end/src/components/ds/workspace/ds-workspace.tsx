@@ -112,7 +112,7 @@ import { InquirySummaryDialog } from "@/components/ds/steps/s1-summary";
 import { StepMoved, type StepMovedNote } from "@/components/ds/workspace/step-moved";
 import { StayDates } from "@/components/ds/stay-dates";
 import { S2Negotiation } from "@/components/ds/steps/s2-negotiation";
-import { S3SetUp, S3_PANES } from "@/components/ds/steps/s3-setup";
+import { S3SetUp } from "@/components/ds/steps/s3-setup";
 import { S4Reserve, S4_PANES } from "@/components/ds/steps/s4-reserve";
 import { S5Arrival } from "@/components/ds/steps/s5-arrival";
 import { S6CheckIn } from "@/components/ds/steps/s6-checkin";
@@ -160,8 +160,20 @@ const NEGOTIATION_SECTIONS: Record<string, string> = {
   table: "Who sleeps where",
   quotation: "The quotation",
 };
-/** The steps drawn in the stage-template layout, with their sections (Inquiry, then Negotiation). */
-const STEP_SECTIONS: Partial<Record<number, Record<string, string>>> = { 1: INQUIRY_SECTIONS, 2: NEGOTIATION_SECTIONS };
+/**
+ * Set up's six sections (2026-10-28, operator: "now lets do the same for stage 3"), in the order the
+ * backend takes them: who is who, who pays, the terms, the bill, the money, then the rooms held.
+ */
+const SETUP_SECTIONS: Record<string, string> = {
+  parties: "The three parties",
+  "billing-model": "Who pays",
+  terms: "Cancellation terms",
+  proforma: "The proforma",
+  money: "The payment plan",
+  hold: "The committed hold",
+};
+/** The steps drawn in the stage-template layout, with their sections (Inquiry, Negotiation, Set up). */
+const STEP_SECTIONS: Partial<Record<number, Record<string, string>>> = { 1: INQUIRY_SECTIONS, 2: NEGOTIATION_SECTIONS, 3: SETUP_SECTIONS };
 const isTopLayoutStep = (n: number) => !!STEP_SECTIONS[n];
 /**
  * Sections made from another one (2026-10-27): the rooms are chosen for the stay, the quotation is the
@@ -821,11 +833,10 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
 
   const preconds0: Precondition[] = sealed
     ? []
-    : confirmStepActive || setupStepActive
-      ? [
-          ...confirmReadiness(entry, { paymentSatisfied, totalReceived, requiredAmount, communications }),
-          ...(confirmStepActive ? reserveExtras.map((label) => ({ label, met: false })) : []),
-        ]
+    : confirmStepActive
+      ? [...confirmReadiness(entry, { paymentSatisfied, totalReceived, requiredAmount, communications }), ...reserveExtras.map((label) => ({ label, met: false }))]
+      : setupStepActive
+        ? withUnsaved(confirmReadiness(entry, { paymentSatisfied, totalReceived, requiredAmount, communications }), unsavedSections)
       : inquiryStepActive
         ? withUnsaved(s1Readiness(entry), unsavedSections)
         : quoteStepActive
@@ -865,8 +876,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   // The step's numbered to-do: the items that have a section on this page, in the order they are
   // done. The rail prints it, and each card takes its own number from it (2026-09-25).
   // Stage 1 is laid out as five numbered sections (2026-10-10), so it numbers by section; so does
-  // Negotiation, in its two (2026-10-27).
-  const sectioned = inquiryStepActive || quoteStepActive;
+  // Negotiation, in its two (2026-10-27), and Set up, in its six (2026-10-28).
+  const sectioned = inquiryStepActive || quoteStepActive || setupStepActive;
   const derived = STEP_DERIVED[viewing] ?? {};
   const flowItems: FlowItem[] = numberFlow(preconds, { bySection: sectioned });
   const inherited = preconds.filter((p) => !p.card);
@@ -877,6 +888,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   // requests · Notes · Documents · History — always on the right, and the step's other ways in
   // the fixed bar at the foot. The other steps keep the rail, the tabs and the side panel.
   // Negotiation joined it on 2026-10-27 (operator: "lets move on to stage 2 and do the same changes").
+  // Set up joined it on 2026-10-28 (operator: "now lets do the same for stage 3"); its Rooms tab became
+  // Change booking's "Move a room".
   const topLayout = isTopLayoutStep(viewing);
   const sections = STEP_SECTIONS[viewing] ?? {};
   const goToCard = (card?: string) => {
@@ -912,7 +925,6 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     if (sealed) return [];
     if (step.key === "stay") return S7_PANES;
     if (step.key === "checkin") return S6_PANES;
-    if (step.key === "setup") return S3_PANES;
     if (step.key === "confirm") return S4_PANES;
     if (step.key === "checkout") return S8_PANES;
     return [];
@@ -1006,9 +1018,12 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
       </Button>
     );
   } else if (setupStepActive) {
-    moveReady = ready;
+    // Green once it can be pressed, as at Inquiry and Negotiation; a section with changes not saved
+    // holds it (2026-10-28).
+    const ok = ready && !preconds.some((p) => p.unsaved);
+    moveReady = ok;
     forward = (
-      <Button state={ready ? "default" : "inert"} reason={ready ? "the booking stays at Set up until you reserve it" : firstNote} onClick={() => setSelected(4)}>
+      <Button className="go" state={ok ? "default" : "inert"} reason={ok ? "the booking stays at Set up until you reserve it" : firstNote} onClick={() => setSelected(4)}>
         Move to Reserve
       </Button>
     );
@@ -1116,7 +1131,6 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
             parkNow={parkable ? parkNow : undefined}
             parking={parkMutation.isPending}
             goToStep={viewingPast ? NOOP : stableSetSelected}
-            pane={pane}
           />
         );
       case "confirm":

@@ -1040,6 +1040,13 @@ export function ActionRow({
 }) {
   const held = !!heldBy;
   const quiet = useQuietScreen();
+  // A folded section opens before it is gone to (2026-10-28 — Set up folds its finished sections,
+  // and a proforma generated but not sent folds while the money still waits on sending it).
+  const flow = useStepFlow();
+  const goThere = (card: string) => {
+    if (flow.on) flow.open(card);
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => goToStepCard(card)));
+  };
   const button = (
     <Button
       kind={kind}
@@ -1068,7 +1075,7 @@ export function ActionRow({
         <span className="held">
           <span className="why">{heldBy}</span>
           {goTo ? (
-            <Button kind="quiet" compact onClick={() => goToStepCard(goTo)}>
+            <Button kind="quiet" compact onClick={() => goThere(goTo)}>
               {goToLabel ?? "Take me there"}
             </Button>
           ) : null}
@@ -1247,6 +1254,8 @@ export type OtherWayTab = {
   content: ReactNode;
   /** false: no button of its own in the bar — it opens from elsewhere (the step line's "Change booking"). */
   inBar?: boolean;
+  /** A wide pop-up — for a table, such as Set up's rooms (2026-10-28). */
+  wide?: boolean;
 };
 
 /**
@@ -1456,7 +1465,7 @@ function AlsoBarWays({ live, slots }: { live: OtherWayTab[]; slots: AlsoBarSlots
             if (e.target === e.currentTarget) go(null);
           }}
         >
-          <div className="also-panel" role="dialog" aria-modal="true" aria-label={current?.label} tabIndex={-1} ref={panelRef}>
+          <div className={`also-panel${current?.wide ? " wide" : ""}`} role="dialog" aria-modal="true" aria-label={current?.label} tabIndex={-1} ref={panelRef}>
             <div className="also-panel-head">
               <h3>{current?.label}</h3>
               <Button kind="quiet" compact onClick={() => go(null)}>
