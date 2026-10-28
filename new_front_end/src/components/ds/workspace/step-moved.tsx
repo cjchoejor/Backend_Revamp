@@ -16,8 +16,10 @@ import { Overlay } from "@/components/ds/steps/kit";
 
 export type StepMovedNote = {
   title: string;
-  from: string;
-  to: string;
+  /** The step it went from and the one it is at — left out for a note that is not a step move
+   *  (the rooms blocked, 2026-10-28). */
+  from?: string;
+  to?: string;
   /** Who and which booking, under the title. */
   who?: string;
   /** What the desk does next, one short line. */
@@ -52,11 +54,13 @@ export function StepMoved({ note, onClose }: { note: StepMovedNote | null; onClo
             </svg>
           </span>
           <h2>{note.title}</h2>
-          <div className="sm-path">
-            <span className="sm-from">{note.from} ✓</span>
-            <span aria-hidden>→</span>
-            <span className="sm-to">now at {note.to}</span>
-          </div>
+          {note.from && note.to ? (
+            <div className="sm-path">
+              <span className="sm-from">{note.from} ✓</span>
+              <span aria-hidden>→</span>
+              <span className="sm-to">now at {note.to}</span>
+            </div>
+          ) : null}
           {note.who ? <p className="sm-who">{note.who}</p> : null}
           {note.next ? <p className="sm-next">{note.next}</p> : null}
           <div className="sm-bar" aria-hidden>

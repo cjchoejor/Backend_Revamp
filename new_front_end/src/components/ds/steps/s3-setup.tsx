@@ -84,6 +84,7 @@ import { CompetingClaimsCard, passesOf, roomsWord, useRoomNumbers } from "./s2-s
 import { PaymentPlanCard } from "./s3-money";
 import { Help, HelpHere } from "@/components/ds/help";
 import { DateInput } from "@/components/ds/date-input";
+import { StepMoved, type StepMovedNote } from "@/components/ds/workspace/step-moved";
 
 /* ------------------------------------------------------------------ vocabulary */
 
@@ -698,6 +699,21 @@ function HoldCard({
    */
   const flow = useStepFlow();
   const [blockedUntil, setBlockedUntil] = useState<string | null>(null);
+  /**
+   * Once the block time is settled, the middle of the screen says so (2026-10-28, operator: "after
+   * the user clicks Keep this time, or sets a block time, show a message saying these rooms are
+   * blocked for the dates for this many hours").
+   */
+  const [blockedNote, setBlockedNote] = useState<StepMovedNote | null>(null);
+  const sayBlocked = (untilIso: string | null, whose: "HOUSE" | "BOOKING" | null) => {
+    if (!untilIso) return;
+    const nights = entry.checkInDate && entry.checkOutDate ? nightsBetween(entry.checkInDate, entry.checkOutDate) : null;
+    setBlockedNote({
+      title: `${count > 1 ? "The rooms are" : "The room is"} blocked`,
+      who: `${rooms} · ${fmtRange(entry.checkInDate, entry.checkOutDate)}${nights ? ` · ${plural(nights, "night")}` : ""}`,
+      next: `Blocked for ${forHowLong(untilIso, Date.now())} — until ${fmtDateTime(untilIso, tz)}${whose === "BOOKING" ? ", the time set for this booking" : whose === "HOUSE" ? ", the hotel's time" : ""}. If the booking is not reserved by then, ${count > 1 ? "they go" : "it goes"} back on sale.`,
+    });
+  };
   useEffect(() => {
     if (!blockAsk) return;
     if (flow.on) flow.open("hold");
@@ -722,8 +738,8 @@ function HoldCard({
       return placeCommittedHold(session!, entry.id, { roomId: anchorRoomId, commercialJustification: why.trim() });
     },
     onSuccess: (h) => {
-      toast.success(`The rooms are blocked until ${fmtDateTime(h.expiresAt, tz)}`);
       setPlaceOpen(false);
+      sayBlocked(h.expiresAt, ownTime ? "BOOKING" : "HOUSE");
       onChanged();
       finish();
     },
@@ -899,7 +915,14 @@ function HoldCard({
           help="The payment blocked the rooms. They stay blocked until this time; if the booking is not reserved by then, they go back on sale."
           footer={
             <>
-              <Button kind="secondary" onClick={() => setBlockedUntil(null)}>
+              <Button
+                kind="secondary"
+                onClick={() => {
+                  const until = blockedUntil;
+                  setBlockedUntil(null);
+                  sayBlocked(until, ownTime ? "BOOKING" : "HOUSE");
+                }}
+              >
                 Keep this time
               </Button>
               <Button
@@ -931,6 +954,9 @@ function HoldCard({
           holdLive={!!hold || !!blockAsk?.until}
           onClose={() => setTimeOpen(false)}
           onChanged={onChanged}
+          onSet={(until, whose, live) => {
+            if (live) sayBlocked(until, whose);
+          }}
         />
       ) : null}
       <ReasonDialog
@@ -945,8 +971,32 @@ function HoldCard({
         placeholder="why the rooms are freed"
         onConfirm={(r) => release.mutate(r)}
       />
+      <StepMoved note={blockedNote} onClose={() => setBlockedNote(null)} />
     </StepCard>
   );
+}
+
+/**
+ * "1 hour", "2 hours 30 minutes", "3 days 4 hours" — how long from now to a moment. Over an hour it
+ * is rounded to 5 minutes: a time typed without seconds, three hours on, read "2 hours 59 minutes".
+ * The exact moment is printed beside it.
+ */
+function forHowLong(untilIso: string, nowMs: number): string {
+  const exact = Math.max(0, Math.round((new Date(untilIso).getTime() - nowMs) / 60_000));
+  if (exact < 60) return plural(exact, "minute");
+  const mins = Math.round(exact / 5) * 5;
+  const hours = Math.floor(mins / 60);
+  const rest = mins % 60;
+  if (hours < 48) return rest ? `${plural(hours, "hour")} ${plural(rest, "minute")}` : plural(hours, "hour");
+  const days = Math.floor(hours / 24);
+  const h = hours % 24;
+  return h ? `${plural(days, "day")} ${plural(h, "hour")}` : plural(days, "day");
+}
+
+/** Nights between two stay dates (both stored at the start of their day). */
+function nightsBetween(a: string, b: string): number | null {
+  const n = Math.round((new Date(b).getTime() - new Date(a).getTime()) / 86_400_000);
+  return n > 0 ? n : null;
 }
 
 /**
@@ -966,6 +1016,7 @@ function HoldTimeDialog({
   holdLive,
   onClose,
   onChanged,
+  onSet,
 }: {
   entry: EntryDetail;
   tz: string;
@@ -975,6 +1026,8 @@ function HoldTimeDialog({
   holdLive: boolean;
   onClose: () => void;
   onChanged: () => void;
+  /** What the block now runs to, whose time that is, and whether a block stands now. */
+  onSet?: (until: string | null, whose: "BOOKING" | "HOUSE", live: boolean) => void;
 }) {
   const { session } = useSession();
   const seed = hotelFormParts(currentIso ?? new Date(Date.now() + 60 * 60_000).toISOString(), tz);
@@ -986,13 +1039,18 @@ function HoldTimeDialog({
     mutationFn: (clear: boolean) =>
       setCommittedHoldExpiry(session!, entry.id, clear ? { clear: true, reason: why.trim() || undefined } : { date, time, reason: why.trim() || undefined }),
     onSuccess: (out) => {
-      toast.success(
-        out.source === "BOOKING"
-          ? `The rooms are blocked until ${fmtDateTime(out.heldUntil, tz)}${out.holdUpdated ? "" : " — from the moment they are blocked"}`
-          : "Back to the hotel's time",
-        out.note ? { description: out.note, duration: 8000 } : undefined,
-      );
+      // A block standing now is said in the middle of the screen; one still to be placed, or a note
+      // from the server, keeps its toast.
+      if (!out.holdUpdated || out.note) {
+        toast.success(
+          out.source === "BOOKING"
+            ? `The rooms are blocked until ${fmtDateTime(out.heldUntil, tz)}${out.holdUpdated ? "" : " — from the moment they are blocked"}`
+            : "Back to the hotel's time",
+          out.note ? { description: out.note, duration: 8000 } : undefined,
+        );
+      }
       onClose();
+      onSet?.(out.heldUntil, out.source, out.holdUpdated);
       onChanged();
     },
     onError: (e) => toastRefusal(e, "The block time was not changed"),
