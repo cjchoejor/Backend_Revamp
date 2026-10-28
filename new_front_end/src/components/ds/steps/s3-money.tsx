@@ -31,7 +31,7 @@ import { expiryModeForPlanDue, resolveCreditExpiry, type CreditExpiryChoice } fr
 import { fmtDate, fmtDateTime, fmtStamp, money, plural } from "@/lib/ds/format";
 import { STEP_NAMES, stepNoOfStage } from "@/lib/ds/steps";
 import type { AdvancePaymentPlanSummary, EntryDetail, InvoiceSummary, PaymentStatusSummary } from "@/types/api";
-import { ActionRow, Choice, DsDialog, Fact, Facts, Live, SeeRow, StepCard, toastRefusal } from "./kit";
+import { ActionRow, Choice, DsDialog, Fact, Facts, Live, SeeRow, StepCard, toastRefusal, useFinishWhenDone } from "./kit";
 import { hotelLocalToIso, isoToHotelLocal } from "./s2-shared";
 import { Help, HelpHere } from "@/components/ds/help";
 import { DateTimeInput } from "@/components/ds/date-input";
@@ -111,6 +111,12 @@ export function PaymentPlanCard({
   const { session } = useSession();
   const folio = entry.folio ?? null;
   const [open, setOpen] = useState<null | "amount" | "plan" | "pay" | "credit">(null);
+  // Money in, or credit extended, finishes the section once it covers the advance (2026-10-28).
+  const finish = useFinishWhenDone("money");
+  const moneyIn = () => {
+    onChanged();
+    finish();
+  };
 
   const inPayments = (folio?.payments ?? []).filter((p) => /IN/i.test(p.paymentDirection ?? "") && !/OUT|REFUND/i.test(p.paymentDirection ?? ""));
   const reconciled = !!folio?.advancePaymentReconciliationComplete;
@@ -386,10 +392,10 @@ export function PaymentPlanCard({
       {open === "amount" ? <RequirementDialog entry={entry} status={status} onClose={() => setOpen(null)} onDone={onChanged} /> : null}
       {open === "plan" ? <PlanDialog entry={entry} status={status} tz={tz} onClose={() => setOpen(null)} onDone={onChanged} /> : null}
       {open === "pay" && folio ? (
-        <PaymentDialog entry={entry} folioId={folio.id} status={status} currency={cur} onClose={() => setOpen(null)} onDone={onChanged} />
+        <PaymentDialog entry={entry} folioId={folio.id} status={status} currency={cur} onClose={() => setOpen(null)} onDone={moneyIn} />
       ) : null}
       {open === "credit" ? (
-        <CreditDialog entry={entry} status={status} tz={tz} currency={cur} onClose={() => setOpen(null)} onDone={onChanged} />
+        <CreditDialog entry={entry} status={status} tz={tz} currency={cur} onClose={() => setOpen(null)} onDone={moneyIn} />
       ) : null}
     </StepCard>
   );

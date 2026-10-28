@@ -1564,7 +1564,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     const backTo = viewingPast && viewing !== currentOrder ? currentOrder : null;
     return (
       <BackendRailSlotContext.Provider value={railSlot}>
-        <StepFlow items={flowItems} on={!viewingPast && !sealed} fold={sectioned ? "done" : null} derived={derived}>
+        {/* Set up's sections are finished by their own acts — no Done (2026-10-28). */}
+        <StepFlow items={flowItems} on={!viewingPast && !sealed} fold={sectioned ? "done" : null} derived={derived} doneBar={!setupStepActive}>
           {/* Two columns from the topbar down (2026-10-27, operator and the boss, after the template: the
               screen divided in two — the work, its head and its bar on the left, with the bell and the
               signed-in person at the left's top right and the move at its foot on the right; the

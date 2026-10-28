@@ -67,6 +67,7 @@ import {
   ChangeBookingMenu,
   StageActs,
   useFlowUnsaved,
+  useFinishWhenDone,
   useOpenAlsoWay,
   OtherWaysTabs,
   InlineWay,
@@ -557,6 +558,8 @@ function BillingModelCard({
     if (savedModel && !BILLING_WORD[savedModel]) base.push([savedModel, words(savedModel)] as const);
     return base;
   }, [savedModel]);
+  // Setting the payer finishes the section — no Done to press after it (2026-10-28).
+  const finish = useFinishWhenDone("billing-model");
   const save = useMutation({
     mutationFn: () => ensureProvisionalFolio(session!, entry.id, { billingModel: model }),
     onSuccess: () => {
@@ -566,6 +569,7 @@ function BillingModelCard({
         !folio ? "The provisional bill is open — the proforma is generated with it" : savedModel ? "The billing model is changed" : "The billing model is set",
       );
       onChanged();
+      finish();
     },
     onError: (e) => toastRefusal(e, "The billing model could not be set"),
   });
@@ -673,6 +677,7 @@ function HoldCard({
   }).data ?? null;
   const ownTime = entry.holdExpiresAtOverride ?? null;
 
+  const finish = useFinishWhenDone("hold");
   const place = useMutation({
     mutationFn: () => {
       if (!anchorRoomId) throw new Error("Choose the rooms at Inquiry first");
@@ -682,6 +687,7 @@ function HoldCard({
       toast.success(`The rooms are held until ${fmtDateTime(h.expiresAt, tz)}`);
       setPlaceOpen(false);
       onChanged();
+      finish();
     },
     onError: (e) => toastRefusal(e, "The rooms could not be held"),
   });
@@ -991,6 +997,7 @@ function TermsCard({ entry, editable, tz, onChanged }: { entry: EntryDetail; edi
   const [open, setOpen] = useState(false);
   // The terms the rooms were booked on carry from the booking they were split off (2026-10-14).
   const [statement, setStatement] = useState(entry.carryOver?.cancellation?.noShowTreatmentStatement || DEFAULT_NO_SHOW);
+  const finish = useFinishWhenDone("terms");
   const record = useMutation({
     mutationFn: () =>
       recordCancellationDisclosure(session!, entry.id, {
@@ -1001,6 +1008,7 @@ function TermsCard({ entry, editable, tz, onChanged }: { entry: EntryDetail; edi
       toast.success("The terms are on record as disclosed");
       setOpen(false);
       onChanged();
+      finish();
     },
     onError: (e) => toastRefusal(e, "The disclosure could not be recorded"),
   });
@@ -1105,6 +1113,7 @@ function ProformaCard({
   // The proforma is made out to the agency or company when one booked, so it goes to their
   // address, never the traveller's by default (2026-09-18) — the backend applies the same rule.
   const [to, setTo] = useSendTo(entry);
+  const finish = useFinishWhenDone("proforma");
 
   const draft = proformas.find((i) => i.state === "DRAFT") ?? null;
   const sendTarget = draft ?? proformas[0] ?? null;
@@ -1222,7 +1231,7 @@ function ProformaCard({
           The guest&rsquo;s answer
           <Help label="About the answer">Needed before Reserve once the proforma has been sent.</Help>
         </span>
-        <AnswerLine entryId={entry.id} type="PROFORMA_INVOICE" sinceIso={passStart} what="the proforma" tz={tz} />
+        <AnswerLine entryId={entry.id} type="PROFORMA_INVOICE" sinceIso={passStart} what="the proforma" tz={tz} onAnswered={finish} />
       </div>
 
       {proformas.length > 1 ? (

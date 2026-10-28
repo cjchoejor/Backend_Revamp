@@ -130,6 +130,8 @@ type FlowCtxValue = {
   done: (card: string, opts?: { reveal?: boolean; next?: string }) => void;
   /** Sections made from another one — see `StepFlow`'s `derived`. */
   derived: Readonly<Record<string, string>>;
+  /** Whether a finished section offers a Done — see `StepFlow`'s `doneBar`. */
+  doneBar: boolean;
 };
 const FlowCtx = createContext<FlowCtxValue>({
   items: [],
@@ -144,6 +146,7 @@ const FlowCtx = createContext<FlowCtxValue>({
   open: () => {},
   done: () => {},
   derived: {},
+  doneBar: true,
 });
 
 /** The cards of a flow in page order, each once. */
@@ -255,6 +258,7 @@ export function StepFlow({
   fold = null,
   confirm = false,
   derived = NO_DERIVED,
+  doneBar = true,
   children,
 }: {
   items: FlowItem[];
@@ -275,6 +279,12 @@ export function StepFlow({
    * defaults (the stay opens on today, one night, one adult) is not counted as done.
    */
   confirm?: boolean;
+  /**
+   * Whether a finished section offers a Done. Off at Set up (2026-10-28, operator: "it already has
+   * a button named Set the billing model — having to click on Done is just an extra step"): there a
+   * section's own act finishes it, and `useFinishWhenDone` folds it and opens the next.
+   */
+  doneBar?: boolean;
   children: ReactNode;
 }) {
   const [active, setActive] = useState<string | null>(null);
@@ -383,9 +393,9 @@ export function StepFlow({
 
   // The list is rebuilt on every render of the workspace; hold one identity per unchanged list so
   // a card only re-renders when its own number or standing moves.
-  const key = `${on}|${fold}|${confirm}|${Object.entries(derived).join(",")}|${[...confirmed].join(",")}|${current}|${active}|${[...opened].join(",")}|${[...visited].join(",")}|${items.map((i) => `${i.n}${i.met ? "1" : "0"}${i.card}`).join("~")}`;
+  const key = `${on}|${fold}|${confirm}|${doneBar}|${Object.entries(derived).join(",")}|${[...confirmed].join(",")}|${current}|${active}|${[...opened].join(",")}|${[...visited].join(",")}|${items.map((i) => `${i.n}${i.met ? "1" : "0"}${i.card}`).join("~")}`;
   const value = useMemo<FlowCtxValue>(
-    () => ({ items, on, fold: on ? fold : null, confirm, confirmed, current, active, visited, opened, open, done, derived }),
+    () => ({ items, on, fold: on ? fold : null, confirm, confirmed, current, active, visited, opened, open, done, derived, doneBar }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [key, open, done],
   );
@@ -563,6 +573,32 @@ export function FlowProgress({ names, onGo }: { names: Record<string, string>; o
 }
 
 /** The step's flow, for a section that moves the work on by itself (Take it → Wrap up). */
+/**
+ * A section finished by its own act, with no Done to press (Set up, 2026-10-28): call the returned
+ * function once the act has gone through. When the section then reads as done — the booking read
+ * again with what the act wrote — it folds and the next section still to do opens, as Done would.
+ * A section the act did not finish (a part payment) stays open; the wait is let go after a while.
+ */
+export function useFinishWhenDone(card: string): () => void {
+  const flow = useContext(FlowCtx);
+  const { done } = useFlowCard(card);
+  const [waiting, setWaiting] = useState(false);
+  useEffect(() => {
+    if (!waiting) return;
+    if (done) {
+      setWaiting(false);
+      flow.done(card);
+      return;
+    }
+    const t = window.setTimeout(() => setWaiting(false), 8000);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [waiting, done]);
+  return useCallback(() => {
+    if (flow.on) setWaiting(true);
+  }, [flow.on]);
+}
+
 export function useStepFlow() {
   const { on, done, open } = useContext(FlowCtx);
   return { on, done, open };
@@ -747,7 +783,7 @@ export function StepCard({
         ? !!ctx.active && ctx.active !== flow && ctx.visited.has(flow)
         : false);
   // A finished, unfolded section offers Done: fold it and go on to the next one.
-  const canDone = !!flow && !!summary && !!met && !waiting && !folded && !!ctx.fold && !noDoneBar;
+  const canDone = !!flow && !!summary && !!met && !waiting && !folded && !!ctx.fold && !noDoneBar && ctx.doneBar;
   const body = (
     <>
       {status ? <div className="meta" style={{ marginBottom: 8 }}>{status}</div> : null}
@@ -2708,6 +2744,7 @@ export function AnswerLine({
   what,
   tz,
   lockedHint,
+  onAnswered,
 }: {
   entryId: string;
   type: EntryCommunicationType;
@@ -2716,6 +2753,8 @@ export function AnswerLine({
   what: string;
   tz?: string;
   lockedHint?: string | null;
+  /** Called once the answer is on record — Set up's proforma finishes its section on it. */
+  onAnswered?: () => void;
 }) {
   const { session } = useSession();
   const { past } = useStepMode();
@@ -2734,6 +2773,7 @@ export function AnswerLine({
       setWords("");
       setMethod(null);
       refresh();
+      onAnswered?.();
     },
     onError: (e) => toastRefusal(e, "The answer could not be recorded"),
   });
