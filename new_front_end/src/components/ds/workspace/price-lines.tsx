@@ -10,8 +10,10 @@
  * built by the same code that writes the quotation (`lib/quotation-price-lines.ts`), so the tab
  * and the paper cannot disagree. Nothing is added up here.
  *
- * In the narrow booking file the Qty and Rate columns fold under the description ("3 nights ×
- * Nu.2,100.00"), so the table never scrolls sideways (frame.css, `.plines`).
+ * In the narrow booking file the Qty and Rate columns fold into the description's own line
+ * ("Extra bed · 1 × 2 nights × 900.00"), so the table never scrolls sideways and each item takes
+ * one line where it fits (2026-10-28, operator: "can this part be shown in a way that it takes less
+ * space"); a meal plan's spelled-out meals go to the hover there (frame.css, `.plines`).
  */
 import type { QuotationPriceLine } from "@/lib/api/quotations";
 import { money } from "@/lib/ds/format";
@@ -31,6 +33,9 @@ export type PriceLinesFigures = {
 };
 
 const plain = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+// The name without a trailing "(…)" — "Meals · MAP+D (breakfast, dinner)" reads "Meals · MAP+D" in the
+// narrow file, the whole name on hover.
+const shortWhat = (d: string) => d.replace(/\s*\([^()]*\)\s*$/, "") || d;
 
 export function PriceLinesTable({ f, currency, totalLabel = "Total" }: { f: PriceLinesFigures; currency: string; totalLabel?: string }) {
   return (
@@ -49,9 +54,10 @@ export function PriceLinesTable({ f, currency, totalLabel = "Total" }: { f: Pric
         {f.lines.map((l, i) => (
           <tr key={i} className={l.indent ? "pl-sub" : "pl-room"}>
             {f.datesShown ? <td className="pl-dates">{l.indent ? "" : l.dates ?? ""}</td> : null}
-            <td className="pl-desc">
+            <td className="pl-desc" title={shortWhat(l.description) !== l.description ? l.description : undefined}>
               <span className="pl-what">{l.description}</span>
-              {/* Shown only when the Qty and Rate columns are folded away. */}
+              <span className="pl-what-short">{shortWhat(l.description)}</span>
+              {/* Shown only when the Qty and Rate columns are folded away — on the name's own line. */}
               <span className="pl-fold">
                 {!l.indent && f.datesShown && l.dates ? `${l.dates} · ` : ""}
                 {l.qty}

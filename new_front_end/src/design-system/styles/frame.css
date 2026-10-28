@@ -441,6 +441,8 @@
 /* Beats the narrow file's own cell padding (the media rule below), so the indent survives. */
 .ds table.plines tr.pl-sub td.pl-desc:not(.desk-root *) { padding-left: 22px; }
 .ds .plines .pl-fold { display: none; }
+.ds .plines .pl-what-short { display: none; }
+.ds .plines tr.pl-room .pl-what-short { font-weight: 600; color: var(--ink); }
 .ds .pl-foot { display: grid; grid-template-columns: 1fr auto; gap: 4px var(--s4); margin-top: var(--s2); padding: var(--s2) 13px 0 0; border-top: 1px solid var(--line-2); text-align: right; }
 .ds .pl-foot span { color: var(--ink-2); }
 .ds .pl-foot b { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -1598,7 +1600,17 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
    enough for all four (about 640px, a 2,140px window) — measured: four columns need ~540px of card. */
 @media (min-width: 1101px) and (max-width: 2140px) {
   .ds .ws-top .file .plines .pl-qty, .ds .ws-top .file .plines .pl-rate, .ds .ws-top .file .plines .pl-dates { display: none; }
-  .ds .ws-top .file .plines .pl-fold { display: block; margin-top: 1px; font-size: var(--t-meta); color: var(--ink-3); font-weight: 400; }
+  /* one line per item where it fits (2026-10-28): the working beside the name, the meals' long name on hover */
+  .ds .ws-top .file .plines .pl-what { display: none; }
+  .ds .ws-top .file .plines .pl-what-short { display: inline; }
+  .ds .ws-top .file .plines .pl-fold { display: inline; font-size: var(--t-meta); color: var(--ink-3); font-weight: 400; white-space: nowrap; }
+  .ds .ws-top .file .plines .pl-fold:not(:empty)::before { content: " · "; }
+  /* a room's own line is too long to share with its working, so the working sits under it */
+  .ds .ws-top .file .plines tr.pl-room .pl-fold { display: block; white-space: normal; }
+  .ds .ws-top .file .plines tr.pl-room .pl-fold::before { content: none; }
+  .ds .ws-top .file table.plines tr.pl-sub td:not(.desk-root *) { padding-top: 1px; padding-bottom: 1px; }
+  .ds .ws-top .file table.plines tr.pl-room td:not(.desk-root *) { padding-bottom: 2px; }
+  .ds .ws-top .file table.plines tr.pl-sub td.pl-desc:not(.desk-root *) { padding-left: 16px; }
 }
 @media (min-width: 1101px) and (max-width: 1440px) {
   .ds .ws-top .file .ftab { padding: 6px 6px; font-size: var(--t-meta); }
