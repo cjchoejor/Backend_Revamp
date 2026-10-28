@@ -1408,8 +1408,9 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .ws-top .move-dock .move-float .btn:not(.desk-root *)::after { content: "\2192"; margin-left: 10px; font-weight: 700; }
 /* the dock: no height, sticky at the work column's foot, the move floating from it (no bar since 2026-10-28) */
 .ds .ws-top .move-dock:not(.desk-root *) { position: sticky; bottom: 0; height: 0; z-index: 30; }
-/* room under the work for the button while it floats, so the page's last lines can scroll clear of it */
-.ds .ws-top .ws-main:has(.move-float) .canvas:not(.desk-root *) { padding-bottom: 72px; }
+/* room under the work for the button while it floats, so the page's last lines can scroll clear of it —
+   the button (48px) and the line under it (~73px in all) hang 16px off the foot */
+.ds .ws-top .ws-main:has(.move-float) .canvas:not(.desk-root *) { padding-bottom: 104px; }
 @keyframes ds-move-rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .ds .ws-top .move-dock .move-float { animation: none; } }
 
@@ -1563,20 +1564,18 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 /* The next thing to do on a card (2026-10-28) — "send this proforma first". Amber: a step still to take, not a refusal. */
 .ds .notice.next:not(.desk-root *) { display: flex; align-items: center; gap: var(--s3); border: 1px solid var(--warning-line); border-left: 5px solid var(--warning); background: var(--warning-soft); color: var(--ink); padding: var(--s3) var(--s4); border-radius: var(--r-control); font-size: var(--t-base); margin-bottom: var(--s3); }
 .ds .notice.next b { font-weight: 700; }
-/* What was just done in a section, said in the section (2026-10-28 — the rooms blocked): one quiet
-   line under the card's title, open or folded — a lock, the time, a ×. Deliberately not the centred
-   card, which is how a step move is said, and not a panel (operator: "too noisy"). Lights once. */
-.ds .card-notice { margin: 0 0 var(--s2); }
-/* brought into view clear of the sticky head and of the floating move at the column's foot */
-.ds .card-notice .notice.blocked { scroll-margin-top: calc(var(--ws-head-h, 0px) + 72px); scroll-margin-bottom: 104px; }
-.ds .notice.blocked:not(.desk-root *) { display: flex; align-items: center; gap: var(--s2); border-left: 3px solid var(--success); padding: 2px 0 2px var(--s3); color: var(--ink-2); font-size: var(--t-sm); animation: ds-blocked-in 1.6s ease-out 1; border-radius: 0; }
-.ds .notice.blocked > .ic { flex: none; width: 14px; height: 14px; color: var(--success); }
-.ds .notice.blocked .blocked-text { min-width: 0; flex: 1; display: inline-flex; align-items: center; flex-wrap: wrap; gap: 0 4px; }
-.ds .notice.blocked .blocked-text b { color: var(--ink); font-weight: 600; }
-.ds .notice.blocked .blocked-close { flex: none; border: 0; background: transparent; color: var(--ink-3, var(--ink-2)); width: 22px; height: 22px; border-radius: var(--r-control); font-size: 15px; line-height: 1; cursor: pointer; }
-.ds .notice.blocked .blocked-close:hover { background: var(--surface-2); color: var(--ink); }
-@keyframes ds-blocked-in { 0% { background: var(--success-soft); } 100% { background: transparent; } }
-@media (prefers-reduced-motion: reduce) { .ds .notice.blocked:not(.desk-root *) { animation: none; } }
+/* The committed hold in one line (2026-10-28): a lock, the rooms by type, until when, whose time,
+   and Edit for the facts and the acts. Lit for a moment when a block was just placed or moved —
+   in the section, not the centred card (which is how a step move is said). */
+.ds .hold-line:not(.desk-root *) { display: flex; align-items: center; gap: var(--s2); border: 1px solid var(--line); border-left: 3px solid var(--success); border-radius: var(--r-control); padding: 6px var(--s2) 6px var(--s3); font-size: var(--t-base); color: var(--ink-2); }
+.ds .hold-line > .ic { flex: none; width: 15px; height: 15px; color: var(--success); }
+.ds .hold-line .hold-text { min-width: 0; flex: 1; }
+.ds .hold-line .hold-text b { color: var(--ink); font-weight: 600; }
+.ds .hold-line.lapsed { border-left-color: var(--warning); }
+.ds .hold-line.lapsed > .ic { color: var(--warning); }
+.ds .hold-line.lit { animation: ds-hold-lit 1.6s ease-out 1; }
+@keyframes ds-hold-lit { 0% { background: var(--success-soft); } 100% { background: transparent; } }
+@media (prefers-reduced-motion: reduce) { .ds .hold-line.lit { animation: none; } }
 /* The guest's answer, once the paper went out and the answer is still owed (2026-10-28, operator:
    "make it prominent on the page that it needs the guest's answer as well"): a box of its own with
    the warning edge, its heading bold, the act full size — and a flash when a send brings the page here. */
@@ -1631,6 +1630,8 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .rooms-saverow .rooms-count { font-size: var(--t-base); font-weight: 700; }
 .ds .rooms-saverow .btn.btn-primary:not(.desk-root *) { min-width: 160px; }
 .ds .ws-cols .ws-main * { scroll-margin-top: calc(53px + var(--ws-head-h, 0px) + var(--s2)); scroll-margin-bottom: calc(var(--ws-bar-h, 0px) + var(--s2)); }
+/* while the move floats at the column's foot, whatever is gone to stops clear of it (the button and its line, ~90px) */
+.ds .ws-cols .ws-main:has(.move-float) * { scroll-margin-bottom: 104px; }
 
 /* The house card's bill in one line (2026-10-27): the stay's figure and the way to the bill, which
    lives in the booking file under Charges & payments › The price — each night, its rooms, the taxes. */

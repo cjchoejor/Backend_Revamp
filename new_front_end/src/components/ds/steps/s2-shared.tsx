@@ -42,6 +42,38 @@ export function useRoomNumbers(): Map<string, string> {
   return useMemo(() => new Map((rooms.data?.items ?? []).map((r) => [r.id, r.roomNumber])), [rooms.data]);
 }
 
+/** Each room's type name, from the rooms catalogue — for saying the rooms by type and count. */
+export function useRoomTypeNames(): Map<string, string> {
+  const { session } = useSession();
+  const rooms = useQuery({
+    queryKey: ["rooms"],
+    queryFn: () => listRooms(session!),
+    enabled: !!session,
+  });
+  return useMemo(
+    () => new Map((rooms.data?.items ?? []).filter((r) => r.roomType?.name).map((r) => [r.id, r.roomType!.name])),
+    [rooms.data],
+  );
+}
+
+/**
+ * "2 Deluxe Double, 1 Standard Double and 1 Executive" — the rooms by type and how many of each
+ * (2026-10-28, operator, on the committed hold: "don't say Standard Double · room 1 — just say 2
+ * Standard Double, 2 Deluxe Double are blocked"). The most of a type first; null while any room's
+ * type is not known yet, so the caller can fall back to `roomsWord`.
+ */
+export function roomsByTypeWord(ids: string[], typeOf: Map<string, string>): string | null {
+  if (!ids.length) return null;
+  const counts = new Map<string, number>();
+  for (const id of ids) {
+    const t = typeOf.get(id);
+    if (!t) return null;
+    counts.set(t, (counts.get(t) ?? 0) + 1);
+  }
+  const parts = [...counts].sort((a, b) => b[1] - a[1]).map(([t, n]) => `${n} ${t}`);
+  return parts.length > 1 ? `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}` : parts[0];
+}
+
 /**
  * "Room 201" · "Rooms 201, 202" — numbers sorted the way the house counts them. A room the system
  * chose and may still move before Arrival (`named`, from `useBookingRooms`) is named by its type

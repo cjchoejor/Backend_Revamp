@@ -16,7 +16,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { BindingBox, Button, Chip, Icon } from "@/design-system";
+import { Button, Chip, Icon } from "@/design-system";
 import { useSession } from "@/hooks/use-session";
 import { useBookingRooms } from "@/hooks/use-booking-rooms";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
@@ -81,7 +81,7 @@ import {
 } from "./kit";
 import { SendToField, useSendTo } from "./s8-parts";
 import { CancellationFiguresLine, WaiverTick, useRefundHow } from "./cancel-figures";
-import { CompetingClaimsCard, passesOf, roomsWord, useRoomNumbers } from "./s2-shared";
+import { CompetingClaimsCard, passesOf, roomsByTypeWord, roomsWord, useRoomNumbers, useRoomTypeNames } from "./s2-shared";
 import { PaymentPlanCard } from "./s3-money";
 import { Help, HelpHere } from "@/components/ds/help";
 import { DateInput } from "@/components/ds/date-input";
@@ -702,20 +702,23 @@ function HoldCard({
   const [blockedUntil, setBlockedUntil] = useState<string | null>(null);
   /**
    * Once the block time is settled, the hold section says so (2026-10-28, operator: "show a message
-   * saying these rooms are blocked for the dates for this many hours"). It is said IN the section,
-   * not in the middle of the screen: the centred card is how a step move is said, and the block
-   * read like one ("leading the user to think he has moved a stage"). The booking is still at Set up.
+   * saying these rooms are blocked … for this many hours"). It is said by the section's own line,
+   * lit for a moment — not in the middle of the screen (the centred card is how a step move is
+   * said, and the block read like one) and not as a second line ("too noisy"). The section keeps
+   * one line, "2 Deluxe Double and 1 Executive are blocked until …", with Edit for the rest.
    */
-  const [blockedNote, setBlockedNote] = useState<BlockedNote | null>(null);
-  const sayBlocked = (untilIso: string | null, whose: "HOUSE" | "BOOKING" | null) => {
+  const [flash, setFlash] = useState(0);
+  const [details, setDetails] = useState(false);
+  // Opened again from its folded line with Edit, the section shows its tools at once — a second
+  // Edit on the line inside would only ask the same question twice.
+  const reopened = flow.opened.has("hold");
+  useEffect(() => {
+    if (reopened) setDetails(true);
+  }, [reopened]);
+  const sayBlocked = (untilIso: string | null) => {
     if (!untilIso) return;
-    setBlockedNote({
-      n: Date.now(),
-      howLong: forHowLong(untilIso, Date.now()),
-      until: fmtDateTime(untilIso, tz),
-      whose: whose === "BOOKING" ? "the time set for this booking" : whose === "HOUSE" ? "the hotel's time" : null,
-      after: `If the booking is not reserved by then, ${count > 1 ? "they go" : "it goes"} back on sale.`,
-    });
+    setDetails(false);
+    setFlash(Date.now());
   };
   useEffect(() => {
     if (!blockAsk) return;
@@ -734,12 +737,6 @@ function HoldCard({
   }).data ?? null;
   const ownTime = entry.holdExpiresAtOverride ?? null;
 
-  // The message is about a block that stands: released (here or on another screen) or lapsed, it goes.
-  const holdId = hold?.id ?? null;
-  useEffect(() => {
-    if (!holdId) setBlockedNote(null);
-  }, [holdId]);
-
   const finish = useFinishWhenDone("hold");
   const place = useMutation({
     mutationFn: () => {
@@ -748,7 +745,7 @@ function HoldCard({
     },
     onSuccess: (h) => {
       setPlaceOpen(false);
-      sayBlocked(h.expiresAt, ownTime ? "BOOKING" : "HOUSE");
+      sayBlocked(h.expiresAt);
       onChanged();
       finish();
     },
@@ -758,7 +755,7 @@ function HoldCard({
     mutationFn: (reason: string) => releaseCommittedHold(session!, entry.id, { releaseReason: reason }),
     onSuccess: () => {
       toast.success("The hold is released — the rooms are back on sale");
-      setBlockedNote(null);
+      setDetails(false);
       setReleaseOpen(false);
       onChanged();
     },
@@ -778,10 +775,19 @@ function HoldCard({
         : moneyLock
           ? "the advance, or part of it, has to come in first — or the FOM extends credit"
           : null;
-  const rooms = roomsWord(roomIds.length ? roomIds : hold?.roomId ? [hold.roomId] : [], roomNos, roomNames);
+  // The rooms by type and count — "2 Deluxe Double and 1 Executive" (2026-10-28, operator); by
+  // number or label only while the rooms' types are not known yet.
+  const typeNames = useRoomTypeNames();
+  const heldIds = roomIds.length ? roomIds : hold?.roomId ? [hold.roomId] : [];
+  const rooms = roomsByTypeWord(heldIds, typeNames) ?? roomsWord(heldIds, roomNos, roomNames);
   const houseWords = house ? (house.minutes % 60 === 0 && house.minutes >= 60 ? plural(house.minutes / 60, "hour") : plural(house.minutes, "minute")) : null;
   const count = roomIds.length || 1;
   const lapsing = hold ? new Date(hold.expiresAt).getTime() < nowMs : false;
+  // A standing block is one line; Edit opens its facts and its acts (2026-10-28, operator: "the
+  // user no longer has to see it unless they have to release it or change the block time"). A
+  // block whose time has passed, and a step looked back at, show everything.
+  const showDetails = !hold || details || lapsing || past;
+  const whoseTime = ownTime ? "the time set for this booking" : houseWords ? `the hotel's ${houseWords}` : "the hotel's time";
   const why_ = hold?.commercialJustification ?? "";
   const autoWord = why_.startsWith("Auto-held on advance payment")
     ? "held automatically when the advance came in"
@@ -794,10 +800,9 @@ function HoldCard({
       flow="hold"
       flowAfter="proforma"
       title="The committed hold"
-      summary={hold ? `${rooms} blocked until ${fmtDateTime(hold.expiresAt, tz)}` : undefined}
-      notice={blockedNote && hold ? <BlockedNotice key={blockedNote.n} note={blockedNote} onClose={() => setBlockedNote(null)} /> : undefined}
+      summary={hold ? `${rooms} ${count > 1 ? "are" : "is"} blocked until ${fmtDateTime(hold.expiresAt, tz)}` : undefined}
       acts={
-        past ? undefined : (
+        past || !showDetails ? undefined : (
           <Live>
             <SeeRow
               label="Set block time"
@@ -831,11 +836,19 @@ function HoldCard({
     >
       {hold ? (
         <>
-          <BindingBox family={lapsing ? "provisional" : "pending"} stateWord={lapsing ? "hold time passed" : "committed hold"}>
-            <div className="sm" style={{ paddingRight: 110 }}>
-              {rooms} blocked until <b>{fmtDateTime(hold.expiresAt, tz)}</b> · takes the rooms from anyone else&rsquo;s marker
-            </div>
-          </BindingBox>
+          <HoldLine
+            key={flash}
+            lit={flash > 0}
+            lapsed={lapsing}
+            rooms={rooms}
+            many={count > 1}
+            until={fmtDateTime(hold.expiresAt, tz)}
+            whose={whoseTime}
+            open={showDetails}
+            canToggle={!past && !lapsing}
+            onToggle={() => setDetails((d) => !d)}
+          />
+          {showDetails ? (
           <Facts wide style={{ marginTop: 8 }}>
             <Fact k="Why held" meta={autoWord ?? undefined}>
               {why_ || <span className="warn-ink">no reason recorded</span>}
@@ -848,6 +861,7 @@ function HoldCard({
               {ownTime ? `to ${fmtDateTime(ownTime, tz)}` : houseWords ? `the hotel's ${houseWords}` : null}
             </Fact>
           </Facts>
+          ) : null}
           {lapsing ? (
             <div className="sm warn-ink" style={{ marginTop: 6 }}>
               The block time has passed — the block lapses on the next sweep. Block the rooms again before Reserve.
@@ -920,7 +934,10 @@ function HoldCard({
       {blockedUntil && !timeOpen ? (
         <DsDialog
           open
-          onClose={() => setBlockedUntil(null)}
+          onClose={() => {
+            setBlockedUntil(null);
+            setDetails(false);
+          }}
           title="The rooms are blocked"
           caseLines={[`${rooms} · until ${fmtDateTime(blockedUntil, tz)}`]}
           help="The payment blocked the rooms. They stay blocked until this time; if the booking is not reserved by then, they go back on sale."
@@ -931,7 +948,7 @@ function HoldCard({
                 onClick={() => {
                   const until = blockedUntil;
                   setBlockedUntil(null);
-                  sayBlocked(until, ownTime ? "BOOKING" : "HOUSE");
+                  sayBlocked(until);
                 }}
               >
                 Keep this time
@@ -966,7 +983,7 @@ function HoldCard({
           onClose={() => setTimeOpen(false)}
           onChanged={onChanged}
           onSet={(until, whose, live) => {
-            if (live) sayBlocked(until, whose);
+            if (live) sayBlocked(until);
           }}
         />
       ) : null}
@@ -986,52 +1003,59 @@ function HoldCard({
   );
 }
 
-type BlockedNote = { n: number; howLong: string; until: string; whose: string | null; after: string };
-
 /**
- * The block, said in the hold section (2026-10-28) — one quiet line (operator, same day: the
- * panel with a title and the room list was "too noisy"): a lock, how long and until when, and
- * whose time it is. The rooms are already named on the line below; what happens if the booking
- * is not reserved by then sits behind a "?". It stays until its × or the block goes, comes into
- * view only when it is not already (it never moves a page the desk is reading), and lights once.
+ * The committed hold in one line (2026-10-28, operator): "2 Deluxe Double and 1 Executive are
+ * blocked until 28 Oct 2026, 11:07 PM · the hotel's 1 hour", with Edit for the facts and the acts
+ * (Set block time, Release). Lit for a moment when a block has just been placed or moved, and
+ * brought into view then only when it is not on screen — it never moves a page being read.
  */
-function BlockedNotice({ note, onClose }: { note: BlockedNote; onClose: () => void }) {
+function HoldLine({
+  lit,
+  lapsed,
+  rooms,
+  many,
+  until,
+  whose,
+  open,
+  canToggle,
+  onToggle,
+}: {
+  lit: boolean;
+  lapsed: boolean;
+  rooms: string;
+  many: boolean;
+  until: string;
+  whose: string;
+  open: boolean;
+  canToggle: boolean;
+  onToggle: () => void;
+}) {
   const ref = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     const el = ref.current;
-    if (!el) return;
-    window.requestAnimationFrame(() => el.scrollIntoView({ block: "nearest", behavior: "smooth" }));
-  }, [note.n]);
+    if (!lit || !el) return;
+    // After the dialog that set the block has closed and handed the page back its scroll.
+    const t = window.setTimeout(() => el.scrollIntoView({ block: "nearest", behavior: "smooth" }), 250);
+    return () => window.clearTimeout(t);
+  }, [lit]);
   return (
-    <div ref={ref} className="notice blocked" role="status">
+    <div ref={ref} className={`hold-line${lit ? " lit" : ""}${lapsed ? " lapsed" : ""}`} role={lit ? "status" : undefined}>
       <Icon name="lock" />
-      <span className="blocked-text">
-        Blocked for <b>{note.howLong}</b> · until <b>{note.until}</b>
-        {note.whose ? <span className="blocked-whose"> · {note.whose}</span> : null}
-        <Help label="If the booking is not reserved in time">{note.after}</Help>
+      <span className="hold-text">
+        <b>{rooms}</b> {lapsed ? (many ? "were" : "was") : many ? "are" : "is"} blocked until <b>{until}</b>
+        <span className="hold-whose"> · {whose}</span>
+        <Help label="About the block">
+          The block takes these rooms from anyone else&rsquo;s marker. If the booking is not reserved by then, {many ? "they go" : "it goes"} back
+          on sale.
+        </Help>
       </span>
-      <button type="button" className="blocked-close" aria-label="Close this message" onClick={onClose}>
-        ×
-      </button>
+      {canToggle ? (
+        <Button kind="quiet" compact onClick={onToggle}>
+          {open ? "Hide" : "Edit"}
+        </Button>
+      ) : null}
     </div>
   );
-}
-
-/**
- * "1 hour", "2 hours 30 minutes", "3 days 4 hours" — how long from now to a moment. Over an hour it
- * is rounded to 5 minutes: a time typed without seconds, three hours on, read "2 hours 59 minutes".
- * The exact moment is printed beside it.
- */
-function forHowLong(untilIso: string, nowMs: number): string {
-  const exact = Math.max(0, Math.round((new Date(untilIso).getTime() - nowMs) / 60_000));
-  if (exact < 60) return plural(exact, "minute");
-  const mins = Math.round(exact / 5) * 5;
-  const hours = Math.floor(mins / 60);
-  const rest = mins % 60;
-  if (hours < 48) return rest ? `${plural(hours, "hour")} ${plural(rest, "minute")}` : plural(hours, "hour");
-  const days = Math.floor(hours / 24);
-  const h = hours % 24;
-  return h ? `${plural(days, "day")} ${plural(h, "hour")}` : plural(days, "day");
 }
 
 /** Nights between two stay dates (both stored at the start of their day). */
