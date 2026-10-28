@@ -147,13 +147,17 @@ Read-only. Nothing on the desk, the holds or the bills changed.
 **When the rooms are placed**: on every save of a pick by type (`sealBookingRoomsByType`), before every provisional block and committed hold (`ensureQuietPlacement` — the room asked for is followed if it moved), and when the rooms are assigned at Arrival (placed, assigned, then fixed).
 
 **2 Inquiry.** The house card asks how many rooms of each type, night by night (`RoomsByType` in [s1-by-type.tsx](../new_front_end/src/components/ds/steps/s1-by-type.tsx)):
-- one row per type, an "every night" box and one box per night with what is free;
-- a tally per night, red while short and green once complete;
-- a guest's own room added by number, which is fixed;
-- the pick checked by the server as it is typed (`POST /api/entries/:id/availability/by-type/seal` with `preview`), refusals in words and other bookings it would move named;
+- one row per type (33px), its count picked from a **dropdown**, never typed;
+- in every box, first **how many of that type are free**, coloured by what it means: green — enough for the whole booking, amber — some but fewer than the rooms asked, red — none (under Every night, the rooms free for the whole stay);
+- a dropdown offers only counts that can stand: never more than the type has free that night, never more than the rooms the booking still needs that night, never fewer than the rooms the guest asked for by number. Once a night has all its rooms, the other types show a dash saying why ("23 Sep already has its 3 rooms — lower another type first");
+- by default one dropdown per type, for every night; **Night by night** opens one per night, and the grid opens that way by itself when the nights already differ (**Same every night** folds it back once they agree);
+- a type with nothing free on any night, and nothing asked of it, is named in one line under the grid instead of a row;
+- a tally per night, red while short and green with a tick once complete;
+- **A room the guest asked for** — one room added by number, which is fixed; the rest stay by type. Its list shuts a type that can take no more rooms on some night;
+- the pick checked by the server as it changes (`POST /api/entries/:id/availability/by-type/seal` with `preview`), refusals in words and other bookings it would move named;
 - then **Save the rooms** (green), and the page goes on to Wrap up.
 
-"Choose particular rooms instead" keeps the room-number table.
+**Pick every room by number instead** leaves picking by type for the room-number table, where every room is chosen by hand and fixed. It is not the same as asking for one room: that keeps the other rooms by type.
 
 **3 Negotiation.** A quiet room reads "Deluxe Double · room 1" in:
 - the negotiation table and the guest board — the row, the room's tab, every message about it;
