@@ -9,8 +9,8 @@
  * 1 · The caller — whoever rang: a phone or an email (an OTA booking needs neither), "on WhatsApp?"
  *     whenever there is a phone, and a title and name that may wait.
  * 5 · Wrap up — once the rooms are chosen: the guest who is STAYING (the caller, or someone else
- *     — found on file or new), the caller's name if it was not taken at the start, who is
- *     arriving. The booking leaves Inquiry only with the guest staying named. The guest's
+ *     — one form, which finds them on file by their phone or email), the caller's name if it was
+ *     not taken at the start, who is arriving (not asked when someone else is named — they are). The booking leaves Inquiry only with the guest staying named. The guest's
  *     preference and the desk's notes live in the booking's Guest requests and Notes tabs
  *     (2026-10-12) — not repeated here.
  *
@@ -25,13 +25,14 @@ import { toast } from "sonner";
 import { Button } from "@/design-system";
 import { useSession } from "@/hooks/use-session";
 import { updateEntryIntake } from "@/lib/api/entries";
-import { guestFullName, searchGuestProfiles, type GuestProfileSummary } from "@/lib/api/guest-profiles";
+import { ApiError } from "@/lib/api/client";
+import { findGuestsOnFile, guestFullName, sameGuestName, type GuestOnFile, type GuestProfileSummary } from "@/lib/api/guest-profiles";
 import { lookupCallers, setEntryGuest, updateEntryCaller, type SetGuestBody } from "@/lib/api/inquiries";
 import { callerNameOf } from "@/lib/ds/status";
 import { fmtDay } from "@/lib/ds/format";
 import { hasAnyContact } from "@/lib/desk/workspace";
 import type { EntryDetail } from "@/types/api";
-import { Choice, StepCard, toastRefusal, useFlowUnsaved, useRefreshEntry } from "./kit";
+import { Choice, DsDialog, StepCard, toastRefusal, useFlowUnsaved, useRefreshEntry } from "./kit";
 import { GuestLine, NATIONALITIES, PHONE_CODES, PhoneInput, PickList, PresetOrCustom, ReqMark, callerIsTheParty, joinPhone, splitStoredPhone } from "./new-inquiry-parts";
 
 export const CALLER_TITLES = ["", "Mr", "Ms", "Mrs", "Dr", "Dasho", "Lyonpo", "Aum"];
@@ -221,7 +222,39 @@ export function TheCaller({ entry, editable }: { entry: EntryDetail; editable: b
 
 /* ------------------------------------------------------------------ 5 · wrap up */
 
-type GuestChoice = "CALLER" | "FOUND" | "NEW";
+/**
+ * The guest staying is the caller, or someone else (2026-10-28, operator: "someone on file and
+ * someone else new can be made into one … when writing the email and phone number it can show a
+ * drop down if it's already on file"). One form for someone else: typing their phone or email lists
+ * the guests already on file with it, and picking one names them. A name that differs from the one
+ * on file for the same phone or email is asked about — keep the name typed (a new guest) or use the
+ * guest on file — whether it is found here or by the backend when the guest is saved
+ * (GUEST_ON_FILE_DIFFERENT_NAME). The same name, case aside, is the guest on file without asking.
+ * Someone else is the one arriving, so "who is arriving" is not asked for them.
+ */
+type GuestChoice = "CALLER" | "OTHER";
+
+type NameAsk = {
+  /** Which form was being saved: the caller made a guest, or someone else typed. */
+  mode: GuestChoice;
+  typed: { title: string | null; firstName: string; lastName: string };
+  matches: GuestOnFile[];
+  /** Asked when the guest was being saved (save again on the answer), or when a row was picked. */
+  onSave: boolean;
+};
+
+const matchWords = (m: GuestOnFile) =>
+  m.matchedBy.length === 2 ? "phone and email" : m.matchedBy[0] === "PHONE" ? "phone" : "email";
+const titledName = (g: { title?: string | null; firstName: string; lastName: string }) =>
+  [g.title, g.firstName, g.lastName].filter((x) => x && String(x).trim()).join(" ");
+const asSummary = (g: GuestOnFile): GuestProfileSummary => ({
+  ...g,
+  vipTier: null,
+  clientTier: null,
+  isActive: true,
+  createdAt: "",
+  updatedAt: "",
+});
 
 export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; editable: boolean; onSaved: () => void }) {
   const { session } = useSession();
@@ -238,36 +271,46 @@ export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; edita
   // The guest staying: the caller by default; once named, shown as named until "Change".
   const [changing, setChanging] = useState(false);
   const choosing = editable && (!named || changing);
-  const [choice, setChoice] = useState<GuestChoice>(callerIsParty ? "NEW" : "CALLER");
+  const [choice, setChoice] = useState<GuestChoice>(callerIsParty ? "OTHER" : "CALLER");
   const [nationality, setNationality] = useState(NATIONALITIES[0]);
   // The caller's name, when it was not taken at the start.
   const [cTitle, setCTitle] = useState("");
   const [cFirst, setCFirst] = useState("");
   const [cLast, setCLast] = useState("");
-  // Someone else, new
+  // Someone else: typed, or a guest on file picked (`linked`), or kept as new despite one on file.
   const [nTitle, setNTitle] = useState("");
   const [nFirst, setNFirst] = useState("");
   const [nLast, setNLast] = useState("");
   const [nCode, setNCode] = useState(PHONE_CODES[0]);
   const [nNumber, setNNumber] = useState("");
   const [nEmail, setNEmail] = useState("");
-  // Someone else, on file
-  const [search, setSearch] = useState("");
-  const [term, setTerm] = useState("");
-  const [found, setFound] = useState<GuestProfileSummary | null>(null);
+  const [linked, setLinked] = useState<GuestOnFile | null>(null);
+  const [keepNew, setKeepNew] = useState(false);
+  const [nameAsk, setNameAsk] = useState<NameAsk | null>(null);
+
+  // The guests on file with the phone or email typed so far, read while the desk types.
+  const typedDigits = nNumber.replace(/\D/g, "");
+  const typedEmail = nEmail.trim();
+  const [onFileQ, setOnFileQ] = useState({ phone: "", email: "" });
   useEffect(() => {
-    const t = setTimeout(() => setTerm(search.trim()), 300);
+    const t = setTimeout(
+      () => setOnFileQ({ phone: typedDigits.length >= 4 ? typedDigits : "", email: typedEmail.length >= 3 ? typedEmail : "" }),
+      300,
+    );
     return () => clearTimeout(t);
-  }, [search]);
-  const lookup = useQuery({
-    queryKey: ["desk-guest-profiles", term],
-    queryFn: () => searchGuestProfiles(session!, term, 12),
-    enabled: !!session && choosing && choice === "FOUND" && term.length >= 2,
+  }, [typedDigits, typedEmail]);
+  const onFile = useQuery({
+    queryKey: ["guests-on-file", onFileQ.phone, onFileQ.email],
+    queryFn: () => findGuestsOnFile(session!, onFileQ),
+    enabled: !!session && choosing && choice === "OTHER" && !linked && !!(onFileQ.phone || onFileQ.email),
+    staleTime: 0,
   });
+  const onFileRows = (onFile.data?.guests ?? []).filter((g) => g.id !== named?.id);
+
   // The guests this caller brought before (2026-10-27): one click names one of them, rather than
   // making a second record of a guest already on file. Read from the caller list, this enquiry
   // left out; the caller's own row is the one with the same number (or email).
-  const callerDigits = (inq.callerPhone ?? "").replace(/D/g, "");
+  const callerDigits = (inq.callerPhone ?? "").replace(/\D/g, "");
   const callerQ = callerDigits.length >= 4 ? callerDigits.slice(-8) : inq.callerEmail?.includes("@") ? inq.callerEmail.trim() : "";
   const history = useQuery({
     queryKey: ["desk-callers", callerQ, inq.id],
@@ -276,7 +319,7 @@ export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; edita
   });
   const ownRow = (history.data?.matches ?? []).find((m) =>
     callerDigits.length >= 4
-      ? (m.phone ?? "").replace(/D/g, "").slice(-8) === callerDigits.slice(-8)
+      ? (m.phone ?? "").replace(/\D/g, "").slice(-8) === callerDigits.slice(-8)
       : (m.email ?? "").toLowerCase() === (inq.callerEmail ?? "").trim().toLowerCase(),
   );
   const broughtBefore: GuestProfileSummary[] = (ownRow?.guests ?? [])
@@ -291,6 +334,37 @@ export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; edita
     setArrPhone(contact.contactPersonPhone ?? "");
   }, [contact.contactPersonName, contact.contactPersonPhone]);
 
+  /** Name a guest on file: their record fills the form. */
+  const linkGuest = (g: GuestOnFile) => {
+    const ph = splitStoredPhone(g.phone);
+    setLinked(g);
+    setKeepNew(false);
+    setNTitle(g.title ?? "");
+    setNFirst(g.firstName);
+    setNLast(g.lastName);
+    if (g.phone) {
+      setNCode(ph.code);
+      setNNumber(ph.number);
+    }
+    if (g.email) setNEmail(g.email);
+    if (g.nationality) setNationality(g.nationality);
+  };
+  /** A row picked from the dropdown: a different name already typed is asked about first. */
+  const pickOnFile = (g: GuestOnFile) => {
+    const typed = { firstName: nFirst.trim(), lastName: nLast.trim() };
+    if (typed.firstName && typed.lastName && !sameGuestName(typed, g)) {
+      setNameAsk({ mode: "OTHER", typed: { title: nTitle || null, ...typed }, matches: [g], onSave: false });
+      return;
+    }
+    linkGuest(g);
+  };
+  const unlink = () => {
+    setLinked(null);
+    setKeepNew(false);
+  };
+  // A contact changed after "keep the new name" is a new question.
+  useEffect(() => setKeepNew(false), [typedDigits, typedEmail]);
+
   const callerNameTyped = !!(cFirst.trim() && cLast.trim());
   const callerNameDirty = !callerHasName && !!(cFirst.trim() || cLast.trim() || cTitle);
   const nEmailBad = nEmail.trim() !== "" && !EMAIL_RE.test(nEmail.trim());
@@ -300,43 +374,56 @@ export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; edita
       ? callerHasName || callerNameTyped
         ? null
         : "the caller's first and last name — the guest record is made from them"
-      : choice === "FOUND"
-        ? found
-          ? null
-          : "the guest, picked from those on file"
-        : !nFirst.trim() || !nLast.trim()
-          ? "the guest's first and last name"
-          : nEmailBad
-            ? "an email that reads as one"
-            : null;
-  const arrivingDirty = arrName.trim() !== (contact.contactPersonName ?? "") || arrPhone.trim() !== (contact.contactPersonPhone ?? "");
+      : !nFirst.trim() || !nLast.trim()
+        ? "the guest's first and last name"
+        : nEmailBad
+          ? "an email that reads as one"
+          : null;
+  // Someone else is the one arriving — the backend fills "who is arriving" from them.
+  const askArriving = !(choosing && choice === "OTHER");
+  const arrivingDirty =
+    askArriving && (arrName.trim() !== (contact.contactPersonName ?? "") || arrPhone.trim() !== (contact.contactPersonPhone ?? ""));
   const dirty = choosing || callerNameDirty || arrivingDirty;
   useFlowUnsaved("wrap", editable && dirty, "Changes to wrap up saved");
 
+  const guestBody = (over?: { useOnFile?: string; keepNewName?: boolean }): SetGuestBody => {
+    const phone = joinPhone(nCode, nNumber) || null;
+    const email = nEmail.trim() || null;
+    if (choice === "CALLER") {
+      return over?.useOnFile
+        ? { mode: "EXISTING", guestProfileId: over.useOnFile }
+        : { mode: "CALLER", nationality, keepNewName: over?.keepNewName };
+    }
+    const typed = { firstName: nFirst.trim(), lastName: nLast.trim() };
+    const onFileId = over?.useOnFile ?? (linked && sameGuestName(typed, linked) ? linked.id : null);
+    if (onFileId) return { mode: "EXISTING", guestProfileId: onFileId, phone, email, arrivingIsGuest: true };
+    return {
+      mode: "NEW",
+      title: nTitle || null,
+      ...typed,
+      nationality,
+      phone,
+      email,
+      keepNewName: over?.keepNewName ?? keepNew,
+      arrivingIsGuest: true,
+    };
+  };
+
   const save = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (over?: { useOnFile?: string; keepNewName?: boolean }) => {
       const done: string[] = [];
+      const notes: string[] = [];
       if (callerNameDirty) {
         await updateEntryCaller(session!, entry.id, { title: cTitle || null, firstName: cFirst.trim() || null, lastName: cLast.trim() || null });
         done.push("the caller's name");
       }
       if (choosing) {
-        const body: SetGuestBody =
-          choice === "CALLER"
-            ? { mode: "CALLER", nationality }
-            : choice === "FOUND"
-              ? { mode: "EXISTING", guestProfileId: found!.id }
-              : {
-                  mode: "NEW",
-                  title: nTitle || null,
-                  firstName: nFirst.trim(),
-                  lastName: nLast.trim(),
-                  nationality,
-                  phone: joinPhone(nCode, nNumber) || null,
-                  email: nEmail.trim() || null,
-                };
-        const r = await setEntryGuest(session!, entry.id, body);
+        const r = await setEntryGuest(session!, entry.id, guestBody(over));
         done.push("the guest staying");
+        if (r.reusedOnFile) notes.push("the guest was already on file — their record is used");
+        if (r.contactKept?.length) {
+          notes.push(`the ${r.contactKept.join(" and ")} on file is kept — a different one was typed`);
+        }
         if (r.duplicate) toast.warning(`This guest already holds a stay over these nights — ${r.duplicate.conflictingEntryId}. It is flagged for the FOM.`);
       }
       if (arrivingDirty) {
@@ -344,26 +431,61 @@ export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; edita
         await updateEntryIntake(session!, entry.id, { contactPersonName: arrName.trim(), contactPersonPhone: arrPhone.trim() });
         done.push("who is arriving");
       }
-      return done;
+      return { done, notes };
     },
-    onSuccess: (done) => {
-      toast.success(done.length ? `On record: ${done.join(", ")}` : "Nothing to save");
+    onSuccess: ({ done, notes }) => {
+      toast.success(done.length ? `On record: ${done.join(", ")}` : "Nothing to save", notes.length ? { description: notes.join(" · ") } : undefined);
       setChanging(false);
       setCTitle("");
       setCFirst("");
       setCLast("");
+      setLinked(null);
+      setKeepNew(false);
       refresh([["inquiry", entry.inquiryId]]);
       onSaved();
     },
     onError: (e) => {
+      const body = e instanceof ApiError ? e.body : undefined;
+      if (body?.blockingCondition === "GUEST_ON_FILE_DIFFERENT_NAME") {
+        const det = (body.details ?? {}) as { typed?: NameAsk["typed"]; matches?: GuestOnFile[] };
+        if (det.matches?.length && det.typed) {
+          setNameAsk({ mode: choice, typed: det.typed, matches: det.matches, onSave: true });
+          if (callerNameDirty) refresh([["inquiry", entry.inquiryId]]);
+          return;
+        }
+      }
       toastRefusal(e, "Wrap up could not be saved");
       refresh([["inquiry", entry.inquiryId]]);
       onSaved();
     },
   });
 
+  /** The answer to "already on file under another name". */
+  const answerNameAsk = (use: GuestOnFile | null) => {
+    const ask = nameAsk;
+    if (!ask) return;
+    setNameAsk(null);
+    if (!ask.onSave) {
+      // A row picked over a different typed name.
+      if (use) linkGuest(use);
+      else {
+        setLinked(null);
+        setKeepNew(true);
+      }
+      return;
+    }
+    if (use) {
+      if (ask.mode === "OTHER") linkGuest(use);
+      save.mutate({ useOnFile: use.id });
+    } else {
+      if (ask.mode === "OTHER") setKeepNew(true);
+      save.mutate({ keepNewName: true });
+    }
+  };
+
   const reachable = hasAnyContact(entry);
   const callerWord = callerNameOf(inq) ?? (callerNameTyped ? `${cFirst.trim()} ${cLast.trim()}` : null);
+  const typedNameNow = titledName({ title: nameAsk?.typed.title ?? null, firstName: nameAsk?.typed.firstName ?? "", lastName: nameAsk?.typed.lastName ?? "" });
   return (
     <StepCard
       flow="wrap"
@@ -438,30 +560,33 @@ export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; edita
                       main: <GuestLine guest={g} />,
                       sub: last ? `stayed ${fmtDay(last)}` : undefined,
                       onPick: () => {
-                        setChoice("FOUND");
-                        setFound(g);
+                        setChoice("OTHER");
+                        linkGuest({
+                          id: g.id,
+                          title: g.title ?? null,
+                          firstName: g.firstName,
+                          lastName: g.lastName,
+                          phone: g.phone,
+                          email: g.email,
+                          nationality: g.nationality,
+                          matchedBy: [],
+                        });
                       },
                     };
                   })}
                 />
               </div>
             ) : null}
-            <Choice
-              options={
-                callerIsParty
-                  ? [
-                      ["NEW", "A guest, new"],
-                      ["FOUND", "Someone on file"],
-                    ]
-                  : [
-                      ["CALLER", callerWord ? `The caller — ${callerWord}` : "The caller"],
-                      ["FOUND", "Someone on file"],
-                      ["NEW", "Someone else, new"],
-                    ]
-              }
-              value={choice}
-              onChange={(v) => setChoice(v)}
-            />
+            {callerIsParty ? null : (
+              <Choice
+                options={[
+                  ["CALLER", callerWord ? `The caller — ${callerWord}` : "The caller"],
+                  ["OTHER", "Someone else"],
+                ]}
+                value={choice}
+                onChange={(v) => setChoice(v)}
+              />
+            )}
             {choice === "CALLER" ? (
               <div className="form2" style={{ marginTop: 10 }}>
                 <div className="field">
@@ -471,30 +596,6 @@ export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; edita
                   </label>
                   <PresetOrCustom presets={NATIONALITIES} value={nationality} onChange={setNationality} placeholder="type the nationality" otherLabel="Other…" ariaLabel="Nationality" />
                 </div>
-              </div>
-            ) : choice === "FOUND" ? (
-              <div style={{ display: "grid", gap: 8, marginTop: 10 }}>
-                {found ? (
-                  <div className="row-acts">
-                    <span className="sm">
-                      <GuestLine guest={found} />
-                    </span>
-                    <Button kind="quiet" compact onClick={() => setFound(null)}>
-                      Someone else
-                    </Button>
-                  </div>
-                ) : (
-                  <>
-                    <input className="input" value={search} placeholder="name, phone or email — at least 2 letters" onChange={(e) => setSearch(e.target.value)} />
-                    {lookup.isFetching ? <span className="meta">Looking…</span> : null}
-                    {term.length >= 2 ? (
-                      <PickList
-                        rows={(lookup.data?.items ?? []).map((x) => ({ key: x.id, main: <GuestLine guest={x} />, onPick: () => setFound(x) }))}
-                        empty="no guest found"
-                      />
-                    ) : null}
-                  </>
-                )}
               </div>
             ) : (
               <div className="form2" style={{ marginTop: 10 }}>
@@ -511,25 +612,55 @@ export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; edita
                   </div>
                   <div className="field">
                     <label>First name</label>
-                    <input className="input" value={nFirst} onChange={(e) => setNFirst(e.target.value)} />
+                    <input className="input" aria-label="Guest's first name" value={nFirst} onChange={(e) => setNFirst(e.target.value)} />
                   </div>
                   <div className="field">
                     <label>Last name</label>
-                    <input className="input" value={nLast} onChange={(e) => setNLast(e.target.value)} />
+                    <input className="input" aria-label="Guest's last name" value={nLast} onChange={(e) => setNLast(e.target.value)} />
                   </div>
                 </div>
                 <div className="field">
-                  <label>Nationality</label>
-                  <PresetOrCustom presets={NATIONALITIES} value={nationality} onChange={setNationality} placeholder="type the nationality" otherLabel="Other…" ariaLabel="Guest nationality" />
-                </div>
-                <div className="field">
-                  <label>Their phone · optional</label>
+                  <label>
+                    Their phone · optional
+                    <Help label="About the phone and email">Typing a phone or an email lists the guests already on file with it — pick one to name them.</Help>
+                  </label>
                   <PhoneInput code={nCode} setCode={setNCode} number={nNumber} setNumber={setNNumber} ariaLabel="Guest's phone" />
                 </div>
                 <div className="field">
                   <label>Their email · optional</label>
-                  <input className={`input${nEmailBad ? " invalid" : ""}`} type="email" value={nEmail} onChange={(e) => setNEmail(e.target.value)} />
+                  <input className={`input${nEmailBad ? " invalid" : ""}`} aria-label="Guest's email" type="email" value={nEmail} onChange={(e) => setNEmail(e.target.value)} />
                   {nEmailBad ? <span className="hint stop-ink">that does not read as an email address</span> : null}
+                </div>
+                {linked ? (
+                  <div className="wide row-acts onfile-linked">
+                    <span className="sm ok-ink" style={{ fontWeight: 700 }}>
+                      On file: {titledName(linked)}
+                      {linked.phone ? <span className="money"> · {linked.phone}</span> : null}
+                      {linked.email ? <span> · {linked.email}</span> : null}
+                    </span>
+                    <Button kind="quiet" compact onClick={unlink}>
+                      Not this guest
+                    </Button>
+                  </div>
+                ) : onFileRows.length > 0 ? (
+                  <div className="wide onfile-list">
+                    <PickList
+                      head="Already on file with this phone or email"
+                      action="Name them"
+                      rows={onFileRows.map((g) => ({
+                        key: g.id,
+                        main: <GuestLine guest={asSummary(g)} />,
+                        sub: `same ${matchWords(g)}`,
+                        onPick: () => pickOnFile(g),
+                      }))}
+                    />
+                  </div>
+                ) : keepNew ? (
+                  <span className="wide meta">a new guest, though this phone or email is on file under another name</span>
+                ) : null}
+                <div className="field">
+                  <label>Nationality</label>
+                  <PresetOrCustom presets={NATIONALITIES} value={nationality} onChange={setNationality} placeholder="type the nationality" otherLabel="Other…" ariaLabel="Guest nationality" />
                 </div>
               </div>
             )}
@@ -542,19 +673,21 @@ export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; edita
         )}
       </div>
 
-      <div className="form2">
-        <div className="field">
-          <label>Who is arriving · name</label>
-          <input className="input" value={arrName} readOnly={!editable} placeholder="who leads the party on the day" onChange={(e) => setArrName(e.target.value)} />
+      {askArriving ? (
+        <div className="form2">
+          <div className="field">
+            <label>Who is arriving · name</label>
+            <input className="input" value={arrName} readOnly={!editable} placeholder="who leads the party on the day" onChange={(e) => setArrName(e.target.value)} />
+          </div>
+          <div className="field">
+            <label>
+              Their phone
+              <Help label="About their phone">Needed before arrival.</Help>
+            </label>
+            <input className="input" value={arrPhone} readOnly={!editable} placeholder="+975 …" onChange={(e) => setArrPhone(e.target.value)} />
+          </div>
         </div>
-        <div className="field">
-          <label>
-            Their phone
-            <Help label="About their phone">Needed before arrival.</Help>
-          </label>
-          <input className="input" value={arrPhone} readOnly={!editable} placeholder="+975 …" onChange={(e) => setArrPhone(e.target.value)} />
-        </div>
-      </div>
+      ) : null}
 
       <div className={`sm ${named ? "ok-ink" : "stop-ink"}`} style={{ marginTop: 8, fontWeight: 700 }}>
         {named ? "The guest staying is named." : "Name the guest staying — the booking cannot move to Negotiation without one."}
@@ -571,12 +704,42 @@ export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; edita
             state={save.isPending ? "working" : guestReason ? "inert" : "default"}
             title={guestReason ?? undefined}
             workingLabel="Saving…"
-            onClick={() => save.mutate()}
+            onClick={() => save.mutate(undefined)}
           >
             Save wrap up
           </Button>
           {guestReason ? <span className="meta warn-ink">first: {guestReason}</span> : null}
         </div>
+      ) : null}
+
+      {nameAsk ? (
+        <DsDialog
+          open
+          onClose={() => setNameAsk(null)}
+          busy={save.isPending}
+          title="Already on file under another name"
+          caseLines={nameAsk.matches.map((m) => `The ${matchWords(m)} ${m.matchedBy.length === 2 ? "are" : "is"} on file for ${titledName(m)}`)}
+          help="One person has one guest record, shared by every booking they make. Use the guest on file when it is the same person; keep the typed name when it is someone else who shares the phone or email."
+          footer={
+            <>
+              <Button kind="quiet" onClick={() => setNameAsk(null)}>
+                Not now
+              </Button>
+              <Button kind="secondary" onClick={() => answerNameAsk(null)}>
+                Keep {typedNameNow} — a new guest
+              </Button>
+              {nameAsk.matches.map((m) => (
+                <Button key={m.id} className="go" onClick={() => answerNameAsk(m)}>
+                  Use {titledName(m)} — on file
+                </Button>
+              ))}
+            </>
+          }
+        >
+          <p className="sm" style={{ margin: 0 }}>
+            You typed <b>{typedNameNow}</b>. Is this the guest on file, or someone else?
+          </p>
+        </DsDialog>
       ) : null}
     </StepCard>
   );

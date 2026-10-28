@@ -41,14 +41,32 @@ export function updateEntryCaller(session: Session, entryId: string, body: Calle
   return apiRequest<{ caller: CallerDetails }>(`/api/entries/${entryId}/caller`, { method: "POST", session, body });
 }
 
+/**
+ * `keepNewName`: the phone or email is on file under another name and the desk keeps the typed one
+ * (a new guest record; otherwise refused GUEST_ON_FILE_DIFFERENT_NAME with the guests on file).
+ * `arrivingIsGuest`: the guest named is the one arriving — on a direct booking "who is arriving"
+ * is filled from them (2026-10-28).
+ */
+type GuestNamingOptions = { keepNewName?: boolean; arrivingIsGuest?: boolean };
+
 export type SetGuestBody =
-  | { mode: "CALLER"; nationality?: string | null }
-  | { mode: "EXISTING"; guestProfileId: string }
-  | { mode: "NEW"; title?: string | null; firstName: string; lastName: string; nationality?: string | null; phone?: string | null; email?: string | null };
+  | ({ mode: "CALLER"; nationality?: string | null } & GuestNamingOptions)
+  | ({ mode: "EXISTING"; guestProfileId: string; phone?: string | null; email?: string | null } & GuestNamingOptions)
+  | ({ mode: "NEW"; title?: string | null; firstName: string; lastName: string; nationality?: string | null; phone?: string | null; email?: string | null } & GuestNamingOptions);
 
 /** Name the guest who is staying — the caller, a guest on file, or someone new (Inquiry only). */
 export function setEntryGuest(session: Session, entryId: string, body: SetGuestBody) {
-  return apiRequest<{ guestProfileId: string; duplicate: { conflictingInquiryId: string; conflictingEntryId: string } | null }>(
+  return apiRequest<{
+    guestProfileId: string;
+    duplicate: { conflictingInquiryId: string; conflictingEntryId: string } | null;
+    /** The same name on a phone or email already on file: that guest's record was used. */
+    reusedOnFile?: boolean;
+    /** Fields the guest on file lacked and took from what was typed. */
+    filled?: string[];
+    /** A phone or email typed that differs from the record's — kept as it was, not overwritten. */
+    contactKept?: string[];
+    arrivingSet?: boolean;
+  }>(
     `/api/entries/${entryId}/guest`,
     { method: "POST", session, body },
   );
