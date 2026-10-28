@@ -1554,6 +1554,23 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 /* The next thing to do on a card (2026-10-28) — "send this proforma first". Amber: a step still to take, not a refusal. */
 .ds .notice.next:not(.desk-root *) { display: flex; align-items: center; gap: var(--s3); border: 1px solid var(--warning-line); border-left: 5px solid var(--warning); background: var(--warning-soft); color: var(--ink); padding: var(--s3) var(--s4); border-radius: var(--r-control); font-size: var(--t-base); margin-bottom: var(--s3); }
 .ds .notice.next b { font-weight: 700; }
+/* A box that asks one thing at a time (2026-10-28 — the advance): each question numbered, a tick
+   once answered, the next one appearing below it. */
+.ds .qsteps:not(.desk-root *) { display: flex; flex-direction: column; gap: var(--s4); }
+.ds .qstep:not(.desk-root *) { display: grid; grid-template-columns: 24px minmax(0, 1fr); column-gap: var(--s3); align-items: start; }
+.ds .qstep > .qn:not(.desk-root *) { width: 22px; height: 22px; margin-top: 1px; border-radius: 50%; border: 1.5px solid var(--accent); color: var(--accent); font-size: 12px; font-weight: 700; display: grid; place-items: center; }
+.ds .qstep.done > .qn:not(.desk-root *) { border-color: var(--success); background: var(--success); color: #fff; }
+.ds .qstep.optional > .qn:not(.desk-root *) { border-style: dashed; border-color: var(--line-2); color: var(--ink-2); }
+.ds .qstep > .qn .ic:not(.desk-root *) { width: 12px; height: 12px; }
+.ds .qstep > .field:not(.desk-root *) { margin: 0; }
+.ds .qsteps > .qsep:not(.desk-root *) { padding-top: var(--s4); border-top: 1px solid var(--line); }
+.ds .qsteps > .qnote:not(.desk-root *) { margin: 0; padding-left: calc(24px + var(--s3)); }
+/* The % after the figure — the twin of the money box’s Nu. before it. */
+.ds .suffix:not(.desk-root *) { display: inline-flex; align-items: center; }
+.ds .suffix > span:not(.desk-root *) { height: var(--control-h); display: inline-flex; align-items: center; padding: 0 var(--s3); border: 1px solid var(--line-2); border-left: 0; border-radius: 0 var(--r-control) var(--r-control) 0; background: var(--surface-2); color: var(--ink-2); font-size: var(--t-sm); font-weight: 600; }
+.ds .suffix > .input:not(.desk-root *) { border-radius: var(--r-control) 0 0 var(--r-control); }
+/* What a dialog still waits for, said beside its buttons. */
+.ds .dialog .foot .dlg-next:not(.desk-root *) { margin-right: auto; align-self: center; font-size: var(--t-sm); font-weight: 500; color: var(--ink); }
 .ds .ws-top .ws-head.ended:not(.desk-root *) { border-color: var(--danger-line); box-shadow: inset 5px 0 0 var(--danger); }
 
 /* ===== Stage 1's rooms table: the count and the save on a band of their own (2026-10-27), and a

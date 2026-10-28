@@ -15,7 +15,7 @@
 import { useEffect, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { BindingBox, Button, Chip, MoneyInput } from "@/design-system";
+import { BindingBox, Button, Chip, Icon, MoneyInput } from "@/design-system";
 import { useSession } from "@/hooks/use-session";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
 import {
@@ -456,7 +456,9 @@ function AdvanceDialog({
 
   /* ---- how much ---- */
   // The box opens on the figure set for this booking, never on a grey example (2026-10-23: a
-  // placeholder "50" read as the value already there).
+  // placeholder "50" read as the value already there). A first advance opens with nothing chosen,
+  // and each question appears once the one before it is answered (2026-10-28, operator: "step by
+  // step — ask for, the figure, how they'll pay, when the rest is coming, then save").
   const pinned = status?.requirementSource === "OPERATOR" ? status.requirementBasis : null;
   const pinnedMode: AmountMode | null = pinned ? (pinned.mode === "AMOUNT" ? "AMOUNT" : "PERCENT") : null;
   const pinnedValue =
@@ -465,45 +467,50 @@ function AdvanceDialog({
       : pinned?.mode === "AMOUNT" && status?.requiredAmount != null
         ? String(status.requiredAmount)
         : "";
-  const [mode, setMode] = useState<AmountMode>(pinnedMode ?? "PERCENT");
+  const [mode, setMode] = useState<AmountMode | null>(pinnedMode);
   const [value, setValue] = useState(pinnedValue);
   const amountModes: ReadonlyArray<readonly [AmountMode, string]> = pinned ? [...REQUIREMENT_MODES, ["DEFAULT", "The hotel's default"] as const] : REQUIREMENT_MODES;
   const n = Number(value);
-  const amountTyped = mode !== "DEFAULT" && value.trim() !== "";
-  const amountOk = mode === "DEFAULT" || value.trim() === "" ? !(pinned && mode !== "DEFAULT" && value.trim() === "") : isAmount(value) && (mode === "AMOUNT" || n <= 100);
+  const typed = value.trim() !== "";
+  const amountOk = mode === "DEFAULT" || (mode === "PERCENT" && isAmount(value) && n <= 100) || (mode === "AMOUNT" && isAmount(value));
   const requirement =
     mode === "DEFAULT"
       ? pinned
         ? ({ mode: "CLEAR" } as const)
         : null
-      : !amountTyped || !amountOk
+      : !mode || !amountOk
         ? null
         : pinnedMode === mode && pinnedValue === value.trim()
           ? null
           : mode === "AMOUNT"
             ? ({ mode: "AMOUNT", amount: n } as const)
             : ({ mode: "PERCENT", percent: n } as const);
+  // Back to the hotel's settings when they ask for nothing: there is nothing for the guest to pay,
+  // so there is no plan to ask about either.
+  const noAdvance = mode === "DEFAULT" && (status?.configuredBaseAmount ?? 0) <= 0;
 
   /* ---- how and when they'll pay ---- */
   const saved = status?.paymentPlan ?? null;
-  const savedDue: Due = saved?.balanceDueAt ? (saved.balanceDueAt === "AT_CHECKOUT" ? "AT_CHECKIN" : saved.balanceDueAt) : "";
+  const savedDue: Due | null = saved ? (saved.balanceDueAt ? (saved.balanceDueAt === "AT_CHECKOUT" ? "AT_CHECKIN" : saved.balanceDueAt) : "") : null;
   const savedPromised = saved?.promisedBy ? isoToHotelLocal(saved.promisedBy, tz) : "";
   // Nothing is picked until the desk picks it — opening the box to change the amount must not
   // record "the whole amount, now" on the guest's behalf.
   const [plan, setPlan] = useState<PlanKind | null>(saved?.plan ?? null);
-  const [due, setDue] = useState<Due>(savedDue);
+  const [due, setDue] = useState<Due | null>(savedDue);
   const [promised, setPromised] = useState(savedPromised);
   const [note, setNote] = useState(saved?.note ?? "");
   const [clearPlan, setClearPlan] = useState(false);
-  const needsDate = !clearPlan && plan != null && due === "BEFORE_CHECKIN" && !promised;
+  // A plan is asked for whenever there is an advance to pay; clearing it is an answer too.
+  const planAsked = !noAdvance && !clearPlan;
   const planChanged =
-    clearPlan
+    clearPlan || (noAdvance && !!saved)
       ? !!saved
       : plan != null &&
+        due != null &&
         (plan !== (saved?.plan ?? null) || due !== savedDue || promised !== savedPromised || note.trim() !== (saved?.note ?? "").trim());
   const planBody = (): NonNullable<Parameters<typeof setAdvanceTerms>[2]["plan"]> | null => {
-    if (clearPlan) return saved ? { plan: "CLEAR" } : null;
-    if (!plan || !planChanged) return null;
+    if (clearPlan || noAdvance) return saved ? { plan: "CLEAR" } : null;
+    if (!plan || due == null || !planChanged) return null;
     const note_ = note.trim() || null;
     if (due === "") return { plan, note: note_ };
     if (due === "BEFORE_CHECKIN") {
@@ -522,7 +529,7 @@ function AdvanceDialog({
     onSuccess: (res) => {
       const words = [
         requirement ? (requirement.mode === "CLEAR" ? "the hotel's default advance applies again" : `the advance is ${money(res.requiredAmount)}`) : null,
-        clearPlan ? "how they'll pay is cleared" : planChanged ? "how they'll pay is recorded" : null,
+        clearPlan || (noAdvance && saved) ? "how they'll pay is cleared" : planChanged ? "how they'll pay is recorded" : null,
       ].filter(Boolean);
       const said = words.join(" · ");
       toast.success(said.charAt(0).toUpperCase() + said.slice(1), {
@@ -546,18 +553,38 @@ function AdvanceDialog({
           ["BEFORE_CHECKIN", "Before check-in, by a date"],
           ["AT_CHECKIN", "At the check-in desk"],
         ];
+
+  // The questions in order; each one answered opens the next.
+  const askedFor = mode != null;
+  const figureIn = askedFor && amountOk;
+  const planIn = figureIn && (!planAsked || plan != null);
+  const dueIn = planIn && (!planAsked || due != null);
+  const dateIn = dueIn && (!planAsked || due !== "BEFORE_CHECKIN" || !!promised);
   const changed = !!requirement || planChanged;
-  const holdReason = !amountOk
-    ? mode === "PERCENT"
-      ? "a percent from 1 to 100"
-      : pinned && value.trim() === ""
-        ? "put in the amount, or choose the hotel's default"
-        : "a positive amount"
-    : needsDate
-      ? "pick the date they promised"
-      : !changed
-        ? "nothing changed"
-        : undefined;
+  const holdReason = !askedFor
+    ? "Choose how much to ask for"
+    : !figureIn
+      ? mode === "PERCENT"
+        ? typed
+          ? "Put in a percent from 1 to 100"
+          : "Put in the percent"
+        : typed
+          ? "Put in an amount above zero"
+          : "Put in the amount"
+      : !planIn
+        ? "Pick how they'll pay"
+        : !dueIn
+          ? plan === "FULL"
+            ? "Pick when they'll pay"
+            : "Pick when the rest is coming"
+          : !dateIn
+            ? "Pick the date they promised"
+            : !changed
+              ? "Nothing changed yet"
+              : undefined;
+
+  let q = 0;
+  const num = () => ++q;
 
   return (
     <DsDialog
@@ -574,6 +601,11 @@ function AdvanceDialog({
       help="The proforma prints the amount and how the guest will pay, so a change issues it again — to send again."
       footer={
         <>
+          {holdReason ? (
+            <span className="dlg-next" role="status">
+              {holdReason}
+            </span>
+          ) : null}
           <Button2 kind="quiet" disabled={save.isPending} onClick={onClose}>
             Not now
           </Button2>
@@ -583,10 +615,8 @@ function AdvanceDialog({
         </>
       }
     >
-      <div className="stack sm">
-        <b>How much</b>
-        <div className="field">
-          <label>Ask for</label>
+      <div className="qsteps">
+        <Ask n={num()} done={askedFor} label="Ask for">
           <Choice
             options={amountModes}
             value={mode}
@@ -595,96 +625,150 @@ function AdvanceDialog({
               setValue(m === pinnedMode ? pinnedValue : ""); // 20 percent is not Nu 20
             }}
           />
-        </div>
-        {mode !== "DEFAULT" ? (
-          <div className="field">
-            <label>
-              {mode === "PERCENT" ? "Percent of the quotation" : "Amount"}
+        </Ask>
+
+        {mode === "PERCENT" || mode === "AMOUNT" ? (
+          <Ask
+            n={num()}
+            done={figureIn}
+            label={mode === "PERCENT" ? "Percent of the quotation" : "Amount"}
+            help={
               <Help label="About the amount">
                 {mode === "PERCENT"
                   ? "The house works the figure out from the quotation now — if the quotation changes, set it again."
                   : "For this booking only — the hotel's minimum is untouched."}
               </Help>
-            </label>
+            }
+          >
             {mode === "AMOUNT" ? (
-              <MoneyInput value={value} onChange={(e) => /^\d*\.?\d{0,2}$/.test(e.target.value) && setValue(e.target.value)} autoFocus />
+              <MoneyInput key="amount" value={value} onChange={(e) => /^\d*\.?\d{0,2}$/.test(e.target.value) && setValue(e.target.value)} autoFocus />
             ) : (
-              <input
-                className="input narrow"
-                inputMode="decimal"
-                value={value}
-                onChange={(e) => /^\d*\.?\d{0,2}$/.test(e.target.value) && setValue(e.target.value)}
-                autoFocus
-              />
+              <div className="suffix">
+                <input
+                  key="percent"
+                  className="input narrow"
+                  inputMode="decimal"
+                  aria-label="Percent of the quotation"
+                  value={value}
+                  onChange={(e) => /^\d*\.?\d{0,2}$/.test(e.target.value) && setValue(e.target.value)}
+                  autoFocus
+                />
+                <span aria-hidden="true">%</span>
+              </div>
             )}
-          </div>
-        ) : (
-          <p className="meta">The amount set for this booking is dropped — the hotel&rsquo;s settings decide again.</p>
-        )}
-      </div>
-
-      <div className="stack sm" style={{ marginTop: 16, paddingTop: 12, borderTop: "1px solid var(--line)" }}>
-        <b>How and when they&rsquo;ll pay</b>
-        {clearPlan ? (
-          <p className="sm">
-            How they&rsquo;ll pay is cleared when you save.{" "}
-            <Button2 kind="quiet" onClick={() => setClearPlan(false)}>
-              Keep it
-            </Button2>
-          </p>
-        ) : (
-          <>
-            <div className="field">
-              <label>What they said</label>
-              <Choice
-                options={PLAN_CHOICES}
-                value={plan}
-                onChange={(next) => {
-                  setPlan(next);
-                  if (next !== "FULL" && due === "") setDue("BEFORE_CHECKIN");
-                }}
-              />
-            </div>
-            {plan ? (
+          </Ask>
+        ) : mode === "DEFAULT" ? (
+          <p className="meta qnote">
+            The amount set for this booking is dropped — the hotel&rsquo;s settings decide again
+            {noAdvance ? (
               <>
-                <div className="field">
-                  <label>{plan === "FULL" ? "When will they pay?" : "When is the rest coming?"}</label>
-                  <Choice options={timing} value={due} onChange={setDue} />
-                </div>
-                {due === "BEFORE_CHECKIN" ? (
-                  <div className="field">
-                    <label>
-                      Promised by
-                      <Help label="About the promise">
-                        On the hotel&rsquo;s clock. A countdown runs to it and the booking is flagged if the money has not come. A date after
-                        check-in is taken as check-in.
-                      </Help>
-                    </label>
-                    <DateTimeInput className="input" value={promised} min={nowLocal || undefined} onChange={(e) => setPromised(e.target.value)} />
-                  </div>
-                ) : null}
-                <div className="field">
-                  <label>What they said, in their words · optional</label>
-                  <input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="will transfer the rest after payday" />
-                </div>
-                {due === "AT_CHECKIN" ? (
-                  <p className="meta">No countdown — the money is collected at the check-in desk. To check in unpaid, the FOM covers the gap with credit.</p>
-                ) : null}
+                . They ask for no advance on this booking, so there is nothing for the guest to pay
+                {saved ? <> and how they&rsquo;ll pay is cleared too</> : null}.
               </>
             ) : (
-              <p className="meta">Not recorded — pick what they said, or leave it for later.</p>
+              <> — they ask for {money(status?.configuredBaseAmount ?? 0)}.</>
             )}
+          </p>
+        ) : null}
+
+        {figureIn && planAsked ? (
+          <Ask n={num()} done={planIn} label="How will they pay?" sep>
+            <Choice
+              options={PLAN_CHOICES}
+              value={plan}
+              onChange={(next) => {
+                setPlan(next);
+                // "Now, at the desk" is an answer only for the whole amount.
+                if (next !== "FULL" && due === "") setDue(null);
+              }}
+            />
             {saved ? (
-              <div>
+              <div style={{ marginTop: 8 }}>
                 <Button2 kind="quiet" onClick={() => setClearPlan(true)}>
                   Clear how they&rsquo;ll pay
                 </Button2>
               </div>
             ) : null}
-          </>
-        )}
+          </Ask>
+        ) : null}
+        {figureIn && clearPlan ? (
+          <p className="sm qnote qsep">
+            How they&rsquo;ll pay is cleared when you save.{" "}
+            <Button2 kind="quiet" onClick={() => setClearPlan(false)}>
+              Keep it
+            </Button2>
+          </p>
+        ) : null}
+
+        {planIn && planAsked ? (
+          <Ask n={num()} done={dueIn} label={plan === "FULL" ? "When will they pay?" : "When is the rest coming?"}>
+            <Choice options={timing} value={due} onChange={setDue} />
+            {due === "AT_CHECKIN" ? (
+              <p className="meta" style={{ marginTop: 6 }}>
+                No countdown — the money is collected at the check-in desk. To check in unpaid, the FOM covers the gap with credit.
+              </p>
+            ) : null}
+          </Ask>
+        ) : null}
+
+        {dueIn && planAsked && due === "BEFORE_CHECKIN" ? (
+          <Ask
+            n={num()}
+            done={dateIn}
+            label="Promised by"
+            help={
+              <Help label="About the promise">
+                On the hotel&rsquo;s clock. A countdown runs to it and the booking is flagged if the money has not come. A date after check-in
+                is taken as check-in.
+              </Help>
+            }
+          >
+            <DateTimeInput className="input" value={promised} min={nowLocal || undefined} onChange={(e) => setPromised(e.target.value)} />
+          </Ask>
+        ) : null}
+
+        {dateIn && planAsked ? (
+          <Ask n={num()} done={false} optional label="What they said, in their words · optional">
+            <input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="will transfer the rest after payday" />
+          </Ask>
+        ) : null}
       </div>
     </DsDialog>
+  );
+}
+
+/** One question in a box that asks one thing at a time: its number (a tick once answered), its label, its answer. */
+function Ask({
+  n,
+  done,
+  optional,
+  sep,
+  label,
+  help,
+  children,
+}: {
+  n: number;
+  done: boolean;
+  optional?: boolean;
+  /** A line above it — the start of a new part of the box. */
+  sep?: boolean;
+  label: React.ReactNode;
+  help?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className={["qstep", done ? "done" : "", optional ? "optional" : "", sep ? "qsep" : ""].filter(Boolean).join(" ")}>
+      <span className="qn" aria-hidden="true">
+        {done ? <Icon name="check" /> : n}
+      </span>
+      <div className="field">
+        <label>
+          {label}
+          {help}
+        </label>
+        {children}
+      </div>
+    </div>
   );
 }
 
