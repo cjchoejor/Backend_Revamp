@@ -70,4 +70,40 @@ export const priceRoomPickRequestSchema = z
   .refine((v) => !(v.roomIds?.length && v.perNight?.length), { message: "Send roomIds or perNight, not both" });
 export type PriceRoomPickRequestDto = z.infer<typeof priceRoomPickRequestSchema>;
 
+/**
+ * The house by room type over a booking's stay, and whether its rooms fit with one room for each
+ * guest's whole stay (2026-10-28). Read-only. Dates default to the booking's; `bookingRooms`
+ * defaults to the booking's sealed pick, read as fixed rooms when it predates booking rooms.
+ */
+const ymdField = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "dates are YYYY-MM-DD");
+export const houseByTypeRequestSchema = z
+  .object({
+    checkInDate: ymdField.optional(),
+    checkOutDate: ymdField.optional(),
+    bookingRooms: z
+      .array(
+        z.object({
+          key: z.string().min(1).max(20),
+          nights: z
+            .array(
+              z.object({
+                date: ymdField,
+                roomTypeId: z.string().min(1),
+                roomId: z.string().min(1).nullable().optional(),
+                fixed: z.boolean().optional(),
+              }),
+            )
+            .min(1)
+            .max(62),
+        }),
+      )
+      .max(100)
+      .optional(),
+  })
+  .refine((v) => !v.checkInDate === !v.checkOutDate, { message: "Send both dates, or neither" })
+  .refine((v) => !v.bookingRooms || new Set(v.bookingRooms.map((r) => r.key)).size === v.bookingRooms.length, {
+    message: "Each booking room needs its own key",
+  });
+export type HouseByTypeRequestDto = z.infer<typeof houseByTypeRequestSchema>;
+
 export type SelectAvailabilityOptionRequestDto = z.infer<typeof selectAvailabilityOptionRequestSchema>;

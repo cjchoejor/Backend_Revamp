@@ -3,6 +3,7 @@ import { prisma } from "../../db.js";
 import {
   queryAvailabilityByEntryRequestSchema,
   priceRoomPickRequestSchema,
+  houseByTypeRequestSchema,
   queryAvailabilitySearchRequestSchema,
   selectAvailabilityOptionRequestSchema,
 } from "../../dtos/04-availability/request-schemas.js";
@@ -12,6 +13,7 @@ import * as s1AvailabilityService from "../../services/domain/s1-availability-se
 import { priceRoomPick } from "../../services/domain/pick-pricing-service.js";
 import { releaseRoomBlock } from "../../services/domain/room-block-release-service.js";
 import { buildRoomChart } from "../../services/domain/room-chart-service.js";
+import { answerHouseByType } from "../../services/domain/room-placement-service.js";
 import { ROOM_BED_TYPES, allowedBedTypesSource, effectiveAllowedBedTypes, setRoomBedType, usualBedTypeFor } from "../../services/domain/room-bed-type-service.js";
 
 export const availabilityRouter = Router();
@@ -189,6 +191,40 @@ availabilityRouter.post(
     try {
       res.setHeader("Cache-Control", "no-store");
       res.json(await priceRoomPick(prisma, req.params.id, req.body));
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+/**
+ * The house by room type, night by night, over the booking's stay — and whether its rooms fit with
+ * one room for each guest's whole stay (2026-10-28, docs/room-types-until-arrival.md, stage 1).
+ * Read-only: nothing is held, moved or written. The booking's own claims are left out.
+ */
+availabilityRouter.post(
+  "/entries/:id/availability/by-type",
+  requireActorLevel("L1"),
+  validateBody(houseByTypeRequestSchema),
+  async (req, res, next) => {
+    try {
+      res.setHeader("Cache-Control", "no-store");
+      const body = req.body as import("../../dtos/04-availability/request-schemas.js").HouseByTypeRequestDto;
+      res.json(
+        await answerHouseByType(prisma, req.params.id, {
+          checkInDate: body.checkInDate,
+          checkOutDate: body.checkOutDate,
+          bookingRooms: body.bookingRooms?.map((r) => ({
+            key: r.key,
+            nights: r.nights.map((n) => ({
+              date: n.date,
+              roomTypeId: n.roomTypeId,
+              roomId: n.roomId ?? null,
+              fixed: n.fixed === true && !!n.roomId,
+            })),
+          })),
+        }),
+      );
     } catch (e) {
       next(e);
     }
