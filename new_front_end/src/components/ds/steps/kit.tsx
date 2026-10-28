@@ -371,9 +371,12 @@ export function StepFlow({
         return next;
       });
       // On to the next section still to do; if every one is done, simply leave this one folded.
+      // A named next section is taken even before it holds anything to do: at Set up, "yes, ask
+      // for an advance" goes to the payment plan, which has no item until an amount is asked
+      // (2026-10-28) — it becomes the section being worked the moment it has one.
       const after = cards.slice(cards.indexOf(card) + 1);
       const target =
-        (opts?.next && cards.includes(opts.next) ? opts.next : null) ??
+        opts?.next ??
         after.find((c) => items.some((i) => i.card === c && !itemDone(i, confirm, nowConfirmed))) ??
         after[0] ??
         null;
@@ -579,24 +582,30 @@ export function FlowProgress({ names, onGo }: { names: Record<string, string>; o
  * again with what the act wrote — it folds and the next section still to do opens, as Done would.
  * A section the act did not finish (a part payment) stays open; the wait is let go after a while.
  */
-export function useFinishWhenDone(card: string): () => void {
+export function useFinishWhenDone(card: string): (opts?: { next?: string }) => void {
   const flow = useContext(FlowCtx);
   const { done } = useFlowCard(card);
   const [waiting, setWaiting] = useState(false);
+  // Where the work goes once this section folds, when the act names it (the advance question).
+  const next = useRef<string | undefined>(undefined);
   useEffect(() => {
     if (!waiting) return;
     if (done) {
       setWaiting(false);
-      flow.done(card);
+      flow.done(card, next.current ? { next: next.current } : undefined);
       return;
     }
     const t = window.setTimeout(() => setWaiting(false), 8000);
     return () => window.clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [waiting, done]);
-  return useCallback(() => {
-    if (flow.on) setWaiting(true);
-  }, [flow.on]);
+  return useCallback(
+    (opts?: { next?: string }) => {
+      next.current = opts?.next;
+      if (flow.on) setWaiting(true);
+    },
+    [flow.on],
+  );
 }
 
 export function useStepFlow() {

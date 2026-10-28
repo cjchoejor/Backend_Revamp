@@ -12,7 +12,7 @@
  * Every figure is `GET /api/entries/:id/payment-status` — received, required, remaining — summed
  * server-side in Decimal. Nothing is added up here.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { BindingBox, Button, Chip, MoneyInput } from "@/design-system";
@@ -31,7 +31,7 @@ import { expiryModeForPlanDue, resolveCreditExpiry, type CreditExpiryChoice } fr
 import { fmtDate, fmtDateTime, fmtStamp, money, plural } from "@/lib/ds/format";
 import { STEP_NAMES, stepNoOfStage } from "@/lib/ds/steps";
 import type { AdvancePaymentPlanSummary, EntryDetail, InvoiceSummary, PaymentStatusSummary } from "@/types/api";
-import { ActionRow, Choice, DsDialog, Fact, Facts, Live, SeeRow, StepCard, toastRefusal, useFinishWhenDone } from "./kit";
+import { ActionRow, Choice, DsDialog, Fact, Facts, Live, SeeRow, StepCard, goToStepCard, toastRefusal, useFinishWhenDone, useStepFlow } from "./kit";
 import { hotelLocalToIso, isoToHotelLocal } from "./s2-shared";
 import { Help, HelpHere } from "@/components/ds/help";
 import { DateTimeInput } from "@/components/ds/date-input";
@@ -94,6 +94,7 @@ export function PaymentPlanCard({
   onRefetch,
   tz,
   bill,
+  askAmount = 0,
   onChanged,
 }: {
   entry: EntryDetail;
@@ -106,16 +107,44 @@ export function PaymentPlanCard({
   tz: string;
   /** This pass's proforma, whether it went out, and whether the guest's answer is on record. */
   bill: { proforma: InvoiceSummary | null; dispatched: boolean; answered: boolean };
+  /** Raised when the desk says yes to an advance after the terms: the amount box opens. */
+  askAmount?: number;
   onChanged: () => void;
 }) {
   const { session } = useSession();
   const folio = entry.folio ?? null;
   const [open, setOpen] = useState<null | "amount" | "plan" | "pay" | "credit">(null);
+  useEffect(() => {
+    if (askAmount > 0) setOpen("amount");
+  }, [askAmount]);
   // Money in, or credit extended, finishes the section once it covers the advance (2026-10-28).
   const finish = useFinishWhenDone("money");
   const moneyIn = () => {
     onChanged();
     finish();
+  };
+  /**
+   * The amount, then how they'll pay, then the proforma (2026-10-28, operator: "when I change the
+   * amount asked and record how they'll pay, I have to send the proforma first, so it should take
+   * the user to that section and tell them there"). The proforma prints both, and money is taken
+   * only against a proforma the guest has, so each act leads to the next.
+   */
+  const flow = useStepFlow();
+  const goToProforma = () => {
+    if (flow.on) flow.open("proforma");
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => goToStepCard("proforma")));
+  };
+  const afterAmount = (askedNow: number) => {
+    onChanged();
+    if (askedNow <= 0) return;
+    // With no plan on record yet, how they'll pay is asked next — sending the proforma first would
+    // mean sending it twice, as recording the plan issues it again.
+    if (!plan) setOpen("plan");
+    else goToProforma();
+  };
+  const afterPlan = () => {
+    onChanged();
+    if ((status?.requiredAmount ?? 0) > 0) goToProforma();
   };
 
   const inPayments = (folio?.payments ?? []).filter((p) => /IN/i.test(p.paymentDirection ?? "") && !/OUT|REFUND/i.test(p.paymentDirection ?? ""));
@@ -389,8 +418,8 @@ export function PaymentPlanCard({
         ) : null}
       </Live>
 
-      {open === "amount" ? <RequirementDialog entry={entry} status={status} onClose={() => setOpen(null)} onDone={onChanged} /> : null}
-      {open === "plan" ? <PlanDialog entry={entry} status={status} tz={tz} onClose={() => setOpen(null)} onDone={onChanged} /> : null}
+      {open === "amount" ? <RequirementDialog entry={entry} status={status} onClose={() => setOpen(null)} onDone={afterAmount} /> : null}
+      {open === "plan" ? <PlanDialog entry={entry} status={status} tz={tz} onClose={() => setOpen(null)} onDone={afterPlan} /> : null}
       {open === "pay" && folio ? (
         <PaymentDialog entry={entry} folioId={folio.id} status={status} currency={cur} onClose={() => setOpen(null)} onDone={moneyIn} />
       ) : null}
@@ -412,7 +441,8 @@ function RequirementDialog({
   entry: EntryDetail;
   status: PaymentStatusSummary | undefined;
   onClose: () => void;
-  onDone: () => void;
+  /** With the amount now asked, as the server worked it out. */
+  onDone: (askedNow: number) => void;
 }) {
   const { session } = useSession();
   const [mode, setMode] = useState<RequirementMode>(status?.requirementBasis?.mode === "AMOUNT" ? "AMOUNT" : "PERCENT");
@@ -435,7 +465,7 @@ function RequirementDialog({
         duration: res.reissuedProforma ? 9000 : undefined,
       });
       onClose();
-      onDone();
+      onDone(Number(res.requiredAmount ?? 0));
     },
     onError: (e) => toastRefusal(e, "The amount asked could not be set"),
   });

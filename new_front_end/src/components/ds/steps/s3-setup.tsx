@@ -159,6 +159,8 @@ export function S3SetUp({
 
   const payment = usePaymentStatus(entry.id, { enabled: !!folio });
   const status = payment.data;
+  // "Yes, ask for an advance" after the terms (2026-10-28) opens the payment plan's amount box.
+  const [askAmount, setAskAmount] = useState(0);
 
   /* ---- the billing model the desk is choosing ---- */
   const isAgentBooking = !!inq.travelAgentId || inq.sourceChannel === "TRAVEL_AGENT" || inq.sourceChannel === "AGENT";
@@ -309,7 +311,14 @@ export function S3SetUp({
 
       {/* The order the desk works in (2026-09-25): the payer, then the terms, the bill and
           the money — and the rooms last, the only order the backend accepts them in. */}
-      <TermsCard entry={entry} editable={editable} tz={tz} onChanged={changed} />
+      <TermsCard
+        entry={entry}
+        editable={editable}
+        tz={tz}
+        status={status}
+        onAskAdvance={() => setAskAmount((n) => n + 1)}
+        onChanged={changed}
+      />
 
       <ProformaCard
         entry={entry}
@@ -333,6 +342,7 @@ export function S3SetUp({
         onRefetch={() => void payment.refetch()}
         tz={tz}
         bill={{ proforma: currentProforma, dispatched, answered }}
+        askAmount={askAmount}
         onChanged={changed}
       />
 
@@ -990,11 +1000,34 @@ function HoldTimeDialog({
 
 /* ------------------------------------------------------------------ the terms disclosed */
 
-function TermsCard({ entry, editable, tz, onChanged }: { entry: EntryDetail; editable: boolean; tz: string; onChanged: () => void }) {
+function TermsCard({
+  entry,
+  editable,
+  tz,
+  status,
+  onAskAdvance,
+  onChanged,
+}: {
+  entry: EntryDetail;
+  editable: boolean;
+  tz: string;
+  /** What the guest is asked to pay — the advance question after the terms reads it. */
+  status: PaymentStatusSummary | undefined;
+  /** "Yes, ask for an advance": open the payment plan's amount box. */
+  onAskAdvance: () => void;
+  onChanged: () => void;
+}) {
   const { session } = useSession();
   const { past } = useStepMode();
   const d = entry.cancellationDisclosure ?? null;
   const [open, setOpen] = useState(false);
+  // Once the terms are recorded and nothing is asked of the guest yet, the desk is asked whether
+  // the hotel wants an advance (2026-10-28, operator: "after finishing the terms it takes the user
+  // directly to the committed hold … it can prompt the user if the hotel wishes to impose advance
+  // payment; if no, take the user to the committed hold; if yes, to the payment plan").
+  const [askAdvance, setAskAdvance] = useState(false);
+  const nothingAsked =
+    !!status && status.requiredAmount === 0 && (status.totalReceived ?? 0) === 0 && !status.creditExtensionActive;
   // The terms the rooms were booked on carry from the booking they were split off (2026-10-14).
   const [statement, setStatement] = useState(entry.carryOver?.cancellation?.noShowTreatmentStatement || DEFAULT_NO_SHOW);
   const finish = useFinishWhenDone("terms");
@@ -1008,7 +1041,8 @@ function TermsCard({ entry, editable, tz, onChanged }: { entry: EntryDetail; edi
       toast.success("The terms are on record as disclosed");
       setOpen(false);
       onChanged();
-      finish();
+      if (nothingAsked) setAskAdvance(true);
+      else finish();
     },
     onError: (e) => toastRefusal(e, "The disclosure could not be recorded"),
   });
@@ -1076,6 +1110,43 @@ function TermsCard({ entry, editable, tz, onChanged }: { entry: EntryDetail; edi
             <label>The no-show treatment, as the guest was told</label>
             <textarea className="input" rows={2} value={statement} onChange={(e) => setStatement(e.target.value)} autoFocus />
           </div>
+        </DsDialog>
+      ) : null}
+      {askAdvance ? (
+        <DsDialog
+          open
+          // Closed without an answer: nothing is asked, so the work goes on to the hold as with No.
+          onClose={() => {
+            setAskAdvance(false);
+            finish();
+          }}
+          title="Ask the guest for an advance?"
+          caseLines={["Nothing is asked now · the hotel's settings ask for no advance"]}
+          help="With an advance, the guest pays it before the booking is reserved and the proforma shows the amount. With none, the rooms are held next."
+          footer={
+            <>
+              <Button
+                kind="secondary"
+                onClick={() => {
+                  setAskAdvance(false);
+                  finish();
+                }}
+              >
+                No advance
+              </Button>
+              <Button
+                onClick={() => {
+                  setAskAdvance(false);
+                  finish({ next: "money" });
+                  onAskAdvance();
+                }}
+              >
+                Yes, ask for an advance
+              </Button>
+            </>
+          }
+        >
+          <p className="sm">Does the hotel want an advance on this booking?</p>
         </DsDialog>
       ) : null}
     </StepCard>
@@ -1157,6 +1228,12 @@ function ProformaCard({
     : status.requiredAmount > 0
       ? `asks for ${basis?.mode === "PERCENT" ? `${basis.percent}% · ` : ""}${money(status.requiredAmount)}`
       : "asks for no advance";
+  // Money is taken only against a proforma the guest has, and after their answer (the backend's
+  // bill-before-money and answer-before-money rules): while an advance is asked, the card says
+  // which comes first, and Send is the main act (2026-10-28).
+  const advanceAsked = !!status && status.requiredAmount > 0 && !status.paidInFull;
+  const sentLive = proformas.some((i) => i.state !== "SUPERSEDED" && i.dispatchedAt != null);
+  const nextUp = !advanceAsked || !editable ? null : !sentLive ? "send" : !answered ? "answer" : null;
   const sendLock = !editable
     ? "not at this step"
     : !draft
@@ -1205,7 +1282,7 @@ function ProformaCard({
           </Button>
           <Live>
             <Button
-              kind="quiet"
+              kind={nextUp === "send" && !sendLock ? "primary" : "quiet"}
               compact
               icon="send"
               state={sendLock ? "inert" : "default"}
@@ -1221,6 +1298,19 @@ function ProformaCard({
         </>
       }
     >
+      {nextUp ? (
+        <div className="notice next" role="status">
+          {nextUp === "send" ? (
+            <span>
+              <b>Send this proforma to the guest first.</b> The advance of {money(status!.requiredAmount)} can be recorded once they have it.
+            </span>
+          ) : (
+            <span>
+              <b>Record the guest&rsquo;s answer below.</b> The advance can be recorded after it.
+            </span>
+          )}
+        </div>
+      ) : null}
       <div className="meta">
         Generated {fmtStamp(shown.createdAt, tz)}
         {shown.dispatchedAt ? ` · sent ${fmtStamp(shown.dispatchedAt, tz)}${shown.dispatchedTo ? ` to ${shown.dispatchedTo}` : ""}` : " · not sent"}
