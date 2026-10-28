@@ -1569,6 +1569,8 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .suffix:not(.desk-root *) { display: inline-flex; align-items: center; }
 .ds .suffix > span:not(.desk-root *) { height: var(--control-h); display: inline-flex; align-items: center; padding: 0 var(--s3); border: 1px solid var(--line-2); border-left: 0; border-radius: 0 var(--r-control) var(--r-control) 0; background: var(--surface-2); color: var(--ink-2); font-size: var(--t-sm); font-weight: 600; }
 .ds .suffix > .input:not(.desk-root *) { border-radius: var(--r-control) 0 0 var(--r-control); }
+/* A dialog's own act at full size — the advance box's Save the advance (2026-10-28). */
+.ds .dialog .foot .btn.big:not(.desk-root *) { min-height: 42px; padding: 0 var(--s5); font-size: var(--t-base); font-weight: 700; }
 /* What a dialog still waits for, said beside its buttons. */
 .ds .dialog .foot .dlg-next:not(.desk-root *) { margin-right: auto; align-self: center; font-size: var(--t-sm); font-weight: 500; color: var(--ink); }
 .ds .ws-top .ws-head.ended:not(.desk-root *) { border-color: var(--danger-line); box-shadow: inset 5px 0 0 var(--danger); }

@@ -609,7 +609,8 @@ function AdvanceDialog({
           <Button2 kind="quiet" disabled={save.isPending} onClick={onClose}>
             Not now
           </Button2>
-          <Button2 working={save.isPending} disabled={!!holdReason} reason={holdReason} onClick={() => save.mutate()}>
+          {/* Green and full size once every answer is in (2026-10-28, operator: "make the button more prominent"). */}
+          <Button2 className="go big" working={save.isPending} disabled={!!holdReason} reason={holdReason} onClick={() => save.mutate()}>
             Save the advance
           </Button2>
         </>
@@ -1042,6 +1043,7 @@ function Button2({
   working,
   disabled,
   reason,
+  className,
   onClick,
   children,
 }: {
@@ -1049,11 +1051,12 @@ function Button2({
   working?: boolean;
   disabled?: boolean;
   reason?: string;
+  className?: string;
   onClick: () => void;
   children: React.ReactNode;
 }) {
   return (
-    <Button kind={kind} state={working ? "working" : disabled ? "inert" : "default"} title={reason} workingLabel="Working…" onClick={onClick}>
+    <Button kind={kind} className={className} state={working ? "working" : disabled ? "inert" : "default"} title={reason} workingLabel="Working…" onClick={onClick}>
       {children}
     </Button>
   );
