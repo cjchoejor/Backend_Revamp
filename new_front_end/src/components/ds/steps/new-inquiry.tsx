@@ -45,7 +45,7 @@ import { fmtRange, money, plural } from "@/lib/ds/format";
 import { StayDates } from "@/components/ds/stay-dates";
 import { STEP_NAMES, STEP_NEEDS } from "@/lib/ds/steps";
 import type { EntryDetail } from "@/types/api";
-import { Choice, FlowChips, StepCanvas, StepCard, StepFlow, anchorFor, atLeast, numberFlow, revealCard, toastRefusal, useFlowStanding } from "./kit";
+import { Choice, FlowProgress, StepCanvas, StepCard, StepFlow, anchorFor, atLeast, numberFlow, revealCard, toastRefusal, useFlowStanding } from "./kit";
 import { useMeasuredVar } from "@/hooks/use-stage-head";
 import { ApiError } from "@/lib/api/client";
 import {
@@ -745,9 +745,11 @@ export function NewInquiryCanvas() {
           </div>
         </div>
         <div className="stagebar">
-          <h3>1 · {STEP_NAMES[0]}</h3>
-          <span className="verb">{STEP_NEEDS[1]}</span>
-          <FlowChips names={INTAKE_SECTIONS} onGo={goToCard} />
+          <h3>
+            1 · {STEP_NAMES[0]}
+            <Help label={`What ${STEP_NAMES[0]} is for`}>{STEP_NEEDS[1]}</Help>
+          </h3>
+          <FlowProgress names={INTAKE_SECTIONS} onGo={goToCard} />
         </div>
       </div>
 

@@ -442,49 +442,122 @@ export function useFlowCard(
 }
 
 /**
- * The step's sections as one line of chips, for the stage bar under the journey (2026-10-27, the
- * operator's stage template): each section's number — a tick once everything in it is done — and
- * its name, the one being worked filled; "N of M done" at the end. A chip opens its section (a
- * finished one unfolds, as Edit does) and `onGo` takes the page there.
+ * The step's sections on the step line as a progress bar and a list (2026-10-28, operator's choice
+ * over chips, which ran out of room on steps with many sections and left none for the step's own
+ * buttons): one segment per section — green once done, blue for the one being worked — then
+ * "N of M done" and the section being worked, which opens the list of every section with where it
+ * stands. A section in the list opens it (a finished one unfolds, as Edit does) and `onGo` takes
+ * the page there. One line however many sections there are.
  */
-export function FlowChips({ names, onGo }: { names: Record<string, string>; onGo: (card: string) => void }) {
+export function FlowProgress({ names, onGo }: { names: Record<string, string>; onGo: (card: string) => void }) {
   const ctx = useContext(FlowCtx);
+  const [open, setOpen] = useState(false);
+  const [at, setAt] = useState<{ top: number; left: number } | null>(null);
+  const btnRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const place = useCallback(() => {
+    const b = btnRef.current?.getBoundingClientRect();
+    if (b) setAt({ top: Math.round(b.bottom + 6), left: Math.round(Math.max(8, Math.min(b.left, window.innerWidth - 368))) });
+  }, []);
+  useEffect(() => {
+    if (!open) return;
+    place();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (menuRef.current?.contains(t) || btnRef.current?.contains(t)) return;
+      setOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    window.requestAnimationFrame(() =>
+      (menuRef.current?.querySelector<HTMLButtonElement>(".fp-item.cur") ?? menuRef.current?.querySelector<HTMLButtonElement>(".fp-item"))?.focus({ preventScroll: true }),
+    );
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }, [open, place]);
   if (!ctx.on) return null;
   const cards = flowCards(ctx.items);
   if (!cards.length) return null;
-  const doneOf = (c: string) => flowSectionDone(ctx.items, c, ctx.derived, (i) => itemDone(i as FlowItem, ctx.confirm, ctx.confirmed));
+  const isDone = (i: { card?: string; met: boolean }) => itemDone(i as FlowItem, ctx.confirm, ctx.confirmed);
+  const doneOf = (c: string) => flowSectionDone(ctx.items, c, ctx.derived, isDone);
   const doneN = cards.filter(doneOf).length;
+  const all = doneN === cards.length;
+  const cur = ctx.current && cards.includes(ctx.current) ? ctx.current : null;
+  const go = (c: string) => {
+    setOpen(false);
+    ctx.open(c);
+    onGo(c);
+  };
+  // Where a section stands, in the list's own words.
+  const standing = (c: string) => {
+    if (doneOf(c)) return "done";
+    const own = ctx.items.filter((i) => i.card === c);
+    const waitsOn = own.every(isDone) ? flowSectionWaitsOn(ctx.items, c, ctx.derived, isDone) : null;
+    if (waitsOn) return `waits for ${names[waitsOn] ?? waitsOn} to be saved`;
+    return own.find((i) => !isDone(i))?.label ?? "to do";
+  };
   return (
-    <div className="flow-chips" aria-label="This step's sections">
-      {cards.map((c, i) => {
-        const met = doneOf(c);
-        const cur = ctx.current === c;
-        const n = ctx.items.find((x) => x.card === c)?.n;
-        return (
-          <Fragment key={c}>
-            {i ? (
-              <span className="sep" aria-hidden="true">
-                ›
-              </span>
-            ) : null}
-            <button
-              type="button"
-              className={`flow-chip${met ? " done" : ""}${cur ? " cur" : ""}`}
-              aria-current={cur ? "step" : undefined}
-              onClick={() => {
-                ctx.open(c);
-                onGo(c);
-              }}
-            >
-              <span className="n">{met ? <Icon name="check" /> : n}</span>
-              {names[c] ?? c}
-            </button>
-          </Fragment>
-        );
-      })}
-      <span className={`flow-count${doneN === cards.length ? " ok-ink" : ""}`}>
+    <div className="flow-progress" aria-label="This step's sections">
+      <span className="fp-bar" aria-hidden="true">
+        {cards.map((c) => (
+          <span key={c} className={`fp-seg${doneOf(c) ? " done" : ""}${c === cur ? " cur" : ""}`} />
+        ))}
+      </span>
+      <span className={`fp-count${all ? " ok-ink" : ""}`}>
         {doneN} of {cards.length} done
       </span>
+      <button
+        ref={btnRef}
+        type="button"
+        className={`fp-now${open ? " on" : ""}`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        {all ? (
+          "all done"
+        ) : cur ? (
+          <>
+            now: <b>{names[cur] ?? cur}</b>
+          </>
+        ) : (
+          "the sections"
+        )}
+        <Icon name="chev" className="cb-chev" />
+      </button>
+      {open && at ? (
+        <Overlay>
+          <div className="cb-menu fp-menu" role="menu" aria-label="This step's sections" ref={menuRef} style={{ top: at.top, left: at.left }}>
+            {cards.map((c) => {
+              const met = doneOf(c);
+              const n = ctx.items.find((x) => x.card === c)?.n;
+              return (
+                <button
+                  key={c}
+                  type="button"
+                  role="menuitem"
+                  className={`fp-item${met ? " done" : ""}${c === cur ? " cur" : ""}`}
+                  aria-current={c === cur ? "step" : undefined}
+                  onClick={() => go(c)}
+                >
+                  <span className="fp-n">{met ? <Icon name="check" /> : n}</span>
+                  <span className="fp-name">{names[c] ?? c}</span>
+                  <span className="fp-state">{c === cur && !met ? `you are here · ${standing(c)}` : standing(c)}</span>
+                </button>
+              );
+            })}
+          </div>
+        </Overlay>
+      ) : null}
     </div>
   );
 }

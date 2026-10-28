@@ -1331,10 +1331,9 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .hdwell b { color: var(--ink-2); font-weight: 600; }
 @media (prefers-reduced-motion: reduce) { .ds .hclock .fill { transition: none; } }
 
-/* the step's line: its name, what it is for, then its sections as chips */
+/* the step's line: its name (what it is for behind a "?"), then its sections as a progress bar */
 .ds .ws-top .stagebar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s3); padding: var(--s2) var(--s4); background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--r-card); }
 .ds .ws-top .stagebar h3 { font-size: var(--t-h3); font-family: var(--font-head); margin: 0; }
-.ds .ws-top .stagebar .verb { color: var(--ink-2); }
 /* Change booking at the right-hand end of the step's line, and its menu (2026-10-27). */
 .ds .ws-top .stagebar .stage-acts { margin-left: auto; display: inline-flex; align-items: center; }
 .ds .ws-top .stagebar .stage-acts:empty { display: none; }
@@ -1351,19 +1350,48 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .cb-item.danger .cb-label { color: var(--danger); }
 .ds .cb-note { font-size: var(--t-meta); color: var(--ink-2); line-height: 1.35; }
 .ds .cb-why { font-size: var(--t-meta); color: var(--warning); font-weight: 600; }
-.ds .flow-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.ds .flow-chips .sep { color: var(--ink-3); }
-.ds .flow-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 12px 3px 4px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--ink-2); font: inherit; font-size: var(--t-sm); font-weight: 500; cursor: pointer; }
-.ds .flow-chip .n { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; border: 1px solid var(--line); font-size: 12px; }
-.ds .flow-chip .n .ic { width: 11px; height: 11px; }
-.ds .flow-chip:hover { background: var(--surface-2); border-color: var(--ink-3); }
-.ds .flow-chip.done { border-color: var(--success-line); color: var(--success); }
-.ds .flow-chip.done .n { background: var(--success); border-color: var(--success); color: #fff; }
-.ds .flow-chip.cur { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 700; }
-.ds .flow-chip.cur .n { border-color: #fff; color: #fff; background: transparent; }
-.ds .flow-chip.cur.done .n { background: #fff; color: var(--accent); }
-.ds .flow-chip:focus-visible { outline: none; box-shadow: var(--focus); }
-.ds .flow-count { font-size: var(--t-sm); font-weight: 700; color: var(--ink-2); margin-left: 4px; }
+/* The sections as a progress bar and a list (2026-10-28, operator's choice over chips): one segment
+   per section — green done, blue the one being worked — "N of M done", and the section being worked
+   as a control that opens every section with where it stands. One line however many sections. */
+.ds .flow-progress { display: inline-flex; align-items: center; gap: 10px; min-width: 0; }
+.ds .fp-bar { display: inline-flex; gap: 3px; }
+.ds .fp-seg { width: 22px; height: 8px; border-radius: 2px; background: var(--line-2); }
+.ds .fp-seg.done { background: var(--success); }
+.ds .fp-seg.cur:not(.done) { background: var(--accent); }
+.ds .fp-seg.cur.done { box-shadow: 0 0 0 2px var(--accent-line); }
+.ds .fp-count { font-size: var(--t-sm); font-weight: 700; color: var(--ink-2); white-space: nowrap; }
+.ds .fp-now { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border: 1px solid var(--line-2); border-radius: 4px; background: var(--surface); color: var(--ink); font: inherit; font-size: var(--t-sm); font-weight: 500; cursor: pointer; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.ds .fp-now b { color: var(--accent-ink); font-weight: 700; }
+.ds .fp-now:hover { background: var(--surface-2); border-color: var(--ink-3); }
+.ds .fp-now:active { background: var(--surface-3); }
+.ds .fp-now.on { border-color: var(--accent); box-shadow: inset 0 -2px 0 var(--accent); }
+.ds .fp-now.on .cb-chev { transform: rotate(-90deg); }
+.ds .fp-now:focus-visible { outline: none; box-shadow: var(--focus); }
+.ds .fp-menu { width: 360px; }
+.ds .fp-item { display: grid; grid-template-columns: 24px minmax(0, 1fr); column-gap: 10px; row-gap: 1px; align-items: center; text-align: left; padding: 8px 10px; border: 0; border-radius: 4px; background: transparent; cursor: pointer; font: inherit; color: var(--ink); }
+.ds .fp-item:hover { background: var(--surface-2); }
+.ds .fp-item:active { background: var(--surface-3); }
+.ds .fp-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.ds .fp-item.cur { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+.ds .fp-n { grid-row: span 2; width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; border: 1px solid var(--line); font-size: 12px; font-weight: 600; color: var(--ink-2); }
+.ds .fp-n .ic { width: 11px; height: 11px; }
+.ds .fp-item.done .fp-n { background: var(--success); border-color: var(--success); color: #fff; }
+.ds .fp-item.cur:not(.done) .fp-n { background: var(--accent); border-color: var(--accent); color: #fff; }
+.ds .fp-name { font-weight: 600; }
+.ds .fp-state { font-size: var(--t-meta); color: var(--ink-2); line-height: 1.35; }
+.ds .fp-item.done .fp-state { color: var(--success); }
+
+/* The move floats above the bar's right end once everything is done (2026-10-28, operator: "shown as
+   a floating icon which appears when all the conditions to move forward are met … fixed at the bottom
+   corner when the user scrolls"). It sits in the sticky bar, so it stays put while the page scrolls;
+   it floats, so it carries a shadow. */
+.ds .ws-top .gatebar.top .move-float:not(.desk-root *) { position: absolute; right: var(--s5); bottom: calc(100% + 12px); z-index: 2; animation: ds-move-rise 220ms ease-out; }
+.ds .ws-top .gatebar.top .move-float .btn:not(.desk-root *) { height: 48px; min-width: 200px; padding: 0 var(--s5); font-size: 16px; font-weight: 700; box-shadow: 0 6px 18px rgba(9, 30, 66, 0.22), 0 0 1px rgba(9, 30, 66, 0.31); }
+.ds .ws-top .gatebar.top .move-float .btn:not(.desk-root *)::after { content: "\2192"; margin-left: 10px; font-weight: 700; }
+/* room under the work for the button while it floats, so the page's last lines can scroll clear of it */
+.ds .ws-top .ws-main:has(.move-float) .canvas:not(.desk-root *) { padding-bottom: 72px; }
+@keyframes ds-move-rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .ds .ws-top .gatebar.top .move-float { animation: none; } }
 
 /* Two columns from the topbar down (2026-10-27, operator and the boss: "divide the screen that way"):
    on the left the work — its head and the step's line staying put under the topbar, the sections,

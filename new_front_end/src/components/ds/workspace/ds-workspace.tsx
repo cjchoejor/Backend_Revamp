@@ -53,7 +53,7 @@ import { ApiError } from "@/lib/api/client";
 import { DESK_STEPS, guestName } from "@/lib/desk/model";
 import {
   AlsoBar,
-  FlowChips,
+  FlowProgress,
   FlowTodo,
   OtherWaysSlot,
   StepFlow,
@@ -67,7 +67,7 @@ import {
   type StepPane,
   type UnsavedSection,
 } from "@/components/ds/steps/kit";
-import { QuietScreen } from "@/components/ds/help";
+import { Help, QuietScreen } from "@/components/ds/help";
 import { findParkTimer } from "@/lib/desk/timers";
 import {
   canConfirm,
@@ -945,6 +945,10 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const inert = unmet > 0;
   const firstNote = inert ? `${plural(unmet, "thing")} first` : undefined;
   let forward: ReactNode;
+  // Whether the step's own move may be pressed — null when the bar holds something that is not the
+  // move (Sealed, Resume, Go to). On the stage layout the move leaves the bar and floats into the
+  // work column's bottom-right corner only once it is ready (2026-10-28, operator).
+  let moveReady: boolean | null = null;
   if (sealed || (step.key === "closed" && entry.status === "CLOSED")) {
     forward = (
       <Chip tone="quiet" icon="lock">
@@ -958,6 +962,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
       </Button>
     );
   } else if (confirmStepActive) {
+    moveReady = ready;
     forward = (
       <Button icon="lock" state={ready ? "default" : "inert"} reason={ready ? undefined : firstNote} onClick={() => setConfirmOpen(true)}>
         Reserve the booking
@@ -966,6 +971,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   } else if (inquiryStepActive) {
     // A section with changes not saved holds the move, as the Negotiation table's do (2026-10-27).
     const ok = canProgressS1(entry) && !preconds.some((p) => p.unsaved);
+    moveReady = ok;
     forward = (
       <Button className="go" state={ok ? "default" : "inert"} reason={ok ? undefined : firstNote} onClick={() => setSummaryOpen(true)}>
         Continue
@@ -973,6 +979,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     );
   } else if (quoteStepActive) {
     const ok = canProgressS2(entry) && negotiationExtras.length === 0;
+    moveReady = ok;
     // Green once it can be pressed, and the move is said in the middle of the screen, as at
     // Inquiry (2026-10-27).
     forward = (
@@ -1001,12 +1008,14 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
       </Button>
     );
   } else if (setupStepActive) {
+    moveReady = ready;
     forward = (
       <Button state={ready ? "default" : "inert"} reason={ready ? "the booking stays at Set up until you reserve it" : firstNote} onClick={() => setSelected(4)}>
         Move to Reserve
       </Button>
     );
   } else if (confirmedS4Active) {
+    moveReady = voucherAnswerRecorded;
     forward = (
       <Button
         state={activateMutation.isPending ? "working" : voucherAnswerRecorded ? "default" : "inert"}
@@ -1019,6 +1028,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     );
   } else if (arrivalStepActive) {
     const ok = canProgressS5(entry, guestPresent, hotelToday);
+    moveReady = ok;
     forward = (
       <Button
         state={advanceMutation.isPending ? "working" : ok ? "default" : "inert"}
@@ -1030,6 +1040,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
       </Button>
     );
   } else if (checkInStepActive) {
+    moveReady = canCheckIn;
     forward = (
       <Button icon="lock" state={canCheckIn ? "default" : "inert"} reason={canCheckIn ? undefined : firstNote} onClick={() => setCheckInOpen(true)}>
         Check in &amp; go live
@@ -1037,6 +1048,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     );
   } else if (stayStepActive) {
     const ok = canProgressS7(entry, nightAuditOk, hotelToday);
+    moveReady = ok;
     forward = (
       <Button state={advanceMutation.isPending ? "working" : ok ? "default" : "inert"} reason={ok ? undefined : firstNote} workingLabel="Moving…" onClick={() => advanceMutation.mutate({ targetStage: "S8" })}>
         Move to Check-out
@@ -1044,6 +1056,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     );
   } else if (checkOutStepActive) {
     const ok = canProgressS8(entry, { inspections, damage });
+    moveReady = ok;
     forward = (
       <Button state={advanceMutation.isPending ? "working" : ok ? "default" : "inert"} reason={ok ? undefined : firstNote} workingLabel="Moving…" onClick={() => advanceMutation.mutate({ targetStage: "S9" })}>
         Move to Closed
@@ -1051,6 +1064,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     );
   } else if (closedStepActive) {
     const ok = !!closure?.canClose && atLeastFom(session?.actorLevel);
+    moveReady = ok;
     forward = (
       <Button icon="lock" state={closeMutation.isPending ? "working" : ok ? "default" : "inert"} reason={ok ? undefined : firstNote} workingLabel="Sealing…" onClick={() => setCloseOpen(true)}>
         Close &amp; seal the record
@@ -1594,9 +1608,9 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                 <div className="stagebar">
                   <h3>
                     {viewing} · {STEP_NAMES[viewing - 1]}
+                    <Help label={`What ${STEP_NAMES[viewing - 1]} is for`}>{STEP_NEEDS[viewing as StepNo]}</Help>
                   </h3>
-                  <span className="verb">{STEP_NEEDS[viewing as StepNo]}</span>
-                  {viewingPast || sealed ? null : <FlowChips names={sections} onGo={goToCard} />}
+                  {viewingPast || sealed ? null : <FlowProgress names={sections} onGo={goToCard} />}
                   <span className="stage-acts" ref={setStageActs} />
                 </div>
               </div>
@@ -1702,7 +1716,15 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                   <div className="also-btns" ref={setAlsoButtons} />
                 </div>
                 <div className="gate-status">{gateStatus}</div>
-                <div className="acts">{forward}</div>
+                {moveReady === null ? <div className="acts">{forward}</div> : null}
+                {/* The move floats above the bar's right end once everything is done, and stays
+                    there while the page scrolls (the bar is sticky); until then the bar says what
+                    is still to do (2026-10-28, operator). */}
+                {moveReady ? (
+                  <div className="move-float" role="region" aria-label="Move on">
+                    {forward}
+                  </div>
+                ) : null}
               </div>
               {dialogs}
             </div>
