@@ -193,9 +193,42 @@ export function RoomsByType({
 
   const roomsOfType = (t: string) => catalog.filter((r) => r.roomTypeId === t);
   const [adding, setAdding] = useState("");
+  const [byNightAsked, setByNightAsked] = useState(false);
 
   if (!configId) return null;
   if (house.isLoading) return <p className="meta">Asking the house for each type…</p>;
+
+  // ---- what each box may offer --------------------------------------------------------------
+  // A count is offered only when it can stand: no more than the type has free that night, and no
+  // more than the rooms the booking still needs that night. A guest's own room keeps its type
+  // counted, so the box never goes below it.
+  const freeOn = (t: string, d: string) => types.find((x) => x.roomTypeId === t)?.perNight.find((p) => p.date === d)?.free ?? 0;
+  const fixedOf = (t: string) => fixed.filter((id) => catalog.find((c) => c.id === id)?.roomTypeId === t).length;
+  const capOn = (t: string, d: string) => Math.max(0, Math.min(freeOn(t, d), numberOfRooms - (totalOn(d) - cell(d, t))));
+  const capEvery = (t: string) => (nights.length ? Math.min(...nights.map((d) => capOn(t, d))) : 0);
+  const span = (lo: number, hi: number) => (hi < lo ? [] : Array.from({ length: hi - lo + 1 }, (_, i) => lo + i));
+  /** green — the type alone covers the booking; amber — some, fewer than asked; red — none. */
+  const freeTone = (n: number) => (n <= 0 ? "none" : n < numberOfRooms ? "few" : "plenty");
+  const shut = (name: string, t: string, d: string) =>
+    freeOn(t, d) === 0
+      ? `No ${name} free on ${fmtDay(d)}`
+      : `${fmtDay(d)} already has its ${plural(numberOfRooms, "room")} — lower another type first`;
+
+  // A type with nothing free on any night, and nothing asked of it, is named in one line instead
+  // of a row of empty boxes.
+  const inUse = (t: string) => fixedOf(t) > 0 || nights.some((d) => cell(d, t) > 0);
+  const shown = types.filter((t) => inUse(t.roomTypeId) || nights.some((d) => freeOn(t.roomTypeId, d) > 0));
+  const full = types.filter((t) => !shown.includes(t));
+  // Most stays take the same rooms every night: one dropdown per type, and the nights show only
+  // what is free. Night by night opens a dropdown per night — by itself when the nights differ.
+  const oneNight = nights.length <= 1;
+  const varies = shown.some((t) => everyNight(t.roomTypeId) == null);
+  const byNight = oneNight || byNightAsked || varies;
+  // A guest's own room can be asked for only while its type can take one more on every night.
+  const canAdd = (t: string) => {
+    const need = fixedOf(t) + 1;
+    return nights.every((d) => cell(d, t) >= need || (totalOn(d) < numberOfRooms && freeOn(t, d) > cell(d, t)));
+  };
 
   const shortNights = nights.filter((d) => totalOn(d) !== numberOfRooms);
   const reason = !editable
@@ -212,26 +245,103 @@ export function RoomsByType({
               ? "nothing changed"
               : null;
 
+  /** One box: what is free (coloured), then how many are taken — a dropdown of what can stand. */
+  const pickCell = (o: {
+    label: string;
+    free: number;
+    freeTitle: string;
+    value: number | null;
+    lo: number;
+    hi: number;
+    shutTitle: string;
+    onPick: (v: number) => void;
+    /** the night's free count only — the count is set in "Every night" */
+    freeOnly?: boolean;
+  }) => {
+    const over = o.value != null && o.value > o.hi;
+    const choices = span(o.lo, o.hi);
+    if (over) choices.push(o.value!);
+    const canChoose = editable && (choices.length > 1 || (o.value == null && choices.length > 0));
+    return (
+      <div className={`bt-cell${o.value ? " picked" : ""}${over ? " over" : ""}`}>
+        <span className={`bt-free ${freeTone(o.free)}`} title={o.freeTitle}>
+          {o.free}
+        </span>
+        {o.freeOnly ? null : canChoose ? (
+          <select
+            className={`bt-pick${o.value == null ? " varies" : ""}`}
+            aria-label={o.label}
+            title={over ? `More than can be taken — ${o.hi} at most` : undefined}
+            value={o.value == null ? "" : String(o.value)}
+            onChange={(e) => {
+              if (e.target.value !== "") o.onPick(Number(e.target.value));
+            }}
+          >
+            {o.value == null ? (
+              <option value="" disabled>
+                varies
+              </option>
+            ) : null}
+            {choices.map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <span className="bt-none" role="img" aria-label={`${o.label}: ${o.value ?? 0}`} title={editable ? o.shutTitle : undefined}>
+            {o.value ? o.value : "–"}
+          </span>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div className="by-type">
+      <div className="bt-scroll">
       <table className="table compact house-types by-type-grid">
         <thead>
           <tr>
-            <th>Type</th>
-            <th className="every">
-              Every night
+            <th>
+              Type
               <Help label="About the counts">
-                How many rooms of each type the guests need. Set it for every night here, or night by night in the columns. The system chooses
-                the rooms — one room for each guest&rsquo;s whole stay — and keeps them until Arrival, where the room numbers are confirmed.
+                Pick how many rooms of each type the guests need — for every night at once, or night by night. The coloured number is
+                how many of that type are free: green is enough for the whole booking, amber is some but fewer than the rooms asked,
+                red is none. A box offers only what can stand — never more than is free, and never more than the rooms the booking
+                still needs that night. The system chooses the rooms, one room for each guest&rsquo;s whole stay, and keeps them until
+                Arrival, where the room numbers are confirmed.
               </Help>
             </th>
+            {oneNight ? null : (
+              <th className="every">
+                Every night
+                {byNight ? (
+                  varies ? null : (
+                    <button type="button" className="bt-mode" onClick={() => setByNightAsked(false)}>
+                      Same every night
+                    </button>
+                  )
+                ) : (
+                  <button type="button" className="bt-mode" onClick={() => setByNightAsked(true)}>
+                    Night by night
+                  </button>
+                )}
+              </th>
+            )}
             {nights.map((d) => {
               const tot = totalOn(d);
+              const left = numberOfRooms - tot;
               return (
                 <th key={d} className="hn">
-                  {WEEKDAY[new Date(`${d}T00:00:00Z`).getUTCDay()]}
-                  <small>{fmtDay(d)}</small>
-                  <span className={`bt-tally ${tot === numberOfRooms ? "done" : "short"}`} title={`${tot} of the ${numberOfRooms} rooms asked`}>
+                  <span className="bt-day">
+                    {WEEKDAY[new Date(`${d}T00:00:00Z`).getUTCDay()]} {fmtDay(d)}
+                  </span>
+                  <span
+                    className={`bt-tally ${tot === numberOfRooms ? "done" : "short"}`}
+                    title={left === 0 ? "Every room this night is picked" : left > 0 ? `${plural(left, "room")} still to pick` : `${-left} too many`}
+                  >
+                    {tot === numberOfRooms ? "✓ " : ""}
                     {tot}/{numberOfRooms}
                   </span>
                 </th>
@@ -240,40 +350,41 @@ export function RoomsByType({
           </tr>
         </thead>
         <tbody>
-          {types.map((t) => {
+          {shown.map((t) => {
             const ev = everyNight(t.roomTypeId);
+            const lo = fixedOf(t.roomTypeId);
             return (
               <tr key={t.roomTypeId}>
-                <td>
-                  {t.name}
-                  <span className="meta"> · {t.wholeStay} free every night</span>
-                </td>
+                <td className="bt-type">{t.name}</td>
+                {oneNight ? null : (
                 <td className="every">
-                  <input
-                    className="bt-count"
-                    inputMode="numeric"
-                    aria-label={`${t.name}, every night`}
-                    disabled={!editable}
-                    value={ev == null ? "" : String(ev)}
-                    placeholder={ev == null ? "varies" : "0"}
-                    onChange={(e) => setEvery(t.roomTypeId, Number(e.target.value))}
-                  />
+                  {pickCell({
+                    label: `${t.name}, every night`,
+                    free: t.wholeStay,
+                    freeTitle: `${t.wholeStay} ${t.name} free for the whole stay${t.wholeStayUncertain ? " — perhaps more" : ""}`,
+                    value: ev,
+                    lo,
+                    hi: Math.max(lo, capEvery(t.roomTypeId)),
+                    shutTitle: `No more ${t.name} can be taken on every night`,
+                    onPick: (v) => setEvery(t.roomTypeId, v),
+                  })}
                 </td>
+                )}
                 {nights.map((d) => {
-                  const free = t.perNight.find((p) => p.date === d)?.free ?? 0;
-                  const v = cell(d, t.roomTypeId);
+                  const free = freeOn(t.roomTypeId, d);
                   return (
-                    <td key={d} className={`hn${v > free ? " over" : ""}`}>
-                      <input
-                        className="bt-count"
-                        inputMode="numeric"
-                        aria-label={`${t.name} on ${fmtDay(d)}`}
-                        disabled={!editable}
-                        value={v ? String(v) : ""}
-                        placeholder="0"
-                        onChange={(e) => setCell(d, t.roomTypeId, Number(e.target.value))}
-                      />
-                      <small className={free === 0 ? "none" : v > free ? "over" : ""}>{free} free</small>
+                    <td key={d} className="hn">
+                      {pickCell({
+                        label: `${t.name} on ${fmtDay(d)}`,
+                        free,
+                        freeTitle: `${free} ${t.name} free on ${fmtDay(d)}`,
+                        value: cell(d, t.roomTypeId),
+                        lo,
+                        hi: Math.max(lo, capOn(t.roomTypeId, d)),
+                        shutTitle: shut(t.name, t.roomTypeId, d),
+                        onPick: (v) => setCell(d, t.roomTypeId, v),
+                        freeOnly: !byNight,
+                      })}
                     </td>
                   );
                 })}
@@ -282,9 +393,15 @@ export function RoomsByType({
           })}
         </tbody>
       </table>
+      </div>
+      {full.length ? (
+        <p className="bt-full">
+          <span className="bt-free none">0</span> Nothing free on these nights: {full.map((t) => t.name).join(" · ")}
+        </p>
+      ) : null}
 
       <div className="bt-fixed">
-        <span className="bt-k">A guest&rsquo;s own room</span>
+        <span className="bt-k">A room the guest asked for</span>
         {fixed.map((id) => {
           const r = catalog.find((c) => c.id === id);
           return (
@@ -312,7 +429,7 @@ export function RoomsByType({
               setFixed((f) => [...f, id]);
               // A room of a type nobody asked for yet: count it in on every night.
               if (t) {
-                const need = fixed.filter((x) => catalog.find((c) => c.id === x)?.roomTypeId === t).length + 1;
+                const need = fixedOf(t) + 1;
                 setCounts((c) => {
                   const next = { ...c };
                   for (const d of nights) if ((next[d]?.[t] ?? 0) < need) next[d] = { ...(next[d] ?? {}), [t]: need };
@@ -321,21 +438,24 @@ export function RoomsByType({
               }
             }}
           >
-            <option value="">+ A particular room</option>
-            {types.map((t) => (
-              <optgroup key={t.roomTypeId} label={t.name}>
-                {roomsOfType(t.roomTypeId)
-                  .filter((r) => !fixed.includes(r.id))
-                  .map((r) => (
-                    <option key={r.id} value={r.id}>
-                      Room {r.roomNumber}
-                    </option>
-                  ))}
-              </optgroup>
-            ))}
+            <option value="">+ Add one room by number</option>
+            {shown.map((t) => {
+              const ok = canAdd(t.roomTypeId);
+              return (
+                <optgroup key={t.roomTypeId} label={ok ? t.name : `${t.name} — lower another type first`}>
+                  {roomsOfType(t.roomTypeId)
+                    .filter((r) => !fixed.includes(r.id))
+                    .map((r) => (
+                      <option key={r.id} value={r.id} disabled={!ok}>
+                        Room {r.roomNumber}
+                      </option>
+                    ))}
+                </optgroup>
+              );
+            })}
           </select>
         ) : null}
-        {fixed.length === 0 ? <span className="meta">none — the system chooses every room</span> : null}
+        <span className="meta">{fixed.length === 0 ? "none — the system chooses every room" : "the system chooses the rest, by type"}</span>
       </div>
 
       {answer && !answer.fits ? (
@@ -369,7 +489,7 @@ export function RoomsByType({
                   : "Does not fit yet"}
           </span>
           <Button kind="quiet" compact onClick={onParticular}>
-            Choose particular rooms instead
+            Pick every room by number instead
           </Button>
           <Button
             className="go"
