@@ -60,6 +60,10 @@ export type PriceLineRoom = {
   /** True when per-date meal plans mean the meals are not one multiplication. */
   mealsVaryByNight: boolean;
   datesLabel?: string | null;
+  /** Name the room by its type alone — the guest's papers (2026-10-28). */
+  hideRoomNumber?: boolean;
+  /** How many identical rooms these rows stand for (default 1) — see `buildPaperPriceLines`. */
+  roomCount?: number;
 };
 
 /** The rows as figures to the cent, for a JSON answer (the document rounds as it prints). */
@@ -94,21 +98,28 @@ export function buildRoomPriceLines(r: PriceLineRoom): PriceLine[] {
   const roomNights = r.nights;
   const planParts = mealPlanParts(raw);
   const lines: PriceLine[] = [];
+  // Several identical rooms set out once: every count and amount is k times one room's.
+  const k = Math.max(1, Math.floor(r.roomCount ?? 1));
+  const many = k > 1;
+  const roomsTimes = (q: string) => (many ? `${k} rooms × ${q}` : q);
 
   // ── Room row ────────────────────────────────────────────────────────────────
   lines.push({
     dates: r.datesLabel ?? null,
-    description: [
-      r.roomNumber ? `Room ${r.roomNumber}` : `Room ${r.roomId.slice(0, 6)}`,
-      r.roomTypeName ?? null,
-      roomOccupantsLabel(raw),
-      raw?.isFoc ? "FOC" : null,
-    ]
+    description: (r.hideRoomNumber
+      ? [r.roomTypeName ?? "Room", many ? `${k} rooms` : null, `${roomOccupantsLabel(raw)}${many ? " each" : ""}`, raw?.isFoc ? "FOC" : null]
+      : [
+          r.roomNumber ? `Room ${r.roomNumber}` : `Room ${r.roomId.slice(0, 6)}`,
+          r.roomTypeName ?? null,
+          roomOccupantsLabel(raw),
+          raw?.isFoc ? "FOC" : null,
+        ]
+    )
       .filter(Boolean)
       .join(" · "),
-    qty: nightsWord(roomNights),
+    qty: roomsTimes(nightsWord(roomNights)),
     rate: r.printedRoomRate,
-    amount: r.printedRoomRate * roomNights,
+    amount: r.printedRoomRate * roomNights * k,
   });
 
   // ── Extra beds ──────────────────────────────────────────────────────────────
@@ -119,16 +130,16 @@ export function buildRoomPriceLines(r: PriceLineRoom): PriceLine[] {
     // one multiplication can't describe it, so print the stored night-by-night figure.
     lines.push({
       description: `Extra bed · varies by night`,
-      qty: nightsWord(roomNights),
+      qty: roomsTimes(nightsWord(roomNights)),
       rate: null,
-      amount: Number(r.extraBedSubtotal),
+      amount: Number(r.extraBedSubtotal) * k,
     });
   } else if (bedCount > 0 && bedRate > 0) {
     lines.push({
       description: `Extra bed`,
-      qty: `${bedCount} × ${nightsWord(roomNights)}`,
+      qty: `${bedCount * k} × ${nightsWord(roomNights)}`,
       rate: bedRate,
-      amount: bedRate * bedCount * roomNights,
+      amount: bedRate * bedCount * roomNights * k,
     });
   }
 
@@ -145,9 +156,9 @@ export function buildRoomPriceLines(r: PriceLineRoom): PriceLine[] {
     // why rather than printing a multiplication that doesn't hold.
     lines.push({
       description: `Meals · varies by night${planParts.length ? ` (usually ${planParts.join(" · ")})` : ""}`,
-      qty: nightsWord(roomNights),
+      qty: roomsTimes(nightsWord(roomNights)),
       rate: null,
-      amount: mealsSubtotal,
+      amount: mealsSubtotal * k,
     });
   } else {
     const planRows: Array<{ label: string; pax: number; rate: number }> = [
@@ -185,17 +196,17 @@ export function buildRoomPriceLines(r: PriceLineRoom): PriceLine[] {
       const covers = only ? only.pax * roomNights : 0;
       lines.push({
         description: only ? `Meals · ${only.label}` : `Meals${planParts.length ? ` · ${planParts.join(" · ")}` : ""}`,
-        qty: only ? `${only.pax} pax × ${nightsWord(roomNights)}` : nightsWord(roomNights),
+        qty: only ? `${only.pax * k} pax × ${nightsWord(roomNights)}` : roomsTimes(nightsWord(roomNights)),
         rate: only && covers > 0 ? Number((mealsSubtotal / covers).toFixed(2)) : null,
-        amount: mealsSubtotal,
+        amount: mealsSubtotal * k,
       });
     }
     for (const p of splitReconciles ? split : []) {
       lines.push({
         description: `Meals · ${p.label}`,
-        qty: `${p.pax} pax × ${nightsWord(roomNights)}`,
+        qty: `${p.pax * k} pax × ${nightsWord(roomNights)}`,
         rate: p.rate,
-        amount: p.amount,
+        amount: p.amount * k,
       });
     }
     // "Others" guests order à la carte, so their meals are priced per meal taken rather than by a
@@ -211,9 +222,9 @@ export function buildRoomPriceLines(r: PriceLineRoom): PriceLine[] {
       if (a.pax > 0 && a.rate > 0) {
         lines.push({
           description: `Meals · à la carte ${a.label}`,
-          qty: `${a.pax} pax × ${nightsWord(roomNights)}`,
+          qty: `${a.pax * k} pax × ${nightsWord(roomNights)}`,
           rate: a.rate,
-          amount: a.rate * a.pax * roomNights,
+          amount: a.rate * a.pax * roomNights * k,
         });
       }
     }
@@ -222,4 +233,23 @@ export function buildRoomPriceLines(r: PriceLineRoom): PriceLine[] {
   // Everything after this room's own row is a sub-line of it.
   for (let i = 1; i < lines.length; i++) lines[i].indent = true;
   return lines;
+}
+
+/**
+ * The rooms' rows as a guest's paper prints them (2026-10-28, operator: "in the quotation and
+ * proforma invoice can it not show the room numbers, just the room type"): each room named by its
+ * type, and rooms that would print the very same rows set out once — "Deluxe Double · 2 rooms ·
+ * 2 adults each", "2 rooms × 3 nights" — so the paper does not read like one line repeated. A
+ * group's amounts are its rooms' amounts added together, so the rows still add up to the net value.
+ * The desk's Charges tab keeps one row per room, with its number.
+ */
+export function buildPaperPriceLines(rooms: readonly PriceLineRoom[]): PriceLine[] {
+  const groups: Array<{ first: PriceLineRoom; key: string; count: number }> = [];
+  for (const r of rooms) {
+    const key = JSON.stringify(buildRoomPriceLines({ ...r, hideRoomNumber: true, roomCount: 1 }));
+    const g = groups.find((x) => x.key === key);
+    if (g) g.count += 1;
+    else groups.push({ first: r, key, count: 1 });
+  }
+  return groups.flatMap((g) => buildRoomPriceLines({ ...g.first, hideRoomNumber: true, roomCount: g.count }));
 }

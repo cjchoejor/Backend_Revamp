@@ -25,12 +25,14 @@ import { Prisma, type PrismaClient, type QuotationLine } from "@prisma/client";
 import { NotFoundError } from "../../lib/errors.js";
 import { labelRoomNights, roomNightsForEntry, roomNightsVary } from "../../lib/room-nights-for-entry.js";
 import {
+  buildPaperPriceLines,
   buildRoomPriceLines,
   mealPlanParts,
   priceLinesToCents,
   roomOccupantsLabel,
   type PriceLine,
   type PriceLineComposition,
+  type PriceLineRoom,
 } from "../../lib/quotation-price-lines.js";
 import { buildStorageKey, hashSha256, readDocument, writeDocument } from "../../lib/document-storage.js";
 import { formatMoney, loadHotelProfileForRender } from "../../lib/pdf-render-context.js";
@@ -188,13 +190,17 @@ type QuotationDocRender = {
  * guest needs to be sent quotation without the price"). It is a face of the document, never a
  * second document: the rows, the rooms, the nights and the quotation number are identical, and
  * the stored PDF — the commercial record — is always the priced one.
+ *
+ * `roomNumbers` keeps one row per room, numbered — the desk's Charges tab. The paper names rooms
+ * by their type alone and sets identical rooms out once (2026-10-28, `buildPaperPriceLines`).
  */
 async function buildQuotationDocRender(
   prisma: PrismaClient,
   q: LoadedQuotation,
-  opts?: { hidePrices?: boolean },
+  opts?: { hidePrices?: boolean; roomNumbers?: boolean },
 ): Promise<QuotationDocRender> {
   const hidePrices = opts?.hidePrices === true;
+  const roomNumbers = opts?.roomNumbers === true;
 
   // Which nights each room is held for. On a plain booking — every room for the whole stay —
   // this comes back empty and no Nights column is printed: the Stay line says it once.
@@ -352,6 +358,7 @@ async function buildQuotationDocRender(
     // The component rates stored on a composition quote are pre-discount, so these rows ARE the
     // originals — the deduction row below says by how much they were cut.
     if (compDiscountApplies) originalsPrinted = true;
+    const paperRooms: PriceLineRoom[] = [];
     for (const r of compositionPerRoom) {
       const raw = inputsByRoomId.get(r.roomId) as (PriceLineComposition & { negotiatedRoomRate?: number | null }) | undefined;
       const roomNights = Math.max(1, Number(r.nights ?? nights));
@@ -374,7 +381,7 @@ async function buildQuotationDocRender(
 
       // The room, its extra beds and its meals — the shared reading the desk's Charges tab and the
       // live negotiation preview print too (lib/quotation-price-lines.ts).
-      for (const line of buildRoomPriceLines({
+      const priceRoom: PriceLineRoom = {
         roomId: r.roomId,
         roomNumber: r.roomNumber,
         roomTypeName: typeNameByRoomId.get(r.roomId) ?? null,
@@ -390,9 +397,14 @@ async function buildQuotationDocRender(
         extraBedsVaryByNight: r.extraBedsVaryByNight === true,
         mealsVaryByNight: nightBreakdown.some((n) => n.overridden),
         datesLabel: nightsLabelFor(r.roomId),
-      })) {
-        linesForTemplate.push(line);
-        printedRowsTotal += line.amount;
+      };
+      if (roomNumbers) {
+        for (const line of buildRoomPriceLines(priceRoom)) {
+          linesForTemplate.push(line);
+          printedRowsTotal += line.amount;
+        }
+      } else {
+        paperRooms.push(priceRoom);
       }
 
       // The archival snapshot keeps its one-row-per-room, tax-inclusive shape.
@@ -404,6 +416,11 @@ async function buildQuotationDocRender(
         amount: Number(r.total),
       });
       totalAmount += Number(r.total);
+    }
+    // The paper: each room by its type, identical rooms set out once.
+    for (const line of roomNumbers ? [] : buildPaperPriceLines(paperRooms)) {
+      linesForTemplate.push(line);
+      printedRowsTotal += line.amount;
     }
   } else {
     // Legacy: one row per stay night. Kept for backward compat.
@@ -639,7 +656,8 @@ export async function quotationPriceLines(
   quotationId: string,
 ): Promise<{ quotationId: string; referenceNumber: string; versionNumber: number; state: string } & QuotationPriceFigures> {
   const q = await loadQuotationForRender(prisma, quotationId);
-  const model = await buildQuotationDocRender(prisma, q);
+  // The desk keeps each room's own row and number (2026-10-28 — only the paper names types).
+  const model = await buildQuotationDocRender(prisma, q, { roomNumbers: true });
   return {
     quotationId: q.id,
     referenceNumber: q.referenceNumber,

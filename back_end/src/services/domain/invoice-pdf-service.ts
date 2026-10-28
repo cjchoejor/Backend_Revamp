@@ -294,21 +294,33 @@ async function buildProformaDocRender(prisma: PrismaClient, inv: LoadedInvoice) 
   const piRoomNights = await roomNightsForEntry(prisma, inv.entryId, { asOf: inv.createdAt }).catch(
     () => new Map<string, string[]>(),
   );
+  // Rooms are named by their type, not their number (2026-10-28, operator: "in the quotation and
+  // proforma invoice can it not show the room numbers, just the room type") — "2 × Deluxe Double
+  // (06–07 Oct) · Standard Double (07–08 Oct)", rooms of one type on the same nights counted
+  // together, earliest nights first.
   let roomNightsLine: string | null = null;
   if (roomNightsVary(piRoomNights)) {
-    const numbers = new Map<string, string>();
+    const types = new Map<string, string>();
     for (const r of await prisma.room.findMany({
       where: { id: { in: [...piRoomNights.keys()] } },
-      select: { id: true, roomNumber: true },
+      select: { id: true, roomType: { select: { name: true } } },
     })) {
-      numbers.set(r.id, r.roomNumber);
+      types.set(r.id, r.roomType?.name ?? "Room");
+    }
+    const groups = new Map<string, { type: string; label: string; first: string; count: number }>();
+    for (const [roomId, nights] of piRoomNights.entries()) {
+      const type = types.get(roomId) ?? "Room";
+      const label = labelRoomNights(nights);
+      const key = `${type}|${label}`;
+      const g = groups.get(key);
+      if (g) g.count += 1;
+      else groups.set(key, { type, label, first: [...nights].sort()[0] ?? "", count: 1 });
     }
     roomNightsLine =
-      [...piRoomNights.entries()]
-        .map(([roomId, nights]) => ({ no: numbers.get(roomId) ?? roomId.slice(0, 6), label: labelRoomNights(nights) }))
-        .sort((a, b) => a.no.localeCompare(b.no, "en", { numeric: true }))
-        .map((r) => `${r.no} · ${r.label}`)
-        .join("  ·  ") || null;
+      [...groups.values()]
+        .sort((a, b) => a.first.localeCompare(b.first) || a.type.localeCompare(b.type))
+        .map((g) => `${g.count > 1 ? `${g.count} × ` : ""}${g.type} (${g.label})`)
+        .join(" · ") || null;
   }
 
   // The booking's discount, read off the terms this document is priced on. `amountOffTotal` is
