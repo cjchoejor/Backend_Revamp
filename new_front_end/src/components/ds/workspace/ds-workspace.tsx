@@ -106,7 +106,6 @@ import { BOOKING_TABS, ChargesView, DocumentsView, NotesView, RequestsView, type
 import { listBookingNotes, listGuestRequests } from "@/lib/api/booking-notes";
 import { useStayPrice } from "@/lib/ds/stay-price";
 import { HeaderClock, SideTimer, StepDwell } from "@/components/ds/workspace/side-timer";
-import { useMeasuredVar } from "@/hooks/use-stage-head";
 import { FoldingSide, useSideFolded } from "@/components/ds/workspace/side-panel";
 import { S1Inquiry } from "@/components/ds/steps/s1-inquiry";
 import { InquirySummaryDialog } from "@/components/ds/steps/s1-summary";
@@ -384,14 +383,13 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     ro.observe(head);
     headObserver.current = ro;
   }, []);
-  // The Stage 1 layout's bar, measured like the head (2026-10-27).
-  const barRef = useMeasuredVar("--ws-bar-h");
   const [railSlot, setRailSlot] = useState<HTMLElement | null>(null);
   // Where the step's "other ways" render — the tab beside This step (2026-09-25).
   const [otherSlot, setOtherSlot] = useState<HTMLElement | null>(null);
-  // Stage 1's fixed bar (2026-10-27): where its other ways' buttons and their open form render.
+  // Where the stage layout's other ways render as buttons: the step line's right-hand end, beside
+  // Change booking (2026-10-28, operator: "bring Park and Cancel booking here, then we eliminate the
+  // bottom bar completely"). The form a way opens is a pop-up in the middle of the screen.
   const [alsoButtons, setAlsoButtons] = useState<HTMLElement | null>(null);
-  const [alsoPanel, setAlsoPanel] = useState<HTMLElement | null>(null);
   // The right-hand end of the step's line — where the step's "Change booking" sits (2026-10-27).
   const [stageActs, setStageActs] = useState<HTMLElement | null>(null);
 
@@ -1611,7 +1609,12 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                     <Help label={`What ${STEP_NAMES[viewing - 1]} is for`}>{STEP_NEEDS[viewing as StepNo]}</Help>
                   </h3>
                   {viewingPast || sealed ? null : <FlowProgress names={sections} onGo={goToCard} />}
-                  <span className="stage-acts" ref={setStageActs} />
+                  <span className="stage-right">
+                    <span className="also-btns" ref={setAlsoButtons} />
+                    <span className="stage-acts" ref={setStageActs} />
+                    {/* A parked booking's Resume sits here too — the bar it lived in is gone. */}
+                    {parked && !sealed ? forward : null}
+                  </span>
                 </div>
               </div>
 
@@ -1654,7 +1657,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                     resuming={unparkMutation.isPending}
                     onHistory={() => setView("history", viewing)}
                   />
-                  <AlsoBar buttons={alsoButtons} panel={alsoPanel} stage={stageActs}>
+                  <AlsoBar buttons={alsoButtons} panel={null} stage={stageActs}>
                     <OtherWaysSlot node={null}>{native}</OtherWaysSlot>
                   </AlsoBar>
                   {!viewingPast && !sealed && preconds.length ? (
@@ -1707,19 +1710,12 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                 <div ref={setRailSlot} hidden />
               </div>
 
-              {/* The fixed bar, the left column's foot: what else is possible here, where the step
-                  stands, and the move at its right end. */}
-              <div className="gatebar top" ref={barRef}>
-                <div className="also-panel-slot" ref={setAlsoPanel} />
-                <div className="also">
-                  <span className="also-h">Also possible here</span>
-                  <div className="also-btns" ref={setAlsoButtons} />
-                </div>
-                <div className="gate-status">{gateStatus}</div>
-                {moveReady === null ? <div className="acts">{forward}</div> : null}
-                {/* The move floats above the bar's right end once everything is done, and stays
-                    there while the page scrolls (the bar is sticky); until then the bar says what
-                    is still to do (2026-10-28, operator). */}
+              {/* No bar at the foot any more (2026-10-28, operator: "eliminate the bottom bar
+                  completely") — the step's other ways sit on the step line, what is still to do is
+                  the step line's list and Before you move on. What stays is a dock with no height,
+                  sticky at the work column's foot: once everything is done the move floats there,
+                  in the bottom-right corner, and stays put while the page scrolls. */}
+              <div className="move-dock">
                 {moveReady ? (
                   <div className="move-float" role="region" aria-label="Move on">
                     {forward}

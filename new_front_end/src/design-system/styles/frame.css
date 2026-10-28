@@ -1335,7 +1335,14 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .ws-top .stagebar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s3); padding: var(--s2) var(--s4); background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--r-card); }
 .ds .ws-top .stagebar h3 { font-size: var(--t-h3); font-family: var(--font-head); margin: 0; }
 /* Change booking at the right-hand end of the step's line, and its menu (2026-10-27). */
-.ds .ws-top .stagebar .stage-acts { margin-left: auto; display: inline-flex; align-items: center; }
+/* …and the step's other ways beside it — Park, Cancel booking, Provisional block — and a parked booking's Resume (2026-10-28, the bar at the foot gone) */
+.ds .ws-top .stagebar .stage-right { margin-left: auto; display: inline-flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: var(--s2); }
+.ds .ws-top .stagebar .stage-acts { display: inline-flex; align-items: center; }
+.ds .ws-top .stagebar .also-btns { display: inline-flex; flex-wrap: wrap; gap: var(--s2); }
+.ds .ws-top .stagebar .also-btns:empty { display: none; }
+.ds .ws-top .stagebar .also-btns .btn[data-way="decline"]:not(.desk-root *) { color: var(--danger); border-color: var(--danger); }
+.ds .ws-top .stagebar .also-btns .btn[data-way="decline"]:hover:not(.desk-root *) { background: var(--danger-soft); }
+.ds .ws-top .stagebar .also-btns .btn.on:not(.desk-root *) { border-color: var(--accent); box-shadow: inset 0 -3px 0 var(--accent); }
 .ds .ws-top .stagebar .stage-acts:empty { display: none; }
 .ds .cb-btn .btn { gap: 6px; }
 .ds .cb-chev { transform: rotate(90deg); transition: transform 120ms ease; }
@@ -1381,17 +1388,19 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .fp-state { font-size: var(--t-meta); color: var(--ink-2); line-height: 1.35; }
 .ds .fp-item.done .fp-state { color: var(--success); }
 
-/* The move floats above the bar's right end once everything is done (2026-10-28, operator: "shown as
-   a floating icon which appears when all the conditions to move forward are met … fixed at the bottom
-   corner when the user scrolls"). It sits in the sticky bar, so it stays put while the page scrolls;
-   it floats, so it carries a shadow. */
-.ds .ws-top .gatebar.top .move-float:not(.desk-root *) { position: absolute; right: var(--s5); bottom: calc(100% + 12px); z-index: 2; animation: ds-move-rise 220ms ease-out; }
-.ds .ws-top .gatebar.top .move-float .btn:not(.desk-root *) { height: 48px; min-width: 200px; padding: 0 var(--s5); font-size: 16px; font-weight: 700; box-shadow: 0 6px 18px rgba(9, 30, 66, 0.22), 0 0 1px rgba(9, 30, 66, 0.31); }
-.ds .ws-top .gatebar.top .move-float .btn:not(.desk-root *)::after { content: "\2192"; margin-left: 10px; font-weight: 700; }
+/* The move floats into the work column's bottom-right corner once everything is done (2026-10-28,
+   operator: "shown as a floating icon which appears when all the conditions to move forward are met …
+   fixed at the bottom corner when the user scrolls"). It hangs off the sticky dock below, so it stays
+   put while the page scrolls; it floats, so it carries a shadow. */
+.ds .ws-top .move-dock .move-float:not(.desk-root *) { position: absolute; right: var(--s5); bottom: var(--s4); z-index: 2; animation: ds-move-rise 220ms ease-out; }
+.ds .ws-top .move-dock .move-float .btn:not(.desk-root *) { height: 48px; min-width: 200px; padding: 0 var(--s5); font-size: 16px; font-weight: 700; box-shadow: 0 6px 18px rgba(9, 30, 66, 0.22), 0 0 1px rgba(9, 30, 66, 0.31); }
+.ds .ws-top .move-dock .move-float .btn:not(.desk-root *)::after { content: "\2192"; margin-left: 10px; font-weight: 700; }
+/* the dock: no height, sticky at the work column's foot, the move floating from it (no bar since 2026-10-28) */
+.ds .ws-top .move-dock:not(.desk-root *) { position: sticky; bottom: 0; height: 0; z-index: 30; }
 /* room under the work for the button while it floats, so the page's last lines can scroll clear of it */
 .ds .ws-top .ws-main:has(.move-float) .canvas:not(.desk-root *) { padding-bottom: 72px; }
 @keyframes ds-move-rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
-@media (prefers-reduced-motion: reduce) { .ds .ws-top .gatebar.top .move-float { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .ds .ws-top .move-dock .move-float { animation: none; } }
 
 /* Two columns from the topbar down (2026-10-27, operator and the boss: "divide the screen that way"):
    on the left the work — its head and the step's line staying put under the topbar, the sections,
@@ -1427,25 +1436,9 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 /* the way back from a step looked back at */
 .ds .ws-top .backto { display: flex; }
 
-/* the bar at the left column's foot: one line while it fits; when it does not, the ways keep a row of
-   their own and where the step stands goes under them with the move, rather than the step's words
-   being squeezed into three lines */
-.ds .ws-cols .gatebar.top:not(.desk-root *) { display: flex; flex-wrap: wrap; align-items: center; row-gap: 6px; }
-.ds .ws-cols .gatebar.top .also { flex: 0 1 auto; }
-.ds .ws-cols .gatebar.top .gate-status { flex: 1 1 160px; min-width: 160px; }
-.ds .ws-cols .gatebar.top .acts { flex: 0 0 auto; margin-left: auto; }
-@media (max-width: 1800px) {
-  .ds .ws-top.ws-cols .gatebar.top .also-btns .btn:not(.desk-root *) { padding: 0 var(--s3); }
-  .ds .ws-cols .gatebar.top .also-h { max-width: 74px; line-height: 1.25; }
-}
-/* a smaller screen (a left column under about 1,050px): the ways lose their heading and some padding
-   so the bar keeps to one line, and the topbar keeps the mark without the name, the person on one line */
+/* a smaller screen (a left column under about 1,050px): the topbar keeps the mark without the name,
+   the person on one line */
 @media (max-width: 1500px) {
-  .ds .ws-cols .gatebar.top .also-h { display: none; }
-  .ds .ws-cols .gatebar.top .also { padding-right: var(--s3); }
-  .ds .ws-top.ws-cols .gatebar.top .also-btns .btn:not(.desk-root *) { padding: 0 var(--s2); }
-  .ds .ws-top.ws-cols .gatebar.top .acts .btn:not(.desk-root *) { min-width: 140px; padding: 0 var(--s4); }
-  .ds .ws-cols .gatebar.top .gate-status { flex-basis: 140px; min-width: 140px; }
   .ds:has(.ws-cols) .topbar .mark .name:not(.desk-root *) { display: none; }
 }
 .ds:has(.ws-cols) .topbar .user:not(.desk-root *) { white-space: nowrap; }
@@ -1472,15 +1465,7 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .ws-top .before-move-foot.wait { background: var(--surface-2); color: var(--ink-2); }
 .ds .ws-top .before-move-foot.ready { background: var(--success-soft); color: var(--success); }
 
-/* the fixed bar: also possible here, where the step stands, the move */
-.ds .ws-top .gatebar.top:not(.desk-root *) { position: sticky; bottom: 0; z-index: 30; grid-template-columns: auto minmax(0, 1fr) auto; box-shadow: 0 -2px 10px rgba(30, 28, 25, .06); }
-.ds .ws-top .gatebar.top .also { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); }
-.ds .ws-top .gatebar.top .also:has(.also-btns:empty) { display: none; }
-.ds .ws-top .gatebar.top .also-h { font-size: var(--t-meta); font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); }
-.ds .ws-top .gatebar.top .also-btns { display: flex; flex-wrap: wrap; gap: var(--s2); }
-.ds .ws-top .gatebar.top .also-btns .btn.on { border-color: var(--accent); color: var(--accent-ink); box-shadow: inset 0 -3px 0 var(--accent); }
-.ds .ws-top .gatebar.top .gate-status { min-width: 0; }
-.ds .ws-top .gatebar.top .also-panel-slot { position: absolute; left: var(--s5); bottom: calc(100% + var(--s2)); width: min(640px, calc(100% - 2 * var(--s5))); }
+/* a way's form, in the pop-up in the middle of the screen */
 .ds .also-panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-dialog); box-shadow: var(--shadow-pop); padding: var(--s3) var(--s4) var(--s4); display: grid; gap: var(--s3); max-height: 60vh; overflow: auto; }
 .ds .also-panel[hidden] { display: none; }
 .ds .also-panel-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s3); }
@@ -1488,7 +1473,6 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 @media (max-width: 1100px) {
   .ds .ws-top.ws-cols:not(.desk-root *) { grid-template-columns: minmax(0, 1fr); }
   .ds .ws-top .file { position: static; height: auto; min-height: 0; border-left: 0; border-top: 1px solid var(--line-2); }
-  .ds .ws-top .gatebar.top:not(.desk-root *) { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* the views inside the file: its tab names the view, so the view's own heading goes, and what was
@@ -1498,13 +1482,6 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .ws-top .file dl.pv:not(.desk-root *) { grid-template-columns: 108px minmax(0, 1fr) !important; }
 .ds .ws-top .file .steps-canvas { gap: var(--s3); }
 .ds .ws-top .file .card:not(.desk-root *) { padding: var(--s3); }
-/* where the step stands, in the bar: one line, read from the left */
-.ds .ws-top .gatebar.top .gate:not(.desk-root *) { display: flex; flex-wrap: wrap; gap: 4px var(--s4); }
-.ds .ws-top .gatebar.top .gate .item:not(.desk-root *) { display: inline-flex; align-items: center; gap: var(--s2); text-align: left; background: none; border: 0; padding: 0; font: inherit; font-size: var(--t-sm); }
-.ds .ws-top .gatebar.top .gate button.item:not(.desk-root *) { cursor: pointer; }
-.ds .ws-top .gatebar.top .gate button.item:hover span { text-decoration: underline; }
-.ds .ws-top .gatebar.top .gate .item .ic:not(.desk-root *) { margin-top: 0; }
-
 /* ===== The blue trial (2026-10-27, operator: "in the html, it has blue type color theme, lets try
    adopting that"). The template's light palette — cool greys, ink, and blue for where you are — while a
    stage-template page is on screen (`.theme-blue` on `.ws-top`; the booking at Inquiry and the new
@@ -1574,22 +1551,13 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .notice.ended .ended-mark { flex: none; width: 26px; height: 26px; border-radius: 50%; background: var(--danger); color: #fff; display: grid; place-items: center; font-weight: 800; font-size: 15px; }
 .ds .ws-top .ws-head.ended:not(.desk-root *) { border-color: var(--danger-line); box-shadow: inset 5px 0 0 var(--danger); }
 
-/* ===== The fixed bar, one slim line (2026-10-27, operator: "minimise the height of the bar, it's too
-   inefficient"): compact controls, less padding, and the move's reason beside its button instead
-   of on a line under it. ===== */
-.ds .ws-top .gatebar.top:not(.desk-root *) { --control-h: 32px; padding: 6px var(--s5); gap: var(--s3); }
-.ds .ws-top .gatebar.top .btn:not(.desk-root *) { font-size: var(--t-sm); padding: 0 var(--s3); }
-.ds .ws-top .gatebar.top .acts:not(.desk-root *) { flex-direction: row; align-items: center; }
-.ds .ws-top .gatebar.top .control-wrap { display: inline-flex; flex-direction: row-reverse; align-items: center; gap: var(--s2); }
-.ds .ws-top .gatebar.top .control-note:not(.desk-root *) { margin-top: 0; white-space: nowrap; }
-
 /* ===== Stage 1's rooms table: the count and the save on a band of their own (2026-10-27), and a
    card scrolled to lands below the sticky head, not under it ("Choose the rooms scrolls down too
    much"). ===== */
 .ds .rooms-saverow:not(.desk-root *) { align-items: center; margin: var(--s3) 0 var(--s3); padding: var(--s2) 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .ds .rooms-saverow .rooms-count { font-size: var(--t-base); font-weight: 700; }
 .ds .rooms-saverow .btn.btn-primary:not(.desk-root *) { min-width: 160px; }
-.ds .ws-cols .ws-main * { scroll-margin-top: calc(53px + var(--ws-head-h, 0px) + var(--s2)); scroll-margin-bottom: calc(var(--ws-bar-h, 56px) + var(--s2)); }
+.ds .ws-cols .ws-main * { scroll-margin-top: calc(53px + var(--ws-head-h, 0px) + var(--s2)); scroll-margin-bottom: calc(var(--ws-bar-h, 0px) + var(--s2)); }
 
 /* The house card's bill in one line (2026-10-27): the stay's figure and the way to the bill, which
    lives in the booking file under Charges & payments › The price — each night, its rooms, the taxes. */
@@ -1651,13 +1619,6 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
    and the Continue button"): full-size buttons with a firm edge and the weight of a control;
    The guest said no ends the lead, so it carries the danger colour; the move is the big one,
    green once it can be pressed, and the reason it waits is said in amber beside it. */
-.ds .ws-top .gatebar.top .also-btns .btn:not(.desk-root *) { height: 38px; padding: 0 var(--s4); font-size: var(--t-base); font-weight: 600; border: 1px solid var(--ink-3); background: var(--surface); color: var(--ink); }
-.ds .ws-top .gatebar.top .also-btns .btn:hover:not(.desk-root *) { background: var(--surface-2); border-color: var(--ink-2); }
-.ds .ws-top .gatebar.top .also-btns .btn[data-way="decline"]:not(.desk-root *) { color: var(--danger); border-color: var(--danger); }
-.ds .ws-top .gatebar.top .also-btns .btn[data-way="decline"]:hover:not(.desk-root *) { background: var(--danger-soft); }
-.ds .ws-top .gatebar.top .also-btns .btn.on:not(.desk-root *) { box-shadow: inset 0 -3px 0 var(--accent); }
-.ds .ws-top .gatebar.top .acts .btn:not(.desk-root *) { height: 42px; min-width: 168px; padding: 0 var(--s5); font-size: var(--t-base); font-weight: 700; }
-.ds .ws-top .gatebar.top .control-note:not(.desk-root *) { font-size: var(--t-sm); font-weight: 700; color: var(--warning); }
 
 /* A step reached, in the middle of the screen (2026-10-27) */
 .ds .step-moved-scrim { position: fixed; inset: 0; z-index: 95; display: grid; place-items: center; padding: var(--s4); background: rgba(20, 22, 21, .32); }
@@ -1686,20 +1647,7 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .staydates .sd.out .lbl { background: var(--ink-2); }
 .ds .staydates .sd b { display: inline-flex; align-items: center; padding: 2px 8px; color: var(--ink); font-weight: 700; font-variant-numeric: tabular-nums; }
 
-/* The bar at the foot reads as its own band, not as part of the page (2026-10-27, operator: "it merges
-   into the UI"; the dark navy tried first "isn't doing justice"). A soft tint of the page's own blue,
-   a firm blue line along its top and a light lift: the white buttons stand out on it, and the white
-   cards above cannot be mistaken for it. The step's other ways sit in their own group, set off by a
-   line from where the step stands and the move. */
-.ds .ws-top .gatebar.top:not(.desk-root *) { background: #E7EEF8; border-top: 2px solid var(--accent); box-shadow: 0 -6px 18px rgba(29, 79, 145, .12); }
-.ds .ws-top .gatebar.top .also-h { color: var(--accent-ink); }
-.ds .ws-top .gatebar.top .also { padding-right: var(--s4); border-right: 1px solid var(--accent-line); }
-.ds .ws-top .gatebar.top .also-btns .btn:not(.desk-root *) { box-shadow: 0 1px 2px rgba(27, 30, 28, .08); }
-/* a move that waits is still a visible button on the tint, not a grey shape that sinks into it */
-.ds .ws-top .gatebar.top .acts .btn.inert:not(.desk-root *) { background: var(--surface); border: 1px dashed var(--line-2); color: var(--ink-4); }
-@media (max-width: 1100px) { .ds .ws-top .gatebar.top .also { padding-right: 0; border-right: 0; } }
-
-/* The bar's ways in the middle of the screen, over a dimmed, blurred page (2026-10-27). Below a
+/* The step's other ways in the middle of the screen, over a dimmed, blurred page (2026-10-27). Below a
    dialog opened from inside a way (85), above everything on the page. */
 .ds .also-scrim { position: fixed; inset: 0; z-index: 84; display: grid; place-items: center; padding: var(--s4); background: rgba(20, 24, 22, .38); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); }
 .ds .also-scrim[hidden] { display: none; }

@@ -115,9 +115,8 @@ export function NewInquiryCanvas() {
   const { session } = useSession();
   // The hotel's day, from the server — never the machine's. Null until it answers.
   const today = useHotelDay()?.today ?? null;
-  // The head and the bar, measured onto the screen so a card scrolled to lands between them.
+  // The head, measured onto the screen so a card scrolled to lands below it.
   const headRef = useMeasuredVar("--ws-head-h");
-  const barRef = useMeasuredVar("--ws-bar-h");
 
   /* ---------------------------------------------------------------- who is asking */
   // No default: the operator says how the booking reached us (the old form made it the first pick).
@@ -1419,12 +1418,7 @@ export function NewInquiryCanvas() {
           <IntakeBeforeMove items={flowItems} also={flowAlso} onGo={goToCard} startLabel={primaryLabel} />
         </div>
 
-      <div className="gatebar top" ref={barRef}>
-        {/* The bar says what is next and takes you to it; the start is The stay's Done. */}
-        <div className="gate-status">
-          <IntakeGateLine items={flowItems} also={flowAlso} onGo={goToCard} startLabel={primaryLabel} />
-        </div>
-      </div>
+      {/* No bar at the foot (2026-10-28): what is next is the step line's "now: …" and its list. */}
       </div>
 
         {/* The booking file: nothing is kept yet, so it shows what has been put in so far — the
@@ -1580,39 +1574,3 @@ function IntakeBeforeMove({ items, also, onGo, startLabel }: IntakeFlowProps) {
   );
 }
 
-/** The bar's line on the new inquiry: the next thing to fill, or the Done still to press. */
-function IntakeGateLine({ items, also, onGo, startLabel }: IntakeFlowProps) {
-  const standing = useFlowStanding();
-  const cards = Object.keys(INTAKE_SECTIONS).filter((c) => items.some((i) => i.card === c));
-  const first = cards.find((c) => !standing.isDone(c));
-  const unmet = first ? items.find((i) => i.card === first && !i.met) : undefined;
-  return (
-    <div className="gate">
-      {unmet ? (
-        <button type="button" className="item unmet" onClick={() => onGo(unmet.card)}>
-          <Icon name="circle" />
-          <span>
-            Next · <b>{unmet.n}</b> {unmet.label}
-          </span>
-        </button>
-      ) : first && first !== "stay" ? (
-        <button type="button" className="item unmet" onClick={() => onGo(first)}>
-          <Icon name="circle" />
-          <span>
-            Next · press Done on <b>{items.find((i) => i.card === first)?.n}</b> {INTAKE_SECTIONS[first]}
-          </span>
-        </button>
-      ) : also.some((p) => !p.met) ? (
-        <div className="item unmet">
-          <Icon name="circle" />
-          <span>{also.find((p) => !p.met)?.label}</span>
-        </div>
-      ) : (
-        <button type="button" className="item met" onClick={() => onGo("stay")}>
-          <Icon name="check" />
-          <span>everything the inquiry needs is in — press {startLabel} on The stay</span>
-        </button>
-      )}
-    </div>
-  );
-}
