@@ -2753,6 +2753,7 @@ export function AnswerLine({
   what,
   tz,
   lockedHint,
+  prominent,
   onAnswered,
 }: {
   entryId: string;
@@ -2762,6 +2763,8 @@ export function AnswerLine({
   what: string;
   tz?: string;
   lockedHint?: string | null;
+  /** The answer is the next thing to do here: the act is full size and green (2026-10-28). */
+  prominent?: boolean;
   /** Called once the answer is on record — Set up's proforma finishes its section on it. */
   onAnswered?: () => void;
 }) {
@@ -2806,9 +2809,15 @@ export function AnswerLine({
         <span className="meta">{lockedHint}</span>
       ) : !open ? (
         <div className="row-acts">
-          <Button kind="secondary" compact state={c.canAcknowledge ? "default" : "inert"} onClick={() => setOpen(true)}>
-            Record their answer
-          </Button>
+          {prominent ? (
+            <Button className="go big" icon="pen" state={c.canAcknowledge ? "default" : "inert"} onClick={() => setOpen(true)}>
+              Record the guest&rsquo;s answer
+            </Button>
+          ) : (
+            <Button kind="secondary" compact state={c.canAcknowledge ? "default" : "inert"} onClick={() => setOpen(true)}>
+              Record their answer
+            </Button>
+          )}
         </div>
       ) : (
         <div className="bind provisional" style={{ display: "grid", gap: 8 }}>

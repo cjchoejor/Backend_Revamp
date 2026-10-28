@@ -13,7 +13,7 @@
  */
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { BindingBox, Button, Chip, Icon } from "@/design-system";
@@ -70,6 +70,7 @@ import {
   useFinishWhenDone,
   useStepFlow,
   goToStepCard,
+  revealCard,
   useOpenAlsoWay,
   OtherWaysTabs,
   InlineWay,
@@ -1254,6 +1255,7 @@ function ProformaCard({
     onSuccess: () => {
       toast.success("The proforma is sent — record the guest's answer when it comes");
       setSendOpen(false);
+      setJustSent(true);
       onChanged();
     },
     onError: (e) => toastRefusal(e, "The proforma could not be sent"),
@@ -1291,7 +1293,18 @@ function ProformaCard({
   // which comes first, and Send is the main act (2026-10-28).
   const advanceAsked = !!status && status.requiredAmount > 0 && !status.paidInFull;
   const sentLive = proformas.some((i) => i.state !== "SUPERSEDED" && i.dispatchedAt != null);
-  const nextUp = !advanceAsked || !editable ? null : !sentLive ? "send" : !answered ? "answer" : null;
+  // Once it has gone out the guest's answer is owed whether or not an advance is asked — Reserve
+  // waits for it too (Policy 40) — so the answer box stands out from then on (2026-10-28).
+  const answerDue = editable && sentLive && !answered;
+  const nextUp = !editable ? null : advanceAsked && !sentLive ? "send" : answerDue ? "answer" : null;
+  // After a send the page goes to the answer box and it flashes, so the next act is seen.
+  const answerRef = useRef<HTMLDivElement | null>(null);
+  const [justSent, setJustSent] = useState(false);
+  useEffect(() => {
+    if (!justSent || !answerDue || !answerRef.current) return;
+    setJustSent(false);
+    revealCard(answerRef.current);
+  }, [justSent, answerDue]);
   const sendLock = !editable
     ? "not at this step"
     : !draft
@@ -1356,17 +1369,11 @@ function ProformaCard({
         </>
       }
     >
-      {nextUp ? (
+      {nextUp === "send" ? (
         <div className="notice next" role="status">
-          {nextUp === "send" ? (
-            <span>
-              <b>Send this proforma to the guest first.</b> The advance of {money(status!.requiredAmount)} can be recorded once they have it.
-            </span>
-          ) : (
-            <span>
-              <b>Record the guest&rsquo;s answer below.</b> The advance can be recorded after it.
-            </span>
-          )}
+          <span>
+            <b>Send this proforma to the guest first.</b> The advance of {money(status!.requiredAmount)} can be recorded once they have it.
+          </span>
         </div>
       ) : null}
       <div className="meta">
@@ -1374,13 +1381,32 @@ function ProformaCard({
         {shown.dispatchedAt ? ` · sent ${fmtStamp(shown.dispatchedAt, tz)}${shown.dispatchedTo ? ` to ${shown.dispatchedTo}` : ""}` : " · not sent"}
       </div>
 
-      <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid var(--line)", display: "grid", gap: 6 }}>
-        <span className="sm" style={{ fontWeight: 600 }}>
-          The guest&rsquo;s answer
-          <Help label="About the answer">Needed before Reserve once the proforma has been sent.</Help>
-        </span>
-        <AnswerLine entryId={entry.id} type="PROFORMA_INVOICE" sinceIso={passStart} what="the proforma" tz={tz} onAnswered={finish} />
-      </div>
+      {answerDue ? (
+        // Sent and not yet answered: the answer is the next thing to do here (2026-10-28, operator:
+        // "make it prominent on the page that it needs the guest's answer as well").
+        <div ref={answerRef} className="answer-due" role="status">
+          <span className="due-head">
+            The guest&rsquo;s answer is needed
+            <Help label="About the answer">
+              Write down how the guest answered the proforma — by message or by telling the desk — and what they said.
+            </Help>
+          </span>
+          <span className="sm">
+            {advanceAsked
+              ? `The advance of ${money(status!.requiredAmount)} can be recorded only after it.`
+              : "The booking cannot be reserved until it is recorded."}
+          </span>
+          <AnswerLine entryId={entry.id} type="PROFORMA_INVOICE" sinceIso={passStart} what="the proforma" tz={tz} prominent onAnswered={finish} />
+        </div>
+      ) : (
+        <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid var(--line)", display: "grid", gap: 6 }}>
+          <span className="sm" style={{ fontWeight: 600 }}>
+            The guest&rsquo;s answer
+            <Help label="About the answer">Needed before Reserve once the proforma has been sent.</Help>
+          </span>
+          <AnswerLine entryId={entry.id} type="PROFORMA_INVOICE" sinceIso={passStart} what="the proforma" tz={tz} onAnswered={finish} />
+        </div>
+      )}
 
       {proformas.length > 1 ? (
         <table className="table compact" style={{ marginTop: 12 }}>

@@ -1554,6 +1554,14 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 /* The next thing to do on a card (2026-10-28) — "send this proforma first". Amber: a step still to take, not a refusal. */
 .ds .notice.next:not(.desk-root *) { display: flex; align-items: center; gap: var(--s3); border: 1px solid var(--warning-line); border-left: 5px solid var(--warning); background: var(--warning-soft); color: var(--ink); padding: var(--s3) var(--s4); border-radius: var(--r-control); font-size: var(--t-base); margin-bottom: var(--s3); }
 .ds .notice.next b { font-weight: 700; }
+/* The guest's answer, once the paper went out and the answer is still owed (2026-10-28, operator:
+   "make it prominent on the page that it needs the guest's answer as well"): a box of its own with
+   the warning edge, its heading bold, the act full size — and a flash when a send brings the page here. */
+.ds .answer-due:not(.desk-root *) { margin-top: var(--s3); display: grid; gap: var(--s2); border: 1px solid var(--warning-line); border-left: 5px solid var(--warning); background: var(--warning-soft); border-radius: var(--r-control); padding: var(--s3) var(--s4); }
+.ds .answer-due .due-head:not(.desk-root *) { display: inline-flex; align-items: center; gap: var(--s1); font-size: var(--t-base); font-weight: 700; color: var(--ink); }
+.ds .answer-due .row-acts:not(.desk-root *) { margin-top: var(--s1); }
+.ds .answer-due.flash { animation: ds-card-flash 1.8s ease-out 1; }
+@media (prefers-reduced-motion: reduce) { .ds .answer-due.flash { animation: none; } }
 /* A box that asks one thing at a time (2026-10-28 — the advance): each question numbered, a tick
    once answered, the next one appearing below it. */
 .ds .qsteps:not(.desk-root *) { display: flex; flex-direction: column; gap: var(--s4); }
@@ -1582,8 +1590,8 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .suffix:not(.desk-root *) { display: inline-flex; align-items: center; }
 .ds .suffix > span:not(.desk-root *) { height: var(--control-h); display: inline-flex; align-items: center; padding: 0 var(--s3); border: 1px solid var(--line-2); border-left: 0; border-radius: 0 var(--r-control) var(--r-control) 0; background: var(--surface-2); color: var(--ink-2); font-size: var(--t-sm); font-weight: 600; }
 .ds .suffix > .input:not(.desk-root *) { border-radius: var(--r-control) 0 0 var(--r-control); }
-/* A dialog's own act at full size — the advance box's Save the advance (2026-10-28). */
-.ds .dialog .foot .btn.big:not(.desk-root *) { min-height: 42px; padding: 0 var(--s5); font-size: var(--t-base); font-weight: 700; }
+/* An act at full size — the advance box's Save the advance, the proforma's Record the guest's answer (2026-10-28). */
+.ds .btn.big:not(.desk-root *) { min-height: 42px; padding: 0 var(--s5); font-size: var(--t-base); font-weight: 700; }
 /* What a dialog still waits for, said beside its buttons. */
 .ds .dialog .foot .dlg-next:not(.desk-root *) { margin-right: auto; align-self: center; font-size: var(--t-sm); font-weight: 500; color: var(--ink); }
 .ds .ws-top .ws-head.ended:not(.desk-root *) { border-color: var(--danger-line); box-shadow: inset 5px 0 0 var(--danger); }
