@@ -85,7 +85,6 @@ import { CompetingClaimsCard, passesOf, roomsWord, useRoomNumbers } from "./s2-s
 import { PaymentPlanCard } from "./s3-money";
 import { Help, HelpHere } from "@/components/ds/help";
 import { DateInput } from "@/components/ds/date-input";
-import { StepMoved, type StepMovedNote } from "@/components/ds/workspace/step-moved";
 
 /* ------------------------------------------------------------------ vocabulary */
 
@@ -702,18 +701,23 @@ function HoldCard({
   const roomNames = useBookingRooms(entry).named;
   const [blockedUntil, setBlockedUntil] = useState<string | null>(null);
   /**
-   * Once the block time is settled, the middle of the screen says so (2026-10-28, operator: "after
-   * the user clicks Keep this time, or sets a block time, show a message saying these rooms are
-   * blocked for the dates for this many hours").
+   * Once the block time is settled, the hold section says so (2026-10-28, operator: "show a message
+   * saying these rooms are blocked for the dates for this many hours"). It is said IN the section,
+   * not in the middle of the screen: the centred card is how a step move is said, and the block
+   * read like one ("leading the user to think he has moved a stage"). The booking is still at Set up.
    */
-  const [blockedNote, setBlockedNote] = useState<StepMovedNote | null>(null);
+  const [blockedNote, setBlockedNote] = useState<BlockedNote | null>(null);
   const sayBlocked = (untilIso: string | null, whose: "HOUSE" | "BOOKING" | null) => {
     if (!untilIso) return;
     const nights = entry.checkInDate && entry.checkOutDate ? nightsBetween(entry.checkInDate, entry.checkOutDate) : null;
     setBlockedNote({
+      n: Date.now(),
       title: `${count > 1 ? "The rooms are" : "The room is"} blocked`,
-      who: `${rooms} · ${fmtRange(entry.checkInDate, entry.checkOutDate)}${nights ? ` · ${plural(nights, "night")}` : ""}`,
-      next: `Blocked for ${forHowLong(untilIso, Date.now())} — until ${fmtDateTime(untilIso, tz)}${whose === "BOOKING" ? ", the time set for this booking" : whose === "HOUSE" ? ", the hotel's time" : ""}. If the booking is not reserved by then, ${count > 1 ? "they go" : "it goes"} back on sale.`,
+      what: `${rooms} · ${fmtRange(entry.checkInDate, entry.checkOutDate)}${nights ? ` · ${plural(nights, "night")}` : ""}`,
+      howLong: forHowLong(untilIso, Date.now()),
+      until: fmtDateTime(untilIso, tz),
+      whose: whose === "BOOKING" ? "the time set for this booking" : whose === "HOUSE" ? "the hotel's time" : null,
+      after: `If the booking is not reserved by then, ${count > 1 ? "they go" : "it goes"} back on sale.`,
     });
   };
   useEffect(() => {
@@ -787,6 +791,7 @@ function HoldCard({
       flowAfter="proforma"
       title="The committed hold"
       summary={hold ? `${rooms} blocked until ${fmtDateTime(hold.expiresAt, tz)}` : undefined}
+      notice={blockedNote ? <BlockedNotice key={blockedNote.n} note={blockedNote} onClose={() => setBlockedNote(null)} /> : undefined}
       acts={
         past ? undefined : (
           <Live>
@@ -973,8 +978,42 @@ function HoldCard({
         placeholder="why the rooms are freed"
         onConfirm={(r) => release.mutate(r)}
       />
-      <StepMoved note={blockedNote} onClose={() => setBlockedNote(null)} />
     </StepCard>
+  );
+}
+
+type BlockedNote = { n: number; title: string; what: string; howLong: string; until: string; whose: string | null; after: string };
+
+/**
+ * The block, said in the hold section (2026-10-28): a flat panel with a lock — the rooms and the
+ * dates, how long and until when, and what happens if the booking is not reserved by then. It
+ * stays until it is closed or the step moves on; it comes into view only when it is not already
+ * (it never moves a page the desk is reading) and lights once as it arrives.
+ */
+function BlockedNotice({ note, onClose }: { note: BlockedNote; onClose: () => void }) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    window.requestAnimationFrame(() => el.scrollIntoView({ block: "nearest", behavior: "smooth" }));
+  }, [note.n]);
+  return (
+    <div ref={ref} className="notice blocked" role="status">
+      <span className="blocked-mark" aria-hidden>
+        <Icon name="lock" />
+      </span>
+      <div className="blocked-text">
+        <b>{note.title}</b>
+        <span className="blocked-what">{note.what}</span>
+        <span>
+          Blocked for <b>{note.howLong}</b> — until <b>{note.until}</b>
+          {note.whose ? `, ${note.whose}` : ""}. {note.after}
+        </span>
+      </div>
+      <button type="button" className="blocked-close" aria-label="Close this message" onClick={onClose}>
+        ×
+      </button>
+    </div>
   );
 }
 

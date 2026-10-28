@@ -1563,6 +1563,22 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 /* The next thing to do on a card (2026-10-28) — "send this proforma first". Amber: a step still to take, not a refusal. */
 .ds .notice.next:not(.desk-root *) { display: flex; align-items: center; gap: var(--s3); border: 1px solid var(--warning-line); border-left: 5px solid var(--warning); background: var(--warning-soft); color: var(--ink); padding: var(--s3) var(--s4); border-radius: var(--r-control); font-size: var(--t-base); margin-bottom: var(--s3); }
 .ds .notice.next b { font-weight: 700; }
+/* What was just done in a section, said in the section (2026-10-28 — the rooms blocked): a flat
+   panel with a lock under the card's title, open or folded. Deliberately not the centred card,
+   which is how a step move is said. Lights once as it arrives. */
+.ds .card-notice { margin: 0 0 var(--s3); }
+/* brought into view clear of the sticky head and of the floating move at the column's foot */
+.ds .card-notice .notice.blocked { scroll-margin-top: calc(var(--ws-head-h, 0px) + 72px); scroll-margin-bottom: 104px; }
+.ds .notice.blocked:not(.desk-root *) { display: flex; align-items: flex-start; gap: var(--s3); border: 1px solid var(--success-line); border-left: 5px solid var(--success); background: var(--success-soft); color: var(--ink); padding: var(--s3) var(--s4); border-radius: var(--r-control); font-size: var(--t-base); animation: ds-blocked-in 1.4s ease-out 1; }
+.ds .notice.blocked .blocked-mark { flex: none; width: 28px; height: 28px; border-radius: var(--r-control); background: var(--success); color: #fff; display: grid; place-items: center; }
+.ds .notice.blocked .blocked-mark .ic { width: 16px; height: 16px; }
+.ds .notice.blocked .blocked-text { display: grid; gap: 2px; min-width: 0; flex: 1; }
+.ds .notice.blocked .blocked-text > b { font-size: var(--t-lead); font-weight: 700; color: var(--success); }
+.ds .notice.blocked .blocked-what { font-weight: 600; }
+.ds .notice.blocked .blocked-close { flex: none; border: 1px solid var(--success-line); background: var(--surface); color: var(--ink-2); width: 28px; height: 28px; border-radius: var(--r-control); font-size: 18px; line-height: 1; cursor: pointer; }
+.ds .notice.blocked .blocked-close:hover { background: var(--surface-2); color: var(--ink); }
+@keyframes ds-blocked-in { 0% { box-shadow: 0 0 0 4px var(--success-line); } 100% { box-shadow: 0 0 0 0 transparent; } }
+@media (prefers-reduced-motion: reduce) { .ds .notice.blocked:not(.desk-root *) { animation: none; } }
 /* The guest's answer, once the paper went out and the answer is still owed (2026-10-28, operator:
    "make it prominent on the page that it needs the guest's answer as well"): a box of its own with
    the warning edge, its heading bold, the act full size — and a flash when a send brings the page here. */

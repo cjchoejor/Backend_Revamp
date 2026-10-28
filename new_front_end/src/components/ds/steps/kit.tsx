@@ -750,6 +750,7 @@ export function StepCard({
   flowAfterOnly,
   heldFor,
   summary,
+  notice,
   noDoneBar = false,
   doneAction,
   revealAtTop = false,
@@ -791,6 +792,12 @@ export function StepCard({
    * A card without one never folds.
    */
   summary?: ReactNode;
+  /**
+   * A message the section says about what was just done in it — the rooms blocked, and until when
+   * (2026-10-28, operator: the centred card said it like a step move, "leading the user to think he
+   * has moved a stage"). Drawn under the title whether the section is open or folded to its line.
+   */
+  notice?: ReactNode;
   /**
    * The section's own act finishes it, so it draws no Done bar (2026-10-27, operator, on the
    * Negotiation table: "remove the extra Done button and merge it into Save & price it"). The act
@@ -888,6 +895,7 @@ export function StepCard({
           {waiting || folded ? null : right ? <div className="row-acts">{right}</div> : null}
         </div>
       ) : null}
+      {notice && !waiting ? <div className="card-notice">{notice}</div> : null}
       {folded ? (
         <div className="flow-summary">
           <span className="sum">{summary}</span>
