@@ -106,4 +106,27 @@ export const houseByTypeRequestSchema = z
   });
 export type HouseByTypeRequestDto = z.infer<typeof houseByTypeRequestSchema>;
 
+/** The Inquiry step's pick by type (2026-10-28): how many of each type, each night. */
+export const sealByTypeRequestSchema = z.object({
+  configurationId: z.string().min(1),
+  perNight: z
+    .array(
+      z.object({
+        date: ymdField,
+        types: z.array(z.object({ roomTypeId: z.string().min(1), count: z.number().int().min(0).max(200) })).max(50),
+      }),
+    )
+    .min(1)
+    .max(62),
+  fixedRoomIds: z.array(z.string().min(1)).max(100).optional(),
+  preview: z.boolean().optional(),
+});
+export type SealByTypeRequestDto = z.infer<typeof sealByTypeRequestSchema>;
+
+/** The desk chooses one of the booking's rooms itself, within its type, before Arrival. */
+export const chooseQuietRoomRequestSchema = z.object({
+  fromRoomId: z.string().min(1),
+  toRoomId: z.string().min(1),
+});
+
 export type SelectAvailabilityOptionRequestDto = z.infer<typeof selectAvailabilityOptionRequestSchema>;

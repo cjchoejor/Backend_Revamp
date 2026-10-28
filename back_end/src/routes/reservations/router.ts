@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { ensureQuietPlacement, markRoomsFixed } from "../../services/domain/quiet-rooms-service.js";
 import { prisma } from "../../db.js";
 import {
   allocateConferenceSpaceRequestSchema,
@@ -378,10 +379,12 @@ reservationsRouter.post("/entries/:id/room-assignments", requireActorLevel("L1")
     if (reEntryToS1 === true) {
       await entryService.reEnterS6ToS1(prisma, req.params.id, req.actor!.actorId);
     }
+    const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
+    const quiet = reEntryToS1 === true ? null : await ensureQuietPlacement(prisma, req.params.id, actor, "The rooms were handed out at Arrival");
     const created = await roomAssignmentService.assignRoom(
       prisma,
       req.params.id,
-      roomId,
+      quiet?.ownMap.get(roomId) ?? roomId,
       req.actor!.actorId,
       notes,
       deficientAcknowledgement,
@@ -401,11 +404,16 @@ reservationsRouter.post("/entries/:id/room-assignments", requireActorLevel("L1")
  */
 reservationsRouter.post("/entries/:id/room-assignments/from-sealed-per-night", requireActorLevel("L1"), async (req, res, next) => {
   try {
+    // Rooms the system chose quietly are placed against the house as it stands right now — the
+    // proposal the desk is confirming — and become the booking's rooms (2026-10-28).
+    const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
+    await ensureQuietPlacement(prisma, req.params.id, actor, "The rooms were handed out at Arrival");
     const created = await roomAssignmentService.assignRoomsFromSealedPerNight(
       prisma,
       req.params.id,
       req.actor!.actorId,
     );
+    await markRoomsFixed(prisma, req.params.id);
     res.status(201).json({ assignments: created, count: created.length });
   } catch (e) {
     next(e);

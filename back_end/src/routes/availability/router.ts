@@ -4,6 +4,8 @@ import {
   queryAvailabilityByEntryRequestSchema,
   priceRoomPickRequestSchema,
   houseByTypeRequestSchema,
+  sealByTypeRequestSchema,
+  chooseQuietRoomRequestSchema,
   queryAvailabilitySearchRequestSchema,
   selectAvailabilityOptionRequestSchema,
 } from "../../dtos/04-availability/request-schemas.js";
@@ -14,6 +16,7 @@ import { priceRoomPick } from "../../services/domain/pick-pricing-service.js";
 import { releaseRoomBlock } from "../../services/domain/room-block-release-service.js";
 import { buildRoomChart } from "../../services/domain/room-chart-service.js";
 import { answerHouseByType } from "../../services/domain/room-placement-service.js";
+import { chooseQuietRoom, describeBookingRooms, sealBookingRoomsByType } from "../../services/domain/quiet-rooms-service.js";
 import { ROOM_BED_TYPES, allowedBedTypesSource, effectiveAllowedBedTypes, setRoomBedType, usualBedTypeFor } from "../../services/domain/room-bed-type-service.js";
 
 export const availabilityRouter = Router();
@@ -225,6 +228,47 @@ availabilityRouter.post(
           })),
         }),
       );
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+/** Save (or, with `preview`, try) the Inquiry step's pick BY TYPE; the system chooses the rooms. */
+availabilityRouter.post(
+  "/entries/:id/availability/by-type/seal",
+  requireActorLevel("L1"),
+  validateBody(sealByTypeRequestSchema),
+  async (req, res, next) => {
+    try {
+      res.setHeader("Cache-Control", "no-store");
+      const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
+      res.json(await sealBookingRoomsByType(prisma, req.params.id, actor, req.body, { preview: req.body.preview === true }));
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+/** This booking's rooms: chosen by the system (and still movable) or fixed, with their labels. */
+availabilityRouter.get("/entries/:id/booking-rooms", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    res.json(await describeBookingRooms(prisma, req.params.id));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** The desk chooses one of the booking's rooms itself (same type, before Arrival); it becomes fixed. */
+availabilityRouter.post(
+  "/entries/:id/booking-rooms/choose",
+  requireActorLevel("L1"),
+  validateBody(chooseQuietRoomRequestSchema),
+  async (req, res, next) => {
+    try {
+      const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
+      res.json(await chooseQuietRoom(prisma, req.params.id, actor, req.body));
     } catch (e) {
       next(e);
     }

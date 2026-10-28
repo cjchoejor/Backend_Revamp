@@ -44,6 +44,14 @@ export async function placeSpeculativeHold(
   if (!!input.roomId === !!input.spaceId) throw new ValidationError("Exactly one of roomId or spaceId is required");
   if (!input.commercialBasis?.trim()) throw new ValidationError("commercialBasis is required");
 
+  // A booking picked by type: its quiet rooms are placed against the house as it stands NOW
+  // before any room is marked (2026-10-28); a room the system has just moved is followed.
+  if (input.roomId) {
+    const { ensureQuietPlacement } = await import("./quiet-rooms-service.js");
+    const quiet = await ensureQuietPlacement(prisma, entryId, actor, "A provisional block is being placed");
+    if (quiet.ownMap.has(input.roomId)) input = { ...input, roomId: quiet.ownMap.get(input.roomId)! };
+  }
+
   /**
    * The hold covers the WHOLE sealed selection, not one room (2026-08-06, operator report: a
    * hold on the anchor room left the seal's other rooms showing vacant to every other search).

@@ -738,6 +738,15 @@ export async function selectOption(
   opts?: {
     validateOnly?: boolean;
     stay?: { checkInDate: Date | null; checkOutDate: Date | null; numberOfRooms: number | null };
+    /**
+     * INTERNAL ONLY — a pick placed by type (2026-10-28, quiet-rooms-service). The engine has just
+     * placed every room against the house as it stands NOW, moving other bookings' quiet rooms where
+     * it had to — so the persisted search result, taken before those moves, is not asked again.
+     * The pick's shape (every night, the asked number of rooms) is still checked.
+     */
+    skipAvailability?: boolean;
+    /** INTERNAL ONLY — the booking rooms, stored with the pick (`optionSelected.bookingRooms`). */
+    bookingRooms?: unknown;
   },
 ) {
   const cfg = await prisma.availabilityConfiguration.findUnique({ where: { id: configId } });
@@ -823,7 +832,7 @@ export async function selectOption(
   /** Ids the per-night pass cleared, and ids it could not answer for on at least one night. */
   const clearedPerNight = new Set<string>();
   const unresolvedPerNight = new Set<string>();
-  if (normalisedPerNight.length > 0 && perDateByDate.size > 0) {
+  if (normalisedPerNight.length > 0 && perDateByDate.size > 0 && !opts?.skipAvailability) {
     for (const night of normalisedPerNight) {
       const row = perDateByDate.get(String(night.date).slice(0, 10));
       if (!row) {
@@ -853,7 +862,7 @@ export async function selectOption(
     }
   }
 
-  for (const id of selectedRoomIds) {
+  for (const id of opts?.skipAvailability ? [] : selectedRoomIds) {
     // Already proven free on every night it was actually claimed for.
     if (clearedPerNight.has(id) && !unresolvedPerNight.has(id)) continue;
     if (unavailableById.has(id)) {
@@ -942,6 +951,7 @@ export async function selectOption(
     } else {
       optionSelected = { roomIds: perRoom, isDeficient: anyDeficient };
     }
+    if (opts?.bookingRooms) optionSelected = { ...optionSelected, bookingRooms: opts.bookingRooms };
 
     const updated = await tx.availabilityConfiguration.update({
       where: { id: configId },

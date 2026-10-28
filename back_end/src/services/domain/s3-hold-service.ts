@@ -145,6 +145,15 @@ export async function placeCommittedHold(
   if (!input.roomId?.trim()) throw new ValidationError("roomId is required");
   if (!input.commercialJustification?.trim()) throw new ValidationError("commercialJustification is required");
 
+  // A booking picked by type: its quiet rooms are placed against the house as it stands NOW,
+  // moving other bookings' quiet rooms where that lets it fit, before any room is checked
+  // (2026-10-28). A room the desk named that the system has just moved is followed.
+  if (input.trigger !== "ROOM_CHANGE") {
+    const { ensureQuietPlacement } = await import("./quiet-rooms-service.js");
+    const quiet = await ensureQuietPlacement(prisma, entryId, actor, "A committed hold is being placed");
+    if (quiet.ownMap.has(input.roomId)) input = { ...input, roomId: quiet.ownMap.get(input.roomId)! };
+  }
+
   const entry = await prisma.entry.findUnique({
     where: { id: entryId },
     include: {

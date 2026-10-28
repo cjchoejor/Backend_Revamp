@@ -24,15 +24,17 @@ import { addUtcDays, listNightYmdsUtc, nightsBetweenUtc, utcDateOnly, ymdUtc } f
 import {
   bookingRoomRuns,
   readBookingRooms,
+  roomUnitsOf,
   sealHasBookingRooms,
   type BookingRoom,
   type BookingRoomRun,
+  type QuietUnit,
 } from "../../lib/booking-rooms.js";
 import { maxExtraStays, placeStays, roomsFreeEveryNight, type PlacementItem } from "../../lib/room-placement.js";
 import { buildRoomChart, CHART_MAX_NIGHTS, type RoomChart } from "./room-chart-service.js";
 
 const QUIET_KINDS = new Set(["HELD", "PROVISIONAL", "RESERVED"]);
-const BEFORE_ARRIVAL: Stage[] = ["S1", "S2", "S3", "S4"];
+const BEFORE_ARRIVAL: Stage[] = ["S1", "S2", "S3", "S4", "S5"];
 
 const dayLabel = (ymd: string) =>
   new Date(`${ymd}T00:00:00.000Z`).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
@@ -40,9 +42,9 @@ const nextYmd = (ymd: string) => ymdUtc(addUtcDays(new Date(`${ymd}T00:00:00.000
 /** "1 Dec → 3 Dec": the first night to the morning after the last. */
 const spanWords = (nights: string[]) => `${dayLabel(nights[0])} → ${dayLabel(nextYmd(nights[nights.length - 1]))}`;
 
-type WorldItem = PlacementItem & { entryId: string; roomTypeId: string; quiet: boolean };
+export type WorldItem = PlacementItem & { entryId: string; roomTypeId: string; quiet: boolean };
 
-type World = {
+export type World = {
   chart: RoomChart;
   /** "YYYY-MM-DD" → night index in the chart's window. */
   index: Map<string, number>;
@@ -56,7 +58,7 @@ type World = {
 };
 
 /** The pass's own sealed pick — an earlier pass's seal is history (the chart's rule). */
-function currentPassSeal(e: {
+export function currentPassSeal(e: {
   segments: Array<{ id: string }>;
   availabilityConfigs: Array<{ segmentId: string | null; optionSelected: unknown }>;
 }): unknown {
@@ -64,7 +66,7 @@ function currentPassSeal(e: {
   return e.availabilityConfigs.find((c) => c.optionSelected != null && (seg == null || c.segmentId == null || c.segmentId === seg))?.optionSelected ?? null;
 }
 
-const sealSelect = {
+export const sealSelect = {
   segments: { orderBy: { segmentNumber: "desc" as const }, take: 1, select: { id: true } },
   availabilityConfigs: {
     where: { sealedAt: { not: null } },
@@ -74,13 +76,17 @@ const sealSelect = {
   },
 };
 
-async function buildWorld(prisma: PrismaClient, input: { from: Date; to: Date; excludeEntryId: string }): Promise<World> {
+export async function buildWorld(prisma: PrismaClient, input: { from: Date; to: Date; excludeEntryId: string }): Promise<World> {
   let from = input.from;
   let to = input.to;
   for (let pass = 0; ; pass++) {
     const count = nightsBetweenUtc(from, to);
     if (count > CHART_MAX_NIGHTS) throw new ValidationError(`A stay of more than ${CHART_MAX_NIGHTS} nights cannot be checked here`);
     const chart = await buildRoomChart(prisma, { from: ymdUtc(from), nights: count });
+    // A room with an open fault report is tried last: the system never chooses one quietly
+    // when a sound room of the type is free.
+    const faulty = new Set(chart.rooms.filter((r) => r.faultOpen).map((r) => r.id));
+    for (const t of chart.roomTypes) t.roomIds = [...t.roomIds.filter((id) => !faulty.has(id)), ...t.roomIds.filter((id) => faulty.has(id))];
     const index = new Map(chart.nights.map((d, i) => [d, i] as const));
     const roomTypeOf = new Map(chart.rooms.map((r) => [r.id, r.roomTypeId] as const));
     const roomNumberOf = new Map(chart.rooms.map((r) => [r.id, r.roomNumber] as const));
@@ -105,26 +111,35 @@ async function buildWorld(prisma: PrismaClient, input: { from: Date; to: Date; e
       cells.set(key, set);
     }
 
-    // ---- quiet runs of bookings still before Arrival --------------------------------------
+    // ---- quiet rooms of bookings not yet given their rooms -----------------------------------
+    // A booking's room is the system's to move while the booking is before its rooms are handed
+    // out at Arrival (no room assigned yet), no room move is running on it, and its seal says the
+    // system chose that room (every night of it quiet).
     const candidateIds = [...new Set(bars.filter((b) => QUIET_KINDS.has(b.kind)).map((b) => b.entryId))];
     const candidates = candidateIds.length
       ? await prisma.entry.findMany({
-          where: { id: { in: candidateIds }, currentStage: { in: BEFORE_ARRIVAL }, status: { in: ["ACTIVE", "PARKED"] } },
+          where: {
+            id: { in: candidateIds },
+            currentStage: { in: BEFORE_ARRIVAL },
+            status: { in: ["ACTIVE", "PARKED"] },
+            roomAssignments: { none: {} },
+            roomMoveLegs: { none: { move: { status: { in: ["IN_PROGRESS", "PARTIAL"] } } } },
+          },
           select: { id: true, checkInDate: true, checkOutDate: true, ...sealSelect },
         })
       : [];
-    const quietRuns: Array<{ entryId: string; run: BookingRoomRun }> = [];
+    const quietUnits: Array<{ entryId: string; unit: QuietUnit }> = [];
     for (const e of candidates) {
       const seal = currentPassSeal(e);
       if (!sealHasBookingRooms(seal)) continue;
       const rooms = readBookingRooms(seal, { checkIn: e.checkInDate, checkOut: e.checkOutDate }, (id) => roomTypeOf.get(id));
-      for (const r of rooms) for (const run of bookingRoomRuns(r)) if (!run.fixed && run.roomId) quietRuns.push({ entryId: e.id, run });
+      for (const unit of roomUnitsOf(rooms)) if (unit.quiet) quietUnits.push({ entryId: e.id, unit });
     }
-    // A quiet run reaching past the window: widen it once so the run can be weighed whole.
-    if (pass === 0 && quietRuns.length > 0) {
-      const first = quietRuns.reduce((m, q) => (q.run.nights[0] < m ? q.run.nights[0] : m), ymdUtc(from));
-      const last = quietRuns.reduce((m, q) => {
-        const end = nextYmd(q.run.nights[q.run.nights.length - 1]);
+    // A quiet room reaching past the window: widen it once so the room can be weighed whole.
+    if (pass === 0 && quietUnits.length > 0) {
+      const first = quietUnits.reduce((m, q) => (q.unit.nights[0] < m ? q.unit.nights[0] : m), ymdUtc(from));
+      const last = quietUnits.reduce((m, q) => {
+        const end = nextYmd(q.unit.nights[q.unit.nights.length - 1]);
         return end > m ? end : m;
       }, ymdUtc(to));
       const wFrom = new Date(`${first}T00:00:00.000Z`);
@@ -137,20 +152,20 @@ async function buildWorld(prisma: PrismaClient, input: { from: Date; to: Date; e
     }
 
     const items: WorldItem[] = [];
-    for (const { entryId, run } of quietRuns) {
-      const idx = run.nights.map((d) => index.get(d));
-      const held = cells.get(`${entryId}|${run.roomId}`);
-      // Movable only when the run lies inside the window and the booking holds its room on every night.
+    for (const { entryId, unit } of quietUnits) {
+      const idx = unit.nights.map((d) => index.get(d));
+      const held = cells.get(`${entryId}|${unit.roomId}`);
+      // Movable only when the room's nights lie inside the window and the booking holds it on every one.
       if (idx.some((i) => i === undefined) || !held || idx.some((i) => !held.has(i!))) continue;
-      if (roomTypeOf.get(run.roomId!) !== run.roomTypeId) continue;
+      if (roomTypeOf.get(unit.roomId) !== unit.roomTypeId) continue;
       for (const i of idx) held.delete(i!);
       items.push({
-        id: `${entryId}|${run.key}|${run.nights[0]}`,
+        id: `${entryId}|unit|${unit.roomId}`,
         entryId,
-        roomTypeId: run.roomTypeId,
+        roomTypeId: unit.roomTypeId,
         nights: idx as number[],
         fixedRoomId: null,
-        currentRoomId: run.roomId,
+        currentRoomId: unit.roomId,
         quiet: true,
       });
     }
@@ -226,7 +241,7 @@ export type BookingRoomsAnswer = {
   refusals: string[];
   rooms: Array<{ key: string; runs: BookingRunAnswer[] }>;
   /** Quiet rooms of other bookings the fit would move. */
-  moves: Array<{ entryId: string; booking: string; fromRoomNumber: string; toRoomNumber: string; span: string }>;
+  moves: Array<{ entryId: string; booking: string; fromRoomId: string; toRoomId: string; fromRoomNumber: string; toRoomNumber: string; span: string }>;
 };
 
 export type HouseByTypeAnswer = {
@@ -303,7 +318,7 @@ export async function answerHouseByType(
   return { entryId, checkInDate: ymdUtc(checkIn), checkOutDate: ymdUtc(checkOut), nights: stayNights, types, booking };
 }
 
-function checkBookingRooms(
+export function checkBookingRooms(
   world: World,
   rooms: BookingRoom[],
   stayNights: string[],
@@ -396,6 +411,8 @@ function checkBookingRooms(
       moves.push({
         entryId: w.entryId,
         booking: world.bookingName.get(w.entryId) ?? w.entryId,
+        fromRoomId: w.currentRoomId,
+        toRoomId: res.roomOf.get(id)!,
         fromRoomNumber: world.roomNumberOf.get(w.currentRoomId) ?? w.currentRoomId,
         toRoomNumber: world.roomNumberOf.get(res.roomOf.get(id)!) ?? "",
         span: spanWords(w.nights.map((n) => world.chart.nights[n])),

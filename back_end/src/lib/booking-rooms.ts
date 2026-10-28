@@ -153,6 +153,143 @@ export function bookingRoomRuns(room: BookingRoom): BookingRoomRun[] {
   return runs;
 }
 
+/**
+ * A booking's rooms seen room by room: every night the booking has in one real room, and whether
+ * the system may move them (every one of those nights quiet). A move takes ALL of a booking's
+ * nights in a room to one other room of the same type, so it is a plain swap of one room number
+ * for another in every record — the price, the guests, the meals and the beds follow unchanged.
+ */
+export type QuietUnit = { roomId: string; roomTypeId: string; nights: string[]; quiet: boolean };
+
+export function roomUnitsOf(rooms: BookingRoom[]): QuietUnit[] {
+  const byRoom = new Map<string, QuietUnit>();
+  for (const r of rooms) {
+    for (const n of r.nights) {
+      if (!n.roomId) continue;
+      const u = byRoom.get(n.roomId) ?? { roomId: n.roomId, roomTypeId: n.roomTypeId, nights: [], quiet: true };
+      if (!u.nights.includes(n.date)) u.nights.push(n.date);
+      if (n.fixed || u.roomTypeId !== n.roomTypeId) u.quiet = false;
+      byRoom.set(n.roomId, u);
+    }
+  }
+  for (const u of byRoom.values()) u.nights.sort();
+  return [...byRoom.values()];
+}
+
+/** Booking rooms with every room relabelled through `map` (old room id → new). */
+export function relabelBookingRooms(rooms: BookingRoom[], map: Map<string, string>): BookingRoom[] {
+  return rooms.map((r) => ({
+    key: r.key,
+    nights: r.nights.map((n) => (n.roomId && map.has(n.roomId) ? { ...n, roomId: map.get(n.roomId)! } : n)),
+  }));
+}
+
+/** Every night of every booking room made fixed to the room it sits in (the desk confirmed them). */
+export function fixAllBookingRooms(rooms: BookingRoom[]): BookingRoom[] {
+  return rooms.map((r) => ({ key: r.key, nights: r.nights.map((n) => (n.roomId ? { ...n, fixed: true } : n)) }));
+}
+
+/**
+ * Booking rooms from "how many of each type, each night" (the Inquiry step's type counts), with
+ * `fixed` rooms the desk named. Rooms carry on from one night to the next:
+ *   1. a fixed room continues as the same booking room;
+ *   2. a booking room continues in the same type while that type still has a place that night;
+ *   3. a booking room whose type has no place left takes another type (the guest changes type);
+ *   4. any place still left opens a new booking room.
+ * `previous` (the booking rooms saved before) keeps keys and quiet rooms where they still fit, so
+ * saving the same counts again changes nothing.
+ */
+export function bookingRoomsFromCounts(input: {
+  nights: string[];
+  counts: Map<string, Map<string, number>>;
+  fixed: Array<{ roomId: string; roomTypeId: string }>;
+  previous?: BookingRoom[] | null;
+}): BookingRoom[] {
+  const rooms = new Map<string, BookingRoom>();
+  const keyOrder: string[] = [];
+  let nextNo = 1;
+  const prevByNight = new Map<string, Map<string, BookingRoomNight>>(); // night -> key -> night
+  for (const r of input.previous ?? []) {
+    nextNo = Math.max(nextNo, (Number(r.key.replace(/^R/, "")) || 0) + 1);
+    for (const n of r.nights) {
+      const m = prevByNight.get(n.date) ?? new Map<string, BookingRoomNight>();
+      m.set(r.key, n);
+      prevByNight.set(n.date, m);
+    }
+  }
+  const usedKeys = new Set<string>((input.previous ?? []).map((r) => r.key));
+  const newKey = () => {
+    while (usedKeys.has(`R${nextNo}`)) nextNo++;
+    const k = `R${nextNo++}`;
+    usedKeys.add(k);
+    return k;
+  };
+  const add = (key: string, n: BookingRoomNight) => {
+    if (!rooms.has(key)) {
+      rooms.set(key, { key, nights: [] });
+      keyOrder.push(key);
+    }
+    rooms.get(key)!.nights.push(n);
+  };
+  let last = new Map<string, BookingRoomNight>(); // key -> its night yesterday
+  for (const date of [...input.nights].sort()) {
+    const left = new Map(input.counts.get(date) ?? new Map<string, number>());
+    const tonight = new Map<string, BookingRoomNight>();
+    const take = (typeId: string) => {
+      const c = left.get(typeId) ?? 0;
+      if (c <= 0) return false;
+      left.set(typeId, c - 1);
+      return true;
+    };
+    // The candidates to continue: yesterday's booking rooms, else (first night) the saved ones.
+    const carry = last.size > 0 ? last : (prevByNight.get(date) ?? new Map<string, BookingRoomNight>());
+    // 1. fixed rooms
+    for (const f of input.fixed) {
+      if (!take(f.roomTypeId)) continue;
+      const key = [...carry.entries()].find(([k, n]) => n.roomId === f.roomId && n.fixed && !tonight.has(k))?.[0] ?? newKey();
+      tonight.set(key, { date, roomTypeId: f.roomTypeId, roomId: f.roomId, fixed: true });
+    }
+    // 2. quiet rooms continuing in their type
+    for (const [key, n] of carry) {
+      if (tonight.has(key) || n.fixed) continue;
+      if (!take(n.roomTypeId)) continue;
+      const saved = prevByNight.get(date)?.get(key);
+      const roomId = saved && saved.roomTypeId === n.roomTypeId && !saved.fixed ? saved.roomId : n.roomId;
+      tonight.set(key, { date, roomTypeId: n.roomTypeId, roomId, fixed: false });
+    }
+    // 3. booking rooms whose type has no place left take another type
+    for (const [key, n] of carry) {
+      if (tonight.has(key)) continue;
+      if (n.fixed && input.fixed.some((f) => f.roomId === n.roomId)) continue;
+      const typeId = [...left.entries()].find(([, c]) => c > 0)?.[0];
+      if (!typeId || !take(typeId)) break;
+      tonight.set(key, { date, roomTypeId: typeId, roomId: null, fixed: false });
+    }
+    // 4. new booking rooms for any place still left
+    for (const [typeId, c] of [...left.entries()]) {
+      for (let i = 0; i < c; i++) tonight.set(newKey(), { date, roomTypeId: typeId, roomId: null, fixed: false });
+      left.set(typeId, 0);
+    }
+    for (const [key, n] of tonight) add(key, n);
+    last = tonight;
+  }
+  return keyOrder.map((k) => rooms.get(k)!).sort((a, b) => (Number(a.key.slice(1)) || 0) - (Number(b.key.slice(1)) || 0));
+}
+
+/** Every string (and object key) that names a room in `map`, swapped for its new room — the
+ *  relabel a quiet move makes in a booking's own records. Room ids are uuids, so nothing else
+ *  can match. */
+export function relabelJson(value: unknown, map: Map<string, string>): unknown {
+  if (typeof value === "string") return map.get(value) ?? value;
+  if (Array.isArray(value)) return value.map((v) => relabelJson(v, map));
+  if (value && typeof value === "object" && !(value instanceof Date)) {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) out[map.get(k) ?? k] = relabelJson(v, map);
+    return out;
+  }
+  return value;
+}
+
 /** How many rooms of each type the booking asks for, night by night. */
 export function typeCountsPerNight(rooms: BookingRoom[]): Map<string, Map<string, number>> {
   const out = new Map<string, Map<string, number>>();
