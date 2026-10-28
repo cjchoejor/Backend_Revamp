@@ -148,16 +148,17 @@ Read-only. Nothing on the desk, the holds or the bills changed.
 
 **2 Inquiry.** The house card asks how many rooms of each type, night by night (`RoomsByType` in [s1-by-type.tsx](../new_front_end/src/components/ds/steps/s1-by-type.tsx)):
 - one row per type (33px), its count picked from a **dropdown**, never typed;
-- in every box, first **how many of that type are free**, coloured by what it means: green — enough for the whole booking, amber — some but fewer than the rooms asked, red — none (under Every night, the rooms free for the whole stay);
-- a key above the grid says what the colours mean, in words (green, amber, red, the box beside it is how many to take, under Every night the rooms free for the whole stay);
+- in every box, first **how many of that type are free**, in words and coloured by what it means: green "6 free" — enough for the whole booking, amber "only 1 free" — some but fewer than the rooms asked, red "none free" (under Every night, the rooms free for the whole stay); the hover says it in full ("1 Suite free on 3 Oct — fewer than the 3 rooms this booking needs"). Then **take** and the dropdown. The words sit on the numbers, not in a key above the grid (operator: "the words on top is not something the user will see");
 - a dropdown offers only counts that can stand: never more than the type has free that night, never more than the rooms the booking still needs that night, never fewer than a room kept for the guest. Once a night has all its rooms, the other types show a dash saying why ("23 Sep already has its 3 rooms — lower another type first");
 - by default one dropdown per type, for every night; **Night by night** opens one per night, and the grid opens that way by itself when the nights already differ (**Same every night** folds it back once they agree);
 - a type with nothing free on any night, and nothing asked of it, is named in one line under the grid instead of a row;
-- a tally per night, red while short and green with a tick once complete;
+- a tally per night, "0 of 3 picked", red while short and green with a tick once complete;
 - the pick checked by the server as it changes (`POST /api/entries/:id/availability/by-type/seal` with `preview`), refusals in words and other bookings it would move named. Only the answer for the counts on screen is shown: while the counts settle and the house is asked it reads "Checking…" (the previous answer, for other counts, used to flash for a moment — "29 Oct has 1 room" over a grid reading 3/3);
 - then **Save the rooms** (green), and the page goes on to Wrap up.
 
-**Pick every room by number instead** leaves picking by type for the room-number table, where every room is chosen by hand and fixed. The picker that added one room by number beside the types was taken off (operator: "I don't think it'll be used much"); a room kept for a guest earlier still shows as "Kept for the guest" and can be let go. "Offer what we have" (never possible) was taken off the house card.
+When the stay's Done moves the work to the house, the house lands with its top just under the sticky head (`StepCard revealAtTop`), and is kept there while its answer arrives — it used to be centred while it was still asking, so it grew down the page with the stay still showing above it.
+
+**Pick every room by number instead** leaves picking by type for the room-number table, where every room is chosen by hand and fixed. The table opens as a **pop-up over the left column only** (`WorkPopup` in [kit.tsx](../new_front_end/src/components/ds/steps/kit.tsx)): the work column is dimmed and blurred and holds still, the booking file on the right stays clear, and a room picked by hand opens its bill there (Charges › The price). Close, Escape or a press on the blurred page goes back to picking by type when nothing was saved by number; **Pick by room type instead** in its head does the same; saving closes it and goes on to Wrap up. The picker that added one room by number beside the types was taken off (operator: "I don't think it'll be used much"); a room kept for a guest earlier still shows as "Kept for the guest" and can be let go. "Offer what we have" (never possible) was taken off the house card.
 
 **3 Negotiation.** A quiet room reads "Deluxe Double · room 1" in:
 - the negotiation table and the guest board — the row, the room's tab, every message about it;
