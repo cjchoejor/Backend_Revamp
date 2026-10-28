@@ -1565,6 +1565,14 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .qstep > .field:not(.desk-root *) { margin: 0; }
 .ds .qsteps > .qsep:not(.desk-root *) { padding-top: var(--s4); border-top: 1px solid var(--line); }
 .ds .qsteps > .qnote:not(.desk-root *) { margin: 0; padding-left: calc(24px + var(--s3)); }
+/* Its answers are full-size choices (2026-10-28, operator: "make these buttons more prominent"):
+   clickable at rest, and the one picked filled in the accent, bold, with a tick — never colour alone. */
+.ds .qsteps .choice:not(.desk-root *) { gap: var(--s2); }
+.ds .qsteps .choice .btn:not(.desk-root *) { height: auto; min-height: 40px; padding: 0 var(--s4); font-size: var(--t-base); font-weight: 500; background: var(--surface); border: 1px solid var(--line-2); color: var(--ink); }
+.ds .qsteps .choice .btn:not(.inert):hover:not(.desk-root *) { background: var(--surface-2); border-color: var(--ink-3); }
+.ds .qsteps .choice .btn[aria-pressed="true"]:not(.desk-root *) { background: var(--accent-soft); border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); color: var(--accent-ink); font-weight: 700; }
+.ds .qsteps .choice .btn[aria-pressed="true"]:hover:not(.desk-root *) { background: var(--accent-soft); border-color: var(--accent); }
+.ds .qsteps .choice .btn[aria-pressed="true"]::before { content: ""; flex: none; width: 10px; height: 5px; border-left: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: translateY(-2px) rotate(-45deg); }
 /* The % after the figure — the twin of the money box’s Nu. before it. */
 .ds .suffix:not(.desk-root *) { display: inline-flex; align-items: center; }
 .ds .suffix > span:not(.desk-root *) { height: var(--control-h); display: inline-flex; align-items: center; padding: 0 var(--s3); border: 1px solid var(--line-2); border-left: 0; border-radius: 0 var(--r-control) var(--r-control) 0; background: var(--surface-2); color: var(--ink-2); font-size: var(--t-sm); font-weight: 600; }
