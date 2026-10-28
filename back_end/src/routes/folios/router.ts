@@ -24,6 +24,7 @@ import {
   recordFolioPaymentRequestSchema,
   setAdvancePaymentPlanRequestSchema,
   setAdvanceRequirementRequestSchema,
+  setAdvanceTermsRequestSchema,
   recordInvoicePaymentEventRequestSchema,
   updateBillingModelDefaultsRequestSchema,
   writeOffOutstandingBalanceRequestSchema,
@@ -170,6 +171,36 @@ foliosRouter.post(
       const status = await s3PaymentService.getPaymentStatus(prisma, { entryId: entry.id, folioId: entry.folio.id });
       // The proforma prints the plan (2026-08-08), so a changed plan re-issued it — the desk
       // toasts "dispatch the new version" off this field, same contract as the requirement route.
+      res.json({ ...status, reissuedProforma: result.reissuedProforma ?? null });
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+/**
+ * The advance in one act (2026-10-28): the amount asked, how the guest will pay, or both. The
+ * proforma prints both, so saved together it is issued again once. Same answer as the two routes
+ * below — the fresh payment-status and the re-issued proforma.
+ */
+foliosRouter.post(
+  "/entries/:id/advance-terms",
+  requireActorLevel("L1"),
+  validateBody(setAdvanceTermsRequestSchema),
+  async (req, res, next) => {
+    try {
+      const entry = await prisma.entry.findUnique({ where: { id: req.params.id }, include: { folio: true } });
+      if (!entry || !entry.folio) {
+        next(new NotFoundError("Entry/folio"));
+        return;
+      }
+      const { requirement, plan } = req.body;
+      const result = await s3PaymentService.setAdvanceTerms(
+        prisma,
+        { entryId: entry.id, folioId: entry.folio.id, requirement, plan },
+        { actorId: req.actor!.actorId, actorLevel: req.actor!.level },
+      );
+      const status = await s3PaymentService.getPaymentStatus(prisma, { entryId: entry.id, folioId: entry.folio.id });
       res.json({ ...status, reissuedProforma: result.reissuedProforma ?? null });
     } catch (e) {
       next(e);
