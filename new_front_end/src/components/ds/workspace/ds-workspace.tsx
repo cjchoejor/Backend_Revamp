@@ -1529,7 +1529,9 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
 
   if (topLayout) {
     const headerClocks = runningClocks(entry, timersQuery.data?.items ?? [], (paymentStatusQuery.data?.paymentPlan?.plan ?? "FULL") !== "FULL");
-    const fileTab: "details" | BookingTab = view === "step" || view === "other" ? "details" : view;
+    // The booking file opens on Charges & payments (2026-10-28, operator: "always make the charges tab
+    // be shown in default in all stages"); Booking is a click away.
+    const fileTab: "details" | BookingTab = view === "step" || view === "other" ? "money" : view;
     const sectionsLeft = flowItems.filter((i) => !i.met).length;
     // A step looked back at (from a later step's rail, or a closed booking's) offers the way back to
     // the step the booking is at — the journey line that did this is gone (2026-10-27).
