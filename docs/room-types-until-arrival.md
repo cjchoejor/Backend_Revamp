@@ -1,6 +1,6 @@
 # Room types until Arrival — the plan
 
-**Status: a plan, not built yet.** Written 2026-10-28 for the operator to check before any of it is built.
+**Status: stage 1 (the engine) built 2026-10-28 — see "Stage 1, as built" below. Stages 2–6 are still a plan.** Written 2026-10-28 for the operator to check before any of it is built.
 
 ## In one paragraph
 
@@ -44,12 +44,14 @@ This is what would have saved the booking blocked this afternoon: Room 203 was t
 
 Counting free rooms night by night is not quite enough. The counts can fit every night and still leave a guest who would have to change rooms halfway through their stay.
 
-Example with the 2 Premium Suites:
-- booking A holds a suite on the 1st and 2nd;
-- booking B holds one on the 2nd and 3rd;
-- booking C wants one on the 1st, 2nd and 3rd.
+Example with the 2 Premium Suites (503 and 504):
+- booking A holds 503 on the 1st only, and the guest asked for 503;
+- booking B holds 504 on the 2nd only, and the guest asked for 504;
+- booking C wants one suite on the 1st and the 2nd.
 
-The count says yes every night, but no single suite is free on all three nights. So C could only be fitted by changing rooms halfway.
+The count says yes each night — one suite is free on the 1st (504) and one on the 2nd (503) — but it is not the same suite, so C could only be fitted by changing rooms halfway.
+
+This happens only because A and B are fixed. Had the system chosen A's suite quietly, it would move A to 504, which is free on the 1st, and C gets 503 for both nights.
 
 The rule: **the system takes a booking only if every guest can still be given one room for their whole stay** (or the change of type they asked for). This applies to the house's answer, the provisional block, the committed hold and Reserve.
 
@@ -117,6 +119,24 @@ In stages, each one checked on test bookings and with the money audit (`back_end
 4. **Set up and Reserve.** The holds and the reservation keep booking rooms, not numbers. Quiet rooms may still move until Arrival.
 5. **Arrival.** The proposal; confirm; a change within a type in place; a change of type through today's room change.
 6. **The rest.** The chart's "room not chosen yet", room moves on the chart before Arrival, the "another booking is working these rooms" box, the voucher.
+
+### Stage 1, as built (2026-10-28)
+
+Read-only. Nothing on the desk, the holds or the bills changed.
+
+- **Booking rooms** — [back_end/src/lib/booking-rooms.ts](../back_end/src/lib/booking-rooms.ts). A booking room is `{key: "R1", nights: [{date, roomTypeId, roomId, fixed}]}`. It will live on the sealed pick (`optionSelected.bookingRooms`), beside the plain `perNight` list every reader uses today, which `sealFromBookingRooms` writes from it. `readBookingRooms` reads a seal written without booking rooms as fixed rooms: one booking room per distinct room, on the nights it appears. `bookingRoomRuns` cuts a booking room into the stretches that must each be one room (a change of type, a gap, or a change of fixed room starts a new one).
+- **Placing stays** — [back_end/src/lib/room-placement.ts](../back_end/src/lib/room-placement.ts), pure, one room type at a time. Fixed stays are facts (two on one room-night, or one on a night the room is out of order, is reported, not refused). Movable stays each get one room for all their nights, trying their current room first, with backtracking and a step limit. `maxExtraStays` says how many more whole stays a type can take once the quiet ones are re-placed.
+- **The house by type** — [back_end/src/services/domain/room-placement-service.ts](../back_end/src/services/domain/room-placement-service.ts) `answerHouseByType`, served at `POST /api/entries/:id/availability/by-type` (L1, no-store; body `{checkInDate?, checkOutDate?, bookingRooms?}`). The house is read through `buildRoomChart`, the asking booking's own claims left out. Every claim is fixed, except a booking before Arrival whose current seal carries booking rooms with a quiet room it holds on every night. The answer gives:
+  - per type per night, the rooms usable, taken and free;
+  - rooms free every night of the stay;
+  - whole stays the type can still take with quiet rooms re-placed;
+  - for the booking's rooms (its seal, or the ones sent), whether they fit, the room each would be in, the quiet rooms of other bookings that would move, and every refusal in words: "Room 503 is held for … (ENT-…) on 24 Aug", "Only 1 Premium Suite free on 24 Aug — 2 asked", "There is a Premium Suite free every night, but no one Premium Suite is free for all of room 1's stay (24 Aug → 26 Aug) …", nights outside the stay.
+- **Verified**:
+  - a rule matrix over the two modules, including 2,000 random houses with no fixed stays — always placed, never two stays in one room;
+  - on `legphel_pms_dev2`, every live booking with a stay ahead: no quiet stays, each type's free rooms per night equal to the chart's once the booking's own rooms are given back, and the booking's rooms fitting exactly when the holds' conflict check finds nothing;
+  - the example above built on 503 and 504 with throwaway bookings: refused while A and B are fixed, then — A's suite written as a quiet one — C fits by moving A from 503 to 504; A asking about itself stays in 503; the chart unchanged by asking;
+  - the money audit at 0 critical. Test data removed.
+- **Today no seal carries booking rooms**, so every answer is the chart's. Quiet rooms begin when stage 2 writes them.
 
 ### For whoever builds it — where it lands
 
