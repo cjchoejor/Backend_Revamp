@@ -35,6 +35,7 @@ import { renderHtmlToPdf } from "../infrastructure/pdf-render-service.js";
 import { renderLegphelConfirmationVoucherHtml } from "../infrastructure/pdf-templates/legphel-confirmation-voucher-template.js";
 import { mastheadFromHotelProfile } from "../infrastructure/pdf-templates/legphel-document-shell.js";
 import { formatDocDate, formatDocDateTime, formatDocDateLocal } from "../infrastructure/pdf-templates/legphel-document-format.js";
+import { guestDisplayName } from "../../lib/guest-display-name.js";
 import { type ConfirmationVoucherLine } from "../infrastructure/pdf-templates/confirmation-voucher-template.js";
 
 /** Static policy text — matches the reference voucher. Would live in ConfigurationEntry once
@@ -111,7 +112,8 @@ export async function generateOrLoadConfirmationVoucherPdf(
   const hotelPhone = extractPrimaryPhone(hotel.contactNumbers);
 
   const guest = entry.guestProfile;
-  const guestFullName = [guest?.firstName, guest?.lastName].filter(Boolean).join(" ") || "Guest";
+  // With the title the desk took at Inquiry (2026-10-28).
+  const guestFullName = guestDisplayName(guest) || "Guest";
   // Boss's convention: `To:` = guest full name, `Guest Name` (booking row) = contact person.
   const contactPersonName = entry.contactPersonName?.trim() || guestFullName;
   const confirmationBy =

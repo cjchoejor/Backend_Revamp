@@ -102,6 +102,24 @@ export function formatStayRange(
 }
 
 /**
+ * The stay as two lines a guest reads on a paper (2026-10-28, operator: "I told you to use the
+ * words check in and check out — use it in papers as well"): "Check-in 27 Oct 2026" and
+ * "Check-out 30 Oct 2026 · 3 nights", where the papers printed one "Stay 27–30 Oct 2026 · 3
+ * nights". The confirmation voucher already printed the pair. Null when the stay has no dates.
+ */
+export type StayLines = { checkIn: string; checkOut: string };
+
+export function formatStayLines(
+  from: Date | null | undefined,
+  to: Date | null | undefined,
+  nights: number | null,
+): StayLines | null {
+  if (!from && !to) return null;
+  const suffix = nights != null ? ` · ${nights} night${nights === 1 ? "" : "s"}` : "";
+  return { checkIn: from ? formatDocDate(from) : "—", checkOut: `${to ? formatDocDate(to) : "—"}${suffix}` };
+}
+
+/**
  * "38 days before arrival" / "on arrival day" / "4 days after arrival" — the cancellation
  * document's Notice given row, which is what selects the refund band.
  */

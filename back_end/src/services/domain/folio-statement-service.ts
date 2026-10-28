@@ -6,7 +6,7 @@ import { toDecimal } from "../../lib/money.js";
 import { mastheadFromHotelProfile } from "../infrastructure/pdf-templates/legphel-document-shell.js";
 import {
   formatDocDateTimeLocal,
-  formatStayRange,
+  formatStayLines,
   localYmd,
 } from "../infrastructure/pdf-templates/legphel-document-format.js";
 import {
@@ -335,7 +335,7 @@ function renderInterimStatement(c: Composed): string {
     asAt: formatDocDateTimeLocal(c.asAt),
     account: c.account,
     forGuest: c.forGuest,
-    stay: c.stay.checkIn && c.stay.checkOut ? formatStayRange(c.stay.checkIn, c.stay.checkOut, c.stay.nights) : null,
+    stay: c.stay.checkIn && c.stay.checkOut ? formatStayLines(c.stay.checkIn, c.stay.checkOut, c.stay.nights) : null,
     nightsLine: nightsLine(c.stay, c.asAt),
     rooms: c.rooms.length > 0 ? `Room${c.rooms.length === 1 ? "" : "s"} ${c.rooms.join(", ")}` : null,
     rows: c.figures.components.map((comp) => ({
@@ -372,7 +372,7 @@ function renderMasterBill(c: Composed, opts: { reprintOrdinal: number | null }):
     strip: sealed ? "Statement — not a tax invoice" : "Statement — not a tax invoice · indicative, charges still posting",
     account: c.account,
     forGuest: c.forGuest,
-    stay: c.stay.checkIn && c.stay.checkOut ? formatStayRange(c.stay.checkIn, c.stay.checkOut, c.stay.nights) : null,
+    stay: c.stay.checkIn && c.stay.checkOut ? formatStayLines(c.stay.checkIn, c.stay.checkOut, c.stay.nights) : null,
     rooms: c.rooms.length > 0 ? `Room${c.rooms.length === 1 ? "" : "s"} ${c.rooms.join(", ")}` : null,
     asAtLabel: sealed ? "Content frozen at folio seal" : "As at",
     asAt: formatDocDateTimeLocal(sealed ? c.sealedAt! : c.asAt),

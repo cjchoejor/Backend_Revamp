@@ -46,7 +46,8 @@ import { renderHtmlToPdf } from "../infrastructure/pdf-render-service.js";
 import { renderLegphelInterimHtml, renderLegphelProformaHtml } from "../infrastructure/pdf-templates/legphel-proforma-template.js";
 import { describeInterimPromise, type InterimFigures } from "./interim-payment-service.js";
 import { mastheadFromHotelProfile, primaryContactNumber } from "../infrastructure/pdf-templates/legphel-document-shell.js";
-import { formatDocDate, formatDocDateTimeLocal, formatStayRange, formatDocDateLocal } from "../infrastructure/pdf-templates/legphel-document-format.js";
+import { formatDocDate, formatDocDateTimeLocal, formatStayLines, formatDocDateLocal } from "../infrastructure/pdf-templates/legphel-document-format.js";
+import { guestDisplayName } from "../../lib/guest-display-name.js";
 import { renderLegphelTaxInvoiceHtml } from "../infrastructure/pdf-templates/legphel-tax-invoice-template.js";
 import { computeStayCharges, resolveChargeRates } from "../infrastructure/compute-stay-charges.js";
 import {
@@ -151,7 +152,8 @@ function invoicePrelude(inv: LoadedInvoice) {
   const nightlyRate = Number(terms?.pricingBreakdown?.nightlyRate ?? terms?.effectiveRate ?? 0);
 
   const guest = inv.entry.guestProfile;
-  const guestName = [guest?.firstName, guest?.lastName].filter(Boolean).join(" ") || "Guest";
+  // With the title the desk took at Inquiry (2026-10-28).
+  const guestName = guestDisplayName(guest) || "Guest";
   const adultCount = inv.entry.adultCount ?? Number(inv.entry.guestCount ?? 1) ?? 1;
   const childCount = inv.entry.childCount ?? 0;
   // "3 adults" / "2 adults, 1 child" — the reference never prints ", 0 children".
@@ -400,8 +402,7 @@ async function buildProformaDocRender(prisma: PrismaClient, inv: LoadedInvoice) 
     advanceDueBy: advanceDeadline && advanceDueNow > 0 ? formatDocDate(advanceDeadline) : null,
     to: billedParty ?? (p.guest?.email ? `${p.guestName} · ${p.guest.email}` : p.guestName),
     forGuest: p.guestName,
-    stayLabel: "Stay",
-    stay: formatStayRange(p.checkIn, p.checkOut, p.nights),
+    stay: formatStayLines(p.checkIn, p.checkOut, p.nights),
     rateLabel,
     rateValue: formatMoney(rateValue),
     // The concession, named on the bill as it is on the quotation. The per-room totals printed
@@ -483,7 +484,7 @@ export async function buildInterimDocRender(prisma: PrismaClient, inv: LoadedInv
     kind: req.kind,
     to: billedParty ?? (p.guest?.email ? `${p.guestName} · ${p.guest.email}` : p.guestName),
     forGuest: p.guestName,
-    stay: formatStayRange(checkIn, checkOut, f.nightsTotal),
+    stay: formatStayLines(checkIn, checkOut, f.nightsTotal),
     nightsLine: `${f.nightsSlept} slept · ${f.nightsToCome} to come`,
     projectedRoomTotal: formatMoney(f.projectedRoomTotal),
     otherChargesSoFar: formatMoney(f.otherChargesSoFar),
@@ -784,7 +785,7 @@ export type TaxInvoiceParties = {
  * else the guest. Shared by the issued document and the draft so the two name the same payer.
  */
 export function taxInvoicePartiesFromEntry(entry: {
-  guestProfile: { firstName: string | null; lastName: string | null } | null;
+  guestProfile: { title?: string | null; firstName: string | null; lastName: string | null } | null;
   contactPersonName: string | null;
   inquiry: {
     travelAgent: { displayName: string } | null;
@@ -793,7 +794,7 @@ export function taxInvoicePartiesFromEntry(entry: {
   } | null;
 }): TaxInvoiceParties {
   const guestName =
-    [entry.guestProfile?.firstName, entry.guestProfile?.lastName].filter(Boolean).join(" ").trim() ||
+    guestDisplayName(entry.guestProfile) ||
     entry.contactPersonName?.trim() ||
     "Guest";
   const corporate = entry.inquiry?.corporateAccount ?? null;
@@ -896,8 +897,7 @@ export function composeTaxInvoiceHtml(input: TaxInvoiceRenderInput): string {
     forGuest: input.parties.forGuest,
     customerTpn: input.parties.customerTpn,
     yourRef: input.parties.yourRef,
-    stay:
-      input.stay.checkIn && input.stay.checkOut ? formatStayRange(input.stay.checkIn, input.stay.checkOut, input.stay.nights) : null,
+    stay: input.stay.checkIn && input.stay.checkOut ? formatStayLines(input.stay.checkIn, input.stay.checkOut, input.stay.nights) : null,
     rooms: roomNumbers.length > 0 ? `Room${roomNumbers.length === 1 ? "" : "s"} ${roomNumbers.join(", ")}` : null,
     lines: f.components.map((c) => ({ description: describeComponent(c), amount: formatMoney(c.total) })),
     detailNote: "Itemised detail on the Master Bill.",

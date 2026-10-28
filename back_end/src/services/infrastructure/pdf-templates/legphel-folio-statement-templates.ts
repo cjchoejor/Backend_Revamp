@@ -25,10 +25,12 @@ import {
   row,
   section,
   signatureRow,
+  stayRows,
   subheading,
   type DocumentMasthead,
   type DocumentWatermark,
 } from "./legphel-document-shell.js";
+import type { StayLines } from "./legphel-document-format.js";
 
 export type LegphelMasterBillInput = {
   masthead: DocumentMasthead;
@@ -40,7 +42,7 @@ export type LegphelMasterBillInput = {
   /** "Pelden Enterprise · conference · 13–15 Oct 2026" */
   account: string;
   forGuest?: string | null;
-  stay?: string | null;
+  stay?: StayLines | null;
   rooms?: string | null;
   /** "As at" (live) or "Content frozen at folio seal" (sealed) → "15 Oct 2026 · 09:40". */
   asAtLabel: string;
@@ -69,7 +71,7 @@ export function renderLegphelMasterBillHtml(input: LegphelMasterBillInput): stri
     row("Booking Ref", input.bookingRef, { redValue: true }),
     row("Account", input.account, { boldValue: true }),
     input.forGuest ? row("For guest", input.forGuest) : "",
-    input.stay ? row("Stay", input.stay) : "",
+    stayRows(input.stay),
     input.rooms ? row("Rooms", input.rooms) : "",
     row(input.asAtLabel, input.asAt, { boldKey: true, boldValue: true }),
     miniTable(
@@ -106,7 +108,7 @@ export type LegphelInterimStatementInput = {
   asAt: string;
   account: string;
   forGuest?: string | null;
-  stay?: string | null;
+  stay?: StayLines | null;
   /** "3 slept · 4 to come" */
   nightsLine?: string | null;
   rooms?: string | null;
@@ -135,7 +137,7 @@ export function renderLegphelInterimStatementHtml(input: LegphelInterimStatement
     section,
     row("Account", input.account, { boldValue: true }),
     input.forGuest ? row("For guest", input.forGuest) : "",
-    input.stay ? row("Stay", input.stay) : "",
+    stayRows(input.stay),
     input.nightsLine ? row("Nights", input.nightsLine) : "",
     input.rooms ? row("Rooms", input.rooms) : "",
     section,

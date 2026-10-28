@@ -795,6 +795,9 @@ model SessionEventRecord {
 
 model GuestProfile {
   id                       String    @id @default(uuid())
+  /// "Mr" · "Mrs" · "Ms" … — taken at Inquiry and printed on the papers (2026-10-28). Null when
+  /// none was given.
+  title                    String?
   firstName                String
   lastName                 String
   email                    String?

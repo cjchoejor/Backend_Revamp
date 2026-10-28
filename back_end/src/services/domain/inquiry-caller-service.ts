@@ -130,7 +130,7 @@ export async function setEntryGuest(prisma: PrismaClient, actor: Actor, entryId:
   const t = (v: string | null | undefined) => v?.trim() || null;
 
   let existingId: string | null = null;
-  let create: { firstName: string; lastName: string; nationality: string | null; phone: string | null; email: string | null } | null = null;
+  let create: { title: string | null; firstName: string; lastName: string; nationality: string | null; phone: string | null; email: string | null } | null = null;
   if (input.mode === "EXISTING") {
     const g = await prisma.guestProfile.findUnique({ where: { id: input.guestProfileId }, select: { id: true, isActive: true } });
     if (!g || !g.isActive) throw new ValidationError("That guest is not on file");
@@ -139,7 +139,10 @@ export async function setEntryGuest(prisma: PrismaClient, actor: Actor, entryId:
     if (!inq.callerFirstName || !inq.callerLastName) {
       throw new ValidationError("Take the caller's first and last name first — the guest record is made from them");
     }
+    // The caller's title comes with their name (2026-10-28 — it was left behind, so the papers
+    // printed "pema lhaden wangchuk" for a caller taken as "Ms pema lhaden wangchuk").
     create = {
+      title: inq.callerTitle?.trim() || null,
       firstName: inq.callerFirstName,
       lastName: inq.callerLastName,
       nationality: t(input.nationality),
@@ -152,7 +155,8 @@ export async function setEntryGuest(prisma: PrismaClient, actor: Actor, entryId:
     if (!firstName || !lastName) throw new ValidationError("The guest's first and last name are needed");
     const email = t(input.email);
     if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new ValidationError("The guest's email does not read as an email address");
-    create = { firstName, lastName, nationality: t(input.nationality), phone: t(input.phone), email };
+    // The title typed at Wrap up is kept (2026-10-28 — the request carried it and it was dropped).
+    create = { title: t(input.title), firstName, lastName, nationality: t(input.nationality), phone: t(input.phone), email };
   }
 
   const now = new Date();

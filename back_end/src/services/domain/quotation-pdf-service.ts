@@ -37,7 +37,8 @@ import { formatMoney, loadHotelProfileForRender } from "../../lib/pdf-render-con
 import { renderHtmlToPdf } from "../infrastructure/pdf-render-service.js";
 import { renderLegphelQuotationHtml } from "../infrastructure/pdf-templates/legphel-quotation-template.js";
 import { mastheadFromHotelProfile } from "../infrastructure/pdf-templates/legphel-document-shell.js";
-import { formatDocDate, formatStayRange, formatDocDateLocal } from "../infrastructure/pdf-templates/legphel-document-format.js";
+import { formatDocDate, formatStayLines, formatDocDateLocal } from "../infrastructure/pdf-templates/legphel-document-format.js";
+import { guestDisplayName } from "../../lib/guest-display-name.js";
 import { computeStayCharges } from "../infrastructure/compute-stay-charges.js";
 
 type QuotationTerms = {
@@ -214,7 +215,8 @@ async function buildQuotationDocRender(
   // reference proforma exactly (each row shows Date | Occupants | Meal Plan | Extra Beds |
   // per-row tax-INCLUSIVE amount). If no dates are set, we emit at least one summary row.
   const guest = q.entry.guestProfile;
-  const guestName = [guest?.firstName, guest?.lastName].filter(Boolean).join(" ") || "Guest";
+  // With the title the desk took at Inquiry — "Ms pema lhaden wangchuk" (2026-10-28).
+  const guestName = guestDisplayName(guest) || "Guest";
   const adultCount = q.entry.adultCount ?? Number(q.entry.guestCount ?? 1) ?? 1;
   const childCount = q.entry.childCount ?? 0;
   const occupantsString = `${adultCount} adult${adultCount === 1 ? "" : "s"}, ${childCount} child${childCount === 1 ? "" : "ren"}`;
@@ -551,7 +553,7 @@ async function buildQuotationDocRender(
       : "Not a booking confirmation",
     to: toEmail ? `${guestName} · ${toEmail}` : guestName,
     attn: null,
-    stay: formatStayRange(checkIn, checkOut, nights),
+    stay: formatStayLines(checkIn, checkOut, nights),
     lines: linesForTemplate.map((l) => ({
       dates: l.dates ?? null,
       description: l.description,
