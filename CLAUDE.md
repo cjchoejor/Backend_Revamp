@@ -2121,6 +2121,7 @@ If a particular tab is still slow in production, the bottleneck is almost always
   - **One accent, for selection and position only** (`--accent`), always with a second cue — an underline, a border, a tick — never colour alone. Danger, warning and success colours only where they mean that.
   - **Type**: medium weight (500) in controls, regular for prose, bold sparingly; a heading by its heading style, not by enlarging text.
   - **Spacing and shape**: the 8px grid (`--s*`); small radii — 3–4px controls and chips, 6px cards, 8px dialogs (`--r-*`). No pill-everything, no oversized radii.
+  - **A dialog is at most 600px wide** (Atlassian's medium modal) — `.dialog-holder` in frame.css, 2026-10-28, after "The rooms are blocked" stretched across the screen on a long room line. A long line wraps; a dialog that needs more room passes its own `width` to `DsDialog`.
   - **Every control shows its states**: it must look clickable AT REST (an edge or a fill, not bare text), a surface change on hover, darker pressed, selected, inert. The focus ring is the keyboard's (`:focus-visible`).
   - **Words**: short sentence-case labels (1–2 words on a tab). Tabs switch views inside one page, never take you to another page.
   - **No emoji as icons, no illustrations, no filler copy.**
