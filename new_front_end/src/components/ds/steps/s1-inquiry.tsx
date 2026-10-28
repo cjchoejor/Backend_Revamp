@@ -70,7 +70,7 @@ import {
 } from "./kit";
 import { AddReturnStay, TripStays } from "@/components/ds/workspace/return-stay";
 import { enumerateNights, useRoomSelection } from "./use-room-selection";
-import { CHANNEL_OPTIONS, PartySearch, cameInAsOf, channelDef, type ChannelKey } from "./new-inquiry-parts";
+import { CHANNEL_OPTIONS, PartySearch, cameInAsOf, channelDef, moreRoomsNeedGuests, type ChannelKey } from "./new-inquiry-parts";
 import { TheCaller, WrapUp } from "./s1-caller";
 import { cleanPicks, usePickPricing, type BillNight } from "./s1-bill";
 import { usePublishPriceDraft } from "@/lib/ds/stay-price";
@@ -551,6 +551,11 @@ function TheStay({
     if (!out.includes(roomsN)) out.push(roomsN);
     return out.sort((a, b) => a - b);
   }, [range?.min, range?.max, roomsN]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The next counts are listed shut, saying what they need (2026-10-28, operator: "I changed to 2
+  // rooms, but I can only select one room" — one adult allows one room, and the list said nothing).
+  const shutRoomOptions = range
+    ? moreRoomsNeedGuests(range.max, env?.hotelRoomCount ?? null, (policy.data?.ageBands.childMaxAge ?? 10) + 1).filter((o) => !roomOptions.includes(o.n))
+    : [];
 
   const bedTypes = useMemo(() => {
     const s = new Set<string>();
@@ -748,6 +753,11 @@ function TheStay({
               <option key={n} value={String(n)}>
                 {plural(n, "room")}
                 {range && n < range.min ? " · too few" : range && n > range.max ? " · more than the guests" : ""}
+              </option>
+            ))}
+            {shutRoomOptions.map((o) => (
+              <option key={o.n} value={String(o.n)} disabled>
+                {o.label}
               </option>
             ))}
           </select>

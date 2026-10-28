@@ -68,6 +68,7 @@ import {
   diffNightsIso,
   digits,
   joinPhone,
+  moreRoomsNeedGuests,
   splitStoredPhone,
   type ChannelKey,
   type GateLine,
@@ -1166,6 +1167,14 @@ export function NewInquiryCanvas() {
                             </option>
                           ))
                         )}
+                        {/* The next counts, shut, saying what they need (2026-10-28). */}
+                        {envelope && allowedRooms.length
+                          ? moreRoomsNeedGuests(roomRange.max, envelope.hotelRoomCount, childMax + 1).map((o) => (
+                              <option key={o.n} value={String(o.n)} disabled>
+                                {o.label}
+                              </option>
+                            ))
+                          : null}
                       </select>
                       {exceedsHotel && envelope ? (
                         <span className="error">

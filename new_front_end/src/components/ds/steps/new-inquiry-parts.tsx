@@ -137,6 +137,22 @@ export function joinPhone(code: string, number: string): string {
   return PHONE_CODES.includes(c) ? `${c}${n}` : `${c} ${n}`;
 }
 
+/**
+ * The room counts just past what the party allows, for a Rooms dropdown to list shut with what each
+ * needs (2026-10-28, operator: a second room could not be chosen and the list said nothing). Every
+ * room needs a guest of `adultFrom` or over in it — younger children share a room. Never past the
+ * hotel's own rooms.
+ */
+export function moreRoomsNeedGuests(max: number, hotelRooms: number | null, adultFrom: number, extra = 2): Array<{ n: number; label: string }> {
+  const out: Array<{ n: number; label: string }> = [];
+  for (let n = max + 1; n <= max + extra; n++) {
+    if (hotelRooms != null && n > hotelRooms) break;
+    const more = n - max;
+    out.push({ n, label: `${plural(n, "room")} · needs ${more} more ${more === 1 ? "guest" : "guests"} aged ${adultFrom}+` });
+  }
+  return out;
+}
+
 /** The calendar day `n` nights after `iso` (a stay date, UTC-safe). */
 export function addNightsIso(iso: string, n: number): string {
   const d = new Date(`${iso}T00:00:00Z`);
