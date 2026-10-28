@@ -221,8 +221,9 @@ export function S1Inquiry({
           guest said no" is the answer the house had no way to write down (2026-10-01): until it,
           a lead that said no could only be parked or left to lapse as "Expired". */}
       {/* On the step line's right, beside each other (2026-10-28, operator: "the guest said no, which
-          is cancel") — the same name and form as Negotiation's Cancel booking. */}
-      <OtherWaysTabs tabs={[parkTab(parkNow, parking), declineTab(declineNow, declining, { label: "Cancel booking", act: "Cancel the booking" })]} />
+          is cancel") — the same form as Negotiation's Cancel booking, named for what it is here: "in
+          inquiry it isn't a booking yet, so name it cancel inquiry, just for here". */}
+      <OtherWaysTabs tabs={[parkTab(parkNow, parking), declineTab(declineNow, declining, { label: "Cancel inquiry", act: "Cancel the inquiry" })]} />
     </StepCanvas>
   );
 }
