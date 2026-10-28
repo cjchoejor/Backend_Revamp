@@ -709,11 +709,8 @@ function HoldCard({
   const [blockedNote, setBlockedNote] = useState<BlockedNote | null>(null);
   const sayBlocked = (untilIso: string | null, whose: "HOUSE" | "BOOKING" | null) => {
     if (!untilIso) return;
-    const nights = entry.checkInDate && entry.checkOutDate ? nightsBetween(entry.checkInDate, entry.checkOutDate) : null;
     setBlockedNote({
       n: Date.now(),
-      title: `${count > 1 ? "The rooms are" : "The room is"} blocked`,
-      what: `${rooms} · ${fmtRange(entry.checkInDate, entry.checkOutDate)}${nights ? ` · ${plural(nights, "night")}` : ""}`,
       howLong: forHowLong(untilIso, Date.now()),
       until: fmtDateTime(untilIso, tz),
       whose: whose === "BOOKING" ? "the time set for this booking" : whose === "HOUSE" ? "the hotel's time" : null,
@@ -989,13 +986,14 @@ function HoldCard({
   );
 }
 
-type BlockedNote = { n: number; title: string; what: string; howLong: string; until: string; whose: string | null; after: string };
+type BlockedNote = { n: number; howLong: string; until: string; whose: string | null; after: string };
 
 /**
- * The block, said in the hold section (2026-10-28): a flat panel with a lock — the rooms and the
- * dates, how long and until when, and what happens if the booking is not reserved by then. It
- * stays until it is closed or the step moves on; it comes into view only when it is not already
- * (it never moves a page the desk is reading) and lights once as it arrives.
+ * The block, said in the hold section (2026-10-28) — one quiet line (operator, same day: the
+ * panel with a title and the room list was "too noisy"): a lock, how long and until when, and
+ * whose time it is. The rooms are already named on the line below; what happens if the booking
+ * is not reserved by then sits behind a "?". It stays until its × or the block goes, comes into
+ * view only when it is not already (it never moves a page the desk is reading), and lights once.
  */
 function BlockedNotice({ note, onClose }: { note: BlockedNote; onClose: () => void }) {
   const ref = useRef<HTMLDivElement | null>(null);
@@ -1006,17 +1004,12 @@ function BlockedNotice({ note, onClose }: { note: BlockedNote; onClose: () => vo
   }, [note.n]);
   return (
     <div ref={ref} className="notice blocked" role="status">
-      <span className="blocked-mark" aria-hidden>
-        <Icon name="lock" />
+      <Icon name="lock" />
+      <span className="blocked-text">
+        Blocked for <b>{note.howLong}</b> · until <b>{note.until}</b>
+        {note.whose ? <span className="blocked-whose"> · {note.whose}</span> : null}
+        <Help label="If the booking is not reserved in time">{note.after}</Help>
       </span>
-      <div className="blocked-text">
-        <b>{note.title}</b>
-        <span className="blocked-what">{note.what}</span>
-        <span>
-          Blocked for <b>{note.howLong}</b> — until <b>{note.until}</b>
-          {note.whose ? `, ${note.whose}` : ""}. {note.after}
-        </span>
-      </div>
       <button type="button" className="blocked-close" aria-label="Close this message" onClick={onClose}>
         ×
       </button>
