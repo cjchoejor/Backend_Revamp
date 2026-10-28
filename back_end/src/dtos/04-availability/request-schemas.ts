@@ -124,9 +124,15 @@ export const sealByTypeRequestSchema = z.object({
 export type SealByTypeRequestDto = z.infer<typeof sealByTypeRequestSchema>;
 
 /** The desk chooses one of the booking's rooms itself, within its type, before Arrival. */
-export const chooseQuietRoomRequestSchema = z.object({
-  fromRoomId: z.string().min(1),
-  toRoomId: z.string().min(1),
-});
+/** One room given ({fromRoomId, toRoomId}), or several at once ({picks: [...]}, the chart). */
+export const chooseQuietRoomRequestSchema = z
+  .object({
+    fromRoomId: z.string().min(1).optional(),
+    toRoomId: z.string().min(1).optional(),
+    picks: z.array(z.object({ fromRoomId: z.string().min(1), toRoomId: z.string().min(1) })).min(1).max(30).optional(),
+  })
+  .refine((v) => (v.picks ? !v.fromRoomId && !v.toRoomId : !!v.fromRoomId && !!v.toRoomId), {
+    message: "Name one room (fromRoomId and toRoomId) or several (picks)",
+  });
 
 export type SelectAvailabilityOptionRequestDto = z.infer<typeof selectAvailabilityOptionRequestSchema>;

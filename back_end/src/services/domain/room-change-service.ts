@@ -53,6 +53,7 @@ import { assignRoomsFromSealedPerNight } from "./room-assignment-service.js";
 import { runPreArrivalWindowActivationWorker } from "../../workers/w4-pre-arrival-window-activation-worker.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import { hotelTodayUtc } from "../../lib/stay-dates.js";
+import { carryBookingRooms, readBookingRooms, sealHasBookingRooms } from "../../lib/booking-rooms.js";
 import type { ToleratedClaim } from "../../lib/room-move-claims.js";
 import { recordHeldDocument, type HeldDocumentReason } from "../../lib/held-documents.js";
 import { carryAdvancePinsAcrossNewPass } from "./s3-payment-service.js";
@@ -1607,14 +1608,31 @@ async function changeRoomToNewSegmentInner(
     ? !!priorSel.perNight
     : stage === Stage.S7 || !!priorSel.perNight || distinctTargets.length > 1 || keptFromNights.length > 0;
   const deficientById = new Map<string, boolean>();
+  const typeById = new Map<string, string>();
   {
     const involved = await prisma.room.findMany({
       where: { id: { in: substitutedDistinct } },
-      select: { id: true, isDeficient: true },
+      select: { id: true, isDeficient: true, roomTypeId: true },
     });
-    for (const r of involved) deficientById.set(r.id, r.isDeficient === true);
+    for (const r of involved) {
+      deficientById.set(r.id, r.isDeficient === true);
+      typeById.set(r.id, r.roomTypeId);
+    }
   }
   const anyDeficient = substitutedDistinct.some((id) => deficientById.get(id) === true);
+  // The rooms the system chose stay the system's choice through the walk (2026-10-28) — a room
+  // the walk names or brings in is the desk's choice and fixed; the rest carry as they were.
+  const carriedBookingRooms = sealHasBookingRooms(ctx.sealedConfig?.optionSelected)
+    ? carryBookingRooms(
+        readBookingRooms(ctx.sealedConfig!.optionSelected, { checkIn: ctx.checkIn, checkOut: ctx.checkOut }, (id) => typeById.get(id)),
+        substitutedPicture,
+        {
+          chosen: setupOnly ? [] : [...distinctTargets, ...[...dateRoomMap].filter(([f, t]) => f !== t).map(([, t]) => t)],
+          roomTypeOf: (id) => typeById.get(id),
+        },
+      )
+    : null;
+  const bookingRoomsKey = carriedBookingRooms ? { bookingRooms: carriedBookingRooms } : {};
   // Marker: toRoomId stays the PRIMARY new room (the plan-history chain folds 1:1 markers);
   // toRoomIds carries the full per-night set for future consumers.
   // A setup-only change writes NO roomChange marker — the plan-history chain folds markers
@@ -1653,12 +1671,14 @@ async function changeRoomToNewSegmentInner(
         isDeficient: anyDeficient,
         ...(roomChangeMarker ? { roomChange: roomChangeMarker } : {}),
         ...extensionMarker,
+        ...bookingRoomsKey,
       }
     : {
         roomIds: substitutedDistinct.map((roomId) => ({ roomId, isDeficient: deficientById.get(roomId) === true })),
         isDeficient: anyDeficient,
         ...(roomChangeMarker ? { roomChange: roomChangeMarker } : {}),
         ...extensionMarker,
+        ...bookingRoomsKey,
       };
 
   // The room-change chain — every sealed config's from→to marker, plus THIS change's — so a

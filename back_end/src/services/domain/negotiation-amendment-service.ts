@@ -62,7 +62,8 @@ import {
 import { createAmendmentEvent } from "../application/s7-amendment-service.js";
 import { updateEntryIntakeFields } from "./s1-entry-service.js";
 import { selectOption } from "./s1-availability-service.js";
-import { hotelTodayUtc, ymdUtc } from "../../lib/stay-dates.js";
+import { hotelTodayUtc, listNightYmdsUtc, ymdUtc } from "../../lib/stay-dates.js";
+import { carryBookingRooms, readBookingRooms, sealHasBookingRooms } from "../../lib/booking-rooms.js";
 import { describeGuestOverlap, findOverlappingBookingOfSameGuest } from "../../policies/04-duplicate-detection/p13-multi-booking-ack-required.js";
 import { releaseSpeculativeHold, placeSpeculativeHold } from "./s2-hold-service.js";
 import { retireSupersededReplyWaitsBestEffort } from "../../lib/reply-waits.js";
@@ -413,7 +414,24 @@ async function amendNegotiationConfigurationInner(
   let newRoomIds = priorRoomIds;
   if (input.rooms) {
     const { configurationId, ...picks } = input.rooms;
-    const sealed = await selectOption(prisma, configurationId, actor.actorId, picks);
+    // The rooms the system chose stay its choice when the desk leaves them ticked (2026-10-28); a
+    // room the desk ticks anew is the desk's choice and fixed.
+    let bookingRooms: ReturnType<typeof carryBookingRooms> = null;
+    if (sealHasBookingRooms(sealedBefore?.optionSelected)) {
+      const picture = picks.perNight
+        ? picks.perNight.map((n) => ({ date: n.date.slice(0, 10), roomIds: n.roomIds }))
+        : stayCheckIn && stayCheckOut
+          ? listNightYmdsUtc(stayCheckIn, stayCheckOut).map((date) => ({ date, roomIds: picks.roomIds ?? (picks.roomId ? [picks.roomId] : []) }))
+          : [];
+      const ids = [...new Set(picture.flatMap((n) => n.roomIds))];
+      const typeOf = new Map((await prisma.room.findMany({ where: { id: { in: ids } }, select: { id: true, roomTypeId: true } })).map((r) => [r.id, r.roomTypeId] as const));
+      bookingRooms = carryBookingRooms(
+        readBookingRooms(sealedBefore!.optionSelected, { checkIn: entry.checkInDate, checkOut: entry.checkOutDate }, (id) => typeOf.get(id)),
+        picture,
+        { roomTypeOf: (id) => typeOf.get(id) },
+      );
+    }
+    const sealed = await selectOption(prisma, configurationId, actor.actorId, picks, bookingRooms ? { bookingRooms } : undefined);
     newRoomIds = readOptionSelected(sealed!.optionSelected).distinctRoomIds;
     const sameSet =
       newRoomIds.length === priorRoomIds.length && newRoomIds.every((id) => priorRoomIds.includes(id));

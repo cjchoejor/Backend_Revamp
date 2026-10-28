@@ -190,6 +190,55 @@ export function fixAllBookingRooms(rooms: BookingRoom[]): BookingRoom[] {
 }
 
 /**
+ * The booking rooms after a pick is sealed again by something other than the by-type pick — a room
+ * change, a setup change, a date move, a split, a change of configuration at Negotiation (2026-10-28,
+ * operator: "complete the things you haven't finished"). Before this every such re-seal dropped the
+ * booking rooms, so the booking read as fixed rooms afterwards and the system stopped moving them.
+ *
+ * One booking room per room in the new pick, on the nights it is held. A room stays the system's
+ * choice (quiet) when it was quiet before and the change did not name it (`chosen`); a room the
+ * change brought in, a room it named, and a room that was fixed are fixed. Rooms keep the order of
+ * their old booking rooms, so "Deluxe Double · room 2" keeps its number. Null when the old pick had
+ * no booking rooms — a pick made by number stays one.
+ */
+export function carryBookingRooms(
+  prior: BookingRoom[] | null,
+  picture: Array<{ date: string; roomIds: string[] }>,
+  opts: { chosen?: Iterable<string>; roomTypeOf: (roomId: string) => string | null | undefined },
+): BookingRoom[] | null {
+  if (!prior) return null;
+  const quiet = new Set(roomUnitsOf(prior).filter((u) => u.quiet).map((u) => u.roomId));
+  const chosen = new Set(opts.chosen ?? []);
+  const keyOf = new Map<string, number>();
+  for (const r of prior) {
+    const k = Number(r.key.slice(1)) || 999;
+    for (const n of r.nights) if (n.roomId) keyOf.set(n.roomId, Math.min(keyOf.get(n.roomId) ?? Number.MAX_SAFE_INTEGER, k));
+  }
+  const order: string[] = [];
+  const nightsOf = new Map<string, string[]>();
+  for (const n of [...picture].sort((a, b) => a.date.localeCompare(b.date))) {
+    for (const roomId of n.roomIds) {
+      if (!nightsOf.has(roomId)) {
+        nightsOf.set(roomId, []);
+        order.push(roomId);
+      }
+      const list = nightsOf.get(roomId)!;
+      if (!list.includes(ymd(n.date))) list.push(ymd(n.date));
+    }
+  }
+  // Old rooms in their old order; rooms new to the booking after them, as they first appear.
+  const ranked = order.map((id, i) => ({ id, rank: keyOf.get(id) ?? 100_000 + i })).sort((a, b) => a.rank - b.rank);
+  const out: BookingRoom[] = [];
+  for (const { id } of ranked) {
+    const typeId = opts.roomTypeOf(id);
+    if (!typeId) continue;
+    const fixed = !quiet.has(id) || chosen.has(id);
+    out.push({ key: `R${out.length + 1}`, nights: nightsOf.get(id)!.map((date) => ({ date, roomTypeId: typeId, roomId: id, fixed })) });
+  }
+  return out;
+}
+
+/**
  * Booking rooms from "how many of each type, each night" (the Inquiry step's type counts), with
  * `fixed` rooms the desk named. Rooms carry on from one night to the next:
  *   1. a fixed room continues as the same booking room;

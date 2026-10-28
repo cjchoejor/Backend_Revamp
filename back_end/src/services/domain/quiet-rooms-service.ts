@@ -393,65 +393,164 @@ export async function sealBookingRoomsByType(
 }
 
 /**
- * The desk chooses one of the booking's rooms itself, before the rooms are handed out — "give
- * them 305 instead of 304" (same type). The room becomes fixed; a booking holding 305 quietly on
- * those nights is moved out of the way (into 304, or wherever it fits). A room of another type is
- * a room change, as before.
+ * The desk chooses the booking's rooms itself, before the rooms are handed out — "give them 305
+ * instead of 304" (same type). Several at once when the desk moves several rooms on the chart. Each
+ * room given becomes fixed; a booking holding the chosen room quietly on those nights is moved out
+ * of the way (into the room left, or wherever it fits). A room of another type is a room change, as
+ * before. All the rooms are placed together, so moving a booking's rooms along by one row works.
  */
+export async function chooseQuietRooms(
+  prisma: PrismaClient,
+  entryId: string,
+  actor: Actor,
+  picks: Array<{ fromRoomId: string; toRoomId: string }>,
+): Promise<{ moved: boolean; othersMoved: number; given: Array<{ fromRoomId: string; toRoomId: string; toRoomNumber: string | null }> }> {
+  if (picks.length === 0) throw new ValidationError("Name a room to give");
+  const e = await loadEntry(prisma, entryId);
+  if (!e) throw new NotFoundError("Entry");
+  if (!QUIET_STAGES.includes(e.currentStage)) throw new ValidationError("Rooms are chosen this way only until they are handed out at Arrival");
+  if (e.roomAssignments.length > 0) throw new ValidationError("The rooms are already handed out — change a room through the room change");
+  const { checkIn, checkOut } = stayOf(e);
+  const world = await buildWorld(prisma, { from: checkIn, to: checkOut, excludeEntryId: entryId });
+  const plan = planChosenRooms(e, world, picks);
+  const maps = new Map<string, Map<string, string>>();
+  for (const [from, to] of plan.ownMap) addMove(maps, entryId, from, to);
+  for (const m of plan.others) addMove(maps, m.entryId, m.fromRoomId, m.toRoomId);
+  await applyQuietMoves(prisma, maps, { ...actor, reason: "The desk chose the room", forEntryId: entryId, roomNumbers: world.roomNumberOf });
+  // The rooms the desk chose are fixed from now on.
+  await markRoomsFixed(prisma, entryId, picks.map((p) => p.toRoomId));
+  return {
+    moved: true,
+    othersMoved: new Set(plan.others.map((m) => m.entryId)).size,
+    given: picks.map((p) => ({ ...p, toRoomNumber: world.roomNumberOf.get(p.toRoomId) ?? null })),
+  };
+}
+
+/** One room given — the form the Rooms tab uses. */
 export async function chooseQuietRoom(
   prisma: PrismaClient,
   entryId: string,
   actor: Actor,
   input: { fromRoomId: string; toRoomId: string },
 ): Promise<{ moved: boolean; othersMoved: number }> {
-  const e = await loadEntry(prisma, entryId);
-  if (!e) throw new NotFoundError("Entry");
-  if (!QUIET_STAGES.includes(e.currentStage)) throw new ValidationError("Rooms are chosen this way only until they are handed out at Arrival");
-  if (e.roomAssignments.length > 0) throw new ValidationError("The rooms are already handed out — change a room through the room change");
+  const out = await chooseQuietRooms(prisma, entryId, actor, [input]);
+  return { moved: out.moved, othersMoved: out.othersMoved };
+}
+
+type ChosenPlan = {
+  /** This booking's rooms, old → new (the chosen ones and any quiet ones placed around them). */
+  ownMap: Map<string, string>;
+  /** Other bookings' quiet rooms moved out of the way. */
+  others: Array<{ entryId: string; fromRoomId: string; toRoomId: string }>;
+};
+
+/** Place this booking's rooms with `picks` fixed — the one rule the act and the choices list share. Throws in words. */
+function planChosenRooms(e: Loaded, world: World, picks: Array<{ fromRoomId: string; toRoomId: string }>): ChosenPlan {
   const seal = currentPassSeal(e);
   const { checkIn, checkOut } = stayOf(e);
-  const world = await buildWorld(prisma, { from: checkIn, to: checkOut, excludeEntryId: entryId });
   const rooms = sealHasBookingRooms(seal) ? readBookingRooms(seal, { checkIn, checkOut }, (id) => world.roomTypeOf.get(id)) : null;
   if (!rooms) throw new ValidationError("This booking's rooms were picked by number — change a room through the room change");
   const units = roomUnitsOf(rooms);
-  const unit = units.find((u) => u.roomId === input.fromRoomId);
+  const froms = new Set<string>();
+  const tos = new Set<string>();
+  const num = (id: string) => world.roomNumberOf.get(id) ?? "?";
+  for (const p of picks) {
+    const unit = units.find((u) => u.roomId === p.fromRoomId);
+    if (!unit) throw new ValidationError("That room is not one of this booking's rooms");
+    if (froms.has(p.fromRoomId)) throw new ValidationError(`Room ${num(p.fromRoomId)} is named twice`);
+    if (tos.has(p.toRoomId)) throw new ValidationError(`Two rooms cannot both go to Room ${num(p.toRoomId)}`);
+    froms.add(p.fromRoomId);
+    tos.add(p.toRoomId);
+    if (p.fromRoomId === p.toRoomId) throw new ValidationError(`Room ${num(p.toRoomId)} is already this room`);
+    if (world.roomTypeOf.get(p.toRoomId) !== unit.roomTypeId) throw new ValidationError(`Room ${num(p.toRoomId)} is another room type — change it through the room change`);
+  }
+  // A room already the booking's may be chosen only when it moves on in the same act.
+  for (const p of picks) {
+    if (units.some((u) => u.roomId === p.toRoomId) && !froms.has(p.toRoomId)) throw new ValidationError(`Room ${num(p.toRoomId)} is already one of this booking's rooms`);
+  }
+  const target = new Map(picks.map((p) => [p.fromRoomId, p.toRoomId] as const));
+  const ownMap = new Map<string, string>();
+  const others: ChosenPlan["others"] = [];
+  for (const typeId of new Set(picks.map((p) => world.roomTypeOf.get(p.toRoomId)!))) {
+    const type = world.chart.roomTypes.find((t) => t.id === typeId)!;
+    const mine: PlacementItem[] = units
+      .filter((u) => u.roomTypeId === typeId)
+      .map((u) => ({
+        id: `__mine|${u.roomId}`,
+        nights: u.nights.map((d) => world.index.get(d)!).filter((i) => i !== undefined),
+        fixedRoomId: target.get(u.roomId) ?? (u.quiet ? null : u.roomId),
+        currentRoomId: u.roomId,
+      }));
+    const worldItems = world.items.filter((it) => it.roomTypeId === typeId);
+    const res = placeStays({ roomIds: type.roomIds, unusable: world.unusable, items: [...worldItems, ...mine] });
+    for (const p of picks.filter((x) => world.roomTypeOf.get(x.toRoomId) === typeId)) {
+      const clash = res.fixedClashes.find((c) => c.itemIds.includes(`__mine|${p.fromRoomId}`));
+      if (clash) {
+        const other = clash.itemIds.map((id) => world.items.find((w) => w.id === id)).find(Boolean);
+        throw new ValidationError(
+          clash.outOfOrder
+            ? `Room ${num(p.toRoomId)} is out of order on one of these nights`
+            : `Room ${num(p.toRoomId)} is held for ${other ? world.bookingName.get(other.entryId) : "another booking"} on these nights`,
+        );
+      }
+    }
+    if (!res.ok) throw new ValidationError(`${[...tos].map((t) => `Room ${num(t)}`).join(" and ")} cannot be given to this booking — the other ${type.name} rooms cannot make way`);
+    for (const it of mine) if (it.currentRoomId) ownMap.set(it.currentRoomId, res.roomOf.get(it.id)!);
+    for (const id of res.moved) {
+      const w = worldItems.find((x) => x.id === id);
+      if (w?.currentRoomId) others.push({ entryId: w.entryId, fromRoomId: w.currentRoomId, toRoomId: res.roomOf.get(id)! });
+    }
+  }
+  for (const [k, v] of [...ownMap]) if (k === v) ownMap.delete(k);
+  return { ownMap, others: others.filter((o) => o.fromRoomId !== o.toRoomId) };
+}
+
+/**
+ * For the desk's "Give it this room": every other room of the same type over the room's nights, and
+ * what giving it would do — free; held as the system's choice by another booking, which is moved to
+ * another room of the type; held for a booking that cannot be moved; out of order. Nothing written.
+ */
+export async function listQuietRoomChoices(prisma: PrismaClient, entryId: string, fromRoomId: string) {
+  const e = await loadEntry(prisma, entryId);
+  if (!e) throw new NotFoundError("Entry");
+  const { checkIn, checkOut } = stayOf(e);
+  const world = await buildWorld(prisma, { from: checkIn, to: checkOut, excludeEntryId: entryId });
+  const seal = currentPassSeal(e);
+  const rooms = sealHasBookingRooms(seal) ? readBookingRooms(seal, { checkIn, checkOut }, (id) => world.roomTypeOf.get(id)) : [];
+  const units = roomUnitsOf(rooms);
+  const unit = units.find((u) => u.roomId === fromRoomId);
   if (!unit) throw new ValidationError("That room is not one of this booking's rooms");
-  const toType = world.roomTypeOf.get(input.toRoomId);
-  if (toType !== unit.roomTypeId) throw new ValidationError(`Room ${world.roomNumberOf.get(input.toRoomId) ?? "?"} is another room type — change it through the room change`);
-  if (units.some((u) => u.roomId === input.toRoomId)) throw new ValidationError(`Room ${world.roomNumberOf.get(input.toRoomId)} is already one of this booking's rooms`);
-
-  const type = world.chart.roomTypes.find((t) => t.id === unit.roomTypeId)!;
-  const mine: PlacementItem[] = units
-    .filter((u) => u.roomTypeId === unit.roomTypeId)
-    .map((u) => ({
-      id: `__mine|${u.roomId}`,
-      nights: u.nights.map((d) => world.index.get(d)!).filter((i) => i !== undefined),
-      fixedRoomId: u.roomId === input.fromRoomId ? input.toRoomId : u.quiet ? null : u.roomId,
-      currentRoomId: u.roomId,
-    }));
-  const worldItems = world.items.filter((it) => it.roomTypeId === unit.roomTypeId);
-  const res = placeStays({ roomIds: type.roomIds, unusable: world.unusable, items: [...worldItems, ...mine] });
-  const clash = res.fixedClashes.find((c) => c.itemIds.includes(`__mine|${input.fromRoomId}`));
-  if (clash) {
-    const other = clash.itemIds.map((id) => world.items.find((w) => w.id === id)).find(Boolean);
-    throw new ValidationError(
-      clash.outOfOrder
-        ? `Room ${world.roomNumberOf.get(input.toRoomId)} is out of order on one of these nights`
-        : `Room ${world.roomNumberOf.get(input.toRoomId)} is held for ${other ? world.bookingName.get(other.entryId) : "another booking"} on these nights`,
-    );
-  }
-  if (!res.ok) throw new ValidationError(`Room ${world.roomNumberOf.get(input.toRoomId)} cannot be given to this booking — the other ${type.name} rooms cannot make way`);
-
-  const maps = new Map<string, Map<string, string>>();
-  for (const it of mine) if (it.currentRoomId) addMove(maps, entryId, it.currentRoomId, res.roomOf.get(it.id)!);
-  for (const id of res.moved) {
-    const w = worldItems.find((x) => x.id === id);
-    if (w?.currentRoomId) addMove(maps, w.entryId, w.currentRoomId, res.roomOf.get(id)!);
-  }
-  await applyQuietMoves(prisma, maps, { ...actor, reason: "The desk chose the room", forEntryId: entryId, roomNumbers: world.roomNumberOf });
-  // The room the desk chose is fixed from now on.
-  await markRoomsFixed(prisma, entryId, [input.toRoomId]);
-  return { moved: true, othersMoved: [...maps.keys()].filter((k) => k !== entryId).length };
+  const type = world.chart.roomTypes.find((t) => t.id === unit.roomTypeId);
+  if (!type) return { typeName: null, choices: [] };
+  const own = new Set(units.map((u) => u.roomId));
+  const faulty = new Set(world.chart.rooms.filter((r) => r.faultOpen).map((r) => r.id));
+  const choices = type.roomIds
+    .filter((id) => !own.has(id))
+    .map((roomId) => {
+      const roomNumber = world.roomNumberOf.get(roomId) ?? "?";
+      try {
+        const plan = planChosenRooms(e, world, [{ fromRoomId, toRoomId: roomId }]);
+        const moves = plan.others.map((o) => ({
+          booking: world.bookingName.get(o.entryId) ?? o.entryId,
+          fromRoomNumber: world.roomNumberOf.get(o.fromRoomId) ?? "?",
+          toRoomNumber: world.roomNumberOf.get(o.toRoomId) ?? "?",
+        }));
+        return {
+          roomId,
+          roomNumber,
+          available: true,
+          fault: faulty.has(roomId),
+          moves,
+          words: moves.length
+            ? `held as the system's choice — ${moves.map((m) => `${m.booking.replace(/ \(ENT-[^)]+\)$/, "")} moves to ${m.toRoomNumber}`).join(", ")}`
+            : "free",
+        };
+      } catch (err) {
+        return { roomId, roomNumber, available: false, fault: faulty.has(roomId), moves: [], words: err instanceof Error ? err.message.replace(/^Room \S+ (is )?/, "") : "cannot be given" };
+      }
+    })
+    .sort((a, b) => Number(b.available) - Number(a.available) || a.moves.length - b.moves.length || a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true }));
+  return { typeName: type.name, choices };
 }
 
 /** The named rooms (or every room) of the booking's booking rooms made fixed — the desk chose them. */

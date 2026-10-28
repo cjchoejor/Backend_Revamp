@@ -16,7 +16,7 @@ import { priceRoomPick } from "../../services/domain/pick-pricing-service.js";
 import { releaseRoomBlock } from "../../services/domain/room-block-release-service.js";
 import { buildRoomChart } from "../../services/domain/room-chart-service.js";
 import { answerHouseByType } from "../../services/domain/room-placement-service.js";
-import { chooseQuietRoom, describeBookingRooms, sealBookingRoomsByType } from "../../services/domain/quiet-rooms-service.js";
+import { chooseQuietRooms, describeBookingRooms, listQuietRoomChoices, sealBookingRoomsByType } from "../../services/domain/quiet-rooms-service.js";
 import { ROOM_BED_TYPES, allowedBedTypesSource, effectiveAllowedBedTypes, setRoomBedType, usualBedTypeFor } from "../../services/domain/room-bed-type-service.js";
 
 export const availabilityRouter = Router();
@@ -260,7 +260,25 @@ availabilityRouter.get("/entries/:id/booking-rooms", requireActorLevel("L1"), as
   }
 });
 
-/** The desk chooses one of the booking's rooms itself (same type, before Arrival); it becomes fixed. */
+/**
+ * For "Give it this room": the other rooms of the type over the room's nights, and what giving each
+ * would do (free, another booking's quiet room moved out of the way, held, out of order).
+ */
+availabilityRouter.get("/entries/:id/booking-rooms/choices", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    const fromRoomId = String(req.query.fromRoomId ?? "");
+    if (!fromRoomId) {
+      res.status(400).json({ message: "Name the room (fromRoomId)" });
+      return;
+    }
+    res.json(await listQuietRoomChoices(prisma, req.params.id, fromRoomId));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** The desk chooses the booking's rooms itself (same type, before Arrival) — one, or several from the chart; they become fixed. */
 availabilityRouter.post(
   "/entries/:id/booking-rooms/choose",
   requireActorLevel("L1"),
@@ -268,7 +286,8 @@ availabilityRouter.post(
   async (req, res, next) => {
     try {
       const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
-      res.json(await chooseQuietRoom(prisma, req.params.id, actor, req.body));
+      const picks = req.body.picks ?? [{ fromRoomId: req.body.fromRoomId, toRoomId: req.body.toRoomId }];
+      res.json(await chooseQuietRooms(prisma, req.params.id, actor, picks));
     } catch (e) {
       next(e);
     }

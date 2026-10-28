@@ -407,14 +407,23 @@ reservationsRouter.post("/entries/:id/room-assignments/from-sealed-per-night", r
     // Rooms the system chose quietly are placed against the house as it stands right now — the
     // proposal the desk is confirming — and become the booking's rooms (2026-10-28).
     const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
-    await ensureQuietPlacement(prisma, req.params.id, actor, "The rooms were handed out at Arrival");
+    const quiet = await ensureQuietPlacement(prisma, req.params.id, actor, "The rooms were handed out at Arrival");
     const created = await roomAssignmentService.assignRoomsFromSealedPerNight(
       prisma,
       req.params.id,
       req.actor!.actorId,
     );
     await markRoomsFixed(prisma, req.params.id);
-    res.status(201).json({ assignments: created, count: created.length });
+    // Name what was handed out, and any room the system had to move since the proposal was shown
+    // (another booking took it meanwhile), so the desk can say so in words.
+    const ids = [...new Set([...created.map((a) => a.roomId), ...quiet.ownMap.keys(), ...quiet.ownMap.values()])];
+    const numberOf = new Map((await prisma.room.findMany({ where: { id: { in: ids } }, select: { id: true, roomNumber: true } })).map((r) => [r.id, r.roomNumber] as const));
+    res.status(201).json({
+      assignments: created,
+      count: created.length,
+      roomNumbers: [...new Set(created.map((a) => numberOf.get(a.roomId) ?? "?"))],
+      movedSinceProposal: [...quiet.ownMap].map(([from, to]) => ({ fromRoomNumber: numberOf.get(from) ?? "?", toRoomNumber: numberOf.get(to) ?? "?" })),
+    });
   } catch (e) {
     next(e);
   }
