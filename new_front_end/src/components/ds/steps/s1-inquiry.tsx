@@ -1907,17 +1907,14 @@ function WhichRooms({
 
   // The rooms by night only (2026-10-28, operator: "remove place the guests option, that way rooms
   // by night option is also not needed") — the guests are placed at Negotiation, room by room.
+  const namesButton = (
+    <Button kind="quiet" compact icon="person" aria-pressed={names} onClick={() => setNames((v) => !v)}>
+      {names ? "Names shown" : "Show names"}
+    </Button>
+  );
   const right = (
         <>
-          <Button
-            kind="quiet"
-            compact
-            icon="person"
-            aria-pressed={names}
-            onClick={() => setNames((v) => !v)}
-          >
-            {names ? "Names shown" : "Show names"}
-          </Button>
+          {popup ? null : namesButton}
           {popup ? null : (
             <Button kind="quiet" compact onClick={() => setFull((v) => !v)}>
               {full ? "Close the full view" : "Full screen"}
@@ -1969,6 +1966,8 @@ function WhichRooms({
         {/* The save sits at the right end of the row, apart from the tallies it acts on
             (operator, 2026-09-29): the eye reads the counts left to right and lands on the act. */}
         <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 12 }}>
+          {/* In the pop-up, Show names sits beside the save (2026-10-28, operator). */}
+          {popup ? namesButton : null}
           <Button
             className="go"
             kind={showSaved ? "secondary" : "primary"}
@@ -2061,13 +2060,7 @@ function WhichRooms({
       />
     </>
   );
-  if (popup)
-    return (
-      <div className="which-rooms-pop">
-        <div className="which-rooms-tools">{right}</div>
-        {inner}
-      </div>
-    );
+  if (popup) return <div className="which-rooms-pop">{inner}</div>;
   const body = (
     <StepCard title={`Which rooms · ${plural(numberOfRooms, "room")} for ${plural(displayNights.length, "night")}`} right={right}>
       {inner}
