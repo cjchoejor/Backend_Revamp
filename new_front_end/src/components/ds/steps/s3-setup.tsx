@@ -737,6 +737,12 @@ function HoldCard({
   }).data ?? null;
   const ownTime = entry.holdExpiresAtOverride ?? null;
 
+  // The message is about a block that stands: released (here or on another screen) or lapsed, it goes.
+  const holdId = hold?.id ?? null;
+  useEffect(() => {
+    if (!holdId) setBlockedNote(null);
+  }, [holdId]);
+
   const finish = useFinishWhenDone("hold");
   const place = useMutation({
     mutationFn: () => {
@@ -755,6 +761,7 @@ function HoldCard({
     mutationFn: (reason: string) => releaseCommittedHold(session!, entry.id, { releaseReason: reason }),
     onSuccess: () => {
       toast.success("The hold is released — the rooms are back on sale");
+      setBlockedNote(null);
       setReleaseOpen(false);
       onChanged();
     },
@@ -791,7 +798,7 @@ function HoldCard({
       flowAfter="proforma"
       title="The committed hold"
       summary={hold ? `${rooms} blocked until ${fmtDateTime(hold.expiresAt, tz)}` : undefined}
-      notice={blockedNote ? <BlockedNotice key={blockedNote.n} note={blockedNote} onClose={() => setBlockedNote(null)} /> : undefined}
+      notice={blockedNote && hold ? <BlockedNotice key={blockedNote.n} note={blockedNote} onClose={() => setBlockedNote(null)} /> : undefined}
       acts={
         past ? undefined : (
           <Live>
