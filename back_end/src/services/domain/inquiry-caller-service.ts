@@ -1,5 +1,6 @@
 import type { ActorLevel, PrismaClient } from "@prisma/client";
-import { NotFoundError, ValidationError } from "../../lib/errors.js";
+import { NotFoundError, PolicyGateBlockedError, ValidationError } from "../../lib/errors.js";
+import { findGuestsOnFile, sameGuestName } from "./guest-profile-service.js";
 import { enforceEntryNotSealedForWorkingAction } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
 import { recordDuplicateDetectionFlagIfPresent } from "../../policies/04-duplicate-detection/p12-duplicate-flag-create-on-inquiry.js";
 import * as auditService from "../infrastructure/audit-service.js";
@@ -42,6 +43,8 @@ async function loadEntry(prisma: PrismaClient, entryId: string) {
           callerPhone: true,
           callerEmail: true,
           callerOnWhatsApp: true,
+          travelAgentId: true,
+          corporateAccountId: true,
           _count: { select: { entries: true } },
         },
       },
@@ -98,10 +101,18 @@ export async function updateEntryCaller(prisma: PrismaClient, actor: Actor, entr
   });
 }
 
+/**
+ * `keepNewName` — the desk was told the phone or email is on file under another name and chose to
+ * keep the name typed (a new guest record). `arrivingIsGuest` — the guest named is the one arriving,
+ * so on a direct booking "who is arriving" is filled from them (an agency's or a company's contact
+ * person is never overwritten).
+ */
+type GuestNamingOptions = { keepNewName?: boolean; arrivingIsGuest?: boolean };
+
 export type SetGuestInput =
-  | { mode: "CALLER"; nationality?: string | null }
-  | { mode: "EXISTING"; guestProfileId: string }
-  | {
+  | ({ mode: "CALLER"; nationality?: string | null } & GuestNamingOptions)
+  | ({ mode: "EXISTING"; guestProfileId: string; phone?: string | null; email?: string | null } & GuestNamingOptions)
+  | ({
       mode: "NEW";
       title?: string | null;
       firstName: string;
@@ -109,7 +120,7 @@ export type SetGuestInput =
       nationality?: string | null;
       phone?: string | null;
       email?: string | null;
-    };
+    } & GuestNamingOptions);
 
 /**
  * Name the guest who is staying: the caller (a guest record made from the caller's name and
@@ -119,6 +130,14 @@ export type SetGuestInput =
  * The duplicate check (Policy 12) runs here, since this is when the guest becomes known: an
  * overlapping stay for the same guest on another enquiry is FLAGGED on this one, and the exit
  * gate then treats it as it treats a flag raised at intake.
+ *
+ * A guest record is never made twice for one person (2026-10-28, operator: "if the name is
+ * different than the last entered name of the same phone number (case insensitive) ask if the user
+ * wishes to keep the new name or the one on file, same for email"). Before a record is made from a
+ * phone or an email already on file: the same name (case and spacing aside) is that guest — their
+ * record is used, and only what it lacks is filled in; another name is refused
+ * GUEST_ON_FILE_DIFFERENT_NAME with the guests on file, until the desk names one of them
+ * (EXISTING) or says to keep the typed name (`keepNewName`).
  */
 export async function setEntryGuest(prisma: PrismaClient, actor: Actor, entryId: string, input: SetGuestInput) {
   const entry = await loadEntry(prisma, entryId);
@@ -131,10 +150,16 @@ export async function setEntryGuest(prisma: PrismaClient, actor: Actor, entryId:
 
   let existingId: string | null = null;
   let create: { title: string | null; firstName: string; lastName: string; nationality: string | null; phone: string | null; email: string | null } | null = null;
+  // What a guest on file should gain from this naming — only fields it has empty.
+  let fill: { title: string | null; nationality: string | null; phone: string | null; email: string | null } | null = null;
+  let reusedOnFile = false;
   if (input.mode === "EXISTING") {
     const g = await prisma.guestProfile.findUnique({ where: { id: input.guestProfileId }, select: { id: true, isActive: true } });
     if (!g || !g.isActive) throw new ValidationError("That guest is not on file");
     existingId = g.id;
+    const email = t(input.email);
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new ValidationError("The guest's email does not read as an email address");
+    fill = { title: null, nationality: null, phone: t(input.phone), email };
   } else if (input.mode === "CALLER") {
     if (!inq.callerFirstName || !inq.callerLastName) {
       throw new ValidationError("Take the caller's first and last name first — the guest record is made from them");
@@ -159,6 +184,38 @@ export async function setEntryGuest(prisma: PrismaClient, actor: Actor, entryId:
     create = { title: t(input.title), firstName, lastName, nationality: t(input.nationality), phone: t(input.phone), email };
   }
 
+  if (create && (create.phone || create.email)) {
+    const typed = create;
+    const onFile = await findGuestsOnFile(prisma, { phone: typed.phone, email: typed.email, partial: false });
+    const same = onFile.find((g) => sameGuestName(g, typed));
+    if (same) {
+      existingId = same.id;
+      fill = { title: typed.title, nationality: typed.nationality, phone: typed.phone, email: typed.email };
+      create = null;
+      reusedOnFile = true;
+    } else if (onFile.length && !input.keepNewName) {
+      const what = (g: (typeof onFile)[number]) =>
+        g.matchedBy.length === 2 ? "phone and email" : g.matchedBy[0] === "PHONE" ? "phone" : "email";
+      const named = (g: (typeof onFile)[number]) => [g.title, g.firstName, g.lastName].filter(Boolean).join(" ");
+      throw new PolicyGateBlockedError(
+        "GUEST_ON_FILE_DIFFERENT_NAME",
+        `${onFile[0].matchedBy.length === 2 ? "This phone and email are" : `This ${what(onFile[0])} is`} on file for ${named(onFile[0])} — name them as the guest, or keep ${typed.firstName} ${typed.lastName} as a new guest`,
+        {
+          typed: { title: typed.title, firstName: typed.firstName, lastName: typed.lastName },
+          matches: onFile.map((g) => ({
+            id: g.id,
+            title: g.title,
+            firstName: g.firstName,
+            lastName: g.lastName,
+            phone: g.phone,
+            email: g.email,
+            matchedBy: g.matchedBy,
+          })),
+        },
+      );
+    }
+  }
+
   const now = new Date();
   const outcome = await prisma.$transaction(async (tx) => {
     let guestProfileId = existingId;
@@ -177,7 +234,62 @@ export async function setEntryGuest(prisma: PrismaClient, actor: Actor, entryId:
         payload: { guestProfileId: g.id, from: input.mode === "CALLER" ? "CALLER" : "WRAP_UP" },
       });
     }
-    await tx.entry.update({ where: { id: entry.id }, data: { guestProfileId } });
+    // A guest on file keeps what it holds; only the fields it has empty take what was typed. A
+    // different phone or email is not written (the record is shared by every booking the guest has)
+    // and is reported instead.
+    const filled: string[] = [];
+    const contactKept: string[] = [];
+    if (fill && guestProfileId) {
+      const cur = await tx.guestProfile.findUniqueOrThrow({
+        where: { id: guestProfileId },
+        select: { title: true, nationality: true, phone: true, email: true },
+      });
+      const data: Record<string, string> = {};
+      const digits = (v: string | null) => (v ?? "").replace(/\D/g, "");
+      for (const k of ["title", "nationality", "phone", "email"] as const) {
+        const v = fill[k];
+        if (!v) continue;
+        const now0 = cur[k];
+        if (!now0) {
+          data[k] = v;
+          filled.push(k);
+        } else if (k === "phone" && digits(now0).slice(-8) !== digits(v).slice(-8)) contactKept.push(k);
+        else if (k === "email" && now0.trim().toLowerCase() !== v.toLowerCase()) contactKept.push(k);
+      }
+      if (filled.length) {
+        await tx.guestProfile.update({ where: { id: guestProfileId }, data });
+        await auditService.emit(tx as any, { actorId: actor.actorId, actorLevel: actor.level }, {
+          eventType: "GUEST_PROFILE.CONTACT_FILLED",
+          entityType: "GuestProfile",
+          entityId: guestProfileId,
+          operation: "UPDATE",
+          timestamp: now,
+          payload: { guestProfileId, fields: filled, from: "WRAP_UP", entryId: entry.id },
+        });
+      }
+    }
+
+    // The guest named is the one arriving: on a direct booking "who is arriving" is them. An
+    // agency's or a company's contact person stays — that is the party's own person.
+    let arrivingSet = false;
+    const partyBooking = !!(inq.travelAgentId || inq.corporateAccountId);
+    if (input.arrivingIsGuest && !partyBooking && guestProfileId) {
+      const g = await tx.guestProfile.findUniqueOrThrow({
+        where: { id: guestProfileId },
+        select: { firstName: true, lastName: true, phone: true },
+      });
+      await tx.entry.update({
+        where: { id: entry.id },
+        data: {
+          guestProfileId,
+          contactPersonName: `${g.firstName} ${g.lastName}`.trim(),
+          ...(g.phone ? { contactPersonPhone: g.phone } : {}),
+        },
+      });
+      arrivingSet = true;
+    } else {
+      await tx.entry.update({ where: { id: entry.id }, data: { guestProfileId } });
+    }
     // The enquiry carries the guest too. It follows this booking when it had none, or when it was
     // this booking's earlier guest — a return stay on the same enquiry keeps whatever it names.
     const followInquiry = !inq.guestProfileId || inq.guestProfileId === entry.guestProfileId || inq._count.entries === 1;
@@ -214,9 +326,19 @@ export async function setEntryGuest(prisma: PrismaClient, actor: Actor, entryId:
       timestamp: now,
       entryId: entry.id,
       inquiryId: inq.id,
-      payload: { mode: input.mode, guestProfileId, previousGuestProfileId: entry.guestProfileId, duplicate },
+      payload: {
+        mode: input.mode,
+        guestProfileId,
+        previousGuestProfileId: entry.guestProfileId,
+        duplicate,
+        reusedOnFile,
+        keptNewName: !!input.keepNewName,
+        filled,
+        contactKept,
+        arrivingSet,
+      },
     });
-    return { guestProfileId: guestProfileId!, duplicate };
+    return { guestProfileId: guestProfileId!, duplicate, reusedOnFile, filled, contactKept, arrivingSet };
   });
   return outcome;
 }

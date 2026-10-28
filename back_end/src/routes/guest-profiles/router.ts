@@ -35,6 +35,24 @@ guestProfilesRouter.get("/guest-profiles", requireActorLevel("L1"), async (req, 
   }
 });
 
+// Guests already on file with a phone or an email — the Wrap up dropdown while the desk types
+// (`partial`), and the exact check when the guest staying is named (2026-10-28). Registered before
+// "/guest-profiles/:id", which would otherwise read "on-file" as an id.
+guestProfilesRouter.get("/guest-profiles/on-file", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const q = (k: string) => (typeof req.query[k] === "string" ? (req.query[k] as string).slice(0, 120) : "");
+    const guests = await guestProfileService.findGuestsOnFile(prisma, {
+      phone: q("phone") || null,
+      email: q("email") || null,
+      partial: q("partial") !== "false",
+    });
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ guests });
+  } catch (e) {
+    next(e);
+  }
+});
+
 guestProfilesRouter.get("/guest-profiles/:id", requireActorLevel("L1"), async (req, res, next) => {
   try {
     const profile = await guestProfileService.getGuestProfileById(prisma, req.params.id);

@@ -118,11 +118,19 @@ entriesRouter.post("/:id/source", requireActorLevel("L1"), validateBody(sourceSc
   }
 });
 
+const guestNamingOptions = { keepNewName: z.boolean().optional(), arrivingIsGuest: z.boolean().optional() };
 const setGuestSchema = z.discriminatedUnion("mode", [
-  z.object({ mode: z.literal("CALLER"), nationality: z.string().trim().max(80).nullable().optional() }),
-  z.object({ mode: z.literal("EXISTING"), guestProfileId: z.string().min(1) }),
+  z.object({ mode: z.literal("CALLER"), nationality: z.string().trim().max(80).nullable().optional(), ...guestNamingOptions }),
+  z.object({
+    mode: z.literal("EXISTING"),
+    guestProfileId: z.string().min(1),
+    phone: z.string().trim().max(40).nullable().optional(),
+    email: z.string().trim().max(200).nullable().optional(),
+    ...guestNamingOptions,
+  }),
   z.object({
     mode: z.literal("NEW"),
+    ...guestNamingOptions,
     title: z.string().trim().max(20).nullable().optional(),
     firstName: z.string().trim().min(1).max(80),
     lastName: z.string().trim().min(1).max(80),

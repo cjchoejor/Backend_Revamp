@@ -1,4 +1,4 @@
-import type { PrismaClient } from "@prisma/client";
+import type { Prisma, PrismaClient } from "@prisma/client";
 import { NotFoundError, PolicyGateBlockedError, ValidationError } from "../../lib/errors.js";
 import { resolveVerificationPaths } from "../../lib/identity-verification-path.js";
 import * as auditService from "../infrastructure/audit-service.js";
@@ -12,6 +12,7 @@ type DocTypeConfig = { documentTypeCode: string; documentTypeName?: string; isAc
 
 const guestProfileSelect = {
   id: true,
+  title: true,
   firstName: true,
   lastName: true,
   email: true,
@@ -296,4 +297,98 @@ export async function recordVerification(
   });
 
   return prisma.guestProfile.findUniqueOrThrow({ where: { id: guestProfileId } });
+}
+
+/* ------------------------------------------------------------------ on file, by phone or email */
+
+/**
+ * Guests already on file with this phone or this email (2026-10-28, operator, at Wrap up: "when
+ * writing the email and phone number it can show a drop down if it's already on file … if the
+ * name is different than the last entered name of the same phone number, ask if the user wishes to
+ * keep the new name or the one on file").
+ *
+ * A phone is compared on its DIGITS only, so "+975 17 88 21 04" and "97517882104" are one number.
+ * `partial` is the dropdown while the desk is still typing: the typed digits (4 or more) anywhere in
+ * the number, the typed email (3 characters or more) anywhere in the address. Exact (`partial`
+ * false) is the check when a guest is named: the last eight digits of the number, the whole email,
+ * case aside.
+ */
+export type GuestOnFile = {
+  id: string;
+  title: string | null;
+  firstName: string;
+  lastName: string;
+  phone: string | null;
+  email: string | null;
+  nationality: string | null;
+  matchedBy: Array<"PHONE" | "EMAIL">;
+};
+
+export async function findGuestsOnFile(
+  prisma: PrismaClient | Prisma.TransactionClient,
+  input: { phone?: string | null; email?: string | null; partial?: boolean; limit?: number },
+): Promise<GuestOnFile[]> {
+  const digits = (input.phone ?? "").replace(/\D/g, "");
+  const email = (input.email ?? "").trim().toLowerCase();
+  const limit = Math.max(1, Math.min(input.limit ?? 8, 20));
+  let phoneIds: string[] = [];
+  let emailIds: string[] = [];
+  if (input.partial) {
+    if (digits.length >= 4) {
+      const rows = await prisma.$queryRaw<Array<{ id: string }>>`
+        SELECT id FROM guest_profiles
+        WHERE "isActive" AND phone IS NOT NULL AND regexp_replace(phone, '\\D', '', 'g') LIKE ${"%" + digits + "%"}
+        ORDER BY "updatedAt" DESC LIMIT ${limit}`;
+      phoneIds = rows.map((r) => r.id);
+    }
+    if (email.length >= 3) {
+      const rows = await prisma.$queryRaw<Array<{ id: string }>>`
+        SELECT id FROM guest_profiles
+        WHERE "isActive" AND email IS NOT NULL AND lower(email) LIKE ${"%" + email.replace(/[%_\\]/g, (c) => "\\" + c) + "%"}
+        ORDER BY "updatedAt" DESC LIMIT ${limit}`;
+      emailIds = rows.map((r) => r.id);
+    }
+  } else {
+    if (digits.length >= 6) {
+      const tail = digits.slice(-8);
+      const rows = await prisma.$queryRaw<Array<{ id: string }>>`
+        SELECT id FROM guest_profiles
+        WHERE "isActive" AND phone IS NOT NULL AND right(regexp_replace(phone, '\\D', '', 'g'), ${tail.length}::int) = ${tail}
+        ORDER BY "updatedAt" DESC LIMIT ${limit}`;
+      phoneIds = rows.map((r) => r.id);
+    }
+    if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      const rows = await prisma.$queryRaw<Array<{ id: string }>>`
+        SELECT id FROM guest_profiles
+        WHERE "isActive" AND email IS NOT NULL AND lower(trim(email)) = ${email}
+        ORDER BY "updatedAt" DESC LIMIT ${limit}`;
+      emailIds = rows.map((r) => r.id);
+    }
+  }
+  const ids = [...new Set([...phoneIds, ...emailIds])];
+  if (!ids.length) return [];
+  const profiles = await prisma.guestProfile.findMany({
+    where: { id: { in: ids } },
+    select: { id: true, title: true, firstName: true, lastName: true, phone: true, email: true, nationality: true, updatedAt: true },
+  });
+  const order = new Map(ids.map((id, i) => [id, i]));
+  return profiles
+    .sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0))
+    .slice(0, limit)
+    .map((p) => ({
+      id: p.id,
+      title: p.title,
+      firstName: p.firstName,
+      lastName: p.lastName,
+      phone: p.phone,
+      email: p.email,
+      nationality: p.nationality,
+      matchedBy: [...(phoneIds.includes(p.id) ? (["PHONE"] as const) : []), ...(emailIds.includes(p.id) ? (["EMAIL"] as const) : [])],
+    }));
+}
+
+/** One guest's name, read the same way everywhere a name is compared: spaces collapsed, case aside. */
+export function sameGuestName(a: { firstName: string; lastName: string }, b: { firstName: string; lastName: string }) {
+  const n = (x: { firstName: string; lastName: string }) => `${x.firstName} ${x.lastName}`.trim().replace(/\s+/g, " ").toLowerCase();
+  return n(a) === n(b);
 }
