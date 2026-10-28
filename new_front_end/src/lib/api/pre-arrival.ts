@@ -101,6 +101,10 @@ export async function assignRoomsFromSealedPerNight(session: Session, entryId: s
   return apiRequest<{
     assignments: Array<{ id: string; roomId: string; startDate: string; endDate: string }>;
     count: number;
+    /** The rooms handed out, by number. */
+    roomNumbers?: string[];
+    /** Rooms the system had to move since the proposal was shown — another booking took them meanwhile. */
+    movedSinceProposal?: Array<{ fromRoomNumber: string; toRoomNumber: string }>;
   }>(`/api/entries/${entryId}/room-assignments/from-sealed-per-night`, {
     method: "POST",
     session,

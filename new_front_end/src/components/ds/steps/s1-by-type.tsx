@@ -158,26 +158,31 @@ export function RoomsByType({
     const t = setTimeout(() => setDebounced(body), 350);
     return () => clearTimeout(t);
   }, [body]);
+  const settled = JSON.stringify(debounced) === JSON.stringify(body);
   const preview = useQuery({
     queryKey: ["by-type-preview", entry.id, JSON.stringify(debounced)],
     queryFn: () => sealRoomsByType(session!, entry.id, { ...debounced, preview: true }),
-    enabled: !!session && !!configId && allSet,
+    enabled: !!session && !!configId && allSet && settled,
     placeholderData: (p) => p,
     staleTime: 10_000,
   });
-  const answer: SealByTypeAnswer | null = allSet ? (preview.data ?? null) : null;
-  const fits = !!answer?.fits && !preview.isFetching;
+  // Only the answer for the counts on screen counts — never the one before it, still on hand
+  // while the new one is asked.
+  const checking = allSet && (!settled || preview.isFetching || preview.isPlaceholderData);
+  const answer: SealByTypeAnswer | null = allSet && !checking ? (preview.data ?? null) : null;
+  const fits = !!answer?.fits;
 
-  // The bill follows the rooms the system would choose.
+  // The bill follows the rooms the system would choose; it holds still while the house is asked.
   const picksKey = answer?.fits ? JSON.stringify(answer.perNight) : "";
   useEffect(() => {
+    if (checking) return;
     if (!answer?.fits) {
       onPicks(null);
       return;
     }
     onPicks({ perNight: answer.perNight, labels: labelsForBookingRooms(answer.bookingRooms, typeName), saved: !dirty });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [picksKey, dirty]);
+  }, [picksKey, dirty, checking]);
 
   const save = useMutation({
     mutationFn: () => sealRoomsByType(session!, entry.id, body),
@@ -191,8 +196,6 @@ export function RoomsByType({
     onError: (e) => toast.error(e instanceof Error ? e.message : "The rooms could not be recorded"),
   });
 
-  const roomsOfType = (t: string) => catalog.filter((r) => r.roomTypeId === t);
-  const [adding, setAdding] = useState("");
   const [byNightAsked, setByNightAsked] = useState(false);
 
   if (!configId) return null;
@@ -224,11 +227,6 @@ export function RoomsByType({
   const oneNight = nights.length <= 1;
   const varies = shown.some((t) => everyNight(t.roomTypeId) == null);
   const byNight = oneNight || byNightAsked || varies;
-  // A guest's own room can be asked for only while its type can take one more on every night.
-  const canAdd = (t: string) => {
-    const need = fixedOf(t) + 1;
-    return nights.every((d) => cell(d, t) >= need || (totalOn(d) < numberOfRooms && freeOn(t, d) > cell(d, t)));
-  };
 
   const shortNights = nights.filter((d) => totalOn(d) !== numberOfRooms);
   const reason = !editable
@@ -237,7 +235,7 @@ export function RoomsByType({
       ? "the house is being asked again"
       : shortNights.length
         ? `every night needs ${plural(numberOfRooms, "room")} — ${fmtDay(shortNights[0])} has ${totalOn(shortNights[0])}`
-        : preview.isFetching
+        : checking
           ? "checking with the house"
           : answer && !answer.fits
             ? "put right what is listed first"
@@ -299,6 +297,22 @@ export function RoomsByType({
 
   return (
     <div className="by-type">
+      <p className="bt-key">
+        <span>
+          <b className="bt-free plenty">6</b> how many of that type are free:
+        </span>
+        <span>
+          <b className="ok-ink">green</b> enough for all {plural(numberOfRooms, "room")}
+        </span>
+        <span>
+          <b className="warn-ink">amber</b> fewer than {numberOfRooms}
+        </span>
+        <span>
+          <b className="stop-ink">red</b> none
+        </span>
+        <span className="bt-key-sep">The box beside it is how many to take.</span>
+        {oneNight ? null : <span>Under Every night, free for the whole stay.</span>}
+      </p>
       <div className="bt-scroll">
       <table className="table compact house-types by-type-grid">
         <thead>
@@ -306,11 +320,10 @@ export function RoomsByType({
             <th>
               Type
               <Help label="About the counts">
-                Pick how many rooms of each type the guests need — for every night at once, or night by night. The coloured number is
-                how many of that type are free: green is enough for the whole booking, amber is some but fewer than the rooms asked,
-                red is none. A box offers only what can stand — never more than is free, and never more than the rooms the booking
-                still needs that night. The system chooses the rooms, one room for each guest&rsquo;s whole stay, and keeps them until
-                Arrival, where the room numbers are confirmed.
+                Pick how many rooms of each type the guests need — for every night at once, or night by night. A box offers only what
+                can stand: never more than is free, and never more than the rooms the booking still needs that night. The system
+                chooses the rooms, one room for each guest&rsquo;s whole stay, and keeps them until Arrival, where the room numbers are
+                confirmed.
               </Help>
             </th>
             {oneNight ? null : (
@@ -400,63 +413,25 @@ export function RoomsByType({
         </p>
       ) : null}
 
-      <div className="bt-fixed">
-        <span className="bt-k">A room the guest asked for</span>
-        {fixed.map((id) => {
-          const r = catalog.find((c) => c.id === id);
-          return (
-            <span key={id} className="bt-chip">
-              Room {r?.roomNumber ?? "?"}
-              <small>{typeName(r?.roomTypeId ?? "")}</small>
-              {editable ? (
-                <button type="button" aria-label={`Let the system choose instead of Room ${r?.roomNumber}`} onClick={() => setFixed((f) => f.filter((x) => x !== id))}>
-                  ×
-                </button>
-              ) : null}
-            </span>
-          );
-        })}
-        {editable ? (
-          <select
-            className="bt-add"
-            value={adding}
-            aria-label="Ask for a particular room"
-            onChange={(e) => {
-              const id = e.target.value;
-              setAdding("");
-              if (!id || fixed.includes(id)) return;
-              const t = catalog.find((c) => c.id === id)?.roomTypeId;
-              setFixed((f) => [...f, id]);
-              // A room of a type nobody asked for yet: count it in on every night.
-              if (t) {
-                const need = fixedOf(t) + 1;
-                setCounts((c) => {
-                  const next = { ...c };
-                  for (const d of nights) if ((next[d]?.[t] ?? 0) < need) next[d] = { ...(next[d] ?? {}), [t]: need };
-                  return next;
-                });
-              }
-            }}
-          >
-            <option value="">+ Add one room by number</option>
-            {shown.map((t) => {
-              const ok = canAdd(t.roomTypeId);
-              return (
-                <optgroup key={t.roomTypeId} label={ok ? t.name : `${t.name} — lower another type first`}>
-                  {roomsOfType(t.roomTypeId)
-                    .filter((r) => !fixed.includes(r.id))
-                    .map((r) => (
-                      <option key={r.id} value={r.id} disabled={!ok}>
-                        Room {r.roomNumber}
-                      </option>
-                    ))}
-                </optgroup>
-              );
-            })}
-          </select>
-        ) : null}
-        <span className="meta">{fixed.length === 0 ? "none — the system chooses every room" : "the system chooses the rest, by type"}</span>
-      </div>
+      {fixed.length > 0 ? (
+        <div className="bt-fixed">
+          <span className="bt-k">Kept for the guest</span>
+          {fixed.map((id) => {
+            const r = catalog.find((c) => c.id === id);
+            return (
+              <span key={id} className="bt-chip">
+                Room {r?.roomNumber ?? "?"}
+                <small>{typeName(r?.roomTypeId ?? "")}</small>
+                {editable ? (
+                  <button type="button" aria-label={`Let the system choose instead of Room ${r?.roomNumber}`} onClick={() => setFixed((f) => f.filter((x) => x !== id))}>
+                    ×
+                  </button>
+                ) : null}
+              </span>
+            );
+          })}
+        </div>
+      ) : null}
 
       {answer && !answer.fits ? (
         <div className="bt-refusals" role="alert">
@@ -484,7 +459,7 @@ export function RoomsByType({
                 ? dirty
                   ? "It fits — save it"
                   : "Saved"
-                : preview.isFetching
+                : checking
                   ? "Checking…"
                   : "Does not fit yet"}
           </span>

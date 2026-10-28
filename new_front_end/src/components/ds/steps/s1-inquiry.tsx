@@ -1458,14 +1458,6 @@ function TheHouse({
                 </Button>
                 )}
                 <Button
-                  kind="secondary"
-                  compact
-                  state="inert"
-                  title="Not possible yet — to offer other dates or rooms, change the stay above and ask the house again"
-                >
-                  Offer what we have
-                </Button>
-                <Button
                   kind="quiet"
                   compact
                   title="Record it under Other ways › The guest said no — say that nothing was free"

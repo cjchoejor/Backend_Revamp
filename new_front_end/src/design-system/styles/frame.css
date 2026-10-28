@@ -1762,6 +1762,9 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .bt-cell.over .bt-pick:not(.desk-root *) { color: var(--danger); border-color: var(--danger); background: var(--danger-soft); }
 .ds .bt-none:not(.desk-root *) { display: inline-block; width: 48px; text-align: center; font-weight: 600; color: var(--ink-3); cursor: default; }
 .ds .bt-cell.picked .bt-none:not(.desk-root *) { color: var(--ink); font-weight: 800; }
+.ds .bt-key:not(.desk-root *) { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin: 0 0 8px; font-size: var(--t-sm); color: var(--ink-2); }
+.ds .bt-key span { display: inline-flex; align-items: center; gap: 6px; }
+.ds .bt-key .bt-key-sep { padding-left: 12px; border-left: 1px solid var(--line-2); }
 .ds .bt-full:not(.desk-root *) { display: flex; align-items: center; gap: 6px; margin: 6px 0 0; font-size: var(--t-sm); color: var(--ink-2); }
 .ds .bt-fixed:not(.desk-root *) { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); margin-top: var(--s3); }
 .ds .bt-fixed .bt-k { font-weight: 600; }

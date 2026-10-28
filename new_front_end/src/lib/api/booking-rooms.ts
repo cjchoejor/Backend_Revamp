@@ -84,6 +84,33 @@ export function chooseBookingRoom(session: Session, entryId: string, body: { fro
   return apiRequest<{ moved: boolean; othersMoved: number }>(`/api/entries/${entryId}/booking-rooms/choose`, { method: "POST", session, body });
 }
 
+/** Several of the booking's rooms given at once (the chart's drop of several rooms). */
+export function chooseBookingRooms(session: Session, entryId: string, picks: Array<{ fromRoomId: string; toRoomId: string }>) {
+  return apiRequest<{ moved: boolean; othersMoved: number; given: Array<{ fromRoomId: string; toRoomId: string; toRoomNumber: string | null }> }>(
+    `/api/entries/${entryId}/booking-rooms/choose`,
+    { method: "POST", session, body: { picks } },
+  );
+}
+
+export type QuietRoomChoice = {
+  roomId: string;
+  roomNumber: string;
+  /** It can be given — free, or held quietly by a booking the system moves out of the way. */
+  available: boolean;
+  fault: boolean;
+  moves: Array<{ booking: string; fromRoomNumber: string; toRoomNumber: string }>;
+  /** What giving it does, or why not: "free", "held as the system's choice — X moves to 207", "held for X on these nights". */
+  words: string;
+};
+
+/** The other rooms of a room's type over its nights, and what giving each would do. Nothing written. */
+export function getQuietRoomChoices(session: Session, entryId: string, fromRoomId: string) {
+  return apiRequest<{ typeName: string | null; choices: QuietRoomChoice[] }>(
+    `/api/entries/${entryId}/booking-rooms/choices?fromRoomId=${encodeURIComponent(fromRoomId)}`,
+    { session },
+  );
+}
+
 /**
  * "Deluxe Double · room 2" for each room the system chose, in the order of the booking rooms (key
  * order). Every room of a type takes its place in the count — a guest's own room too, though it is

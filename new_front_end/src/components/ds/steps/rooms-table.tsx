@@ -25,8 +25,8 @@ import { useMemo, useState, type ReactNode } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button, Chip } from "@/design-system/components/primitives";
-import { changeBookingRoom, listRoomChangeCandidates } from "@/lib/api/entries";
-import { chooseBookingRoom } from "@/lib/api/booking-rooms";
+import { changeBookingRoom } from "@/lib/api/entries";
+import { chooseBookingRoom, getQuietRoomChoices } from "@/lib/api/booking-rooms";
 import { useBookingRooms } from "@/hooks/use-booking-rooms";
 import type { RoomCompositionInput } from "@/lib/api/quotations";
 import { RoomCompositionPlanner } from "@/components/desk/workspace/room-compositions-board";
@@ -410,14 +410,18 @@ function QuietRoomChoice({
 }) {
   const { session } = useSession();
   const [to, setTo] = useState("");
+  // Every other room of the type, and what giving it does — a room another booking holds as the
+  // system's choice can be given too: that booking is moved to another room of the type.
   const q = useQuery({
-    queryKey: ["room-change-candidates", entry.id, fromRoomId],
-    queryFn: () => listRoomChangeCandidates(session!, entry.id, fromRoomId),
+    queryKey: ["quiet-room-choices", entry.id, fromRoomId, entry.updatedAt],
+    queryFn: () => getQuietRoomChoices(session!, entry.id, fromRoomId),
     enabled: !!session,
-    staleTime: 30_000,
+    staleTime: 15_000,
   });
-  const options = (q.data?.candidates ?? []).filter((c) => c.sameType && c.selectable);
-  const toNo = options.find((c) => c.roomId === to)?.roomNumber ?? null;
+  const choices = q.data?.choices ?? [];
+  const options = choices.filter((c) => c.available);
+  const picked = options.find((c) => c.roomId === to) ?? null;
+  const toNo = picked?.roomNumber ?? null;
   const m = useMutation({
     mutationFn: () => chooseBookingRoom(session!, entry.id, { fromRoomId, toRoomId: to }),
     onSuccess: (res) => {
@@ -429,23 +433,28 @@ function QuietRoomChoice({
     onError: (e) => toastRefusal(e, "That room could not be given"),
   });
   return (
-    <span className="quiet-choice" style={{ display: "inline-flex", gap: "var(--s2)", alignItems: "center" }}>
+    <span className="quiet-choice" style={{ display: "inline-flex", flexWrap: "wrap", gap: "var(--s2)", alignItems: "center" }}>
       <select
         className="input"
         aria-label={`A room for ${name}`}
         value={to}
         disabled={m.isPending || q.isLoading}
         onChange={(e) => setTo(e.target.value)}
-        style={{ height: 32, minWidth: 180 }}
+        style={{ height: 32, minWidth: 220 }}
       >
-        <option value="">{q.isLoading ? "Reading the free rooms…" : options.length ? "Give it a room of this type" : "No other room of this type is free"}</option>
-        {options.map((c) => (
-          <option key={c.roomId} value={c.roomId}>
-            Room {c.roomNumber}
-            {c.bedType ? ` · ${c.bedType.charAt(0) + c.bedType.slice(1).toLowerCase()}` : ""}
+        <option value="">{q.isLoading ? "Reading the rooms…" : options.length ? "Give it a room of this type" : "No other room of this type can be given"}</option>
+        {choices.map((c) => (
+          <option key={c.roomId} value={c.roomId} disabled={!c.available}>
+            Room {c.roomNumber} · {c.available ? (c.moves.length ? `${c.moves.map((mv) => mv.booking.replace(/ \(ENT-[^)]+\)$/, "")).join(", ")} moves to make way` : "free") : c.words}
+            {c.fault ? " · open fault" : ""}
           </option>
         ))}
       </select>
+      {picked && picked.moves.length > 0 ? (
+        <span className="warn-ink" style={{ fontWeight: 600 }}>
+          {picked.moves.map((mv) => `${mv.booking.replace(/ \(ENT-[^)]+\)$/, "")} moves from ${mv.fromRoomNumber} to ${mv.toRoomNumber}`).join(" · ")} — same type, nothing else changes for them
+        </span>
+      ) : null}
       <Button
         compact
         className={to ? "go" : undefined}

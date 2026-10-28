@@ -233,7 +233,13 @@ export function AssignRoomsCard({ entry }: { entry: EntryDetail }) {
       return out;
     },
     onSuccess: (out) => {
-      toast.success(`${plural(out.count, "room assignment")} made from the plan — each room for its own nights`);
+      const rooms = out.roomNumbers?.length ? ` · Room${out.roomNumbers.length === 1 ? "" : "s"} ${out.roomNumbers.join(", ")}` : "";
+      toast.success(`The rooms are assigned${rooms} — each room for its own nights`, { duration: 9000 });
+      // A room shown in the proposal may have gone to another booking meanwhile; the system gave
+      // the next free room of the same type, and says which.
+      for (const mv of out.movedSinceProposal ?? []) {
+        toast.warning(`The system gave Room ${mv.toRoomNumber} instead of Room ${mv.fromRoomNumber} (same type) — the house changed since the rooms were shown`, { duration: 12000 });
+      }
       changed();
     },
     onError: (e) => toastRefusal(e, "The rooms could not be assigned"),

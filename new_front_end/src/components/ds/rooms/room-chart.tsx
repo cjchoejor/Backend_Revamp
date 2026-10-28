@@ -1110,18 +1110,41 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
    * other drop is the room move as before.
    */
   const openMove = (legs: RoomMoveLegInput[]) => {
-    if (legs.length === 1 && !legs[0].newCheckInDate) {
-      const l = legs[0];
-      const own = (barsByRoom.get(l.fromRoomId) ?? []).filter((b) => b.entryId === l.entryId);
-      const fromRoom = chart.rooms.find((r) => r.id === l.fromRoomId);
-      const toRoom = chart.rooms.find((r) => r.id === l.toRoomId);
-      const first = own.reduce((m, b) => (b.from < m ? b.from : m), "9999-12-31");
-      const last = own.reduce((m, b) => (b.to > m ? b.to : m), "0000-01-01");
-      const inWay = (barsByRoom.get(l.toRoomId) ?? []).some((b) => b.entryId !== l.entryId && b.from < last && first < b.to);
-      if (own.length && own.every((b) => b.quiet) && fromRoom && toRoom && fromRoom.roomTypeId === toRoom.roomTypeId && !inWay) {
-        setQuietPick({ entryId: l.entryId, fromRoomId: l.fromRoomId, toRoomId: l.toRoomId, toRoomNumber: toRoom.roomNumber, guest: nameOf(bookingOf.get(l.entryId)) });
-        return;
+    // Rooms the system chose, onto other rooms of their type on the same nights: the desk is
+    // choosing which rooms the guest gets, not moving a booking — one room or several. A room in
+    // the way held only as another booking's system choice is moved by the system; anything held
+    // for certain (or other dates, another type) is the room move.
+    const quiet = (() => {
+      if (legs.length === 0 || legs.some((l) => l.newCheckInDate)) return null;
+      const entryId = legs[0].entryId;
+      if (legs.some((l) => l.entryId !== entryId)) return null;
+      const froms = new Set(legs.map((l) => l.fromRoomId));
+      const picks: QuietPick["picks"] = [];
+      const inWay: QuietPick["inWay"] = [];
+      for (const l of legs) {
+        const own = (barsByRoom.get(l.fromRoomId) ?? []).filter((b) => b.entryId === entryId);
+        const fromRoom = chart.rooms.find((r) => r.id === l.fromRoomId);
+        const toRoom = chart.rooms.find((r) => r.id === l.toRoomId);
+        if (!own.length || !own.every((b) => b.quiet) || !fromRoom || !toRoom || fromRoom.roomTypeId !== toRoom.roomTypeId) return null;
+        const first = own.reduce((m, b) => (b.from < m ? b.from : m), "9999-12-31");
+        const last = own.reduce((m, b) => (b.to > m ? b.to : m), "0000-01-01");
+        const there = (barsByRoom.get(l.toRoomId) ?? []).filter((b) => b.from < last && first < b.to);
+        for (const b of there) {
+          if (b.entryId === entryId) {
+            if (!froms.has(l.toRoomId)) return null;
+            continue;
+          }
+          if (!b.quiet) return null;
+          const guest = nameOf(bookingOf.get(b.entryId));
+          if (!inWay.some((w) => w.guest === guest && w.roomNumber === toRoom.roomNumber)) inWay.push({ guest, roomNumber: toRoom.roomNumber });
+        }
+        picks.push({ fromRoomId: l.fromRoomId, fromRoomNumber: fromRoom.roomNumber, toRoomId: l.toRoomId, toRoomNumber: toRoom.roomNumber });
       }
+      return { entryId, guest: nameOf(bookingOf.get(entryId)), picks, inWay };
+    })();
+    if (quiet) {
+      setQuietPick(quiet);
+      return;
     }
     setMoveLegs(legs);
   };
