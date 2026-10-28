@@ -245,7 +245,7 @@ const KNOWN = [
   "Proforma sent to guest",
   "Guest's answer to the proforma recorded",
   "Advance settled or credit extended",
-  "Room held",
+  "Rooms blocked",
   "A contact on file",
 ];
 
@@ -358,7 +358,7 @@ function BeforeYouReserve({
   const hold = entry.committedHold ?? null;
   const holdJ = journey?.s3Setup.committedHold ?? null;
   const holdRooms = (holdJ?.rooms ?? []).map((r) => r.roomNumber).filter(Boolean);
-  const holdOk = metOr("Room held");
+  const holdOk = metOr("Rooms blocked");
   lines.push({
     key: "hold",
     label: "Rooms held",

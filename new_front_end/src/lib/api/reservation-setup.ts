@@ -226,6 +226,35 @@ export async function setAdvanceRequirement(
   });
 }
 
+/**
+ * The advance in one act (2026-10-28): the amount asked, how the guest will pay, or both. The
+ * proforma prints both, so saving them together issues it again once. Returns the fresh
+ * payment-status, as the two single routes do.
+ */
+export async function setAdvanceTerms(
+  session: Session,
+  entryId: string,
+  body: {
+    requirement?: { mode: "AMOUNT"; amount: number } | { mode: "PERCENT"; percent: number } | { mode: "CLEAR" };
+    plan?: {
+      plan: "FULL" | "PARTIAL" | "INSTALLMENTS" | "CLEAR";
+      balanceDueAt?: "BEFORE_CHECKIN" | "AT_CHECKIN" | null;
+      promisedBy?: string | null;
+      note?: string | null;
+    };
+  },
+) {
+  return apiRequest<
+    PaymentStatusSummary & {
+      reissuedProforma?: { newInvoiceId: string; supersededIds: string[]; versionNumber: number } | null;
+    }
+  >(`/api/entries/${entryId}/advance-terms`, {
+    method: "POST",
+    session,
+    body,
+  });
+}
+
 export async function placeCommittedHold(
   session: Session,
   entryId: string,

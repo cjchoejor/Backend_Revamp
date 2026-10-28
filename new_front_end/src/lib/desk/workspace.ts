@@ -302,7 +302,7 @@ export function s3Readiness(
     // NOTE: advance-payment RECONCILIATION (folio.advancePaymentReconciliationComplete) is a
     // Stage 5 pre-arrival gate (Policy 28), NOT an S3→S4 confirmation prerequisite. The backend
     // confirm gate (s4-confirmation-service) never checks it, so it must not gate the freeze here.
-    { label: "Room held", met: hold?.state === "PLACED" || hold?.state === "UPGRADED", card: "hold" },
+    { label: "Rooms blocked", met: hold?.state === "PLACED" || hold?.state === "UPGRADED", card: "hold" },
   ];
 }
 
