@@ -711,7 +711,16 @@ function InterimRequestPanel({
 
 // ── Interim payment (long stay) ─────────────────────────────────────────────────────────────
 
-export function InterimPaymentBlock({ entry, onChanged }: { entry: EntryDetail; onChanged?: () => void }) {
+export function InterimPaymentBlock({
+  entry,
+  onChanged,
+  unfolded = false,
+}: {
+  entry: EntryDetail;
+  onChanged?: () => void;
+  /** Shown open with no fold of its own — Stay's payment sub-tab (2026-10-29). */
+  unfolded?: boolean;
+}) {
   const { session } = useSession();
   const queryClient = useQueryClient();
   const entryId = entry.id;
@@ -732,7 +741,8 @@ export function InterimPaymentBlock({ entry, onChanged }: { entry: EntryDetail; 
   const [value, setValue] = useState("");
   const [note, setNote] = useState("");
   // Collapsed until opened (2026-08-24, operator request) — the header tags carry the live state.
-  const [expanded, setExpanded] = useState(false);
+  const [expandedState, setExpanded] = useState(false);
+  const expanded = unfolded || expandedState;
 
   const createM = useMutation({
     mutationFn: () => createInterimPayment(session!, entryId, { askMode: mode, askValue: Number(value), note: note.trim() || undefined }),
@@ -752,7 +762,7 @@ export function InterimPaymentBlock({ entry, onChanged }: { entry: EntryDetail; 
 
   return (
     <div className="block">
-      <BlockH expanded={expanded} onToggle={() => setExpanded((v) => !v)}>
+      <BlockH expanded={expanded} onToggle={unfolded ? undefined : () => setExpanded((v) => !v)}>
         <Receipt style={{ width: 13, height: 13 }} />
         Interim payment
         <Help label="About interim payments">

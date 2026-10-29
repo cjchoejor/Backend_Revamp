@@ -30,6 +30,7 @@ import {
   ShutWay,
   StageActs,
   StepCanvas,
+  SubTabs,
   Tool,
   WorkPopup,
   useOpenAlsoWay,
@@ -188,18 +189,38 @@ export function S7Stay({
       </div>
 
       <div className="pane" hidden={at("interim")}>
-        <div id={ID.interim}>
-          <Tool>
-            <InterimPaymentBlock entry={entry} onChanged={onMoney} />
-          </Tool>
-        </div>
-        {folioId ? (
-          <div id={ID.split}>
-            <Tool>
-              <SplitSettlementBlock entry={entry} folioId={folioId} />
-            </Tool>
-          </div>
-        ) : null}
+        {/* Two ways to take money mid-stay, as sub-tabs (2026-10-29, operator: "make these into sub tabs"):
+            ask for part of the bill with an interim bill, or take money now against a room, a hall or the rest. */}
+        <SubTabs
+          label="Taking a payment"
+          param="pay"
+          tabs={[
+            {
+              key: "interim",
+              label: "Interim payment",
+              content: (
+                <div id={ID.interim}>
+                  <Tool>
+                    <InterimPaymentBlock entry={entry} onChanged={onMoney} unfolded />
+                  </Tool>
+                </div>
+              ),
+            },
+            folioId
+              ? {
+                  key: "parts",
+                  label: "Who's paying for what",
+                  content: (
+                    <div id={ID.split}>
+                      <Tool>
+                        <SplitSettlementBlock entry={entry} folioId={folioId} unfolded />
+                      </Tool>
+                    </div>
+                  ),
+                }
+              : null,
+          ]}
+        />
       </div>
 
       <div className="pane" hidden={at("extend")}>
