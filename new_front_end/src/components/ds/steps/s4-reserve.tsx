@@ -12,7 +12,7 @@
  * answer to it (Arrival waits for that answer), the pre-arrival tasks Reserve opened, and the
  * advance, which can still come in before Arrival.
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button, Chip, Refusal } from "@/design-system";
@@ -24,12 +24,13 @@ import { useStaffNames } from "@/hooks/use-desk-data";
 import { acknowledgeMultiBooking, resendConfirmationVoucher, verifyConference } from "@/lib/api/confirmation";
 import { getBillingSummary, getEntryTrace, getJourneySummary, type EntryCommunication } from "@/lib/api/entries";
 import { listSameGuestBookings } from "@/lib/api/guest-bookings";
-import { HeldPaperRow, useHeldDocuments } from "@/components/ds/workspace/held-papers";
+import { HeldPaperRow, HeldPapersCard, useHeldDocuments } from "@/components/ds/workspace/held-papers";
 import { confirmReadiness, reservedThisPass } from "@/lib/desk/workspace";
 import { fmtDate, fmtDateTime, fmtRange, fmtStamp, money, nightsOf, plural } from "@/lib/ds/format";
 import { roomRatesOf } from "@/lib/ds/rates";
 import { JourneySummaryPanel } from "@/components/desk/workspace/journey-summary";
-import { AdvanceSettlementBlock, PLAN_LABEL, dueLabel } from "@/components/desk/workspace/advance-settlement";
+import { PLAN_LABEL, dueLabel } from "@/components/desk/workspace/advance-settlement";
+import { PaymentPlanCard } from "./s3-money";
 import type { EntryDetail, PaymentStatusSummary, QuotationSummary } from "@/types/api";
 import {
   DsDialog,
@@ -46,6 +47,7 @@ import {
   AnswerLine,
   atLeast,
   currentPassStart,
+  goToStepCard,
   latestDispatched,
   toastRefusal,
   useCommunications,
@@ -59,7 +61,6 @@ import {
 } from "./kit";
 import { BookingOtherWays } from "./s4-other-ways";
 import { roomsHeldWord } from "./s2-shared";
-import { PreArrivalTasksCard, RESERVE_PREP_TASKS } from "./s5-pre-arrival-tasks";
 import { Help } from "@/components/ds/help";
 
 /* ------------------------------------------------------------------ vocabulary */
@@ -194,23 +195,10 @@ export function S4Reserve({
           {/* The work first — the voucher and the guest's answer, which Arrival waits for — then
               the record of what was reserved. */}
           <VoucherCard entry={entry} />
+          {/* The pre-arrival tasks are Arrival's (SIG-S5 §2.5 — "created and updated at S5"; the
+              operator, 2026-10-29: "if it's for stage 5 then keep it at stage 5"). */}
+          <ReserveAdvance entry={entry} past={past} />
           <WhatReserveDecided entry={entry} />
-          <PreArrivalTasksCard
-            entry={entry}
-            title="Pre-arrival · opened by Reserve, worked at Arrival"
-            meta="Four of these are the desk's own preparation and can be ticked here; the rest are done at Arrival. When Arrival opens, completed tasks re-open so the arrival desk confirms them fresh."
-            actionable={RESERVE_PREP_TASKS}
-            movedOn={past && entry.currentStage === "S5" ? { onGo: () => goToStep(5) } : null}
-          />
-          <StepCard>
-            <Tool>
-              <AdvanceSettlementBlock
-                entry={entry}
-                title="The advance"
-                intro="The booking is reserved; the rest of the advance can still be paid here before Arrival. It goes on the same bill as the advance already paid."
-              />
-            </Tool>
-          </StepCard>
         </>
       ) : (
         // Before the click (restored 2026-10-29): what Reserve will sign, each fact with its Fix.
@@ -224,6 +212,42 @@ export function S4Reserve({
         onChangeStay={past ? undefined : onChangeStay}
       />
     </StepCanvas>
+  );
+}
+
+/**
+ * The advance at Reserve (2026-10-29, operator: "sometimes the advance can be paid even in stage 4 …
+ * file an advance payment like in stage 3") — Set up's payment card: what is asked and received,
+ * Record payment, Change the advance, the sign-off and the FOM's credit.
+ */
+function ReserveAdvance({ entry, past }: { entry: EntryDetail; past: boolean }) {
+  const { session } = useSession();
+  const clock = useHotelClock(60_000);
+  const refresh = useRefreshEntry(entry.id);
+  const payment = usePaymentStatus(entry.id, { enabled: !!entry.folio });
+  const comms = useCommunications(entry.id).data?.items;
+  const since = currentPassStart(entry);
+  const proformas = (entry.folio?.invoices ?? []).filter((i) => i.invoiceType === "PROFORMA");
+  const proforma = proformas.find((i) => i.state !== "SUPERSEDED") ?? null;
+  const pfComm = latestDispatched(comms, "PROFORMA_INVOICE", since);
+  if (!entry.folio) return null;
+  return (
+    <PaymentPlanCard
+      entry={entry}
+      setUp={false}
+      editable={!past}
+      elevated={atLeast(session?.actorLevel, "L2")}
+      status={payment.data}
+      statusLoading={payment.isLoading}
+      refetching={payment.isFetching}
+      onRefetch={() => void payment.refetch()}
+      tz={clock.tz}
+      bill={{ proforma, dispatched: !!proforma?.dispatchedAt, answered: pfComm?.acknowledgementStatus === "RECEIVED" }}
+      onChanged={() => {
+        refresh();
+        void payment.refetch();
+      }}
+    />
   );
 }
 
@@ -958,6 +982,9 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
   const heldRows = (heldQ.data ?? []).filter((h) => h.kind === "CONFIRMATION_VOUCHER" && h.documentId === res.id);
   const held = heldRows.find((h) => h.decision == null) ?? null;
   const decided = heldRows.find((h) => h.decision && h.decision !== "SUPERSEDED") ?? null;
+  // Any other paper the change made (the pass's proforma) is decided here too, so everything the
+  // desk has to send or not is in one place (2026-10-29) — the card above the step leaves it.
+  const otherHeld = (heldQ.data ?? []).filter((h) => h.decision == null && !(h.kind === "CONFIRMATION_VOUCHER" && h.documentId === res.id));
   const onWhatsApp = decided?.decision === "SENT_WHATSAPP";
   const notSent = decided?.decision === "NOT_SENT";
   const emailed = emailEvents.some((t) => t.eventType.endsWith(".SENT"));
@@ -985,6 +1012,16 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
   const decideFirst = !past && !afterReserve && !answered && !loading && !!held;
   // Gone out and not answered: the answer is next, and Arrival waits for it (Set up's answer box).
   const answerDue = !past && !afterReserve && !loading && !held && !!voucherComm && !answered;
+  const otherDue = !past && !afterReserve && !loading && otherHeld.length > 0;
+  // The page lands here (2026-10-29, operator: "by default at first move the screen to there so the
+  // user knows what needs to be done") — once, when there is something to decide or answer.
+  const landed = useRef(false);
+  useEffect(() => {
+    if (landed.current || loading || past || afterReserve) return;
+    if (!(decideFirst || answerDue || otherDue)) return;
+    landed.current = true;
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => goToStepCard("voucher")));
+  }, [loading, past, afterReserve, decideFirst, answerDue, otherDue]);
 
   const send = useMutation({
     mutationFn: () => resendConfirmationVoucher(session!, res.id, { dispatchedTo: sendTo.trim() || undefined }),
@@ -1032,7 +1069,9 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
       icon="file"
       // It folds once settled — answered, or not sent; a held voucher stays open with its choice.
       summary={
-        answered
+        otherDue
+          ? undefined
+          : answered
           ? `${res.confirmationVoucherNumber ?? res.id} · ${onWhatsApp ? "sent on WhatsApp" : "sent"} · the guest's answer recorded`
           : notSent && !voucherComm
             ? `${res.confirmationVoucherNumber ?? res.id} · not sent to the guest — no answer needed`
@@ -1056,6 +1095,10 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
         )
       }
     >
+      {/* While the desk chooses, the paper is shown once — in the choice, with its View (2026-10-29,
+          operator: "the same confirmation voucher is showed twice … remove the top one"). */}
+      {decideFirst && held ? null : (
+      <>
       <div className="meta">
         Generated {fmtDate(res.confirmationVoucherRenderedAt ?? res.confirmedAt)}
         {res.confirmationVoucherChecksum ? ` · signed ${res.confirmationVoucherChecksumAlgo ?? "SHA-256"} ${res.confirmationVoucherChecksum.slice(0, 12)}…` : " · the PDF is stored on first preview"}
@@ -1082,6 +1125,8 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
         </Button>
         <Help label="Not available yet">Not possible by hand. A new version of the voucher is made by itself whenever the booking&rsquo;s rooms, dates or price change.</Help>
       </div>
+      </>
+      )}
       {failed && !answered && !afterReserve ? (
         <div style={{ marginTop: 10 }}>
           <Refusal
@@ -1126,6 +1171,16 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
         <div className="sm" style={{ marginTop: 12 }}>
           Not sent to the guest, so no answer is needed.
           <Help label="If it is sent later">Send it if the guest asks for it — Arrival then waits for their answer to it.</Help>
+        </div>
+      ) : null}
+      {otherDue ? (
+        <div style={{ marginTop: 14 }}>
+          <HeldPapersCard
+            entryId={entry.id}
+            onlyIds={otherHeld.map((h) => h.id)}
+            tz={tz}
+            title={otherHeld.length === 1 ? "Also made again by the change — send it or not" : "Also made again by the change — send them or not"}
+          />
         </div>
       ) : null}
       <PaperDrawer paper={paper} onClose={() => setPaper(null)} />

@@ -98,6 +98,7 @@ export function PaymentPlanCard({
   askAdvance = 0,
   onRoomsBlocked,
   onChanged,
+  setUp = true,
 }: {
   entry: EntryDetail;
   editable: boolean;
@@ -117,6 +118,14 @@ export function PaymentPlanCard({
    */
   onRoomsBlocked?: (until: string | null) => void;
   onChanged: () => void;
+  /**
+   * Reserve's advance (2026-10-29, operator: "sometimes the advance can be paid even in stage 4 … it
+   * can have the option there to file an advance payment like in stage 3"): the same card, not a
+   * section of the step's flow. Money is not held for the proforma there — bill-before-money and
+   * answer-before-money are Set-up rules — and a payment can be recorded even once the advance is
+   * paid, the guest paying more ahead.
+   */
+  setUp?: boolean;
 }) {
   const { session } = useSession();
   const folio = entry.folio ?? null;
@@ -143,6 +152,10 @@ export function PaymentPlanCard({
   };
   const afterAdvance = (askedNow: number, reissued: boolean) => {
     onChanged();
+    if (!setUp) {
+      if (reissued) toast.info("A new proforma was made with the new advance", { description: "It waits, not sent, in the booking file — Papers › Proforma invoices." });
+      return;
+    }
     if (askedNow > 0 && (reissued || !bill.dispatched)) goToProforma();
   };
   /** A payment came in: the money section finishes, and the hold card takes it from there. */
@@ -175,7 +188,9 @@ export function PaymentPlanCard({
    */
   const payHold: { why: string; card: string; cta: string } | null = !folio
     ? { why: "Open the provisional bill first — money has nowhere to land until there is one.", card: "billing-model", cta: "Open the bill" }
-    : !bill.dispatched
+    : !setUp
+      ? null
+      : !bill.dispatched
       ? { why: "Send the proforma first — money is logged against the bill the guest received.", card: "proforma", cta: "Go to the proforma" }
       : !bill.answered
         ? { why: "Record the guest's answer to the proforma first.", card: "proforma", cta: "Go to the proforma" }
@@ -223,7 +238,13 @@ export function PaymentPlanCard({
     !!status && !status.paidInFull && received > 0 && !!plan && (plan.plan !== "FULL" || !!plan.balanceDueAt) && !status.creditExtensionActive;
 
   return (
-    <StepCard flow="money" flowAfter="proforma" title="The payment plan" right={stateChip} summary={summary}>
+    <StepCard
+      flow={setUp ? "money" : undefined}
+      flowAfter={setUp ? "proforma" : undefined}
+      title={setUp ? "The payment plan" : "The advance"}
+      right={stateChip}
+      summary={setUp ? summary : undefined}
+    >
       {!folio ? (
         <span className="meta">The plan is set once the provisional bill exists — choose the billing model above.</span>
       ) : !status ? (
@@ -367,7 +388,7 @@ export function PaymentPlanCard({
               Every payment is kept on the booking. A printed receipt can&rsquo;t be made yet.
             </HelpHere>
           ) : null}
-          {shortWithPlan ? (
+          {shortWithPlan && setUp ? (
             <div className="sm warn-ink" style={{ marginTop: 8 }}>
               The guest still owes {money(status.shortfall, cur)} and said {plan!.plan === "FULL" ? "they would pay" : "the rest comes"}{" "}
               {plan!.balanceDueAt === "BEFORE_CHECKIN" ? "before check-in" : plan!.balanceDueAt === "AT_CHECKIN" ? "at the check-in desk" : "later"}.
@@ -381,8 +402,9 @@ export function PaymentPlanCard({
         {editable && folio && payDue ? (
           <div className="notice next" role="status" style={{ marginTop: 12, marginBottom: 0 }}>
             <span>
-              <b>Record the payment now.</b> The guest has the proforma and their answer is on record — {money(status!.shortfall, cur)} of the
-              advance is still to come.
+              <b>Record the payment now.</b>{" "}
+              {setUp ? "The guest has the proforma and their answer is on record — " : ""}
+              {money(status!.shortfall, cur)} of the advance is still to come.
             </span>
           </div>
         ) : null}
@@ -401,7 +423,11 @@ export function PaymentPlanCard({
               // black button, so the user knows it's time to record the payment now").
               className={payDue ? "go big" : undefined}
               label="Record payment"
-              caption="The rooms are blocked automatically when money comes in — even part of it."
+              caption={
+                setUp
+                  ? "The rooms are blocked automatically when money comes in — even part of it."
+                  : "It goes on the booking's bill with the advance already received."
+              }
               onClick={() => setOpen("pay")}
               state={payHold ? "inert" : "default"}
               heldBy={payHold?.why}

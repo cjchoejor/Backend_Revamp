@@ -45,7 +45,7 @@ import { isHousekeeping, traceWords } from "@/lib/ds/trace-words";
 import type { TraceEvent } from "@/lib/trace/humanize";
 import { Choice, DsDialog, Fact, Facts, PapersCard, ReasonDialog, StepCard, SubTabs, Tool, atLeast, toastRefusal, useRefreshEntry } from "@/components/ds/steps/kit";
 import { FolioDocumentsBlock } from "@/components/desk/workspace/folio-documents";
-import { HeldPapersCard } from "@/components/ds/workspace/held-papers";
+import { useHeldDocuments } from "@/components/ds/workspace/held-papers";
 import { PLAN_LABEL, dueLabel } from "@/components/desk/workspace/advance-settlement";
 import { useStayPrice, type StayPrice } from "@/lib/ds/stay-price";
 import { getQuotationPriceLines, type QuotationLivePreview } from "@/lib/api/quotations";
@@ -1206,6 +1206,8 @@ export function DocumentsView({
   onGo: (step: number) => void;
 }) {
   const folioLive = !!entry.folio && ["LIVE", "OUTSTANDING", "SETTLED", "CLOSED"].includes(entry.folio.state);
+  const heldDocs = useHeldDocuments(entry.id).data ?? [];
+  const heldOpen = sealed ? 0 : heldDocs.filter((h) => h.decision == null).length;
   // One sub-tab per kind of paper (2026-10-12, operator: "for papers it should be divided among
   // different types of papers"). A kind with nothing in it has no tab.
   const quotes = (entry.quotations ?? []).length;
@@ -1223,7 +1225,15 @@ export function DocumentsView({
         Documents <span className="need">every paper, every version, and what the guest said back</span>
       </h3>
       <div className="steps-canvas">
-        <HeldPapersCard entryId={entry.id} tz={tz} />
+        {/* The send-or-not choice lives on the step, once (2026-10-29, operator: "the same
+            confirmation voucher is showed twice, keep only once"); the file only says so. */}
+        {heldOpen > 0 ? (
+          <p className="notice next" role="status" style={{ margin: "0 0 10px" }}>
+            <span>
+              {heldOpen === 1 ? "A paper is" : `${heldOpen} papers are`} waiting to be sent or not — you choose on the step.
+            </span>
+          </p>
+        ) : null}
         {quotes + invoices.length + vouchers + sent.length === 0 && !folioLive ? (
           <EmptyState title="No papers yet">A quotation is the first — it is generated at Negotiation.</EmptyState>
         ) : (

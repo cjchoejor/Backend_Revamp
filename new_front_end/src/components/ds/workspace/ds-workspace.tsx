@@ -1564,8 +1564,14 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     </>
   );
   // Reserve's voucher is sent, or not, on its own card (2026-10-29) — not asked twice on that step.
+  // Reserved, Reserve's voucher section decides every paper the change made — the voucher and the
+  // pass's proforma — so the card above the step says nothing twice (2026-10-29).
   const reserveVoucherOnCard =
-    viewing === 4 ? (h: { kind: string; documentId: string }) => h.kind === "CONFIRMATION_VOUCHER" && h.documentId === entry.reservation?.id : undefined;
+    viewing === 4 && entry.currentStage === "S4"
+      ? () => true
+      : viewing === 4
+        ? (h: { kind: string; documentId: string }) => h.kind === "CONFIRMATION_VOUCHER" && h.documentId === entry.reservation?.id
+        : undefined;
   const dialogs = (
     <>
         <StepMoved note={moved} onClose={closeMoved} />

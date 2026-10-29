@@ -60,6 +60,12 @@ export function CaseCards({
 }) {
   const { session } = useSession();
   const [paper, setPaper] = useState<PaperRef | null>(null);
+  /**
+   * Passes and amendments read as one line until opened (2026-10-29, operator: "this part can be
+   * shown with just a header or message but minimized until the user expands it, do it
+   * everywhere") — it is a record of what happened, not work to do.
+   */
+  const [passesOpen, setPassesOpen] = useState(false);
   const cur = "BTN";
 
   const passes = useQuery({
@@ -129,8 +135,33 @@ export function CaseCards({
   const amendments = (passes.data?.segments ?? []).flatMap((s) => s.amendments.map((a) => ({ ...a, pass: s.segmentNumber })));
   if (earlier.length || amendments.length) {
     const opener = (n: number) => passes.data?.segments.find((s) => s.segmentNumber === n + 1);
+    // The one line it reads as while closed: how many, and the latest way back.
+    const latest = earlier.length ? earlier[earlier.length - 1] : null;
+    const latestNext = latest ? opener(latest.segmentNumber) : undefined;
+    const lineParts = [
+      earlier.length ? `${earlier.length} earlier pass${earlier.length === 1 ? "" : "es"}` : null,
+      amendments.length ? `${amendments.length} change${amendments.length === 1 ? "" : "s"}` : null,
+      latestNext?.openedBy?.fromStage
+        ? `latest: from ${stepWord(latestNext.openedBy.fromStage)} back to ${stepWord(latestNext.openedBy.toStage)}${latest?.sealedAt ? ` · ${fmtDateTime(latest.sealedAt, tz)}` : ""}`
+        : null,
+    ].filter(Boolean);
     cards.push(
-      <StepCard key="passes" title="Passes and amendments" acts={<Button kind="quiet" compact icon="history" onClick={onHistory}>See every pass</Button>}>
+      <StepCard
+        key="passes"
+        title="Passes and amendments"
+        status={lineParts.join(" · ")}
+        acts={
+          <>
+            <Button kind="quiet" compact aria-expanded={passesOpen} onClick={() => setPassesOpen((v) => !v)}>
+              {passesOpen ? "Hide" : "Show"}
+            </Button>
+            <Button kind="quiet" compact icon="history" onClick={onHistory}>
+              See every pass
+            </Button>
+          </>
+        }
+      >
+        {passesOpen ? (
         <div className="stack sm" style={{ display: "grid", gap: 4 }}>
           {earlier.map((s) => {
             const next = opener(s.segmentNumber);
@@ -158,6 +189,7 @@ export function CaseCards({
             </div>
           ))}
         </div>
+        ) : null}
       </StepCard>,
     );
   }
