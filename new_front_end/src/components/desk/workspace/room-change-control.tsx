@@ -1145,7 +1145,11 @@ export function InitialSelectionCell({ entryId, roomId }: { entryId: string; roo
   const item = historyQuery.data?.rooms.find((r) => r.currentRoomId === roomId) ?? null;
   if (!item) return null;
 
+  // Only a room (or its beds) changed since Check-in is said, highlighted (2026-10-29, operator:
+  // "it's still showing Initially: Room 307 — this should show, highlighted, only if the room has
+  // been changed here"). An unchanged room says nothing.
   const changed = item.roomChanged || item.bedTypeChanged;
+  if (!changed) return null;
   const label = item.initialRoomNumber
     ? `Room ${item.initialRoomNumber}${item.initialBedType ? ` · ${bedLabel(item.initialBedType)}${item.initialBedType === "TWIN" ? " beds" : " bed"}` : ""}`
     : "not recorded";
