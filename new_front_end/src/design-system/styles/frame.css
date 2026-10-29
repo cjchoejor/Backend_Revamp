@@ -1771,6 +1771,12 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 @media (max-width: 1100px) { .ds .work-scrim { right: 0; } }
 @media (prefers-reduced-motion: reduce) { .ds .work-panel { animation: none; } }
 /* Stay (2026-10-29): the bill's acts read as acts — Post a charge first, green; the rest full size. */
+.ds .qstep-title:not(.desk-root *) { display: flex; width: fit-content; align-items: center; gap: var(--s1); font-weight: 700; margin-bottom: var(--s2); }
+/* The departments (2026-10-29): one row per department to accept — the rooms, its ticks, one Accept. */
+.ds .dept-rows:not(.desk-root *) { display: grid; gap: var(--s2); margin-top: var(--s3); }
+.ds .dept-row:not(.desk-root *) { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; border: 1px solid var(--line); border-radius: var(--r-control); padding: var(--s2) var(--s3); }
+.ds .dept-row .dept-what:not(.desk-root *) { min-width: 220px; }
+.ds .dept-row .dept-ticks:not(.desk-root *) { flex: 1; display: flex; gap: var(--s3); flex-wrap: wrap; }
 .ds .folio-acts:not(.desk-root *) { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: center; margin-top: var(--s3); padding-top: var(--s3); border-top: 1px solid var(--line); }
 /* What needs doing at Stay from the sections that live in pop-ups: one line each, a button to it. */
 .ds .stay-attention:not(.desk-root *) { display: grid; gap: var(--s2); margin-bottom: var(--s3); }

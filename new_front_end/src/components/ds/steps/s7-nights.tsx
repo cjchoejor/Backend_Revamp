@@ -43,11 +43,9 @@ function lastStayNightYmd(checkOutIso: string) {
 export function NightsCard({
   entry,
   setNightAuditOk,
-  onMoveRoom,
 }: {
   entry: EntryDetail;
   setNightAuditOk: (v: boolean) => void;
-  onMoveRoom: () => void;
 }) {
   const { session } = useSession();
   const refresh = useRefreshEntry(entry.id);
@@ -266,11 +264,6 @@ export function NightsCard({
               Post the night
             </Button>
           )}
-          {hasRooms ? (
-            <Button kind="quiet" compact onClick={onMoveRoom}>
-              Move room · same category
-            </Button>
-          ) : null}
         </div>
       </Live>
     </StepCard>

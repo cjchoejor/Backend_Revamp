@@ -86,65 +86,82 @@ function tally(list: HandoffSummary[]) {
  * The departments have no terminal of their own yet, so the desk records the acceptance on
  * their word — the same checklist the backend demands, ticked here. Acceptance is all there is
  * to record: the code fulfils H1, H4 and H5 only.
+ *
+ * One row per department, not one card per room (2026-10-29, operator: "it seems to be asking
+ * housekeeping and kitchen and bar for every room, consuming a lot of space"): the rooms it was told
+ * about and not yet accepted, its checklist ticked once, and one Accept that records it for each.
  */
-function AcceptDepartmentHandoff({ entry, handoff, tz }: { entry: EntryDetail; handoff: HandoffSummary; tz: string }) {
+function AcceptDepartment({ entry, type, handoffs }: { entry: EntryDetail; type: "H2" | "H3"; handoffs: HandoffSummary[] }) {
   const { session } = useSession();
   const refresh = useRefreshEntry(entry.id);
-  const dept = handoff.handoffType === "H3" ? "Kitchen and bar" : "Housekeeping";
-  const raw = handoff as HandoffSummary & { roomAssignmentId?: string | null; createdAt?: string | null };
-  const roomId = raw.roomAssignmentId ?? null;
-  const toldAt = handoff.assignedAt ?? raw.createdAt ?? null;
-  const roomNo = roomId ? ((entry.roomAssignments ?? []).find((a) => a.id === roomId)?.room?.roomNumber ?? null) : null;
+  const dept = type === "H3" ? "Kitchen and bar" : "Housekeeping";
+  const roomOf = (h: HandoffSummary) => {
+    const id = (h as HandoffSummary & { roomAssignmentId?: string | null }).roomAssignmentId ?? null;
+    return id ? ((entry.roomAssignments ?? []).find((a) => a.id === id)?.room?.roomNumber ?? null) : null;
+  };
+  const rooms = handoffs.map(roomOf).filter((r): r is string => !!r);
   const checklist = useQuery({
-    queryKey: ["handoff-checklist", handoff.handoffType],
-    queryFn: () => getHandoffChecklist(session!, handoff.handoffType),
+    queryKey: ["handoff-checklist", type],
+    queryFn: () => getHandoffChecklist(session!, type),
     enabled: !!session,
   });
   const items = (checklist.data?.items ?? []) as HandoffChecklistItem[];
   const [ticks, setTicks] = useState<Record<string, boolean>>({});
   const allTicked = items.filter((i) => i.mandatory).every((i) => ticks[i.code] === true);
   const accept = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
       const c: Record<string, boolean> = {};
       for (const i of items) c[i.code] = ticks[i.code] === true;
-      return acceptHandoff(session!, handoff.id, c);
+      const failed: string[] = [];
+      for (const h of handoffs) {
+        try {
+          await acceptHandoff(session!, h.id, c);
+        } catch {
+          failed.push(roomOf(h) ?? h.id);
+        }
+      }
+      return failed;
     },
-    onSuccess: () => {
-      toast.success(`${dept} accepted${roomNo ? ` · Room ${roomNo}` : ""}`);
+    onSuccess: (failed) => {
+      const ok = handoffs.length - failed.length;
+      if (ok) toast.success(`${dept} accepted · ${rooms.length > 1 ? `Rooms ${rooms.join(", ")}` : rooms[0] ? `Room ${rooms[0]}` : plural(ok, "handoff")}`);
+      if (failed.length) toast.error(`${dept}: not accepted for ${failed.map((r) => `Room ${r}`).join(", ")} — try again`);
+      setTicks({});
       refresh();
     },
     onError: (e) => toastRefusal(e, "The handoff could not be accepted"),
   });
+  if (handoffs.length === 0) return null;
   return (
-    <div className="bind provisional" style={{ display: "grid", gap: 6 }}>
-      <span className="sm">
+    <div className="dept-row">
+      <span className="dept-what">
         <b>{dept}</b>
-        {roomNo ? ` · Room ${roomNo}` : ""} · told {toldAt ? fmtStamp(toldAt, tz) : "—"} · waiting to be accepted
+        <span className="meta"> · to accept: {rooms.length ? `${rooms.length > 1 ? "Rooms" : "Room"} ${rooms.join(", ")}` : plural(handoffs.length, "handoff")}</span>
       </span>
-      {items.length === 0 ? (
-        <span className="meta">{checklist.isLoading ? "Reading the checklist…" : "No checklist for this handoff."}</span>
-      ) : (
-        items.map((i) => (
-          <label key={i.code} className="sm" style={{ display: "flex", gap: 8, cursor: "pointer" }}>
-            <input type="checkbox" checked={ticks[i.code] === true} onChange={(e) => setTicks((p) => ({ ...p, [i.code]: e.target.checked }))} />
-            <span>
-              {i.description ?? words(i.code)}
-              {i.mandatory ? null : <span className="meta"> · optional</span>}
-            </span>
-          </label>
-        ))
-      )}
-      <div className="row-acts">
-        <Button
-          compact
-          state={accept.isPending ? "working" : allTicked ? "default" : "inert"}
-          title={allTicked ? undefined : "tick every item that is required first"}
-          workingLabel="Accepting…"
-          onClick={() => accept.mutate()}
-        >
-          Accept for {dept.toLowerCase()}
-        </Button>
-      </div>
+      <span className="dept-ticks">
+        {items.length === 0 ? (
+          <span className="meta">{checklist.isLoading ? "Reading the checklist…" : "No checklist"}</span>
+        ) : (
+          items.map((i) => (
+            <label key={i.code} className="sm" style={{ display: "inline-flex", gap: 6, cursor: "pointer", alignItems: "center" }}>
+              <input type="checkbox" checked={ticks[i.code] === true} onChange={(e) => setTicks((p) => ({ ...p, [i.code]: e.target.checked }))} />
+              <span>
+                {i.description ?? words(i.code)}
+                {i.mandatory ? null : <span className="meta"> · optional</span>}
+              </span>
+            </label>
+          ))
+        )}
+      </span>
+      <Button
+        className={allTicked ? "go" : undefined}
+        state={accept.isPending ? "working" : allTicked ? "default" : "inert"}
+        title={allTicked ? undefined : "tick what they confirmed first"}
+        workingLabel="Accepting…"
+        onClick={() => accept.mutate()}
+      >
+        Accept{handoffs.length > 1 ? ` all ${handoffs.length}` : ""}
+      </Button>
     </div>
   );
 }
@@ -208,14 +225,11 @@ export function HandoffsCard({ entry, tz }: { entry: EntryDetail; tz: string }) 
           {before ? handoffWord(before) : <span className="warn-ink">not started — the move to Check-out waits for it</span>}
         </Fact>
       </Facts>
-      {/* The departments' own handoffs waiting to be accepted — below the facts, one row each. */}
+      {/* The departments' own handoffs waiting to be accepted — one row per department. */}
       {past ? null : (
-        <div className="stack" style={{ marginTop: 10 }}>
-          {[...housekeeping, ...kitchen]
-            .filter((h) => h.state === "CREATED")
-            .map((h) => (
-              <AcceptDepartmentHandoff key={h.id} entry={entry} handoff={h} tz={tz} />
-            ))}
+        <div className="dept-rows">
+          <AcceptDepartment entry={entry} type="H2" handoffs={housekeeping.filter((h) => h.state === "CREATED")} />
+          <AcceptDepartment entry={entry} type="H3" handoffs={kitchen.filter((h) => h.state === "CREATED")} />
         </div>
       )}
       {past ? null : !before ? (

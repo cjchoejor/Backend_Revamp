@@ -1500,7 +1500,18 @@ export type ChangeBookingItem = {
  * line opening a short menu — each choice with what it does under its name. The menu is drawn at the
  * desk's root so the sticky head never clips it; Escape, a press outside or a choice closes it.
  */
-export function ChangeBookingMenu({ items, label = "Change booking" }: { items: ChangeBookingItem[]; label?: string }) {
+export function ChangeBookingMenu({
+  items,
+  label = "Change booking",
+  badge = 0,
+  badgeTitle,
+}: {
+  items: ChangeBookingItem[];
+  label?: string;
+  /** Something owed in the menu, in red on its button (2026-10-29 — the keys owed today). */
+  badge?: number;
+  badgeTitle?: string;
+}) {
   const [open, setOpen] = useState(false);
   const [at, setAt] = useState<{ top: number; right: number } | null>(null);
   const btnRef = useRef<HTMLSpanElement | null>(null);
@@ -1536,8 +1547,20 @@ export function ChangeBookingMenu({ items, label = "Change booking" }: { items: 
   return (
     <>
       <span ref={btnRef} className="cb-btn">
-        <Button kind="secondary" aria-haspopup="menu" aria-expanded={open} className={open ? "on" : undefined} onClick={() => setOpen((v) => !v)}>
+        <Button
+          kind="secondary"
+          aria-haspopup="menu"
+          aria-expanded={open}
+          className={[open ? "on" : "", badge ? "stage-due" : ""].filter(Boolean).join(" ") || undefined}
+          title={badge ? badgeTitle : undefined}
+          onClick={() => setOpen((v) => !v)}
+        >
           {label}
+          {badge ? (
+            <span className="due-n" aria-label={badgeTitle ?? `${badge} to do`}>
+              {badge}
+            </span>
+          ) : null}
           <Icon name="chev" className="cb-chev" />
         </Button>
       </span>

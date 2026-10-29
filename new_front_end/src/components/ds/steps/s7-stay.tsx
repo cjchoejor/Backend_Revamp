@@ -39,7 +39,7 @@ import {
   type StepPane,
 } from "./kit";
 import { WhoPaysCard, DisputesCard, FaultsCard, HandoffsCard, RaiseDisputeDialog, TermsChangeCard } from "./s7-desk";
-import { ChitsWaitingCard, FolioCard } from "./s7-folio";
+import { FolioCard } from "./s7-folio";
 import { NightsCard } from "./s7-nights";
 import { FlagDeficientDialog, KeysCard, KeysDueNotice, RoomsInUseCard, keysDue, keysDueWords } from "./s7-rooms";
 import { RoomsTableCard } from "./rooms-table";
@@ -135,7 +135,6 @@ export function S7Stay({
           target={chargeTarget}
           setTarget={setChargeTarget}
         />
-        <ChitsWaitingCard />
         <HandoffsCard entry={entry} tz={tz} />
         <TermsChangeCard entry={entry} />
         <WhoPaysCard entry={entry} tz={tz} />
@@ -143,14 +142,7 @@ export function S7Stay({
 
       {/* From the step line: each in a pop-up over the work column, the booking file clear. */}
       <WorkPopup open={popup === "nights"} keepMounted title={POPUP_TITLE.nights} onClose={() => setPopup(null)}>
-        <NightsCard
-          entry={entry}
-          setNightAuditOk={reportNight}
-          onMoveRoom={() => {
-            setPopup(null);
-            go("rooms");
-          }}
-        />
+        <NightsCard entry={entry} setNightAuditOk={reportNight} />
       </WorkPopup>
       <WorkPopup open={popup === "disputes"} title={POPUP_TITLE.disputes} onClose={() => setPopup(null)}>
         <DisputesCard
@@ -336,6 +328,12 @@ function StayActs({
   ];
   const guestsAndRooms: ChangeBookingItem[] = [
     {
+      key: "keys",
+      label: owed ? `Keys · ${owed} owed today` : "Keys",
+      note: owedWords.length ? owedWords.join(" · ") : "Each room's key — handed over, back, or lost.",
+      onSelect: () => onOpen("keys"),
+    },
+    {
       key: "guests",
       label: "Guest details & ID proof",
       note: "Each guest's document and photo — a guest added to the room is recorded here.",
@@ -381,21 +379,13 @@ function StayActs({
   ];
   return (
     <StageActs>
-      <Button
-        kind="secondary"
-        className={owed ? "stage-due" : undefined}
-        title={owedWords.length ? owedWords.join(" · ") : "Each room's key — handed over, back, or lost"}
-        onClick={() => onOpen("keys")}
-      >
-        Keys
-        {owed ? (
-          <span className="due-n" aria-label={`${owed} owed today`}>
-            {owed}
-          </span>
-        ) : null}
-      </Button>
       <ChangeBookingMenu label="Charges" items={charges} />
-      <ChangeBookingMenu label="Guests and rooms" items={guestsAndRooms} />
+      <ChangeBookingMenu
+        label="Guests and rooms"
+        items={guestsAndRooms}
+        badge={owed}
+        badgeTitle={owed ? `${owed} key${owed === 1 ? "" : "s"} owed today — ${owedWords.join(" · ")}` : undefined}
+      />
       <ChangeBookingMenu items={items} />
     </StageActs>
   );

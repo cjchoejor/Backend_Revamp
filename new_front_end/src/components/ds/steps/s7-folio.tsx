@@ -49,7 +49,44 @@ import {
 } from "./kit";
 import { WideDialog } from "./s6-shared";
 import { Help } from "@/components/ds/help";
-import { DateInput } from "@/components/ds/date-input";
+import { DateInput, TimeInput, timeInWords } from "@/components/ds/date-input";
+import { getPayer } from "@/lib/api/payer";
+import { payerWord } from "./s7-desk";
+import { useBookedBy } from "./s8-parts";
+
+/**
+ * What the charge was, asked in the outlet's own words (2026-10-29, operator: "simply saying 'what' is
+ * confusing"). The words go on the bill's line after the outlet and the chit.
+ */
+const WHAT_WORDS: Record<string, readonly [string, string]> = {
+  restaurant: ["What was ordered", "dinner · 2 covers"],
+  bar: ["What was ordered", "2 × beer, 1 × juice"],
+  roomservice: ["What was ordered", "club sandwich, 1 coffee"],
+  minibar: ["What was taken", "2 × Mineral water 1L, 1 × Beer · Druk 11000"],
+  laundry: ["What was washed or pressed", "3 shirts washed, 1 suit pressed"],
+  transport: ["Where to", "airport drop · Paro"],
+  conference: ["What it was for", "Hall A · half day, coffee break for 20"],
+  shop: ["What was bought", "1 scarf"],
+  other: ["What it was for", "late check-out · 3 hours"],
+};
+
+/** One numbered question of the charge form — a tick once it is answered (the advance box's look). */
+function ChargeStep({ n, done, title, help, children }: { n: number; done: boolean; title: string; help?: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <div className={`qstep${done ? " done" : ""}`}>
+      <span className="qn" aria-hidden="true">
+        {done ? "✓" : n}
+      </span>
+      <div>
+        <div className="qstep-title">
+          {title}
+          {help}
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
 
 /* ------------------------------------------------------------------ vocabulary */
 
@@ -343,7 +380,7 @@ function PostChargeDialog({
     : needsChit && !chit.trim()
       ? "the chit number — it is how the posting is matched to the outlet later"
       : !what.trim()
-        ? "what was taken"
+        ? "what it was"
         : !Number.isFinite(amt) || amt === 0
           ? "a net amount"
           : null;
@@ -353,7 +390,7 @@ function PostChargeDialog({
 
   const description = () => {
     if (!o) return what.trim();
-    const parts = [o.id === "other" ? null : o.label, chit.trim() ? `chit ${chit.trim()}` : null, what.trim(), at.trim() ? `at ${at.trim()}` : null, servedBy.trim() ? `served by ${servedBy.trim()}` : null];
+    const parts = [o.id === "other" ? null : o.label, chit.trim() ? `chit ${chit.trim()}` : null, what.trim(), at.trim() ? `at ${timeInWords(at)}` : null, servedBy.trim() ? `served by ${servedBy.trim()}` : null];
     return parts.filter(Boolean).join(" · ");
   };
 
@@ -382,7 +419,18 @@ function PostChargeDialog({
     onError: (e) => toastRefusal(e, "The charge could not be posted"),
   });
 
-  const billingModel = entry.folio?.billingModel ?? null;
+  // Who this kind of charge goes to — the server's Who-pays map, read, never worked out here.
+  const booked = useBookedBy(entry);
+  const payer = useQuery({
+    queryKey: ["payer", entry.id, entry.updatedAt],
+    queryFn: () => getPayer(session!, entry.id),
+    enabled: !!session && !!entry.folio && open,
+  });
+  const payerModel = payer.data?.map?.[lineType] ?? payer.data?.current ?? entry.folio?.billingModel ?? null;
+  const goesTo = payerModel ? `Goes to ${payerWord(payerModel, booked.party)}` : "Goes to the payer set under Who pays";
+  const whatWords = (o ? WHAT_WORDS[o.id] : null) ?? (["What it was for", ""] as const);
+  const billDone = !!o && (!needsChit || !!chit.trim()) && !!consumedOn;
+  const whatDone = !!what.trim() && Number.isFinite(amt) && amt !== 0;
 
   return (
     <>
@@ -399,98 +447,118 @@ function PostChargeDialog({
             <Button kind="quiet" state={post.isPending ? "inert" : "default"} onClick={() => setOutlet(null)}>
               Cancel
             </Button>
-            <Button state={post.isPending ? "working" : missing ? "inert" : "default"} title={missing ?? undefined} workingLabel="Posting…" onClick={() => post.mutate()}>
+            <Button
+              className={missing ? undefined : "go"}
+              state={post.isPending ? "working" : missing ? "inert" : "default"}
+              title={missing ?? undefined}
+              workingLabel="Posting…"
+              onClick={() => post.mutate()}
+            >
               Post
             </Button>
           </>
         }
       >
-        <div className="field">
-          <label>Where is it from?</label>
-          <Choice options={OUTLETS.map((x) => [x.id, x.label] as const)} value={outlet} onChange={(v) => setOutletState(v)} />
-        </div>
-        <div className="form2" style={{ marginTop: 8 }}>
-          <div className="field">
-            <label>
-              Chit number{needsChit ? "" : " · optional"}
-              <Help label="About the chit">The paper chit today; the till&rsquo;s own number later. A chit posts once.</Help>
-            </label>
-            <input className="input" value={chit} placeholder={o ? `${o.prefix}-1182` : ""} onChange={(e) => setChit(e.target.value)} />
-            {chitSeen ? <span className="hint warn-ink">a chit with this number is already on the folio — a chit posts once</span> : null}
-          </div>
-          <div className="field">
-            <label>
-              Room
-              <Help label="About the room">A till posts by room; the room finds the booking.</Help>
-            </label>
-            <TargetSelect value={target} onChange={setTarget} targets={targets} />
-          </div>
-          <div className="field">
-            <label>
-              Consumed on
-              <Help label="About the date">The day it was had, not the day you type it. A day the night audit has already closed can&rsquo;t take new charges.</Help>
-            </label>
-            <DateInput
-              className="input"
-              value={consumedOn}
-              max={hotelToday ?? undefined}
-              disabled={!hotelToday}
-              title={hotelToday ? undefined : "checking today's date at the hotel…"}
-              onChange={(e) => setConsumedOn(e.target.value)}
-            />
-            {consumedOn ? <span className="hint">{fmtDay(consumedOn)}</span> : null}
-          </div>
-          <div className="field">
-            <label>At · optional</label>
-            <input className="input" value={at} placeholder="8:15 PM" onChange={(e) => setAt(e.target.value)} />
-          </div>
-          {o?.id === "other" ? (
-            <div className="wide field">
-              <label>
-                Kind of charge
-                <Help label="About the kind">One of the kinds a tax invoice carries.</Help>
-              </label>
-              <Choice options={KINDS} value={kind} onChange={setKind} />
-            </div>
+        {/* Step by step (2026-10-29, operator): where it's from, then the chit, the room and when, then what it
+            was and the amount, then who it goes to — each question once the one before it is answered. */}
+        <div className="qsteps">
+          <ChargeStep n={1} done={!!o} title="Where is it from?">
+            <Choice options={OUTLETS.map((x) => [x.id, x.label] as const)} value={outlet} onChange={(v) => setOutletState(v)} />
+          </ChargeStep>
+          {o ? (
+            <ChargeStep n={2} done={billDone} title="The chit, the room and when">
+              <div className="form2">
+                <div className="field">
+                  <label>
+                    Chit number{needsChit ? "" : " · optional"}
+                    <Help label="About the chit">The number on the paper bill the outlet wrote. A chit posts once.</Help>
+                  </label>
+                  <input className="input" value={chit} placeholder={`${o.prefix}-1182`} onChange={(e) => setChit(e.target.value)} />
+                  {chitSeen ? <span className="hint warn-ink">a chit with this number is already on the folio — a chit posts once</span> : null}
+                </div>
+                <div className="field">
+                  <label>
+                    Room
+                    <Help label="About the room">The room the charge belongs to — or the whole booking.</Help>
+                  </label>
+                  <TargetSelect value={target} onChange={setTarget} targets={targets} />
+                </div>
+                <div className="field">
+                  <label>
+                    Consumed on
+                    <Help label="About the date">The day it was had, not the day you type it. A day the night audit has already closed can&rsquo;t take new charges.</Help>
+                  </label>
+                  <DateInput
+                    className="input"
+                    value={consumedOn}
+                    max={hotelToday ?? undefined}
+                    disabled={!hotelToday}
+                    title={hotelToday ? undefined : "checking today's date at the hotel…"}
+                    onChange={(e) => setConsumedOn(e.target.value)}
+                  />
+                  {consumedOn ? <span className="hint">{fmtDay(consumedOn)}</span> : null}
+                </div>
+                <div className="field">
+                  <label>At · optional</label>
+                  <TimeInput className="input" value={at} onChange={(e) => setAt(e.target.value)} />
+                </div>
+              </div>
+            </ChargeStep>
           ) : null}
-          <div className="wide field">
-            <label>
-              {o?.id === "minibar" ? "What was taken" : "What"}
-              {o?.id === "minibar" ? (
-                <Help label="About the minibar">
-                  Count what was taken in the room. There is no minibar price list yet, so type the total below.
+          {o && billDone ? (
+            <ChargeStep n={3} done={whatDone} title="What it was, and the amount">
+              <div className="form2">
+                {o.id === "other" ? (
+                  <div className="wide field">
+                    <label>
+                      Kind of charge
+                      <Help label="About the kind">One of the kinds a tax invoice carries.</Help>
+                    </label>
+                    <Choice options={KINDS} value={kind} onChange={setKind} />
+                  </div>
+                ) : null}
+                <div className="wide field">
+                  <label>
+                    {whatWords[0]}
+                    {o.id === "minibar" ? (
+                      <Help label="About the minibar">
+                        Count what was taken in the room. There is no minibar price list yet, so type the total below.
+                      </Help>
+                    ) : null}
+                  </label>
+                  <input className="input" value={what} placeholder={whatWords[1]} onChange={(e) => setWhat(e.target.value)} />
+                </div>
+                <div className="field">
+                  <label>
+                    Net amount · Nu.
+                    <Help label="About the amount">Before service charge and GST — they post alongside, at the rates the hotel has set.</Help>
+                  </label>
+                  <input className="input money" inputMode="decimal" value={amount} placeholder="1,250.00" onChange={(e) => setAmount(e.target.value.replace(/[^\d.]/g, ""))} />
+                </div>
+                <div className="field">
+                  <label>Served by · optional</label>
+                  <input className="input" value={servedBy} placeholder="the waiter or the driver" onChange={(e) => setServedBy(e.target.value)} />
+                </div>
+              </div>
+            </ChargeStep>
+          ) : null}
+          {o && billDone && whatDone ? (
+            <ChargeStep
+              n={4}
+              done
+              title="Who it goes to"
+              help={
+                <Help label="About who pays">
+                  Each kind of charge goes to the payer set under Who pays — the guest, or the agency or company on account. A single charge
+                  can&rsquo;t be sent to another payer; change Who pays for the stay instead.
                 </Help>
-              ) : null}
-            </label>
-            <input
-              className="input"
-              value={what}
-              placeholder={o?.id === "minibar" ? "2 × Mineral water 1L, 1 × Beer · Druk 11000" : "dinner · 2 covers"}
-              onChange={(e) => setWhat(e.target.value)}
-            />
-          </div>
-          <div className="field">
-            <label>
-              Net amount · Nu.
-              <Help label="About the amount">Before service charge and GST — they post alongside, at the rates the hotel has set.</Help>
-            </label>
-            <input className="input money" inputMode="decimal" value={amount} placeholder="1,250.00" onChange={(e) => setAmount(e.target.value.replace(/[^\d.]/g, ""))} />
-          </div>
-          <div className="field">
-            <label>Served by · optional</label>
-            <input className="input" value={servedBy} placeholder="optional" onChange={(e) => setServedBy(e.target.value)} />
-          </div>
-          <div className="wide field">
-            <label>
-              Goes to
-              <Help label="About who pays">
-                Each kind of charge goes to the payer set under Who pays. One charge on its own can&rsquo;t be sent to a different payer yet.
-              </Help>
-            </label>
-            <select className="input" disabled value="model">
-              <option value="model">{billingModel ? BILLING_WORD[billingModel] ?? "as the billing model says" : "as the billing model says"}</option>
-            </select>
-          </div>
+              }
+            >
+              <span className="sm">
+                <b>{goesTo}</b>
+              </span>
+            </ChargeStep>
+          ) : null}
         </div>
         <div className="meta" style={{ marginTop: 8 }}>
           Kind: <b>{KIND_WORD[lineType] ?? "Other"}</b> · the line reads &ldquo;{description() || "…"}&rdquo;
