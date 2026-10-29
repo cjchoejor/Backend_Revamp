@@ -615,14 +615,20 @@ export function useFinishWhenDone(card: string): (opts?: { next?: string }) => v
   );
 }
 
-/** The last thing the desk pressed or typed, and when — read by `useFinishWhenMet`. */
-let lastInput: { target: EventTarget | null; at: number } = { target: null, at: 0 };
+/**
+ * The section the desk last pressed or typed in, and when — read by `useFinishWhenMet`. The
+ * section is noted at the press, not the element: ticking a box redraws it, and the element the
+ * press landed on is gone from the page by the time the section reads as done (2026-10-29, the
+ * registration tick that never moved on).
+ */
+let lastInput: { card: string | null; at: number } = { card: null, at: 0 };
 let listening = false;
 function listenForInput() {
   if (listening || typeof window === "undefined") return;
   listening = true;
   const note = (e: Event) => {
-    lastInput = { target: e.target, at: Date.now() };
+    const el = e.target instanceof Element ? e.target.closest("[data-flow]") : null;
+    lastInput = { card: el?.getAttribute("data-flow") ?? null, at: Date.now() };
   };
   window.addEventListener("pointerdown", note, true);
   window.addEventListener("keydown", note, true);
@@ -646,9 +652,7 @@ export function useFinishWhenMet(card: string) {
     const before = was.current;
     was.current = done;
     if (before || !done || !flow.on) return;
-    const el = document.getElementById(anchorFor(card));
-    const t = lastInput.target as Node | null;
-    if (!el || !t || !el.contains(t) || Date.now() - lastInput.at > 30_000) return;
+    if (lastInput.card !== card || Date.now() - lastInput.at > 30_000) return;
     flow.done(card);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [done]);
