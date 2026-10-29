@@ -35,6 +35,7 @@ import { placeStays, type PlacementItem } from "../../lib/room-placement.js";
 import { applyRoomFlagRepairs, planRoomFlagRepairs } from "../../lib/room-flag-repair.js";
 import { buildWorld, checkBookingRooms, currentPassSeal, sealSelect, type BookingRoomsAnswer, type World } from "./room-placement-service.js";
 import { selectOption } from "./s1-availability-service.js";
+import { carryBedsToNewRooms, readBedsBefore } from "./entry-bed-plan-service.js";
 
 type Actor = { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" };
 
@@ -151,6 +152,9 @@ async function applyQuietMoves(
   const touched = new Set<string>();
   for (const m of maps.values()) for (const [a, b] of m) touched.add(a).add(b);
   if (touched.size === 0) return;
+  // Each booking's beds as they were to be — carried to the rooms the move gives them (2026-10-29).
+  const bedsBefore = new Map<string, Awaited<ReturnType<typeof readBedsBefore>>>();
+  for (const entryId of maps.keys()) bedsBefore.set(entryId, await readBedsBefore(prisma, entryId));
   await prisma.$transaction(
     async (tx) => {
       for (const [entryId, map] of maps) {
@@ -159,6 +163,7 @@ async function applyQuietMoves(
     },
     { timeout: 30_000 },
   );
+  for (const [entryId, map] of maps) await carryBedsToNewRooms(prisma, entryId, bedsBefore.get(entryId) ?? new Map(), map);
   const plan = await planRoomFlagRepairs(prisma, { roomIds: [...touched] });
   if (plan.plan.length > 0) await applyRoomFlagRepairs(prisma, plan.plan, plan.today);
 }
@@ -850,22 +855,36 @@ function windowOf(nights: string[]): { from: Date; to: Date } {
  * number (`ROOM_CHANGE`), it is the room change, other bookings' system rooms moved out of the way
  * first (`makeWayForRoom`). Nothing written.
  */
-export async function listArrivalRoomChoices(prisma: PrismaClient, entryId: string, fromRoomId: string) {
+export async function listArrivalRoomChoices(
+  prisma: PrismaClient,
+  entryId: string,
+  fromRoomId: string,
+  /**
+   * Only these nights (2026-10-29, operator: "I changed the room … by choosing night one from the
+   * drop down, but it also changed night two"): the room for the nights named, the guest keeping it
+   * on the others — always the room change, which can put a stay in two rooms.
+   */
+  onlyNights?: string[] | null,
+) {
   const e = await loadEntry(prisma, entryId);
   if (!e) throw new NotFoundError("Entry");
   if (e.currentStage !== "S5") throw new ValidationError("Rooms are given this way at Arrival");
   if (e.status !== "ACTIVE") throw new ValidationError("This booking is not active — resume it first");
   const seal = currentPassSeal(e);
-  if (sealHasBookingRooms(seal) && e.roomAssignments.length === 0) {
+  const allNights = await nightsInRoom(prisma, e, fromRoomId);
+  const asked = onlyNights?.length ? allNights.filter((d) => onlyNights.includes(d)) : null;
+  if (onlyNights?.length && (!asked || asked.length === 0)) throw new ValidationError("This room is not the booking's on that night");
+  const someNights = !!asked && asked.length < allNights.length;
+  if (!someNights && sealHasBookingRooms(seal) && e.roomAssignments.length === 0) {
     const out = await listQuietRoomChoices(prisma, entryId, fromRoomId);
-    return { mode: "CHOOSE" as const, ...out };
+    return { mode: "CHOOSE" as const, nights: allNights, ...out };
   }
-  const nights = await nightsInRoom(prisma, e, fromRoomId);
+  const nights = asked ?? allNights;
   if (nights.length === 0) throw new ValidationError("That room is not one of this booking's rooms from today on");
   const world = await buildWorld(prisma, { ...windowOf(nights), excludeEntryId: entryId });
   const typeId = world.roomTypeOf.get(fromRoomId);
   const type = typeId ? world.chart.roomTypes.find((t) => t.id === typeId) : null;
-  if (!type) return { mode: "ROOM_CHANGE" as const, typeName: null, choices: [] as ArrivalChoice[] };
+  if (!type) return { mode: "ROOM_CHANGE" as const, nights, typeName: null, choices: [] as ArrivalChoice[] };
   const own = new Set([
     ...(await prisma.roomAssignment.findMany({ where: { entryId }, select: { roomId: true } })).map((r) => r.roomId),
     ...(sealAsPerNight(seal, stayOf(e)) ?? []).flatMap((n) => n.roomIds.map((x) => x.roomId)),
@@ -896,7 +915,7 @@ export async function listArrivalRoomChoices(prisma: PrismaClient, entryId: stri
       }
     })
     .sort((a, b) => Number(b.available) - Number(a.available) || a.moves.length - b.moves.length || a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true }));
-  return { mode: "ROOM_CHANGE" as const, typeName: type.name, choices };
+  return { mode: "ROOM_CHANGE" as const, nights, typeName: type.name, choices };
 }
 
 /**
@@ -908,12 +927,14 @@ export async function listArrivalRoomChoices(prisma: PrismaClient, entryId: stri
 export async function makeWayForRoom(
   prisma: PrismaClient,
   actor: Actor,
-  input: { entryId: string; fromRoomId: string; toRoomId: string },
+  input: { entryId: string; fromRoomId: string; toRoomId: string; nights?: string[] | null },
 ): Promise<{ othersMoved: number; moves: Array<{ entryId: string; fromRoomNumber: string; toRoomNumber: string }> }> {
   const e = await loadEntry(prisma, input.entryId);
   if (!e) throw new NotFoundError("Entry");
   if (e.currentStage !== "S5") throw new ValidationError("A room is taken this way at Arrival");
-  const nights = await nightsInRoom(prisma, e, input.fromRoomId);
+  const all = await nightsInRoom(prisma, e, input.fromRoomId);
+  // Only the nights the new room takes (a change of one night leaves the others where they are).
+  const nights = input.nights?.length ? all.filter((d) => input.nights!.includes(d)) : all;
   if (nights.length === 0) return { othersMoved: 0, moves: [] };
   const world = await buildWorld(prisma, { ...windowOf(nights), excludeEntryId: input.entryId });
   const own = new Set(

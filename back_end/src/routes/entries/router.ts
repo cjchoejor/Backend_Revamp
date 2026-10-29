@@ -226,10 +226,25 @@ entriesRouter.post("/:id/room-change", requireActorLevel("L1"), validateBody(roo
     // Arrival takes the room (2026-10-29): another booking holding it only as the system's choice is
     // moved to another room of its type first — a quiet move, the same type and rate — so the room
     // change finds it free. Refused in words when that booking chose it by number.
-    const madeWay =
-      req.body.makeWay === true && req.body.toRoomId
-        ? await makeWayForRoom(prisma, actor, { entryId: req.params.id, fromRoomId: req.body.fromRoomId, toRoomId: req.body.toRoomId })
-        : null;
+    let madeWay: Awaited<ReturnType<typeof makeWayForRoom>> | null = null;
+    if (req.body.makeWay === true && req.body.toRoomId) {
+      madeWay = await makeWayForRoom(prisma, actor, { entryId: req.params.id, fromRoomId: req.body.fromRoomId, toRoomId: req.body.toRoomId });
+    } else if (req.body.makeWay === true && req.body.perNight?.length) {
+      // A room for some nights only: each new room makes way over its own nights.
+      const byRoom = new Map<string, string[]>();
+      for (const n of req.body.perNight as Array<{ date: string; roomId: string }>) {
+        if (n.roomId === req.body.fromRoomId) continue;
+        byRoom.set(n.roomId, [...(byRoom.get(n.roomId) ?? []), n.date.slice(0, 10)]);
+      }
+      let othersMoved = 0;
+      const moves: Awaited<ReturnType<typeof makeWayForRoom>>["moves"] = [];
+      for (const [toRoomId, nights] of byRoom) {
+        const one = await makeWayForRoom(prisma, actor, { entryId: req.params.id, fromRoomId: req.body.fromRoomId, toRoomId, nights });
+        othersMoved += one.othersMoved;
+        moves.push(...one.moves);
+      }
+      madeWay = { othersMoved, moves };
+    }
     const outcome = await changeRoomToNewSegment(prisma, actor, {
       entryId: req.params.id,
       fromRoomId: req.body.fromRoomId,

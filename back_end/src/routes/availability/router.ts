@@ -310,7 +310,11 @@ availabilityRouter.get("/entries/:id/arrival-room-choices", requireActorLevel("L
       res.status(400).json({ message: "Name the room (fromRoomId)" });
       return;
     }
-    res.json(await listArrivalRoomChoices(prisma, req.params.id, fromRoomId));
+    const nights = String(req.query.nights ?? "")
+      .split(",")
+      .map((d) => d.trim().slice(0, 10))
+      .filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d));
+    res.json(await listArrivalRoomChoices(prisma, req.params.id, fromRoomId, nights.length ? nights : null));
   } catch (e) {
     next(e);
   }

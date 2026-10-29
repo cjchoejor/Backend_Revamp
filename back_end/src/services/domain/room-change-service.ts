@@ -3468,8 +3468,19 @@ export async function releasePreOccupancyForReEntryTx(
 export async function changeRoomToNewSegment(
   ...args: Parameters<typeof changeRoomToNewSegmentInner>
 ): ReturnType<typeof changeRoomToNewSegmentInner> {
+  const input = args[2];
+  const { readBedsBefore, carryBedsToNewRooms } = await import("./entry-bed-plan-service.js");
+  const bedsBefore = input.dryRun ? null : await readBedsBefore(args[0], input.entryId);
   const out = await changeRoomToNewSegmentInner(...args);
   if (!out.dryRun) await traceRoomChangeSummary(args[0], args[1], args[2], out).catch(() => {});
+  // The guest's bed goes with them to the new room (2026-10-29) — the desk's choice or their ask.
+  if (bedsBefore && !out.dryRun) {
+    const pairs: Array<[string, string]> = [];
+    if (input.toRoomId) pairs.push([input.fromRoomId, input.toRoomId]);
+    for (const n of input.perNight ?? []) if (n.roomId !== input.fromRoomId) pairs.push([input.fromRoomId, n.roomId]);
+    for (const [from, to] of Object.entries(input.dateShift?.roomMap ?? {})) pairs.push([from, to]);
+    await carryBedsToNewRooms(args[0], input.entryId, bedsBefore, pairs);
+  }
   return out;
 }
 

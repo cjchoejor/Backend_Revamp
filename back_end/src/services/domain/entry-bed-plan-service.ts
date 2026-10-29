@@ -442,3 +442,60 @@ export async function applyBedPlanToAssignedRooms(
     /* the beds stay the desk's to set if this could not run */
   }
 }
+
+/* ------------------------------------------------------------------ carried through a room change */
+
+/** Each room's bed as the booking reads it now — the desk's choice, the guest's ask shared out, or the room's usual. */
+export type BedsBefore = Map<string, { bedType: RoomBedType; source: BedPlanRoom["source"] }>;
+
+/** Read before a room change, so the change can carry each room's bed to the room that replaces it. Never throws. */
+export async function readBedsBefore(prisma: PrismaClient, entryId: string): Promise<BedsBefore> {
+  try {
+    const p = await buildEntryBedPlan(prisma, entryId);
+    return new Map(p.rooms.map((r) => [r.roomId, { bedType: r.bedType as RoomBedType, source: r.source }] as const));
+  } catch {
+    return new Map();
+  }
+}
+
+/**
+ * After a room change (2026-10-29, operator: "if the guest had applied for a bed type in stage 1 or
+ * change configuration, while choosing a room or switching it shouldn't forget that the guest asked
+ * for that bed type"): each new room is made up as its old room was to be — the desk's choice, or the
+ * guest's ask as it was shared out — when the new room can be made up that way. Written into the
+ * plan, so the ask is not shared out afresh over the new rooms and handed to another room. A room's
+ * usual setup is not carried (the new room's own usual stands). Never throws; returns how many.
+ */
+export async function carryBedsToNewRooms(
+  prisma: PrismaClient,
+  entryId: string,
+  before: BedsBefore,
+  pairs: Iterable<readonly [string, string]>,
+): Promise<number> {
+  try {
+    const moves = [...pairs].filter(([from, to]) => from !== to && before.get(from) && before.get(from)!.source !== "USUAL");
+    if (moves.length === 0) return 0;
+    const entry = await prisma.entry.findUnique({ where: { id: entryId }, select: { bedPlan: true } });
+    if (!entry) return 0;
+    const plan = readStoredPlan(entry.bedPlan);
+    const rooms = await prisma.room.findMany({
+      where: { id: { in: moves.map(([, to]) => to) } },
+      select: { id: true, allowedBedTypes: true, roomType: { select: { allowedBedTypes: true } } },
+    });
+    let n = 0;
+    for (const [from, to] of moves) {
+      const bed = before.get(from)!.bedType;
+      if (plan[to] === bed) continue;
+      // A choice already recorded for the new room is the desk's and stands.
+      if (plan[to] && !(plan[from] && plan[to] === plan[from])) continue;
+      const room = rooms.find((r) => r.id === to);
+      if (!room || !effectiveAllowedBedTypes(room.allowedBedTypes, room.roomType?.allowedBedTypes ?? []).includes(bed)) continue;
+      plan[to] = bed;
+      n++;
+    }
+    if (n > 0) await prisma.entry.update({ where: { id: entryId }, data: { bedPlan: plan as Prisma.InputJsonValue } });
+    return n;
+  } catch {
+    return 0;
+  }
+}

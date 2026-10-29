@@ -484,6 +484,8 @@ async function amendNegotiationConfigurationInner(
         { roomTypeOf: (id) => typeOf.get(id) },
       );
     }
+    const { readBedsBefore, carryBedsToNewRooms } = await import("./entry-bed-plan-service.js");
+    const bedsBefore = await readBedsBefore(prisma, entryId);
     const sealed = await selectOption(
       prisma,
       configurationId,
@@ -491,6 +493,21 @@ async function amendNegotiationConfigurationInner(
       picks,
       bookingRooms ? { bookingRooms, ...(placedRooms ? { skipAvailability: true } : {}) } : undefined,
     );
+    // Each booking room keeps the bed it was to be made up as, in the room it now has (2026-10-29).
+    if (bookingRooms && sealHasBookingRooms(sealedBefore?.optionSelected)) {
+      const typeOfAny = () => "x";
+      const old = readBookingRooms(sealedBefore!.optionSelected, { checkIn: entry.checkInDate, checkOut: entry.checkOutDate }, typeOfAny);
+      const pairs: Array<[string, string]> = [];
+      for (const br of bookingRooms) {
+        const was = old.find((o) => o.key === br.key);
+        if (!was) continue;
+        for (const n of br.nights) {
+          const before = was.nights.find((w) => w.date === n.date)?.roomId ?? was.nights[0]?.roomId;
+          if (before && n.roomId && before !== n.roomId) pairs.push([before, n.roomId]);
+        }
+      }
+      await carryBedsToNewRooms(prisma, entryId, bedsBefore, pairs);
+    }
     newRoomIds = readOptionSelected(sealed!.optionSelected).distinctRoomIds;
     const sameSet =
       newRoomIds.length === priorRoomIds.length && newRoomIds.every((id) => priorRoomIds.includes(id));
