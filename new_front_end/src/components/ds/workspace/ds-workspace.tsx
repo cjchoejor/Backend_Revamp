@@ -1708,7 +1708,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   );
 
   if (topLayout) {
-    const headerClocks = runningClocks(entry, timersQuery.data?.items ?? [], (paymentStatusQuery.data?.paymentPlan?.plan ?? "FULL") !== "FULL");
+    const headerClocks = runningClocks(entry, timersQuery.data?.items ?? [], (paymentStatusQuery.data?.paymentPlan?.plan ?? "FULL") !== "FULL", clock.now);
     // The booking file opens on Charges & payments (2026-10-28, operator: "always make the charges tab
     // be shown in default in all stages"); Booking is a click away.
     const fileTab: "details" | BookingTab = view === "step" || view === "other" ? "money" : view;
@@ -2330,7 +2330,7 @@ function SidePanel({
  * The booking's running clocks as the desk names them, soonest first — one list for the side panel
  * and the header (2026-10-27), so the two cannot read a clock differently.
  */
-function runningClocks(entry: EntryDetail, timers: TimerRecordSummary[], promiseIsForTheRest: boolean): Array<{ t: TimerRecordSummary; label: string }> {
+function runningClocks(entry: EntryDetail, timers: TimerRecordSummary[], promiseIsForTheRest: boolean, now: number = Date.now()): Array<{ t: TimerRecordSummary; label: string }> {
   // The housekeeping (H2) and kitchen (H3) handoffs share one clock code; name them apart by
   // the handoff each clock is on, or both read "Housekeeping to accept".
   const handoffTypeById = new Map((entry.handoffs ?? []).map((h) => [h.id, h.handoffType]));
@@ -2347,6 +2347,10 @@ function runningClocks(entry: EntryDetail, timers: TimerRecordSummary[], promise
   };
   const sorted = timers
     .filter((t) => t.status === "SCHEDULED")
+    // The no-show cut-off is not a countdown until its grace starts — the guest's expected
+    // arrival (2026-10-29, operator: "no show cut off timer shouldn't show unless the 2 hr mark
+    // has been reached"). The arrival card still says when it falls.
+    .filter((t) => !t.showsFrom || new Date(t.showsFrom).getTime() <= now)
     .map((t) => ({ t, label: labelOf(t) }))
     .filter((x): x is { t: (typeof timers)[number]; label: string } => !!x.label)
     .sort((a, b) => a.t.firesAt.localeCompare(b.t.firesAt));

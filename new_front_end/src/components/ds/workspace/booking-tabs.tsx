@@ -53,7 +53,7 @@ import { PriceLinesTable, type PriceLinesFigures } from "@/components/ds/workspa
 import { PickBill } from "@/components/ds/steps/s1-bill";
 import type { EntryDetail } from "@/types/api";
 import { Help, HelpHere } from "@/components/ds/help";
-import { DateInput } from "@/components/ds/date-input";
+import { DateInput, TimeInput } from "@/components/ds/date-input";
 
 export type BookingTab = "money" | "requests" | "notes" | "docs" | "history";
 
@@ -699,7 +699,7 @@ export function RequestsView({ entry, sealed, tz }: { entry: EntryDetail; sealed
                   Time · optional
                   <Help label="About the time">On the hotel&rsquo;s clock.</Help>
                 </label>
-                <input className="input" type="time" value={forTime} onChange={(e) => setForTime(e.target.value)} />
+                <TimeInput className="input" value={forTime} onChange={(e) => setForTime(e.target.value)} />
               </div>
             </div>
             <div className="row-acts" style={{ marginTop: 10 }}>
@@ -996,7 +996,7 @@ export function NotesView({ entry, tz }: { entry: EntryDetail; tz: string }) {
                   <label>Day and time</label>
                   <div className="row-acts">
                     <DateInput className="input" min={day?.today} value={pickDate} onChange={(e) => setPickDate(e.target.value)} />
-                    <input className="input" type="time" value={pickTime} onChange={(e) => setPickTime(e.target.value)} />
+                    <TimeInput className="input" value={pickTime} onChange={(e) => setPickTime(e.target.value)} />
                   </div>
                 </div>
               ) : null}

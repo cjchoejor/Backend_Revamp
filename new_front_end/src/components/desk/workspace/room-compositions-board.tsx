@@ -1142,6 +1142,9 @@ export function RoomCompositionPlanner(props: DiscountEdit & {
   pickedRoomId?: string | null;
   /** Double-clicking a room opens its room-type change — see RoomCompositionsTable (2026-10-29). */
   onOpenRoom?: (roomId: string, night: string | null) => void;
+  /** The night shown, held by the caller so it survives the table being drawn again — see RoomCompositionsTable. */
+  nightView?: string;
+  onNightViewChange?: (v: string) => void;
   /** Seat the party on opening though rows were carried in — see RoomCompositionsTable. */
   autoSeat?: boolean;
   /** The booking's bed plan, one line per room — see RoomCompositionsTable. */

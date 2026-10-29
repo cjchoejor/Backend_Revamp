@@ -84,7 +84,7 @@ import { CancellationFiguresLine, WaiverTick, useRefundHow } from "./cancel-figu
 import { CompetingClaimsCard, passesOf, roomsHeldWord, useRoomNumbers, useRoomTypeNames } from "./s2-shared";
 import { PaymentPlanCard } from "./s3-money";
 import { Help, HelpHere } from "@/components/ds/help";
-import { DateInput } from "@/components/ds/date-input";
+import { DateInput, TimeInput } from "@/components/ds/date-input";
 
 /* ------------------------------------------------------------------ vocabulary */
 
@@ -1148,7 +1148,7 @@ function HoldTimeDialog({
             Blocked until · time
             <Help label="About the time">On the hotel&rsquo;s clock.</Help>
           </label>
-          <input className="input" type="time" value={time} onChange={(e) => setTime(e.target.value)} />
+          <TimeInput className="input" value={time} onChange={(e) => setTime(e.target.value)} />
         </div>
         <div className="wide field">
           <label>Why, if it is worth saying · optional</label>

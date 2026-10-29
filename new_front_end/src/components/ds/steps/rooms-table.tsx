@@ -184,6 +184,10 @@ export function RoomsTable({
    * otherwise it follows the seed, so a change made elsewhere shows here without a reload.
    */
   const plannerKey = editing ? "edit" : `seed:${canon(seed)}`;
+  // The night shown in the table lives here, above the planner's key (2026-10-29, operator: "I
+  // choose night 2 and changed a room … it switched the table to all nights"): the planner is drawn
+  // again on the booking's new rooms after every change, and kept the night only as its own state.
+  const [nightView, setNightView] = useState("");
 
   const changed = () =>
     refresh([
@@ -321,6 +325,8 @@ export function RoomsTable({
         roomDates={roomDates}
         roomLabels={roomNames.labels}
         initialCompositions={seed}
+        nightView={nightView}
+        onNightViewChange={setNightView}
         lockCommercial={inHouse}
         readOnly={!editing}
         onPickRoom={past || !roomActions ? undefined : (id) => setPicked((cur) => (cur === id ? null : id))}

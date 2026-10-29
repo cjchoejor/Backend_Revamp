@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState, type CSSProperties } from "react";
-import { CalendarDays } from "lucide-react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { CalendarDays, Clock } from "lucide-react";
+import { PickFooter, PickPopover, pickCell, pickColours } from "./pick-popover";
 
 /**
  * The desk's date box — typed and shown DD/MM/YYYY on every terminal (2026-10-27, operator: "make
@@ -9,8 +10,9 @@ import { CalendarDays } from "lucide-react";
  *
  * A bare `<input type="date">` draws in the BROWSER's order, so one terminal read 10/27/2026 and
  * the next 27/10/2026. This box types DD/MM/YYYY (the slashes go in as the desk keys digits) and
- * keeps the browser's own calendar behind the button at its end, so picking from a calendar still
- * works — the calendar never shows its own text.
+ * keeps a calendar behind the button at its end. The calendar is the desk's own since 2026-10-29
+ * (operator: "keep an OK or tick button in the calendar") — a day is picked, then ✓ OK; the
+ * browser's calendar had no way out but a press outside it.
  *
  * A drop-in for the native box: `value` is ISO (YYYY-MM-DD) and `onChange` receives
  * `{ target: { value } }` with ISO, as the native one did — only ever a whole, real date, or ""
@@ -114,6 +116,8 @@ export function DateInput({
     onBlur?.();
   };
   const inert = disabled || readOnly;
+  const calBtn = useRef<HTMLButtonElement | null>(null);
+  const [calOpen, setCalOpen] = useState(false);
 
   return (
     // Block-level and full width, as the native box drew under `.input`; a narrow place sizes
@@ -136,8 +140,15 @@ export function DateInput({
         onChange={(e) => typed(e.target.value)}
         onBlur={leave}
       />
-      <span
+      <button
+        ref={calBtn}
+        type="button"
         title="Pick from a calendar"
+        aria-label="Pick from a calendar"
+        aria-expanded={calOpen}
+        tabIndex={-1}
+        disabled={inert}
+        onClick={() => setCalOpen((o) => !o)}
         style={{
           position: "absolute",
           right: 1,
@@ -147,31 +158,252 @@ export function DateInput({
           display: "inline-flex",
           alignItems: "center",
           justifyContent: "center",
-          pointerEvents: inert ? "none" : "auto",
+          border: "none",
+          background: "transparent",
+          color: "currentColor",
+          padding: 0,
+          cursor: inert ? "default" : "pointer",
           opacity: inert ? 0.45 : 1,
         }}
       >
-        <CalendarDays aria-hidden style={{ width: 16, height: 16, color: "currentColor" }} />
-        {/* The browser's own calendar, invisible over the icon: a click opens it, and the day picked
-            comes back as ISO. Its own text is never seen. */}
-        <input
-          type="date"
+        <CalendarDays aria-hidden style={{ width: 16, height: 16 }} />
+      </button>
+      <PickPopover anchor={calBtn} open={calOpen} onCancel={() => setCalOpen(false)} width={292} label="Pick a day">
+        <CalendarPick
           value={iso}
           min={min}
           max={max}
-          disabled={inert}
-          tabIndex={-1}
-          aria-label="Pick from a calendar"
-          onChange={(e) => e.target.value && emit(clamp(e.target.value))}
-          style={{ position: "absolute", inset: 0, width: "100%", height: "100%", opacity: 0, cursor: "pointer", padding: 0, border: "none", background: "transparent" }}
+          onCancel={() => setCalOpen(false)}
+          onPick={(v) => {
+            setCalOpen(false);
+            emit(clamp(v));
+          }}
         />
-      </span>
+      </PickPopover>
     </span>
   );
 }
 
+const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const MONTH_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const WEEKDAYS = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
+const pad2 = (n: number) => String(n).padStart(2, "0");
+const isoOf = (y: number, m: number, d: number) => `${y}-${pad2(m)}-${pad2(d)}`;
+
+/** "2026-10-29" → "Thu 29 Oct 2026". */
+function dayInWords(iso: string): string {
+  const [y, m, d] = iso.split("-").map((x) => Number(x));
+  const wd = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][new Date(Date.UTC(y, m - 1, d)).getUTCDay()];
+  return `${wd} ${d} ${MONTH_SHORT[m - 1]} ${y}`;
+}
+
 /**
- * A day and a time of day — the DD/MM/YYYY box beside the browser's time box. A drop-in for
+ * The month on screen and the day picked; ✓ OK puts the day in the box, Cancel leaves the box as
+ * it was. A double click is a pick and OK in one. Days outside min / max are shut.
+ */
+function CalendarPick({ value, min, max, onPick, onCancel }: { value: string; min?: string; max?: string; onPick: (iso: string) => void; onCancel: () => void }) {
+  // The month it opens on: the box's day, else the first day it allows, else this month on this
+  // machine (only which month is shown first — nothing is picked from it).
+  const opening = value || min || (() => { const n = new Date(); return isoOf(n.getFullYear(), n.getMonth() + 1, n.getDate()); })();
+  const [ym, setYm] = useState(() => opening.slice(0, 7));
+  const [draft, setDraft] = useState(value);
+  const [y, m] = ym.split("-").map((x) => Number(x));
+  const shift = (by: number) => {
+    const d = new Date(Date.UTC(y, m - 1 + by, 1));
+    setYm(`${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}`);
+  };
+  const lead = (new Date(Date.UTC(y, m - 1, 1)).getUTCDay() + 6) % 7;
+  const cells = Array.from({ length: 42 }, (_, k) => {
+    const d = new Date(Date.UTC(y, m - 1, 1 - lead + k));
+    return { iso: isoOf(d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate()), day: d.getUTCDate(), inMonth: d.getUTCMonth() === m - 1 };
+  });
+  const shut = (iso: string) => (!!min && iso < min) || (!!max && iso > max);
+  const navBtn: CSSProperties = { width: 30, height: 30, border: `1px solid ${pickColours.line2}`, borderRadius: 4, background: pickColours.surface, color: pickColours.ink, cursor: "pointer", fontSize: 16, lineHeight: 1, padding: 0 };
+  const canOk = !!draft && !shut(draft);
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+        <button type="button" style={navBtn} aria-label="The month before" onClick={() => shift(-1)}>‹</button>
+        <b style={{ flex: 1, textAlign: "center", fontSize: 14 }}>{MONTH_NAMES[m - 1]} {y}</b>
+        <button type="button" style={navBtn} aria-label="The month after" onClick={() => shift(1)}>›</button>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 2 }} role="grid" aria-label={`${MONTH_NAMES[m - 1]} ${y}`}>
+        {WEEKDAYS.map((w) => (
+          <span key={w} style={{ textAlign: "center", fontSize: 12, fontWeight: 600, color: pickColours.muted, paddingBottom: 2 }}>{w}</span>
+        ))}
+        {cells.map((c) => {
+          const off = shut(c.iso);
+          const on = c.iso === draft;
+          return (
+            <button
+              key={c.iso}
+              type="button"
+              data-day={c.iso}
+              aria-pressed={on}
+              aria-label={dayInWords(c.iso)}
+              disabled={off}
+              onClick={() => setDraft(c.iso)}
+              onDoubleClick={() => !off && onPick(c.iso)}
+              style={pickCell(on, off, { opacity: c.inMonth || on ? 1 : 0.5 })}
+            >
+              {c.day}
+            </button>
+          );
+        })}
+      </div>
+      <PickFooter picked={draft ? dayInWords(draft) : "Pick a day"} canOk={canOk} onOk={() => canOk && onPick(draft)} onCancel={onCancel} />
+    </div>
+  );
+}
+
+/** "15:05" → "3:05 PM"; "" when not a time. */
+export function timeInWords(hhmm?: string | null): string {
+  const t = /^(\d{2}):(\d{2})$/.exec(hhmm ?? "");
+  if (!t) return "";
+  const h = Number(t[1]);
+  return `${h % 12 === 0 ? 12 : h % 12}:${t[2]} ${h < 12 ? "AM" : "PM"}`;
+}
+
+type TimeInputProps = {
+  /** "HH:MM", 24-hour; "" when unset. */
+  value: string | null | undefined;
+  onChange?: (e: ChangeLike) => void;
+  /** The earliest and latest times open, "HH:MM" (both included). */
+  min?: string;
+  max?: string;
+  /** The minutes offered, every N (5 by default); the box's own minute is always offered too. */
+  minuteStep?: number;
+  disabled?: boolean;
+  className?: string;
+  style?: CSSProperties;
+  placeholder?: string;
+  "aria-label"?: string;
+};
+
+/**
+ * The desk's time box (2026-10-29, operator: "keep an OK or tick button … in the time when the
+ * user is choosing" — the browser's time box opened a list with no way out but a press outside).
+ * A press opens the hour, the minutes and AM / PM; ✓ OK puts the time in the box, Cancel or Escape
+ * leaves it as it was. Times outside min / max are shut. A drop-in for `<input type="time">`:
+ * `value` and `onChange({ target: { value } })` are "HH:MM", 24-hour.
+ */
+export function TimeInput({ value, onChange, min, max, minuteStep = 5, disabled, className, style, placeholder = "Pick a time", "aria-label": ariaLabel }: TimeInputProps) {
+  const btn = useRef<HTMLButtonElement | null>(null);
+  const [open, setOpen] = useState(false);
+  const shown = timeInWords(value);
+  return (
+    <>
+      <button
+        ref={btn}
+        type="button"
+        className={className}
+        disabled={disabled}
+        aria-label={ariaLabel ?? "Time"}
+        aria-expanded={open}
+        data-time-input=""
+        onClick={() => setOpen((o) => !o)}
+        style={{ display: "inline-flex", alignItems: "center", justifyContent: "space-between", gap: 8, textAlign: "left", cursor: disabled ? "default" : "pointer", minWidth: 0, ...style }}
+      >
+        <span style={{ color: shown ? undefined : pickColours.muted, whiteSpace: "nowrap" }}>{shown || placeholder}</span>
+        <Clock aria-hidden style={{ width: 16, height: 16, flex: "0 0 auto", opacity: disabled ? 0.45 : 0.8 }} />
+      </button>
+      <PickPopover anchor={btn} open={open} onCancel={() => setOpen(false)} width={318} label="Pick a time">
+        <TimePick
+          value={value ?? ""}
+          min={min}
+          max={max}
+          minuteStep={minuteStep}
+          onCancel={() => setOpen(false)}
+          onPick={(v) => {
+            setOpen(false);
+            onChange?.({ target: { value: v } });
+          }}
+        />
+      </PickPopover>
+    </>
+  );
+}
+
+function TimePick({ value, min, max, minuteStep, onPick, onCancel }: { value: string; min?: string; max?: string; minuteStep: number; onPick: (v: string) => void; onCancel: () => void }) {
+  const t = /^(\d{2}):(\d{2})$/.exec(value);
+  const [h12, setH12] = useState<number | null>(t ? Number(t[1]) % 12 || 12 : null);
+  const [mi, setMi] = useState<number | null>(t ? Number(t[2]) : null);
+  const [ap, setAp] = useState<"AM" | "PM" | null>(t ? (Number(t[1]) < 12 ? "AM" : "PM") : null);
+  const to24 = (h: number, m: number, a: "AM" | "PM") => `${pad2((h % 12) + (a === "PM" ? 12 : 0))}:${pad2(m)}`;
+  const open = (hhmm: string) => (!min || hhmm >= min) && (!max || hhmm <= max);
+  const minutes = Array.from(new Set([...Array.from({ length: Math.ceil(60 / minuteStep) }, (_, k) => k * minuteStep), ...(mi != null ? [mi] : [])])).sort((a, b) => a - b);
+  const hours = [12, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+  const aps: Array<"AM" | "PM"> = ap ? [ap] : ["AM", "PM"];
+  const hourOpen = (h: number) => aps.some((a) => minutes.some((m) => open(to24(h, m, a))));
+  const minuteOpen = (m: number) => aps.some((a) => (h12 != null ? [h12] : hours).some((h) => open(to24(h, m, a))));
+  const apOpen = (a: "AM" | "PM") => (h12 != null ? [h12] : hours).some((h) => (mi != null ? [mi] : minutes).some((m) => open(to24(h, m, a))));
+  const whole = h12 != null && mi != null && ap != null ? to24(h12, mi, ap) : null;
+  const canOk = !!whole && open(whole);
+  const head: CSSProperties = { fontSize: 12, fontWeight: 600, color: pickColours.muted, margin: "0 0 4px" };
+  return (
+    <div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        <div>
+          <p style={head}>Hour</p>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 3 }}>
+            {hours.map((h) => {
+              const shut = !hourOpen(h);
+              return (
+                <button key={h} type="button" data-hour={h} aria-pressed={h === h12} disabled={shut} onClick={() => setH12(h)} style={pickCell(h === h12, shut)}>
+                  {h}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        <div>
+          <p style={head}>Minutes</p>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 3 }}>
+            {minutes.map((m) => {
+              const shut = !minuteOpen(m);
+              return (
+                <button key={m} type="button" data-minute={m} aria-pressed={m === mi} disabled={shut} onClick={() => setMi(m)} style={pickCell(m === mi, shut)}>
+                  :{pad2(m)}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginTop: 8 }}>
+        {(["AM", "PM"] as const).map((a) => {
+          const shut = !apOpen(a);
+          return (
+            <button key={a} type="button" data-ampm={a} aria-pressed={a === ap} disabled={shut} onClick={() => setAp(a)} style={pickCell(a === ap, shut, { border: `1px solid ${a === ap ? pickColours.accent : pickColours.line2}` })}>
+              {a}
+            </button>
+          );
+        })}
+      </div>
+      <PickFooter
+        picked={
+          whole ? (
+            open(whole) ? (
+              <b style={{ color: pickColours.ink }}>{timeInWords(whole)}</b>
+            ) : (
+              <span style={{ color: "var(--danger, #b3261e)", fontWeight: 600 }}>
+                {timeInWords(whole)} is not open{min && whole < min ? ` — from ${timeInWords(min)}` : max ? ` — until ${timeInWords(max)}` : ""}
+              </span>
+            )
+          ) : (
+            "Pick the hour, minutes and AM or PM"
+          )
+        }
+        canOk={canOk}
+        onOk={() => whole && canOk && onPick(whole)}
+        onCancel={onCancel}
+      />
+    </div>
+  );
+}
+
+/**
+ * A day and a time of day — the DD/MM/YYYY box beside the desk's time box. A drop-in for
  * `<input type="datetime-local">`: `value` is "YYYY-MM-DDTHH:MM", and `onChange` gets that once both
  * halves are in, or "" while either is missing.
  */
@@ -207,11 +439,13 @@ export function DateTimeInput({
           emit(e.target.value, time);
         }}
       />
-      <input
-        type="time"
+      <TimeInput
         className={className}
-        style={{ flex: "0 0 auto", width: 130 }}
+        style={{ flex: "0 0 auto", width: 140 }}
         value={time}
+        // On the first or last day allowed, the times before or after the bound are shut.
+        min={min && date && date === min.slice(0, 10) ? min.slice(11, 16) || undefined : undefined}
+        max={max && date && date === max.slice(0, 10) ? max.slice(11, 16) || undefined : undefined}
         disabled={disabled}
         aria-label={ariaLabel ? `${ariaLabel} — time` : "Time"}
         onChange={(e) => {

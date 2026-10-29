@@ -109,7 +109,8 @@ export async function deskMoneyFor(session: Session, entryIds: string[]) {
 export type DeskTimerRow = {
   entryId: string;
   running: number;
-  next: Array<{ timerCode: string; timerType: string; stageContext: string | null; firesAt: string; handoffType?: string | null }>;
+  /** `showsFrom` — the clock is shown from then, not before (the no-show cut-off, from its grace; 2026-10-29). */
+  next: Array<{ timerCode: string; timerType: string; stageContext: string | null; firesAt: string; showsFrom?: string | null; handoffType?: string | null }>;
 };
 
 export async function deskTimersFor(session: Session, entryIds: string[]) {

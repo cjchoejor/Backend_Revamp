@@ -29,12 +29,14 @@ import {
   type HandoffChecklistItem,
 } from "@/lib/api/pre-arrival";
 import { s5Readiness } from "@/lib/desk/workspace";
-import { fmtStamp, fmtTime, instantYmd, money } from "@/lib/ds/format";
+import { fmtDay, fmtStamp, fmtTime, instantYmd, money } from "@/lib/ds/format";
+import { TimeInput, timeInWords } from "@/components/ds/date-input";
 import { AdvanceSettlementBlock } from "@/components/desk/workspace/advance-settlement";
 import { IdentityProofBlock } from "@/components/desk/workspace/identity-proof";
 import type { EntryDetail } from "@/types/api";
 import {
   AnswerLine,
+  Choice,
   Fact,
   FactLine,
   Facts,
@@ -184,20 +186,22 @@ function ExpectedArrivalFact({ entry }: { entry: EntryDetail }) {
   const refresh = useRefreshEntry(entry.id);
   const [editing, setEditing] = useState(false);
   const [time, setTime] = useState("");
+  // The check-in day, or the next morning (2026-10-29 — a future booking may arrive after midnight).
+  const [day, setDay] = useState<"CHECKIN" | "NEXT">("CHECKIN");
   const q = useQuery({
     queryKey: ["expected-arrival", entry.id],
     queryFn: () => getExpectedArrival(session!, entry.id),
     enabled: !!session,
   });
   const save = useMutation({
-    mutationFn: (t: string | null) => setExpectedArrival(session!, entry.id, t),
+    mutationFn: ({ t, next }: { t: string | null; next: boolean }) => setExpectedArrival(session!, entry.id, t, next),
     onSuccess: (r) => {
       toast.success(
         r.cutoffAlreadyReached
           ? "Arrival time recorded — the no-show cut-off had already passed; reopening the booking is the FOM's reactivation"
           : r.rearmedAt
-            ? `Expected at ${fmtTime(r.at, tz)} — the no-show cut-off is now ${fmtTime(r.rearmedAt, tz)}`
-            : `Expected at ${fmtTime(r.at, tz)}`,
+            ? `Expected ${when(r.at)} — the no-show cut-off is now ${when(r.rearmedAt)}`
+            : `Expected ${when(r.at)}`,
       );
       setEditing(false);
       refresh([["expected-arrival", entry.id]]);
@@ -211,6 +215,30 @@ function ExpectedArrivalFact({ entry }: { entry: EntryDetail }) {
   const today = instantYmd(clock.now, tz);
   const when = (v: string | null | undefined) => (v && instantYmd(v, tz) !== today ? fmtStamp(v, tz) : fmtTime(v, tz));
   const grace = d?.graceMinutes == null ? null : d.graceMinutes % 60 === 0 ? `${d.graceMinutes / 60} hour${d.graceMinutes === 60 ? "" : "s"}` : `${d.graceMinutes} minutes`;
+
+  // What may be picked (2026-10-29, operator: "it shouldn't let the time pick be … 2 hrs (or the
+  // time set in the admin console) later than the current time — say it is 5 pm, it should let the
+  // user pick 3 pm"). The earliest is the server's — now less the grace; on an earlier day nothing.
+  const dayOf = (k: "CHECKIN" | "NEXT") => (k === "NEXT" ? d?.dayAfterDate : d?.checkInDate) ?? null;
+  const minFor = (k: "CHECKIN" | "NEXT") => {
+    const dy = dayOf(k);
+    if (!d?.earliest || !dy) return undefined;
+    return dy < d.earliest.date ? "24:00" : dy === d.earliest.date ? d.earliest.time : undefined;
+  };
+  // The next morning, before the hotel's check-out time — the last minute before it.
+  const maxFor = (k: "CHECKIN" | "NEXT") => {
+    if (k !== "NEXT" || !d?.nextMorningLatest) return undefined;
+    const [h, m] = d.nextMorningLatest.split(":").map((x) => Number(x));
+    const last = h * 60 + m - 1;
+    return last < 0 ? "00:00" : `${String(Math.floor(last / 60)).padStart(2, "0")}:${String(last % 60).padStart(2, "0")}`;
+  };
+  const fits = (t: string, k: "CHECKIN" | "NEXT") => {
+    const lo = minFor(k);
+    const hi = maxFor(k);
+    return /^\d\d:\d\d$/.test(t) && (!lo || t >= lo) && (!hi || t <= hi);
+  };
+  const dayPassed = minFor(day) === "24:00";
+  const timeOk = fits(time, day);
   return (
     <Fact k="Expected arrival">
       {!d ? (
@@ -242,26 +270,62 @@ function ExpectedArrivalFact({ entry }: { entry: EntryDetail }) {
           ) : null}
           <Live>
             {editing ? (
-              <div className="row-acts">
-                <input className="input" type="time" value={time} onChange={(e) => setTime(e.target.value)} style={{ width: 140 }} />
-                <Button
-                  kind="secondary"
-                  compact
-                  state={save.isPending ? "working" : /^\d\d:\d\d$/.test(time) ? "default" : "inert"}
-                  title={/^\d\d:\d\d$/.test(time) ? undefined : "put in the time the guest gave"}
-                  workingLabel="Saving…"
-                  onClick={() => save.mutate(time)}
-                >
-                  Save
-                </Button>
-                {d.guestTime ? (
-                  <Button kind="quiet" compact onClick={() => save.mutate(null)}>
-                    Use the hotel&rsquo;s time
-                  </Button>
+              <div style={{ display: "grid", gap: 8, marginTop: 4 }}>
+                {d.offerNextMorning && d.checkInDate && d.dayAfterDate ? (
+                  <Choice
+                    options={[
+                      ["CHECKIN", `The check-in day · ${fmtDay(d.checkInDate)}`],
+                      ["NEXT", `The next morning · ${fmtDay(d.dayAfterDate)}`],
+                    ]}
+                    value={day}
+                    onChange={(v) => {
+                      setDay(v);
+                      // A time that does not fit the other day is taken out, not carried.
+                      if (!fits(time, v)) setTime("");
+                    }}
+                  />
                 ) : null}
-                <Button kind="quiet" compact onClick={() => setEditing(false)}>
-                  Cancel
-                </Button>
+                <div className="row-acts">
+                  <TimeInput
+                    className="input"
+                    value={time}
+                    min={minFor(day)}
+                    max={maxFor(day)}
+                    onChange={(e) => setTime(e.target.value)}
+                    style={{ width: 150 }}
+                    aria-label="The time the guest gave"
+                  />
+                  <Button
+                    className={timeOk ? "go" : undefined}
+                    compact
+                    state={save.isPending ? "working" : timeOk ? "default" : "inert"}
+                    reason={timeOk ? undefined : "pick the time the guest gave"}
+                    workingLabel="Saving…"
+                    onClick={() => timeOk && save.mutate({ t: time, next: day === "NEXT" })}
+                  >
+                    Save
+                  </Button>
+                  {d.guestTime ? (
+                    <Button kind="quiet" compact onClick={() => save.mutate({ t: null, next: false })}>
+                      Use the hotel&rsquo;s time
+                    </Button>
+                  ) : null}
+                  <Button kind="quiet" compact onClick={() => setEditing(false)}>
+                    Cancel
+                  </Button>
+                </div>
+                {dayPassed ? (
+                  <span className="sm stop-ink" role="alert">
+                    {fmtDay(dayOf(day))} has passed — the guest can no longer be expected then.
+                    {d.offerNextMorning && day === "CHECKIN" ? " Pick the next morning, or change the dates." : " Change the dates instead."}
+                  </span>
+                ) : minFor(day) ? (
+                  <span className="sm meta">
+                    From {timeInWords(minFor(day))} — earlier, the no-show cut-off ({grace ?? "the grace"} after the arrival) would already have passed.
+                  </span>
+                ) : day === "NEXT" && d.nextMorningLatest ? (
+                  <span className="sm meta">Before {timeInWords(d.nextMorningLatest)}, the hotel&rsquo;s check-out time — later than that the first night is missed.</span>
+                ) : null}
               </div>
             ) : d.editable ? (
               <div>
@@ -269,7 +333,11 @@ function ExpectedArrivalFact({ entry }: { entry: EntryDetail }) {
                   kind="quiet"
                   compact
                   onClick={() => {
-                    setTime(d.guestTime ?? d.time);
+                    const k = d.dayAfter ? "NEXT" : "CHECKIN";
+                    const seed = d.guestTime ?? d.time;
+                    setDay(k);
+                    // The hotel's time, or one that no longer fits (it is past), opens empty.
+                    setTime(fits(seed, k) ? seed : "");
                     setEditing(true);
                   }}
                 >

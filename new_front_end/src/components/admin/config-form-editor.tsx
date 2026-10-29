@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { TimeInput } from "@/components/ds/date-input";
 import {
   ACK_WINDOW_LABELS,
   DWELL_LEVELS,
@@ -389,7 +390,7 @@ export function ConfigFormEditor({ schema, value, onChange }: Props) {
       return (
         <label className="block space-y-1">
           <span className="admin-muted text-xs">{schema.label}</span>
-          <input type="time" className="admin-input" value={isTime ? str : ""} onChange={(e) => onChange(e.target.value)} />
+          <TimeInput className="admin-input" value={isTime ? str : ""} onChange={(e) => onChange(e.target.value)} />
           {!isTime && str ? (
             <span className="admin-muted text-[10px]">
               Currently a cron expression in UTC: <code>{str}</code> — pick a time to replace it.

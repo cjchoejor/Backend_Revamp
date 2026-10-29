@@ -125,7 +125,18 @@ export type ExpectedArrival = {
   time: string;
   source: "GUEST" | "HOTEL";
   guestTime: string | null;
+  /** The guest is expected the morning after the check-in day (2026-10-29). */
+  dayAfter?: boolean;
   standardTime: string;
+  /** The check-in day and the day after it, "YYYY-MM-DD". */
+  checkInDate?: string | null;
+  dayAfterDate?: string | null;
+  /** The next morning, the guest is expected before this ("HH:MM", the hotel's check-out time). */
+  nextMorningLatest?: string;
+  /** Whether the desk offers the next morning (a check-in after today, or one already recorded). */
+  offerNextMorning?: boolean;
+  /** The earliest a guest's time may be — now less the grace — as the hotel reads it (2026-10-29). */
+  earliest?: { at: string; date: string; time: string } | null;
   at: string | null;
   graceMinutes: number | null;
   /** The cut-off on the current expected arrival (planned). */
@@ -143,10 +154,13 @@ export async function getExpectedArrival(session: Session, entryId: string) {
   return apiRequest<ExpectedArrival>(`/api/entries/${entryId}/expected-arrival`, { session });
 }
 
-/** Record the guest's own arrival time ("HH:MM"), or null to go back to the hotel's check-in time. */
-export async function setExpectedArrival(session: Session, entryId: string, time: string | null) {
+/**
+ * Record the guest's own arrival time ("HH:MM"), or null to go back to the hotel's check-in time;
+ * `dayAfter` — they come the morning after the check-in day.
+ */
+export async function setExpectedArrival(session: Session, entryId: string, time: string | null, dayAfter = false) {
   return apiRequest<ExpectedArrival & { rearmedAt: string | null; cutoffAlreadyReached: boolean }>(
     `/api/entries/${entryId}/expected-arrival`,
-    { method: "POST", session, body: { time } },
+    { method: "POST", session, body: { time, dayAfter } },
   );
 }

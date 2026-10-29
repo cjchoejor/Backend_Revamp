@@ -50,7 +50,8 @@ export function HeaderDwell({ since }: { since: string }) {
 /** Where a clock stands: time left, how much of its run has gone (0–100), and its colour. */
 function timerProgress(timer: TimerRecordSummary, now: number) {
   const fires = new Date(timer.firesAt).getTime();
-  const start = new Date(timer.createdAt).getTime();
+  // A clock shown only from a moment of its own fills from then (the no-show cut-off's grace).
+  const start = new Date(timer.showsFrom ?? timer.createdAt).getTime();
   const ms = fires - now;
   const pct = Math.min(100, Math.max(0, ((now - start) / Math.max(1, fires - start)) * 100));
   // The timer's own warning / critical marks when it has them; otherwise six hours / one hour out.

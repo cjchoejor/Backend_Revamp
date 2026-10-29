@@ -163,6 +163,11 @@ export type TimerRecordSummary = {
   criticalAt: string | null;
   status: string;
   createdAt: string;
+  /**
+   * Shown from this moment, not from when it was armed (2026-10-29): the no-show cut-off appears
+   * once its grace starts — the guest's expected arrival. Null — shown while it runs.
+   */
+  showsFrom?: string | null;
 };
 
 export async function getEntryTimers(session: Session, entryId: string) {

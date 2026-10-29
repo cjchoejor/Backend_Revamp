@@ -545,6 +545,8 @@ export function RoomCompositionsTable({
   onPickRoom,
   pickedRoomId,
   onOpenRoom,
+  nightView: nightViewProp,
+  onNightViewChange,
   autoSeat,
   bedPlan,
   onBedChange,
@@ -591,6 +593,14 @@ export function RoomCompositionsTable({
   /** Double-clicking a room opens what can be done with it — change its room type (2026-10-29). */
   /** `night` — the night picked in the table's night list, when one is (2026-10-29): the change is for that night only. */
   onOpenRoom?: (roomId: string, night: string | null) => void;
+  /**
+   * The night shown, held by the caller (2026-10-29, operator: "suppose I choose night 2 and
+   * changed a room to assign, after it's been selected, it switched the table to all nights"): the
+   * table is drawn again on the booking's new rooms after a change, and a choice it held itself
+   * went back to the default. "" — the default for the stay; "all", "stay", or a night.
+   */
+  nightView?: string;
+  onNightViewChange?: (v: string) => void;
   /**
    * Seat the party when the table opens even though rows were carried in (2026-10-29, operator:
    * "after a rooms configuration has been done, can the system automatically distribute the party
@@ -817,7 +827,9 @@ export function RoomCompositionsTable({
   const [expanded, setExpanded] = useState(false);
   /** Which night the table shows on a stay whose rooms change between nights — "all" sets every
    *  night out in turn, one under the other (2026-10-22, operator). */
-  const [nightView, setNightView] = useState<string>("");
+  const [ownNightView, setOwnNightView] = useState<string>("");
+  const nightView = nightViewProp ?? ownNightView;
+  const setNightView = (v: string) => (onNightViewChange ? onNightViewChange(v) : setOwnNightView(v));
   /** Explanations behind a "?" — only messages on screen (2026-10-12). */
   const quiet = useQuietScreen();
   useEffect(() => {
