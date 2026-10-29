@@ -227,6 +227,27 @@ const FILE_TAB_SHORT: Record<"details" | BookingTab, string> = {
 
 /* ------------------------------------------------------------------ */
 
+/**
+ * The way back to the step's own page while the booking is being changed on it (2026-10-29,
+ * operator: "this needs to be a little more prominent and a back arrow needs to be there"). The
+ * step's move waits until the desk is back.
+ */
+function BackToStep({ name, doing, onBack }: { name: string; doing: string; onBack: () => void }) {
+  return (
+    <div className="backto changing">
+      <Button kind="secondary" onClick={onBack}>
+        <span className="back-arrow" aria-hidden>
+          ←
+        </span>{" "}
+        Back to {name}
+      </Button>
+      <span className="backto-note">
+        <b>{doing}</b> — {name}&rsquo;s own page, and its move on, are behind this
+      </span>
+    </div>
+  );
+}
+
 export function DsWorkspace({ entryId }: { entryId: string }) {
   const { session, isLoading: sessionLoading } = useSession();
   const router = useRouter();
@@ -1801,21 +1822,13 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                   />
                   {roomsInPage ? (
                     <div className="rooms-in-page">
-                      <div className="backto">
-                        <Button kind="secondary" compact onClick={() => stepPane.close()}>
-                          Back to {STEP_NAMES[viewing - 1]}
-                        </Button>
-                      </div>
+                      <BackToStep name={STEP_NAMES[viewing - 1]} doing="Moving a room" onBack={() => stepPane.close()} />
                       <RoomsTableCard entry={entry} title="The rooms" lead={ROOMS_LEAD} />
                     </div>
                   ) : null}
                   {changeInPage ? (
                     <div className="rooms-in-page">
-                      <div className="backto">
-                        <Button kind="secondary" compact onClick={() => stepPane.close()}>
-                          Back to {STEP_NAMES[viewing - 1]}
-                        </Button>
-                      </div>
+                      <BackToStep name={STEP_NAMES[viewing - 1]} doing="Changing the dates, rooms or guests" onBack={() => stepPane.close()} />
                       <div className="card">
                         <ChangeConfiguration entry={entry} inPlace onClose={() => stepPane.close()} onDone={() => stepPane.close()} />
                       </div>
@@ -1885,7 +1898,9 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                   sticky at the work column's foot: once everything is done the move floats there,
                   in the bottom-right corner, and stays put while the page scrolls. */}
               <div className="move-dock">
-                {moveReady ? (
+                {/* While the booking is being changed (Move a room, Change the dates, rooms or
+                    guests) the step's move waits for its own page (2026-10-29). */}
+                {moveReady && !inPage ? (
                   <div className="move-float" role="region" aria-label="Move on">
                     {forward}
                   </div>

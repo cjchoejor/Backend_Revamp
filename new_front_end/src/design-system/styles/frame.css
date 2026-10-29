@@ -1782,19 +1782,22 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .by-type-grid .bt-tally:not(.desk-root *) { display: inline-block; margin-top: 2px; padding: 0 6px; white-space: nowrap; border-radius: 3px; font-size: 13px; font-weight: 800; font-variant-numeric: tabular-nums; }
 .ds .by-type-grid .bt-tally.short:not(.desk-root *) { color: var(--danger); background: var(--danger-soft); }
 .ds .by-type-grid .bt-tally.done:not(.desk-root *) { color: var(--success); background: var(--success-soft); }
+.ds .by-type-grid .bt-tick:not(.desk-root *) { display: inline-block; width: 1.1em; }
+.ds .by-type-grid .bt-tick.off:not(.desk-root *) { visibility: hidden; }
 .ds .bt-cell:not(.desk-root *) { display: inline-flex; align-items: center; gap: 6px; }
 .ds .bt-take:not(.desk-root *) { margin-left: 2px; font-size: 12.5px; font-weight: 500; color: var(--ink-2); }
 .ds .bt-free:not(.desk-root *) { min-width: 78px; height: 24px; padding: 0 7px; white-space: nowrap; border: 1px solid transparent; border-radius: 3px; display: inline-flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; cursor: default; }
 .ds .bt-free.plenty:not(.desk-root *) { background: var(--success-soft); border-color: var(--success-line); color: var(--success); }
 .ds .bt-free.few:not(.desk-root *) { background: var(--warning-soft); border-color: var(--warning-line); color: var(--warning); }
 .ds .bt-free.none:not(.desk-root *) { background: var(--danger-soft); border-color: var(--danger-line); color: var(--danger); }
-.ds .bt-pick:not(.desk-root *) { width: 48px; height: 26px; padding: 0 2px 0 8px; border: 1px solid var(--line-2); border-radius: var(--r-control); background: #fff; font: inherit; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--ink-3); cursor: pointer; }
+.ds .bt-pick:not(.desk-root *) { width: 64px; height: 26px; padding: 0 2px 0 8px; border: 1px solid var(--line-2); border-radius: var(--r-control); background: #fff; font: inherit; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--ink-3); cursor: pointer; }
 .ds .bt-pick:hover:not(.desk-root *) { border-color: var(--ink-3); }
-.ds .bt-pick.varies:not(.desk-root *) { width: 78px; font-style: italic; }
+/* One width for every box — a number, "varies" or a dash — so picking never resizes the grid (2026-10-29). */
+.ds .bt-pick.varies:not(.desk-root *) { width: 64px; font-style: italic; }
 .ds .bt-pick:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .ds .bt-cell.picked .bt-pick:not(.desk-root *) { color: var(--ink); font-weight: 800; border-color: var(--accent); background: var(--accent-soft); }
 .ds .bt-cell.over .bt-pick:not(.desk-root *) { color: var(--danger); border-color: var(--danger); background: var(--danger-soft); }
-.ds .bt-none:not(.desk-root *) { display: inline-block; width: 48px; text-align: center; font-weight: 600; color: var(--ink-3); cursor: default; }
+.ds .bt-none:not(.desk-root *) { display: inline-block; width: 64px; text-align: center; font-weight: 600; color: var(--ink-3); cursor: default; }
 .ds .bt-cell.picked .bt-none:not(.desk-root *) { color: var(--ink); font-weight: 800; }
 .ds .bt-full:not(.desk-root *) { display: flex; align-items: center; gap: 6px; margin: 6px 0 0; font-size: var(--t-sm); color: var(--ink-2); }
 .ds .bt-fixed:not(.desk-root *) { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); margin-top: var(--s3); }
@@ -1839,3 +1842,11 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .rt-room:not(.desk-root *) { height: 32px; padding: 0 var(--s3); font: inherit; font-weight: 600; background: var(--surface); border: 1px solid var(--ink-3); border-radius: var(--r-control); cursor: pointer; }
 .ds .rt-room.on:not(.desk-root *) { background: var(--accent-soft); border-color: var(--accent); }
 .ds .rt-room small:not(.desk-root *) { font-weight: 500; color: var(--ink-3); }
+
+/* ---- The way back to the step while the booking is being changed (2026-10-29) ---- */
+.ds .backto.changing:not(.desk-root *) { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s3); margin: 0 0 var(--s3); padding: var(--s2) var(--s3); border: 1px solid var(--accent); border-left-width: 4px; border-radius: var(--r-control); background: var(--accent-soft); }
+.ds .backto.changing .btn:not(.desk-root *) { height: 38px; padding: 0 var(--s4) 0 var(--s3); font-size: var(--t-base); font-weight: 700; border-color: var(--accent); color: var(--accent-ink, var(--accent)); background: var(--surface); }
+.ds .backto.changing .btn:hover:not(.desk-root *) { background: var(--surface-2); }
+.ds .back-arrow:not(.desk-root *) { font-size: 18px; line-height: 1; font-weight: 700; }
+.ds .backto-note:not(.desk-root *) { font-size: var(--t-sm); color: var(--ink-2); }
+.ds .backto-note b:not(.desk-root *) { color: var(--ink); }

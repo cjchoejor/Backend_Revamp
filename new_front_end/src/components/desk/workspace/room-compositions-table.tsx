@@ -545,6 +545,7 @@ export function RoomCompositionsTable({
   onPickRoom,
   pickedRoomId,
   onOpenRoom,
+  autoSeat,
   bedPlan,
   onBedChange,
   bedAsk,
@@ -589,6 +590,13 @@ export function RoomCompositionsTable({
   pickedRoomId?: string | null;
   /** Double-clicking a room opens what can be done with it — change its room type (2026-10-29). */
   onOpenRoom?: (roomId: string) => void;
+  /**
+   * Seat the party when the table opens even though rows were carried in (2026-10-29, operator:
+   * "after a rooms configuration has been done, can the system automatically distribute the party
+   * first by default"): a change of rooms or party carries each room's meals and rates but its
+   * guests no longer fit. A room whose guests were all on one plan keeps that plan for its new guests.
+   */
+  autoSeat?: boolean;
   /**
    * How each room is to be made up for this stay, from the booking's bed plan (2026-10-06,
    * operator: "in the table in s2 we can have column as bed type ... make it for s5 s6 s7 as
@@ -1175,8 +1183,8 @@ export function RoomCompositionsTable({
    *    stand in the way, the room with the most space takes the child and the operator decides.
    * CNB 11+ retired: declared children above the child band join the adult pool.
    */
-  const distribute = () => {
-    if (sealedRoomIds.length === 0) return;
+  const distribute = (): Map<string, { ad: number; c6: number; u6: number; bed: number }> => {
+    if (sealedRoomIds.length === 0) return new Map();
     const ages = entryChildAges ?? [];
     const party = {
       ad: Math.max(0, entryAdults ?? 0) + ages.filter((a) => a > childMax).length,
@@ -1271,6 +1279,7 @@ export function RoomCompositionsTable({
       return next;
     });
     for (const [id, s] of seats) syncNightBeds(id, s.bed);
+    return seats;
   };
 
   // First-open distribute, once, while the band columns are untouched — the operator
@@ -1288,7 +1297,21 @@ export function RoomCompositionsTable({
     if (autoRanRef.current || !ready || readOnly) return;
     const pristine = sealedRoomIds.every((id) => rows[id].ad === "" && rows[id].c6 === "" && rows[id].u6 === "");
     autoRanRef.current = true;
-    if (pristine && (entryAdults ?? 0) + (entryChildAges?.length ?? 0) > 0) distribute();
+    if (!(pristine || autoSeat) || (entryAdults ?? 0) + (entryChildAges?.length ?? 0) === 0) return;
+    // Each room's one meal plan, as carried — kept for whoever now sleeps in the room.
+    const PLAN_COLS = ["cp", "ml", "md", "ap", "ot"] as const;
+    const onePlan = new Map<string, (typeof PLAN_COLS)[number]>();
+    if (autoSeat) {
+      for (const id of sealedRoomIds) {
+        const on = PLAN_COLS.filter((c) => cnt(rows[id]?.[c] ?? "") > 0);
+        if (on.length === 1) onePlan.set(id, on[0]);
+      }
+    }
+    const seated = distribute();
+    for (const [id, col] of onePlan) {
+      const s = seated.get(id);
+      if (s) writeAllNights(id, { [col]: String(s.ad + s.c6 + s.u6) } as Partial<NightVals>);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready]);
 

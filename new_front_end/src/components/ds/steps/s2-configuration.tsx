@@ -381,6 +381,8 @@ export function ChangeConfiguration({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pickedRoomIds.join(","), typeMode, catalog.length]);
   const [comps, setComps] = useState<RoomCompositionInput[]>([]);
+  /** The rooms or the party changed: the table seats the party itself, keeping each room's meals and rates. */
+  const autoSeat = partyMoved || pickedRoomIds.some((id) => !seedComps.some((c) => c.roomId === id));
   const [tableFaults, setTableFaults] = useState<string[]>([]);
   const tableReady = inPlace && !!configId && roomsReady;
 
@@ -764,6 +766,7 @@ export function ChangeConfiguration({
                   {...(typeMode && typePicks ? { roomLabels: typePicks.labels } : {})}
                   entryId={entry.id}
                   initialCompositions={seedComps}
+                  autoSeat={autoSeat}
                   previewStay={{ checkInDate: checkIn, checkOutDate: checkOut }}
                   onFaultsChange={setTableFaults}
                   onChange={setComps}

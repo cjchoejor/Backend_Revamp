@@ -282,6 +282,13 @@ export function RoomsByType({
     onDraft?.({ basis, counts, fixed, byNight: byNightAsked });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [basis, counts, fixed, byNightAsked]);
+  // Once the nights have differed, night by night stays open (2026-10-29, operator: the table
+  // resizing as rooms are picked is "useless noise") — the desk goes back to Same every night itself.
+  const countsVary =
+    nights.length > 1 && [...new Set(nights.flatMap((d) => Object.keys(counts[d] ?? {})))].some((t) => everyNight(t) == null);
+  useEffect(() => {
+    if (countsVary && !byNightAsked) setByNightAsked(true);
+  }, [countsVary, byNightAsked]);
 
   if (!configId) return null;
   if (house.isLoading) return <p className="meta">Asking the house for each type…</p>;
@@ -435,7 +442,10 @@ export function RoomsByType({
                     className={`bt-tally ${tot === numberOfRooms ? "done" : "short"}`}
                     title={left === 0 ? "Every room this night is picked" : left > 0 ? `${plural(left, "room")} still to pick` : `${-left} too many`}
                   >
-                    {tot === numberOfRooms ? "✓ " : ""}
+                    {/* The tick keeps its place when it is not shown, so a night turning done never widens the grid. */}
+                    <span className={`bt-tick${tot === numberOfRooms ? "" : " off"}`} aria-hidden>
+                      ✓
+                    </span>
                     {tot} of {numberOfRooms} picked
                   </span>
                 </th>

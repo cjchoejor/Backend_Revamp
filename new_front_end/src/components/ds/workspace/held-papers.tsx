@@ -36,6 +36,8 @@ const REASON_WORD: Record<string, string> = {
   DATE_MOVE: "after the dates were moved",
   ROOM_SPLIT: "after the rooms were split off",
   RESERVE: "made at Reserve",
+  RECONFIGURE: "after the stay was changed",
+  NEW_PASS: "made again for the change",
 };
 
 export function useHeldDocuments(entryId: string | null | undefined) {
