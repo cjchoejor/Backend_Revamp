@@ -125,6 +125,7 @@ import { S6_PANES } from "@/components/ds/steps/s6-checkin";
 import { S8CheckOut, S8_PANES } from "@/components/ds/steps/s8-checkout";
 import { S9Closed, S9_PANES } from "@/components/ds/steps/s9-closed";
 import { Overlay, atLeast, useRefreshEntry, useStepPane } from "@/components/ds/steps/kit";
+import { ChangeConfiguration } from "@/components/ds/steps/s2-configuration";
 import { declineEntry } from "@/lib/api/reservation-setup";
 const atLeastFom = (level?: string | null) => atLeast(level, "L2");
 
@@ -174,14 +175,14 @@ const SETUP_SECTIONS: Record<string, string> = {
   proforma: "The proforma",
   money: "The payment plan",
   hold: "The committed hold",
+  // Only when it applies: the guest's other booking, a conference, the desk's own words (2026-10-29).
+  reserve: "Before you reserve",
 };
 /**
- * Reserve's sections (2026-10-29, operator: "now can we make the new UI changes to stage 4 and 5"):
- * before the click, the facts on record that Reserve signs; after it, the confirmation voucher and
- * the guest's answer to it, which Arrival waits for.
+ * Reserve's section (2026-10-29): the confirmation voucher and the guest's answer to it, which
+ * Arrival waits for. The booking is reserved from Set up — there is no page between the two.
  */
 const RESERVE_SECTIONS: Record<string, string> = {
-  facts: "Before you reserve",
   voucher: "The confirmation voucher",
 };
 /** Arrival's five sections (2026-10-29), in the order the desk works them; the handoff records itself once the first three are done. */
@@ -350,6 +351,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   // A step's own pane — Stay's Night audit, Room change, … (2026-09-25). Null is This step.
   const paneParam = params.get("pane");
   const stepPane = useStepPane();
+  const openChangeStay = useCallback(() => stepPane.open("change"), [stepPane]);
   const setPane = (key: string | null) => {
     const p = new URLSearchParams(params.toString());
     p.delete("view");
@@ -375,7 +377,9 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
 
   const currentOrder = entry ? currentStepOrder(entry) : 1;
   const readyToConfirm = entry ? canConfirm(entry, { paymentSatisfied, totalReceived, requiredAmount, communications }) : false;
-  const maxReach = !entry ? 1 : entry.currentStage === "S3" && !readyToConfirm ? Math.min(maxReachableOrder(entry), 3) : maxReachableOrder(entry);
+  // A booking at Set up is reserved from Set up itself (2026-10-29, operator: "the screen shows 4 ·
+  // Reserve when we are actually in stage 3 … remove that first page") — Reserve opens once it is.
+  const maxReach = !entry ? 1 : entry.currentStage === "S3" ? Math.min(maxReachableOrder(entry), 3) : maxReachableOrder(entry);
 
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [checkInOpen, setCheckInOpen] = useState(false);
@@ -649,19 +653,21 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     onError: fail("Couldn't resume this booking"),
   });
 
-  // Land on the step the booking is at (or the Reserve review when Set up is complete).
+  // Land on the step the booking is at — a finished Set up is reserved from Set up itself (2026-10-29).
   useEffect(() => {
     if (!entry || selected !== null) return;
-    setSelectedState(readyToConfirm ? 4 : currentStepOrder(entry));
+    setSelectedState(currentStepOrder(entry));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [entry, selected, readyToConfirm]);
+  }, [entry, selected]);
 
   // Every step view starts at the top. A booking tab does too on the rail layout, where it replaces
   // the canvas — but not on the Stage 1 layout, where it opens in the booking file BESIDE the work
   // (and the bar's other ways open above the bar): there the page stays exactly where it is
   // (2026-10-27, operator: "the working screen was scrolled down, and when I clicked Charges &
   // payments in the booking file, the working screen scrolled").
-  const viewing = selected ?? currentOrder;
+  // A step the booking cannot reach yet, asked for in the address, shows the step it is at — the Reserve
+  // review a finished Set up used to open (`?step=4`) is gone (2026-10-29).
+  const viewing = selected != null && selected > maxReach ? currentOrder : (selected ?? currentOrder);
   // A pane or a way left in the address belongs to the step it was opened on: when the step changes —
   // a re-entry sending the booking back, the booking moving on — it goes (2026-10-28: Set up's way
   // left in the address opened Park on Inquiry by itself).
@@ -907,7 +913,10 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     : confirmStepActive
       ? [...confirmReadiness(entry, { paymentSatisfied, totalReceived, requiredAmount, communications }), ...reserveExtras.map((label) => ({ label, met: false }))]
       : setupStepActive
-        ? withUnsaved(confirmReadiness(entry, { paymentSatisfied, totalReceived, requiredAmount, communications }), unsavedSections)
+        ? [
+            ...withUnsaved(confirmReadiness(entry, { paymentSatisfied, totalReceived, requiredAmount, communications }), unsavedSections),
+            ...reserveExtras.map((label) => ({ label, met: false, card: "reserve" })),
+          ]
       : inquiryStepActive
         ? withUnsaved(s1Readiness(entry), unsavedSections)
         : quoteStepActive
@@ -1014,6 +1023,11 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   // step's sections stay mounted, hidden, so nothing half-typed is lost.
   // Reserve's rooms open the same way (2026-10-29) — its Rooms tab became Change booking's "Move a room".
   const roomsInPage = topLayout && (setupStepActive || confirmStepActive || confirmedS4Active) && !sealed && paneParam === "rooms";
+  // Change booking › "Change the dates, rooms or guests" (2026-10-29, operator: "for the user it should
+  // still happen in that current stage"): the editor in the page; the booking walks back through
+  // Negotiation and returns here.
+  const changeInPage = topLayout && (setupStepActive || confirmedS4Active || arrivalStepActive) && !sealed && paneParam === "change";
+  const inPage = roomsInPage || changeInPage;
   // The keys owed today on a move day — counted on Stay's Keys tab (2026-10-26).
   const keysOwedNow = step.key === "stay" && !viewingPast ? keysDue(entry, hotelToday) : { collect: [], handOver: [] };
   const keysOwedCount = keysOwedNow.collect.length + keysOwedNow.handOver.length;
@@ -1103,13 +1117,13 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
       </Button>
     );
   } else if (setupStepActive) {
-    // Green once it can be pressed, as at Inquiry and Negotiation; a section with changes not saved
-    // holds it (2026-10-28).
+    // Reserve is pressed here (2026-10-29) — its commit dialog, then the booking is at Reserve. Green
+    // once it can be pressed; a section with changes not saved holds it (2026-10-28).
     const ok = ready && !preconds.some((p) => p.unsaved);
     moveReady = ok;
     forward = (
-      <Button className="go" state={ok ? "default" : "inert"} reason={ok ? "the booking stays at Set up until you reserve it" : firstNote} onClick={() => setSelected(4)}>
-        Move to Reserve
+      <Button className="go" state={ok ? "default" : "inert"} reason={ok ? undefined : firstNote} onClick={() => setConfirmOpen(true)}>
+        Reserve the booking
       </Button>
     );
   } else if (confirmedS4Active) {
@@ -1232,6 +1246,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
             parkNow={parkable ? parkNow : undefined}
             parking={parkMutation.isPending}
             goToStep={viewingPast ? NOOP : stableSetSelected}
+            onChangeStay={viewingPast ? undefined : openChangeStay}
+            onReserveItems={setupStepActive ? reportReserveExtras : undefined}
           />
         );
       case "confirm":
@@ -1242,8 +1258,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
             parkNow={parkable ? parkNow : undefined}
             parking={parkMutation.isPending}
             goToStep={gotoStep}
-            reserve={confirmStepActive ? { onClick: () => setConfirmOpen(true), ready, reason: ready ? undefined : firstNote } : null}
-            onOpenItems={confirmStepActive ? reportReserveExtras : undefined}
+            onChangeStay={confirmedS4Active ? openChangeStay : undefined}
           />
         );
       case "arrival":
@@ -1255,6 +1270,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
             parking={parkMutation.isPending}
             guestPresent={guestPresent}
             setGuestPresent={arrivalStepActive ? setGuestPresent : NOOP}
+            onChangeStay={arrivalStepActive ? openChangeStay : undefined}
           />
         );
       case "checkin":
@@ -1789,12 +1805,24 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                       <RoomsTableCard entry={entry} title="The rooms" lead={ROOMS_LEAD} />
                     </div>
                   ) : null}
-                  <div hidden={roomsInPage}>
+                  {changeInPage ? (
+                    <div className="rooms-in-page">
+                      <div className="backto">
+                        <Button kind="secondary" compact onClick={() => stepPane.close()}>
+                          Back to {STEP_NAMES[viewing - 1]}
+                        </Button>
+                      </div>
+                      <div className="card">
+                        <ChangeConfiguration entry={entry} inPlace onClose={() => stepPane.close()} onDone={() => stepPane.close()} />
+                      </div>
+                    </div>
+                  ) : null}
+                  <div hidden={inPage}>
                     <AlsoBar buttons={alsoButtons} panel={null} stage={stageActs}>
                       <OtherWaysSlot node={null}>{native}</OtherWaysSlot>
                     </AlsoBar>
                   </div>
-                  {!viewingPast && !sealed && !roomsInPage && preconds.length ? (
+                  {!viewingPast && !sealed && !inPage && preconds.length ? (
                     // What the move checks, in one place (the stage template's "Before you move on"):
                     // each section, then what the system does when the booking moves on. The move
                     // itself is in the bar at the foot.

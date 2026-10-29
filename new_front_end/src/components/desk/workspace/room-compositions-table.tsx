@@ -553,7 +553,10 @@ export function RoomCompositionsTable({
   onDiscountChange,
   lockCommercial,
   readOnly,
+  previewStay,
 }: DiscountEdit & {
+  /** Price for a stay the booking does not hold yet — a change of dates on the step (2026-10-29). */
+  previewStay?: { checkInDate: string; checkOutDate: string } | null;
   /**
    * Post-freeze, in-house (2026-08-19): the negotiated rates and the FOC / service-charge
    * waivers render read-only, because changing them mid-stay is a GM rate revision the backend
@@ -1472,6 +1475,7 @@ export function RoomCompositionsTable({
     discount: { percent?: number; amount?: number } | null;
     roomNights?: Record<string, number>;
     roomNightDates?: Record<string, string[]>;
+    stay?: { checkInDate: string; checkOutDate: string };
   } | null>(null);
   // The nights each row is priced for, from the caller's dates — on the room-change panel the
   // rooms are picked night by night and the booking does not hold them yet (2026-10-19).
@@ -1513,12 +1517,13 @@ export function RoomCompositionsTable({
           discount,
           ...(previewRoomNights ? { roomNights: previewRoomNights } : {}),
           ...(previewRoomNightDates ? { roomNightDates: previewRoomNightDates } : {}),
+          ...(previewStay ? { stay: previewStay } : {}),
         }),
       450,
     );
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [compositions, entryId, discNum, discUnitNow, previewRoomNightsKey]);
+  }, [compositions, entryId, discNum, discUnitNow, previewRoomNightsKey, previewStay?.checkInDate, previewStay?.checkOutDate]);
   const previewQuery = useQuery({
     queryKey: ["quotation-live-preview", entryId, previewBody],
     queryFn: () => previewQuotationPricing(session!, entryId!, previewBody!),

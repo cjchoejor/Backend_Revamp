@@ -1115,6 +1115,8 @@ export function RoomCompositionPlanner(props: DiscountEdit & {
   unsaved?: boolean;
   saveAside?: React.ReactNode;
   onFaultsChange?: (faults: string[]) => void;
+  /** Price for a stay the booking does not hold yet — a change of dates on the step (2026-10-29). */
+  previewStay?: { checkInDate: string; checkOutDate: string } | null;
   /** When set, in-progress edits persist per booking (sessionStorage) and survive leaving
    *  the workspace — without it the grid reset to the auto-distributed default on return. */
   persistKey?: string;

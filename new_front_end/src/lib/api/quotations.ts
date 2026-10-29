@@ -177,6 +177,8 @@ export async function previewQuotationPricing(
     roomNights?: Record<string, number>;
     /** And which nights those are (YYYY-MM-DD), so per-night meals and beds price on them. */
     roomNightDates?: Record<string, string[]>;
+    /** A stay the booking does not hold yet — its rates resolve for those nights (2026-10-29). */
+    stay?: { checkInDate: string; checkOutDate: string };
   },
 ) {
   return apiRequest<QuotationLivePreview>(`/api/entries/${entryId}/quotation-preview`, {

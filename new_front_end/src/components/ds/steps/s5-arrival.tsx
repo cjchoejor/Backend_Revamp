@@ -111,6 +111,7 @@ export function S5Arrival({
   parking,
   guestPresent,
   setGuestPresent,
+  onChangeStay,
 }: {
   entry: EntryDetail;
   past: boolean;
@@ -119,6 +120,8 @@ export function S5Arrival({
   parking?: boolean;
   guestPresent: boolean;
   setGuestPresent: (v: boolean) => void;
+  /** Change booking › "Change the dates, rooms or guests" — the editor in the page (2026-10-29). */
+  onChangeStay?: () => void;
 }) {
   const facts = useArrivalFacts(entry);
   const since = currentPassStart(entry);
@@ -154,7 +157,14 @@ export function S5Arrival({
       <FrontDeskHandoff entry={entry} facts={facts} />
       <GuestHereCard guestPresent={guestPresent} setGuestPresent={setGuestPresent} />
       <PreArrivalAnswerCard entryId={entry.id} since={since} tz={clock.tz} />
-      <BookingOtherWays entry={entry} parkNow={parkNow} parking={parking} guestPresent={guestPresent} onMoveRoom={past ? undefined : moveRoom} />
+      <BookingOtherWays
+        entry={entry}
+        parkNow={parkNow}
+        parking={parking}
+        guestPresent={guestPresent}
+        onMoveRoom={past ? undefined : moveRoom}
+        onChangeStay={past ? undefined : onChangeStay}
+      />
     </StepCanvas>
   );
 }

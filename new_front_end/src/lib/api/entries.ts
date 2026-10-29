@@ -1259,3 +1259,36 @@ export async function amendNegotiationConfiguration(
     body,
   });
 }
+
+/** What the in-place change of the stay did (2026-10-29) — every figure the server's. */
+export type StayChangeOutcome = {
+  entryId: string;
+  fromStage: string;
+  reachedStage: string;
+  returned: boolean;
+  blocked: { atStep: string; message: string } | null;
+  quotationId: string | null;
+  pricing: { priorTotal: number | null; newTotal: number | null; currency: string | null };
+  heldDocuments: Array<{ id: string; kind: "CONFIRMATION_VOUCHER" | "PROFORMA"; documentId: string }>;
+  notes: string[];
+  summary: string;
+};
+
+/**
+ * Change the dates, rooms or guests on the step the booking is at — Set up, Reserve, Arrival
+ * (2026-10-29). The FOM's. The booking walks back through Negotiation and returns to its step.
+ */
+export async function changeStayInPlace(
+  session: Session,
+  entryId: string,
+  body: {
+    dates: { checkInDate: string; checkOutDate: string };
+    party: { adultCount: number; childCount: number; childAges: number[]; numberOfRooms: number };
+    rooms: { configurationId: string; perNight: Array<{ date: string; roomIds: string[] }> };
+    roomCompositions: RoomCompositionInput[];
+    reason: string;
+    expectedVersion?: number;
+  },
+) {
+  return apiRequest<StayChangeOutcome>(`/api/entries/${entryId}/change-stay`, { method: "POST", session, body });
+}

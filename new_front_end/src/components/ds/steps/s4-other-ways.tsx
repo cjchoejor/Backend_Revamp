@@ -10,7 +10,6 @@
  *  - Reserve (frozen):    cancel (FOM; the GM waives) · backflow to Inquiry (FOM)
  *  - Arrival:             cancel (FOM; the GM waives) · no-show after the cut-off (FOM) · backflow to Inquiry (FOM)
  */
-import { reservedThisPass } from "@/lib/desk/workspace";
 import { CancellationFiguresLine, WaiverTick, useRefundHow } from "./cancel-figures";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -19,8 +18,7 @@ import { toast } from "sonner";
 import { Button, Chip } from "@/design-system";
 import { useSession } from "@/hooks/use-session";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
-import { backflows } from "@/lib/api/backflows";
-import { cancelEntryAtS3, cancelEntryAtS5, initiateS3ReEntryToS1 } from "@/lib/api/reservation-setup";
+import { cancelEntryAtS3, cancelEntryAtS5 } from "@/lib/api/reservation-setup";
 import { fmtDay, fmtStamp, money } from "@/lib/ds/format";
 import type { EntryDetail } from "@/types/api";
 import {
@@ -51,6 +49,7 @@ export function BookingOtherWays({
   parking,
   guestPresent = false,
   onMoveRoom,
+  onChangeStay,
 }: {
   entry: EntryDetail;
   /** Park with the reason typed in Other ways' own tab (2026-10-17). */
@@ -59,6 +58,8 @@ export function BookingOtherWays({
   guestPresent?: boolean;
   /** "Move a room" in Change booking (2026-10-29) — Reserve opens the rooms in the page, Arrival goes to its rooms section. */
   onMoveRoom?: () => void;
+  /** "Change the dates, rooms or guests" — the editor in the page; the booking walks and comes back here (2026-10-29). */
+  onChangeStay?: () => void;
 }) {
   const { session } = useSession();
   const stage = entry.currentStage;
@@ -66,7 +67,6 @@ export function BookingOtherWays({
   const fom = atLeast(session?.actorLevel, "L2");
   const cutoffAt = (entry as EntryDetail & EntryScalars).noShowCutoffReachedAt ?? null;
   const checkIn = entry.reservation?.frozenCheckInDate ?? entry.checkInDate ?? null;
-  const reserved = reservedThisPass(entry);
   const here = active && (stage === "S3" || stage === "S4" || stage === "S5");
 
   // Cancel. A reserved booking is cancelled at Reserve or at Arrival (2026-09-18) — it used to be
@@ -126,28 +126,6 @@ export function BookingOtherWays({
     };
   }
 
-  const amend: OtherWayTab | null = !here
-    ? null
-    : {
-        key: "amend",
-        label: "Change the dates, rooms or guests",
-        inBar: false,
-        content: fom ? (
-          <InlineWay render={(done) => <AmendDatesDialog entry={entry} onClose={done} />} />
-        ) : (
-          <ShutWay
-            act="Open a new pass"
-            why="Needs the FOM — changing the dates sends the booking back to Inquiry."
-            help={
-              <p>
-                {reserved
-                  ? "The booking goes back to Inquiry for the new dates: the rooms are let go, a new quotation is made, and it is reserved again."
-                  : "The booking goes back to Inquiry for the new dates and is priced again; the held rooms are let go."}
-              </p>
-            }
-          />
-        ),
-      };
 
   /**
    * Change booking (2026-10-29, Reserve and Arrival in the stage layout — as at Set up): the ways the
@@ -167,11 +145,11 @@ export function BookingOtherWays({
           reason: here && onMoveRoom ? undefined : notNow,
         },
         {
-          key: "amend",
+          key: "change-stay",
           label: "Change the dates, rooms or guests",
-          note: "Back to Inquiry to ask the house again. The rooms are let go, a new quotation is made and the booking is reserved again.",
-          onSelect: here && fom ? () => openAlsoWay("amend") : undefined,
-          reason: !here ? notNow : fom ? undefined : "The FOM's call",
+          note: "Here, on this step. The house is asked again, the rooms picked, the price made again and the booking reserved again — it comes back to this step.",
+          onSelect: here && fom && onChangeStay ? onChangeStay : undefined,
+          reason: !here ? notNow : !fom ? "The FOM's call" : onChangeStay ? undefined : notNow,
         },
         ...(stage === "S5"
           ? [
@@ -203,7 +181,7 @@ export function BookingOtherWays({
           <ChangeBookingMenu items={changeItems} />
         </StageActs>
       ) : null}
-      <OtherWaysTabs tabs={[cancel, noShow, active ? parkTab(parkNow, parking) : null, amend]} />
+      <OtherWaysTabs tabs={[cancel, noShow, active ? parkTab(parkNow, parking) : null]} />
     </>
   );
 }
@@ -478,43 +456,5 @@ function NoShowDialog({ entry, cutoffAt, onClose }: { entry: EntryDetail; cutoff
         <textarea className="input" rows={2} value={reason} maxLength={500} onChange={(e) => setReason(e.target.value)} placeholder="why this is a no-show" />
       </div>
     </DsDialog>
-  );
-}
-
-/* ------------------------------------------------------------------ amend dates */
-
-function AmendDatesDialog({ entry, onClose }: { entry: EntryDetail; onClose: () => void }) {
-  const { session } = useSession();
-  const refresh = useRefreshEntry(entry.id);
-  const stage = entry.currentStage;
-  const run = useMutation({
-    mutationFn: (reason: string) => {
-      if (stage === "S3") return initiateS3ReEntryToS1(session!, entry.id, { reason });
-      if (stage === "S4") return backflows.s4ToS1(session!, entry.id, reason);
-      return backflows.s5ToS1(session!, entry.id, reason);
-    },
-    onSuccess: () => {
-      toast.success("A new pass is open at Inquiry — search the new dates there");
-      onClose();
-      refresh([["journey-summary", entry.id], ["rooms"], ["rooms-catalog"], ["segment-history", entry.id]]);
-    },
-    onError: (e) => toastRefusal(e, "The dates could not be reopened"),
-  });
-  return (
-    <ReasonDialog
-      open
-      onClose={onClose}
-      busy={run.isPending}
-      title="Amend the dates"
-      lead={
-        <>
-          The booking goes back to Inquiry in a new pass. What was decided stays as a read-only record of this pass; the held rooms
-          are released and the new dates are searched, quoted{entry.reservation?.confirmedAt ? " and reserved" : ""} again.
-        </>
-      }
-      confirmLabel="Open a new pass"
-      placeholder="e.g. the guest moved the stay to the following week"
-      onConfirm={(r) => run.mutate(r)}
-    />
   );
 }
