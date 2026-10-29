@@ -1949,18 +1949,22 @@ export function DocCard({
  * same fact differently. A choice is recorded for the stay; from Arrival it also makes the room
  * up that way, and the server says which happened — the toast reads accordingly.
  */
-export function useBedPlan(entryId: string) {
+export function useBedPlan(entryId: string, version?: string | number | null) {
   const { session } = useSession();
   const qc = useQueryClient();
+  // Read again whenever the booking changes (2026-10-29, operator: after a room change the new room
+  // showed no bed setup). The rooms are the booking's, and a room change, a change of the stay or a
+  // quiet move gives it other rooms — the list cached under the booking alone kept the old ones.
+  const key = ["bed-plan", entryId, version ?? null] as const;
   const q = useQuery({
-    queryKey: ["bed-plan", entryId],
+    queryKey: key,
     queryFn: () => getEntryBedPlan(session!, entryId),
     enabled: !!session,
   });
   const m = useMutation({
     mutationFn: (v: { roomId: string; bedType: string | null }) => setEntryBedPlan(session!, entryId, v.roomId, v.bedType),
     onSuccess: (out, v) => {
-      qc.setQueryData(["bed-plan", entryId], out);
+      qc.setQueryData(key, out);
       void qc.invalidateQueries({ queryKey: ["rooms-catalog"] });
       const row = out.rooms.find((r) => r.roomId === v.roomId);
       const word = row?.bedType ? BED_WORDS[row.bedType] ?? row.bedType : "its usual setup";

@@ -232,7 +232,7 @@ export function S2Negotiation({
   /* ---- the rooms chosen at Inquiry, and the marker on them ---- */
   const sealedPreferred = (entry.availabilityConfigs ?? []).find((c) => c.sealedAt && c.optionSelected);
   const sealedRoomIds = useMemo(() => optionSelectedRoomIds(sealedPreferred?.optionSelected), [sealedPreferred?.optionSelected]);
-  const beds = useBedPlan(entry.id);
+  const beds = useBedPlan(entry.id, entry.updatedAt);
   const anchorRoomId = preferredHoldRoomId(sealedPreferred?.optionSelected ?? null);
   /**
    * "Change configuration" (2026-09-30; dates since 2026-10-12) — the stay, the rooms and the party, changed here rather than by

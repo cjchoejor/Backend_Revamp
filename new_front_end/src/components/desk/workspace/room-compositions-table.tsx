@@ -589,7 +589,8 @@ export function RoomCompositionsTable({
   /** The room currently chosen, drawn as such. */
   pickedRoomId?: string | null;
   /** Double-clicking a room opens what can be done with it — change its room type (2026-10-29). */
-  onOpenRoom?: (roomId: string) => void;
+  /** `night` — the night picked in the table's night list, when one is (2026-10-29): the change is for that night only. */
+  onOpenRoom?: (roomId: string, night: string | null) => void;
   /**
    * Seat the party when the table opens even though rows were carried in (2026-10-29, operator:
    * "after a rooms configuration has been done, can the system automatically distribute the party
@@ -724,7 +725,9 @@ export function RoomCompositionsTable({
    * every room type).
    */
   const rowFault = (roomId: string): string | null => {
-    const r = rows[roomId] ?? EMPTY_ROW;
+    // Not judged until its row is filled in — an empty frame is not an empty room (2026-10-29).
+    const r = rows[roomId];
+    if (!r) return null;
     const adults = cnt(r.ad);
     if (adults + cnt(r.c6) + cnt(r.u6) === 0)
       return "nobody is in this room — put someone in it, or drop the room back at Inquiry";
@@ -781,7 +784,19 @@ export function RoomCompositionsTable({
   // The caller's latest seed, read only for rooms added after mount (see `initialCompositions`).
   const lateSeedRef = useRef(initialCompositions);
   lateSeedRef.current = initialCompositions;
-  const [rows, setRows] = useState<Record<string, RowState>>({});
+  // Seeded on the first draw (2026-10-29, operator: a red line "flashing under the table" after a
+  // room change). The table remounts on the new rooms, and with the rows filled in an effect its
+  // first frame showed every room empty — "Room 305 — nobody is in this room" for a few
+  // milliseconds. The effect below still adds a room that arrives later.
+  const [rows, setRows] = useState<Record<string, RowState>>(() => {
+    const seedById = new Map([...(initialCompositions ?? []), ...(initial ?? [])].map((c) => [c.roomId, c] as const));
+    const out: Record<string, RowState> = {};
+    for (const id of sealedRoomIds) {
+      const seed = seedById.get(id);
+      out[id] = seed ? rowFromComposition(seed) : { ...EMPTY_ROW };
+    }
+    return out;
+  });
   /** A room's meals and extra beds on a night where they differ from its own row (2026-10-22). */
   const [nightVals, setNightVals] = useState<Record<string, Record<string, NightVals>>>({});
   /** The nights each room is held for — the caller's dates, else the whole stay. */
@@ -1737,7 +1752,9 @@ export function RoomCompositionsTable({
       );
     }
     for (const id of sealedRoomIds) {
-      const r = rows[id] ?? EMPTY_ROW;
+      // A room whose row is not filled in yet is judged once it is (2026-10-29).
+      if (!rows[id]) continue;
+      const r = rows[id];
       const occ = cnt(r.ad) + cnt(r.c6) + cnt(r.u6);
       const fault = rowFault(id);
       if (fault) out.push(`${nameOf(id)} — ${fault}`);
@@ -2312,7 +2329,7 @@ export function RoomCompositionsTable({
                       <td
                         className={`room${onPickRoom || onOpenRoomInBoard || onOpenRoom ? " opens" : ""}${onPickRoom && pickedRoomId === id ? " picked" : ""}`}
                         onClick={onPickRoom ? () => onPickRoom(id) : onOpenRoomInBoard ? () => onOpenRoomInBoard(id) : undefined}
-                        onDoubleClick={onOpenRoom ? () => onOpenRoom(id) : undefined}
+                        onDoubleClick={onOpenRoom ? () => onOpenRoom(id, viewNight) : undefined}
                         title={
                           onOpenRoom
                             ? "Double-click to change this room's type"
@@ -2620,7 +2637,8 @@ export function RoomCompositionsTable({
         </p>
       )}
       {!onSave && sealedRoomIds.some((id) => {
-        const r = rows[id] ?? EMPTY_ROW;
+        const r = rows[id];
+        if (!r) return false;
         return MEAL_COLS.reduce((s, c) => s + cnt(r[c]), 0) > cnt(r.ad) + cnt(r.c6) + cnt(r.u6);
       }) && (
         <p className="rce-warns" style={{ marginBottom: 0 }}>

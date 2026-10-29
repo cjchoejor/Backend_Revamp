@@ -100,7 +100,7 @@ export function RoomsTable({
   const byId = useMemo(() => new Map((catalogQ.data?.items ?? []).map((r) => [r.id, r])), [catalogQ.data]);
 
   const hotelToday = useHotelDay()?.today ?? null;
-  const beds = useBedPlan(entry.id);
+  const beds = useBedPlan(entry.id, entry.updatedAt);
   const ids = useMemo(() => planRoomIds(entry, hotelToday), [entry, hotelToday]);
   const seed = useMemo(() => operativeRoomCompositions(entry) ?? [], [entry]);
   const ranges = useMemo(() => roomStayRangesByRoom(entry), [entry]);
@@ -136,6 +136,8 @@ export function RoomsTable({
   const [draft, setDraft] = useState<RoomCompositionInput[] | null>(null);
   /** The room double-clicked — its room-type change open in a dialog (2026-10-29). */
   const [openRoom, setOpenRoom] = useState<string | null>(null);
+  /** The night picked in the table's night list when the room was double-clicked — that night only (2026-10-29). */
+  const [openNight, setOpenNight] = useState<string | null>(null);
   const [faults, setFaults] = useState<string[]>([]);
   const [reasonOpen, setReasonOpen] = useState(false);
   const [reason, setReason] = useState("");
@@ -323,7 +325,16 @@ export function RoomsTable({
         readOnly={!editing}
         onPickRoom={past || !roomActions ? undefined : (id) => setPicked((cur) => (cur === id ? null : id))}
         pickedRoomId={chosen}
-        onOpenRoom={past || editing ? undefined : (id) => setOpenRoom(id)}
+        onOpenRoom={
+          past || editing
+            ? undefined
+            : (id, night) => {
+                setOpenRoom(id);
+                // A night counts only when the room is held on other nights too.
+                const ds = roomDates[id]?.dates ?? [];
+                setOpenNight(night && ds.length > 1 && ds.includes(night) ? night : null);
+              }
+        }
         onChange={editing ? setDraft : () => { /* read-first until "Change configuration" is pressed */ }}
         onFaultsChange={editing ? setFaults : undefined}
         onSave={editing ? () => setReasonOpen(true) : undefined}
@@ -337,12 +348,22 @@ export function RoomsTable({
         <ArrivalRoomDialog
           entry={entry}
           roomId={openRoom}
+          night={openNight}
+          roomNights={openRoom ? (roomDates[openRoom]?.dates ?? []) : []}
           name={openRoom ? (quietName(openRoom) ? `${quietName(openRoom)} — Room ${numberOf(openRoom)}` : `Room ${numberOf(openRoom)}`) : ""}
           onClose={() => setOpenRoom(null)}
           onChanged={changed}
         />
       ) : (
-        <RoomTypeDialog entry={entry} roomId={openRoom} name={openRoom ? nameOf(openRoom) : ""} onClose={() => setOpenRoom(null)} onChanged={changed} />
+        <RoomTypeDialog
+          entry={entry}
+          roomId={openRoom}
+          night={openNight}
+          roomNights={openRoom ? (roomDates[openRoom]?.dates ?? []) : []}
+          name={openRoom ? nameOf(openRoom) : ""}
+          onClose={() => setOpenRoom(null)}
+          onChanged={changed}
+        />
       )}
 
       <DsDialog

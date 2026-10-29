@@ -155,9 +155,9 @@ export type ArrivalRoomChoice = QuietRoomChoice;
  * Arrival: the other rooms of a room's type and what taking each would do. `mode` CHOOSE before the
  * rooms are handed out (the quiet choice), ROOM_CHANGE after (the room change, with `makeWay`).
  */
-export function getArrivalRoomChoices(session: Session, entryId: string, fromRoomId: string) {
-  return apiRequest<{ mode: "CHOOSE" | "ROOM_CHANGE"; typeName: string | null; choices: ArrivalRoomChoice[] }>(
-    `/api/entries/${entryId}/arrival-room-choices?fromRoomId=${encodeURIComponent(fromRoomId)}`,
+export function getArrivalRoomChoices(session: Session, entryId: string, fromRoomId: string, nights?: string[] | null) {
+  return apiRequest<{ mode: "CHOOSE" | "ROOM_CHANGE"; nights: string[]; typeName: string | null; choices: ArrivalRoomChoice[] }>(
+    `/api/entries/${entryId}/arrival-room-choices?fromRoomId=${encodeURIComponent(fromRoomId)}${nights?.length ? `&nights=${nights.join(",")}` : ""}`,
     { session },
   );
 }

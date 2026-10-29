@@ -19,7 +19,7 @@ import { Button } from "@/design-system/components/primitives";
 import { useSession } from "@/hooks/use-session";
 import { getRoomTypeOptions, type RoomTypeOption } from "@/lib/api/booking-rooms";
 import { changeBookingRoom } from "@/lib/api/entries";
-import { fmtRange, money, plural } from "@/lib/ds/format";
+import { fmtDay, fmtRange, money, plural } from "@/lib/ds/format";
 import type { EntryDetail } from "@/types/api";
 import { DsDialog, atLeast, toastRefusal } from "./kit";
 
@@ -32,6 +32,8 @@ const nextDay = (d: string) => {
 export function RoomTypeDialog({
   entry,
   roomId,
+  night = null,
+  roomNights = [],
   name,
   onClose,
   onChanged,
@@ -39,6 +41,10 @@ export function RoomTypeDialog({
   entry: EntryDetail;
   /** The room double-clicked; null when the dialog is shut. */
   roomId: string | null;
+  /** The night picked in the table's night list — that night only, the others kept (2026-10-29). */
+  night?: string | null;
+  /** The nights the room is the booking's. */
+  roomNights?: string[];
   /** "Standard Double · room 1" before Arrival, "Room 203" after. */
   name: string;
   onClose: () => void;
@@ -72,11 +78,14 @@ export function RoomTypeDialog({
   const span = nights.length ? `${fmtRange(nights[0], nextDay(nights[nights.length - 1]))} · ${plural(nights.length, "night")}` : "";
   const cur = data?.currency ?? "BTN";
 
+  const oneNight = !!night && roomNights.length > 1;
   const change = useMutation({
     mutationFn: () =>
       changeBookingRoom(session!, entry.id, {
         fromRoomId: roomId!,
-        toRoomId: target!,
+        ...(oneNight
+          ? { perNight: roomNights.map((d) => ({ date: d, roomId: d === night ? target! : roomId! })) }
+          : { toRoomId: target! }),
         reason: reason.trim(),
         systemChosen: data?.beforeArrival === true,
       }),
@@ -110,8 +119,8 @@ export function RoomTypeDialog({
       open={open}
       onClose={onClose}
       busy={change.isPending}
-      title={`Change the room type of ${name}`}
-      caseLines={[entry.id, ...(span ? [inHouse ? `from tonight · ${span}` : span] : [])]}
+      title={`Change the room type of ${name}${oneNight ? ` on ${fmtDay(night!)}` : ""}`}
+      caseLines={[entry.id, ...(oneNight ? [`${fmtDay(night!)} only — the other nights keep this room`] : span ? [inHouse ? `from tonight · ${span}` : span] : [])]}
       help={
         <>
           <p>The booking is priced again on the new type, its rooms held again and its papers made again — and it comes back to this step. Nothing goes to the guest unless you send it.</p>

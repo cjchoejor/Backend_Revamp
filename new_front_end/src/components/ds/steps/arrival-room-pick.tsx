@@ -21,6 +21,7 @@ import { useSession } from "@/hooks/use-session";
 import { chooseBookingRoom, getArrivalRoomChoices, type ArrivalRoomChoice } from "@/lib/api/booking-rooms";
 import { changeBookingRoom } from "@/lib/api/entries";
 import type { EntryDetail } from "@/types/api";
+import { fmtDay } from "@/lib/ds/format";
 import { DsDialog, toastRefusal } from "./kit";
 
 const first = (s: string) => s.replace(/ \(ENT-[^)]+\)$/, "");
@@ -28,6 +29,8 @@ const first = (s: string) => s.replace(/ \(ENT-[^)]+\)$/, "");
 export function ArrivalRoomDialog({
   entry,
   roomId,
+  night = null,
+  roomNights = [],
   name,
   onClose,
   onChanged,
@@ -35,6 +38,14 @@ export function ArrivalRoomDialog({
   entry: EntryDetail;
   /** The room double-clicked; null when the dialog is shut. */
   roomId: string | null;
+  /**
+   * The night picked in the table's night list (2026-10-29, operator: "I changed the room … by
+   * choosing night one from the drop down, but it also changed night two"): the new room is for that
+   * night only, the guest keeping this room on its other nights. Null — every night.
+   */
+  night?: string | null;
+  /** The nights the room is the booking's — the other nights keep it on a change of one night. */
+  roomNights?: string[];
   /** "Standard Double · room 1 — Room 303" or "Room 303". */
   name: string;
   onClose: () => void;
@@ -43,8 +54,8 @@ export function ArrivalRoomDialog({
   const { session } = useSession();
   const open = !!roomId;
   const q = useQuery({
-    queryKey: ["arrival-room-choices", entry.id, roomId, entry.updatedAt],
-    queryFn: () => getArrivalRoomChoices(session!, entry.id, roomId!),
+    queryKey: ["arrival-room-choices", entry.id, roomId, night, entry.updatedAt],
+    queryFn: () => getArrivalRoomChoices(session!, entry.id, roomId!, night ? [night] : null),
     enabled: !!session && open,
     staleTime: 5_000,
   });
@@ -57,9 +68,15 @@ export function ArrivalRoomDialog({
   }, [roomId]);
   const chosen: ArrivalRoomChoice | null = data?.choices.find((c) => c.roomId === toRoom) ?? null;
   const handedOut = data?.mode === "ROOM_CHANGE";
+  const oneNight = !!night && roomNights.length > 1;
 
   const give = useMutation({
     mutationFn: async () => {
+      if (oneNight) {
+        // That night in the new room, every other night kept as it is.
+        const perNight = roomNights.map((d) => ({ date: d, roomId: d === night ? toRoom! : roomId! }));
+        return changeBookingRoom(session!, entry.id, { fromRoomId: roomId!, perNight, reason: reason.trim(), makeWay: true });
+      }
       if (handedOut) {
         return changeBookingRoom(session!, entry.id, { fromRoomId: roomId!, toRoomId: toRoom!, reason: reason.trim(), makeWay: true });
       }
@@ -68,7 +85,7 @@ export function ArrivalRoomDialog({
     onSuccess: (res) => {
       const moved = chosen?.moves ?? [];
       toast.success(
-        `Room ${chosen?.roomNumber} is this booking's now` +
+        `Room ${chosen?.roomNumber} is this booking's ${oneNight ? `on ${fmtDay(night!)}` : "now"}` +
           (moved.length ? ` — ${moved.map((m) => `${first(m.booking)} moves to Room ${m.toRoomNumber}`).join(", ")}` : ""),
         { duration: 9000 },
       );
@@ -89,7 +106,7 @@ export function ArrivalRoomDialog({
       open={open}
       onClose={onClose}
       busy={give.isPending}
-      title={`Another ${data?.typeName ?? "room"} for ${name}`}
+      title={`Another ${data?.typeName ?? "room"} for ${name}${oneNight ? ` on ${fmtDay(night!)}` : ""}`}
       caseLines={[entry.id]}
       help={
         <>
@@ -98,7 +115,13 @@ export function ArrivalRoomDialog({
             A room another booking holds only as the system&rsquo;s choice can be taken: Arrival comes first, and that booking moves to
             another room of the same type — same rate, nothing sent to its guest. A room chosen by number, or already handed out, cannot.
           </p>
-          {handedOut ? <p>The rooms are already handed out, so this is a room change: the booking is priced again (the same rate), its papers are made again and held for you, and it comes back here.</p> : null}
+          {oneNight ? (
+            <p>
+              Only {fmtDay(night!)} is changed — the night picked in the table. The guest keeps this room on its other nights. Pick All
+              nights in the table to change every night.
+            </p>
+          ) : null}
+          {handedOut ? <p>This is a room change: the booking is priced again (the same rate), its papers are made again and held for you, and it comes back here.</p> : null}
         </>
       }
       footer={
@@ -157,6 +180,11 @@ export function ArrivalRoomDialog({
           })}
         </div>
       )}
+      {oneNight ? (
+        <p className="sm" style={{ marginTop: 10 }}>
+          <b>{fmtDay(night!)} only</b> — the other {roomNights.length - 1 === 1 ? "night stays" : `${roomNights.length - 1} nights stay`} in this room.
+        </p>
+      ) : null}
       {handedOut ? (
         <div className="field" style={{ marginTop: 10 }}>
           <label>Why</label>
