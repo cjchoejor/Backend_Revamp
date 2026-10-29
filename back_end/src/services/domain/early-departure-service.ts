@@ -669,6 +669,18 @@ export async function recordEarlyDeparture(
     }
   }
 
+  // Tonight, if it was posted ahead (at check-in, or by the desk), is no longer a night of the stay —
+  // its lines go to zero before the move to Check-out (2026-10-29).
+  {
+    const { reconcileTonightBestEffort } = await import("../application/s7-night-audit-service.js");
+    await reconcileTonightBestEffort(prisma, {
+      entryId,
+      actorId: actor.actorId,
+      actorLevel: actor.actorLevel,
+      reason: "Left early — tonight is not a night of the stay",
+    });
+  }
+
   // --- Compression into S8 (SIG-S8 §1.2: "Early Departure mode compresses S7→S8") -------------
   let movedToCheckout = false;
   let checkoutBlocked: { code: string; message: string } | null = null;

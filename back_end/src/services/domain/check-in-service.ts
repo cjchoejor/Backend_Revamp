@@ -574,6 +574,11 @@ export async function completeCheckInToS7(
   // A request to pay later that nobody answered is moot once the guest is in.
   await closeMootCheckInPaymentRequests(prisma, entryId, "CHECKED_IN").catch(() => {});
 
+  // Tonight on the bill at once (2026-10-29) — the hotel's run later finds it there and posts nothing more.
+  const checkedInBy = await prisma.staffUser.findUnique({ where: { id: actorId }, select: { actorLevel: true } }).catch(() => null);
+  const { postTonightAtCheckIn } = await import("../application/s7-night-audit-service.js");
+  await postTonightAtCheckIn(prisma, { entryId, actorId, actorLevel: checkedInBy?.actorLevel ?? undefined });
+
   return prisma.entry.findUniqueOrThrow({
     where: { id: entryId },
     include: { folio: true, guestProfile: true, handoffs: { orderBy: { createdAt: "desc" } } },

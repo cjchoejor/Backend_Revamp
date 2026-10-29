@@ -256,6 +256,17 @@ export async function departRoomEarly(
     // swallowed on purpose — see above
   }
 
+  // The room no longer sleeps the guest tonight — its line, if posted ahead, goes to zero (2026-10-29).
+  {
+    const { reconcileTonightBestEffort } = await import("../application/s7-night-audit-service.js");
+    await reconcileTonightBestEffort(prisma, {
+      entryId: entry.id,
+      actorId: input.actorId,
+      actorLevel: input.actorLevel,
+      reason: `Room ${room.roomNumber} released — tonight is not charged for it`,
+    });
+  }
+
   return {
     roomId: room.id,
     roomNumber: room.roomNumber,

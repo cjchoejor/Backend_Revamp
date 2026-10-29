@@ -3499,6 +3499,17 @@ export async function changeRoomToNewSegment(
     for (const [from, to] of Object.entries(input.dateShift?.roomMap ?? {})) pairs.push([from, to]);
     await carryBedsToNewRooms(args[0], input.entryId, bedsBefore, pairs);
   }
+  // A change made from tonight while the guest is in house: tonight's lines already on the bill are
+  // put right at once (2026-10-29 — tonight is posted at check-in, before the hotel's run).
+  if (!out.dryRun && out.originStage === "S7" && !input.extension) {
+    const { reconcileTonightBestEffort } = await import("../application/s7-night-audit-service.js");
+    await reconcileTonightBestEffort(args[0], {
+      entryId: input.entryId,
+      actorId: args[1].actorId,
+      actorLevel: args[1].actorLevel,
+      reason: out.setupOnly ? "Changed tonight — tonight is charged as the room is now set up" : "Room changed tonight — tonight is charged on the room the guest sleeps in",
+    });
+  }
   return out;
 }
 
