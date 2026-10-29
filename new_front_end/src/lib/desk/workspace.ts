@@ -646,13 +646,14 @@ export function s7Readiness(entry: EntryDetail, hotelToday: string | null = null
       met: h4Init || leavingToday,
     },
     {
-      card: "faults",
+      // Off the page since 2026-10-29 (a pop-up from the step line) — read with the departments.
+      card: "departments",
       label: openFaults
         ? `${openFaults} open fault${openFaults === 1 ? "" : "s"} — carried to check-out, recorded at the inspection`
         : "Deficiencies resolved",
       met: deficientFinal,
     },
-    { label: "No open disputes", met: openDisputes.length === 0, card: "disputes" },
+    { label: "No open disputes", met: openDisputes.length === 0, card: "folio" },
   ];
 }
 

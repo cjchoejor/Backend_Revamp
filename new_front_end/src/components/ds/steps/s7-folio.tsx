@@ -160,10 +160,15 @@ export function FolioCard({
   entry,
   onTab,
   onInterimPayment,
+  target,
+  setTarget,
 }: {
   entry: EntryDetail;
   onTab: (target: string) => void;
   onInterimPayment: () => void;
+  /** The room or space the next charge goes to — an open tab on the folio. */
+  target: string;
+  setTarget: (v: string) => void;
 }) {
   const { session } = useSession();
   const { past } = useStepMode();
@@ -185,6 +190,9 @@ export function FolioCard({
   const [paper, setPaper] = useState<PaperRef | null>(null);
   const [correcting, setCorrecting] = useState(false);
   const [crediting, setCrediting] = useState(false);
+  // One Post a charge, inside the bill (2026-10-29, operator: "post charge needs one concrete button
+  // which is prominent, maybe inside the folio section") — where it's from is the form's first question.
+  const [charging, setCharging] = useState(false);
 
   return (
     <StepCard
@@ -223,10 +231,20 @@ export function FolioCard({
               <b className="money">{money(f?.billedSoFar ?? null, cur)}</b>
             </span>
           </div>
-          <div className="row-acts" style={{ marginTop: 12 }}>
+          <div className="folio-acts">
+            <Live>
+              <Button
+                className={folioLive ? "go" : undefined}
+                icon="pen"
+                state={folioLive ? "default" : "inert"}
+                reason={folioLive ? undefined : "charges post once the folio is live — at check-in"}
+                onClick={() => setCharging(true)}
+              >
+                Post a charge
+              </Button>
+            </Live>
             <Button
               kind="secondary"
-              compact
               icon="file"
               state={interim?.available ? "default" : "inert"}
               reason={interim && !interim.available ? interim.unavailableReason ?? undefined : undefined}
@@ -237,12 +255,11 @@ export function FolioCard({
               Interim statement
             </Button>
             <Live>
-              <Button kind="quiet" compact onClick={onInterimPayment}>
+              <Button kind="secondary" onClick={onInterimPayment}>
                 Interim payment
               </Button>
               <Button
-                kind="quiet"
-                compact
+                kind="secondary"
                 state={folioLive ? "default" : "inert"}
                 title={folioLive ? undefined : "the folio takes corrections while it is live"}
                 onClick={() => setCorrecting(true)}
@@ -250,8 +267,7 @@ export function FolioCard({
                 Correct a charge
               </Button>
               <Button
-                kind="quiet"
-                compact
+                kind="secondary"
                 state={elevated && folioLive ? "default" : "inert"}
                 reason={elevated ? undefined : "a credit note is the FOM's"}
                 title={folioLive ? undefined : "the folio takes credit notes while it is live"}
@@ -266,6 +282,7 @@ export function FolioCard({
       <PaperDrawer paper={paper} onClose={() => setPaper(null)} />
       {folio && !past ? (
         <>
+          <PostChargeDialog entry={entry} open={charging} onClose={() => setCharging(false)} target={target} setTarget={setTarget} />
           <CorrectionDialog entry={entry} open={correcting} onClose={() => setCorrecting(false)} />
           <CreditNoteDialog entry={entry} open={crediting} onClose={() => setCrediting(false)} />
         </>
@@ -276,57 +293,25 @@ export function FolioCard({
 
 /* ------------------------------------------------------------------ post a charge */
 
-export function PostChargeCard({
-  entry,
-  target,
-  setTarget,
-}: {
-  entry: EntryDetail;
-  target: string;
-  setTarget: (v: string) => void;
-}) {
-  const { past } = useStepMode();
-  const [outlet, setOutlet] = useState<OutletId | null>(null);
-  if (past) return null;
-  const folioLive = entry.folio?.state === "LIVE";
-  return (
-    <StepCard
-      title="Post a charge"
-      meta="Each opens the same form: where it's from, the bill's number, when it was had, the room and the amount. Who it's billed to follows Who pays."
-    >
-      <div className="row-acts">
-        {OUTLETS.map((o) => (
-          <Button
-            key={o.id}
-            kind="quiet"
-            compact
-            state={folioLive ? "default" : "inert"}
-            title={folioLive ? undefined : "charges post once the folio is live — at check-in"}
-            onClick={() => setOutlet(o.id)}
-          >
-            {o.label}
-          </Button>
-        ))}
-      </div>
-      {folioLive ? null : <span className="control-note">Charges post once the folio is live — at check-in</span>}
-      <PostChargeDialog entry={entry} outlet={outlet} setOutlet={setOutlet} target={target} setTarget={setTarget} />
-    </StepCard>
-  );
-}
-
 function PostChargeDialog({
   entry,
-  outlet,
-  setOutlet,
+  open,
+  onClose,
   target,
   setTarget,
 }: {
   entry: EntryDetail;
-  outlet: OutletId | null;
-  setOutlet: (o: OutletId | null) => void;
+  open: boolean;
+  onClose: () => void;
   target: string;
   setTarget: (v: string) => void;
 }) {
+  const [outlet, setOutletState] = useState<OutletId | null>(null);
+  // Closing the form forgets where it was from, so the next charge starts with the question.
+  const setOutlet = (o: OutletId | null) => {
+    setOutletState(o);
+    if (o === null) onClose();
+  };
   const { session } = useSession();
   const refresh = useRefreshEntry(entry.id);
   const hotelToday = useHotelDay()?.today ?? null;
@@ -402,7 +387,7 @@ function PostChargeDialog({
   return (
     <>
       <WideDialog
-        open={!!o}
+        open={open}
         onClose={() => setOutlet(null)}
         register="commit"
         title="Post a charge"
@@ -420,7 +405,10 @@ function PostChargeDialog({
           </>
         }
       >
-        <Choice options={OUTLETS.map((x) => [x.id, x.label] as const)} value={outlet} onChange={(v) => setOutlet(v)} />
+        <div className="field">
+          <label>Where is it from?</label>
+          <Choice options={OUTLETS.map((x) => [x.id, x.label] as const)} value={outlet} onChange={(v) => setOutletState(v)} />
+        </div>
         <div className="form2" style={{ marginTop: 8 }}>
           <div className="field">
             <label>

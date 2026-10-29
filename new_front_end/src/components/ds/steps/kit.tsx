@@ -2100,12 +2100,15 @@ export function WorkPopup({
   title,
   onClose,
   acts,
+  keepMounted = false,
   children,
 }: {
   open: boolean;
   title: ReactNode;
   onClose: () => void;
   acts?: ReactNode;
+  /** Keep what is inside alive while closed (2026-10-29 — Stay's night audit reports to the move from there). */
+  keepMounted?: boolean;
   children: ReactNode;
 }) {
   const panelRef = useRef<HTMLDivElement | null>(null);
@@ -2128,10 +2131,10 @@ export function WorkPopup({
       html.style.overflow = before;
     };
   }, [open]);
-  if (!open) return null;
+  if (!open && !keepMounted) return null;
   return (
     <Overlay>
-      <div className="work-scrim" onMouseDown={(e) => e.target === e.currentTarget && closeRef.current()}>
+      <div className="work-scrim" hidden={!open} onMouseDown={(e) => e.target === e.currentTarget && closeRef.current()}>
         <div className="work-panel" role="dialog" aria-modal="true" aria-label={typeof title === "string" ? title : undefined} tabIndex={-1} ref={panelRef}>
           <div className="work-panel-head">
             <h3>{title}</h3>

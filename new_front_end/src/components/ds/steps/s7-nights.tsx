@@ -211,6 +211,8 @@ export function NightsCard({
                         <span key={l.id}>
                           {i > 0 ? <span className="meta"> · </span> : null}
                           {l.roomId && ls.length > 1 ? <span className="meta">Room {roomNo.get(l.roomId) ?? "?"} </span> : null}
+                          {/* A night put right after a change tonight (2026-10-29) — the ledger's own line, named. */}
+                          {l.description.startsWith("Correction for") ? <span className="meta">put right </span> : null}
                           {money(l.amount, l.currency)}
                         </span>
                       ))

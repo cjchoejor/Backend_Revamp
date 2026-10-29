@@ -210,12 +210,11 @@ const CHECKIN_SECTIONS: Record<string, string> = {
  * Stay's sections (2026-10-29, operator: "also stage 7") — the day's work. They are numbered but
  * never fold: a stay is worked on every day, in whatever order the day takes.
  */
+// The night audit, disputes, faults and the guest table open from the step line since 2026-10-29;
+// their lines are read with the bill and the departments.
 const STAY_SECTIONS: Record<string, string> = {
   folio: "The bill",
-  nights: "The nights",
   departments: "The departments",
-  faults: "Faults",
-  disputes: "Disputes",
 };
 /** The steps drawn in the stage-template layout, with their sections (Inquiry to Stay). */
 const STEP_SECTIONS: Partial<Record<number, Record<string, string>>> = {
@@ -1004,7 +1003,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                     const r = s7Readiness(entry, hotelToday);
                     return [
                       ...r.filter((x) => !x.card || x.card === "folio"),
-                      { label: "Night audit complete", met: nightAuditOk, card: "nights" },
+                      { label: "Night audit complete", met: nightAuditOk, card: "folio" },
                       ...r.filter((x) => x.card && x.card !== "folio"),
                     ];
                   })()

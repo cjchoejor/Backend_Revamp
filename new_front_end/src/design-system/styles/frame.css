@@ -1764,11 +1764,19 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .work-scrim { position: fixed; top: 53px; left: 0; right: var(--file-w, 0px); bottom: 0; z-index: 84; display: flex; align-items: flex-start; justify-content: center; padding: var(--s4); background: rgba(20, 24, 22, .38); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); }
 .ds .work-panel { width: 100%; max-height: 100%; overflow: auto; overscroll-behavior: contain; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-dialog); box-shadow: var(--shadow-dialog, var(--shadow-pop)); padding: var(--s3) var(--s4) var(--s4); animation: also-in .18s ease-out; }
 .ds .work-panel:focus { outline: none; }
+.ds .work-scrim[hidden] { display: none; }
 .ds .work-panel-head { position: sticky; top: calc(-1 * var(--s3)); z-index: 3; display: flex; align-items: center; justify-content: space-between; gap: var(--s3); margin: calc(-1 * var(--s3)) 0 var(--s3); padding: var(--s3) 0 var(--s2); border-bottom: 1px solid var(--line); background: var(--surface); }
 .ds .work-panel-head h3 { margin: 0; font-size: var(--t-h3); }
 .ds .work-panel-acts { display: inline-flex; flex-wrap: wrap; gap: var(--s2); align-items: center; }
 @media (max-width: 1100px) { .ds .work-scrim { right: 0; } }
 @media (prefers-reduced-motion: reduce) { .ds .work-panel { animation: none; } }
+/* Stay (2026-10-29): the bill's acts read as acts — Post a charge first, green; the rest full size. */
+.ds .folio-acts:not(.desk-root *) { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: center; margin-top: var(--s3); padding-top: var(--s3); border-top: 1px solid var(--line); }
+/* What needs doing at Stay from the sections that live in pop-ups: one line each, a button to it. */
+.ds .stay-attention:not(.desk-root *) { display: grid; gap: var(--s2); margin-bottom: var(--s3); }
+.ds .stay-attention .att:not(.desk-root *) { display: flex; align-items: center; justify-content: space-between; gap: var(--s3); flex-wrap: wrap; border: 1px solid var(--warning-line); border-left: 5px solid var(--warning); background: var(--warning-soft); border-radius: var(--r-control); padding: var(--s2) var(--s3); }
+.ds .stay-attention .att.stop:not(.desk-root *) { border-color: var(--danger-line); border-left-color: var(--danger); background: var(--danger-soft); }
+.ds .stay-attention .att b:not(.desk-root *) { font-size: var(--t-base); }
 
 
 /* The topbar clock reads to the second (2026-10-28): figures of one width, so the time does not
