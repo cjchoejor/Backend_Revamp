@@ -175,14 +175,15 @@ const SETUP_SECTIONS: Record<string, string> = {
   proforma: "The proforma",
   money: "The payment plan",
   hold: "The committed hold",
-  // Only when it applies: the guest's other booking, a conference, the desk's own words (2026-10-29).
-  reserve: "Before you reserve",
 };
 /**
- * Reserve's section (2026-10-29): the confirmation voucher and the guest's answer to it, which
- * Arrival waits for. The booking is reserved from Set up — there is no page between the two.
+ * Reserve's sections (2026-10-29): before the click, the facts on record that Reserve signs — the
+ * Reserve page's own button is the one that reserves (restored the same day, operator: "the Reserve
+ * button in stage 4 is the real button that moves a booking from Set up to stage 4"); after it,
+ * the confirmation voucher, sent or not, and its answer when it went out.
  */
 const RESERVE_SECTIONS: Record<string, string> = {
+  facts: "Before you reserve",
   voucher: "The confirmation voucher",
 };
 /** Arrival's five sections (2026-10-29), in the order the desk works them; the handoff records itself once the first three are done. */
@@ -377,9 +378,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
 
   const currentOrder = entry ? currentStepOrder(entry) : 1;
   const readyToConfirm = entry ? canConfirm(entry, { paymentSatisfied, totalReceived, requiredAmount, communications }) : false;
-  // A booking at Set up is reserved from Set up itself (2026-10-29, operator: "the screen shows 4 ·
-  // Reserve when we are actually in stage 3 … remove that first page") — Reserve opens once it is.
-  const maxReach = !entry ? 1 : entry.currentStage === "S3" ? Math.min(maxReachableOrder(entry), 3) : maxReachableOrder(entry);
+  // A finished Set up opens the Reserve page, where the booking is reserved (2026-10-29).
+  const maxReach = !entry ? 1 : entry.currentStage === "S3" && !readyToConfirm ? Math.min(maxReachableOrder(entry), 3) : maxReachableOrder(entry);
 
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [checkInOpen, setCheckInOpen] = useState(false);
@@ -532,7 +532,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
         from: "Set up",
         to: "Reserve",
         who: [[g?.firstName, g?.lastName].filter(Boolean).join(" ") || null, updated.id].filter(Boolean).join(" · "),
-        next: "Next: the confirmation voucher goes to the guest — record their answer, and Arrival can open.",
+        next: "Next: send the confirmation voucher or not — if it goes out, record the guest's answer — then Move to Arrival.",
       });
     },
     // A refusal closes the dialog (2026-09-18): it stayed open over the page, hiding the very
@@ -918,10 +918,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     : confirmStepActive
       ? [...confirmReadiness(entry, { paymentSatisfied, totalReceived, requiredAmount, communications }), ...reserveExtras.map((label) => ({ label, met: false }))]
       : setupStepActive
-        ? [
-            ...withUnsaved(confirmReadiness(entry, { paymentSatisfied, totalReceived, requiredAmount, communications }), unsavedSections),
-            ...reserveExtras.map((label) => ({ label, met: false, card: "reserve" })),
-          ]
+        ? withUnsaved(confirmReadiness(entry, { paymentSatisfied, totalReceived, requiredAmount, communications }), unsavedSections)
       : inquiryStepActive
         ? withUnsaved(s1Readiness(entry), unsavedSections)
         : quoteStepActive
@@ -1122,13 +1119,14 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
       </Button>
     );
   } else if (setupStepActive) {
-    // Reserve is pressed here (2026-10-29) — its commit dialog, then the booking is at Reserve. Green
-    // once it can be pressed; a section with changes not saved holds it (2026-10-28).
-    const ok = ready && !preconds.some((p) => p.unsaved);
+    // Set up's move opens the Reserve page; the booking stays at Set up until Reserve the booking is
+    // pressed there (restored 2026-10-29). Green once it can be pressed; a section with changes not
+    // saved holds it (2026-10-28).
+    const ok = readyToConfirm && !preconds.some((p) => p.unsaved);
     moveReady = ok;
     forward = (
-      <Button className="go" state={ok ? "default" : "inert"} reason={ok ? undefined : firstNote} onClick={() => setConfirmOpen(true)}>
-        Reserve the booking
+      <Button className="go" state={ok ? "default" : "inert"} reason={ok ? "the booking stays at Set up until you reserve it" : firstNote} onClick={() => setSelected(4)}>
+        Move to Reserve
       </Button>
     );
   } else if (confirmedS4Active) {
@@ -1252,7 +1250,6 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
             parking={parkMutation.isPending}
             goToStep={viewingPast ? NOOP : stableSetSelected}
             onChangeStay={viewingPast ? undefined : openChangeStay}
-            onReserveItems={setupStepActive ? reportReserveExtras : undefined}
           />
         );
       case "confirm":
@@ -1263,6 +1260,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
             parkNow={parkable ? parkNow : undefined}
             parking={parkMutation.isPending}
             goToStep={gotoStep}
+            reserve={confirmStepActive ? { onClick: () => setConfirmOpen(true), ready, reason: ready ? undefined : firstNote } : null}
+            onOpenItems={confirmStepActive ? reportReserveExtras : undefined}
             onChangeStay={confirmedS4Active ? openChangeStay : undefined}
           />
         );
@@ -1868,7 +1867,10 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                       <div className={`before-move-foot ${sectionsLeft ? "wait" : "ready"}`}>
                         {sectionsLeft
                           ? `${plural(sectionsLeft, "thing")} still to do`
-                          : `${STEP_NAMES[viewing - 1]} is done · next: ${STEP_NAMES[viewing] ?? ""}`}
+                          : confirmStepActive
+                            ? // Not reserved yet: the page's own button does it (2026-10-29).
+                              "Everything is on record · Reserve the booking"
+                            : `${STEP_NAMES[viewing - 1]} is done · next: ${STEP_NAMES[viewing] ?? ""}`}
                       </div>
                     </div>
                   ) : null}

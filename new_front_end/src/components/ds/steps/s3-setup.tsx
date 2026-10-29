@@ -83,7 +83,6 @@ import { SendToField, useSendTo } from "./s8-parts";
 import { CancellationFiguresLine, WaiverTick, useRefundHow } from "./cancel-figures";
 import { CompetingClaimsCard, passesOf, roomsHeldWord, useRoomNumbers, useRoomTypeNames } from "./s2-shared";
 import { PaymentPlanCard } from "./s3-money";
-import { ReserveChecks } from "./s4-reserve";
 import { Help, HelpHere } from "@/components/ds/help";
 import { DateInput } from "@/components/ds/date-input";
 
@@ -132,7 +131,6 @@ export function S3SetUp({
   parking,
   goToStep,
   onChangeStay,
-  onReserveItems,
 }: {
   entry: EntryDetail;
   past: boolean;
@@ -142,8 +140,6 @@ export function S3SetUp({
   goToStep: (n: number) => void;
   /** Change booking › "Change the dates, rooms or guests" — the editor in the page (2026-10-29). */
   onChangeStay?: () => void;
-  /** What Reserve asks that Set up's sections do not — reported to the gate (2026-10-29). */
-  onReserveItems?: (items: string[]) => void;
 }) {
   const { session } = useSession();
   const router = useRouter();
@@ -377,7 +373,6 @@ export function S3SetUp({
       />
       {/* What Reserve asks that the sections above do not — the page between Set up and Reserve
           is gone (2026-10-29), and Reserve the booking floats in here. */}
-      {past ? null : <ReserveChecks entry={entry} onOpenItems={onReserveItems} />}
 
       {isGroupLike || entry.useType === "CORPORATE" ? <CoordinatorCard entry={entry} editable={editable} inq={inq} onChanged={changed} /> : null}
       {isGroupLike ? <FocCard entry={entry} editable={editable} gm={gm} onChanged={changed} /> : null}

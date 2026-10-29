@@ -162,6 +162,8 @@ export function S4Reserve({
   parkNow,
   parking,
   goToStep,
+  reserve,
+  onOpenItems,
   onChangeStay,
 }: {
   entry: EntryDetail;
@@ -170,6 +172,14 @@ export function S4Reserve({
   parkNow?: (reason: string) => void;
   parking?: boolean;
   goToStep: (n: number) => void;
+  /**
+   * The real Reserve, on this page while the booking is still at Set up (2026-10-29, operator: "the
+   * Reserve button in stage 4 is the real button that moves a booking from Set up to stage 4").
+   */
+  reserve: { onClick: () => void; ready: boolean; reason?: string } | null;
+  /** Open items only this canvas knows (conference verification, the desk's own words) — the
+   *  workspace adds them to the gate so both Reserve buttons agree. */
+  onOpenItems?: (items: string[]) => void;
   /** Change booking › "Change the dates, rooms or guests" — the editor in the page (2026-10-29). */
   onChangeStay?: () => void;
 }) {
@@ -202,7 +212,10 @@ export function S4Reserve({
             </Tool>
           </StepCard>
         </>
-      ) : null}
+      ) : (
+        // Before the click (restored 2026-10-29): what Reserve will sign, each fact with its Fix.
+        <BeforeYouReserve entry={entry} goToStep={goToStep} reserve={reserve} onOpenItems={onOpenItems} />
+      )}
       <BookingOtherWays
         entry={entry}
         parkNow={parkNow}
@@ -214,30 +227,235 @@ export function S4Reserve({
   );
 }
 
-/* ------------------------------------------------------------------ before Reserve, at Set up */
+/* ------------------------------------------------------------------ before the click */
 
-/**
- * What Reserve asks that Set up's own sections do not (2026-10-29, operator: "it seems like the screen
- * shows as 4 · Reserve when we are actually in stage 3 … remove that first page, and put the Reserve
- * button on stage 3"). The page between Set up and Reserve is gone; these are the three questions it
- * held that no Set up section asks, shown on Set up as one section, and only when one applies:
- *   - the guest's other reserved booking over these nights (Policy 13 — the FOM says both are meant);
- *   - a conference booking's venue, catering and AV, verified by the FOM;
- *   - what only the desk can know about the guest's own requests ("It's done").
- * Each open one is an item the workspace adds to Reserve's gate.
- */
-export function ReserveChecks({ entry, onOpenItems }: { entry: EntryDetail; onOpenItems?: (items: string[]) => void }) {
+type Line = {
+  key: string;
+  label: string;
+  value: React.ReactNode;
+  who?: React.ReactNode;
+  state: FactState;
+  fix?: number;
+  action?: React.ReactNode;
+};
+
+const KNOWN = [
+  "Quote generated",
+  "Who pays chosen",
+  "Cancellation terms recorded",
+  "Proforma invoice generated",
+  "Proforma sent to guest",
+  "Guest's answer to the proforma recorded",
+  "Advance settled or credit extended",
+  "Rooms blocked",
+  "A contact on file",
+];
+
+function BeforeYouReserve({
+  entry,
+  goToStep,
+  reserve,
+  onOpenItems,
+}: {
+  entry: EntryDetail;
+  goToStep: (n: number) => void;
+  reserve: { onClick: () => void; ready: boolean; reason?: string } | null;
+  onOpenItems?: (items: string[]) => void;
+}) {
+  // A room the system chose and may still move reads "Deluxe Double · room 1" until Arrival.
+  const roomByNo = useBookingRooms(entry).byNumber;
   const { session } = useSession();
   const { past } = useStepMode();
   const clock = useHotelClock(60_000);
   const tz = clock.tz;
+  const pay = usePaymentStatus(entry.id, { enabled: !!entry.folio }).data;
+  const comms = useCommunications(entry.id).data?.items ?? null;
+  const journey = useJourney(entry.id).data ?? null;
+  const billing = useBilling(entry).data ?? null;
   const trace = useTrace(entry.id).data?.items ?? [];
   const asked = useRequestWords(entry, session?.displayName ?? session?.username ?? "the desk");
-  const fom = atLeast(session?.actorLevel, "L2");
+  const since = currentPassStart(entry);
+  const cur = billing?.currency ?? "BTN";
+
+  const checks = confirmReadiness(entry, {
+    paymentSatisfied: pay?.satisfied,
+    totalReceived: pay?.totalReceived ?? null,
+    requiredAmount: pay?.requiredAmount ?? null,
+    communications: comms,
+  });
+  const check = (prefix: string) => checks.find((c) => c.label.startsWith(prefix));
+  const metOr = (prefix: string, dflt = true) => check(prefix)?.met ?? dflt;
+
+  const lines: Line[] = [];
+
+  /* the quote */
+  const quote = operativeQuote(entry);
+  const quoteAnswer = answerWords(latestDispatched(comms ?? undefined, "QUOTATION", since));
+  const jq = journey?.s2Quote;
+  const sameQuote = !!quote && jq?.reference === quote.referenceNumber;
+  lines.push({
+    key: "quote",
+    label: quote?.state === "ACCEPTED" ? "Accepted quotation" : "Quotation",
+    value: quote ? (
+      <>
+        {quote.referenceNumber} · {QUOTE_WORD[quote.state] ?? words(quote.state)}
+        {quoteAnswer ? ` · ${quoteAnswer}` : ""}
+      </>
+    ) : (
+      "no quotation in this pass — Negotiation"
+    ),
+    who: quote
+      ? quote.state === "ACCEPTED"
+        ? `${sameQuote && jq?.acceptedByName ? `${jq.acceptedByName} · ` : ""}accepted ${fmtStamp(quote.acceptedAt, tz)}`
+        : quote.state === "SENT"
+          ? `sent ${fmtStamp(quote.sentAt, tz)}${quote.sentTo ? ` to ${quote.sentTo}` : ""}`
+          : `${sameQuote && jq?.draftedBy ? `${jq.draftedBy} · ` : ""}generated ${fmtStamp(quote.createdAt, tz)} · sending it is optional`
+      : undefined,
+    state: quote ? "on" : "missing",
+    fix: 2,
+  });
+
+  /* the parties and the rate */
+  const party = journey?.s1Inquiry.commercialContext;
+  const guest = entry.guestProfile ?? entry.inquiry?.guestProfile ?? null;
+  const guestName = [guest?.firstName, guest?.lastName].filter(Boolean).join(" ") || guest?.displayName || "the guest";
+  const rateSource = jq?.agentRateDetail?.source ?? null;
+  lines.push({
+    key: "rate",
+    label: "Parties and the rate",
+    value: quote ? (
+      <>
+        <b>{party?.partyName ?? "Direct"}</b> for {guestName}
+        {jq?.nightlyRate != null && sameQuote ? ` · ${money(jq.nightlyRate, jq.currency ?? cur)} / night` : ""}
+        {billing?.stayTotal.amount != null ? ` · ${money(billing.stayTotal.amount, cur)} for the stay` : ""}
+      </>
+    ) : (
+      "the price comes with the quotation"
+    ),
+    who: quote
+      ? party?.type === "TRAVEL_AGENT" || party?.type === "CORPORATE"
+        ? rateSource
+          ? `the account's rate · ${words(rateSource)}`
+          : "the account's rate"
+        : "published rates · the price freezes on the click"
+      : undefined,
+    state: quote ? "on" : "waiting",
+  });
+
+  /* the billing model */
+  const folio = entry.folio ?? null;
+  const lastModelChange = folio?.billingModelTransitions?.[0] ?? null;
+  lines.push({
+    key: "billing",
+    label: "Who pays",
+    value: folio?.billingModel ? billingWord(folio.billingModel) : "not set — Set up",
+    who: folio?.billingModel
+      ? lastModelChange
+        ? `set ${fmtStamp(lastModelChange.createdAt, tz)}`
+        : "set at Set up"
+      : undefined,
+    state: metOr("Who pays chosen") ? "on" : "missing",
+    fix: 3,
+  });
+
+  /* the rooms held */
+  const hold = entry.committedHold ?? null;
+  const holdJ = journey?.s3Setup.committedHold ?? null;
+  // Counted by type while the system may still move them; a room given by number by its number (2026-10-29).
+  const holdRooms = holdJ?.rooms ?? [];
+  const holdWord = holdRooms.length
+    ? roomsHeldWord(holdRooms.map((r) => ({ number: r.roomNumber, typeName: r.roomTypeName, quiet: !!r.roomNumber && roomByNo.has(r.roomNumber) })))
+    : null;
+  const holdOk = metOr("Rooms blocked");
+  lines.push({
+    key: "hold",
+    label: "Rooms held",
+    value: hold ? (
+      <>
+        {holdWord ?? "the rooms"} · {HOLD_WORD[hold.state] ?? words(hold.state)}
+        {holdOk ? ` until ${fmtDateTime(hold.expiresAt, tz)}` : hold.state === "EXPIRED" ? ` at ${fmtDateTime(hold.expiresAt, tz)} — hold them again at Set up` : " — hold them again at Set up"}
+        {hold.commercialJustification ? ` · ${hold.commercialJustification.slice(0, 60)}` : ""}
+      </>
+    ) : (
+      "not held — Set up"
+    ),
+    who: hold ? `placed ${fmtStamp(hold.placedAt, tz)}${holdJ?.placedBy ? ` · ${holdJ.placedBy}` : ""}` : undefined,
+    state: holdOk ? "on" : "missing",
+    fix: 3,
+  });
+
+  /* the terms disclosed */
+  const disc = entry.cancellationDisclosure ?? null;
+  const discJ = journey?.s3Setup.cancellation ?? null;
+  lines.push({
+    key: "terms",
+    label: "Terms disclosed",
+    value: disc
+      ? `cancellation and no-show · ${disc.noShowTreatmentStatement.length > 80 ? `${disc.noShowTreatmentStatement.slice(0, 80)}…` : disc.noShowTreatmentStatement}`
+      : "not yet — Set up · record that the terms were told",
+    who: disc ? `${discJ?.disclosedBy ? `${discJ.disclosedBy} · ` : ""}${fmtStamp(disc.disclosedAt, tz)}` : undefined,
+    state: metOr("Cancellation terms recorded") ? "on" : "missing",
+    fix: 3,
+  });
+
+  /* the advance */
+  const advCheck = check("Advance settled or credit extended");
+  lines.push(
+    folio
+      ? advanceLine(pay, advCheck ? advCheck.met : null, cur, tz)
+      : { key: "advance", label: "Advance", value: "no folio yet — Set up opens it", state: advCheck && !advCheck.met ? "missing" : "waiting", fix: 3 },
+  );
+
+  /* the proforma and the guest's answer */
+  const proformas = (folio?.invoices ?? []).filter((i) => i.invoiceType === "PROFORMA" && i.state !== "SUPERSEDED");
+  const pi = proformas[0] ?? null;
+  const piComm = latestDispatched(comms ?? undefined, "PROFORMA_INVOICE", since);
+  const piAnswer = answerWords(piComm);
+  const piOk = metOr("Proforma invoice generated", false) && metOr("Proforma sent to guest") && metOr("Guest's answer to the proforma recorded");
+  const piSent = !!pi && (pi.dispatchedAt != null || pi.state !== "DRAFT");
+  lines.push({
+    key: "proforma",
+    label: "Proforma and the answer",
+    value: pi ? (
+      <>
+        {pi.invoiceNumber ?? pi.id} · {piSent ? `sent${pi.dispatchedTo ? ` to ${pi.dispatchedTo}` : ""}` : "generated, not sent"}
+        {piSent ? (piAnswer ? ` · ${piAnswer}` : " · their answer is not on record — Set up") : ""}
+        {!metOr("Proforma sent to guest") ? " · money came in, so it must go out first" : ""}
+      </>
+    ) : (
+      "not generated — Set up"
+    ),
+    who: pi ? (piSent ? `sent ${fmtStamp(pi.dispatchedAt, tz)}` : `generated ${fmtStamp(pi.createdAt, tz)} · sending it is optional`) : undefined,
+    state: piOk ? "on" : "missing",
+    fix: 3,
+  });
+
+  /* the guest's contact */
+  const guestReach = [guest?.email, guest?.phone].filter(Boolean).join(" · ");
+  const bookingReach = [entry.contactPersonName, entry.contactPersonPhone].filter(Boolean).join(" · ");
+  lines.push({
+    key: "contact",
+    label: "Contact",
+    value: guestReach || (entry.contactPersonPhone ? bookingReach : "") || "no email or phone on the booking",
+    who: guestReach ? "on the guest's record" : entry.contactPersonPhone ? "the booking's contact" : undefined,
+    state: metOr("A contact on file") ? "on" : "missing",
+    fix: 1,
+  });
+
+  /* any readiness item this list does not name — never hidden */
+  for (const c of checks) {
+    if (c.met || KNOWN.some((k) => c.label.startsWith(k))) continue;
+    lines.push({ key: c.label, label: c.label, value: "not yet on record", state: "missing", fix: 3 });
+  }
+
+  /* conference verification — a gate the backend applies at the click */
+  const conference = entry.useType === "CONFERENCE";
+  const conferenceDone = trace.some((t) => t.eventType === "CONFERENCE.VERIFIED");
   const [verifyOpen, setVerifyOpen] = useState(false);
   const [overlapOpen, setOverlapOpen] = useState(false);
-
-  // The guest's other reserved booking over these nights — read the gate's own way.
+  const fom = atLeast(session?.actorLevel, "L2");
+  // The guest's other reserved booking over these nights — what Reserve asks the FOM about
+  // (Policy 13), read the gate's own way (2026-10-29). Said here with its act, only when it is so.
   const overlapQ = useQuery({
     queryKey: ["guest-bookings", entry.id, "reserve", entry.updatedAt],
     queryFn: () => listSameGuestBookings(session!, entry.id),
@@ -245,13 +463,69 @@ export function ReserveChecks({ entry, onOpenItems }: { entry: EntryDetail; onOp
   });
   const overlap = overlapQ.data?.reserveOverlap ?? null;
   const overlapOpenItem = !!overlap && !overlap.acknowledged;
-  const conference = entry.useType === "CONFERENCE";
-  const conferenceDone = trace.some((t) => t.eventType === "CONFERENCE.VERIFIED");
+  if (overlap) {
+    lines.push({
+      key: "overlap",
+      label: "The guest's other booking",
+      value: overlap.acknowledged
+        ? `${overlap.entryId} (${fmtRange(overlap.checkInDate, overlap.checkOutDate)}) — both bookings are meant`
+        : `${overlap.entryId} is reserved over these nights (${fmtRange(overlap.checkInDate, overlap.checkOutDate)})`,
+      who: overlap.acknowledged ? "acknowledged by the FOM" : "the FOM says whether both are meant before Reserve",
+      state: overlap.acknowledged ? "on" : "missing",
+      action:
+        overlap.acknowledged || past ? undefined : (
+          <Button
+            className="go"
+            state={fom ? "default" : "inert"}
+            title={fom ? undefined : "needs the FOM"}
+            reason={fom ? undefined : "The FOM's call"}
+            onClick={() => setOverlapOpen(true)}
+          >
+            Acknowledge the overlap
+          </Button>
+        ),
+    });
+  }
+  if (conference) {
+    lines.push({
+      key: "conference",
+      label: "Conference verification",
+      value: conferenceDone ? "venue, catering and AV verified" : "venue, catering and AV not yet verified",
+      who: conferenceDone ? "by the FOM" : "the FOM verifies it before Reserve",
+      state: conferenceDone ? "on" : "missing",
+      action: conferenceDone || past ? undefined : (
+        <Button kind="secondary" compact state={fom ? "default" : "inert"} title={fom ? undefined : "needs the FOM"} onClick={() => setVerifyOpen(true)}>
+          Verify
+        </Button>
+      ),
+    });
+  }
+
+  const missing = lines.filter((l) => l.state === "missing");
+  const done = lines.filter((l) => l.state !== "missing");
   const openWords = asked.items.filter((w) => !asked.saved[w.id]).length;
 
+  const renderLine = (l: Line) => (
+    <FactLine
+      key={l.key}
+      label={l.label}
+      value={l.value}
+      who={l.who}
+      state={l.state}
+      action={
+        l.action ??
+        (l.state === "missing" && l.fix && !past ? (
+          <Button kind="secondary" compact onClick={() => goToStep(l.fix!)}>
+            Fix
+          </Button>
+        ) : undefined)
+      }
+    />
+  );
+
   const extraOpen = [
-    ...(overlapOpenItem ? ["The guest's other booking acknowledged by the FOM"] : []),
     ...(conference && !conferenceDone ? ["The conference verified by the FOM"] : []),
+    ...(overlapOpenItem ? ["The guest's other booking acknowledged by the FOM"] : []),
     ...(openWords ? [`${openWords === 1 ? "One thing" : `${openWords} things`} only you can know, said`] : []),
   ].join("|");
   useEffect(() => {
@@ -259,70 +533,87 @@ export function ReserveChecks({ entry, onOpenItems }: { entry: EntryDetail; onOp
   }, [extraOpen, onOpenItems]);
   useEffect(() => () => onOpenItems?.([]), [onOpenItems]);
 
-  if (!overlap && !conference && asked.items.length === 0) return null;
+  // The overlap is not a fact to fix but the FOM's answer, so it is said in its own words.
+  const toFix = missing.filter((l) => l.key !== "overlap").length;
+  const inertWhy = toFix
+    ? `${plural(toFix, "fact")} missing — Fix ${toFix === 1 ? "it" : "them"} first`
+    : overlapOpenItem
+      ? "The FOM says whether both of this guest's bookings are meant — Acknowledge the overlap"
+      : openWords
+      ? `${openWords === 1 ? "one thing" : `${openWords} things`} only you can know — say how ${openWords === 1 ? "it was" : "they were"} arranged`
+      : reserve && !reserve.ready
+        ? reserve.reason ?? "the list at the foot of the page names what is left"
+        : null;
+
   return (
     <>
       <StepCard
-        flow={extraOpen ? "reserve" : undefined}
+        flow="facts"
         title="Before you reserve"
-        meta="What Reserve asks that the sections above do not. Reserve the booking floats in once each is answered."
+        meta="Each line is a fact already on record, with who recorded it and when. Nothing to tick — if a line is wrong or missing, Fix takes you to it. Reserve the booking is your signature on the set: it moves the booking to Reserve and makes the confirmation voucher, which you then send or not."
+        // What still stands in the way, said where the lines are; once nothing does, Reserve the
+        // booking floats in at the foot of the page (2026-10-29).
         status={
-          overlapOpenItem ? (
-            <span className="warn-ink">The FOM says whether both of this guest&rsquo;s bookings are meant</span>
-          ) : conference && !conferenceDone ? (
-            <span className="warn-ink">The FOM verifies the venue, catering and AV</span>
-          ) : openWords ? (
-            <span className="warn-ink">
-              {openWords === 1 ? "One thing" : `${openWords} things`} only you can know — say how {openWords === 1 ? "it was" : "they were"} arranged
-            </span>
-          ) : (
-            <span className="ok-ink">Answered</span>
-          )
+          inertWhy ? (
+            <span className="warn-ink">{inertWhy}</span>
+          ) : entry.status === "PARKED" ? (
+            <span className="warn-ink">Parked — resume the booking to reserve it</span>
+          ) : reserve ? (
+            <span className="ok-ink">Everything is on record — Reserve the booking</span>
+          ) : undefined
         }
       >
-        {overlap ? (
-          <FactLine
-            label="The guest's other booking"
-            value={
-              overlap.acknowledged
-                ? `${overlap.entryId} (${fmtRange(overlap.checkInDate, overlap.checkOutDate)}) — both bookings are meant`
-                : `${overlap.entryId} is reserved over these nights (${fmtRange(overlap.checkInDate, overlap.checkOutDate)})`
-            }
-            who={overlap.acknowledged ? "acknowledged by the FOM" : "the FOM says whether both are meant before Reserve"}
-            state={overlap.acknowledged ? "on" : "missing"}
-            action={
-              overlap.acknowledged || past ? undefined : (
-                <Button className="go" state={fom ? "default" : "inert"} title={fom ? undefined : "needs the FOM"} reason={fom ? undefined : "The FOM's call"} onClick={() => setOverlapOpen(true)}>
-                  Acknowledge the overlap
-                </Button>
-              )
-            }
-          />
-        ) : null}
-        {conference ? (
-          <FactLine
-            label="Conference verification"
-            value={conferenceDone ? "venue, catering and AV verified" : "venue, catering and AV not yet verified"}
-            who={conferenceDone ? "by the FOM" : "the FOM verifies it before Reserve"}
-            state={conferenceDone ? "on" : "missing"}
-            action={
-              conferenceDone || past ? undefined : (
-                <Button className="go" state={fom ? "default" : "inert"} title={fom ? undefined : "needs the FOM"} reason={fom ? undefined : "The FOM's call"} onClick={() => setVerifyOpen(true)}>
-                  Verify
-                </Button>
-              )
-            }
-          />
-        ) : null}
+        {missing.map(renderLine)}
+        {done.map(renderLine)}
         {asked.items.map((w) => (
           <WordRow key={w.id} item={w} saved={asked.saved[w.id]} onRecord={(word) => asked.record(w.id, word)} onUndo={() => asked.undo(w.id)} tz={tz} />
         ))}
       </StepCard>
+
       <ConferenceVerifyDialog entry={entry} open={verifyOpen} onClose={() => setVerifyOpen(false)} />
       <OverlapDialog entry={entry} open={overlapOpen} onClose={() => setOverlapOpen(false)} />
     </>
   );
 }
+
+function advanceLine(pay: PaymentStatusSummary | undefined, met: boolean | null, cur: string, tz: string): Line {
+  if (!pay) return { key: "advance", label: "Advance", value: "reading the payment position…", state: "waiting", fix: 3 };
+  const plan = pay.paymentPlan ?? null;
+  const planWords = plan ? `${PLAN_LABEL[plan.plan]}${plan.balanceDueAt ? ` · ${dueLabel(plan.plan, plan.balanceDueAt)}` : ""}${plan.promisedBy ? ` by ${fmtDateTime(plan.promisedBy, tz)}` : ""}` : null;
+  const last = pay.installments?.length ? pay.installments[pay.installments.length - 1] : null;
+  if (met === null) {
+    return {
+      key: "advance",
+      label: "Advance",
+      value: pay.totalReceived > 0 ? `not required · ${money(pay.totalReceived, cur)} received anyway` : "not required for this booking",
+      state: "on",
+      action: <Chip tone="quiet">not needed</Chip>,
+    };
+  }
+  if (met) {
+    return {
+      key: "advance",
+      label: "Advance",
+      value: pay.paidInFull
+        ? `${money(pay.totalReceived, cur)} received of ${money(pay.requiredAmount, cur)}`
+        : pay.creditExtensionActive
+          ? `${money(pay.totalReceived, cur)} received of ${money(pay.requiredAmount, cur)} · the rest on credit up to ${money(pay.ceilingAmount, cur)}`
+          : `${money(pay.totalReceived, cur)} received of ${money(pay.requiredAmount, cur)}`,
+      who: [last ? `last payment ${fmtStamp(last.receivedAt, tz)}` : null, planWords].filter(Boolean).join(" · ") || undefined,
+      state: "on",
+    };
+  }
+  return {
+    key: "advance",
+    label: "Advance",
+    value: `${money(pay.shortfall, cur)} still to come of ${money(pay.requiredAmount, cur)}${pay.creditExtensionExpired ? " · the credit extension has run out" : ""}`,
+    who: planWords ?? (pay.totalReceived > 0 ? `${money(pay.totalReceived, cur)} received so far` : "nothing received yet"),
+    state: "missing",
+    fix: 3,
+  };
+}
+
+/* ---- what only the desk can know (the prototype's reading of the notes) ---- */
 
 type WordItem = { id: string; k: string; note: string };
 type SavedWord = { word: string; at: string; by: string };
