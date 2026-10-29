@@ -741,9 +741,25 @@ export async function buildRoomPlanHistory(prisma: PrismaClient, entryId: string
   });
   if (!entry) throw new NotFoundError("Entry");
 
-  const configs = entry.availabilityConfigs;
-  const firstConfig = configs[0] ?? null;
-  const latestConfig = configs.length > 0 ? configs[configs.length - 1] : null;
+  const allConfigs = entry.availabilityConfigs;
+  const latestConfig = allConfigs.length > 0 ? allConfigs[allConfigs.length - 1] : null;
+
+  // The rooms are given out at Arrival (2026-10-29, operator: "room assigning was only done in
+  // stage 5, so the system red shouldn't be there"). Until then a booking holds room TYPES and every
+  // choice of a room — the desk's at Arrival included, even one made for a single night through the
+  // room change — is the assignment, not a change. So the starting point is the plan as it stood when
+  // the booking first reached Check-in; only what changed after that is a change. A booking not yet
+  // at Check-in starts from its plan as it is now.
+  const firstAtCheckIn = await prisma.stageDwellRecord.findFirst({
+    where: { entryId, stage: Stage.S6 },
+    orderBy: { enteredAt: "asc" },
+    select: { enteredAt: true },
+  });
+  const cutoff = firstAtCheckIn?.enteredAt ?? null;
+  const beforeCheckIn = cutoff ? allConfigs.filter((c) => (c.sealedAt ?? c.createdAt).getTime() <= cutoff.getTime()) : allConfigs;
+  const firstConfig = beforeCheckIn.length > 0 ? beforeCheckIn[beforeCheckIn.length - 1] : (allConfigs[0] ?? null);
+  // The changes: every pass sealed after that starting point.
+  const configs = firstConfig ? allConfigs.slice(allConfigs.indexOf(firstConfig) + 1) : allConfigs;
 
   // Current plan = latest sealed picture, plus hold + assignment rooms (covers bookings whose
   // plan never went through a sealed config, and the S7 split where both rooms have rows).
@@ -756,9 +772,11 @@ export async function buildRoomPlanHistory(prisma: PrismaClient, entryId: string
     ]),
   );
 
-  // Initial selection: first sealed config; earliest assignments as the legacy fallback.
+  // Initial selection: the plan as it stood when the booking reached Check-in (above); earliest
+  // assignments as the legacy fallback.
   const firstSel = readOptionSelected(firstConfig?.optionSelected ?? null);
   let initialRoomIds = [...firstSel.distinctRoomIds];
+  // A bed set up at Arrival is part of the assignment too — beds changed before Check-in are not changes.
   let initialSelectedAt: Date | null = firstConfig?.sealedAt ?? null;
   if (initialRoomIds.length === 0 && entry.roomAssignments.length > 0) {
     initialRoomIds = Array.from(new Set(entry.roomAssignments.map((a) => a.roomId)));
@@ -825,7 +843,7 @@ export async function buildRoomPlanHistory(prisma: PrismaClient, entryId: string
 
   // Bed setup AT SELECTION TIME: the earliest ROOM.BED_TYPE_CHANGED trace after the selection
   // records the value it moved FROM; no trace since then means the registry still holds it.
-  const bedCutoff = initialSelectedAt ?? entry.createdAt;
+  const bedCutoff = cutoff ?? new Date();
   const bedTraces = initialRoomIds.length
     ? await prisma.traceEvent.findMany({
         where: {
