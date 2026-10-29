@@ -20,7 +20,13 @@ export type HeldDocumentReason =
   | "ROOM_MOVE"
   | "DATE_MOVE"
   /** Rooms split off to a booking of their own (2026-10-14) — both bookings' papers. */
-  | "ROOM_SPLIT";
+  | "ROOM_SPLIT"
+  /**
+   * The desk's own Reserve (2026-10-29, operator: "the confirmation voucher is sent automatically
+   * when I click Reserve the booking, but that should also be optional like how I did for
+   * quotation and proforma") — the voucher is made and waits for the desk, like every other paper.
+   */
+  | "RESERVE";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 

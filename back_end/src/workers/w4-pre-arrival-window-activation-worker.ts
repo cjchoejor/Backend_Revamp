@@ -98,8 +98,8 @@ export async function runPreArrivalWindowActivationWorker(
       detail: {
         voucherDispatched: !!voucherComm,
         message: !voucherComm
-          ? "The confirmation voucher hasn't been sent this segment — send it to the guest, record their answer, then open Arrival."
-          : "Record the guest's answer to the confirmation voucher first — the voucher went out at confirmation; their reply (verbal or written) is captured on the Confirm step.",
+          ? "There is no confirmation voucher on record for this booking as it stands — it is made when the booking is reserved. Record the guest's answer to it, then open Arrival."
+          : "Record the guest's answer to the confirmation voucher first — on the Reserve step, by message or as they told the desk.",
       },
     } as const;
   }

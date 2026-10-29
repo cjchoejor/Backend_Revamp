@@ -124,7 +124,8 @@ reservationsRouter.post("/entries/:id/activate-pre-arrival", requireActorLevel("
 
 reservationsRouter.post("/entries/:id/confirm", requireActorLevel("L1"), validateBody(confirmReservationRequestSchema), async (req, res, next) => {
   try {
-    const out = await reservationService.confirmReservation(prisma, req.params.id, req.actor!.actorId, req.body);
+    // Nothing is emailed on the click (2026-10-29) — the voucher waits for the desk to send it.
+    const out = await reservationService.confirmReservationForDesk(prisma, req.params.id, { actorId: req.actor!.actorId, actorLevel: req.actor!.level }, req.body);
     res.json({ reservation: out.reservation, entry: out.entry });
   } catch (e) {
     next(e);
@@ -232,7 +233,7 @@ reservationsRouter.post("/entries/:id/progress-stage", requireActorLevel("L1"), 
         next(new ValidationError("version is required for S3→S4 progression"));
         return;
       }
-      await reservationService.confirmReservation(prisma, req.params.id, req.actor!.actorId, { version });
+      await reservationService.confirmReservationForDesk(prisma, req.params.id, { actorId: req.actor!.actorId, actorLevel: req.actor!.level }, { version });
       const entryAfterConfirm = await loadEntryDetail(req.params.id);
       if (!entryAfterConfirm) {
         next(new NotFoundError("Entry"));

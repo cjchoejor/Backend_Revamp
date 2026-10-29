@@ -37,6 +37,7 @@ import { generateOrLoadConfirmationVoucherPdf } from "./confirmation-voucher-pdf
 import { computeStayCharges } from "../infrastructure/compute-stay-charges.js";
 import { initialiseTasks as initialisePreArrivalTasks } from "./pre-arrival-service.js";
 import { latestDispatchedInForce, retireSupersededReplyWaitsBestEffort } from "../../lib/reply-waits.js";
+import { recordHeldDocument } from "../../lib/held-documents.js";
 
 function commercialTermsHaveRateBasis(terms: unknown): boolean {
   if (!terms || typeof terms !== "object") return false;
@@ -97,8 +98,8 @@ async function confirmReservationInner(
      * voucher on its own. Set by the walk, the voucher is still generated and its communication
      * still minted (the S4→Arrival answer gate reads it), but the email is held — skipped with
      * reason HELD_FOR_DESK_DECISION — and the walk records a HeldDocument the desk answers
-     * (send by email · mark sent on WhatsApp · don't send). The desk's own confirmation at
-     * Reserve never sets it, and keeps emailing as before.
+     * (send by email · mark sent on WhatsApp · don't send). Since 2026-10-29 the desk's own
+     * Reserve holds it too (`confirmReservationForDesk`): nothing is emailed on the click.
      */
     holdGuestEmail?: boolean;
   },
@@ -376,7 +377,7 @@ async function confirmReservationInner(
       voucherRef: voucher.storageReference,
       templateKey: voucher.templateKey,
       ...(input?.holdGuestEmail
-        ? { contentSummary: "Confirmation voucher re-issued — held for the desk to send or not", holdReplyWindow: true }
+        ? { contentSummary: "Confirmation voucher made — held for the desk to send or not", holdReplyWindow: true }
         : {}),
     });
 
@@ -759,6 +760,33 @@ export async function confirmReservation(...args: Parameters<typeof confirmReser
   const out = await confirmReservationInner(...args);
   const entryId = args[1];
   if (entryId) await retireSupersededReplyWaitsBestEffort(args[0], entryId, args[2]);
+  return out;
+}
+
+/**
+ * The desk's Reserve (2026-10-29, operator: "that should also be optional like how I did for
+ * quotation and proforma"): the booking is reserved and the voucher made exactly as before, but
+ * nothing is emailed on the click. The voucher waits as a held paper the desk answers once — send
+ * it by email, record that it went on WhatsApp, or don't send it (`decideHeldDocument`). Its reply
+ * clock starts when it actually goes out; a guest's answer can still be recorded on it (a guest
+ * told at the desk), and that is what Arrival waits for.
+ */
+export async function confirmReservationForDesk(
+  prisma: PrismaClient,
+  entryId: string,
+  actor: { actorId: string; actorLevel?: string | null },
+  input: Parameters<typeof confirmReservationInner>[3],
+) {
+  const out = await confirmReservation(prisma, entryId, actor.actorId, { ...(input ?? {}), holdGuestEmail: true });
+  await recordHeldDocument(prisma, {
+    entryId,
+    kind: "CONFIRMATION_VOUCHER",
+    documentId: out.reservation.id,
+    reason: "RESERVE",
+    heldBy: actor.actorId,
+    heldByLevel: actor.actorLevel ?? undefined,
+    stage: "S4",
+  });
   return out;
 }
 
