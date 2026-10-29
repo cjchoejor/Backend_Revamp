@@ -69,7 +69,10 @@ export async function dispatchConfirmationVoucherTx(tx: Prisma.TransactionClient
       commType: CommunicationType.CONFIRMATION_VOUCHER,
       stageContext: Stage.S4,
       direction: "OUTBOUND",
-      sendStatus: "DISPATCHED",
+      // A held voucher has not gone out (2026-10-29): HELD until the desk sends it (WhatsApp turns it
+      // DISPATCHED; email sends a fresh record) or says not to (NOT_SENT). An answer is awaited only
+      // for a voucher that went out.
+      sendStatus: input.holdReplyWindow && !input.otaSource ? "HELD" : "DISPATCHED",
       acknowledgementStatus: input.otaSource ? "RECEIVED" : "PENDING",
       acknowledgementTimeoutAt: input.otaSource || input.holdReplyWindow ? null : new Date(Date.now() + input.voucherAckSeconds * 1000),
       actorId: input.actorId,
@@ -121,9 +124,17 @@ export async function armVoucherReplyWindow(
       payload: { path: ["reservationId"], equals: input.reservationId },
     },
     orderBy: { createdAt: "desc" },
-    select: { id: true, entryId: true, acknowledgementTimeoutAt: true },
+    select: { id: true, entryId: true, acknowledgementTimeoutAt: true, sendStatus: true },
   });
-  if (!comm || comm.acknowledgementTimeoutAt) return null;
+  if (!comm) return null;
+  // It has gone out now, on WhatsApp.
+  if (comm.sendStatus === "HELD") {
+    await prisma.communicationRecord.update({
+      where: { id: comm.id },
+      data: { sendStatus: "DISPATCHED", channel: CommunicationChannel.WHATSAPP, contentSummary: "Confirmation voucher sent on WhatsApp" },
+    });
+  }
+  if (comm.acknowledgementTimeoutAt) return null;
   const running = await prisma.timerRecord.count({
     where: { entityType: "CommunicationRecord", entityId: comm.id, timerType: "ACKNOWLEDGEMENT_WINDOW_W22", status: "SCHEDULED" },
   });

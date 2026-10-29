@@ -76,7 +76,7 @@ export async function startWorkers() {
   // in a row). One photo's QR and strip are read in this process while the other's printed text is
   // read in the layout child, which takes one page at a time; the strip reader takes one at a time too.
   await (engine.boss as any).work("IDENTITY_OCR_W39", { batchSize: 1, localConcurrency: 2 }, async (job: any) => runIdentityOcrWorker(prisma, unwrapJobData(job)));
-  await (engine.boss as any).work("PRE_ARRIVAL_COUNTDOWN_W4", async (job: any) => runPreArrivalWindowActivationWorker(prisma, engine, unwrapJobData(job)));
+  await (engine.boss as any).work("PRE_ARRIVAL_COUNTDOWN_W4", async (job: any) => runPreArrivalWindowActivationWorker(prisma, engine, { ...unwrapJobData(job), fromTimer: true }));
   await (engine.boss as any).work(
     "NO_SHOW_CUTOFF_W5",
     async (job: any) => runNoShowCutoffWorker(prisma, engine, { ...(unwrapJobData(job) as any), timerType: "NO_SHOW_CUTOFF_W5" }),

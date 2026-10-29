@@ -384,24 +384,73 @@ async function confirmReservationInner(
     const engine = await getTimerEngine();
     const arrival = entry.checkInDate ?? new Date(Date.now() + 86400_000);
     const preArrivalAt = new Date(arrival.getTime() - Number(preArrivalDays) * 86400_000);
-    const firesAt = preArrivalAt <= new Date() ? new Date() : preArrivalAt;
-    const preArrJob = await engine.schedule("PRE_ARRIVAL_COUNTDOWN_W4", { entryId }, { startAfter: firesAt });
-    await tx.timerRecord.create({
-      data: {
-        entryId,
-        entityType: "Entry",
-        entityId: entryId,
-        timerType: "PRE_ARRIVAL_COUNTDOWN_W4",
-        timerCode: "PRE_ARRIVAL_COUNTDOWN_W4",
-        stageContext: Stage.S4,
-        dueAt: firesAt,
-        firesAt,
+    if (preArrivalAt > now) {
+      // The countdown to Arrival: when the window opens, the booking moves on by itself.
+      const preArrJob = await engine.schedule("PRE_ARRIVAL_COUNTDOWN_W4", { entryId }, { startAfter: preArrivalAt });
+      await tx.timerRecord.create({
+        data: {
+          entryId,
+          entityType: "Entry",
+          entityId: entryId,
+          timerType: "PRE_ARRIVAL_COUNTDOWN_W4",
+          timerCode: "PRE_ARRIVAL_COUNTDOWN_W4",
+          stageContext: Stage.S4,
+          dueAt: preArrivalAt,
+          firesAt: preArrivalAt,
+          status: "SCHEDULED",
+          createdBy: actorId,
+          pgBossJobId: preArrJob,
+          payload: { entryId },
+        },
+      });
+    } else {
+      // Arrival's window is already open (2026-10-29, operator: "why did the Arrival window timer
+      // trigger when I clicked Reserve"). A countdown due at once fired seconds after Reserve, while
+      // the desk was still deciding whether to send the voucher, and read "overdue" when it could
+      // not move on. No clock is armed: the desk moves the booking with Move to Arrival.
+      await tx.traceEvent.create({
+        data: {
+          eventType: "PRE_ARRIVAL.WINDOW_ALREADY_OPEN",
+          actorId,
+          actorLevel: "L1",
+          entityType: "Entry",
+          entityId: entryId,
+          operation: "UPDATE",
+          timestamp: now,
+          stageContext: Stage.S4,
+          inquiryId: entry.inquiryId,
+          entryId,
+          payload: { entryId, windowOpenedAt: preArrivalAt.toISOString(), checkInDate: arrival.toISOString(), windowDays: Number(preArrivalDays) },
+          createdBy: actorId,
+        },
+      });
+    }
+
+    // The quotation has done its job once the booking is reserved — the reservation holds the
+    // terms — so its validity and reply clocks stop (2026-10-29: a reserved booking still read
+    // "Quote valid in 6d 23h").
+    const quoteIds = (await tx.quotation.findMany({ where: { entryId }, select: { id: true, communicationRecordId: true } }));
+    const quoteClocks = await tx.timerRecord.findMany({
+      where: {
         status: "SCHEDULED",
-        createdBy: actorId,
-        pgBossJobId: preArrJob,
-        payload: { entryId },
+        OR: [
+          { entityType: "Quotation", entityId: { in: quoteIds.map((q) => q.id) } },
+          {
+            entityType: "CommunicationRecord",
+            entityId: { in: quoteIds.map((q) => q.communicationRecordId).filter((x): x is string => !!x) },
+            timerType: "ACKNOWLEDGEMENT_WINDOW_W22",
+          },
+        ],
       },
+      select: { id: true, pgBossJobId: true },
     });
+    if (quoteClocks.length) {
+      await Promise.all(quoteClocks.map((t) => (t.pgBossJobId ? engine.cancel(t.pgBossJobId) : Promise.resolve())));
+      await tx.timerRecord.updateMany({
+        where: { id: { in: quoteClocks.map((t) => t.id) } },
+        data: { status: "CANCELLED", cancelledAt: now, cancelledBy: actorId, cancelledReason: "RESERVED — the reservation holds the terms" },
+      });
+    }
 
     // Ownership assignment + H1 creation (minimal)
     await tx.traceEvent.create({
