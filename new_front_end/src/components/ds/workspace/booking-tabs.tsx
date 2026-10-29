@@ -1356,9 +1356,10 @@ function SentPapers({
                 <td>
                   <b>{PAPER_NAME[c.commType] ?? c.commType}</b>
                   {number ? <span className="mono sm"> {number}</span> : null}
-                  <span className="meta"> · {c.channel?.toLowerCase() ?? "email"}</span>
+                  {sent ? <span className="meta"> · {c.channel?.toLowerCase() ?? "email"}</span> : null}
                 </td>
-                <td>{fmtStamp(c.createdAt, tz)}</td>
+                {/* A held or not-sent voucher has no "sent" moment (2026-10-29). */}
+                <td>{sent ? fmtStamp(c.createdAt, tz) : <span className="meta">—</span>}</td>
                 <td>
                   {answered ? (
                     <Chip tone="success">answered</Chip>

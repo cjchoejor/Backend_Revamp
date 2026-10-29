@@ -856,15 +856,20 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const canCheckIn = s6Readiness(entry, { guestDetails: guestDetailsCoverage, identityVerified: stayIdentityVerified }).every((c) => c.met) && registrationConfirmed && keysValid;
 
   const segStart = (entry.segments ?? [])[0]?.startedAt ?? null;
-  const voucherAnswerRecorded = (communications ?? []).some(
-    (c) =>
-      c.commType === "CONFIRMATION_VOUCHER" &&
-      c.direction === "OUTBOUND" &&
-      c.sendStatus === "DISPATCHED" &&
-      c.inForce !== false &&
-      c.acknowledgementStatus === "RECEIVED" &&
-      (!segStart || (c.createdAt ?? "") >= segStart),
-  );
+  // Sending the voucher is the desk's choice; once it went out, its answer is not (2026-10-29,
+  // operator). The newest voucher of this pass that went out and is in force — the backend's own
+  // reading (latestDispatchedInForce) — must be answered; when none went out there is nothing to answer.
+  const voucherSent = (communications ?? [])
+    .filter(
+      (c) =>
+        c.commType === "CONFIRMATION_VOUCHER" &&
+        c.direction === "OUTBOUND" &&
+        c.sendStatus === "DISPATCHED" &&
+        c.inForce !== false &&
+        (!segStart || (c.createdAt ?? "") >= segStart),
+    )
+    .sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""))[0];
+  const voucherAnswerRecorded = !voucherSent || voucherSent.acknowledgementStatus === "RECEIVED";
 
   const ready = readyToConfirm && reserveExtras.length === 0;
   // A no-show says so — the imported ones sit EXPIRED at the end, and read "Expired" (2026-09-18).
@@ -945,7 +950,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                       ? [...closure.checks.map((c) => ({ label: c.label, met: c.met })), { label: "Sealing needs the FOM", met: atLeastFom(session?.actorLevel) }]
                       : [{ label: "Checking what is left before the close…", met: false }]
                     : confirmedS4Active
-                      ? [{ label: "The guest's answer to the confirmation voucher recorded", met: voucherAnswerRecorded }]
+                      ? [{ label: "The guest's answer to the voucher, if it was sent", met: voucherAnswerRecorded }]
                       : viewing < currentOrder
                         ? []
                         : preconditionsFor(entry, step, hotelToday);
@@ -1132,7 +1137,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
       <Button
         className="go"
         state={activateMutation.isPending ? "working" : voucherAnswerRecorded ? "default" : "inert"}
-        reason={voucherAnswerRecorded ? undefined : "record the guest's answer to the voucher first"}
+        reason={voucherAnswerRecorded ? undefined : "the voucher went to the guest — record their answer first"}
         workingLabel="Opening…"
         onClick={() => activateMutation.mutate()}
       >

@@ -672,7 +672,7 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
   const emailed = emailEvents.some((t) => t.eventType.endsWith(".SENT"));
   const sent = emailed || onWhatsApp;
   // Said the way it went out, on the answer line (2026-10-29).
-  const answerWords = { notSent: notSent && !emailed, sentAt: onWhatsApp && !emailed ? decided?.decidedAt ?? null : null };
+  const answerWords = { sentAt: onWhatsApp && !emailed ? decided?.decidedAt ?? null : null };
   // A guest with no email on file is not a failed send — there was nobody to send to, and the
   // voucher is shared at the desk or by phone. It read as "could not be sent — have the email
   // settings fixed" beside the raw code GUEST_HAS_NO_EMAIL (2026-09-18). Nor is a voucher held
@@ -681,22 +681,19 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
   const noAddress = (t: TraceItem) => reasonOf(t) === "GUEST_HAS_NO_EMAIL";
   const heldSkip = (t: TraceItem) => reasonOf(t) === "HELD_FOR_DESK_DECISION";
   const failed = !sent && emailEvents.some((t) => !noAddress(t) && !heldSkip(t));
+  // The voucher that went out, if any — a held or not-sent voucher is not one (2026-10-29).
   const voucherComm = latestDispatched(comms, "CONFIRMATION_VOUCHER", since);
   const answered = voucherComm?.acknowledgementStatus === "RECEIVED";
   const { past } = useStepMode();
   const afterReserve = !["S3", "S4"].includes(entry.currentStage);
   // The answer, once on record, finishes the section — as Set up's proforma does (2026-10-29).
   const finish = useFinishWhenDone("voucher");
-  const loading = trace.isLoading || heldQ.isLoading;
-  // Held: whether and how it goes out is the next thing to do here (2026-10-29).
+  const loading = trace.isLoading || heldQ.isLoading || !comms;
+  // Sending is the desk's choice (2026-10-29, operator: "sending the confirmation voucher is not
+  // mandatory, but if sent, the reply is"). Held: the choice is offered, and nothing waits on it.
   const decideFirst = !past && !afterReserve && !answered && !loading && !!held;
-  // Gone out, or the desk said how the guest has it: the answer is next (Set up's answer box).
-  const answerDue = !past && !afterReserve && !answered && !loading && !held && (sent || failed || notSent || !guestEmail);
-  // A voucher made before 2026-10-29 that never went out — Send is its main act.
-  const sendFirst = !past && !afterReserve && !answered && !loading && !held && !sent && !notSent && !!guestEmail && !failed;
-  // Send before record (2026-08-07): the answer waits until the voucher went out — unless the guest
-  // has no email (verbal is their only way), every attempt failed, or the desk said it is not sent.
-  const locked = !!guestEmail && !afterReserve && !loading && !sent && !failed && !notSent;
+  // Gone out and not answered: the answer is next, and Arrival waits for it (Set up's answer box).
+  const answerDue = !past && !afterReserve && !loading && !held && !!voucherComm && !answered;
 
   const send = useMutation({
     mutationFn: () => resendConfirmationVoucher(session!, res.id, { dispatchedTo: sendTo.trim() || undefined }),
@@ -742,7 +739,14 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
       flow="voucher"
       title={`Confirmation voucher · ${res.confirmationVoucherNumber ?? res.id}`}
       icon="file"
-      summary={`${res.confirmationVoucherNumber ?? res.id} · ${onWhatsApp ? "sent on WhatsApp" : sent ? "sent" : notSent ? "not sent" : "issued"} · the guest's answer recorded`}
+      // It folds once settled — answered, or not sent; a held voucher stays open with its choice.
+      summary={
+        answered
+          ? `${res.confirmationVoucherNumber ?? res.id} · ${onWhatsApp ? "sent on WhatsApp" : "sent"} · the guest's answer recorded`
+          : notSent && !voucherComm
+            ? `${res.confirmationVoucherNumber ?? res.id} · not sent to the guest — no answer needed`
+            : undefined
+      }
       right={
         sent ? (
           <Chip tone="success" icon="check">
@@ -777,8 +781,7 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
         </Button>
         {held ? null : (
           <Live>
-            {/* The main act while it has not gone out (2026-10-29), as the proforma's Send is. */}
-            <Button kind={sendFirst ? "primary" : "quiet"} className={sendFirst ? "go" : undefined} compact={!sendFirst} icon="send" onClick={() => setSendOpen(true)}>
+            <Button kind="quiet" compact icon="send" onClick={() => setSendOpen(true)}>
               {sent ? "Send again" : "Send"}
             </Button>
           </Live>
@@ -802,19 +805,13 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
         <div className="voucher-send" role="status">
           <div className="notice next">
             <span>
-              The voucher is made and nothing was sent. Send it to the guest, record that it went on WhatsApp, or say it is not sent —
-              then record their answer. Arrival waits for it.
+              The voucher is made and nothing was sent. Sending it is up to you — by email, on WhatsApp, or not at all. Once it goes out,
+              Arrival waits for the guest&rsquo;s answer to it.
             </span>
           </div>
           <Live>
             <HeldPaperRow h={held} tz={tz} onView={() => setPaper({ kind: "voucher", reservationId: res.id, label: `Confirmation voucher · ${res.confirmationVoucherNumber ?? res.id}` })} />
           </Live>
-        </div>
-      ) : sendFirst ? (
-        <div className="notice next" role="status" style={{ marginTop: 10 }}>
-          <span>
-            Send the voucher to the guest first. Their answer is recorded once they have it — Arrival waits for it.
-          </span>
         </div>
       ) : null}
       {decideFirst ? null : answerDue ? (
@@ -827,24 +824,19 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
           <span className="sm">Arrival opens only once it is recorded.</span>
           <AnswerLine entryId={entry.id} type="CONFIRMATION_VOUCHER" sinceIso={since} what="the voucher" tz={tz} prominent onAnswered={() => finish()} {...answerWords} />
         </div>
-      ) : (
+      ) : answered ? (
         <div className="rule-above" style={{ borderTop: "1px solid var(--line)", marginTop: 12, paddingTop: 10 }}>
           <div className="sm" style={{ marginBottom: 4, fontWeight: 600 }}>
             What they said about it
-            <Help label="About the answer">Arrival waits for the guest&rsquo;s answer to the voucher.</Help>
           </div>
-          <AnswerLine
-            entryId={entry.id}
-            type="CONFIRMATION_VOUCHER"
-            sinceIso={since}
-            what="the voucher"
-            tz={tz}
-            lockedHint={locked ? "The voucher email hasn't gone out yet — send it first, then record their answer here." : null}
-            onAnswered={() => finish()}
-            {...answerWords}
-          />
+          <AnswerLine entryId={entry.id} type="CONFIRMATION_VOUCHER" sinceIso={since} what="the voucher" tz={tz} {...answerWords} />
         </div>
-      )}
+      ) : notSent && !voucherComm && !loading ? (
+        <div className="sm" style={{ marginTop: 12 }}>
+          Not sent to the guest, so no answer is needed.
+          <Help label="If it is sent later">Send it if the guest asks for it — Arrival then waits for their answer to it.</Help>
+        </div>
+      ) : null}
       <PaperDrawer paper={paper} onClose={() => setPaper(null)} />
       <DsDialog
         open={sendOpen}

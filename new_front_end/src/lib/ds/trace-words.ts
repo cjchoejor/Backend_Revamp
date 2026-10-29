@@ -136,6 +136,8 @@ const WORDS: Record<string, string> = {
   "ADVANCE_PAYMENT.S5_RECONCILIATION_AUTO": "Advance reconciled by the system",
   "PRE_ARRIVAL_TASK.RESET_FOR_ARRIVAL_VERIFICATION": "Arrival tasks reopened for checking",
   "PRE_ARRIVAL.ACTIVATION_FIRED": "Arrival opened",
+  "PRE_ARRIVAL.WINDOW_ALREADY_OPEN": "Reserved inside Arrival's window — move on to Arrival when ready",
+  "PRE_ARRIVAL.WINDOW_OPEN_WAITING": "Arrival's window opened — waiting for the guest's answer to the voucher",
   "NO_SHOW_CUTOFF.FIRED": "No-show time passed",
   "NO_SHOW.DETERMINED": "Recorded as a no-show",
   "NO_SHOW.AUTO_FINALISED": "Recorded as a no-show — the wait for their written word ran out",
