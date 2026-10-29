@@ -19,6 +19,7 @@ import { useSession } from "@/hooks/use-session";
 import {
   getHouseByType,
   labelsForBookingRooms,
+  planRoomsByType,
   sealRoomsByType,
   type BookingRoom,
   type SealByTypeAnswer,
@@ -67,6 +68,15 @@ const canon = (counts: Counts, fixed: string[], nights: string[]) =>
     [...fixed].sort(),
   ]);
 
+/** What the grid has chosen, for the bill — and, in the change panel, for the change itself. */
+export type TypePicks = {
+  perNight: Array<{ date: string; roomIds: string[] }>;
+  labels: Map<string, string>;
+  saved: boolean;
+  /** The counts as sent — what a change by type posts. */
+  byType: { perNight: Array<{ date: string; types: Array<{ roomTypeId: string; count: number }> }>; fixedRoomIds: string[] };
+};
+
 export function RoomsByType({
   entry,
   configId,
@@ -80,6 +90,9 @@ export function RoomsByType({
   onParticular,
   draft,
   onDraft,
+  stay,
+  noSave = false,
+  flowKey = "house",
 }: {
   entry: EntryDetail;
   configId: string | null;
@@ -89,17 +102,27 @@ export function RoomsByType({
   catalog: Array<{ id: string; roomNumber: string; roomTypeId?: string; roomType?: { name?: string | null } | null }>;
   editable: boolean;
   /** The rooms the system would choose, night by night, with their labels — for the bill. */
-  onPicks: (p: { perNight: Array<{ date: string; roomIds: string[] }>; labels: Map<string, string>; saved: boolean } | null) => void;
+  onPicks: (p: TypePicks | null) => void;
   onSaved: () => void;
   onParticular: () => void;
   /** The counts typed last time the grid was on the page, unsaved — taken back when they still fit. */
   draft?: TypeDraft | null;
   onDraft?: (d: TypeDraft) => void;
+  /**
+   * A stay that is not the booking's yet — "Change the dates, rooms or guests" (2026-10-29, operator:
+   * "it doesn't show the availability chart like in S1 … adopt the same style in all stages"): the
+   * house and the plan are asked for these dates, and the grid saves nothing itself (`noSave`); the
+   * change it belongs to posts the counts.
+   */
+  stay?: { checkIn: string; checkOut: string };
+  noSave?: boolean;
+  /** The step section whose unsaved state the grid reports — none in the change panel. */
+  flowKey?: string | null;
 }) {
   const { session } = useSession();
   const house = useQuery({
-    queryKey: ["house-by-type", entry.id, configId, entry.updatedAt],
-    queryFn: () => getHouseByType(session!, entry.id),
+    queryKey: ["house-by-type", entry.id, configId, entry.updatedAt, stay?.checkIn ?? "", stay?.checkOut ?? ""],
+    queryFn: () => getHouseByType(session!, entry.id, stay ? { checkInDate: stay.checkIn, checkOutDate: stay.checkOut } : undefined),
     enabled: !!session && !!configId,
     staleTime: 15_000,
   });
@@ -126,12 +149,39 @@ export function RoomsByType({
     return { counts, fixed: [] as string[] };
   }, [entry, catalog]);
   const savedKey = saved && savedBookingRooms(entry) ? canon(saved.counts, saved.fixed, nights) : null;
+  /**
+   * New dates (the change panel): the counts saved for the old nights carry to the new ones — each
+   * new night takes its own date's counts when the stay had it, else the first night's.
+   */
+  const seed = useMemo(() => {
+    if (!saved) return null;
+    if (nights.every((d) => saved.counts[d])) return saved;
+    const first = Object.keys(saved.counts).sort()[0];
+    const tmpl = first ? saved.counts[first] : {};
+    const counts: Counts = {};
+    for (const d of nights) counts[d] = { ...(saved.counts[d] ?? tmpl) };
+    return { counts, fixed: saved.fixed };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [saved, nights.join(",")]);
   // What was on record for these nights when the desk typed — a draft typed on another basis
   // (saved since, or other dates) is not taken back.
   const basis = `${nights.join(",")}|${canon(saved?.counts ?? {}, saved?.fixed ?? [], nights)}`;
   const fromDraft = draft && draft.basis === basis ? draft : null;
-  const [counts, setCounts] = useState<Counts>(() => fromDraft?.counts ?? saved?.counts ?? {});
-  const [fixed, setFixed] = useState<string[]>(() => fromDraft?.fixed ?? saved?.fixed ?? []);
+  const [counts, setCounts] = useState<Counts>(() => fromDraft?.counts ?? seed?.counts ?? {});
+  const [fixed, setFixed] = useState<string[]>(() => fromDraft?.fixed ?? seed?.fixed ?? []);
+  // The change panel's new nights: a night the grid has no counts for yet takes the first night's.
+  const nightsKey = nights.join(",");
+  useEffect(() => {
+    if (!stay) return;
+    setCounts((c) => {
+      const first = Object.keys(c).sort()[0];
+      if (!first || nights.every((d) => c[d])) return c;
+      const next: Counts = {};
+      for (const d of nights) next[d] = { ...(c[d] ?? c[first]) };
+      return next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nightsKey]);
   const seededFor = useRef(savedKey);
   useEffect(() => {
     // Saved again (here or on another screen): the grid follows what is on record.
@@ -143,7 +193,7 @@ export function RoomsByType({
   }, [savedKey, saved]);
   const key = canon(counts, fixed, nights);
   const dirty = key !== (savedKey ?? canon({}, [], nights));
-  useFlowUnsaved("house", editable && dirty, "The rooms picked saved");
+  useFlowUnsaved(flowKey ?? "house", flowKey != null && editable && dirty, "The rooms picked saved");
 
   const cell = (d: string, t: string) => counts[d]?.[t] ?? 0;
   const setCell = (d: string, t: string, v: number) =>
@@ -177,8 +227,17 @@ export function RoomsByType({
   }, [body]);
   const settled = JSON.stringify(debounced) === JSON.stringify(body);
   const preview = useQuery({
-    queryKey: ["by-type-preview", entry.id, JSON.stringify(debounced)],
-    queryFn: () => sealRoomsByType(session!, entry.id, { ...debounced, preview: true }),
+    queryKey: ["by-type-preview", entry.id, JSON.stringify(debounced), stay?.checkIn ?? "", stay?.checkOut ?? "", numberOfRooms],
+    queryFn: () =>
+      stay
+        ? planRoomsByType(session!, entry.id, {
+            checkInDate: stay.checkIn,
+            checkOutDate: stay.checkOut,
+            numberOfRooms,
+            perNight: debounced.perNight,
+            fixedRoomIds: debounced.fixedRoomIds,
+          })
+        : sealRoomsByType(session!, entry.id, { ...debounced, preview: true }),
     enabled: !!session && !!configId && allSet && settled,
     placeholderData: (p) => p,
     staleTime: 10_000,
@@ -197,7 +256,12 @@ export function RoomsByType({
       onPicks(null);
       return;
     }
-    onPicks({ perNight: answer.perNight, labels: labelsForBookingRooms(answer.bookingRooms, typeName), saved: !dirty });
+    onPicks({
+      perNight: answer.perNight,
+      labels: labelsForBookingRooms(answer.bookingRooms, typeName),
+      saved: !dirty,
+      byType: { perNight: body.perNight.map((n) => ({ date: n.date, types: n.types.filter((t) => t.count > 0) })), fixedRoomIds: body.fixedRoomIds },
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [picksKey, dirty, checking]);
 
@@ -473,9 +537,11 @@ export function RoomsByType({
             {!allSet
               ? `${nights.filter((d) => totalOn(d) === numberOfRooms).length} of ${plural(nights.length, "night")} set`
               : fits
-                ? dirty
-                  ? "It fits — save it"
-                  : "Saved"
+                ? noSave
+                  ? "It fits"
+                  : dirty
+                    ? "It fits — save it"
+                    : "Saved"
                 : checking
                   ? "Checking…"
                   : "Does not fit yet"}
@@ -483,6 +549,7 @@ export function RoomsByType({
           <Button kind="quiet" compact onClick={onParticular}>
             Pick every room by number instead
           </Button>
+          {noSave ? null : (
           <Button
             className="go"
             style={{ marginLeft: "auto" }}
@@ -493,6 +560,7 @@ export function RoomsByType({
           >
             Save the rooms
           </Button>
+          )}
         </div>
       ) : null}
     </div>

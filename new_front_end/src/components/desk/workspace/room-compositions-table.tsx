@@ -544,6 +544,7 @@ export function RoomCompositionsTable({
   onOpenRoomInBoard,
   onPickRoom,
   pickedRoomId,
+  onOpenRoom,
   bedPlan,
   onBedChange,
   bedAsk,
@@ -586,6 +587,8 @@ export function RoomCompositionsTable({
   onPickRoom?: (roomId: string) => void;
   /** The room currently chosen, drawn as such. */
   pickedRoomId?: string | null;
+  /** Double-clicking a room opens what can be done with it — change its room type (2026-10-29). */
+  onOpenRoom?: (roomId: string) => void;
   /**
    * How each room is to be made up for this stay, from the booking's bed plan (2026-10-06,
    * operator: "in the table in s2 we can have column as bed type ... make it for s5 s6 s7 as
@@ -1982,7 +1985,15 @@ export function RoomCompositionsTable({
           layer is a flex column in which only `.rct-scroll` scrolls, so this strip, the close bar
           and the toolbar are held at the top structurally rather than by sticky positioning. */}
       {bedAsk && bedsShown && <BedAskStrip ask={bedAsk} />}
-      {entryId && <RateReferenceStrip entryId={entryId} compact roomIds={sealedRoomIds} />}
+      {entryId && (
+        <RateReferenceStrip
+          entryId={entryId}
+          compact
+          roomIds={sealedRoomIds}
+          // The system's rooms are counted, never named — their number is not a promise until Arrival.
+          quietNumbers={new Set(sealedRoomIds.filter((id) => roomLabels?.has(id)).map((id) => roomById.get(id)?.roomNumber ?? "").filter(Boolean))}
+        />
+      )}
       {/* Discount rides with the rates, inside the panel — one negotiation surface. */}
       <NegotiationDiscountBar
         discountValue={discountValue}
@@ -2276,16 +2287,19 @@ export function RoomCompositionsTable({
                           the room cell and not the whole row: a row-level handler would fire on
                           every cell click and fight the grid's own editing/navigation. */}
                       <td
-                        className={`room${onPickRoom || onOpenRoomInBoard ? " opens" : ""}${onPickRoom && pickedRoomId === id ? " picked" : ""}`}
+                        className={`room${onPickRoom || onOpenRoomInBoard || onOpenRoom ? " opens" : ""}${onPickRoom && pickedRoomId === id ? " picked" : ""}`}
                         onClick={onPickRoom ? () => onPickRoom(id) : onOpenRoomInBoard ? () => onOpenRoomInBoard(id) : undefined}
+                        onDoubleClick={onOpenRoom ? () => onOpenRoom(id) : undefined}
                         title={
-                          onPickRoom
-                            ? pickedRoomId === id
-                              ? "Chosen — its acts are above the table"
-                              : "Choose this room to see what can be done with it"
-                            : onOpenRoomInBoard
-                              ? "Open this room on its own in the guest board"
-                              : undefined
+                          onOpenRoom
+                            ? "Double-click to change this room's type"
+                            : onPickRoom
+                              ? pickedRoomId === id
+                                ? "Chosen — its acts are above the table"
+                                : "Choose this room to see what can be done with it"
+                              : onOpenRoomInBoard
+                                ? "Open this room on its own in the guest board"
+                                : undefined
                         }
                       >
                         {roomLabels?.has(id) ? (

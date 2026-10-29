@@ -1140,6 +1140,8 @@ export function RoomCompositionPlanner(props: DiscountEdit & {
   /** Clicking a room CHOOSES it rather than opening the board — see RoomCompositionsTable. */
   onPickRoom?: (roomId: string) => void;
   pickedRoomId?: string | null;
+  /** Double-clicking a room opens its room-type change — see RoomCompositionsTable (2026-10-29). */
+  onOpenRoom?: (roomId: string) => void;
   /** The booking's bed plan, one line per room — see RoomCompositionsTable. */
   bedPlan?: Record<string, BedPlanCell>;
   onBedChange?: (roomId: string, bedType: string | null) => void;

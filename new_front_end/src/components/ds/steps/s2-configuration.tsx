@@ -55,6 +55,7 @@ import { foldNightsToRangesLabel, operativeRoomCompositions } from "@/lib/desk/p
 import type { RoomCompositionInput } from "@/lib/api/quotations";
 import { enumerateNights, useRoomSelection } from "./use-room-selection";
 import { DateInput } from "@/components/ds/date-input";
+import { RoomsByType, type TypePicks } from "./s1-by-type";
 
 /**
  * A count field that may be emptied while typing — "0" and "" are different answers. A keystroke
@@ -154,6 +155,15 @@ export function ChangeConfiguration({
   const [ages, setAges] = useState<string[]>(() => (entry.childAges ?? []).map(String));
   const [rooms, setRooms] = useState(String(entry.numberOfRooms ?? 1));
   const [reason, setReason] = useState("");
+  /**
+   * The rooms by TYPE, the way the Inquiry step picks them (2026-10-29, operator: "it doesn't show
+   * the availability chart like shown in S1 when I ask the house — adopt the same style for this
+   * section in all stages"): how many of each type each night, the system choosing the rooms. Every
+   * room by number stays one press away.
+   */
+  const [byNumber, setByNumber] = useState(false);
+  const typeMode = !byNumber;
+  const [typePicks, setTypePicks] = useState<TypePicks | null>(null);
 
   const childCount = Number(children || "0");
   const adultCount = Number(adults || "0");
@@ -200,7 +210,7 @@ export function ChangeConfiguration({
     },
     onSuccess: (a) => {
       setAnswer(a);
-      toast.success("The house has answered — tick or untick the rooms below");
+      toast.success(typeMode ? "The house has answered — set the room types below" : "The house has answered — tick or untick the rooms below");
       /**
        * On new dates, a carried room that is not free on every new night is unticked — and named,
        * never silently (2026-10-12). Done here, where the answer lands, rather than in an effect:
@@ -301,7 +311,10 @@ export function ChangeConfiguration({
    * nights differently is a change too, and comparing only which rooms the booking uses said
    * "nothing has changed" for it. A pick never sealed reads as moved whenever anything is ticked.
    */
-  const roomsMoved = sel.currentCanon !== sel.savedCanon && (sel.currentCanon != null || sel.savedCanon != null);
+  const roomsMovedByNumber = sel.currentCanon !== sel.savedCanon && (sel.currentCanon != null || sel.savedCanon != null);
+  // By type the grid knows whether its counts differ from what is saved; a fitting plan is ready.
+  const roomsMoved = typeMode ? !!typePicks && !typePicks.saved : roomsMovedByNumber;
+  const roomsReady = typeMode ? !!typePicks : sel.ready;
   const partyMoved =
     adultCount !== (entry.adultCount ?? 0) ||
     childCount !== (entry.childCount ?? 0) ||
@@ -321,17 +334,20 @@ export function ChangeConfiguration({
    * on any one night, so the old test — every room it uses against the count — could never pass.
    */
   const countMoved = roomCount !== (entry.numberOfRooms ?? priorRoomIds.length);
-  const pickComplete = sel.ready;
+  const pickComplete = roomsReady;
   const needsRepick = (countMoved || roomsMoved) && !datesMoved && (!configId || !pickComplete);
   /** New dates are only saved with rooms picked for every new night, from a search for them. */
-  const needsNightPick = datesMoved && (!configId || !sel.ready);
+  const needsNightPick = datesMoved && (!configId || !roomsReady);
 
   /* ---- 4. who sleeps where (in place): the table over the rooms picked ---------- */
   const pickPayload = sel.payload();
   const pickedPerNight = useMemo(
-    () => pickPayload.perNight ?? stayNights.map((date) => ({ date, roomIds: [...(pickPayload.roomIds ?? [])] })),
+    () =>
+      typeMode
+        ? (typePicks?.perNight ?? [])
+        : (pickPayload.perNight ?? stayNights.map((date) => ({ date, roomIds: [...(pickPayload.roomIds ?? [])] }))),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [JSON.stringify(pickPayload.perNight ?? pickPayload.roomIds ?? []), stayNights.join(",")],
+    [typeMode, JSON.stringify(typePicks?.perNight ?? null), JSON.stringify(pickPayload.perNight ?? pickPayload.roomIds ?? []), stayNights.join(",")],
   );
   const pickedRoomIds = useMemo(() => [...new Set(pickedPerNight.flatMap((n) => n.roomIds))], [pickedPerNight]);
   const pickedRoomDates = useMemo(() => {
@@ -342,15 +358,31 @@ export function ChangeConfiguration({
     }
     return out;
   }, [pickedRoomIds, pickedPerNight]);
-  /** A room kept from today brings its row along (meals, beds, rates); a new room starts empty. */
+  /**
+   * A room kept from today brings its row along (meals, beds, rates); a new room starts empty. By
+   * type, a room the system put elsewhere within its type is the same booking room — its row follows
+   * it to the new room of that type.
+   */
   const seedComps = useMemo(() => {
     const now = operativeRoomCompositions(entry) ?? [];
-    return now.filter((c) => pickedRoomIds.includes(c.roomId)).map((c) => ({ ...c, nightMealOverrides: undefined }));
+    const kept = now.filter((c) => pickedRoomIds.includes(c.roomId)).map((c) => ({ ...c, nightMealOverrides: undefined }));
+    if (!typeMode) return kept;
+    const typeOf = (id: string) => catalog.find((r) => r.id === id)?.roomTypeId ?? null;
+    const left = now.filter((c) => !pickedRoomIds.includes(c.roomId));
+    const out = [...kept];
+    for (const id of pickedRoomIds) {
+      if (out.some((c) => c.roomId === id)) continue;
+      const i = left.findIndex((c) => typeOf(c.roomId) != null && typeOf(c.roomId) === typeOf(id));
+      if (i < 0) continue;
+      out.push({ ...left[i], roomId: id, nightMealOverrides: undefined });
+      left.splice(i, 1);
+    }
+    return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pickedRoomIds.join(",")]);
+  }, [pickedRoomIds.join(","), typeMode, catalog.length]);
   const [comps, setComps] = useState<RoomCompositionInput[]>([]);
   const [tableFaults, setTableFaults] = useState<string[]>([]);
-  const tableReady = inPlace && !!configId && sel.ready;
+  const tableReady = inPlace && !!configId && roomsReady;
 
   const overCapacity = !!env && env.exceedsHotelCapacity;
   const roomsOutOfRange = !!env && envMin != null && envMax != null && (roomCount < envMin || roomCount > envMax);
@@ -366,7 +398,9 @@ export function ChangeConfiguration({
           childAges: ageInputs.filter((a) => a !== "").map(Number),
           numberOfRooms: roomCount,
         },
-        rooms: { configurationId: configId!, perNight: pickedPerNight },
+        rooms: typeMode && typePicks
+          ? { configurationId: configId!, perNight: typePicks.perNight, byType: typePicks.byType }
+          : { configurationId: configId!, perNight: pickedPerNight },
         roomCompositions: comps,
         reason: reason.trim(),
         expectedVersion: entry.version,
@@ -407,12 +441,16 @@ export function ChangeConfiguration({
         };
       }
       if ((roomsMoved || datesMoved) && configId) {
-        const p = sel.payload();
-        body.rooms = {
-          configurationId: configId,
-          roomIds: p.perNight ? undefined : p.roomIds,
-          perNight: p.perNight,
-        };
+        if (typeMode && typePicks) {
+          body.rooms = { configurationId: configId, byType: typePicks.byType };
+        } else {
+          const p = sel.payload();
+          body.rooms = {
+            configurationId: configId,
+            roomIds: p.perNight ? undefined : p.roomIds,
+            perNight: p.perNight,
+          };
+        }
       }
       return amendNegotiationConfiguration(session!, entry.id, body);
     },
@@ -478,7 +516,7 @@ export function ChangeConfiguration({
     !agesReady ||
     adultCount < 1 ||
     (roomsMoved && !configId) ||
-    (inPlace && (!configId || !sel.ready || comps.length === 0 || tableFaults.length > 0)) ||
+    (inPlace && (!configId || !roomsReady || comps.length === 0 || tableFaults.length > 0)) ||
     pending;
 
   return (
@@ -637,9 +675,34 @@ export function ChangeConfiguration({
             Ask the house {answerOutdated ? "for the new dates" : "first"}. Holding today:{" "}
             {priorRoomIds.length ? priorRoomIds.map(roomNo).join(", ") : "none"}.
           </p>
+        ) : typeMode ? (
+          <div style={{ marginTop: 8 }}>
+            <RoomsByType
+              key={`${checkIn}|${checkOut}|${roomCount}`}
+              entry={entry}
+              configId={configId}
+              stale={false}
+              nights={stayNights}
+              numberOfRooms={roomCount}
+              catalog={catalog}
+              editable={!pending}
+              onPicks={setTypePicks}
+              onSaved={() => {}}
+              onParticular={() => {
+                setTypePicks(null);
+                setByNumber(true);
+              }}
+              stay={{ checkIn, checkOut }}
+              noSave
+              flowKey={null}
+            />
+          </div>
         ) : (
           <>
             <div className="row-acts" style={{ margin: "8px 0" }}>
+              <Button kind="quiet" compact onClick={() => setByNumber(false)}>
+                Back to room types
+              </Button>
               <span className={pickComplete ? "ok-ink" : "stop-ink"} style={{ fontWeight: 700 }}>
                 {sel.nightsDiffer
                   ? `${sel.nightsReady} of ${plural(displayNights.length, "night")} ${sel.nightsReady === 1 ? "has" : "have"} ${plural(roomCount, "room")}`
@@ -698,6 +761,7 @@ export function ChangeConfiguration({
                   entryAdults={adultCount}
                   entryChildAges={ageInputs.filter((a) => a !== "").map(Number)}
                   roomDates={pickedRoomDates}
+                  {...(typeMode && typePicks ? { roomLabels: typePicks.labels } : {})}
                   entryId={entry.id}
                   initialCompositions={seedComps}
                   previewStay={{ checkInDate: checkIn, checkOutDate: checkOut }}
@@ -741,19 +805,25 @@ export function ChangeConfiguration({
                   : needsNightPick
                     ? !configId
                       ? "The dates changed — ask the house for them, then pick the rooms"
-                      : `Pick the rooms for every new night — ${sel.nightsReady} of ${plural(stayNights.length, "night")} ready`
+                      : typeMode
+                        ? "Set the room types for every new night — the grid says what is short"
+                        : `Pick the rooms for every new night — ${sel.nightsReady} of ${plural(stayNights.length, "night")} ready`
                     : needsRepick
                   ? !configId
                     ? countMoved
                       ? `The rooms asked for changed to ${roomCount} — ask the house and pick them`
                       : "Ask the house before saving rooms"
-                    : sel.nightsDiffer
-                      ? `Every night needs ${plural(roomCount, "room")} — ${sel.nightsReady} of ${plural(displayNights.length, "night")} ${sel.nightsReady === 1 ? "has" : "have"} them`
-                      : `Pick ${plural(roomCount, "room")} below — ${sel.commonPlan.length} ${sel.commonPlan.length === 1 ? "is" : "are"} ticked`
+                    : typeMode
+                      ? `Set ${plural(roomCount, "room")} for every night in the grid`
+                      : sel.nightsDiffer
+                        ? `Every night needs ${plural(roomCount, "room")} — ${sel.nightsReady} of ${plural(displayNights.length, "night")} ${sel.nightsReady === 1 ? "has" : "have"} them`
+                        : `Pick ${plural(roomCount, "room")} below — ${sel.commonPlan.length} ${sel.commonPlan.length === 1 ? "is" : "are"} ticked`
                   : inPlace && !configId
                     ? "Ask the house for the stay first"
-                    : inPlace && !sel.ready
-                      ? "Pick the rooms for every night"
+                    : inPlace && !roomsReady
+                      ? typeMode
+                        ? "Set the room types for every night"
+                        : "Pick the rooms for every night"
                       : inPlace && tableFaults.length > 0
                         ? "Put right what the table lists first"
                         : !reason.trim()

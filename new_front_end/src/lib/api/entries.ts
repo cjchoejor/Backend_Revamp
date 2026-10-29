@@ -1032,6 +1032,8 @@ export async function changeBookingRoom(
     fromRoomId: string;
     /** One room for every night of the change… */
     toRoomId?: string;
+    /** The desk changed the room's type and the system chose the room — it stays the system's until Arrival (2026-10-29). */
+    systemChosen?: boolean;
     /** …or a room per night, S1-table style (may name the from-room on kept nights)… */
     perNight?: Array<{ date: string; roomId: string }>;
     reason: string;
@@ -1256,6 +1258,8 @@ export async function amendNegotiationConfiguration(
       roomIds?: string[];
       perNight?: Array<{ date: string; roomIds: string[] }>;
       deficientAcknowledgements?: unknown;
+      /** Rooms by type (2026-10-29): the counts each night; the system chooses the rooms. */
+      byType?: { perNight: Array<{ date: string; types: Array<{ roomTypeId: string; count: number }> }>; fixedRoomIds?: string[] };
     };
     reason: string;
     expectedVersion?: number;
@@ -1292,7 +1296,8 @@ export async function changeStayInPlace(
   body: {
     dates: { checkInDate: string; checkOutDate: string };
     party: { adultCount: number; childCount: number; childAges: number[]; numberOfRooms: number };
-    rooms: { configurationId: string; perNight: Array<{ date: string; roomIds: string[] }> };
+    /** Picked by type (2026-10-29): `perNight` is the rooms the system chose for `byType`, as shown. */
+    rooms: { configurationId: string; perNight: Array<{ date: string; roomIds: string[] }>; byType?: { perNight: Array<{ date: string; types: Array<{ roomTypeId: string; count: number }> }>; fixedRoomIds?: string[] }; };
     roomCompositions: RoomCompositionInput[];
     reason: string;
     expectedVersion?: number;

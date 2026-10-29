@@ -59,8 +59,53 @@ export type BookingRoomsView = {
   bookingRooms?: BookingRoom[];
 };
 
-export function getHouseByType(session: Session, entryId: string) {
-  return apiRequest<HouseByType>(`/api/entries/${entryId}/availability/by-type`, { method: "POST", session, body: {} });
+/** The house by type over the booking's stay — or, with `stay`, over dates not saved yet (2026-10-29). */
+export function getHouseByType(session: Session, entryId: string, stay?: { checkInDate: string; checkOutDate: string }) {
+  return apiRequest<HouseByType>(`/api/entries/${entryId}/availability/by-type`, { method: "POST", session, body: stay ?? {} });
+}
+
+/**
+ * The pick by type for a stay not saved yet — "Change the dates, rooms or guests" (2026-10-29): the
+ * counts checked and the system's rooms placed for the dates and room count given. Read-only.
+ */
+export function planRoomsByType(
+  session: Session,
+  entryId: string,
+  body: {
+    checkInDate: string;
+    checkOutDate: string;
+    numberOfRooms: number;
+    perNight: Array<{ date: string; types: Array<{ roomTypeId: string; count: number }> }>;
+    fixedRoomIds?: string[];
+  },
+) {
+  return apiRequest<SealByTypeAnswer>(`/api/entries/${entryId}/availability/by-type/plan`, { method: "POST", session, body });
+}
+
+/** One of the booking's rooms: the room types it could change to over its nights (2026-10-29). */
+export type RoomTypeOption = {
+  roomTypeId: string;
+  name: string;
+  sameType: boolean;
+  free: number;
+  roomId: string | null;
+  roomNumber: string | null;
+  rooms: Array<{ roomId: string; roomNumber: string }>;
+  ratePerNight: number | null;
+  requiredLevel: "L1" | "L2";
+};
+export type RoomTypeOptions = {
+  entryId: string;
+  stage: string;
+  beforeArrival: boolean;
+  fromRoom: { roomId: string; roomNumber: string; roomTypeId: string; typeName: string | null };
+  nights: string[];
+  currency: string;
+  currentRatePerNight: number | null;
+  options: RoomTypeOption[];
+};
+export function getRoomTypeOptions(session: Session, entryId: string, fromRoomId: string) {
+  return apiRequest<RoomTypeOptions>(`/api/entries/${entryId}/room-type-options?fromRoomId=${encodeURIComponent(fromRoomId)}`, { session });
 }
 
 export function sealRoomsByType(
