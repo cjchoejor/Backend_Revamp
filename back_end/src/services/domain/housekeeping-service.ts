@@ -143,9 +143,10 @@ export async function listHousekeepingRooms(prisma: PrismaClient, opts: { now?: 
   }
   const nextEntries = await prisma.entry.findMany({
     where: { id: { in: [...new Set([...next.values()].map((c) => c.entryId))] } },
-    select: { id: true, expectedArrivalTime: true },
+    select: { id: true, expectedArrivalTime: true, expectedArrivalDayAfter: true },
   });
-  const arrivalTime = new Map(nextEntries.map((e) => [e.id, e.expectedArrivalTime]));
+  // A guest expected the next morning is not arriving on the day their stay starts (2026-10-29).
+  const arrivalTime = new Map(nextEntries.map((e) => [e.id, e.expectedArrivalDayAfter ? null : e.expectedArrivalTime]));
 
   const dirty = rooms.filter(needsCleaning);
   const lastDeparture = new Map<string, { at: Date; entryId: string | null }>();

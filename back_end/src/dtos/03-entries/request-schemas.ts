@@ -284,6 +284,8 @@ export const setExpectedArrivalRequestSchema = z.object({
     .string()
     .regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Use a 24-hour time, HH:MM")
     .nullable(),
+  /** The guest is expected the morning after the check-in day (2026-10-29). */
+  dayAfter: z.boolean().optional(),
 });
 export type CloseEntryRequestDto = z.infer<typeof closeEntryRequestSchema>;
 

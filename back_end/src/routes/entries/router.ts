@@ -75,6 +75,7 @@ import {
 } from "../../services/domain/stay-extension-service.js";
 import { buildPartySeatingStatus, repairPartySeatingForEntry } from "../../services/domain/party-seating-service.js";
 import { getExpectedArrival, setExpectedArrival } from "../../services/domain/expected-arrival-service.js";
+import { resolveNoShowGraceMinutes, timerShowsFrom } from "../../lib/expected-arrival.js";
 import { buildEntryBedPlan, setEntryBedPlanRoom } from "../../services/domain/entry-bed-plan-service.js";
 
 export const entriesRouter = Router();
@@ -510,7 +511,10 @@ entriesRouter.get("/:id/timers", requireActorLevel("L1"), async (req, res, next)
         createdAt: true,
       },
     });
-    res.json({ items, count: items.length });
+    // A clock the desk shows only from a moment of its own — the no-show cut-off, from the start
+    // of its grace (2026-10-29).
+    const grace = items.some((t) => t.timerCode === "NO_SHOW_CUTOFF_W5") ? await resolveNoShowGraceMinutes(prisma).catch(() => null) : null;
+    res.json({ items: items.map((t) => ({ ...t, showsFrom: timerShowsFrom(t, grace)?.toISOString() ?? null })), count: items.length });
   } catch (e) {
     next(e);
   }
@@ -1062,7 +1066,7 @@ entriesRouter.post(
   validateBody(setExpectedArrivalRequestSchema),
   async (req, res, next) => {
     try {
-      res.json(await setExpectedArrival(prisma, req.params.id, req.actor!.actorId, req.actor!.level, req.body.time));
+      res.json(await setExpectedArrival(prisma, req.params.id, req.actor!.actorId, req.actor!.level, req.body.time, req.body.dayAfter === true));
     } catch (e) {
       next(e);
     }

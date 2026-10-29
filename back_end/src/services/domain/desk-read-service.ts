@@ -13,6 +13,7 @@
  */
 import type { EntryStatus, Prisma, PrismaClient, Stage } from "@prisma/client";
 import { buildEntryBillingSummary } from "./entry-billing-summary-service.js";
+import { resolveNoShowGraceMinutes, timerShowsFrom } from "../../lib/expected-arrival.js";
 
 type Db = PrismaClient;
 
@@ -196,7 +197,7 @@ export type DeskMoneyRow = {
 export type DeskTimerRow = {
   entryId: string;
   running: number;
-  next: Array<{ timerCode: string; timerType: string; stageContext: string | null; firesAt: string; handoffType?: string | null }>;
+  next: Array<{ timerCode: string; timerType: string; stageContext: string | null; firesAt: string; showsFrom?: string | null; handoffType?: string | null }>;
 };
 
 export async function deskTimersFor(prisma: Db, entryIds: string[]): Promise<DeskTimerRow[]> {
@@ -204,9 +205,11 @@ export async function deskTimersFor(prisma: Db, entryIds: string[]): Promise<Des
   if (ids.length === 0) return [];
   const rows = await prisma.timerRecord.findMany({
     where: { entryId: { in: ids }, status: "SCHEDULED" },
-    select: { entryId: true, timerCode: true, timerType: true, stageContext: true, firesAt: true, entityType: true, entityId: true },
+    select: { entryId: true, timerCode: true, timerType: true, stageContext: true, firesAt: true, entityType: true, entityId: true, createdAt: true },
     orderBy: { firesAt: "asc" },
   });
+  // The no-show cut-off shows only from the start of its grace (2026-10-29).
+  const grace = rows.some((r) => r.timerCode === "NO_SHOW_CUTOFF_W5") ? await resolveNoShowGraceMinutes(prisma as never).catch(() => null) : null;
   // The acceptance clock is one code for housekeeping and the kitchen alike; the handoff behind
   // it says which. One query for the lot, so the row can name the department.
   const handoffIds = rows.filter((r) => r.entityType === "HandoffRecord" && r.entityId).map((r) => r.entityId as string);
@@ -228,6 +231,7 @@ export async function deskTimersFor(prisma: Db, entryIds: string[]): Promise<Des
         timerType: r.timerType,
         stageContext: r.stageContext ?? null,
         firesAt: r.firesAt.toISOString(),
+        showsFrom: timerShowsFrom(r, grace)?.toISOString() ?? null,
         handoffType: r.entityType === "HandoffRecord" && r.entityId ? (handoffTypeById.get(r.entityId) ?? null) : null,
       });
     }
