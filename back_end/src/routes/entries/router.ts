@@ -17,6 +17,7 @@ import {
   setExpectedArrivalRequestSchema,
   decideNegotiationAmendmentRequestSchema,
   negotiationAmendmentRequestSchema,
+  changeStayInPlaceRequestSchema,
   updateEntryRequestSchema,
   withdrawNegotiationAmendmentRequestSchema,
 } from "../../dtos/03-entries/request-schemas.js";
@@ -25,6 +26,7 @@ import { validateBody } from "../../middleware/validate-body.js";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import * as s1EntryService from "../../services/domain/s1-entry-service.js";
 import { switchStay } from "../../services/domain/trip-switch-service.js";
+import { changeBookingInPlace } from "../../services/domain/booking-change-service.js";
 import * as s8CheckoutService from "../../services/domain/s8-checkout-service.js";
 import * as damageAssessmentService from "../../services/domain/damage-assessment-service.js";
 import * as s9Service from "../../services/domain/s9-service.js";
@@ -547,7 +549,7 @@ entriesRouter.get("/:id/competing-claims", requireActorLevel("L1"), async (req, 
  */
 entriesRouter.post("/:id/quotation-preview", requireActorLevel("L1"), async (req, res, next) => {
   try {
-    const body = req.body as { roomCompositions?: unknown; discount?: unknown; roomNights?: unknown; roomNightDates?: unknown };
+    const body = req.body as { roomCompositions?: unknown; discount?: unknown; roomNights?: unknown; roomNightDates?: unknown; stay?: unknown };
     res.setHeader("Cache-Control", "no-store");
     const roomCompositions = Array.isArray(body?.roomCompositions) ? (body.roomCompositions as Array<{ roomId?: unknown }>) : [];
     // Each room prices at its own type's rate even when the booking does not hold it yet (the
@@ -567,6 +569,23 @@ entriesRouter.post("/:id/quotation-preview", requireActorLevel("L1"), async (req
         roomNightDates.set(rid, ds as string[]);
       }
     }
+    // Priced for a stay the booking does not hold yet (2026-10-29, a change of dates on the step):
+    // the rates resolve for those nights.
+    const stayIn = (body?.stay as { checkInDate?: unknown } | undefined)?.checkInDate;
+    const stayOut = (body?.stay as { checkOutDate?: unknown } | undefined)?.checkOutDate;
+    const stayOverride =
+      typeof stayIn === "string" && typeof stayOut === "string" && /^\d{4}-\d{2}-\d{2}$/.test(stayIn) && /^\d{4}-\d{2}-\d{2}$/.test(stayOut) && stayOut > stayIn
+        ? {
+            checkIn: new Date(`${stayIn}T00:00:00.000Z`),
+            checkOut: new Date(`${stayOut}T00:00:00.000Z`),
+            perRoomNightCounts: new Map(
+              roomCompositions
+                .map((c) => c.roomId)
+                .filter((id): id is string => typeof id === "string")
+                .map((id) => [id, roomNights.get(id) ?? Math.round((Date.parse(stayOut) - Date.parse(stayIn)) / 86_400_000)] as [string, number]),
+            ),
+          }
+        : null;
     res.json(
       await buildQuotationPreview(
         prisma,
@@ -576,6 +595,7 @@ entriesRouter.post("/:id/quotation-preview", requireActorLevel("L1"), async (req
           planRoomIds: roomCompositions.map((c) => c.roomId).filter((id): id is string => typeof id === "string"),
           ...(roomNights.size ? { roomNights } : {}),
           ...(roomNightDates.size ? { roomNightDates } : {}),
+          ...(stayOverride ? { stayOverride } : {}),
         },
       ),
     );
@@ -758,6 +778,19 @@ entriesRouter.post(
     }
   },
 );
+
+/**
+ * Change the dates, rooms or guests on the step the booking is at (2026-10-29) — Set up, Reserve,
+ * Arrival. **L2**: moving a reserved booking's dates is the FOM's (Policy 58). The booking walks
+ * back through Negotiation and forward again; the desk stays on its step.
+ */
+entriesRouter.post("/:id/change-stay", requireActorLevel("L2"), validateBody(changeStayInPlaceRequestSchema), async (req, res, next) => {
+  try {
+    res.json(await changeBookingInPlace(prisma, req.params.id, { actorId: req.actor!.actorId, actorLevel: req.actor!.level }, req.body));
+  } catch (e) {
+    next(e);
+  }
+});
 
 /**
  * Approve or turn down a waiting configuration change (2026-09-30). **L2** — approving IS

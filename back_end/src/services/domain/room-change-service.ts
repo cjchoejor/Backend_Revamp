@@ -2586,27 +2586,7 @@ async function changeRoomToNewSegmentInner(
             },
           });
         }
-        // Pre-occupancy: release the hold + every claim flag; the new segment re-places its own
-        // hold on the substituted selection (2026-08-02 ruling — a new segment places its own
-        // commitments).
-        await s3HoldService.releaseCommittedHoldForRoomChange(
-          tx,
-          input.entryId,
-          actor,
-          "ROOM_CHANGE",
-          entry.inquiryId,
-          "COMMITTED_HOLD.RELEASED_ON_ROOM_CHANGE",
-          stage,
-        );
-        // Pre-occupancy assignment rows are planning state, not history (the sealed segment's
-        // configuration + traces keep the story) — stale rows would leak the OLD room into the
-        // check-in/night-audit distinct-room iteration.
-        await tx.roomNightMealPlan.deleteMany({ where: { roomAssignment: { entryId: input.entryId } } });
-        await tx.handoffRecord.updateMany({
-          where: { entryId: input.entryId, roomAssignmentId: { not: null } },
-          data: { roomAssignmentId: null },
-        });
-        await tx.roomAssignment.deleteMany({ where: { entryId: input.entryId } });
+        await releasePreOccupancyForReEntryTx(tx, { entryId: input.entryId, actor, inquiryId: entry.inquiryId, stage });
       },
     });
   }
@@ -3443,6 +3423,35 @@ export async function roomChangeNights(prisma: PrismaClient, entryId: string, fr
  * before and after, and where the walk ended — for a change from the booking, a room move from the
  * chart, a setup change, a seating repair or a stay extension alike. A dry run writes nothing.
  */
+/**
+ * Before the guest is in: what a walk back through Negotiation lets go of, inside the re-entry's
+ * transaction — the hold and every claim flag (a new pass places its own commitments, the
+ * 2026-08-02 ruling), and Arrival's room rows, which are planning state, not history (the sealed
+ * pass's configuration and the trail keep the story; stale rows would leak the OLD room into the
+ * check-in and night-audit room lists). Shared by the room-change walk and the in-place change of
+ * the stay (booking-change-service, 2026-10-29).
+ */
+export async function releasePreOccupancyForReEntryTx(
+  tx: Prisma.TransactionClient,
+  input: { entryId: string; actor: Actor; inquiryId: string | null; stage: Stage },
+) {
+  await s3HoldService.releaseCommittedHoldForRoomChange(
+    tx,
+    input.entryId,
+    input.actor,
+    "ROOM_CHANGE",
+    input.inquiryId,
+    "COMMITTED_HOLD.RELEASED_ON_ROOM_CHANGE",
+    input.stage,
+  );
+  await tx.roomNightMealPlan.deleteMany({ where: { roomAssignment: { entryId: input.entryId } } });
+  await tx.handoffRecord.updateMany({
+    where: { entryId: input.entryId, roomAssignmentId: { not: null } },
+    data: { roomAssignmentId: null },
+  });
+  await tx.roomAssignment.deleteMany({ where: { entryId: input.entryId } });
+}
+
 export async function changeRoomToNewSegment(
   ...args: Parameters<typeof changeRoomToNewSegmentInner>
 ): ReturnType<typeof changeRoomToNewSegmentInner> {

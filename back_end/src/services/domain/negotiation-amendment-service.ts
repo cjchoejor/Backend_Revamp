@@ -197,7 +197,7 @@ function parseStayDay(value: string, what: string): Date {
  * another live stay of the same enquiry (a return stay is the nights AFTER the guest comes back;
  * a shared night means the same stay twice).
  */
-async function checkNewDates(
+export async function checkNewDates(
   prisma: PrismaClient,
   entry: { id: string; inquiryId: string; checkInDate: Date | null; checkOutDate: Date | null },
   dates: NegotiationAmendmentInput["dates"],

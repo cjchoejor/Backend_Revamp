@@ -37,6 +37,7 @@ import { generateOrLoadQuotationPdf } from "../services/domain/quotation-pdf-ser
 import { registerNightAuditTimers } from "../services/domain/pre-arrival-service.js";
 import { getTimerEngine } from "../services/infrastructure/timer-management-service.js";
 import { armInquiryExpiryTx } from "../lib/inquiry-expiry.js";
+import { retireHeldPapersOnReEntryTx } from "../lib/held-documents.js";
 import {
   enforceS2ToS1BackflowAuthority,
   enforceS4ToS1BackflowAuthority,
@@ -169,6 +170,8 @@ async function runBackflow(
     if (input.hooks) {
       await input.hooks(tx, { id: entry.id, version: entry.version, inquiryId: entry.inquiryId, currentStage: entry.currentStage });
     }
+    // Papers held for the desk describe the pass being sealed — retired, never sent (2026-10-29).
+    await retireHeldPapersOnReEntryTx(tx, { entryId: entry.id, actorId: input.actor.actorId });
 
     // 3. Seal the current segment.
     if (!currentSeg.sealedAt) {

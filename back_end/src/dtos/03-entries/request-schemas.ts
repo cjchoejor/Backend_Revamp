@@ -1,5 +1,6 @@
 import { EntryStatus, Stage } from "@prisma/client";
 import { z } from "zod";
+import { roomCompositionInputSchema } from "../05-quotations-and-holds/request-schemas.js";
 
 /**
  * Add the guest's return stay to the same enquiry (2026-09-25) — "we'll stay again on the way
@@ -119,6 +120,35 @@ export const negotiationAmendmentRequestSchema = z
     message: "Nothing to change — send the dates, the party, the rooms, or any of them.",
   });
 export type NegotiationAmendmentRequestDto = z.infer<typeof negotiationAmendmentRequestSchema>;
+
+/**
+ * Change the dates, rooms or guests on the step the booking is at (2026-10-29) — Set up, Reserve
+ * or Arrival. The whole stay as it will stand: the dates, the party, the rooms picked night by
+ * night from the house's answer for those dates, and the table for them.
+ */
+export const changeStayInPlaceRequestSchema = z.object({
+  dates: z.object({
+    checkInDate: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/, "Give the check-in as YYYY-MM-DD."),
+    checkOutDate: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/, "Give the check-out as YYYY-MM-DD."),
+  }),
+  party: z.object({
+    adultCount: z.coerce.number().int().min(1),
+    childCount: z.coerce.number().int().min(0),
+    childAges: z.array(z.coerce.number().int().min(0).max(150)),
+    numberOfRooms: z.coerce.number().int().min(1).max(50),
+  }),
+  rooms: z.object({
+    configurationId: z.string().min(1),
+    perNight: z
+      .array(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), roomIds: z.array(z.string().min(1)).min(1).max(60) }))
+      .min(1)
+      .max(90),
+  }),
+  roomCompositions: z.array(roomCompositionInputSchema).min(1).max(60),
+  reason: z.string().trim().min(1, "Type why the stay is changing.").max(500),
+  expectedVersion: z.coerce.number().int().optional(),
+});
+export type ChangeStayInPlaceRequestDto = z.infer<typeof changeStayInPlaceRequestSchema>;
 
 /** Approve (which applies it) or turn down a waiting configuration change. */
 export const decideNegotiationAmendmentRequestSchema = z.object({
