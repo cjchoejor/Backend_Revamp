@@ -92,6 +92,14 @@ const listSelect = {
     select: { id: true, kind: true, state: true, dueBy: true, remindersSent: true, promiseKind: true, promisedBy: true },
     take: 3,
   },
+  // The rest of the bill at check-in (2026-10-29): a request the FOM must answer, or the FOM's
+  // "pay during the stay by …" the desk is reminded on.
+  checkInPaymentDeferrals: {
+    where: { status: { in: ["REQUESTED", "APPROVED"] } },
+    orderBy: { createdAt: "desc" as const },
+    take: 2,
+    select: { id: true, status: true, payBy: true, dueBy: true, stillToPay: true, requestedAt: true },
+  },
   timers: {
     where: { status: "SCHEDULED" as const },
     orderBy: { firesAt: "asc" as const },
@@ -330,7 +338,7 @@ export async function listDeskActivity(
 export const DESK_ALERTS_MAX = 400;
 
 /** What a sent alert was about (2026-10-23) — one word per writer in notification-service / W14. */
-export type DeskAlertKind = "STAGE_DWELL" | "EXPIRED" | "PAYMENT_REMINDER" | "VIP_ARRIVAL" | "OTHER";
+export type DeskAlertKind = "STAGE_DWELL" | "EXPIRED" | "PAYMENT_REMINDER" | "PAY_LATER_ASKED" | "VIP_ARRIVAL" | "OTHER";
 /** Who an alert was routed to — the tiers `notification.routing.*` names. */
 export type DeskAlertTarget = "OPERATOR" | "FOM" | "GM";
 
@@ -338,6 +346,8 @@ const ALERT_KIND: Record<string, DeskAlertKind> = {
   "NOTIFICATION.STAGE_DWELL_DISPATCHED": "STAGE_DWELL",
   "NOTIFICATION.OPERATOR_EXPIRY_DISPATCHED": "EXPIRED",
   "NOTIFICATION.INTERIM_PAYMENT_REMINDER_DISPATCHED": "PAYMENT_REMINDER",
+  "NOTIFICATION.CHECKIN_PAYMENT_REMINDER_DISPATCHED": "PAYMENT_REMINDER",
+  "NOTIFICATION.CHECKIN_PAYMENT_DEFERRAL_REQUESTED": "PAY_LATER_ASKED",
   "NOTIFICATION.VIP_ARRIVAL_W14_PROCESSED": "VIP_ARRIVAL",
 };
 const TARGETS = new Set<DeskAlertTarget>(["OPERATOR", "FOM", "GM"]);
@@ -399,7 +409,11 @@ export async function listDeskAlerts(prisma: Db, q: { from: Date; to: Date; limi
       payment:
         r.eventType === "NOTIFICATION.INTERIM_PAYMENT_REMINDER_DISPATCHED"
           ? { kind: str(p.kind), remaining: num(p.remaining), remindersSent: num(p.remindersSent), dueBy: str(p.dueBy), billed: p.billed === true }
-          : null,
+          : r.eventType === "NOTIFICATION.CHECKIN_PAYMENT_REMINDER_DISPATCHED"
+            ? { kind: "CHECKIN", remaining: num(p.remaining), remindersSent: num(p.remindersSent), dueBy: str(p.dueBy), billed: false }
+            : r.eventType === "NOTIFICATION.CHECKIN_PAYMENT_DEFERRAL_REQUESTED"
+              ? { kind: "PAY_LATER", remaining: num(p.stillToPay), remindersSent: null, dueBy: null, billed: false }
+              : null,
       booking: entryId ? (byId.get(entryId) ?? null) : null,
     };
   });

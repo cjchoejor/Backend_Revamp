@@ -251,6 +251,12 @@ export async function recordPayment(
         )
       : null;
 
+  // A request to let the guest pay the rest later is moot once nothing is left to pay (2026-10-29).
+  if (txResult.stageAtPayment === Stage.S5 || txResult.stageAtPayment === Stage.S6) {
+    const { closeMootCheckInPaymentRequests } = await import("./checkin-payment-service.js");
+    await closeMootCheckInPaymentRequests(prisma, input.entryId, "PAID").catch(() => {});
+  }
+
   return { ...txResult.created, autoHold };
 }
 

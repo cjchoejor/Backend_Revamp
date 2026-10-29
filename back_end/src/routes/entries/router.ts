@@ -15,6 +15,9 @@ import {
   answerDamageRequestSchema,
   previewDamageChargeRequestSchema,
   setExpectedArrivalRequestSchema,
+  checkInPaymentDeferralRequestSchema,
+  checkInPaymentDecisionRequestSchema,
+  checkInPaymentWithdrawRequestSchema,
   decideNegotiationAmendmentRequestSchema,
   negotiationAmendmentRequestSchema,
   changeStayInPlaceRequestSchema,
@@ -1072,6 +1075,54 @@ entriesRouter.post(
     }
   },
 );
+
+/**
+ * The rest of the bill at check-in (2026-10-29, operator ruling "wait for the FOM"): the guest's
+ * promise, the figures (stay total − money received, server-side), the open request and the
+ * FOM's decision, and whether check-in may go on. Read-only.
+ */
+entriesRouter.get("/:id/checkin-payment", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    const { readCheckInPayment } = await import("../../services/domain/checkin-payment-service.js");
+    res.json(await readCheckInPayment(prisma, req.params.id));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** The desk asks the FOM to let the guest pay the rest later (L1). */
+entriesRouter.post("/:id/checkin-payment/deferral", requireActorLevel("L1"), validateBody(checkInPaymentDeferralRequestSchema), async (req, res, next) => {
+  try {
+    const { requestCheckInPaymentDeferral } = await import("../../services/domain/checkin-payment-service.js");
+    const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
+    res.status(201).json(await requestCheckInPaymentDeferral(prisma, actor, { entryId: req.params.id, reason: req.body.reason }));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** The FOM decides — let them pay later, or turn it down (L2+). */
+entriesRouter.post("/:id/checkin-payment/decide", requireActorLevel("L2"), validateBody(checkInPaymentDecisionRequestSchema), async (req, res, next) => {
+  try {
+    const { decideCheckInPaymentDeferral } = await import("../../services/domain/checkin-payment-service.js");
+    const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
+    res.json(await decideCheckInPaymentDeferral(prisma, actor, { entryId: req.params.id, ...req.body }));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** The desk takes its request back before the FOM answers (L1). */
+entriesRouter.post("/:id/checkin-payment/deferral/:requestId/withdraw", requireActorLevel("L1"), validateBody(checkInPaymentWithdrawRequestSchema), async (req, res, next) => {
+  try {
+    const { withdrawCheckInPaymentDeferral } = await import("../../services/domain/checkin-payment-service.js");
+    const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
+    res.json(await withdrawCheckInPaymentDeferral(prisma, actor, { entryId: req.params.id, requestId: req.params.requestId, note: req.body.note }));
+  } catch (e) {
+    next(e);
+  }
+});
 
 /** What still stands between the booking and "Close & seal" — the close's own checks, read not run (2026-09-18). */
 entriesRouter.get("/:id/closure-readiness", requireActorLevel("L1"), async (req, res, next) => {

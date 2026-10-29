@@ -297,3 +297,23 @@ export const listEntriesQuerySchema = z.object({
   currentStage: z.nativeEnum(Stage).optional(),
 });
 export type ListEntriesQueryDto = z.infer<typeof listEntriesQuerySchema>;
+
+/** The rest of the bill at check-in (2026-10-29): the desk asks the FOM to let the guest pay later. */
+export const checkInPaymentDeferralRequestSchema = z.object({
+  reason: z.string().trim().min(1).max(2000),
+});
+
+/** The FOM's answer — let them pay later (when, by when, why) or turn the request down. */
+export const checkInPaymentDecisionRequestSchema = z
+  .object({
+    requestId: z.string().min(1).nullable().optional(),
+    decision: z.enum(["APPROVE", "REJECT"]),
+    payBy: z.enum(["DURING_STAY", "AT_CHECKOUT", "AFTER_STAY"]).nullable().optional(),
+    dueBy: z.string().min(1).nullable().optional(),
+    note: z.string().trim().max(2000).nullable().optional(),
+  })
+  .refine((v) => v.decision === "REJECT" || !!v.payBy, { message: "Pick when the guest will pay", path: ["payBy"] });
+
+export const checkInPaymentWithdrawRequestSchema = z.object({
+  note: z.string().trim().max(2000).nullable().optional(),
+});

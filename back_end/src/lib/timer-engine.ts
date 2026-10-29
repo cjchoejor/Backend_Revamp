@@ -31,6 +31,9 @@ export type TimerJobName =
   /// Mid-stay payment reminder (2026-08-22): fires at an interim bill's due-by while unpaid,
   /// raises a reminder and re-arms every N hours up to a cap.
   | "INTERIM_PAYMENT_REMINDER_W41"
+  /// The rest of the bill, let to wait at check-in (2026-10-29): fires at the FOM's due-by while
+  /// it is still to pay, raises a reminder and re-arms every N hours up to a cap.
+  | "CHECKIN_PAYMENT_REMINDER_W42"
   | "PRE_ARRIVAL_COUNTDOWN_W4"
   | "NO_SHOW_CUTOFF_W5"
   | "AWAITING_WRITTEN_CONFIRMATION_W5"
@@ -75,6 +78,7 @@ export const TIMER_QUEUES: readonly TimerJobName[] = [
   "IDENTITY_OCR_W39",
   "STAY_EXTENSION_HOLD_EXPIRY_W40",
   "INTERIM_PAYMENT_REMINDER_W41",
+  "CHECKIN_PAYMENT_REMINDER_W42",
   "PRE_ARRIVAL_COUNTDOWN_W4",
   "NO_SHOW_CUTOFF_W5",
   "AWAITING_WRITTEN_CONFIRMATION_W5",

@@ -40,6 +40,7 @@ import { runGuestDataRetentionWorker } from "./w30-guest-data-retention-worker.j
 import { runLostFoundRetentionWorker } from "./w30-lost-found-retention-worker.js";
 import { runFomOverrideFrequencyWorkerW32 } from "./w32-fom-override-frequency-worker.js";
 import { runVipArrivalNotificationWorker } from "./w14-vip-arrival-notification-worker.js";
+import { runCheckInPaymentReminderWorker } from "./w42-checkin-payment-reminder-worker.js";
 import { reconcileOverduePostCheckoutInspectionTimers } from "./reconcile-overdue-w9-timers.js";
 
 export async function startWorkers() {
@@ -72,6 +73,7 @@ export async function startWorkers() {
   await (engine.boss as any).work("ADVANCE_PROMISE_DEADLINE_W38", async (job: any) => runAdvancePromiseDeadlineWorker(prisma, unwrapJobData(job)));
   await (engine.boss as any).work("STAY_EXTENSION_HOLD_EXPIRY_W40", async (job: any) => runStayExtensionHoldExpiryWorker(prisma, unwrapJobData(job)));
   await (engine.boss as any).work("INTERIM_PAYMENT_REMINDER_W41", async (job: any) => runInterimPaymentReminderWorker(prisma, unwrapJobData(job)));
+  await (engine.boss as any).work("CHECKIN_PAYMENT_REMINDER_W42", async (job: any) => runCheckInPaymentReminderWorker(prisma, unwrapJobData(job)));
   // W39 identity OCR — two photos at a time (2026-10-23, operator: a phone sends a whole party's IDs
   // in a row). One photo's QR and strip are read in this process while the other's printed text is
   // read in the layout child, which takes one page at a time; the strip reader takes one at a time too.

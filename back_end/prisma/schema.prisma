@@ -1222,6 +1222,7 @@ model Entry {
   invoices                     Invoice[]
   timers                       TimerRecord[]
   interimPaymentRequests       InterimPaymentRequest[]
+  checkInPaymentDeferrals      CheckInPaymentDeferral[]
   stayExtensionRequests        StayExtensionRequest[]
   negotiationAmendmentRequests NegotiationAmendmentRequest[]
   roomMoveLegs                 RoomMoveLeg[]
@@ -1939,6 +1940,7 @@ model Folio {
   billingModelTransitions BillingModelTransitionRecord[]
 
   interimPaymentRequests InterimPaymentRequest[]
+  checkInPaymentDeferrals CheckInPaymentDeferral[]
   advanceApplications    AdvanceApplication[]
 
   @@map("folios")
@@ -3074,6 +3076,52 @@ model InterimPaymentRequest {
 
   @@index([entryId, state])
   @@map("interim_payment_requests")
+}
+
+/// The rest of the bill, promised at check-in, and the FOM's word on paying it later
+/// (2026-10-29, operator: "if promised here it should prompt the user that the guest said that
+/// as well; if they can't pay here, the issue should be raised to the FOM, GM or admin to let
+/// them pay during the stay, at check-out or later"). A guest whose payment plan says "the rest
+/// at check-in" is not checked in while money is still to pay, unless an FOM (L2+) APPROVED a
+/// later time: during the stay by `dueBy` (the W42 reminder fires there), at check-out (said on
+/// the bill), or after the stay by `dueBy` (the FOM's credit extension, so check-out may settle
+/// partly). The desk asks (REQUESTED); the FOM decides, or decides directly.
+model CheckInPaymentDeferral {
+  id                    String    @id @default(uuid())
+  entryId               String
+  folioId               String
+  segmentId             String?
+  /// REQUESTED · APPROVED · REJECTED · WITHDRAWN
+  status                String    @default("REQUESTED")
+  /// The rest of the bill when the desk asked (stay total − money received), server figure.
+  stillToPay            Decimal   @db.Decimal(15, 2)
+  /// What the guest said — why they cannot pay now.
+  reason                String
+  requestedBy           String
+  requestedLevel        String?
+  requestedAt           DateTime  @default(now())
+  /// DURING_STAY · AT_CHECKOUT · AFTER_STAY — set on approval.
+  payBy                 String?
+  /// When the money is expected (DURING_STAY, AFTER_STAY).
+  dueBy                 DateTime?
+  decisionNote          String?
+  decidedBy             String?
+  decidedLevel          String?
+  decidedAt             DateTime?
+  /// AFTER_STAY: the credit extension the approval recorded.
+  creditExtensionId     String?
+  /// The SCHEDULED W42 TimerRecord that owns the next reminder (DURING_STAY).
+  reminderTimerRecordId String?
+  remindersSent         Int       @default(0)
+  lastReminderAt        DateTime?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  entry Entry @relation(fields: [entryId], references: [id], onUpdate: Cascade)
+  folio Folio @relation(fields: [folioId], references: [id], onUpdate: Cascade)
+
+  @@index([entryId, status])
+  @@map("checkin_payment_deferrals")
 }
 
 /// A stay extension in flight (2026-08-21, operator ruling): the guest wants N more nights.
