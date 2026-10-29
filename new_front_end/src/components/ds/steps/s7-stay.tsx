@@ -39,6 +39,7 @@ import { ChitsWaitingCard, FolioCard, PostChargeCard } from "./s7-folio";
 import { NightsCard } from "./s7-nights";
 import { FlagDeficientDialog, KeysCard, KeysDueNotice, RoomsInUseCard, keysDue, keysDueWords } from "./s7-rooms";
 import { RoomsTableCard } from "./rooms-table";
+import { PayLaterNote } from "./s6-balance";
 
 const ID = {
   rooms: "s7-rooms",
@@ -104,6 +105,7 @@ export function S7Stay({
           </Tool>
         ) : null}
         <KeysDueNotice entry={entry} onOpen={() => go("keys")} />
+        <PayLaterNote entry={entry} at="stay" />
         <FolioCard entry={entry} onTab={setChargeTarget} onInterimPayment={() => go("interim")} />
         <PostChargeCard entry={entry} target={chargeTarget} setTarget={setChargeTarget} />
         <ChitsWaitingCard />

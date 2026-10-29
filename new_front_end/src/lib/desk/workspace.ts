@@ -513,6 +513,8 @@ export function s6Readiness(
     /** The desk's two attestations at the counter (2026-09-25) — listed when the caller has them. */
     registrationConfirmed?: boolean;
     keys?: { label: string; met: boolean } | null;
+    /** The rest of the bill promised at check-in (2026-10-29) — the server's `GET /checkin-payment`. */
+    balance?: { promisedAtCheckIn: boolean; gateMet: boolean } | null;
   },
 ): Precondition[] {
   const g = entry.guestProfile;
@@ -543,6 +545,9 @@ export function s6Readiness(
       ? [{ label: "Registration confirmed", met: !!opts.registrationConfirmed, card: "registration" }]
       : []),
     { label: "Advance reconciled", met: entry.folio?.advancePaymentReconciliationComplete === true, card: "advance" },
+    ...(opts?.balance?.promisedAtCheckIn
+      ? [{ label: "The rest of the bill — paid, or the FOM's word", met: opts.balance.gateMet, card: "advance" }]
+      : []),
     // A line, and a section, only on a VIP's booking (2026-10-29) — nothing to do on any other.
     ...(isVip ? [{ label: "VIP arrival notified", met: (entry.vipArrivalNotifications ?? []).length > 0, card: "vip" }] : []),
     {

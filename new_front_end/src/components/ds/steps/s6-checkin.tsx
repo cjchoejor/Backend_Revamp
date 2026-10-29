@@ -53,6 +53,8 @@ import {
   type StepPane,
 } from "./kit";
 import { RoomsTableCard } from "./rooms-table";
+import { CheckInBalance, payLaterWords } from "./s6-balance";
+import { useCheckInPayment } from "@/hooks/use-checkin-payment";
 import { CancelAtArrivalDialog } from "./s4-other-ways";
 import { InlineTool, claimWord, distinctRoomRows, physicalWord, roomLabel } from "./s6-shared";
 import { Help } from "@/components/ds/help";
@@ -160,7 +162,7 @@ export function S6CheckIn({
 
         <RegistrationCard entry={entry} tz={tz} confirmed={registrationConfirmed} setConfirmed={setRegistrationConfirmed} />
 
-        <CheckInAdvanceCard entry={entry} />
+        <CheckInAdvanceCard entry={entry} tz={tz} />
 
         {isVip ? <VipCard entry={entry} tz={tz} /> : null}
 
@@ -260,8 +262,10 @@ function CheckInChangeBooking({ entry, onOpen }: { entry: EntryDetail; onOpen: (
 /* ------------------------------------------------------------------ the advance */
 
 /** The advance still owed — a section of its own, folding to one line once it is in order (2026-10-29). */
-function CheckInAdvanceCard({ entry }: { entry: EntryDetail }) {
+function CheckInAdvanceCard({ entry, tz }: { entry: EntryDetail; tz?: string }) {
   const pay = usePaymentStatus(entry.id, { enabled: !!entry.folio }).data;
+  // The rest of the bill, when the guest said it comes at check-in (2026-10-29).
+  const balance = useCheckInPayment(entry.id, entry.updatedAt, { enabled: !!entry.folio }).data;
   // A payment, a credit extension or the sign-off finishes the section once it reads done.
   const finish = useFinishWhenDone("advance");
   const reconciled = entry.folio?.advancePaymentReconciliationComplete === true;
@@ -276,16 +280,23 @@ function CheckInAdvanceCard({ entry }: { entry: EntryDetail }) {
     : reconciled
       ? "Signed off"
       : undefined;
+  const rest =
+    balance?.promisedAtCheckIn && balance.approved
+      ? ` · the rest ${payLaterWords(balance.approved, tz)}`
+      : balance?.promisedAtCheckIn && balance.stillToPay === 0
+        ? " · the rest paid"
+        : "";
   return (
     <div id={ID.advance}>
       <StepCard
         flow="advance"
-        title="The advance"
+        title={balance?.promisedAtCheckIn ? "The advance and the rest of the bill" : "The advance"}
         meta="If the guest planned to settle the advance at the desk, take it now — checking in with money still short needs the FOM's credit extension instead."
-        summary={summary}
+        summary={summary ? summary + rest : undefined}
       >
+        <CheckInBalance entry={entry} tz={tz} onChanged={() => finish()} />
         <Tool>
-          <AdvanceSettlementBlock entry={entry} title="The advance" noHeading onChanged={() => finish()} />
+          <AdvanceSettlementBlock entry={entry} title="The advance" noHeading hidePlan={!!balance?.promisedAtCheckIn} onChanged={() => finish()} />
         </Tool>
       </StepCard>
     </div>

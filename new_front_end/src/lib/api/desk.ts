@@ -71,6 +71,15 @@ export type DeskListRow = {
     promiseKind: "NOW" | "BY_DATE" | null;
     promisedBy: string | null;
   }>;
+  /** The rest of the bill at check-in (2026-10-29): a request the FOM must answer, or the FOM's later date. */
+  checkInPaymentDeferrals?: Array<{
+    id: string;
+    status: "REQUESTED" | "APPROVED";
+    payBy: "DURING_STAY" | "AT_CHECKOUT" | "AFTER_STAY" | null;
+    dueBy: string | null;
+    stillToPay: string | number;
+    requestedAt: string;
+  }>;
   timers: Array<{ timerCode: string; timerType: string; firesAt: string }>;
   custodianName: string | null;
   parkReason: string | null;
@@ -152,7 +161,7 @@ export async function listDeskActivity(session: Session, q: { date: string; acto
 
 /* ---------- the alerts the system sent (2026-10-23) ---------- */
 
-export type DeskAlertKind = "STAGE_DWELL" | "EXPIRED" | "PAYMENT_REMINDER" | "VIP_ARRIVAL" | "OTHER";
+export type DeskAlertKind = "STAGE_DWELL" | "EXPIRED" | "PAYMENT_REMINDER" | "PAY_LATER_ASKED" | "VIP_ARRIVAL" | "OTHER";
 export type DeskAlertTarget = "OPERATOR" | "FOM" | "GM";
 
 export type DeskAlert = {

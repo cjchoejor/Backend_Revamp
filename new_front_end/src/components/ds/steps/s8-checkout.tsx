@@ -100,6 +100,7 @@ import {
   type SettleMethod,
 } from "./s8-shares";
 import { Help } from "@/components/ds/help";
+import { PayLaterNote } from "./s6-balance";
 
 /* ------------------------------------------------------------------ vocabulary */
 
@@ -1029,6 +1030,7 @@ function HowSettled({
       meta="One bill by the model; part by part when each room or hall pays its own; free to change until the bill is settled — after that, the tax invoice decides."
     >
       <UnauditedLastNight entry={entry} live={live} onBackToStay={onBackToStay} goToStep={goToStep} />
+      <PayLaterNote entry={entry} at="checkout" />
       <div className="row-acts">
         <Chip tone="accent">by the billing model · {model ? BILLING_MODEL_WORD[model] ?? words(model) : "not set"}</Chip>
         {entry.groupBillingMode === "GROUP_MASTER" ? <Chip tone="quiet">one bill for the party</Chip> : null}

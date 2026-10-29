@@ -1591,6 +1591,14 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .answer-due .row-acts:not(.desk-root *) { margin-top: var(--s1); }
 .ds .answer-due.flash { animation: ds-card-flash 1.8s ease-out 1; }
 @media (prefers-reduced-motion: reduce) { .ds .answer-due.flash { animation: none; } }
+/* The rest of the bill at check-in (2026-10-29, "UIappeal"): the figure still to pay large and red, the
+   FOM's word or the money in green. */
+.ds .balance-due.ok:not(.desk-root *) { margin-top: var(--s3); display: grid; gap: var(--s1); border: 1px solid var(--success-line); border-left: 5px solid var(--success); background: var(--success-soft); border-radius: var(--r-control); padding: var(--s3) var(--s4); }
+.ds .balance-due.ok .due-head:not(.desk-root *) { font-size: var(--t-base); font-weight: 700; }
+.ds .balance-figure:not(.desk-root *) { color: var(--ink); }
+.ds .balance-figure strong:not(.desk-root *) { font-size: 22px; font-weight: 700; color: var(--danger); }
+.ds .balance-wait:not(.desk-root *) { display: grid; gap: var(--s1); border-top: 1px solid var(--warning-line); padding-top: var(--s2); }
+.ds .balance-pay:not(.desk-root *) { margin-top: var(--s1); }
 /* A box that asks one thing at a time (2026-10-28 — the advance): each question numbered, a tick
    once answered, the next one appearing below it. */
 .ds .qsteps:not(.desk-root *) { display: flex; flex-direction: column; gap: var(--s4); }

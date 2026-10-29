@@ -25,6 +25,7 @@ const LABELS: Record<string, string | null> = {
   ADVANCE_PROMISE_DEADLINE_W38: "Advance promised by",
   STAY_EXTENSION_HOLD_EXPIRY_W40: "Extra nights held until",
   INTERIM_PAYMENT_REMINDER_W41: "Mid-stay payment due",
+  CHECKIN_PAYMENT_REMINDER_W42: "The rest of the bill due",
   PRE_ARRIVAL_COUNTDOWN_W4: "Arrival window opens",
   NO_SHOW_CUTOFF_W5: "No-show cut-off",
   AWAITING_WRITTEN_CONFIRMATION_W5: "Written confirmation due",

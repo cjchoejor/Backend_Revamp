@@ -16,6 +16,7 @@ export const ALERT_KIND_WORD: Record<DeskAlertKind, string> = {
   STAGE_DWELL: "Too long at a step",
   EXPIRED: "Lapsed",
   PAYMENT_REMINDER: "Payment reminder",
+  PAY_LATER_ASKED: "Asks to pay later",
   VIP_ARRIVAL: "VIP arrival",
   OTHER: "Alert",
 };
@@ -43,9 +44,11 @@ export function alertHeadline(a: DeskAlert): string {
       return "Its clock ran out";
     case "PAYMENT_REMINDER": {
       const p = a.payment;
-      const what = p?.kind === "EXTENSION" ? "Extension payment" : "Mid-stay payment";
+      const what = p?.kind === "EXTENSION" ? "Extension payment" : p?.kind === "CHECKIN" ? "The rest of the bill" : "Mid-stay payment";
       return [`${what} still owed`, p?.remaining != null ? money(p.remaining) : null, p?.remindersSent ? `reminder ${p.remindersSent}` : null].filter(Boolean).join(" · ");
     }
+    case "PAY_LATER_ASKED":
+      return [`Asks to pay the rest of the bill later — the FOM decides`, a.payment?.remaining != null ? money(a.payment.remaining) : null].filter(Boolean).join(" · ");
     case "VIP_ARRIVAL":
       return "A VIP is arriving — the departments were told";
     default:

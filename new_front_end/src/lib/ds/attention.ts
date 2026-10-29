@@ -100,6 +100,18 @@ export function attentionItems(rows: DeskListRow[], now: number, hotelToday: str
       else if (at - now < DAY) push(r, { need: `${what} due`, band: "soon", work: "money", deadline: { label: "Due", at } });
     }
 
+    // The rest of the bill at check-in (2026-10-29): the desk asked the FOM to let the guest pay
+    // later — the FOM, the GM or an admin answers; or the FOM's "during the stay, by …" has come.
+    for (const d of r.checkInPaymentDeferrals ?? []) {
+      if (d.status === "REQUESTED" && (step === 5 || step === 6)) {
+        push(r, { need: "Asks to pay the rest later · the FOM decides", band: "overdue", work: "money", since: new Date(d.requestedAt).getTime() });
+      } else if (d.status === "APPROVED" && d.payBy === "DURING_STAY" && d.dueBy && step === 7) {
+        const at = new Date(d.dueBy).getTime();
+        if (at <= now) push(r, { need: "The rest of the bill is overdue", band: "overdue", work: "money", deadline: { label: "Due", at } });
+        else if (at - now < DAY) push(r, { need: "The rest of the bill is due", band: "soon", work: "money", deadline: { label: "Due", at } });
+      }
+    }
+
     // An arrival date that has passed before check-in
     if (ci && ci < hotelToday && step >= 3 && step <= 6) {
       push(r, { need: "Arrival date passed — check in, or record what happened", band: "overdue", work: "arrivals", deadline: { label: "Arrival was", at: ymdStart(ci) } });

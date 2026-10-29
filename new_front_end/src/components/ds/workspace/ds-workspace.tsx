@@ -28,6 +28,7 @@ import { useSession } from "@/hooks/use-session";
 import { useHotelDay } from "@/hooks/use-hotel-day";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
 import { usePaymentStatus } from "@/hooks/use-payment-status";
+import { useCheckInPayment } from "@/hooks/use-checkin-payment";
 import { useBookingRooms } from "@/hooks/use-booking-rooms";
 import { roomsHeldWord } from "@/components/ds/steps/s2-shared";
 import { usePageTitle } from "@/hooks/use-page-title";
@@ -339,6 +340,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const guestDetailsCoverage = identityProofsQuery.data?.coverage ?? null;
   // Verified at THIS stay — the check-in gate's own reading (2026-09-18).
   const stayIdentityVerified = !!identityProofsQuery.data?.verification;
+  // The rest of the bill promised at check-in (2026-10-29) — the gate's own reading.
+  const checkInBalance = useCheckInPayment(entryId, entry?.updatedAt, { enabled: entry?.currentStage === "S6" && !!entry?.folio }).data ?? null;
 
   // The five tabs say how much is in them (the mockup's counts): open requests, notes and open
   // to-dos — a to-do past its time in red.
@@ -906,7 +909,10 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const moveDayRoomCount = allAssignedRoomIds.length - checkInRoomIds.length;
   const issuedKeyCount = checkInRoomIds.filter((id) => issuedKeyRooms[id]).length;
   const keysValid = checkInRoomIds.length > 0 && issuedKeyCount === checkInRoomIds.length;
-  const canCheckIn = s6Readiness(entry, { guestDetails: guestDetailsCoverage, identityVerified: stayIdentityVerified }).every((c) => c.met) && registrationConfirmed && keysValid;
+  const canCheckIn =
+    s6Readiness(entry, { guestDetails: guestDetailsCoverage, identityVerified: stayIdentityVerified, balance: checkInBalance }).every((c) => c.met) &&
+    registrationConfirmed &&
+    keysValid;
 
   const segStart = (entry.segments ?? [])[0]?.startedAt ?? null;
   // Sending the voucher is the desk's choice; once it went out, its answer is not (2026-10-29,
@@ -982,6 +988,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
               ? s6Readiness(entry, {
                   guestDetails: guestDetailsCoverage,
                   identityVerified: stayIdentityVerified,
+                  balance: checkInBalance,
                   registrationConfirmed,
                   keys: {
                     label:

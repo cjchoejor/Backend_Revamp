@@ -118,7 +118,7 @@ export function AdvancePlanFacts({ status }: { status: PaymentStatusSummary | un
           {dueLabel(plan.plan, plan.balanceDueAt) ? ` · ${dueLabel(plan.plan, plan.balanceDueAt)}` : ""}
           {plan.balanceDueAt === "BEFORE_CHECKIN" && plan.promisedBy ? ` · by ${fmtDate(plan.promisedBy)}` : ""}
         </span>
-        {settled ? <span className="tag">Kept — paid in full</span> : null}
+        {settled ? <span className="tag">Advance paid in full</span> : null}
       </div>
       {!settled && plan.promiseOverdue && (
         <span className="timer crit">
@@ -455,6 +455,7 @@ export function AdvanceSettlementBlock({
   children,
   onChanged,
   noHeading = false,
+  hidePlan = false,
 }: {
   entry: EntryDetail;
   title?: string;
@@ -466,6 +467,8 @@ export function AdvanceSettlementBlock({
   onChanged?: () => void;
   /** The step's own section names it (Arrival, 2026-10-29) — no heading of its own. */
   noHeading?: boolean;
+  /** Check-in states the guest's promise above (2026-10-29) — not said twice. */
+  hidePlan?: boolean;
 }) {
   const { session } = useSession();
   const queryClient = useQueryClient();
@@ -609,8 +612,9 @@ export function AdvanceSettlementBlock({
       {status && (
         <div className="fact b-transit" style={{ marginBottom: 9, padding: "7px 11px", fontSize: 12.5, width: "100%", justifyContent: "space-between" }}>
           <span>
-            Received {money(status.totalReceived, currency)} of the{" "}
-            {status.requirementSource === "OPERATOR" ? "requested" : "min threshold"} {money(status.requiredAmount, currency)}
+            {status.requiredAmount > 0
+              ? `Received ${money(status.totalReceived, currency)} of the ${money(status.requiredAmount, currency)} advance`
+              : `No advance asked · ${money(status.totalReceived, currency)} received`}
             {(status.installments?.length ?? 0) > 1 ? ` · ${status.installments!.length} payments` : ""}
           </span>
           <span className={`tag ${settled ? "" : status.satisfied ? "" : "warn"}`}>
@@ -638,7 +642,7 @@ export function AdvanceSettlementBlock({
           </div>
         )}
 
-      <AdvancePlanFacts status={status} />
+      {hidePlan ? null : <AdvancePlanFacts status={status} />}
       <InstallmentHistory status={status} currency={currency} />
 
       {status?.creditExtensionActive && !settled && (
