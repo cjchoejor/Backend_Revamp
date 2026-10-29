@@ -123,6 +123,16 @@ export const sealByTypeRequestSchema = z.object({
 });
 export type SealByTypeRequestDto = z.infer<typeof sealByTypeRequestSchema>;
 
+/** The same pick by type for a stay not saved yet — new dates, a new room count (2026-10-29). Read-only. */
+export const planByTypeRequestSchema = z.object({
+  checkInDate: ymdField,
+  checkOutDate: ymdField,
+  numberOfRooms: z.number().int().min(1).max(200),
+  perNight: sealByTypeRequestSchema.shape.perNight,
+  fixedRoomIds: z.array(z.string().min(1)).max(100).optional(),
+});
+export type PlanByTypeRequestDto = z.infer<typeof planByTypeRequestSchema>;
+
 /** The desk chooses one of the booking's rooms itself, within its type, before Arrival. */
 /** One room given ({fromRoomId, toRoomId}), or several at once ({picks: [...]}, the chart). */
 export const chooseQuietRoomRequestSchema = z

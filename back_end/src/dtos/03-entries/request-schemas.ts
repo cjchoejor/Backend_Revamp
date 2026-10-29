@@ -108,9 +108,24 @@ export const negotiationAmendmentRequestSchema = z
           .max(90)
           .optional(),
         deficientAcknowledgements: z.unknown().optional(),
+        /** Rooms by type (2026-10-29): the counts each night; the system chooses the rooms. */
+        byType: z
+          .object({
+            perNight: z
+              .array(
+                z.object({
+                  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+                  types: z.array(z.object({ roomTypeId: z.string().min(1), count: z.number().int().min(0).max(200) })).max(50),
+                }),
+              )
+              .min(1)
+              .max(90),
+            fixedRoomIds: z.array(z.string().min(1)).max(100).optional(),
+          })
+          .optional(),
       })
-      .refine((r) => !!r.roomId || (r.roomIds?.length ?? 0) > 0 || (r.perNight?.length ?? 0) > 0, {
-        message: "Name the rooms — roomId, roomIds or perNight.",
+      .refine((r) => !!r.roomId || (r.roomIds?.length ?? 0) > 0 || (r.perNight?.length ?? 0) > 0 || !!r.byType, {
+        message: "Name the rooms — roomId, roomIds, perNight or byType.",
       })
       .optional(),
     reason: z.string().trim().min(1, "A reason is required.").max(500),
@@ -143,6 +158,21 @@ export const changeStayInPlaceRequestSchema = z.object({
       .array(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), roomIds: z.array(z.string().min(1)).min(1).max(60) }))
       .min(1)
       .max(90),
+    /** Picked by type (2026-10-29): `perNight` is then the rooms the system chose for it, as shown. */
+    byType: z
+          .object({
+            perNight: z
+              .array(
+                z.object({
+                  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+                  types: z.array(z.object({ roomTypeId: z.string().min(1), count: z.number().int().min(0).max(200) })).max(50),
+                }),
+              )
+              .min(1)
+              .max(90),
+            fixedRoomIds: z.array(z.string().min(1)).max(100).optional(),
+          })
+          .optional(),
   }),
   roomCompositions: z.array(roomCompositionInputSchema).min(1).max(60),
   reason: z.string().trim().min(1, "Type why the stay is changing.").max(500),

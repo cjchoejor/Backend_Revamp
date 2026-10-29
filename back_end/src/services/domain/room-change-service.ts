@@ -1048,6 +1048,13 @@ async function changeRoomToNewSegmentInner(
     perNight?: Array<{ date: string; roomId: string }>;
     reason: string;
     /**
+     * The desk changed the room's TYPE and the system chose the room (2026-10-29, operator: "double
+     * click on the room … change to another room type, where the system can offer free room types").
+     * Before Arrival the new room stays the system's, moved within its type like any other until the
+     * rooms are handed out; from Arrival on it is the booking's room, as any change makes it.
+     */
+    systemChosen?: boolean;
+    /**
      * Setup for the single replacement room (simple-swap sugar — applied to the primary) — OR,
      * with NO `toRoomId`/`perNight` at all (2026-08-19, operator request: "put the extra bed
      * selection option on S5–S7"), a SETUP-ONLY change on the from-room itself: the guest keeps
@@ -1626,10 +1633,12 @@ async function changeRoomToNewSegmentInner(
     ? carryBookingRooms(
         readBookingRooms(ctx.sealedConfig!.optionSelected, { checkIn: ctx.checkIn, checkOut: ctx.checkOut }, (id) => typeById.get(id)),
         substitutedPicture,
-        {
-          chosen: setupOnly ? [] : [...distinctTargets, ...[...dateRoomMap].filter(([f, t]) => f !== t).map(([, t]) => t)],
-          roomTypeOf: (id) => typeById.get(id),
-        },
+        input.systemChosen && (ctx.stage === Stage.S3 || ctx.stage === Stage.S4)
+          ? { systemChosen: distinctTargets, roomTypeOf: (id) => typeById.get(id) }
+          : {
+              chosen: setupOnly ? [] : [...distinctTargets, ...[...dateRoomMap].filter(([f, t]) => f !== t).map(([, t]) => t)],
+              roomTypeOf: (id) => typeById.get(id),
+            },
       )
     : null;
   const bookingRoomsKey = carriedBookingRooms ? { bookingRooms: carriedBookingRooms } : {};

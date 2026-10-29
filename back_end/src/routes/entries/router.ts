@@ -196,6 +196,23 @@ entriesRouter.get("/:id/room-change/candidates", requireActorLevel("L1"), async 
 });
 
 /**
+ * The room types one of the booking's rooms could change to (2026-10-29) — "double-click a room to
+ * change its room type": how many of each are free over the room's nights, the room the system would
+ * give, the rate per night. Read-only; the change itself is the room change below.
+ */
+entriesRouter.get("/:id/room-type-options", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    const fromRoomId = typeof req.query.fromRoomId === "string" ? req.query.fromRoomId : "";
+    if (!fromRoomId) throw new ValidationError("fromRoomId query parameter is required");
+    const { listRoomTypeOptions } = await import("../../services/domain/room-type-options-service.js");
+    res.json(await listRoomTypeOptions(prisma, req.params.id, fromRoomId));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
  * In-place room change — the composite. One call: governed ROOM_CHANGE re-entry (new segment),
  * substituted basis revalidated against live availability, silent re-quote (nothing sent to the
  * guest; PI not re-issued; the advance already received stands), then the walk back to the
@@ -211,6 +228,7 @@ entriesRouter.post("/:id/room-change", requireActorLevel("L1"), validateBody(roo
       toRoomId: req.body.toRoomId,
       perNight: req.body.perNight,
       reason: req.body.reason,
+      systemChosen: req.body.systemChosen === true,
       adjustments: req.body.adjustments,
       roomSetups: req.body.roomSetups,
       roomCompositions: req.body.roomCompositions,

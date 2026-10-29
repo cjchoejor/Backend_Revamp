@@ -204,10 +204,15 @@ export function fixAllBookingRooms(rooms: BookingRoom[]): BookingRoom[] {
 export function carryBookingRooms(
   prior: BookingRoom[] | null,
   picture: Array<{ date: string; roomIds: string[] }>,
-  opts: { chosen?: Iterable<string>; roomTypeOf: (roomId: string) => string | null | undefined },
+  opts: {
+    chosen?: Iterable<string>;
+    /** Rooms new to the booking that the SYSTEM chose — the desk changed a room's type, not its number (2026-10-29). */
+    systemChosen?: Iterable<string>;
+    roomTypeOf: (roomId: string) => string | null | undefined;
+  },
 ): BookingRoom[] | null {
   if (!prior) return null;
-  const quiet = new Set(roomUnitsOf(prior).filter((u) => u.quiet).map((u) => u.roomId));
+  const quiet = new Set([...roomUnitsOf(prior).filter((u) => u.quiet).map((u) => u.roomId), ...(opts.systemChosen ?? [])]);
   const chosen = new Set(opts.chosen ?? []);
   const keyOf = new Map<string, number>();
   for (const r of prior) {

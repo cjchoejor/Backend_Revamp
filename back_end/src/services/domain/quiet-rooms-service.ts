@@ -285,6 +285,118 @@ export async function sealBookingRoomsByType(
   if (!cfg || cfg.entryId !== entryId) throw new NotFoundError("AvailabilityConfiguration");
   if (cfg.isStale && !opts.preview) throw new ValidationError("The house's answer is out of date — ask the house again");
 
+  const { answer, world } = await planByType(prisma, e, {
+    checkIn,
+    checkOut,
+    nights,
+    asked: e.numberOfRooms ?? 0,
+    perNight: input.perNight,
+    fixedRoomIds: input.fixedRoomIds,
+    previousSeal: currentPassSeal(e),
+  });
+  if (opts.preview || !answer.fits) return answer;
+
+  // ---- save: first the other bookings' quiet rooms the fit moves, then the pick ------------------
+  const maps = new Map<string, Map<string, string>>();
+  for (const m of answer.check?.moves ?? []) addMove(maps, m.entryId, m.fromRoomId, m.toRoomId);
+  await applyQuietMoves(prisma, maps, { ...actor, reason: "Made way for a booking picked by type", forEntryId: entryId, roomNumbers: world.roomNumberOf });
+  const sealed = sealFromBookingRooms(answer.bookingRooms);
+  await selectOption(prisma, input.configurationId, actor.actorId, { perNight: answer.perNight }, { skipAvailability: true, bookingRooms: sealed.bookingRooms });
+  const typeName = (id: string) => world.typeName.get(id) ?? "room";
+  await prisma.traceEvent.create({
+    data: {
+      eventType: "BOOKING_ROOMS.PICKED_BY_TYPE",
+      actorId: actor.actorId,
+      actorLevel: actor.actorLevel,
+      entityType: "Entry",
+      entityId: entryId,
+      operation: "UPDATE",
+      timestamp: new Date(),
+      stageContext: e.currentStage,
+      inquiryId: e.inquiryId,
+      entryId,
+      payload: {
+        perNight: input.perNight.map((n) => ({ date: n.date, types: n.types.filter((t) => t.count > 0).map((t) => ({ type: typeName(t.roomTypeId), count: t.count })) })),
+        fixedRooms: (input.fixedRoomIds ?? []).map((id) => world.roomNumberOf.get(id)),
+        othersMoved: [...maps.keys()],
+      } as Prisma.InputJsonValue,
+    },
+  });
+  return { ...answer, saved: true };
+}
+
+/**
+ * Rooms by type for a stay that may not be the booking's yet (2026-10-29, operator: "when I click
+ * Change the dates, rooms or guests it doesn't show the availability chart like in S1 … adopt the
+ * same style for this section in all stages"): the same plan as the Inquiry step's — the counts
+ * checked, the system's rooms placed, the other bookings it would move — for the dates and the room
+ * count given, before anything is changed. READ-ONLY.
+ */
+export async function planRoomsByTypeForStay(
+  prisma: PrismaClient,
+  entryId: string,
+  input: {
+    checkInDate: string;
+    checkOutDate: string;
+    numberOfRooms: number;
+    perNight: SealByTypeInput["perNight"];
+    fixedRoomIds?: string[];
+  },
+): Promise<SealByTypeAnswer> {
+  const e = await loadEntry(prisma, entryId);
+  if (!e) throw new NotFoundError("Entry");
+  if (e.status !== "ACTIVE" && e.status !== "PARKED") throw new ValidationError("This booking has ended — a sealed record is read-only");
+  const checkIn = utcDateOnly(new Date(`${input.checkInDate.slice(0, 10)}T00:00:00.000Z`));
+  const checkOut = utcDateOnly(new Date(`${input.checkOutDate.slice(0, 10)}T00:00:00.000Z`));
+  if (!(checkOut > checkIn)) throw new ValidationError("The check-out has to be after the check-in");
+  const { answer } = await planByType(prisma, e, {
+    checkIn,
+    checkOut,
+    nights: listNightYmdsUtc(checkIn, checkOut),
+    asked: input.numberOfRooms,
+    perNight: input.perNight,
+    fixedRoomIds: input.fixedRoomIds,
+    previousSeal: currentPassSeal(e),
+  });
+  return answer;
+}
+
+/** The other bookings' quiet rooms a plan moves to make way — moved now, before the plan is sealed. */
+export async function applyPlanMoves(
+  prisma: PrismaClient,
+  answer: SealByTypeAnswer,
+  actor: Actor,
+  entryId: string,
+): Promise<number> {
+  const maps = new Map<string, Map<string, string>>();
+  const numbers = new Map<string, string>();
+  for (const m of answer.check?.moves ?? []) {
+    if (m.entryId === entryId) continue;
+    addMove(maps, m.entryId, m.fromRoomId, m.toRoomId);
+    numbers.set(m.fromRoomId, m.fromRoomNumber);
+    numbers.set(m.toRoomId, m.toRoomNumber);
+  }
+  if (maps.size === 0) return 0;
+  await applyQuietMoves(prisma, maps, { ...actor, reason: "Made way for a booking's rooms picked by type", forEntryId: entryId, roomNumbers: numbers });
+  return maps.size;
+}
+
+/** The counts → booking rooms → the system's rooms placed, against the house as it stands. */
+async function planByType(
+  prisma: PrismaClient,
+  e: Loaded,
+  input: {
+    checkIn: Date;
+    checkOut: Date;
+    nights: string[];
+    asked: number;
+    perNight: SealByTypeInput["perNight"];
+    fixedRoomIds?: string[];
+    previousSeal: unknown;
+  },
+): Promise<{ answer: SealByTypeAnswer; world: World }> {
+  const entryId = e.id;
+  const { checkIn, checkOut, nights, asked } = input;
   const world = await buildWorld(prisma, { from: checkIn, to: checkOut, excludeEntryId: entryId });
   const typeName = (id: string) => world.typeName.get(id) ?? "room";
 
@@ -292,7 +404,6 @@ export async function sealBookingRoomsByType(
   const refusals: string[] = [];
   const counts = new Map<string, Map<string, number>>();
   const given = new Map(input.perNight.map((n) => [n.date.slice(0, 10), n.types] as const));
-  const asked = e.numberOfRooms ?? 0;
   for (const date of nights) {
     const types = given.get(date);
     if (!types) {
@@ -336,7 +447,7 @@ export async function sealBookingRoomsByType(
     }
   }
 
-  const prevSeal = currentPassSeal(e);
+  const prevSeal = input.previousSeal;
   const previous = sealHasBookingRooms(prevSeal) ? readBookingRooms(prevSeal, { checkIn, checkOut }, (id) => world.roomTypeOf.get(id)) : null;
   const bookingRooms = refusals.length > 0 ? [] : bookingRoomsFromCounts({ nights, counts, fixed, previous });
 
@@ -368,34 +479,7 @@ export async function sealBookingRoomsByType(
     roomIds: placedRooms.flatMap((r) => r.nights.filter((n) => n.date === date && n.roomId).map((n) => n.roomId!)),
   }));
   const answer: SealByTypeAnswer = { fits: dedup.length === 0, refusals: dedup, bookingRooms: placedRooms, perNight, check, saved: false };
-  if (opts.preview || dedup.length > 0) return answer;
-
-  // ---- save: first the other bookings' quiet rooms the fit moves, then the pick ------------------
-  const maps = new Map<string, Map<string, string>>();
-  for (const m of check?.moves ?? []) addMove(maps, m.entryId, m.fromRoomId, m.toRoomId);
-  await applyQuietMoves(prisma, maps, { ...actor, reason: "Made way for a booking picked by type", forEntryId: entryId, roomNumbers: world.roomNumberOf });
-  const sealed = sealFromBookingRooms(placedRooms);
-  await selectOption(prisma, input.configurationId, actor.actorId, { perNight }, { skipAvailability: true, bookingRooms: sealed.bookingRooms });
-  await prisma.traceEvent.create({
-    data: {
-      eventType: "BOOKING_ROOMS.PICKED_BY_TYPE",
-      actorId: actor.actorId,
-      actorLevel: actor.actorLevel,
-      entityType: "Entry",
-      entityId: entryId,
-      operation: "UPDATE",
-      timestamp: new Date(),
-      stageContext: e.currentStage,
-      inquiryId: e.inquiryId,
-      entryId,
-      payload: {
-        perNight: input.perNight.map((n) => ({ date: n.date, types: n.types.filter((t) => t.count > 0).map((t) => ({ type: typeName(t.roomTypeId), count: t.count })) })),
-        fixedRooms: fixed.map((f) => world.roomNumberOf.get(f.roomId)),
-        othersMoved: [...maps.keys()],
-      } as Prisma.InputJsonValue,
-    },
-  });
-  return { ...answer, saved: true };
+  return { answer, world };
 }
 
 /**

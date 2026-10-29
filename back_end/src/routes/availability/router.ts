@@ -5,6 +5,7 @@ import {
   priceRoomPickRequestSchema,
   houseByTypeRequestSchema,
   sealByTypeRequestSchema,
+  planByTypeRequestSchema,
   chooseQuietRoomRequestSchema,
   queryAvailabilitySearchRequestSchema,
   selectAvailabilityOptionRequestSchema,
@@ -16,7 +17,7 @@ import { priceRoomPick } from "../../services/domain/pick-pricing-service.js";
 import { releaseRoomBlock } from "../../services/domain/room-block-release-service.js";
 import { buildRoomChart } from "../../services/domain/room-chart-service.js";
 import { answerHouseByType } from "../../services/domain/room-placement-service.js";
-import { chooseQuietRooms, describeBookingRooms, listQuietRoomChoices, sealBookingRoomsByType } from "../../services/domain/quiet-rooms-service.js";
+import { chooseQuietRooms, describeBookingRooms, listQuietRoomChoices, planRoomsByTypeForStay, sealBookingRoomsByType } from "../../services/domain/quiet-rooms-service.js";
 import { ROOM_BED_TYPES, allowedBedTypesSource, effectiveAllowedBedTypes, setRoomBedType, usualBedTypeFor } from "../../services/domain/room-bed-type-service.js";
 
 export const availabilityRouter = Router();
@@ -228,6 +229,24 @@ availabilityRouter.post(
           })),
         }),
       );
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+/**
+ * The pick by type for a stay not saved yet — "Change the dates, rooms or guests" (2026-10-29): the
+ * counts checked and the system's rooms placed for the dates and room count given. Read-only.
+ */
+availabilityRouter.post(
+  "/entries/:id/availability/by-type/plan",
+  requireActorLevel("L1"),
+  validateBody(planByTypeRequestSchema),
+  async (req, res, next) => {
+    try {
+      res.setHeader("Cache-Control", "no-store");
+      res.json(await planRoomsByTypeForStay(prisma, req.params.id, req.body));
     } catch (e) {
       next(e);
     }

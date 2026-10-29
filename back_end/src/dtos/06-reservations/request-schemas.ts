@@ -135,6 +135,8 @@ export const roomChangeRequestSchema = z
     // Any non-empty reason — one word is fine (2026-08-14: the old min-3 kept the desk's swap
     // button dead on short reasons like "AC" with nothing explaining why).
     reason: z.string().trim().min(1, "A reason for the room change is required"),
+    /** The desk changed the room's type and the system chose the room (2026-10-29). */
+    systemChosen: z.boolean().optional(),
     // Simple-swap sugar: setup for the single replacement room — OR, with neither toRoomId nor
     // perNight, a SETUP-ONLY change on the from-room itself (2026-08-19: extra beds / meals
     // re-priced on the same room; the service walks the same governed journey).

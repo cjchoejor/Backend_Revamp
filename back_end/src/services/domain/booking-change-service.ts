@@ -24,6 +24,7 @@ import { confirmReservation } from "./s4-confirmation-service.js";
 import { recordCommunicationAcknowledgement } from "./communication-acknowledgement-service.js";
 import { assignRoomsFromSealedPerNight } from "./room-assignment-service.js";
 import { releasePreOccupancyForReEntryTx } from "./room-change-service.js";
+import { applyPlanMoves, planRoomsByTypeForStay, type SealByTypeAnswer } from "./quiet-rooms-service.js";
 
 /**
  * CHANGE THE DATES, ROOMS OR GUESTS ON THE STEP THE BOOKING IS AT (2026-10-29, operator: "in the
@@ -55,8 +56,16 @@ type Actor = { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" };
 export type BookingChangeInput = {
   dates: { checkInDate: string; checkOutDate: string };
   party: { adultCount: number; childCount: number; childAges: number[]; numberOfRooms: number };
-  /** The house's answer the rooms were picked from, for exactly the new dates, and the picks. */
-  rooms: { configurationId: string; perNight: Array<{ date: string; roomIds: string[] }> };
+  /**
+   * The house's answer the rooms were picked from, for exactly the new dates, and the picks. Picked
+   * by type (2026-10-29): `byType` the counts, `perNight` the rooms the system chose for them as the
+   * desk saw them — chosen again here, and refused if the house has changed since.
+   */
+  rooms: {
+    configurationId: string;
+    perNight: Array<{ date: string; roomIds: string[] }>;
+    byType?: { perNight: Array<{ date: string; types: Array<{ roomTypeId: string; count: number }> }>; fixedRoomIds?: string[] };
+  };
   /** The S2 table for the new rooms — who sleeps where, meals, beds, rates. */
   roomCompositions: RoomCompositionServiceInput[];
   reason: string;
@@ -155,10 +164,28 @@ export async function changeBookingInPlace(
     throw new ValidationError("Those rooms were found for other dates — ask the house for the new dates first.");
   }
   const perNight = input.rooms.perNight.map((n) => ({ date: String(n.date).slice(0, 10), roomIds: [...new Set(n.roomIds)] }));
-  await selectOption(prisma, cfg.id, actor.actorId, { perNight }, {
-    validateOnly: true,
-    stay: { checkInDate: checkIn, checkOutDate: checkOut, numberOfRooms: party.numberOfRooms },
-  });
+  let byTypePlan: SealByTypeAnswer | null = null;
+  if (input.rooms.byType) {
+    // By type: the system chooses the rooms again, against the house as it stands now.
+    byTypePlan = await planRoomsByTypeForStay(prisma, entryId, {
+      checkInDate: ymd(checkIn),
+      checkOutDate: ymd(checkOut),
+      numberOfRooms: party.numberOfRooms,
+      perNight: input.rooms.byType.perNight,
+      fixedRoomIds: input.rooms.byType.fixedRoomIds,
+    });
+    if (!byTypePlan.fits) throw new ValidationError(byTypePlan.refusals.join(" · ") || "Those rooms do not fit the new stay.");
+    const canonPN = (pn: Array<{ date: string; roomIds: string[] }>) =>
+      JSON.stringify(pn.map((n) => [String(n.date).slice(0, 10), [...new Set(n.roomIds)].sort()]).sort());
+    if (canonPN(byTypePlan.perNight) !== canonPN(perNight)) {
+      throw new ValidationError("The house changed while you worked — the rooms the system would choose are not the ones shown. Look at the rooms again, then save.");
+    }
+  } else {
+    await selectOption(prisma, cfg.id, actor.actorId, { perNight }, {
+      validateOnly: true,
+      stay: { checkInDate: checkIn, checkOutDate: checkOut, numberOfRooms: party.numberOfRooms },
+    });
+  }
   const planRoomIds = [...new Set(perNight.flatMap((n) => n.roomIds))];
 
   // The table covers exactly the rooms picked.
@@ -209,11 +236,22 @@ export async function changeBookingInPlace(
     }))?.optionSelected ?? null) as never,
   ).distinctRoomIds;
   const holdWasPlaced = entry.committedHold?.state === "PLACED" || entry.committedHold?.state === "CONFIRMED";
-  const roomNumbers = new Map(
-    (await prisma.room.findMany({ where: { id: { in: [...new Set([...priorRooms, ...planRoomIds])] } }, select: { id: true, roomNumber: true } })).map((r) => [r.id, r.roomNumber]),
-  );
-  const roomsWords = (ids: string[]) =>
-    ids.length ? ids.map((id) => roomNumbers.get(id) ?? "?").sort((a, b) => a.localeCompare(b, "en", { numeric: true })).join(", ") : "—";
+  const involved = await prisma.room.findMany({
+    where: { id: { in: [...new Set([...priorRooms, ...planRoomIds])] } },
+    select: { id: true, roomNumber: true, roomType: { select: { name: true } } },
+  });
+  const roomNumbers = new Map(involved.map((r) => [r.id, r.roomNumber]));
+  const typeNames = new Map(involved.map((r) => [r.id, r.roomType?.name ?? "room"]));
+  // Rooms by type are counted by type — the system's room numbers are not named (2026-10-29).
+  const roomsWords = (ids: string[]) => {
+    if (!ids.length) return "—";
+    if (byTypePlan) {
+      const n = new Map<string, number>();
+      for (const id of ids) n.set(typeNames.get(id) ?? "room", (n.get(typeNames.get(id) ?? "room") ?? 0) + 1);
+      return [...n.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([t, c]) => `${c} ${t}`).join(" and ");
+    }
+    return ids.map((id) => roomNumbers.get(id) ?? "?").sort((a, b) => a.localeCompare(b, "en", { numeric: true })).join(", ");
+  };
   const before = {
     checkIn: ymd(entry.checkInDate!),
     checkOut: ymd(entry.checkOutDate!),
@@ -278,6 +316,8 @@ export async function changeBookingInPlace(
 
   // 2. The change itself, at Negotiation, on a search of this pass for the new dates.
   await step("THE_CHANGE", async () => {
+    // Picked by type: the other bookings' system-chosen rooms the plan moves are moved first.
+    if (byTypePlan) await applyPlanMoves(prisma, byTypePlan, actor, entryId);
     const search = (await queryAvailability(prisma, entryId, actor.actorId, actor.actorLevel, {
       checkInDate: ymd(checkIn),
       checkOutDate: ymd(checkOut),
@@ -287,7 +327,7 @@ export async function changeBookingInPlace(
       reason: `Changed at ${stage === Stage.S3 ? "Set up" : stage === Stage.S4 ? "Reserve" : "Arrival"}: ${reason}`,
       ...(newStay ? { dates: { checkInDate: ymd(checkIn), checkOutDate: ymd(checkOut) } } : {}),
       party: { adultCount: party.adultCount, childCount: party.childCount, childAges: party.childAges, numberOfRooms: party.numberOfRooms },
-      rooms: { configurationId: search.configuration.id, perNight },
+      rooms: { configurationId: search.configuration.id, perNight, ...(byTypePlan ? { bookingRooms: byTypePlan.bookingRooms } : {}) },
     });
     if (!out.applied) throw new ValidationError("The change could not be applied at Negotiation.");
   });
