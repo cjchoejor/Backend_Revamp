@@ -23,10 +23,11 @@ import { isHousekeeping, traceDetail, traceWords } from "@/lib/ds/trace-words";
 import { groupWalks, type HistoryItem, type HistoryNames } from "@/lib/ds/history-walks";
 import { useRoomsList } from "@/hooks/use-desk-data";
 import { SegmentHistoryPanel } from "@/components/desk/workspace/segment-history";
+import { PassesAndAmendments } from "@/components/ds/steps/case-cards";
 import type { EntryDetail } from "@/types/api";
 import { Help, HelpHere } from "@/components/ds/help";
 
-type Lens = "all" | "changes" | "money" | "approvals" | "notes";
+type Lens = "all" | "changes" | "money" | "approvals" | "notes" | "passes";
 
 const LENSES: ReadonlyArray<readonly [Lens, string]> = [
   ["all", "All"],
@@ -34,9 +35,10 @@ const LENSES: ReadonlyArray<readonly [Lens, string]> = [
   ["money", "Price & payments"],
   ["approvals", "Approvals"],
   ["notes", "Desk notes"],
+  ["passes", "Passes and amendments"],
 ];
 
-const LENS_TEST: Record<Exclude<Lens, "all">, RegExp> = {
+const LENS_TEST: Record<Exclude<Lens, "all" | "passes">, RegExp> = {
   changes:
     /TRANSITION|BACKFLOW|REENTRY|AMEND|ROOM_CHANGE|ROOM_MOVE|STAY_DATES|BED_TYPE|EXTENSION|EARLY_DEPARTURE|BILLING_MODEL|INTAKE|CONFIGURATION_SELECTED|HOLD|PARK|CANCELLED|EXPIRED|CLOSED|ROOM_KEY|CHECK_IN|ACTIVATION|ASSIGN|CALLER|SOURCE_CHANGED|GUEST_NAMED|GUEST_REQUEST|PREFERENCE|DECLINED/,
   money:
@@ -47,7 +49,7 @@ const LENS_TEST: Record<Exclude<Lens, "all">, RegExp> = {
 
 const isLens = (v: string | null | undefined): v is Lens => !!v && LENSES.some(([k]) => k === v);
 
-const inLens = (ev: TraceEvent, lens: Lens) => lens === "all" || LENS_TEST[lens].test(ev.eventType);
+const inLens = (ev: TraceEvent, lens: Lens) => lens === "all" || (lens !== "passes" && LENS_TEST[lens].test(ev.eventType));
 
 const whoDid = (ev: TraceEvent) =>
   ev.actorId === "SYSTEM" || ev.actorLevel === "SYSTEM" || ev.actorName === "SYSTEM"
@@ -176,7 +178,7 @@ export function HistoryView({
                 </Button>
               ))}
             </div>
-            <span className="meta">
+            <span className="meta" hidden={lens === "passes"}>
               {shownActs} of {plural(all.length, "act")} · newest first
               <Help label="About the history">
                 Nothing here is ever edited. The system&rsquo;s own bookkeeping — timers set, documents printed, checks run — is left out;
@@ -184,7 +186,9 @@ export function HistoryView({
               </Help>
             </span>
           </div>
-          {trace.isLoading ? (
+          {lens === "passes" ? (
+            <PassesAndAmendments entry={entry} tz={tz} />
+          ) : trace.isLoading ? (
             <p className="meta">Reading the record…</p>
           ) : chapters.length === 0 ? (
             <EmptyState title={lens === "all" ? "Nothing recorded yet" : "Nothing of this kind yet"} />
@@ -272,6 +276,7 @@ export function HistoryView({
           ) : null}
         </div>
 
+        {lens === "passes" ? (
         <div className="card">
           <div className="card-top">
             <h4>
@@ -290,6 +295,7 @@ export function HistoryView({
             </div>
           ) : null}
         </div>
+        ) : null}
 
       </div>
     </>

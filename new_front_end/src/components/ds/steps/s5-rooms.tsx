@@ -41,7 +41,7 @@ import { deriveRoomStatus, ROOM_STATUS, type RoomStatusKey } from "@/lib/desk/ro
 import { formatRoomPickerLabel } from "@/lib/room-inventory-status";
 import { fmtDate, fmtDay, money, plural } from "@/lib/ds/format";
 import { optionSelectedRoomIds, type EntryDetail, type RoomAssignmentSummary } from "@/types/api";
-import { ExtraBedEditor, InitialSelectionCell } from "@/components/desk/workspace/room-change-control";
+import { InitialSelectionCell } from "@/components/desk/workspace/room-change-control";
 import { Choice, DsDialog, Fact, Facts, Live, StepCard, toastRefusal, useFinishWhenDone, useRefreshEntry, useStepMode } from "./kit";
 import { enumerateNights } from "./use-room-selection";
 import { RoomsTable } from "./rooms-table";

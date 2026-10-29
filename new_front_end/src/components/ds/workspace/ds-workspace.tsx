@@ -1895,7 +1895,6 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                     park={parked ? { reason: listRow?.parkReason ?? null, followUpAt: listRow?.parkFollowUpAt ?? null, lapsesAt: parkTimer?.firesAt ?? null } : null}
                     onResume={parked ? () => unparkMutation.mutate() : undefined}
                     resuming={unparkMutation.isPending}
-                    onHistory={() => setView("history", viewing)}
                   />
                   {roomsInPage ? (
                     <div className="rooms-in-page">
@@ -2257,7 +2256,6 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                     park={parked ? { reason: listRow?.parkReason ?? null, followUpAt: listRow?.parkFollowUpAt ?? null, lapsesAt: parkTimer?.firesAt ?? null } : null}
                     onResume={parked ? () => unparkMutation.mutate() : undefined}
                     resuming={unparkMutation.isPending}
-                    onHistory={() => setView("history", viewing)}
                   />
                 </div>
                 <StepFlow items={flowItems} on={!viewingPast && !sealed} fold={inquiryStepActive ? "done" : null} derived={derived}>

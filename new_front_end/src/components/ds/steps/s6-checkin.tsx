@@ -29,7 +29,7 @@ import { guestName } from "@/lib/desk/model";
 import { fmtDate, fmtDay, fmtStamp, money, plural } from "@/lib/ds/format";
 import { AdvanceSettlementBlock } from "@/components/desk/workspace/advance-settlement";
 import { IdentityProofBlock } from "@/components/desk/workspace/identity-proof";
-import { ExtraBedEditor, InitialSelectionCell } from "@/components/desk/workspace/room-change-control";
+import { InitialSelectionCell } from "@/components/desk/workspace/room-change-control";
 import type { EntryDetail, RoomAssignmentSummary } from "@/types/api";
 import {
   ChangeBookingMenu,
@@ -651,7 +651,6 @@ function RoomRow({
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
           <InlineTool>
             <InitialSelectionCell entryId={entry.id} roomId={a.roomId} />
-            <ExtraBedEditor entry={entry} roomId={a.roomId} onChanged={onChanged} />
           </InlineTool>
           <Button kind="quiet" compact onClick={onToggleOpen}>
             {open ? "Hide" : "Details"}

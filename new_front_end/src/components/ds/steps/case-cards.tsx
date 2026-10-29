@@ -39,6 +39,67 @@ const stepWord = (stage?: string | null) => (stage ? STEP_NAMES[stepNoOfStage(st
 
 type CancelPayload = { reason?: string; penalty?: number; netRefund?: number; advanceTotal?: number; penaltyWaiverRequested?: boolean };
 
+/**
+ * Passes and amendments (2026-10-29, operator: "this section can be moved to the right screen,
+ * under History as a sub-tab — remove it from the current step's main page, for all stages"): every
+ * earlier pass with how it closed and why, and every change recorded, newest pass last. A record of
+ * what happened, not work to do — it lives in the booking file's History.
+ */
+export function PassesAndAmendments({ entry, tz }: { entry: EntryDetail; tz: string }) {
+  const { session } = useSession();
+  const passes = useQuery({
+    queryKey: ["segment-history", entry.id, entry.segmentNumber ?? 1],
+    queryFn: () => getSegmentHistory(session!, entry.id),
+    enabled: !!session,
+  });
+  if (passes.isLoading) return <p className="meta">Reading the passes…</p>;
+  const earlier = (passes.data?.segments ?? []).filter((s) => !s.isActive || s.sealedAt).sort((a, b) => a.segmentNumber - b.segmentNumber);
+  const amendments = (passes.data?.segments ?? []).flatMap((s) => s.amendments.map((a) => ({ ...a, pass: s.segmentNumber })));
+  if (!earlier.length && !amendments.length) {
+    return <p className="meta">One pass so far — nothing on the booking has been changed in a way that starts a new one.</p>;
+  }
+  const opener = (n: number) => passes.data?.segments.find((s) => s.segmentNumber === n + 1);
+  const summary = [
+    earlier.length ? `${earlier.length} earlier pass${earlier.length === 1 ? "" : "es"}` : null,
+    amendments.length ? `${amendments.length} change${amendments.length === 1 ? "" : "s"}` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  return (
+    <div className="stack sm" style={{ display: "grid", gap: 6 }}>
+      <span className="meta">{summary}</span>
+      {earlier.map((s) => {
+        const next = opener(s.segmentNumber);
+        const why = next?.openedBy?.modeKey ? PASS_WORD[next.openedBy.modeKey] ?? words(next.openedBy.modeKey) : null;
+        return (
+          <div key={s.id} style={{ display: "grid", gap: 2, borderTop: "1px solid var(--line)", paddingTop: 6 }}>
+            <span>
+              <b>Pass {s.segmentNumber} closed</b>
+              {next?.openedBy?.fromStage ? ` · from ${stepWord(next.openedBy.fromStage)} back to ${stepWord(next.openedBy.toStage)}` : ""}
+              {why ? ` · for ${why}` : ""}
+            </span>
+            {next?.openReason ? <span className="meta">“{next.openReason.replace(/^[A-Z_]+:\s*/, "")}”</span> : null}
+            <span className="meta">
+              {s.sealedAt ? fmtDateTime(s.sealedAt, tz) : ""}
+              {s.sealedByName ? ` · ${s.sealedByName}` : ""}
+            </span>
+          </div>
+        );
+      })}
+      {amendments.map((a) => (
+        <div key={a.id} style={{ display: "grid", gap: 2, borderTop: "1px solid var(--line)", paddingTop: 6 }}>
+          <span>
+            <b>{words(a.amendmentType)}</b> · {a.reason}
+          </span>
+          <span className="meta">
+            at {stepWord(a.stageAtAmendment)} · pass {a.pass} · {fmtDateTime(a.createdAt, tz)}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function CaseCards({
   entry,
   step,
@@ -47,7 +108,6 @@ export function CaseCards({
   park,
   onResume,
   resuming,
-  onHistory,
 }: {
   entry: EntryDetail;
   step: number;
@@ -56,23 +116,9 @@ export function CaseCards({
   park: { reason: string | null; followUpAt: string | null; lapsesAt: string | null } | null;
   onResume?: () => void;
   resuming?: boolean;
-  onHistory: () => void;
 }) {
-  const { session } = useSession();
   const [paper, setPaper] = useState<PaperRef | null>(null);
-  /**
-   * Passes and amendments read as one line until opened (2026-10-29, operator: "this part can be
-   * shown with just a header or message but minimized until the user expands it, do it
-   * everywhere") — it is a record of what happened, not work to do.
-   */
-  const [passesOpen, setPassesOpen] = useState(false);
   const cur = "BTN";
-
-  const passes = useQuery({
-    queryKey: ["segment-history", entry.id, entry.segmentNumber ?? 1],
-    queryFn: () => getSegmentHistory(session!, entry.id),
-    enabled: !!session && (entry.segmentNumber ?? 1) > 1,
-  });
   const inHouse = step >= 6 && step <= 8 && !!entry.folio;
   const pay = usePaymentStatus(entry.id, { enabled: inHouse });
 
@@ -127,69 +173,6 @@ export function CaseCards({
           <Fact k="How">{NO_SHOW_PATH[ns.determinationPath] ?? words(ns.determinationPath)}</Fact>
           <Fact k="Reason">{ns.decisionReason}</Fact>
         </Facts>
-      </StepCard>,
-    );
-  }
-
-  const earlier = (passes.data?.segments ?? []).filter((s) => !s.isActive || s.sealedAt).sort((a, b) => a.segmentNumber - b.segmentNumber);
-  const amendments = (passes.data?.segments ?? []).flatMap((s) => s.amendments.map((a) => ({ ...a, pass: s.segmentNumber })));
-  if (earlier.length || amendments.length) {
-    const opener = (n: number) => passes.data?.segments.find((s) => s.segmentNumber === n + 1);
-    // The one line it reads as while closed: how many, and the latest way back.
-    const latest = earlier.length ? earlier[earlier.length - 1] : null;
-    const latestNext = latest ? opener(latest.segmentNumber) : undefined;
-    const lineParts = [
-      earlier.length ? `${earlier.length} earlier pass${earlier.length === 1 ? "" : "es"}` : null,
-      amendments.length ? `${amendments.length} change${amendments.length === 1 ? "" : "s"}` : null,
-      latestNext?.openedBy?.fromStage
-        ? `latest: from ${stepWord(latestNext.openedBy.fromStage)} back to ${stepWord(latestNext.openedBy.toStage)}${latest?.sealedAt ? ` · ${fmtDateTime(latest.sealedAt, tz)}` : ""}`
-        : null,
-    ].filter(Boolean);
-    cards.push(
-      <StepCard
-        key="passes"
-        title="Passes and amendments"
-        status={lineParts.join(" · ")}
-        acts={
-          <>
-            <Button kind="quiet" compact aria-expanded={passesOpen} onClick={() => setPassesOpen((v) => !v)}>
-              {passesOpen ? "Hide" : "Show"}
-            </Button>
-            <Button kind="quiet" compact icon="history" onClick={onHistory}>
-              See every pass
-            </Button>
-          </>
-        }
-      >
-        {passesOpen ? (
-        <div className="stack sm" style={{ display: "grid", gap: 4 }}>
-          {earlier.map((s) => {
-            const next = opener(s.segmentNumber);
-            const why = next?.openedBy?.modeKey ? PASS_WORD[next.openedBy.modeKey] ?? words(next.openedBy.modeKey) : null;
-            return (
-              <div key={s.id} className="row-acts" style={{ justifyContent: "space-between" }}>
-                <span>
-                  Pass {s.segmentNumber} closed
-                  {next?.openedBy?.fromStage ? ` · from ${stepWord(next.openedBy.fromStage)} back to ${stepWord(next.openedBy.toStage)}` : ""}
-                  {why ? ` · for ${why}` : ""}
-                  {next?.openReason ? <span className="meta"> · “{next.openReason.replace(/^[A-Z_]+:\s*/, "")}”</span> : null}
-                </span>
-                <span className="meta">{s.sealedAt ? fmtDateTime(s.sealedAt, tz) : ""}{s.sealedByName ? ` · ${s.sealedByName}` : ""}</span>
-              </div>
-            );
-          })}
-          {amendments.map((a) => (
-            <div key={a.id} className="row-acts" style={{ justifyContent: "space-between" }}>
-              <span>
-                <b>{words(a.amendmentType)}</b> · {a.reason}
-              </span>
-              <span className="meta">
-                at {stepWord(a.stageAtAmendment)} · pass {a.pass} · {fmtDateTime(a.createdAt, tz)}
-              </span>
-            </div>
-          ))}
-        </div>
-        ) : null}
       </StepCard>,
     );
   }
