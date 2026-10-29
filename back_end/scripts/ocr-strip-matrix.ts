@@ -1,7 +1,9 @@
-// The passport strip reader's rules (2026-10-29): the check-digit repair, the shapes, a cut strip, the guards.
+// The ID reader's rules (2026-10-29): the passport strip's check-digit repair, the shapes, a cut strip,
+// the guards, and the citizenship card's recognition.
 // Read-only, no database. Run: npx tsx scripts/ocr-strip-matrix.ts
 import { extractMrzLines, parseMrzLines, repairTd3 } from "../src/lib/identity-ocr/mrz.js";
 import { namesFromLine1, printedNumberLookalikes, readPassportFromText } from "../src/lib/identity-ocr/passport-text.js";
+import { parseLayoutText } from "../src/lib/identity-ocr/layout-parse.js";
 
 let fails = 0;
 const check = (name: string, ok: boolean, extra?: unknown) => {
@@ -43,5 +45,15 @@ check("…the dates proven", cut?.fieldConfidence.dateOfBirth === "VERIFIED" && 
 // A printed eight-digit number the check digit does not pick is never suggested.
 const none = readPassportFromText(["02591<9IND7606157M3505207E070991364625<60"], ["12345678"], { isPassport: true });
 check("an unproven eight-digit number is not suggested", !none?.fields.documentNumber, none?.fields.documentNumber);
+// A Bhutanese citizenship card as the page reader read it (2026-10-29, operator's photo).
+const card = parseLayoutText(["KINGDOM OF BHUTan", "BHUTAN", "/Citizenship Card", "Name:Dilip Bhandari", "Sex: Male", "Date of Birth:03/04/1997", "Citizenships ID No. 11811003547"]);
+check("a citizenship card is a CID, with its number", card?.fields.documentType === "CID" && card?.fields.documentNumber === "11811003547", card?.fields);
+check("…its name, birth date and sex", card?.fields.fullName === "Dilip Bhandari" && card?.fields.dateOfBirth === "1997-04-03" && card?.fields.gender === "M", card?.fields);
+const permit = parseLayoutText(["KINGDOM OF BHUTAN", "DEPARTMENT OF IMMIGRATION", "WORK PERMIT", "Name: Ram Kumar", "Job Category: Driver"]);
+check("a work permit is still a work permit", permit?.fields.documentType === "WORK_PERMIT", permit?.fields.documentType);
+const unknown = parseLayoutText(["Some card", "Name: Test Person", "ID No. 12345678901"]);
+check("an unknown card takes a number written after ID No.", unknown?.fields.documentNumber === "12345678901", unknown?.fields);
+const bare = parseLayoutText(["Some card", "Name: Test Person", "12345678901"]);
+check("…but never a bare number with no label", !bare?.fields.documentNumber, bare?.fields);
 console.log(fails === 0 ? "ALL PASS" : `${fails} FAILED`);
 process.exit(0);
