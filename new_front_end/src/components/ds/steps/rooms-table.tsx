@@ -41,6 +41,7 @@ import { listRooms } from "@/lib/api/rooms";
 import { DsDialog, StepCard, Tool, toastRefusal, useBedPlan, useRefreshEntry, useStepMode } from "./kit";
 import { Help } from "@/components/ds/help";
 import { RoomTypeDialog } from "./room-type-change";
+import { ArrivalRoomDialog } from "./arrival-room-pick";
 
 /**
  * The room registry. Deliberately NOT imported from s5-rooms: Arrival imports this module, so
@@ -77,8 +78,16 @@ export function RoomsTable({
   entry,
   roomActions,
   lead,
+  mode = "change",
 }: {
   entry: EntryDetail;
+  /**
+   * `assign` — Arrival's own section (2026-10-29, operator: "it shows the move room feature already
+   * on the screen from change booking, this should be only shown there"): the table as it is, and a
+   * double-click gives a room another room of its type. Changing the type or the setup is Change
+   * booking › Move a room.
+   */
+  mode?: "change" | "assign";
   /** Acts for the chosen room that belong to this step — Arrival's Assign, say. */
   roomActions?: (roomId: string, roomNumber: string) => ReactNode;
   /** Shown above the table before any room is chosen. */
@@ -231,7 +240,19 @@ export function RoomsTable({
       {/* What can be done, where the eye lands before the table (2026-10-29, operator: "the change
           configuration button … somewhere near the table … the buttons should be prominent, leave a
           prominent message, not too big, that says double-click to change room types"). */}
-      {!past ? (
+      {!past && mode === "assign" ? (
+        <div className="rooms-tablebar">
+          <span className="rooms-hint" role="note">
+            <b>Double-click a room</b> to give it another room of its type
+          </span>
+          <Help label="About giving a room">
+            The rooms of the same type are offered, free or not. A room another booking holds only as the system&rsquo;s choice can be
+            taken — Arrival comes first, and that booking moves to another room of the type. Another room type, or a change of who
+            sleeps where, is Change booking › Move a room.
+          </Help>
+        </div>
+      ) : null}
+      {!past && mode === "change" ? (
         <div className="rooms-tablebar">
           {editing ? (
             <>
@@ -312,7 +333,17 @@ export function RoomsTable({
       />
       </Tool>
 
-      <RoomTypeDialog entry={entry} roomId={openRoom} name={openRoom ? nameOf(openRoom) : ""} onClose={() => setOpenRoom(null)} onChanged={changed} />
+      {mode === "assign" ? (
+        <ArrivalRoomDialog
+          entry={entry}
+          roomId={openRoom}
+          name={openRoom ? (quietName(openRoom) ? `${quietName(openRoom)} — Room ${numberOf(openRoom)}` : `Room ${numberOf(openRoom)}`) : ""}
+          onClose={() => setOpenRoom(null)}
+          onChanged={changed}
+        />
+      ) : (
+        <RoomTypeDialog entry={entry} roomId={openRoom} name={openRoom ? nameOf(openRoom) : ""} onClose={() => setOpenRoom(null)} onChanged={changed} />
+      )}
 
       <DsDialog
         open={reasonOpen}

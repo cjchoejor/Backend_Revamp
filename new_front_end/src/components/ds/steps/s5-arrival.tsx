@@ -49,7 +49,7 @@ import {
   useRefreshEntry,
   useStepFlow,
   useStepMode,
-  goToStepCard,
+  useStepPane,
   words,
   latestDispatched,
   useCommunications,
@@ -126,12 +126,10 @@ export function S5Arrival({
   const facts = useArrivalFacts(entry);
   const since = currentPassStart(entry);
   const clock = useHotelClock(60_000);
-  const flow = useStepFlow();
-  // Change booking's "Move a room" (2026-10-29): the rooms section is the room table — opened and gone to.
-  const moveRoom = () => {
-    flow.open("rooms");
-    window.setTimeout(() => goToStepCard("rooms"), 60);
-  };
+  // Change booking's "Move a room" opens the rooms in the page, as at Set up and Reserve (2026-10-29,
+  // operator: Arrival's own section showed the move-room tools, "this should be only shown there").
+  const stepPane = useStepPane();
+  const moveRoom = () => stepPane.open("rooms");
   return (
     <StepCanvas past={past}>
       <WhenTheyArrive entry={entry} />
@@ -212,6 +210,7 @@ function ExpectedArrivalFact({ entry }: { entry: EntryDetail }) {
   // a week ahead read "2:00 PM · no-show cut-off 4:00 PM" with nothing saying which day.
   const today = instantYmd(clock.now, tz);
   const when = (v: string | null | undefined) => (v && instantYmd(v, tz) !== today ? fmtStamp(v, tz) : fmtTime(v, tz));
+  const grace = d?.graceMinutes == null ? null : d.graceMinutes % 60 === 0 ? `${d.graceMinutes / 60} hour${d.graceMinutes === 60 ? "" : "s"}` : `${d.graceMinutes} minutes`;
   return (
     <Fact k="Expected arrival">
       {!d ? (
@@ -223,7 +222,18 @@ function ExpectedArrivalFact({ entry }: { entry: EntryDetail }) {
             <span className="meta">
               · {d.source === "GUEST" ? "the guest's own time" : "the hotel's check-in time"}
               {cutoff ? ` · no-show cut-off ${when(cutoff)}` : ""}
-            </span>
+              {/* Why the cut-off is not the arrival plus the grace (2026-10-29, operator, on 6:56 PM beside 2:00 PM). */}
+              {cutoff && d.cutoffFrom === "REACHED_ARRIVAL" && d.cutoffFromAt ? ` — ${grace ?? "the grace"} after it reached Arrival at ${when(d.cutoffFromAt)}` : ""}
+            </span>{" "}
+            <Help label="About the arrival time">
+              <p>When the guest is expected — the time they gave, or the hotel&rsquo;s check-in time — and when the no-show cut-off falls.</p>
+              <p>
+                The cut-off is {grace ?? "the grace"} after the expected arrival. A booking that reaches Arrival after that time gets the
+                same grace from the moment it reached Arrival, so it is never a no-show the moment it arrives here. A change made to the
+                booking at Arrival keeps the cut-off it had.
+              </p>
+              <p>Once the cut-off passes the guest can still check in; recording a no-show is the FOM&rsquo;s decision, after trying to reach the contact person.</p>
+            </Help>
           </span>
           {d.cutoffReachedAt ? (
             <span className="sm warn-ink">

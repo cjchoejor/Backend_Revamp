@@ -148,6 +148,20 @@ export type QuietRoomChoice = {
   words: string;
 };
 
+/** Arrival's choice of a room of the same type — the same reading as `QuietRoomChoice` (2026-10-29). */
+export type ArrivalRoomChoice = QuietRoomChoice;
+
+/**
+ * Arrival: the other rooms of a room's type and what taking each would do. `mode` CHOOSE before the
+ * rooms are handed out (the quiet choice), ROOM_CHANGE after (the room change, with `makeWay`).
+ */
+export function getArrivalRoomChoices(session: Session, entryId: string, fromRoomId: string) {
+  return apiRequest<{ mode: "CHOOSE" | "ROOM_CHANGE"; typeName: string | null; choices: ArrivalRoomChoice[] }>(
+    `/api/entries/${entryId}/arrival-room-choices?fromRoomId=${encodeURIComponent(fromRoomId)}`,
+    { session },
+  );
+}
+
 /** The other rooms of a room's type over its nights, and what giving each would do. Nothing written. */
 export function getQuietRoomChoices(session: Session, entryId: string, fromRoomId: string) {
   return apiRequest<{ typeName: string | null; choices: QuietRoomChoice[] }>(

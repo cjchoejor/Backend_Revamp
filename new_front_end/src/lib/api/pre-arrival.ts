@@ -132,6 +132,9 @@ export type ExpectedArrival = {
   cutoffAt: string | null;
   /** The running cut-off clock, once Arrival has armed it. */
   cutoffClockAt: string | null;
+  /** What the cut-off counts from — the expected arrival, or the moment the booking reached Arrival after it (2026-10-29). */
+  cutoffFrom?: "EXPECTED" | "REACHED_ARRIVAL" | null;
+  cutoffFromAt?: string | null;
   cutoffReachedAt: string | null;
   editable: boolean;
 };

@@ -319,7 +319,7 @@ export function AssignRoomsCard({ entry }: { entry: EntryDetail }) {
 
         </>
       }
-      meta="Who sleeps where, on what plan, with what beds — the table the price was negotiated on. Click a room to change it; every night is checked again and the price follows."
+      meta="Who sleeps where, on what plan, with what beds — the table the price was negotiated on. Double-click a room to give it another room of its type; another room type, or a change of who sleeps where, is Change booking › Move a room."
       status={readiness}
       summary={
         assigned
@@ -359,12 +359,12 @@ export function AssignRoomsCard({ entry }: { entry: EntryDetail }) {
           <span>
             <b>The system&apos;s rooms for this booking:</b>{" "}
             {proposals.map((r) => `${r.label} — Room ${r.roomNumber ?? "?"}`).join(" · ")}.{" "}
-            {multi ? "Assign them to confirm" : "Assign it to confirm"}, or click a room below to give it another of its type.
+            {multi ? "Confirm and assign them" : "Assign it to confirm"}, or double-click a room below to give it another of its type.
           </span>
         </div>
       ) : null}
 
-      <RoomsTable entry={entry} />
+      <RoomsTable entry={entry} mode="assign" />
 
       <Live>
         {!assigned && entry.currentStage === "S5" ? (

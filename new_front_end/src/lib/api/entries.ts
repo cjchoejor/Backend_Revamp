@@ -1034,6 +1034,8 @@ export async function changeBookingRoom(
     toRoomId?: string;
     /** The desk changed the room's type and the system chose the room — it stays the system's until Arrival (2026-10-29). */
     systemChosen?: boolean;
+    /** At Arrival: another booking holding the room only as the system's choice is moved out of the way first (2026-10-29). */
+    makeWay?: boolean;
     /** …or a room per night, S1-table style (may name the from-room on kept nights)… */
     perNight?: Array<{ date: string; roomId: string }>;
     reason: string;

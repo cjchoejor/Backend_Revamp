@@ -1045,7 +1045,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   // we had in the rooms tab in our previous UI") — opened from Change booking's "Move a room"; the
   // step's sections stay mounted, hidden, so nothing half-typed is lost.
   // Reserve's rooms open the same way (2026-10-29) — its Rooms tab became Change booking's "Move a room".
-  const roomsInPage = topLayout && (setupStepActive || confirmStepActive || confirmedS4Active) && !sealed && paneParam === "rooms";
+  const roomsInPage = topLayout && (setupStepActive || confirmStepActive || confirmedS4Active || arrivalStepActive) && !sealed && paneParam === "rooms";
   // Change booking › "Change the dates, rooms or guests" (2026-10-29, operator: "for the user it should
   // still happen in that current stage"): the editor in the page; the booking walks back through
   // Negotiation and returns here.
