@@ -199,12 +199,15 @@ export async function ensureQuietPlacement(
   if (!e || !QUIET_STAGES.includes(e.currentStage) || e.roomAssignments.length > 0) return none;
   if (e.status !== "ACTIVE" && e.status !== "PARKED") return none;
   const seal = currentPassSeal(e);
-  if (!sealHasBookingRooms(seal)) return none;
+  if (!seal) return none;
   const { checkIn, checkOut } = stayOf(e);
   const world = await buildWorld(prisma, { from: checkIn, to: checkOut, excludeEntryId: entryId });
+  // A seal from before booking rooms reads as fixed rooms. It has nothing of its own to move, but
+  // another booking's room the system chose may sit on one of them, and moves out of the way here
+  // (2026-10-29): the warning box already says such a room is no clash, so the hold must agree.
   const rooms = readBookingRooms(seal, { checkIn, checkOut }, (id) => world.roomTypeOf.get(id));
   const units = roomUnitsOf(rooms);
-  if (!units.some((u) => u.quiet)) return none;
+  if (units.length === 0) return none;
 
   const maps = new Map<string, Map<string, string>>();
   const refusals: string[] = [];
@@ -218,9 +221,12 @@ export async function ensureQuietPlacement(
         nights: u.nights.map((d) => world.index.get(d)!).filter((i) => i !== undefined),
         fixedRoomId: u.quiet ? null : u.roomId,
         currentRoomId: u.roomId,
+        // Before it holds, a room the system chose moves off a room another booking picked, when one
+        // nobody picked is free (2026-10-29).
+        avoidPicked: u.quiet,
       }));
     const worldItems = world.items.filter((it) => it.roomTypeId === typeId);
-    const res = placeStays({ roomIds: type.roomIds, unusable: world.unusable, items: [...worldItems, ...mine] });
+    const res = placeStays({ roomIds: type.roomIds, unusable: world.unusable, items: [...worldItems, ...mine], soft: world.soft });
     if (!res.ok) {
       refusals.push(
         res.reason === "COUNT"

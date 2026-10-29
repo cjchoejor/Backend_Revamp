@@ -55,7 +55,17 @@ export type World = {
   unusable: Map<string, Set<number>>;
   items: WorldItem[];
   bookingName: Map<string, string>;
+  /**
+   * Rooms other bookings have picked and do not hold (Inquiry, Negotiation, Set up before the
+   * hold): room → window night → weight, 2 for a room chosen by number, 1 for one the system chose.
+   * A pick holds nothing — the system only prefers other rooms for its own choices (2026-10-29).
+   */
+  soft: Map<string, Map<number, number>>;
 };
+
+/** A room chosen by number weighs more than one the system chose — moving it away is the guest's loss. */
+const PICK_WEIGHT_FIXED = 2;
+const PICK_WEIGHT_QUIET = 1;
 
 /** The pass's own sealed pick — an earlier pass's seal is history (the chart's rule). */
 export function currentPassSeal(e: {
@@ -98,6 +108,13 @@ export async function buildWorld(prisma: PrismaClient, input: { from: Date; to: 
       if (off.size > 0) unusable.set(r.id, off);
     }
     const bars = chart.bars.filter((b) => b.entryId !== input.excludeEntryId);
+    // entry|room|night a booking holds itself — its pick on those nights is that hold, not a pick.
+    const heldBy = new Set<string>();
+    for (const b of chart.bars)
+      for (let d = b.from; d < b.to; d = nextYmd(d)) {
+        const i = index.get(d);
+        if (i !== undefined) heldBy.add(`${b.entryId}|${b.roomId}|${i}`);
+      }
 
     // cells[entry|room] = the window nights that booking holds on that room
     const cells = new Map<string, Set<number>>();
@@ -191,13 +208,39 @@ export async function buildWorld(prisma: PrismaClient, input: { from: Date; to: 
       }
     }
 
+    // ---- picks of other bookings, held by nothing — the system steers its own choices around them
+    const soft = new Map<string, Map<number, number>>();
+    const pickers = await prisma.entry.findMany({
+      where: {
+        id: { not: input.excludeEntryId },
+        currentStage: { in: ["S1", "S2", "S3"] },
+        status: { in: ["ACTIVE", "PARKED"] },
+        checkInDate: { lt: to },
+        checkOutDate: { gt: from },
+      },
+      select: { id: true, checkInDate: true, checkOutDate: true, ...sealSelect },
+    });
+    for (const p of pickers) {
+      const seal = currentPassSeal(p);
+      if (!seal) continue;
+      for (const room of readBookingRooms(seal, { checkIn: p.checkInDate, checkOut: p.checkOutDate }, (id) => roomTypeOf.get(id))) {
+        for (const n of room.nights) {
+          const i = index.get(n.date);
+          if (!n.roomId || i === undefined || heldBy.has(`${p.id}|${n.roomId}|${i}`)) continue;
+          const row = soft.get(n.roomId) ?? new Map<number, number>();
+          row.set(i, (row.get(i) ?? 0) + (n.fixed ? PICK_WEIGHT_FIXED : PICK_WEIGHT_QUIET));
+          soft.set(n.roomId, row);
+        }
+      }
+    }
+
     const bookingName = new Map<string, string>();
     for (const b of chart.bookings) {
       const guest = [b.guestProfile?.firstName, b.guestProfile?.lastName].filter(Boolean).join(" ");
       const caller = [b.inquiry?.callerFirstName, b.inquiry?.callerLastName].filter(Boolean).join(" ");
       bookingName.set(b.entryId, `${guest || caller || b.partyName || "a booking"} (${b.entryId})`);
     }
-    return { chart, index, roomTypeOf, roomNumberOf, typeName, unusable, items, bookingName };
+    return { chart, index, roomTypeOf, roomNumberOf, typeName, unusable, items, bookingName, soft };
   }
 }
 
@@ -360,8 +403,9 @@ export function checkBookingRooms(
       nights: x.run.nights.map((d) => world.index.get(d)!),
       fixedRoomId: x.run.fixed ? x.run.roomId : null,
       currentRoomId: x.run.roomId,
+      avoidPicked: !x.run.fixed,
     }));
-    const res = placeStays({ roomIds: type.roomIds, unusable: world.unusable, items: [...worldItems, ...mineItems] });
+    const res = placeStays({ roomIds: type.roomIds, unusable: world.unusable, items: [...worldItems, ...mineItems], soft: world.soft });
 
     // A fixed room of this booking on a night someone else holds, or out of order.
     for (const c of res.fixedClashes) {

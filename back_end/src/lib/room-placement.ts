@@ -19,6 +19,12 @@
  * The search: fixed stays first, then the movable ones in order of their first night, each trying
  * its current room first; backtracking when a stay finds no room. A step limit stops a search that
  * runs too long and says so rather than guessing.
+ *
+ * ROOMS OTHERS HAVE PICKED (2026-10-29). A booking's pick at Inquiry, Negotiation or Set up holds
+ * nothing, so it never blocks a room here — but a stay marked `avoidPicked` tries the rooms nobody
+ * else has picked first, then the ones picked least (`soft`: room → night → weight; a room chosen by
+ * number weighs more than one the system chose). Three bookings asking for a Standard Double get
+ * three different rooms while there are three free, instead of all landing in the first one.
  */
 
 export type PlacementItem = {
@@ -29,6 +35,8 @@ export type PlacementItem = {
   fixedRoomId: string | null;
   /** Where it sits now, for a movable stay — tried first. */
   currentRoomId: string | null;
+  /** Try rooms other bookings have picked last (`PlacementInput.soft`). */
+  avoidPicked?: boolean;
 };
 
 export type PlacementInput = {
@@ -39,6 +47,8 @@ export type PlacementInput = {
   items: PlacementItem[];
   /** Search steps before giving up. */
   stepLimit?: number;
+  /** Rooms other bookings have picked but do not hold: room → night → weight. Never blocks. */
+  soft?: Map<string, Map<number, number>>;
 };
 
 export type FixedClash = {
@@ -150,10 +160,15 @@ export function placeStays(input: PlacementInput): PlacementResult {
     }
     const it = order[k];
     const tried = new Set<string>();
-    const candidates = [
+    let candidates = [
       ...(it.currentRoomId && known.has(it.currentRoomId) ? [it.currentRoomId] : []),
       ...roomIds,
     ];
+    if (it.avoidPicked && input.soft && input.soft.size > 0) {
+      // Rooms nobody else has picked first; the current room stays first among equals.
+      const weight = (r: string) => it.nights.reduce((sum, n) => sum + (input.soft!.get(r)?.get(n) ?? 0), 0);
+      candidates = candidates.map((r, i) => ({ r, i, w: weight(r) })).sort((a, b) => a.w - b.w || a.i - b.i).map((x) => x.r);
+    }
     for (const r of candidates) {
       if (tried.has(r)) continue;
       tried.add(r);
