@@ -938,6 +938,9 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .heldp-choices label.on { font-weight: 700; color: var(--accent-ink); }
 .ds .heldp-fields { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; }
 .ds .heldp-fields .field { flex: 1 1 220px; margin: 0; }
+/* Reserve's voucher, made and not sent (2026-10-29): the send-or-not question on its own card. */
+.ds .voucher-send { margin-top: 10px; display: grid; gap: 8px; }
+.ds .voucher-send .heldp-row { border: 2px solid var(--warning); background: var(--warning-soft); }
 
 /* A room move still running or part-done, on each of its bookings. */
 .ds .rmv-card { border: 2px solid var(--danger); background: var(--danger-soft); border-radius: 10px; padding: 10px 12px; display: grid; gap: 8px; margin: 0 0 12px; }

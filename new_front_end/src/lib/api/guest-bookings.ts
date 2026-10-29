@@ -28,6 +28,11 @@ export type SameGuestBookings = {
   guestProfileId: string | null;
   guestName: string | null;
   bookings: SameGuestBooking[];
+  /**
+   * The guest's other RESERVED booking over these nights — what Reserve asks the FOM to
+   * acknowledge (Policy 13), read the gate's own way; null when there is none (2026-10-29).
+   */
+  reserveOverlap: { entryId: string; checkInDate: string; checkOutDate: string; acknowledged: boolean } | null;
 };
 
 export type CombinePreview = {

@@ -23,6 +23,8 @@ import { usePaymentStatus } from "@/hooks/use-payment-status";
 import { useStaffNames } from "@/hooks/use-desk-data";
 import { acknowledgeMultiBooking, resendConfirmationVoucher, verifyConference } from "@/lib/api/confirmation";
 import { getBillingSummary, getEntryTrace, getJourneySummary, type EntryCommunication } from "@/lib/api/entries";
+import { listSameGuestBookings } from "@/lib/api/guest-bookings";
+import { HeldPaperRow, useHeldDocuments } from "@/components/ds/workspace/held-papers";
 import { confirmReadiness, reservedThisPass } from "@/lib/desk/workspace";
 import { fmtDate, fmtDateTime, fmtRange, fmtStamp, money, nightsOf, plural } from "@/lib/ds/format";
 import { roomRatesOf } from "@/lib/ds/rates";
@@ -437,10 +439,41 @@ function BeforeYouReserve({
   /* conference verification — a gate the backend applies at the click */
   const conference = entry.useType === "CONFERENCE";
   const conferenceDone = trace.some((t) => t.eventType === "CONFERENCE.VERIFIED");
-  const overlapDone = trace.some((t) => t.eventType === "MULTI_BOOKING.ACKNOWLEDGED");
   const [verifyOpen, setVerifyOpen] = useState(false);
   const [overlapOpen, setOverlapOpen] = useState(false);
   const fom = atLeast(session?.actorLevel, "L2");
+  // The guest's other reserved booking over these nights — what Reserve asks the FOM about
+  // (Policy 13), read the gate's own way (2026-10-29). Said here with its act, only when it is so.
+  const overlapQ = useQuery({
+    queryKey: ["guest-bookings", entry.id, "reserve", entry.updatedAt],
+    queryFn: () => listSameGuestBookings(session!, entry.id),
+    enabled: !!session,
+  });
+  const overlap = overlapQ.data?.reserveOverlap ?? null;
+  const overlapOpenItem = !!overlap && !overlap.acknowledged;
+  if (overlap) {
+    lines.push({
+      key: "overlap",
+      label: "The guest's other booking",
+      value: overlap.acknowledged
+        ? `${overlap.entryId} (${fmtRange(overlap.checkInDate, overlap.checkOutDate)}) — both bookings are meant`
+        : `${overlap.entryId} is reserved over these nights (${fmtRange(overlap.checkInDate, overlap.checkOutDate)})`,
+      who: overlap.acknowledged ? "acknowledged by the FOM" : "the FOM says whether both are meant before Reserve",
+      state: overlap.acknowledged ? "on" : "missing",
+      action:
+        overlap.acknowledged || past ? undefined : (
+          <Button
+            className="go"
+            state={fom ? "default" : "inert"}
+            title={fom ? undefined : "needs the FOM"}
+            reason={fom ? undefined : "The FOM's call"}
+            onClick={() => setOverlapOpen(true)}
+          >
+            Acknowledge the overlap
+          </Button>
+        ),
+    });
+  }
   if (conference) {
     lines.push({
       key: "conference",
@@ -459,16 +492,6 @@ function BeforeYouReserve({
   const missing = lines.filter((l) => l.state === "missing");
   const done = lines.filter((l) => l.state !== "missing");
   const openWords = asked.items.filter((w) => !asked.saved[w.id]).length;
-
-  const sys: Array<[string, string]> = [
-    ["Committed hold ready", "system"],
-    ["Provisional folio opened", "system"],
-    ["Rate and dates freeze on the click", "system"],
-    [overlapDone ? "Overlapping reservations · acknowledged" : "Overlapping reservations · checked on the click", "FOM"],
-    ["High-value authority · checked on the click", "GM"],
-    ["Overbooking · checked on the click", "GM"],
-    ...(conference ? [] : ([["Conference verification · not needed", "FOM"]] as Array<[string, string]>)),
-  ];
 
   const renderLine = (l: Line) => (
     <FactLine
@@ -490,6 +513,7 @@ function BeforeYouReserve({
 
   const extraOpen = [
     ...(conference && !conferenceDone ? ["The conference verified by the FOM"] : []),
+    ...(overlapOpenItem ? ["The guest's other booking acknowledged by the FOM"] : []),
     ...(openWords ? [`${openWords === 1 ? "One thing" : `${openWords} things`} only you can know, said`] : []),
   ].join("|");
   useEffect(() => {
@@ -497,9 +521,13 @@ function BeforeYouReserve({
   }, [extraOpen, onOpenItems]);
   useEffect(() => () => onOpenItems?.([]), [onOpenItems]);
 
-  const inertWhy = missing.length
-    ? `${plural(missing.length, "fact")} missing — Fix ${missing.length === 1 ? "it" : "them"} first`
-    : openWords
+  // The overlap is not a fact to fix but the FOM's answer, so it is said in its own words.
+  const toFix = missing.filter((l) => l.key !== "overlap").length;
+  const inertWhy = toFix
+    ? `${plural(toFix, "fact")} missing — Fix ${toFix === 1 ? "it" : "them"} first`
+    : overlapOpenItem
+      ? "The FOM says whether both of this guest's bookings are meant — Acknowledge the overlap"
+      : openWords
       ? `${openWords === 1 ? "one thing" : `${openWords} things`} only you can know — say how ${openWords === 1 ? "it was" : "they were"} arranged`
       : reserve && !reserve.ready
         ? reserve.reason ?? "the list at the foot of the page names what is left"
@@ -528,35 +556,6 @@ function BeforeYouReserve({
         {asked.items.map((w) => (
           <WordRow key={w.id} item={w} saved={asked.saved[w.id]} onRecord={(word) => asked.record(w.id, word)} onUndo={() => asked.undo(w.id)} tz={tz} />
         ))}
-        <div className="meta" style={{ marginTop: 12 }}>
-          Done by the system, without you
-          {asked.items.length ? (
-            <Help label="About what was arranged">
-              What was arranged above is kept on this desk only — the guest&rsquo;s own requests, and what was arranged for each, are in the
-              Guest requests tab.
-            </Help>
-          ) : null}
-        </div>
-        <div className="row-acts" style={{ marginTop: 4 }}>
-          {sys.map(([t, w]) => (
-            <Chip key={t} tone="quiet">
-              {t} <span className="meta">· {w}</span>
-            </Chip>
-          ))}
-          <Live>
-            {overlapDone ? null : (
-              <Button
-                kind="quiet"
-                compact
-                state={fom ? "default" : "inert"}
-                title={fom ? "only when Reserve says this guest already holds a booking over the same nights" : "needs the FOM"}
-                onClick={() => setOverlapOpen(true)}
-              >
-                Acknowledge an overlap
-              </Button>
-            )}
-          </Live>
-        </div>
       </StepCard>
 
       <ConferenceVerifyDialog entry={entry} open={verifyOpen} onClose={() => setVerifyOpen(false)} />
@@ -785,7 +784,7 @@ function OverlapDialog({ entry, open, onClose }: { entry: EntryDetail; open: boo
     onSuccess: () => {
       toast.success("The overlap is acknowledged — Reserve can go ahead");
       onClose();
-      refresh();
+      refresh([["guest-bookings", entry.id]]);
     },
     onError: (e) => toastRefusal(e, "The overlap could not be acknowledged"),
   });
@@ -819,25 +818,6 @@ function OverlapDialog({ entry, open, onClose }: { entry: EntryDetail; open: boo
 
 /* ---- who receives the confirmation ---- */
 
-const CHANNELS: Array<[string, string, string | null]> = [
-  ["email", "Email · in the thread", null],
-  ["whatsapp", "WhatsApp", "Not possible yet — the voucher goes by email. If you send it on WhatsApp yourself, record their answer under Documents"],
-  ["print", "Print", "Not possible yet as a choice here — print the voucher from Documents"],
-  ["phone", "Tell them by phone", "Not possible yet — if you tell them by phone, write what was said in Notes"],
-];
-
-function ChannelChoice() {
-  return (
-    <div className="filters choice" style={{ marginTop: 8 }}>
-      {CHANNELS.map(([v, l, why]) => (
-        <Button key={v} kind={why ? "quiet" : "secondary"} compact aria-pressed={!why} state={why ? "inert" : "default"} title={why ?? "the voucher goes by email, in the booking's thread"}>
-          {l}
-        </Button>
-      ))}
-    </div>
-  );
-}
-
 function WhoReceives({ entry }: { entry: EntryDetail }) {
   const journey = useJourney(entry.id).data ?? null;
   const guest = entry.guestProfile ?? entry.inquiry?.guestProfile ?? null;
@@ -845,21 +825,14 @@ function WhoReceives({ entry }: { entry: EntryDetail }) {
   const booker = journey?.s1Inquiry.commercialContext.partyName ?? null;
   return (
     <StepCard
-      title="Who receives the confirmation, and how"
-      meta="Reserve emails the voucher to the guest in the same click, with the PDF attached. WhatsApp, printing or phoning can't be chosen here yet. The booking shows whether the email went out."
+      title="Who receives the confirmation"
+      meta="Reserve makes the confirmation voucher and sends nothing. After it, you choose: send it by email, record that it went on WhatsApp, or don't send it."
     >
       <FactBox
-        k="Going to"
-        v={email ? <><b>{email}</b> · the confirmation voucher, PDF attached</> : <span className="warn-ink">no email on file</span>}
-        meta={
-          email
-            ? booker
-              ? `booked by ${booker}`
-              : undefined
-            : "nothing will be emailed — after Reserve, share the voucher another way and record their answer"
-        }
+        k="By email to"
+        v={email ? <><b>{email}</b> · when you send it, the PDF attached</> : <span className="warn-ink">no email on file</span>}
+        meta={email ? (booker ? `booked by ${booker}` : undefined) : "share the voucher another way after Reserve, and record their answer"}
       />
-      <ChannelChoice />
     </StepCard>
   );
 }
@@ -999,24 +972,43 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
   const emailEvents = items.filter((t) => t.eventType.startsWith("RESERVATION_CONFIRMATION_EMAIL."));
   const last = emailEvents[0];
   const lastPayload = (last?.payload ?? null) as { actualRecipient?: string; intendedRecipient?: string; redirected?: boolean; reason?: string; message?: string } | null;
-  const sent = emailEvents.some((t) => t.eventType.endsWith(".SENT"));
+  // Reserve makes the voucher and sends nothing (2026-10-29, operator: "that should also be
+  // optional like how I did for quotation and proforma"): it waits as a held paper until the desk
+  // sends it by email, records it as sent on WhatsApp, or says it is not sent.
+  const heldQ = useHeldDocuments(entry.id);
+  const heldRows = (heldQ.data ?? []).filter((h) => h.kind === "CONFIRMATION_VOUCHER" && h.documentId === res.id);
+  const held = heldRows.find((h) => h.decision == null) ?? null;
+  const decided = heldRows.find((h) => h.decision && h.decision !== "SUPERSEDED") ?? null;
+  const onWhatsApp = decided?.decision === "SENT_WHATSAPP";
+  const notSent = decided?.decision === "NOT_SENT";
+  const emailed = emailEvents.some((t) => t.eventType.endsWith(".SENT"));
+  const sent = emailed || onWhatsApp;
+  // Said the way it went out, on the answer line (2026-10-29).
+  const answerWords = { notSent: notSent && !emailed, sentAt: onWhatsApp && !emailed ? decided?.decidedAt ?? null : null };
   // A guest with no email on file is not a failed send — there was nobody to send to, and the
   // voucher is shared at the desk or by phone. It read as "could not be sent — have the email
-  // settings fixed" beside the raw code GUEST_HAS_NO_EMAIL (2026-09-18).
-  const noAddress = (t: TraceItem) => (t.payload as { reason?: string } | null)?.reason === "GUEST_HAS_NO_EMAIL";
-  const failed = !sent && emailEvents.some((t) => !noAddress(t));
+  // settings fixed" beside the raw code GUEST_HAS_NO_EMAIL (2026-09-18). Nor is a voucher held
+  // for the desk — it has not been sent yet, by choice.
+  const reasonOf = (t: TraceItem) => (t.payload as { reason?: string } | null)?.reason;
+  const noAddress = (t: TraceItem) => reasonOf(t) === "GUEST_HAS_NO_EMAIL";
+  const heldSkip = (t: TraceItem) => reasonOf(t) === "HELD_FOR_DESK_DECISION";
+  const failed = !sent && emailEvents.some((t) => !noAddress(t) && !heldSkip(t));
   const voucherComm = latestDispatched(comms, "CONFIRMATION_VOUCHER", since);
   const answered = voucherComm?.acknowledgementStatus === "RECEIVED";
   const { past } = useStepMode();
   const afterReserve = !["S3", "S4"].includes(entry.currentStage);
   // The answer, once on record, finishes the section — as Set up's proforma does (2026-10-29).
   const finish = useFinishWhenDone("voucher");
-  // Sent, or nobody to send it to: the answer is the next thing to do here (Set up's answer box).
-  const answerDue = !past && !afterReserve && !answered && !trace.isLoading && (sent || failed || !guestEmail);
-  const sendFirst = !past && !afterReserve && !sent && !!guestEmail && !trace.isLoading;
-  // Send before record (2026-08-07): the answer waits until the voucher email actually went out —
-  // unless the guest has no email (verbal is their only way), or every attempt failed.
-  const locked = !!guestEmail && !afterReserve && !trace.isLoading && emailEvents.length === 0;
+  const loading = trace.isLoading || heldQ.isLoading;
+  // Held: whether and how it goes out is the next thing to do here (2026-10-29).
+  const decideFirst = !past && !afterReserve && !answered && !loading && !!held;
+  // Gone out, or the desk said how the guest has it: the answer is next (Set up's answer box).
+  const answerDue = !past && !afterReserve && !answered && !loading && !held && (sent || failed || notSent || !guestEmail);
+  // A voucher made before 2026-10-29 that never went out — Send is its main act.
+  const sendFirst = !past && !afterReserve && !answered && !loading && !held && !sent && !notSent && !!guestEmail && !failed;
+  // Send before record (2026-08-07): the answer waits until the voucher went out — unless the guest
+  // has no email (verbal is their only way), every attempt failed, or the desk said it is not sent.
+  const locked = !!guestEmail && !afterReserve && !loading && !sent && !failed && !notSent;
 
   const send = useMutation({
     mutationFn: () => resendConfirmationVoucher(session!, res.id, { dispatchedTo: sendTo.trim() || undefined }),
@@ -1028,8 +1020,16 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
     onError: (e) => toastRefusal(e, "The voucher could not be sent"),
   });
 
-  const emailLine = trace.isLoading ? (
+  const emailLine = loading ? (
     <span className="meta">checking what was sent…</span>
+  ) : held ? (
+    <span className="meta">Made at Reserve, not sent yet — you choose below</span>
+  ) : onWhatsApp ? (
+    <span>
+      Sent on WhatsApp{decided?.sentTo ? ` to ${decided.sentTo}` : ""} · {fmtStamp(decided?.decidedAt ?? null, tz)}
+    </span>
+  ) : notSent && !last?.eventType.endsWith(".SENT") ? (
+    <span className="meta">Not sent{decided?.note ? ` — ${decided.note}` : ""} · {fmtStamp(decided?.decidedAt ?? null, tz)}</span>
   ) : last?.eventType.endsWith(".SENT") ? (
     <span>
       Emailed to {lastPayload?.actualRecipient ?? lastPayload?.intendedRecipient ?? guestEmail} · {fmtStamp(last.timestamp, tz)}
@@ -1054,14 +1054,18 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
       flow="voucher"
       title={`Confirmation voucher · ${res.confirmationVoucherNumber ?? res.id}`}
       icon="file"
-      summary={`${res.confirmationVoucherNumber ?? res.id} · ${sent ? "sent" : "issued"} · the guest's answer recorded`}
+      summary={`${res.confirmationVoucherNumber ?? res.id} · ${onWhatsApp ? "sent on WhatsApp" : sent ? "sent" : notSent ? "not sent" : "issued"} · the guest's answer recorded`}
       right={
         sent ? (
           <Chip tone="success" icon="check">
-            sent
+            {onWhatsApp ? "sent on WhatsApp" : "sent"}
           </Chip>
+        ) : held ? (
+          <Chip tone="warning">not sent yet</Chip>
         ) : failed ? (
           <Chip tone="warning">not sent</Chip>
+        ) : notSent ? (
+          <Chip tone="quiet">not sent</Chip>
         ) : (
           <Chip tone="success" icon="check">
             issued
@@ -1083,12 +1087,14 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
         <Button kind="quiet" compact icon="eye" state="inert" title="Not possible yet — a copy of the voucher without the prices can't be made yet">
           Preview · guest copy
         </Button>
-        <Live>
-          {/* The main act while it has not gone out (2026-10-29), as the proforma's Send is. */}
-          <Button kind={sendFirst ? "primary" : "quiet"} className={sendFirst ? "go" : undefined} compact={!sendFirst} icon="send" onClick={() => setSendOpen(true)}>
-            Send
-          </Button>
-        </Live>
+        {held ? null : (
+          <Live>
+            {/* The main act while it has not gone out (2026-10-29), as the proforma's Send is. */}
+            <Button kind={sendFirst ? "primary" : "quiet"} className={sendFirst ? "go" : undefined} compact={!sendFirst} icon="send" onClick={() => setSendOpen(true)}>
+              {sent ? "Send again" : "Send"}
+            </Button>
+          </Live>
+        )}
         <Button kind="quiet" compact state="inert">
           Re-issue as v2
         </Button>
@@ -1103,14 +1109,27 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
           />
         </div>
       ) : null}
-      {sendFirst && !failed ? (
+      {decideFirst && held ? (
+        // Nothing went out on the click: the desk chooses — as the quotation and proforma are sent.
+        <div className="voucher-send" role="status">
+          <div className="notice next">
+            <span>
+              The voucher is made and nothing was sent. Send it to the guest, record that it went on WhatsApp, or say it is not sent —
+              then record their answer. Arrival waits for it.
+            </span>
+          </div>
+          <Live>
+            <HeldPaperRow h={held} tz={tz} onView={() => setPaper({ kind: "voucher", reservationId: res.id, label: `Confirmation voucher · ${res.confirmationVoucherNumber ?? res.id}` })} />
+          </Live>
+        </div>
+      ) : sendFirst ? (
         <div className="notice next" role="status" style={{ marginTop: 10 }}>
           <span>
             Send the voucher to the guest first. Their answer is recorded once they have it — Arrival waits for it.
           </span>
         </div>
       ) : null}
-      {answerDue ? (
+      {decideFirst ? null : answerDue ? (
         // Sent and not yet answered: the answer is the next thing to do (2026-10-29, as at Set up).
         <div className="answer-due" role="status">
           <span className="due-head">
@@ -1118,7 +1137,7 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
             <Help label="About the answer">Write down how the guest answered the voucher — by message or by telling the desk — and what they said.</Help>
           </span>
           <span className="sm">Arrival opens only once it is recorded.</span>
-          <AnswerLine entryId={entry.id} type="CONFIRMATION_VOUCHER" sinceIso={since} what="the voucher" tz={tz} prominent onAnswered={() => finish()} />
+          <AnswerLine entryId={entry.id} type="CONFIRMATION_VOUCHER" sinceIso={since} what="the voucher" tz={tz} prominent onAnswered={() => finish()} {...answerWords} />
         </div>
       ) : (
         <div className="rule-above" style={{ borderTop: "1px solid var(--line)", marginTop: 12, paddingTop: 10 }}>
@@ -1134,6 +1153,7 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
             tz={tz}
             lockedHint={locked ? "The voucher email hasn't gone out yet — send it first, then record their answer here." : null}
             onAnswered={() => finish()}
+            {...answerWords}
           />
         </div>
       )}
@@ -1163,7 +1183,6 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
           </label>
           <input className="input" type="email" value={sendTo} onChange={(e) => setSendTo(e.target.value)} placeholder="guest@example.com" />
         </div>
-        <ChannelChoice />
       </DsDialog>
     </StepCard>
   );

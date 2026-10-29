@@ -1517,6 +1517,9 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
           )}
     </>
   );
+  // Reserve's voucher is sent, or not, on its own card (2026-10-29) — not asked twice on that step.
+  const reserveVoucherOnCard =
+    viewing === 4 ? (h: { kind: string; documentId: string }) => h.kind === "CONFIRMATION_VOUCHER" && h.documentId === entry.reservation?.id : undefined;
   const dialogs = (
     <>
         <StepMoved note={moved} onClose={closeMoved} />
@@ -1528,7 +1531,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
           lines={[
             fin.indicativeTotal !== null ? `The price freezes at ${money(fin.indicativeTotal, fin.currency)} — the guest is held to it.` : "The price freezes — the guest is held to it.",
             "The rooms lock — no longer offerable to anyone else.",
-            "The confirmation voucher goes to whoever booked.",
+            "The confirmation voucher is made — nothing is sent; you send it next, or not.",
             "Any later change opens a new pass; it never edits what is frozen.",
           ]}
           confirmLabel="Reserve"
@@ -1760,7 +1763,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                     </div>
                   ) : null}
                   {!sealed ? <ActiveRoomMoves entryId={entry.id} tz={clock.tz} /> : null}
-                  {!sealed ? <HeldPapersCard entryId={entry.id} tz={clock.tz} /> : null}
+                  {!sealed ? <HeldPapersCard entryId={entry.id} tz={clock.tz} skip={reserveVoucherOnCard} /> : null}
                   <CaseCards
                     entry={entry}
                     step={viewing}
@@ -2110,7 +2113,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                 <div hidden={view !== "step"}>
                 {/* Papers a walk re-issued and held — whichever walk ran, the send-or-not question is here. */}
                 {!sealed ? <ActiveRoomMoves entryId={entry.id} tz={clock.tz} /> : null}
-                {!sealed ? <HeldPapersCard entryId={entry.id} tz={clock.tz} /> : null}
+                {!sealed ? <HeldPapersCard entryId={entry.id} tz={clock.tz} skip={reserveVoucherOnCard} /> : null}
                 <CaseCards
                     entry={entry}
                     step={viewing}

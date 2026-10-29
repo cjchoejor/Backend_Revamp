@@ -2917,6 +2917,8 @@ export function AnswerLine({
   lockedHint,
   prominent,
   onAnswered,
+  notSent,
+  sentAt,
 }: {
   entryId: string;
   type: EntryCommunicationType;
@@ -2929,6 +2931,10 @@ export function AnswerLine({
   prominent?: boolean;
   /** Called once the answer is on record — Set up's proforma finishes its section on it. */
   onAnswered?: () => void;
+  /** The desk said the paper is not sent (a voucher held at Reserve, 2026-10-29): it never "went out". */
+  notSent?: boolean;
+  /** When it went out, when that is not when the paper was made (a held voucher sent on WhatsApp). */
+  sentAt?: string | null;
 }) {
   const { session } = useSession();
   const { past } = useStepMode();
@@ -2965,7 +2971,7 @@ export function AnswerLine({
   return (
     <div style={{ display: "grid", gap: 6 }}>
       <span className="sm">
-        <Icon name="clock" /> Sent {fmtStamp(c.createdAt, tz)} · {c.isOverdue ? <b className="warn-ink">the reply window has passed</b> : c.acknowledgementTimeoutAt ? <>awaiting their reply until {fmtDateTime(c.acknowledgementTimeoutAt, tz)}</> : "awaiting their reply"}
+        <Icon name="clock" /> {notSent ? "Not sent to the guest" : `Sent ${fmtStamp(sentAt ?? c.createdAt, tz)}`} · {c.isOverdue ? <b className="warn-ink">the reply window has passed</b> : c.acknowledgementTimeoutAt ? <>awaiting their reply until {fmtDateTime(c.acknowledgementTimeoutAt, tz)}</> : "awaiting their reply"}
       </span>
       {past ? null : lockedHint ? (
         <span className="meta">{lockedHint}</span>
