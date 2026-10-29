@@ -18,7 +18,7 @@ import { patchPreArrivalTask } from "@/lib/api/pre-arrival";
 import { listIdentityProofs } from "@/lib/api/identity-proofs";
 import { fmtStamp, plural } from "@/lib/ds/format";
 import type { EntryDetail, PreArrivalTaskSummary } from "@/types/api";
-import { ReasonDialog, StepCard, toastRefusal, useRefreshEntry, useStepMode, words } from "./kit";
+import { ReasonDialog, StepCard, toastRefusal, useFinishWhenDone, useRefreshEntry, useStepMode, words } from "./kit";
 import { Help } from "@/components/ds/help";
 
 /** The task list in the desk's words, with whose job each one is (prototype `V16.PREARRIVAL`). */
@@ -85,6 +85,8 @@ export function PreArrivalTasksCard({
   const clock = useHotelClock(60_000);
   const refresh = useRefreshEntry(entry.id);
   const [waiving, setWaiving] = useState<PreArrivalTaskSummary | null>(null);
+  // In Arrival's flow the last task done folds the section and moves on (2026-10-29).
+  const finish = useFinishWhenDone(flow ?? "");
   const tasks = [...(entry.preArrivalTasks ?? [])].sort((a, b) => {
     const ia = ORDER.indexOf(a.taskType);
     const ib = ORDER.indexOf(b.taskType);
@@ -105,6 +107,7 @@ export function PreArrivalTasksCard({
       toast.success(v.action === "COMPLETE" ? "Task done — on record" : "Task waived — the reason is on record");
       setWaiving(null);
       refresh([["journey-summary", entry.id]]);
+      if (flow) finish();
     },
     onError: (e) => toastRefusal(e, "The task could not be updated"),
   });
@@ -113,8 +116,10 @@ export function PreArrivalTasksCard({
     !past && t.status === "PENDING" && (actionable === "all" || actionable.has(t.taskType));
   const open = tasks.filter((t) => t.status === "PENDING").length;
   // Every task done or waived: the card folds to its heading (2026-10-23, operator) — Show opens it.
+  // In Arrival's flow the section folds itself to its line instead, with its own Edit (2026-10-29).
   const [shown, setShown] = useState(false);
-  const folded = tasks.length > 0 && open === 0 && !shown;
+  const folded = !flow && tasks.length > 0 && open === 0 && !shown;
+  const waived = tasks.filter((t) => t.status === "WAIVED").length;
 
   return (
     <StepCard
@@ -123,11 +128,20 @@ export function PreArrivalTasksCard({
       title={title}
       id={id}
       meta={meta}
+      summary={
+        !tasks.length
+          ? undefined
+          : waived === 0
+            ? `All ${plural(tasks.length, "task")} done`
+            : waived === tasks.length
+              ? `All ${plural(tasks.length, "task")} waived`
+              : `${plural(tasks.length - waived, "task")} done · ${waived} waived`
+      }
       right={
         tasks.length ? (
           <>
             <Chip tone={open ? "warning" : "success"}>{open ? `${open} open` : "all done or waived"}</Chip>
-            {open === 0 ? (
+            {open === 0 && !flow ? (
               <Button kind="quiet" compact aria-expanded={!folded} onClick={() => setShown((v) => !v)}>
                 {folded ? "Show" : "Hide"}
               </Button>

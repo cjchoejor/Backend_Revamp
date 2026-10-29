@@ -2,8 +2,9 @@
 
 /**
  * "Other ways this booking can go" for Reserve and Arrival (prototype `V16.caseActs`, rulings A7):
- * Cancel… · No-show… · Park… · Amend dates… — each wired only to a route the backend has at the
- * stage the booking is at, otherwise shown inert with the reason.
+ * Cancel · No-show · Park · Change the dates, rooms or guests — each wired only to a route the
+ * backend has at the stage the booking is at, otherwise shown inert with the reason. Since
+ * 2026-10-29 all but Park open from Change booking at the end of the step's line.
  *
  *  - Set up (reserving):  cancel-at-s3 (L1; the GM waives) · re-entry to Inquiry (FOM)
  *  - Reserve (frozen):    cancel (FOM; the GM waives) · backflow to Inquiry (FOM)
@@ -22,7 +23,23 @@ import { backflows } from "@/lib/api/backflows";
 import { cancelEntryAtS3, cancelEntryAtS5, initiateS3ReEntryToS1 } from "@/lib/api/reservation-setup";
 import { fmtDay, fmtStamp, money } from "@/lib/ds/format";
 import type { EntryDetail } from "@/types/api";
-import { DsDialog, ReasonDialog, atLeast, toastRefusal, useRefreshEntry, OtherWaysTabs, InlineWay, ShutWay, NotNow, parkTab, type OtherWayTab } from "./kit";
+import {
+  DsDialog,
+  ReasonDialog,
+  atLeast,
+  toastRefusal,
+  useRefreshEntry,
+  OtherWaysTabs,
+  InlineWay,
+  ShutWay,
+  NotNow,
+  parkTab,
+  ChangeBookingMenu,
+  StageActs,
+  useOpenAlsoWay,
+  type ChangeBookingItem,
+  type OtherWayTab,
+} from "./kit";
 import { Help } from "@/components/ds/help";
 
 
@@ -33,12 +50,15 @@ export function BookingOtherWays({
   parkNow,
   parking,
   guestPresent = false,
+  onMoveRoom,
 }: {
   entry: EntryDetail;
   /** Park with the reason typed in Other ways' own tab (2026-10-17). */
   parkNow?: (reason: string) => void;
   parking?: boolean;
   guestPresent?: boolean;
+  /** "Move a room" in Change booking (2026-10-29) — Reserve opens the rooms in the page, Arrival goes to its rooms section. */
+  onMoveRoom?: () => void;
 }) {
   const { session } = useSession();
   const stage = entry.currentStage;
@@ -55,7 +75,9 @@ export function BookingOtherWays({
     ? null
     : {
         key: "cancel",
-        label: "Cancel",
+        label: "Cancel booking",
+        // Opened from Change booking at the end of the step's line (2026-10-29), as at Set up.
+        inBar: false,
         content:
           stage === "S3" ? (
             <InlineWay render={(done) => <CancelAtSetupDialog entry={entry} onClose={done} />} />
@@ -72,6 +94,7 @@ export function BookingOtherWays({
 
   // No-show — only at Arrival, after the cut-off.
   let noShow: OtherWayTab | null = null;
+  let noShowWhy: string | null = null;
   if (here) {
     const done = !!entry.noShowDetermination;
     const why =
@@ -86,9 +109,11 @@ export function BookingOtherWays({
               : !fom
                 ? "Needs the FOM — determining a no-show."
                 : null;
+    noShowWhy = why;
     noShow = {
       key: "noshow",
       label: "No-show",
+      inBar: false,
       content: why ? (
         <ShutWay
           act="Record the no-show"
@@ -105,7 +130,8 @@ export function BookingOtherWays({
     ? null
     : {
         key: "amend",
-        label: "Amend dates",
+        label: "Change the dates, rooms or guests",
+        inBar: false,
         content: fom ? (
           <InlineWay render={(done) => <AmendDatesDialog entry={entry} onClose={done} />} />
         ) : (
@@ -123,8 +149,63 @@ export function BookingOtherWays({
         ),
       };
 
+  /**
+   * Change booking (2026-10-29, Reserve and Arrival in the stage layout — as at Set up): the ways the
+   * booking itself is changed or ended, from the end of the step's line. Park stays its own button.
+   */
+  const openAlsoWay = useOpenAlsoWay();
+  const notNow = entry.status === "PARKED" ? "Resume the booking first" : "Not possible on this booking now";
+  const shown = here || entry.status === "PARKED";
+  const changeItems: ChangeBookingItem[] = !shown
+    ? []
+    : [
+        {
+          key: "rooms",
+          label: "Move a room",
+          note: "Into another free room on the same dates. Every night is checked again, the booking is reserved again and the price follows.",
+          onSelect: here && onMoveRoom ? onMoveRoom : undefined,
+          reason: here && onMoveRoom ? undefined : notNow,
+        },
+        {
+          key: "amend",
+          label: "Change the dates, rooms or guests",
+          note: "Back to Inquiry to ask the house again. The rooms are let go, a new quotation is made and the booking is reserved again.",
+          onSelect: here && fom ? () => openAlsoWay("amend") : undefined,
+          reason: !here ? notNow : fom ? undefined : "The FOM's call",
+        },
+        ...(stage === "S5"
+          ? [
+              {
+                key: "noshow",
+                label: "Record a no-show",
+                note: "They never came. The disclosed no-show charge is kept and the rooms are released.",
+                onSelect: here && !noShowWhy ? () => openAlsoWay("noshow") : undefined,
+                reason: !here ? notNow : noShowWhy ?? undefined,
+                danger: true,
+              },
+            ]
+          : []),
+        {
+          key: "cancel",
+          label: "Cancel booking",
+          note: "The booking ends. The rooms are released, the disclosed charge is kept and the rest of the advance refunded.",
+          onSelect: here && (stage === "S3" || fom) ? () => openAlsoWay("cancel") : undefined,
+          reason: !here ? notNow : stage === "S3" || fom ? undefined : "The FOM's call",
+          danger: true,
+        },
+      ];
+
   // Other ways as sub-tabs (2026-10-17), each panel the form its button used to open.
-  return <OtherWaysTabs tabs={[cancel, noShow, active ? parkTab(parkNow, parking) : null, amend]} />;
+  return (
+    <>
+      {changeItems.length ? (
+        <StageActs>
+          <ChangeBookingMenu items={changeItems} />
+        </StageActs>
+      ) : null}
+      <OtherWaysTabs tabs={[cancel, noShow, active ? parkTab(parkNow, parking) : null, amend]} />
+    </>
+  );
 }
 
 /* ------------------------------------------------------------------ cancel */

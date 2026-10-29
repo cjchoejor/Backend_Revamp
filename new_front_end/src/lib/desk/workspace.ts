@@ -452,7 +452,7 @@ export function s5Readiness(
                 ? "Checking today's date at the hotel…"
                 : hotelToday >= checkInYmd
                   ? "Arrival day reached"
-                  : `The stay starts ${checkInYmd} — arriving earlier is a change of dates (Amend dates)`,
+                  : `The stay starts ${new Date(`${checkInYmd}T00:00:00Z`).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" })} — arriving earlier is a change of dates (Change booking › Change the dates, rooms or guests)`,
             met: hotelToday !== null && hotelToday >= checkInYmd,
           },
         ];

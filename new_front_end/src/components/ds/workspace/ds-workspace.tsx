@@ -116,7 +116,7 @@ import { StayDates } from "@/components/ds/stay-dates";
 import { S2Negotiation } from "@/components/ds/steps/s2-negotiation";
 import { S3SetUp, ROOMS_LEAD } from "@/components/ds/steps/s3-setup";
 import { RoomsTableCard } from "@/components/ds/steps/rooms-table";
-import { S4Reserve, S4_PANES } from "@/components/ds/steps/s4-reserve";
+import { S4Reserve } from "@/components/ds/steps/s4-reserve";
 import { S5Arrival } from "@/components/ds/steps/s5-arrival";
 import { S6CheckIn } from "@/components/ds/steps/s6-checkin";
 import { S7Stay, S7_PANES } from "@/components/ds/steps/s7-stay";
@@ -175,8 +175,31 @@ const SETUP_SECTIONS: Record<string, string> = {
   money: "The payment plan",
   hold: "The committed hold",
 };
-/** The steps drawn in the stage-template layout, with their sections (Inquiry, Negotiation, Set up). */
-const STEP_SECTIONS: Partial<Record<number, Record<string, string>>> = { 1: INQUIRY_SECTIONS, 2: NEGOTIATION_SECTIONS, 3: SETUP_SECTIONS };
+/**
+ * Reserve's sections (2026-10-29, operator: "now can we make the new UI changes to stage 4 and 5"):
+ * before the click, the facts on record that Reserve signs; after it, the confirmation voucher and
+ * the guest's answer to it, which Arrival waits for.
+ */
+const RESERVE_SECTIONS: Record<string, string> = {
+  facts: "Before you reserve",
+  voucher: "The confirmation voucher",
+};
+/** Arrival's five sections (2026-10-29), in the order the desk works them; the handoff records itself once the first three are done. */
+const ARRIVAL_SECTIONS: Record<string, string> = {
+  rooms: "The rooms",
+  tasks: "Pre-arrival tasks",
+  advance: "The advance",
+  handoff: "The front-desk handoff",
+  present: "The guest is here",
+};
+/** The steps drawn in the stage-template layout, with their sections (Inquiry to Arrival). */
+const STEP_SECTIONS: Partial<Record<number, Record<string, string>>> = {
+  1: INQUIRY_SECTIONS,
+  2: NEGOTIATION_SECTIONS,
+  3: SETUP_SECTIONS,
+  4: RESERVE_SECTIONS,
+  5: ARRIVAL_SECTIONS,
+};
 const isTopLayoutStep = (n: number) => !!STEP_SECTIONS[n];
 /**
  * Sections made from another one (2026-10-27): the rooms are chosen for the stay, the quotation is the
@@ -498,7 +521,15 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
       afterMove(updated);
       setConfirmOpen(false);
       setSelected(4);
-      toast.success("Reserved — the booking is frozen.");
+      // Said in the middle of the screen, as the other moves are (2026-10-29).
+      const g = updated.guestProfile ?? updated.inquiry?.guestProfile ?? null;
+      setMoved({
+        title: "The booking is reserved",
+        from: "Set up",
+        to: "Reserve",
+        who: [[g?.firstName, g?.lastName].filter(Boolean).join(" ") || null, updated.id].filter(Boolean).join(" · "),
+        next: "Next: the confirmation voucher goes to the guest — record their answer, and Arrival can open.",
+      });
     },
     // A refusal closes the dialog (2026-09-18): it stayed open over the page, hiding the very
     // control the refusal points to (Acknowledge an overlap…, the missing line to fix).
@@ -538,7 +569,14 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     onSuccess: (updated) => {
       afterMove(updated);
       setSelected(5);
-      toast.success("Moved to Arrival.");
+      const g = updated.guestProfile ?? updated.inquiry?.guestProfile ?? null;
+      setMoved({
+        title: "Reserve is done",
+        from: "Reserve",
+        to: "Arrival",
+        who: [[g?.firstName, g?.lastName].filter(Boolean).join(" ") || null, updated.id].filter(Boolean).join(" · "),
+        next: "Next: the rooms, the pre-arrival tasks and the advance — then the guest is checked in.",
+      });
     },
     onError: fail("Couldn't open Arrival yet"),
   });
@@ -902,15 +940,22 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                       : viewing < currentOrder
                         ? []
                         : preconditionsFor(entry, step, hotelToday);
-  // Reserve shows Set up's checklist, but Set up's cards are not on this page — so the items are
-  // listed plainly there rather than numbered onto sections that cannot be scrolled to.
-  const preconds: Precondition[] = confirmStepActive ? preconds0.map((p) => ({ label: p.label, met: p.met })) : preconds0;
+  // Reserve shows Set up's checklist, but Set up's cards are not on this page — so every item is
+  // the one section "Before you reserve", the facts card that names each of them with its Fix
+  // (2026-10-29); after the click the voucher's answer is the voucher's section.
+  const preconds: Precondition[] = confirmStepActive
+    ? preconds0.map((p) => ({ label: p.label, met: p.met, card: "facts" }))
+    : confirmedS4Active
+      ? preconds0.map((p) => ({ ...p, card: "voucher" }))
+      : preconds0;
   const unmet = preconds.filter((p) => !p.met).length;
   // The step's numbered to-do: the items that have a section on this page, in the order they are
   // done. The rail prints it, and each card takes its own number from it (2026-09-25).
   // Stage 1 is laid out as five numbered sections (2026-10-10), so it numbers by section; so does
   // Negotiation, in its two (2026-10-27), and Set up, in its six (2026-10-28).
-  const sectioned = inquiryStepActive || quoteStepActive || setupStepActive;
+  const sectioned = inquiryStepActive || quoteStepActive || setupStepActive || confirmStepActive || confirmedS4Active || arrivalStepActive;
+  // From Set up on, each section is finished by its own act — no Done to press (2026-10-28).
+  const noDoneBar = setupStepActive || confirmStepActive || confirmedS4Active || arrivalStepActive;
   const derived = STEP_DERIVED[viewing] ?? {};
   const flowItems: FlowItem[] = numberFlow(preconds, { bySection: sectioned });
   const inherited = preconds.filter((p) => !p.card);
@@ -960,7 +1005,6 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     if (sealed) return [];
     if (step.key === "stay") return S7_PANES;
     if (step.key === "checkin") return S6_PANES;
-    if (step.key === "confirm") return S4_PANES;
     if (step.key === "checkout") return S8_PANES;
     return [];
   })();
@@ -968,7 +1012,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   // Set up's rooms in the page (2026-10-28, operator: "it should just show in the current page like how
   // we had in the rooms tab in our previous UI") — opened from Change booking's "Move a room"; the
   // step's sections stay mounted, hidden, so nothing half-typed is lost.
-  const roomsInPage = topLayout && setupStepActive && !sealed && paneParam === "rooms";
+  // Reserve's rooms open the same way (2026-10-29) — its Rooms tab became Change booking's "Move a room".
+  const roomsInPage = topLayout && (setupStepActive || confirmStepActive || confirmedS4Active) && !sealed && paneParam === "rooms";
   // The keys owed today on a move day — counted on Stay's Keys tab (2026-10-26).
   const keysOwedNow = step.key === "stay" && !viewingPast ? keysDue(entry, hotelToday) : { collect: [], handOver: [] };
   const keysOwedCount = keysOwedNow.collect.length + keysOwedNow.handOver.length;
@@ -1011,9 +1056,10 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
       </Button>
     );
   } else if (confirmStepActive) {
+    // Green once it can be pressed and floating in, as from Inquiry to Set up (2026-10-29).
     moveReady = ready;
     forward = (
-      <Button icon="lock" state={ready ? "default" : "inert"} reason={ready ? undefined : firstNote} onClick={() => setConfirmOpen(true)}>
+      <Button className="go" state={ready ? "default" : "inert"} reason={ready ? undefined : firstNote} onClick={() => setConfirmOpen(true)}>
         Reserve the booking
       </Button>
     );
@@ -1070,6 +1116,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     moveReady = voucherAnswerRecorded;
     forward = (
       <Button
+        className="go"
         state={activateMutation.isPending ? "working" : voucherAnswerRecorded ? "default" : "inert"}
         reason={voucherAnswerRecorded ? undefined : "record the guest's answer to the voucher first"}
         workingLabel="Opening…"
@@ -1083,10 +1130,25 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     moveReady = ok;
     forward = (
       <Button
+        className="go"
         state={advanceMutation.isPending ? "working" : ok ? "default" : "inert"}
         reason={ok ? undefined : firstNote}
         workingLabel="Moving…"
-        onClick={() => advanceMutation.mutate({ targetStage: "S6", guestPhysicallyPresent: true })}
+        onClick={() =>
+          advanceMutation.mutate(
+            { targetStage: "S6", guestPhysicallyPresent: true, announce: true },
+            {
+              onSuccess: () =>
+                setMoved({
+                  title: "Arrival is done",
+                  from: "Arrival",
+                  to: "Check-in",
+                  who: [name, entry.id].filter(Boolean).join(" · "),
+                  next: "Next: the guests' documents, the registration and the keys.",
+                }),
+            },
+          )
+        }
       >
         Move to Check-in
       </Button>
@@ -1182,7 +1244,6 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
             goToStep={gotoStep}
             reserve={confirmStepActive ? { onClick: () => setConfirmOpen(true), ready, reason: ready ? undefined : firstNote } : null}
             onOpenItems={confirmStepActive ? reportReserveExtras : undefined}
-            pane={pane}
           />
         );
       case "arrival":
@@ -1603,7 +1664,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     return (
       <BackendRailSlotContext.Provider value={railSlot}>
         {/* Set up's sections are finished by their own acts — no Done (2026-10-28). */}
-        <StepFlow items={flowItems} on={!viewingPast && !sealed} fold={sectioned ? "done" : null} derived={derived} doneBar={!setupStepActive}>
+        <StepFlow items={flowItems} on={!viewingPast && !sealed} fold={sectioned ? "done" : null} derived={derived} doneBar={!noDoneBar}>
           {/* Two columns from the topbar down (2026-10-27, operator and the boss, after the template: the
               screen divided in two — the work, its head and its bar on the left, with the bell and the
               signed-in person at the left's top right and the move at its foot on the right; the
@@ -2139,7 +2200,7 @@ function CommitDialog({
               <Button kind="quiet" state={pending ? "inert" : "default"} onClick={onClose}>
                 Not yet
               </Button>
-              <Button icon="lock" state={pending ? "working" : "default"} workingLabel="Working…" onClick={onConfirm}>
+              <Button className="go" icon="lock" state={pending ? "working" : "default"} workingLabel="Working…" onClick={onConfirm}>
                 {confirmLabel}
               </Button>
             </>

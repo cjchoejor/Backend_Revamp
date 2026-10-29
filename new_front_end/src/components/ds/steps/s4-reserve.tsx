@@ -47,14 +47,14 @@ import {
   latestDispatched,
   toastRefusal,
   useCommunications,
+  useFinishWhenDone,
   useRefreshEntry,
   useStepMode,
+  useStepPane,
   words,
   type FactState,
   type PaperRef,
-  type StepPane,
 } from "./kit";
-import { RoomsTableCard } from "./rooms-table";
 import { BookingOtherWays } from "./s4-other-ways";
 import { PreArrivalTasksCard, RESERVE_PREP_TASKS } from "./s5-pre-arrival-tasks";
 import { Help } from "@/components/ds/help";
@@ -153,9 +153,6 @@ function operativeQuote(entry: EntryDetail): QuotationSummary | null {
 
 /* ------------------------------------------------------------------ the step */
 
-/** Reserve's own tab (2026-10-13) — the same rooms table as Set up and the steps after it. */
-export const S4_PANES: StepPane[] = [{ key: "rooms", label: "Rooms", cards: [] }];
-
 export function S4Reserve({
   entry,
   past,
@@ -164,11 +161,9 @@ export function S4Reserve({
   goToStep,
   reserve,
   onOpenItems,
-  pane,
 }: {
   entry: EntryDetail;
   past: boolean;
-  pane?: string | null;
   /** Park with the reason typed in Other ways' own tab (2026-10-17). */
   parkNow?: (reason: string) => void;
   parking?: boolean;
@@ -179,15 +174,17 @@ export function S4Reserve({
   onOpenItems?: (items: string[]) => void;
 }) {
   const confirmed = reservedThisPass(entry);
-  // A pane is hidden, never unmounted — a half-typed reason survives a look at the rooms.
-  const at = (k: string | null) => ((pane ?? null) === k ? undefined : true);
+  // Reserve in the stage layout (2026-10-29, operator: "now can we make the new UI changes to stage
+  // 4 and 5"): its Rooms tab became Change booking's "Move a room", opened in the page as at Set up.
+  const stepPane = useStepPane();
   return (
     <StepCanvas past={past}>
-      <div className="pane" hidden={at(null)}>
       {confirmed ? (
         <>
-          <WhatReserveDecided entry={entry} />
+          {/* The work first — the voucher and the guest's answer, which Arrival waits for — then
+              the record of what was reserved. */}
           <VoucherCard entry={entry} />
+          <WhatReserveDecided entry={entry} />
           <PreArrivalTasksCard
             entry={entry}
             title="Pre-arrival · opened by Reserve, worked at Arrival"
@@ -212,16 +209,7 @@ export function S4Reserve({
           <SoFar entry={entry} />
         </>
       )}
-      <BookingOtherWays entry={entry} parkNow={parkNow} parking={parking} />
-      </div>
-
-      <div className="pane" hidden={at("rooms")}>
-        <RoomsTableCard
-          entry={entry}
-          title="The rooms"
-          lead="Who sleeps where, on what plan, with what beds. Click a room to change it — every night is checked again, the booking walks back through Negotiation, is reserved again with a new voucher held for you, and the price follows."
-        />
-      </div>
+      <BookingOtherWays entry={entry} parkNow={parkNow} parking={parking} onMoveRoom={past ? undefined : () => stepPane.open("rooms")} />
     </StepCanvas>
   );
 }
@@ -520,8 +508,20 @@ function BeforeYouReserve({
   return (
     <>
       <StepCard
-        title="Before you reserve · read these, then press Reserve"
+        flow="facts"
+        title="Before you reserve"
         meta="Each line is a fact already on record, with who recorded it and when. Nothing to tick — if a line is wrong or missing, Fix takes you to it. Reserve is your signature on the set."
+        // What still stands in the way, said where the lines are; once nothing does, Reserve the
+        // booking floats in at the foot of the page (2026-10-29).
+        status={
+          inertWhy ? (
+            <span className="warn-ink">{inertWhy}</span>
+          ) : entry.status === "PARKED" ? (
+            <span className="warn-ink">Parked — resume the booking to reserve it</span>
+          ) : reserve ? (
+            <span className="ok-ink">Everything is on record — Reserve the booking</span>
+          ) : undefined
+        }
       >
         {missing.map(renderLine)}
         {done.map(renderLine)}
@@ -558,27 +558,6 @@ function BeforeYouReserve({
           </Live>
         </div>
       </StepCard>
-
-      <Live>
-        {reserve ? (
-          <div className="row-acts" style={{ justifyContent: "flex-end", alignItems: "center" }}>
-            {inertWhy ? (
-              <span className="control-note" style={{ margin: 0 }}>
-                {inertWhy}
-              </span>
-            ) : null}
-            <Button icon="lock" state={inertWhy ? "inert" : "default"} title={inertWhy ?? undefined} onClick={reserve.onClick}>
-              Reserve · I have checked these
-            </Button>
-          </div>
-        ) : entry.status === "PARKED" ? (
-          <div className="row-acts" style={{ justifyContent: "flex-end" }}>
-            <span className="control-note" style={{ margin: 0 }}>
-              Parked — resume the booking to reserve it
-            </span>
-          </div>
-        ) : null}
-      </Live>
 
       <ConferenceVerifyDialog entry={entry} open={verifyOpen} onClose={() => setVerifyOpen(false)} />
       <OverlapDialog entry={entry} open={overlapOpen} onClose={() => setOverlapOpen(false)} />
@@ -1028,7 +1007,13 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
   const failed = !sent && emailEvents.some((t) => !noAddress(t));
   const voucherComm = latestDispatched(comms, "CONFIRMATION_VOUCHER", since);
   const answered = voucherComm?.acknowledgementStatus === "RECEIVED";
+  const { past } = useStepMode();
   const afterReserve = !["S3", "S4"].includes(entry.currentStage);
+  // The answer, once on record, finishes the section — as Set up's proforma does (2026-10-29).
+  const finish = useFinishWhenDone("voucher");
+  // Sent, or nobody to send it to: the answer is the next thing to do here (Set up's answer box).
+  const answerDue = !past && !afterReserve && !answered && !trace.isLoading && (sent || failed || !guestEmail);
+  const sendFirst = !past && !afterReserve && !sent && !!guestEmail && !trace.isLoading;
   // Send before record (2026-08-07): the answer waits until the voucher email actually went out —
   // unless the guest has no email (verbal is their only way), or every attempt failed.
   const locked = !!guestEmail && !afterReserve && !trace.isLoading && emailEvents.length === 0;
@@ -1066,8 +1051,10 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
 
   return (
     <StepCard
-      title={`Confirmation voucher · ${res.id}`}
+      flow="voucher"
+      title={`Confirmation voucher · ${res.confirmationVoucherNumber ?? res.id}`}
       icon="file"
+      summary={`${res.confirmationVoucherNumber ?? res.id} · ${sent ? "sent" : "issued"} · the guest's answer recorded`}
       right={
         sent ? (
           <Chip tone="success" icon="check">
@@ -1097,7 +1084,8 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
           Preview · guest copy
         </Button>
         <Live>
-          <Button kind="quiet" compact icon="send" onClick={() => setSendOpen(true)}>
+          {/* The main act while it has not gone out (2026-10-29), as the proforma's Send is. */}
+          <Button kind={sendFirst ? "primary" : "quiet"} className={sendFirst ? "go" : undefined} compact={!sendFirst} icon="send" onClick={() => setSendOpen(true)}>
             Send
           </Button>
         </Live>
@@ -1115,20 +1103,40 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
           />
         </div>
       ) : null}
-      <div className="rule-above" style={{ borderTop: "1px solid var(--line)", marginTop: 12, paddingTop: 10 }}>
-        <div className="sm" style={{ marginBottom: 4, fontWeight: 600 }}>
-          What they said about it
-          <Help label="About the answer">Arrival waits for the guest&rsquo;s answer to the voucher.</Help>
+      {sendFirst && !failed ? (
+        <div className="notice next" role="status" style={{ marginTop: 10 }}>
+          <span>
+            Send the voucher to the guest first. Their answer is recorded once they have it — Arrival waits for it.
+          </span>
         </div>
-        <AnswerLine
-          entryId={entry.id}
-          type="CONFIRMATION_VOUCHER"
-          sinceIso={since}
-          what="the voucher"
-          tz={tz}
-          lockedHint={locked ? "The voucher email hasn't gone out yet — send it first, then record their answer here." : null}
-        />
-      </div>
+      ) : null}
+      {answerDue ? (
+        // Sent and not yet answered: the answer is the next thing to do (2026-10-29, as at Set up).
+        <div className="answer-due" role="status">
+          <span className="due-head">
+            The guest&rsquo;s answer is needed
+            <Help label="About the answer">Write down how the guest answered the voucher — by message or by telling the desk — and what they said.</Help>
+          </span>
+          <span className="sm">Arrival opens only once it is recorded.</span>
+          <AnswerLine entryId={entry.id} type="CONFIRMATION_VOUCHER" sinceIso={since} what="the voucher" tz={tz} prominent onAnswered={() => finish()} />
+        </div>
+      ) : (
+        <div className="rule-above" style={{ borderTop: "1px solid var(--line)", marginTop: 12, paddingTop: 10 }}>
+          <div className="sm" style={{ marginBottom: 4, fontWeight: 600 }}>
+            What they said about it
+            <Help label="About the answer">Arrival waits for the guest&rsquo;s answer to the voucher.</Help>
+          </div>
+          <AnswerLine
+            entryId={entry.id}
+            type="CONFIRMATION_VOUCHER"
+            sinceIso={since}
+            what="the voucher"
+            tz={tz}
+            lockedHint={locked ? "The voucher email hasn't gone out yet — send it first, then record their answer here." : null}
+            onAnswered={() => finish()}
+          />
+        </div>
+      )}
       <PaperDrawer paper={paper} onClose={() => setPaper(null)} />
       <DsDialog
         open={sendOpen}

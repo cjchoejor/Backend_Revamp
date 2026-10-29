@@ -42,7 +42,7 @@ import { formatRoomPickerLabel } from "@/lib/room-inventory-status";
 import { fmtDate, fmtDay, money, plural } from "@/lib/ds/format";
 import { optionSelectedRoomIds, type EntryDetail, type RoomAssignmentSummary } from "@/types/api";
 import { ExtraBedEditor, InitialSelectionCell } from "@/components/desk/workspace/room-change-control";
-import { Choice, DsDialog, Fact, Facts, Live, StepCard, toastRefusal, useRefreshEntry, useStepMode } from "./kit";
+import { Choice, DsDialog, Fact, Facts, Live, StepCard, toastRefusal, useFinishWhenDone, useRefreshEntry, useStepMode } from "./kit";
 import { enumerateNights } from "./use-room-selection";
 import { RoomsTable } from "./rooms-table";
 import { Help } from "@/components/ds/help";
@@ -89,6 +89,8 @@ export function AssignRoomsCard({ entry }: { entry: EntryDetail }) {
   const { session } = useSession();
   const { past } = useStepMode();
   const refresh = useRefreshEntry(entry.id);
+  // Assigning the rooms finishes the section and moves on to the tasks (2026-10-29).
+  const finish = useFinishWhenDone("rooms");
   const catalogQ = useRoomsCatalog();
   const catalog = catalogQ.data?.items ?? [];
   const byId = useMemo(() => new Map(catalog.map((r) => [r.id, r])), [catalog]);
@@ -220,6 +222,7 @@ export function AssignRoomsCard({ entry }: { entry: EntryDetail }) {
     mutationFn: () => assignRoom(session!, entry.id, { roomId: roomId.trim(), notes: notes.trim() || undefined }),
     onSuccess: () => {
       toast.success(`Room ${numberOf(roomId)} assigned — a claim on the room, no step moved`);
+      finish();
       setPickOpen(false);
       setNotes("");
       changed();
@@ -235,6 +238,7 @@ export function AssignRoomsCard({ entry }: { entry: EntryDetail }) {
     onSuccess: (out) => {
       const rooms = out.roomNumbers?.length ? ` · Room${out.roomNumbers.length === 1 ? "" : "s"} ${out.roomNumbers.join(", ")}` : "";
       toast.success(`The rooms are assigned${rooms} — each room for its own nights`, { duration: 9000 });
+      finish();
       // A room shown in the proposal may have gone to another booking meanwhile; the system gave
       // the next free room of the same type, and says which.
       for (const mv of out.movedSinceProposal ?? []) {
@@ -317,6 +321,11 @@ export function AssignRoomsCard({ entry }: { entry: EntryDetail }) {
       }
       meta="Who sleeps where, on what plan, with what beds — the table the price was negotiated on. Click a room to change it; every night is checked again and the price follows."
       status={readiness}
+      summary={
+        assigned
+          ? `${assignedIds.length === 1 ? "Room" : "Rooms"} ${assignedIds.map((id) => numberOf(id)).join(", ")} assigned · ${notReady.length ? "not all clean yet — housekeeping's to clear" : "clean and ready"}`
+          : undefined
+      }
     >
       {/* The rooms ARE the S2 table now (2026-10-06, operator: "instead of these cards ... I
           would love the table to be shown here"). The party card, the room bins and the
@@ -362,20 +371,21 @@ export function AssignRoomsCard({ entry }: { entry: EntryDetail }) {
           multi ? (
             sealed ? (
               <div className="row-acts" style={{ marginTop: 12, alignItems: "center" }}>
-                <Button state={assignAll.isPending ? "working" : canWork ? "default" : "inert"} workingLabel="Assigning…" onClick={() => assignAll.mutate()}>
+                <Button className="go" state={assignAll.isPending ? "working" : canWork ? "default" : "inert"} workingLabel="Assigning…" onClick={() => assignAll.mutate()}>
                   {proposals.length ? `Confirm and assign the ${planRoomCount} rooms` : `Assign all ${planRoomCount} rooms`}
                 </Button>
                 <Help label="About assigning">The rooms chosen at Inquiry, each for its own nights. A room above can be changed first.</Help>
               </div>
             ) : (
               <div style={{ marginTop: 12 }}>
-                <Refusal kind="state" message={`There is no room plan from Inquiry — ${numberOfRooms} rooms have to be chosen there first.`} carries="A change of rooms before arrival is a new pass from Inquiry — Amend… below." />
+                <Refusal kind="state" message={`There is no room plan from Inquiry — ${numberOfRooms} rooms have to be chosen there first.`} carries="A change of rooms before arrival is a new pass from Inquiry — Change booking › Change the dates, rooms or guests." />
               </div>
             )
           ) : (
             <div style={{ marginTop: 12, display: "grid", gap: 8 }}>
               <div className="row-acts" style={{ alignItems: "center" }}>
                 <Button
+                  className="go"
                   state={assignOne.isPending ? "working" : roomId && canWork ? "default" : "inert"}
                   title={roomId ? undefined : "choose the room first"}
                   workingLabel="Assigning…"

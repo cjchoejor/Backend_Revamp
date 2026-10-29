@@ -45,8 +45,11 @@ import {
   atLeast,
   currentPassStart,
   toastRefusal,
+  useFinishWhenDone,
   useRefreshEntry,
+  useStepFlow,
   useStepMode,
+  goToStepCard,
   words,
   latestDispatched,
   useCommunications,
@@ -120,6 +123,12 @@ export function S5Arrival({
   const facts = useArrivalFacts(entry);
   const since = currentPassStart(entry);
   const clock = useHotelClock(60_000);
+  const flow = useStepFlow();
+  // Change booking's "Move a room" (2026-10-29): the rooms section is the room table — opened and gone to.
+  const moveRoom = () => {
+    flow.open("rooms");
+    window.setTimeout(() => goToStepCard("rooms"), 60);
+  };
   return (
     <StepCanvas past={past}>
       <WhenTheyArrive entry={entry} />
@@ -138,15 +147,14 @@ export function S5Arrival({
         flow="tasks"
         flowAfter="rooms"
       />
-      {/* Gone once the advance is paid in full and signed off (2026-10-23) — its words are on
-          Charges & payments › Money received; while something is left, its acts are needed here. */}
-      {facts.reconciled && facts.pay?.paidInFull && !facts.creditNeedsAck ? null : <AdvanceAndCredit entry={entry} facts={facts} />}
+      {/* A section of its own, folding to one line once it is in order (2026-10-29). */}
+      <AdvanceAndCredit entry={entry} facts={facts} />
       {/* The handoff records itself once the room, the tasks and the money are done — so it sits
           after them, where the list has it (2026-09-25). */}
       <FrontDeskHandoff entry={entry} facts={facts} />
       <GuestHereCard guestPresent={guestPresent} setGuestPresent={setGuestPresent} />
       <PreArrivalAnswerCard entryId={entry.id} since={since} tz={clock.tz} />
-      <BookingOtherWays entry={entry} parkNow={parkNow} parking={parking} guestPresent={guestPresent} />
+      <BookingOtherWays entry={entry} parkNow={parkNow} parking={parking} guestPresent={guestPresent} onMoveRoom={past ? undefined : moveRoom} />
     </StepCanvas>
   );
 }
@@ -262,12 +270,15 @@ function ExpectedArrivalFact({ entry }: { entry: EntryDetail }) {
  * waits for it, so it is a numbered item with a card of its own, after the handoff.
  */
 function GuestHereCard({ guestPresent, setGuestPresent }: { guestPresent: boolean; setGuestPresent: (v: boolean) => void }) {
+  // Saying so finishes the section; Move to Check-in floats in (2026-10-29).
+  const finish = useFinishWhenDone("present");
   return (
     <StepCard
       flow="present"
       flowAfter="handoff"
       title="The guest is here"
       meta="Say so when they are at the desk — Check-in opens on it. This is the desk's word, recorded with the check-in."
+      summary="The guest is at the desk"
       acts={
         <Live>
           {guestPresent ? (
@@ -280,7 +291,13 @@ function GuestHereCard({ guestPresent, setGuestPresent }: { guestPresent: boolea
               </Button>
             </>
           ) : (
-            <Button compact onClick={() => setGuestPresent(true)}>
+            <Button
+              className="go"
+              onClick={() => {
+                setGuestPresent(true);
+                finish();
+              }}
+            >
               Guest is present
             </Button>
           )}
@@ -326,6 +343,8 @@ function FrontDeskHandoff({ entry, facts }: { entry: EntryDetail; facts: Facts_ 
   const { past } = useStepMode();
   const h1 = (entry.handoffs ?? []).find((h) => h.handoffType === "H1") ?? null;
   const { latest, readinessConfirmed, paymentReconciled, tasksComplete, creditNeedsAck } = facts;
+  // Fulfilled — by hand or by itself — finishes the section (2026-10-29).
+  const finish = useFinishWhenDone("handoff");
 
   const checklist = useQuery({
     queryKey: ["handoff-checklist", "H1"],
@@ -362,6 +381,7 @@ function FrontDeskHandoff({ entry, facts }: { entry: EntryDetail; facts: Facts_ 
     onSuccess: () => {
       toast.success("The front-desk handoff is fulfilled");
       refresh();
+      finish();
     },
     onError: (e) => toastRefusal(e, "The handoff could not be fulfilled"),
   });
@@ -378,6 +398,7 @@ function FrontDeskHandoff({ entry, facts }: { entry: EntryDetail; facts: Facts_ 
     onSuccess: () => {
       toast.success("The front-desk handoff recorded itself — the room, the tasks and the advance are in order");
       refresh();
+      finish();
     },
     onError: (e) => toastRefusal(e, "The handoff could not record itself — press Record it fulfilled"),
   });
@@ -415,6 +436,7 @@ function FrontDeskHandoff({ entry, facts }: { entry: EntryDetail; facts: Facts_ 
       flow="handoff"
       flowAfter="advance"
       title="The front-desk handoff"
+      summary={h1.fulfilledAt ? `Fulfilled ${fmtStamp(h1.fulfilledAt, clock.tz)}` : "Fulfilled"}
       right={
         h1.state === "FULFILLED" ? (
           <Chip tone="success" icon="check">
@@ -458,6 +480,7 @@ function FrontDeskHandoff({ entry, facts }: { entry: EntryDetail; facts: Facts_ 
           <Live>
             <div className="row-acts">
               <Button
+                className="go"
                 compact
                 state={accept.isPending ? "working" : canAccept ? "default" : "inert"}
                 title={canAccept ? undefined : "tick every required item first"}
@@ -509,18 +532,35 @@ function AdvanceAndCredit({ entry, facts }: { entry: EntryDetail; facts: Facts_ 
     onSuccess: () => {
       toast.success("The credit ceiling is acknowledged");
       refresh();
+      finish();
     },
     onError: (e) => toastRefusal(e, "The credit ceiling could not be acknowledged"),
   });
   const acked = entry.creditCeilingTier2AcknowledgedAt ?? null;
+  // A payment, a credit extension, the sign-off or the ceiling acknowledged finishes the section
+  // once it reads done (2026-10-29); a part payment leaves it open.
+  const finish = useFinishWhenDone("advance");
+  const pay = facts.pay;
+  const cur = entry.folio?.lines?.[0]?.currency;
+  const signed = facts.reconciled ? " · signed off" : "";
+  const summary = pay
+    ? pay.requiredAmount > 0
+      ? `Received ${money(pay.totalReceived, cur)} of ${money(pay.requiredAmount, cur)}${signed}`
+      : pay.totalReceived > 0
+        ? `No advance asked · ${money(pay.totalReceived, cur)} received${signed}`
+        : `No advance asked${signed}`
+    : facts.reconciled
+      ? "Signed off"
+      : undefined;
   return (
-    <StepCard flow="advance">
+    <StepCard
+      flow="advance"
+      title="The advance"
+      meta="Settle the advance before the guest arrives: log any remainder they send, or have the FOM cover the gap so check-in isn't held up."
+      summary={summary}
+    >
       <Tool>
-        <AdvanceSettlementBlock
-          entry={entry}
-          title="Advance and credit"
-          intro="Settle the advance before the guest arrives: log any remainder they send, or have the FOM cover the gap so check-in isn't held up."
-        />
+        <AdvanceSettlementBlock entry={entry} title="Advance and credit" noHeading onChanged={() => finish()} />
       </Tool>
       {facts.creditNeedsAck ? (
         <FactLine
