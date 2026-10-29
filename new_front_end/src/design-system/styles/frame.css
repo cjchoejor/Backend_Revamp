@@ -1351,7 +1351,11 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 /* Change booking at the right-hand end of the step's line, and its menu (2026-10-27). */
 /* …and the step's other ways beside it — Park, Cancel booking, Provisional block — and a parked booking's Resume (2026-10-28, the bar at the foot gone) */
 .ds .ws-top .stagebar .stage-right { margin-left: auto; display: inline-flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: var(--s2); }
-.ds .ws-top .stagebar .stage-acts { display: inline-flex; align-items: center; }
+.ds .ws-top .stagebar .stage-acts { display: inline-flex; align-items: center; gap: var(--s2); }
+/* Stay's Keys on the step line (2026-10-29): the keys owed today, in red, on the button — "UIappeal". */
+.ds .ws-top .stagebar .stage-acts .btn.stage-due:not(.desk-root *) { border-color: var(--danger); color: var(--danger); font-weight: 600; }
+.ds .ws-top .stagebar .stage-acts .btn.stage-due:hover:not(.desk-root *) { background: var(--danger-soft); }
+.ds .ws-top .stagebar .stage-acts .due-n { display: inline-block; min-width: 20px; margin-left: 6px; padding: 0 6px; border-radius: 10px; background: var(--danger); color: #fff; font-size: 12px; font-weight: 700; line-height: 20px; text-align: center; }
 .ds .ws-top .stagebar .also-btns { display: inline-flex; flex-wrap: wrap; gap: var(--s2); }
 .ds .ws-top .stagebar .also-btns:empty { display: none; }
 .ds .ws-top .stagebar .also-btns .btn[data-way="decline"]:not(.desk-root *) { color: var(--danger); border-color: var(--danger); }

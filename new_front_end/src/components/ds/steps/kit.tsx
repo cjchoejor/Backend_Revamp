@@ -615,6 +615,45 @@ export function useFinishWhenDone(card: string): (opts?: { next?: string }) => v
   );
 }
 
+/** The last thing the desk pressed or typed, and when — read by `useFinishWhenMet`. */
+let lastInput: { target: EventTarget | null; at: number } = { target: null, at: 0 };
+let listening = false;
+function listenForInput() {
+  if (listening || typeof window === "undefined") return;
+  listening = true;
+  const note = (e: Event) => {
+    lastInput = { target: e.target, at: Date.now() };
+  };
+  window.addEventListener("pointerdown", note, true);
+  window.addEventListener("keydown", note, true);
+}
+
+/**
+ * A section finished by an act inside it that the step cannot hear from (2026-10-29 — Check-in's
+ * guest table, its registration tick, its keys): once the section turns done, it folds and the
+ * next section still to do opens, as `useFinishWhenDone` does for an act that calls it. Only when
+ * the desk pressed or typed inside this section in the last half minute — a change read from
+ * another screen never folds a section or moves the page.
+ */
+export function useFinishWhenMet(card: string) {
+  const flow = useContext(FlowCtx);
+  const { done } = useFlowCard(card);
+  const was = useRef(done);
+  useEffect(() => {
+    listenForInput();
+  }, []);
+  useEffect(() => {
+    const before = was.current;
+    was.current = done;
+    if (before || !done || !flow.on) return;
+    const el = document.getElementById(anchorFor(card));
+    const t = lastInput.target as Node | null;
+    if (!el || !t || !el.contains(t) || Date.now() - lastInput.at > 30_000) return;
+    flow.done(card);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [done]);
+}
+
 export function useStepFlow() {
   const { on, done, open, opened } = useContext(FlowCtx);
   // `opened`: the sections opened again with their Edit — a card can show its tools at once then.

@@ -1,14 +1,12 @@
 "use client";
 
 /**
- * Step 6 · Check-in — "keys & live folio" (SS03 amendment C1–C3; prototype `stepCanvas[6]`,
- * `V16.checkinFacts`).
+ * Step 6 · Check-in — "keys & live folio" (SS03 amendment C1–C3; prototype `stepCanvas[6]`).
  *
- * The code's facts read the Reserve way, one line each with "on record" or the one control that
- * puts it there. Two of them happen at the counter — the document and the keys. Below them: the
- * document (the lead's row of the guest table, which is where it is typed and verified), the
- * registration card, the advance still owed, the rooms with their keys, and the check-in itself.
- * Every figure is the backend's; the readiness lines are read from `s6Readiness`, never re-decided.
+ * In the stage-template layout since 2026-10-29: the guests' documents, the registration, the
+ * advance still owed, the VIP notice and the rooms with their keys, each a numbered section that
+ * folds to one line once its own act finishes it; Check in floats in once every one is done. The
+ * readiness lines are the workspace's `s6Readiness`, never re-decided here.
  */
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -17,7 +15,6 @@ import { useSession } from "@/hooks/use-session";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
 import { usePaymentStatus } from "@/hooks/use-payment-status";
 import { getChildPolicy } from "@/lib/api/child-policy";
-import { getEntryTrace } from "@/lib/api/entries";
 import { listIdentityProofs, type IdentityProofSummary } from "@/lib/api/identity-proofs";
 import type { RoomCompositionInput } from "@/lib/api/quotations";
 import {
@@ -29,32 +26,35 @@ import {
   seatPartyRoomsByComposition,
 } from "@/lib/desk/party-rooms";
 import { guestName } from "@/lib/desk/model";
-import { s6Readiness } from "@/lib/desk/workspace";
 import { fmtDate, fmtDay, fmtStamp, money, plural } from "@/lib/ds/format";
 import { AdvanceSettlementBlock } from "@/components/desk/workspace/advance-settlement";
 import { IdentityProofBlock } from "@/components/desk/workspace/identity-proof";
 import { ExtraBedEditor, InitialSelectionCell } from "@/components/desk/workspace/room-change-control";
 import type { EntryDetail, RoomAssignmentSummary } from "@/types/api";
 import {
+  ChangeBookingMenu,
   Fact,
-  FactLine,
   Facts,
+  InlineWay,
   Live,
+  OtherWaysTabs,
+  StageActs,
   StepCanvas,
   StepCard,
   Tool,
-  useRefreshEntry,
-  words,
-  type FactState,
-  type StepPane,
-  OtherWaysTabs,
-  ShutWay,
-  InlineWay,
   atLeast,
+  useFinishWhenDone,
+  useFinishWhenMet,
+  useOpenAlsoWay,
+  useRefreshEntry,
+  useStepPane,
+  words,
+  type ChangeBookingItem,
+  type StepPane,
 } from "./kit";
 import { RoomsTableCard } from "./rooms-table";
 import { CancelAtArrivalDialog } from "./s4-other-ways";
-import { InlineTool, claimWord, distinctRoomRows, physicalWord, physicallyReady, revealBlock, roomLabel } from "./s6-shared";
+import { InlineTool, claimWord, distinctRoomRows, physicalWord, roomLabel } from "./s6-shared";
 import { Help } from "@/components/ds/help";
 
 /* ------------------------------------------------------------------ vocabulary */
@@ -77,20 +77,24 @@ const ID = {
   rooms: "s6-rooms",
 };
 
-type CheckInMove = { onClick: () => void; ready: boolean; reason?: string } | null;
-
 /* ------------------------------------------------------------------ the step */
 
 /** This stay's identity verification, from the identity-proofs feed (2026-09-18). */
 type StayVerification = { verifiedAt: string; verifiedBy: string | null; path: string | null } | null;
 
 /**
- * Check-in's own tab (2026-10-06, operator: "remove change room option from Room and keep it as a
- * tab on the top"). The rooms live beside the step rather than inside a card, so changing one is
- * reached the same way at Check-in as at Stay.
+ * Check-in's own view in the page — the rooms as the negotiation table, opened from Change
+ * booking's "Move a room" (2026-10-29, in the stage-template layout, as at Set up to Arrival).
  */
-export const S6_PANES: StepPane[] = [{ key: "rooms", label: "Rooms", cards: [] }];
+export const S6_PANES: StepPane[] = [{ key: "rooms", label: "Moving a room", cards: [] }];
 
+/**
+ * Check-in in the stage-template layout (2026-10-29, operator: "now make the same UI change for
+ * stage 6"): five numbered sections in the order the desk works them — the guests' documents,
+ * the registration, the advance, the VIP notice (a VIP's booking only), the rooms and their keys.
+ * Each is finished by its own act and folds to one line; Check in floats in once all are done.
+ * The facts list that stood at the top said every section again, and went.
+ */
 export function S6CheckIn({
   entry,
   past,
@@ -99,28 +103,22 @@ export function S6CheckIn({
   setKeyRooms,
   registrationConfirmed,
   setRegistrationConfirmed,
-  checkIn,
   pane = null,
-  openPane,
 }: {
   entry: EntryDetail;
   past: boolean;
   pane?: string | null;
-  openPane?: (k: string | null) => void;
   issuedKeyRooms: Record<string, boolean>;
   toggleKeyRoom: (roomId: string) => void;
   setKeyRooms: (roomIds: string[], issued: boolean) => void;
   registrationConfirmed: boolean;
   setRegistrationConfirmed: (v: boolean) => void;
-  checkIn: CheckInMove;
 }) {
   // A pane is hidden, never unmounted — a half-typed reason survives a look at the rooms.
   const at = (k: string | null) => ((pane ?? null) === k ? undefined : true);
   const { session } = useSession();
   const { tz } = useHotelClock(60_000);
-  const advancePay = usePaymentStatus(entry.id, { enabled: !!entry.folio }).data;
-  // Paid in full and signed off: nothing to collect here — Money received carries it (2026-10-23).
-  const advanceSettled = entry.folio?.advancePaymentReconciliationComplete === true && advancePay?.paidInFull === true;
+  const stepPane = useStepPane();
 
   const proofs = useQuery({
     queryKey: ["identity-proofs", entry.id],
@@ -130,15 +128,9 @@ export function S6CheckIn({
   const coverage = proofs.data?.coverage ?? null;
   // Verified at THIS stay — never the profile's stamp, which a returning guest carries over (2026-09-18).
   const verification = proofs.data?.verification ?? null;
-  const readiness = useMemo(
-    () => s6Readiness(entry, { guestDetails: coverage, identityVerified: !!verification }),
-    [entry, coverage, verification],
-  );
-  const met = (re: RegExp) => readiness.find((r) => re.test(r.label))?.met ?? false;
 
   const guest = entry.guestProfile ?? entry.inquiry?.guestProfile ?? null;
   const isVip = !!guest?.vipTier?.trim();
-  const folioLive = !!entry.folio?.convertedToLiveAt || entry.folio?.state === "LIVE";
 
   // The lead's row of the guest table — where the document is typed, and what verification records.
   const lead = useMemo(
@@ -157,470 +149,188 @@ export function S6CheckIn({
   const dayOneIds = rooms.filter((a) => dayOne.has(a.roomId)).map((a) => a.roomId);
   const laterCount = rooms.length - dayOneIds.length;
 
-  const facts = useCheckInFacts({
-    entry,
-    past,
-    tz,
-    met,
-    verification,
-    lead,
-    docName,
-    coverage,
-    rooms,
-    dayOneIds,
-    laterCount,
-    issuedKeyRooms,
-    setKeyRooms,
-    registrationConfirmed,
-    setRegistrationConfirmed,
-    folioLive,
-    isVip,
-  });
-
   return (
     <StepCanvas past={past}>
       <div className="pane" hidden={at(null)}>
-      <StepCard
-        title={past || folioLive ? "Checked in · what was on record" : "Before you check in · read these, then press Check in"}
-        meta="Check-in needs every one of these before the guest's bill opens. Two of them happen at the counter: the document, and the keys."
-      >
-        {facts.map((f) => (
-          <FactLine key={f.label} label={f.label} value={f.value} who={f.who} state={f.state} action={f.action} />
-        ))}
-      </StepCard>
+        <GuestDocumentsCard entry={entry} lead={lead} verification={verification} coverage={coverage} docName={docName} tz={tz} />
 
-      <DocumentCard entry={entry} past={past} lead={lead} verification={verification} docName={docName} tz={tz} />
-      <div id={ID.guests}>
-        <Tool>
-          <IdentityProofBlock entry={entry} checkInGate />
-        </Tool>
-      </div>
+        <RegistrationCard entry={entry} tz={tz} confirmed={registrationConfirmed} setConfirmed={setRegistrationConfirmed} />
 
-      <RegistrationCard
-        entry={entry}
-        tz={tz}
-        confirmed={registrationConfirmed}
-        setConfirmed={setRegistrationConfirmed}
-      />
+        <CheckInAdvanceCard entry={entry} />
 
-      {advanceSettled ? null : (
-      <div id={ID.advance}>
-        <StepCard flow="advance">
-          <Tool>
-            <AdvanceSettlementBlock
-              entry={entry}
-              title="Collect the remaining advance"
-              intro="If the guest planned to settle the advance at the desk, take it now — checking in with money still short needs the FOM's credit extension instead."
-            />
-          </Tool>
-        </StepCard>
-      </div>
-      )}
+        {isVip ? <VipCard entry={entry} tz={tz} /> : null}
 
-      {isVip ? <VipCard entry={entry} tz={tz} /> : null}
+        <RoomsCard
+          entry={entry}
+          past={past}
+          rooms={rooms}
+          dayOne={dayOne}
+          dayOneIds={dayOneIds}
+          laterCount={laterCount}
+          issuedKeyRooms={issuedKeyRooms}
+          toggleKeyRoom={toggleKeyRoom}
+          setKeyRooms={setKeyRooms}
+          tz={tz}
+        />
 
-      <RoomsCard
-        entry={entry}
-        past={past}
-        rooms={rooms}
-        dayOne={dayOne}
-        dayOneIds={dayOneIds}
-        laterCount={laterCount}
-        issuedKeyRooms={issuedKeyRooms}
-        toggleKeyRoom={toggleKeyRoom}
-        setKeyRooms={setKeyRooms}
-        tz={tz}
-      />
-
-      <Live>
-        {checkIn ? (
-          <div style={{ display: "grid", gap: 6, justifyItems: "end" }}>
-            <div className="row-acts" style={{ justifyContent: "flex-end", alignItems: "center" }}>
-              {!checkIn.ready && checkIn.reason ? (
-                <span className="control-note" style={{ margin: 0 }}>
-                  {checkIn.reason}
-                </span>
-              ) : null}
-              <Button icon="lock" state={checkIn.ready ? "default" : "inert"} title={checkIn.ready ? undefined : checkIn.reason} onClick={checkIn.onClick}>
-                Check in · keys and the bill
-              </Button>
-              <Help label="About checking in">
-                One click: the guest&rsquo;s bill opens, the rooms are marked occupied, the keys are handed over, and housekeeping and the kitchen are told.
-              </Help>
-            </div>
-          </div>
-        ) : null}
-      </Live>
-
-      {/* Other ways as sub-tabs (2026-10-17) — neither is taken at Check-in; each says where. */}
-      <OtherWaysTabs
-        tabs={
-          entry.status === "ACTIVE"
-            ? [
-                {
-                  key: "cancel",
-                  label: "Cancel",
-                  // The guest is at the desk but is not staying (2026-10-26, SIG-S6 §8.6 / Policy 35):
-                  // the same cancel as Reserve and Arrival — the FOM's, the agreed charge, the GM waives.
-                  content: atLeast(session?.actorLevel, "L2") ? (
-                    <InlineWay render={(done) => <CancelAtArrivalDialog entry={entry} onClose={done} />} />
-                  ) : (
-                    <ShutWay
-                      act="Cancel the booking"
-                      why="Needs the FOM — cancelling a reserved booking."
-                      help={
-                        <p>
-                          The guest is at the desk but is not staying. The charge follows the terms they agreed to, the rest of the
-                          advance goes back, and the rooms are released. Once they are checked in, leaving is an early departure, at Stay.
-                        </p>
-                      }
-                    />
-                  ),
-                },
-                {
-                  key: "amend",
-                  label: "Amend dates",
-                  content: (
-                    <ShutWay
-                      act="Amend the dates"
-                      why="Not from Check-in — the dates move at Stay."
-                      help={<p>At Stay, Extend the stay adds nights and Leaving early ends it sooner.</p>}
-                    />
-                  ),
-                },
-              ]
-            : []
-        }
-      />
+        {past ? null : <CheckInChangeBooking entry={entry} onMoveRoom={() => stepPane.open("rooms")} />}
       </div>
 
       <div className="pane" hidden={at("rooms")}>
         <RoomsTableCard
           entry={entry}
           title="The rooms"
-          lead="Who sleeps where, on what plan, with what beds. Click a room to change it — every night is checked again and the price follows."
+          lead="Who sleeps where, on what plan, with what beds. Double-click a room to give it another room — every night is checked again and the price follows."
         />
       </div>
     </StepCanvas>
   );
 }
 
-/* ------------------------------------------------------------------ the facts */
+/* ------------------------------------------------------------------ change booking */
 
-type FactRow = { label: string; value: React.ReactNode; who?: React.ReactNode; state: FactState; action?: React.ReactNode };
-
-function useCheckInFacts({
-  entry,
-  past,
-  tz,
-  met,
-  verification,
-  lead,
-  docName,
-  coverage,
-  rooms,
-  dayOneIds,
-  laterCount,
-  issuedKeyRooms,
-  setKeyRooms,
-  registrationConfirmed,
-  setRegistrationConfirmed,
-  folioLive,
-  isVip,
-}: {
-  entry: EntryDetail;
-  past: boolean;
-  tz: string;
-  met: (re: RegExp) => boolean;
-  verification: StayVerification;
-  lead: IdentityProofSummary | null;
-  docName: (code?: string | null) => string | null;
-  coverage: { vipExempt: boolean; totalSlots: number; filledSlots: number; missing: { key: string; label: string }[]; satisfied: boolean } | null;
-  rooms: RoomAssignmentSummary[];
-  dayOneIds: string[];
-  laterCount: number;
-  issuedKeyRooms: Record<string, boolean>;
-  setKeyRooms: (roomIds: string[], issued: boolean) => void;
-  registrationConfirmed: boolean;
-  setRegistrationConfirmed: (v: boolean) => void;
-  folioLive: boolean;
-  isVip: boolean;
-}): FactRow[] {
+/**
+ * Change booking at the end of the step line (2026-10-29), as at Reserve and Arrival: Move a room
+ * opens the rooms in the page; the dates are not changed at Check-in — they move at Stay; and the
+ * guest who is at the desk but not staying is cancelled (SIG-S6 §8.6 / Policy 35, the FOM's).
+ */
+function CheckInChangeBooking({ entry, onMoveRoom }: { entry: EntryDetail; onMoveRoom: () => void }) {
   const { session } = useSession();
-  const trace = useQuery({
-    queryKey: ["entry-trace", entry.id, entry.updatedAt ?? ""],
-    queryFn: () => getEntryTrace(session!, entry.id, 100),
-    enabled: !!session,
-  });
-  const pay = usePaymentStatus(entry.id, { enabled: !!entry.folio });
-  const working = !past && !folioLive;
-  const guest = entry.guestProfile ?? entry.inquiry?.guestProfile ?? null;
-
-  const out: FactRow[] = [];
-
-  // Guest present — attested when Arrival moved on.
-  const arrived = (trace.data?.items ?? [])
-    .filter((e) => e.eventType === "ENTRY.STAGE_TRANSITION" && (e.payload as { toStage?: string } | null)?.toStage === "S6")
-    .sort((a, b) => b.timestamp.localeCompare(a.timestamp))[0];
-  out.push({
-    label: "Guest present",
-    value: arrived
-      ? `the guest at the desk · ${fmtStamp(arrived.timestamp, tz)}`
-      : entry.walkInCompressed
-        ? "a walk-in, at the desk"
-        : "at the desk — recorded when Arrival moved on",
-    who: arrived?.actorName,
-    state: "on",
-  });
-
-  // Rooms assigned.
-  const numbers = rooms.map(roomLabel).sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
-  out.push({
-    label: "Rooms assigned",
-    value: numbers.length ? numbers.join(", ") : "none — rooms are assigned at Arrival",
-    state: numbers.length ? "on" : "missing",
-  });
-
-  // The lead's identity — as verified at THIS stay.
-  const verifiedAt = verification?.verifiedAt ?? null;
-  const path = verification?.path ?? null;
-  const doc = [docName(lead?.documentType), lead?.documentNumber].filter(Boolean).join(" ");
-  const idOk = met(/^Identity verified/);
-  out.push({
-    label: "Identity verified · the lead",
-    value: idOk ? `${doc || (path ? PATH_WORD[path] ?? words(path) : "verified")}${verifiedAt ? ` · ${fmtStamp(verifiedAt, tz)}` : ""}` : "the document, seen at the desk",
-    who: idOk && doc && path ? PATH_WORD[path] ?? words(path) : undefined,
-    state: idOk ? "on" : "missing",
-    action: idOk || !working ? undefined : (
-      <Button kind="secondary" compact onClick={() => revealBlock(ID.document, false)}>
-        Fix
-      </Button>
-    ),
-  });
-
-  // The party's documents.
-  if (!coverage) {
-    out.push({ label: "The party's documents", value: "reading the guest table…", state: "waiting" });
-  } else if (coverage.vipExempt) {
-    out.push({ label: "The party's documents", value: "not needed · a VIP booking", state: "on" });
-  } else if (coverage.satisfied) {
-    out.push({ label: "The party's documents", value: `${coverage.filledSlots} of ${coverage.totalSlots} on file`, state: "on" });
-  } else {
-    out.push({
-      label: "The party's documents",
-      value: `${coverage.filledSlots} of ${coverage.totalSlots} on file — a number or an ID photo on each row`,
-      who: coverage.missing.length ? `still to come: ${coverage.missing.map((m) => m.label).join(", ")}` : undefined,
-      state: "missing",
-      action: working ? (
-        <span className="row-acts">
-          <Button kind="secondary" compact onClick={() => revealBlock(ID.guests, false)}>
-            Fill the rows
-          </Button>
-          <Button kind="quiet" compact state="inert" reason="Not possible yet — every guest's details are needed at check-in">
-            By the first night
-          </Button>
-        </span>
-      ) : undefined,
-    });
-  }
-
-  // Registration.
-  const completedAt = entry.registrationCompletedAt ?? null;
-  if (completedAt) {
-    out.push({ label: "Registration", value: `completed with the check-in · ${fmtStamp(completedAt, tz)}`, state: "on" });
-  } else if (registrationConfirmed) {
-    out.push({
-      label: "Registration",
-      value: "confirmed at the desk — recorded with the check-in",
-      state: "word",
-      action: working ? (
-        <span className="row-acts">
-          <Chip tone="success" icon="check">
-            confirmed
-          </Chip>
-          <Button kind="quiet" compact onClick={() => setRegistrationConfirmed(false)}>
-            Undo
-          </Button>
-        </span>
-      ) : undefined,
-    });
-  } else {
-    out.push({
-      label: "Registration",
-      value: "not confirmed — the guest checks the details on record",
-      state: "missing",
-      action: working ? (
-        <span className="row-acts">
-          <Button kind="secondary" compact onClick={() => setRegistrationConfirmed(true)}>
-            Confirm at the desk
-          </Button>
-          <Button kind="quiet" compact state="inert">
-            Send to the tablet
-          </Button>
-          <Help label="Not available yet">Not possible yet — there is no tablet for the guest to sign on. Confirm the registration at the desk.</Help>
-        </span>
-      ) : undefined,
-    });
-  }
-
-  // Advance reconciled.
-  const advOk = met(/^Advance reconciled/);
-  const ps = pay.data;
-  const cur = entry.folio?.lines?.[0]?.currency ?? "BTN";
-  out.push({
-    label: "Advance reconciled",
-    value: ps
-      ? ps.requiredAmount > 0
-        ? `${money(ps.totalReceived, cur)} received of ${money(ps.requiredAmount, cur)}${advOk ? " · reconciled" : ""}`
-        : `no advance asked${advOk ? " · reconciled" : ""}`
-      : advOk
-        ? "reconciled"
-        : "not reconciled yet",
-    who: "system",
-    state: advOk ? "system" : "missing",
-    action: advOk || !working ? undefined : (
-      <Button kind="secondary" compact onClick={() => revealBlock(ID.advance, false)}>
-        Take the rest
-      </Button>
-    ),
-  });
-
-  // Housekeeping — the arrival prep and the rooms' own state.
-  const roomsOk = met(/assigned & ready$/);
-  const prepOk = met(/^Handoff fulfilled/);
-  const notReady = rooms.filter((a) => !physicallyReady(a));
-  out.push({
-    label: "Housekeeping",
-    value: [
-      prepOk ? "arrival prep done" : "arrival prep still open — finish it at Arrival",
-      notReady.length === 0
-        ? rooms.length
-          ? "rooms ready"
-          : "no rooms yet"
-        : notReady.map((a) => `Room ${roomLabel(a)} ${physicalWord(a.room?.physicalState) ?? "not ready"}`).join(" · "),
-    ].join(" · "),
-    who: "housekeeping",
-    state: roomsOk && prepOk ? "on" : "missing",
-  });
-
-  // Keys.
-  const stamped = rooms
-    .map((a) => (entry.roomAssignments ?? []).filter((r) => r.roomId === a.roomId).find((r) => r.keyIssuedAt))
-    .filter((r): r is RoomAssignmentSummary => !!r);
-  const later = laterCount > 0 ? ` · ${laterCount} on the move day` : "";
-  if (folioLive || past) {
-    out.push({
-      label: "Keys",
-      value: stamped.length
-        ? `${plural(stamped.length, "key")} issued · ${fmtStamp(stamped[0].keyIssuedAt, tz)}${later}`
-        : entry.keysIssuedCount
-          ? `${plural(entry.keysIssuedCount, "key")} issued at check-in`
-          : "issued at check-in",
-      state: "on",
-    });
-  } else {
-    const marked = dayOneIds.filter((id) => issuedKeyRooms[id]).length;
-    const ready = dayOneIds.length > 0 && marked === dayOneIds.length;
-    out.push({
-      label: "Keys",
-      value:
-        dayOneIds.length === 0
-          ? "no room for tonight yet"
-          : ready
-            ? `${dayOneIds.length} ready · issued on the click${later}`
-            : `${dayOneIds.length - marked} to make up${marked ? ` · ${marked} ready` : ""}${later}`,
-      state: ready ? "word" : "missing",
-      action:
-        dayOneIds.length === 0 ? undefined : ready ? (
-          <span className="row-acts">
-            <Chip tone="success" icon="key">
-              ready
-            </Chip>
-            <Button kind="quiet" compact onClick={() => setKeyRooms(dayOneIds, false)}>
-              Clear
-            </Button>
-          </span>
-        ) : (
-          <Button kind="secondary" compact icon="key" onClick={() => setKeyRooms(dayOneIds, true)}>
-            Keys ready
-          </Button>
-        ),
-    });
-  }
-
-  // Folio.
-  out.push({
-    label: "Folio",
-    value: folioLive
-      ? `live${entry.folio?.convertedToLiveAt ? ` since ${fmtStamp(entry.folio.convertedToLiveAt, tz)}` : ""}`
-      : "provisional · goes live on the click",
-    who: "system",
-    state: "system",
-  });
-
-  // VIP arrival notice — only for a VIP booking.
-  if (isVip) {
-    const vipOk = met(/^VIP arrival notified/);
-    const n = (entry.vipArrivalNotifications ?? [])[0];
-    out.push({
-      label: "VIP arrival",
-      value: vipOk && n ? `the house is told · ${fmtStamp(n.checkInInitiatedAt, tz)}` : "not told yet — it goes out when Arrival moves on with the guest present",
-      who: "system",
-      state: vipOk ? "system" : "missing",
-    });
-  }
-
-  return out;
+  const openAlsoWay = useOpenAlsoWay();
+  const fom = atLeast(session?.actorLevel, "L2");
+  const active = entry.status === "ACTIVE";
+  const items: ChangeBookingItem[] = [
+    {
+      key: "rooms",
+      label: "Move a room",
+      note: "Into another free room on the same dates. Every night is checked again and the price follows.",
+      onSelect: active ? onMoveRoom : undefined,
+      reason: active ? undefined : "Not possible on this booking now",
+    },
+    {
+      key: "dates",
+      label: "Change the dates",
+      note: "Once the guest is checked in, Stay adds nights (Extend the stay) or ends the stay sooner (Leaving early).",
+      reason: "Not at Check-in — the dates change at Stay",
+    },
+    {
+      key: "cancel",
+      label: "Cancel booking",
+      note: "The guest is at the desk but is not staying. The agreed charge is kept, the rest of the advance goes back and the rooms are released.",
+      onSelect: active && fom ? () => openAlsoWay("cancel") : undefined,
+      reason: !active ? "Not possible on this booking now" : fom ? undefined : "The FOM's call",
+      danger: true,
+    },
+  ];
+  return (
+    <>
+      <StageActs>
+        <ChangeBookingMenu items={items} />
+      </StageActs>
+      <OtherWaysTabs
+        tabs={
+          active && fom
+            ? [
+                {
+                  key: "cancel",
+                  label: "Cancel booking",
+                  inBar: false,
+                  content: <InlineWay render={(done) => <CancelAtArrivalDialog entry={entry} onClose={done} />} />,
+                },
+              ]
+            : []
+        }
+      />
+    </>
+  );
 }
 
-/* ------------------------------------------------------------------ the document */
+/* ------------------------------------------------------------------ the advance */
 
-function DocumentCard({
+/** The advance still owed — a section of its own, folding to one line once it is in order (2026-10-29). */
+function CheckInAdvanceCard({ entry }: { entry: EntryDetail }) {
+  const pay = usePaymentStatus(entry.id, { enabled: !!entry.folio }).data;
+  // A payment, a credit extension or the sign-off finishes the section once it reads done.
+  const finish = useFinishWhenDone("advance");
+  const reconciled = entry.folio?.advancePaymentReconciliationComplete === true;
+  const cur = entry.folio?.lines?.[0]?.currency;
+  const signed = reconciled ? " · signed off" : "";
+  const summary = pay
+    ? pay.requiredAmount > 0
+      ? `Received ${money(pay.totalReceived, cur)} of ${money(pay.requiredAmount, cur)}${signed}`
+      : pay.totalReceived > 0
+        ? `No advance asked · ${money(pay.totalReceived, cur)} received${signed}`
+        : `No advance asked${signed}`
+    : reconciled
+      ? "Signed off"
+      : undefined;
+  return (
+    <div id={ID.advance}>
+      <StepCard
+        flow="advance"
+        title="The advance"
+        meta="If the guest planned to settle the advance at the desk, take it now — checking in with money still short needs the FOM's credit extension instead."
+        summary={summary}
+      >
+        <Tool>
+          <AdvanceSettlementBlock entry={entry} title="The advance" noHeading onChanged={() => finish()} />
+        </Tool>
+      </StepCard>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ the guests' documents */
+
+/**
+ * The guests' documents (2026-10-29): the lead's document as recorded, and the guest table where
+ * every guest's details are typed and the lead's identity is verified. One section — the card above
+ * the table only pointed at it. Recording the verification with every guest on file finishes it.
+ */
+function GuestDocumentsCard({
   entry,
-  past,
   lead,
   verification,
+  coverage,
   docName,
   tz,
 }: {
   entry: EntryDetail;
-  past: boolean;
   lead: IdentityProofSummary | null;
   verification: StayVerification;
+  coverage: { vipExempt: boolean; totalSlots: number; filledSlots: number; satisfied: boolean } | null;
   docName: (code?: string | null) => string | null;
   tz: string;
 }) {
+  useFinishWhenMet("identity");
   const verifiedAt = verification?.verifiedAt ?? null;
   const path = verification?.path ?? null;
+  const doc = [docName(lead?.documentType), lead?.documentNumber].filter(Boolean).join(" ");
+  const onFile = coverage ? (coverage.vipExempt ? "not needed · a VIP booking" : `${coverage.filledSlots} of ${coverage.totalSlots} guests on file`) : null;
+  const summary = verifiedAt
+    ? [`Verified ${fmtStamp(verifiedAt, tz)}`, doc || (path ? PATH_WORD[path] ?? words(path) : null), onFile].filter(Boolean).join(" · ")
+    : undefined;
   return (
     <div id={ID.document}>
       <StepCard
         flow="identity"
-        title="The document, at the desk"
-        meta="Typed once, in the lead's row of the guest table below — choose the guest type there and record the verification under the table; it records that row's document. Date of birth and gender are what the TRS asks for. An ID photo is uploaded, or taken on a phone, from the same row."
-        acts={
-          past ? null : (
-            <>
-              <Button kind={verifiedAt ? "secondary" : "primary"} compact onClick={() => revealBlock(ID.guests, false)}>
-                {verifiedAt ? "Open the guest table" : "Verify identity"}
-              </Button>
-              <Button kind="quiet" compact onClick={() => revealBlock(ID.guests, false)}>
-                ID photo
-              </Button>
-            </>
-          )
-        }
+        title="The guests' documents"
+        meta="Each guest's details go in the table below — a document number or an ID photo on every row. The lead's document is verified under the table, with the guest type. Date of birth and gender are what the TRS asks for; an ID photo is uploaded, or taken on a phone, from the guest's row."
+        summary={summary}
       >
         <Facts>
           <Fact k="The lead">{lead?.subjectLabel?.trim() || null}</Fact>
-          <Fact k="Document type">{docName(lead?.documentType)}</Fact>
-          <Fact k="Document number">{lead?.documentNumber}</Fact>
+          <Fact k="Document">{doc || null}</Fact>
           <Fact k="Date of birth">{lead?.dateOfBirth ? fmtDate(lead.dateOfBirth) : null}</Fact>
-          <Fact k="Gender">{lead?.gender ? words(lead.gender) : null}</Fact>
           <Fact k="Verified" meta={verifiedAt && path ? PATH_WORD[path] ?? words(path) : undefined}>
             {verifiedAt ? fmtStamp(verifiedAt, tz) : <span className="warn-ink">not yet</span>}
           </Fact>
         </Facts>
+        <div id={ID.guests} style={{ marginTop: 10 }}>
+          <Tool>
+            <IdentityProofBlock entry={entry} checkInGate />
+          </Tool>
+        </div>
       </StepCard>
     </div>
   );
@@ -643,9 +353,16 @@ function RegistrationCard({
   const completedAt = entry.registrationCompletedAt ?? null;
   const party = entry.guestCount ?? (entry.adultCount ?? 0) + (entry.childCount ?? 0);
   const name = guestName(guest);
+  // The tick finishes the section (2026-10-29).
+  useFinishWhenMet("registration");
   return (
     <div id={ID.registration}>
-      <StepCard flow="registration" flowAfter="identity" title="Registration card">
+      <StepCard
+        flow="registration"
+        flowAfter="identity"
+        title="Registration card"
+        summary={completedAt ? `Completed ${fmtStamp(completedAt, tz)}` : confirmed ? `Confirmed at the desk for ${name}` : undefined}
+      >
         <Facts wide>
           <Fact k="State">
             {completedAt ? (
@@ -793,12 +510,19 @@ function RoomsCard({
   const marked = dayOneIds.filter((id) => issuedKeyRooms[id]).length;
   const allMarked = dayOneIds.length > 0 && marked === dayOneIds.length;
   const onChanged = () => refresh([["room-plan-history", entry.id], ["identity-proofs", entry.id], ["rooms-catalog"]]);
+  // Every key of tonight marked finishes the section (2026-10-29).
+  useFinishWhenMet("rooms");
+  const numbers = ordered.map(roomLabel);
+  const summary = numbers.length
+    ? `${numbers.length > 1 ? "Rooms" : "Room"} ${numbers.join(", ")} · ${plural(marked, "key")} ready${laterCount > 0 ? ` · ${laterCount} on the move day` : ""}`
+    : undefined;
 
   return (
     <div id={ID.rooms}>
       <StepCard
         flow="rooms"
-        title={rooms.length > 1 ? `Rooms · ${rooms.length}` : "Room"}
+        title={rooms.length > 1 ? `The rooms and keys · ${rooms.length}` : "The room and its key"}
+        summary={summary}
         icon="bed"
         right={rooms.length > 1 ? <Chip tone="quiet">check-in covers all{entry.numberOfRooms ? ` · ${entry.numberOfRooms} asked for` : ""}</Chip> : null}
         meta="Mark each key as it is handed over. Every room the guest sleeps in tonight needs its key; a room the plan moves them into later gets its key on the move day, at Stay."

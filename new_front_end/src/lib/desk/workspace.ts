@@ -543,7 +543,8 @@ export function s6Readiness(
       ? [{ label: "Registration confirmed", met: !!opts.registrationConfirmed, card: "registration" }]
       : []),
     { label: "Advance reconciled", met: entry.folio?.advancePaymentReconciliationComplete === true, card: "advance" },
-    { label: "VIP arrival notified", met: !isVip || (entry.vipArrivalNotifications ?? []).length > 0, card: "vip" },
+    // A line, and a section, only on a VIP's booking (2026-10-29) — nothing to do on any other.
+    ...(isVip ? [{ label: "VIP arrival notified", met: (entry.vipArrivalNotifications ?? []).length > 0, card: "vip" }] : []),
     {
       card: "rooms",
       label: rooms.length > 1 ? `All ${rooms.length} rooms assigned & ready` : "Room assigned & ready",

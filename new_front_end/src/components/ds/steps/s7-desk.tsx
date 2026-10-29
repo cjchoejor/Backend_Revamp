@@ -302,7 +302,26 @@ export function DisputesCard({ entry, tz, onRaise }: { entry: EntryDetail; tz: s
     },
     onError: (e) => toastRefusal(e, "The dispute could not be closed"),
   });
-  if (disputes.length === 0) return null;
+  // A section of the step (2026-10-29) — said when there is none, with the act that raises one.
+  if (disputes.length === 0)
+    return (
+      <div id="s7-disputes">
+        <StepCard
+          flow="disputes"
+          title="Disputes"
+          icon="alert"
+          status="None raised"
+          meta="A guest who disagrees with a charge. An open dispute holds the move to Check-out."
+          acts={
+            <Live>
+              <Button kind="secondary" compact onClick={onRaise}>
+                Raise a dispute
+              </Button>
+            </Live>
+          }
+        />
+      </div>
+    );
   return (
     <div id="s7-disputes">
       <StepCard
@@ -456,7 +475,24 @@ export function FaultsCard({ entry, tz, onFlag }: { entry: EntryDetail; tz: stri
     },
     onError: (e) => toastRefusal(e, "The fault could not be updated"),
   });
-  if (records.length === 0) return null;
+  // A section of the step (2026-10-29) — said when there is none, with the act that reports one.
+  if (records.length === 0)
+    return (
+      <StepCard
+        flow="faults"
+        title="Faults in the room"
+        icon="wrench"
+        status="None reported"
+        meta="Something broken or not working in a room. A room with a fault that stops it being used is taken out of service."
+        acts={
+          <Live>
+            <Button kind="secondary" compact onClick={onFlag}>
+              Report a fault
+            </Button>
+          </Live>
+        }
+      />
+    );
   return (
     <StepCard
       flow="faults"

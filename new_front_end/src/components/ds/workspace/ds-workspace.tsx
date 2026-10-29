@@ -194,13 +194,37 @@ const ARRIVAL_SECTIONS: Record<string, string> = {
   handoff: "The front-desk handoff",
   present: "The guest is here",
 };
-/** The steps drawn in the stage-template layout, with their sections (Inquiry to Arrival). */
+/**
+ * Check-in's sections (2026-10-29, operator: "now make the same UI change for stage 6"), in the order
+ * the desk works them; the VIP notice is a section only on a VIP's booking.
+ */
+const CHECKIN_SECTIONS: Record<string, string> = {
+  identity: "The guests' documents",
+  registration: "Registration",
+  advance: "The advance",
+  vip: "VIP arrival",
+  rooms: "The rooms and keys",
+};
+/**
+ * Stay's sections (2026-10-29, operator: "also stage 7") — the day's work. They are numbered but
+ * never fold: a stay is worked on every day, in whatever order the day takes.
+ */
+const STAY_SECTIONS: Record<string, string> = {
+  folio: "The bill",
+  nights: "The nights",
+  departments: "The departments",
+  faults: "Faults",
+  disputes: "Disputes",
+};
+/** The steps drawn in the stage-template layout, with their sections (Inquiry to Stay). */
 const STEP_SECTIONS: Partial<Record<number, Record<string, string>>> = {
   1: INQUIRY_SECTIONS,
   2: NEGOTIATION_SECTIONS,
   3: SETUP_SECTIONS,
   4: RESERVE_SECTIONS,
   5: ARRIVAL_SECTIONS,
+  6: CHECKIN_SECTIONS,
+  7: STAY_SECTIONS,
 };
 const isTopLayoutStep = (n: number) => !!STEP_SECTIONS[n];
 /**
@@ -621,7 +645,15 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
       } catch {
         /* non-fatal */
       }
-      toast.success("Checked in — the folio is live.");
+      // Said in the middle of the screen, as every move from Inquiry on is (2026-10-29).
+      const g = updated.guestProfile ?? updated.inquiry?.guestProfile ?? null;
+      setMoved({
+        title: "The guest is checked in",
+        from: "Check-in",
+        to: "Stay",
+        who: [[g?.firstName, g?.lastName].filter(Boolean).join(" ") || null, updated.id].filter(Boolean).join(" · "),
+        next: "Next: the bill grows with each charge, the nights are audited, and the departments are told.",
+      });
     },
     onError: fail("Check-in failed"),
   });
@@ -960,7 +992,15 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                   },
                 })
               : stayStepActive
-                ? [...s7Readiness(entry, hotelToday), { label: "Night audit complete", met: nightAuditOk, card: "nights" }]
+                ? (() => {
+                    // The nights come right after the bill, as on the page (2026-10-29).
+                    const r = s7Readiness(entry, hotelToday);
+                    return [
+                      ...r.filter((x) => !x.card || x.card === "folio"),
+                      { label: "Night audit complete", met: nightAuditOk, card: "nights" },
+                      ...r.filter((x) => x.card && x.card !== "folio"),
+                    ];
+                  })()
                 : checkOutStepActive
                   ? s8Readiness(entry, { inspections, damage })
                   : closedStepActive
@@ -985,9 +1025,12 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   // done. The rail prints it, and each card takes its own number from it (2026-09-25).
   // Stage 1 is laid out as five numbered sections (2026-10-10), so it numbers by section; so does
   // Negotiation, in its two (2026-10-27), and Set up, in its six (2026-10-28).
-  const sectioned = inquiryStepActive || quoteStepActive || setupStepActive || confirmStepActive || confirmedS4Active || arrivalStepActive;
+  const sectioned =
+    inquiryStepActive || quoteStepActive || setupStepActive || confirmStepActive || confirmedS4Active || arrivalStepActive || checkInStepActive || stayStepActive;
   // From Set up on, each section is finished by its own act — no Done to press (2026-10-28).
-  const noDoneBar = setupStepActive || confirmStepActive || confirmedS4Active || arrivalStepActive;
+  const noDoneBar = setupStepActive || confirmStepActive || confirmedS4Active || arrivalStepActive || checkInStepActive || stayStepActive;
+  // A finished section folds to its line — except at Stay, whose sections are the day's work (2026-10-29).
+  const foldDone = sectioned && !stayStepActive;
   const derived = STEP_DERIVED[viewing] ?? {};
   const flowItems: FlowItem[] = numberFlow(preconds, { bySection: sectioned });
   const inherited = preconds.filter((p) => !p.card);
@@ -1050,7 +1093,10 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   // still happen in that current stage"): the editor in the page; the booking walks back through
   // Negotiation and returns here.
   const changeInPage = topLayout && (setupStepActive || confirmedS4Active || arrivalStepActive) && !sealed && paneParam === "change";
-  const inPage = roomsInPage || changeInPage;
+  // Check-in's and Stay's own views in the page (2026-10-29) — the step draws them itself; the way back
+  // is said above them, and the step's move waits for its own page.
+  const stepViewInPage = topLayout && !!pane && (checkInStepActive || stayStepActive);
+  const inPage = roomsInPage || changeInPage || stepViewInPage;
   // The keys owed today on a move day — counted on Stay's Keys tab (2026-10-26).
   const keysOwedNow = step.key === "stay" && !viewingPast ? keysDue(entry, hotelToday) : { collect: [], handOver: [] };
   const keysOwedCount = keysOwedNow.collect.length + keysOwedNow.handOver.length;
@@ -1192,17 +1238,38 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
       </Button>
     );
   } else if (checkInStepActive) {
+    // Green once it can be pressed and floating in, as from Inquiry to Arrival (2026-10-29).
     moveReady = canCheckIn;
     forward = (
-      <Button icon="lock" state={canCheckIn ? "default" : "inert"} reason={canCheckIn ? undefined : firstNote} onClick={() => setCheckInOpen(true)}>
-        Check in &amp; go live
+      <Button className="go" state={canCheckIn ? "default" : "inert"} reason={canCheckIn ? undefined : firstNote} onClick={() => setCheckInOpen(true)}>
+        Check in
       </Button>
     );
   } else if (stayStepActive) {
     const ok = canProgressS7(entry, nightAuditOk, hotelToday);
     moveReady = ok;
     forward = (
-      <Button state={advanceMutation.isPending ? "working" : ok ? "default" : "inert"} reason={ok ? undefined : firstNote} workingLabel="Moving…" onClick={() => advanceMutation.mutate({ targetStage: "S8" })}>
+      <Button
+        className="go"
+        state={advanceMutation.isPending ? "working" : ok ? "default" : "inert"}
+        reason={ok ? undefined : firstNote}
+        workingLabel="Moving…"
+        onClick={() =>
+          advanceMutation.mutate(
+            { targetStage: "S8", announce: true },
+            {
+              onSuccess: () =>
+                setMoved({
+                  title: "Stay is done",
+                  from: "Stay",
+                  to: "Check-out",
+                  who: [name, entry.id].filter(Boolean).join(" · "),
+                  next: "Next: the bill settled, the keys back, the rooms inspected and the departure handed over.",
+                }),
+            },
+          )
+        }
+      >
         Move to Check-out
       </Button>
     );
@@ -1308,9 +1375,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
             setKeyRooms={checkInStepActive ? setKeyRooms : NOOP}
             registrationConfirmed={registrationConfirmed}
             setRegistrationConfirmed={checkInStepActive ? setRegistrationConfirmed : NOOP}
-            checkIn={checkInStepActive ? { onClick: () => setCheckInOpen(true), ready: canCheckIn, reason: canCheckIn ? undefined : firstNote } : null}
             pane={pane}
-            openPane={setPane}
           />
         );
       case "stay":
@@ -1321,7 +1386,6 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
             setNightAuditOk={stayStepActive ? setNightAuditOk : NOOP}
             goToStep={viewingPast ? NOOP : stableSetSelected}
             pane={pane}
-            openPane={setPane}
           />
         );
       case "checkout":
@@ -1719,7 +1783,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     return (
       <BackendRailSlotContext.Provider value={railSlot}>
         {/* Set up's sections are finished by their own acts — no Done (2026-10-28). */}
-        <StepFlow items={flowItems} on={!viewingPast && !sealed} fold={sectioned ? "done" : null} derived={derived} doneBar={!noDoneBar}>
+        <StepFlow items={flowItems} on={!viewingPast && !sealed} fold={foldDone ? "done" : null} derived={derived} doneBar={!noDoneBar}>
           {/* Two columns from the topbar down (2026-10-27, operator and the boss, after the template: the
               screen divided in two — the work, its head and its bar on the left, with the bell and the
               signed-in person at the left's top right and the move at its foot on the right; the
@@ -1840,7 +1904,10 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                       </div>
                     </div>
                   ) : null}
-                  <div hidden={inPage}>
+                  {stepViewInPage ? (
+                    <BackToStep name={STEP_NAMES[viewing - 1]} doing={panes.find((p) => p.key === pane)?.label ?? ""} onBack={() => stepPane.close()} />
+                  ) : null}
+                  <div hidden={roomsInPage || changeInPage}>
                     <AlsoBar buttons={alsoButtons} panel={null} stage={stageActs}>
                       <OtherWaysSlot node={null}>{native}</OtherWaysSlot>
                     </AlsoBar>
