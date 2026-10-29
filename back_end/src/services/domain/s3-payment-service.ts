@@ -697,29 +697,47 @@ async function reissueProformaTx(
 }
 
 /**
- * A pass arriving at Set up has a bill of its own (2026-09-25).
+ * Every pass has a proforma of its own (2026-10-29, operator, on ENT-20261029-0032: a change made
+ * at Reserve made the quotation and the voucher again, but the proforma in force was still the
+ * earlier pass's, printing the old price — "if there's a change it should be created new papers
+ * till the current stage it is … check similar bugs along all stages").
  *
- * A re-entry supersedes the proforma of the pass it seals, and the folio is a singleton — so
- * nothing mints a starter a second time and the next pass reached Set up with no live proforma
- * at all. This mints one, and ONLY when there is none: it never replaces a bill that stands.
+ * Called where a pass reaches Set up (Negotiation → Set up, and the payer set at Set up). When the
+ * live proforma belongs to an EARLIER pass (made before this pass began) it is replaced — the same
+ * supersession as a change of the advance, linked, the old version kept with the figures it was
+ * made with (the re-entry froze any never-rendered one before the pass began). When none stands,
+ * one is made; when this pass already has its own, nothing happens. The new one is a draft: it
+ * goes to the guest only when the desk sends it.
  *
- * Deliberately called on ARRIVAL at Set up, not at the re-entry itself: a proforma belonging to
- * the new pass locks that pass's negotiation table (the 2026-08-06 "the PI finalises the
- * quotation" rule), so minting it while the booking is at Negotiation would forbid the very
- * re-pricing the re-entry was for. Caught by driving the desk.
+ * This supersedes the 2026-10-06 limit ("the proforma is not re-issued by these walks"): it was
+ * about a fresh unsent proforma blocking money or check-in, and no gate does — bill-before-money
+ * and answer-before-money are Set-up rules, the freeze counts a bill that went out even once
+ * replaced, and the answer it asks for is the one in force in this pass.
+ *
+ * Deliberately on ARRIVAL at Set up, never at the re-entry itself (2026-09-25): a proforma of the
+ * new pass locks that pass's negotiation table (the 2026-08-06 "the PI finalises the quotation"
+ * rule), so making it while the booking is at Negotiation would forbid the very re-pricing the
+ * re-entry was for.
  */
-export async function ensureLiveProformaForPassTx(
+export async function ensureProformaOfThisPassTx(
   tx: Prisma.TransactionClient,
-  input: { entryId: string; folioId: string; basis?: string; now?: Date },
+  input: { entryId: string; folioId: string; passStartedAt: Date | null; basis?: string; now?: Date },
   actor: { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" },
 ) {
+  const live = await tx.invoice.findMany({
+    where: { folioId: input.folioId, invoiceType: InvoiceType.PROFORMA, state: { not: InvoiceState.SUPERSEDED } },
+    select: { id: true, createdAt: true },
+  });
+  const ofThisPass = input.passStartedAt ? live.some((i) => i.createdAt.getTime() >= input.passStartedAt!.getTime()) : live.length > 0;
+  if (ofThisPass) return null;
   return reissueProformaTx(
     tx,
     {
       entryId: input.entryId,
       folioId: input.folioId,
-      changed: false,
-      basisWhenChanged: input.basis ?? "REISSUED_AFTER_REENTRY",
+      changed: live.length > 0,
+      basisWhenChanged: "NEW_PASS",
+      ...(input.basis ? { extraMetadata: { madeAt: input.basis } } : {}),
       now: input.now ?? new Date(),
     },
     actor,

@@ -98,6 +98,12 @@ async function runBackflow(
   const currentSeg = entry.segments[0];
   if (!currentSeg) throw new ValidationError("Entry has no segment");
 
+  // The next pass replaces the proforma when it reaches Set up (2026-10-29) — a never-rendered one
+  // is rendered now, while its own pass and quotation still stand, so the replaced version keeps
+  // the figures it was made with (the 2026-08-02 freeze-at-supersession ruling). Best-effort: a
+  // render failure leaves that version to the labelled reconstruction.
+  await freezeUnrenderedProformasForEntry(prisma, input.entryId, input.actor.actorId).catch(() => {});
+
   // Mode registry — ACIG §2.1A.7. Was dormant; now load-bearing.
   const mode = await requireActiveMode(prisma, input.modeKey);
   // Warn (not block) if stageRoute doesn't declare both stages. The registry is authoritative

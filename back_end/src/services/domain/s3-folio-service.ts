@@ -24,7 +24,7 @@ import {
 } from "./s3-hold-service.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.js";
-import { ensureLiveProformaForPassTx } from "./s3-payment-service.js";
+import { ensureProformaOfThisPassTx } from "./s3-payment-service.js";
 import { enforceEntryNotSealedForWorkingAction } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
 import { latestDispatchedInForce } from "../../lib/reply-waits.js";
 
@@ -79,8 +79,14 @@ export async function getOrCreateProvisionalFolioTx(
     });
     // The folio carries across passes, so only the FIRST pass ever got a starter proforma —
     // a re-entered booking reached Set up with its old bill superseded and nothing in its
-    // place (2026-09-25). Mints one only when none stands; never touches a live bill.
-    await ensureLiveProformaForPassTx(tx, { entryId, folioId: existing.id, now }, { actorId, actorLevel: "L1" });
+    // place (2026-09-25). Every pass has its own now (2026-10-29): an earlier pass's bill is
+    // replaced, a missing one is made, this pass's own is left as it is.
+    const pass = await tx.segment.findUnique({ where: { id: segmentId }, select: { startedAt: true } });
+    await ensureProformaOfThisPassTx(
+      tx,
+      { entryId, folioId: existing.id, passStartedAt: pass?.startedAt ?? null, basis: "ARRIVAL_AT_SET_UP", now },
+      { actorId, actorLevel: "L1" },
+    );
     return existing;
   }
 

@@ -2544,8 +2544,8 @@ async function changeRoomToNewSegmentInner(
     // replaces it like the renegotiation route does (2026-09-25): a never-rendered version is
     // frozen first (2026-08-02 ruling — a superseded paper keeps the figures that were on the
     // table), the pending ones are superseded in the re-entry, and the new pass mints its own on
-    // arrival back at Set up. From Reserve on the voucher is the binding paper and the proforma
-    // stands (the room-change doctrine since 2026-08-12).
+    // arrival back at Set up. From Reserve on it is replaced on arrival at Set up too (2026-10-29,
+    // `ensureProformaOfThisPassTx`) — every way back freezes it first.
     if (stage === Stage.S3) {
       const { freezeUnrenderedProformasForEntry } = await import("./invoice-pdf-service.js");
       await freezeUnrenderedProformasForEntry(prisma, input.entryId, actor.actorId).catch(() => {});
@@ -3001,8 +3001,9 @@ async function changeRoomToNewSegmentInner(
     return blockedOutcome("HOLD_PLACEMENT", e);
   }
 
-  // ── Set up is home: the walk stops here, with the fresh proforma held for the desk ──────────
-  if (stage === Stage.S3) {
+  // ── The pass's own proforma, held for the desk (2026-10-29: at every step, not only Set up —
+  // the walk made it on reaching Set up, the earlier pass's bill replaced) ───────────────────────
+  {
     try {
       const newSegment = await prisma.segment.findFirst({
         where: { entryId: input.entryId },
@@ -3037,6 +3038,9 @@ async function changeRoomToNewSegmentInner(
     } catch {
       /* the proforma stays on the Documents tab; only the prompt is lost */
     }
+  }
+  // ── Set up is home: the walk stops here ─────────────────────────────────────────────────────
+  if (stage === Stage.S3) {
     const entryAtSetup = await prisma.entry.findUniqueOrThrow({ where: { id: input.entryId }, select: { currentStage: true } });
     return {
       ...outcomeBase,

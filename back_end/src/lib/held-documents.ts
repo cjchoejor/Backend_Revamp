@@ -28,7 +28,9 @@ export type HeldDocumentReason =
    */
   | "RESERVE"
   /** The dates, rooms or party changed on the step the booking is at (2026-10-29, `booking-change-service`). */
-  | "RECONFIGURE";
+  | "RECONFIGURE"
+  /** A pass's own proforma made after the event, for a change made before every pass had one (2026-10-29, `repair-pass-proformas.ts`). */
+  | "NEW_PASS";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 

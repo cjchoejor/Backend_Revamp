@@ -16,6 +16,7 @@ import { getOrCreateProvisionalFolioTx } from "../services/domain/s3-folio-servi
 import { scheduleS3StageDwellWarningMonitor } from "../lib/schedule-s3-dwell-warning-monitor.js";
 import { getTimerEngine } from "../services/infrastructure/timer-management-service.js";
 import { cancelNegotiationExpiryTx } from "../lib/negotiation-expiry.js";
+import { retireSupersededReplyWaitsBestEffort } from "../lib/reply-waits.js";
 
 export async function progressS2ToS3(prisma: PrismaClient, entryId: string, _actorId: string, clientVersion: number | undefined) {
   const entry = await prisma.entry.findUnique({
@@ -108,6 +109,8 @@ export async function progressS2ToS3(prisma: PrismaClient, entryId: string, _act
   });
 
   await scheduleS3StageDwellWarningMonitor(prisma, entryId, _actorId);
+  // Arrival at Set up may have replaced an earlier pass's proforma — its reply is no longer awaited.
+  await retireSupersededReplyWaitsBestEffort(prisma, entryId, _actorId);
 
   return updated;
 }

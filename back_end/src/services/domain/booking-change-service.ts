@@ -368,11 +368,18 @@ export async function changeBookingInPlace(
       }),
     );
   }
-  if (stage === Stage.S3 && !blocked) {
-    // At Set up the proforma is the live bill: the new pass made its own on arrival — held for the desk.
+  if (!blocked) {
+    // The new pass made its own proforma on reaching Set up, the earlier pass's replaced — held for
+    // the desk at every step (2026-10-29), as the voucher is.
+    const passStart = (await prisma.segment.findFirst({ where: { entryId }, orderBy: { segmentNumber: "desc" }, select: { startedAt: true } }))?.startedAt;
     const proforma = entry.folio
       ? await prisma.invoice.findFirst({
-          where: { folioId: entry.folio.id, invoiceType: "PROFORMA", state: { not: "SUPERSEDED" } },
+          where: {
+            folioId: entry.folio.id,
+            invoiceType: "PROFORMA",
+            state: { not: "SUPERSEDED" },
+            ...(passStart ? { createdAt: { gte: passStart } } : {}),
+          },
           orderBy: { createdAt: "desc" },
           select: { id: true },
         })
