@@ -255,6 +255,15 @@ guestProfilesRouter.get("/entries/:id/identity-proofs", requireActorLevel("L1"),
       // the guest's row; Apply goes through the same detail save as typing.
       identityOcrService.listOcrSuggestionsForEntry(prisma, req.params.id),
     ]);
+    // A desk with this guest table open and IDs still to capture: the page reader is loaded now,
+    // so the first CID read does not wait twenty seconds for it to start (2026-10-29, operator:
+    // "it is really slow, 30 s to a minute"). Each read keeps it loaded ten more minutes; it never
+    // holds this answer up.
+    if (list.coverage && !list.coverage.satisfied && !identityOcrService.serverOcrDisabled()) {
+      void import("../../lib/identity-ocr/layout-ocr.js")
+        .then((m) => m.warmLayoutOcr())
+        .catch((err) => console.warn("[identity-proofs] layout model warm-up:", err instanceof Error ? err.message : err));
+    }
     res.json({ ...list, suggestions });
   } catch (e) {
     next(e);

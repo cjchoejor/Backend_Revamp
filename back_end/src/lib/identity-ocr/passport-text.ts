@@ -116,15 +116,21 @@ function line2In(raw: string): MrzLine2 | null {
   return null;
 }
 
-/** Candidates for the strip's first line: start with `P`, carry `<` fillers, are not line 2. */
+/**
+ * Candidates for the strip's first line: start with `P`, carry `<` fillers, are not line 2 — or a
+ * first line cut at its left edge (2026-10-29: a photocopy cut short read "NDGUPTA<<ANUJ<<<…"),
+ * which still holds the names: letters, the "<<" between surname and given names, no digits.
+ */
 function mrzLine1Candidates(lines: string[], line2: string | null): string[] {
   const out: string[] = [];
+  const cut: string[] = [];
   for (const raw of lines) {
     const s = cleanMrzLine(raw);
-    if (s === line2 || out.includes(s)) continue;
+    if (s === line2 || out.includes(s) || cut.includes(s)) continue;
     if (/^P[A-Z<]/.test(s) && s.length >= 12 && s.includes("<")) out.push(s);
+    else if (s.length >= 12 && /[A-Z]{2,}<<[A-Z]{2,}/.test(s) && !/\d/.test(s.slice(0, 20))) cut.push(s);
   }
-  return out;
+  return [...out, ...cut];
 }
 
 /** Best approximate occurrence of `p` inside `t` (edit distance; start + end of the match). */
@@ -216,6 +222,51 @@ function namesFromStrip(line1: string, printedLines: string[]): string | null {
   return [...given, surname].join(" ");
 }
 
+/**
+ * The names straight off the strip's first line, with no page to check them against (2026-10-29) —
+ * a first line cut at its left edge ("NDGUPTA<<ANUJ<<<…": what is left of "P<IND" is dropped) or a
+ * read where the page reader found no names. Surname before "<<", given names after it.
+ */
+export function namesFromLine1(line1: string, nationality: string | null): string | null {
+  const s = cleanMrzLine(line1);
+  const nat = (nationality ?? "").slice(0, 3);
+  let body: string | null = null;
+  if (/^P[A-Z<]/.test(s) && s.length > 5) body = s.slice(5);
+  else {
+    const sep = s.indexOf("<<");
+    if (sep < 0) return null;
+    const head = s.slice(0, sep);
+    const full = `P<${nat}`;
+    for (let k = full.length; k >= 1 && body == null; k--) {
+      const suf = full.slice(full.length - k);
+      if (head.startsWith(suf) && head.length - k >= 2) body = s.slice(k);
+    }
+    // The country code further in, behind a misread start ("FP<INDSINGH<<…").
+    const at = nat.length === 3 ? head.indexOf(nat) : -1;
+    if (body == null && at >= 0 && head.length - at - 3 >= 2) body = s.slice(at + 3);
+    if (body == null) return null;
+  }
+  // Only a line that reads cleanly: names of letters joined by "<", the "<<" between surname and
+  // given names, then the fillers — a garbled line is left to the page reader.
+  // No surname is allowed ("P<IND<<DEV<DUTT": every name is a given name).
+  const tail = body.replace(/^(?:[A-Z]+(?:<[A-Z]+)*)?<<[A-Z]+(?:<[A-Z]+)*/, "");
+  if (tail === body) return null;
+  const fill = tail.slice(0, Math.max(0, tail.length - 3));
+  if (fill.length && (fill.match(/</g)?.length ?? 0) / fill.length < 0.75) return null;
+  const sep = body.indexOf("<<");
+  if (sep < 0) return null;
+  const surname = body.slice(0, sep).replace(/<+/g, " ").trim();
+  const rest = body.slice(sep + 2);
+  const end = rest.indexOf("<<");
+  const given = (end >= 0 ? rest.slice(0, end) : rest).split("<").filter((w) => /^[A-Z]{2,}$/.test(w));
+  const words = [...given, ...surname.split(" ").filter((w) => /^[A-Z]{2,}$/.test(w))];
+  if (words.length < 2 && !(given.length && !surname)) return null;
+  // Fillers misread as letters are not names: a run of three of one letter ("TRRRR"), a word of three
+  // letters or more with no vowel ("KRT"), or more names than a strip line holds.
+  if (words.length > 6 || words.some((w) => /(.)/.test(w) || (w.length >= 3 && !/[AEIOUY]/.test(w)))) return null;
+  return words.map(titleCase).join(" ");
+}
+
 /** The printed page's dates, earliest first. */
 function printedDates(lines: string[]): string[] {
   const out = new Set<string>();
@@ -256,7 +307,11 @@ export function readPassportFromText(
     put("expiryDate", isoFromYYMMDD(line2.expiry, "expiry", now), "VERIFIED");
     // The sex and the nationality carry no check digit: a misread character there passes unseen.
     if (line2.sex === "M" || line2.sex === "F") put("gender", line2.sex, "READ");
-    put("nationality", line2.nationality, "READ");
+    // One letter off the issuing country the first line names ("INP" on an Indian strip,
+    // 2026-10-29) is that country misread — the two are the same on almost every passport.
+    const issuing = line1 && /^P[A-Z<][A-Z]{3}/.test(line1) ? line1.slice(2, 5) : null;
+    const off = issuing && line2.nationality.length === 3 ? [...line2.nationality].filter((c, i) => c !== issuing[i]).length : 0;
+    put("nationality", issuing && off === 1 ? issuing : line2.nationality, "READ");
   }
   // The printed page without the strip: the strip's own garbled words must not pass for names.
   const clean = printedLines.map((l) => l.trim()).filter((l) => l && !looksLikeStrip(l));
@@ -267,6 +322,8 @@ export function readPassportFromText(
       break;
     }
   }
+  // No page words to match: the strip's first line alone (2026-10-29).
+  if (!fields.fullName && line1s.length) put("fullName", namesFromLine1(line1s[0], line2?.nationality ?? null), "READ");
   if (!fields.dateOfBirth) {
     const dates = printedDates(clean);
     // A passport page prints three dates — birth, issue, expiry. With all three, the earliest is the birth.
@@ -285,8 +342,15 @@ export function readPassportFromText(
     // line, since it prints beside its label as often as on a line of its own. One that agrees with
     // the strip's check digit is proven even when the strip's own copy of it came back misread.
     const printed = printedNumbers(clean);
-    const agreed = line2?.numberCheck != null ? printed.find((n) => mrzCheckDigit(n.padEnd(9, "<")) === line2.numberCheck) : undefined;
-    if (agreed) put("documentNumber", agreed, "VERIFIED");
+    // A number printed as digits only, its first letter read as the digit it looks like (2026-10-29:
+    // "I0602591" read "10602591") — taken only when the strip's check digit proves the letter.
+    const looked = printedNumberLookalikes(clean);
+    const agreed =
+      line2?.numberCheck != null
+        ? [...printed, ...looked].filter((n) => mrzCheckDigit(n.padEnd(9, "<")) === line2.numberCheck).filter((n, i, all) => all.indexOf(n) === i)
+        : [];
+    const agreedOne = agreed.length === 1 ? agreed[0] : agreed.find((n) => printed.includes(n));
+    if (agreedOne) put("documentNumber", agreedOne, "VERIFIED");
     else if (printed[0]) put("documentNumber", printed[0], "READ");
   }
   if (!Object.keys(fields).length) return null;
@@ -305,6 +369,27 @@ export function printedNumbers(lines: string[]): string[] {
   const out: string[] = [];
   for (const l of lines) {
     for (const m of l.matchAll(/(?:^|[^A-Z0-9])([A-Z][0-9]{7})(?![A-Z0-9])/g)) if (!out.includes(m[1])) out.push(m[1]);
+  }
+  return out;
+}
+
+/** The first letter of a passport number read as a digit, and what it may be. */
+const FIRST_LETTER: Record<string, string> = { "1": "ILT", "0": "OQD", "2": "Z", "5": "S", "6": "G", "7": "TZ", "8": "B", "4": "A" };
+
+/**
+ * Printed numbers of eight digits whose first digit may be a misread letter: each letter it may
+ * be, followed by the seven digits. Never suggested alone — only when the strip's check digit
+ * picks one (see readPassportFromText).
+ */
+export function printedNumberLookalikes(lines: string[]): string[] {
+  const out: string[] = [];
+  for (const l of lines) {
+    for (const m of l.matchAll(/(?:^|[^A-Z0-9])([0-9]{8})(?![A-Z0-9])/g)) {
+      for (const letter of FIRST_LETTER[m[1][0]] ?? "") {
+        const n = letter + m[1].slice(1);
+        if (!out.includes(n)) out.push(n);
+      }
+    }
   }
   return out;
 }

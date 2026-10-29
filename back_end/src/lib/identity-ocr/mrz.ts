@@ -47,6 +47,14 @@ export function extractMrzLines(ocrText: string): string[] | null {
     }
     return l;
   });
+  // A two-line strip (TD3 / TD2) found by its first line (2026-10-29): "P<IND…" with the name
+  // fillers, and the line after it of the same length — the second line of a passport often holds
+  // no "<<" at all (the personal number fills it), and was dropped, so the strip was never parsed.
+  for (let i = norm.length - 2; i >= 0; i--) {
+    const a = norm[i];
+    const b = norm[i + 1];
+    if ((a.length === 44 || a.length === 36) && b.length === a.length && /^[PV]/.test(a) && a.includes("<<")) return [a, b];
+  }
   const candidates = norm.filter((l) => MRZ_LINE_LENGTHS.has(l.length) && (l.includes("<<") || /^[PIACV]/.test(l)));
   if (candidates.length < 2) return null;
   // Prefer the LAST lines (the MRZ sits at the foot of the page); TD3 = 2×44, TD1 = 3×30, TD2 = 2×36.
@@ -55,6 +63,122 @@ export function extractMrzLines(ocrText: string): string[] | null {
   const tail2 = candidates.slice(-2);
   if (tail2[0].length === tail2[1].length && (tail2[0].length === 44 || tail2[0].length === 36)) return tail2;
   return null;
+}
+
+/* ------------------------------------------------------------ a misread put right by its check digit */
+
+/** ICAO 9303 check digit: weights 7, 3, 1; `<` is 0, A–Z are 10–35. */
+function checkDigitOf(field: string): number {
+  const w = [7, 3, 1];
+  let sum = 0;
+  for (let i = 0; i < field.length; i++) {
+    const c = field[i];
+    const v = c === "<" ? 0 : c >= "0" && c <= "9" ? c.charCodeAt(0) - 48 : c.charCodeAt(0) - 55;
+    sum += v * w[i % 3];
+  }
+  return sum % 10;
+}
+const passes = (field: string, check: string) => /^\d$/.test(check) && checkDigitOf(field) === Number(check);
+
+/** What OCR-B reads one character as, and what it may really be (2026-10-29 — the Z of "Z7286983" read as 7). */
+const LOOKALIKE: Record<string, string> = {
+  "0": "OQD", O: "0QD", Q: "O0", D: "0O",
+  "1": "ILZ7T", I: "1", L: "1I",
+  "2": "Z", Z: "27",
+  "5": "S", S: "5",
+  "6": "G", G: "6",
+  "7": "ZT1", T: "7",
+  "8": "B", B: "8",
+  "4": "A", A: "4",
+};
+const AS_DIGIT: Record<string, string> = { O: "0", Q: "0", D: "0", I: "1", L: "1", Z: "2", S: "5", G: "6", T: "7", B: "8", A: "4" };
+const AS_LETTER: Record<string, string> = { "0": "O", "1": "I", "2": "Z", "5": "S", "6": "G", "7": "T", "8": "B", "4": "A" };
+
+/** A field that must be digits (a date, a check digit) — a letter there is the digit it looks like. */
+function asDigits(v: string): string {
+  return v.replace(/[A-Z]/g, (c) => AS_DIGIT[c] ?? c);
+}
+/** A field that must be letters (a country, a name) — a digit there is the letter it looks like. */
+function asLetters(v: string): string {
+  return v.replace(/[0-9]/g, (c) => AS_LETTER[c] ?? c);
+}
+
+/**
+ * The field as read when its check digit passes; else every way of changing ONE character for its
+ * look-alike that makes it pass (often more than one — the strip's composite check then chooses).
+ */
+function fixesFor(field: string, check: string, shape: RegExp): string[] {
+  if (passes(field, check)) return [field];
+  const found = new Set<string>();
+  for (let i = 0; i < field.length; i++) {
+    for (const alt of LOOKALIKE[field[i]] ?? "") {
+      const next = field.slice(0, i) + alt + field.slice(i + 1);
+      if (passes(next, check) && shape.test(next)) found.add(next);
+    }
+  }
+  return [...found];
+}
+
+/**
+ * What each field may look like once put right. A date is six digits. A passport number is letters
+ * then digits (2026-10-29): India's is one letter and seven digits — "Z7286983" read as "77286983"
+ * has two fixes its check digit cannot tell apart, Z7286983 and 7T286983, and only the first is a
+ * passport number. The composite check adds nothing between them: it weighs those characters alike.
+ */
+const DATE_SHAPE = /^\d{6}$/;
+const NUMBER_SHAPE = /^[A-Z]{0,3}\d+<*$/;
+
+/**
+ * A two-line passport strip (TD3) with its misreads put right (2026-10-29, operator: "the passport
+ * band is clearly visible yet it only detected passport, DOB and sex"). The strip reader saw the Z
+ * of Z7286983 as a 7, the number's check digit failed, and the whole strip was set aside. Each
+ * field is read as the kind it must be — a date is digits, a country is letters — and a field
+ * still short of its check digit may have ONE character changed for its look-alike where that
+ * makes its check pass. The strip's own composite check digit chooses among those fixes: exactly
+ * one combination must pass it, or nothing is changed. Lines that are not a TD3 strip come back as given.
+ */
+export function repairTd3(lines: string[]): string[] {
+  if (lines.length !== 2 || lines[0].length !== 44 || lines[1].length !== 44) return lines;
+  const l1 = lines[0];
+  const l2 = lines[1];
+  if (!/^[PV]/.test(l1)) return lines;
+  // Line 1: the document code, the issuing country (letters), the names (letters and fillers).
+  const r1 = l1.slice(0, 2) + asLetters(l1.slice(2, 5)) + asLetters(l1.slice(5));
+  const num = l2.slice(0, 9);
+  const numCheck = asDigits(l2.slice(9, 10));
+  // The nationality is the issuing country on almost every passport: one letter off it ("INP" on an
+  // Indian strip, 2026-10-29) is that country misread. It carries no check digit — it stays READ.
+  const issuing = asLetters(l1.slice(2, 5));
+  const natRead = asLetters(l2.slice(10, 13));
+  const offByOne = [...natRead].filter((c, i) => c !== issuing[i]).length === 1;
+  const nat = offByOne && /^[A-Z]{3}$/.test(issuing) ? issuing : natRead;
+  const dob = asDigits(l2.slice(13, 19));
+  const dobCheck = asDigits(l2.slice(19, 20));
+  const sex = l2.slice(20, 21).replace("H", "M");
+  const exp = asDigits(l2.slice(21, 27));
+  const expCheck = asDigits(l2.slice(27, 28));
+  const personal = l2.slice(28, 42);
+  const personalCheck = l2.slice(42, 43).replace(/[A-Z]/g, (c) => AS_DIGIT[c] ?? c);
+  const composite = asDigits(l2.slice(43, 44));
+  // Every combination of the fields' fixes; the composite check — over the number, the birth date,
+  // the expiry and the personal number with their checks — must pass, and exactly one combination
+  // may: a guess between two is no proof.
+  // A field no single change can prove is kept as read.
+  const optionsFor = (f: string, c: string, shape: RegExp) => {
+    const x = fixesFor(f, c, shape);
+    return x.length ? x : [f];
+  };
+  const line = (n: string, d: string, e: string) => n + numCheck + nat + d + dobCheck + sex + e + expCheck + personal + personalCheck + composite;
+  const fits: string[] = [];
+  for (const n of optionsFor(num, numCheck, NUMBER_SHAPE))
+    for (const d of optionsFor(dob, dobCheck, DATE_SHAPE))
+      for (const e of optionsFor(exp, expCheck, DATE_SHAPE)) {
+        const r = line(n, d, e);
+        if (passes(r.slice(0, 10) + r.slice(13, 20) + r.slice(21, 43), composite)) fits.push(r);
+      }
+  const r2 = fits.length === 1 ? fits[0] : l2;
+  if (r2 === l2 && r1 === l1) return lines;
+  return [r1, r2];
 }
 
 function isoFromYYMMDD(v: string | null | undefined, kind: "birth" | "expiry", now = new Date()): string | undefined {
@@ -87,8 +211,10 @@ function titleCase(s: string): string {
  */
 export function parseMrzLines(lines: string[], now = new Date()): IdentityExtraction | null {
   let result: ReturnType<typeof parseMrz>;
+  // A misread character put right by its check digit first (2026-10-29) — see repairTd3.
+  const cleaned = repairTd3(lines.map(cleanMrzLine));
   try {
-    result = parseMrz(lines.map(cleanMrzLine));
+    result = parseMrz(cleaned);
   } catch {
     return null;
   }
@@ -131,5 +257,6 @@ export function parseMrzLines(lines: string[], now = new Date()): IdentityExtrac
   }
 
   const empty = Object.keys(fields).length === 0;
-  return { fields, fieldConfidence: conf, raw: { mrzLines: lines, source: `MRZ ${result.format}` }, empty };
+  const repaired = cleaned.some((l, i) => l !== cleanMrzLine(lines[i] ?? ""));
+  return { fields, fieldConfidence: conf, raw: { mrzLines: cleaned, source: `MRZ ${result.format}${repaired ? " · a misread put right by its check digit" : ""}` }, empty };
 }
