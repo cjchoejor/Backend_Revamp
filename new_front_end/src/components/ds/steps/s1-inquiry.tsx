@@ -74,7 +74,7 @@ import { enumerateNights, useRoomSelection } from "./use-room-selection";
 import { CHANNEL_OPTIONS, PartySearch, cameInAsOf, channelDef, moreRoomsNeedGuests, type ChannelKey } from "./new-inquiry-parts";
 import { TheCaller, WrapUp } from "./s1-caller";
 import { cleanPicks, usePickPricing, type BillNight } from "./s1-bill";
-import { RoomsByType, savedBookingRooms } from "./s1-by-type";
+import { RoomsByType, savedBookingRooms, type TypeDraft } from "./s1-by-type";
 import { useBookingRooms } from "@/hooks/use-booking-rooms";
 import { usePublishPriceDraft } from "@/lib/ds/stay-price";
 import { Help, HelpHere } from "@/components/ds/help";
@@ -1392,6 +1392,9 @@ function TheHouse({
   // the page there") — a room picked by hand opens its bill in the file beside it.
   const [toolOpen, setToolOpen] = useState(false);
   const openTool = () => setToolOpen(true);
+  // The by-type grid is off the page while rooms are picked by number; what it held unsaved is
+  // kept here and given back when it returns.
+  const typeDraft = useRef<TypeDraft | null>(null);
   // Closing it without a pick saved by number goes back to picking by type, where it came from.
   const closeTool = () => {
     setToolOpen(false);
@@ -1522,6 +1525,10 @@ function TheHouse({
                 onParticular={() => {
                   setMode("NUMBER");
                   openTool();
+                }}
+                draft={typeDraft.current}
+                onDraft={(d) => {
+                  typeDraft.current = d;
                 }}
               />
             ) : (

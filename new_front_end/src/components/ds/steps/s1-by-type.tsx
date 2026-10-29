@@ -33,6 +33,14 @@ const WEEKDAY = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 type Counts = Record<string, Record<string, number>>; // night -> type -> count
 
+/**
+ * What the desk has typed in the grid and not saved, kept by the step while the grid is off the
+ * page (2026-10-29, operator: "I picked some rooms night by night, clicked Pick every room by
+ * number instead and closed it without saving — it should still keep the last state of the house
+ * section"). `basis` is what was on record when it was typed; a save in between makes it stale.
+ */
+export type TypeDraft = { basis: string; counts: Counts; fixed: string[]; byNight: boolean };
+
 /** The booking rooms on the pick in force, when it was made by type. */
 export function savedBookingRooms(entry: EntryDetail): BookingRoom[] | null {
   const cfg = currentPassConfigs(entry).find((c) => c.optionSelected != null);
@@ -70,6 +78,8 @@ export function RoomsByType({
   onPicks,
   onSaved,
   onParticular,
+  draft,
+  onDraft,
 }: {
   entry: EntryDetail;
   configId: string | null;
@@ -82,6 +92,9 @@ export function RoomsByType({
   onPicks: (p: { perNight: Array<{ date: string; roomIds: string[] }>; labels: Map<string, string>; saved: boolean } | null) => void;
   onSaved: () => void;
   onParticular: () => void;
+  /** The counts typed last time the grid was on the page, unsaved — taken back when they still fit. */
+  draft?: TypeDraft | null;
+  onDraft?: (d: TypeDraft) => void;
 }) {
   const { session } = useSession();
   const house = useQuery({
@@ -113,8 +126,12 @@ export function RoomsByType({
     return { counts, fixed: [] as string[] };
   }, [entry, catalog]);
   const savedKey = saved && savedBookingRooms(entry) ? canon(saved.counts, saved.fixed, nights) : null;
-  const [counts, setCounts] = useState<Counts>(() => saved?.counts ?? {});
-  const [fixed, setFixed] = useState<string[]>(() => saved?.fixed ?? []);
+  // What was on record for these nights when the desk typed — a draft typed on another basis
+  // (saved since, or other dates) is not taken back.
+  const basis = `${nights.join(",")}|${canon(saved?.counts ?? {}, saved?.fixed ?? [], nights)}`;
+  const fromDraft = draft && draft.basis === basis ? draft : null;
+  const [counts, setCounts] = useState<Counts>(() => fromDraft?.counts ?? saved?.counts ?? {});
+  const [fixed, setFixed] = useState<string[]>(() => fromDraft?.fixed ?? saved?.fixed ?? []);
   const seededFor = useRef(savedKey);
   useEffect(() => {
     // Saved again (here or on another screen): the grid follows what is on record.
@@ -196,7 +213,11 @@ export function RoomsByType({
     onError: (e) => toast.error(e instanceof Error ? e.message : "The rooms could not be recorded"),
   });
 
-  const [byNightAsked, setByNightAsked] = useState(false);
+  const [byNightAsked, setByNightAsked] = useState(() => fromDraft?.byNight ?? false);
+  useEffect(() => {
+    onDraft?.({ basis, counts, fixed, byNight: byNightAsked });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [basis, counts, fixed, byNightAsked]);
 
   if (!configId) return null;
   if (house.isLoading) return <p className="meta">Asking the house for each type…</p>;
