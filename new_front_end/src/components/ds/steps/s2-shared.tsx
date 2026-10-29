@@ -14,7 +14,6 @@ import { useQuery } from "@tanstack/react-query";
 import { Chip } from "@/design-system";
 import { bookingHref } from "@/components/ds/ui";
 import { useSession } from "@/hooks/use-session";
-import type { RoomByType } from "@/hooks/use-booking-rooms";
 import { getCompetingClaims, type CompetingClaimItem } from "@/lib/api/entries";
 import { listRooms } from "@/lib/api/rooms";
 import { STEP_NAMES, stepNoOfStage } from "@/lib/ds/steps";
@@ -57,45 +56,25 @@ export function useRoomTypeNames(): Map<string, string> {
 }
 
 /**
- * "2 Deluxe Double, 1 Standard Double and 1 Executive" — the rooms by type and how many of each
- * (2026-10-28, operator, on the committed hold: "don't say Standard Double · room 1 — just say 2
- * Standard Double, 2 Deluxe Double are blocked"). The most of a type first; null while any room's
- * type is not known yet, so the caller can fall back to `roomsWord`.
+ * The rooms a booking holds, the way the desk says them (2026-10-29, operator: "it can show like 2
+ * Deluxe room 2 Standard room, until and unless specific rooms are chosen"): the rooms the system
+ * chose and may still move are counted by type — "2 Deluxe Double and 1 Standard Double" — and a
+ * room given by number (a guest's own room, or any room from Arrival on) is named by its number:
+ * "2 Deluxe Double and Room 206". A system room whose type is not known yet is named by number too.
  */
-export function roomsByTypeWord(ids: string[], typeOf: Map<string, string>): string | null {
-  if (!ids.length) return null;
+export function roomsHeldWord(rooms: Array<{ number: string | null; typeName: string | null; quiet: boolean }>): string {
   const counts = new Map<string, number>();
-  for (const id of ids) {
-    const t = typeOf.get(id);
-    if (!t) return null;
-    counts.set(t, (counts.get(t) ?? 0) + 1);
+  const nos: string[] = [];
+  for (const r of rooms) {
+    if (r.quiet && r.typeName) counts.set(r.typeName, (counts.get(r.typeName) ?? 0) + 1);
+    else if (r.number) nos.push(r.number);
   }
-  const parts = [...counts].sort((a, b) => b[1] - a[1]).map(([t, n]) => `${n} ${t}`);
+  // The most of a type first, then by name, so every place says the same rooms in the same order.
+  const parts = [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([t, n]) => `${n} ${t}`);
+  const sorted = [...new Set(nos)].sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
+  if (sorted.length) parts.push(`${sorted.length === 1 ? "Room" : "Rooms"} ${sorted.join(", ")}`);
+  if (!parts.length) return rooms.length === 1 ? "1 room" : `${rooms.length} rooms`;
   return parts.length > 1 ? `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}` : parts[0];
-}
-
-/**
- * "Room 201" · "Rooms 201, 202" — numbers sorted the way the house counts them. A room the system
- * chose and may still move before Arrival (`named`, from `useBookingRooms`) is named by its type
- * instead — "Deluxe Double · rooms 1, 2 · Room 206" — since its number is not a promise yet.
- */
-export function roomsWord(ids: string[], numbers: Map<string, string>, named?: Map<string, RoomByType>): string {
-  const byType = new Map<string, number[]>();
-  const plain: string[] = [];
-  for (const id of ids) {
-    const q = named?.get(id);
-    if (q && q.ordinal != null) byType.set(q.typeName, [...(byType.get(q.typeName) ?? []), q.ordinal]);
-    else plain.push(id);
-  }
-  const typed = [...byType].map(([t, ns]) =>
-    ns.length === 1 ? `${t} · room ${ns[0]}` : `${t} · rooms ${[...ns].sort((a, b) => a - b).join(", ")}`,
-  );
-  const nos = plain
-    .map((id) => numbers.get(id))
-    .filter((n): n is string => !!n)
-    .sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
-  if (nos.length === 0 && typed.length === 0) return ids.length === 1 ? "1 room" : `${ids.length} rooms`;
-  return [...typed, nos.length ? `${nos.length === 1 ? "Room" : "Rooms"} ${nos.join(", ")}` : null].filter(Boolean).join(" · ");
 }
 
 /* ------------------------------------------------------------------ passes */

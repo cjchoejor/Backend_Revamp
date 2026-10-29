@@ -58,6 +58,7 @@ import {
   type PaperRef,
 } from "./kit";
 import { BookingOtherWays } from "./s4-other-ways";
+import { roomsHeldWord } from "./s2-shared";
 import { PreArrivalTasksCard, RESERVE_PREP_TASKS } from "./s5-pre-arrival-tasks";
 import { Help } from "@/components/ds/help";
 
@@ -350,17 +351,18 @@ function BeforeYouReserve({
   /* the rooms held */
   const hold = entry.committedHold ?? null;
   const holdJ = journey?.s3Setup.committedHold ?? null;
-  const holdRooms = (holdJ?.rooms ?? [])
-    .map((r) => r.roomNumber)
-    .filter((n): n is string => !!n)
-    .map((n) => roomByNo.get(n) ?? n);
+  // Counted by type while the system may still move them; a room given by number by its number (2026-10-29).
+  const holdRooms = holdJ?.rooms ?? [];
+  const holdWord = holdRooms.length
+    ? roomsHeldWord(holdRooms.map((r) => ({ number: r.roomNumber, typeName: r.roomTypeName, quiet: !!r.roomNumber && roomByNo.has(r.roomNumber) })))
+    : null;
   const holdOk = metOr("Rooms blocked");
   lines.push({
     key: "hold",
     label: "Rooms held",
     value: hold ? (
       <>
-        {holdRooms.length ? `${plural(holdRooms.length, "room")} (${holdRooms.join(", ")})` : "the rooms"} · {HOLD_WORD[hold.state] ?? words(hold.state)}
+        {holdWord ?? "the rooms"} · {HOLD_WORD[hold.state] ?? words(hold.state)}
         {holdOk ? ` until ${fmtDateTime(hold.expiresAt, tz)}` : hold.state === "EXPIRED" ? ` at ${fmtDateTime(hold.expiresAt, tz)} — hold them again at Set up` : " — hold them again at Set up"}
         {hold.commercialJustification ? ` · ${hold.commercialJustification.slice(0, 60)}` : ""}
       </>
@@ -862,7 +864,8 @@ function SoFar({ entry }: { entry: EntryDetail }) {
 
 function WhatReserveDecided({ entry }: { entry: EntryDetail }) {
   // A room the system chose and may still move reads "Deluxe Double · room 1" until Arrival.
-  const roomByNo = useBookingRooms(entry).byNumber;
+  const bookingRooms = useBookingRooms(entry);
+  const roomByNo = bookingRooms.byNumber;
   const clock = useHotelClock(60_000);
   const tz = clock.tz;
   const staff = useStaffNames();
@@ -891,6 +894,11 @@ function WhatReserveDecided({ entry }: { entry: EntryDetail }) {
   )
     .filter((x): x is string => !!x)
     .sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
+  // Each room's type, by number — the booking's rooms, the priced rooms, the hold's rooms.
+  const typeOfNo = new Map<string, string>();
+  for (const r of bookingRooms.data?.rooms ?? []) if (r.roomNumber) typeOfNo.set(r.roomNumber, r.typeName);
+  for (const r of billing?.rooms ?? []) if (r.roomNumber && r.roomTypeName && !typeOfNo.has(r.roomNumber)) typeOfNo.set(r.roomNumber, r.roomTypeName);
+  for (const r of journey?.s3Setup.committedHold?.rooms ?? []) if (r.roomNumber && r.roomTypeName && !typeOfNo.has(r.roomNumber)) typeOfNo.set(r.roomNumber, r.roomTypeName);
   const tasks = entry.preArrivalTasks ?? [];
   const emailEvents = trace.filter((t) => t.eventType.startsWith("RESERVATION_CONFIRMATION_EMAIL"));
   const sent = emailEvents.some((t) => t.eventType.endsWith(".SENT"));
@@ -929,9 +937,12 @@ function WhatReserveDecided({ entry }: { entry: EntryDetail }) {
         <Fact k="Who pays">{billingWord(res.frozenBillingModel) || null}</Fact>
         <Fact k="Rooms" meta={held ? "the advance is not fully paid — the rooms read Reserved once it is" : undefined}>
           {held ? <Chip tone="warning">Held · not yet Reserved</Chip> : <Chip tone="success">Reserved</Chip>}{" "}
-          {rooms.length
-            ? `${rooms.map((n) => roomByNo.get(n) ?? n).join(", ")}`
-            : `${plural(entry.numberOfRooms ?? 1, "room")} · numbers assigned at Arrival`}
+          {/* The booking's own rooms first — each with its type, and whether the system may still move it. */}
+          {bookingRooms.data?.rooms.length
+            ? roomsHeldWord(bookingRooms.data.rooms.map((r) => ({ number: r.roomNumber, typeName: r.typeName, quiet: r.quiet && !bookingRooms.atArrival })))
+            : rooms.length
+              ? roomsHeldWord(rooms.map((n) => ({ number: n, typeName: typeOfNo.get(n) ?? null, quiet: roomByNo.has(n) })))
+              : `${plural(entry.numberOfRooms ?? 1, "room")} · numbers assigned at Arrival`}
         </Fact>
         <Fact k="Terms disclosed" meta={disc ? fmtStamp(disc.disclosedAt, tz) : undefined}>
           {disc ? "cancellation and no-show, as told to the guest" : null}

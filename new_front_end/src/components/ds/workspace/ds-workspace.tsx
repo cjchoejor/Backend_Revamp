@@ -29,7 +29,7 @@ import { useHotelDay } from "@/hooks/use-hotel-day";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
 import { usePaymentStatus } from "@/hooks/use-payment-status";
 import { useBookingRooms } from "@/hooks/use-booking-rooms";
-import { roomsWord } from "@/components/ds/steps/s2-shared";
+import { roomsHeldWord } from "@/components/ds/steps/s2-shared";
 import { usePageTitle } from "@/hooks/use-page-title";
 import { useDeskBookings, useRoomsList } from "@/hooks/use-desk-data";
 import {
@@ -1367,7 +1367,12 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   // A room the system chose and may still move is named by its type, not its number.
   const heldIds = roomNumbers.length ? [] : heldRoomIds(entry).filter((id) => roomList?.some((r) => r.id === id));
   const heldRoomsWord = heldIds.length
-    ? roomsWord(heldIds, new Map((roomList ?? []).map((r) => [r.id, r.roomNumber])), bookingRoomNames.named).replace(/^Rooms? /, "")
+    ? roomsHeldWord(
+        heldIds.map((id) => {
+          const r = roomList?.find((x) => x.id === id);
+          return { number: r?.roomNumber ?? null, typeName: r?.roomType?.name ?? null, quiet: bookingRoomNames.named.has(id) };
+        }),
+      ).replace(/^Rooms? /, "")
     : "";
   const cur = billing?.currency ?? fin.currency;
   const totalKind =

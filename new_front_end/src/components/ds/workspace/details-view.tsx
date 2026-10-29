@@ -21,7 +21,7 @@ import { reservedThisPass } from "@/lib/desk/workspace";
 import { heldRoomIds } from "@/lib/desk/party-rooms";
 import { useRoomsList } from "@/hooks/use-desk-data";
 import { useBookingRooms } from "@/hooks/use-booking-rooms";
-import { roomsWord } from "@/components/ds/steps/s2-shared";
+import { roomsHeldWord } from "@/components/ds/steps/s2-shared";
 import { Fact, FactBox, Facts, StepCard } from "@/components/ds/steps/kit";
 import { TripCard } from "@/components/ds/workspace/return-stay";
 import { GuestBookingsCard } from "@/components/ds/workspace/guest-bookings";
@@ -146,7 +146,7 @@ export function DetailsView({
               {rooms.length
                 ? `${rooms.length} · ${rooms.join(", ")}${types.length ? ` · ${types.join(", ")}` : ""}`
                 : held.length
-                  ? `${held.length} · ${roomsWord(held.map((r) => r.id), new Map(held.map((r) => [r.id, r.roomNumber])), bookingRoomNames.named).replace(/^Rooms? /, "")} · held for the guest, assigned at Arrival`
+                  ? `${roomsHeldWord(held.map((r) => ({ number: r.roomNumber, typeName: r.roomType?.name ?? null, quiet: bookingRoomNames.named.has(r.id) })))} · held for the guest, assigned at Arrival`
                   : `${entry.numberOfRooms ?? "—"} · not yet assigned`}
             </Fact>
             <Fact k="Guests">{party}</Fact>

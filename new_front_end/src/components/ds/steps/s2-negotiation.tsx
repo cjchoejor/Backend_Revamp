@@ -43,7 +43,7 @@ import { Choice, DsDialog, Live, Notice, OtherWaysTabs, ChangeBookingMenu, Stage
 import { usePublishPriceDraft } from "@/lib/ds/stay-price";
 import { Help } from "@/components/ds/help";
 import type { ChangeBookingItem } from "./kit";
-import { CompetingClaimsCard, LEVEL_WORD, passesOf, roomsWord, useCompetingClaims, useRoomNumbers } from "./s2-shared";
+import { CompetingClaimsCard, LEVEL_WORD, passesOf, roomsHeldWord, useCompetingClaims, useRoomNumbers, useRoomTypeNames } from "./s2-shared";
 import { useInvoiceRecipient } from "@/hooks/use-invoice-recipient";
 
 /* ------------------------------------------------------------------ vocabulary */
@@ -181,6 +181,10 @@ export function S2Negotiation({
   const roomNos = useRoomNumbers();
   // A room the system chose and may still move reads "Deluxe Double · room 1" (2026-10-28).
   const bookingRooms = useBookingRooms(entry);
+  // The rooms the system chose, counted by type; a room given by number, by its number (2026-10-29).
+  const typeNames = useRoomTypeNames();
+  const heldWord = (ids: string[]) =>
+    roomsHeldWord(ids.map((id) => ({ number: roomNos.get(id) ?? null, typeName: typeNames.get(id) ?? null, quiet: bookingRooms.named.has(id) })));
   const passes = useMemo(() => passesOf(entry), [entry.segments]); // eslint-disable-line react-hooks/exhaustive-deps
   const passId = passes.current?.id ?? null;
   const editable = !past && entry.currentStage === "S2" && entry.status === "ACTIVE";
@@ -551,7 +555,7 @@ export function S2Negotiation({
     .join(" · ");
   const tableSummary = pricedQuote
     ? [
-        sealedRoomIds.length ? roomsWord(sealedRoomIds, roomNos, bookingRooms.named) : null,
+        sealedRoomIds.length ? heldWord(sealedRoomIds) : null,
         partyWords || null,
         `priced as ${pricedQuote.referenceNumber} · v${pricedQuote.versionNumber}`,
         pricedStay && pricedStay.quotationId === pricedQuote.id ? money(pricedStay.amount, pricedQuote.currency) : null,
@@ -605,7 +609,7 @@ export function S2Negotiation({
       {activeHold ? (
         <BindingBox family="provisional" stateWord={new Date(activeHold.expiresAt).getTime() < clock.now ? "expired" : "marked"} style={{ marginTop: 4 }}>
           <div className="sm" style={{ paddingRight: 80 }}>
-            {roomsWord(holdRoomIds(activeHold), roomNos, bookingRooms.named)} marked until <b>{fmtDateTime(activeHold.expiresAt, tz)}</b> · others can still be sold
+            {heldWord(holdRoomIds(activeHold))} marked until <b>{fmtDateTime(activeHold.expiresAt, tz)}</b> · others can still be sold
             if someone commits first
           </div>
         </BindingBox>
@@ -826,7 +830,7 @@ export function S2Negotiation({
         {!changing && !past && activeHold ? (
           <div className="row-acts" style={{ marginTop: 12, alignItems: "center", gap: 10 }}>
             <span className="sm">
-              <Icon name="clock" /> {roomsWord(holdRoomIds(activeHold), roomNos, bookingRooms.named)} marked until <b>{fmtDateTime(activeHold.expiresAt, tz)}</b>
+              <Icon name="clock" /> {heldWord(holdRoomIds(activeHold))} marked until <b>{fmtDateTime(activeHold.expiresAt, tz)}</b>
             </span>
           </div>
         ) : null}
@@ -891,7 +895,7 @@ export function S2Negotiation({
         onClose={() => setReleaseOpen(false)}
         busy={releaseM.isPending}
         title="Release the rooms"
-        caseLines={activeHold ? [`${roomsWord(holdRoomIds(activeHold), roomNos, bookingRooms.named)} marked until ${fmtDateTime(activeHold.expiresAt, tz)}`] : undefined}
+        caseLines={activeHold ? [`${heldWord(holdRoomIds(activeHold))} marked until ${fmtDateTime(activeHold.expiresAt, tz)}`] : undefined}
         lead="The marker is removed. The quotation stands and can still be accepted if the rooms are free then."
         confirmLabel="Release"
         placeholder="agent went elsewhere"

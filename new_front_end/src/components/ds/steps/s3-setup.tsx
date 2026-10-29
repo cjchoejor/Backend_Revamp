@@ -81,7 +81,7 @@ import {
 } from "./kit";
 import { SendToField, useSendTo } from "./s8-parts";
 import { CancellationFiguresLine, WaiverTick, useRefundHow } from "./cancel-figures";
-import { CompetingClaimsCard, passesOf, roomsByTypeWord, roomsWord, useRoomNumbers, useRoomTypeNames } from "./s2-shared";
+import { CompetingClaimsCard, passesOf, roomsHeldWord, useRoomNumbers, useRoomTypeNames } from "./s2-shared";
 import { PaymentPlanCard } from "./s3-money";
 import { Help, HelpHere } from "@/components/ds/help";
 import { DateInput } from "@/components/ds/date-input";
@@ -775,11 +775,11 @@ function HoldCard({
         : moneyLock
           ? "the advance, or part of it, has to come in first — or the FOM extends credit"
           : null;
-  // The rooms by type and count — "2 Deluxe Double and 1 Executive" (2026-10-28, operator); by
-  // number or label only while the rooms' types are not known yet.
+  // The rooms by type and count — "2 Deluxe Double and 1 Executive" (2026-10-28, operator) — and a
+  // room given by number by its number (2026-10-29).
   const typeNames = useRoomTypeNames();
   const heldIds = roomIds.length ? roomIds : hold?.roomId ? [hold.roomId] : [];
-  const rooms = roomsByTypeWord(heldIds, typeNames) ?? roomsWord(heldIds, roomNos, roomNames);
+  const rooms = roomsHeldWord(heldIds.map((id) => ({ number: roomNos.get(id) ?? null, typeName: typeNames.get(id) ?? null, quiet: roomNames.has(id) })));
   const houseWords = house ? (house.minutes % 60 === 0 && house.minutes >= 60 ? plural(house.minutes / 60, "hour") : plural(house.minutes, "minute")) : null;
   const count = roomIds.length || 1;
   const lapsing = hold ? new Date(hold.expiresAt).getTime() < nowMs : false;
