@@ -85,7 +85,7 @@ export function noShowCutoffFor(expectedAt: Date, graceMinutes: number, from: Da
  * and job) and one fresh clock is set — exactly one live cut-off per booking. The job carries
  * its TimerRecord id so the worker marks the right record when it fires.
  */
-export async function armNoShowCutoff(prisma: PrismaClient, entryId: string, cutoffAt: Date, actorId: string) {
+export async function armNoShowCutoff(prisma: PrismaClient, entryId: string, cutoffAt: Date, actorId: string, expectedAt: Date | null = null) {
   const engine = await getTimerEngine();
   const running = await prisma.timerRecord.findMany({
     where: { entryId, timerCode: "NO_SHOW_CUTOFF_W5", status: "SCHEDULED" },
@@ -112,7 +112,9 @@ export async function armNoShowCutoff(prisma: PrismaClient, entryId: string, cut
       firesAt: cutoffAt,
       dueAt: cutoffAt,
       status: "SCHEDULED",
-      payload: { entryId, timerRecordId, cutoffAt: cutoffAt.toISOString() },
+      // The expected arrival the clock was set for (2026-10-29) — a change made at Arrival re-arms
+      // the same cut-off for the same arrival instead of a fresh grace from that moment.
+      payload: { entryId, timerRecordId, cutoffAt: cutoffAt.toISOString(), ...(expectedAt ? { expectedAt: expectedAt.toISOString() } : {}) },
       pgBossJobId: jobId,
       createdBy: actorId,
     },

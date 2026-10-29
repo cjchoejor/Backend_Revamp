@@ -18,7 +18,8 @@
  */
 import { Prisma, type PrismaClient, type Stage } from "@prisma/client";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
-import { listNightYmdsUtc, utcDateOnly } from "../../lib/stay-dates.js";
+import { hotelCalendarYmd, listNightYmdsUtc, utcDateOnly } from "../../lib/stay-dates.js";
+import { sealAsPerNight } from "../../lib/option-selected-reader.js";
 import {
   bookingRoomRuns,
   bookingRoomsFromCounts,
@@ -580,11 +581,18 @@ function planChosenRooms(e: Loaded, world: World, picks: Array<{ fromRoomId: str
         throw new ValidationError(
           clash.outOfOrder
             ? `Room ${num(p.toRoomId)} is out of order on one of these nights`
-            : `Room ${num(p.toRoomId)} is held for ${other ? world.bookingName.get(other.entryId) : "another booking"} on these nights`,
+            : `Room ${num(p.toRoomId)} is held for ${other ? world.bookingName.get(other.entryId) : "another booking"} — chosen by number or already handed out`,
         );
       }
     }
-    if (!res.ok) throw new ValidationError(`${[...tos].map((t) => `Room ${num(t)}`).join(" and ")} cannot be given to this booking — the other ${type.name} rooms cannot make way`);
+    if (!res.ok) {
+      const sat = [...new Set(worldItems.filter((w) => w.currentRoomId && tos.has(w.currentRoomId)).map((w) => world.bookingName.get(w.entryId) ?? "another booking"))];
+      throw new ValidationError(
+        sat.length
+          ? `${[...tos].map((t) => `Room ${num(t)}`).join(" and ")} ${tos.size === 1 ? "is" : "are"} held for ${sat.join(" and ")} — no other ${type.name} is free for them to move to`
+          : `${[...tos].map((t) => `Room ${num(t)}`).join(" and ")} cannot be given to this booking — the other ${type.name} rooms cannot make way`,
+      );
+    }
     for (const it of mine) if (it.currentRoomId) ownMap.set(it.currentRoomId, res.roomOf.get(it.id)!);
     for (const id of res.moved) {
       const w = worldItems.find((x) => x.id === id);
@@ -740,3 +748,187 @@ function dayWords(ymd: string): string {
 // Re-exported so callers need only this module.
 export type { World };
 export { bookingRoomRuns };
+
+/* ------------------------------------------------------------------ Arrival gives a room */
+
+type ArrivalChoice = {
+  roomId: string;
+  roomNumber: string;
+  available: boolean;
+  fault: boolean;
+  moves: Array<{ booking: string; fromRoomNumber: string; toRoomNumber: string }>;
+  words: string;
+};
+
+/**
+ * Taking `toRoomId` over `nights` for this booking, with every other booking's system-chosen room of
+ * the type re-placed around it — the one reading the choices list and the act share. Throws in words
+ * when the room is held for a booking that cannot be moved (a room chosen by number, a room handed
+ * out at Arrival, a guest in it) or is out of order.
+ */
+function planMakeWay(
+  world: World,
+  toRoomId: string,
+  nights: string[],
+  /** This booking's own rooms — still its own until the room change runs, so nobody is moved into them. */
+  ownRoomIds: Iterable<string>,
+): Array<{ entryId: string; fromRoomId: string; toRoomId: string }> {
+  const typeId = world.roomTypeOf.get(toRoomId);
+  const type = typeId ? world.chart.roomTypes.find((t) => t.id === typeId) : null;
+  const num = (id: string) => world.roomNumberOf.get(id) ?? "?";
+  if (!type) throw new ValidationError("That room is not on the house chart");
+  const idx = nights.map((d) => world.index.get(d)).filter((i): i is number => i !== undefined);
+  if (idx.length === 0) return [];
+  const worldItems = world.items.filter((it) => it.roomTypeId === typeId);
+  const mine: PlacementItem = { id: "__mine", nights: idx, fixedRoomId: toRoomId, currentRoomId: null };
+  // The world leaves this booking out, so its own rooms read as free — but it still holds them until
+  // the room change runs, and moving another booking into one would claim it twice.
+  const unusable = new Map(world.unusable);
+  const every = new Set(world.chart.nights.map((_, i) => i));
+  for (const id of ownRoomIds) if (id !== toRoomId) unusable.set(id, every);
+  const res = placeStays({ roomIds: type.roomIds, unusable, items: [...worldItems, mine] });
+  const clash = res.fixedClashes.find((c) => c.itemIds.includes("__mine"));
+  if (clash) {
+    const other = clash.itemIds.map((id) => world.items.find((w) => w.id === id)).find(Boolean);
+    throw new ValidationError(
+      clash.outOfOrder
+        ? `Room ${num(toRoomId)} is out of order on one of these nights`
+        : `Room ${num(toRoomId)} is held for ${other ? world.bookingName.get(other.entryId) : "another booking"} — chosen by number or already handed out`,
+    );
+  }
+  if (!res.ok) {
+    const sat = [...new Set(worldItems.filter((w) => w.currentRoomId === toRoomId && w.nights.some((n) => idx.includes(n))).map((w) => world.bookingName.get(w.entryId) ?? "another booking"))];
+    throw new ValidationError(
+      sat.length
+        ? `Room ${num(toRoomId)} is held for ${sat.join(" and ")} — no other ${type.name} is free for them to move to`
+        : `Room ${num(toRoomId)} cannot be given — the other ${type.name} rooms cannot make way`,
+    );
+  }
+  const moves: Array<{ entryId: string; fromRoomId: string; toRoomId: string }> = [];
+  for (const id of res.moved) {
+    const w = worldItems.find((x) => x.id === id);
+    const to = res.roomOf.get(id);
+    if (w?.currentRoomId && to && to !== w.currentRoomId) moves.push({ entryId: w.entryId, fromRoomId: w.currentRoomId, toRoomId: to });
+  }
+  return moves;
+}
+
+/** The nights this booking sleeps in `roomId` from the hotel's today on — its assignment rows, else its pick. */
+async function nightsInRoom(prisma: PrismaClient, e: Loaded, roomId: string): Promise<string[]> {
+  const { checkIn, checkOut } = stayOf(e);
+  const today = hotelCalendarYmd(new Date());
+  const rows = await prisma.roomAssignment.findMany({ where: { entryId: e.id, roomId }, select: { startDate: true, endDate: true } });
+  let nights: string[] = [];
+  if (rows.length) {
+    for (const r of rows) nights.push(...listNightYmdsUtc(utcDateOnly(r.startDate ?? checkIn), utcDateOnly(r.endDate ?? checkOut)));
+  } else {
+    const seal = currentPassSeal(e);
+    nights = (sealAsPerNight(seal, { checkIn, checkOut }) ?? []).filter((n) => n.roomIds.some((x) => x.roomId === roomId)).map((n) => n.date.slice(0, 10));
+  }
+  return [...new Set(nights)].filter((d) => d >= today).sort();
+}
+
+/** The window a list of nights spans, for the house chart. */
+function windowOf(nights: string[]): { from: Date; to: Date } {
+  return {
+    from: new Date(`${nights[0]}T00:00:00.000Z`),
+    to: new Date(Date.parse(`${nights[nights.length - 1]}T00:00:00.000Z`) + 86_400_000),
+  };
+}
+
+/**
+ * Arrival gives one of the booking's rooms a particular room of its type (2026-10-29, operator: "this
+ * is the part where the user sees the other bookings and assigns the room … say another booking
+ * reserved the room type Standard Double and the system picked 303 … due to the guest's request the
+ * user picked room 303 — the system should prioritize this since it is Arrival, where rooms are
+ * assigned, and smart switch the rooms").
+ *
+ * Every other room of the type over the room's nights, with what taking it would do: free; held as
+ * another booking's system choice — that booking moves to another room of the type (the smart
+ * switch); held for a booking that cannot be moved. Before the rooms are handed out (`CHOOSE`) the
+ * act is the quiet choice (`chooseQuietRooms`); once they are, or when the rooms were picked by
+ * number (`ROOM_CHANGE`), it is the room change, other bookings' system rooms moved out of the way
+ * first (`makeWayForRoom`). Nothing written.
+ */
+export async function listArrivalRoomChoices(prisma: PrismaClient, entryId: string, fromRoomId: string) {
+  const e = await loadEntry(prisma, entryId);
+  if (!e) throw new NotFoundError("Entry");
+  if (e.currentStage !== "S5") throw new ValidationError("Rooms are given this way at Arrival");
+  if (e.status !== "ACTIVE") throw new ValidationError("This booking is not active — resume it first");
+  const seal = currentPassSeal(e);
+  if (sealHasBookingRooms(seal) && e.roomAssignments.length === 0) {
+    const out = await listQuietRoomChoices(prisma, entryId, fromRoomId);
+    return { mode: "CHOOSE" as const, ...out };
+  }
+  const nights = await nightsInRoom(prisma, e, fromRoomId);
+  if (nights.length === 0) throw new ValidationError("That room is not one of this booking's rooms from today on");
+  const world = await buildWorld(prisma, { ...windowOf(nights), excludeEntryId: entryId });
+  const typeId = world.roomTypeOf.get(fromRoomId);
+  const type = typeId ? world.chart.roomTypes.find((t) => t.id === typeId) : null;
+  if (!type) return { mode: "ROOM_CHANGE" as const, typeName: null, choices: [] as ArrivalChoice[] };
+  const own = new Set([
+    ...(await prisma.roomAssignment.findMany({ where: { entryId }, select: { roomId: true } })).map((r) => r.roomId),
+    ...(sealAsPerNight(seal, stayOf(e)) ?? []).flatMap((n) => n.roomIds.map((x) => x.roomId)),
+  ]);
+  const faulty = new Set(world.chart.rooms.filter((r) => r.faultOpen).map((r) => r.id));
+  const choices: ArrivalChoice[] = type.roomIds
+    .filter((id) => !own.has(id))
+    .map((roomId) => {
+      const roomNumber = world.roomNumberOf.get(roomId) ?? "?";
+      try {
+        const moves = planMakeWay(world, roomId, nights, own).map((o) => ({
+          booking: world.bookingName.get(o.entryId) ?? o.entryId,
+          fromRoomNumber: world.roomNumberOf.get(o.fromRoomId) ?? "?",
+          toRoomNumber: world.roomNumberOf.get(o.toRoomId) ?? "?",
+        }));
+        return {
+          roomId,
+          roomNumber,
+          available: true,
+          fault: faulty.has(roomId),
+          moves,
+          words: moves.length
+            ? `held as the system's choice — ${moves.map((m) => `${m.booking.replace(/ \(ENT-[^)]+\)$/, "")} moves to ${m.toRoomNumber}`).join(", ")}`
+            : "free",
+        };
+      } catch (err) {
+        return { roomId, roomNumber, available: false, fault: faulty.has(roomId), moves: [], words: err instanceof Error ? err.message.replace(/^Room \S+ (is )?/, "") : "cannot be given" };
+      }
+    })
+    .sort((a, b) => Number(b.available) - Number(a.available) || a.moves.length - b.moves.length || a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true }));
+  return { mode: "ROOM_CHANGE" as const, typeName: type.name, choices };
+}
+
+/**
+ * Before a room change at Arrival takes `toRoomId` (2026-10-29): every other booking holding it only
+ * as the system's choice over these nights is moved to another room of the type, as a quiet move
+ * (its records rewritten, the same type and rate, no new pass). Refused in words when the room is
+ * held for a booking that cannot be moved. Returns how many bookings moved.
+ */
+export async function makeWayForRoom(
+  prisma: PrismaClient,
+  actor: Actor,
+  input: { entryId: string; fromRoomId: string; toRoomId: string },
+): Promise<{ othersMoved: number; moves: Array<{ entryId: string; fromRoomNumber: string; toRoomNumber: string }> }> {
+  const e = await loadEntry(prisma, input.entryId);
+  if (!e) throw new NotFoundError("Entry");
+  if (e.currentStage !== "S5") throw new ValidationError("A room is taken this way at Arrival");
+  const nights = await nightsInRoom(prisma, e, input.fromRoomId);
+  if (nights.length === 0) return { othersMoved: 0, moves: [] };
+  const world = await buildWorld(prisma, { ...windowOf(nights), excludeEntryId: input.entryId });
+  const own = new Set(
+    [
+      ...(await prisma.roomAssignment.findMany({ where: { entryId: input.entryId }, select: { roomId: true } })).map((r) => r.roomId),
+      ...(sealAsPerNight(currentPassSeal(e), stayOf(e)) ?? []).flatMap((n) => n.roomIds.map((x) => x.roomId)),
+    ],
+  );
+  const plan = planMakeWay(world, input.toRoomId, nights, own);
+  if (plan.length === 0) return { othersMoved: 0, moves: [] };
+  const maps = new Map<string, Map<string, string>>();
+  for (const m of plan) addMove(maps, m.entryId, m.fromRoomId, m.toRoomId);
+  await applyQuietMoves(prisma, maps, { ...actor, reason: "Arrival took the room for another booking", forEntryId: input.entryId, roomNumbers: world.roomNumberOf });
+  return {
+    othersMoved: new Set(plan.map((m) => m.entryId)).size,
+    moves: plan.map((m) => ({ entryId: m.entryId, fromRoomNumber: world.roomNumberOf.get(m.fromRoomId) ?? "?", toRoomNumber: world.roomNumberOf.get(m.toRoomId) ?? "?" })),
+  };
+}

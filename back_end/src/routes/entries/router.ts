@@ -55,6 +55,7 @@ import { previewEarlyDeparture, recordEarlyDeparture } from "../../services/doma
 import { buildQuotationPreview } from "../../services/domain/quotation-preview-service.js";
 import { buildCompetingClaims } from "../../services/domain/competing-claims-service.js";
 import { changeRoomToNewSegment, listRoomChangeCandidates, buildRoomPlanHistory } from "../../services/domain/room-change-service.js";
+import { makeWayForRoom } from "../../services/domain/quiet-rooms-service.js";
 import { issueRoomKey, issueRoomKeysBulk, returnRoomKey } from "../../services/domain/room-key-service.js";
 import {
   partySeatingRepairRequestSchema,
@@ -222,6 +223,13 @@ entriesRouter.get("/:id/room-type-options", requireActorLevel("L1"), async (req,
 entriesRouter.post("/:id/room-change", requireActorLevel("L1"), validateBody(roomChangeRequestSchema), async (req, res, next) => {
   try {
     const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
+    // Arrival takes the room (2026-10-29): another booking holding it only as the system's choice is
+    // moved to another room of its type first — a quiet move, the same type and rate — so the room
+    // change finds it free. Refused in words when that booking chose it by number.
+    const madeWay =
+      req.body.makeWay === true && req.body.toRoomId
+        ? await makeWayForRoom(prisma, actor, { entryId: req.params.id, fromRoomId: req.body.fromRoomId, toRoomId: req.body.toRoomId })
+        : null;
     const outcome = await changeRoomToNewSegment(prisma, actor, {
       entryId: req.params.id,
       fromRoomId: req.body.fromRoomId,
@@ -234,7 +242,7 @@ entriesRouter.post("/:id/room-change", requireActorLevel("L1"), validateBody(roo
       roomCompositions: req.body.roomCompositions,
       ...("requestedDiscount" in (req.body ?? {}) ? { requestedDiscount: req.body.requestedDiscount } : {}),
     });
-    res.json(outcome);
+    res.json(madeWay ? { ...outcome, madeWay } : outcome);
   } catch (e) {
     next(e);
   }

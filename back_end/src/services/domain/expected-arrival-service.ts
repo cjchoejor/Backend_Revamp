@@ -42,6 +42,11 @@ export async function getExpectedArrival(prisma: PrismaClient, entryId: string) 
     orderBy: { createdAt: "desc" },
     select: { dueAt: true },
   });
+  // When the cut-off counts from (2026-10-29, operator, on a cut-off of 6:56 PM beside a 2:00 PM
+  // arrival): the expected arrival — or, when the booking reached Arrival after it, that moment.
+  const fromAt = clock && graceMinutes != null ? new Date(clock.dueAt.getTime() - graceMinutes * 60_000) : null;
+  const cutoffFrom: "EXPECTED" | "REACHED_ARRIVAL" | null =
+    !fromAt || !expected.at ? null : fromAt.getTime() - expected.at.getTime() > 60_000 ? "REACHED_ARRIVAL" : "EXPECTED";
   return {
     entryId,
     /** "HH:MM" hotel-local; the guest's own when set, else the hotel's standard check-in time. */
@@ -56,6 +61,10 @@ export async function getExpectedArrival(prisma: PrismaClient, entryId: string) 
     cutoffAt: expected.at && graceMinutes != null ? noShowCutoffFor(expected.at, graceMinutes).toISOString() : null,
     /** The cut-off clock (Arrival onward): the running one, or the one that fired once reached. */
     cutoffClockAt: clock?.dueAt.toISOString() ?? null,
+    /** What the running cut-off counts from: the expected arrival, or the moment the booking reached Arrival after it. */
+    cutoffFrom,
+    /** That moment, when the cut-off counts from it. */
+    cutoffFromAt: cutoffFrom === "REACHED_ARRIVAL" ? fromAt!.toISOString() : null,
     cutoffReachedAt: entry.noShowCutoffReachedAt?.toISOString() ?? null,
     editable: EDITABLE.includes(entry.currentStage) && (entry.status === "ACTIVE" || entry.status === "PARKED"),
   };
@@ -102,7 +111,7 @@ export async function setExpectedArrival(
     const grace = await resolveNoShowGraceMinutes(prisma);
     if (expected.at) {
       const cutoffAt = noShowCutoffFor(expected.at, grace);
-      await armNoShowCutoff(prisma, entryId, cutoffAt, actorId);
+      await armNoShowCutoff(prisma, entryId, cutoffAt, actorId, expected.at);
       rearmedAt = cutoffAt.toISOString();
     }
   }

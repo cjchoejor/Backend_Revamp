@@ -150,6 +150,27 @@ export function placeStays(input: PlacementInput): PlacementResult {
     const row = busy.get(roomId)!;
     for (const n of it.nights) row[n] = value;
   };
+  // Where each movable stay sits now, room -> night -> stay (2026-10-29). A stay tries the rooms nobody
+  // else sits in before one another stay sits in, so placing a new stay never moves another booking's
+  // quiet room while a free room of the type will do (booking A at Arrival was given B's room, and B
+  // moved, with two rooms of the type free).
+  const sitting = new Map<string, Map<number, string>>();
+  for (const it of movable) {
+    if (!it.currentRoomId || !known.has(it.currentRoomId)) continue;
+    const row = sitting.get(it.currentRoomId) ?? new Map<number, string>();
+    for (const n of it.nights) row.set(n, it.id);
+    sitting.set(it.currentRoomId, row);
+  }
+  const othersSitIn = (r: string, it: PlacementItem) => {
+    const row = sitting.get(r);
+    return (
+      !!row &&
+      it.nights.some((n) => {
+        const who = row.get(n);
+        return who !== undefined && who !== it.id;
+      })
+    );
+  };
   let steps = 0;
   let gaveUp = false;
   const search = (k: number): boolean => {
@@ -164,11 +185,15 @@ export function placeStays(input: PlacementInput): PlacementResult {
       ...(it.currentRoomId && known.has(it.currentRoomId) ? [it.currentRoomId] : []),
       ...roomIds,
     ];
-    if (it.avoidPicked && input.soft && input.soft.size > 0) {
-      // Rooms nobody else has picked first; the current room stays first among equals.
-      const weight = (r: string) => it.nights.reduce((sum, n) => sum + (input.soft!.get(r)?.get(n) ?? 0), 0);
-      candidates = candidates.map((r, i) => ({ r, i, w: weight(r) })).sort((a, b) => a.w - b.w || a.i - b.i).map((x) => x.r);
-    }
+    const avoid = !!it.avoidPicked && !!input.soft && input.soft.size > 0;
+    const weight = (r: string) => (avoid ? it.nights.reduce((sum, n) => sum + (input.soft!.get(r)?.get(n) ?? 0), 0) : 0);
+    // A stay that avoids picks tries the rooms nobody else has picked first (the current room first
+    // among equals); every stay then keeps its current room, then tries rooms no other stay sits in
+    // before one another stay sits in; the room order breaks ties.
+    candidates = candidates
+      .map((r, i) => ({ r, i, cur: r === it.currentRoomId ? 0 : 1, sat: othersSitIn(r, it) ? 1 : 0, w: weight(r) }))
+      .sort((a, b) => a.w - b.w || a.cur - b.cur || a.sat - b.sat || a.i - b.i)
+      .map((x) => x.r);
     for (const r of candidates) {
       if (tried.has(r)) continue;
       tried.add(r);

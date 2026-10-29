@@ -17,7 +17,7 @@ import { priceRoomPick } from "../../services/domain/pick-pricing-service.js";
 import { releaseRoomBlock } from "../../services/domain/room-block-release-service.js";
 import { buildRoomChart } from "../../services/domain/room-chart-service.js";
 import { answerHouseByType } from "../../services/domain/room-placement-service.js";
-import { chooseQuietRooms, describeBookingRooms, listQuietRoomChoices, planRoomsByTypeForStay, sealBookingRoomsByType } from "../../services/domain/quiet-rooms-service.js";
+import { chooseQuietRooms, describeBookingRooms, listArrivalRoomChoices, listQuietRoomChoices, planRoomsByTypeForStay, sealBookingRoomsByType } from "../../services/domain/quiet-rooms-service.js";
 import { ROOM_BED_TYPES, allowedBedTypesSource, effectiveAllowedBedTypes, setRoomBedType, usualBedTypeFor } from "../../services/domain/room-bed-type-service.js";
 
 export const availabilityRouter = Router();
@@ -292,6 +292,25 @@ availabilityRouter.get("/entries/:id/booking-rooms/choices", requireActorLevel("
       return;
     }
     res.json(await listQuietRoomChoices(prisma, req.params.id, fromRoomId));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
+ * Arrival: the other rooms of a room's type and what taking each would do — free, another booking's
+ * system choice moved out of the way, or held for a booking that cannot be moved (2026-10-29).
+ * `mode` says which act takes it: CHOOSE before the rooms are handed out, ROOM_CHANGE after.
+ */
+availabilityRouter.get("/entries/:id/arrival-room-choices", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    const fromRoomId = String(req.query.fromRoomId ?? "");
+    if (!fromRoomId) {
+      res.status(400).json({ message: "Name the room (fromRoomId)" });
+      return;
+    }
+    res.json(await listArrivalRoomChoices(prisma, req.params.id, fromRoomId));
   } catch (e) {
     next(e);
   }

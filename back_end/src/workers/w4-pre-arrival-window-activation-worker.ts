@@ -152,7 +152,24 @@ async function activate(
   const expectedArrival = await resolveExpectedArrival(prisma, entry);
   // Never inside the grace of now: a same-day booking opened after its expected arrival gets the
   // grace from the moment it reaches Arrival, not a cut-off that already passed.
-  const cutoffAt = expectedArrival.at ? noShowCutoffFor(expectedArrival.at, cutoffWindowMinutes, now) : null;
+  // A change made at Arrival walks the booking back and returns it here (2026-10-29): it keeps the
+  // cut-off it had for this same expected arrival — the guest is no later for the desk having moved
+  // their room — and once that cut-off has fired, no new one is armed (a reactivation clears it on
+  // purpose). Each change used to re-arm a fresh grace from that moment, pushing the cut-off later.
+  const priorCutoff = expectedArrival.at
+    ? await prisma.timerRecord.findFirst({
+        where: { entryId, timerCode: "NO_SHOW_CUTOFF_W5", payload: { path: ["expectedAt"], equals: expectedArrival.at.toISOString() } },
+        orderBy: { createdAt: "desc" },
+        select: { status: true, dueAt: true },
+      })
+    : null;
+  const cutoffAt = !expectedArrival.at
+    ? null
+    : priorCutoff?.status === "FIRED"
+      ? null
+      : priorCutoff
+        ? priorCutoff.dueAt
+        : noShowCutoffFor(expectedArrival.at, cutoffWindowMinutes, now);
 
   await prisma.$transaction(async (tx) => {
     if (s4Dwell) await tx.stageDwellRecord.update({ where: { id: s4Dwell.id }, data: { exitedAt: now, dwellSeconds: Math.floor((now.getTime() - s4Dwell.enteredAt.getTime()) / 1000) } as any });
@@ -253,7 +270,7 @@ async function activate(
       where: { entryId, timerCode: "NO_SHOW_CUTOFF_W5", status: "SCHEDULED" },
       orderBy: { createdAt: "desc" },
     });
-    if (!existing) await armNoShowCutoff(prisma, entryId, cutoffAt, "SYSTEM");
+    if (!existing) await armNoShowCutoff(prisma, entryId, cutoffAt, "SYSTEM", expectedArrival.at);
   }
 
   return { skipped: false, entryId } as const;
