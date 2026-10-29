@@ -859,14 +859,22 @@ export type CompetingClaimItem = {
   documentId: string | null;
   documentState: string | null;
   dispatched: boolean;
+  /** Rooms both bookings chose by number (or that the other holds). */
   roomNumbers: string[];
+  /** Room types too few for everyone working them (2026-10-29). */
+  roomTypeNames: string[];
 };
+
+export type CompetingTypeShort = { roomTypeName: string; nights: string[]; free: number; wanted: number };
 
 export type CompetingClaims = {
   checkIn: string | null;
   checkOut: string | null;
   roomNumbers: string[];
   items: CompetingClaimItem[];
+  typeShort: CompetingTypeShort[];
+  /** This booking holds its rooms — nobody's paper can take them. */
+  holdsItsRooms: boolean;
 };
 
 export async function getCompetingClaims(session: Session, entryId: string) {

@@ -17,6 +17,7 @@ import { useSession } from "@/hooks/use-session";
 import { getCompetingClaims, type CompetingClaimItem } from "@/lib/api/entries";
 import { listRooms } from "@/lib/api/rooms";
 import { STEP_NAMES, stepNoOfStage } from "@/lib/ds/steps";
+import { fmtDay } from "@/lib/ds/format";
 import type { EntryDetail } from "@/types/api";
 import { StepCard, useStepMode } from "./kit";
 
@@ -176,23 +177,35 @@ export function useCompetingClaims(entryId: string) {
  * "Another booking is working these rooms" — advisory. The first committed hold wins the rooms;
  * until then everything is paper, and this is where the slower booking learns it before money is
  * taken. Names the other booking by its reference, never by its guest (SS03 §5.4).
+ *
+ * By type (2026-10-29): a room the system chose moves within its type, so the race is for the TYPE
+ * when there are not rooms enough for everyone working it — "Standard Double: 1 free on 30 Oct,
+ * 2 wanted". A room both bookings chose by number is still a race for that room.
  */
 export function CompetingClaimsCard({ entryId }: { entryId: string }) {
   const { past } = useStepMode();
   const claims = useCompetingClaims(entryId);
   const items = claims.data?.items ?? [];
+  const typeShort = claims.data?.typeShort ?? [];
   if (past || items.length === 0) return null;
   const anyHard = items.some((i) => HARD.includes(i.kind));
+  const byTypeOnly = items.every((i) => i.roomNumbers.length === 0);
+  const roomPaper = items.some((i) => !HARD.includes(i.kind) && i.roomNumbers.length > 0);
+  const typeCount = new Set(items.flatMap((i) => i.roomTypeNames)).size;
   return (
     <StepCard
-      title={`Another booking is working ${items.length === 1 && items[0].roomNumbers.length === 1 ? "this room" : "these rooms"}`}
+      title={
+        byTypeOnly
+          ? `Another booking is working on ${typeCount === 1 ? "this room type" : "these room types"}`
+          : `Another booking is working ${items.length === 1 && items[0].roomNumbers.length === 1 ? "this room" : "these rooms"}`
+      }
       icon="alert"
       right={<Chip tone={anyHard ? "danger" : "warning"}>{anyHard ? "already taken" : "first to hold wins"}</Chip>}
     >
       <table className="table compact">
         <thead>
           <tr>
-            <th>Rooms</th>
+            <th>{byTypeOnly ? "Room type" : "Rooms"}</th>
             <th>What they have</th>
             <th>Booking</th>
             <th>At</th>
@@ -201,7 +214,7 @@ export function CompetingClaimsCard({ entryId }: { entryId: string }) {
         <tbody>
           {items.map((i) => (
             <tr key={`${i.entryId}:${i.kind}:${i.documentId ?? ""}`} className="static">
-              <td>{i.roomNumbers.join(", ")}</td>
+              <td>{[...i.roomNumbers, ...i.roomTypeNames.map((t) => (byTypeOnly ? t : `a ${t}`))].join(", ")}</td>
               <td>
                 {CLAIM_WORD[i.kind]}
                 {i.documentId ? <span className="sub">{i.documentId}</span> : null}
@@ -215,11 +228,22 @@ export function CompetingClaimsCard({ entryId }: { entryId: string }) {
           ))}
         </tbody>
       </table>
-      <p className={anyHard ? "stop-ink sm" : "sm"} style={{ marginTop: 8 }}>
-        {anyHard
-          ? "These nights are already held — this booking will be refused at the hold. Change the rooms, or ask the GM to release theirs."
-          : "Nobody holds these nights yet — whoever places the hold first takes the rooms."}
-      </p>
+      {anyHard ? (
+        <p className="stop-ink sm" style={{ marginTop: 8 }}>
+          These nights are already held — this booking will be refused at the hold. Change the rooms, or ask the GM to release theirs.
+        </p>
+      ) : null}
+      {typeShort.map((t) => (
+        <p key={t.roomTypeName} className="warn-ink sm" style={{ marginTop: 8, fontWeight: 600 }}>
+          {t.roomTypeName}: {t.free === 0 ? "none" : t.free} free on {t.nights.map((n) => fmtDay(n)).join(", ")}, {t.wanted} wanted —
+          whoever places the hold first takes {t.free === 1 ? "it" : "them"}.
+        </p>
+      ))}
+      {roomPaper ? (
+        <p className="sm" style={{ marginTop: 8 }}>
+          Nobody holds these rooms yet — both bookings chose them by number, and whoever places the hold first takes them.
+        </p>
+      ) : null}
     </StepCard>
   );
 }
