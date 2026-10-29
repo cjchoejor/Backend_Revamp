@@ -16,6 +16,7 @@ const PATH_WORD: Record<string, string> = {
   VIP: "VIP path",
 };
 import { fetchPdfObjectUrl } from "@/lib/api/documents";
+import { IdPhotoViewerHost, showIdPhoto } from "./id-photo-viewer";
 import { getChildPolicy } from "@/lib/api/child-policy";
 import { listRooms } from "@/lib/api/rooms";
 import {
@@ -113,7 +114,7 @@ function sameDraft(a: DetailDraft, b: DetailDraft): boolean {
 }
 
 /** Thumbnail that fetches the image through the authenticated endpoint (blob object-URL). */
-function ProofThumb({ proof, size = 40 }: { proof: IdentityProofSummary; size?: number }) {
+function ProofThumb({ proof, size = 40, name }: { proof: IdentityProofSummary; size?: number; /** The guest's name as the table has it now — the viewer's title. */ name?: string }) {
   const { session } = useSession();
   const [url, setUrl] = useState<string | null>(null);
   const isImage = (proof.mimeType ?? "").startsWith("image/");
@@ -140,14 +141,15 @@ function ProofThumb({ proof, size = 40 }: { proof: IdentityProofSummary; size?: 
     };
   }, [session, proof.id, isImage]);
 
+  // Opens beside the table, over the booking file (2026-10-29) — not in another browser tab. The
+  // viewer takes a copy of its own, so this thumbnail can let its copy go whenever it likes.
   const open = async () => {
     if (!session) return;
     try {
-      // Images reuse the already-fetched blob; PDFs (and failed thumbs) fetch on demand.
-      const u = url ?? (await fetchPdfObjectUrl(session, identityProofFileUrl(proof.id)));
-      const win = window.open(u, "_blank");
-      if (win) win.opener = null;
-      if (!url) setTimeout(() => URL.revokeObjectURL(u), 60_000);
+      const u = await fetchPdfObjectUrl(session, identityProofFileUrl(proof.id));
+      const who = name?.trim() || proof.subjectLabel?.trim();
+      const kind = proof.documentType && !["PASSPORT_OR_PERMIT", "PHOTO_PROOF"].includes(proof.documentType) ? proof.documentType.replace(/_/g, " ").toLowerCase() : null;
+      showIdPhoto({ id: proof.id, url: u, mime: proof.mimeType ?? "image/jpeg", title: [who || "ID photo", kind].filter(Boolean).join(" · ") });
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Could not open the file");
     }
@@ -157,7 +159,7 @@ function ProofThumb({ proof, size = 40 }: { proof: IdentityProofSummary; size?: 
     <button
       type="button"
       onClick={open}
-      title={`${(proof.documentType ?? "ID").replace(/_/g, " ")} · ${fmtDateTime(proof.capturedAt, HOTEL_TZ_DEFAULT)} — open full size`}
+      title={`${(proof.documentType ?? "ID").replace(/_/g, " ")} · ${fmtDateTime(proof.capturedAt, HOTEL_TZ_DEFAULT)} — open it beside the table`}
       style={{
         width: Math.round((size * 4) / 3),
         height: size,
@@ -287,6 +289,9 @@ function DobField({
       />
       <select
         ref={monthRef}
+        // A box like the day and the year beside it (2026-10-29, operator: "the document type, month
+        // and gender need boxes as well, or else the user can easily miss them").
+        className="dinput"
         aria-label="Month"
         disabled={disabled}
         value={parts.m}
@@ -968,6 +973,69 @@ export function IdentityProofBlock({
     onError: (e) => toast.error(e instanceof Error ? e.message : "Verification failed"),
   });
 
+  /**
+   * One button for the table (2026-10-29, operator: "what is the difference between Confirm guest
+   * details and Record identity verification … if they both do the same purpose, keep only one
+   * button, prominent, on the bottom right"). At Check-in it saves what is still unsaved, records
+   * the identity verification — the check the check-in needs — when it is not yet recorded for this
+   * stay or the guest type changed, then locks every row with something on file. Before and after
+   * Check-in there is no verification to record, and it only locks the rows. A refused verification
+   * locks nothing.
+   */
+  const needsVerify = checkInGate && (!identityVerified || pathChanged);
+  const confirmAllM = useMutation({
+    mutationFn: async () => {
+      if (!session) throw new Error("Not signed in");
+      for (const slot of slots) {
+        const draft = drafts[slot.key] ?? EMPTY_DRAFT;
+        if (lockedFor(slot.key)) continue;
+        if (sameDraft(draft, draftFromRow(detailRow(slot.key)))) continue;
+        await saveGuestIdentityDetail(session, entryId, {
+          subjectKey: slot.key,
+          subjectLabel: draft.name.trim() || null,
+          documentType: draft.docType || null,
+          documentNumber: draft.num.trim() || null,
+          dateOfBirth: draft.dob || null,
+          gender: (draft.gender || null) as "MALE" | "FEMALE" | "OTHER" | null,
+        });
+      }
+      let verified = false;
+      if (needsVerify) {
+        if (!guest?.id) throw new Error("Guest profile required");
+        const body: Parameters<typeof verifyGuestIdentity>[2] = { entryId, verificationPath };
+        if (verifyNeedsDocument) {
+          body.documentType = primaryDraft.docType;
+          if (verificationPath === "FIRST_TIME") body.documentNumber = primaryDraft.num.trim();
+        }
+        await verifyGuestIdentity(session, guest.id, body);
+        verified = true;
+      }
+      const outcome = await confirmGuestIdentityDetails(session, entryId, { subjectKeys: slots.map((x) => x.key), confirmed: true });
+      return { outcome, verified };
+    },
+    onSuccess: ({ outcome, verified }) => {
+      setTouched({});
+      const locked = outcome.changed.length;
+      toast.success(
+        [
+          verified ? `Identity verified · ${PATH_WORD[verificationPath] ?? verificationPath}` : null,
+          locked ? `${locked === slots.length ? "Every guest's" : `${locked} guests'`} details confirmed — locked until you choose "Make changes"` : null,
+        ]
+          .filter(Boolean)
+          .join(". ") || "Guest details confirmed",
+      );
+      const worthSaying = outcome.skipped.filter((x) => x.reason !== "ALREADY_CONFIRMED" && x.reason !== "NOT_CONFIRMED");
+      if (worthSaying.length) toast.warning(worthSaying.map((x) => x.message).join(" · "));
+      void queryClient.invalidateQueries({ queryKey: ["entry", entryId] });
+      void queryClient.invalidateQueries({ queryKey: ["entry-trace", entryId] });
+      void queryClient.invalidateQueries({ queryKey: ["identity-proofs", entryId] });
+    },
+    onError: (e) => {
+      toast.error(e instanceof Error ? e.message : "The guest details could not be confirmed");
+      void queryClient.invalidateQueries({ queryKey: ["identity-proofs", entryId] });
+    },
+  });
+
   const onFiles = async (files: FileList | null) => {
     const slot = pendingSlotRef.current;
     const file = files?.[0];
@@ -1049,11 +1117,11 @@ export function IdentityProofBlock({
     phoneReceivedRef.current = phoneReceived;
   }, [phoneReceived, phoneCapture]);
 
-  const photoChips = (proofs: IdentityProofSummary[], showSubject = false) => (
+  const photoChips = (proofs: IdentityProofSummary[], showSubject = false, name?: string) => (
     <div style={{ display: "flex", gap: 5, flexWrap: "wrap", alignItems: "center" }}>
       {proofs.map((p) => (
         <div key={p.id} style={{ display: "flex", flexDirection: "column", gap: 2, alignItems: "center" }}>
-          <ProofThumb proof={p} />
+          <ProofThumb proof={p} name={name} />
           {showSubject && (
             <span style={{ fontSize: 10, color: "var(--ink-3)", maxWidth: 60, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
               {p.subjectLabel ?? (p.documentType ?? "ID").replace(/_/g, " ")}
@@ -1450,6 +1518,7 @@ export function IdentityProofBlock({
                   </td>
                   <td style={{ ...td, minWidth: 118 }}>
                     <select
+                      className="dinput"
                       style={cell}
                       disabled={locked}
                       value={draft.docType}
@@ -1504,6 +1573,7 @@ export function IdentityProofBlock({
                   </td>
                   <td style={{ ...td, minWidth: 92 }}>
                     <select
+                      className="dinput"
                       style={{ ...cell, width: "auto" }}
                       disabled={locked}
                       value={draft.gender}
@@ -1524,7 +1594,7 @@ export function IdentityProofBlock({
                         the earlier bytes as evidence, but they're no longer "the ID").
                         Thumb above; the two buttons stay one horizontal row. */}
                     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                      {photos.length > 0 && photoChips(photos.slice(0, 1))}
+                      {photos.length > 0 && photoChips(photos.slice(0, 1), false, (drafts[slot.key]?.name ?? "").trim() || slot.label)}
                       {covered && suggestion && <OcrProgress suggestion={suggestion} fetchedAt={listQuery.dataUpdatedAt} />}
                       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                         <button
@@ -1593,22 +1663,20 @@ export function IdentityProofBlock({
         </table>
       </div>
 
-      {/* Confirm guest details — ONE control for the whole table (2026-08-21, operator ruling:
-          no per-row Confirm, no per-row Make changes). Rows stay editable until this is pressed;
-          then every row with something on file locks, and the same spot offers "Make changes"
-          to unlock them all. Partial-and-vocal: guests with nothing recorded are skipped and
-          named in the toast, never confirmed empty. Distinct from the S6 identity VERIFICATION
-          below, which vouches the documents were checked and gates check-in — it locks nothing. */}
+      {/* One act under the table, at its bottom right (2026-10-29) — see confirmAllM. */}
       {slots.length > 0 && (
-        <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-          {allLocked ? (
+        <div className="id-confirm">
+          {allLocked && !needsVerify ? (
             <>
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 600, color: "var(--ok)" }}>
-                <Lock style={{ width: 12, height: 12 }} /> Guest details confirmed — the table is locked
+              <span className="id-confirm-done">
+                <Lock style={{ width: 13, height: 13 }} />
+                {checkInGate && identityVerified
+                  ? `Guest details confirmed · identity verified${recordedPath ? ` (${PATH_WORD[recordedPath] ?? recordedPath})` : ""}`
+                  : "Guest details confirmed — the table is locked"}
               </span>
               <button
                 type="button"
-                className="btn btn-ghost btn-sm"
+                className="btn btn-ghost"
                 disabled={confirmM.isPending}
                 onClick={() => confirmM.mutate({ slots, confirmed: false })}
                 title="Unlock every guest's details so a mistake can be corrected"
@@ -1617,91 +1685,60 @@ export function IdentityProofBlock({
               </button>
             </>
           ) : (
-            <>
-              <button
-                type="button"
-                className="btn btn-primary"
-                disabled={confirmM.isPending || saveM.isPending || confirmableSlots.length === 0}
-                onClick={() => confirmM.mutate({ slots: confirmableSlots, confirmed: true })}
-                title={
-                  confirmableSlots.length
-                    ? `Lock the guest details as recorded — ${confirmableSlots.length} of ${slots.length} guests have something on file`
-                    : "Nothing is recorded for any guest yet"
-                }
-              >
-                <Lock style={{ width: 13, height: 13 }} />
-                Confirm guest details
-              </button>
-              {confirmedSlotCount > 0 ? (
-                <span style={{ fontSize: 11.5 }}>{`${confirmedSlotCount} of ${slots.length} confirmed — press to lock the rest`}</span>
-              ) : null}
-              <Help label="About confirming">Locks every row as recorded; &ldquo;Make changes&rdquo; reopens them.</Help>
-            </>
+            (() => {
+              // Why it waits, said beside it — a refusal the desk can act on.
+              const why = !checkInGate
+                ? confirmableSlots.length === 0
+                  ? "Nothing is recorded for any guest yet"
+                  : null
+                : needsVerify && detailsIncomplete
+                  ? `Every guest's details first${coverage ? ` — ${coverage.filledSlots} of ${coverage.totalSlots} recorded` : ""}`
+                  : needsVerify && verifyMissing
+                    ? `${primaryLabel}'s document ${verificationPath === "FIRST_TIME" ? "type and number" : "type"} first — the lead's row`
+                    : !needsVerify && confirmableSlots.length === 0
+                      ? "Nothing is recorded for any guest yet"
+                      : null;
+              const ready = !why && !!guest?.id;
+              return (
+                <>
+                  <span className={`id-confirm-note${why ? " wait" : ""}`}>
+                    {why ??
+                      (needsVerify
+                        ? verificationPath === "VIP"
+                          ? "Records the VIP path and locks the rows"
+                          : verifyNeedsDocument
+                            ? `Records ${primaryLabel}'s ${docTypes.find((t) => t.code === primaryDraft.docType)?.name ?? primaryDraft.docType}${
+                                verificationPath === "FIRST_TIME" && primaryDraft.num.trim() ? ` ${primaryDraft.num.trim()}` : ""
+                              } as verified and locks the rows`
+                            : "Records the verification and locks the rows"
+                        : confirmedSlotCount > 0
+                          ? `${confirmedSlotCount} of ${slots.length} confirmed — this locks the rest`
+                          : "Locks every row as recorded")}
+                  </span>
+                  <Help label="About confirming">
+                    {checkInGate ? (
+                      <>
+                        One press: anything not saved yet is saved, the identity is recorded as verified — the check the check-in needs,
+                        under the guest type chosen above — and every guest&rsquo;s row is locked. &ldquo;Make changes&rdquo; opens
+                        them again; a different guest type then records the verification again.
+                      </>
+                    ) : (
+                      <>Locks every guest&rsquo;s row as recorded; &ldquo;Make changes&rdquo; opens them again. The identity is verified at Check-in.</>
+                    )}
+                  </Help>
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-go"
+                    disabled={!ready || confirmAllM.isPending || saveM.isPending}
+                    onClick={() => confirmAllM.mutate()}
+                  >
+                    <Lock style={{ width: 14, height: 14 }} />
+                    {needsVerify && identityVerified ? "Confirm guest details again" : "Confirm guest details"}
+                  </button>
+                </>
+              );
+            })()
           )}
-        </div>
-      )}
-
-      {/* Record verification — the table's bottom action (2026-08-12, operator ruling: no
-          boxed section; the path select sits above the table and THIS is the sign-off). It
-          stamps `identityVerifiedAt` — the vouching act that a human checked the documents
-          against the guests — and unlocks only once every guest's details are in the table
-          (same coverage as the check-in gate; VIP exempt). Document-needing paths record the
-          MAIN guest's row. S6 only. */}
-      {checkInGate && (
-        <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 4 }}>
-          {(!identityVerified || pathChanged) &&
-            (verificationPath === "VIP" ? (
-              <p style={{ fontSize: 11.5, color: "var(--ink-3)", margin: 0, lineHeight: 1.5 }}>
-                VIP path — no guest details needed to record the verification.
-              </p>
-            ) : detailsIncomplete ? (
-              <p style={{ fontSize: 11.5, color: "var(--warn)", margin: 0, lineHeight: 1.5 }}>
-                Every guest&rsquo;s details go in the table above first
-                {coverage ? ` — ${coverage.filledSlots} of ${coverage.totalSlots} recorded` : ""}. The
-                verification unlocks when the table is complete.
-              </p>
-            ) : verifyNeedsDocument ? (
-              <p
-                style={{
-                  fontSize: 11.5,
-                  color: verifyMissing ? "var(--warn)" : "var(--ink-3)",
-                  margin: 0,
-                  lineHeight: 1.5,
-                }}
-              >
-                {verifyMissing
-                  ? `Fill ${primaryLabel}'s document ${
-                      verificationPath === "FIRST_TIME" ? "type and number" : "type"
-                    } in the table above first — the verification records what's on that row.`
-                  : `Records ${primaryLabel}'s document from the table above (${
-                      docTypes.find((t) => t.code === primaryDraft.docType)?.name ?? primaryDraft.docType
-                    }${verificationPath === "FIRST_TIME" && primaryDraft.num.trim() ? ` · ${primaryDraft.num.trim()}` : ""}).`}
-              </p>
-            ) : null)}
-          {!identityVerified && (
-            <HelpHere label="About the verification">
-              The verification vouches that a human checked the documents against the guests — it is required for check-in and is
-              not the same as confirming the details above.
-            </HelpHere>
-          )}
-          {identityVerified && editMode && !pathChanged && (
-            <HelpHere label="About the guest type">
-              To change the recorded guest type, pick a different one above — the verification is then re-recorded under the new
-              type.
-            </HelpHere>
-          )}
-          {/* Re-recording under a different guest type (2026-08-21): the backend simply re-stamps
-              the path, so "update" is the same call with the new pick. Only offered in edit mode
-              and only when the pick actually differs — a locked table shows the recorded fact. */}
-          <StepAction
-            className="btn btn-primary"
-            label={identityVerified && pathChanged ? "Update identity verification" : "Record identity verification"}
-            doneLabel={`Identity verified${recordedPath ? ` · ${PATH_WORD[recordedPath] ?? recordedPath}` : ""}`}
-            done={identityVerified && !pathChanged}
-            pending={verifyM.isPending}
-            disabled={!guest?.id || verifyMissing || detailsIncomplete || (identityVerified && !pathChanged)}
-            onClick={() => verifyM.mutate()}
-          />
         </div>
       )}
 
@@ -1732,8 +1769,8 @@ export function IdentityProofBlock({
         policy.{" "}
         {checkInGate ? (
           <>
-            This table is the evidence; the identity <i>verification</i> panel at the top is the
-            act that vouches a human checked the documents against the guests.
+            Confirm guest details, under the table, records the identity verification the check-in
+            needs and locks the rows in one press.
           </>
         ) : inHouse ? (
           <>
@@ -1742,8 +1779,8 @@ export function IdentityProofBlock({
         ) : (
           <>
             Everything recorded here carries to Check-in, where each guest needs a document number
-            or an ID photo on file before &ldquo;Check in &amp; go live&rdquo; (VIP bookings
-            exempt); the identity <i>verification</i> itself is recorded there.
+            or an ID photo on file before the check-in (VIP bookings exempt); the identity is
+            verified there, with the same Confirm guest details.
           </>
         )}{" "}
         <b>Confirm guest details</b> locks the table as recorded — it stays locked at every later
@@ -1751,6 +1788,8 @@ export function IdentityProofBlock({
       </HelpHere>
         </>
       )}
+
+      <IdPhotoViewerHost />
 
       {clearFor &&
         (() => {

@@ -126,6 +126,15 @@
 .ds .desk-root .rct-save-btn.clean,
 .ds .desk-root .rct-save-btn.clean:disabled { background: var(--ok-t, #E7F3EC); border-color: var(--ok, #1E7A4F); color: var(--ok, #1E7A4F); opacity: 1; cursor: default; }
 .ds .desk-root .btn-ghost { background: #FFFFFF; color: var(--ink); border-color: var(--line-2); }
+/* The guest table's one act, at its bottom right (2026-10-29): green once it can be pressed — "UIappeal". */
+.ds .desk-root .id-confirm { margin-top: 12px; display: flex; align-items: center; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
+.ds .desk-root .id-confirm-note { font-size: 13.5px; color: var(--ink-3); text-align: right; }
+.ds .desk-root .id-confirm-note.wait { color: var(--warn, #9A6A00); font-weight: 600; }
+.ds .desk-root .id-confirm-done { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 700; color: var(--ok, #1E7A4F); margin-right: auto; }
+.ds .desk-root .btn.btn-go { height: 42px; padding: 0 18px; font-size: 16px; font-weight: 700; gap: 8px; }
+.ds .desk-root .btn.btn-go:not(:disabled) { background: var(--ok, #1E7A4F); border-color: var(--ok, #1E7A4F); color: #fff; }
+.ds .desk-root .btn.btn-go:hover:not(:disabled) { background: #18663F; border-color: #18663F; }
+.ds .desk-root .btn.btn-go[data-pending]:disabled { background: var(--ok, #1E7A4F); border-color: var(--ok, #1E7A4F); color: #fff; }
 .ds .desk-root .btn-ghost:hover:not(:disabled) { background: var(--cream); border-color: var(--ink-3); }
 .ds .desk-root .btn:disabled,
 .ds .desk-root .btn[disabled] { background: var(--cream-2); color: var(--ink-4); border-color: var(--cream-2); opacity: 1; cursor: not-allowed; }

@@ -86,7 +86,11 @@ type StayVerification = { verifiedAt: string; verifiedBy: string | null; path: s
  * Check-in's own view in the page — the rooms as the negotiation table, opened from Change
  * booking's "Move a room" (2026-10-29, in the stage-template layout, as at Set up to Arrival).
  */
-export const S6_PANES: StepPane[] = [{ key: "rooms", label: "Moving a room", cards: [] }];
+export const S6_PANES: StepPane[] = [
+  { key: "rooms", label: "Moving a room", cards: [] },
+  // The same table, opened on Change configuration (2026-10-29).
+  { key: "setup", label: "Changing the extra beds or meals", cards: [] },
+];
 
 /**
  * Check-in in the stage-template layout (2026-10-29, operator: "now make the same UI change for
@@ -173,14 +177,15 @@ export function S6CheckIn({
           tz={tz}
         />
 
-        {past ? null : <CheckInChangeBooking entry={entry} onMoveRoom={() => stepPane.open("rooms")} />}
+        {past ? null : <CheckInChangeBooking entry={entry} onOpen={(k) => stepPane.open(k)} />}
       </div>
 
-      <div className="pane" hidden={at("rooms")}>
+      <div className="pane" hidden={at("rooms") && at("setup")}>
         <RoomsTableCard
           entry={entry}
           title="The rooms"
           lead="Who sleeps where, on what plan, with what beds. Double-click a room to give it another room — every night is checked again and the price follows."
+          editNow={pane === "setup"}
         />
       </div>
     </StepCanvas>
@@ -194,7 +199,7 @@ export function S6CheckIn({
  * opens the rooms in the page; the dates are not changed at Check-in — they move at Stay; and the
  * guest who is at the desk but not staying is cancelled (SIG-S6 §8.6 / Policy 35, the FOM's).
  */
-function CheckInChangeBooking({ entry, onMoveRoom }: { entry: EntryDetail; onMoveRoom: () => void }) {
+function CheckInChangeBooking({ entry, onOpen }: { entry: EntryDetail; onOpen: (pane: string) => void }) {
   const { session } = useSession();
   const openAlsoWay = useOpenAlsoWay();
   const fom = atLeast(session?.actorLevel, "L2");
@@ -204,7 +209,14 @@ function CheckInChangeBooking({ entry, onMoveRoom }: { entry: EntryDetail; onMov
       key: "rooms",
       label: "Move a room",
       note: "Into another free room on the same dates. Every night is checked again and the price follows.",
-      onSelect: active ? onMoveRoom : undefined,
+      onSelect: active ? () => onOpen("rooms") : undefined,
+      reason: active ? undefined : "Not possible on this booking now",
+    },
+    {
+      key: "setup",
+      label: "Change extra beds or meals",
+      note: "Who sleeps where, the meal plans and the extra beds. The booking is priced again and comes back here.",
+      onSelect: active ? () => onOpen("setup") : undefined,
       reason: active ? undefined : "Not possible on this booking now",
     },
     {

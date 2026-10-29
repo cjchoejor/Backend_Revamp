@@ -23,7 +23,7 @@
  * act with its own walk.
  */
 
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button, Chip } from "@/design-system/components/primitives";
@@ -79,8 +79,15 @@ export function RoomsTable({
   roomActions,
   lead,
   mode = "change",
+  editNow = false,
 }: {
   entry: EntryDetail;
+  /**
+   * Open on Change configuration (2026-10-29, operator: "in stage 6 we don't have the option to change
+   * the configuration of the stay, like adding an extra bed or a meal type, in Change booking"): the
+   * step's "Change extra beds or meals" opens this table already editing.
+   */
+  editNow?: boolean;
   /**
    * `assign` — Arrival's own section (2026-10-29, operator: "it shows the move room feature already
    * on the screen from change booking, this should be only shown there"): the table as it is, and a
@@ -132,8 +139,11 @@ export function RoomsTable({
    * re-frozen, and comes back to this step. Nobody moves rooms. The quotation it mints is saved
    * and superseded like any other; it goes to the guest only if the desk sends it.
    */
-  const [editing, setEditing] = useState(false);
+  const [editing, setEditing] = useState(editNow);
   const [draft, setDraft] = useState<RoomCompositionInput[] | null>(null);
+  useEffect(() => {
+    if (editNow) setEditing(true);
+  }, [editNow]);
   /** The room double-clicked — its room-type change open in a dialog (2026-10-29). */
   const [openRoom, setOpenRoom] = useState<string | null>(null);
   /** The night picked in the table's night list when the room was double-clicked — that night only (2026-10-29). */
@@ -422,6 +432,7 @@ export function RoomsTableCard({
   lead,
   flow,
   flowAfter,
+  editNow,
 }: {
   entry: EntryDetail;
   title?: string;
@@ -429,11 +440,13 @@ export function RoomsTableCard({
   lead?: ReactNode;
   flow?: string;
   flowAfter?: string;
+  /** Open on Change configuration — see RoomsTable. */
+  editNow?: boolean;
 }) {
   const n = planRoomIds(entry, useHotelDay()?.today ?? null).length;
   return (
     <StepCard title={title} flow={flow} flowAfter={flowAfter} right={n ? <Chip tone="quiet">{n === 1 ? "1 room" : `${n} rooms`}</Chip> : null}>
-      <RoomsTable entry={entry} roomActions={roomActions} lead={lead} />
+      <RoomsTable entry={entry} roomActions={roomActions} lead={lead} editNow={editNow} />
     </StepCard>
   );
 }

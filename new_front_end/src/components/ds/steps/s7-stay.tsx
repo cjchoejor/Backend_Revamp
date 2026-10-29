@@ -56,6 +56,8 @@ const ID = {
  */
 export const S7_PANES: StepPane[] = [
   { key: "rooms", label: "Moving a room", cards: [] },
+  // The same table, opened on Change configuration (2026-10-29).
+  { key: "setup", label: "Changing the extra beds or meals", cards: [] },
   // The keys owed on a move day (2026-10-26, operator: room 304's key was never handed over).
   { key: "keys", label: "The keys", cards: [] },
   { key: "interim", label: "A mid-stay payment", cards: [] },
@@ -118,12 +120,13 @@ export function S7Stay({
         </div>
       </div>
 
-      <div className="pane" hidden={at("rooms")}>
+      <div className="pane" hidden={at("rooms") && at("setup")}>
         {/* The rooms as the negotiation table (2026-10-06) — a room is changed by double-clicking it. */}
         <RoomsTableCard
           entry={entry}
           title="The rooms"
           lead="While the guest is staying the prices can't be changed here. A change takes effect from tonight; the nights already slept stay as they were charged."
+          editNow={pane === "setup"}
         />
         <RoomsInUseCard entry={entry} id={ID.rooms} />
       </div>
@@ -215,6 +218,13 @@ function StayActs({ entry, inHouse, onOpen }: { entry: EntryDetail; inHouse: boo
       label: "Move a room",
       note: "Into another free room, from tonight. The nights already slept stay as they were charged.",
       onSelect: inHouse ? () => onOpen("rooms") : undefined,
+      reason: inHouse ? undefined : notNow,
+    },
+    {
+      key: "setup",
+      label: "Change extra beds or meals",
+      note: "Who sleeps where, the meal plans and the extra beds — from tonight. The nights already slept stay as they were charged.",
+      onSelect: inHouse ? () => onOpen("setup") : undefined,
       reason: inHouse ? undefined : notNow,
     },
     {
