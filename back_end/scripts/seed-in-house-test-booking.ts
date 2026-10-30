@@ -8,7 +8,9 @@
  *   npx tsx scripts/seed-in-house-test-booking.ts --commit        # write (re-runnable: clears its own prior seed first)
  *   npx tsx scripts/seed-in-house-test-booking.ts --clean --commit  # remove it
  *
- * Options: --tag X (a second fixture beside the first) · --slept N (nights already slept, default 2) · --ahead N (nights still booked, default 4)
+ * Options: --tag X (a second fixture beside the first) · --slept N (nights already slept, default 2) · --ahead N (nights still booked, default 4;
+ *            0 = the guest checks out today, once at least one night was slept — 2026-10-30, for the Check-out and Closed steps)
+ *          · --guest "First Last" (the guest's name, default Early Leaver)
  *          · --rate R (frozen NET per-night room figure, default 2000) · --room NNN (room number)
  *          · --rooms N (how many rooms, default 1 — a MULTI-room booking, added 2026-09-09 for
  *            PMS-237's one-room-leaves-early path, which by definition cannot be exercised on a
@@ -35,7 +37,11 @@ const arg = (k: string, d: string) => {
   return i >= 0 && argv[i + 1] ? argv[i + 1] : d;
 };
 const SLEPT = Math.max(0, Number(arg("--slept", "2")));
-const AHEAD = Math.max(1, Number(arg("--ahead", "4")));
+// Checking out today needs a night slept: a stay is at least one night.
+const AHEAD = Math.max(SLEPT > 0 ? 0 : 1, Number(arg("--ahead", "4")));
+const GUEST = arg("--guest", "Early Leaver").trim().split(/\s+/);
+const GUEST_FIRST = GUEST[0] || "Early";
+const GUEST_LAST = GUEST.slice(1).join(" ") || "Leaver";
 const RATE = Number(arg("--rate", "2000"));
 const ROOM = arg("--room", "");
 const ROOM_COUNT = Math.max(1, Number(arg("--rooms", "1")));
@@ -160,13 +166,15 @@ async function main() {
   const gst = Number(gstRow?.configValue ?? 0.05);
   const subtotal = new Prisma.Decimal(RATE).mul(nights);
   const total = subtotal.mul(1 + sc).mul(1 + gst).toDecimalPlaces(2);
+  const scAmount = subtotal.mul(sc).toDecimalPlaces(2);
+  const gstAmount = total.sub(subtotal).sub(scAmount);
 
   console.log(
     `in-house test booking: room${rooms.length > 1 ? "s" : ""} ${rooms.map((r) => r.roomNumber).join(", ")} · stay ${iso(checkIn)} → ${iso(checkOut)} (${nights} nights, ${SLEPT} slept) · rate ${RATE}/night net · frozen subtotal ${subtotal} / total ${total} PER ROOM`,
   );
   if (!COMMIT) return console.log("(dry run — pass --commit to write)");
 
-  const gp = await prisma.guestProfile.create({ data: { id: `${P}GP`, firstName: "Early", lastName: "Leaver", phone: "+97517000099", email: null } });
+  const gp = await prisma.guestProfile.create({ data: { id: `${P}GP`, firstName: GUEST_FIRST, lastName: GUEST_LAST, phone: "+97517000099", email: null } });
   const inq = await prisma.inquiry.create({
     data: { id: `${P}INQ`, referenceNumber: `${P}INQ`, guestProfileId: gp.id, defaultCustodianId: staff.id, sourceChannel: "DIRECT", notes: "Seeded in-house test booking (early departure)" },
   });
@@ -183,7 +191,7 @@ async function main() {
       guestCount: 2,
       adultCount: 2,
       numberOfRooms: rooms.length,
-      contactPersonName: "Early Leaver",
+      contactPersonName: `${GUEST_FIRST} ${GUEST_LAST}`,
       contactPersonPhone: "+97517000099",
       createdBy: staff.id,
       keysIssuedAt: checkIn,
@@ -252,9 +260,23 @@ async function main() {
       totalAmount: total.mul(rooms.length),
       commercialTerms: {
         roomCompositions: rooms.map((r) => ({ roomId: r.id, occupantCount: 2, adultCount: 2, extraBedCount: 0, negotiatedRoomRate: RATE })),
+        // The figures a real quotation stores (2026-10-30): net, service charge and GST beside the
+        // total, and each room by its number — the booking file's price prints them.
         compositionTotals: {
+          subtotal: Number(subtotal.mul(rooms.length)),
+          serviceCharge: Number(scAmount.mul(rooms.length)),
+          gst: Number(gstAmount.mul(rooms.length)),
           total: Number(total.mul(rooms.length)),
-          perRoom: rooms.map((r) => ({ roomId: r.id, roomRate: RATE, nights, subtotal: Number(subtotal), total: Number(total) })),
+          perRoom: rooms.map((r) => ({
+            roomId: r.id,
+            roomNumber: r.roomNumber,
+            roomRate: RATE,
+            nights,
+            subtotal: Number(subtotal),
+            serviceCharge: Number(scAmount),
+            gst: Number(gstAmount),
+            total: Number(total),
+          })),
         },
       },
     } as Prisma.QuotationUncheckedCreateInput,
