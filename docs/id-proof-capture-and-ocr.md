@@ -456,6 +456,18 @@ Operator: "it is really slow, like taking 30 s to a minute to read it … the pa
 
 - **The newer Bhutanese citizenship card** (2026-10-29, operator: "for pictures like this can't it read the CID number below") — it prints "Citizenship Card" and "Citizenship ID No.", not "Citizenship Identity Card", so only "KINGDOM OF BHUTAN" matched, which counts for the work permit too: a tie, the card was not recognised, and the CID rule that takes the number never ran (the page reader had read "Citizenships ID No. 11811003547" whole). `DOC_KEYWORDS` in [layout-parse.ts](../back_end/src/lib/identity-ocr/layout-parse.ts) now weighs "Citizenship Card" and "Citizenship ID" as the CID's title (OCR's stray "s" allowed), and an unrecognised card still takes a number printed right after an "ID No." label — never a bare number without one. The operator's photo: CID, 11811003547, Dilip Bhandari, 3 Apr 1997, M. The work permit is still recognised; the rule checks are in `scripts/ocr-strip-matrix.ts` (24).
 
+### 2.7 The page reader's threads (2026-10-30)
+
+Operator, on the hotel's server: "reading CID or other than passport is taking 30 seconds when in the original code it takes less than 7 seconds". Same code, same libraries (transformers.js 4.2.0, onnxruntime-node 1.24.3, as locked) and the same q4 model files — but a CPU with fast and slow cores (i7-13700: 8 performance + 8 efficiency). Left to itself onnxruntime runs on every core, and each of the ~190 small decoding steps of a read waits for the slowest thread. One CID read, the model alone, measured there:
+
+| Threads | 16 (the default) | 8 | 6 | 5 | 4 | 3 | 2 |
+|---|---|---|---|---|---|---|---|
+| Read | 29.8–31.4 s | 8.3–9.0 s | 8.1–10.6 s | 9.3 s | 7.8–8.9 s | 9.4–10.3 s | 12.6–12.9 s |
+
+`layoutThreads()` in [layout-ocr.ts](../back_end/src/lib/identity-ocr/layout-ocr.ts) now gives the model **4 threads** (fewer on a smaller CPU); `OCR_LAYOUT_THREADS` overrides it and `0` hands the choice back to onnxruntime. The readings are unchanged — the same name and number every run. Through the real pipeline (the child process, the desk's CID hint), six reads: 12.8 s for the first (it loads the model), then 8.1–8.5 s each. A blurred passport, which falls through to the page reader, went 115 s → 46 s; a clear one is unchanged (0.7 s). One read took 40 s while the machine had 1.1 GB of RAM free — the reader needs about 1.5 GB of its own, so a server short of memory is slow whatever the threads.
+
+Not changed, noted for whoever owns the reading: the model's own `generation_config.json` asks for `num_beams: 3` (three candidates kept at every step). Greedy decoding would be roughly two to three times faster again, but it can change what is read.
+
 ### 2.4 Cloud option — explicitly gated
 
 AWS Textract AnalyzeID / Azure Document Intelligence / Claude vision would all extract more

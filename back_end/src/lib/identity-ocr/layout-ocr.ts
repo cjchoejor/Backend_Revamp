@@ -22,6 +22,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { fork, type ChildProcess } from "node:child_process";
+import os from "node:os";
 
 export type LayoutOcrLine = { text: string; box?: [number, number, number, number] };
 export type LayoutOcrResult = { engine: "FLORENCE2" | "TESSERACT"; lines: LayoutOcrLine[]; ms: number };
@@ -30,6 +31,23 @@ const MODEL_ID = "onnx-community/Florence-2-base-ft";
 
 function modelsDir(): string {
   return process.env.OCR_MODELS_DIR ?? "./storage/models";
+}
+
+/**
+ * How many CPU threads the model runs on (2026-10-30). Left to onnxruntime it takes every core, and
+ * on a processor with fast and slow cores (the hotel's i7-13700: 8 + 8) each of the ~200 small
+ * decoding steps of a read waits for the slowest thread — a CID took 30 s there. Measured on that
+ * machine, one CID read: 16 threads (the default) 29.8–31.4 s · 8 → 8.3–9.0 s · 4 → 7.8–8.9 s ·
+ * 2 → 12.6–12.9 s. Four is the best there and no worse than the default on a smaller CPU.
+ * `OCR_LAYOUT_THREADS` overrides it; 0 hands the choice back to onnxruntime.
+ */
+function layoutThreads(): number | null {
+  const raw = process.env.OCR_LAYOUT_THREADS?.trim();
+  if (raw) {
+    const n = Math.floor(Number(raw));
+    return Number.isFinite(n) && n > 0 ? n : null;
+  }
+  return Math.max(1, Math.min(4, os.availableParallelism?.() ?? os.cpus().length));
 }
 
 /** Whether Florence-2 is already on disk (so a first run offline won't try to download). */
@@ -59,9 +77,11 @@ async function getFlorence(): Promise<Florence> {
       tf.env.cacheDir = modelsDir();
       // fp32 vision encoder + embeddings: the fp16 variants fail to initialise on CPU
       // onnxruntime ("InsertedPrecisionFreeCast … does not exist"); q4 text side keeps it light.
+      const threads = layoutThreads();
       const model = await tf.Florence2ForConditionalGeneration.from_pretrained(MODEL_ID, {
         dtype: { embed_tokens: "fp32", vision_encoder: "fp32", encoder_model: "q4", decoder_model_merged: "q4" },
         device: "cpu",
+        ...(threads ? { session_options: { intraOpNumThreads: threads, interOpNumThreads: 1 } } : {}),
       } as any);
       const processor = await tf.AutoProcessor.from_pretrained(MODEL_ID);
       const tokenizer = await tf.AutoTokenizer.from_pretrained(MODEL_ID);
