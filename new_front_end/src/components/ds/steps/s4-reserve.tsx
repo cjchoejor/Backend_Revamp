@@ -32,33 +32,7 @@ import { JourneySummaryPanel } from "@/components/desk/workspace/journey-summary
 import { PLAN_LABEL, dueLabel } from "@/components/desk/workspace/advance-settlement";
 import { PaymentPlanCard } from "./s3-money";
 import type { EntryDetail, PaymentStatusSummary, QuotationSummary } from "@/types/api";
-import {
-  DsDialog,
-  FactBox,
-  FactLine,
-  Facts,
-  Fact,
-  Live,
-  OnRecord,
-  PaperDrawer,
-  StepCanvas,
-  StepCard,
-  Tool,
-  AnswerLine,
-  atLeast,
-  currentPassStart,
-  goToStepCard,
-  latestDispatched,
-  toastRefusal,
-  useCommunications,
-  useFinishWhenDone,
-  useRefreshEntry,
-  useStepMode,
-  useStepPane,
-  words,
-  type FactState,
-  type PaperRef,
-} from "./kit";
+import { DsDialog, FactBox, FactLine, Facts, Fact, Live, OnRecord, PaperDrawer, StepCanvas, StepCard, Tool, AnswerLine, atLeast, currentPassStart, goToStepCard, latestDispatched, toastRefusal, useCommunications, useFinishWhenDone, useRefreshEntry, useStepMode, useStepPane, words, type FactState, type PaperRef, NightsChoice } from "./kit";
 import { BookingOtherWays } from "./s4-other-ways";
 import { roomsHeldWord } from "./s2-shared";
 import { Help } from "@/components/ds/help";
@@ -965,6 +939,8 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
   const since = currentPassStart(entry);
   const [paper, setPaper] = useState<PaperRef | null>(null);
   const [sendOpen, setSendOpen] = useState(false);
+  // Every night named on the copy sent (2026-10-30).
+  const [nightsEach, setNightsEach] = useState(false);
   const guestEmail = entry.guestProfile?.email?.trim() ?? "";
   const [sendTo, setSendTo] = useState(guestEmail);
   useEffect(() => {
@@ -1024,7 +1000,7 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
   }, [loading, past, afterReserve, decideFirst, answerDue, otherDue]);
 
   const send = useMutation({
-    mutationFn: () => resendConfirmationVoucher(session!, res.id, { dispatchedTo: sendTo.trim() || undefined }),
+    mutationFn: () => resendConfirmationVoucher(session!, res.id, { dispatchedTo: sendTo.trim() || undefined, nightsEach }),
     onSuccess: (out) => {
       toast.success(`Voucher sent to ${out.dispatchedTo} — a fresh reply window is open`);
       setSendOpen(false);
@@ -1208,6 +1184,9 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
             <Help label="About the address">Prefilled from the guest&rsquo;s record — change it to correct a wrong address.</Help>
           </label>
           <input className="input" type="email" value={sendTo} onChange={(e) => setSendTo(e.target.value)} placeholder="guest@example.com" />
+        </div>
+        <div className="paper-faces in-dialog">
+          <NightsChoice each={nightsEach} onChange={setNightsEach} />
         </div>
       </DsDialog>
     </StepCard>

@@ -17,7 +17,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/design-system";
 import { Help } from "@/components/ds/help";
-import { Choice as PickOne, PaperDrawer, toastRefusal, type PaperRef } from "@/components/ds/steps/kit";
+import { Choice as PickOne, NightsChoice, PaperDrawer, toastRefusal, type PaperRef } from "@/components/ds/steps/kit";
 import { useSession } from "@/hooks/use-session";
 import { decideHeldDocument, listHeldDocuments, type HeldDocument } from "@/lib/api/room-moves";
 import { fmtDateTime } from "@/lib/ds/format";
@@ -52,7 +52,7 @@ export function useHeldDocuments(entryId: string | null | undefined) {
 
 function paperOf(h: HeldDocument): PaperRef {
   return h.kind === "PROFORMA"
-    ? { kind: "invoice", id: h.documentId, label: `Proforma invoice ${h.documentNumber ?? h.documentId}` }
+    ? { kind: "invoice", id: h.documentId, invoiceType: "PROFORMA", label: `Proforma invoice ${h.documentNumber ?? h.documentId}` }
     : { kind: "voucher", reservationId: h.documentId, label: `Confirmation voucher ${h.documentNumber ?? h.documentId}` };
 }
 
@@ -64,12 +64,15 @@ export function HeldPaperRow({ h, tz, onView }: { h: HeldDocument; tz?: string; 
   const [choice, setChoice] = useState<Choice>(h.defaultRecipient.to ? "EMAIL" : h.kind === "PROFORMA" ? "EMAIL" : "WHATSAPP");
   const [to, setTo] = useState(h.defaultRecipient.to ?? "");
   const [note, setNote] = useState("");
+  // Every night named on the copy emailed (2026-10-30).
+  const [nightsEach, setNightsEach] = useState(false);
   const decide = useMutation({
     mutationFn: () =>
       decideHeldDocument(session!, h.id, {
         action: choice,
         sentTo: choice === "NONE" ? null : to.trim() || null,
         note: note.trim() || null,
+        nightsEach: choice === "EMAIL" && nightsEach,
       }),
     onSuccess: (r) => {
       toast.success(
@@ -117,6 +120,11 @@ export function HeldPaperRow({ h, tz, onView }: { h: HeldDocument; tz?: string; 
             <span>Send to{h.defaultRecipient.whose ? <span className="muted"> · {h.defaultRecipient.whose}</span> : null}</span>
             <input className="input" type="email" value={to} onChange={(e) => setTo(e.target.value)} placeholder="name@example.com" />
           </label>
+        ) : null}
+        {choice === "EMAIL" ? (
+          <div className="paper-faces in-dialog">
+            <NightsChoice each={nightsEach} onChange={setNightsEach} />
+          </div>
         ) : null}
         {choice === "WHATSAPP" ? (
           <label className="field">

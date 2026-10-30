@@ -48,11 +48,23 @@ async function openPdf(session: Session, path: string): Promise<void> {
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
+/**
+ * A paper's face as a query string: `prices=none` takes the money off a quotation (2026-10-06),
+ * `nights=each` names every night instead of writing a run as its first and last (2026-10-30).
+ * Either is rendered fresh and never stored — the stored PDF is the priced one, nights short.
+ */
+export type PaperFace = { hidePrices?: boolean; nightsEach?: boolean };
+function faceQuery(f?: PaperFace): string {
+  const q = new URLSearchParams();
+  if (f?.hidePrices) q.set("prices", "none");
+  if (f?.nightsEach) q.set("nights", "each");
+  const s = q.toString();
+  return s ? `?${s}` : "";
+}
+
 /** S2 — quotation PDF. `GET /api/quotations/:id/pdf`. */
-export function openQuotationPdf(session: Session, quotationId: string, opts?: { hidePrices?: boolean }): Promise<void> {
-  // `prices=none` is the same quotation with the money taken off — rendered fresh, never stored:
-  // the stored artifact is the priced one, which is the commercial record (2026-10-06).
-  return openPdf(session, `/api/quotations/${quotationId}/pdf${opts?.hidePrices ? "?prices=none" : ""}`);
+export function openQuotationPdf(session: Session, quotationId: string, opts?: PaperFace): Promise<void> {
+  return openPdf(session, `/api/quotations/${quotationId}/pdf${faceQuery(opts)}`);
 }
 
 /**
@@ -64,11 +76,9 @@ export function openQuotationPdf(session: Session, quotationId: string, opts?: {
 export async function fetchQuotationPreviewHtml(
   session: Session,
   quotationId: string,
-  opts?: { hidePrices?: boolean },
+  opts?: PaperFace,
 ): Promise<string> {
-  // `prices=none` is the same quotation with the money taken off (2026-10-06).
-  const q = opts?.hidePrices ? "?prices=none" : "";
-  return fetchPreviewHtml(session, `/api/quotations/${quotationId}/preview-html${q}`, "quotation");
+  return fetchPreviewHtml(session, `/api/quotations/${quotationId}/preview-html${faceQuery(opts)}`, "quotation");
 }
 
 /**
@@ -76,8 +86,8 @@ export async function fetchQuotationPreviewHtml(
  * as the quotation preview: reflects the folio's current payments and the desk's advance
  * requirement live, without generating a PDF.
  */
-export async function fetchInvoicePreviewHtml(session: Session, invoiceId: string): Promise<string> {
-  return fetchPreviewHtml(session, `/api/invoices/${invoiceId}/preview-html`, "proforma");
+export async function fetchInvoicePreviewHtml(session: Session, invoiceId: string, opts?: PaperFace): Promise<string> {
+  return fetchPreviewHtml(session, `/api/invoices/${invoiceId}/preview-html${faceQuery({ nightsEach: opts?.nightsEach })}`, "proforma");
 }
 
 /**
@@ -125,13 +135,13 @@ async function fetchPreviewHtml(session: Session, path: string, label: string): 
 }
 
 /** S3 proforma / S8·S9 final — invoice PDF. `GET /api/invoices/:id/pdf`. */
-export function openInvoicePdf(session: Session, invoiceId: string): Promise<void> {
-  return openPdf(session, `/api/invoices/${invoiceId}/pdf`);
+export function openInvoicePdf(session: Session, invoiceId: string, opts?: PaperFace): Promise<void> {
+  return openPdf(session, `/api/invoices/${invoiceId}/pdf${faceQuery({ nightsEach: opts?.nightsEach })}`);
 }
 
 /** S4 — confirmation voucher PDF. `GET /api/reservations/:id/confirmation-voucher-pdf`. */
-export function openConfirmationVoucherPdf(session: Session, reservationId: string): Promise<void> {
-  return openPdf(session, `/api/reservations/${reservationId}/confirmation-voucher-pdf`);
+export function openConfirmationVoucherPdf(session: Session, reservationId: string, opts?: PaperFace): Promise<void> {
+  return openPdf(session, `/api/reservations/${reservationId}/confirmation-voucher-pdf${faceQuery({ nightsEach: opts?.nightsEach })}`);
 }
 
 /** A5 — cancellation confirmation PDF. `GET /api/entries/:id/cancellation-confirmation-pdf`. */
@@ -186,11 +196,11 @@ export function getFolioDocuments(session: Session, entryId: string): Promise<Fo
 }
 
 /** The document as inline HTML — composed fresh from the ledger, no side effects. */
-export function fetchFolioDocumentPreviewHtml(session: Session, entryId: string, kind: FolioDocumentKind): Promise<string> {
-  return fetchPreviewHtml(session, `/api/entries/${entryId}/folio-documents/${kind}/preview-html`, kind.replace("-", " "));
+export function fetchFolioDocumentPreviewHtml(session: Session, entryId: string, kind: FolioDocumentKind, opts?: PaperFace): Promise<string> {
+  return fetchPreviewHtml(session, `/api/entries/${entryId}/folio-documents/${kind}/preview-html${faceQuery({ nightsEach: opts?.nightsEach })}`, kind.replace("-", " "));
 }
 
 /** The document as a PDF, rendered fresh (never stored). A sealed master bill print counts as a reprint. */
-export function openFolioDocumentPdf(session: Session, entryId: string, kind: FolioDocumentKind): Promise<void> {
-  return openPdf(session, `/api/entries/${entryId}/folio-documents/${kind}/pdf`);
+export function openFolioDocumentPdf(session: Session, entryId: string, kind: FolioDocumentKind, opts?: PaperFace): Promise<void> {
+  return openPdf(session, `/api/entries/${entryId}/folio-documents/${kind}/pdf${faceQuery({ nightsEach: opts?.nightsEach })}`);
 }

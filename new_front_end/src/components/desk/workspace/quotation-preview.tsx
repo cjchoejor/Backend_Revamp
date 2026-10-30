@@ -162,20 +162,23 @@ export function QuotationPreview({
   quotationId,
   frozenPdf,
   hidePrices,
+  nightsEach,
 }: {
   quotationId: string;
   frozenPdf?: boolean;
   /** The copy a guest who asked for a quotation without prices receives (2026-10-06). */
   hidePrices?: boolean;
+  /** Every night named instead of a run as its first and last (2026-10-30). */
+  nightsEach?: boolean;
 }) {
   const { session } = useSession();
-  if (frozenPdf) {
+  if (frozenPdf && !hidePrices && !nightsEach) {
     return <FrozenPdfFrame path={`/api/quotations/${quotationId}/pdf`} title="Quotation (as sent)" />;
   }
   return (
     <DocumentPreviewFrame
-      queryKey={["quotation-preview", quotationId, hidePrices ? "no-prices" : "priced"] as const}
-      fetchHtml={() => fetchQuotationPreviewHtml(session!, quotationId, { hidePrices })}
+      queryKey={["quotation-preview", quotationId, hidePrices ? "no-prices" : "priced", nightsEach ? "each" : "short"] as const}
+      fetchHtml={() => fetchQuotationPreviewHtml(session!, quotationId, { hidePrices, nightsEach })}
       title={hidePrices ? "Quotation · without prices" : "Quotation document"}
     />
   );
@@ -186,9 +189,12 @@ export function QuotationPreview({
  * "view like PI and quotation"). The voucher is write-once; the route lazily renders + stores
  * it on first view, so this works both before and after the artifact exists.
  */
-export function VoucherPreview({ reservationId }: { reservationId: string }) {
+export function VoucherPreview({ reservationId, nightsEach }: { reservationId: string; nightsEach?: boolean }) {
   return (
-    <FrozenPdfFrame path={`/api/reservations/${reservationId}/confirmation-voucher-pdf`} title="Confirmation voucher" />
+    <FrozenPdfFrame
+      path={`/api/reservations/${reservationId}/confirmation-voucher-pdf${nightsEach ? "?nights=each" : ""}`}
+      title="Confirmation voucher"
+    />
   );
 }
 
@@ -206,15 +212,27 @@ export function CancellationVoucherPreview({ entryId }: { entryId: string }) {
  * S3 — the proforma document. Live rows compose from folio payments + the desk's advance
  * requirement; pass `frozenPdf` on a superseded row to show the stored artifact instead.
  */
-export function ProformaPreview({ invoiceId, frozenPdf, notice, title }: { invoiceId: string; frozenPdf?: boolean; notice?: string; title?: string }) {
+export function ProformaPreview({
+  invoiceId,
+  frozenPdf,
+  notice,
+  title,
+  nightsEach,
+}: {
+  invoiceId: string;
+  frozenPdf?: boolean;
+  notice?: string;
+  title?: string;
+  nightsEach?: boolean;
+}) {
   const { session } = useSession();
   if (frozenPdf) {
     return <FrozenPdfFrame path={`/api/invoices/${invoiceId}/pdf`} title={title ? `${title} (as sent)` : "Proforma invoice (as sent)"} />;
   }
   return (
     <DocumentPreviewFrame
-      queryKey={["invoice-preview", invoiceId] as const}
-      fetchHtml={() => fetchInvoicePreviewHtml(session!, invoiceId)}
+      queryKey={["invoice-preview", invoiceId, nightsEach ? "each" : "short"] as const}
+      fetchHtml={() => fetchInvoicePreviewHtml(session!, invoiceId, { nightsEach })}
       title={title ?? "Proforma invoice document"}
       notice={notice}
     />
@@ -231,17 +249,19 @@ export function FolioDocumentPreview({
   kind,
   title,
   refreshKey,
+  nightsEach,
 }: {
   entryId: string;
   kind: FolioDocumentKind;
   title: string;
   refreshKey: string;
+  nightsEach?: boolean;
 }) {
   const { session } = useSession();
   return (
     <DocumentPreviewFrame
-      queryKey={["folio-document-preview", entryId, kind, refreshKey] as const}
-      fetchHtml={() => fetchFolioDocumentPreviewHtml(session!, entryId, kind)}
+      queryKey={["folio-document-preview", entryId, kind, refreshKey, nightsEach ? "each" : "short"] as const}
+      fetchHtml={() => fetchFolioDocumentPreviewHtml(session!, entryId, kind, { nightsEach })}
       title={title}
     />
   );

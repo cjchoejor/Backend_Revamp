@@ -52,21 +52,22 @@ export function PriceLinesTable({ f, currency, totalLabel = "Total" }: { f: Pric
       </thead>
       <tbody>
         {f.lines.map((l, i) => (
-          <tr key={i} className={l.indent ? "pl-sub" : "pl-room"}>
-            {f.datesShown ? <td className="pl-dates">{l.indent ? "" : l.dates ?? ""}</td> : null}
+          <tr key={i} className={`${l.indent ? "pl-sub" : "pl-room"}${l.muted ? " pl-muted" : ""}`}>
+            {/* A line under a room names its own nights when they are not all the room's (2026-10-30). */}
+            {f.datesShown ? <td className="pl-dates">{l.dates ?? ""}</td> : null}
             <td className="pl-desc" title={shortWhat(l.description) !== l.description ? l.description : undefined}>
               <span className="pl-what">{l.description}</span>
               <span className="pl-what-short">{shortWhat(l.description)}</span>
               {/* Shown only when the Qty and Rate columns are folded away — on the name's own line. */}
               <span className="pl-fold">
-                {!l.indent && f.datesShown && l.dates ? `${l.dates} · ` : ""}
+                {f.datesShown && l.dates ? `${l.dates}${l.qty ? " · " : ""}` : ""}
                 {l.qty}
                 {l.rate != null ? ` × ${plain(l.rate)}` : ""}
               </span>
             </td>
             <td className="pl-qty">{l.qty}</td>
-            <td className="num pl-rate">{l.rate != null ? plain(l.rate) : "—"}</td>
-            <td className="num">{plain(l.amount)}</td>
+            <td className="num pl-rate">{l.muted ? "" : l.rate != null ? plain(l.rate) : "—"}</td>
+            <td className="num">{l.muted ? "—" : plain(l.amount)}</td>
           </tr>
         ))}
       </tbody>
