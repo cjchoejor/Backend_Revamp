@@ -14,14 +14,15 @@ import { toast } from "sonner";
 import { Button, Chip } from "@/design-system";
 import { useHotelDay } from "@/hooks/use-hotel-day";
 import { useSession } from "@/hooks/use-session";
-import { issueAllRoomKeys, issueRoomKey, returnRoomKey } from "@/lib/api/entries";
+import { declareRoomKeyLost, issueAllRoomKeys, issueRoomKey, returnRoomKey } from "@/lib/api/entries";
 import { currentRoomAssignments, roomStayRangesByRoom } from "@/lib/desk/party-rooms";
-import { fmtDay, plural } from "@/lib/ds/format";
+import { fmtDay, fmtStamp, plural } from "@/lib/ds/format";
+import { useHotelClock } from "@/hooks/use-hotel-clock";
 import { DeficiencyPanel } from "@/components/deficiency/deficiency-panel";
 import { RoomCompositionSummary, hasRoomComposition } from "@/components/desk/workspace/room-composition-summary";
 import { InitialSelectionCell, RoomChangeControl } from "@/components/desk/workspace/room-change-control";
 import type { EntryDetail } from "@/types/api";
-import { Choice, Live, StepCard, Tool, toastRefusal, useRefreshEntry, useStepMode, NotNow } from "./kit";
+import { Choice, Live, ReasonDialog, StepCard, Tool, toastRefusal, useRefreshEntry, useStepMode, NotNow } from "./kit";
 import { InlineTool, WideDialog, claimWord, physicalWord } from "./s6-shared";
 
 /* ------------------------------------------------------------------ rooms in use */
@@ -91,6 +92,10 @@ type KeyRow = {
   stay: { nightCount: number; firstNight: string | null; label: string } | undefined;
   keyOut: boolean;
   keyReturned: boolean;
+  /** Its key was lost and no new one has gone out yet (2026-10-30). */
+  lost: boolean;
+  lostNote: string | null;
+  lostAt: string | null;
   vacated: boolean;
   movesInToday: boolean;
   movesInLater: boolean;
@@ -106,7 +111,8 @@ export function keyPlan(entry: EntryDetail, hotelToday: string | null): KeyRow[]
   const items = Array.from(byRoom.entries()).map(([roomId, rs]) => {
     const stay = stayByRoom.get(roomId);
     const keyOut = rs.some((r) => r.keyIssuedAt && !r.keyReturnedAt && !r.keyLostAt);
-    const keyReturned = !keyOut && rs.some((r) => r.keyReturnedAt);
+    const lostRow = keyOut ? null : (rs.find((r) => r.keyLostAt) ?? null);
+    const keyReturned = !keyOut && !lostRow && rs.some((r) => r.keyReturnedAt);
     // Vacated only once every range of the room has reached its move-out morning; never on a guess.
     const vacated = !!hotelToday && rs.length > 0 && rs.every((r) => r.endDate && String(r.endDate).slice(0, 10) <= hotelToday);
     return {
@@ -115,6 +121,9 @@ export function keyPlan(entry: EntryDetail, hotelToday: string | null): KeyRow[]
       stay,
       keyOut,
       keyReturned,
+      lost: !!lostRow,
+      lostNote: lostRow?.keyLostNote ?? null,
+      lostAt: lostRow?.keyLostAt ?? null,
       vacated,
       movesInToday: !!hotelToday && stay?.firstNight === hotelToday,
       movesInLater: !!hotelToday && !!stay?.firstNight && stay.firstNight > hotelToday,
@@ -221,6 +230,19 @@ export function KeysCard({ entry, emptyNote = false }: { entry: EntryDetail; /**
     },
     onError: (e) => toastRefusal(e, "The key return could not be recorded"),
   });
+  // A key lost while the guest is staying (2026-10-30): what happened is asked in a pop-up and kept
+  // with the room; a new key can then be issued for it.
+  const { tz } = useHotelClock(60_000);
+  const [askLost, setAskLost] = useState<{ roomId: string; roomNumber: string } | null>(null);
+  const loseKey = useMutation({
+    mutationFn: (v: { roomId: string; note: string }) => declareRoomKeyLost(session!, entry.id, v.roomId, v.note),
+    onSuccess: (r) => {
+      setAskLost(null);
+      toast.success(`Room ${r.roomNumber}'s key is recorded as lost — issue a new one when the guest needs it`);
+      refresh();
+    },
+    onError: (e) => toastRefusal(e, "The lost key could not be recorded"),
+  });
   // The set is the server's decision; the toast says what it left out.
   const issueAll = useMutation({
     mutationFn: () => issueAllRoomKeys(session!, entry.id),
@@ -248,7 +270,7 @@ export function KeysCard({ entry, emptyNote = false }: { entry: EntryDetail; /**
   if (!show)
     return emptyNote ? <StepCard title="Keys" icon="key" status="No room keys are kept room by room on this booking — they were counted at check-in." /> : null;
   const bulk = plan.filter((k) => !k.keyOut && !k.movesInLater && blockersFor(k.roomId).length === 0);
-  const busy = issue.isPending || giveBack.isPending || issueAll.isPending;
+  const busy = issue.isPending || giveBack.isPending || issueAll.isPending || loseKey.isPending;
 
   return (
     <StepCard
@@ -305,6 +327,12 @@ export function KeysCard({ entry, emptyNote = false }: { entry: EntryDetail; /**
                 {k.stay ? <span className="meta"> · {k.stay.label}</span> : null}
               </span>
               {note}
+              {k.lost ? (
+                <span className="sm warn-ink">
+                  Lost{k.lostAt ? ` ${fmtStamp(k.lostAt, tz)}` : ""}
+                  {k.lostNote ? <> — &ldquo;{k.lostNote}&rdquo;</> : null}
+                </span>
+              ) : null}
             </span>
             <span className="row-acts" style={{ alignItems: "center" }}>
               {k.keyOut ? (
@@ -317,6 +345,29 @@ export function KeysCard({ entry, emptyNote = false }: { entry: EntryDetail; /**
                       Take the key back
                     </Button>
                   ) : null}
+                  {past ? null : (
+                    <Button kind="secondary" compact state={busy ? "inert" : "default"} onClick={() => setAskLost({ roomId: k.roomId, roomNumber: k.roomNumber })}>
+                      Lost
+                    </Button>
+                  )}
+                </>
+              ) : k.lost ? (
+                <>
+                  <Chip tone="warning" icon="key">
+                    key lost
+                  </Chip>
+                  {past ? null : (
+                    <Button
+                      kind="secondary"
+                      compact
+                      icon="key"
+                      state={busy || unlock ? "inert" : "default"}
+                      title={unlock ? `This key goes out ${unlock}` : undefined}
+                      onClick={() => issue.mutate(k.roomId)}
+                    >
+                      Issue a new key
+                    </Button>
+                  )}
                 </>
               ) : k.keyReturned ? (
                 <>
@@ -340,6 +391,17 @@ export function KeysCard({ entry, emptyNote = false }: { entry: EntryDetail; /**
           </div>
         );
       })}
+      <ReasonDialog
+        open={!!askLost}
+        onClose={() => setAskLost(null)}
+        title={askLost ? `Room ${askLost.roomNumber}'s key is lost` : "A lost key"}
+        lead="What happened is kept with this room. The key no longer counts as with the guest — issue a new one when they need it. Nothing is charged for it."
+        reasonLabel="What happened to it"
+        placeholder="left in a taxi in Thimphu"
+        confirmLabel="Record the lost key"
+        busy={loseKey.isPending}
+        onConfirm={(note) => askLost && loseKey.mutate({ roomId: askLost.roomId, note: note.trim() })}
+      />
     </StepCard>
   );
 }

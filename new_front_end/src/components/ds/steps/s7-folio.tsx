@@ -330,7 +330,7 @@ export function FolioCard({
 
 /* ------------------------------------------------------------------ post a charge */
 
-function PostChargeDialog({
+export function PostChargeDialog({
   entry,
   open,
   onClose,
@@ -596,7 +596,7 @@ function PostChargeDialog({
 const tabOf = (k: string): FolioTab =>
   k === "ALL" || k === "WHOLE" ? k : k.startsWith("space:") ? { spaceId: k.slice(6) } : { roomId: k.slice(5) };
 
-function CorrectionDialog({ entry, open, onClose }: { entry: EntryDetail; open: boolean; onClose: () => void }) {
+export function CorrectionDialog({ entry, open, onClose }: { entry: EntryDetail; open: boolean; onClose: () => void }) {
   const { session } = useSession();
   const refresh = useRefreshEntry(entry.id);
   const targets = useChargeTargets(entry);
@@ -770,7 +770,7 @@ function CorrectionDialog({ entry, open, onClose }: { entry: EntryDetail; open: 
 
 /* ------------------------------------------------------------------ credit note */
 
-function CreditNoteDialog({ entry, open, onClose }: { entry: EntryDetail; open: boolean; onClose: () => void }) {
+export function CreditNoteDialog({ entry, open, onClose }: { entry: EntryDetail; open: boolean; onClose: () => void }) {
   const { session } = useSession();
   const refresh = useRefreshEntry(entry.id);
   const targets = useChargeTargets(entry);

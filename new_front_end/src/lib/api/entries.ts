@@ -286,6 +286,15 @@ export async function returnRoomKey(session: Session, entryId: string, roomId: s
   );
 }
 
+/** THIS room's key is lost while the guest is staying, with what happened (2026-10-30). */
+export async function declareRoomKeyLost(session: Session, entryId: string, roomId: string, note: string) {
+  return apiRequest<{ roomNumber: string; note: string }>(`/api/entries/${entryId}/rooms/${roomId}/key-lost`, {
+    method: "POST",
+    session,
+    body: { note },
+  });
+}
+
 export async function parkEntry(session: Session, entryId: string, reason: string) {
   const data = await apiRequest<unknown>(`/api/entries/${entryId}/park`, {
     method: "POST",

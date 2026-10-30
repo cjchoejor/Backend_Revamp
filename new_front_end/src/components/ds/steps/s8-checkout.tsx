@@ -19,42 +19,32 @@ import { toast } from "sonner";
 import { Button, Chip, Icon, Refusal } from "@/design-system";
 import { useSession } from "@/hooks/use-session";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
-import { useHotelDay } from "@/hooks/use-hotel-day";
 import { usePaymentStatus } from "@/hooks/use-payment-status";
 import { useRoomInspections } from "@/hooks/use-room-inspections";
 import { RoomInspectionGrid } from "./room-inspections";
 import { DamageCard, useUnansweredDamage } from "./damage-card";
 import {
   buildH4FulfilmentEvidence,
-  correctFolioCharge,
   fulfilHandoff,
   initiateSettlement,
-  postFolioCharge,
   reEnterS8ToS7,
   recordKeyReturn,
   recordRoomInspection,
 } from "@/lib/api/checkout";
-import { getNightAuditRecord, openDispute, postCreditNote } from "@/lib/api/in-stay";
+import { getNightAuditRecord, openDispute } from "@/lib/api/in-stay";
 import { recordCreditExtension } from "@/lib/api/reservation-setup";
 import { openFolioDocumentPdf, openInvoicePdf } from "@/lib/api/documents";
 import { deriveFinancials, effectiveCheckOutIso } from "@/lib/desk/workspace";
-import { fmtDate, fmtDateTime, fmtDay, fmtStamp, money, plural } from "@/lib/ds/format";
+import { fmtDate, fmtDateTime, fmtStamp, money, plural } from "@/lib/ds/format";
 import { PLAN_LABEL, dueLabel } from "@/components/desk/workspace/advance-settlement";
-import {
-  FolioLinesTable,
-  chargeTargetSpaces,
-  isTaxCompanion,
-  spaceNamesFromAllocations,
-  splitChargeTarget,
-} from "@/components/desk/workspace/folio-lines";
+import { FolioLinesTable, spaceNamesFromAllocations } from "@/components/desk/workspace/folio-lines";
 import { SplitSettlementBlock } from "@/components/desk/workspace/split-settlement";
-import type { EntryDetail, FolioLineSummary } from "@/types/api";
+import type { EntryDetail } from "@/types/api";
 import { sentWords } from "@/hooks/use-invoice-recipient";
 import { OverpaidCard } from "./refund-card";
 import {
   AnswerLine,
   ChangeBookingMenu,
-  Choice,
   DsDialog,
   Fact,
   Facts,
@@ -110,14 +100,9 @@ import {
 } from "./s8-shares";
 import { Help } from "@/components/ds/help";
 import { PayLaterNote } from "./s6-balance";
+import { CorrectionDialog, CreditNoteDialog, PostChargeDialog } from "./s7-folio";
 
 /* ------------------------------------------------------------------ vocabulary */
-
-const CHARGE_TYPES = [
-  ["F_AND_B", "Food and drink"],
-  ["SERVICE", "Service"],
-  ["OTHER", "Other"],
-] as const;
 
 const H4_FLAGS = [
   ["RECORDED", "The fault is recorded"],
@@ -239,23 +224,7 @@ export function S8CheckOut({
       </WorkPopup>
 
       <div className="pane" hidden={at("charges")}>
-        <FolioTableCard entry={entry} onTab={setChargeTarget} />
-        {chargeable ? (
-          <AddOrCorrectCharge entry={entry} target={chargeTarget} setTarget={setChargeTarget} />
-        ) : (
-          <StepCard
-            title="Add or correct a charge"
-            status={
-              <span className="warn-ink">
-                {!folio
-                  ? "There is no bill on this booking."
-                  : isSettled(folio.state)
-                    ? "The bill is settled — a charge found now is posted on the Closed step, as a late charge."
-                    : `The bill is ${FOLIO_STATE_WORD[folio.state] ?? words(folio.state)} — charges can be added only while it is open.`}
-              </span>
-            }
-          />
-        )}
+        <FolioTableCard entry={entry} onTab={setChargeTarget} chargeable={chargeable} target={chargeTarget} setTarget={setChargeTarget} />
       </div>
 
       {past ? null : (
@@ -614,17 +583,74 @@ export function BillFigures({ fo, cur }: { fo: BillFolio | null; cur: string }) 
   );
 }
 
-/** The folio again, on the Add a charge tab — so a charge is posted with the bill in view. */
-function FolioTableCard({ entry, onTab }: { entry: EntryDetail; onTab: (target: string) => void }) {
+/**
+ * The folio again, on the Add a charge tab — so a charge is posted with the bill in view. Its acts
+ * are Stay's (2026-10-30, operator: "post charge and correct charge to be made into buttons like
+ * this in stage 7, after clicking showing pop up"): Post a charge, Correct a charge and the FOM's
+ * credit note, each in its own pop-up — the same forms, so the two steps cannot word them apart.
+ */
+function FolioTableCard({
+  entry,
+  onTab,
+  chargeable,
+  target,
+  setTarget,
+}: {
+  entry: EntryDetail;
+  onTab: (target: string) => void;
+  /** The bill is open at Check-out — a charge can still go on it. */
+  chargeable: boolean;
+  target: string;
+  setTarget: (v: string) => void;
+}) {
+  const { session } = useSession();
+  const fom = atLeast(session?.actorLevel, "L2");
   const billing = useBilling(entry);
   const fo = billing.data?.folio ?? null;
   const cur = billing.data?.currency ?? entry.folio?.lines?.[0]?.currency ?? "BTN";
+  const folio = entry.folio ?? null;
+  const [open, setOpen] = useState<null | "post" | "correct" | "credit">(null);
+  const shut = !folio
+    ? "There is no bill on this booking."
+    : isSettled(folio.state)
+      ? "The bill is settled — a charge found now is posted on the Closed step, as a late charge."
+      : folio.state !== "LIVE"
+        ? `The bill is ${FOLIO_STATE_WORD[folio.state] ?? words(folio.state)} — charges can be added only while it is open.`
+        : null;
   return (
-    <StepCard title="The folio" status={fo ? `${plural(fo.lineCount, "line")} on the bill` : undefined}>
+    <StepCard
+      title="The folio"
+      status={shut ? <span className="warn-ink">{shut}</span> : fo ? `${plural(fo.lineCount, "line")} on the bill` : undefined}
+      meta="A charge on the bill is never edited — a correction adds a line beside it that puts it right, and its service charge and GST move with it."
+    >
       <BillFigures fo={fo} cur={cur} />
       <div style={{ marginTop: 12 }}>
         <BillLines entry={entry} onTab={onTab} />
       </div>
+      {folio ? (
+        <Live>
+          <div className="folio-acts">
+            <Button className={chargeable ? "go" : undefined} icon="pen" state={chargeable ? "default" : "inert"} reason={shut ?? undefined} onClick={() => setOpen("post")}>
+              Post a charge
+            </Button>
+            <Button kind="secondary" state={chargeable ? "default" : "inert"} title={shut ?? undefined} onClick={() => setOpen("correct")}>
+              Correct a charge
+            </Button>
+            <Button
+              kind="secondary"
+              state={chargeable && fom ? "default" : "inert"}
+              reason={fom ? undefined : "a credit note is the FOM's"}
+              title={shut ?? undefined}
+              onClick={() => setOpen("credit")}
+            >
+              Credit note
+            </Button>
+          </div>
+          <PostChargeDialog entry={entry} open={open === "post"} onClose={() => setOpen(null)} target={target} setTarget={setTarget} />
+          <CorrectionDialog entry={entry} open={open === "correct"} onClose={() => setOpen(null)} />
+          <CreditNoteDialog entry={entry} open={open === "credit"} onClose={() => setOpen(null)} />
+        </Live>
+      ) : null}
     </StepCard>
   );
 }
@@ -646,7 +672,8 @@ function MasterBill({
   const billing = useBilling(entry);
   const index = useFolioIndex(entry);
   const [paper, setPaper] = useState<PaperRef | null>(null);
-  const [showLines, setShowLines] = useState(true);
+  // The lines wait for "Show the lines" (2026-10-30, operator).
+  const [showLines, setShowLines] = useState(false);
   const doc = index.data?.documents.find((d) => d.kind === "master-bill") ?? null;
   const fo = billing.data?.folio ?? null;
   const cur = billing.data?.currency ?? entry.folio?.lines?.[0]?.currency ?? "BTN";
@@ -709,266 +736,6 @@ function MasterBill({
       </div>
       {showLines ? <BillLines entry={entry} onTab={onTab} /> : null}
       <PaperDrawer paper={paper} onClose={() => setPaper(null)} />
-    </StepCard>
-  );
-}
-
-/* ------------------------------------------------------------------ add or correct a charge */
-
-function AddOrCorrectCharge({ entry, target, setTarget }: { entry: EntryDetail; target: string; setTarget: (v: string) => void }) {
-  const { session } = useSession();
-  const hotelDay = useHotelDay();
-  const refresh = useRefreshEntry(entry.id);
-  const fom = atLeast(session?.actorLevel, "L2");
-  const folio = entry.folio!;
-  // Last-morning charges belong to the check-out day — never a stay night, so never sealed by the
-  // night audit. The server normalises the date to the hotel's calendar. The EFFECTIVE check-out:
-  // after an early departure the guest left on that day, and dating their last charges on the
-  // booked check-out put them days after the stay ended (2026-09-18).
-  const checkoutDate = effectiveCheckOutIso(entry);
-  const dateForPosting = checkoutDate ?? hotelDay?.today ?? null;
-  const rooms = useMemo(() => distinctRooms(entry), [entry]);
-  const spaces = useMemo(() => chargeTargetSpaces(entry.spaceAllocations), [entry.spaceAllocations]);
-  const roomNumberById = useMemo(() => new Map(rooms.map((r) => [r.roomId, r.roomNumber])), [rooms]);
-  const spaceNameById = useMemo(() => new Map(spaces.map((s) => [s.spaceId, s.spaceName])), [spaces]);
-  const targetLabel = (l: { roomId?: string | null; spaceId?: string | null }) =>
-    l.roomId ? `Room ${roomNumberById.get(l.roomId) ?? "?"}` : l.spaceId ? spaceNameById.get(l.spaceId) ?? "a space" : "no room or space";
-
-  const [type, setType] = useState<(typeof CHARGE_TYPES)[number][0]>("F_AND_B");
-  const [amount, setAmount] = useState("");
-  const [desc, setDesc] = useState("");
-  const [posted, setPosted] = useState<FolioLineSummary | null>(null);
-
-  const [lineId, setLineId] = useState("");
-  const [mode, setMode] = useState<"adjust" | "setNet">("adjust");
-  const [delta, setDelta] = useState("");
-  const [toAmount, setToAmount] = useState("");
-  const [why, setWhy] = useState("");
-
-  // Charges only — a service-charge or GST line moves with its charge and is never corrected alone.
-  const correctable = (folio.lines ?? []).filter((l) => !isTaxCompanion(l) && !l.description.toLowerCase().startsWith("correction for"));
-  const amt = Number.parseFloat(amount);
-  const amountOk = amount.trim() !== "" && Number.isFinite(amt);
-
-  const post = useMutation({
-    mutationFn: () => {
-      if (!amountOk) throw new Error("Put in the amount");
-      return postFolioCharge(session!, folio.id, {
-        entryId: entry.id,
-        lineType: type,
-        description: desc.trim() || "Final morning charge",
-        amount: amt,
-        chargeDate: dateForPosting ?? undefined,
-        ...splitChargeTarget(target),
-      });
-    },
-    onSuccess: (line) => {
-      setPosted(line);
-      setAmount("");
-      setDesc("");
-      refresh([["settlement-targets"]]);
-    },
-    onError: (e) => toastRefusal(e, "The charge could not be posted"),
-  });
-  const credit = useMutation({
-    mutationFn: () => {
-      if (!amountOk || amt <= 0) throw new Error("Put in the amount of the credit");
-      if (!dateForPosting) throw new Error("The hotel's date is not known yet");
-      return postCreditNote(session!, folio.id, {
-        entryId: entry.id,
-        description: desc.trim() || "Credit note",
-        amount: amt,
-        creditDate: dateForPosting,
-        ...splitChargeTarget(target),
-      });
-    },
-    onSuccess: () => {
-      toast.success("Credit note posted");
-      setAmount("");
-      setDesc("");
-      refresh([["settlement-targets"]]);
-    },
-    onError: (e) => toastRefusal(e, "The credit note could not be posted"),
-  });
-  const correct = useMutation({
-    mutationFn: () => {
-      if (!lineId) throw new Error("Choose the charge that is wrong");
-      if (!dateForPosting) throw new Error("The hotel's date is not known yet");
-      const body: Parameters<typeof correctFolioCharge>[2] = {
-        entryId: entry.id,
-        originalFolioLineId: lineId,
-        reason: why.trim(),
-        correctionDate: dateForPosting,
-      };
-      if (mode === "setNet") {
-        const n = Number.parseFloat(toAmount);
-        if (!Number.isFinite(n)) throw new Error("Put in what the charge should be");
-        body.correctToAmount = n;
-      } else {
-        const v = Number.parseFloat(delta);
-        if (!Number.isFinite(v) || v === 0) throw new Error("Put in the adjustment — more or less than zero");
-        body.correctionAmount = v;
-      }
-      return correctFolioCharge(session!, folio.id, body);
-    },
-    onSuccess: () => {
-      toast.success("Correction posted — its service charge and GST moved with it");
-      setLineId("");
-      setDelta("");
-      setToAmount("");
-      setWhy("");
-      refresh([["settlement-targets"]]);
-    },
-    onError: (e) => toastRefusal(e, "The correction could not be posted"),
-  });
-
-  return (
-    <StepCard
-      title="Add or correct a charge"
-      status={`Dated the check-out day${checkoutDate ? `, ${fmtDate(checkoutDate)}` : ""}`}
-      meta="The last night is already audited. Charges can be added or corrected until the bill is settled." 
-    >
-      <div className="form2">
-        <div className="field">
-          <label>What it is</label>
-          <select className="input" value={type} onChange={(e) => setType(e.target.value as typeof type)}>
-            {CHARGE_TYPES.map(([v, l]) => (
-              <option key={v} value={v}>
-                {l}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="field">
-          <label>For</label>
-          <select className="input" value={target} onChange={(e) => setTarget(e.target.value)}>
-            <option value="">No room or space</option>
-            {rooms.map((r) => (
-              <option key={r.roomId} value={`room:${r.roomId}`}>
-                Room {r.roomNumber}
-              </option>
-            ))}
-            {spaces.length ? (
-              <optgroup label="Spaces">
-                {spaces.map((s) => (
-                  <option key={s.spaceId} value={`space:${s.spaceId}`}>
-                    {s.spaceName}
-                  </option>
-                ))}
-              </optgroup>
-            ) : null}
-          </select>
-        </div>
-        <div className="field">
-          <label>Amount · Nu. · before service charge and GST</label>
-          <input className="input money" inputMode="decimal" value={amount} placeholder="0.00" onChange={(e) => setAmount(e.target.value)} />
-        </div>
-        <div className="field">
-          <label>Description</label>
-          <input className="input" value={desc} placeholder="2 × mineral water, 1 × beer" onChange={(e) => setDesc(e.target.value)} />
-        </div>
-      </div>
-      <div className="row-acts" style={{ marginTop: 10 }}>
-        <Button
-          compact
-          state={post.isPending ? "working" : amountOk ? "default" : "inert"}
-          title={amountOk ? undefined : "put in the amount first"}
-          workingLabel="Posting…"
-          onClick={() => post.mutate()}
-        >
-          Post the charge
-        </Button>
-        <Button
-          kind="quiet"
-          compact
-          state={credit.isPending ? "working" : !fom ? "inert" : amountOk && amt > 0 ? "default" : "inert"}
-          title={!fom ? "A credit note needs the FOM" : amountOk && amt > 0 ? undefined : "put in the amount of the credit first"}
-          workingLabel="Posting…"
-          onClick={() => credit.mutate()}
-        >
-          Post a credit note
-        </Button>
-        <Help label="About the credit note">Its service charge and GST post beside it on their own lines.</Help>
-      </div>
-
-      {correctable.length ? (
-        <div className="form2" style={{ marginTop: 12 }}>
-          <div className="rule-above">
-            <b className="sm">Correct a charge</b>
-            <Help label="About corrections">
-              The bill only grows — a correction is a new line beside the original, and its service charge and GST move with it.
-            </Help>
-          </div>
-          <div className="wide field">
-            <label>Which charge is wrong</label>
-            <select className="input" value={lineId} onChange={(e) => setLineId(e.target.value)}>
-              <option value="">Choose a charge from the bill…</option>
-              {correctable.map((l) => (
-                <option key={l.id} value={l.id}>
-                  {l.id.split("-").pop()} · {fmtDay(l.chargeDate)} · {targetLabel(l)} · {l.description} · {money(l.amount, l.currency)}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="wide field">
-            <label>How</label>
-            <Choice
-              options={[
-                ["adjust", "Adjust it by an amount"],
-                ["setNet", "Set it to an amount"],
-              ]}
-              value={mode}
-              onChange={setMode}
-            />
-          </div>
-          <div className="field">
-            <label>{mode === "adjust" ? "Adjustment · Nu. · minus to reduce" : "What it should be · Nu. · net"}</label>
-            {mode === "adjust" ? (
-              <input className="input money" inputMode="decimal" value={delta} placeholder="-50.00" onChange={(e) => setDelta(e.target.value)} />
-            ) : (
-              <input className="input money" inputMode="decimal" value={toAmount} placeholder="0.00" onChange={(e) => setToAmount(e.target.value)} />
-            )}
-          </div>
-          <div className="field">
-            <label>Why</label>
-            <input className="input" value={why} placeholder="the guest had one beer, not two" onChange={(e) => setWhy(e.target.value)} />
-          </div>
-          <div className="wide row-acts">
-            <Button
-              kind="secondary"
-              compact
-              state={correct.isPending ? "working" : lineId && why.trim() ? "default" : "inert"}
-              title={!lineId ? "choose the charge first" : !why.trim() ? "write why first" : undefined}
-              workingLabel="Posting…"
-              onClick={() => correct.mutate()}
-            >
-              Post the correction
-            </Button>
-          </div>
-        </div>
-      ) : null}
-
-      <DsDialog
-        open={!!posted}
-        onClose={() => setPosted(null)}
-        register="report"
-        title="Charge posted"
-        caseLines={posted ? [<b key="a">{money(posted.amount, posted.currency)}</b>, posted.description] : undefined}
-        footer={
-          <Button compact onClick={() => setPosted(null)}>
-            Done
-          </Button>
-        }
-      >
-        {posted ? (
-          <>
-            <p className="sm">
-              {CHARGE_TYPES.find(([v]) => v === posted.lineType)?.[1] ?? words(posted.lineType)} · for {targetLabel(posted)} · line {posted.id.split("-").pop()}
-              <Help label="About the charge">Service charge and GST posted beside it on their own lines.</Help>
-            </p>
-          </>
-        ) : null}
-      </DsDialog>
     </StepCard>
   );
 }
@@ -1683,15 +1450,19 @@ function Departure({ entry, live }: { entry: EntryDetail; live: boolean }) {
         outstanding: rs.some((r) => r.keyIssuedAt && !r.keyReturnedAt && !r.keyLostAt),
         backEarlier: rs.some((r) => r.keyReturnedAt) && !rs.some((r) => r.keyIssuedAt && !r.keyReturnedAt && !r.keyLostAt),
         lost: rs.some((r) => r.keyLostAt),
+        lostNote: rs.find((r) => r.keyLostAt)?.keyLostNote ?? null,
       }))
       .filter((k) => k.outstanding || k.backEarlier || k.lost)
       .sort((a, b) => a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true }));
   }, [entry.roomAssignments]);
   const roomWise = keyPlan.length > 0;
   const outstandingKeys = keyPlan.filter((k) => k.outstanding);
-  // Each room's key is BACK or LOST (2026-10-26, operator: "tell the system which room's key
-  // exactly is missing"); a room not answered has not come back. A loss needs the note.
+  // Each room's key is RETURNED or LOST (2026-10-26, operator: "tell the system which room's key
+  // exactly is missing"). A lost key says what happened, in a pop-up, and the reason stays with that
+  // room (2026-10-30, operator); every room is answered before the keys are recorded.
   const [keyState, setKeyState] = useState<Record<string, "back" | "lost">>({});
+  const [lostNotes, setLostNotes] = useState<Record<string, string>>({});
+  const [askLost, setAskLost] = useState<{ roomId: string; roomNumber: string } | null>(null);
   const marked = outstandingKeys.filter((k) => keyState[k.roomId] === "back");
   const lostKeys = outstandingKeys.filter((k) => keyState[k.roomId] === "lost");
   const unanswered = outstandingKeys.filter((k) => !keyState[k.roomId]);
@@ -1702,19 +1473,32 @@ function Departure({ entry, live }: { entry: EntryDetail; live: boolean }) {
       else next[roomId] = v;
       return next;
     });
+  // Lost asks why first; pressed again it takes the answer back.
+  const pressLost = (k: { roomId: string; roomNumber: string }) => {
+    if (keyState[k.roomId] === "lost") toggleKey(k.roomId, "lost");
+    else setAskLost(k);
+  };
+  const notLost = outstandingKeys.filter((k) => keyState[k.roomId] !== "lost");
+  const allReturned = notLost.length > 0 && notLost.every((k) => keyState[k.roomId] === "back");
+  const setAllReturned = () =>
+    setKeyState((p) => {
+      const next = { ...p };
+      for (const k of notLost) {
+        if (allReturned) delete next[k.roomId];
+        else next[k.roomId] = "back";
+      }
+      return next;
+    });
   const [count, setCount] = useState(String(keysIssued || 1));
   // The record-the-keys act is the section's own; it is green once it can be pressed.
   const [lostCount, setLostCount] = useState("0");
   const lostN = Number.parseInt(lostCount || "0", 10) || 0;
   const [keyNote, setKeyNote] = useState("");
   const countN = Number.parseInt(count, 10);
-  const anyLost = roomWise ? lostKeys.length > 0 : lostN > 0;
-  const short = (roomWise ? marked.length !== outstandingKeys.length : countN !== keysIssued) || anyLost;
-  const notePrompt = anyLost
-    ? roomWise
-      ? `what happened to ${lostKeys.length > 1 ? "the keys of Rooms" : "the key of Room"} ${lostKeys.map((k) => k.roomNumber).join(", ")}`
-      : "what happened to the lost key"
-    : "a key has not come back — say what happened";
+  // A booking keyed by count (no room stamps) keeps the counts and the one note.
+  const anyLost = lostN > 0;
+  const short = countN !== keysIssued || anyLost;
+  const notePrompt = anyLost ? "what happened to the lost key" : "a key has not come back — say what happened";
 
   const keys = useMutation({
     mutationFn: () => {
@@ -1724,8 +1508,9 @@ function Departure({ entry, live }: { entry: EntryDetail; live: boolean }) {
         return recordKeyReturn(session!, entry.id, {
           keyCountReturned: ids.length,
           ...(ids.length ? { returnedRoomIds: ids } : {}),
-          ...(lostIds.length ? { lostRoomIds: lostIds, keyCountLost: lostIds.length } : {}),
-          ...(short ? { reconciliationNote: keyNote.trim() } : {}),
+          ...(lostIds.length
+            ? { lostRooms: lostKeys.map((k) => ({ roomId: k.roomId, note: (lostNotes[k.roomId] ?? "").trim() })), keyCountLost: lostIds.length }
+            : {}),
         });
       }
       if (!Number.isInteger(countN) || countN < 0) throw new Error("Put in how many keys came back");
@@ -1755,8 +1540,8 @@ function Departure({ entry, live }: { entry: EntryDetail; live: boolean }) {
   const damaged = inspRooms.filter((r) => r.damageFound).length;
   const keysLine = keyReturn
     ? keyReturn.keyCountLost
-      ? `${keyReturn.keyCountReturned} of ${keyReturn.keyCountIssued} keys back · ${keyReturn.keyCountLost} lost`
-      : "Keys back"
+      ? `${keyReturn.keyCountReturned} of ${keyReturn.keyCountIssued} keys returned · ${keyReturn.keyCountLost} lost`
+      : "Keys returned"
     : "";
   const roomsLine =
     inspRooms.length === 1
@@ -1790,7 +1575,7 @@ function Departure({ entry, live }: { entry: EntryDetail; live: boolean }) {
                   returned
                 </Chip>
               )}{" "}
-              {keyReturn.keyCountReturned} of {keyReturn.keyCountIssued} back
+              {keyReturn.keyCountReturned} of {keyReturn.keyCountIssued} returned
               {keyReturn.lostRoomIds?.length ? (
                 <b className="warn-ink">
                   {" "}
@@ -1803,62 +1588,77 @@ function Departure({ entry, live }: { entry: EntryDetail; live: boolean }) {
             </span>
           ) : roomWise ? (
             <div style={{ display: "grid", gap: 6 }}>
-              <span>
-                {outstandingKeys.length} out
-                <span className="meta">
-                  {" "}
-                  · {marked.length} back{lostKeys.length ? ` · ${lostKeys.length} lost` : ""}
-                  {unanswered.length ? ` · ${unanswered.length} not answered` : ""}
+              <span className="row-acts" style={{ justifyContent: "space-between", alignItems: "center" }}>
+                <span>
+                  {outstandingKeys.length} out
+                  <span className="meta">
+                    {" "}
+                    · {marked.length} returned{lostKeys.length ? ` · ${lostKeys.length} lost` : ""}
+                    {unanswered.length ? ` · ${unanswered.length} not answered` : ""}
+                  </span>
                 </span>
+                {live && notLost.length > 1 ? (
+                  <Button kind="secondary" compact icon={allReturned ? undefined : "check"} onClick={setAllReturned}>
+                    {allReturned ? "Clear" : "All returned"}
+                  </Button>
+                ) : null}
               </span>
               {keyPlan.map((k) => (
-                <div key={k.roomId} className="row-acts sm">
-                  <span style={{ minWidth: 90 }}>Room {k.roomNumber}</span>
-                  {k.outstanding ? (
-                    live ? (
-                      <span className="row-acts" role="group" aria-label={`Room ${k.roomNumber}'s key`}>
-                        <Button
-                          kind={keyState[k.roomId] === "back" ? "primary" : "secondary"}
-                          compact
-                          icon={keyState[k.roomId] === "back" ? "check" : undefined}
-                          aria-pressed={keyState[k.roomId] === "back"}
-                          onClick={() => toggleKey(k.roomId, "back")}
-                        >
-                          Back
-                        </Button>
-                        <Button
-                          kind={keyState[k.roomId] === "lost" ? "danger" : "secondary"}
-                          compact
-                          icon={keyState[k.roomId] === "lost" ? "check" : undefined}
-                          aria-pressed={keyState[k.roomId] === "lost"}
-                          onClick={() => toggleKey(k.roomId, "lost")}
-                        >
-                          Lost
-                        </Button>
-                      </span>
+                <div key={k.roomId} style={{ display: "grid", gap: 2 }}>
+                  <div className="row-acts sm">
+                    <span style={{ minWidth: 90 }}>Room {k.roomNumber}</span>
+                    {k.outstanding ? (
+                      live ? (
+                        <span className="row-acts" role="group" aria-label={`Room ${k.roomNumber}'s key`}>
+                          <Button
+                            kind={keyState[k.roomId] === "back" ? "primary" : "secondary"}
+                            compact
+                            icon={keyState[k.roomId] === "back" ? "check" : undefined}
+                            aria-pressed={keyState[k.roomId] === "back"}
+                            onClick={() => toggleKey(k.roomId, "back")}
+                          >
+                            Returned
+                          </Button>
+                          <Button
+                            kind={keyState[k.roomId] === "lost" ? "danger" : "secondary"}
+                            compact
+                            icon={keyState[k.roomId] === "lost" ? "check" : undefined}
+                            aria-pressed={keyState[k.roomId] === "lost"}
+                            onClick={() => pressLost(k)}
+                          >
+                            Lost
+                          </Button>
+                        </span>
+                      ) : (
+                        <span className="meta">key out</span>
+                      )
+                    ) : k.lost ? (
+                      <Chip tone="warning" icon="key">
+                        lost
+                      </Chip>
                     ) : (
-                      <span className="meta">key out</span>
-                    )
-                  ) : k.lost ? (
-                    <Chip tone="warning" icon="key">
-                      lost
-                    </Chip>
-                  ) : (
-                    <Chip tone="quiet" icon="check">
-                      back earlier
-                    </Chip>
-                  )}
+                      <Chip tone="quiet" icon="check">
+                        returned earlier
+                      </Chip>
+                    )}
+                  </div>
+                  {k.outstanding && keyState[k.roomId] === "lost" && lostNotes[k.roomId] ? (
+                    <span className="sm warn-ink" style={{ paddingLeft: 98 }}>
+                      Lost — &ldquo;{lostNotes[k.roomId]}&rdquo;
+                    </span>
+                  ) : !k.outstanding && k.lost && k.lostNote ? (
+                    <span className="sm warn-ink" style={{ paddingLeft: 98 }}>
+                      Lost — &ldquo;{k.lostNote}&rdquo;
+                    </span>
+                  ) : null}
                 </div>
               ))}
               <Live>
-                {short && live ? (
-                  <input className="input" value={keyNote} placeholder={notePrompt} onChange={(e) => setKeyNote(e.target.value)} />
-                ) : null}
                 <div className="row-acts">
                   <Button
-                    className={live && unanswered.length === 0 && (!short || keyNote.trim()) ? "go" : undefined}
-                    state={keys.isPending ? "working" : live && (!short || keyNote.trim()) ? "default" : "inert"}
-                    title={!live ? "only while the booking is at Check-out" : short && !keyNote.trim() ? `${notePrompt} — write it first` : undefined}
+                    className={live && unanswered.length === 0 ? "go" : undefined}
+                    state={keys.isPending ? "working" : live && unanswered.length === 0 ? "default" : "inert"}
+                    reason={!live ? "only while the booking is at Check-out" : unanswered.length ? "answer every room's key — Returned or Lost" : undefined}
                     workingLabel="Recording…"
                     onClick={() => keys.mutate()}
                   >
@@ -1866,6 +1666,21 @@ function Departure({ entry, live }: { entry: EntryDetail; live: boolean }) {
                   </Button>
                 </div>
               </Live>
+              <ReasonDialog
+                open={!!askLost}
+                onClose={() => setAskLost(null)}
+                title={askLost ? `Room ${askLost.roomNumber}'s key is lost` : "A lost key"}
+                lead="What happened is kept with this room. Nothing is charged for it."
+                reasonLabel="What happened to it"
+                placeholder="dropped on the hike to Taktsang"
+                confirmLabel="Mark it lost"
+                onConfirm={(reason) => {
+                  if (!askLost) return;
+                  setLostNotes((p) => ({ ...p, [askLost.roomId]: reason.trim() }));
+                  setKeyState((p) => ({ ...p, [askLost.roomId]: "lost" }));
+                  setAskLost(null);
+                }}
+              />
             </div>
           ) : (
             <div style={{ display: "grid", gap: 6 }}>
@@ -1875,7 +1690,7 @@ function Departure({ entry, live }: { entry: EntryDetail; live: boolean }) {
               <Live>
                 <div className="row-acts">
                   <span className="count-in sm">
-                    back
+                    returned
                     <input className="input" inputMode="numeric" value={count} onChange={(e) => setCount(e.target.value.replace(/\D/g, ""))} disabled={!live} />
                   </span>
                   <span className="count-in sm">

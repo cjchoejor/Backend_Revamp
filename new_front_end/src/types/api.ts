@@ -479,9 +479,11 @@ export type RoomAssignmentSummary = {
   keyIssuedBy?: string | null;
   keyReturnedAt?: string | null;
   keyReturnedBy?: string | null;
-  /** Declared lost at the S8 key return — no longer out with the guest. */
+  /** Declared lost — at Stay or the S8 key return — and no longer out with the guest. */
   keyLostAt?: string | null;
   keyLostBy?: string | null;
+  /** What happened to it, asked room by room (2026-10-30). */
+  keyLostNote?: string | null;
   room?: {
     id: string;
     roomNumber: string;
