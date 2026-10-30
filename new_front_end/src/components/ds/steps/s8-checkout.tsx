@@ -3,8 +3,10 @@
 /**
  * Step 8 · Check-out — "settle up" (SS03 amendment O1–O5, prototype `stepCanvas[8]`).
  *
- * The order the desk works in: is the folio complete → the master bill reviewed with the guest →
- * how the bill is settled → the tax invoice issued and sent → the departure (keys, the room).
+ * The order the desk works in (2026-10-30, the stage template): the keys back and every room
+ * inspected → any damage found answered → the master bill reviewed and the bill settled → the tax
+ * invoice issued and sent → the departure handed over. Each numbered section folds to its line once
+ * its own act finishes it; the charges, the disputes and the way back to Stay open from the step line.
  * Taking payment is the last thing that cannot be taken back; it sits behind its dialog.
  *
  * Every figure is the backend's: the billing summary's buckets and totals, the folio's own
@@ -51,6 +53,7 @@ import { sentWords } from "@/hooks/use-invoice-recipient";
 import { OverpaidCard } from "./refund-card";
 import {
   AnswerLine,
+  ChangeBookingMenu,
   Choice,
   DsDialog,
   Fact,
@@ -59,18 +62,24 @@ import {
   PaperDrawer,
   ReasonDialog,
   SeeRow,
+  StageActs,
   StepCanvas,
   StepCard,
   Tool,
+  WorkPopup,
   atLeast,
   toastRefusal,
+  useFinishWhenDone,
+  useFinishWhenMet,
+  useOpenAlsoWay,
   useRefreshEntry,
+  useStepPane,
   words,
+  type ChangeBookingItem,
   type PaperRef,
   OtherWaysTabs,
   InlineWay,
   ShutWay,
-  useOpenOtherWay,
   type StepPane,
 } from "./kit";
 import {
@@ -140,14 +149,12 @@ export function S8CheckOut({
   past,
   goToStep,
   pane = null,
-  openPane,
 }: {
   entry: EntryDetail;
   past: boolean;
   goToStep: (n: number) => void;
-  /** Which pane is open — null is This step. */
+  /** Which view is open in the page — null is the step itself. */
   pane?: string | null;
-  openPane?: (key: string | null) => void;
 }) {
   const { session } = useSession();
   const clock = useHotelClock(60_000);
@@ -158,8 +165,10 @@ export function S8CheckOut({
   const settled = isSettled(folio?.state);
   // The Stay step defaults its "for" to the folio tab opened; Check-out does the same.
   const [chargeTarget, setChargeTarget] = useState("");
-  // Going back and raising a dispute happen in Other ways' own tabs (2026-10-17).
-  const openWay = useOpenOtherWay();
+  // Going back and raising a dispute open in the middle of the screen, from the step line (2026-10-30).
+  const openWay = useOpenAlsoWay();
+  const stepPane = useStepPane();
+  const [disputesOpen, setDisputesOpen] = useState(false);
 
   // One way back from Check-out: to Stay. "Re-open to Negotiation" was taken off (2026-10-26) — the
   // guest is still in, and from Negotiation the booking could never reach Check-out again. A price is
@@ -200,21 +209,34 @@ export function S8CheckOut({
   return (
     <StepCanvas past={past}>
       <div className="pane" hidden={at(null)}>
-        <DisputesCard entry={entry} tz={clock.tz} />
-        <MasterBill
-          entry={entry}
-          tz={clock.tz}
-          onTab={setChargeTarget}
-          onAddCharge={chargeable && openPane ? () => openPane("charges") : undefined}
-        />
+        {past ? null : <CheckoutAttention entry={entry} onDisputes={() => setDisputesOpen(true)} />}
+        <Departure entry={entry} live={live} />
         {/* A damage found is answered before the bill is settled (2026-10-26). */}
         <DamageCard entry={entry} live={live} />
+        <MasterBill entry={entry} tz={clock.tz} onTab={setChargeTarget} onAddCharge={chargeable ? () => stepPane.open("charges") : undefined} />
         <HowSettled entry={entry} live={live} tz={clock.tz} onBackToStay={() => openWay("stay")} goToStep={goToStep} />
         <OverpaidCard entry={entry} live={live} />
         <Invoices entry={entry} live={live} tz={clock.tz} />
-        <Departure entry={entry} live={live} />
         <DepartureHandoff entry={entry} live={live} tz={clock.tz} />
       </div>
+
+      {/* The disputes, from the step line — in a pop-up over the work column, the booking file clear. */}
+      <WorkPopup open={disputesOpen} title="Disputes" onClose={() => setDisputesOpen(false)}>
+        {(entry.disputes ?? []).length ? <DisputesCard entry={entry} tz={clock.tz} /> : <p className="meta">No dispute has been raised on this booking.</p>}
+        {live && folio ? (
+          <div className="row-acts" style={{ marginTop: 10 }}>
+            <Button
+              kind="secondary"
+              onClick={() => {
+                setDisputesOpen(false);
+                openWay("dispute");
+              }}
+            >
+              Raise a dispute
+            </Button>
+          </div>
+        ) : null}
+      </WorkPopup>
 
       <div className="pane" hidden={at("charges")}>
         <FolioTableCard entry={entry} onTab={setChargeTarget} />
@@ -236,18 +258,130 @@ export function S8CheckOut({
         )}
       </div>
 
-      {/* Other ways as sub-tabs (2026-10-17), each panel the form its button used to open. */}
+      {past ? null : (
+        <CheckoutActs
+          entry={entry}
+          live={live}
+          onCharges={() => stepPane.open("charges")}
+          onDisputes={() => setDisputesOpen(true)}
+          onBackToStay={() => openWay("stay")}
+        />
+      )}
+
+      {/* Going back and raising a dispute open in the middle of the screen (2026-10-30). */}
       <OtherWaysTabs
         tabs={[
           live && !settled
-            ? { key: "stay", label: "Back to Stay", content: fom ? backForm() : <ShutWay act="Back to Stay" why="Going back to Stay needs the FOM." /> }
+            ? {
+                key: "stay",
+                label: "Back to Stay",
+                inBar: false,
+                content: fom ? backForm() : <ShutWay act="Back to Stay" why="Going back to Stay needs the FOM." />,
+              }
             : null,
           live && folio
-            ? { key: "dispute", label: "Raise a dispute", content: <InlineWay render={(done) => <RaiseDispute entry={entry} open onClose={done} />} /> }
+            ? { key: "dispute", label: "Raise a dispute", inBar: false, content: <InlineWay render={(done) => <RaiseDispute entry={entry} open onClose={done} />} /> }
             : null,
         ]}
       />
     </StepCanvas>
+  );
+}
+
+/**
+ * What needs doing from what opens on the step line — one line each, with the way to it
+ * (2026-10-30): an open dispute holds the booking at Check-out.
+ */
+function CheckoutAttention({ entry, onDisputes }: { entry: EntryDetail; onDisputes: () => void }) {
+  const open = (entry.disputes ?? []).filter((d) => d.status === "OPEN" || d.status === "IN_PROGRESS").length;
+  if (!open) return null;
+  return (
+    <div className="stay-attention">
+      <div className="att stop" role="alert">
+        <b>
+          {open} open dispute{open === 1 ? "" : "s"} — the booking stays at Check-out until {open === 1 ? "it is" : "they are"} closed
+        </b>
+        <Button kind="secondary" onClick={onDisputes}>
+          Disputes
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The step line's right end at Check-out (2026-10-30): the charges and the disputes (Charges ▾, the
+ * open disputes as a red count), and the way back to Stay (Change booking ▾, the FOM's — shut once
+ * the bill is settled).
+ */
+function CheckoutActs({
+  entry,
+  live,
+  onCharges,
+  onDisputes,
+  onBackToStay,
+}: {
+  entry: EntryDetail;
+  live: boolean;
+  onCharges: () => void;
+  onDisputes: () => void;
+  onBackToStay: () => void;
+}) {
+  const { session } = useSession();
+  const fom = atLeast(session?.actorLevel, "L2");
+  const folio = entry.folio ?? null;
+  const settled = isSettled(folio?.state);
+  const openDisputes = (entry.disputes ?? []).filter((d) => d.status === "OPEN" || d.status === "IN_PROGRESS").length;
+  const chargeWhy = !folio
+    ? "There is no bill on this booking"
+    : settled
+      ? "The bill is settled — a charge found now is posted on the Closed step, as a late charge"
+      : folio.state !== "LIVE"
+        ? "The bill is not open"
+        : !live
+          ? "Only while the booking is at Check-out"
+          : undefined;
+  const charges: ChangeBookingItem[] = [
+    {
+      key: "charge",
+      label: "Add or correct a charge",
+      note: "The bill's lines, and a charge found this morning — posted while the bill is open.",
+      onSelect: chargeWhy ? undefined : onCharges,
+      reason: chargeWhy,
+    },
+    {
+      key: "disputes",
+      label: openDisputes ? `Disputes · ${openDisputes} open` : "Disputes",
+      note: "A charge the guest questions — raised, reviewed, closed. The booking stays at Check-out while one is open.",
+      onSelect: onDisputes,
+    },
+  ];
+  const backWhy = !live
+    ? "Only while the booking is at Check-out"
+    : settled
+      ? "The bill is settled — a charge found now is posted on the Closed step"
+      : !fom
+        ? "The FOM's call"
+        : undefined;
+  const items: ChangeBookingItem[] = [
+    {
+      key: "stay",
+      label: "Back to Stay",
+      note: "The booking goes back to Stay so a missed charge can be posted there. The bill stays open.",
+      onSelect: backWhy ? undefined : onBackToStay,
+      reason: backWhy,
+    },
+  ];
+  return (
+    <StageActs>
+      <ChangeBookingMenu
+        label="Charges"
+        items={charges}
+        badge={openDisputes}
+        badgeTitle={openDisputes ? `${openDisputes} open dispute${openDisputes === 1 ? "" : "s"} — the booking stays at Check-out until answered` : undefined}
+      />
+      <ChangeBookingMenu items={items} />
+    </StageActs>
   );
 }
 
@@ -330,6 +464,7 @@ function DepartureHandoff({ entry, live, tz }: { entry: EntryDetail; live: boole
   const putOffRooms = inspRooms.filter((r) => r.state === "PUT_OFF").map((r) => r.roomNumber);
   const flagWords = flag ? (H4_FLAGS.find(([v]) => v === flag)?.[1] ?? words(flag)) : null;
   const many = inspRooms.length > 1;
+  const finish = useFinishWhenDone("handoff");
   const fulfil = useMutation({
     mutationFn: () => {
       if (!flag) throw new Error(many ? "Inspect every room first — their answer is the handoff's" : "Record the inspection first — its answer is the handoff's");
@@ -338,6 +473,7 @@ function DepartureHandoff({ entry, live, tz }: { entry: EntryDetail; live: boole
     onSuccess: () => {
       toast.success("The departure handoff is done");
       refresh();
+      finish();
     },
     onError: (e) => toastRefusal(e, "The departure handoff could not be completed"),
   });
@@ -346,14 +482,15 @@ function DepartureHandoff({ entry, live, tz }: { entry: EntryDetail; live: boole
     ? "only while the booking is at Check-out"
     : !flag
       ? many
-        ? "inspect every room in The departure first"
-        : "record the inspection in The departure first"
+        ? "inspect every room in The keys and the rooms first"
+        : "record the inspection in The keys and the rooms first"
       : undefined;
 
   return (
     <StepCard
       flow="handoff"
       title="The departure handoff"
+      summary={`Done${doneAt ? ` · ${fmtStamp(doneAt, tz)}` : ""}${h4?.isAutoFulfilled ? " · recorded by itself" : ""}`}
       status={
         done ? (
           <span className="ok-ink">
@@ -365,8 +502,8 @@ function DepartureHandoff({ entry, live, tz }: { entry: EntryDetail; live: boole
             {flag
               ? `${capFirst(HANDOFF_STATE_WORD[h4.state] ?? words(h4.state))} — ready to mark done`
               : many
-                ? `Waiting for every room's inspection in The departure — ${inspQ.data?.inspectedCount ?? 0} of ${inspRooms.length} done`
-                : "Waiting for the inspection in The departure — its answer is carried here"}
+                ? `Waiting for every room's inspection — ${inspQ.data?.inspectedCount ?? 0} of ${inspRooms.length} done`
+                : "Waiting for the room's inspection — its answer is carried here"}
           </span>
         ) : (
           <span className="warn-ink">Not raised — it is raised when the booking leaves Stay</span>
@@ -393,7 +530,7 @@ function DepartureHandoff({ entry, live, tz }: { entry: EntryDetail; live: boole
             )}
           </span>
           <Button
-            compact
+            className={reason ? undefined : "go"}
             state={fulfil.isPending ? "working" : reason ? "inert" : "default"}
             title={reason}
             workingLabel="Recording…"
@@ -947,6 +1084,7 @@ function HowSettled({
   const voucherValid = Number.isFinite(voucherTyped) && voucherTyped >= 0;
   const invoicesParty = method === "DIRECT_BILL" || method === "VOUCHER";
 
+  const finish = useFinishWhenDone("settle");
   const settle = useMutation({
     mutationFn: () => {
       if (!folio?.id || !folio.billingModel) throw new Error("The bill or its billing model is missing");
@@ -976,6 +1114,7 @@ function HowSettled({
               : "Settled — the bill is closed and the rooms go to housekeeping",
       );
       refresh([["settlement-targets"]]);
+      finish();
     },
     onError: (e) => toastRefusal(e, "The settlement did not go through"),
   });
@@ -1028,6 +1167,11 @@ function HowSettled({
       flow="settle"
       title="How the bill is settled"
       meta="One bill by the model; part by part when each room or hall pays its own; free to change until the bill is settled — after that, the tax invoice decides."
+      summary={
+        stillOwed
+          ? `Settled in part · ${money(balance, cur)} still owed, collected after the stay`
+          : `Settled${folio?.closedAt ? ` · the bill closed ${fmtStamp(folio.closedAt, tz)}` : ""} · the rooms released`
+      }
     >
       <UnauditedLastNight entry={entry} live={live} onBackToStay={onBackToStay} goToStep={goToStep} />
       <PayLaterNote entry={entry} at="checkout" />
@@ -1071,7 +1215,7 @@ function HowSettled({
           There is no bill on this booking.
         </p>
       ) : shares ? (
-        <PayerShares entry={entry} shares={shares} live={live} currency={cur} />
+        <PayerShares entry={entry} shares={shares} live={live} currency={cur} onSettled={() => finish()} />
       ) : settled ? (
         <div className="bind bound" style={{ marginTop: 12 }}>
           {/* an OUTSTANDING bill with nothing left on it (an import, a later payment) reads as settled */}
@@ -1222,6 +1366,7 @@ function HowSettled({
             ) : null}
             <div className="row-acts" style={{ marginTop: 12 }}>
               <Button
+                className={live && !settleReason ? "go" : undefined}
                 icon="lock"
                 state={live && !settleReason ? "default" : "inert"}
                 reason={live ? settleReason : "only while the booking is at Check-out"}
@@ -1558,6 +1703,7 @@ function Departure({ entry, live }: { entry: EntryDetail; live: boolean }) {
       return next;
     });
   const [count, setCount] = useState(String(keysIssued || 1));
+  // The record-the-keys act is the section's own; it is green once it can be pressed.
   const [lostCount, setLostCount] = useState("0");
   const lostN = Number.parseInt(lostCount || "0", 10) || 0;
   const [keyNote, setKeyNote] = useState("");
@@ -1600,8 +1746,37 @@ function Departure({ entry, live }: { entry: EntryDetail; live: boolean }) {
   const released = rooms.length > 0 && rooms.every((r) => r.room?.currentClaimState === "DEPARTED_DIRTY" || r.room?.currentClaimState === "DEPARTED_CLEAN");
   const onAccount = !!entry.folio?.billingModel && ON_ACCOUNT_MODELS.has(entry.folio.billingModel);
 
+  // Folds once every key is back and every room inspected or put off — finished by the presses in it.
+  useFinishWhenMet("departure");
+  const insp = useRoomInspections(entry);
+  const inspRooms = insp.data?.rooms ?? [];
+  const doneRooms = inspRooms.filter((r) => r.state === "DONE");
+  const putOff = inspRooms.filter((r) => r.state === "PUT_OFF").length;
+  const damaged = inspRooms.filter((r) => r.damageFound).length;
+  const keysLine = keyReturn
+    ? keyReturn.keyCountLost
+      ? `${keyReturn.keyCountReturned} of ${keyReturn.keyCountIssued} keys back · ${keyReturn.keyCountLost} lost`
+      : "Keys back"
+    : "";
+  const roomsLine =
+    inspRooms.length === 1
+      ? inspRooms[0].state === "PUT_OFF"
+        ? `Room ${inspRooms[0].roomNumber}'s inspection put off`
+        : `Room ${inspRooms[0].roomNumber} inspected · ${damaged ? "damage found" : "nothing found"}`
+      : inspRooms.length
+        ? `${plural(doneRooms.length, "room")} inspected${putOff ? ` · ${putOff} put off` : ""}${damaged ? ` · damage in ${damaged}` : " · nothing found"}`
+        : "";
+  const leavesWith = onAccount
+    ? `They leave with the master bill — charged to ${booked.payer}, nothing due from them at the desk.`
+    : "They leave with their tax invoice, sent — and printed if they want paper.";
+
   return (
-    <StepCard flow="departure" title="The departure">
+    <StepCard
+      flow="departure"
+      title="The keys and the rooms"
+      meta={`Each room's key back, and each room inspected or put off to after the departure. ${leavesWith} A printed receipt for the payment can't be made yet — the tax invoice shows what was paid. The stay stays on ${booked.guest}'s record; closing the booking seals it.`}
+      summary={[keysLine, roomsLine].filter(Boolean).join(" · ")}
+    >
       <Facts wide>
         <Fact k="Keys">
           {keyReturn ? (
@@ -1681,8 +1856,7 @@ function Departure({ entry, live }: { entry: EntryDetail; live: boolean }) {
                 ) : null}
                 <div className="row-acts">
                   <Button
-                    kind="secondary"
-                    compact
+                    className={live && unanswered.length === 0 && (!short || keyNote.trim()) ? "go" : undefined}
                     state={keys.isPending ? "working" : live && (!short || keyNote.trim()) ? "default" : "inert"}
                     title={!live ? "only while the booking is at Check-out" : short && !keyNote.trim() ? `${notePrompt} — write it first` : undefined}
                     workingLabel="Recording…"
@@ -1740,20 +1914,6 @@ function Departure({ entry, live }: { entry: EntryDetail; live: boolean }) {
             </span>
             <RoomInspectionGrid entry={entry} live={live} />
           </div>
-        </Fact>
-
-        <Fact k="The guest leaves with">
-          {onAccount ? (
-            <>
-              the master bill — <b>charged to {booked.payer}</b>, nothing due from them at the desk
-            </>
-          ) : (
-            <>their tax invoice, sent — and printed if they want paper</>
-          )}
-          <Help label="About the receipt">A printed receipt for the payment can&rsquo;t be made yet — the tax invoice shows what was paid.</Help>
-        </Fact>
-        <Fact k="The record">
-          the stay stays on {booked.guest}&rsquo;s record; closing the booking seals it
         </Fact>
       </Facts>
     </StepCard>

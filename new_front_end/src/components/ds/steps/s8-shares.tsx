@@ -96,7 +96,20 @@ function shareTitle(model: string, booked: ReturnType<typeof useBookedBy>) {
   return words(model);
 }
 
-export function PayerShares({ entry, shares, live, currency }: { entry: EntryDetail; shares: SettlementBucket[]; live: boolean; currency: string }) {
+export function PayerShares({
+  entry,
+  shares,
+  live,
+  currency,
+  onSettled,
+}: {
+  entry: EntryDetail;
+  shares: SettlementBucket[];
+  live: boolean;
+  currency: string;
+  /** A share was settled — the Check-out section folds once the last one is (2026-10-30). */
+  onSettled?: () => void;
+}) {
   const booked = useBookedBy(entry);
   return (
     <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
@@ -108,13 +121,25 @@ export function PayerShares({ entry, shares, live, currency }: { entry: EntryDet
         </Help>
       </p>
       {shares.map((s) => (
-        <ShareRow key={s.billingModel} entry={entry} share={s} live={live} currency={currency} />
+        <ShareRow key={s.billingModel} entry={entry} share={s} live={live} currency={currency} onSettled={onSettled} />
       ))}
     </div>
   );
 }
 
-function ShareRow({ entry, share, live, currency }: { entry: EntryDetail; share: SettlementBucket; live: boolean; currency: string }) {
+function ShareRow({
+  entry,
+  share,
+  live,
+  currency,
+  onSettled,
+}: {
+  entry: EntryDetail;
+  share: SettlementBucket;
+  live: boolean;
+  currency: string;
+  onSettled?: () => void;
+}) {
   const { session } = useSession();
   const refresh = useRefreshEntry(entry.id);
   const booked = useBookedBy(entry);
@@ -195,6 +220,7 @@ function ShareRow({ entry, share, live, currency }: { entry: EntryDetail; share:
               : `${title} — settled`,
       );
       refresh([["settlement-targets"], ["settlement-buckets"], ["folio-documents"]]);
+      onSettled?.();
     },
     onError: (e) => toastRefusal(e, "The share did not settle"),
   });

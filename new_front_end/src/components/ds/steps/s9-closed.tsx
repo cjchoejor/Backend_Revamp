@@ -5,7 +5,9 @@
  *
  * The page opened months later when someone asks about an old booking: what the stay was, where
  * the money sits in the tail after the stay, the one door back in, and the papers as they were
- * sealed. Money arriving after the close is not a change to the record, so recording it — or a
+ * sealed. Until the seal (2026-10-30, the stage template) its sections are numbered from the
+ * backend's own close checks — the money, a room whose inspection was put off, the damage still to
+ * charge or waive, the after-stay handoff — and the seal floats in once every one is in. Money arriving after the close is not a change to the record, so recording it — or a
  * charge found after departure, or a write-off — stays open on a closed booking without a
  * re-entry (Z4). Anything else goes through the door back in.
  *
@@ -21,6 +23,7 @@ import { useHotelDay } from "@/hooks/use-hotel-day";
 import { usePaymentStatus } from "@/hooks/use-payment-status";
 import { useClosureReadiness } from "@/hooks/use-closure-readiness";
 import { recordRoomInspection } from "@/lib/api/checkout";
+import type { RoomInspectionView } from "@/lib/api/post-stay";
 import { RoomInspectionGrid } from "./room-inspections";
 import { DamageCard } from "./damage-card";
 import {
@@ -59,7 +62,10 @@ import {
   latestDispatched,
   toastRefusal,
   useCommunications,
+  useFinishWhenDone,
+  useFinishWhenMet,
   useRefreshEntry,
+  useStepPane,
   words,
   type PaperRef,
   type StepPane,
@@ -124,33 +130,34 @@ export const S9_PANES: StepPane[] = [
 export function S9Closed({
   entry,
   past,
-  close,
   pane = null,
-  openPane,
 }: {
   entry: EntryDetail;
   past: boolean;
-  close: { onClick: () => void; ready: boolean; reason?: string } | null;
-  /** Which pane is open — null is This step. */
+  /** Which view is open in the page — null is the step itself. */
   pane?: string | null;
-  openPane?: (key: string | null) => void;
 }) {
   const clock = useHotelClock(60_000);
+  const stepPane = useStepPane();
   // A cancelled or expired booking reaching this page is only a record. A CLOSED one keeps its
   // tail open (Z4): money, a late chit and a write-off are not changes to what was sealed.
   const readOnly = past || entry.status === "CANCELLED" || entry.status === "EXPIRED";
   const tail = !readOnly && !!entry.folio;
   const shown = tail ? (pane ?? null) : null;
   const at = (k: string | null) => (shown === k ? undefined : true);
+  const open = !readOnly && entry.status !== "CLOSED" && entry.currentStage === "S9";
   return (
     <StepCanvas past={readOnly}>
       <div className="pane" hidden={at(null)}>
         <DisputesCard entry={entry} tz={clock.tz} />
         <WhatTheStayWas entry={entry} />
-        {/* The record is sealed once every damage is charged or waived (2026-10-26). */}
-        <DamageCard entry={entry} live={!readOnly && entry.status !== "CLOSED" && entry.currentStage === "S9"} atClosed />
         {entry.folio ? <OverpaidCard entry={entry} live={!readOnly} /> : null}
-        {entry.folio ? <AfterTheStay entry={entry} tz={clock.tz} close={readOnly ? null : close} openPane={tail ? openPane : undefined} /> : null}
+        {/* The late charge and the tax invoice open in the page, with the way back (2026-10-30). */}
+        {entry.folio ? <AfterTheStay entry={entry} tz={clock.tz} openPane={tail ? (k) => stepPane.open(k) : undefined} /> : null}
+        <ClosedInspections entry={entry} live={open} />
+        {/* The record is sealed once every damage is charged or waived (2026-10-26). */}
+        <DamageCard entry={entry} live={open} atClosed />
+        <AfterStayHandoff entry={entry} live={open} tz={clock.tz} />
         <SealedPapers entry={entry} tz={clock.tz} />
         {entry.status === "CANCELLED" ? <Cancellation entry={entry} /> : null}
       </div>
@@ -294,19 +301,8 @@ function useInvoiceFacts(entry: EntryDetail, tz: string) {
 
 /* ------------------------------------------------------------------ after the stay (Z3, Z4) */
 
-function AfterTheStay({
-  entry,
-  tz,
-  close,
-  openPane,
-}: {
-  entry: EntryDetail;
-  tz: string;
-  close: { onClick: () => void; ready: boolean; reason?: string } | null;
-  openPane?: (key: string | null) => void;
-}) {
+function AfterTheStay({ entry, tz, openPane }: { entry: EntryDetail; tz: string; openPane?: (key: string) => void }) {
   const { session } = useSession();
-  const refresh = useRefreshEntry(entry.id);
   const fom = atLeast(session?.actorLevel, "L2");
   const gm = atLeast(session?.actorLevel, "L3");
   const folio = entry.folio!;
@@ -330,28 +326,12 @@ function AfterTheStay({
   const finalComm = latestDispatched(comms.data?.items, "FINAL_INVOICE");
   const answerPending = !!finalComm && finalComm.acknowledgementStatus !== "RECEIVED";
 
-  const h5 = (entry.handoffs ?? []).find((h) => h.handoffType === "H5") ?? null;
-  const h5Open = !!h5 && (h5.state === "CREATED" || h5.state === "ASSIGNED" || h5.state === "ACCEPTED");
-  // Where the room inspection stands, read from the backend's closure checks (2026-09-18).
-  const closure = useClosureReadiness(entry.id, !sealed && entry.currentStage === "S9");
-  // Each room's inspection (2026-10-26 — one per room).
-  const inspRooms = closure.data?.inspections?.rooms ?? [];
   const commissions = entry.commissionDueRecords ?? [];
   const followUps = entry.followUpTasks ?? [];
 
   const [paying, setPaying] = useState(false);
   const [writing, setWriting] = useState(false);
   const [byPart, setByPart] = useState(false);
-  const [h5Basis, setH5Basis] = useState("Nothing left to settle");
-
-  const h5Done = useMutation({
-    mutationFn: () => fulfilHandoff(session!, h5!.id, { resolutionBasis: h5Basis.trim() }),
-    onSuccess: () => {
-      toast.success("The after-stay handoff is done");
-      refresh();
-    },
-    onError: (e) => toastRefusal(e, "The after-stay handoff could not be completed"),
-  });
 
   const { finals, lastSent, ageDays, lateSinceInvoice } = inv;
   const whereItSits = writtenOff ? (
@@ -392,9 +372,18 @@ function AfterTheStay({
     FOLIO_STATE_WORD[folio.state] ?? words(folio.state)
   );
 
+  // The line it folds to once the money's checks are in (2026-10-30).
+  const summary = writtenOff
+    ? "Nothing owing — written off"
+    : noShow
+      ? "Closed as a no-show"
+      : `${owed ? `${money(outstanding, cur)} owed by ${booked.payer}` : "Nothing owing"}${lastSent ? ` · tax invoice ${invoiceLabel(lastSent)} sent` : ""}`;
+
   return (
     <StepCard
+      flow="money"
       title="After the stay"
+      summary={summary}
       meta="Money that comes in after the guest has left, a charge found later and a write-off are all recorded here — the booking is not reopened for any of them."
       status={
         writtenOff ? (
@@ -551,59 +540,104 @@ function AfterTheStay({
             </div>
           </Fact>
         ) : null}
-        {h5 ? (
-          <Fact k="The last handoff">
-            {h5Open ? (
-              <div style={{ display: "grid", gap: 6 }}>
-                <span>
-                  {HANDOFF_STATE_WORD[h5.state] ?? words(h5.state)}
-                  <Help label="About the last handoff">It is done once the money is all in, written off, or there is nothing left to do.</Help>
-                </span>
-                <Live>
-                  <div className="row-acts">
-                    <input className="input" style={{ flex: 1, minWidth: 220 }} value={h5Basis} onChange={(e) => setH5Basis(e.target.value)} />
-                    <Button
-                      kind="secondary"
-                      compact
-                      state={h5Done.isPending ? "working" : h5Basis.trim() ? "default" : "inert"}
-                      title={h5Basis.trim() ? undefined : "say what settled it"}
-                      workingLabel="Recording…"
-                      onClick={() => h5Done.mutate()}
-                    >
-                      Mark it done
-                    </Button>
-                  </div>
-                </Live>
-              </div>
-            ) : (
-              <span>{HANDOFF_STATE_WORD[h5.state] ?? words(h5.state)}</span>
-            )}
-          </Fact>
-        ) : null}
-        {/* The rooms put off at check-out (or never inspected), as tiles, each finished here or its
-            window closed by the FOM (2026-10-26). Nothing shows when every room was inspected at
-            check-out. */}
-        {inspRooms.some((r) => r.state !== "DONE" || (entry.roomInspectionRecords ?? []).some((i) => i.roomId === r.roomId && i.isDeferred)) ? (
-          <Fact k={inspRooms.length > 1 ? "The inspections" : "The inspection"}>
-            <Live>
-              <RoomInspectionGrid entry={entry} live={!sealed && entry.currentStage === "S9"} atClosed fom={fom} />
-            </Live>
-          </Fact>
-        ) : null}
       </Facts>
 
-      {close && !sealed ? (
+      <RecordPayment entry={entry} open={paying} onClose={() => setPaying(false)} invoices={inv.invoices} outstanding={outstanding} answerPending={answerPending} currency={cur} payer={booked.payer} />
+      <WriteOff entry={entry} open={writing} onClose={() => setWriting(false)} outstanding={outstanding} currency={cur} payer={booked.payer} />
+    </StepCard>
+  );
+}
+
+/* ------------------------------------------------------------------ the inspections owed (a section) */
+
+/**
+ * Whether the Closed step draws the inspections — a room put off at check-out, or never inspected
+ * (2026-10-26). Nothing shows when every room was inspected at check-out. The workspace numbers the
+ * section by the same rule, so the two cannot disagree.
+ */
+export function inspectionsOwedAtClosed(entry: EntryDetail, rooms: ReadonlyArray<RoomInspectionView>) {
+  return rooms.some((r) => r.state !== "DONE" || (entry.roomInspectionRecords ?? []).some((i) => i.roomId === r.roomId && i.isDeferred));
+}
+
+/** The rooms put off at check-out, as tiles, each finished here or its window closed by the FOM. */
+function ClosedInspections({ entry, live }: { entry: EntryDetail; live: boolean }) {
+  const { session } = useSession();
+  const fom = atLeast(session?.actorLevel, "L2");
+  const closure = useClosureReadiness(entry.id, entry.status !== "CLOSED" && entry.currentStage === "S9");
+  const rooms = closure.data?.inspections?.rooms ?? [];
+  // Finished by the presses in it — the tiles' forms are inline.
+  useFinishWhenMet("inspections");
+  if (!inspectionsOwedAtClosed(entry, rooms)) return null;
+  const owing = rooms.filter((r) => r.state === "PUT_OFF" || r.state === "NOT_RECORDED");
+  const many = rooms.length > 1;
+  return (
+    <StepCard
+      flow="inspections"
+      title={many ? "The inspections" : "The inspection"}
+      meta="A room put off at check-out is inspected here; once its window has passed the FOM can close it instead."
+      status={
+        owing.length ? (
+          <span className="warn-ink">
+            {owing.length === 1 ? `Room ${owing[0].roomNumber}` : `Rooms ${owing.map((r) => r.roomNumber).join(", ")}`} still to inspect, or the window to close
+          </span>
+        ) : (
+          <span className="ok-ink">{many ? "Every room inspected or its window closed" : "Inspected, or its window closed"}</span>
+        )
+      }
+      summary={many ? `${plural(rooms.length, "room")} inspected or closed` : `Room ${rooms[0]?.roomNumber ?? ""} inspected or closed`}
+    >
+      <Live>
+        <RoomInspectionGrid entry={entry} live={live} atClosed fom={fom} />
+      </Live>
+    </StepCard>
+  );
+}
+
+/* ------------------------------------------------------------------ the after-stay handoff (a section) */
+
+function AfterStayHandoff({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz: string }) {
+  const { session } = useSession();
+  const refresh = useRefreshEntry(entry.id);
+  const h5 = (entry.handoffs ?? []).find((h) => h.handoffType === "H5") ?? null;
+  const h5Open = !!h5 && (h5.state === "CREATED" || h5.state === "ASSIGNED" || h5.state === "ACCEPTED");
+  const [basis, setBasis] = useState("Nothing left to settle");
+  const finish = useFinishWhenDone("handoff");
+  const done = useMutation({
+    mutationFn: () => fulfilHandoff(session!, h5!.id, { resolutionBasis: basis.trim() }),
+    onSuccess: () => {
+      toast.success("The after-stay handoff is done");
+      refresh();
+      finish();
+    },
+    onError: (e) => toastRefusal(e, "The after-stay handoff could not be completed"),
+  });
+  if (!h5) return null;
+  const word = HANDOFF_STATE_WORD[h5.state] ?? words(h5.state);
+  const state = word ? word[0].toUpperCase() + word.slice(1) : word;
+  return (
+    <StepCard
+      flow="handoff"
+      title="The after-stay handoff"
+      meta="It is done once the money is all in, written off, or there is nothing left to do."
+      status={h5Open ? <span className="warn-ink">{state} — say what settled it and mark it done</span> : <span className="ok-ink">{state}</span>}
+      summary={`${state}${h5.fulfilledAt ? ` · ${fmtStamp(h5.fulfilledAt, tz)}` : ""}`}
+    >
+      {h5Open && live ? (
         <Live>
-          <div className="row-acts" style={{ marginTop: 14, borderTop: "1px solid var(--line)", paddingTop: 12 }}>
-            <Button icon="lock" state={close.ready ? "default" : "inert"} reason={close.ready ? undefined : close.reason} onClick={close.onClick}>
-              Close &amp; seal the record
+          <div className="row-acts">
+            <input className="input" style={{ flex: 1, minWidth: 220 }} value={basis} aria-label="What settled it" onChange={(e) => setBasis(e.target.value)} />
+            <Button
+              className={basis.trim() ? "go" : undefined}
+              state={done.isPending ? "working" : basis.trim() ? "default" : "inert"}
+              title={basis.trim() ? undefined : "say what settled it"}
+              workingLabel="Recording…"
+              onClick={() => done.mutate()}
+            >
+              Mark it done
             </Button>
           </div>
         </Live>
       ) : null}
-
-      <RecordPayment entry={entry} open={paying} onClose={() => setPaying(false)} invoices={inv.invoices} outstanding={outstanding} answerPending={answerPending} currency={cur} payer={booked.payer} />
-      <WriteOff entry={entry} open={writing} onClose={() => setWriting(false)} outstanding={outstanding} currency={cur} payer={booked.payer} />
     </StepCard>
   );
 }

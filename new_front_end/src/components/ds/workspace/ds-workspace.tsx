@@ -124,7 +124,7 @@ import { S7Stay, S7_PANES } from "@/components/ds/steps/s7-stay";
 import { keysDue, keysDueWords } from "@/components/ds/steps/s7-rooms";
 import { S6_PANES } from "@/components/ds/steps/s6-checkin";
 import { S8CheckOut, S8_PANES } from "@/components/ds/steps/s8-checkout";
-import { S9Closed, S9_PANES } from "@/components/ds/steps/s9-closed";
+import { S9Closed, S9_PANES, inspectionsOwedAtClosed } from "@/components/ds/steps/s9-closed";
 import { Overlay, atLeast, useRefreshEntry, useStepPane } from "@/components/ds/steps/kit";
 import { ChangeConfiguration } from "@/components/ds/steps/s2-configuration";
 import { declineEntry } from "@/lib/api/reservation-setup";
@@ -216,7 +216,41 @@ const STAY_SECTIONS: Record<string, string> = {
   folio: "The bill",
   departments: "The departments",
 };
-/** The steps drawn in the stage-template layout, with their sections (Inquiry to Stay). */
+/**
+ * Check-out's sections (2026-10-30, operator: "make the new ui changes for stage 8 and 9"), in the
+ * order the desk works them: the keys back and every room inspected — a damage found is answered
+ * before the bill is settled — then the bill, then the departure handed over. The damage is a
+ * section only when an inspection found some.
+ */
+const CHECKOUT_SECTIONS: Record<string, string> = {
+  departure: "The keys and the rooms",
+  damage: "Damage found",
+  settle: "Settling the bill",
+  handoff: "The departure handoff",
+};
+/**
+ * Closed's sections (2026-10-30), from the backend's own close checks: the money after the stay,
+ * a room whose inspection was put off at check-out, the damage still to charge or waive, and the
+ * after-stay handoff — each a section only when the booking has it.
+ */
+const CLOSED_SECTIONS: Record<string, string> = {
+  money: "The money after the stay",
+  inspections: "The inspections",
+  damage: "Damage found",
+  handoff: "The after-stay handoff",
+};
+/** Which section each of the backend's close checks belongs to; the rest are listed apart. */
+const CLOSED_CHECK_CARD: Record<string, string> = {
+  INVOICES: "money",
+  PAYMENTS: "money",
+  BILL: "money",
+  NO_SHOW: "money",
+  FOLIO: "money",
+  INSPECTION: "inspections",
+  DAMAGE: "damage",
+  H5: "handoff",
+};
+/** The steps drawn in the stage-template layout, with their sections (every step since 2026-10-30). */
 const STEP_SECTIONS: Partial<Record<number, Record<string, string>>> = {
   1: INQUIRY_SECTIONS,
   2: NEGOTIATION_SECTIONS,
@@ -225,6 +259,8 @@ const STEP_SECTIONS: Partial<Record<number, Record<string, string>>> = {
   5: ARRIVAL_SECTIONS,
   6: CHECKIN_SECTIONS,
   7: STAY_SECTIONS,
+  8: CHECKOUT_SECTIONS,
+  9: CLOSED_SECTIONS,
 };
 const isTopLayoutStep = (n: number) => !!STEP_SECTIONS[n];
 /**
@@ -594,7 +630,6 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     onSuccess: (updated) => {
       afterMove(updated);
       setCloseOpen(false);
-      toast.success("Closed — the record is sealed.");
     },
     onError: fail("Closing failed"),
   });
@@ -1011,7 +1046,24 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                   ? s8Readiness(entry, { inspections, damage })
                   : closedStepActive
                     ? closure
-                      ? [...closure.checks.map((c) => ({ label: c.label, met: c.met })), { label: "Sealing needs the FOM", met: atLeastFom(session?.actorLevel) }]
+                      ? (() => {
+                          // Each check in its section, the sections in the page's order (2026-10-30). A
+                          // section the page does not draw — every room inspected at check-out, no
+                          // after-stay handoff — leaves its check listed apart.
+                          const order = Object.keys(CLOSED_SECTIONS);
+                          const drawn = (card?: string) =>
+                            card === "inspections"
+                              ? inspectionsOwedAtClosed(entry, closure.inspections?.rooms ?? [])
+                              : card === "handoff"
+                                ? (entry.handoffs ?? []).some((h) => h.handoffType === "H5")
+                                : !!card;
+                          const items: Precondition[] = closure.checks.map((c) => {
+                            const card = CLOSED_CHECK_CARD[c.code];
+                            return { label: c.label, met: c.met, card: drawn(card) ? card : undefined };
+                          });
+                          const rank = (p: Precondition) => (p.card ? order.indexOf(p.card) : order.length);
+                          return [...items.sort((a, b) => rank(a) - rank(b)), { label: "Sealing needs the FOM", met: atLeastFom(session?.actorLevel) }];
+                        })()
                       : [{ label: "Checking what is left before the close…", met: false }]
                     : confirmedS4Active
                       ? [{ label: "The guest's answer to the voucher, if it was sent", met: voucherAnswerRecorded }]
@@ -1032,9 +1084,19 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   // Stage 1 is laid out as five numbered sections (2026-10-10), so it numbers by section; so does
   // Negotiation, in its two (2026-10-27), and Set up, in its six (2026-10-28).
   const sectioned =
-    inquiryStepActive || quoteStepActive || setupStepActive || confirmStepActive || confirmedS4Active || arrivalStepActive || checkInStepActive || stayStepActive;
+    inquiryStepActive ||
+    quoteStepActive ||
+    setupStepActive ||
+    confirmStepActive ||
+    confirmedS4Active ||
+    arrivalStepActive ||
+    checkInStepActive ||
+    stayStepActive ||
+    checkOutStepActive ||
+    closedStepActive;
   // From Set up on, each section is finished by its own act — no Done to press (2026-10-28).
-  const noDoneBar = setupStepActive || confirmStepActive || confirmedS4Active || arrivalStepActive || checkInStepActive || stayStepActive;
+  const noDoneBar =
+    setupStepActive || confirmStepActive || confirmedS4Active || arrivalStepActive || checkInStepActive || stayStepActive || checkOutStepActive || closedStepActive;
   // A finished section folds to its line — except at Stay, whose sections are the day's work (2026-10-29).
   const foldDone = sectioned && !stayStepActive;
   const derived = STEP_DERIVED[viewing] ?? {};
@@ -1100,8 +1162,9 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   // Negotiation and returns here.
   const changeInPage = topLayout && (setupStepActive || confirmedS4Active || arrivalStepActive) && !sealed && paneParam === "change";
   // Check-in's and Stay's own views in the page (2026-10-29) — the step draws them itself; the way back
-  // is said above them, and the step's move waits for its own page.
-  const stepViewInPage = topLayout && !!pane && (checkInStepActive || stayStepActive);
+  // is said above them, and the step's move waits for its own page. Check-out's charges and Closed's
+  // late charge and tax invoice open the same way (2026-10-30) — Closed's on a sealed record too.
+  const stepViewInPage = topLayout && !!pane && (checkInStepActive || stayStepActive || checkOutStepActive || step.key === "closed");
   const inPage = roomsInPage || changeInPage || stepViewInPage;
   // The keys owed today on a move day — counted on Stay's Keys tab (2026-10-26).
   const keysOwedNow = step.key === "stay" && !viewingPast ? keysDue(entry, hotelToday) : { collect: [], handOver: [] };
@@ -1280,10 +1343,32 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
       </Button>
     );
   } else if (checkOutStepActive) {
+    // Green once it can be pressed and floating in, and the move is said in the middle of the
+    // screen, as from Inquiry to Stay (2026-10-30).
     const ok = canProgressS8(entry, { inspections, damage });
     moveReady = ok;
     forward = (
-      <Button state={advanceMutation.isPending ? "working" : ok ? "default" : "inert"} reason={ok ? undefined : firstNote} workingLabel="Moving…" onClick={() => advanceMutation.mutate({ targetStage: "S9" })}>
+      <Button
+        className="go"
+        state={advanceMutation.isPending ? "working" : ok ? "default" : "inert"}
+        reason={ok ? undefined : firstNote}
+        workingLabel="Moving…"
+        onClick={() =>
+          advanceMutation.mutate(
+            { targetStage: "S9", announce: true },
+            {
+              onSuccess: () =>
+                setMoved({
+                  title: "Check-out is done",
+                  from: "Check-out",
+                  to: "Closed",
+                  who: [name, entry.id].filter(Boolean).join(" · "),
+                  next: "Next: anything still owed collected, the tax invoice sent, then the record closed and sealed.",
+                }),
+            },
+          )
+        }
+      >
         Move to Closed
       </Button>
     );
@@ -1291,7 +1376,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     const ok = !!closure?.canClose && atLeastFom(session?.actorLevel);
     moveReady = ok;
     forward = (
-      <Button icon="lock" state={closeMutation.isPending ? "working" : ok ? "default" : "inert"} reason={ok ? undefined : firstNote} workingLabel="Sealing…" onClick={() => setCloseOpen(true)}>
+      <Button className="go" icon="lock" state={closeMutation.isPending ? "working" : ok ? "default" : "inert"} reason={ok ? undefined : firstNote} workingLabel="Sealing…" onClick={() => setCloseOpen(true)}>
         Close &amp; seal the record
       </Button>
     );
@@ -1395,28 +1480,10 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
           />
         );
       case "checkout":
-        return (
-          <S8CheckOut
-            entry={entry}
-            past={viewingPast}
-            goToStep={viewingPast ? NOOP : stableSetSelected}
-            pane={pane}
-            openPane={setPane}
-          />
-        );
-      case "closed": {
-        const canClose = !!closure?.canClose && atLeastFom(session?.actorLevel);
-        const closeReason = canClose ? undefined : !atLeastFom(session?.actorLevel) ? "closing needs the FOM" : firstNote;
-        return (
-          <S9Closed
-            entry={entry}
-            past={viewingPast}
-            close={closedStepActive ? { onClick: () => setCloseOpen(true), ready: canClose, reason: closeReason } : null}
-            pane={pane}
-            openPane={setPane}
-          />
-        );
-      }
+        return <S8CheckOut entry={entry} past={viewingPast} goToStep={viewingPast ? NOOP : stableSetSelected} pane={pane} />;
+      case "closed":
+        // The seal is the step's move, floating in once it can be pressed (2026-10-30).
+        return <S9Closed entry={entry} past={viewingPast} pane={pane} />;
       default:
         return null;
     }
@@ -1705,7 +1772,17 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
           ]}
           confirmLabel="Close & seal"
           pending={closeMutation.isPending}
-          onConfirm={() => closeMutation.mutate()}
+          onConfirm={() =>
+            // Said in the middle of the screen, as a step move is (2026-10-30).
+            closeMutation.mutate(undefined, {
+              onSuccess: () =>
+                setMoved({
+                  title: "The record is closed and sealed",
+                  who: [name, entry.id].filter(Boolean).join(" · "),
+                  next: "The system sends the feedback request, follows up anything still owed and keeps the record. A payment, a late charge or a tax invoice can still be recorded here.",
+                }),
+            })
+          }
           onClose={() => setCloseOpen(false)}
         />
 
@@ -1961,7 +2038,9 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                           : confirmStepActive
                             ? // Not reserved yet: the page's own button does it (2026-10-29).
                               "Everything is on record · Reserve the booking"
-                            : `${STEP_NAMES[viewing - 1]} is done · next: ${STEP_NAMES[viewing] ?? ""}`}
+                            : closedStepActive
+                              ? "Everything is in · Close & seal the record"
+                              : `${STEP_NAMES[viewing - 1]} is done · next: ${STEP_NAMES[viewing] ?? ""}`}
                       </div>
                     </div>
                   ) : null}

@@ -697,21 +697,25 @@ export function s8Readiness(
     distinctRooms.every(
       (r) => r?.currentClaimState === "DEPARTED_DIRTY" || r?.currentClaimState === "DEPARTED_CLEAN",
     );
+  // In the order the desk works them (2026-10-30): the keys back and each room inspected first — a
+  // damage found is answered before the bill is settled (Policy 81) — then the bill, which releases
+  // the rooms, then the departure handed over.
   return [
-    // A written-off folio owes nothing and leaves Check-out too (Policy 33, 2026-10-12).
-    { label: "Folio settled", met: folio?.state === "SETTLED" || folio?.state === "OUTSTANDING" || folio?.state === "WRITTEN_OFF", card: "settle" },
     {
       card: "departure",
       label: "Keys returned",
       met: !!keyReturn && (keyReturn.countReconciled || !!keyReturn.reconciliationNote),
     },
+    inspectionLine,
+    ...(opts.damage?.any ? [{ label: "Damage answered", met: opts.damage.unanswered.length === 0, card: "damage" } as Precondition] : []),
+    // A written-off folio owes nothing and leaves Check-out too (Policy 33, 2026-10-12).
+    { label: "Folio settled", met: folio?.state === "SETTLED" || folio?.state === "OUTSTANDING" || folio?.state === "WRITTEN_OFF", card: "settle" },
     {
       label:
         distinctRooms.length > 1 ? "Rooms released to housekeeping" : "Room released to housekeeping",
       met: roomsReleased,
+      card: "settle",
     },
-    inspectionLine,
-    ...(opts.damage?.any ? [{ label: "Damage answered", met: opts.damage.unanswered.length === 0, card: "damage" } as Precondition] : []),
     { label: "Departure handoff done", met: !!h4 && (h4.state === "FULFILLED" || h4.isAutoFulfilled === true), card: "handoff" },
     { label: "No open disputes", met: openDisputes.length === 0 },
   ];
