@@ -153,7 +153,7 @@ export default function AdminConfigurationPage() {
               </div>
               {activeQuery.data && (
                 <p className="admin-muted text-xs">
-                  Active since {new Date(activeQuery.data.effectiveFrom).toLocaleString()} · set by{" "}
+                  Active since {new Date(activeQuery.data.effectiveFrom).toLocaleString("en-GB")} · set by{" "}
                   {activeQuery.data.setBy}
                 </p>
               )}

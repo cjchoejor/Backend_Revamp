@@ -79,7 +79,7 @@ export function OverpaidCard({ entry, live }: { entry: EntryDetail; live: boolea
               setOpen(true);
             }}
           >
-            Record the refund…
+            Record the refund
           </Button>
         </div>
       </Live>

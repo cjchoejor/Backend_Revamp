@@ -55,9 +55,6 @@ export type DeskListRow = {
     corporateAccount: { id: string; displayName: string } | null;
   } | null;
   reservation: { id: string; confirmedAt: string; confirmationVoucherSent: boolean } | null;
-  /** The guest has actually been sent their confirmation — read from the communications,
-   *  not from the reservation's write-once flag. See desk-read-service. */
-  voucherSent: boolean;
   folio: { id: string; state: string; billingModel: string | null } | null;
   committedHold: { state: string; expiresAt: string } | null;
   speculativeHolds: Array<{ expiresAt: string }>;
@@ -73,6 +70,15 @@ export type DeskListRow = {
     remindersSent: number;
     promiseKind: "NOW" | "BY_DATE" | null;
     promisedBy: string | null;
+  }>;
+  /** The rest of the bill at check-in (2026-10-29): a request the FOM must answer, or the FOM's later date. */
+  checkInPaymentDeferrals?: Array<{
+    id: string;
+    status: "REQUESTED" | "APPROVED";
+    payBy: "DURING_STAY" | "AT_CHECKOUT" | "AFTER_STAY" | null;
+    dueBy: string | null;
+    stillToPay: string | number;
+    requestedAt: string;
   }>;
   timers: Array<{ timerCode: string; timerType: string; firesAt: string }>;
   custodianName: string | null;
@@ -112,7 +118,8 @@ export async function deskMoneyFor(session: Session, entryIds: string[]) {
 export type DeskTimerRow = {
   entryId: string;
   running: number;
-  next: Array<{ timerCode: string; timerType: string; stageContext: string | null; firesAt: string; handoffType?: string | null }>;
+  /** `showsFrom` — the clock is shown from then, not before (the no-show cut-off, from its grace; 2026-10-29). */
+  next: Array<{ timerCode: string; timerType: string; stageContext: string | null; firesAt: string; showsFrom?: string | null; handoffType?: string | null }>;
 };
 
 export async function deskTimersFor(session: Session, entryIds: string[]) {
@@ -154,7 +161,7 @@ export async function listDeskActivity(session: Session, q: { date: string; acto
 
 /* ---------- the alerts the system sent (2026-10-23) ---------- */
 
-export type DeskAlertKind = "STAGE_DWELL" | "EXPIRED" | "PAYMENT_REMINDER" | "VIP_ARRIVAL" | "OTHER";
+export type DeskAlertKind = "STAGE_DWELL" | "EXPIRED" | "PAYMENT_REMINDER" | "PAY_LATER_ASKED" | "VIP_ARRIVAL" | "OTHER";
 export type DeskAlertTarget = "OPERATOR" | "FOM" | "GM";
 
 export type DeskAlert = {

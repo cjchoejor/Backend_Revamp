@@ -20,9 +20,37 @@ export type HeldDocumentReason =
   | "ROOM_MOVE"
   | "DATE_MOVE"
   /** Rooms split off to a booking of their own (2026-10-14) — both bookings' papers. */
-  | "ROOM_SPLIT";
+  | "ROOM_SPLIT"
+  /**
+   * The desk's own Reserve (2026-10-29, operator: "the confirmation voucher is sent automatically
+   * when I click Reserve the booking, but that should also be optional like how I did for
+   * quotation and proforma") — the voucher is made and waits for the desk, like every other paper.
+   */
+  | "RESERVE"
+  /** The dates, rooms or party changed on the step the booking is at (2026-10-29, `booking-change-service`). */
+  | "RECONFIGURE"
+  /** A pass's own proforma made after the event, for a change made before every pass had one (2026-10-29, `repair-pass-proformas.ts`). */
+  | "NEW_PASS";
 
 type Db = PrismaClient | Prisma.TransactionClient;
+
+/**
+ * The booking went back a step (2026-10-29, found on ENT-20261029-0001: pass 1's voucher still asked
+ * to be sent after "Change the dates" had sent the booking back to Inquiry). A paper held for the
+ * desk restates the pass it was made for; once that pass is sealed it describes a stay that no
+ * longer stands, so it is retired — never sent — and the new pass makes its own.
+ */
+export async function retireHeldPapersOnReEntryTx(db: Db, input: { entryId: string; actorId: string }) {
+  await db.heldDocument.updateMany({
+    where: { entryId: input.entryId, decision: null },
+    data: {
+      decision: "SUPERSEDED",
+      decidedAt: new Date(),
+      decidedBy: "SYSTEM",
+      note: "The booking went back a step — the new pass makes its own papers",
+    },
+  });
+}
 
 /**
  * Record a paper held for the desk. An older paper of the same kind on the booking that nobody

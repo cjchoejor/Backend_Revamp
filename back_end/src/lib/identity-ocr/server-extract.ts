@@ -178,16 +178,43 @@ async function stripPng(img: sharp.Sharp, threshold: boolean): Promise<Buffer> {
   return p.png().toBuffer();
 }
 
-async function preprocessForMrz(work: Buffer, region: "bottom" | "full"): Promise<Buffer> {
+async function preprocessForMrz(work: Buffer, region: "bottom" | "full", from = 0.55, threshold = true): Promise<Buffer> {
   const img = sharp(work, { failOn: "none" });
   const meta = await img.metadata();
   const w = meta.width ?? 0;
   const h = meta.height ?? 0;
   if (region === "bottom" && w > 0 && h > 0) {
-    const top = Math.floor(h * 0.55);
-    return stripPng(img.extract({ left: 0, top, width: w, height: h - top }), true);
+    const top = Math.floor(h * from);
+    return stripPng(img.extract({ left: 0, top, width: w, height: h - top }), threshold);
   }
-  return stripPng(img, true);
+  return stripPng(img, threshold);
+}
+
+/**
+ * The foot of the page, cropped tighter first (2026-10-29, operator: "it is really slow — 30 s to a
+ * minute"). A passport photographed whole has its strip in the last fifth; read alone, without the
+ * page's other print, it comes back nearly clean in a third of a second, where the bottom half read
+ * as one block came back as noise and sent the photo to the page reader (20 s and more). Each crop
+ * is tried in turn and the first strip its check digits prove wins.
+ */
+const STRIP_CROPS: Array<{ from: number; threshold: boolean }> = [
+  { from: 0.82, threshold: false },
+  { from: 0.72, threshold: false },
+  { from: 0.55, threshold: false },
+  { from: 0.55, threshold: true },
+];
+async function readFootStrip(work: Buffer): Promise<{ parsed: IdentityExtraction | null; lines: string[]; complete: boolean }> {
+  const lines: string[] = [];
+  let best: IdentityExtraction | null = null;
+  for (const c of STRIP_CROPS) {
+    const r = await readStrip(await preprocessForMrz(work, "bottom", c.from, c.threshold));
+    lines.push(...r.lines);
+    if (!r.parsed) continue;
+    const complete = r.parsed.fieldConfidence.documentNumber === "VERIFIED" && r.parsed.fieldConfidence.dateOfBirth === "VERIFIED";
+    if (complete) return { parsed: r.parsed, lines, complete: true };
+    best ??= r.parsed;
+  }
+  return { parsed: best, lines, complete: false };
 }
 
 /** The strip read off the image: the strict parse when it holds, and the raw lines either way. */
@@ -205,11 +232,9 @@ async function readStrip(png: Buffer, psm: PSM = PSM.SINGLE_BLOCK): Promise<{ pa
 /** OCR the MRZ off the image; returns the parsed extraction or null. */
 export async function readMrzFromImage(bytes: Buffer): Promise<IdentityExtraction | null> {
   const work = await workingCopy(bytes);
-  for (const region of ["bottom", "full"] as const) {
-    const r = await readStrip(await preprocessForMrz(work, region));
-    if (r.parsed) return r.parsed;
-  }
-  return null;
+  const foot = await readFootStrip(work);
+  if (foot.parsed) return foot.parsed;
+  return (await readStrip(await preprocessForMrz(work, "full"))).parsed;
 }
 
 /**
@@ -351,6 +376,29 @@ function stripRegion(lines: Array<{ text: string; box?: [number, number, number,
   return hits.filter((b) => lowest[1] - b[3] <= h * 2.5);
 }
 
+/**
+ * The numbers printed on the page, read with the strip reader (2026-10-29) — for a strip cut short
+ * at its left edge, whose own copy of the number is gone. The strip's reader reads the bold print
+ * of "10602591" in about a second where the page reader missed it. Eight-character tokens with at
+ * least six digits; the strip's check digit then says which, if any, is the number.
+ */
+async function readPageNumbers(work: Buffer): Promise<string[]> {
+  const meta = await sharp(work).metadata();
+  const W = meta.width ?? 0;
+  const H = meta.height ?? 0;
+  if (!W || !H) return [];
+  const top = Math.floor(H * 0.25);
+  const png = await sharp(work)
+    .extract({ left: 0, top, width: W, height: Math.floor(H * 0.88) - top })
+    .resize({ width: 2000 })
+    .grayscale()
+    .normalise()
+    .png()
+    .toBuffer();
+  const text = await recogniseStrip(png, PSM.SPARSE_TEXT);
+  return [...new Set([...text.matchAll(/[A-Z0-9]{8}/g)].map((m) => m[0]).filter((t) => (t.match(/\d/g)?.length ?? 0) >= 6))];
+}
+
 /** Where a reading has got to — the desk draws it (2026-10-23). */
 export type ReadStage = "QR" | "STRIP" | "TEXT";
 
@@ -398,11 +446,31 @@ export async function extractIdentityFromImage(
     if (aadhaar && !aadhaar.empty) return { engine: "SERVER_QR", extraction: aadhaar };
     genericQr = parseGenericQrText(qrText);
   }
-  await opts.onStage?.("STRIP");
-  const bottom = await readStrip(await preprocessForMrz(work, "bottom"));
-  // A clean strip with every field proven — but its names are still checked against the page below.
-  const bottomComplete = bottom.parsed && bottom.parsed.fieldConfidence.documentNumber === "VERIFIED" && bottom.parsed.fieldConfidence.dateOfBirth === "VERIFIED";
-  if (bottomComplete && bottom.parsed) return { engine: "SERVER_MRZ", extraction: bottom.parsed };
+  // A document the desk already names as one without a strip (a CID, a voter card, a birth
+  // certificate, a work permit) goes straight to the page reader (2026-10-29) — the strip's crops
+  // cost seconds and find nothing on it.
+  const noStrip = !!opts.kindHint && opts.kindHint !== "PASSPORT";
+  if (!noStrip) await opts.onStage?.("STRIP");
+  const bottom = noStrip ? { parsed: null, lines: [] as string[], complete: false } : await readFootStrip(work);
+  // A strip with its number and birth date proven by their check digits is the whole passport —
+  // the names, the nationality, the sex and the expiry are on it too. No page reader is needed.
+  if (bottom.complete && bottom.parsed) return { engine: "SERVER_MRZ", extraction: bottom.parsed };
+  // A strip read in part — cut at its left edge, or a line the strict parse could not take — can
+  // still be the whole passport without the page reader (2026-10-29): the dates from the second
+  // line, the names from the first, and the number printed on the page proven by the strip's
+  // check digit. Only when that falls short does the page reader run.
+  if (!noStrip && bottom.lines.length) {
+    let quick = readPassportFromText(bottom.lines, [], { isPassport: true });
+    const datesProven = quick?.fieldConfidence.dateOfBirth === "VERIFIED" && quick?.fieldConfidence.expiryDate === "VERIFIED";
+    if (quick && datesProven && quick.fieldConfidence.documentNumber !== "VERIFIED") {
+      const numbers = await readPageNumbers(work);
+      if (numbers.length) quick = readPassportFromText(bottom.lines, numbers, { isPassport: true }) ?? quick;
+    }
+    if (quick && datesProven && quick.fieldConfidence.documentNumber === "VERIFIED" && quick.fields.fullName) {
+      const merged = mergeExtractions(`${quick.raw.source} · page number`, quick, bottom.parsed);
+      if (merged) return { engine: "SERVER_MRZ", extraction: { ...merged, raw: { ...merged.raw, mrzLines: quick.raw.mrzLines } } };
+    }
+  }
   await opts.onStage?.("TEXT");
   const layout = await layoutWholePage(work);
   const lines = layout?.lines ?? [];
@@ -429,7 +497,9 @@ export async function extractIdentityFromImage(
     if (merged) return { engine: "SERVER_MRZ", extraction: { ...merged, raw: { ...merged.raw, mrzLines: close.parsed.raw.mrzLines, ocrLines: texts.slice(0, 60) } } };
   }
   const fromStrip = !!passport && Object.values(passport.fieldConfidence).includes("VERIFIED");
-  const parsed = mergeExtractions(`${passport ? passport.raw.source : layoutParsed?.raw.source ?? "LAYOUT"}${via}`, passport, layoutParsed);
+  // The strip's own reading of the names, nationality and sex counts here too (2026-10-29): the first
+  // line can read cleanly while the second does not, and its names were dropped on this path.
+  const parsed = mergeExtractions(`${passport ? passport.raw.source : layoutParsed?.raw.source ?? "LAYOUT"}${via}`, passport, bottom.parsed, layoutParsed);
   if (parsed) {
     // QR values beat OCR values on overlap (an exact decode has no character errors) —
     // except the document TYPE, which the QR payload almost never names.

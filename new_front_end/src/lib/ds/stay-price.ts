@@ -16,6 +16,7 @@
  * none; else the saved quotation (the billing summary); else the room picks, or the saved room
  * pick, priced rooms only.
  */
+import { useBookingRooms } from "@/hooks/use-booking-rooms";
 import { useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSession } from "@/hooks/use-session";
@@ -28,7 +29,7 @@ import type { AvailabilityOptionSelected, EntryDetail } from "@/types/api";
 
 export type PriceDraft =
   /** The Inquiry step's rooms, per night — `saved` when they are what is on record. */
-  | { kind: "PICKS"; perNight: BillNight[]; saved: boolean }
+  | { kind: "PICKS"; perNight: BillNight[]; saved: boolean; labels?: Record<string, string> }
   /** The Negotiation table — `saved` when it matches the quotation on file. */
   | {
       kind: "TABLE";
@@ -93,6 +94,8 @@ export type StayPrice = {
   savedQuoteAmount: number | null;
   preview: QuotationLivePreview | null;
   pick: PickPricing | null;
+  /** Rooms the system chose quietly, named by their type (2026-10-28). */
+  labels?: Record<string, string> | null;
   loading: boolean;
 };
 
@@ -119,6 +122,7 @@ export function useStayPrice(entry: EntryDetail | null, billing: EntryBillingSum
   const atInquiryOrNegotiation = live && (entry?.currentStage === "S1" || entry?.currentStage === "S2");
   const pickNights = entry && !useTable && quoteAmount == null && atInquiryOrNegotiation ? (picksDraft?.perNight ?? savedPickNights(entry)) : [];
   const pick = usePickPricing(entryId, pickNights, pickNights.length > 0);
+  const bookingRooms = useBookingRooms(entry);
 
   if (useTable) {
     const p = preview.data ?? null;
@@ -148,6 +152,7 @@ export function useStayPrice(entry: EntryDetail | null, billing: EntryBillingSum
       savedQuoteAmount: null,
       preview: null,
       pick: pick.pricing,
+      labels: picksDraft?.labels ?? Object.fromEntries(bookingRooms.labels),
       loading: pick.loading,
     };
   }

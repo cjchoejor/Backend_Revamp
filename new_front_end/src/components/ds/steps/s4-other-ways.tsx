@@ -2,14 +2,14 @@
 
 /**
  * "Other ways this booking can go" for Reserve and Arrival (prototype `V16.caseActs`, rulings A7):
- * Cancel… · No-show… · Park… · Amend dates… — each wired only to a route the backend has at the
- * stage the booking is at, otherwise shown inert with the reason.
+ * Cancel · No-show · Park · Change the dates, rooms or guests — each wired only to a route the
+ * backend has at the stage the booking is at, otherwise shown inert with the reason. Since
+ * 2026-10-29 all but Park open from Change booking at the end of the step's line.
  *
  *  - Set up (reserving):  cancel-at-s3 (L1; the GM waives) · re-entry to Inquiry (FOM)
  *  - Reserve (frozen):    cancel (FOM; the GM waives) · backflow to Inquiry (FOM)
  *  - Arrival:             cancel (FOM; the GM waives) · no-show after the cut-off (FOM) · backflow to Inquiry (FOM)
  */
-import { reservedThisPass } from "@/lib/desk/workspace";
 import { CancellationFiguresLine, WaiverTick, useRefundHow } from "./cancel-figures";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -18,11 +18,26 @@ import { toast } from "sonner";
 import { Button, Chip } from "@/design-system";
 import { useSession } from "@/hooks/use-session";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
-import { backflows } from "@/lib/api/backflows";
-import { cancelEntryAtS3, cancelEntryAtS5, initiateS3ReEntryToS1 } from "@/lib/api/reservation-setup";
+import { cancelEntryAtS3, cancelEntryAtS5 } from "@/lib/api/reservation-setup";
 import { fmtDay, fmtStamp, money } from "@/lib/ds/format";
 import type { EntryDetail } from "@/types/api";
-import { DsDialog, ReasonDialog, atLeast, toastRefusal, useRefreshEntry, OtherWaysTabs, InlineWay, ShutWay, NotNow, parkTab, type OtherWayTab } from "./kit";
+import {
+  DsDialog,
+  ReasonDialog,
+  atLeast,
+  toastRefusal,
+  useRefreshEntry,
+  OtherWaysTabs,
+  InlineWay,
+  ShutWay,
+  NotNow,
+  parkTab,
+  ChangeBookingMenu,
+  StageActs,
+  useOpenAlsoWay,
+  type ChangeBookingItem,
+  type OtherWayTab,
+} from "./kit";
 import { Help } from "@/components/ds/help";
 
 
@@ -33,12 +48,18 @@ export function BookingOtherWays({
   parkNow,
   parking,
   guestPresent = false,
+  onMoveRoom,
+  onChangeStay,
 }: {
   entry: EntryDetail;
   /** Park with the reason typed in Other ways' own tab (2026-10-17). */
   parkNow?: (reason: string) => void;
   parking?: boolean;
   guestPresent?: boolean;
+  /** "Move a room" in Change booking (2026-10-29) — Reserve opens the rooms in the page, Arrival goes to its rooms section. */
+  onMoveRoom?: () => void;
+  /** "Change the dates, rooms or guests" — the editor in the page; the booking walks and comes back here (2026-10-29). */
+  onChangeStay?: () => void;
 }) {
   const { session } = useSession();
   const stage = entry.currentStage;
@@ -46,7 +67,6 @@ export function BookingOtherWays({
   const fom = atLeast(session?.actorLevel, "L2");
   const cutoffAt = (entry as EntryDetail & EntryScalars).noShowCutoffReachedAt ?? null;
   const checkIn = entry.reservation?.frozenCheckInDate ?? entry.checkInDate ?? null;
-  const reserved = reservedThisPass(entry);
   const here = active && (stage === "S3" || stage === "S4" || stage === "S5");
 
   // Cancel. A reserved booking is cancelled at Reserve or at Arrival (2026-09-18) — it used to be
@@ -55,7 +75,9 @@ export function BookingOtherWays({
     ? null
     : {
         key: "cancel",
-        label: "Cancel",
+        label: "Cancel booking",
+        // Opened from Change booking at the end of the step's line (2026-10-29), as at Set up.
+        inBar: false,
         content:
           stage === "S3" ? (
             <InlineWay render={(done) => <CancelAtSetupDialog entry={entry} onClose={done} />} />
@@ -72,6 +94,7 @@ export function BookingOtherWays({
 
   // No-show — only at Arrival, after the cut-off.
   let noShow: OtherWayTab | null = null;
+  let noShowWhy: string | null = null;
   if (here) {
     const done = !!entry.noShowDetermination;
     const why =
@@ -86,9 +109,11 @@ export function BookingOtherWays({
               : !fom
                 ? "Needs the FOM — determining a no-show."
                 : null;
+    noShowWhy = why;
     noShow = {
       key: "noshow",
       label: "No-show",
+      inBar: false,
       content: why ? (
         <ShutWay
           act="Record the no-show"
@@ -101,30 +126,64 @@ export function BookingOtherWays({
     };
   }
 
-  const amend: OtherWayTab | null = !here
-    ? null
-    : {
-        key: "amend",
-        label: "Amend dates",
-        content: fom ? (
-          <InlineWay render={(done) => <AmendDatesDialog entry={entry} onClose={done} />} />
-        ) : (
-          <ShutWay
-            act="Open a new pass"
-            why="Needs the FOM — changing the dates sends the booking back to Inquiry."
-            help={
-              <p>
-                {reserved
-                  ? "The booking goes back to Inquiry for the new dates: the rooms are let go, a new quotation is made, and it is reserved again."
-                  : "The booking goes back to Inquiry for the new dates and is priced again; the held rooms are let go."}
-              </p>
-            }
-          />
-        ),
-      };
+
+  /**
+   * Change booking (2026-10-29, Reserve and Arrival in the stage layout — as at Set up): the ways the
+   * booking itself is changed or ended, from the end of the step's line. Park stays its own button.
+   */
+  const openAlsoWay = useOpenAlsoWay();
+  const notNow = entry.status === "PARKED" ? "Resume the booking first" : "Not possible on this booking now";
+  const shown = here || entry.status === "PARKED";
+  const changeItems: ChangeBookingItem[] = !shown
+    ? []
+    : [
+        {
+          key: "rooms",
+          label: "Move a room",
+          note: "Into another free room on the same dates. Every night is checked again, the booking is reserved again and the price follows.",
+          onSelect: here && onMoveRoom ? onMoveRoom : undefined,
+          reason: here && onMoveRoom ? undefined : notNow,
+        },
+        {
+          key: "change-stay",
+          label: "Change the dates, rooms or guests",
+          note: "Here, on this step. The house is asked again, the rooms picked, the price made again and the booking reserved again — it comes back to this step.",
+          onSelect: here && fom && onChangeStay ? onChangeStay : undefined,
+          reason: !here ? notNow : !fom ? "The FOM's call" : onChangeStay ? undefined : notNow,
+        },
+        ...(stage === "S5"
+          ? [
+              {
+                key: "noshow",
+                label: "Record a no-show",
+                note: "They never came. The disclosed no-show charge is kept and the rooms are released.",
+                onSelect: here && !noShowWhy ? () => openAlsoWay("noshow") : undefined,
+                reason: !here ? notNow : noShowWhy ?? undefined,
+                danger: true,
+              },
+            ]
+          : []),
+        {
+          key: "cancel",
+          label: "Cancel booking",
+          note: "The booking ends. The rooms are released, the disclosed charge is kept and the rest of the advance refunded.",
+          onSelect: here && (stage === "S3" || fom) ? () => openAlsoWay("cancel") : undefined,
+          reason: !here ? notNow : stage === "S3" || fom ? undefined : "The FOM's call",
+          danger: true,
+        },
+      ];
 
   // Other ways as sub-tabs (2026-10-17), each panel the form its button used to open.
-  return <OtherWaysTabs tabs={[cancel, noShow, active ? parkTab(parkNow, parking) : null, amend]} />;
+  return (
+    <>
+      {changeItems.length ? (
+        <StageActs>
+          <ChangeBookingMenu items={changeItems} />
+        </StageActs>
+      ) : null}
+      <OtherWaysTabs tabs={[cancel, noShow, active ? parkTab(parkNow, parking) : null]} />
+    </>
+  );
 }
 
 /* ------------------------------------------------------------------ cancel */
@@ -397,43 +456,5 @@ function NoShowDialog({ entry, cutoffAt, onClose }: { entry: EntryDetail; cutoff
         <textarea className="input" rows={2} value={reason} maxLength={500} onChange={(e) => setReason(e.target.value)} placeholder="why this is a no-show" />
       </div>
     </DsDialog>
-  );
-}
-
-/* ------------------------------------------------------------------ amend dates */
-
-function AmendDatesDialog({ entry, onClose }: { entry: EntryDetail; onClose: () => void }) {
-  const { session } = useSession();
-  const refresh = useRefreshEntry(entry.id);
-  const stage = entry.currentStage;
-  const run = useMutation({
-    mutationFn: (reason: string) => {
-      if (stage === "S3") return initiateS3ReEntryToS1(session!, entry.id, { reason });
-      if (stage === "S4") return backflows.s4ToS1(session!, entry.id, reason);
-      return backflows.s5ToS1(session!, entry.id, reason);
-    },
-    onSuccess: () => {
-      toast.success("A new pass is open at Inquiry — search the new dates there");
-      onClose();
-      refresh([["journey-summary", entry.id], ["rooms"], ["rooms-catalog"], ["segment-history", entry.id]]);
-    },
-    onError: (e) => toastRefusal(e, "The dates could not be reopened"),
-  });
-  return (
-    <ReasonDialog
-      open
-      onClose={onClose}
-      busy={run.isPending}
-      title="Amend the dates"
-      lead={
-        <>
-          The booking goes back to Inquiry in a new pass. What was decided stays as a read-only record of this pass; the held rooms
-          are released and the new dates are searched, quoted{entry.reservation?.confirmedAt ? " and reserved" : ""} again.
-        </>
-      }
-      confirmLabel="Open a new pass"
-      placeholder="e.g. the guest moved the stay to the following week"
-      onConfirm={(r) => run.mutate(r)}
-    />
   );
 }

@@ -122,6 +122,17 @@ export function splitCombinedTax(
  * Tell a tax companion apart from a real charge. Anything not recognised as a companion is a
  * CHARGE — including legacy `SERVICE` lines such as "Laundry summary (imported)".
  */
+/**
+ * How many charges a set of folio lines holds (2026-10-30, operator: "it reads as lines 9, prolly
+ * because it also reads the gst and service charges line"). A charge's service charge and GST lines
+ * are part of the charge, not lines of their own — every "N lines on the bill" the desk shows (the
+ * folio, the master bill's parts, the tax invoice, who pays) counts with this. A correction is a
+ * line of its own; its tax corrections are not.
+ */
+export function chargeLineCount(lines: ReadonlyArray<{ lineType: FolioLineType | string; description: string }>): number {
+  return lines.filter((l) => classifyFolioLine(l) === "CHARGE").length;
+}
+
 export function classifyFolioLine(line: { lineType: FolioLineType | string; description: string }): FolioLineKind {
   const d = line.description ?? "";
   if (line.lineType === FolioLineType.OTHER && d.startsWith(LEGACY_IMPORTED_TAX_DESCRIPTION_PREFIX)) {

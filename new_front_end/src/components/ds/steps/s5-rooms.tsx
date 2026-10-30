@@ -20,6 +20,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button, Chip, Refusal, type ChipTone } from "@/design-system";
 import { useSession } from "@/hooks/use-session";
+import { useBookingRooms } from "@/hooks/use-booking-rooms";
 import { roomsFromResultSet } from "@/lib/api/availability";
 import { getChildPolicy } from "@/lib/api/child-policy";
 import { listRoomChangeCandidates, repairPartySeating, type RoomChangeCandidate } from "@/lib/api/entries";
@@ -40,8 +41,8 @@ import { deriveRoomStatus, ROOM_STATUS, type RoomStatusKey } from "@/lib/desk/ro
 import { formatRoomPickerLabel } from "@/lib/room-inventory-status";
 import { fmtDate, fmtDay, money, plural } from "@/lib/ds/format";
 import { optionSelectedRoomIds, type EntryDetail, type RoomAssignmentSummary } from "@/types/api";
-import { ExtraBedEditor, InitialSelectionCell } from "@/components/desk/workspace/room-change-control";
-import { Choice, DsDialog, Fact, Facts, Live, StepCard, toastRefusal, useRefreshEntry, useStepMode } from "./kit";
+import { InitialSelectionCell } from "@/components/desk/workspace/room-change-control";
+import { Choice, DsDialog, Fact, Facts, Live, StepCard, toastRefusal, useFinishWhenDone, useRefreshEntry, useStepMode } from "./kit";
 import { enumerateNights } from "./use-room-selection";
 import { RoomsTable } from "./rooms-table";
 import { Help } from "@/components/ds/help";
@@ -88,6 +89,8 @@ export function AssignRoomsCard({ entry }: { entry: EntryDetail }) {
   const { session } = useSession();
   const { past } = useStepMode();
   const refresh = useRefreshEntry(entry.id);
+  // Assigning the rooms finishes the section and moves on to the tasks (2026-10-29).
+  const finish = useFinishWhenDone("rooms");
   const catalogQ = useRoomsCatalog();
   const catalog = catalogQ.data?.items ?? [];
   const byId = useMemo(() => new Map(catalog.map((r) => [r.id, r])), [catalog]);
@@ -99,6 +102,10 @@ export function AssignRoomsCard({ entry }: { entry: EntryDetail }) {
   });
   const youngMax = policy.data?.ageBands.youngChildMaxAge ?? 5;
   const childMax = policy.data?.ageBands.childMaxAge ?? 10;
+  // The rooms the system chose before Arrival: here they are its proposal, by number, for the
+  // desk to confirm or change (2026-10-28, docs/room-types-until-arrival.md).
+  const bookingRooms = useBookingRooms(entry);
+  const proposals = bookingRooms.proposals;
   const proofs = useQuery({
     queryKey: ["identity-proofs", entry.id],
     queryFn: () => listIdentityProofs(session!, entry.id),
@@ -113,6 +120,7 @@ export function AssignRoomsCard({ entry }: { entry: EntryDetail }) {
       ["room-change-candidates", entry.id],
       ["identity-proofs", entry.id],
       ["journey-summary", entry.id],
+      ["booking-rooms", entry.id],
     ]);
 
   /* ---- the plan ---- */
@@ -214,6 +222,7 @@ export function AssignRoomsCard({ entry }: { entry: EntryDetail }) {
     mutationFn: () => assignRoom(session!, entry.id, { roomId: roomId.trim(), notes: notes.trim() || undefined }),
     onSuccess: () => {
       toast.success(`Room ${numberOf(roomId)} assigned — a claim on the room, no step moved`);
+      finish();
       setPickOpen(false);
       setNotes("");
       changed();
@@ -227,7 +236,14 @@ export function AssignRoomsCard({ entry }: { entry: EntryDetail }) {
       return out;
     },
     onSuccess: (out) => {
-      toast.success(`${plural(out.count, "room assignment")} made from the plan — each room for its own nights`);
+      const rooms = out.roomNumbers?.length ? ` · Room${out.roomNumbers.length === 1 ? "" : "s"} ${out.roomNumbers.join(", ")}` : "";
+      toast.success(`The rooms are assigned${rooms} — each room for its own nights`, { duration: 9000 });
+      finish();
+      // A room shown in the proposal may have gone to another booking meanwhile; the system gave
+      // the next free room of the same type, and says which.
+      for (const mv of out.movedSinceProposal ?? []) {
+        toast.warning(`The system gave Room ${mv.toRoomNumber} instead of Room ${mv.fromRoomNumber} (same type) — the house changed since the rooms were shown`, { duration: 12000 });
+      }
       changed();
     },
     onError: (e) => toastRefusal(e, "The rooms could not be assigned"),
@@ -303,8 +319,13 @@ export function AssignRoomsCard({ entry }: { entry: EntryDetail }) {
 
         </>
       }
-      meta="Who sleeps where, on what plan, with what beds — the table the price was negotiated on. Click a room to change it; every night is checked again and the price follows."
+      meta="Who sleeps where, on what plan, with what beds — the table the price was negotiated on. Double-click a room to give it another room of its type; another room type, or a change of who sleeps where, is Change booking › Move a room."
       status={readiness}
+      summary={
+        assigned
+          ? `${assignedIds.length === 1 ? "Room" : "Rooms"} ${assignedIds.map((id) => numberOf(id)).join(", ")} assigned · ${notReady.length ? "not all clean yet — housekeeping's to clear" : "clean and ready"}`
+          : undefined
+      }
     >
       {/* The rooms ARE the S2 table now (2026-10-06, operator: "instead of these cards ... I
           would love the table to be shown here"). The party card, the room bins and the
@@ -325,7 +346,7 @@ export function AssignRoomsCard({ entry }: { entry: EntryDetail }) {
             actions={
               canWork ? (
                 <Button kind="secondary" compact onClick={() => setSeatOpen(true)}>
-                  Seat everyone in a room…
+                  Seat everyone in a room
                 </Button>
               ) : undefined
             }
@@ -333,27 +354,38 @@ export function AssignRoomsCard({ entry }: { entry: EntryDetail }) {
         </div>
       ) : null}
 
-      <RoomsTable entry={entry} />
+      {!assigned && proposals.length > 0 ? (
+        <div className="notice next" role="status">
+          <span>
+            <b>The system&apos;s rooms for this booking:</b>{" "}
+            {proposals.map((r) => `${r.label} — Room ${r.roomNumber ?? "?"}`).join(" · ")}.{" "}
+            {multi ? "Confirm and assign them" : "Assign it to confirm"}, or double-click a room below to give it another of its type.
+          </span>
+        </div>
+      ) : null}
+
+      <RoomsTable entry={entry} mode="assign" />
 
       <Live>
         {!assigned && entry.currentStage === "S5" ? (
           multi ? (
             sealed ? (
               <div className="row-acts" style={{ marginTop: 12, alignItems: "center" }}>
-                <Button state={assignAll.isPending ? "working" : canWork ? "default" : "inert"} workingLabel="Assigning…" onClick={() => assignAll.mutate()}>
-                  Assign all {planRoomCount} rooms
+                <Button className="go" state={assignAll.isPending ? "working" : canWork ? "default" : "inert"} workingLabel="Assigning…" onClick={() => assignAll.mutate()}>
+                  {proposals.length ? `Confirm and assign the ${planRoomCount} rooms` : `Assign all ${planRoomCount} rooms`}
                 </Button>
                 <Help label="About assigning">The rooms chosen at Inquiry, each for its own nights. A room above can be changed first.</Help>
               </div>
             ) : (
               <div style={{ marginTop: 12 }}>
-                <Refusal kind="state" message={`There is no room plan from Inquiry — ${numberOfRooms} rooms have to be chosen there first.`} carries="A change of rooms before arrival is a new pass from Inquiry — Amend… below." />
+                <Refusal kind="state" message={`There is no room plan from Inquiry — ${numberOfRooms} rooms have to be chosen there first.`} carries="A change of rooms before arrival is a new pass from Inquiry — Change booking › Change the dates, rooms or guests." />
               </div>
             )
           ) : (
             <div style={{ marginTop: 12, display: "grid", gap: 8 }}>
               <div className="row-acts" style={{ alignItems: "center" }}>
                 <Button
+                  className="go"
                   state={assignOne.isPending ? "working" : roomId && canWork ? "default" : "inert"}
                   title={roomId ? undefined : "choose the room first"}
                   workingLabel="Assigning…"

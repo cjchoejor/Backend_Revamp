@@ -21,6 +21,7 @@ import { fmtDateTime, HOTEL_TZ_DEFAULT } from "@/lib/ds/format";
 import { hotelLocalToIso, isoToHotelLocal } from "@/components/ds/steps/s2-shared";
 import type { AdvancePaymentPlanSummary, EntryDetail, PaymentStatusSummary } from "@/types/api";
 import { Help } from "@/components/ds/help";
+import { DateTimeInput } from "@/components/ds/date-input";
 
 /**
  * The advance-payment settlement surface (2026-08-07, operator request).
@@ -117,7 +118,7 @@ export function AdvancePlanFacts({ status }: { status: PaymentStatusSummary | un
           {dueLabel(plan.plan, plan.balanceDueAt) ? ` · ${dueLabel(plan.plan, plan.balanceDueAt)}` : ""}
           {plan.balanceDueAt === "BEFORE_CHECKIN" && plan.promisedBy ? ` · by ${fmtDate(plan.promisedBy)}` : ""}
         </span>
-        {settled ? <span className="tag">Kept — paid in full</span> : null}
+        {settled ? <span className="tag">Advance paid in full</span> : null}
       </div>
       {!settled && plan.promiseOverdue && (
         <span className="timer crit">
@@ -404,7 +405,7 @@ export function AdvancePlanCapture({
             {balanceDueAt === "BEFORE_CHECKIN" && (
               <div className="field">
                 <label>Promised by</label>
-                <input type="datetime-local" value={promisedBy} onChange={(e) => setPromisedBy(e.target.value)} disabled={disabled} />
+                <DateTimeInput className="dinput" value={promisedBy} onChange={(e) => setPromisedBy(e.target.value)} disabled={disabled} />
               </div>
             )}
           </div>
@@ -452,6 +453,9 @@ export function AdvanceSettlementBlock({
   title = "Advance settlement",
   intro,
   children,
+  onChanged,
+  noHeading = false,
+  hidePlan = false,
 }: {
   entry: EntryDetail;
   title?: string;
@@ -459,6 +463,12 @@ export function AdvanceSettlementBlock({
   intro?: string;
   /** Stage-specific extras (e.g. the S5 FOM credit-ceiling acknowledgement button). */
   children?: React.ReactNode;
+  /** After a payment, a credit extension or a sign-off — Arrival folds its section once it reads done (2026-10-29). */
+  onChanged?: () => void;
+  /** The step's own section names it (Arrival, 2026-10-29) — no heading of its own. */
+  noHeading?: boolean;
+  /** Check-in states the guest's promise above (2026-10-29) — not said twice. */
+  hidePlan?: boolean;
 }) {
   const { session } = useSession();
   const queryClient = useQueryClient();
@@ -542,6 +552,7 @@ export function AdvanceSettlementBlock({
       editedRef.current = false;
       ceilingEditedRef.current = false;
       invalidate();
+      onChanged?.();
     },
     onError: (e: unknown) => toast.error(e instanceof ApiError ? e.message : "Couldn't log the payment"),
   });
@@ -559,6 +570,7 @@ export function AdvanceSettlementBlock({
     onSuccess: () => {
       toast.success("Credit extension approved — the gate is covered");
       invalidate();
+      onChanged?.();
     },
     onError: (e: unknown) => toast.error(e instanceof ApiError ? e.message : "Couldn't approve the extension"),
   });
@@ -570,6 +582,7 @@ export function AdvanceSettlementBlock({
     onSuccess: () => {
       toast.success("Advance reconciled");
       invalidate();
+      onChanged?.();
     },
     onError: (e: unknown) => toast.error(e instanceof ApiError ? e.message : "Couldn't reconcile"),
   });
@@ -588,17 +601,20 @@ export function AdvanceSettlementBlock({
 
   return (
     <div className="block">
-      <BlockH>
-        <Banknote style={{ width: 13, height: 13 }} />
-        {title}
-        {intro ? <Help label="About the advance">{intro}</Help> : null}
-      </BlockH>
+      {noHeading ? null : (
+        <BlockH>
+          <Banknote style={{ width: 13, height: 13 }} />
+          {title}
+          {intro ? <Help label="About the advance">{intro}</Help> : null}
+        </BlockH>
+      )}
 
       {status && (
         <div className="fact b-transit" style={{ marginBottom: 9, padding: "7px 11px", fontSize: 12.5, width: "100%", justifyContent: "space-between" }}>
           <span>
-            Received {money(status.totalReceived, currency)} of the{" "}
-            {status.requirementSource === "OPERATOR" ? "requested" : "min threshold"} {money(status.requiredAmount, currency)}
+            {status.requiredAmount > 0
+              ? `Received ${money(status.totalReceived, currency)} of the ${money(status.requiredAmount, currency)} advance`
+              : `No advance asked · ${money(status.totalReceived, currency)} received`}
             {(status.installments?.length ?? 0) > 1 ? ` · ${status.installments!.length} payments` : ""}
           </span>
           <span className={`tag ${settled ? "" : status.satisfied ? "" : "warn"}`}>
@@ -626,7 +642,7 @@ export function AdvanceSettlementBlock({
           </div>
         )}
 
-      <AdvancePlanFacts status={status} />
+      {hidePlan ? null : <AdvancePlanFacts status={status} />}
       <InstallmentHistory status={status} currency={currency} />
 
       {status?.creditExtensionActive && !settled && (

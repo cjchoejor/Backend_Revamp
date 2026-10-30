@@ -11,9 +11,11 @@
  * free-room cards are gone; Check-in and Stay reach it from a tab of their own rather than a
  * button buried on a room row.
  *
- * **A room is chosen by clicking it**, and its own acts appear above the table (operator:
- * "changing can be just clicking on one room in the table and showing an option"). Assign stays
- * a button of its own, because assigning is about the booking's plan rather than about one row.
+ * **Double-click a room to change its room type** (2026-10-29, operator: "the user can just double
+ * click on the room and it can show option to change another room type, where the system can offer
+ * free room types for that date"; the old "Give it a room of this type" and the rooms-by-night change
+ * panel are gone). The types free over the room's nights open in a dialog (`RoomTypeDialog`). A step
+ * with acts of its own for one room (Arrival's Assign) still chooses a room with a single click.
  *
  * **Nothing here writes directly.** "Change room" opens the governed composite — a new pass, a
  * silently re-made quotation, the hold replaced, the reservation re-frozen, the guests re-seated
@@ -21,15 +23,15 @@
  * act with its own walk.
  */
 
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button, Chip } from "@/design-system/components/primitives";
 import { changeBookingRoom } from "@/lib/api/entries";
+import { useBookingRooms } from "@/hooks/use-booking-rooms";
 import type { RoomCompositionInput } from "@/lib/api/quotations";
 import { RoomCompositionPlanner } from "@/components/desk/workspace/room-compositions-board";
 import { nightOverridesCanon } from "@/components/desk/workspace/room-compositions-table";
-import { RoomChangeControl } from "@/components/desk/workspace/room-change-control";
 import { operativeRoomCompositions, roomNightsByRoom, roomStayRangesByRoom, roomsInUseFor } from "@/lib/desk/party-rooms";
 import { optionSelectedRoomIds, type EntryDetail } from "@/types/api";
 import { useQuery } from "@tanstack/react-query";
@@ -38,6 +40,8 @@ import { useHotelDay } from "@/hooks/use-hotel-day";
 import { listRooms } from "@/lib/api/rooms";
 import { DsDialog, StepCard, Tool, toastRefusal, useBedPlan, useRefreshEntry, useStepMode } from "./kit";
 import { Help } from "@/components/ds/help";
+import { RoomTypeDialog } from "./room-type-change";
+import { ArrivalRoomDialog } from "./arrival-room-pick";
 
 /**
  * The room registry. Deliberately NOT imported from s5-rooms: Arrival imports this module, so
@@ -74,8 +78,23 @@ export function RoomsTable({
   entry,
   roomActions,
   lead,
+  mode = "change",
+  editNow = false,
 }: {
   entry: EntryDetail;
+  /**
+   * Open on Change configuration (2026-10-29, operator: "in stage 6 we don't have the option to change
+   * the configuration of the stay, like adding an extra bed or a meal type, in Change booking"): the
+   * step's "Change extra beds or meals" opens this table already editing.
+   */
+  editNow?: boolean;
+  /**
+   * `assign` — Arrival's own section (2026-10-29, operator: "it shows the move room feature already
+   * on the screen from change booking, this should be only shown there"): the table as it is, and a
+   * double-click gives a room another room of its type. Changing the type or the setup is Change
+   * booking › Move a room.
+   */
+  mode?: "change" | "assign";
   /** Acts for the chosen room that belong to this step — Arrival's Assign, say. */
   roomActions?: (roomId: string, roomNumber: string) => ReactNode;
   /** Shown above the table before any room is chosen. */
@@ -88,7 +107,7 @@ export function RoomsTable({
   const byId = useMemo(() => new Map((catalogQ.data?.items ?? []).map((r) => [r.id, r])), [catalogQ.data]);
 
   const hotelToday = useHotelDay()?.today ?? null;
-  const beds = useBedPlan(entry.id);
+  const beds = useBedPlan(entry.id, entry.updatedAt);
   const ids = useMemo(() => planRoomIds(entry, hotelToday), [entry, hotelToday]);
   const seed = useMemo(() => operativeRoomCompositions(entry) ?? [], [entry]);
   const ranges = useMemo(() => roomStayRangesByRoom(entry), [entry]);
@@ -105,6 +124,10 @@ export function RoomsTable({
 
   const [picked, setPicked] = useState<string | null>(null);
   const chosen = picked && ids.includes(picked) ? picked : null;
+  // A room the system chose and may still move reads "Deluxe Double · room 1" until Arrival
+  // (2026-10-28, docs/room-types-until-arrival.md) — its number is not a promise yet.
+  const roomNames = useBookingRooms(entry);
+  const quietName = (id: string) => roomNames.labels.get(id) ?? null;
 
   /**
    * Changing the setup in place (2026-10-06, operator: "it should be editable in that as well,
@@ -116,21 +139,21 @@ export function RoomsTable({
    * re-frozen, and comes back to this step. Nobody moves rooms. The quotation it mints is saved
    * and superseded like any other; it goes to the guest only if the desk sends it.
    */
-  const [editing, setEditing] = useState(false);
+  const [editing, setEditing] = useState(editNow);
   const [draft, setDraft] = useState<RoomCompositionInput[] | null>(null);
-  /**
-   * A room change is open above (2026-10-19, operator: "when we do change configuration I don't
-   * get why there are two tables showing"). The change panel carries its own table — the rooms
-   * being moved into, which is what the move saves — so this one, the booking as it stands, is
-   * put away until the change is made or cancelled. Two tables of one booking read as two
-   * answers, and only one of them is being worked.
-   */
-  const [roomChangeOpen, setRoomChangeOpen] = useState(false);
+  useEffect(() => {
+    if (editNow) setEditing(true);
+  }, [editNow]);
+  /** The room double-clicked — its room-type change open in a dialog (2026-10-29). */
+  const [openRoom, setOpenRoom] = useState<string | null>(null);
+  /** The night picked in the table's night list when the room was double-clicked — that night only (2026-10-29). */
+  const [openNight, setOpenNight] = useState<string | null>(null);
   const [faults, setFaults] = useState<string[]>([]);
   const [reasonOpen, setReasonOpen] = useState(false);
   const [reason, setReason] = useState("");
   const numberOf = (id: string) =>
     (entry.roomAssignments ?? []).find((a) => a.roomId === id)?.room?.roomNumber ?? byId.get(id)?.roomNumber ?? id.slice(0, 6);
+  const nameOf = (id: string) => quietName(id) ?? `Room ${numberOf(id)}`;
 
   /**
    * In-house the rates, the waivers and the discount are read-only — changing a rate mid-stay is
@@ -171,6 +194,10 @@ export function RoomsTable({
    * otherwise it follows the seed, so a change made elsewhere shows here without a reload.
    */
   const plannerKey = editing ? "edit" : `seed:${canon(seed)}`;
+  // The night shown in the table lives here, above the planner's key (2026-10-29, operator: "I
+  // choose night 2 and changed a room … it switched the table to all nights"): the planner is drawn
+  // again on the booking's new rooms after every change, and kept the night only as its own state.
+  const [nightView, setNightView] = useState("");
 
   const changed = () =>
     refresh([
@@ -181,6 +208,7 @@ export function RoomsTable({
       ["identity-proofs", entry.id],
       ["billing-summary", entry.id],
       ["entry-timers", entry.id],
+      ["booking-rooms", entry.id],
     ]);
 
   const saveM = useMutation({
@@ -210,106 +238,87 @@ export function RoomsTable({
 
   if (ids.length === 0) return <span className="meta">No rooms on the plan yet — they are chosen at Inquiry.</span>;
 
-  // What the table is and how it is used — one "?" in the acts line, not three grey lines.
+  // What the table is and how it is used — behind one "?", not three grey lines.
   const about = (
     <>
       {lead ? <>{lead} </> : null}
-      Click a room in the table to see what can be done with it.{" "}
+      Double-click a room to change its room type: the types free for its nights are offered, with their rate.{" "}
+      {roomActions ? "Click a room once for its own acts. " : ""}
+      Change configuration edits who sleeps where, the meals and the beds.{" "}
       {inHouse
         ? "A night already charged at the wrong price is put right with a correction on the bill."
-        : "This is what the booking is priced on today. A change made here prices the booking again, brings it back to this step and is kept in its history."}
+        : "A change made here prices the booking again, brings it back to this step and is kept in its history."}
     </>
   );
 
   return (
     <>
+      {/* What can be done, where the eye lands before the table (2026-10-29, operator: "the change
+          configuration button … somewhere near the table … the buttons should be prominent, leave a
+          prominent message, not too big, that says double-click to change room types"). */}
+      {!past && mode === "assign" ? (
+        <div className="rooms-tablebar">
+          <span className="rooms-hint" role="note">
+            <b>Double-click a room</b> to give it another room of its type
+          </span>
+          <Help label="About giving a room">
+            The rooms of the same type are offered, free or not. A room another booking holds only as the system&rsquo;s choice can be
+            taken — Arrival comes first, and that booking moves to another room of the type. Another room type, or a change of who
+            sleeps where, is Change booking › Move a room.
+          </Help>
+        </div>
+      ) : null}
+      {!past && mode === "change" ? (
+        <div className="rooms-tablebar">
+          {editing ? (
+            <>
+              <span className="rooms-hint editing">
+                Editing who sleeps where, the meals and the beds — Save &amp; price it again below.
+              </span>
+              <Button
+                kind="secondary"
+                onClick={() => {
+                  setEditing(false);
+                  setDraft(null);
+                }}
+              >
+                Leave it as it was
+              </Button>
+            </>
+          ) : (
+            <>
+              <span className="rooms-hint" role="note">
+                <b>Double-click a room</b> to change its room type
+              </span>
+              <Help label="About this table">{about}</Help>
+              <Button icon="pen" onClick={() => setEditing(true)}>
+                Change configuration
+              </Button>
+            </>
+          )}
+        </div>
+      ) : null}
 
-      {/* The chosen room's own acts, above the table they belong to. */}
-      {!past ? (
+      {/* A step's own acts for one room (Arrival's Assign) — a single click chooses the room. */}
+      {!past && roomActions && chosen ? (
         <div className="roomacts">
           <div className="line">
-            {chosen ? (
-              <>
-                <span className="who">
-                  Room <b>{numberOf(chosen)}</b>
-                  {roomDates[chosen] ? <span className="meta"> · {roomDates[chosen].label}</span> : null}
-                </span>
-                {roomActions?.(chosen, numberOf(chosen))}
-                <Button kind="quiet" compact onClick={() => setPicked(null)}>
-                  Done with this room
-                </Button>
-              </>
-            ) : null}
-            <span style={{ marginLeft: "auto", display: "flex", gap: "var(--s2)", alignItems: "center" }}>
-              <Help label="About this table">{about}</Help>
-              {editing ? (
-                <>
-                  <span className="sm" style={{ fontWeight: 600 }}>
-                    Editing
-                    <Help label="About editing">Meals, beds and guests. Save prices it again.</Help>
-                  </span>
-                  <Button
-                    kind="quiet"
-                    compact
-                    onClick={() => {
-                      setEditing(false);
-                      setDraft(null);
-                    }}
-                  >
-                    Leave it as it was
-                  </Button>
-                </>
-              ) : (
-                <Button
-                  kind="quiet"
-                  compact
-                  state={roomChangeOpen ? "inert" : "default"}
-                  reason={roomChangeOpen ? "finish or cancel the room change first" : undefined}
-                  onClick={() => !roomChangeOpen && setEditing(true)}
-                >
-                  Change configuration…
-                </Button>
-              )}
+            <span className="who">
+              {quietName(chosen) ? <b>{quietName(chosen)}</b> : <>Room <b>{numberOf(chosen)}</b></>}
+              {roomNames.atArrival && roomNames.quietIds.has(chosen) ? <span className="meta"> · proposed by the system</span> : null}
+              {roomDates[chosen] ? <span className="meta"> · {roomDates[chosen].label}</span> : null}
             </span>
+            {roomActions(chosen, numberOf(chosen))}
+            <Button kind="quiet" compact onClick={() => setPicked(null)}>
+              Done with this room
+            </Button>
           </div>
-
-          {/* Its own row, and its own `.desk-root`: the change panel opens a rooms-by-night table
-              and the whole S2 planner inside itself, so as a flex ITEM in the line above it was
-              squeezed to a column, and outside `.desk-root` none of its CSS applied at all
-              (2026-10-06, operator: "after selecting a room from change rooms, the UI breaks"). */}
-          {chosen ? (
-            <Tool>
-              <RoomChangeControl
-                entry={entry}
-                fromRoomId={chosen}
-                fromRoomNumber={numberOf(chosen)}
-                onChanged={changed}
-                compact
-                onOpenChange={(isOpen) => {
-                  setRoomChangeOpen(isOpen);
-                  // A room change and an edit of this table are two different acts, and the
-                  // move does not carry the edit — so opening one leaves the other.
-                  if (isOpen && editing) {
-                    if (unsaved) toast.info("The table's unsaved changes were left — the room change starts from the booking as it stands.");
-                    setEditing(false);
-                    setDraft(null);
-                  }
-                }}
-              />
-            </Tool>
-          ) : null}
         </div>
       ) : null}
 
       {/* The planner is one of the old tools: every rule that lays its grid out is scoped under
           `.desk-root` in desk-theme.css, and `legacy-bridge.css` re-colours it there. Rendered
           bare it had no styling at all (2026-10-06, operator: "this looks very broken in s7"). */}
-      {roomChangeOpen ? (
-        <p className="sm" style={{ margin: "var(--s2) 0 0" }}>
-          The booking&apos;s own table is put away while Room {chosen ? numberOf(chosen) : ""} is being changed.
-          <Help label="About the table">It comes back when you move the room or press Cancel change.</Help>
-        </p>
-      ) : (
       <Tool inert={past}>
       <RoomCompositionPlanner
         key={plannerKey}
@@ -324,11 +333,24 @@ export function RoomsTable({
         entryChildAges={entry.childAges ?? null}
         entryId={entry.id}
         roomDates={roomDates}
+        roomLabels={roomNames.labels}
         initialCompositions={seed}
+        nightView={nightView}
+        onNightViewChange={setNightView}
         lockCommercial={inHouse}
         readOnly={!editing}
-        onPickRoom={past ? undefined : (id) => setPicked((cur) => (cur === id ? null : id))}
+        onPickRoom={past || !roomActions ? undefined : (id) => setPicked((cur) => (cur === id ? null : id))}
         pickedRoomId={chosen}
+        onOpenRoom={
+          past || editing
+            ? undefined
+            : (id, night) => {
+                setOpenRoom(id);
+                // A night counts only when the room is held on other nights too.
+                const ds = roomDates[id]?.dates ?? [];
+                setOpenNight(night && ds.length > 1 && ds.includes(night) ? night : null);
+              }
+        }
         onChange={editing ? setDraft : () => { /* read-first until "Change configuration" is pressed */ }}
         onFaultsChange={editing ? setFaults : undefined}
         onSave={editing ? () => setReasonOpen(true) : undefined}
@@ -337,6 +359,27 @@ export function RoomsTable({
         unsaved={unsaved}
       />
       </Tool>
+
+      {mode === "assign" ? (
+        <ArrivalRoomDialog
+          entry={entry}
+          roomId={openRoom}
+          night={openNight}
+          roomNights={openRoom ? (roomDates[openRoom]?.dates ?? []) : []}
+          name={openRoom ? (quietName(openRoom) ? `${quietName(openRoom)} — Room ${numberOf(openRoom)}` : `Room ${numberOf(openRoom)}`) : ""}
+          onClose={() => setOpenRoom(null)}
+          onChanged={changed}
+        />
+      ) : (
+        <RoomTypeDialog
+          entry={entry}
+          roomId={openRoom}
+          night={openNight}
+          roomNights={openRoom ? (roomDates[openRoom]?.dates ?? []) : []}
+          name={openRoom ? nameOf(openRoom) : ""}
+          onClose={() => setOpenRoom(null)}
+          onChanged={changed}
+        />
       )}
 
       <DsDialog
@@ -389,6 +432,7 @@ export function RoomsTableCard({
   lead,
   flow,
   flowAfter,
+  editNow,
 }: {
   entry: EntryDetail;
   title?: string;
@@ -396,11 +440,13 @@ export function RoomsTableCard({
   lead?: ReactNode;
   flow?: string;
   flowAfter?: string;
+  /** Open on Change configuration — see RoomsTable. */
+  editNow?: boolean;
 }) {
   const n = planRoomIds(entry, useHotelDay()?.today ?? null).length;
   return (
     <StepCard title={title} flow={flow} flowAfter={flowAfter} right={n ? <Chip tone="quiet">{n === 1 ? "1 room" : `${n} rooms`}</Chip> : null}>
-      <RoomsTable entry={entry} roomActions={roomActions} lead={lead} />
+      <RoomsTable entry={entry} roomActions={roomActions} lead={lead} editNow={editNow} />
     </StepCard>
   );
 }

@@ -45,7 +45,8 @@ import { formatMoney, loadHotelProfileForRender } from "../../lib/pdf-render-con
 import { renderHtmlToPdf } from "../infrastructure/pdf-render-service.js";
 import { renderLegphelCancellationConfirmationHtml } from "../infrastructure/pdf-templates/legphel-cancellation-confirmation-template.js";
 import { mastheadFromHotelProfile } from "../infrastructure/pdf-templates/legphel-document-shell.js";
-import { formatDocDate, formatNoticeGiven, formatStayRange, formatDocDateLocal } from "../infrastructure/pdf-templates/legphel-document-format.js";
+import { formatDocDate, formatNoticeGiven, formatStayLines, formatDocDateLocal } from "../infrastructure/pdf-templates/legphel-document-format.js";
+import { guestDisplayName } from "../../lib/guest-display-name.js";
 
 export type CancellationFigures = {
   /** Total advance held against the folio at the moment of cancellation. */
@@ -115,8 +116,8 @@ export async function generateCancellationConfirmationPdf(
   }
 
   const hotel = await loadHotelProfileForRender(prisma);
-  const guestName =
-    [entry.guestProfile?.firstName, entry.guestProfile?.lastName].filter(Boolean).join(" ") || "Guest";
+  // With the title the desk took at Inquiry (2026-10-28).
+  const guestName = guestDisplayName(entry.guestProfile) || "Guest";
 
   const roomTypeName =
     entry.roomAssignments.find((a) => a.room?.roomType?.name)?.room?.roomType?.name ?? null;
@@ -127,9 +128,7 @@ export async function generateCancellationConfirmationPdf(
           Math.round((entry.checkOutDate.getTime() - entry.checkInDate.getTime()) / 86_400_000),
         )
       : null;
-  const cancelledStay = [formatStayRange(entry.checkInDate, entry.checkOutDate, nights), roomTypeName]
-    .filter(Boolean)
-    .join(" · ");
+  const stay = formatStayLines(entry.checkInDate, entry.checkOutDate, nights);
 
   const refundableLabel = figures.bandLabel
     ? `Refundable per terms (${figures.bandLabel})`
@@ -152,7 +151,8 @@ export async function generateCancellationConfirmationPdf(
     bookingRef: entry.inquiryId,
     date: formatDocDateLocal(cancelledAt),
     guest: guestName,
-    cancelledStay: cancelledStay || "—",
+    stay,
+    roomType: roomTypeName,
     noticeGiven: formatNoticeGiven(cancelledAt, entry.checkInDate),
     advanceReceiptRef: figures.advanceReceiptRef ?? null,
     advanceHeld: formatMoney(figures.advanceHeld),

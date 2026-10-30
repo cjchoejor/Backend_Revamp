@@ -14,11 +14,14 @@ import { useState } from "react";
 import { Button } from "@/design-system";
 import { JourneySummaryBlock } from "@/components/desk/workspace/journey-summary";
 import { channelWord } from "@/lib/ds/status";
-import { fmtRange, nightsOf, plural } from "@/lib/ds/format";
+import { nightsOf, plural } from "@/lib/ds/format";
+import { StayDates } from "@/components/ds/stay-dates";
 import { guestName } from "@/lib/desk/model";
 import { reservedThisPass } from "@/lib/desk/workspace";
 import { heldRoomIds } from "@/lib/desk/party-rooms";
 import { useRoomsList } from "@/hooks/use-desk-data";
+import { useBookingRooms } from "@/hooks/use-booking-rooms";
+import { roomsHeldWord } from "@/components/ds/steps/s2-shared";
 import { Fact, FactBox, Facts, StepCard } from "@/components/ds/steps/kit";
 import { TripCard } from "@/components/ds/workspace/return-stay";
 import { GuestBookingsCard } from "@/components/ds/workspace/guest-bookings";
@@ -55,6 +58,8 @@ export function DetailsView({
   const nights = nightsOf(entry.checkInDate, co);
   // Before Arrival assigns them, the rooms the booking holds are named from its newest pick.
   const roomList = useRoomsList().data?.items;
+  // A room the system chose and may still move reads "Deluxe Double · room 1" until Arrival.
+  const bookingRoomNames = useBookingRooms(entry);
   const held = (entry.roomAssignments ?? []).length
     ? []
     : heldRoomIds(entry)
@@ -132,12 +137,16 @@ export function DetailsView({
 
         <StepCard title="The stay">
           <Facts wide>
-            <Fact k="Dates">{`${fmtRange(entry.checkInDate, co)}${nights ? ` · ${plural(nights, "night")}` : ""}`}</Fact>
+            {/* Check-in and Check-out by name, as in the header (2026-10-27). */}
+            <Fact k="Dates">
+              <StayDates checkIn={entry.checkInDate} checkOut={co} />
+            </Fact>
+            <Fact k="Nights">{nights ? plural(nights, "night") : "—"}</Fact>
             <Fact k="Rooms" meta={beds ? `asked for ${beds}` : undefined}>
               {rooms.length
                 ? `${rooms.length} · ${rooms.join(", ")}${types.length ? ` · ${types.join(", ")}` : ""}`
                 : held.length
-                  ? `${held.length} · ${held.map((r) => r.roomNumber).join(", ")} · held for the guest, assigned at Arrival`
+                  ? `${roomsHeldWord(held.map((r) => ({ number: r.roomNumber, typeName: r.roomType?.name ?? null, quiet: bookingRoomNames.named.has(r.id) })))} · held for the guest, assigned at Arrival`
                   : `${entry.numberOfRooms ?? "—"} · not yet assigned`}
             </Fact>
             <Fact k="Guests">{party}</Fact>

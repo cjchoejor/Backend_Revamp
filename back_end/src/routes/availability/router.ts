@@ -3,6 +3,10 @@ import { prisma } from "../../db.js";
 import {
   queryAvailabilityByEntryRequestSchema,
   priceRoomPickRequestSchema,
+  houseByTypeRequestSchema,
+  sealByTypeRequestSchema,
+  planByTypeRequestSchema,
+  chooseQuietRoomRequestSchema,
   queryAvailabilitySearchRequestSchema,
   selectAvailabilityOptionRequestSchema,
 } from "../../dtos/04-availability/request-schemas.js";
@@ -12,6 +16,8 @@ import * as s1AvailabilityService from "../../services/domain/s1-availability-se
 import { priceRoomPick } from "../../services/domain/pick-pricing-service.js";
 import { releaseRoomBlock } from "../../services/domain/room-block-release-service.js";
 import { buildRoomChart } from "../../services/domain/room-chart-service.js";
+import { answerHouseByType } from "../../services/domain/room-placement-service.js";
+import { chooseQuietRooms, describeBookingRooms, listArrivalRoomChoices, listQuietRoomChoices, planRoomsByTypeForStay, sealBookingRoomsByType } from "../../services/domain/quiet-rooms-service.js";
 import { ROOM_BED_TYPES, allowedBedTypesSource, effectiveAllowedBedTypes, setRoomBedType, usualBedTypeFor } from "../../services/domain/room-bed-type-service.js";
 
 export const availabilityRouter = Router();
@@ -189,6 +195,141 @@ availabilityRouter.post(
     try {
       res.setHeader("Cache-Control", "no-store");
       res.json(await priceRoomPick(prisma, req.params.id, req.body));
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+/**
+ * The house by room type, night by night, over the booking's stay — and whether its rooms fit with
+ * one room for each guest's whole stay (2026-10-28, docs/room-types-until-arrival.md, stage 1).
+ * Read-only: nothing is held, moved or written. The booking's own claims are left out.
+ */
+availabilityRouter.post(
+  "/entries/:id/availability/by-type",
+  requireActorLevel("L1"),
+  validateBody(houseByTypeRequestSchema),
+  async (req, res, next) => {
+    try {
+      res.setHeader("Cache-Control", "no-store");
+      const body = req.body as import("../../dtos/04-availability/request-schemas.js").HouseByTypeRequestDto;
+      res.json(
+        await answerHouseByType(prisma, req.params.id, {
+          checkInDate: body.checkInDate,
+          checkOutDate: body.checkOutDate,
+          bookingRooms: body.bookingRooms?.map((r) => ({
+            key: r.key,
+            nights: r.nights.map((n) => ({
+              date: n.date,
+              roomTypeId: n.roomTypeId,
+              roomId: n.roomId ?? null,
+              fixed: n.fixed === true && !!n.roomId,
+            })),
+          })),
+        }),
+      );
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+/**
+ * The pick by type for a stay not saved yet — "Change the dates, rooms or guests" (2026-10-29): the
+ * counts checked and the system's rooms placed for the dates and room count given. Read-only.
+ */
+availabilityRouter.post(
+  "/entries/:id/availability/by-type/plan",
+  requireActorLevel("L1"),
+  validateBody(planByTypeRequestSchema),
+  async (req, res, next) => {
+    try {
+      res.setHeader("Cache-Control", "no-store");
+      res.json(await planRoomsByTypeForStay(prisma, req.params.id, req.body));
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+/** Save (or, with `preview`, try) the Inquiry step's pick BY TYPE; the system chooses the rooms. */
+availabilityRouter.post(
+  "/entries/:id/availability/by-type/seal",
+  requireActorLevel("L1"),
+  validateBody(sealByTypeRequestSchema),
+  async (req, res, next) => {
+    try {
+      res.setHeader("Cache-Control", "no-store");
+      const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
+      res.json(await sealBookingRoomsByType(prisma, req.params.id, actor, req.body, { preview: req.body.preview === true }));
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+/** This booking's rooms: chosen by the system (and still movable) or fixed, with their labels. */
+availabilityRouter.get("/entries/:id/booking-rooms", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    res.json(await describeBookingRooms(prisma, req.params.id));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
+ * For "Give it this room": the other rooms of the type over the room's nights, and what giving each
+ * would do (free, another booking's quiet room moved out of the way, held, out of order).
+ */
+availabilityRouter.get("/entries/:id/booking-rooms/choices", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    const fromRoomId = String(req.query.fromRoomId ?? "");
+    if (!fromRoomId) {
+      res.status(400).json({ message: "Name the room (fromRoomId)" });
+      return;
+    }
+    res.json(await listQuietRoomChoices(prisma, req.params.id, fromRoomId));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
+ * Arrival: the other rooms of a room's type and what taking each would do — free, another booking's
+ * system choice moved out of the way, or held for a booking that cannot be moved (2026-10-29).
+ * `mode` says which act takes it: CHOOSE before the rooms are handed out, ROOM_CHANGE after.
+ */
+availabilityRouter.get("/entries/:id/arrival-room-choices", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    const fromRoomId = String(req.query.fromRoomId ?? "");
+    if (!fromRoomId) {
+      res.status(400).json({ message: "Name the room (fromRoomId)" });
+      return;
+    }
+    const nights = String(req.query.nights ?? "")
+      .split(",")
+      .map((d) => d.trim().slice(0, 10))
+      .filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d));
+    res.json(await listArrivalRoomChoices(prisma, req.params.id, fromRoomId, nights.length ? nights : null));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** The desk chooses the booking's rooms itself (same type, before Arrival) — one, or several from the chart; they become fixed. */
+availabilityRouter.post(
+  "/entries/:id/booking-rooms/choose",
+  requireActorLevel("L1"),
+  validateBody(chooseQuietRoomRequestSchema),
+  async (req, res, next) => {
+    try {
+      const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
+      const picks = req.body.picks ?? [{ fromRoomId: req.body.fromRoomId, toRoomId: req.body.toRoomId }];
+      res.json(await chooseQuietRooms(prisma, req.params.id, actor, picks));
     } catch (e) {
       next(e);
     }

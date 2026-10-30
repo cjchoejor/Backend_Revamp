@@ -53,6 +53,7 @@ import { assignRoomsFromSealedPerNight } from "./room-assignment-service.js";
 import { runPreArrivalWindowActivationWorker } from "../../workers/w4-pre-arrival-window-activation-worker.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import { hotelTodayUtc } from "../../lib/stay-dates.js";
+import { carryBookingRooms, readBookingRooms, sealHasBookingRooms } from "../../lib/booking-rooms.js";
 import type { ToleratedClaim } from "../../lib/room-move-claims.js";
 import { recordHeldDocument, type HeldDocumentReason } from "../../lib/held-documents.js";
 import { carryAdvancePinsAcrossNewPass } from "./s3-payment-service.js";
@@ -740,9 +741,25 @@ export async function buildRoomPlanHistory(prisma: PrismaClient, entryId: string
   });
   if (!entry) throw new NotFoundError("Entry");
 
-  const configs = entry.availabilityConfigs;
-  const firstConfig = configs[0] ?? null;
-  const latestConfig = configs.length > 0 ? configs[configs.length - 1] : null;
+  const allConfigs = entry.availabilityConfigs;
+  const latestConfig = allConfigs.length > 0 ? allConfigs[allConfigs.length - 1] : null;
+
+  // The rooms are given out at Arrival (2026-10-29, operator: "room assigning was only done in
+  // stage 5, so the system red shouldn't be there"). Until then a booking holds room TYPES and every
+  // choice of a room — the desk's at Arrival included, even one made for a single night through the
+  // room change — is the assignment, not a change. So the starting point is the plan as it stood when
+  // the booking first reached Check-in; only what changed after that is a change. A booking not yet
+  // at Check-in starts from its plan as it is now.
+  const firstAtCheckIn = await prisma.stageDwellRecord.findFirst({
+    where: { entryId, stage: Stage.S6 },
+    orderBy: { enteredAt: "asc" },
+    select: { enteredAt: true },
+  });
+  const cutoff = firstAtCheckIn?.enteredAt ?? null;
+  const beforeCheckIn = cutoff ? allConfigs.filter((c) => (c.sealedAt ?? c.createdAt).getTime() <= cutoff.getTime()) : allConfigs;
+  const firstConfig = beforeCheckIn.length > 0 ? beforeCheckIn[beforeCheckIn.length - 1] : (allConfigs[0] ?? null);
+  // The changes: every pass sealed after that starting point.
+  const configs = firstConfig ? allConfigs.slice(allConfigs.indexOf(firstConfig) + 1) : allConfigs;
 
   // Current plan = latest sealed picture, plus hold + assignment rooms (covers bookings whose
   // plan never went through a sealed config, and the S7 split where both rooms have rows).
@@ -755,9 +772,11 @@ export async function buildRoomPlanHistory(prisma: PrismaClient, entryId: string
     ]),
   );
 
-  // Initial selection: first sealed config; earliest assignments as the legacy fallback.
+  // Initial selection: the plan as it stood when the booking reached Check-in (above); earliest
+  // assignments as the legacy fallback.
   const firstSel = readOptionSelected(firstConfig?.optionSelected ?? null);
   let initialRoomIds = [...firstSel.distinctRoomIds];
+  // A bed set up at Arrival is part of the assignment too — beds changed before Check-in are not changes.
   let initialSelectedAt: Date | null = firstConfig?.sealedAt ?? null;
   if (initialRoomIds.length === 0 && entry.roomAssignments.length > 0) {
     initialRoomIds = Array.from(new Set(entry.roomAssignments.map((a) => a.roomId)));
@@ -824,7 +843,7 @@ export async function buildRoomPlanHistory(prisma: PrismaClient, entryId: string
 
   // Bed setup AT SELECTION TIME: the earliest ROOM.BED_TYPE_CHANGED trace after the selection
   // records the value it moved FROM; no trace since then means the registry still holds it.
-  const bedCutoff = initialSelectedAt ?? entry.createdAt;
+  const bedCutoff = cutoff ?? new Date();
   const bedTraces = initialRoomIds.length
     ? await prisma.traceEvent.findMany({
         where: {
@@ -1046,6 +1065,13 @@ async function changeRoomToNewSegmentInner(
      */
     perNight?: Array<{ date: string; roomId: string }>;
     reason: string;
+    /**
+     * The desk changed the room's TYPE and the system chose the room (2026-10-29, operator: "double
+     * click on the room … change to another room type, where the system can offer free room types").
+     * Before Arrival the new room stays the system's, moved within its type like any other until the
+     * rooms are handed out; from Arrival on it is the booking's room, as any change makes it.
+     */
+    systemChosen?: boolean;
     /**
      * Setup for the single replacement room (simple-swap sugar — applied to the primary) — OR,
      * with NO `toRoomId`/`perNight` at all (2026-08-19, operator request: "put the extra bed
@@ -1607,14 +1633,33 @@ async function changeRoomToNewSegmentInner(
     ? !!priorSel.perNight
     : stage === Stage.S7 || !!priorSel.perNight || distinctTargets.length > 1 || keptFromNights.length > 0;
   const deficientById = new Map<string, boolean>();
+  const typeById = new Map<string, string>();
   {
     const involved = await prisma.room.findMany({
       where: { id: { in: substitutedDistinct } },
-      select: { id: true, isDeficient: true },
+      select: { id: true, isDeficient: true, roomTypeId: true },
     });
-    for (const r of involved) deficientById.set(r.id, r.isDeficient === true);
+    for (const r of involved) {
+      deficientById.set(r.id, r.isDeficient === true);
+      typeById.set(r.id, r.roomTypeId);
+    }
   }
   const anyDeficient = substitutedDistinct.some((id) => deficientById.get(id) === true);
+  // The rooms the system chose stay the system's choice through the walk (2026-10-28) — a room
+  // the walk names or brings in is the desk's choice and fixed; the rest carry as they were.
+  const carriedBookingRooms = sealHasBookingRooms(ctx.sealedConfig?.optionSelected)
+    ? carryBookingRooms(
+        readBookingRooms(ctx.sealedConfig!.optionSelected, { checkIn: ctx.checkIn, checkOut: ctx.checkOut }, (id) => typeById.get(id)),
+        substitutedPicture,
+        input.systemChosen && (ctx.stage === Stage.S3 || ctx.stage === Stage.S4)
+          ? { systemChosen: distinctTargets, roomTypeOf: (id) => typeById.get(id) }
+          : {
+              chosen: setupOnly ? [] : [...distinctTargets, ...[...dateRoomMap].filter(([f, t]) => f !== t).map(([, t]) => t)],
+              roomTypeOf: (id) => typeById.get(id),
+            },
+      )
+    : null;
+  const bookingRoomsKey = carriedBookingRooms ? { bookingRooms: carriedBookingRooms } : {};
   // Marker: toRoomId stays the PRIMARY new room (the plan-history chain folds 1:1 markers);
   // toRoomIds carries the full per-night set for future consumers.
   // A setup-only change writes NO roomChange marker — the plan-history chain folds markers
@@ -1653,12 +1698,14 @@ async function changeRoomToNewSegmentInner(
         isDeficient: anyDeficient,
         ...(roomChangeMarker ? { roomChange: roomChangeMarker } : {}),
         ...extensionMarker,
+        ...bookingRoomsKey,
       }
     : {
         roomIds: substitutedDistinct.map((roomId) => ({ roomId, isDeficient: deficientById.get(roomId) === true })),
         isDeficient: anyDeficient,
         ...(roomChangeMarker ? { roomChange: roomChangeMarker } : {}),
         ...extensionMarker,
+        ...bookingRoomsKey,
       };
 
   // The room-change chain — every sealed config's from→to marker, plus THIS change's — so a
@@ -2515,8 +2562,8 @@ async function changeRoomToNewSegmentInner(
     // replaces it like the renegotiation route does (2026-09-25): a never-rendered version is
     // frozen first (2026-08-02 ruling — a superseded paper keeps the figures that were on the
     // table), the pending ones are superseded in the re-entry, and the new pass mints its own on
-    // arrival back at Set up. From Reserve on the voucher is the binding paper and the proforma
-    // stands (the room-change doctrine since 2026-08-12).
+    // arrival back at Set up. From Reserve on it is replaced on arrival at Set up too (2026-10-29,
+    // `ensureProformaOfThisPassTx`) — every way back freezes it first.
     if (stage === Stage.S3) {
       const { freezeUnrenderedProformasForEntry } = await import("./invoice-pdf-service.js");
       await freezeUnrenderedProformasForEntry(prisma, input.entryId, actor.actorId).catch(() => {});
@@ -2566,27 +2613,7 @@ async function changeRoomToNewSegmentInner(
             },
           });
         }
-        // Pre-occupancy: release the hold + every claim flag; the new segment re-places its own
-        // hold on the substituted selection (2026-08-02 ruling — a new segment places its own
-        // commitments).
-        await s3HoldService.releaseCommittedHoldForRoomChange(
-          tx,
-          input.entryId,
-          actor,
-          "ROOM_CHANGE",
-          entry.inquiryId,
-          "COMMITTED_HOLD.RELEASED_ON_ROOM_CHANGE",
-          stage,
-        );
-        // Pre-occupancy assignment rows are planning state, not history (the sealed segment's
-        // configuration + traces keep the story) — stale rows would leak the OLD room into the
-        // check-in/night-audit distinct-room iteration.
-        await tx.roomNightMealPlan.deleteMany({ where: { roomAssignment: { entryId: input.entryId } } });
-        await tx.handoffRecord.updateMany({
-          where: { entryId: input.entryId, roomAssignmentId: { not: null } },
-          data: { roomAssignmentId: null },
-        });
-        await tx.roomAssignment.deleteMany({ where: { entryId: input.entryId } });
+        await releasePreOccupancyForReEntryTx(tx, { entryId: input.entryId, actor, inquiryId: entry.inquiryId, stage });
       },
     });
   }
@@ -2992,8 +3019,9 @@ async function changeRoomToNewSegmentInner(
     return blockedOutcome("HOLD_PLACEMENT", e);
   }
 
-  // ── Set up is home: the walk stops here, with the fresh proforma held for the desk ──────────
-  if (stage === Stage.S3) {
+  // ── The pass's own proforma, held for the desk (2026-10-29: at every step, not only Set up —
+  // the walk made it on reaching Set up, the earlier pass's bill replaced) ───────────────────────
+  {
     try {
       const newSegment = await prisma.segment.findFirst({
         where: { entryId: input.entryId },
@@ -3028,6 +3056,9 @@ async function changeRoomToNewSegmentInner(
     } catch {
       /* the proforma stays on the Documents tab; only the prompt is lost */
     }
+  }
+  // ── Set up is home: the walk stops here ─────────────────────────────────────────────────────
+  if (stage === Stage.S3) {
     const entryAtSetup = await prisma.entry.findUniqueOrThrow({ where: { id: input.entryId }, select: { currentStage: true } });
     return {
       ...outcomeBase,
@@ -3423,11 +3454,62 @@ export async function roomChangeNights(prisma: PrismaClient, entryId: string, fr
  * before and after, and where the walk ended — for a change from the booking, a room move from the
  * chart, a setup change, a seating repair or a stay extension alike. A dry run writes nothing.
  */
+/**
+ * Before the guest is in: what a walk back through Negotiation lets go of, inside the re-entry's
+ * transaction — the hold and every claim flag (a new pass places its own commitments, the
+ * 2026-08-02 ruling), and Arrival's room rows, which are planning state, not history (the sealed
+ * pass's configuration and the trail keep the story; stale rows would leak the OLD room into the
+ * check-in and night-audit room lists). Shared by the room-change walk and the in-place change of
+ * the stay (booking-change-service, 2026-10-29).
+ */
+export async function releasePreOccupancyForReEntryTx(
+  tx: Prisma.TransactionClient,
+  input: { entryId: string; actor: Actor; inquiryId: string | null; stage: Stage },
+) {
+  await s3HoldService.releaseCommittedHoldForRoomChange(
+    tx,
+    input.entryId,
+    input.actor,
+    "ROOM_CHANGE",
+    input.inquiryId,
+    "COMMITTED_HOLD.RELEASED_ON_ROOM_CHANGE",
+    input.stage,
+  );
+  await tx.roomNightMealPlan.deleteMany({ where: { roomAssignment: { entryId: input.entryId } } });
+  await tx.handoffRecord.updateMany({
+    where: { entryId: input.entryId, roomAssignmentId: { not: null } },
+    data: { roomAssignmentId: null },
+  });
+  await tx.roomAssignment.deleteMany({ where: { entryId: input.entryId } });
+}
+
 export async function changeRoomToNewSegment(
   ...args: Parameters<typeof changeRoomToNewSegmentInner>
 ): ReturnType<typeof changeRoomToNewSegmentInner> {
+  const input = args[2];
+  const { readBedsBefore, carryBedsToNewRooms } = await import("./entry-bed-plan-service.js");
+  const bedsBefore = input.dryRun ? null : await readBedsBefore(args[0], input.entryId);
   const out = await changeRoomToNewSegmentInner(...args);
   if (!out.dryRun) await traceRoomChangeSummary(args[0], args[1], args[2], out).catch(() => {});
+  // The guest's bed goes with them to the new room (2026-10-29) — the desk's choice or their ask.
+  if (bedsBefore && !out.dryRun) {
+    const pairs: Array<[string, string]> = [];
+    if (input.toRoomId) pairs.push([input.fromRoomId, input.toRoomId]);
+    for (const n of input.perNight ?? []) if (n.roomId !== input.fromRoomId) pairs.push([input.fromRoomId, n.roomId]);
+    for (const [from, to] of Object.entries(input.dateShift?.roomMap ?? {})) pairs.push([from, to]);
+    await carryBedsToNewRooms(args[0], input.entryId, bedsBefore, pairs);
+  }
+  // A change made from tonight while the guest is in house: tonight's lines already on the bill are
+  // put right at once (2026-10-29 — tonight is posted at check-in, before the hotel's run).
+  if (!out.dryRun && out.originStage === "S7" && !input.extension) {
+    const { reconcileTonightBestEffort } = await import("../application/s7-night-audit-service.js");
+    await reconcileTonightBestEffort(args[0], {
+      entryId: input.entryId,
+      actorId: args[1].actorId,
+      actorLevel: args[1].actorLevel,
+      reason: out.setupOnly ? "Changed tonight — tonight is charged as the room is now set up" : "Room changed tonight — tonight is charged on the room the guest sleeps in",
+    });
+  }
   return out;
 }
 

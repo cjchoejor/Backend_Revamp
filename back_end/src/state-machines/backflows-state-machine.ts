@@ -37,6 +37,7 @@ import { generateOrLoadQuotationPdf } from "../services/domain/quotation-pdf-ser
 import { registerNightAuditTimers } from "../services/domain/pre-arrival-service.js";
 import { getTimerEngine } from "../services/infrastructure/timer-management-service.js";
 import { armInquiryExpiryTx } from "../lib/inquiry-expiry.js";
+import { retireHeldPapersOnReEntryTx } from "../lib/held-documents.js";
 import {
   enforceS2ToS1BackflowAuthority,
   enforceS4ToS1BackflowAuthority,
@@ -96,6 +97,12 @@ async function runBackflow(
   enforceEntryActiveForStageTransition({ status: entry.status });
   const currentSeg = entry.segments[0];
   if (!currentSeg) throw new ValidationError("Entry has no segment");
+
+  // The next pass replaces the proforma when it reaches Set up (2026-10-29) — a never-rendered one
+  // is rendered now, while its own pass and quotation still stand, so the replaced version keeps
+  // the figures it was made with (the 2026-08-02 freeze-at-supersession ruling). Best-effort: a
+  // render failure leaves that version to the labelled reconstruction.
+  await freezeUnrenderedProformasForEntry(prisma, input.entryId, input.actor.actorId).catch(() => {});
 
   // Mode registry — ACIG §2.1A.7. Was dormant; now load-bearing.
   const mode = await requireActiveMode(prisma, input.modeKey);
@@ -169,6 +176,8 @@ async function runBackflow(
     if (input.hooks) {
       await input.hooks(tx, { id: entry.id, version: entry.version, inquiryId: entry.inquiryId, currentStage: entry.currentStage });
     }
+    // Papers held for the desk describe the pass being sealed — retired, never sent (2026-10-29).
+    await retireHeldPapersOnReEntryTx(tx, { entryId: entry.id, actorId: input.actor.actorId });
 
     // 3. Seal the current segment.
     if (!currentSeg.sealedAt) {

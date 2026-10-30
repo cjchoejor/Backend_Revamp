@@ -1,4 +1,4 @@
-import type { Prisma, PrismaClient } from "@prisma/client";
+import type { ActorLevel, Prisma, PrismaClient } from "@prisma/client";
 import { enforceNightAuditOperatingDateEnded, enforceNightAuditOperatingDateNotAhead } from "../../policies/24-night-audit/p61-night-audit-complete-before-s7-to-s8.js";
 import { effectiveCheckOutDate, hotelTodayUtc, ymdUtc } from "../../lib/stay-dates.js";
 import { FolioLineType, NightAuditAnomalyType, NightAuditRunStatus, Stage } from "@prisma/client";
@@ -135,6 +135,8 @@ export async function runNightAuditForEntry(
   prisma: PrismaClient,
   actorId: string,
   input: { operatingDate: string; entryId: string },
+  /** Who posted it and why (2026-10-29): the desk's button, the check-in itself, a change tonight. */
+  opts?: { actorLevel?: string; cause?: "DESK" | "CHECK_IN" | "CHANGED_TONIGHT" },
 ): Promise<{ entryId: string; operatingDate: string; posted: number; lines: string[]; hotelRecordId: string | null }> {
   if (!input.operatingDate?.trim()) throw new ValidationError("operatingDate is required");
   const d = new Date(input.operatingDate);
@@ -175,7 +177,7 @@ export async function runNightAuditForEntry(
       data: {
         eventType: "NIGHT_AUDIT.BOOKING_NIGHT_POSTED",
         actorId,
-        actorLevel: "L2",
+        actorLevel: (opts?.actorLevel ?? "L2") as ActorLevel,
         entityType: "Entry",
         entityId: input.entryId,
         operation: "CREATE",
@@ -188,6 +190,7 @@ export async function runNightAuditForEntry(
           lines: p.perRoomPosts.map((x) => x.description),
           hotelRecordId: hotelRecord?.id ?? null,
           aheadOfHotelRun: !hotelRecord,
+          cause: opts?.cause ?? "DESK",
         },
         createdBy: actorId,
       },
@@ -206,6 +209,8 @@ export async function planNightForEntries(
   prisma: PrismaClient,
   operatingDate: Date,
   entryWhere: Prisma.EntryWhereInput = {},
+  /** Every line the night should carry, posted or not — tonight's correction reads it (2026-10-29). */
+  opts?: { includePosted?: boolean },
 ): Promise<{ plan: EntryNightPlan[]; notProcessed: string[] }> {
   const expected = (await requireActiveConfigValue<{ amount?: number; currency?: string } | undefined>(prisma, "nightAudit.expectedDailyFAndBCharge")) ?? {};
   const expectedAmount = typeof expected.amount === "number" ? expected.amount : 0;
@@ -309,6 +314,10 @@ export async function planNightForEntries(
       // Uses `description` as the discriminator since FolioLine has no roomId column.
       const perRoomPosts: PerRoomPost[] = [];
       for (const p of perRoomPostCandidates) {
+        if (opts?.includePosted) {
+          perRoomPosts.push(p);
+          continue;
+        }
         const already = await prisma.folioLine.findFirst({
           where: {
             folioId: entry.folio.id,
@@ -342,6 +351,177 @@ export async function planNightForEntries(
   }
 
   return { plan, notProcessed };
+}
+
+/**
+ * Tonight, posted ahead and then changed (2026-10-29). Tonight is posted the moment the guest checks
+ * in (and the desk may post it by hand), before the hotel's run. A change made "from tonight" — a
+ * room change, a change of extra beds or meals, a room released, the guest leaving early — moves
+ * tonight onto another basis, and the lines already on the bill would charge tonight twice (the old
+ * room's line, then the new room's at the hotel's run) or at the old price.
+ *
+ * So tonight's lines are put right at once: each night-audit line already posted for tonight is
+ * corrected to what the night audit would post now (to zero when the room no longer sleeps the
+ * guest tonight, or the stay ends today), its service charge and GST moving with it; a room that
+ * now sleeps the guest tonight and has no line yet is posted. The hotel's run then finds every line
+ * there and posts nothing more. Nothing posted for tonight → nothing to do: the run posts it right.
+ */
+export async function reconcileTonightPostedAhead(
+  prisma: PrismaClient,
+  input: { entryId: string; actorId: string; actorLevel?: string; reason: string },
+): Promise<{ corrected: Array<{ lineId: string; from: number; to: number }>; posted: string[] }> {
+  const operatingDate = hotelTodayUtc();
+  const ymd = ymdUtc(operatingDate);
+  const entry = await prisma.entry.findUnique({
+    where: { id: input.entryId },
+    select: { id: true, inquiryId: true, status: true, currentStage: true, folio: { select: { id: true, state: true } } },
+  });
+  if (!entry?.folio || entry.folio.state !== "LIVE") return { corrected: [], posted: [] };
+  const folioId = entry.folio.id;
+  const posted = await prisma.folioLine.findMany({
+    where: {
+      folioId,
+      chargeDate: operatingDate,
+      lineType: { in: [FolioLineType.ROOM_CHARGE, FolioLineType.F_AND_B] },
+      OR: [
+        { description: { startsWith: NIGHT_AUDIT_ROOM_CHARGE_DESCRIPTION_PREFIX } },
+        { description: { startsWith: NIGHT_AUDIT_MEAL_PLAN_DESCRIPTION_PREFIX } },
+      ],
+    },
+    select: { id: true, lineType: true, description: true, amount: true },
+  });
+  if (posted.length === 0) return { corrected: [], posted: [] };
+
+  // What tonight should carry now: only while the guest is in house and tonight is a night of the stay.
+  const inHouse = entry.status === "ACTIVE" && entry.currentStage === Stage.S7;
+  const candidates = inHouse
+    ? ((await planNightForEntries(prisma, operatingDate, { id: entry.id }, { includePosted: true })).plan[0]?.perRoomPosts ?? [])
+    : [];
+
+  const { correctCharge } = await import("../domain/s7-folio-lines-service.js");
+  const corrected: Array<{ lineId: string; from: number; to: number }> = [];
+  for (const line of posted) {
+    const corrections = await prisma.folioLine.findMany({
+      where: { folioId, description: { startsWith: `Correction for ${line.id}:` } },
+      select: { amount: true },
+    });
+    const net = round2(toDecimal(line.amount).add(corrections.reduce((a, c) => a.add(toDecimal(c.amount)), ZERO)));
+    const cand = candidates.find((c) => c.lineType === line.lineType && c.description === line.description);
+    const target = round2(toDecimal(cand ? cand.amount : 0));
+    if (net.equals(target)) continue;
+    await correctCharge(prisma, folioId, input.actorId, {
+      entryId: entry.id,
+      originalFolioLineId: line.id,
+      reason: input.reason,
+      correctToAmount: Number(target),
+      correctionDate: ymd,
+    });
+    corrected.push({ lineId: line.id, from: Number(net), to: Number(target) });
+  }
+
+  // A room that sleeps the guest tonight now and has no line yet: posted, exactly as the run would.
+  let postedLines: string[] = [];
+  const missing = candidates.filter((c) => !posted.some((l) => l.lineType === c.lineType && l.description === c.description));
+  if (inHouse && missing.length > 0) {
+    const r = await runNightAuditForEntry(
+      prisma,
+      input.actorId,
+      { operatingDate: ymd, entryId: entry.id },
+      { actorLevel: input.actorLevel, cause: "CHANGED_TONIGHT" },
+    );
+    postedLines = r.lines;
+  }
+
+  if (corrected.length || postedLines.length) {
+    await prisma.traceEvent.create({
+      data: {
+        eventType: "NIGHT_AUDIT.TONIGHT_RECONCILED",
+        actorId: input.actorId,
+        actorLevel: (input.actorLevel ?? "L1") as ActorLevel,
+        entityType: "Entry",
+        entityId: entry.id,
+        operation: "UPDATE",
+        timestamp: new Date(),
+        stageContext: entry.currentStage,
+        inquiryId: entry.inquiryId ?? undefined,
+        entryId: entry.id,
+        payload: { operatingDate: operatingDate.toISOString(), reason: input.reason, corrected, posted: postedLines },
+        createdBy: input.actorId,
+      },
+    });
+  }
+  return { corrected, posted: postedLines };
+}
+
+/** A failure to post or put right tonight goes on the booking's history — never silent. */
+async function traceTonightFailure(prisma: PrismaClient, entryId: string, actorId: string, what: string, e: unknown) {
+  const message = e instanceof Error ? e.message : String(e);
+  console.warn(`[night-audit] ${what} failed for ${entryId}:`, message);
+  await prisma.traceEvent
+    .create({
+      data: {
+        eventType: "NIGHT_AUDIT.TONIGHT_FAILED",
+        actorId,
+        actorLevel: "SYSTEM",
+        entityType: "Entry",
+        entityId: entryId,
+        operation: "ALERT",
+        timestamp: new Date(),
+        entryId,
+        payload: { what, message },
+        createdBy: actorId,
+      },
+    })
+    .catch(() => {});
+}
+
+export async function reconcileTonightBestEffort(
+  prisma: PrismaClient,
+  input: { entryId: string; actorId: string; actorLevel?: string; reason: string },
+) {
+  try {
+    return await reconcileTonightPostedAhead(prisma, input);
+  } catch (e) {
+    await traceTonightFailure(prisma, input.entryId, input.actorId, "putting tonight's charge right", e);
+    return null;
+  }
+}
+
+/**
+ * Tonight, posted the moment the guest checks in (2026-10-29, operator: "as soon as a guest checks in
+ * the folio can log the night audit for that night automatically — it doesn't have to wait for the
+ * night audit timer, but the timer running shouldn't double charge them for the same night"). The
+ * same posting as the desk's "Post tonight": the hotel's run finds the lines there and posts nothing
+ * more. Only tonight, and only when tonight is a night of the stay — earlier nights of a late arrival
+ * are the desk's, as before.
+ */
+export async function postTonightAtCheckIn(prisma: PrismaClient, input: { entryId: string; actorId: string; actorLevel?: string }) {
+  try {
+    const today = hotelTodayUtc();
+    const entry = await prisma.entry.findUnique({
+      where: { id: input.entryId },
+      select: {
+        checkInDate: true,
+        checkOutDate: true,
+        actualCheckOutDate: true,
+        reservation: { select: { frozenCheckInDate: true, frozenCheckOutDate: true } },
+      },
+    });
+    if (!entry) return null;
+    const start = entry.reservation?.frozenCheckInDate ?? entry.checkInDate ?? null;
+    const end = effectiveCheckOutDate(entry);
+    const t = today.getTime();
+    if (!start || !end || t < operatingDateUtc(start).getTime() || t >= operatingDateUtc(end).getTime()) return null;
+    return await runNightAuditForEntry(
+      prisma,
+      input.actorId,
+      { operatingDate: ymdUtc(today), entryId: input.entryId },
+      { actorLevel: input.actorLevel, cause: "CHECK_IN" },
+    );
+  } catch (e) {
+    await traceTonightFailure(prisma, input.entryId, input.actorId, "posting tonight at check-in", e);
+    return null;
+  }
 }
 
 /** Post one booking's lines for the night, stamped with the audit record, and what follows them. */

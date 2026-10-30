@@ -23,7 +23,7 @@ import { useSession } from "@/hooks/use-session";
 import { answerDamage, previewDamageCharge, type BookingDamage, type BookingDamages, type DamageWay } from "@/lib/api/damages";
 import { fmtDateTime, money } from "@/lib/ds/format";
 import type { EntryDetail } from "@/types/api";
-import { DsDialog, NotNow, ReasonDialog, StepCard, atLeast, toastRefusal, useRefreshEntry } from "./kit";
+import { DsDialog, NotNow, ReasonDialog, StepCard, atLeast, toastRefusal, useFinishWhenDone, useRefreshEntry } from "./kit";
 
 function roomWords(numbers: string[]) {
   if (numbers.length === 1) return `Room ${numbers[0]}`;
@@ -48,6 +48,8 @@ function shutWhy(way: DamageWay, fom: boolean, whose: string): string | undefine
 
 export function DamageCard({ entry, live, atClosed = false }: { entry: EntryDetail; live: boolean; atClosed?: boolean }) {
   const q = useBookingDamages(entry);
+  // An answer is given in a pop-up; once every damage is answered the section folds and the next opens (2026-10-30).
+  const finish = useFinishWhenDone("damage");
   const data = q.data;
   if (!data || !data.damages.length) return null;
   const unanswered = data.damages.filter((d) => !d.answer).map((d) => d.roomNumber);
@@ -67,17 +69,43 @@ export function DamageCard({ entry, live, atClosed = false }: { entry: EntryDeta
       title={data.damages.length > 1 ? "Damage found" : `Damage found in Room ${data.damages[0].roomNumber}`}
       meta="What the room inspections found damaged. Charge it to the bill — with or without service charge and GST — waive it, or decide after departure."
       status={status}
+      summary={data.damages
+        .map(
+          (d) =>
+            `Room ${d.roomNumber} · ${
+              d.answer === "CHARGED"
+                ? `charged${d.charge ? ` ${money(d.charge.amount)}` : ""}`
+                : d.answer === "WAIVED"
+                  ? "waived"
+                  : d.answer === "LATER"
+                    ? "decided after departure"
+                    : "needs an answer"
+            }`,
+        )
+        .join(" · ")}
     >
       <div className="dmg-list">
         {data.damages.map((d) => (
-          <DamageRow key={d.inspectionId} entry={entry} data={data} d={d} live={live} />
+          <DamageRow key={d.inspectionId} entry={entry} data={data} d={d} live={live} onAnswered={() => finish()} />
         ))}
       </div>
     </StepCard>
   );
 }
 
-function DamageRow({ entry, data, d, live }: { entry: EntryDetail; data: BookingDamages; d: BookingDamage; live: boolean }) {
+function DamageRow({
+  entry,
+  data,
+  d,
+  live,
+  onAnswered,
+}: {
+  entry: EntryDetail;
+  data: BookingDamages;
+  d: BookingDamage;
+  live: boolean;
+  onAnswered?: () => void;
+}) {
   const { session } = useSession();
   const { tz } = useHotelClock(60_000);
   const fom = atLeast(session?.actorLevel, "L2");
@@ -102,6 +130,7 @@ function DamageRow({ entry, data, d, live }: { entry: EntryDetail; data: Booking
             : `Room ${d.roomNumber}'s damage is left to decide after departure`,
       );
       after();
+      onAnswered?.();
     },
     onError: (e) => toastRefusal(e, `Room ${d.roomNumber}'s damage could not be answered`),
   });
@@ -146,14 +175,14 @@ function DamageRow({ entry, data, d, live }: { entry: EntryDetail; data: Booking
       {live && !decided ? (
         <div className="row-acts dmg-acts">
           <Button kind="primary" compact state={chargeWhy ? "inert" : "default"} reason={chargeWhy} onClick={() => setOpen("charge")}>
-            Charge it…
+            Charge it
           </Button>
           <Button kind="secondary" compact state={waiveWhy ? "inert" : "default"} reason={waiveWhy} onClick={() => setOpen("waive")}>
-            Waive it…
+            Waive it
           </Button>
           {laterOpen ? (
             <Button kind="quiet" compact onClick={() => setOpen("later")}>
-              Decide after departure…
+              Decide after departure
             </Button>
           ) : null}
         </div>

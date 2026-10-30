@@ -24,6 +24,7 @@ import { DsDialog, Live, atLeast, toastRefusal, useRefreshEntry, words } from ".
 import { SendToField, useBookedBy, useSendTo } from "./s8-parts";
 import { useUnansweredDamage } from "./damage-card";
 import { Help } from "@/components/ds/help";
+import { ReqMark } from "./new-inquiry-parts";
 
 export const SETTLE_METHODS = [
   ["CASH", "Cash"],
@@ -36,6 +37,54 @@ export const SETTLE_METHODS = [
   ["VOUCHER", "The agent's voucher"],
 ] as const;
 export type SettleMethod = (typeof SETTLE_METHODS)[number][0];
+
+/**
+ * Cash and QR take a payment reference whenever money is taken — the backend refuses them without
+ * one (s8-settlement-service, "paymentVerificationRef is required for CASH and MOBILE_PAYMENT").
+ * Keep the two in step.
+ */
+export const referenceNeeded = (method: SettleMethod) => method === "CASH" || method === "MOBILE_PAYMENT";
+
+/**
+ * The payment reference (or the agency's voucher number) — said to be needed on its label, and red
+ * while it is empty and needed (2026-10-30, operator: "it doesn't indicate the user has to fill the
+ * transaction reference").
+ */
+export function ReferenceField({
+  method,
+  value,
+  onChange,
+  takesMoney,
+}: {
+  method: SettleMethod;
+  value: string;
+  onChange: (v: string) => void;
+  /** Money is taken now — a zero payment has nothing to reference. */
+  takesMoney: boolean;
+}) {
+  const voucher = method === "VOUCHER";
+  const needed = !voucher && referenceNeeded(method) && takesMoney;
+  const missing = needed && !value.trim();
+  const placeholder = voucher
+    ? "the agency's voucher number"
+    : method === "CARD"
+      ? "the card slip's number"
+      : method === "MOBILE_PAYMENT"
+        ? "the QR payment's reference"
+        : method === "CASH"
+          ? "the cash receipt's number"
+          : "the transaction reference";
+  return (
+    <div className="field">
+      <label>
+        {voucher ? "Voucher number" : "Payment reference"}
+        {needed ? <ReqMark title={`needed for ${method === "CASH" ? "cash" : "a QR payment"}`} /> : <span className="meta"> · optional</span>}
+      </label>
+      <input className={`input${missing ? " missing" : ""}`} value={value} placeholder={placeholder} aria-invalid={missing || undefined} onChange={(e) => onChange(e.target.value)} />
+      {missing ? <span className="hint stop-ink">Needed for {method === "CASH" ? "cash" : "a QR payment"} — fill it in to settle</span> : null}
+    </div>
+  );
+}
 
 /**
  * The ways of settling a billing model allows (2026-09-18). The backend refuses anything but a
@@ -96,7 +145,20 @@ function shareTitle(model: string, booked: ReturnType<typeof useBookedBy>) {
   return words(model);
 }
 
-export function PayerShares({ entry, shares, live, currency }: { entry: EntryDetail; shares: SettlementBucket[]; live: boolean; currency: string }) {
+export function PayerShares({
+  entry,
+  shares,
+  live,
+  currency,
+  onSettled,
+}: {
+  entry: EntryDetail;
+  shares: SettlementBucket[];
+  live: boolean;
+  currency: string;
+  /** A share was settled — the Check-out section folds once the last one is (2026-10-30). */
+  onSettled?: () => void;
+}) {
   const booked = useBookedBy(entry);
   return (
     <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
@@ -108,13 +170,25 @@ export function PayerShares({ entry, shares, live, currency }: { entry: EntryDet
         </Help>
       </p>
       {shares.map((s) => (
-        <ShareRow key={s.billingModel} entry={entry} share={s} live={live} currency={currency} />
+        <ShareRow key={s.billingModel} entry={entry} share={s} live={live} currency={currency} onSettled={onSettled} />
       ))}
     </div>
   );
 }
 
-function ShareRow({ entry, share, live, currency }: { entry: EntryDetail; share: SettlementBucket; live: boolean; currency: string }) {
+function ShareRow({
+  entry,
+  share,
+  live,
+  currency,
+  onSettled,
+}: {
+  entry: EntryDetail;
+  share: SettlementBucket;
+  live: boolean;
+  currency: string;
+  onSettled?: () => void;
+}) {
   const { session } = useSession();
   const refresh = useRefreshEntry(entry.id);
   const booked = useBookedBy(entry);
@@ -195,6 +269,7 @@ function ShareRow({ entry, share, live, currency }: { entry: EntryDetail; share:
               : `${title} — settled`,
       );
       refresh([["settlement-targets"], ["settlement-buckets"], ["folio-documents"]]);
+      onSettled?.();
     },
     onError: (e) => toastRefusal(e, "The share did not settle"),
   });
@@ -222,7 +297,7 @@ function ShareRow({ entry, share, live, currency }: { entry: EntryDetail; share:
 
       {done ? null : (
         <Live>
-          <div className="form2" style={{ marginTop: 10 }}>
+          <div className="form3 settle-row" style={{ marginTop: 10 }}>
             <div className="field">
               <label>How they pay</label>
               <select className="input" value={method} onChange={(e) => setMethod(e.target.value as SettleMethod)}>
@@ -233,17 +308,7 @@ function ShareRow({ entry, share, live, currency }: { entry: EntryDetail; share:
                 ))}
               </select>
             </div>
-            {method === "DIRECT_BILL" ? null : (
-              <div className="field">
-                <label>{method === "VOUCHER" ? "Voucher number" : "Payment reference"}</label>
-                <input
-                  className="input"
-                  value={ref}
-                  placeholder={method === "VOUCHER" ? "the agency's voucher number" : "the transaction reference"}
-                  onChange={(e) => setRef(e.target.value)}
-                />
-              </div>
-            )}
+            {method === "DIRECT_BILL" ? null : <ReferenceField method={method} value={ref} onChange={setRef} takesMoney={takesMoney} />}
             {method === "VOUCHER" ? (
               <div className="field">
                 <label>

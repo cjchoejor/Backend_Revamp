@@ -17,6 +17,7 @@ import { useSession } from "@/hooks/use-session";
 import { getCompetingClaims, type CompetingClaimItem } from "@/lib/api/entries";
 import { listRooms } from "@/lib/api/rooms";
 import { STEP_NAMES, stepNoOfStage } from "@/lib/ds/steps";
+import { fmtDay } from "@/lib/ds/format";
 import type { EntryDetail } from "@/types/api";
 import { StepCard, useStepMode } from "./kit";
 
@@ -41,14 +42,40 @@ export function useRoomNumbers(): Map<string, string> {
   return useMemo(() => new Map((rooms.data?.items ?? []).map((r) => [r.id, r.roomNumber])), [rooms.data]);
 }
 
-/** "Room 201" · "Rooms 201, 202" — numbers sorted the way the house counts them. */
-export function roomsWord(ids: string[], numbers: Map<string, string>): string {
-  const nos = ids
-    .map((id) => numbers.get(id))
-    .filter((n): n is string => !!n)
-    .sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
-  if (nos.length === 0) return ids.length === 1 ? "1 room" : `${ids.length} rooms`;
-  return `${nos.length === 1 ? "Room" : "Rooms"} ${nos.join(", ")}`;
+/** Each room's type name, from the rooms catalogue — for saying the rooms by type and count. */
+export function useRoomTypeNames(): Map<string, string> {
+  const { session } = useSession();
+  const rooms = useQuery({
+    queryKey: ["rooms"],
+    queryFn: () => listRooms(session!),
+    enabled: !!session,
+  });
+  return useMemo(
+    () => new Map((rooms.data?.items ?? []).filter((r) => r.roomType?.name).map((r) => [r.id, r.roomType!.name])),
+    [rooms.data],
+  );
+}
+
+/**
+ * The rooms a booking holds, the way the desk says them (2026-10-29, operator: "it can show like 2
+ * Deluxe room 2 Standard room, until and unless specific rooms are chosen"): the rooms the system
+ * chose and may still move are counted by type — "2 Deluxe Double and 1 Standard Double" — and a
+ * room given by number (a guest's own room, or any room from Arrival on) is named by its number:
+ * "2 Deluxe Double and Room 206". A system room whose type is not known yet is named by number too.
+ */
+export function roomsHeldWord(rooms: Array<{ number: string | null; typeName: string | null; quiet: boolean }>): string {
+  const counts = new Map<string, number>();
+  const nos: string[] = [];
+  for (const r of rooms) {
+    if (r.quiet && r.typeName) counts.set(r.typeName, (counts.get(r.typeName) ?? 0) + 1);
+    else if (r.number) nos.push(r.number);
+  }
+  // The most of a type first, then by name, so every place says the same rooms in the same order.
+  const parts = [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([t, n]) => `${n} ${t}`);
+  const sorted = [...new Set(nos)].sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
+  if (sorted.length) parts.push(`${sorted.length === 1 ? "Room" : "Rooms"} ${sorted.join(", ")}`);
+  if (!parts.length) return rooms.length === 1 ? "1 room" : `${rooms.length} rooms`;
+  return parts.length > 1 ? `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}` : parts[0];
 }
 
 /* ------------------------------------------------------------------ passes */
@@ -150,23 +177,35 @@ export function useCompetingClaims(entryId: string) {
  * "Another booking is working these rooms" — advisory. The first committed hold wins the rooms;
  * until then everything is paper, and this is where the slower booking learns it before money is
  * taken. Names the other booking by its reference, never by its guest (SS03 §5.4).
+ *
+ * By type (2026-10-29): a room the system chose moves within its type, so the race is for the TYPE
+ * when there are not rooms enough for everyone working it — "Standard Double: 1 free on 30 Oct,
+ * 2 wanted". A room both bookings chose by number is still a race for that room.
  */
 export function CompetingClaimsCard({ entryId }: { entryId: string }) {
   const { past } = useStepMode();
   const claims = useCompetingClaims(entryId);
   const items = claims.data?.items ?? [];
+  const typeShort = claims.data?.typeShort ?? [];
   if (past || items.length === 0) return null;
   const anyHard = items.some((i) => HARD.includes(i.kind));
+  const byTypeOnly = items.every((i) => i.roomNumbers.length === 0);
+  const roomPaper = items.some((i) => !HARD.includes(i.kind) && i.roomNumbers.length > 0);
+  const typeCount = new Set(items.flatMap((i) => i.roomTypeNames)).size;
   return (
     <StepCard
-      title={`Another booking is working ${items.length === 1 && items[0].roomNumbers.length === 1 ? "this room" : "these rooms"}`}
+      title={
+        byTypeOnly
+          ? `Another booking is working on ${typeCount === 1 ? "this room type" : "these room types"}`
+          : `Another booking is working ${items.length === 1 && items[0].roomNumbers.length === 1 ? "this room" : "these rooms"}`
+      }
       icon="alert"
       right={<Chip tone={anyHard ? "danger" : "warning"}>{anyHard ? "already taken" : "first to hold wins"}</Chip>}
     >
       <table className="table compact">
         <thead>
           <tr>
-            <th>Rooms</th>
+            <th>{byTypeOnly ? "Room type" : "Rooms"}</th>
             <th>What they have</th>
             <th>Booking</th>
             <th>At</th>
@@ -175,7 +214,7 @@ export function CompetingClaimsCard({ entryId }: { entryId: string }) {
         <tbody>
           {items.map((i) => (
             <tr key={`${i.entryId}:${i.kind}:${i.documentId ?? ""}`} className="static">
-              <td>{i.roomNumbers.join(", ")}</td>
+              <td>{[...i.roomNumbers, ...i.roomTypeNames.map((t) => (byTypeOnly ? t : `a ${t}`))].join(", ")}</td>
               <td>
                 {CLAIM_WORD[i.kind]}
                 {i.documentId ? <span className="sub">{i.documentId}</span> : null}
@@ -189,11 +228,22 @@ export function CompetingClaimsCard({ entryId }: { entryId: string }) {
           ))}
         </tbody>
       </table>
-      <p className={anyHard ? "stop-ink sm" : "sm"} style={{ marginTop: 8 }}>
-        {anyHard
-          ? "These nights are already held — this booking will be refused at the hold. Change the rooms, or ask the GM to release theirs."
-          : "Nobody holds these nights yet — whoever places the hold first takes the rooms."}
-      </p>
+      {anyHard ? (
+        <p className="stop-ink sm" style={{ marginTop: 8 }}>
+          These nights are already held — this booking will be refused at the hold. Change the rooms, or ask the GM to release theirs.
+        </p>
+      ) : null}
+      {typeShort.map((t) => (
+        <p key={t.roomTypeName} className="warn-ink sm" style={{ marginTop: 8, fontWeight: 600 }}>
+          {t.roomTypeName}: {t.free === 0 ? "none" : t.free} free on {t.nights.map((n) => fmtDay(n)).join(", ")}, {t.wanted} wanted —
+          whoever places the hold first takes {t.free === 1 ? "it" : "them"}.
+        </p>
+      ))}
+      {roomPaper ? (
+        <p className="sm" style={{ marginTop: 8 }}>
+          Nobody holds these rooms yet — both bookings chose them by number, and whoever places the hold first takes them.
+        </p>
+      ) : null}
     </StepCard>
   );
 }

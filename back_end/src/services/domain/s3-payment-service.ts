@@ -478,16 +478,35 @@ export async function carryAdvancePinsAcrossNewPass(
   return { requirementCarried: carryRequirement, planCarried: carryPlan, requiredAmount: requiredAmount ? Number(requiredAmount.toFixed(2)) : null };
 }
 
-async function setAdvanceRequirementInner(
-  prisma: PrismaClient,
-  input: { entryId: string; folioId: string; mode: "AMOUNT" | "PERCENT" | "CLEAR"; amount?: number; percent?: number },
-  actor: { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" },
-) {
-  const folio = await prisma.folio.findUnique({ where: { id: input.folioId } });
-  if (!folio) throw new ValidationError("folioId invalid");
-  if (folio.entryId !== input.entryId) throw new ValidationError("entryId/folioId mismatch");
+type AdvanceActor = { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" };
 
-  const now = new Date();
+/** How much the guest is asked to pay as an advance — a flat amount, a percent of the quotation, or the hotel's default. */
+export type AdvanceRequirementInput = { mode: "AMOUNT" | "PERCENT" | "CLEAR"; amount?: number; percent?: number };
+
+/** What the guest said about paying the advance. */
+export type AdvancePlanInput = {
+  plan: AdvancePaymentPlanKind | "CLEAR";
+  balanceDueAt?: AdvanceBalanceDueAt | null;
+  promisedBy?: string | Date | null;
+  note?: string | null;
+};
+
+/**
+ * The amount asked, worked out and checked — nothing written. `changed` says whether the figure
+ * actually moves, which is what re-issues the proforma: setting the same figure again must not
+ * spawn a new document version. The prior is the segment-scoped EFFECTIVE requirement (a prior
+ * segment's pin counts as "nothing set"), so re-pinning any amount after a re-entry registers as a
+ * change and re-issues correctly.
+ */
+async function resolveRequirementChange(
+  prisma: PrismaClient,
+  folio: { advanceRequiredAmount: Prisma.Decimal | null; advanceRequiredBasis: Prisma.JsonValue | null },
+  entryId: string,
+  input: AdvanceRequirementInput,
+  actor: AdvanceActor,
+  now: Date,
+  segmentStartedAt: Date | null,
+): Promise<{ requiredDec: Prisma.Decimal | null; basis: Record<string, unknown> | null; changed: boolean }> {
   let requiredDec: Prisma.Decimal | null = null;
   let basis: Record<string, unknown> | null = null;
 
@@ -501,7 +520,7 @@ async function setAdvanceRequirementInner(
     }
     // Percentage of the operative quotation's total (the current segment's commercial basis).
     const entry = await prisma.entry.findUnique({
-      where: { id: input.entryId },
+      where: { id: entryId },
       include: { segments: { orderBy: { segmentNumber: "desc" }, take: 1 }, quotations: true },
     });
     const segmentId = entry?.segments[0]?.id;
@@ -522,78 +541,54 @@ async function setAdvanceRequirementInner(
   }
   // mode === "CLEAR" leaves requiredDec/basis null → falls back to config thresholds.
 
-  // Did the requirement actually change? Drives the proforma re-issue below — setting the
-  // same figure again must not spawn a new document version. The prior is the segment-scoped
-  // EFFECTIVE requirement (a prior segment's pin counts as "nothing set"), so re-pinning any
-  // amount after a re-entry registers as a change and re-issues correctly.
-  const currentSegment = await prisma.segment.findFirst({
-    where: { entryId: input.entryId },
-    orderBy: { segmentNumber: "desc" },
-    select: { startedAt: true },
-  });
-  const priorEffective = resolveOperatorAdvanceRequirement(folio, currentSegment?.startedAt ?? null);
+  const priorEffective = resolveOperatorAdvanceRequirement(folio, segmentStartedAt);
   const priorStr = priorEffective != null ? toDecimal(priorEffective).toFixed(2) : null;
   const nextStr = requiredDec != null ? requiredDec.toFixed(2) : null;
-  const requirementChanged = priorStr !== nextStr;
+  return { requiredDec, basis, changed: priorStr !== nextStr };
+}
 
-  // Freeze what the outgoing versions LOOKED LIKE before the change lands (2026-08-02,
-  // operator ruling): a superseded proforma without a stored artifact recomposes from
-  // current data, so old versions silently adopted every later figure. Rendering their PDFs
-  // NOW — before the folio update — captures the figures that were actually on the table.
-  // Dynamic import: invoice-pdf-service statically imports this module (evaluation +
-  // requirement resolver), so a static import back would create a cycle.
-  if (requirementChanged) {
-    const { freezeUnrenderedProformasForEntry } = await import("./invoice-pdf-service.js");
-    await freezeUnrenderedProformasForEntry(prisma, input.entryId, actor.actorId);
-  }
-
-  return prisma.$transaction(async (tx) => {
-    const updated = await tx.folio.update({
-      where: { id: input.folioId },
-      data: { advanceRequiredAmount: requiredDec, advanceRequiredBasis: basis === null ? Prisma.DbNull : (basis as any) },
-    });
-
-    await tx.traceEvent.create({
-      data: {
-        eventType: input.mode === "CLEAR" ? "ADVANCE_PAYMENT.REQUIREMENT_CLEARED" : "ADVANCE_PAYMENT.REQUIREMENT_SET",
-        actorId: actor.actorId,
-        actorLevel: actor.actorLevel,
-        entityType: "Folio",
-        entityId: input.folioId,
-        operation: "UPDATE",
-        timestamp: now,
-        stageContext: Stage.S3,
-        entryId: input.entryId,
-        payload: {
-          entryId: input.entryId,
-          folioId: input.folioId,
-          mode: input.mode,
-          requiredAmount: requiredDec ? Number(requiredDec.toFixed(2)) : null,
-          basis: basis as any,
-        },
-        createdBy: actor.actorId,
-      },
-    });
-
-    // ── Class-1 supersession on a changed advance (2026-08-01, operator request) ─────────
-    // "Advance due now" is printed on the proforma, so a changed requirement makes the live
-    // proformas misstate the deal — shared re-issue helper below (the payment PLAN prints on
-    // the proforma too since 2026-08-08 and runs the same machinery).
-    const reissued = await reissueProformaTx(
-      tx,
-      {
+/** Writes the amount asked and its trace, inside the caller's transaction. */
+async function writeRequirementTx(
+  tx: Prisma.TransactionClient,
+  input: { entryId: string; folioId: string; mode: AdvanceRequirementInput["mode"]; requiredDec: Prisma.Decimal | null; basis: Record<string, unknown> | null; now: Date },
+  actor: AdvanceActor,
+) {
+  const updated = await tx.folio.update({
+    where: { id: input.folioId },
+    data: { advanceRequiredAmount: input.requiredDec, advanceRequiredBasis: input.basis === null ? Prisma.DbNull : (input.basis as any) },
+  });
+  await tx.traceEvent.create({
+    data: {
+      eventType: input.mode === "CLEAR" ? "ADVANCE_PAYMENT.REQUIREMENT_CLEARED" : "ADVANCE_PAYMENT.REQUIREMENT_SET",
+      actorId: actor.actorId,
+      actorLevel: actor.actorLevel,
+      entityType: "Folio",
+      entityId: input.folioId,
+      operation: "UPDATE",
+      timestamp: input.now,
+      stageContext: Stage.S3,
+      entryId: input.entryId,
+      payload: {
         entryId: input.entryId,
         folioId: input.folioId,
-        changed: requirementChanged,
-        basisWhenChanged: "ADVANCE_REQUIREMENT_CHANGED",
-        extraMetadata: { requiredAmount: requiredDec ? Number(requiredDec.toFixed(2)) : null },
-        now,
+        mode: input.mode,
+        requiredAmount: input.requiredDec ? Number(input.requiredDec.toFixed(2)) : null,
+        basis: input.basis as any,
       },
-      actor,
-    );
-
-    return { folio: updated, reissuedProforma: reissued };
+      createdBy: actor.actorId,
+    },
   });
+  return updated;
+}
+
+async function setAdvanceRequirementInner(
+  prisma: PrismaClient,
+  input: { entryId: string; folioId: string } & AdvanceRequirementInput,
+  actor: AdvanceActor,
+) {
+  const { entryId, folioId, ...requirement } = input;
+  const out = await setAdvanceTermsInner(prisma, { entryId, folioId, requirement }, actor);
+  return { folio: out.folio, reissuedProforma: out.reissuedProforma };
 }
 
 /**
@@ -702,29 +697,47 @@ async function reissueProformaTx(
 }
 
 /**
- * A pass arriving at Set up has a bill of its own (2026-09-25).
+ * Every pass has a proforma of its own (2026-10-29, operator, on ENT-20261029-0032: a change made
+ * at Reserve made the quotation and the voucher again, but the proforma in force was still the
+ * earlier pass's, printing the old price — "if there's a change it should be created new papers
+ * till the current stage it is … check similar bugs along all stages").
  *
- * A re-entry supersedes the proforma of the pass it seals, and the folio is a singleton — so
- * nothing mints a starter a second time and the next pass reached Set up with no live proforma
- * at all. This mints one, and ONLY when there is none: it never replaces a bill that stands.
+ * Called where a pass reaches Set up (Negotiation → Set up, and the payer set at Set up). When the
+ * live proforma belongs to an EARLIER pass (made before this pass began) it is replaced — the same
+ * supersession as a change of the advance, linked, the old version kept with the figures it was
+ * made with (the re-entry froze any never-rendered one before the pass began). When none stands,
+ * one is made; when this pass already has its own, nothing happens. The new one is a draft: it
+ * goes to the guest only when the desk sends it.
  *
- * Deliberately called on ARRIVAL at Set up, not at the re-entry itself: a proforma belonging to
- * the new pass locks that pass's negotiation table (the 2026-08-06 "the PI finalises the
- * quotation" rule), so minting it while the booking is at Negotiation would forbid the very
- * re-pricing the re-entry was for. Caught by driving the desk.
+ * This supersedes the 2026-10-06 limit ("the proforma is not re-issued by these walks"): it was
+ * about a fresh unsent proforma blocking money or check-in, and no gate does — bill-before-money
+ * and answer-before-money are Set-up rules, the freeze counts a bill that went out even once
+ * replaced, and the answer it asks for is the one in force in this pass.
+ *
+ * Deliberately on ARRIVAL at Set up, never at the re-entry itself (2026-09-25): a proforma of the
+ * new pass locks that pass's negotiation table (the 2026-08-06 "the PI finalises the quotation"
+ * rule), so making it while the booking is at Negotiation would forbid the very re-pricing the
+ * re-entry was for.
  */
-export async function ensureLiveProformaForPassTx(
+export async function ensureProformaOfThisPassTx(
   tx: Prisma.TransactionClient,
-  input: { entryId: string; folioId: string; basis?: string; now?: Date },
+  input: { entryId: string; folioId: string; passStartedAt: Date | null; basis?: string; now?: Date },
   actor: { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" },
 ) {
+  const live = await tx.invoice.findMany({
+    where: { folioId: input.folioId, invoiceType: InvoiceType.PROFORMA, state: { not: InvoiceState.SUPERSEDED } },
+    select: { id: true, createdAt: true },
+  });
+  const ofThisPass = input.passStartedAt ? live.some((i) => i.createdAt.getTime() >= input.passStartedAt!.getTime()) : live.length > 0;
+  if (ofThisPass) return null;
   return reissueProformaTx(
     tx,
     {
       entryId: input.entryId,
       folioId: input.folioId,
-      changed: false,
-      basisWhenChanged: input.basis ?? "REISSUED_AFTER_REENTRY",
+      changed: live.length > 0,
+      basisWhenChanged: "NEW_PASS",
+      ...(input.basis ? { extraMetadata: { madeAt: input.basis } } : {}),
       now: input.now ?? new Date(),
     },
     actor,
@@ -847,22 +860,31 @@ export async function autoCompletePaymentReconciliationTaskTx(
  */
 async function setAdvancePaymentPlanInner(
   prisma: PrismaClient,
-  input: {
-    entryId: string;
-    folioId: string;
-    plan: AdvancePaymentPlanKind | "CLEAR";
-    balanceDueAt?: AdvanceBalanceDueAt | null;
-    promisedBy?: string | Date | null;
-    note?: string | null;
-  },
-  actor: { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" },
+  input: { entryId: string; folioId: string } & AdvancePlanInput,
+  actor: AdvanceActor,
 ) {
-  const folio = await prisma.folio.findUnique({ where: { id: input.folioId } });
-  if (!folio) throw new ValidationError("folioId invalid");
-  if (folio.entryId !== input.entryId) throw new ValidationError("entryId/folioId mismatch");
+  const { entryId, folioId, ...plan } = input;
+  const out = await setAdvanceTermsInner(prisma, { entryId, folioId, plan }, actor);
+  return { folio: out.folio, plan: out.plan, reissuedProforma: out.reissuedProforma };
+}
 
+/**
+ * The payment plan, worked out and checked — nothing written. `changed` says whether it MATERIALLY
+ * changed: the proforma prints plan + timing, so those three fields decide the re-issue; a
+ * note-only edit re-saves without minting a new document version. The prior is the segment-scoped
+ * EFFECTIVE plan (a prior segment's plan counts as "nothing").
+ */
+async function resolvePlanChange(
+  prisma: PrismaClient,
+  folio: { advancePaymentPlan: Prisma.JsonValue | null },
+  entryId: string,
+  input: AdvancePlanInput,
+  actor: AdvanceActor,
+  now: Date,
+  segmentStartedAt: Date | null,
+): Promise<{ stored: AdvancePaymentPlan | null; changed: boolean; stage: Stage }> {
   const entry = await prisma.entry.findUnique({
-    where: { id: input.entryId },
+    where: { id: entryId },
     select: { id: true, status: true, currentStage: true, checkInDate: true },
   });
   if (!entry) throw new ValidationError("entryId invalid");
@@ -875,7 +897,6 @@ async function setAdvancePaymentPlanInner(
     );
   }
 
-  const now = new Date();
   let stored: AdvancePaymentPlan | null = null;
 
   if (input.plan !== "CLEAR") {
@@ -951,99 +972,162 @@ async function setAdvancePaymentPlanInner(
     };
   }
 
-  // Did the plan MATERIALLY change? The proforma prints plan + timing, so those three fields
-  // decide the re-issue; a note-only edit re-saves without minting a new document version.
-  // Prior = the segment-scoped EFFECTIVE plan (a prior segment's plan counts as "nothing").
+  const prior = resolveAdvancePaymentPlan(folio, segmentStartedAt);
+  const changed =
+    (prior?.plan ?? null) !== (stored?.plan ?? null) ||
+    (prior?.balanceDueAt ?? null) !== (stored?.balanceDueAt ?? null) ||
+    (prior?.promisedBy ?? null) !== (stored?.promisedBy ?? null);
+  return { stored, changed, stage: entry.currentStage };
+}
+
+/** Writes the payment plan, its promise clock and its trace, inside the caller's transaction. */
+async function writePlanTx(
+  tx: Prisma.TransactionClient,
+  input: { entryId: string; folioId: string; stored: AdvancePaymentPlan | null; stage: Stage; now: Date },
+  actor: AdvanceActor,
+) {
+  const { stored } = input;
+  const updated = await tx.folio.update({
+    where: { id: input.folioId },
+    data: { advancePaymentPlan: stored === null ? Prisma.DbNull : (stored as any) },
+  });
+
+  // One live promise clock at most: whatever was armed before this plan is superseded by it.
+  await cancelScheduledAdvancePromiseDeadlinesForEntry(tx, input.entryId, actor.actorId, stored ? "PLAN_REPLACED" : "PLAN_CLEARED");
+
+  if (stored?.balanceDueAt === "BEFORE_CHECKIN" && stored.promisedBy) {
+    await armAdvancePromiseDeadlineTx(tx, {
+      entryId: input.entryId,
+      folioId: input.folioId,
+      promisedBy: stored.promisedBy,
+      stage: input.stage,
+      actorId: actor.actorId,
+    });
+  }
+
+  await tx.traceEvent.create({
+    data: {
+      eventType: stored ? "ADVANCE_PAYMENT.PLAN_RECORDED" : "ADVANCE_PAYMENT.PLAN_CLEARED",
+      actorId: actor.actorId,
+      actorLevel: actor.actorLevel,
+      entityType: "Folio",
+      entityId: input.folioId,
+      operation: "UPDATE",
+      timestamp: input.now,
+      stageContext: input.stage,
+      entryId: input.entryId,
+      payload: {
+        entryId: input.entryId,
+        folioId: input.folioId,
+        plan: stored?.plan ?? null,
+        balanceDueAt: stored?.balanceDueAt ?? null,
+        promisedBy: stored?.promisedBy ?? null,
+        note: stored?.note ?? null,
+      },
+      createdBy: actor.actorId,
+    },
+  });
+  return updated;
+}
+
+/**
+ * The advance — the amount asked, how the guest will pay, or both — in ONE act (2026-10-28,
+ * operator: "change the amount asked and record how they'll pay should be inside one button").
+ * The amount setter and the plan setter both run through here, so the three cannot drift.
+ *
+ * Both are checked before anything is written, so neither half lands when the other is refused.
+ * The proforma prints both, and a change to either re-issues it (`reissueProformaTx`); saved
+ * together they re-issue it ONCE — two acts in a row minted two versions, the first rendered to
+ * PDF and replaced at once, never sent. The plan re-issues only at Set up (post-freeze the
+ * voucher is the binding document); the amount re-issues whenever it moves, as before.
+ */
+async function setAdvanceTermsInner(
+  prisma: PrismaClient,
+  input: { entryId: string; folioId: string; requirement?: AdvanceRequirementInput; plan?: AdvancePlanInput },
+  actor: AdvanceActor,
+) {
+  if (!input.requirement && !input.plan) {
+    throw new ValidationError("Nothing to set — give the amount asked, how the guest will pay, or both");
+  }
+  const folio = await prisma.folio.findUnique({ where: { id: input.folioId } });
+  if (!folio) throw new ValidationError("folioId invalid");
+  if (folio.entryId !== input.entryId) throw new ValidationError("entryId/folioId mismatch");
+
+  const now = new Date();
   const currentSegment = await prisma.segment.findFirst({
     where: { entryId: input.entryId },
     orderBy: { segmentNumber: "desc" },
     select: { startedAt: true },
   });
-  const prior = resolveAdvancePaymentPlan(folio, currentSegment?.startedAt ?? null);
-  const planChanged =
-    (prior?.plan ?? null) !== (stored?.plan ?? null) ||
-    (prior?.balanceDueAt ?? null) !== (stored?.balanceDueAt ?? null) ||
-    (prior?.promisedBy ?? null) !== (stored?.promisedBy ?? null);
+  const segStart = currentSegment?.startedAt ?? null;
 
-  // Re-issue is an S3 concern only: post-freeze the voucher is the binding document, and the
-  // p40/p27 proforma gates are S3-scoped — minting proforma versions at S4–S6 would be noise.
-  const reissueAtS3 = entry.currentStage === Stage.S3;
-  if (reissueAtS3 && planChanged) {
-    // Freeze what the outgoing versions LOOKED LIKE before the change lands (2026-08-02 ruling;
-    // dynamic import — invoice-pdf-service statically imports this module).
+  const req = input.requirement ? await resolveRequirementChange(prisma, folio, input.entryId, input.requirement, actor, now, segStart) : null;
+  const pl = input.plan ? await resolvePlanChange(prisma, folio, input.entryId, input.plan, actor, now, segStart) : null;
+
+  const planReissues = !!pl && pl.stage === Stage.S3;
+  const changed = !!req?.changed || (planReissues && !!pl?.changed);
+
+  // Freeze what the outgoing versions LOOKED LIKE before the change lands (2026-08-02,
+  // operator ruling): a superseded proforma without a stored artifact recomposes from
+  // current data, so old versions silently adopted every later figure. Rendering their PDFs
+  // NOW — before the folio update — captures the figures that were actually on the table.
+  // Dynamic import: invoice-pdf-service statically imports this module (evaluation +
+  // requirement resolver), so a static import back would create a cycle.
+  if (changed) {
     const { freezeUnrenderedProformasForEntry } = await import("./invoice-pdf-service.js");
     await freezeUnrenderedProformasForEntry(prisma, input.entryId, actor.actorId);
   }
 
   return prisma.$transaction(async (tx) => {
-    const updated = await tx.folio.update({
-      where: { id: input.folioId },
-      data: { advancePaymentPlan: stored === null ? Prisma.DbNull : (stored as any) },
-    });
-
-    // One live promise clock at most: whatever was armed before this plan is superseded by it.
-    await cancelScheduledAdvancePromiseDeadlinesForEntry(
-      tx,
-      input.entryId,
-      actor.actorId,
-      stored ? "PLAN_REPLACED" : "PLAN_CLEARED",
-    );
-
-    if (stored?.balanceDueAt === "BEFORE_CHECKIN" && stored.promisedBy) {
-      await armAdvancePromiseDeadlineTx(tx, {
-        entryId: input.entryId,
-        folioId: input.folioId,
-        promisedBy: stored.promisedBy,
-        stage: entry.currentStage,
-        actorId: actor.actorId,
-      });
+    let updated = folio;
+    if (req) {
+      updated = await writeRequirementTx(
+        tx,
+        { entryId: input.entryId, folioId: input.folioId, mode: input.requirement!.mode, requiredDec: req.requiredDec, basis: req.basis, now },
+        actor,
+      );
+    }
+    if (pl) {
+      updated = await writePlanTx(tx, { entryId: input.entryId, folioId: input.folioId, stored: pl.stored, stage: pl.stage, now }, actor);
     }
 
-    await tx.traceEvent.create({
-      data: {
-        eventType: stored ? "ADVANCE_PAYMENT.PLAN_RECORDED" : "ADVANCE_PAYMENT.PLAN_CLEARED",
-        actorId: actor.actorId,
-        actorLevel: actor.actorLevel,
-        entityType: "Folio",
-        entityId: input.folioId,
-        operation: "UPDATE",
-        timestamp: now,
-        stageContext: entry.currentStage,
-        entryId: input.entryId,
-        payload: {
-          entryId: input.entryId,
-          folioId: input.folioId,
-          plan: stored?.plan ?? null,
-          balanceDueAt: stored?.balanceDueAt ?? null,
-          promisedBy: stored?.promisedBy ?? null,
-          note: stored?.note ?? null,
-        },
-        createdBy: actor.actorId,
-      },
-    });
-
-    // The proforma prints the plan (2026-08-08), so a changed plan re-issues it — same
-    // machinery as the requirement change; S3 only (see the doc above).
-    const reissued = reissueAtS3
-      ? await reissueProformaTx(
-          tx,
-          {
-            entryId: input.entryId,
-            folioId: input.folioId,
-            changed: planChanged,
-            basisWhenChanged: "ADVANCE_PAYMENT_PLAN_CHANGED",
-            extraMetadata: {
-              paymentPlan: stored?.plan ?? null,
-              balanceDueAt: stored?.balanceDueAt ?? null,
-              promisedBy: stored?.promisedBy ?? null,
+    // ── Class-1 supersession (2026-08-01 / 2026-08-08) ───────────────────────────────────
+    // "Advance due now" and the payment plan are printed on the proforma, so a change to either
+    // makes the live proformas misstate the deal — shared re-issue helper, run once.
+    const basisWhenChanged =
+      req?.changed && planReissues && pl?.changed
+        ? "ADVANCE_TERMS_CHANGED"
+        : req?.changed
+          ? "ADVANCE_REQUIREMENT_CHANGED"
+          : "ADVANCE_PAYMENT_PLAN_CHANGED";
+    const reissued =
+      req || planReissues
+        ? await reissueProformaTx(
+            tx,
+            {
+              entryId: input.entryId,
+              folioId: input.folioId,
+              changed,
+              basisWhenChanged,
+              extraMetadata: {
+                ...(req ? { requiredAmount: req.requiredDec ? Number(req.requiredDec.toFixed(2)) : null } : {}),
+                ...(planReissues
+                  ? { paymentPlan: pl!.stored?.plan ?? null, balanceDueAt: pl!.stored?.balanceDueAt ?? null, promisedBy: pl!.stored?.promisedBy ?? null }
+                  : {}),
+              },
+              now,
             },
-            now,
-          },
-          actor,
-        )
-      : null;
+            actor,
+          )
+        : null;
 
-    return { folio: updated, plan: stored, reissuedProforma: reissued };
+    return {
+      folio: updated,
+      plan: pl?.stored ?? null,
+      reissuedProforma: reissued,
+      requirementChanged: !!req?.changed,
+      planChanged: !!pl?.changed,
+    };
   });
 }
 
@@ -1284,6 +1368,17 @@ export async function setAdvanceRequirement(...args: Parameters<typeof setAdvanc
  */
 export async function setAdvancePaymentPlan(...args: Parameters<typeof setAdvancePaymentPlanInner>): ReturnType<typeof setAdvancePaymentPlanInner> {
   const out = await setAdvancePaymentPlanInner(...args);
+  const entryId = args[1].entryId;
+  if (entryId) await retireSupersededReplyWaitsBestEffort(args[0], entryId, args[2].actorId);
+  return out;
+}
+
+/**
+ * setAdvanceTerms — the amount and the plan in one act — then stop waiting for replies to the papers it replaced
+ * (2026-10-28; lib/reply-waits.ts).
+ */
+export async function setAdvanceTerms(...args: Parameters<typeof setAdvanceTermsInner>): ReturnType<typeof setAdvanceTermsInner> {
+  const out = await setAdvanceTermsInner(...args);
   const entryId = args[1].entryId;
   if (entryId) await retireSupersededReplyWaitsBestEffort(args[0], entryId, args[2].actorId);
   return out;

@@ -31,7 +31,7 @@ type Props = {
 
 function formatTimestamp(iso: string): string {
   try {
-    return new Date(iso).toLocaleString();
+    return new Date(iso).toLocaleString("en-GB");
   } catch {
     return iso;
   }
@@ -83,7 +83,7 @@ function humanizeValue(v: unknown): React.ReactNode {
   const str = String(v);
   // ISO timestamps stored as strings should read as dates, not as machine text.
   if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(str)) {
-    try { return new Date(str).toLocaleString(); } catch { return str; }
+    try { return new Date(str).toLocaleString("en-GB"); } catch { return str; }
   }
   return str;
 }

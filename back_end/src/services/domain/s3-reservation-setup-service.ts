@@ -7,7 +7,8 @@ import { enforceBillingModelAllowlistFromConfig } from "../../policies/13-billin
 import { enforceEntryAtS3ForS3DomainOperations } from "../../policies/01-availability/p01-entry-at-s3-for-s3-domain-operations.js";
 import { enforceGroupBillingSplitConfigured } from "../../policies/26-group-foc-billing/p66-group-foc-and-billing-split.js";
 import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.js";
-import { ensureLiveProformaForPassTx } from "./s3-payment-service.js";
+import { ensureProformaOfThisPassTx } from "./s3-payment-service.js";
+import { retireSupersededReplyWaitsBestEffort } from "../../lib/reply-waits.js";
 import { buildInitialBillingModelDefaults } from "../../lib/billing-model-defaults.js";
 import { enforceEntryNotSealedForWorkingAction } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
 
@@ -55,7 +56,7 @@ export async function ensureProvisionalFolioAndBillingModel(
     }
   }
 
-  return prisma.$transaction(async (tx) => {
+  const folioOut = await prisma.$transaction(async (tx) => {
     const allowed = await requireActiveConfigValue<Record<string, string[]>>(tx as any, "billingModel.availablePerSource").catch(
       () => ({} as Record<string, string[]>),
     );
@@ -105,9 +106,18 @@ export async function ensureProvisionalFolioAndBillingModel(
     // bill; and on a re-entered booking it was the only thing that ever minted one at all, which
     // is why a pass arriving with its old bill superseded had none. The shared helper mints only
     // when no live proforma stands, and never replaces one that does.
-    await ensureLiveProformaForPassTx(tx, { entryId, folioId: folio.id, basis: "S3 setup" }, { actorId, actorLevel: "L1" });
+    // …and a pass that reached Set up straight from Reserve (a change of who pays) gets its own
+    // here, the earlier pass's bill replaced (2026-10-29).
+    await ensureProformaOfThisPassTx(
+      tx,
+      { entryId, folioId: folio.id, passStartedAt: entry.segments[0]?.startedAt ?? null, basis: "S3 setup" },
+      { actorId, actorLevel: "L1" },
+    );
 
     return tx.folio.findUniqueOrThrow({ where: { id: folio.id }, include: { invoices: true } });
   });
+  // An earlier pass's proforma replaced here is no longer waiting for an answer.
+  await retireSupersededReplyWaitsBestEffort(prisma, entryId, actorId);
+  return folioOut;
 }
 

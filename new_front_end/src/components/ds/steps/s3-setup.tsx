@@ -13,11 +13,12 @@
  */
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { BindingBox, Button, Chip, Icon } from "@/design-system";
+import { Button, Chip, Icon } from "@/design-system";
 import { useSession } from "@/hooks/use-session";
+import { useBookingRooms } from "@/hooks/use-booking-rooms";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
 import { usePaymentStatus } from "@/hooks/use-payment-status";
 import { openInvoicePdf } from "@/lib/api/documents";
@@ -63,18 +64,27 @@ import {
   useStepMode,
   words,
   type PaperRef,
-  type StepPane,
+  type ChangeBookingItem,
+  ChangeBookingMenu,
+  StageActs,
+  useFlowUnsaved,
+  useFinishWhenDone,
+  useStepFlow,
+  goToStepCard,
+  revealCard,
+  useOpenAlsoWay,
+  useStepPane,
   OtherWaysTabs,
   InlineWay,
   ShutWay,
   parkTab,
 } from "./kit";
-import { RoomsTableCard } from "./rooms-table";
 import { SendToField, useSendTo } from "./s8-parts";
 import { CancellationFiguresLine, WaiverTick, useRefundHow } from "./cancel-figures";
-import { CompetingClaimsCard, passesOf, roomsWord, useRoomNumbers } from "./s2-shared";
+import { CompetingClaimsCard, passesOf, roomsHeldWord, useRoomNumbers, useRoomTypeNames } from "./s2-shared";
 import { PaymentPlanCard } from "./s3-money";
 import { Help, HelpHere } from "@/components/ds/help";
+import { DateInput, TimeInput } from "@/components/ds/date-input";
 
 /* ------------------------------------------------------------------ vocabulary */
 
@@ -111,13 +121,7 @@ type EntryContact = { contactPersonName?: string | null; contactPersonPhone?: st
 
 /* ------------------------------------------------------------------ the step */
 
-/**
- * Set up's own tab (2026-10-13, operator: "in stage 3 and 4 can you add the rooms tab we have in s5
- * s6 s7"): the same rooms table, with the same governed change behind a click on a room.
- */
-export const S3_PANES: StepPane[] = [{ key: "rooms", label: "Rooms", cards: [] }];
-
-const ROOMS_LEAD =
+export const ROOMS_LEAD =
   "Who sleeps where, on what plan, with what beds. Click a room to change it — every night is checked again, the booking walks back through Negotiation and the price follows.";
 
 export function S3SetUp({
@@ -126,7 +130,7 @@ export function S3SetUp({
   parkNow,
   parking,
   goToStep,
-  pane,
+  onChangeStay,
 }: {
   entry: EntryDetail;
   past: boolean;
@@ -134,10 +138,9 @@ export function S3SetUp({
   parkNow?: (reason: string) => void;
   parking?: boolean;
   goToStep: (n: number) => void;
-  pane?: string | null;
+  /** Change booking › "Change the dates, rooms or guests" — the editor in the page (2026-10-29). */
+  onChangeStay?: () => void;
 }) {
-  // A pane is hidden, never unmounted — a half-typed reason survives a look at the rooms.
-  const at = (k: string | null) => ((pane ?? null) === k ? undefined : true);
   const { session } = useSession();
   const router = useRouter();
   const refresh = useRefreshEntry(entry.id);
@@ -163,6 +166,10 @@ export function S3SetUp({
 
   const payment = usePaymentStatus(entry.id, { enabled: !!folio });
   const status = payment.data;
+  // "Yes, ask for an advance" after the terms (2026-10-28) opens the payment plan's advance box.
+  const [askAdvance, setAskAdvance] = useState(0);
+  // A payment that blocked the rooms — the hold card asks whether to set a block time (2026-10-28).
+  const [blockAsk, setBlockAsk] = useState<{ until: string | null; n: number } | null>(null);
 
   /* ---- the billing model the desk is choosing ---- */
   const isAgentBooking = !!inq.travelAgentId || inq.sourceChannel === "TRAVEL_AGENT" || inq.sourceChannel === "AGENT";
@@ -246,9 +253,54 @@ export function S3SetUp({
     onError: (e) => toastRefusal(e, "A new pass could not be opened"),
   });
 
+  /**
+   * Change booking (2026-10-28, Set up in the stage layout — as at Negotiation): the ways the booking
+   * itself is changed, from the end of the step's line. Moving a room is the Rooms tab's table, which
+   * the stage layout has no tab for; it opens in the middle of the screen.
+   */
+  const openAlsoWay = useOpenAlsoWay();
+  const stepPane = useStepPane();
+  const notNow = entry.status === "PARKED" ? "Resume the booking first" : "Not possible on this booking now";
+  const changeItems: ChangeBookingItem[] = past
+    ? []
+    : [
+        {
+          key: "rooms",
+          label: "Move a room",
+          note: "Into another free room on the same dates. Every night is checked again and the price follows.",
+          // In the page, as the Rooms tab was (2026-10-28) — not a pop-up.
+          onSelect: editable ? () => stepPane.open("rooms") : undefined,
+          reason: editable ? undefined : notNow,
+        },
+        {
+          key: "renegotiate",
+          label: "Renegotiate the price",
+          note: "Back to Negotiation for a fresh quotation. The hold is released and the proforma replaced.",
+          onSelect: editable && elevated ? () => openAlsoWay("renegotiate") : undefined,
+          reason: !editable ? notNow : elevated ? undefined : "The FOM's call",
+        },
+        {
+          key: "reconfigure",
+          label: "Change the dates, rooms or guests",
+          note: "Here, on this step. The house is asked again, the rooms picked and the price made again — the booking comes back to Set up.",
+          onSelect: editable && elevated && onChangeStay ? onChangeStay : undefined,
+          reason: !editable ? notNow : elevated ? undefined : "The FOM's call",
+        },
+        {
+          key: "cancel",
+          label: "Cancel booking",
+          note: "The booking ends. The hold is released, the proforma withdrawn, the disclosed charge kept and the rest of the advance refunded.",
+          onSelect: entry.status === "ACTIVE" && editable ? () => openAlsoWay("cancel") : undefined,
+          reason: entry.status === "ACTIVE" && editable ? undefined : notNow,
+          danger: true,
+        },
+      ];
+
   return (
     <StepCanvas past={past}>
-      <div className="pane" hidden={at(null)}>
+      <StageActs>
+        <ChangeBookingMenu items={changeItems} />
+      </StageActs>
       <PartiesCard entry={entry} inq={inq} partyName={partyName} model={savedModel ?? model} modelSaved={!!savedModel} status={status} />
 
       <BillingModelCard
@@ -270,7 +322,14 @@ export function S3SetUp({
 
       {/* The order the desk works in (2026-09-25): the payer, then the terms, the bill and
           the money — and the rooms last, the only order the backend accepts them in. */}
-      <TermsCard entry={entry} editable={editable} tz={tz} onChanged={changed} />
+      <TermsCard
+        entry={entry}
+        editable={editable}
+        tz={tz}
+        status={status}
+        onAskAdvance={() => setAskAdvance((n) => n + 1)}
+        onChanged={changed}
+      />
 
       <ProformaCard
         entry={entry}
@@ -280,6 +339,7 @@ export function S3SetUp({
         current={currentProforma}
         status={status}
         passStart={passStart}
+        answered={answered}
         onChanged={changed}
       />
 
@@ -293,6 +353,8 @@ export function S3SetUp({
         onRefetch={() => void payment.refetch()}
         tz={tz}
         bill={{ proforma: currentProforma, dispatched, answered }}
+        askAdvance={askAdvance}
+        onRoomsBlocked={(until) => setBlockAsk((prev) => ({ until, n: (prev?.n ?? 0) + 1 }))}
         onChanged={changed}
       />
 
@@ -306,8 +368,11 @@ export function S3SetUp({
         roomNos={roomNos}
         anchorRoomId={anchorRoomId}
         defaultWhy={acceptedQuote ? `Quotation ${acceptedQuote.referenceNumber} accepted` : "Reservation set-up — the rooms held for this booking"}
+        blockAsk={blockAsk}
         onChanged={changed}
       />
+      {/* What Reserve asks that the sections above do not — the page between Set up and Reserve
+          is gone (2026-10-29), and Reserve the booking floats in here. */}
 
       {isGroupLike || entry.useType === "CORPORATE" ? <CoordinatorCard entry={entry} editable={editable} inq={inq} onChanged={changed} /> : null}
       {isGroupLike ? <FocCard entry={entry} editable={editable} gm={gm} onChanged={changed} /> : null}
@@ -323,7 +388,8 @@ export function S3SetUp({
           entry.status === "ACTIVE" && editable
             ? {
                 key: "cancel",
-                label: "Cancel",
+                label: "Cancel booking",
+                inBar: false,
                 content: (
                   <InlineWay
                     render={() => (
@@ -359,6 +425,7 @@ export function S3SetUp({
             ? {
                 key: "renegotiate",
                 label: "Renegotiate the price",
+                inBar: false,
                 content: elevated ? (
                   <InlineWay
                     render={() => (
@@ -380,38 +447,8 @@ export function S3SetUp({
                 ),
               }
             : null,
-          editable
-            ? {
-                key: "reconfigure",
-                label: "Change the dates or rooms",
-                content: elevated ? (
-                  <InlineWay
-                    render={() => (
-                      <ReasonDialog
-                        open
-                        onClose={() => undefined}
-                        busy={reentryM.isPending}
-                        title="Change the dates or rooms"
-                        caseLines={["A new pass opens at Inquiry"]}
-                        lead="This pass is sealed as it stands. The committed hold is released and the house is asked again for the new dates or rooms."
-                        confirmLabel="Open a new pass"
-                        placeholder="guest moved the dates by a day"
-                        onConfirm={(r) => reentryM.mutate({ to: "S1", reason: r })}
-                      />
-                    )}
-                  />
-                ) : (
-                  <ShutWay act="Open a new pass" why="A new pass is the FOM's call." help={<p>A new pass at Inquiry: the house is asked again and the hold is released.</p>} />
-                ),
-              }
-            : null,
         ]}
       />
-      </div>
-
-      <div className="pane" hidden={at("rooms")}>
-        <RoomsTableCard entry={entry} title="The rooms" lead={ROOMS_LEAD} />
-      </div>
     </StepCanvas>
   );
 }
@@ -456,7 +493,11 @@ function PartiesCard({
   const billedTo =
     model === "GUEST_PAY" ? guest : model === "DIRECT_BILL" || model === "TOUR_OPERATOR_VOUCHER" ? (account ?? "the account") : words(model);
   return (
-    <StepCard flow="parties" title="The three parties">
+    <StepCard
+      flow="parties"
+      title="The three parties"
+      summary={`${guest} · booked by ${partyName ?? (bookerKind === "Walk-in" ? "walk-in" : "the guest, direct")} · billed to ${billedTo}`}
+    >
       <div className="grid3">
         <FactBox
           k="Guest"
@@ -513,6 +554,8 @@ function BillingModelCard({
     if (savedModel && !BILLING_WORD[savedModel]) base.push([savedModel, words(savedModel)] as const);
     return base;
   }, [savedModel]);
+  // Setting the payer finishes the section — no Done to press after it (2026-10-28).
+  const finish = useFinishWhenDone("billing-model");
   const save = useMutation({
     mutationFn: () => ensureProvisionalFolio(session!, entry.id, { billingModel: model }),
     onSuccess: () => {
@@ -522,16 +565,20 @@ function BillingModelCard({
         !folio ? "The provisional bill is open — the proforma is generated with it" : savedModel ? "The billing model is changed" : "The billing model is set",
       );
       onChanged();
+      finish();
     },
     onError: (e) => toastRefusal(e, "The billing model could not be set"),
   });
   const dirty = !savedModel || model !== savedModel;
+  // A payer changed and not saved keeps the section open, and holds the move (2026-10-28).
+  useFlowUnsaved("billing-model", editable && !!savedModel && model !== savedModel, "Changes to who pays saved");
   const groupLock =
     group && !GROUP_FRIENDLY.has(model) && !gm ? "for a group, only the account or the voucher — anything else is the GM's call" : null;
   return (
     <StepCard
       flow="billing-model"
       title="Who pays"
+      summary={savedModel ? (BILLING_WORD[savedModel] ?? words(savedModel)) : undefined}
       right={savedModel && !dirty ? <OnRecord /> : null}
       meta={
         <>
@@ -553,6 +600,8 @@ function BillingModelCard({
           <div className="row-acts" style={{ marginTop: 10 }}>
             <Button
               compact
+              // Green once it can be pressed — the act that finishes the section (2026-10-28, as at Inquiry).
+              className={groupLock ? undefined : "go"}
               state={save.isPending ? "working" : groupLock ? "inert" : "default"}
               title={groupLock ?? undefined}
               workingLabel="Saving…"
@@ -584,6 +633,7 @@ function HoldCard({
   roomNos,
   anchorRoomId,
   defaultWhy,
+  blockAsk,
   onChanged,
 }: {
   entry: EntryDetail;
@@ -595,6 +645,8 @@ function HoldCard({
   roomNos: Map<string, string>;
   anchorRoomId: string | null;
   defaultWhy: string;
+  /** A payment just came in: `until` is when it blocked the rooms to, `null` when it could not. */
+  blockAsk: { until: string | null; n: number } | null;
   onChanged: () => void;
 }) {
   const { session } = useSession();
@@ -615,6 +667,46 @@ function HoldCard({
     if (placeOpen) setWhy(defaultWhy);
   }, [placeOpen, defaultWhy]);
 
+  /**
+   * After a payment (2026-10-28, operator: "as soon as the payment is recorded it should take the
+   * user to the committed hold section and ask if they wish to set a block time, otherwise it
+   * blocks according to the system time — after paying an advance the guest by default commits
+   * to a hold"). The payment blocked the rooms on the hotel's time (or this booking's own); the
+   * card comes into view and asks whether to keep it. One that could not be placed just shows the
+   * card, to block the rooms by hand.
+   */
+  const flow = useStepFlow();
+  // A room the system chose and may still move reads "Deluxe Double · room 1" until Arrival.
+  const roomNames = useBookingRooms(entry).named;
+  const [blockedUntil, setBlockedUntil] = useState<string | null>(null);
+  /**
+   * Once the block time is settled, the hold section says so (2026-10-28, operator: "show a message
+   * saying these rooms are blocked … for this many hours"). It is said by the section's own line,
+   * lit for a moment — not in the middle of the screen (the centred card is how a step move is
+   * said, and the block read like one) and not as a second line ("too noisy"). The section keeps
+   * one line, "2 Deluxe Double and 1 Executive are blocked until …", with Edit for the rest.
+   */
+  const [flash, setFlash] = useState(0);
+  const [details, setDetails] = useState(false);
+  // Opened again from its folded line with Edit, the section shows its tools at once — a second
+  // Edit on the line inside would only ask the same question twice.
+  const reopened = flow.opened.has("hold");
+  useEffect(() => {
+    if (reopened) setDetails(true);
+  }, [reopened]);
+  const sayBlocked = (untilIso: string | null) => {
+    if (!untilIso) return;
+    setDetails(false);
+    setFlash(Date.now());
+  };
+  useEffect(() => {
+    if (!blockAsk) return;
+    if (flow.on) flow.open("hold");
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => goToStepCard("hold")));
+    if (blockAsk.until) setBlockedUntil(blockAsk.until);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [blockAsk?.n]);
+
   // The house's own window, so the card can say what it gives beside a time set for one booking.
   const house = useQuery({
     queryKey: ["hold-window"],
@@ -624,15 +716,17 @@ function HoldCard({
   }).data ?? null;
   const ownTime = entry.holdExpiresAtOverride ?? null;
 
+  const finish = useFinishWhenDone("hold");
   const place = useMutation({
     mutationFn: () => {
       if (!anchorRoomId) throw new Error("Choose the rooms at Inquiry first");
       return placeCommittedHold(session!, entry.id, { roomId: anchorRoomId, commercialJustification: why.trim() });
     },
     onSuccess: (h) => {
-      toast.success(`The rooms are held until ${fmtDateTime(h.expiresAt, tz)}`);
       setPlaceOpen(false);
+      sayBlocked(h.expiresAt);
       onChanged();
+      finish();
     },
     onError: (e) => toastRefusal(e, "The rooms could not be held"),
   });
@@ -640,6 +734,7 @@ function HoldCard({
     mutationFn: (reason: string) => releaseCommittedHold(session!, entry.id, { releaseReason: reason }),
     onSuccess: () => {
       toast.success("The hold is released — the rooms are back on sale");
+      setDetails(false);
       setReleaseOpen(false);
       onChanged();
     },
@@ -659,10 +754,19 @@ function HoldCard({
         : moneyLock
           ? "the advance, or part of it, has to come in first — or the FOM extends credit"
           : null;
-  const rooms = roomsWord(roomIds.length ? roomIds : hold?.roomId ? [hold.roomId] : [], roomNos);
+  // The rooms by type and count — "2 Deluxe Double and 1 Executive" (2026-10-28, operator) — and a
+  // room given by number by its number (2026-10-29).
+  const typeNames = useRoomTypeNames();
+  const heldIds = roomIds.length ? roomIds : hold?.roomId ? [hold.roomId] : [];
+  const rooms = roomsHeldWord(heldIds.map((id) => ({ number: roomNos.get(id) ?? null, typeName: typeNames.get(id) ?? null, quiet: roomNames.has(id) })));
   const houseWords = house ? (house.minutes % 60 === 0 && house.minutes >= 60 ? plural(house.minutes / 60, "hour") : plural(house.minutes, "minute")) : null;
   const count = roomIds.length || 1;
   const lapsing = hold ? new Date(hold.expiresAt).getTime() < nowMs : false;
+  // A standing block is one line; Edit opens its facts and its acts (2026-10-28, operator: "the
+  // user no longer has to see it unless they have to release it or change the block time"). A
+  // block whose time has passed, and a step looked back at, show everything.
+  const showDetails = !hold || details || lapsing || past;
+  const whoseTime = ownTime ? "the time set for this booking" : houseWords ? `the hotel's ${houseWords}` : "the hotel's time";
   const why_ = hold?.commercialJustification ?? "";
   const autoWord = why_.startsWith("Auto-held on advance payment")
     ? "held automatically when the advance came in"
@@ -675,22 +779,23 @@ function HoldCard({
       flow="hold"
       flowAfter="proforma"
       title="The committed hold"
+      summary={hold ? `${rooms} ${count > 1 ? "are" : "is"} blocked until ${fmtDateTime(hold.expiresAt, tz)}` : undefined}
       acts={
-        past ? undefined : (
+        past || !showDetails ? undefined : (
           <Live>
             <SeeRow
-              label={hold ? "Hold time…" : "Set the hold time…"}
+              label="Set block time"
               note={
                 ownTime
-                  ? `runs to ${fmtDateTime(ownTime, tz)} — set for this booking`
-                  : `the house gives ${houseWords ?? "its own window"} — set this booking's own time`
+                  ? `blocked to ${fmtDateTime(ownTime, tz)} — set for this booking`
+                  : `the hotel blocks for ${houseWords ?? "its own time"} — set this booking's own time`
               }
               onClick={editable ? () => setTimeOpen(true) : undefined}
               reason={editable ? undefined : "not at this step"}
             />
             {hold ? (
               <SeeRow
-                label="Release…"
+                label="Release"
                 note="frees the rooms with a reason — they return to sale"
                 onClick={editable && gm ? () => setReleaseOpen(true) : undefined}
                 reason={!editable ? "not at this step" : gm ? undefined : "releasing a committed hold is the GM's call"}
@@ -698,8 +803,8 @@ function HoldCard({
             ) : (
               <SeeRow
                 kind="secondary"
-                label="Place the committed hold…"
-                note="with the reason these rooms are held — the booking refuses a hold without one"
+                label="Block the rooms"
+                note="with the reason these rooms are blocked — a block needs one"
                 onClick={editable && !placeLock ? () => setPlaceOpen(true) : undefined}
                 reason={!editable ? "not at this step" : (placeLock ?? undefined)}
               />
@@ -710,26 +815,35 @@ function HoldCard({
     >
       {hold ? (
         <>
-          <BindingBox family={lapsing ? "provisional" : "pending"} stateWord={lapsing ? "hold time passed" : "committed hold"}>
-            <div className="sm" style={{ paddingRight: 110 }}>
-              {rooms} held until <b>{fmtDateTime(hold.expiresAt, tz)}</b> · takes the rooms from anyone else&rsquo;s marker
-            </div>
-          </BindingBox>
+          <HoldLine
+            key={flash}
+            lit={flash > 0}
+            lapsed={lapsing}
+            rooms={rooms}
+            many={count > 1}
+            until={fmtDateTime(hold.expiresAt, tz)}
+            whose={whoseTime}
+            open={showDetails}
+            canToggle={!past && !lapsing}
+            onToggle={() => setDetails((d) => !d)}
+          />
+          {showDetails ? (
           <Facts wide style={{ marginTop: 8 }}>
             <Fact k="Why held" meta={autoWord ?? undefined}>
               {why_ || <span className="warn-ink">no reason recorded</span>}
             </Fact>
             <Fact k="Placed">{fmtStamp(hold.placedAt, tz)}</Fact>
             <Fact
-              k="Hold time"
-              meta={ownTime ? `set for this booking${houseWords ? ` · the house gives ${houseWords}` : ""}` : undefined}
+              k="Block time"
+              meta={ownTime ? `set for this booking${houseWords ? ` · the hotel blocks for ${houseWords}` : ""}` : undefined}
             >
-              {ownTime ? `runs to ${fmtDateTime(ownTime, tz)}` : houseWords ? `the house's ${houseWords}` : null}
+              {ownTime ? `to ${fmtDateTime(ownTime, tz)}` : houseWords ? `the hotel's ${houseWords}` : null}
             </Fact>
           </Facts>
+          ) : null}
           {lapsing ? (
             <div className="sm warn-ink" style={{ marginTop: 6 }}>
-              The hold&rsquo;s time has passed — it lapses on the next sweep. Place it again before Reserve.
+              The block time has passed — the block lapses on the next sweep. Block the rooms again before Reserve.
             </div>
           ) : null}
         </>
@@ -737,26 +851,26 @@ function HoldCard({
         <>
           {carried ? (
             <p className="warn-ink" style={{ margin: "0 0 6px", fontWeight: 700 }} role="status">
-              {rooms} {roomIds.length > 1 ? "are" : "is"} still kept for this booking by the reservation from an earlier pass. This pass needs its own hold before Reserve — place it again.
+              {rooms} {roomIds.length > 1 ? "are" : "is"} still kept for this booking by the reservation from an earlier pass. This pass needs its own block before Reserve — block the rooms again.
             </p>
           ) : null}
           <span className="meta">
             {carried
               ? `The earlier hold was placed ${fmtStamp(carried.placedAt, tz)}.`
               : raw
-              ? `The last hold ${raw.state === "EXPIRED" ? "ran out" : "was released"} — place it again before Reserve.`
-              : "Not placed yet."}
+              ? `The last block ${raw.state === "EXPIRED" ? "ran out" : "was released"} — block the rooms again before Reserve.`
+              : "Not blocked yet."}
             {!carried && !raw ? (
-              <Help label="How the hold is placed">
-                Recording an advance payment — even part of it — holds {count === 1 ? "the room" : `all ${count} rooms`} automatically. Place it by
-                hand when the rooms should be pinned before any money arrives.
+              <Help label="How the rooms are blocked">
+                Recording an advance payment — even part of it — blocks {count === 1 ? "the room" : `all ${count} rooms`} automatically. Block them
+                by hand when the rooms should be kept before any money arrives.
               </Help>
             ) : null}
           </span>
           {ownTime ? (
             <div className="sm" style={{ marginTop: 6 }}>
-              When it is placed it will run to <b>{fmtDateTime(ownTime, tz)}</b> — set for this booking
-              {houseWords ? `, not the house's ${houseWords}` : ""}.
+              When the rooms are blocked, the block runs to <b>{fmtDateTime(ownTime, tz)}</b> — set for this booking
+              {houseWords ? `, not the hotel's ${houseWords}` : ""}.
             </div>
           ) : null}
         </>
@@ -767,7 +881,7 @@ function HoldCard({
           open
           onClose={() => setPlaceOpen(false)}
           busy={place.isPending}
-          title="The committed hold"
+          title="Block the rooms"
           caseLines={[`${rooms} · ${fmtRange(entry.checkInDate, entry.checkOutDate)}`]}
           footer={
             <>
@@ -777,23 +891,64 @@ function HoldCard({
               <Button
                 icon="lock"
                 state={place.isPending ? "working" : why.trim() ? "default" : "inert"}
-                title={why.trim() ? undefined : "write why the rooms are held"}
-                workingLabel="Holding…"
+                title={why.trim() ? undefined : "write why the rooms are blocked"}
+                workingLabel="Blocking…"
                 onClick={() => place.mutate()}
               >
-                Hold the rooms
+                Block the rooms
               </Button>
             </>
           }
         >
-          <p className="sm">The rooms are taken from anyone else&rsquo;s marker. The first committed hold wins.</p>
+          <p className="sm">The rooms are taken from anyone else&rsquo;s marker. The first block wins.</p>
           <div className="field">
             <label>
-              Why these rooms are held for this booking
-              <Help label="About the reason">The commercial justification recorded against the hold. The hold runs for the time the settings give.</Help>
+              Why these rooms are blocked for this booking
+              <Help label="About the reason">The reason recorded against the block. It runs for the hotel&rsquo;s time, or the block time set for this booking.</Help>
             </label>
             <textarea className="input" rows={2} value={why} onChange={(e) => setWhy(e.target.value)} autoFocus />
           </div>
+        </DsDialog>
+      ) : null}
+      {blockedUntil && !timeOpen ? (
+        <DsDialog
+          open
+          onClose={() => {
+            setBlockedUntil(null);
+            setDetails(false);
+          }}
+          title="The rooms are blocked"
+          caseLines={[`${rooms} · until ${fmtDateTime(blockedUntil, tz)}`]}
+          help="The payment blocked the rooms. They stay blocked until this time; if the booking is not reserved by then, they go back on sale."
+          footer={
+            <>
+              <Button
+                kind="secondary"
+                onClick={() => {
+                  const until = blockedUntil;
+                  setBlockedUntil(null);
+                  sayBlocked(until);
+                }}
+              >
+                Keep this time
+              </Button>
+              <Button
+                icon="clock"
+                onClick={() => {
+                  setBlockedUntil(null);
+                  setTimeOpen(true);
+                }}
+              >
+                Set block time
+              </Button>
+            </>
+          }
+        >
+          <p className="sm">
+            The advance came in, so {rooms} {count > 1 ? "are" : "is"} blocked until <b>{fmtDateTime(blockedUntil, tz)}</b> —{" "}
+            {ownTime ? "the block time set for this booking" : houseWords ? `the hotel's ${houseWords}` : "the hotel's own time"}. Set a different
+            block time?
+          </p>
         </DsDialog>
       ) : null}
       {timeOpen ? (
@@ -801,11 +956,14 @@ function HoldCard({
           entry={entry}
           tz={tz}
           houseWords={houseWords}
-          currentIso={hold?.expiresAt ?? ownTime ?? null}
+          currentIso={hold?.expiresAt ?? blockAsk?.until ?? ownTime ?? null}
           hasOwnTime={!!ownTime}
-          holdLive={!!hold}
+          holdLive={!!hold || !!blockAsk?.until}
           onClose={() => setTimeOpen(false)}
           onChanged={onChanged}
+          onSet={(until, whose, live) => {
+            if (live) sayBlocked(until);
+          }}
         />
       ) : null}
       <ReasonDialog
@@ -825,6 +983,67 @@ function HoldCard({
 }
 
 /**
+ * The committed hold in one line (2026-10-28, operator): "2 Deluxe Double and 1 Executive are
+ * blocked until 28 Oct 2026, 11:07 PM · the hotel's 1 hour", with Edit for the facts and the acts
+ * (Set block time, Release). Lit for a moment when a block has just been placed or moved, and
+ * brought into view then only when it is not on screen — it never moves a page being read.
+ */
+function HoldLine({
+  lit,
+  lapsed,
+  rooms,
+  many,
+  until,
+  whose,
+  open,
+  canToggle,
+  onToggle,
+}: {
+  lit: boolean;
+  lapsed: boolean;
+  rooms: string;
+  many: boolean;
+  until: string;
+  whose: string;
+  open: boolean;
+  canToggle: boolean;
+  onToggle: () => void;
+}) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!lit || !el) return;
+    // After the dialog that set the block has closed and handed the page back its scroll.
+    const t = window.setTimeout(() => el.scrollIntoView({ block: "nearest", behavior: "smooth" }), 250);
+    return () => window.clearTimeout(t);
+  }, [lit]);
+  return (
+    <div ref={ref} className={`hold-line${lit ? " lit" : ""}${lapsed ? " lapsed" : ""}`} role={lit ? "status" : undefined}>
+      <Icon name="lock" />
+      <span className="hold-text">
+        <b>{rooms}</b> {lapsed ? (many ? "were" : "was") : many ? "are" : "is"} blocked until <b>{until}</b>
+        <span className="hold-whose"> · {whose}</span>
+        <Help label="About the block">
+          The block takes these rooms from anyone else&rsquo;s marker. If the booking is not reserved by then, {many ? "they go" : "it goes"} back
+          on sale.
+        </Help>
+      </span>
+      {canToggle ? (
+        <Button kind="quiet" compact onClick={onToggle}>
+          {open ? "Hide" : "Edit"}
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
+/** Nights between two stay dates (both stored at the start of their day). */
+function nightsBetween(a: string, b: string): number | null {
+  const n = Math.round((new Date(b).getTime() - new Date(a).getTime()) / 86_400_000);
+  return n > 0 ? n : null;
+}
+
+/**
  * "Hold the rooms until six" — this booking's own hold time (2026-09-25, operator request).
  *
  * The day and time are the HOTEL's wall clock: what is typed here is what the hotel's clock will
@@ -841,6 +1060,7 @@ function HoldTimeDialog({
   holdLive,
   onClose,
   onChanged,
+  onSet,
 }: {
   entry: EntryDetail;
   tz: string;
@@ -850,6 +1070,8 @@ function HoldTimeDialog({
   holdLive: boolean;
   onClose: () => void;
   onChanged: () => void;
+  /** What the block now runs to, whose time that is, and whether a block stands now. */
+  onSet?: (until: string | null, whose: "BOOKING" | "HOUSE", live: boolean) => void;
 }) {
   const { session } = useSession();
   const seed = hotelFormParts(currentIso ?? new Date(Date.now() + 60 * 60_000).toISOString(), tz);
@@ -861,16 +1083,21 @@ function HoldTimeDialog({
     mutationFn: (clear: boolean) =>
       setCommittedHoldExpiry(session!, entry.id, clear ? { clear: true, reason: why.trim() || undefined } : { date, time, reason: why.trim() || undefined }),
     onSuccess: (out) => {
-      toast.success(
-        out.source === "BOOKING"
-          ? `The rooms are held until ${fmtDateTime(out.heldUntil, tz)}${out.holdUpdated ? "" : " — from the moment the hold is placed"}`
-          : "Back to the house window",
-        out.note ? { description: out.note, duration: 8000 } : undefined,
-      );
+      // A block standing now is said in the middle of the screen; one still to be placed, or a note
+      // from the server, keeps its toast.
+      if (!out.holdUpdated || out.note) {
+        toast.success(
+          out.source === "BOOKING"
+            ? `The rooms are blocked until ${fmtDateTime(out.heldUntil, tz)}${out.holdUpdated ? "" : " — from the moment they are blocked"}`
+            : "Back to the hotel's time",
+          out.note ? { description: out.note, duration: 8000 } : undefined,
+        );
+      }
       onClose();
+      onSet?.(out.heldUntil, out.source, out.holdUpdated);
       onChanged();
     },
-    onError: (e) => toastRefusal(e, "The hold time was not changed"),
+    onError: (e) => toastRefusal(e, "The block time was not changed"),
   });
 
   const typed = date && time;
@@ -880,8 +1107,8 @@ function HoldTimeDialog({
       onClose={onClose}
       busy={save.isPending}
       width={560}
-      title="How long the rooms are held"
-      caseLines={[entry.id, houseWords ? `the house gives ${houseWords}` : "the house's own window"]}
+      title="Set block time"
+      caseLines={[entry.id, houseWords ? `the hotel blocks for ${houseWords}` : "the hotel's own time"]}
       footer={
         <>
           <Button kind="quiet" state={save.isPending ? "inert" : "default"} onClick={onClose}>
@@ -889,7 +1116,7 @@ function HoldTimeDialog({
           </Button>
           {hasOwnTime ? (
             <Button kind="quiet" state={save.isPending ? "inert" : "default"} onClick={() => save.mutate(true)}>
-              Back to the house window
+              Back to the hotel&rsquo;s time
             </Button>
           ) : null}
           <Button
@@ -899,29 +1126,29 @@ function HoldTimeDialog({
             workingLabel="Setting…"
             onClick={() => save.mutate(false)}
           >
-            Hold until this time
+            Block until this time
           </Button>
         </>
       }
     >
-      {holdLive ? <p className="sm">The hold standing now moves to this time.</p> : null}
+      {holdLive ? <p className="sm">The block standing now moves to this time.</p> : null}
       <div className="form2" style={{ marginTop: holdLive ? 10 : 0 }}>
         <div className="field">
           <label>
-            Held until · day
-            <Help label="About the hold time">
-              The guest who says they will confirm by six gets until six. This booking remembers the time, so a hold placed again later runs to
-              it. It cannot run past the day they arrive.
+            Blocked until · day
+            <Help label="About the block time">
+              The guest who says they will confirm by six gets until six. This booking remembers the time, so the rooms blocked again later stay
+              blocked to it. It cannot run past the day they arrive.
             </Help>
           </label>
-          <input className="input" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+          <DateInput className="input" value={date} onChange={(e) => setDate(e.target.value)} />
         </div>
         <div className="field">
           <label>
-            Held until · time
+            Blocked until · time
             <Help label="About the time">On the hotel&rsquo;s clock.</Help>
           </label>
-          <input className="input" type="time" value={time} onChange={(e) => setTime(e.target.value)} />
+          <TimeInput className="input" value={time} onChange={(e) => setTime(e.target.value)} />
         </div>
         <div className="wide field">
           <label>Why, if it is worth saying · optional</label>
@@ -934,13 +1161,37 @@ function HoldTimeDialog({
 
 /* ------------------------------------------------------------------ the terms disclosed */
 
-function TermsCard({ entry, editable, tz, onChanged }: { entry: EntryDetail; editable: boolean; tz: string; onChanged: () => void }) {
+function TermsCard({
+  entry,
+  editable,
+  tz,
+  status,
+  onAskAdvance,
+  onChanged,
+}: {
+  entry: EntryDetail;
+  editable: boolean;
+  tz: string;
+  /** What the guest is asked to pay — the advance question after the terms reads it. */
+  status: PaymentStatusSummary | undefined;
+  /** "Yes, ask for an advance": open the payment plan's amount box. */
+  onAskAdvance: () => void;
+  onChanged: () => void;
+}) {
   const { session } = useSession();
   const { past } = useStepMode();
   const d = entry.cancellationDisclosure ?? null;
   const [open, setOpen] = useState(false);
+  // Once the terms are recorded and nothing is asked of the guest yet, the desk is asked whether
+  // the hotel wants an advance (2026-10-28, operator: "after finishing the terms it takes the user
+  // directly to the committed hold … it can prompt the user if the hotel wishes to impose advance
+  // payment; if no, take the user to the committed hold; if yes, to the payment plan").
+  const [askAdvance, setAskAdvance] = useState(false);
+  const nothingAsked =
+    !!status && status.requiredAmount === 0 && (status.totalReceived ?? 0) === 0 && !status.creditExtensionActive;
   // The terms the rooms were booked on carry from the booking they were split off (2026-10-14).
   const [statement, setStatement] = useState(entry.carryOver?.cancellation?.noShowTreatmentStatement || DEFAULT_NO_SHOW);
+  const finish = useFinishWhenDone("terms");
   const record = useMutation({
     mutationFn: () =>
       recordCancellationDisclosure(session!, entry.id, {
@@ -951,6 +1202,8 @@ function TermsCard({ entry, editable, tz, onChanged }: { entry: EntryDetail; edi
       toast.success("The terms are on record as disclosed");
       setOpen(false);
       onChanged();
+      if (nothingAsked) setAskAdvance(true);
+      else finish();
     },
     onError: (e) => toastRefusal(e, "The disclosure could not be recorded"),
   });
@@ -959,12 +1212,13 @@ function TermsCard({ entry, editable, tz, onChanged }: { entry: EntryDetail; edi
       flow="terms"
       flowAfter="billing-model"
       title="Terms disclosed"
+      summary={d ? `The hotel's standard terms · disclosed ${fmtStamp(d.disclosedAt, tz)}` : undefined}
       acts={
         d || past ? undefined : (
           <Live>
             <SeeRow
               kind="secondary"
-              label="Record that the terms were disclosed…"
+              label="Record that the terms were disclosed"
               note="the no-show treatment in the words the guest was given — Reserve is refused without it"
               onClick={editable ? () => setOpen(true) : undefined}
               reason={editable ? undefined : "not at this step"}
@@ -1019,6 +1273,43 @@ function TermsCard({ entry, editable, tz, onChanged }: { entry: EntryDetail; edi
           </div>
         </DsDialog>
       ) : null}
+      {askAdvance ? (
+        <DsDialog
+          open
+          // Closed without an answer: nothing is asked, so the work goes on to the hold as with No.
+          onClose={() => {
+            setAskAdvance(false);
+            finish();
+          }}
+          title="Ask the guest for an advance?"
+          caseLines={["Nothing is asked now · the hotel's settings ask for no advance"]}
+          help="With an advance, the guest pays it before the booking is reserved and the proforma shows the amount. With none, the rooms are blocked next."
+          footer={
+            <>
+              <Button
+                kind="secondary"
+                onClick={() => {
+                  setAskAdvance(false);
+                  finish();
+                }}
+              >
+                No advance
+              </Button>
+              <Button
+                onClick={() => {
+                  setAskAdvance(false);
+                  finish({ next: "money" });
+                  onAskAdvance();
+                }}
+              >
+                Yes, ask for an advance
+              </Button>
+            </>
+          }
+        >
+          <p className="sm">Does the hotel want an advance on this booking?</p>
+        </DsDialog>
+      ) : null}
     </StepCard>
   );
 }
@@ -1033,6 +1324,7 @@ function ProformaCard({
   current,
   status,
   passStart,
+  answered,
   onChanged,
 }: {
   entry: EntryDetail;
@@ -1042,6 +1334,8 @@ function ProformaCard({
   current: InvoiceSummary | null;
   status: PaymentStatusSummary | undefined;
   passStart: string | null;
+  /** The guest's answer to this pass's proforma is on record. */
+  answered: boolean;
   onChanged: () => void;
 }) {
   const { session } = useSession();
@@ -1051,6 +1345,7 @@ function ProformaCard({
   // The proforma is made out to the agency or company when one booked, so it goes to their
   // address, never the traveller's by default (2026-09-18) — the backend applies the same rule.
   const [to, setTo] = useSendTo(entry);
+  const finish = useFinishWhenDone("proforma");
 
   const draft = proformas.find((i) => i.state === "DRAFT") ?? null;
   const sendTarget = draft ?? proformas[0] ?? null;
@@ -1062,6 +1357,7 @@ function ProformaCard({
     onSuccess: () => {
       toast.success("The proforma is sent — record the guest's answer when it comes");
       setSendOpen(false);
+      setJustSent(true);
       onChanged();
     },
     onError: (e) => toastRefusal(e, "The proforma could not be sent"),
@@ -1071,6 +1367,19 @@ function ProformaCard({
     if (!session) return;
     openInvoicePdf(session, id).catch((e) => toastRefusal(e, "The PDF could not be opened"));
   };
+
+  const sentLive = proformas.some((i) => i.state !== "SUPERSEDED" && i.dispatchedAt != null);
+  // Once it has gone out the guest's answer is owed whether or not an advance is asked — Reserve
+  // waits for it too (Policy 40) — so the answer box stands out from then on (2026-10-28).
+  const answerDue = editable && sentLive && !answered;
+  // After a send the page goes to the answer box and it flashes, so the next act is seen.
+  const answerRef = useRef<HTMLDivElement | null>(null);
+  const [justSent, setJustSent] = useState(false);
+  useEffect(() => {
+    if (!justSent || !answerDue || !answerRef.current) return;
+    setJustSent(false);
+    revealCard(answerRef.current);
+  }, [justSent, answerDue]);
 
   if (proformas.length === 0) {
     return (
@@ -1094,6 +1403,11 @@ function ProformaCard({
     : status.requiredAmount > 0
       ? `asks for ${basis?.mode === "PERCENT" ? `${basis.percent}% · ` : ""}${money(status.requiredAmount)}`
       : "asks for no advance";
+  // Money is taken only against a proforma the guest has, and after their answer (the backend's
+  // bill-before-money and answer-before-money rules): while an advance is asked, the card says
+  // which comes first, and Send is the main act (2026-10-28).
+  const advanceAsked = !!status && status.requiredAmount > 0 && !status.paidInFull;
+  const nextUp = !editable ? null : advanceAsked && !sentLive ? "send" : answerDue ? "answer" : null;
   const sendLock = !editable
     ? "not at this step"
     : !draft
@@ -1123,6 +1437,14 @@ function ProformaCard({
       // nothing to scroll to (2026-10-06). The empty-state card above always had it.
       flow="proforma"
       flowAfter="terms"
+      // The number is in the title; the line says where the bill stands.
+      summary={[
+        asks,
+        shown.dispatchedAt ? `sent ${fmtStamp(shown.dispatchedAt, tz)}` : "not sent",
+        shown.dispatchedAt ? (answered ? "the guest's answer recorded" : "the guest's answer awaited") : null,
+      ]
+        .filter(Boolean)
+        .join(" · ")}
       title={`Proforma · ${no}${(shown.versionNumber ?? 1) > 1 ? ` · v${shown.versionNumber}` : ""}`}
       icon="file"
       right={asks ? <Chip tone="quiet">{asks}</Chip> : null}
@@ -1134,14 +1456,14 @@ function ProformaCard({
           </Button>
           <Live>
             <Button
-              kind="quiet"
+              kind={nextUp === "send" && !sendLock ? "primary" : "quiet"}
               compact
               icon="send"
               state={sendLock ? "inert" : "default"}
               title={sendLock ?? undefined}
               onClick={() => setSendOpen(true)}
             >
-              {shown.dispatchedAt && draft ? "Send the new version…" : "Send…"}
+              {shown.dispatchedAt && draft ? "Send the new version" : "Send"}
             </Button>
           </Live>
           <Button kind="quiet" compact icon="file" onClick={() => pdf(shown.id)}>
@@ -1150,18 +1472,53 @@ function ProformaCard({
         </>
       }
     >
+      {nextUp === "send" ? (
+        <div className="notice next" role="status">
+          <span>
+            <b>Send this proforma to the guest first.</b> The advance of {money(status!.requiredAmount)} can be recorded once they have it.
+          </span>
+        </div>
+      ) : null}
       <div className="meta">
         Generated {fmtStamp(shown.createdAt, tz)}
         {shown.dispatchedAt ? ` · sent ${fmtStamp(shown.dispatchedAt, tz)}${shown.dispatchedTo ? ` to ${shown.dispatchedTo}` : ""}` : " · not sent"}
       </div>
 
-      <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid var(--line)", display: "grid", gap: 6 }}>
-        <span className="sm" style={{ fontWeight: 600 }}>
-          The guest&rsquo;s answer
-          <Help label="About the answer">Needed before Reserve once the proforma has been sent.</Help>
-        </span>
-        <AnswerLine entryId={entry.id} type="PROFORMA_INVOICE" sinceIso={passStart} what="the proforma" tz={tz} />
-      </div>
+      {answerDue ? (
+        // Sent and not yet answered: the answer is the next thing to do here (2026-10-28, operator:
+        // "make it prominent on the page that it needs the guest's answer as well").
+        <div ref={answerRef} className="answer-due" role="status">
+          <span className="due-head">
+            The guest&rsquo;s answer is needed
+            <Help label="About the answer">
+              Write down how the guest answered the proforma — by message or by telling the desk — and what they said.
+            </Help>
+          </span>
+          <span className="sm">
+            {advanceAsked
+              ? `The advance of ${money(status!.requiredAmount)} can be recorded only after it.`
+              : "The booking cannot be reserved until it is recorded."}
+          </span>
+          <AnswerLine
+            entryId={entry.id}
+            type="PROFORMA_INVOICE"
+            sinceIso={passStart}
+            what="the proforma"
+            tz={tz}
+            prominent
+            // With an advance asked the money is next, so the page goes to the payment plan.
+            onAnswered={() => finish(advanceAsked ? { next: "money" } : undefined)}
+          />
+        </div>
+      ) : (
+        <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid var(--line)", display: "grid", gap: 6 }}>
+          <span className="sm" style={{ fontWeight: 600 }}>
+            The guest&rsquo;s answer
+            <Help label="About the answer">Needed before Reserve once the proforma has been sent.</Help>
+          </span>
+          <AnswerLine entryId={entry.id} type="PROFORMA_INVOICE" sinceIso={passStart} what="the proforma" tz={tz} onAnswered={finish} />
+        </div>
+      )}
 
       {proformas.length > 1 ? (
         <table className="table compact" style={{ marginTop: 12 }}>
@@ -1269,7 +1626,7 @@ function CoordinatorCard({ entry, editable, inq, onChanged }: { entry: EntryDeta
           <Live>
             <SeeRow
               kind={confirmed ? "quiet" : "secondary"}
-              label={confirmed ? "Change the coordinator…" : "Confirm the coordinator…"}
+              label={confirmed ? "Change the coordinator" : "Confirm the coordinator"}
               note="their name, and the authority they carry for this booking"
               onClick={
                 editable

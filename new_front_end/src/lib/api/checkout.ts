@@ -21,6 +21,8 @@ export async function recordKeyReturn(
     /** Keys declared lost (2026-10-26): the count, and room by room which. A loss needs the note. */
     keyCountLost?: number;
     lostRoomIds?: string[];
+    /** Each lost room with what happened to its key (2026-10-30) — kept on that room. */
+    lostRooms?: Array<{ roomId: string; note: string }>;
   },
 ) {
   return apiRequest<KeyReturnSummary>(`/api/entries/${entryId}/key-return`, {

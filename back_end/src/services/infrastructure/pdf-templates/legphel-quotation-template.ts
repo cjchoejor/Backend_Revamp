@@ -20,9 +20,11 @@ import {
   renderTitle,
   row,
   section,
+  stayRows,
   type DocumentMasthead,
   type DocumentWatermark,
 } from "./legphel-document-shell.js";
+import type { StayLines } from "./legphel-document-format.js";
 
 /**
  * One printed row. Since 2026-08-03 (operator request) a room is billed over SEVERAL rows —
@@ -66,8 +68,8 @@ export type LegphelQuotationInput = {
   to: string;
   /** "Mr Rajesh Nandi" — the reference's Attn line. Omitted when absent. */
   attn?: string | null;
-  /** "20 Oct — 22 Oct 2026 · 2 nights" */
-  stay: string;
+  /** Check-in "20 Oct 2026" · Check-out "22 Oct 2026 · 2 nights" (2026-10-28). */
+  stay: StayLines | null;
   lines: LegphelQuotationLine[];
   /**
    * The discount row (2026-10-06): everything above it — the rows, Net value, the service
@@ -122,7 +124,7 @@ export function renderLegphelQuotationHtml(input: LegphelQuotationInput): string
     row("To", input.to, { boldValue: true }),
     input.attn ? row("Attn", input.attn) : "",
     section,
-    row("Stay", input.stay),
+    stayRows(input.stay),
     miniTable(
       [
         ...(input.datesShown ? [{ header: "Nights" }] : []),

@@ -1,8 +1,11 @@
 /**
  * How dates, times and money read on every screen (DSS §8, amended 11 Sep 2026).
  *
- *  - Dates `20 Oct 2026`; ranges `20 → 23 Oct 2026`; day headers `20 Oct`. Never dd/mm/yyyy on
- *    screen — digits transpose, letters do not.
+ *  - Dates `20 Oct 2026`; ranges `20 → 23 Oct 2026`; day headers `20 Oct`. Written dates keep the
+ *    month in letters — digits transpose, letters do not.
+ *  - A date the desk TYPES is DD/MM/YYYY on every terminal (2026-10-27, operator) —
+ *    `components/ds/date-input.tsx`, never a bare `<input type="date">`, which draws in the
+ *    browser's order (10/27/2026 on a US-set machine). Nothing is ever shown month first.
  *  - Times 12-hour with AM/PM, hotel time.
  *  - Money `Nu.1,828.47` — the prefix without a space, international grouping, always two
  *    decimals. A missing figure is a dash. This module formats; it never adds anything up
@@ -33,6 +36,12 @@ export function ymdOf(value?: string | null): YMD | null {
 export function fmtDate(value?: string | null, dash = "—"): string {
   const p = ymdOf(value);
   return p ? `${p.d} ${MON[p.m - 1]} ${p.y}` : dash;
+}
+
+/** `27/10/2026` — a stay date written the way the desk types it (DD/MM/YYYY); a dash when absent. */
+export function fmtDmy(value?: string | null, dash = "—"): string {
+  const p = ymdOf(value);
+  return p ? `${String(p.d).padStart(2, "0")}/${String(p.m).padStart(2, "0")}/${p.y}` : dash;
 }
 
 /** `20 Oct` — a day header, or a date where the year is obvious. */
@@ -77,13 +86,14 @@ function partsIn(instant: Date, tz: string) {
     day: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
+    second: "2-digit",
     hour12: false,
     weekday: "short",
   });
   const o: Record<string, string> = {};
   for (const p of f.formatToParts(instant)) o[p.type] = p.value;
   const hour = Number(o.hour) % 24;
-  return { y: Number(o.year), m: Number(o.month), d: Number(o.day), hour, minute: Number(o.minute), weekday: o.weekday };
+  return { y: Number(o.year), m: Number(o.month), d: Number(o.day), hour, minute: Number(o.minute), second: Number(o.second), weekday: o.weekday };
 }
 
 function toDate(value?: string | number | Date | null): Date | null {
@@ -152,10 +162,19 @@ export function hotelFormParts(value?: string | number | Date | null, tz = HOTEL
 }
 
 /** `Sat 12 Sep 2026` and `2:32 PM` — the clock in the bar. */
-export function clockParts(value: string | number | Date, tz = HOTEL_TZ_DEFAULT): { date: string; time: string } {
+export function clockParts(
+  value: string | number | Date,
+  tz = HOTEL_TZ_DEFAULT,
+  opts?: { seconds?: boolean },
+): { date: string; time: string } {
   const d = toDate(value) ?? new Date();
   const p = partsIn(d, tz);
-  return { date: `${p.weekday} ${p.d} ${MON[p.m - 1]} ${p.y}`, time: fmtTime(d, tz) };
+  const h12 = p.hour % 12 === 0 ? 12 : p.hour % 12;
+  // The topbar's clock reads to the second (2026-10-28); everywhere else a time stays to the minute.
+  const time = opts?.seconds
+    ? `${h12}:${String(p.minute).padStart(2, "0")}:${String(p.second).padStart(2, "0")} ${p.hour < 12 ? "AM" : "PM"}`
+    : fmtTime(d, tz);
+  return { date: `${p.weekday} ${p.d} ${MON[p.m - 1]} ${p.y}`, time };
 }
 
 /** `Saturday 12 September 2026` — the date written out, for page titles. */

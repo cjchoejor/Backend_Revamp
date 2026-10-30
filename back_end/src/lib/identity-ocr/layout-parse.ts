@@ -22,7 +22,10 @@ export type LayoutDocKind = "CID" | "VOTER_CARD" | "BIRTH_CERTIFICATE" | "WORK_P
  *  the title phrase ("WORK PERMIT" / "CITIZENSHIP IDENTITY CARD") is what separates them. */
 type Kw = { kind: Exclude<LayoutDocKind, null>; patterns: Array<[RegExp, number]> };
 const DOC_KEYWORDS: Kw[] = [
-  { kind: "CID", patterns: [[/CITIZENSHIP\s+IDENTITY\s+CARD/i, 2], [/KINGDOM OF BHUTAN/i, 1], [/ROYAL GOVERNMENT OF BHUTAN/i, 1], [/\bCID\b/i, 1], [/DZONGKHAG/i, 1], [/GEWOG/i, 1]] },
+  // The newer card prints "Citizenship Card" and "Citizenship ID No." (2026-10-29, operator: "for
+  // pictures like this can't it read the CID number below") — with "KINGDOM OF BHUTAN" alone it tied
+  // with the work permit and nothing was recognised. OCR adds an "s" now and then ("Citizenships").
+  { kind: "CID", patterns: [[/CITIZENSHIP\s+IDENTITY\s+CARD/i, 2], [/CITIZENSHIPS?\s+CARD/i, 2], [/CITIZENSHIPS?\s+ID\b/i, 2], [/KINGDOM OF BHUTAN/i, 1], [/ROYAL GOVERNMENT OF BHUTAN/i, 1], [/\bCID\b/i, 1], [/DZONGKHAG/i, 1], [/GEWOG/i, 1]] },
   { kind: "VOTER_CARD", patterns: [[/ELECTOR'?S?\s+PHOTO\s+IDENTITY/i, 2], [/ELECTION COMMISSION/i, 1], [/\bEPIC\b/i, 1], [/VOTER/i, 1]] },
   { kind: "BIRTH_CERTIFICATE", patterns: [[/BIRTH\s+CERTIFICATE/i, 2], [/CERTIFICATE\s+OF\s+BIRTH/i, 2], [/REGISTRATION\s+OF\s+BIRTH/i, 1], [/NAME\s+OF\s+(?:THE\s+)?CHILD/i, 1]] },
   // Bhutanese work permit (Dept. of Immigration card carried by foreign workers — a common
@@ -253,8 +256,10 @@ export function parseLayoutText(lines: string[], kindHint: LayoutDocKind = null)
       }
     }
   } else {
-    // Unknown document: only fields whose labels are unambiguous across all layouts.
-    for (const a of [...ANCHORS.CID].filter((x) => x.field === "dateOfBirth" || x.field === "gender" || x.field === "fullName")) {
+    // Unknown document: only fields whose labels are unambiguous across all layouts — and a number
+    // printed right after an "ID No." label (2026-10-29), never one found without its label.
+    const numberByLabel = ANCHORS.CID.filter((x) => x.field === "documentNumber").map((x) => ({ ...x, loose: undefined }));
+    for (const a of [...ANCHORS.CID.filter((x) => x.field === "dateOfBirth" || x.field === "gender" || x.field === "fullName"), ...numberByLabel]) {
       const v = anchorField(clean, a);
       if (v) {
         fields[a.field] = v;

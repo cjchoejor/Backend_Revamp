@@ -8,6 +8,7 @@ import { getHotelProfile, updateHotelProfile, type HotelProfileAdmin } from "@/l
 import { useSession } from "@/hooks/use-session";
 import { SmartConfigEditor } from "@/components/admin/smart-config-editor";
 import { VersionsTab } from "@/components/admin/versions-tab";
+import { TimeInput } from "@/components/ds/date-input";
 
 type ContactRow = { label: string; value: string };
 
@@ -131,11 +132,11 @@ export default function AdminHotelProfilePage() {
           <h2 className="admin-display col-span-full mt-4 text-lg">Operating hours</h2>
           <label className="space-y-1">
             <span className="admin-muted text-xs">Check-in from</span>
-            <input type="time" className="admin-input" value={checkIn} onChange={(e) => setCheckIn(e.target.value)} />
+            <TimeInput className="admin-input" value={checkIn} onChange={(e) => setCheckIn(e.target.value)} />
           </label>
           <label className="space-y-1">
             <span className="admin-muted text-xs">Check-out by</span>
-            <input type="time" className="admin-input" value={checkOut} onChange={(e) => setCheckOut(e.target.value)} />
+            <TimeInput className="admin-input" value={checkOut} onChange={(e) => setCheckOut(e.target.value)} />
           </label>
 
           <h2 className="admin-display col-span-full mt-4 text-lg">Public holidays (optional)</h2>

@@ -6,6 +6,7 @@ import { cancelEntryTimersByCode } from "../lib/cancel-entry-timers-by-code.js";
 import { freezeUnrenderedProformasForEntry } from "../services/domain/invoice-pdf-service.js";
 import * as s3HoldService from "../services/domain/s3-hold-service.js";
 import { supersedePendingInvoicesTx } from "../services/domain/s3-folio-service.js";
+import { retireHeldPapersOnReEntryTx } from "../lib/held-documents.js";
 import { computeReEntryConsequences } from "../engines/re-entry-consequence-engine.js";
 import { enforceS3ReEntryAuthority } from "../policies/01-availability/p01-reentry-authority.js";
 import { enforceEntryAtS3ForS3DomainOperations } from "../policies/01-availability/p01-entry-at-s3-for-s3-domain-operations.js";
@@ -52,6 +53,7 @@ async function initiateS3ToS2BackflowInner(prisma: PrismaClient, entryId: string
     // generated ✓" off a bill quoting the price being renegotiated. The next pass mints its own
     // when it ARRIVES at Set up; minting one here would lock its negotiation table at once.
     await supersedePendingInvoicesTx(tx as any, entryId, actor.actorId);
+    await retireHeldPapersOnReEntryTx(tx as any, { entryId, actorId: actor.actorId });
 
     await tx.segment.create({ data: { entryId, segmentNumber: nextSegmentNumber, stage: Stage.S2, startedAt: now, createdBy: actor.actorId, notes: input?.reason ?? "REENTRY_S3_TO_S2" } });
 
@@ -142,6 +144,7 @@ async function initiateS3ToS1BackflowInner(prisma: PrismaClient, entryId: string
     // Consequences (must be same tx): release hold + supersede invoices + cancel timers.
     await s3HoldService.releaseOnReEntry(tx as any, entryId, actor as any);
     await supersedePendingInvoicesTx(tx as any, entryId, actor.actorId);
+    await retireHeldPapersOnReEntryTx(tx as any, { entryId, actorId: actor.actorId });
 
     await tx.segment.create({ data: { entryId, segmentNumber: nextSegmentNumber, stage: Stage.S1, startedAt: now, createdBy: actor.actorId, notes: input?.reason ?? "REENTRY_S3_TO_S1" } });
     await tx.entry.update({ where: { id: entryId }, data: { currentStage: Stage.S1, segmentNumber: nextSegmentNumber, version: { increment: 1 }, updatedAt: now } });

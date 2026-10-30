@@ -101,6 +101,18 @@ export const setAdvanceRequirementRequestSchema = z
   .refine((b) => (b.mode === "PERCENT" ? b.percent != null : true), { message: "percent is required for mode PERCENT" });
 export type SetAdvanceRequirementRequestDto = z.infer<typeof setAdvanceRequirementRequestSchema>;
 
+/**
+ * The advance in one act (2026-10-28): the amount asked, how the guest will pay, or both — saved
+ * together so the proforma, which prints both, is issued again once.
+ */
+export const setAdvanceTermsRequestSchema = z
+  .object({
+    requirement: setAdvanceRequirementRequestSchema.optional(),
+    plan: setAdvancePaymentPlanRequestSchema.optional(),
+  })
+  .refine((b) => b.requirement != null || b.plan != null, { message: "give the amount asked, how the guest will pay, or both" });
+export type SetAdvanceTermsRequestDto = z.infer<typeof setAdvanceTermsRequestSchema>;
+
 /** Same route serves S7 charges and S9 post-stay charges; only `entryId` is universally required before stage split. */
 export const postFolioChargesBodySchema = z
   .object({

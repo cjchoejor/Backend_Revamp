@@ -12,10 +12,10 @@
  * Every figure is `GET /api/entries/:id/payment-status` — received, required, remaining — summed
  * server-side in Decimal. Nothing is added up here.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { BindingBox, Button, Chip, MoneyInput } from "@/design-system";
+import { BindingBox, Button, Chip, Icon, MoneyInput } from "@/design-system";
 import { useSession } from "@/hooks/use-session";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
 import {
@@ -24,16 +24,16 @@ import {
   ADVANCE_PAYMENT_MODES,
   recordFolioPayment,
   type AdvancePaymentMode,
-  setAdvancePaymentPlan,
-  setAdvanceRequirement,
+  setAdvanceTerms,
 } from "@/lib/api/reservation-setup";
 import { expiryModeForPlanDue, resolveCreditExpiry, type CreditExpiryChoice } from "@/components/desk/workspace/advance-settlement";
 import { fmtDate, fmtDateTime, fmtStamp, money, plural } from "@/lib/ds/format";
 import { STEP_NAMES, stepNoOfStage } from "@/lib/ds/steps";
 import type { AdvancePaymentPlanSummary, EntryDetail, InvoiceSummary, PaymentStatusSummary } from "@/types/api";
-import { ActionRow, Choice, DsDialog, Fact, Facts, Live, SeeRow, StepCard, toastRefusal } from "./kit";
+import { ActionRow, Choice, DsDialog, Fact, Facts, Live, SeeRow, StepCard, goToStepCard, toastRefusal, useFinishWhenDone, useStepFlow } from "./kit";
 import { hotelLocalToIso, isoToHotelLocal } from "./s2-shared";
 import { Help, HelpHere } from "@/components/ds/help";
+import { DateTimeInput } from "@/components/ds/date-input";
 
 /* ------------------------------------------------------------------ words */
 
@@ -66,6 +66,8 @@ const REQUIREMENT_MODES = [
   ["AMOUNT", "A flat amount"],
 ] as const;
 type RequirementMode = (typeof REQUIREMENT_MODES)[number][0];
+/** The amount's choice in the advance box — "the hotel's default" is offered when this booking set its own. */
+type AmountMode = RequirementMode | "DEFAULT";
 
 type Reissued = { versionNumber: number; supersededIds: string[] } | null | undefined;
 
@@ -93,7 +95,10 @@ export function PaymentPlanCard({
   onRefetch,
   tz,
   bill,
+  askAdvance = 0,
+  onRoomsBlocked,
   onChanged,
+  setUp = true,
 }: {
   entry: EntryDetail;
   editable: boolean;
@@ -105,11 +110,59 @@ export function PaymentPlanCard({
   tz: string;
   /** This pass's proforma, whether it went out, and whether the guest's answer is on record. */
   bill: { proforma: InvoiceSummary | null; dispatched: boolean; answered: boolean };
+  /** Raised when the desk says yes to an advance after the terms: the advance box opens. */
+  askAdvance?: number;
+  /**
+   * A payment came in and the rooms were blocked by it (`until`), or not (`null`) — the hold card
+   * then asks whether to set a block time, or shows itself to block them by hand (2026-10-28).
+   */
+  onRoomsBlocked?: (until: string | null) => void;
   onChanged: () => void;
+  /**
+   * Reserve's advance (2026-10-29, operator: "sometimes the advance can be paid even in stage 4 … it
+   * can have the option there to file an advance payment like in stage 3"): the same card, not a
+   * section of the step's flow. Money is not held for the proforma there — bill-before-money and
+   * answer-before-money are Set-up rules — and a payment can be recorded even once the advance is
+   * paid, the guest paying more ahead.
+   */
+  setUp?: boolean;
 }) {
   const { session } = useSession();
   const folio = entry.folio ?? null;
-  const [open, setOpen] = useState<null | "amount" | "plan" | "pay" | "credit">(null);
+  const [open, setOpen] = useState<null | "advance" | "pay" | "credit">(null);
+  useEffect(() => {
+    if (askAdvance > 0) setOpen("advance");
+  }, [askAdvance]);
+  // Money in, or credit extended, finishes the section once it covers the advance (2026-10-28).
+  const finish = useFinishWhenDone("money");
+  const moneyIn = () => {
+    onChanged();
+    finish();
+  };
+  /**
+   * The advance, then the proforma (2026-10-28, operator: "when I change the amount asked and
+   * record how they'll pay, I have to send the proforma first, so it should take the user to that
+   * section and tell them there"). The proforma prints both, and money is taken only against a
+   * proforma the guest has, so a saved advance goes on to it while it still has to be sent.
+   */
+  const flow = useStepFlow();
+  const goToProforma = () => {
+    if (flow.on) flow.open("proforma");
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => goToStepCard("proforma")));
+  };
+  const afterAdvance = (askedNow: number, reissued: boolean) => {
+    onChanged();
+    if (!setUp) {
+      if (reissued) toast.info("A new proforma was made with the new advance", { description: "It waits, not sent, in the booking file — Papers › Proforma invoices." });
+      return;
+    }
+    if (askedNow > 0 && (reissued || !bill.dispatched)) goToProforma();
+  };
+  /** A payment came in: the money section finishes, and the hold card takes it from there. */
+  const paid = (blockedUntil: string | null | undefined) => {
+    moneyIn();
+    if (blockedUntil !== undefined) onRoomsBlocked?.(blockedUntil);
+  };
 
   const inPayments = (folio?.payments ?? []).filter((p) => /IN/i.test(p.paymentDirection ?? "") && !/OUT|REFUND/i.test(p.paymentDirection ?? ""));
   const reconciled = !!folio?.advancePaymentReconciliationComplete;
@@ -135,19 +188,23 @@ export function PaymentPlanCard({
    */
   const payHold: { why: string; card: string; cta: string } | null = !folio
     ? { why: "Open the provisional bill first — money has nowhere to land until there is one.", card: "billing-model", cta: "Open the bill" }
-    : !bill.dispatched
+    : !setUp
+      ? null
+      : !bill.dispatched
       ? { why: "Send the proforma first — money is logged against the bill the guest received.", card: "proforma", cta: "Go to the proforma" }
       : !bill.answered
         ? { why: "Record the guest's answer to the proforma first.", card: "proforma", cta: "Go to the proforma" }
         : null;
   const payLock = payHold?.why ?? null;
+  // The proforma went out, the guest answered, and the advance is still short: money is next.
+  const payDue = !payHold && !!status && status.requiredAmount > 0 && !status.paidInFull && status.shortfall > 0;
   const reconcilable = received > 0 || inPayments.length > 0 || ["DIRECT_BILL", "GOVERNMENT"].includes(folio?.billingModel ?? "");
   const reconcileLock = !folio
     ? "open the provisional bill first"
     : reconciled
       ? "already signed off"
       : !reconcilable
-        ? "log a payment first — with nothing received there is nothing to sign off (a direct-bill booking is the exception)"
+        ? "nothing received yet"
         : null;
 
   const nothingAsked = !!status && status.requiredAmount === 0 && received === 0 && !status.creditExtensionActive;
@@ -165,13 +222,29 @@ export function PaymentPlanCard({
     <Chip tone="warning">not received</Chip>
   );
 
+  // The line the section folds to once the advance is settled (2026-10-28) — the server's figures.
+  const summary = !status
+    ? undefined
+    : status.requiredAmount === 0 && received === 0
+      ? "No advance asked"
+      : status.paidInFull
+        ? `Received ${money(received, cur)} of ${money(status.requiredAmount, cur)}`
+        : status.satisfied
+          ? `Covered by credit · received ${money(received, cur)} of ${money(status.requiredAmount, cur)}`
+          : `Received ${money(received, cur)} of ${money(status.requiredAmount, cur)}`;
   const basis = status?.requirementBasis ?? null;
   const advWindow = status?.advanceWindow ?? null;
   const shortWithPlan =
     !!status && !status.paidInFull && received > 0 && !!plan && (plan.plan !== "FULL" || !!plan.balanceDueAt) && !status.creditExtensionActive;
 
   return (
-    <StepCard flow="money" flowAfter="proforma" title="The payment plan" right={stateChip}>
+    <StepCard
+      flow={setUp ? "money" : undefined}
+      flowAfter={setUp ? "proforma" : undefined}
+      title={setUp ? "The payment plan" : "The advance"}
+      right={stateChip}
+      summary={setUp ? summary : undefined}
+    >
       {!folio ? (
         <span className="meta">The plan is set once the provisional bill exists — choose the billing model above.</span>
       ) : !status ? (
@@ -315,7 +388,7 @@ export function PaymentPlanCard({
               Every payment is kept on the booking. A printed receipt can&rsquo;t be made yet.
             </HelpHere>
           ) : null}
-          {shortWithPlan ? (
+          {shortWithPlan && setUp ? (
             <div className="sm warn-ink" style={{ marginTop: 8 }}>
               The guest still owes {money(status.shortfall, cur)} and said {plan!.plan === "FULL" ? "they would pay" : "the rest comes"}{" "}
               {plan!.balanceDueAt === "BEFORE_CHECKIN" ? "before check-in" : plan!.balanceDueAt === "AT_CHECKIN" ? "at the check-in desk" : "later"}.
@@ -326,22 +399,35 @@ export function PaymentPlanCard({
       )}
 
       <Live>
+        {editable && folio && payDue ? (
+          <div className="notice next" role="status" style={{ marginTop: 12, marginBottom: 0 }}>
+            <span>
+              <b>Record the payment now.</b>{" "}
+              {setUp ? "The guest has the proforma and their answer is on record — " : ""}
+              {money(status!.shortfall, cur)} of the advance is still to come.
+            </span>
+          </div>
+        ) : null}
         {editable && folio ? (
-          <div className="stack sm" style={{ marginTop: 12 }}>
+          // The acts side by side, not one per line (2026-10-28, operator: "the buttons are taking
+          // needless space by being arranged vertically, make it horizontal").
+          <div className="actbar">
             <ActionRow
-              label="Change the amount asked…"
-              caption="A flat amount, or a percent of the quotation. A changed amount issues the proforma again."
-              onClick={() => setOpen("amount")}
-            />
-            <ActionRow
-              label={plan ? "Change how they'll pay…" : "Record how they'll pay…"}
-              caption="The whole now, part now or in instalments, and when. The proforma prints it, so a change issues it again."
-              onClick={() => setOpen("plan")}
+              label={status?.requirementSource === "OPERATOR" || plan ? "Change the advance" : "Set the advance"}
+              caption="How much the guest pays, and how and when. The proforma prints both, so a change issues it again."
+              onClick={() => setOpen("advance")}
             />
             <ActionRow
               kind="primary"
-              label="Record payment…"
-              caption="The rooms are held automatically when money comes in — even part of it."
+              // Green and full size once it is time (2026-10-28, operator: "more prominent than just a
+              // black button, so the user knows it's time to record the payment now").
+              className={payDue ? "go big" : undefined}
+              label="Record payment"
+              caption={
+                setUp
+                  ? "The rooms are blocked automatically when money comes in — even part of it."
+                  : "It goes on the booking's bill with the advance already received."
+              }
               onClick={() => setOpen("pay")}
               state={payHold ? "inert" : "default"}
               heldBy={payHold?.why}
@@ -350,13 +436,13 @@ export function PaymentPlanCard({
             />
             <ActionRow
               label="Mark reconciled"
-              caption="Signs off the money position — ticks the arrival checklist and stops the chasing."
+              caption="Signs off the money position — ticks the arrival checklist and stops the chasing. It needs money received first; a direct-bill booking is the exception."
               onClick={() => reconcileM.mutate()}
               state={reconcileM.isPending ? "working" : reconcileLock ? "inert" : "default"}
               heldBy={reconcileLock}
             />
             <ActionRow
-              label="Extend credit…"
+              label="Extend credit"
               caption="Lets the booking go on without the advance, up to a ceiling and for a time."
               onClick={elevated ? () => setOpen("credit") : undefined}
               state={elevated ? "default" : "inert"}
@@ -372,130 +458,26 @@ export function PaymentPlanCard({
         ) : null}
       </Live>
 
-      {open === "amount" ? <RequirementDialog entry={entry} status={status} onClose={() => setOpen(null)} onDone={onChanged} /> : null}
-      {open === "plan" ? <PlanDialog entry={entry} status={status} tz={tz} onClose={() => setOpen(null)} onDone={onChanged} /> : null}
+      {open === "advance" ? <AdvanceDialog entry={entry} status={status} tz={tz} onClose={() => setOpen(null)} onDone={afterAdvance} /> : null}
       {open === "pay" && folio ? (
-        <PaymentDialog entry={entry} folioId={folio.id} status={status} currency={cur} onClose={() => setOpen(null)} onDone={onChanged} />
+        <PaymentDialog entry={entry} folioId={folio.id} status={status} currency={cur} onClose={() => setOpen(null)} onDone={paid} />
       ) : null}
       {open === "credit" ? (
-        <CreditDialog entry={entry} status={status} tz={tz} currency={cur} onClose={() => setOpen(null)} onDone={onChanged} />
+        <CreditDialog entry={entry} status={status} tz={tz} currency={cur} onClose={() => setOpen(null)} onDone={moneyIn} />
       ) : null}
     </StepCard>
   );
 }
 
-/* ------------------------------------------------------------------ what the guest must pay */
+/* ------------------------------------------------------------------ the advance */
 
-function RequirementDialog({
-  entry,
-  status,
-  onClose,
-  onDone,
-}: {
-  entry: EntryDetail;
-  status: PaymentStatusSummary | undefined;
-  onClose: () => void;
-  onDone: () => void;
-}) {
-  const { session } = useSession();
-  const [mode, setMode] = useState<RequirementMode>(status?.requirementBasis?.mode === "AMOUNT" ? "AMOUNT" : "PERCENT");
-  // The box opens on the figure set for this booking, never on a grey example (2026-10-23: a
-  // placeholder "50" read as the value already there).
-  const pinned = status?.requirementSource === "OPERATOR" ? status.requirementBasis : null;
-  const [value, setValue] = useState(
-    pinned?.mode === "PERCENT" && pinned.percent != null
-      ? String(pinned.percent)
-      : pinned?.mode === "AMOUNT" && status?.requiredAmount != null
-        ? String(status.requiredAmount)
-        : "",
-  );
-  const set = useMutation({
-    mutationFn: (body: { mode: "AMOUNT"; amount: number } | { mode: "PERCENT"; percent: number } | { mode: "CLEAR" }) =>
-      setAdvanceRequirement(session!, entry.id, body),
-    onSuccess: (res, body) => {
-      toast.success(body.mode === "CLEAR" ? "The hotel's default advance applies again" : `Amount asked: ${money(res.requiredAmount)}`, {
-        description: reissueWords(res.reissuedProforma) ?? undefined,
-        duration: res.reissuedProforma ? 9000 : undefined,
-      });
-      onClose();
-      onDone();
-    },
-    onError: (e) => toastRefusal(e, "The amount asked could not be set"),
-  });
-  const n = Number(value);
-  const valid = isAmount(value) && (mode === "AMOUNT" || n <= 100);
-  return (
-    <DsDialog
-      open
-      onClose={onClose}
-      busy={set.isPending}
-      title="What the guest must pay"
-      caseLines={[
-        status
-          ? `Asked now: ${money(status.requiredAmount)} · ${status.requirementSource === "OPERATOR" ? "set for this booking" : "the hotel's default"}`
-          : "Nothing read yet",
-      ]}
-      footer={
-        <>
-          <Button2 kind="quiet" disabled={set.isPending} onClick={onClose}>
-            Not now
-          </Button2>
-          {status?.requirementSource === "OPERATOR" ? (
-            <Button2 kind="secondary" disabled={set.isPending} onClick={() => set.mutate({ mode: "CLEAR" })}>
-              Use the hotel&rsquo;s default
-            </Button2>
-          ) : null}
-          <Button2
-            working={set.isPending}
-            disabled={!valid}
-            reason={valid ? undefined : mode === "PERCENT" ? "a percent from 1 to 100" : "a positive amount"}
-            onClick={() => set.mutate(mode === "AMOUNT" ? { mode: "AMOUNT", amount: n } : { mode: "PERCENT", percent: n })}
-          >
-            Set the amount
-          </Button2>
-        </>
-      }
-    >
-      <div className="field">
-        <label>Ask for</label>
-        <Choice
-          options={REQUIREMENT_MODES}
-          value={mode}
-          onChange={(m) => {
-            setMode(m);
-            setValue(""); // 20 percent is not Nu 20
-          }}
-        />
-      </div>
-      <div className="field">
-        <label>
-          {mode === "PERCENT" ? "Percent of the quotation" : "Amount"}
-          <Help label="About the amount">
-            {mode === "PERCENT"
-              ? "The house works the figure out from the quotation now — if the quotation changes, set it again."
-              : "For this booking only — the hotel's minimum is untouched."}
-          </Help>
-        </label>
-        {mode === "AMOUNT" ? (
-          <MoneyInput value={value} onChange={(e) => /^\d*\.?\d{0,2}$/.test(e.target.value) && setValue(e.target.value)} autoFocus />
-        ) : (
-          <input
-            className="input narrow"
-            inputMode="decimal"
-            value={value}
-            onChange={(e) => /^\d*\.?\d{0,2}$/.test(e.target.value) && setValue(e.target.value)}
-            autoFocus
-          />
-        )}
-      </div>
-      <p className="meta">A changed amount replaces the proforma with a new version; it has to be sent again.</p>
-    </DsDialog>
-  );
-}
-
-/* ------------------------------------------------------------------ how they will pay */
-
-function PlanDialog({
+/**
+ * The advance in one box (2026-10-28, operator: "change the amount asked and record how they'll pay
+ * should be inside one button"): how much the guest pays, and how and when. Saved together, so the
+ * proforma — which prints both — is issued again once. Only what changed is sent: an amount left
+ * as it is, or no answer picked for how they'll pay, is left alone.
+ */
+function AdvanceDialog({
   entry,
   status,
   tz,
@@ -506,132 +488,329 @@ function PlanDialog({
   status: PaymentStatusSummary | undefined;
   tz: string;
   onClose: () => void;
-  onDone: () => void;
+  /** With the amount now asked, and whether the proforma was issued again. */
+  onDone: (askedNow: number, reissued: boolean) => void;
 }) {
   const { session } = useSession();
-  const saved = status?.paymentPlan ?? null;
-  const [plan, setPlan] = useState<PlanKind>(saved?.plan ?? "FULL");
-  const [due, setDue] = useState<Due>(saved?.balanceDueAt ? (saved.balanceDueAt === "AT_CHECKOUT" ? "AT_CHECKIN" : saved.balanceDueAt) : "");
-  const [promised, setPromised] = useState(saved?.promisedBy ? isoToHotelLocal(saved.promisedBy, tz) : "");
-  const [note, setNote] = useState(saved?.note ?? "");
   const clock = useHotelClock(60_000);
   const nowLocal = isoToHotelLocal(clock.now, tz);
 
-  const toastReissue = (r: Reissued) => {
-    const w = reissueWords(r);
-    if (w) toast.info(w, { duration: 9000 });
+  /* ---- how much ---- */
+  // The box opens on the figure set for this booking, never on a grey example (2026-10-23: a
+  // placeholder "50" read as the value already there). A first advance opens with nothing chosen,
+  // and each question appears once the one before it is answered (2026-10-28, operator: "step by
+  // step — ask for, the figure, how they'll pay, when the rest is coming, then save").
+  const pinned = status?.requirementSource === "OPERATOR" ? status.requirementBasis : null;
+  const pinnedMode: AmountMode | null = pinned ? (pinned.mode === "AMOUNT" ? "AMOUNT" : "PERCENT") : null;
+  const pinnedValue =
+    pinned?.mode === "PERCENT" && pinned.percent != null
+      ? String(pinned.percent)
+      : pinned?.mode === "AMOUNT" && status?.requiredAmount != null
+        ? String(status.requiredAmount)
+        : "";
+  const [mode, setMode] = useState<AmountMode | null>(pinnedMode);
+  const [value, setValue] = useState(pinnedValue);
+  const amountModes: ReadonlyArray<readonly [AmountMode, string]> = pinned ? [...REQUIREMENT_MODES, ["DEFAULT", "The hotel's default"] as const] : REQUIREMENT_MODES;
+  const n = Number(value);
+  const typed = value.trim() !== "";
+  const amountOk = mode === "DEFAULT" || (mode === "PERCENT" && isAmount(value) && n <= 100) || (mode === "AMOUNT" && isAmount(value));
+  const requirement =
+    mode === "DEFAULT"
+      ? pinned
+        ? ({ mode: "CLEAR" } as const)
+        : null
+      : !mode || !amountOk
+        ? null
+        : pinnedMode === mode && pinnedValue === value.trim()
+          ? null
+          : mode === "AMOUNT"
+            ? ({ mode: "AMOUNT", amount: n } as const)
+            : ({ mode: "PERCENT", percent: n } as const);
+  // Back to the hotel's settings when they ask for nothing: there is nothing for the guest to pay,
+  // so there is no plan to ask about either.
+  const noAdvance = mode === "DEFAULT" && (status?.configuredBaseAmount ?? 0) <= 0;
+
+  /* ---- how and when they'll pay ---- */
+  const saved = status?.paymentPlan ?? null;
+  const savedDue: Due | null = saved ? (saved.balanceDueAt ? (saved.balanceDueAt === "AT_CHECKOUT" ? "AT_CHECKIN" : saved.balanceDueAt) : "") : null;
+  const savedPromised = saved?.promisedBy ? isoToHotelLocal(saved.promisedBy, tz) : "";
+  // Nothing is picked until the desk picks it — opening the box to change the amount must not
+  // record "the whole amount, now" on the guest's behalf.
+  const [plan, setPlan] = useState<PlanKind | null>(saved?.plan ?? null);
+  const [due, setDue] = useState<Due | null>(savedDue);
+  const [promised, setPromised] = useState(savedPromised);
+  const [note, setNote] = useState(saved?.note ?? "");
+  const [clearPlan, setClearPlan] = useState(false);
+  // A plan is asked for whenever there is an advance to pay; clearing it is an answer too.
+  const planAsked = !noAdvance && !clearPlan;
+  const planChanged =
+    clearPlan || (noAdvance && !!saved)
+      ? !!saved
+      : plan != null &&
+        due != null &&
+        (plan !== (saved?.plan ?? null) || due !== savedDue || promised !== savedPromised || note.trim() !== (saved?.note ?? "").trim());
+  const planBody = (): NonNullable<Parameters<typeof setAdvanceTerms>[2]["plan"]> | null => {
+    if (clearPlan || noAdvance) return saved ? { plan: "CLEAR" } : null;
+    if (!plan || due == null || !planChanged) return null;
+    const note_ = note.trim() || null;
+    if (due === "") return { plan, note: note_ };
+    if (due === "BEFORE_CHECKIN") {
+      const iso = hotelLocalToIso(promised, tz);
+      if (!iso) throw new Error("Pick the date the guest promised");
+      return { plan, balanceDueAt: due, promisedBy: iso, note: note_ };
+    }
+    return { plan, balanceDueAt: due, note: note_ };
   };
+
   const save = useMutation({
     mutationFn: () => {
-      const note_ = note.trim() || null;
-      if (due === "") return setAdvancePaymentPlan(session!, entry.id, { plan, note: note_ });
-      if (due === "BEFORE_CHECKIN") {
-        const iso = hotelLocalToIso(promised, tz);
-        if (!iso) throw new Error("Pick the date the guest promised");
-        return setAdvancePaymentPlan(session!, entry.id, { plan, balanceDueAt: due, promisedBy: iso, note: note_ });
-      }
-      return setAdvancePaymentPlan(session!, entry.id, { plan, balanceDueAt: due, note: note_ });
+      const p = planBody();
+      return setAdvanceTerms(session!, entry.id, { ...(requirement ? { requirement } : {}), ...(p ? { plan: p } : {}) });
     },
     onSuccess: (res) => {
-      toast.success("The guest's payment plan is recorded");
-      toastReissue(res.reissuedProforma);
+      const words = [
+        requirement ? (requirement.mode === "CLEAR" ? "the hotel's default advance applies again" : `the advance is ${money(res.requiredAmount)}`) : null,
+        clearPlan || (noAdvance && saved) ? "how they'll pay is cleared" : planChanged ? "how they'll pay is recorded" : null,
+      ].filter(Boolean);
+      const said = words.join(" · ");
+      toast.success(said.charAt(0).toUpperCase() + said.slice(1), {
+        description: reissueWords(res.reissuedProforma) ?? undefined,
+        duration: res.reissuedProforma ? 9000 : undefined,
+      });
       onClose();
-      onDone();
+      onDone(Number(res.requiredAmount ?? 0), !!res.reissuedProforma);
     },
-    onError: (e) => toastRefusal(e, "The plan could not be recorded"),
-  });
-  const clear = useMutation({
-    mutationFn: () => setAdvancePaymentPlan(session!, entry.id, { plan: "CLEAR" }),
-    onSuccess: (res) => {
-      toast.success("The payment plan is cleared");
-      toastReissue(res.reissuedProforma);
-      onClose();
-      onDone();
-    },
-    onError: (e) => toastRefusal(e, "The plan could not be cleared"),
+    onError: (e) => toastRefusal(e, "The advance could not be saved"),
   });
 
   const timing: ReadonlyArray<readonly [Due, string]> =
-    plan === "FULL"
+    plan === "PARTIAL" || plan === "INSTALLMENTS"
       ? [
-          ["", "Now, at the desk"],
           ["BEFORE_CHECKIN", "Before check-in, by a date"],
           ["AT_CHECKIN", "At the check-in desk"],
         ]
       : [
+          ["", "Now, at the desk"],
           ["BEFORE_CHECKIN", "Before check-in, by a date"],
           ["AT_CHECKIN", "At the check-in desk"],
         ];
-  const needsDate = due === "BEFORE_CHECKIN" && !promised;
-  const busy = save.isPending || clear.isPending;
+
+  // The questions in order; each one answered opens the next.
+  const askedFor = mode != null;
+  const figureIn = askedFor && amountOk;
+  const planIn = figureIn && (!planAsked || plan != null);
+  const dueIn = planIn && (!planAsked || due != null);
+  const dateIn = dueIn && (!planAsked || due !== "BEFORE_CHECKIN" || !!promised);
+  const changed = !!requirement || planChanged;
+  const holdReason = !askedFor
+    ? "Choose how much to ask for"
+    : !figureIn
+      ? mode === "PERCENT"
+        ? typed
+          ? "Put in a percent from 1 to 100"
+          : "Put in the percent"
+        : typed
+          ? "Put in an amount above zero"
+          : "Put in the amount"
+      : !planIn
+        ? "Pick how they'll pay"
+        : !dueIn
+          ? plan === "FULL"
+            ? "Pick when they'll pay"
+            : "Pick when the rest is coming"
+          : !dateIn
+            ? "Pick the date they promised"
+            : !changed
+              ? "Nothing changed yet"
+              : undefined;
+
+  let q = 0;
+  const num = () => ++q;
 
   return (
     <DsDialog
       open
       onClose={onClose}
-      busy={busy}
-      title="How the guest will pay the advance"
-      caseLines={[status ? `The advance: ${money(status.requiredAmount)} · received ${money(status.totalReceived)}` : "Nothing read yet"]}
+      busy={save.isPending}
+      width={620}
+      title="The advance"
+      caseLines={[
+        status
+          ? `Asked now: ${money(status.requiredAmount)} · ${status.requirementSource === "OPERATOR" ? "set for this booking" : "the hotel's default"} · received ${money(status.totalReceived)}`
+          : "Nothing read yet",
+      ]}
+      help="The proforma prints the amount and how the guest will pay, so a change issues it again — to send again."
       footer={
         <>
-          <Button2 kind="quiet" disabled={busy} onClick={onClose}>
+          {holdReason ? (
+            <span className="dlg-next" role="status">
+              {holdReason}
+            </span>
+          ) : null}
+          <Button2 kind="quiet" disabled={save.isPending} onClick={onClose}>
             Not now
           </Button2>
-          {saved ? (
-            <Button2 kind="secondary" disabled={busy} working={clear.isPending} onClick={() => clear.mutate()}>
-              Clear the plan
-            </Button2>
-          ) : null}
-          <Button2
-            working={save.isPending}
-            disabled={needsDate || clear.isPending}
-            reason={needsDate ? "pick the date they promised" : undefined}
-            onClick={() => save.mutate()}
-          >
-            Record the plan
+          {/* Green and full size once every answer is in (2026-10-28, operator: "make the button more prominent"). */}
+          <Button2 className="go big" working={save.isPending} disabled={!!holdReason} reason={holdReason} onClick={() => save.mutate()}>
+            Save the advance
           </Button2>
         </>
       }
     >
-      <div className="field">
-        <label>What they said</label>
-        <Choice
-          options={PLAN_CHOICES}
-          value={plan}
-          onChange={(next) => {
-            setPlan(next);
-            if (next !== "FULL" && due === "") setDue("BEFORE_CHECKIN");
-          }}
-        />
+      <div className="qsteps">
+        <Ask n={num()} done={askedFor} label="Ask for">
+          <Choice
+            options={amountModes}
+            value={mode}
+            onChange={(m) => {
+              setMode(m);
+              setValue(m === pinnedMode ? pinnedValue : ""); // 20 percent is not Nu 20
+            }}
+          />
+        </Ask>
+
+        {mode === "PERCENT" || mode === "AMOUNT" ? (
+          <Ask
+            n={num()}
+            done={figureIn}
+            label={mode === "PERCENT" ? "Percent of the quotation" : "Amount"}
+            help={
+              <Help label="About the amount">
+                {mode === "PERCENT"
+                  ? "The house works the figure out from the quotation now — if the quotation changes, set it again."
+                  : "For this booking only — the hotel's minimum is untouched."}
+              </Help>
+            }
+          >
+            {mode === "AMOUNT" ? (
+              <MoneyInput key="amount" value={value} onChange={(e) => /^\d*\.?\d{0,2}$/.test(e.target.value) && setValue(e.target.value)} autoFocus />
+            ) : (
+              <div className="suffix">
+                <input
+                  key="percent"
+                  className="input narrow"
+                  inputMode="decimal"
+                  aria-label="Percent of the quotation"
+                  value={value}
+                  onChange={(e) => /^\d*\.?\d{0,2}$/.test(e.target.value) && setValue(e.target.value)}
+                  autoFocus
+                />
+                <span aria-hidden="true">%</span>
+              </div>
+            )}
+          </Ask>
+        ) : mode === "DEFAULT" ? (
+          <p className="meta qnote">
+            The amount set for this booking is dropped — the hotel&rsquo;s settings decide again
+            {noAdvance ? (
+              <>
+                . They ask for no advance on this booking, so there is nothing for the guest to pay
+                {saved ? <> and how they&rsquo;ll pay is cleared too</> : null}.
+              </>
+            ) : (
+              <> — they ask for {money(status?.configuredBaseAmount ?? 0)}.</>
+            )}
+          </p>
+        ) : null}
+
+        {figureIn && planAsked ? (
+          <Ask n={num()} done={planIn} label="How will they pay?" sep>
+            <Choice
+              options={PLAN_CHOICES}
+              value={plan}
+              onChange={(next) => {
+                setPlan(next);
+                // "Now, at the desk" is an answer only for the whole amount.
+                if (next !== "FULL" && due === "") setDue(null);
+              }}
+            />
+            {saved ? (
+              <div style={{ marginTop: 8 }}>
+                <Button2 kind="quiet" onClick={() => setClearPlan(true)}>
+                  Clear how they&rsquo;ll pay
+                </Button2>
+              </div>
+            ) : null}
+          </Ask>
+        ) : null}
+        {figureIn && clearPlan ? (
+          <p className="sm qnote qsep">
+            How they&rsquo;ll pay is cleared when you save.{" "}
+            <Button2 kind="quiet" onClick={() => setClearPlan(false)}>
+              Keep it
+            </Button2>
+          </p>
+        ) : null}
+
+        {planIn && planAsked ? (
+          <Ask n={num()} done={dueIn} label={plan === "FULL" ? "When will they pay?" : "When is the rest coming?"}>
+            <Choice options={timing} value={due} onChange={setDue} />
+            {due === "AT_CHECKIN" ? (
+              <p className="meta" style={{ marginTop: 6 }}>
+                No countdown — the money is collected at the check-in desk. To check in unpaid, the FOM covers the gap with credit.
+              </p>
+            ) : null}
+          </Ask>
+        ) : null}
+
+        {dueIn && planAsked && due === "BEFORE_CHECKIN" ? (
+          <Ask
+            n={num()}
+            done={dateIn}
+            label="Promised by"
+            help={
+              <Help label="About the promise">
+                On the hotel&rsquo;s clock. A countdown runs to it and the booking is flagged if the money has not come. A date after check-in
+                is taken as check-in.
+              </Help>
+            }
+          >
+            <DateTimeInput className="input" value={promised} min={nowLocal || undefined} onChange={(e) => setPromised(e.target.value)} />
+          </Ask>
+        ) : null}
+
+        {dateIn && planAsked ? (
+          <Ask n={num()} done={false} optional label="What they said, in their words · optional">
+            <input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="will transfer the rest after payday" />
+          </Ask>
+        ) : null}
       </div>
-      <div className="field">
-        <label>{plan === "FULL" ? "When will they pay?" : "When is the rest coming?"}</label>
-        <Choice options={timing} value={due} onChange={setDue} />
-      </div>
-      {due === "BEFORE_CHECKIN" ? (
-        <div className="field">
-          <label>
-            Promised by
-            <Help label="About the promise">
-              On the hotel&rsquo;s clock. A countdown runs to it and the booking is flagged if the money has not come. A date after check-in is
-              taken as check-in.
-            </Help>
-          </label>
-          <input className="input" type="datetime-local" value={promised} min={nowLocal || undefined} onChange={(e) => setPromised(e.target.value)} />
-        </div>
-      ) : null}
-      <div className="field">
-        <label>What they said, in their words · optional</label>
-        <input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="will transfer the rest after payday" />
-      </div>
-      <p className="meta">
-        {due === "AT_CHECKIN"
-          ? "No countdown — the money is collected at the check-in desk. To check in unpaid, the FOM covers the gap with credit."
-          : due === ""
-            ? "Paying now records no promise."
-            : "The proforma prints this plan — a change issues it again, to send again."}
-      </p>
     </DsDialog>
+  );
+}
+
+/** One question in a box that asks one thing at a time: its number (a tick once answered), its label, its answer. */
+function Ask({
+  n,
+  done,
+  optional,
+  sep,
+  label,
+  help,
+  children,
+}: {
+  n: number;
+  done: boolean;
+  optional?: boolean;
+  /** A line above it — the start of a new part of the box. */
+  sep?: boolean;
+  label: React.ReactNode;
+  help?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className={["qstep", done ? "done" : "", optional ? "optional" : "", sep ? "qsep" : ""].filter(Boolean).join(" ")}>
+      <span className="qn" aria-hidden="true">
+        {done ? <Icon name="check" /> : n}
+      </span>
+      <div className="field">
+        <label>
+          {label}
+          {help}
+        </label>
+        {children}
+      </div>
+    </div>
   );
 }
 
@@ -650,7 +829,11 @@ function PaymentDialog({
   status: PaymentStatusSummary | undefined;
   currency?: string;
   onClose: () => void;
-  onDone: () => void;
+  /**
+   * With when the rooms are now blocked to: the time when this payment blocked them, `null` when
+   * it should have and could not, `undefined` when it was not for this payment to block them.
+   */
+  onDone: (blockedUntil: string | null | undefined) => void;
 }) {
   const { session } = useSession();
   // Prefilled with what is owed only while nothing has been paid (2026-08-07 ruling) — after a
@@ -670,19 +853,19 @@ function PaymentDialog({
     onSuccess: (res) => {
       toast.success(`${money(Number(amount), currency)} recorded`);
       const ah = res.autoHold;
-      if (ah?.placed) {
-        toast.success("The rooms are held for this booking", {
-          description: "The advance came in, so the committed hold was placed. It runs on the standard hold clock.",
-          duration: 9000,
-        });
-      } else if (ah && !ah.placed && ah.reason !== "ALREADY_HELD") {
-        toast.warning("The rooms were not held automatically", {
-          description: `${ah.message} — place the committed hold by hand.`,
+      // A block placed by this payment is asked about on the hold card — keep the time, or set
+      // one (2026-10-28). One the payment could not place is said here, and the card shows itself.
+      let blockedUntil: string | null | undefined;
+      if (ah?.placed) blockedUntil = ah.expiresAt;
+      else if (ah && !ah.placed && ah.reason !== "ALREADY_HELD" && ah.reason !== "NOT_AT_S3") {
+        toast.warning("The rooms were not blocked automatically", {
+          description: `${ah.message} — block them by hand.`,
           duration: 10000,
         });
+        blockedUntil = null;
       }
       onClose();
-      onDone();
+      onDone(blockedUntil);
     },
     onError: (e) => toastRefusal(e, "The payment could not be recorded"),
   });
@@ -901,6 +1084,7 @@ function Button2({
   working,
   disabled,
   reason,
+  className,
   onClick,
   children,
 }: {
@@ -908,11 +1092,12 @@ function Button2({
   working?: boolean;
   disabled?: boolean;
   reason?: string;
+  className?: string;
   onClick: () => void;
   children: React.ReactNode;
 }) {
   return (
-    <Button kind={kind} state={working ? "working" : disabled ? "inert" : "default"} title={reason} workingLabel="Working…" onClick={onClick}>
+    <Button kind={kind} className={className} state={working ? "working" : disabled ? "inert" : "default"} title={reason} workingLabel="Working…" onClick={onClick}>
       {children}
     </Button>
   );

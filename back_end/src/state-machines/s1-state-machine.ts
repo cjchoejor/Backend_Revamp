@@ -5,6 +5,7 @@ import {
   enforceDeficientAcknowledgementsWhenRequiredForS1Exit,
   enforcePreferredAvailabilityConfigurationNotStaleForS1Exit,
   enforcePreferredAvailabilityConfigurationSelectedForS1Exit,
+  enforcePreferredPickFitsStayForS1Exit,
   enforceSelectedRoomNotMaintenanceOrBlockedForS1Exit,
 } from "../policies/01-availability/p01-s1-exit-preferred-configuration-and-room-eligibility.js";
 import { enforceNoOpenDuplicateFlagsForS1Exit } from "../policies/04-duplicate-detection/p12-open-duplicate-flag-blocks-s1-exit.js";
@@ -98,6 +99,15 @@ export async function progressS1ToS2(prisma: PrismaClient, entryId: string, acto
   enforcePreferredAvailabilityConfigurationSelectedForS1Exit({ preferred: preferredCfg });
   const preferred = preferredCfg!;
   enforcePreferredAvailabilityConfigurationNotStaleForS1Exit({ isStale: preferred.isStale });
+  // The pick must still fit the stay as it stands — the dates or the room count may have changed
+  // since the rooms were chosen (2026-10-27).
+  enforcePreferredPickFitsStayForS1Exit({
+    optionSelected: preferred.optionSelected,
+    searchCriteria: preferred.searchCriteria,
+    checkInDate: entry.checkInDate,
+    checkOutDate: entry.checkOutDate,
+    numberOfRooms: entry.numberOfRooms,
+  });
   enforceDeficientAcknowledgementsWhenRequiredForS1Exit({
     optionSelected: preferred.optionSelected,
     deficientAcknowledgements: preferred.deficientAcknowledgements,
@@ -191,6 +201,13 @@ export async function autoFulfilS2ToS3(prisma: PrismaClient, entryId: string, ac
   enforcePreferredAvailabilityConfigurationSelectedForS1Exit({ preferred: preferredCfg });
   const preferred = preferredCfg!;
   enforcePreferredAvailabilityConfigurationNotStaleForS1Exit({ isStale: preferred.isStale });
+  enforcePreferredPickFitsStayForS1Exit({
+    optionSelected: preferred.optionSelected,
+    searchCriteria: preferred.searchCriteria,
+    checkInDate: entry.checkInDate,
+    checkOutDate: entry.checkOutDate,
+    numberOfRooms: entry.numberOfRooms,
+  });
 
   const now = new Date();
   return prisma.$transaction(async (tx) => {

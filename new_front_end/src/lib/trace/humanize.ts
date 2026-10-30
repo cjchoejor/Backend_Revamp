@@ -178,7 +178,7 @@ export function humanizeTrace(event: TraceEvent, now?: Date): HumanTrace {
     actor: event.actorName ?? event.actorId,
     actorLevel: event.actorLevel,
     whenRelative: relativeTime(event.timestamp, now),
-    whenAbsolute: ts.toLocaleString(),
+    whenAbsolute: ts.toLocaleString("en-GB"),
     stage: friendlyStage(event.stageContext),
   };
 }

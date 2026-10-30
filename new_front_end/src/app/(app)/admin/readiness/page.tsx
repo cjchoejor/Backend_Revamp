@@ -92,7 +92,7 @@ export default function AdminReadinessPage() {
               </tbody>
             </table>
           </div>
-          <p className="admin-muted text-xs">Last run: {new Date(report.ranAt).toLocaleString()}</p>
+          <p className="admin-muted text-xs">Last run: {new Date(report.ranAt).toLocaleString("en-GB")}</p>
         </>
       )}
     </div>

@@ -10,6 +10,7 @@
  * Every figure is the server's: the same bill the Inquiry step prints (`price-pick`), priced on
  * the rooms as SAVED — the move to Negotiation carries the saved pick, never an unsaved one.
  */
+import { useBookingRooms } from "@/hooks/use-booking-rooms";
 import { useMemo } from "react";
 import { Button } from "@/design-system";
 import { DsDialog, Fact, Facts } from "./kit";
@@ -54,6 +55,7 @@ export function InquirySummaryDialog({
 }) {
   const picks = useMemo(() => savedPicks(entry), [entry]);
   const bill = usePickPricing(entry.id, picks, open);
+  const roomLabels = useBookingRooms(entry).labels;
 
   const inq = entry.inquiry;
   const caller = callerNameOf(inq);
@@ -83,7 +85,7 @@ export function InquirySummaryDialog({
           <Button kind="quiet" onClick={onClose} state={busy ? "inert" : "default"}>
             Go back and edit
           </Button>
-          <Button kind="primary" onClick={onConfirm} state={busy ? "working" : "default"} workingLabel="Moving…">
+          <Button kind="primary" className="go" onClick={onConfirm} state={busy ? "working" : "default"} workingLabel="Moving…">
             Confirm and move to Negotiation
           </Button>
         </>
@@ -133,6 +135,7 @@ export function InquirySummaryDialog({
           {bill.pricing ? (
             <PickBill
               pricing={bill.pricing}
+              roomLabels={Object.fromEntries(roomLabels)}
               loading={bill.loading}
               title="The rooms chosen"
               help="Indicative, not a quote. Meals, extra beds and any agreed rate are set at Negotiation."

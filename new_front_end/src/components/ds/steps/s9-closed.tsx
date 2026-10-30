@@ -5,7 +5,9 @@
  *
  * The page opened months later when someone asks about an old booking: what the stay was, where
  * the money sits in the tail after the stay, the one door back in, and the papers as they were
- * sealed. Money arriving after the close is not a change to the record, so recording it — or a
+ * sealed. Until the seal (2026-10-30, the stage template) its sections are numbered from the
+ * backend's own close checks — the money, a room whose inspection was put off, the damage still to
+ * charge or waive, the after-stay handoff — and the seal floats in once every one is in. Money arriving after the close is not a change to the record, so recording it — or a
  * charge found after departure, or a write-off — stays open on a closed booking without a
  * re-entry (Z4). Anything else goes through the door back in.
  *
@@ -21,6 +23,7 @@ import { useHotelDay } from "@/hooks/use-hotel-day";
 import { usePaymentStatus } from "@/hooks/use-payment-status";
 import { useClosureReadiness } from "@/hooks/use-closure-readiness";
 import { recordRoomInspection } from "@/lib/api/checkout";
+import type { RoomInspectionView } from "@/lib/api/post-stay";
 import { RoomInspectionGrid } from "./room-inspections";
 import { DamageCard } from "./damage-card";
 import {
@@ -46,12 +49,10 @@ import {
   DsDialog,
   Fact,
   Facts,
-  InlineWay,
   Live,
   NotNow,
   PaperDrawer,
   ReasonDialog,
-  ShutWay,
   StepCanvas,
   StepCard,
   Tool,
@@ -59,7 +60,10 @@ import {
   latestDispatched,
   toastRefusal,
   useCommunications,
+  useFinishWhenDone,
+  useFinishWhenMet,
   useRefreshEntry,
+  useStepPane,
   words,
   type PaperRef,
   type StepPane,
@@ -124,33 +128,34 @@ export const S9_PANES: StepPane[] = [
 export function S9Closed({
   entry,
   past,
-  close,
   pane = null,
-  openPane,
 }: {
   entry: EntryDetail;
   past: boolean;
-  close: { onClick: () => void; ready: boolean; reason?: string } | null;
-  /** Which pane is open — null is This step. */
+  /** Which view is open in the page — null is the step itself. */
   pane?: string | null;
-  openPane?: (key: string | null) => void;
 }) {
   const clock = useHotelClock(60_000);
+  const stepPane = useStepPane();
   // A cancelled or expired booking reaching this page is only a record. A CLOSED one keeps its
   // tail open (Z4): money, a late chit and a write-off are not changes to what was sealed.
   const readOnly = past || entry.status === "CANCELLED" || entry.status === "EXPIRED";
   const tail = !readOnly && !!entry.folio;
   const shown = tail ? (pane ?? null) : null;
   const at = (k: string | null) => (shown === k ? undefined : true);
+  const open = !readOnly && entry.status !== "CLOSED" && entry.currentStage === "S9";
   return (
     <StepCanvas past={readOnly}>
       <div className="pane" hidden={at(null)}>
         <DisputesCard entry={entry} tz={clock.tz} />
         <WhatTheStayWas entry={entry} />
-        {/* The record is sealed once every damage is charged or waived (2026-10-26). */}
-        <DamageCard entry={entry} live={!readOnly && entry.status !== "CLOSED" && entry.currentStage === "S9"} atClosed />
         {entry.folio ? <OverpaidCard entry={entry} live={!readOnly} /> : null}
-        {entry.folio ? <AfterTheStay entry={entry} tz={clock.tz} close={readOnly ? null : close} openPane={tail ? openPane : undefined} /> : null}
+        {/* The late charge and the tax invoice open in the page, with the way back (2026-10-30). */}
+        {entry.folio ? <AfterTheStay entry={entry} tz={clock.tz} openPane={tail ? (k) => stepPane.open(k) : undefined} /> : null}
+        <ClosedInspections entry={entry} live={open} />
+        {/* The record is sealed once every damage is charged or waived (2026-10-26). */}
+        <DamageCard entry={entry} live={open} atClosed />
+        <AfterStayHandoff entry={entry} live={open} tz={clock.tz} />
         <SealedPapers entry={entry} tz={clock.tz} />
         {entry.status === "CANCELLED" ? <Cancellation entry={entry} /> : null}
       </div>
@@ -294,19 +299,8 @@ function useInvoiceFacts(entry: EntryDetail, tz: string) {
 
 /* ------------------------------------------------------------------ after the stay (Z3, Z4) */
 
-function AfterTheStay({
-  entry,
-  tz,
-  close,
-  openPane,
-}: {
-  entry: EntryDetail;
-  tz: string;
-  close: { onClick: () => void; ready: boolean; reason?: string } | null;
-  openPane?: (key: string | null) => void;
-}) {
+function AfterTheStay({ entry, tz, openPane }: { entry: EntryDetail; tz: string; openPane?: (key: string) => void }) {
   const { session } = useSession();
-  const refresh = useRefreshEntry(entry.id);
   const fom = atLeast(session?.actorLevel, "L2");
   const gm = atLeast(session?.actorLevel, "L3");
   const folio = entry.folio!;
@@ -330,28 +324,12 @@ function AfterTheStay({
   const finalComm = latestDispatched(comms.data?.items, "FINAL_INVOICE");
   const answerPending = !!finalComm && finalComm.acknowledgementStatus !== "RECEIVED";
 
-  const h5 = (entry.handoffs ?? []).find((h) => h.handoffType === "H5") ?? null;
-  const h5Open = !!h5 && (h5.state === "CREATED" || h5.state === "ASSIGNED" || h5.state === "ACCEPTED");
-  // Where the room inspection stands, read from the backend's closure checks (2026-09-18).
-  const closure = useClosureReadiness(entry.id, !sealed && entry.currentStage === "S9");
-  // Each room's inspection (2026-10-26 — one per room).
-  const inspRooms = closure.data?.inspections?.rooms ?? [];
   const commissions = entry.commissionDueRecords ?? [];
   const followUps = entry.followUpTasks ?? [];
 
   const [paying, setPaying] = useState(false);
   const [writing, setWriting] = useState(false);
   const [byPart, setByPart] = useState(false);
-  const [h5Basis, setH5Basis] = useState("Nothing left to settle");
-
-  const h5Done = useMutation({
-    mutationFn: () => fulfilHandoff(session!, h5!.id, { resolutionBasis: h5Basis.trim() }),
-    onSuccess: () => {
-      toast.success("The after-stay handoff is done");
-      refresh();
-    },
-    onError: (e) => toastRefusal(e, "The after-stay handoff could not be completed"),
-  });
 
   const { finals, lastSent, ageDays, lateSinceInvoice } = inv;
   const whereItSits = writtenOff ? (
@@ -392,9 +370,18 @@ function AfterTheStay({
     FOLIO_STATE_WORD[folio.state] ?? words(folio.state)
   );
 
+  // The line it folds to once the money's checks are in (2026-10-30).
+  const summary = writtenOff
+    ? "Nothing owing — written off"
+    : noShow
+      ? "Closed as a no-show"
+      : `${owed ? `${money(outstanding, cur)} owed by ${booked.payer}` : "Nothing owing"}${lastSent ? ` · tax invoice ${invoiceLabel(lastSent)} sent` : ""}`;
+
   return (
     <StepCard
+      flow="money"
       title="After the stay"
+      summary={summary}
       meta="Money that comes in after the guest has left, a charge found later and a write-off are all recorded here — the booking is not reopened for any of them."
       status={
         writtenOff ? (
@@ -551,59 +538,104 @@ function AfterTheStay({
             </div>
           </Fact>
         ) : null}
-        {h5 ? (
-          <Fact k="The last handoff">
-            {h5Open ? (
-              <div style={{ display: "grid", gap: 6 }}>
-                <span>
-                  {HANDOFF_STATE_WORD[h5.state] ?? words(h5.state)}
-                  <Help label="About the last handoff">It is done once the money is all in, written off, or there is nothing left to do.</Help>
-                </span>
-                <Live>
-                  <div className="row-acts">
-                    <input className="input" style={{ flex: 1, minWidth: 220 }} value={h5Basis} onChange={(e) => setH5Basis(e.target.value)} />
-                    <Button
-                      kind="secondary"
-                      compact
-                      state={h5Done.isPending ? "working" : h5Basis.trim() ? "default" : "inert"}
-                      title={h5Basis.trim() ? undefined : "say what settled it"}
-                      workingLabel="Recording…"
-                      onClick={() => h5Done.mutate()}
-                    >
-                      Mark it done
-                    </Button>
-                  </div>
-                </Live>
-              </div>
-            ) : (
-              <span>{HANDOFF_STATE_WORD[h5.state] ?? words(h5.state)}</span>
-            )}
-          </Fact>
-        ) : null}
-        {/* The rooms put off at check-out (or never inspected), as tiles, each finished here or its
-            window closed by the FOM (2026-10-26). Nothing shows when every room was inspected at
-            check-out. */}
-        {inspRooms.some((r) => r.state !== "DONE" || (entry.roomInspectionRecords ?? []).some((i) => i.roomId === r.roomId && i.isDeferred)) ? (
-          <Fact k={inspRooms.length > 1 ? "The inspections" : "The inspection"}>
-            <Live>
-              <RoomInspectionGrid entry={entry} live={!sealed && entry.currentStage === "S9"} atClosed fom={fom} />
-            </Live>
-          </Fact>
-        ) : null}
       </Facts>
 
-      {close && !sealed ? (
+      <RecordPayment entry={entry} open={paying} onClose={() => setPaying(false)} invoices={inv.invoices} outstanding={outstanding} answerPending={answerPending} currency={cur} payer={booked.payer} />
+      <WriteOff entry={entry} open={writing} onClose={() => setWriting(false)} outstanding={outstanding} currency={cur} payer={booked.payer} />
+    </StepCard>
+  );
+}
+
+/* ------------------------------------------------------------------ the inspections owed (a section) */
+
+/**
+ * Whether the Closed step draws the inspections — a room put off at check-out, or never inspected
+ * (2026-10-26). Nothing shows when every room was inspected at check-out. The workspace numbers the
+ * section by the same rule, so the two cannot disagree.
+ */
+export function inspectionsOwedAtClosed(entry: EntryDetail, rooms: ReadonlyArray<RoomInspectionView>) {
+  return rooms.some((r) => r.state !== "DONE" || (entry.roomInspectionRecords ?? []).some((i) => i.roomId === r.roomId && i.isDeferred));
+}
+
+/** The rooms put off at check-out, as tiles, each finished here or its window closed by the FOM. */
+function ClosedInspections({ entry, live }: { entry: EntryDetail; live: boolean }) {
+  const { session } = useSession();
+  const fom = atLeast(session?.actorLevel, "L2");
+  const closure = useClosureReadiness(entry.id, entry.status !== "CLOSED" && entry.currentStage === "S9");
+  const rooms = closure.data?.inspections?.rooms ?? [];
+  // Finished by the presses in it — the tiles' forms are inline.
+  useFinishWhenMet("inspections");
+  if (!inspectionsOwedAtClosed(entry, rooms)) return null;
+  const owing = rooms.filter((r) => r.state === "PUT_OFF" || r.state === "NOT_RECORDED");
+  const many = rooms.length > 1;
+  return (
+    <StepCard
+      flow="inspections"
+      title={many ? "The inspections" : "The inspection"}
+      meta="A room put off at check-out is inspected here; once its window has passed the FOM can close it instead."
+      status={
+        owing.length ? (
+          <span className="warn-ink">
+            {owing.length === 1 ? `Room ${owing[0].roomNumber}` : `Rooms ${owing.map((r) => r.roomNumber).join(", ")}`} still to inspect, or the window to close
+          </span>
+        ) : (
+          <span className="ok-ink">{many ? "Every room inspected or its window closed" : "Inspected, or its window closed"}</span>
+        )
+      }
+      summary={many ? `${plural(rooms.length, "room")} inspected or closed` : `Room ${rooms[0]?.roomNumber ?? ""} inspected or closed`}
+    >
+      <Live>
+        <RoomInspectionGrid entry={entry} live={live} atClosed fom={fom} />
+      </Live>
+    </StepCard>
+  );
+}
+
+/* ------------------------------------------------------------------ the after-stay handoff (a section) */
+
+function AfterStayHandoff({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz: string }) {
+  const { session } = useSession();
+  const refresh = useRefreshEntry(entry.id);
+  const h5 = (entry.handoffs ?? []).find((h) => h.handoffType === "H5") ?? null;
+  const h5Open = !!h5 && (h5.state === "CREATED" || h5.state === "ASSIGNED" || h5.state === "ACCEPTED");
+  const [basis, setBasis] = useState("Nothing left to settle");
+  const finish = useFinishWhenDone("handoff");
+  const done = useMutation({
+    mutationFn: () => fulfilHandoff(session!, h5!.id, { resolutionBasis: basis.trim() }),
+    onSuccess: () => {
+      toast.success("The after-stay handoff is done");
+      refresh();
+      finish();
+    },
+    onError: (e) => toastRefusal(e, "The after-stay handoff could not be completed"),
+  });
+  if (!h5) return null;
+  const word = HANDOFF_STATE_WORD[h5.state] ?? words(h5.state);
+  const state = word ? word[0].toUpperCase() + word.slice(1) : word;
+  return (
+    <StepCard
+      flow="handoff"
+      title="The after-stay handoff"
+      meta="It is done once the money is all in, written off, or there is nothing left to do."
+      status={h5Open ? <span className="warn-ink">{state} — say what settled it and mark it done</span> : <span className="ok-ink">{state}</span>}
+      summary={`${state}${h5.fulfilledAt ? ` · ${fmtStamp(h5.fulfilledAt, tz)}` : ""}`}
+    >
+      {h5Open && live ? (
         <Live>
-          <div className="row-acts" style={{ marginTop: 14, borderTop: "1px solid var(--line)", paddingTop: 12 }}>
-            <Button icon="lock" state={close.ready ? "default" : "inert"} reason={close.ready ? undefined : close.reason} onClick={close.onClick}>
-              Close &amp; seal the record
+          <div className="row-acts">
+            <input className="input" style={{ flex: 1, minWidth: 220 }} value={basis} aria-label="What settled it" onChange={(e) => setBasis(e.target.value)} />
+            <Button
+              className={basis.trim() ? "go" : undefined}
+              state={done.isPending ? "working" : basis.trim() ? "default" : "inert"}
+              title={basis.trim() ? undefined : "say what settled it"}
+              workingLabel="Recording…"
+              onClick={() => done.mutate()}
+            >
+              Mark it done
             </Button>
           </div>
         </Live>
       ) : null}
-
-      <RecordPayment entry={entry} open={paying} onClose={() => setPaying(false)} invoices={inv.invoices} outstanding={outstanding} answerPending={answerPending} currency={cur} payer={booked.payer} />
-      <WriteOff entry={entry} open={writing} onClose={() => setWriting(false)} outstanding={outstanding} currency={cur} payer={booked.payer} />
     </StepCard>
   );
 }
@@ -617,24 +649,33 @@ function LateChargePane({ entry }: { entry: EntryDetail }) {
   const fo = billing.data?.folio ?? null;
   const cur = billing.data?.currency ?? entry.folio?.lines?.[0]?.currency ?? "BTN";
   const noShow = entry.folio?.state === "NO_SHOW_CLOSED";
+  // A button under the bill, the form in a pop-up (2026-10-30, operator: "post charge here to be a
+  // button as well") — as Stay's and Check-out's Post a charge.
+  const [posting, setPosting] = useState(false);
+  const why = noShow
+    ? "A no-show never stayed — its bill closed with the no-show charge, so nothing more can be added."
+    : !fom
+      ? "Adding a charge after the guest has left is the FOM's."
+      : null;
   return (
     <>
-      <StepCard title="The bill" status={fo ? `${plural(fo.lineCount, "line")} on the bill` : undefined}>
+      <StepCard
+        title="The bill"
+        status={noShow ? <span className="warn-ink">{why}</span> : fo ? `${plural(fo.lineCount, "line")} on the bill` : undefined}
+      >
         <BillFigures fo={fo} cur={cur} />
         <div style={{ marginTop: 12 }}>
           <BillLines entry={entry} onTab={() => undefined} />
         </div>
+        <Live>
+          <div className="folio-acts">
+            <Button className={why ? undefined : "go"} icon="pen" state={why ? "inert" : "default"} reason={why ?? undefined} onClick={() => setPosting(true)}>
+              Post a charge
+            </Button>
+          </div>
+        </Live>
       </StepCard>
-      {noShow ? (
-        <StepCard
-          title="A charge found after departure"
-          status={<span className="warn-ink">A no-show never stayed — its bill closed with the no-show charge, so nothing more can be added.</span>}
-        />
-      ) : !fom ? (
-        <ShutWay act="Post the charge" why="Adding a charge after the guest has left needs the FOM." />
-      ) : (
-        <InlineWay render={(done) => <LateCharge entry={entry} open onClose={done} />} />
-      )}
+      {why ? null : <LateCharge entry={entry} open={posting} onClose={() => setPosting(false)} />}
     </>
   );
 }
@@ -649,6 +690,12 @@ function TaxInvoicePane({ entry, tz }: { entry: EntryDetail; tz: string }) {
   const [paper, setPaper] = useState<PaperRef | null>(null);
   const { invoices, finals, lastSent, lateSinceInvoice } = useInvoiceFacts(entry, tz);
   const others = invoices.filter((i) => i.invoiceType !== "FINAL");
+  // Issue and send sits beside the paper's own Preview and PDF, and asks in a pop-up (2026-10-30,
+  // operator: "the issue and send button is way below, keep it next to the preview and pdf").
+  const index = useFolioIndex(entry);
+  const draft = index.data?.documents.find((x) => x.kind === "tax-invoice") ?? null;
+  const [issuing, setIssuing] = useState(false);
+  const covered = !!lastSent && !lateSinceInvoice;
   const row = (inv: InvoiceSummary) => (
     <div key={inv.id} className="row-acts sm">
       <span className={inv.state === "SUPERSEDED" ? "meta" : undefined}>
@@ -698,7 +745,7 @@ function TaxInvoicePane({ entry, tz }: { entry: EntryDetail; tz: string }) {
         status={
           lateSinceInvoice ? (
             <span className="warn-ink">
-              A charge was added after {invoiceLabel(lastSent!)} went out — it isn&rsquo;t on that invoice. Issue a new one below.
+              A charge was added after {invoiceLabel(lastSent!)} went out — it isn&rsquo;t on that invoice. Issue and send a new one.
             </span>
           ) : lastSent ? (
             <span className="ok-ink">
@@ -707,11 +754,54 @@ function TaxInvoicePane({ entry, tz }: { entry: EntryDetail; tz: string }) {
           ) : finals.length ? (
             <span className="warn-ink">Issued but not sent yet — send it from its row.</span>
           ) : (
-            <span className="warn-ink">No tax invoice yet — issue one below.</span>
+            <span className="warn-ink">No tax invoice yet — look at the draft, then issue and send it.</span>
           )
         }
       >
-        {finals.length ? <div style={{ display: "grid", gap: 4 }}>{finals.map(row)}</div> : null}
+        {finals.length ? (
+          <div style={{ display: "grid", gap: 4 }}>{finals.map(row)}</div>
+        ) : (
+          // Before the first one: the draft, with its Preview and PDF and the act beside them.
+          <div className="row-acts sm">
+            <span>
+              <b>Tax invoice</b> · draft · not issued yet
+            </span>
+            <Button
+              kind="quiet"
+              compact
+              icon="eye"
+              state={draft?.available ? "default" : "inert"}
+              title={draft?.available ? undefined : draft?.unavailableReason ?? undefined}
+              onClick={() => setPaper({ kind: "folio", entryId: entry.id, doc: "tax-invoice", label: "Tax invoice · draft", refreshKey: `${entry.updatedAt}|${index.data?.asAt ?? ""}` })}
+            >
+              Preview
+            </Button>
+            <Button
+              kind="quiet"
+              compact
+              icon="file"
+              state={draft?.available ? "default" : "inert"}
+              title={draft?.available ? undefined : draft?.unavailableReason ?? undefined}
+              onClick={() => session && openFolioDocumentPdf(session, entry.id, "tax-invoice").catch((e) => toastRefusal(e, "The PDF could not be opened"))}
+            >
+              PDF
+            </Button>
+            <Live>
+              <Button className="go" compact icon="send" onClick={() => setIssuing(true)}>
+                Issue and send
+              </Button>
+            </Live>
+          </div>
+        )}
+        {finals.length ? (
+          <Live>
+            <div className="row-acts" style={{ marginTop: 6 }}>
+              <Button className={covered ? undefined : "go"} kind={covered ? "secondary" : undefined} compact icon="send" onClick={() => setIssuing(true)}>
+                Issue and send a new one
+              </Button>
+            </div>
+          </Live>
+        ) : null}
         {finals.some((i) => i.state === "DRAFT") ? (
           <Live>
             <div className="form2" style={{ marginTop: 6 }}>
@@ -728,29 +818,27 @@ function TaxInvoicePane({ entry, tz }: { entry: EntryDetail; tz: string }) {
           </details>
         ) : null}
       </StepCard>
-      <Live>
-        <InlineWay render={(done) => <IssueTaxInvoice entry={entry} onDone={done} hasOne={!!lastSent && !lateSinceInvoice} />} />
-      </Live>
+      <IssueTaxInvoice entry={entry} open={issuing} onDone={() => setIssuing(false)} hasOne={covered} />
       <PaperDrawer paper={paper} onClose={() => setPaper(null)} />
     </>
   );
 }
 
-function IssueTaxInvoice({ entry, onDone, hasOne }: { entry: EntryDetail; onDone: () => void; hasOne: boolean }) {
+function IssueTaxInvoice({ entry, open, onDone, hasOne }: { entry: EntryDetail; open: boolean; onDone: () => void; hasOne: boolean }) {
   const booked = useBookedBy(entry);
   const issueSend = useIssueAndSend(entry, "final-v1");
   const [sendTo, setSendTo] = useSendTo(entry);
   return (
     <DsDialog
-      open
+      open={open}
       onClose={onDone}
-      title="Issue and send a new tax invoice"
+      title="Issue and send a tax invoice"
       caseLines={[<b key="p">{booked.payer}</b>, entry.id]}
       busy={issueSend.isPending}
       footer={
         <>
           <NotNow onClick={onDone} busy={issueSend.isPending} />
-          <Button icon="lock" state={issueSend.isPending ? "working" : "default"} workingLabel="Issuing…" onClick={() => issueSend.mutate(sendTo, { onSettled: onDone })}>
+          <Button className="go" icon="lock" state={issueSend.isPending ? "working" : "default"} workingLabel="Issuing…" onClick={() => issueSend.mutate(sendTo, { onSettled: onDone })}>
             Issue and send
           </Button>
         </>
@@ -1062,6 +1150,7 @@ function LateCharge({ entry, open, onClose }: { entry: EntryDetail; open: boolea
         <>
           <NotNow onClick={onClose} busy={run.isPending} />
           <Button
+            className={ok ? "go" : undefined}
             state={run.isPending ? "working" : ok ? "default" : "inert"}
             reason={ok ? undefined : amount.trim() !== "" && !amountOk ? "a charge must be more than zero" : "say what it was and the amount first"}
             workingLabel="Posting…"

@@ -22,6 +22,7 @@ import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { DeficientConditionCategory } from "@prisma/client";
 import { HOTEL_TIMEZONE } from "../../services/infrastructure/pdf-templates/legphel-document-format.js";
 import { checkBedRequestAgainstRooms, loadRoomBedOptions } from "../../services/domain/room-bed-type-service.js";
+import { lookupCallers } from "../../services/domain/caller-lookup-service.js";
 
 export const lookupsRouter = Router();
 const L1 = requireActorLevel("L1");
@@ -231,6 +232,24 @@ lookupsRouter.post("/lookups/allowed-room-counts", L1, async (req, res, next) =>
 // `limit` rides along so a caller can tell a capped list from a complete one without mirroring
 // the number: receiving exactly `limit` rows means the roster was cut. A blank `q` lists all
 // active parties, which is what lets the desk picker open as a browsable dropdown.
+/**
+ * Who has rung before with this number or email (2026-10-27): earlier enquiries' callers and the
+ * agencies' and companies' own people and numbers, each with the party they ring for and the
+ * guests they brought. `q` is a phone (4+ digits) or an email; `exclude` leaves the booking's own
+ * enquiry out. Read-only.
+ */
+lookupsRouter.get("/lookups/callers", L1, async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    res.json(
+      await lookupCallers(prisma, {
+        q: String(req.query.q ?? ""),
+        excludeInquiryId: req.query.exclude ? String(req.query.exclude) : null,
+      }),
+    );
+  } catch (e) { next(e); }
+});
+
 lookupsRouter.get("/lookups/travel-agents/search", L1, async (req, res, next) => {
   try {
     const q = String(req.query.q ?? "");

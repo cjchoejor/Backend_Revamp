@@ -20,6 +20,7 @@ import { effectiveCheckOutIso } from "@/lib/desk/workspace";
 import { fmtDate, fmtDay, money } from "@/lib/ds/format";
 import type { EntryDetail } from "@/types/api";
 import { Live, StepCard, atLeast, toastRefusal, useRefreshEntry, words } from "./kit";
+import { DateInput } from "@/components/ds/date-input";
 
 /** Every night of a stay, `YYYY-MM-DD` — calendar arithmetic only. */
 export function stayNights(checkIn?: string | null, checkOut?: string | null): string[] {
@@ -42,11 +43,9 @@ function lastStayNightYmd(checkOutIso: string) {
 export function NightsCard({
   entry,
   setNightAuditOk,
-  onMoveRoom,
 }: {
   entry: EntryDetail;
   setNightAuditOk: (v: boolean) => void;
-  onMoveRoom: () => void;
 }) {
   const { session } = useSession();
   const refresh = useRefreshEntry(entry.id);
@@ -210,6 +209,8 @@ export function NightsCard({
                         <span key={l.id}>
                           {i > 0 ? <span className="meta"> · </span> : null}
                           {l.roomId && ls.length > 1 ? <span className="meta">Room {roomNo.get(l.roomId) ?? "?"} </span> : null}
+                          {/* A night put right after a change tonight (2026-10-29) — the ledger's own line, named. */}
+                          {l.description.startsWith("Correction for") ? <span className="meta">put right </span> : null}
                           {money(l.amount, l.currency)}
                         </span>
                       ))
@@ -227,9 +228,8 @@ export function NightsCard({
             <>
               <div className="field" style={{ width: 180 }}>
                 <label>Night to post</label>
-                <input
+                <DateInput
                   className="input"
-                  type="date"
                   value={runDate}
                   max={today && lastNight && lastNight < today ? lastNight : (today ?? undefined)}
                   min={nights[0]}
@@ -264,11 +264,6 @@ export function NightsCard({
               Post the night
             </Button>
           )}
-          {hasRooms ? (
-            <Button kind="quiet" compact onClick={onMoveRoom}>
-              Move room · same category
-            </Button>
-          ) : null}
         </div>
       </Live>
     </StepCard>

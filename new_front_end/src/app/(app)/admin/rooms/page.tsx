@@ -8,6 +8,7 @@ import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
 import { useConfirm, usePrompt } from "@/components/providers/dialog-provider";
 import { AllowedBedSetups, bedSetupListWords, bedSetupWord } from "@/components/admin/bed-setup-fields";
+import { DateTimeInput } from "@/components/ds/date-input";
 
 type DeficientForm = { roomId: string; roomNumber: string; category: string; description: string; deadline: string };
 /** `usualBedType` "" = the room follows its room type's usual setup. */
@@ -299,9 +300,8 @@ export default function AdminRoomsPage() {
             </label>
             <label className="admin-muted text-xs">
               Resolution deadline (optional)
-              <input
+              <DateTimeInput
                 className="admin-input mt-1 w-full"
-                type="datetime-local"
                 value={defForm.deadline}
                 onChange={(e) => setDefForm({ ...defForm, deadline: e.target.value })}
               />

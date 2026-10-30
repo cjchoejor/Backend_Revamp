@@ -62,7 +62,8 @@ import {
 import { createAmendmentEvent } from "../application/s7-amendment-service.js";
 import { updateEntryIntakeFields } from "./s1-entry-service.js";
 import { selectOption } from "./s1-availability-service.js";
-import { hotelTodayUtc, ymdUtc } from "../../lib/stay-dates.js";
+import { hotelTodayUtc, listNightYmdsUtc, ymdUtc } from "../../lib/stay-dates.js";
+import { carryBookingRooms, readBookingRooms, sealFromBookingRooms, sealHasBookingRooms, type BookingRoom } from "../../lib/booking-rooms.js";
 import { describeGuestOverlap, findOverlappingBookingOfSameGuest } from "../../policies/04-duplicate-detection/p13-multi-booking-ack-required.js";
 import { releaseSpeculativeHold, placeSpeculativeHold } from "./s2-hold-service.js";
 import { retireSupersededReplyWaitsBestEffort } from "../../lib/reply-waits.js";
@@ -94,6 +95,15 @@ export type NegotiationAmendmentInput = {
     roomIds?: string[];
     perNight?: Array<{ date: string; roomIds: string[] }>;
     deficientAcknowledgements?: unknown;
+    /**
+     * Rooms by type (2026-10-29, operator: "adopt the same style [as Inquiry's] in all stages"): how
+     * many of each type each night, and any room the guest asked for. The system chooses the rooms —
+     * one room for each guest's whole stay, the system's own until Arrival — and moves other
+     * bookings' system-chosen rooms where that is what makes them fit.
+     */
+    byType?: { perNight: Array<{ date: string; types: Array<{ roomTypeId: string; count: number }> }>; fixedRoomIds?: string[] };
+    /** INTERNAL ONLY — the booking rooms already placed (the in-place change); never on the HTTP body. */
+    bookingRooms?: BookingRoom[];
   };
   reason: string;
   expectedVersion?: number;
@@ -154,6 +164,11 @@ function describeChange(
   before: { adults: number | null; children: number | null; rooms: number | null; roomIds: string[]; checkIn?: Date | null; checkOut?: Date | null },
   after: { adults: number | null; children: number | null; rooms: number | null; roomIds: string[]; checkIn?: Date | null; checkOut?: Date | null },
   roomNo: (id: string) => string,
+  /**
+   * Rooms by type (2026-10-29): the system's rooms are not named — the change reads by type
+   * ("1 Standard Double → 1 Deluxe Double"), and a room moved within its type is no change.
+   */
+  byType?: { typeOf: (id: string) => string },
 ): string {
   const parts: string[] = [];
   const day = (d: Date | null | undefined) => (d ? ymdUtc(d) : null);
@@ -163,6 +178,17 @@ function describeChange(
   if (before.adults !== after.adults) parts.push(`${before.adults ?? 0} adults → ${after.adults ?? 0}`);
   if (before.children !== after.children) parts.push(`${before.children ?? 0} children → ${after.children ?? 0}`);
   if (before.rooms !== after.rooms) parts.push(`${before.rooms ?? 0} rooms asked → ${after.rooms ?? 0}`);
+  if (byType) {
+    const words = (ids: string[]) => {
+      const n = new Map<string, number>();
+      for (const id of ids) n.set(byType.typeOf(id), (n.get(byType.typeOf(id)) ?? 0) + 1);
+      return [...n.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([t, c]) => `${c} ${t}`).join(" and ");
+    };
+    const was = words(before.roomIds);
+    const now = words(after.roomIds);
+    if (was !== now) parts.push(`${was || "no rooms"} → ${now || "no rooms"}`);
+    return parts.length > 0 ? parts.join(" · ") : "no change";
+  }
   const dropped = before.roomIds.filter((id) => !after.roomIds.includes(id));
   const added = after.roomIds.filter((id) => !before.roomIds.includes(id));
   if (dropped.length > 0) parts.push(`dropped ${dropped.map(roomNo).join(", ")}`);
@@ -196,7 +222,7 @@ function parseStayDay(value: string, what: string): Date {
  * another live stay of the same enquiry (a return stay is the nights AFTER the guest comes back;
  * a shared night means the same stay twice).
  */
-async function checkNewDates(
+export async function checkNewDates(
   prisma: PrismaClient,
   entry: { id: string; inquiryId: string; checkInDate: Date | null; checkOutDate: Date | null },
   dates: NegotiationAmendmentInput["dates"],
@@ -307,13 +333,34 @@ async function amendNegotiationConfigurationInner(
   }
 
   /**
+   * Rooms by type: the system chooses them now, against the house as it stands, and the change goes
+   * on with the rooms it chose (2026-10-29). Placed, not picked: the plan is the check.
+   */
+  let byTypePlan: import("./quiet-rooms-service.js").SealByTypeAnswer | null = null;
+  if (input.rooms?.byType && !input.rooms.bookingRooms) {
+    if (!stayCheckIn || !stayCheckOut) throw new ValidationError("The booking has no stay dates yet");
+    const { planRoomsByTypeForStay } = await import("./quiet-rooms-service.js");
+    byTypePlan = await planRoomsByTypeForStay(prisma, entryId, {
+      checkInDate: ymdUtc(stayCheckIn),
+      checkOutDate: ymdUtc(stayCheckOut),
+      numberOfRooms: input.party?.numberOfRooms ?? entry.numberOfRooms ?? 1,
+      perNight: input.rooms.byType.perNight,
+      fixedRoomIds: input.rooms.byType.fixedRoomIds,
+    });
+    if (!byTypePlan.fits) throw new ValidationError(byTypePlan.refusals.join(" · ") || "Those rooms do not fit the stay.");
+    input = { ...input, rooms: { ...input.rooms, roomId: undefined, roomIds: undefined, perNight: byTypePlan.perNight } };
+  }
+  const placedRooms: BookingRoom[] | null = input.rooms?.bookingRooms ?? byTypePlan?.bookingRooms ?? null;
+
+  /**
    * Prove the rooms hold for the stay AS IT WILL STAND before anything is written. The party and
    * the dates are written first (the per-night check reads the room count and the nights), and a
    * pick refused after that would leave the booking on new dates with rooms sealed for the old
-   * ones — so the same `selectOption`, with nothing written, answers first.
+   * ones — so the same `selectOption`, with nothing written, answers first. Rooms placed by type
+   * were checked by their plan.
    */
-  if (input.rooms) {
-    const { configurationId, ...picks } = input.rooms;
+  if (input.rooms && !placedRooms) {
+    const { configurationId, byType: _byType, bookingRooms: _placed, ...picks } = input.rooms;
     await selectOption(prisma, configurationId, actor.actorId, picks, {
       validateOnly: true,
       stay: {
@@ -412,8 +459,55 @@ async function amendNegotiationConfigurationInner(
   let roomsChanged = false;
   let newRoomIds = priorRoomIds;
   if (input.rooms) {
-    const { configurationId, ...picks } = input.rooms;
-    const sealed = await selectOption(prisma, configurationId, actor.actorId, picks);
+    const { configurationId, byType: _byType, bookingRooms: _placed, ...picks } = input.rooms;
+    // The rooms the system chose stay its choice when the desk leaves them ticked (2026-10-28); a
+    // room the desk ticks anew is the desk's choice and fixed.
+    let bookingRooms: ReturnType<typeof carryBookingRooms> = null;
+    if (placedRooms) {
+      // Picked by type: the other bookings' rooms it moves are moved first, then its own sealed.
+      if (byTypePlan) {
+        const { applyPlanMoves } = await import("./quiet-rooms-service.js");
+        await applyPlanMoves(prisma, byTypePlan, actor, entryId);
+      }
+      bookingRooms = sealFromBookingRooms(placedRooms).bookingRooms;
+    } else if (sealHasBookingRooms(sealedBefore?.optionSelected)) {
+      const picture = picks.perNight
+        ? picks.perNight.map((n) => ({ date: n.date.slice(0, 10), roomIds: n.roomIds }))
+        : stayCheckIn && stayCheckOut
+          ? listNightYmdsUtc(stayCheckIn, stayCheckOut).map((date) => ({ date, roomIds: picks.roomIds ?? (picks.roomId ? [picks.roomId] : []) }))
+          : [];
+      const ids = [...new Set(picture.flatMap((n) => n.roomIds))];
+      const typeOf = new Map((await prisma.room.findMany({ where: { id: { in: ids } }, select: { id: true, roomTypeId: true } })).map((r) => [r.id, r.roomTypeId] as const));
+      bookingRooms = carryBookingRooms(
+        readBookingRooms(sealedBefore!.optionSelected, { checkIn: entry.checkInDate, checkOut: entry.checkOutDate }, (id) => typeOf.get(id)),
+        picture,
+        { roomTypeOf: (id) => typeOf.get(id) },
+      );
+    }
+    const { readBedsBefore, carryBedsToNewRooms } = await import("./entry-bed-plan-service.js");
+    const bedsBefore = await readBedsBefore(prisma, entryId);
+    const sealed = await selectOption(
+      prisma,
+      configurationId,
+      actor.actorId,
+      picks,
+      bookingRooms ? { bookingRooms, ...(placedRooms ? { skipAvailability: true } : {}) } : undefined,
+    );
+    // Each booking room keeps the bed it was to be made up as, in the room it now has (2026-10-29).
+    if (bookingRooms && sealHasBookingRooms(sealedBefore?.optionSelected)) {
+      const typeOfAny = () => "x";
+      const old = readBookingRooms(sealedBefore!.optionSelected, { checkIn: entry.checkInDate, checkOut: entry.checkOutDate }, typeOfAny);
+      const pairs: Array<[string, string]> = [];
+      for (const br of bookingRooms) {
+        const was = old.find((o) => o.key === br.key);
+        if (!was) continue;
+        for (const n of br.nights) {
+          const before = was.nights.find((w) => w.date === n.date)?.roomId ?? was.nights[0]?.roomId;
+          if (before && n.roomId && before !== n.roomId) pairs.push([before, n.roomId]);
+        }
+      }
+      await carryBedsToNewRooms(prisma, entryId, bedsBefore, pairs);
+    }
     newRoomIds = readOptionSelected(sealed!.optionSelected).distinctRoomIds;
     const sameSet =
       newRoomIds.length === priorRoomIds.length && newRoomIds.every((id) => priorRoomIds.includes(id));
@@ -427,9 +521,10 @@ async function amendNegotiationConfigurationInner(
   // ---- consequences ----------------------------------------------------------------
   const rooms = await prisma.room.findMany({
     where: { id: { in: [...new Set([...priorRoomIds, ...newRoomIds])] } },
-    select: { id: true, roomNumber: true },
+    select: { id: true, roomNumber: true, roomType: { select: { name: true } } },
   });
   const roomNo = (id: string) => rooms.find((r) => r.id === id)?.roomNumber ?? id.slice(0, 6);
+  const typeNames = new Map(rooms.map((r) => [r.id, r.roomType?.name ?? "room"] as const));
 
   /**
    * A quotation priced a party and a room plan that no longer stand, so it is no longer an
@@ -628,6 +723,7 @@ async function amendNegotiationConfigurationInner(
       checkOut: after?.checkOutDate ?? before.checkOut,
     },
     roomNo,
+    placedRooms ? { typeOf: (id) => typeNames.get(id) ?? "room" } : undefined,
   );
 
   /**

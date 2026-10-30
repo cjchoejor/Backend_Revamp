@@ -479,9 +479,11 @@ export type RoomAssignmentSummary = {
   keyIssuedBy?: string | null;
   keyReturnedAt?: string | null;
   keyReturnedBy?: string | null;
-  /** Declared lost at the S8 key return — no longer out with the guest. */
+  /** Declared lost — at Stay or the S8 key return — and no longer out with the guest. */
   keyLostAt?: string | null;
   keyLostBy?: string | null;
+  /** What happened to it, asked room by room (2026-10-30). */
+  keyLostNote?: string | null;
   room?: {
     id: string;
     roomNumber: string;
@@ -613,13 +615,6 @@ export type EntryDetail = EntryListItem & {
   holdExpiryOverrideSetBy?: string | null;
   holdExpiryOverrideSetAt?: string | null;
   reservation?: ReservationSummary | null;
-  /**
-   * The confirmation vouchers actually dispatched to the guest, newest first. This — not
-   * `reservation.confirmationVoucherSent` — says whether the guest has their confirmation:
-   * that flag is written once inside the create of an immutable row, so it means "confirmed
-   * by this system" and never moves again.
-   */
-  communications?: { id: string; createdAt: string; acknowledgementStatus: string | null }[];
   /** Every confirmation's voucher, newest first — each re-confirmation is a new voucher (2026-10-13). */
   reservations?: Array<{
     id: string;

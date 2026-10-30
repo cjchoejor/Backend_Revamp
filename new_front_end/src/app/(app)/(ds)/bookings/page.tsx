@@ -19,6 +19,7 @@ import type { DeskListRow, DeskMoneyRow, DeskTimerRow } from "@/lib/api/desk";
 import { fmtDate, fmtRange, fmtStamp, money, nightsOf, plural, weekdayOf } from "@/lib/ds/format";
 import { bookerOfRow, channelWord, factsFromRow, guestNameOf, isNamed, rowNameOf, standingOf } from "@/lib/ds/status";
 import { STEP_NAMES, stepNoOfStage } from "@/lib/ds/steps";
+import { DateInput } from "@/components/ds/date-input";
 
 const GROUPS = ["Upcoming", "In-house", "Departed", "All"] as const;
 const PAGE = 50;
@@ -344,7 +345,7 @@ function BookingsScreen() {
             <h2>Bookings</h2>
             <div className="meta">
               {rows.length.toLocaleString("en-IN")} shown
-              {!q && !from && !to && !view ? " · the last twelve months and everything ahead · older through Date… or the search" : ""} · sorted by{" "}
+              {!q && !from && !to && !view ? " · the last twelve months and everything ahead · older through Date or the search" : ""} · sorted by{" "}
               <b>{sortWords(sort)}</b>
               {chosenSort ? "" : " (the usual for this list)"} · click a row to preview, double-click to open
             </div>
@@ -359,17 +360,17 @@ function BookingsScreen() {
           <details className="calwrap" ref={calRef}>
             <summary className="btn btn-secondary compact">
               <Icon name="clock" />
-              {from || to ? (from && to && from !== to ? fmtRange(from, to) : `On ${fmtDate(from || to)}`) : "Date…"}
+              {from || to ? (from && to && from !== to ? fmtRange(from, to) : `On ${fmtDate(from || to)}`) : "Date"}
             </summary>
-            <div className="pop-cal" style={{ width: 320 }}>
+            <div className="pop-cal" style={{ width: 400 }}>
               <div className="cal-range">
                 <label className="cal-box">
                   <span className="meta">From</span>
-                  <input className="input" type="date" value={draftFrom} onChange={(e) => setDraftFrom(e.target.value)} />
+                  <DateInput className="input" value={draftFrom} onChange={(e) => setDraftFrom(e.target.value)} />
                 </label>
                 <label className="cal-box">
                   <span className="meta">To</span>
-                  <input className="input" type="date" value={draftTo} min={draftFrom || undefined} onChange={(e) => setDraftTo(e.target.value)} />
+                  <DateInput className="input" value={draftTo} min={draftFrom || undefined} onChange={(e) => setDraftTo(e.target.value)} />
                 </label>
                 <div className="row-acts" style={{ gridColumn: "1 / -1" }}>
                   <Button

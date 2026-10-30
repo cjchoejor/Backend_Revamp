@@ -30,31 +30,36 @@ import { useHotelDay } from "@/hooks/use-hotel-day";
 import { usePageTitle } from "@/hooks/use-page-title";
 import { getAllowedRoomCounts, getChildPolicy } from "@/lib/api/child-policy";
 import { createEntry, getEntry } from "@/lib/api/entries";
-import { guestFullName, searchGuestProfiles, type GuestProfileSummary } from "@/lib/api/guest-profiles";
 import {
   captureCorporateContext,
   createInquiry,
   listRatePackagesLookup,
+  lookupCallers,
+  type CallerMatch,
   type CoordinatorContact,
   type LookupPartyMatch,
 } from "@/lib/api/inquiries";
 import { checkBedRequest, listRooms } from "@/lib/api/rooms";
 import { bookingHref } from "@/components/ds/ui";
 import { fmtRange, money, plural } from "@/lib/ds/format";
-import { BOUNDARY_STEPS, PHASES, STEP_NAMES, STEP_NEEDS } from "@/lib/ds/steps";
+import { StayDates } from "@/components/ds/stay-dates";
+import { STEP_NAMES, STEP_NEEDS } from "@/lib/ds/steps";
 import type { EntryDetail } from "@/types/api";
-import { Choice, FlowTodo, StepCanvas, StepCard, StepFlow, anchorFor, atLeast, numberFlow, revealCard, toastRefusal } from "./kit";
+import { Choice, FlowProgress, StepCanvas, StepCard, StepFlow, anchorFor, atLeast, numberFlow, revealCard, toastRefusal, useFlowStanding } from "./kit";
+import { useMeasuredVar } from "@/hooks/use-stage-head";
 import { ApiError } from "@/lib/api/client";
 import {
   BED_ORDER,
   CHANNEL_OPTIONS,
   ChildChargeNote,
-  GuestLine,
+  CallerLine,
   PHONE_CODES,
   PartyContacts,
   PartySearch,
   PhoneInput,
   PickList,
+  ReqMark,
+  partyPersonOf,
   USE_TYPES,
   addNightsIso,
   bedWord,
@@ -62,20 +67,28 @@ import {
   defaultContactFor,
   diffNightsIso,
   digits,
+  joinPhone,
+  moreRoomsNeedGuests,
   splitStoredPhone,
   type ChannelKey,
   type GateLine,
   type UseTypeKey,
 } from "./new-inquiry-parts";
 import { Help } from "@/components/ds/help";
-import { FoldingSide, useSideFolded } from "@/components/ds/workspace/side-panel";
+import { DateInput } from "@/components/ds/date-input";
 
-/**
- * The prototype's final pass draws this screen without the journey rail (`ws-body norail`, and
- * the generated stylesheet names "the no-rail new inquiry"). The rail below is kept for the day
- * that changes: step 1 current, the rest unreachable.
- */
-const WITH_RAIL = false;
+// The sections the intake asks, as the step's line names them; the house and Wrap up are asked on
+// the booking once the lead is kept.
+const INTAKE_SECTIONS: Record<string, string> = { caller: "The caller", asking: "Who is asking", stay: "The stay" };
+// The booking file's tabs, as the booking shows them; only the first has anything before the lead is kept.
+const INTAKE_FILE_TABS: ReadonlyArray<[string, string]> = [
+  ["Booking", "Booking"],
+  ["Charges & payments", "Charges"],
+  ["Guest requests", "Requests"],
+  ["Notes", "Notes"],
+  ["Documents", "Papers"],
+  ["History", "History"],
+];
 
 // The guest card is a flow card, so its anchor is the flow's (the focus helper below reads it).
 const GUEST_CARD_ID = anchorFor("caller");
@@ -102,7 +115,8 @@ export function NewInquiryCanvas() {
   const { session } = useSession();
   // The hotel's day, from the server — never the machine's. Null until it answers.
   const today = useHotelDay()?.today ?? null;
-  const [sideFolded, setSideFolded] = useSideFolded();
+  // The head, measured onto the screen so a card scrolled to lands below it.
+  const headRef = useMeasuredVar("--ws-head-h");
 
   /* ---------------------------------------------------------------- who is asking */
   // No default: the operator says how the booking reached us (the old form made it the first pick).
@@ -130,7 +144,21 @@ export function NewInquiryCanvas() {
   // Wrap up; a phone or an email cannot (an OTA booking needs neither).
   const [callerTitle, setCallerTitle] = useState("");
   const [onWhatsApp, setOnWhatsApp] = useState<boolean | null>(null);
-  const [selectedGuest, setSelectedGuest] = useState<GuestProfileSummary | null>(null);
+  // A caller found in the caller list (2026-10-27) — never a guest: the guest staying is named at
+  // Wrap up. `beforePick` is the form as it stood, so "Not this caller" puts it back.
+  const [selectedCaller, setSelectedCaller] = useState<CallerMatch | null>(null);
+  const beforePick = useRef<{
+    callerTitle: string;
+    firstName: string;
+    lastName: string;
+    phoneCode: string;
+    phoneNumber: string;
+    email: string;
+    onWhatsApp: boolean | null;
+    channelKey: ChannelKey | null;
+    party: LookupPartyMatch | null;
+    partyContact: CoordinatorContact | null;
+  } | null>(null);
   // Who leads the party on the day. Blank → the agency's contact person, else the guest.
   const [arrivingName, setArrivingName] = useState("");
   const [arrivingPhone, setArrivingPhone] = useState("");
@@ -171,14 +199,31 @@ export function NewInquiryCanvas() {
     focusNext.current = "who";
   };
 
+  // A caller picked from the list who rings for an agency or a company brings that party and
+  // themselves as its contact (2026-10-27) — held here across the two effects below, which
+  // otherwise clear the party on a change of kind and reset the contact on a change of party.
+  const pendingParty = useRef<{ party: LookupPartyMatch; contact: CoordinatorContact | null } | null>(null);
+
   // A party belongs to one kind — a travel agent must never ride into a company booking.
   useEffect(() => {
+    const p = pendingParty.current;
+    if (p && partyKind) {
+      setParty(p.party);
+      return;
+    }
     setParty(null);
     setPartyContact(null);
   }, [partyKind]);
 
-  // A new party brings its own contact: the first person on file, else the party's own details.
+  // A new party brings its own contact: the first person on file, else the party's own details —
+  // or the caller, when the caller's pick brought the party.
   useEffect(() => {
+    const p = pendingParty.current;
+    if (p && party && p.party.id === party.id) {
+      pendingParty.current = null;
+      setPartyContact(p.contact ?? defaultContactFor(party));
+      return;
+    }
     setPartyContact(party ? defaultContactFor(party) : null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [party?.id]);
@@ -384,37 +429,93 @@ export function NewInquiryCanvas() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bedSum, allowedRooms]);
 
-  /* ---------------------------------------------------------------- guest lookups */
-  // Typing a known number surfaces the guest already on file.
+  /* ---------------------------------------------------------------- the caller list */
+  // Typing a number (or, with no number, an email) lists who has rung with it before — earlier
+  // callers and the agencies' and companies' people — never guests (2026-10-27, operator).
   const phoneDigits = phoneNumber.replace(/\D/g, "");
-  const [phoneTerm, setPhoneTerm] = useState("");
+  const callerQ = phoneDigits.length >= 4 ? phoneDigits : email.trim().includes("@") ? email.trim() : "";
+  const [callerTerm, setCallerTerm] = useState("");
   useEffect(() => {
-    const t = setTimeout(() => setPhoneTerm(phoneDigits), 350);
+    const t = setTimeout(() => setCallerTerm(callerQ), 350);
     return () => clearTimeout(t);
-  }, [phoneDigits]);
-  const phoneLookupOn = !selectedGuest && phoneTerm.length >= 4;
-  const phoneMatch = useQuery({
-    queryKey: ["desk-guest-phone", phoneTerm],
-    queryFn: () => searchGuestProfiles(session!, phoneTerm, 5),
-    enabled: !!session && phoneLookupOn,
+  }, [callerQ]);
+  const callerLookupOn = !selectedCaller && callerTerm.length >= 4;
+  const callerQuery = useQuery({
+    queryKey: ["desk-callers", callerTerm],
+    queryFn: () => lookupCallers(session!, callerTerm),
+    enabled: !!session && callerLookupOn,
   });
-  const phoneMatches = phoneLookupOn ? (phoneMatch.data?.items ?? []) : [];
+  const callerMatches = callerLookupOn ? (callerQuery.data?.matches ?? []) : [];
 
-  const adoptGuest = (g: GuestProfileSummary) => {
-    setSelectedGuest(g);
-    setFirstName(g.firstName);
-    setLastName(g.lastName);
-    setEmail(g.email ?? "");
-    // The stored number replaces the fragment typed to find them.
-    if (g.phone) {
-      const { code, number } = splitStoredPhone(g.phone);
-      setPhoneCode(code);
+  const adoptCaller = (m: CallerMatch) => {
+    beforePick.current = { callerTitle, firstName, lastName, phoneCode, phoneNumber, email, onWhatsApp, channelKey, party, partyContact };
+    setSelectedCaller(m);
+    // An agency's or a company's caller is the party itself (2026-10-27, operator: "in the first
+    // name it should be naming it as Bhutan INC, because that's the caller … the contact person is
+    // filled below in Who is asking").
+    const person = partyPersonOf(m);
+    setCallerTitle(m.party ? "" : (m.title ?? ""));
+    setFirstName(m.party ? m.party.displayName : (m.firstName ?? ""));
+    setLastName(m.party ? "" : (m.lastName ?? ""));
+    const mail = m.party ? (m.party.contactEmail ?? m.email) : m.email;
+    if (mail) setEmail(mail);
+    if (m.onWhatsApp != null) setOnWhatsApp(m.onWhatsApp);
+    // The number on record replaces the fragment typed to find them; one kept without its dialling
+    // code keeps the code the desk had.
+    if (m.phone) {
+      const { code, number } = splitStoredPhone(m.phone);
+      setPhoneCode(code || phoneCode);
       setPhoneNumber(number);
     }
-    toast.success(`${guestFullName(g)} is on file — taken as the guest staying; Wrap up can change that`);
+    // Ringing for an agency or a company: "Who is asking" is that party, with the caller as its
+    // contact person.
+    if (m.party) {
+      // The person at the party; for its own line, the first person on its list.
+      const p = { party: m.party, contact: person ?? defaultContactFor(m.party) };
+      const key: ChannelKey = m.party.kind === "TRAVEL_AGENT" ? "AGENT" : "CORPORATE";
+      if (partyKind === m.party.kind) {
+        if (party?.id === m.party.id) setPartyContact(p.contact);
+        else {
+          pendingParty.current = p;
+          setParty(m.party);
+        }
+      } else {
+        pendingParty.current = p;
+        setChannelKey(key);
+      }
+      toast.success(`${m.kind === "TRAVEL_AGENT" ? "Travel agent" : "Company"} caller — Who is asking is filled in as ${m.party.displayName}`);
+    } else {
+      toast.success("The caller is filled in from the last time they rang");
+    }
+  };
+  const notThisCaller = () => {
+    const b = beforePick.current;
+    setSelectedCaller(null);
+    if (!b) return;
+    beforePick.current = null;
+    setCallerTitle(b.callerTitle);
+    setFirstName(b.firstName);
+    setLastName(b.lastName);
+    setPhoneCode(b.phoneCode);
+    setPhoneNumber(b.phoneNumber);
+    setEmail(b.email);
+    setOnWhatsApp(b.onWhatsApp);
+    // What the pick filled in "Who is asking" goes back too — through the same hand-over the pick
+    // used, since a change of kind would otherwise clear the party being put back.
+    if (b.channelKey !== channelKey) {
+      pendingParty.current = b.party ? { party: b.party, contact: b.partyContact } : null;
+      setChannelKey(b.channelKey);
+    } else if (b.party && b.party.id !== party?.id) {
+      pendingParty.current = { party: b.party, contact: b.partyContact };
+      setParty(b.party);
+    } else {
+      pendingParty.current = null;
+      setParty(b.party);
+      setPartyContact(b.partyContact);
+    }
   };
 
-  const fullPhone = phoneCode && phoneNumber.trim() ? `${phoneCode}${phoneNumber.trim()}` : "";
+  const fullPhone = phoneCode ? joinPhone(phoneCode, phoneNumber) : "";
   // The caller's name (title left off — it reads as a salutation, not a name).
   const typedGuestName = `${firstName.trim()} ${lastName.trim()}`.trim();
   // A typed email the backend would refuse is a blocker here, not a "bad request" after the click.
@@ -491,9 +592,9 @@ export function NewInquiryCanvas() {
       const agesOut = c > 0 && parsedAges.length === c ? parsedAges : undefined;
 
       if (!channel) throw new Error("Say how they came in first");
-      // The guest staying is named at Wrap up (2026-10-12) — unless the caller's number found a
-      // guest already on file, who is taken as the guest until Wrap up says otherwise.
-      const guestProfileId = selectedGuest?.id ?? null;
+      // The guest staying is named at Wrap up (2026-10-12). The caller list finds callers, never a
+      // guest (2026-10-27), so nothing names one here.
+      const guestProfileId: string | null = null;
       const inquiryBody = {
         guestProfileId,
         caller: {
@@ -559,7 +660,8 @@ export function NewInquiryCanvas() {
       if (session) void queryClient.prefetchQuery({ queryKey: ["entry", id], queryFn: () => getEntry(session, id) });
       toast.success(`${id} kept · the lead is on record`);
       setNavigating(true);
-      router.push(fromChart.room ? `${bookingHref(id, 1)}&room=${encodeURIComponent(fromChart.room)}` : bookingHref(id));
+      // The house is asked as the booking opens — no second press of Ask the house.
+      router.push(fromChart.room ? `${bookingHref(id, 1)}&room=${encodeURIComponent(fromChart.room)}` : `${bookingHref(id, 1)}&ask=1`);
     },
     onError: (e) => {
       const body = e instanceof ApiError ? e.body : undefined;
@@ -617,57 +719,42 @@ export function NewInquiryCanvas() {
   const saveReason = saveBlockers.length ? `first: ${saveBlockers.join(" · ")}` : null;
 
   /* ---------------------------------------------------------------- render */
+  // The stage-template layout, as the booking's Inquiry step has it (2026-10-27, operator: "I
+  // refreshed and it turned back to the old UI" — this screen still had the side panel): the clocks
+  // and the facts in the header, the journey and the sections as lines under it, the sections on the
+  // left, the booking file on the right, and where the step stands in the bar at the foot.
+  const callerName = `${callerTitle ? `${callerTitle} ` : ""}${typedGuestName}`.trim();
+  const useTypeWord = useType ? (USE_TYPES.find(([k]) => k === useType)?.[1] ?? useType) : null;
   return (
-    <div className="ws">
-      <div className="ws-head">
-        <div>
-          <Link href="/bookings" className="backlink">
-            <Icon name="chev" /> Back to Bookings
-          </Link>
+    <StepFlow items={flowItems} on fold="on-move" confirm>
+    <div className="ws ws-top ws-cols theme-blue">
+      {/* Two columns from the topbar down, as on the booking (2026-10-27): the work on the left with
+          its head and its bar, the file on the right with the stay's facts above its tabs. */}
+      <div className="ws-main">
+      <div className="ws-topstick" ref={headRef}>
+        <div className="ws-head">
+          {/* One line, as on the booking: the enquiry's number comes once the lead is kept. */}
           <div className="who">
             <h2 className="ink-2">
               New inquiry
               <Help label="About a new inquiry">There is no other way to see whether rooms are free: looking is recording. The lead is kept — taken or not.</Help>
             </h2>
+            <span className="refno" title="The enquiry's number is given once the lead is kept">
+              <b className="ink-3">not kept yet</b>
+            </span>
           </div>
         </div>
-        <div className="total">
-          <div className="figure money" style={{ cursor: "default" }}>
-            <span className="dash">—</span>
-          </div>
-          <div className="kind">{datesSet ? "no total until the house is asked" : "no dates, no total"}</div>
+        <div className="stagebar">
+          <h3>
+            1 · {STEP_NAMES[0]}
+            <Help label={`What ${STEP_NAMES[0]} is for`}>{STEP_NEEDS[1]}</Help>
+          </h3>
+          <FlowProgress names={INTAKE_SECTIONS} onGo={goToCard} />
         </div>
       </div>
 
-      <div className={`ws-body${WITH_RAIL ? "" : " norail"}${sideFolded ? " side-folded" : ""}`}>
-        {WITH_RAIL ? (
-          <nav className="rail" aria-label="Journey">
-            {PHASES.map(([phase, steps]) => (
-              <div key={phase} style={{ display: "contents" }}>
-                <div className={`phase${steps.includes(1) ? " current" : ""}`}>{phase}</div>
-                {steps.map((n) => (
-                  <span key={n} className={["step", n === 1 ? "current" : "unreachable", BOUNDARY_STEPS.has(n) ? "boundary" : ""].filter(Boolean).join(" ")}>
-                    <span className="n">{n}</span>
-                    <span>{STEP_NAMES[n - 1]}</span>
-                  </span>
-                ))}
-              </div>
-            ))}
-            <div className="legend">
-              <span>
-                <i />
-                cannot be undone
-              </span>
-            </div>
-          </nav>
-        ) : null}
-
         <div className="canvas">
-          <h3>
-            {STEP_NAMES[0]} <span className="need">{STEP_NEEDS[1]}</span>
-          </h3>
           <StepCanvas past={false}>
-            <StepFlow items={flowItems} on fold="on-move">
               <div className="stack">
                 {fromChart.room || fromChart.checkIn ? (
                   <p className="chart-from">
@@ -691,7 +778,7 @@ export function NewInquiryCanvas() {
                         {fullPhone ? <> · {fullPhone}{onWhatsApp === true ? " · on WhatsApp" : onWhatsApp === false ? " · not on WhatsApp" : ""}</> : null}
                         {email.trim() ? <> · {email.trim()}</> : null}
                         {isOta && !fullPhone && !email.trim() ? <> · OTA booking</> : null}
-                        {selectedGuest ? <> · on file as {guestFullName(selectedGuest)}</> : null}
+                        {selectedCaller?.party ? <> · for {selectedCaller.party.displayName}</> : selectedCaller ? <> · rang before</> : null}
                       </>
                     )
                   }
@@ -713,21 +800,23 @@ export function NewInquiryCanvas() {
                       <div className="field">
                         <label>
                           Phone
-                          <Help label="About the phone">Typing it finds a guest already on file.</Help>
+                          {!isOta ? <ReqMark /> : null}
+                          <Help label="About the phone">Typing it finds who has rung with it before — a caller, or an agency&rsquo;s or a company&rsquo;s person.</Help>
                         </label>
                         <PhoneInput code={phoneCode} setCode={setPhoneCode} number={phoneNumber} setNumber={setPhoneNumber} />
-                        {!callerReachable ? <span className="hint warn-ink">a phone or an email is needed to start</span> : null}
+                        {!callerReachable ? <span className="hint stop-ink">a phone or an email is needed to start</span> : null}
                       </div>
                       <div className="field">
                         <label>
                           Email
-                          <Help label="About the email">Optional when there is a phone.</Help>
+                          {!isOta ? <ReqMark /> : null}
+                          <Help label="About the email">Optional when there is a phone. With no phone, typing it finds who has rung with it before.</Help>
                         </label>
                         <input className="input" type="email" value={email} placeholder="name@example.com" onChange={(e) => setEmail(e.target.value)} />
                         {emailBad ? (
                           <span className="hint stop-ink">that does not read as an email address</span>
                         ) : !callerReachable ? (
-                          <span className="hint warn-ink">or the email</span>
+                          <span className="hint stop-ink">or the email</span>
                         ) : null}
                       </div>
                       {fullPhone ? (
@@ -747,24 +836,28 @@ export function NewInquiryCanvas() {
                           {onWhatsApp === null ? <span className="hint warn-ink">ask them</span> : null}
                         </div>
                       ) : null}
-                      {phoneMatches.length > 0 ? (
+                      {callerMatches.length > 0 ? (
                         <div className="wide">
                           <PickList
-                            head={`${phoneMatches.length === 1 ? "A guest" : "Guests"} on file with this number`}
-                            rows={phoneMatches.map((g) => ({ key: g.id, main: <GuestLine guest={g} />, onPick: () => adoptGuest(g) }))}
+                            head={`${callerMatches.length === 1 ? "Someone has" : "People have"} rung with this ${callerTerm.includes("@") ? "email" : "number"} before`}
+                            rows={callerMatches.map((m) => ({ key: m.key, main: <CallerLine caller={m} />, onPick: () => adoptCaller(m) }))}
                           />
                         </div>
                       ) : null}
-                      {selectedGuest ? (
+                      {selectedCaller ? (
                         <div className="wide bind bound" style={{ display: "grid", gap: 6 }}>
-                          <span className="sm">
-                            <Icon name="check" /> <GuestLine guest={selectedGuest} />
+                          <span className="sm" style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
+                            <Icon name="check" /> <CallerLine caller={selectedCaller} />
                           </span>
                           <div className="row-acts">
-                            <span className="meta">on file — taken as the guest staying</span>
-                            <Help label="About the guest on file">Wrap up can name someone else.</Help>
-                            <Button kind="quiet" compact onClick={() => setSelectedGuest(null)}>
-                              Not this guest
+                            <span className="meta">
+                              {selectedCaller.party ? `${selectedCaller.party.displayName} is the caller — its contact person is under Who is asking` : "the caller, as they rang before"}
+                            </span>
+                            <Help label="About the caller found">
+                              Only the caller is filled in. The guest staying is named at Wrap up, where the guests this caller brought before come first.
+                            </Help>
+                            <Button kind="quiet" compact onClick={notThisCaller}>
+                              Not this caller
                             </Button>
                           </div>
                         </div>
@@ -963,7 +1056,8 @@ export function NewInquiryCanvas() {
                 <StepCard
                   title="The stay"
                   flow="stay"
-                  flowAfter="caller"
+                  flowAfter="asking"
+                  flowAfterOnly
                   doneAction={{
                     label: primaryLabel,
                     onClick: () => run.mutate(),
@@ -984,9 +1078,8 @@ export function NewInquiryCanvas() {
                   <div className="form3">
                     <div className="field">
                       <label>Check-in</label>
-                      <input
+                      <DateInput
                         className={`input${checkInPast ? " invalid" : ""}`}
-                        type="date"
                         value={checkIn}
                         min={today ?? undefined}
                         onChange={(e) => setCheckIn(e.target.value)}
@@ -1016,9 +1109,8 @@ export function NewInquiryCanvas() {
                     </div>
                     <div className="field">
                       <label>Check-out</label>
-                      <input
+                      <DateInput
                         className="input"
-                        type="date"
                         value={checkOut}
                         min={checkOutMin}
                         onChange={(e) => onCheckOut(e.target.value)}
@@ -1074,6 +1166,14 @@ export function NewInquiryCanvas() {
                             </option>
                           ))
                         )}
+                        {/* The next counts, shut, saying what they need (2026-10-28). */}
+                        {envelope && allowedRooms.length
+                          ? moreRoomsNeedGuests(roomRange.max, envelope.hotelRoomCount, childMax + 1).map((o) => (
+                              <option key={o.n} value={String(o.n)} disabled>
+                                {o.label}
+                              </option>
+                            ))
+                          : null}
                       </select>
                       {exceedsHotel && envelope ? (
                         <span className="error">
@@ -1275,23 +1375,10 @@ export function NewInquiryCanvas() {
                   </div>
                 </StepCard>
               </div>
-            </StepFlow>
           </StepCanvas>
-        </div>
-
-        <FoldingSide folded={sideFolded} onFold={setSideFolded} clocks={[]} todo={flowItems} also={flowAlso}>
-          <div>
-            <h4>Timers</h4>
-            <div className="list">
-              <span className="meta">nothing running</span>
-            </div>
-          </div>
-          <FlowTodo items={flowItems} also={flowAlso} onGo={goToCard} />
-        </FoldingSide>
-      </div>
 
       {dupe ? (
-        <section className="card" style={{ margin: "0 20px 12px" }}>
+        <section className="card">
           <h4>This guest already holds a booking over these nights</h4>
           <p className="sm" style={{ marginTop: 6 }}>
             {dupe.entryId ? <Link href={`/bookings/${dupe.entryId}`}>{dupe.entryId}</Link> : "Another booking"} overlaps these dates for the
@@ -1327,29 +1414,163 @@ export function NewInquiryCanvas() {
         </section>
       ) : null}
 
-      <div className="gatebar">
-        {/* The list is in the side panel, numbered; the bar says what is next and takes you to it. */}
-        <div className="gate">
-          {nextUp ? (
-            <button type="button" className="item unmet" onClick={() => goToCard(nextUp.card)}>
-              <Icon name="circle" />
-              <span>
-                Next · <b>{nextUp.n}</b> {nextUp.label}
-              </span>
-            </button>
-          ) : flowAlso.some((p) => !p.met) ? (
-            <div className="item unmet">
-              <Icon name="circle" />
-              <span>{flowAlso.find((p) => !p.met)?.label}</span>
-            </div>
-          ) : (
-            <button type="button" className="item met" onClick={() => goToCard("stay")}>
-              <Icon name="check" />
-              <span>everything the inquiry needs is here — start it from The stay</span>
-            </button>
-          )}
+          {/* What the start checks, in one place — each section, then what the system does on save. */}
+          <IntakeBeforeMove items={flowItems} also={flowAlso} onGo={goToCard} startLabel={primaryLabel} />
         </div>
+
+      {/* No bar at the foot (2026-10-28): what is next is the step line's "now: …" and its list. */}
+      </div>
+
+        {/* The booking file: nothing is kept yet, so it shows what has been put in so far — the
+            stay's facts at its head, as on the booking. */}
+        <aside className="file" aria-label="Booking file">
+          <div className="fhead">
+            <div className="fclocks">
+              <span className="meta">No clock running · the inquiry&rsquo;s clock starts once the lead is kept</span>
+            </div>
+            <div className="fstay">
+              {datesSet ? <StayDates checkIn={checkIn} checkOut={checkOut} /> : <span className="meta">No dates yet</span>}
+              <div className="ffacts-line">
+                {datesSet ? (
+                  <span>
+                    <b>{plural(stayNights, "night")}</b>
+                  </span>
+                ) : null}
+                <span>
+                  <b>{roomsN ? plural(roomsN, "room") : "Rooms not set"}</b>
+                </span>
+                <span className="camein">
+                  {channel ? channel.label : "How they came in · not said yet"}
+                  {party ? ` · ${party.displayName}` : ""}
+                </span>
+              </div>
+            </div>
+          </div>
+          <div className="ftabs" role="tablist">
+            {INTAKE_FILE_TABS.map(([label, short], i) => (
+              <button
+                key={label}
+                type="button"
+                role="tab"
+                className="ftab"
+                aria-selected={i === 0}
+                disabled={i > 0}
+                title={i > 0 ? `${label} · opens once the inquiry is kept` : label}
+              >
+                <span className="ft-long">{label}</span>
+                <span className="ft-short">{short}</span>
+              </button>
+            ))}
+          </div>
+          <div className="fbody">
+            <p className="meta">The other tabs open once the inquiry is kept.</p>
+            <dl className="pv">
+              <dt>The caller</dt>
+              <dd>
+                {callerName || <span className="meta">no name yet</span>}
+                {fullPhone ? <div>{fullPhone}{onWhatsApp ? " · on WhatsApp" : ""}</div> : null}
+                {email.trim() ? <div>{email.trim()}</div> : null}
+                {!fullPhone && !email.trim() ? <div className={isOta ? "meta" : "warn-ink"}>{isOta ? "an OTA booking" : "no phone or email yet"}</div> : null}
+              </dd>
+              <dt>Came in as</dt>
+              <dd>
+                {channel ? channel.label : <span className="warn-ink">not said yet</span>}
+                {party ? <div>{party.displayName}</div> : null}
+                {partyContact?.name ? <div className="meta">contact · {partyContact.name}</div> : null}
+              </dd>
+              <dt>Kind of stay</dt>
+              <dd>{useTypeWord ?? <span className="warn-ink">not said yet</span>}</dd>
+              <dt>The stay</dt>
+              <dd>
+                {datesSet ? (
+                  <>
+                    <StayDates checkIn={checkIn} checkOut={checkOut} />
+                    <div>{plural(stayNights, "night")}</div>
+                  </>
+                ) : (
+                  <span className="warn-ink">no dates yet</span>
+                )}
+              </dd>
+              <dt>Guests</dt>
+              <dd>
+                {plural(adultsN, "adult")}
+                {childN ? `, ${plural(childN, "child", "children")}` : ""}
+                {childN && ages.some((a) => a.trim()) ? <div className="meta">ages {ages.map((a) => a.trim() || "?").join(", ")}</div> : null}
+              </dd>
+              <dt>Rooms</dt>
+              <dd>
+                {roomsN || "—"}
+                {bedSum > 0 ? <div className="meta">{Object.entries(bedRequest).map(([t, n]) => `${n} ${bedWord(t)}`).join(" + ")} asked</div> : null}
+              </dd>
+              {fromChart.room ? (
+                <>
+                  <dt>From the chart</dt>
+                  <dd>Room {fromChart.room}</dd>
+                </>
+              ) : null}
+            </dl>
+          </div>
+        </aside>
+    </div>
+    </StepFlow>
+  );
+}
+
+type IntakeFlowProps = {
+  items: ReturnType<typeof numberFlow>;
+  also: ReadonlyArray<{ label: string; met: boolean }>;
+  onGo: (card?: string) => void;
+  startLabel: string;
+};
+
+/**
+ * "Before you move on" on the new inquiry: each section, done only once its Done is pressed
+ * (2026-10-27, operator: the list filled itself as fields were typed), then what the system does
+ * on save. The stay's Done is the start itself.
+ */
+function IntakeBeforeMove({ items, also, onGo, startLabel }: IntakeFlowProps) {
+  const standing = useFlowStanding();
+  const cards = Object.keys(INTAKE_SECTIONS).filter((c) => items.some((i) => i.card === c));
+  const toFill = cards.filter((c) => items.some((i) => i.card === c && !i.met));
+  const toPress = cards.find((c) => c !== "stay" && standing.awaitsDone(c));
+  const ready = toFill.length === 0 && !toPress;
+  return (
+    <div className="card before-move">
+      <h4>Before you move on</h4>
+      <table className="compact">
+        <tbody>
+          {cards.map((card) => {
+            const own = items.filter((i) => i.card === card);
+            const done = standing.isDone(card);
+            const awaits = standing.awaitsDone(card);
+            return (
+              <tr key={card} className="pick" onClick={() => onGo(card)}>
+                <td className={done ? "ok-ink" : "warn-ink"}>{done ? <Icon name="check" /> : "●"}</td>
+                <td>{INTAKE_SECTIONS[card]}</td>
+                <td className={awaits ? "warn-ink" : "meta"}>
+                  {done ? "done" : awaits ? (card === "stay" ? `all in — press ${startLabel}` : "all in — press Done") : own.filter((i) => !i.met).map((i) => i.label).join(" · ")}
+                </td>
+              </tr>
+            );
+          })}
+          {also.map((p) => (
+            <tr key={p.label}>
+              <td className={p.met ? "ok-ink" : "warn-ink"}>{p.met ? <Icon name="check" /> : "→"}</td>
+              <td colSpan={2} className="meta">
+                {p.label}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className={`before-move-foot ${ready ? "ready" : "wait"}`}>
+        {toFill.length
+          ? `${plural(toFill.length, "section")} still to fill`
+          : toPress
+            ? `Press Done on ${INTAKE_SECTIONS[toPress]}`
+            : `Everything is in · press ${startLabel} on The stay`}
       </div>
     </div>
   );
 }
+

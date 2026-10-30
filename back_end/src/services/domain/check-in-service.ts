@@ -18,7 +18,8 @@ import { enforceIdentityVerifiedBeforeCheckInCompletion } from "../../policies/0
 import { enforceGuestDetailsCapturedForCheckIn } from "../../policies/06-guest-identity/p15-guest-identity-capture.js";
 import { guestDetailsCoverageForEntry } from "./guest-identity-proof-service.js";
 import { enforceKeyCountIssuedForCheckInCompletion, enforceRegistrationConfirmedForCheckInCompletion } from "../../policies/06-guest-identity/p16-checkin-completion-ceremony-gates.js";
-import { enforceAdvancePaymentReconciledBeforeCheckInCompletion } from "../../policies/12-advance-payment/p29-advance-payment-reconciled-before-checkin-completion.js";
+import { enforceAdvancePaymentReconciledBeforeCheckInCompletion, enforceCheckInBalancePaidOrDeferred } from "../../policies/12-advance-payment/p29-advance-payment-reconciled-before-checkin-completion.js";
+import { closeMootCheckInPaymentRequests, nuWords, readCheckInPayment } from "./checkin-payment-service.js";
 import { enforceFolioProvisionalBeforeCheckInCompletion } from "../../policies/13-billing-model/p31-folio-provisional-before-checkin-completion.js";
 import { enforceVipArrivalNotificationRecordedForCheckInCompletion } from "../../policies/20-communication-acknowledgement-tracking/p52-vip-arrival-notification-recorded-for-checkin.js";
 import { enforceH2H3NotRejectedAtS6CheckIn } from "../../policies/25-handoff/p63-handoff-lifecycle-gates.js";
@@ -92,6 +93,14 @@ export async function completeCheckInToS7(
   enforceFolioProvisionalBeforeCheckInCompletion({ folio: entry.folio });
   enforceAdvancePaymentReconciledBeforeCheckInCompletion({
     advancePaymentReconciliationComplete: !!entry.folio?.advancePaymentReconciliationComplete,
+  });
+  // The rest of the bill, promised at check-in (2026-10-29): paid, or the FOM's word on later.
+  const balance = await readCheckInPayment(prisma, entryId);
+  enforceCheckInBalancePaidOrDeferred({
+    promisedAtCheckIn: balance.promisedAtCheckIn,
+    stillToPay: balance.stillToPay ?? 0,
+    deferralApproved: !!balance.approved,
+    stillToPayWords: nuWords(balance.stillToPay ?? 0),
   });
 
   // Batching rule: whenever the entry has multiple distinct room assignments, check in all
@@ -561,6 +570,14 @@ export async function completeCheckInToS7(
   } catch {
     // Best-effort timer cleanup.
   }
+
+  // A request to pay later that nobody answered is moot once the guest is in.
+  await closeMootCheckInPaymentRequests(prisma, entryId, "CHECKED_IN").catch(() => {});
+
+  // Tonight on the bill at once (2026-10-29) — the hotel's run later finds it there and posts nothing more.
+  const checkedInBy = await prisma.staffUser.findUnique({ where: { id: actorId }, select: { actorLevel: true } }).catch(() => null);
+  const { postTonightAtCheckIn } = await import("../application/s7-night-audit-service.js");
+  await postTonightAtCheckIn(prisma, { entryId, actorId, actorLevel: checkedInBy?.actorLevel ?? undefined });
 
   return prisma.entry.findUniqueOrThrow({
     where: { id: entryId },

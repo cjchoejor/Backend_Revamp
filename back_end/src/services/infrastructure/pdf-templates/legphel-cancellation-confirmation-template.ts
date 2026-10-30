@@ -21,9 +21,11 @@ import {
   renderTitle,
   row,
   section,
+  stayRows,
   type DocumentMasthead,
   type DocumentWatermark,
 } from "./legphel-document-shell.js";
+import type { StayLines } from "./legphel-document-format.js";
 
 export type LegphelCancellationConfirmationInput = {
   masthead: DocumentMasthead;
@@ -37,8 +39,10 @@ export type LegphelCancellationConfirmationInput = {
   strip?: string;
   /** "Mr Karma Wangchuk" */
   guest: string;
-  /** "10–12 Oct 2026 · Deluxe · 2 nights" */
-  cancelledStay: string;
+  /** Check-in · Check-out of the stay that was cancelled (2026-10-28 — was one "Cancelled stay" row). */
+  stay: StayLines | null;
+  /** "Deluxe" */
+  roomType?: string | null;
   /** "38 days before arrival" — drives which band of the ladder applied. */
   noticeGiven: string;
   /**
@@ -80,7 +84,8 @@ export function renderLegphelCancellationConfirmationHtml(
     row("Date", input.date),
     section,
     row("Guest", input.guest, { boldValue: true }),
-    row("Cancelled stay", input.cancelledStay),
+    stayRows(input.stay),
+    input.roomType ? row("Room type", input.roomType) : "",
     row("Notice given", input.noticeGiven),
     section,
     row(advanceLabel, input.advanceHeld),

@@ -15,8 +15,12 @@ import {
   answerDamageRequestSchema,
   previewDamageChargeRequestSchema,
   setExpectedArrivalRequestSchema,
+  checkInPaymentDeferralRequestSchema,
+  checkInPaymentDecisionRequestSchema,
+  checkInPaymentWithdrawRequestSchema,
   decideNegotiationAmendmentRequestSchema,
   negotiationAmendmentRequestSchema,
+  changeStayInPlaceRequestSchema,
   updateEntryRequestSchema,
   withdrawNegotiationAmendmentRequestSchema,
 } from "../../dtos/03-entries/request-schemas.js";
@@ -25,6 +29,7 @@ import { validateBody } from "../../middleware/validate-body.js";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import * as s1EntryService from "../../services/domain/s1-entry-service.js";
 import { switchStay } from "../../services/domain/trip-switch-service.js";
+import { changeBookingInPlace } from "../../services/domain/booking-change-service.js";
 import * as s8CheckoutService from "../../services/domain/s8-checkout-service.js";
 import * as damageAssessmentService from "../../services/domain/damage-assessment-service.js";
 import * as s9Service from "../../services/domain/s9-service.js";
@@ -53,7 +58,8 @@ import { previewEarlyDeparture, recordEarlyDeparture } from "../../services/doma
 import { buildQuotationPreview } from "../../services/domain/quotation-preview-service.js";
 import { buildCompetingClaims } from "../../services/domain/competing-claims-service.js";
 import { changeRoomToNewSegment, listRoomChangeCandidates, buildRoomPlanHistory } from "../../services/domain/room-change-service.js";
-import { issueRoomKey, issueRoomKeysBulk, returnRoomKey } from "../../services/domain/room-key-service.js";
+import { makeWayForRoom } from "../../services/domain/quiet-rooms-service.js";
+import { declareRoomKeyLost, issueRoomKey, issueRoomKeysBulk, returnRoomKey } from "../../services/domain/room-key-service.js";
 import {
   partySeatingRepairRequestSchema,
   roomChangeRequestSchema,
@@ -72,6 +78,7 @@ import {
 } from "../../services/domain/stay-extension-service.js";
 import { buildPartySeatingStatus, repairPartySeatingForEntry } from "../../services/domain/party-seating-service.js";
 import { getExpectedArrival, setExpectedArrival } from "../../services/domain/expected-arrival-service.js";
+import { resolveNoShowGraceMinutes, timerShowsFrom } from "../../lib/expected-arrival.js";
 import { buildEntryBedPlan, setEntryBedPlanRoom } from "../../services/domain/entry-bed-plan-service.js";
 
 export const entriesRouter = Router();
@@ -118,11 +125,19 @@ entriesRouter.post("/:id/source", requireActorLevel("L1"), validateBody(sourceSc
   }
 });
 
+const guestNamingOptions = { keepNewName: z.boolean().optional(), arrivingIsGuest: z.boolean().optional() };
 const setGuestSchema = z.discriminatedUnion("mode", [
-  z.object({ mode: z.literal("CALLER"), nationality: z.string().trim().max(80).nullable().optional() }),
-  z.object({ mode: z.literal("EXISTING"), guestProfileId: z.string().min(1) }),
+  z.object({ mode: z.literal("CALLER"), nationality: z.string().trim().max(80).nullable().optional(), ...guestNamingOptions }),
+  z.object({
+    mode: z.literal("EXISTING"),
+    guestProfileId: z.string().min(1),
+    phone: z.string().trim().max(40).nullable().optional(),
+    email: z.string().trim().max(200).nullable().optional(),
+    ...guestNamingOptions,
+  }),
   z.object({
     mode: z.literal("NEW"),
+    ...guestNamingOptions,
     title: z.string().trim().max(20).nullable().optional(),
     firstName: z.string().trim().min(1).max(80),
     lastName: z.string().trim().min(1).max(80),
@@ -186,6 +201,23 @@ entriesRouter.get("/:id/room-change/candidates", requireActorLevel("L1"), async 
 });
 
 /**
+ * The room types one of the booking's rooms could change to (2026-10-29) — "double-click a room to
+ * change its room type": how many of each are free over the room's nights, the room the system would
+ * give, the rate per night. Read-only; the change itself is the room change below.
+ */
+entriesRouter.get("/:id/room-type-options", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    const fromRoomId = typeof req.query.fromRoomId === "string" ? req.query.fromRoomId : "";
+    if (!fromRoomId) throw new ValidationError("fromRoomId query parameter is required");
+    const { listRoomTypeOptions } = await import("../../services/domain/room-type-options-service.js");
+    res.json(await listRoomTypeOptions(prisma, req.params.id, fromRoomId));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
  * In-place room change — the composite. One call: governed ROOM_CHANGE re-entry (new segment),
  * substituted basis revalidated against live availability, silent re-quote (nothing sent to the
  * guest; PI not re-issued; the advance already received stands), then the walk back to the
@@ -195,18 +227,41 @@ entriesRouter.get("/:id/room-change/candidates", requireActorLevel("L1"), async 
 entriesRouter.post("/:id/room-change", requireActorLevel("L1"), validateBody(roomChangeRequestSchema), async (req, res, next) => {
   try {
     const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
+    // Arrival takes the room (2026-10-29): another booking holding it only as the system's choice is
+    // moved to another room of its type first — a quiet move, the same type and rate — so the room
+    // change finds it free. Refused in words when that booking chose it by number.
+    let madeWay: Awaited<ReturnType<typeof makeWayForRoom>> | null = null;
+    if (req.body.makeWay === true && req.body.toRoomId) {
+      madeWay = await makeWayForRoom(prisma, actor, { entryId: req.params.id, fromRoomId: req.body.fromRoomId, toRoomId: req.body.toRoomId });
+    } else if (req.body.makeWay === true && req.body.perNight?.length) {
+      // A room for some nights only: each new room makes way over its own nights.
+      const byRoom = new Map<string, string[]>();
+      for (const n of req.body.perNight as Array<{ date: string; roomId: string }>) {
+        if (n.roomId === req.body.fromRoomId) continue;
+        byRoom.set(n.roomId, [...(byRoom.get(n.roomId) ?? []), n.date.slice(0, 10)]);
+      }
+      let othersMoved = 0;
+      const moves: Awaited<ReturnType<typeof makeWayForRoom>>["moves"] = [];
+      for (const [toRoomId, nights] of byRoom) {
+        const one = await makeWayForRoom(prisma, actor, { entryId: req.params.id, fromRoomId: req.body.fromRoomId, toRoomId, nights });
+        othersMoved += one.othersMoved;
+        moves.push(...one.moves);
+      }
+      madeWay = { othersMoved, moves };
+    }
     const outcome = await changeRoomToNewSegment(prisma, actor, {
       entryId: req.params.id,
       fromRoomId: req.body.fromRoomId,
       toRoomId: req.body.toRoomId,
       perNight: req.body.perNight,
       reason: req.body.reason,
+      systemChosen: req.body.systemChosen === true,
       adjustments: req.body.adjustments,
       roomSetups: req.body.roomSetups,
       roomCompositions: req.body.roomCompositions,
       ...("requestedDiscount" in (req.body ?? {}) ? { requestedDiscount: req.body.requestedDiscount } : {}),
     });
-    res.json(outcome);
+    res.json(madeWay ? { ...outcome, madeWay } : outcome);
   } catch (e) {
     next(e);
   }
@@ -408,6 +463,20 @@ entriesRouter.post("/:id/rooms/:roomId/key-returned", requireActorLevel("L1"), a
   }
 });
 
+/** THIS room's key is lost while the guest is staying, with what happened (2026-10-30). L1. */
+entriesRouter.post(
+  "/:id/rooms/:roomId/key-lost",
+  requireActorLevel("L1"),
+  validateBody(z.object({ note: z.string().trim().min(1, "Say what happened to the key").max(500) })),
+  async (req, res, next) => {
+    try {
+      res.json(await declareRoomKeyLost(prisma, req.params.id, req.params.roomId, req.actor!.actorId, { note: req.body.note }));
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
 /** Read-only trace/event feed for a single entry — visible to the staff working it (L1+). */
 entriesRouter.get("/:id/trace", requireActorLevel("L1"), async (req, res, next) => {
   try {
@@ -459,7 +528,10 @@ entriesRouter.get("/:id/timers", requireActorLevel("L1"), async (req, res, next)
         createdAt: true,
       },
     });
-    res.json({ items, count: items.length });
+    // A clock the desk shows only from a moment of its own — the no-show cut-off, from the start
+    // of its grace (2026-10-29).
+    const grace = items.some((t) => t.timerCode === "NO_SHOW_CUTOFF_W5") ? await resolveNoShowGraceMinutes(prisma).catch(() => null) : null;
+    res.json({ items: items.map((t) => ({ ...t, showsFrom: timerShowsFrom(t, grace)?.toISOString() ?? null })), count: items.length });
   } catch (e) {
     next(e);
   }
@@ -539,7 +611,7 @@ entriesRouter.get("/:id/competing-claims", requireActorLevel("L1"), async (req, 
  */
 entriesRouter.post("/:id/quotation-preview", requireActorLevel("L1"), async (req, res, next) => {
   try {
-    const body = req.body as { roomCompositions?: unknown; discount?: unknown; roomNights?: unknown; roomNightDates?: unknown };
+    const body = req.body as { roomCompositions?: unknown; discount?: unknown; roomNights?: unknown; roomNightDates?: unknown; stay?: unknown };
     res.setHeader("Cache-Control", "no-store");
     const roomCompositions = Array.isArray(body?.roomCompositions) ? (body.roomCompositions as Array<{ roomId?: unknown }>) : [];
     // Each room prices at its own type's rate even when the booking does not hold it yet (the
@@ -559,6 +631,23 @@ entriesRouter.post("/:id/quotation-preview", requireActorLevel("L1"), async (req
         roomNightDates.set(rid, ds as string[]);
       }
     }
+    // Priced for a stay the booking does not hold yet (2026-10-29, a change of dates on the step):
+    // the rates resolve for those nights.
+    const stayIn = (body?.stay as { checkInDate?: unknown } | undefined)?.checkInDate;
+    const stayOut = (body?.stay as { checkOutDate?: unknown } | undefined)?.checkOutDate;
+    const stayOverride =
+      typeof stayIn === "string" && typeof stayOut === "string" && /^\d{4}-\d{2}-\d{2}$/.test(stayIn) && /^\d{4}-\d{2}-\d{2}$/.test(stayOut) && stayOut > stayIn
+        ? {
+            checkIn: new Date(`${stayIn}T00:00:00.000Z`),
+            checkOut: new Date(`${stayOut}T00:00:00.000Z`),
+            perRoomNightCounts: new Map(
+              roomCompositions
+                .map((c) => c.roomId)
+                .filter((id): id is string => typeof id === "string")
+                .map((id) => [id, roomNights.get(id) ?? Math.round((Date.parse(stayOut) - Date.parse(stayIn)) / 86_400_000)] as [string, number]),
+            ),
+          }
+        : null;
     res.json(
       await buildQuotationPreview(
         prisma,
@@ -568,6 +657,7 @@ entriesRouter.post("/:id/quotation-preview", requireActorLevel("L1"), async (req
           planRoomIds: roomCompositions.map((c) => c.roomId).filter((id): id is string => typeof id === "string"),
           ...(roomNights.size ? { roomNights } : {}),
           ...(roomNightDates.size ? { roomNightDates } : {}),
+          ...(stayOverride ? { stayOverride } : {}),
         },
       ),
     );
@@ -750,6 +840,19 @@ entriesRouter.post(
     }
   },
 );
+
+/**
+ * Change the dates, rooms or guests on the step the booking is at (2026-10-29) — Set up, Reserve,
+ * Arrival. **L2**: moving a reserved booking's dates is the FOM's (Policy 58). The booking walks
+ * back through Negotiation and forward again; the desk stays on its step.
+ */
+entriesRouter.post("/:id/change-stay", requireActorLevel("L2"), validateBody(changeStayInPlaceRequestSchema), async (req, res, next) => {
+  try {
+    res.json(await changeBookingInPlace(prisma, req.params.id, { actorId: req.actor!.actorId, actorLevel: req.actor!.level }, req.body));
+  } catch (e) {
+    next(e);
+  }
+});
 
 /**
  * Approve or turn down a waiting configuration change (2026-09-30). **L2** — approving IS
@@ -980,12 +1083,60 @@ entriesRouter.post(
   validateBody(setExpectedArrivalRequestSchema),
   async (req, res, next) => {
     try {
-      res.json(await setExpectedArrival(prisma, req.params.id, req.actor!.actorId, req.actor!.level, req.body.time));
+      res.json(await setExpectedArrival(prisma, req.params.id, req.actor!.actorId, req.actor!.level, req.body.time, req.body.dayAfter === true));
     } catch (e) {
       next(e);
     }
   },
 );
+
+/**
+ * The rest of the bill at check-in (2026-10-29, operator ruling "wait for the FOM"): the guest's
+ * promise, the figures (stay total − money received, server-side), the open request and the
+ * FOM's decision, and whether check-in may go on. Read-only.
+ */
+entriesRouter.get("/:id/checkin-payment", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    const { readCheckInPayment } = await import("../../services/domain/checkin-payment-service.js");
+    res.json(await readCheckInPayment(prisma, req.params.id));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** The desk asks the FOM to let the guest pay the rest later (L1). */
+entriesRouter.post("/:id/checkin-payment/deferral", requireActorLevel("L1"), validateBody(checkInPaymentDeferralRequestSchema), async (req, res, next) => {
+  try {
+    const { requestCheckInPaymentDeferral } = await import("../../services/domain/checkin-payment-service.js");
+    const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
+    res.status(201).json(await requestCheckInPaymentDeferral(prisma, actor, { entryId: req.params.id, reason: req.body.reason }));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** The FOM decides — let them pay later, or turn it down (L2+). */
+entriesRouter.post("/:id/checkin-payment/decide", requireActorLevel("L2"), validateBody(checkInPaymentDecisionRequestSchema), async (req, res, next) => {
+  try {
+    const { decideCheckInPaymentDeferral } = await import("../../services/domain/checkin-payment-service.js");
+    const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
+    res.json(await decideCheckInPaymentDeferral(prisma, actor, { entryId: req.params.id, ...req.body }));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** The desk takes its request back before the FOM answers (L1). */
+entriesRouter.post("/:id/checkin-payment/deferral/:requestId/withdraw", requireActorLevel("L1"), validateBody(checkInPaymentWithdrawRequestSchema), async (req, res, next) => {
+  try {
+    const { withdrawCheckInPaymentDeferral } = await import("../../services/domain/checkin-payment-service.js");
+    const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
+    res.json(await withdrawCheckInPaymentDeferral(prisma, actor, { entryId: req.params.id, requestId: req.params.requestId, note: req.body.note }));
+  } catch (e) {
+    next(e);
+  }
+});
 
 /** What still stands between the booking and "Close & seal" — the close's own checks, read not run (2026-09-18). */
 entriesRouter.get("/:id/closure-readiness", requireActorLevel("L1"), async (req, res, next) => {

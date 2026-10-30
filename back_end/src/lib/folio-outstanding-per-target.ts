@@ -1,3 +1,4 @@
+import { classifyFolioLine } from "./folio-tax-lines.js";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { PaymentDirection } from "@prisma/client";
 import { maxZeroSub, round2, sumMoney, toDecimal } from "./money.js";
@@ -138,7 +139,7 @@ export async function summariseSettlementTargets(
   const [lines, payments, applications, folio] = await Promise.all([
     tx.folioLine.findMany({
       where: { folioId },
-      select: { amount: true, roomId: true, spaceId: true },
+      select: { amount: true, roomId: true, spaceId: true, lineType: true, description: true },
     }),
     tx.paymentRecord.findMany({
       where: { folioId },
@@ -155,13 +156,17 @@ export async function summariseSettlementTargets(
     charges: Prisma.Decimal;
     paid: Prisma.Decimal;
     advanceApplied: Prisma.Decimal;
+    /** The charges in it — a charge's service charge and GST lines are part of it (2026-10-30). */
     lineCount: number;
+    /** Every line, tax included — whether the slice holds anything at all. */
+    entries: number;
   };
   const empty = (): Bucket => ({
     charges: toDecimal(0),
     paid: toDecimal(0),
     advanceApplied: toDecimal(0),
     lineCount: 0,
+    entries: 0,
   });
   const byRoom = new Map<string, Bucket>();
   const bySpace = new Map<string, Bucket>();
@@ -170,14 +175,15 @@ export async function summariseSettlementTargets(
 
   for (const l of lines) {
     const amt = toDecimal(l.amount);
+    const one = classifyFolioLine(l) === "CHARGE" ? 1 : 0;
     if (l.roomId) {
       const b = bucket(byRoom, l.roomId);
-      byRoom.set(l.roomId, { ...b, charges: b.charges.add(amt), lineCount: b.lineCount + 1 });
+      byRoom.set(l.roomId, { ...b, charges: b.charges.add(amt), lineCount: b.lineCount + one, entries: b.entries + 1 });
     } else if (l.spaceId) {
       const b = bucket(bySpace, l.spaceId);
-      bySpace.set(l.spaceId, { ...b, charges: b.charges.add(amt), lineCount: b.lineCount + 1 });
+      bySpace.set(l.spaceId, { ...b, charges: b.charges.add(amt), lineCount: b.lineCount + one, entries: b.entries + 1 });
     } else {
-      unassigned = { ...unassigned, charges: unassigned.charges.add(amt), lineCount: unassigned.lineCount + 1 };
+      unassigned = { ...unassigned, charges: unassigned.charges.add(amt), lineCount: unassigned.lineCount + one, entries: unassigned.entries + 1 };
     }
   }
 
@@ -245,7 +251,7 @@ export async function summariseSettlementTargets(
       .sort((a, z) => (a.label ?? "").localeCompare(z.label ?? "")),
   ];
   // The leftover slice earns a row only when something is actually in it.
-  if (unassigned.lineCount > 0) targets.push(shape("UNASSIGNED", null, unassigned));
+  if (unassigned.entries > 0) targets.push(shape("UNASSIGNED", null, unassigned));
 
   return {
     targets,

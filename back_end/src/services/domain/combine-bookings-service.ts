@@ -3,6 +3,7 @@ import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { foldIsoNightsToRanges } from "../../lib/entry-inventory-claim.js";
 import { sealAsPerNight } from "../../lib/option-selected-reader.js";
 import { findRoomBookingConflicts } from "../../lib/room-booking-conflicts.js";
+import { findOverlappingBookingOfSameGuest, isMultiBookingAcknowledged } from "../../policies/04-duplicate-detection/p13-multi-booking-ack-required.js";
 import { enforceNegotiationAmendmentAuthority } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
 import { declineEntryBeforeSetup } from "../application/cancellation-service.js";
 import { validateCapacity } from "./capacity-validation-service.js";
@@ -217,7 +218,7 @@ export type SameGuestBooking = {
 export async function listSameGuestBookings(prisma: PrismaClient, entryId: string) {
   const self = await loadBooking(prisma, entryId);
   if (!self) throw new NotFoundError("Entry");
-  if (!self.guestProfileId) return { guestProfileId: null, guestName: null, bookings: [] as SameGuestBooking[] };
+  if (!self.guestProfileId) return { guestProfileId: null, guestName: null, bookings: [] as SameGuestBooking[], reserveOverlap: null };
   const ids = (
     await prisma.entry.findMany({
       where: { guestProfileId: self.guestProfileId, id: { not: entryId } },
@@ -251,7 +252,27 @@ export async function listSameGuestBookings(prisma: PrismaClient, entryId: strin
       combine: { possible: blockers.length === 0, why: blockers[0] ?? null },
     });
   }
-  return { guestProfileId: self.guestProfileId, guestName: nameOf(self.guestProfile), bookings };
+  // What Reserve itself will ask (Policy 13, 2026-10-29): the guest's other RESERVED booking over
+  // these nights — the gate's own reading, so the desk can ask for the acknowledgement up front
+  // instead of finding out when Reserve is refused.
+  const overlap =
+    LIVE.has(String(self.status)) && self.checkInDate && self.checkOutDate
+      ? await findOverlappingBookingOfSameGuest(prisma, {
+          entryId,
+          guestProfileId: self.guestProfileId,
+          checkInDate: self.checkInDate,
+          checkOutDate: self.checkOutDate,
+        })
+      : null;
+  const reserveOverlap = overlap
+    ? {
+        entryId: overlap.entryId,
+        checkInDate: iso(overlap.frozenCheckInDate),
+        checkOutDate: iso(overlap.frozenCheckOutDate),
+        acknowledged: await isMultiBookingAcknowledged(prisma, entryId),
+      }
+    : null;
+  return { guestProfileId: self.guestProfileId, guestName: nameOf(self.guestProfile), bookings, reserveOverlap };
 }
 
 /* ───────────────────────────── combine ───────────────────────────── */

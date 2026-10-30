@@ -19,10 +19,11 @@ import {
   createTravelAgentLookup,
   searchCorporateAccountsLookup,
   searchTravelAgentsLookup,
+  type CallerMatch,
   type CoordinatorContact,
   type LookupPartyMatch,
 } from "@/lib/api/inquiries";
-import { plural } from "@/lib/ds/format";
+import { fmtDay, fmtInstantDate, plural } from "@/lib/ds/format";
 import { toastRefusal } from "./kit";
 import { Help, HelpHere } from "@/components/ds/help";
 
@@ -121,6 +122,35 @@ export function splitStoredPhone(full: string | null | undefined): { code: strin
   if (m) return { code: m[1], number: strip(m[2]) };
   // Most imported numbers carry no dialling code; leave it blank rather than assume one.
   return { code: "", number: v };
+}
+
+/**
+ * The code and the number as one stored phone. A listed code is joined straight on ("+97517…"),
+ * as numbers always were; any other code keeps a space after it ("+66 812…"), because without one
+ * "+66812…" reads back as the code "+6681" and the desk's next visit shows the wrong code.
+ */
+export function joinPhone(code: string, number: string): string {
+  const n = number.trim();
+  if (!n) return "";
+  const c = code.trim();
+  if (!c) return n;
+  return PHONE_CODES.includes(c) ? `${c}${n}` : `${c} ${n}`;
+}
+
+/**
+ * The room counts just past what the party allows, for a Rooms dropdown to list shut with what each
+ * needs (2026-10-28, operator: a second room could not be chosen and the list said nothing). Every
+ * room needs a guest of `adultFrom` or over in it — younger children share a room. Never past the
+ * hotel's own rooms.
+ */
+export function moreRoomsNeedGuests(max: number, hotelRooms: number | null, adultFrom: number, extra = 2): Array<{ n: number; label: string }> {
+  const out: Array<{ n: number; label: string }> = [];
+  for (let n = max + 1; n <= max + extra; n++) {
+    if (hotelRooms != null && n > hotelRooms) break;
+    const more = n - max;
+    out.push({ n, label: `${plural(n, "room")} · needs ${more} more ${more === 1 ? "guest" : "guests"} aged ${adultFrom}+` });
+  }
+  return out;
 }
 
 /** The calendar day `n` nights after `iso` (a stay date, UTC-safe). */
@@ -332,6 +362,80 @@ export function PickList({ head, rows, empty, action = "Use" }: { head?: ReactNo
   );
 }
 
+/** A red asterisk on a label — the field (or, with its partner, one of the two) is needed. */
+export function ReqMark({ title = "needed" }: { title?: string }) {
+  return (
+    <span className="stop-ink" aria-hidden title={title} style={{ fontWeight: 700, marginLeft: 2 }}>
+      *
+    </span>
+  );
+}
+
+/**
+ * One caller in the caller list (2026-10-27): the name, who they ring for (an agency, a company, or
+ * themselves), the number and email, how often they have rung, and under it the guests they
+ * brought before — shown, not picked; the guest staying is named at Wrap up.
+ */
+const sameName = (a: string | null | undefined, b: string | null | undefined) =>
+  (a ?? "").toLowerCase().replace(/\s+/g, " ").trim() === (b ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+
+/**
+ * The person at the party a caller-list row names, or null when the row is the party's own line
+ * (or a caller recorded as the party itself).
+ */
+export function partyPersonOf(caller: CallerMatch): CoordinatorContact | null {
+  if (!caller.party || caller.foundAs === "PARTY_NUMBER") return null;
+  const c = caller.partyContact;
+  return c && c.name && !sameName(c.name, caller.party.displayName) ? c : null;
+}
+
+/** Whether a booking's caller is the agency or company itself — never a guest of the hotel. */
+export function callerIsTheParty(
+  inq: { callerFirstName?: string | null; callerLastName?: string | null } | null | undefined,
+  partyName: string | null | undefined,
+): boolean {
+  if (!inq || !partyName) return false;
+  return sameName(`${inq.callerFirstName ?? ""} ${inq.callerLastName ?? ""}`, partyName);
+}
+
+export function CallerLine({ caller }: { caller: CallerMatch }) {
+  // An agency's or a company's caller IS the party (2026-10-27, operator): the row leads with the
+  // party; the person at it, when known, is its contact.
+  const person = partyPersonOf(caller);
+  const name = caller.party ? caller.party.displayName : [caller.title, caller.firstName, caller.lastName].filter(Boolean).join(" ");
+  const tag = caller.party ? (caller.kind === "TRAVEL_AGENT" ? "Travel agent" : "Company") : "Direct";
+  const where =
+    caller.foundAs === "PARTY_NUMBER"
+      ? "the office line"
+      : caller.foundAs === "PARTY_CONTACT" && caller.calls === 0
+        ? "on their contact list"
+        : caller.calls > 0
+          ? `rang ${caller.calls === 1 ? "once" : `${caller.calls} times`}${caller.lastCalledAt ? ` · last ${fmtInstantDate(caller.lastCalledAt)}` : ""}`
+          : null;
+  return (
+    <span style={{ display: "grid", gap: 2 }}>
+      <span>
+        <b>{name || (caller.party ? caller.party.displayName : "No name on record")}</b>{" "}
+        <span className={`chip${caller.party ? " accent" : ""}`} style={{ marginLeft: 4 }}>
+          {tag}
+        </span>
+        {caller.phone ? <span className="money ink-2"> · {caller.phone}</span> : null}
+        {caller.email ? <span className="meta"> · {caller.email}</span> : null}
+        {where ? <span className="meta"> · {where}</span> : null}
+      </span>
+      {person ? <span className="meta">Contact person: {person.name}</span> : null}
+      {caller.guests.length > 0 ? (
+        <span className="meta">
+          Brought before:{" "}
+          {caller.guests
+            .map((g) => `${guestFullName(g)}${g.lastStay ? ` (${fmtDay(g.lastStay)})` : ""}`)
+            .join(" · ")}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
 /** One guest in a pick list: the name, the number it matched on, the email behind. */
 export function GuestLine({ guest }: { guest: GuestProfileSummary }) {
   return (
@@ -519,7 +623,7 @@ export function PartySearch({
               : null}
             {kind === "TRAVEL_AGENT" && !filing ? (
               <Button kind="quiet" compact onClick={startFiling}>
-                {term ? `New agency “${term}”…` : "New agency…"}
+                {term ? `New agency “${term}”` : "New agency"}
               </Button>
             ) : null}
           </span>
@@ -565,7 +669,7 @@ export function PartyContacts({
     mutationFn: () =>
       addPartyContact(session!, kind, party.id, {
         name: name.trim(),
-        phone: phone.trim() ? `${code}${phone.trim()}` : null,
+        phone: joinPhone(code, phone) || null,
       }),
     onSuccess: (res) => {
       setParty({ ...party, coordinators: res.coordinators });

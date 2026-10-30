@@ -36,6 +36,7 @@ import { PdfButton } from "./pdf-button";
 import { ProformaPreview } from "./quotation-preview";
 import { RoomCompositionPlanner } from "./room-compositions-board";
 import { Help } from "@/components/ds/help";
+import { DateInput, DateTimeInput } from "@/components/ds/date-input";
 
 /**
  * Mid-stay money on the Stay step (2026-08-21, operator ruling):
@@ -65,12 +66,12 @@ const LEVEL_RANK: Record<string, number> = { L1: 1, L2: 2, L3: 3, L4: 4 };
 const fmtDay = (iso: string | null | undefined) => {
   if (!iso) return "—";
   const d = new Date(`${iso.slice(0, 10)}T00:00:00`);
-  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
 };
 const fmtWhen = (iso: string | null | undefined) => {
   if (!iso) return "";
   const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 };
 const addDaysIso = (iso: string, n: number) => {
   const d = new Date(`${iso.slice(0, 10)}T00:00:00Z`);
@@ -513,7 +514,7 @@ function InterimRequestPanel({
               <div style={row}>
                 <div className="field" style={fieldTight}>
                   <label>Payment due by</label>
-                  <input type="datetime-local" value={dueDraft} onChange={(e) => setDueDraft(e.target.value)} />
+                  <DateTimeInput className="dinput" value={dueDraft} onChange={(e) => setDueDraft(e.target.value)} />
                 </div>
                 <button type="button" className="btn btn-primary btn-sm" disabled={!dueDraft || dueM.isPending} onClick={() => dueM.mutate()}>
                   {dueM.isPending ? "Saving…" : "Save due date"}
@@ -542,7 +543,7 @@ function InterimRequestPanel({
         {pKind === "BY_DATE" && (
           <div className="field" style={fieldTight}>
             <label>Promised by</label>
-            <input type="datetime-local" value={pWhen} onChange={(e) => setPWhen(e.target.value)} />
+            <DateTimeInput className="dinput" value={pWhen} onChange={(e) => setPWhen(e.target.value)} />
           </div>
         )}
       </div>
@@ -710,7 +711,16 @@ function InterimRequestPanel({
 
 // ── Interim payment (long stay) ─────────────────────────────────────────────────────────────
 
-export function InterimPaymentBlock({ entry, onChanged }: { entry: EntryDetail; onChanged?: () => void }) {
+export function InterimPaymentBlock({
+  entry,
+  onChanged,
+  unfolded = false,
+}: {
+  entry: EntryDetail;
+  onChanged?: () => void;
+  /** Shown open with no fold of its own — Stay's payment sub-tab (2026-10-29). */
+  unfolded?: boolean;
+}) {
   const { session } = useSession();
   const queryClient = useQueryClient();
   const entryId = entry.id;
@@ -731,7 +741,8 @@ export function InterimPaymentBlock({ entry, onChanged }: { entry: EntryDetail; 
   const [value, setValue] = useState("");
   const [note, setNote] = useState("");
   // Collapsed until opened (2026-08-24, operator request) — the header tags carry the live state.
-  const [expanded, setExpanded] = useState(false);
+  const [expandedState, setExpanded] = useState(false);
+  const expanded = unfolded || expandedState;
 
   const createM = useMutation({
     mutationFn: () => createInterimPayment(session!, entryId, { askMode: mode, askValue: Number(value), note: note.trim() || undefined }),
@@ -751,7 +762,7 @@ export function InterimPaymentBlock({ entry, onChanged }: { entry: EntryDetail; 
 
   return (
     <div className="block">
-      <BlockH expanded={expanded} onToggle={() => setExpanded((v) => !v)}>
+      <BlockH expanded={expanded} onToggle={unfolded ? undefined : () => setExpanded((v) => !v)}>
         <Receipt style={{ width: 13, height: 13 }} />
         Interim payment
         <Help label="About interim payments">
@@ -1013,8 +1024,7 @@ export function StayExtensionBlock({ entry, onChanged }: { entry: EntryDetail; o
       <div style={{ ...row, gap: 10 }}>
         <div className="field" style={fieldTight}>
           <label>New checkout date</label>
-          <input
-            type="date"
+          <DateInput className="dinput"
             value={newDate}
             min={currentCheckOut ? addDaysIso(currentCheckOut, 1) : undefined}
             onChange={(e) => {
@@ -1194,6 +1204,7 @@ export function StayExtensionBlock({ entry, onChanged }: { entry: EntryDetail; o
             </div>
             {negotiate && extensionRoomIds.length > 0 && (
               <RoomCompositionPlanner
+                tableOnly
                 sealedRoomIds={extensionRoomIds}
                 entryCheckIn={entry.checkInDate ?? null}
                 entryCheckOut={preview!.newCheckOut}

@@ -20,8 +20,9 @@ import { DeficiencyPanel } from "@/components/deficiency/deficiency-panel";
 import { useDeskBookings, useRoomsList } from "@/hooks/use-desk-data";
 import { useHotelDay } from "@/hooks/use-hotel-day";
 import { useSession } from "@/hooks/use-session";
-import { listSpaces, type RoomListItem, type SpaceListItem } from "@/lib/api/rooms";
-import { guestNameOf } from "@/lib/ds/status";
+import { getRoomChart, listSpaces, type RoomChart, type RoomChartBar, type RoomListItem, type SpaceListItem } from "@/lib/api/rooms";
+import { callerNameOf, guestNameOf } from "@/lib/ds/status";
+import { fmtDay } from "@/lib/ds/format";
 import { stepNoOfStage } from "@/lib/ds/steps";
 import { groupByRoomType } from "@/lib/ds/group-by-type";
 
@@ -39,6 +40,41 @@ function standingOfRoom(r: RoomListItem): RoomStanding {
     default:
       return r.isDeficient ? "deficient" : "free";
   }
+}
+
+/**
+ * What a room is TONIGHT, read off the chart's own claims (2026-10-27, operator: "it says rooms
+ * 305 and 306 are held or reserved, but the chart shows nothing"). The room's stored flag is a
+ * marker for the strongest claim from today on — a booking a week away included — and can be left
+ * behind by a stay that ended without a check-in; the dates are the truth, the same as the chart's.
+ */
+type Tonight = { standing: RoomStanding; bar: RoomChartBar | null; next: RoomChartBar | null };
+
+function standingOfBar(b: RoomChartBar): RoomStanding {
+  switch (b.kind) {
+    case "IN_HOUSE":
+    case "OVERSTAY":
+      return "occupied";
+    case "RESERVED":
+      return b.paymentPending ? "committed-held" : "reserved";
+    case "PROVISIONAL":
+      return "speculatively-held";
+    default:
+      return "committed-held";
+  }
+}
+
+function tonightByRoom(chart: RoomChart | undefined, today: string | null): Map<string, Tonight> | null {
+  if (!chart || !today) return null;
+  const out = new Map<string, Tonight>();
+  const rank: Record<string, number> = { OVERSTAY: 6, IN_HOUSE: 5, RESERVED: 4, MOVING: 3, HELD: 3, EXTENSION_HELD: 2, PROVISIONAL: 1, CHECKED_OUT: 0 };
+  for (const room of chart.rooms) {
+    const bars = chart.bars.filter((b) => b.roomId === room.id && b.kind !== "CHECKED_OUT");
+    const now = bars.filter((b) => b.from <= today && today < b.to).sort((a, b) => (rank[b.kind] ?? 0) - (rank[a.kind] ?? 0))[0] ?? null;
+    const next = bars.filter((b) => b.from > today).sort((a, b) => a.from.localeCompare(b.from))[0] ?? null;
+    out.set(room.id, { standing: now ? standingOfBar(now) : "free", bar: now, next });
+  }
+  return out;
 }
 
 function physicalOfRoom(r: RoomListItem): RoomPhysical | undefined {
@@ -152,11 +188,36 @@ function RoomsPageBody() {
     return new Map([...best].map(([room, v]) => [room, v.name]));
   }, [bookings.data, hotelToday]);
 
+  // Tonight and the next booking of each room, from the chart (62 nights — the chart's own ceiling).
+  const chart = useQuery({
+    queryKey: ["room-chart", "cards", hotelToday],
+    queryFn: () => getRoomChart(session!, { from: hotelToday!, nights: 62 }),
+    enabled: !!session && !isLoading && !!hotelToday && view === "tonight",
+    refetchInterval: 60_000,
+  });
+  const tonight = useMemo(() => tonightByRoom(chart.data, hotelToday), [chart.data, hotelToday]);
+  const bookingName = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const b of chart.data?.bookings ?? []) {
+      const g = b.guestProfile && (b.guestProfile.firstName || b.guestProfile.lastName) ? guestNameOf(b.guestProfile) : null;
+      m.set(b.entryId, g ?? callerNameOf(b.inquiry) ?? b.partyName ?? "a booking");
+    }
+    return m;
+  }, [chart.data]);
+  // Out of order stays the room's own fact; everything else is tonight's booking. Until the chart
+  // answers, the room's flag stands in.
+  const standingNow = (r: RoomListItem): RoomStanding => {
+    if (r.isUnderMaintenance || r.isBlocked) return "ooo";
+    const t = tonight?.get(r.id);
+    if (!t) return standingOfRoom(r);
+    return t.standing === "free" && r.isDeficient ? "deficient" : t.standing;
+  };
+
   const count = (pred: (r: RoomListItem) => boolean) => items.filter(pred).length;
-  const occupied = count((r) => standingOfRoom(r) === "occupied");
-  const held = count((r) => ["reserved", "committed-held", "speculatively-held"].includes(standingOfRoom(r)));
+  const occupied = count((r) => standingNow(r) === "occupied");
+  const held = count((r) => ["reserved", "committed-held", "speculatively-held"].includes(standingNow(r)));
   const out = count((r) => !!(r.isBlocked || r.isUnderMaintenance || r.isDeficient));
-  const free = count((r) => standingOfRoom(r) === "free");
+  const free = count((r) => standingNow(r) === "free");
 
   const spaceItems = spaces.data?.items ?? [];
 
@@ -167,7 +228,7 @@ function RoomsPageBody() {
         <div>
           <h2>Rooms</h2>
           <div className="meta">
-            Tonight · {occupied} of {items.length} occupied · for knowing, not choosing
+            Tonight · {occupied} of {items.length} occupied · for knowing, not choosing{chart.isLoading && view === "tonight" ? " · reading tonight…" : ""}
           </div>
         </div>
         <Tabs
@@ -208,8 +269,8 @@ function RoomsPageBody() {
               each type in the order of its lowest room number, as on the chart. */}
           <div className="type-groups flow">
             {groupByRoomType(items, (r) => r.roomType?.name, (r) => r.roomNumber).map((g) => {
-              const busy = g.rooms.filter((r) => standingOfRoom(r) === "occupied").length;
-              const freeHere = g.rooms.filter((r) => standingOfRoom(r) === "free").length;
+              const busy = g.rooms.filter((r) => standingNow(r) === "occupied").length;
+              const freeHere = g.rooms.filter((r) => standingNow(r) === "free").length;
               return (
                 <div key={g.name} className="floor type-group">
                   <div className="tg-head">
@@ -220,17 +281,21 @@ function RoomsPageBody() {
                   </div>
                   <div className="tiles">
                     {g.rooms.map((r) => {
-                      const standing = standingOfRoom(r);
+                      const standing = standingNow(r);
+                      const t = tonight?.get(r.id) ?? null;
                       const bed = r.bedType ? BED_WORD[r.bedType] ?? r.bedType : null;
+                      // A room free tonight but kept for a later stay says from when.
+                      const later = t && !t.bar && t.next ? `${t.next.kind === "RESERVED" ? "reserved" : "held"} from ${fmtDay(t.next.from)}` : null;
+                      const who = t?.bar ? bookingName.get(t.bar.entryId) : occupant.get(r.roomNumber);
                       return (
                         <RoomTile
                           key={r.id}
                           number={r.roomNumber}
                           standing={standing}
-                          occupant={standing === "free" ? undefined : (occupant.get(r.roomNumber) ?? (standing === "occupied" ? "in-house" : standing === "ooo" || standing === "deficient" ? "out of service" : "held"))}
+                          occupant={standing === "free" ? undefined : (who ?? (standing === "occupied" ? "in-house" : standing === "ooo" || standing === "deficient" ? "out of service" : "held"))}
                           physical={physicalOfRoom(r)}
                           qualifier={r.isDeficient && standing !== "deficient" ? "fault reported" : undefined}
-                          note={bed ?? undefined}
+                          note={later ? <span>{bed ? `${bed} · ` : ""}{later}</span> : (bed ?? undefined)}
                           onSelect={() => setTarget({ kind: "room", id: r.id, label: `Room ${r.roomNumber}` })}
                         />
                       );

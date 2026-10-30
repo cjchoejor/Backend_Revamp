@@ -1,5 +1,6 @@
 import { EntryStatus, Stage } from "@prisma/client";
 import { z } from "zod";
+import { roomCompositionInputSchema } from "../05-quotations-and-holds/request-schemas.js";
 
 /**
  * Add the guest's return stay to the same enquiry (2026-09-25) — "we'll stay again on the way
@@ -107,9 +108,24 @@ export const negotiationAmendmentRequestSchema = z
           .max(90)
           .optional(),
         deficientAcknowledgements: z.unknown().optional(),
+        /** Rooms by type (2026-10-29): the counts each night; the system chooses the rooms. */
+        byType: z
+          .object({
+            perNight: z
+              .array(
+                z.object({
+                  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+                  types: z.array(z.object({ roomTypeId: z.string().min(1), count: z.number().int().min(0).max(200) })).max(50),
+                }),
+              )
+              .min(1)
+              .max(90),
+            fixedRoomIds: z.array(z.string().min(1)).max(100).optional(),
+          })
+          .optional(),
       })
-      .refine((r) => !!r.roomId || (r.roomIds?.length ?? 0) > 0 || (r.perNight?.length ?? 0) > 0, {
-        message: "Name the rooms — roomId, roomIds or perNight.",
+      .refine((r) => !!r.roomId || (r.roomIds?.length ?? 0) > 0 || (r.perNight?.length ?? 0) > 0 || !!r.byType, {
+        message: "Name the rooms — roomId, roomIds, perNight or byType.",
       })
       .optional(),
     reason: z.string().trim().min(1, "A reason is required.").max(500),
@@ -119,6 +135,50 @@ export const negotiationAmendmentRequestSchema = z
     message: "Nothing to change — send the dates, the party, the rooms, or any of them.",
   });
 export type NegotiationAmendmentRequestDto = z.infer<typeof negotiationAmendmentRequestSchema>;
+
+/**
+ * Change the dates, rooms or guests on the step the booking is at (2026-10-29) — Set up, Reserve
+ * or Arrival. The whole stay as it will stand: the dates, the party, the rooms picked night by
+ * night from the house's answer for those dates, and the table for them.
+ */
+export const changeStayInPlaceRequestSchema = z.object({
+  dates: z.object({
+    checkInDate: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/, "Give the check-in as YYYY-MM-DD."),
+    checkOutDate: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/, "Give the check-out as YYYY-MM-DD."),
+  }),
+  party: z.object({
+    adultCount: z.coerce.number().int().min(1),
+    childCount: z.coerce.number().int().min(0),
+    childAges: z.array(z.coerce.number().int().min(0).max(150)),
+    numberOfRooms: z.coerce.number().int().min(1).max(50),
+  }),
+  rooms: z.object({
+    configurationId: z.string().min(1),
+    perNight: z
+      .array(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), roomIds: z.array(z.string().min(1)).min(1).max(60) }))
+      .min(1)
+      .max(90),
+    /** Picked by type (2026-10-29): `perNight` is then the rooms the system chose for it, as shown. */
+    byType: z
+          .object({
+            perNight: z
+              .array(
+                z.object({
+                  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+                  types: z.array(z.object({ roomTypeId: z.string().min(1), count: z.number().int().min(0).max(200) })).max(50),
+                }),
+              )
+              .min(1)
+              .max(90),
+            fixedRoomIds: z.array(z.string().min(1)).max(100).optional(),
+          })
+          .optional(),
+  }),
+  roomCompositions: z.array(roomCompositionInputSchema).min(1).max(60),
+  reason: z.string().trim().min(1, "Type why the stay is changing.").max(500),
+  expectedVersion: z.coerce.number().int().optional(),
+});
+export type ChangeStayInPlaceRequestDto = z.infer<typeof changeStayInPlaceRequestSchema>;
 
 /** Approve (which applies it) or turn down a waiting configuration change. */
 export const decideNegotiationAmendmentRequestSchema = z.object({
@@ -165,6 +225,11 @@ export const recordKeyReturnRequestSchema = z.object({
   /** Keys declared LOST (2026-10-26, ported from 4e36b65): the count, and room by room which. */
   keyCountLost: z.coerce.number().int().min(0).optional(),
   lostRoomIds: z.array(z.string().min(1)).max(60).optional(),
+  /** Each lost room with what happened to its key (2026-10-30) — the reason is kept on that room. */
+  lostRooms: z
+    .array(z.object({ roomId: z.string().min(1), note: z.string().trim().min(1, "Say what happened to the key").max(500) }))
+    .max(60)
+    .optional(),
 });
 export type RecordKeyReturnRequestDto = z.infer<typeof recordKeyReturnRequestSchema>;
 
@@ -224,6 +289,8 @@ export const setExpectedArrivalRequestSchema = z.object({
     .string()
     .regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Use a 24-hour time, HH:MM")
     .nullable(),
+  /** The guest is expected the morning after the check-in day (2026-10-29). */
+  dayAfter: z.boolean().optional(),
 });
 export type CloseEntryRequestDto = z.infer<typeof closeEntryRequestSchema>;
 
@@ -235,3 +302,23 @@ export const listEntriesQuerySchema = z.object({
   currentStage: z.nativeEnum(Stage).optional(),
 });
 export type ListEntriesQueryDto = z.infer<typeof listEntriesQuerySchema>;
+
+/** The rest of the bill at check-in (2026-10-29): the desk asks the FOM to let the guest pay later. */
+export const checkInPaymentDeferralRequestSchema = z.object({
+  reason: z.string().trim().min(1).max(2000),
+});
+
+/** The FOM's answer — let them pay later (when, by when, why) or turn the request down. */
+export const checkInPaymentDecisionRequestSchema = z
+  .object({
+    requestId: z.string().min(1).nullable().optional(),
+    decision: z.enum(["APPROVE", "REJECT"]),
+    payBy: z.enum(["DURING_STAY", "AT_CHECKOUT", "AFTER_STAY"]).nullable().optional(),
+    dueBy: z.string().min(1).nullable().optional(),
+    note: z.string().trim().max(2000).nullable().optional(),
+  })
+  .refine((v) => v.decision === "REJECT" || !!v.payBy, { message: "Pick when the guest will pay", path: ["payBy"] });
+
+export const checkInPaymentWithdrawRequestSchema = z.object({
+  note: z.string().trim().max(2000).nullable().optional(),
+});

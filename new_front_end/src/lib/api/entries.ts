@@ -163,6 +163,11 @@ export type TimerRecordSummary = {
   criticalAt: string | null;
   status: string;
   createdAt: string;
+  /**
+   * Shown from this moment, not from when it was armed (2026-10-29): the no-show cut-off appears
+   * once its grace starts — the guest's expected arrival. Null — shown while it runs.
+   */
+  showsFrom?: string | null;
 };
 
 export async function getEntryTimers(session: Session, entryId: string) {
@@ -279,6 +284,15 @@ export async function returnRoomKey(session: Session, entryId: string, roomId: s
     `/api/entries/${entryId}/rooms/${roomId}/key-returned`,
     { method: "POST", session },
   );
+}
+
+/** THIS room's key is lost while the guest is staying, with what happened (2026-10-30). */
+export async function declareRoomKeyLost(session: Session, entryId: string, roomId: string, note: string) {
+  return apiRequest<{ roomNumber: string; note: string }>(`/api/entries/${entryId}/rooms/${roomId}/key-lost`, {
+    method: "POST",
+    session,
+    body: { note },
+  });
 }
 
 export async function parkEntry(session: Session, entryId: string, reason: string) {
@@ -859,14 +873,22 @@ export type CompetingClaimItem = {
   documentId: string | null;
   documentState: string | null;
   dispatched: boolean;
+  /** Rooms both bookings chose by number (or that the other holds). */
   roomNumbers: string[];
+  /** Room types too few for everyone working them (2026-10-29). */
+  roomTypeNames: string[];
 };
+
+export type CompetingTypeShort = { roomTypeName: string; nights: string[]; free: number; wanted: number };
 
 export type CompetingClaims = {
   checkIn: string | null;
   checkOut: string | null;
   roomNumbers: string[];
   items: CompetingClaimItem[];
+  typeShort: CompetingTypeShort[];
+  /** This booking holds its rooms — nobody's paper can take them. */
+  holdsItsRooms: boolean;
 };
 
 export async function getCompetingClaims(session: Session, entryId: string) {
@@ -1024,6 +1046,10 @@ export async function changeBookingRoom(
     fromRoomId: string;
     /** One room for every night of the change… */
     toRoomId?: string;
+    /** The desk changed the room's type and the system chose the room — it stays the system's until Arrival (2026-10-29). */
+    systemChosen?: boolean;
+    /** At Arrival: another booking holding the room only as the system's choice is moved out of the way first (2026-10-29). */
+    makeWay?: boolean;
     /** …or a room per night, S1-table style (may name the from-room on kept nights)… */
     perNight?: Array<{ date: string; roomId: string }>;
     reason: string;
@@ -1248,6 +1274,8 @@ export async function amendNegotiationConfiguration(
       roomIds?: string[];
       perNight?: Array<{ date: string; roomIds: string[] }>;
       deficientAcknowledgements?: unknown;
+      /** Rooms by type (2026-10-29): the counts each night; the system chooses the rooms. */
+      byType?: { perNight: Array<{ date: string; types: Array<{ roomTypeId: string; count: number }> }>; fixedRoomIds?: string[] };
     };
     reason: string;
     expectedVersion?: number;
@@ -1258,4 +1286,38 @@ export async function amendNegotiationConfiguration(
     session,
     body,
   });
+}
+
+/** What the in-place change of the stay did (2026-10-29) — every figure the server's. */
+export type StayChangeOutcome = {
+  entryId: string;
+  fromStage: string;
+  reachedStage: string;
+  returned: boolean;
+  blocked: { atStep: string; message: string } | null;
+  quotationId: string | null;
+  pricing: { priorTotal: number | null; newTotal: number | null; currency: string | null };
+  heldDocuments: Array<{ id: string; kind: "CONFIRMATION_VOUCHER" | "PROFORMA"; documentId: string }>;
+  notes: string[];
+  summary: string;
+};
+
+/**
+ * Change the dates, rooms or guests on the step the booking is at — Set up, Reserve, Arrival
+ * (2026-10-29). The FOM's. The booking walks back through Negotiation and returns to its step.
+ */
+export async function changeStayInPlace(
+  session: Session,
+  entryId: string,
+  body: {
+    dates: { checkInDate: string; checkOutDate: string };
+    party: { adultCount: number; childCount: number; childAges: number[]; numberOfRooms: number };
+    /** Picked by type (2026-10-29): `perNight` is the rooms the system chose for `byType`, as shown. */
+    rooms: { configurationId: string; perNight: Array<{ date: string; roomIds: string[] }>; byType?: { perNight: Array<{ date: string; types: Array<{ roomTypeId: string; count: number }> }>; fixedRoomIds?: string[] }; };
+    roomCompositions: RoomCompositionInput[];
+    reason: string;
+    expectedVersion?: number;
+  },
+) {
+  return apiRequest<StayChangeOutcome>(`/api/entries/${entryId}/change-stay`, { method: "POST", session, body });
 }

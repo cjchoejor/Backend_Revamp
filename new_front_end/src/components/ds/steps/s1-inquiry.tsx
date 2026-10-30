@@ -13,8 +13,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { createPortal } from "react-dom";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button, Chip, Icon } from "@/design-system";
 import { useSession } from "@/hooks/use-session";
@@ -41,9 +40,8 @@ import {
   roomStatusRows,
   type RoomStatusRow,
 } from "@/components/desk/workspace/room-status-table";
-import { RoomSelectBoard } from "@/components/desk/workspace/room-select-board";
-import { fmtRange, money, plural } from "@/lib/ds/format";
-import { currentPassConfigs } from "@/lib/desk/workspace";
+import { fmtDay, fmtRange, money, plural } from "@/lib/ds/format";
+import { currentPassConfigs, pickFitsStay } from "@/lib/desk/workspace";
 import {
   optionSelectedRoomIds,
   type AvailabilityOptionSelected,
@@ -65,17 +63,27 @@ import {
   parkTab,
   declineTab,
   useOpenOtherWay,
+  useOpenFileTab,
+  useFlowUnsaved,
+  WorkPopup,
+  anchorFor,
+  revealCard,
 } from "./kit";
 import { AddReturnStay, TripStays } from "@/components/ds/workspace/return-stay";
 import { enumerateNights, useRoomSelection } from "./use-room-selection";
-import { CHANNEL_OPTIONS, PartySearch, cameInAsOf, channelDef, type ChannelKey } from "./new-inquiry-parts";
+import { CHANNEL_OPTIONS, PartySearch, cameInAsOf, channelDef, moreRoomsNeedGuests, type ChannelKey } from "./new-inquiry-parts";
 import { TheCaller, WrapUp } from "./s1-caller";
-import { PickBill, usePickPricing, type BillNight } from "./s1-bill";
+import { cleanPicks, usePickPricing, type BillNight } from "./s1-bill";
+import { RoomsByType, savedBookingRooms, type TypeDraft } from "./s1-by-type";
+import { useBookingRooms } from "@/hooks/use-booking-rooms";
 import { usePublishPriceDraft } from "@/lib/ds/stay-price";
 import { Help, HelpHere } from "@/components/ds/help";
 import type { PickPricing } from "@/lib/api/availability";
+import { DateInput } from "@/components/ds/date-input";
 
 /* ------------------------------------------------------------------ vocabulary */
+
+const WEEKDAY = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 const CAME_IN_AS = [
   ["WALK_IN", "Walk-in"],
@@ -176,8 +184,6 @@ export function S1Inquiry({
     queryFn: () => listRooms(session!),
     enabled: !!session,
   });
-  // The room tool spans the canvas under the form; the house card (right column) renders into it.
-  const [toolSlot, setToolSlot] = useState<HTMLElement | null>(null);
 
   return (
     <StepCanvas past={past}>
@@ -202,10 +208,7 @@ export function S1Inquiry({
           editable={editable}
           duplicates={(inquiryRec?.duplicateFlags ?? []).length}
           catalog={rooms.data?.items ?? []}
-          toolSlot={toolSlot}
         />
-        {/* The room table lands here, right under the house that opens it. */}
-        <div ref={setToolSlot} style={{ display: "contents" }} />
         <WrapUp
           entry={entry}
           editable={editable}
@@ -215,7 +218,10 @@ export function S1Inquiry({
       {/* Other ways as sub-tabs (2026-10-17), each panel the form its button used to open. "The
           guest said no" is the answer the house had no way to write down (2026-10-01): until it,
           a lead that said no could only be parked or left to lapse as "Expired". */}
-      <OtherWaysTabs tabs={[parkTab(parkNow, parking), declineTab(declineNow, declining)]} />
+      {/* On the step line's right, beside each other (2026-10-28, operator: "the guest said no, which
+          is cancel") — the same form as Negotiation's Cancel booking, named for what it is here: "in
+          inquiry it isn't a booking yet, so name it cancel inquiry, just for here". */}
+      <OtherWaysTabs tabs={[parkTab(parkNow, parking), declineTab(declineNow, declining, { label: "Cancel inquiry", act: "Cancel the inquiry" })]} />
     </StepCanvas>
   );
 }
@@ -303,6 +309,7 @@ function WhoIsAsking({
     (d.party?.id ?? null) !== (recParty?.id ?? null) ||
     (d.party ? d.pkg : null) !== (recParty ? recPkg : null) ||
     (isCorp && (d.ref.trim() !== recRef || d.coord.trim() !== recCoord));
+  useFlowUnsaved("asking", editable && dirty, "Changes to who is asking saved");
   const save = useMutation({
     mutationFn: () =>
       updateEntrySource(session!, entry.id, {
@@ -453,7 +460,7 @@ function WhoIsAsking({
               Put it back
             </Button>
           ) : null}
-          <Button state={save.isPending ? "working" : saveBlock ? "inert" : "default"} reason={saveBlock ?? undefined} workingLabel="Saving…" onClick={() => save.mutate()}>
+          <Button className="go" state={save.isPending ? "working" : saveBlock ? "inert" : "default"} reason={saveBlock ?? undefined} workingLabel="Saving…" onClick={() => save.mutate()}>
             Save who is asking
           </Button>
         </div>
@@ -536,6 +543,20 @@ function TheStay({
   });
   const env = envelope.data ?? null;
   const roomsN = Math.max(1, parseInt(f.rooms || "1", 10) || 1);
+  // The room counts the party allows, as the new inquiry offers them (2026-10-27, operator: "the
+  // rooms no longer give a dropdown like before"). The booking's own count stays on the list even
+  // when it falls outside, so a stored figure is never silently changed.
+  const range = env?.allowedRoomCounts ?? null;
+  const roomOptions = useMemo(() => {
+    const out = range && range.min > 0 && range.max >= range.min ? Array.from({ length: range.max - range.min + 1 }, (_, i) => range.min + i) : [];
+    if (!out.includes(roomsN)) out.push(roomsN);
+    return out.sort((a, b) => a - b);
+  }, [range?.min, range?.max, roomsN]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The next counts are listed shut, saying what they need (2026-10-28, operator: "I changed to 2
+  // rooms, but I can only select one room" — one adult allows one room, and the list said nothing).
+  const shutRoomOptions = range
+    ? moreRoomsNeedGuests(range.max, env?.hotelRoomCount ?? null, (policy.data?.ageBands.childMaxAge ?? 10) + 1).filter((o) => !roomOptions.includes(o.n))
+    : [];
 
   const bedTypes = useMemo(() => {
     const s = new Set<string>();
@@ -560,6 +581,14 @@ function TheStay({
       .map(([k, v]) => [k, parseInt(v, 10) || 0])
       .filter(([, v]) => (v as number) > 0),
   ) as Record<string, number>;
+  // A party changed here can make the room count impossible — snap it to the first count allowed,
+  // as the new inquiry does. Only after the desk changed the party: a stored count is left alone.
+  const partyEdited = f.adults !== saved.adults || String(childN) !== saved.children || ages.join(",") !== saved.ages.join(",");
+  useEffect(() => {
+    if (!range || !partyEdited) return;
+    if (roomsN < range.min || roomsN > range.max) set({ rooms: String(range.min) });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [range?.min, range?.max, partyEdited]);
   const dirty =
     f.checkIn !== saved.checkIn ||
     f.nights !== saved.nights ||
@@ -568,6 +597,7 @@ function TheStay({
     String(childN) !== saved.children ||
     ages.join(",") !== saved.ages.join(",") ||
     JSON.stringify(bedMap) !== JSON.stringify(savedBedMap);
+  useFlowUnsaved("stay", editable && dirty, "Changes to the stay saved");
 
   const save = useMutation({
     mutationFn: () =>
@@ -585,14 +615,27 @@ function TheStay({
         expectedVersion: entry.version,
       }),
     onSuccess: () => {
-      toast.success(
-        "The stay is updated — ask the house again for these dates",
-      );
+      toast.success("The stay is updated — the house is asked again for these dates");
       refresh();
+      // The house is asked again by itself (2026-10-27, operator: "when I make edits to the stay
+      // and click Done, can it ask the house directly, so we can remove the Ask again button").
+      // The saved figures ride on the event, since the entry on screen is still the old one.
+      if (f.checkIn && checkOut)
+        window.dispatchEvent(
+          new CustomEvent(STAY_SAVED_EVENT, {
+            detail: { entryId: entry.id, checkInDate: f.checkIn, checkOutDate: checkOut, guestCount: adultsN + childN },
+          }),
+        );
+      // Done saved it; the work moves on to the house, which is being asked again for the stay as
+      // it is now (2026-10-27, operator: "it took me to Wrap up, when it should ask the house again
+      // and take me to the house section").
+      flowDone("stay", { next: "house" });
     },
     onError: (e) => toastRefusal(e, "The stay could not be updated"),
   });
 
+  const { done: flowDone } = useStepFlow();
+  const invalid = !f.checkIn ? "put in the check-in date" : childN > 0 && !agesOk ? "put in every child's age" : null;
   const cp = policy.data;
   const young = cp?.ageBands.youngChildMaxAge ?? 5;
   const childMax = cp?.ageBands.childMaxAge ?? 10;
@@ -605,6 +648,26 @@ function TheStay({
       flow="stay"
       flowAfter="caller"
       title="The stay"
+      // One Done (2026-10-27, operator: "remove Save the stay and merge it with Done, and bring
+      // Undo beside Done"): with a change on the stay, Done saves it and moves on; Undo puts the
+      // fields back. Without a change, the card's own Done simply folds it.
+      doneAction={
+        editable && dirty
+          ? {
+              label: "Done",
+              state: save.isPending ? "working" : invalid ? "inert" : "default",
+              title: invalid ?? undefined,
+              workingLabel: "Saving…",
+              note: <span className="warn-ink">Changed — Done saves it</span>,
+              extra: (
+                <Button kind="quiet" state={save.isPending ? "inert" : "default"} onClick={() => setF(seed())}>
+                  Undo
+                </Button>
+              ),
+              onClick: () => save.mutate(),
+            }
+          : undefined
+      }
       summary={
         <>
           <b>{entry.checkInDate ? fmtRange(entry.checkInDate, entry.checkOutDate) : "no dates"}</b>
@@ -623,9 +686,8 @@ function TheStay({
       <div className="form3">
         <div className="field">
           <label>Check-in</label>
-          <input
+          <DateInput
             className="input"
-            type="date"
             value={f.checkIn}
             readOnly={ro}
             onChange={(e) => set({ checkIn: e.target.value })}
@@ -645,9 +707,8 @@ function TheStay({
         </div>
         <div className="field">
           <label>Check-out</label>
-          <input
+          <DateInput
             className="input"
-            type="date"
             value={checkOut}
             min={f.checkIn || undefined}
             readOnly={ro}
@@ -688,13 +749,19 @@ function TheStay({
                 : "A count — the room type is ours to pick."}
             </Help>
           </label>
-          <input
-            className="input"
-            inputMode="numeric"
-            value={f.rooms}
-            readOnly={ro}
-            onChange={(e) => set({ rooms: e.target.value.replace(/\D/g, "") })}
-          />
+          <select className="input" value={String(roomsN)} disabled={ro} onChange={(e) => set({ rooms: e.target.value })}>
+            {roomOptions.map((n) => (
+              <option key={n} value={String(n)}>
+                {plural(n, "room")}
+                {range && n < range.min ? " · too few" : range && n > range.max ? " · more than the guests" : ""}
+              </option>
+            ))}
+            {shutRoomOptions.map((o) => (
+              <option key={o.n} value={String(o.n)} disabled>
+                {o.label}
+              </option>
+            ))}
+          </select>
           {env && (env.exceedsHotelCapacity || roomsN < env.allowedRoomCounts.min) ? (
             <span className="hint warn-ink">
               {env.exceedsHotelCapacity
@@ -803,34 +870,6 @@ function TheStay({
           <AddReturnStay entry={entry} />
         </Live>
       </div>
-      {editable && dirty ? (
-        <div className="row-acts" style={{ marginTop: 12 }}>
-          <Button
-            state={
-              save.isPending
-                ? "working"
-                : !f.checkIn || (childN > 0 && !agesOk)
-                  ? "inert"
-                  : "default"
-            }
-            title={
-              !f.checkIn
-                ? "put in the check-in date"
-                : childN > 0 && !agesOk
-                  ? "put in every child's age"
-                  : undefined
-            }
-            workingLabel="Saving…"
-            onClick={() => save.mutate()}
-          >
-            Save the stay
-          </Button>
-          <Button kind="quiet" onClick={() => setF(seed())}>
-            Undo
-          </Button>
-          <Help label="About saving the stay">The house is asked again after a change.</Help>
-        </div>
-      ) : null}
     </StepCard>
   );
 }
@@ -868,14 +907,12 @@ function TheHouse({
   editable,
   duplicates,
   catalog,
-  toolSlot,
 }: {
   entry: EntryDetail;
   past: boolean;
   editable: boolean;
   duplicates: number;
   catalog: Catalog;
-  toolSlot: HTMLElement | null;
 }) {
   const { session } = useSession();
   const refresh = useRefreshEntry(entry.id);
@@ -965,6 +1002,9 @@ function TheHouse({
   const numberOfRooms = entry.numberOfRooms ?? 1;
   const savedOption = preferred?.optionSelected as
     AvailabilityOptionSelected | null | undefined;
+  // The rooms saved may no longer fit the stay — its dates or room count changed after they were
+  // chosen. The move to Negotiation refuses it on the same rule (2026-10-27).
+  const pickMisfit = savedOption ? pickFitsStay(savedOption, entry, preferred?.searchCriteria) : null;
   const sel = useRoomSelection({
     entryId: entry.id,
     numberOfRooms,
@@ -972,6 +1012,16 @@ function TheHouse({
     displayNights,
     stayNights,
   });
+
+  // Rooms by type (2026-10-28, docs/room-types-until-arrival.md): the desk says how many of each
+  // type each night and the system chooses the rooms. Particular rooms by number stay one press
+  // away, and a pick already saved by number opens as it was.
+  const savedByType = !!savedBookingRooms(entry);
+  const savedByNumber = !!savedOption && !savedByType;
+  const [mode, setMode] = useState<"TYPE" | "NUMBER">(savedByNumber ? "NUMBER" : "TYPE");
+  const byTypeMode = mode === "TYPE";
+  const [typePicks, setTypePicks] = useState<{ perNight: BillNight[]; labels: Map<string, string>; saved: boolean } | null>(null);
+  const bookingRoomsView = useBookingRooms(entry);
 
   /* free rooms by type, over every night of the answer */
   const byType = useMemo<TypeRow[]>(() => {
@@ -1001,6 +1051,51 @@ function TheHouse({
       (a, b) => b.full.length - a.full.length || a.name.localeCompare(b.name),
     );
   }, [rows, perDate, displayNights]);
+
+  // Each type's free rooms night by night (2026-10-27, operator: "how does it handle a room free on
+  // the first night, not on the second, and free on the third?"). The Free column counts only the
+  // rooms free on EVERY night; these columns show each night on its own, from the house's own
+  // answer, so a night a type runs short on is plain to see. Up to two weeks of nights.
+  const typeOfRoom = useMemo(() => new Map(rows.map((r) => [r.roomId, r.roomTypeName])), [rows]);
+  const nightCols = perDate?.length && displayNights.length > 1 && displayNights.length <= 14 ? displayNights : [];
+  const freeByTypeNight = useMemo(() => {
+    const m = new Map<string, Map<string, number>>();
+    for (const p of perDate ?? []) {
+      const night = String(p.date).slice(0, 10);
+      for (const id of p.availableRoomIds) {
+        const t = typeOfRoom.get(id);
+        if (!t) continue;
+        const tm = m.get(t) ?? new Map<string, number>();
+        tm.set(night, (tm.get(night) ?? 0) + 1);
+        m.set(t, tm);
+      }
+    }
+    return m;
+  }, [perDate, typeOfRoom]);
+
+  // Too few rooms for the ask (2026-10-27, operator: "the guest asked for 3 rooms and the house has
+  // only 2 — show it on top, in red"). Counted night by night off the house's own answer: the
+  // tightest night decides. With enough rooms every night but no one type holding them all, the
+  // rooms have to be mixed across types — said in amber, since it can still be done.
+  const houseShort = useMemo(() => {
+    if (!hasResults) return null;
+    const nights = stayNights.length ? stayNights : displayNights;
+    let free = byType.reduce((s, t) => s + t.full.length + t.deficient, 0);
+    let night: string | null = null;
+    if (perDate?.length && nights.length) {
+      free = Infinity;
+      for (const n of nights) {
+        const count = perDate.find((p) => p.date === n)?.availableRoomIds.length ?? 0;
+        if (count < free) {
+          free = count;
+          night = n;
+        }
+      }
+    }
+    if (free < numberOfRooms) return { kind: "SHORT" as const, free, night };
+    if (!byType.some((t) => t.full.length >= numberOfRooms)) return { kind: "MIX" as const, free, night: null };
+    return null;
+  }, [hasResults, stayNights, displayNights, perDate, byType, numberOfRooms]);
 
   const savedIds = optionSelectedRoomIds(savedOption);
   const savedTypes = [
@@ -1037,15 +1132,16 @@ function TheHouse({
   const chartRead = useRef(false);
 
   const ask = useMutation({
-    mutationFn: async () => {
-      const ci = entry.checkInDate?.slice(0, 10);
-      const co = entry.checkOutDate?.slice(0, 10);
+    // `over` carries the stay just saved — the entry on screen is re-read a moment later.
+    mutationFn: async (over: StaySaved | void) => {
+      const ci = over ? over.checkInDate : entry.checkInDate?.slice(0, 10);
+      const co = over ? over.checkOutDate : entry.checkOutDate?.slice(0, 10);
       if (!ci || !co)
         throw new Error("Put in the check-in and check-out first");
       return queryAvailabilityByEntry(session!, entry.id, {
         checkInDate: ci,
         checkOutDate: co,
-        guestCount: entry.guestCount ?? undefined,
+        guestCount: (over ? over.guestCount : entry.guestCount) ?? undefined,
         useType: entry.useType ?? undefined,
       });
     },
@@ -1079,23 +1175,38 @@ function TheHouse({
           : undefined,
       });
     },
-    onSuccess: () => {
+    onSuccess: async () => {
       toast.success("The rooms are chosen and on record");
+      setToolOpen(false);
       refresh();
-      // The rooms are chosen: the work moves on to Wrap up, the bill staying in view.
-      if (flow.on) flow.done("house", { reveal: false });
+      await goToWrap();
     },
     onError: (e) => toastRefusal(e, "The rooms could not be recorded"),
   });
+  // Saving the rooms (the table's Save, or Take it) goes straight to Wrap up (2026-10-28, operator:
+  // "when I click Save the room in the choose room table, can it directly take me to the wrap
+  // section"). The bill lives in the booking file now, so nothing here has to stay in view. Wrap up
+  // waits for the rooms until the booking is read again, so the page moves once it has opened.
+  const qc = useQueryClient();
+  const flowRef = useRef(flow);
+  flowRef.current = flow;
+  const goToWrap = async () => {
+    await qc.invalidateQueries({ queryKey: ["entry", entry.id] });
+    const opened = () => !!document.querySelector('[data-flow="wrap"]:not(.flow-waiting)');
+    const end = Date.now() + 3000;
+    while (!opened() && Date.now() < end) await new Promise((r) => window.setTimeout(r, 40));
+    if (flowRef.current.on) flowRef.current.done("house", { next: "wrap" });
+  };
 
   // The bill (2026-10-10): what the rooms on the table cost, night by night and for the stay —
   // the picks as they stand, saved or not; with none, what Take it would hold.
   const stayNightSet = useMemo(() => new Set(stayNights), [stayNights]);
-  const picked: BillNight[] = sel.allPicked.length
+  const numberPicked: BillNight[] = sel.allPicked.length
     ? displayNights
         .filter((d) => stayNightSet.has(d))
         .map((date) => ({ date, roomIds: sel.effectiveByNight[date] ?? [] }))
     : [];
+  const picked: BillNight[] = byTypeMode ? (typePicks?.perNight ?? []).filter((n) => stayNightSet.has(n.date)) : numberPicked;
   // Take it takes the marked type's rooms free on every night — the chart's room first, when it is one.
   const takeIds = chosenRow
     ? (chartPick && chosenRow.full.includes(chartPick) ? [chartPick, ...chosenRow.full.filter((id) => id !== chartPick)] : chosenRow.full).slice(0, numberOfRooms)
@@ -1106,9 +1217,33 @@ function TheHouse({
       : [];
   const billFor = picked.length ? picked : candidate;
   const bill = usePickPricing(entry.id, billFor, hasResults);
-  const pickedSaved = sel.savedCanon != null && sel.savedCanon === sel.currentCanon;
+  const pickedSaved = byTypeMode ? !!typePicks?.saved : sel.savedCanon != null && sel.savedCanon === sel.currentCanon;
+  // Picks changed and not saved: the house does not read as done (2026-10-27).
+  useFlowUnsaved("house", editable && !past && !byTypeMode && sel.currentCanon !== sel.savedCanon, "The rooms picked saved");
+  // The bill lives in the booking file (2026-10-27, operator: "when rooms are picked, show this on
+  // the right, in Charges & payments › The price, with the nights and the rooms"). A pick made by
+  // hand opens it there; picks restored on arrival or a background re-read do not, and the page
+  // never moves — only the file's tab changes.
+  const openFile = useOpenFileTab();
+  const handPickedAt = useRef(0);
+  const markHandPick = () => {
+    handPickedAt.current = Date.now();
+  };
+  const pickKey = picked.length ? JSON.stringify(cleanPicks(picked)) : "";
+  const lastPickKey = useRef(pickKey);
+  useEffect(() => {
+    if (pickKey === lastPickKey.current) return;
+    lastPickKey.current = pickKey;
+    if (!pickKey || !editable || past || Date.now() - handPickedAt.current > 2000) return;
+    openFile("money", "price");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pickKey]);
   // What is picked, saved or not, for the Charges & payments tab and the header total.
-  usePublishPriceDraft(entry.id, editable ? { kind: "PICKS", perNight: picked, saved: pickedSaved } : null);
+  const pickLabels = byTypeMode ? (typePicks?.labels ?? bookingRoomsView.labels) : bookingRoomsView.labels;
+  usePublishPriceDraft(
+    entry.id,
+    editable ? { kind: "PICKS", perNight: picked, saved: pickedSaved, labels: Object.fromEntries(pickLabels) } : null,
+  );
   const billTitle = picked.length
     ? pickedSaved
       ? "The rooms chosen"
@@ -1117,6 +1252,7 @@ function TheHouse({
 
   const takeIt = () => {
     if (!chosenRow) return;
+    markHandPick();
     const ids = takeIds;
     sel.setWholeStay(ids);
     const perNight = stayNights.length
@@ -1173,24 +1309,105 @@ function TheHouse({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chartRoom, editable, past, session, savedOption, hasResults, rows]);
 
+  // Started from the intake (2026-10-27, operator: "ask the house directly as soon as I click
+  // Start the inquiry"): the new booking opens with `?ask=1` and the house is asked once on
+  // arrival, the same way the chart's room is. A booking already asked, or with rooms chosen, is
+  // left as it is; the flag leaves the address once read.
+  const askOnArrival = searchParams.get("ask") === "1";
+  const arrivalRead = useRef(false);
+  useEffect(() => {
+    if (!askOnArrival || arrivalRead.current || chartRoom || !editable || past || !session) return;
+    const clearAddress = () => {
+      const p = new URLSearchParams(searchParams.toString());
+      p.delete("ask");
+      const qs = p.toString();
+      router.replace(`${pathname}${qs ? `?${qs}` : ""}`, { scroll: false });
+    };
+    // The stay's "Done · Start the inquiry" goes on to the house (2026-10-28, operator: "after the
+    // stay is done it should scroll to the house section, but it's still showing the stay on top"):
+    // the booking opens with the house's top just under the head, kept there while its answer
+    // arrives. This finishes the move the desk pressed for; it does not happen on any other visit.
+    const goToHouse = () =>
+      window.requestAnimationFrame(() =>
+        window.requestAnimationFrame(() =>
+          window.setTimeout(() => {
+            const el = document.getElementById(anchorFor("house"));
+            if (el) revealCard(el);
+          }, 150),
+        ),
+      );
+    if (hasResults || savedOption || !entry.checkInDate || !entry.checkOutDate) {
+      arrivalRead.current = true;
+      clearAddress();
+      goToHouse();
+      return;
+    }
+    // Started once the effect has settled — see the chart's ask above.
+    const t = setTimeout(() => {
+      arrivalRead.current = true;
+      ask.mutate();
+      clearAddress();
+      goToHouse();
+    }, 0);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [askOnArrival, chartRoom, editable, past, session, savedOption, hasResults]);
+
+  // The stay's Done asks the house again (2026-10-27) — with the dates it just saved.
+  const askRef = useRef(ask);
+  askRef.current = ask;
+  const autoAsked = useRef<string | null>(null);
+  useEffect(() => {
+    if (!editable || past) return;
+    const on = (e: Event) => {
+      const d = (e as CustomEvent<StaySaved & { entryId: string }>).detail;
+      if (!d || d.entryId !== entry.id || !d.checkInDate || !d.checkOutDate) return;
+      autoAsked.current = `${d.checkInDate}|${d.checkOutDate}|${d.guestCount ?? ""}`;
+      askRef.current.mutate({ checkInDate: d.checkInDate, checkOutDate: d.checkOutDate, guestCount: d.guestCount });
+    };
+    window.addEventListener(STAY_SAVED_EVENT, on);
+    return () => window.removeEventListener(STAY_SAVED_EVENT, on);
+  }, [entry.id, editable, past]);
+  // With no Ask again button, an answer gone old (the house's clock marks it so) or one for dates
+  // the booking no longer has — the stay changed on another screen — is asked again, once.
+  const bookingKey = `${entry.checkInDate?.slice(0, 10) ?? ""}|${entry.checkOutDate?.slice(0, 10) ?? ""}|${entry.guestCount ?? ""}`;
+  const otherDates =
+    !!searched.checkIn &&
+    !!entry.checkInDate &&
+    (searched.checkIn !== entry.checkInDate.slice(0, 10) || (!!searched.checkOut && !!entry.checkOutDate && searched.checkOut !== entry.checkOutDate.slice(0, 10)));
+  const reask = !hasResults || !editable || past ? null : stale ? `stale:${configId}` : otherDates ? bookingKey : null;
+  useEffect(() => {
+    if (!reask || autoAsked.current === reask || ask.isPending || !session || !entry.checkInDate || !entry.checkOutDate) return;
+    // Started once the effect has settled — see the chart's ask above.
+    const t = setTimeout(() => {
+      autoAsked.current = reask;
+      ask.mutate();
+    }, 0);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reask, ask.isPending, session]);
+
+  // The room-number table opens as a pop-up over the work column, the booking file left clear
+  // (2026-10-28, operator: "a pop up which blurs the screen on the left and not the right side, show
+  // the page there") — a room picked by hand opens its bill in the file beside it.
   const [toolOpen, setToolOpen] = useState(false);
-  const toolRef = useRef<HTMLDivElement | null>(null);
-  const openTool = () => {
-    setToolOpen(true);
-    requestAnimationFrame(() =>
-      toolRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }),
-    );
+  const openTool = () => setToolOpen(true);
+  // The by-type grid is off the page while rooms are picked by number; what it held unsaved is
+  // kept here and given back when it returns.
+  const typeDraft = useRef<TypeDraft | null>(null);
+  // Closing it without a pick saved by number goes back to picking by type, where it came from.
+  const closeTool = () => {
+    setToolOpen(false);
+    if (!savedByNumber) setMode("TYPE");
   };
-  const variedSaved =
-    !!savedOption && "perNight" in savedOption && sel.nightsDiffer;
-  const showTool = hasResults && !past && (toolOpen || variedSaved);
+  const showTool = hasResults && !past && !byTypeMode && toolOpen;
 
   const takeReason = !editable
     ? null
     : !configId
       ? "ask the house first"
       : stale
-        ? "the answer is old — ask again first"
+        ? "the house is being asked again"
         : !chosenRow
           ? "choose a type in the table"
           : chosenRow.full.length < numberOfRooms
@@ -1215,15 +1432,31 @@ function TheHouse({
         flow="house"
         flowAfter="stay"
         flowAfterOnly
+        revealAtTop
         title={
-          hasResults || entry.checkInDate ? `The house · ${range}` : "The house"
+          <>
+            {hasResults || entry.checkInDate ? `The house · ${range}` : "The house"}
+            {houseShort?.kind === "SHORT" ? (
+              <span className="house-short" role="alert">
+                Not enough rooms · {numberOfRooms} asked,{" "}
+                {houseShort.free === 0 ? "none" : `only ${houseShort.free}`} free
+                {houseShort.night && stayNights.length > 1 ? ` on ${fmtDay(houseShort.night)}` : ""}
+              </span>
+            ) : houseShort?.kind === "MIX" ? (
+              <span className="house-short mix" role="status">
+                No one type has {numberOfRooms} free — mix types
+              </span>
+            ) : null}
+          </>
         }
         meta="Ask the house — the free rooms for these dates, and what they cost, appear here while you are still on the phone."
         acts={
           editable ? (
             hasResults ? (
               <>
+                {byTypeMode ? null : (
                 <Button
+                  className="go"
                   state={
                     seal.isPending
                       ? "working"
@@ -1237,14 +1470,7 @@ function TheHouse({
                 >
                   Take it
                 </Button>
-                <Button
-                  kind="secondary"
-                  compact
-                  state="inert"
-                  title="Not possible yet — to offer other dates or rooms, change the stay above and ask the house again"
-                >
-                  Offer what we have
-                </Button>
+                )}
                 <Button
                   kind="quiet"
                   compact
@@ -1282,11 +1508,50 @@ function TheHouse({
                 {chartNote.text}
               </p>
             ) : null}
-            <table className="table compact">
+            {byTypeMode ? (
+              <RoomsByType
+                entry={entry}
+                configId={configId}
+                stale={stale}
+                nights={stayNights}
+                numberOfRooms={numberOfRooms}
+                catalog={catalog}
+                editable={editable && !past}
+                onPicks={setTypePicks}
+                onSaved={() => {
+                  refresh();
+                  void goToWrap();
+                }}
+                onParticular={() => {
+                  setMode("NUMBER");
+                  openTool();
+                }}
+                draft={typeDraft.current}
+                onDraft={(d) => {
+                  typeDraft.current = d;
+                }}
+              />
+            ) : (
+            <table className="table compact house-types">
               <thead>
                 <tr>
                   <th>Type</th>
-                  <th>Free</th>
+                  <th>
+                    Free every night
+                    {nightCols.length ? (
+                      <Help label="About the nights">
+                        A room counts as free only when it is free on every night of the stay. Each night&rsquo;s column says how many of
+                        that type are free that night — a room free on some nights only can still be chosen for those nights in
+                        Choose the rooms.
+                      </Help>
+                    ) : null}
+                  </th>
+                  {nightCols.map((n) => (
+                    <th key={n} className="hn">
+                      {WEEKDAY[new Date(`${n}T00:00:00Z`).getUTCDay()]}
+                      <small>{fmtDay(n)}</small>
+                    </th>
+                  ))}
                 </tr>
               </thead>
               <tbody>
@@ -1298,13 +1563,18 @@ function TheHouse({
                   >
                     <td>{t.name}</td>
                     <td>
-                      {t.full.length > 0 ? (
+                      {t.full.length >= numberOfRooms ? (
                         <Chip tone="success">{t.full.length} free</Chip>
+                      ) : t.full.length > 0 ? (
+                        <Chip tone="warning" title={`fewer than the ${numberOfRooms} rooms asked`}>
+                          {t.full.length} free · fewer than {numberOfRooms}
+                        </Chip>
                       ) : t.partial > 0 ? (
                         <Chip tone="warning">{t.partial} on some nights</Chip>
                       ) : (
                         <Chip tone="quiet">none</Chip>
                       )}
+                      {t.full.length > 0 && t.partial > 0 ? <span className="meta"> · {t.partial} more on some nights</span> : null}
                       {t.deficient > 0 ? (
                         <span className="meta">
                           {" "}
@@ -1312,18 +1582,35 @@ function TheHouse({
                         </span>
                       ) : null}
                     </td>
+                    {nightCols.map((n) => {
+                      const free = freeByTypeNight.get(t.name)?.get(n) ?? 0;
+                      return (
+                        <td
+                          key={n}
+                          className={`hn${free === 0 ? " none" : free < numberOfRooms ? " low" : ""}`}
+                          title={`${plural(free, "room")} of this type free on ${fmtDay(n)}`}
+                        >
+                          {free}
+                        </td>
+                      );
+                    })}
                   </tr>
                 ))}
               </tbody>
             </table>
+            )}
             {bill.pricing ? (
-              <PickBill
-                pricing={bill.pricing}
-                loading={bill.loading}
-                title={billTitle}
-                caption={picked.length && !pickedSaved ? "Save the rooms to keep this choice — the figures follow every pick." : undefined}
-                help="Indicative, not a quote. Meals, extra beds and any agreed rate are set at Negotiation." 
-              />
+              <div className={`pb-line${bill.loading ? " loading" : ""}`}>
+                <span className="pb-line-k">{billTitle}</span>
+                <b className="money">{money(bill.pricing.totals.total, bill.pricing.currency)}</b>
+                <span className="meta">
+                  {plural(bill.pricing.totals.roomNights, "room-night")} · room only, taxes included
+                </span>
+                <Help label="About this figure">
+                  Indicative, not a quote. Meals, extra beds and any agreed rate are set at Negotiation.
+                  {picked.length ? " The bill for the rooms picked — each night, its rooms and the taxes — is in the booking file, under Charges & payments." : ""}
+                </Help>
+              </div>
             ) : chosenPricing ? (
               <div style={{ marginTop: 10 }}>
                 <b className="money">
@@ -1344,10 +1631,20 @@ function TheHouse({
                 </span>
               </div>
             ) : null}
-            {stale ? (
-              <div className="sm warn-ink" style={{ marginTop: 8 }}>
-                This answer is old — ask the house again before choosing.
+            {ask.isPending ? (
+              <div className="sm meta" style={{ marginTop: 8 }} role="status">
+                Asking the house for these dates…
               </div>
+            ) : stale ? (
+              <div className="sm warn-ink" style={{ marginTop: 8 }}>
+                This answer is old — the house is asked again.
+              </div>
+            ) : null}
+            {pickMisfit ? (
+              <p className="pick-misfit" role="alert">
+                <span className="mark" aria-hidden>!</span>
+                The rooms chosen no longer fit the stay — {pickMisfit}. Choose the rooms again.
+              </p>
             ) : null}
             {savedIds.length ? (
               <div
@@ -1360,11 +1657,12 @@ function TheHouse({
                   flexWrap: "wrap",
                 }}
               >
-                <Chip tone="success" icon="check">
-                  chosen
+                <Chip tone={pickMisfit ? "warning" : "success"} icon={pickMisfit ? undefined : "check"}>
+                  {pickMisfit ? "chosen for the stay before" : "chosen"}
                 </Chip>
-                Room{savedNumbers.length === 1 ? "" : "s"}{" "}
-                {savedNumbers.join(", ")}
+                {savedByType
+                  ? savedIds.map((id) => bookingRoomsView.labels.get(id) ?? `Room ${rows.find((r) => r.roomId === id)?.roomNumber ?? catalog.find((r) => r.id === id)?.roomNumber ?? "?"}`).join(", ")
+                  : `Room${savedNumbers.length === 1 ? "" : "s"} ${savedNumbers.join(", ")}`}
                 {savedTypes.length ? (
                   <span className="meta"> · {savedTypes.join(", ")}</span>
                 ) : null}
@@ -1388,52 +1686,59 @@ function TheHouse({
             ) : null}
             {editable ? (
               <div className="row-acts" style={{ marginTop: 10 }}>
-                <Button
-                  kind="quiet"
-                  compact
-                  state={ask.isPending ? "working" : "default"}
-                  workingLabel="Asking…"
-                  onClick={() => ask.mutate()}
-                >
-                  Ask again
-                </Button>
-                <Button kind="quiet" compact onClick={openTool}>
-                  Choose the rooms…
-                </Button>
+                {/* No Ask again (2026-10-27): the house is asked by itself after the stay's
+                    Done, and when its answer goes old. Only a failed ask offers it once more. */}
+                {ask.isError && !ask.isPending ? (
+                  <Button kind="quiet" compact onClick={() => ask.mutate()}>
+                    Try asking the house again
+                  </Button>
+                ) : null}
+                {byTypeMode ? null : (
+                  <>
+                    <Button kind="quiet" compact onClick={openTool}>
+                      Choose the rooms
+                    </Button>
+                    <Button kind="quiet" compact onClick={() => { setMode("TYPE"); setToolOpen(false); }}>
+                      Pick by room type instead
+                    </Button>
+                  </>
+                )}
               </div>
             ) : null}
           </>
         )}
       </StepCard>
 
-      {showTool && toolSlot
-        ? createPortal(
-            <div ref={toolRef}>
-              <WhichRooms
-                entry={entry}
-                rows={rows}
-                perDate={perDate}
-                displayNights={displayNights}
-                numberOfRooms={numberOfRooms}
-                sel={sel}
-                catalog={catalog}
-                stale={stale}
-                saving={seal.isPending}
-                onSave={() => {
-                  const p = sel.payload();
-                  sel.submittedRef.current = sel.currentCanon;
-                  seal.mutate(p);
-                }}
-                justSaved={seal.isSuccess}
-                bill={picked.length ? bill.pricing : null}
-                isGm={isGm}
-                onClose={() => setToolOpen(false)}
-                onReleased={() => ask.mutate()}
-              />
-            </div>,
-            toolSlot,
-          )
-        : null}
+      <WorkPopup
+        open={showTool}
+        title={`Pick every room by number · ${plural(numberOfRooms, "room")} for ${plural(displayNights.length, "night")}`}
+        onClose={closeTool}
+      >
+        <div onPointerDownCapture={markHandPick} onClickCapture={markHandPick} onKeyDownCapture={markHandPick}>
+          <WhichRooms
+            entry={entry}
+            rows={rows}
+            perDate={perDate}
+            displayNights={displayNights}
+            numberOfRooms={numberOfRooms}
+            sel={sel}
+            catalog={catalog}
+            stale={stale}
+            saving={seal.isPending}
+            onSave={() => {
+              const p = sel.payload();
+              sel.submittedRef.current = sel.currentCanon;
+              seal.mutate(p);
+            }}
+            justSaved={seal.isSuccess}
+            bill={picked.length ? bill.pricing : null}
+            isGm={isGm}
+            onClose={closeTool}
+            popup
+            onReleased={() => ask.mutate()}
+          />
+        </div>
+      </WorkPopup>
     </>
   );
 }
@@ -1456,6 +1761,7 @@ function WhichRooms({
   isGm,
   onClose,
   onReleased,
+  popup = false,
 }: {
   entry: EntryDetail;
   rows: RoomStatusRow[];
@@ -1473,19 +1779,12 @@ function WhichRooms({
   isGm: boolean;
   onClose: () => void;
   onReleased: () => void;
+  /** Drawn inside the work-column pop-up: no card of its own, no full screen, the pop-up closes it. */
+  popup?: boolean;
 }) {
-  const [view, setView] = useState<"table" | "board">("table");
   const [names, setNames] = useState(false);
   const [full, setFull] = useState(false);
   const [release, setRelease] = useState<ReleaseTarget | null>(null);
-  const canBoard =
-    (entry.adultCount ?? 0) > 0 || (entry.childAges ?? []).length > 0;
-  const board = view === "board" && canBoard;
-  const boardBase = useRef<string[]>([]);
-  const boardEcho = useRef(false);
-  useEffect(() => {
-    if (board) boardEcho.current = true;
-  }, [board]);
   useEffect(() => {
     if (!full) return;
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && setFull(false);
@@ -1497,28 +1796,6 @@ function WhichRooms({
       document.body.style.overflow = prev;
     };
   }, [full]);
-
-  const capacity = useMemo(
-    () =>
-      new Map(
-        catalog
-          .map((r) => [
-            r.id,
-            r.roomType?.maxCapacity ?? r.roomType?.standardCapacity ?? 0,
-          ])
-          .filter(([, c]) => (c as number) > 0) as Array<[string, number]>,
-      ),
-    [catalog],
-  );
-  const maxChildren = useMemo(
-    () =>
-      new Map(
-        catalog
-          .filter((r) => typeof r.roomType?.maxChildren === "number")
-          .map((r) => [r.id, r.roomType!.maxChildren!]),
-      ),
-    [catalog],
-  );
 
   const showSaved =
     !saving &&
@@ -1628,52 +1905,41 @@ function WhichRooms({
   const saveWord = showSaved
     ? "Saved"
     : stale
-      ? "Ask again to save"
+      ? "Waiting for the house"
       : sel.nightsDiffer
         ? "Save the rooms by night"
         : numberOfRooms === 1
           ? "Save the room"
           : `Save ${numberOfRooms} rooms`;
 
-  const body = (
-    <StepCard
-      title={`Which rooms · ${plural(numberOfRooms, "room")} for ${plural(displayNights.length, "night")}`}
-      right={
+  // The rooms by night only (2026-10-28, operator: "remove place the guests option, that way rooms
+  // by night option is also not needed") — the guests are placed at Negotiation, room by room.
+  const namesButton = (
+    <Button kind="quiet" compact icon="person" aria-pressed={names} onClick={() => setNames((v) => !v)}>
+      {names ? "Names shown" : "Show names"}
+    </Button>
+  );
+  const right = (
         <>
-          {canBoard ? (
-            <Choice
-              options={[
-                ["table", "Rooms by night"],
-                ["board", "Place the guests"],
-              ]}
-              value={board ? "board" : "table"}
-              onChange={setView}
-            />
-          ) : null}
-          {!board ? (
-            <Button
-              kind="quiet"
-              compact
-              icon="person"
-              aria-pressed={names}
-              onClick={() => setNames((v) => !v)}
-            >
-              {names ? "Names shown" : "Show names"}
+          {popup ? null : namesButton}
+          {popup ? null : (
+            <Button kind="quiet" compact onClick={() => setFull((v) => !v)}>
+              {full ? "Close the full view" : "Full screen"}
             </Button>
-          ) : null}
-          <Button kind="quiet" compact onClick={() => setFull((v) => !v)}>
-            {full ? "Close the full view" : "Full screen"}
-          </Button>
-          {!full ? (
+          )}
+          {!full && !popup ? (
             <Button kind="quiet" compact icon="x" onClick={onClose}>
               Hide
             </Button>
           ) : null}
         </>
-      }
-    >
-      <div className="row-acts" style={{ marginBottom: 10 }}>
-        <span className={`sm ${sel.ready ? "ok-ink" : "stop-ink"}`}>{counter}</span>
+  );
+  const inner = (
+    <>
+      {/* The count and the save on a band of their own under the card's buttons (2026-10-27,
+          operator: "make Save the room prominent — it looks misaligned, too close to the button on top"). */}
+      <div className="row-acts rooms-saverow">
+        <span className={`rooms-count ${sel.ready ? "ok-ink" : "stop-ink"}`}>{counter}</span>
         {tally.map((t) => (
           <Chip
             key={t.parts.join("+")}
@@ -1706,9 +1972,11 @@ function WhichRooms({
         ) : null}
         {/* The save sits at the right end of the row, apart from the tallies it acts on
             (operator, 2026-09-29): the eye reads the counts left to right and lands on the act. */}
-        <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "baseline", gap: 12 }}>
+        <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 12 }}>
+          {/* In the pop-up, Show names sits beside the save (2026-10-28, operator). */}
+          {popup ? namesButton : null}
           <Button
-            compact
+            className="go"
             kind={showSaved ? "secondary" : "primary"}
             icon={showSaved ? "check" : undefined}
             state={
@@ -1737,41 +2005,6 @@ function WhichRooms({
       {/* No total band here (2026-10-19, operator: "there is already a table on top to do that") —
           the house card's bill above carries the stay's total and each room type's. */}
       <Tool>
-        {board ? (
-          <RoomSelectBoard
-            rows={rows}
-            nights={displayNights}
-            perDate={perDate}
-            entryAdults={entry.adultCount}
-            entryChildAges={entry.childAges}
-            maxRooms={numberOfRooms}
-            selectedRoomIds={sel.base}
-            initialPerNight={sel.effectiveByNight}
-            onSelectionChange={(ids) => {
-              boardBase.current = ids;
-              sel.setBase(ids);
-            }}
-            onPerNightChange={(pn, diffs) => {
-              const b = boardBase.current;
-              if (diffs) {
-                boardEcho.current = false;
-                sel.setOverrides(
-                  Object.fromEntries(
-                    pn
-                      .filter((p) => !sel.sameSet(p.roomIds, b))
-                      .map((p) => [p.date, p.roomIds]),
-                  ),
-                );
-              } else if (boardEcho.current) {
-                boardEcho.current = false;
-              } else sel.setOverrides({});
-            }}
-            capacityByRoomId={capacity}
-            maxChildrenByRoomId={maxChildren}
-            capacitiesReady={catalog.length > 0}
-            disabled={saving}
-          />
-        ) : (
           <RoomStatusTable
             rows={rows}
             nights={displayNights}
@@ -1798,7 +2031,6 @@ function WhichRooms({
             large={full}
             nightTotals={bill ? Object.fromEntries(bill.nights.map((n) => [n.date, money(n.total, bill.currency)])) : undefined}
           />
-        )}
       </Tool>
       {!full && (held.length || blocked.length) ? (
         <div className="sm" style={{ marginTop: 10, display: "grid", gap: 4 }}>
@@ -1833,6 +2065,12 @@ function WhichRooms({
         onClose={() => setRelease(null)}
         onDone={onReleased}
       />
+    </>
+  );
+  if (popup) return <div className="which-rooms-pop">{inner}</div>;
+  const body = (
+    <StepCard title={`Which rooms · ${plural(numberOfRooms, "room")} for ${plural(displayNights.length, "night")}`} right={right}>
+      {inner}
     </StepCard>
   );
   return full ? <div className="fullscreen-layer">{body}</div> : body;
@@ -1929,3 +2167,7 @@ function ReleaseDialog({
     </ReasonDialog>
   );
 }
+
+/** The stay saved on the Inquiry step — the house card asks the house again with these figures. */
+const STAY_SAVED_EVENT = "desk:stay-saved";
+type StaySaved = { checkInDate: string; checkOutDate: string; guestCount?: number | null };

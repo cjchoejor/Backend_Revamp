@@ -101,6 +101,13 @@ export function hotelDayEndUtc(at: Date): Date {
   return new Date(Date.UTC(y, m - 1, d + 1, 0, 0, 0, 0) - hotelOffsetMs(at));
 }
 
+/** The hotel-local time of day ("HH:MM", 24-hour) at an instant — HOTEL_TIMEZONE. */
+export function hotelClockHm(at: Date = new Date()): string {
+  const parts = new Intl.DateTimeFormat("en-GB", { timeZone: HOTEL_TIMEZONE, hour12: false, hour: "2-digit", minute: "2-digit" }).formatToParts(at);
+  const hour = Number(parts.find((p) => p.type === "hour")?.value ?? 0) % 24; // some ICU builds render midnight as "24"
+  return `${String(hour).padStart(2, "0")}:${parts.find((p) => p.type === "minute")?.value ?? "00"}`;
+}
+
 /**
  * The instant a hotel-local time of day falls on a stored calendar date (2026-09-18) — e.g. the
  * check-in date at 14:00 in Thimphu. Stay dates are stored at UTC midnight, which is 06:00 in

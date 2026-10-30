@@ -143,9 +143,10 @@ export async function listHousekeepingRooms(prisma: PrismaClient, opts: { now?: 
   }
   const nextEntries = await prisma.entry.findMany({
     where: { id: { in: [...new Set([...next.values()].map((c) => c.entryId))] } },
-    select: { id: true, expectedArrivalTime: true },
+    select: { id: true, expectedArrivalTime: true, expectedArrivalDayAfter: true },
   });
-  const arrivalTime = new Map(nextEntries.map((e) => [e.id, e.expectedArrivalTime]));
+  // A guest expected the next morning is not arriving on the day their stay starts (2026-10-29).
+  const arrivalTime = new Map(nextEntries.map((e) => [e.id, e.expectedArrivalDayAfter ? null : e.expectedArrivalTime]));
 
   const dirty = rooms.filter(needsCleaning);
   const lastDeparture = new Map<string, { at: Date; entryId: string | null }>();
@@ -330,6 +331,10 @@ export async function markRoomCleaned(
     orderBy: { createdAt: "desc" },
     select: { dueAt: true },
   });
+  // The history line goes on the booking that left — only while it still exists (2026-10-30): a
+  // booking erased afterwards (scripts/delete-booking.ts) left the line naming nobody, and the
+  // database refused it, so the room could never be marked clean. Its number stays in the payload.
+  const leftBy = dep?.entryId ? await prisma.entry.findUnique({ where: { id: dep.entryId }, select: { id: true } }) : null;
   const window = await windowMinutes(prisma);
   const cleanBy = clock?.dueAt ?? (dep ? new Date(dep.effectiveFrom.getTime() + window * 60_000) : null);
   const minutesTaken = dep ? Math.round((now.getTime() - dep.effectiveFrom.getTime()) / 60_000) : null;
@@ -359,7 +364,7 @@ export async function markRoomCleaned(
         entityId: roomId,
         operation: "UPDATE",
         timestamp: now,
-        entryId: dep?.entryId ?? null,
+        entryId: leftBy?.id ?? null,
         payload: {
           roomNumber: room.roomNumber,
           leftAt: dep?.effectiveFrom.toISOString() ?? null,

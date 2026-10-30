@@ -9,7 +9,7 @@
  * Markup follows the prototype's own helpers (`card`, `docCard`, `V16.fact`, `V16.seeRow`), so
  * the generated components.css and frame.css style it without anything added per screen.
  */
-import { Fragment, createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Children, Fragment, createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -113,6 +113,9 @@ type FlowCtxValue = {
   items: FlowItem[];
   on: boolean;
   fold: FlowFold | null;
+  /** A section counts as done only once its Done is pressed — see `StepFlow`'s `confirm`. */
+  confirm: boolean;
+  confirmed: ReadonlySet<string>;
   /** The section being worked: the one last clicked or typed in, else the first not done. */
   current: string | null;
   active: string | null;
@@ -124,18 +127,26 @@ type FlowCtxValue = {
    * marks the next one current without scrolling to it — after Take it the bill above stays in
    * view while Wrap up below is where the work has moved.
    */
-  done: (card: string, opts?: { reveal?: boolean }) => void;
+  done: (card: string, opts?: { reveal?: boolean; next?: string }) => void;
+  /** Sections made from another one — see `StepFlow`'s `derived`. */
+  derived: Readonly<Record<string, string>>;
+  /** Whether a finished section offers a Done — see `StepFlow`'s `doneBar`. */
+  doneBar: boolean;
 };
 const FlowCtx = createContext<FlowCtxValue>({
   items: [],
   on: false,
   fold: null,
+  confirm: false,
+  confirmed: new Set(),
   current: null,
   active: null,
   visited: new Set(),
   opened: new Set(),
   open: () => {},
   done: () => {},
+  derived: {},
+  doneBar: true,
 });
 
 /** The cards of a flow in page order, each once. */
@@ -143,6 +154,79 @@ function flowCards(items: FlowItem[]): string[] {
   const out: string[] = [];
   for (const i of items) if (i.card && !out.includes(i.card)) out.push(i.card);
   return out;
+}
+
+/**
+ * Whether one item counts as done: its value is in, and — when the flow asks for it — the Done of
+ * the section it belongs to has been pressed.
+ */
+function itemDone(i: FlowItem, confirm: boolean, confirmed: ReadonlySet<string>) {
+  return i.met && (!confirm || !i.card || confirmed.has(i.card));
+}
+
+/**
+ * Whether a section is done (2026-10-27, operator: "when I make changes [to the table], should the
+ * quotation remove its tick? The same happens for others"): every item of its own is done, AND the
+ * section it is made from — `derived`, e.g. the quotation from the table, the rooms from the stay —
+ * is done too. A section made from one that has changed and is not saved does not read as done.
+ * One reading for the chips, the cards' ticks and "Before you move on".
+ */
+export function flowSectionDone(
+  items: ReadonlyArray<{ card?: string; met: boolean }>,
+  card: string,
+  derived: Readonly<Record<string, string>> = {},
+  isDone: (i: { card?: string; met: boolean }) => boolean = (i) => i.met,
+  seen: Set<string> = new Set(),
+): boolean {
+  const own = items.filter((i) => i.card === card);
+  if (!own.length || !own.every(isDone)) return false;
+  const from = derived[card];
+  if (!from || seen.has(from) || !items.some((i) => i.card === from)) return true;
+  seen.add(card);
+  return flowSectionDone(items, from, derived, isDone, seen);
+}
+
+/** The section a derived one is waiting on, when that section is not done. */
+export function flowSectionWaitsOn(
+  items: ReadonlyArray<{ card?: string; met: boolean }>,
+  card: string,
+  derived: Readonly<Record<string, string>> = {},
+  isDone: (i: { card?: string; met: boolean }) => boolean = (i) => i.met,
+): string | null {
+  const from = derived[card];
+  if (!from || !items.some((i) => i.card === from)) return null;
+  return flowSectionDone(items, from, derived, isDone) ? null : from;
+}
+
+/**
+ * Changes on screen not saved yet, section by section (2026-10-27). A section reports it with
+ * `useFlowUnsaved`; the workspace counts such a section as not done (when what is saved would
+ * otherwise read as done) and holds the move until it is saved — the Negotiation table's rule,
+ * now every section's.
+ */
+export type UnsavedSection = { card: string; label: string };
+const UnsavedCtx = createContext<((card: string, label: string | null) => void) | null>(null);
+
+export function UnsavedReport({ onChange, children }: { onChange: (items: UnsavedSection[]) => void; children: ReactNode }) {
+  const map = useRef(new Map<string, string>());
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+  const report = useCallback((card: string, label: string | null) => {
+    const had = map.current.get(card) ?? null;
+    if (had === label) return;
+    if (label) map.current.set(card, label);
+    else map.current.delete(card);
+    onChangeRef.current([...map.current].map(([c, l]) => ({ card: c, label: l })));
+  }, []);
+  return <UnsavedCtx.Provider value={report}>{children}</UnsavedCtx.Provider>;
+}
+
+export function useFlowUnsaved(card: string, unsaved: boolean, label: string) {
+  const report = useContext(UnsavedCtx);
+  useEffect(() => {
+    report?.(card, unsaved ? label : null);
+  }, [report, card, unsaved, label]);
+  useEffect(() => () => report?.(card, null), [report, card]);
 }
 
 /**
@@ -166,19 +250,46 @@ export function numberFlow(
     });
 }
 
+const NO_DERIVED: Readonly<Record<string, string>> = {};
+
 export function StepFlow({
   items,
   on,
   fold = null,
+  confirm = false,
+  derived = NO_DERIVED,
+  doneBar = true,
   children,
 }: {
   items: FlowItem[];
   on: boolean;
+  /**
+   * Sections made from another one: `{ quotation: "table" }` — the quotation is the table priced, so
+   * it does not read as done while the table has changes not saved (2026-10-27).
+   */
+  derived?: Readonly<Record<string, string>>;
   /** Whether finished sections fold, and when — see `FlowFold`. Off when omitted. */
   fold?: FlowFold | null;
+  /**
+   * A section counts as done only once the desk presses its Done, not as soon as its fields are
+   * valid (2026-10-27, operator, on the new inquiry: "as soon as I click Yes for On WhatsApp it
+   * opens Who is asking and The stay — it should wait for the user to click Done, and because of
+   * that the to-do list is getting filled on its own"). The sections after it wait for that Done,
+   * the step's line and the card's number tick only then, and a section complete only by its
+   * defaults (the stay opens on today, one night, one adult) is not counted as done.
+   */
+  confirm?: boolean;
+  /**
+   * Whether a finished section offers a Done. Off at Set up (2026-10-28, operator: "it already has
+   * a button named Set the billing model — having to click on Done is just an extra step"): there a
+   * section's own act finishes it, and `useFinishWhenDone` folds it and opens the next.
+   */
+  doneBar?: boolean;
   children: ReactNode;
 }) {
   const [active, setActive] = useState<string | null>(null);
+  // The sections whose Done the desk has pressed (only read when `confirm` is on).
+  const [confirmed, setConfirmed] = useState<ReadonlySet<string>>(() => new Set());
   // The sections the operator has worked in. In "on-move" mode only these fold: a section that is
   // complete only because of its defaults (the stay opens on today, one night, one adult) is not
   // one the desk has finished, and folding it would hide it before it was ever read.
@@ -237,7 +348,7 @@ export function StepFlow({
   }, [active]);
 
   const cards = flowCards(items);
-  const firstOpen = cards.find((c) => items.some((i) => i.card === c && !i.met)) ?? null;
+  const firstOpen = cards.find((c) => items.some((i) => i.card === c && !itemDone(i, confirm, confirmed))) ?? null;
   const current = on ? (active && cards.includes(active) ? active : firstOpen) : null;
 
   const open = useCallback((card: string) => {
@@ -246,36 +357,58 @@ export function StepFlow({
     setActive(card);
   }, []);
   const done = useCallback(
-    (card: string, opts?: { reveal?: boolean }) => {
+    (card: string, opts?: { reveal?: boolean; next?: string }) => {
       if (pressed.current) skipPress.current = true;
+      const nowConfirmed = new Set(confirmed).add(card);
+      setConfirmed(nowConfirmed);
       setVisited((prev) => new Set(prev).add(card));
+      // A named next section is opened even when it reads as done — the stay's Done after a change
+      // goes to the house, which is asked again (2026-10-27).
       setOpened((prev) => {
         const next = new Set(prev);
         next.delete(card);
+        if (opts?.next) next.add(opts.next);
         return next;
       });
       // On to the next section still to do; if every one is done, simply leave this one folded.
+      // A named next section is taken even before it holds anything to do: at Set up, "yes, ask
+      // for an advance" goes to the payment plan, which has no item until an amount is asked
+      // (2026-10-28) — it becomes the section being worked the moment it has one.
       const after = cards.slice(cards.indexOf(card) + 1);
-      const target = after.find((c) => items.some((i) => i.card === c && !i.met)) ?? after[0] ?? null;
+      const target =
+        opts?.next ??
+        after.find((c) => items.some((i) => i.card === c && !itemDone(i, confirm, nowConfirmed))) ??
+        after[0] ??
+        null;
       setActive(target);
       if (target && opts?.reveal !== false) {
-        window.requestAnimationFrame(() => {
-          const el = document.getElementById(anchorFor(target));
-          if (!el) return;
-          revealCard(el);
-          el.querySelector<HTMLElement>("input.input:not([disabled]):not([readonly]), select.input:not([disabled]), textarea.input:not([readonly])")?.focus({ preventScroll: true });
-        });
+        // Wait for the section left behind to fold and the next one to open out before going there:
+        // aimed at mid-change, the page landed partway down the next card (2026-10-28, operator:
+        // "after recording the guest's reply it moved the page like this … very inconsistent").
+        window.requestAnimationFrame(() =>
+          window.requestAnimationFrame(() =>
+            window.setTimeout(() => {
+              const el = document.getElementById(anchorFor(target));
+              if (!el) return;
+              revealCard(el);
+              el.querySelector<HTMLElement>("input.input:not([disabled]):not([readonly]), select.input:not([disabled]), textarea.input:not([readonly])")?.focus({ preventScroll: true });
+            }, 150),
+          ),
+        );
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [cards.join("|"), items.map((i) => `${i.card}${i.met ? 1 : 0}`).join("|")],
+    [cards.join("|"), items.map((i) => `${i.card}${i.met ? 1 : 0}`).join("|"), confirm, [...confirmed].join(",")],
   );
 
   // The list is rebuilt on every render of the workspace; hold one identity per unchanged list so
   // a card only re-renders when its own number or standing moves.
-  const key = `${on}|${fold}|${current}|${active}|${[...opened].join(",")}|${[...visited].join(",")}|${items.map((i) => `${i.n}${i.met ? "1" : "0"}${i.card}`).join("~")}`;
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const value = useMemo<FlowCtxValue>(() => ({ items, on, fold: on ? fold : null, current, active, visited, opened, open, done }), [key, open, done]);
+  const key = `${on}|${fold}|${confirm}|${doneBar}|${Object.entries(derived).join(",")}|${[...confirmed].join(",")}|${current}|${active}|${[...opened].join(",")}|${[...visited].join(",")}|${items.map((i) => `${i.n}${i.met ? "1" : "0"}${i.card}`).join("~")}`;
+  const value = useMemo<FlowCtxValue>(
+    () => ({ items, on, fold: on ? fold : null, confirm, confirmed, current, active, visited, opened, open, done, derived, doneBar }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [key, open, done],
+  );
   return (
     <FlowCtx.Provider value={value}>
       <div className="flow-scope" onFocusCapture={onFocus} onPointerDownCapture={onPointerDown} onPointerUpCapture={onPointerUp}>
@@ -300,8 +433,8 @@ export function useFlowCard(
   after?: string,
   /** Wait on the named card's own items only, not on everything numbered before it. */
   afterOnly?: boolean,
-): { n?: number; met?: boolean; waitsFor?: FlowItem } {
-  const { items, on } = useContext(FlowCtx);
+): { n?: number; met?: boolean; done?: boolean; ticked?: boolean; waitsOn?: string | null; waitsFor?: FlowItem } {
+  const { items, on, confirm, confirmed, derived } = useContext(FlowCtx);
   if (!on) return {};
   // A card may hold several items (Check-in's room card: assigned & ready, then the key). It
   // carries the number of the first still open, and ticks only once every one of them is done —
@@ -315,15 +448,238 @@ export function useFlowCard(
     items.forEach((x, k) => {
       if (x.card === after) last = k;
     });
-    if (last >= 0) waitsFor = items.slice(0, last + 1).find((x) => !x.met && (!afterOnly || x.card === after));
+    if (last >= 0) waitsFor = items.slice(0, last + 1).find((x) => !itemDone(x, confirm, confirmed) && (!afterOnly || x.card === after));
   }
-  return { n: mine?.n, met: mine ? allMet : undefined, waitsFor };
+  // `met`: everything the section asks for is in. `done`: and, where the flow asks for it, its
+  // Done has been pressed — what ticks the card and lets the next one open.
+  const done = allMet && (!confirm || (!!card && confirmed.has(card)));
+  // `ticked`: done, and the section it is made from done too — what the card's tick shows. Folding
+  // keeps reading `done`, so a folded section does not open by itself while one above it is edited.
+  const isDone = (x: { card?: string; met: boolean }) => itemDone(x as FlowItem, confirm, confirmed);
+  const waitsOn = card ? flowSectionWaitsOn(items, card, derived, isDone) : null;
+  const ticked = done && !waitsOn;
+  return { n: mine?.n, met: mine ? allMet : undefined, done: mine ? done : undefined, ticked: mine ? ticked : undefined, waitsOn, waitsFor };
+}
+
+/**
+ * The step's sections on the step line as a progress bar and a list (2026-10-28, operator's choice
+ * over chips, which ran out of room on steps with many sections and left none for the step's own
+ * buttons): one segment per section — green once done, blue for the one being worked — then
+ * "N of M done" and the section being worked, which opens the list of every section with where it
+ * stands. A section in the list opens it (a finished one unfolds, as Edit does) and `onGo` takes
+ * the page there. One line however many sections there are.
+ */
+export function FlowProgress({ names, onGo }: { names: Record<string, string>; onGo: (card: string) => void }) {
+  const ctx = useContext(FlowCtx);
+  const [open, setOpen] = useState(false);
+  const [at, setAt] = useState<{ top: number; left: number } | null>(null);
+  const btnRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const place = useCallback(() => {
+    const b = btnRef.current?.getBoundingClientRect();
+    if (b) setAt({ top: Math.round(b.bottom + 6), left: Math.round(Math.max(8, Math.min(b.left, window.innerWidth - 368))) });
+  }, []);
+  useEffect(() => {
+    if (!open) return;
+    place();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (menuRef.current?.contains(t) || btnRef.current?.contains(t)) return;
+      setOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    window.requestAnimationFrame(() =>
+      (menuRef.current?.querySelector<HTMLButtonElement>(".fp-item.cur") ?? menuRef.current?.querySelector<HTMLButtonElement>(".fp-item"))?.focus({ preventScroll: true }),
+    );
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }, [open, place]);
+  if (!ctx.on) return null;
+  const cards = flowCards(ctx.items);
+  if (!cards.length) return null;
+  const isDone = (i: { card?: string; met: boolean }) => itemDone(i as FlowItem, ctx.confirm, ctx.confirmed);
+  const doneOf = (c: string) => flowSectionDone(ctx.items, c, ctx.derived, isDone);
+  const doneN = cards.filter(doneOf).length;
+  const all = doneN === cards.length;
+  const cur = ctx.current && cards.includes(ctx.current) ? ctx.current : null;
+  const go = (c: string) => {
+    setOpen(false);
+    ctx.open(c);
+    onGo(c);
+  };
+  // Where a section stands, in the list's own words.
+  const standing = (c: string) => {
+    if (doneOf(c)) return "done";
+    const own = ctx.items.filter((i) => i.card === c);
+    const waitsOn = own.every(isDone) ? flowSectionWaitsOn(ctx.items, c, ctx.derived, isDone) : null;
+    if (waitsOn) return `waits for ${names[waitsOn] ?? waitsOn} to be saved`;
+    return own.find((i) => !isDone(i))?.label ?? "to do";
+  };
+  return (
+    <div className="flow-progress" aria-label="This step's sections">
+      <span className="fp-bar" aria-hidden="true">
+        {cards.map((c) => (
+          <span key={c} className={`fp-seg${doneOf(c) ? " done" : ""}${c === cur ? " cur" : ""}`} />
+        ))}
+      </span>
+      <span className={`fp-count${all ? " ok-ink" : ""}`}>
+        {doneN} of {cards.length} done
+      </span>
+      <button
+        ref={btnRef}
+        type="button"
+        className={`fp-now${open ? " on" : ""}`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        {all ? (
+          "all done"
+        ) : cur ? (
+          <>
+            now: <b>{names[cur] ?? cur}</b>
+          </>
+        ) : (
+          "the sections"
+        )}
+        <Icon name="chev" className="cb-chev" />
+      </button>
+      {open && at ? (
+        <Overlay>
+          <div className="cb-menu fp-menu" role="menu" aria-label="This step's sections" ref={menuRef} style={{ top: at.top, left: at.left }}>
+            {cards.map((c) => {
+              const met = doneOf(c);
+              const n = ctx.items.find((x) => x.card === c)?.n;
+              return (
+                <button
+                  key={c}
+                  type="button"
+                  role="menuitem"
+                  className={`fp-item${met ? " done" : ""}${c === cur ? " cur" : ""}`}
+                  aria-current={c === cur ? "step" : undefined}
+                  onClick={() => go(c)}
+                >
+                  <span className="fp-n">{met ? <Icon name="check" /> : n}</span>
+                  <span className="fp-name">{names[c] ?? c}</span>
+                  <span className="fp-state">{c === cur && !met ? `you are here · ${standing(c)}` : standing(c)}</span>
+                </button>
+              );
+            })}
+          </div>
+        </Overlay>
+      ) : null}
+    </div>
+  );
 }
 
 /** The step's flow, for a section that moves the work on by itself (Take it → Wrap up). */
+/**
+ * A section finished by its own act, with no Done to press (Set up, 2026-10-28): call the returned
+ * function once the act has gone through. When the section then reads as done — the booking read
+ * again with what the act wrote — it folds and the next section still to do opens, as Done would.
+ * A section the act did not finish (a part payment) stays open; the wait is let go after a while.
+ */
+export function useFinishWhenDone(card: string): (opts?: { next?: string }) => void {
+  const flow = useContext(FlowCtx);
+  const { done } = useFlowCard(card);
+  const [waiting, setWaiting] = useState(false);
+  // Where the work goes once this section folds, when the act names it (the advance question).
+  const next = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (!waiting) return;
+    if (done) {
+      setWaiting(false);
+      flow.done(card, next.current ? { next: next.current } : undefined);
+      return;
+    }
+    const t = window.setTimeout(() => setWaiting(false), 8000);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [waiting, done]);
+  return useCallback(
+    (opts?: { next?: string }) => {
+      next.current = opts?.next;
+      if (flow.on) setWaiting(true);
+    },
+    [flow.on],
+  );
+}
+
+/**
+ * The section the desk last pressed or typed in, and when — read by `useFinishWhenMet`. The
+ * section is noted at the press, not the element: ticking a box redraws it, and the element the
+ * press landed on is gone from the page by the time the section reads as done (2026-10-29, the
+ * registration tick that never moved on).
+ */
+let lastInput: { card: string | null; at: number } = { card: null, at: 0 };
+let listening = false;
+function listenForInput() {
+  if (listening || typeof window === "undefined") return;
+  listening = true;
+  const note = (e: Event) => {
+    const el = e.target instanceof Element ? e.target.closest("[data-flow]") : null;
+    lastInput = { card: el?.getAttribute("data-flow") ?? null, at: Date.now() };
+  };
+  window.addEventListener("pointerdown", note, true);
+  window.addEventListener("keydown", note, true);
+}
+
+/**
+ * A section finished by an act inside it that the step cannot hear from (2026-10-29 — Check-in's
+ * guest table, its registration tick, its keys): once the section turns done, it folds and the
+ * next section still to do opens, as `useFinishWhenDone` does for an act that calls it. Only when
+ * the desk pressed or typed inside this section in the last half minute — a change read from
+ * another screen never folds a section or moves the page.
+ */
+export function useFinishWhenMet(card: string) {
+  const flow = useContext(FlowCtx);
+  const { done } = useFlowCard(card);
+  const was = useRef(done);
+  useEffect(() => {
+    listenForInput();
+  }, []);
+  useEffect(() => {
+    const before = was.current;
+    was.current = done;
+    if (before || !done || !flow.on) return;
+    if (lastInput.card !== card || Date.now() - lastInput.at > 30_000) return;
+    flow.done(card);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [done]);
+}
+
 export function useStepFlow() {
-  const { on, done } = useContext(FlowCtx);
-  return { on, done };
+  const { on, done, open, opened } = useContext(FlowCtx);
+  // `opened`: the sections opened again with their Edit — a card can show its tools at once then.
+  return { on, done, open, opened };
+}
+
+/**
+ * Where a section stands, for a list that reports on the sections (the new inquiry's "Before you
+ * move on"): done — in and, where asked, its Done pressed — or in but still waiting for its Done.
+ */
+export function useFlowStanding() {
+  const { items, confirm, confirmed } = useContext(FlowCtx);
+  return {
+    isDone: (card: string) => {
+      const own = items.filter((i) => i.card === card);
+      return own.length > 0 && own.every((i) => itemDone(i, confirm, confirmed));
+    },
+    awaitsDone: (card: string) => {
+      const own = items.filter((i) => i.card === card);
+      return confirm && own.length > 0 && own.every((i) => i.met) && !confirmed.has(card);
+    },
+  };
 }
 
 export function anchorFor(card: string) {
@@ -336,11 +692,49 @@ export function anchorFor(card: string) {
  * box had moved).
  */
 export function revealCard(el: HTMLElement) {
-  el.scrollIntoView({ behavior: "smooth", block: "center" });
+  // A tall section is shown from its top (under the sticky head) — centred, its top ran off the
+  // screen and only its last buttons showed (2026-10-28). A card marked to land at the top always
+  // does (StepCard `revealAtTop`).
+  const place = () => {
+    const top = el.dataset.reveal === "top" || el.getBoundingClientRect().height > window.innerHeight * 0.55;
+    el.scrollIntoView({ behavior: "smooth", block: top ? "start" : "center" });
+  };
+  place();
   el.classList.remove("flash");
   void el.offsetWidth;
   el.classList.add("flash");
   window.setTimeout(() => el.classList.remove("flash"), 1900);
+  keepPlacedWhileSettling(el, place);
+}
+
+/**
+ * A card the desk was taken to may still be filling in — the house's answer arriving, a section
+ * opening out — and the page could not yet scroll far enough to put it in place. For up to ten seconds
+ * it is put back where it was taken whenever it changes size, which finishes the move the desk asked
+ * for; the moment the operator scrolls, clicks or types the page is theirs again (the page never
+ * moves on its own, 2026-10-27).
+ */
+function keepPlacedWhileSettling(el: HTMLElement, place: () => void) {
+  if (typeof ResizeObserver === "undefined") return;
+  let height = el.getBoundingClientRect().height;
+  let pending = 0;
+  const events = ["wheel", "touchstart", "keydown", "pointerdown"] as const;
+  const stop = () => {
+    ro.disconnect();
+    window.clearTimeout(pending);
+    window.clearTimeout(end);
+    for (const t of events) window.removeEventListener(t, stop, true);
+  };
+  const ro = new ResizeObserver(() => {
+    const h = el.getBoundingClientRect().height;
+    if (Math.abs(h - height) < 4) return;
+    height = h;
+    window.clearTimeout(pending);
+    pending = window.setTimeout(place, 80);
+  });
+  for (const t of events) window.addEventListener(t, stop, { capture: true, passive: true });
+  ro.observe(el);
+  const end = window.setTimeout(stop, 10000);
 }
 
 /**
@@ -400,7 +794,9 @@ export function StepCard({
   flowAfterOnly,
   heldFor,
   summary,
+  noDoneBar = false,
   doneAction,
+  revealAtTop = false,
 }: {
   title?: ReactNode;
   icon?: IconName;
@@ -440,13 +836,35 @@ export function StepCard({
    */
   summary?: ReactNode;
   /**
+   * The section's own act finishes it, so it draws no Done bar (2026-10-27, operator, on the
+   * Negotiation table: "remove the extra Done button and merge it into Save & price it"). The act
+   * calls `useStepFlow().done(card, …)` itself.
+   */
+  noDoneBar?: boolean;
+  /**
    * What the section's Done does instead of folding — the intake's stay ends with "Done · Start
    * the inquiry" (2026-10-12, operator: the start button sat at the foot of the page and broke the
    * flow). Shown whenever the section is open; inert, with its reason, until it can be pressed.
    */
-  doneAction?: { label: string; onClick: () => void; state?: "default" | "inert" | "working"; title?: string; workingLabel?: string };
+  doneAction?: {
+    label: string;
+    onClick: () => void;
+    state?: "default" | "inert" | "working";
+    title?: string;
+    workingLabel?: string;
+    /** What the bar says beside the button, in place of "All in" (e.g. a change waiting to be saved). */
+    note?: ReactNode;
+    /** A button beside Done, before it (e.g. Undo). */
+    extra?: ReactNode;
+  };
+  /**
+   * When the work moves to this section it lands with its top just under the sticky head, however
+   * short it is at that moment — the house is still asking when the stay's Done goes there, and
+   * centred it grew down the page with the stay still showing above it (2026-10-28).
+   */
+  revealAtTop?: boolean;
 }) {
-  const { n, met, waitsFor } = useFlowCard(flow, flowAfter, flowAfterOnly);
+  const { n, met, done, ticked, waitsFor } = useFlowCard(flow, flowAfter, flowAfterOnly);
   const ctx = useContext(FlowCtx);
   // In a quiet screen the grey line under the title is an explanation, so it moves behind a "?"
   // beside the title (2026-10-12). A card with no title keeps it where it is.
@@ -458,10 +876,15 @@ export function StepCard({
   const isOpened = !!flow && ctx.opened.has(flow);
   // A finished section folds to its line: in "done" mode unless it is opened or being worked in,
   // in "on-move" mode once the operator is working in another section.
+  // A section with nothing inside but its status line never folds (2026-10-30, operator, on a
+  // departure handoff that recorded itself: "this had an Edit button, when clicked it didn't do
+  // anything") — opening it would show nothing to look at or change, so it simply reads its line.
+  const hasBody = Children.toArray(children).length > 0 || !!acts;
   const folded =
     !!flow &&
     !!summary &&
-    !!met &&
+    hasBody &&
+    !!done &&
     !waiting &&
     !isOpened &&
     (ctx.fold === "done"
@@ -470,7 +893,7 @@ export function StepCard({
         ? !!ctx.active && ctx.active !== flow && ctx.visited.has(flow)
         : false);
   // A finished, unfolded section offers Done: fold it and go on to the next one.
-  const canDone = !!flow && !!summary && !!met && !waiting && !folded && !!ctx.fold;
+  const canDone = !!flow && !!summary && !!met && !waiting && !folded && !!ctx.fold && !noDoneBar && ctx.doneBar;
   const body = (
     <>
       {status ? <div className="meta" style={{ marginBottom: 8 }}>{status}</div> : null}
@@ -490,7 +913,7 @@ export function StepCard({
         sealed ? "sealed" : "",
         quiet ? "quiet" : "",
         n ? "flowed" : "",
-        met ? "flow-done" : "",
+        ticked ? "flow-done" : "",
         waiting ? "flow-waiting" : "",
         isCurrent ? "flow-current" : "",
         folded ? "flow-folded" : "",
@@ -499,12 +922,13 @@ export function StepCard({
         .join(" ")}
       id={flow ? anchorFor(flow) : id}
       data-flow={flow}
+      data-reveal={revealAtTop ? "top" : undefined}
       style={style}
     >
       {title ? (
         <div className="card-top">
           <h4>
-            {n ? <span className={`cardno${met ? " done" : ""}`}>{met ? <Icon name="check" /> : n}</span> : null}
+            {n ? <span className={`cardno${ticked ? " done" : ""}`}>{ticked ? <Icon name="check" /> : n}</span> : null}
             {icon ? <Icon name={icon} /> : null}
             {title}
             {metaInHelp ? <Help label="About this section">{meta}</Help> : null}
@@ -528,7 +952,16 @@ export function StepCard({
           ) : (
             <>
               <span className="meta">
-                after <b>{waitsFor!.n}</b> · {waitsFor!.label}
+                {waitsFor!.met ? (
+                  // Its fields are in; what it waits for is the Done of that section.
+                  <>
+                    waits for Done on section <b>{waitsFor!.n}</b>
+                  </>
+                ) : (
+                  <>
+                    after <b>{waitsFor!.n}</b> · {waitsFor!.label}
+                  </>
+                )}
               </span>
               <Button kind="quiet" compact onClick={() => setAnyway(true)}>
                 Show it anyway
@@ -543,21 +976,34 @@ export function StepCard({
         <div className="flow-body" hidden={folded}>
           {body}
           {doneAction ? (
-            <div className="flow-closebar">
+            <div className={`flow-closebar${doneAction.state === "inert" ? "" : " ready"}`}>
               {doneAction.state === "inert" && doneAction.title ? (
                 <span className="meta warn-ink" style={{ alignSelf: "center", marginRight: 10 }}>
                   {doneAction.title}
                 </span>
+              ) : doneAction.note ? (
+                <span className="flow-ready" role="status">
+                  {doneAction.note}
+                </span>
+              ) : doneAction.state !== "inert" ? (
+                <span className="flow-ready ok-ink" role="status">
+                  <Icon name="check" /> All in
+                </span>
               ) : null}
-              <Button state={doneAction.state ?? "default"} title={doneAction.title} workingLabel={doneAction.workingLabel} onClick={doneAction.onClick}>
+              {doneAction.extra}
+              <Button className="go" state={doneAction.state ?? "default"} title={doneAction.title} workingLabel={doneAction.workingLabel} onClick={doneAction.onClick}>
                 {doneAction.label}
               </Button>
             </div>
           ) : canDone ? (
-            <div className="flow-closebar">
-              <Button kind="secondary" compact onClick={() => ctx.done(flow!)}>
-                Done
-              </Button>
+            // Everything the section asks for is in, so Done is the next press: it says so, in
+            // green, and the button is the filled one (2026-10-27, operator: "the Done button
+            // should look more prominent so the user knows where to click").
+            <div className="flow-closebar ready">
+              <span className="flow-ready ok-ink" role="status">
+                <Icon name="check" /> All in — press Done to go on
+              </span>
+              <Button className="go" onClick={() => ctx.done(flow!)}>Done</Button>
             </div>
           ) : null}
         </div>
@@ -727,6 +1173,7 @@ export function ActionRow({
   heldBy,
   goTo,
   goToLabel,
+  className,
 }: {
   label: string;
   caption: ReactNode;
@@ -738,16 +1185,25 @@ export function ActionRow({
   /** The card on this step that would release it. */
   goTo?: string;
   goToLabel?: string;
+  /** Extra classes for the button — "go big" when it is the next thing to do. */
+  className?: string;
 }) {
   const held = !!heldBy;
   const quiet = useQuietScreen();
+  // A folded section opens before it is gone to (2026-10-28 — Set up folds its finished sections,
+  // and a proforma generated but not sent folds while the money still waits on sending it).
+  const flow = useStepFlow();
+  const goThere = (card: string) => {
+    if (flow.on) flow.open(card);
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => goToStepCard(card)));
+  };
   const button = (
     <Button
       kind={kind}
       state={state ?? (onClick ? "default" : "inert")}
       onClick={onClick}
       title={heldBy ?? undefined}
-      className={quiet && (kind === "quiet" || kind === "secondary") ? "act" : undefined}
+      className={[quiet && (kind === "quiet" || kind === "secondary") ? "act" : "", className ?? ""].filter(Boolean).join(" ") || undefined}
     >
       {label}
     </Button>
@@ -769,7 +1225,7 @@ export function ActionRow({
         <span className="held">
           <span className="why">{heldBy}</span>
           {goTo ? (
-            <Button kind="quiet" compact onClick={() => goToStepCard(goTo)}>
+            <Button kind="quiet" compact onClick={() => goThere(goTo)}>
               {goToLabel ?? "Take me there"}
             </Button>
           ) : null}
@@ -942,16 +1398,319 @@ export function OtherWays({ children }: { children: ReactNode }) {
  * half-typed reason survives a look at another tab. The open tab lives in the address
  * (`?way=`), so This step can send the operator straight to one (`useOpenOtherWay`).
  */
-export type OtherWayTab = { key: string; label: string; content: ReactNode };
+export type OtherWayTab = {
+  key: string;
+  label: string;
+  content: ReactNode;
+  /** false: no button of its own in the bar — it opens from elsewhere (the step line's "Change booking"). */
+  inBar?: boolean;
+  /** A wide pop-up — for a table, such as Set up's rooms (2026-10-28). */
+  wide?: boolean;
+};
+
+/**
+ * "Also possible here" as the fixed bar at the foot of the page (2026-10-27, the operator's stage
+ * template, Stage 1 first): the step's other ways become buttons in the bar, and the one pressed
+ * opens its form in a panel that rises above it. The workspace hands the two places to render
+ * into; with none, Other ways stays a tab beside This step.
+ */
+type AlsoBarSlots = {
+  buttons: HTMLElement | null;
+  panel: HTMLElement | null;
+  /** The right-hand end of the step's line, where "Change booking" sits (2026-10-27). */
+  stage?: HTMLElement | null;
+};
+const AlsoBarCtx = createContext<AlsoBarSlots | null>(null);
+
+export function AlsoBar({ buttons, panel, stage = null, children }: AlsoBarSlots & { children: ReactNode }) {
+  const value = useMemo(() => ({ buttons, panel, stage }), [buttons, panel, stage]);
+  return <AlsoBarCtx.Provider value={value}>{children}</AlsoBarCtx.Provider>;
+}
+
+/** What a step puts at the right-hand end of its line — nothing where the layout has no such place. */
+export function StageActs({ children }: { children: ReactNode }) {
+  const bar = useContext(AlsoBarCtx);
+  return bar?.stage ? createPortal(children, bar.stage) : null;
+}
+
+/**
+ * A step's own view in the page (2026-10-28, operator: "it should just show in the current page like
+ * how we had in the rooms tab in our previous UI") — Set up's rooms, opened from Change booking's
+ * "Move a room". The view lives in the address (`?pane=`); the place on the page is kept, so the way
+ * back returns to it.
+ */
+let paneReturnY: number | null = null;
+export function useStepPane() {
+  const params = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  const go = (key: string | null) => {
+    const p = new URLSearchParams(params.toString());
+    p.delete("also");
+    p.delete("way");
+    if (key) p.set("pane", key);
+    else p.delete("pane");
+    router.replace(`${pathname}?${p.toString()}`, { scroll: false });
+  };
+  return {
+    open: (key: string) => {
+      paneReturnY = window.scrollY;
+      go(key);
+      window.requestAnimationFrame(() => window.scrollTo({ top: 0 }));
+    },
+    close: () => {
+      const y = paneReturnY;
+      paneReturnY = null;
+      go(null);
+      if (y == null) return;
+      // The sections come back with the next render; try until the page is drawn tall enough.
+      let tries = 0;
+      const attempt = () => {
+        window.scrollTo({ top: y });
+        if (Math.abs(window.scrollY - y) > 2 && tries++ < 20) window.setTimeout(attempt, 50);
+      };
+      window.setTimeout(attempt, 30);
+    },
+  };
+}
+
+/** Open one of the bar's ways in its pop-up — from anywhere on the step (the step line's menu). */
+export function useOpenAlsoWay() {
+  const params = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  return (key: string) => {
+    const p = new URLSearchParams(params.toString());
+    p.set("way", key);
+    p.set("also", "1");
+    router.replace(`${pathname}?${p.toString()}`, { scroll: false });
+  };
+}
+
+export type ChangeBookingItem = {
+  key: string;
+  label: string;
+  /** What it does, in a line under its name. */
+  note: string;
+  onSelect?: () => void;
+  /** Why it cannot be done now — the item is shown shut, with this said. */
+  reason?: string;
+  danger?: boolean;
+};
+
+/**
+ * "Change booking" (2026-10-27, operator: "merge it into a new button named Change booking … on the
+ * right side here; the guest said no is actually cancel booking, which changes the booking, so
+ * clicking Change booking can show these two options together"). One button at the end of the step's
+ * line opening a short menu — each choice with what it does under its name. The menu is drawn at the
+ * desk's root so the sticky head never clips it; Escape, a press outside or a choice closes it.
+ */
+export function ChangeBookingMenu({
+  items,
+  label = "Change booking",
+  badge = 0,
+  badgeTitle,
+}: {
+  items: ChangeBookingItem[];
+  label?: string;
+  /** Something owed in the menu, in red on its button (2026-10-29 — the keys owed today). */
+  badge?: number;
+  badgeTitle?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [at, setAt] = useState<{ top: number; right: number } | null>(null);
+  const btnRef = useRef<HTMLSpanElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const place = useCallback(() => {
+    const b = btnRef.current?.getBoundingClientRect();
+    if (b) setAt({ top: Math.round(b.bottom + 6), right: Math.round(window.innerWidth - b.right) });
+  }, []);
+  useEffect(() => {
+    if (!open) return;
+    place();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (menuRef.current?.contains(t) || btnRef.current?.contains(t)) return;
+      setOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    window.requestAnimationFrame(() => menuRef.current?.querySelector<HTMLButtonElement>("button:not([disabled])")?.focus({ preventScroll: true }));
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }, [open, place]);
+  if (items.length === 0) return null;
+  return (
+    <>
+      <span ref={btnRef} className="cb-btn">
+        <Button
+          kind="secondary"
+          aria-haspopup="menu"
+          aria-expanded={open}
+          className={[open ? "on" : "", badge ? "stage-due" : ""].filter(Boolean).join(" ") || undefined}
+          title={badge ? badgeTitle : undefined}
+          onClick={() => setOpen((v) => !v)}
+        >
+          {label}
+          {badge ? (
+            <span className="due-n" aria-label={badgeTitle ?? `${badge} to do`}>
+              {badge}
+            </span>
+          ) : null}
+          <Icon name="chev" className="cb-chev" />
+        </Button>
+      </span>
+      {open && at ? (
+        <Overlay>
+          <div className="cb-menu" role="menu" aria-label={label} ref={menuRef} style={{ top: at.top, right: at.right }}>
+            {items.map((it) => {
+              const shut = !!it.reason || !it.onSelect;
+              return (
+                <button
+                  key={it.key}
+                  type="button"
+                  role="menuitem"
+                  className={`cb-item${it.danger ? " danger" : ""}`}
+                  data-item={it.key}
+                  disabled={shut}
+                  onClick={() => {
+                    setOpen(false);
+                    it.onSelect?.();
+                  }}
+                >
+                  <span className="cb-label">{it.label}</span>
+                  <span className="cb-note">{it.note}</span>
+                  {it.reason ? <span className="cb-why">{it.reason}</span> : null}
+                </button>
+              );
+            })}
+          </div>
+        </Overlay>
+      ) : null}
+    </>
+  );
+}
+
+function AlsoBarWays({ live, slots }: { live: OtherWayTab[]; slots: AlsoBarSlots }) {
+  const params = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  // Open when a bar button was pressed (`also`), or a button on This step sent the desk to a way
+  // (`view=other`, `useOpenOtherWay`).
+  const wantOpen = params.get("also") === "1" || params.get("view") === "other";
+  const want = params.get("way");
+  // A way named in the address that this step does not have opens nothing (2026-10-28): a way left
+  // there from another step — Set up's "Change the dates, rooms or guests" sending the booking back
+  // to Inquiry — opened Inquiry's first way, Park, by itself.
+  const urlOpen = wantOpen ? (want ? (live.find((t) => t.key === want)?.key ?? null) : (live[0]?.key ?? null)) : null;
+  // A press opens or closes the pop-up at once; the address follows. Read from the address alone, a
+  // quick press could land before the address had caught up and be undone by it (found driving it).
+  const [pressed, setPressed] = useState<{ key: string | null } | null>(null);
+  const paramsKey = params.toString();
+  useEffect(() => setPressed(null), [paramsKey]);
+  const open = pressed ? pressed.key : urlOpen;
+  const go = (key: string | null) => {
+    setPressed({ key });
+    const p = new URLSearchParams(params.toString());
+    if (key) {
+      p.set("way", key);
+      p.set("also", "1");
+    } else {
+      p.delete("also");
+      if (p.get("view") === "other") p.delete("view");
+    }
+    router.replace(`${pathname}?${p.toString()}`, { scroll: false });
+  };
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") go(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+  // While the pop-up is open the page behind holds still (the page's gutter is reserved, so nothing
+  // shifts sideways), and the keyboard starts inside it.
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    const html = document.documentElement;
+    const before = html.style.overflow;
+    html.style.overflow = "hidden";
+    panelRef.current?.focus({ preventScroll: true });
+    return () => {
+      html.style.overflow = before;
+    };
+  }, [open]);
+  const current = live.find((t) => t.key === open) ?? null;
+  return (
+    <>
+      {slots.buttons
+        ? createPortal(
+            <>
+              {live
+                .filter((t) => t.inBar !== false)
+                .map((t) => (
+                  <Button key={t.key} kind="secondary" className={open === t.key ? "on" : undefined} data-way={t.key} aria-pressed={open === t.key} onClick={() => go(open === t.key ? null : t.key)}>
+                    {t.label}
+                  </Button>
+                ))}
+            </>,
+            slots.buttons,
+          )
+        : null}
+      {/* The way pressed opens in the middle of the screen over a dimmed, blurred page (2026-10-27,
+          operator: "when clicked on the buttons in the bottom bar, show it as a pop-up in the middle of
+          the screen blurring the background"). It is drawn at the desk's root, outside the step,
+          and every way stays mounted, so a half-typed reason survives closing it. Close, Escape or a
+          press outside closes it. */}
+      <Overlay>
+        <div
+          className="also-scrim"
+          hidden={!current}
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) go(null);
+          }}
+        >
+          <div className={`also-panel${current?.wide ? " wide" : ""}`} role="dialog" aria-modal="true" aria-label={current?.label} tabIndex={-1} ref={panelRef}>
+            <div className="also-panel-head">
+              <h3>{current?.label}</h3>
+              <Button kind="quiet" compact onClick={() => go(null)}>
+                Close
+              </Button>
+            </div>
+            {live.map((t) => (
+              <div key={t.key} hidden={t.key !== open}>
+                {t.content}
+              </div>
+            ))}
+          </div>
+        </div>
+      </Overlay>
+    </>
+  );
+}
 
 export function OtherWaysTabs({ tabs }: { tabs: ReadonlyArray<OtherWayTab | null | false | undefined> }) {
   const { past } = useStepMode();
   const slot = useContext(OtherWaysSlotCtx);
+  const bar = useContext(AlsoBarCtx);
   const params = useSearchParams();
   const router = useRouter();
   const pathname = usePathname();
   const live = tabs.filter((t): t is OtherWayTab => !!t);
   if (past || live.length === 0) return null;
+  if (bar) return <AlsoBarWays live={live} slots={bar} />;
   const want = params.get("way");
   const current = live.find((t) => t.key === want) ?? live[0];
   const pick = (key: string) => {
@@ -1034,7 +1793,29 @@ export function useOpenOtherWay() {
     p.set("view", "other");
     p.set("way", key);
     router.replace(`${pathname}?${p.toString()}`, { scroll: false });
-    if (typeof window !== "undefined") window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }));
+    // The old layout's Other ways is a tab at the top of the step. In the stage layout it opens in
+    // the fixed bar, so the page stays where it is (2026-10-27 — the page never moves on its own).
+    if (typeof window !== "undefined" && !document.querySelector(".ws-top"))
+      window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }));
+  };
+}
+
+/**
+ * Open a tab of the booking file (the stage layout's right-hand side) — and a sub-tab inside it —
+ * without moving the page (2026-10-27, operator: "when rooms are picked … automatically switch
+ * to Charges & payments, on the sub-tab The price"). Nothing happens when it is already open.
+ */
+export function useOpenFileTab() {
+  const params = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  return (view: string, sub?: string) => {
+    if (params.get("view") === view && (!sub || params.get("sub") === sub)) return;
+    const p = new URLSearchParams(params.toString());
+    p.set("view", view);
+    if (sub) p.set("sub", sub);
+    p.delete("lens");
+    router.replace(`${pathname}?${p.toString()}`, { scroll: false });
   };
 }
 
@@ -1116,15 +1897,21 @@ export function parkTab(parkNow: ((reason: string) => void) | undefined, busy?: 
 }
 
 /** The guest said no (2026-10-01) — Inquiry and Negotiation only; from Set up it is a cancellation. */
-export function declineTab(declineNow: ((reason: string) => void) | undefined, busy?: boolean): OtherWayTab | null {
+export function declineTab(
+  declineNow: ((reason: string) => void) | undefined,
+  busy?: boolean,
+  /** Negotiation names it Cancel booking and opens it from Change booking (2026-10-27). */
+  opts?: { label?: string; act?: string; inBar?: boolean },
+): OtherWayTab | null {
   if (!declineNow) return null;
   return {
     key: "decline",
-    label: "The guest said no",
+    label: opts?.label ?? "The guest said no",
+    inBar: opts?.inBar,
     content: (
       <ReasonForm
         danger
-        label="Turn the booking down"
+        label={opts?.act ?? "Turn the booking down"}
         fieldLabel="What did they say?"
         placeholder="too expensive · booked elsewhere · dates changed"
         busy={busy}
@@ -1233,18 +2020,22 @@ export function DocCard({
  * same fact differently. A choice is recorded for the stay; from Arrival it also makes the room
  * up that way, and the server says which happened — the toast reads accordingly.
  */
-export function useBedPlan(entryId: string) {
+export function useBedPlan(entryId: string, version?: string | number | null) {
   const { session } = useSession();
   const qc = useQueryClient();
+  // Read again whenever the booking changes (2026-10-29, operator: after a room change the new room
+  // showed no bed setup). The rooms are the booking's, and a room change, a change of the stay or a
+  // quiet move gives it other rooms — the list cached under the booking alone kept the old ones.
+  const key = ["bed-plan", entryId, version ?? null] as const;
   const q = useQuery({
-    queryKey: ["bed-plan", entryId],
+    queryKey: key,
     queryFn: () => getEntryBedPlan(session!, entryId),
     enabled: !!session,
   });
   const m = useMutation({
     mutationFn: (v: { roomId: string; bedType: string | null }) => setEntryBedPlan(session!, entryId, v.roomId, v.bedType),
     onSuccess: (out, v) => {
-      qc.setQueryData(["bed-plan", entryId], out);
+      qc.setQueryData(key, out);
       void qc.invalidateQueries({ queryKey: ["rooms-catalog"] });
       const row = out.rooms.find((r) => r.roomId === v.roomId);
       const word = row?.bedType ? BED_WORDS[row.bedType] ?? row.bedType : "its usual setup";
@@ -1323,6 +2114,70 @@ export function Overlay({ children }: { children: ReactNode }) {
     setHost(document.querySelector<HTMLElement>("[data-ds-overlays]") ?? document.body);
   }, []);
   return host ? createPortal(children, host) : null;
+}
+
+/**
+ * A pop-up over the work column only (2026-10-28, operator: "a pop up which blurs the screen on the
+ * left and not the right side, show the page there"). The booking file on the right stays clear and
+ * live — a room picked by hand opens its bill there — while the page on the left is dimmed and
+ * blurred and holds still. Close, Escape or a press on the blurred page closes it; a dialog opened
+ * from inside it stands above it and takes Escape first.
+ */
+export function WorkPopup({
+  open,
+  title,
+  onClose,
+  acts,
+  keepMounted = false,
+  children,
+}: {
+  open: boolean;
+  title: ReactNode;
+  onClose: () => void;
+  acts?: ReactNode;
+  /** Keep what is inside alive while closed (2026-10-29 — Stay's night audit reports to the move from there). */
+  keepMounted?: boolean;
+  children: ReactNode;
+}) {
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      if (document.querySelector(".scrim.open")) return;
+      closeRef.current();
+    };
+    window.addEventListener("keydown", onKey);
+    const html = document.documentElement;
+    const before = html.style.overflow;
+    html.style.overflow = "hidden";
+    panelRef.current?.focus({ preventScroll: true });
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      html.style.overflow = before;
+    };
+  }, [open]);
+  if (!open && !keepMounted) return null;
+  return (
+    <Overlay>
+      <div className="work-scrim" hidden={!open} onMouseDown={(e) => e.target === e.currentTarget && closeRef.current()}>
+        <div className="work-panel" role="dialog" aria-modal="true" aria-label={typeof title === "string" ? title : undefined} tabIndex={-1} ref={panelRef}>
+          <div className="work-panel-head">
+            <h3>{title}</h3>
+            <span className="work-panel-acts">
+              {acts}
+              <Button kind="quiet" compact icon="x" onClick={() => closeRef.current()}>
+                Close
+              </Button>
+            </span>
+          </div>
+          {children}
+        </div>
+      </div>
+    </Overlay>
+  );
 }
 
 export function DsDialog({
@@ -1735,7 +2590,7 @@ export function PapersCard({
                 <Live>
                   {liveQuote(q) ? (
                     <Button kind="quiet" compact icon="send" onClick={() => setSendQuote(q)}>
-                      Send…
+                      Send
                     </Button>
                   ) : null}
                 </Live>
@@ -1768,7 +2623,7 @@ export function PapersCard({
                 <Live>
                   {liveInvoice(i) ? (
                     <Button kind="quiet" compact icon="send" onClick={() => setSendInvoice(i)}>
-                      {i.dispatchedAt ? "Send again…" : "Send…"}
+                      {i.dispatchedAt ? "Send again" : "Send"}
                     </Button>
                   ) : null}
                 </Live>
@@ -2138,6 +2993,9 @@ export function AnswerLine({
   what,
   tz,
   lockedHint,
+  prominent,
+  onAnswered,
+  sentAt,
 }: {
   entryId: string;
   type: EntryCommunicationType;
@@ -2146,6 +3004,12 @@ export function AnswerLine({
   what: string;
   tz?: string;
   lockedHint?: string | null;
+  /** The answer is the next thing to do here: the act is full size and green (2026-10-28). */
+  prominent?: boolean;
+  /** Called once the answer is on record — Set up's proforma finishes its section on it. */
+  onAnswered?: () => void;
+  /** When it went out, when that is not when the paper was made (a held voucher sent on WhatsApp). */
+  sentAt?: string | null;
 }) {
   const { session } = useSession();
   const { past } = useStepMode();
@@ -2164,6 +3028,7 @@ export function AnswerLine({
       setWords("");
       setMethod(null);
       refresh();
+      onAnswered?.();
     },
     onError: (e) => toastRefusal(e, "The answer could not be recorded"),
   });
@@ -2181,15 +3046,21 @@ export function AnswerLine({
   return (
     <div style={{ display: "grid", gap: 6 }}>
       <span className="sm">
-        <Icon name="clock" /> Sent {fmtStamp(c.createdAt, tz)} · {c.isOverdue ? <b className="warn-ink">the reply window has passed</b> : c.acknowledgementTimeoutAt ? <>awaiting their reply until {fmtDateTime(c.acknowledgementTimeoutAt, tz)}</> : "awaiting their reply"}
+        <Icon name="clock" /> {`Sent ${fmtStamp(sentAt ?? c.createdAt, tz)}`} · {c.isOverdue ? <b className="warn-ink">the reply window has passed</b> : c.acknowledgementTimeoutAt ? <>awaiting their reply until {fmtDateTime(c.acknowledgementTimeoutAt, tz)}</> : "awaiting their reply"}
       </span>
       {past ? null : lockedHint ? (
         <span className="meta">{lockedHint}</span>
       ) : !open ? (
         <div className="row-acts">
-          <Button kind="secondary" compact state={c.canAcknowledge ? "default" : "inert"} onClick={() => setOpen(true)}>
-            Record their answer
-          </Button>
+          {prominent ? (
+            <Button className="go big" icon="pen" state={c.canAcknowledge ? "default" : "inert"} onClick={() => setOpen(true)}>
+              Record the guest&rsquo;s answer
+            </Button>
+          ) : (
+            <Button kind="secondary" compact state={c.canAcknowledge ? "default" : "inert"} onClick={() => setOpen(true)}>
+              Record their answer
+            </Button>
+          )}
         </div>
       ) : (
         <div className="bind provisional" style={{ display: "grid", gap: 8 }}>
@@ -2207,7 +3078,8 @@ export function AnswerLine({
           </div>
           <div className="row-acts">
             <Button
-              compact
+              compact={!prominent}
+              className={prominent ? "go" : undefined}
               state={save.isPending ? "working" : !method || (method === "VERBAL" && !words.trim()) ? "inert" : "default"}
               title={!method ? "say how the answer came" : method === "VERBAL" && !words.trim() ? "write what they said first" : undefined}
               onClick={() => save.mutate()}

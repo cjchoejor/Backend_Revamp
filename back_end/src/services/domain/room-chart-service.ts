@@ -42,6 +42,7 @@ import {
 import { hotelTodayUtc, ymdUtc } from "../../lib/stay-dates.js";
 import { roomMoveClaims } from "../../lib/room-move-claims.js";
 import { sealAsPerNight } from "../../lib/option-selected-reader.js";
+import { readBookingRooms, roomUnitsOf, sealHasBookingRooms } from "../../lib/booking-rooms.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 export const CHART_DEFAULT_NIGHTS = 14;
@@ -89,6 +90,11 @@ export type RoomChartBar = {
   holdExpiresAt: string | null;
   /** The room move holding it, for MOVING. */
   moveId: string | null;
+  /**
+   * The system chose this room for the booking and may still move it to another room of the type
+   * until Arrival (a booking picked by type, 2026-10-28) — the desk draws it "room not chosen yet".
+   */
+  quiet: boolean;
 };
 
 /** Rooms a booking has chosen and does not hold — consecutive nights on one room. */
@@ -98,6 +104,8 @@ export type RoomChartPick = {
   from: string;
   to: string;
   parked: boolean;
+  /** Picked by type — the system chose the room (2026-10-28). */
+  quiet: boolean;
 };
 
 export type RoomChartBooking = {
@@ -444,6 +452,7 @@ export async function buildRoomChart(
           paymentPending: c.kind === "RESERVED" && e?.reservationPaymentPending === true,
           holdExpiresAt: c.holdExpiresAt ? c.holdExpiresAt.toISOString() : null,
           moveId: c.moveId ?? null,
+          quiet: false,
         });
         i = j + 1;
       }
@@ -541,12 +550,44 @@ export async function buildRoomChart(
       let start = idx[0];
       for (let k = 1; k <= idx.length; k++) {
         if (k < idx.length && idx[k] === idx[k - 1] + 1) continue;
-        picks.push({ roomId, entryId: e.id, from: nights[start], to: ymdUtc(addDays(from, idx[k - 1] + 1)), parked: e.status === "PARKED" });
+        picks.push({ roomId, entryId: e.id, from: nights[start], to: ymdUtc(addDays(from, idx[k - 1] + 1)), parked: e.status === "PARKED", quiet: false });
         if (k < idx.length) start = idx[k];
       }
     }
   }
   picks.sort((a, b) => a.from.localeCompare(b.from));
+
+  // ---- rooms the system chose for bookings picked by type, before Arrival --------------------
+  const quietEntryIds = [...new Set([...bars.filter((b) => b.kind === "RESERVED" || b.kind === "HELD" || b.kind === "PROVISIONAL").map((b) => b.entryId), ...picks.map((p) => p.entryId)])];
+  if (quietEntryIds.length > 0) {
+    const rows = await prisma.entry.findMany({
+      where: {
+        id: { in: quietEntryIds },
+        currentStage: { in: ["S1", "S2", "S3", "S4", "S5"] },
+        status: { in: ["ACTIVE", "PARKED"] },
+        roomAssignments: { none: {} },
+      },
+      select: {
+        id: true,
+        checkInDate: true,
+        checkOutDate: true,
+        segments: { orderBy: { segmentNumber: "desc" }, take: 1, select: { id: true } },
+        availabilityConfigs: { where: { sealedAt: { not: null } }, orderBy: { sealedAt: "desc" }, take: 3, select: { segmentId: true, optionSelected: true } },
+      },
+    });
+    const quiet = new Set<string>();
+    for (const e of rows) {
+      const seg = e.segments[0]?.id ?? null;
+      const seal = e.availabilityConfigs.find((c) => c.optionSelected != null && (seg == null || c.segmentId == null || c.segmentId === seg))?.optionSelected;
+      if (!sealHasBookingRooms(seal)) continue;
+      const typeOf = new Map(rooms.map((r) => [r.id, r.roomTypeId] as const));
+      for (const u of roomUnitsOf(readBookingRooms(seal, { checkIn: e.checkInDate, checkOut: e.checkOutDate }, (id) => typeOf.get(id)))) {
+        if (u.quiet) quiet.add(`${e.id}|${u.roomId}`);
+      }
+    }
+    for (const b of bars) if (quiet.has(`${b.entryId}|${b.roomId}`) && (b.kind === "RESERVED" || b.kind === "HELD" || b.kind === "PROVISIONAL")) b.quiet = true;
+    for (const p of picks) if (quiet.has(`${p.entryId}|${p.roomId}`)) p.quiet = true;
+  }
 
   const usedEntryIds = new Set([...bars.map((b) => b.entryId), ...picks.map((p) => p.entryId)]);
   const bookings: RoomChartBooking[] = [...entries.values()]

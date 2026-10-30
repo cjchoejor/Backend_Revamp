@@ -29,8 +29,10 @@ import {
   renderTitle,
   row,
   section,
+  stayRows,
   type DocumentMasthead,
 } from "./legphel-document-shell.js";
+import type { StayLines } from "./legphel-document-format.js";
 
 export type LegphelTaxInvoiceInput = {
   masthead: DocumentMasthead;
@@ -48,8 +50,8 @@ export type LegphelTaxInvoiceInput = {
   forGuest?: string | null;
   customerTpn?: string | null;
   yourRef?: string | null;
-  /** "13–15 Oct 2026 · 2 nights" */
-  stay?: string | null;
+  /** Check-in · Check-out (2026-10-28). */
+  stay?: StayLines | null;
   /** "Rooms 201, 202" */
   rooms?: string | null;
   /** Category-level rows, GST-inclusive amounts: "Accommodation · 12 room-nights" → "41,400.00". */
@@ -106,7 +108,7 @@ export function renderLegphelTaxInvoiceHtml(input: LegphelTaxInvoiceInput): stri
     row("Billed to", input.billedTo, { boldValue: true }),
     input.forGuest ? row("For guest", input.forGuest) : "",
     identity.length > 0 ? row(identity.join(" · "), "") : "",
-    input.stay ? row("Stay", input.stay) : "",
+    stayRows(input.stay),
     input.rooms ? row("Rooms", input.rooms) : "",
     section,
     ...input.lines.map((l) => row(l.description, l.amount)),

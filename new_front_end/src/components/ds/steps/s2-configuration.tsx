@@ -36,6 +36,7 @@ import {
   type AvailabilityQueryResponse,
 } from "@/lib/api/availability";
 import {
+  changeStayInPlace,
   amendNegotiationConfiguration,
   decideNegotiationAmendment,
   withdrawNegotiationAmendment,
@@ -49,7 +50,12 @@ import { fmtDateTime, fmtRange, plural } from "@/lib/ds/format";
 import { optionSelectedRoomIds, type AvailabilityOptionSelected, type EntryDetail } from "@/types/api";
 import { Tool, atLeast, toastRefusal, useRefreshEntry } from "./kit";
 import { Help } from "@/components/ds/help";
+import { RoomCompositionPlanner } from "@/components/desk/workspace/room-compositions-board";
+import { foldNightsToRangesLabel, operativeRoomCompositions } from "@/lib/desk/party-rooms";
+import type { RoomCompositionInput } from "@/lib/api/quotations";
 import { enumerateNights, useRoomSelection } from "./use-room-selection";
+import { DateInput } from "@/components/ds/date-input";
+import { RoomsByType, type TypePicks } from "./s1-by-type";
 
 /**
  * A count field that may be emptied while typing — "0" and "" are different answers. A keystroke
@@ -111,12 +117,20 @@ export function ChangeConfiguration({
   entry,
   onClose,
   onDone,
+  inPlace = false,
 }: {
   entry: EntryDetail;
   onClose: () => void;
   onDone: () => void;
+  /**
+   * Set up, Reserve and Arrival (2026-10-29, operator: "the backend goes back but the user stays on
+   * the current page"): the same editor, plus who sleeps where, saved through the in-place walk —
+   * the booking goes back through Negotiation and returns to this step with its papers made again.
+   */
+  inPlace?: boolean;
 }) {
   const { session } = useSession();
+  const refresh = useRefreshEntry(entry.id);
 
   /* ---- 1. the stay, as the operator may now retype it -------------------------- */
   const hotelDay = useHotelDay();
@@ -141,6 +155,15 @@ export function ChangeConfiguration({
   const [ages, setAges] = useState<string[]>(() => (entry.childAges ?? []).map(String));
   const [rooms, setRooms] = useState(String(entry.numberOfRooms ?? 1));
   const [reason, setReason] = useState("");
+  /**
+   * The rooms by TYPE, the way the Inquiry step picks them (2026-10-29, operator: "it doesn't show
+   * the availability chart like shown in S1 when I ask the house — adopt the same style for this
+   * section in all stages"): how many of each type each night, the system choosing the rooms. Every
+   * room by number stays one press away.
+   */
+  const [byNumber, setByNumber] = useState(false);
+  const typeMode = !byNumber;
+  const [typePicks, setTypePicks] = useState<TypePicks | null>(null);
 
   const childCount = Number(children || "0");
   const adultCount = Number(adults || "0");
@@ -187,7 +210,7 @@ export function ChangeConfiguration({
     },
     onSuccess: (a) => {
       setAnswer(a);
-      toast.success("The house has answered — tick or untick the rooms below");
+      toast.success(typeMode ? "The house has answered — set the room types below" : "The house has answered — tick or untick the rooms below");
       /**
        * On new dates, a carried room that is not free on every new night is unticked — and named,
        * never silently (2026-10-12). Done here, where the answer lands, rather than in an effect:
@@ -288,7 +311,10 @@ export function ChangeConfiguration({
    * nights differently is a change too, and comparing only which rooms the booking uses said
    * "nothing has changed" for it. A pick never sealed reads as moved whenever anything is ticked.
    */
-  const roomsMoved = sel.currentCanon !== sel.savedCanon && (sel.currentCanon != null || sel.savedCanon != null);
+  const roomsMovedByNumber = sel.currentCanon !== sel.savedCanon && (sel.currentCanon != null || sel.savedCanon != null);
+  // By type the grid knows whether its counts differ from what is saved; a fitting plan is ready.
+  const roomsMoved = typeMode ? !!typePicks && !typePicks.saved : roomsMovedByNumber;
+  const roomsReady = typeMode ? !!typePicks : sel.ready;
   const partyMoved =
     adultCount !== (entry.adultCount ?? 0) ||
     childCount !== (entry.childCount ?? 0) ||
@@ -308,13 +334,98 @@ export function ChangeConfiguration({
    * on any one night, so the old test — every room it uses against the count — could never pass.
    */
   const countMoved = roomCount !== (entry.numberOfRooms ?? priorRoomIds.length);
-  const pickComplete = sel.ready;
+  const pickComplete = roomsReady;
   const needsRepick = (countMoved || roomsMoved) && !datesMoved && (!configId || !pickComplete);
   /** New dates are only saved with rooms picked for every new night, from a search for them. */
-  const needsNightPick = datesMoved && (!configId || !sel.ready);
+  const needsNightPick = datesMoved && (!configId || !roomsReady);
+
+  /* ---- 4. who sleeps where (in place): the table over the rooms picked ---------- */
+  const pickPayload = sel.payload();
+  const pickedPerNight = useMemo(
+    () =>
+      typeMode
+        ? (typePicks?.perNight ?? [])
+        : (pickPayload.perNight ?? stayNights.map((date) => ({ date, roomIds: [...(pickPayload.roomIds ?? [])] }))),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [typeMode, JSON.stringify(typePicks?.perNight ?? null), JSON.stringify(pickPayload.perNight ?? pickPayload.roomIds ?? []), stayNights.join(",")],
+  );
+  const pickedRoomIds = useMemo(() => [...new Set(pickedPerNight.flatMap((n) => n.roomIds))], [pickedPerNight]);
+  const pickedRoomDates = useMemo(() => {
+    const out: Record<string, { label: string; nights: number; dates: string[] }> = {};
+    for (const id of pickedRoomIds) {
+      const dates = pickedPerNight.filter((n) => n.roomIds.includes(id)).map((n) => n.date);
+      out[id] = { label: foldNightsToRangesLabel(dates), nights: dates.length, dates };
+    }
+    return out;
+  }, [pickedRoomIds, pickedPerNight]);
+  /**
+   * A room kept from today brings its row along (meals, beds, rates); a new room starts empty. By
+   * type, a room the system put elsewhere within its type is the same booking room — its row follows
+   * it to the new room of that type.
+   */
+  const seedComps = useMemo(() => {
+    const now = operativeRoomCompositions(entry) ?? [];
+    const kept = now.filter((c) => pickedRoomIds.includes(c.roomId)).map((c) => ({ ...c, nightMealOverrides: undefined }));
+    if (!typeMode) return kept;
+    const typeOf = (id: string) => catalog.find((r) => r.id === id)?.roomTypeId ?? null;
+    const left = now.filter((c) => !pickedRoomIds.includes(c.roomId));
+    const out = [...kept];
+    for (const id of pickedRoomIds) {
+      if (out.some((c) => c.roomId === id)) continue;
+      const i = left.findIndex((c) => typeOf(c.roomId) != null && typeOf(c.roomId) === typeOf(id));
+      if (i < 0) continue;
+      out.push({ ...left[i], roomId: id, nightMealOverrides: undefined });
+      left.splice(i, 1);
+    }
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pickedRoomIds.join(","), typeMode, catalog.length]);
+  const [comps, setComps] = useState<RoomCompositionInput[]>([]);
+  /** The rooms or the party changed: the table seats the party itself, keeping each room's meals and rates. */
+  const autoSeat = partyMoved || pickedRoomIds.some((id) => !seedComps.some((c) => c.roomId === id));
+  const [tableFaults, setTableFaults] = useState<string[]>([]);
+  const tableReady = inPlace && !!configId && roomsReady;
 
   const overCapacity = !!env && env.exceedsHotelCapacity;
   const roomsOutOfRange = !!env && envMin != null && envMax != null && (roomCount < envMin || roomCount > envMax);
+
+  /** In place: the walk — back through Negotiation, priced again, back to this step. */
+  const change = useMutation({
+    mutationFn: () =>
+      changeStayInPlace(session!, entry.id, {
+        dates: { checkInDate: checkIn, checkOutDate: checkOut },
+        party: {
+          adultCount,
+          childCount,
+          childAges: ageInputs.filter((a) => a !== "").map(Number),
+          numberOfRooms: roomCount,
+        },
+        rooms: typeMode && typePicks
+          ? { configurationId: configId!, perNight: typePicks.perNight, byType: typePicks.byType }
+          : { configurationId: configId!, perNight: pickedPerNight },
+        roomCompositions: comps,
+        reason: reason.trim(),
+        expectedVersion: entry.version,
+      }),
+    onSuccess: (o) => {
+      refresh([["held-documents", entry.id], ["entry-communications", entry.id], ["booking-rooms", entry.id], ["rooms"], ["rooms-catalog"], ["billing-summary", entry.id]]);
+      if (o.blocked) {
+        toast.warning(`The stay changed, but the booking stopped on the way back: ${o.blocked.message}`, { duration: 12000 });
+      } else {
+        toast.success(`The stay is changed — ${o.summary}`);
+      }
+      if (o.heldDocuments.some((h) => h.kind === "CONFIRMATION_VOUCHER")) toast.info("A new confirmation voucher is made — send it to the guest, or not, on the voucher.", { duration: 9000 });
+      if (o.heldDocuments.some((h) => h.kind === "PROFORMA")) toast.info("A new proforma is made — send it to the guest, or not.", { duration: 9000 });
+      for (const n of o.notes) toast.info(n, { duration: 9000 });
+      try {
+        localStorage.removeItem(`desk:rst-sel:${entry.id}:amend`);
+      } catch {
+        /* a blocked store must not break the save */
+      }
+      onDone();
+    },
+    onError: (e) => toastRefusal(e, "The stay could not be changed"),
+  });
 
   const save = useMutation({
     mutationFn: () => {
@@ -332,12 +443,16 @@ export function ChangeConfiguration({
         };
       }
       if ((roomsMoved || datesMoved) && configId) {
-        const p = sel.payload();
-        body.rooms = {
-          configurationId: configId,
-          roomIds: p.perNight ? undefined : p.roomIds,
-          perNight: p.perNight,
-        };
+        if (typeMode && typePicks) {
+          body.rooms = { configurationId: configId, byType: typePicks.byType };
+        } else {
+          const p = sel.payload();
+          body.rooms = {
+            configurationId: configId,
+            roomIds: p.perNight ? undefined : p.roomIds,
+            perNight: p.perNight,
+          };
+        }
       }
       return amendNegotiationConfiguration(session!, entry.id, body);
     },
@@ -387,7 +502,8 @@ export function ChangeConfiguration({
    * afterwards. The backend decides for real; this only names what the press will do.
    */
   const liveQuote = (entry.quotations ?? []).some((q) => q.state === "SENT" || q.state === "ACCEPTED");
-  const needsApproval = liveQuote && !atLeast(session?.actorLevel, "L2");
+  const needsApproval = !inPlace && liveQuote && !atLeast(session?.actorLevel, "L2");
+  const pending = save.isPending || change.isPending;
 
   const nothingMoved = !partyMoved && !roomsMoved && !datesMoved;
   const blocked =
@@ -402,7 +518,8 @@ export function ChangeConfiguration({
     !agesReady ||
     adultCount < 1 ||
     (roomsMoved && !configId) ||
-    save.isPending;
+    (inPlace && (!configId || !roomsReady || comps.length === 0 || tableFaults.length > 0)) ||
+    pending;
 
   return (
     <div className="cfg-change">
@@ -415,6 +532,12 @@ export function ChangeConfiguration({
               or an untick.
             </p>
             <p>New dates need the house asked again for them, and the rooms picked for every new night.</p>
+            {inPlace ? (
+              <p>
+                The booking stays on this step. Behind it, it goes back through Negotiation: the price is made again, the rooms are blocked
+                again and, from Reserve on, it is reserved again with a new voucher held for you to send — then it comes back here.
+              </p>
+            ) : null}
           </Help>
         </div>
         <Button kind="quiet" compact onClick={onClose}>
@@ -428,9 +551,8 @@ export function ChangeConfiguration({
         <div className="form3" style={{ marginTop: 8 }}>
           <div className="field">
             <label>Check-in</label>
-            <input
+            <DateInput
               className="input"
-              type="date"
               value={checkIn}
               min={hotelDay?.today}
               onChange={(e) => setCheckIn(e.target.value)}
@@ -444,9 +566,8 @@ export function ChangeConfiguration({
           <Count label="Nights" value={nights} onChange={setNights} min={1} max={90} />
           <div className="field">
             <label>Check-out</label>
-            <input
+            <DateInput
               className="input"
-              type="date"
               value={checkOut}
               min={checkIn || undefined}
               onChange={(e) => {
@@ -556,9 +677,34 @@ export function ChangeConfiguration({
             Ask the house {answerOutdated ? "for the new dates" : "first"}. Holding today:{" "}
             {priorRoomIds.length ? priorRoomIds.map(roomNo).join(", ") : "none"}.
           </p>
+        ) : typeMode ? (
+          <div style={{ marginTop: 8 }}>
+            <RoomsByType
+              key={`${checkIn}|${checkOut}|${roomCount}`}
+              entry={entry}
+              configId={configId}
+              stale={false}
+              nights={stayNights}
+              numberOfRooms={roomCount}
+              catalog={catalog}
+              editable={!pending}
+              onPicks={setTypePicks}
+              onSaved={() => {}}
+              onParticular={() => {
+                setTypePicks(null);
+                setByNumber(true);
+              }}
+              stay={{ checkIn, checkOut }}
+              noSave
+              flowKey={null}
+            />
+          </div>
         ) : (
           <>
             <div className="row-acts" style={{ margin: "8px 0" }}>
+              <Button kind="quiet" compact onClick={() => setByNumber(false)}>
+                Back to room types
+              </Button>
               <span className={pickComplete ? "ok-ink" : "stop-ink"} style={{ fontWeight: 700 }}>
                 {sel.nightsDiffer
                   ? `${sel.nightsReady} of ${plural(displayNights.length, "night")} ${sel.nightsReady === 1 ? "has" : "have"} ${plural(roomCount, "room")}`
@@ -590,12 +736,52 @@ export function ChangeConfiguration({
                 onCappedClick={() =>
                   toast.info(`All ${plural(roomCount, "room")} are chosen — untick one first to swap it.`)
                 }
-                disabled={save.isPending}
+                disabled={pending}
               />
             </Tool>
           </>
         )}
       </section>
+
+      {/* 4 ---------------------------------------------------------------- who sleeps where (in place) */}
+      {inPlace ? (
+        <section>
+          <b className="cfg-n">4 · Who sleeps where</b>
+          {!tableReady ? (
+            <p className="sm" style={{ marginTop: 6 }}>
+              Pick the rooms for every night first — then who sleeps in each, on what plan.
+            </p>
+          ) : (
+            <div style={{ marginTop: 8 }}>
+              <Tool>
+                <RoomCompositionPlanner
+                  key={`${pickedRoomIds.join(",")}|${checkIn}|${checkOut}|${adultCount}|${ageInputs.join(",")}`}
+                  tableOnly
+                  sealedRoomIds={pickedRoomIds}
+                  entryCheckIn={checkIn}
+                  entryCheckOut={checkOut}
+                  entryAdults={adultCount}
+                  entryChildAges={ageInputs.filter((a) => a !== "").map(Number)}
+                  roomDates={pickedRoomDates}
+                  {...(typeMode && typePicks ? { roomLabels: typePicks.labels } : {})}
+                  entryId={entry.id}
+                  initialCompositions={seedComps}
+                  autoSeat={autoSeat}
+                  previewStay={{ checkInDate: checkIn, checkOutDate: checkOut }}
+                  onFaultsChange={setTableFaults}
+                  onChange={setComps}
+                />
+              </Tool>
+              {tableFaults.length ? (
+                <p className="cfg-stop" role="alert" style={{ marginTop: 6 }}>
+                  {tableFaults[0]}
+                  {tableFaults.length > 1 ? ` · and ${plural(tableFaults.length - 1, "more thing")}` : ""}
+                </p>
+              ) : null}
+            </div>
+          )}
+        </section>
+      ) : null}
 
       {/* ------------------------------------------------------------------ the save */}
       <section>
@@ -611,7 +797,8 @@ export function ChangeConfiguration({
         <div className="row-acts" style={{ marginTop: 10 }}>
           <Button
             kind="primary"
-            onClick={() => save.mutate()}
+            className={inPlace && !blocked ? "go" : undefined}
+            onClick={() => (inPlace ? change.mutate() : save.mutate())}
             state={blocked ? "inert" : "default"}
             reason={
               nothingMoved
@@ -621,16 +808,28 @@ export function ChangeConfiguration({
                   : needsNightPick
                     ? !configId
                       ? "The dates changed — ask the house for them, then pick the rooms"
-                      : `Pick the rooms for every new night — ${sel.nightsReady} of ${plural(stayNights.length, "night")} ready`
+                      : typeMode
+                        ? "Set the room types for every new night — the grid says what is short"
+                        : `Pick the rooms for every new night — ${sel.nightsReady} of ${plural(stayNights.length, "night")} ready`
                     : needsRepick
                   ? !configId
                     ? countMoved
                       ? `The rooms asked for changed to ${roomCount} — ask the house and pick them`
                       : "Ask the house before saving rooms"
-                    : sel.nightsDiffer
-                      ? `Every night needs ${plural(roomCount, "room")} — ${sel.nightsReady} of ${plural(displayNights.length, "night")} ${sel.nightsReady === 1 ? "has" : "have"} them`
-                      : `Pick ${plural(roomCount, "room")} below — ${sel.commonPlan.length} ${sel.commonPlan.length === 1 ? "is" : "are"} ticked`
-                  : !reason.trim()
+                    : typeMode
+                      ? `Set ${plural(roomCount, "room")} for every night in the grid`
+                      : sel.nightsDiffer
+                        ? `Every night needs ${plural(roomCount, "room")} — ${sel.nightsReady} of ${plural(displayNights.length, "night")} ${sel.nightsReady === 1 ? "has" : "have"} them`
+                        : `Pick ${plural(roomCount, "room")} below — ${sel.commonPlan.length} ${sel.commonPlan.length === 1 ? "is" : "are"} ticked`
+                  : inPlace && !configId
+                    ? "Ask the house for the stay first"
+                    : inPlace && !roomsReady
+                      ? typeMode
+                        ? "Set the room types for every night"
+                        : "Pick the rooms for every night"
+                      : inPlace && tableFaults.length > 0
+                        ? "Put right what the table lists first"
+                        : !reason.trim()
                     ? "Type why the configuration is changing"
                     : !agesReady
                       ? "Every child needs an age"
@@ -639,14 +838,31 @@ export function ChangeConfiguration({
                         : undefined
             }
           >
-            {save.isPending ? (needsApproval ? "Sending…" : "Saving…") : needsApproval ? "Send for the FOM's approval" : "Save the configuration"}
+            {inPlace
+              ? change.isPending
+                ? "Changing the stay…"
+                : "Change the stay"
+              : save.isPending
+                ? needsApproval
+                  ? "Sending…"
+                  : "Saving…"
+                : needsApproval
+                  ? "Send for the FOM's approval"
+                  : "Save the configuration"}
           </Button>
           <Help label="About saving the change">
             <p>The reason goes on the booking&rsquo;s record with your name.</p>
-            <p>
-              Saving retires any quotation priced on the old configuration — price it again before moving to Set up. A provisional block moves to
-              the new rooms and nights and keeps its deadline.
-            </p>
+            {inPlace ? (
+              <p>
+                The booking comes back to this step with a new pass: the quotation priced from the table, the rooms blocked again and — from
+                Reserve on — reserved again, the new voucher held for you to send. The money already received stays on the bill.
+              </p>
+            ) : (
+              <p>
+                Saving retires any quotation priced on the old configuration — price it again before moving to Set up. A provisional block moves
+                to the new rooms and nights and keeps its deadline.
+              </p>
+            )}
             <p>A date change is kept on its own line in the booking&rsquo;s history: the old dates, the new ones, who moved them and why.</p>
             <p>When the guest is already holding a quotation, the change goes to the FOM, and nothing changes until they approve it.</p>
           </Help>
@@ -727,7 +943,7 @@ export function WaitingConfigurationChange({ entry }: { entry: EntryDetail }) {
               Approve &amp; apply
             </Button>
             <Button kind="quiet" compact onClick={() => setRejecting((v) => !v)}>
-              {rejecting ? "Keep it waiting" : "Turn it down…"}
+              {rejecting ? "Keep it waiting" : "Turn it down"}
             </Button>
           </div>
           {rejecting && (

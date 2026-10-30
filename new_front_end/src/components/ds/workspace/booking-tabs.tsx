@@ -45,11 +45,15 @@ import { isHousekeeping, traceWords } from "@/lib/ds/trace-words";
 import type { TraceEvent } from "@/lib/trace/humanize";
 import { Choice, DsDialog, Fact, Facts, PapersCard, ReasonDialog, StepCard, SubTabs, Tool, atLeast, toastRefusal, useRefreshEntry } from "@/components/ds/steps/kit";
 import { FolioDocumentsBlock } from "@/components/desk/workspace/folio-documents";
-import { HeldPapersCard } from "@/components/ds/workspace/held-papers";
+import { useHeldDocuments } from "@/components/ds/workspace/held-papers";
 import { PLAN_LABEL, dueLabel } from "@/components/desk/workspace/advance-settlement";
 import { useStayPrice, type StayPrice } from "@/lib/ds/stay-price";
+import { getQuotationPriceLines, type QuotationLivePreview } from "@/lib/api/quotations";
+import { PriceLinesTable, type PriceLinesFigures } from "@/components/ds/workspace/price-lines";
+import { PickBill } from "@/components/ds/steps/s1-bill";
 import type { EntryDetail } from "@/types/api";
 import { Help, HelpHere } from "@/components/ds/help";
+import { DateInput, TimeInput } from "@/components/ds/date-input";
 
 export type BookingTab = "money" | "requests" | "notes" | "docs" | "history";
 
@@ -143,7 +147,7 @@ export function ChargesView({
               label: "The price",
               content: (
                 <>
-        <StepCard title="The price" status={sp.source === "QUOTE" ? (tag ?? undefined) : sp.kind || undefined}>
+        <StepCard title="The price" status={sp.source === "QUOTE" ? (tag ?? undefined) : sp.source === "PICKS" ? undefined : sp.kind || undefined}>
           {sp.source === "TABLE" ? (
             <TablePrice sp={sp} />
           ) : sp.source === "PICKS" ? (
@@ -170,8 +174,10 @@ export function ChargesView({
                   Shortened: {st.earlyDeparture.sleptNights} nights slept · {money(st.earlyDeparture.forgoneRoomTotal, cur)} not charged
                 </p>
               ) : null}
-              {billing?.rooms?.length ? (
-                <table className="table compact" style={{ marginTop: 8 }}>
+              {st.quotationId ? (
+                <QuotePriceLines quotationId={st.quotationId} stayTotal={st.amount} currency={cur} />
+              ) : billing?.rooms?.length ? (
+                <table className="table compact resp" style={{ marginTop: 8 }}>
                   <thead>
                     <tr>
                       <th>Room</th>
@@ -193,12 +199,12 @@ export function ChargesView({
                             {r.isFoc ? " · free of charge" : ""}
                           </span>
                         </td>
-                        <td>{r.nights ?? "—"}</td>
-                        <td className="num">{money(r.roomSubtotal, cur)}</td>
-                        <td className="num">{(r.mealsSubtotal ?? 0) > 0 ? money(r.mealsSubtotal, cur) : "—"}</td>
-                        <td className="num">{r.extraBedCount > 0 ? money(r.extraBedSubtotal, cur) : "—"}</td>
-                        <td className="num">{r.serviceCharge != null || r.gst != null ? money((r.serviceCharge ?? 0) + (r.gst ?? 0), cur) : "—"}</td>
-                        <td className="num">
+                        <td data-label="Nights">{r.nights ?? "—"}</td>
+                        <td className="num" data-label="Room">{money(r.roomSubtotal, cur)}</td>
+                        <td className="num" data-label="Meals">{(r.mealsSubtotal ?? 0) > 0 ? money(r.mealsSubtotal, cur) : "—"}</td>
+                        <td className="num" data-label="Extra bed">{r.extraBedCount > 0 ? money(r.extraBedSubtotal, cur) : "—"}</td>
+                        <td className="num" data-label="Service + GST">{r.serviceCharge != null || r.gst != null ? money((r.serviceCharge ?? 0) + (r.gst ?? 0), cur) : "—"}</td>
+                        <td className="num" data-label="Total">
                           <b>{money(r.total, cur)}</b>
                         </td>
                       </tr>
@@ -210,8 +216,9 @@ export function ChargesView({
                 <p className="meta" style={{ marginTop: 6 }}>Priced on pass {st.segmentNumber}.</p>
               ) : null}
               <HelpHere label="About these figures">
-                Room, meals and bed are before tax; each room&rsquo;s total adds the service charge and the GST.
-                {billing?.rooms?.some((r) => r.componentsPreDiscount) ? " The parts are before the booking discount; the totals after it." : ""}
+                {st.quotationId
+                  ? "Set out as the quotation is: each room, with its extra beds and meals beneath it, all before tax and before any discount. The service charge, the GST and the discount follow, then the total."
+                  : "Room, meals and bed are before tax; each room’s total adds the service charge and the GST."}
               </HelpHere>
             </>
           )}
@@ -256,7 +263,7 @@ export function ChargesView({
                 <b>{money(balance, cur)}</b>
               </div>
               {parts.length > 1 ? (
-                <table className="table compact" style={{ marginTop: 10 }}>
+                <table className="table compact resp" style={{ marginTop: 10 }}>
                   <thead>
                     <tr>
                       <th>Part of the bill</th>
@@ -270,10 +277,10 @@ export function ChargesView({
                     {parts.map((x) => (
                       <tr key={x.key}>
                         <td>{x.label}</td>
-                        <td className="num">{money(x.b.base, cur)}</td>
-                        <td className="num">{money(x.b.serviceCharge, cur)}</td>
-                        <td className="num">{money(x.b.gst, cur)}</td>
-                        <td className="num">
+                        <td className="num" data-label="Charges">{money(x.b.base, cur)}</td>
+                        <td className="num" data-label="Service">{money(x.b.serviceCharge, cur)}</td>
+                        <td className="num" data-label="GST">{money(x.b.gst, cur)}</td>
+                        <td className="num" data-label="Total">
                           <b>{money(x.b.charges, cur)}</b>
                         </td>
                       </tr>
@@ -402,6 +409,61 @@ export function ChargesView({
   );
 }
 
+/** "10%" — a rate as the quotation's labels print it. */
+const pctWord = (rate: number) => `${Number((rate * 100).toFixed(2))}%`;
+
+/**
+ * The live preview's figures in the quotation's shape — the rows are the server's, and so is every
+ * figure; only the labels are worded here, exactly as the quotation words them.
+ */
+function previewFigures(p: QuotationLivePreview): PriceLinesFigures {
+  const d = p.discount;
+  return {
+    lines: p.lines,
+    datesShown: p.datesShown,
+    net: p.subtotal,
+    serviceChargeLabel: p.serviceChargeRate > 0 ? `Service charge ${pctWord(p.serviceChargeRate)} of net value` : "Service charge",
+    serviceCharge: p.serviceCharge,
+    gstLabel: p.gstRate > 0 ? `GST @ ${pctWord(p.gstRate)} of net + service charge` : "GST",
+    gst: p.gst,
+    discountLabel: !d
+      ? null
+      : d.requestedPercent != null
+        ? `Discount ${Number(d.requestedPercent.toFixed(2))}%`
+        : `Discount · ${(d.requestedAmount ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} off the total`,
+    discountAmount: d ? d.amountOffTotal : null,
+    discountNote: null,
+    total: p.payable,
+  };
+}
+
+/** The saved quotation's own rows, read from the server — the paper set out on the tab. */
+function QuotePriceLines({ quotationId, stayTotal, currency }: { quotationId: string; stayTotal: number | null; currency: string }) {
+  const { session } = useSession();
+  const q = useQuery({
+    queryKey: ["quotation-price-lines", quotationId],
+    queryFn: () => getQuotationPriceLines(session!, quotationId),
+    enabled: !!session,
+  });
+  if (q.isLoading) return <p className="meta">Reading the quotation…</p>;
+  if (!q.data) return <p className="meta">The quotation&rsquo;s rows could not be read.</p>;
+  const f = q.data;
+  return (
+    <>
+      <p className="meta" style={{ margin: "8px 0 4px" }}>
+        As quoted · {f.referenceNumber}
+        {f.versionNumber > 1 ? ` · v${f.versionNumber}` : ""}
+      </p>
+      <PriceLinesTable f={f} currency={currency} />
+      {stayTotal != null && Math.abs(stayTotal - f.total) > 0.005 ? (
+        <p className="meta" style={{ marginTop: 6 }}>
+          The quotation&rsquo;s total is for the stay as booked; the stay total above is what this stay comes to.
+        </p>
+      ) : null}
+    </>
+  );
+}
+
 /** The Negotiation table, priced by the server as it stands — saved or not. */
 function TablePrice({ sp }: { sp: StayPrice }) {
   const p = sp.preview;
@@ -419,102 +481,36 @@ function TablePrice({ sp }: { sp: StayPrice }) {
           <b>The quotation on file says {money(sp.savedQuoteAmount, cur)}</b> — save the table at Negotiation to bring it up to date.
         </p>
       ) : null}
-      <table className="table compact" style={{ marginTop: 8 }}>
-        <thead>
-          <tr>
-            <th>Room</th>
-            <th>Nights</th>
-            <th className="num">Room</th>
-            <th className="num">Meals</th>
-            <th className="num">Extra bed</th>
-            <th className="num">Service + GST</th>
-            <th className="num">Total</th>
-          </tr>
-        </thead>
-        <tbody>
-          {p.rooms.map((r) => (
-            <tr key={r.roomId}>
-              <td>
-                <b>Room {r.roomNumber ?? "—"}</b>
-                {r.isFoc ? <span className="meta"> · free of charge</span> : null}
-              </td>
-              <td>{r.nights}</td>
-              <td className="num">{money(r.roomSubtotal, cur)}</td>
-              <td className="num">{r.mealsSubtotal > 0 ? money(r.mealsSubtotal, cur) : "—"}</td>
-              <td className="num">{r.extraBedCount > 0 ? money(r.extraBedSubtotal, cur) : "—"}</td>
-              <td className="num">{money(r.serviceCharge + r.gst, cur)}</td>
-              <td className="num">
-                <b>{money(r.total, cur)}</b>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      <Facts wide style={{ marginTop: 8 }}>
-        <Fact k="Net">{money(p.payableSubtotal, cur)}</Fact>
-        <Fact k="Service charge">{money(p.payableServiceCharge, cur)}</Fact>
-        <Fact k="GST">{money(p.payableGst, cur)}</Fact>
-        {p.discount ? (
-          <Fact k="Discount" meta={p.discount.requestedPercent != null ? `${p.discount.requestedPercent}% asked` : "a set amount"}>
-            − {money(p.discount.amountOffTotal, cur)}
-          </Fact>
-        ) : null}
-      </Facts>
+      {p.lines ? <PriceLinesTable f={previewFigures(p)} currency={cur} /> : null}
       <HelpHere label="About these figures">
-        The figures follow the negotiation table as it is changed — priced by the hotel server, the same way the quotation will be.
+        The figures follow the negotiation table as it is changed — priced by the hotel server, the same way the quotation will be,
+        and set out as the quotation will set them out.
       </HelpHere>
     </>
   );
 }
 
-/** The rooms picked at Inquiry, priced rooms only by the server. */
+/**
+ * The rooms picked at Inquiry, priced rooms only by the server — the same bill the house card
+ * carried (2026-10-27, moved here): each night with its rooms, each room's nights, room-nights ×
+ * rate per type, the net, the service charge, the GST and the stay's total.
+ */
 function PicksPrice({ sp }: { sp: StayPrice }) {
   const p = sp.pick;
-  const cur = sp.currency;
   if (!p) return null;
   return (
-    <>
-      <div className="bigfig">
-        <span className="meta">Stay total · rooms only</span>
-        <b>{money(p.totals.total, cur)}</b>
-        {sp.loading ? <span className="meta">updating…</span> : null}
-      </div>
-      <table className="table compact" style={{ marginTop: 8 }}>
-        <thead>
-          <tr>
-            <th>Room type</th>
-            <th>Room-nights</th>
-            <th className="num">Rate a night</th>
-            <th className="num">Net</th>
-            <th className="num">Total</th>
-          </tr>
-        </thead>
-        <tbody>
-          {p.byType.map((t) => (
-            <tr key={t.roomTypeId}>
-              <td>
-                <b>{t.name}</b>
-                {t.packageName ? <span className="meta"> · {t.packageName}</span> : null}
-              </td>
-              <td>{t.roomNights}</td>
-              <td className="num">{t.rate != null ? money(t.rate, cur) : "no rate"}</td>
-              <td className="num">{money(t.net, cur)}</td>
-              <td className="num">
-                <b>{money(t.total, cur)}</b>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      <Facts wide style={{ marginTop: 8 }}>
-        <Fact k="Net">{money(p.totals.net, cur)}</Fact>
-        <Fact k="Service charge">{money(p.totals.serviceCharge, cur)}</Fact>
-        <Fact k="GST">{money(p.totals.gst, cur)}</Fact>
-      </Facts>
-      {p.unpricedTypes.length ? (
-        <p className="warn-ink sm">No rate on file for {p.unpricedTypes.map((t) => t.name).join(", ")} — not counted above.</p>
-      ) : null}
-    </>
+    <PickBill
+      pricing={p}
+      roomLabels={sp.labels}
+      loading={sp.loading}
+      title={sp.unsaved ? "The rooms picked · not saved yet" : "The rooms chosen"}
+      caption={
+        sp.unsaved ? (
+          <span className="warn-ink">Save the rooms on the Inquiry step to keep this choice — the figures follow every pick.</span>
+        ) : undefined
+      }
+      help="Indicative, not a quote — rooms only. Meals, extra beds and any agreed rate are added at Negotiation, where the quotation prices them."
+    />
   );
 }
 
@@ -671,7 +667,7 @@ export function RequestsView({ entry, sealed, tz }: { entry: EntryDetail; sealed
                     ) : null}
                     {!sealed && r.state !== "WITHDRAWN" ? (
                       <Button kind="quiet" compact onClick={() => setWithdrawing(r)}>
-                        Take back…
+                        Take back
                       </Button>
                     ) : null}
                   </div>
@@ -696,14 +692,14 @@ export function RequestsView({ entry, sealed, tz }: { entry: EntryDetail; sealed
                   For which day · optional
                   <Help label="About the day">From today to the day they leave.</Help>
                 </label>
-                <input className="input" type="date" value={forDate} min={minDate} max={maxDate} onChange={(e) => setForDate(e.target.value)} />
+                <DateInput className="input" value={forDate} min={minDate} max={maxDate} onChange={(e) => setForDate(e.target.value)} />
               </div>
               <div className="field">
                 <label>
                   Time · optional
                   <Help label="About the time">On the hotel&rsquo;s clock.</Help>
                 </label>
-                <input className="input" type="time" value={forTime} onChange={(e) => setForTime(e.target.value)} />
+                <TimeInput className="input" value={forTime} onChange={(e) => setForTime(e.target.value)} />
               </div>
             </div>
             <div className="row-acts" style={{ marginTop: 10 }}>
@@ -999,8 +995,8 @@ export function NotesView({ entry, tz }: { entry: EntryDetail; tz: string }) {
                 <div className="field">
                   <label>Day and time</label>
                   <div className="row-acts">
-                    <input className="input" type="date" min={day?.today} value={pickDate} onChange={(e) => setPickDate(e.target.value)} />
-                    <input className="input" type="time" value={pickTime} onChange={(e) => setPickTime(e.target.value)} />
+                    <DateInput className="input" min={day?.today} value={pickDate} onChange={(e) => setPickDate(e.target.value)} />
+                    <TimeInput className="input" value={pickTime} onChange={(e) => setPickTime(e.target.value)} />
                   </div>
                 </div>
               ) : null}
@@ -1210,6 +1206,8 @@ export function DocumentsView({
   onGo: (step: number) => void;
 }) {
   const folioLive = !!entry.folio && ["LIVE", "OUTSTANDING", "SETTLED", "CLOSED"].includes(entry.folio.state);
+  const heldDocs = useHeldDocuments(entry.id).data ?? [];
+  const heldOpen = sealed ? 0 : heldDocs.filter((h) => h.decision == null).length;
   // One sub-tab per kind of paper (2026-10-12, operator: "for papers it should be divided among
   // different types of papers"). A kind with nothing in it has no tab.
   const quotes = (entry.quotations ?? []).length;
@@ -1227,7 +1225,15 @@ export function DocumentsView({
         Documents <span className="need">every paper, every version, and what the guest said back</span>
       </h3>
       <div className="steps-canvas">
-        <HeldPapersCard entryId={entry.id} tz={tz} />
+        {/* The send-or-not choice lives on the step, once (2026-10-29, operator: "the same
+            confirmation voucher is showed twice, keep only once"); the file only says so. */}
+        {heldOpen > 0 ? (
+          <p className="notice next" role="status" style={{ margin: "0 0 10px" }}>
+            <span>
+              {heldOpen === 1 ? "A paper is" : `${heldOpen} papers are`} waiting to be sent or not — you choose on the step.
+            </span>
+          </p>
+        ) : null}
         {quotes + invoices.length + vouchers + sent.length === 0 && !folioLive ? (
           <EmptyState title="No papers yet">A quotation is the first — it is generated at Negotiation.</EmptyState>
         ) : (
@@ -1360,9 +1366,10 @@ function SentPapers({
                 <td>
                   <b>{PAPER_NAME[c.commType] ?? c.commType}</b>
                   {number ? <span className="mono sm"> {number}</span> : null}
-                  <span className="meta"> · {c.channel?.toLowerCase() ?? "email"}</span>
+                  {sent ? <span className="meta"> · {c.channel?.toLowerCase() ?? "email"}</span> : null}
                 </td>
-                <td>{fmtStamp(c.createdAt, tz)}</td>
+                {/* A held or not-sent voucher has no "sent" moment (2026-10-29). */}
+                <td>{sent ? fmtStamp(c.createdAt, tz) : <span className="meta">—</span>}</td>
                 <td>
                   {answered ? (
                     <Chip tone="success">answered</Chip>

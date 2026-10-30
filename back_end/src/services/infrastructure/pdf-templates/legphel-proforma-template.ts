@@ -22,9 +22,11 @@ import {
   renderTitle,
   row,
   section,
+  stayRows,
   type DocumentMasthead,
   type DocumentWatermark,
 } from "./legphel-document-shell.js";
+import type { StayLines } from "./legphel-document-format.js";
 
 export type LegphelProformaInput = {
   masthead: DocumentMasthead;
@@ -40,13 +42,8 @@ export type LegphelProformaInput = {
   to: string;
   /** "Dr Lakshmi Menon" — the reference's "For guest" line. */
   forGuest?: string | null;
-  /**
-   * Stay label + its value. The reference shows a split stay
-   * ("Split stay" / "08–09 Sep · Re 12–13 Sep 2026 · 2 nights"), so the label is a parameter
-   * rather than hardcoded "Stay".
-   */
-  stayLabel: string;
-  stay: string;
+  /** Check-in "08 Sep 2026" · Check-out "10 Sep 2026 · 2 nights" (2026-10-28 — was one "Stay" row). */
+  stay: StayLines | null;
   /** "Deluxe · 3 adults · MAP · per night" → "3,450.00" */
   rateLabel: string;
   rateValue: string;
@@ -114,7 +111,7 @@ export function renderLegphelProformaHtml(input: LegphelProformaInput): string {
     row("To", input.to, { boldValue: true }),
     input.forGuest ? row("For guest", input.forGuest) : "",
     section,
-    row(input.stayLabel, input.stay),
+    stayRows(input.stay),
     row(input.rateLabel, input.rateValue),
     input.roomNights ? row("Rooms", input.roomNights) : "",
     section,
@@ -170,8 +167,8 @@ export type LegphelInterimInput = {
   kind: "LONG_STAY" | "EXTENSION";
   to: string;
   forGuest?: string | null;
-  /** "08 Aug – 22 Aug 2026 · 14 nights" — the PROJECTED stay (new checkout on an extension). */
-  stay: string;
+  /** The PROJECTED stay — on an extension the check-out is the new one. */
+  stay: StayLines | null;
   /** "7 slept · 7 to come" */
   nightsLine: string;
   projectedRoomTotal: string;
@@ -219,7 +216,7 @@ export function renderLegphelInterimHtml(input: LegphelInterimInput): string {
     row("To", input.to, { boldValue: true }),
     input.forGuest ? row("For guest", input.forGuest) : "",
     section,
-    row(input.kind === "EXTENSION" ? "Extended stay" : "Stay", input.stay),
+    stayRows(input.stay, input.kind === "EXTENSION" ? "Check-out · extended" : "Check-out"),
     row("Nights", input.nightsLine),
     section,
     row("Room nights (projected, incl. service & GST)", input.projectedRoomTotal),

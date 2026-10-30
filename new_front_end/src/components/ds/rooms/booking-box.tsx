@@ -28,6 +28,7 @@ import { rowNameOf } from "@/lib/ds/status";
 import { STEP_NAMES, stepNoOfStage } from "@/lib/ds/steps";
 import type { NightMove } from "./night-move-dialog";
 import type { SplitMove } from "./split-move-dialog";
+import { DateInput } from "@/components/ds/date-input";
 
 const DAY = 86_400_000;
 const shift = (ymd: string, days: number) => new Date(Date.parse(`${ymd}T00:00:00Z`) + days * DAY).toISOString().slice(0, 10);
@@ -310,9 +311,8 @@ export function BookingBox({
             <div className="bbox-to">
               <label className="field bbox-first">
                 <span>First night</span>
-                <input
+                <DateInput
                   className="input"
-                  type="date"
                   value={newFirst || firstNight || ""}
                   min={chart?.today}
                   onChange={(e) => setNewFirst(e.target.value === firstNight ? "" : e.target.value)}

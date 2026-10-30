@@ -302,7 +302,7 @@ export function s3Readiness(
     // NOTE: advance-payment RECONCILIATION (folio.advancePaymentReconciliationComplete) is a
     // Stage 5 pre-arrival gate (Policy 28), NOT an S3→S4 confirmation prerequisite. The backend
     // confirm gate (s4-confirmation-service) never checks it, so it must not gate the freeze here.
-    { label: "Room held", met: hold?.state === "PLACED" || hold?.state === "UPGRADED", card: "hold" },
+    { label: "Rooms blocked", met: hold?.state === "PLACED" || hold?.state === "UPGRADED", card: "hold" },
   ];
 }
 
@@ -376,7 +376,7 @@ export function s1Readiness(entry: EntryDetail): Precondition[] {
     { label: "Stay dates set", met: !!(entry.checkInDate && entry.checkOutDate), card: "stay" },
     { label: "Guest count set", met: (entry.guestCount ?? 0) >= 1, card: "stay" },
     { label: "Availability searched", met: configs.length > 0, card: "house" },
-    { label: "Preferred room selected", met: !!preferred, card: "house" },
+    { label: "Preferred room selected", met: !!preferred && !pickFitsStay(preferred.optionSelected, entry, preferred.searchCriteria), card: "house" },
     { label: "The guest staying, named", met: !!entry.guestProfile, card: "wrap" },
     { label: "A contact on file", met: hasAnyContact(entry), card: "wrap" },
   ];
@@ -413,11 +413,16 @@ export function s2Readiness(entry: EntryDetail, now: number = Date.now()): Preco
     (h) => h.state === "PLACED" || h.state === "UPGRADED" || h.state === "RELEASED" || h.state === "EXPIRED",
   );
   const validOk = !operative?.validUntil || new Date(operative.validUntil).getTime() > now;
+  // Two sections on the page (2026-10-27, the stage layout at Negotiation): the table, whose Save
+  // prices it, and the quotation it produced. "Still valid" asks for a quotation to exist — with
+  // none, the table's item already holds the move, so this changes nothing about what may move on;
+  // it only keeps the quotation's section from reading as done before there is one. The marker
+  // (the provisional block) lives in the bar's Other ways, so its line has no section here.
   return [
     { label: "Availability sealed from Inquiry", met: sealed },
-    { label: "Quote generated", met: live.length > 0, card: "quote" },
-    { label: "Quote still valid", met: !operative || validOk, card: "quote" },
-    { label: "Any holds still healthy", met: holdsOk, card: "quote" },
+    { label: "Quote generated", met: live.length > 0, card: "table" },
+    { label: "Quote still valid", met: !!operative && validOk, card: "quotation" },
+    { label: "Any holds still healthy", met: holdsOk },
   ];
 }
 
@@ -447,7 +452,7 @@ export function s5Readiness(
                 ? "Checking today's date at the hotel…"
                 : hotelToday >= checkInYmd
                   ? "Arrival day reached"
-                  : `The stay starts ${checkInYmd} — arriving earlier is a change of dates (Amend dates)`,
+                  : `The stay starts ${new Date(`${checkInYmd}T00:00:00Z`).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" })} — arriving earlier is a change of dates (Change booking › Change the dates, rooms or guests)`,
             met: hotelToday !== null && hotelToday >= checkInYmd,
           },
         ];
@@ -508,6 +513,8 @@ export function s6Readiness(
     /** The desk's two attestations at the counter (2026-09-25) — listed when the caller has them. */
     registrationConfirmed?: boolean;
     keys?: { label: string; met: boolean } | null;
+    /** The rest of the bill promised at check-in (2026-10-29) — the server's `GET /checkin-payment`. */
+    balance?: { promisedAtCheckIn: boolean; gateMet: boolean } | null;
   },
 ): Precondition[] {
   const g = entry.guestProfile;
@@ -538,7 +545,11 @@ export function s6Readiness(
       ? [{ label: "Registration confirmed", met: !!opts.registrationConfirmed, card: "registration" }]
       : []),
     { label: "Advance reconciled", met: entry.folio?.advancePaymentReconciliationComplete === true, card: "advance" },
-    { label: "VIP arrival notified", met: !isVip || (entry.vipArrivalNotifications ?? []).length > 0, card: "vip" },
+    ...(opts?.balance?.promisedAtCheckIn
+      ? [{ label: "The rest of the bill — paid, or the FOM's word", met: opts.balance.gateMet, card: "advance" }]
+      : []),
+    // A line, and a section, only on a VIP's booking (2026-10-29) — nothing to do on any other.
+    ...(isVip ? [{ label: "VIP arrival notified", met: (entry.vipArrivalNotifications ?? []).length > 0, card: "vip" }] : []),
     {
       card: "rooms",
       label: rooms.length > 1 ? `All ${rooms.length} rooms assigned & ready` : "Room assigned & ready",
@@ -579,7 +590,7 @@ export function departureWouldBeEarly(entry: EntryDetail, hotelToday: string | n
 
 function shortDayLabel(iso: string): string {
   const d = new Date(`${iso.slice(0, 10)}T00:00:00Z`);
-  return Number.isNaN(d.getTime()) ? iso.slice(0, 10) : d.toLocaleDateString(undefined, { day: "numeric", month: "short", timeZone: "UTC" });
+  return Number.isNaN(d.getTime()) ? iso.slice(0, 10) : d.toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
 }
 
 /** S7 exit readiness (SIG-S7) — derivable gates before checkout prep (S8). Night audit is reported separately. */
@@ -635,13 +646,14 @@ export function s7Readiness(entry: EntryDetail, hotelToday: string | null = null
       met: h4Init || leavingToday,
     },
     {
-      card: "faults",
+      // Off the page since 2026-10-29 (a pop-up from the step line) — read with the departments.
+      card: "departments",
       label: openFaults
         ? `${openFaults} open fault${openFaults === 1 ? "" : "s"} — carried to check-out, recorded at the inspection`
         : "Deficiencies resolved",
       met: deficientFinal,
     },
-    { label: "No open disputes", met: openDisputes.length === 0, card: "disputes" },
+    { label: "No open disputes", met: openDisputes.length === 0, card: "folio" },
   ];
 }
 
@@ -668,9 +680,9 @@ export function s8Readiness(
     ? {
         label: insp.rooms.length > 1 ? `Rooms inspected or put off (${insp.inspectedCount}/${insp.rooms.length})` : "Room inspection recorded",
         met: insp.allRecorded,
-        card: "departure",
+        card: "rooms",
       }
-    : { label: "Room inspection recorded", met: !!inspection, card: "departure" };
+    : { label: "Room inspection recorded", met: !!inspection, card: "rooms" };
   const h4 = (entry.handoffs ?? []).find((h) => h.handoffType === "H4");
   const openDisputes = (entry.disputes ?? []).filter((d) => d.status === "OPEN" || d.status === "IN_PROGRESS");
   // EVERY distinct room must be released (2026-08-17 — the old check read only the first
@@ -685,21 +697,25 @@ export function s8Readiness(
     distinctRooms.every(
       (r) => r?.currentClaimState === "DEPARTED_DIRTY" || r?.currentClaimState === "DEPARTED_CLEAN",
     );
+  // In the order the desk works them (2026-10-30): the keys back and each room inspected first — a
+  // damage found is answered before the bill is settled (Policy 81) — then the bill, which releases
+  // the rooms, then the departure handed over.
   return [
-    // A written-off folio owes nothing and leaves Check-out too (Policy 33, 2026-10-12).
-    { label: "Folio settled", met: folio?.state === "SETTLED" || folio?.state === "OUTSTANDING" || folio?.state === "WRITTEN_OFF", card: "settle" },
     {
-      card: "departure",
+      card: "keys",
       label: "Keys returned",
       met: !!keyReturn && (keyReturn.countReconciled || !!keyReturn.reconciliationNote),
     },
+    inspectionLine,
+    ...(opts.damage?.any ? [{ label: "Damage answered", met: opts.damage.unanswered.length === 0, card: "damage" } as Precondition] : []),
+    // A written-off folio owes nothing and leaves Check-out too (Policy 33, 2026-10-12).
+    { label: "Folio settled", met: folio?.state === "SETTLED" || folio?.state === "OUTSTANDING" || folio?.state === "WRITTEN_OFF", card: "settle" },
     {
       label:
         distinctRooms.length > 1 ? "Rooms released to housekeeping" : "Room released to housekeeping",
       met: roomsReleased,
+      card: "settle",
     },
-    inspectionLine,
-    ...(opts.damage?.any ? [{ label: "Damage answered", met: opts.damage.unanswered.length === 0, card: "damage" } as Precondition] : []),
     { label: "Departure handoff done", met: !!h4 && (h4.state === "FULFILLED" || h4.isAutoFulfilled === true), card: "handoff" },
     { label: "No open disputes", met: openDisputes.length === 0 },
   ];
@@ -725,7 +741,13 @@ export function stepStateFor(order: number, currentOrder: number): StepState {
  * waiting for. An item with no card is one the step inherits from an earlier step; it is listed
  * apart rather than numbered, since there is nothing here to press.
  */
-export type Precondition = { label: string; met: boolean; card?: string };
+export type Precondition = {
+  label: string;
+  met: boolean;
+  card?: string;
+  /** A section's changes on screen, not saved yet (2026-10-27) — holds the move until saved. */
+  unsaved?: boolean;
+};
 
 /** Real-state preconditions surfaced in the gate bar for each step. */
 export function preconditionsFor(entry: EntryDetail, step: DeskStep, hotelToday: string | null = null): Precondition[] {
@@ -764,3 +786,52 @@ export function preconditionsFor(entry: EntryDetail, step: DeskStep, hotelToday:
 }
 
 export { DESK_STEPS };
+
+/**
+ * Why the rooms saved at Inquiry no longer fit the stay as it stands — or null when they do
+ * (2026-10-27: the stay was changed after the rooms were chosen and the house read as done). The
+ * mirror of the backend's `pickDoesNotFitStay` (back_end policies/01-availability/
+ * p01-s1-exit-preferred-configuration-and-room-eligibility.ts), which refuses the move to
+ * Negotiation on the same rule — keep the two in step.
+ */
+export function pickFitsStay(
+  optionSelected: unknown,
+  entry: { checkInDate?: string | null; checkOutDate?: string | null; numberOfRooms?: number | null },
+  searchCriteria: unknown,
+): string | null {
+  const ci = entry.checkInDate?.slice(0, 10);
+  const co = entry.checkOutDate?.slice(0, 10);
+  if (!ci || !co) return null;
+  const nights: string[] = [];
+  for (let t = Date.parse(`${ci}T00:00:00Z`); t < Date.parse(`${co}T00:00:00Z`) && nights.length < 366; t += 86_400_000) {
+    nights.push(new Date(t).toISOString().slice(0, 10));
+  }
+  const want = Math.max(1, entry.numberOfRooms ?? 1);
+  const rooms = (n: number) => `${n} room${n === 1 ? "" : "s"}`;
+  const day = (iso: string) => {
+    const d = new Date(`${iso}T00:00:00Z`);
+    return `${d.getUTCDate()} ${["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][d.getUTCMonth()]}`;
+  };
+  const opt = optionSelected as { perNight?: Array<{ date: string; roomIds?: unknown[] }>; roomIds?: unknown[]; roomId?: string } | null;
+  if (!opt) return null;
+  if (Array.isArray(opt.perNight) && opt.perNight.length > 0) {
+    const byNight = new Map(opt.perNight.map((n) => [String(n.date).slice(0, 10), Array.isArray(n.roomIds) ? n.roomIds.length : 0]));
+    const outside = [...byNight.keys()].filter((d) => !nights.includes(d)).sort();
+    const missing = nights.filter((d) => !byNight.has(d) || byNight.get(d) === 0);
+    const wrong = nights.filter((d) => byNight.has(d) && byNight.get(d)! > 0 && byNight.get(d) !== want);
+    if (missing.length) return `no room is chosen for ${missing.map(day).join(", ")}`;
+    if (outside.length) return `rooms are still chosen for ${outside.map(day).join(", ")}, which is no longer part of the stay`;
+    if (wrong.length) {
+      const had = byNight.get(wrong[0])!;
+      return `${rooms(had)} ${had === 1 ? "is" : "are"} chosen for ${wrong.map(day).join(", ")} — ${rooms(want)} a night are asked now`;
+    }
+    return null;
+  }
+  const sc = (searchCriteria ?? {}) as { checkInDate?: unknown; checkOutDate?: unknown };
+  const sci = typeof sc.checkInDate === "string" ? sc.checkInDate.slice(0, 10) : null;
+  const sco = typeof sc.checkOutDate === "string" ? sc.checkOutDate.slice(0, 10) : null;
+  if (sci && sco && (sci !== ci || sco !== co)) return `the rooms were chosen for ${day(sci)} → ${day(sco)}, and the stay is now ${day(ci)} → ${day(co)}`;
+  const count = Array.isArray(opt.roomIds) ? opt.roomIds.length : opt.roomId ? 1 : 0;
+  if (count !== want) return `${rooms(count)} ${count === 1 ? "is" : "are"} chosen — ${rooms(want)} are asked now`;
+  return null;
+}

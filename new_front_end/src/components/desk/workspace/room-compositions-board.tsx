@@ -106,7 +106,7 @@ function stayNights(checkIn?: string | null, checkOut?: string | null): string[]
 function nightLabel(key: string): string {
   const d = new Date(key + "T00:00:00.000Z");
   if (Number.isNaN(d.getTime())) return key;
-  return d.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" });
+  return d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" });
 }
 
 type RoomExtras = {
@@ -173,6 +173,7 @@ export function RoomCompositionsBoard({
   onChange,
   focusRoomId,
   onFocusRoom,
+  roomLabels,
   discountValue,
   discountUnit,
   discountBasis,
@@ -196,6 +197,8 @@ export function RoomCompositionsBoard({
    */
   focusRoomId?: string | null;
   onFocusRoom?: (roomId: string | null) => void;
+  /** A room the system may still move before Arrival — "Deluxe Double · room 1". See RoomCompositionsTable. */
+  roomLabels?: Map<string, string>;
 }) {
   const { session } = useSession();
   const roomsQuery = useQuery({
@@ -536,7 +539,7 @@ export function RoomCompositionsBoard({
           const room = roomById.get(roomId);
           const spots = Math.max(0, ceiling - current);
           flashCap(
-            `Room ${room?.roomNumber ?? ""} fits ${ceiling} adult-rate guests right now — ${
+            `${roomLabels?.get(roomId) ?? `Room ${room?.roomNumber ?? ""}`} fits ${ceiling} adult-rate guests right now — ${
               spots === 0 ? "it's full" : `only space for ${spots} more`
             }. Add an extra bed on the room, or move someone out (children under ${childMax + 1} don't take a slot).`,
           );
@@ -894,7 +897,7 @@ export function RoomCompositionsBoard({
             All rooms
           </button>
           {sealedRoomIds.map((id) => {
-            const n = roomById.get(id)?.roomNumber ?? id.slice(0, 6);
+            const n = roomLabels?.get(id) ?? roomById.get(id)?.roomNumber ?? id.slice(0, 6);
             const count = guests.filter((g) => assign[g.key] === id).length;
             return (
               <button
@@ -902,7 +905,7 @@ export function RoomCompositionsBoard({
                 type="button"
                 className={activeFocus === id ? "on" : ""}
                 onClick={() => onFocusRoom?.(activeFocus === id ? null : id)}
-                title={`Show room ${n} on its own`}
+                title={`Show ${roomLabels?.has(id) ? n : `room ${n}`} on its own`}
               >
                 {n}
                 <span className="c">{count}</span>
@@ -916,6 +919,7 @@ export function RoomCompositionsBoard({
         {visibleRoomIds.map((id) => {
           const room = roomById.get(id);
           const roomNumber = room?.roomNumber ?? id.slice(0, 6);
+          const roomName = roomLabels?.get(id) ?? `Room ${roomNumber}`;
           const here = guests.filter((g) => assign[g.key] === id);
           const x = extras[id] ?? EMPTY_EXTRAS;
           const othersCount = here.filter((g) => (plans[g.key] ?? "NONE") === "OTHERS").length;
@@ -938,8 +942,8 @@ export function RoomCompositionsBoard({
               {...zoneDragProps(id, id)}
             >
               <div className="rcb-room-head">
-                <span className="rce-roomno">Room {roomNumber}</span>
-                {room?.roomType?.name && <span className="rcb-type">{room.roomType.name}</span>}
+                <span className="rce-roomno">{roomName}</span>
+                {room?.roomType?.name && !roomLabels?.has(id) && <span className="rcb-type">{room.roomType.name}</span>}
                 <span className="ln" />
                 {full && (
                   <span className="tag warn" style={{ fontSize: 9 }}>
@@ -981,7 +985,7 @@ export function RoomCompositionsBoard({
                   disabled={blockedForSelection}
                   title={
                     blockedForSelection
-                      ? `Room ${roomNumber} fits ${ceiling} adult-rate guests right now — add an extra bed to raise it`
+                      ? `${roomName} fits ${ceiling} adult-rate guests right now — add an extra bed to raise it`
                       : undefined
                   }
                   onClick={() => placeSelection(id)}
@@ -1102,6 +1106,8 @@ export function RoomCompositionPlanner(props: DiscountEdit & {
   entryChildAges?: number[] | null;
   /** roomId → that room's own nights, display-ready. See RoomCompositionsTable. */
   roomDates?: Record<string, { label: string; nights: number }>;
+  /** A room the system may still move before Arrival — "Deluxe Double · room 1". See RoomCompositionsTable. */
+  roomLabels?: Map<string, string>;
   /** Commit the table by pricing it — see RoomCompositionsTable. Table mode only. */
   onSave?: () => void;
   saveLabel?: string;
@@ -1109,6 +1115,8 @@ export function RoomCompositionPlanner(props: DiscountEdit & {
   unsaved?: boolean;
   saveAside?: React.ReactNode;
   onFaultsChange?: (faults: string[]) => void;
+  /** Price for a stay the booking does not hold yet — a change of dates on the step (2026-10-29). */
+  previewStay?: { checkInDate: string; checkOutDate: string } | null;
   /** When set, in-progress edits persist per booking (sessionStorage) and survive leaving
    *  the workspace — without it the grid reset to the auto-distributed default on return. */
   persistKey?: string;
@@ -1132,6 +1140,13 @@ export function RoomCompositionPlanner(props: DiscountEdit & {
   /** Clicking a room CHOOSES it rather than opening the board — see RoomCompositionsTable. */
   onPickRoom?: (roomId: string) => void;
   pickedRoomId?: string | null;
+  /** Double-clicking a room opens its room-type change — see RoomCompositionsTable (2026-10-29). */
+  onOpenRoom?: (roomId: string, night: string | null) => void;
+  /** The night shown, held by the caller so it survives the table being drawn again — see RoomCompositionsTable. */
+  nightView?: string;
+  onNightViewChange?: (v: string) => void;
+  /** Seat the party on opening though rows were carried in — see RoomCompositionsTable. */
+  autoSeat?: boolean;
   /** The booking's bed plan, one line per room — see RoomCompositionsTable. */
   bedPlan?: Record<string, BedPlanCell>;
   onBedChange?: (roomId: string, bedType: string | null) => void;

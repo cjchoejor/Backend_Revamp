@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useSession } from "@/hooks/use-session";
 import { getRateReference } from "@/lib/api/entries";
 import { moneyOrDash } from "@/lib/desk/workspace";
-import { Help, useQuietScreen } from "@/components/ds/help";
+import { Help } from "@/components/ds/help";
 
 /**
  * Reference rates under the S2 composition editors (2026-08-01, operator request): typing a
@@ -15,14 +15,12 @@ import { Help, useQuietScreen } from "@/components/ds/help";
  * figure verbatim from the API, nothing computed here.
  */
 
-const TH: React.CSSProperties = { padding: "3px 16px 4px 0", fontWeight: 600, whiteSpace: "nowrap", textAlign: "left" };
-const TD: React.CSSProperties = { padding: "5px 16px 5px 0", whiteSpace: "nowrap" };
 /**
  * A rate on this strip is the anchor every negotiated figure below it is typed against, so it is
- * read, not squinted at ("UIappeal", 2026-09-29): the money sits at 14px in full ink while the
- * labels around it stay quiet.
+ * read, not squinted at ("UIappeal", 2026-09-29): the money in full ink and bold while the labels
+ * around it stay quiet.
  */
-const MONEY: React.CSSProperties = { ...TD, fontSize: 14, fontWeight: 700, color: "var(--ink, #1e1c19)" };
+const RATE: React.CSSProperties = { fontSize: 13.5, fontWeight: 700, color: "var(--ink, #1e1c19)", whiteSpace: "nowrap" };
 /**
  * The MSR floor is a LIMIT, not a footnote: the house's minimum sellable rate for the type, and a
  * booking priced under it needs the GM's waiver (p19). It is drawn as a bounded chip so the eye
@@ -48,9 +46,26 @@ const ADD_ON_COLS = [
   ["dinnerRate", "Dinner"],
 ] as const;
 
-export function RateReferenceStrip({ entryId, compact, roomIds }: { entryId: string; compact?: boolean; roomIds?: string[] }) {
+/**
+ * One line per room type (2026-10-29, operator: "is there a way this can be displayed differently
+ * which takes less space"; and the room numbers it listed "shouldn't [show] unless a specified room
+ * was picked"). The type, how many rooms of it the booking has — a room the guest asked for by
+ * number named by its number, the system's rooms only counted — then each rate with its label, the
+ * basis, and the MSR floor as a chip.
+ */
+export function RateReferenceStrip({
+  entryId,
+  compact,
+  roomIds,
+  quietNumbers,
+}: {
+  entryId: string;
+  compact?: boolean;
+  roomIds?: string[];
+  /** Numbers of the rooms the system chose (they read "Standard Double · room 1" until Arrival) — counted, never named. */
+  quietNumbers?: Set<string>;
+}) {
   const { session } = useSession();
-  const quiet = useQuietScreen();
   const roomsKey = (roomIds ?? []).join(",");
   const query = useQuery({
     queryKey: roomsKey ? ["rate-reference", entryId, roomsKey] : ["rate-reference", entryId],
@@ -64,130 +79,89 @@ export function RateReferenceStrip({ entryId, compact, roomIds }: { entryId: str
 
   const pct = (rate: number) => `${(rate * 100).toLocaleString(undefined, { maximumFractionDigits: 2 })}%`;
   const visibleAddOns = ADD_ON_COLS.filter(([key]) => ref.roomTypes.some((t) => t[key] != null));
-  /**
-   * The MSR floor gets a column of its OWN (2026-09-30, operator: "if the basis column shows
-   * MSR, why is it named basis — show it as MSR"). Basis answers WHERE the rate came from
-   * (the standard plan, or a party's package); the floor is a different fact entirely — the
-   * limit the rate may not go under. Reading one out of the other's column was the confusion.
-   * The column drops out when no type has a floor, exactly as the add-on columns do: a party's
-   * package rate is negotiated and the pricing pipeline exempts it from MSR.
-   */
-  const anyFloor = ref.roomTypes.some((t) => t.roomRateSource === "STANDARD_RATE_PLAN" && t.msrValue != null);
+  const roomsWord = (numbers: string[]) => {
+    const named = numbers.filter((n) => !quietNumbers?.has(n));
+    const counted = numbers.length - named.length;
+    const parts = [
+      ...(counted > 0 ? [`${counted} room${counted === 1 ? "" : "s"}`] : []),
+      ...(named.length ? [`Room${named.length === 1 ? "" : "s"} ${named.join(", ")}`] : []),
+    ];
+    return parts.join(" · ") || "not on the booking";
+  };
 
   return (
-    // Boxed (2026-08-06, operator request) — the same bordered-strip language as the discount
-    // bar below it, so the reference reads as its own card instead of loose rows on the panel.
     <div
       style={{
         marginTop: compact ? 0 : 12,
-        fontSize: 11.5,
+        fontSize: 12,
         color: "var(--ink-3, #7a6a52)",
         border: "1px solid var(--line-2, #d9cdb8)",
         borderRadius: "var(--r-md, 10px)",
         background: "var(--cream, #faf6ee)",
-        padding: "8px 12px",
+        padding: "6px 12px",
       }}
     >
-      <div style={{ marginBottom: compact ? 3 : 6, display: "flex", alignItems: "baseline", gap: 6 }}>
-        <span className="rce-lbl">Reference rates</span>
-        {quiet ? (
-          <>
-            {ref.party && (
-              <span style={{ fontSize: 11 }}>
-                {ref.party.type === "TRAVEL_AGENT" ? "agent" : "corporate"} card: {ref.party.name}
-              </span>
-            )}
-            <Help label="About the reference rates">
-              <p>What each room type sells at per night when no rate is negotiated — the figure a rate typed in the table is set against.</p>
-              <p>
-                Service charge ({pct(ref.serviceChargeRate)}) and GST ({pct(ref.gstRate)}) are added on top.
-              </p>
-              <p>Basis says where the rate comes from. MSR is the lowest rate the house sells at — a room priced below it needs the GM&rsquo;s waiver.</p>
-            </Help>
-          </>
-        ) : (
-          <span style={{ fontSize: 11 }}>
-            per night · SC {pct(ref.serviceChargeRate)} + GST {pct(ref.gstRate)} on top
-            {ref.party && <> · {ref.party.type === "TRAVEL_AGENT" ? "agent" : "corporate"} card: {ref.party.name}</>}
+      {ref.roomTypes.map((t, i) => (
+        <div
+          key={t.roomTypeId}
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            alignItems: "baseline",
+            gap: "2px 12px",
+            padding: "4px 0",
+            borderTop: i ? "1px dashed var(--line, #e3d9c8)" : undefined,
+          }}
+        >
+          {i === 0 ? (
+            <span style={{ display: "inline-flex", alignItems: "baseline", gap: 4, minWidth: 92 }}>
+              <span className="rce-lbl">Rates a night</span>
+              <Help label="About the reference rates">
+                <p>What each room type sells at per night when no rate is negotiated — the figure a rate typed in the table is set against.</p>
+                <p>
+                  Service charge ({pct(ref.serviceChargeRate)}) and GST ({pct(ref.gstRate)}) are added on top.
+                  {ref.party ? ` The rates are ${ref.party.name}'s ${ref.party.type === "TRAVEL_AGENT" ? "agency" : "company"} rates.` : ""}
+                </p>
+                <p>The rates are the house&rsquo;s published rates unless a rate package is named beside them.</p>
+                <p>MSR is the lowest rate the house sells at — a room priced below it needs the GM&rsquo;s waiver.</p>
+                {visibleAddOns.length === 0 ? <p>No extra-bed or meal rates are on file — those price at nothing unless negotiated in the table.</p> : null}
+              </Help>
+            </span>
+          ) : (
+            <span style={{ minWidth: 92 }} />
+          )}
+          <span style={{ minWidth: 150 }}>
+            <b style={{ color: "var(--ink, #1e1c19)", fontSize: 13 }}>{t.name}</b>
+            <span> · {roomsWord(t.roomNumbers)}</span>
           </span>
-        )}
-      </div>
-      <div style={{ overflowX: "auto" }}>
-        <table style={{ borderCollapse: "collapse", fontSize: 11.5 }}>
-          <thead>
-            <tr style={{ textAlign: "left", color: "var(--ink-3, #7a6a52)" }}>
-              {[
-                "Room type",
-                "Rooms",
-                "Room",
-                ...visibleAddOns.map(([, label]) => label),
-                "Basis",
-                ...(anyFloor ? ["MSR"] : []),
-              ].map((h) => (
-                <th key={h} style={TH}>
-                  {h}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {ref.roomTypes.map((t) => (
-              <tr key={t.roomTypeId} style={{ borderTop: "1px dashed var(--line, #e3d9c8)" }}>
-                <td style={TD}>
-                  <b>{t.code ?? t.name}</b>
-                  {t.code && <span style={{ marginLeft: 6 }}>{t.name}</span>}
-                </td>
-                <td style={TD}>{t.roomNumbers.join(", ")}</td>
-                <td className="mono" style={MONEY}>
-                  {moneyOrDash(t.roomRate, ref.currency)}
-                </td>
-                {visibleAddOns.map(([key]) => (
-                  <td key={key} className="mono" style={MONEY}>
-                    {moneyOrDash(t[key], ref.currency)}
-                  </td>
-                ))}
-                <td style={{ ...TD, paddingRight: 0 }}>
-                  {t.roomRateSource === "AGENT_RATE_PACKAGE" ? (
-                    <>
-                      {t.packageName ?? "rate package"}
-                      {t.standardRate != null && <> · standard {moneyOrDash(t.standardRate, ref.currency)}</>}
-                    </>
-                  ) : t.roomRateSource === "STANDARD_RATE_PLAN" ? (
-                    "standard plan"
-                  ) : (
-                    "no rate on file"
-                  )}
-                </td>
-                {anyFloor && (
-                  <td style={{ ...TD, paddingRight: 0 }}>
-                    {t.roomRateSource === "STANDARD_RATE_PLAN" && t.msrValue != null ? (
-                      <span
-                        className="mono"
-                        style={FLOOR}
-                        title="Minimum sellable rate — the house's floor for this room type. A booking priced below it needs the GM's waiver."
-                      >
-                        {moneyOrDash(t.msrValue, ref.currency)}
-                      </span>
-                    ) : (
-                      <span style={{ color: "var(--ink-3, #7a6a52)" }} title="Negotiated rates carry no MSR floor">
-                        —
-                      </span>
-                    )}
-                  </td>
-                )}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <p style={{ margin: "6px 0 0", lineHeight: 1.6, display: compact ? "none" : undefined }}>
-        These are what the draft prices with when a negotiated cell is left empty
-        {ref.nights != null ? ` · ${ref.nights} night${ref.nights === 1 ? "" : "s"}` : ""}.
-        {visibleAddOns.length === 0
-          ? " No extra-bed or meal rates on file — those lines price at zero unless negotiated in the grid."
-          : ref.roomTypes.some((t) => visibleAddOns.some(([key]) => t[key] == null)) &&
-            " Dashes mean no rate on file — those lines price at zero unless negotiated."}
-      </p>
+          <span>
+            Room <b className="mono" style={RATE}>{moneyOrDash(t.roomRate, ref.currency)}</b>
+          </span>
+          {visibleAddOns.map(([key, label]) => (
+            <span key={key}>
+              {label} <b className="mono" style={RATE}>{moneyOrDash(t[key], ref.currency)}</b>
+            </span>
+          ))}
+          {/* The basis only when it is not the house's own rates — a package's name, or no rate at all. */}
+          {t.roomRateSource === "AGENT_RATE_PACKAGE" ? (
+            <span>
+              {t.packageName ?? "rate package"}
+              {t.standardRate != null && <> · standard {moneyOrDash(t.standardRate, ref.currency)}</>}
+            </span>
+          ) : t.roomRateSource !== "STANDARD_RATE_PLAN" ? (
+            <span>no rate on file</span>
+          ) : null}
+          {t.roomRateSource === "STANDARD_RATE_PLAN" && t.msrValue != null ? (
+            <span
+              className="mono"
+              style={FLOOR}
+              title="Minimum sellable rate — the house's floor for this room type. A booking priced below it needs the GM's waiver."
+            >
+              MSR {moneyOrDash(t.msrValue, ref.currency)}
+            </span>
+          ) : null}
+        </div>
+      ))}
     </div>
   );
 }

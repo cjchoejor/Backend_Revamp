@@ -3,8 +3,10 @@
 /**
  * Step 8 · Check-out — "settle up" (SS03 amendment O1–O5, prototype `stepCanvas[8]`).
  *
- * The order the desk works in: is the folio complete → the master bill reviewed with the guest →
- * how the bill is settled → the tax invoice issued and sent → the departure (keys, the room).
+ * The order the desk works in (2026-10-30, the stage template): the keys back and every room
+ * inspected → any damage found answered → the master bill reviewed and the bill settled → the tax
+ * invoice issued and sent → the departure handed over. Each numbered section folds to its line once
+ * its own act finishes it; the charges, the disputes and the way back to Stay open from the step line.
  * Taking payment is the last thing that cannot be taken back; it sits behind its dialog.
  *
  * Every figure is the backend's: the billing summary's buckets and totals, the folio's own
@@ -17,41 +19,32 @@ import { toast } from "sonner";
 import { Button, Chip, Icon, Refusal } from "@/design-system";
 import { useSession } from "@/hooks/use-session";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
-import { useHotelDay } from "@/hooks/use-hotel-day";
 import { usePaymentStatus } from "@/hooks/use-payment-status";
 import { useRoomInspections } from "@/hooks/use-room-inspections";
 import { RoomInspectionGrid } from "./room-inspections";
 import { DamageCard, useUnansweredDamage } from "./damage-card";
 import {
   buildH4FulfilmentEvidence,
-  correctFolioCharge,
   fulfilHandoff,
   initiateSettlement,
-  postFolioCharge,
   reEnterS8ToS7,
   recordKeyReturn,
   recordRoomInspection,
 } from "@/lib/api/checkout";
-import { getNightAuditRecord, openDispute, postCreditNote } from "@/lib/api/in-stay";
+import { getNightAuditRecord, openDispute } from "@/lib/api/in-stay";
 import { recordCreditExtension } from "@/lib/api/reservation-setup";
 import { openFolioDocumentPdf, openInvoicePdf } from "@/lib/api/documents";
 import { deriveFinancials, effectiveCheckOutIso } from "@/lib/desk/workspace";
-import { fmtDate, fmtDateTime, fmtDay, fmtStamp, money, plural } from "@/lib/ds/format";
+import { fmtDate, fmtDateTime, fmtStamp, money, plural } from "@/lib/ds/format";
 import { PLAN_LABEL, dueLabel } from "@/components/desk/workspace/advance-settlement";
-import {
-  FolioLinesTable,
-  chargeTargetSpaces,
-  isTaxCompanion,
-  spaceNamesFromAllocations,
-  splitChargeTarget,
-} from "@/components/desk/workspace/folio-lines";
+import { FolioLinesTable, spaceNamesFromAllocations } from "@/components/desk/workspace/folio-lines";
 import { SplitSettlementBlock } from "@/components/desk/workspace/split-settlement";
-import type { EntryDetail, FolioLineSummary } from "@/types/api";
+import type { EntryDetail } from "@/types/api";
 import { sentWords } from "@/hooks/use-invoice-recipient";
 import { OverpaidCard } from "./refund-card";
 import {
   AnswerLine,
-  Choice,
+  ChangeBookingMenu,
   DsDialog,
   Fact,
   Facts,
@@ -59,18 +52,25 @@ import {
   PaperDrawer,
   ReasonDialog,
   SeeRow,
+  StageActs,
   StepCanvas,
   StepCard,
   Tool,
+  WorkPopup,
   atLeast,
   toastRefusal,
+  useFinishWhenDone,
+  useFinishWhenMet,
+  useOpenAlsoWay,
   useRefreshEntry,
+  useStepPane,
   words,
+  type ChangeBookingItem,
   type PaperRef,
   OtherWaysTabs,
   InlineWay,
+  NotNow,
   ShutWay,
-  useOpenOtherWay,
   type StepPane,
 } from "./kit";
 import {
@@ -93,6 +93,7 @@ import {
 } from "./s8-parts";
 import {
   PayerShares,
+  ReferenceField,
   defaultSettleMethod,
   settleMethodsFor,
   sharesToSettle,
@@ -100,14 +101,10 @@ import {
   type SettleMethod,
 } from "./s8-shares";
 import { Help } from "@/components/ds/help";
+import { PayLaterNote } from "./s6-balance";
+import { CorrectionDialog, CreditNoteDialog, PostChargeDialog } from "./s7-folio";
 
 /* ------------------------------------------------------------------ vocabulary */
-
-const CHARGE_TYPES = [
-  ["F_AND_B", "Food and drink"],
-  ["SERVICE", "Service"],
-  ["OTHER", "Other"],
-] as const;
 
 const H4_FLAGS = [
   ["RECORDED", "The fault is recorded"],
@@ -139,14 +136,12 @@ export function S8CheckOut({
   past,
   goToStep,
   pane = null,
-  openPane,
 }: {
   entry: EntryDetail;
   past: boolean;
   goToStep: (n: number) => void;
-  /** Which pane is open — null is This step. */
+  /** Which view is open in the page — null is the step itself. */
   pane?: string | null;
-  openPane?: (key: string | null) => void;
 }) {
   const { session } = useSession();
   const clock = useHotelClock(60_000);
@@ -157,8 +152,10 @@ export function S8CheckOut({
   const settled = isSettled(folio?.state);
   // The Stay step defaults its "for" to the folio tab opened; Check-out does the same.
   const [chargeTarget, setChargeTarget] = useState("");
-  // Going back and raising a dispute happen in Other ways' own tabs (2026-10-17).
-  const openWay = useOpenOtherWay();
+  // Going back and raising a dispute open in the middle of the screen, from the step line (2026-10-30).
+  const openWay = useOpenAlsoWay();
+  const stepPane = useStepPane();
+  const [disputesOpen, setDisputesOpen] = useState(false);
 
   // One way back from Check-out: to Stay. "Re-open to Negotiation" was taken off (2026-10-26) — the
   // guest is still in, and from Negotiation the booking could never reach Check-out again. A price is
@@ -199,54 +196,163 @@ export function S8CheckOut({
   return (
     <StepCanvas past={past}>
       <div className="pane" hidden={at(null)}>
-        <DisputesCard entry={entry} tz={clock.tz} />
-        <MasterBill
-          entry={entry}
-          tz={clock.tz}
-          onTab={setChargeTarget}
-          onAddCharge={chargeable && openPane ? () => openPane("charges") : undefined}
-        />
+        {past ? null : <CheckoutAttention entry={entry} onDisputes={() => setDisputesOpen(true)} />}
+        <Departure entry={entry} live={live} />
         {/* A damage found is answered before the bill is settled (2026-10-26). */}
         <DamageCard entry={entry} live={live} />
+        <MasterBill entry={entry} tz={clock.tz} onTab={setChargeTarget} onAddCharge={chargeable ? () => stepPane.open("charges") : undefined} />
         <HowSettled entry={entry} live={live} tz={clock.tz} onBackToStay={() => openWay("stay")} goToStep={goToStep} />
         <OverpaidCard entry={entry} live={live} />
         <Invoices entry={entry} live={live} tz={clock.tz} />
-        <Departure entry={entry} live={live} />
         <DepartureHandoff entry={entry} live={live} tz={clock.tz} />
       </div>
 
+      {/* The disputes, from the step line — in a pop-up over the work column, the booking file clear. */}
+      <WorkPopup open={disputesOpen} title="Disputes" onClose={() => setDisputesOpen(false)}>
+        {(entry.disputes ?? []).length ? <DisputesCard entry={entry} tz={clock.tz} /> : <p className="meta">No dispute has been raised on this booking.</p>}
+        {live && folio ? (
+          <div className="row-acts" style={{ marginTop: 10 }}>
+            <Button
+              kind="secondary"
+              onClick={() => {
+                setDisputesOpen(false);
+                openWay("dispute");
+              }}
+            >
+              Raise a dispute
+            </Button>
+          </div>
+        ) : null}
+      </WorkPopup>
+
       <div className="pane" hidden={at("charges")}>
-        <FolioTableCard entry={entry} onTab={setChargeTarget} />
-        {chargeable ? (
-          <AddOrCorrectCharge entry={entry} target={chargeTarget} setTarget={setChargeTarget} />
-        ) : (
-          <StepCard
-            title="Add or correct a charge"
-            status={
-              <span className="warn-ink">
-                {!folio
-                  ? "There is no bill on this booking."
-                  : isSettled(folio.state)
-                    ? "The bill is settled — a charge found now is posted on the Closed step, as a late charge."
-                    : `The bill is ${FOLIO_STATE_WORD[folio.state] ?? words(folio.state)} — charges can be added only while it is open.`}
-              </span>
-            }
-          />
-        )}
+        <FolioTableCard entry={entry} onTab={setChargeTarget} chargeable={chargeable} target={chargeTarget} setTarget={setChargeTarget} />
       </div>
 
-      {/* Other ways as sub-tabs (2026-10-17), each panel the form its button used to open. */}
+      {past ? null : (
+        <CheckoutActs
+          entry={entry}
+          live={live}
+          onCharges={() => stepPane.open("charges")}
+          onDisputes={() => setDisputesOpen(true)}
+          onBackToStay={() => openWay("stay")}
+        />
+      )}
+
+      {/* Going back and raising a dispute open in the middle of the screen (2026-10-30). */}
       <OtherWaysTabs
         tabs={[
           live && !settled
-            ? { key: "stay", label: "Back to Stay", content: fom ? backForm() : <ShutWay act="Back to Stay" why="Going back to Stay needs the FOM." /> }
+            ? {
+                key: "stay",
+                label: "Back to Stay",
+                inBar: false,
+                content: fom ? backForm() : <ShutWay act="Back to Stay" why="Going back to Stay needs the FOM." />,
+              }
             : null,
           live && folio
-            ? { key: "dispute", label: "Raise a dispute", content: <InlineWay render={(done) => <RaiseDispute entry={entry} open onClose={done} />} /> }
+            ? { key: "dispute", label: "Raise a dispute", inBar: false, content: <InlineWay render={(done) => <RaiseDispute entry={entry} open onClose={done} />} /> }
             : null,
         ]}
       />
     </StepCanvas>
+  );
+}
+
+/**
+ * What needs doing from what opens on the step line — one line each, with the way to it
+ * (2026-10-30): an open dispute holds the booking at Check-out.
+ */
+function CheckoutAttention({ entry, onDisputes }: { entry: EntryDetail; onDisputes: () => void }) {
+  const open = (entry.disputes ?? []).filter((d) => d.status === "OPEN" || d.status === "IN_PROGRESS").length;
+  if (!open) return null;
+  return (
+    <div className="stay-attention">
+      <div className="att stop" role="alert">
+        <b>
+          {open} open dispute{open === 1 ? "" : "s"} — the booking stays at Check-out until {open === 1 ? "it is" : "they are"} closed
+        </b>
+        <Button kind="secondary" onClick={onDisputes}>
+          Disputes
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The step line's right end at Check-out (2026-10-30): the charges and the disputes (Charges ▾, the
+ * open disputes as a red count), and the way back to Stay (Change booking ▾, the FOM's — shut once
+ * the bill is settled).
+ */
+function CheckoutActs({
+  entry,
+  live,
+  onCharges,
+  onDisputes,
+  onBackToStay,
+}: {
+  entry: EntryDetail;
+  live: boolean;
+  onCharges: () => void;
+  onDisputes: () => void;
+  onBackToStay: () => void;
+}) {
+  const { session } = useSession();
+  const fom = atLeast(session?.actorLevel, "L2");
+  const folio = entry.folio ?? null;
+  const settled = isSettled(folio?.state);
+  const openDisputes = (entry.disputes ?? []).filter((d) => d.status === "OPEN" || d.status === "IN_PROGRESS").length;
+  const chargeWhy = !folio
+    ? "There is no bill on this booking"
+    : settled
+      ? "The bill is settled — a charge found now is posted on the Closed step, as a late charge"
+      : folio.state !== "LIVE"
+        ? "The bill is not open"
+        : !live
+          ? "Only while the booking is at Check-out"
+          : undefined;
+  const charges: ChangeBookingItem[] = [
+    {
+      key: "charge",
+      label: "Add or correct a charge",
+      note: "The bill's lines, and a charge found this morning — posted while the bill is open.",
+      onSelect: chargeWhy ? undefined : onCharges,
+      reason: chargeWhy,
+    },
+    {
+      key: "disputes",
+      label: openDisputes ? `Disputes · ${openDisputes} open` : "Disputes",
+      note: "A charge the guest questions — raised, reviewed, closed. The booking stays at Check-out while one is open.",
+      onSelect: onDisputes,
+    },
+  ];
+  const backWhy = !live
+    ? "Only while the booking is at Check-out"
+    : settled
+      ? "The bill is settled — a charge found now is posted on the Closed step"
+      : !fom
+        ? "The FOM's call"
+        : undefined;
+  const items: ChangeBookingItem[] = [
+    {
+      key: "stay",
+      label: "Back to Stay",
+      note: "The booking goes back to Stay so a missed charge can be posted there. The bill stays open.",
+      onSelect: backWhy ? undefined : onBackToStay,
+      reason: backWhy,
+    },
+  ];
+  return (
+    <StageActs>
+      <ChangeBookingMenu
+        label="Charges"
+        items={charges}
+        badge={openDisputes}
+        badgeTitle={openDisputes ? `${openDisputes} open dispute${openDisputes === 1 ? "" : "s"} — the booking stays at Check-out until answered` : undefined}
+      />
+      <ChangeBookingMenu items={items} />
+    </StageActs>
   );
 }
 
@@ -290,7 +396,7 @@ function UnauditedLastNight({
         actions={
           fom ? (
             <Button kind="secondary" compact onClick={onBackToStay}>
-              Back to Stay…
+              Back to Stay
             </Button>
           ) : (
             <Button kind="quiet" compact onClick={() => goToStep(7)}>
@@ -329,6 +435,7 @@ function DepartureHandoff({ entry, live, tz }: { entry: EntryDetail; live: boole
   const putOffRooms = inspRooms.filter((r) => r.state === "PUT_OFF").map((r) => r.roomNumber);
   const flagWords = flag ? (H4_FLAGS.find(([v]) => v === flag)?.[1] ?? words(flag)) : null;
   const many = inspRooms.length > 1;
+  const finish = useFinishWhenDone("handoff");
   const fulfil = useMutation({
     mutationFn: () => {
       if (!flag) throw new Error(many ? "Inspect every room first — their answer is the handoff's" : "Record the inspection first — its answer is the handoff's");
@@ -337,6 +444,7 @@ function DepartureHandoff({ entry, live, tz }: { entry: EntryDetail; live: boole
     onSuccess: () => {
       toast.success("The departure handoff is done");
       refresh();
+      finish();
     },
     onError: (e) => toastRefusal(e, "The departure handoff could not be completed"),
   });
@@ -345,14 +453,15 @@ function DepartureHandoff({ entry, live, tz }: { entry: EntryDetail; live: boole
     ? "only while the booking is at Check-out"
     : !flag
       ? many
-        ? "inspect every room in The departure first"
-        : "record the inspection in The departure first"
+        ? "inspect every room in The rooms first"
+        : "record the inspection in The rooms first"
       : undefined;
 
   return (
     <StepCard
       flow="handoff"
       title="The departure handoff"
+      summary={`Done${doneAt ? ` · ${fmtStamp(doneAt, tz)}` : ""}${h4?.isAutoFulfilled ? " · recorded by itself" : ""}`}
       status={
         done ? (
           <span className="ok-ink">
@@ -364,8 +473,8 @@ function DepartureHandoff({ entry, live, tz }: { entry: EntryDetail; live: boole
             {flag
               ? `${capFirst(HANDOFF_STATE_WORD[h4.state] ?? words(h4.state))} — ready to mark done`
               : many
-                ? `Waiting for every room's inspection in The departure — ${inspQ.data?.inspectedCount ?? 0} of ${inspRooms.length} done`
-                : "Waiting for the inspection in The departure — its answer is carried here"}
+                ? `Waiting for every room's inspection — ${inspQ.data?.inspectedCount ?? 0} of ${inspRooms.length} done`
+                : "Waiting for the room's inspection — its answer is carried here"}
           </span>
         ) : (
           <span className="warn-ink">Not raised — it is raised when the booking leaves Stay</span>
@@ -392,7 +501,7 @@ function DepartureHandoff({ entry, live, tz }: { entry: EntryDetail; live: boole
             )}
           </span>
           <Button
-            compact
+            className={reason ? undefined : "go"}
             state={fulfil.isPending ? "working" : reason ? "inert" : "default"}
             title={reason}
             workingLabel="Recording…"
@@ -476,17 +585,74 @@ export function BillFigures({ fo, cur }: { fo: BillFolio | null; cur: string }) 
   );
 }
 
-/** The folio again, on the Add a charge tab — so a charge is posted with the bill in view. */
-function FolioTableCard({ entry, onTab }: { entry: EntryDetail; onTab: (target: string) => void }) {
+/**
+ * The folio again, on the Add a charge tab — so a charge is posted with the bill in view. Its acts
+ * are Stay's (2026-10-30, operator: "post charge and correct charge to be made into buttons like
+ * this in stage 7, after clicking showing pop up"): Post a charge, Correct a charge and the FOM's
+ * credit note, each in its own pop-up — the same forms, so the two steps cannot word them apart.
+ */
+function FolioTableCard({
+  entry,
+  onTab,
+  chargeable,
+  target,
+  setTarget,
+}: {
+  entry: EntryDetail;
+  onTab: (target: string) => void;
+  /** The bill is open at Check-out — a charge can still go on it. */
+  chargeable: boolean;
+  target: string;
+  setTarget: (v: string) => void;
+}) {
+  const { session } = useSession();
+  const fom = atLeast(session?.actorLevel, "L2");
   const billing = useBilling(entry);
   const fo = billing.data?.folio ?? null;
   const cur = billing.data?.currency ?? entry.folio?.lines?.[0]?.currency ?? "BTN";
+  const folio = entry.folio ?? null;
+  const [open, setOpen] = useState<null | "post" | "correct" | "credit">(null);
+  const shut = !folio
+    ? "There is no bill on this booking."
+    : isSettled(folio.state)
+      ? "The bill is settled — a charge found now is posted on the Closed step, as a late charge."
+      : folio.state !== "LIVE"
+        ? `The bill is ${FOLIO_STATE_WORD[folio.state] ?? words(folio.state)} — charges can be added only while it is open.`
+        : null;
   return (
-    <StepCard title="The folio" status={fo ? `${plural(fo.lineCount, "line")} on the bill` : undefined}>
+    <StepCard
+      title="The folio"
+      status={shut ? <span className="warn-ink">{shut}</span> : fo ? `${plural(fo.lineCount, "line")} on the bill` : undefined}
+      meta="A charge on the bill is never edited — a correction adds a line beside it that puts it right, and its service charge and GST move with it."
+    >
       <BillFigures fo={fo} cur={cur} />
       <div style={{ marginTop: 12 }}>
         <BillLines entry={entry} onTab={onTab} />
       </div>
+      {folio ? (
+        <Live>
+          <div className="folio-acts">
+            <Button className={chargeable ? "go" : undefined} icon="pen" state={chargeable ? "default" : "inert"} reason={shut ?? undefined} onClick={() => setOpen("post")}>
+              Post a charge
+            </Button>
+            <Button kind="secondary" state={chargeable ? "default" : "inert"} title={shut ?? undefined} onClick={() => setOpen("correct")}>
+              Correct a charge
+            </Button>
+            <Button
+              kind="secondary"
+              state={chargeable && fom ? "default" : "inert"}
+              reason={fom ? undefined : "a credit note is the FOM's"}
+              title={shut ?? undefined}
+              onClick={() => setOpen("credit")}
+            >
+              Credit note
+            </Button>
+          </div>
+          <PostChargeDialog entry={entry} open={open === "post"} onClose={() => setOpen(null)} target={target} setTarget={setTarget} />
+          <CorrectionDialog entry={entry} open={open === "correct"} onClose={() => setOpen(null)} />
+          <CreditNoteDialog entry={entry} open={open === "credit"} onClose={() => setOpen(null)} />
+        </Live>
+      ) : null}
     </StepCard>
   );
 }
@@ -508,7 +674,8 @@ function MasterBill({
   const billing = useBilling(entry);
   const index = useFolioIndex(entry);
   const [paper, setPaper] = useState<PaperRef | null>(null);
-  const [showLines, setShowLines] = useState(true);
+  // The lines wait for "Show the lines" (2026-10-30, operator).
+  const [showLines, setShowLines] = useState(false);
   const doc = index.data?.documents.find((d) => d.kind === "master-bill") ?? null;
   const fo = billing.data?.folio ?? null;
   const cur = billing.data?.currency ?? entry.folio?.lines?.[0]?.currency ?? "BTN";
@@ -571,266 +738,6 @@ function MasterBill({
       </div>
       {showLines ? <BillLines entry={entry} onTab={onTab} /> : null}
       <PaperDrawer paper={paper} onClose={() => setPaper(null)} />
-    </StepCard>
-  );
-}
-
-/* ------------------------------------------------------------------ add or correct a charge */
-
-function AddOrCorrectCharge({ entry, target, setTarget }: { entry: EntryDetail; target: string; setTarget: (v: string) => void }) {
-  const { session } = useSession();
-  const hotelDay = useHotelDay();
-  const refresh = useRefreshEntry(entry.id);
-  const fom = atLeast(session?.actorLevel, "L2");
-  const folio = entry.folio!;
-  // Last-morning charges belong to the check-out day — never a stay night, so never sealed by the
-  // night audit. The server normalises the date to the hotel's calendar. The EFFECTIVE check-out:
-  // after an early departure the guest left on that day, and dating their last charges on the
-  // booked check-out put them days after the stay ended (2026-09-18).
-  const checkoutDate = effectiveCheckOutIso(entry);
-  const dateForPosting = checkoutDate ?? hotelDay?.today ?? null;
-  const rooms = useMemo(() => distinctRooms(entry), [entry]);
-  const spaces = useMemo(() => chargeTargetSpaces(entry.spaceAllocations), [entry.spaceAllocations]);
-  const roomNumberById = useMemo(() => new Map(rooms.map((r) => [r.roomId, r.roomNumber])), [rooms]);
-  const spaceNameById = useMemo(() => new Map(spaces.map((s) => [s.spaceId, s.spaceName])), [spaces]);
-  const targetLabel = (l: { roomId?: string | null; spaceId?: string | null }) =>
-    l.roomId ? `Room ${roomNumberById.get(l.roomId) ?? "?"}` : l.spaceId ? spaceNameById.get(l.spaceId) ?? "a space" : "no room or space";
-
-  const [type, setType] = useState<(typeof CHARGE_TYPES)[number][0]>("F_AND_B");
-  const [amount, setAmount] = useState("");
-  const [desc, setDesc] = useState("");
-  const [posted, setPosted] = useState<FolioLineSummary | null>(null);
-
-  const [lineId, setLineId] = useState("");
-  const [mode, setMode] = useState<"adjust" | "setNet">("adjust");
-  const [delta, setDelta] = useState("");
-  const [toAmount, setToAmount] = useState("");
-  const [why, setWhy] = useState("");
-
-  // Charges only — a service-charge or GST line moves with its charge and is never corrected alone.
-  const correctable = (folio.lines ?? []).filter((l) => !isTaxCompanion(l) && !l.description.toLowerCase().startsWith("correction for"));
-  const amt = Number.parseFloat(amount);
-  const amountOk = amount.trim() !== "" && Number.isFinite(amt);
-
-  const post = useMutation({
-    mutationFn: () => {
-      if (!amountOk) throw new Error("Put in the amount");
-      return postFolioCharge(session!, folio.id, {
-        entryId: entry.id,
-        lineType: type,
-        description: desc.trim() || "Final morning charge",
-        amount: amt,
-        chargeDate: dateForPosting ?? undefined,
-        ...splitChargeTarget(target),
-      });
-    },
-    onSuccess: (line) => {
-      setPosted(line);
-      setAmount("");
-      setDesc("");
-      refresh([["settlement-targets"]]);
-    },
-    onError: (e) => toastRefusal(e, "The charge could not be posted"),
-  });
-  const credit = useMutation({
-    mutationFn: () => {
-      if (!amountOk || amt <= 0) throw new Error("Put in the amount of the credit");
-      if (!dateForPosting) throw new Error("The hotel's date is not known yet");
-      return postCreditNote(session!, folio.id, {
-        entryId: entry.id,
-        description: desc.trim() || "Credit note",
-        amount: amt,
-        creditDate: dateForPosting,
-        ...splitChargeTarget(target),
-      });
-    },
-    onSuccess: () => {
-      toast.success("Credit note posted");
-      setAmount("");
-      setDesc("");
-      refresh([["settlement-targets"]]);
-    },
-    onError: (e) => toastRefusal(e, "The credit note could not be posted"),
-  });
-  const correct = useMutation({
-    mutationFn: () => {
-      if (!lineId) throw new Error("Choose the charge that is wrong");
-      if (!dateForPosting) throw new Error("The hotel's date is not known yet");
-      const body: Parameters<typeof correctFolioCharge>[2] = {
-        entryId: entry.id,
-        originalFolioLineId: lineId,
-        reason: why.trim(),
-        correctionDate: dateForPosting,
-      };
-      if (mode === "setNet") {
-        const n = Number.parseFloat(toAmount);
-        if (!Number.isFinite(n)) throw new Error("Put in what the charge should be");
-        body.correctToAmount = n;
-      } else {
-        const v = Number.parseFloat(delta);
-        if (!Number.isFinite(v) || v === 0) throw new Error("Put in the adjustment — more or less than zero");
-        body.correctionAmount = v;
-      }
-      return correctFolioCharge(session!, folio.id, body);
-    },
-    onSuccess: () => {
-      toast.success("Correction posted — its service charge and GST moved with it");
-      setLineId("");
-      setDelta("");
-      setToAmount("");
-      setWhy("");
-      refresh([["settlement-targets"]]);
-    },
-    onError: (e) => toastRefusal(e, "The correction could not be posted"),
-  });
-
-  return (
-    <StepCard
-      title="Add or correct a charge"
-      status={`Dated the check-out day${checkoutDate ? `, ${fmtDate(checkoutDate)}` : ""}`}
-      meta="The last night is already audited. Charges can be added or corrected until the bill is settled." 
-    >
-      <div className="form2">
-        <div className="field">
-          <label>What it is</label>
-          <select className="input" value={type} onChange={(e) => setType(e.target.value as typeof type)}>
-            {CHARGE_TYPES.map(([v, l]) => (
-              <option key={v} value={v}>
-                {l}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="field">
-          <label>For</label>
-          <select className="input" value={target} onChange={(e) => setTarget(e.target.value)}>
-            <option value="">No room or space</option>
-            {rooms.map((r) => (
-              <option key={r.roomId} value={`room:${r.roomId}`}>
-                Room {r.roomNumber}
-              </option>
-            ))}
-            {spaces.length ? (
-              <optgroup label="Spaces">
-                {spaces.map((s) => (
-                  <option key={s.spaceId} value={`space:${s.spaceId}`}>
-                    {s.spaceName}
-                  </option>
-                ))}
-              </optgroup>
-            ) : null}
-          </select>
-        </div>
-        <div className="field">
-          <label>Amount · Nu. · before service charge and GST</label>
-          <input className="input money" inputMode="decimal" value={amount} placeholder="0.00" onChange={(e) => setAmount(e.target.value)} />
-        </div>
-        <div className="field">
-          <label>Description</label>
-          <input className="input" value={desc} placeholder="2 × mineral water, 1 × beer" onChange={(e) => setDesc(e.target.value)} />
-        </div>
-      </div>
-      <div className="row-acts" style={{ marginTop: 10 }}>
-        <Button
-          compact
-          state={post.isPending ? "working" : amountOk ? "default" : "inert"}
-          title={amountOk ? undefined : "put in the amount first"}
-          workingLabel="Posting…"
-          onClick={() => post.mutate()}
-        >
-          Post the charge
-        </Button>
-        <Button
-          kind="quiet"
-          compact
-          state={credit.isPending ? "working" : !fom ? "inert" : amountOk && amt > 0 ? "default" : "inert"}
-          title={!fom ? "A credit note needs the FOM" : amountOk && amt > 0 ? undefined : "put in the amount of the credit first"}
-          workingLabel="Posting…"
-          onClick={() => credit.mutate()}
-        >
-          Post a credit note
-        </Button>
-        <Help label="About the credit note">Its service charge and GST post beside it on their own lines.</Help>
-      </div>
-
-      {correctable.length ? (
-        <div className="form2" style={{ marginTop: 12 }}>
-          <div className="rule-above">
-            <b className="sm">Correct a charge</b>
-            <Help label="About corrections">
-              The bill only grows — a correction is a new line beside the original, and its service charge and GST move with it.
-            </Help>
-          </div>
-          <div className="wide field">
-            <label>Which charge is wrong</label>
-            <select className="input" value={lineId} onChange={(e) => setLineId(e.target.value)}>
-              <option value="">Choose a charge from the bill…</option>
-              {correctable.map((l) => (
-                <option key={l.id} value={l.id}>
-                  {l.id.split("-").pop()} · {fmtDay(l.chargeDate)} · {targetLabel(l)} · {l.description} · {money(l.amount, l.currency)}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="wide field">
-            <label>How</label>
-            <Choice
-              options={[
-                ["adjust", "Adjust it by an amount"],
-                ["setNet", "Set it to an amount"],
-              ]}
-              value={mode}
-              onChange={setMode}
-            />
-          </div>
-          <div className="field">
-            <label>{mode === "adjust" ? "Adjustment · Nu. · minus to reduce" : "What it should be · Nu. · net"}</label>
-            {mode === "adjust" ? (
-              <input className="input money" inputMode="decimal" value={delta} placeholder="-50.00" onChange={(e) => setDelta(e.target.value)} />
-            ) : (
-              <input className="input money" inputMode="decimal" value={toAmount} placeholder="0.00" onChange={(e) => setToAmount(e.target.value)} />
-            )}
-          </div>
-          <div className="field">
-            <label>Why</label>
-            <input className="input" value={why} placeholder="the guest had one beer, not two" onChange={(e) => setWhy(e.target.value)} />
-          </div>
-          <div className="wide row-acts">
-            <Button
-              kind="secondary"
-              compact
-              state={correct.isPending ? "working" : lineId && why.trim() ? "default" : "inert"}
-              title={!lineId ? "choose the charge first" : !why.trim() ? "write why first" : undefined}
-              workingLabel="Posting…"
-              onClick={() => correct.mutate()}
-            >
-              Post the correction
-            </Button>
-          </div>
-        </div>
-      ) : null}
-
-      <DsDialog
-        open={!!posted}
-        onClose={() => setPosted(null)}
-        register="report"
-        title="Charge posted"
-        caseLines={posted ? [<b key="a">{money(posted.amount, posted.currency)}</b>, posted.description] : undefined}
-        footer={
-          <Button compact onClick={() => setPosted(null)}>
-            Done
-          </Button>
-        }
-      >
-        {posted ? (
-          <>
-            <p className="sm">
-              {CHARGE_TYPES.find(([v]) => v === posted.lineType)?.[1] ?? words(posted.lineType)} · for {targetLabel(posted)} · line {posted.id.split("-").pop()}
-              <Help label="About the charge">Service charge and GST posted beside it on their own lines.</Help>
-            </p>
-          </>
-        ) : null}
-      </DsDialog>
     </StepCard>
   );
 }
@@ -917,6 +824,7 @@ function HowSettled({
     if (balance != null && balance > 0) setCeiling(String(balance));
   }, [balance]);
   const [creditWhy, setCreditWhy] = useState("");
+  const [creditOpen, setCreditOpen] = useState(false);
   const [payWithin, setPayWithin] = useState("");
 
   // The backend's partial-settlement rule, said before the click (it enforces it regardless):
@@ -946,6 +854,7 @@ function HowSettled({
   const voucherValid = Number.isFinite(voucherTyped) && voucherTyped >= 0;
   const invoicesParty = method === "DIRECT_BILL" || method === "VOUCHER";
 
+  const finish = useFinishWhenDone("settle");
   const settle = useMutation({
     mutationFn: () => {
       if (!folio?.id || !folio.billingModel) throw new Error("The bill or its billing model is missing");
@@ -975,6 +884,7 @@ function HowSettled({
               : "Settled — the bill is closed and the rooms go to housekeeping",
       );
       refresh([["settlement-targets"]]);
+      finish();
     },
     onError: (e) => toastRefusal(e, "The settlement did not go through"),
   });
@@ -986,6 +896,7 @@ function HowSettled({
       return recordCreditExtension(session!, entry.id, body);
     },
     onSuccess: () => {
+      setCreditOpen(false);
       toast.success("Credit extension approved — a part-payment within it can now be settled");
       refresh();
     },
@@ -1027,21 +938,27 @@ function HowSettled({
       flow="settle"
       title="How the bill is settled"
       meta="One bill by the model; part by part when each room or hall pays its own; free to change until the bill is settled — after that, the tax invoice decides."
+      summary={
+        stillOwed
+          ? `Settled in part · ${money(balance, cur)} still owed, collected after the stay`
+          : `Settled${folio?.closedAt ? ` · the bill closed ${fmtStamp(folio.closedAt, tz)}` : ""} · the rooms released`
+      }
     >
       <UnauditedLastNight entry={entry} live={live} onBackToStay={onBackToStay} goToStep={goToStep} />
+      <PayLaterNote entry={entry} at="checkout" />
       <div className="row-acts">
         <Chip tone="accent">by the billing model · {model ? BILLING_MODEL_WORD[model] ?? words(model) : "not set"}</Chip>
         {entry.groupBillingMode === "GROUP_MASTER" ? <Chip tone="quiet">one bill for the party</Chip> : null}
         {folio ? (
           <SeeRow
-            label={byPart ? "Hide the parts" : "Settle part by part…"}
+            label="Settle part by part"
             note="each room or space pays its own part — the money is filed against it; the bill stays one"
-            onClick={() => setByPart((v) => !v)}
+            onClick={() => setByPart(true)}
           />
         ) : null}
         <Live>
           <SeeRow
-            label="Settle by proportion…"
+            label="Settle by proportion"
             note="whatever split was agreed — 60 / 40 — each invoice its share of everything"
             reason="Not possible yet — use Settle part by part instead"
             notYet
@@ -1058,10 +975,13 @@ function HowSettled({
         </div>
       ) : null}
 
-      {byPart && folio ? (
-        <Tool>
-          <SplitSettlementBlock entry={entry} folioId={folio.id} defaultOpen />
-        </Tool>
+      {/* In a pop-up over the work column (2026-10-30, operator: "settle part by part can show a pop up"). */}
+      {folio ? (
+        <WorkPopup open={byPart} title="Settle part by part" onClose={() => setByPart(false)}>
+          <Tool>
+            <SplitSettlementBlock entry={entry} folioId={folio.id} unfolded />
+          </Tool>
+        </WorkPopup>
       ) : null}
 
       {!folio ? (
@@ -1069,7 +989,7 @@ function HowSettled({
           There is no bill on this booking.
         </p>
       ) : shares ? (
-        <PayerShares entry={entry} shares={shares} live={live} currency={cur} />
+        <PayerShares entry={entry} shares={shares} live={live} currency={cur} onSettled={() => finish()} />
       ) : settled ? (
         <div className="bind bound" style={{ marginTop: 12 }}>
           {/* an OUTSTANDING bill with nothing left on it (an import, a later payment) reads as settled */}
@@ -1124,12 +1044,13 @@ function HowSettled({
           ) : null}
           {creditExpired ? (
             <p className="sm warn-ink" style={{ marginTop: 8 }}>
-              The credit extension on file has run out — it no longer covers a part-payment. The FOM approves it again below, or settles it.
+              The credit extension on file has run out — it no longer covers a part-payment. The FOM approves it again (Change the credit extension), or settles it.
             </p>
           ) : null}
 
           <Live>
-            <div className="form2" style={{ marginTop: 12 }}>
+            {/* How they pay · the reference · the amount, in one line (2026-10-30, operator). */}
+            <div className="form3 settle-row" style={{ marginTop: 12 }}>
               <div className="field">
                 <label>
                   How they pay
@@ -1145,19 +1066,10 @@ function HowSettled({
                   ))}
                 </select>
               </div>
-              {method === "DIRECT_BILL" ? null : (
-                <div className="field">
-                  <label>
-                    {method === "VOUCHER" ? "Voucher number" : "Payment reference"}
-                    <Help label="About the reference">{method === "VOUCHER" ? "As printed on the voucher." : "Cash and QR need one."}</Help>
-                  </label>
-                  <input
-                    className="input"
-                    value={ref}
-                    placeholder={method === "VOUCHER" ? "the agency's voucher number" : "the transaction reference"}
-                    onChange={(e) => setRef(e.target.value)}
-                  />
-                </div>
+              {method === "DIRECT_BILL" ? (
+                <SendToField entry={entry} value={invoiceTo} onChange={setInvoiceTo} label="Send the invoice to" />
+              ) : (
+                <ReferenceField method={method} value={ref} onChange={setRef} takesMoney={takesMoney} />
               )}
               {method === "VOUCHER" ? (
                 <div className="field">
@@ -1193,7 +1105,10 @@ function HowSettled({
                   ) : null}
                 </div>
               )}
-              {invoicesParty ? <SendToField entry={entry} value={invoiceTo} onChange={setInvoiceTo} label="Send the invoice to" /> : null}
+            </div>
+            {method === "VOUCHER" || (overCeiling && fom) ? (
+            <div className="form2 settle-row" style={{ marginTop: 10 }}>
+              {method === "VOUCHER" ? <SendToField entry={entry} value={invoiceTo} onChange={setInvoiceTo} label="Send the invoice to" /> : null}
               {overCeiling && fom ? (
                 <div className="field">
                   <label>
@@ -1209,6 +1124,7 @@ function HowSettled({
                 </div>
               ) : null}
             </div>
+            ) : null}
             {partialLocked ? (
               <div style={{ marginTop: 10 }}>
                 <Refusal
@@ -1220,6 +1136,7 @@ function HowSettled({
             ) : null}
             <div className="row-acts" style={{ marginTop: 12 }}>
               <Button
+                className={live && !settleReason ? "go" : undefined}
                 icon="lock"
                 state={live && !settleReason ? "default" : "inert"}
                 reason={live ? settleReason : "only while the booking is at Check-out"}
@@ -1227,17 +1144,38 @@ function HowSettled({
               >
                 Take payment &amp; settle
               </Button>
+              {fom ? (
+                <Button kind="secondary" state={live ? "default" : "inert"} onClick={() => setCreditOpen(true)}>
+                  {creditActive || creditExpired ? "Change the credit extension" : "Let the guest leave owing"}
+                </Button>
+              ) : null}
             </div>
 
-            {fom ? (
-              <div className="form2" style={{ marginTop: 14 }}>
-                <div className="rule-above">
-                  <b className="sm">Let the guest leave owing — a credit extension</b>
-                  <Help label="About the credit extension">
-                    The FOM&rsquo;s approval covers what is left, so a part-payment (even nothing) can settle and the rest is collected after the
-                    stay.
-                  </Help>
-                </div>
+            {/* The FOM's credit extension, in a pop-up (2026-10-30, operator: "credit extension to be made
+                into a button, when clicked, it should show a pop up"). */}
+            <DsDialog
+              open={creditOpen}
+              onClose={() => setCreditOpen(false)}
+              title="Let the guest leave owing — a credit extension"
+              caseLines={[<b key="g">{guest}</b>, `${entry.id} · balance ${money(balance, cur)}`]}
+              help="The FOM's approval covers what is left, so a part-payment (even nothing) can settle and the rest is collected after the stay."
+              busy={creditExt.isPending}
+              footer={
+                <>
+                  <NotNow onClick={() => setCreditOpen(false)} busy={creditExt.isPending} />
+                  <Button
+                    className={live && ceiling.trim() && creditWhy.trim() ? "go" : undefined}
+                    state={creditExt.isPending ? "working" : live && ceiling.trim() && creditWhy.trim() ? "default" : "inert"}
+                    reason={!ceiling.trim() ? "put in the amount it covers" : !creditWhy.trim() ? "write why first" : undefined}
+                    workingLabel="Approving…"
+                    onClick={() => creditExt.mutate()}
+                  >
+                    {creditActive || creditExpired ? "Approve it again" : "Approve the credit extension"}
+                  </Button>
+                </>
+              }
+            >
+              <div className="form2">
                 <div className="field">
                   <label>Covers up to · Nu.</label>
                   <input
@@ -1261,20 +1199,8 @@ function HowSettled({
                   <label>Why</label>
                   <input className="input" value={creditWhy} placeholder="bank transfer promised by Friday" onChange={(e) => setCreditWhy(e.target.value)} />
                 </div>
-                <div className="wide row-acts">
-                  <Button
-                    kind="secondary"
-                    compact
-                    state={creditExt.isPending ? "working" : live && ceiling.trim() && creditWhy.trim() ? "default" : "inert"}
-                    title={!ceiling.trim() ? "put in the amount it covers" : !creditWhy.trim() ? "write why first" : undefined}
-                    workingLabel="Approving…"
-                    onClick={() => creditExt.mutate()}
-                  >
-                    {creditActive || creditExpired ? "Approve it again" : "Approve the credit extension"}
-                  </Button>
-                </div>
               </div>
-            ) : null}
+            </DsDialog>
           </Live>
         </>
       )}
@@ -1498,7 +1424,7 @@ function Invoices({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz: 
         meta={`A tax invoice of the guest's own extras — food, laundry, the minibar — apart from the rooms billed to ${booked.party ?? "the account"}. It can't be made yet.`}
       >
         <p className="sm">
-          Today the bill issues <b>one</b> tax invoice to {booked.payer}. Until the split exists, take the guest&rsquo;s part with <b>Settle part by part…</b> above.
+          Today the bill issues <b>one</b> tax invoice to {booked.payer}. Until the split exists, take the guest&rsquo;s part with <b>Settle part by part</b> above.
         </p>
         <Live>
           <div className="row-acts" style={{ marginTop: 10 }}>
@@ -1536,15 +1462,20 @@ function Departure({ entry, live }: { entry: EntryDetail; live: boolean }) {
         outstanding: rs.some((r) => r.keyIssuedAt && !r.keyReturnedAt && !r.keyLostAt),
         backEarlier: rs.some((r) => r.keyReturnedAt) && !rs.some((r) => r.keyIssuedAt && !r.keyReturnedAt && !r.keyLostAt),
         lost: rs.some((r) => r.keyLostAt),
+        lostNote: rs.find((r) => r.keyLostAt)?.keyLostNote ?? null,
+        returnedAt: rs.map((r) => r.keyReturnedAt ?? "").sort().pop() || null,
       }))
       .filter((k) => k.outstanding || k.backEarlier || k.lost)
       .sort((a, b) => a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true }));
   }, [entry.roomAssignments]);
   const roomWise = keyPlan.length > 0;
   const outstandingKeys = keyPlan.filter((k) => k.outstanding);
-  // Each room's key is BACK or LOST (2026-10-26, operator: "tell the system which room's key
-  // exactly is missing"); a room not answered has not come back. A loss needs the note.
+  // Each room's key is RETURNED or LOST (2026-10-26, operator: "tell the system which room's key
+  // exactly is missing"). A lost key says what happened, in a pop-up, and the reason stays with that
+  // room (2026-10-30, operator); every room is answered before the keys are recorded.
   const [keyState, setKeyState] = useState<Record<string, "back" | "lost">>({});
+  const [lostNotes, setLostNotes] = useState<Record<string, string>>({});
+  const [askLost, setAskLost] = useState<{ roomId: string; roomNumber: string } | null>(null);
   const marked = outstandingKeys.filter((k) => keyState[k.roomId] === "back");
   const lostKeys = outstandingKeys.filter((k) => keyState[k.roomId] === "lost");
   const unanswered = outstandingKeys.filter((k) => !keyState[k.roomId]);
@@ -1555,18 +1486,32 @@ function Departure({ entry, live }: { entry: EntryDetail; live: boolean }) {
       else next[roomId] = v;
       return next;
     });
+  // Lost asks why first; pressed again it takes the answer back.
+  const pressLost = (k: { roomId: string; roomNumber: string }) => {
+    if (keyState[k.roomId] === "lost") toggleKey(k.roomId, "lost");
+    else setAskLost(k);
+  };
+  const notLost = outstandingKeys.filter((k) => keyState[k.roomId] !== "lost");
+  const allReturned = notLost.length > 0 && notLost.every((k) => keyState[k.roomId] === "back");
+  const setAllReturned = () =>
+    setKeyState((p) => {
+      const next = { ...p };
+      for (const k of notLost) {
+        if (allReturned) delete next[k.roomId];
+        else next[k.roomId] = "back";
+      }
+      return next;
+    });
   const [count, setCount] = useState(String(keysIssued || 1));
+  // The record-the-keys act is the section's own; it is green once it can be pressed.
   const [lostCount, setLostCount] = useState("0");
   const lostN = Number.parseInt(lostCount || "0", 10) || 0;
   const [keyNote, setKeyNote] = useState("");
   const countN = Number.parseInt(count, 10);
-  const anyLost = roomWise ? lostKeys.length > 0 : lostN > 0;
-  const short = (roomWise ? marked.length !== outstandingKeys.length : countN !== keysIssued) || anyLost;
-  const notePrompt = anyLost
-    ? roomWise
-      ? `what happened to ${lostKeys.length > 1 ? "the keys of Rooms" : "the key of Room"} ${lostKeys.map((k) => k.roomNumber).join(", ")}`
-      : "what happened to the lost key"
-    : "a key has not come back — say what happened";
+  // A booking keyed by count (no room stamps) keeps the counts and the one note.
+  const anyLost = lostN > 0;
+  const short = countN !== keysIssued || anyLost;
+  const notePrompt = anyLost ? "what happened to the lost key" : "a key has not come back — say what happened";
 
   const keys = useMutation({
     mutationFn: () => {
@@ -1576,8 +1521,9 @@ function Departure({ entry, live }: { entry: EntryDetail; live: boolean }) {
         return recordKeyReturn(session!, entry.id, {
           keyCountReturned: ids.length,
           ...(ids.length ? { returnedRoomIds: ids } : {}),
-          ...(lostIds.length ? { lostRoomIds: lostIds, keyCountLost: lostIds.length } : {}),
-          ...(short ? { reconciliationNote: keyNote.trim() } : {}),
+          ...(lostIds.length
+            ? { lostRooms: lostKeys.map((k) => ({ roomId: k.roomId, note: (lostNotes[k.roomId] ?? "").trim() })), keyCountLost: lostIds.length }
+            : {}),
         });
       }
       if (!Number.isInteger(countN) || countN < 0) throw new Error("Put in how many keys came back");
@@ -1598,11 +1544,79 @@ function Departure({ entry, live }: { entry: EntryDetail; live: boolean }) {
   const released = rooms.length > 0 && rooms.every((r) => r.room?.currentClaimState === "DEPARTED_DIRTY" || r.room?.currentClaimState === "DEPARTED_CLEAN");
   const onAccount = !!entry.folio?.billingModel && ON_ACCOUNT_MODELS.has(entry.folio.billingModel);
 
+  // Each section folds once its own presses finish it; the rooms open after the keys (2026-10-30).
+  useFinishWhenMet("keys");
+  useFinishWhenMet("rooms");
+  const insp = useRoomInspections(entry);
+  const inspRooms = insp.data?.rooms ?? [];
+  const doneRooms = inspRooms.filter((r) => r.state === "DONE");
+  const putOff = inspRooms.filter((r) => r.state === "PUT_OFF").length;
+  const damaged = inspRooms.filter((r) => r.damageFound).length;
+  // Once recorded, every room's key is counted — one taken back during the stay included (2026-10-30:
+  // a three-room booking read "2 of 2 returned").
+  const returnedRooms = keyPlan.filter((k) => !k.outstanding && !k.lost);
+  const lostRooms = keyPlan.filter((k) => !k.outstanding && k.lost);
+  const earlierRooms = keyReturn
+    ? returnedRooms.filter((k) => !!k.returnedAt && new Date(k.returnedAt).getTime() < new Date(keyReturn.returnedAt).getTime() - 1000)
+    : [];
+  const keysLine = !keyReturn
+    ? ""
+    : roomWise
+      ? lostRooms.length
+        ? `${returnedRooms.length} of ${plural(keyPlan.length, "key")} returned · ${lostRooms.length} lost`
+        : keyPlan.length > 1
+          ? `All ${keyPlan.length} keys returned`
+          : "The key returned"
+      : keyReturn.keyCountLost
+        ? `${keyReturn.keyCountReturned} of ${keyReturn.keyCountIssued} keys returned · ${keyReturn.keyCountLost} lost`
+        : "Keys returned";
+  const roomsLine =
+    inspRooms.length === 1
+      ? inspRooms[0].state === "PUT_OFF"
+        ? `Room ${inspRooms[0].roomNumber}'s inspection put off`
+        : `Room ${inspRooms[0].roomNumber} inspected · ${damaged ? "damage found" : "nothing found"}`
+      : inspRooms.length
+        ? `${plural(doneRooms.length, "room")} inspected${putOff ? ` · ${putOff} put off` : ""}${damaged ? ` · damage in ${damaged}` : " · nothing found"}`
+        : "";
+  const leavesWith = onAccount
+    ? `They leave with the master bill — charged to ${booked.payer}, nothing due from them at the desk.`
+    : "They leave with their tax invoice, sent — and printed if they want paper.";
+
+  const roomsWord = (ks: Array<{ roomNumber: string }>) => (ks.length > 1 ? `Rooms ${ks.map((k) => k.roomNumber).join(", ")}` : `Room ${ks[0]?.roomNumber ?? ""}`);
+
+  // Two sections (2026-10-30, operator: "after keys are returned, it should then show the rooms
+  // section, prompting the user to do this step as well; before that minimise it"): the keys, then
+  // the rooms, which waits under its title until the keys are on record.
   return (
-    <StepCard flow="departure" title="The departure">
-      <Facts wide>
-        <Fact k="Keys">
-          {keyReturn ? (
+    <>
+    <StepCard
+      flow="keys"
+      title="The keys"
+      meta="Each room's key returned or lost — a lost key says what happened, kept with its room. Nothing is charged for a lost key."
+      summary={keysLine}
+    >
+          {keyReturn && roomWise ? (
+            <div style={{ display: "grid", gap: 4 }}>
+              <span>
+                {lostRooms.length ? (
+                  <Chip tone="warning" icon="key">
+                    {lostRooms.length === 1 ? "a key lost" : `${lostRooms.length} keys lost`}
+                  </Chip>
+                ) : (
+                  <Chip tone="success" icon="check">
+                    returned
+                  </Chip>
+                )}{" "}
+                {returnedRooms.length} of {plural(keyPlan.length, "key")} returned
+                {earlierRooms.length ? <span className="meta"> · {roomsWord(earlierRooms)} during the stay</span> : null}
+              </span>
+              {lostRooms.map((k) => (
+                <span key={k.roomId} className="sm warn-ink">
+                  Room {k.roomNumber}&rsquo;s key lost{k.lostNote ? <> — &ldquo;{k.lostNote}&rdquo;</> : null}
+                </span>
+              ))}
+            </div>
+          ) : keyReturn ? (
             <span>
               {keyReturn.keyCountLost ? (
                 <Chip tone="warning" icon="key">
@@ -1613,76 +1627,84 @@ function Departure({ entry, live }: { entry: EntryDetail; live: boolean }) {
                   returned
                 </Chip>
               )}{" "}
-              {keyReturn.keyCountReturned} of {keyReturn.keyCountIssued} back
-              {keyReturn.lostRoomIds?.length ? (
-                <b className="warn-ink">
-                  {" "}
-                  · lost: {keyReturn.lostRoomIds.map((id) => `Room ${keyPlan.find((k) => k.roomId === id)?.roomNumber ?? "?"}`).join(", ")}
-                </b>
-              ) : null}
+              {keyReturn.keyCountReturned} of {keyReturn.keyCountIssued} returned
               <span className="meta">
                 {keyReturn.countReconciled && !keyReturn.keyCountLost ? " · all accounted for" : keyReturn.reconciliationNote ? ` · “${keyReturn.reconciliationNote}”` : ""}
               </span>
             </span>
           ) : roomWise ? (
             <div style={{ display: "grid", gap: 6 }}>
-              <span>
-                {outstandingKeys.length} out
-                <span className="meta">
-                  {" "}
-                  · {marked.length} back{lostKeys.length ? ` · ${lostKeys.length} lost` : ""}
-                  {unanswered.length ? ` · ${unanswered.length} not answered` : ""}
+              <span className="row-acts" style={{ justifyContent: "space-between", alignItems: "center" }}>
+                <span>
+                  {outstandingKeys.length} out
+                  <span className="meta">
+                    {" "}
+                    · {marked.length} returned{lostKeys.length ? ` · ${lostKeys.length} lost` : ""}
+                    {unanswered.length ? ` · ${unanswered.length} not answered` : ""}
+                  </span>
                 </span>
+                {live && notLost.length > 1 ? (
+                  <Button kind="secondary" compact icon={allReturned ? undefined : "check"} onClick={setAllReturned}>
+                    {allReturned ? "Clear" : "All returned"}
+                  </Button>
+                ) : null}
               </span>
               {keyPlan.map((k) => (
-                <div key={k.roomId} className="row-acts sm">
-                  <span style={{ minWidth: 90 }}>Room {k.roomNumber}</span>
-                  {k.outstanding ? (
-                    live ? (
-                      <span className="row-acts" role="group" aria-label={`Room ${k.roomNumber}'s key`}>
-                        <Button
-                          kind={keyState[k.roomId] === "back" ? "primary" : "secondary"}
-                          compact
-                          icon={keyState[k.roomId] === "back" ? "check" : undefined}
-                          aria-pressed={keyState[k.roomId] === "back"}
-                          onClick={() => toggleKey(k.roomId, "back")}
-                        >
-                          Back
-                        </Button>
-                        <Button
-                          kind={keyState[k.roomId] === "lost" ? "danger" : "secondary"}
-                          compact
-                          icon={keyState[k.roomId] === "lost" ? "check" : undefined}
-                          aria-pressed={keyState[k.roomId] === "lost"}
-                          onClick={() => toggleKey(k.roomId, "lost")}
-                        >
-                          Lost
-                        </Button>
-                      </span>
+                <div key={k.roomId} style={{ display: "grid", gap: 2 }}>
+                  <div className="row-acts sm">
+                    <span style={{ minWidth: 90 }}>Room {k.roomNumber}</span>
+                    {k.outstanding ? (
+                      live ? (
+                        <span className="row-acts" role="group" aria-label={`Room ${k.roomNumber}'s key`}>
+                          <Button
+                            kind={keyState[k.roomId] === "back" ? "primary" : "secondary"}
+                            compact
+                            icon={keyState[k.roomId] === "back" ? "check" : undefined}
+                            aria-pressed={keyState[k.roomId] === "back"}
+                            onClick={() => toggleKey(k.roomId, "back")}
+                          >
+                            Returned
+                          </Button>
+                          <Button
+                            kind={keyState[k.roomId] === "lost" ? "danger" : "secondary"}
+                            compact
+                            icon={keyState[k.roomId] === "lost" ? "check" : undefined}
+                            aria-pressed={keyState[k.roomId] === "lost"}
+                            onClick={() => pressLost(k)}
+                          >
+                            Lost
+                          </Button>
+                        </span>
+                      ) : (
+                        <span className="meta">key out</span>
+                      )
+                    ) : k.lost ? (
+                      <Chip tone="warning" icon="key">
+                        lost
+                      </Chip>
                     ) : (
-                      <span className="meta">key out</span>
-                    )
-                  ) : k.lost ? (
-                    <Chip tone="warning" icon="key">
-                      lost
-                    </Chip>
-                  ) : (
-                    <Chip tone="quiet" icon="check">
-                      back earlier
-                    </Chip>
-                  )}
+                      <Chip tone="quiet" icon="check">
+                        returned earlier
+                      </Chip>
+                    )}
+                  </div>
+                  {k.outstanding && keyState[k.roomId] === "lost" && lostNotes[k.roomId] ? (
+                    <span className="sm warn-ink" style={{ paddingLeft: 98 }}>
+                      Lost — &ldquo;{lostNotes[k.roomId]}&rdquo;
+                    </span>
+                  ) : !k.outstanding && k.lost && k.lostNote ? (
+                    <span className="sm warn-ink" style={{ paddingLeft: 98 }}>
+                      Lost — &ldquo;{k.lostNote}&rdquo;
+                    </span>
+                  ) : null}
                 </div>
               ))}
               <Live>
-                {short && live ? (
-                  <input className="input" value={keyNote} placeholder={notePrompt} onChange={(e) => setKeyNote(e.target.value)} />
-                ) : null}
                 <div className="row-acts">
                   <Button
-                    kind="secondary"
-                    compact
-                    state={keys.isPending ? "working" : live && (!short || keyNote.trim()) ? "default" : "inert"}
-                    title={!live ? "only while the booking is at Check-out" : short && !keyNote.trim() ? `${notePrompt} — write it first` : undefined}
+                    className={live && unanswered.length === 0 ? "go" : undefined}
+                    state={keys.isPending ? "working" : live && unanswered.length === 0 ? "default" : "inert"}
+                    reason={!live ? "only while the booking is at Check-out" : unanswered.length ? "answer every room's key — Returned or Lost" : undefined}
                     workingLabel="Recording…"
                     onClick={() => keys.mutate()}
                   >
@@ -1690,6 +1712,21 @@ function Departure({ entry, live }: { entry: EntryDetail; live: boolean }) {
                   </Button>
                 </div>
               </Live>
+              <ReasonDialog
+                open={!!askLost}
+                onClose={() => setAskLost(null)}
+                title={askLost ? `Room ${askLost.roomNumber}'s key is lost` : "A lost key"}
+                lead="What happened is kept with this room. Nothing is charged for it."
+                reasonLabel="What happened to it"
+                placeholder="dropped on the hike to Taktsang"
+                confirmLabel="Mark it lost"
+                onConfirm={(reason) => {
+                  if (!askLost) return;
+                  setLostNotes((p) => ({ ...p, [askLost.roomId]: reason.trim() }));
+                  setKeyState((p) => ({ ...p, [askLost.roomId]: "lost" }));
+                  setAskLost(null);
+                }}
+              />
             </div>
           ) : (
             <div style={{ display: "grid", gap: 6 }}>
@@ -1699,7 +1736,7 @@ function Departure({ entry, live }: { entry: EntryDetail; live: boolean }) {
               <Live>
                 <div className="row-acts">
                   <span className="count-in sm">
-                    back
+                    returned
                     <input className="input" inputMode="numeric" value={count} onChange={(e) => setCount(e.target.value.replace(/\D/g, ""))} disabled={!live} />
                   </span>
                   <span className="count-in sm">
@@ -1723,38 +1760,19 @@ function Departure({ entry, live }: { entry: EntryDetail; live: boolean }) {
               </Live>
             </div>
           )}
-        </Fact>
-
-        <Fact k="The room">
-          <div style={{ display: "grid", gap: 6 }}>
-            <span>
-              {released ? (
-                <Chip tone="success" icon="check">
-                  released to housekeeping
-                </Chip>
-              ) : (
-                <>released to housekeeping when the bill is settled</>
-              )}
-            </span>
-            <RoomInspectionGrid entry={entry} live={live} />
-          </div>
-        </Fact>
-
-        <Fact k="The guest leaves with">
-          {onAccount ? (
-            <>
-              the master bill — <b>charged to {booked.payer}</b>, nothing due from them at the desk
-            </>
-          ) : (
-            <>their tax invoice, sent — and printed if they want paper</>
-          )}
-          <Help label="About the receipt">A printed receipt for the payment can&rsquo;t be made yet — the tax invoice shows what was paid.</Help>
-        </Fact>
-        <Fact k="The record">
-          the stay stays on {booked.guest}&rsquo;s record; closing the booking seals it
-        </Fact>
-      </Facts>
     </StepCard>
+    <StepCard
+      flow="rooms"
+      flowAfter="keys"
+      flowAfterOnly
+      title="The rooms"
+      meta={`Each room inspected, or put off to after the departure. ${leavesWith} A printed receipt for the payment can't be made yet — the tax invoice shows what was paid. The stay stays on ${booked.guest}'s record; closing the booking seals it.`}
+      status={released ? <span className="ok-ink">Released to housekeeping</span> : "Released to housekeeping when the bill is settled"}
+      summary={roomsLine}
+    >
+      <RoomInspectionGrid entry={entry} live={live} />
+    </StepCard>
+    </>
   );
 }
 

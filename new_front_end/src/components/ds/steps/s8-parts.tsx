@@ -430,7 +430,7 @@ export function DisputesCard({ entry, tz }: { entry: EntryDetail; tz: string }) 
                           title={gm ? undefined : "Closing a dispute is the GM's"}
                           onClick={() => setClosing(d)}
                         >
-                          Close…
+                          Close
                         </Button>
                       ) : null}
                     </div>

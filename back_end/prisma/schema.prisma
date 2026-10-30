@@ -795,6 +795,9 @@ model SessionEventRecord {
 
 model GuestProfile {
   id                       String    @id @default(uuid())
+  /// "Mr" · "Mrs" · "Ms" … — taken at Inquiry and printed on the papers (2026-10-28). Null when
+  /// none was given.
+  title                    String?
   firstName                String
   lastName                 String
   email                    String?
@@ -1061,6 +1064,10 @@ model Entry {
   /// Null = the hotel's standard check-in time (`checkIn.standardTime`). The no-show cut-off
   /// counts from this (SIG-S5 §7.3 "expected arrival time + noShow.cutoffWindowMinutes").
   expectedArrivalTime            String?
+  /// The guest is expected in the early hours of the DAY AFTER the check-in day (2026-10-29,
+  /// operator: a future booking "should also have the option to set a date" — the check-in day or
+  /// the next morning, before `checkout.cutoffTime`). Meaningful only with expectedArrivalTime set.
+  expectedArrivalDayAfter        Boolean           @default(false)
   guestCount                     Int?
   /// Breakdown of the head count. guestCount remains the canonical total (adultCount + childCount when both set).
   /// adultCount/childCount are nullable for backward compatibility with pre-Phase-D inquiries.
@@ -1215,6 +1222,7 @@ model Entry {
   invoices                     Invoice[]
   timers                       TimerRecord[]
   interimPaymentRequests       InterimPaymentRequest[]
+  checkInPaymentDeferrals      CheckInPaymentDeferral[]
   stayExtensionRequests        StayExtensionRequest[]
   negotiationAmendmentRequests NegotiationAmendmentRequest[]
   roomMoveLegs                 RoomMoveLeg[]
@@ -1932,6 +1940,7 @@ model Folio {
   billingModelTransitions BillingModelTransitionRecord[]
 
   interimPaymentRequests InterimPaymentRequest[]
+  checkInPaymentDeferrals CheckInPaymentDeferral[]
   advanceApplications    AdvanceApplication[]
 
   @@map("folios")
@@ -2361,10 +2370,13 @@ model RoomAssignment {
   /// S7 swap so a new room's key can gate on the old one being back.
   keyReturnedAt DateTime?
   keyReturnedBy String?
-  /// THIS room's key declared LOST at the S8 key return (2026-10-26, operator: "tell the system
-  /// which room's key exactly is missing"). A lost key is no longer out with the guest.
+  /// THIS room's key declared LOST — at the S8 key return (2026-10-26, operator: "tell the system
+  /// which room's key exactly is missing") or at Stay (2026-10-30). A lost key is no longer out
+  /// with the guest; a new key issued for the room clears these three (the loss stays in the trace).
   keyLostAt     DateTime?
   keyLostBy     String?
+  /// What happened to it, asked room by room (2026-10-30, operator: "it should be attached to that room").
+  keyLostNote   String?
 
   entry          Entry               @relation(fields: [entryId], references: [id])
   room           Room                @relation(fields: [roomId], references: [id])
@@ -3067,6 +3079,52 @@ model InterimPaymentRequest {
 
   @@index([entryId, state])
   @@map("interim_payment_requests")
+}
+
+/// The rest of the bill, promised at check-in, and the FOM's word on paying it later
+/// (2026-10-29, operator: "if promised here it should prompt the user that the guest said that
+/// as well; if they can't pay here, the issue should be raised to the FOM, GM or admin to let
+/// them pay during the stay, at check-out or later"). A guest whose payment plan says "the rest
+/// at check-in" is not checked in while money is still to pay, unless an FOM (L2+) APPROVED a
+/// later time: during the stay by `dueBy` (the W42 reminder fires there), at check-out (said on
+/// the bill), or after the stay by `dueBy` (the FOM's credit extension, so check-out may settle
+/// partly). The desk asks (REQUESTED); the FOM decides, or decides directly.
+model CheckInPaymentDeferral {
+  id                    String    @id @default(uuid())
+  entryId               String
+  folioId               String
+  segmentId             String?
+  /// REQUESTED · APPROVED · REJECTED · WITHDRAWN
+  status                String    @default("REQUESTED")
+  /// The rest of the bill when the desk asked (stay total − money received), server figure.
+  stillToPay            Decimal   @db.Decimal(15, 2)
+  /// What the guest said — why they cannot pay now.
+  reason                String
+  requestedBy           String
+  requestedLevel        String?
+  requestedAt           DateTime  @default(now())
+  /// DURING_STAY · AT_CHECKOUT · AFTER_STAY — set on approval.
+  payBy                 String?
+  /// When the money is expected (DURING_STAY, AFTER_STAY).
+  dueBy                 DateTime?
+  decisionNote          String?
+  decidedBy             String?
+  decidedLevel          String?
+  decidedAt             DateTime?
+  /// AFTER_STAY: the credit extension the approval recorded.
+  creditExtensionId     String?
+  /// The SCHEDULED W42 TimerRecord that owns the next reminder (DURING_STAY).
+  reminderTimerRecordId String?
+  remindersSent         Int       @default(0)
+  lastReminderAt        DateTime?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  entry Entry @relation(fields: [entryId], references: [id], onUpdate: Cascade)
+  folio Folio @relation(fields: [folioId], references: [id], onUpdate: Cascade)
+
+  @@index([entryId, status])
+  @@map("checkin_payment_deferrals")
 }
 
 /// A stay extension in flight (2026-08-21, operator ruling): the guest wants N more nights.

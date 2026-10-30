@@ -60,11 +60,13 @@ import { rowNameOf } from "@/lib/ds/status";
 import { STEP_NAMES, stepNoOfStage } from "@/lib/ds/steps";
 import type { RoomMoveLegInput } from "@/lib/api/room-moves";
 import { RoomMoveDialog } from "./room-move-dialog";
+import { QuietRoomDialog, type QuietPick } from "./quiet-room-dialog";
 import { DateMoveDialog } from "./date-move-dialog";
 import { SplitMoveDialog, type SplitMove } from "./split-move-dialog";
 import { NightMoveDialog, type NightMove } from "./night-move-dialog";
 import { BookingBox, type BoxMove } from "./booking-box";
 import type { DateMoveInput } from "@/lib/api/room-moves";
+import { DateInput } from "@/components/ds/date-input";
 
 const KIND_WORD: Record<ChartBarKind, string> = {
   OVERSTAY: "Due out · still in",
@@ -774,6 +776,8 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
   const dragEnded = useRef(false);
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const [moveLegs, setMoveLegs] = useState<RoomMoveLegInput[] | null>(null);
+  /** A room the system chose, given another room of its type on the same nights — no room move. */
+  const [quietPick, setQuietPick] = useState<QuietPick | null>(null);
   /** A bar dragged sideways: the booking's stay moving to other dates (2026-10-13). */
   const [dateMove, setDateMove] = useState<(DateMoveInput & { label: string }) | null>(null);
   /** Some of a booking's rooms dragged to other dates — a booking of their own (2026-10-14). */
@@ -1099,6 +1103,51 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
   };
   const pickMax = pick ? (pick.reachesEnd ? Math.max(pick.freeRun, START_MAX_NIGHTS) : pick.freeRun) : 1;
   const roomNoOf = (id: string) => chart.rooms.find((r) => r.id === id)?.roomNumber ?? "?";
+  /**
+   * Where a drop goes (2026-10-28, docs/room-types-until-arrival.md). One room the system chose,
+   * moved onto another room of its type on the same nights with nobody in the way, is the desk
+   * choosing which room of the type the guest gets: it is given and fixed, with no new pass. Every
+   * other drop is the room move as before.
+   */
+  const openMove = (legs: RoomMoveLegInput[]) => {
+    // Rooms the system chose, onto other rooms of their type on the same nights: the desk is
+    // choosing which rooms the guest gets, not moving a booking — one room or several. A room in
+    // the way held only as another booking's system choice is moved by the system; anything held
+    // for certain (or other dates, another type) is the room move.
+    const quiet = (() => {
+      if (legs.length === 0 || legs.some((l) => l.newCheckInDate)) return null;
+      const entryId = legs[0].entryId;
+      if (legs.some((l) => l.entryId !== entryId)) return null;
+      const froms = new Set(legs.map((l) => l.fromRoomId));
+      const picks: QuietPick["picks"] = [];
+      const inWay: QuietPick["inWay"] = [];
+      for (const l of legs) {
+        const own = (barsByRoom.get(l.fromRoomId) ?? []).filter((b) => b.entryId === entryId);
+        const fromRoom = chart.rooms.find((r) => r.id === l.fromRoomId);
+        const toRoom = chart.rooms.find((r) => r.id === l.toRoomId);
+        if (!own.length || !own.every((b) => b.quiet) || !fromRoom || !toRoom || fromRoom.roomTypeId !== toRoom.roomTypeId) return null;
+        const first = own.reduce((m, b) => (b.from < m ? b.from : m), "9999-12-31");
+        const last = own.reduce((m, b) => (b.to > m ? b.to : m), "0000-01-01");
+        const there = (barsByRoom.get(l.toRoomId) ?? []).filter((b) => b.from < last && first < b.to);
+        for (const b of there) {
+          if (b.entryId === entryId) {
+            if (!froms.has(l.toRoomId)) return null;
+            continue;
+          }
+          if (!b.quiet) return null;
+          const guest = nameOf(bookingOf.get(b.entryId));
+          if (!inWay.some((w) => w.guest === guest && w.roomNumber === toRoom.roomNumber)) inWay.push({ guest, roomNumber: toRoom.roomNumber });
+        }
+        picks.push({ fromRoomId: l.fromRoomId, fromRoomNumber: fromRoom.roomNumber, toRoomId: l.toRoomId, toRoomNumber: toRoom.roomNumber });
+      }
+      return { entryId, guest: nameOf(bookingOf.get(entryId)), picks, inWay };
+    })();
+    if (quiet) {
+      setQuietPick(quiet);
+      return;
+    }
+    setMoveLegs(legs);
+  };
   const ownRoom = ownRoomOf(barsByRoom, roomNoOf);
   /** The rows a booking holds on the chart, top to bottom. */
   const ownRowsOf = (entryId: string) => rows.filter((rid) => ownRoom(entryId, rid) != null);
@@ -1143,7 +1192,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
       if (plan.why) toast.error(plan.why);
       return;
     }
-    setMoveLegs(plan.legs);
+    openMove(plan.legs);
   };
   /** The night whose column is under the pointer, read off the header. */
   const nightAtX = (x: number): string | null => {
@@ -1523,7 +1572,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
         if (plan.why) toast.error(plan.why);
         return;
       }
-      setMoveLegs(plan.legs);
+      openMove(plan.legs);
     };
     const onMove = (ev: PointerEvent) => {
       last = { x: ev.clientX, y: ev.clientY };
@@ -1627,9 +1676,8 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
               lengths move or stretch the same window. */}
           <label className="rchart-date">
             <span>From</span>
-            <input
+            <DateInput
               className="input"
-              type="date"
               value={chart.from}
               onChange={(e) => {
                 if (!isYmd(e.target.value)) return;
@@ -1640,9 +1688,8 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
           </label>
           <label className="rchart-date">
             <span>To</span>
-            <input
+            <DateInput
               className="input"
-              type="date"
               value={lastNight}
               min={chart.from}
               max={shiftDay(chart.from, MAX_NIGHTS - 1)}
@@ -1982,7 +2029,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
                             colSpan={s.span}
                             style={gi ? guestStyle(gi) : undefined}
                             data-entry={s.bar.entryId}
-                            className={`seg ${KIND_CLASS[s.bar.kind]}${gi ? " g" : ""}${s.bar.parked ? " parked" : ""}${s.bar.paymentPending ? " paypend" : ""}${contL ? " cont-l" : ""}${contR ? " cont-r" : ""}${selKeys.has(selKey(sel)) ? " marked" : ""}${dragged.has(selKey(sel)) ? " dragging" : ""}`}
+                            className={`seg ${KIND_CLASS[s.bar.kind]}${gi ? " g" : ""}${s.bar.parked ? " parked" : ""}${s.bar.quiet ? " quiet" : ""}${s.bar.paymentPending ? " paypend" : ""}${contL ? " cont-l" : ""}${contR ? " cont-r" : ""}${selKeys.has(selKey(sel)) ? " marked" : ""}${dragged.has(selKey(sel)) ? " dragging" : ""}`}
                           >
                             <button
                               type="button"
@@ -2058,6 +2105,19 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
           </tbody>
         </table>
       </div>
+
+      <QuietRoomDialog
+        pick={quietPick}
+        onClose={() => {
+          setQuietPick(null);
+          stopSwitching();
+        }}
+        onDone={() => {
+          setQuietPick(null);
+          stopSwitching();
+          void q.refetch();
+        }}
+      />
 
       <RoomMoveDialog
         legs={moveLegs}
@@ -2316,7 +2376,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
                               setBox(x.entryId);
                             }}
                           >
-                            Its rooms…
+                            Its rooms
                           </Button>
                         ) : null}
                       </span>
@@ -2441,6 +2501,7 @@ function HoverCard({
             {b ? fact("Step", <span className="hc-step">{STEP_NAMES[stepNoOfStage(b.stage) - 1]}</span>) : null}
             {fact("Booking", b ? `${b.entryId} · ${b.inquiryId}` : bar.entryId)}
             {bar.holdExpiresAt ? fact("Held until", fmtDateTime(bar.holdExpiresAt)) : null}
+            {bar.quiet ? fact("Room", "not chosen yet — the system keeps a room of this type and may move it until Arrival") : null}
             {bar.moveId ? fact("Room move", bar.moveId) : null}
             {showPicks
               ? uniquePicks((chart.picks ?? []).filter((p) => p.roomId === room.id && p.entryId !== bar.entryId && p.from < bar.to && p.to > bar.from)).map((p) => {

@@ -18,8 +18,12 @@ import type { DeskTimerRow } from "@/lib/api/desk";
 
 const HOUR = 3_600_000;
 
-/** The label, with the department named on an acceptance clock — the rail does the same. */
-function labelOf(t: DeskTimerRow["next"][number]): string | null {
+/**
+ * The label, with the department named on an acceptance clock — the rail does the same. A clock
+ * not to be shown yet has none: the no-show cut-off waits for its grace to start (2026-10-29).
+ */
+function labelOf(t: DeskTimerRow["next"][number], now: number): string | null {
+  if (t.showsFrom && new Date(t.showsFrom).getTime() > now) return null;
   if (t.timerCode === "H2_H3_ACCEPTANCE_W25") {
     if (t.handoffType === "H3") return "Kitchen to accept";
     if (t.handoffType === "H2") return "Housekeeping to accept";
@@ -43,7 +47,7 @@ export function countdownWords(ms: number): string {
 /** Every clock the desk can name on this booking, for the list's preview panel. */
 export function RowTimerList({ row }: { row: DeskTimerRow | undefined }) {
   const { now, tz } = useHotelClock(1000);
-  const named = (row?.next ?? []).map((t) => ({ t, label: labelOf(t) })).filter((x): x is { t: NonNullable<typeof row>["next"][number]; label: string } => !!x.label);
+  const named = (row?.next ?? []).map((t) => ({ t, label: labelOf(t, now) })).filter((x): x is { t: NonNullable<typeof row>["next"][number]; label: string } => !!x.label);
   if (named.length === 0) return <span className="dash">—</span>;
   return (
     <div className="row-timer-list">
@@ -69,7 +73,7 @@ export function RowTimer({ row }: { row: DeskTimerRow | undefined }) {
   if (!row || row.running === 0) return <span className="dash">—</span>;
   // Only the clocks the desk has words for: the dwell monitor and the retention purge run on
   // every booking and are the system's business, not the front desk's.
-  const named = row.next.map((t) => ({ t, label: labelOf(t) })).filter((x): x is { t: (typeof row.next)[number]; label: string } => !!x.label);
+  const named = row.next.map((t) => ({ t, label: labelOf(t, now) })).filter((x): x is { t: (typeof row.next)[number]; label: string } => !!x.label);
   const first = named[0];
   if (!first) return <span className="dash">—</span>;
   const fires = new Date(first.t.firesAt).getTime();

@@ -35,6 +35,24 @@ guestProfilesRouter.get("/guest-profiles", requireActorLevel("L1"), async (req, 
   }
 });
 
+// Guests already on file with a phone or an email — the Wrap up dropdown while the desk types
+// (`partial`), and the exact check when the guest staying is named (2026-10-28). Registered before
+// "/guest-profiles/:id", which would otherwise read "on-file" as an id.
+guestProfilesRouter.get("/guest-profiles/on-file", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const q = (k: string) => (typeof req.query[k] === "string" ? (req.query[k] as string).slice(0, 120) : "");
+    const guests = await guestProfileService.findGuestsOnFile(prisma, {
+      phone: q("phone") || null,
+      email: q("email") || null,
+      partial: q("partial") !== "false",
+    });
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ guests });
+  } catch (e) {
+    next(e);
+  }
+});
+
 guestProfilesRouter.get("/guest-profiles/:id", requireActorLevel("L1"), async (req, res, next) => {
   try {
     const profile = await guestProfileService.getGuestProfileById(prisma, req.params.id);
@@ -237,6 +255,15 @@ guestProfilesRouter.get("/entries/:id/identity-proofs", requireActorLevel("L1"),
       // the guest's row; Apply goes through the same detail save as typing.
       identityOcrService.listOcrSuggestionsForEntry(prisma, req.params.id),
     ]);
+    // A desk with this guest table open and IDs still to capture: the page reader is loaded now,
+    // so the first CID read does not wait twenty seconds for it to start (2026-10-29, operator:
+    // "it is really slow, 30 s to a minute"). Each read keeps it loaded ten more minutes; it never
+    // holds this answer up.
+    if (list.coverage && !list.coverage.satisfied && !identityOcrService.serverOcrDisabled()) {
+      void import("../../lib/identity-ocr/layout-ocr.js")
+        .then((m) => m.warmLayoutOcr())
+        .catch((err) => console.warn("[identity-proofs] layout model warm-up:", err instanceof Error ? err.message : err));
+    }
     res.json({ ...list, suggestions });
   } catch (e) {
     next(e);

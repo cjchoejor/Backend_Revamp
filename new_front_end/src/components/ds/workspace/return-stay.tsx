@@ -27,6 +27,7 @@ import { fmtRange, plural } from "@/lib/ds/format";
 import { stepName, stepNoOfStage } from "@/lib/ds/steps";
 import { DsDialog, StepCard, toastRefusal, useRefreshEntry } from "@/components/ds/steps/kit";
 import type { EntryDetail, TripStaySummary } from "@/types/api";
+import { DateInput } from "@/components/ds/date-input";
 
 /** A trip that is over — the next visit is a fresh enquiry, not a return stay on this one. */
 const SEALED = new Set(["CANCELLED", "EXPIRED", "CLOSED"]);
@@ -182,9 +183,8 @@ function ReturnStayDialog({ entry, onClose }: { entry: EntryDetail; onClose: () 
       <div className="form2">
         <div className="field">
           <label>Coming back on</label>
-          <input
+          <DateInput
             className="input"
-            type="date"
             value={from}
             min={day?.today ?? undefined}
             onChange={(e) => setFrom(e.target.value)}

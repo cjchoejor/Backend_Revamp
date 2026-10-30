@@ -41,14 +41,32 @@ export function updateEntryCaller(session: Session, entryId: string, body: Calle
   return apiRequest<{ caller: CallerDetails }>(`/api/entries/${entryId}/caller`, { method: "POST", session, body });
 }
 
+/**
+ * `keepNewName`: the phone or email is on file under another name and the desk keeps the typed one
+ * (a new guest record; otherwise refused GUEST_ON_FILE_DIFFERENT_NAME with the guests on file).
+ * `arrivingIsGuest`: the guest named is the one arriving — on a direct booking "who is arriving"
+ * is filled from them (2026-10-28).
+ */
+type GuestNamingOptions = { keepNewName?: boolean; arrivingIsGuest?: boolean };
+
 export type SetGuestBody =
-  | { mode: "CALLER"; nationality?: string | null }
-  | { mode: "EXISTING"; guestProfileId: string }
-  | { mode: "NEW"; title?: string | null; firstName: string; lastName: string; nationality?: string | null; phone?: string | null; email?: string | null };
+  | ({ mode: "CALLER"; nationality?: string | null } & GuestNamingOptions)
+  | ({ mode: "EXISTING"; guestProfileId: string; phone?: string | null; email?: string | null } & GuestNamingOptions)
+  | ({ mode: "NEW"; title?: string | null; firstName: string; lastName: string; nationality?: string | null; phone?: string | null; email?: string | null } & GuestNamingOptions);
 
 /** Name the guest who is staying — the caller, a guest on file, or someone new (Inquiry only). */
 export function setEntryGuest(session: Session, entryId: string, body: SetGuestBody) {
-  return apiRequest<{ guestProfileId: string; duplicate: { conflictingInquiryId: string; conflictingEntryId: string } | null }>(
+  return apiRequest<{
+    guestProfileId: string;
+    duplicate: { conflictingInquiryId: string; conflictingEntryId: string } | null;
+    /** The same name on a phone or email already on file: that guest's record was used. */
+    reusedOnFile?: boolean;
+    /** Fields the guest on file lacked and took from what was typed. */
+    filled?: string[];
+    /** A phone or email typed that differs from the record's — kept as it was, not overwritten. */
+    contactKept?: string[];
+    arrivingSet?: boolean;
+  }>(
     `/api/entries/${entryId}/guest`,
     { method: "POST", session, body },
   );
@@ -142,6 +160,47 @@ export type LookupPartyMatch = {
  * was cut, so the caller can say so without hardcoding the number here.
  */
 type PartyLookupResult = { matches: LookupPartyMatch[]; limit?: number };
+
+/** A guest a caller booked for before — shown under the caller, offered first at Wrap up. */
+export type CallerGuest = {
+  id: string;
+  firstName: string;
+  lastName: string;
+  phone: string | null;
+  email: string | null;
+  nationality: string | null;
+  lastStay: string | null;
+};
+
+/**
+ * Someone who has rung before with this number or email (2026-10-27): an earlier enquiry's caller,
+ * or an agency's or a company's contact person or own line. `party` is the agency or company they
+ * ring for (the same shape the party search returns), so the desk can fill "Who is asking".
+ */
+export type CallerMatch = {
+  key: string;
+  kind: "DIRECT" | "TRAVEL_AGENT" | "CORPORATE";
+  foundAs: "EARLIER_CALLER" | "PARTY_CONTACT" | "PARTY_NUMBER";
+  title: string | null;
+  firstName: string | null;
+  lastName: string | null;
+  phone: string | null;
+  email: string | null;
+  onWhatsApp: boolean | null;
+  party: (LookupPartyMatch & { kind: "TRAVEL_AGENT" | "CORPORATE" }) | null;
+  partyContact: CoordinatorContact | null;
+  calls: number;
+  lastCalledAt: string | null;
+  lastInquiryId: string | null;
+  guests: CallerGuest[];
+};
+
+/** `q` is a phone (4+ digits) or an email; `exclude` leaves an enquiry out (the booking's own). */
+export async function lookupCallers(session: Session, q: string, exclude?: string | null) {
+  const qs = new URLSearchParams({ q });
+  if (exclude) qs.set("exclude", exclude);
+  return apiRequest<{ mode: "PHONE" | "EMAIL" | "NONE"; matches: CallerMatch[] }>(`/api/lookups/callers?${qs}`, { session });
+}
 
 export async function searchTravelAgentsLookup(session: Session, q: string) {
   const qs = new URLSearchParams({ q });

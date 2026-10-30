@@ -21,6 +21,7 @@
  * pinned to the bottom edge — the card IS the page, exactly like a real bill.
  */
 import { htmlEscape } from "../../../lib/pdf-render-context.js";
+import type { StayLines } from "./legphel-document-format.js";
 
 export type DocumentFamily = "fiscal" | "commercial" | "informational" | "internal";
 
@@ -238,6 +239,12 @@ export function row(key: string, value: string | null, opts: RowOpts = {}): stri
   return `<div class="dl${opts.total ? " tot" : ""}"><span class="k">${inner}</span><span class="${vClass}">${
     value == null ? "" : htmlEscape(value)
   }</span></div>`;
+}
+
+/** The stay's Check-in and Check-out rows (2026-10-28) — every paper prints them the same way. */
+export function stayRows(stay: StayLines | null | undefined, checkOutLabel = "Check-out"): string {
+  if (!stay) return "";
+  return [row("Check-in", stay.checkIn, { boldValue: true }), row(checkOutLabel, stay.checkOut)].join("\n");
 }
 
 /** `.dsec` — the hairline section divider. */

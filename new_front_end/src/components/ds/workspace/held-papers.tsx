@@ -17,7 +17,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/design-system";
 import { Help } from "@/components/ds/help";
-import { PaperDrawer, toastRefusal, type PaperRef } from "@/components/ds/steps/kit";
+import { Choice as PickOne, PaperDrawer, toastRefusal, type PaperRef } from "@/components/ds/steps/kit";
 import { useSession } from "@/hooks/use-session";
 import { decideHeldDocument, listHeldDocuments, type HeldDocument } from "@/lib/api/room-moves";
 import { fmtDateTime } from "@/lib/ds/format";
@@ -33,6 +33,11 @@ const REASON_WORD: Record<string, string> = {
   SEATING_REPAIR: "after the guests were seated again",
   REPRICE: "after the re-price",
   ROOM_MOVE: "after the room switch",
+  DATE_MOVE: "after the dates were moved",
+  ROOM_SPLIT: "after the rooms were split off",
+  RESERVE: "made at Reserve",
+  RECONFIGURE: "after the stay was changed",
+  NEW_PASS: "made again for the change",
 };
 
 export function useHeldDocuments(entryId: string | null | undefined) {
@@ -53,7 +58,7 @@ function paperOf(h: HeldDocument): PaperRef {
 
 type Choice = "EMAIL" | "WHATSAPP" | "NONE";
 
-function HeldPaperRow({ h, tz, onView }: { h: HeldDocument; tz?: string; onView: () => void }) {
+export function HeldPaperRow({ h, tz, onView }: { h: HeldDocument; tz?: string; onView: () => void }) {
   const { session } = useSession();
   const qc = useQueryClient();
   const [choice, setChoice] = useState<Choice>(h.defaultRecipient.to ? "EMAIL" : h.kind === "PROFORMA" ? "EMAIL" : "WHATSAPP");
@@ -94,18 +99,17 @@ function HeldPaperRow({ h, tz, onView }: { h: HeldDocument; tz?: string; onView:
           View
         </Button>
       </div>
-      <div className="heldp-choices" role="radiogroup" aria-label={`What to do with the ${KIND_WORD[h.kind].toLowerCase()}`}>
-        <label className={choice === "EMAIL" ? "on" : undefined}>
-          <input type="radio" checked={choice === "EMAIL"} onChange={() => setChoice("EMAIL")} /> Send by email
-        </label>
-        {h.kind === "CONFIRMATION_VOUCHER" ? (
-          <label className={choice === "WHATSAPP" ? "on" : undefined}>
-            <input type="radio" checked={choice === "WHATSAPP"} onChange={() => setChoice("WHATSAPP")} /> Sent on WhatsApp
-          </label>
-        ) : null}
-        <label className={choice === "NONE" ? "on" : undefined}>
-          <input type="radio" checked={choice === "NONE"} onChange={() => setChoice("NONE")} /> Don&apos;t send
-        </label>
+      {/* Choice buttons, as every pick-one on the desk (2026-10-29). */}
+      <div aria-label={`What to do with the ${KIND_WORD[h.kind].toLowerCase()}`}>
+        <PickOne<Choice>
+          options={[
+            ["EMAIL", "Send by email"],
+            ...(h.kind === "CONFIRMATION_VOUCHER" ? ([["WHATSAPP", "Sent on WhatsApp"]] as const) : []),
+            ["NONE", "Don't send"],
+          ]}
+          value={choice}
+          onChange={setChoice}
+        />
       </div>
       <div className="heldp-fields">
         {choice === "EMAIL" ? (
@@ -124,7 +128,13 @@ function HeldPaperRow({ h, tz, onView }: { h: HeldDocument; tz?: string; onView:
           <span>{choice === "NONE" ? "Why not · optional" : "Note · optional"}</span>
           <input className="input" value={note} onChange={(e) => setNote(e.target.value)} />
         </label>
-        <Button kind={choice === "NONE" ? "quiet" : "primary"} compact state={blocked || decide.isPending ? "inert" : "default"} onClick={() => !blocked && decide.mutate()}>
+        <Button
+          kind={choice === "NONE" ? "secondary" : "primary"}
+          className={choice === "NONE" ? undefined : "go"}
+          compact
+          state={blocked || decide.isPending ? "inert" : "default"}
+          onClick={() => !blocked && decide.mutate()}
+        >
           {decide.isPending ? "Recording…" : choice === "EMAIL" ? "Send it" : choice === "WHATSAPP" ? "Record it as sent" : "Don't send it"}
         </Button>
         {blocked ? <span className="stop-ink sm">{blocked}</span> : null}
@@ -137,10 +147,23 @@ function HeldPaperRow({ h, tz, onView }: { h: HeldDocument; tz?: string; onView:
  * The booking's undecided held papers. `onlyIds` narrows to the papers one act produced (a room
  * move's result); renders nothing when there is nothing to answer.
  */
-export function HeldPapersCard({ entryId, onlyIds, tz, title }: { entryId: string; onlyIds?: string[]; tz?: string; title?: string }) {
+export function HeldPapersCard({
+  entryId,
+  onlyIds,
+  tz,
+  title,
+  skip,
+}: {
+  entryId: string;
+  onlyIds?: string[];
+  tz?: string;
+  title?: string;
+  /** Papers answered somewhere else on the screen — Reserve's voucher is answered on its own card (2026-10-29). */
+  skip?: (h: HeldDocument) => boolean;
+}) {
   const q = useHeldDocuments(entryId);
   const [paper, setPaper] = useState<PaperRef | null>(null);
-  const open = (q.data ?? []).filter((h) => h.decision == null && (!onlyIds || onlyIds.includes(h.id)));
+  const open = (q.data ?? []).filter((h) => h.decision == null && (!onlyIds || onlyIds.includes(h.id)) && !skip?.(h));
   if (open.length === 0) return null;
   return (
     <section className="heldp" aria-label="Papers waiting to be sent or not">

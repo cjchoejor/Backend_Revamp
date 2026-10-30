@@ -3,9 +3,8 @@
 /**
  * Step 2 · Negotiation — "shape the price" (SS03 §5, prototype `stepCanvas[2]`, Storyboard 02).
  *
- * The rate with its basis, the counter-offer line (not in the backend yet), who sleeps where and
- * their meals (the per-room table — the old planner, kept whole), the two doors — provisional
- * block or send the quote — the quotation as a paper with the guest's answer, earlier versions,
+ * Who sleeps where and their meals (the per-room table — the old planner, kept whole), the two
+ * doors — provisional block or send the quote — the quotation as a paper with the guest's answer, earlier versions,
  * and the race with another booking.
  *
  * Generating the quotation is what the gate needs; sending it is not (operator ruling
@@ -13,11 +12,12 @@
  * the paper's total comes from the billing summary. Nothing is added up here.
  */
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { BindingBox, Button, Chip, Icon } from "@/design-system";
 import { useSession } from "@/hooks/use-session";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
+import { useBookingRooms } from "@/hooks/use-booking-rooms";
 import { getChildPolicy } from "@/lib/api/child-policy";
 import { openQuotationPdf } from "@/lib/api/documents";
 import { getBillingSummary } from "@/lib/api/entries";
@@ -39,10 +39,11 @@ import { ChangeConfiguration, DecidedConfigurationChanges, WaitingConfigurationC
 import { operativeRoomCompositions, roomNightsByRoom, roomStayRangesByRoom } from "@/lib/desk/party-rooms";
 import { fmtDateTime, fmtStamp, money, plural } from "@/lib/ds/format";
 import { optionSelectedRoomIds, preferredHoldRoomId, type EntryDetail, type QuotationSummary, type SpeculativeHoldSummary } from "@/types/api";
-import { Choice, DsDialog, Live, Notice, OtherWaysTabs, PaperDrawer, QuotationSendDialog, ReasonDialog, SeeRow, StepCanvas, StepCard, Tool, atLeast, toastRefusal, type PaperRef, useBedPlan, useOpenOtherWay, useRefreshEntry, words, parkTab, declineTab } from "./kit";
+import { Choice, DsDialog, Live, Notice, OtherWaysTabs, ChangeBookingMenu, StageActs, useOpenAlsoWay, PaperDrawer, QuotationSendDialog, ReasonDialog, SeeRow, StepCanvas, StepCard, Tool, atLeast, toastRefusal, type PaperRef, useBedPlan, useOpenFileTab, useRefreshEntry, useStepFlow, useFlowCard, anchorFor, revealCard, words, parkTab, declineTab } from "./kit";
 import { usePublishPriceDraft } from "@/lib/ds/stay-price";
 import { Help } from "@/components/ds/help";
-import { CompetingClaimsCard, LEVEL_WORD, passesOf, roomsWord, useCompetingClaims, useRoomNumbers } from "./s2-shared";
+import type { ChangeBookingItem } from "./kit";
+import { CompetingClaimsCard, LEVEL_WORD, passesOf, roomsHeldWord, useCompetingClaims, useRoomNumbers, useRoomTypeNames } from "./s2-shared";
 import { useInvoiceRecipient } from "@/hooks/use-invoice-recipient";
 
 /* ------------------------------------------------------------------ vocabulary */
@@ -178,6 +179,12 @@ export function S2Negotiation({
   const clock = useHotelClock(30_000);
   const tz = clock.tz;
   const roomNos = useRoomNumbers();
+  // A room the system chose and may still move reads "Deluxe Double · room 1" (2026-10-28).
+  const bookingRooms = useBookingRooms(entry);
+  // The rooms the system chose, counted by type; a room given by number, by its number (2026-10-29).
+  const typeNames = useRoomTypeNames();
+  const heldWord = (ids: string[]) =>
+    roomsHeldWord(ids.map((id) => ({ number: roomNos.get(id) ?? null, typeName: typeNames.get(id) ?? null, quiet: bookingRooms.named.has(id) })));
   const passes = useMemo(() => passesOf(entry), [entry.segments]); // eslint-disable-line react-hooks/exhaustive-deps
   const passId = passes.current?.id ?? null;
   const editable = !past && entry.currentStage === "S2" && entry.status === "ACTIVE";
@@ -225,7 +232,7 @@ export function S2Negotiation({
   /* ---- the rooms chosen at Inquiry, and the marker on them ---- */
   const sealedPreferred = (entry.availabilityConfigs ?? []).find((c) => c.sealedAt && c.optionSelected);
   const sealedRoomIds = useMemo(() => optionSelectedRoomIds(sealedPreferred?.optionSelected), [sealedPreferred?.optionSelected]);
-  const beds = useBedPlan(entry.id);
+  const beds = useBedPlan(entry.id, entry.updatedAt);
   const anchorRoomId = preferredHoldRoomId(sealedPreferred?.optionSelected ?? null);
   /**
    * "Change configuration" (2026-09-30; dates since 2026-10-12) — the stay, the rooms and the party, changed here rather than by
@@ -309,6 +316,26 @@ export function S2Negotiation({
   const tableUnsaved =
     !working || canonComps(roomCompositions) !== canonComps(pricedCompositions) || discountMoved;
 
+  // The table edited by hand opens the booking file on the price (2026-10-27, as the rooms picked
+  // at Inquiry do): Charges & payments › The price, room by room, beside the grid. The seed and a
+  // background re-read do not, and the page never moves — only the file's tab changes.
+  const openFile = useOpenFileTab();
+  const handEditAt = useRef(0);
+  const markHandEdit = () => {
+    handEditAt.current = Date.now();
+  };
+  const tableKey = `${canonComps(roomCompositions)}|${discountValue}|${discountUnit}`;
+  const lastTableKey = useRef(tableKey);
+  useEffect(() => {
+    if (tableKey === lastTableKey.current) return;
+    lastTableKey.current = tableKey;
+    if (!editable || past || Date.now() - handEditAt.current > 2000) return;
+    // Only where the file sits beside the step — in the old layout the tab would replace the step.
+    if (typeof document !== "undefined" && !document.querySelector(".ws-top")) return;
+    openFile("money", "price");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tableKey]);
+
   // What the table holds, saved or not, for the Charges & payments tab and the header total.
   usePublishPriceDraft(
     entry.id,
@@ -378,16 +405,44 @@ export function S2Negotiation({
   });
 
   /* ---- the acts ---- */
+  // Save & price it is also the table's Done (2026-10-27, operator: "when I click Save, or Save &
+  // price it again, it should take me to the quotation section"): once the booking is read again
+  // with its new quotation, the table folds to its line and the page goes to the quotation. It
+  // waits for the table to read as done (its own "changes saved" item clears a render later) and
+  // then for the fold itself, so the page moves to where the quotation sits once the table above it
+  // is one line — moving first left the card off the top of the screen (found driving it).
+  const qc = useQueryClient();
+  const flow = useStepFlow();
+  const flowRef = useRef(flow);
+  flowRef.current = flow;
+  const tableFlow = useFlowCard("table");
+  const tableMetRef = useRef(false);
+  tableMetRef.current = !!tableFlow.met;
+  const waitFor = async (test: () => boolean, ms: number) => {
+    const end = Date.now() + ms;
+    while (!test() && Date.now() < end) await new Promise((r) => window.setTimeout(r, 40));
+    return test();
+  };
+  const goToQuotation = async () => {
+    await qc.invalidateQueries({ queryKey: ["entry", entry.id] });
+    await waitFor(() => tableMetRef.current, 3000);
+    if (!flowRef.current.on) return;
+    flowRef.current.done("table", { next: "quotation", reveal: false });
+    await waitFor(() => !!document.querySelector('[data-flow="table"].flow-folded'), 1500);
+    const el = document.getElementById(anchorFor("quotation"));
+    if (el) revealCard(el);
+  };
   const [sendTarget, setSendTarget] = useState<QuotationSummary | null>(null);
   const [releaseOpen, setReleaseOpen] = useState(false);
   const createdRef = useRef(false);
 
   const generateM = useMutation({
     mutationFn: () => createQuotation(session!, entry.id, createBody()),
-    onSuccess: (q) => {
+    onSuccess: async (q) => {
       toast.success(`Quotation ${q.referenceNumber} generated — nothing sent, no rooms marked`);
       setValidTouched(false);
       refresh(extraKeys);
+      await goToQuotation();
     },
     onError: (e) => toastRefusal(e, "The quotation could not be generated"),
   });
@@ -400,10 +455,11 @@ export function S2Negotiation({
         roomCompositions: roomCompositions.length > 0 ? roomCompositions : undefined,
       });
     },
-    onSuccess: (q) => {
+    onSuccess: async (q) => {
       toast.success(`Version ${q.versionNumber} generated — the earlier one is kept`);
       setValidTouched(false);
       refresh(extraKeys);
+      await goToQuotation();
     },
     onError: (e) => toastRefusal(e, "The quotation could not be generated again"),
   });
@@ -483,9 +539,33 @@ export function S2Negotiation({
             .join(" ") || "no time at all"
         }`;
 
+  /* ---- the line the table folds to once it is priced ---- */
+  const billingNow = useQuery({
+    queryKey: ["billing-summary", entry.id, entry.updatedAt ?? ""],
+    queryFn: () => getBillingSummary(session!, entry.id),
+    enabled: !!session,
+  });
+  const pricedQuote = accepted ?? working ?? null;
+  const pricedStay = billingNow.data?.stayTotal;
+  const partyWords = [
+    entry.adultCount != null ? plural(entry.adultCount, "adult") : entry.guestCount != null ? plural(entry.guestCount, "guest") : null,
+    entry.childCount ? plural(entry.childCount, "child", "children") : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const tableSummary = pricedQuote
+    ? [
+        sealedRoomIds.length ? heldWord(sealedRoomIds) : null,
+        partyWords || null,
+        `priced as ${pricedQuote.referenceNumber} · v${pricedQuote.versionNumber}`,
+        pricedStay && pricedStay.quotationId === pricedQuote.id ? money(pricedStay.amount, pricedQuote.currency) : null,
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : undefined;
+
   const competing = useCompetingClaims(entry.id);
   const otherMarkers = (competing.data?.items ?? []).filter((i) => i.kind === "SPECULATIVE_HOLD");
-  const openWay = useOpenOtherWay();
 
   /**
    * The provisional block, as Other ways' first panel (2026-10-12, operator: "this section can be
@@ -529,7 +609,7 @@ export function S2Negotiation({
       {activeHold ? (
         <BindingBox family="provisional" stateWord={new Date(activeHold.expiresAt).getTime() < clock.now ? "expired" : "marked"} style={{ marginTop: 4 }}>
           <div className="sm" style={{ paddingRight: 80 }}>
-            {roomsWord(holdRoomIds(activeHold), roomNos)} marked until <b>{fmtDateTime(activeHold.expiresAt, tz)}</b> · others can still be sold
+            {heldWord(holdRoomIds(activeHold))} marked until <b>{fmtDateTime(activeHold.expiresAt, tz)}</b> · others can still be sold
             if someone commits first
           </div>
         </BindingBox>
@@ -544,7 +624,7 @@ export function S2Negotiation({
         <div style={{ marginTop: 6, display: "grid", gap: 6 }}>
           {activeHold ? (
             <SeeRow
-              label="Release…"
+              label="Release"
               note="Frees the rooms, with a reason. The quotation stands."
               onClick={editable && elevated ? () => setReleaseOpen(true) : undefined}
               reason={!editable ? "not at this step" : elevated ? undefined : "releasing a marker early is the FOM's call"}
@@ -571,11 +651,54 @@ export function S2Negotiation({
     </div>
   );
 
+  /** Change booking — the two ways the booking itself is changed, from the end of the step's line. */
+  const openAlsoWay = useOpenAlsoWay();
+  const openChange = () => {
+    setChanging(true);
+    flow.open("table");
+    window.requestAnimationFrame(() =>
+      window.requestAnimationFrame(() => {
+        const el = document.getElementById(anchorFor("table"));
+        if (el) revealCard(el);
+      }),
+    );
+  };
+  const changeItems: ChangeBookingItem[] = past
+    ? []
+    : [
+        {
+          key: "configuration",
+          label: "Change configuration",
+          note: "The dates, the rooms, the adults, the children and their ages. A quotation priced on the old configuration is retired.",
+          onSelect: editable ? openChange : undefined,
+          reason: editable ? undefined : entry.status === "PARKED" ? "Resume the booking first" : "Not possible on this booking now",
+        },
+        ...(declineNow
+          ? [
+              {
+                key: "cancel",
+                label: "Cancel booking",
+                note: "The guest said no. The booking ends, the marked rooms go back on sale and nothing is charged.",
+                onSelect: () => openAlsoWay("decline"),
+                danger: true,
+              },
+            ]
+          : []),
+      ];
+
   return (
     <StepCanvas past={past}>
+      <StageActs>
+        <ChangeBookingMenu items={changeItems} />
+      </StageActs>
 
       <StepCard
-        flow="quote"
+        flow="table"
+        // Always a line, so the card's inside keeps one shape: a summary appearing only once the
+        // quotation existed re-mounted the table on the save and lost what it held. It can only
+        // fold once the table is priced (its item is the quotation), so the placeholder never shows.
+        summary={tableSummary ?? "Not priced yet"}
+        noDoneBar
         title="Who sleeps where, and their meals"
         meta="One row per room: the guests by age, their meal plans, extra beds, any negotiated rate and the booking's discount. Saving the table prices it — that is the quotation."
       >
@@ -590,7 +713,11 @@ export function S2Negotiation({
           />
         ) : tableOpen ? (
           <Tool>
+            <div onPointerDownCapture={markHandEdit} onKeyDownCapture={markHandEdit} onInputCapture={markHandEdit}>
+            {/* The grid alone (2026-10-27, operator: "remove the guest board option, that way you
+                don't have to keep the table option as well") — as at Arrival, Check-in and Stay. */}
             <RoomCompositionPlanner
+              tableOnly
               bedPlan={beds.byRoom}
               onBedChange={beds.set}
               bedAsk={beds.ask}
@@ -600,6 +727,7 @@ export function S2Negotiation({
               entryAdults={entry.adultCount ?? entry.guestCount ?? null}
               entryChildAges={entry.childAges ?? null}
               roomDates={roomDates}
+              roomLabels={bookingRooms.labels}
               onSave={() => (working ? regenerateM.mutate() : generateM.mutate())}
               saveLabel={working ? "Save & price it again" : "Save & price it"}
               saving={generateM.isPending || regenerateM.isPending}
@@ -673,6 +801,7 @@ export function S2Negotiation({
                 if (patch.basis !== undefined) setDiscountBasis(patch.basis);
               }}
             />
+            </div>
           </Tool>
         ) : (
           <>
@@ -680,11 +809,11 @@ export function S2Negotiation({
               <Notice>Choose the rooms at Inquiry first — the table needs them.</Notice>
             ) : accepted && !past ? (
               <Notice>
-                The guest accepted these terms, so the table is closed. To change the price, use <b>Renegotiate the price…</b> at Set up.
+                The guest accepted these terms, so the table is closed. To change the price, use <b>Renegotiate the price</b> at Set up.
               </Notice>
             ) : proformaLocked && !past ? (
               <Notice>
-                A proforma has been issued on these terms, so they are final. To change the price, use <b>Renegotiate the price…</b> at Set up.
+                A proforma has been issued on these terms, so they are final. To change the price, use <b>Renegotiate the price</b> at Set up.
               </Notice>
             ) : null}
             <CompositionSummary entry={entry} />
@@ -695,34 +824,14 @@ export function S2Negotiation({
             operator ruling). It sits under the table it changes, and closes while the change is
             being made so there is only ever one plan on screen. */}
         {!changing ? <WaitingConfigurationChange entry={entry} /> : null}
-        {!changing && !past ? (
+        {/* Change configuration moved into "Change booking" at the end of the step's line, beside
+            Cancel booking (2026-10-27, operator). The provisional block is placed from the bar at the
+            foot. A marker in place is a state, so it is still said here. */}
+        {!changing && !past && activeHold ? (
           <div className="row-acts" style={{ marginTop: 12, alignItems: "center", gap: 10 }}>
-            {editable ? (
-              <>
-                <Button kind="quiet" className="act" onClick={() => setChanging(true)}>
-                  Change configuration…
-                </Button>
-                <Help label="About changing the configuration">
-                  <p>Move the dates, add or drop rooms, or change the adults, the children and their ages.</p>
-                  <p>Any quotation priced on the old configuration is retired, and the change is kept in the history.</p>
-                </Help>
-              </>
-            ) : null}
-            {/* The provisional block lives under Other ways (2026-10-12, operator: "leave a small
-                button there ... when they click it, it takes them to Other ways and opens the
-                provisional block"). A marker in place is a state, so it is said here too. */}
-            <Button kind="quiet" className="act" onClick={() => openWay("block")}>
-              Provisional block…
-            </Button>
-            <Help label="About the provisional block">
-              <p>Marks the rooms so nobody else sells them while the guest decides. Nothing is sent to the guest.</p>
-              <p>It opens under Other ways.</p>
-            </Help>
-            {activeHold ? (
-              <span className="sm">
-                <Icon name="clock" /> {roomsWord(holdRoomIds(activeHold), roomNos)} marked until <b>{fmtDateTime(activeHold.expiresAt, tz)}</b>
-              </span>
-            ) : null}
+            <span className="sm">
+              <Icon name="clock" /> {heldWord(holdRoomIds(activeHold))} marked until <b>{fmtDateTime(activeHold.expiresAt, tz)}</b>
+            </span>
           </div>
         ) : null}
         {!changing ? <DecidedConfigurationChanges entry={entry} /> : null}
@@ -744,6 +853,11 @@ export function S2Negotiation({
           onSend={() => setSendTarget(shown)}
           refreshKeys={extraKeys}
         />
+      ) : !past ? (
+        // Section 2 before anything is priced: it waits for the table's Save (2026-10-27).
+        <StepCard flow="quotation" flowAfter="table" title="The quotation" icon="file">
+          <span className="sm">Nothing is priced yet — the table&rsquo;s Save makes the quotation.</span>
+        </StepCard>
       ) : null}
 
 
@@ -759,26 +873,10 @@ export function S2Negotiation({
           { key: "block", label: "Provisional block", content: blockPanel },
           parkTab(parkNow, parking),
           // The answer the house had no way to write down (2026-10-01) — see the Inquiry step.
-          declineTab(declineNow, declining),
-          {
-            key: "counter",
-            label: "Counter-offer",
-            content: (
-              <div className="way-form">
-                <p className="sm" style={{ margin: 0 }}>
-                  Counter-offers can&rsquo;t be recorded yet. For now, set the discount in the table on This step.
-                </p>
-                <div className="row-acts" style={{ alignItems: "center" }}>
-                  <Button kind="quiet" className="act" state="inert">
-                    Record a counter-offer
-                  </Button>
-                  <Help label="About counter-offers">
-                    <p>Records what the guest or agent asked for, by whom, and how it ended — it adds to the agent&rsquo;s record.</p>
-                  </Help>
-                </div>
-              </div>
-            ),
-          },
+          // The guest said no is Cancel booking here, opened from Change booking (2026-10-27, operator).
+          declineTab(declineNow, declining, { label: "Cancel booking", act: "Cancel the booking", inBar: false }),
+          // The Counter-offer way was taken off (2026-10-27, operator: "remove the counter offer") —
+          // it could record nothing; the discount on the table is how a counter-offer is met.
         ]}
       />
 
@@ -797,7 +895,7 @@ export function S2Negotiation({
         onClose={() => setReleaseOpen(false)}
         busy={releaseM.isPending}
         title="Release the rooms"
-        caseLines={activeHold ? [`${roomsWord(holdRoomIds(activeHold), roomNos)} marked until ${fmtDateTime(activeHold.expiresAt, tz)}`] : undefined}
+        caseLines={activeHold ? [`${heldWord(holdRoomIds(activeHold))} marked until ${fmtDateTime(activeHold.expiresAt, tz)}`] : undefined}
         lead="The marker is removed. The quotation stands and can still be accepted if the rooms are free then."
         confirmLabel="Release"
         placeholder="agent went elsewhere"
@@ -821,6 +919,7 @@ const PLAN_SHORT: Array<[keyof MealCounts, string]> = [
 /** The table as the backend priced it — for a passed step, an accepted quote, or a final one. */
 function CompositionSummary({ entry }: { entry: EntryDetail }) {
   const { session } = useSession();
+  const { labels } = useBookingRooms(entry);
   const billing = useQuery({
     queryKey: ["billing-summary", entry.id, entry.updatedAt ?? ""],
     queryFn: () => getBillingSummary(session!, entry.id),
@@ -857,8 +956,8 @@ function CompositionSummary({ entry }: { entry: EntryDetail }) {
             return (
               <tr key={r.roomId ?? i} className="static">
                 <td>
-                  {r.roomNumber ? `Room ${r.roomNumber}` : "—"}
-                  {r.roomTypeName ? <span className="sub">{r.roomTypeName}</span> : null}
+                  {r.roomId && labels.has(r.roomId) ? labels.get(r.roomId) : r.roomNumber ? `Room ${r.roomNumber}` : "—"}
+                  {r.roomTypeName && !(r.roomId && labels.has(r.roomId)) ? <span className="sub">{r.roomTypeName}</span> : null}
                 </td>
                 <td>
                   {o ? (
@@ -1009,6 +1108,7 @@ function QuotationCard({
 
   return (
     <StepCard
+      flow="quotation"
       title={`Quotation · ${q.referenceNumber} · v${q.versionNumber}`}
       icon="file"
       right={
@@ -1050,7 +1150,7 @@ function QuotationCard({
               }
               onClick={onSend}
             >
-              Send…
+              Send
             </Button>
           </Live>
           <Button kind="quiet" compact icon="file" onClick={pdf}>
@@ -1071,6 +1171,7 @@ function QuotationCard({
           <span className={lapsed && q.state !== "ACCEPTED" ? "warn-ink" : undefined}>
             <Icon name="clock" /> {lapsed && q.state !== "ACCEPTED" ? "The price lapsed on" : "Price valid until"}{" "}
             <b>{fmtDateTime(q.validUntil, tz)}</b>
+            {lapsed && q.state !== "ACCEPTED" && editable ? " — set how long it is valid under the table and save it again" : ""}
           </span>
         ) : null}
         {q.sentAt ? (
@@ -1128,13 +1229,13 @@ function QuotationCard({
                 <div style={{ display: "grid", gap: 4 }}>
                   <SeeRow
                     kind="secondary"
-                    label="Record the answer…"
+                    label="Record the answer"
                     note="Records how the guest accepted and the words they used. A spoken answer counts once it is written down."
                     onClick={editable ? () => setAnswerOpen(true) : undefined}
                     reason={editable ? undefined : "not at this step"}
                   />
                   <SeeRow
-                    label="No answer — the FOM decides…"
+                    label="No answer — the FOM decides"
                     note="Closes the reply window as the FOM's decision, with a reason."
                     onClick={editable && elevated ? () => setCloseLoopOpen(true) : undefined}
                     reason={!editable ? "not at this step" : elevated ? undefined : "closing the reply window is the FOM's call"}

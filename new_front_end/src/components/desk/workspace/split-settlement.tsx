@@ -29,14 +29,18 @@ export function SplitSettlementBlock({
   folioId,
   /** Collapsed by default everywhere except S8, where settling is the job at hand. */
   defaultOpen = false,
+  /** Shown open with no fold of its own — Stay's payment sub-tab (2026-10-29). */
+  unfolded = false,
 }: {
   entry: EntryDetail;
   folioId: string;
   defaultOpen?: boolean;
+  unfolded?: boolean;
 }) {
   const { session } = useSession();
   const qc = useQueryClient();
-  const [open, setOpen] = useState(defaultOpen);
+  const [openState, setOpen] = useState(defaultOpen);
+  const open = unfolded || openState;
   /** Which row's collect form is showing — only one at a time; a stray amount can't be misfiled. */
   const [collecting, setCollecting] = useState<string | null>(null);
   const [amount, setAmount] = useState("");
@@ -173,16 +177,18 @@ export function SplitSettlementBlock({
     return owing === 0 ? "all parts paid" : `${owing} of ${rows.length} still owing`;
   }, [rows]);
 
-  if (!folioId || (!q.isLoading && !worthShowing)) return null;
+  if (!folioId || (!q.isLoading && !worthShowing)) {
+    return unfolded ? <p className="meta">Nothing is on the bill yet to take a payment against.</p> : null;
+  }
 
   return (
     <div className="block">
       <div
         className="block-h"
-        onClick={() => setOpen((v) => !v)}
-        role="button"
-        style={{ cursor: "pointer", userSelect: "none" }}
-        title={open ? "Hide this section" : "Show this section"}
+        onClick={unfolded ? undefined : () => setOpen((v) => !v)}
+        role={unfolded ? undefined : "button"}
+        style={unfolded ? undefined : { cursor: "pointer", userSelect: "none" }}
+        title={unfolded ? undefined : open ? "Hide this section" : "Show this section"}
       >
         <Split style={{ width: 13, height: 13 }} />
         Who&apos;s paying for what
@@ -196,7 +202,7 @@ export function SplitSettlementBlock({
           </span>
         )}
         <span className="ln" />
-        <span style={{ fontSize: 10.5, fontWeight: 600, color: "var(--ink-3)", whiteSpace: "nowrap", letterSpacing: 0.3 }}>
+        <span hidden={unfolded} style={{ fontSize: 10.5, fontWeight: 600, color: "var(--ink-3)", whiteSpace: "nowrap", letterSpacing: 0.3 }}>
           {open ? "Hide ▴" : "Show ▾"}
         </span>
       </div>

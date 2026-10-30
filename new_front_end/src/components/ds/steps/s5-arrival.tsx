@@ -29,12 +29,14 @@ import {
   type HandoffChecklistItem,
 } from "@/lib/api/pre-arrival";
 import { s5Readiness } from "@/lib/desk/workspace";
-import { fmtStamp, fmtTime, instantYmd, money } from "@/lib/ds/format";
+import { fmtDay, fmtStamp, fmtTime, instantYmd, money } from "@/lib/ds/format";
+import { TimeInput, timeInWords } from "@/components/ds/date-input";
 import { AdvanceSettlementBlock } from "@/components/desk/workspace/advance-settlement";
 import { IdentityProofBlock } from "@/components/desk/workspace/identity-proof";
 import type { EntryDetail } from "@/types/api";
 import {
   AnswerLine,
+  Choice,
   Fact,
   FactLine,
   Facts,
@@ -45,8 +47,11 @@ import {
   atLeast,
   currentPassStart,
   toastRefusal,
+  useFinishWhenDone,
   useRefreshEntry,
+  useStepFlow,
   useStepMode,
+  useStepPane,
   words,
   latestDispatched,
   useCommunications,
@@ -108,6 +113,7 @@ export function S5Arrival({
   parking,
   guestPresent,
   setGuestPresent,
+  onChangeStay,
 }: {
   entry: EntryDetail;
   past: boolean;
@@ -116,10 +122,16 @@ export function S5Arrival({
   parking?: boolean;
   guestPresent: boolean;
   setGuestPresent: (v: boolean) => void;
+  /** Change booking › "Change the dates, rooms or guests" — the editor in the page (2026-10-29). */
+  onChangeStay?: () => void;
 }) {
   const facts = useArrivalFacts(entry);
   const since = currentPassStart(entry);
   const clock = useHotelClock(60_000);
+  // Change booking's "Move a room" opens the rooms in the page, as at Set up and Reserve (2026-10-29,
+  // operator: Arrival's own section showed the move-room tools, "this should be only shown there").
+  const stepPane = useStepPane();
+  const moveRoom = () => stepPane.open("rooms");
   return (
     <StepCanvas past={past}>
       <WhenTheyArrive entry={entry} />
@@ -138,15 +150,21 @@ export function S5Arrival({
         flow="tasks"
         flowAfter="rooms"
       />
-      {/* Gone once the advance is paid in full and signed off (2026-10-23) — its words are on
-          Charges & payments › Money received; while something is left, its acts are needed here. */}
-      {facts.reconciled && facts.pay?.paidInFull && !facts.creditNeedsAck ? null : <AdvanceAndCredit entry={entry} facts={facts} />}
+      {/* A section of its own, folding to one line once it is in order (2026-10-29). */}
+      <AdvanceAndCredit entry={entry} facts={facts} />
       {/* The handoff records itself once the room, the tasks and the money are done — so it sits
           after them, where the list has it (2026-09-25). */}
       <FrontDeskHandoff entry={entry} facts={facts} />
       <GuestHereCard guestPresent={guestPresent} setGuestPresent={setGuestPresent} />
       <PreArrivalAnswerCard entryId={entry.id} since={since} tz={clock.tz} />
-      <BookingOtherWays entry={entry} parkNow={parkNow} parking={parking} guestPresent={guestPresent} />
+      <BookingOtherWays
+        entry={entry}
+        parkNow={parkNow}
+        parking={parking}
+        guestPresent={guestPresent}
+        onMoveRoom={past ? undefined : moveRoom}
+        onChangeStay={past ? undefined : onChangeStay}
+      />
     </StepCanvas>
   );
 }
@@ -168,20 +186,22 @@ function ExpectedArrivalFact({ entry }: { entry: EntryDetail }) {
   const refresh = useRefreshEntry(entry.id);
   const [editing, setEditing] = useState(false);
   const [time, setTime] = useState("");
+  // The check-in day, or the next morning (2026-10-29 — a future booking may arrive after midnight).
+  const [day, setDay] = useState<"CHECKIN" | "NEXT">("CHECKIN");
   const q = useQuery({
     queryKey: ["expected-arrival", entry.id],
     queryFn: () => getExpectedArrival(session!, entry.id),
     enabled: !!session,
   });
   const save = useMutation({
-    mutationFn: (t: string | null) => setExpectedArrival(session!, entry.id, t),
+    mutationFn: ({ t, next }: { t: string | null; next: boolean }) => setExpectedArrival(session!, entry.id, t, next),
     onSuccess: (r) => {
       toast.success(
         r.cutoffAlreadyReached
           ? "Arrival time recorded — the no-show cut-off had already passed; reopening the booking is the FOM's reactivation"
           : r.rearmedAt
-            ? `Expected at ${fmtTime(r.at, tz)} — the no-show cut-off is now ${fmtTime(r.rearmedAt, tz)}`
-            : `Expected at ${fmtTime(r.at, tz)}`,
+            ? `Expected ${when(r.at)} — the no-show cut-off is now ${when(r.rearmedAt)}`
+            : `Expected ${when(r.at)}`,
       );
       setEditing(false);
       refresh([["expected-arrival", entry.id]]);
@@ -194,6 +214,31 @@ function ExpectedArrivalFact({ entry }: { entry: EntryDetail }) {
   // a week ahead read "2:00 PM · no-show cut-off 4:00 PM" with nothing saying which day.
   const today = instantYmd(clock.now, tz);
   const when = (v: string | null | undefined) => (v && instantYmd(v, tz) !== today ? fmtStamp(v, tz) : fmtTime(v, tz));
+  const grace = d?.graceMinutes == null ? null : d.graceMinutes % 60 === 0 ? `${d.graceMinutes / 60} hour${d.graceMinutes === 60 ? "" : "s"}` : `${d.graceMinutes} minutes`;
+
+  // What may be picked (2026-10-29, operator: "it shouldn't let the time pick be … 2 hrs (or the
+  // time set in the admin console) later than the current time — say it is 5 pm, it should let the
+  // user pick 3 pm"). The earliest is the server's — now less the grace; on an earlier day nothing.
+  const dayOf = (k: "CHECKIN" | "NEXT") => (k === "NEXT" ? d?.dayAfterDate : d?.checkInDate) ?? null;
+  const minFor = (k: "CHECKIN" | "NEXT") => {
+    const dy = dayOf(k);
+    if (!d?.earliest || !dy) return undefined;
+    return dy < d.earliest.date ? "24:00" : dy === d.earliest.date ? d.earliest.time : undefined;
+  };
+  // The next morning, before the hotel's check-out time — the last minute before it.
+  const maxFor = (k: "CHECKIN" | "NEXT") => {
+    if (k !== "NEXT" || !d?.nextMorningLatest) return undefined;
+    const [h, m] = d.nextMorningLatest.split(":").map((x) => Number(x));
+    const last = h * 60 + m - 1;
+    return last < 0 ? "00:00" : `${String(Math.floor(last / 60)).padStart(2, "0")}:${String(last % 60).padStart(2, "0")}`;
+  };
+  const fits = (t: string, k: "CHECKIN" | "NEXT") => {
+    const lo = minFor(k);
+    const hi = maxFor(k);
+    return /^\d\d:\d\d$/.test(t) && (!lo || t >= lo) && (!hi || t <= hi);
+  };
+  const dayPassed = minFor(day) === "24:00";
+  const timeOk = fits(time, day);
   return (
     <Fact k="Expected arrival">
       {!d ? (
@@ -205,7 +250,18 @@ function ExpectedArrivalFact({ entry }: { entry: EntryDetail }) {
             <span className="meta">
               · {d.source === "GUEST" ? "the guest's own time" : "the hotel's check-in time"}
               {cutoff ? ` · no-show cut-off ${when(cutoff)}` : ""}
-            </span>
+              {/* Why the cut-off is not the arrival plus the grace (2026-10-29, operator, on 6:56 PM beside 2:00 PM). */}
+              {cutoff && d.cutoffFrom === "REACHED_ARRIVAL" && d.cutoffFromAt ? ` — ${grace ?? "the grace"} after it reached Arrival at ${when(d.cutoffFromAt)}` : ""}
+            </span>{" "}
+            <Help label="About the arrival time">
+              <p>When the guest is expected — the time they gave, or the hotel&rsquo;s check-in time — and when the no-show cut-off falls.</p>
+              <p>
+                The cut-off is {grace ?? "the grace"} after the expected arrival. A booking that reaches Arrival after that time gets the
+                same grace from the moment it reached Arrival, so it is never a no-show the moment it arrives here. A change made to the
+                booking at Arrival keeps the cut-off it had.
+              </p>
+              <p>Once the cut-off passes the guest can still check in; recording a no-show is the FOM&rsquo;s decision, after trying to reach the contact person.</p>
+            </Help>
           </span>
           {d.cutoffReachedAt ? (
             <span className="sm warn-ink">
@@ -214,26 +270,62 @@ function ExpectedArrivalFact({ entry }: { entry: EntryDetail }) {
           ) : null}
           <Live>
             {editing ? (
-              <div className="row-acts">
-                <input className="input" type="time" value={time} onChange={(e) => setTime(e.target.value)} style={{ width: 140 }} />
-                <Button
-                  kind="secondary"
-                  compact
-                  state={save.isPending ? "working" : /^\d\d:\d\d$/.test(time) ? "default" : "inert"}
-                  title={/^\d\d:\d\d$/.test(time) ? undefined : "put in the time the guest gave"}
-                  workingLabel="Saving…"
-                  onClick={() => save.mutate(time)}
-                >
-                  Save
-                </Button>
-                {d.guestTime ? (
-                  <Button kind="quiet" compact onClick={() => save.mutate(null)}>
-                    Use the hotel&rsquo;s time
-                  </Button>
+              <div style={{ display: "grid", gap: 8, marginTop: 4 }}>
+                {d.offerNextMorning && d.checkInDate && d.dayAfterDate ? (
+                  <Choice
+                    options={[
+                      ["CHECKIN", `The check-in day · ${fmtDay(d.checkInDate)}`],
+                      ["NEXT", `The next morning · ${fmtDay(d.dayAfterDate)}`],
+                    ]}
+                    value={day}
+                    onChange={(v) => {
+                      setDay(v);
+                      // A time that does not fit the other day is taken out, not carried.
+                      if (!fits(time, v)) setTime("");
+                    }}
+                  />
                 ) : null}
-                <Button kind="quiet" compact onClick={() => setEditing(false)}>
-                  Cancel
-                </Button>
+                <div className="row-acts">
+                  <TimeInput
+                    className="input"
+                    value={time}
+                    min={minFor(day)}
+                    max={maxFor(day)}
+                    onChange={(e) => setTime(e.target.value)}
+                    style={{ width: 150 }}
+                    aria-label="The time the guest gave"
+                  />
+                  <Button
+                    className={timeOk ? "go" : undefined}
+                    compact
+                    state={save.isPending ? "working" : timeOk ? "default" : "inert"}
+                    reason={timeOk ? undefined : "pick the time the guest gave"}
+                    workingLabel="Saving…"
+                    onClick={() => timeOk && save.mutate({ t: time, next: day === "NEXT" })}
+                  >
+                    Save
+                  </Button>
+                  {d.guestTime ? (
+                    <Button kind="quiet" compact onClick={() => save.mutate({ t: null, next: false })}>
+                      Use the hotel&rsquo;s time
+                    </Button>
+                  ) : null}
+                  <Button kind="quiet" compact onClick={() => setEditing(false)}>
+                    Cancel
+                  </Button>
+                </div>
+                {dayPassed ? (
+                  <span className="sm stop-ink" role="alert">
+                    {fmtDay(dayOf(day))} has passed — the guest can no longer be expected then.
+                    {d.offerNextMorning && day === "CHECKIN" ? " Pick the next morning, or change the dates." : " Change the dates instead."}
+                  </span>
+                ) : minFor(day) ? (
+                  <span className="sm meta">
+                    From {timeInWords(minFor(day))} — earlier, the no-show cut-off ({grace ?? "the grace"} after the arrival) would already have passed.
+                  </span>
+                ) : day === "NEXT" && d.nextMorningLatest ? (
+                  <span className="sm meta">Before {timeInWords(d.nextMorningLatest)}, the hotel&rsquo;s check-out time — later than that the first night is missed.</span>
+                ) : null}
               </div>
             ) : d.editable ? (
               <div>
@@ -241,11 +333,15 @@ function ExpectedArrivalFact({ entry }: { entry: EntryDetail }) {
                   kind="quiet"
                   compact
                   onClick={() => {
-                    setTime(d.guestTime ?? d.time);
+                    const k = d.dayAfter ? "NEXT" : "CHECKIN";
+                    const seed = d.guestTime ?? d.time;
+                    setDay(k);
+                    // The hotel's time, or one that no longer fits (it is past), opens empty.
+                    setTime(fits(seed, k) ? seed : "");
                     setEditing(true);
                   }}
                 >
-                  {d.guestTime ? "Change the time" : "The guest gave a time…"}
+                  {d.guestTime ? "Change the time" : "The guest gave a time"}
                 </Button>
               </div>
             ) : null}
@@ -262,12 +358,15 @@ function ExpectedArrivalFact({ entry }: { entry: EntryDetail }) {
  * waits for it, so it is a numbered item with a card of its own, after the handoff.
  */
 function GuestHereCard({ guestPresent, setGuestPresent }: { guestPresent: boolean; setGuestPresent: (v: boolean) => void }) {
+  // Saying so finishes the section; Move to Check-in floats in (2026-10-29).
+  const finish = useFinishWhenDone("present");
   return (
     <StepCard
       flow="present"
       flowAfter="handoff"
       title="The guest is here"
       meta="Say so when they are at the desk — Check-in opens on it. This is the desk's word, recorded with the check-in."
+      summary="The guest is at the desk"
       acts={
         <Live>
           {guestPresent ? (
@@ -280,7 +379,13 @@ function GuestHereCard({ guestPresent, setGuestPresent }: { guestPresent: boolea
               </Button>
             </>
           ) : (
-            <Button compact onClick={() => setGuestPresent(true)}>
+            <Button
+              className="go"
+              onClick={() => {
+                setGuestPresent(true);
+                finish();
+              }}
+            >
               Guest is present
             </Button>
           )}
@@ -326,6 +431,8 @@ function FrontDeskHandoff({ entry, facts }: { entry: EntryDetail; facts: Facts_ 
   const { past } = useStepMode();
   const h1 = (entry.handoffs ?? []).find((h) => h.handoffType === "H1") ?? null;
   const { latest, readinessConfirmed, paymentReconciled, tasksComplete, creditNeedsAck } = facts;
+  // Fulfilled — by hand or by itself — finishes the section (2026-10-29).
+  const finish = useFinishWhenDone("handoff");
 
   const checklist = useQuery({
     queryKey: ["handoff-checklist", "H1"],
@@ -362,6 +469,7 @@ function FrontDeskHandoff({ entry, facts }: { entry: EntryDetail; facts: Facts_ 
     onSuccess: () => {
       toast.success("The front-desk handoff is fulfilled");
       refresh();
+      finish();
     },
     onError: (e) => toastRefusal(e, "The handoff could not be fulfilled"),
   });
@@ -378,6 +486,7 @@ function FrontDeskHandoff({ entry, facts }: { entry: EntryDetail; facts: Facts_ 
     onSuccess: () => {
       toast.success("The front-desk handoff recorded itself — the room, the tasks and the advance are in order");
       refresh();
+      finish();
     },
     onError: (e) => toastRefusal(e, "The handoff could not record itself — press Record it fulfilled"),
   });
@@ -415,6 +524,7 @@ function FrontDeskHandoff({ entry, facts }: { entry: EntryDetail; facts: Facts_ 
       flow="handoff"
       flowAfter="advance"
       title="The front-desk handoff"
+      summary={h1.fulfilledAt ? `Fulfilled ${fmtStamp(h1.fulfilledAt, clock.tz)}` : "Fulfilled"}
       right={
         h1.state === "FULFILLED" ? (
           <Chip tone="success" icon="check">
@@ -458,6 +568,7 @@ function FrontDeskHandoff({ entry, facts }: { entry: EntryDetail; facts: Facts_ 
           <Live>
             <div className="row-acts">
               <Button
+                className="go"
                 compact
                 state={accept.isPending ? "working" : canAccept ? "default" : "inert"}
                 title={canAccept ? undefined : "tick every required item first"}
@@ -509,18 +620,35 @@ function AdvanceAndCredit({ entry, facts }: { entry: EntryDetail; facts: Facts_ 
     onSuccess: () => {
       toast.success("The credit ceiling is acknowledged");
       refresh();
+      finish();
     },
     onError: (e) => toastRefusal(e, "The credit ceiling could not be acknowledged"),
   });
   const acked = entry.creditCeilingTier2AcknowledgedAt ?? null;
+  // A payment, a credit extension, the sign-off or the ceiling acknowledged finishes the section
+  // once it reads done (2026-10-29); a part payment leaves it open.
+  const finish = useFinishWhenDone("advance");
+  const pay = facts.pay;
+  const cur = entry.folio?.lines?.[0]?.currency;
+  const signed = facts.reconciled ? " · signed off" : "";
+  const summary = pay
+    ? pay.requiredAmount > 0
+      ? `Received ${money(pay.totalReceived, cur)} of ${money(pay.requiredAmount, cur)}${signed}`
+      : pay.totalReceived > 0
+        ? `No advance asked · ${money(pay.totalReceived, cur)} received${signed}`
+        : `No advance asked${signed}`
+    : facts.reconciled
+      ? "Signed off"
+      : undefined;
   return (
-    <StepCard flow="advance">
+    <StepCard
+      flow="advance"
+      title="The advance"
+      meta="Settle the advance before the guest arrives: log any remainder they send, or have the FOM cover the gap so check-in isn't held up."
+      summary={summary}
+    >
       <Tool>
-        <AdvanceSettlementBlock
-          entry={entry}
-          title="Advance and credit"
-          intro="Settle the advance before the guest arrives: log any remainder they send, or have the FOM cover the gap so check-in isn't held up."
-        />
+        <AdvanceSettlementBlock entry={entry} title="Advance and credit" noHeading onChanged={() => finish()} />
       </Tool>
       {facts.creditNeedsAck ? (
         <FactLine

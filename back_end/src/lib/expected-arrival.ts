@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { Stage, type Prisma, type PrismaClient } from "@prisma/client";
 import { requireActiveConfigValue } from "./config-store.js";
 import { getRegistryPolicy } from "./policy-registry-runtime.js";
-import { hotelLocalTimeOn } from "./stay-dates.js";
+import { addUtcDays, hotelLocalTimeOn } from "./stay-dates.js";
 import { getTimerEngine } from "../services/infrastructure/timer-management-service.js";
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
@@ -19,6 +19,8 @@ type DbClient = PrismaClient | Prisma.TransactionClient;
  */
 
 export const DEFAULT_CHECK_IN_TIME = "14:00";
+/** The latest a guest expected "the next morning" may come — the late-checkout cut-off's own default. */
+export const DEFAULT_NEXT_MORNING_LATEST = "12:00";
 const TIME_OF_DAY = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 export function isTimeOfDay(v: unknown): v is string {
@@ -36,6 +38,21 @@ export async function resolveStandardCheckInTime(db: DbClient): Promise<string> 
   return DEFAULT_CHECK_IN_TIME;
 }
 
+/**
+ * The latest time a guest may be expected the morning after the check-in day (2026-10-29): the
+ * hotel's check-out time (`checkout.cutoffTime`). Later than that, the first night is missed — the
+ * stay starts a day later, which is a change of dates, not an arrival time.
+ */
+export async function resolveNextMorningLatest(db: DbClient): Promise<string> {
+  try {
+    const v = await requireActiveConfigValue<string>(db as PrismaClient, "checkout.cutoffTime");
+    if (isTimeOfDay(v)) return v;
+  } catch {
+    /* fall through to the default */
+  }
+  return DEFAULT_NEXT_MORNING_LATEST;
+}
+
 /** The grace after the expected arrival before the no-show process starts, in minutes. */
 export async function resolveNoShowGraceMinutes(db: DbClient): Promise<number> {
   // The admin-editable registry row wins over the older ConfigurationEntry (disable it to fall back).
@@ -51,6 +68,8 @@ export type ExpectedArrival = {
   time: string;
   /** Whose time it is: the guest's own, or the hotel's standard check-in time. */
   source: "GUEST" | "HOTEL";
+  /** The guest is expected the morning after the check-in day (only with their own time). */
+  dayAfter: boolean;
 };
 
 export async function resolveExpectedArrival(
@@ -58,13 +77,16 @@ export async function resolveExpectedArrival(
   entry: {
     checkInDate: Date | null;
     expectedArrivalTime?: string | null;
+    expectedArrivalDayAfter?: boolean | null;
     reservation?: { frozenCheckInDate: Date } | null;
   },
 ): Promise<ExpectedArrival> {
   const own = isTimeOfDay(entry.expectedArrivalTime) ? entry.expectedArrivalTime : null;
   const time = own ?? (await resolveStandardCheckInTime(db));
-  const date = entry.reservation?.frozenCheckInDate ?? entry.checkInDate;
-  return { at: date ? hotelLocalTimeOn(date, time) : null, time, source: own ? "GUEST" : "HOTEL" };
+  const dayAfter = !!own && entry.expectedArrivalDayAfter === true;
+  const checkIn = entry.reservation?.frozenCheckInDate ?? entry.checkInDate;
+  const date = checkIn ? (dayAfter ? addUtcDays(checkIn, 1) : checkIn) : null;
+  return { at: date ? hotelLocalTimeOn(date, time) : null, time, source: own ? "GUEST" : "HOTEL", dayAfter };
 }
 
 /**
@@ -81,11 +103,24 @@ export function noShowCutoffFor(expectedAt: Date, graceMinutes: number, from: Da
 }
 
 /**
+ * When the no-show cut-off's countdown is shown (2026-10-29, operator: "no show cut off timer
+ * shouldn't show unless the 2 hr mark has been reached"): from the start of its grace — the
+ * guest's expected arrival — not from the moment Arrival armed it, which can be days ahead. A
+ * cut-off that counts from the booking reaching Arrival shows at once (its grace started then).
+ * Timer rows with any other code show as they always have: null.
+ */
+export function timerShowsFrom(t: { timerCode: string; createdAt: Date; firesAt: Date }, graceMinutes: number | null): Date | null {
+  if (t.timerCode !== "NO_SHOW_CUTOFF_W5" || graceMinutes == null) return null;
+  const graceStart = t.firesAt.getTime() - graceMinutes * 60_000;
+  return new Date(Math.max(t.createdAt.getTime(), graceStart));
+}
+
+/**
  * Arm the no-show cut-off for a booking at `cutoffAt`: any clock still running is stopped (row
  * and job) and one fresh clock is set — exactly one live cut-off per booking. The job carries
  * its TimerRecord id so the worker marks the right record when it fires.
  */
-export async function armNoShowCutoff(prisma: PrismaClient, entryId: string, cutoffAt: Date, actorId: string) {
+export async function armNoShowCutoff(prisma: PrismaClient, entryId: string, cutoffAt: Date, actorId: string, expectedAt: Date | null = null) {
   const engine = await getTimerEngine();
   const running = await prisma.timerRecord.findMany({
     where: { entryId, timerCode: "NO_SHOW_CUTOFF_W5", status: "SCHEDULED" },
@@ -112,7 +147,9 @@ export async function armNoShowCutoff(prisma: PrismaClient, entryId: string, cut
       firesAt: cutoffAt,
       dueAt: cutoffAt,
       status: "SCHEDULED",
-      payload: { entryId, timerRecordId, cutoffAt: cutoffAt.toISOString() },
+      // The expected arrival the clock was set for (2026-10-29) — a change made at Arrival re-arms
+      // the same cut-off for the same arrival instead of a fresh grace from that moment.
+      payload: { entryId, timerRecordId, cutoffAt: cutoffAt.toISOString(), ...(expectedAt ? { expectedAt: expectedAt.toISOString() } : {}) },
       pgBossJobId: jobId,
       createdBy: actorId,
     },

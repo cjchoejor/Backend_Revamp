@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { ensureQuietPlacement, markRoomsFixed } from "../../services/domain/quiet-rooms-service.js";
 import { prisma } from "../../db.js";
 import {
   allocateConferenceSpaceRequestSchema,
@@ -123,7 +124,8 @@ reservationsRouter.post("/entries/:id/activate-pre-arrival", requireActorLevel("
 
 reservationsRouter.post("/entries/:id/confirm", requireActorLevel("L1"), validateBody(confirmReservationRequestSchema), async (req, res, next) => {
   try {
-    const out = await reservationService.confirmReservation(prisma, req.params.id, req.actor!.actorId, req.body);
+    // Nothing is emailed on the click (2026-10-29) — the voucher waits for the desk to send it.
+    const out = await reservationService.confirmReservationForDesk(prisma, req.params.id, { actorId: req.actor!.actorId, actorLevel: req.actor!.level }, req.body);
     res.json({ reservation: out.reservation, entry: out.entry });
   } catch (e) {
     next(e);
@@ -231,7 +233,7 @@ reservationsRouter.post("/entries/:id/progress-stage", requireActorLevel("L1"), 
         next(new ValidationError("version is required for S3→S4 progression"));
         return;
       }
-      await reservationService.confirmReservation(prisma, req.params.id, req.actor!.actorId, { version });
+      await reservationService.confirmReservationForDesk(prisma, req.params.id, { actorId: req.actor!.actorId, actorLevel: req.actor!.level }, { version });
       const entryAfterConfirm = await loadEntryDetail(req.params.id);
       if (!entryAfterConfirm) {
         next(new NotFoundError("Entry"));
@@ -378,10 +380,12 @@ reservationsRouter.post("/entries/:id/room-assignments", requireActorLevel("L1")
     if (reEntryToS1 === true) {
       await entryService.reEnterS6ToS1(prisma, req.params.id, req.actor!.actorId);
     }
+    const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
+    const quiet = reEntryToS1 === true ? null : await ensureQuietPlacement(prisma, req.params.id, actor, "The rooms were handed out at Arrival");
     const created = await roomAssignmentService.assignRoom(
       prisma,
       req.params.id,
-      roomId,
+      quiet?.ownMap.get(roomId) ?? roomId,
       req.actor!.actorId,
       notes,
       deficientAcknowledgement,
@@ -401,12 +405,26 @@ reservationsRouter.post("/entries/:id/room-assignments", requireActorLevel("L1")
  */
 reservationsRouter.post("/entries/:id/room-assignments/from-sealed-per-night", requireActorLevel("L1"), async (req, res, next) => {
   try {
+    // Rooms the system chose quietly are placed against the house as it stands right now — the
+    // proposal the desk is confirming — and become the booking's rooms (2026-10-28).
+    const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
+    const quiet = await ensureQuietPlacement(prisma, req.params.id, actor, "The rooms were handed out at Arrival");
     const created = await roomAssignmentService.assignRoomsFromSealedPerNight(
       prisma,
       req.params.id,
       req.actor!.actorId,
     );
-    res.status(201).json({ assignments: created, count: created.length });
+    await markRoomsFixed(prisma, req.params.id);
+    // Name what was handed out, and any room the system had to move since the proposal was shown
+    // (another booking took it meanwhile), so the desk can say so in words.
+    const ids = [...new Set([...created.map((a) => a.roomId), ...quiet.ownMap.keys(), ...quiet.ownMap.values()])];
+    const numberOf = new Map((await prisma.room.findMany({ where: { id: { in: ids } }, select: { id: true, roomNumber: true } })).map((r) => [r.id, r.roomNumber] as const));
+    res.status(201).json({
+      assignments: created,
+      count: created.length,
+      roomNumbers: [...new Set(created.map((a) => numberOf.get(a.roomId) ?? "?"))],
+      movedSinceProposal: [...quiet.ownMap].map(([from, to]) => ({ fromRoomNumber: numberOf.get(from) ?? "?", toRoomNumber: numberOf.get(to) ?? "?" })),
+    });
   } catch (e) {
     next(e);
   }

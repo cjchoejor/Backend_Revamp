@@ -13,6 +13,7 @@
  */
 import type { EntryStatus, Prisma, PrismaClient, Stage } from "@prisma/client";
 import { buildEntryBillingSummary } from "./entry-billing-summary-service.js";
+import { resolveNoShowGraceMinutes, timerShowsFrom } from "../../lib/expected-arrival.js";
 
 type Db = PrismaClient;
 
@@ -68,20 +69,6 @@ const listSelect = {
     },
   },
   reservation: { select: { id: true, confirmedAt: true, confirmationVoucherSent: true } },
-  /**
-   * Whether the guest has actually been sent their confirmation — see `voucherSent` below.
-   * One row is enough; the desk only asks yes or no.
-   */
-  communications: {
-    where: {
-      commType: "CONFIRMATION_VOUCHER" as const,
-      direction: "OUTBOUND",
-      sendStatus: "DISPATCHED",
-    },
-    orderBy: { createdAt: "desc" as const },
-    take: 1,
-    select: { createdAt: true },
-  },
   folio: { select: { id: true, state: true, billingModel: true } },
   committedHold: { select: { state: true, expiresAt: true } },
   speculativeHolds: {
@@ -105,6 +92,14 @@ const listSelect = {
     select: { id: true, kind: true, state: true, dueBy: true, remindersSent: true, promiseKind: true, promisedBy: true },
     take: 3,
   },
+  // The rest of the bill at check-in (2026-10-29): a request the FOM must answer, or the FOM's
+  // "pay during the stay by …" the desk is reminded on.
+  checkInPaymentDeferrals: {
+    where: { status: { in: ["REQUESTED", "APPROVED"] } },
+    orderBy: { createdAt: "desc" as const },
+    take: 2,
+    select: { id: true, status: true, payBy: true, dueBy: true, stillToPay: true, requestedAt: true },
+  },
   timers: {
     where: { status: "SCHEDULED" as const },
     orderBy: { firesAt: "asc" as const },
@@ -124,24 +119,9 @@ export type DeskListRow = Prisma.EntryGetPayload<{ select: typeof listSelect }> 
 };
 
 /**
- * Bookings still in play — live or parked, or ended with money still owed. The desk lists every
- * one of them whatever their age (2026-10-24): the go-live brought the old system's finished stays
- * across, ~2,500 of them, and the newest-500 window would have dropped the ones still owing off
- * the Billing page, and in time the live bookings off Today.
- */
-const IN_PLAY: Prisma.EntryWhereInput = {
-  OR: [{ status: { in: ["ACTIVE", "PARKED"] } }, { folio: { is: { state: "OUTSTANDING" } } }],
-};
-/** A ceiling on the in-play read, far above any real day — it only stops a runaway. */
-export const DESK_IN_PLAY_MAX = 3000;
-/** How much ended history rides along with them, newest first. Older stays are on the guest's page. */
-export const DESK_HISTORY_MAX = 200;
-
-/**
- * Every booking the desk may need to find, newest activity first: everything still in play, plus
- * the most recent ended bookings. `status` / `stage` / `guestProfileId` narrow it instead, newest
- * first up to `limit`; the screens search and filter by date in memory (SS02-P2 moves that here
- * when the list grows past what one read carries).
+ * Every booking the desk may need to find, newest activity first. `status` / `stage` narrow it;
+ * the screens search and filter by date in memory (SS02-P2 moves that here when the list grows
+ * past what one read carries).
  */
 export async function listDeskBookings(
   prisma: Db,
@@ -151,27 +131,13 @@ export async function listDeskBookings(
   if (query.status) where.status = query.status;
   if (query.stage) where.currentStage = query.stage;
   if (query.guestProfileId) where.guestProfileId = query.guestProfileId;
-  const narrowed = !!(query.status || query.stage || query.guestProfileId);
 
-  const rows = narrowed
-    ? await prisma.entry.findMany({
-        where,
-        orderBy: { updatedAt: "desc" },
-        take: Math.min(DESK_LIST_MAX, Math.max(1, query.limit)),
-        select: listSelect,
-      })
-    : await (async () => {
-        const [inPlay, history] = await Promise.all([
-          prisma.entry.findMany({ where: IN_PLAY, orderBy: { updatedAt: "desc" }, take: DESK_IN_PLAY_MAX, select: listSelect }),
-          prisma.entry.findMany({
-            where: { NOT: IN_PLAY },
-            orderBy: { updatedAt: "desc" },
-            take: Math.min(DESK_HISTORY_MAX, Math.max(1, query.limit)),
-            select: listSelect,
-          }),
-        ]);
-        return [...inPlay, ...history].sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
-      })();
+  const rows = await prisma.entry.findMany({
+    where,
+    orderBy: { updatedAt: "desc" },
+    take: Math.min(DESK_LIST_MAX, Math.max(1, query.limit)),
+    select: listSelect,
+  });
 
   // Names, not ids: the custodians and the park reasons, each in one query.
   const custodianIds = [...new Set(rows.map((r) => r.inquiry?.defaultCustodianId).filter((x): x is string => !!x))];
@@ -207,20 +173,6 @@ export async function listDeskBookings(
     const follow = r.timers.find((t) => t.timerCode === "PARKING_FOLLOW_UP");
     return {
       ...r,
-      /**
-       * Has the guest been sent their confirmation? Answered from the communications, not from
-       * `Reservation.confirmationVoucherSent` — which is written `true` once, inside the
-       * `reservation.create` at confirmation, on a row that is then immutable. That flag means
-       * "confirmed by this system", not "the voucher went out": a booking whose send FAILED
-       * reads sent, and a booking brought across from the old PMS reads unsent forever, however
-       * many times the desk sends it (found on ENT-20260510-0006, 2026-09-25 — four sends, four
-       * answers, still "voucher not sent").
-       *
-       * A dispatched voucher is exactly what the W4 gate keys on, so the desk now stops asking
-       * for the one thing that no longer holds the booking up. Confirmation always writes one,
-       * so nothing that read sent before reads unsent now.
-       */
-      voucherSent: r.communications.length > 0,
       custodianName: r.inquiry?.defaultCustodianId ? nameOf.get(r.inquiry.defaultCustodianId) ?? null : null,
       parkReason: reasonOf.get(r.id) ?? null,
       parkFollowUpAt: r.status === "PARKED" && follow ? follow.firesAt.toISOString() : null,
@@ -253,7 +205,7 @@ export type DeskMoneyRow = {
 export type DeskTimerRow = {
   entryId: string;
   running: number;
-  next: Array<{ timerCode: string; timerType: string; stageContext: string | null; firesAt: string; handoffType?: string | null }>;
+  next: Array<{ timerCode: string; timerType: string; stageContext: string | null; firesAt: string; showsFrom?: string | null; handoffType?: string | null }>;
 };
 
 export async function deskTimersFor(prisma: Db, entryIds: string[]): Promise<DeskTimerRow[]> {
@@ -261,9 +213,11 @@ export async function deskTimersFor(prisma: Db, entryIds: string[]): Promise<Des
   if (ids.length === 0) return [];
   const rows = await prisma.timerRecord.findMany({
     where: { entryId: { in: ids }, status: "SCHEDULED" },
-    select: { entryId: true, timerCode: true, timerType: true, stageContext: true, firesAt: true, entityType: true, entityId: true },
+    select: { entryId: true, timerCode: true, timerType: true, stageContext: true, firesAt: true, entityType: true, entityId: true, createdAt: true },
     orderBy: { firesAt: "asc" },
   });
+  // The no-show cut-off shows only from the start of its grace (2026-10-29).
+  const grace = rows.some((r) => r.timerCode === "NO_SHOW_CUTOFF_W5") ? await resolveNoShowGraceMinutes(prisma as never).catch(() => null) : null;
   // The acceptance clock is one code for housekeeping and the kitchen alike; the handoff behind
   // it says which. One query for the lot, so the row can name the department.
   const handoffIds = rows.filter((r) => r.entityType === "HandoffRecord" && r.entityId).map((r) => r.entityId as string);
@@ -285,6 +239,7 @@ export async function deskTimersFor(prisma: Db, entryIds: string[]): Promise<Des
         timerType: r.timerType,
         stageContext: r.stageContext ?? null,
         firesAt: r.firesAt.toISOString(),
+        showsFrom: timerShowsFrom(r, grace)?.toISOString() ?? null,
         handoffType: r.entityType === "HandoffRecord" && r.entityId ? (handoffTypeById.get(r.entityId) ?? null) : null,
       });
     }
@@ -383,7 +338,7 @@ export async function listDeskActivity(
 export const DESK_ALERTS_MAX = 400;
 
 /** What a sent alert was about (2026-10-23) — one word per writer in notification-service / W14. */
-export type DeskAlertKind = "STAGE_DWELL" | "EXPIRED" | "PAYMENT_REMINDER" | "VIP_ARRIVAL" | "OTHER";
+export type DeskAlertKind = "STAGE_DWELL" | "EXPIRED" | "PAYMENT_REMINDER" | "PAY_LATER_ASKED" | "VIP_ARRIVAL" | "OTHER";
 /** Who an alert was routed to — the tiers `notification.routing.*` names. */
 export type DeskAlertTarget = "OPERATOR" | "FOM" | "GM";
 
@@ -391,6 +346,8 @@ const ALERT_KIND: Record<string, DeskAlertKind> = {
   "NOTIFICATION.STAGE_DWELL_DISPATCHED": "STAGE_DWELL",
   "NOTIFICATION.OPERATOR_EXPIRY_DISPATCHED": "EXPIRED",
   "NOTIFICATION.INTERIM_PAYMENT_REMINDER_DISPATCHED": "PAYMENT_REMINDER",
+  "NOTIFICATION.CHECKIN_PAYMENT_REMINDER_DISPATCHED": "PAYMENT_REMINDER",
+  "NOTIFICATION.CHECKIN_PAYMENT_DEFERRAL_REQUESTED": "PAY_LATER_ASKED",
   "NOTIFICATION.VIP_ARRIVAL_W14_PROCESSED": "VIP_ARRIVAL",
 };
 const TARGETS = new Set<DeskAlertTarget>(["OPERATOR", "FOM", "GM"]);
@@ -452,7 +409,11 @@ export async function listDeskAlerts(prisma: Db, q: { from: Date; to: Date; limi
       payment:
         r.eventType === "NOTIFICATION.INTERIM_PAYMENT_REMINDER_DISPATCHED"
           ? { kind: str(p.kind), remaining: num(p.remaining), remindersSent: num(p.remindersSent), dueBy: str(p.dueBy), billed: p.billed === true }
-          : null,
+          : r.eventType === "NOTIFICATION.CHECKIN_PAYMENT_REMINDER_DISPATCHED"
+            ? { kind: "CHECKIN", remaining: num(p.remaining), remindersSent: num(p.remindersSent), dueBy: str(p.dueBy), billed: false }
+            : r.eventType === "NOTIFICATION.CHECKIN_PAYMENT_DEFERRAL_REQUESTED"
+              ? { kind: "PAY_LATER", remaining: num(p.stillToPay), remindersSent: null, dueBy: null, billed: false }
+              : null,
       booking: entryId ? (byId.get(entryId) ?? null) : null,
     };
   });

@@ -156,6 +156,19 @@ export async function decideHeldDocument(
 
   const decision = input.action === "EMAIL" ? "SENT_EMAIL" : input.action === "WHATSAPP" ? "SENT_WHATSAPP" : "NOT_SENT";
   const now = new Date();
+  // A voucher not sent awaits no answer (2026-10-29, operator: "sending the confirmation voucher
+  // is not mandatory, but if sent, the reply is").
+  if (decision === "NOT_SENT" && row.kind === "CONFIRMATION_VOUCHER") {
+    await prisma.communicationRecord.updateMany({
+      where: {
+        entryId: row.entryId,
+        commType: "CONFIRMATION_VOUCHER",
+        sendStatus: "HELD",
+        payload: { path: ["reservationId"], equals: row.documentId },
+      },
+      data: { sendStatus: "NOT_SENT", contentSummary: "Confirmation voucher not sent to the guest" },
+    });
+  }
   const updated = await prisma.heldDocument.update({
     where: { id: row.id },
     data: { decision, sentTo, note, decidedAt: now, decidedBy: actor.actorId },

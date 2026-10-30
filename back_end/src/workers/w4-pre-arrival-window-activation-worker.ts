@@ -11,7 +11,7 @@ import { latestDispatchedInForce } from "../lib/reply-waits.js";
 export async function runPreArrivalWindowActivationWorker(
   prisma: PrismaClient,
   engine: TimerEngine,
-  input: { entryId?: string; timerRecordId?: string },
+  input: { entryId?: string; timerRecordId?: string; fromTimer?: boolean },
   opts?: {
     /**
      * Room-change re-walk (2026-08-12): the guest's arrival was already verified this stay —
@@ -26,6 +26,46 @@ export async function runPreArrivalWindowActivationWorker(
   const now = new Date();
   const entryId = typeof input.entryId === "string" ? input.entryId : undefined;
   if (!entryId) return { skipped: true, reason: "MISSING_ENTRY_ID" } as const;
+  const result = await activate(prisma, engine, entryId, input, opts, now);
+  // The countdown fired and could not open Arrival: its record is closed and says why, so the desk
+  // does not show a clock "overdue" for good (2026-10-29). The desk moves the booking on once the
+  // reason is put right.
+  if (input.fromTimer && result.skipped && result.reason !== "ALREADY_FIRED") {
+    const closed = await prisma.timerRecord.updateMany({
+      where: { entryId, timerCode: "PRE_ARRIVAL_COUNTDOWN_W4", status: "SCHEDULED", firesAt: { lte: now } },
+      data: { status: "FIRED", firedAt: now },
+    });
+    if (closed.count && result.reason !== "NOT_AT_S4") {
+      await prisma.traceEvent
+        .create({
+          data: {
+            eventType: "PRE_ARRIVAL.WINDOW_OPEN_WAITING",
+            actorId: "SYSTEM",
+            actorLevel: "SYSTEM" as never,
+            entityType: "Entry",
+            entityId: entryId,
+            operation: "UPDATE",
+            timestamp: now,
+            stageContext: Stage.S4,
+            entryId,
+            payload: { entryId, reason: result.reason, message: (result as { detail?: { message?: string } }).detail?.message ?? null },
+            createdBy: "SYSTEM",
+          },
+        })
+        .catch(() => {});
+    }
+  }
+  return result;
+}
+
+async function activate(
+  prisma: PrismaClient,
+  engine: TimerEngine,
+  entryId: string,
+  input: { entryId?: string; timerRecordId?: string; fromTimer?: boolean },
+  opts: { skipTaskReset?: boolean } | undefined,
+  now: Date,
+) {
 
   const entry = await prisma.entry.findUnique({ where: { id: entryId }, include: { reservation: true } });
   if (!entry) return { skipped: true, reason: "ENTRY_NOT_FOUND" } as const;
@@ -77,29 +117,28 @@ export async function runPreArrivalWindowActivationWorker(
   });
   if (alreadyFired) return { skipped: true, reason: "ALREADY_FIRED" } as const;
 
-  // The guest's answer to the CONFIRMATION VOUCHER must be on record before the booking moves
-  // to pre-arrival (2026-08-07, operator ruling — extends the proforma answer-before-freeze
-  // rule one stage up): the voucher went out at confirmation asking "is this booking right?",
-  // and arrival prep starts on a yes. Segment-scoped like every communication gate; OTA
-  // bookings auto-acknowledge at dispatch and pass. TIMED_OUT does not satisfy — capture the
-  // late answer (p52 allows it), then activate. Skip (not throw): this is also the automatic
-  // W4 path, and pg-boss must not retry-and-fail forever; the manual /activate-pre-arrival
-  // route surfaces the message.
+  // The guest's answer to the CONFIRMATION VOUCHER, when it went out (2026-08-07, operator ruling;
+  // narrowed 2026-10-29: "sending the confirmation voucher is not mandatory, but if sent, the
+  // reply is"). A voucher the desk held and never sent, or chose not to send, has nothing to
+  // answer — the generate-vs-send rule the quotation and the proforma already follow. A voucher
+  // that went out (by email or on WhatsApp) asked "is this booking right?", and arrival prep
+  // starts on a yes. Segment-scoped like every communication gate; OTA bookings auto-acknowledge
+  // at dispatch and pass. TIMED_OUT does not satisfy — capture the late answer (p52 allows it),
+  // then activate. Skip (not throw): this is also the automatic W4 path, and pg-boss must not
+  // retry-and-fail forever; the manual /activate-pre-arrival route surfaces the message.
   // The voucher in force — a replaced one's answer is never demanded (2026-10-13).
   const voucherComm = await latestDispatchedInForce(prisma, {
     entryId,
     commType: "CONFIRMATION_VOUCHER",
     since: activationSince ?? null,
   });
-  if (!voucherComm || voucherComm.acknowledgementStatus !== "RECEIVED") {
+  if (voucherComm && voucherComm.acknowledgementStatus !== "RECEIVED") {
     return {
       skipped: true,
       reason: "VOUCHER_ANSWER_MISSING",
       detail: {
-        voucherDispatched: !!voucherComm,
-        message: !voucherComm
-          ? "The confirmation voucher hasn't been sent this segment — send it to the guest, record their answer, then open Arrival."
-          : "Record the guest's answer to the confirmation voucher first — the voucher went out at confirmation; their reply (verbal or written) is captured on the Confirm step.",
+        voucherDispatched: true,
+        message: "The confirmation voucher went to the guest — record their answer to it first, on the Reserve step, by message or as they told the desk.",
       },
     } as const;
   }
@@ -113,7 +152,24 @@ export async function runPreArrivalWindowActivationWorker(
   const expectedArrival = await resolveExpectedArrival(prisma, entry);
   // Never inside the grace of now: a same-day booking opened after its expected arrival gets the
   // grace from the moment it reaches Arrival, not a cut-off that already passed.
-  const cutoffAt = expectedArrival.at ? noShowCutoffFor(expectedArrival.at, cutoffWindowMinutes, now) : null;
+  // A change made at Arrival walks the booking back and returns it here (2026-10-29): it keeps the
+  // cut-off it had for this same expected arrival — the guest is no later for the desk having moved
+  // their room — and once that cut-off has fired, no new one is armed (a reactivation clears it on
+  // purpose). Each change used to re-arm a fresh grace from that moment, pushing the cut-off later.
+  const priorCutoff = expectedArrival.at
+    ? await prisma.timerRecord.findFirst({
+        where: { entryId, timerCode: "NO_SHOW_CUTOFF_W5", payload: { path: ["expectedAt"], equals: expectedArrival.at.toISOString() } },
+        orderBy: { createdAt: "desc" },
+        select: { status: true, dueAt: true },
+      })
+    : null;
+  const cutoffAt = !expectedArrival.at
+    ? null
+    : priorCutoff?.status === "FIRED"
+      ? null
+      : priorCutoff
+        ? priorCutoff.dueAt
+        : noShowCutoffFor(expectedArrival.at, cutoffWindowMinutes, now);
 
   await prisma.$transaction(async (tx) => {
     if (s4Dwell) await tx.stageDwellRecord.update({ where: { id: s4Dwell.id }, data: { exitedAt: now, dwellSeconds: Math.floor((now.getTime() - s4Dwell.enteredAt.getTime()) / 1000) } as any });
@@ -214,7 +270,7 @@ export async function runPreArrivalWindowActivationWorker(
       where: { entryId, timerCode: "NO_SHOW_CUTOFF_W5", status: "SCHEDULED" },
       orderBy: { createdAt: "desc" },
     });
-    if (!existing) await armNoShowCutoff(prisma, entryId, cutoffAt, "SYSTEM");
+    if (!existing) await armNoShowCutoff(prisma, entryId, cutoffAt, "SYSTEM", expectedArrival.at);
   }
 
   return { skipped: false, entryId } as const;
