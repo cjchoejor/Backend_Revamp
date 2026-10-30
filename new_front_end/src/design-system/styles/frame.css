@@ -398,11 +398,12 @@
 .ds .list-band.today td:not(.desk-root *) { background: var(--accent-soft); color: var(--accent-ink); border-bottom-color: var(--accent-line); }
 .ds .list-band .n:not(.desk-root *) { margin-left: 10px; font-weight: 600; color: var(--ink-3); }
 .ds .bookings-page .date-cell:not(.desk-root *) { white-space: nowrap; }
-/* The preview slides in from the left over the table, which never moves (2026-10-30, operator). It
-   sits under the bar at the top (z 40), so the bell and the person's panels still open over it; its
-   top is the bar's bottom, measured. A shadow, since it floats. */
-.ds .preview.preview-over:not(.desk-root *) { position: fixed; left: 0; bottom: 0; z-index: 38; width: min(420px, calc(100vw - 32px)); overflow: auto; border: 0; border-right: 1px solid var(--line-2); border-radius: 0; padding: var(--s4) var(--s5); box-shadow: 6px 0 24px rgba(27, 30, 28, .16); animation: pv-in .18s ease-out; }
-@keyframes pv-in { from { transform: translateX(-100%); } to { transform: none; } }
+/* The preview slides in from the right over the table, which never moves (2026-10-30, operator: first
+   from the left, then "show from the right side"). It sits under the bar at the top (z 40), so the
+   bell and the person's panels still open over it; its top is the bar's bottom, measured. A shadow,
+   since it floats. */
+.ds .preview.preview-over:not(.desk-root *) { position: fixed; right: 0; bottom: 0; z-index: 38; width: min(420px, calc(100vw - 32px)); overflow: auto; border: 0; border-left: 1px solid var(--line-2); border-radius: 0; padding: var(--s4) var(--s5); box-shadow: -6px 0 24px rgba(27, 30, 28, .16); animation: pv-in .18s ease-out; }
+@keyframes pv-in { from { transform: translateX(100%); } to { transform: none; } }
 @media (prefers-reduced-motion: reduce) { .ds .preview.preview-over:not(.desk-root *) { animation: none; } }
 /* A grid item grows to its widest content unless told otherwise, so a wide table inside a
    step (the S1 rooms-by-night grid over many nights) pushed the middle column under the side

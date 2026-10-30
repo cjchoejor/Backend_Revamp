@@ -622,9 +622,9 @@ function Preview({
   const nights = nightsOf(row.checkInDate, row.actualCheckOutDate ?? row.checkOutDate);
   const t = totalWord(m);
   const party = [row.adultCount ? plural(row.adultCount, "adult") : null, row.childCount ? plural(row.childCount, "child", "children") : null].filter(Boolean).join(" · ");
-  // The preview slides in from the left over the table, which stays exactly where it is (2026-10-30,
-  // operator: "an overlay on top of the actual table which comes from the left and stays there, that
-  // way the table won't move"). It starts under the bar at the top (and the "more" row when open),
+  // The preview slides in from the right over the table, which stays exactly where it is (2026-10-30,
+  // operator: "an overlay on top of the actual table … that way the table won't move", then "show
+  // from the right side"). It starts under the bar at the top (and the "more" row when open),
   // and stays until closed — ×, Escape, or the same row clicked again.
   const [top, setTop] = useState(52);
   useEffect(() => {
