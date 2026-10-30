@@ -18,15 +18,7 @@ import { Button, Chip, Dialog, Icon, type ButtonProps, type DialogRegister, type
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
 import { acknowledgeCommunication, listEntryCommunications, type EntryCommunication, type EntryCommunicationType } from "@/lib/api/entries";
-import {
-  getFolioDocuments,
-  openCancellationConfirmationPdf,
-  openConfirmationVoucherPdf,
-  openFolioDocumentPdf,
-  openInvoicePdf,
-  openQuotationPdf,
-  type FolioDocumentKind,
-} from "@/lib/api/documents";
+import { getFolioDocuments, openCancellationConfirmationPdf, openConfirmationVoucherPdf, openFolioDocumentPdf, openInvoicePdf, openQuotationPdf, type FolioDocumentKind, getNightsShorten, type PaperOf } from "@/lib/api/documents";
 import {
   CancellationVoucherPreview,
   FolioDocumentPreview,
@@ -2367,7 +2359,32 @@ export type PaperRef =
  * shortened, three or more nights in a row as the first and the last ("10–19 Mar"), or every night
  * named. Choice buttons, so the choice is seen.
  */
-export function NightsChoice({ each, onChange, label = "Nights on the paper" }: { each: boolean; onChange: (each: boolean) => void; label?: string }) {
+export function NightsChoice({
+  each,
+  onChange,
+  of,
+  label = "Nights",
+}: {
+  each: boolean;
+  onChange: (each: boolean) => void;
+  /** The paper — to say so when shortening changes nothing on it (a stay of one or two nights). */
+  of?: PaperOf | null;
+  label?: string;
+}) {
+  const { session } = useSession();
+  const key = of ? JSON.stringify(of) : null;
+  const q = useQuery({
+    queryKey: ["nights-shorten", key],
+    queryFn: () => getNightsShorten(session!, of!),
+    enabled: !!session && !!of,
+    staleTime: 30_000,
+  });
+  // A paper whose nights read the same either way says so, rather than offering a choice that
+  // changes nothing (2026-10-30, operator: "why do I not see any difference").
+  const same = q.data?.differs === false;
+  useEffect(() => {
+    if (same && each) onChange(false);
+  }, [same, each, onChange]);
   return (
     <div className="pf-item">
       <span className="pf-k">
@@ -2377,6 +2394,11 @@ export function NightsChoice({ each, onChange, label = "Nights on the paper" }: 
           11, 12 Mar. The figures are the same either way.
         </Help>
       </span>
+      {same ? (
+        <span className="pf-same" title="No room on this paper has three nights in a row, so shortening changes nothing">
+          the same either way — no 3 nights in a row
+        </span>
+      ) : (
       <Choice
         options={[
           ["SHORT", "Shortened"],
@@ -2385,6 +2407,7 @@ export function NightsChoice({ each, onChange, label = "Nights on the paper" }: 
         value={each ? "EACH" : "SHORT"}
         onChange={(v) => onChange(v === "EACH")}
       />
+      )}
     </div>
   );
 }
@@ -2426,6 +2449,16 @@ export function PaperDrawer({ paper, onClose }: { paper: PaperRef | null; onClos
     setNoPrices(false);
     setNightsEach(false);
   }, [paperKey]);
+  // The paper, so the nights choice can say when it changes nothing.
+  const nightsOf: PaperOf | null = !paper
+    ? null
+    : paper.kind === "quotation"
+      ? { quotationId: paper.id }
+      : paper.kind === "invoice"
+        ? { invoiceId: paper.id }
+        : paper.kind === "voucher"
+          ? { reservationId: paper.reservationId }
+          : { entryId: paper.entryId };
   // Which papers have the faces: a quotation both; a proforma in force, the voucher and the bill
   // papers their nights. A replaced or issued paper is shown as it was stored.
   const hasNights =
@@ -2461,7 +2494,8 @@ export function PaperDrawer({ paper, onClose }: { paper: PaperRef | null; onClos
         <div
           role="dialog"
           aria-label={paper.label}
-          style={{ width: "min(560px, 96vw)", background: "var(--surface)", borderLeft: "1px solid var(--line-2)", display: "flex", flexDirection: "column", boxShadow: "var(--shadow-dialog)" }}
+          // 680px so the paper's two choices sit on one line (2026-10-30, operator).
+          style={{ width: "min(680px, 96vw)", background: "var(--surface)", borderLeft: "1px solid var(--line-2)", display: "flex", flexDirection: "column", boxShadow: "var(--shadow-dialog)" }}
         >
           <div className="card-top" style={{ padding: "12px 16px", borderBottom: "1px solid var(--line)" }}>
             <h4 style={{ margin: 0 }}>
@@ -2485,7 +2519,7 @@ export function PaperDrawer({ paper, onClose }: { paper: PaperRef | null; onClos
           {paper.kind === "quotation" || hasNights ? (
             <div className="paper-faces">
               {paper.kind === "quotation" ? <PricesChoice hidden={noPrices} onChange={setNoPrices} /> : null}
-              {hasNights ? <NightsChoice each={nightsEach} onChange={setNightsEach} /> : null}
+              {hasNights ? <NightsChoice each={nightsEach} onChange={setNightsEach} of={nightsOf} /> : null}
             </div>
           ) : null}
           <div className="desk-root" style={{ overflow: "auto", flex: 1, padding: "8px 12px" }}>
@@ -2881,6 +2915,8 @@ export function QuotationSendDialog({
       open
       onClose={onClose}
       busy={send.isPending}
+      // Wide enough for the paper's two choices on one line (2026-10-30).
+      width={720}
       title={`Send quotation ${target.referenceNumber}`}
       caseLines={[
         `Version ${target.versionNumber}`,
@@ -2937,7 +2973,7 @@ export function QuotationSendDialog({
       </div>
       <div className="paper-faces in-dialog">
         <PricesChoice hidden={hidePrices} onChange={setHidePrices} />
-        <NightsChoice each={nightsEach} onChange={setNightsEach} />
+        <NightsChoice each={nightsEach} onChange={setNightsEach} of={{ quotationId: target.id }} />
       </div>
       <div className="field">
         <label>
@@ -2994,6 +3030,7 @@ function InvoiceSendDialog({
       open
       onClose={onClose}
       busy={send.isPending}
+      width={720}
       title={`Send ${INVOICE_WORD[target.invoiceType] ?? "invoice"} ${target.invoiceNumber ?? target.id}`}
       caseLines={[entry.id, target.dispatchedAt ? "Already sent once — this sends it again" : "Not sent yet"]}
       footer={
@@ -3025,7 +3062,7 @@ function InvoiceSendDialog({
       </div>
       {isProforma ? (
         <div className="paper-faces in-dialog">
-          <NightsChoice each={nightsEach} onChange={setNightsEach} />
+          <NightsChoice each={nightsEach} onChange={setNightsEach} of={{ invoiceId: target.id }} />
         </div>
       ) : null}
     </DsDialog>

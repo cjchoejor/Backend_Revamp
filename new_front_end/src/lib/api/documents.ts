@@ -204,3 +204,18 @@ export function fetchFolioDocumentPreviewHtml(session: Session, entryId: string,
 export function openFolioDocumentPdf(session: Session, entryId: string, kind: FolioDocumentKind, opts?: PaperFace): Promise<void> {
   return openPdf(session, `/api/entries/${entryId}/folio-documents/${kind}/pdf${faceQuery({ nightsEach: opts?.nightsEach })}`);
 }
+
+/** Which paper — any one id finds its booking. */
+export type PaperOf = { quotationId?: string; invoiceId?: string; reservationId?: string; entryId?: string };
+
+/**
+ * Whether the paper reads differently with its nights shortened and with every night named
+ * (2026-10-30) — on a stay of one or two nights, or rooms never held three nights in a row, the two
+ * are the same. `GET /api/papers/nights-shorten`.
+ */
+export async function getNightsShorten(session: Session, of: PaperOf): Promise<{ entryId: string; differs: boolean }> {
+  const q = new URLSearchParams(Object.entries(of).filter(([, v]) => !!v) as Array<[string, string]>);
+  const res = await fetch(`/api/papers/nights-shorten?${q.toString()}`, { headers: authHeaders(session), credentials: "same-origin" });
+  if (!res.ok) throw new Error(`Could not read the paper's nights (HTTP ${res.status})`);
+  return res.json();
+}

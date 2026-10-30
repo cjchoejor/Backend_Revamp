@@ -123,7 +123,7 @@ export function HeldPaperRow({ h, tz, onView }: { h: HeldDocument; tz?: string; 
         ) : null}
         {choice === "EMAIL" ? (
           <div className="paper-faces in-dialog">
-            <NightsChoice each={nightsEach} onChange={setNightsEach} />
+            <NightsChoice each={nightsEach} onChange={setNightsEach} of={{ entryId: h.entryId }} />
           </div>
         ) : null}
         {choice === "WHATSAPP" ? (

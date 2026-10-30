@@ -1164,6 +1164,7 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
         open={sendOpen}
         onClose={() => setSendOpen(false)}
         busy={send.isPending}
+        width={720}
         title="Send the confirmation voucher"
         caseLines={[res.id]}
         help="The same email and PDF Reserve sent, recorded as a new send with a fresh reply window." 
@@ -1186,7 +1187,7 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
           <input className="input" type="email" value={sendTo} onChange={(e) => setSendTo(e.target.value)} placeholder="guest@example.com" />
         </div>
         <div className="paper-faces in-dialog">
-          <NightsChoice each={nightsEach} onChange={setNightsEach} />
+          <NightsChoice each={nightsEach} onChange={setNightsEach} of={{ reservationId: res.id }} />
         </div>
       </DsDialog>
     </StepCard>

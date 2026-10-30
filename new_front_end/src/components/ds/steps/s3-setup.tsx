@@ -1537,6 +1537,7 @@ function ProformaCard({
           open
           onClose={() => setSendOpen(false)}
           busy={send.isPending}
+          width={720}
           title={`Send proforma ${sendTarget.invoiceNumber ?? sendTarget.id}`}
           caseLines={[
             asks ? `It ${asks}` : "The advance it asks for is being read",
@@ -1558,7 +1559,7 @@ function ProformaCard({
         >
           <SendToField entry={entry} value={to} onChange={setTo} label="Email address" />
           <div className="paper-faces in-dialog">
-            <NightsChoice each={nightsEach} onChange={setNightsEach} />
+            <NightsChoice each={nightsEach} onChange={setNightsEach} of={{ invoiceId: sendTarget.id }} />
           </div>
         </DsDialog>
       ) : null}

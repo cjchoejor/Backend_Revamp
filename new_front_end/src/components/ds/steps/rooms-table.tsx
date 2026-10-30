@@ -269,7 +269,8 @@ export function RoomsTable({
         </div>
       ) : null}
       {!past && mode === "change" ? (
-        <div className="rooms-tablebar">
+        // While the table is being changed the step's move on is put away (2026-10-30).
+        <div className="rooms-tablebar" data-changing-booking={editing ? "" : undefined}>
           {editing ? (
             <>
               <span className="rooms-hint editing">
