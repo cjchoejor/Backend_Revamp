@@ -683,6 +683,12 @@ function TaxInvoicePane({ entry, tz }: { entry: EntryDetail; tz: string }) {
   const [paper, setPaper] = useState<PaperRef | null>(null);
   const { invoices, finals, lastSent, lateSinceInvoice } = useInvoiceFacts(entry, tz);
   const others = invoices.filter((i) => i.invoiceType !== "FINAL");
+  // Issue and send sits beside the paper's own Preview and PDF, and asks in a pop-up (2026-10-30,
+  // operator: "the issue and send button is way below, keep it next to the preview and pdf").
+  const index = useFolioIndex(entry);
+  const draft = index.data?.documents.find((x) => x.kind === "tax-invoice") ?? null;
+  const [issuing, setIssuing] = useState(false);
+  const covered = !!lastSent && !lateSinceInvoice;
   const row = (inv: InvoiceSummary) => (
     <div key={inv.id} className="row-acts sm">
       <span className={inv.state === "SUPERSEDED" ? "meta" : undefined}>
@@ -732,7 +738,7 @@ function TaxInvoicePane({ entry, tz }: { entry: EntryDetail; tz: string }) {
         status={
           lateSinceInvoice ? (
             <span className="warn-ink">
-              A charge was added after {invoiceLabel(lastSent!)} went out — it isn&rsquo;t on that invoice. Issue a new one below.
+              A charge was added after {invoiceLabel(lastSent!)} went out — it isn&rsquo;t on that invoice. Issue and send a new one.
             </span>
           ) : lastSent ? (
             <span className="ok-ink">
@@ -741,11 +747,54 @@ function TaxInvoicePane({ entry, tz }: { entry: EntryDetail; tz: string }) {
           ) : finals.length ? (
             <span className="warn-ink">Issued but not sent yet — send it from its row.</span>
           ) : (
-            <span className="warn-ink">No tax invoice yet — issue one below.</span>
+            <span className="warn-ink">No tax invoice yet — look at the draft, then issue and send it.</span>
           )
         }
       >
-        {finals.length ? <div style={{ display: "grid", gap: 4 }}>{finals.map(row)}</div> : null}
+        {finals.length ? (
+          <div style={{ display: "grid", gap: 4 }}>{finals.map(row)}</div>
+        ) : (
+          // Before the first one: the draft, with its Preview and PDF and the act beside them.
+          <div className="row-acts sm">
+            <span>
+              <b>Tax invoice</b> · draft · not issued yet
+            </span>
+            <Button
+              kind="quiet"
+              compact
+              icon="eye"
+              state={draft?.available ? "default" : "inert"}
+              title={draft?.available ? undefined : draft?.unavailableReason ?? undefined}
+              onClick={() => setPaper({ kind: "folio", entryId: entry.id, doc: "tax-invoice", label: "Tax invoice · draft", refreshKey: `${entry.updatedAt}|${index.data?.asAt ?? ""}` })}
+            >
+              Preview
+            </Button>
+            <Button
+              kind="quiet"
+              compact
+              icon="file"
+              state={draft?.available ? "default" : "inert"}
+              title={draft?.available ? undefined : draft?.unavailableReason ?? undefined}
+              onClick={() => session && openFolioDocumentPdf(session, entry.id, "tax-invoice").catch((e) => toastRefusal(e, "The PDF could not be opened"))}
+            >
+              PDF
+            </Button>
+            <Live>
+              <Button className="go" compact icon="send" onClick={() => setIssuing(true)}>
+                Issue and send
+              </Button>
+            </Live>
+          </div>
+        )}
+        {finals.length ? (
+          <Live>
+            <div className="row-acts" style={{ marginTop: 6 }}>
+              <Button className={covered ? undefined : "go"} kind={covered ? "secondary" : undefined} compact icon="send" onClick={() => setIssuing(true)}>
+                Issue and send a new one
+              </Button>
+            </div>
+          </Live>
+        ) : null}
         {finals.some((i) => i.state === "DRAFT") ? (
           <Live>
             <div className="form2" style={{ marginTop: 6 }}>
@@ -762,29 +811,27 @@ function TaxInvoicePane({ entry, tz }: { entry: EntryDetail; tz: string }) {
           </details>
         ) : null}
       </StepCard>
-      <Live>
-        <InlineWay render={(done) => <IssueTaxInvoice entry={entry} onDone={done} hasOne={!!lastSent && !lateSinceInvoice} />} />
-      </Live>
+      <IssueTaxInvoice entry={entry} open={issuing} onDone={() => setIssuing(false)} hasOne={covered} />
       <PaperDrawer paper={paper} onClose={() => setPaper(null)} />
     </>
   );
 }
 
-function IssueTaxInvoice({ entry, onDone, hasOne }: { entry: EntryDetail; onDone: () => void; hasOne: boolean }) {
+function IssueTaxInvoice({ entry, open, onDone, hasOne }: { entry: EntryDetail; open: boolean; onDone: () => void; hasOne: boolean }) {
   const booked = useBookedBy(entry);
   const issueSend = useIssueAndSend(entry, "final-v1");
   const [sendTo, setSendTo] = useSendTo(entry);
   return (
     <DsDialog
-      open
+      open={open}
       onClose={onDone}
-      title="Issue and send a new tax invoice"
+      title="Issue and send a tax invoice"
       caseLines={[<b key="p">{booked.payer}</b>, entry.id]}
       busy={issueSend.isPending}
       footer={
         <>
           <NotNow onClick={onDone} busy={issueSend.isPending} />
-          <Button icon="lock" state={issueSend.isPending ? "working" : "default"} workingLabel="Issuing…" onClick={() => issueSend.mutate(sendTo, { onSettled: onDone })}>
+          <Button className="go" icon="lock" state={issueSend.isPending ? "working" : "default"} workingLabel="Issuing…" onClick={() => issueSend.mutate(sendTo, { onSettled: onDone })}>
             Issue and send
           </Button>
         </>
