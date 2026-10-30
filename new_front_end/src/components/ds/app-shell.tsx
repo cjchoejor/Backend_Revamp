@@ -98,6 +98,9 @@ export function AppShell({ children }: { children: ReactNode }) {
   const housekeeping = useHousekeepingBoard();
   const lateRooms = (housekeeping.data?.rooms ?? []).filter((r) => r.state === "TO_CLEAN" && r.toClean?.overdue);
   const secondPage = SECOND.some((s) => isOn(pathname, s.href));
+  // The six main pages take the stages' blue palette (2026-10-30, operator: "make the theme colour of
+  // that page like how we have in the stages UI"); the pages under "more" keep the desk's own.
+  const bluePage = MAIN.some((m) => isOn(pathname, m.href));
   const [secondOpen, setSecondOpen] = useState(false);
   const bell = usePanel();
   const user = usePanel();
@@ -160,7 +163,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   return (
     <div className="ds" data-ds-overlays>
       <IconSprite />
-      <div className="shell">
+      <div className={`shell${bluePage ? " theme-blue" : ""}`}>
         <div className="topbar">
           <Link href="/today" className="mark" aria-label="Today">
             {/* eslint-disable-next-line @next/next/no-img-element */}

@@ -20,6 +20,7 @@ import { fmtDate, fmtRange, fmtStamp, money, nightsOf, plural, weekdayOf } from 
 import { bookerOfRow, channelWord, factsFromRow, guestNameOf, isNamed, rowNameOf, standingOf } from "@/lib/ds/status";
 import { STEP_NAMES, stepNoOfStage } from "@/lib/ds/steps";
 import { DateInput } from "@/components/ds/date-input";
+import { Overlay } from "@/components/ds/steps/kit";
 
 const GROUPS = ["Upcoming", "In-house", "Departed", "All"] as const;
 const PAGE = 50;
@@ -338,7 +339,7 @@ function BookingsScreen() {
   };
 
   return (
-    <div className={`page bookings-page${preview ? " with-preview" : ""}`}>
+    <div className="page bookings-page">
       <div style={{ display: "grid", gap: "var(--s3)", alignContent: "start", minHeight: 0 }}>
         <div className="page-head">
           <div>
@@ -621,8 +622,30 @@ function Preview({
   const nights = nightsOf(row.checkInDate, row.actualCheckOutDate ?? row.checkOutDate);
   const t = totalWord(m);
   const party = [row.adultCount ? plural(row.adultCount, "adult") : null, row.childCount ? plural(row.childCount, "child", "children") : null].filter(Boolean).join(" · ");
+  // The preview slides in from the right over the table, which stays exactly where it is (2026-10-30,
+  // operator: "an overlay on top of the actual table … that way the table won't move", then "show
+  // from the right side"). It starts under the bar at the top (and the "more" row when open),
+  // and stays until closed — ×, Escape, or the same row clicked again.
+  const [top, setTop] = useState(52);
+  useEffect(() => {
+    const measure = () => {
+      const bar = document.querySelector(".shell .subrow") ?? document.querySelector(".shell .topbar");
+      if (bar) setTop(Math.max(0, Math.round(bar.getBoundingClientRect().bottom)));
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, []);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !document.querySelector(".scrim.open")) onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
   return (
-    <aside className="preview" aria-label="Booking preview">
+    <Overlay>
+    <aside className="preview preview-over" aria-label="Booking preview" style={{ top }}>
       <div className="pv-head">
         <div>
           <h3 className={isNamed(g) ? "" : "name-i"}>{rowNameOf(row)}</h3>
@@ -714,6 +737,7 @@ function Preview({
         ) : null}
       </dl>
     </aside>
+    </Overlay>
   );
 }
 

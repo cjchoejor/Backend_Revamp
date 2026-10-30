@@ -301,6 +301,26 @@ export function rowNameOf(r: {
   return caller ? `${caller} · caller` : "guest to be named";
 }
 
+/**
+ * Who rang for a booking, for the house chart's "Name by caller" (2026-10-30, operator: "view the
+ * booking of each in the chart by caller's name"). The caller as recorded on the enquiry (an
+ * agency's or a company's caller is recorded as the party itself); else their phone or email. An
+ * enquiry from before callers were kept has none: on an agency's or a company's booking the party
+ * rang, on a direct one the guest did (the caller card's own reading). Else it says so.
+ */
+export function callerOfBooking(r: {
+  guestProfile?: { firstName?: string | null; lastName?: string | null; displayName?: string | null } | null;
+  inquiry?: { callerTitle?: string | null; callerFirstName?: string | null; callerLastName?: string | null; callerPhone?: string | null; callerEmail?: string | null } | null;
+  partyName?: string | null;
+}): string {
+  const inq = r.inquiry;
+  const recorded = callerNameOf(inq) ?? inq?.callerPhone?.trim() ?? inq?.callerEmail?.trim() ?? null;
+  if (recorded) return recorded;
+  if (r.partyName?.trim()) return r.partyName.trim();
+  if (isNamed(r.guestProfile)) return guestNameOf(r.guestProfile);
+  return "caller not recorded";
+}
+
 export function rowNamed(r: { guestProfile?: { firstName?: string | null; lastName?: string | null; displayName?: string | null } | null }): boolean {
   return isNamed(r.guestProfile);
 }
