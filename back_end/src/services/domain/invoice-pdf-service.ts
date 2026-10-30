@@ -57,7 +57,7 @@ import {
   resolveOperatorAdvanceRequirement,
 } from "./s3-payment-service.js";
 import { resolveOperativeQuotation } from "../../lib/operative-quotation.js";
-import { labelRoomNights, roomNightsForEntry, roomNightsVary } from "../../lib/room-nights-for-entry.js";
+import { labelRoomNights, roomNightsForEntry } from "../../lib/room-nights-for-entry.js";
 
 type QuotationTerms = {
   roomCount?: number;
@@ -287,19 +287,18 @@ async function buildProformaDocRender(prisma: PrismaClient, inv: LoadedInvoice) 
   // Per-night figure consistent with the printed total (composition totals are stay-wide).
   const rateValue = Number((totalAmount / Math.max(1, p.nights)).toFixed(2));
 
-  // A booking that moves rooms mid-stay: name each room with the nights it is held for, since
-  // this document has no per-room table to date (2026-10-06, operator: "do the same for proforma
-  // and other papers"). On a plain booking the map is empty and the line is not printed — the
-  // Stay row above already says it.
+  // Each room with the nights it is held for, since this document has no per-room table to date
+  // (2026-10-06, operator: "do the same for proforma and other papers") — on every booking since
+  // 2026-10-30, the rooms the same every night or not, each night named.
   const piRoomNights = await roomNightsForEntry(prisma, inv.entryId, { asOf: inv.createdAt }).catch(
     () => new Map<string, string[]>(),
   );
   // Rooms are named by their type, not their number (2026-10-28, operator: "in the quotation and
   // proforma invoice can it not show the room numbers, just the room type") — "2 × Deluxe Double
-  // (06–07 Oct) · Standard Double (07–08 Oct)", rooms of one type on the same nights counted
-  // together, earliest nights first.
+  // (06 Oct) · Standard Double (07 Oct)", rooms of one type on the same nights counted together,
+  // earliest nights first.
   let roomNightsLine: string | null = null;
-  if (roomNightsVary(piRoomNights)) {
+  if (piRoomNights.size > 0) {
     const types = new Map<string, string>();
     for (const r of await prisma.room.findMany({
       where: { id: { in: [...piRoomNights.keys()] } },

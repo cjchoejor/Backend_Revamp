@@ -261,3 +261,25 @@ export function buildPaperPriceLines(rooms: readonly PriceLineRoom[]): PriceLine
   }
   return groups.flatMap((g) => buildRoomPriceLines({ ...g.first, hideRoomNumber: true, roomCount: g.count }));
 }
+
+/**
+ * The rows as the desk shows them: a room given by number keeps its own numbered rows, and the
+ * rooms the system chose (they carry a `roomLabel`) read as the paper reads them — by their type,
+ * identical rooms counted, "Premium Suite · 2 rooms" — never "Premium Suite · room 1, room 2"
+ * (2026-10-30, operator). Their rows stand where the first of them stood.
+ */
+export function buildDeskPriceLines(rooms: readonly PriceLineRoom[]): PriceLine[] {
+  const quiet = rooms.filter((r) => r.roomLabel);
+  const lines: PriceLine[] = [];
+  let quietDone = false;
+  for (const r of rooms) {
+    if (!r.roomLabel) {
+      lines.push(...buildRoomPriceLines(r));
+      continue;
+    }
+    if (quietDone) continue;
+    quietDone = true;
+    lines.push(...buildPaperPriceLines(quiet.map((q) => ({ ...q, roomLabel: null }))));
+  }
+  return lines;
+}

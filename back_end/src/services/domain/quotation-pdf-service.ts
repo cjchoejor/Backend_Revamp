@@ -23,10 +23,10 @@
  */
 import { Prisma, type PrismaClient, type QuotationLine } from "@prisma/client";
 import { NotFoundError } from "../../lib/errors.js";
-import { labelRoomNights, roomNightsForEntry, roomNightsVary } from "../../lib/room-nights-for-entry.js";
+import { labelRoomNights, roomNightsForEntry, stayNightDates } from "../../lib/room-nights-for-entry.js";
 import {
   buildPaperPriceLines,
-  buildRoomPriceLines,
+  buildDeskPriceLines,
   mealPlanParts,
   priceLinesToCents,
   roomOccupantsLabel,
@@ -204,15 +204,18 @@ async function buildQuotationDocRender(
   const hidePrices = opts?.hidePrices === true;
   const roomNumbers = opts?.roomNumbers === true;
 
-  // Which nights each room is held for. On a plain booking — every room for the whole stay —
-  // this comes back empty and no Nights column is printed: the Stay line says it once.
+  // Which nights each room is held for — printed on every quotation, one night or many
+  // (2026-10-30, operator: "make it like the 5th image"). A room the seal does not name runs the
+  // whole stay.
   const roomNights = await roomNightsForEntry(prisma, q.entryId, { segmentId: q.segmentId, asOf: q.createdAt }).catch(
     () => new Map<string, string[]>(),
   );
-  const datesShown = roomNightsVary(roomNights);
+  const wholeStay = stayNightDates(q.entry.checkInDate, q.entry.checkOutDate);
+  const datesShown = true;
   const nightsLabelFor = (roomId: string) => {
     const n = roomNights.get(roomId);
-    return n && n.length ? labelRoomNights(n) : null;
+    const list = n && n.length ? n : wholeStay;
+    return list.length ? labelRoomNights(list) : null;
   };
   const terms = (q.commercialTerms as QuotationTerms) ?? {};
   const nights = Math.max(1, Number(terms?.pricingBreakdown?.nights ?? 1));
@@ -401,14 +404,7 @@ async function buildQuotationDocRender(
         datesLabel: nightsLabelFor(r.roomId),
         roomLabel: opts?.roomLabels?.get(r.roomId) ?? null,
       };
-      if (roomNumbers) {
-        for (const line of buildRoomPriceLines(priceRoom)) {
-          linesForTemplate.push(line);
-          printedRowsTotal += line.amount;
-        }
-      } else {
-        paperRooms.push(priceRoom);
-      }
+      paperRooms.push(priceRoom);
 
       // The archival snapshot keeps its one-row-per-room, tax-inclusive shape.
       snapshotLines.push({
@@ -420,8 +416,9 @@ async function buildQuotationDocRender(
       });
       totalAmount += Number(r.total);
     }
-    // The paper: each room by its type, identical rooms set out once.
-    for (const line of roomNumbers ? [] : buildPaperPriceLines(paperRooms)) {
+    // The paper: each room by its type, identical rooms set out once. The desk: a room given by
+    // number by its number, the system's rooms by their type, counted.
+    for (const line of roomNumbers ? buildDeskPriceLines(paperRooms) : buildPaperPriceLines(paperRooms)) {
       linesForTemplate.push(line);
       printedRowsTotal += line.amount;
     }
@@ -443,6 +440,7 @@ async function buildQuotationDocRender(
     for (let i = 0; i < nights; i++) {
       const date = new Date(checkIn.getTime() + i * 86_400_000);
       linesForTemplate.push({
+        dates: labelRoomNights([date.toISOString().slice(0, 10)]),
         description: [legacyTypeName, occupantsString, mealPlanDisplay || null, extraBeds !== "None" ? extraBeds : null]
           .filter(Boolean)
           .join(" · "),
