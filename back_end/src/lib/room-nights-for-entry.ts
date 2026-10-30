@@ -81,6 +81,45 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
  */
 export type NightsMode = "SHORT" | "EACH";
 
+/** Shortening starts at this many nights in a row ("10–12 Mar"); fewer are always named. */
+export const SHORT_RUN = 3;
+
+/** Whether shortening changes anything in these night lists — some list has SHORT_RUN nights in a row. */
+export function nightsShorten(lists: ReadonlyArray<readonly string[]>): boolean {
+  for (const list of lists) {
+    const sorted = [...new Set(list.map((n) => String(n).slice(0, 10)))].sort();
+    let run = 0;
+    let prev: string | null = null;
+    for (const n of sorted) {
+      run = prev && nextDayKey(prev) === n ? run + 1 : 1;
+      if (run >= SHORT_RUN) return true;
+      prev = n;
+    }
+  }
+  return false;
+}
+
+/**
+ * Whether a booking's papers read differently shortened and with every night named (2026-10-30,
+ * operator: "why do I not see any difference" — on a stay of one or two nights there is none). Read
+ * off the rooms' nights the papers print: the sealed pick (the whole stay for a plain one) and the
+ * assignment rows.
+ */
+export async function entryNightsShorten(
+  prisma: PrismaClient,
+  entryId: string,
+  /** A paper made at a time reads the pick in force then (a quotation, a proforma). */
+  opts?: { segmentId?: string | null; asOf?: Date | null },
+): Promise<boolean> {
+  const entry = await prisma.entry.findUnique({ where: { id: entryId }, select: { checkInDate: true, checkOutDate: true } });
+  if (!entry) return false;
+  const picked = await roomNightsForEntry(prisma, entryId, opts).catch(() => new Map<string, string[]>());
+  if (opts?.asOf) return nightsShorten([...picked.values()]);
+  if (stayNightDates(entry.checkInDate, entry.checkOutDate).length < SHORT_RUN) return false;
+  const assigned = await assignedRoomNights(prisma, entryId, { checkIn: entry.checkInDate, checkOut: entry.checkOutDate }).catch(() => []);
+  return nightsShorten([...picked.values(), ...assigned.map((a) => a.nights)]);
+}
+
 /** `?nights=each` / `nightsEach: true` → EACH; anything else the default. */
 export function readNightsMode(v: unknown): NightsMode {
   if (v === true) return "EACH";
@@ -125,7 +164,7 @@ export function labelRoomNights(nights: readonly string[], mode: NightsMode = "S
     days = null;
   };
   for (const run of runs) {
-    if (mode === "SHORT" && run.length >= 3) {
+    if (mode === "SHORT" && run.length >= SHORT_RUN) {
       flush();
       const a = parts(run[0]);
       const b = parts(run[run.length - 1]);

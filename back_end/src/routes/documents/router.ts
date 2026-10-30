@@ -13,7 +13,7 @@ import { requireActorLevel } from "../../middleware/auth.js";
 import { NotFoundError } from "../../lib/errors.js";
 import { readDocument } from "../../lib/document-storage.js";
 import { generateOrLoadQuotationPdf, quotationPriceLines, renderQuotationPdfFace, renderQuotationPreviewHtml } from "../../services/domain/quotation-pdf-service.js";
-import { readNightsMode } from "../../lib/room-nights-for-entry.js";
+import { entryNightsShorten, readNightsMode } from "../../lib/room-nights-for-entry.js";
 import { generateOrLoadInvoicePdf, renderInvoicePreviewHtml, renderProformaPdfFace } from "../../services/domain/invoice-pdf-service.js";
 import { generateOrLoadConfirmationVoucherPdf } from "../../services/domain/confirmation-voucher-pdf-service.js";
 import { generateCancellationConfirmationPdf } from "../../services/domain/cancellation-confirmation-pdf-service.js";
@@ -93,6 +93,37 @@ documentsRouter.get("/quotations/:id/preview-html", requireActorLevel("L1"), asy
     // Never cache — the preview must track live edits to the draft terms.
     res.setHeader("Cache-Control", "no-store");
     res.send(html);
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
+ * GET /api/papers/nights-shorten?quotationId=|invoiceId=|reservationId=|entryId= — whether the
+ * paper reads differently with its nights shortened and with every night named (2026-10-30). On a
+ * stay of one or two nights, or rooms never held three nights in a row, the two are the same, and
+ * the desk says so instead of offering a choice that changes nothing. Staff-only (L1+).
+ */
+documentsRouter.get("/papers/nights-shorten", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const q = req.query as Record<string, string | undefined>;
+    let entryId = q.entryId ?? null;
+    // A quotation or a proforma is judged on the pick it was made on.
+    let asOf: { segmentId?: string | null; asOf?: Date | null } | undefined;
+    if (!entryId && q.quotationId) {
+      const quote = await prisma.quotation.findUnique({ where: { id: q.quotationId }, select: { entryId: true, segmentId: true, createdAt: true } });
+      entryId = quote?.entryId ?? null;
+      if (quote) asOf = { segmentId: quote.segmentId, asOf: quote.createdAt };
+    }
+    if (!entryId && q.invoiceId) {
+      const inv = await prisma.invoice.findUnique({ where: { id: q.invoiceId }, select: { entryId: true, createdAt: true } });
+      entryId = inv?.entryId ?? null;
+      if (inv) asOf = { asOf: inv.createdAt };
+    }
+    if (!entryId && q.reservationId) entryId = (await prisma.reservation.findUnique({ where: { id: q.reservationId }, select: { entryId: true } }))?.entryId ?? null;
+    if (!entryId) throw new NotFoundError("Paper");
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ entryId, differs: await entryNightsShorten(prisma, entryId, asOf) });
   } catch (e) {
     next(e);
   }
