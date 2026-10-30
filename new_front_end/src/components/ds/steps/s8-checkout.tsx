@@ -453,8 +453,8 @@ function DepartureHandoff({ entry, live, tz }: { entry: EntryDetail; live: boole
     ? "only while the booking is at Check-out"
     : !flag
       ? many
-        ? "inspect every room in The keys and the rooms first"
-        : "record the inspection in The keys and the rooms first"
+        ? "inspect every room in The rooms first"
+        : "record the inspection in The rooms first"
       : undefined;
 
   return (
@@ -1463,6 +1463,7 @@ function Departure({ entry, live }: { entry: EntryDetail; live: boolean }) {
         backEarlier: rs.some((r) => r.keyReturnedAt) && !rs.some((r) => r.keyIssuedAt && !r.keyReturnedAt && !r.keyLostAt),
         lost: rs.some((r) => r.keyLostAt),
         lostNote: rs.find((r) => r.keyLostAt)?.keyLostNote ?? null,
+        returnedAt: rs.map((r) => r.keyReturnedAt ?? "").sort().pop() || null,
       }))
       .filter((k) => k.outstanding || k.backEarlier || k.lost)
       .sort((a, b) => a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true }));
@@ -1543,18 +1544,32 @@ function Departure({ entry, live }: { entry: EntryDetail; live: boolean }) {
   const released = rooms.length > 0 && rooms.every((r) => r.room?.currentClaimState === "DEPARTED_DIRTY" || r.room?.currentClaimState === "DEPARTED_CLEAN");
   const onAccount = !!entry.folio?.billingModel && ON_ACCOUNT_MODELS.has(entry.folio.billingModel);
 
-  // Folds once every key is back and every room inspected or put off — finished by the presses in it.
-  useFinishWhenMet("departure");
+  // Each section folds once its own presses finish it; the rooms open after the keys (2026-10-30).
+  useFinishWhenMet("keys");
+  useFinishWhenMet("rooms");
   const insp = useRoomInspections(entry);
   const inspRooms = insp.data?.rooms ?? [];
   const doneRooms = inspRooms.filter((r) => r.state === "DONE");
   const putOff = inspRooms.filter((r) => r.state === "PUT_OFF").length;
   const damaged = inspRooms.filter((r) => r.damageFound).length;
-  const keysLine = keyReturn
-    ? keyReturn.keyCountLost
-      ? `${keyReturn.keyCountReturned} of ${keyReturn.keyCountIssued} keys returned · ${keyReturn.keyCountLost} lost`
-      : "Keys returned"
-    : "";
+  // Once recorded, every room's key is counted — one taken back during the stay included (2026-10-30:
+  // a three-room booking read "2 of 2 returned").
+  const returnedRooms = keyPlan.filter((k) => !k.outstanding && !k.lost);
+  const lostRooms = keyPlan.filter((k) => !k.outstanding && k.lost);
+  const earlierRooms = keyReturn
+    ? returnedRooms.filter((k) => !!k.returnedAt && new Date(k.returnedAt).getTime() < new Date(keyReturn.returnedAt).getTime() - 1000)
+    : [];
+  const keysLine = !keyReturn
+    ? ""
+    : roomWise
+      ? lostRooms.length
+        ? `${returnedRooms.length} of ${plural(keyPlan.length, "key")} returned · ${lostRooms.length} lost`
+        : keyPlan.length > 1
+          ? `All ${keyPlan.length} keys returned`
+          : "The key returned"
+      : keyReturn.keyCountLost
+        ? `${keyReturn.keyCountReturned} of ${keyReturn.keyCountIssued} keys returned · ${keyReturn.keyCountLost} lost`
+        : "Keys returned";
   const roomsLine =
     inspRooms.length === 1
       ? inspRooms[0].state === "PUT_OFF"
@@ -1567,16 +1582,41 @@ function Departure({ entry, live }: { entry: EntryDetail; live: boolean }) {
     ? `They leave with the master bill — charged to ${booked.payer}, nothing due from them at the desk.`
     : "They leave with their tax invoice, sent — and printed if they want paper.";
 
+  const roomsWord = (ks: Array<{ roomNumber: string }>) => (ks.length > 1 ? `Rooms ${ks.map((k) => k.roomNumber).join(", ")}` : `Room ${ks[0]?.roomNumber ?? ""}`);
+
+  // Two sections (2026-10-30, operator: "after keys are returned, it should then show the rooms
+  // section, prompting the user to do this step as well; before that minimise it"): the keys, then
+  // the rooms, which waits under its title until the keys are on record.
   return (
+    <>
     <StepCard
-      flow="departure"
-      title="The keys and the rooms"
-      meta={`Each room's key back, and each room inspected or put off to after the departure. ${leavesWith} A printed receipt for the payment can't be made yet — the tax invoice shows what was paid. The stay stays on ${booked.guest}'s record; closing the booking seals it.`}
-      summary={[keysLine, roomsLine].filter(Boolean).join(" · ")}
+      flow="keys"
+      title="The keys"
+      meta="Each room's key returned or lost — a lost key says what happened, kept with its room. Nothing is charged for a lost key."
+      summary={keysLine}
     >
-      <Facts wide>
-        <Fact k="Keys">
-          {keyReturn ? (
+          {keyReturn && roomWise ? (
+            <div style={{ display: "grid", gap: 4 }}>
+              <span>
+                {lostRooms.length ? (
+                  <Chip tone="warning" icon="key">
+                    {lostRooms.length === 1 ? "a key lost" : `${lostRooms.length} keys lost`}
+                  </Chip>
+                ) : (
+                  <Chip tone="success" icon="check">
+                    returned
+                  </Chip>
+                )}{" "}
+                {returnedRooms.length} of {plural(keyPlan.length, "key")} returned
+                {earlierRooms.length ? <span className="meta"> · {roomsWord(earlierRooms)} during the stay</span> : null}
+              </span>
+              {lostRooms.map((k) => (
+                <span key={k.roomId} className="sm warn-ink">
+                  Room {k.roomNumber}&rsquo;s key lost{k.lostNote ? <> — &ldquo;{k.lostNote}&rdquo;</> : null}
+                </span>
+              ))}
+            </div>
+          ) : keyReturn ? (
             <span>
               {keyReturn.keyCountLost ? (
                 <Chip tone="warning" icon="key">
@@ -1588,12 +1628,6 @@ function Departure({ entry, live }: { entry: EntryDetail; live: boolean }) {
                 </Chip>
               )}{" "}
               {keyReturn.keyCountReturned} of {keyReturn.keyCountIssued} returned
-              {keyReturn.lostRoomIds?.length ? (
-                <b className="warn-ink">
-                  {" "}
-                  · lost: {keyReturn.lostRoomIds.map((id) => `Room ${keyPlan.find((k) => k.roomId === id)?.roomNumber ?? "?"}`).join(", ")}
-                </b>
-              ) : null}
               <span className="meta">
                 {keyReturn.countReconciled && !keyReturn.keyCountLost ? " · all accounted for" : keyReturn.reconciliationNote ? ` · “${keyReturn.reconciliationNote}”` : ""}
               </span>
@@ -1726,24 +1760,19 @@ function Departure({ entry, live }: { entry: EntryDetail; live: boolean }) {
               </Live>
             </div>
           )}
-        </Fact>
-
-        <Fact k="The room">
-          <div style={{ display: "grid", gap: 6 }}>
-            <span>
-              {released ? (
-                <Chip tone="success" icon="check">
-                  released to housekeeping
-                </Chip>
-              ) : (
-                <>released to housekeeping when the bill is settled</>
-              )}
-            </span>
-            <RoomInspectionGrid entry={entry} live={live} />
-          </div>
-        </Fact>
-      </Facts>
     </StepCard>
+    <StepCard
+      flow="rooms"
+      flowAfter="keys"
+      flowAfterOnly
+      title="The rooms"
+      meta={`Each room inspected, or put off to after the departure. ${leavesWith} A printed receipt for the payment can't be made yet — the tax invoice shows what was paid. The stay stays on ${booked.guest}'s record; closing the booking seals it.`}
+      status={released ? <span className="ok-ink">Released to housekeeping</span> : "Released to housekeeping when the bill is settled"}
+      summary={roomsLine}
+    >
+      <RoomInspectionGrid entry={entry} live={live} />
+    </StepCard>
+    </>
   );
 }
 

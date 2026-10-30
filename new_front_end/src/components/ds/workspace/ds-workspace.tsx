@@ -223,7 +223,9 @@ const STAY_SECTIONS: Record<string, string> = {
  * section only when an inspection found some.
  */
 const CHECKOUT_SECTIONS: Record<string, string> = {
-  departure: "The keys and the rooms",
+  // The keys, then the rooms — the rooms wait for the keys (2026-10-30, operator).
+  keys: "The keys",
+  rooms: "The rooms",
   damage: "Damage found",
   settle: "Settling the bill",
   handoff: "The departure handoff",

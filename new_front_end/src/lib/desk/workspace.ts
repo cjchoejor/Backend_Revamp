@@ -680,9 +680,9 @@ export function s8Readiness(
     ? {
         label: insp.rooms.length > 1 ? `Rooms inspected or put off (${insp.inspectedCount}/${insp.rooms.length})` : "Room inspection recorded",
         met: insp.allRecorded,
-        card: "departure",
+        card: "rooms",
       }
-    : { label: "Room inspection recorded", met: !!inspection, card: "departure" };
+    : { label: "Room inspection recorded", met: !!inspection, card: "rooms" };
   const h4 = (entry.handoffs ?? []).find((h) => h.handoffType === "H4");
   const openDisputes = (entry.disputes ?? []).filter((d) => d.status === "OPEN" || d.status === "IN_PROGRESS");
   // EVERY distinct room must be released (2026-08-17 — the old check read only the first
@@ -702,7 +702,7 @@ export function s8Readiness(
   // the rooms, then the departure handed over.
   return [
     {
-      card: "departure",
+      card: "keys",
       label: "Keys returned",
       met: !!keyReturn && (keyReturn.countReconciled || !!keyReturn.reconciliationNote),
     },
