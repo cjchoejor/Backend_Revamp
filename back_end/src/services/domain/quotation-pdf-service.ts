@@ -23,10 +23,10 @@
  */
 import { Prisma, type PrismaClient, type QuotationLine } from "@prisma/client";
 import { NotFoundError } from "../../lib/errors.js";
-import { labelRoomNights, roomNightsForEntry, roomNightsVary } from "../../lib/room-nights-for-entry.js";
+import { labelRoomNights, roomNightsForEntry, stayNightDates, type NightsMode } from "../../lib/room-nights-for-entry.js";
 import {
   buildPaperPriceLines,
-  buildRoomPriceLines,
+  buildDeskPriceLines,
   mealPlanParts,
   priceLinesToCents,
   roomOccupantsLabel,
@@ -199,20 +199,24 @@ type QuotationDocRender = {
 async function buildQuotationDocRender(
   prisma: PrismaClient,
   q: LoadedQuotation,
-  opts?: { hidePrices?: boolean; roomNumbers?: boolean; roomLabels?: Map<string, string> },
+  opts?: { hidePrices?: boolean; roomNumbers?: boolean; roomLabels?: Map<string, string>; nightsMode?: NightsMode },
 ): Promise<QuotationDocRender> {
   const hidePrices = opts?.hidePrices === true;
+  // How the nights are written — the first and last of a run, or each one (2026-10-30).
+  const nightsMode: NightsMode = opts?.nightsMode ?? "SHORT";
   const roomNumbers = opts?.roomNumbers === true;
 
-  // Which nights each room is held for. On a plain booking — every room for the whole stay —
-  // this comes back empty and no Nights column is printed: the Stay line says it once.
+  // Which nights each room is held for — printed on every quotation, one night or many
+  // (2026-10-30, operator: "make it like the 5th image"). A room the seal does not name runs the
+  // whole stay.
   const roomNights = await roomNightsForEntry(prisma, q.entryId, { segmentId: q.segmentId, asOf: q.createdAt }).catch(
     () => new Map<string, string[]>(),
   );
-  const datesShown = roomNightsVary(roomNights);
-  const nightsLabelFor = (roomId: string) => {
+  const wholeStay = stayNightDates(q.entry.checkInDate, q.entry.checkOutDate);
+  const datesShown = true;
+  const nightsOf = (roomId: string): string[] => {
     const n = roomNights.get(roomId);
-    return n && n.length ? labelRoomNights(n) : null;
+    return n && n.length ? n : wholeStay;
   };
   const terms = (q.commercialTerms as QuotationTerms) ?? {};
   const nights = Math.max(1, Number(terms?.pricingBreakdown?.nights ?? 1));
@@ -379,7 +383,8 @@ async function buildQuotationDocRender(
         rateMoved && negotiatedRoomRate == null ? preDiscountRate : Number(r.roomRate ?? 0);
       if (printedRoomRate > Number(r.roomRate ?? 0)) originalsPrinted = true;
       const nightBreakdown =
-        (r as unknown as { perNightMealBreakdown?: Array<{ overridden?: boolean }> }).perNightMealBreakdown ?? [];
+        (r as unknown as { perNightMealBreakdown?: Array<{ date?: string; meals?: number | string; overridden?: boolean; extraBeds?: number | null }> })
+          .perNightMealBreakdown ?? [];
 
       // The room, its extra beds and its meals — the shared reading the desk's Charges tab and the
       // live negotiation preview print too (lib/quotation-price-lines.ts).
@@ -398,17 +403,14 @@ async function buildQuotationDocRender(
         extraBedSubtotal: r.extraBedSubtotal ?? null,
         extraBedsVaryByNight: r.extraBedsVaryByNight === true,
         mealsVaryByNight: nightBreakdown.some((n) => n.overridden),
-        datesLabel: nightsLabelFor(r.roomId),
+        nightDates: nightsOf(r.roomId),
+        nightsMode,
+        nightBreakdown: nightBreakdown
+          .filter((n) => n.date)
+          .map((n) => ({ date: String(n.date).slice(0, 10), meals: Number(n.meals ?? 0), extraBeds: n.extraBeds ?? null })),
         roomLabel: opts?.roomLabels?.get(r.roomId) ?? null,
       };
-      if (roomNumbers) {
-        for (const line of buildRoomPriceLines(priceRoom)) {
-          linesForTemplate.push(line);
-          printedRowsTotal += line.amount;
-        }
-      } else {
-        paperRooms.push(priceRoom);
-      }
+      paperRooms.push(priceRoom);
 
       // The archival snapshot keeps its one-row-per-room, tax-inclusive shape.
       snapshotLines.push({
@@ -420,8 +422,9 @@ async function buildQuotationDocRender(
       });
       totalAmount += Number(r.total);
     }
-    // The paper: each room by its type, identical rooms set out once.
-    for (const line of roomNumbers ? [] : buildPaperPriceLines(paperRooms)) {
+    // The paper: each room by its type, identical rooms set out once. The desk: a room given by
+    // number by its number, the system's rooms by their type, counted.
+    for (const line of roomNumbers ? buildDeskPriceLines(paperRooms) : buildPaperPriceLines(paperRooms)) {
       linesForTemplate.push(line);
       printedRowsTotal += line.amount;
     }
@@ -443,6 +446,7 @@ async function buildQuotationDocRender(
     for (let i = 0; i < nights; i++) {
       const date = new Date(checkIn.getTime() + i * 86_400_000);
       linesForTemplate.push({
+        dates: labelRoomNights([date.toISOString().slice(0, 10)], nightsMode),
         description: [legacyTypeName, occupantsString, mealPlanDisplay || null, extraBeds !== "None" ? extraBeds : null]
           .filter(Boolean)
           .join(" · "),
@@ -578,9 +582,10 @@ async function buildQuotationDocRender(
       dates: l.dates ?? null,
       description: l.description,
       qty: l.qty,
-      rate: l.rate == null ? "—" : formatMoney(l.rate),
-      amount: formatMoney(l.amount),
+      rate: l.muted ? "" : l.rate == null ? "—" : formatMoney(l.rate),
+      amount: l.muted ? "—" : formatMoney(l.amount),
       indent: l.indent,
+      muted: l.muted,
     })),
     discountLabel,
     discountValue,
@@ -641,7 +646,7 @@ async function buildQuotationDocRender(
 export async function renderQuotationPreviewHtml(
   prisma: PrismaClient,
   quotationId: string,
-  opts?: { hidePrices?: boolean },
+  opts?: { hidePrices?: boolean; nightsMode?: NightsMode },
 ): Promise<{ html: string; referenceNumber: string }> {
   const q = await loadQuotationForRender(prisma, quotationId);
   const model = await buildQuotationDocRender(prisma, q, opts);
@@ -682,9 +687,23 @@ export async function quotationPriceLines(
 export async function renderQuotationPdfWithoutPrices(
   prisma: PrismaClient,
   quotationId: string,
+  opts?: { nightsMode?: NightsMode },
+): Promise<{ bytes: Buffer; referenceNumber: string }> {
+  return renderQuotationPdfFace(prisma, quotationId, { hidePrices: true, nightsMode: opts?.nightsMode });
+}
+
+/**
+ * Another face of the same quotation as a PDF, rendered fresh and never stored — without prices,
+ * every night named (2026-10-30), or both. The stored PDF is the priced one with the nights
+ * written short: the commercial record.
+ */
+export async function renderQuotationPdfFace(
+  prisma: PrismaClient,
+  quotationId: string,
+  face: { hidePrices?: boolean; nightsMode?: NightsMode },
 ): Promise<{ bytes: Buffer; referenceNumber: string }> {
   const q = await loadQuotationForRender(prisma, quotationId);
-  const m = await buildQuotationDocRender(prisma, q, { hidePrices: true });
+  const m = await buildQuotationDocRender(prisma, q, face);
   return { bytes: await renderHtmlToPdf(m.html, { fitToPage: true }), referenceNumber: q.referenceNumber };
 }
 

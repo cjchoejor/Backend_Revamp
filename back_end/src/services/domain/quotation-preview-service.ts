@@ -27,8 +27,8 @@ import {
 import { buildEntryRateReference } from "./rate-reference-service.js";
 import { loadChildPolicyBundle } from "./child-policy-service.js";
 import { readOptionSelected, firstRoomId } from "../../lib/option-selected-reader.js";
-import { buildRoomPriceLines, priceLinesToCents, type PriceLine } from "../../lib/quotation-price-lines.js";
-import { labelRoomNights, roomNightsVary } from "../../lib/room-nights-for-entry.js";
+import { buildDeskPriceLines, priceLinesToCents, type PriceLine, type PriceLineRoom } from "../../lib/quotation-price-lines.js";
+import { stayNightDates } from "../../lib/room-nights-for-entry.js";
 
 const ZERO = new Prisma.Decimal(0);
 
@@ -409,40 +409,48 @@ export async function buildQuotationPreview(
   });
 
   // The rows the quotation would print for this table — the same builder the document uses.
+  // Every room says its nights, as the quotation does (2026-10-30); a room with no nights of its
+  // own runs the whole stay — unless it was given a count of its own, whose nights are not known.
+  const wholeStay = stayNightDates(stayCheckIn, stayCheckOut);
   const nightsByRoom = new Map<string, string[]>();
   for (const c of input.roomCompositions) {
     const ds = perRoomNightDates.get(c.roomId);
     if (ds && ds.length) nightsByRoom.set(c.roomId, [...new Set(ds)].sort());
+    else {
+      const n = perRoomNightCounts.get(c.roomId);
+      if (wholeStay.length && (n == null || n === wholeStay.length)) nightsByRoom.set(c.roomId, wholeStay);
+    }
   }
-  const datesShown = roomNightsVary(nightsByRoom);
+  const datesShown = true;
   // A room the system chose and may still move before Arrival reads "Deluxe Double · room 1".
   const { quietRoomLabels } = await import("./quiet-rooms-service.js");
   const roomLabels = await quietRoomLabels(prisma, entryId);
-  const lines: PriceLine[] = [];
+  const lineRooms: PriceLineRoom[] = [];
   totals.perRoom.forEach((r, i) => {
     const c = input.roomCompositions[i];
     const ds = nightsByRoom.get(r.roomId);
-    lines.push(
-      ...buildRoomPriceLines({
-        roomId: r.roomId,
-        roomNumber: r.roomNumber,
-        roomTypeName: roomById.get(r.roomId)?.roomType?.name ?? null,
-        nights: r.nights,
-        composition: c,
-        printedRoomRate: n2(r.roomRate),
-        extraBedRate: n2(r.extraBedRate),
-        breakfastRate: n2(r.breakfastRate),
-        lunchRate: n2(r.lunchRate),
-        dinnerRate: n2(r.dinnerRate),
-        mealsSubtotal: n2(r.mealsSubtotal),
-        extraBedSubtotal: n2(r.extraBedSubtotal),
-        extraBedsVaryByNight: r.extraBedsVaryByNight === true,
-        mealsVaryByNight: r.perNightMealBreakdown.some((b) => b.overridden),
-        datesLabel: datesShown && ds ? labelRoomNights(ds) : null,
-        roomLabel: roomLabels.get(r.roomId) ?? null,
-      }),
-    );
+    lineRooms.push({
+      roomId: r.roomId,
+      roomNumber: r.roomNumber,
+      roomTypeName: roomById.get(r.roomId)?.roomType?.name ?? null,
+      nights: r.nights,
+      composition: c,
+      printedRoomRate: n2(r.roomRate),
+      extraBedRate: n2(r.extraBedRate),
+      breakfastRate: n2(r.breakfastRate),
+      lunchRate: n2(r.lunchRate),
+      dinnerRate: n2(r.dinnerRate),
+      mealsSubtotal: n2(r.mealsSubtotal),
+      extraBedSubtotal: n2(r.extraBedSubtotal),
+      extraBedsVaryByNight: r.extraBedsVaryByNight === true,
+      mealsVaryByNight: r.perNightMealBreakdown.some((b) => b.overridden),
+      nightDates: ds ?? null,
+      nightBreakdown: r.perNightMealBreakdown.map((b) => ({ date: b.date, meals: n2(b.meals), extraBeds: b.extraBeds })),
+      roomLabel: roomLabels.get(r.roomId) ?? null,
+    });
   });
+  // The system's rooms by their type, counted; a room given by number by its number (2026-10-30).
+  const lines: PriceLine[] = buildDeskPriceLines(lineRooms);
 
   // The discount is measured against the grand total, in whichever way the operator expressed it.
   // Exactly the helper the draft applies, so a previewed discount and a generated one cannot

@@ -42,43 +42,7 @@ import {
 import { guestNameOf } from "@/lib/ds/status";
 import { fmtDateTime, fmtRange, fmtStamp, hotelFormParts, money, plural } from "@/lib/ds/format";
 import { optionSelectedRoomIds, preferredHoldRoomId, type EntryDetail, type InvoiceSummary, type PaymentStatusSummary } from "@/types/api";
-import {
-  AnswerLine,
-  Choice,
-  DsDialog,
-  Fact,
-  FactBox,
-  Facts,
-  Live,
-  OnRecord,
-  PaperDrawer,
-  ReasonDialog,
-  SeeRow,
-  StepCanvas,
-  StepCard,
-  atLeast,
-  currentPassStart,
-  toastRefusal,
-  useCommunications,
-  useRefreshEntry,
-  useStepMode,
-  words,
-  type PaperRef,
-  type ChangeBookingItem,
-  ChangeBookingMenu,
-  StageActs,
-  useFlowUnsaved,
-  useFinishWhenDone,
-  useStepFlow,
-  goToStepCard,
-  revealCard,
-  useOpenAlsoWay,
-  useStepPane,
-  OtherWaysTabs,
-  InlineWay,
-  ShutWay,
-  parkTab,
-} from "./kit";
+import { AnswerLine, Choice, DsDialog, Fact, FactBox, Facts, Live, OnRecord, PaperDrawer, ReasonDialog, SeeRow, StepCanvas, StepCard, atLeast, currentPassStart, toastRefusal, useCommunications, useRefreshEntry, useStepMode, words, type PaperRef, type ChangeBookingItem, ChangeBookingMenu, StageActs, useFlowUnsaved, useFinishWhenDone, useStepFlow, goToStepCard, revealCard, useOpenAlsoWay, useStepPane, OtherWaysTabs, InlineWay, ShutWay, parkTab, NightsChoice } from "./kit";
 import { SendToField, useSendTo } from "./s8-parts";
 import { CancellationFiguresLine, WaiverTick, useRefundHow } from "./cancel-figures";
 import { CompetingClaimsCard, passesOf, roomsHeldWord, useRoomNumbers, useRoomTypeNames } from "./s2-shared";
@@ -1342,6 +1306,8 @@ function ProformaCard({
   const passes = passesOf(entry);
   const [paper, setPaper] = useState<PaperRef | null>(null);
   const [sendOpen, setSendOpen] = useState(false);
+  // Every night named on the copy sent, instead of a run as its first and last (2026-10-30).
+  const [nightsEach, setNightsEach] = useState(false);
   // The proforma is made out to the agency or company when one booked, so it goes to their
   // address, never the traveller's by default (2026-09-18) — the backend applies the same rule.
   const [to, setTo] = useSendTo(entry);
@@ -1352,7 +1318,7 @@ function ProformaCard({
   const send = useMutation({
     mutationFn: () => {
       if (!sendTarget) throw new Error("There is no proforma to send");
-      return dispatchInvoice(session!, sendTarget.id, { dispatchedTo: to.trim() || undefined });
+      return dispatchInvoice(session!, sendTarget.id, { dispatchedTo: to.trim() || undefined, nightsEach });
     },
     onSuccess: () => {
       toast.success("The proforma is sent — record the guest's answer when it comes");
@@ -1421,6 +1387,7 @@ function ProformaCard({
     return {
       kind: "invoice",
       id: inv.id,
+      invoiceType: "PROFORMA",
       label: `Proforma ${inv.invoiceNumber ?? inv.id}${(inv.versionNumber ?? 1) > 1 ? ` · v${inv.versionNumber}` : ""}`,
       frozen: old && kept,
       notice:
@@ -1570,6 +1537,7 @@ function ProformaCard({
           open
           onClose={() => setSendOpen(false)}
           busy={send.isPending}
+          width={720}
           title={`Send proforma ${sendTarget.invoiceNumber ?? sendTarget.id}`}
           caseLines={[
             asks ? `It ${asks}` : "The advance it asks for is being read",
@@ -1590,6 +1558,9 @@ function ProformaCard({
           }
         >
           <SendToField entry={entry} value={to} onChange={setTo} label="Email address" />
+          <div className="paper-faces in-dialog">
+            <NightsChoice each={nightsEach} onChange={setNightsEach} of={{ invoiceId: sendTarget.id }} />
+          </div>
         </DsDialog>
       ) : null}
     </StepCard>

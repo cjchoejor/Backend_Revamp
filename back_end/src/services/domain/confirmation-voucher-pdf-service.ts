@@ -18,7 +18,7 @@
 import { type PrismaClient } from "@prisma/client";
 import { NotFoundError } from "../../lib/errors.js";
 import { allocateReadableId } from "../../lib/readable-id.js";
-import { labelRoomNights, roomNightsForEntry } from "../../lib/room-nights-for-entry.js";
+import { roomNightsForEntry, roomsWithNightsLine, type NightsMode } from "../../lib/room-nights-for-entry.js";
 import {
   buildStorageKey,
   documentExists,
@@ -67,8 +67,17 @@ export async function generateOrLoadConfirmationVoucherPdf(
    * free name (`VOU-…-r2`, `-r3`) — stored files are write-once, so an earlier render stays on
    * disk as it was, and is never adopted in place of the new one.
    */
-  opts?: { remake?: boolean },
+  opts?: {
+    remake?: boolean;
+    /**
+     * Another face of the voucher, rendered fresh and NEVER stored (2026-10-30): every night named
+     * instead of a run as its first and last. The stored voucher writes runs short.
+     */
+    nightsMode?: NightsMode;
+  },
 ): Promise<ConfirmationVoucherArtifact> {
+  const nightsMode: NightsMode = opts?.nightsMode ?? "SHORT";
+  const freshFace = nightsMode !== "SHORT";
   const reservation = await prisma.reservation.findUnique({
     where: { id: reservationId },
     include: {
@@ -96,7 +105,7 @@ export async function generateOrLoadConfirmationVoucherPdf(
   }
 
   // Idempotency
-  if (reservation.confirmationVoucherStorageKey && reservation.confirmationVoucherChecksum) {
+  if (!freshFace && reservation.confirmationVoucherStorageKey && reservation.confirmationVoucherChecksum) {
     const bytes = await readDocument(reservation.confirmationVoucherStorageKey);
     const bookingReference = reservation.entry.inquiryId ?? reservation.id;
     return {
@@ -137,6 +146,13 @@ export async function generateOrLoadConfirmationVoucherPdf(
   const bookingRows: ConfirmationVoucherLine[] = [];
   /** Rooms the system chose, named by type on this paper: type name → the rooms behind it. */
   const typedRooms = new Map<string, Set<string>>();
+  /** Each room with its nights, for the Room · plan line (2026-10-30): room id → name, nights. */
+  const roomNightItems = new Map<string, { name: string; nights: string[] }>();
+  const addRoomNights = (roomId: string, name: string, nightsList: readonly string[]) => {
+    const cur = roomNightItems.get(roomId) ?? { name, nights: [] };
+    cur.nights.push(...nightsList);
+    roomNightItems.set(roomId, cur);
+  };
   const fallbackAdults = entry.adultCount ?? Number(entry.guestCount ?? 1) ?? 1;
   const fallbackChildren = entry.childCount ?? 0;
   const fallbackOccupants = `${fallbackAdults} adult${fallbackAdults === 1 ? "" : "s"}, ${fallbackChildren} child${fallbackChildren === 1 ? "" : "ren"}`;
@@ -167,6 +183,11 @@ export async function generateOrLoadConfirmationVoucherPdf(
     const aStart = a.startDate ?? checkIn;
     const aEnd = a.endDate ?? checkOut;
     const aNights = Math.max(1, Math.round((aEnd.getTime() - aStart.getTime()) / 86_400_000));
+    addRoomNights(
+      a.roomId,
+      a.room.roomNumber ? `Room ${a.room.roomNumber}` : "Room",
+      Array.from({ length: aNights }, (_, i) => new Date(aStart.getTime() + i * 86_400_000).toISOString().slice(0, 10)),
+    );
     for (let i = 0; i < aNights; i++) {
       bookingRows.push({
         date: new Date(aStart.getTime() + i * 86_400_000),
@@ -229,6 +250,7 @@ export async function generateOrLoadConfirmationVoucherPdf(
         } as unknown as (typeof entry.roomAssignments)[number];
         const typeName = quietType.get(c.roomId);
         if (typeName) typedRooms.set(typeName, (typedRooms.get(typeName) ?? new Set<string>()).add(c.roomId));
+        addRoomNights(c.roomId, typeName ?? (roomNo.get(c.roomId) ? `Room ${roomNo.get(c.roomId)}` : "Room"), heldNights.get(c.roomId) ?? stayNights);
         for (const night of heldNights.get(c.roomId) ?? stayNights) {
           bookingRows.push({
             date: new Date(`${night}T00:00:00.000Z`),
@@ -263,18 +285,14 @@ export async function generateOrLoadConfirmationVoucherPdf(
   // When the rooms are not all held for the same nights (a stay that moves rooms), each room says
   // its nights — "302 · 13–15 Oct" — as the quotation's Nights column does.
   // A room the system chose reads by its type, counted: "2 × Deluxe Double" (2026-10-28).
-  const typedWords = [...typedRooms].map(([t, ids]) => (ids.size === 1 ? t : `${ids.size} × ${t}`));
-  const roomsOnce = [...new Set(bookingRows.map((r) => r.roomNo).filter(Boolean))]
-    .filter((no) => !typedRooms.has(no))
-    .sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
-  const nightsOf = new Map(roomsOnce.map((no) => [no, bookingRows.filter((r) => r.roomNo === no).map((r) => r.date.toISOString().slice(0, 10))]));
-  const nightsVary = new Set([...nightsOf.values()].map((n) => [...new Set(n)].sort().join(","))).size > 1;
-  const roomWords = roomsOnce.map((no) => (nightsVary ? `${no} · ${labelRoomNights(nightsOf.get(no) ?? [])}` : no));
+  // Each room with its nights (2026-10-30, operator — on every paper): "2 × Deluxe Double
+  // (10–19 Mar) · Room 204 (10–14 Mar)", a room the system chose by its type, rooms of one name on
+  // the same nights counted together, the nights written short or each one named.
+  const roomsWords = roomsWithNightsLine([...roomNightItems.values()], nightsMode);
   const plans = [...new Set(bookingRows.map((r) => r.mealPlan).filter(Boolean))];
   const roomsSummary = bookingRows.length
     ? [
-        typedWords.length ? typedWords.join(", ") : null,
-        roomsOnce.length ? `${roomsOnce.length === 1 ? "Room" : "Rooms"} ${roomWords.join(", ")}` : null,
+        roomsWords || null,
         plans.length === 1 ? plans[0] : plans.length > 1 ? "meal plans per room" : null,
         `${nights} night${nights === 1 ? "" : "s"} total`,
       ]
@@ -306,6 +324,10 @@ export async function generateOrLoadConfirmationVoucherPdf(
   });
 
   let bytes = await renderHtmlToPdf(html, { fitToPage: true });
+  // Another face is handed back as it is — never stored, never the record.
+  if (freshFace) {
+    return { storageKey: "", checksum: hashSha256(bytes), bytes, filename: `${voucherNumber}-confirmation-voucher-each-night.pdf` };
+  }
   // Named by the voucher's own number (2026-10-13). It was `<enquiry>-v1`, the same for every
   // voucher of a booking and of every stay on its enquiry — so the first file was found and
   // adopted below by every later one, and a re-confirmed booking's voucher (a room move, a

@@ -103,6 +103,8 @@ export type QuotationPriceLine = {
   rate: number | null;
   amount: number;
   indent?: boolean;
+  /** Says something, charges nothing — "Room only · no meals" (2026-10-30). */
+  muted?: boolean;
 };
 
 /** `GET /api/quotations/:id/price-lines` — the quotation's rows and the figures under them. */
@@ -267,6 +269,8 @@ export async function sendQuotation(
     recipientAddress?: string;
     /** Attach the copy with no money on it — the offer and the stored record are unchanged. */
     hidePrices?: boolean;
+    /** Attach the copy with every night named (2026-10-30). */
+    nightsEach?: boolean;
   },
 ) {
   return apiRequest<QuotationSummary>(`/api/quotations/${quotationId}/send`, {

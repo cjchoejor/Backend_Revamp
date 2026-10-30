@@ -45,7 +45,7 @@ import { fmtRange, money, plural } from "@/lib/ds/format";
 import { StayDates } from "@/components/ds/stay-dates";
 import { STEP_NAMES, STEP_NEEDS } from "@/lib/ds/steps";
 import type { EntryDetail } from "@/types/api";
-import { Choice, FlowProgress, StepCanvas, StepCard, StepFlow, anchorFor, atLeast, numberFlow, revealCard, toastRefusal, useFlowStanding } from "./kit";
+import { Choice, Fact, Facts, FlowProgress, StepCanvas, StepCard, StepFlow, anchorFor, atLeast, numberFlow, revealCard, toastRefusal, useFlowStanding } from "./kit";
 import { useMeasuredVar } from "@/hooks/use-stage-head";
 import { ApiError } from "@/lib/api/client";
 import {
@@ -80,14 +80,16 @@ import { DateInput } from "@/components/ds/date-input";
 // The sections the intake asks, as the step's line names them; the house and Wrap up are asked on
 // the booking once the lead is kept.
 const INTAKE_SECTIONS: Record<string, string> = { caller: "The caller", asking: "Who is asking", stay: "The stay" };
-// The booking file's tabs, as the booking shows them; only the first has anything before the lead is kept.
-const INTAKE_FILE_TABS: ReadonlyArray<[string, string]> = [
-  ["Booking", "Booking"],
-  ["Charges & payments", "Charges"],
-  ["Guest requests", "Requests"],
-  ["Notes", "Notes"],
-  ["Documents", "Papers"],
-  ["History", "History"],
+// The booking file's tabs, as the booking shows them. Every one opens (2026-10-30, operator: they
+// were shut until the lead was kept); before then each says what it holds so far.
+type IntakeFileTab = "details" | "money" | "requests" | "notes" | "docs" | "history";
+const INTAKE_FILE_TABS: ReadonlyArray<[IntakeFileTab, string, string]> = [
+  ["details", "Booking", "Booking"],
+  ["money", "Charges & payments", "Charges"],
+  ["requests", "Guest requests", "Requests"],
+  ["notes", "Notes", "Notes"],
+  ["docs", "Documents", "Papers"],
+  ["history", "History", "History"],
 ];
 
 // The guest card is a flow card, so its anchor is the flow's (the focus helper below reads it).
@@ -175,6 +177,8 @@ export function NewInquiryCanvas() {
   // "5 King + 2 Twin" — optional, may be partial.
   const [beds, setBeds] = useState<Record<string, string>>({});
   const [notes, setNotes] = useState("");
+  // The booking file's open tab — Booking until the desk picks another.
+  const [fileTab, setFileTab] = useState<IntakeFileTab>("details");
   // A check-in brought from the house chart is a typed date — the hotel's today never replaces it.
   const checkInDefaulted = useRef(!!fromChart.checkIn);
 
@@ -270,6 +274,29 @@ export function NewInquiryCanvas() {
     setRatePackageId((cur) => (cur && packages.some((p) => p.id === cur) ? cur : (packages.find((p) => p.isDefault)?.id ?? null)));
   }, [party?.id, packages]);
   const chosenPackage = packages?.find((p) => p.id === ratePackageId) ?? null;
+  // Which meal plans the rates price — shown under Who is asking and in the file's Charges tab.
+  const mealPlansWord = chosenPackage
+    ? [
+        chosenPackage.cpRate ? "CP" : null,
+        chosenPackage.mapLunchRate ? "MAP + lunch" : null,
+        chosenPackage.mapDinnerRate ? "MAP + dinner" : null,
+        chosenPackage.apRate ? "AP" : null,
+      ]
+        .filter(Boolean)
+        .join(" · ") || "none in the package"
+    : party
+      ? "from their package"
+      : "from the house tariff";
+  // The rates the booking will be priced on, in words (the Rate package field's own reading).
+  const ratesWord = !party
+    ? "Published rates"
+    : packagesQuery.isLoading
+      ? "Reading their packages…"
+      : !packages || packages.length === 0
+        ? "The hotel's common package"
+        : chosenPackage
+          ? `${chosenPackage.name} · ${party.displayName}'s package — ${money(chosenPackage.roomBaseRate, chosenPackage.currency)} a night`
+          : `Not chosen — pricing takes ${party.displayName}'s newest package`;
 
   /* ---------------------------------------------------------------- dates */
   // Check-in defaults to the hotel's today, once; a typed date is never replaced, and the
@@ -966,20 +993,7 @@ export function NewInquiryCanvas() {
                         <input
                           className="input"
                           readOnly
-                          value={
-                            chosenPackage
-                              ? [
-                                  chosenPackage.cpRate ? "CP" : null,
-                                  chosenPackage.mapLunchRate ? "MAP + lunch" : null,
-                                  chosenPackage.mapDinnerRate ? "MAP + dinner" : null,
-                                  chosenPackage.apRate ? "AP" : null,
-                                ]
-                                  .filter(Boolean)
-                                  .join(" · ") || "none in the package"
-                              : party
-                                ? "from their package"
-                                : "from the house tariff"
-                          }
+                          value={mealPlansWord}
                         />
                       </div>
                       </>
@@ -1447,15 +1461,15 @@ export function NewInquiryCanvas() {
             </div>
           </div>
           <div className="ftabs" role="tablist">
-            {INTAKE_FILE_TABS.map(([label, short], i) => (
+            {INTAKE_FILE_TABS.map(([key, label, short]) => (
               <button
-                key={label}
+                key={key}
                 type="button"
                 role="tab"
                 className="ftab"
-                aria-selected={i === 0}
-                disabled={i > 0}
-                title={i > 0 ? `${label} · opens once the inquiry is kept` : label}
+                aria-selected={fileTab === key}
+                title={label}
+                onClick={() => setFileTab(key)}
               >
                 <span className="ft-long">{label}</span>
                 <span className="ft-short">{short}</span>
@@ -1463,7 +1477,9 @@ export function NewInquiryCanvas() {
             ))}
           </div>
           <div className="fbody">
-            <p className="meta">The other tabs open once the inquiry is kept.</p>
+            {fileTab !== "details" ? (
+              <IntakeFilePanel tab={fileTab} ratesWord={ratesWord} mealPlansWord={mealPlansWord} notes={notes} setNotes={setNotes} />
+            ) : (
             <dl className="pv">
               <dt>The caller</dt>
               <dd>
@@ -1509,10 +1525,94 @@ export function NewInquiryCanvas() {
                 </>
               ) : null}
             </dl>
+            )}
           </div>
         </aside>
     </div>
     </StepFlow>
+  );
+}
+
+/**
+ * The booking file's other tabs on the new inquiry (2026-10-30). Nothing is kept yet, so each says
+ * what it holds so far; the preference is the one thing already typed, and can be written here too
+ * (it is the same field as the stay's).
+ */
+function IntakeFilePanel({
+  tab,
+  ratesWord,
+  mealPlansWord,
+  notes,
+  setNotes,
+}: {
+  tab: Exclude<IntakeFileTab, "details">;
+  ratesWord: string;
+  mealPlansWord: string;
+  notes: string;
+  setNotes: (v: string) => void;
+}) {
+  if (tab === "money")
+    return (
+      <>
+        <StepCard
+          title="The price"
+          status={<span className="warn-ink"><b>Nothing priced yet — no rooms chosen</b></span>}
+          meta="The rooms are chosen at The house, once the inquiry is started. Their bill shows here then."
+        >
+          <Facts>
+            <Fact k="Rates">{ratesWord}</Fact>
+            <Fact k="Meal plans priced">{mealPlansWord}</Fact>
+          </Facts>
+        </StepCard>
+        <StepCard title="Money received" status={<b>Nothing received</b>} meta="An advance is asked for at Set up." />
+      </>
+    );
+  if (tab === "requests")
+    return (
+      <>
+        <StepCard
+          title="Preference"
+          status={notes.trim() ? <b>noted</b> : undefined}
+          meta="What the guest likes — a high floor, a quiet room. The same field as the stay's preference; it is kept with the inquiry."
+        >
+          <textarea
+            className="input"
+            rows={3}
+            maxLength={2000}
+            value={notes}
+            placeholder="e.g. high floor, quiet room, honeymoon — allergic to nuts"
+            onChange={(e) => setNotes(e.target.value)}
+          />
+        </StepCard>
+        <StepCard
+          title="Requests"
+          status={<b>Nothing asked yet</b>}
+          meta="Something to arrange — a pickup, a cake, an early room. Requests are taken once the inquiry is started."
+        />
+      </>
+    );
+  if (tab === "notes")
+    return (
+      <StepCard
+        title="Notes and to-dos"
+        status={<b>Nothing kept yet</b>}
+        meta="Notes and to-dos are written once the inquiry is started. What you type with an act — a park, a cancel — is kept here too."
+      />
+    );
+  if (tab === "docs")
+    return (
+      <StepCard
+        title="Papers"
+        status={<b>No papers yet</b>}
+        meta="The quotation is made at Negotiation, the proforma and bills from Set up."
+      />
+    );
+  return (
+    <StepCard
+      title="History"
+      status={<b>Nothing on the record yet</b>}
+      meta="The history starts when the inquiry is started — every act from then on is listed here."
+    />
   );
 }
 

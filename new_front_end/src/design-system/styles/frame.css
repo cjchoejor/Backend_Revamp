@@ -311,17 +311,11 @@
 .ds .pickbill .pb-rooms { display: inline-flex; flex-wrap: wrap; gap: 4px; }
 .ds .pickbill .pb-room { display: inline-flex; align-items: baseline; gap: 4px; padding: 1px 7px; border: 1px solid var(--line-2); border-radius: 999px; background: var(--surface-2); font-weight: 700; font-size: var(--t-meta); }
 .ds .pickbill .pb-room small { font-weight: 400; color: var(--ink-2); }
-.ds .pickbill .pb-byroom { margin: var(--s2) 0; line-height: 1.5; }
 .ds .pickbill .pb-ladder { margin-top: var(--s2); }
+.ds .pickbill .pb-nights { margin-top: var(--s3); }
 .ds .pickbill .pb-ladder .pb-step td { border-top: 1px solid var(--line-2); font-weight: 600; }
 .ds .pickbill .pb-ladder .pb-grand td { border-top: 2px solid var(--ink); font-weight: 800; font-size: var(--t-sm); }
 .ds .pickbill .pb-caption { margin-top: var(--s2); }
-/* Each room type's total, taxes included (2026-10-12). */
-.ds .pb-types { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 var(--s2); }
-.ds .pb-type { display: inline-flex; align-items: baseline; gap: 8px; padding: 4px 10px; border: 1px solid var(--line-2); border-radius: var(--r-control); background: var(--surface); }
-.ds .pb-type-name { font-weight: 700; }
-.ds .pb-type-n { font-size: var(--t-meta); color: var(--ink-2); }
-.ds .pb-type .money { font-variant-numeric: tabular-nums; }
 
 /* The side panel's to-do: what this step still needs, in the order it is done. */
 .ds .side .todo { display: grid; gap: 2px; }
@@ -1904,3 +1898,24 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .settle-row .input:focus-visible:not(.desk-root *) { border-color: var(--accent); }
 .ds .settle-row .input.missing:not(.desk-root *) { border-color: var(--danger); background: var(--danger-soft); }
 .ds .settle-row .hint.stop-ink:not(.desk-root *) { font-weight: 600; }
+
+/* A paper's faces (2026-10-30, operator: "even in preview it should have that option, and make
+   those buttons prominent") — with or without prices, the nights shortened or every night named.
+   Choice buttons on a band of their own under the paper's title, and in the send boxes. */
+/* One line (2026-10-30, operator: "can this be fitted in one line"): short labels, the buttons a
+   little tighter than elsewhere — still the choice look, still 32px. */
+.ds .paper-faces:not(.desk-root *) { display: flex; flex-wrap: nowrap; align-items: center; gap: var(--s4); padding: 8px 14px; border-bottom: 1px solid var(--line); background: var(--surface-2); overflow-x: auto; }
+.ds .paper-faces.in-dialog:not(.desk-root *) { padding: 8px 10px; border: 1px solid var(--line-2); border-radius: var(--r-card); margin-top: var(--s2); }
+.ds .paper-faces .pf-item:not(.desk-root *) { display: flex; flex-wrap: nowrap; align-items: center; gap: 6px; flex: none; }
+.ds .paper-faces .pf-k:not(.desk-root *) { display: inline-flex; align-items: center; gap: 2px; font-weight: 600; font-size: var(--t-sm); color: var(--ink); white-space: nowrap; }
+.ds .paper-faces .pf-same:not(.desk-root *) { font-size: var(--t-meta); color: var(--ink-2); white-space: nowrap; }
+.ds .paper-faces .filters.choice:not(.desk-root *) { margin: 0; flex-wrap: nowrap; gap: 4px; }
+.ds .paper-faces .filters.choice .btn:not(.desk-root *) { min-height: 32px; padding: 0 10px 0 8px; font-size: var(--t-sm); gap: 6px; white-space: nowrap; }
+.ds .paper-faces .filters.choice .btn:not(.desk-root *)::before { width: 14px; height: 14px; }
+/* A price line that charges nothing — "Room only · no meals" — reads grey (2026-10-30). */
+.ds .plines tr.pl-muted td:not(.desk-root *) { color: var(--ink-3, var(--ink-2)); }
+/* No move on while the booking is being changed on the page (2026-10-30, operator: "if the user used
+   change booking or changing the booking, the next step move button shouldn't show") — Negotiation's
+   Change configuration panel, a rooms table opened on Change configuration. The in-page views
+   (?pane=change, ?pane=rooms) already leave it out. */
+.ds .ws-top .ws-main:has(.cfg-change, [data-changing-booking]) .move-dock:not(.desk-root *) { display: none; }

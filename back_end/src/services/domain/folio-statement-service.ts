@@ -1,3 +1,4 @@
+import { assignedRoomNights, roomsWithNightsLine, type NightsMode } from "../../lib/room-nights-for-entry.js";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { effectiveCheckOutDate } from "../../lib/stay-dates.js";
 import { NotFoundError, PolicyGateBlockedError, ValidationError } from "../../lib/errors.js";
@@ -257,11 +258,13 @@ type Composed = {
   forGuest: string | null;
   stay: ReturnType<typeof stayFrame>;
   rooms: string[];
+  /** "Room 201 (10–19 Mar) · Room 202 (10–14 Mar)" — each room with its nights (2026-10-30). */
+  roomsLine: string | null;
   sealedAt: Date | null;
   asAt: Date;
 };
 
-async function compose(prisma: PrismaClient, entryId: string): Promise<Composed> {
+async function compose(prisma: PrismaClient, entryId: string, opts?: { nightsMode?: NightsMode }): Promise<Composed> {
   const entry = await loadContext(prisma, entryId);
   if (!entry.folio) throw new ValidationError("This booking has no folio yet — nothing to bill.");
   const [hotel, { gstRate, serviceChargeRate: svcRate }] = await Promise.all([loadHotelProfileForRender(prisma), resolveChargeRates(prisma)]);
@@ -271,7 +274,9 @@ async function compose(prisma: PrismaClient, entryId: string): Promise<Composed>
     { gstRate, svcRate, nights: Math.max(1, stay.nights ?? 1), nightlyRate: 0 },
   );
   const parties = taxInvoicePartiesFromEntry(entry);
+  const assigned = await assignedRoomNights(prisma, entryId, stay).catch(() => []);
   return {
+    roomsLine: assigned.length ? roomsWithNightsLine(assigned, opts?.nightsMode ?? "SHORT") : null,
     entry,
     figures,
     rates: { gstRate, svcRate },
@@ -337,7 +342,7 @@ function renderInterimStatement(c: Composed): string {
     forGuest: c.forGuest,
     stay: c.stay.checkIn && c.stay.checkOut ? formatStayLines(c.stay.checkIn, c.stay.checkOut, c.stay.nights) : null,
     nightsLine: nightsLine(c.stay, c.asAt),
-    rooms: c.rooms.length > 0 ? `Room${c.rooms.length === 1 ? "" : "s"} ${c.rooms.join(", ")}` : null,
+    rooms: c.roomsLine || (c.rooms.length > 0 ? `Room${c.rooms.length === 1 ? "" : "s"} ${c.rooms.join(", ")}` : null),
     rows: c.figures.components.map((comp) => ({
       label: comp.key === "ROOM" ? "Room charges to date" : `${comp.label} to date`,
       value: formatMoney(comp.total),
@@ -373,7 +378,7 @@ function renderMasterBill(c: Composed, opts: { reprintOrdinal: number | null }):
     account: c.account,
     forGuest: c.forGuest,
     stay: c.stay.checkIn && c.stay.checkOut ? formatStayLines(c.stay.checkIn, c.stay.checkOut, c.stay.nights) : null,
-    rooms: c.rooms.length > 0 ? `Room${c.rooms.length === 1 ? "" : "s"} ${c.rooms.join(", ")}` : null,
+    rooms: c.roomsLine || (c.rooms.length > 0 ? `Room${c.rooms.length === 1 ? "" : "s"} ${c.rooms.join(", ")}` : null),
     asAtLabel: sealed ? "Content frozen at folio seal" : "As at",
     asAt: formatDocDateTimeLocal(sealed ? c.sealedAt! : c.asAt),
     rows: c.figures.components.map((comp) => ({
@@ -409,6 +414,7 @@ function renderTaxInvoiceDraft(c: Composed): string {
     bookingRef: c.entry.id,
     stay: c.stay,
     roomNumbers: c.rooms,
+    roomsLine: c.roomsLine,
     issued: null,
     asAt: c.asAt,
     gstRate: c.rates.gstRate,
@@ -432,8 +438,9 @@ export async function renderFolioDocumentHtml(
   prisma: PrismaClient,
   entryId: string,
   kind: FolioDocumentKind,
+  opts?: { nightsMode?: NightsMode },
 ): Promise<{ html: string; filename: string; asAt: Date }> {
-  const c = await compose(prisma, entryId);
+  const c = await compose(prisma, entryId, opts);
   const html =
     kind === "interim-statement"
       ? renderInterimStatement(c)
@@ -454,8 +461,9 @@ export async function printFolioDocumentPdf(
   entryId: string,
   kind: FolioDocumentKind,
   actorId: string,
+  opts?: { nightsMode?: NightsMode },
 ): Promise<{ bytes: Buffer; filename: string; reprintOrdinal: number | null }> {
-  const c = await compose(prisma, entryId);
+  const c = await compose(prisma, entryId, opts);
   let html: string;
   let reprintOrdinal: number | null = null;
   if (kind === "master-bill") {

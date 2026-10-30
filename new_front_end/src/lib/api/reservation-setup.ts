@@ -329,7 +329,7 @@ export async function issueProformaInvoice(
   });
 }
 
-export async function dispatchInvoice(session: Session, invoiceId: string, body?: { dispatchedTo?: string }) {
+export async function dispatchInvoice(session: Session, invoiceId: string, body?: { dispatchedTo?: string; nightsEach?: boolean }) {
   return apiRequest<InvoiceSummary>(`/api/invoices/${invoiceId}/dispatch`, {
     method: "POST",
     session,

@@ -98,6 +98,11 @@ export const LEGPHEL_DOCUMENT_CSS = `
   table.mini tr.sub td { border-bottom:0;color:var(--slate) }
   table.mini tr.sub td:first-child { padding-left:16px }
   table.mini tr.grp-end td { border-bottom:1px solid var(--hair) }
+  /* A table led by a Nights column indents its description, not its nights (2026-10-30). */
+  table.mini.dated tr.sub td:first-child { padding-left:6px }
+  table.mini.dated tr.sub td:nth-child(2) { padding-left:16px }
+  /* A line that says something and charges nothing — "Room only · no meals". */
+  table.mini tr.quiet td { color:var(--mute) }
   .dsub { font-size:7.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute);
     font-weight:600;margin:6px 0 3px }
   .sig { display:flex;justify-content:space-between;gap:14px;margin-top:12px }
@@ -287,6 +292,7 @@ export function miniTable(
   columns: MiniColumn[],
   rows: Array<Array<string | null>>,
   rowClasses?: Array<string | null | undefined>,
+  tableClass?: string | null,
 ): string {
   const head = columns
     .map((c) => `<th${c.align === "r" ? ' class="r"' : ""}>${htmlEscape(c.header)}</th>`)
@@ -299,7 +305,7 @@ export function miniTable(
         .join("")}</tr>`;
     })
     .join("");
-  return `<table class="mini"><tr>${head}</tr>${body}</table>`;
+  return `<table class="mini${tableClass ? ` ${htmlEscape(tableClass)}` : ""}"><tr>${head}</tr>${body}</table>`;
 }
 
 /**

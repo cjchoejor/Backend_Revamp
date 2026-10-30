@@ -143,6 +143,7 @@ reservationsRouter.post("/reservations/:id/confirmation-voucher/send", requireAc
     const dispatchedTo = typeof req.body?.dispatchedTo === "string" ? req.body.dispatchedTo : undefined;
     const out = await reservationService.resendConfirmationVoucher(prisma, req.params.id, req.actor!.actorId, {
       dispatchedTo,
+      nightsEach: req.body?.nightsEach === true,
     });
     res.json(out);
   } catch (e) {

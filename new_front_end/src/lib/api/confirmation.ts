@@ -36,7 +36,7 @@ export async function verifyConference(session: Session, entryId: string, checkl
 export async function resendConfirmationVoucher(
   session: Session,
   reservationId: string,
-  body?: { dispatchedTo?: string },
+  body?: { dispatchedTo?: string; nightsEach?: boolean },
 ) {
   return apiRequest<{ communicationRecordId: string; dispatchedTo: string }>(
     `/api/reservations/${reservationId}/confirmation-voucher/send`,

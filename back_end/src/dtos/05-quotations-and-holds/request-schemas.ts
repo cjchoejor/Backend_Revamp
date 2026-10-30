@@ -149,6 +149,8 @@ export const sendQuotationRequestSchema = z.object({
   recipientAddress: z.string().optional(),
   /** Attach the copy with no money on it — the offer and the stored record are unchanged. */
   hidePrices: z.boolean().optional(),
+  /** Name every night on the copy sent, instead of writing a run as its first and last (2026-10-30). */
+  nightsEach: z.boolean().optional(),
 });
 export type SendQuotationRequestDto = z.infer<typeof sendQuotationRequestSchema>;
 

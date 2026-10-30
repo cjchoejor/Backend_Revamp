@@ -113,7 +113,7 @@ export async function decideHeldDocument(
   prisma: PrismaClient,
   heldDocumentId: string,
   actor: Actor,
-  input: { action: "EMAIL" | "WHATSAPP" | "NONE"; sentTo?: string | null; note?: string | null },
+  input: { action: "EMAIL" | "WHATSAPP" | "NONE"; sentTo?: string | null; note?: string | null; nightsEach?: boolean },
 ): Promise<HeldDocumentView> {
   const row = await prisma.heldDocument.findUnique({ where: { id: heldDocumentId } });
   if (!row) throw new NotFoundError("Held document");
@@ -131,11 +131,13 @@ export async function decideHeldDocument(
     if (row.kind === "CONFIRMATION_VOUCHER") {
       const out = (await resendConfirmationVoucher(prisma, row.documentId, actor.actorId, {
         dispatchedTo: input.sentTo?.trim() || null,
+        nightsEach: input.nightsEach === true,
       })) as { dispatchedTo?: string | null; recipient?: string | null };
       sentTo = out?.dispatchedTo ?? out?.recipient ?? input.sentTo?.trim() ?? null;
     } else {
       const inv = await dispatchInvoice(prisma, row.documentId, actor.actorId, {
         ...(input.sentTo?.trim() ? { dispatchedTo: input.sentTo.trim() } : {}),
+        nightsEach: input.nightsEach === true,
       });
       sentTo = (inv as { dispatchedTo?: string | null }).dispatchedTo ?? input.sentTo?.trim() ?? null;
     }
