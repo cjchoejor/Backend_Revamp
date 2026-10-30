@@ -49,12 +49,10 @@ import {
   DsDialog,
   Fact,
   Facts,
-  InlineWay,
   Live,
   NotNow,
   PaperDrawer,
   ReasonDialog,
-  ShutWay,
   StepCanvas,
   StepCard,
   Tool,
@@ -651,24 +649,33 @@ function LateChargePane({ entry }: { entry: EntryDetail }) {
   const fo = billing.data?.folio ?? null;
   const cur = billing.data?.currency ?? entry.folio?.lines?.[0]?.currency ?? "BTN";
   const noShow = entry.folio?.state === "NO_SHOW_CLOSED";
+  // A button under the bill, the form in a pop-up (2026-10-30, operator: "post charge here to be a
+  // button as well") — as Stay's and Check-out's Post a charge.
+  const [posting, setPosting] = useState(false);
+  const why = noShow
+    ? "A no-show never stayed — its bill closed with the no-show charge, so nothing more can be added."
+    : !fom
+      ? "Adding a charge after the guest has left is the FOM's."
+      : null;
   return (
     <>
-      <StepCard title="The bill" status={fo ? `${plural(fo.lineCount, "line")} on the bill` : undefined}>
+      <StepCard
+        title="The bill"
+        status={noShow ? <span className="warn-ink">{why}</span> : fo ? `${plural(fo.lineCount, "line")} on the bill` : undefined}
+      >
         <BillFigures fo={fo} cur={cur} />
         <div style={{ marginTop: 12 }}>
           <BillLines entry={entry} onTab={() => undefined} />
         </div>
+        <Live>
+          <div className="folio-acts">
+            <Button className={why ? undefined : "go"} icon="pen" state={why ? "inert" : "default"} reason={why ?? undefined} onClick={() => setPosting(true)}>
+              Post a charge
+            </Button>
+          </div>
+        </Live>
       </StepCard>
-      {noShow ? (
-        <StepCard
-          title="A charge found after departure"
-          status={<span className="warn-ink">A no-show never stayed — its bill closed with the no-show charge, so nothing more can be added.</span>}
-        />
-      ) : !fom ? (
-        <ShutWay act="Post the charge" why="Adding a charge after the guest has left needs the FOM." />
-      ) : (
-        <InlineWay render={(done) => <LateCharge entry={entry} open onClose={done} />} />
-      )}
+      {why ? null : <LateCharge entry={entry} open={posting} onClose={() => setPosting(false)} />}
     </>
   );
 }
@@ -1143,6 +1150,7 @@ function LateCharge({ entry, open, onClose }: { entry: EntryDetail; open: boolea
         <>
           <NotNow onClick={onClose} busy={run.isPending} />
           <Button
+            className={ok ? "go" : undefined}
             state={run.isPending ? "working" : ok ? "default" : "inert"}
             reason={ok ? undefined : amount.trim() !== "" && !amountOk ? "a charge must be more than zero" : "say what it was and the amount first"}
             workingLabel="Posting…"
