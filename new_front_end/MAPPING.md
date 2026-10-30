@@ -116,3 +116,5 @@ Also for Stage 1 (2026-10-10), outside the desk router: `POST /api/entries/:id/a
 
    They still show a few old words, such as "min threshold".
 2. Build the second-row boards, the walk-in, the agent record and the accounts as their backend items land.
+
+**Papers — shortened or every night (2026-10-30).** Every paper that names nights (quotation, proforma, voucher, interim statement, master bill, tax invoice) has two faces, like the quotation's with/without prices: the nights shortened (default — "10–19 Mar") or every night named. The preview drawer and the send boxes carry them as choice buttons (`NightsChoice`, `PricesChoice` in kit.tsx); `?nights=each` / `nightsEach`. The lines under a room carry their own nights when an extra bed or a meal plan changes part-way.
