@@ -28,7 +28,15 @@ type KeyAssignmentRow = {
   createdAt: Date;
   keyIssuedAt: Date | null;
   keyReturnedAt: Date | null;
+  keyLostAt: Date | null;
 };
+
+/**
+ * A key out with the guest: issued, not back, not lost (2026-10-30). A lost key is no longer out —
+ * the room can have a new one, and it holds no sequential room's key back.
+ */
+const keyOut = (r: { keyIssuedAt: Date | null; keyReturnedAt: Date | null; keyLostAt: Date | null }) =>
+  !!r.keyIssuedAt && !r.keyReturnedAt && !r.keyLostAt;
 
 /** The row that carries a room's key story: earliest-starting live range (null start = whole stay = earliest). */
 function keyRowForRoom(rows: KeyAssignmentRow[]): KeyAssignmentRow | null {
@@ -119,7 +127,7 @@ export async function issueRoomKey(prisma: PrismaClient, entryId: string, roomId
   const target = keyRowForRoom(rows)!;
   const room = rows[0].room;
 
-  if (rows.some((r) => r.keyIssuedAt && !r.keyReturnedAt)) {
+  if (rows.some(keyOut)) {
     throw new ValidationError(`Room ${room.roomNumber}'s key is already out`);
   }
 
@@ -128,7 +136,7 @@ export async function issueRoomKey(prisma: PrismaClient, entryId: string, roomId
   const blockers: Array<{ roomId: string; roomNumber: string }> = [];
   for (const [otherRoomId, otherRows] of groupByRoom(entry.roomAssignments)) {
     if (otherRoomId === roomId) continue;
-    const outstanding = otherRows.some((r) => r.keyIssuedAt && !r.keyReturnedAt);
+    const outstanding = otherRows.some(keyOut);
     if (!outstanding) continue;
     const otherRanges = roomRangesIso(otherRows, entry.checkInDate, entry.checkOutDate);
     const disjoint = !otherRanges.some((o) => targetRanges.some((t) => rangesOverlap(t, o)));
@@ -143,11 +151,19 @@ export async function issueRoomKey(prisma: PrismaClient, entryId: string, roomId
   }
 
   const reissue = !!target.keyIssuedAt;
+  // A new key for a lost one (2026-10-30): the row describes the new key, so the loss is cleared
+  // from it — it stays in the trace (ROOM_KEY.LOST, and named again on this issue).
+  const lostRow = rows.find((r) => r.keyLostAt) ?? null;
   const now = new Date();
   return prisma.$transaction(async (tx) => {
+    for (const r of rows) {
+      if (r.keyLostAt && r.id !== target.id) {
+        await tx.roomAssignment.update({ where: { id: r.id }, data: { keyLostAt: null, keyLostBy: null, keyLostNote: null } });
+      }
+    }
     const updated = await tx.roomAssignment.update({
       where: { id: target.id },
-      data: { keyIssuedAt: now, keyIssuedBy: actorId, keyReturnedAt: null, keyReturnedBy: null },
+      data: { keyIssuedAt: now, keyIssuedBy: actorId, keyReturnedAt: null, keyReturnedBy: null, keyLostAt: null, keyLostBy: null, keyLostNote: null },
     });
     await tx.traceEvent.create({
       data: {
@@ -161,11 +177,18 @@ export async function issueRoomKey(prisma: PrismaClient, entryId: string, roomId
         stageContext: entry.currentStage,
         inquiryId: entry.inquiryId,
         entryId,
-        payload: { entryId, roomId, roomNumber: room.roomNumber, reissue, stage: entry.currentStage },
+        payload: {
+          entryId,
+          roomId,
+          roomNumber: room.roomNumber,
+          reissue,
+          stage: entry.currentStage,
+          replacesLostKey: lostRow ? { lostAt: lostRow.keyLostAt!.toISOString(), note: lostRow.keyLostNote ?? null } : null,
+        },
         createdBy: actorId,
       },
     });
-    return { assignment: updated, roomNumber: room.roomNumber, reissue };
+    return { assignment: updated, roomNumber: room.roomNumber, reissue, replacesLostKey: !!lostRow };
   });
 }
 
@@ -259,7 +282,7 @@ export async function issueRoomKeysBulk(
   /** Rooms holding an outstanding key — seeded from the DB, grown as the batch decides. */
   const outstanding = new Map<string, { roomNumber: string; ranges: Array<{ start: string | null; end: string | null }> }>();
   for (const [roomId, rows] of byRoom) {
-    if (rows.some((r) => r.keyIssuedAt && !r.keyReturnedAt)) {
+    if (rows.some(keyOut)) {
       outstanding.set(roomId, {
         roomNumber: rows[0].room.roomNumber,
         ranges: roomRangesIso(rows, entry.checkInDate, entry.checkOutDate),
@@ -309,7 +332,7 @@ export async function issueRoomKeysBulk(
         // Per-row update — the db.ts guard forbids roomAssignment.updateMany wholesale.
         await tx.roomAssignment.update({
           where: { id: w.rowId },
-          data: { keyIssuedAt: now, keyIssuedBy: actorId, keyReturnedAt: null, keyReturnedBy: null },
+          data: { keyIssuedAt: now, keyIssuedBy: actorId, keyReturnedAt: null, keyReturnedBy: null, keyLostAt: null, keyLostBy: null, keyLostNote: null },
         });
         // One trace per key: each key is its own physical handover, and the single-room path
         // writes the same event — a bulk-only shape would make the two unqueryable together.
@@ -357,7 +380,7 @@ export async function returnRoomKey(prisma: PrismaClient, entryId: string, roomI
   const rows = entry.roomAssignments.filter((a) => a.roomId === roomId);
   if (rows.length === 0) throw new NotFoundError("RoomAssignment");
   const room = rows[0].room;
-  const outstanding = rows.filter((r) => r.keyIssuedAt && !r.keyReturnedAt);
+  const outstanding = rows.filter(keyOut);
   if (outstanding.length === 0) {
     throw new ValidationError(`Room ${room.roomNumber} has no key out to return`);
   }
@@ -404,6 +427,56 @@ export async function returnRoomKey(prisma: PrismaClient, entryId: string, roomI
       },
     });
     return { roomNumber: room.roomNumber };
+  });
+}
+
+/**
+ * THIS room's key is lost, while the guest is staying (2026-10-30, operator: "the feature of lost
+ * should be implemented in s7's key section as well"). What happened is asked, and kept on the
+ * room's own rows; the key is no longer out, so a new one can be issued for the room (which clears
+ * the loss from the rows — it stays in the trace). At Check-out a lost key is recorded with the
+ * keys returned. A lost key posts no charge — there is no price list to charge one against.
+ */
+export async function declareRoomKeyLost(prisma: PrismaClient, entryId: string, roomId: string, actorId: string, input: { note: string }) {
+  const note = input.note?.trim();
+  if (!note) throw new ValidationError("Say what happened to the key");
+  const entry = await loadEntryForKeys(prisma, entryId);
+  if (entry.status !== "ACTIVE") throw new ValidationError(`Entry is ${entry.status} — keys can only move on an active booking`);
+  if (entry.currentStage !== "S7") {
+    throw new ValidationError(
+      entry.currentStage === "S8"
+        ? "At Check-out a lost key is recorded with the keys returned"
+        : `A key is declared lost while the guest is staying (the booking is at ${entry.currentStage})`,
+    );
+  }
+  const rows = entry.roomAssignments.filter((a) => a.roomId === roomId);
+  if (rows.length === 0) throw new NotFoundError("RoomAssignment");
+  const room = rows[0].room;
+  const outstanding = rows.filter(keyOut);
+  if (outstanding.length === 0) throw new ValidationError(`Room ${room.roomNumber} has no key out to lose`);
+  const now = new Date();
+  return prisma.$transaction(async (tx) => {
+    // Per-row updates — the db.ts guard forbids roomAssignment.updateMany wholesale.
+    for (const r of outstanding) {
+      await tx.roomAssignment.update({ where: { id: r.id }, data: { keyLostAt: now, keyLostBy: actorId, keyLostNote: note } });
+    }
+    await tx.traceEvent.create({
+      data: {
+        eventType: "ROOM_KEY.LOST",
+        actorId,
+        actorLevel: "L1",
+        entityType: "RoomAssignment",
+        entityId: outstanding[0].id,
+        operation: "UPDATE",
+        timestamp: now,
+        stageContext: entry.currentStage,
+        inquiryId: entry.inquiryId,
+        entryId,
+        payload: { entryId, roomId, roomNumber: room.roomNumber, note, stage: entry.currentStage },
+        createdBy: actorId,
+      },
+    });
+    return { roomNumber: room.roomNumber, note };
   });
 }
 

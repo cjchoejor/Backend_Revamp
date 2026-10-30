@@ -59,7 +59,7 @@ import { buildQuotationPreview } from "../../services/domain/quotation-preview-s
 import { buildCompetingClaims } from "../../services/domain/competing-claims-service.js";
 import { changeRoomToNewSegment, listRoomChangeCandidates, buildRoomPlanHistory } from "../../services/domain/room-change-service.js";
 import { makeWayForRoom } from "../../services/domain/quiet-rooms-service.js";
-import { issueRoomKey, issueRoomKeysBulk, returnRoomKey } from "../../services/domain/room-key-service.js";
+import { declareRoomKeyLost, issueRoomKey, issueRoomKeysBulk, returnRoomKey } from "../../services/domain/room-key-service.js";
 import {
   partySeatingRepairRequestSchema,
   roomChangeRequestSchema,
@@ -462,6 +462,20 @@ entriesRouter.post("/:id/rooms/:roomId/key-returned", requireActorLevel("L1"), a
     next(e);
   }
 });
+
+/** THIS room's key is lost while the guest is staying, with what happened (2026-10-30). L1. */
+entriesRouter.post(
+  "/:id/rooms/:roomId/key-lost",
+  requireActorLevel("L1"),
+  validateBody(z.object({ note: z.string().trim().min(1, "Say what happened to the key").max(500) })),
+  async (req, res, next) => {
+    try {
+      res.json(await declareRoomKeyLost(prisma, req.params.id, req.params.roomId, req.actor!.actorId, { note: req.body.note }));
+    } catch (e) {
+      next(e);
+    }
+  },
+);
 
 /** Read-only trace/event feed for a single entry — visible to the staff working it (L1+). */
 entriesRouter.get("/:id/trace", requireActorLevel("L1"), async (req, res, next) => {

@@ -2370,10 +2370,13 @@ model RoomAssignment {
   /// S7 swap so a new room's key can gate on the old one being back.
   keyReturnedAt DateTime?
   keyReturnedBy String?
-  /// THIS room's key declared LOST at the S8 key return (2026-10-26, operator: "tell the system
-  /// which room's key exactly is missing"). A lost key is no longer out with the guest.
+  /// THIS room's key declared LOST — at the S8 key return (2026-10-26, operator: "tell the system
+  /// which room's key exactly is missing") or at Stay (2026-10-30). A lost key is no longer out
+  /// with the guest; a new key issued for the room clears these three (the loss stays in the trace).
   keyLostAt     DateTime?
   keyLostBy     String?
+  /// What happened to it, asked room by room (2026-10-30, operator: "it should be attached to that room").
+  keyLostNote   String?
 
   entry          Entry               @relation(fields: [entryId], references: [id])
   room           Room                @relation(fields: [roomId], references: [id])

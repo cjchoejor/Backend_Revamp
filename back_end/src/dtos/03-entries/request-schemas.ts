@@ -225,6 +225,11 @@ export const recordKeyReturnRequestSchema = z.object({
   /** Keys declared LOST (2026-10-26, ported from 4e36b65): the count, and room by room which. */
   keyCountLost: z.coerce.number().int().min(0).optional(),
   lostRoomIds: z.array(z.string().min(1)).max(60).optional(),
+  /** Each lost room with what happened to its key (2026-10-30) — the reason is kept on that room. */
+  lostRooms: z
+    .array(z.object({ roomId: z.string().min(1), note: z.string().trim().min(1, "Say what happened to the key").max(500) }))
+    .max(60)
+    .optional(),
 });
 export type RecordKeyReturnRequestDto = z.infer<typeof recordKeyReturnRequestSchema>;
 

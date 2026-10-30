@@ -413,6 +413,8 @@ export async function buildEntryBillingSummary(prisma: Db, entryId: string): Pro
       /** Legacy imported tax, held apart until it can be split (see `split` below). */
       combined: Prisma.Decimal;
       count: number;
+      /** The charges among them — what "lines on the bill" counts (2026-10-30). */
+      chargeCount: number;
     };
     const newBucket = (roomNumber: string | null): Bucket => ({
       roomNumber,
@@ -422,12 +424,14 @@ export async function buildEntryBillingSummary(prisma: Db, entryId: string): Pro
       gst: toDecimal(0),
       combined: toDecimal(0),
       count: 0,
+      chargeCount: 0,
     });
     const addTo = (b: Bucket, l: (typeof lines)[number]) => {
       const amt = toDecimal(l.amount);
       b.sum = b.sum.add(amt);
       b.count += 1;
       const kind = classifyFolioLine(l);
+      if (kind === "CHARGE") b.chargeCount += 1;
       if (kind === "SERVICE_CHARGE") b.sc = b.sc.add(amt);
       else if (kind === "GST") b.gst = b.gst.add(amt);
       else if (kind === "LEGACY_COMBINED_TAX") b.combined = b.combined.add(amt);
@@ -476,7 +480,7 @@ export async function buildEntryBillingSummary(prisma: Db, entryId: string): Pro
                 roomId,
                 roomNumber: v.roomNumber,
                 charges: money(v.sum) ?? 0,
-                lineCount: v.count,
+                lineCount: v.chargeCount,
                 base: money(s.base) ?? 0,
                 serviceCharge: money(s.sc) ?? 0,
                 gst: money(s.gst) ?? 0,
@@ -495,7 +499,7 @@ export async function buildEntryBillingSummary(prisma: Db, entryId: string): Pro
                     spaceId,
                     spaceName: v.roomNumber,
                     charges: money(v.sum) ?? 0,
-                    lineCount: v.count,
+                    lineCount: v.chargeCount,
                     base: money(s.base) ?? 0,
                     serviceCharge: money(s.sc) ?? 0,
                     gst: money(s.gst) ?? 0,
@@ -507,7 +511,7 @@ export async function buildEntryBillingSummary(prisma: Db, entryId: string): Pro
     folioBlock = {
       state: entry.folio.state,
       billedSoFar: lines.length > 0 ? money(sumMoneyBy(lines, "amount")) : null,
-      lineCount: lines.length,
+      lineCount: whole.chargeCount,
       paymentsReceived: money(toDecimal(inAgg._sum.amount)),
       refunded: refundedDec.gt(0) ? money(refundedDec) : null,
       writtenOff: writtenOffDec.gt(0) ? money(writtenOffDec) : null,
@@ -523,7 +527,7 @@ export async function buildEntryBillingSummary(prisma: Db, entryId: string): Pro
         unassignedCount > 0
           ? {
               charges: money(unassignedSum) ?? 0,
-              lineCount: unassignedCount,
+              lineCount: unassigned.chargeCount,
               base: money(split(unassigned).base) ?? 0,
               serviceCharge: money(split(unassigned).sc) ?? 0,
               gst: money(split(unassigned).gst) ?? 0,

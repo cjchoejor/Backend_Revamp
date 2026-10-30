@@ -33,7 +33,7 @@ import { FolioState, Stage } from "@prisma/client";
 import { AuthorizationError, NotFoundError, ValidationError } from "../../lib/errors.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { buildInitialBillingModelDefaults } from "../../lib/billing-model-defaults.js";
-import { classifyFolioLine, CORRECTION_LINE_PREFIX } from "../../lib/folio-tax-lines.js";
+import { chargeLineCount, classifyFolioLine, CORRECTION_LINE_PREFIX } from "../../lib/folio-tax-lines.js";
 import { parentChargeOf } from "../../lib/folio-ledger-view.js";
 import { round2, toDecimal, ZERO } from "../../lib/money.js";
 import { enforceEntryNotSealedForWorkingAction } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
@@ -194,7 +194,9 @@ async function plan(db: PrismaClient | Prisma.TransactionClient, ctx: Ctx, actor
       before: round2(before.get(k) ?? ZERO).toFixed(2),
       after: round2(after.get(k) ?? ZERO).toFixed(2),
     })),
-    linesOnBill: folio.lines.length,
+    // Charges, not ledger lines — a charge's service charge and GST move with it (2026-10-30).
+    linesOnBill: chargeLineCount(folio.lines),
+    chargesMoving: chargeLineCount(moves.map((m) => m.line)),
     allowed,
   };
 }
@@ -207,7 +209,7 @@ export async function readPayer(prisma: PrismaClient, entryId: string) {
     current: folio?.billingModel ?? null,
     map: (folio?.billingModelDefaults ?? null) as Record<string, string> | null,
     allowed: await allowedPayers(prisma),
-    linesOnBill: folio?.lines.length ?? 0,
+    linesOnBill: folio ? chargeLineCount(folio.lines) : 0,
     canChange: !!folio && folio.state === FolioState.LIVE && ctx.currentStage === Stage.S7 && ctx.status === "ACTIVE",
   };
 }
@@ -220,7 +222,7 @@ export async function previewPayerChange(prisma: PrismaClient, entryId: string, 
     to: p.to,
     moveExisting: p.moveExisting,
     newMap: p.newMap,
-    linesMoving: p.moves.length,
+    linesMoving: p.chargesMoving,
     linesOnBill: p.linesOnBill,
     byPayer: p.byPayer,
   };
@@ -290,7 +292,7 @@ export async function changePayerInStay(prisma: PrismaClient, entryId: string, a
           from: p.from,
           to: p.to,
           moveExisting: p.moveExisting,
-          linesMoved: p.moves.length,
+          linesMoved: p.chargesMoving,
           linesPinned: p.pinLines.length,
           paymentsPinned: p.pinPayments.length,
           byPayer: p.byPayer,
@@ -301,6 +303,6 @@ export async function changePayerInStay(prisma: PrismaClient, entryId: string, a
       },
     });
 
-    return { from: p.from, to: p.to, linesMoved: p.moves.length, byPayer: p.byPayer };
+    return { from: p.from, to: p.to, linesMoved: p.chargesMoving, byPayer: p.byPayer };
   });
 }
