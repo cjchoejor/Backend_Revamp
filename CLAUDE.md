@@ -35,10 +35,10 @@ Endpoints that show the pattern:
 
 | Branch | Contains | Status |
 |---|---|---|
-| `UI-experiment5` | `back_end/` + `new_front_end/` + the retired `front_end/` | **The working branch since 2026-10-27** (operator: "we will be working on that branch now for new UI changes"). Cut from `UI-experiment3` at `e0a8760`, an exact copy at the time. |
-| `UI-experiment3` | the same, up to `e0a8760` | Parked at `e0a8760`, fully pushed. All work from 2026-09-01 to 2026-10-27 is here. Do not commit here. |
+| `UI-experiment5` | `back_end/` + `new_front_end/` + the retired `front_end/` | **The working branch since 2026-10-27** (operator: "we will be working on that branch now for new UI changes"). Cut from `UI-experiment3` at `e0a8760`, an exact copy at the time. **The public server pulls this branch from 2026-10-30** (operator: "the best and latest updated") — a fast-forward from `UI-experiment3`, which it pulled before. The server is pull-only: work is done and committed on the development computer. |
+| `UI-experiment3` | the same, up to `e0a8760` | Parked at `e0a8760`, fully pushed. All work from 2026-09-01 to 2026-10-27 is here. The public server pulled it until 2026-10-30. Do not commit here. |
 | `UI-experiment4` | a side experiment from 2026-10-07 | Parked. The "second screen" (a live read-only board for a second monitor) and an availability preview for dates still being typed: 21 commits that are **not** on `UI-experiment3`/`5`, cut at `90cf626`. Work went back to `UI-experiment3` after it; nothing from it was merged. |
-| `deployment_branch` | what runs on the server | Merging the UI work into it is **paused by the operator**; whether its own commits come back here is an open question. Ask before touching it. |
+| `deployment_branch` | an older server branch — the public server does not run it (it pulled `UI-experiment3`, now `UI-experiment5`) | Merging the UI work into it is **paused by the operator**; whether its own commits come back here is an open question. Ask before touching it. |
 | `UI-experiment2` | his final state | Frozen. His last push; `UI-experiment3` was cut from it. Do not commit here. |
 | `integration-prod-frontend` | the user's own `back_end/` + `my_front_end/` + `front_end/` | **Frozen, but not finished** — holds 16 commits of the user's work not yet ported here (see below). |
 | `main` | older daily branch | Stale; predates both. |
