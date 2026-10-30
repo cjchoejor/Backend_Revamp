@@ -398,6 +398,12 @@
 .ds .list-band.today td:not(.desk-root *) { background: var(--accent-soft); color: var(--accent-ink); border-bottom-color: var(--accent-line); }
 .ds .list-band .n:not(.desk-root *) { margin-left: 10px; font-weight: 600; color: var(--ink-3); }
 .ds .bookings-page .date-cell:not(.desk-root *) { white-space: nowrap; }
+/* The preview slides in from the left over the table, which never moves (2026-10-30, operator). It
+   sits under the bar at the top (z 40), so the bell and the person's panels still open over it; its
+   top is the bar's bottom, measured. A shadow, since it floats. */
+.ds .preview.preview-over:not(.desk-root *) { position: fixed; left: 0; bottom: 0; z-index: 38; width: min(420px, calc(100vw - 32px)); overflow: auto; border: 0; border-right: 1px solid var(--line-2); border-radius: 0; padding: var(--s4) var(--s5); box-shadow: 6px 0 24px rgba(27, 30, 28, .16); animation: pv-in .18s ease-out; }
+@keyframes pv-in { from { transform: translateX(-100%); } to { transform: none; } }
+@media (prefers-reduced-motion: reduce) { .ds .preview.preview-over:not(.desk-root *) { animation: none; } }
 /* A grid item grows to its widest content unless told otherwise, so a wide table inside a
    step (the S1 rooms-by-night grid over many nights) pushed the middle column under the side
    panel. The column and the step's cards stay their own width; the table scrolls in its box. */
@@ -1503,9 +1509,11 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .ws-top .file .card:not(.desk-root *) { padding: var(--s3); }
 /* ===== The blue trial (2026-10-27, operator: "in the html, it has blue type color theme, lets try
    adopting that"). The template's light palette — cool greys, ink, and blue for where you are — while a
-   stage-template page is on screen (`.theme-blue` on `.ws-top`; the booking at Inquiry and the new
-   inquiry). It is set on the desk's root, so the dialogs and pop-ups rendered there take it too; the
-   bar at the very top keeps its own ink. Remove this block to go back. ===== */
+   stage-template page is on screen (`.theme-blue` on `.ws-top`: every step of a booking and the new
+   inquiry), and since 2026-10-30 on the six main pages — Today, Bookings, Rooms, Housekeeping,
+   Billing, Shift (`.theme-blue` on `.shell`, set by AppShell); the pages under "more" keep the desk's
+   own palette. It is set on the desk's root, so the dialogs and pop-ups rendered there take it too;
+   the bar at the very top keeps its own ink. Remove this block to go back. ===== */
 .ds:has(.theme-blue) {
   --paper: #F2F3F0;
   --surface: #FFFFFF;
@@ -1561,6 +1569,18 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds:has(.theme-blue) .card.flow-current .cardno:not(.done) { background: var(--accent); border-color: var(--accent); color: #fff; }
 .ds:has(.theme-blue) .card .flow-here { background: var(--accent); color: #fff; }
 .ds:has(.theme-blue) .btn.btn-primary.go:not(.inert):not(.faulty):hover:not(.desk-root *) { background: #175E37; border-color: #175E37; }
+/* The house chart in the same palette (2026-10-30) — its greys and lines cool, its type bands and the
+   today column in the blue palette's ink. The booking colours stay: they say how firmly a room is held. */
+.ds:has(.theme-blue) .rchart, .ds:has(.theme-blue) .rchart-hc, .ds:has(.theme-blue) .rchart-pick {
+  --rs-line: #DFE2DD; --rs-head: #F7F8F5; --rs-stay: #EEF0EC;
+  --rs-pick-line: #9AA19B; --rs-pick-tx: #545B56;
+  --rs-out-bg: #E6E8E3; --rs-ooo-a: #EEF0EC; --rs-ooo-b: #DCDFDA; --rs-ooo-tx: #4F5651;
+  --rs-type: #1B1E1C; --rs-type-band: #E6E8E3; --rs-today: #1B1E1C; --rs-today-col: #EEF2F8; --rs-we: #F4F6F2;
+}
+.ds:has(.theme-blue) .rchart .tape th, .ds:has(.theme-blue) .rchart .tape td { border-right-color: #E6E8E3; border-bottom-color: #E6E8E3; }
+.ds:has(.theme-blue) .rchart .tape tr.trow > * { border-bottom-color: #C9CEC8; }
+.ds:has(.theme-blue) .rchart .tape tr.rrow.last > * { border-bottom-color: #C9CEC8; }
+.ds:has(.theme-blue) .rchart .rslegend .sw.free { box-shadow: inset 0 0 0 1px #C4C9C3; }
 
 /* ===== A booking that ended without a stay says so in red (2026-10-27, operator: "if it is lapsed it
    should show in red or prominent way") — on the step, on the header's edge and in the bar. ===== */

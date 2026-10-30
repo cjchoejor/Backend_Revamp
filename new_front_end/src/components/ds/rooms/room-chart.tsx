@@ -56,7 +56,7 @@ import { LoadFailed, LoadingBlock } from "@/components/ds/ui";
 import { useSession } from "@/hooks/use-session";
 import { getRoomChart, type ChartBarKind, type RoomChart, type RoomChartBar, type RoomChartBooking, type RoomChartPick } from "@/lib/api/rooms";
 import { fmtDateTime, fmtRange, plural } from "@/lib/ds/format";
-import { rowNameOf } from "@/lib/ds/status";
+import { callerOfBooking, rowNameOf } from "@/lib/ds/status";
 import { STEP_NAMES, stepNoOfStage } from "@/lib/ds/steps";
 import type { RoomMoveLegInput } from "@/lib/api/room-moves";
 import { RoomMoveDialog } from "./room-move-dialog";
@@ -763,6 +763,24 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
       }
       return !v;
     });
+  // The name on the bars — the guest staying, or who rang (2026-10-30, operator), remembered the same way.
+  const [byCaller, setByCaller] = useState(false);
+  useEffect(() => {
+    try {
+      if (window.localStorage.getItem("desk:chart-names") === "caller") setByCaller(true);
+    } catch {
+      /* storage unavailable — the guest's name */
+    }
+  }, []);
+  const toggleByCaller = () =>
+    setByCaller((v) => {
+      try {
+        window.localStorage.setItem("desk:chart-names", v ? "guest" : "caller");
+      } catch {
+        /* storage unavailable — the choice lasts this visit */
+      }
+      return !v;
+    });
   const [full, setFull] = useState(false);
   const [pickNights, setPickNights] = useState(1);
   const pickRef = useRef<HTMLDivElement | null>(null);
@@ -1074,6 +1092,8 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
 
   const lastNight = chart.nights[chart.nights.length - 1];
   const nameOf = (b?: RoomChartBooking) => (b ? rowNameOf(b) : "Booking");
+  /** The name drawn on a bar: the guest's, or the caller's when the desk chose callers. */
+  const barNameOf = (b?: RoomChartBooking) => (b ? (byCaller ? callerOfBooking(b) : rowNameOf(b)) : "Booking");
   // The card opens after the pointer has rested a second, so sweeping across the table shows nothing.
   const point = (h: Hover) => {
     if (hoverTimer.current) window.clearTimeout(hoverTimer.current);
@@ -1736,12 +1756,16 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
           <Button kind="quiet" compact onClick={toggleByGuest} aria-pressed={byGuest}>
             {byGuest ? "Colour by state" : "Colour by guest"}
           </Button>
+          <Button kind="quiet" compact onClick={toggleByCaller} aria-pressed={byCaller}>
+            {byCaller ? "Name by guest" : "Name by caller"}
+          </Button>
           <Button kind="quiet" compact onClick={() => setFull((f) => !f)} aria-pressed={full}>
             {full ? "Exit full screen" : "Full screen"}
           </Button>
           <Help label="About the house chart">
             <p>Every room, night by night: who holds it and how firmly. Rest the pointer on a booking for a second to see it. Click it once for a box with all its rooms night by night, where you tick what to move; double-click it to open the booking.</p>
             <p>Click a free night to start an inquiry for that room from that night. The room is chosen on the booking, where the house is asked.</p>
+            <p>Name by caller shows who rang for each booking instead of the guest staying — an agency or a company by its own name. The other name is on the card when you rest on a booking.</p>
             <p>Click a room number to report a fault or review one. A room drawn free here is one the room search offers.</p>
             <p>A faint dashed bar is a pick: a booking at Inquiry, or at Negotiation without a provisional block, has chosen the room but holds nothing — the room is still free, and whoever reserves first takes it. Several picks on one night show as &ldquo;2 picks&rdquo;; a pick on a room someone holds shows as a &ldquo;+1 pick&rdquo; badge on that booking. Hide picks clears them from the chart on this computer.</p>
             <p>Colour by guest gives every booking in view its own colour — no two the same — so its rooms read as one and the bookings beside it look furthest apart — pale while reserved or held, deep once in house; a dashed edge is still held, a dotted edge a provisional block. Colour by state goes back to one colour per state. The colours are shared out among the bookings on screen, so moving to other dates can change them. The choice is kept on this computer.</p>
@@ -1942,7 +1966,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
                                 {one ? (
                                   <>
                                     {one.parked ? <span className="pk">Parked</span> : null}
-                                    {nameOf(pb)}
+                                    {barNameOf(pb)}
                                     <span className="st"> · picked, not held</span>
                                   </>
                                 ) : (
@@ -2045,7 +2069,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
                               onClick={(e) => clickBar(e, sel, movable)}
                             >
                               {s.bar.parked ? <span className="pk">Parked</span> : null}
-                              {nameOf(b)}
+                              {barNameOf(b)}
                               {s.span > 1 && b ? <span className="st"> · {STEP_NAMES[stepNoOfStage(b.stage) - 1]}</span> : null}
                             </button>
                             {(() => {
@@ -2298,7 +2322,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
 
       {hover && !box && !pick && !pickList && !clash && !moveLegs && !dateMove && !splitMove && !nightMove ? (
         <Floating>
-          <HoverCard hover={hover} chart={chart} bookingOf={bookingOf} typeName={(id) => typeOf.get(id)?.name ?? ""} showPicks={showPicks} />
+          <HoverCard hover={hover} chart={chart} bookingOf={bookingOf} typeName={(id) => typeOf.get(id)?.name ?? ""} showPicks={showPicks} byCaller={byCaller} />
         </Floating>
       ) : null}
 
@@ -2464,11 +2488,13 @@ function HoverCard({
   bookingOf,
   typeName,
   showPicks = true,
+  byCaller = false,
 }: {
   hover: Hover;
   chart: RoomChart;
   bookingOf: Map<string, RoomChartBooking>;
   typeName: (roomTypeId: string) => string;
+  byCaller?: boolean;
   showPicks?: boolean;
 }) {
   const style = placeBeside(hover.rect, 320);
@@ -2492,9 +2518,11 @@ function HoverCard({
           {bar.paymentPending ? <span className="hc-tag">Advance short</span> : null}
         </div>
         <div className="hc-body">
-          <div className="hc-name">{b ? rowNameOf(b) : bar.entryId}</div>
+          {/* The big name is the one on the bar; the other name is a fact under it. */}
+          <div className="hc-name">{b ? (byCaller ? callerOfBooking(b) : rowNameOf(b)) : bar.entryId}</div>
           {b?.partyName ? <div className="hc-sub">Booked by {b.partyName}</div> : null}
           <div className="hc-facts">
+            {b ? (byCaller ? fact("Guest", rowNameOf(b)) : fact("Caller", callerOfBooking(b))) : null}
             {fact("Room", roomLine(room))}
             {fact("In this room", `${fmtRange(bar.from, bar.to)} · ${plural(nightsBetween(bar.from, bar.to), "night")} on the chart`)}
             {b?.checkInDate ? fact("Stay", `${fmtRange(b.checkInDate, b.checkOutDate)}${stay ? ` · ${plural(stay, "night")}` : ""}`) : null}
