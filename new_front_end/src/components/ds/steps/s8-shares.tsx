@@ -24,6 +24,7 @@ import { DsDialog, Live, atLeast, toastRefusal, useRefreshEntry, words } from ".
 import { SendToField, useBookedBy, useSendTo } from "./s8-parts";
 import { useUnansweredDamage } from "./damage-card";
 import { Help } from "@/components/ds/help";
+import { ReqMark } from "./new-inquiry-parts";
 
 export const SETTLE_METHODS = [
   ["CASH", "Cash"],
@@ -36,6 +37,54 @@ export const SETTLE_METHODS = [
   ["VOUCHER", "The agent's voucher"],
 ] as const;
 export type SettleMethod = (typeof SETTLE_METHODS)[number][0];
+
+/**
+ * Cash and QR take a payment reference whenever money is taken — the backend refuses them without
+ * one (s8-settlement-service, "paymentVerificationRef is required for CASH and MOBILE_PAYMENT").
+ * Keep the two in step.
+ */
+export const referenceNeeded = (method: SettleMethod) => method === "CASH" || method === "MOBILE_PAYMENT";
+
+/**
+ * The payment reference (or the agency's voucher number) — said to be needed on its label, and red
+ * while it is empty and needed (2026-10-30, operator: "it doesn't indicate the user has to fill the
+ * transaction reference").
+ */
+export function ReferenceField({
+  method,
+  value,
+  onChange,
+  takesMoney,
+}: {
+  method: SettleMethod;
+  value: string;
+  onChange: (v: string) => void;
+  /** Money is taken now — a zero payment has nothing to reference. */
+  takesMoney: boolean;
+}) {
+  const voucher = method === "VOUCHER";
+  const needed = !voucher && referenceNeeded(method) && takesMoney;
+  const missing = needed && !value.trim();
+  const placeholder = voucher
+    ? "the agency's voucher number"
+    : method === "CARD"
+      ? "the card slip's number"
+      : method === "MOBILE_PAYMENT"
+        ? "the QR payment's reference"
+        : method === "CASH"
+          ? "the cash receipt's number"
+          : "the transaction reference";
+  return (
+    <div className="field">
+      <label>
+        {voucher ? "Voucher number" : "Payment reference"}
+        {needed ? <ReqMark title={`needed for ${method === "CASH" ? "cash" : "a QR payment"}`} /> : <span className="meta"> · optional</span>}
+      </label>
+      <input className={`input${missing ? " missing" : ""}`} value={value} placeholder={placeholder} aria-invalid={missing || undefined} onChange={(e) => onChange(e.target.value)} />
+      {missing ? <span className="hint stop-ink">Needed for {method === "CASH" ? "cash" : "a QR payment"} — fill it in to settle</span> : null}
+    </div>
+  );
+}
 
 /**
  * The ways of settling a billing model allows (2026-09-18). The backend refuses anything but a
@@ -248,7 +297,7 @@ function ShareRow({
 
       {done ? null : (
         <Live>
-          <div className="form2" style={{ marginTop: 10 }}>
+          <div className="form3 settle-row" style={{ marginTop: 10 }}>
             <div className="field">
               <label>How they pay</label>
               <select className="input" value={method} onChange={(e) => setMethod(e.target.value as SettleMethod)}>
@@ -259,17 +308,7 @@ function ShareRow({
                 ))}
               </select>
             </div>
-            {method === "DIRECT_BILL" ? null : (
-              <div className="field">
-                <label>{method === "VOUCHER" ? "Voucher number" : "Payment reference"}</label>
-                <input
-                  className="input"
-                  value={ref}
-                  placeholder={method === "VOUCHER" ? "the agency's voucher number" : "the transaction reference"}
-                  onChange={(e) => setRef(e.target.value)}
-                />
-              </div>
-            )}
+            {method === "DIRECT_BILL" ? null : <ReferenceField method={method} value={ref} onChange={setRef} takesMoney={takesMoney} />}
             {method === "VOUCHER" ? (
               <div className="field">
                 <label>

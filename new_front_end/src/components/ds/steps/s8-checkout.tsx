@@ -69,6 +69,7 @@ import {
   type PaperRef,
   OtherWaysTabs,
   InlineWay,
+  NotNow,
   ShutWay,
   type StepPane,
 } from "./kit";
@@ -92,6 +93,7 @@ import {
 } from "./s8-parts";
 import {
   PayerShares,
+  ReferenceField,
   defaultSettleMethod,
   settleMethodsFor,
   sharesToSettle,
@@ -822,6 +824,7 @@ function HowSettled({
     if (balance != null && balance > 0) setCeiling(String(balance));
   }, [balance]);
   const [creditWhy, setCreditWhy] = useState("");
+  const [creditOpen, setCreditOpen] = useState(false);
   const [payWithin, setPayWithin] = useState("");
 
   // The backend's partial-settlement rule, said before the click (it enforces it regardless):
@@ -893,6 +896,7 @@ function HowSettled({
       return recordCreditExtension(session!, entry.id, body);
     },
     onSuccess: () => {
+      setCreditOpen(false);
       toast.success("Credit extension approved — a part-payment within it can now be settled");
       refresh();
     },
@@ -947,9 +951,9 @@ function HowSettled({
         {entry.groupBillingMode === "GROUP_MASTER" ? <Chip tone="quiet">one bill for the party</Chip> : null}
         {folio ? (
           <SeeRow
-            label={byPart ? "Hide the parts" : "Settle part by part"}
+            label="Settle part by part"
             note="each room or space pays its own part — the money is filed against it; the bill stays one"
-            onClick={() => setByPart((v) => !v)}
+            onClick={() => setByPart(true)}
           />
         ) : null}
         <Live>
@@ -971,10 +975,13 @@ function HowSettled({
         </div>
       ) : null}
 
-      {byPart && folio ? (
-        <Tool>
-          <SplitSettlementBlock entry={entry} folioId={folio.id} defaultOpen />
-        </Tool>
+      {/* In a pop-up over the work column (2026-10-30, operator: "settle part by part can show a pop up"). */}
+      {folio ? (
+        <WorkPopup open={byPart} title="Settle part by part" onClose={() => setByPart(false)}>
+          <Tool>
+            <SplitSettlementBlock entry={entry} folioId={folio.id} unfolded />
+          </Tool>
+        </WorkPopup>
       ) : null}
 
       {!folio ? (
@@ -1037,12 +1044,13 @@ function HowSettled({
           ) : null}
           {creditExpired ? (
             <p className="sm warn-ink" style={{ marginTop: 8 }}>
-              The credit extension on file has run out — it no longer covers a part-payment. The FOM approves it again below, or settles it.
+              The credit extension on file has run out — it no longer covers a part-payment. The FOM approves it again (Change the credit extension), or settles it.
             </p>
           ) : null}
 
           <Live>
-            <div className="form2" style={{ marginTop: 12 }}>
+            {/* How they pay · the reference · the amount, in one line (2026-10-30, operator). */}
+            <div className="form3 settle-row" style={{ marginTop: 12 }}>
               <div className="field">
                 <label>
                   How they pay
@@ -1058,19 +1066,10 @@ function HowSettled({
                   ))}
                 </select>
               </div>
-              {method === "DIRECT_BILL" ? null : (
-                <div className="field">
-                  <label>
-                    {method === "VOUCHER" ? "Voucher number" : "Payment reference"}
-                    <Help label="About the reference">{method === "VOUCHER" ? "As printed on the voucher." : "Cash and QR need one."}</Help>
-                  </label>
-                  <input
-                    className="input"
-                    value={ref}
-                    placeholder={method === "VOUCHER" ? "the agency's voucher number" : "the transaction reference"}
-                    onChange={(e) => setRef(e.target.value)}
-                  />
-                </div>
+              {method === "DIRECT_BILL" ? (
+                <SendToField entry={entry} value={invoiceTo} onChange={setInvoiceTo} label="Send the invoice to" />
+              ) : (
+                <ReferenceField method={method} value={ref} onChange={setRef} takesMoney={takesMoney} />
               )}
               {method === "VOUCHER" ? (
                 <div className="field">
@@ -1106,7 +1105,10 @@ function HowSettled({
                   ) : null}
                 </div>
               )}
-              {invoicesParty ? <SendToField entry={entry} value={invoiceTo} onChange={setInvoiceTo} label="Send the invoice to" /> : null}
+            </div>
+            {method === "VOUCHER" || (overCeiling && fom) ? (
+            <div className="form2 settle-row" style={{ marginTop: 10 }}>
+              {method === "VOUCHER" ? <SendToField entry={entry} value={invoiceTo} onChange={setInvoiceTo} label="Send the invoice to" /> : null}
               {overCeiling && fom ? (
                 <div className="field">
                   <label>
@@ -1122,6 +1124,7 @@ function HowSettled({
                 </div>
               ) : null}
             </div>
+            ) : null}
             {partialLocked ? (
               <div style={{ marginTop: 10 }}>
                 <Refusal
@@ -1141,17 +1144,38 @@ function HowSettled({
               >
                 Take payment &amp; settle
               </Button>
+              {fom ? (
+                <Button kind="secondary" state={live ? "default" : "inert"} onClick={() => setCreditOpen(true)}>
+                  {creditActive || creditExpired ? "Change the credit extension" : "Let the guest leave owing"}
+                </Button>
+              ) : null}
             </div>
 
-            {fom ? (
-              <div className="form2" style={{ marginTop: 14 }}>
-                <div className="rule-above">
-                  <b className="sm">Let the guest leave owing — a credit extension</b>
-                  <Help label="About the credit extension">
-                    The FOM&rsquo;s approval covers what is left, so a part-payment (even nothing) can settle and the rest is collected after the
-                    stay.
-                  </Help>
-                </div>
+            {/* The FOM's credit extension, in a pop-up (2026-10-30, operator: "credit extension to be made
+                into a button, when clicked, it should show a pop up"). */}
+            <DsDialog
+              open={creditOpen}
+              onClose={() => setCreditOpen(false)}
+              title="Let the guest leave owing — a credit extension"
+              caseLines={[<b key="g">{guest}</b>, `${entry.id} · balance ${money(balance, cur)}`]}
+              help="The FOM's approval covers what is left, so a part-payment (even nothing) can settle and the rest is collected after the stay."
+              busy={creditExt.isPending}
+              footer={
+                <>
+                  <NotNow onClick={() => setCreditOpen(false)} busy={creditExt.isPending} />
+                  <Button
+                    className={live && ceiling.trim() && creditWhy.trim() ? "go" : undefined}
+                    state={creditExt.isPending ? "working" : live && ceiling.trim() && creditWhy.trim() ? "default" : "inert"}
+                    reason={!ceiling.trim() ? "put in the amount it covers" : !creditWhy.trim() ? "write why first" : undefined}
+                    workingLabel="Approving…"
+                    onClick={() => creditExt.mutate()}
+                  >
+                    {creditActive || creditExpired ? "Approve it again" : "Approve the credit extension"}
+                  </Button>
+                </>
+              }
+            >
+              <div className="form2">
                 <div className="field">
                   <label>Covers up to · Nu.</label>
                   <input
@@ -1175,20 +1199,8 @@ function HowSettled({
                   <label>Why</label>
                   <input className="input" value={creditWhy} placeholder="bank transfer promised by Friday" onChange={(e) => setCreditWhy(e.target.value)} />
                 </div>
-                <div className="wide row-acts">
-                  <Button
-                    kind="secondary"
-                    compact
-                    state={creditExt.isPending ? "working" : live && ceiling.trim() && creditWhy.trim() ? "default" : "inert"}
-                    title={!ceiling.trim() ? "put in the amount it covers" : !creditWhy.trim() ? "write why first" : undefined}
-                    workingLabel="Approving…"
-                    onClick={() => creditExt.mutate()}
-                  >
-                    {creditActive || creditExpired ? "Approve it again" : "Approve the credit extension"}
-                  </Button>
-                </div>
               </div>
-            ) : null}
+            </DsDialog>
           </Live>
         </>
       )}

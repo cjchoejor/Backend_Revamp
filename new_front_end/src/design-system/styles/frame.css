@@ -1876,3 +1876,10 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .back-arrow:not(.desk-root *) { font-size: 18px; line-height: 1; font-weight: 700; }
 .ds .backto-note:not(.desk-root *) { font-size: var(--t-sm); color: var(--ink-2); }
 .ds .backto-note b:not(.desk-root *) { color: var(--ink); }
+
+/* Check-out's settle fields (2026-10-30, operator: "make the boxes prominent; it doesn't indicate the
+   user has to fill the transaction reference") — firmer edges, and a needed field that is empty is red. */
+.ds .settle-row .input:not(.desk-root *) { border: 1.5px solid var(--ink-3); min-height: 40px; background: var(--surface, #fff); }
+.ds .settle-row .input:focus-visible:not(.desk-root *) { border-color: var(--accent); }
+.ds .settle-row .input.missing:not(.desk-root *) { border-color: var(--danger); background: var(--danger-soft); }
+.ds .settle-row .hint.stop-ink:not(.desk-root *) { font-weight: 600; }

@@ -9,7 +9,7 @@
  * Markup follows the prototype's own helpers (`card`, `docCard`, `V16.fact`, `V16.seeRow`), so
  * the generated components.css and frame.css style it without anything added per screen.
  */
-import { Fragment, createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Children, Fragment, createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -876,9 +876,14 @@ export function StepCard({
   const isOpened = !!flow && ctx.opened.has(flow);
   // A finished section folds to its line: in "done" mode unless it is opened or being worked in,
   // in "on-move" mode once the operator is working in another section.
+  // A section with nothing inside but its status line never folds (2026-10-30, operator, on a
+  // departure handoff that recorded itself: "this had an Edit button, when clicked it didn't do
+  // anything") — opening it would show nothing to look at or change, so it simply reads its line.
+  const hasBody = Children.toArray(children).length > 0 || !!acts;
   const folded =
     !!flow &&
     !!summary &&
+    hasBody &&
     !!done &&
     !waiting &&
     !isOpened &&
