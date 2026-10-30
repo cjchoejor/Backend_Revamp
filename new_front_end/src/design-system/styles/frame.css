@@ -311,17 +311,11 @@
 .ds .pickbill .pb-rooms { display: inline-flex; flex-wrap: wrap; gap: 4px; }
 .ds .pickbill .pb-room { display: inline-flex; align-items: baseline; gap: 4px; padding: 1px 7px; border: 1px solid var(--line-2); border-radius: 999px; background: var(--surface-2); font-weight: 700; font-size: var(--t-meta); }
 .ds .pickbill .pb-room small { font-weight: 400; color: var(--ink-2); }
-.ds .pickbill .pb-byroom { margin: var(--s2) 0; line-height: 1.5; }
 .ds .pickbill .pb-ladder { margin-top: var(--s2); }
+.ds .pickbill .pb-nights { margin-top: var(--s3); }
 .ds .pickbill .pb-ladder .pb-step td { border-top: 1px solid var(--line-2); font-weight: 600; }
 .ds .pickbill .pb-ladder .pb-grand td { border-top: 2px solid var(--ink); font-weight: 800; font-size: var(--t-sm); }
 .ds .pickbill .pb-caption { margin-top: var(--s2); }
-/* Each room type's total, taxes included (2026-10-12). */
-.ds .pb-types { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 var(--s2); }
-.ds .pb-type { display: inline-flex; align-items: baseline; gap: 8px; padding: 4px 10px; border: 1px solid var(--line-2); border-radius: var(--r-control); background: var(--surface); }
-.ds .pb-type-name { font-weight: 700; }
-.ds .pb-type-n { font-size: var(--t-meta); color: var(--ink-2); }
-.ds .pb-type .money { font-variant-numeric: tabular-nums; }
 
 /* The side panel's to-do: what this step still needs, in the order it is done. */
 .ds .side .todo { display: grid; gap: 2px; }
