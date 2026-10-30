@@ -20,7 +20,7 @@ import { computeStayCharges, resolveChargeRates } from "../infrastructure/comput
 import { mulMoney, round2, sumMoneyBy, toDecimal } from "../../lib/money.js";
 import { describeAdvancePaymentPlan, resolveAdvancePaymentPlan } from "./s3-payment-service.js";
 import { formatMoment as formatEmailDate } from "../infrastructure/stage-email-helpers.js";
-import { buildFinalInvoiceFigures, generateOrLoadInvoicePdf, loadInvoiceForRender } from "./invoice-pdf-service.js";
+import { buildFinalInvoiceFigures, generateOrLoadInvoicePdf, loadInvoiceForRender, renderProformaPdfFace } from "./invoice-pdf-service.js";
 import { releaseEntryRoomsToFree } from "../../lib/room-claim-state.js";
 import { resolveBillingModelForNewLine } from "../../lib/billing-model-defaults.js";
 import { computeOutstandingForBillingModel, listBillingModelBucketsForFolio } from "../../lib/folio-outstanding-per-billing-model.js";
@@ -194,7 +194,7 @@ async function dispatchInvoiceInner(
   prisma: PrismaClient,
   invoiceId: string,
   actorId: string,
-  input?: { dispatchedTo?: string },
+  input?: { dispatchedTo?: string; nightsEach?: boolean },
 ) {
   const invoice = await prisma.invoice.findUnique({ where: { id: invoiceId } });
   if (!invoice) throw new NotFoundError("Invoice");
@@ -443,12 +443,18 @@ async function dispatchInvoiceInner(
 
   // Phase 3 — outbound invoice email (best-effort, post-tx).
   // PROFORMA → S3 PI email; final invoices (RECEIPT_BASED / FOLIO / etc.) → S8/S9 final invoice email.
-  await sendInvoiceEmailBestEffort(prisma, actorId, result.id, recipient);
+  await sendInvoiceEmailBestEffort(prisma, actorId, result.id, recipient, { nightsEach: input?.nightsEach === true });
 
   return result;
 }
 
-async function sendInvoiceEmailBestEffort(prisma: PrismaClient, actorId: string, invoiceId: string, recipient: InvoiceRecipient) {
+async function sendInvoiceEmailBestEffort(
+  prisma: PrismaClient,
+  actorId: string,
+  invoiceId: string,
+  recipient: InvoiceRecipient,
+  face?: { nightsEach?: boolean },
+) {
   const inv = await prisma.invoice.findUnique({
     where: { id: invoiceId },
     include: {
@@ -583,11 +589,17 @@ async function sendInvoiceEmailBestEffort(prisma: PrismaClient, actorId: string,
   // Generate the invoice PDF and attach it. Idempotent — subsequent dispatches serve the
   // stored file. Failure is non-fatal: the text email still goes out.
   try {
+    // The stored PDF is rendered either way — the record. A proforma the desk asked to send with
+    // every night named goes out as that copy (2026-10-30).
     const artifact = await generateOrLoadInvoicePdf(prisma, inv.id, actorId);
+    const attached =
+      isPI && face?.nightsEach
+        ? await renderProformaPdfFace(prisma, inv.id, { nightsMode: "EACH" })
+        : { filename: artifact.filename, bytes: artifact.bytes };
     content.attachments = [
       {
-        filename: artifact.filename,
-        content: artifact.bytes,
+        filename: attached.filename,
+        content: attached.bytes,
         contentType: "application/pdf",
       },
     ];

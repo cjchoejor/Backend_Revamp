@@ -635,7 +635,8 @@ async function resendConfirmationVoucherInner(
   prisma: PrismaClient,
   reservationId: string,
   actorId: string,
-  input: { dispatchedTo?: string | null },
+  /** `nightsEach` sends the copy with every night named (2026-10-30); the stored voucher stays as it is. */
+  input: { dispatchedTo?: string | null; nightsEach?: boolean },
 ) {
   const reservation = await prisma.reservation.findUnique({
     where: { id: reservationId },
@@ -762,10 +763,14 @@ async function resendConfirmationVoucherInner(
     return created;
   });
 
-  // PDF attachment + email — post-tx, best-effort, same as confirmation.
+  // PDF attachment + email — post-tx, best-effort, same as confirmation. The stored voucher is made
+  // either way; the copy with every night named is what goes out when the desk asked for it.
   try {
     const artifact = await generateOrLoadConfirmationVoucherPdf(prisma, reservation.id, actorId);
-    content.attachments = [{ filename: artifact.filename, content: artifact.bytes, contentType: "application/pdf" }];
+    const attached = input.nightsEach
+      ? await generateOrLoadConfirmationVoucherPdf(prisma, reservation.id, actorId, { nightsMode: "EACH" })
+      : artifact;
+    content.attachments = [{ filename: attached.filename, content: attached.bytes, contentType: "application/pdf" }];
   } catch (e) {
     await prisma.traceEvent
       .create({

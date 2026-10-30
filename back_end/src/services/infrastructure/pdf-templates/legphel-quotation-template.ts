@@ -36,9 +36,8 @@ import type { StayLines } from "./legphel-document-format.js";
  */
 export type LegphelQuotationLine = {
   /**
-   * The nights this room is held for — "06–07 Oct" (2026-10-06). Printed only on a booking whose
-   * rooms are NOT all held for the same nights: where they are, the Stay line above says it once
-   * and a column repeating it on every row is noise. Sub-lines leave it empty.
+   * The nights this line is for — "10–19 Mar", or every night named (2026-10-30). A room's row
+   * always carries them; a line under it only when its nights are not all the room's.
    */
   dates?: string | null;
   /** "Room 201 · Deluxe · 2 adults" or, indented beneath it, "Meals · AP (all meals)". */
@@ -52,6 +51,8 @@ export type LegphelQuotationLine = {
   amount: string;
   /** Sub-line of the room above — indented, lighter. */
   indent?: boolean;
+  /** Says something, charges nothing — printed grey ("Room only · no meals"). */
+  muted?: boolean;
 };
 
 export type LegphelQuotationInput = {
@@ -105,7 +106,7 @@ export type LegphelQuotationInput = {
    * are always the priced one.
    */
   hidePrices?: boolean;
-  /** Lead the table with each room's own nights — a booking that moves rooms mid-stay. */
+  /** Lead the table with each room's own nights — on every quotation since 2026-10-30. */
   datesShown?: boolean;
   /** Optional issuance-register id for the footer's middle slot. */
   issuanceRef?: string | null;
@@ -142,10 +143,11 @@ export function renderLegphelQuotationHtml(input: LegphelQuotationInput): string
       // row of each group so room + beds + meals read as one billed item.
       input.lines.map((l, i) => {
         const lastOfGroup = !input.lines[i + 1]?.indent;
-        return [l.indent ? "sub" : null, l.indent && lastOfGroup ? "grp-end" : null]
+        return [l.indent ? "sub" : null, l.indent && lastOfGroup ? "grp-end" : null, l.muted ? "quiet" : null]
           .filter(Boolean)
           .join(" ") || null;
       }),
+      input.datesShown ? "dated" : null,
     ),
     input.hidePrices ? "" : row("Net value", input.netValue),
     input.hidePrices ? "" : row(input.serviceChargeLabel, input.serviceCharge),

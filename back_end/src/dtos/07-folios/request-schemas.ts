@@ -301,6 +301,8 @@ export type RecordFolioRefundRequestDto = z.infer<typeof recordFolioRefundReques
 
 export const dispatchInvoiceRequestSchema = z.object({
   dispatchedTo: z.string().optional(),
+  /** A proforma sent with every night named, instead of a run as its first and last (2026-10-30). */
+  nightsEach: z.boolean().optional(),
 });
 export type DispatchInvoiceRequestDto = z.infer<typeof dispatchInvoiceRequestSchema>;
 

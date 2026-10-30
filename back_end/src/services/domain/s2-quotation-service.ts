@@ -37,7 +37,7 @@ import { resolveRatePackageForBooking, type AgentRateBreakdown } from "../../lib
 import { loadChildPolicyBundle, computeGroupMealCharge } from "./child-policy-service.js";
 import { readOptionSelected, firstRoomId } from "../../lib/option-selected-reader.js";
 import { mulMoney, round2, sumMoney, toDecimal } from "../../lib/money.js";
-import { generateOrLoadQuotationPdf, renderQuotationPdfWithoutPrices } from "./quotation-pdf-service.js";
+import { generateOrLoadQuotationPdf, renderQuotationPdfFace } from "./quotation-pdf-service.js";
 import {
   applyBookingDiscountToTotals,
   autoAddRequiredExtraBeds,
@@ -1999,6 +1999,8 @@ async function sendQuotationInner(
      * still the priced one; only what the guest receives differs, and the trace says so.
      */
     hidePrices?: boolean;
+    /** Name every night on the copy sent (2026-10-30) — the stored PDF writes runs short. */
+    nightsEach?: boolean;
   },
 ) {
   const q = await prisma.quotation.findUnique({ where: { id: quotationId } });
@@ -2164,6 +2166,7 @@ async function sendQuotationInner(
           documentStorageReference: doc.storageReference,
           // What the guest actually received — the record keeps the priced document either way.
           pricesShown: input.hidePrices !== true,
+          nightsShown: input.nightsEach === true ? "EACH" : "SHORT",
         },
         createdBy: actorId,
       },
@@ -2184,6 +2187,7 @@ async function sendQuotationInner(
       quotationId,
       /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(typed) ? typed : null,
       input.hidePrices === true,
+      input.nightsEach === true,
     );
   }
 
@@ -2195,6 +2199,7 @@ async function sendQuotationEmailBestEffort(
   quotationId: string,
   toAddress: string | null = null,
   hidePrices = false,
+  nightsEach = false,
 ) {
   const q = await prisma.quotation.findUnique({
     where: { id: quotationId },
@@ -2241,14 +2246,13 @@ async function sendQuotationEmailBestEffort(
     // The priced PDF is rendered and stored either way — it is the record of what was offered.
     // When the desk asked for a copy without prices, THAT is what the guest receives.
     const artifact = await generateOrLoadQuotationPdf(prisma, q.id, q.createdBy ?? "SYSTEM");
-    const attached = hidePrices
-      ? await renderQuotationPdfWithoutPrices(prisma, q.id)
-      : { bytes: artifact.bytes, referenceNumber: artifact.invoiceNumber };
+    const attached =
+      hidePrices || nightsEach
+        ? await renderQuotationPdfFace(prisma, q.id, { hidePrices, nightsMode: nightsEach ? "EACH" : "SHORT" })
+        : { bytes: artifact.bytes, referenceNumber: artifact.invoiceNumber };
     content.attachments = [
       {
-        filename: hidePrices
-          ? `${attached.referenceNumber}-quotation-no-prices.pdf`
-          : `${attached.referenceNumber}-quotation.pdf`,
+        filename: `${attached.referenceNumber}-quotation${hidePrices ? "-no-prices" : ""}${nightsEach ? "-each-night" : ""}.pdf`,
         content: attached.bytes,
         contentType: "application/pdf",
       },

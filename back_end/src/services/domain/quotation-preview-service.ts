@@ -28,7 +28,7 @@ import { buildEntryRateReference } from "./rate-reference-service.js";
 import { loadChildPolicyBundle } from "./child-policy-service.js";
 import { readOptionSelected, firstRoomId } from "../../lib/option-selected-reader.js";
 import { buildDeskPriceLines, priceLinesToCents, type PriceLine, type PriceLineRoom } from "../../lib/quotation-price-lines.js";
-import { labelRoomNights, stayNightDates } from "../../lib/room-nights-for-entry.js";
+import { stayNightDates } from "../../lib/room-nights-for-entry.js";
 
 const ZERO = new Prisma.Decimal(0);
 
@@ -444,7 +444,8 @@ export async function buildQuotationPreview(
       extraBedSubtotal: n2(r.extraBedSubtotal),
       extraBedsVaryByNight: r.extraBedsVaryByNight === true,
       mealsVaryByNight: r.perNightMealBreakdown.some((b) => b.overridden),
-      datesLabel: ds ? labelRoomNights(ds) : null,
+      nightDates: ds ?? null,
+      nightBreakdown: r.perNightMealBreakdown.map((b) => ({ date: b.date, meals: n2(b.meals), extraBeds: b.extraBeds })),
       roomLabel: roomLabels.get(r.roomId) ?? null,
     });
   });

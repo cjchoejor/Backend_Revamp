@@ -57,7 +57,7 @@ import {
   resolveOperatorAdvanceRequirement,
 } from "./s3-payment-service.js";
 import { resolveOperativeQuotation } from "../../lib/operative-quotation.js";
-import { labelRoomNights, roomNightsForEntry } from "../../lib/room-nights-for-entry.js";
+import { assignedRoomNights, roomNightsForEntry, roomsWithNightsLine, type NightsMode } from "../../lib/room-nights-for-entry.js";
 
 type QuotationTerms = {
   roomCount?: number;
@@ -189,7 +189,8 @@ type ProformaPrintLine = {
  *     falls back to the full remaining balance.
  *   - "Balance at checkout" = total − received − advance due now (floor 0).
  */
-async function buildProformaDocRender(prisma: PrismaClient, inv: LoadedInvoice) {
+async function buildProformaDocRender(prisma: PrismaClient, inv: LoadedInvoice, opts?: { nightsMode?: NightsMode }) {
+  const nightsMode: NightsMode = opts?.nightsMode ?? "SHORT";
   const hotel = await loadHotelProfileForRender(prisma);
   const p = invoicePrelude(inv);
 
@@ -306,20 +307,11 @@ async function buildProformaDocRender(prisma: PrismaClient, inv: LoadedInvoice) 
     })) {
       types.set(r.id, r.roomType?.name ?? "Room");
     }
-    const groups = new Map<string, { type: string; label: string; first: string; count: number }>();
-    for (const [roomId, nights] of piRoomNights.entries()) {
-      const type = types.get(roomId) ?? "Room";
-      const label = labelRoomNights(nights);
-      const key = `${type}|${label}`;
-      const g = groups.get(key);
-      if (g) g.count += 1;
-      else groups.set(key, { type, label, first: [...nights].sort()[0] ?? "", count: 1 });
-    }
     roomNightsLine =
-      [...groups.values()]
-        .sort((a, b) => a.first.localeCompare(b.first) || a.type.localeCompare(b.type))
-        .map((g) => `${g.count > 1 ? `${g.count} × ` : ""}${g.type} (${g.label})`)
-        .join(" · ") || null;
+      roomsWithNightsLine(
+        [...piRoomNights.entries()].map(([roomId, nights]) => ({ name: types.get(roomId) ?? "Room", nights })),
+        nightsMode,
+      ) || null;
   }
 
   // The booking's discount, read off the terms this document is priced on. `amountOffTotal` is
@@ -531,6 +523,7 @@ export async function buildInterimDocRender(prisma: PrismaClient, inv: LoadedInv
 export async function renderInvoicePreviewHtml(
   prisma: PrismaClient,
   invoiceId: string,
+  opts?: { nightsMode?: NightsMode },
 ): Promise<{ html: string; invoiceRef: string }> {
   const inv = await loadInvoiceForRender(prisma, invoiceId);
   if (inv.invoiceType === InvoiceType.INTERIM) {
@@ -540,8 +533,24 @@ export async function renderInvoicePreviewHtml(
   if (inv.invoiceType !== InvoiceType.PROFORMA) {
     throw new ValidationError("Inline preview is available for proforma and interim invoices only");
   }
-  const m = await buildProformaDocRender(prisma, inv);
+  const m = await buildProformaDocRender(prisma, inv, opts);
   return { html: m.html, invoiceRef: m.invoiceRef };
+}
+
+/**
+ * The proforma with every night named, as a PDF rendered fresh and never stored (2026-10-30): the
+ * stored artifact writes runs short, and is the record of what was billed.
+ */
+export async function renderProformaPdfFace(
+  prisma: PrismaClient,
+  invoiceId: string,
+  face: { nightsMode: NightsMode },
+): Promise<{ bytes: Buffer; filename: string }> {
+  const inv = await loadInvoiceForRender(prisma, invoiceId);
+  if (inv.invoiceType !== InvoiceType.PROFORMA) throw new ValidationError("Only a proforma has a copy with every night named");
+  const m = await buildProformaDocRender(prisma, inv, face);
+  const base = filenameFor(inv.invoiceType, inv.invoiceNumber ?? inv.id).replace(/\.pdf$/, "");
+  return { bytes: await renderHtmlToPdf(m.html, { fitToPage: true }), filename: `${base}${face.nightsMode === "EACH" ? "-each-night" : ""}.pdf` };
 }
 
 /**
@@ -830,6 +839,8 @@ export type TaxInvoiceRenderInput = {
   stay: { checkIn: Date | null; checkOut: Date | null; nights: number | null };
   /** Room numbers to print (falls back to the ledger's attribution when empty). */
   roomNumbers?: string[];
+  /** The Rooms line with each room's nights — "Room 201 (10–19 Mar) · Room 202 (10–14 Mar)" (2026-10-30). Wins over `roomNumbers`. */
+  roomsLine?: string | null;
   /** The issued original's reference + date. Null renders the DRAFT. */
   issued: { invoiceRef: string; issuedAt: Date } | null;
   /** The instant the figures were read — the draft's "Position as at". */
@@ -909,7 +920,7 @@ export function composeTaxInvoiceHtml(input: TaxInvoiceRenderInput): string {
     customerTpn: input.parties.customerTpn,
     yourRef: input.parties.yourRef,
     stay: input.stay.checkIn && input.stay.checkOut ? formatStayLines(input.stay.checkIn, input.stay.checkOut, input.stay.nights) : null,
-    rooms: roomNumbers.length > 0 ? `Room${roomNumbers.length === 1 ? "" : "s"} ${roomNumbers.join(", ")}` : null,
+    rooms: input.roomsLine || (roomNumbers.length > 0 ? `Room${roomNumbers.length === 1 ? "" : "s"} ${roomNumbers.join(", ")}` : null),
     lines: f.components.map((c) => ({ description: describeComponent(c), amount: formatMoney(c.total) })),
     detailNote: "Itemised detail on the Master Bill.",
     netValue: formatMoney(f.ladder.net),
@@ -1145,12 +1156,15 @@ export async function generateOrLoadInvoicePdf(
   const preparedByName = await getPreparedByName(prisma, actorId);
   const parties = taxInvoicePartiesFromEntry(inv.entry);
 
+  // Each room with its nights, written short (2026-10-30).
+  const assigned = await assignedRoomNights(prisma, inv.entryId, { checkIn, checkOut }).catch(() => []);
   const html = composeTaxInvoiceHtml({
     hotel,
     figures: fig,
     parties,
     bookingRef: inv.entryId,
     stay: { checkIn, checkOut, nights },
+    roomsLine: assigned.length ? roomsWithNightsLine(assigned) : null,
     issued: { invoiceRef, issuedAt: inv.issuedAt ?? inv.dispatchedAt ?? now },
     asAt: now,
     gstRate,
