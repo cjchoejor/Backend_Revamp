@@ -1488,6 +1488,12 @@ export type ChangeBookingItem = {
   /** Why it cannot be done now — the item is shown shut, with this said. */
   reason?: string;
   danger?: boolean;
+  /**
+   * Something owed on this item, said in a red count beside its name — "2 owed today", "1 open" —
+   * with the item and its line drawn in red (2026-10-31, operator: "inside also it needs to be
+   * prominent"). The menu's button carries the same number (`badge`).
+   */
+  due?: string;
 };
 
 /**
@@ -1571,7 +1577,7 @@ export function ChangeBookingMenu({
                   key={it.key}
                   type="button"
                   role="menuitem"
-                  className={`cb-item${it.danger ? " danger" : ""}`}
+                  className={`cb-item${it.danger ? " danger" : ""}${it.due ? " due" : ""}`}
                   data-item={it.key}
                   disabled={shut}
                   onClick={() => {
@@ -1579,7 +1585,10 @@ export function ChangeBookingMenu({
                     it.onSelect?.();
                   }}
                 >
-                  <span className="cb-label">{it.label}</span>
+                  <span className="cb-head">
+                    <span className="cb-label">{it.label}</span>
+                    {it.due ? <span className="cb-due">{it.due}</span> : null}
+                  </span>
                   <span className="cb-note">{it.note}</span>
                   {it.reason ? <span className="cb-why">{it.reason}</span> : null}
                 </button>

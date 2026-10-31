@@ -322,8 +322,11 @@ function CheckoutActs({
     },
     {
       key: "disputes",
-      label: openDisputes ? `Disputes · ${openDisputes} open` : "Disputes",
-      note: "A charge the guest questions — raised, reviewed, closed. The booking stays at Check-out while one is open.",
+      label: "Disputes",
+      due: openDisputes ? `${openDisputes} open` : undefined,
+      note: openDisputes
+        ? `The booking stays at Check-out until ${openDisputes === 1 ? "it is" : "they are"} closed — open it to review or close it.`
+        : "A charge the guest questions — raised, reviewed, closed. The booking stays at Check-out while one is open.",
       onSelect: onDisputes,
     },
   ];

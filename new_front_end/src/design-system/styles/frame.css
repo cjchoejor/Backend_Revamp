@@ -1373,6 +1373,14 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .cb-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .ds .cb-item:disabled { cursor: default; opacity: 0.7; }
 .ds .cb-label { font-weight: 600; }
+.ds .cb-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* An item with something owed on it reads in red, its count beside its name (2026-10-31, operator:
+   "inside also it needs to be prominent") — the same red the menu's button carries. */
+.ds .cb-due { display: inline-block; padding: 0 8px; border-radius: 10px; background: var(--danger); color: #fff; font-size: 12px; font-weight: 700; line-height: 20px; white-space: nowrap; }
+.ds .cb-item.due { background: var(--danger-soft); box-shadow: inset 4px 0 0 var(--danger); padding-left: 14px; }
+.ds .cb-item.due:hover:not(:disabled) { background: var(--danger-soft); box-shadow: inset 4px 0 0 var(--danger), inset 0 0 0 1px var(--danger); }
+.ds .cb-item.due .cb-label { color: var(--danger); font-weight: 700; }
+.ds .cb-item.due .cb-note { color: var(--danger); font-weight: 600; }
 .ds .cb-item.danger .cb-label { color: var(--danger); }
 .ds .cb-note { font-size: var(--t-meta); color: var(--ink-2); line-height: 1.35; }
 .ds .cb-why { font-size: var(--t-meta); color: var(--warning); font-weight: 600; }
