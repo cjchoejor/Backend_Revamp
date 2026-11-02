@@ -45,7 +45,7 @@ on :4000.
 | Audit | `/audit` | `GET /api/desk/activity` (FOM and above) | Built. One hotel day, filtered by person or booking. The front desk sees why it is closed to them. |
 | Notifications | `/notifications?view=now|sent` | the bookings list (as the bell), `GET /api/desk/alerts?days=` | Built (2026-10-23), opened from the bell's **See all notifications**. **Needs a person**: the bell's whole list — overdue, due soon, waiting — grouped by kind of work (money · arrivals · departures and closing · quotes, holds and papers · follow-ups; `WORK_KINDS` in `lib/ds/attention.ts`), filtered by urgency. **Alerts sent**: what the system sent (`NOTIFICATION.*` traces) by hotel day, one row per booking and step with its earlier alerts folded under it (`lib/ds/alerts.ts`), who each was for (front desk · FOM · GM, filterable), and how the booking stands now; Today / 7 / 14 / 31 days. |
 | Handoffs · Disputes · Messages | `/handoffs`, `/disputes`, `/messages` | — | "Not available yet". Each item is still worked from its booking. |
-| Console | `/admin/**` | unchanged | Copied as it was. Reached from the user panel (administrators only). |
+| Console | `/admin/**` | the admin routes, unchanged | Rebuilt in the desk's look on 2026-11-02: settings in words, days · hours · minutes, no JSON (CLAUDE.md, **Admin console — rebuilt**). Reached from the user panel (administrators only). |
 
 The old `/desk/...` addresses redirect to the new ones.
 

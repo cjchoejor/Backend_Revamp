@@ -225,6 +225,7 @@ Anchor these in your head before searching:
 | `src/design-system/` | Tokens, generated components CSS, `frame.css`, `legacy-bridge.css`, fonts, icon sprite, React primitives. |
 | `src/lib/ds/` | Desk words and selections: steps, status phrase, attention lists, timers, format, refusal and trace wording. |
 | `src/hooks/use-desk-data.ts` · `use-hotel-clock.ts` | The desk list, money, staff and rooms reads; the server-corrected clock. |
+| `src/app/(app)/admin/` · `src/components/admin/` · `src/lib/admin/` | The admin console and its settings forms — see **Admin console — rebuilt**. |
 
 ### Memory / Claude state
 
@@ -1111,46 +1112,43 @@ Nothing new is stored: `Inquiry.entries` has always been a list, and the returni
 
 **Admin reskinned into the desk format (2026-06-26):** `/admin` + `/admin/health` now wear the desk cream/green palette. Done centrally, not per-page — [admin-theme.css](front_end/src/app/(app)/admin/admin-theme.css) overrides the design-system tokens (`--background`/`--card`/`--primary`/`--foreground`/`--border`/`--muted-foreground`/`--accent`/`--destructive`/`--success`/`--ring`/`--radius` + `--font-sans`/`--font-display` → Hanken) **scoped to `.admin-console`** (the shell root). Because `.admin-console` is a closer ancestor than `:root`/`.dark`, those values win for the whole admin subtree, recolouring every `admin-*` class, Tailwind semantic utility (`bg-background`, `text-muted-foreground`, …) and shadcn component at once. Palette values are ported from [desk-theme.css](front_end/src/styles/desk-theme.css). The no-op `ThemeToggle` was removed from the admin header (admin now has no dark mode — tokens are pinned). Residual hardcoded `red-*`/`amber-*` utilities are left as-is (semantic error/warning colours that harmonise with the desk's own terracotta/amber).
 
-## Admin console — sidebar structure
+## Admin console — rebuilt in the desk's look (2026-11-02)
 
-As of 2026-06-10, the L4 sidebar is organised into **9 collapsible domain groups** matching ACIG §6.2 / `docs/admin-console-visual.html`, plus a pinned **Overview** at the top and a pinned **Utilities** group at the bottom. The drawer containing the active page auto-expands; the others stay collapsed. Source: [admin-nav.ts](front_end/src/config/admin-nav.ts) (`adminNavGroups`), rendered by [admin-shell.tsx](front_end/src/components/admin/admin-shell.tsx).
+The operator: "change the UI of the admin console to match the operation theme, also if there are any field where user has to input time ... make it into minutes and hrs and days so user doesn't have to calculate it into seconds, also if there are still some json fields ... make it into proper UI UX ... the ones which are already changed from json to these before, they are still lacking, make it proper." This is `new_front_end`'s console; `front_end/` keeps its old one.
 
-Every ConfigurationEntry key now appears on **exactly one page** (its spec-owner per `config-key-registry.ts`):
+**The look.** The console sits inside the desk's `.ds` root with the blue palette and `data-ds-overlays`, so `Help` and the pickers open as they do on the desk. [layout.tsx](new_front_end/src/app/(app)/admin/layout.tsx) imports the desk's stylesheets in their fixed order. [admin-theme.css](new_front_end/src/app/(app)/admin/admin-theme.css) re-points the shadcn tokens under `.ds .admin-console`. Two traps: `--accent` stays the desk's blue, so `bg-accent` is full blue, and `.ds h1..p { margin: 0 }` beats Tailwind's layered utilities, so the sheet restores `mt-*` / `mb-*` / `space-y-*` for headings and paragraphs.
 
-| Domain | Pages | Notes |
-|---|---|---|
-| 01 Identity & Org | Hotel profile · Departments · Roles & sessions · Staff registry | |
-| 02 Inventory | Room types · Rooms · Spaces | |
-| 03 Commercial | Rate plans · Seasons · Packages · Commercial thresholds | Owns `discount.*`, `creditCeiling.*`, `foc.configuration`, `overbooking.*`, `confirmation.authorityThresholds`, `speculativeHold.placementThresholds`, `writeOff.authority.thresholds` |
-| 04 Workflow governance | Cancellation policies · Modes · Policies (registry) | |
-| 05 Communications & templates | Channels & ack windows · Templates · VIP routing | Owns `communication.channels`, `acknowledgement.windowPerType` (richer ack-windows editor lives here now) |
-| 06 Financial & operational | Financial settings · Operational settings · Timers & workers | Timers & workers trimmed to only `expiry.s*`, `stageDwell.thresholds`, `deficientResolution.deadlineHours`, `lostFound.retention.warningOffsetDays` (WorkflowConfig + ConfigurationService) |
-| 07 Post-stay & governance | Post-stay & governance | |
-| 08 OTA & AI agent | OTA config · AI agent config | Owns OTA polling + `processingLock.ttl.perChannel` + voice-note SLAs |
-| 09 Generic & readiness | Configuration (orphaned) · Readiness | Configuration page now filters out domain-owned keys per ACIG §6.2.25 — only truly generic keys appear |
+**The side list** ([admin-nav.ts](new_front_end/src/config/admin-nav.ts), [admin-shell.tsx](new_front_end/src/components/admin/admin-shell.tsx)): Overview, then The hotel and its people · Rooms and spaces · Rates and limits · Rules · Messages · Money and daily running · After the stay · Online bookings and AI · Everything else, then Audit trail · System health · Email test. **Find a setting** searches every form by name and opens it. A page's small heading names its group. The Overview page is the readiness band and one card per group; ACIG's 9 domains and 26 services are still the spec's own count.
 
-### What was removed
+**A setting is one row**: its name, its value in words, Change. Change opens its form; Save waits on refusals; "Put it back" undoes unsaved edits. No JSON anywhere — the generic editor, its raw escape hatch and "Add custom policy" are deleted.
 
-- `/admin/workflow` (Workflow & thresholds) — was 100% duplicate of keys surfaced on Financial / Commercial / Timers / Operational. Page directory deleted; `workflowConfigKeys` constant removed.
-- `writeOff.authority.thresholds` removed from `FINANCIAL_CONFIG_KEYS` (owner is CommercialThresholdService).
-- All previously-duplicated keys (acknowledgement.windowPerType, advancePayment.*, processingLock.*, nightAudit.*, dispute.sla, fomOverride.frequency, housekeeping.sla.windowMinutes, etc.) were removed from `TIMER_WORKER_CONFIG_KEYS` and now appear only on their spec-owner's page. Their typed schemas live in `DOMAIN_OWNED_TYPED_SCHEMAS` so `getConfigSchema()` still finds them when an owner's page renders.
-
-### Number inputs
-
-The `<input type="number">` editors in `config-form-editor.tsx` were rewritten to use a string-draft pattern (`NumberInput`, `CellNumberInput`) so users can backspace to empty, type partial decimals like `0.`, or paste partial values without the field snapping back to `0`. `parseInt` was replaced by `parseFloat` so decimal values like `0.5` are preserved. Old call sites using the `numInput(...)` shim keep working unchanged.
-
-## Admin console — overview
-
-The Overview page (`/admin`) shows four numbers at the top:
-
-| Number | What it means |
+| File | What it holds |
 |---|---|
-| **Domains: 9** | The ACIG admin surface is organised into 9 functional domains (Identity & Org, Inventory, Commercial, Workflow Governance, Communications & Templates, Financial & Operational Schedule, Post-Stay & Governance, OTA & AI Agent, Generic & Readiness). Source: `docs/admin-console-visual.html`. Defined in `front_end/src/config/admin-nav.ts` as `adminDomains`. |
-| **Services: 26** | The 26 admin services per ACIG §6.2 (full list in §6.3). Each service owns specific config keys and exposes its own admin endpoints. The number is hardcoded in `back_end/src/routes/admin/overview-router.ts` and matches the sum across all 9 domains. |
-| **Config keys: ~80** | Count of distinct `configKey` values in the `configuration_entries` table — i.e. how many keyed configuration items have at least one row. The number varies with seeded + manually-created keys. A "config key" is a single named tunable parameter (e.g. `expiry.s3.committedHoldTtlSeconds`, `acknowledgement.windowPerType`, `nightAudit.scheduleTime`). Each key can have many versions over time; the count is of distinct keys, not rows. The full canonical list is in ACIG §9. |
-| **Readiness: OK / Gaps** | Aggregated result of `runReadinessCheck` ([back_end/src/services/admin/readiness-admin-service.ts](back_end/src/services/admin/readiness-admin-service.ts)) — green when all 13 critical config items are seeded and ≥1 rate plan / L4 staff / room exists; red otherwise. |
+| [setting-fields.ts](new_front_end/src/lib/admin/setting-fields.ts) | The vocabulary: `SField` kinds (number, money, percent, duration, time, date, hotelHour, grid, text, toggle, staff, choice, select, multi, tags, numberList, group, rows, map), the refusal and summary readers, `codeWords`. |
+| [setting-form.tsx](new_front_end/src/components/admin/setting-form.tsx) | Draws any `SField`. |
+| [settings-list.tsx](new_front_end/src/components/admin/settings-list.tsx) | `SettingsPage`, `SettingsList`, `NotUsedYet`. `?key=` opens a row and goes to it. |
+| [setting-forms.ts](new_front_end/src/lib/admin/setting-forms.ts) | One `SettingDef` per setting and rule: title, about, form, summary, `decidedBy`, `unused`, `check`, `normalise`, and the page it lives on. |
+| [setting-routes.ts](new_front_end/src/lib/admin/setting-routes.ts) | `routeFor(session, key)`: where a setting is read and saved. The backend refuses a key owned by another service on the generic route, so an owned key must be listed here. |
+| [duration-input.tsx](new_front_end/src/components/admin/duration-input.tsx) | Days · hours · minutes over a value stored in seconds, minutes, hours or days. A seconds box appears only when the stored value is not a whole minute. |
 
-The headline "26 services across 9 domains" is exact, not approximate — both numbers are spec-mandated. The 80-ish config keys count is dynamic; ACIG §9 lists ~100 canonical keys total, but not all may be seeded in your environment yet.
+**To add a setting**: a def in `setting-forms.ts`; a case in `setting-routes.ts` if its owner is not the generic route; its key in a page's `groups`. A saved key with no def shows under "Others on file" saying it has no form, so a missing one is seen rather than hidden.
+
+**A form edits only the fields it names and keeps the rest of the stored value**, so a field the page does not know about is never lost. **Never ask for seconds**: a length of time is a `duration`; an hour of the day stored in UTC is a `hotelHour`, shown on the hotel's clock.
+
+**A setting that a rule overrides says so** (`decidedBy`): an amber line naming the rule and its value, since the rule wins. Quotation validity reads 2 days and the rule 7, group size 50 and the rule 6, discounts 10 / 25 and the rule 5 / 15.
+
+**⚠️ Cancellation charges, a money finding.** Saving a policy on Cancellation policies wrote `cancellation.policyTiers` as `[{daysBeforeArrival, penaltyPercentage}]`. Policy 35 reads that key's amounts, so it would read a charge of 0, and all 148 reservations on `legphel_pms_dev2` take their charge from this setting (Nu 100 usual, Nu 150 walk-out, the no-show fallback) because none carries an amount of its own. It never fired on dev2: the key has one row, from 2026-08-31. **The hotel's server was not checked**; if it fired there the page reads "Needs you" in red. The write is removed. The real charges now save through `GET` / `PUT /api/admin/cancellation-policies/charges` (strict schema, `sameDayPenaltyAmount` required, traced `ADMIN.CANCELLATION_CHARGES_CHANGED`); no route could save them before.
+
+**"Not used yet" is said on the page** — `unused` on a def puts it in a "Saved, but not used yet" group, `NotUsedYet` marks a table or block. Do not delete these as dead, and do not describe them as working.
+- **Settings nothing reads**: `communication.channels`, `ai.agentConfig`, `ai.confidence.thresholds.perIntent` (read only by a job with no scheduler), `creditCeiling.clientTier.thresholds`, `invoice.templates*`, `proformaInvoice.templates`, `payment.followUp.intervals`, `nightAudit.expectedChargesRules`, `roomAssignment.priorityRules`, `room.readiness.slaWindow`, `ota.sourceFlagConfig`, `ota.inbox.pollingIntervalSeconds`, `ota.conflictTriggerRules`, `noShow.cutoffMinutes`, `feedback.platformLinks`, `government.submissionConfig`, `overbooking.otaConflictRules`, `paymentMilestone.warningOffsetDays`, `quotation.document.templateKey` and `confirmation.document.templateKey` (a label only), `availability.walkIn.ratePlanId` (the walk-in plan on Rate plans — a walk-in is priced from each room type's own plan), `registry.shadowInventory.l4Only`, `registry.child.separateBedCharge`.
+- **Tables nothing reads at runtime**: CommunicationTemplate, WorkOrderTemplate, InvoiceTemplate, FeedbackSurveyTemplate, HandoffChecklistTemplate, VipNotificationRoutingConfig, CancellationPolicyRegistry, PackageRegistry. The Handoff and VIP pages used to edit such tables; they now edit the settings the code reads (`handoff.Hn.checklist`, `registry.vip.notificationRoutingPerTier`).
+- **Left off the pages** (no reader and no known shape): `commission.calculationBasis`, `damage.rateList`, `voiceNote.*`, `ai.confidenceThreshold.autoApprove`, `ai.correctionLog.maximumSize`. Old names kept out of Other settings by `LEFT_BEHIND`: `expiry.defaults`, `feedback.platform.links`, `feedback.survey.templates`, `government.submission.config`, `identity.document.retentionPeriodDays`, `ota_email_poll_interval_seconds`, `pricing.ratePlans`.
+
+**Other honest gaps**: `billingModel.availablePerSource`'s source keys are never told apart at runtime, and `maxConcurrentHolds` is never enforced, so its column is hidden. `ownership.assignmentRules` holds ids that are not real staff, so the page reads "Nobody on the staff list" and offers the real ones (the custodian gap under The redesigned desk).
+
+**Verified 2026-11-02** by driving the console: 62 checks through real saves (units, stored shapes, grids, maps, rows, refusals, search and going to a setting, the charges route, the removed write, phone width), every test value put back, leaving "ZZTest: put back" rows in the settings' history; a sweep of all 34 pages for raw braces, system words, setting names and codes, with no page errors and one expected 404 (`paymentMilestone.warningOffsetDays` has no row, and its form says so). What the sweep still finds is real data or a code the admin types: agency names, room type and department codes. Money audit 0 critical before and after.
+
+**Not done**: `next build` not run. The shared confirm dialog (`DialogProvider`, drawn on the page body) keeps its own font and blur. The forms on Rooms, Room types, Rate plans, Seasons and similar are re-styled and re-worded, not rebuilt; many still use a placeholder as the label.
 
 ## Dev commands (cheat sheet)
 
@@ -1880,7 +1878,7 @@ Currently wired (each editable on `/admin/policies` with typed forms):
 24. `registry.child.adultToChildRatio` → capacity-validation-service (WARN issue `ADULT_CHILD_RATIO_EXCEEDED`)
 25. `registry.groupBooking.advancePaymentBoost` → s3-payment-service `computeAdvancePaymentEvaluation`. Multiplies the resolved base amount (respects per-source thresholds too) by `multiplierPercent` when parent entry is `GROUP_MASTER`. Default 200%.
 
-Frontend schema registry at [`front_end/src/lib/admin/policy-schemas.ts`](front_end/src/lib/admin/policy-schemas.ts) — typed field metadata per known policy ID; supports `number`, `text`, `boolean`, and `json` field kinds. `boolean` renders as a checkbox with an "On/Off" text indicator; `buildDefinition` in `/admin/policies` page coerces to a real boolean before persisting. Adding a new policy = new schema entry + new seed row + new `getRegistryPolicy()` consumer.
+Each rule's form on `new_front_end` is a `rule(...)` entry in [setting-forms.ts](new_front_end/src/lib/admin/setting-forms.ts) (see **Admin console — rebuilt** above). Adding a new policy = a form entry + a seed row + a `getRegistryPolicy()` consumer.
 
 ### Unwired policy inventory (audit 2026-06-27)
 
@@ -2046,7 +2044,7 @@ Schema migrated 2026-06-01 to match ACIG §2.1A.7 — `stageRoute`, `autoFulfilm
 
 ### Timer / worker config coverage
 
-`/admin/timers-workers` exposes 21 typed config keys with friendly editors. `/admin/operational` covers operational-schedule keys (checkout, night audit, room assignment, housekeeping/inspection SLAs). `OPERATIONAL_CONFIG_SCHEMAS` in `config-schemas.ts` lets keys get typed editors on the operational page without polluting the timers-workers list.
+`/admin/timers-workers` and `/admin/operational` are settings lists like every other (see **Admin console — rebuilt**): each time limit reads and takes days, hours and minutes, whatever unit it is stored in.
 
 ### Timer cancellation (fixed 2026-07-09) — `engine.cancel(jobId)` now actually cancels
 
@@ -2229,15 +2227,6 @@ Each renders on-demand if the artifact hasn't been stored yet (internal preview 
 - **Monthly integrity verification worker** — the schema table exists (`InvoiceIntegrityCheck`) but the cron isn't wired yet.
 - **HotelProfile admin fields** for `accountNumber`, `tpnNumber`, `gstTpnNumber`, `logoStorageKey` — column exists but no admin UI form yet. Voucher template falls back to the reference logo in `images/legphel_logo without background.png` until admin uploads.
 - **RateCard pricing-engine consumer** for `rateIsTaxInclusive`. Column is honoured on write; pipeline back-solve when true is a follow-up.
-
-### Editable JSON safety
-
-`SmartConfigEditor` ([`front_end/src/components/admin/smart-config-editor.tsx`](front_end/src/components/admin/smart-config-editor.tsx)) is the fallback editor when no typed schema exists. As of the recent UX pass:
-
-- Field names are **read-only by default** (rendered as labels) to prevent accidental shape mutation. Operational code consumes objects by exact field name; a rename breaks the workflow.
-- A "Show structure controls" checkbox unlocks rename + remove (with an amber warning banner) for power users.
-- "Advanced JSON" toggle remains the full escape hatch.
-- The `StructuredConfigPanel` now handles 404 gracefully — initializes to the schema's default value and shows a "first save" CTA instead of an infinite "Loading…".
 
 ## Performance — tab navigation speed
 
