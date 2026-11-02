@@ -14,9 +14,9 @@ export function AdminGuard({ children }: { children: React.ReactNode }) {
   if (!session || session.actorLevel !== "L4") {
     return (
       <div className="admin-panel max-w-lg space-y-4 p-8">
-        <h2 className="admin-display text-2xl">L4 authority required</h2>
+        <h2 className="admin-display text-2xl">For administrators only</h2>
         <p className="admin-muted text-sm">
-          The Admin Console configures hotel parameters. Only L4 administrators may access write surfaces.
+          The admin console sets how the hotel runs. Only an administrator can open it.
         </p>
         <Button variant="outline" asChild>
           <Link href="/today">Return to operations</Link>

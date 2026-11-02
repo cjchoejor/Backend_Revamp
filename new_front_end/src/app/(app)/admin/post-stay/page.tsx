@@ -1,26 +1,25 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { KeyedConfigPanel } from "@/components/admin/keyed-config-panel";
+import { NotUsedYet, SettingsList } from "@/components/admin/settings-list";
+import { Control } from "@/components/admin/setting-form";
+import { PAGE_KEYS } from "@/lib/admin/setting-forms";
 import { useSession } from "@/hooks/use-session";
 import {
   createFeedbackTemplate,
   deactivateFeedbackTemplate,
-  getPostStayValue,
   listFeedbackTemplates,
   reactivateFeedbackTemplate,
-  setPostStayValue,
   type FeedbackTemplateAdmin,
 } from "@/lib/api/admin";
 import { ApiError } from "@/lib/api/client";
-import { SmartConfigEditor } from "@/components/admin/smart-config-editor";
 
 export default function AdminPostStayPage() {
   const { session } = useSession();
   const queryClient = useQueryClient();
-  const [form, setForm] = useState<{ templateKey: string; title: string; questions: unknown }>({ templateKey: "", title: "", questions: [] });
+  const [form, setForm] = useState<{ templateKey: string; title: string; questions: string[] }>({ templateKey: "", title: "", questions: [] });
   const enabled = !!session && session.actorLevel === "L4";
 
   const templatesQuery = useQuery({
@@ -30,7 +29,7 @@ export default function AdminPostStayPage() {
   });
 
   const createMutation = useMutation({
-    mutationFn: () => createFeedbackTemplate(session!, { templateKey: form.templateKey, title: form.title, questions: form.questions }),
+    mutationFn: () => createFeedbackTemplate(session!, { templateKey: form.templateKey, title: form.title, questions: form.questions.map((text) => ({ text })) }),
     onSuccess: () => {
       toast.success("Feedback template created");
       setForm({ templateKey: "", title: "", questions: [] });
@@ -63,19 +62,24 @@ export default function AdminPostStayPage() {
   return (
     <div className="space-y-6 pb-16">
       <div>
-        <p className="admin-eyebrow mb-2">Domain 07 · Post-stay &amp; governance</p>
-        <h1 className="admin-display text-3xl">Post-stay &amp; governance</h1>
+        <p className="admin-eyebrow mb-2">After the stay</p>
+        <h1 className="admin-display text-3xl">Feedback and records</h1>
       </div>
 
+      <Suspense>
+        <SettingsList groups={[{ keys: PAGE_KEYS.postStay }]} />
+      </Suspense>
+
       <div className="admin-panel space-y-3 p-5">
-        <p className="admin-eyebrow">Feedback survey templates</p>
+        <h2 className="admin-display text-lg">Feedback surveys</h2>
+        <NotUsedYet>The feedback email is built in, so nothing reads these surveys yet.</NotUsedYet>
         <div className="grid gap-3 md:grid-cols-2">
-          <input className="admin-input" placeholder="Template key" value={form.templateKey} onChange={(e) => setForm({ ...form, templateKey: e.target.value })} />
+          <input className="admin-input" placeholder="A short name" value={form.templateKey} onChange={(e) => setForm({ ...form, templateKey: e.target.value })} />
           <input className="admin-input" placeholder="Title" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
         </div>
-        <div>
-          <p className="admin-muted mb-1 text-xs">Survey questions</p>
-          <SmartConfigEditor value={form.questions} onChange={(v) => setForm({ ...form, questions: v })} />
+        <div className="sf-field">
+          <span className="sf-label">Questions</span>
+          <Control f={{ kind: "tags", label: "Questions", placeholder: "How was your stay?", addLabel: "Add" }} value={form.questions} onChange={(v) => setForm({ ...form, questions: v as string[] })} />
         </div>
         <button type="button" className="admin-btn w-fit" disabled={createMutation.isPending || !form.templateKey} onClick={() => createMutation.mutate()}>
           Create template
@@ -103,20 +107,6 @@ export default function AdminPostStayPage() {
         </table>
       </div>
 
-      <KeyedConfigPanel title="Online review platform links" queryKey={["admin", "post-stay", "platform-links"]} enabled={enabled} load={async () => (await getPostStayValue(session, "platform-links")).value} save={(v) => setPostStayValue(session, "platform-links", v)} />
-      <KeyedConfigPanel title="Government portal submission config" queryKey={["admin", "post-stay", "government-portal"]} enabled={enabled} load={async () => (await getPostStayValue(session, "government-portal")).value} save={(v) => setPostStayValue(session, "government-portal", v)} />
-      <KeyedConfigPanel title="Commission calculation basis" queryKey={["admin", "post-stay", "commission-basis"]} enabled={enabled} load={async () => (await getPostStayValue(session, "commission-basis")).value} save={(v) => setPostStayValue(session, "commission-basis", v)} />
-      <div className="admin-panel border-amber-500/30 bg-amber-500/5 p-3 text-xs text-[var(--admin-ink-soft)]">
-        <p>
-          <strong>Heads up:</strong> &ldquo;Identity document types&rdquo; lists the kinds of ID your hotel accepts
-          (Passport, National ID, …) &mdash; <em>not</em> attributes captured about each guest. Each entry has a fixed
-          shape (<span className="font-mono">documentTypeCode</span>, <span className="font-mono">documentTypeName</span>,{" "}
-          <span className="font-mono">isActive</span>) that operational code matches against. If you want to capture
-          something like gender or date of birth, that&rsquo;s a Guest Profile field &mdash; not a document type.
-        </p>
-      </div>
-      <KeyedConfigPanel title="Identity document types" description="Catalogue of accepted ID document types. Array of { documentTypeCode, documentTypeName, isActive }." queryKey={["admin", "post-stay", "identity-document-types"]} enabled={enabled} load={async () => (await getPostStayValue(session, "identity-document-types")).value} save={(v) => setPostStayValue(session, "identity-document-types", v)} />
-      <KeyedConfigPanel title="Identity retention period (days)" description="Retention per document type (JSON object)." queryKey={["admin", "post-stay", "identity-retention"]} enabled={enabled} load={async () => (await getPostStayValue(session, "identity-retention")).value} save={(v) => setPostStayValue(session, "identity-retention", v)} />
     </div>
   );
 }

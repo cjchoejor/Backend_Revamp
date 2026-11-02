@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { createSpace, deleteSpace, listSpaces, updateSpace } from "@/lib/api/admin";
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
+import { codeWords } from "@/lib/admin/setting-fields";
 import { useConfirm } from "@/components/providers/dialog-provider";
 import { DeficiencyPanel } from "@/components/deficiency/deficiency-panel";
 
@@ -59,7 +60,7 @@ export default function AdminSpacesPage() {
   return (
     <div className="space-y-8 pb-16">
       <div>
-        <p className="admin-eyebrow mb-2">Domain 02 · Inventory</p>
+        <p className="admin-eyebrow mb-2">Rooms and spaces</p>
         <h1 className="admin-display text-3xl">Spaces</h1>
       </div>
 
@@ -89,7 +90,7 @@ export default function AdminSpacesPage() {
               <tr key={s.id}>
                 <td className="font-mono text-xs">{s.code}</td>
                 <td>{s.name}</td>
-                <td>{s.spaceType}</td>
+                <td>{codeWords(s.spaceType)}</td>
                 <td>{s.capacity}</td>
                 <td>
                   {s.isDeficient ? (

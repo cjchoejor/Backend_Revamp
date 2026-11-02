@@ -1,5 +1,6 @@
 "use client";
 
+import { Help } from "@/components/ds/help";
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -9,7 +10,7 @@ import { ApiError } from "@/lib/api/client";
 
 const DEFAULT_SUBJECT = "Test from Legphel PMS";
 const DEFAULT_BODY =
-  "Hi,\n\nThis is a test email from the Legphel PMS admin console — confirming that SMTP delivery is working.\n\nThanks!";
+  "Hi,\n\nThis is a test email from the Legphel PMS admin console — confirming that email is working.\n\nThanks!";
 
 type SendLog = {
   at: string;
@@ -28,7 +29,6 @@ export default function AdminEmailTestPage() {
   const [subject, setSubject] = useState(DEFAULT_SUBJECT);
   const [body, setBody] = useState(DEFAULT_BODY);
   const [threadEntryId, setThreadEntryId] = useState("");
-  const [threadReadableId, setThreadReadableId] = useState("");
   const [history, setHistory] = useState<SendLog[]>([]);
 
   const verifyQuery = useQuery({
@@ -46,7 +46,7 @@ export default function AdminEmailTestPage() {
         subject,
         body,
         threadEntryId: threadEntryId.trim() || undefined,
-        threadReadableId: threadReadableId.trim() || undefined,
+        threadReadableId: threadEntryId.trim() || undefined,
       }),
     onSuccess: (result) => {
       const log: SendLog = {
@@ -54,7 +54,7 @@ export default function AdminEmailTestPage() {
         result,
         subject,
         threadEntryId: threadEntryId.trim() || undefined,
-        threadReadableId: threadReadableId.trim() || undefined,
+        threadReadableId: threadEntryId.trim() || undefined,
       };
       setHistory((h) => [log, ...h].slice(0, 10));
       if (result.status === "sent") {
@@ -79,14 +79,11 @@ export default function AdminEmailTestPage() {
   return (
     <div className="space-y-8 pb-16">
       <div>
-        <p className="admin-eyebrow mb-2">Phase 1 · Email integration</p>
-        <h1 className="admin-display text-3xl">Email test send</h1>
-        <p className="admin-muted mt-2 max-w-3xl text-sm">
-          Fire test emails through the SMTP transport to verify deliverability and threading
-          before we wire S1–S9 stage events. While <span className="font-mono">EMAIL_REDIRECT_ALL_TO</span> is set,
-          all sends route to that address regardless of the recipient field below — the original
-          recipient is prepended to the subject like <span className="font-mono">[→guest@example.com]</span>.
-        </p>
+        <p className="admin-eyebrow mb-2">Tools</p>
+        <h1 className="admin-display flex items-center gap-2 text-3xl">
+          Email test
+          <Help label="Email test">Send a test email to check that mail goes out and that replies stay in one conversation. On a test machine all mail may be sent to one address instead of the one typed here.</Help>
+        </h1>
       </div>
 
       <section className="admin-panel space-y-3 p-5">
@@ -101,19 +98,19 @@ export default function AdminEmailTestPage() {
             Re-check
           </button>
         </div>
-        {verifyQuery.isLoading && <p className="admin-muted text-sm">Checking SMTP authentication…</p>}
+        {verifyQuery.isLoading && <p className="admin-muted text-sm">Checking the mail connection…</p>}
         {verifyQuery.error && (
           <p className="text-sm text-destructive">
-            Verify call failed: {verifyQuery.error instanceof ApiError ? verifyQuery.error.message : "unknown"}
+            Could not check: {verifyQuery.error instanceof ApiError ? verifyQuery.error.message : "unknown"}
           </p>
         )}
         {verify && (
           <p className="text-sm">
             {verify.ok ? (
-              <span className="admin-tag admin-tag-ok">SMTP OK — transporter authenticated</span>
+              <span className="admin-tag admin-tag-ok">The mail connection works</span>
             ) : (
               <span className="text-destructive">
-                <span className="admin-tag admin-tag-warn">SMTP error</span>
+                <span className="admin-tag admin-tag-warn">The mail connection failed</span>
                 <span className="ml-2 font-mono text-xs">{verify.error}</span>
               </span>
             )}
@@ -125,7 +122,10 @@ export default function AdminEmailTestPage() {
         <h2 className="admin-display text-lg">Compose</h2>
 
         <label className="block space-y-1 text-xs">
-          <span className="admin-muted">To (intended recipient — overridden by EMAIL_REDIRECT_ALL_TO if set)</span>
+          <span className="admin-muted flex items-center gap-1">
+            To
+            <Help label="To">If this server is set to send every test mail to one address, the mail goes there instead. The list below says where each one went.</Help>
+          </span>
           <input
             className="admin-input w-full"
             value={to}
@@ -144,7 +144,7 @@ export default function AdminEmailTestPage() {
         </label>
 
         <label className="block space-y-1 text-xs">
-          <span className="admin-muted">Body (plain text — HTML version auto-generated)</span>
+          <span className="admin-muted">Message</span>
           <textarea
             className="admin-input w-full min-h-[160px] font-mono"
             value={body}
@@ -152,36 +152,18 @@ export default function AdminEmailTestPage() {
           />
         </label>
 
-        <div className="rounded border border-[var(--admin-rule)] p-3">
-          <p className="admin-muted mb-2 text-xs font-medium">Threading (optional — for testing Gmail thread grouping)</p>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <label className="block space-y-1 text-xs">
-              <span className="admin-muted">Thread Entry ID (UUID of an Entry row)</span>
-              <input
-                className="admin-input w-full font-mono"
-                placeholder="leave blank for no threading"
-                value={threadEntryId}
-                onChange={(e) => setThreadEntryId(e.target.value)}
-              />
-            </label>
-            <label className="block space-y-1 text-xs">
-              <span className="admin-muted">Thread readable ID (e.g. ENT-0042) — becomes subject prefix</span>
-              <input
-                className="admin-input w-full font-mono"
-                placeholder="ENT-0042"
-                value={threadReadableId}
-                onChange={(e) => setThreadReadableId(e.target.value)}
-              />
-            </label>
-          </div>
-          <p className="admin-muted mt-2 text-[10px]">
-            On the FIRST send for an Entry, the service mints a Message-ID and persists it on
-            <span className="font-mono"> Entry.emailThreadRootMessageId</span>. On subsequent sends
-            for the same Entry, it sets In-Reply-To / References so Gmail clusters them as one
-            conversation. Use the same threadEntryId twice (with different subjects/bodies) to
-            verify threading works.
-          </p>
-        </div>
+        <label className="block space-y-1 text-xs">
+          <span className="admin-muted flex items-center gap-1">
+            Booking number (optional)
+            <Help label="Booking number">Every email about one booking lands in one conversation in the guest's inbox. Send twice with the same number to see it happen.</Help>
+          </span>
+          <input
+            className="admin-input w-full"
+            placeholder="ENT-20261102-0001"
+            value={threadEntryId}
+            onChange={(e) => setThreadEntryId(e.target.value)}
+          />
+        </label>
 
         <button
           type="button"
@@ -195,13 +177,13 @@ export default function AdminEmailTestPage() {
 
       {history.length > 0 && (
         <section className="admin-panel space-y-2 p-5">
-          <h2 className="admin-display text-lg">Recent sends (this session)</h2>
+          <h2 className="admin-display text-lg">Sent from this page</h2>
           <table className="admin-table">
             <thead>
               <tr>
                 <th>At</th>
                 <th>Subject</th>
-                <th>Thread</th>
+                <th>Booking</th>
                 <th>Result</th>
               </tr>
             </thead>
@@ -210,12 +192,7 @@ export default function AdminEmailTestPage() {
                 <tr key={i}>
                   <td className="font-mono text-xs">{h.at}</td>
                   <td className="text-xs">{h.subject}</td>
-                  <td className="font-mono text-[10px]">
-                    {h.threadReadableId ?? "—"}
-                    {h.threadEntryId && (
-                      <span className="admin-muted block">{h.threadEntryId.slice(0, 8)}…</span>
-                    )}
-                  </td>
+                  <td className="text-xs">{h.threadReadableId ?? "—"}</td>
                   <td className="text-xs">
                     {h.result.status === "sent" ? (
                       <>
@@ -223,7 +200,6 @@ export default function AdminEmailTestPage() {
                         <span className="admin-muted ml-2 block font-mono text-[10px]">
                           {h.result.redirected ? `→ ${h.result.actualRecipient} (redirected from ${h.result.intendedRecipient})` : `→ ${h.result.actualRecipient}`}
                         </span>
-                        <span className="admin-muted block font-mono text-[10px]">{h.result.messageId}</span>
                       </>
                     ) : h.result.status === "skipped" ? (
                       <>

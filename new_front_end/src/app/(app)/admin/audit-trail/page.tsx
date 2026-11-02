@@ -1,11 +1,13 @@
 "use client";
 
+import { Help } from "@/components/ds/help";
 import { useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { queryAuditEvents, type AuditEventFilters } from "@/lib/api/admin";
 import { useSession } from "@/hooks/use-session";
 import { TraceEventRow } from "@/components/trace/trace-event-row";
 import { DateTimeInput } from "@/components/ds/date-input";
+import { getSettingDef } from "@/lib/admin/setting-forms";
 
 const PAGE_SIZE = 50;
 const EMPTY: AuditEventFilters = { actorId: "", entityType: "", entityId: "", eventType: "", from: "", to: "" };
@@ -43,12 +45,11 @@ export default function AdminAuditTrailPage() {
   return (
     <div className="space-y-6 pb-16">
       <div>
-        <p className="admin-eyebrow mb-2">Generic · Audit visibility</p>
-        <h1 className="admin-display text-3xl">Audit trail</h1>
-        <p className="admin-muted mt-1">
-          A plain-language, read-only history of everything that happens in the system — who did what, to which record,
-          and when. Filter to narrow it down.
-        </p>
+        <p className="admin-eyebrow mb-2">Tools</p>
+        <h1 className="admin-display flex items-center gap-2 text-3xl">
+          Audit trail
+          <Help label="Audit trail">Who did what, to which record, and when. It cannot be changed.</Help>
+        </h1>
       </div>
 
       <div className="admin-panel grid gap-3 p-5 md:grid-cols-3">
@@ -88,7 +89,7 @@ export default function AdminAuditTrailPage() {
         <div className="divide-y divide-[var(--admin-rule)]">
           {items.length === 0 && !query.isLoading && <p className="admin-muted py-6 text-center text-sm">No events match these filters.</p>}
           {items.map((e) => (
-            <TraceEventRow key={e.id} event={e} />
+            <TraceEventRow key={e.id} event={e} settingName={(k) => getSettingDef(k)?.title} />
           ))}
         </div>
       </div>

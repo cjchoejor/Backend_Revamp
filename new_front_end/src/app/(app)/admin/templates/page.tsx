@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
@@ -11,13 +11,11 @@ import {
   deactivateInvoiceTemplate,
   deactivateWorkOrderTemplate,
   listCommunicationTemplates,
-  listHandoffTemplates,
   listInvoiceTemplates,
   listWorkOrderTemplates,
   reactivateCommunicationTemplate,
   reactivateInvoiceTemplate,
   reactivateWorkOrderTemplate,
-  saveHandoffTemplate,
   updateCommunicationTemplate,
   updateInvoiceTemplate,
   updateWorkOrderTemplate,
@@ -26,14 +24,13 @@ import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
 import { useConfirm } from "@/components/providers/dialog-provider";
 import type { Session } from "@/types/session";
+import { Help } from "@/components/ds/help";
+import { NotUsedYet, SettingsList } from "@/components/admin/settings-list";
+import { Control } from "@/components/admin/setting-form";
+import { codeWords } from "@/lib/admin/setting-fields";
+import { PAGE_KEYS } from "@/lib/admin/setting-forms";
 
 const err = (e: unknown, fallback: string) => toast.error(e instanceof ApiError ? e.message : fallback);
-const linesToItems = (text: string) =>
-  text
-    .split("\n")
-    .map((l) => l.trim())
-    .filter(Boolean);
-
 function CommunicationTemplates({ session }: { session: Session }) {
   const qc = useQueryClient();
   const confirm = useConfirm();
@@ -89,14 +86,15 @@ function CommunicationTemplates({ session }: { session: Session }) {
   const items = query.data?.items ?? [];
   return (
     <section className="admin-panel space-y-4 p-5">
-      <h2 className="admin-display text-lg">Communication templates</h2>
+      <h2 className="admin-display text-lg">Message templates</h2>
+      <NotUsedYet>The emails the desk sends are built in, so nothing reads these yet.</NotUsedYet>
       <div className="grid gap-3 md:grid-cols-3">
         <input className="admin-input" placeholder="Template key" value={form.templateKey} disabled={!!editingId} onChange={(e) => setForm({ ...form, templateKey: e.target.value })} />
         <select className="admin-select" value={form.channel} onChange={(e) => setForm({ ...form, channel: e.target.value })}>
-          <option value="EMAIL">EMAIL</option>
-          <option value="WHATSAPP">WHATSAPP</option>
+          <option value="EMAIL">Email</option>
+          <option value="WHATSAPP">WhatsApp</option>
         </select>
-        <input className="admin-input" placeholder="Type (e.g. QUOTATION)" value={form.templateType} onChange={(e) => setForm({ ...form, templateType: e.target.value })} />
+        <input className="admin-input" placeholder="Kind of message" value={form.templateType} onChange={(e) => setForm({ ...form, templateType: e.target.value })} />
         <input className="admin-input md:col-span-3" placeholder="Subject (optional)" value={form.subjectTemplate} onChange={(e) => setForm({ ...form, subjectTemplate: e.target.value })} />
         <textarea className="admin-input md:col-span-3 font-mono text-xs" rows={3} placeholder="Body template — supports {{tokens}}" value={form.bodyTemplate} onChange={(e) => setForm({ ...form, bodyTemplate: e.target.value })} />
       </div>
@@ -114,8 +112,8 @@ function CommunicationTemplates({ session }: { session: Session }) {
           {items.map((t) => (
             <tr key={t.id}>
               <td className="font-mono text-xs">{t.templateKey}</td>
-              <td>{t.channel}</td>
-              <td>{t.templateType}</td>
+              <td>{codeWords(t.channel)}</td>
+              <td>{codeWords(t.templateType)}</td>
               <td>{t.isActive ? <span className="admin-tag admin-tag-ok">active</span> : <span className="admin-tag admin-tag-warn">inactive</span>}</td>
               <td className="text-right">
                 <div className="flex justify-end gap-1">
@@ -135,57 +133,6 @@ function CommunicationTemplates({ session }: { session: Session }) {
                   )}
                 </div>
               </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </section>
-  );
-}
-
-function HandoffTemplates({ session }: { session: Session }) {
-  const qc = useQueryClient();
-  const key = ["admin", "templates", "handoff"];
-  const [handoffType, setHandoffType] = useState<"H1" | "H2" | "H3" | "H4">("H1");
-  const [items, setItems] = useState("Confirmation voucher on file\nAdvance payment status reviewed");
-
-  const query = useQuery({ queryKey: key, queryFn: () => listHandoffTemplates(session) });
-  const saveMutation = useMutation({
-    mutationFn: () =>
-      saveHandoffTemplate(session, {
-        handoffType,
-        checklistItems: linesToItems(items).map((description, i) => ({ itemKey: `item_${i + 1}`, description, isRequired: true })),
-      }),
-    onSuccess: () => {
-      toast.success(`${handoffType} checklist saved (new version)`);
-      void qc.invalidateQueries({ queryKey: key });
-    },
-    onError: (e) => err(e, "Save failed"),
-  });
-
-  const rows = query.data?.items ?? [];
-  return (
-    <section className="admin-panel space-y-4 p-5">
-      <h2 className="admin-display text-lg">Handoff checklists</h2>
-      <p className="admin-muted text-xs">Checklists are versioned — saving creates a new active version for that handoff type.</p>
-      <div className="grid gap-3 md:grid-cols-[160px_1fr]">
-        <select className="admin-select" value={handoffType} onChange={(e) => setHandoffType(e.target.value as typeof handoffType)}>
-          {(["H1", "H2", "H3", "H4"] as const).map((h) => <option key={h} value={h}>{h}</option>)}
-        </select>
-        <textarea className="admin-input font-mono text-xs" rows={4} placeholder="One checklist item per line" value={items} onChange={(e) => setItems(e.target.value)} />
-      </div>
-      <button type="button" className="admin-btn w-fit" disabled={saveMutation.isPending} onClick={() => saveMutation.mutate()}>Save {handoffType} version</button>
-
-      <table className="admin-table">
-        <thead><tr><th>Type</th><th>Version</th><th>Items</th><th>Status</th></tr></thead>
-        <tbody>
-          {rows.length === 0 && <tr><td colSpan={4} className="admin-muted">No handoff checklists.</td></tr>}
-          {rows.map((t) => (
-            <tr key={t.id}>
-              <td className="font-mono text-xs">{t.handoffType}</td>
-              <td>v{t.version}</td>
-              <td className="text-xs">{Array.isArray(t.checklistItems) ? (t.checklistItems as Array<{ description?: string }>).map((i) => i.description).filter(Boolean).join(", ") : "—"}</td>
-              <td>{t.isActive ? <span className="admin-tag admin-tag-ok">active</span> : <span className="admin-tag admin-tag-warn">superseded</span>}</td>
             </tr>
           ))}
         </tbody>
@@ -226,12 +173,12 @@ function InvoiceTemplates({ session }: { session: Session }) {
   return (
     <section className="admin-panel space-y-4 p-5">
       <h2 className="admin-display text-lg">Invoice templates</h2>
-      <p className="admin-muted text-xs">At least one active PROFORMA and one active FINAL template are required before S3 / S8.</p>
+      <NotUsedYet>The bills' layouts are built in, so nothing reads these yet.</NotUsedYet>
       <div className="grid gap-3 md:grid-cols-3">
         <input className="admin-input" placeholder="Template key" value={form.templateKey} disabled={!!editingId} onChange={(e) => setForm({ ...form, templateKey: e.target.value })} />
         <select className="admin-select" value={form.invoiceType} disabled={!!editingId} onChange={(e) => setForm({ ...form, invoiceType: e.target.value as "PROFORMA" | "FINAL" })}>
-          <option value="PROFORMA">PROFORMA</option>
-          <option value="FINAL">FINAL</option>
+          <option value="PROFORMA">Proforma</option>
+          <option value="FINAL">Tax invoice</option>
         </select>
         <input className="admin-input" placeholder="Title" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
         <textarea className="admin-input md:col-span-3 font-mono text-xs" rows={3} placeholder="Body template" value={form.bodyTemplate} onChange={(e) => setForm({ ...form, bodyTemplate: e.target.value })} />
@@ -248,7 +195,7 @@ function InvoiceTemplates({ session }: { session: Session }) {
           {items.map((t) => (
             <tr key={t.id}>
               <td className="font-mono text-xs">{t.templateKey}</td>
-              <td>{t.invoiceType}</td>
+              <td>{t.invoiceType === "FINAL" ? "Tax invoice" : "Proforma"}</td>
               <td>{t.title}</td>
               <td>{t.isActive ? <span className="admin-tag admin-tag-ok">active</span> : <span className="admin-tag admin-tag-warn">inactive</span>}</td>
               <td className="text-right">
@@ -282,13 +229,13 @@ function WorkOrderTemplates({ session }: { session: Session }) {
   const confirm = useConfirm();
   const key = ["admin", "templates", "work-order"];
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [form, setForm] = useState({ templateKey: "", title: "", useType: "", todoItems: "" });
-  const reset = () => { setForm({ templateKey: "", title: "", useType: "", todoItems: "" }); setEditingId(null); };
+  const [form, setForm] = useState({ templateKey: "", title: "", useType: "", todoItems: [] as string[] });
+  const reset = () => { setForm({ templateKey: "", title: "", useType: "", todoItems: [] }); setEditingId(null); };
 
   const query = useQuery({ queryKey: key, queryFn: () => listWorkOrderTemplates(session) });
   const saveMutation = useMutation({
     mutationFn: () => {
-      const todoItems = linesToItems(form.todoItems).map((description) => ({ description }));
+      const todoItems = form.todoItems.map((description) => ({ description }));
       return editingId
         ? updateWorkOrderTemplate(session, editingId, { title: form.title, todoItems })
         : createWorkOrderTemplate(session, { templateKey: form.templateKey, title: form.title, useType: form.useType || null, todoItems });
@@ -311,11 +258,15 @@ function WorkOrderTemplates({ session }: { session: Session }) {
   return (
     <section className="admin-panel space-y-4 p-5">
       <h2 className="admin-display text-lg">Work order templates</h2>
+      <NotUsedYet>Nothing makes a work order from these yet.</NotUsedYet>
       <div className="grid gap-3 md:grid-cols-3">
         <input className="admin-input" placeholder="Template key" value={form.templateKey} disabled={!!editingId} onChange={(e) => setForm({ ...form, templateKey: e.target.value })} />
         <input className="admin-input" placeholder="Title" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
         <input className="admin-input" placeholder="Use type (optional)" value={form.useType} disabled={!!editingId} onChange={(e) => setForm({ ...form, useType: e.target.value })} />
-        <textarea className="admin-input md:col-span-3 font-mono text-xs" rows={3} placeholder="One to-do item per line" value={form.todoItems} onChange={(e) => setForm({ ...form, todoItems: e.target.value })} />
+        <div className="sf-field md:col-span-3">
+          <span className="sf-label">To do</span>
+          <Control f={{ kind: "tags", label: "To do", placeholder: "Check the minibar", addLabel: "Add" }} value={form.todoItems} onChange={(v) => setForm({ ...form, todoItems: v as string[] })} />
+        </div>
       </div>
       <div className="flex gap-2">
         <button type="button" className="admin-btn w-fit" disabled={saveMutation.isPending || !form.templateKey || !form.title} onClick={() => saveMutation.mutate()}>{editingId ? "Save changes" : "Create template"}</button>
@@ -334,7 +285,7 @@ function WorkOrderTemplates({ session }: { session: Session }) {
               <td>{t.isActive ? <span className="admin-tag admin-tag-ok">active</span> : <span className="admin-tag admin-tag-warn">inactive</span>}</td>
               <td className="text-right">
                 <div className="flex justify-end gap-1">
-                  <button type="button" className="admin-btn text-[10px]" onClick={() => { setEditingId(t.id); setForm({ templateKey: t.templateKey, title: t.title, useType: t.useType ?? "", todoItems: Array.isArray(t.todoItems) ? (t.todoItems as Array<{ description?: string }>).map((i) => i.description ?? "").join("\n") : "" }); }}>Edit</button>
+                  <button type="button" className="admin-btn text-[10px]" onClick={() => { setEditingId(t.id); setForm({ templateKey: t.templateKey, title: t.title, useType: t.useType ?? "", todoItems: Array.isArray(t.todoItems) ? (t.todoItems as Array<{ description?: string }>).map((i) => i.description ?? "").filter(Boolean) : [] }); }}>Edit</button>
                   {t.isActive ? (
                     <button type="button" className="admin-btn text-[10px]" onClick={async () => {
                       const ok = await confirm({
@@ -365,12 +316,16 @@ export default function AdminTemplatesPage() {
   return (
     <div className="space-y-8 pb-16">
       <div>
-        <p className="admin-eyebrow mb-2">Domain 05 · Communications</p>
-        <h1 className="admin-display text-3xl">Templates</h1>
-        <p className="admin-muted mt-2 text-sm">Create, edit, and retire communication, handoff, invoice, and work-order templates.</p>
+        <p className="admin-eyebrow mb-2">Messages</p>
+        <h1 className="admin-display flex items-center gap-2 text-3xl">
+          Templates
+          <Help label="Templates">The checklists the desk uses at each handoff, and the layouts kept on file.</Help>
+        </h1>
       </div>
+      <Suspense>
+        <SettingsList groups={[{ title: "Handoff checklists", keys: PAGE_KEYS.handoffs }]} />
+      </Suspense>
       <CommunicationTemplates session={session} />
-      <HandoffTemplates session={session} />
       <InvoiceTemplates session={session} />
       <WorkOrderTemplates session={session} />
     </div>

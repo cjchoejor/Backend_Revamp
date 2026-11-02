@@ -352,6 +352,14 @@ export async function reactivateWorkOrderTemplate(session: Session, id: string) 
   return updateWorkOrderTemplate(session, id, { isActive: true });
 }
 
+export async function getCancellationCharges(session: Session) {
+  return apiRequest<{ value: unknown; overwritten: boolean }>("/api/admin/cancellation-policies/charges", { session });
+}
+
+export async function setCancellationCharges(session: Session, value: unknown, notes?: string | null) {
+  return apiRequest("/api/admin/cancellation-policies/charges", { method: "PUT", session, body: { value, notes } });
+}
+
 export async function getDeficientCategories(session: Session) {
   return apiRequest<{ configKey: string; configValue: unknown; isSystemDefault: boolean }>(
     "/api/admin/deficient-condition-categories",

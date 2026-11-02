@@ -3,11 +3,51 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { Control } from "@/components/admin/setting-form";
+import { Help } from "@/components/ds/help";
 import { activateMode, deactivateMode, listModes, saveMode, type ModeAdmin } from "@/lib/api/admin";
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
 
-const STAGES = ["S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9", "TERMINAL"] as const;
+const STAGES = [
+  { value: "S1", label: "Inquiry" },
+  { value: "S2", label: "Negotiation" },
+  { value: "S3", label: "Set up" },
+  { value: "S4", label: "Reserve" },
+  { value: "S5", label: "Arrival" },
+  { value: "S6", label: "Check-in" },
+  { value: "S7", label: "Stay" },
+  { value: "S8", label: "Check-out" },
+  { value: "S9", label: "Closed" },
+  { value: "TERMINAL", label: "Ended" },
+];
+const stageWord = (s: string) => STAGES.find((x) => x.value === s)?.label ?? s;
+
+/** The skips the system knows how to judge (lib/mode-auto-fulfilment). Any other is never skipped. */
+const CONDITIONS = [
+  { value: "SAME_RATE_AS_FROZEN_RESERVATION", label: "The rate has not changed" },
+  { value: "INVENTORY_ALREADY_COMMITTED_FOR_NEW_NIGHTS", label: "The extra nights are already held" },
+  { value: "WITHIN_ORIGINAL_GROUP_THRESHOLD", label: "The party is still below a group" },
+];
+
+const NEEDS = [
+  { value: "AvailabilityEngine", label: "Room availability" },
+  { value: "PricingPipelineEngine", label: "Pricing" },
+  { value: "RatePlanRegistry", label: "Rate plans" },
+  { value: "SeasonCalendar", label: "Seasons" },
+  { value: "CommunicationConfigService", label: "Messages" },
+  { value: "CancellationPolicyRegistry", label: "Cancellation policies" },
+  { value: "RoomAssignmentService", label: "Room assignment" },
+  { value: "DiscountAuthorityPolicy", label: "Discount limits" },
+  { value: "GroupDetectionPolicy", label: "Group detection" },
+  { value: "GuestProfileService", label: "Guest records" },
+  { value: "DisputeService", label: "Disputes" },
+  { value: "FolioService", label: "The bill" },
+  { value: "BillingModelPolicy", label: "Who pays" },
+  { value: "FolioSettlementService", label: "Settling the bill" },
+];
+
+const STATE_WORD: Record<string, string> = { DRAFT: "Draft", VALIDATED: "Ready", ACTIVE: "In use", SUPERSEDED: "Replaced" };
 
 type Draft = {
   id?: string;
@@ -41,11 +81,10 @@ const draftFromRow = (m: ModeAdmin): Draft => ({
   featureDependencies: Array.isArray(m.featureDependencies) ? m.featureDependencies : [],
 });
 
-export default function AdminModesPage() {
+export default function AdminKindsOfChangePage() {
   const { session } = useSession();
   const queryClient = useQueryClient();
-  const [draft, setDraft] = useState<Draft>(EMPTY);
-  const [depInput, setDepInput] = useState("");
+  const [draft, setDraft] = useState<Draft | null>(null);
 
   const query = useQuery({
     queryKey: ["admin", "modes"],
@@ -53,26 +92,23 @@ export default function AdminModesPage() {
     enabled: !!session && session.actorLevel === "L4",
   });
 
-  const resetDraft = () => {
-    setDraft(EMPTY);
-    setDepInput("");
-  };
-
   const saveMutation = useMutation({
-    mutationFn: () =>
-      saveMode(session!, {
-        id: draft.id,
-        modeKey: draft.modeKey.trim(),
-        displayName: draft.displayName.trim(),
-        description: draft.description.trim() || null,
-        isPredefined: draft.isPredefined,
-        stageRoute: draft.stageRoute,
-        autoFulfilmentConditions: draft.autoFulfilmentConditions,
-        featureDependencies: draft.featureDependencies,
-      }),
+    mutationFn: () => {
+      const d = draft!;
+      return saveMode(session!, {
+        id: d.id,
+        modeKey: d.modeKey.trim(),
+        displayName: d.displayName.trim(),
+        description: d.description.trim() || null,
+        isPredefined: d.isPredefined,
+        stageRoute: d.stageRoute,
+        autoFulfilmentConditions: d.autoFulfilmentConditions,
+        featureDependencies: d.featureDependencies,
+      });
+    },
     onSuccess: () => {
-      toast.success(draft.id ? "Mode updated (new version saved as VALIDATED)" : "Mode created");
-      resetDraft();
+      toast.success(draft?.id ? "Saved as a new version. Put it in use when it is ready." : "Added");
+      setDraft(null);
       void queryClient.invalidateQueries({ queryKey: ["admin", "modes"] });
     },
     onError: (e) => toast.error(e instanceof ApiError ? e.message : "Save failed"),
@@ -81,306 +117,210 @@ export default function AdminModesPage() {
   const activateMutation = useMutation({
     mutationFn: (id: string) => activateMode(session!, id),
     onSuccess: () => {
-      toast.success("Mode activated");
+      toast.success("In use");
       void queryClient.invalidateQueries({ queryKey: ["admin", "modes"] });
     },
-    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Activate failed"),
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "It could not be put in use"),
   });
 
   const deactivateMutation = useMutation({
     mutationFn: (id: string) => deactivateMode(session!, id),
     onSuccess: () => {
-      toast.success("Mode deactivated");
+      toast.success("No longer in use");
       void queryClient.invalidateQueries({ queryKey: ["admin", "modes"] });
     },
-    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Deactivate failed"),
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "It could not be taken out of use"),
   });
 
   if (!session || session.actorLevel !== "L4") return null;
   const items = query.data?.items ?? [];
 
-  const toggleStage = (stage: string) => {
-    setDraft((d) =>
-      d.stageRoute.includes(stage)
-        ? { ...d, stageRoute: d.stageRoute.filter((s) => s !== stage) }
-        : { ...d, stageRoute: [...d.stageRoute, stage] },
-    );
-  };
-
-  const moveStage = (idx: number, dir: -1 | 1) => {
-    const newIdx = idx + dir;
-    if (newIdx < 0 || newIdx >= draft.stageRoute.length) return;
-    const next = [...draft.stageRoute];
-    [next[idx], next[newIdx]] = [next[newIdx], next[idx]];
-    setDraft({ ...draft, stageRoute: next });
-  };
-
-  const addCondition = () =>
-    setDraft({
-      ...draft,
-      autoFulfilmentConditions: [...draft.autoFulfilmentConditions, { stage: "S1", condition: "" }],
-    });
-  const updateCondition = (i: number, patch: Partial<{ stage: string; condition: string }>) => {
-    const next = [...draft.autoFulfilmentConditions];
-    next[i] = { ...next[i], ...patch };
-    setDraft({ ...draft, autoFulfilmentConditions: next });
-  };
-  const removeCondition = (i: number) =>
-    setDraft({ ...draft, autoFulfilmentConditions: draft.autoFulfilmentConditions.filter((_, idx) => idx !== i) });
-
-  const addDependency = () => {
-    const v = depInput.trim();
-    if (!v) return;
-    if (draft.featureDependencies.includes(v)) {
-      setDepInput("");
-      return;
-    }
-    setDraft({ ...draft, featureDependencies: [...draft.featureDependencies, v] });
-    setDepInput("");
-  };
-  const removeDependency = (v: string) =>
-    setDraft({ ...draft, featureDependencies: draft.featureDependencies.filter((d) => d !== v) });
-
   return (
     <div className="space-y-8 pb-16">
-      <div>
-        <p className="admin-eyebrow mb-2">Domain 04 · Workflow</p>
-        <h1 className="admin-display text-3xl">Modes</h1>
-        <p className="admin-muted mt-1 max-w-3xl text-sm">
-          Per ACIG §2.1A.7, each mode is an operational scenario (e.g. <span className="font-mono">NEW_BOOKING</span>,
-          {" "}
-          <span className="font-mono">ROOM_CHANGE</span>) defined by the stages it routes through, where auto-fulfilment
-          kicks in, and which engines/services it depends on. Lifecycle:{" "}
-          <span className="font-mono">DRAFT → VALIDATED → ACTIVE → SUPERSEDED</span>. Saving here transitions to
-          VALIDATED; click Activate to publish (auto-supersedes any prior active row with the same key).
-        </p>
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <p className="admin-eyebrow mb-2">Rules</p>
+          <h1 className="admin-display flex items-center gap-2 text-3xl">
+            Kinds of change
+            <Help label="Kinds of change">
+              Each kind of change to a booking, such as a room change or a new rate, and the steps it goes back through. Taking one out of use stops that change being made on any booking. A new version waits until you put it in use.
+            </Help>
+          </h1>
+        </div>
+        {!draft ? (
+          <button type="button" className="admin-btn" onClick={() => setDraft({ ...EMPTY })}>
+            Add a kind of change
+          </button>
+        ) : null}
       </div>
 
-      <div className="admin-panel space-y-4 p-5">
-        <div className="flex items-center justify-between">
-          <h2 className="admin-display text-lg">{draft.id ? `Edit mode (v${"?"})` : "Create / edit mode"}</h2>
-          {draft.id && (
-            <button type="button" className="admin-btn text-[10px]" onClick={resetDraft}>
-              Cancel edit
-            </button>
-          )}
-        </div>
+      {draft ? (
+        <div className="admin-panel space-y-4 p-5">
+          <h2 className="admin-display text-lg">{draft.id ? draft.displayName : "A new kind of change"}</h2>
 
-        <div className="grid gap-3 md:grid-cols-2">
-          <input
-            className="admin-input"
-            placeholder="modeKey (e.g. NEW_BOOKING)"
-            value={draft.modeKey}
-            disabled={!!draft.id && draft.isPredefined}
-            onChange={(e) => setDraft({ ...draft, modeKey: e.target.value })}
-          />
-          <input
-            className="admin-input"
-            placeholder="Display name"
-            value={draft.displayName}
-            onChange={(e) => setDraft({ ...draft, displayName: e.target.value })}
-          />
-        </div>
-        <input
-          className="admin-input"
-          placeholder="Description (optional)"
-          value={draft.description}
-          onChange={(e) => setDraft({ ...draft, description: e.target.value })}
-        />
-        <label className="flex items-center gap-2 text-xs">
-          <input
-            type="checkbox"
-            checked={draft.isPredefined}
-            disabled={!!draft.id}
-            onChange={(e) => setDraft({ ...draft, isPredefined: e.target.checked })}
-          />
-          Predefined (one of the 8 canonical modes — locked once saved)
-        </label>
-
-        <div>
-          <p className="admin-muted mb-1 text-xs">Stage route — click to add/remove; use ↑↓ to reorder</p>
-          <div className="mb-2 flex flex-wrap gap-1">
-            {STAGES.map((s) => (
-              <button
-                key={s}
-                type="button"
-                className={`admin-btn text-[10px] ${draft.stageRoute.includes(s) ? "admin-btn-success" : ""}`}
-                onClick={() => toggleStage(s)}
-              >
-                {s}
-              </button>
-            ))}
-          </div>
-          {draft.stageRoute.length > 0 && (
-            <ol className="space-y-1">
-              {draft.stageRoute.map((s, i) => (
-                <li key={`${s}-${i}`} className="flex items-center gap-2 text-xs">
-                  <span className="admin-muted w-6">{i + 1}.</span>
-                  <span className="font-mono">{s}</span>
-                  <button type="button" className="admin-btn text-[10px]" onClick={() => moveStage(i, -1)} disabled={i === 0}>
-                    ↑
-                  </button>
-                  <button
-                    type="button"
-                    className="admin-btn text-[10px]"
-                    onClick={() => moveStage(i, 1)}
-                    disabled={i === draft.stageRoute.length - 1}
-                  >
-                    ↓
-                  </button>
-                </li>
-              ))}
-            </ol>
-          )}
-        </div>
-
-        <div>
-          <div className="mb-1 flex items-center justify-between">
-            <p className="admin-muted text-xs">Auto-fulfilment conditions</p>
-            <button type="button" className="admin-btn text-[10px]" onClick={addCondition}>
-              + Add condition
-            </button>
-          </div>
-          {draft.autoFulfilmentConditions.length === 0 ? (
-            <p className="admin-muted text-[10px]">No auto-fulfilment conditions.</p>
-          ) : (
-            <div className="space-y-2">
-              {draft.autoFulfilmentConditions.map((c, i) => (
-                <div key={i} className="flex flex-wrap items-center gap-2">
-                  <select
-                    className="admin-select w-24"
-                    value={c.stage}
-                    onChange={(e) => updateCondition(i, { stage: e.target.value })}
-                  >
-                    {STAGES.map((s) => (
-                      <option key={s} value={s}>
-                        {s}
-                      </option>
-                    ))}
-                  </select>
-                  <input
-                    className="admin-input flex-1"
-                    placeholder="Condition (e.g. SAME_TEAM_AUTO_FULFIL)"
-                    value={c.condition}
-                    onChange={(e) => updateCondition(i, { condition: e.target.value })}
-                  />
-                  <button type="button" className="admin-btn text-[10px]" onClick={() => removeCondition(i)}>
-                    Remove
-                  </button>
-                </div>
-              ))}
+          <div className="sf-grid">
+            <div className="sf-field">
+              <span className="sf-label">Name</span>
+              <input className="admin-input" value={draft.displayName} onChange={(e) => setDraft({ ...draft, displayName: e.target.value })} />
             </div>
-          )}
-        </div>
+            {!draft.isPredefined ? (
+              <div className="sf-field">
+                <span className="sf-label">
+                  Short code
+                  <Help label="Short code">A short name the system keeps for this. Keep it once it is in use.</Help>
+                </span>
+                <input className="admin-input" placeholder="ROOM_CHANGE" value={draft.modeKey} onChange={(e) => setDraft({ ...draft, modeKey: e.target.value })} />
+              </div>
+            ) : null}
+          </div>
 
-        <div>
-          <p className="admin-muted mb-1 text-xs">Feature dependencies (services / engines this mode requires)</p>
-          <div className="mb-2 flex gap-2">
-            <input
-              className="admin-input flex-1"
-              placeholder="e.g. PricingPipelineEngine"
-              value={depInput}
-              onChange={(e) => setDepInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  addDependency();
-                }
-              }}
+          <div className="sf-field">
+            <span className="sf-label">What it is for</span>
+            <input className="admin-input" value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} />
+          </div>
+
+          <div className="sf-field">
+            <span className="sf-label">
+              The steps it goes through
+              <Help label="The steps it goes through">Click a step to add it or take it off. Use the arrows to put them in order.</Help>
+            </span>
+            <Control
+              f={{ kind: "multi", label: "The steps", options: STAGES }}
+              value={draft.stageRoute}
+              onChange={(v) => setDraft({ ...draft, stageRoute: v as string[] })}
             />
-            <button type="button" className="admin-btn text-[10px]" onClick={addDependency}>
-              Add
+            {draft.stageRoute.length > 0 ? (
+              <ol className="mt-2 flex flex-wrap items-center gap-2">
+                {draft.stageRoute.map((s, i) => (
+                  <li key={`${s}-${i}`} className="sf-tag">
+                    <span>
+                      {i + 1}. {stageWord(s)}
+                    </span>
+                    <button
+                      type="button"
+                      aria-label={`Move ${stageWord(s)} earlier`}
+                      disabled={i === 0}
+                      onClick={() => {
+                        const next = [...draft.stageRoute];
+                        [next[i - 1], next[i]] = [next[i], next[i - 1]];
+                        setDraft({ ...draft, stageRoute: next });
+                      }}
+                    >
+                      ←
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`Move ${stageWord(s)} later`}
+                      disabled={i === draft.stageRoute.length - 1}
+                      onClick={() => {
+                        const next = [...draft.stageRoute];
+                        [next[i + 1], next[i]] = [next[i], next[i + 1]];
+                        setDraft({ ...draft, stageRoute: next });
+                      }}
+                    >
+                      →
+                    </button>
+                  </li>
+                ))}
+              </ol>
+            ) : null}
+          </div>
+
+          <div className="sf-field">
+            <span className="sf-label">
+              A step it can skip
+              <Help label="A step it can skip">The system skips the step by itself when this holds.</Help>
+            </span>
+            <Control
+              f={{
+                kind: "rows",
+                label: "A step it can skip",
+                addLabel: "Add a step it can skip",
+                word: ["step", "steps"],
+                emptyText: "It goes through every step.",
+                blank: { stage: "S2", condition: "SAME_RATE_AS_FROZEN_RESERVATION" },
+                columns: [
+                  { kind: "select", key: "stage", label: "Step", options: STAGES },
+                  { kind: "select", key: "condition", label: "When", options: CONDITIONS },
+                ],
+              }}
+              value={draft.autoFulfilmentConditions}
+              onChange={(v) => setDraft({ ...draft, autoFulfilmentConditions: v as Draft["autoFulfilmentConditions"] })}
+            />
+          </div>
+
+          <div className="sf-field">
+            <span className="sf-label">
+              What it relies on
+              <Help label="What it relies on">Parts of the system this change needs. The readiness check warns about any it does not know.</Help>
+            </span>
+            <Control
+              f={{ kind: "multi", label: "What it relies on", options: NEEDS }}
+              value={draft.featureDependencies}
+              onChange={(v) => setDraft({ ...draft, featureDependencies: v as string[] })}
+            />
+          </div>
+
+          <div className="flex gap-2">
+            <button type="button" className="admin-btn" disabled={saveMutation.isPending || !draft.modeKey.trim() || !draft.displayName.trim()} onClick={() => saveMutation.mutate()}>
+              {draft.id ? "Save a new version" : "Add it"}
+            </button>
+            <button type="button" className="admin-btn admin-btn-ghost" onClick={() => setDraft(null)}>
+              Cancel
             </button>
           </div>
-          {draft.featureDependencies.length > 0 && (
-            <ul className="flex flex-wrap gap-1">
-              {draft.featureDependencies.map((d) => (
-                <li key={d} className="admin-tag flex items-center gap-1 text-[10px]">
-                  <span className="font-mono">{d}</span>
-                  <button type="button" className="text-red-500 hover:text-red-700" onClick={() => removeDependency(d)}>
-                    ×
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
         </div>
-
-        <button
-          type="button"
-          className="admin-btn w-fit"
-          disabled={saveMutation.isPending || !draft.modeKey.trim() || !draft.displayName.trim()}
-          onClick={() => saveMutation.mutate()}
-        >
-          {draft.id ? "Save new version" : "Create mode"}
-        </button>
-      </div>
+      ) : null}
 
       <div className="admin-panel overflow-x-auto p-4">
         <table className="admin-table">
           <thead>
             <tr>
-              <th>Key</th>
-              <th>Name</th>
-              <th>Stage route</th>
-              <th>Lifecycle</th>
-              <th>v</th>
-              <th>Active</th>
+              <th>Kind of change</th>
+              <th>The steps</th>
+              <th>Standing</th>
+              <th>Version</th>
               <th />
             </tr>
           </thead>
           <tbody>
-            {items.length === 0 && (
+            {items.length === 0 ? (
               <tr>
-                <td colSpan={7} className="admin-muted text-sm">
-                  No modes yet — run the seed script to install the 8 predefined modes.
+                <td colSpan={5} className="admin-muted">
+                  None yet.
                 </td>
               </tr>
-            )}
+            ) : null}
             {items.map((m) => (
               <tr key={m.id}>
-                <td className="font-mono text-xs">{m.modeKey}</td>
-                <td>{m.displayName}</td>
-                <td className="font-mono text-[10px]">{(m.stageRoute ?? []).join(" → ") || "—"}</td>
                 <td>
-                  <span
-                    className={`admin-tag ${
-                      m.lifecycleState === "ACTIVE"
-                        ? "admin-tag-ok"
-                        : m.lifecycleState === "SUPERSEDED"
-                          ? ""
-                          : "admin-tag-warn"
-                    }`}
-                  >
-                    {m.lifecycleState}
+                  <strong>{m.displayName}</strong>
+                </td>
+                <td>{(m.stageRoute ?? []).map(stageWord).join(" → ") || "—"}</td>
+                <td>
+                  <span className={`admin-tag ${m.lifecycleState === "ACTIVE" ? "admin-tag-ok" : m.lifecycleState === "SUPERSEDED" ? "" : "admin-tag-warn"}`}>
+                    {STATE_WORD[m.lifecycleState] ?? m.lifecycleState}
                   </span>
                 </td>
-                <td className="font-mono text-xs">{m.version}</td>
-                <td>{m.isActive ? "yes" : "no"}</td>
-                <td className="space-x-1 text-right">
-                  {m.lifecycleState !== "SUPERSEDED" && (
-                    <button type="button" className="admin-btn text-[10px]" onClick={() => setDraft(draftFromRow(m))}>
-                      Edit
-                    </button>
-                  )}
-                  {!m.isActive && m.lifecycleState !== "SUPERSEDED" && (
-                    <button
-                      type="button"
-                      className="admin-btn admin-btn-success text-[10px]"
-                      onClick={() => activateMutation.mutate(m.id)}
-                    >
-                      Activate
-                    </button>
-                  )}
-                  {m.isActive && (
-                    <button
-                      type="button"
-                      className="admin-btn text-[10px]"
-                      onClick={() => deactivateMutation.mutate(m.id)}
-                    >
-                      Deactivate
-                    </button>
-                  )}
+                <td>{m.version}</td>
+                <td className="text-right">
+                  <span className="inline-flex gap-1">
+                    {m.lifecycleState !== "SUPERSEDED" ? (
+                      <button type="button" className="admin-btn text-[10px]" onClick={() => setDraft(draftFromRow(m))}>
+                        Change
+                      </button>
+                    ) : null}
+                    {!m.isActive && m.lifecycleState !== "SUPERSEDED" ? (
+                      <button type="button" className="admin-btn admin-btn-success text-[10px]" onClick={() => activateMutation.mutate(m.id)}>
+                        Put in use
+                      </button>
+                    ) : null}
+                    {m.isActive ? (
+                      <button type="button" className="admin-btn text-[10px]" onClick={() => deactivateMutation.mutate(m.id)}>
+                        Take out of use
+                      </button>
+                    ) : null}
+                  </span>
                 </td>
               </tr>
             ))}

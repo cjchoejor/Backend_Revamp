@@ -1,5 +1,6 @@
 "use client";
 
+import { Help } from "@/components/ds/help";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -7,7 +8,7 @@ import { createSeason, deactivateSeason, listSeasons, reactivateSeason, type Sea
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
 import { useConfirm } from "@/components/providers/dialog-provider";
-import { DateInput } from "@/components/ds/date-input";
+import { DateInput, isoToDmy } from "@/components/ds/date-input";
 
 const EMPTY = { name: "", startDate: "", endDate: "", rateMultiplier: "", priority: "0" };
 
@@ -66,17 +67,19 @@ export default function AdminSeasonsPage() {
   return (
     <div className="space-y-8 pb-16">
       <div>
-        <p className="admin-eyebrow mb-2">Domain 03 · Commercial</p>
-        <h1 className="admin-display text-3xl">Seasons</h1>
-        <p className="admin-muted mt-1">Active seasons may not overlap.</p>
+        <p className="admin-eyebrow mb-2">Rates and limits</p>
+        <h1 className="admin-display flex items-center gap-2 text-3xl">
+          Seasons
+          <Help label="Seasons">Dates when rates go up or down. Two seasons in use may not overlap.</Help>
+        </h1>
       </div>
 
       <div className="admin-panel grid gap-4 p-5 md:grid-cols-3">
         <input className="admin-input" placeholder="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
         <label className="admin-muted text-xs">Start<DateInput className="admin-input mt-1" value={form.startDate} onChange={(e) => setForm({ ...form, startDate: e.target.value })} /></label>
         <label className="admin-muted text-xs">End<DateInput className="admin-input mt-1" value={form.endDate} onChange={(e) => setForm({ ...form, endDate: e.target.value })} /></label>
-        <input className="admin-input" placeholder="Rate multiplier (e.g. 1.25)" type="number" step="0.01" value={form.rateMultiplier} onChange={(e) => setForm({ ...form, rateMultiplier: e.target.value })} />
-        <input className="admin-input" placeholder="Priority" type="number" value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })} />
+        <input className="admin-input" placeholder="Rates times (1.25 is 25% more)" type="number" step="0.01" value={form.rateMultiplier} onChange={(e) => setForm({ ...form, rateMultiplier: e.target.value })} />
+        <input className="admin-input" placeholder="Priority, if two apply" type="number" value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })} />
         <button type="button" className="admin-btn col-span-full w-fit" disabled={createMutation.isPending || !form.name || !form.startDate || !form.endDate} onClick={() => createMutation.mutate()}>
           Create season
         </button>
@@ -89,15 +92,15 @@ export default function AdminSeasonsPage() {
       <div className="admin-panel overflow-x-auto p-4">
         <table className="admin-table">
           <thead>
-            <tr><th>Name</th><th>Start</th><th>End</th><th>Multiplier</th><th>Priority</th><th>Status</th><th /></tr>
+            <tr><th>Name</th><th>Start</th><th>End</th><th>Rates times</th><th>Priority</th><th>Status</th><th /></tr>
           </thead>
           <tbody>
             {items.length === 0 && <tr><td colSpan={7} className="admin-muted">No seasons found.</td></tr>}
             {items.map((s: SeasonAdmin) => (
               <tr key={s.id}>
                 <td>{s.name}</td>
-                <td className="font-mono text-xs">{s.startDate.slice(0, 10)}</td>
-                <td className="font-mono text-xs">{s.endDate.slice(0, 10)}</td>
+                <td>{isoToDmy(s.startDate)}</td>
+                <td>{isoToDmy(s.endDate)}</td>
                 <td>{s.rateMultiplier ?? "—"}</td>
                 <td>{s.priority}</td>
                 <td>{s.isActive ? <span className="admin-tag admin-tag-ok">active</span> : <span className="admin-tag admin-tag-warn">inactive</span>}</td>

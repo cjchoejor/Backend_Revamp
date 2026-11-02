@@ -1,5 +1,6 @@
 "use client";
 
+import { Help } from "@/components/ds/help";
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -167,13 +168,11 @@ export default function AdminHouseTariffPage() {
   return (
     <div className="space-y-8 pb-16">
       <div>
-        <p className="admin-eyebrow mb-2">Domain 03 · Commercial</p>
-        <h1 className="admin-display text-3xl">House tariff</h1>
-        <p className="admin-muted mt-1">
-          The hotel&apos;s own extra-bed and meal prices. Used for <strong>walk-in, direct and OTA</strong> bookings —
-          anything with no travel agent or corporate account attached. Agent and corporate bookings use their own
-          rate card instead and never fall back to these.
-        </p>
+        <p className="admin-eyebrow mb-2">Rates and limits</p>
+        <h1 className="admin-display flex items-center gap-2 text-3xl">
+          House tariff
+          <Help label="House tariff">The hotel's own prices for an extra bed and meals. They apply to any booking with no travel agent or company. Those bookings use their rate package instead and never fall back to these.</Help>
+        </h1>
       </div>
 
       <div className="admin-panel p-4 text-xs leading-relaxed">
@@ -216,8 +215,8 @@ export default function AdminHouseTariffPage() {
         </p>
         <div className="admin-panel grid gap-4 p-5 md:grid-cols-4">
           <RateInput label="CP" hint="breakfast only" value={form.cpRate} onChange={(v) => setForm({ ...form, cpRate: v })} />
-          <RateInput label="MAPL" hint="breakfast + lunch" value={form.mapLunchRate} onChange={(v) => setForm({ ...form, mapLunchRate: v })} />
-          <RateInput label="MAPD" hint="breakfast + dinner" value={form.mapDinnerRate} onChange={(v) => setForm({ ...form, mapDinnerRate: v })} />
+          <RateInput label="MAP+L" hint="breakfast + lunch" value={form.mapLunchRate} onChange={(v) => setForm({ ...form, mapLunchRate: v })} />
+          <RateInput label="MAP+D" hint="breakfast + dinner" value={form.mapDinnerRate} onChange={(v) => setForm({ ...form, mapDinnerRate: v })} />
           <RateInput label="AP" hint="all three meals" value={form.apRate} onChange={(v) => setForm({ ...form, apRate: v })} />
         </div>
 
@@ -230,7 +229,7 @@ export default function AdminHouseTariffPage() {
             <tbody>
               {(["CP", "MAPL", "MAPD", "AP"] as const).map((k) => (
                 <tr key={k}>
-                  <td className="font-mono text-xs">{k}</td>
+                  <td className="text-xs">{k === "MAPL" ? "MAP+L" : k === "MAPD" ? "MAP+D" : k}</td>
                   <td className="admin-muted text-xs">{effective[k].covers}</td>
                   <td className="font-mono">{money(effective[k].value, form.currency)}</td>
                   <td className="text-xs">
@@ -243,8 +242,8 @@ export default function AdminHouseTariffPage() {
             </tbody>
           </table>
           <p className="admin-muted mt-3 text-[11px]">
-            Front desk can still renegotiate any meal price per room in Stage 2. A negotiated meal re-prices only the
-            plans that include it — negotiating dinner moves MAPD and AP, and leaves CP alone.
+            The desk can still renegotiate any meal price per room at Negotiation. A negotiated meal re-prices only the
+            plans that include it — negotiating dinner moves MAP+D and AP, and leaves CP alone.
           </p>
         </div>
       </section>
@@ -280,7 +279,7 @@ export default function AdminHouseTariffPage() {
           <div className="admin-panel overflow-x-auto p-4">
             <table className="admin-table">
               <thead>
-                <tr><th>Extra bed</th><th>Breakfast</th><th>Lunch</th><th>Dinner</th><th>CP</th><th>MAPL</th><th>MAPD</th><th>AP</th><th>In force since</th></tr>
+                <tr><th>Extra bed</th><th>Breakfast</th><th>Lunch</th><th>Dinner</th><th>CP</th><th>MAP+L</th><th>MAP+D</th><th>AP</th><th>In force since</th></tr>
               </thead>
               <tbody>
                 <tr>
@@ -307,7 +306,7 @@ export default function AdminHouseTariffPage() {
           <div className="admin-panel overflow-x-auto p-4">
             <table className="admin-table">
               <thead>
-                <tr><th>From</th><th>To</th><th>Extra bed</th><th>B / L / D</th><th>CP / MAPL / MAPD / AP</th><th>By</th></tr>
+                <tr><th>From</th><th>To</th><th>Extra bed</th><th>B / L / D</th><th>CP / MAP+L / MAP+D / AP</th><th>By</th></tr>
               </thead>
               <tbody>
                 {history.map((v: HouseTariffAdmin) => (

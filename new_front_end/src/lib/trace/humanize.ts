@@ -35,15 +35,15 @@ const CATEGORY_LABELS: Record<string, string> = {
   ADMIN: "Admin",
   ENTRY: "Booking",
   INQUIRY: "Inquiry",
-  S1: "Stage 1",
-  S2: "Stage 2",
-  S3: "Stage 3",
-  S4: "Stage 4",
-  S5: "Stage 5",
-  S6: "Stage 6",
-  S7: "Stage 7",
-  S8: "Stage 8",
-  S9: "Stage 9",
+  S1: "Inquiry",
+  S2: "Negotiation",
+  S3: "Set up",
+  S4: "Reserve",
+  S5: "Arrival",
+  S6: "Check-in",
+  S7: "Stay",
+  S8: "Check-out",
+  S9: "Closed",
   STAGE_DWELL: "Stage timing",
   NO_SHOW: "No-show",
   NO_SHOW_CUTOFF: "No-show",
@@ -105,13 +105,13 @@ function toneFor(eventType: string): TraceTone {
 }
 
 const STAGE_NAMES: Record<string, string> = {
-  S1: "Inquiry", S2: "Quotation", S3: "Reservation", S4: "Confirmation", S5: "Arrival",
-  S6: "In-house", S7: "Stay", S8: "Checkout", S9: "Post-stay",
+  S1: "Inquiry", S2: "Negotiation", S3: "Set up", S4: "Reserve", S5: "Arrival",
+  S6: "Check-in", S7: "Stay", S8: "Check-out", S9: "Closed",
 };
 
 function friendlyStage(stage: string | null | undefined): string | null {
   if (!stage) return null;
-  return STAGE_NAMES[stage] ? `${stage} · ${STAGE_NAMES[stage]}` : stage;
+  return STAGE_NAMES[stage] ?? stage;
 }
 
 // Payload keys worth surfacing as a one-line summary, in priority order.
@@ -120,7 +120,7 @@ const SUMMARY_KEYS = [
   "fromStage", "toStage", "vipTier", "handoffType", "version", "modeKey", "message",
 ];
 
-function buildDetail(payload: unknown, eventType: string): string | null {
+function buildDetail(payload: unknown, eventType: string, settingName?: (key: string) => string | undefined): string | null {
   if (!payload || typeof payload !== "object") return null;
   const p = payload as Record<string, unknown>;
 
@@ -135,7 +135,8 @@ function buildDetail(payload: unknown, eventType: string): string | null {
   for (const key of SUMMARY_KEYS) {
     const v = p[key];
     if (v === undefined || v === null || v === "" || typeof v === "object") continue;
-    parts.push(`${titleCaseWords(key)}: ${String(v)}`);
+    const isSetting = key === "configKey" || key === "policyId";
+    parts.push(isSetting ? `Setting: ${settingName?.(String(v)) ?? String(v)}` : `${titleCaseWords(key)}: ${String(v)}`);
     if (parts.length >= 3) break;
   }
   if (parts.length > 0) return parts.join(" · ");
@@ -163,7 +164,7 @@ export function relativeTime(iso: string, now: Date = new Date()): string {
   return `${Math.round(months / 12)} yr ago`;
 }
 
-export function humanizeTrace(event: TraceEvent, now?: Date): HumanTrace {
+export function humanizeTrace(event: TraceEvent, now?: Date, settingName?: (key: string) => string | undefined): HumanTrace {
   const [domain, ...rest] = event.eventType.split(".");
   const category = CATEGORY_LABELS[domain] ?? titleCaseWords(domain);
   const action = rest.length > 0 ? titleCaseWords(rest.join(" ")) : titleCaseWords(domain);
@@ -173,7 +174,7 @@ export function humanizeTrace(event: TraceEvent, now?: Date): HumanTrace {
   return {
     category,
     title,
-    detail: buildDetail(event.payload, event.eventType),
+    detail: buildDetail(event.payload, event.eventType, settingName),
     tone: toneFor(event.eventType),
     actor: event.actorName ?? event.actorId,
     actorLevel: event.actorLevel,

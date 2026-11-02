@@ -29,15 +29,13 @@ export type AdminNavItem = {
 };
 
 /**
- * Domain-grouped nav for the L4 admin console. Maps directly to the 9 canonical ACIG domains
- * (see `docs/admin-console-visual.html`) plus a top "Overview" pin and a bottom "Utilities" group
- * for read-only / utility pages.
+ * The console's side list: the nine ACIG domains under plain names (see `docs/ACIG-v1_1.md` §6.2 for
+ * which service owns what), an Overview at the top and the tools underneath.
  *
- * The sidebar renders each `AdminNavGroup` as a collapsible drawer; the drawer containing the
- * currently-active route is auto-expanded by default. See `admin-shell.tsx`.
+ * Each group opens and closes; the one holding the current page opens by itself. See `admin-shell.tsx`.
  */
 export type AdminNavGroup = {
-  /** "01" through "09" — printed as "DOMAIN 0X". Use "" for pinned groups (Overview/Utilities). */
+  /** The ACIG domain, "01" to "09": a stable id for the group, never shown. */
   domainNumber: string;
   title: string;
   icon: LucideIcon;
@@ -49,122 +47,113 @@ export const overviewNavItem: AdminNavItem = {
   title: "Overview",
   href: "/admin",
   icon: LayoutDashboard,
-  description: "Console home & readiness summary",
+  description: "Everything in the console",
 };
 
 export const adminNavGroups: AdminNavGroup[] = [
   {
     domainNumber: "01",
-    title: "Identity & Org",
+    title: "The hotel and its people",
     icon: Users,
     items: [
-      { title: "Hotel profile", href: "/admin/hotel-profile", icon: Building2, description: "Property identity & contact metadata" },
-      { title: "Departments", href: "/admin/departments", icon: ClipboardList, description: "Org registry (codes, active status)" },
-      { title: "Roles & sessions", href: "/admin/roles", icon: KeyRound, description: "Roles, permissions, session config" },
-      { title: "Staff registry", href: "/admin/staff", icon: Users, description: "People, roles, session timeouts" },
-      { title: "ID prefixes", href: "/admin/id-prefixes", icon: KeyRound, description: "Edit the PREFIX in PREFIX-YYYYMMDD-NNNN business IDs" },
+      { title: "Hotel profile", href: "/admin/hotel-profile", icon: Building2, description: "The hotel's name, address, contacts and holidays" },
+      { title: "Departments", href: "/admin/departments", icon: ClipboardList, description: "The hotel's departments" },
+      { title: "Roles", href: "/admin/roles", icon: KeyRound, description: "Roles, what they may do, how long a sign-in lasts" },
+      { title: "Staff", href: "/admin/staff", icon: Users, description: "People, their roles and PINs" },
+      { title: "Number prefixes", href: "/admin/id-prefixes", icon: KeyRound, description: "The letters at the start of booking, invoice and other numbers" },
     ],
   },
   {
     domainNumber: "02",
-    title: "Inventory",
+    title: "Rooms and spaces",
     icon: Building2,
     items: [
-      { title: "Room types", href: "/admin/room-types", icon: Building2, description: "Room type registry" },
-      { title: "Rooms", href: "/admin/rooms", icon: Building2, description: "Rooms & deficient conditions" },
-      { title: "Spaces", href: "/admin/spaces", icon: Building2, description: "Conference & event spaces" },
+      { title: "Room types", href: "/admin/room-types", icon: Building2, description: "Kinds of room, what they sleep, their beds" },
+      { title: "Rooms", href: "/admin/rooms", icon: Building2, description: "Each room and any fault on it" },
+      { title: "Spaces", href: "/admin/spaces", icon: Building2, description: "Halls and event spaces" },
     ],
   },
   {
     domainNumber: "03",
-    title: "Commercial",
+    title: "Rates and limits",
     icon: Receipt,
     items: [
-      { title: "Rate plans", href: "/admin/rate-plans", icon: Receipt, description: "Rate plan registry & walk-in designation" },
-      { title: "Seasons", href: "/admin/seasons", icon: Receipt, description: "Season calendar (non-overlapping)" },
-      // Renamed: "Packages" collided with the new negotiated RATE packages, which live on the
-      // travel-agent / corporate pages. This one is the ACIG §6.2.10 stay-package registry
-      // (inclusions), an unrelated concept.
-      { title: "Stay packages (inclusions)", href: "/admin/packages", icon: Receipt, description: "Stay package registry & inclusions — NOT agent rates" },
-      { title: "Travel agents & rate packages", href: "/admin/travel-agents", icon: Users, description: "Agencies and their negotiated rate packages" },
-      { title: "Common rate package", href: "/admin/common-rate-package", icon: Banknote, description: "Fallback rate for an agent or company with no package of their own" },
-      { title: "House tariff (walk-in add-ons)", href: "/admin/house-tariff", icon: Banknote, description: "Extra bed, meals and meal plans for guests with no agency package" },
-      { title: "Corporate accounts & rate packages", href: "/admin/corporate-accounts", icon: Building2, description: "Company accounts + their negotiated rate packages" },
-      { title: "Commercial thresholds", href: "/admin/commercial", icon: Receipt, description: "Discount, FOC, overbooking, credit ceiling, write-off" },
+      { title: "Rate plans", href: "/admin/rate-plans", icon: Receipt, description: "Published rates and the walk-in rate" },
+      { title: "Seasons", href: "/admin/seasons", icon: Receipt, description: "Dates when rates go up or down" },
+      // "Packages" collided with the negotiated RATE packages on the agency and company pages.
+      { title: "Stay packages", href: "/admin/packages", icon: Receipt, description: "Packages with inclusions, not agency rates" },
+      { title: "Travel agents", href: "/admin/travel-agents", icon: Users, description: "Agencies and their rate packages" },
+      { title: "Corporate accounts", href: "/admin/corporate-accounts", icon: Building2, description: "Companies and their rate packages" },
+      { title: "Common rate package", href: "/admin/common-rate-package", icon: Banknote, description: "For an agency or company with no package of its own" },
+      { title: "House tariff", href: "/admin/house-tariff", icon: Banknote, description: "Extra bed, meals and meal plans for guests with no package" },
+      { title: "Limits", href: "/admin/commercial", icon: Receipt, description: "Discounts, credit, free stays, overbooking, write-offs" },
     ],
   },
   {
     domainNumber: "04",
-    title: "Workflow governance",
+    title: "Rules",
     icon: Workflow,
     items: [
-      { title: "Cancellation policies", href: "/admin/cancellation-policies", icon: Receipt, description: "Penalty tiers & no-show treatment" },
-      { title: "Modes", href: "/admin/modes", icon: Workflow, description: "Operational mode configurations" },
-      { title: "Policies (registry)", href: "/admin/policies", icon: Workflow, description: "Versioned policy registry" },
+      { title: "House rules", href: "/admin/policies", icon: Workflow, description: "The hotel's rules: time limits, money, children, groups" },
+      { title: "Cancellation policies", href: "/admin/cancellation-policies", icon: Receipt, description: "What a guest pays when they cancel or do not come" },
+      { title: "Kinds of change", href: "/admin/modes", icon: Workflow, description: "The steps each kind of change to a booking goes through" },
     ],
   },
   {
     domainNumber: "05",
-    title: "Communications & templates",
+    title: "Messages",
     icon: MessageSquare,
     items: [
-      { title: "Channels & ack windows", href: "/admin/communication-config", icon: MessageSquare, description: "Channels, credentials, ack windows" },
-      { title: "Templates", href: "/admin/templates", icon: FileText, description: "Communication, handoff, invoice, work-order templates" },
-      { title: "VIP routing", href: "/admin/vip-routing", icon: Users, description: "VIP arrival notification routing" },
+      { title: "Channels and replies", href: "/admin/communication-config", icon: MessageSquare, description: "Email, WhatsApp and how long to wait for an answer" },
+      { title: "Templates", href: "/admin/templates", icon: FileText, description: "Messages, handoff checklists, invoices and work orders" },
+      { title: "VIP arrivals", href: "/admin/vip-routing", icon: Users, description: "Who is told when a VIP arrives" },
     ],
   },
   {
     domainNumber: "06",
-    title: "Financial & operational",
+    title: "Money and daily running",
     icon: Banknote,
     items: [
-      { title: "Financial settings", href: "/admin/financial", icon: Banknote, description: "Payments, invoices, follow-up intervals, tax rates" },
-      { title: "Operational settings", href: "/admin/operational", icon: Cog, description: "Night audit, checkout, room assignment, housekeeping SLA" },
-      { title: "Timers & workers", href: "/admin/timers-workers", icon: Activity, description: "Background job schedules not owned by another domain" },
+      { title: "Payments and bills", href: "/admin/financial", icon: Banknote, description: "Tax rates, advances, reminders and bills" },
+      { title: "Daily schedule", href: "/admin/operational", icon: Cog, description: "Night audit, check-in and check-out times, cleaning" },
+      { title: "Time limits", href: "/admin/timers-workers", icon: Activity, description: "How long a booking, a hold or a quote can wait" },
     ],
   },
   {
     domainNumber: "07",
-    title: "Post-stay & governance",
+    title: "After the stay",
     icon: Shield,
     items: [
-      { title: "Post-stay & governance", href: "/admin/post-stay", icon: Shield, description: "Feedback, reviews, commission, identity docs" },
+      { title: "Feedback and records", href: "/admin/post-stay", icon: Shield, description: "Feedback, reviews, commission, ID documents" },
     ],
   },
   {
     domainNumber: "08",
-    title: "OTA & AI agent",
+    title: "Online bookings and AI",
     icon: Bot,
     items: [
-      { title: "OTA config", href: "/admin/ota-config", icon: Settings2, description: "OTA sources, polling, no-show penalties" },
-      { title: "AI agent config", href: "/admin/ai-agent-config", icon: Bot, description: "AI agent trust, credentials, processing locks" },
+      { title: "Online booking sites", href: "/admin/ota-config", icon: Settings2, description: "Booking sites, how often the inbox is read, no-show charges" },
+      { title: "AI agent", href: "/admin/ai-agent-config", icon: Bot, description: "What the AI may do and how long it may hold a booking" },
     ],
   },
   {
     domainNumber: "09",
-    title: "Generic & readiness",
+    title: "Everything else",
     icon: HelpCircle,
     items: [
-      { title: "Configuration (orphaned)", href: "/admin/configuration", icon: Settings2, description: "Keys not owned by a domain service" },
-      { title: "Readiness", href: "/admin/readiness", icon: Gauge, description: "Stage readiness gate checks" },
+      { title: "Other settings", href: "/admin/configuration", icon: Settings2, description: "Settings that do not belong to another page" },
+      { title: "Readiness check", href: "/admin/readiness", icon: Gauge, description: "Is everything set that the desk needs" },
     ],
   },
 ];
 
-/** Utility pages — pinned to the bottom, no domain number. */
+/** Tools, under the groups. */
 export const utilityNavItems: AdminNavItem[] = [
-  { title: "Audit trail", href: "/admin/audit-trail", icon: Gauge, description: "Who did what, when" },
-  { title: "System health", href: "/admin/health", icon: Activity, description: "API connectivity" },
-  { title: "Email test", href: "/admin/email-test", icon: Mail, description: "Verify SMTP & threading" },
+  { title: "Audit trail", href: "/admin/audit-trail", icon: Gauge, description: "Who changed what, and when" },
+  { title: "System health", href: "/admin/health", icon: Activity, description: "Is the system connected and running" },
+  { title: "Email test", href: "/admin/email-test", icon: Mail, description: "Send a test email" },
 ];
 
-/** Legacy flat list — preserved as a derived value for any code still importing it. New code
- *  should consume `adminNavGroups` instead. */
-export const adminNav: AdminNavItem[] = [
-  overviewNavItem,
-  ...adminNavGroups.flatMap((g) => g.items),
-  ...utilityNavItems,
-];
 
 /**
  * Find which domain group contains the given pathname. Used by the sidebar to auto-expand the
@@ -178,76 +167,3 @@ export function activeDomainNumber(pathname: string): string | null {
   }
   return null;
 }
-
-/**
- * The 9 ACIG admin console domains, used by the Overview page's hero card. Source of truth:
- * `docs/admin-console-visual.html` §domains and `docs/ACIG-v1_1.md` §6.2 / §6.3.
- *
- * Service counts: 4 + 3 + 4 + 4 + 3 + 3 + 1 + 2 + 2 = 26. Keep this in sync with the nav above
- * and the hardcoded numbers in `back_end/src/routes/admin/overview-router.ts`.
- */
-export const adminDomains = [
-  {
-    num: "01",
-    name: "Identity & org",
-    purpose: "The hotel itself, its departments, its people, and the role-permission map.",
-    services: ["HotelProfile", "Department", "Staff", "Role"],
-    icon: Users,
-  },
-  {
-    num: "02",
-    name: "Inventory",
-    purpose: "Room types, rooms with deficient-condition tracking, and non-room spaces.",
-    services: ["RoomType", "RoomInstance", "SpaceInventory"],
-    icon: Building2,
-  },
-  {
-    num: "03",
-    name: "Commercial",
-    purpose: "Rate plans, seasonal calendars, packages, and every commercial threshold (discount, FOC, overbooking, credit ceiling, write-off).",
-    services: ["RatePlan", "Season", "Package", "CommercialThreshold"],
-    icon: Receipt,
-  },
-  {
-    num: "04",
-    name: "Workflow governance",
-    purpose: "Cancellation policy, hold/expiry behaviour, operational modes, and the policy registry.",
-    services: ["CancellationPolicy", "WorkflowConfiguration", "Mode", "PolicyRegistry"],
-    icon: Workflow,
-  },
-  {
-    num: "05",
-    name: "Communications & templates",
-    purpose: "Channel credentials, acknowledgement windows, message templates, handoff checklists, and work order templates.",
-    services: ["CommunicationConfig", "HandoffTemplate", "WorkOrderTemplate"],
-    icon: MessageSquare,
-  },
-  {
-    num: "06",
-    name: "Financial & operational",
-    purpose: "Advance payment thresholds, invoices, damage rates, night audit, checkout time, room assignment priorities, VIP routing.",
-    services: ["FinancialConfiguration", "OperationalSchedule", "VIPNotificationRouting"],
-    icon: Banknote,
-  },
-  {
-    num: "07",
-    name: "Post-stay & governance",
-    purpose: "Feedback templates, review platform links, government portal config, agent commission, ID document types and retention.",
-    services: ["PostStayAndGovernance"],
-    icon: Shield,
-  },
-  {
-    num: "08",
-    name: "OTA & AI agent",
-    purpose: "OTA source flags, polling, conflict rules, no-show penalties; AI agent processing locks, voice-note SLAs, escalation routing.",
-    services: ["OTAConfiguration", "AIAgentConfig"],
-    icon: Bot,
-  },
-  {
-    num: "09",
-    name: "Generic & readiness",
-    purpose: "Catch-all keyed configuration for anything not owned by a domain service, plus the readiness gate endpoint.",
-    services: ["Configuration", "Readiness"],
-    icon: HelpCircle,
-  },
-] as const;

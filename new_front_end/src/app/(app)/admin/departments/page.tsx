@@ -1,5 +1,6 @@
 "use client";
 
+import { Help } from "@/components/ds/help";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -44,9 +45,11 @@ export default function AdminDepartmentsPage() {
   return (
     <div className="space-y-8 pb-16">
       <div>
-        <p className="admin-eyebrow mb-2">Domain 01 · Identity</p>
-        <h1 className="admin-display text-3xl">Departments</h1>
-        <p className="admin-muted mt-2 max-w-2xl text-sm">Registry of organizational departments used for staff and routing policies.</p>
+        <p className="admin-eyebrow mb-2">The hotel and its people</p>
+        <h1 className="admin-display flex items-center gap-2 text-3xl">
+          Departments
+          <Help label="Departments">The hotel's departments.</Help>
+        </h1>
       </div>
 
       <div className="admin-panel grid gap-4 p-5 md:grid-cols-2">

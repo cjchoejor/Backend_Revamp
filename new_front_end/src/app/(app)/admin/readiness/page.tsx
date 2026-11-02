@@ -4,6 +4,21 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { getReadiness, runReadiness } from "@/lib/api/admin";
 import { useSession } from "@/hooks/use-session";
+import { getSettingDef } from "@/lib/admin/setting-forms";
+
+const READINESS_WORD: Record<string, string> = {
+  S9_READINESS: "What the Closed step needs",
+  RATE_PLAN_REGISTRY: "Rate plans in use",
+  L4_STAFF: "At least one administrator",
+  ROOM_INVENTORY: "Rooms",
+  MODE_FEATURE_DEPENDENCIES: "Kinds of change",
+};
+
+const readinessDetail = (d?: string | null) => {
+  const since = /^Active since (.+)$/.exec(d ?? "");
+  if (since) return `Set on ${new Date(since[1]).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}`;
+  return d === "No active configuration row" ? "Nothing saved" : d ?? "—";
+};
 
 function statusClass(status: string) {
   if (status === "OK") return "admin-tag-ok admin-tag";
@@ -36,11 +51,8 @@ export default function AdminReadinessPage() {
     <div className="space-y-6 pb-16">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <p className="admin-eyebrow mb-2">ReadinessGateEngine</p>
-          <h1 className="admin-display text-3xl">System readiness</h1>
-          <p className="admin-muted mt-2 max-w-2xl text-sm">
-            Validates core configuration surfaces before stages rely on them. L1+ can view; L4 can re-run on demand.
-          </p>
+          <p className="admin-eyebrow mb-2">Everything else</p>
+          <h1 className="admin-display text-3xl">Readiness check</h1>
         </div>
         {session?.actorLevel === "L4" && (
           <button type="button" className="admin-btn" disabled={runMutation.isPending} onClick={() => runMutation.mutate()}>
@@ -54,10 +66,10 @@ export default function AdminReadinessPage() {
           <dl className="admin-stat grid grid-cols-2 md:grid-cols-4">
             <div>
               <dt>Status</dt>
-              <dd className="text-xl">{report.ready ? "Ready" : "Gaps"}</dd>
+              <dd className="text-xl">{report.ready ? "Ready" : "Things missing"}</dd>
             </div>
             <div>
-              <dt>OK</dt>
+              <dt>Set</dt>
               <dd>{report.summary.ok}</dd>
             </div>
             <div>
@@ -65,7 +77,7 @@ export default function AdminReadinessPage() {
               <dd>{report.summary.missing}</dd>
             </div>
             <div>
-              <dt>Warnings</dt>
+              <dt>To look at</dt>
               <dd>{report.summary.warnings}</dd>
             </div>
           </dl>
@@ -82,11 +94,11 @@ export default function AdminReadinessPage() {
               <tbody>
                 {report.checks.map((c) => (
                   <tr key={c.id}>
-                    <td className="font-mono text-xs">{c.label}</td>
+                    <td>{getSettingDef(c.id)?.title ?? READINESS_WORD[c.id] ?? c.label}</td>
                     <td>
-                      <span className={statusClass(c.status)}>{c.status}</span>
+                      <span className={statusClass(c.status)}>{c.status === "OK" ? "Set" : c.status === "MISSING" ? "Missing" : "Look at this"}</span>
                     </td>
-                    <td className="text-xs">{c.detail ?? "—"}</td>
+                    <td>{readinessDetail(c.detail)}</td>
                   </tr>
                 ))}
               </tbody>

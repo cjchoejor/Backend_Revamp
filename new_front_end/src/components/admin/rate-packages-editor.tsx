@@ -235,7 +235,7 @@ export function RatePackagesEditor({ owner, ownerLabel }: { owner: PackageOwner;
             <thead>
               <tr>
                 <th>Package</th><th>Room</th><th>Extra bed</th><th>B / L / D</th>
-                <th>CP / MAPL / MAPD / AP</th><th>Since</th><th />
+                <th>CP / MAP+L / MAP+D / AP</th><th>Since</th><th />
               </tr>
             </thead>
             <tbody>
@@ -393,8 +393,8 @@ export function RatePackagesEditor({ owner, ownerLabel }: { owner: PackageOwner;
           <p className="admin-eyebrow mb-2">Meal plans — charged instead of the meals they cover</p>
           <div className="grid gap-4 md:grid-cols-4">
             <Field label="CP" hint="breakfast" value={draft.cpRate} onChange={(v) => setDraft({ ...draft, cpRate: v })} />
-            <Field label="MAPL" hint="breakfast + lunch" value={draft.mapLunchRate} onChange={(v) => setDraft({ ...draft, mapLunchRate: v })} />
-            <Field label="MAPD" hint="breakfast + dinner" value={draft.mapDinnerRate} onChange={(v) => setDraft({ ...draft, mapDinnerRate: v })} />
+            <Field label="MAP+L" hint="breakfast + lunch" value={draft.mapLunchRate} onChange={(v) => setDraft({ ...draft, mapLunchRate: v })} />
+            <Field label="MAP+D" hint="breakfast + dinner" value={draft.mapDinnerRate} onChange={(v) => setDraft({ ...draft, mapDinnerRate: v })} />
             <Field label="AP" hint="all three" value={draft.apRate} onChange={(v) => setDraft({ ...draft, apRate: v })} />
           </div>
         </div>

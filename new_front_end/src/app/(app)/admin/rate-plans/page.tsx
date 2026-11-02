@@ -1,5 +1,6 @@
 "use client";
 
+import { Help } from "@/components/ds/help";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -17,6 +18,8 @@ import {
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
 import { useConfirm } from "@/components/providers/dialog-provider";
+import { NotUsedYet } from "@/components/admin/settings-list";
+import { codeWords } from "@/lib/admin/setting-fields";
 
 const RATE_PLAN_TYPES = ["INDIVIDUAL", "PROMOTIONAL", "TIER", "CHANNEL", "RACK"] as const;
 type RatePlanTypeLiteral = (typeof RATE_PLAN_TYPES)[number];
@@ -131,12 +134,10 @@ export default function AdminRatePlansPage() {
   return (
     <div className="space-y-8 pb-16">
       <div>
-        <p className="admin-eyebrow mb-2">Domain 03 · Commercial</p>
+        <p className="admin-eyebrow mb-2">Rates and limits</p>
         <h1 className="admin-display text-3xl">Rate plans</h1>
-        <p className="admin-muted mt-1">
-          Walk-in plan:{" "}
-          <span className="font-mono">{walkInQuery.data?.ratePlan?.name ?? (walkInId ? walkInId : "not set")}</span>
-        </p>
+        <p className="admin-muted mt-2 text-sm">Walk-in plan: <strong>{walkInQuery.data?.ratePlan?.name ?? "none chosen"}</strong></p>
+        <NotUsedYet>Nothing prices from the walk-in plan yet, so choosing one changes nothing. A walk-in is priced from each room type's own plan.</NotUsedYet>
       </div>
 
       <div className="admin-panel grid gap-4 p-5 md:grid-cols-3">
@@ -145,8 +146,8 @@ export default function AdminRatePlansPage() {
         </p>
         {editingId && (
           <p className="admin-muted col-span-full -mt-2 text-xs">
-            Confirmed reservations carry a frozen rate snapshot from S4 and won't be affected. Only un-confirmed
-            bookings (S1–S3) pick up the new value on their next pricing read.
+            A reserved booking keeps the rate it was reserved on. A booking not reserved yet takes the new figure
+            the next time it is priced.
           </p>
         )}
         <input className="admin-input" placeholder="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
@@ -154,10 +155,10 @@ export default function AdminRatePlansPage() {
           className="admin-select"
           value={form.type}
           onChange={(e) => setForm({ ...form, type: e.target.value as RatePlanTypeLiteral })}
-          title="Type drives priority in the PricingPipelineEngine (INDIVIDUAL → PROMOTIONAL → TIER → CHANNEL → RACK)."
+          title="When a stay fits more than one plan, the first kind in this order wins: individual, promotional, tier, channel, rack."
         >
           {RATE_PLAN_TYPES.map((t) => (
-            <option key={t} value={t}>{t}</option>
+            <option key={t} value={t}>{codeWords(t)}</option>
           ))}
         </select>
         <select
@@ -218,7 +219,7 @@ export default function AdminRatePlansPage() {
             {items.map((rp: RatePlanAdmin) => (
               <tr key={rp.id}>
                 <td>{rp.name}</td>
-                <td className="font-mono text-[10px]">{rp.type}</td>
+                <td className="text-xs">{codeWords(rp.type)}</td>
                 <td className="text-xs">
                   {rp.roomTypeId ? (
                     <span className="font-mono">{roomTypeNameById.get(rp.roomTypeId) ?? rp.roomTypeId}</span>

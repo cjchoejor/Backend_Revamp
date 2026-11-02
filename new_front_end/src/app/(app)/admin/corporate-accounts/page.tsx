@@ -1,5 +1,6 @@
 "use client";
 
+import { Help } from "@/components/ds/help";
 import { useState, useEffect, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -20,6 +21,7 @@ import { RatePackagesEditor } from "@/components/admin/rate-packages-editor";
 import { RatePackageHistory } from "@/components/admin/rate-package-history";
 import { VersionsTab } from "@/components/admin/versions-tab";
 import { useSelectionParam } from "@/hooks/use-selection-param";
+import { Control } from "@/components/admin/setting-form";
 
 const CONTACT_MODES: ContactMode[] = ["PHONE", "EMAIL", "WHATSAPP", "IN_PERSON", "OTHER"];
 const EMPTY: CorporateAccountInput = { displayName: "", modeOfContact: "EMAIL" };
@@ -122,14 +124,11 @@ export default function AdminCorporateAccountsPage() {
   return (
     <div className="space-y-6 pb-16">
       <div>
-        <p className="admin-eyebrow mb-2">Domain 03 · Commercial</p>
-        <h1 className="admin-display text-3xl">Corporate accounts</h1>
-        <p className="admin-muted mt-2 max-w-2xl text-sm">
-          Companies with negotiated rates. Same rate-card shape as travel agents (base rate,
-          per-room-type overrides, meal plans, meal add-ons, CNB %) plus billing fields (GST
-          number, billing address). Saving the rate card creates a new version; historical
-          bookings always see the rate active at the time they were quoted.
-        </p>
+        <p className="admin-eyebrow mb-2">Rates and limits</p>
+        <h1 className="admin-display flex items-center gap-2 text-3xl">
+          Corporate accounts
+          <Help label="Corporate accounts">Companies with negotiated rates. Each has its rate packages, like a travel agent, and its billing details. A booking keeps the rates it was quoted on.</Help>
+        </h1>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[280px_1fr]">
@@ -187,15 +186,14 @@ export default function AdminCorporateAccountsPage() {
                       {CONTACT_MODES.map((m) => <option key={m} value={m}>{m.replace("_", " ")}</option>)}
                     </select>
                   </label>
-                  <label className="block space-y-1">
-                    <span className="admin-muted text-xs">Contact numbers</span>
-                    <input
-                      className="admin-input"
-                      placeholder="17123456, 77123456"
-                      value={(draft.contactNumbers ?? []).join(", ")}
-                      onChange={(e) => setDraft({ ...draft, contactNumbers: e.target.value.split(",").map((s) => s.trim()) })}
+                  <div className="sf-field">
+                    <span className="sf-label">Contact numbers</span>
+                    <Control
+                      f={{ kind: "tags", label: "Contact numbers", placeholder: "17123456", addLabel: "Add" }}
+                      value={draft.contactNumbers ?? []}
+                      onChange={(v) => setDraft({ ...draft, contactNumbers: v as string[] })}
                     />
-                  </label>
+                  </div>
                   <label className="block space-y-1">
                     <span className="admin-muted text-xs">Email</span>
                     <input className="admin-input" type="email" value={draft.contactEmail ?? ""} onChange={(e) => setDraft({ ...draft, contactEmail: e.target.value })} />
