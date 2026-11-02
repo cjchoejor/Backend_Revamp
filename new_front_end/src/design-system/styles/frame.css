@@ -1373,6 +1373,14 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .cb-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .ds .cb-item:disabled { cursor: default; opacity: 0.7; }
 .ds .cb-label { font-weight: 600; }
+.ds .cb-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* An item with something owed on it reads in red, its count beside its name (2026-10-31, operator:
+   "inside also it needs to be prominent") — the same red the menu's button carries. */
+.ds .cb-due { display: inline-block; padding: 0 8px; border-radius: 10px; background: var(--danger); color: #fff; font-size: 12px; font-weight: 700; line-height: 20px; white-space: nowrap; }
+.ds .cb-item.due { background: var(--danger-soft); box-shadow: inset 4px 0 0 var(--danger); padding-left: 14px; }
+.ds .cb-item.due:hover:not(:disabled) { background: var(--danger-soft); box-shadow: inset 4px 0 0 var(--danger), inset 0 0 0 1px var(--danger); }
+.ds .cb-item.due .cb-label { color: var(--danger); font-weight: 700; }
+.ds .cb-item.due .cb-note { color: var(--danger); font-weight: 600; }
 .ds .cb-item.danger .cb-label { color: var(--danger); }
 .ds .cb-note { font-size: var(--t-meta); color: var(--ink-2); line-height: 1.35; }
 .ds .cb-why { font-size: var(--t-meta); color: var(--warning); font-weight: 600; }
@@ -1919,3 +1927,22 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
    Change configuration panel, a rooms table opened on Change configuration. The in-page views
    (?pane=change, ?pane=rooms) already leave it out. */
 .ds .ws-top .ws-main:has(.cfg-change, [data-changing-booking]) .move-dock:not(.desk-root *) { display: none; }
+
+/* Two bookings on one night — each says first, in its bar's own colour, whether the guest is in the
+   room or coming (2026-10-31, operator: "at a glance the user really can't say which one is due out
+   and which is reserved"). The card's edge takes the same colour. */
+.ds .rchart-pick .pl-row.clash-row { border-left: 5px solid var(--hc-edge, var(--line-2)); padding-top: 0; overflow: hidden; gap: 2px; }
+.ds .rchart-pick .pl-row.clash-row b { font-size: 14px; }
+.ds .clash-state { display: block; padding: 5px 9px; font-weight: 800; font-size: 13px; line-height: 1.3; letter-spacing: .01em; background: var(--rs-res-bg); color: var(--rs-res-tx); }
+.ds .rchart-pick .pl-row .clash-state { margin: 0 -9px 4px -9px; font-size: 13px; color: var(--rs-res-tx); }
+.ds .clash-state.k-over, .ds .rchart-pick .pl-row .clash-state.k-over { background: var(--rs-over-bg); color: #fff; }
+.ds .clash-state.k-in, .ds .rchart-pick .pl-row .clash-state.k-in { background: var(--rs-in-bg); color: #fff; }
+.ds .clash-state.k-res, .ds .rchart-pick .pl-row .clash-state.k-res { background: var(--rs-res-bg); color: var(--rs-res-tx); border-bottom: 2px solid #9fb7cf; }
+.ds .clash-state.k-held, .ds .rchart-pick .pl-row .clash-state.k-held { background: var(--rs-held-bg); color: var(--rs-held-tx); border-bottom: 2px dashed var(--rs-held-line); }
+.ds .clash-state.k-prov, .ds .rchart-pick .pl-row .clash-state.k-prov { background: var(--rs-prov-bg); color: var(--rs-prov-tx); border-bottom: 2px dotted var(--rs-prov-line); }
+.ds .clash-state.k-move, .ds .rchart-pick .pl-row .clash-state.k-move { background: var(--accent-soft); color: var(--accent-ink); border-bottom: 2px dashed var(--accent); }
+.ds .clash-state.k-out, .ds .rchart-pick .pl-row .clash-state.k-out { background: var(--rs-out-bg); color: var(--ink-2); }
+.ds .rchart-hc .hc-clash { display: grid; gap: 8px; margin-top: 6px; }
+.ds .rchart-hc .hc-clash-row { display: grid; gap: 3px; }
+.ds .rchart-hc .hc-clash-row .clash-state { border-radius: 4px; }
+.ds .rchart-hc .hc-clash-row b { font-size: 13px; }

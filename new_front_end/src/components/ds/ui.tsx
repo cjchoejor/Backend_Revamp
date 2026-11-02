@@ -6,7 +6,7 @@
  */
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { Button, Chip, Icon } from "@/design-system";
 import type { DeskListRow } from "@/lib/api/desk";
 import type { WaitingText } from "@/lib/ds/attention";
@@ -67,15 +67,44 @@ export function OpenRow({ entryId, step, locked, selected, onSelect, children }:
   step?: number;
   locked?: boolean;
   selected?: boolean;
-  /** When given, a click selects (preview) and a double-click opens. */
+  /**
+   * When given, a click selects (preview) and a double-click opens. The click waits a moment for a
+   * second one, so a double-click opens the booking without the preview flashing up first.
+   */
   onSelect?: () => void;
   children: ReactNode;
 }) {
   const router = useRouter();
   const open = () => router.push(bookingHref(entryId, step));
+  const waiting = useRef<number | null>(null);
+  const stopWaiting = () => {
+    if (waiting.current !== null) window.clearTimeout(waiting.current);
+    waiting.current = null;
+  };
+  useEffect(() => stopWaiting, []);
+  const select = (e: MouseEvent) => {
+    stopWaiting();
+    if (e.detail >= 2) return;
+    waiting.current = window.setTimeout(() => {
+      waiting.current = null;
+      onSelect?.();
+    }, 260);
+  };
   const cls = [selected ? "selected" : "", locked ? "locked" : ""].filter(Boolean).join(" ") || undefined;
   return (
-    <tr className={cls} aria-selected={selected || undefined} onClick={onSelect ?? open} onDoubleClick={onSelect ? open : undefined}>
+    <tr
+      className={cls}
+      aria-selected={selected || undefined}
+      onClick={onSelect ? select : open}
+      onDoubleClick={
+        onSelect
+          ? () => {
+              stopWaiting();
+              open();
+            }
+          : undefined
+      }
+    >
       {children}
     </tr>
   );

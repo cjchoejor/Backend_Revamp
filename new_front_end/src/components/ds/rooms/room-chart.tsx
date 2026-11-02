@@ -123,6 +123,40 @@ const longDay = (ymd: string) => `${WEEKDAY[dayOfWeek(ymd)]} ${Number(ymd.slice(
 
 type ChartRoom = RoomChart["rooms"][number];
 
+/**
+ * Two bookings on one night: which guest is in the room and which is coming, said first and in the
+ * bar's own colour (2026-10-31, operator: "at a glance the user really can't say which one is due out
+ * and which is reserved to check in, unless they read the grey text").
+ */
+const IN_ROOM_KINDS = new Set<ChartBarKind>(["IN_HOUSE", "OVERSTAY"]);
+function clashRole(x: RoomChartBar, today: string): string {
+  const on = (d: string) => (d === today ? "today" : longDay(d));
+  const coming = (word: string) => (x.from >= today ? `${word} · comes in ${on(x.from)}` : `${word} · not in yet`);
+  switch (x.kind) {
+    case "OVERSTAY":
+      return `Still in the room · due out ${on(x.from)}`;
+    case "IN_HOUSE":
+      return "In the room now";
+    case "CHECKED_OUT":
+      return "Checked out";
+    case "MOVING":
+      return `Moving in · ${on(x.from)}`;
+    case "RESERVED":
+      return coming("Reserved");
+    case "HELD":
+      return coming("Held, not confirmed");
+    case "PROVISIONAL":
+      return coming("Provisional block");
+    case "EXTENSION_HELD":
+      return coming("Extra nights held");
+    default:
+      return KIND_WORD[x.kind];
+  }
+}
+/** The guest in the room first, then whoever is coming. */
+const inRoomFirst = (bars: RoomChartBar[]) =>
+  [...bars].sort((a, b) => Number(!IN_ROOM_KINDS.has(a.kind)) - Number(!IN_ROOM_KINDS.has(b.kind)));
+
 type Seg =
   | { t: "free"; night: string; index: number }
   | { t: "ooo"; span: number; reason: string | null; from: string; to: string }
@@ -2374,13 +2408,14 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
                 {longDay(clash.night)} · one of them has to move
               </div>
               <div className="pl-list">
-                {clash.bars.map((x) => {
+                {inRoomFirst(clash.bars).map((x) => {
                   const b = bookingOf.get(x.entryId);
                   return (
-                    <div key={x.entryId} className="pl-row static">
+                    <div key={x.entryId} className={`pl-row static clash-row e-${KIND_CLASS[x.kind]}`}>
+                      <span className={`clash-state ${KIND_CLASS[x.kind]}`}>{clashRole(x, chart.today)}</span>
                       <b>{nameOf(b)}</b>
                       <span>
-                        {KIND_WORD[x.kind]} · {x.entryId}
+                        {x.entryId}
                         {b ? ` · ${STEP_NAMES[stepNoOfStage(b.stage) - 1]}` : ""}
                         {x.parked ? " · parked" : ""}
                       </span>
@@ -2553,10 +2588,17 @@ function HoverCard({
           <div className="hc-sub">
             {roomLine(hover.room)} · {longDay(hover.night)}
           </div>
-          <div className="hc-facts">
-            {hover.bars.map((x) => {
+          <div className="hc-clash">
+            {inRoomFirst(hover.bars).map((x) => {
               const b = bookingOf.get(x.entryId);
-              return fact(KIND_WORD[x.kind], `${b ? rowNameOf(b) : "Booking"} · ${x.entryId}`);
+              return (
+                <div key={x.entryId} className="hc-clash-row">
+                  <span className={`clash-state ${KIND_CLASS[x.kind]}`}>{clashRole(x, chart.today)}</span>
+                  <b>
+                    {b ? rowNameOf(b) : "Booking"} · {x.entryId}
+                  </b>
+                </div>
+              );
             })}
           </div>
         </div>

@@ -342,15 +342,19 @@ function StayActs({
     },
     {
       key: "disputes",
-      label: openDisputes ? `Disputes · ${openDisputes} open` : "Disputes",
-      note: "A charge the guest questions — raised, reviewed, closed. Check-out waits while one is open.",
+      label: "Disputes",
+      due: openDisputes ? `${openDisputes} open` : undefined,
+      note: openDisputes
+        ? `Check-out waits until ${openDisputes === 1 ? "it is" : "they are"} closed — open it to review or close it.`
+        : "A charge the guest questions — raised, reviewed, closed. Check-out waits while one is open.",
       onSelect: () => onPopup("disputes"),
     },
   ];
   const guestsAndRooms: ChangeBookingItem[] = [
     {
       key: "keys",
-      label: owed ? `Keys · ${owed} owed today` : "Keys",
+      label: "Keys",
+      due: owed ? `${owed} owed today` : undefined,
       note: owedWords.length ? owedWords.join(" · ") : "Each room's key — handed over, back, or lost.",
       onSelect: () => onOpen("keys"),
     },
@@ -400,7 +404,12 @@ function StayActs({
   ];
   return (
     <StageActs>
-      <ChangeBookingMenu label="Charges" items={charges} />
+      <ChangeBookingMenu
+        label="Charges"
+        items={charges}
+        badge={openDisputes}
+        badgeTitle={openDisputes ? `${openDisputes} open dispute${openDisputes === 1 ? "" : "s"} — check-out waits until answered` : undefined}
+      />
       <ChangeBookingMenu
         label="Guests and rooms"
         items={guestsAndRooms}
