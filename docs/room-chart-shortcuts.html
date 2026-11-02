@@ -1,0 +1,862 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Room Chart Shortcuts</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Carlito:wght@400;700&family=Poppins:wght@500;600&display=swap">
+<style>
+:root {
+  color-scheme: light;
+  --paper: #F2F3F0;
+  --surface: #FFFFFF;
+  --ink: #1B1E1C;
+  --ink-2: #4F5651;
+  --line: #DFE2DD;
+  --line-2: #BFC4BE;
+  --accent: #1D4F91;
+  --accent-soft: #E3ECF7;
+  --ok: #1E7A4F;
+  --a-bg: #DBE6F1; --a-tx: #24506F;
+  --b-bg: #DCEFE6; --b-tx: #1E5B49;
+  --rw: 66px;
+  --f-ui: "Carlito", "Calibri", "Segoe UI", system-ui, sans-serif;
+  --f-head: "Poppins", "Carlito", "Calibri", sans-serif;
+}
+*, *::before, *::after { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html { scroll-behavior: smooth; }
+body { margin: 0; background: var(--paper); color: var(--ink); font: 16px/1.45 var(--f-ui); }
+.page { max-width: 1180px; margin: 0 auto; padding: 28px max(16px, env(safe-area-inset-right, 0px)) 72px max(16px, env(safe-area-inset-left, 0px)); display: grid; gap: 28px; }
+h1, h2, h3 { font-family: var(--f-head); font-weight: 600; margin: 0; text-wrap: balance; }
+h1 { font-size: 28px; }
+h2 { font-size: 20px; padding-bottom: 8px; border-bottom: 2px solid var(--ink); }
+h3 { font-size: 16px; line-height: 1.3; }
+p { margin: 0; }
+a { color: var(--accent); }
+.lead { display: grid; gap: 8px; max-width: 76ch; margin-top: 8px; }
+.notice { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between; padding: 12px 16px; background: var(--accent-soft); border: 1px solid var(--accent); border-radius: 6px; }
+.notice b { font-weight: 700; }
+.open-real { flex: none; display: inline-block; padding: 7px 14px; background: var(--ink); color: #fff; border-radius: 4px; font-weight: 700; text-decoration: none; }
+.open-real:hover { background: #000; }
+
+kbd { display: inline-block; min-width: 26px; padding: 1px 7px; background: var(--surface); border: 1px solid var(--line-2); border-bottom-width: 3px; border-radius: 4px; font: 700 13px/1.5 var(--f-ui); text-align: center; color: var(--ink); transition: background .12s, color .12s, border-color .12s; }
+kbd.held { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+/* The quick list */
+.quick { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+.qcol { display: grid; gap: 16px; }
+.qbox { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.qbox h3 { padding: 10px 14px; background: var(--ink); color: #fff; font-size: 14px; }
+.qrow { display: grid; grid-template-columns: minmax(150px, 40%) 1fr; gap: 12px; align-items: baseline; padding: 7px 14px; border-top: 1px solid var(--line); color: inherit; text-decoration: none; }
+.qrow:first-of-type { border-top: 0; }
+.qrow:hover { background: var(--accent-soft); }
+.qrow:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* An example */
+.group { display: grid; gap: 16px; }
+.ex { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 8fr); gap: 20px; padding: 18px; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; scroll-margin-top: 16px; }
+.ex:target { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.ex-text { display: grid; gap: 10px; align-content: start; min-width: 0; }
+.keys { font-weight: 700; }
+.steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; counter-reset: s; }
+.steps li { counter-increment: s; display: grid; grid-template-columns: 24px 1fr; gap: 8px; align-items: start; color: var(--ink-2); }
+.steps li::before { content: counter(s); display: grid; place-items: center; width: 22px; height: 22px; margin-top: 1px; border: 1px solid var(--line-2); border-radius: 50%; font-size: 12px; font-weight: 700; background: var(--surface); }
+.steps li.now { color: var(--ink); font-weight: 700; }
+.steps li.now::before { background: var(--accent); border-color: var(--accent); color: #fff; }
+.steps li.done { color: var(--ink); }
+.steps li.done::before { content: "\2713"; background: var(--ok); border-color: var(--ok); color: #fff; }
+.who { font-size: 14px; color: var(--ink-2); padding-top: 8px; border-top: 1px solid var(--line); }
+.who b { color: var(--ink); }
+
+/* The little chart */
+.ex-show { display: grid; gap: 10px; min-width: 0; align-content: start; }
+.stage { position: relative; display: grid; gap: 8px; overflow: hidden; padding-bottom: 2px; }
+.tb { display: flex; justify-content: flex-end; }
+.tb button { font: 500 14px/1 var(--f-ui); padding: 8px 12px; background: var(--surface); color: var(--ink); border: 1px solid var(--line-2); border-radius: 4px; pointer-events: none; }
+.tb button.on { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 700; }
+.banner { min-height: 58px; padding: 7px 10px; border: 1px solid transparent; border-radius: 4px; display: grid; align-content: center; gap: 1px; font-size: 13.5px; line-height: 1.3; }
+.banner.on { background: var(--accent-soft); border-color: var(--accent); }
+.banner b { font-weight: 700; }
+.banner span { color: var(--ink-2); }
+.mc { position: relative; border: 1px solid var(--line-2); border-radius: 4px; overflow: hidden; background: var(--surface); }
+.mrow { display: grid; grid-template-columns: var(--rw) repeat(6, minmax(0, 1fr)); height: 36px; border-top: 1px solid var(--line); }
+.mrow.head { height: 42px; border-top: 0; background: #F7F8F5; }
+.hc { display: grid; place-content: center; text-align: center; border-left: 1px solid var(--line); font-size: 11px; line-height: 1.1; color: var(--ink-2); transition: background .15s; }
+.hc b { font-size: 15px; color: var(--ink); }
+.hc.lit { background: var(--accent); color: #fff; }
+.hc.lit b { color: #fff; }
+.rn { display: grid; place-items: center; font-size: 12px; color: var(--ink-2); }
+.rno { padding: 1px 7px; border: 1px solid var(--line-2); border-radius: 4px; background: var(--surface); font-weight: 700; color: var(--ink); font-size: 13px; }
+.cell { border-left: 1px solid var(--line); }
+.mrow.lit { background: var(--accent-soft); box-shadow: inset 0 2px 0 var(--accent), inset 0 -2px 0 var(--accent); }
+.band { height: 24px; padding: 0 8px; background: var(--ink); color: #fff; font-size: 12px; font-weight: 700; line-height: 24px; white-space: nowrap; overflow: hidden; }
+.layer { position: absolute; inset: 0; pointer-events: none; }
+.bar, .ghost, .nm { position: absolute; left: calc(var(--rw) + (100% - var(--rw)) * var(--f) / 6 + 2px); width: calc((100% - var(--rw)) * var(--n) / 6 - 4px); height: 28px; border-radius: 4px; }
+.bar { display: flex; align-items: center; padding: 0 7px; font-size: 13px; font-weight: 700; white-space: nowrap; overflow: hidden; transition: left .5s ease, top .5s ease, width .5s ease, opacity .3s; }
+.bar.a { background: var(--a-bg); color: var(--a-tx); }
+.bar.b { background: var(--b-bg); color: var(--b-tx); }
+.bar.ring { outline: 3px solid var(--accent); outline-offset: -1px; z-index: 2; }
+.bar.fresh { opacity: 0; }
+.nm { outline: 3px solid var(--accent); outline-offset: -3px; background: rgba(29, 79, 145, .22); z-index: 3; }
+.ghost { z-index: 4; display: flex; align-items: center; gap: 5px; padding: 0 7px; background: #C9CBC8; border: 1px dashed var(--ink); color: var(--ink); font-size: 13px; font-weight: 800; white-space: nowrap; overflow: hidden; transition: left .8s cubic-bezier(.4, 0, .2, 1), top .8s cubic-bezier(.4, 0, .2, 1); }
+.ghost.light { background: #E4E5E3; }
+.ghost span { font-weight: 600; font-size: 12px; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; }
+.dim { position: absolute; inset: 0; background: rgba(27, 30, 28, .38); z-index: 5; }
+.win { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 6; width: min(380px, 94%); max-height: calc(100% - 10px); overflow: hidden; display: grid; gap: 7px; padding: 12px 14px; background: var(--surface); border-radius: 8px; box-shadow: 0 8px 24px rgba(0, 0, 0, .28); font-size: 13.5px; line-height: 1.3; }
+.win.wide { width: min(460px, 96%); }
+.win h4 { margin: 0; font: 600 14px/1.3 var(--f-head); }
+.win .ln { color: var(--ink-2); }
+.win .ln b { color: var(--ink); }
+.win .fld { padding: 4px 8px; border: 1px solid var(--line-2); border-radius: 4px; color: var(--ink); }
+.win .fld i { color: var(--ink-2); font-style: normal; }
+.win .opts { display: flex; flex-wrap: wrap; gap: 6px; }
+.win .opt { padding: 4px 9px; border: 1px solid var(--ink); border-bottom-width: 2px; border-radius: 4px; font-weight: 500; }
+.win .opt.on { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 700; }
+.win .acts { display: flex; justify-content: flex-end; gap: 6px; }
+.win .btn { padding: 6px 11px; border: 1px solid var(--line-2); border-radius: 4px; font-weight: 500; background: var(--surface); }
+.win .btn.go { background: var(--ink); border-color: var(--ink); color: #fff; font-weight: 700; }
+.bx { width: 100%; border-collapse: collapse; font-size: 13px; }
+.bx th, .bx td { padding: 3px 5px; border: 1px solid var(--line); text-align: center; font-weight: 500; }
+.bx th { background: #F7F8F5; }
+.tick { display: inline-block; width: 15px; height: 15px; border: 1px solid var(--ink); border-radius: 3px; vertical-align: middle; }
+.tick.on { background: var(--accent); border-color: var(--accent); box-shadow: inset 0 0 0 2px #fff; }
+.opening { position: absolute; inset: 0; z-index: 7; display: grid; place-items: center; padding: 12px; text-align: center; background: var(--surface); font: 600 15px/1.3 var(--f-head); }
+.ptr { position: absolute; left: 0; top: 0; z-index: 20; width: 0; height: 0; opacity: 0; transition: transform .65s cubic-bezier(.4, 0, .2, 1), opacity .2s; pointer-events: none; }
+.ptr.on { opacity: 1; }
+.ptr svg { position: absolute; left: -3px; top: -2px; width: 22px; height: 26px; filter: drop-shadow(0 1px 1px rgba(0, 0, 0, .35)); }
+.ptag { position: absolute; left: 18px; top: 18px; padding: 1px 6px; background: var(--accent); color: #fff; border-radius: 3px; font-size: 12px; font-weight: 700; white-space: nowrap; }
+.ptag:empty { display: none; }
+.ptr.up .ptag { top: -24px; }
+.ptr.left .ptag { left: auto; right: 6px; }
+.tapring { position: absolute; left: -16px; top: -16px; width: 32px; height: 32px; border-radius: 50%; border: 3px solid var(--accent); opacity: 0; }
+.tapring.go { animation: tap .42s ease-out; }
+.ptr.down .tapring { opacity: .75; transform: scale(.6); }
+@keyframes tap { 0% { opacity: .9; transform: scale(.35); } 100% { opacity: 0; transform: scale(1.1); } }
+.lab { position: absolute; left: 0; top: 0; z-index: 19; display: grid; gap: 1px; max-width: min(300px, 86%); padding: 6px 9px; background: var(--ink); color: #fff; border-radius: 4px; font-size: 12.5px; line-height: 1.3; transition: left .8s cubic-bezier(.4, 0, .2, 1), top .8s cubic-bezier(.4, 0, .2, 1); pointer-events: none; }
+.lab span.sub { color: #D3D7D3; }
+.foot { display: flex; gap: 12px; align-items: flex-start; }
+.cap { flex: 1 1 auto; min-width: 0; min-height: 44px; padding: 7px 10px; background: var(--paper); border-radius: 4px; font-size: 14.5px; line-height: 1.35; }
+.play { flex: none; padding: 8px 12px; background: var(--surface); color: var(--ink); border: 1px solid var(--ink); border-bottom-width: 2px; border-radius: 4px; font: 700 14px/1.2 var(--f-ui); cursor: pointer; }
+.play:hover { background: var(--accent-soft); }
+.play:active { background: #D3E0F2; }
+.play:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.know { display: grid; gap: 8px; padding: 16px 18px 16px 34px; margin: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; }
+
+@media (max-width: 880px) {
+  :root { --rw: 52px; }
+  h1 { font-size: 24px; }
+  .quick { grid-template-columns: 1fr; }
+  .ex { grid-template-columns: minmax(0, 1fr); padding: 14px; }
+  .qrow { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  .bar, .ghost, .ptr, .lab, .hc, kbd { transition: none !important; }
+  .tapring.go { animation: none; }
+}
+</style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <h1>Room chart: pick, move and swap</h1>
+    <div class="lead">
+      <p>A <b>bar</b> is a booking's coloured strip on a room's row. To use these, open <b>Rooms</b>, then <b>Chart</b>, and hold the key while you click or drag a bar.</p>
+      <p>Each example below plays by itself when you reach it. Press <b>Play again</b> to watch it again.</p>
+    </div>
+  </header>
+
+  <div class="notice">
+    <p><b>Letting go of a bar changes nothing.</b> It opens a window showing what would happen. Nothing moves until you confirm there.</p>
+    <a class="open-real" href="http://localhost:3002/rooms?view=chart" target="_blank" rel="noopener">Open the real chart</a>
+  </div>
+
+  <section class="group" aria-labelledby="quick-h">
+    <h2 id="quick-h">The quick list</h2>
+    <div class="quick" id="quick"></div>
+    <p>Click a line to jump to its example. On a Mac, use <kbd>Cmd</kbd> for <kbd>Ctrl</kbd> and <kbd>Option</kbd> for <kbd>Alt</kbd>.</p>
+  </section>
+
+  <section class="group" aria-labelledby="sel-h"><h2 id="sel-h">Select</h2><div class="group" id="g-select"></div></section>
+  <section class="group" aria-labelledby="mov-h"><h2 id="mov-h">Move</h2><div class="group" id="g-move"></div></section>
+  <section class="group" aria-labelledby="swp-h"><h2 id="swp-h">Swap</h2><div class="group" id="g-swap"></div></section>
+
+  <section class="group" aria-labelledby="know-h">
+    <h2 id="know-h">Good to know</h2>
+    <ul class="know">
+      <li>You can pick up to 8 rooms at a time.</li>
+      <li>Parked bookings, ended bookings, bookings at Check-out or Closed, and a guest past their check-out and still in can't be moved. The chart says why.</li>
+      <li>A faint dashed bar (picked, not held) holds nothing yet, so it can't be dragged. Change its dates or rooms on the booking itself. At Negotiation, a booking with a provisional block does have a bar you can drag.</li>
+      <li>Once nights are marked with Alt, dragging a marked night moves them all, with or without Alt.</li>
+      <li>While a guest is in the house, use <b>Extend the stay</b> or <b>Leaving early</b> to change the dates.</li>
+      <li>If the system chose a booking's room, dropping it on another room of the same type asks whether to give it that room.</li>
+      <li>Click a free night, with Switch rooms off, to start an inquiry for that room from that night.</li>
+      <li>Rest the pointer on a bar for a second to see the booking's details. Click a room number to report or review a fault.</li>
+      <li>The examples use made-up bookings, Karma and Sonam, in two colours so you can follow them. <b>Colour by guest</b> on the real chart does the same.</li>
+    </ul>
+  </section>
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  /* ---------- The chart every example draws ---------- */
+  var NIGHTS = [["Mon", 9], ["Tue", 10], ["Wed", 11], ["Thu", 12], ["Fri", 13], ["Sat", 14]];
+  var LAYOUT = [
+    { type: "Standard Double", rooms: [202, 203] },
+    { type: "Deluxe Double", rooms: [204, 205, 206] }
+  ];
+  var KEYS = { Ctrl: 1, Shift: 1, Alt: 1, Esc: 1 };
+
+  var range = function (from, n) { return (9 + from) + " → " + (9 + from + n) + " Nov 2026"; };
+  var karma = function (id, room, from, n, who) { return { id: id, who: who || "Karma", room: room, from: from, n: n, tone: "a" }; };
+  var sonam = function (id, room, from, n) { return { id: id, who: "Sonam", room: room, from: from, n: n, tone: "b" }; };
+  var ban = function (top, sub) { return "<b>" + top + "</b><span>" + sub + "</span>"; };
+  var lab = function () { return [].slice.call(arguments).map(function (t, i) { return '<span class="' + (i ? "sub" : "") + '">' + t + "</span>"; }).join(""); };
+  var reason = '<div class="fld"><i>Reason:</i> guest asked</div>';
+  var DRAG_SUB = "Drag them onto another room: the one you hold lands where you drop it, the rest keep their spacing.";
+  var NIGHT_SUB = "Hold Alt and drag onto other rooms or to other dates · Esc clears";
+
+  var WHO_ROOM = "<b>Who:</b> the front desk for the same room type, the FOM for another type. <b>When:</b> from Set up to Stay.";
+  var WHO_DATES = "<b>Who:</b> the front desk at Negotiation until a quote goes out, otherwise the FOM. <b>When:</b> from Negotiation to Arrival.";
+  var WHO_NIGHT = "<b>Who:</b> the front desk at Negotiation until a quote goes out, otherwise the FOM.";
+  var WHO_SWAP = "<b>Who:</b> the FOM. <b>When:</b> from Set up to Stay. The two bookings can be at different steps.";
+
+  /* ---------- The examples ---------- */
+  var SCENES = {
+    select: [
+      {
+        id: "click", title: "One click: see the booking's rooms", keys: ["Click"], what: "Opens a box with that booking's rooms",
+        steps: ["Click the booking's bar once.", "A box opens with its rooms, night by night.", "Tick what to move, then press <b>Show what happens</b> or <b>Drag them on the chart</b>."],
+        bars: [karma("a", 204, 0, 3), karma("b", 205, 0, 3)],
+        play: [
+          ["step", 1], ["say", "Click Karma's bar once."], ["to", 204, 1], ["tap"], ["wait", 400],
+          ["step", 2], ["say", "The box opens a moment after the click, in case a second click follows."],
+          ["box"], ["wait", 1500],
+          ["step", 3], ["say", "Tick a night, a room's number for all its nights, or a date for every room that night."],
+          ["toSel", '[data-t="205:2"]'], ["tap"], ["tick", '[data-t="205:2"]'], ["wait", 1600],
+          ["say", "Nothing moves from this box until you confirm in the next window."], ["wait", 1800], ["closeWin"]
+        ]
+      },
+      {
+        id: "dbl", title: "Double-click: open the booking", keys: ["Double-click"], what: "Opens the booking",
+        steps: ["Click the bar twice, quickly.", "The booking opens. No box appears on the way."],
+        bars: [karma("a", 204, 0, 3)],
+        play: [
+          ["step", 1], ["say", "Click Karma's bar twice, quickly."], ["to", 204, 1], ["tap", 70], ["wait", 80], ["tap"],
+          ["step", 2], ["open", "Karma's booking opens"], ["say", "The booking opens straight away."], ["wait", 1400]
+        ]
+      },
+      {
+        id: "ctrl", title: "Ctrl + click: pick rooms one by one", keys: ["Ctrl", "click"], what: "Picks a whole room, or adds another; click again to unpick", banner: true,
+        steps: ["Hold <b>Ctrl</b>.", "Click a bar. It gets a blue ring.", "Click another bar to add it. It can be another booking's.", "Click a ringed bar again to take it off."],
+        bars: [karma("a", 204, 0, 3), sonam("b", 205, 1, 3)],
+        play: [
+          ["step", 1], ["say", "Hold Ctrl and keep holding it."], ["key", "Ctrl", true], ["wait", 700],
+          ["step", 2], ["say", "Click Karma's bar: the room is picked."], ["to", 204, 1], ["tap"], ["pick", "a", true],
+          ["banner", ban("1 room picked — Karma · 204", DRAG_SUB)], ["wait", 1000],
+          ["step", 3], ["say", "Click Sonam's bar: now two rooms are picked."], ["to", 205, 2], ["tap"], ["pick", "b", true],
+          ["banner", ban("2 rooms picked — Karma · 204 · Sonam · 205", DRAG_SUB)], ["wait", 1100],
+          ["step", 4], ["say", "Click Sonam's bar again: it comes off."], ["tap"], ["pick", "b", false],
+          ["banner", ban("1 room picked — Karma · 204", DRAG_SUB)], ["wait", 700], ["key", "Ctrl", false],
+          ["say", "Press Esc to clear the picks, or drag a ringed bar to move them."], ["wait", 800]
+        ]
+      },
+      {
+        id: "shift", title: "Shift + click: pick the rooms in between", keys: ["Shift", "click"], what: "Picks that booking's rooms in between", banner: true,
+        steps: ["Hold <b>Shift</b>.", "Click the booking's first bar.", "Click its last bar. Its rooms in between are picked too."],
+        bars: [karma("a", 202, 0, 3), karma("b", 203, 0, 3), sonam("s", 204, 0, 3), karma("c", 205, 0, 3), karma("d", 206, 0, 3)],
+        play: [
+          ["step", 1], ["say", "Hold Shift and keep holding it."], ["key", "Shift", true], ["wait", 700],
+          ["step", 2], ["say", "Click Karma's top bar."], ["to", 202, 1], ["tap"], ["pick", "a", true],
+          ["banner", ban("1 room picked — Karma · 202", DRAG_SUB)], ["wait", 900],
+          ["step", 3], ["say", "Click Karma's bottom bar: every Karma room between is picked."], ["to", 206, 1], ["tap"],
+          ["pick", "b", true], ["pick", "c", true], ["pick", "d", true],
+          ["banner", ban("4 rooms picked — Karma · 202, 203, 205, 206", DRAG_SUB)], ["wait", 900], ["key", "Shift", false],
+          ["say", "Sonam's room in between is left out. Shift stays inside one booking. To add Sonam's, use Ctrl + click."], ["wait", 800]
+        ]
+      },
+      {
+        id: "alt", title: "Alt + click: pick single nights", keys: ["Alt", "click"], what: "Picks one night; click another to add it, or the same one to remove it", banner: true,
+        steps: ["Hold <b>Alt</b>.", "Click a night on the bar. Only that night is marked.", "Click another night to add it. A gap between them is fine.", "Click a marked night again to take it off."],
+        bars: [karma("a", 205, 0, 4)],
+        play: [
+          ["step", 1], ["say", "Hold Alt and keep holding it."], ["key", "Alt", true], ["wait", 700],
+          ["step", 2], ["say", "Click Tuesday on the bar."], ["to", 205, 1], ["tap"], ["night", "a", 1, true],
+          ["banner", ban("A night picked — Room 205 · " + range(1, 1) + " · Karma", NIGHT_SUB)], ["wait", 900],
+          ["step", 3], ["say", "Click Thursday. Wednesday stays unmarked, so the two have a gap."], ["to", 205, 3], ["tap"], ["night", "a", 3, true],
+          ["banner", ban("2 nights picked — Room 205 · " + range(1, 1) + " · " + range(3, 1) + " · Karma", NIGHT_SUB)], ["wait", 1200],
+          ["step", 4], ["say", "Click Thursday again: it comes off."], ["tap"], ["night", "a", 3, false],
+          ["banner", ban("A night picked — Room 205 · " + range(1, 1) + " · Karma", NIGHT_SUB)], ["wait", 700], ["key", "Alt", false],
+          ["say", "On the real chart this line sits at the foot of the window."], ["wait", 800]
+        ]
+      },
+      {
+        id: "altshift", title: "Alt + Shift + click: pick the nights in between", keys: ["Alt", "Shift", "click"], what: "Picks the nights in between", banner: true,
+        steps: ["Hold <b>Alt</b> and click the first night.", "Hold <b>Shift</b> as well and click the last night.", "The nights in between are marked too."],
+        bars: [karma("a", 205, 0, 5)],
+        play: [
+          ["step", 1], ["say", "Hold Alt and click Tuesday."], ["key", "Alt", true], ["wait", 500], ["to", 205, 1], ["tap"], ["night", "a", 1, true],
+          ["banner", ban("A night picked — Room 205 · " + range(1, 1) + " · Karma", NIGHT_SUB)], ["wait", 800],
+          ["step", 2], ["say", "Add Shift and click Thursday."], ["key", "Shift", true], ["wait", 400], ["to", 205, 3], ["tap"],
+          ["step", 3], ["night", "a", 2, true], ["night", "a", 3, true],
+          ["banner", ban("3 nights picked — Room 205 · " + range(1, 3) + " · Karma", NIGHT_SUB)],
+          ["say", "Tuesday, Wednesday and Thursday are all marked."], ["wait", 800], ["key", "Shift", false], ["key", "Alt", false], ["wait", 400]
+        ]
+      },
+      {
+        id: "altctrl", title: "Alt + Ctrl + click: add a night from another room", keys: ["Alt", "Ctrl", "click"], what: "Adds a night from another room of the same booking", banner: true,
+        steps: ["Hold <b>Alt</b> and click a night on one room.", "Hold <b>Ctrl</b> as well and click a night on another of the booking's rooms.", "Each room keeps its own nights, and they move together."],
+        bars: [karma("a", 204, 0, 4), karma("b", 205, 0, 4)],
+        play: [
+          ["step", 1], ["say", "Hold Alt and click Tuesday on Room 204."], ["key", "Alt", true], ["wait", 500], ["to", 204, 1], ["tap"], ["night", "a", 1, true],
+          ["banner", ban("A night picked — Room 204 · " + range(1, 1) + " · Karma", NIGHT_SUB)], ["wait", 800],
+          ["step", 2], ["say", "Add Ctrl and click Wednesday on Room 205."], ["key", "Ctrl", true], ["wait", 400], ["to", 205, 2], ["tap"], ["night", "b", 2, true],
+          ["step", 3], ["banner", ban("2 rooms' nights picked — 204 · " + range(1, 1) + " · 205 · " + range(2, 1) + " · Karma", NIGHT_SUB)],
+          ["say", "A night from another booking would start a new pick instead."], ["wait", 800], ["key", "Ctrl", false], ["key", "Alt", false], ["wait", 500]
+        ]
+      },
+      {
+        id: "esc", title: "Esc: clear the picks or cancel a drag", keys: ["Esc"], what: "Clears the picks or cancels a drag; with nothing picked, leaves full screen", banner: true,
+        steps: ["With rooms or nights picked, press <b>Esc</b>. The picks clear.", "During a drag, press <b>Esc</b>. The bar stays where it was.", "With nothing picked, <b>Esc</b> leaves full screen."],
+        bars: [karma("a", 204, 0, 3), karma("b", 205, 0, 3)],
+        init: [["pick", "a", true], ["pick", "b", true], ["banner", ban("2 rooms picked — Karma · 204, 205", DRAG_SUB)]],
+        play: [
+          ["step", 1], ["say", "Two rooms are picked. Press Esc."], ["wait", 1000], ["esc"],
+          ["pick", "a", false], ["pick", "b", false], ["banner", null], ["say", "The picks are gone."], ["wait", 900],
+          ["step", 2], ["say", "Now start dragging a bar, then press Esc before letting go."], ["to", 204, 1], ["press"],
+          ["drag", 206, 1, { ghosts: [{ key: "g", who: "Karma", n: 3, room0: 204, from0: 0, room: 206, from: 0 }], lit: [206], label: lab("Room 204 → <b>206</b>", "Let go to see what the move would do") }],
+          ["wait", 700], ["esc"], ["release"], ["say", "The drag is dropped. The bar has not moved."], ["wait", 1000],
+          ["step", 3], ["say", "With nothing picked, Esc leaves full screen."], ["wait", 800]
+        ]
+      }
+    ],
+    move: [
+      {
+        id: "drag-room", title: "Drag up or down: move to a free room", keys: ["Drag up or down"], what: "Moves the room to that row",
+        who: WHO_ROOM,
+        steps: ["Press and hold the bar.", "Drag it up or down onto a free room. A grey copy shows where it will land.", "Let go. A window shows what would happen.", "Give the reason and confirm."],
+        bars: [karma("a", 202, 0, 3)],
+        play: [
+          ["step", 1], ["say", "Press and hold Karma's bar."], ["to", 202, 1], ["press"],
+          ["step", 2], ["say", "Drag it down to Room 203."],
+          ["drag", 203, 1, { ghosts: [{ key: "g", who: "Karma", n: 3, room0: 202, from0: 0, room: 203, from: 0 }], lit: [203], label: lab("Room 202 → <b>203</b>", "Let go to see what the move would do") }], ["wait", 900],
+          ["step", 3], ["say", "Let go. Nothing has moved yet."], ["release"],
+          ["win", { title: "Move to Room 203", lines: ['<div class="ln">Karma · Room 202 → <b>Room 203</b></div>', reason], btn: "Move the booking" }], ["wait", 1200],
+          ["step", 4], ["say", "Confirm in the window."], ["toBtn"], ["tap"], ["closeWin"],
+          ["set", [karma("a", 203, 0, 3)]], ["say", "Now the booking is in Room 203."], ["wait", 900]
+        ]
+      },
+      {
+        id: "drag-dates", title: "Drag sideways: move the dates", keys: ["Drag sideways"], what: "Moves the dates and keeps the number of nights",
+        who: WHO_DATES,
+        steps: ["Press and hold the bar.", "Drag it left or right. The number of nights stays the same.", "Let go, then choose <b>Keep the price</b> or <b>At the new dates</b>.", "Give the reason and confirm."],
+        bars: [karma("a", 204, 0, 2)],
+        play: [
+          ["step", 1], ["say", "Press and hold Karma's bar."], ["to", 204, 0], ["press"],
+          ["step", 2], ["say", "Drag it two nights to the right. The nights it would land on light up."],
+          ["drag", 204, 2, { ghosts: [{ key: "g", who: "Karma", n: 2, room0: 204, from0: 0, room: 204, from: 2 }], litN: [2, 3], label: lab("Karma · <b>" + range(2, 2) + "</b>", "2 days later", "Let go to see what moving the dates would do") }], ["wait", 1100],
+          ["step", 3], ["say", "Let go, then choose the price. At the new dates needs the guest's agreement typed in."], ["release"],
+          ["win", { title: "Move Karma to other dates", lines: ['<div class="opts"><span class="opt on">Keep the price</span><span class="opt">At the new dates</span></div>', reason], btn: "Move the dates" }], ["wait", 1500],
+          ["step", 4], ["say", "Confirm in the window."], ["toBtn"], ["tap"], ["closeWin"],
+          ["set", [karma("a", 204, 2, 2)]], ["say", "The stay now runs Wednesday to Friday morning, still two nights."], ["wait", 900]
+        ]
+      },
+      {
+        id: "drag-split", title: "Drag one room of several sideways: it becomes its own booking", keys: ["Drag sideways"], what: "One room of a multi-room booking leaves as a booking of its own",
+        who: WHO_DATES,
+        steps: ["Drag just one of the booking's rooms sideways.", "Let go. The room will leave as a booking of its own.", "Choose <b>A new booking on this enquiry</b> or <b>A new enquiry</b>.", "Give the reason and confirm."],
+        bars: [karma("a", 204, 0, 2), karma("b", 205, 0, 2)],
+        play: [
+          ["step", 1], ["say", "Karma has two rooms. Drag only Room 205 to the right."], ["to", 205, 0], ["press"],
+          ["drag", 205, 2, { ghosts: [{ key: "g", who: "Karma", n: 2, room0: 205, from0: 0, room: 205, from: 2 }], litN: [2, 3], label: lab("Karma · <b>" + range(2, 2) + "</b>", "<b>Room 205</b> alone — it leaves as a booking of its own", "Let go to choose") }], ["wait", 1300],
+          ["step", 2], ["say", "Let go. Room 204 stays on the booking."], ["release"],
+          ["win", { title: "Move Room 205 to other dates", lines: ['<div class="ln">Make it</div><div class="opts"><span class="opt" data-opt="a">A new booking on this enquiry</span><span class="opt">A new enquiry</span></div>', reason], btn: "Make the new booking" }], ["wait", 1000],
+          ["step", 3], ["say", "Nothing is chosen for you. Pick one."], ["toSel", '[data-opt="a"]'], ["tap"], ["opt", '[data-opt="a"]'], ["wait", 800],
+          ["step", 4], ["say", "Confirm in the window."], ["toBtn"], ["tap"], ["closeWin"],
+          ["set", [karma("a", 204, 0, 2), karma("b", 205, 2, 2, "Karma · own booking")]], ["say", "Room 205 is now a separate booking on the later nights."], ["wait", 900]
+        ]
+      },
+      {
+        id: "drag-whole", title: "Pick every room, then drag sideways: move the whole booking", keys: ["Ctrl", "click each room, then drag"], what: "Moves the whole booking", banner: true,
+        who: WHO_DATES,
+        steps: ["Hold <b>Ctrl</b> and click each of the booking's rooms.", "Let go of Ctrl, then drag one ringed bar sideways.", "Let go of the bar. Both rooms keep the same number of nights.", "Give the reason and confirm."],
+        bars: [karma("a", 204, 0, 2), karma("b", 205, 0, 2)],
+        play: [
+          ["step", 1], ["say", "Hold Ctrl and click both of Karma's rooms."], ["key", "Ctrl", true], ["wait", 400],
+          ["to", 204, 0], ["tap"], ["pick", "a", true], ["banner", ban("1 room picked — Karma · 204", DRAG_SUB)], ["wait", 300],
+          ["to", 205, 0], ["tap"], ["pick", "b", true], ["banner", ban("2 rooms picked — Karma · 204, 205", DRAG_SUB)], ["wait", 500], ["key", "Ctrl", false],
+          ["step", 2], ["say", "Now drag one ringed bar to the right. Both grey copies move."], ["press"],
+          ["drag", 205, 2, { ghosts: [{ key: "g1", who: "Karma", n: 2, room0: 204, from0: 0, room: 204, from: 2 }, { key: "g2", who: "Karma", n: 2, room0: 205, from0: 0, room: 205, from: 2 }], litN: [2, 3], label: lab("Karma · <b>" + range(2, 2) + "</b>", "2 days later", "Let go to see what moving the dates would do") }], ["wait", 1100],
+          ["step", 3], ["say", "Let go. The window covers the whole booking."], ["release"],
+          ["win", { title: "Move Karma to other dates", lines: ['<div class="opts"><span class="opt on">Keep the price</span><span class="opt">At the new dates</span></div>', reason], btn: "Move the dates" }], ["wait", 1200],
+          ["step", 4], ["say", "Confirm in the window."], ["toBtn"], ["tap"], ["closeWin"],
+          ["pick", "a", false], ["pick", "b", false], ["banner", null],
+          ["set", [karma("a", 204, 2, 2), karma("b", 205, 2, 2)]], ["say", "Both rooms moved together."], ["wait", 900]
+        ]
+      },
+      {
+        id: "alt-room", title: "Alt + drag down: one night in another room", keys: ["Alt", "drag up or down"], what: "Moves only that night to another room",
+        who: WHO_NIGHT + " While a guest is in the house, a change has to be one room for all the remaining nights.",
+        steps: ["Hold <b>Alt</b> and press on the night.", "Drag it up or down onto another room.", "Let go. Only that night changes room.", "Give the reason and confirm."],
+        bars: [karma("a", 205, 0, 4)],
+        play: [
+          ["step", 1], ["say", "Hold Alt and press on Wednesday."], ["key", "Alt", true], ["wait", 500], ["to", 205, 2], ["press"], ["night", "a", 2, true],
+          ["step", 2], ["say", "Drag it down to Room 206. Only one night's grey copy moves."],
+          ["drag", 206, 2, { ghosts: [{ key: "g", who: "Karma", n: 1, room0: 205, from0: 2, room: 206, from: 2 }], lit: [206], label: lab("Room 205 → <b>206</b> · " + range(2, 1), "Let go to see the room change for that night") }], ["wait", 1000],
+          ["step", 3], ["say", "Let go. The other nights stay in Room 205."], ["release"], ["night", "a", 2, false], ["key", "Alt", false],
+          ["win", { title: "Room 205 → 206 for one night", lines: ['<div class="ln">Karma · ' + range(2, 1) + "</div>", reason], btn: "Move the night" }], ["wait", 1200],
+          ["step", 4], ["say", "Confirm in the window."], ["toBtn"], ["tap"], ["closeWin"],
+          ["set", [karma("a", 205, 0, 2), karma("n", 206, 2, 1), karma("c", 205, 3, 1)]], ["say", "Karma sleeps in Room 206 on Wednesday only."], ["wait", 900]
+        ]
+      },
+      {
+        id: "alt-dates", title: "Alt + drag sideways: one night on other dates", keys: ["Alt", "drag sideways"], what: "Moves only that night to other dates; the stay is cut apart",
+        who: WHO_NIGHT + " Not while the guest is in the house.",
+        steps: ["Hold <b>Alt</b> and press on the night.", "Drag it left or right to other dates.", "Let go. The stay is cut apart, and the moved night becomes its own booking.", "Choose where it goes, give the reason and confirm."],
+        bars: [karma("a", 205, 0, 3)],
+        play: [
+          ["step", 1], ["say", "Hold Alt and press on Wednesday."], ["key", "Alt", true], ["wait", 500], ["to", 205, 2], ["press"], ["night", "a", 2, true],
+          ["step", 2], ["say", "Drag it to Saturday."],
+          ["drag", 205, 5, { ghosts: [{ key: "g", who: "Karma", n: 1, room0: 205, from0: 2, room: 205, from: 5 }], litN: [5], label: lab("Room 205 · <b>" + range(5, 1) + "</b>", "3 days later · the stay is cut apart", "Let go to choose") }], ["wait", 1200],
+          ["step", 3], ["say", "Let go. A one-room booking keeps its earliest stay."], ["release"], ["night", "a", 2, false], ["key", "Alt", false],
+          ["win", { title: "Move Room 205's night to other dates", lines: ['<div class="ln">Make it</div><div class="opts"><span class="opt" data-opt="a">A new booking on this enquiry</span><span class="opt">A new enquiry</span></div>', reason], btn: "Make the new booking" }], ["wait", 1000],
+          ["step", 4], ["say", "Pick one and confirm."], ["toSel", '[data-opt="a"]'], ["tap"], ["opt", '[data-opt="a"]'], ["wait", 500], ["toBtn"], ["tap"], ["closeWin"],
+          ["set", [karma("a", 205, 0, 2), karma("n", 205, 5, 1, "Own booking")]], ["say", "Monday and Tuesday stay on the booking. Saturday is its own booking."], ["wait", 900]
+        ]
+      },
+      {
+        id: "drag-picked", title: "Drag a picked room: all your picks move", keys: ["Drag a picked bar"], what: "All your picks move together and keep their spacing", banner: true,
+        who: WHO_ROOM,
+        steps: ["Pick the rooms with <b>Ctrl</b> or <b>Shift</b>.", "Drag one ringed bar. The one you hold lands where you drop it.", "The others keep their spacing.", "Give the reason and confirm."],
+        bars: [karma("a", 202, 0, 3), karma("b", 204, 0, 3)],
+        play: [
+          ["step", 1], ["say", "Hold Ctrl and click both of Karma's rooms."], ["key", "Ctrl", true], ["wait", 400],
+          ["to", 202, 1], ["tap"], ["pick", "a", true], ["wait", 200], ["to", 204, 1], ["tap"], ["pick", "b", true],
+          ["banner", ban("2 rooms picked — Karma · 202, 204", DRAG_SUB)], ["wait", 500], ["key", "Ctrl", false],
+          ["step", 2], ["say", "Drag Room 202 down one row."], ["to", 202, 1], ["press"],
+          ["step", 3],
+          ["drag", 203, 1, { ghosts: [{ key: "g1", who: "Karma", n: 3, room0: 202, from0: 0, room: 203, from: 0 }, { key: "g2", who: "Karma", n: 3, room0: 204, from0: 0, room: 205, from: 0 }], lit: [203, 205], label: lab("Room 202 → <b>203</b>", "Room 204 → <b>205</b>", "Let go to see what the move would do") }],
+          ["say", "Room 204 moves down one row too."], ["wait", 1200], ["release"],
+          ["step", 4], ["win", { title: "Move 2 rooms", lines: ['<div class="ln">Room 202 → <b>203</b> · Room 204 → <b>205</b></div>', reason], btn: "Move the rooms" }], ["say", "Confirm in the window."], ["wait", 1200], ["toBtn"], ["tap"], ["closeWin"],
+          ["pick", "a", false], ["pick", "b", false], ["banner", null],
+          ["set", [karma("a", 203, 0, 3), karma("b", 205, 0, 3)]], ["say", "Both rooms moved down, one row apart as before."], ["wait", 900]
+        ]
+      }
+    ],
+    swap: [
+      {
+        id: "swap-drag", title: "Drag onto another booking's room: swap rooms", keys: ["Drag onto a taken room"], what: "The two swap rooms; the other booking takes the room you left",
+        who: WHO_SWAP,
+        steps: ["Press and hold the bar.", "Drag it onto the room the other booking holds. A second copy shows that booking swapped back.", "Let go. A window shows both moves.", "Give the reason and confirm."],
+        bars: [karma("a", 202, 0, 3), sonam("b", 203, 0, 3)],
+        play: [
+          ["step", 1], ["say", "Press and hold Karma's bar."], ["to", 202, 1], ["press"],
+          ["step", 2], ["say", "Drag it onto Sonam's room. The lighter copy shows Sonam taking the room Karma leaves."],
+          ["drag", 203, 1, { ghosts: [{ key: "g", who: "Karma", n: 3, room0: 202, from0: 0, room: 203, from: 0 }, { key: "h", who: "Sonam", sub: "swapped into Room 202", light: true, n: 3, room0: 203, from0: 0, room: 202, from: 0 }], lit: [203], label: lab("Room 202 → <b>203</b>", "Room 203 → <b>202</b>", "Let go to see what the move would do") }], ["wait", 1500],
+          ["step", 3], ["say", "Let go. Nothing has moved yet."], ["release"],
+          ["win", { title: "Switch these two bookings' rooms", lines: ['<div class="ln">Karma · Room 202 → <b>203</b></div><div class="ln">Sonam · Room 203 → <b>202</b></div>', reason], btn: "Switch the rooms" }], ["wait", 1300],
+          ["step", 4], ["say", "Confirm in the window."], ["toBtn"], ["tap"], ["closeWin"],
+          ["set", [karma("a", 203, 0, 3), sonam("b", 202, 0, 3)]], ["say", "The two bookings have swapped rooms."], ["wait", 900]
+        ]
+      },
+      {
+        id: "swap-trade", title: "Drag onto another booking's stay: swap rooms and dates", keys: ["Drag onto their stay"], what: "The two swap both rooms and dates",
+        who: "<b>Who:</b> the FOM. <b>When:</b> from Set up to Arrival, one room at a time, for bookings holding one room each.",
+        steps: ["Press and hold the bar.", "Drag it onto the other booking's bar, on its dates.", "Let go. Each booking takes the other's room and first night.", "Give the reason and confirm."],
+        bars: [karma("a", 202, 0, 2), sonam("b", 204, 3, 2)],
+        play: [
+          ["step", 1], ["say", "Press and hold Karma's bar."], ["to", 202, 0], ["press"],
+          ["step", 2], ["say", "Drag it onto Sonam's bar."],
+          ["drag", 204, 3, { ghosts: [{ key: "g", who: "Karma", n: 2, room0: 202, from0: 0, room: 204, from: 3 }, { key: "h", who: "Sonam", light: true, n: 2, room0: 204, from0: 3, room: 202, from: 0 }], lit: [204], label: lab("Karma ⇄ <b>Sonam</b>", "They trade places — rooms and dates", "Let go to see what trading would do") }], ["wait", 1500],
+          ["step", 3], ["say", "Let go. Each keeps their own number of nights."], ["release"],
+          ["win", { title: "Switch these two bookings' rooms and dates", lines: ['<div class="ln">Karma → Room 204 · ' + range(3, 2) + '</div><div class="ln">Sonam → Room 202 · ' + range(0, 2) + "</div>", reason], btn: "Switch rooms and dates" }], ["wait", 1400],
+          ["step", 4], ["say", "Confirm in the window."], ["toBtn"], ["tap"], ["closeWin"],
+          ["set", [karma("a", 204, 3, 2), sonam("b", 202, 0, 2)]], ["say", "The two bookings have swapped rooms and dates."], ["wait", 900]
+        ]
+      },
+      {
+        id: "switch-swap", title: "Switch rooms button: swap with two clicks", keys: ["Switch rooms", "click", "click"], what: "<b>Switch rooms</b>, click a booking, click another: the same swap with no dragging", banner: true, toolbar: true,
+        who: WHO_SWAP,
+        steps: ["Press <b>Switch rooms</b> above the chart.", "Click the first booking. It gets a blue ring.", "Click the other booking.", "Give the reason and confirm."],
+        bars: [karma("a", 204, 0, 3), sonam("b", 205, 0, 3)],
+        play: [
+          ["step", 1], ["say", "Press Switch rooms."], ["toSel", ".tb button"], ["tap"], ["switchOn", true],
+          ["banner", ban("Switch rooms — click the booking whose room should change", "Ctrl-click picks more rooms; Shift-click picks a booking's rooms in between.")], ["wait", 1200],
+          ["step", 2], ["say", "Click Karma's bar."], ["to", 204, 1], ["tap"], ["pick", "a", true],
+          ["banner", ban("1 room picked — Karma · 204", "Click the room the top one should move to, or a booking to swap with.")], ["wait", 1200],
+          ["step", 3], ["say", "Click Sonam's bar."], ["to", 205, 1], ["tap"], ["wait", 200],
+          ["step", 4], ["win", { title: "Switch these two bookings' rooms", lines: ['<div class="ln">Karma · Room 204 → <b>205</b></div><div class="ln">Sonam · Room 205 → <b>204</b></div>', reason], btn: "Switch the rooms" }], ["say", "Confirm in the window."], ["wait", 1300], ["toBtn"], ["tap"], ["closeWin"],
+          ["pick", "a", false], ["banner", null], ["switchOn", false],
+          ["set", [karma("a", 205, 0, 3), sonam("b", 204, 0, 3)]], ["say", "The two bookings have swapped rooms."], ["wait", 900]
+        ]
+      },
+      {
+        id: "switch-free", title: "Switch rooms button: move to a free night", keys: ["Switch rooms", "click", "click a free night"], what: "<b>Switch rooms</b>, click a booking, click a free night: moves it there", banner: true, toolbar: true,
+        who: WHO_ROOM,
+        steps: ["Press <b>Switch rooms</b> above the chart.", "Click the booking.", "Click a free night on another room.", "Give the reason and confirm."],
+        bars: [karma("a", 202, 0, 3)],
+        play: [
+          ["step", 1], ["say", "Press Switch rooms."], ["toSel", ".tb button"], ["tap"], ["switchOn", true],
+          ["banner", ban("Switch rooms — click the booking whose room should change", "Ctrl-click picks more rooms; Shift-click picks a booking's rooms in between.")], ["wait", 1000],
+          ["step", 2], ["say", "Click Karma's bar."], ["to", 202, 1], ["tap"], ["pick", "a", true],
+          ["banner", ban("1 room picked — Karma · 202", "Click the room the top one should move to, or a booking to swap with.")], ["wait", 1000],
+          ["step", 3], ["say", "Click a free night on Room 203."], ["to", 203, 1], ["tap"], ["wait", 200],
+          ["step", 4], ["win", { title: "Move to Room 203", lines: ['<div class="ln">Karma · Room 202 → <b>Room 203</b></div>', reason], btn: "Move the booking" }], ["say", "Confirm in the window."], ["wait", 1200], ["toBtn"], ["tap"], ["closeWin"],
+          ["pick", "a", false], ["banner", null], ["switchOn", false],
+          ["set", [karma("a", 203, 0, 3)]], ["say", "Moved. A free night outside the booking's own dates opens the dates window instead."], ["wait", 900]
+        ]
+      }
+    ]
+  };
+
+  /* ---------- Page building ---------- */
+  var keysHtml = function (keys) {
+    return keys.map(function (k) { return KEYS[k] ? '<kbd data-k="' + k + '">' + k + "</kbd>" : k; }).join(" + ");
+  };
+  var chartHtml = function () {
+    var h = '<div class="mc"><div class="mrow head"><div class="rn">Rooms</div>' +
+      NIGHTS.map(function (d, i) { return '<div class="hc" data-n="' + i + '"><span>' + d[0] + "</span><b>" + d[1] + "</b></div>"; }).join("") + "</div>";
+    LAYOUT.forEach(function (t) {
+      h += '<div class="band">' + t.type + "</div>";
+      t.rooms.forEach(function (r) {
+        h += '<div class="mrow" data-r="' + r + '"><div class="rn"><span class="rno">' + r + "</span></div>" +
+          NIGHTS.map(function (_, i) { return '<div class="cell" data-c="' + r + ":" + i + '"></div>'; }).join("") + "</div>";
+      });
+    });
+    return h + '<div class="layer"></div><div class="dim" hidden></div><div class="win" hidden></div><div class="opening" hidden></div></div>';
+  };
+  var POINTER = '<div class="ptr" aria-hidden="true"><svg viewBox="0 0 22 26"><path d="M3 2 L3 21 L8 16.5 L11.5 24 L15 22.5 L11.5 15.2 L18 15 Z" fill="#fff" stroke="#1B1E1C" stroke-width="1.6" stroke-linejoin="round"/></svg><span class="tapring"></span><span class="ptag"></span></div>';
+
+  var wait = function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); };
+  var calm = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  var current = null;
+  var players = [];
+
+  function Player(scene, group) {
+    this.scene = scene;
+    this.run = 0;
+    this.seen = false;
+    this.inView = false;
+    var el = document.createElement("article");
+    el.className = "ex";
+    el.id = "ex-" + scene.id;
+    el.dataset.state = "idle";
+    el.innerHTML =
+      '<div class="ex-text"><h3>' + scene.title + '</h3><div class="keys">' + keysHtml(scene.keys) + "</div>" +
+      '<ol class="steps">' + scene.steps.map(function (s) { return "<li><span>" + s + "</span></li>"; }).join("") + "</ol>" +
+      (scene.who ? '<p class="who">' + scene.who + "</p>" : "") + "</div>" +
+      '<div class="ex-show"><div class="stage">' +
+      (scene.toolbar ? '<div class="tb"><button type="button" tabindex="-1">Switch rooms</button></div>' : "") +
+      (scene.banner ? '<div class="banner" role="status"></div>' : "") +
+      chartHtml() + POINTER + '<div class="lab" hidden></div></div>' +
+      '<div class="foot"><p class="cap" aria-live="polite"></p><button type="button" class="play">Play</button></div></div>';
+    group.appendChild(el);
+    this.el = el;
+    this.stage = el.querySelector(".stage");
+    this.mc = el.querySelector(".mc");
+    this.layer = el.querySelector(".layer");
+    this.ptr = el.querySelector(".ptr");
+    this.tag = el.querySelector(".ptag");
+    this.ringEl = el.querySelector(".tapring");
+    this.labEl = el.querySelector(".lab");
+    this.capEl = el.querySelector(".cap");
+    this.bannerEl = el.querySelector(".banner");
+    this.winEl = el.querySelector(".win");
+    this.dimEl = el.querySelector(".dim");
+    this.openEl = el.querySelector(".opening");
+    this.playBtn = el.querySelector(".play");
+    this.stepEls = [].slice.call(el.querySelectorAll(".steps li"));
+    var self = this;
+    this.playBtn.addEventListener("click", function () { self.play(); });
+    this.reset();
+    this.capEl.textContent = "Press Play to watch this one.";
+  }
+
+  Player.prototype.rowTop = function (room) {
+    return this.mc.querySelector('[data-r="' + room + '"]').offsetTop + 3;
+  };
+  Player.prototype.placeBox = function (el, room, from, n) {
+    el.style.setProperty("--f", from);
+    el.style.setProperty("--n", n);
+    el.style.top = this.rowTop(room) + "px";
+  };
+  Player.prototype.reset = function () {
+    this.bars = {};
+    this.nights = {};
+    this.held = {};
+    this.layer.innerHTML = "";
+    this.lab = null;
+    this.labEl.hidden = true;
+    this.labEl.innerHTML = "";
+    this.winEl.hidden = true;
+    this.winEl.classList.remove("wide");
+    this.dimEl.hidden = true;
+    this.openEl.hidden = true;
+    this.ptr.classList.remove("on", "down");
+    this.ptr.style.transitionDuration = "0ms";
+    this.ptr.classList.remove("up", "left");
+    this.ptr.style.transform = "translate(" + Math.round(this.stage.clientWidth * .72) + "px," + (this.stage.clientHeight - 90) + "px)";
+    this.tag.textContent = "";
+    this.setBanner(null);
+    this.el.querySelectorAll("kbd.held").forEach(function (k) { k.classList.remove("held"); });
+    this.el.querySelectorAll(".mrow.lit,.hc.lit").forEach(function (k) { k.classList.remove("lit"); });
+    var sw = this.el.querySelector(".tb button");
+    if (sw) sw.classList.remove("on");
+    this.stepEls.forEach(function (li) { li.classList.remove("now", "done"); });
+    this.setBars(this.scene.bars, true);
+    var self = this;
+    (this.scene.init || []).forEach(function (s) { self[s[0]].apply(self, s.slice(1)); });
+  };
+  Player.prototype.setBanner = function (html) {
+    if (!this.bannerEl) return;
+    this.bannerEl.innerHTML = html || "";
+    this.bannerEl.classList.toggle("on", !!html);
+  };
+  Player.prototype.setBars = function (list, quiet) {
+    var self = this;
+    var keep = {};
+    list.forEach(function (b) {
+      keep[b.id] = 1;
+      var el = self.bars[b.id];
+      if (!el) {
+        el = document.createElement("div");
+        el.className = "bar " + b.tone;
+        el.dataset.id = b.id;
+        if (!quiet) el.classList.add("fresh");
+        self.placeBox(el, b.room, b.from, b.n);
+        self.layer.appendChild(el);
+        self.bars[b.id] = el;
+        void el.offsetWidth;
+        el.classList.remove("fresh");
+      }
+      el.textContent = b.who;
+      el.dataset.room = b.room;
+      el.dataset.from = b.from;
+      el.dataset.n = b.n;
+      self.placeBox(el, b.room, b.from, b.n);
+    });
+    Object.keys(this.bars).forEach(function (id) {
+      if (!keep[id]) { self.bars[id].remove(); delete self.bars[id]; }
+    });
+  };
+
+  /* Every step changes the page first and waits afterwards, so a replay can never be undone by an old step. */
+  Player.prototype.step = function (n) {
+    this.stepEls.forEach(function (li, i) {
+      li.classList.toggle("done", i < n - 1);
+      li.classList.toggle("now", i === n - 1);
+    });
+  };
+  Player.prototype.say = function (t) { this.capEl.textContent = t; };
+  Player.prototype.banner = function (h) { this.setBanner(h); };
+  Player.prototype.glide = function (el, ms) {
+    var s = this.stage.getBoundingClientRect();
+    var r = el.getBoundingClientRect();
+    this.px = r.left - s.left + r.width / 2;
+    this.py = r.top - s.top + r.height / 2;
+    this.ptr.classList.add("on");
+    this.ptr.classList.toggle("up", this.py > this.stage.clientHeight - 44);
+    this.ptr.classList.toggle("left", this.px > this.stage.clientWidth - 90);
+    this.ptr.style.transitionDuration = ms + "ms";
+    this.ptr.style.transform = "translate(" + this.px + "px," + this.py + "px)";
+    return wait(ms + 90);
+  };
+  Player.prototype.to = function (room, night) { return this.glide(this.mc.querySelector('[data-c="' + room + ":" + night + '"]'), 650); };
+  Player.prototype.toSel = function (sel) { return this.glide(this.stage.querySelector(sel), 550); };
+  Player.prototype.toBtn = function () { return this.glide(this.winEl.querySelector(".btn.go"), 550); };
+  Player.prototype.tap = function (ms) {
+    var r = this.ringEl;
+    r.classList.remove("go");
+    void r.offsetWidth;
+    r.classList.add("go");
+    return wait(ms || 260);
+  };
+  Player.prototype.key = function (name, down) {
+    this.held[name] = down;
+    var k = this.el.querySelector('kbd[data-k="' + name + '"]');
+    if (k) k.classList.toggle("held", !!down);
+    var self = this;
+    this.tag.textContent = ["Alt", "Ctrl", "Shift"].filter(function (x) { return self.held[x]; }).join(" + ");
+    this.ptr.classList.add("on");
+  };
+  Player.prototype.esc = function () {
+    var k = this.el.querySelector('kbd[data-k="Esc"]');
+    var tag = this.tag;
+    if (k) k.classList.add("held");
+    tag.textContent = "Esc";
+    this.ptr.classList.add("on");
+    return wait(450).then(function () {
+      if (k) k.classList.remove("held");
+      if (tag.textContent === "Esc") tag.textContent = "";
+    });
+  };
+  Player.prototype.pick = function (id, on) { this.bars[id].classList.toggle("ring", !!on); };
+  Player.prototype.night = function (id, idx, on) {
+    var key = id + ":" + idx;
+    if (on && !this.nights[key]) {
+      var b = this.bars[id];
+      var m = document.createElement("div");
+      m.className = "nm";
+      this.placeBox(m, b.dataset.room, idx, 1);
+      this.layer.appendChild(m);
+      this.nights[key] = m;
+    } else if (!on && this.nights[key]) {
+      this.nights[key].remove();
+      delete this.nights[key];
+    }
+  };
+  Player.prototype.press = function () {
+    this.ptr.classList.add("down");
+    return wait(280);
+  };
+  Player.prototype.drag = function (room, night, o) {
+    var self = this;
+    (o.ghosts || []).forEach(function (g) {
+      var el = self.layer.querySelector('[data-g="' + g.key + '"]');
+      if (!el) {
+        el = document.createElement("div");
+        el.className = "ghost" + (g.light ? " light" : "");
+        el.dataset.g = g.key;
+        el.innerHTML = g.who + (g.sub ? "<span>" + g.sub + "</span>" : "");
+        self.placeBox(el, g.room0, g.from0, g.n);
+        self.layer.appendChild(el);
+        void el.offsetWidth;
+      }
+      self.placeBox(el, g.room, g.from, g.n);
+    });
+    (o.lit || []).forEach(function (r) { self.mc.querySelector('[data-r="' + r + '"]').classList.add("lit"); });
+    (o.litN || []).forEach(function (n) { self.mc.querySelector('.hc[data-n="' + n + '"]').classList.add("lit"); });
+    var done = this.glide(this.mc.querySelector('[data-c="' + room + ":" + night + '"]'), 800);
+    if (o.label) {
+      var l = this.labEl;
+      l.innerHTML = o.label;
+      l.hidden = false;
+      var w = l.offsetWidth, h = l.offsetHeight, W = this.stage.clientWidth, H = this.stage.clientHeight;
+      var left = Math.max(4, Math.min(this.px + 20, W - w - 4));
+      var top = this.py + 34 + h > H ? Math.max(4, this.py - h - 12) : this.py + 26;
+      l.style.left = left + "px";
+      l.style.top = top + "px";
+    }
+    return done;
+  };
+  Player.prototype.release = function () {
+    this.ptr.classList.remove("down");
+    this.layer.querySelectorAll(".ghost").forEach(function (g) { g.remove(); });
+    this.el.querySelectorAll(".mrow.lit,.hc.lit").forEach(function (k) { k.classList.remove("lit"); });
+    this.labEl.hidden = true;
+    return wait(180);
+  };
+  Player.prototype.win = function (o) {
+    this.winEl.classList.remove("wide");
+    this.winEl.innerHTML = "<h4>" + o.title + "</h4>" + o.lines.join("") +
+      '<div class="acts"><span class="btn">Not now</span><span class="btn go">' + o.btn + "</span></div>";
+    this.winEl.hidden = false;
+    this.dimEl.hidden = false;
+  };
+  Player.prototype.box = function () {
+    var cells = function (room) {
+      return [0, 1, 2].map(function (n) { return '<td><span class="tick" data-t="' + room + ":" + n + '"></span></td>'; }).join("");
+    };
+    this.winEl.classList.add("wide");
+    this.winEl.innerHTML = "<h4>Karma · " + range(0, 3) + "</h4>" +
+      '<table class="bx"><tr><th>Room</th><th>Mon 9</th><th>Tue 10</th><th>Wed 11</th></tr><tr><th>204</th>' + cells(204) + "</tr><tr><th>205</th>" + cells(205) + "</tr></table>" +
+      '<div class="acts"><span class="btn">Drag them on the chart</span><span class="btn go">Show what happens</span></div>';
+    this.winEl.hidden = false;
+    this.dimEl.hidden = false;
+  };
+  Player.prototype.tick = function (sel) { this.stage.querySelector(sel).classList.add("on"); };
+  Player.prototype.opt = function (sel) { this.stage.querySelector(sel).classList.add("on"); };
+  Player.prototype.closeWin = function () {
+    this.winEl.hidden = true;
+    this.dimEl.hidden = true;
+    return wait(250);
+  };
+  Player.prototype.open = function (t) {
+    this.openEl.textContent = t;
+    this.openEl.hidden = false;
+  };
+  Player.prototype.set = function (list) { this.setBars(list); return wait(600); };
+  Player.prototype.switchOn = function (on) { this.el.querySelector(".tb button").classList.toggle("on", !!on); };
+
+  Player.prototype.stop = function () {
+    this.run++;
+    this.reset();
+    this.el.dataset.state = "idle";
+    this.seen = false;
+    this.playBtn.textContent = "Play";
+    this.capEl.textContent = "Press Play to watch this one.";
+  };
+  Player.prototype.play = async function () {
+    if (current && current !== this) current.stop();
+    current = this;
+    var me = ++this.run;
+    this.seen = true;
+    this.reset();
+    this.el.dataset.state = "playing";
+    this.playBtn.textContent = "Play again";
+    for (var i = 0; i < this.scene.play.length; i++) {
+      var s = this.scene.play[i];
+      if (me !== this.run) return;
+      if (s[0] === "wait") await wait(s[1]);
+      else await this[s[0]].apply(this, s.slice(1));
+      if (me !== this.run) return;
+      await wait(s[0] === "step" || s[0] === "say" || s[0] === "banner" ? 0 : 120);
+    }
+    if (me !== this.run) return;
+    this.ptr.classList.remove("on", "down");
+    this.tag.textContent = "";
+    this.stepEls.forEach(function (li) { li.classList.remove("now"); li.classList.add("done"); });
+    this.el.dataset.state = "done";
+    current = null;
+    nextInView();
+  };
+
+  /* One example plays at a time: the first in view that has not played yet. */
+  function nextInView() {
+    if (calm || current) return;
+    for (var i = 0; i < players.length; i++) {
+      if (players[i].inView && !players[i].seen) { players[i].play(); return; }
+    }
+  }
+
+  /* ---------- Put it together ---------- */
+  var GROUPS = { select: "g-select", move: "g-move", swap: "g-swap" };
+  Object.keys(SCENES).forEach(function (g) {
+    var host = document.getElementById(GROUPS[g]);
+    SCENES[g].forEach(function (scene) { players.push(new Player(scene, host)); });
+  });
+
+  var qbox = function (title, list) {
+    return '<div class="qbox"><h3>' + title + "</h3>" + list.map(function (s) {
+      return '<a class="qrow" href="#ex-' + s.id + '"><span>' + keysHtml(s.keys) + "</span><span>" + s.what + "</span></a>";
+    }).join("") + "</div>";
+  };
+  document.getElementById("quick").innerHTML =
+    '<div class="qcol">' + qbox("Select", SCENES.select) + "</div>" +
+    '<div class="qcol">' + qbox("Move", SCENES.move) + qbox("Swap", SCENES.swap) + "</div>";
+
+  if ("IntersectionObserver" in window) {
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (en) {
+        var p = players.filter(function (x) { return x.stage === en.target; })[0];
+        if (!p) return;
+        p.inView = en.isIntersecting;
+        if (!en.isIntersecting && current === p) {
+          p.stop();
+          current = null;
+        }
+      });
+      nextInView();
+    }, { threshold: 0.7 });
+    players.forEach(function (p) { io.observe(p.stage); });
+  }
+})();
+</script>
+</body>
+</html>
