@@ -1,0 +1,377 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Desk Part Names</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Carlito:wght@400;700&family=Poppins:wght@500;600&display=swap">
+<style>
+/* Layout: one column of labelled screens, each a picture of the desk as it looks, then the glossary.
+   The page around the pictures follows the viewer's theme; the pictures stay the desk's own light look. */
+:root {
+  --bg: #F7F7F4;
+  --panel: #FFFFFF;
+  --fg: #1B1E1C;
+  --fg-2: #4B524D;
+  --line: #DCDFD9;
+  --mk: #FFD84D;      /* the name tags — a highlighter yellow the desk itself never uses */
+  --mk-ink: #2A2200;
+  --mk-line: #B98C00;
+  --f-ui: "Carlito", "Calibri", "Segoe UI", system-ui, sans-serif;
+  --f-head: "Poppins", "Carlito", "Calibri", sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --bg: #131614; --panel: #1B1F1D; --fg: #E7EAE5; --fg-2: #A8AFA9; --line: #2E3430; --mk-line: #E0B21F; color-scheme: dark; }
+}
+:root[data-theme="dark"] { --bg: #131614; --panel: #1B1F1D; --fg: #E7EAE5; --fg-2: #A8AFA9; --line: #2E3430; --mk-line: #E0B21F; color-scheme: dark; }
+
+*, *::before, *::after { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font: 16px/1.45 var(--f-ui); }
+.page { max-width: 1120px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 32px 64px; display: grid; gap: 40px; }
+h1, h2 { font-family: var(--f-head); font-weight: 600; text-wrap: balance; margin: 0; }
+h1 { font-size: 30px; }
+h2 { font-size: 20px; }
+.lead { margin: 6px 0 0; color: var(--fg-2); max-width: 64ch; }
+.lead .mk { background: var(--mk); color: var(--mk-ink); font-weight: 700; padding: 1px 6px; border-radius: 3px; }
+section { display: grid; gap: 12px; min-width: 0; }
+section > p { margin: 0; color: var(--fg-2); max-width: 70ch; }
+
+/* ---------- The pictures: the desk's own light look, fixed ---------- */
+.shot { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+.desk {
+  --d-paper: #F2F3F0; --d-surface: #FFFFFF; --d-surface-2: #F7F8F5; --d-line: #D6D9D3; --d-line-2: #B4BAB3;
+  --d-ink: #1B1E1C; --d-ink-2: #454B47; --d-accent: #1D4F91; --d-accent-soft: #E6EEF9; --d-accent-line: #A9C2E6;
+  --d-danger: #B42318; --d-danger-soft: #FCE7E4; --d-warning: #8A5300; --d-success: #1D7343;
+  background: var(--d-paper); color: var(--d-ink); font: 15px/1.35 var(--f-ui);
+  border-radius: 7px; padding: 64px 40px 92px; min-width: max-content;
+}
+.desk .card { background: var(--d-surface); border: 1px solid var(--d-line); border-radius: 6px; }
+.desk .btn { display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 14px; border: 1px solid var(--d-line-2); border-radius: 4px; background: var(--d-surface); font-weight: 600; white-space: nowrap; }
+.desk .btn.go { background: var(--d-success); border-color: var(--d-success); color: #fff; }
+.desk .q { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--d-line-2); font-size: 12px; font-weight: 700; color: var(--d-ink-2); }
+.desk .chev { font-size: 11px; color: var(--d-ink-2); }
+.desk .badge { display: inline-block; min-width: 20px; padding: 0 6px; border-radius: 10px; background: var(--d-danger); color: #fff; font-size: 12px; font-weight: 700; line-height: 20px; text-align: center; }
+
+/* ---------- The name tags ---------- */
+.t { position: relative; outline: 2px dashed var(--mk-line); outline-offset: 4px; border-radius: 4px; }
+.tag { position: absolute; z-index: 3; white-space: nowrap; font: 700 13px/1 var(--f-ui); background: var(--mk); color: var(--mk-ink); padding: 6px 9px; border-radius: 4px; pointer-events: none; box-shadow: 0 1px 2px rgba(0, 0, 0, .18); }
+.tag::before { content: ""; position: absolute; background: var(--mk-line); }
+.tag.dn  { top: calc(100% + 16px); left: 0; }
+.tag.dn::before  { left: 14px; top: -12px; width: 2px; height: 12px; }
+.tag.dn2 { top: calc(100% + 50px); left: 0; }
+.tag.dn2::before { left: 14px; top: -46px; width: 2px; height: 46px; }
+.tag.up  { bottom: calc(100% + 16px); left: 0; }
+.tag.up::before  { left: 14px; bottom: -12px; width: 2px; height: 12px; }
+.tag.r { left: auto; right: 0; }
+.tag.r::before { left: auto; right: 14px; }
+.tag.rt { left: calc(100% + 22px); top: 50%; transform: translateY(-50%); }
+.tag.rt::before { left: -18px; top: 50%; width: 18px; height: 2px; }
+.tag.rt.top { top: 16px; }
+.tag.lf { right: calc(100% + 22px); top: 50%; transform: translateY(-50%); }
+.tag.lf::before { right: -18px; top: 50%; width: 18px; height: 2px; }
+
+/* ---------- 1 · The top of a booking ---------- */
+.m1 { min-width: 1000px; display: grid; gap: 52px; }
+.m-head { display: flex; align-items: center; gap: 14px; padding: 12px 18px; }
+.m-head .g-name { font: 600 24px/1.2 var(--f-head); }
+.m-head .g-inq { border: 1px solid var(--d-line-2); border-radius: 4px; padding: 3px 9px; font-weight: 700; background: var(--d-surface-2); }
+.m-head .sep { width: 1px; height: 24px; background: var(--d-line); }
+.m-head .g-ent { font-weight: 700; }
+.m-step { display: flex; align-items: center; gap: 22px; padding: 10px 16px; outline-offset: 7px; }
+.s-name { display: inline-flex; align-items: center; gap: 8px; font: 600 21px/1 var(--f-head); }
+.s-prog { display: inline-flex; align-items: center; gap: 4px; font-weight: 700; color: var(--d-ink-2); }
+.s-prog i { width: 26px; height: 9px; border-radius: 2px; background: var(--d-success); }
+.s-prog b { margin-left: 8px; }
+.s-list { height: 34px; display: inline-flex; align-items: center; gap: 8px; padding: 0 12px; border: 1px solid var(--d-line-2); border-radius: 4px; background: var(--d-surface); font-weight: 600; }
+.s-right { margin-left: auto; display: inline-flex; gap: 10px; }
+.desk .btn.due { border-color: var(--d-danger); color: var(--d-danger); }
+
+/* ---------- 2 · Menus ---------- */
+.m2 { min-width: 860px; display: grid; gap: 64px; justify-items: center; }
+.mdemo { width: 340px; display: grid; gap: 8px; justify-items: end; }
+.desk .btn.open { box-shadow: 0 0 0 2px var(--d-accent); }
+.menu { width: 340px; padding: 4px; background: var(--d-surface); border: 1px solid var(--d-line-2); border-radius: 6px; box-shadow: 0 8px 24px rgba(9, 30, 66, .16); display: grid; gap: 2px; justify-self: stretch; }
+.item { display: grid; gap: 3px; padding: 10px 12px; border-radius: 4px; }
+.i-head { display: flex; align-items: center; gap: 8px; }
+.i-title { font-weight: 700; }
+.i-desc { font-size: 13.5px; color: var(--d-ink-2); line-height: 1.35; }
+.i-why { font-size: 13.5px; color: var(--d-warning); font-weight: 700; }
+.i-badge { display: inline-block; padding: 0 8px; border-radius: 10px; background: var(--d-danger); color: #fff; font-size: 12px; font-weight: 700; line-height: 20px; }
+.item.due { background: var(--d-danger-soft); box-shadow: inset 4px 0 0 var(--d-danger); padding-left: 14px; }
+.item.due .i-title, .item.due .i-desc { color: var(--d-danger); }
+.item.due .i-desc { font-weight: 700; }
+.item.off .i-title, .item.off .i-desc { opacity: .62; }
+.item.danger .i-title { color: var(--d-danger); }
+.tline { display: inline-block; }
+.item .tline.t { outline-offset: 2px; }
+.item.tagged { gap: 8px; }
+.i-why { margin-top: 4px; }
+
+/* ---------- 3 · Where a choice opens ---------- */
+.m3 { min-width: 980px; display: grid; grid-template-columns: 1fr 1fr; gap: 44px; padding-top: 70px; }
+.screen { position: relative; height: 330px; border: 1px solid var(--d-line-2); border-radius: 6px; background: var(--d-paper); overflow: visible; }
+.screen .inner { position: absolute; inset: 0; border-radius: 6px; overflow: hidden; padding: 14px; display: grid; gap: 10px; align-content: start; }
+.fakebar { height: 40px; border-radius: 6px; background: var(--d-surface); border: 1px solid var(--d-line); display: flex; align-items: center; padding: 0 12px; font: 600 15px var(--f-head); gap: 10px; }
+.fakecard { border-radius: 6px; background: var(--d-surface); border: 1px solid var(--d-line); padding: 12px; display: grid; gap: 8px; }
+.fakecard i { display: block; height: 9px; border-radius: 3px; background: var(--d-line); }
+.blurred { filter: blur(2.5px); }
+.scrim { position: absolute; inset: 0; background: rgba(27, 30, 28, .32); border-radius: 6px; }
+.dialog { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 300px; background: var(--d-surface); border-radius: 8px; box-shadow: 0 12px 32px rgba(0, 0, 0, .25); padding: 16px; display: grid; gap: 10px; }
+.d-title { display: flex; align-items: center; gap: 8px; font: 600 17px var(--f-head); }
+.d-label { font-size: 13.5px; font-weight: 700; color: var(--d-ink-2); }
+.d-input { height: 34px; border: 1px solid var(--d-line-2); border-radius: 4px; padding: 0 10px; display: flex; align-items: center; }
+.d-acts { display: flex; justify-content: flex-end; gap: 8px; }
+.backbar { display: flex; align-items: center; gap: 12px; padding: 8px 10px; border-radius: 6px; background: var(--d-accent-soft); border: 1px solid var(--d-accent-line); }
+.backbar .btn { color: var(--d-accent); border-color: var(--d-accent); font-weight: 700; }
+.backbar span:last-child { font-size: 13.5px; color: var(--d-ink-2); }
+.screen .tag.up { bottom: calc(100% + 16px); }
+
+/* ---------- 4 · Also on a step ---------- */
+.specimens { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); gap: 14px; }
+.spec { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); display: grid; grid-template-rows: auto 1fr; overflow: hidden; min-width: 0; }
+.spec .desk { padding: 20px; min-width: 0; border-radius: 0; display: grid; align-content: center; justify-items: start; gap: 10px; }
+.spec .cap { padding: 12px 14px 14px; display: grid; gap: 4px; }
+.spec .cap b { justify-self: start; background: var(--mk); color: var(--mk-ink); font-size: 14px; padding: 3px 8px; border-radius: 3px; }
+.spec .cap span { color: var(--fg-2); font-size: 14.5px; }
+.sec { width: 100%; padding: 12px 14px; display: grid; gap: 8px; box-shadow: 0 0 0 2px var(--d-accent); }
+.sec-h { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 16px; }
+.num { display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: var(--d-accent); color: #fff; font-size: 13px; font-weight: 700; }
+.num.done { background: var(--d-success); }
+.here { margin-left: auto; font-size: 12px; font-weight: 700; background: var(--d-accent); color: #fff; padding: 2px 8px; border-radius: 3px; }
+.fold { width: 100%; padding: 10px 12px; display: flex; align-items: center; gap: 10px; }
+.fold .sum { color: var(--d-ink-2); font-size: 14px; }
+.fold .btn { margin-left: auto; height: 30px; padding: 0 10px; }
+.helpbox { display: flex; align-items: flex-start; gap: 10px; }
+.helpbox .pop { max-width: 220px; background: var(--d-surface); border: 1px solid var(--d-line-2); border-radius: 6px; padding: 8px 10px; font-size: 13.5px; color: var(--d-ink-2); box-shadow: 0 4px 12px rgba(0, 0, 0, .12); }
+.choices { display: flex; gap: 6px; flex-wrap: wrap; }
+.choice { display: inline-flex; align-items: center; gap: 8px; height: 38px; padding: 0 12px 0 10px; border: 1.5px solid #3A403C; border-bottom-width: 3px; border-radius: 4px; background: var(--d-surface); font-weight: 600; }
+.choice::before { content: ""; width: 14px; height: 14px; border-radius: 50%; border: 2px solid #3A403C; }
+.choice.on { background: var(--d-accent); border-color: var(--d-accent); color: #fff; font-weight: 700; }
+.choice.on::before { border-color: #fff; background: radial-gradient(circle, #fff 0 4px, transparent 5px); }
+.float { height: 48px; padding: 0 20px; border-radius: 6px; background: var(--d-success); color: #fff; font-weight: 700; display: inline-flex; align-items: center; gap: 8px; box-shadow: 0 6px 18px rgba(29, 115, 67, .35); }
+.tabs { display: flex; gap: 4px; flex-wrap: wrap; }
+.tab { padding: 6px 10px; border: 1px solid var(--d-line-2); border-radius: 4px; background: var(--d-surface); font-weight: 500; font-size: 14px; }
+.tab.on { background: var(--d-accent-soft); border-color: var(--d-accent); box-shadow: inset 0 -3px 0 var(--d-accent); font-weight: 700; color: var(--d-accent); }
+.subtabs .tab { font-size: 13px; padding: 4px 9px; }
+
+/* ---------- Glossary ---------- */
+.gloss { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+table { border-collapse: collapse; width: 100%; min-width: 680px; font-size: 15px; }
+th, td { text-align: left; vertical-align: top; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+th { font-size: 12.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--fg-2); }
+tr:last-child td { border-bottom: 0; }
+td:first-child { font-weight: 700; white-space: nowrap; }
+td:last-child { color: var(--fg-2); }
+
+@media (prefers-reduced-motion: no-preference) { .tag { transition: none; } }
+</style>
+
+</head>
+<body>
+<main class="page">
+  <header>
+    <h1>Desk part names</h1>
+    <p class="lead">The names to use when you ask for a change on the desk. Each picture shows the desk as it looks at the Stay step of a booking; the <span class="mk">yellow tag</span> names the part inside the dashed line.</p>
+  </header>
+
+  <section>
+    <h2>The top of a booking</h2>
+    <div class="shot">
+      <div class="desk m1">
+        <div class="card m-head t">
+          <span class="tag up">booking head</span>
+          <span class="g-name">kuenzang Jurmey</span><span class="g-inq">INQ-20261029-0030</span><span class="sep"></span><span class="g-ent">ENT-20261029-0032</span>
+        </div>
+        <div class="card m-step t">
+          <span class="tag dn2">step line · the whole bar</span>
+          <span class="s-name t">7 · Stay <span class="q">?</span><span class="tag dn">step name</span></span>
+          <span class="s-prog t"><i></i><i></i><b>2 of 2 done</b><span class="tag dn">progress bar</span></span>
+          <span class="s-list t">all done <span class="chev">▼</span><span class="tag dn">section list</span></span>
+          <span class="s-right t">
+            <span class="tag dn r">menu buttons</span>
+            <span class="btn">Charges <span class="chev">▼</span></span>
+            <span class="btn due">Guests and rooms <span class="badge t">2<span class="tag up r">badge</span></span> <span class="chev">▼</span></span>
+            <span class="btn">Change booking <span class="chev">▼</span></span>
+          </span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>A menu, opened</h2>
+    <p>A menu button opens a menu. Each line in it is a menu item, with a title and a description under it.</p>
+    <div class="shot">
+      <div class="desk m2">
+        <div class="mdemo">
+          <span class="btn due open t">Guests and rooms <span class="badge">2</span> <span class="chev">▲</span><span class="tag rt">menu button, open</span></span>
+          <div class="menu t">
+            <span class="tag rt top">menu</span>
+            <div class="item due t">
+              <span class="tag rt">owed item · in red, with a badge</span>
+              <div class="i-head"><span class="i-title">Keys</span><span class="i-badge">2 owed today</span></div>
+              <div class="i-desc">Rooms 206, 301 — the guest has moved out; take the key back</div>
+            </div>
+            <div class="item tagged t">
+              <span class="tag rt">menu item</span>
+              <div class="i-head"><span class="i-title tline t">Guest details &amp; ID proof<span class="tag lf">title</span></span></div>
+              <div class="i-desc"><span class="tline t">Each guest's document and photo — a guest added to the room is recorded here.<span class="tag lf">description</span></span></div>
+            </div>
+            <div class="item">
+              <div class="i-head"><span class="i-title">Faults in the room</span></div>
+              <div class="i-desc">Something broken in a room — reported, put right, or carried to check-out.</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="mdemo">
+          <span class="btn open">Change booking <span class="chev">▲</span></span>
+          <div class="menu">
+            <div class="item">
+              <div class="i-head"><span class="i-title">Move a room</span></div>
+              <div class="i-desc">The rooms table in the page, under ← Back to Check-in.</div>
+            </div>
+            <div class="item off t">
+              <span class="tag rt">disabled item</span>
+              <div class="i-head"><span class="i-title">Change the dates</span></div>
+              <div class="i-desc">The stay's nights, moved or added to.</div>
+              <div class="i-why"><span class="tline t">Not at Check-in — the dates change at Stay<span class="tag lf">its reason</span></span></div>
+            </div>
+            <div class="item danger t">
+              <span class="tag rt">danger item</span>
+              <div class="i-head"><span class="i-title">Cancel booking</span></div>
+              <div class="i-desc">The guest is not staying. The FOM's call.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Where a choice opens</h2>
+    <p>A menu item opens one of two ways: a pop-up over the page, or a view in the page that takes the step's place until you go back.</p>
+    <div class="shot">
+      <div class="desk m3">
+        <div class="screen t">
+          <span class="tag up">pop-up · over the page, the page blurred behind</span>
+          <div class="inner">
+            <div class="blurred" style="display:grid; gap:10px">
+              <div class="fakebar">7 · Stay</div>
+              <div class="fakecard"><i style="width:55%"></i><i></i><i style="width:80%"></i></div>
+              <div class="fakecard"><i style="width:40%"></i><i></i><i style="width:70%"></i></div>
+            </div>
+            <div class="scrim"></div>
+            <div class="dialog">
+              <div class="d-title">Raise a dispute <span class="q">?</span></div>
+              <div class="d-label">What does the guest question?</div>
+              <div class="d-input">Minibar charge, Room 206</div>
+              <div class="d-acts"><span class="btn">Close</span><span class="btn go">Raise the dispute</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="screen t">
+          <span class="tag up">in the page · it takes the step's place</span>
+          <div class="inner">
+            <div class="backbar t"><span class="btn">← Back to Stay</span><span>Moving a room — Stay's own page is behind this</span><span class="tag dn">back bar</span></div>
+            <div class="fakecard" style="margin-top:42px"><i style="width:35%"></i><i></i><i></i><i style="width:60%"></i></div>
+            <div class="fakecard"><i style="width:45%"></i><i></i><i style="width:75%"></i></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Also on a step</h2>
+    <div class="specimens">
+      <div class="spec">
+        <div class="desk">
+          <div class="card sec">
+            <div class="sec-h"><span class="num">2</span>The rooms<span class="here">you are here</span></div>
+            <div class="fakecard" style="border:0;padding:0"><i style="width:80%"></i><i style="width:60%"></i></div>
+          </div>
+        </div>
+        <div class="cap"><b>section</b><span>One numbered part of a step. The one being worked carries "you are here" and a blue edge.</span></div>
+      </div>
+      <div class="spec">
+        <div class="desk">
+          <div class="card fold">
+            <span class="num done">✓</span><b>The keys</b><span class="sum">3 of 3 keys returned</span><span class="btn">Edit</span>
+          </div>
+        </div>
+        <div class="cap"><b>folded section</b><span>A finished section shrunk to one line, with Edit to open it again.</span></div>
+      </div>
+      <div class="spec">
+        <div class="desk">
+          <div class="helpbox"><span class="q" style="width:22px;height:22px">?</span><span class="pop">Shortened writes three or more nights in a row as the first and the last night.</span></div>
+        </div>
+        <div class="cap"><b>"?" help</b><span>A small question mark that opens the explanation beside it. Explanations live here, not on the screen.</span></div>
+      </div>
+      <div class="spec">
+        <div class="desk">
+          <div class="choices"><span class="choice on">They wrote to us</span><span class="choice">They told us</span></div>
+        </div>
+        <div class="cap"><b>choice buttons</b><span>Pick one of a few answers. The picked one is filled blue.</span></div>
+      </div>
+      <div class="spec">
+        <div class="desk">
+          <span class="btn go">Record the keys</span>
+        </div>
+        <div class="cap"><b>green button</b><span>The act that finishes a section. It turns green once it can be pressed.</span></div>
+      </div>
+      <div class="spec">
+        <div class="desk">
+          <span class="float">Move to Check-out →</span>
+        </div>
+        <div class="cap"><b>floating move button</b><span>Appears at the bottom right of the work once the step is done, and stays there as you scroll.</span></div>
+      </div>
+      <div class="spec">
+        <div class="desk">
+          <div class="tabs"><span class="tab">Booking</span><span class="tab on">Charges</span><span class="tab">Requests</span><span class="tab">Notes</span><span class="tab">Papers</span><span class="tab">History</span></div>
+          <div class="tabs subtabs"><span class="tab on">The price</span><span class="tab">The bill</span><span class="tab">Money received</span></div>
+        </div>
+        <div class="cap"><b>booking file · tabs and sub-tabs</b><span>The column on the right. Its tabs on top; inside Charges, the sub-tabs.</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>All the names</h2>
+    <div class="gloss">
+      <table>
+        <thead><tr><th>Name</th><th>What it is</th><th>Say it like this</th></tr></thead>
+        <tbody>
+          <tr><td>booking head</td><td>The guest's name with the enquiry and booking numbers.</td><td>"Show the room count in the booking head."</td></tr>
+          <tr><td>step line</td><td>The bar under the booking head: the step, its progress and the step's buttons.</td><td>"On Stay's step line, put Keys before Charges."</td></tr>
+          <tr><td>step name</td><td>"7 · Stay" with its "?".</td><td>"Make the step name smaller."</td></tr>
+          <tr><td>progress bar</td><td>One block per section; green when done.</td><td>"Show the progress bar in red when a section is stuck."</td></tr>
+          <tr><td>section list</td><td>"now: … ▼" / "all done ▼" — every section and where it stands.</td><td>"In the section list, show the open item in red."</td></tr>
+          <tr><td>menu button</td><td>A button with ▼ that opens a menu: Charges, Guests and rooms, Change booking.</td><td>"Rename the Guests and rooms menu button to Guests."</td></tr>
+          <tr><td>badge</td><td>A small red count — on a menu button, or beside a menu item's title.</td><td>"Add a badge to the Charges menu button for unpaid bills."</td></tr>
+          <tr><td>menu</td><td>The box that drops down from a menu button.</td><td>"Make the Change booking menu wider."</td></tr>
+          <tr><td>menu item</td><td>One choice in a menu.</td><td>"Add a menu item for lost and found to Guests and rooms."</td></tr>
+          <tr><td>title / description</td><td>A menu item's bold first line, and the smaller line under it.</td><td>"Shorten the Faults item's description."</td></tr>
+          <tr><td>owed item</td><td>A menu item with something owed: red, with a badge.</td><td>"Make Disputes an owed item when one is open."</td></tr>
+          <tr><td>disabled item</td><td>A greyed item that can't be used now, with its reason.</td><td>"Show the disabled item's reason in red."</td></tr>
+          <tr><td>danger item</td><td>A red item that ends or cuts short a booking.</td><td>"Make Leaving early a danger item."</td></tr>
+          <tr><td>pop-up</td><td>A form over the page, the page blurred behind, with Close.</td><td>"Open Disputes as a pop-up."</td></tr>
+          <tr><td>in the page</td><td>A view that takes the step's place, with a back bar above it.</td><td>"Open Keys in the page instead of a pop-up."</td></tr>
+          <tr><td>back bar</td><td>"← Back to Stay" and what is being done.</td><td>"Make the back bar stay put when I scroll."</td></tr>
+          <tr><td>section</td><td>One numbered part of a step.</td><td>"Split section 2 into keys and rooms."</td></tr>
+          <tr><td>folded section</td><td>A finished section shown as one line with Edit.</td><td>"Don't fold the bill section."</td></tr>
+          <tr><td>"?" help</td><td>The question mark holding an explanation.</td><td>"Put the rule behind a "?" help."</td></tr>
+          <tr><td>choice buttons</td><td>A row of pick-one answers.</td><td>"Use choice buttons for the payment method."</td></tr>
+          <tr><td>green button</td><td>The act that finishes a section.</td><td>"Make Settle a green button."</td></tr>
+          <tr><td>floating move button</td><td>The move to the next step, bottom right, once all is done.</td><td>"Hide the floating move button while a pop-up is open."</td></tr>
+          <tr><td>booking file</td><td>The right-hand column: its tabs and sub-tabs.</td><td>"Open the booking file on History."</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+</main>
+</body>
+</html>

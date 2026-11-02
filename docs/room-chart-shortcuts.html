@@ -188,7 +188,8 @@ kbd.held { background: var(--accent); border-color: var(--accent); color: #fff; 
   <section class="group" aria-labelledby="know-h">
     <h2 id="know-h">Good to know</h2>
     <ul class="know">
-      <li>You can pick up to 8 rooms at a time.</li>
+      <li><b>How many rooms at once.</b> Ctrl and Shift pick up to 8 rooms. The 9th Ctrl pick is refused with a message, and a Shift pick of more than 8 picks nothing. To take more, click the booking once, tick its rooms in the box, and choose <b>Drag them on the chart</b>.</li>
+      <li><b>What a big pick can do.</b> Moving rooms to other dates has no limit, whether that is the whole booking or rooms split off to a booking of their own. Changing rooms on the same dates, or moving single nights, still takes at most 8 rooms at a time.</li>
       <li>Parked bookings, ended bookings, bookings at Check-out or Closed, and a guest past their check-out and still in can't be moved. The chart says why.</li>
       <li>A faint dashed bar (picked, not held) holds nothing yet, so it can't be dragged. Change its dates or rooms on the booking itself. At Negotiation, a booking with a provisional block does have a bar you can drag.</li>
       <li>Once nights are marked with Alt, dragging a marked night moves them all, with or without Alt.</li>
@@ -384,7 +385,7 @@ kbd.held { background: var(--accent); border-color: var(--accent); color: #fff; 
       },
       {
         id: "drag-whole", title: "Pick every room, then drag sideways: move the whole booking", keys: ["Ctrl", "click each room, then drag"], what: "Moves the whole booking", banner: true,
-        who: WHO_DATES,
+        who: WHO_DATES + " <b>More than 8 rooms:</b> Ctrl stops at 8, so click the booking once and tick its rooms in the box instead.",
         steps: ["Hold <b>Ctrl</b> and click each of the booking's rooms.", "Let go of Ctrl, then drag one ringed bar sideways.", "Let go of the bar. Both rooms keep the same number of nights.", "Give the reason and confirm."],
         bars: [karma("a", 204, 0, 2), karma("b", 205, 0, 2)],
         play: [
