@@ -162,6 +162,9 @@ export function CommunicationAcceptanceBlock({
     );
   }
 
+  // Its reply is switched off in the admin console: nothing to ask, nothing to show (2026-11-03).
+  if (comm.acknowledgementStatus === "NOT_ASKED") return null;
+
   if (comm.acknowledgementStatus === "RECEIVED") {
     return (
       <div className="fact b-bound" style={{ padding: "9px 12px", fontSize: 13 }}>

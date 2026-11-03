@@ -632,7 +632,7 @@ const CANCELLATION = page("/admin/cancellation-policies", "Cancellation policies
 const guestReply = (key: string, title: string, about: string): Draft => ({
   key,
   title,
-  about,
+  about: `${about} While it is off, the booking's steps do not ask for a reply or offer to note one.`,
   form: { kind: "group", label: "", fields: [{ kind: "toggle", key: "required", label: "The guest's reply", on: "Must be noted", off: "Not needed" }] },
   summary: (v) => ((v as { required?: boolean } | null)?.required === false ? "Not needed" : "Must be noted"),
   fresh: { required: true },

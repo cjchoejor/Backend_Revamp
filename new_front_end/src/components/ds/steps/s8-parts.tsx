@@ -25,7 +25,7 @@ import { channelWord } from "@/lib/ds/status";
 import { refusalText } from "@/lib/ds/translate";
 import { fmtStamp } from "@/lib/ds/format";
 import type { DisputeSummary, EntryDetail } from "@/types/api";
-import { Live, ReasonDialog, StepCard, atLeast, toastRefusal, useRefreshEntry, words } from "./kit";
+import { Live, ReasonDialog, StepCard, atLeast, toastRefusal, useRefreshEntry, useReplyAsked, words } from "./kit";
 
 /* ------------------------------------------------------------------ words */
 
@@ -211,11 +211,12 @@ export function useSendInvoice(entry: EntryDetail) {
   const { session } = useSession();
   const refresh = useRefreshEntry(entry.id);
   const recipient = useInvoiceRecipient(entry);
+  const replyAsked = useReplyAsked(entry.id, "FINAL_INVOICE");
   return useMutation({
     mutationFn: (v: { invoiceId: string; to?: string }) =>
       dispatchInvoice(session!, v.invoiceId, { dispatchedTo: v.to?.trim() || undefined }) as Promise<{ dispatchedTo?: string | null } | null>,
     onSuccess: (out) => {
-      toast.success(`Sent — ${sentWords(out?.dispatchedTo ?? null, entry, recipient.party)}. The answer is awaited.`);
+      toast.success(`Sent — ${sentWords(out?.dispatchedTo ?? null, entry, recipient.party)}.${replyAsked ? " The answer is awaited." : ""}`);
       refresh();
     },
     onError: (e) => toastRefusal(e, "The invoice could not be sent"),

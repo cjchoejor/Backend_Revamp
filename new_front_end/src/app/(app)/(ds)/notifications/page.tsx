@@ -68,7 +68,7 @@ function Notifications() {
   const hotelDay = useHotelDay();
   const bookings = useDeskBookings();
   const items = useMemo(
-    () => attentionItems(bookings.data?.items ?? [], clock.now, hotelDay?.today ?? null, clock.tz),
+    () => attentionItems(bookings.data?.items ?? [], clock.now, hotelDay?.today ?? null, clock.tz, bookings.data?.repliesOff),
     // clock.now moves every 30 s; the list follows it by the minute
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [bookings.data, hotelDay?.today, Math.floor(clock.now / 60_000)],

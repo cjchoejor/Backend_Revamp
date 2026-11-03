@@ -9,6 +9,7 @@ import { prisma } from "../../db.js";
 import { requireActorLevel } from "../../middleware/auth.js";
 import { validateBody } from "../../middleware/validate-body.js";
 import { ValidationError } from "../../lib/errors.js";
+import { guestRepliesOff } from "../../lib/guest-reply-settings.js";
 import { hotelDayEndUtc } from "../../lib/stay-dates.js";
 import {
   DESK_ACTIVITY_MAX,
@@ -38,7 +39,9 @@ deskRouter.get("/bookings", L1, async (req, res, next) => {
     const parsed = listQuery.safeParse(req.query);
     if (!parsed.success) throw new ValidationError("Invalid query parameters", parsed.error.flatten());
     const items = await listDeskBookings(prisma, parsed.data);
-    res.set("Cache-Control", "no-store").json({ items, count: items.length });
+    // Which emails' replies are off, so the lists do not say an answer is missing.
+    const repliesOff = [...(await guestRepliesOff(prisma)).keys()];
+    res.set("Cache-Control", "no-store").json({ items, count: items.length, repliesOff });
   } catch (e) {
     next(e);
   }

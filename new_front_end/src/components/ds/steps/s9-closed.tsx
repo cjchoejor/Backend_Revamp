@@ -45,6 +45,7 @@ import { OverpaidCard } from "./refund-card";
 import {
   ActTiles,
   AnswerLine,
+  useReplyAsked,
   DocCard,
   DsDialog,
   Fact,
@@ -465,7 +466,7 @@ function AfterTheStay({ entry, tz, openPane }: { entry: EntryDetail; tz: string;
           </span>
         </Fact>
         <Fact k="The bill">{whereItSits}</Fact>
-        {finalComm ? (
+        {finalComm && finalComm.acknowledgementStatus !== "NOT_ASKED" ? (
           <Fact k="Their answer">
             <AnswerLine entryId={entry.id} type="FINAL_INVOICE" what="the tax invoice" tz={tz} />
           </Fact>
@@ -828,6 +829,7 @@ function IssueTaxInvoice({ entry, open, onDone, hasOne }: { entry: EntryDetail; 
   const booked = useBookedBy(entry);
   const issueSend = useIssueAndSend(entry, "final-v1");
   const [sendTo, setSendTo] = useSendTo(entry);
+  const replyAsked = useReplyAsked(entry.id, "FINAL_INVOICE");
   return (
     <DsDialog
       open={open}
@@ -848,7 +850,7 @@ function IssueTaxInvoice({ entry, open, onDone, hasOne }: { entry: EntryDetail; 
       <p className="sm">This cannot be undone:</p>
       <ul className="plain-list sm" style={{ margin: 0, paddingLeft: 18, display: "grid", gap: 4 }}>
         <li>A tax invoice is made for the bill as it stands now, with a new number.</li>
-        <li>It is emailed straight away, and their answer is waited for like any paper.</li>
+        <li>It is emailed straight away{replyAsked ? ", and their answer is waited for like any paper" : ""}.</li>
         <li>An invoice sent before stays exactly as it was — that is the file they received.</li>
       </ul>
       <div className="form2" style={{ marginTop: 10 }}>

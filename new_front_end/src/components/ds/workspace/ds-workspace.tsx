@@ -1090,7 +1090,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                         })()
                       : [{ label: "Checking what is left before the close…", met: false }]
                     : confirmedS4Active
-                      ? [{ label: voucherReplyOff ? "No answer needed to the voucher" : "The guest's answer to the voucher, if it was sent", met: voucherAnswerRecorded }]
+                      ? [{ label: voucherReplyOff ? "The confirmation voucher — sending it is up to you" : "The guest's answer to the voucher, if it was sent", met: voucherAnswerRecorded }]
                       : viewing < currentOrder
                         ? []
                         : preconditionsFor(entry, step, hotelToday);

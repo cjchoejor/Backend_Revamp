@@ -324,8 +324,8 @@ export function PaymentPlanCard({
                   {bill.dispatched ? (
                     <span className="meta">
                       {" "}
-                      · sent{bill.proforma.dispatchedAt ? ` ${fmtStamp(bill.proforma.dispatchedAt, tz)}` : ""} ·{" "}
-                      {bill.notAsked ? "no answer needed" : bill.answered ? "their answer is on record" : "awaiting their answer"}
+                      · sent{bill.proforma.dispatchedAt ? ` ${fmtStamp(bill.proforma.dispatchedAt, tz)}` : ""}
+                      {bill.notAsked ? null : bill.answered ? " · their answer is on record" : " · awaiting their answer"}
                     </span>
                   ) : (
                     <span className="meta"> · generated, not sent</span>
