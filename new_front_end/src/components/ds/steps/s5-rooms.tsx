@@ -38,7 +38,7 @@ import {
   seatPartyRoomsByComposition,
 } from "@/lib/desk/party-rooms";
 import { deriveRoomStatus, ROOM_STATUS, type RoomStatusKey } from "@/lib/desk/rooms";
-import { formatRoomPickerLabel } from "@/lib/room-inventory-status";
+import { ArrivalRoomDialog } from "./arrival-room-pick";
 import { fmtDate, fmtDay, money, plural } from "@/lib/ds/format";
 import { optionSelectedRoomIds, type EntryDetail, type RoomAssignmentSummary } from "@/types/api";
 import { InitialSelectionCell } from "@/components/desk/workspace/room-change-control";
@@ -212,19 +212,18 @@ export function AssignRoomsCard({ entry }: { entry: EntryDetail }) {
 
   /* ---- assigning ---- */
   const defaultRoom = holdRoom ?? sealedIds[0] ?? "";
-  const [roomId, setRoomId] = useState(defaultRoom);
-  const [pickOpen, setPickOpen] = useState(false);
-  const [bedFilter, setBedFilter] = useState("");
-  const [notes, setNotes] = useState("");
+  // Always the room the booking holds. Another of its type is given through the same box a double-click
+  // opens (2026-11-03): it reads each room for this stay's dates and moves the booking's records with
+  // the room. A list of its own read tonight's status and left the records behind.
+  const roomId = defaultRoom;
+  const [pickOther, setPickOther] = useState(false);
   const [seatOpen, setSeatOpen] = useState(false);
 
   const assignOne = useMutation({
-    mutationFn: () => assignRoom(session!, entry.id, { roomId: roomId.trim(), notes: notes.trim() || undefined }),
+    mutationFn: () => assignRoom(session!, entry.id, { roomId: roomId.trim() }),
     onSuccess: () => {
       toast.success(`Room ${numberOf(roomId)} assigned — a claim on the room, no step moved`);
       finish();
-      setPickOpen(false);
-      setNotes("");
       changed();
     },
     onError: (e) => toastRefusal(e, "The room could not be assigned"),
@@ -260,25 +259,6 @@ export function AssignRoomsCard({ entry }: { entry: EntryDetail }) {
     },
     onError: (e) => toastRefusal(e, "The guests could not be seated"),
   });
-
-  const bedTypes = useMemo(() => {
-    const m = new Map<string, string[]>();
-    for (const r of catalog) {
-      if (!r.bedType || r.isBlocked) continue;
-      m.set(r.bedType, [...(m.get(r.bedType) ?? []), r.roomNumber]);
-    }
-    return [...m.entries()]
-      .sort((a, b) => a[0].localeCompare(b[0]))
-      .map(([type, nums]) => ({ type, nums: nums.sort((a, b) => a.localeCompare(b, undefined, { numeric: true })) }));
-  }, [catalog]);
-  const roomOptions = useMemo(() => {
-    const m = new Map<string, { id: string; roomNumber: string; claim?: string; physical?: string; blocked?: boolean; bed?: string | null; type?: string | null }>();
-    for (const r of preferred) if (r.roomId) m.set(r.roomId, { id: r.roomId, roomNumber: r.roomNumber ?? r.roomId, claim: r.claimState });
-    for (const r of catalog)
-      m.set(r.id, { id: r.id, roomNumber: r.roomNumber, claim: r.currentClaimState, physical: r.physicalState, blocked: r.isBlocked, bed: r.bedType ?? null, type: r.roomType?.name ?? null });
-    return [...m.values()].sort((a, b) => a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true }));
-  }, [preferred, catalog]);
-  const visibleOptions = bedFilter ? roomOptions.filter((r) => r.bed === bedFilter || r.id === roomId) : roomOptions;
 
   const assigned = assignedIds.length > 0;
   const canWork = !past && entry.currentStage === "S5" && entry.status === "ACTIVE";
@@ -393,51 +373,24 @@ export function AssignRoomsCard({ entry }: { entry: EntryDetail }) {
                 >
                   {roomId ? `Assign room ${numberOf(roomId)}` : "Assign the room"}
                 </Button>
-                <Button kind="quiet" compact onClick={() => setPickOpen((v) => !v)}>
-                  {pickOpen ? "Keep the room chosen earlier" : "Pick another of this type"}
+                <Button kind="quiet" compact state={roomId ? "default" : "inert"} onClick={() => setPickOther(true)}>
+                  Pick another of this type
                 </Button>
                 {roomId && roomId === defaultRoom ? <span className="meta">chosen earlier{typeOf(roomId) ? ` · ${typeOf(roomId)}` : ""}</span> : null}
               </div>
-              {pickOpen || !roomId ? (
-                <div className="form2">
-                  {bedTypes.length ? (
-                    <div className="field">
-                      <label>Bed setup</label>
-                      <select className="input" value={bedFilter} onChange={(e) => setBedFilter(e.target.value)}>
-                        <option value="">Any bed setup</option>
-                        {bedTypes.map((b) => (
-                          <option key={b.type} value={b.type}>
-                            {bedWord(b.type)} ({plural(b.nums.length, "room")}) — {b.nums.join(", ")}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  ) : null}
-                  <div className="field">
-                    <label>
-                      Room
-                      <Help label="About the room">The room is checked for these dates when you assign it.</Help>
-                    </label>
-                    <select className="input" value={roomId} onChange={(e) => setRoomId(e.target.value)}>
-                      <option value="">Choose a room…</option>
-                      {visibleOptions.map((r) => (
-                        <option key={r.id} value={r.id}>
-                          {formatRoomPickerLabel({ roomNumber: r.roomNumber, currentClaimState: r.claim, physicalState: r.physical, isBlocked: r.blocked })}
-                          {r.bed ? ` · ${bedWord(r.bed)}` : ""}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="wide field">
-                    <label>Note · optional</label>
-                    <input className="input" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="why this room" />
-                  </div>
-                </div>
-              ) : null}
+              {!roomId ? <Refusal kind="state" message="There is no room plan from Inquiry — the room has to be chosen there first." carries="A change of room is made at Inquiry" /> : null}
             </div>
           )
         ) : null}
       </Live>
+
+      <ArrivalRoomDialog
+        entry={entry}
+        roomId={pickOther ? roomId : null}
+        name={`Room ${numberOf(roomId)}`}
+        onClose={() => setPickOther(false)}
+        onChanged={changed}
+      />
 
       <DsDialog
         open={seatOpen}

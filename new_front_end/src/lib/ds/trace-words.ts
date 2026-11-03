@@ -101,6 +101,9 @@ const WORDS: Record<string, string> = {
   "FOLIO.CORRECTION_POSTED": "Charge corrected",
   "CHECK_IN.COMPLETED": "Checked in",
   "CHECK_IN.KEYS_ISSUED": "Keys handed over",
+  "ROOM_ASSIGNMENT.HANDED_OUT": "Room handed out",
+  "ROOM_ASSIGNMENT.FIGURES_REPAIRED": "Room put right — it was handed out without its priced figures",
+  "BOOKING_ROOMS.QUIET_MOVED": "Room changed within its type",
   "ROOM_KEY.ISSUED": "Key handed over",
   "ROOM_KEY.RETURNED": "Key returned",
   "NIGHT_AUDIT.COMPLETED": "Night audit run",
@@ -390,6 +393,19 @@ export function traceDetail(ev: TraceEvent, names?: Partial<HistoryNames>): stri
     if (p.reconfirmation === true) bits.push("confirmed again");
   }
   if (ev.eventType === "ENTRY.ROOM_CHANGED") bits.push(...roomChangeDetail(p as RoomChangedPayload));
+  if (ev.eventType === "ROOM_ASSIGNMENT.HANDED_OUT" && Array.isArray(p.rooms)) {
+    const nos = (p.rooms as Array<{ roomNumber?: string }>).map((r) => r.roomNumber).filter((x): x is string => !!x);
+    if (nos.length) bits.push(`${nos.length > 1 ? "rooms" : "room"} ${nos.join(", ")}`);
+  }
+  if (ev.eventType === "ROOM_ASSIGNMENT.FIGURES_REPAIRED" && str("fromRoomNumber") && str("toRoomNumber")) {
+    bits.push(`room ${str("fromRoomNumber")} → ${str("toRoomNumber")}`);
+    if (Number(p.nightsBilledFlat) > 0) bits.push(`${p.nightsBilledFlat} night(s) already billed Nu ${str("shortNet")} short, before service charge and GST`);
+  }
+  if (ev.eventType === "BOOKING_ROOMS.QUIET_MOVED" && Array.isArray(p.moves)) {
+    const moves = (p.moves as Array<{ fromRoomNumber?: string; toRoomNumber?: string }>).map((m) => `room ${m.fromRoomNumber} → ${m.toRoomNumber}`);
+    bits.push(...moves);
+    if (str("reason")) bits.push(str("reason")!);
+  }
   if (ev.eventType === "COMMUNICATION.REPLY_NOT_ASKED") bits.push(PAPER_WORD[str("commType") ?? ""] ?? "paper");
   // A reply no longer awaited names the paper and what replaced it (2026-10-13).
   if (ev.eventType === "COMMUNICATION.REPLY_NO_LONGER_AWAITED") {

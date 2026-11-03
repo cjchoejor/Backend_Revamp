@@ -175,7 +175,7 @@ export function ChargesView({
                 </p>
               ) : null}
               {st.quotationId ? (
-                <QuotePriceLines quotationId={st.quotationId} stayTotal={st.amount} currency={cur} />
+                <QuotePriceLines quotationId={st.quotationId} rooms={roomsNamed(entry, st.quotationId)} stayTotal={st.amount} currency={cur} />
               ) : billing?.rooms?.length ? (
                 <table className="table compact resp" style={{ marginTop: 8 }}>
                   <thead>
@@ -437,11 +437,21 @@ function previewFigures(p: QuotationLivePreview): PriceLinesFigures {
   };
 }
 
+/**
+ * What the quotation's rows depend on besides the quotation: a room moving within its type keeps the
+ * same quotation (2026-11-03), and the rooms handed out change how a room is named.
+ */
+function roomsNamed(entry: EntryDetail, quotationId: string): string {
+  const q = (entry.quotations ?? []).find((x) => x.id === quotationId);
+  const rows = (q?.commercialTerms as { roomCompositions?: Array<{ roomId?: string }> } | null | undefined)?.roomCompositions ?? [];
+  return [...rows.map((r) => r.roomId), "|", ...(entry.roomAssignments ?? []).map((a) => a.roomId)].join(",");
+}
+
 /** The saved quotation's own rows, read from the server — the paper set out on the tab. */
-function QuotePriceLines({ quotationId, stayTotal, currency }: { quotationId: string; stayTotal: number | null; currency: string }) {
+function QuotePriceLines({ quotationId, rooms, stayTotal, currency }: { quotationId: string; rooms: string; stayTotal: number | null; currency: string }) {
   const { session } = useSession();
   const q = useQuery({
-    queryKey: ["quotation-price-lines", quotationId],
+    queryKey: ["quotation-price-lines", quotationId, rooms],
     queryFn: () => getQuotationPriceLines(session!, quotationId),
     enabled: !!session,
   });
