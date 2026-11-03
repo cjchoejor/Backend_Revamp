@@ -1,3 +1,4 @@
+import { moveBookingToRoomHandedOut } from "./quiet-rooms-service.js";
 import type { PrismaClient } from "@prisma/client";
 import { RoomPhysicalState, Stage } from "@prisma/client";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
@@ -39,6 +40,7 @@ export async function assignRoom(
      */
     startDate?: Date;
     endDate?: Date;
+    actorLevel?: "L1" | "L2" | "L3" | "L4";
   },
 ) {
   const entry = await prisma.entry.findUnique({
@@ -82,6 +84,16 @@ export async function assignRoom(
 
   const activeDef = room.deficientConditionRecords[0];
   const isDeficient = !!activeDef;
+
+  // Refused here rather than after the room has moved below.
+  if (isDeficient) requireDeficientRoomAcknowledgement(deficientAcknowledgement);
+  else if (deficientAcknowledgement) throw new ValidationError("deficientAcknowledgement must not be sent when room is not DEFICIENT");
+
+  // A room other than the one the booking holds: the booking's records move to it first, so the
+  // row below freezes the guests and the figures they were priced at.
+  if (entry.currentStage === Stage.S5) {
+    await moveBookingToRoomHandedOut(prisma, { actorId, actorLevel: opts?.actorLevel ?? "L1" }, entryId, roomId);
+  }
 
   // Hydrate per-room composition from the accepted quotation (Phase C, 2026-07-27).
   // Returns null when no accepted quotation exists or the room wasn't in the composition —
@@ -137,6 +149,35 @@ export async function assignRoom(
   // best-effort: a bed that cannot be set is a difference the desk reads on the rooms table.
   await applyBedPlanToAssignedRooms(entryId, actorId, prisma);
   return created;
+}
+
+/** History's line for rooms the desk handed out (2026-11-03: nothing recorded it before). */
+export async function traceRoomsHandedOut(
+  prisma: PrismaClient,
+  entryId: string,
+  actor: { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" },
+  roomIds: string[],
+) {
+  const entry = await prisma.entry.findUnique({ where: { id: entryId }, select: { inquiryId: true, currentStage: true } });
+  const rows = await prisma.roomAssignment.findMany({
+    where: { entryId, roomId: { in: roomIds } },
+    select: { roomId: true, frozenTotal: true, room: { select: { roomNumber: true } } },
+  });
+  await prisma.traceEvent.create({
+    data: {
+      eventType: "ROOM_ASSIGNMENT.HANDED_OUT",
+      actorId: actor.actorId,
+      actorLevel: actor.actorLevel,
+      entityType: "Entry",
+      entityId: entryId,
+      operation: "CREATE",
+      timestamp: new Date(),
+      stageContext: entry?.currentStage ?? null,
+      inquiryId: entry?.inquiryId ?? null,
+      entryId,
+      payload: { rooms: rows.map((r) => ({ roomId: r.roomId, roomNumber: r.room.roomNumber, frozenTotal: r.frozenTotal?.toString() ?? null })) },
+    },
+  });
 }
 
 /**

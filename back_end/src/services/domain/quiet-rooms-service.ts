@@ -107,9 +107,11 @@ export async function relabelEntryRoomsTx(
       },
     });
   }
-  // Its live quotations of this pass — the price rows keep their figures, only the room is relabelled.
+  // Its quotations of this pass — the price rows keep their figures, only the room is relabelled. A
+  // lapsed one counts: a booking reserved before the clocks stopped at Reserve still reads its rows
+  // from it, and left behind it would name a room the booking no longer has.
   if (segId) {
-    for (const q of await tx.quotation.findMany({ where: { entryId, segmentId: segId, state: { in: ["DRAFT", "SENT", "ACCEPTED"] } }, select: { id: true, commercialTerms: true } })) {
+    for (const q of await tx.quotation.findMany({ where: { entryId, segmentId: segId, state: { in: ["DRAFT", "SENT", "ACCEPTED", "EXPIRED"] } }, select: { id: true, commercialTerms: true } })) {
       await tx.quotation.update({ where: { id: q.id }, data: { commercialTerms: swap(q.commercialTerms) as Prisma.InputJsonValue } });
     }
   }
@@ -164,7 +166,7 @@ async function applyQuietMoves(
     { timeout: 30_000 },
   );
   for (const [entryId, map] of maps) await carryBedsToNewRooms(prisma, entryId, bedsBefore.get(entryId) ?? new Map(), map);
-  const plan = await planRoomFlagRepairs(prisma, { roomIds: [...touched] });
+  const plan = await planRoomFlagRepairs(prisma, { roomIds: [...touched], fillFree: true });
   if (plan.plan.length > 0) await applyRoomFlagRepairs(prisma, plan.plan, plan.today);
 }
 
@@ -520,6 +522,42 @@ export async function chooseQuietRooms(
     othersMoved: new Set(plan.others.map((m) => m.entryId)).size,
     given: picks.map((p) => ({ ...p, toRoomNumber: world.roomNumberOf.get(p.toRoomId) ?? null })),
   };
+}
+
+/**
+ * A one-room booking handed a room other than the one it holds, at Arrival (2026-11-03, operator: "when
+ * I click on move room, it shows no distribution"). The room moves first, as any room given does: the
+ * pick, the hold, the quotation's rows and the bed plan go with it, so the room is handed out with its
+ * guests and its figures. Without this the row froze nothing and the night audit billed the flat rate:
+ * priced Nu 3,118.50, billed Nu 2,079.00, the extra bed never charged. The same check decides whether
+ * the room can be had: another booking's room the system chose makes way, one chosen by number or
+ * already handed out refuses it, in words. Before this nothing checked, and a reserved room was accepted.
+ */
+export async function moveBookingToRoomHandedOut(prisma: PrismaClient, actor: Actor, entryId: string, toRoomId: string): Promise<void> {
+  const e = await loadEntry(prisma, entryId);
+  if (!e || e.currentStage !== "S5" || e.roomAssignments.length > 0 || !e.checkInDate || !e.checkOutDate) return;
+  const seal = currentPassSeal(e);
+  const held = new Set((sealAsPerNight(seal, stayOf(e)) ?? []).flatMap((n) => n.roomIds.map((x) => x.roomId)));
+  if (held.size === 0) {
+    const hold = await prisma.committedHold.findUnique({ where: { entryId }, select: { roomId: true } });
+    if (hold?.roomId) held.add(hold.roomId);
+  }
+  if (held.size === 0 || held.has(toRoomId)) return;
+  if (held.size > 1) throw new ValidationError("This booking holds more than one room — double-click the room in the table to give it another");
+  const [fromRoomId] = held;
+  if (sealHasBookingRooms(seal)) {
+    await chooseQuietRooms(prisma, entryId, actor, [{ fromRoomId, toRoomId }]);
+    return;
+  }
+  // Picked by number: the same two steps, without the booking rooms a seal by type carries.
+  await makeWayForRoom(prisma, actor, { entryId, fromRoomId, toRoomId });
+  const rows = await prisma.room.findMany({ where: { id: { in: [fromRoomId, toRoomId] } }, select: { id: true, roomNumber: true } });
+  await applyQuietMoves(prisma, new Map([[entryId, new Map([[fromRoomId, toRoomId]])]]), {
+    ...actor,
+    reason: "The desk picked another room of the type at Arrival",
+    forEntryId: null,
+    roomNumbers: new Map(rows.map((r) => [r.id, r.roomNumber])),
+  });
 }
 
 /** One room given — the form the Rooms tab uses. */

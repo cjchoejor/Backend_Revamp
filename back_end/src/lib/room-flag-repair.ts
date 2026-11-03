@@ -121,7 +121,12 @@ export async function readExpectedRoomFlags(
 
 export async function planRoomFlagRepairs(
   prisma: PrismaClient,
-  opts: { roomIds?: string[]; except?: Set<string>; now?: Date } = {},
+  /**
+   * `fillFree`: a room reading FREE that a booking holds from today on is set too. For a room a booking
+   * has just moved onto, where nothing else would set it (2026-11-03). Left off for the sweep over the
+   * house, which leaves a flag alone unless it is wrong about a guest or names a claim that is gone.
+   */
+  opts: { roomIds?: string[]; except?: Set<string>; now?: Date; fillFree?: boolean } = {},
 ): Promise<{ today: Date; guestsIn: number; plan: RoomFlagRepair[]; skipped: string[] }> {
   const today = hotelTodayUtc(opts.now);
   const except = opts.except ?? new Set<string>();
@@ -151,6 +156,7 @@ export async function planRoomFlagRepairs(
     if (guestIn.has(r.id) && from !== "OCCUPIED") why = `a guest is in the room (${guestIn.get(r.id)}) — check-out needs OCCUPIED`;
     else if (from === "OCCUPIED" && !guestIn.has(r.id)) why = "OCCUPIED but no guest is in the room";
     else if (CLAIM.includes(from) && !claimFlag.has(r.id)) why = `${from} but no booking holds the room from today on`;
+    else if (opts.fillFree && from === "FREE" && claimFlag.has(r.id)) why = "a booking moved onto the room";
     else if ((from === "DEPARTED_DIRTY" || from === "DEPARTED_CLEAN") && (setterGone || !recorded)) {
       why = setterGone ? `${from} set by ${setter}, which no longer exists` : `${from} with no claim event behind it (its booking was erased)`;
     }

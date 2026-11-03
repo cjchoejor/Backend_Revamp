@@ -1,3 +1,4 @@
+import { resolveCompositionBasis } from "./party-seating.js";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { computeRoomComposition, nightKeys, type RoomCompositionInput, type RoomCompositionRateContext } from "./room-composition.js";
 import { round2, toDecimal } from "./money.js";
@@ -72,6 +73,7 @@ export async function hydrateRoomAssignmentComposition(
     where: { id: entryId },
     select: {
       segments: { orderBy: { segmentNumber: "desc" }, take: 1, select: { id: true } },
+      reservation: { select: { frozenCommercialTerms: true } },
       quotations: {
         orderBy: { createdAt: "desc" },
         select: { id: true, segmentId: true, state: true, versionNumber: true, createdAt: true, commercialTerms: true },
@@ -84,7 +86,10 @@ export async function hydrateRoomAssignmentComposition(
     : null;
   const basis =
     operative ?? (entryRow?.quotations ?? []).find((q) => q.state === "ACCEPTED") ?? null;
-  const terms = (basis?.commercialTerms ?? null) as
+  // A booking reserved on a quotation that has since lapsed has no operative quotation. Its rows are
+  // still what was priced: read them where the desk and the seating read them, or the room would
+  // freeze nothing and bill at the flat rate.
+  const terms = (basis?.commercialTerms ?? (entryRow ? resolveCompositionBasis(entryRow).terms : null)) as
     | {
         roomCompositions?: Array<{ roomId: string; [k: string]: unknown }>;
         compositionTotals?: {
