@@ -123,8 +123,9 @@ export async function generateOrLoadConfirmationVoucherPdf(
   const guest = entry.guestProfile;
   // With the title the desk took at Inquiry (2026-10-28).
   const guestFullName = guestDisplayName(guest) || "Guest";
-  // Boss's convention: `To:` = guest full name, `Guest Name` (booking row) = contact person.
-  const contactPersonName = entry.contactPersonName?.trim() || guestFullName;
+  // Boss's convention: `To:` = guest full name, `Guest Name` (booking row) = contact person. On an
+  // agency's or a company's booking that is its own person, kept on the enquiry once a guest is named.
+  const contactPersonName = entry.inquiry?.partyContactName?.trim() || entry.contactPersonName?.trim() || guestFullName;
   const confirmationBy =
     entry.inquiry?.travelAgent?.displayName ??
     entry.inquiry?.corporateAccount?.displayName ??

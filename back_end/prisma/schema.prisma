@@ -974,6 +974,13 @@ model Inquiry {
   callerPhone                String?
   callerEmail                String?
   callerOnWhatsApp           Boolean?
+
+  /// The agency's or company's own person on this enquiry (2026-11-03). Who is arriving becomes the
+  /// guest once one is named, on every booking, so this person is kept here rather than lost: the
+  /// voucher prints them as who booked it.
+  partyContactName  String?
+  partyContactPhone String?
+  partyContactEmail String?
   agentProfileId             String?
   sourceChannel              String           @default("DIRECT")
   /// How the guest came in, as the desk records it (2026-09-18). `sourceChannel` holds only the

@@ -1,4 +1,5 @@
 import type { ActorLevel, PrismaClient } from "@prisma/client";
+import { guestDisplayName } from "../../lib/guest-display-name.js";
 import { NotFoundError, PolicyGateBlockedError, ValidationError } from "../../lib/errors.js";
 import { findGuestsOnFile, sameGuestName } from "./guest-profile-service.js";
 import { enforceEntryNotSealedForWorkingAction } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
@@ -32,11 +33,16 @@ async function loadEntry(prisma: PrismaClient, entryId: string) {
       guestProfileId: true,
       checkInDate: true,
       checkOutDate: true,
+      contactPersonName: true,
+      contactPersonPhone: true,
+      contactPersonEmail: true,
       inquiry: {
         select: {
           id: true,
           guestProfileId: true,
           sourceChannel: true,
+          partyContactName: true,
+          partyContactPhone: true,
           callerTitle: true,
           callerFirstName: true,
           callerLastName: true,
@@ -104,8 +110,9 @@ export async function updateEntryCaller(prisma: PrismaClient, actor: Actor, entr
 /**
  * `keepNewName` — the desk was told the phone or email is on file under another name and chose to
  * keep the name typed (a new guest record). `arrivingIsGuest` — the guest named is the one arriving,
- * so on a direct booking "who is arriving" is filled from them (an agency's or a company's contact
- * person is never overwritten).
+ * so "who is arriving" is filled from them, on every booking (2026-11-03, operator: "check if there's
+ * a bug where who is arriving is still named the caller … check if travel agent case as well"). On an
+ * agency's or a company's booking its own person, who stood there until now, moves to the enquiry.
  */
 type GuestNamingOptions = { keepNewName?: boolean; arrivingIsGuest?: boolean };
 
@@ -269,21 +276,31 @@ export async function setEntryGuest(prisma: PrismaClient, actor: Actor, entryId:
       }
     }
 
-    // The guest named is the one arriving: on a direct booking "who is arriving" is them. An
-    // agency's or a company's contact person stays — that is the party's own person.
+    // The guest named is the one arriving, so "who is arriving" is them. A guest with no number
+    // keeps a way to reach the party: the agency's or company's person's, else the caller's — never
+    // the number of whoever stood there before them.
     let arrivingSet = false;
     const partyBooking = !!(inq.travelAgentId || inq.corporateAccountId);
-    if (input.arrivingIsGuest && !partyBooking && guestProfileId) {
+    if (input.arrivingIsGuest && guestProfileId) {
       const g = await tx.guestProfile.findUniqueOrThrow({
         where: { id: guestProfileId },
-        select: { firstName: true, lastName: true, phone: true },
+        select: { title: true, firstName: true, lastName: true, phone: true, email: true },
       });
+      let partyPhone = inq.partyContactPhone ?? null;
+      if (partyBooking && !inq.partyContactName && entry.contactPersonName) {
+        partyPhone = entry.contactPersonPhone ?? null;
+        await tx.inquiry.update({
+          where: { id: inq.id },
+          data: { partyContactName: entry.contactPersonName, partyContactPhone: entry.contactPersonPhone, partyContactEmail: entry.contactPersonEmail },
+        });
+      }
       await tx.entry.update({
         where: { id: entry.id },
         data: {
           guestProfileId,
-          contactPersonName: `${g.firstName} ${g.lastName}`.trim(),
-          ...(g.phone ? { contactPersonPhone: g.phone } : {}),
+          contactPersonName: guestDisplayName(g),
+          contactPersonPhone: g.phone ?? partyPhone ?? inq.callerPhone ?? null,
+          contactPersonEmail: g.email ?? null,
         },
       });
       arrivingSet = true;
