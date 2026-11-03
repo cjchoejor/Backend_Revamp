@@ -346,6 +346,7 @@ function ReturnStayDialog({ entry, fromAfter, onClose }: { entry: EntryDetail; f
       <DsDialog
         open
         onClose={different}
+        closeX
         busy={same.isPending}
         register="report"
         width={560}

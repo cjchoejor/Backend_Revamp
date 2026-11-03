@@ -161,6 +161,13 @@
    A dialog that asks for its own width keeps it (the inline style). */
 .ds .dialog-holder { max-width: min(600px, calc(100vw - 32px)); }
 .ds .dialog-holder > .dialog { width: 100%; }
+/* A pop-up's X, for one whose acts offer no plain way out (2026-11-03). */
+.ds .dialog:has(> .dialog-x):not(.desk-root *) { position: relative; }
+.ds .dialog:has(> .dialog-x) h3:not(.desk-root *) { padding-right: 40px; }
+.ds .dialog > .dialog-x { position: absolute; top: 12px; right: 12px; width: 32px; height: 32px; display: grid; place-items: center; padding: 0; border: 1px solid var(--line-2); border-radius: var(--r-control); background: var(--surface); color: var(--ink-2); cursor: pointer; }
+.ds .dialog > .dialog-x:hover { background: var(--surface-2); color: var(--ink); }
+.ds .dialog > .dialog-x:active { background: var(--surface-3); }
+.ds .dialog > .dialog-x:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .ds .rule-above { border-top: 1px solid var(--line); padding-top: 10px; margin-top: 10px; }
 
 /* a running timer in the side panel: label and live countdown, then a bar that fills to the due time */

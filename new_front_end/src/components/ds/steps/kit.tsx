@@ -2195,9 +2195,12 @@ export function DsDialog({
   width,
   busy,
   help,
+  closeX = false,
 }: {
   open: boolean;
   onClose: () => void;
+  /** An X at the top right — for a pop-up whose acts offer no plain way out (2026-11-03). */
+  closeX?: boolean;
   register?: DialogRegister;
   title: ReactNode;
   caseLines?: ReactNode[];
@@ -2231,7 +2234,7 @@ export function DsDialog({
     <Overlay>
       <div className="scrim open" onMouseDown={(e) => e.target === e.currentTarget && !busy && onClose()}>
         <div style={width ? { width, maxWidth: "100%" } : undefined} className="dialog-holder">
-          <Dialog register={register} title={shownTitle} caseLines={caseLines} footer={footer}>
+          <Dialog register={register} title={shownTitle} caseLines={caseLines} footer={footer} onClose={closeX && !busy ? onClose : undefined}>
             {children}
           </Dialog>
         </div>

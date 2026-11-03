@@ -892,6 +892,24 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [parkPromptable, entryId, tripKey]);
 
+  // The park question closes without choosing (2026-11-03, operator: "this needs a close button like
+  // a X on the top right … or else the user wouldn't know how to close without choosing the two
+  // options"). The X, Escape and a press outside all stay on the booking, and nothing is parked.
+  const parkBusy = parkMutation.isPending || !!exitLeaving;
+  const closePark = () => {
+    pendingExitRef.current = null;
+    setParkOpen(false);
+  };
+  useEffect(() => {
+    if (!parkOpen || parkBusy) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closePark();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [parkOpen, parkBusy]);
+
   if (sessionLoading || entryQuery.isLoading) {
     return (
       <div className="page">
@@ -1793,13 +1811,13 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
             <div
               className="scrim open"
               onClick={(e) => {
-                if (e.target !== e.currentTarget || parkMutation.isPending || exitLeaving) return;
-                pendingExitRef.current = null;
-                setParkOpen(false);
+                if (e.target !== e.currentTarget || parkBusy) return;
+                closePark();
               }}
             >
               <Dialog
                 register="commit"
+                onClose={parkBusy ? undefined : closePark}
                 title={parkExitFlow ? "Park this booking before you leave?" : "Park this booking"}
                 caseLines={[<b key="n">{name}</b>, entry.id]}
                 footer={

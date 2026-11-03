@@ -51,10 +51,15 @@ export function RoomTile({ number, standing, qualifier, occupant, physical, note
 
 /* ---------- dialogs: two registers and the report ---------- */
 export type DialogRegister = "commit" | "danger" | "report";
-export function Dialog({ register, title, caseLines, children, footer }: { register: DialogRegister; title: React.ReactNode; caseLines?: React.ReactNode[]; children?: React.ReactNode; footer: React.ReactNode }) {
+export function Dialog({ register, title, caseLines, children, footer, onClose }: { register: DialogRegister; title: React.ReactNode; caseLines?: React.ReactNode[]; children?: React.ReactNode; footer: React.ReactNode; /** Draws an X at the top right, for a pop-up with no plain way out among its acts. */ onClose?: () => void }) {
   const icon: IconName = register === "commit" ? "lock" : register === "danger" ? "alert" : "check";
   return (
     <div className={`dialog ${register}`} role="dialog" aria-modal="true">
+      {onClose ? (
+        <button type="button" className="dialog-x" aria-label="Close" title="Close" onClick={onClose}>
+          <Icon name="x" />
+        </button>
+      ) : null}
       <div className="body">
         <h3><Icon name={icon} size="lg" />{title}</h3>
         {caseLines?.length ? <div className="case">{caseLines.map((l, i) => <span key={i}>{l}</span>)}</div> : null}
