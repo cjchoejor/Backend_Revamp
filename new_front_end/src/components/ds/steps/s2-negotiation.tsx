@@ -288,7 +288,9 @@ export function S2Negotiation({
   const [discountUnit, setDiscountUnit] = useState<"percent" | "amount">("percent");
   const [discountBasis, setDiscountBasis] = useState("negotiation");
   const recordedDiscount = useMemo(() => readDiscount(working ?? accepted), [working, accepted]);
-  const seededFor = useRef<string | null>(null);
+  // `undefined` until the first run: with no quotation yet the id is null, and starting at null
+  // skipped the first run, so a discount carried from another booking never reached the table.
+  const seededFor = useRef<string | null | undefined>(undefined);
   useEffect(() => {
     const id = (working ?? accepted)?.id ?? null;
     if (seededFor.current === id) return;
@@ -301,6 +303,12 @@ export function S2Negotiation({
       // Not priced yet, split off a booking that had a percentage off: it carries.
       setDiscountValue(String(entry.carryOver.discount.discountPercent));
       setDiscountUnit("percent");
+      setDiscountBasis(entry.carryOver.discount.discountBasis || "negotiation");
+    } else if (!id && entry.followsEntryId && entry.carryOver?.discount?.discountAmount) {
+      // A stay set up the same as another copies a flat amount off too (2026-11-03). A booking split
+      // off another does not: that amount stays with the original.
+      setDiscountValue(String(entry.carryOver.discount.discountAmount));
+      setDiscountUnit("amount");
       setDiscountBasis(entry.carryOver.discount.discountBasis || "negotiation");
     }
   }, [working, accepted, recordedDiscount]); // eslint-disable-line react-hooks/exhaustive-deps

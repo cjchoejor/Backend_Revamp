@@ -30,6 +30,7 @@ import { useHotelDay } from "@/hooks/use-hotel-day";
 import { usePageTitle } from "@/hooks/use-page-title";
 import { getAllowedRoomCounts, getChildPolicy } from "@/lib/api/child-policy";
 import { createEntry, getEntry } from "@/lib/api/entries";
+import { openReturnStayOnArrival } from "@/components/ds/workspace/return-stay";
 import {
   captureCorporateContext,
   createInquiry,
@@ -600,6 +601,8 @@ export function NewInquiryCanvas() {
 
   /* ---------------------------------------------------------------- the save */
   const [navigating, setNavigating] = useState(false);
+  // "Add a return stay" keeps the lead the same way, and the booking opens with its box up (2026-11-03).
+  const returnStayNext = useRef(false);
   // A retry after a refused entry reuses the inquiry already made, so a refusal never leaves
   // a second lead behind for the same guest and the same request.
   const madeInquiry = useRef<{ key: string; id: string } | null>(null);
@@ -687,6 +690,7 @@ export function NewInquiryCanvas() {
       if (session) void queryClient.prefetchQuery({ queryKey: ["entry", id], queryFn: () => getEntry(session, id) });
       toast.success(`${id} kept · the lead is on record`);
       setNavigating(true);
+      if (returnStayNext.current) openReturnStayOnArrival(id);
       // The house is asked as the booking opens — no second press of Ask the house.
       router.push(fromChart.room ? `${bookingHref(id, 1)}&room=${encodeURIComponent(fromChart.room)}` : `${bookingHref(id, 1)}&ask=1`);
     },
@@ -1074,7 +1078,10 @@ export function NewInquiryCanvas() {
                   flowAfterOnly
                   doneAction={{
                     label: primaryLabel,
-                    onClick: () => run.mutate(),
+                    onClick: () => {
+                      returnStayNext.current = false;
+                      run.mutate();
+                    },
                     state: busy ? "working" : saveReason ? "inert" : "default",
                     title: saveReason ?? undefined,
                     workingLabel: navigating ? "Opening the booking…" : "Keeping the lead…",
@@ -1329,10 +1336,14 @@ export function NewInquiryCanvas() {
                       One bill each
                     </Button>
                     <Button
-                      kind="quiet"
+                      kind="secondary"
                       compact
-                      state="inert"
-                      title="Keep this stay first, then add the return stay from the booking — it goes on the same enquiry"
+                      state={busy ? "inert" : saveReason ? "inert" : "default"}
+                      title={saveReason ?? "Keeps this stay, then adds the return stay on the same enquiry"}
+                      onClick={() => {
+                        returnStayNext.current = true;
+                        run.mutate();
+                      }}
                     >
                       Add a return stay
                     </Button>

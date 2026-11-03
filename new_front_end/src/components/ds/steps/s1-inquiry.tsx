@@ -599,33 +599,45 @@ function TheStay({
     JSON.stringify(bedMap) !== JSON.stringify(savedBedMap);
   useFlowUnsaved("stay", editable && dirty, "Changes to the stay saved");
 
+  const writeStay = () =>
+    updateEntryIntake(session!, entry.id, {
+      checkInDate: f.checkIn || undefined,
+      checkOutDate: checkOut || undefined,
+      adultCount: adultsN,
+      childCount: childN,
+      childAges: childN > 0 ? agesNum : [],
+      guestCount: adultsN + childN,
+      numberOfRooms: roomsN,
+      bedTypeRequest: Object.keys(bedMap).length
+        ? (bedMap as Record<string, number>)
+        : null,
+      expectedVersion: entry.version,
+    });
+  // The house is asked again by itself (2026-10-27, operator: "when I make edits to the stay
+  // and click Done, can it ask the house directly, so we can remove the Ask again button").
+  // The saved figures ride on the event, since the entry on screen is still the old one.
+  const stayWasSaved = () => {
+    refresh();
+    if (f.checkIn && checkOut)
+      window.dispatchEvent(
+        new CustomEvent(STAY_SAVED_EVENT, {
+          detail: { entryId: entry.id, checkInDate: f.checkIn, checkOutDate: checkOut, guestCount: adultsN + childN },
+        }),
+      );
+  };
+  // A return stay can be added as soon as the stay's fields are in (2026-11-03, operator: "after
+  // the user fills in check in, nights, check out, adults, children and room, the add a return stay
+  // can be enabled"). What is typed is saved first; the page stays where it is.
+  const saveForReturn = useMutation({
+    mutationFn: writeStay,
+    onSuccess: stayWasSaved,
+    onError: (e) => toastRefusal(e, "The stay could not be saved"),
+  });
   const save = useMutation({
-    mutationFn: () =>
-      updateEntryIntake(session!, entry.id, {
-        checkInDate: f.checkIn || undefined,
-        checkOutDate: checkOut || undefined,
-        adultCount: adultsN,
-        childCount: childN,
-        childAges: childN > 0 ? agesNum : [],
-        guestCount: adultsN + childN,
-        numberOfRooms: roomsN,
-        bedTypeRequest: Object.keys(bedMap).length
-          ? (bedMap as Record<string, number>)
-          : null,
-        expectedVersion: entry.version,
-      }),
+    mutationFn: writeStay,
     onSuccess: () => {
       toast.success("The stay is updated — the house is asked again for these dates");
-      refresh();
-      // The house is asked again by itself (2026-10-27, operator: "when I make edits to the stay
-      // and click Done, can it ask the house directly, so we can remove the Ask again button").
-      // The saved figures ride on the event, since the entry on screen is still the old one.
-      if (f.checkIn && checkOut)
-        window.dispatchEvent(
-          new CustomEvent(STAY_SAVED_EVENT, {
-            detail: { entryId: entry.id, checkInDate: f.checkIn, checkOutDate: checkOut, guestCount: adultsN + childN },
-          }),
-        );
+      stayWasSaved();
       // Done saved it; the work moves on to the house, which is being asked again for the stay as
       // it is now (2026-10-27, operator: "it took me to Wrap up, when it should ask the house again
       // and take me to the house section").
@@ -648,6 +660,26 @@ function TheStay({
       flow="stay"
       flowAfter="caller"
       title="The stay"
+      keepRight
+      right={
+        <Live>
+          <AddReturnStay
+            entry={entry}
+            kind="secondary"
+            shutReason={invalid}
+            fromAfter={checkOut || null}
+            prepare={
+              dirty && editable
+                ? () =>
+                    saveForReturn
+                      .mutateAsync()
+                      .then(() => true)
+                      .catch(() => false)
+                : undefined
+            }
+          />
+        </Live>
+      }
       // One Done (2026-10-27, operator: "remove Save the stay and merge it with Done, and bring
       // Undo beside Done"): with a change on the stay, Done saves it and moves on; Undo puts the
       // fields back. Without a change, the card's own Done simply folds it.
@@ -867,7 +899,6 @@ function TheStay({
           >
             One bill each
           </Button>
-          <AddReturnStay entry={entry} />
         </Live>
       </div>
     </StepCard>

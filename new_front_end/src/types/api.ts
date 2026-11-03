@@ -593,7 +593,7 @@ export type EntryCarryOver = {
   rooms: Array<{ fromRoomId: string; fromRoomNumber: string; roomId: string; roomNumber: string; priceMode: "KEEP" | "NEW_DATES" }>;
   /** The rooms' rows, on their new rooms — the Negotiation table's starting point. */
   compositions: unknown[];
-  discount: { discountPercent?: number; discountBasis?: string } | null;
+  discount: { discountPercent?: number; discountAmount?: number; discountBasis?: string } | null;
   billingModel: string | null;
   cancellation: { noShowTreatmentStatement: string; disclosedTerms?: unknown } | null;
   guestAgreedNote?: string | null;
@@ -603,6 +603,8 @@ export type EntryDetail = EntryListItem & {
   /** The booking these rooms were split off (2026-10-14) — a soft link. */
   splitFromEntryId?: string | null;
   carryOver?: EntryCarryOver | null;
+  /** The stay of this enquiry this one copies, until it is priced or changed by hand (2026-11-03). */
+  followsEntryId?: string | null;
   /** Who is arriving / who booked it — the booking's own contact (the agency's person on an agency booking). */
   contactPersonName?: string | null;
   contactPersonPhone?: string | null;

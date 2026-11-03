@@ -179,6 +179,55 @@
 .ds .trip-stay { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .ds .trip-stay > .meta { min-width: 52px; }
 .ds .trip-stay > :last-child { margin-left: auto; }
+
+/* Choosing a stay of the trip, in the booking head (2026-11-03). */
+.ds .stay-pick:not(.desk-root *) { display: inline-flex; align-items: center; gap: 8px; height: 30px; padding: 0 8px 0 10px; border: 1px solid var(--line-2); border-radius: var(--r-control); background: var(--surface); color: var(--ink); font: inherit; font-weight: 700; font-variant-numeric: tabular-nums; cursor: pointer; }
+.ds .stay-pick:hover:not(.desk-root *) { background: var(--surface-2); }
+.ds .stay-pick:active:not(.desk-root *) { background: var(--surface-3); }
+.ds .stay-pick:focus-visible:not(.desk-root *) { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ds .stay-pick[aria-expanded="true"]:not(.desk-root *) { border-color: var(--accent); box-shadow: inset 0 -3px 0 var(--accent); }
+.ds .stay-pick[aria-expanded="true"] .cb-chev { transform: rotate(-90deg); }
+.ds .stay-pick .meta { font-weight: 500; }
+.ds .stay-menu { position: fixed; z-index: 86; width: 430px; max-width: calc(100vw - 32px); max-height: 70vh; overflow: auto; padding: 4px; background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--r-card); box-shadow: 0 8px 24px rgba(9, 30, 66, 0.16), 0 0 1px rgba(9, 30, 66, 0.31); display: grid; gap: 2px; }
+.ds .stay-item:not(.desk-root *) { display: grid; gap: 6px; padding: 10px 12px; border-radius: 4px; color: var(--ink); text-decoration: none; }
+.ds a.stay-item:hover:not(.desk-root *) { background: var(--surface-2); }
+.ds a.stay-item:active:not(.desk-root *) { background: var(--surface-3); }
+.ds a.stay-item:focus-visible:not(.desk-root *) { outline: 2px solid var(--accent); outline-offset: -2px; }
+.ds .stay-item.here:not(.desk-root *) { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+.ds .stay-item .si-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ds .stay-item .si-id { font-variant-numeric: tabular-nums; color: var(--ink-2); }
+.ds .stay-item .si-line { font-size: var(--t-sm); color: var(--ink-2); }
+.ds .stay-item .si-line.stop-ink { color: var(--danger); font-weight: 600; }
+.ds .stay-item .si-short { font-size: var(--t-sm); color: var(--danger); font-weight: 700; }
+
+/* A return stay: how it is set up, and rooms that are not free for it (2026-11-03). */
+.ds .notice.follow:not(.desk-root *) { display: flex; align-items: center; justify-content: space-between; gap: var(--s3); border: 1px solid var(--line-2); border-left: 5px solid var(--accent); background: var(--accent-soft); color: var(--ink); padding: var(--s3) var(--s4); border-radius: var(--r-control); margin-bottom: var(--s3); }
+.ds .notice.follow .btn { flex: none; }
+.ds .rs-opts { display: grid; gap: var(--s2); }
+.ds .rs-opt { display: grid; gap: 4px; text-align: left; padding: 12px 14px; border: 1px solid var(--line-2); border-radius: var(--r-control); background: var(--surface); color: var(--ink); font: inherit; cursor: pointer; }
+.ds .rs-opt b { font-size: var(--t-lead); font-weight: 700; }
+.ds .rs-opt span { font-size: var(--t-sm); color: var(--ink-2); line-height: 1.45; }
+.ds .rs-opt:hover:not(:disabled) { background: var(--surface-2); border-color: var(--accent); }
+.ds .rs-opt:active:not(:disabled) { background: var(--surface-3); }
+.ds .rs-opt:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ds .rs-opt:disabled { opacity: 0.6; cursor: default; }
+.ds .short-alert { display: flex; align-items: flex-start; gap: var(--s3); border: 1px solid var(--danger-line); border-left: 5px solid var(--danger); background: var(--danger-soft); color: var(--danger); padding: var(--s3) var(--s4); border-radius: var(--r-control); font-weight: 600; }
+.ds .short-alert.standing { align-items: center; margin-bottom: var(--s3); }
+.ds .short-alert .short-lines { flex: 1; }
+.ds .short-mark { flex: none; width: 22px; height: 22px; border-radius: 50%; background: var(--danger); color: #fff; display: grid; place-items: center; font-weight: 800; font-size: 13px; }
+.ds .short-need { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s3); margin-top: var(--s3); }
+.ds .short-picks { display: flex; flex-wrap: wrap; gap: 6px; margin-top: var(--s2); }
+.ds .short-pick { display: inline-flex; align-items: center; gap: 6px; padding: 3px 4px 3px 10px; border: 1px solid var(--line-2); border-radius: var(--r-control); background: var(--surface-2); font-weight: 600; }
+.ds .short-pick button { width: 22px; height: 22px; border: 0; border-radius: 3px; background: transparent; color: var(--ink-2); font: inherit; font-size: 15px; line-height: 1; cursor: pointer; }
+.ds .short-pick button:hover { background: var(--surface-3); color: var(--danger); }
+.ds .rs-types { display: grid; gap: 6px; }
+.ds .rs-type { display: grid; grid-template-columns: 1fr auto minmax(120px, auto); align-items: center; gap: var(--s3); text-align: left; padding: 10px 12px; border: 1px solid var(--line-2); border-radius: var(--r-control); background: var(--surface); color: var(--ink); font: inherit; cursor: pointer; }
+.ds .rs-type:hover:not(:disabled) { background: var(--surface-2); border-color: var(--accent); }
+.ds .rs-type:active:not(:disabled) { background: var(--surface-3); }
+.ds .rs-type:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ds .rs-type:disabled { cursor: default; opacity: 0.7; }
+.ds .rs-type .ok-ink, .ds .rs-type .warn-ink, .ds .rs-type .stop-ink { font-weight: 700; }
+.ds .rs-type .rs-rate { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink-2); }
 /* This guest's other bookings (2026-10-19) — one row each; the ones over these nights stand out. */
 .ds .gb-rows { display: grid; gap: 6px; }
 .ds .gb-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 8px; border-radius: var(--r-control); border: 1px solid var(--line); }

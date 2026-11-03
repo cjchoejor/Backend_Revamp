@@ -23,7 +23,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button, Chip, Dialog, EmptyState, Icon } from "@/design-system";
 import { StandingChip, bookingHref } from "@/components/ds/ui";
-import { tripOf } from "@/components/ds/workspace/return-stay";
+import { FollowNotice, StayPicker, TripFollowPrompt, tripOf } from "@/components/ds/workspace/return-stay";
 import { useSession } from "@/hooks/use-session";
 import { useHotelDay } from "@/hooks/use-hotel-day";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
@@ -1889,10 +1889,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                     <span className="refno" title="The enquiry's number">
                       <b>{entry.inquiry?.id ?? "—"}</b>
                     </span>
-                    <span className="refid" title="The booking's number">
-                      {entry.id}
-                      {trip.stays.length > 1 ? <span className="meta"> · stay {trip.position} of {trip.stays.length}</span> : null}
-                    </span>
+                    <StayPicker entry={entry} />
                     {entry.guestProfile?.vipTier ? (
                       <Chip tone="accent" tier>
                         VIP
@@ -1965,6 +1962,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                   ) : null}
                   {!sealed ? <ActiveRoomMoves entryId={entry.id} tz={clock.tz} /> : null}
                   {!sealed ? <HeldPapersCard entryId={entry.id} tz={clock.tz} skip={reserveVoucherOnCard} /> : null}
+                  {!sealed && !viewingPast ? <FollowNotice entry={entry} /> : null}
+                  {!sealed ? <TripFollowPrompt entry={entry} /> : null}
                   <CaseCards
                     entry={entry}
                     step={viewing}

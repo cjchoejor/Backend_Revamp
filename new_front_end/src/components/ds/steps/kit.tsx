@@ -789,10 +789,13 @@ export function StepCard({
   noDoneBar = false,
   doneAction,
   revealAtTop = false,
+  keepRight = false,
 }: {
   title?: ReactNode;
   icon?: IconName;
   right?: ReactNode;
+  /** `right` stays on the card's top line while the section is folded to its summary. */
+  keepRight?: boolean;
   acts?: ReactNode;
   sealed?: boolean;
   quiet?: boolean;
@@ -926,7 +929,7 @@ export function StepCard({
             {metaInHelp ? <Help label="About this section">{meta}</Help> : null}
             {isCurrent ? <span className="flow-here">you are here</span> : null}
           </h4>
-          {waiting || folded ? null : right ? <div className="row-acts">{right}</div> : null}
+          {waiting || (folded && !keepRight) ? null : right ? <div className="row-acts">{right}</div> : null}
         </div>
       ) : null}
       {folded ? (

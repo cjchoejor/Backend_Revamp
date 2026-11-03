@@ -42,6 +42,15 @@ const WORDS: Record<string, string> = {
   "ENTRY.ROOMS_SPLIT_OFF": "Rooms split off to a booking of their own",
   "ENTRY.NIGHTS_SPLIT_OFF": "A night moved — the stay cut apart into bookings of their own",
   "ENTRY.CREATED_FROM_SPLIT": "Made from rooms split off another booking",
+  // A return stay, and one set up the same as another stay (2026-11-03).
+  "ENTRY.RETURN_STAY_ADDED": "Return stay added to this enquiry",
+  "ENTRY.CREATED_AS_RETURN_STAY": "Made as a return stay",
+  "ENTRY.FOLLOW_STARTED": "Set up the same as another stay",
+  "ENTRY.FOLLOW_APPLIED": "Copied from the other stay",
+  "ENTRY.FOLLOW_ROOMS_SHORT": "The other stay's rooms are not free on these nights",
+  "ENTRY.FOLLOW_ROOMS_CHOSEN": "Other room types chosen for this stay",
+  "ENTRY.FOLLOW_ENDED": "Stopped copying the other stay",
+  "ENTRY.FOLLOW_FAILED": "The other stay could not be copied",
   // One guest's two bookings (2026-10-19).
   "ENTRY.BOOKINGS_COMBINED": "The guest's other booking combined into this one",
   "ENTRY.COMBINED_INTO": "Combined into the guest's other booking",
@@ -408,6 +417,26 @@ export function traceDetail(ev: TraceEvent, names?: Partial<HistoryNames>): stri
     if (typeof p.reason === "string" && p.reason) bits.push(p.reason);
   }
   if (ev.eventType === "ENTRY.COMBINED_INTO" && typeof p.combinedInto === "string") bits.push(`into ${p.combinedInto}`);
+  if (ev.eventType === "ENTRY.RETURN_STAY_ADDED" && typeof p.returnStayEntryId === "string") bits.push(p.returnStayEntryId);
+  if (ev.eventType === "ENTRY.CREATED_AS_RETURN_STAY" && typeof p.fromEntryId === "string") bits.push(`from ${p.fromEntryId}`);
+  if (ev.eventType.startsWith("ENTRY.FOLLOW_")) {
+    if (typeof p.fromEntryId === "string") bits.push(p.fromEntryId);
+    if (Array.isArray(p.changed) && p.changed.length) bits.push((p.changed as string[]).join(", "));
+    if (Array.isArray(p.refusals) && p.refusals.length) bits.push((p.refusals as string[]).join(" · "));
+    if (Array.isArray(p.notes) && p.notes.length) bits.push((p.notes as string[]).join(" · "));
+    const why: Record<string, string> = {
+      PRICED: "this stay was priced",
+      MOVED_ON: "this stay moved on",
+      CHANGED_HERE: "changed on this stay",
+      ROOMS_CHOSEN_HERE: "rooms chosen on this stay",
+      GUEST_NAMED_HERE: "another guest named on this stay",
+      SET_ITS_OWN: "set to its own by the desk",
+      FIRST_STAY_ENDED: "the other stay ended",
+      FIRST_STAY_GONE: "the other stay no longer exists",
+    };
+    if (typeof p.cause === "string" && why[p.cause]) bits.push(why[p.cause]);
+    if (typeof p.message === "string" && p.message) bits.push(p.message);
+  }
   if (ev.eventType === "MULTI_BOOKING.ACKNOWLEDGED" && typeof p.note === "string" && p.note) bits.push(p.note);
   // Rooms split off to other dates (2026-10-14): which rooms, to which booking, its nights and guests.
   if (ev.eventType === "ENTRY.ROOMS_SPLIT_OFF" || ev.eventType === "ENTRY.CREATED_FROM_SPLIT") {
