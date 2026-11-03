@@ -44,6 +44,7 @@ import {
   switchStay,
   unparkEntry,
   type TimerRecordSummary,
+  replySettled,
 } from "@/lib/api/entries";
 import { closeEntryAtS9 } from "@/lib/api/post-stay";
 import { useClosureReadiness } from "@/hooks/use-closure-readiness";
@@ -617,7 +618,9 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
         from: "Set up",
         to: "Reserve",
         who: [[g?.title, g?.firstName, g?.lastName].filter(Boolean).join(" ") || null, updated.id].filter(Boolean).join(" · "),
-        next: "Next: send the confirmation voucher or not — if it goes out, record the guest's answer — then Move to Arrival.",
+        next: (commsQuery.data?.repliesOff ?? []).includes("CONFIRMATION_VOUCHER")
+          ? "Next: send the confirmation voucher or not, then Move to Arrival."
+          : "Next: send the confirmation voucher or not — if it goes out, record the guest's answer — then Move to Arrival.",
       });
     },
     // A refusal closes the dialog (2026-09-18): it stayed open over the page, hiding the very
@@ -982,7 +985,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
         (!segStart || (c.createdAt ?? "") >= segStart),
     )
     .sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""))[0];
-  const voucherAnswerRecorded = !voucherSent || voucherSent.acknowledgementStatus === "RECEIVED";
+  const voucherAnswerRecorded = !voucherSent || replySettled(voucherSent);
+  const voucherReplyOff = (commsQuery.data?.repliesOff ?? []).includes("CONFIRMATION_VOUCHER") || voucherSent?.acknowledgementStatus === "NOT_ASKED";
 
   const ready = readyToConfirm && reserveExtras.length === 0;
   // A no-show says so — the imported ones sit EXPIRED at the end, and read "Expired" (2026-09-18).
@@ -1086,7 +1090,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                         })()
                       : [{ label: "Checking what is left before the close…", met: false }]
                     : confirmedS4Active
-                      ? [{ label: "The guest's answer to the voucher, if it was sent", met: voucherAnswerRecorded }]
+                      ? [{ label: voucherReplyOff ? "No answer needed to the voucher" : "The guest's answer to the voucher, if it was sent", met: voucherAnswerRecorded }]
                       : viewing < currentOrder
                         ? []
                         : preconditionsFor(entry, step, hotelToday);

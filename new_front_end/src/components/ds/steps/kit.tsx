@@ -3096,6 +3096,11 @@ export function useCommunications(entryId: string) {
   });
 }
 
+/** Whether this email's reply is being asked for now — the admin console's setting (2026-11-03). */
+export function useReplyAsked(entryId: string, type: EntryCommunicationType) {
+  return !(useCommunications(entryId).data?.repliesOff ?? []).includes(type);
+}
+
 /** The newest dispatched paper of one kind within the current pass. */
 export function latestDispatched(items: EntryCommunication[] | undefined, type: EntryCommunicationType, sinceIso?: string | null) {
   return (items ?? [])
@@ -3164,6 +3169,13 @@ export function AnswerLine({
         <Icon name="check" /> Answered · {ANSWER_WORD[payload.acknowledgementMethod ?? ""] ?? "on record"}
         {c.acknowledgementReceivedAt ? ` · ${fmtStamp(c.acknowledgementReceivedAt, tz)}` : ""}
         {payload.verbatimNote ? <span className="meta"> · “{payload.verbatimNote}”</span> : null}
+      </span>
+    );
+  }
+  if (c.acknowledgementStatus === "NOT_ASKED") {
+    return (
+      <span className="sm">
+        <Icon name="check" /> {`Sent ${fmtStamp(sentAt ?? c.createdAt, tz)}`} · no answer needed
       </span>
     );
   }

@@ -925,6 +925,12 @@ export async function listCommunicationChannels(session: Session) {
 export async function updateCommunicationChannel(session: Session, channelId: string, body: Record<string, unknown>) {
   return apiRequest(`/api/admin/communication-config/channels/${encodeURIComponent(channelId)}`, { method: "PUT", session, body });
 }
+export async function getGuestReplySetting(session: Session, key: string) {
+  return apiRequest<{ value: unknown }>(`/api/admin/communication-config/guest-replies/${encodeURIComponent(key)}`, { session });
+}
+export async function setGuestReplySetting(session: Session, key: string, value: unknown) {
+  return apiRequest(`/api/admin/communication-config/guest-replies/${encodeURIComponent(key)}`, { method: "PUT", session, body: { value } });
+}
 export async function getAcknowledgementWindow(session: Session) {
   return apiRequest<{ value: unknown }>("/api/admin/communication-config/acknowledgement-window", { session });
 }

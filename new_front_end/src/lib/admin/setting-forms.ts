@@ -628,7 +628,39 @@ const CANCELLATION = page("/admin/cancellation-policies", "Cancellation policies
   },
 ]);
 
+/** One setting per email: must the desk note the guest's reply to it? (2026-11-03) */
+const guestReply = (key: string, title: string, about: string): Draft => ({
+  key,
+  title,
+  about,
+  form: { kind: "group", label: "", fields: [{ kind: "toggle", key: "required", label: "The guest's reply", on: "Must be noted", off: "Not needed" }] },
+  summary: (v) => ((v as { required?: boolean } | null)?.required === false ? "Not needed" : "Must be noted"),
+  fresh: { required: true },
+});
+
 const COMMUNICATION = page("/admin/communication-config", "Channels and replies", [
+  guestReply("guestReply.quotation", "Reply to a quotation", "Nothing is held up by this reply. Off stops the desk waiting for it, and its clock."),
+  guestReply(
+    "guestReply.proforma",
+    "Reply to a proforma invoice",
+    "Once a proforma is sent, the advance cannot be logged and the booking cannot be reserved until the reply is noted. Off lets both go ahead.",
+  ),
+  guestReply(
+    "guestReply.confirmationVoucher",
+    "Reply to a confirmation voucher",
+    "Once a voucher is sent, the booking cannot move to Arrival until the reply is noted. Off lets it move.",
+  ),
+  guestReply("guestReply.preArrivalMessage", "Reply to a pre-arrival message", "Nothing is held up by this reply. Off stops the desk waiting for it, and its clock."),
+  guestReply(
+    "guestReply.interimBill",
+    "Reply to a mid-stay bill",
+    "Once a mid-stay bill is sent, its payment cannot be logged until the reply is noted. Off lets the payment be logged.",
+  ),
+  guestReply(
+    "guestReply.taxInvoice",
+    "Reply to a tax invoice",
+    "Once a tax invoice is sent, a payment against it after the stay cannot be logged until the reply is noted. Off lets the payment be logged.",
+  ),
   {
     key: "acknowledgement.windowPerType",
     title: "How long to wait for an answer",

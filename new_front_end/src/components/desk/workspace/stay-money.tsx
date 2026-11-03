@@ -25,7 +25,7 @@ import {
   type InterimPaymentRow,
   type StayExtensionPreview,
 } from "@/lib/api/stay-money";
-import { listEntryCommunications } from "@/lib/api/entries";
+import { listEntryCommunications, replySettled } from "@/lib/api/entries";
 import { money } from "@/lib/desk/workspace";
 import { countdownTo } from "@/lib/desk/timers";
 import type { RoomCompositionInput } from "@/lib/api/quotations";
@@ -296,9 +296,12 @@ function InterimRequestPanel({
   });
   const answeredComm =
     (commsQuery.data?.items ?? []).find(
-      (c) => c.commType === "INTERIM_INVOICE" && c.sendStatus === "DISPATCHED" && (c.createdAt ?? "") >= request.requestedAt && c.acknowledgementStatus === "RECEIVED",
+      (c) => c.commType === "INTERIM_INVOICE" && c.sendStatus === "DISPATCHED" && (c.createdAt ?? "") >= request.requestedAt && replySettled(c),
     ) ?? null;
   const answered = !!answeredComm;
+  const replyOff = (commsQuery.data?.repliesOff ?? []).includes("INTERIM_INVOICE");
+  // Its reply is not asked for (the admin console's setting): the checklist has no such step.
+  const hideAnswer = answeredComm?.acknowledgementStatus === "NOT_ASKED" || (replyOff && !answered);
   const paid = request.state === "PAID";
   const invalidateAll = () => {
     for (const key of ["interim-payments", "stay-extensions", "entry", "entry-communications", "billing-summary", "entry-timers", "entry-trace", "invoice-preview"]) {
@@ -368,7 +371,7 @@ function InterimRequestPanel({
   const sendM = useMutation({
     mutationFn: () => dispatchInvoice(session!, request.invoiceId!, { dispatchedTo: sendTo.trim() || undefined }),
     onSuccess: () => {
-      toast.success("Interim invoice sent — next, record the guest's answer");
+      toast.success(replyOff ? "Interim invoice sent" : "Interim invoice sent — next, record the guest's answer");
       invalidateAll();
     },
     onError: (e) => toast.error(e instanceof ApiError ? e.message : "Could not send the interim invoice"),
@@ -697,7 +700,7 @@ function InterimRequestPanel({
 
   return (
     <div style={{ border: "1px solid var(--line-2)", borderRadius: "var(--r-sm)", padding: "4px 12px 8px", background: "var(--paper)" }}>
-      <StepList steps={[...leadSteps, billStep, promiseStep, sendStep, answerStep, payStep, ...tailSteps]} />
+      <StepList steps={[...leadSteps, billStep, promiseStep, sendStep, ...(hideAnswer ? [] : [answerStep]), payStep, ...tailSteps]} />
       {canWithdraw && !paid && (
         <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 4 }}>
           <button type="button" className="btn btn-ghost btn-sm" disabled={withdrawM.isPending} onClick={() => withdrawM.mutate()} title="Drops this bill — its invoice is superseded; nothing was taken">
@@ -766,7 +769,7 @@ export function InterimPaymentBlock({
         <Receipt style={{ width: 13, height: 13 }} />
         Interim payment
         <Help label="About interim payments">
-          A part payment during a long stay: ask for a share of the projected total, send the bill, record the guest&rsquo;s answer, then log the
+          A part payment during a long stay: ask for a share of the projected total, send the bill, record the guest&rsquo;s answer if it is asked for, then log the
           money. The night audit raises a prompt here every few nights on its own.
         </Help>
         {suggested && <span className="tag warn">Due</span>}

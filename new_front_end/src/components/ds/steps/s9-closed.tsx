@@ -322,7 +322,7 @@ function AfterTheStay({ entry, tz, openPane }: { entry: EntryDetail; tz: string;
 
   // Answer before money (the backend refuses a payment while the tax invoice's answer is open).
   const finalComm = latestDispatched(comms.data?.items, "FINAL_INVOICE");
-  const answerPending = !!finalComm && finalComm.acknowledgementStatus !== "RECEIVED";
+  const answerPending = !!finalComm && !(finalComm.acknowledgementStatus === "RECEIVED" || finalComm.acknowledgementStatus === "NOT_ASKED");
 
   const commissions = entry.commissionDueRecords ?? [];
   const followUps = entry.followUpTasks ?? [];

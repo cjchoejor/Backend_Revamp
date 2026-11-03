@@ -22,7 +22,7 @@ import { useHotelClock } from "@/hooks/use-hotel-clock";
 import { usePaymentStatus } from "@/hooks/use-payment-status";
 import { useStaffNames } from "@/hooks/use-desk-data";
 import { acknowledgeMultiBooking, resendConfirmationVoucher, verifyConference } from "@/lib/api/confirmation";
-import { getBillingSummary, getEntryTrace, getJourneySummary, type EntryCommunication } from "@/lib/api/entries";
+import { getBillingSummary, getEntryTrace, getJourneySummary, replySettled, type EntryCommunication } from "@/lib/api/entries";
 import { listSameGuestBookings } from "@/lib/api/guest-bookings";
 import { HeldPaperRow, HeldPapersCard, useHeldDocuments } from "@/components/ds/workspace/held-papers";
 import { confirmReadiness, reservedThisPass } from "@/lib/desk/workspace";
@@ -32,7 +32,7 @@ import { JourneySummaryPanel } from "@/components/desk/workspace/journey-summary
 import { PLAN_LABEL, dueLabel } from "@/components/desk/workspace/advance-settlement";
 import { PaymentPlanCard } from "./s3-money";
 import type { EntryDetail, PaymentStatusSummary, QuotationSummary } from "@/types/api";
-import { DsDialog, FactBox, FactLine, Facts, Fact, Live, OnRecord, PaperDrawer, StepCanvas, StepCard, Tool, AnswerLine, atLeast, currentPassStart, goToStepCard, latestDispatched, toastRefusal, useCommunications, useFinishWhenDone, useRefreshEntry, useStepMode, useStepPane, words, type FactState, type PaperRef, NightsChoice } from "./kit";
+import { DsDialog, FactBox, FactLine, Facts, Fact, Live, OnRecord, PaperDrawer, StepCanvas, StepCard, Tool, AnswerLine, useReplyAsked, atLeast, currentPassStart, goToStepCard, latestDispatched, toastRefusal, useCommunications, useFinishWhenDone, useRefreshEntry, useStepMode, useStepPane, words, type FactState, type PaperRef, NightsChoice } from "./kit";
 import { BookingOtherWays } from "./s4-other-ways";
 import { roomsHeldWord } from "./s2-shared";
 import { Help } from "@/components/ds/help";
@@ -216,7 +216,7 @@ function ReserveAdvance({ entry, past }: { entry: EntryDetail; past: boolean }) 
       refetching={payment.isFetching}
       onRefetch={() => void payment.refetch()}
       tz={clock.tz}
-      bill={{ proforma, dispatched: !!proforma?.dispatchedAt, answered: pfComm?.acknowledgementStatus === "RECEIVED" }}
+      bill={{ proforma, dispatched: !!proforma?.dispatchedAt, answered: replySettled(pfComm), notAsked: pfComm?.acknowledgementStatus === "NOT_ASKED" }}
       onChanged={() => {
         refresh();
         void payment.refetch();
@@ -417,7 +417,7 @@ function BeforeYouReserve({
     value: pi ? (
       <>
         {pi.invoiceNumber ?? pi.id} · {piSent ? `sent${pi.dispatchedTo ? ` to ${pi.dispatchedTo}` : ""}` : "generated, not sent"}
-        {piSent ? (piAnswer ? ` · ${piAnswer}` : " · their answer is not on record — Set up") : ""}
+        {piSent ? (piAnswer ? ` · ${piAnswer}` : piComm?.acknowledgementStatus === "NOT_ASKED" ? " · no answer needed" : " · their answer is not on record — Set up") : ""}
         {!metOr("Proforma sent to guest") ? " · money came in, so it must go out first" : ""}
       </>
     ) : (
@@ -978,6 +978,8 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
   // The voucher that went out, if any — a held or not-sent voucher is not one (2026-10-29).
   const voucherComm = latestDispatched(comms, "CONFIRMATION_VOUCHER", since);
   const answered = voucherComm?.acknowledgementStatus === "RECEIVED";
+  const notAsked = voucherComm?.acknowledgementStatus === "NOT_ASKED";
+  const replyAsked = useReplyAsked(entry.id, "CONFIRMATION_VOUCHER");
   const { past } = useStepMode();
   const afterReserve = !["S3", "S4"].includes(entry.currentStage);
   // The answer, once on record, finishes the section — as Set up's proforma does (2026-10-29).
@@ -985,9 +987,9 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
   const loading = trace.isLoading || heldQ.isLoading || !comms;
   // Sending is the desk's choice (2026-10-29, operator: "sending the confirmation voucher is not
   // mandatory, but if sent, the reply is"). Held: the choice is offered, and nothing waits on it.
-  const decideFirst = !past && !afterReserve && !answered && !loading && !!held;
+  const decideFirst = !past && !afterReserve && !answered && !notAsked && !loading && !!held;
   // Gone out and not answered: the answer is next, and Arrival waits for it (Set up's answer box).
-  const answerDue = !past && !afterReserve && !loading && !held && !!voucherComm && !answered;
+  const answerDue = !past && !afterReserve && !loading && !held && !!voucherComm && !answered && !notAsked;
   const otherDue = !past && !afterReserve && !loading && otherHeld.length > 0;
   // The page lands here (2026-10-29, operator: "by default at first move the screen to there so the
   // user knows what needs to be done") — once, when there is something to decide or answer.
@@ -1047,8 +1049,8 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
       summary={
         otherDue
           ? undefined
-          : answered
-          ? `${res.confirmationVoucherNumber ?? res.id} · ${onWhatsApp ? "sent on WhatsApp" : "sent"} · the guest's answer recorded`
+          : answered || notAsked
+          ? `${res.confirmationVoucherNumber ?? res.id} · ${onWhatsApp ? "sent on WhatsApp" : "sent"} · ${notAsked ? "no answer needed" : "the guest's answer recorded"}`
           : notSent && !voucherComm
             ? `${res.confirmationVoucherNumber ?? res.id} · not sent to the guest — no answer needed`
             : undefined
@@ -1117,8 +1119,8 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
         <div className="voucher-send" role="status">
           <div className="notice next">
             <span>
-              The voucher is made and nothing was sent. Sending it is up to you — by email, on WhatsApp, or not at all. Once it goes out,
-              Arrival waits for the guest&rsquo;s answer to it.
+              The voucher is made and nothing was sent. Sending it is up to you — by email, on WhatsApp, or not at all.
+              {replyAsked ? <> Once it goes out, Arrival waits for the guest&rsquo;s answer to it.</> : null}
             </span>
           </div>
           <Live>
@@ -1143,10 +1145,14 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
           </div>
           <AnswerLine entryId={entry.id} type="CONFIRMATION_VOUCHER" sinceIso={since} what="the voucher" tz={tz} {...answerWords} />
         </div>
+      ) : notAsked ? (
+        <div className="sm" style={{ marginTop: 12 }}>
+          Sent, and no answer is needed.
+        </div>
       ) : notSent && !voucherComm && !loading ? (
         <div className="sm" style={{ marginTop: 12 }}>
           Not sent to the guest, so no answer is needed.
-          <Help label="If it is sent later">Send it if the guest asks for it — Arrival then waits for their answer to it.</Help>
+          {replyAsked ? <Help label="If it is sent later">Send it if the guest asks for it — Arrival then waits for their answer to it.</Help> : null}
         </div>
       ) : null}
       {otherDue ? (

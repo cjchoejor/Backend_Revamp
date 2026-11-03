@@ -6,6 +6,7 @@
 import type { QueryClient } from "@tanstack/react-query";
 import {
   getAcknowledgementWindow,
+  getGuestReplySetting,
   getAiAgentConfig,
   getCancellationCharges,
   getCommercialConfig,
@@ -20,6 +21,7 @@ import {
   listPolicies,
   savePolicy,
   setAcknowledgementWindow,
+  setGuestReplySetting,
   setCancellationCharges,
   setCommercialConfig,
   setConfiguration,
@@ -118,6 +120,12 @@ export function routeFor(session: Session, key: string): SettingRoute {
       // Whatever else the rule holds, its description included, goes back as it came.
       save: (value) => savePolicy(session, { policyId: key, policyClass: policy.policyClass, policyDefinition: value }),
       invalidates: [["admin", "policies"]],
+    };
+  }
+  if (key.startsWith("guestReply.")) {
+    return {
+      load: async () => ({ value: (await getGuestReplySetting(session, key)).value ?? undefined }),
+      save: (v) => setGuestReplySetting(session, key, v),
     };
   }
 

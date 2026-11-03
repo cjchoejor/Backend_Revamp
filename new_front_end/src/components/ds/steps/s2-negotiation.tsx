@@ -39,7 +39,7 @@ import { ChangeConfiguration, DecidedConfigurationChanges, WaitingConfigurationC
 import { operativeRoomCompositions, roomNightsByRoom, roomStayRangesByRoom } from "@/lib/desk/party-rooms";
 import { fmtDateTime, fmtStamp, money, plural } from "@/lib/ds/format";
 import { optionSelectedRoomIds, preferredHoldRoomId, type EntryDetail, type QuotationSummary, type SpeculativeHoldSummary } from "@/types/api";
-import { Choice, DsDialog, Live, Notice, OtherWaysTabs, ChangeBookingMenu, StageActs, useOpenAlsoWay, PaperDrawer, QuotationSendDialog, ReasonDialog, SeeRow, StepCanvas, StepCard, Tool, atLeast, toastRefusal, type PaperRef, useBedPlan, useOpenFileTab, useRefreshEntry, useStepFlow, useFlowCard, anchorFor, revealCard, words, parkTab, declineTab } from "./kit";
+import { Choice, latestDispatched, useCommunications, DsDialog, Live, Notice, OtherWaysTabs, ChangeBookingMenu, StageActs, useOpenAlsoWay, PaperDrawer, QuotationSendDialog, ReasonDialog, SeeRow, StepCanvas, StepCard, Tool, atLeast, toastRefusal, type PaperRef, useBedPlan, useOpenFileTab, useRefreshEntry, useStepFlow, useFlowCard, anchorFor, revealCard, words, parkTab, declineTab } from "./kit";
 import { usePublishPriceDraft } from "@/lib/ds/stay-price";
 import { Help } from "@/components/ds/help";
 import type { ChangeBookingItem } from "./kit";
@@ -1056,6 +1056,7 @@ function QuotationCard({
   const [paper, setPaper] = useState<PaperRef | null>(null);
   const [why, setWhy] = useState(false);
   const [answerOpen, setAnswerOpen] = useState(false);
+  const replyNotAsked = latestDispatched(useCommunications(entry.id).data?.items, "QUOTATION")?.acknowledgementStatus === "NOT_ASKED";
   const [how, setHow] = useState<AnswerHow | null>(null);
   const [said, setSaid] = useState("");
   const [closeLoopOpen, setCloseLoopOpen] = useState(false);
@@ -1230,7 +1231,7 @@ function QuotationCard({
         ) : q.state === "SENT" ? (
           <>
             <span className="sm">
-              <Icon name="clock" /> Awaiting their answer{q.validUntil ? ` — the price holds until ${fmtDateTime(q.validUntil, tz)}` : ""}
+              <Icon name="clock" /> {replyNotAsked ? "Sent · no answer needed" : "Awaiting their answer"}{q.validUntil ? ` — the price holds until ${fmtDateTime(q.validUntil, tz)}` : ""}
             </span>
             <Live>
               {!answerOpen ? (
@@ -1242,12 +1243,14 @@ function QuotationCard({
                     onClick={editable ? () => setAnswerOpen(true) : undefined}
                     reason={editable ? undefined : "not at this step"}
                   />
-                  <SeeRow
-                    label="No answer — the FOM decides"
-                    note="Closes the reply window as the FOM's decision, with a reason."
-                    onClick={editable && elevated ? () => setCloseLoopOpen(true) : undefined}
-                    reason={!editable ? "not at this step" : elevated ? undefined : "closing the reply window is the FOM's call"}
-                  />
+                  {replyNotAsked ? null : (
+                    <SeeRow
+                      label="No answer — the FOM decides"
+                      note="Closes the reply window as the FOM's decision, with a reason."
+                      onClick={editable && elevated ? () => setCloseLoopOpen(true) : undefined}
+                      reason={!editable ? "not at this step" : elevated ? undefined : "closing the reply window is the FOM's call"}
+                    />
+                  )}
                 </div>
               ) : (
                 <div className="bind provisional" style={{ display: "grid", gap: 8 }}>

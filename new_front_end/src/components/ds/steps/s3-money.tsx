@@ -109,7 +109,7 @@ export function PaymentPlanCard({
   onRefetch: () => void;
   tz: string;
   /** This pass's proforma, whether it went out, and whether the guest's answer is on record. */
-  bill: { proforma: InvoiceSummary | null; dispatched: boolean; answered: boolean };
+  bill: { proforma: InvoiceSummary | null; dispatched: boolean; answered: boolean; notAsked?: boolean };
   /** Raised when the desk says yes to an advance after the terms: the advance box opens. */
   askAdvance?: number;
   /**
@@ -325,7 +325,7 @@ export function PaymentPlanCard({
                     <span className="meta">
                       {" "}
                       · sent{bill.proforma.dispatchedAt ? ` ${fmtStamp(bill.proforma.dispatchedAt, tz)}` : ""} ·{" "}
-                      {bill.answered ? "their answer is on record" : "awaiting their answer"}
+                      {bill.notAsked ? "no answer needed" : bill.answered ? "their answer is on record" : "awaiting their answer"}
                     </span>
                   ) : (
                     <span className="meta"> · generated, not sent</span>
@@ -403,7 +403,7 @@ export function PaymentPlanCard({
           <div className="notice next" role="status" style={{ marginTop: 12, marginBottom: 0 }}>
             <span>
               <b>Record the payment now.</b>{" "}
-              {setUp ? "The guest has the proforma and their answer is on record — " : ""}
+              {setUp ? (bill.notAsked ? "The guest has the proforma — " : "The guest has the proforma and their answer is on record — ") : ""}
               {money(status!.shortfall, cur)} of the advance is still to come.
             </span>
           </div>

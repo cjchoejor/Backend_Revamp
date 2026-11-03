@@ -75,8 +75,12 @@ export type EntryCommunication = {
   replacedBy?: string | null;
 };
 
+/** Nothing more is wanted from the guest on this paper: they answered, or their reply is not asked for. */
+export const replySettled = (c?: { acknowledgementStatus: string | null } | null) =>
+  c?.acknowledgementStatus === "RECEIVED" || c?.acknowledgementStatus === "NOT_ASKED";
+
 export async function listEntryCommunications(session: Session, entryId: string) {
-  return apiRequest<{ entryId: string; items: EntryCommunication[] }>(
+  return apiRequest<{ entryId: string; items: EntryCommunication[]; repliesOff?: EntryCommunicationType[] }>(
     `/api/entries/${entryId}/communications`,
     { session },
   );

@@ -36,7 +36,7 @@ import {
   type GuestRequest,
   type NoteAssignee,
 } from "@/lib/api/booking-notes";
-import { acknowledgeCommunication, getEntryTrace, type EntryBillingSummary, type EntryCommunication } from "@/lib/api/entries";
+import { acknowledgeCommunication, getEntryTrace, replySettled, type EntryBillingSummary, type EntryCommunication } from "@/lib/api/entries";
 import { updateInquiryNotes } from "@/lib/api/inquiries";
 import { resendConfirmationVoucher } from "@/lib/api/confirmation";
 import { fmtDateTime, fmtDay, fmtStamp, hotelFormParts, money, plural } from "@/lib/ds/format";
@@ -1217,7 +1217,7 @@ export function DocumentsView({
   const vouchers = Math.max(entry.reservations?.length ?? 0, entry.reservation?.id ? 1 : 0) + (entry.status === "CANCELLED" ? 1 : 0);
   const sent = communications.filter((c) => c.direction !== "INBOUND");
   // A replaced paper awaits no answer — only the one in force does (2026-10-13).
-  const awaiting = sent.filter((c) => c.sendStatus === "DISPATCHED" && c.acknowledgementStatus !== "RECEIVED" && !c.superseded && !c.held).length;
+  const awaiting = sent.filter((c) => c.sendStatus === "DISPATCHED" && !replySettled(c) && !c.superseded && !c.held).length;
   const count = (n: number) => (n ? <span className="n">{n}</span> : null);
   return (
     <>
@@ -1382,6 +1382,8 @@ function SentPapers({
                         </span>
                       ) : null}
                     </span>
+                  ) : c.acknowledgementStatus === "NOT_ASKED" ? (
+                    <Chip tone="quiet">no answer needed</Chip>
                   ) : c.held ? (
                     <Chip tone="quiet">held — not sent yet</Chip>
                   ) : sent ? (

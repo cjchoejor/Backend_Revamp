@@ -69,6 +69,7 @@ const WORDS: Record<string, string> = {
   "ROOM_MOVE.RESOLVED": "Room move closed",
   "DOCUMENT.HELD": "Paper held for the desk to send or not",
   "COMMUNICATION.REPLY_NO_LONGER_AWAITED": "No answer needed any more — the paper was replaced",
+  "COMMUNICATION.REPLY_NOT_ASKED": "No answer asked for — the reply to this paper is switched off",
   "COMMITTED_HOLD.RELEASED_ON_ROOM_CHANGE": "Rooms let go for the room change",
   "ROOM.BED_TYPE_RESET_TO_USUAL": "Room's beds back to its usual setup",
   "RESERVATION.CONFIRMATION_VOUCHER_REMADE": "Confirmation voucher made again",
@@ -389,6 +390,7 @@ export function traceDetail(ev: TraceEvent, names?: Partial<HistoryNames>): stri
     if (p.reconfirmation === true) bits.push("confirmed again");
   }
   if (ev.eventType === "ENTRY.ROOM_CHANGED") bits.push(...roomChangeDetail(p as RoomChangedPayload));
+  if (ev.eventType === "COMMUNICATION.REPLY_NOT_ASKED") bits.push(PAPER_WORD[str("commType") ?? ""] ?? "paper");
   // A reply no longer awaited names the paper and what replaced it (2026-10-13).
   if (ev.eventType === "COMMUNICATION.REPLY_NO_LONGER_AWAITED") {
     const commType = str("commType") ?? "";
