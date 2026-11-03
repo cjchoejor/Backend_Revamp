@@ -1,4 +1,5 @@
 import type { PrismaClient } from "@prisma/client";
+import { guestDisplayName } from "../lib/guest-display-name.js";
 import { EntryStatus, Stage } from "@prisma/client";
 import { dispatchStageEmailBestEffort } from "../services/infrastructure/stage-email-helpers.js";
 import { renderFeedbackSolicitationEmail } from "../services/infrastructure/stage-email-templates.js";
@@ -79,7 +80,7 @@ export async function runFeedbackSolicitationWorker(prisma: PrismaClient, input:
 
   // Phase 3 — outbound feedback solicitation email (best-effort, post-tx).
   const displayName =
-    [entry.guestProfile?.firstName, entry.guestProfile?.lastName].filter(Boolean).join(" ") || "Guest";
+    guestDisplayName(entry.guestProfile) || "Guest";
   const ci = entry.reservation?.frozenCheckInDate ?? entry.checkInDate ?? new Date();
   const co = entry.reservation?.frozenCheckOutDate ?? entry.checkOutDate ?? new Date(ci.getTime() + 86400_000);
   const content = renderFeedbackSolicitationEmail({

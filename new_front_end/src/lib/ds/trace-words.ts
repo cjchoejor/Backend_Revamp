@@ -42,6 +42,15 @@ const WORDS: Record<string, string> = {
   "ENTRY.ROOMS_SPLIT_OFF": "Rooms split off to a booking of their own",
   "ENTRY.NIGHTS_SPLIT_OFF": "A night moved — the stay cut apart into bookings of their own",
   "ENTRY.CREATED_FROM_SPLIT": "Made from rooms split off another booking",
+  // A return stay, and one set up the same as another stay (2026-11-03).
+  "ENTRY.RETURN_STAY_ADDED": "Return stay added to this enquiry",
+  "ENTRY.CREATED_AS_RETURN_STAY": "Made as a return stay",
+  "ENTRY.FOLLOW_STARTED": "Set up the same as another stay",
+  "ENTRY.FOLLOW_APPLIED": "Copied from the other stay",
+  "ENTRY.FOLLOW_ROOMS_SHORT": "The other stay's rooms are not free on these nights",
+  "ENTRY.FOLLOW_ROOMS_CHOSEN": "Other room types chosen for this stay",
+  "ENTRY.FOLLOW_ENDED": "Stopped copying the other stay",
+  "ENTRY.FOLLOW_FAILED": "The other stay could not be copied",
   // One guest's two bookings (2026-10-19).
   "ENTRY.BOOKINGS_COMBINED": "The guest's other booking combined into this one",
   "ENTRY.COMBINED_INTO": "Combined into the guest's other booking",
@@ -60,6 +69,7 @@ const WORDS: Record<string, string> = {
   "ROOM_MOVE.RESOLVED": "Room move closed",
   "DOCUMENT.HELD": "Paper held for the desk to send or not",
   "COMMUNICATION.REPLY_NO_LONGER_AWAITED": "No answer needed any more — the paper was replaced",
+  "COMMUNICATION.REPLY_NOT_ASKED": "No answer asked for — the reply to this paper is switched off",
   "COMMITTED_HOLD.RELEASED_ON_ROOM_CHANGE": "Rooms let go for the room change",
   "ROOM.BED_TYPE_RESET_TO_USUAL": "Room's beds back to its usual setup",
   "RESERVATION.CONFIRMATION_VOUCHER_REMADE": "Confirmation voucher made again",
@@ -91,6 +101,9 @@ const WORDS: Record<string, string> = {
   "FOLIO.CORRECTION_POSTED": "Charge corrected",
   "CHECK_IN.COMPLETED": "Checked in",
   "CHECK_IN.KEYS_ISSUED": "Keys handed over",
+  "ROOM_ASSIGNMENT.HANDED_OUT": "Room handed out",
+  "ROOM_ASSIGNMENT.FIGURES_REPAIRED": "Room put right — it was handed out without its priced figures",
+  "BOOKING_ROOMS.QUIET_MOVED": "Room changed within its type",
   "ROOM_KEY.ISSUED": "Key handed over",
   "ROOM_KEY.RETURNED": "Key returned",
   "NIGHT_AUDIT.COMPLETED": "Night audit run",
@@ -380,6 +393,20 @@ export function traceDetail(ev: TraceEvent, names?: Partial<HistoryNames>): stri
     if (p.reconfirmation === true) bits.push("confirmed again");
   }
   if (ev.eventType === "ENTRY.ROOM_CHANGED") bits.push(...roomChangeDetail(p as RoomChangedPayload));
+  if (ev.eventType === "ROOM_ASSIGNMENT.HANDED_OUT" && Array.isArray(p.rooms)) {
+    const nos = (p.rooms as Array<{ roomNumber?: string }>).map((r) => r.roomNumber).filter((x): x is string => !!x);
+    if (nos.length) bits.push(`${nos.length > 1 ? "rooms" : "room"} ${nos.join(", ")}`);
+  }
+  if (ev.eventType === "ROOM_ASSIGNMENT.FIGURES_REPAIRED" && str("fromRoomNumber") && str("toRoomNumber")) {
+    bits.push(`room ${str("fromRoomNumber")} → ${str("toRoomNumber")}`);
+    if (Number(p.nightsBilledFlat) > 0) bits.push(`${p.nightsBilledFlat} night(s) already billed Nu ${str("shortNet")} short, before service charge and GST`);
+  }
+  if (ev.eventType === "BOOKING_ROOMS.QUIET_MOVED" && Array.isArray(p.moves)) {
+    const moves = (p.moves as Array<{ fromRoomNumber?: string; toRoomNumber?: string }>).map((m) => `room ${m.fromRoomNumber} → ${m.toRoomNumber}`);
+    bits.push(...moves);
+    if (str("reason")) bits.push(str("reason")!);
+  }
+  if (ev.eventType === "COMMUNICATION.REPLY_NOT_ASKED") bits.push(PAPER_WORD[str("commType") ?? ""] ?? "paper");
   // A reply no longer awaited names the paper and what replaced it (2026-10-13).
   if (ev.eventType === "COMMUNICATION.REPLY_NO_LONGER_AWAITED") {
     const commType = str("commType") ?? "";
@@ -408,6 +435,26 @@ export function traceDetail(ev: TraceEvent, names?: Partial<HistoryNames>): stri
     if (typeof p.reason === "string" && p.reason) bits.push(p.reason);
   }
   if (ev.eventType === "ENTRY.COMBINED_INTO" && typeof p.combinedInto === "string") bits.push(`into ${p.combinedInto}`);
+  if (ev.eventType === "ENTRY.RETURN_STAY_ADDED" && typeof p.returnStayEntryId === "string") bits.push(p.returnStayEntryId);
+  if (ev.eventType === "ENTRY.CREATED_AS_RETURN_STAY" && typeof p.fromEntryId === "string") bits.push(`from ${p.fromEntryId}`);
+  if (ev.eventType.startsWith("ENTRY.FOLLOW_")) {
+    if (typeof p.fromEntryId === "string") bits.push(p.fromEntryId);
+    if (Array.isArray(p.changed) && p.changed.length) bits.push((p.changed as string[]).join(", "));
+    if (Array.isArray(p.refusals) && p.refusals.length) bits.push((p.refusals as string[]).join(" · "));
+    if (Array.isArray(p.notes) && p.notes.length) bits.push((p.notes as string[]).join(" · "));
+    const why: Record<string, string> = {
+      PRICED: "this stay was priced",
+      MOVED_ON: "this stay moved on",
+      CHANGED_HERE: "changed on this stay",
+      ROOMS_CHOSEN_HERE: "rooms chosen on this stay",
+      GUEST_NAMED_HERE: "another guest named on this stay",
+      SET_ITS_OWN: "set to its own by the desk",
+      FIRST_STAY_ENDED: "the other stay ended",
+      FIRST_STAY_GONE: "the other stay no longer exists",
+    };
+    if (typeof p.cause === "string" && why[p.cause]) bits.push(why[p.cause]);
+    if (typeof p.message === "string" && p.message) bits.push(p.message);
+  }
   if (ev.eventType === "MULTI_BOOKING.ACKNOWLEDGED" && typeof p.note === "string" && p.note) bits.push(p.note);
   // Rooms split off to other dates (2026-10-14): which rooms, to which booking, its nights and guests.
   if (ev.eventType === "ENTRY.ROOMS_SPLIT_OFF" || ev.eventType === "ENTRY.CREATED_FROM_SPLIT") {

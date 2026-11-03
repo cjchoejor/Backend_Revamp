@@ -199,7 +199,7 @@ export function VersionsTab({ entityType, entityId, invalidateOnRestore, renderP
       {snapshotsQuery.isLoading && <p className="admin-muted text-sm">Loading…</p>}
 
       {snapshots.length === 0 && !snapshotsQuery.isLoading && (
-        <p className="admin-muted text-sm">No prior versions exist. Edit and save the entity to start building history.</p>
+        <p className="admin-muted text-sm">No earlier versions yet. Saving a change makes the first one.</p>
       )}
 
       <div className="space-y-2">

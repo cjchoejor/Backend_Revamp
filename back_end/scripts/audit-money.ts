@@ -35,6 +35,7 @@
  *      per-room buckets + unassigned = whole)
  *   H. Global tallies (printed at the end)
  */
+import { resolveCompositionBasis } from "../src/lib/party-seating.js";
 import { PrismaClient, Prisma } from "@prisma/client";
 import { round2, sumMoney, toDecimal, ZERO } from "../src/lib/money.js";
 import {
@@ -73,8 +74,10 @@ async function main() {
   const entries = await prisma.entry.findMany({
     include: {
       folio: { include: { lines: true, payments: true } },
-      reservation: { select: { frozenCheckInDate: true, frozenCheckOutDate: true, frozenRate: true } },
+      reservation: { select: { frozenCheckInDate: true, frozenCheckOutDate: true, frozenRate: true, frozenCommercialTerms: true } },
       roomAssignments: { include: { room: { select: { roomNumber: true } } } },
+      segments: { orderBy: { segmentNumber: "desc" }, take: 1, select: { id: true } },
+      quotations: { select: { id: true, segmentId: true, state: true, versionNumber: true, createdAt: true, commercialTerms: true } },
     },
   });
   const writeOffs = await prisma.writeOffRecord.groupBy({ by: ["folioId"], _sum: { writtenOffAmount: true } });
@@ -93,6 +96,20 @@ async function main() {
     const payments = folio.payments ?? [];
     const isImported = lines.some((l) => l.description.includes("(imported)"));
     const tag = `${folio.id} (${entry.id} ${entry.status}/${entry.currentStage}, ${folio.state}${isImported ? ", imported" : ""})`;
+
+    // A12 — a room handed out with no priced figures, on a booking priced by the table. The night
+    // audit bills such a room at the flat room rate, so its extra bed and meals are never billed
+    // (found 2026-11-03: priced Nu 3,118.50, billed Nu 2,079.00 for the night).
+    const unpriced = entry.roomAssignments.filter((a) => a.frozenSubtotal == null);
+    if (unpriced.length > 0 && (resolveCompositionBasis(entry).compositions?.length ?? 0) > 0) {
+      const live = entry.status === "ACTIVE" || entry.status === "PARKED";
+      add(
+        live ? "CRITICAL" : "WARN",
+        "A12_ROOM_NOT_PRICED",
+        tag,
+        `${unpriced.map((a) => `Room ${a.room.roomNumber}`).join(", ")} handed out with no priced figures on a booking priced by the table — the night audit bills the flat rate ${money(D(entry.reservation?.frozenRate))} for it`,
+      );
+    }
 
     // A1 — stored balance vs the recompute rule (mirror of recomputeFolioOutstandingBalance).
     // Imported folios are their own class: the legacy importer brought the CHARGES across but

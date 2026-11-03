@@ -50,6 +50,21 @@ export const purgeStaffRequestSchema = z.object({
   confirm: z.literal("PURGE"),
 });
 
+/** `cancellation.policyTiers` as Policy 35 reads it: amounts in money, tiers by hours before check-in. */
+export const cancellationChargesRequestSchema = z.object({
+  value: z
+    .object({
+      sameDayPenaltyAmount: z.number().min(0),
+      preArrivalPenaltyAmount: z.number().min(0).nullable().optional(),
+      postCheckInEarlyDeparturePenaltyAmount: z.number().min(0).nullable().optional(),
+      tiers: z
+        .array(z.object({ minHoursBeforeCheckIn: z.number().min(0), penaltyAmount: z.number().min(0) }))
+        .optional(),
+    })
+    .strict(),
+  notes: z.string().optional().nullable(),
+});
+
 export const deficientCategoriesRequestSchema = z.object({
   configValue: z.array(
     z.object({

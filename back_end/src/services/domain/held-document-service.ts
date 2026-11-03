@@ -1,4 +1,5 @@
 import type { PrismaClient } from "@prisma/client";
+import { guestDisplayName } from "../../lib/guest-display-name.js";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { resendConfirmationVoucher } from "./s4-confirmation-service.js";
 import { armVoucherReplyWindow } from "./communication-service.js";
@@ -50,9 +51,9 @@ async function defaultRecipientFor(prisma: PrismaClient, row: { entryId: string;
   }
   const entry = await prisma.entry.findUnique({
     where: { id: row.entryId },
-    select: { guestProfile: { select: { email: true, firstName: true, lastName: true } } },
+    select: { guestProfile: { select: { email: true, title: true, firstName: true, lastName: true } } },
   });
-  const name = [entry?.guestProfile?.firstName, entry?.guestProfile?.lastName].filter(Boolean).join(" ").trim();
+  const name = guestDisplayName(entry?.guestProfile);
   return { to: entry?.guestProfile?.email ?? null, whose: entry?.guestProfile?.email ? (name ? `${name} (the guest)` : "the guest") : null };
 }
 

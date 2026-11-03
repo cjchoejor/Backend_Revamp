@@ -1,4 +1,5 @@
 import type { PrismaClient } from "@prisma/client";
+import { guestDisplayName } from "../../lib/guest-display-name.js";
 import { Prisma, Stage } from "@prisma/client";
 import { ValidationError } from "../../lib/errors.js";
 import { readOptionSelected } from "../../lib/option-selected-reader.js";
@@ -195,7 +196,7 @@ async function planNightMove(prisma: PrismaClient, actor: Actor, input: NightMov
   const stage = entry.currentStage;
   const isFom = (RANK[actor.actorLevel] ?? 0) >= 2;
   const guest =
-    [entry.guestProfile?.firstName, entry.guestProfile?.lastName].filter(Boolean).join(" ").trim() ||
+    guestDisplayName(entry.guestProfile) ||
     [entry.inquiry?.callerFirstName, entry.inquiry?.callerLastName].filter(Boolean).join(" ").trim() ||
     null;
 

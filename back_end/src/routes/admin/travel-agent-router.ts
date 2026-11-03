@@ -63,6 +63,10 @@ adminTravelAgentRouter.post("/travel-agents/:id/deactivate", L4, async (req, res
   try { res.json(await svc.deactivateTravelAgent(prisma, req.params.id, req.actor!.actorId)); } catch (e) { next(e); }
 });
 
+adminTravelAgentRouter.delete("/travel-agents/:id", L4, async (req, res, next) => {
+  try { res.json(await svc.deleteTravelAgent(prisma, req.params.id, req.actor!.actorId)); } catch (e) { next(e); }
+});
+
 adminTravelAgentRouter.post("/travel-agents/:id/reactivate", L4, async (req, res, next) => {
   try { res.json(await svc.reactivateTravelAgent(prisma, req.params.id, req.actor!.actorId)); } catch (e) { next(e); }
 });

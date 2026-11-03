@@ -276,19 +276,21 @@ export function s3Readiness(
         .filter((i) => i.state !== "SUPERSEDED" && (!segStartIso || i.createdAt >= segStartIso))
         .some((i) => i.dispatchedAt != null || i.state !== "DRAFT");
       if (!dispatchedThisSegment) return [];
+      const inForce = (opts?.communications ?? []).find(
+        (c) =>
+          c.commType === "PROFORMA_INVOICE" &&
+          c.direction === "OUTBOUND" &&
+          c.sendStatus === "DISPATCHED" &&
+          c.inForce !== false &&
+          (!segStartIso || (c.createdAt ?? "") >= segStartIso),
+      );
+      // Its reply is not asked for (the admin console's setting): there is nothing to wait for.
+      if (inForce?.acknowledgementStatus === "NOT_ASKED") return [];
       return [
         {
           label: "Guest's answer to the proforma recorded",
           card: "proforma",
-          met:
-            (opts?.communications ?? []).find(
-              (c) =>
-                c.commType === "PROFORMA_INVOICE" &&
-                c.direction === "OUTBOUND" &&
-                c.sendStatus === "DISPATCHED" &&
-                c.inForce !== false &&
-                (!segStartIso || (c.createdAt ?? "") >= segStartIso),
-            )?.acknowledgementStatus === "RECEIVED",
+          met: inForce?.acknowledgementStatus === "RECEIVED",
         },
       ];
     })()),

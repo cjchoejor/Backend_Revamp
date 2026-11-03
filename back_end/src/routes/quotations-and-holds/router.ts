@@ -16,6 +16,7 @@ import { validateBody } from "../../middleware/validate-body.js";
 import * as s1EntryService from "../../services/domain/s1-entry-service.js";
 import * as holdService from "../../services/domain/hold-service.js";
 import * as quotationService from "../../services/domain/quotation-service.js";
+import { afterStayChanged } from "../../services/domain/trip-follow-service.js";
 
 export const quotationsAndHoldsRouter = Router();
 
@@ -40,6 +41,7 @@ quotationsAndHoldsRouter.post("/entries/:id/quotations", requireActorLevel("L1")
             ...req.body,
             actorLevel: req.actor!.level,
           });
+    await afterStayChanged(prisma, { actorId: req.actor!.actorId, actorLevel: req.actor!.level }, req.params.id, "PRICED");
     res.status(201).json(created);
   } catch (e) {
     next(e);
@@ -52,6 +54,7 @@ quotationsAndHoldsRouter.post("/quotations/:id/supersede", requireActorLevel("L1
       ...req.body,
       actorLevel: req.actor!.level,
     });
+    await afterStayChanged(prisma, { actorId: req.actor!.actorId, actorLevel: req.actor!.level }, created.entryId, "PRICED");
     res.status(201).json(created);
   } catch (e) {
     next(e);

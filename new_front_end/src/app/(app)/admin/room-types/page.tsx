@@ -1,5 +1,7 @@
 "use client";
 
+import { AdmField as Field } from "@/components/admin/field-title";
+import { Help } from "@/components/ds/help";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -107,22 +109,17 @@ export default function AdminRoomTypesPage() {
   return (
     <div className="space-y-8 pb-16">
       <div>
-        <p className="admin-eyebrow mb-2">Domain 02 · Inventory</p>
-        <h1 className="admin-display text-3xl">Room types</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Per-type physical capacity limits. The booking flow enforces these at S1 intake (over-capacity =
-          block) and the calendar grid respects them for filtering.
-        </p>
-        <p className="mt-1 text-sm text-muted-foreground">
-          <strong>Beds:</strong> any room can be made up in any bed setup unless you narrow it here. The{" "}
-          <em>usual setup</em> is how rooms of this type are normally made up; when a guest asks for another
-          (a King in a Standard room), the desk changes that room&apos;s setup for the stay. A single room can
-          narrow its own list on the Rooms page.
-        </p>
+        <p className="admin-eyebrow mb-2">Rooms and spaces</p>
+        <h1 className="admin-display flex items-center gap-2 text-3xl">
+          Room types
+          <Help label="Room types">
+            How many people each kind of room sleeps. An inquiry over these limits is refused. Any room can be made up in any bed setup unless you narrow it here. The usual setup is how rooms of this type are normally made up; when a guest asks for another, the desk changes that room for the stay. A single room can narrow its own list on the Rooms page.
+          </Help>
+        </h1>
       </div>
 
       <div className="admin-panel space-y-4 p-5">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">New room type</h2>
+        <h2 className="admin-display text-lg">New room type</h2>
         <div className="grid gap-3 md:grid-cols-2">
           <Field label="Code" hint="Short code, e.g. DLX">
             <input className="admin-input" placeholder="DLX" value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} />
@@ -157,7 +154,7 @@ export default function AdminRoomTypesPage() {
               onChange={(v) => setForm({ ...form, defaultBedType: v })}
             />
           </Field>
-          <Field label="Can be made up as" hint="Every box ticked = any setup">
+          <Field group label="Can be made up as" hint="Every box ticked = any setup">
             <AllowedBedSetups
               vocabulary={bedTypes}
               value={form.allowedBedTypes}
@@ -280,16 +277,6 @@ export default function AdminRoomTypesPage() {
         </table>
       </div>
     </div>
-  );
-}
-
-function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
-  return (
-    <label className="block">
-      <div className="text-[11px] font-medium text-muted-foreground">{label}</div>
-      {hint && <div className="text-[10px] text-muted-foreground/70">{hint}</div>}
-      <div className="mt-1">{children}</div>
-    </label>
   );
 }
 

@@ -1,5 +1,7 @@
 "use client";
 
+import { AdmField } from "@/components/admin/field-title";
+import { Help } from "@/components/ds/help";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -17,6 +19,8 @@ import {
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
 import { useConfirm } from "@/components/providers/dialog-provider";
+import { NotUsedYet } from "@/components/admin/settings-list";
+import { codeWords } from "@/lib/admin/setting-fields";
 
 const RATE_PLAN_TYPES = ["INDIVIDUAL", "PROMOTIONAL", "TIER", "CHANNEL", "RACK"] as const;
 type RatePlanTypeLiteral = (typeof RATE_PLAN_TYPES)[number];
@@ -131,53 +135,64 @@ export default function AdminRatePlansPage() {
   return (
     <div className="space-y-8 pb-16">
       <div>
-        <p className="admin-eyebrow mb-2">Domain 03 · Commercial</p>
+        <p className="admin-eyebrow mb-2">Rates and limits</p>
         <h1 className="admin-display text-3xl">Rate plans</h1>
-        <p className="admin-muted mt-1">
-          Walk-in plan:{" "}
-          <span className="font-mono">{walkInQuery.data?.ratePlan?.name ?? (walkInId ? walkInId : "not set")}</span>
-        </p>
+        <p className="admin-muted mt-2 text-sm">Walk-in plan: <strong>{walkInQuery.data?.ratePlan?.name ?? "none chosen"}</strong></p>
+        <NotUsedYet>Nothing prices from the walk-in plan yet, so choosing one changes nothing. A walk-in is priced from each room type's own plan.</NotUsedYet>
       </div>
 
-      <div className="admin-panel grid gap-4 p-5 md:grid-cols-3">
-        <p className="admin-eyebrow col-span-full">
+      <div className="admin-panel grid gap-4 p-5 md:grid-cols-3" data-edit-form>
+        <p className="admin-eyebrow col-span-full flex w-fit items-center gap-2">
           {editingId ? "Edit rate plan" : "Create rate plan"}
+          {editingId ? (
+            <Help label="Editing a rate plan">
+              A reserved booking keeps the rate it was reserved on. A booking not reserved yet takes the new figure the next time it is priced.
+            </Help>
+          ) : null}
         </p>
-        {editingId && (
-          <p className="admin-muted col-span-full -mt-2 text-xs">
-            Confirmed reservations carry a frozen rate snapshot from S4 and won't be affected. Only un-confirmed
-            bookings (S1–S3) pick up the new value on their next pricing read.
-          </p>
-        )}
-        <input className="admin-input" placeholder="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-        <select
-          className="admin-select"
-          value={form.type}
-          onChange={(e) => setForm({ ...form, type: e.target.value as RatePlanTypeLiteral })}
-          title="Type drives priority in the PricingPipelineEngine (INDIVIDUAL → PROMOTIONAL → TIER → CHANNEL → RACK)."
-        >
-          {RATE_PLAN_TYPES.map((t) => (
-            <option key={t} value={t}>{t}</option>
-          ))}
-        </select>
-        <select
-          className="admin-select"
-          value={form.roomTypeId}
-          onChange={(e) => setForm({ ...form, roomTypeId: e.target.value })}
-          title="Pick a room type to bind this rate plan to those rooms only. Universal plans apply to every room type."
-        >
-          <option value="">Applies to: all room types (universal)</option>
-          {roomTypes.map((rt) => (
-            <option key={rt.id} value={rt.id}>
-              {rt.code} — {rt.name}
-            </option>
-          ))}
-        </select>
-        <input className="admin-input" placeholder="Currency" value={form.currency} onChange={(e) => setForm({ ...form, currency: e.target.value })} />
-        <input className="admin-input" placeholder="Base rate (nightly)" type="number" value={form.baseRate} onChange={(e) => setForm({ ...form, baseRate: e.target.value })} />
-        <input className="admin-input" placeholder="Minimum sell rate (MSR, optional)" type="number" value={form.msr} onChange={(e) => setForm({ ...form, msr: e.target.value })} title="MSR is the floor that discounts + override paths may not cross." />
-        <input className="admin-input" placeholder="Override margin (e.g. 0.05)" type="number" step="0.01" value={form.overrideMargin} onChange={(e) => setForm({ ...form, overrideMargin: e.target.value })} />
-        <input className="admin-input md:col-span-3" placeholder="Description (optional)" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+        <AdmField label="Name">
+          <input className="admin-input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+        </AdmField>
+        <AdmField label="Kind of plan" help="When a stay fits more than one plan, the first kind in this order wins: individual, promotional, tier, channel, rack.">
+          <select
+            className="admin-select"
+            value={form.type}
+            onChange={(e) => setForm({ ...form, type: e.target.value as RatePlanTypeLiteral })}
+          >
+            {RATE_PLAN_TYPES.map((t) => (
+              <option key={t} value={t}>{codeWords(t)}</option>
+            ))}
+          </select>
+        </AdmField>
+        <AdmField label="Applies to" help="Pick a room type to bind this rate plan to those rooms only. Otherwise it applies to every room type.">
+          <select
+            className="admin-select"
+            value={form.roomTypeId}
+            onChange={(e) => setForm({ ...form, roomTypeId: e.target.value })}
+          >
+            <option value="">All room types</option>
+            {roomTypes.map((rt) => (
+              <option key={rt.id} value={rt.id}>
+                {rt.code} — {rt.name}
+              </option>
+            ))}
+          </select>
+        </AdmField>
+        <AdmField label="Currency">
+          <input className="admin-input" value={form.currency} onChange={(e) => setForm({ ...form, currency: e.target.value })} />
+        </AdmField>
+        <AdmField label="Base rate" hint="a night">
+          <input className="admin-input" type="number" value={form.baseRate} onChange={(e) => setForm({ ...form, baseRate: e.target.value })} />
+        </AdmField>
+        <AdmField label="Minimum sell rate" hint="optional" help="The floor that a discount or an override may not go below.">
+          <input className="admin-input" type="number" value={form.msr} onChange={(e) => setForm({ ...form, msr: e.target.value })} />
+        </AdmField>
+        <AdmField label="Override margin" hint="e.g. 0.05">
+          <input className="admin-input" type="number" step="0.01" value={form.overrideMargin} onChange={(e) => setForm({ ...form, overrideMargin: e.target.value })} />
+        </AdmField>
+        <AdmField label="Description" hint="optional" className="md:col-span-3">
+          <input className="admin-input" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+        </AdmField>
         <div className="col-span-full flex flex-wrap gap-2">
           <button type="button" className="admin-btn w-fit" disabled={saveMutation.isPending || !form.name} onClick={() => saveMutation.mutate()}>
             {editingId ? "Save changes" : "Create rate plan"}
@@ -218,7 +233,7 @@ export default function AdminRatePlansPage() {
             {items.map((rp: RatePlanAdmin) => (
               <tr key={rp.id}>
                 <td>{rp.name}</td>
-                <td className="font-mono text-[10px]">{rp.type}</td>
+                <td className="text-xs">{codeWords(rp.type)}</td>
                 <td className="text-xs">
                   {rp.roomTypeId ? (
                     <span className="font-mono">{roomTypeNameById.get(rp.roomTypeId) ?? rp.roomTypeId}</span>
@@ -270,7 +285,6 @@ export default function AdminRatePlansPage() {
                           msr: rp.msr ?? "",
                           overrideMargin: rp.overrideMargin ?? "",
                         });
-                        if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
                       }}
                     >
                       Edit

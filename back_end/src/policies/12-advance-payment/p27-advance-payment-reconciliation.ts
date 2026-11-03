@@ -1,3 +1,4 @@
+import { replySettled } from "../../lib/guest-reply-settings.js";
 import { PolicyGateBlockedError } from "../../lib/errors.js";
 
 /**
@@ -46,7 +47,7 @@ export function enforceProformaGuestAnswerRecordedBeforeAdvancePayment(input: {
 }) {
   const comm = input.latestDispatchedProformaComm;
   if (!comm) return;
-  if (comm.acknowledgementStatus === "RECEIVED") return;
+  if (replySettled(comm.acknowledgementStatus)) return;
   throw new PolicyGateBlockedError(
     "PROFORMA_GUEST_ANSWER_REQUIRED_FOR_ADVANCE",
     "Note down the guest's response to the proforma first — record their answer (verbal or written), then log the money received",

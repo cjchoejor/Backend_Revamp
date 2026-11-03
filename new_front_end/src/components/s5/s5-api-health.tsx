@@ -36,26 +36,23 @@ export function S5ApiHealth() {
   if (err) {
     return (
       <section className="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm">
-        <strong>API</strong>: not reachable ({err}). Start the backend on port 4000 (or set{" "}
-        <code className="text-xs">BACKEND_URL</code>) and run <code className="text-xs">npm run dev</code> in{" "}
-        <code className="text-xs">front_end</code>.
+        <strong>The server cannot be reached</strong> ({err}). The desk cannot read or save anything until it is back.
       </section>
     );
   }
 
   if (!data) {
-    return <p className="text-sm text-muted-foreground">Checking API…</p>;
+    return <p className="text-sm text-muted-foreground">Checking the server…</p>;
   }
 
   return (
     <section
       className={cn(
         "rounded-lg border p-4 text-sm",
-        data.ok ? "border-success/40 bg-accent" : "border-muted bg-muted",
+        data.ok ? "border-[var(--success-line)] bg-[var(--success-soft)]" : "border-[var(--line-2)] bg-[var(--surface-2)]",
       )}
     >
-      <strong>API</strong>: {data.ok ? "healthy" : "unknown"}
-      {data.scope ? ` (${data.scope})` : ""}
+      <strong>{data.ok ? "The server is running" : "The server did not say how it is"}</strong>
     </section>
   );
 }

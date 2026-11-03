@@ -17,9 +17,12 @@ import {
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
 import { useConfirm, usePrompt } from "@/components/providers/dialog-provider";
+import { Help } from "@/components/ds/help";
+import { DurationInput, durationInWords } from "@/components/admin/duration-input";
 
 type ActorLevel = "L1" | "L2" | "L3" | "L4";
 const LEVELS: ActorLevel[] = ["L1", "L2", "L3", "L4"];
+const LEVEL_WORD: Record<string, string> = { L1: "Front desk", L2: "FOM", L3: "GM", L4: "Administrator" };
 
 const PIN_REGEX = /^\d{4}$/;
 const USERNAME_REGEX = /^[a-z0-9._-]{3,32}$/i;
@@ -37,8 +40,8 @@ export default function AdminStaffPage() {
     actorLevel: "L1" as ActorLevel,
     roleId: "",
     pin: "",
-    idleThresholdSeconds: "600",
-    hardLogoutThresholdSeconds: "28800",
+    idleThresholdSeconds: 600,
+    hardLogoutThresholdSeconds: 28800,
   });
 
   const staffQuery = useQuery({
@@ -81,8 +84,8 @@ export default function AdminStaffPage() {
         role: roleRow.roleCode,
         roleId: form.roleId,
         pin: form.pin,
-        idleThresholdSeconds: Number.parseInt(form.idleThresholdSeconds, 10),
-        hardLogoutThresholdSeconds: Number.parseInt(form.hardLogoutThresholdSeconds, 10),
+        idleThresholdSeconds: form.idleThresholdSeconds,
+        hardLogoutThresholdSeconds: form.hardLogoutThresholdSeconds,
       });
     },
     onSuccess: () => {
@@ -140,12 +143,11 @@ export default function AdminStaffPage() {
   return (
     <div className="space-y-8 pb-16">
       <div>
-        <p className="admin-eyebrow mb-2">Domain 01 · Identity</p>
-        <h1 className="admin-display text-3xl">Staff registry</h1>
-        <p className="admin-muted mt-2 max-w-2xl text-sm">
-          Full lifecycle: create staff, assign role, reset 4-digit PIN, edit name / username, deactivate (soft), or
-          delete permanently. Deactivating a user terminates all active sessions immediately.
-        </p>
+        <p className="admin-eyebrow mb-2">The hotel and its people</p>
+        <h1 className="admin-display flex items-center gap-2 text-3xl">
+          Staff
+          <Help label="Staff">Add staff, give them a role, reset a PIN, change a name, turn someone off or delete them. Turning someone off signs them out at once.</Help>
+        </h1>
       </div>
 
       <div className="admin-panel grid gap-4 p-5 md:grid-cols-2">
@@ -194,7 +196,7 @@ export default function AdminStaffPage() {
           >
             {LEVELS.map((l) => (
               <option key={l} value={l}>
-                {l}
+                {LEVEL_WORD[l]}
               </option>
             ))}
           </select>
@@ -210,13 +212,13 @@ export default function AdminStaffPage() {
             <option value="">— pick a role —</option>
             {rolesForLevel.map((r) => (
               <option key={r.id} value={r.id}>
-                {r.displayName} · {r.roleCode}
+                {r.displayName}
               </option>
             ))}
           </select>
           {form.actorLevel && rolesForLevel.length === 0 && (
             <p className="mt-1 text-[10px] text-amber-500">
-              No roles configured for level {form.actorLevel}. Create one on /admin/roles first.
+              No roles for {LEVEL_WORD[form.actorLevel]} yet. Add one under Roles first.
             </p>
           )}
         </label>
@@ -234,25 +236,22 @@ export default function AdminStaffPage() {
           />
         </label>
 
-        <label className="col-span-full text-xs opacity-70 md:col-span-1">
-          Idle lock (seconds)
-          <input
-            className="admin-input mt-1"
-            placeholder="600"
-            value={form.idleThresholdSeconds}
-            onChange={(e) => setForm({ ...form, idleThresholdSeconds: e.target.value })}
-          />
-        </label>
+        <div className="sf-field col-span-full md:col-span-1">
+          <span className="sf-label">
+            Locks after
+            <Help label="Locks after">How long the terminal can sit untouched before it locks and asks for the PIN again.</Help>
+          </span>
+          <DurationInput base="seconds" units={["hours", "minutes"]} aria-label="Locks after" value={form.idleThresholdSeconds} onChange={(n) => setForm({ ...form, idleThresholdSeconds: n })} />
+        </div>
 
-        <label className="col-span-full text-xs opacity-70 md:col-span-1">
-          Hard logout (seconds)
-          <input
-            className="admin-input mt-1"
-            placeholder="28800"
-            value={form.hardLogoutThresholdSeconds}
-            onChange={(e) => setForm({ ...form, hardLogoutThresholdSeconds: e.target.value })}
-          />
-        </label>
+        <div className="sf-field col-span-full md:col-span-1">
+          <span className="sf-label">
+            Signs out after
+            <Help label="Signs out after">How long a sign-in lasts before the person has to sign in again, however busy they are. It must be longer than the lock.</Help>
+          </span>
+          <DurationInput base="seconds" units={["hours", "minutes"]} aria-label="Signs out after" value={form.hardLogoutThresholdSeconds} onChange={(n) => setForm({ ...form, hardLogoutThresholdSeconds: n })} />
+          {form.hardLogoutThresholdSeconds <= form.idleThresholdSeconds ? <span className="sf-error" role="alert">It must be longer than the lock.</span> : null}
+        </div>
 
         <button
           type="button"
@@ -417,7 +416,7 @@ function StaffRow(props: {
               >
                 {LEVELS.map((l) => (
                   <option key={l} value={l}>
-                    {l}
+                    {LEVEL_WORD[l]}
                   </option>
                 ))}
               </select>
@@ -432,7 +431,7 @@ function StaffRow(props: {
                 <option value="">— none —</option>
                 {props.editingRolesForLevel.map((r) => (
                   <option key={r.id} value={r.id}>
-                    {r.displayName} · {r.roleCode}
+                    {r.displayName}
                   </option>
                 ))}
               </select>
@@ -457,10 +456,12 @@ function StaffRow(props: {
         {row.email && <div className="text-xs opacity-70">{row.email}</div>}
       </td>
       <td className="font-mono text-xs">{row.username}</td>
-      <td>{row.actorLevel}</td>
+      <td>{LEVEL_WORD[row.actorLevel] ?? row.actorLevel}</td>
       <td className="font-mono text-xs">{row.roleRef?.displayName ?? row.role}</td>
       <td className="text-xs">
-        idle {row.idleThresholdSeconds}s / hard {row.hardLogoutThresholdSeconds}s
+        Locks after {durationInWords(row.idleThresholdSeconds, "seconds").toLowerCase()}
+        <br />
+        Signs out after {durationInWords(row.hardLogoutThresholdSeconds, "seconds").toLowerCase()}
       </td>
       <td>
         {row.isActive ? (

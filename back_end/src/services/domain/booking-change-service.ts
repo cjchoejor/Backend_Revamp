@@ -110,7 +110,7 @@ export async function changeBookingInPlace(
       quotations: { orderBy: { createdAt: "desc" } },
       committedHold: true,
       folio: true,
-      guestProfile: { select: { firstName: true, lastName: true } },
+      guestProfile: { select: { title: true, firstName: true, lastName: true } },
     },
   });
   if (!entry) throw new NotFoundError("Entry");

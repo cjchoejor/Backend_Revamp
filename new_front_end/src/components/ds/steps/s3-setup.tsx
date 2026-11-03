@@ -42,7 +42,8 @@ import {
 import { guestNameOf } from "@/lib/ds/status";
 import { fmtDateTime, fmtRange, fmtStamp, hotelFormParts, money, plural } from "@/lib/ds/format";
 import { optionSelectedRoomIds, preferredHoldRoomId, type EntryDetail, type InvoiceSummary, type PaymentStatusSummary } from "@/types/api";
-import { AnswerLine, Choice, DsDialog, Fact, FactBox, Facts, Live, OnRecord, PaperDrawer, ReasonDialog, SeeRow, StepCanvas, StepCard, atLeast, currentPassStart, toastRefusal, useCommunications, useRefreshEntry, useStepMode, words, type PaperRef, type ChangeBookingItem, ChangeBookingMenu, StageActs, useFlowUnsaved, useFinishWhenDone, useStepFlow, goToStepCard, revealCard, useOpenAlsoWay, useStepPane, OtherWaysTabs, InlineWay, ShutWay, parkTab, NightsChoice } from "./kit";
+import { replySettled } from "@/lib/api/entries";
+import { AnswerLine, useReplyAsked, Choice, DsDialog, Fact, FactBox, Facts, Live, OnRecord, PaperDrawer, ReasonDialog, SeeRow, StepCanvas, StepCard, atLeast, currentPassStart, toastRefusal, useCommunications, useRefreshEntry, useStepMode, words, type PaperRef, type ChangeBookingItem, ChangeBookingMenu, StageActs, useFlowUnsaved, useFinishWhenDone, useStepFlow, goToStepCard, revealCard, useOpenAlsoWay, useStepPane, OtherWaysTabs, InlineWay, ShutWay, parkTab, NightsChoice } from "./kit";
 import { SendToField, useSendTo } from "./s8-parts";
 import { CancellationFiguresLine, WaiverTick, useRefundHow } from "./cancel-figures";
 import { CompetingClaimsCard, passesOf, roomsHeldWord, useRoomNumbers, useRoomTypeNames } from "./s2-shared";
@@ -179,7 +180,8 @@ export function S3SetUp({
         (!passStart || (c.createdAt ?? "") >= passStart),
     )
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
-  const answered = latestProformaComm?.acknowledgementStatus === "RECEIVED";
+  const answered = replySettled(latestProformaComm);
+  const replyNotAsked = latestProformaComm?.acknowledgementStatus === "NOT_ASKED";
 
   const acceptedQuote = (entry.quotations ?? []).find((q) => q.state === "ACCEPTED" && (!passes.current || q.segmentId === passes.current.id));
   const isGroupLike = entry.useType === "GROUP" || entry.useType === "CONFERENCE";
@@ -304,6 +306,7 @@ export function S3SetUp({
         status={status}
         passStart={passStart}
         answered={answered}
+        replyNotAsked={replyNotAsked}
         onChanged={changed}
       />
 
@@ -316,7 +319,7 @@ export function S3SetUp({
         refetching={payment.isFetching}
         onRefetch={() => void payment.refetch()}
         tz={tz}
-        bill={{ proforma: currentProforma, dispatched, answered }}
+        bill={{ proforma: currentProforma, dispatched, answered, notAsked: replyNotAsked }}
         askAdvance={askAdvance}
         onRoomsBlocked={(until) => setBlockAsk((prev) => ({ until, n: (prev?.n ?? 0) + 1 }))}
         onChanged={changed}
@@ -1289,6 +1292,7 @@ function ProformaCard({
   status,
   passStart,
   answered,
+  replyNotAsked,
   onChanged,
 }: {
   entry: EntryDetail;
@@ -1298,8 +1302,10 @@ function ProformaCard({
   current: InvoiceSummary | null;
   status: PaymentStatusSummary | undefined;
   passStart: string | null;
-  /** The guest's answer to this pass's proforma is on record. */
+  /** Nothing more is wanted from the guest on this pass's proforma. */
   answered: boolean;
+  /** …because their reply is not asked for (the admin console's setting). */
+  replyNotAsked: boolean;
   onChanged: () => void;
 }) {
   const { session } = useSession();
@@ -1312,6 +1318,7 @@ function ProformaCard({
   // address, never the traveller's by default (2026-09-18) — the backend applies the same rule.
   const [to, setTo] = useSendTo(entry);
   const finish = useFinishWhenDone("proforma");
+  const replyAsked = useReplyAsked(entry.id, "PROFORMA_INVOICE");
 
   const draft = proformas.find((i) => i.state === "DRAFT") ?? null;
   const sendTarget = draft ?? proformas[0] ?? null;
@@ -1321,10 +1328,12 @@ function ProformaCard({
       return dispatchInvoice(session!, sendTarget.id, { dispatchedTo: to.trim() || undefined, nightsEach });
     },
     onSuccess: () => {
-      toast.success("The proforma is sent — record the guest's answer when it comes");
+      toast.success(replyAsked ? "The proforma is sent — record the guest's answer when it comes" : "The proforma is sent");
       setSendOpen(false);
       setJustSent(true);
       onChanged();
+      // No answer to wait for: the section is finished, as the answer finishes it otherwise.
+      if (!replyAsked) finish(advanceAsked ? { next: "money" } : undefined);
     },
     onError: (e) => toastRefusal(e, "The proforma could not be sent"),
   });
@@ -1408,7 +1417,7 @@ function ProformaCard({
       summary={[
         asks,
         shown.dispatchedAt ? `sent ${fmtStamp(shown.dispatchedAt, tz)}` : "not sent",
-        shown.dispatchedAt ? (answered ? "the guest's answer recorded" : "the guest's answer awaited") : null,
+        shown.dispatchedAt ? (replyNotAsked ? "no answer needed" : answered ? "the guest's answer recorded" : "the guest's answer awaited") : null,
       ]
         .filter(Boolean)
         .join(" · ")}
@@ -1477,15 +1486,15 @@ function ProformaCard({
             onAnswered={() => finish(advanceAsked ? { next: "money" } : undefined)}
           />
         </div>
-      ) : (
+      ) : replyAsked || sentLive ? (
         <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid var(--line)", display: "grid", gap: 6 }}>
           <span className="sm" style={{ fontWeight: 600 }}>
             The guest&rsquo;s answer
-            <Help label="About the answer">Needed before Reserve once the proforma has been sent.</Help>
+            {replyAsked ? <Help label="About the answer">Needed before Reserve once the proforma has been sent.</Help> : null}
           </span>
           <AnswerLine entryId={entry.id} type="PROFORMA_INVOICE" sinceIso={passStart} what="the proforma" tz={tz} onAnswered={finish} />
         </div>
-      )}
+      ) : null}
 
       {proformas.length > 1 ? (
         <table className="table compact" style={{ marginTop: 12 }}>
@@ -1541,7 +1550,7 @@ function ProformaCard({
           title={`Send proforma ${sendTarget.invoiceNumber ?? sendTarget.id}`}
           caseLines={[
             asks ? `It ${asks}` : "The advance it asks for is being read",
-            "Once it goes out, the guest's answer is needed before money is logged",
+            ...(replyAsked ? ["Once it goes out, the guest's answer is needed before money is logged"] : []),
           ]}
           footer={
             <>

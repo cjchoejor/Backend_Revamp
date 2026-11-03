@@ -76,7 +76,7 @@ export async function runReadinessCheck(prisma: PrismaClient) {
     id: "RATE_PLAN_REGISTRY",
     label: "Active rate plans (PricingPipelineEngine source)",
     status: ratePlanCount > 0 ? "OK" : "MISSING",
-    detail: ratePlanCount > 0 ? `${ratePlanCount} active rate plan(s) in registry` : "No active rate plans — S1 indicative + S2 quotation pricing will fail",
+    detail: ratePlanCount > 0 ? `${ratePlanCount} in use` : "None in use: the desk cannot price a booking",
   });
 
   const staffCount = await prisma.staffUser.count({ where: { isActive: true, actorLevel: "L4" } });
@@ -84,7 +84,7 @@ export async function runReadinessCheck(prisma: PrismaClient) {
     id: "L4_STAFF",
     label: "Active L4 administrators",
     status: staffCount > 0 ? "OK" : "WARN",
-    detail: staffCount > 0 ? `${staffCount} active L4 user(s)` : "No active L4 staff — admin writes need an L4 actor",
+    detail: staffCount > 0 ? `${staffCount} on file` : "None on file: nobody can change settings",
   });
 
   const roomCount = await prisma.room.count();
@@ -92,7 +92,7 @@ export async function runReadinessCheck(prisma: PrismaClient) {
     id: "ROOM_INVENTORY",
     label: "Room inventory",
     status: roomCount > 0 ? "OK" : "WARN",
-    detail: `${roomCount} room(s) registered`,
+    detail: `${roomCount} on file`,
   });
 
   // Mode dependencies — every ACTIVE ModeConfiguration declares a `featureDependencies` list.
@@ -118,7 +118,7 @@ export async function runReadinessCheck(prisma: PrismaClient) {
     status: unknownDeps.length === 0 ? "OK" : "WARN",
     detail:
       unknownDeps.length === 0
-        ? `${activeModes.length} active mode(s); all declared dependencies recognised.`
+        ? `${activeModes.length} in use`
         : `${unknownDeps.length} unknown dependency reference(s): ${unknownDeps.map((u) => `${u.mode}→${u.dependency}`).join(", ")}. Update KNOWN_FEATURE_DEPENDENCIES if these are real subsystems, or edit the mode to remove typos.`,
   });
 

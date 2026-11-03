@@ -1,12 +1,14 @@
 "use client";
 
+import { AdmField } from "@/components/admin/field-title";
+import { Help } from "@/components/ds/help";
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { ApiError } from "@/lib/api/client";
 import { getHotelProfile, updateHotelProfile, type HotelProfileAdmin } from "@/lib/api/admin";
 import { useSession } from "@/hooks/use-session";
-import { SmartConfigEditor } from "@/components/admin/smart-config-editor";
+import { Control } from "@/components/admin/setting-form";
 import { VersionsTab } from "@/components/admin/versions-tab";
 import { TimeInput } from "@/components/ds/date-input";
 
@@ -90,9 +92,11 @@ export default function AdminHotelProfilePage() {
   return (
     <div className="space-y-6 pb-16">
       <div>
-        <p className="admin-eyebrow mb-2">Domain 01 · Identity</p>
-        <h1 className="admin-display text-3xl">Hotel profile</h1>
-        <p className="admin-muted mt-2 max-w-2xl text-sm">Single-row property identity record used across templates and invoices.</p>
+        <p className="admin-eyebrow mb-2">The hotel and its people</p>
+        <h1 className="admin-display flex items-center gap-2 text-3xl">
+          Hotel profile
+          <Help label="Hotel profile">The hotel's details, printed on papers and emails.</Help>
+        </h1>
       </div>
 
       {header}
@@ -106,19 +110,35 @@ export default function AdminHotelProfilePage() {
       {draft && (
         <div className="admin-panel grid gap-4 p-5 md:grid-cols-2">
           <h2 className="admin-display col-span-full text-lg">Core fields</h2>
-          <input className="admin-input" value={draft.hotelName ?? ""} onChange={(e) => setDraft({ ...draft, hotelName: e.target.value })} placeholder="Hotel name" />
-          <input className="admin-input" value={draft.primaryEmail ?? ""} onChange={(e) => setDraft({ ...draft, primaryEmail: e.target.value })} placeholder="Primary email" />
-          <input className="admin-input md:col-span-2" value={draft.registeredAddress ?? ""} onChange={(e) => setDraft({ ...draft, registeredAddress: e.target.value })} placeholder="Registered address" />
-          <input className="admin-input md:col-span-2" value={draft.tradingAddress ?? ""} onChange={(e) => setDraft({ ...draft, tradingAddress: e.target.value || null })} placeholder="Trading address (optional)" />
-          <input className="admin-input" value={draft.timeZone ?? ""} onChange={(e) => setDraft({ ...draft, timeZone: e.target.value })} placeholder="Time zone (IANA)" />
-          <input className="admin-input" value={draft.propertyCurrency ?? ""} onChange={(e) => setDraft({ ...draft, propertyCurrency: e.target.value })} placeholder="Currency (e.g. BTN)" />
+          <AdmField label="Hotel name">
+            <input className="admin-input" value={draft.hotelName ?? ""} onChange={(e) => setDraft({ ...draft, hotelName: e.target.value })} />
+          </AdmField>
+          <AdmField label="Primary email">
+            <input className="admin-input" value={draft.primaryEmail ?? ""} onChange={(e) => setDraft({ ...draft, primaryEmail: e.target.value })} />
+          </AdmField>
+          <AdmField label="Registered address" className="md:col-span-2">
+            <input className="admin-input" value={draft.registeredAddress ?? ""} onChange={(e) => setDraft({ ...draft, registeredAddress: e.target.value })} />
+          </AdmField>
+          <AdmField label="Trading address" hint="optional" className="md:col-span-2">
+            <input className="admin-input" value={draft.tradingAddress ?? ""} onChange={(e) => setDraft({ ...draft, tradingAddress: e.target.value || null })} />
+          </AdmField>
+          <AdmField label="Time zone" hint="e.g. Asia/Thimphu">
+            <input className="admin-input" value={draft.timeZone ?? ""} onChange={(e) => setDraft({ ...draft, timeZone: e.target.value })} />
+          </AdmField>
+          <AdmField label="Currency" hint="e.g. BTN">
+            <input className="admin-input" value={draft.propertyCurrency ?? ""} onChange={(e) => setDraft({ ...draft, propertyCurrency: e.target.value })} />
+          </AdmField>
 
           <h2 className="admin-display col-span-full mt-4 text-lg">Contact numbers</h2>
           <div className="col-span-full space-y-2">
             {contacts.map((c, i) => (
-              <div key={i} className="flex flex-wrap gap-2">
-                <input className="admin-input flex-1" placeholder="Label" value={c.label} onChange={(e) => setContacts(contacts.map((x, j) => (j === i ? { ...x, label: e.target.value } : x)))} />
-                <input className="admin-input flex-[2]" placeholder="Phone number" value={c.value} onChange={(e) => setContacts(contacts.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)))} />
+              <div key={i} className="flex flex-wrap items-end gap-2">
+                <AdmField label="Label" className="flex-1">
+                  <input className="admin-input" value={c.label} onChange={(e) => setContacts(contacts.map((x, j) => (j === i ? { ...x, label: e.target.value } : x)))} />
+                </AdmField>
+                <AdmField label="Phone number" className="flex-[2]">
+                  <input className="admin-input" value={c.value} onChange={(e) => setContacts(contacts.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)))} />
+                </AdmField>
                 <button type="button" className="admin-btn text-[10px]" onClick={() => setContacts(contacts.filter((_, j) => j !== i))}>
                   Remove
                 </button>
@@ -141,10 +161,22 @@ export default function AdminHotelProfilePage() {
 
           <h2 className="admin-display col-span-full mt-4 text-lg">Public holidays (optional)</h2>
           <div className="col-span-full">
-            <p className="admin-muted mb-1 text-xs">
-              List of public holidays. Add items with at least a date (e.g. <code>2026-12-31</code>) and a label.
-            </p>
-            <SmartConfigEditor value={holidays} onChange={(v) => setHolidays(Array.isArray(v) ? (v as unknown[]) : [])} />
+            <Control
+              f={{
+                kind: "rows",
+                label: "Public holidays",
+                addLabel: "Add a holiday",
+                word: ["holiday", "holidays"],
+                emptyText: "No holidays yet.",
+                blank: { date: "", label: "" },
+                columns: [
+                  { kind: "date", key: "date", label: "Date" },
+                  { kind: "text", key: "label", label: "Name", placeholder: "Losar", wide: true },
+                ],
+              }}
+              value={holidays}
+              onChange={(v) => setHolidays(Array.isArray(v) ? (v as unknown[]) : [])}
+            />
           </div>
         </div>
       )}

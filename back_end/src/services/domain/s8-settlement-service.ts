@@ -1,4 +1,5 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
+import { guestDisplayName } from "../../lib/guest-display-name.js";
 import { effectiveCheckOutDate } from "../../lib/stay-dates.js";
 import { FolioState, InvoiceState, InvoiceType, PaymentDirection, Stage } from "@prisma/client";
 import { MissingConfigurationError, NotFoundError, ValidationError } from "../../lib/errors.js";
@@ -68,13 +69,13 @@ async function resolveGroupInvoiceOverrides(
     entry.guestProfileId
       ? db.guestProfile.findUnique({
           where: { id: entry.guestProfileId },
-          select: { firstName: true, lastName: true },
+          select: { title: true, firstName: true, lastName: true },
         })
       : Promise.resolve(null),
     db.roomAssignment.count({ where: { entryId } }),
   ]);
   const groupLeader =
-    [profile?.firstName, profile?.lastName].filter(Boolean).join(" ") || null;
+    guestDisplayName(profile) || null;
   return {
     templateKey: baseTemplateKey.startsWith("group-") ? baseTemplateKey : `group-${baseTemplateKey}`,
     metadata: {

@@ -36,7 +36,7 @@ import {
   type GuestRequest,
   type NoteAssignee,
 } from "@/lib/api/booking-notes";
-import { acknowledgeCommunication, getEntryTrace, type EntryBillingSummary, type EntryCommunication } from "@/lib/api/entries";
+import { acknowledgeCommunication, getEntryTrace, replySettled, type EntryBillingSummary, type EntryCommunication } from "@/lib/api/entries";
 import { updateInquiryNotes } from "@/lib/api/inquiries";
 import { resendConfirmationVoucher } from "@/lib/api/confirmation";
 import { fmtDateTime, fmtDay, fmtStamp, hotelFormParts, money, plural } from "@/lib/ds/format";
@@ -175,7 +175,7 @@ export function ChargesView({
                 </p>
               ) : null}
               {st.quotationId ? (
-                <QuotePriceLines quotationId={st.quotationId} stayTotal={st.amount} currency={cur} />
+                <QuotePriceLines quotationId={st.quotationId} rooms={roomsNamed(entry, st.quotationId)} stayTotal={st.amount} currency={cur} />
               ) : billing?.rooms?.length ? (
                 <table className="table compact resp" style={{ marginTop: 8 }}>
                   <thead>
@@ -437,11 +437,21 @@ function previewFigures(p: QuotationLivePreview): PriceLinesFigures {
   };
 }
 
+/**
+ * What the quotation's rows depend on besides the quotation: a room moving within its type keeps the
+ * same quotation (2026-11-03), and the rooms handed out change how a room is named.
+ */
+function roomsNamed(entry: EntryDetail, quotationId: string): string {
+  const q = (entry.quotations ?? []).find((x) => x.id === quotationId);
+  const rows = (q?.commercialTerms as { roomCompositions?: Array<{ roomId?: string }> } | null | undefined)?.roomCompositions ?? [];
+  return [...rows.map((r) => r.roomId), "|", ...(entry.roomAssignments ?? []).map((a) => a.roomId)].join(",");
+}
+
 /** The saved quotation's own rows, read from the server — the paper set out on the tab. */
-function QuotePriceLines({ quotationId, stayTotal, currency }: { quotationId: string; stayTotal: number | null; currency: string }) {
+function QuotePriceLines({ quotationId, rooms, stayTotal, currency }: { quotationId: string; rooms: string; stayTotal: number | null; currency: string }) {
   const { session } = useSession();
   const q = useQuery({
-    queryKey: ["quotation-price-lines", quotationId],
+    queryKey: ["quotation-price-lines", quotationId, rooms],
     queryFn: () => getQuotationPriceLines(session!, quotationId),
     enabled: !!session,
   });
@@ -1217,7 +1227,7 @@ export function DocumentsView({
   const vouchers = Math.max(entry.reservations?.length ?? 0, entry.reservation?.id ? 1 : 0) + (entry.status === "CANCELLED" ? 1 : 0);
   const sent = communications.filter((c) => c.direction !== "INBOUND");
   // A replaced paper awaits no answer — only the one in force does (2026-10-13).
-  const awaiting = sent.filter((c) => c.sendStatus === "DISPATCHED" && c.acknowledgementStatus !== "RECEIVED" && !c.superseded && !c.held).length;
+  const awaiting = sent.filter((c) => c.sendStatus === "DISPATCHED" && !replySettled(c) && !c.superseded && !c.held).length;
   const count = (n: number) => (n ? <span className="n">{n}</span> : null);
   return (
     <>
@@ -1382,6 +1392,8 @@ function SentPapers({
                         </span>
                       ) : null}
                     </span>
+                  ) : c.acknowledgementStatus === "NOT_ASKED" ? (
+                    <Chip tone="quiet">no answer needed</Chip>
                   ) : c.held ? (
                     <Chip tone="quiet">held — not sent yet</Chip>
                   ) : sent ? (

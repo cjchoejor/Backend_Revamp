@@ -508,7 +508,7 @@ export async function listInquiries(prisma: PrismaClient, query: { limit: number
     take: query.limit,
     include: {
       guestProfile: {
-        select: { id: true, firstName: true, lastName: true, email: true, phone: true },
+        select: { id: true, title: true, firstName: true, lastName: true, email: true, phone: true },
       },
       entries: { select: inquiryEntrySummarySelect },
     },
@@ -520,7 +520,7 @@ export async function getInquiryById(prisma: PrismaClient, inquiryId: string) {
     where: { id: inquiryId },
     include: {
       entries: { select: inquiryEntrySummarySelect },
-      guestProfile: { select: { id: true, firstName: true, lastName: true, email: true, phone: true } },
+      guestProfile: { select: { id: true, title: true, firstName: true, lastName: true, email: true, phone: true } },
       duplicateFlags: { where: { status: "OPEN" }, orderBy: { createdAt: "desc" } },
       travelAgent: { select: { id: true, displayName: true, modeOfContact: true, contactNumbers: true, contactEmail: true } },
       corporateAccount: { select: { id: true, displayName: true, modeOfContact: true, contactNumbers: true, contactEmail: true, gstNumber: true, billingAddress: true } },

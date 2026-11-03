@@ -7,7 +7,7 @@ import { useSession } from "@/hooks/use-session";
 import { listRooms } from "@/lib/api/rooms";
 import { getAllowedRoomCounts, getChildPolicy } from "@/lib/api/child-policy";
 import type { RoomCompositionInput } from "@/lib/api/quotations";
-import { NegotiationDiscountBar, RoomCompositionsTable, type BedAskSummary, type BedPlanCell, type DiscountEdit } from "./room-compositions-table";
+import { FixedDiscount, RoomCompositionsTable, type BedAskSummary, type BedPlanCell, type DiscountEdit } from "./room-compositions-table";
 import { RateReferenceStrip } from "./rate-reference-strip";
 
 /**
@@ -176,7 +176,6 @@ export function RoomCompositionsBoard({
   roomLabels,
   discountValue,
   discountUnit,
-  discountBasis,
   onDiscountChange,
 }: DiscountEdit & {
   sealedRoomIds: string[];
@@ -729,12 +728,7 @@ export function RoomCompositionsBoard({
     <div className="rcb">
       {/* Same negotiation strip the table carries — the discount must not vanish when the
           operator switches modes (it belongs to the booking, not to either editor). */}
-      <NegotiationDiscountBar
-        discountValue={discountValue}
-        discountUnit={discountUnit}
-        discountBasis={discountBasis}
-        onDiscountChange={onDiscountChange}
-      />
+      <FixedDiscount discountValue={discountValue} discountUnit={discountUnit} onDiscountChange={onDiscountChange} />
       <div className="rce-bar">
         <button
           type="button"

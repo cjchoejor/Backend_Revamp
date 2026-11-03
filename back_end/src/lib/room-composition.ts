@@ -726,3 +726,22 @@ export function applyBookingDiscountToTotals(
     netReduction: totals.subtotal.sub(sum((r) => r.subtotal)),
   };
 }
+
+/**
+ * What each meal plan comes to at the sum of its meals (CP = breakfast; MAP+L = breakfast + lunch;
+ * MAP+D = breakfast + dinner; AP = all three), the figure a plan with no rate of its own is charged.
+ * A plan with one of its meals not set has no figure yet.
+ */
+export function planRatesFromMeals(meals: {
+  breakfast: Prisma.Decimal | null;
+  lunch: Prisma.Decimal | null;
+  dinner: Prisma.Decimal | null;
+}): { cpRate: string | null; mapLunchRate: string | null; mapDinnerRate: string | null; apRate: string | null } {
+  const { breakfast: b, lunch: l, dinner: d } = meals;
+  return {
+    cpRate: b ? b.toFixed(2) : null,
+    mapLunchRate: b && l ? b.add(l).toFixed(2) : null,
+    mapDinnerRate: b && d ? b.add(d).toFixed(2) : null,
+    apRate: b && l && d ? b.add(l).add(d).toFixed(2) : null,
+  };
+}

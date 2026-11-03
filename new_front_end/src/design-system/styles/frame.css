@@ -161,6 +161,13 @@
    A dialog that asks for its own width keeps it (the inline style). */
 .ds .dialog-holder { max-width: min(600px, calc(100vw - 32px)); }
 .ds .dialog-holder > .dialog { width: 100%; }
+/* A pop-up's X, for one whose acts offer no plain way out (2026-11-03). */
+.ds .dialog:has(> .dialog-x):not(.desk-root *) { position: relative; }
+.ds .dialog:has(> .dialog-x) h3:not(.desk-root *) { padding-right: 40px; }
+.ds .dialog > .dialog-x { position: absolute; top: 12px; right: 12px; width: 32px; height: 32px; display: grid; place-items: center; padding: 0; border: 1px solid var(--line-2); border-radius: var(--r-control); background: var(--surface); color: var(--ink-2); cursor: pointer; }
+.ds .dialog > .dialog-x:hover { background: var(--surface-2); color: var(--ink); }
+.ds .dialog > .dialog-x:active { background: var(--surface-3); }
+.ds .dialog > .dialog-x:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .ds .rule-above { border-top: 1px solid var(--line); padding-top: 10px; margin-top: 10px; }
 
 /* a running timer in the side panel: label and live countdown, then a bar that fills to the due time */
@@ -179,6 +186,55 @@
 .ds .trip-stay { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .ds .trip-stay > .meta { min-width: 52px; }
 .ds .trip-stay > :last-child { margin-left: auto; }
+
+/* Choosing a stay of the trip, in the booking head (2026-11-03). */
+.ds .stay-pick:not(.desk-root *) { display: inline-flex; align-items: center; gap: 8px; height: 30px; padding: 0 8px 0 10px; border: 1px solid var(--line-2); border-radius: var(--r-control); background: var(--surface); color: var(--ink); font: inherit; font-weight: 700; font-variant-numeric: tabular-nums; cursor: pointer; }
+.ds .stay-pick:hover:not(.desk-root *) { background: var(--surface-2); }
+.ds .stay-pick:active:not(.desk-root *) { background: var(--surface-3); }
+.ds .stay-pick:focus-visible:not(.desk-root *) { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ds .stay-pick[aria-expanded="true"]:not(.desk-root *) { border-color: var(--accent); box-shadow: inset 0 -3px 0 var(--accent); }
+.ds .stay-pick[aria-expanded="true"] .cb-chev { transform: rotate(-90deg); }
+.ds .stay-pick .meta { font-weight: 500; }
+.ds .stay-menu { position: fixed; z-index: 86; width: 430px; max-width: calc(100vw - 32px); max-height: 70vh; overflow: auto; padding: 4px; background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--r-card); box-shadow: 0 8px 24px rgba(9, 30, 66, 0.16), 0 0 1px rgba(9, 30, 66, 0.31); display: grid; gap: 2px; }
+.ds .stay-item:not(.desk-root *) { display: grid; gap: 6px; padding: 10px 12px; border-radius: 4px; color: var(--ink); text-decoration: none; }
+.ds a.stay-item:hover:not(.desk-root *) { background: var(--surface-2); }
+.ds a.stay-item:active:not(.desk-root *) { background: var(--surface-3); }
+.ds a.stay-item:focus-visible:not(.desk-root *) { outline: 2px solid var(--accent); outline-offset: -2px; }
+.ds .stay-item.here:not(.desk-root *) { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+.ds .stay-item .si-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ds .stay-item .si-id { font-variant-numeric: tabular-nums; color: var(--ink-2); }
+.ds .stay-item .si-line { font-size: var(--t-sm); color: var(--ink-2); }
+.ds .stay-item .si-line.stop-ink { color: var(--danger); font-weight: 600; }
+.ds .stay-item .si-short { font-size: var(--t-sm); color: var(--danger); font-weight: 700; }
+
+/* A return stay: how it is set up, and rooms that are not free for it (2026-11-03). */
+.ds .notice.follow:not(.desk-root *) { display: flex; align-items: center; justify-content: space-between; gap: var(--s3); border: 1px solid var(--line-2); border-left: 5px solid var(--accent); background: var(--accent-soft); color: var(--ink); padding: var(--s3) var(--s4); border-radius: var(--r-control); margin-bottom: var(--s3); }
+.ds .notice.follow .btn { flex: none; }
+.ds .rs-opts { display: grid; gap: var(--s2); }
+.ds .rs-opt { display: grid; gap: 4px; text-align: left; padding: 12px 14px; border: 1px solid var(--line-2); border-radius: var(--r-control); background: var(--surface); color: var(--ink); font: inherit; cursor: pointer; }
+.ds .rs-opt b { font-size: var(--t-lead); font-weight: 700; }
+.ds .rs-opt span { font-size: var(--t-sm); color: var(--ink-2); line-height: 1.45; }
+.ds .rs-opt:hover:not(:disabled) { background: var(--surface-2); border-color: var(--accent); }
+.ds .rs-opt:active:not(:disabled) { background: var(--surface-3); }
+.ds .rs-opt:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ds .rs-opt:disabled { opacity: 0.6; cursor: default; }
+.ds .short-alert { display: flex; align-items: flex-start; gap: var(--s3); border: 1px solid var(--danger-line); border-left: 5px solid var(--danger); background: var(--danger-soft); color: var(--danger); padding: var(--s3) var(--s4); border-radius: var(--r-control); font-weight: 600; }
+.ds .short-alert.standing { align-items: center; margin-bottom: var(--s3); }
+.ds .short-alert .short-lines { flex: 1; }
+.ds .short-mark { flex: none; width: 22px; height: 22px; border-radius: 50%; background: var(--danger); color: #fff; display: grid; place-items: center; font-weight: 800; font-size: 13px; }
+.ds .short-need { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s3); margin-top: var(--s3); }
+.ds .short-picks { display: flex; flex-wrap: wrap; gap: 6px; margin-top: var(--s2); }
+.ds .short-pick { display: inline-flex; align-items: center; gap: 6px; padding: 3px 4px 3px 10px; border: 1px solid var(--line-2); border-radius: var(--r-control); background: var(--surface-2); font-weight: 600; }
+.ds .short-pick button { width: 22px; height: 22px; border: 0; border-radius: 3px; background: transparent; color: var(--ink-2); font: inherit; font-size: 15px; line-height: 1; cursor: pointer; }
+.ds .short-pick button:hover { background: var(--surface-3); color: var(--danger); }
+.ds .rs-types { display: grid; gap: 6px; }
+.ds .rs-type { display: grid; grid-template-columns: 1fr auto minmax(120px, auto); align-items: center; gap: var(--s3); text-align: left; padding: 10px 12px; border: 1px solid var(--line-2); border-radius: var(--r-control); background: var(--surface); color: var(--ink); font: inherit; cursor: pointer; }
+.ds .rs-type:hover:not(:disabled) { background: var(--surface-2); border-color: var(--accent); }
+.ds .rs-type:active:not(:disabled) { background: var(--surface-3); }
+.ds .rs-type:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ds .rs-type:disabled { cursor: default; opacity: 0.7; }
+.ds .rs-type .ok-ink, .ds .rs-type .warn-ink, .ds .rs-type .stop-ink { font-weight: 700; }
+.ds .rs-type .rs-rate { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink-2); }
 /* This guest's other bookings (2026-10-19) — one row each; the ones over these nights stand out. */
 .ds .gb-rows { display: grid; gap: 6px; }
 .ds .gb-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 8px; border-radius: var(--r-control); border: 1px solid var(--line); }
@@ -984,6 +1040,25 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .rchart .tape thead th.drop-night .mo {
   color: #fff !important;
 }
+
+/* A cell that takes typing looks like it (2026-11-03, operator: "it just looks like a place where
+   edits can't happen"; then, the same day, "this is over doing it too much, make it subtle"): a
+   small white box with a thin edge, at the grid's own size. A figure worked out (Occ) has no box,
+   and a table that only reads, or a cell that only reads, stays plain. */
+.ds .desk-root .rct-t td input[type="text"] { box-sizing: border-box; width: 40px; height: 24px; min-height: 0; margin: 3px; padding: 0 2px; border: 1px solid var(--line-2); border-radius: 3px; background: #fff; font-size: 12px; font-weight: 400; box-shadow: none; }
+.ds .desk-root .rct-t td input[type="text"].wide { width: 68px; }
+.ds .desk-root .rct-t td input[type="text"]:hover:not([readonly]) { border-color: var(--line-3); }
+.ds .desk-root .rct-t td input[type="text"][readonly] { border-color: transparent; background: transparent; }
+.ds .desk-root .rct-t td.warn input[type="text"]:not([readonly]) { border-color: var(--warn); }
+.ds .desk-root .rct-t td.stop input[type="text"]:not([readonly]) { border-color: var(--stop); }
+/* A meal plan switched on: its heading takes the accent's ink and a thin line, its column the
+   faintest tint, and one soft fade as it arrives. The chip keeps its own light "on" look. */
+.ds .desk-root .rct:not(.ro) .rct-t thead tr th.mealcol { color: var(--green-d); }
+.ds .desk-root .rct:not(.ro) .rct-t thead tr:last-child th.mealcol { box-shadow: inset 0 -2px 0 var(--green); }
+.ds .desk-root .rct:not(.ro) .rct-t td.mealcol:not(.warn):not(.stop) { background: color-mix(in srgb, var(--green-t) 40%, #fff); }
+@keyframes rct-col-on { from { background-color: var(--green-t); } }
+.ds .desk-root .rct-t .mealcol.just-on { animation: rct-col-on 1s ease-out; }
+@media (prefers-reduced-motion: reduce) { .ds .desk-root .rct-t .mealcol.just-on { animation: none; } }
 
 /* The rooms tab from Set up on reads until Change configuration is pressed (2026-10-19): no cell
    lights as if it took typing, and the cursor says it does not. */

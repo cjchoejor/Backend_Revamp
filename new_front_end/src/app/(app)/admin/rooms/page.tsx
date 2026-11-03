@@ -1,6 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { AdmField, FieldTitle } from "@/components/admin/field-title";
+import { Help } from "@/components/ds/help";
+import { Suspense, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { createAdminRoom, deactivateAdminRoom, deleteAdminRoom, getDeficientCategories, listAdminRooms, listRoomTypes, markRoomDeficient, reactivateAdminRoom, resolveRoomDeficient, updateAdminRoom } from "@/lib/api/admin";
@@ -9,6 +11,16 @@ import { ApiError } from "@/lib/api/client";
 import { useConfirm, usePrompt } from "@/components/providers/dialog-provider";
 import { AllowedBedSetups, bedSetupListWords, bedSetupWord } from "@/components/admin/bed-setup-fields";
 import { DateTimeInput } from "@/components/ds/date-input";
+import { SettingsList } from "@/components/admin/settings-list";
+import { CLAIM_STATE_OPTIONS } from "@/lib/admin/setting-forms";
+
+const standingWord = (state: string) => CLAIM_STATE_OPTIONS.find((o) => o.value === state)?.label ?? state;
+const CONDITION_WORD: Record<string, string> = {
+  AVAILABLE_CLEAN: "Clean",
+  AVAILABLE_INSPECTED: "Inspected",
+  DIRTY: "Needs cleaning",
+  UNDER_MAINTENANCE: "Under maintenance",
+};
 
 type DeficientForm = { roomId: string; roomNumber: string; category: string; description: string; deadline: string };
 /** `usualBedType` "" = the room follows its room type's usual setup. */
@@ -121,10 +133,10 @@ export default function AdminRoomsPage() {
   const resolveDeficientMutation = useMutation({
     mutationFn: ({ id, note }: { id: string; note?: string }) => resolveRoomDeficient(session!, id, note),
     onSuccess: () => {
-      toast.success("Deficient condition resolved");
+      toast.success("Fault put right");
       void queryClient.invalidateQueries({ queryKey: ["admin", "rooms"] });
     },
-    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Resolve failed"),
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "That could not be saved"),
   });
 
   const reactivateMutation = useMutation({
@@ -146,11 +158,11 @@ export default function AdminRoomsPage() {
       });
     },
     onSuccess: () => {
-      toast.success("Room marked deficient");
+      toast.success("Fault reported");
       setDefForm(null);
       void queryClient.invalidateQueries({ queryKey: ["admin", "rooms"] });
     },
-    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Mark deficient failed"),
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "The fault could not be reported"),
   });
 
   const categoriesQuery = useQuery({
@@ -206,40 +218,55 @@ export default function AdminRoomsPage() {
   return (
     <div className="space-y-8 pb-16">
       <div>
-        <p className="admin-eyebrow mb-2">Domain 02 · Inventory</p>
-        <h1 className="admin-display text-3xl">Room inventory</h1>
-        <p className="admin-muted mt-2 max-w-2xl text-sm">
-          Register rooms and review claim state. Operational claim transitions are not edited here.
-        </p>
+        <p className="admin-eyebrow mb-2">Rooms and spaces</p>
+        <h1 className="admin-display flex items-center gap-2 text-3xl">
+          Rooms
+          <Help label="Rooms">Add rooms, set their beds and report faults. Whether a room is held or occupied comes from its bookings, so it is not changed here.</Help>
+        </h1>
       </div>
 
       <div className="admin-panel grid gap-4 p-5 md:grid-cols-2">
-        <h2 className="admin-display col-span-full text-lg">Add room</h2>
-        <input className="admin-input" placeholder="Room number" value={form.roomNumber} onChange={(e) => setForm({ ...form, roomNumber: e.target.value })} />
-        <select className="admin-select" value={form.roomTypeId} onChange={(e) => setForm({ ...form, roomTypeId: e.target.value })}>
-          <option value="">Select room type</option>
-          {(roomTypesQuery.data?.items ?? []).map((rt) => (
-            <option key={rt.id} value={rt.id}>
-              {rt.code} — {rt.name}
+        <h2 className="admin-display col-span-full flex items-center gap-2 text-lg">
+          Add room
+          <Help label="Beds in a room">
+            Any room can be made up in any bed setup unless its room type, or the room itself here, narrows it. The usual bed is how the room is normally
+            made up: its room type's, unless you give this room its own, since two rooms of one type can differ. Bed now is how it is made up today: the
+            desk changes it when a guest asks for another setup, and it goes back to the usual bed when that guest leaves.
+          </Help>
+        </h2>
+        <AdmField label="Room number">
+          <input className="admin-input" value={form.roomNumber} onChange={(e) => setForm({ ...form, roomNumber: e.target.value })} />
+        </AdmField>
+        <AdmField label="Room type">
+          <select className="admin-select" value={form.roomTypeId} onChange={(e) => setForm({ ...form, roomTypeId: e.target.value })}>
+            <option value="">Select room type</option>
+            {(roomTypesQuery.data?.items ?? []).map((rt) => (
+              <option key={rt.id} value={rt.id}>
+                {rt.code} — {rt.name}
+              </option>
+            ))}
+          </select>
+        </AdmField>
+        <AdmField label="Floor">
+          <input className="admin-input" value={form.floorNumber} onChange={(e) => setForm({ ...form, floorNumber: e.target.value })} />
+        </AdmField>
+        <AdmField label="Usual bed">
+          <select className="admin-select" value={form.usualBedType} onChange={(e) => setForm({ ...form, usualBedType: e.target.value })}>
+            <option value="">
+              {(() => {
+                const usual = (roomTypesQuery.data?.items ?? []).find((rt) => rt.id === form.roomTypeId)?.defaultBedType;
+                return usual ? `As its room type (${bedSetupWord(usual)})` : "As its room type";
+              })()}
             </option>
-          ))}
-        </select>
-        <input className="admin-input" placeholder="Floor" value={form.floorNumber} onChange={(e) => setForm({ ...form, floorNumber: e.target.value })} />
-        <select className="admin-select" value={form.usualBedType} onChange={(e) => setForm({ ...form, usualBedType: e.target.value })}>
-          <option value="">
-            {(() => {
-              const usual = (roomTypesQuery.data?.items ?? []).find((rt) => rt.id === form.roomTypeId)?.defaultBedType;
-              return usual ? `Usual bed — as its room type (${bedSetupWord(usual)})` : "Usual bed — as its room type";
-            })()}
-          </option>
-          {bedTypes.map((b) => (
-            <option key={b} value={b}>
-              Usual bed — {bedLabel(b)}
-            </option>
-          ))}
-        </select>
+            {bedTypes.map((b) => (
+              <option key={b} value={b}>
+                {bedLabel(b)}
+              </option>
+            ))}
+          </select>
+        </AdmField>
         <div className="col-span-full">
-          <div className="text-[11px] font-medium text-muted-foreground">This room can be made up as</div>
+          <FieldTitle label="This room can be made up as" />
           <AllowedBedSetups
             vocabulary={bedTypes}
             value={form.allowedBedTypes}
@@ -247,65 +274,43 @@ export default function AdminRoomsPage() {
             emptyLabel="Follows its room type"
           />
         </div>
-        <p className="admin-muted col-span-full text-xs">
-          Any room can be made up in any bed setup unless its room type — or the room itself, here — narrows it. The
-          <em> usual bed</em> is how the room is normally made up: its room type&apos;s, unless you give this room its own
-          (two rooms of one type can differ). <em>Bed now</em> is how it is made up today — the desk changes it when a
-          guest asks for another setup, and it goes back to the usual bed when that guest leaves.
-        </p>
         <button type="button" className="admin-btn col-span-full w-fit" disabled={createMutation.isPending} onClick={() => createMutation.mutate()}>
           Create room
         </button>
       </div>
 
-      <div className="admin-panel p-5">
-        <h2 className="admin-display mb-3 text-lg">Deficient condition categories</h2>
-        {categoriesQuery.data?.isSystemDefault && <span className="admin-tag mb-3 inline-block">system default</span>}
-        <p className="admin-muted text-xs">
-          These categories are the allowed reasons when marking a room deficient. Edit the list under{" "}
-          <span className="font-mono text-[var(--admin-brass)]">Configuration → deficientCondition.categories</span>.
-        </p>
-        <ul className="mt-3 grid gap-2 sm:grid-cols-2">
-          {(Array.isArray(categoriesQuery.data?.configValue) ? (categoriesQuery.data!.configValue as Array<{ code: string; label: string; isActive?: boolean }>) : []).map((c) => (
-            <li key={c.code} className="flex items-center justify-between rounded border border-[var(--admin-rule)] px-3 py-2 text-xs">
-              <span>
-                <span className="font-mono">{c.code}</span> · {c.label}
-              </span>
-              {c.isActive === false && <span className="admin-tag admin-tag-warn">inactive</span>}
-            </li>
-          ))}
-        </ul>
-      </div>
+      <Suspense>
+        <SettingsList groups={[{ keys: ["deficientCondition.categories"] }]} />
+      </Suspense>
 
       {defForm && (
         <div className="admin-panel space-y-3 p-5">
-          <h2 className="admin-display text-lg">Mark room {defForm.roomNumber} deficient</h2>
+          <h2 className="admin-display text-lg">Report a fault on Room {defForm.roomNumber}</h2>
           <div className="grid gap-3 md:grid-cols-2">
             <label className="admin-muted text-xs">
-              Category
+              Kind of fault
               <select
                 className="admin-select mt-1 w-full"
                 value={defForm.category}
                 onChange={(e) => setDefForm({ ...defForm, category: e.target.value })}
               >
-                <option value="">Select category…</option>
+                <option value="">Pick one</option>
                 {(Array.isArray(categoriesQuery.data?.configValue) ? (categoriesQuery.data!.configValue as Array<{ code: string; label: string; isActive?: boolean }>) : [])
                   .filter((c) => c.isActive !== false)
                   .map((c) => (
                     <option key={c.code} value={c.code}>
-                      {c.label} ({c.code})
+                      {c.label}
                     </option>
                   ))}
               </select>
             </label>
-            <label className="admin-muted text-xs">
-              Resolution deadline (optional)
+            <AdmField label="To be fixed by" hint="optional" help="Left empty, the time allowed comes from the rule Time to fix a fault.">
               <DateTimeInput
-                className="admin-input mt-1 w-full"
+                className="admin-input w-full"
                 value={defForm.deadline}
                 onChange={(e) => setDefForm({ ...defForm, deadline: e.target.value })}
               />
-            </label>
+            </AdmField>
             <label className="admin-muted text-xs md:col-span-2">
               Description
               <textarea
@@ -317,9 +322,6 @@ export default function AdminRoomsPage() {
               />
             </label>
           </div>
-          <p className="admin-muted text-xs">
-            Defaults the deadline to <span className="font-mono">deficientResolution.deadlineHours</span> from now (48h if not configured).
-          </p>
           <div className="flex gap-2">
             <button
               type="button"
@@ -327,7 +329,7 @@ export default function AdminRoomsPage() {
               disabled={markDeficientMutation.isPending || !defForm.category || defForm.description.trim().length < 3}
               onClick={() => markDeficientMutation.mutate()}
             >
-              Confirm mark deficient
+              Report the fault
             </button>
             <button type="button" className="admin-btn w-fit" onClick={() => setDefForm(null)}>
               Cancel
@@ -379,10 +381,10 @@ export default function AdminRoomsPage() {
               <th>Bed now</th>
               <th>Usual bed</th>
               <th>Can be made up as</th>
-              <th>Claim</th>
-              <th>Physical</th>
-              <th>Deficient</th>
-              <th>Blocked</th>
+              <th>Standing</th>
+              <th>Condition</th>
+              <th>Fault</th>
+              <th>Out of order</th>
               <th />
             </tr>
           </thead>
@@ -451,8 +453,8 @@ export default function AdminRoomsPage() {
                         emptyLabel="Follows its room type"
                       />
                     </td>
-                    <td>{r.currentClaimState}</td>
-                    <td>{r.physicalState}</td>
+                    <td>{standingWord(r.currentClaimState)}</td>
+                    <td>{CONDITION_WORD[r.physicalState] ?? r.physicalState}</td>
                     <td>{r.isDeficient ? "Yes" : "—"}</td>
                     <td>{r.isBlocked ? "Yes" : "—"}</td>
                     <td className="text-right">
@@ -500,8 +502,8 @@ export default function AdminRoomsPage() {
                     {r.allowedBedTypesSource === "ROOM" ? "this room's own list" : r.allowedBedTypesSource === "ROOM_TYPE" ? "from its room type" : "no limit set"}
                   </div>
                 </td>
-                <td>{r.currentClaimState}</td>
-                <td>{r.physicalState}</td>
+                <td>{standingWord(r.currentClaimState)}</td>
+                <td>{CONDITION_WORD[r.physicalState] ?? r.physicalState}</td>
                 <td>{r.isDeficient ? "Yes" : "—"}</td>
                 <td>{r.isBlocked ? "Yes" : "—"}</td>
                 <td className="text-right">
@@ -520,17 +522,17 @@ export default function AdminRoomsPage() {
                         disabled={resolveDeficientMutation.isPending}
                         onClick={async () => {
                           const note = await prompt({
-                            title: `Resolve deficient condition`,
-                            message: `Room ${r.roomNumber} — describe what was fixed (optional). Leave blank if no notes.`,
-                            placeholder: "Resolution notes (optional)",
-                            confirmLabel: "Mark resolved",
+                            title: "Fault put right",
+                            message: `Room ${r.roomNumber} — what was fixed? You may leave this empty.`,
+                            placeholder: "What was fixed",
+                            confirmLabel: "Fault put right",
                             multiline: true,
                           });
                           if (note === null) return;
                           resolveDeficientMutation.mutate({ id: r.id, note: note.trim() || undefined });
                         }}
                       >
-                        Mark resolved
+                        Fault put right
                       </button>
                     )}
                     {!r.isDeficient && !r.isBlocked && (
@@ -547,7 +549,7 @@ export default function AdminRoomsPage() {
                           })
                         }
                       >
-                        Mark deficient
+                        Report a fault
                       </button>
                     )}
                     {r.isBlocked ? (
@@ -583,7 +585,7 @@ export default function AdminRoomsPage() {
                       disabled={deleteMutation.isPending}
                       onClick={async () => {
                         if (r.currentClaimState !== "FREE") {
-                          toast.error("Only FREE rooms with no history can be deleted — use Deactivate instead");
+                          toast.error("Only a free room with no history can be deleted — use Deactivate instead");
                           return;
                         }
                         const ok = await confirm({

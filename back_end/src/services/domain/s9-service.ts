@@ -1,4 +1,5 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
+import { guestDisplayName } from "../../lib/guest-display-name.js";
 import { CommissionDueStatus, EntryStatus, FolioLineType, FolioState, InvoiceState, InvoiceType, Stage } from "@prisma/client";
 import { allocateReadableId, READABLE_ID_PREFIXES, allocateFolioLineId } from "../../lib/readable-id.js";
 import { AppError, MissingConfigurationError, NotFoundError, ValidationError } from "../../lib/errors.js";
@@ -49,6 +50,7 @@ import { computeGuestDataRetentionDueAt } from "../../policies/07-guest-data-gov
 import { enforceNoShowFinancialAmountsNonNegative } from "../../policies/22-no-show/p57-no-show-folio-financial.js";
 import { hotelTodayUtc } from "../../lib/stay-dates.js";
 import { latestDispatchedInForce, retireSupersededReplyWaitsBestEffort } from "../../lib/reply-waits.js";
+import { replySettled } from "../../lib/guest-reply-settings.js";
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
 
@@ -163,7 +165,7 @@ export async function resolveInvoiceRecipient(
     where: { id: entryId },
     select: {
       contactPersonName: true,
-      guestProfile: { select: { firstName: true, lastName: true, email: true } },
+      guestProfile: { select: { title: true, firstName: true, lastName: true, email: true } },
       inquiry: {
         select: {
           travelAgent: { select: { displayName: true, contactEmail: true } },
@@ -173,7 +175,7 @@ export async function resolveInvoiceRecipient(
     },
   });
   const guestName =
-    [entry?.guestProfile?.firstName, entry?.guestProfile?.lastName].filter(Boolean).join(" ").trim() ||
+    guestDisplayName(entry?.guestProfile) ||
     entry?.contactPersonName?.trim() ||
     "Guest";
   const party = entry?.inquiry?.travelAgent ?? entry?.inquiry?.corporateAccount ?? null;
@@ -664,7 +666,7 @@ export async function recordInvoicePaymentEvent(
     const latestFinalComm = invoice.entryId
       ? await latestDispatchedInForce(prisma, { entryId: invoice.entryId, commType: "FINAL_INVOICE" as never })
       : null;
-    if (latestFinalComm && latestFinalComm.acknowledgementStatus !== "RECEIVED") {
+    if (latestFinalComm && !replySettled(latestFinalComm.acknowledgementStatus)) {
       throw new ValidationError(
         "Record the guest's answer to the final invoice before logging its payment",
       );
@@ -1514,12 +1516,12 @@ async function sendPostStayChargeNoticeBestEffort(
         checkOutDate: true,
         actualCheckOutDate: true,
         contactPersonName: true,
-        guestProfile: { select: { firstName: true, lastName: true, email: true } },
+        guestProfile: { select: { title: true, firstName: true, lastName: true, email: true } },
       },
     });
     if (!entry) return { sent: false, to: null, reason: "ENTRY_NOT_FOUND" };
     const guestName =
-      [entry.guestProfile?.firstName, entry.guestProfile?.lastName].filter(Boolean).join(" ").trim() || entry.contactPersonName?.trim() || "Guest";
+      guestDisplayName(entry.guestProfile) || entry.contactPersonName?.trim() || "Guest";
     const guestPays = d.billingModel === "GUEST_PAY";
     const recipient = guestPays
       ? entry.guestProfile?.email?.trim()

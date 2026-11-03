@@ -10,6 +10,9 @@ import { getAllowedRoomCounts, getChildPolicy } from "@/lib/api/child-policy";
 import { getRateReference } from "@/lib/api/entries";
 import { previewQuotationPricing, type RoomCompositionInput, type RoomNightMealOverrideInput } from "@/lib/api/quotations";
 import { Help, useQuietScreen } from "@/components/ds/help";
+import { Button } from "@/design-system/components/primitives";
+import { Choice, DsDialog } from "@/components/ds/steps/kit";
+import { MoneyInput } from "@/design-system";
 
 /**
  * Spreadsheet-style composition table (2026-07-28) — the pure-tabular alternative to the
@@ -128,125 +131,129 @@ export type DiscountUnit = "percent" | "amount";
 export type DiscountEdit = {
   discountValue?: string;
   discountUnit?: DiscountUnit;
-  discountBasis?: string;
-  onDiscountChange?: (patch: { value?: string; unit?: DiscountUnit; basis?: string }) => void;
+  onDiscountChange?: (patch: { value?: string; unit?: DiscountUnit }) => void;
 };
 
 /**
- * Negotiation strip (2026-08-03, operator request) — the discount moved out of the form
- * blocks below and into the composition panel, so rates, FOC and the discount are edited in
- * one place and the panel reads as the negotiation surface.
+ * The booking's discount: a button under the table, the question in a pop-up (2026-11-03, operator:
+ * "can this be brought below the table like a button, and when clicked it can ask if it's percentage
+ * or amount, and the basis is not needed"). The backend still records a basis on every discount; the
+ * callers send their usual word, so nothing is asked for it here.
  *
- * The discount is BOOKING-WIDE, not per room: the backend folds it into the resolved room
- * rate before the compositions are costed (`prepareQuotationDraft`). Two consequences the
- * strip states outright rather than leaving the operator to discover them from the total —
- * a room carrying its own negotiated rate ignores the default rate and so prices the same
- * discounted or not, and meals / extra beds are never discounted (they come off the rate
- * card's add-ons). NO MONEY IS COMPUTED HERE — the backend prices on create/regenerate.
+ * The discount is BOOKING-WIDE, not per room, and comes off the grand total, meals and extra beds
+ * included (`applyBookingDiscountToTotals`). NO MONEY IS COMPUTED HERE: the live total under this
+ * button is the server's, and so is the quotation's.
  */
-export function NegotiationDiscountBar({
+export function FixedDiscount({
   discountValue,
   discountUnit,
-  discountBasis,
   onDiscountChange,
   lockCommercial,
 }: DiscountEdit & { lockCommercial?: boolean }) {
-  const quiet = useQuietScreen();
+  const [open, setOpen] = useState(false);
+  const [unit, setUnit] = useState<DiscountUnit | null>(null);
+  const [value, setValue] = useState("");
   if (!onDiscountChange) return null;
-  const unit: DiscountUnit = discountUnit ?? "percent";
-  const n = Number(discountValue ?? "");
-  const live = Number.isFinite(n) && n > 0;
+  const set = Number(discountValue ?? "");
+  const live = Number.isFinite(set) && set > 0;
+  const setUnitNow: DiscountUnit = discountUnit ?? "percent";
+  const words = !live ? null : setUnitNow === "percent" ? `${set}% off` : `Nu ${set.toLocaleString("en-US")} off`;
+  // Locked and nothing set: nothing to show. Locked with a discount: the fact still reads.
+  if (lockCommercial && !live) return null;
+
+  const figure = Number(value);
+  const ok = !!unit && value.trim() !== "" && Number.isFinite(figure) && figure > 0 && (unit !== "percent" || figure <= 100);
+  const apply = () => {
+    if (!ok) return;
+    onDiscountChange({ unit: unit!, value });
+    setOpen(false);
+  };
+  const typed = (v: string) => {
+    if (!/^\d*\.?\d{0,2}$/.test(v)) return;
+    if (unit === "percent" && v !== "" && Number(v) > 100) return;
+    setValue(v);
+  };
   return (
-    <div className="rct-neg">
-      <span className="rce-lbl">Negotiate</span>
-      <label className="rct-neg-f">
-        Discount
-        <input
-          type="text"
-          inputMode="decimal"
-          className="rct-neg-val"
-          value={discountValue ?? ""}
-          placeholder="0"
-          readOnly={lockCommercial}
-          onChange={(e) => {
-            const v = e.target.value;
-            if (!/^\d*\.?\d*$/.test(v)) return;
-            // 100% off is a full waiver — use the per-room FOC toggle for that instead. A flat
-            // amount has no such cap client-side; the backend clamps it to the bill.
-            if (unit === "percent" && v !== "" && Number(v) > 100) return;
-            onDiscountChange({ value: v });
+    <div className="rct-disc">
+      <button
+        type="button"
+        className={`btn btn-ghost${live ? " on" : ""}`}
+        disabled={lockCommercial}
+        title={lockCommercial ? "The discount cannot be changed here" : undefined}
+        onClick={() => {
+          setUnit(live ? setUnitNow : null);
+          setValue(live ? String(discountValue) : "");
+          setOpen(true);
+        }}
+      >
+        Fixed discount{words ? ` · ${words}` : ""}
+      </button>
+      <DsDialog
+        open={open}
+        onClose={() => setOpen(false)}
+        title="Fixed discount"
+        help={
+          <>
+            <p>One discount for the whole booking. It comes off the grand total, meals and extra beds included.</p>
+            <p>Service charge and GST follow the discounted figure. A discount larger than the bill brings it to zero; it is never a refund.</p>
+          </>
+        }
+        footer={
+          <>
+            <Button kind="quiet" onClick={() => setOpen(false)}>
+              Not now
+            </Button>
+            {live ? (
+              <Button
+                kind="quiet"
+                onClick={() => {
+                  onDiscountChange({ value: "" });
+                  setOpen(false);
+                }}
+              >
+                Take it off
+              </Button>
+            ) : null}
+            <Button className={ok ? "go" : undefined} state={ok ? "default" : "inert"} reason={ok ? undefined : unit ? "type the figure" : "pick percentage or amount"} onClick={apply}>
+              Apply
+            </Button>
+          </>
+        }
+      >
+        <form
+          style={{ display: "grid", gap: 14 }}
+          onSubmit={(e) => {
+            e.preventDefault();
+            apply();
           }}
-          title={
-            unit === "percent"
-              ? "Percentage off the booking's grand total"
-              : "Flat amount off the booking's grand total (Nu)"
-          }
-        />
-      </label>
-      {/* The unit is the operator's choice (2026-08-06): the same figure box holds a percent or
-          a flat Nu amount, and this switch says which the backend receives. The `amount` class
-          slides the pill thumb (CSS ::before) — the buttons themselves never move or resize. */}
-      <span className={`rct-neg-unit${unit === "amount" ? " amount" : ""}`} role="group" aria-label="Discount given as">
-        <button
-          type="button"
-          className={unit === "percent" ? "on" : ""}
-          disabled={lockCommercial}
-          title="Give the discount as a percentage of the grand total"
-          onClick={() =>
-            // A figure over 100 is legal as an amount but not as a percent — clear it on switch
-            // rather than carrying an untypeable value into the capped input.
-            onDiscountChange({ unit: "percent", ...(live && n > 100 ? { value: "" } : {}) })
-          }
         >
-          %
-        </button>
-        <button
-          type="button"
-          className={unit === "amount" ? "on" : ""}
-          disabled={lockCommercial}
-          title="Give the discount as a flat amount in Nu"
-          onClick={() => onDiscountChange({ unit: "amount" })}
-        >
-          Nu
-        </button>
-      </span>
-      <label className="rct-neg-f wide">
-        Basis
-        <input
-          type="text"
-          value={discountBasis ?? ""}
-          readOnly={lockCommercial}
-          placeholder="negotiation"
-          onChange={(e) => onDiscountChange({ basis: e.target.value })}
-          title="Why the discount is being given — recorded on the quote and audited"
-        />
-      </label>
-      {live && (
-        <span className="rct-neg-on">
-          −{unit === "percent" ? `${n}%` : `Nu ${n.toLocaleString()}`} off the total
-        </span>
-      )}
-      {/* States the CURRENT model (operator ruling 2026-08-04, applyBookingDiscountToTotals):
-          the deduction comes off the grand total, meals and beds included — the earlier
-          "room rate only" wording described the superseded 2026-08-03 model. In a quiet screen
-          it is behind a "?" beside the fields it explains. */}
-      {quiet ? (
-        <Help label="About the discount">
-          <p>A percentage or a flat amount in Nu. Either way it comes off the booking&rsquo;s grand total, meals and extra beds included.</p>
-          <p>Service charge and GST follow the discounted figure. A discount larger than the bill brings it to zero — it is never a refund.</p>
-          <p>The basis is why the discount is given; it is recorded on the quotation.</p>
-        </Help>
-      ) : null}
-      <span className="ln" />
-      {quiet ? null : (
-        <span
-          className="rct-neg-note"
-          style={{ textAlign: "right", flex: "0 1 auto" }}
-          title="Percent or flat amount — both come off the booking's grand total, meals and extra beds included. Service charge and GST follow the discounted figure, and a discount larger than the bill settles it (never a refund). The hotel's system works out the figures when the quote is saved."
-        >
-          Comes off the grand total — meals &amp; beds included
-        </span>
-      )}
+          <div className="field">
+            <label>Percentage or amount?</label>
+            <Choice
+              options={[["percent", "Percentage"], ["amount", "Amount"]] as const}
+              value={unit}
+              onChange={(u) => {
+                if (u !== unit) setValue("");
+                setUnit(u);
+              }}
+            />
+          </div>
+          {unit === "percent" ? (
+            <div className="field">
+              <label htmlFor="fixed-discount-figure">Percent off the total</label>
+              <div className="suffix">
+                <input id="fixed-discount-figure" key="percent" className="input narrow" inputMode="decimal" value={value} onChange={(e) => typed(e.target.value)} autoFocus />
+                <span aria-hidden="true">%</span>
+              </div>
+            </div>
+          ) : unit === "amount" ? (
+            <div className="field">
+              <label htmlFor="fixed-discount-figure">Amount off the total</label>
+              <MoneyInput id="fixed-discount-figure" key="amount" value={value} onChange={(e) => typed(e.target.value)} autoFocus />
+            </div>
+          ) : null}
+        </form>
+      </DsDialog>
     </div>
   );
 }
@@ -553,7 +560,6 @@ export function RoomCompositionsTable({
   bedAsk,
   discountValue,
   discountUnit,
-  discountBasis,
   onDiscountChange,
   lockCommercial,
   readOnly,
@@ -848,6 +854,8 @@ export function RoomCompositionsTable({
   // Plans the operator switched on. A plan column is VISIBLE when toggled on OR when any
   // row carries pax for it — a column with data can never silently disappear.
   const [activePlans, setActivePlans] = useState<Set<NumCol>>(new Set());
+  /** The meal plan just switched on: its column flashes, and its first cell takes the cursor. */
+  const [justOn, setJustOn] = useState<NumCol | null>(null);
   // CNB columns exist automatically when the intake party has children, or when saved
   // data already carries child counts — the manual "Kids +" toggle was removed
   // (2026-07-31, operator request); only the Rates toggle remains in the corner.
@@ -1186,6 +1194,7 @@ export function RoomCompositionsTable({
       }
     } else {
       setActivePlans((prev) => new Set(prev).add(c));
+      setJustOn(c);
     }
   };
 
@@ -1613,6 +1622,21 @@ export function RoomCompositionsTable({
   // Right only once the caret is at the text boundary, so in-value cursor movement
   // still works); Enter moves down. Checkboxes participate too (Space still toggles).
   const wrapRef = useRef<HTMLDivElement>(null);
+  // A meal plan switched on (2026-11-03, operator: "whenever user clicks a meal plan, and it shows
+  // on the table that row is active"): the cursor goes to its first cell, ready to type. A wide
+  // table scrolls sideways inside its own box; the page stays where it is.
+  useEffect(() => {
+    if (!justOn) return;
+    const box = wrapRef.current;
+    const cell = box?.querySelector<HTMLInputElement>(`input[data-cell$=":${justOn}"]:not([readonly])`);
+    if (box && cell) {
+      cell.focus({ preventScroll: true });
+      const over = cell.getBoundingClientRect().right - box.getBoundingClientRect().right;
+      if (over > 0) box.scrollLeft += over + 12;
+    }
+    const t = setTimeout(() => setJustOn(null), 1400);
+    return () => clearTimeout(t);
+  }, [justOn]);
   const visibleCols: string[] = useMemo(() => {
     const cols: string[] = ["ad"];
     if (childColsVisible) cols.push("c6", "u6");
@@ -1871,7 +1895,13 @@ export function RoomCompositionsTable({
     })();
     const ownNight = mark != null;
     const raw = varies ? "" : valAt(roomId, night, col);
-    const cls = [opts?.stop ? "stop" : opts?.warn ? "warn" : "", varies ? "varies" : "", ownNight ? "own" : ""]
+    const cls = [
+      opts?.stop ? "stop" : opts?.warn ? "warn" : "",
+      varies ? "varies" : "",
+      ownNight ? "own" : "",
+      (MEAL_COLS as string[]).includes(col) ? "mealcol" : "",
+      justOn === col ? "just-on" : "",
+    ]
       .filter(Boolean)
       .join(" ");
     const title = varies
@@ -2046,14 +2076,6 @@ export function RoomCompositionsTable({
           quietNumbers={new Set(sealedRoomIds.filter((id) => roomLabels?.has(id)).map((id) => roomById.get(id)?.roomNumber ?? "").filter(Boolean))}
         />
       )}
-      {/* Discount rides with the rates, inside the panel — one negotiation surface. */}
-      <NegotiationDiscountBar
-        discountValue={discountValue}
-        discountUnit={discountUnit}
-        discountBasis={discountBasis}
-        onDiscountChange={onDiscountChange}
-        lockCommercial={lockCommercial || readOnly}
-      />
       <div className="rce-bar">
         {!readOnly && (
         <>
@@ -2241,7 +2263,7 @@ export function RoomCompositionsTable({
               {bedsShown && <th />}
               <th />
               <th colSpan={childColsVisible ? 4 : 2}>Guests</th>
-              {visibleMeals.length > 0 && <th colSpan={visibleMeals.length}>Meal-plan pax</th>}
+              {visibleMeals.length > 0 && <th className="mealcol" colSpan={visibleMeals.length}>Meal-plan pax</th>}
               {othersVisible && <th colSpan={3}>Others à-la-carte pax</th>}
               {ratesOpen && (
                 <th
@@ -2280,7 +2302,7 @@ export function RoomCompositionsTable({
               )}
               <th title="Extra beds">Extra bed</th>
               {visibleMeals.map((c) => (
-                <th key={c} title={MEAL_META[c].title}>
+                <th key={c} className={`mealcol${justOn === c ? " just-on" : ""}`} title={MEAL_META[c].title}>
                   {MEAL_META[c].th}
                 </th>
               ))}
@@ -2525,7 +2547,7 @@ export function RoomCompositionsTable({
               )}
               <td>{footSum("bed")}</td>
               {visibleMeals.map((c) => (
-                <td key={c}>{footSum(c)}</td>
+                <td key={c} className="mealcol">{footSum(c)}</td>
               ))}
               {othersVisible && (
                 <>
@@ -2586,6 +2608,8 @@ export function RoomCompositionsTable({
           </tfoot>
         </table>
       </div>
+
+      <FixedDiscount discountValue={discountValue} discountUnit={discountUnit} onDiscountChange={onDiscountChange} lockCommercial={lockCommercial || readOnly} />
 
       {/* Running total, backend-priced (2026-08-07): the same figures the generated quote will
           carry — net, taxes, grand total, and the discount's effect when one is set. */}

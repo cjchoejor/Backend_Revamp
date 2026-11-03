@@ -115,7 +115,7 @@ export type RoomChartBooking = {
   status: EntryStatus;
   checkInDate: string | null;
   checkOutDate: string | null;
-  guestProfile: { firstName: string | null; lastName: string | null } | null;
+  guestProfile: { title?: string | null; firstName: string | null; lastName: string | null } | null;
   inquiry: {
     callerTitle: string | null;
     callerFirstName: string | null;
@@ -195,7 +195,7 @@ const entrySelect = {
   checkInDate: true,
   checkOutDate: true,
   reservationPaymentPending: true,
-  guestProfile: { select: { firstName: true, lastName: true } },
+  guestProfile: { select: { title: true, firstName: true, lastName: true } },
   inquiry: {
     select: {
       callerTitle: true,
@@ -272,7 +272,8 @@ export async function buildRoomChart(
           checkOutDate: { gt: from },
         },
       },
-      select: { roomId: true, entryId: true, perNightBreakdown: true, expiresAt: true, entry: { select: entrySelect } },
+      select: {
+        state: true, roomId: true, entryId: true, perNightBreakdown: true, expiresAt: true, entry: { select: entrySelect } },
     }),
     prisma.speculativeHold.findMany({
       where: {
@@ -298,7 +299,7 @@ export async function buildRoomChart(
     checkInDate: Date | null;
     checkOutDate: Date | null;
     reservationPaymentPending: boolean;
-    guestProfile: { firstName: string | null; lastName: string | null } | null;
+    guestProfile: { title?: string | null; firstName: string | null; lastName: string | null } | null;
     inquiry: {
       callerTitle: string | null;
       callerFirstName: string | null;
@@ -340,7 +341,9 @@ export async function buildRoomChart(
     if (!e?.checkInDate || !e.checkOutDate) continue;
     remember(e);
     for (const s of committedHoldSpans(h, { checkIn: e.checkInDate, checkOut: e.checkOutDate })) {
-      claims.push({ roomId: s.roomId, start: s.startDate, end: s.endDate, entryId: h.entryId, kind: "HELD", holdExpiresAt: h.expiresAt });
+      // A hold is confirmed at Reserve: the room is the reservation's, and no clock runs on it.
+      const confirmed = h.state === "CONFIRMED";
+      claims.push({ roomId: s.roomId, start: s.startDate, end: s.endDate, entryId: h.entryId, kind: confirmed ? "RESERVED" : "HELD", holdExpiresAt: confirmed ? null : h.expiresAt });
     }
   }
   for (const h of speculativeHolds) {

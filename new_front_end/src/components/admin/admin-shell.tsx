@@ -1,9 +1,15 @@
 "use client";
 
-import { useEffect, useState } from "react";
+/**
+ * The admin console's frame (2026-11-02, operator: "change the UI of the admin console to match the
+ * operation theme"). The desk's own ink bar and palette, with the console's pages in a side list
+ * beside the work. A search box at the top of the list finds a page or one setting by its name.
+ */
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ArrowLeft, ChevronDown, ChevronRight, Menu, X } from "lucide-react";
+import { ChevronRight, Menu, X } from "lucide-react";
+import { Icon, IconSprite } from "@/design-system";
 import {
   activeDomainNumber,
   adminNavGroups,
@@ -11,18 +17,21 @@ import {
   utilityNavItems,
   type AdminNavGroup,
 } from "@/config/admin-nav";
-import { ZoneTransitionLink } from "@/components/layout/zone-transition";
+import { ROLE_WORD } from "@/components/ds/app-shell";
+import { useHotelClock } from "@/hooks/use-hotel-clock";
 import { useSession } from "@/hooks/use-session";
+import { settingsIndex } from "@/lib/admin/setting-forms";
+import { clockParts } from "@/lib/ds/format";
 import { cn } from "@/lib/utils";
 import { AdminGuard } from "./admin-guard";
+import { useGoToWhatEditOpens } from "./use-go-to-edit";
 
 function isItemActive(pathname: string, href: string): boolean {
   if (href === "/admin") return pathname === "/admin";
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
-/** One collapsible domain drawer. Header is clickable to toggle. */
-function DomainDrawer({
+function SideGroup({
   group,
   expanded,
   onToggle,
@@ -35,210 +44,207 @@ function DomainDrawer({
   pathname: string;
   onNavigate?: () => void;
 }) {
-  const Icon = group.icon;
+  const GroupIcon = group.icon;
   return (
-    <div className="admin-sidebar-group">
-      <button
-        type="button"
-        onClick={onToggle}
-        className="admin-sidebar-group-header flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-        aria-expanded={expanded}
-      >
-        {expanded ? (
-          <ChevronDown className="h-3.5 w-3.5 shrink-0" />
-        ) : (
-          <ChevronRight className="h-3.5 w-3.5 shrink-0" />
-        )}
-        <Icon className="h-3.5 w-3.5 shrink-0" />
-        <span className="flex-1 truncate">
-          <span className="admin-eyebrow mr-1.5 text-[10px] tracking-widest opacity-60">
-            {group.domainNumber}
-          </span>
-          {group.title}
-        </span>
+    <div className="admin-side-group" data-tone={group.domainNumber}>
+      <button type="button" onClick={onToggle} className="admin-side-head" aria-expanded={expanded}>
+        <ChevronRight className="admin-side-chev" />
+        <GroupIcon />
+        <span>{group.title}</span>
       </button>
-      {expanded && (
-        <div className="admin-sidebar-group-items mt-0.5 space-y-0.5 pl-3">
-          {group.items.map((item) => {
-            const active = isItemActive(pathname, item.href);
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                onClick={onNavigate}
-                className={cn("admin-sidebar-link", active && "active")}
-              >
-                <item.icon className="h-3.5 w-3.5 shrink-0 opacity-70" />
-                <span className="truncate">{item.title}</span>
-              </Link>
-            );
-          })}
+      {expanded ? (
+        <div className="admin-side-items">
+          {group.items.map((item) => (
+            <Link
+              key={item.href}
+              href={item.href}
+              onClick={onNavigate}
+              aria-current={isItemActive(pathname, item.href) ? "page" : undefined}
+              className={cn("admin-sidebar-link", isItemActive(pathname, item.href) && "active")}
+            >
+              {item.title}
+            </Link>
+          ))}
         </div>
-      )}
+      ) : null}
     </div>
   );
 }
 
-/** The nav body shared by the desktop sidebar and the mobile drawer. */
-function SidebarNav({
+/** Pages and settings whose words hold what was typed. */
+function useFound(query: string) {
+  return useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (q.length < 2) return null;
+    const pages = adminNavGroups
+      .flatMap((g) => g.items.map((i) => ({ ...i, group: g.title })))
+      .concat(utilityNavItems.map((i) => ({ ...i, group: "Tools" })))
+      .filter((i) => `${i.title} ${i.description ?? ""}`.toLowerCase().includes(q))
+      .slice(0, 8);
+    const settings = settingsIndex()
+      .filter((s) => `${s.title} ${s.about}`.toLowerCase().includes(q))
+      .slice(0, 12);
+    return { pages, settings };
+  }, [query]);
+}
+
+function SideList({
   pathname,
-  expandedDomain,
-  setExpandedDomain,
+  expanded,
+  setExpanded,
   onNavigate,
 }: {
   pathname: string;
-  expandedDomain: string | null;
-  setExpandedDomain: React.Dispatch<React.SetStateAction<string | null>>;
+  expanded: string | null;
+  setExpanded: React.Dispatch<React.SetStateAction<string | null>>;
   onNavigate?: () => void;
 }) {
-  const { session } = useSession();
-  const overviewActive = isItemActive(pathname, overviewNavItem.href);
+  const [query, setQuery] = useState("");
+  const found = useFound(query);
 
   return (
     <>
-      <nav className="space-y-1.5">
-        {/* Pinned: Overview */}
-        <Link
-          href={overviewNavItem.href}
-          onClick={onNavigate}
-          className={cn("admin-sidebar-link mb-2", overviewActive && "active")}
-        >
-          <overviewNavItem.icon className="h-4 w-4 shrink-0" />
-          {overviewNavItem.title}
-        </Link>
+      <div className="admin-find">
+        <input
+          type="search"
+          className="admin-input"
+          placeholder="Find a setting"
+          aria-label="Find a page or a setting"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") setQuery("");
+          }}
+        />
+      </div>
 
-        {/* Nine domain drawers */}
-        {adminNavGroups.map((group) => (
-          <DomainDrawer
-            key={group.domainNumber}
-            group={group}
-            expanded={expandedDomain === group.domainNumber}
-            onToggle={() =>
-              setExpandedDomain((cur) => (cur === group.domainNumber ? null : group.domainNumber))
-            }
-            pathname={pathname}
-            onNavigate={onNavigate}
-          />
-        ))}
-
-        {/* Pinned: Utilities */}
-        <div className="mt-4 border-t border-border pt-3">
-          <p className="admin-eyebrow mb-1.5 px-2 text-[10px] tracking-widest opacity-60">Utilities</p>
-          {utilityNavItems.map((item) => {
-            const active = isItemActive(pathname, item.href);
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                onClick={onNavigate}
-                className={cn("admin-sidebar-link", active && "active")}
-              >
-                <item.icon className="h-3.5 w-3.5 shrink-0 opacity-70" />
-                <span className="truncate">{item.title}</span>
-              </Link>
-            );
-          })}
-        </div>
-      </nav>
-
-      {session && (
-        <div className="mt-6 border-t border-border pt-3 text-xs text-muted-foreground">
-          <p className="font-medium text-foreground">{session.displayName ?? session.username ?? session.userId}</p>
-          <p>{session.actorLevel} · configuration writes</p>
-        </div>
+      {found ? (
+        <nav aria-label="Found" className="admin-side-items">
+          {found.pages.map((p) => (
+            <Link key={p.href} href={p.href} onClick={onNavigate} className="admin-sidebar-link found">
+              <span>{p.title}</span>
+              <small>Page · {p.group}</small>
+            </Link>
+          ))}
+          {found.settings.map((s) => (
+            <Link key={s.key} href={`${s.page}?key=${encodeURIComponent(s.key)}`} onClick={onNavigate} className="admin-sidebar-link found">
+              <span>{s.title}</span>
+              <small>{s.pageTitle}</small>
+            </Link>
+          ))}
+          {found.pages.length + found.settings.length === 0 ? <p className="admin-find-empty">Nothing by that name.</p> : null}
+        </nav>
+      ) : (
+        <nav aria-label="Console">
+          <Link
+            href={overviewNavItem.href}
+            onClick={onNavigate}
+            aria-current={isItemActive(pathname, overviewNavItem.href) ? "page" : undefined}
+            className={cn("admin-sidebar-link top", isItemActive(pathname, overviewNavItem.href) && "active")}
+          >
+            {overviewNavItem.title}
+          </Link>
+          {adminNavGroups.map((group) => (
+            <SideGroup
+              key={group.domainNumber}
+              group={group}
+              expanded={expanded === group.domainNumber}
+              onToggle={() => setExpanded((cur) => (cur === group.domainNumber ? null : group.domainNumber))}
+              pathname={pathname}
+              onNavigate={onNavigate}
+            />
+          ))}
+          <p className="admin-side-sep">Tools</p>
+          {utilityNavItems.map((item) => (
+            <Link
+              key={item.href}
+              href={item.href}
+              onClick={onNavigate}
+              aria-current={isItemActive(pathname, item.href) ? "page" : undefined}
+              className={cn("admin-sidebar-link top", isItemActive(pathname, item.href) && "active")}
+            >
+              {item.title}
+            </Link>
+          ))}
+        </nav>
       )}
     </>
   );
 }
 
+function BarClock() {
+  const clock = useHotelClock(1000);
+  const { date, time } = clockParts(clock.now, clock.tz, { seconds: true });
+  return (
+    <span className="clock" title={clock.known ? `Hotel time · ${clock.tz}` : "Hotel time — checking with the server"}>
+      <span className="date">{date} · </span>
+      <b>{time}</b>
+    </span>
+  );
+}
+
 export function AdminShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const { session } = useSession();
 
-  // Auto-expand the group containing the current page. When you navigate to a page in another
-  // domain, that domain expands and the previously-expanded one collapses.
-  const [expandedDomain, setExpandedDomain] = useState<string | null>(() => activeDomainNumber(pathname));
-  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  // The group holding the page is open; going to a page in another group opens that one.
+  const [expanded, setExpanded] = useState<string | null>(() => activeDomainNumber(pathname));
+  const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
     const next = activeDomainNumber(pathname);
-    if (next) setExpandedDomain(next);
+    if (next) setExpanded(next);
   }, [pathname]);
 
-  // Close the mobile drawer whenever the route changes.
   useEffect(() => {
-    setMobileNavOpen(false);
+    setMenuOpen(false);
   }, [pathname]);
+
+  useGoToWhatEditOpens();
+
+  const name = session ? session.displayName ?? session.username ?? session.userId : null;
 
   return (
-    <div className="admin-console flex min-h-screen flex-col bg-background">
-      <header className="admin-topnav sticky top-0 z-50 border-b bg-card/95 backdrop-blur">
-        <div className="mx-auto flex max-w-[1500px] items-center gap-4 px-4 py-3 md:gap-6 md:px-6 lg:px-8">
-          <button
-            type="button"
-            onClick={() => setMobileNavOpen(true)}
-            className="admin-nav-link -ml-1 flex items-center rounded-md p-1.5 md:hidden"
-            aria-label="Open navigation"
-          >
-            <Menu className="h-5 w-5" />
+    <div className="ds" data-ds-overlays>
+      <IconSprite />
+      <div className="shell theme-blue admin-console">
+        <div className="topbar">
+          <button type="button" className="admin-menu" aria-label={menuOpen ? "Close the list" : "Open the list"} onClick={() => setMenuOpen((o) => !o)}>
+            {menuOpen ? <X size={20} /> : <Menu size={20} />}
           </button>
-          <div className="admin-brand shrink-0 border-l-4 border-primary pl-3">
-            Admin Console
-            <small>LEGPHEL PMS · Configuration</small>
-          </div>
-          <div className="ml-auto flex shrink-0 items-center gap-2">
-            <ZoneTransitionLink href="/today" target="operations" className="admin-nav-link flex items-center gap-1 text-xs">
-              <ArrowLeft className="h-3 w-3" />
-              Operations
-            </ZoneTransitionLink>
-          </div>
+          <Link href="/admin" className="mark" aria-label="Admin console">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/brand/logo-mark.png" alt="" />
+            <span className="name">LEGPHEL PMS</span>
+          </Link>
+          <span className="admin-zone">Admin console</span>
+          <span className="spacer" />
+          {session ? (
+            <>
+              <BarClock />
+              <span className="user admin-who" style={{ cursor: "default" }}>
+                <Icon name="person" />
+                <b>{name}</b>
+                <span className="role">{ROLE_WORD[session.actorLevel] ?? session.actorLevel}</span>
+              </span>
+            </>
+          ) : null}
+          <Link href="/today" className="admin-back">
+            ← Back to the desk
+          </Link>
         </div>
-      </header>
 
-      {/* Mobile nav drawer */}
-      {mobileNavOpen && (
-        <div className="fixed inset-0 z-[60] md:hidden">
-          <div
-            className="absolute inset-0 bg-black/40 backdrop-blur-sm"
-            onClick={() => setMobileNavOpen(false)}
-            aria-hidden
-          />
-          <aside className="admin-sidebar absolute left-0 top-0 flex h-full w-72 max-w-[85%] flex-col overflow-y-auto border-r border-border bg-card p-4 shadow-2xl">
-            <div className="mb-4 flex items-center justify-between">
-              <div className="admin-brand border-l-4 border-primary pl-3">
-                Admin Console
-                <small>Configuration</small>
-              </div>
-              <button
-                type="button"
-                onClick={() => setMobileNavOpen(false)}
-                className="admin-nav-link rounded-md p-1.5"
-                aria-label="Close navigation"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-            <SidebarNav
-              pathname={pathname}
-              expandedDomain={expandedDomain}
-              setExpandedDomain={setExpandedDomain}
-              onNavigate={() => setMobileNavOpen(false)}
-            />
+        <div className="admin-body">
+          <div className={cn("admin-scrim", menuOpen && "open")} onClick={() => setMenuOpen(false)} aria-hidden />
+          <aside className={cn("admin-sidebar", menuOpen && "open")}>
+            <SideList pathname={pathname} expanded={expanded} setExpanded={setExpanded} onNavigate={() => setMenuOpen(false)} />
           </aside>
+          <main className="admin-main" data-tone={activeDomainNumber(pathname) ?? undefined}>
+            <div className="admin-page">
+              <AdminGuard>{children}</AdminGuard>
+            </div>
+          </main>
         </div>
-      )}
-
-      <div className="mx-auto flex w-full max-w-[1500px] flex-1 gap-6 px-4 py-6 md:gap-8 md:px-6 lg:px-8">
-        <aside className="admin-sidebar sticky top-[84px] hidden max-h-[calc(100vh-104px)] w-60 shrink-0 self-start overflow-y-auto rounded-xl border border-border bg-card p-3 shadow-sm md:block">
-          <SidebarNav
-            pathname={pathname}
-            expandedDomain={expandedDomain}
-            setExpandedDomain={setExpandedDomain}
-          />
-        </aside>
-
-        <main className="min-w-0 flex-1 pb-16">
-          <AdminGuard>{children}</AdminGuard>
-        </main>
       </div>
     </div>
   );

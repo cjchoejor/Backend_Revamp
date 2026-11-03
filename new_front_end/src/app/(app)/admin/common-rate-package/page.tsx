@@ -1,5 +1,6 @@
 "use client";
 
+import { Help } from "@/components/ds/help";
 import { useSession } from "@/hooks/use-session";
 import { RatePackagesEditor } from "@/components/admin/rate-packages-editor";
 
@@ -21,27 +22,17 @@ export default function AdminCommonRatePackagePage() {
   return (
     <div className="space-y-6 pb-16">
       <div>
-        <p className="admin-eyebrow mb-2">Domain 03 · Commercial</p>
-        <h1 className="admin-display text-3xl">Common rate package</h1>
-        <p className="admin-muted mt-2 max-w-3xl text-sm">
-          The rate used when a travel agent or corporate account has <strong>no package of their own</strong> —
+        <p className="admin-eyebrow mb-2">Rates and limits</p>
+        <h1 className="admin-display flex items-center gap-2 text-3xl">
+          Common rate package
+          <Help label="Common rate package">
+            The rate used when a travel agent or corporate account has <strong>no package of their own</strong> —
           typically an agency the hotel has just started dealing with. Without this they would price at zero, so
-          front desk can quote them the moment they call and the negotiated rates can be entered later.
-        </p>
-      </div>
-
-      <div className="admin-panel p-4 text-xs leading-relaxed">
-        <p className="admin-muted">
-          <strong>This is not the walk-in rate.</strong> A guest booking directly, with no agency behind them,
-          prices from <a className="underline" href="/admin/rate-plans">Rate plans</a> plus the{" "}
-          <a className="underline" href="/admin/house-tariff">House tariff</a>. The common package applies only to
-          agent and corporate bookings.
-        </p>
-        <p className="admin-muted mt-2">
-          Once an agency has its own package on{" "}
-          <a className="underline" href="/admin/travel-agents">Travel agents &amp; rate packages</a>, that package
-          takes over and this one stops applying to them.
-        </p>
+          front desk can quote them the moment they call and the negotiated rates can be entered later. This is not the walk-in rate: a guest booking
+          directly, with no agency behind them, prices from Rate plans plus the House tariff. Once an agency has a package of its own under Travel agents,
+          that package takes over and this one stops applying to them.
+          </Help>
+        </h1>
       </div>
 
       {/* Owner deliberately empty — that is what makes it the COMMON package. */}

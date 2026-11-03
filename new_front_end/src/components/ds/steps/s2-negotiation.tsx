@@ -39,7 +39,7 @@ import { ChangeConfiguration, DecidedConfigurationChanges, WaitingConfigurationC
 import { operativeRoomCompositions, roomNightsByRoom, roomStayRangesByRoom } from "@/lib/desk/party-rooms";
 import { fmtDateTime, fmtStamp, money, plural } from "@/lib/ds/format";
 import { optionSelectedRoomIds, preferredHoldRoomId, type EntryDetail, type QuotationSummary, type SpeculativeHoldSummary } from "@/types/api";
-import { Choice, DsDialog, Live, Notice, OtherWaysTabs, ChangeBookingMenu, StageActs, useOpenAlsoWay, PaperDrawer, QuotationSendDialog, ReasonDialog, SeeRow, StepCanvas, StepCard, Tool, atLeast, toastRefusal, type PaperRef, useBedPlan, useOpenFileTab, useRefreshEntry, useStepFlow, useFlowCard, anchorFor, revealCard, words, parkTab, declineTab } from "./kit";
+import { Choice, latestDispatched, useCommunications, DsDialog, Live, Notice, OtherWaysTabs, ChangeBookingMenu, StageActs, useOpenAlsoWay, PaperDrawer, QuotationSendDialog, ReasonDialog, SeeRow, StepCanvas, StepCard, Tool, atLeast, toastRefusal, type PaperRef, useBedPlan, useOpenFileTab, useRefreshEntry, useStepFlow, useFlowCard, anchorFor, revealCard, words, parkTab, declineTab } from "./kit";
 import { usePublishPriceDraft } from "@/lib/ds/stay-price";
 import { Help } from "@/components/ds/help";
 import type { ChangeBookingItem } from "./kit";
@@ -288,7 +288,9 @@ export function S2Negotiation({
   const [discountUnit, setDiscountUnit] = useState<"percent" | "amount">("percent");
   const [discountBasis, setDiscountBasis] = useState("negotiation");
   const recordedDiscount = useMemo(() => readDiscount(working ?? accepted), [working, accepted]);
-  const seededFor = useRef<string | null>(null);
+  // `undefined` until the first run: with no quotation yet the id is null, and starting at null
+  // skipped the first run, so a discount carried from another booking never reached the table.
+  const seededFor = useRef<string | null | undefined>(undefined);
   useEffect(() => {
     const id = (working ?? accepted)?.id ?? null;
     if (seededFor.current === id) return;
@@ -301,6 +303,12 @@ export function S2Negotiation({
       // Not priced yet, split off a booking that had a percentage off: it carries.
       setDiscountValue(String(entry.carryOver.discount.discountPercent));
       setDiscountUnit("percent");
+      setDiscountBasis(entry.carryOver.discount.discountBasis || "negotiation");
+    } else if (!id && entry.followsEntryId && entry.carryOver?.discount?.discountAmount) {
+      // A stay set up the same as another copies a flat amount off too (2026-11-03). A booking split
+      // off another does not: that amount stays with the original.
+      setDiscountValue(String(entry.carryOver.discount.discountAmount));
+      setDiscountUnit("amount");
       setDiscountBasis(entry.carryOver.discount.discountBasis || "negotiation");
     }
   }, [working, accepted, recordedDiscount]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -794,11 +802,9 @@ export function S2Negotiation({
               onChange={setRoomCompositions}
               discountValue={discountValue}
               discountUnit={discountUnit}
-              discountBasis={discountBasis}
               onDiscountChange={(patch) => {
                 if (patch.value !== undefined) setDiscountValue(patch.value);
                 if (patch.unit !== undefined) setDiscountUnit(patch.unit);
-                if (patch.basis !== undefined) setDiscountBasis(patch.basis);
               }}
             />
             </div>
@@ -1048,6 +1054,7 @@ function QuotationCard({
   const [paper, setPaper] = useState<PaperRef | null>(null);
   const [why, setWhy] = useState(false);
   const [answerOpen, setAnswerOpen] = useState(false);
+  const replyNotAsked = latestDispatched(useCommunications(entry.id).data?.items, "QUOTATION")?.acknowledgementStatus === "NOT_ASKED";
   const [how, setHow] = useState<AnswerHow | null>(null);
   const [said, setSaid] = useState("");
   const [closeLoopOpen, setCloseLoopOpen] = useState(false);
@@ -1222,7 +1229,7 @@ function QuotationCard({
         ) : q.state === "SENT" ? (
           <>
             <span className="sm">
-              <Icon name="clock" /> Awaiting their answer{q.validUntil ? ` — the price holds until ${fmtDateTime(q.validUntil, tz)}` : ""}
+              <Icon name="clock" /> {replyNotAsked ? "Sent · no answer needed" : "Awaiting their answer"}{q.validUntil ? ` — the price holds until ${fmtDateTime(q.validUntil, tz)}` : ""}
             </span>
             <Live>
               {!answerOpen ? (
@@ -1234,12 +1241,14 @@ function QuotationCard({
                     onClick={editable ? () => setAnswerOpen(true) : undefined}
                     reason={editable ? undefined : "not at this step"}
                   />
-                  <SeeRow
-                    label="No answer — the FOM decides"
-                    note="Closes the reply window as the FOM's decision, with a reason."
-                    onClick={editable && elevated ? () => setCloseLoopOpen(true) : undefined}
-                    reason={!editable ? "not at this step" : elevated ? undefined : "closing the reply window is the FOM's call"}
-                  />
+                  {replyNotAsked ? null : (
+                    <SeeRow
+                      label="No answer — the FOM decides"
+                      note="Closes the reply window as the FOM's decision, with a reason."
+                      onClick={editable && elevated ? () => setCloseLoopOpen(true) : undefined}
+                      reason={!editable ? "not at this step" : elevated ? undefined : "closing the reply window is the FOM's call"}
+                    />
+                  )}
                 </div>
               ) : (
                 <div className="bind provisional" style={{ display: "grid", gap: 8 }}>

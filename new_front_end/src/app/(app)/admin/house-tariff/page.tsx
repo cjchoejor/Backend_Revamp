@@ -1,5 +1,7 @@
 "use client";
 
+import { AdmField } from "@/components/admin/field-title";
+import { Help } from "@/components/ds/help";
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -62,10 +64,9 @@ function RateInput({
   label, hint, value, onChange,
 }: { label: string; hint?: string; value: string; onChange: (v: string) => void }) {
   return (
-    <label className="admin-muted text-xs">
-      {label}
+    <AdmField label={label} hint={hint}>
       <input
-        className="admin-input mt-1"
+        className="admin-input"
         type="number"
         min="0"
         step="0.01"
@@ -73,8 +74,7 @@ function RateInput({
         value={value}
         onChange={(e) => onChange(e.target.value)}
       />
-      {hint && <span className="mt-1 block text-[10px] leading-snug opacity-70">{hint}</span>}
-    </label>
+    </AdmField>
   );
 }
 
@@ -167,26 +167,11 @@ export default function AdminHouseTariffPage() {
   return (
     <div className="space-y-8 pb-16">
       <div>
-        <p className="admin-eyebrow mb-2">Domain 03 · Commercial</p>
-        <h1 className="admin-display text-3xl">House tariff</h1>
-        <p className="admin-muted mt-1">
-          The hotel&apos;s own extra-bed and meal prices. Used for <strong>walk-in, direct and OTA</strong> bookings —
-          anything with no travel agent or corporate account attached. Agent and corporate bookings use their own
-          rate card instead and never fall back to these.
-        </p>
-      </div>
-
-      <div className="admin-panel p-4 text-xs leading-relaxed">
-        <p className="admin-muted">
-          <strong>Room rates are not here.</strong> They live on{" "}
-          <a className="underline" href="/admin/rate-plans">Rate plans</a>, one per room type, because that path also
-          carries the minimum-sell-rate floor, the season multiplier and the discount pipeline.
-        </p>
-        <p className="admin-muted mt-2">
-          <strong>Leave a box empty</strong> to mean &ldquo;not priced&rdquo;. An empty meal-plan box falls back to
-          the sum of the meals that plan covers. Enter <strong>0</strong> to mean deliberately free — that is not the
-          same as leaving it empty.
-        </p>
+        <p className="admin-eyebrow mb-2">Rates and limits</p>
+        <h1 className="admin-display flex items-center gap-2 text-3xl">
+          House tariff
+          <Help label="House tariff">The hotel's own prices for an extra bed and meals. They apply to any booking with no travel agent or company. Those bookings use their rate package instead and never fall back to these. Room rates are not here: they are on Rate plans, one per room type, with the floor, the season and the discounts. Leave a box empty to mean not priced; an empty meal plan falls back to the sum of its meals. Enter 0 to mean deliberately free, which is not the same as leaving it empty.</Help>
+        </h1>
       </div>
 
       {activeQuery.isLoading && <p className="admin-muted text-sm">Loading…</p>}
@@ -198,8 +183,10 @@ export default function AdminHouseTariffPage() {
       )}
 
       <section className="space-y-3">
-        <h2 className="admin-display text-lg">Extra bed &amp; à-la-carte meals</h2>
-        <p className="admin-muted text-xs">Per guest, per serving, per night. These are also the fallback prices for meal plans.</p>
+        <h2 className="admin-display flex items-center gap-2 text-lg">
+          Extra bed &amp; à-la-carte meals
+          <Help label="Extra bed and meals">Per guest, per serving, per night. These are also the fallback prices for meal plans.</Help>
+        </h2>
         <div className="admin-panel grid gap-4 p-5 md:grid-cols-4">
           <RateInput label="Extra bed" hint="per bed, per night" value={form.extraBedRate} onChange={(v) => setForm({ ...form, extraBedRate: v })} />
           <RateInput label="Breakfast" value={form.breakfastRate} onChange={(v) => setForm({ ...form, breakfastRate: v })} />
@@ -209,15 +196,18 @@ export default function AdminHouseTariffPage() {
       </section>
 
       <section className="space-y-3">
-        <h2 className="admin-display text-lg">Meal plans</h2>
-        <p className="admin-muted text-xs">
-          A guest on a plan is charged the plan price <strong>instead of</strong> the individual meals it covers —
-          never both. Leave empty and the plan simply adds up its own meals.
-        </p>
+        <h2 className="admin-display flex items-center gap-2 text-lg">
+          Meal plans
+          <Help label="Meal plans">
+            A guest on a plan is charged the plan price instead of the individual meals it covers, never both. Leave empty and the plan simply adds up
+            its own meals. The desk can still renegotiate any meal price per room at Negotiation: a negotiated meal re-prices only the plans that include
+            it, so negotiating dinner moves MAP+D and AP and leaves CP alone.
+          </Help>
+        </h2>
         <div className="admin-panel grid gap-4 p-5 md:grid-cols-4">
           <RateInput label="CP" hint="breakfast only" value={form.cpRate} onChange={(v) => setForm({ ...form, cpRate: v })} />
-          <RateInput label="MAPL" hint="breakfast + lunch" value={form.mapLunchRate} onChange={(v) => setForm({ ...form, mapLunchRate: v })} />
-          <RateInput label="MAPD" hint="breakfast + dinner" value={form.mapDinnerRate} onChange={(v) => setForm({ ...form, mapDinnerRate: v })} />
+          <RateInput label="MAP+L" hint="breakfast + lunch" value={form.mapLunchRate} onChange={(v) => setForm({ ...form, mapLunchRate: v })} />
+          <RateInput label="MAP+D" hint="breakfast + dinner" value={form.mapDinnerRate} onChange={(v) => setForm({ ...form, mapDinnerRate: v })} />
           <RateInput label="AP" hint="all three meals" value={form.apRate} onChange={(v) => setForm({ ...form, apRate: v })} />
         </div>
 
@@ -230,7 +220,7 @@ export default function AdminHouseTariffPage() {
             <tbody>
               {(["CP", "MAPL", "MAPD", "AP"] as const).map((k) => (
                 <tr key={k}>
-                  <td className="font-mono text-xs">{k}</td>
+                  <td className="text-xs">{k === "MAPL" ? "MAP+L" : k === "MAPD" ? "MAP+D" : k}</td>
                   <td className="admin-muted text-xs">{effective[k].covers}</td>
                   <td className="font-mono">{money(effective[k].value, form.currency)}</td>
                   <td className="text-xs">
@@ -242,10 +232,6 @@ export default function AdminHouseTariffPage() {
               ))}
             </tbody>
           </table>
-          <p className="admin-muted mt-3 text-[11px]">
-            Front desk can still renegotiate any meal price per room in Stage 2. A negotiated meal re-prices only the
-            plans that include it — negotiating dinner moves MAPD and AP, and leaves CP alone.
-          </p>
         </div>
       </section>
 
@@ -259,18 +245,20 @@ export default function AdminHouseTariffPage() {
             Note for the audit trail <span className="opacity-60">(optional)</span>
             <input className="admin-input mt-1" placeholder="e.g. 2026 meal price revision" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
           </label>
-          <button
-            type="button"
-            className="admin-btn col-span-full w-fit"
-            disabled={saveMutation.isPending}
-            onClick={() => saveMutation.mutate()}
-          >
-            {saveMutation.isPending ? "Saving…" : "Save as new version"}
-          </button>
-          <p className="admin-muted col-span-full text-[11px]">
-            Saving never overwrites. The current tariff is closed off and a new version starts now, so quotes issued
-            under the old prices can always be re-derived.
-          </p>
+          <div className="col-span-full flex items-center gap-2">
+            <button
+              type="button"
+              className="admin-btn w-fit"
+              disabled={saveMutation.isPending}
+              onClick={() => saveMutation.mutate()}
+            >
+              {saveMutation.isPending ? "Saving…" : "Save as new version"}
+            </button>
+            <Help label="Saving">
+              Saving never overwrites. The current tariff is closed off and a new version starts now, so quotes made under the old prices can always be worked
+              out.
+            </Help>
+          </div>
         </div>
       </section>
 
@@ -280,7 +268,7 @@ export default function AdminHouseTariffPage() {
           <div className="admin-panel overflow-x-auto p-4">
             <table className="admin-table">
               <thead>
-                <tr><th>Extra bed</th><th>Breakfast</th><th>Lunch</th><th>Dinner</th><th>CP</th><th>MAPL</th><th>MAPD</th><th>AP</th><th>In force since</th></tr>
+                <tr><th>Extra bed</th><th>Breakfast</th><th>Lunch</th><th>Dinner</th><th>CP</th><th>MAP+L</th><th>MAP+D</th><th>AP</th><th>In force since</th></tr>
               </thead>
               <tbody>
                 <tr>
@@ -307,7 +295,7 @@ export default function AdminHouseTariffPage() {
           <div className="admin-panel overflow-x-auto p-4">
             <table className="admin-table">
               <thead>
-                <tr><th>From</th><th>To</th><th>Extra bed</th><th>B / L / D</th><th>CP / MAPL / MAPD / AP</th><th>By</th></tr>
+                <tr><th>From</th><th>To</th><th>Extra bed</th><th>B / L / D</th><th>CP / MAP+L / MAP+D / AP</th><th>By</th></tr>
               </thead>
               <tbody>
                 {history.map((v: HouseTariffAdmin) => (

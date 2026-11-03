@@ -21,7 +21,7 @@ import type { RoomCompositionInput } from "@/lib/api/quotations";
 import type { EntryDetail } from "@/types/api";
 import { DeskConfirmModal } from "./confirm-modal";
 import { RoomCompositionPlanner } from "./room-compositions-board";
-import { NegotiationDiscountBar, type DiscountUnit } from "./room-compositions-table";
+import type { DiscountUnit } from "./room-compositions-table";
 import { Help } from "@/components/ds/help";
 
 /**
@@ -988,19 +988,14 @@ export function RoomChangeControl({
                     : `Rates, FOC / service-charge waivers and the discount need FOM authority (L2+) on a confirmed booking — you are ${level}. Guests, meals and extra beds are yours to change.`}
                 </p>
               )}
-              <NegotiationDiscountBar
+              <RoomCompositionPlanner
+                tableOnly
                 discountValue={discountValue}
                 discountUnit={discountUnit}
-                discountBasis={discountBasis}
-                lockCommercial={lockCommercial}
                 onDiscountChange={(patch) => {
                   if (patch.value !== undefined) setDiscountValue(patch.value);
                   if (patch.unit !== undefined) setDiscountUnit(patch.unit);
-                  if (patch.basis !== undefined) setDiscountBasis(patch.basis);
                 }}
-              />
-              <RoomCompositionPlanner
-                tableOnly
                 sealedRoomIds={selectedNewRooms}
                 entryCheckIn={entry.checkInDate ?? null}
                 entryCheckOut={entry.checkOutDate ?? null}

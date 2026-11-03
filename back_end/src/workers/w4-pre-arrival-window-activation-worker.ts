@@ -7,6 +7,7 @@ import { armNoShowCutoff, noShowCutoffFor, resolveExpectedArrival, resolveNoShow
 import { enforceReservationSnapshotPresentForS5Activation } from "../policies/01-availability/p01-reservation-snapshot-required-for-s5-activation.js";
 import { scheduleS5StageDwellWarningMonitor } from "../lib/schedule-s5-dwell-warning-monitor.js";
 import { latestDispatchedInForce } from "../lib/reply-waits.js";
+import { replySettled } from "../lib/guest-reply-settings.js";
 
 export async function runPreArrivalWindowActivationWorker(
   prisma: PrismaClient,
@@ -132,7 +133,7 @@ async function activate(
     commType: "CONFIRMATION_VOUCHER",
     since: activationSince ?? null,
   });
-  if (voucherComm && voucherComm.acknowledgementStatus !== "RECEIVED") {
+  if (voucherComm && !replySettled(voucherComm.acknowledgementStatus)) {
     return {
       skipped: true,
       reason: "VOUCHER_ANSWER_MISSING",

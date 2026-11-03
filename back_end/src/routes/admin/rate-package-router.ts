@@ -40,6 +40,11 @@ const overrideSchema = z.object({
   notes: z.string().trim().max(500).optional().nullable(),
 });
 
+const workOutSchema = z.object({
+  meals: z.object({ breakfast: rate, lunch: rate, dinner: rate }).optional(),
+  withTaxes: z.record(z.string().trim().min(1).max(40), decimal).optional(),
+});
+
 /** Owner comes from the query string on reads: ?travelAgentId= | ?corporateAccountId= | neither = COMMON. */
 function ownerFromQuery(q: Record<string, unknown>) {
   const ta = typeof q.travelAgentId === "string" && q.travelAgentId ? q.travelAgentId : null;
@@ -60,6 +65,15 @@ adminRatePackageRouter.get("/rate-packages", L4, async (req, res, next) => {
 adminRatePackageRouter.get("/rate-packages/history", L4, async (req, res, next) => {
   try {
     res.json({ items: await svc.listPackageHistory(prisma, ownerFromQuery(req.query as never)) });
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** What the package form fills in as it is typed: meal plans from their meals, rates without taxes. Saves nothing. */
+adminRatePackageRouter.post("/rate-packages/work-out", L4, validateBody(workOutSchema), async (req, res, next) => {
+  try {
+    res.json(await svc.workOutPackageRates(prisma, req.body));
   } catch (e) {
     next(e);
   }

@@ -23,7 +23,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button, Chip, Dialog, EmptyState, Icon } from "@/design-system";
 import { StandingChip, bookingHref } from "@/components/ds/ui";
-import { tripOf } from "@/components/ds/workspace/return-stay";
+import { FollowNotice, StayPicker, TripFollowPrompt, tripOf } from "@/components/ds/workspace/return-stay";
 import { useSession } from "@/hooks/use-session";
 import { useHotelDay } from "@/hooks/use-hotel-day";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
@@ -44,6 +44,7 @@ import {
   switchStay,
   unparkEntry,
   type TimerRecordSummary,
+  replySettled,
 } from "@/lib/api/entries";
 import { closeEntryAtS9 } from "@/lib/api/post-stay";
 import { useClosureReadiness } from "@/hooks/use-closure-readiness";
@@ -616,8 +617,10 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
         title: "The booking is reserved",
         from: "Set up",
         to: "Reserve",
-        who: [[g?.firstName, g?.lastName].filter(Boolean).join(" ") || null, updated.id].filter(Boolean).join(" · "),
-        next: "Next: send the confirmation voucher or not — if it goes out, record the guest's answer — then Move to Arrival.",
+        who: [[g?.title, g?.firstName, g?.lastName].filter(Boolean).join(" ") || null, updated.id].filter(Boolean).join(" · "),
+        next: (commsQuery.data?.repliesOff ?? []).includes("CONFIRMATION_VOUCHER")
+          ? "Next: send the confirmation voucher or not, then Move to Arrival."
+          : "Next: send the confirmation voucher or not — if it goes out, record the guest's answer — then Move to Arrival.",
       });
     },
     // A refusal closes the dialog (2026-09-18): it stayed open over the page, hiding the very
@@ -662,7 +665,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
         title: "Reserve is done",
         from: "Reserve",
         to: "Arrival",
-        who: [[g?.firstName, g?.lastName].filter(Boolean).join(" ") || null, updated.id].filter(Boolean).join(" · "),
+        who: [[g?.title, g?.firstName, g?.lastName].filter(Boolean).join(" ") || null, updated.id].filter(Boolean).join(" · "),
         next: "Next: the rooms, the pre-arrival tasks and the advance — then the guest is checked in.",
       });
     },
@@ -690,7 +693,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
         title: "The guest is checked in",
         from: "Check-in",
         to: "Stay",
-        who: [[g?.firstName, g?.lastName].filter(Boolean).join(" ") || null, updated.id].filter(Boolean).join(" · "),
+        who: [[g?.title, g?.firstName, g?.lastName].filter(Boolean).join(" ") || null, updated.id].filter(Boolean).join(" · "),
         next: "Next: the bill grows with each charge, the nights are audited, and the departments are told.",
       });
     },
@@ -892,6 +895,24 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [parkPromptable, entryId, tripKey]);
 
+  // The park question closes without choosing (2026-11-03, operator: "this needs a close button like
+  // a X on the top right … or else the user wouldn't know how to close without choosing the two
+  // options"). The X, Escape and a press outside all stay on the booking, and nothing is parked.
+  const parkBusy = parkMutation.isPending || !!exitLeaving;
+  const closePark = () => {
+    pendingExitRef.current = null;
+    setParkOpen(false);
+  };
+  useEffect(() => {
+    if (!parkOpen || parkBusy) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closePark();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [parkOpen, parkBusy]);
+
   if (sessionLoading || entryQuery.isLoading) {
     return (
       <div className="page">
@@ -964,7 +985,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
         (!segStart || (c.createdAt ?? "") >= segStart),
     )
     .sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""))[0];
-  const voucherAnswerRecorded = !voucherSent || voucherSent.acknowledgementStatus === "RECEIVED";
+  const voucherAnswerRecorded = !voucherSent || replySettled(voucherSent);
+  const voucherReplyOff = (commsQuery.data?.repliesOff ?? []).includes("CONFIRMATION_VOUCHER") || voucherSent?.acknowledgementStatus === "NOT_ASKED";
 
   const ready = readyToConfirm && reserveExtras.length === 0;
   // A no-show says so — the imported ones sit EXPIRED at the end, and read "Expired" (2026-09-18).
@@ -1068,7 +1090,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                         })()
                       : [{ label: "Checking what is left before the close…", met: false }]
                     : confirmedS4Active
-                      ? [{ label: "The guest's answer to the voucher, if it was sent", met: voucherAnswerRecorded }]
+                      ? [{ label: voucherReplyOff ? "No answer needed to the voucher" : "The guest's answer to the voucher, if it was sent", met: voucherAnswerRecorded }]
                       : viewing < currentOrder
                         ? []
                         : preconditionsFor(entry, step, hotelToday);
@@ -1793,13 +1815,13 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
             <div
               className="scrim open"
               onClick={(e) => {
-                if (e.target !== e.currentTarget || parkMutation.isPending || exitLeaving) return;
-                pendingExitRef.current = null;
-                setParkOpen(false);
+                if (e.target !== e.currentTarget || parkBusy) return;
+                closePark();
               }}
             >
               <Dialog
                 register="commit"
+                onClose={parkBusy ? undefined : closePark}
                 title={parkExitFlow ? "Park this booking before you leave?" : "Park this booking"}
                 caseLines={[<b key="n">{name}</b>, entry.id]}
                 footer={
@@ -1889,10 +1911,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                     <span className="refno" title="The enquiry's number">
                       <b>{entry.inquiry?.id ?? "—"}</b>
                     </span>
-                    <span className="refid" title="The booking's number">
-                      {entry.id}
-                      {trip.stays.length > 1 ? <span className="meta"> · stay {trip.position} of {trip.stays.length}</span> : null}
-                    </span>
+                    <StayPicker entry={entry} />
                     {entry.guestProfile?.vipTier ? (
                       <Chip tone="accent" tier>
                         VIP
@@ -1965,6 +1984,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                   ) : null}
                   {!sealed ? <ActiveRoomMoves entryId={entry.id} tz={clock.tz} /> : null}
                   {!sealed ? <HeldPapersCard entryId={entry.id} tz={clock.tz} skip={reserveVoucherOnCard} /> : null}
+                  {!sealed && !viewingPast ? <FollowNotice entry={entry} /> : null}
+                  {!sealed ? <TripFollowPrompt entry={entry} /> : null}
                   <CaseCards
                     entry={entry}
                     step={viewing}

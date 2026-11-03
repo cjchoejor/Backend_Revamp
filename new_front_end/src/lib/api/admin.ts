@@ -352,6 +352,14 @@ export async function reactivateWorkOrderTemplate(session: Session, id: string) 
   return updateWorkOrderTemplate(session, id, { isActive: true });
 }
 
+export async function getCancellationCharges(session: Session) {
+  return apiRequest<{ value: unknown; overwritten: boolean }>("/api/admin/cancellation-policies/charges", { session });
+}
+
+export async function setCancellationCharges(session: Session, value: unknown, notes?: string | null) {
+  return apiRequest("/api/admin/cancellation-policies/charges", { method: "PUT", session, body: { value, notes } });
+}
+
 export async function getDeficientCategories(session: Session) {
   return apiRequest<{ configKey: string; configValue: unknown; isSystemDefault: boolean }>(
     "/api/admin/deficient-condition-categories",
@@ -917,6 +925,12 @@ export async function listCommunicationChannels(session: Session) {
 export async function updateCommunicationChannel(session: Session, channelId: string, body: Record<string, unknown>) {
   return apiRequest(`/api/admin/communication-config/channels/${encodeURIComponent(channelId)}`, { method: "PUT", session, body });
 }
+export async function getGuestReplySetting(session: Session, key: string) {
+  return apiRequest<{ value: unknown }>(`/api/admin/communication-config/guest-replies/${encodeURIComponent(key)}`, { session });
+}
+export async function setGuestReplySetting(session: Session, key: string, value: unknown) {
+  return apiRequest(`/api/admin/communication-config/guest-replies/${encodeURIComponent(key)}`, { method: "PUT", session, body: { value } });
+}
 export async function getAcknowledgementWindow(session: Session) {
   return apiRequest<{ value: unknown }>("/api/admin/communication-config/acknowledgement-window", { session });
 }
@@ -1111,6 +1125,11 @@ export async function deactivateTravelAgent(session: Session, id: string) {
   return apiRequest<TravelAgentAdmin>(`/api/admin/travel-agents/${id}/deactivate`, { method: "POST", session });
 }
 
+/** For good. Refused in words while any enquiry names the agency. */
+export async function deleteTravelAgent(session: Session, id: string) {
+  return apiRequest<{ deleted: boolean; id: string; displayName: string; packagesDeleted: number }>(`/api/admin/travel-agents/${id}`, { method: "DELETE", session });
+}
+
 export async function reactivateTravelAgent(session: Session, id: string) {
   return apiRequest<TravelAgentAdmin>(`/api/admin/travel-agents/${id}/reactivate`, { method: "POST", session });
 }
@@ -1244,6 +1263,20 @@ export async function listRatePackages(session: Session, owner: PackageOwner) {
 }
 export async function listRatePackageHistory(session: Session, owner: PackageOwner) {
   return apiRequest<{ items: RatePackageAdmin[] }>(`/api/admin/rate-packages/history${ownerQuery(owner)}`, { session });
+}
+export type PackageRatesWorkedOut = {
+  serviceChargeRate: number;
+  gstRate: number;
+  planRates: { cpRate: string | null; mapLunchRate: string | null; mapDinnerRate: string | null; apRate: string | null } | null;
+  withoutTaxes: Record<string, string>;
+  comesTo: Record<string, string>;
+};
+/** What the package form fills in as it is typed. Saves nothing. */
+export async function workOutPackageRates(
+  session: Session,
+  body: { meals?: { breakfast: number | null; lunch: number | null; dinner: number | null }; withTaxes?: Record<string, number> },
+) {
+  return apiRequest<PackageRatesWorkedOut>("/api/admin/rate-packages/work-out", { method: "POST", session, body });
 }
 export async function saveRatePackage(session: Session, body: RatePackageInput) {
   return apiRequest<RatePackageAdmin>("/api/admin/rate-packages", { method: "POST", session, body });

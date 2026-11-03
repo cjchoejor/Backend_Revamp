@@ -789,10 +789,13 @@ export function StepCard({
   noDoneBar = false,
   doneAction,
   revealAtTop = false,
+  keepRight = false,
 }: {
   title?: ReactNode;
   icon?: IconName;
   right?: ReactNode;
+  /** `right` stays on the card's top line while the section is folded to its summary. */
+  keepRight?: boolean;
   acts?: ReactNode;
   sealed?: boolean;
   quiet?: boolean;
@@ -926,7 +929,7 @@ export function StepCard({
             {metaInHelp ? <Help label="About this section">{meta}</Help> : null}
             {isCurrent ? <span className="flow-here">you are here</span> : null}
           </h4>
-          {waiting || folded ? null : right ? <div className="row-acts">{right}</div> : null}
+          {waiting || (folded && !keepRight) ? null : right ? <div className="row-acts">{right}</div> : null}
         </div>
       ) : null}
       {folded ? (
@@ -2192,9 +2195,12 @@ export function DsDialog({
   width,
   busy,
   help,
+  closeX = false,
 }: {
   open: boolean;
   onClose: () => void;
+  /** An X at the top right — for a pop-up whose acts offer no plain way out (2026-11-03). */
+  closeX?: boolean;
   register?: DialogRegister;
   title: ReactNode;
   caseLines?: ReactNode[];
@@ -2217,7 +2223,10 @@ export function DsDialog({
   useEffect(() => {
     if (!open || inline) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !busy) onClose();
+      if (e.key !== "Escape") return;
+      // Only the pop-up closes: a full-screen table behind it listens further up, on the window.
+      e.stopPropagation();
+      if (!busy) onClose();
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
@@ -2228,7 +2237,7 @@ export function DsDialog({
     <Overlay>
       <div className="scrim open" onMouseDown={(e) => e.target === e.currentTarget && !busy && onClose()}>
         <div style={width ? { width, maxWidth: "100%" } : undefined} className="dialog-holder">
-          <Dialog register={register} title={shownTitle} caseLines={caseLines} footer={footer}>
+          <Dialog register={register} title={shownTitle} caseLines={caseLines} footer={footer} onClose={closeX && !busy ? onClose : undefined}>
             {children}
           </Dialog>
         </div>
@@ -3090,6 +3099,11 @@ export function useCommunications(entryId: string) {
   });
 }
 
+/** Whether this email's reply is being asked for now — the admin console's setting (2026-11-03). */
+export function useReplyAsked(entryId: string, type: EntryCommunicationType) {
+  return !(useCommunications(entryId).data?.repliesOff ?? []).includes(type);
+}
+
 /** The newest dispatched paper of one kind within the current pass. */
 export function latestDispatched(items: EntryCommunication[] | undefined, type: EntryCommunicationType, sinceIso?: string | null) {
   return (items ?? [])
@@ -3158,6 +3172,13 @@ export function AnswerLine({
         <Icon name="check" /> Answered · {ANSWER_WORD[payload.acknowledgementMethod ?? ""] ?? "on record"}
         {c.acknowledgementReceivedAt ? ` · ${fmtStamp(c.acknowledgementReceivedAt, tz)}` : ""}
         {payload.verbatimNote ? <span className="meta"> · “{payload.verbatimNote}”</span> : null}
+      </span>
+    );
+  }
+  if (c.acknowledgementStatus === "NOT_ASKED") {
+    return (
+      <span className="sm">
+        <Icon name="check" /> {`Sent ${fmtStamp(sentAt ?? c.createdAt, tz)}`} · no answer needed
       </span>
     );
   }

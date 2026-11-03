@@ -1,5 +1,6 @@
 import { HoldState, InvoiceState, Stage } from "@prisma/client";
 import { StageGateBlockedError } from "../../lib/errors.js";
+import { replySettled } from "../../lib/guest-reply-settings.js";
 
 /** SIG-S4: entry must be at S3 before reservation confirmation. */
 export function enforceEntryAtS3ForReservationConfirmation(input: { currentStage: Stage }) {
@@ -109,7 +110,7 @@ export function enforceDispatchedProformaGuestAnswerRecordedForS4Confirmation(in
 }) {
   const comm = input.latestDispatchedProformaComm;
   if (!comm) return; // never sent → nothing the guest was asked to answer
-  if (comm.acknowledgementStatus === "RECEIVED") return;
+  if (replySettled(comm.acknowledgementStatus)) return;
   throw new StageGateBlockedError(
     "The proforma invoice was sent to the guest — record the guest's answer before confirming.",
     "PROFORMA_GUEST_ANSWER_NOT_RECORDED",

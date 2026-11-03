@@ -390,8 +390,9 @@ reservationsRouter.post("/entries/:id/room-assignments", requireActorLevel("L1")
       req.actor!.actorId,
       notes,
       deficientAcknowledgement,
-      { reEntryToS1: reEntryToS1 === true },
+      { reEntryToS1: reEntryToS1 === true, actorLevel: actor.actorLevel },
     );
+    await roomAssignmentService.traceRoomsHandedOut(prisma, req.params.id, actor, [created.roomId]);
     res.status(201).json(created);
   } catch (e) {
     next(e);
@@ -416,6 +417,7 @@ reservationsRouter.post("/entries/:id/room-assignments/from-sealed-per-night", r
       req.actor!.actorId,
     );
     await markRoomsFixed(prisma, req.params.id);
+    if (created.length) await roomAssignmentService.traceRoomsHandedOut(prisma, req.params.id, actor, [...new Set(created.map((a) => a.roomId))]);
     // Name what was handed out, and any room the system had to move since the proposal was shown
     // (another booking took it meanwhile), so the desk can say so in words.
     const ids = [...new Set([...created.map((a) => a.roomId), ...quiet.ownMap.keys(), ...quiet.ownMap.values()])];

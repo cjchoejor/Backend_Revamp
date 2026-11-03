@@ -382,7 +382,7 @@ export async function pendingStayExtensionClaims(
       entryId: true,
       extraNights: true,
       holdExpiresAt: true,
-      entry: { select: { inquiryId: true, guestProfile: { select: { firstName: true, lastName: true } } } },
+      entry: { select: { inquiryId: true, guestProfile: { select: { title: true, firstName: true, lastName: true } } } },
     },
   });
   const out: Array<

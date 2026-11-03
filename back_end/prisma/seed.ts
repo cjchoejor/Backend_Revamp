@@ -235,6 +235,15 @@ async function main() {
       notes: "Speculative hold placement thresholds",
     },
     {
+      configKey: "guestReply.quotation",
+      configValue: { required: true },
+    },
+    { configKey: "guestReply.proforma", configValue: { required: true } },
+    { configKey: "guestReply.confirmationVoucher", configValue: { required: true } },
+    { configKey: "guestReply.preArrivalMessage", configValue: { required: true } },
+    { configKey: "guestReply.interimBill", configValue: { required: true } },
+    { configKey: "guestReply.taxInvoice", configValue: { required: true } },
+    {
       configKey: "acknowledgement.windowPerType",
       configValue: {
         quotation: 86400,
@@ -325,7 +334,6 @@ async function main() {
     { configKey: "noShow.awaitingConfirmationWindowMinutes", configValue: 180, notes: "Minutes to await written confirmation after no-show cutoff (S5)" },
     { configKey: "cancellation.policyTiers", configValue: { sameDayPenaltyAmount: 100, postCheckInEarlyDeparturePenaltyAmount: 150 } },
     { configKey: "creditCeiling.proximityThresholds", configValue: { tier1Percent: 75, tier2Percent: 90 } },
-    { configKey: "nightAudit.expectedDailyFAndBCharge", configValue: { amount: 50, currency: "BTN" } },
     { configKey: "billing.salesTaxRate", configValue: 0.05, notes: "GST 5% — compound, applied to (net value + service charge) everywhere (quotes, charge posting, invoices). 0 disables automatic tax lines." },
     { configKey: "billing.serviceChargeRate", configValue: 0.1, notes: "Service charge 10% of net value. GST is computed on top of (net + this)." },
     {
@@ -1141,7 +1149,7 @@ async function main() {
       segmentId: segS7.id,
       frozenRate: 350,
       frozenRatePlanId: "rp-dlx-weekday",
-      frozenInclusions: { dailyFAndBExpected: true },
+      frozenInclusions: {},
       frozenCancellationTerms: { sameDayPenaltyAmount: 100 },
       frozenBillingModel: "GUEST_PAY",
       frozenCheckInDate: checkInS7,
@@ -1161,7 +1169,7 @@ async function main() {
       segmentId: segS7DirectBill.id,
       frozenRate: 500,
       frozenRatePlanId: "rp-corp-directbill",
-      frozenInclusions: { dailyFAndBExpected: false },
+      frozenInclusions: {},
       frozenCancellationTerms: { sameDayPenaltyAmount: 0 },
       frozenBillingModel: "DIRECT_BILL",
       frozenCheckInDate: checkInS7,

@@ -1,5 +1,6 @@
 "use client";
 
+import { AdmField } from "@/components/admin/field-title";
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -17,6 +18,10 @@ import { useSession } from "@/hooks/use-session";
 import { useConfirm, usePrompt } from "@/components/providers/dialog-provider";
 import { cn } from "@/lib/utils";
 import { useSelectionParam } from "@/hooks/use-selection-param";
+import { DurationInput } from "@/components/admin/duration-input";
+import { Help } from "@/components/ds/help";
+
+const LEVEL_WORD: Record<string, string> = { L1: "Front desk", L2: "FOM", L3: "GM", L4: "Administrator" };
 
 export default function AdminRolesPage() {
   const { session } = useSession();
@@ -29,7 +34,7 @@ export default function AdminRolesPage() {
   const selectedRoleId = selectedRoleIdRaw ?? "";
   const [permissionList, setPermissionList] = useState<string[]>([]);
   const [permInput, setPermInput] = useState("");
-  const [sessionCfgDraft, setSessionCfgDraft] = useState({ idle: "600", hard: "28800", manual: true });
+  const [sessionCfgDraft, setSessionCfgDraft] = useState({ idle: 600, hard: 28800, manual: true });
 
   const rolesQuery = useQuery({
     queryKey: ["admin", "roles", showInactive],
@@ -92,7 +97,7 @@ export default function AdminRolesPage() {
         manualLockAvailable: input.manualLockAvailable,
       }),
     onSuccess: () => {
-      toast.success("Session config saved (snapshots propagated)");
+      toast.success("Session times saved");
       void queryClient.invalidateQueries({ queryKey: ["admin", "roles"] });
     },
     onError: (e) => toast.error(e instanceof ApiError ? e.message : "Save failed"),
@@ -111,35 +116,38 @@ export default function AdminRolesPage() {
   return (
     <div className="space-y-8 pb-16">
       <div>
-        <p className="admin-eyebrow mb-2">Domain 01 · Identity</p>
-        <h1 className="admin-display text-3xl">Roles & sessions</h1>
-        <p className="admin-muted mt-2 max-w-2xl text-sm">
-          Manage role registry, attach permissions (string IDs for now), and configure session lock/logout timeouts. Saving a role session config propagates
-          the snapshot onto active staff who use the same role code.
-        </p>
+        <p className="admin-eyebrow mb-2">The hotel and its people</p>
+        <h1 className="admin-display flex items-center gap-2 text-3xl">
+          Roles
+          <Help label="Roles">Each role has its level, what it may do, and how long a sign-in lasts. Saving the times passes them on to the staff who hold that role.</Help>
+        </h1>
       </div>
 
       <div className="admin-panel grid gap-4 p-5 md:grid-cols-3">
         <h2 className="admin-display col-span-full text-lg">Create role</h2>
-        <input
-          className="admin-input"
-          placeholder="Role code (e.g. FRONT_DESK)"
-          value={form.roleCode}
-          onChange={(e) => setForm({ ...form, roleCode: e.target.value })}
-        />
-        <input
-          className="admin-input"
-          placeholder="Display name"
-          value={form.displayName}
-          onChange={(e) => setForm({ ...form, displayName: e.target.value })}
-        />
-        <select className="admin-select" value={form.actorLevel} onChange={(e) => setForm({ ...form, actorLevel: e.target.value as typeof form.actorLevel })}>
-          {(["L1", "L2", "L3", "L4"] as const).map((l) => (
-            <option key={l} value={l}>
-              {l}
-            </option>
-          ))}
-        </select>
+        <AdmField label="Role code" hint="e.g. FRONT_DESK">
+          <input
+            className="admin-input"
+            value={form.roleCode}
+            onChange={(e) => setForm({ ...form, roleCode: e.target.value })}
+          />
+        </AdmField>
+        <AdmField label="Display name">
+          <input
+            className="admin-input"
+            value={form.displayName}
+            onChange={(e) => setForm({ ...form, displayName: e.target.value })}
+          />
+        </AdmField>
+        <AdmField label="Level">
+          <select className="admin-select" value={form.actorLevel} onChange={(e) => setForm({ ...form, actorLevel: e.target.value as typeof form.actorLevel })}>
+            {(["L1", "L2", "L3", "L4"] as const).map((l) => (
+              <option key={l} value={l}>
+                {LEVEL_WORD[l]}
+              </option>
+            ))}
+          </select>
+        </AdmField>
         <button type="button" className="admin-btn col-span-full w-fit" disabled={createMutation.isPending} onClick={() => createMutation.mutate()}>
           Create
         </button>
@@ -165,8 +173,8 @@ export default function AdminRolesPage() {
                   setPermissionList(r.permissions.map((p) => p.permissionId));
                   setPermInput("");
                   setSessionCfgDraft({
-                    idle: String(r.sessionCfg?.idleLockTimeoutSeconds ?? 600),
-                    hard: String(r.sessionCfg?.hardLogoutTimeoutSeconds ?? 28800),
+                    idle: r.sessionCfg?.idleLockTimeoutSeconds ?? 600,
+                    hard: r.sessionCfg?.hardLogoutTimeoutSeconds ?? 28800,
                     manual: r.sessionCfg?.manualLockAvailable ?? true,
                   });
                 }}
@@ -182,7 +190,7 @@ export default function AdminRolesPage() {
                     <div className="font-mono text-xs text-[var(--admin-ink-faint)]">{r.roleCode}</div>
                     <div className="text-[var(--admin-ink-soft)]">{r.displayName}</div>
                   </div>
-                  <div className="text-xs text-[var(--admin-ink-faint)]">{r.actorLevel}</div>
+                  <div className="text-xs text-[var(--admin-ink-faint)]">{LEVEL_WORD[r.actorLevel] ?? r.actorLevel}</div>
                 </div>
               </button>
             ))}
@@ -205,7 +213,7 @@ export default function AdminRolesPage() {
                     <h2 className="admin-display text-lg">
                       {selected.displayName} <span className="font-mono text-xs opacity-70">({selected.roleCode})</span>
                     </h2>
-                    <p className="admin-muted text-xs">Level {selected.actorLevel} · {selected.isActive ? "active" : "inactive"}</p>
+                    <p className="admin-muted text-xs">{LEVEL_WORD[selected.actorLevel] ?? selected.actorLevel} · {selected.isActive ? "active" : "inactive"}</p>
                   </div>
                   <div className="flex flex-wrap gap-2">
                     <button type="button" className="admin-btn text-[10px]" onClick={() => updateMutation.mutate({ id: selected.id, body: { isActive: !selected.isActive } })}>
@@ -298,14 +306,26 @@ export default function AdminRolesPage() {
               </div>
 
               <div className="admin-panel p-5">
-                <h3 className="admin-display text-lg">Session config</h3>
-                <p className="admin-muted mt-1 text-xs">Idle lock must be less than hard logout.</p>
-                <div className="mt-3 grid gap-3 md:grid-cols-3">
-                  <input className="admin-input" value={sessionCfgDraft.idle} onChange={(e) => setSessionCfgDraft({ ...sessionCfgDraft, idle: e.target.value })} placeholder="Idle lock (sec)" />
-                  <input className="admin-input" value={sessionCfgDraft.hard} onChange={(e) => setSessionCfgDraft({ ...sessionCfgDraft, hard: e.target.value })} placeholder="Hard logout (sec)" />
+                <h3 className="admin-display text-lg">Locking and signing out</h3>
+                <div className="sf-grid mt-3">
+                  <div className="sf-field">
+                    <span className="sf-label">
+                      Locks after
+                      <Help label="Locks after">How long the terminal can sit untouched before it locks and asks for the PIN again.</Help>
+                    </span>
+                    <DurationInput base="seconds" units={["hours", "minutes"]} aria-label="Locks after" value={sessionCfgDraft.idle} onChange={(n) => setSessionCfgDraft({ ...sessionCfgDraft, idle: n })} />
+                  </div>
+                  <div className="sf-field">
+                    <span className="sf-label">
+                      Signs out after
+                      <Help label="Signs out after">How long a sign-in lasts before the person has to sign in again, however busy they are.</Help>
+                    </span>
+                    <DurationInput base="seconds" units={["hours", "minutes"]} aria-label="Signs out after" value={sessionCfgDraft.hard} onChange={(n) => setSessionCfgDraft({ ...sessionCfgDraft, hard: n })} />
+                    {sessionCfgDraft.hard <= sessionCfgDraft.idle ? <span className="sf-error" role="alert">It must be longer than the lock.</span> : null}
+                  </div>
                   <label className="flex items-center gap-2 text-sm text-[var(--admin-ink-soft)]">
                     <input type="checkbox" checked={sessionCfgDraft.manual} onChange={(e) => setSessionCfgDraft({ ...sessionCfgDraft, manual: e.target.checked })} />
-                    Manual lock available
+                    They can lock it themselves
                   </label>
                 </div>
                 <button
@@ -314,14 +334,14 @@ export default function AdminRolesPage() {
                   onClick={() =>
                     sessionCfgMutation.mutate({
                       id: selected.id,
-                      idle: Number.parseInt(sessionCfgDraft.idle, 10),
-                      hard: Number.parseInt(sessionCfgDraft.hard, 10),
+                      idle: sessionCfgDraft.idle,
+                      hard: sessionCfgDraft.hard,
                       manualLockAvailable: sessionCfgDraft.manual,
                     })
                   }
-                  disabled={sessionCfgMutation.isPending}
+                  disabled={sessionCfgMutation.isPending || sessionCfgDraft.hard <= sessionCfgDraft.idle}
                 >
-                  Save session config
+                  Save
                 </button>
               </div>
             </>

@@ -1,5 +1,8 @@
 "use client";
 
+import { AdmField } from "@/components/admin/field-title";
+import { FieldTitle } from "@/components/admin/field-title";
+import { Help } from "@/components/ds/help";
 import { useState, useEffect, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -7,6 +10,7 @@ import { useSession } from "@/hooks/use-session";
 import {
   createTravelAgent,
   deactivateTravelAgent,
+  deleteTravelAgent,
   listTravelAgents,
   reactivateTravelAgent,
   updateTravelAgent,
@@ -20,6 +24,8 @@ import { RatePackagesEditor } from "@/components/admin/rate-packages-editor";
 import { RatePackageHistory } from "@/components/admin/rate-package-history";
 import { VersionsTab } from "@/components/admin/versions-tab";
 import { useSelectionParam } from "@/hooks/use-selection-param";
+import { Control } from "@/components/admin/setting-form";
+import { PartyList } from "@/components/admin/party-list";
 
 const CONTACT_MODES: ContactMode[] = ["PHONE", "EMAIL", "WHATSAPP", "IN_PERSON", "OTHER"];
 const EMPTY: TravelAgentInput = { displayName: "", modeOfContact: "PHONE" };
@@ -112,55 +118,41 @@ export default function AdminTravelAgentsPage() {
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["admin", "travel-agents"] }),
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: (a: TravelAgentAdmin) => deleteTravelAgent(session!, a.id),
+    onSuccess: (out) => {
+      toast.success(`${out.displayName} deleted${out.packagesDeleted ? `, with its ${out.packagesDeleted} rate package${out.packagesDeleted === 1 ? "" : "s"}` : ""}`);
+      setSelectedId(null);
+      void queryClient.invalidateQueries({ queryKey: ["admin", "travel-agents"] });
+    },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Delete failed", { duration: 9000 }),
+  });
+
   if (!enabled) return null;
 
   return (
     <div className="space-y-6 pb-16">
       <div>
-        <p className="admin-eyebrow mb-2">Domain 03 · Commercial</p>
-        <h1 className="admin-display text-3xl">Travel agents</h1>
-        <p className="admin-muted mt-2 max-w-2xl text-sm">
-          Travel agencies the hotel works with. Each agent carries a versioned rate card with base
-          room rate, optional per-room-type overrides, standalone meal add-ons (breakfast / lunch /
-          dinner), meal plan rates (CP / MAP / AP), extra bed, and CNB percentage. Saving the rate
-          card creates a new version; historical bookings always see the rate that was active when
-          quoted.
-        </p>
+        <p className="admin-eyebrow mb-2">Rates and limits</p>
+        <h1 className="admin-display flex items-center gap-2 text-3xl">
+          Travel agents
+          <Help label="Travel agents">Agencies the hotel works with. Each has its rate packages: a room rate, a different rate for a room type where needed, meals, meal plans and extra beds. A booking keeps the rates it was quoted on.</Help>
+        </h1>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[280px_1fr]">
-        <div className="admin-panel max-h-[80vh] space-y-2 overflow-y-auto p-3">
-          <div className="flex items-center justify-between gap-2">
-            <button type="button" className="admin-btn admin-btn-sm" onClick={startNew}>+ New agent</button>
-            <label className="flex items-center gap-1 text-xs text-[var(--admin-ink-soft)]">
-              <input type="checkbox" checked={showInactive} onChange={(e) => setShowInactive(e.target.checked)} />
-              Inactive
-            </label>
-          </div>
-          <ul className="space-y-0.5">
-            {agents.map((a) => (
-              <li key={a.id}>
-                <button
-                  type="button"
-                  className={`block w-full truncate rounded px-2 py-1.5 text-left text-sm ${
-                    selectedId === a.id ? "bg-[var(--admin-brass-glow)] text-[var(--admin-brass)]" : "text-[var(--admin-ink-soft)] hover:bg-[var(--admin-bg)]/50"
-                  }`}
-                  onClick={() => selectAgent(a)}
-                >
-                  <span className="font-medium">{a.displayName}</span>
-                  <br />
-                  <span className="font-mono text-[10px] opacity-60">{a.id}</span>
-                  {!a.isActive && <span className="ml-2 text-[10px] uppercase opacity-60">inactive</span>}
-                </button>
-              </li>
-            ))}
-            {agents.length === 0 && (
-              <li className="px-2 py-2 text-xs text-[var(--admin-ink-soft)]">No agents yet — click &ldquo;+ New agent&rdquo; to create one.</li>
-            )}
-          </ul>
-        </div>
+        <PartyList
+          items={agents}
+          selectedId={selectedId}
+          onSelect={selectAgent}
+          onNew={startNew}
+          newLabel="+ New agent"
+          noun="agent"
+          showInactive={showInactive}
+          setShowInactive={setShowInactive}
+        />
 
-        <div className="space-y-6">
+        <div className="min-w-0 space-y-6">
           {selectedId == null && (
             <div className="admin-panel p-8 text-center text-sm text-[var(--admin-ink-soft)]">
               Select an agent from the list or click <strong>+ New agent</strong> to begin.
@@ -183,26 +175,23 @@ export default function AdminTravelAgentsPage() {
                       {CONTACT_MODES.map((m) => <option key={m} value={m}>{m.replace("_", " ")}</option>)}
                     </select>
                   </label>
-                  <label className="block space-y-1">
-                    <span className="admin-muted text-xs">Contact numbers</span>
-                    <input
-                      className="admin-input"
-                      placeholder="17123456, 77123456"
-                      value={(draft.contactNumbers ?? []).join(", ")}
-                      onChange={(e) => setDraft({ ...draft, contactNumbers: e.target.value.split(",").map((s) => s.trim()) })}
+                  <div className="sf-field">
+                    <span className="sf-label">Contact numbers</span>
+                    <Control
+                      f={{ kind: "tags", label: "Contact numbers", placeholder: "17123456", addLabel: "Add" }}
+                      value={draft.contactNumbers ?? []}
+                      onChange={(v) => setDraft({ ...draft, contactNumbers: v as string[] })}
                     />
-                  </label>
+                  </div>
                   <label className="block space-y-1">
                     <span className="admin-muted text-xs">Email</span>
                     <input className="admin-input" type="email" value={draft.contactEmail ?? ""} onChange={(e) => setDraft({ ...draft, contactEmail: e.target.value })} />
                   </label>
                   <div className="block space-y-1 sm:col-span-2">
-                    <span className="admin-muted text-xs">Contact persons</span>
-                    <p className="admin-muted text-[11px]">
-                      The people at this agency who ring in bookings. The front desk picks one at
-                      intake to fill the booking&rsquo;s contact person, and can append a new one
-                      mid-call — so this list also grows from the desk.
-                    </p>
+                    <FieldTitle
+                      label="Contact persons"
+                      help="The people at this agency who ring in bookings. The front desk picks one at intake as the booking's contact person, and can add a new one mid-call, so this list also grows from the desk."
+                    />
                     {(draft.coordinators ?? []).map((c, i) => {
                       const update = (patch: Partial<typeof c>) => {
                         const next = [...(draft.coordinators ?? [])];
@@ -244,28 +233,16 @@ export default function AdminTravelAgentsPage() {
                         );
                       }
                       return (
-                        <div key={i} className="flex flex-wrap gap-2">
-                          <input
-                            className="admin-input"
-                            style={{ flex: "1 1 30%" }}
-                            value={c.name}
-                            placeholder="Name"
-                            onChange={(e) => update({ name: e.target.value })}
-                          />
-                          <input
-                            className="admin-input"
-                            style={{ flex: "1 1 25%" }}
-                            value={c.phone ?? ""}
-                            placeholder="Phone"
-                            onChange={(e) => update({ phone: e.target.value })}
-                          />
-                          <input
-                            className="admin-input"
-                            style={{ flex: "1 1 25%" }}
-                            value={c.email ?? ""}
-                            placeholder="Email"
-                            onChange={(e) => update({ email: e.target.value })}
-                          />
+                        <div key={i} className="flex flex-wrap items-end gap-2">
+                          <AdmField label="Name" style={{ flex: "1 1 30%" }}>
+                            <input className="admin-input" value={c.name} onChange={(e) => update({ name: e.target.value })} />
+                          </AdmField>
+                          <AdmField label="Phone" style={{ flex: "1 1 25%" }}>
+                            <input className="admin-input" value={c.phone ?? ""} onChange={(e) => update({ phone: e.target.value })} />
+                          </AdmField>
+                          <AdmField label="Email" style={{ flex: "1 1 25%" }}>
+                            <input className="admin-input" value={c.email ?? ""} onChange={(e) => update({ email: e.target.value })} />
+                          </AdmField>
                           <button type="button" className="admin-btn admin-btn-ghost admin-btn-sm" onClick={remove}>
                             Remove
                           </button>
@@ -306,6 +283,24 @@ export default function AdminTravelAgentsPage() {
                       }}
                     >
                       {selected.isActive ? "Deactivate" : "Reactivate"}
+                    </button>
+                  )}
+                  {!isNewMode && selected && (
+                    <button
+                      type="button"
+                      className="admin-btn text-[10px] text-destructive"
+                      disabled={deleteMutation.isPending}
+                      onClick={async () => {
+                        const ok = await confirmDialog({
+                          title: "Delete this agent for good?",
+                          message: `${selected.displayName} and its rate packages will be gone, and this cannot be undone. An agent with any enquiry on record cannot be deleted: deactivate it instead.`,
+                          confirmLabel: "Delete",
+                          variant: "danger",
+                        });
+                        if (ok) deleteMutation.mutate(selected);
+                      }}
+                    >
+                      Delete
                     </button>
                   )}
                   <button

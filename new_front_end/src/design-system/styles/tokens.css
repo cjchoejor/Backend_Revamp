@@ -2,8 +2,8 @@
    LEGPHEL PMS — design-system tokens (DSS v1.0, locked 9 Sep 2026;
    palette ruled 10 Sep: ink frame, plum accent, Poppins headings).
    The single place a colour or size changes. Scoped to `.ds`, the root
-   of the desk frame, so none of it reaches the admin console, whose own
-   theme uses some of the same variable names (--accent, --line).
+   of the desk frame. The admin console sits inside it too (2026-11-02);
+   its admin-theme.css points the older tools' names at these.
    ============================================================ */
 
 .ds {

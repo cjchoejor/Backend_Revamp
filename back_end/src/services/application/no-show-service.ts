@@ -1,4 +1,5 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
+import { guestDisplayName } from "../../lib/guest-display-name.js";
 import { EntryStatus, FolioLineType, FolioState, Stage } from "@prisma/client";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { getActiveConfigEntry, requireActiveConfigValue } from "../../lib/config-store.js";
@@ -460,14 +461,14 @@ export async function sendNoShowNoticeBestEffort(prisma: PrismaClient, entryId: 
         checkOutDate: true,
         contactPersonName: true,
         reservation: { select: { frozenCheckInDate: true, frozenCheckOutDate: true } },
-        guestProfile: { select: { firstName: true, lastName: true } },
+        guestProfile: { select: { title: true, firstName: true, lastName: true } },
         inquiry: { select: { travelAgentId: true, corporateAccountId: true } },
       },
     });
     if (!entry) return;
     const recipient = await resolveInvoiceRecipient(prisma, entryId);
     const guestName =
-      [entry.guestProfile?.firstName, entry.guestProfile?.lastName].filter(Boolean).join(" ").trim() || entry.contactPersonName?.trim() || null;
+      guestDisplayName(entry.guestProfile) || entry.contactPersonName?.trim() || null;
     const partyBooked = !!(entry.inquiry?.travelAgentId || entry.inquiry?.corporateAccountId);
     await dispatchStageEmailBestEffort(
       {

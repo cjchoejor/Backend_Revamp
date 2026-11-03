@@ -1,5 +1,8 @@
 "use client";
 
+import { AdmField } from "@/components/admin/field-title";
+import { FieldTitle } from "@/components/admin/field-title";
+import { Help } from "@/components/ds/help";
 import { useState, useEffect, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -20,6 +23,8 @@ import { RatePackagesEditor } from "@/components/admin/rate-packages-editor";
 import { RatePackageHistory } from "@/components/admin/rate-package-history";
 import { VersionsTab } from "@/components/admin/versions-tab";
 import { useSelectionParam } from "@/hooks/use-selection-param";
+import { Control } from "@/components/admin/setting-form";
+import { PartyList } from "@/components/admin/party-list";
 
 const CONTACT_MODES: ContactMode[] = ["PHONE", "EMAIL", "WHATSAPP", "IN_PERSON", "OTHER"];
 const EMPTY: CorporateAccountInput = { displayName: "", modeOfContact: "EMAIL" };
@@ -122,49 +127,26 @@ export default function AdminCorporateAccountsPage() {
   return (
     <div className="space-y-6 pb-16">
       <div>
-        <p className="admin-eyebrow mb-2">Domain 03 · Commercial</p>
-        <h1 className="admin-display text-3xl">Corporate accounts</h1>
-        <p className="admin-muted mt-2 max-w-2xl text-sm">
-          Companies with negotiated rates. Same rate-card shape as travel agents (base rate,
-          per-room-type overrides, meal plans, meal add-ons, CNB %) plus billing fields (GST
-          number, billing address). Saving the rate card creates a new version; historical
-          bookings always see the rate active at the time they were quoted.
-        </p>
+        <p className="admin-eyebrow mb-2">Rates and limits</p>
+        <h1 className="admin-display flex items-center gap-2 text-3xl">
+          Corporate accounts
+          <Help label="Corporate accounts">Companies with negotiated rates. Each has its rate packages, like a travel agent, and its billing details. A booking keeps the rates it was quoted on.</Help>
+        </h1>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[280px_1fr]">
-        <div className="admin-panel max-h-[80vh] space-y-2 overflow-y-auto p-3">
-          <div className="flex items-center justify-between gap-2">
-            <button type="button" className="admin-btn admin-btn-sm" onClick={startNew}>+ New corporate</button>
-            <label className="flex items-center gap-1 text-xs text-[var(--admin-ink-soft)]">
-              <input type="checkbox" checked={showInactive} onChange={(e) => setShowInactive(e.target.checked)} />
-              Inactive
-            </label>
-          </div>
-          <ul className="space-y-0.5">
-            {accounts.map((a) => (
-              <li key={a.id}>
-                <button
-                  type="button"
-                  className={`block w-full truncate rounded px-2 py-1.5 text-left text-sm ${
-                    selectedId === a.id ? "bg-[var(--admin-brass-glow)] text-[var(--admin-brass)]" : "text-[var(--admin-ink-soft)] hover:bg-[var(--admin-bg)]/50"
-                  }`}
-                  onClick={() => selectAccount(a)}
-                >
-                  <span className="font-medium">{a.displayName}</span>
-                  <br />
-                  <span className="font-mono text-[10px] opacity-60">{a.id}</span>
-                  {!a.isActive && <span className="ml-2 text-[10px] uppercase opacity-60">inactive</span>}
-                </button>
-              </li>
-            ))}
-            {accounts.length === 0 && (
-              <li className="px-2 py-2 text-xs text-[var(--admin-ink-soft)]">No accounts yet — click &ldquo;+ New corporate&rdquo; to create one.</li>
-            )}
-          </ul>
-        </div>
+        <PartyList
+          items={accounts}
+          selectedId={selectedId}
+          onSelect={selectAccount}
+          onNew={startNew}
+          newLabel="+ New corporate"
+          noun="account"
+          showInactive={showInactive}
+          setShowInactive={setShowInactive}
+        />
 
-        <div className="space-y-6">
+        <div className="min-w-0 space-y-6">
           {selectedId == null && (
             <div className="admin-panel p-8 text-center text-sm text-[var(--admin-ink-soft)]">
               Select an account from the list or click <strong>+ New corporate</strong> to begin.
@@ -187,15 +169,14 @@ export default function AdminCorporateAccountsPage() {
                       {CONTACT_MODES.map((m) => <option key={m} value={m}>{m.replace("_", " ")}</option>)}
                     </select>
                   </label>
-                  <label className="block space-y-1">
-                    <span className="admin-muted text-xs">Contact numbers</span>
-                    <input
-                      className="admin-input"
-                      placeholder="17123456, 77123456"
-                      value={(draft.contactNumbers ?? []).join(", ")}
-                      onChange={(e) => setDraft({ ...draft, contactNumbers: e.target.value.split(",").map((s) => s.trim()) })}
+                  <div className="sf-field">
+                    <span className="sf-label">Contact numbers</span>
+                    <Control
+                      f={{ kind: "tags", label: "Contact numbers", placeholder: "17123456", addLabel: "Add" }}
+                      value={draft.contactNumbers ?? []}
+                      onChange={(v) => setDraft({ ...draft, contactNumbers: v as string[] })}
                     />
-                  </label>
+                  </div>
                   <label className="block space-y-1">
                     <span className="admin-muted text-xs">Email</span>
                     <input className="admin-input" type="email" value={draft.contactEmail ?? ""} onChange={(e) => setDraft({ ...draft, contactEmail: e.target.value })} />
@@ -209,11 +190,10 @@ export default function AdminCorporateAccountsPage() {
                     <input className="admin-input" value={draft.billingAddress ?? ""} onChange={(e) => setDraft({ ...draft, billingAddress: e.target.value })} />
                   </label>
                   <div className="block space-y-1 sm:col-span-2">
-                    <span className="admin-muted text-xs">Contract references</span>
-                    <p className="admin-muted text-[11px]">
-                      Inherited by corporate bookings at intake (SIG-S1 §100.6 / Policy 17). PO / account /
-                      authorisation references for this client.
-                    </p>
+                    <FieldTitle
+                      label="Contract references"
+                      help="Purchase order, account or authorisation numbers for this client. A booking through this company takes them when it is made."
+                    />
                     {(draft.contractRefs ?? []).map((r, i) => (
                       <div key={i} className="flex gap-2">
                         <input
@@ -247,8 +227,7 @@ export default function AdminCorporateAccountsPage() {
                   </div>
 
                   <div className="block space-y-1 sm:col-span-2">
-                    <span className="admin-muted text-xs">Coordinators</span>
-                    <p className="admin-muted text-[11px]">Contact person(s) on the client side.</p>
+                    <FieldTitle label="Coordinators" help="The people to contact at this company." />
                     {(draft.coordinators ?? []).map((c, i) => {
                       const update = (patch: Partial<typeof c>) => {
                         const next = [...(draft.coordinators ?? [])];
@@ -290,28 +269,16 @@ export default function AdminCorporateAccountsPage() {
                         );
                       }
                       return (
-                        <div key={i} className="flex flex-wrap gap-2">
-                          <input
-                            className="admin-input"
-                            style={{ flex: "1 1 30%" }}
-                            value={c.name}
-                            placeholder="Name"
-                            onChange={(e) => update({ name: e.target.value })}
-                          />
-                          <input
-                            className="admin-input"
-                            style={{ flex: "1 1 25%" }}
-                            value={c.phone ?? ""}
-                            placeholder="Phone"
-                            onChange={(e) => update({ phone: e.target.value })}
-                          />
-                          <input
-                            className="admin-input"
-                            style={{ flex: "1 1 25%" }}
-                            value={c.email ?? ""}
-                            placeholder="Email"
-                            onChange={(e) => update({ email: e.target.value })}
-                          />
+                        <div key={i} className="flex flex-wrap items-end gap-2">
+                          <AdmField label="Name" style={{ flex: "1 1 30%" }}>
+                            <input className="admin-input" value={c.name} onChange={(e) => update({ name: e.target.value })} />
+                          </AdmField>
+                          <AdmField label="Phone" style={{ flex: "1 1 25%" }}>
+                            <input className="admin-input" value={c.phone ?? ""} onChange={(e) => update({ phone: e.target.value })} />
+                          </AdmField>
+                          <AdmField label="Email" style={{ flex: "1 1 25%" }}>
+                            <input className="admin-input" value={c.email ?? ""} onChange={(e) => update({ email: e.target.value })} />
+                          </AdmField>
                           <button type="button" className="admin-btn admin-btn-ghost admin-btn-sm" onClick={remove}>
                             Remove
                           </button>

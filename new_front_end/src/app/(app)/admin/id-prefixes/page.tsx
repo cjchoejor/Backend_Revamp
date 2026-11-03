@@ -1,9 +1,11 @@
 "use client";
 
+import { Help } from "@/components/ds/help";
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
+import { useHotelDay } from "@/hooks/use-hotel-day";
 import { listIdPrefixAssignments, resetIdPrefix, setIdPrefix, type IdPrefixEntry } from "@/lib/api/admin";
 import { ApiError } from "@/lib/api/client";
 
@@ -51,6 +53,7 @@ function PrefixRow({
   onReset: (entity: string) => void;
   saving: boolean;
 }) {
+  const day = useHotelDay();
   const [draft, setDraft] = useState(row.currentPrefix);
   // Sync the draft if the server value changes (e.g. someone else edited it).
   useEffect(() => setDraft(row.currentPrefix), [row.currentPrefix]);
@@ -61,10 +64,7 @@ function PrefixRow({
   return (
     <tr className="border-b border-border last:border-0">
       <td className="px-3 py-2 align-middle">
-        <div className="flex flex-col">
-          <span className="text-sm font-medium">{ENTITY_LABEL[row.entity] ?? row.entity}</span>
-          <span className="admin-muted text-[10px] font-mono">{row.entity}</span>
-        </div>
+        <span className="text-sm font-medium">{ENTITY_LABEL[row.entity] ?? row.entity}</span>
       </td>
       <td className="px-3 py-2 align-middle">
         <input
@@ -84,7 +84,7 @@ function PrefixRow({
         )}
       </td>
       <td className="px-3 py-2 align-middle text-xs font-mono text-[var(--admin-ink-soft)]">
-        {draft}-YYYYMMDD-0001
+        {draft}-{day ? day.today.replace(/-/g, "") : "date"}-0001
       </td>
       <td className="px-3 py-2 align-middle">
         <div className="flex gap-1.5">
@@ -149,15 +149,11 @@ export default function AdminIdPrefixesPage() {
   return (
     <div className="space-y-6 pb-16">
       <div>
-        <p className="admin-eyebrow mb-2">Domain 01 · Identity &amp; Org</p>
-        <h1 className="admin-display text-3xl">ID prefixes</h1>
-        <p className="admin-muted mt-2 max-w-2xl text-sm">
-          Every readable business ID follows the pattern{" "}
-          <code className="font-mono">PREFIX-YYYYMMDD-NNNN</code>. Edit a prefix here to change how
-          IDs are generated going forward. Prefixes must be 2–4 uppercase letters; collisions
-          across entities are rejected by the backend. Existing IDs are not rewritten — only
-          newly-created rows use the new prefix.
-        </p>
+        <p className="admin-eyebrow mb-2">The hotel and its people</p>
+        <h1 className="admin-display flex items-center gap-2 text-3xl">
+          Number prefixes
+          <Help label="Number prefixes">A prefix is two to four capital letters, and no two kinds of record can share one. A change counts from the next number given out. Booking, invoice and other numbers read PREFIX-date-number. Change a prefix here and new numbers use it; numbers already given stay as they are. A prefix is 2 to 4 capital letters, and no two may be the same.</Help>
+        </h1>
       </div>
 
       <div className="admin-panel overflow-x-auto p-0">
@@ -185,7 +181,7 @@ export default function AdminIdPrefixesPage() {
             {rows.length === 0 && (
               <tr>
                 <td className="px-3 py-6 text-center text-sm text-[var(--admin-ink-soft)]" colSpan={6}>
-                  {assignmentsQuery.isLoading ? "Loading…" : "No entities configured"}
+                  {assignmentsQuery.isLoading ? "Loading…" : "No numbers are set up"}
                 </td>
               </tr>
             )}
@@ -193,11 +189,6 @@ export default function AdminIdPrefixesPage() {
         </table>
       </div>
 
-      <div className="admin-muted text-xs">
-        <strong>Tip:</strong> backend rejects any prefix outside the <code>A-Z, length 2–4</code>{" "}
-        format, and rejects any change that would cause a collision (two entities can never share
-        the same prefix). The change takes effect immediately for the next ID allocated.
-      </div>
     </div>
   );
 }

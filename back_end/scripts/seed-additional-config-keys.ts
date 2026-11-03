@@ -49,6 +49,18 @@ const ADDITIONS: { key: string; value: unknown; notes: string }[] = [
     notes:
       "Guest requests (BE-64, 2026-10-12): the kinds the desk picks from when it records something the guest asked the hotel to arrange. Order is the order on the desk.",
   },
+  ...[
+    "guestReply.quotation",
+    "guestReply.proforma",
+    "guestReply.confirmationVoucher",
+    "guestReply.preArrivalMessage",
+    "guestReply.interimBill",
+    "guestReply.taxInvoice",
+  ].map((key) => ({
+    key,
+    value: { required: true },
+    notes: "Whether the desk must note the guest's reply to this email. Off: nothing waits for it, and no reply clock runs.",
+  })),
   {
     key: "expiry.parking.followUpDays",
     value: 30,

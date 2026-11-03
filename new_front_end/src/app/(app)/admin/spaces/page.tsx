@@ -1,11 +1,13 @@
 "use client";
 
+import { AdmField } from "@/components/admin/field-title";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { createSpace, deleteSpace, listSpaces, updateSpace } from "@/lib/api/admin";
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
+import { codeWords } from "@/lib/admin/setting-fields";
 import { useConfirm } from "@/components/providers/dialog-provider";
 import { DeficiencyPanel } from "@/components/deficiency/deficiency-panel";
 
@@ -59,14 +61,20 @@ export default function AdminSpacesPage() {
   return (
     <div className="space-y-8 pb-16">
       <div>
-        <p className="admin-eyebrow mb-2">Domain 02 · Inventory</p>
+        <p className="admin-eyebrow mb-2">Rooms and spaces</p>
         <h1 className="admin-display text-3xl">Spaces</h1>
       </div>
 
       <div className="admin-panel grid gap-4 p-5 md:grid-cols-3">
-        <input className="admin-input" placeholder="Code" value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} />
-        <input className="admin-input" placeholder="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-        <input className="admin-input" placeholder="Capacity" value={form.capacity} onChange={(e) => setForm({ ...form, capacity: e.target.value })} />
+        <AdmField label="Code">
+          <input className="admin-input" value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} />
+        </AdmField>
+        <AdmField label="Name">
+          <input className="admin-input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+        </AdmField>
+        <AdmField label="Capacity">
+          <input className="admin-input" value={form.capacity} onChange={(e) => setForm({ ...form, capacity: e.target.value })} />
+        </AdmField>
         <button type="button" className="admin-btn col-span-full w-fit" disabled={createMutation.isPending} onClick={() => createMutation.mutate()}>
           Create space
         </button>
@@ -89,7 +97,7 @@ export default function AdminSpacesPage() {
               <tr key={s.id}>
                 <td className="font-mono text-xs">{s.code}</td>
                 <td>{s.name}</td>
-                <td>{s.spaceType}</td>
+                <td>{codeWords(s.spaceType)}</td>
                 <td>{s.capacity}</td>
                 <td>
                   {s.isDeficient ? (

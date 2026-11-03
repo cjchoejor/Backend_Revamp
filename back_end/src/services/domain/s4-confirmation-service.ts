@@ -1,4 +1,5 @@
 import type { PrismaClient } from "@prisma/client";
+import { guestDisplayName } from "../../lib/guest-display-name.js";
 import { CommunicationType, InvoiceType, Stage } from "@prisma/client";
 import { toDecimal } from "../../lib/money.js";
 import { MissingConfigurationError, NotFoundError, PolicyGateBlockedError, ValidationError } from "../../lib/errors.js";
@@ -525,7 +526,7 @@ async function confirmReservationInner(
   const nights = Math.max(1, Math.round(ms / 86400_000));
   const currency = (accepted.commercialTerms as any)?.currency ?? "BTN";
   const displayName =
-    [entry.guestProfile?.firstName, entry.guestProfile?.lastName].filter(Boolean).join(" ") || "Guest";
+    guestDisplayName(entry.guestProfile) || "Guest";
   // Room count is needed BEFORE computeStayCharges so the stay total reflects all rooms.
   // Read from the accepted quotation's commercialTerms.roomCount (single source of truth
   // set at quote creation), fall back to entry.numberOfRooms, fall back to 1.
@@ -670,7 +671,7 @@ async function resendConfirmationVoucherInner(
   const operativeTerms = (operative?.commercialTerms ?? null) as { currency?: string; roomCount?: number } | null;
   const currency = operativeTerms?.currency ?? "BTN";
   const displayName =
-    [entry.guestProfile?.firstName, entry.guestProfile?.lastName].filter(Boolean).join(" ") || "Guest";
+    guestDisplayName(entry.guestProfile) || "Guest";
   const bookingRoomCount = Math.max(1, Number(operativeTerms?.roomCount) || entry.numberOfRooms || 1);
   const breakdown = await computeStayCharges(prisma, frozenRate, nights, bookingRoomCount);
   const isGroup = entry.groupBillingMode === "GROUP_MASTER";

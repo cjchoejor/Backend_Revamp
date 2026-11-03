@@ -2,6 +2,7 @@ import type { Prisma } from "@prisma/client";
 import { CommunicationChannel, CommunicationType, Stage } from "@prisma/client";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import { allocateReadableId } from "../../lib/readable-id.js";
+import { REPLY_NOT_ASKED, guestRepliesOff } from "../../lib/guest-reply-settings.js";
 
 export type OutboundQuotationCommunicationInput = {
   entryId: string;
@@ -133,6 +134,11 @@ export async function armVoucherReplyWindow(
       where: { id: comm.id },
       data: { sendStatus: "DISPATCHED", channel: CommunicationChannel.WHATSAPP, contentSummary: "Confirmation voucher sent on WhatsApp" },
     });
+  }
+  // Its reply setting is off: nothing is asked of the guest, and no clock runs (2026-11-03).
+  if ((await guestRepliesOff(prisma)).has(CommunicationType.CONFIRMATION_VOUCHER)) {
+    await prisma.communicationRecord.update({ where: { id: comm.id }, data: { acknowledgementStatus: REPLY_NOT_ASKED } });
+    return null;
   }
   if (comm.acknowledgementTimeoutAt) return null;
   const running = await prisma.timerRecord.count({

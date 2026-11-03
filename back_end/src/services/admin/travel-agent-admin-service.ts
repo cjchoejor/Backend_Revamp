@@ -245,6 +245,52 @@ export async function deactivateTravelAgent(prisma: PrismaClient, id: string, ac
   });
 }
 
+/**
+ * Delete an agency for good (2026-11-03, operator: "keep a delete option for travel agents, not just
+ * deactivate"). Only one nothing depends on: an enquiry through it, or on one of its packages, is a
+ * record whose bookings and bills name it, so that is refused in words and deactivating is the way.
+ * Its packages and old rate cards go with it. What was deleted stays on the audit trail.
+ */
+export async function deleteTravelAgent(prisma: PrismaClient, id: string, actorId: string) {
+  const agent = await prisma.travelAgent.findUnique({
+    where: { id },
+    include: { ratePackages: { select: { id: true, name: true, roomBaseRate: true } } },
+  });
+  if (!agent) throw new NotFoundError("Travel agent");
+  const packageIds = agent.ratePackages.map((p) => p.id);
+  const enquiries = await prisma.inquiry.count({
+    where: { OR: [{ travelAgentId: id }, ...(packageIds.length ? [{ ratePackageId: { in: packageIds } }] : [])] },
+  });
+  if (enquiries > 0) {
+    throw new AppError(409, {
+      error: "TravelAgentInUse",
+      message: `${agent.displayName} has ${enquiries} ${enquiries === 1 ? "enquiry" : "enquiries"} on record, so it cannot be deleted: their bookings and bills name it. Deactivate it instead, and it stops being offered.`,
+      details: { code: "TRAVEL_AGENT_IN_USE", enquiries },
+    });
+  }
+  return prisma.$transaction(async (tx) => {
+    const cards = await tx.rateCard.deleteMany({ where: { partyType: "TRAVEL_AGENT", partyId: id } });
+    await tx.ratePackage.deleteMany({ where: { travelAgentId: id } });
+    await tx.travelAgent.delete({ where: { id } });
+    await writeAdminAuditEvent(tx, {
+      actorId,
+      eventType: "ADMIN.TRAVEL_AGENT_DELETED",
+      entityType: "TravelAgent",
+      entityId: id,
+      operation: "DELETE",
+      payload: {
+        displayName: agent.displayName,
+        contactNumbers: agent.contactNumbers,
+        contactEmail: agent.contactEmail,
+        coordinators: agent.coordinators,
+        packages: agent.ratePackages.map((p) => ({ name: p.name, roomBaseRate: p.roomBaseRate.toString() })),
+        rateCardsDeleted: cards.count,
+      },
+    });
+    return { deleted: true, id, displayName: agent.displayName, packagesDeleted: packageIds.length };
+  });
+}
+
 export async function reactivateTravelAgent(prisma: PrismaClient, id: string, actorId: string) {
   const existing = await prisma.travelAgent.findUnique({ where: { id } });
   if (!existing) throw new NotFoundError("TravelAgent");

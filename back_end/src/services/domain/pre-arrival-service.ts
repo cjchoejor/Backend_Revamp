@@ -1,8 +1,10 @@
 import type { PrismaClient } from "@prisma/client";
+import { guestDisplayName } from "../../lib/guest-display-name.js";
 import { PreArrivalTaskType, Stage, TaskCategory, TaskStatus } from "@prisma/client";
 import { NotFoundError, PolicyGateBlockedError, ValidationError } from "../../lib/errors.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
+import { retireSupersededReplyWaitsBestEffort } from "../../lib/reply-waits.js";
 import {
   enforcePreArrivalTaskPendingForUpdate,
   enforcePreArrivalTaskWaiveRequiresReason,
@@ -409,7 +411,7 @@ export async function sendPreArrivalReminderOutbound(prisma: PrismaClient, entry
   });
   if (full) {
     const displayName =
-      [full.guestProfile?.firstName, full.guestProfile?.lastName].filter(Boolean).join(" ") || "Guest";
+      guestDisplayName(full.guestProfile) || "Guest";
     const ci = full.reservation?.frozenCheckInDate ?? full.checkInDate ?? new Date();
     const co = full.reservation?.frozenCheckOutDate ?? full.checkOutDate ?? new Date(ci.getTime() + 86400_000);
     const content = renderPreArrivalEmail({
@@ -529,6 +531,7 @@ export async function updatePreArrivalTask(
     }
     if (task.taskType === PreArrivalTaskType.PRE_ARRIVAL_COMMUNICATION) {
       await sendPreArrivalReminderOutbound(prisma, task.entryId, actorId);
+      await retireSupersededReplyWaitsBestEffort(prisma, task.entryId, actorId);
     }
   }
 

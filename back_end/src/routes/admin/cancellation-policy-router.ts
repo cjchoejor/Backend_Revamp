@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { prisma } from "../../db.js";
 import {
+  cancellationChargesRequestSchema,
   createCancellationPolicyRequestSchema,
   updateCancellationPolicyRequestSchema,
 } from "../../dtos/08-admin/request-schemas.js";
@@ -18,6 +19,28 @@ adminCancellationPolicyRouter.get("/cancellation-policies", requireActorLevel("L
     next(e);
   }
 });
+
+// What the desk really charges (`cancellation.policyTiers`). Before /:id, which would take "charges" for an id.
+adminCancellationPolicyRouter.get("/cancellation-policies/charges", requireActorLevel("L4"), async (_req, res, next) => {
+  try {
+    res.json(await cancellationPolicyService.getCancellationCharges(prisma));
+  } catch (e) {
+    next(e);
+  }
+});
+
+adminCancellationPolicyRouter.put(
+  "/cancellation-policies/charges",
+  requireActorLevel("L4"),
+  validateBody(cancellationChargesRequestSchema),
+  async (req, res, next) => {
+    try {
+      res.json(await cancellationPolicyService.setCancellationCharges(prisma, req.body.value, req.actor!.actorId, req.body.notes));
+    } catch (e) {
+      next(e);
+    }
+  },
+);
 
 adminCancellationPolicyRouter.get("/cancellation-policies/:id", requireActorLevel("L4"), async (req, res, next) => {
   try {

@@ -75,8 +75,12 @@ export type EntryCommunication = {
   replacedBy?: string | null;
 };
 
+/** Nothing more is wanted from the guest on this paper: they answered, or their reply is not asked for. */
+export const replySettled = (c?: { acknowledgementStatus: string | null } | null) =>
+  c?.acknowledgementStatus === "RECEIVED" || c?.acknowledgementStatus === "NOT_ASKED";
+
 export async function listEntryCommunications(session: Session, entryId: string) {
-  return apiRequest<{ entryId: string; items: EntryCommunication[] }>(
+  return apiRequest<{ entryId: string; items: EntryCommunication[]; repliesOff?: EntryCommunicationType[] }>(
     `/api/entries/${entryId}/communications`,
     { session },
   );
@@ -119,6 +123,49 @@ export async function addReturnStay(
   },
 ) {
   return apiRequest<EntryDetail>(`/api/entries/${entryId}/return-stay`, { method: "POST", session, body });
+}
+
+/** The room types not free for a stay that copies another, and what is free on its nights. */
+export type FollowShortfallView = {
+  refusals: string[];
+  key: string;
+  rooms: number;
+  currency: string;
+  wanted: Array<{ roomTypeId: string; name: string; count: number; canTake: number }>;
+  types: Array<{ roomTypeId: string; name: string; free: number; ratePerNight: number | null }>;
+};
+
+export type FollowView = {
+  entryId: string;
+  fromEntryId: string;
+  checkInDate: string | null;
+  checkOutDate: string | null;
+  roomsFollow: boolean;
+  notes: string[];
+  shortfall: FollowShortfallView | null;
+};
+
+/** What this stay copies and which stays copy it (2026-11-03). */
+export async function getTripFollow(session: Session, entryId: string) {
+  return apiRequest<{ following: FollowView | null; followers: FollowView[] }>(`/api/entries/${entryId}/trip-follow`, { session });
+}
+
+/** "Same as this stay": the return stay copies the stay named, through Negotiation. */
+export async function startFollowing(session: Session, entryId: string, fromEntryId: string) {
+  return apiRequest<{ following: boolean; changed: string[]; notes: string[]; shortfall: FollowShortfallView | null }>(`/api/entries/${entryId}/follow`, {
+    method: "POST",
+    session,
+    body: { fromEntryId },
+  });
+}
+
+export async function stopFollowing(session: Session, entryId: string) {
+  return apiRequest<{ following: boolean }>(`/api/entries/${entryId}/follow/stop`, { method: "POST", session, body: {} });
+}
+
+/** The room types chosen when the first stay's are not free on this stay's nights. */
+export async function chooseFollowRooms(session: Session, entryId: string, types: Array<{ roomTypeId: string; count: number }>) {
+  return apiRequest<{ saved: boolean }>(`/api/entries/${entryId}/follow/rooms`, { method: "POST", session, body: { types } });
 }
 
 export async function createEntry(

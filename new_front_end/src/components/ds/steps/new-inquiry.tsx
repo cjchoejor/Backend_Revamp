@@ -29,7 +29,9 @@ import { useSession } from "@/hooks/use-session";
 import { useHotelDay } from "@/hooks/use-hotel-day";
 import { usePageTitle } from "@/hooks/use-page-title";
 import { getAllowedRoomCounts, getChildPolicy } from "@/lib/api/child-policy";
+import { useRoomsFollowParty } from "@/hooks/use-rooms-follow-party";
 import { createEntry, getEntry } from "@/lib/api/entries";
+import { openReturnStayOnArrival } from "@/components/ds/workspace/return-stay";
 import {
   captureCorporateContext,
   createInquiry,
@@ -170,8 +172,9 @@ export function NewInquiryCanvas() {
   const [checkOut, setCheckOut] = useState("");
   // Nights lead; check-out follows check-in + nights, and a picked check-out sets the nights.
   const [nights, setNights] = useState(() => fromChart.nights ?? "1");
-  const [rooms, setRooms] = useState("1");
-  const [adults, setAdults] = useState("1");
+  // Both start at nothing (2026-11-03, operator): the party is asked, never assumed.
+  const [rooms, setRooms] = useState("0");
+  const [adults, setAdults] = useState("0");
   const [children, setChildren] = useState("0");
   const [ages, setAges] = useState<string[]>([]);
   // "5 King + 2 Twin" — optional, may be partial.
@@ -398,13 +401,6 @@ export function NewInquiryCanvas() {
       roomRange.min > 0 && roomRange.max >= roomRange.min ? Array.from({ length: roomRange.max - roomRange.min + 1 }, (_, i) => roomRange.min + i) : [],
     [roomRange.min, roomRange.max],
   );
-  // A smaller party can make the chosen count illegal — snap it to the first one allowed.
-  useEffect(() => {
-    if (allowedRooms.length === 0) return;
-    const n = parseInt(rooms || "0", 10) || 0;
-    if (!allowedRooms.includes(n)) setRooms(String(allowedRooms[0]));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allowedRooms]);
   const roomsN = parseInt(rooms || "0", 10) || 0;
 
   /* ---------------------------------------------------------------- beds */
@@ -455,6 +451,12 @@ export function NewInquiryCanvas() {
     if (bedSum > current && allowedRooms.includes(bedSum)) setRooms(String(bedSum));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bedSum, allowedRooms]);
+  // No adults, no rooms: the count goes back to nothing with them.
+  useEffect(() => {
+    if (adultsN < 1) setRooms("0");
+  }, [adultsN]);
+  // After the bed effect above, which reads the count from before this answer: this one wins.
+  useRoomsFollowParty({ env: envelope, partyEdited: true, rooms: roomsN, bedAsk: bedSum, apply: (n) => setRooms(String(n)) });
 
   /* ---------------------------------------------------------------- the caller list */
   // Typing a number (or, with no number, an email) lists who has rung with it before — earlier
@@ -544,7 +546,7 @@ export function NewInquiryCanvas() {
 
   const fullPhone = phoneCode ? joinPhone(phoneCode, phoneNumber) : "";
   // The caller's name (title left off — it reads as a salutation, not a name).
-  const typedGuestName = `${firstName.trim()} ${lastName.trim()}`.trim();
+  const typedGuestName = [callerTitle, firstName.trim(), lastName.trim()].filter(Boolean).join(" ");
   // A typed email the backend would refuse is a blocker here, not a "bad request" after the click.
   const emailBad = email.trim() !== "" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
   const isOta = channelKey === "OTA";
@@ -600,6 +602,8 @@ export function NewInquiryCanvas() {
 
   /* ---------------------------------------------------------------- the save */
   const [navigating, setNavigating] = useState(false);
+  // "Add a return stay" keeps the lead the same way, and the booking opens with its box up (2026-11-03).
+  const returnStayNext = useRef(false);
   // A retry after a refused entry reuses the inquiry already made, so a refusal never leaves
   // a second lead behind for the same guest and the same request.
   const madeInquiry = useRef<{ key: string; id: string } | null>(null);
@@ -687,6 +691,7 @@ export function NewInquiryCanvas() {
       if (session) void queryClient.prefetchQuery({ queryKey: ["entry", id], queryFn: () => getEntry(session, id) });
       toast.success(`${id} kept · the lead is on record`);
       setNavigating(true);
+      if (returnStayNext.current) openReturnStayOnArrival(id);
       // The house is asked as the booking opens — no second press of Ask the house.
       router.push(fromChart.room ? `${bookingHref(id, 1)}&room=${encodeURIComponent(fromChart.room)}` : `${bookingHref(id, 1)}&ask=1`);
     },
@@ -827,7 +832,8 @@ export function NewInquiryCanvas() {
                       <div className="field">
                         <label>
                           Phone
-                          {!isOta ? <ReqMark /> : null}
+                          {/* Either one will do, so the empty one stops asking once the other is in. */}
+                          {!isOta && (fullPhone || !email.trim()) ? <ReqMark /> : null}
                           <Help label="About the phone">Typing it finds who has rung with it before — a caller, or an agency&rsquo;s or a company&rsquo;s person.</Help>
                         </label>
                         <PhoneInput code={phoneCode} setCode={setPhoneCode} number={phoneNumber} setNumber={setPhoneNumber} />
@@ -836,7 +842,7 @@ export function NewInquiryCanvas() {
                       <div className="field">
                         <label>
                           Email
-                          {!isOta ? <ReqMark /> : null}
+                          {!isOta && (email.trim() || !fullPhone) ? <ReqMark /> : null}
                           <Help label="About the email">Optional when there is a phone. With no phone, typing it finds who has rung with it before.</Help>
                         </label>
                         <input className="input" type="email" value={email} placeholder="name@example.com" onChange={(e) => setEmail(e.target.value)} />
@@ -1074,7 +1080,10 @@ export function NewInquiryCanvas() {
                   flowAfterOnly
                   doneAction={{
                     label: primaryLabel,
-                    onClick: () => run.mutate(),
+                    onClick: () => {
+                      returnStayNext.current = false;
+                      run.mutate();
+                    },
                     state: busy ? "working" : saveReason ? "inert" : "default",
                     title: saveReason ?? undefined,
                     workingLabel: navigating ? "Opening the booking…" : "Keeping the lead…",
@@ -1135,14 +1144,14 @@ export function NewInquiryCanvas() {
                       {datesSet ? <span className="hint">{`${fmtRange(checkIn, checkOut)} · ${plural(stayNights, "night")}`}</span> : null}
                     </div>
                     <div className="field">
-                      <label>Adults</label>
+                      <label>Adults{adultsN < 1 ? <ReqMark /> : null}</label>
                       <input
-                        className={`input${adultsN < 1 ? " invalid" : ""}`}
+                        className="input"
                         inputMode="numeric"
                         value={adults}
-                        onChange={(e) => setAdults(digits(e.target.value))}
+                        onFocus={(e) => e.target.select()}
+                        onChange={(e) => setAdults(digits(e.target.value).replace(/^0+(?=\d)/, ""))}
                       />
-                      {adultsN < 1 ? <span className="error">at least one adult</span> : null}
                     </div>
                     <div className="field">
                       <label>
@@ -1153,15 +1162,16 @@ export function NewInquiryCanvas() {
                         className="input"
                         inputMode="numeric"
                         value={children}
-                        onChange={(e) => setChildren(digits(e.target.value, 2))}
+                        onFocus={(e) => e.target.select()}
+                        onChange={(e) => setChildren(digits(e.target.value, 2).replace(/^0+(?=\d)/, ""))}
                       />
                     </div>
                     <div className="field">
                       <label>
-                        Rooms
+                        Rooms{roomsN < 1 ? <ReqMark /> : null}
                         <Help label="About the room count">
                           {envelope
-                            ? `A count — ${roomRange.min === roomRange.max ? roomRange.min : `${roomRange.min}–${roomRange.max}`} for ${plural(envelope.chargeableOccupants, "chargeable guest")}, up to ${envelope.maxCapacityUsed} a room. The room type is ours to pick.`
+                            ? `Starts at two guests to a room. ${roomRange.min === roomRange.max ? roomRange.min : `${roomRange.min}–${roomRange.max}`} for ${plural(envelope.chargeableOccupants, "chargeable guest")}, up to ${envelope.maxCapacityUsed} a room. The room type is ours to pick.`
                             : "A count — the room type is ours to pick."}
                         </Help>
                       </label>
@@ -1171,15 +1181,13 @@ export function NewInquiryCanvas() {
                         disabled={allowedRooms.length === 0}
                         onChange={(e) => setRooms(e.target.value)}
                       >
-                        {allowedRooms.length === 0 ? (
-                          <option value={rooms}>—</option>
-                        ) : (
-                          allowedRooms.map((n) => (
-                            <option key={n} value={String(n)}>
-                              {plural(n, "room")}
-                            </option>
-                          ))
-                        )}
+                        {/* A count not on the list reads as not chosen: a select would show its first option instead. */}
+                        {allowedRooms.includes(roomsN) ? null : <option value={rooms} hidden={allowedRooms.length > 0}>—</option>}
+                        {allowedRooms.map((n) => (
+                          <option key={n} value={String(n)}>
+                            {plural(n, "room")}
+                          </option>
+                        ))}
                         {/* The next counts, shut, saying what they need (2026-10-28). */}
                         {envelope && allowedRooms.length
                           ? moreRoomsNeedGuests(roomRange.max, envelope.hotelRoomCount, childMax + 1).map((o) => (
@@ -1329,10 +1337,14 @@ export function NewInquiryCanvas() {
                       One bill each
                     </Button>
                     <Button
-                      kind="quiet"
+                      kind="secondary"
                       compact
-                      state="inert"
-                      title="Keep this stay first, then add the return stay from the booking — it goes on the same enquiry"
+                      state={busy ? "inert" : saveReason ? "inert" : "default"}
+                      title={saveReason ?? "Keeps this stay, then adds the return stay on the same enquiry"}
+                      onClick={() => {
+                        returnStayNext.current = true;
+                        run.mutate();
+                      }}
                     >
                       Add a return stay
                     </Button>
@@ -1509,7 +1521,7 @@ export function NewInquiryCanvas() {
               </dd>
               <dt>Guests</dt>
               <dd>
-                {plural(adultsN, "adult")}
+                {adultsN < 1 ? <span className="warn-ink">no adults yet</span> : plural(adultsN, "adult")}
                 {childN ? `, ${plural(childN, "child", "children")}` : ""}
                 {childN && ages.some((a) => a.trim()) ? <div className="meta">ages {ages.map((a) => a.trim() || "?").join(", ")}</div> : null}
               </dd>

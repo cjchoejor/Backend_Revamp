@@ -25,6 +25,7 @@ import {
   type PerDateAvailabilityResult,
 } from "@/lib/api/availability";
 import { getAllowedRoomCounts, getChildPolicy } from "@/lib/api/child-policy";
+import { useRoomsFollowParty } from "@/hooks/use-rooms-follow-party";
 import { updateEntryIntake } from "@/lib/api/entries";
 import {
   getInquiry,
@@ -71,7 +72,7 @@ import {
 } from "./kit";
 import { AddReturnStay, TripStays } from "@/components/ds/workspace/return-stay";
 import { enumerateNights, useRoomSelection } from "./use-room-selection";
-import { CHANNEL_OPTIONS, PartySearch, cameInAsOf, channelDef, moreRoomsNeedGuests, type ChannelKey } from "./new-inquiry-parts";
+import { CHANNEL_OPTIONS, PartySearch, RoomCountField, cameInAsOf, channelDef, type ChannelKey } from "./new-inquiry-parts";
 import { TheCaller, WrapUp } from "./s1-caller";
 import { cleanPicks, usePickPricing, type BillNight } from "./s1-bill";
 import { RoomsByType, savedBookingRooms, type TypeDraft } from "./s1-by-type";
@@ -543,20 +544,6 @@ function TheStay({
   });
   const env = envelope.data ?? null;
   const roomsN = Math.max(1, parseInt(f.rooms || "1", 10) || 1);
-  // The room counts the party allows, as the new inquiry offers them (2026-10-27, operator: "the
-  // rooms no longer give a dropdown like before"). The booking's own count stays on the list even
-  // when it falls outside, so a stored figure is never silently changed.
-  const range = env?.allowedRoomCounts ?? null;
-  const roomOptions = useMemo(() => {
-    const out = range && range.min > 0 && range.max >= range.min ? Array.from({ length: range.max - range.min + 1 }, (_, i) => range.min + i) : [];
-    if (!out.includes(roomsN)) out.push(roomsN);
-    return out.sort((a, b) => a - b);
-  }, [range?.min, range?.max, roomsN]); // eslint-disable-line react-hooks/exhaustive-deps
-  // The next counts are listed shut, saying what they need (2026-10-28, operator: "I changed to 2
-  // rooms, but I can only select one room" — one adult allows one room, and the list said nothing).
-  const shutRoomOptions = range
-    ? moreRoomsNeedGuests(range.max, env?.hotelRoomCount ?? null, (policy.data?.ageBands.childMaxAge ?? 10) + 1).filter((o) => !roomOptions.includes(o.n))
-    : [];
 
   const bedTypes = useMemo(() => {
     const s = new Set<string>();
@@ -581,14 +568,15 @@ function TheStay({
       .map(([k, v]) => [k, parseInt(v, 10) || 0])
       .filter(([, v]) => (v as number) > 0),
   ) as Record<string, number>;
-  // A party changed here can make the room count impossible — snap it to the first count allowed,
-  // as the new inquiry does. Only after the desk changed the party: a stored count is left alone.
   const partyEdited = f.adults !== saved.adults || String(childN) !== saved.children || ages.join(",") !== saved.ages.join(",");
-  useEffect(() => {
-    if (!range || !partyEdited) return;
-    if (roomsN < range.min || roomsN > range.max) set({ rooms: String(range.min) });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [range?.min, range?.max, partyEdited]);
+  useRoomsFollowParty({
+    env,
+    partyEdited,
+    rooms: roomsN,
+    savedRooms: Number(saved.rooms),
+    bedAsk: Object.values(bedMap).reduce<number>((a, b) => a + (b as number), 0),
+    apply: (n) => set({ rooms: String(n) }),
+  });
   const dirty =
     f.checkIn !== saved.checkIn ||
     f.nights !== saved.nights ||
@@ -599,33 +587,45 @@ function TheStay({
     JSON.stringify(bedMap) !== JSON.stringify(savedBedMap);
   useFlowUnsaved("stay", editable && dirty, "Changes to the stay saved");
 
+  const writeStay = () =>
+    updateEntryIntake(session!, entry.id, {
+      checkInDate: f.checkIn || undefined,
+      checkOutDate: checkOut || undefined,
+      adultCount: adultsN,
+      childCount: childN,
+      childAges: childN > 0 ? agesNum : [],
+      guestCount: adultsN + childN,
+      numberOfRooms: roomsN,
+      bedTypeRequest: Object.keys(bedMap).length
+        ? (bedMap as Record<string, number>)
+        : null,
+      expectedVersion: entry.version,
+    });
+  // The house is asked again by itself (2026-10-27, operator: "when I make edits to the stay
+  // and click Done, can it ask the house directly, so we can remove the Ask again button").
+  // The saved figures ride on the event, since the entry on screen is still the old one.
+  const stayWasSaved = () => {
+    refresh();
+    if (f.checkIn && checkOut)
+      window.dispatchEvent(
+        new CustomEvent(STAY_SAVED_EVENT, {
+          detail: { entryId: entry.id, checkInDate: f.checkIn, checkOutDate: checkOut, guestCount: adultsN + childN },
+        }),
+      );
+  };
+  // A return stay can be added as soon as the stay's fields are in (2026-11-03, operator: "after
+  // the user fills in check in, nights, check out, adults, children and room, the add a return stay
+  // can be enabled"). What is typed is saved first; the page stays where it is.
+  const saveForReturn = useMutation({
+    mutationFn: writeStay,
+    onSuccess: stayWasSaved,
+    onError: (e) => toastRefusal(e, "The stay could not be saved"),
+  });
   const save = useMutation({
-    mutationFn: () =>
-      updateEntryIntake(session!, entry.id, {
-        checkInDate: f.checkIn || undefined,
-        checkOutDate: checkOut || undefined,
-        adultCount: adultsN,
-        childCount: childN,
-        childAges: childN > 0 ? agesNum : [],
-        guestCount: adultsN + childN,
-        numberOfRooms: roomsN,
-        bedTypeRequest: Object.keys(bedMap).length
-          ? (bedMap as Record<string, number>)
-          : null,
-        expectedVersion: entry.version,
-      }),
+    mutationFn: writeStay,
     onSuccess: () => {
       toast.success("The stay is updated — the house is asked again for these dates");
-      refresh();
-      // The house is asked again by itself (2026-10-27, operator: "when I make edits to the stay
-      // and click Done, can it ask the house directly, so we can remove the Ask again button").
-      // The saved figures ride on the event, since the entry on screen is still the old one.
-      if (f.checkIn && checkOut)
-        window.dispatchEvent(
-          new CustomEvent(STAY_SAVED_EVENT, {
-            detail: { entryId: entry.id, checkInDate: f.checkIn, checkOutDate: checkOut, guestCount: adultsN + childN },
-          }),
-        );
+      stayWasSaved();
       // Done saved it; the work moves on to the house, which is being asked again for the stay as
       // it is now (2026-10-27, operator: "it took me to Wrap up, when it should ask the house again
       // and take me to the house section").
@@ -648,6 +648,26 @@ function TheStay({
       flow="stay"
       flowAfter="caller"
       title="The stay"
+      keepRight
+      right={
+        <Live>
+          <AddReturnStay
+            entry={entry}
+            kind="secondary"
+            shutReason={invalid}
+            fromAfter={checkOut || null}
+            prepare={
+              dirty && editable
+                ? () =>
+                    saveForReturn
+                      .mutateAsync()
+                      .then(() => true)
+                      .catch(() => false)
+                : undefined
+            }
+          />
+        </Live>
+      }
       // One Done (2026-10-27, operator: "remove Save the stay and merge it with Done, and bring
       // Undo beside Done"): with a change on the stay, Done saves it and moves on; Undo puts the
       // fields back. Without a change, the card's own Done simply folds it.
@@ -740,28 +760,13 @@ function TheStay({
             }
           />
         </div>
-        <div className="field">
-          <label>
-            Rooms
-            <Help label="About the room count">
-              {env
-                ? `A count — at least ${env.allowedRoomCounts.min}, at most ${env.allowedRoomCounts.max} for ${plural(env.chargeableOccupants, "chargeable guest")}. The room type is ours to pick.`
-                : "A count — the room type is ours to pick."}
-            </Help>
-          </label>
-          <select className="input" value={String(roomsN)} disabled={ro} onChange={(e) => set({ rooms: e.target.value })}>
-            {roomOptions.map((n) => (
-              <option key={n} value={String(n)}>
-                {plural(n, "room")}
-                {range && n < range.min ? " · too few" : range && n > range.max ? " · more than the guests" : ""}
-              </option>
-            ))}
-            {shutRoomOptions.map((o) => (
-              <option key={o.n} value={String(o.n)} disabled>
-                {o.label}
-              </option>
-            ))}
-          </select>
+        <RoomCountField
+          env={env}
+          rooms={roomsN}
+          disabled={ro}
+          adultFrom={(policy.data?.ageBands.childMaxAge ?? 10) + 1}
+          onChange={(n) => set({ rooms: String(n) })}
+        >
           {env && (env.exceedsHotelCapacity || roomsN < env.allowedRoomCounts.min) ? (
             <span className="hint warn-ink">
               {env.exceedsHotelCapacity
@@ -769,7 +774,7 @@ function TheStay({
                 : `at least ${plural(env.allowedRoomCounts.min, "room")} for ${plural(env.chargeableOccupants, "chargeable guest")}`}
             </span>
           ) : null}
-        </div>
+        </RoomCountField>
         {childN > 0 ? (
           <div className="wide field">
             <label>
@@ -867,7 +872,6 @@ function TheStay({
           >
             One bill each
           </Button>
-          <AddReturnStay entry={entry} />
         </Live>
       </div>
     </StepCard>

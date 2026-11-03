@@ -1,4 +1,5 @@
 import { EntryStatus, QuotationState, Stage, type PrismaClient } from "@prisma/client";
+import { guestDisplayName } from "../../lib/guest-display-name.js";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { foldIsoNightsToRanges } from "../../lib/entry-inventory-claim.js";
 import { sealAsPerNight } from "../../lib/option-selected-reader.js";
@@ -54,7 +55,7 @@ const fmtDay = (d: string) =>
   new Date(`${d}T00:00:00.000Z`).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
 const stayWords = (ci: Date | null, co: Date | null) => (ci && co ? `${fmtDay(iso(ci))} – ${fmtDay(iso(co))}` : "no dates yet");
 const nameOf = (g: { firstName: string | null; lastName: string | null } | null | undefined) =>
-  [g?.firstName, g?.lastName].filter(Boolean).join(" ").trim() || null;
+  guestDisplayName(g) || null;
 
 async function loadBooking(prisma: PrismaClient, entryId: string) {
   const e = await prisma.entry.findUnique({
@@ -74,7 +75,7 @@ async function loadBooking(prisma: PrismaClient, entryId: string) {
       bedTypeRequest: true,
       checkInDate: true,
       checkOutDate: true,
-      guestProfile: { select: { firstName: true, lastName: true } },
+      guestProfile: { select: { title: true, firstName: true, lastName: true } },
       inquiry: {
         select: {
           travelAgentId: true,

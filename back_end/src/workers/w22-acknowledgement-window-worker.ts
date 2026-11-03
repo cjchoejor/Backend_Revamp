@@ -1,5 +1,6 @@
 import type { PrismaClient } from "@prisma/client";
 import { findReplacedPapers } from "../lib/reply-waits.js";
+import { REPLY_NOT_ASKED, guestRepliesOff } from "../lib/guest-reply-settings.js";
 
 export async function runAcknowledgementWindowWorker(prisma: PrismaClient, input: { communicationRecordId?: string; timerRecordId?: string }) {
   const now = new Date();
@@ -22,6 +23,18 @@ export async function runAcknowledgementWindowWorker(prisma: PrismaClient, input
       });
     }
     return { skipped: true, reason: "PAPER_REPLACED" } as const;
+  }
+
+  if (comm.acknowledgementStatus === REPLY_NOT_ASKED) return { skipped: true, reason: "NOT_ASKED" } as const;
+  // Its reply setting is off: the clock ends quietly, and the paper waits again if it comes back on.
+  if ((await guestRepliesOff(prisma)).has(comm.commType)) {
+    if (typeof input.timerRecordId === "string") {
+      await prisma.timerRecord.updateMany({
+        where: { id: input.timerRecordId, status: "SCHEDULED" },
+        data: { status: "CANCELLED", cancelledAt: now, cancelledBy: "SYSTEM", cancelledReason: "REPLIES_OFF" },
+      });
+    }
+    return { skipped: true, reason: "REPLIES_OFF" } as const;
   }
 
   await prisma.$transaction(async (tx) => {

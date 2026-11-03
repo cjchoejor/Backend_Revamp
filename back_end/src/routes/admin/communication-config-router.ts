@@ -37,6 +37,27 @@ adminCommunicationConfigRouter.put(
   },
 );
 
+adminCommunicationConfigRouter.get("/communication-config/guest-replies/:key", L4, async (req, res, next) => {
+  try {
+    res.json({ value: await svc.getGuestReplySetting(prisma, String(req.params.key)) });
+  } catch (e) {
+    next(e);
+  }
+});
+
+adminCommunicationConfigRouter.put(
+  "/communication-config/guest-replies/:key",
+  L4,
+  validateBody(valueOnlyRequestSchema),
+  async (req, res, next) => {
+    try {
+      res.json(await svc.setGuestReplySetting(prisma, String(req.params.key), req.body.value, req.actor!.actorId));
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
 adminCommunicationConfigRouter.get("/communication-config/acknowledgement-window", L4, async (_req, res, next) => {
   try {
     res.json({ value: await svc.getAcknowledgementWindow(prisma) });

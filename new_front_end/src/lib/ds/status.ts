@@ -275,9 +275,9 @@ export function bookerOfRow(r: DeskListRow): Booker | null {
 }
 
 /** The guest's name, or the honest "to come from the agent" when none was given. */
-export function guestNameOf(g?: { firstName?: string | null; lastName?: string | null; displayName?: string | null } | null): string {
+export function guestNameOf(g?: { title?: string | null; firstName?: string | null; lastName?: string | null; displayName?: string | null } | null): string {
   if (!g) return "to come from the agent";
-  const full = g.displayName?.trim() || [g.firstName, g.lastName].filter(Boolean).join(" ").trim();
+  const full = g.displayName?.trim() || [g.title, g.firstName, g.lastName].filter(Boolean).join(" ").trim();
   return full || "to come from the agent";
 }
 
@@ -293,7 +293,7 @@ export function callerNameOf(inq?: { callerTitle?: string | null; callerFirstNam
  * guest is named at Wrap up, so a row with no guest is normal at Inquiry.
  */
 export function rowNameOf(r: {
-  guestProfile?: { firstName?: string | null; lastName?: string | null; displayName?: string | null } | null;
+  guestProfile?: { title?: string | null; firstName?: string | null; lastName?: string | null; displayName?: string | null } | null;
   inquiry?: { callerTitle?: string | null; callerFirstName?: string | null; callerLastName?: string | null; callerPhone?: string | null; callerEmail?: string | null } | null;
 }): string {
   if (isNamed(r.guestProfile)) return guestNameOf(r.guestProfile);
@@ -309,7 +309,7 @@ export function rowNameOf(r: {
  * rang, on a direct one the guest did (the caller card's own reading). Else it says so.
  */
 export function callerOfBooking(r: {
-  guestProfile?: { firstName?: string | null; lastName?: string | null; displayName?: string | null } | null;
+  guestProfile?: { title?: string | null; firstName?: string | null; lastName?: string | null; displayName?: string | null } | null;
   inquiry?: { callerTitle?: string | null; callerFirstName?: string | null; callerLastName?: string | null; callerPhone?: string | null; callerEmail?: string | null } | null;
   partyName?: string | null;
 }): string {

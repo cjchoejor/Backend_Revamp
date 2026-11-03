@@ -9,8 +9,8 @@ const TONE: Record<TraceTone, { dot: string; text: string; chip: string }> = {
   critical: { dot: "bg-red-500", text: "text-red-600", chip: "bg-red-500/10 text-red-600" },
 };
 
-export function TraceEventRow({ event, compact = false }: { event: TraceEvent; compact?: boolean }) {
-  const h = humanizeTrace(event);
+export function TraceEventRow({ event, compact = false, settingName }: { event: TraceEvent; compact?: boolean; settingName?: (key: string) => string | undefined }) {
+  const h = humanizeTrace(event, undefined, settingName);
   const tone = TONE[h.tone];
 
   return (

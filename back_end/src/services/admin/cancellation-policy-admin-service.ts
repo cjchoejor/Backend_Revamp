@@ -4,8 +4,57 @@ import { writeAdminAuditEvent } from "../../lib/admin/write-admin-audit.js";
 import { requiredControlCheck } from "../../lib/admin/required-control-check.js";
 import { supersedeConfigurationEntry } from "../../lib/admin/supersede-configuration.js";
 import { captureSnapshotTx } from "../../lib/admin/entity-version-snapshot.js";
+import { getActiveConfigEntry } from "../../lib/config-store.js";
 
-const MIRROR_KEY = "cancellation.policyTiers";
+/**
+ * What the desk really charges when a booking is cancelled, walks out or does not come (Policy 35).
+ * The registry rows on this page are a different thing: nothing charges from them, and until
+ * 2026-11-02 saving one overwrote this key with its day-and-percent list, which Policy 35 reads as a
+ * charge of 0. Only setCancellationCharges writes the key now.
+ */
+const CHARGES_KEY = "cancellation.policyTiers";
+
+export type CancellationChargesInput = {
+  sameDayPenaltyAmount: number;
+  preArrivalPenaltyAmount?: number | null;
+  postCheckInEarlyDeparturePenaltyAmount?: number | null;
+  tiers?: Array<{ minHoursBeforeCheckIn: number; penaltyAmount: number }>;
+};
+
+export async function getCancellationCharges(prisma: PrismaClient) {
+  const row = await getActiveConfigEntry(prisma, CHARGES_KEY);
+  const stored = row?.configValue ?? null;
+  // A list here is what a saved policy left behind: Policy 35 reads no charge from it.
+  const overwritten = Array.isArray(stored);
+  return { value: overwritten ? null : stored, overwritten };
+}
+
+export async function setCancellationCharges(prisma: PrismaClient, input: CancellationChargesInput, actorId: string, notes?: string | null) {
+  // Nothing typed means "use the usual charge", which is what a missing field does in Policy 35.
+  const value: Record<string, unknown> = { sameDayPenaltyAmount: input.sameDayPenaltyAmount };
+  if (input.preArrivalPenaltyAmount != null) value.preArrivalPenaltyAmount = input.preArrivalPenaltyAmount;
+  if (input.postCheckInEarlyDeparturePenaltyAmount != null) value.postCheckInEarlyDeparturePenaltyAmount = input.postCheckInEarlyDeparturePenaltyAmount;
+  if (input.tiers?.length) value.tiers = input.tiers;
+
+  return prisma.$transaction(async (tx) => {
+    const before = await getActiveConfigEntry(tx as unknown as PrismaClient, CHARGES_KEY);
+    const saved = await supersedeConfigurationEntry(tx, {
+      configKey: CHARGES_KEY,
+      configValue: value as Prisma.InputJsonValue,
+      actorId,
+      notes: notes ?? null,
+    });
+    await writeAdminAuditEvent(tx, {
+      actorId,
+      eventType: "ADMIN.CANCELLATION_CHARGES_CHANGED",
+      entityType: "ConfigurationEntry",
+      entityId: saved.entry.id,
+      operation: "UPDATE",
+      payload: { from: (before?.configValue ?? null) as Prisma.InputJsonValue, to: value as Prisma.InputJsonValue },
+    });
+    return { value, overwritten: false };
+  });
+}
 
 export interface CancellationPolicyInput {
   name: string;
@@ -48,12 +97,6 @@ export async function createPolicy(prisma: PrismaClient, input: CancellationPoli
       operation: "CREATE",
       payload: { name },
     });
-    await supersedeConfigurationEntry(tx, {
-      configKey: MIRROR_KEY,
-      configValue: input.penaltyTiers,
-      actorId,
-      notes: `Mirror of cancellation policy "${name}"`,
-    });
     return created;
   });
 }
@@ -88,14 +131,6 @@ export async function updatePolicy(
       operation: "UPDATE",
       payload: { name: updated.name },
     });
-    if (input.penaltyTiers !== undefined && updated.isActive) {
-      await supersedeConfigurationEntry(tx, {
-        configKey: MIRROR_KEY,
-        configValue: input.penaltyTiers,
-        actorId,
-        notes: `Mirror of cancellation policy "${updated.name}"`,
-      });
-    }
     return updated;
   });
 }

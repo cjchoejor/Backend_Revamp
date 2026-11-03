@@ -1,4 +1,5 @@
 import type { PrismaClient } from "@prisma/client";
+import { guestDisplayName } from "../../lib/guest-display-name.js";
 import { InvoiceState, InvoiceType } from "@prisma/client";
 import { readOptionSelected } from "../../lib/option-selected-reader.js";
 import { findRoomBookingConflicts } from "../../lib/room-booking-conflicts.js";
@@ -230,7 +231,7 @@ export async function buildCompetingClaims(prisma: PrismaClient, entryId: string
           currentStage: true,
           checkInDate: true,
           checkOutDate: true,
-          guestProfile: { select: { firstName: true, lastName: true } },
+          guestProfile: { select: { title: true, firstName: true, lastName: true } },
           ...sealSelect,
           quotations: {
             where: { state: { in: ["DRAFT", "SENT", "ACCEPTED"] } },
@@ -288,7 +289,7 @@ export async function buildCompetingClaims(prisma: PrismaClient, entryId: string
           m.set(o.id, (m.get(o.id) ?? 0) + 1);
           wantedBy.set(key, m);
         }
-      const guest = [o.guestProfile?.firstName, o.guestProfile?.lastName].filter(Boolean).join(" ").trim() || null;
+      const guest = guestDisplayName(o.guestProfile) || null;
       rows.set(o.id, { entryId: o.id, ref: o.inquiryId, guest, stage: o.currentStage, rooms: contested, types: new Set(), quote, proforma });
     }
 

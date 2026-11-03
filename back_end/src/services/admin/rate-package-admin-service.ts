@@ -13,6 +13,8 @@
 import { Prisma, RatePackageScope, type PrismaClient } from "@prisma/client";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { writeAdminAuditEvent } from "../../lib/admin/write-admin-audit.js";
+import { planRatesFromMeals } from "../../lib/room-composition.js";
+import { resolveChargeRates } from "../infrastructure/compute-stay-charges.js";
 
 type DecimalInput = number | string;
 
@@ -245,4 +247,34 @@ export async function deleteRoomTypeOverride(prisma: PrismaClient, overrideId: s
   const row = await prisma.roomTypePackageOverride.findUnique({ where: { id: overrideId } });
   if (!row) throw new NotFoundError("RoomTypePackageOverride");
   return prisma.roomTypePackageOverride.delete({ where: { id: overrideId } });
+}
+
+/**
+ * The figures the package form fills in as it is typed (2026-11-03, operator): nothing is saved.
+ *  - `meals`: each meal plan at the sum of the meals it covers, the form's starting figure.
+ *  - `withTaxes`: a rate the manager has with service charge and GST in it, taken back to the rate
+ *    without them. The bill adds service charge to the rate, then GST on the two, so the rate is the
+ *    figure divided by both. `comesTo` is what the rounded rate adds back up to.
+ */
+export async function workOutPackageRates(
+  prisma: PrismaClient,
+  input: {
+    meals?: { breakfast?: number | string | null; lunch?: number | string | null; dinner?: number | string | null };
+    withTaxes?: Record<string, number | string>;
+  },
+) {
+  const { gstRate, serviceChargeRate } = await resolveChargeRates(prisma);
+  const factor = new Prisma.Decimal(1).add(serviceChargeRate).mul(new Prisma.Decimal(1).add(gstRate));
+  const withoutTaxes: Record<string, string> = {};
+  const comesTo: Record<string, string> = {};
+  for (const [key, value] of Object.entries(input.withTaxes ?? {})) {
+    const rate = new Prisma.Decimal(value).div(factor).toDecimalPlaces(2);
+    withoutTaxes[key] = rate.toFixed(2);
+    comesTo[key] = rate.mul(factor).toDecimalPlaces(2).toFixed(2);
+  }
+  const meal = (v: number | string | null | undefined) => (v == null || v === "" ? null : new Prisma.Decimal(v));
+  const planRates = input.meals
+    ? planRatesFromMeals({ breakfast: meal(input.meals.breakfast), lunch: meal(input.meals.lunch), dinner: meal(input.meals.dinner) })
+    : null;
+  return { serviceChargeRate, gstRate, planRates, withoutTaxes, comesTo };
 }

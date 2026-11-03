@@ -35,10 +35,10 @@ export type RoomBookingConflict = {
   endDate: Date;
 };
 
-/** "First Last", or null when the profile carries neither. */
-function guestNameOf(g: { firstName?: string | null; lastName?: string | null } | null | undefined) {
-  if (!g) return null;
-  const combined = [g.firstName, g.lastName]
+/** "Ms First Last", or null when the profile carries neither name. */
+function guestNameOf(g: { title?: string | null; firstName?: string | null; lastName?: string | null } | null | undefined) {
+  if (!g || !(g.firstName?.trim() || g.lastName?.trim())) return null;
+  const combined = [g.title, g.firstName, g.lastName]
     .filter((v): v is string => !!v?.trim())
     .join(" ")
     .trim();
@@ -111,7 +111,7 @@ export async function findRoomBookingConflicts(
         entry: {
           select: {
             inquiryId: true,
-            guestProfile: { select: { firstName: true, lastName: true } },
+            guestProfile: { select: { title: true, firstName: true, lastName: true } },
             ...reservedEntryRoomsSelect,
           },
         },
@@ -140,7 +140,7 @@ export async function findRoomBookingConflicts(
             inquiryId: true,
             checkInDate: true,
             checkOutDate: true,
-            guestProfile: { select: { firstName: true, lastName: true } },
+            guestProfile: { select: { title: true, firstName: true, lastName: true } },
           },
         },
       },
@@ -170,7 +170,7 @@ export async function findRoomBookingConflicts(
             inquiryId: true,
             checkInDate: true,
             checkOutDate: true,
-            guestProfile: { select: { firstName: true, lastName: true } },
+            guestProfile: { select: { title: true, firstName: true, lastName: true } },
           },
         },
       },

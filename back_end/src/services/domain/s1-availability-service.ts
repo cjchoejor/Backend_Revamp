@@ -1,4 +1,5 @@
 import { Prisma, PartyType } from "@prisma/client";
+import { guestDisplayName } from "../../lib/guest-display-name.js";
 import type { Entry, PrismaClient } from "@prisma/client";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { getActiveConfigEntry, requireActiveConfigValue } from "../../lib/config-store.js";
@@ -103,7 +104,7 @@ export async function runAvailabilityEngineForEntry(
     contactPersonName: true,
     contactPersonPhone: true,
     guestProfile: {
-      select: { firstName: true, lastName: true, email: true, phone: true },
+      select: { title: true, firstName: true, lastName: true, email: true, phone: true },
     },
     inquiry: {
       select: {
@@ -212,7 +213,7 @@ export async function runAvailabilityEngineForEntry(
   /** Compose "First Last" or fall back to "Guest" when both names are missing. */
   const guestNameOf = (g: { firstName?: string | null; lastName?: string | null } | null | undefined) => {
     if (!g) return "Guest";
-    const combined = [g.firstName, g.lastName].filter((v): v is string => !!v?.trim()).join(" ").trim();
+    const combined = guestDisplayName(g);
     return combined || "Guest";
   };
 

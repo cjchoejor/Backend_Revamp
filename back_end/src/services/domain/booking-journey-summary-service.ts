@@ -1,4 +1,5 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
+import { guestDisplayName } from "../../lib/guest-display-name.js";
 import type { EntryStatus, EntryUseType, GroupBillingMode, Stage } from "@prisma/client";
 import { NotFoundError } from "../../lib/errors.js";
 import { readOptionSelected } from "../../lib/option-selected-reader.js";
@@ -450,7 +451,7 @@ export async function buildBookingJourneySummary(prisma: Db, entryId: string): P
   const proforma = liveProforma;
 
   const guest = entry.guestProfile ?? inq?.guestProfile ?? null;
-  const guestName = guest ? [guest.firstName, guest.lastName].filter(Boolean).join(" ").trim() || null : null;
+  const guestName = guestDisplayName(guest) || null;
 
   const res = entry.reservation;
 
