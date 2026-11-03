@@ -590,3 +590,7 @@
 .ds .admin-console .adm-with-tax-rates { margin: var(--s2) 0 var(--s3); color: var(--tone-ink); font-size: var(--t-sm); font-weight: 600; }
 .ds .admin-console .adm-with-tax-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: var(--s3); }
 .ds .admin-console .adm-with-tax-net { display: block; margin-top: 4px; color: var(--tone-ink); font-size: var(--t-meta); font-weight: 600; }
+
+/* Danger keeps its own colour, whatever colour the page's group has. */
+.ds .admin-console .admin-btn.text-destructive:not(.desk-root *) { border-color: var(--danger); background: var(--surface); color: var(--danger); }
+.ds .admin-console .admin-btn.text-destructive:hover:not(.desk-root *) { border-color: var(--danger); background: var(--danger-soft); color: var(--danger); }

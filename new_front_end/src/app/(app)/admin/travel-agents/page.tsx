@@ -10,6 +10,7 @@ import { useSession } from "@/hooks/use-session";
 import {
   createTravelAgent,
   deactivateTravelAgent,
+  deleteTravelAgent,
   listTravelAgents,
   reactivateTravelAgent,
   updateTravelAgent,
@@ -115,6 +116,16 @@ export default function AdminTravelAgentsPage() {
     mutationFn: (a: TravelAgentAdmin) =>
       a.isActive ? deactivateTravelAgent(session!, a.id) : reactivateTravelAgent(session!, a.id),
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["admin", "travel-agents"] }),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (a: TravelAgentAdmin) => deleteTravelAgent(session!, a.id),
+    onSuccess: (out) => {
+      toast.success(`${out.displayName} deleted${out.packagesDeleted ? `, with its ${out.packagesDeleted} rate package${out.packagesDeleted === 1 ? "" : "s"}` : ""}`);
+      setSelectedId(null);
+      void queryClient.invalidateQueries({ queryKey: ["admin", "travel-agents"] });
+    },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Delete failed", { duration: 9000 }),
   });
 
   if (!enabled) return null;
@@ -272,6 +283,24 @@ export default function AdminTravelAgentsPage() {
                       }}
                     >
                       {selected.isActive ? "Deactivate" : "Reactivate"}
+                    </button>
+                  )}
+                  {!isNewMode && selected && (
+                    <button
+                      type="button"
+                      className="admin-btn text-[10px] text-destructive"
+                      disabled={deleteMutation.isPending}
+                      onClick={async () => {
+                        const ok = await confirmDialog({
+                          title: "Delete this agent for good?",
+                          message: `${selected.displayName} and its rate packages will be gone, and this cannot be undone. An agent with any enquiry on record cannot be deleted: deactivate it instead.`,
+                          confirmLabel: "Delete",
+                          variant: "danger",
+                        });
+                        if (ok) deleteMutation.mutate(selected);
+                      }}
+                    >
+                      Delete
                     </button>
                   )}
                   <button

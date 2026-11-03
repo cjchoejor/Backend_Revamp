@@ -1125,6 +1125,11 @@ export async function deactivateTravelAgent(session: Session, id: string) {
   return apiRequest<TravelAgentAdmin>(`/api/admin/travel-agents/${id}/deactivate`, { method: "POST", session });
 }
 
+/** For good. Refused in words while any enquiry names the agency. */
+export async function deleteTravelAgent(session: Session, id: string) {
+  return apiRequest<{ deleted: boolean; id: string; displayName: string; packagesDeleted: number }>(`/api/admin/travel-agents/${id}`, { method: "DELETE", session });
+}
+
 export async function reactivateTravelAgent(session: Session, id: string) {
   return apiRequest<TravelAgentAdmin>(`/api/admin/travel-agents/${id}/reactivate`, { method: "POST", session });
 }
