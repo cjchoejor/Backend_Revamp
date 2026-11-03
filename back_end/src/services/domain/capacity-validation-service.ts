@@ -95,6 +95,21 @@ export function computeAllowedRoomCounts(
   return { min, max };
 }
 
+/** How many chargeable guests the desk's room count assumes in a room until told otherwise. */
+export const GUESTS_PER_ROOM_BY_DEFAULT = 2;
+
+/**
+ * The room count a party starts on (2026-11-03, operator: "place two in each room"): two to a room,
+ * an odd guest taking a room of their own, so 2 → 1, 3 → 2, 5 → 3, 6 → 3, 9 → 5. Always inside the
+ * envelope above — the hotel's own rooms cap it — and only ever a default: the desk may pick any
+ * count the envelope allows.
+ */
+export function suggestRoomCount(chargeableOccupants: number, allowed: { min: number; max: number }): number {
+  if (chargeableOccupants <= 0) return 0;
+  const wanted = Math.ceil(chargeableOccupants / GUESTS_PER_ROOM_BY_DEFAULT);
+  return Math.min(allowed.max, Math.max(allowed.min, wanted));
+}
+
 /**
  * Live counts from the room registry — deliberately NOT a config key. The bookable-room count
  * and total sleepable capacity are derived from the Room/RoomType tables at call time, so

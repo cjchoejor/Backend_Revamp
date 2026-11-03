@@ -15,7 +15,7 @@ import * as travelAgentSvc from "../../services/admin/travel-agent-admin-service
 import * as corporateSvc from "../../services/admin/corporate-account-admin-service.js";
 import { PARTY_LOOKUP_LIMIT } from "../../lib/admin/party-lookup.js";
 import { loadChildPolicyBundle } from "../../services/domain/child-policy-service.js";
-import { computeChargeableOccupants, computeAllowedRoomCounts, loadHotelInventorySnapshot } from "../../services/domain/capacity-validation-service.js";
+import { computeChargeableOccupants, computeAllowedRoomCounts, loadHotelInventorySnapshot, suggestRoomCount } from "../../services/domain/capacity-validation-service.js";
 import { listPackagesForParty } from "../../lib/rate-package-resolution.js";
 import { addUtcDays, hotelTodayUtc, ymdUtc } from "../../lib/stay-dates.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
@@ -218,6 +218,7 @@ lookupsRouter.post("/lookups/allowed-room-counts", L1, async (req, res, next) =>
     res.json({
       chargeableOccupants,
       allowedRoomCounts,
+      suggestedRoomCount: suggestRoomCount(chargeableOccupants, allowedRoomCounts),
       bandBreakdown,
       maxCapacityUsed: maxCapacity,
       hotelRoomCount: hotelInventory.bookableRoomCount,
