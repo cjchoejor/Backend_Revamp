@@ -16,13 +16,19 @@
  * Nothing new is stored: `Inquiry.entries` has always been a list. This service is the governed
  * way to add to it, and `createEntry` does the actual work, so a return stay is validated,
  * classified and timed exactly like any other booking.
+ *
+ * The desk stays on the stay it was working (2026-11-03, operator: "dont switch the entry directly
+ * to the new one, show the old one by default but create the new entry"). So the new stay is parked
+ * as a move between stays parks one: its inquiry clock would otherwise run out while nobody is on
+ * it. Opening it from the booking head resumes it with a fresh clock.
  */
 import type { ActorLevel, PrismaClient } from "@prisma/client";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { enforceEntryNotSealedForWorkingAction } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
 import { hotelTodayUtc, ymdUtc } from "../../lib/stay-dates.js";
 import * as auditService from "../infrastructure/audit-service.js";
-import { createEntry } from "./s1-entry-service.js";
+import { createEntry, parkEntry } from "./s1-entry-service.js";
+import { TRIP_SWITCH_CAUSE, TRIP_SWITCH_PARK_REASON } from "./trip-switch-service.js";
 
 const dayMs = 24 * 60 * 60 * 1000;
 
@@ -118,6 +124,7 @@ export async function addReturnStay(
         ? (input.adultCount ?? source.adultCount ?? 0) + (input.childCount ?? source.childCount ?? 0)
         : (source.guestCount ?? undefined),
     numberOfRooms: input.numberOfRooms ?? source.numberOfRooms ?? undefined,
+    bedTypeRequest: input.numberOfRooms == null ? ((source.bedTypeRequest as Record<string, number> | null) ?? undefined) : undefined,
     otaSource: source.otaSource ?? undefined,
     contactPersonName: source.contactPersonName ?? undefined,
     contactPersonPhone: source.contactPersonPhone ?? undefined,
@@ -146,5 +153,16 @@ export async function addReturnStay(
     payload: { fromEntryId: source.id },
   });
 
-  return created;
+  let parked = false;
+  try {
+    await parkEntry(prisma, created.id, actor.actorId, `${TRIP_SWITCH_PARK_REASON} — it waits while the desk works on ${source.id}`, {
+      cause: TRIP_SWITCH_CAUSE,
+      switchedTo: source.id,
+    });
+    parked = true;
+  } catch (e) {
+    console.error("[return-stay] could not park", created.id, e);
+  }
+
+  return parked ? { ...created, status: "PARKED" as const } : created;
 }

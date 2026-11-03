@@ -1189,6 +1189,14 @@ model Entry {
   /// never enforced — every step still asks and checks as it would for any booking.
   carryOver        Json?
 
+  /// A return stay set up "the same as" another stay of its enquiry (2026-11-03, operator: "they
+  /// will have the same info till s2"): the stay it copies its guests, rooms by type and table
+  /// from, until it is priced or changed by hand. A soft link, like `splitFromEntryId`.
+  followsEntryId   String?
+  /// What was last copied, so a save that changes nothing copies nothing, and any room type that
+  /// could not be copied, for the desk to ask about.
+  followState      Json?
+
   inquiry                      Inquiry                       @relation(fields: [inquiryId], references: [id])
   guestProfile                 GuestProfile?                 @relation(fields: [guestProfileId], references: [id])
   segments                     Segment[]
@@ -1239,6 +1247,7 @@ model Entry {
   @@index([inquiryId])
   @@index([currentStage, status])
   @@index([splitFromEntryId])
+  @@index([followsEntryId])
   @@map("entries")
 }
 

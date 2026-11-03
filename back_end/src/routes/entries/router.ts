@@ -2,6 +2,8 @@ import { Router } from "express";
 import { prisma } from "../../db.js";
 import {
   addReturnStayRequestSchema,
+  chooseFollowerRoomsRequestSchema,
+  startFollowingRequestSchema,
   closeEntryRequestSchema,
   createEntryRequestSchema,
   listEntriesQuerySchema,
@@ -42,6 +44,14 @@ import {
 import { z } from "zod";
 import { entryDetailInclude } from "../../lib/entry-detail-include.js";
 import { addReturnStay } from "../../services/domain/return-stay-service.js";
+import {
+  afterStayChanged,
+  chooseFollowerRooms,
+  readTripFollow,
+  retryFollowerOnOpen,
+  startFollowing,
+  stopFollowing,
+} from "../../services/domain/trip-follow-service.js";
 import { setEntryGuest, updateEntryCaller, updateEntrySource } from "../../services/domain/inquiry-caller-service.js";
 import { CAME_IN_AS_VALUES } from "../../lib/inquiry-came-in-as.js";
 import { callerRequestSchema } from "../../dtos/02-inquiries/request-schemas.js";
@@ -149,7 +159,9 @@ const setGuestSchema = z.discriminatedUnion("mode", [
 
 entriesRouter.post("/:id/guest", requireActorLevel("L1"), validateBody(setGuestSchema), async (req, res, next) => {
   try {
-    res.json(await setEntryGuest(prisma, { actorId: req.actor!.actorId, level: req.actor!.level }, req.params.id, req.body));
+    const named = await setEntryGuest(prisma, { actorId: req.actor!.actorId, level: req.actor!.level }, req.params.id, req.body);
+    await afterStayChanged(prisma, { actorId: req.actor!.actorId, actorLevel: req.actor!.level }, req.params.id, "GUEST");
+    res.json(named);
   } catch (e) {
     next(e);
   }
@@ -171,14 +183,14 @@ entriesRouter.get("/:id/bed-plan", requireActorLevel("L1"), async (req, res, nex
 entriesRouter.post("/:id/bed-plan", requireActorLevel("L1"), async (req, res, next) => {
   try {
     const bedType = req.body?.bedType;
-    res.json(
-      await setEntryBedPlanRoom(
-        prisma,
-        req.params.id,
-        { roomId: String(req.body?.roomId ?? ""), bedType: bedType == null || bedType === "" ? null : String(bedType) },
-        { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" },
-      ),
+    const plan = await setEntryBedPlanRoom(
+      prisma,
+      req.params.id,
+      { roomId: String(req.body?.roomId ?? ""), bedType: bedType == null || bedType === "" ? null : String(bedType) },
+      { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" },
     );
+    await afterStayChanged(prisma, { actorId: req.actor!.actorId, actorLevel: req.actor!.level }, req.params.id, "BEDS");
+    res.json(plan);
   } catch (e) {
     next(e);
   }
@@ -792,6 +804,45 @@ entriesRouter.post(
 );
 
 /**
+ * A return stay set up "the same as" another stay of its enquiry (2026-11-03): what this stay
+ * follows and which stays follow it, starting and stopping that, and the room types the desk
+ * chooses when the first stay's are not free on this stay's nights. L1 — desk work, nothing is
+ * held or priced by it.
+ */
+entriesRouter.get("/:id/trip-follow", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    res.json(await readTripFollow(prisma, req.params.id));
+  } catch (e) {
+    next(e);
+  }
+});
+
+entriesRouter.post("/:id/follow", requireActorLevel("L1"), validateBody(startFollowingRequestSchema), async (req, res, next) => {
+  try {
+    res.json(await startFollowing(prisma, { actorId: req.actor!.actorId, actorLevel: req.actor!.level }, req.params.id, req.body.fromEntryId));
+  } catch (e) {
+    next(e);
+  }
+});
+
+entriesRouter.post("/:id/follow/stop", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.json(await stopFollowing(prisma, { actorId: req.actor!.actorId, actorLevel: req.actor!.level }, req.params.id));
+  } catch (e) {
+    next(e);
+  }
+});
+
+entriesRouter.post("/:id/follow/rooms", requireActorLevel("L1"), validateBody(chooseFollowerRoomsRequestSchema), async (req, res, next) => {
+  try {
+    res.json(await chooseFollowerRooms(prisma, { actorId: req.actor!.actorId, actorLevel: req.actor!.level }, req.params.id, req.body.types));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
  * L3+ manual override of the group billing mode. Used when Policy 64's auto-classification
  * disagrees with the operator's on-the-ground judgement. Body: { mode: "GROUP_MASTER" | null,
  * reason: string, clearManualOverride?: boolean }. Setting clearManualOverride to true
@@ -834,6 +885,9 @@ entriesRouter.post(
         { actorId: req.actor!.actorId, actorLevel: req.actor!.level },
         req.body,
       );
+      if ((outcome as { applied?: boolean }).applied !== false) {
+        await afterStayChanged(prisma, { actorId: req.actor!.actorId, actorLevel: req.actor!.level }, req.params.id, "AMENDED");
+      }
       res.json(outcome);
     } catch (e) {
       next(e);
@@ -910,6 +964,7 @@ entriesRouter.patch("/:id", requireActorLevel("L1"), validateBody(updateEntryReq
       req.actor!.level,
       req.body,
     );
+    await afterStayChanged(prisma, { actorId: req.actor!.actorId, actorLevel: req.actor!.level }, req.params.id, "INTAKE");
     res.json(updated);
   } catch (e) {
     next(e);
@@ -1207,7 +1262,10 @@ entriesRouter.post("/:id/park", requireActorLevel("L1"), validateBody(parkEntryR
 
 entriesRouter.post("/:id/switch-stay", requireActorLevel("L1"), validateBody(switchStayRequestSchema), async (req, res, next) => {
   try {
-    res.json(await switchStay(prisma, req.params.id, req.body.toEntryId, req.actor!.actorId));
+    const out = await switchStay(prisma, req.params.id, req.body.toEntryId, req.actor!.actorId);
+    // Rooms that were not free when this stay last copied them may be free now.
+    await retryFollowerOnOpen(prisma, { actorId: req.actor!.actorId, actorLevel: req.actor!.level }, req.body.toEntryId);
+    res.json(out);
   } catch (e) {
     next(e);
   }

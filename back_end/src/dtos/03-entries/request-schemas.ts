@@ -17,6 +17,14 @@ export const addReturnStayRequestSchema = z.object({
 });
 export type AddReturnStayRequestDto = z.infer<typeof addReturnStayRequestSchema>;
 
+/** "Same as this stay": the stay of the same enquiry this one copies (2026-11-03). */
+export const startFollowingRequestSchema = z.object({ fromEntryId: z.string().trim().min(1) });
+
+/** The room types chosen for a stay whose first stay's rooms are not free on its nights. */
+export const chooseFollowerRoomsRequestSchema = z.object({
+  types: z.array(z.object({ roomTypeId: z.string().trim().min(1), count: z.coerce.number().int().min(1).max(50) })).min(1).max(50),
+});
+
 export const createEntryRequestSchema = z.object({
   inquiryId: z.string().min(1),
   guestProfileId: z.string().optional(),

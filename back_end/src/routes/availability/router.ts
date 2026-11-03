@@ -16,6 +16,7 @@ import * as s1AvailabilityService from "../../services/domain/s1-availability-se
 import { priceRoomPick } from "../../services/domain/pick-pricing-service.js";
 import { releaseRoomBlock } from "../../services/domain/room-block-release-service.js";
 import { buildRoomChart } from "../../services/domain/room-chart-service.js";
+import { afterStayChanged } from "../../services/domain/trip-follow-service.js";
 import { answerHouseByType } from "../../services/domain/room-placement-service.js";
 import { chooseQuietRooms, describeBookingRooms, listArrivalRoomChoices, listQuietRoomChoices, planRoomsByTypeForStay, sealBookingRoomsByType } from "../../services/domain/quiet-rooms-service.js";
 import { ROOM_BED_TYPES, allowedBedTypesSource, effectiveAllowedBedTypes, setRoomBedType, usualBedTypeFor } from "../../services/domain/room-bed-type-service.js";
@@ -262,7 +263,9 @@ availabilityRouter.post(
     try {
       res.setHeader("Cache-Control", "no-store");
       const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
-      res.json(await sealBookingRoomsByType(prisma, req.params.id, actor, req.body, { preview: req.body.preview === true }));
+      const answer = await sealBookingRoomsByType(prisma, req.params.id, actor, req.body, { preview: req.body.preview === true });
+      if (answer.saved) await afterStayChanged(prisma, actor, req.params.id, "ROOMS");
+      res.json(answer);
     } catch (e) {
       next(e);
     }
@@ -360,6 +363,7 @@ availabilityRouter.patch(
   async (req, res, next) => {
     try {
       const updated = await s1AvailabilityService.selectOption(prisma, req.params.id, req.actor!.actorId, req.body);
+      if (updated) await afterStayChanged(prisma, { actorId: req.actor!.actorId, actorLevel: req.actor!.level }, updated.entryId, "ROOMS");
       res.json(updated);
     } catch (e) {
       next(e);
