@@ -1,9 +1,8 @@
 import type { ActorLevel, Prisma, PrismaClient } from "@prisma/client";
 import { enforceNightAuditOperatingDateEnded, enforceNightAuditOperatingDateNotAhead } from "../../policies/24-night-audit/p61-night-audit-complete-before-s7-to-s8.js";
 import { effectiveCheckOutDate, hotelTodayUtc, ymdUtc } from "../../lib/stay-dates.js";
-import { FolioLineType, NightAuditAnomalyType, NightAuditRunStatus, Stage } from "@prisma/client";
+import { FolioLineType, NightAuditRunStatus, Stage } from "@prisma/client";
 import { MissingConfigurationError, NotFoundError, ValidationError } from "../../lib/errors.js";
-import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { randomUUID } from "node:crypto";
 import { recalculateNextDayTimers } from "../infrastructure/next-day-timer-service.js";
 import { allocateReadableId, allocateFolioLineId } from "../../lib/readable-id.js";
@@ -54,7 +53,6 @@ type EntryNightPlan = {
   folioId: string;
   /** One per room active on operatingDate. Empty when no assignments cover this date. */
   perRoomPosts: PerRoomPost[];
-  shouldWriteFnbMissingAnomaly: boolean;
   ceiling: Prisma.Decimal | null;
 };
 
@@ -212,9 +210,6 @@ export async function planNightForEntries(
   /** Every line the night should carry, posted or not — tonight's correction reads it (2026-10-29). */
   opts?: { includePosted?: boolean },
 ): Promise<{ plan: EntryNightPlan[]; notProcessed: string[] }> {
-  const expected = (await requireActiveConfigValue<{ amount?: number; currency?: string } | undefined>(prisma, "nightAudit.expectedDailyFAndBCharge")) ?? {};
-  const expectedAmount = typeof expected.amount === "number" ? expected.amount : 0;
-
   const entries = await prisma.entry.findMany({
     where: { currentStage: Stage.S7, status: "ACTIVE", ...entryWhere },
     include: {
@@ -331,17 +326,10 @@ export async function planNightForEntries(
 
       // No assignments today (pre-check-in or checkout complete) → nothing to post; but the
       // entry itself is still "processed" as long as the folio is LIVE.
-      const expectsFnb = expectedAmount > 0 && (entry.reservation?.frozenInclusions as Record<string, unknown> | null | undefined)?.dailyFAndBExpected === true;
-      const hasFnb = expectsFnb
-        ? await prisma.folioLine.findFirst({ where: { folioId: entry.folio.id, lineType: FolioLineType.F_AND_B, chargeDate: operatingDate } })
-        : null;
-      const shouldWriteFnbMissingAnomaly = expectsFnb && !hasFnb;
-
       plan.push({
         entryId: entry.id,
         folioId: entry.folio.id,
         perRoomPosts,
-        shouldWriteFnbMissingAnomaly,
         // SIG-S7 Policy 45 — carried so the post-charge ceiling re-check below still runs.
         ceiling: entry.reservation?.creditCeilingIfExtended ?? null,
       });
@@ -632,18 +620,6 @@ async function postEntryNightPlanTx(
   // proof default; the desk can always ask earlier by hand. Best-effort: a prompt that
   // can't be written must not fail the audit.
   await maybePromptInterimPaymentTx(tx, { entryId: p.entryId, folioId: p.folioId, operatingDate, actorId }).catch(() => {});
-  // The anomaly hangs off the hotel's record; a run for one booking has none to hang it on,
-  // and the missing-F&B question is the hotel's run's to raise.
-  if (p.shouldWriteFnbMissingAnomaly && recordId) {
-    await tx.nightAuditAnomaly.create({
-      data: {
-        nightAuditRecordId: recordId,
-        entryId: p.entryId,
-        anomalyType: NightAuditAnomalyType.MISSING_EXPECTED_CHARGE,
-        description: "Expected daily F&B charge missing for operating date",
-      },
-    });
-  }
 }
 
 /**

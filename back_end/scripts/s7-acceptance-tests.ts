@@ -195,7 +195,7 @@ async function main() {
     });
   }
 
-  // AC-S7-04/05 (night audit anomaly + idempotency)
+  // AC-S7-05 (night audit idempotency). AC-S7-04's missing food charge anomaly was removed 2026-11-03.
   {
     const operatingDate = "2026-04-21T00:00:00.000Z";
     const r1 = await http("POST", "/night-audit/run", L2, { operatingDate });
@@ -206,21 +206,9 @@ async function main() {
       status: r1.status,
       body: r1.json,
       explanation:
-        "First run for **2026-04-21** (UTC). The seeded S7 reservation has `frozen_inclusions` with `dailyFAndBExpected: true`, so the engine expects an **F_AND_B** line for that operating date. If none exists, it records an anomaly instead of auto-posting the missing charge (AC-S7-04). It still posts **ROOM_CHARGE** for the night when applicable (AC-S7-05).",
+        "First run for **2026-04-21** (UTC). It posts **ROOM_CHARGE** for the night when applicable (AC-S7-05).",
       dbImpact:
-        "**INSERT** `night_audit_records` for `operating_date = 2026-04-21`. **INSERT** `folio_lines` for night-audit room charge with `night_audit_record_id` set. **INSERT** `night_audit_anomalies` (`night_audit_record_id`, `entry_id`, `anomaly_type` = MISSING_EXPECTED_CHARGE, `description`, …) when expected F&B is missing. **UPDATE** `folios.outstanding_balance` for the room charge.",
-    });
-
-    const anomalies = await prisma.nightAuditAnomaly.findMany({ where: { nightAuditRecordId: (r1.json as { id?: string }).id } });
-    results.push({
-      id: "AC-S7-04",
-      title: "Night audit creates MISSING_EXPECTED_CHARGE anomaly when expected daily F&B missing",
-      pass: anomalies.some((a) => a.anomalyType === "MISSING_EXPECTED_CHARGE"),
-      notes: `Anomalies found: ${anomalies.map((a) => a.anomalyType).join(", ")}`,
-      explanation:
-        "This case does not call the HTTP API again; it **queries Prisma** after the AC-S7-05 run to assert that `night_audit_anomalies` contains at least one row with `anomaly_type = MISSING_EXPECTED_CHARGE` for the new `night_audit_records.id`. That proves the audit detected a missing expected F&B charge **without** inserting a compensating `folio_lines` row for F&B.",
-      dbImpact:
-        "**SELECT** from `night_audit_anomalies` filtered by `night_audit_record_id`. Expected row columns include `anomaly_type`, `entry_id`, `description`, `created_at`.",
+        "**INSERT** `night_audit_records` for `operating_date = 2026-04-21`. **INSERT** `folio_lines` for night-audit room charge with `night_audit_record_id` set. **UPDATE** `folios.outstanding_balance` for the room charge.",
     });
 
     const beforeLines = await prisma.folioLine.count({ where: { nightAuditRecordId: (r1.json as { id?: string }).id } });

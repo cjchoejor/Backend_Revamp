@@ -42,20 +42,12 @@ export async function collectS8ToS9ReadOnlyFailures(
       folioId: folio.id,
       checkIn: entry.reservation.frozenCheckInDate,
       checkOut: entry.reservation.frozenCheckOutDate,
-      frozenInclusions: entry.reservation.frozenInclusions,
     });
-    const roomDates = gaps.filter((g) => g.lineType === "ROOM_CHARGE").map((g) => g.operatingDateIso);
-    const fnbDates = gaps.filter((g) => g.lineType === "F_AND_B").map((g) => g.operatingDateIso);
+    const roomDates = gaps.map((g) => g.operatingDateIso);
     if (roomDates.length) {
       failures.push({
         blockingCondition: "UNPOSTED_ROOM_CHARGE_AT_S8_EXIT",
         message: `Stay night(s) with COMPLETE night audit but no ROOM_CHARGE folio line: ${roomDates.join(", ")}`,
-      });
-    }
-    if (fnbDates.length) {
-      failures.push({
-        blockingCondition: "UNPOSTED_F_AND_B_AT_S8_EXIT",
-        message: `Stay night(s) with COMPLETE night audit but no F_AND_B line (daily F&B expected): ${fnbDates.join(", ")}`,
       });
     }
   }
