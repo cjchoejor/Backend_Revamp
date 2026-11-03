@@ -19,6 +19,8 @@ export type AllowedRoomCountsResponse = {
   chargeableOccupants: number;
   /** min = rooms the party needs at least; max is clamped to the hotel's registered room count. */
   allowedRoomCounts: { min: number; max: number };
+  /** The count this party starts on: two chargeable guests to a room, inside the range above. */
+  suggestedRoomCount: number;
   bandBreakdown: { young: number; child: number; adult: number };
   maxCapacityUsed: number;
   /** Live room-registry counts (Room / RoomType tables, never config). */

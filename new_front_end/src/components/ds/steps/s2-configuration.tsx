@@ -41,8 +41,10 @@ import {
   decideNegotiationAmendment,
   withdrawNegotiationAmendment,
 } from "@/lib/api/entries";
-import { getAllowedRoomCounts } from "@/lib/api/child-policy";
+import { getAllowedRoomCounts, getChildPolicy } from "@/lib/api/child-policy";
 import { useHotelDay } from "@/hooks/use-hotel-day";
+import { useRoomsFollowParty } from "@/hooks/use-rooms-follow-party";
+import { RoomCountField } from "./new-inquiry-parts";
 import { listRooms } from "@/lib/api/rooms";
 import { RoomStatusTable, roomStatusRows } from "@/components/desk/workspace/room-status-table";
 import { currentPassConfigs } from "@/lib/desk/workspace";
@@ -190,6 +192,23 @@ export function ChangeConfiguration({
   /** The house's room-count envelope for this party — `allowedRoomCounts` on the response. */
   const envMin = env?.allowedRoomCounts?.min ?? null;
   const envMax = env?.allowedRoomCounts?.max ?? null;
+  const policy = useQuery({
+    queryKey: ["lookup", "child-policy"],
+    queryFn: () => getChildPolicy(session!),
+    enabled: !!session,
+    staleTime: 600_000,
+  });
+  useRoomsFollowParty({
+    env,
+    partyEdited:
+      adultCount !== (entry.adultCount ?? entry.guestCount ?? 1) ||
+      childCount !== (entry.childCount ?? 0) ||
+      ageInputs.join(",") !== (entry.childAges ?? []).join(","),
+    rooms: roomCount,
+    savedRooms: entry.numberOfRooms ?? 1,
+    bedAsk: Object.values((entry.bedTypeRequest ?? {}) as Record<string, number>).reduce((a, b) => a + (Number(b) || 0), 0),
+    apply: (n) => setRooms(String(n)),
+  });
 
   /* ---- 2. the house's answer ---------------------------------------------------- */
   const [answer, setAnswer] = useState<{ data: AvailabilityQueryResponse; dates: string } | null>(null);
@@ -594,18 +613,11 @@ export function ChangeConfiguration({
               setAges((prev) => Array.from({ length: n }, (_, i) => prev[i] ?? ""));
             }}
           />
-          <Count
-            label="Rooms"
-            value={rooms}
-            onChange={setRooms}
-            min={1}
-            hint={
-              envMin != null && envMax != null
-                ? envMin === envMax
-                  ? `${plural(envMin, "room")} for this party`
-                  : `${envMin}–${envMax} rooms fit this party`
-                : undefined
-            }
+          <RoomCountField
+            env={env}
+            rooms={roomCount}
+            adultFrom={(policy.data?.ageBands.childMaxAge ?? 10) + 1}
+            onChange={(n) => setRooms(String(n))}
           />
           <div className="field">
             <label>Their ages</label>

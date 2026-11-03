@@ -23,6 +23,7 @@ import {
   type CoordinatorContact,
   type LookupPartyMatch,
 } from "@/lib/api/inquiries";
+import type { AllowedRoomCountsResponse } from "@/lib/api/child-policy";
 import { fmtDay, fmtInstantDate, plural } from "@/lib/ds/format";
 import { toastRefusal } from "./kit";
 import { Help, HelpHere } from "@/components/ds/help";
@@ -151,6 +152,60 @@ export function moreRoomsNeedGuests(max: number, hotelRooms: number | null, adul
     out.push({ n, label: `${plural(n, "room")} · needs ${more} more ${more === 1 ? "guest" : "guests"} aged ${adultFrom}+` });
   }
   return out;
+}
+
+/**
+ * Rooms on a booking: the counts the party allows, the booking's own count kept on the list even
+ * when it falls outside (a stored figure is never silently changed), and the next counts shut,
+ * saying what they need. The Inquiry step and Change the dates, rooms or guests both ask it here.
+ */
+export function RoomCountField({
+  env,
+  rooms,
+  onChange,
+  adultFrom,
+  disabled,
+  children,
+}: {
+  env: AllowedRoomCountsResponse | null | undefined;
+  rooms: number;
+  onChange: (rooms: number) => void;
+  /** The age a guest counts as an adult from. */
+  adultFrom: number;
+  disabled?: boolean;
+  children?: ReactNode;
+}) {
+  const range = env?.allowedRoomCounts ?? null;
+  const options = range && range.min > 0 && range.max >= range.min ? Array.from({ length: range.max - range.min + 1 }, (_, i) => range.min + i) : [];
+  if (!options.includes(rooms)) options.push(rooms);
+  options.sort((a, b) => a - b);
+  const shut = range ? moreRoomsNeedGuests(range.max, env?.hotelRoomCount ?? null, adultFrom).filter((o) => !options.includes(o.n)) : [];
+  return (
+    <div className="field">
+      <label>
+        Rooms
+        <Help label="About the room count">
+          {env
+            ? `Starts at two guests to a room. At least ${env.allowedRoomCounts.min}, at most ${env.allowedRoomCounts.max} for ${plural(env.chargeableOccupants, "chargeable guest")}. The room type is ours to pick.`
+            : "A count — the room type is ours to pick."}
+        </Help>
+      </label>
+      <select className="input" value={String(rooms)} disabled={disabled} onChange={(e) => onChange(Number(e.target.value))}>
+        {options.map((n) => (
+          <option key={n} value={String(n)}>
+            {plural(n, "room")}
+            {range && n < range.min ? " · too few" : range && n > range.max ? " · more than the guests" : ""}
+          </option>
+        ))}
+        {shut.map((o) => (
+          <option key={o.n} value={String(o.n)} disabled>
+            {o.label}
+          </option>
+        ))}
+      </select>
+      {children}
+    </div>
+  );
 }
 
 /** The calendar day `n` nights after `iso` (a stay date, UTC-safe). */
@@ -730,7 +785,7 @@ export function PartyContacts({
   if (contact) {
     return (
       <div className="wide" style={{ display: "grid", gap: 8 }}>
-        <div className="form2">
+        <div className="form3">
           <div className="field">
             <label>Contact person</label>
             <input className="input" placeholder="their name" value={contact.name ?? ""} onChange={(e) => setContact({ ...contact, name: e.target.value })} />
@@ -745,7 +800,7 @@ export function PartyContacts({
               onChange={(e) => setContact({ ...contact, phone: e.target.value })}
             />
           </div>
-          <div className="wide field">
+          <div className="field">
             <label>Their email</label>
             <input
               className="input"
@@ -754,10 +809,10 @@ export function PartyContacts({
               value={contact.email ?? ""}
               onChange={(e) => setContact({ ...contact, email: e.target.value })}
             />
-            {contacts.length > 1 ? (
-              <span className="hint warn-ink">{contacts.length} people are on file for {party.displayName} — check it is the right one.</span>
-            ) : null}
           </div>
+          {contacts.length > 1 ? (
+            <span className="wide hint warn-ink">{contacts.length} people are on file for {party.displayName} — check it is the right one.</span>
+          ) : null}
         </div>
         {contacts.length > 1 || (contacts.length > 0 && !pickedIsOnFile) ? (
           <div className="row-acts">

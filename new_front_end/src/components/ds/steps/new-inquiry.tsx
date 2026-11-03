@@ -29,6 +29,7 @@ import { useSession } from "@/hooks/use-session";
 import { useHotelDay } from "@/hooks/use-hotel-day";
 import { usePageTitle } from "@/hooks/use-page-title";
 import { getAllowedRoomCounts, getChildPolicy } from "@/lib/api/child-policy";
+import { useRoomsFollowParty } from "@/hooks/use-rooms-follow-party";
 import { createEntry, getEntry } from "@/lib/api/entries";
 import { openReturnStayOnArrival } from "@/components/ds/workspace/return-stay";
 import {
@@ -171,8 +172,9 @@ export function NewInquiryCanvas() {
   const [checkOut, setCheckOut] = useState("");
   // Nights lead; check-out follows check-in + nights, and a picked check-out sets the nights.
   const [nights, setNights] = useState(() => fromChart.nights ?? "1");
-  const [rooms, setRooms] = useState("1");
-  const [adults, setAdults] = useState("1");
+  // Both start at nothing (2026-11-03, operator): the party is asked, never assumed.
+  const [rooms, setRooms] = useState("0");
+  const [adults, setAdults] = useState("0");
   const [children, setChildren] = useState("0");
   const [ages, setAges] = useState<string[]>([]);
   // "5 King + 2 Twin" — optional, may be partial.
@@ -399,13 +401,6 @@ export function NewInquiryCanvas() {
       roomRange.min > 0 && roomRange.max >= roomRange.min ? Array.from({ length: roomRange.max - roomRange.min + 1 }, (_, i) => roomRange.min + i) : [],
     [roomRange.min, roomRange.max],
   );
-  // A smaller party can make the chosen count illegal — snap it to the first one allowed.
-  useEffect(() => {
-    if (allowedRooms.length === 0) return;
-    const n = parseInt(rooms || "0", 10) || 0;
-    if (!allowedRooms.includes(n)) setRooms(String(allowedRooms[0]));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allowedRooms]);
   const roomsN = parseInt(rooms || "0", 10) || 0;
 
   /* ---------------------------------------------------------------- beds */
@@ -456,6 +451,12 @@ export function NewInquiryCanvas() {
     if (bedSum > current && allowedRooms.includes(bedSum)) setRooms(String(bedSum));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bedSum, allowedRooms]);
+  // No adults, no rooms: the count goes back to nothing with them.
+  useEffect(() => {
+    if (adultsN < 1) setRooms("0");
+  }, [adultsN]);
+  // After the bed effect above, which reads the count from before this answer: this one wins.
+  useRoomsFollowParty({ env: envelope, partyEdited: true, rooms: roomsN, bedAsk: bedSum, apply: (n) => setRooms(String(n)) });
 
   /* ---------------------------------------------------------------- the caller list */
   // Typing a number (or, with no number, an email) lists who has rung with it before — earlier
@@ -1143,14 +1144,14 @@ export function NewInquiryCanvas() {
                       {datesSet ? <span className="hint">{`${fmtRange(checkIn, checkOut)} · ${plural(stayNights, "night")}`}</span> : null}
                     </div>
                     <div className="field">
-                      <label>Adults</label>
+                      <label>Adults{adultsN < 1 ? <ReqMark /> : null}</label>
                       <input
-                        className={`input${adultsN < 1 ? " invalid" : ""}`}
+                        className="input"
                         inputMode="numeric"
                         value={adults}
-                        onChange={(e) => setAdults(digits(e.target.value))}
+                        onFocus={(e) => e.target.select()}
+                        onChange={(e) => setAdults(digits(e.target.value).replace(/^0+(?=\d)/, ""))}
                       />
-                      {adultsN < 1 ? <span className="error">at least one adult</span> : null}
                     </div>
                     <div className="field">
                       <label>
@@ -1161,15 +1162,16 @@ export function NewInquiryCanvas() {
                         className="input"
                         inputMode="numeric"
                         value={children}
-                        onChange={(e) => setChildren(digits(e.target.value, 2))}
+                        onFocus={(e) => e.target.select()}
+                        onChange={(e) => setChildren(digits(e.target.value, 2).replace(/^0+(?=\d)/, ""))}
                       />
                     </div>
                     <div className="field">
                       <label>
-                        Rooms
+                        Rooms{roomsN < 1 ? <ReqMark /> : null}
                         <Help label="About the room count">
                           {envelope
-                            ? `A count — ${roomRange.min === roomRange.max ? roomRange.min : `${roomRange.min}–${roomRange.max}`} for ${plural(envelope.chargeableOccupants, "chargeable guest")}, up to ${envelope.maxCapacityUsed} a room. The room type is ours to pick.`
+                            ? `Starts at two guests to a room. ${roomRange.min === roomRange.max ? roomRange.min : `${roomRange.min}–${roomRange.max}`} for ${plural(envelope.chargeableOccupants, "chargeable guest")}, up to ${envelope.maxCapacityUsed} a room. The room type is ours to pick.`
                             : "A count — the room type is ours to pick."}
                         </Help>
                       </label>
@@ -1179,15 +1181,13 @@ export function NewInquiryCanvas() {
                         disabled={allowedRooms.length === 0}
                         onChange={(e) => setRooms(e.target.value)}
                       >
-                        {allowedRooms.length === 0 ? (
-                          <option value={rooms}>—</option>
-                        ) : (
-                          allowedRooms.map((n) => (
-                            <option key={n} value={String(n)}>
-                              {plural(n, "room")}
-                            </option>
-                          ))
-                        )}
+                        {/* A count not on the list reads as not chosen: a select would show its first option instead. */}
+                        {allowedRooms.includes(roomsN) ? null : <option value={rooms} hidden={allowedRooms.length > 0}>—</option>}
+                        {allowedRooms.map((n) => (
+                          <option key={n} value={String(n)}>
+                            {plural(n, "room")}
+                          </option>
+                        ))}
                         {/* The next counts, shut, saying what they need (2026-10-28). */}
                         {envelope && allowedRooms.length
                           ? moreRoomsNeedGuests(roomRange.max, envelope.hotelRoomCount, childMax + 1).map((o) => (
@@ -1521,7 +1521,7 @@ export function NewInquiryCanvas() {
               </dd>
               <dt>Guests</dt>
               <dd>
-                {plural(adultsN, "adult")}
+                {adultsN < 1 ? <span className="warn-ink">no adults yet</span> : plural(adultsN, "adult")}
                 {childN ? `, ${plural(childN, "child", "children")}` : ""}
                 {childN && ages.some((a) => a.trim()) ? <div className="meta">ages {ages.map((a) => a.trim() || "?").join(", ")}</div> : null}
               </dd>
