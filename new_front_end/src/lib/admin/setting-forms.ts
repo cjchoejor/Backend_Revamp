@@ -190,7 +190,7 @@ const TIME_LIMITS = page("/admin/timers-workers", "Time limits", [
   {
     key: "stageDwell.thresholds",
     title: "Warnings when a booking waits",
-    about: "How long a booking can wait at a step before each warning goes up. Who is told is set under Other settings. Each kind of waiting has its own times.",
+    about: "How long a booking can wait at a step before each warning goes up. Each kind of waiting has its own times. A warning is listed under Notifications, Alerts sent; nobody is sent a message.",
     form: {
       kind: "grid",
       label: "Warnings",
@@ -390,7 +390,8 @@ const OPERATIONAL = page("/admin/operational", "Daily schedule", [
   {
     key: "nightAudit.expectedDailyFAndBCharge",
     title: "Food and drink expected a night",
-    about: "What an occupied room is expected to spend on food and drink in a night. The night audit flags a night that falls well short.",
+    about: "Meant to flag a night with no food or drink charge on a stay that includes food. Above 0 turns the check on; the amount itself is never compared.",
+    unused: "Only a booking marked as expecting food and drink is checked, and nothing marks one, so changing this changes nothing.",
     form: { kind: "group", label: "", fields: [{ kind: "money", key: "amount", label: "A night" }] },
   },
   {
@@ -1137,7 +1138,7 @@ const OTHER = page("/admin/configuration", "Other settings", [
   {
     key: "notification.routing.stageDwell",
     title: "Who is told when a booking waits",
-    about: "Who is told at each of the warnings set under Time limits.",
+    about: "Who each warning set under Time limits is marked for, under Notifications, Alerts sent. Nobody is sent a message, and everyone signed in sees the same list.",
     form: {
       kind: "map",
       label: "Told",
