@@ -283,6 +283,7 @@ function BeforeYouReserve({
   });
   const check = (prefix: string) => checks.find((c) => c.label.startsWith(prefix));
   const metOr = (prefix: string, dflt = true) => check(prefix)?.met ?? dflt;
+  const proformaReplyAsked = useReplyAsked(entry.id, "PROFORMA_INVOICE");
 
   const lines: Line[] = [];
 
@@ -410,14 +411,15 @@ function BeforeYouReserve({
   const piComm = latestDispatched(comms ?? undefined, "PROFORMA_INVOICE", since);
   const piAnswer = answerWords(piComm);
   const piOk = metOr("Proforma invoice generated", false) && metOr("Proforma sent to guest") && metOr("Guest's answer to the proforma recorded");
+  const piAsked = proformaReplyAsked && piComm?.acknowledgementStatus !== "NOT_ASKED";
   const piSent = !!pi && (pi.dispatchedAt != null || pi.state !== "DRAFT");
   lines.push({
     key: "proforma",
-    label: "Proforma and the answer",
+    label: piAsked || piAnswer ? "Proforma and the answer" : "Proforma",
     value: pi ? (
       <>
         {pi.invoiceNumber ?? pi.id} · {piSent ? `sent${pi.dispatchedTo ? ` to ${pi.dispatchedTo}` : ""}` : "generated, not sent"}
-        {piSent ? (piAnswer ? ` · ${piAnswer}` : piComm?.acknowledgementStatus === "NOT_ASKED" ? " · no answer needed" : " · their answer is not on record — Set up") : ""}
+        {piSent ? (piAnswer ? ` · ${piAnswer}` : piComm?.acknowledgementStatus === "NOT_ASKED" ? "" : " · their answer is not on record — Set up") : ""}
         {!metOr("Proforma sent to guest") ? " · money came in, so it must go out first" : ""}
       </>
     ) : (
@@ -1004,7 +1006,7 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
   const send = useMutation({
     mutationFn: () => resendConfirmationVoucher(session!, res.id, { dispatchedTo: sendTo.trim() || undefined, nightsEach }),
     onSuccess: (out) => {
-      toast.success(`Voucher sent to ${out.dispatchedTo} — a fresh reply window is open`);
+      toast.success(`Voucher sent to ${out.dispatchedTo}${replyAsked ? " — a fresh reply window is open" : ""}`);
       setSendOpen(false);
       refresh();
     },
@@ -1027,7 +1029,7 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
       {lastPayload?.redirected ? <span className="meta"> · a test redirect{lastPayload.intendedRecipient ? `, meant for ${lastPayload.intendedRecipient}` : ""}</span> : null}
     </span>
   ) : last?.eventType.endsWith(".SKIPPED") && lastPayload?.reason === "GUEST_HAS_NO_EMAIL" ? (
-    <span className="meta">No email on file — share the voucher at the desk or by phone (Preview → PDF), then record their answer below</span>
+    <span className="meta">No email on file — share the voucher at the desk or by phone (Preview → PDF){replyAsked ? ", then record their answer below" : ""}</span>
   ) : last?.eventType.endsWith(".SKIPPED") ? (
     <span className="warn-ink">
       Not emailed — {lastPayload?.reason === "EMAIL_DISABLE" ? "email sending is turned off on this system" : (lastPayload?.reason ?? "no reason recorded")}
@@ -1050,9 +1052,9 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
         otherDue
           ? undefined
           : answered || notAsked
-          ? `${res.confirmationVoucherNumber ?? res.id} · ${onWhatsApp ? "sent on WhatsApp" : "sent"} · ${notAsked ? "no answer needed" : "the guest's answer recorded"}`
+          ? `${res.confirmationVoucherNumber ?? res.id} · ${onWhatsApp ? "sent on WhatsApp" : "sent"}${notAsked ? "" : " · the guest's answer recorded"}`
           : notSent && !voucherComm
-            ? `${res.confirmationVoucherNumber ?? res.id} · not sent to the guest — no answer needed`
+            ? `${res.confirmationVoucherNumber ?? res.id} · not sent to the guest${replyAsked ? " — no answer needed" : ""}`
             : undefined
       }
       right={
@@ -1110,7 +1112,7 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
           <Refusal
             kind="fault"
             message="The voucher email could not be sent — the guest has not received it by email."
-            carries="Share it another way (Preview → PDF or Print), record their answer below, and have the email settings fixed — or Send… again once email works."
+            carries={`Share it another way (Preview → PDF or Print), ${replyAsked ? "record their answer below, " : ""}and have the email settings fixed — or Send… again once email works.`}
           />
         </div>
       ) : null}
@@ -1145,13 +1147,9 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
           </div>
           <AnswerLine entryId={entry.id} type="CONFIRMATION_VOUCHER" sinceIso={since} what="the voucher" tz={tz} {...answerWords} />
         </div>
-      ) : notAsked ? (
-        <div className="sm" style={{ marginTop: 12 }}>
-          Sent, and no answer is needed.
-        </div>
       ) : notSent && !voucherComm && !loading ? (
         <div className="sm" style={{ marginTop: 12 }}>
-          Not sent to the guest, so no answer is needed.
+          Not sent to the guest{replyAsked ? ", so no answer is needed" : ""}.
           {replyAsked ? <Help label="If it is sent later">Send it if the guest asks for it — Arrival then waits for their answer to it.</Help> : null}
         </div>
       ) : null}
@@ -1173,7 +1171,7 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
         width={720}
         title="Send the confirmation voucher"
         caseLines={[res.id]}
-        help="The same email and PDF Reserve sent, recorded as a new send with a fresh reply window." 
+        help={`The same email and PDF Reserve sent, recorded as a new send${replyAsked ? " with a fresh reply window" : ""}.`} 
         footer={
           <>
             <Button kind="quiet" state={send.isPending ? "inert" : "default"} onClick={() => setSendOpen(false)}>

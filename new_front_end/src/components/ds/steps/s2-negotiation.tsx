@@ -11,7 +11,7 @@
  * 2026-07-28). Every figure is the backend's: the table prices itself through the live preview,
  * the paper's total comes from the billing summary. Nothing is added up here.
  */
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { BindingBox, Button, Chip, Icon } from "@/design-system";
@@ -34,12 +34,11 @@ import {
 } from "@/lib/api/quotations";
 import { RoomCompositionPlanner } from "@/components/desk/workspace/room-compositions-board";
 import { nightOverridesCanon } from "@/components/desk/workspace/room-compositions-table";
-import { PriceResolutionPanel } from "@/components/desk/workspace/price-resolution";
 import { ChangeConfiguration, DecidedConfigurationChanges, WaitingConfigurationChange } from "./s2-configuration";
 import { operativeRoomCompositions, roomNightsByRoom, roomStayRangesByRoom } from "@/lib/desk/party-rooms";
 import { fmtDateTime, fmtStamp, money, plural } from "@/lib/ds/format";
 import { optionSelectedRoomIds, preferredHoldRoomId, type EntryDetail, type QuotationSummary, type SpeculativeHoldSummary } from "@/types/api";
-import { Choice, latestDispatched, useCommunications, DsDialog, Live, Notice, OtherWaysTabs, ChangeBookingMenu, StageActs, useOpenAlsoWay, PaperDrawer, QuotationSendDialog, ReasonDialog, SeeRow, StepCanvas, StepCard, Tool, atLeast, toastRefusal, type PaperRef, useBedPlan, useOpenFileTab, useRefreshEntry, useStepFlow, useFlowCard, anchorFor, revealCard, words, parkTab, declineTab } from "./kit";
+import { Choice, latestDispatched, useCommunications, useReplyAsked, DsDialog, Live, Notice, OtherWaysTabs, ChangeBookingMenu, StageActs, useOpenAlsoWay, PaperDrawer, QuotationSendDialog, ReasonDialog, SeeRow, StepCanvas, StepCard, Tool, atLeast, toastRefusal, type PaperRef, useBedPlan, useOpenFileTab, useRefreshEntry, useStepFlow, useFlowCard, anchorFor, revealCard, words, parkTab, declineTab } from "./kit";
 import { usePublishPriceDraft } from "@/lib/ds/stay-price";
 import { Help } from "@/components/ds/help";
 import type { ChangeBookingItem } from "./kit";
@@ -55,6 +54,12 @@ const QUOTE_STATE: Record<string, { word: string; tone: "success" | "warning" | 
   SUPERSEDED: { word: "replaced", tone: "quiet" },
   EXPIRED: { word: "lapsed", tone: "warning" },
 };
+
+/** A quotation's standing. With its reply off nobody is waiting on the guest, so it reads "sent" (2026-11-03). */
+function quoteStanding(state: string, replyNotAsked: boolean) {
+  if (state === "SENT" && replyNotAsked) return { word: "sent", tone: "quiet" as const };
+  return QUOTE_STATE[state] ?? { word: words(state), tone: "default" as const };
+}
 
 const CHANNELS = [
   ["EMAIL", "Email · in the booking's thread"],
@@ -1052,9 +1057,9 @@ function QuotationCard({
   const { session } = useSession();
   const refresh = useRefreshEntry(entry.id);
   const [paper, setPaper] = useState<PaperRef | null>(null);
-  const [why, setWhy] = useState(false);
   const [answerOpen, setAnswerOpen] = useState(false);
   const replyNotAsked = latestDispatched(useCommunications(entry.id).data?.items, "QUOTATION")?.acknowledgementStatus === "NOT_ASKED";
+  const replyAsked = useReplyAsked(entry.id, "QUOTATION");
   const [how, setHow] = useState<AnswerHow | null>(null);
   const [said, setSaid] = useState("");
   const [closeLoopOpen, setCloseLoopOpen] = useState(false);
@@ -1067,7 +1072,7 @@ function QuotationCard({
   const st = billing.data?.stayTotal;
   const figure = st && st.quotationId === q.id ? st.amount : q.totalAmount;
   const perNight = st && st.quotationId === q.id && st.basis === "PER_NIGHT_TIMES_NIGHTS" ? st.perNightAmount : null;
-  const state = QUOTE_STATE[q.state] ?? { word: words(q.state), tone: "default" as const };
+  const state = quoteStanding(q.state, replyNotAsked);
   const discount = readDiscount(q);
   const authority = readDiscountAuthority(q);
   const validMs = q.validUntil ? new Date(q.validUntil).getTime() : Number.NaN;
@@ -1163,9 +1168,6 @@ function QuotationCard({
           <Button kind="quiet" compact icon="file" onClick={pdf}>
             PDF
           </Button>
-          <Button kind="quiet" compact icon="info" aria-pressed={why} onClick={() => setWhy((v) => !v)}>
-            {why ? "Hide the price's basis" : "Why this price"}
-          </Button>
         </>
       }
     >
@@ -1214,87 +1216,81 @@ function QuotationCard({
         ) : null}
       </div>
 
-      {why ? (
-        <Tool inert={false}>
-          <PriceResolutionPanel terms={q.commercialTerms} currency={q.currency} />
-        </Tool>
-      ) : null}
-
-      <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid var(--line)", display: "grid", gap: 6 }}>
-        <b className="sm">The guest&rsquo;s answer</b>
-        {q.state === "ACCEPTED" ? (
-          <span className="sm">
-            <Icon name="check" /> Accepted{q.acceptedAt ? ` · ${fmtStamp(q.acceptedAt, tz)}` : ""}
-          </span>
-        ) : q.state === "SENT" ? (
-          <>
+      {q.state === "ACCEPTED" || (replyAsked && !replyNotAsked) ? (
+        <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid var(--line)", display: "grid", gap: 6 }}>
+          <b className="sm">The guest&rsquo;s answer</b>
+          {q.state === "ACCEPTED" ? (
             <span className="sm">
-              <Icon name="clock" /> {replyNotAsked ? "Sent · no answer needed" : "Awaiting their answer"}{q.validUntil ? ` — the price holds until ${fmtDateTime(q.validUntil, tz)}` : ""}
+              <Icon name="check" /> Accepted{q.acceptedAt ? ` · ${fmtStamp(q.acceptedAt, tz)}` : ""}
             </span>
-            <Live>
-              {!answerOpen ? (
-                <div style={{ display: "grid", gap: 4 }}>
-                  <SeeRow
-                    kind="secondary"
-                    label="Record the answer"
-                    note="Records how the guest accepted and the words they used. A spoken answer counts once it is written down."
-                    onClick={editable ? () => setAnswerOpen(true) : undefined}
-                    reason={editable ? undefined : "not at this step"}
-                  />
-                  {replyNotAsked ? null : (
+          ) : q.state === "SENT" ? (
+            <>
+              <span className="sm">
+                <Icon name="clock" /> Awaiting their answer{q.validUntil ? ` — the price holds until ${fmtDateTime(q.validUntil, tz)}` : ""}
+              </span>
+              <Live>
+                {!answerOpen ? (
+                  <div style={{ display: "grid", gap: 4 }}>
+                    <SeeRow
+                      kind="secondary"
+                      label="Record the answer"
+                      note="Records how the guest accepted and the words they used. A spoken answer counts once it is written down."
+                      onClick={editable ? () => setAnswerOpen(true) : undefined}
+                      reason={editable ? undefined : "not at this step"}
+                    />
                     <SeeRow
                       label="No answer — the FOM decides"
                       note="Closes the reply window as the FOM's decision, with a reason."
                       onClick={editable && elevated ? () => setCloseLoopOpen(true) : undefined}
                       reason={!editable ? "not at this step" : elevated ? undefined : "closing the reply window is the FOM's call"}
                     />
-                  )}
-                </div>
-              ) : (
-                <div className="bind provisional" style={{ display: "grid", gap: 8 }}>
-                  <div className="field">
-                    <label>How did they accept?</label>
-                    <Choice options={ANSWERS} value={how} onChange={setHow} />
                   </div>
-                  {how ? (
+                ) : (
+                  <div className="bind provisional" style={{ display: "grid", gap: 8 }}>
                     <div className="field">
-                      <label>
-                        {how === "VERBAL" ? "What they said · the words are the record" : "They wrote to us — email or WhatsApp; nothing to attach"}
-                      </label>
-                      {how === "VERBAL" ? (
-                        <textarea
-                          className="input"
-                          rows={2}
-                          value={said}
-                          onChange={(e) => setSaid(e.target.value)}
-                          placeholder="'yes, go ahead with the two rooms'"
-                        />
-                      ) : null}
+                      <label>How did they accept?</label>
+                      <Choice options={ANSWERS} value={how} onChange={setHow} />
                     </div>
-                  ) : null}
-                  <div className="row-acts">
-                    <Button
-                      compact
-                      state={acceptM.isPending ? "working" : answerReady ? "default" : "inert"}
-                      title={answerReady ? undefined : how === "VERBAL" ? "write what they said first" : "choose how they answered first"}
-                      onClick={() => acceptM.mutate()}
-                    >
-                      Record the acceptance
-                    </Button>
-                    <Button kind="quiet" compact onClick={() => setAnswerOpen(false)}>
-                      Not now
-                    </Button>
+                    {how ? (
+                      <div className="field">
+                        <label>
+                          {how === "VERBAL" ? "What they said · the words are the record" : "They wrote to us — email or WhatsApp; nothing to attach"}
+                        </label>
+                        {how === "VERBAL" ? (
+                          <textarea
+                            className="input"
+                            rows={2}
+                            value={said}
+                            onChange={(e) => setSaid(e.target.value)}
+                            placeholder="'yes, go ahead with the two rooms'"
+                          />
+                        ) : null}
+                      </div>
+                    ) : null}
+                    <div className="row-acts">
+                      <Button
+                        compact
+                        state={acceptM.isPending ? "working" : answerReady ? "default" : "inert"}
+                        title={answerReady ? undefined : how === "VERBAL" ? "write what they said first" : "choose how they answered first"}
+                        onClick={() => acceptM.mutate()}
+                      >
+                        Record the acceptance
+                      </Button>
+                      <Button kind="quiet" compact onClick={() => setAnswerOpen(false)}>
+                        Not now
+                      </Button>
+                    </div>
                   </div>
-                </div>
-              )}
-            </Live>
-          </>
-        ) : q.state === "DRAFT" ? (
-          <span className="sm">Not sent yet.</span>
-        ) : (
-          <span className="sm">This version is {state.word}.</span>
-        )}
-      </div>
+                )}
+              </Live>
+            </>
+          ) : q.state === "DRAFT" ? (
+            <span className="sm">Not sent yet.</span>
+          ) : (
+            <span className="sm">This version is {state.word}.</span>
+          )}
+        </div>
+      ) : null}
 
       <PaperDrawer paper={paper} onClose={() => setPaper(null)} />
       <ReasonDialog
@@ -1318,7 +1314,7 @@ function QuoteHistoryCard({ entry, quotations, tz }: { entry: EntryDetail; quota
   const { session } = useSession();
   const passes = passesOf(entry);
   const [paper, setPaper] = useState<PaperRef | null>(null);
-  const [why, setWhy] = useState<string | null>(null);
+  const replyNotAsked = latestDispatched(useCommunications(entry.id).data?.items, "QUOTATION")?.acknowledgementStatus === "NOT_ASKED";
   return (
     <StepCard
       title="Every version of the quotation"
@@ -1338,62 +1334,48 @@ function QuoteHistoryCard({ entry, quotations, tz }: { entry: EntryDetail; quota
           {quotations.map((q) => {
             const passNo = passes.numberById.get(q.segmentId) ?? null;
             const current = passNo == null || passNo === passes.currentNumber;
-            const st = QUOTE_STATE[q.state] ?? { word: words(q.state), tone: "default" as const };
+            const st = quoteStanding(q.state, replyNotAsked);
             return (
-              <Fragment key={q.id}>
-                <tr className="static" style={current ? undefined : { opacity: 0.7 }}>
-                  <td>
-                    {q.referenceNumber} · v{q.versionNumber}
-                    <span className="sub">{fmtStamp(q.createdAt, tz)}</span>
-                  </td>
-                  {passes.many ? <td>{passNo != null ? `Pass ${passNo}${current ? " · now" : ""}` : "earlier"}</td> : null}
-                  <td>
-                    <Chip tone={st.tone}>{st.word}</Chip>
-                  </td>
-                  <td className="money" style={{ textAlign: "right" }}>
-                    {money(q.totalAmount, q.currency)}
-                  </td>
-                  <td>
-                    <div className="row-acts" style={{ justifyContent: "flex-end" }}>
-                      <Button
-                        kind="quiet"
-                        compact
-                        icon="eye"
-                        onClick={() =>
-                          setPaper({
-                            kind: "quotation",
-                            id: q.id,
-                            label: `Quotation ${q.referenceNumber} · v${q.versionNumber}`,
-                            frozen: (q.state === "SUPERSEDED" || q.state === "EXPIRED") && !!q.pdfStorageKey,
-                          })
-                        }
-                      >
-                        Preview
-                      </Button>
-                      <Button
-                        kind="quiet"
-                        compact
-                        icon="file"
-                        onClick={() => session && openQuotationPdf(session, q.id).catch((e) => toastRefusal(e, "The PDF could not be opened"))}
-                      >
-                        PDF
-                      </Button>
-                      <Button kind="quiet" compact aria-pressed={why === q.id} onClick={() => setWhy((w) => (w === q.id ? null : q.id))}>
-                        {why === q.id ? "Hide" : "Why this price"}
-                      </Button>
-                    </div>
-                  </td>
-                </tr>
-                {why === q.id ? (
-                  <tr className="static">
-                    <td colSpan={passes.many ? 5 : 4}>
-                      <Tool inert={false}>
-                        <PriceResolutionPanel terms={q.commercialTerms} currency={q.currency} />
-                      </Tool>
-                    </td>
-                  </tr>
-                ) : null}
-              </Fragment>
+              <tr key={q.id} className="static" style={current ? undefined : { opacity: 0.7 }}>
+                <td>
+                  {q.referenceNumber} · v{q.versionNumber}
+                  <span className="sub">{fmtStamp(q.createdAt, tz)}</span>
+                </td>
+                {passes.many ? <td>{passNo != null ? `Pass ${passNo}${current ? " · now" : ""}` : "earlier"}</td> : null}
+                <td>
+                  <Chip tone={st.tone}>{st.word}</Chip>
+                </td>
+                <td className="money" style={{ textAlign: "right" }}>
+                  {money(q.totalAmount, q.currency)}
+                </td>
+                <td>
+                  <div className="row-acts" style={{ justifyContent: "flex-end" }}>
+                    <Button
+                      kind="quiet"
+                      compact
+                      icon="eye"
+                      onClick={() =>
+                        setPaper({
+                          kind: "quotation",
+                          id: q.id,
+                          label: `Quotation ${q.referenceNumber} · v${q.versionNumber}`,
+                          frozen: (q.state === "SUPERSEDED" || q.state === "EXPIRED") && !!q.pdfStorageKey,
+                        })
+                      }
+                    >
+                      Preview
+                    </Button>
+                    <Button
+                      kind="quiet"
+                      compact
+                      icon="file"
+                      onClick={() => session && openQuotationPdf(session, q.id).catch((e) => toastRefusal(e, "The PDF could not be opened"))}
+                    >
+                      PDF
+                    </Button>
+                  </div>
+                </td>
+              </tr>
             );
           })}
         </tbody>

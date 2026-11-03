@@ -36,6 +36,7 @@ import { PdfButton } from "./pdf-button";
 import { ProformaPreview } from "./quotation-preview";
 import { RoomCompositionPlanner } from "./room-compositions-board";
 import { Help } from "@/components/ds/help";
+import { useReplyAsked } from "@/components/ds/steps/kit";
 import { DateInput, DateTimeInput } from "@/components/ds/date-input";
 
 /**
@@ -630,7 +631,7 @@ function InterimRequestPanel({
                 {sendM.isPending ? "Sending…" : "Send interim invoice"}
               </button>
               <Help label="About sending">
-                Emails the bill with the PDF attached. Money is taken only against a bill the guest received, so the answer and the payment come
+                Emails the bill with the PDF attached. Money is taken only against a bill the guest received, so {hideAnswer ? "the payment comes" : "the answer and the payment come"}{" "}
                 after this.
               </Help>
             </div>
@@ -696,7 +697,7 @@ function InterimRequestPanel({
             </div>
           ),
         }
-      : { key: "pay", label: "Log the payment received", state: "todo", summary: dispatched ? "after the guest's answer is recorded" : "after the bill is sent and answered" };
+      : { key: "pay", label: "Log the payment received", state: "todo", summary: dispatched ? "after the guest's answer is recorded" : hideAnswer ? "after the bill is sent" : "after the bill is sent and answered" };
 
   return (
     <div style={{ border: "1px solid var(--line-2)", borderRadius: "var(--r-sm)", padding: "4px 12px 8px", background: "var(--paper)" }}>
@@ -874,6 +875,8 @@ export function InterimPaymentBlock({
 // ── Extend the stay ─────────────────────────────────────────────────────────────────────────
 
 export function StayExtensionBlock({ entry, onChanged }: { entry: EntryDetail; onChanged?: () => void }) {
+  const billReplyAsked = useReplyAsked(entry.id, "INTERIM_INVOICE");
+  const voucherReplyAsked = useReplyAsked(entry.id, "CONFIRMATION_VOUCHER");
   const { session } = useSession();
   const queryClient = useQueryClient();
   const entryId = entry.id;
@@ -1361,7 +1364,9 @@ export function StayExtensionBlock({ entry, onChanged }: { entry: EntryDetail; o
               active.pricingPreview?.moves?.length
                 ? `On ${fmtDay(active.priorCheckOutDate)} the guest moves room — execute it that day from the Rooms block (key swap).`
                 : "Nobody moves rooms; the current room runs on to the new checkout.",
-              "Nothing is sent to the guest — the re-issued voucher states the new dates; the request itself is the guest's answer.",
+              voucherReplyAsked
+                ? "Nothing is sent to the guest — the re-issued voucher states the new dates; the request itself is the guest's answer."
+                : "Nothing is sent to the guest — the re-issued voucher states the new dates.",
             ]}
             confirmLabel="Commit extension"
             pending={commitM.isPending}
@@ -1384,7 +1389,7 @@ export function StayExtensionBlock({ entry, onChanged }: { entry: EntryDetail; o
               why="The extra nights are held for the guest while the bill goes out and the payment comes in. Nothing about the booking changes until you commit — after the money."
               consequences={[
                 `The extra nights are claimed for this guest for ${Math.round(preview.holdTtlSeconds / 3600)} hours — other bookings see them as held; they release if unpaid by then.`,
-                `An interim invoice for ${money(preview.figures.dueNow ?? 0, currency)} (${preview.figures.askLabel}) is generated — send it, record the answer, log the payment.`,
+                `An interim invoice for ${money(preview.figures.dueNow ?? 0, currency)} (${preview.figures.askLabel}) is generated — send it, ${billReplyAsked ? "record the answer, " : ""}log the payment.`,
                 "Commit the extension once paid; the booking re-freezes with the new checkout and comes back here.",
               ]}
               confirmLabel="Hold the nights & generate the bill"

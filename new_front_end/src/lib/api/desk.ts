@@ -94,7 +94,7 @@ export async function listDeskBookings(session: Session, q: { status?: EntryStat
   if (q.guestProfileId) p.set("guestProfileId", q.guestProfileId);
   if (q.limit) p.set("limit", String(q.limit));
   const qs = p.toString();
-  return apiRequest<{ items: DeskListRow[]; count: number }>(`/api/desk/bookings${qs ? `?${qs}` : ""}`, { session });
+  return apiRequest<{ items: DeskListRow[]; count: number; repliesOff?: string[] }>(`/api/desk/bookings${qs ? `?${qs}` : ""}`, { session });
 }
 
 /** The money line for a page of bookings — the booking header's own billing summary, trimmed. */

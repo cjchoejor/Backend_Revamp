@@ -3148,6 +3148,7 @@ export function AnswerLine({
   const refresh = useRefreshEntry(entryId);
   const comms = useCommunications(entryId);
   const c = latestDispatched(comms.data?.items, type, sinceIso);
+  const asked = useReplyAsked(entryId, type);
   const [open, setOpen] = useState(false);
   // No default (N8): the operator says which way the answer came.
   const [method, setMethod] = useState<"WRITTEN" | "VERBAL" | null>(null);
@@ -3164,7 +3165,8 @@ export function AnswerLine({
     },
     onError: (e) => toastRefusal(e, "The answer could not be recorded"),
   });
-  if (!c) return <span className="meta">{what.charAt(0).toUpperCase() + what.slice(1)} has not gone out yet — nothing to answer.</span>;
+  // With the reply off in the admin console, nothing is said about an answer (2026-11-03).
+  if (!c) return asked ? <span className="meta">{what.charAt(0).toUpperCase() + what.slice(1)} has not gone out yet — nothing to answer.</span> : null;
   const payload = (c.payload ?? {}) as { acknowledgementMethod?: string; verbatimNote?: string };
   if (c.acknowledgementStatus === "RECEIVED") {
     return (
@@ -3175,13 +3177,7 @@ export function AnswerLine({
       </span>
     );
   }
-  if (c.acknowledgementStatus === "NOT_ASKED") {
-    return (
-      <span className="sm">
-        <Icon name="check" /> {`Sent ${fmtStamp(sentAt ?? c.createdAt, tz)}`} · no answer needed
-      </span>
-    );
-  }
+  if (c.acknowledgementStatus === "NOT_ASKED") return null;
   return (
     <div style={{ display: "grid", gap: 6 }}>
       <span className="sm">

@@ -1417,7 +1417,7 @@ function ProformaCard({
       summary={[
         asks,
         shown.dispatchedAt ? `sent ${fmtStamp(shown.dispatchedAt, tz)}` : "not sent",
-        shown.dispatchedAt ? (replyNotAsked ? "no answer needed" : answered ? "the guest's answer recorded" : "the guest's answer awaited") : null,
+        shown.dispatchedAt && !replyNotAsked ? (answered ? "the guest's answer recorded" : "the guest's answer awaited") : null,
       ]
         .filter(Boolean)
         .join(" · ")}
@@ -1486,7 +1486,7 @@ function ProformaCard({
             onAnswered={() => finish(advanceAsked ? { next: "money" } : undefined)}
           />
         </div>
-      ) : replyAsked || sentLive ? (
+      ) : !replyNotAsked && (replyAsked || answered) ? (
         <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid var(--line)", display: "grid", gap: 6 }}>
           <span className="sm" style={{ fontWeight: 600 }}>
             The guest&rsquo;s answer

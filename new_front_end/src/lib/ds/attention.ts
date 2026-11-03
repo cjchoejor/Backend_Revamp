@@ -68,7 +68,7 @@ function effectiveCheckout(r: DeskListRow): string | null {
  * Everything that needs a person now, whatever its date (SS01 §3.2). Ordered: overdue first,
  * then closest to a deadline, then longest waiting.
  */
-export function attentionItems(rows: DeskListRow[], now: number, hotelToday: string | null, tz: string): AttentionItem[] {
+export function attentionItems(rows: DeskListRow[], now: number, hotelToday: string | null, tz: string, repliesOff?: readonly string[]): AttentionItem[] {
   const out: AttentionItem[] = [];
   if (!hotelToday) return out;
   const tomorrow = nextYmd(hotelToday);
@@ -131,7 +131,9 @@ export function attentionItems(rows: DeskListRow[], now: number, hotelToday: str
       } else if (q?.state === "SENT" && q.validUntil && new Date(q.validUntil).getTime() - now < DAY) {
         push(r, { need: "The quote is running out", band: "soon", work: "holds", deadline: { label: "Quote valid", at: new Date(q.validUntil).getTime() } });
       } else if (ci && ci >= hotelToday && now - new Date(r.updatedAt).getTime() > 2 * DAY) {
-        push(r, { need: "No answer recorded", band: "waiting", work: "followups", since: new Date(r.updatedAt).getTime() });
+        // With the quotation's reply off nobody is waiting for an answer; the booking has only sat.
+        const need = repliesOff?.includes("QUOTATION") ? "Nothing done for two days" : "No answer recorded";
+        push(r, { need, band: "waiting", work: "followups", since: new Date(r.updatedAt).getTime() });
       }
     } else if (step === 1) {
       if (ci && ci >= hotelToday && now - new Date(r.updatedAt).getTime() > 2 * DAY) {

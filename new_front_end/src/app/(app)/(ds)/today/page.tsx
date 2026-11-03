@@ -121,7 +121,7 @@ export default function TodayPage() {
   const minute = Math.floor(clock.now / 60_000);
 
   const items = useMemo(
-    () => attentionItems(rows, clock.now, today, clock.tz),
+    () => attentionItems(rows, clock.now, today, clock.tz, bookings.data?.repliesOff),
     // re-derived once a minute, not on every clock tick
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [rows, today, clock.tz, minute],
