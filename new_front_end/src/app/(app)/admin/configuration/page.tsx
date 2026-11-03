@@ -7,7 +7,7 @@ import { getSettingDef } from "@/lib/admin/setting-forms";
 import { listConfigurationKeys } from "@/lib/api/admin";
 import { useSession } from "@/hooks/use-session";
 
-/** Not listed here: the old names of settings that live elsewhere now, and the walk-in plan, chosen on Rate plans. */
+/** Not listed here: the old names of settings that live elsewhere now, the walk-in plan, chosen on Rate plans, and the food check removed 2026-11-03, whose saved row stays on file. */
 const LEFT_BEHIND = new Set([
   "availability.walkIn.ratePlanId",
   "expiry.defaults",
@@ -15,6 +15,7 @@ const LEFT_BEHIND = new Set([
   "feedback.survey.templates",
   "government.submission.config",
   "identity.document.retentionPeriodDays",
+  "nightAudit.expectedDailyFAndBCharge",
   "ota_email_poll_interval_seconds",
   "pricing.ratePlans",
 ]);

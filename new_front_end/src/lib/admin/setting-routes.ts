@@ -68,7 +68,6 @@ const OPERATIONAL = new Set([
   "nightAudit.scheduleTime",
   "nightAudit.schedule",
   "nightAudit.expectedChargesRules",
-  "nightAudit.expectedDailyFAndBCharge",
   "checkout.cutoffTime",
   "checkIn.standardTime",
   "roomAssignment.priorityRules",

@@ -11,7 +11,6 @@ export default function AdminDailySchedulePage() {
       groups={[
         { title: "Times of day", keys: ["checkIn.standardTime", "checkout.cutoffTime", "noShow.cutoffWindowMinutes", "nightAudit.scheduleTime", "nightAudit.schedule"] },
         { title: "Rooms", keys: ["housekeeping.sla.windowMinutes", "inspection.postCheckout.windowHours"] },
-        { title: "Night audit", keys: ["nightAudit.expectedDailyFAndBCharge"] },
         { keys: ["room.readiness.slaWindow", "nightAudit.expectedChargesRules", "roomAssignment.priorityRules"] },
       ]}
     />

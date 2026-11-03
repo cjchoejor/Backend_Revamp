@@ -388,13 +388,6 @@ const OPERATIONAL = page("/admin/operational", "Daily schedule", [
     form: hours(undefined, "Within", 1),
   },
   {
-    key: "nightAudit.expectedDailyFAndBCharge",
-    title: "Food and drink expected a night",
-    about: "Meant to flag a night with no food or drink charge on a stay that includes food. Above 0 turns the check on; the amount itself is never compared.",
-    unused: "Only a booking marked as expecting food and drink is checked, and nothing marks one, so changing this changes nothing.",
-    form: { kind: "group", label: "", fields: [{ kind: "money", key: "amount", label: "A night" }] },
-  },
-  {
     key: "room.readiness.slaWindow",
     title: "Time to get a room ready",
     about: "How long a room can take to be got ready.",
