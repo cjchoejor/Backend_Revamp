@@ -1,5 +1,6 @@
 "use client";
 
+import { AdmField as Field } from "@/components/admin/field-title";
 import { Help } from "@/components/ds/help";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -118,7 +119,7 @@ export default function AdminRoomTypesPage() {
       </div>
 
       <div className="admin-panel space-y-4 p-5">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">New room type</h2>
+        <h2 className="admin-display text-lg">New room type</h2>
         <div className="grid gap-3 md:grid-cols-2">
           <Field label="Code" hint="Short code, e.g. DLX">
             <input className="admin-input" placeholder="DLX" value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} />
@@ -153,7 +154,7 @@ export default function AdminRoomTypesPage() {
               onChange={(v) => setForm({ ...form, defaultBedType: v })}
             />
           </Field>
-          <Field label="Can be made up as" hint="Every box ticked = any setup">
+          <Field group label="Can be made up as" hint="Every box ticked = any setup">
             <AllowedBedSetups
               vocabulary={bedTypes}
               value={form.allowedBedTypes}
@@ -276,16 +277,6 @@ export default function AdminRoomTypesPage() {
         </table>
       </div>
     </div>
-  );
-}
-
-function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
-  return (
-    <label className="block">
-      <div className="text-[11px] font-medium text-muted-foreground">{label}</div>
-      {hint && <div className="text-[10px] text-muted-foreground/70">{hint}</div>}
-      <div className="mt-1">{children}</div>
-    </label>
   );
 }
 

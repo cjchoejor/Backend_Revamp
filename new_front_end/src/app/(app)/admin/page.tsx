@@ -37,7 +37,7 @@ export default function AdminOverviewPage() {
         {adminNavGroups.map((g) => {
           const GroupIcon = g.icon;
           return (
-            <section key={g.domainNumber} className="home-card">
+            <section key={g.domainNumber} className="home-card" data-tone={g.domainNumber}>
               <h2>
                 <GroupIcon />
                 {g.title}

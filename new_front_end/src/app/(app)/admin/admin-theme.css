@@ -209,6 +209,15 @@
 .ds .admin-console label.admin-muted { color: var(--ink-2); font-size: var(--t-sm); font-weight: 700; opacity: 1; }
 .ds .admin-console label.text-xs > :is(input, select, textarea),
 .ds .admin-console label.admin-muted > :is(input, select, textarea) { font-weight: 400; }
+/* The title of a field stands out (2026-11-03, operator): firm and dark, whichever way the page draws it. */
+.ds .admin-console label.text-xs:not(.flex):not(.inline-flex),
+.ds .admin-console label.admin-muted:not(.flex) { color: var(--ink); }
+.ds .admin-console label > span.admin-muted:first-child { color: var(--ink); font-size: var(--t-sm); font-weight: 700; }
+.ds .admin-console .adm-field { display: block; min-width: 0; }
+.ds .admin-console .adm-field-title { display: flex; flex-wrap: wrap; align-items: center; gap: 0 8px; min-height: 20px; margin-bottom: 4px; color: var(--ink); font-size: var(--t-sm); font-weight: 700; }
+.ds .admin-console .adm-field-hint { color: var(--ink-3); font-size: var(--t-meta); font-weight: 400; }
+.ds .admin-console .adm-field-req { color: var(--danger); }
+.ds .admin-console .adm-field > :is(input, select, textarea) { font-weight: 400; }
 
 /* ---- panels ---------------------------------------------------------------------------------- */
 .ds .admin-console .admin-panel {
@@ -406,7 +415,7 @@
 .ds .admin-console .sf-form { display: flex; flex-direction: column; gap: var(--s4); }
 .ds .admin-console .sf-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: var(--s4); align-items: start; }
 .ds .admin-console .sf-field { display: flex; flex-direction: column; gap: var(--s1); min-width: 0; }
-.ds .admin-console .sf-label { display: flex; align-items: center; gap: var(--s1); font-size: var(--t-sm); font-weight: 700; color: var(--ink-2); }
+.ds .admin-console .sf-label { display: flex; align-items: center; gap: var(--s1); font-size: var(--t-sm); font-weight: 700; color: var(--ink); }
 .ds .admin-console .sf-title { font-size: var(--t-sm); font-weight: 700; color: var(--ink); }
 .ds .admin-console .sf-hint { font-size: var(--t-meta); color: var(--ink-3); }
 .ds .admin-console .sf-error { font-size: var(--t-sm); font-weight: 700; color: var(--danger); }
@@ -502,3 +511,82 @@
   .ds .admin-console .set-row-head { grid-template-columns: minmax(0, 1fr) auto; }
   .ds .admin-console .set-row-value { grid-column: 1 / -1; grid-row: 2; }
 }
+
+/* ---- colour (2026-11-03, operator: "give some colors to the admin console page") --------------------
+   The one place the desk's "one accent" gives way: each group of pages has its own colour, on the side
+   list, the page's heading, its panels' top edges, its table headings and its main buttons, so the
+   console says where it is at a glance. Flat, as everywhere: no gradients. */
+.ds .admin-console { --tone: var(--accent); --tone-soft: var(--accent-soft); --tone-ink: var(--accent-ink); --tone-line: #C3D3EA; }
+.ds .admin-console [data-tone="01"] { --tone: #1D4F91; --tone-soft: #E6EEF9; --tone-ink: #163E73; --tone-line: #C3D3EA; }
+.ds .admin-console [data-tone="02"] { --tone: #0F766E; --tone-soft: #DDF3F0; --tone-ink: #0B5B55; --tone-line: #B2DFD9; }
+.ds .admin-console [data-tone="03"] { --tone: #B45309; --tone-soft: #FCEFD9; --tone-ink: #8A3F06; --tone-line: #F0D3A6; }
+.ds .admin-console [data-tone="04"] { --tone: #6D28D9; --tone-soft: #EFE7FC; --tone-ink: #5420A8; --tone-line: #D6C4F5; }
+.ds .admin-console [data-tone="05"] { --tone: #0369A1; --tone-soft: #DFF1FB; --tone-ink: #02537F; --tone-line: #B5DCF2; }
+.ds .admin-console [data-tone="06"] { --tone: #15803D; --tone-soft: #E0F5E7; --tone-ink: #0F6330; --tone-line: #B6E3C4; }
+.ds .admin-console [data-tone="07"] { --tone: #BE185D; --tone-soft: #FBE4EF; --tone-ink: #93124A; --tone-line: #F3C0D8; }
+.ds .admin-console [data-tone="08"] { --tone: #4338CA; --tone-soft: #E7E6FB; --tone-ink: #342BA0; --tone-line: #C9C6F3; }
+.ds .admin-console [data-tone="09"] { --tone: #475569; --tone-soft: #E8EBF0; --tone-ink: #334155; --tone-line: #CBD2DC; }
+
+.ds .admin-console .admin-main { background: color-mix(in srgb, var(--tone-soft) 45%, #F7F8F9); }
+.ds .admin-console .admin-side-head svg:not(.admin-side-chev) { box-sizing: content-box; padding: 4px; border-radius: var(--r-control); background: var(--tone-soft); color: var(--tone); }
+.ds .admin-console .admin-side-head[aria-expanded="true"] { color: var(--tone-ink); }
+.ds .admin-console .admin-sidebar-link:hover:not(.desk-root *) { background: var(--tone-soft); color: var(--tone-ink); }
+.ds .admin-console .admin-sidebar-link.active:not(.desk-root *) { background: var(--tone-soft); color: var(--tone-ink); box-shadow: inset 3px 0 0 var(--tone); }
+
+.ds .admin-console .admin-main .admin-eyebrow,
+.ds .admin-console .admin-main .set-head .eyebrow { display: inline-block; padding: 2px 8px; border-radius: var(--r-chip); background: var(--tone-soft); color: var(--tone-ink); }
+.ds .admin-console .admin-main h1,
+.ds .admin-console .admin-main .admin-display:not(.desk-root *),
+.ds .admin-console .admin-main .set-group > h2 { color: var(--tone-ink); }
+
+.ds .admin-console .admin-main .admin-panel,
+.ds .admin-console .admin-main .set-rows,
+.ds .admin-console .home-card { border-top: 3px solid var(--tone); }
+.ds .admin-console table.admin-table th { background: var(--tone-soft); color: var(--tone-ink); border-bottom-color: var(--tone-line); }
+.ds .admin-console table.admin-table tbody tr:hover { background: color-mix(in srgb, var(--tone-soft) 45%, #fff); }
+.ds .admin-console .admin-callout { border-left-color: var(--tone); }
+
+.ds .admin-console .set-row-value { color: var(--tone-ink); font-weight: 600; }
+.ds .admin-console .set-row-value.empty { color: var(--ink-3); font-weight: 400; }
+.ds .admin-console .set-row.open > .set-row-head { background: var(--tone-soft); box-shadow: inset 3px 0 0 var(--tone); }
+
+.ds .admin-console .admin-btn:not(.desk-root *) { border-color: var(--tone); background: var(--tone); }
+.ds .admin-console .admin-btn:hover:not(.desk-root *) { border-color: var(--tone-ink); background: var(--tone-ink); }
+.ds .admin-console .admin-btn:active:not(.desk-root *) { border-color: var(--tone-ink); background: var(--tone-ink); }
+.ds .admin-console .admin-btn:disabled:not(.desk-root *) { border-color: var(--line-2); background: var(--surface-3); color: var(--ink-4); }
+.ds .admin-console .admin-btn.text-\[10px\]:not(.desk-root *),
+.ds .admin-console .admin-btn.text-\[11px\]:not(.desk-root *),
+.ds .admin-console .admin-btn.text-xs:not(.desk-root *),
+.ds .admin-console .admin-btn-ghost:not(.desk-root *) { border-color: var(--tone-line); background: var(--surface); color: var(--tone-ink); }
+.ds .admin-console .admin-btn.text-\[10px\]:hover:not(.desk-root *),
+.ds .admin-console .admin-btn.text-\[11px\]:hover:not(.desk-root *),
+.ds .admin-console .admin-btn.text-xs:hover:not(.desk-root *),
+.ds .admin-console .admin-btn-ghost:hover:not(.desk-root *) { border-color: var(--tone); background: var(--tone-soft); color: var(--tone-ink); }
+
+/* ---- the list beside an agency's or a company's details: new and search stay put, the rows scroll ---- */
+.ds .admin-console .adm-master { position: sticky; top: 68px; align-self: start; display: flex; flex-direction: column; /* Short enough that its foot shows before the page is scrolled. */ max-height: calc(100vh - 176px); min-height: 320px; padding: 0; overflow: hidden; }
+.ds .admin-console .adm-master-head { display: grid; gap: var(--s2); padding: var(--s3); background: var(--tone-soft); border-bottom: 1px solid var(--tone-line); }
+.ds .admin-console .adm-master-acts { display: flex; align-items: center; justify-content: space-between; gap: var(--s2); }
+.ds .admin-console .adm-master-count { color: var(--tone-ink); font-size: var(--t-meta); font-weight: 600; }
+.ds .admin-console .adm-master-list { flex: 1 1 auto; min-height: 0; margin: 0; padding: 4px; overflow-y: auto; list-style: none; }
+.ds .admin-console .adm-master-none { padding: var(--s3); color: var(--ink-3); font-size: var(--t-sm); }
+.ds .admin-console .adm-row:not(.desk-root *) { display: block; width: 100%; min-height: 0; height: auto; padding: 4px 8px; border: 0; border-radius: var(--r-control); background: transparent; color: var(--ink); text-align: left; line-height: 1.25; cursor: pointer; }
+.ds .admin-console .adm-row .name { display: block; overflow: hidden; font-size: var(--t-sm); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.ds .admin-console .adm-row .id { display: block; color: var(--ink-3); font-size: 11px; font-variant-numeric: tabular-nums; }
+.ds .admin-console .adm-row:hover:not(.desk-root *) { background: var(--tone-soft); }
+.ds .admin-console .adm-row.on:not(.desk-root *) { background: var(--tone-soft); box-shadow: inset 3px 0 0 var(--tone); }
+.ds .admin-console .adm-row.on .name { color: var(--tone-ink); font-weight: 700; }
+@media (max-width: 1023px) {
+  .ds .admin-console .adm-master { position: static; max-height: 320px; }
+}
+.ds .admin-console .adm-tick { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-2); font-size: var(--t-sm); font-weight: 600; cursor: pointer; }
+.ds .admin-console .adm-find-row { display: flex; align-items: center; gap: var(--s3); max-width: 560px; }
+.ds .admin-console .adm-find-row .admin-input { flex: 1 1 auto; }
+.ds .admin-console .adm-find-row .adm-master-count { flex: none; }
+
+/* ---- rates with service charge and GST in them ---------------------------------------------------- */
+.ds .admin-console .adm-with-tax { padding: var(--s3); border: 1px solid var(--tone-line); border-radius: var(--r-card); background: color-mix(in srgb, var(--tone-soft) 55%, #fff); }
+.ds .admin-console .adm-with-tax-head { display: flex; align-items: center; gap: var(--s2); }
+.ds .admin-console .adm-with-tax-rates { margin: var(--s2) 0 var(--s3); color: var(--tone-ink); font-size: var(--t-sm); font-weight: 600; }
+.ds .admin-console .adm-with-tax-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: var(--s3); }
+.ds .admin-console .adm-with-tax-net { display: block; margin-top: 4px; color: var(--tone-ink); font-size: var(--t-meta); font-weight: 600; }

@@ -24,6 +24,7 @@ import { settingsIndex } from "@/lib/admin/setting-forms";
 import { clockParts } from "@/lib/ds/format";
 import { cn } from "@/lib/utils";
 import { AdminGuard } from "./admin-guard";
+import { useGoToWhatEditOpens } from "./use-go-to-edit";
 
 function isItemActive(pathname: string, href: string): boolean {
   if (href === "/admin") return pathname === "/admin";
@@ -45,7 +46,7 @@ function SideGroup({
 }) {
   const GroupIcon = group.icon;
   return (
-    <div className="admin-side-group">
+    <div className="admin-side-group" data-tone={group.domainNumber}>
       <button type="button" onClick={onToggle} className="admin-side-head" aria-expanded={expanded}>
         <ChevronRight className="admin-side-chev" />
         <GroupIcon />
@@ -199,6 +200,8 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
     setMenuOpen(false);
   }, [pathname]);
 
+  useGoToWhatEditOpens();
+
   const name = session ? session.displayName ?? session.username ?? session.userId : null;
 
   return (
@@ -236,7 +239,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
           <aside className={cn("admin-sidebar", menuOpen && "open")}>
             <SideList pathname={pathname} expanded={expanded} setExpanded={setExpanded} onNavigate={() => setMenuOpen(false)} />
           </aside>
-          <main className="admin-main">
+          <main className="admin-main" data-tone={activeDomainNumber(pathname) ?? undefined}>
             <div className="admin-page">
               <AdminGuard>{children}</AdminGuard>
             </div>

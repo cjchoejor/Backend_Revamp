@@ -1,5 +1,6 @@
 "use client";
 
+import { AdmField } from "@/components/admin/field-title";
 import { Suspense, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -74,8 +75,12 @@ export default function AdminPostStayPage() {
         <h2 className="admin-display text-lg">Feedback surveys</h2>
         <NotUsedYet>The feedback email is built in, so nothing reads these surveys yet.</NotUsedYet>
         <div className="grid gap-3 md:grid-cols-2">
-          <input className="admin-input" placeholder="A short name" value={form.templateKey} onChange={(e) => setForm({ ...form, templateKey: e.target.value })} />
-          <input className="admin-input" placeholder="Title" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
+          <AdmField label="A short name">
+            <input className="admin-input" value={form.templateKey} onChange={(e) => setForm({ ...form, templateKey: e.target.value })} />
+          </AdmField>
+          <AdmField label="Title">
+            <input className="admin-input" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
+          </AdmField>
         </div>
         <div className="sf-field">
           <span className="sf-label">Questions</span>

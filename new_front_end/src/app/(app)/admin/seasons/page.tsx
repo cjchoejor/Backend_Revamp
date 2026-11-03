@@ -1,5 +1,6 @@
 "use client";
 
+import { AdmField } from "@/components/admin/field-title";
 import { Help } from "@/components/ds/help";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -75,11 +76,17 @@ export default function AdminSeasonsPage() {
       </div>
 
       <div className="admin-panel grid gap-4 p-5 md:grid-cols-3">
-        <input className="admin-input" placeholder="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+        <AdmField label="Name">
+          <input className="admin-input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+        </AdmField>
         <label className="admin-muted text-xs">Start<DateInput className="admin-input mt-1" value={form.startDate} onChange={(e) => setForm({ ...form, startDate: e.target.value })} /></label>
         <label className="admin-muted text-xs">End<DateInput className="admin-input mt-1" value={form.endDate} onChange={(e) => setForm({ ...form, endDate: e.target.value })} /></label>
-        <input className="admin-input" placeholder="Rates times (1.25 is 25% more)" type="number" step="0.01" value={form.rateMultiplier} onChange={(e) => setForm({ ...form, rateMultiplier: e.target.value })} />
-        <input className="admin-input" placeholder="Priority, if two apply" type="number" value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })} />
+        <AdmField label="Rates times" hint="1.25 is 25% more">
+          <input className="admin-input" type="number" step="0.01" value={form.rateMultiplier} onChange={(e) => setForm({ ...form, rateMultiplier: e.target.value })} />
+        </AdmField>
+        <AdmField label="Priority" hint="if two apply">
+          <input className="admin-input" type="number" value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })} />
+        </AdmField>
         <button type="button" className="admin-btn col-span-full w-fit" disabled={createMutation.isPending || !form.name || !form.startDate || !form.endDate} onClick={() => createMutation.mutate()}>
           Create season
         </button>

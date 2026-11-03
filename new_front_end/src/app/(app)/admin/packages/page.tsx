@@ -1,5 +1,6 @@
 "use client";
 
+import { AdmField } from "@/components/admin/field-title";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -19,6 +20,7 @@ export default function AdminPackagesPage() {
   const confirm = useConfirm();
   const [form, setForm] = useState(EMPTY);
   const [showInactive, setShowInactive] = useState(false);
+  const [find, setFind] = useState("");
   const enabled = !!session && session.actorLevel === "L4";
 
   const query = useQuery({
@@ -65,7 +67,17 @@ export default function AdminPackagesPage() {
   });
 
   if (!session || session.actorLevel !== "L4") return null;
-  const items = query.data?.items ?? [];
+  const all = query.data?.items ?? [];
+  const q = find.trim().toLowerCase();
+  const items = q
+    ? all.filter((p: PackageAdmin) =>
+        [p.name, p.description, ...(Array.isArray(p.inclusions) ? (p.inclusions as Array<{ label?: string }>).map((i) => i.label) : [])]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase()
+          .includes(q),
+      )
+    : all;
 
   return (
     <div className="space-y-8 pb-16">
@@ -80,12 +92,18 @@ export default function AdminPackagesPage() {
       <NotUsedYet>A package saved here cannot be added to a quotation yet.</NotUsedYet>
 
       <div className="admin-panel grid gap-4 p-5 md:grid-cols-2">
-        <input className="admin-input" placeholder="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-        <span className="sf-unit">
-          <span>Nu</span>
-          <input className="admin-input" placeholder="Added to the price" type="number" value={form.priceAdjustment} onChange={(e) => setForm({ ...form, priceAdjustment: e.target.value })} />
-        </span>
-        <input className="admin-input md:col-span-2" placeholder="Description (optional)" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+        <AdmField label="Name">
+          <input className="admin-input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+        </AdmField>
+        <AdmField label="Added to the price">
+          <span className="sf-unit">
+            <span>Nu</span>
+            <input className="admin-input" type="number" value={form.priceAdjustment} onChange={(e) => setForm({ ...form, priceAdjustment: e.target.value })} />
+          </span>
+        </AdmField>
+        <AdmField label="Description" hint="optional" className="md:col-span-2">
+          <input className="admin-input" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+        </AdmField>
         <div className="sf-field md:col-span-2">
           <span className="sf-label">What it includes</span>
           <Control f={{ kind: "tags", label: "What it includes", placeholder: "Dinner on arrival", addLabel: "Add" }} value={form.inclusions} onChange={(v) => setForm({ ...form, inclusions: v as string[] })} />
@@ -93,6 +111,21 @@ export default function AdminPackagesPage() {
         <button type="button" className="admin-btn w-fit" disabled={createMutation.isPending || !form.name} onClick={() => createMutation.mutate()}>
           Create package
         </button>
+      </div>
+
+      <div className="adm-find-row">
+        <input
+          type="search"
+          className="admin-input"
+          placeholder="Find a package: name or what it includes"
+          aria-label="Find a package"
+          value={find}
+          onChange={(e) => setFind(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") setFind("");
+          }}
+        />
+        <span className="adm-master-count">{q ? `${items.length} of ${all.length}` : `${all.length} package${all.length === 1 ? "" : "s"}`}</span>
       </div>
 
       <label className="admin-muted flex items-center gap-2 text-xs">
@@ -105,7 +138,7 @@ export default function AdminPackagesPage() {
             <tr><th>Name</th><th>Inclusions</th><th>Added to the price</th><th>Status</th><th /></tr>
           </thead>
           <tbody>
-            {items.length === 0 && <tr><td colSpan={5} className="admin-muted">No packages found.</td></tr>}
+            {items.length === 0 && <tr><td colSpan={5} className="admin-muted">{q ? "No package by that name." : "No packages found."}</td></tr>}
             {items.map((p: PackageAdmin) => (
               <tr key={p.id}>
                 <td>{p.name}</td>

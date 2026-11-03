@@ -1,5 +1,6 @@
 "use client";
 
+import { AdmField } from "@/components/admin/field-title";
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -124,25 +125,29 @@ export default function AdminRolesPage() {
 
       <div className="admin-panel grid gap-4 p-5 md:grid-cols-3">
         <h2 className="admin-display col-span-full text-lg">Create role</h2>
-        <input
-          className="admin-input"
-          placeholder="Role code (e.g. FRONT_DESK)"
-          value={form.roleCode}
-          onChange={(e) => setForm({ ...form, roleCode: e.target.value })}
-        />
-        <input
-          className="admin-input"
-          placeholder="Display name"
-          value={form.displayName}
-          onChange={(e) => setForm({ ...form, displayName: e.target.value })}
-        />
-        <select className="admin-select" value={form.actorLevel} onChange={(e) => setForm({ ...form, actorLevel: e.target.value as typeof form.actorLevel })}>
-          {(["L1", "L2", "L3", "L4"] as const).map((l) => (
-            <option key={l} value={l}>
-              {LEVEL_WORD[l]}
-            </option>
-          ))}
-        </select>
+        <AdmField label="Role code" hint="e.g. FRONT_DESK">
+          <input
+            className="admin-input"
+            value={form.roleCode}
+            onChange={(e) => setForm({ ...form, roleCode: e.target.value })}
+          />
+        </AdmField>
+        <AdmField label="Display name">
+          <input
+            className="admin-input"
+            value={form.displayName}
+            onChange={(e) => setForm({ ...form, displayName: e.target.value })}
+          />
+        </AdmField>
+        <AdmField label="Level">
+          <select className="admin-select" value={form.actorLevel} onChange={(e) => setForm({ ...form, actorLevel: e.target.value as typeof form.actorLevel })}>
+            {(["L1", "L2", "L3", "L4"] as const).map((l) => (
+              <option key={l} value={l}>
+                {LEVEL_WORD[l]}
+              </option>
+            ))}
+          </select>
+        </AdmField>
         <button type="button" className="admin-btn col-span-full w-fit" disabled={createMutation.isPending} onClick={() => createMutation.mutate()}>
           Create
         </button>

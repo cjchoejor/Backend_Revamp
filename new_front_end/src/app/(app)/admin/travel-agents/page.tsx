@@ -1,5 +1,7 @@
 "use client";
 
+import { AdmField } from "@/components/admin/field-title";
+import { FieldTitle } from "@/components/admin/field-title";
 import { Help } from "@/components/ds/help";
 import { useState, useEffect, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -22,6 +24,7 @@ import { RatePackageHistory } from "@/components/admin/rate-package-history";
 import { VersionsTab } from "@/components/admin/versions-tab";
 import { useSelectionParam } from "@/hooks/use-selection-param";
 import { Control } from "@/components/admin/setting-form";
+import { PartyList } from "@/components/admin/party-list";
 
 const CONTACT_MODES: ContactMode[] = ["PHONE", "EMAIL", "WHATSAPP", "IN_PERSON", "OTHER"];
 const EMPTY: TravelAgentInput = { displayName: "", modeOfContact: "PHONE" };
@@ -127,38 +130,18 @@ export default function AdminTravelAgentsPage() {
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[280px_1fr]">
-        <div className="admin-panel max-h-[80vh] space-y-2 overflow-y-auto p-3">
-          <div className="flex items-center justify-between gap-2">
-            <button type="button" className="admin-btn admin-btn-sm" onClick={startNew}>+ New agent</button>
-            <label className="flex items-center gap-1 text-xs text-[var(--admin-ink-soft)]">
-              <input type="checkbox" checked={showInactive} onChange={(e) => setShowInactive(e.target.checked)} />
-              Inactive
-            </label>
-          </div>
-          <ul className="space-y-0.5">
-            {agents.map((a) => (
-              <li key={a.id}>
-                <button
-                  type="button"
-                  className={`block w-full truncate rounded px-2 py-1.5 text-left text-sm ${
-                    selectedId === a.id ? "bg-[var(--admin-brass-glow)] text-[var(--admin-brass)]" : "text-[var(--admin-ink-soft)] hover:bg-[var(--admin-bg)]/50"
-                  }`}
-                  onClick={() => selectAgent(a)}
-                >
-                  <span className="font-medium">{a.displayName}</span>
-                  <br />
-                  <span className="font-mono text-[10px] opacity-60">{a.id}</span>
-                  {!a.isActive && <span className="ml-2 text-[10px] uppercase opacity-60">inactive</span>}
-                </button>
-              </li>
-            ))}
-            {agents.length === 0 && (
-              <li className="px-2 py-2 text-xs text-[var(--admin-ink-soft)]">No agents yet — click &ldquo;+ New agent&rdquo; to create one.</li>
-            )}
-          </ul>
-        </div>
+        <PartyList
+          items={agents}
+          selectedId={selectedId}
+          onSelect={selectAgent}
+          onNew={startNew}
+          newLabel="+ New agent"
+          noun="agent"
+          showInactive={showInactive}
+          setShowInactive={setShowInactive}
+        />
 
-        <div className="space-y-6">
+        <div className="min-w-0 space-y-6">
           {selectedId == null && (
             <div className="admin-panel p-8 text-center text-sm text-[var(--admin-ink-soft)]">
               Select an agent from the list or click <strong>+ New agent</strong> to begin.
@@ -194,12 +177,10 @@ export default function AdminTravelAgentsPage() {
                     <input className="admin-input" type="email" value={draft.contactEmail ?? ""} onChange={(e) => setDraft({ ...draft, contactEmail: e.target.value })} />
                   </label>
                   <div className="block space-y-1 sm:col-span-2">
-                    <span className="admin-muted text-xs">Contact persons</span>
-                    <p className="admin-muted text-[11px]">
-                      The people at this agency who ring in bookings. The front desk picks one at
-                      intake to fill the booking&rsquo;s contact person, and can append a new one
-                      mid-call — so this list also grows from the desk.
-                    </p>
+                    <FieldTitle
+                      label="Contact persons"
+                      help="The people at this agency who ring in bookings. The front desk picks one at intake as the booking's contact person, and can add a new one mid-call, so this list also grows from the desk."
+                    />
                     {(draft.coordinators ?? []).map((c, i) => {
                       const update = (patch: Partial<typeof c>) => {
                         const next = [...(draft.coordinators ?? [])];
@@ -241,28 +222,16 @@ export default function AdminTravelAgentsPage() {
                         );
                       }
                       return (
-                        <div key={i} className="flex flex-wrap gap-2">
-                          <input
-                            className="admin-input"
-                            style={{ flex: "1 1 30%" }}
-                            value={c.name}
-                            placeholder="Name"
-                            onChange={(e) => update({ name: e.target.value })}
-                          />
-                          <input
-                            className="admin-input"
-                            style={{ flex: "1 1 25%" }}
-                            value={c.phone ?? ""}
-                            placeholder="Phone"
-                            onChange={(e) => update({ phone: e.target.value })}
-                          />
-                          <input
-                            className="admin-input"
-                            style={{ flex: "1 1 25%" }}
-                            value={c.email ?? ""}
-                            placeholder="Email"
-                            onChange={(e) => update({ email: e.target.value })}
-                          />
+                        <div key={i} className="flex flex-wrap items-end gap-2">
+                          <AdmField label="Name" style={{ flex: "1 1 30%" }}>
+                            <input className="admin-input" value={c.name} onChange={(e) => update({ name: e.target.value })} />
+                          </AdmField>
+                          <AdmField label="Phone" style={{ flex: "1 1 25%" }}>
+                            <input className="admin-input" value={c.phone ?? ""} onChange={(e) => update({ phone: e.target.value })} />
+                          </AdmField>
+                          <AdmField label="Email" style={{ flex: "1 1 25%" }}>
+                            <input className="admin-input" value={c.email ?? ""} onChange={(e) => update({ email: e.target.value })} />
+                          </AdmField>
                           <button type="button" className="admin-btn admin-btn-ghost admin-btn-sm" onClick={remove}>
                             Remove
                           </button>

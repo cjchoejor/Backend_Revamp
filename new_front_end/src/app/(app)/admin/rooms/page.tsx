@@ -1,5 +1,6 @@
 "use client";
 
+import { AdmField, FieldTitle } from "@/components/admin/field-title";
 import { Help } from "@/components/ds/help";
 import { Suspense, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -225,32 +226,47 @@ export default function AdminRoomsPage() {
       </div>
 
       <div className="admin-panel grid gap-4 p-5 md:grid-cols-2">
-        <h2 className="admin-display col-span-full text-lg">Add room</h2>
-        <input className="admin-input" placeholder="Room number" value={form.roomNumber} onChange={(e) => setForm({ ...form, roomNumber: e.target.value })} />
-        <select className="admin-select" value={form.roomTypeId} onChange={(e) => setForm({ ...form, roomTypeId: e.target.value })}>
-          <option value="">Select room type</option>
-          {(roomTypesQuery.data?.items ?? []).map((rt) => (
-            <option key={rt.id} value={rt.id}>
-              {rt.code} — {rt.name}
+        <h2 className="admin-display col-span-full flex items-center gap-2 text-lg">
+          Add room
+          <Help label="Beds in a room">
+            Any room can be made up in any bed setup unless its room type, or the room itself here, narrows it. The usual bed is how the room is normally
+            made up: its room type's, unless you give this room its own, since two rooms of one type can differ. Bed now is how it is made up today: the
+            desk changes it when a guest asks for another setup, and it goes back to the usual bed when that guest leaves.
+          </Help>
+        </h2>
+        <AdmField label="Room number">
+          <input className="admin-input" value={form.roomNumber} onChange={(e) => setForm({ ...form, roomNumber: e.target.value })} />
+        </AdmField>
+        <AdmField label="Room type">
+          <select className="admin-select" value={form.roomTypeId} onChange={(e) => setForm({ ...form, roomTypeId: e.target.value })}>
+            <option value="">Select room type</option>
+            {(roomTypesQuery.data?.items ?? []).map((rt) => (
+              <option key={rt.id} value={rt.id}>
+                {rt.code} — {rt.name}
+              </option>
+            ))}
+          </select>
+        </AdmField>
+        <AdmField label="Floor">
+          <input className="admin-input" value={form.floorNumber} onChange={(e) => setForm({ ...form, floorNumber: e.target.value })} />
+        </AdmField>
+        <AdmField label="Usual bed">
+          <select className="admin-select" value={form.usualBedType} onChange={(e) => setForm({ ...form, usualBedType: e.target.value })}>
+            <option value="">
+              {(() => {
+                const usual = (roomTypesQuery.data?.items ?? []).find((rt) => rt.id === form.roomTypeId)?.defaultBedType;
+                return usual ? `As its room type (${bedSetupWord(usual)})` : "As its room type";
+              })()}
             </option>
-          ))}
-        </select>
-        <input className="admin-input" placeholder="Floor" value={form.floorNumber} onChange={(e) => setForm({ ...form, floorNumber: e.target.value })} />
-        <select className="admin-select" value={form.usualBedType} onChange={(e) => setForm({ ...form, usualBedType: e.target.value })}>
-          <option value="">
-            {(() => {
-              const usual = (roomTypesQuery.data?.items ?? []).find((rt) => rt.id === form.roomTypeId)?.defaultBedType;
-              return usual ? `Usual bed — as its room type (${bedSetupWord(usual)})` : "Usual bed — as its room type";
-            })()}
-          </option>
-          {bedTypes.map((b) => (
-            <option key={b} value={b}>
-              Usual bed — {bedLabel(b)}
-            </option>
-          ))}
-        </select>
+            {bedTypes.map((b) => (
+              <option key={b} value={b}>
+                {bedLabel(b)}
+              </option>
+            ))}
+          </select>
+        </AdmField>
         <div className="col-span-full">
-          <div className="text-[11px] font-medium text-muted-foreground">This room can be made up as</div>
+          <FieldTitle label="This room can be made up as" />
           <AllowedBedSetups
             vocabulary={bedTypes}
             value={form.allowedBedTypes}
@@ -258,12 +274,6 @@ export default function AdminRoomsPage() {
             emptyLabel="Follows its room type"
           />
         </div>
-        <p className="admin-muted col-span-full text-xs">
-          Any room can be made up in any bed setup unless its room type — or the room itself, here — narrows it. The
-          <em> usual bed</em> is how the room is normally made up: its room type&apos;s, unless you give this room its own
-          (two rooms of one type can differ). <em>Bed now</em> is how it is made up today — the desk changes it when a
-          guest asks for another setup, and it goes back to the usual bed when that guest leaves.
-        </p>
         <button type="button" className="admin-btn col-span-full w-fit" disabled={createMutation.isPending} onClick={() => createMutation.mutate()}>
           Create room
         </button>
@@ -294,14 +304,13 @@ export default function AdminRoomsPage() {
                   ))}
               </select>
             </label>
-            <label className="admin-muted text-xs">
-              To be fixed by (optional)
+            <AdmField label="To be fixed by" hint="optional" help="Left empty, the time allowed comes from the rule Time to fix a fault.">
               <DateTimeInput
-                className="admin-input mt-1 w-full"
+                className="admin-input w-full"
                 value={defForm.deadline}
                 onChange={(e) => setDefForm({ ...defForm, deadline: e.target.value })}
               />
-            </label>
+            </AdmField>
             <label className="admin-muted text-xs md:col-span-2">
               Description
               <textarea
@@ -313,9 +322,6 @@ export default function AdminRoomsPage() {
               />
             </label>
           </div>
-          <p className="admin-muted text-xs">
-            Left empty, the time allowed comes from the rule Time to fix a fault.
-          </p>
           <div className="flex gap-2">
             <button
               type="button"

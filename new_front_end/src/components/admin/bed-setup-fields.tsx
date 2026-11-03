@@ -54,7 +54,7 @@ export function AllowedBedSetups({
           {bedSetupWord(t)}
         </label>
       ))}
-      <span className="text-[10px] text-muted-foreground">{all ? emptyLabel : `Only ${bedSetupListWords(value)}`}</span>
+      <span className="adm-field-hint">{all ? emptyLabel : `Only ${bedSetupListWords(value)}`}</span>
     </div>
   );
 }

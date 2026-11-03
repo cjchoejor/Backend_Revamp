@@ -1,5 +1,6 @@
 "use client";
 
+import { Help } from "@/components/ds/help";
 import { Fragment, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useSession } from "@/hooks/use-session";
@@ -82,9 +83,12 @@ export function RatePackageHistory({ owner, ownerLabel }: { owner: PackageOwner;
 
   return (
     <div className="space-y-3">
-      <p className="admin-muted text-xs">
-        Rate history. Saving a package never edits it in place — the previous rates are closed off and kept, so a
-        booking can always be re-derived at the rates it was quoted on.
+      <p className="admin-eyebrow flex w-fit items-center gap-2">
+        Rate history
+        <Help label="Rate history">
+          Saving a package never edits it in place. The previous rates are closed off and kept, so a booking can always be worked out again at the rates
+          it was quoted on.
+        </Help>
       </p>
 
       {groups.map(([name, versions]) => {

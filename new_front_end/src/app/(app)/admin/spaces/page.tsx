@@ -1,5 +1,6 @@
 "use client";
 
+import { AdmField } from "@/components/admin/field-title";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -65,9 +66,15 @@ export default function AdminSpacesPage() {
       </div>
 
       <div className="admin-panel grid gap-4 p-5 md:grid-cols-3">
-        <input className="admin-input" placeholder="Code" value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} />
-        <input className="admin-input" placeholder="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-        <input className="admin-input" placeholder="Capacity" value={form.capacity} onChange={(e) => setForm({ ...form, capacity: e.target.value })} />
+        <AdmField label="Code">
+          <input className="admin-input" value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} />
+        </AdmField>
+        <AdmField label="Name">
+          <input className="admin-input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+        </AdmField>
+        <AdmField label="Capacity">
+          <input className="admin-input" value={form.capacity} onChange={(e) => setForm({ ...form, capacity: e.target.value })} />
+        </AdmField>
         <button type="button" className="admin-btn col-span-full w-fit" disabled={createMutation.isPending} onClick={() => createMutation.mutate()}>
           Create space
         </button>

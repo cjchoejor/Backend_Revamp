@@ -1,5 +1,6 @@
 "use client";
 
+import { AdmField } from "@/components/admin/field-title";
 import { Help } from "@/components/ds/help";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -54,18 +55,20 @@ export default function AdminDepartmentsPage() {
 
       <div className="admin-panel grid gap-4 p-5 md:grid-cols-2">
         <h2 className="admin-display col-span-full text-lg">Create department</h2>
-        <input
-          className="admin-input"
-          placeholder="Department code (e.g. FRONT_OFFICE)"
-          value={form.departmentCode}
-          onChange={(e) => setForm({ ...form, departmentCode: e.target.value })}
-        />
-        <input
-          className="admin-input"
-          placeholder="Department name"
-          value={form.departmentName}
-          onChange={(e) => setForm({ ...form, departmentName: e.target.value })}
-        />
+        <AdmField label="Department code" hint="e.g. FRONT_OFFICE">
+          <input
+            className="admin-input"
+            value={form.departmentCode}
+            onChange={(e) => setForm({ ...form, departmentCode: e.target.value })}
+          />
+        </AdmField>
+        <AdmField label="Department name">
+          <input
+            className="admin-input"
+            value={form.departmentName}
+            onChange={(e) => setForm({ ...form, departmentName: e.target.value })}
+          />
+        </AdmField>
         <button type="button" className="admin-btn col-span-full w-fit" disabled={createMutation.isPending} onClick={() => createMutation.mutate()}>
           Create
         </button>

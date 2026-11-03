@@ -152,7 +152,7 @@ export default function AdminIdPrefixesPage() {
         <p className="admin-eyebrow mb-2">The hotel and its people</p>
         <h1 className="admin-display flex items-center gap-2 text-3xl">
           Number prefixes
-          <Help label="Number prefixes">Booking, invoice and other numbers read PREFIX-date-number. Change a prefix here and new numbers use it; numbers already given stay as they are. A prefix is 2 to 4 capital letters, and no two may be the same.</Help>
+          <Help label="Number prefixes">A prefix is two to four capital letters, and no two kinds of record can share one. A change counts from the next number given out. Booking, invoice and other numbers read PREFIX-date-number. Change a prefix here and new numbers use it; numbers already given stay as they are. A prefix is 2 to 4 capital letters, and no two may be the same.</Help>
         </h1>
       </div>
 
@@ -189,11 +189,6 @@ export default function AdminIdPrefixesPage() {
         </table>
       </div>
 
-      <div className="admin-muted text-xs">
-        <strong>Tip:</strong> backend rejects any prefix outside the <code>A-Z, length 2–4</code>{" "}
-        format, and rejects any change that would cause a collision (two entities can never share
-        the same prefix). The change takes effect immediately for the next ID allocated.
-      </div>
     </div>
   );
 }

@@ -1259,6 +1259,20 @@ export async function listRatePackages(session: Session, owner: PackageOwner) {
 export async function listRatePackageHistory(session: Session, owner: PackageOwner) {
   return apiRequest<{ items: RatePackageAdmin[] }>(`/api/admin/rate-packages/history${ownerQuery(owner)}`, { session });
 }
+export type PackageRatesWorkedOut = {
+  serviceChargeRate: number;
+  gstRate: number;
+  planRates: { cpRate: string | null; mapLunchRate: string | null; mapDinnerRate: string | null; apRate: string | null } | null;
+  withoutTaxes: Record<string, string>;
+  comesTo: Record<string, string>;
+};
+/** What the package form fills in as it is typed. Saves nothing. */
+export async function workOutPackageRates(
+  session: Session,
+  body: { meals?: { breakfast: number | null; lunch: number | null; dinner: number | null }; withTaxes?: Record<string, number> },
+) {
+  return apiRequest<PackageRatesWorkedOut>("/api/admin/rate-packages/work-out", { method: "POST", session, body });
+}
 export async function saveRatePackage(session: Session, body: RatePackageInput) {
   return apiRequest<RatePackageAdmin>("/api/admin/rate-packages", { method: "POST", session, body });
 }

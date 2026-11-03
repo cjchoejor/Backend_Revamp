@@ -134,7 +134,7 @@ function SettingRow({ settingKey, session, open, onToggle }: { settingKey: strin
         </div>
       </div>
       {everOpen && load.data ? (
-        <div className="set-row-body" hidden={!open}>
+        <div className="set-row-body" hidden={!open} data-edit-form>
           {load.data.warning ? (
             <p className="set-refused" role="alert">
               {load.data.warning}

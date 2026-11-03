@@ -1,5 +1,6 @@
 "use client";
 
+import { AdmField } from "@/components/admin/field-title";
 import { Suspense, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -88,15 +89,25 @@ function CommunicationTemplates({ session }: { session: Session }) {
     <section className="admin-panel space-y-4 p-5">
       <h2 className="admin-display text-lg">Message templates</h2>
       <NotUsedYet>The emails the desk sends are built in, so nothing reads these yet.</NotUsedYet>
-      <div className="grid gap-3 md:grid-cols-3">
-        <input className="admin-input" placeholder="Template key" value={form.templateKey} disabled={!!editingId} onChange={(e) => setForm({ ...form, templateKey: e.target.value })} />
-        <select className="admin-select" value={form.channel} onChange={(e) => setForm({ ...form, channel: e.target.value })}>
-          <option value="EMAIL">Email</option>
-          <option value="WHATSAPP">WhatsApp</option>
-        </select>
-        <input className="admin-input" placeholder="Kind of message" value={form.templateType} onChange={(e) => setForm({ ...form, templateType: e.target.value })} />
-        <input className="admin-input md:col-span-3" placeholder="Subject (optional)" value={form.subjectTemplate} onChange={(e) => setForm({ ...form, subjectTemplate: e.target.value })} />
-        <textarea className="admin-input md:col-span-3 font-mono text-xs" rows={3} placeholder="Body template — supports {{tokens}}" value={form.bodyTemplate} onChange={(e) => setForm({ ...form, bodyTemplate: e.target.value })} />
+      <div className="grid gap-3 md:grid-cols-3" data-edit-form>
+        <AdmField label="Template key">
+          <input className="admin-input" value={form.templateKey} disabled={!!editingId} onChange={(e) => setForm({ ...form, templateKey: e.target.value })} />
+        </AdmField>
+        <AdmField label="Sent by">
+          <select className="admin-select" value={form.channel} onChange={(e) => setForm({ ...form, channel: e.target.value })}>
+            <option value="EMAIL">Email</option>
+            <option value="WHATSAPP">WhatsApp</option>
+          </select>
+        </AdmField>
+        <AdmField label="Kind of message">
+          <input className="admin-input" value={form.templateType} onChange={(e) => setForm({ ...form, templateType: e.target.value })} />
+        </AdmField>
+        <AdmField label="Subject" hint="optional" className="md:col-span-3">
+          <input className="admin-input" value={form.subjectTemplate} onChange={(e) => setForm({ ...form, subjectTemplate: e.target.value })} />
+        </AdmField>
+        <AdmField label="Body template" hint="takes {{tokens}}" className="md:col-span-3">
+          <textarea className="admin-input font-mono text-xs" rows={3} value={form.bodyTemplate} onChange={(e) => setForm({ ...form, bodyTemplate: e.target.value })} />
+        </AdmField>
       </div>
       <div className="flex gap-2">
         <button type="button" className="admin-btn w-fit" disabled={saveMutation.isPending || !form.templateKey || !form.bodyTemplate} onClick={() => saveMutation.mutate()}>
@@ -174,14 +185,22 @@ function InvoiceTemplates({ session }: { session: Session }) {
     <section className="admin-panel space-y-4 p-5">
       <h2 className="admin-display text-lg">Invoice templates</h2>
       <NotUsedYet>The bills' layouts are built in, so nothing reads these yet.</NotUsedYet>
-      <div className="grid gap-3 md:grid-cols-3">
-        <input className="admin-input" placeholder="Template key" value={form.templateKey} disabled={!!editingId} onChange={(e) => setForm({ ...form, templateKey: e.target.value })} />
-        <select className="admin-select" value={form.invoiceType} disabled={!!editingId} onChange={(e) => setForm({ ...form, invoiceType: e.target.value as "PROFORMA" | "FINAL" })}>
-          <option value="PROFORMA">Proforma</option>
-          <option value="FINAL">Tax invoice</option>
-        </select>
-        <input className="admin-input" placeholder="Title" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
-        <textarea className="admin-input md:col-span-3 font-mono text-xs" rows={3} placeholder="Body template" value={form.bodyTemplate} onChange={(e) => setForm({ ...form, bodyTemplate: e.target.value })} />
+      <div className="grid gap-3 md:grid-cols-3" data-edit-form>
+        <AdmField label="Template key">
+          <input className="admin-input" value={form.templateKey} disabled={!!editingId} onChange={(e) => setForm({ ...form, templateKey: e.target.value })} />
+        </AdmField>
+        <AdmField label="Kind of bill">
+          <select className="admin-select" value={form.invoiceType} disabled={!!editingId} onChange={(e) => setForm({ ...form, invoiceType: e.target.value as "PROFORMA" | "FINAL" })}>
+            <option value="PROFORMA">Proforma</option>
+            <option value="FINAL">Tax invoice</option>
+          </select>
+        </AdmField>
+        <AdmField label="Title">
+          <input className="admin-input" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
+        </AdmField>
+        <AdmField label="Body template" className="md:col-span-3">
+          <textarea className="admin-input font-mono text-xs" rows={3} value={form.bodyTemplate} onChange={(e) => setForm({ ...form, bodyTemplate: e.target.value })} />
+        </AdmField>
       </div>
       <div className="flex gap-2">
         <button type="button" className="admin-btn w-fit" disabled={saveMutation.isPending || !form.templateKey || !form.title} onClick={() => saveMutation.mutate()}>{editingId ? "Save changes" : "Create template"}</button>
@@ -259,10 +278,16 @@ function WorkOrderTemplates({ session }: { session: Session }) {
     <section className="admin-panel space-y-4 p-5">
       <h2 className="admin-display text-lg">Work order templates</h2>
       <NotUsedYet>Nothing makes a work order from these yet.</NotUsedYet>
-      <div className="grid gap-3 md:grid-cols-3">
-        <input className="admin-input" placeholder="Template key" value={form.templateKey} disabled={!!editingId} onChange={(e) => setForm({ ...form, templateKey: e.target.value })} />
-        <input className="admin-input" placeholder="Title" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
-        <input className="admin-input" placeholder="Use type (optional)" value={form.useType} disabled={!!editingId} onChange={(e) => setForm({ ...form, useType: e.target.value })} />
+      <div className="grid gap-3 md:grid-cols-3" data-edit-form>
+        <AdmField label="Template key">
+          <input className="admin-input" value={form.templateKey} disabled={!!editingId} onChange={(e) => setForm({ ...form, templateKey: e.target.value })} />
+        </AdmField>
+        <AdmField label="Title">
+          <input className="admin-input" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
+        </AdmField>
+        <AdmField label="Use type" hint="optional">
+          <input className="admin-input" value={form.useType} disabled={!!editingId} onChange={(e) => setForm({ ...form, useType: e.target.value })} />
+        </AdmField>
         <div className="sf-field md:col-span-3">
           <span className="sf-label">To do</span>
           <Control f={{ kind: "tags", label: "To do", placeholder: "Check the minibar", addLabel: "Add" }} value={form.todoItems} onChange={(v) => setForm({ ...form, todoItems: v as string[] })} />

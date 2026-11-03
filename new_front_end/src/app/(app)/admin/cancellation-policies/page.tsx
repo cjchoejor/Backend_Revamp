@@ -1,5 +1,6 @@
 "use client";
 
+import { AdmField } from "@/components/admin/field-title";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -96,7 +97,9 @@ export default function AdminCancellationPoliciesPage() {
 
       <div className="admin-panel space-y-4 p-5">
         <div className="grid gap-4 md:grid-cols-2">
-          <input className="admin-input" placeholder="Policy name" value={name} onChange={(e) => setName(e.target.value)} />
+          <AdmField label="Policy name">
+            <input className="admin-input" value={name} onChange={(e) => setName(e.target.value)} />
+          </AdmField>
         </div>
 
         <div className="sf-field">
