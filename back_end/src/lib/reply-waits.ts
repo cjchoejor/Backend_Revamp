@@ -22,6 +22,7 @@
  */
 import type { CommunicationType, Prisma, PrismaClient } from "@prisma/client";
 import { getTimerEngine } from "../services/infrastructure/timer-management-service.js";
+import { REPLY_NOT_ASKED, guestRepliesOff, replySettled } from "./guest-reply-settings.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -107,14 +108,114 @@ export async function latestDispatchedInForce(
   if (!rows.length) return null;
   const replaced = new Set((await findReplacedPapers(db, args.entryId, rows)).map((r) => r.communicationId));
   const inForce = rows.find((r) => !replaced.has(r.id));
-  return inForce ? { id: inForce.id, acknowledgementStatus: inForce.acknowledgementStatus } : null;
+  if (!inForce) return null;
+  // Its reply setting is off: nothing waits for it for as long as it stays off (2026-11-03).
+  const notAsked = !replySettled(inForce.acknowledgementStatus) && (await guestRepliesOff(db)).has(args.commType);
+  return { id: inForce.id, acknowledgementStatus: notAsked ? REPLY_NOT_ASKED : inForce.acknowledgementStatus };
 }
 
 /**
- * Stop waiting for replies to replaced papers on this booking. Safe to call after any act that
- * makes, sends or replaces a paper; idempotent. Returns how many waits it stopped.
+ * A paper sent while its reply setting is off was never asked about (2026-11-03): marked so, with no
+ * clock, it stays exempt when the setting comes back on. A paper sent before the setting went off is
+ * left as it is, and waits again then.
+ */
+async function markPapersSentWhileRepliesOff(prisma: PrismaClient, entryId: string, actorId: string): Promise<number> {
+  const off = await guestRepliesOff(prisma);
+  if (!off.size) return 0;
+  const rows = await prisma.communicationRecord.findMany({
+    where: {
+      entryId,
+      direction: "OUTBOUND",
+      sendStatus: "DISPATCHED",
+      acknowledgementStatus: "PENDING",
+      OR: [...off].map(([commType, since]) => ({ commType, createdAt: { gte: since } })),
+    },
+    select: { id: true, commType: true, payload: true, stageContext: true },
+  });
+  if (!rows.length) return 0;
+  const ids = rows.map((r) => r.id);
+  const quoteIds = rows
+    .filter((r) => r.commType === "QUOTATION")
+    .map((r) => (r.payload as { quotationId?: string } | null)?.quotationId)
+    .filter((x): x is string => !!x);
+  const timers = await prisma.timerRecord.findMany({
+    where: {
+      status: "SCHEDULED",
+      OR: [
+        { entityType: "CommunicationRecord", entityId: { in: ids } },
+        ...(quoteIds.length ? [{ entityType: "Quotation", entityId: { in: quoteIds }, timerCode: { contains: "ACK" } }] : []),
+      ],
+    },
+    select: { id: true, pgBossJobId: true },
+  });
+  if (timers.length) {
+    const engine = await getTimerEngine();
+    await Promise.all(timers.map((t) => (t.pgBossJobId ? engine.cancel(t.pgBossJobId).catch(() => {}) : Promise.resolve())));
+  }
+  const now = new Date();
+  await prisma.$transaction(async (tx) => {
+    await tx.communicationRecord.updateMany({ where: { id: { in: ids }, acknowledgementStatus: "PENDING" }, data: { acknowledgementStatus: REPLY_NOT_ASKED } });
+    if (timers.length) {
+      await tx.timerRecord.updateMany({
+        where: { id: { in: timers.map((t) => t.id) } },
+        data: { status: "CANCELLED", cancelledAt: now, cancelledBy: actorId, cancelledReason: "REPLIES_OFF" },
+      });
+    }
+    for (const r of rows) {
+      await tx.traceEvent.create({
+        data: {
+          eventType: "COMMUNICATION.REPLY_NOT_ASKED",
+          actorId,
+          actorLevel: actorId === "SYSTEM" ? "SYSTEM" : "L1",
+          entityType: "CommunicationRecord",
+          entityId: r.id,
+          operation: "UPDATE",
+          timestamp: now,
+          stageContext: r.stageContext ?? undefined,
+          entryId,
+          payload: { communicationId: r.id, commType: r.commType },
+          createdBy: actorId,
+        } as never,
+      });
+    }
+  });
+  return rows.length;
+}
+
+/**
+ * Clocks the desk should not be shown: a reply clock on an email whose reply is off (2026-11-03).
+ * It is left to run out quietly, so that turning the setting back on loses nothing.
+ */
+export async function withoutClocksOfRepliesOff<T extends { timerCode?: string | null; timerType?: string | null; entityType?: string | null; entityId?: string | null }>(
+  db: Db,
+  timers: T[],
+): Promise<T[]> {
+  const off = await guestRepliesOff(db);
+  if (!off.size) return timers;
+  const isReply = (t: T) => t.timerType === "ACKNOWLEDGEMENT_WINDOW_W22" && t.entityType === "CommunicationRecord" && !!t.entityId;
+  const isQuoteTracker = (t: T) => t.entityType === "Quotation" && !!t.timerCode?.includes("ACK");
+  const ids = timers.filter(isReply).map((t) => t.entityId!);
+  const comms = ids.length ? await db.communicationRecord.findMany({ where: { id: { in: ids } }, select: { id: true, commType: true } }) : [];
+  const typeOf = new Map(comms.map((c) => [c.id, c.commType]));
+  return timers.filter((t) => {
+    if (isQuoteTracker(t)) return !off.has("QUOTATION" as CommunicationType);
+    if (!isReply(t)) return true;
+    const type = typeOf.get(t.entityId!);
+    return !type || !off.has(type);
+  });
+}
+
+/**
+ * Stop waiting for replies to replaced papers on this booking, and to papers sent while their reply
+ * setting is off. Safe to call after any act that makes, sends or replaces a paper; idempotent.
+ * Returns how many waits it stopped.
  */
 export async function retireSupersededReplyWaits(prisma: PrismaClient, entryId: string, actorId: string): Promise<number> {
+  const replaced = await retireReplacedPapers(prisma, entryId, actorId);
+  return replaced + (await markPapersSentWhileRepliesOff(prisma, entryId, actorId));
+}
+
+async function retireReplacedPapers(prisma: PrismaClient, entryId: string, actorId: string): Promise<number> {
   const pending = await prisma.communicationRecord.findMany({
     where: { entryId, acknowledgementStatus: "PENDING", commType: { in: AWAITING_TYPES } },
     select: { id: true, commType: true, payload: true, createdAt: true, stageContext: true },

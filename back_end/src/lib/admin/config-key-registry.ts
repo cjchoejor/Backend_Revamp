@@ -165,6 +165,12 @@ export const CONFIG_KEY_REGISTRY: Record<string, ConfigKeyMeta> = {
   // Communication (CommunicationConfigService)
   "communication.channels": own("CommunicationConfigService", isObject),
   "acknowledgement.windowPerType": own("CommunicationConfigService", isObject),
+  "guestReply.quotation": own("CommunicationConfigService", isObject),
+  "guestReply.proforma": own("CommunicationConfigService", isObject),
+  "guestReply.confirmationVoucher": own("CommunicationConfigService", isObject),
+  "guestReply.preArrivalMessage": own("CommunicationConfigService", isObject),
+  "guestReply.interimBill": own("CommunicationConfigService", isObject),
+  "guestReply.taxInvoice": own("CommunicationConfigService", isObject),
 
   // Post-stay & governance (PostStayAndGovernanceService)
   "feedback.platformLinks": own("PostStayAndGovernanceService"),

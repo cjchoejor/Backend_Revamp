@@ -3,6 +3,7 @@ import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { getActiveConfigEntry } from "../../lib/config-store.js";
 import { supersedeConfigurationEntry } from "../../lib/admin/supersede-configuration.js";
 import { maskSecrets, mergePreservingSecrets } from "../../lib/admin/mask-secrets.js";
+import { GUEST_REPLY_SETTINGS } from "../../lib/guest-reply-settings.js";
 
 const CHANNELS_KEY = "communication.channels";
 const ACK_WINDOW_KEY = "acknowledgement.windowPerType";
@@ -46,6 +47,33 @@ export async function updateChannel(
     });
     return maskSecrets(merged);
   });
+}
+
+function guestReplySetting(key: string) {
+  const setting = GUEST_REPLY_SETTINGS.find((s) => s.key === key);
+  if (!setting) throw new NotFoundError("Guest reply setting");
+  return setting;
+}
+
+/** One email's reply setting. With no row saved it reads as on, the rule the desk has always run. */
+export async function getGuestReplySetting(prisma: PrismaClient, key: string) {
+  guestReplySetting(key);
+  const row = await getActiveConfigEntry(prisma, key);
+  return row?.configValue ?? { required: true };
+}
+
+export async function setGuestReplySetting(prisma: PrismaClient, key: string, value: unknown, actorId: string) {
+  guestReplySetting(key);
+  const required = (value as { required?: unknown } | null)?.required;
+  if (typeof required !== "boolean") throw new ValidationError("Say whether the guest's reply must be noted");
+  return prisma.$transaction((tx) =>
+    supersedeConfigurationEntry(tx, {
+      configKey: key,
+      configValue: { required },
+      actorId,
+      notes: required ? "The guest's reply must be noted" : "The guest's reply is not needed",
+    }),
+  );
 }
 
 export async function getAcknowledgementWindow(prisma: PrismaClient) {

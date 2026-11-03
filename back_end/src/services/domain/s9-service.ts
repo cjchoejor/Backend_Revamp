@@ -50,6 +50,7 @@ import { computeGuestDataRetentionDueAt } from "../../policies/07-guest-data-gov
 import { enforceNoShowFinancialAmountsNonNegative } from "../../policies/22-no-show/p57-no-show-folio-financial.js";
 import { hotelTodayUtc } from "../../lib/stay-dates.js";
 import { latestDispatchedInForce, retireSupersededReplyWaitsBestEffort } from "../../lib/reply-waits.js";
+import { replySettled } from "../../lib/guest-reply-settings.js";
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
 
@@ -665,7 +666,7 @@ export async function recordInvoicePaymentEvent(
     const latestFinalComm = invoice.entryId
       ? await latestDispatchedInForce(prisma, { entryId: invoice.entryId, commType: "FINAL_INVOICE" as never })
       : null;
-    if (latestFinalComm && latestFinalComm.acknowledgementStatus !== "RECEIVED") {
+    if (latestFinalComm && !replySettled(latestFinalComm.acknowledgementStatus)) {
       throw new ValidationError(
         "Record the guest's answer to the final invoice before logging its payment",
       );

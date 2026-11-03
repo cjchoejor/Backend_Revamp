@@ -14,6 +14,7 @@
 import type { EntryStatus, Prisma, PrismaClient, Stage } from "@prisma/client";
 import { buildEntryBillingSummary } from "./entry-billing-summary-service.js";
 import { resolveNoShowGraceMinutes, timerShowsFrom } from "../../lib/expected-arrival.js";
+import { withoutClocksOfRepliesOff } from "../../lib/reply-waits.js";
 
 type Db = PrismaClient;
 
@@ -211,11 +212,12 @@ export type DeskTimerRow = {
 export async function deskTimersFor(prisma: Db, entryIds: string[]): Promise<DeskTimerRow[]> {
   const ids = [...new Set(entryIds)].slice(0, 100);
   if (ids.length === 0) return [];
-  const rows = await prisma.timerRecord.findMany({
+  const scheduled = await prisma.timerRecord.findMany({
     where: { entryId: { in: ids }, status: "SCHEDULED" },
     select: { entryId: true, timerCode: true, timerType: true, stageContext: true, firesAt: true, entityType: true, entityId: true, createdAt: true },
     orderBy: { firesAt: "asc" },
   });
+  const rows = await withoutClocksOfRepliesOff(prisma, scheduled);
   // The no-show cut-off shows only from the start of its grace (2026-10-29).
   const grace = rows.some((r) => r.timerCode === "NO_SHOW_CUTOFF_W5") ? await resolveNoShowGraceMinutes(prisma as never).catch(() => null) : null;
   // The acceptance clock is one code for housekeeping and the kitchen alike; the handoff behind

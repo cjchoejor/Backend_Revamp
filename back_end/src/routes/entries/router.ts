@@ -43,6 +43,7 @@ import {
 } from "../../services/domain/negotiation-amendment-service.js";
 import { z } from "zod";
 import { entryDetailInclude } from "../../lib/entry-detail-include.js";
+import { withoutClocksOfRepliesOff } from "../../lib/reply-waits.js";
 import { addReturnStay } from "../../services/domain/return-stay-service.js";
 import {
   afterStayChanged,
@@ -521,7 +522,7 @@ entriesRouter.get("/:id/communications", requireActorLevel("L1"), async (req, re
  */
 entriesRouter.get("/:id/timers", requireActorLevel("L1"), async (req, res, next) => {
   try {
-    const items = await prisma.timerRecord.findMany({
+    const scheduled = await prisma.timerRecord.findMany({
       where: { entryId: req.params.id, status: "SCHEDULED" },
       orderBy: { firesAt: "asc" },
       select: {
@@ -540,6 +541,7 @@ entriesRouter.get("/:id/timers", requireActorLevel("L1"), async (req, res, next)
         createdAt: true,
       },
     });
+    const items = await withoutClocksOfRepliesOff(prisma, scheduled);
     // A clock the desk shows only from a moment of its own — the no-show cut-off, from the start
     // of its grace (2026-10-29).
     const grace = items.some((t) => t.timerCode === "NO_SHOW_CUTOFF_W5") ? await resolveNoShowGraceMinutes(prisma).catch(() => null) : null;

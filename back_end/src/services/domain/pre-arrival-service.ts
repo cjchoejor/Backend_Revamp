@@ -4,6 +4,7 @@ import { PreArrivalTaskType, Stage, TaskCategory, TaskStatus } from "@prisma/cli
 import { NotFoundError, PolicyGateBlockedError, ValidationError } from "../../lib/errors.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
+import { retireSupersededReplyWaitsBestEffort } from "../../lib/reply-waits.js";
 import {
   enforcePreArrivalTaskPendingForUpdate,
   enforcePreArrivalTaskWaiveRequiresReason,
@@ -530,6 +531,7 @@ export async function updatePreArrivalTask(
     }
     if (task.taskType === PreArrivalTaskType.PRE_ARRIVAL_COMMUNICATION) {
       await sendPreArrivalReminderOutbound(prisma, task.entryId, actorId);
+      await retireSupersededReplyWaitsBestEffort(prisma, task.entryId, actorId);
     }
   }
 

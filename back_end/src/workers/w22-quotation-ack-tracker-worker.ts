@@ -1,4 +1,5 @@
 import type { PrismaClient } from "@prisma/client";
+import { replySettled } from "../lib/guest-reply-settings.js";
 
 export async function runQuotationAckTrackerWorker(prisma: PrismaClient, input: { quotationId?: string; timerRecordId?: string }) {
   const now = new Date();
@@ -21,7 +22,7 @@ export async function runQuotationAckTrackerWorker(prisma: PrismaClient, input: 
 
     if (q.communicationRecordId) {
       const comm = await tx.communicationRecord.findUnique({ where: { id: q.communicationRecordId } });
-      if (comm?.acknowledgementStatus === "RECEIVED") {
+      if (replySettled(comm?.acknowledgementStatus)) {
         await tx.traceEvent.create({
           data: {
             eventType: "S2.QUOTATION_ACK_WINDOW_SKIP",

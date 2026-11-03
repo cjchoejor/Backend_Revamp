@@ -1,5 +1,6 @@
 import { FolioState, Stage } from "@prisma/client";
 import { PolicyGateBlockedError, ValidationError } from "../../lib/errors.js";
+import { replySettled } from "../../lib/guest-reply-settings.js";
 
 /**
  * Policy 80 — interim payments and stay extensions at S7 (2026-08-21, operator ruling).
@@ -39,7 +40,7 @@ export function enforceInterimGuestAnswerRecordedBeforePayment(input: {
 }) {
   const comm = input.latestDispatchedInterimComm;
   if (!comm) return;
-  if (comm.acknowledgementStatus === "RECEIVED") return;
+  if (replySettled(comm.acknowledgementStatus)) return;
   throw new PolicyGateBlockedError(
     "INTERIM_GUEST_ANSWER_REQUIRED",
     "Note down the guest's response to the interim invoice first — record their answer (verbal or written), then log the money received",

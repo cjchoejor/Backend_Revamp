@@ -2,6 +2,7 @@ import type { PrismaClient } from "@prisma/client";
 import { CommunicationType } from "@prisma/client";
 import { NotFoundError } from "../../lib/errors.js";
 import { findReplacedPapers } from "../../lib/reply-waits.js";
+import { REPLY_NOT_ASKED, guestRepliesOff, replySettled } from "../../lib/guest-reply-settings.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import * as auditService from "../infrastructure/audit-service.js";
 import {
@@ -188,15 +189,23 @@ export async function listEntryCommunications(prisma: PrismaClient, entryId: str
       })
     ).map((h) => h.documentId),
   );
+  const off = await guestRepliesOff(prisma);
   return {
     entryId,
+    // The emails whose reply is off now, so the desk says nothing about an answer before one goes out.
+    repliesOff: [...off.keys()],
     items: rows.map((r) => {
       // No answer is awaited for it: replaced while still waiting. An answer already on record
       // stays "answered" — it is history.
       const superseded = r.acknowledgementStatus === "SUPERSEDED" || (replaced.has(r.id) && r.acknowledgementStatus === "PENDING");
+      // Sent while the reply was off, or the reply is off now: no answer is wanted (2026-11-03).
+      const notAsked =
+        !superseded &&
+        (r.acknowledgementStatus === REPLY_NOT_ASKED ||
+          (r.sendStatus === "DISPATCHED" && !replySettled(r.acknowledgementStatus) && off.has(r.commType)));
       return {
         ...r,
-        acknowledgementStatus: superseded ? "SUPERSEDED" : r.acknowledgementStatus,
+        acknowledgementStatus: superseded ? "SUPERSEDED" : notAsked ? REPLY_NOT_ASKED : r.acknowledgementStatus,
         superseded,
         // The paper it carried is the one in force — the paper the "answer recorded" gates read.
         inForce: !superseded && !replaced.has(r.id),
@@ -210,6 +219,7 @@ export async function listEntryCommunications(prisma: PrismaClient, entryId: str
           !superseded && r.direction === "OUTBOUND" && r.sendStatus === "DISPATCHED" && r.acknowledgementStatus !== "RECEIVED",
         isOverdue:
           !superseded &&
+          !notAsked &&
           r.acknowledgementStatus !== "RECEIVED" &&
           !!r.acknowledgementTimeoutAt &&
           r.acknowledgementTimeoutAt.getTime() < Date.now(),

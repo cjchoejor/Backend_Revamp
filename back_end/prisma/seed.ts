@@ -235,6 +235,15 @@ async function main() {
       notes: "Speculative hold placement thresholds",
     },
     {
+      configKey: "guestReply.quotation",
+      configValue: { required: true },
+    },
+    { configKey: "guestReply.proforma", configValue: { required: true } },
+    { configKey: "guestReply.confirmationVoucher", configValue: { required: true } },
+    { configKey: "guestReply.preArrivalMessage", configValue: { required: true } },
+    { configKey: "guestReply.interimBill", configValue: { required: true } },
+    { configKey: "guestReply.taxInvoice", configValue: { required: true } },
+    {
       configKey: "acknowledgement.windowPerType",
       configValue: {
         quotation: 86400,
