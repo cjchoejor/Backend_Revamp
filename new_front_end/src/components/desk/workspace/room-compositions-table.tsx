@@ -848,6 +848,8 @@ export function RoomCompositionsTable({
   // Plans the operator switched on. A plan column is VISIBLE when toggled on OR when any
   // row carries pax for it — a column with data can never silently disappear.
   const [activePlans, setActivePlans] = useState<Set<NumCol>>(new Set());
+  /** The meal plan just switched on: its column flashes, and its first cell takes the cursor. */
+  const [justOn, setJustOn] = useState<NumCol | null>(null);
   // CNB columns exist automatically when the intake party has children, or when saved
   // data already carries child counts — the manual "Kids +" toggle was removed
   // (2026-07-31, operator request); only the Rates toggle remains in the corner.
@@ -1186,6 +1188,7 @@ export function RoomCompositionsTable({
       }
     } else {
       setActivePlans((prev) => new Set(prev).add(c));
+      setJustOn(c);
     }
   };
 
@@ -1613,6 +1616,21 @@ export function RoomCompositionsTable({
   // Right only once the caret is at the text boundary, so in-value cursor movement
   // still works); Enter moves down. Checkboxes participate too (Space still toggles).
   const wrapRef = useRef<HTMLDivElement>(null);
+  // A meal plan switched on (2026-11-03, operator: "whenever user clicks a meal plan, and it shows
+  // on the table that row is active"): the cursor goes to its first cell, ready to type. A wide
+  // table scrolls sideways inside its own box; the page stays where it is.
+  useEffect(() => {
+    if (!justOn) return;
+    const box = wrapRef.current;
+    const cell = box?.querySelector<HTMLInputElement>(`input[data-cell$=":${justOn}"]:not([readonly])`);
+    if (box && cell) {
+      cell.focus({ preventScroll: true });
+      const over = cell.getBoundingClientRect().right - box.getBoundingClientRect().right;
+      if (over > 0) box.scrollLeft += over + 12;
+    }
+    const t = setTimeout(() => setJustOn(null), 1400);
+    return () => clearTimeout(t);
+  }, [justOn]);
   const visibleCols: string[] = useMemo(() => {
     const cols: string[] = ["ad"];
     if (childColsVisible) cols.push("c6", "u6");
@@ -1871,7 +1889,13 @@ export function RoomCompositionsTable({
     })();
     const ownNight = mark != null;
     const raw = varies ? "" : valAt(roomId, night, col);
-    const cls = [opts?.stop ? "stop" : opts?.warn ? "warn" : "", varies ? "varies" : "", ownNight ? "own" : ""]
+    const cls = [
+      opts?.stop ? "stop" : opts?.warn ? "warn" : "",
+      varies ? "varies" : "",
+      ownNight ? "own" : "",
+      (MEAL_COLS as string[]).includes(col) ? "mealcol" : "",
+      justOn === col ? "just-on" : "",
+    ]
       .filter(Boolean)
       .join(" ");
     const title = varies
@@ -2241,7 +2265,7 @@ export function RoomCompositionsTable({
               {bedsShown && <th />}
               <th />
               <th colSpan={childColsVisible ? 4 : 2}>Guests</th>
-              {visibleMeals.length > 0 && <th colSpan={visibleMeals.length}>Meal-plan pax</th>}
+              {visibleMeals.length > 0 && <th className="mealcol" colSpan={visibleMeals.length}>Meal-plan pax</th>}
               {othersVisible && <th colSpan={3}>Others à-la-carte pax</th>}
               {ratesOpen && (
                 <th
@@ -2280,7 +2304,7 @@ export function RoomCompositionsTable({
               )}
               <th title="Extra beds">Extra bed</th>
               {visibleMeals.map((c) => (
-                <th key={c} title={MEAL_META[c].title}>
+                <th key={c} className={`mealcol${justOn === c ? " just-on" : ""}`} title={MEAL_META[c].title}>
                   {MEAL_META[c].th}
                 </th>
               ))}
@@ -2525,7 +2549,7 @@ export function RoomCompositionsTable({
               )}
               <td>{footSum("bed")}</td>
               {visibleMeals.map((c) => (
-                <td key={c}>{footSum(c)}</td>
+                <td key={c} className="mealcol">{footSum(c)}</td>
               ))}
               {othersVisible && (
                 <>

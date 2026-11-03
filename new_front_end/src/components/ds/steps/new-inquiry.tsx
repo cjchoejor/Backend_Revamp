@@ -545,7 +545,7 @@ export function NewInquiryCanvas() {
 
   const fullPhone = phoneCode ? joinPhone(phoneCode, phoneNumber) : "";
   // The caller's name (title left off — it reads as a salutation, not a name).
-  const typedGuestName = `${firstName.trim()} ${lastName.trim()}`.trim();
+  const typedGuestName = [callerTitle, firstName.trim(), lastName.trim()].filter(Boolean).join(" ");
   // A typed email the backend would refuse is a blocker here, not a "bad request" after the click.
   const emailBad = email.trim() !== "" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
   const isOta = channelKey === "OTA";
@@ -831,7 +831,8 @@ export function NewInquiryCanvas() {
                       <div className="field">
                         <label>
                           Phone
-                          {!isOta ? <ReqMark /> : null}
+                          {/* Either one will do, so the empty one stops asking once the other is in. */}
+                          {!isOta && (fullPhone || !email.trim()) ? <ReqMark /> : null}
                           <Help label="About the phone">Typing it finds who has rung with it before — a caller, or an agency&rsquo;s or a company&rsquo;s person.</Help>
                         </label>
                         <PhoneInput code={phoneCode} setCode={setPhoneCode} number={phoneNumber} setNumber={setPhoneNumber} />
@@ -840,7 +841,7 @@ export function NewInquiryCanvas() {
                       <div className="field">
                         <label>
                           Email
-                          {!isOta ? <ReqMark /> : null}
+                          {!isOta && (email.trim() || !fullPhone) ? <ReqMark /> : null}
                           <Help label="About the email">Optional when there is a phone. With no phone, typing it finds who has rung with it before.</Help>
                         </label>
                         <input className="input" type="email" value={email} placeholder="name@example.com" onChange={(e) => setEmail(e.target.value)} />

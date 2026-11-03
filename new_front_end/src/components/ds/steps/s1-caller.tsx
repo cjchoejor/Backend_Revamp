@@ -141,7 +141,8 @@ export function TheCaller({ entry, editable }: { entry: EntryDetail; editable: b
         <div className="field">
           <label>
             Phone
-            {!isOta && editable ? <ReqMark /> : null}
+            {/* Either one will do, so the empty one stops asking once the other is in. */}
+            {!isOta && editable && (fullPhone || !f.email.trim()) ? <ReqMark /> : null}
             {reachable ? (
               <Help label="About the phone">{isOta && !fullPhone ? "An OTA booking — the phone is optional." : "Where the caller can be rung back."}</Help>
             ) : null}
@@ -156,7 +157,7 @@ export function TheCaller({ entry, editable }: { entry: EntryDetail; editable: b
         <div className="field">
           <label>
             Email
-            {!isOta && editable ? <ReqMark /> : null}
+            {!isOta && editable && (f.email.trim() || !fullPhone) ? <ReqMark /> : null}
             <Help label="About the email">Optional when there is a phone.</Help>
           </label>
           <input
@@ -336,12 +337,26 @@ export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; edita
     .map((g) => ({ ...g, vipTier: null, clientTier: null, isActive: true, createdAt: "", updatedAt: "" }));
   const lastStayOf = new Map((ownRow?.guests ?? []).map((g) => [g.id, g.lastStay]));
 
-  const [arrName, setArrName] = useState(contact.contactPersonName ?? "");
-  const [arrPhone, setArrPhone] = useState(contact.contactPersonPhone ?? "");
+  // Who is arriving follows the caller when the caller is the guest (2026-11-03, operator: "first i
+  // added someone else, and then switched to the caller, the who is arriving still shows the someone
+  // else's info"). It follows when nobody stands there yet or the guest named until now does; someone
+  // the desk typed by hand stays.
+  const sameWords = (a?: string | null, b?: string | null) => (a ?? "").trim().replace(/\s+/g, " ").toLowerCase() === (b ?? "").trim().replace(/\s+/g, " ").toLowerCase();
+  const onRecordName = contact.contactPersonName ?? "";
+  const onRecordPhone = contact.contactPersonPhone ?? "";
+  const arrivingWasTheGuest =
+    !onRecordName.trim() ||
+    (!!named && (sameWords(onRecordName, guestFullName({ title: named.title, firstName: named.firstName ?? "", lastName: named.lastName ?? "" })) || sameWords(onRecordName, `${named.firstName ?? ""} ${named.lastName ?? ""}`)));
+  const callerNameNow = callerNameOf(inq) ?? (cFirst.trim() && cLast.trim() ? [cTitle, cFirst.trim(), cLast.trim()].filter(Boolean).join(" ") : "");
+  const arrivingFollowsCaller = choosing && choice === "CALLER" && !callerIsParty && arrivingWasTheGuest;
+  const seedName = arrivingFollowsCaller ? callerNameNow || onRecordName : onRecordName;
+  const seedPhone = arrivingFollowsCaller ? (inq.callerPhone ?? "") : onRecordPhone;
+  const [arrName, setArrName] = useState(seedName);
+  const [arrPhone, setArrPhone] = useState(seedPhone);
   useEffect(() => {
-    setArrName(contact.contactPersonName ?? "");
-    setArrPhone(contact.contactPersonPhone ?? "");
-  }, [contact.contactPersonName, contact.contactPersonPhone]);
+    setArrName(seedName);
+    setArrPhone(seedPhone);
+  }, [seedName, seedPhone]);
 
   /** Name a guest on file: their record fills the form. */
   const linkGuest = (g: GuestOnFile) => {
@@ -390,8 +405,7 @@ export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; edita
           : null;
   // Someone else is the one arriving — the backend fills "who is arriving" from them.
   const askArriving = !(choosing && choice === "OTHER");
-  const arrivingDirty =
-    askArriving && (arrName.trim() !== (contact.contactPersonName ?? "") || arrPhone.trim() !== (contact.contactPersonPhone ?? ""));
+  const arrivingDirty = askArriving && (arrName.trim() !== seedName.trim() || arrPhone.trim() !== seedPhone.trim());
   const dirty = choosing || callerNameDirty || arrivingDirty;
   useFlowUnsaved("wrap", editable && dirty, "Changes to wrap up saved");
 
@@ -400,8 +414,8 @@ export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; edita
     const email = nEmail.trim() || null;
     if (choice === "CALLER") {
       return over?.useOnFile
-        ? { mode: "EXISTING", guestProfileId: over.useOnFile }
-        : { mode: "CALLER", nationality, keepNewName: over?.keepNewName };
+        ? { mode: "EXISTING", guestProfileId: over.useOnFile, arrivingIsGuest: arrivingFollowsCaller }
+        : { mode: "CALLER", nationality, keepNewName: over?.keepNewName, arrivingIsGuest: arrivingFollowsCaller };
     }
     const typed = { firstName: nFirst.trim(), lastName: nLast.trim() };
     const onFileId = over?.useOnFile ?? (linked && sameGuestName(typed, linked) ? linked.id : null);
@@ -448,6 +462,12 @@ export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; edita
       setCTitle("");
       setCFirst("");
       setCLast("");
+      // The form starts empty next time: the next person named must not take this one's number.
+      setNTitle("");
+      setNFirst("");
+      setNLast("");
+      setNNumber("");
+      setNEmail("");
       setLinked(null);
       setKeepNew(false);
       refresh([["inquiry", entry.inquiryId]]);
@@ -492,6 +512,17 @@ export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; edita
     }
   };
 
+  // A guest with no number stands on someone else's until the desk has theirs: said, so it is not
+  // taken for the guest's own.
+  const digitsOf = (v?: string | null) => (v ?? "").replace(/\D/g, "");
+  const arrivingPhoneIsOthers =
+    named && !choosing && !named.phone && digitsOf(arrPhone)
+      ? digitsOf(arrPhone) === digitsOf(inq.partyContactPhone)
+        ? `This is ${partyName ?? "the agency"}'s number — put in the guest's own if you have it.`
+        : digitsOf(arrPhone) === digitsOf(inq.callerPhone)
+          ? "This is the caller's number — put in the guest's own if you have it."
+          : null
+      : null;
   const reachable = hasAnyContact(entry);
   const callerWord = callerNameOf(inq) ?? (callerNameTyped ? `${cFirst.trim()} ${cLast.trim()}` : null);
   const typedNameNow = titledName({ title: nameAsk?.typed.title ?? null, firstName: nameAsk?.typed.firstName ?? "", lastName: nameAsk?.typed.lastName ?? "" });
@@ -537,7 +568,7 @@ export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; edita
           named ? (
             <div className="row-acts">
               <span className="sm">
-                <b>{guestFullName({ firstName: named.firstName ?? "", lastName: named.lastName ?? "" })}</b>
+                <b>{guestFullName({ title: named.title, firstName: named.firstName ?? "", lastName: named.lastName ?? "" })}</b>
                 {named.nationality ? <> · {named.nationality}</> : null}
                 {named.id ? (
                   <>
@@ -675,7 +706,7 @@ export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; edita
             )}
             {changing ? (
               <Button kind="quiet" compact onClick={() => setChanging(false)}>
-                Keep {guestFullName({ firstName: named?.firstName ?? "", lastName: named?.lastName ?? "" })}
+                Keep {guestFullName({ title: named?.title, firstName: named?.firstName ?? "", lastName: named?.lastName ?? "" })}
               </Button>
             ) : null}
           </>
@@ -694,7 +725,14 @@ export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; edita
               <Help label="About their phone">Needed before arrival.</Help>
             </label>
             <input className="input" value={arrPhone} readOnly={!editable} placeholder="+975 …" onChange={(e) => setArrPhone(e.target.value)} />
+            {arrivingPhoneIsOthers ? <span className="hint warn-ink">{arrivingPhoneIsOthers}</span> : null}
           </div>
+          {inq.partyContactName ? (
+            <span className="wide meta">
+              {partyName ?? "Their"}&rsquo;s contact person: <b>{inq.partyContactName}</b>
+              {inq.partyContactPhone ? <> · {inq.partyContactPhone}</> : null}
+            </span>
+          ) : null}
         </div>
       ) : null}
 

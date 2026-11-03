@@ -1,4 +1,5 @@
 export type GuestNameFields = {
+  title?: string | null;
   displayName?: string | null;
   firstName?: string | null;
   lastName?: string | null;
@@ -13,7 +14,7 @@ export function formatGuestName(guest?: GuestNameFields | null, fallback = "—"
   const display = guest.displayName?.trim();
   if (display) return display;
 
-  const full = [guest.firstName, guest.lastName].filter(Boolean).join(" ").trim();
+  const full = [guest.title, guest.firstName, guest.lastName].filter(Boolean).join(" ").trim();
   if (full) return full;
 
   const email = guest.email?.trim();

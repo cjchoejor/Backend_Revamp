@@ -616,7 +616,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
         title: "The booking is reserved",
         from: "Set up",
         to: "Reserve",
-        who: [[g?.firstName, g?.lastName].filter(Boolean).join(" ") || null, updated.id].filter(Boolean).join(" · "),
+        who: [[g?.title, g?.firstName, g?.lastName].filter(Boolean).join(" ") || null, updated.id].filter(Boolean).join(" · "),
         next: "Next: send the confirmation voucher or not — if it goes out, record the guest's answer — then Move to Arrival.",
       });
     },
@@ -662,7 +662,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
         title: "Reserve is done",
         from: "Reserve",
         to: "Arrival",
-        who: [[g?.firstName, g?.lastName].filter(Boolean).join(" ") || null, updated.id].filter(Boolean).join(" · "),
+        who: [[g?.title, g?.firstName, g?.lastName].filter(Boolean).join(" ") || null, updated.id].filter(Boolean).join(" · "),
         next: "Next: the rooms, the pre-arrival tasks and the advance — then the guest is checked in.",
       });
     },
@@ -690,7 +690,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
         title: "The guest is checked in",
         from: "Check-in",
         to: "Stay",
-        who: [[g?.firstName, g?.lastName].filter(Boolean).join(" ") || null, updated.id].filter(Boolean).join(" · "),
+        who: [[g?.title, g?.firstName, g?.lastName].filter(Boolean).join(" ") || null, updated.id].filter(Boolean).join(" · "),
         next: "Next: the bill grows with each charge, the nights are audited, and the departments are told.",
       });
     },

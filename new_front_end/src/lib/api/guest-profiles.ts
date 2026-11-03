@@ -46,8 +46,9 @@ export async function createGuestProfile(
 }
 
 /** The plain name, with no contact detail appended. */
-export function guestFullName(g: Pick<GuestProfileSummary, "firstName" | "lastName">) {
-  return `${g.firstName} ${g.lastName}`.trim() || "Guest";
+/** The guest's name as the desk shows it — with the title when one was given (2026-11-03). */
+export function guestFullName(g: Pick<GuestProfileSummary, "firstName" | "lastName"> & { title?: string | null }) {
+  return [g.title, g.firstName, g.lastName].filter((x) => x && String(x).trim()).join(" ").trim() || "Guest";
 }
 
 /** A guest already on file with a phone or an email — which of the two matched. */

@@ -316,7 +316,7 @@ function BeforeYouReserve({
   /* the parties and the rate */
   const party = journey?.s1Inquiry.commercialContext;
   const guest = entry.guestProfile ?? entry.inquiry?.guestProfile ?? null;
-  const guestName = [guest?.firstName, guest?.lastName].filter(Boolean).join(" ") || guest?.displayName || "the guest";
+  const guestName = [guest?.title, guest?.firstName, guest?.lastName].filter(Boolean).join(" ") || guest?.displayName || "the guest";
   const rateSource = jq?.agentRateDetail?.source ?? null;
   lines.push({
     key: "rate",

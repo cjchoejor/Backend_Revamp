@@ -85,7 +85,7 @@ export function avatarColor(seed: string): string {
 export function guestName(g?: GuestProfileName | null): string {
   if (!g) return "Guest";
   if (g.displayName?.trim()) return g.displayName.trim();
-  const full = [g.firstName, g.lastName].filter(Boolean).join(" ").trim();
+  const full = [g.title, g.firstName, g.lastName].filter(Boolean).join(" ").trim();
   return full || "Guest";
 }
 

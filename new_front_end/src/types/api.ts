@@ -60,6 +60,8 @@ export type EntryListItem = {
 
 export type GuestProfileName = {
   id: string;
+  /** Mr, Mrs, Ms … as taken at Inquiry, shown wherever the guest is named (2026-11-03). */
+  title?: string | null;
   displayName?: string | null;
   firstName?: string | null;
   lastName?: string | null;
@@ -679,6 +681,10 @@ export type EntryDetail = EntryListItem & {
     callerPhone?: string | null;
     callerEmail?: string | null;
     callerOnWhatsApp?: boolean | null;
+    /** The agency's or company's own person, kept here once a guest is named (2026-11-03). */
+    partyContactName?: string | null;
+    partyContactPhone?: string | null;
+    partyContactEmail?: string | null;
     guestProfileId?: string | null;
     /** Full Inquiry scalars come through the entry include; declared as needed. */
     sourceChannel?: string | null;

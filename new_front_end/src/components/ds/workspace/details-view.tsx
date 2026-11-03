@@ -130,6 +130,7 @@ export function DetailsView({
           </div>
           <Facts wide style={{ marginTop: 10 }}>
             <Fact k="Arriving">{[contact.contactPersonName, contact.contactPersonPhone].filter(Boolean).join(" · ")}</Fact>
+            {entry.inquiry?.partyContactName ? <Fact k="Their contact person">{[entry.inquiry.partyContactName, entry.inquiry.partyContactPhone].filter(Boolean).join(" · ")}</Fact> : null}
             <Fact k="Custodian">{custodian}</Fact>
             {g?.vipTier ? <Fact k="VIP">{g.vipTier}</Fact> : null}
           </Facts>

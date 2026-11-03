@@ -1041,6 +1041,27 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
   color: #fff !important;
 }
 
+/* A cell that takes typing looks like it (2026-11-03, operator: "it just looks like a place where
+   edits can't happen"): a white box with an edge. A figure worked out (Occ) has no box, and a table
+   that only reads, or a cell that only reads, stays plain. */
+.ds .desk-root .rct-t td input[type="text"] { box-sizing: border-box; width: 46px; margin: 4px; padding: 4px 2px; border: 1px solid var(--line-3); border-radius: 3px; background: #fff; }
+.ds .desk-root .rct-t td input[type="text"].wide { width: 72px; }
+.ds .desk-root .rct-t td input[type="text"]:hover:not([readonly]) { border-color: var(--ink-3); }
+.ds .desk-root .rct-t td input[type="text"][readonly] { border-color: transparent; background: transparent; }
+.ds .desk-root .rct-t td.warn input[type="text"]:not([readonly]) { border-color: var(--warn); }
+.ds .desk-root .rct-t td.stop input[type="text"]:not([readonly]) { border-color: var(--stop); }
+/* A meal plan switched on: its column is lit from its heading to its total, and its boxes carry the
+   accent, so it plainly waits to be filled. It flashes once as it arrives. */
+.ds .desk-root .rct:not(.ro) .rct-t td.mealcol:not(.warn):not(.stop) { background: var(--green-t); }
+.ds .desk-root .rct:not(.ro) .rct-t td.mealcol:not(.warn):not(.stop) input[type="text"] { border: 1.5px solid var(--green); font-weight: 700; }
+.ds .desk-root .rct:not(.ro) .rct-t thead tr th.mealcol { background: var(--green); color: #fff; }
+.ds .desk-root .rct:not(.ro) .rct-t tfoot td.mealcol { background: var(--green-t); color: var(--green-d); font-weight: 700; }
+.ds .desk-root .rct-chip.on { background: var(--green); border-color: var(--green); color: #fff; }
+.ds .desk-root .rct-chip.on:hover { background: var(--green-d); border-color: var(--green-d); color: #fff; }
+@keyframes rct-col-on { 0%, 45% { box-shadow: inset 0 0 0 2px var(--green-d); } 100% { box-shadow: inset 0 0 0 0 transparent; } }
+.ds .desk-root .rct-t .mealcol.just-on { animation: rct-col-on 1.2s ease-out; }
+@media (prefers-reduced-motion: reduce) { .ds .desk-root .rct-t .mealcol.just-on { animation: none; } }
+
 /* The rooms tab from Set up on reads until Change configuration is pressed (2026-10-19): no cell
    lights as if it took typing, and the cursor says it does not. */
 .ds .desk-root .rct.ro .rct-t td:focus-within { outline: none; background: inherit; }
