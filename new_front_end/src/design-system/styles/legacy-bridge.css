@@ -126,6 +126,10 @@
 .ds .desk-root .rct-save-btn.clean,
 .ds .desk-root .rct-save-btn.clean:disabled { background: var(--ok-t, #E7F3EC); border-color: var(--ok, #1E7A4F); color: var(--ok, #1E7A4F); opacity: 1; cursor: default; }
 .ds .desk-root .btn-ghost { background: #FFFFFF; color: var(--ink); border-color: var(--line-2); }
+/* The booking's discount, under the table: a button until it is set, then it says what it is. */
+.ds .desk-root .rct-disc { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+.ds .desk-root .rct-disc .btn-ghost.on { background: var(--success-soft); border-color: var(--success); color: var(--success); font-weight: 700; }
+.ds .desk-root .rct-disc .btn-ghost.on:disabled { opacity: 1; }
 /* The guest table's one act, at its bottom right (2026-10-29): green once it can be pressed — "UIappeal". */
 .ds .desk-root .id-confirm { margin-top: 12px; display: flex; align-items: center; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
 .ds .desk-root .id-confirm-note { font-size: 13.5px; color: var(--ink-3); text-align: right; }

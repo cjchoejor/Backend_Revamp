@@ -802,11 +802,9 @@ export function S2Negotiation({
               onChange={setRoomCompositions}
               discountValue={discountValue}
               discountUnit={discountUnit}
-              discountBasis={discountBasis}
               onDiscountChange={(patch) => {
                 if (patch.value !== undefined) setDiscountValue(patch.value);
                 if (patch.unit !== undefined) setDiscountUnit(patch.unit);
-                if (patch.basis !== undefined) setDiscountBasis(patch.basis);
               }}
             />
             </div>

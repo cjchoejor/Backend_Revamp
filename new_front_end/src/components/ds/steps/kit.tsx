@@ -2223,7 +2223,10 @@ export function DsDialog({
   useEffect(() => {
     if (!open || inline) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !busy) onClose();
+      if (e.key !== "Escape") return;
+      // Only the pop-up closes: a full-screen table behind it listens further up, on the window.
+      e.stopPropagation();
+      if (!busy) onClose();
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
