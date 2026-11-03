@@ -5,7 +5,8 @@
  *
  * On is the rule the desk has always run, and a setting with no row reads as on. Off means, for as
  * long as it stays off: nothing waits for that email's reply, no reply clock shows or runs out, and
- * the desk does not ask. A reply can still be noted if the guest sends one.
+ * the steps say nothing about a reply and offer no way to note one (2026-11-03, operator: "it doesn't
+ * have to show the record reply button, and also it shouldn't show awaiting reply from guest").
  *
  * Turning one off writes only the setting, never a booking, so a mistaken switch is undone by
  * flipping it back. A paper SENT while it is off is marked NOT_ASKED and stays exempt when the

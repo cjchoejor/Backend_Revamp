@@ -216,7 +216,7 @@ export async function listEntryCommunications(prisma: PrismaClient, entryId: str
         replacedBy: replaced.get(r.id)?.replacedBy ?? null,
         // Pre-computed so every frontend renders the same states rather than each re-deriving them.
         canAcknowledge:
-          !superseded && r.direction === "OUTBOUND" && r.sendStatus === "DISPATCHED" && r.acknowledgementStatus !== "RECEIVED",
+          !superseded && !notAsked && r.direction === "OUTBOUND" && r.sendStatus === "DISPATCHED" && r.acknowledgementStatus !== "RECEIVED",
         isOverdue:
           !superseded &&
           !notAsked &&
