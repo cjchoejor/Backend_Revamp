@@ -17,6 +17,7 @@
  * writes, nothing tied to a booking's step.
  */
 import { InventoryClaimState, Prisma, RoomPhysicalState, type PrismaClient } from "@prisma/client";
+import { guestDisplayName } from "../../lib/guest-display-name.js";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { findRoomBookingConflicts } from "../../lib/room-booking-conflicts.js";
@@ -75,11 +76,11 @@ export type CleanedToday = {
 
 function guestNameOfEntry(e: {
   contactPersonName?: string | null;
-  inquiry?: { guestProfile?: { firstName?: string | null; lastName?: string | null } | null; callerFirstName?: string | null; callerLastName?: string | null } | null;
+  inquiry?: { guestProfile?: { title?: string | null; firstName?: string | null; lastName?: string | null } | null; callerFirstName?: string | null; callerLastName?: string | null } | null;
 } | null): string | null {
   if (!e) return null;
   const g = e.inquiry?.guestProfile;
-  const full = [g?.firstName, g?.lastName].filter((v) => v && v.trim()).join(" ").trim();
+  const full = guestDisplayName(g);
   if (full) return full;
   const caller = [e.inquiry?.callerFirstName, e.inquiry?.callerLastName].filter((v) => v && v.trim()).join(" ").trim();
   return caller || e.contactPersonName?.trim() || null;
@@ -163,7 +164,7 @@ export async function listHousekeepingRooms(prisma: PrismaClient, opts: { now?: 
     select: {
       id: true,
       contactPersonName: true,
-      inquiry: { select: { callerFirstName: true, callerLastName: true, guestProfile: { select: { firstName: true, lastName: true } } } },
+      inquiry: { select: { callerFirstName: true, callerLastName: true, guestProfile: { select: { title: true, firstName: true, lastName: true } } } },
     },
   });
   const leftName = new Map(leftEntries.map((e) => [e.id, guestNameOfEntry(e)]));

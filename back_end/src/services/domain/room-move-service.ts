@@ -1,4 +1,5 @@
 import { Prisma, Stage, type PrismaClient } from "@prisma/client";
+import { guestDisplayName } from "../../lib/guest-display-name.js";
 import { AppError, NotFoundError, PolicyGateBlockedError, ValidationError } from "../../lib/errors.js";
 import { allocateReadableId } from "../../lib/readable-id.js";
 import { findRoomBookingConflicts } from "../../lib/room-booking-conflicts.js";
@@ -108,7 +109,7 @@ function errorParts(e: unknown): { message: string; code: string | null } {
 }
 
 function guestName(g: { firstName: string | null; lastName: string | null } | null | undefined) {
-  return [g?.firstName, g?.lastName].filter(Boolean).join(" ").trim() || null;
+  return guestDisplayName(g) || null;
 }
 
 const iso = (d: Date) => d.toISOString().slice(0, 10);
@@ -135,7 +136,7 @@ async function loadLegBooking(prisma: PrismaClient, entryId: string) {
       actualCheckOutDate: true,
       inquiryId: true,
       noShowCutoffReachedAt: true,
-      guestProfile: { select: { firstName: true, lastName: true } },
+      guestProfile: { select: { title: true, firstName: true, lastName: true } },
       reservation: { select: { frozenCheckInDate: true, frozenCheckOutDate: true } },
       stayExtensionRequests: { where: { state: { in: ["REQUESTED", "BILLED", "PAID"] } }, select: { id: true, state: true } },
       negotiationAmendmentRequests: { where: { state: "REQUESTED" }, select: { id: true } },
@@ -897,7 +898,7 @@ type MoveRow = Prisma.RoomMoveGetPayload<{
   include: {
     legs: {
       include: {
-        entry: { select: { id: true; currentStage: true; guestProfile: { select: { firstName: true; lastName: true } } } };
+        entry: { select: { id: true; currentStage: true; guestProfile: { select: { title: true; firstName: true; lastName: true } } } };
         fromRoom: { select: { roomNumber: true } };
         toRoom: { select: { roomNumber: true } };
         heldDocuments: true;
@@ -910,7 +911,7 @@ const moveInclude = {
   legs: {
     orderBy: { order: "asc" as const },
     include: {
-      entry: { select: { id: true, currentStage: true, guestProfile: { select: { firstName: true, lastName: true } } } },
+      entry: { select: { id: true, currentStage: true, guestProfile: { select: { title: true, firstName: true, lastName: true } } } },
       fromRoom: { select: { roomNumber: true } },
       toRoom: { select: { roomNumber: true } },
       heldDocuments: { orderBy: { heldAt: "desc" as const } },
@@ -1047,7 +1048,7 @@ async function runLeg(
   const leg = await prisma.roomMoveLeg.findUniqueOrThrow({ where: { id: legId } });
   const others = await prisma.roomMoveLeg.findMany({
     where: { moveId, id: { not: legId }, entryId: { not: leg.entryId } },
-    include: { entry: { select: { guestProfile: { select: { firstName: true, lastName: true } } } } },
+    include: { entry: { select: { guestProfile: { select: { title: true, firstName: true, lastName: true } } } } },
   });
   // The partner named on this leg's papers: the booking leaving the room it enters, else any other.
   const partner = others.find((p) => p.fromRoomId === leg.toRoomId) ?? others[0] ?? null;

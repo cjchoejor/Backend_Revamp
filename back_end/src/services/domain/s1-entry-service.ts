@@ -944,12 +944,12 @@ export async function listEntries(
         take: 3,
       },
       guestProfile: {
-        select: { id: true, firstName: true, lastName: true, email: true, phone: true },
+        select: { id: true, title: true, firstName: true, lastName: true, email: true, phone: true },
       },
       inquiry: {
         select: {
           guestProfile: {
-            select: { id: true, firstName: true, lastName: true, email: true, phone: true },
+            select: { id: true, title: true, firstName: true, lastName: true, email: true, phone: true },
           },
         },
       },

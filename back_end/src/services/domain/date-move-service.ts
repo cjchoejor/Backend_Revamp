@@ -1,4 +1,5 @@
 import type { PrismaClient } from "@prisma/client";
+import { guestDisplayName } from "../../lib/guest-display-name.js";
 import { Prisma, Stage } from "@prisma/client";
 import { AppError, NotFoundError, ValidationError } from "../../lib/errors.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
@@ -148,7 +149,7 @@ async function loadEntry(prisma: PrismaClient, entryId: string) {
   const entry = await prisma.entry.findUnique({
     where: { id: entryId },
     include: {
-      guestProfile: { select: { firstName: true, lastName: true } },
+      guestProfile: { select: { title: true, firstName: true, lastName: true } },
       inquiry: { select: { callerFirstName: true, callerLastName: true } },
       segments: { orderBy: { segmentNumber: "desc" }, take: 1 },
       quotations: { orderBy: { createdAt: "desc" } },
@@ -204,7 +205,7 @@ function negotiationPicture(
 
 export async function previewDateMove(prisma: PrismaClient, actor: Actor, input: DateMoveRequest): Promise<DateMovePreview> {
   const entry = await loadEntry(prisma, input.entryId);
-  const guest = [entry.guestProfile?.firstName, entry.guestProfile?.lastName].filter(Boolean).join(" ").trim() ||
+  const guest = guestDisplayName(entry.guestProfile) ||
     [entry.inquiry?.callerFirstName, entry.inquiry?.callerLastName].filter(Boolean).join(" ").trim() || null;
   const stage = String(entry.currentStage);
   const refusals: string[] = [];

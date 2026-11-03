@@ -1,4 +1,5 @@
 import type { PrismaClient } from "@prisma/client";
+import { guestDisplayName } from "../../lib/guest-display-name.js";
 import { Prisma, Stage } from "@prisma/client";
 import { AppError, NotFoundError, ValidationError } from "../../lib/errors.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
@@ -205,7 +206,7 @@ export async function loadSource(prisma: PrismaClient, entryId: string) {
   const entry = await prisma.entry.findUnique({
     where: { id: entryId },
     include: {
-      guestProfile: { select: { id: true, firstName: true, lastName: true } },
+      guestProfile: { select: { id: true, title: true, firstName: true, lastName: true } },
       inquiry: true,
       segments: { orderBy: { segmentNumber: "desc" } },
       quotations: { orderBy: { createdAt: "desc" } },
@@ -251,7 +252,7 @@ async function planSplit(prisma: PrismaClient, actor: Actor, input: RoomSplitReq
   const notes: string[] = [];
   const stage = entry.currentStage;
   const guest =
-    [entry.guestProfile?.firstName, entry.guestProfile?.lastName].filter(Boolean).join(" ").trim() ||
+    guestDisplayName(entry.guestProfile) ||
     [entry.inquiry?.callerFirstName, entry.inquiry?.callerLastName].filter(Boolean).join(" ").trim() ||
     null;
 

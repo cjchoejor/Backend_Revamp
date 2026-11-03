@@ -47,7 +47,7 @@ const listSelect = {
   createdAt: true,
   updatedAt: true,
   guestProfile: {
-    select: { id: true, firstName: true, lastName: true, email: true, phone: true, vipTier: true, nationality: true },
+    select: { id: true, title: true, firstName: true, lastName: true, email: true, phone: true, vipTier: true, nationality: true },
   },
   inquiry: {
     select: {
@@ -384,7 +384,7 @@ export async function listDeskAlerts(prisma: Db, q: { from: Date; to: Date; limi
           closedAs: true,
           checkInDate: true,
           checkOutDate: true,
-          guestProfile: { select: { firstName: true, lastName: true } },
+          guestProfile: { select: { title: true, firstName: true, lastName: true } },
           inquiry: { select: { callerTitle: true, callerFirstName: true, callerLastName: true, callerPhone: true, callerEmail: true } },
         },
       })

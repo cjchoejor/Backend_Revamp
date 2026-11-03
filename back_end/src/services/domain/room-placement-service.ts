@@ -19,6 +19,7 @@
  * their rooms).
  */
 import type { PrismaClient, Stage } from "@prisma/client";
+import { guestDisplayName } from "../../lib/guest-display-name.js";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { addUtcDays, listNightYmdsUtc, nightsBetweenUtc, utcDateOnly, ymdUtc } from "../../lib/stay-dates.js";
 import {
@@ -236,7 +237,7 @@ export async function buildWorld(prisma: PrismaClient, input: { from: Date; to: 
 
     const bookingName = new Map<string, string>();
     for (const b of chart.bookings) {
-      const guest = [b.guestProfile?.firstName, b.guestProfile?.lastName].filter(Boolean).join(" ");
+      const guest = guestDisplayName(b.guestProfile);
       const caller = [b.inquiry?.callerFirstName, b.inquiry?.callerLastName].filter(Boolean).join(" ");
       bookingName.set(b.entryId, `${guest || caller || b.partyName || "a booking"} (${b.entryId})`);
     }

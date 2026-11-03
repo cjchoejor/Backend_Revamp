@@ -74,7 +74,7 @@ async function activeLegs(db: Db): Promise<ActiveLeg[]> {
       nights: true,
       toNights: true,
       status: true,
-      entry: { select: { inquiryId: true, guestProfile: { select: { firstName: true, lastName: true } } } },
+      entry: { select: { inquiryId: true, guestProfile: { select: { title: true, firstName: true, lastName: true } } } },
     },
   });
 }

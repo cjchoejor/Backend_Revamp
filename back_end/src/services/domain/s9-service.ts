@@ -1,4 +1,5 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
+import { guestDisplayName } from "../../lib/guest-display-name.js";
 import { CommissionDueStatus, EntryStatus, FolioLineType, FolioState, InvoiceState, InvoiceType, Stage } from "@prisma/client";
 import { allocateReadableId, READABLE_ID_PREFIXES, allocateFolioLineId } from "../../lib/readable-id.js";
 import { AppError, MissingConfigurationError, NotFoundError, ValidationError } from "../../lib/errors.js";
@@ -163,7 +164,7 @@ export async function resolveInvoiceRecipient(
     where: { id: entryId },
     select: {
       contactPersonName: true,
-      guestProfile: { select: { firstName: true, lastName: true, email: true } },
+      guestProfile: { select: { title: true, firstName: true, lastName: true, email: true } },
       inquiry: {
         select: {
           travelAgent: { select: { displayName: true, contactEmail: true } },
@@ -173,7 +174,7 @@ export async function resolveInvoiceRecipient(
     },
   });
   const guestName =
-    [entry?.guestProfile?.firstName, entry?.guestProfile?.lastName].filter(Boolean).join(" ").trim() ||
+    guestDisplayName(entry?.guestProfile) ||
     entry?.contactPersonName?.trim() ||
     "Guest";
   const party = entry?.inquiry?.travelAgent ?? entry?.inquiry?.corporateAccount ?? null;
@@ -1514,12 +1515,12 @@ async function sendPostStayChargeNoticeBestEffort(
         checkOutDate: true,
         actualCheckOutDate: true,
         contactPersonName: true,
-        guestProfile: { select: { firstName: true, lastName: true, email: true } },
+        guestProfile: { select: { title: true, firstName: true, lastName: true, email: true } },
       },
     });
     if (!entry) return { sent: false, to: null, reason: "ENTRY_NOT_FOUND" };
     const guestName =
-      [entry.guestProfile?.firstName, entry.guestProfile?.lastName].filter(Boolean).join(" ").trim() || entry.contactPersonName?.trim() || "Guest";
+      guestDisplayName(entry.guestProfile) || entry.contactPersonName?.trim() || "Guest";
     const guestPays = d.billingModel === "GUEST_PAY";
     const recipient = guestPays
       ? entry.guestProfile?.email?.trim()

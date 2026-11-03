@@ -123,7 +123,7 @@ export async function lookupCallers(
         exclude,
       );
 
-  const guestSelect = { id: true, firstName: true, lastName: true, phone: true, email: true, nationality: true } as const;
+  const guestSelect = { id: true, title: true, firstName: true, lastName: true, phone: true, email: true, nationality: true } as const;
   const partySelect = {
     id: true,
     displayName: true,
