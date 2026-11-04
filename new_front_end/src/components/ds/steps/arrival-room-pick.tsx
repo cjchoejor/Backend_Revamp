@@ -61,10 +61,8 @@ export function ArrivalRoomDialog({
   });
   const data = q.data ?? null;
   const [toRoom, setToRoom] = useState<string | null>(null);
-  const [reason, setReason] = useState("");
   useEffect(() => {
     setToRoom(null);
-    setReason("");
   }, [roomId]);
   const chosen: ArrivalRoomChoice | null = data?.choices.find((c) => c.roomId === toRoom) ?? null;
   const handedOut = data?.mode === "ROOM_CHANGE";
@@ -75,10 +73,10 @@ export function ArrivalRoomDialog({
       if (oneNight) {
         // That night in the new room, every other night kept as it is.
         const perNight = roomNights.map((d) => ({ date: d, roomId: d === night ? toRoom! : roomId! }));
-        return changeBookingRoom(session!, entry.id, { fromRoomId: roomId!, perNight, reason: reason.trim(), makeWay: true });
+        return changeBookingRoom(session!, entry.id, { fromRoomId: roomId!, perNight, makeWay: true });
       }
       if (handedOut) {
-        return changeBookingRoom(session!, entry.id, { fromRoomId: roomId!, toRoomId: toRoom!, reason: reason.trim(), makeWay: true });
+        return changeBookingRoom(session!, entry.id, { fromRoomId: roomId!, toRoomId: toRoom!, makeWay: true });
       }
       return chooseBookingRoom(session!, entry.id, { fromRoomId: roomId!, toRoomId: toRoom! });
     },
@@ -99,7 +97,7 @@ export function ArrivalRoomDialog({
     onError: (e) => toastRefusal(e, "The room could not be given"),
   });
 
-  const why = !chosen ? "pick a room first" : !chosen.available ? "that room cannot be given" : handedOut && !reason.trim() ? "type why first" : null;
+  const why = !chosen ? "pick a room first" : !chosen.available ? "that room cannot be given" : null;
 
   return (
     <DsDialog
@@ -184,12 +182,6 @@ export function ArrivalRoomDialog({
         <p className="sm" style={{ marginTop: 10 }}>
           <b>{fmtDay(night!)} only</b> — the other {roomNights.length - 1 === 1 ? "night stays" : `${roomNights.length - 1} nights stay`} in this room.
         </p>
-      ) : null}
-      {handedOut ? (
-        <div className="field" style={{ marginTop: 10 }}>
-          <label>Why</label>
-          <input className="input" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="the guest asked for this room" />
-        </div>
       ) : null}
     </DsDialog>
   );

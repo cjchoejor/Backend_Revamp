@@ -149,8 +149,7 @@ export function RoomsTable({
   /** The night picked in the table's night list when the room was double-clicked — that night only (2026-10-29). */
   const [openNight, setOpenNight] = useState<string | null>(null);
   const [faults, setFaults] = useState<string[]>([]);
-  const [reasonOpen, setReasonOpen] = useState(false);
-  const [reason, setReason] = useState("");
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const numberOf = (id: string) =>
     (entry.roomAssignments ?? []).find((a) => a.roomId === id)?.room?.roomNumber ?? byId.get(id)?.roomNumber ?? id.slice(0, 6);
   const nameOf = (id: string) => quietName(id) ?? `Room ${numberOf(id)}`;
@@ -212,15 +211,14 @@ export function RoomsTable({
     ]);
 
   const saveM = useMutation({
-    mutationFn: (reason: string) =>
+    mutationFn: () =>
       changeBookingRoom(session!, entry.id, {
         // No room moves: the from-room only anchors the walk. The table IS the new basis.
         fromRoomId: chosen ?? ids[0],
-        reason,
         roomCompositions: draft ?? seed,
       }),
     onSuccess: (res) => {
-      setReasonOpen(false);
+      setConfirmOpen(false);
       setEditing(false);
       setDraft(null);
       changed();
@@ -354,7 +352,7 @@ export function RoomsTable({
         }
         onChange={editing ? setDraft : () => { /* read-first until "Change configuration" is pressed */ }}
         onFaultsChange={editing ? setFaults : undefined}
-        onSave={editing ? () => setReasonOpen(true) : undefined}
+        onSave={editing ? () => setConfirmOpen(true) : undefined}
         saveLabel="Save & price it again"
         saving={saveM.isPending}
         unsaved={unsaved}
@@ -384,23 +382,18 @@ export function RoomsTable({
       )}
 
       <DsDialog
-        open={reasonOpen}
-        onClose={() => setReasonOpen(false)}
+        open={confirmOpen}
+        onClose={() => setConfirmOpen(false)}
         register="commit"
         title="Set the booking up again"
         caseLines={[entry.id]}
         busy={saveM.isPending}
         footer={
           <>
-            <Button kind="quiet" state={saveM.isPending ? "inert" : "default"} onClick={() => setReasonOpen(false)}>
+            <Button kind="quiet" state={saveM.isPending ? "inert" : "default"} onClick={() => setConfirmOpen(false)}>
               Not now
             </Button>
-            <Button
-              state={saveM.isPending ? "working" : reason.trim() ? "default" : "inert"}
-              workingLabel="Pricing…"
-              title={reason.trim() ? undefined : "type the reason to continue"}
-              onClick={() => saveM.mutate(reason.trim())}
-            >
+            <Button className="go" state={saveM.isPending ? "working" : "default"} workingLabel="Pricing…" onClick={() => saveM.mutate()}>
               Price it again
             </Button>
           </>
@@ -412,10 +405,6 @@ export function RoomsTable({
           the guest only if you send it.
           {inHouse ? " The nights already slept keep the setup they were billed on." : ""}
         </p>
-        <div className="field">
-          <label>Why</label>
-          <input className="input" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="what the guest asked for" autoFocus />
-        </div>
       </DsDialog>
 
     </>

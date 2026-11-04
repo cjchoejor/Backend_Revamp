@@ -1101,7 +1101,7 @@ export async function changeBookingRoom(
     makeWay?: boolean;
     /** …or a room per night, S1-table style (may name the from-room on kept nights)… */
     perNight?: Array<{ date: string; roomId: string }>;
-    reason: string;
+    reason?: string;
     /** …or NEITHER, with `adjustments` alone: a setup-only change on the from-room itself
      *  (2026-08-19 — extra beds / meals re-priced on the same room, same governed journey). */
     adjustments?: RoomChangeAdjustments;

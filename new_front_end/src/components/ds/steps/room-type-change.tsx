@@ -61,12 +61,10 @@ export function RoomTypeDialog({
   const data = q.data ?? null;
   const [typeId, setTypeId] = useState<string | null>(null);
   const [toRoom, setToRoom] = useState<string | null>(null);
-  const [reason, setReason] = useState("");
   // A fresh start each time a room is opened.
   useEffect(() => {
     setTypeId(null);
     setToRoom(null);
-    setReason("");
   }, [roomId]);
 
   const chosen: RoomTypeOption | null = data?.options.find((o) => o.roomTypeId === typeId) ?? null;
@@ -86,7 +84,6 @@ export function RoomTypeDialog({
         ...(oneNight
           ? { perNight: roomNights.map((d) => ({ date: d, roomId: d === night ? target! : roomId! })) }
           : { toRoomId: target! }),
-        reason: reason.trim(),
         systemChosen: data?.beforeArrival === true,
       }),
     onSuccess: (res) => {
@@ -110,9 +107,7 @@ export function RoomTypeDialog({
       ? `no ${chosen.name} is free for these nights`
       : needsFom
         ? "another room type is the FOM's call"
-        : !reason.trim()
-          ? "type why first"
-          : null;
+        : null;
 
   return (
     <DsDialog
@@ -210,10 +205,6 @@ export function RoomTypeDialog({
           Another room type changes the price — the FOM&rsquo;s call.
         </p>
       ) : null}
-      <div className="field" style={{ marginTop: 10 }}>
-        <label>Why</label>
-        <input className="input" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="the guest asked for a bigger room" />
-      </div>
     </DsDialog>
   );
 }
