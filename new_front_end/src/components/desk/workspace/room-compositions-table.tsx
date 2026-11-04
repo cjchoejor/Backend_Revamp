@@ -724,7 +724,7 @@ export function RoomCompositionsTable({
     queryKey: ["rate-reference", entryId, rateRefRoomsKey],
     queryFn: () => getRateReference(session!, entryId!, sealedRoomIds),
     enabled: !!session && !!entryId,
-    staleTime: 5 * 60_000,
+    staleTime: 30_000,
   });
   const rateRef = rateRefQuery.data ?? null;
   const refByRoomType = useMemo(

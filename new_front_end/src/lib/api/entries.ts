@@ -899,6 +899,8 @@ export type EntryRateReference = {
   serviceChargeRate: number;
   party: { type: "TRAVEL_AGENT" | "CORPORATE"; id: string; name: string } | null;
   roomTypes: RoomTypeRateReference[];
+  /** Meal plans charged at a figure of their own, not what their meals add up to. */
+  plansOff?: Array<{ key: string; rate: string | null; meals: string | null }>;
 };
 
 export async function getRateReference(session: Session, entryId: string, roomIds?: string[]) {
@@ -1324,7 +1326,7 @@ export async function amendNegotiationConfiguration(
       /** Rooms by type (2026-10-29): the counts each night; the system chooses the rooms. */
       byType?: { perNight: Array<{ date: string; types: Array<{ roomTypeId: string; count: number }> }>; fixedRoomIds?: string[] };
     };
-    reason: string;
+    reason?: string;
     expectedVersion?: number;
   },
 ) {
@@ -1362,7 +1364,7 @@ export async function changeStayInPlace(
     /** Picked by type (2026-10-29): `perNight` is the rooms the system chose for `byType`, as shown. */
     rooms: { configurationId: string; perNight: Array<{ date: string; roomIds: string[] }>; byType?: { perNight: Array<{ date: string; types: Array<{ roomTypeId: string; count: number }> }>; fixedRoomIds?: string[] }; };
     roomCompositions: RoomCompositionInput[];
-    reason: string;
+    reason?: string;
     expectedVersion?: number;
   },
 ) {

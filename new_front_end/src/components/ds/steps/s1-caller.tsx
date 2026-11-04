@@ -9,7 +9,8 @@
  * 1 · The caller — whoever rang: a phone or an email (an OTA booking needs neither), "on WhatsApp?"
  *     whenever there is a phone, and a title and name that may wait.
  * 5 · Wrap up — once the rooms are chosen: the guest who is STAYING (the caller, or someone else
- *     — one form, which finds them on file by their phone or email), the caller's name if it was
+ *     — one form, which finds them on file by their phone or email; an agency or a company books for
+ *     someone else, so it goes straight to that form), the caller's name if it was
  *     not taken at the start, who is arriving (not asked when someone else is named — they are). The booking leaves Inquiry only with the guest staying named. The guest's
  *     preference and the desk's notes live in the booking's Guest requests and Notes tabs
  *     (2026-10-12) — not repeated here.
@@ -33,7 +34,7 @@ import { fmtDay } from "@/lib/ds/format";
 import { hasAnyContact } from "@/lib/desk/workspace";
 import type { EntryDetail } from "@/types/api";
 import { Choice, DsDialog, StepCard, toastRefusal, useFlowUnsaved, useRefreshEntry } from "./kit";
-import { GuestLine, NATIONALITIES, PHONE_CODES, PhoneInput, PickList, PresetOrCustom, ReqMark, callerIsTheParty, joinPhone, splitStoredPhone } from "./new-inquiry-parts";
+import { GuestLine, NATIONALITIES, PHONE_CODES, PhoneInput, PickList, PresetOrCustom, ReqMark, cameInAsOf, channelDef, joinPhone, splitStoredPhone } from "./new-inquiry-parts";
 
 export const CALLER_TITLES = ["", "Mr", "Ms", "Mrs", "Dr", "Dasho", "Lyonpo", "Aum"];
 
@@ -44,6 +45,16 @@ type Inq = NonNullable<EntryDetail["inquiry"]>;
 /** Whether this enquiry was recorded before callers were kept — its guest was the caller then. */
 function legacy(inq: Inq | null | undefined) {
   return !!inq && !(inq.callerPhone || inq.callerEmail || inq.callerFirstName || inq.callerLastName || inq.callerTitle || inq.callerOnWhatsApp != null);
+}
+
+/**
+ * A travel agent or a company rings for someone else, whoever at the agency it was (2026-11-04,
+ * operator: "because it's a travel agent, of course they'd book for someone else"): Wrap up asks for
+ * the guest directly, and neither offers the caller as the guest nor asks for the caller's name.
+ */
+function bookedByParty(inq: Inq) {
+  if (inq.travelAgentId || inq.corporateAccountId || inq.travelAgent || inq.corporateAccount) return true;
+  return !!channelDef(cameInAsOf(inq.sourceChannel, inq.notes, null, inq.cameInAs))?.party;
 }
 
 /* ------------------------------------------------------------------ 1 · the caller */
@@ -198,11 +209,11 @@ export function TheCaller({ entry, editable }: { entry: EntryDetail; editable: b
           </div>
           <div className="field">
             <label>First name</label>
-            <input className="input" value={f.firstName} readOnly={!editable} placeholder="can wait for Wrap up" onChange={(e) => set({ firstName: e.target.value })} />
+            <input className="input" value={f.firstName} readOnly={!editable} placeholder={bookedByParty(inq) ? undefined : "can wait for Wrap up"} onChange={(e) => set({ firstName: e.target.value })} />
           </div>
           <div className="field">
             <label>Last name</label>
-            <input className="input" value={f.lastName} readOnly={!editable} placeholder="can wait for Wrap up" onChange={(e) => set({ lastName: e.target.value })} />
+            <input className="input" value={f.lastName} readOnly={!editable} placeholder={bookedByParty(inq) ? undefined : "can wait for Wrap up"} onChange={(e) => set({ lastName: e.target.value })} />
           </div>
         </div>
       </div>
@@ -272,16 +283,15 @@ export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; edita
   const inq = (entry.inquiry ?? {}) as Inq;
   const named = entry.guestProfile ?? null;
   const contact = entry as EntryDetail & { contactPersonName?: string | null; contactPersonPhone?: string | null };
-  // A caller who is the agency or the company itself (2026-10-27) has a name already, and is never
-  // the guest staying: Wrap up neither asks for a caller's name nor offers "The caller".
   const partyName = inq.travelAgent?.displayName ?? inq.corporateAccount?.displayName ?? null;
-  const callerIsParty = callerIsTheParty(inq, partyName);
-  const callerHasName = callerIsParty || !!(inq.callerFirstName?.trim() && inq.callerLastName?.trim());
+  const byParty = bookedByParty(inq);
+  const callerHasName = byParty || !!(inq.callerFirstName?.trim() && inq.callerLastName?.trim());
 
   // The guest staying: the caller by default; once named, shown as named until "Change".
   const [changing, setChanging] = useState(false);
   const choosing = editable && (!named || changing);
-  const [choice, setChoice] = useState<GuestChoice>(callerIsParty ? "OTHER" : "CALLER");
+  const [picked, setChoice] = useState<GuestChoice>("CALLER");
+  const choice: GuestChoice = byParty ? "OTHER" : picked;
   const [nationality, setNationality] = useState(NATIONALITIES[0]);
   // The caller's name, when it was not taken at the start.
   const [cTitle, setCTitle] = useState("");
@@ -348,7 +358,7 @@ export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; edita
     !onRecordName.trim() ||
     (!!named && (sameWords(onRecordName, guestFullName({ title: named.title, firstName: named.firstName ?? "", lastName: named.lastName ?? "" })) || sameWords(onRecordName, `${named.firstName ?? ""} ${named.lastName ?? ""}`)));
   const callerNameNow = callerNameOf(inq) ?? (cFirst.trim() && cLast.trim() ? [cTitle, cFirst.trim(), cLast.trim()].filter(Boolean).join(" ") : "");
-  const arrivingFollowsCaller = choosing && choice === "CALLER" && !callerIsParty && arrivingWasTheGuest;
+  const arrivingFollowsCaller = choosing && choice === "CALLER" && arrivingWasTheGuest;
   const seedName = arrivingFollowsCaller ? callerNameNow || onRecordName : onRecordName;
   const seedPhone = arrivingFollowsCaller ? (inq.callerPhone ?? "") : onRecordPhone;
   const [arrName, setArrName] = useState(seedName);
@@ -617,7 +627,7 @@ export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; edita
                 />
               </div>
             ) : null}
-            {callerIsParty ? null : (
+            {byParty ? null : (
               <Choice
                 options={[
                   ["CALLER", callerWord ? `The caller — ${callerWord}` : "The caller"],

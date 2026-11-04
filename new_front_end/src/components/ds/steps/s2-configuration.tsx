@@ -156,7 +156,6 @@ export function ChangeConfiguration({
   const [children, setChildren] = useState(String(entry.childCount ?? 0));
   const [ages, setAges] = useState<string[]>(() => (entry.childAges ?? []).map(String));
   const [rooms, setRooms] = useState(String(entry.numberOfRooms ?? 1));
-  const [reason, setReason] = useState("");
   /**
    * The rooms by TYPE, the way the Inquiry step picks them (2026-10-29, operator: "it doesn't show
    * the availability chart like shown in S1 when I ask the house — adopt the same style for this
@@ -423,7 +422,6 @@ export function ChangeConfiguration({
           ? { configurationId: configId!, perNight: typePicks.perNight, byType: typePicks.byType }
           : { configurationId: configId!, perNight: pickedPerNight },
         roomCompositions: comps,
-        reason: reason.trim(),
         expectedVersion: entry.version,
       }),
     onSuccess: (o) => {
@@ -449,7 +447,6 @@ export function ChangeConfiguration({
   const save = useMutation({
     mutationFn: () => {
       const body: Parameters<typeof amendNegotiationConfiguration>[2] = {
-        reason: reason.trim(),
         expectedVersion: entry.version,
       };
       if (datesMoved) body.dates = { checkInDate: checkIn, checkOutDate: checkOut };
@@ -526,7 +523,6 @@ export function ChangeConfiguration({
 
   const nothingMoved = !partyMoved && !roomsMoved && !datesMoved;
   const blocked =
-    !reason.trim() ||
     nothingMoved ||
     !checkIn ||
     startsBeforeToday ||
@@ -795,25 +791,47 @@ export function ChangeConfiguration({
         </section>
       ) : null}
 
-      {/* ------------------------------------------------------------------ the save */}
-      <section>
-        <div className="field">
-          <label>Why the change</label>
-          <input
-            className="input"
-            value={reason}
-            placeholder="the guest's party shrank — two rooms no longer needed"
-            onChange={(e) => setReason(e.target.value)}
-          />
-        </div>
-        <div className="row-acts" style={{ marginTop: 10 }}>
+      {/*
+        * ------------------------------------------------------------------ the save
+        * At the panel's bottom right, in view while the rooms are chosen, and it speaks up the moment
+        * they are done (2026-11-04, operator: "as soon as the user finishes choosing the rooms, it
+        * should prompt the user to save the configuration … right bottom corner"). No "why" is asked
+        * any more: the summary on the record says what changed, and who changed it.
+        */}
+      <section className="cfg-savebar">
+        {needsApproval ? (
+          <p className="warn-ink sm cfg-save-note">This goes to the FOM — nothing changes on the booking until they approve it.</p>
+        ) : null}
+        <div className="cfg-save-row">
+          {!blocked ? (
+            <span className="cfg-save-prompt" role="status">
+              All in — {inPlace ? "change the stay" : needsApproval ? "send it to the FOM" : "save the configuration"}
+            </span>
+          ) : null}
+          <Help label="About saving the change">
+            {inPlace ? (
+              <p>
+                The booking comes back to this step with a new pass: the quotation priced from the table, the rooms blocked again and — from
+                Reserve on — reserved again, the new voucher held for you to send. The money already received stays on the bill.
+              </p>
+            ) : (
+              <p>
+                Saving retires any quotation priced on the old configuration — price it again before moving to Set up. A provisional block moves
+                to the new rooms and nights and keeps its deadline.
+              </p>
+            )}
+            <p>A date change is kept on its own line in the booking&rsquo;s history: the old dates, the new ones and who moved them.</p>
+            <p>When the guest is already holding a quotation, the change goes to the FOM, and nothing changes until they approve it.</p>
+          </Help>
           <Button
             kind="primary"
-            className={inPlace && !blocked ? "go" : undefined}
+            className={!blocked ? "go" : undefined}
             onClick={() => (inPlace ? change.mutate() : save.mutate())}
             state={blocked ? "inert" : "default"}
             reason={
-              nothingMoved
+              typeMode && !!result && !typePicks && !needsRepick && !needsNightPick
+                ? `Set ${plural(roomCount, "room")} for every night in the grid`
+                : nothingMoved
                 ? "Nothing has changed yet"
                 : startsBeforeToday
                   ? "The stay can start today or later"
@@ -841,9 +859,7 @@ export function ChangeConfiguration({
                         : "Pick the rooms for every night"
                       : inPlace && tableFaults.length > 0
                         ? "Put right what the table lists first"
-                        : !reason.trim()
-                    ? "Type why the configuration is changing"
-                    : !agesReady
+                        : !agesReady
                       ? "Every child needs an age"
                       : roomsMoved && !configId
                         ? "Ask the house before saving rooms"
@@ -862,28 +878,7 @@ export function ChangeConfiguration({
                   ? "Send for the FOM's approval"
                   : "Save the configuration"}
           </Button>
-          <Help label="About saving the change">
-            <p>The reason goes on the booking&rsquo;s record with your name.</p>
-            {inPlace ? (
-              <p>
-                The booking comes back to this step with a new pass: the quotation priced from the table, the rooms blocked again and — from
-                Reserve on — reserved again, the new voucher held for you to send. The money already received stays on the bill.
-              </p>
-            ) : (
-              <p>
-                Saving retires any quotation priced on the old configuration — price it again before moving to Set up. A provisional block moves
-                to the new rooms and nights and keeps its deadline.
-              </p>
-            )}
-            <p>A date change is kept on its own line in the booking&rsquo;s history: the old dates, the new ones, who moved them and why.</p>
-            <p>When the guest is already holding a quotation, the change goes to the FOM, and nothing changes until they approve it.</p>
-          </Help>
         </div>
-        {needsApproval ? (
-          <p className="warn-ink sm" style={{ marginTop: 8, fontWeight: 600 }}>
-            This goes to the FOM — nothing changes on the booking until they approve it.
-          </p>
-        ) : null}
       </section>
     </div>
   );
@@ -946,7 +941,7 @@ export function WaitingConfigurationChange({ entry }: { entry: EntryDetail }) {
       </div>
       <div className="cfg-wait-b">
         <b className="cfg-wait-s">{waiting.summary}</b>
-        <span className="sm">&ldquo;{waiting.reason}&rdquo;</span>
+        {waiting.reason && waiting.reason !== waiting.summary ? <span className="sm">&ldquo;{waiting.reason}&rdquo;</span> : null}
       </div>
       {elevated ? (
         <>

@@ -192,7 +192,9 @@ export function RoomsByType({
     }
   }, [savedKey, saved]);
   const key = canon(counts, fixed, nights);
-  const dirty = key !== (savedKey ?? canon({}, [], nights));
+  // In the change panel "not saved" means other rooms than the booking holds, however they were first
+  // picked: a pick by number carries over as its counts and is no change until the desk changes them.
+  const dirty = noSave && saved ? key !== canon(saved.counts, saved.fixed, nights) : key !== (savedKey ?? canon({}, [], nights));
   useFlowUnsaved(flowKey ?? "house", flowKey != null && editable && dirty, "The rooms picked saved");
 
   const cell = (d: string, t: string) => counts[d]?.[t] ?? 0;

@@ -52,6 +52,15 @@ const BLANK = {
 type Draft = typeof BLANK;
 
 const PLAN_KEYS = ["cpRate", "mapLunchRate", "mapDinnerRate", "apRate"] as const;
+/** Each plan, and the meals it stands in for. */
+const PLAN_WORDS: Record<(typeof PLAN_KEYS)[number], { label: string; meals: string }> = {
+  cpRate: { label: "CP", meals: "breakfast" },
+  mapLunchRate: { label: "MAP+L", meals: "breakfast + lunch" },
+  mapDinnerRate: { label: "MAP+D", meals: "breakfast + dinner" },
+  apRate: { label: "AP", meals: "all three meals" },
+};
+/** The meals as a key, to tell a package just opened from one whose meals have changed. */
+const mealsKey = (d: Pick<Draft, "breakfastRate" | "lunchRate" | "dinnerRate">) => `${d.breakfastRate}|${d.lunchRate}|${d.dinnerRate}`;
 /** The rates the manager may type with service charge and GST in them. */
 const WITH_TAX_FIELDS: Array<{ key: keyof Draft; label: string }> = [
   { key: "roomBaseRate", label: "Room rate" },
@@ -136,11 +145,16 @@ export function RatePackagesEditor({ owner, ownerLabel }: { owner: PackageOwner;
   const [ovWithTax, setOvWithTax] = useState(false);
 
   /* ----- what the form fills in as it is typed (2026-11-03, operator) ------
-   * The meal plans start at the sum of the meals they cover, and stay editable: a plan typed by hand,
-   * or already on the package, is left alone. A rate the manager has with service charge and GST in
-   * it goes in the box above the fields, and the rate without them lands in the field. Every figure
-   * is the server's. */
+   * The meal plans start at the sum of the meals they cover and follow them, and stay editable: a plan
+   * typed by hand, or one on the package at a figure of its own, is left alone and says so below the
+   * plans. (2026-11-04: a plan on the package was always left alone, so Bhutan INC's Season had the tax
+   * taken out of its meals and kept it in its plans, and the bill taxed the meals twice.) A rate the
+   * manager has with service charge and GST in it goes in the box above the fields, and the rate
+   * without them lands in the field. Every figure is the server's. */
   const handPicked = useRef(new Set<string>());
+  // The meals as the package was opened: until they change, opening it rewrites nothing on it.
+  const openedMeals = useRef<string | null>(null);
+  const [planSums, setPlanSums] = useState<PackageRatesWorkedOut["planRates"]>(null);
   const fromWithTax = useRef(new Set<string>());
   // What each box was last filled from, so a figure corrected by hand survives the next one typed.
   const appliedGross = useRef<Record<string, string>>({});
@@ -157,6 +171,8 @@ export function RatePackagesEditor({ owner, ownerLabel }: { owner: PackageOwner;
     handPicked.current = new Set();
     fromWithTax.current = new Set();
     appliedGross.current = {};
+    openedMeals.current = null;
+    setPlanSums(null);
     setWithTax(false);
     setGross({});
     setWorked(null);
@@ -164,7 +180,9 @@ export function RatePackagesEditor({ owner, ownerLabel }: { owner: PackageOwner;
   const startEdit = (p: RatePackageAdmin) => {
     resetExtras();
     const d = draftFrom(p);
-    handPicked.current = new Set(PLAN_KEYS.filter((k) => d[k] !== ""));
+    const matches = new Set((p.planCheck ?? []).filter((c) => c.matches).map((c) => c.key));
+    handPicked.current = new Set(PLAN_KEYS.filter((k) => d[k] !== "" && !matches.has(k)));
+    openedMeals.current = mealsKey(d);
     setDraft(d);
     setEditing(p.id);
   };
@@ -177,14 +195,21 @@ export function RatePackagesEditor({ owner, ownerLabel }: { owner: PackageOwner;
   useEffect(() => {
     if (!session) return;
     const meals = { breakfast: numOrNull(draft.breakfastRate), lunch: numOrNull(draft.lunchRate), dinner: numOrNull(draft.dinnerRate) };
+    const key = mealsKey(draft);
     let stale = false;
     const t = window.setTimeout(async () => {
       const r = await workOutPackageRates(session, { meals }).catch(() => null);
       if (stale || !r?.planRates) return;
       const plans = r.planRates;
+      setPlanSums(plans);
+      const justOpened = openedMeals.current === key;
+      if (!justOpened) openedMeals.current = null;
       setDraft((d) => {
         const next = { ...d };
-        for (const k of PLAN_KEYS) if (!handPicked.current.has(k)) next[k] = plans[k] ?? "";
+        for (const k of PLAN_KEYS) {
+          if (handPicked.current.has(k) || (justOpened && d[k] !== "")) continue;
+          next[k] = plans[k] ?? "";
+        }
         return next;
       });
     }, 300);
@@ -238,6 +263,13 @@ export function RatePackagesEditor({ owner, ownerLabel }: { owner: PackageOwner;
   });
   const roomTypes: RoomTypeAdmin[] = roomTypesQuery.data?.items ?? [];
 
+  // The desk reads these rates on its own screens: a change here shows there at once.
+  const refreshDesk = () => {
+    for (const k of [["rate-reference"], ["price-pick"], ["quotation-live-preview"], ["lookup", "rate-packages"], ["lookup-rate-packages"]]) {
+      void queryClient.invalidateQueries({ queryKey: k });
+    }
+  };
+
   const setOverrideM = useMutation({
     mutationFn: async (packageId: string) => {
       const rate = Number.parseFloat(ovRate);
@@ -252,6 +284,7 @@ export function RatePackagesEditor({ owner, ownerLabel }: { owner: PackageOwner;
       setOvRate("");
       setOvWithTax(false);
       void queryClient.invalidateQueries({ queryKey: ["admin", "rate-packages"] });
+      refreshDesk();
     },
     onError: (e: unknown) => toast.error(e instanceof ApiError ? e.message : (e as Error).message),
   });
@@ -260,11 +293,28 @@ export function RatePackagesEditor({ owner, ownerLabel }: { owner: PackageOwner;
     onSuccess: () => {
       toast.success("Override removed");
       void queryClient.invalidateQueries({ queryKey: ["admin", "rate-packages"] });
+      refreshDesk();
     },
     onError: (e: unknown) => toast.error(e instanceof ApiError ? e.message : "Could not remove the override"),
   });
 
-  const refresh = () => void queryClient.invalidateQueries({ queryKey });
+  const refresh = () => {
+    void queryClient.invalidateQueries({ queryKey });
+    refreshDesk();
+  };
+
+  /** The plans at a figure other than their meals, as the form stands. */
+  const plansOff = PLAN_KEYS.filter((k) => {
+    const sum = planSums?.[k];
+    const typed = draft[k].trim();
+    return sum != null && typed !== "" && Math.abs(Number(typed) - Number(sum)) > 0.05;
+  });
+  const usePlanSums = () => {
+    const sums = planSums;
+    if (!sums) return;
+    for (const k of plansOff) handPicked.current.delete(k);
+    setDraft((d) => ({ ...d, ...Object.fromEntries(plansOff.map((k) => [k, sums[k] ?? ""])) }));
+  };
 
   const saveM = useMutation({
     mutationFn: () =>
@@ -285,8 +335,12 @@ export function RatePackagesEditor({ owner, ownerLabel }: { owner: PackageOwner;
         isDefault: draft.isDefault,
         notes: draft.notes.trim() || null,
       }),
-    onSuccess: () => {
+    onSuccess: (saved) => {
       toast.success(editing ? `"${draft.name}" saved as a new version` : `Package "${draft.name}" created`);
+      const n = saved.bookingsFollowing ?? 0;
+      const kept = saved.bookingsKept ?? 0;
+      if (n > 0) toast.info(`${n} booking${n === 1 ? "" : "s"} with no quotation yet now use${n === 1 ? "s" : ""} these rates.`, { duration: 9000 });
+      if (kept > 0) toast.info(`${kept} booking${kept === 1 ? "" : "s"} already quoted keep${kept === 1 ? "s" : ""} the earlier rates.`, { duration: 9000 });
       resetForm();
       refresh();
     },
@@ -325,7 +379,8 @@ export function RatePackagesEditor({ owner, ownerLabel }: { owner: PackageOwner;
             </>
           )}{" "}
           Saving a package whose name already exists makes a new version and closes the old one, so quotes made under the earlier rates can still be worked
-          out. Leave a box empty for "not negotiated". An empty meal plan falls back to the sum of its meals; 0 means deliberately free.
+          out. A booking with no quotation yet moves to the new rates at once; one already quoted keeps the rates it was quoted on. Leave a box empty for "not
+          negotiated". An empty meal plan falls back to the sum of its meals; 0 means deliberately free.
         </Help>
       </p>
 
@@ -357,6 +412,17 @@ export function RatePackagesEditor({ owner, ownerLabel }: { owner: PackageOwner;
                   <td>
                     {p.name}
                     {p.isDefault && <span className="admin-tag admin-tag-ok ml-2">default</span>}
+                    {p.planCheck?.some((c) => c.differs) ? (
+                      <span
+                        className="admin-tag admin-tag-warn ml-2"
+                        title={p.planCheck
+                          .filter((c) => c.differs)
+                          .map((c) => `${PLAN_WORDS[c.key].label} ${c.rate} · its meals come to ${c.meals}`)
+                          .join("\n")}
+                      >
+                        meal plans differ from their meals
+                      </span>
+                    ) : null}
                     <button
                       type="button"
                       className="admin-muted ml-2 text-[10px] underline"
@@ -571,7 +637,7 @@ export function RatePackagesEditor({ owner, ownerLabel }: { owner: PackageOwner;
         <div>
           <p className="admin-eyebrow mb-2">
             Meal plans — charged instead of the meals they cover
-            <Help label="Meal plan rates">They start at the sum of the meals above. Type over any of them: a figure you type stays as you typed it.</Help>
+            <Help label="Meal plan rates">They start at the sum of the meals above and follow them when the meals change. Type over any of them: a figure you type stays as you typed it.</Help>
           </p>
           <div className="grid gap-4 md:grid-cols-4">
             <Field label="CP" hint="breakfast" value={draft.cpRate} onChange={(v) => { handPicked.current.add("cpRate"); setDraft({ ...draft, cpRate: v }); }} />
@@ -579,6 +645,24 @@ export function RatePackagesEditor({ owner, ownerLabel }: { owner: PackageOwner;
             <Field label="MAP+D" hint="breakfast + dinner" value={draft.mapDinnerRate} onChange={(v) => { handPicked.current.add("mapDinnerRate"); setDraft({ ...draft, mapDinnerRate: v }); }} />
             <Field label="AP" hint="all three" value={draft.apRate} onChange={(v) => { handPicked.current.add("apRate"); setDraft({ ...draft, apRate: v }); }} />
           </div>
+          {plansOff.length > 0 ? (
+            <div className="admin-panel mt-3 border-l-4 border-amber-500 p-3 text-sm" role="status">
+              <p>
+                <strong>{plansOff.length === 1 ? "This meal plan is" : "These meal plans are"} not what the meals add up to.</strong> The bill charges the plan&rsquo;s
+                figure in place of the meals, with service charge and GST added.
+              </p>
+              <ul className="my-2">
+                {plansOff.map((k) => (
+                  <li key={k}>
+                    <b>{PLAN_WORDS[k].label}</b> {money(draft[k], draft.currency)} · {PLAN_WORDS[k].meals} come{PLAN_WORDS[k].meals === "breakfast" ? "s" : ""} to <b>{money(planSums?.[k], draft.currency)}</b>
+                  </li>
+                ))}
+              </ul>
+              <button type="button" className="admin-btn" onClick={usePlanSums}>
+                Use what the meals add up to
+              </button>
+            </div>
+          ) : null}
         </div>
 
         <div className="grid gap-4 md:grid-cols-3">
