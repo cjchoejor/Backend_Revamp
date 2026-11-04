@@ -5,6 +5,7 @@ import { resolveRatePackageForBooking, type RatePackageBreakdown } from "../../l
 import { resolveRatePlanPricingForS2Quotation } from "../../policies/08-pricing-rate-plan/p19-rate-plan-resolution-for-s2-quotation.js";
 import { resolveChargeRates } from "../infrastructure/compute-stay-charges.js";
 import { resolveActiveHouseTariff } from "../../lib/house-tariff.js";
+import { plansAgainstMeals, type PlanRateKey } from "../../lib/room-composition.js";
 
 /**
  * Rate reference for the S2 composition editors (2026-08-01).
@@ -61,6 +62,8 @@ export type EntryRateReference = {
   /** The linked agent/corporate whose rate card supplies the rates, when any. */
   party: { type: "TRAVEL_AGENT" | "CORPORATE"; id: string; name: string } | null;
   roomTypes: RoomTypeRateReference[];
+  /** Meal plans charged at a figure of their own, not what their meals add up to (2026-11-04). */
+  plansOff: Array<{ key: PlanRateKey; rate: string | null; meals: string | null }>;
 };
 
 export async function buildEntryRateReference(
@@ -198,5 +201,20 @@ export async function buildEntryRateReference(
     });
   }
 
-  return { entryId: entry.id, currency, nights, gstRate, serviceChargeRate, party, roomTypes };
+  // The meal rates are the booking's, the same on every room type.
+  const first = roomTypes[0];
+  const plansOff = first
+    ? plansAgainstMeals({
+        breakfastRate: first.breakfastRate,
+        lunchRate: first.lunchRate,
+        dinnerRate: first.dinnerRate,
+        cpRate: first.cpRate,
+        mapLunchRate: first.mapLunchRate,
+        mapDinnerRate: first.mapDinnerRate,
+        apRate: first.apRate,
+      })
+        .filter((p) => p.differs)
+        .map(({ key, rate, meals }) => ({ key, rate, meals }))
+    : [];
+  return { entryId: entry.id, currency, nights, gstRate, serviceChargeRate, party, roomTypes, plansOff };
 }

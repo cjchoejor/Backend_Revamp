@@ -10,10 +10,10 @@
  * from the package that was active then. Room-type overrides are carried forward automatically —
  * an admin adjusting a room rate should not silently lose the per-type exceptions.
  */
-import { Prisma, RatePackageScope, type PrismaClient } from "@prisma/client";
+import { EntryStatus, Prisma, RatePackageScope, type PrismaClient } from "@prisma/client";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { writeAdminAuditEvent } from "../../lib/admin/write-admin-audit.js";
-import { planRatesFromMeals } from "../../lib/room-composition.js";
+import { planRatesFromMeals, plansAgainstMeals } from "../../lib/room-composition.js";
 import { resolveChargeRates } from "../infrastructure/compute-stay-charges.js";
 
 type DecimalInput = number | string;
@@ -71,7 +71,7 @@ function ownerWhere(owner: PackageOwner) {
 /** Currently-active packages for a party (or the house COMMON one), default first. */
 export async function listPackages(prisma: PrismaClient, owner: PackageOwner) {
   const now = new Date();
-  return prisma.ratePackage.findMany({
+  const rows = await prisma.ratePackage.findMany({
     where: {
       ...ownerWhere(owner),
       effectiveFrom: { lte: now },
@@ -80,6 +80,7 @@ export async function listPackages(prisma: PrismaClient, owner: PackageOwner) {
     orderBy: [{ isDefault: "desc" }, { name: "asc" }],
     include: { overrides: { include: { roomType: { select: { code: true, name: true } } } } },
   });
+  return rows.map((p) => ({ ...p, planCheck: plansAgainstMeals(p) }));
 }
 
 /** Every version ever, newest first — the audit view. */
@@ -162,6 +163,22 @@ export async function savePackage(
       });
     }
 
+    /**
+     * A booking with no quotation yet has agreed no rates, so it moves to this version at once
+     * (2026-11-04, operator: "where it hasn't yet generated a quotation, it should pull those
+     * rates"). A booking with one keeps the version it was quoted on. The rate sits on the enquiry,
+     * so a trip with one stay already quoted keeps its rates for its other stays too.
+     */
+    const live = { status: { in: [EntryStatus.ACTIVE, EntryStatus.PARKED] } };
+    let bookingsFollowing = 0;
+    let bookingsKept = 0;
+    if (prior) {
+      const notQuoted = { ratePackageId: prior.id, entries: { none: { quotations: { some: {} } } } };
+      bookingsFollowing = await tx.entry.count({ where: { ...live, inquiry: notQuoted } });
+      await tx.inquiry.updateMany({ where: notQuoted, data: { ratePackageId: created.id } });
+      bookingsKept = await tx.entry.count({ where: { ...live, inquiry: { ratePackageId: prior.id } } });
+    }
+
     // Only one default per owner.
     if (created.isDefault) {
       await tx.ratePackage.updateMany({
@@ -184,10 +201,13 @@ export async function savePackage(
         priorPackageId: prior?.id ?? null,
         changedFields: changed,
         overridesCarriedForward: prior?.overrides.length ?? 0,
+        bookingsFollowing,
+        bookingsKept,
       },
     });
 
-    return tx.ratePackage.findUniqueOrThrow({ where: { id: created.id }, include: { overrides: true } });
+    const saved = await tx.ratePackage.findUniqueOrThrow({ where: { id: created.id }, include: { overrides: true } });
+    return { ...saved, planCheck: plansAgainstMeals(saved), bookingsFollowing, bookingsKept };
   });
 }
 

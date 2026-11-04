@@ -745,3 +745,28 @@ export function planRatesFromMeals(meals: {
     apRate: b && l && d ? b.add(l).add(d).toFixed(2) : null,
   };
 }
+
+const PLAN_KEYS = ["cpRate", "mapLunchRate", "mapDinnerRate", "apRate"] as const;
+export type PlanRateKey = (typeof PLAN_KEYS)[number];
+type RateLike = Prisma.Decimal | number | string | null | undefined;
+
+/**
+ * Each meal plan against what its meals add up to (2026-11-04). A plan is charged in place of its
+ * meals, so one left behind when its meals change charges a figure nobody chose: Bhutan INC's Season
+ * kept plans with service charge and GST in them after its meals had both taken out, and the bill
+ * taxed the meals twice. Five paisa is rounding (a figure worked back by hand), not a difference. A
+ * plan with no rate, or with a meal not set, has nothing to be set against.
+ */
+export function plansAgainstMeals(
+  p: { breakfastRate: RateLike; lunchRate: RateLike; dinnerRate: RateLike } & Record<PlanRateKey, RateLike>,
+): Array<{ key: PlanRateKey; rate: string | null; meals: string | null; matches: boolean; differs: boolean }> {
+  const dec = (v: RateLike) => (v == null || v === "" ? null : new Prisma.Decimal(v));
+  const sums = planRatesFromMeals({ breakfast: dec(p.breakfastRate), lunch: dec(p.lunchRate), dinner: dec(p.dinnerRate) });
+  return PLAN_KEYS.map((key) => {
+    const rate = dec(p[key]);
+    const meals = sums[key];
+    const comparable = rate != null && meals != null;
+    const close = comparable && rate.sub(meals).abs().lte(0.05);
+    return { key, rate: rate ? rate.toFixed(2) : null, meals, matches: close, differs: comparable && !close };
+  });
+}
