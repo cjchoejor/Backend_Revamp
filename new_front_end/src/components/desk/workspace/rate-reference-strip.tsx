@@ -39,6 +39,8 @@ const FLOOR: React.CSSProperties = {
 
 /** The add-on rate columns. Rendered only when at least one type carries a value — without a
  *  rate card they are ALL null, and four columns of dashes were most of the strip's noise. */
+const PLAN_LABEL: Record<string, string> = { cpRate: "CP", mapLunchRate: "MAP+L", mapDinnerRate: "MAP+D", apRate: "AP" };
+
 const ADD_ON_COLS = [
   ["extraBedRate", "Extra bed"],
   ["breakfastRate", "B'fast"],
@@ -71,7 +73,7 @@ export function RateReferenceStrip({
     queryKey: roomsKey ? ["rate-reference", entryId, roomsKey] : ["rate-reference", entryId],
     queryFn: () => getRateReference(session!, entryId, roomIds),
     enabled: !!session,
-    staleTime: 5 * 60_000,
+    staleTime: 30_000,
   });
 
   const ref = query.data;
@@ -162,6 +164,13 @@ export function RateReferenceStrip({
           ) : null}
         </div>
       ))}
+      {/* A plan at a figure of its own is charged in place of the meals above, so the meals alone would not explain the bill (2026-11-04). */}
+      {ref.plansOff?.length ? (
+        <div style={{ padding: "4px 0", borderTop: "1px dashed var(--line, #e3d9c8)", color: "var(--warning, #8f5300)", fontWeight: 600 }}>
+          Charged in place of their meals:{" "}
+          {ref.plansOff.map((p) => `${PLAN_LABEL[p.key] ?? p.key} ${moneyOrDash(p.rate, ref.currency)} (the meals come to ${moneyOrDash(p.meals, ref.currency)})`).join(" · ")}
+        </div>
+      ) : null}
     </div>
   );
 }

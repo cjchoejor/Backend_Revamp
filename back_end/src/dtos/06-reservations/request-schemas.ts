@@ -132,9 +132,8 @@ export const roomChangeRequestSchema = z
       .array(z.object({ date: z.string().min(8), roomId: z.string().min(1) }))
       .max(120)
       .optional(),
-    // Any non-empty reason — one word is fine (2026-08-14: the old min-3 kept the desk's swap
-    // button dead on short reasons like "AC" with nothing explaining why).
-    reason: z.string().trim().min(1, "A reason for the room change is required"),
+    // Optional since 2026-11-04: the desk no longer asks why (the record says what changed).
+    reason: z.string().trim().max(2000).optional(),
     /** The desk changed the room's type and the system chose the room (2026-10-29). */
     systemChosen: z.boolean().optional(),
     // At Arrival a room another booking holds only as the system's choice is taken: that booking

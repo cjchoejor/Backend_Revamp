@@ -285,6 +285,13 @@
 .ds .cfg-n:not(.desk-root *) { display: block; font-size: var(--t-sm); color: var(--ink-2); letter-spacing: .02em; }
 .ds .cfg-change section:not(.desk-root *) { display: block; }
 .ds .cfg-change section + section:not(.desk-root *) { border-top: 1px solid var(--line); padding-top: var(--s3); }
+/* The save, at the panel's bottom right and in view while the rooms are chosen (2026-11-04). */
+.ds .cfg-change section.cfg-savebar:not(.desk-root *) { position: sticky; bottom: 0; z-index: 6; margin: 0 calc(var(--s4) * -1) calc(var(--s4) * -1); padding: var(--s3) var(--s4); background: var(--surface-2); border-top: 1px solid var(--line-2); border-radius: 0 0 var(--r-card) var(--r-card); }
+.ds .cfg-save-row:not(.desk-root *) { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--s3); }
+.ds .cfg-save-row .control-wrap:not(.desk-root *) { align-items: flex-end; text-align: right; }
+.ds .cfg-save-prompt:not(.desk-root *) { color: var(--success); font-weight: 700; }
+.ds .cfg-save-note:not(.desk-root *) { margin: 0 0 var(--s2); text-align: right; font-weight: 600; }
+.ds .cfg-change .rooms-saverow:not(.desk-root *) { border-bottom: 0; padding-bottom: 0; }
 /* A refusal of the party just typed — the same loud treatment the negotiation table uses. */
 .ds .cfg-stop:not(.desk-root *) { margin: 8px 0 0; padding: 6px 10px; border: 1px solid var(--danger); border-radius: var(--r-control); background: var(--danger-soft); color: var(--danger); font-size: var(--t-sm); font-weight: 600; }
 /* A stay being moved (2026-10-12) — the old dates and the new, said where the dates are typed. */

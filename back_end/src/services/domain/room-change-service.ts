@@ -1064,7 +1064,8 @@ async function changeRoomToNewSegmentInner(
      * nights the guest keeps. Must cover exactly the substitution nights.
      */
     perNight?: Array<{ date: string; roomId: string }>;
-    reason: string;
+    /** Optional since 2026-11-04: the desk no longer asks why. A room move or an extension still gives its words. */
+    reason?: string;
     /**
      * The desk changed the room's TYPE and the system chose the room (2026-10-29, operator: "double
      * click on the room … change to another room type, where the system can offer free room types").
@@ -1130,8 +1131,12 @@ async function changeRoomToNewSegmentInner(
     moveContext?: RoomMoveWalkContext | null;
   },
 ): Promise<RoomChangeOutcome> {
-  const reason = input.reason?.trim();
-  if (!reason) throw new ValidationError("reason is required");
+  // With no words given, the walk's own lines say where it was done, and nothing that reads as the
+  // guest's or the desk's reason is written (2026-11-04, operator: "we'll not use that anymore").
+  const why = input.reason?.trim() || null;
+  const reason = why ?? "changed at the desk";
+  const whyColon = why ? `: ${why}` : "";
+  const whyParen = why ? ` (${why})` : "";
   if (!input.fromRoomId?.trim()) throw new ValidationError("fromRoomId is required");
   const hasPerNightForm = Array.isArray(input.perNight) && input.perNight.length > 0;
   const hasSetup =
@@ -2441,7 +2446,7 @@ async function changeRoomToNewSegmentInner(
                 deficientAtAssignment: toRoom.isDeficient === true,
                 startDate: ext.priorCheckOutDate,
                 endDate: ctx.checkOut,
-                notes: `Stay extension: moves from Room ${ctx.fromRoom.roomNumber} on ${ext.priorCheckOutDate.toISOString().slice(0, 10)}: ${reason}`,
+                notes: `Stay extension: moves from Room ${ctx.fromRoom.roomNumber} on ${ext.priorCheckOutDate.toISOString().slice(0, 10)}${whyColon}`,
               },
             });
           }
@@ -2522,8 +2527,8 @@ async function changeRoomToNewSegmentInner(
               // (Key stamps stay on the slept-nights row — the key service reads per ROOM across
               // every row, so the same-room split never reads as a second key.)
               notes: setupOnly
-                ? `Setup change on Room ${ctx.fromRoom.roomNumber} from tonight: ${reason}`
-                : `Room change from ${ctx.fromRoom.roomNumber}: ${reason}`,
+                ? `Setup change on Room ${ctx.fromRoom.roomNumber} from tonight${whyColon}`
+                : `Room change from ${ctx.fromRoom.roomNumber}${whyColon}`,
             },
           });
         }
@@ -2766,18 +2771,18 @@ async function changeRoomToNewSegmentInner(
                   shiftDays: ctx.shiftDays,
                   priceMode: input.dateShift!.priceMode,
                   priceModes: input.dateShift!.priceModes ?? null,
-                  reason,
+                  reason: why,
                 },
-                ...(roomChangeMarker ? { roomChange: { ...roomChangeMarker, reason } } : {}),
+                ...(roomChangeMarker ? { roomChange: { ...roomChangeMarker, reason: why } } : {}),
               }
             : {}),
           ...(isDateShift ? {} : isExtension
-            ? { stayExtension: { requestId: input.extension!.requestId, newCheckOutDate: ctx.checkOut.toISOString(), reason }, ...(roomChangeMarker ? { roomChange: { ...roomChangeMarker, reason } } : {}) }
+            ? { stayExtension: { requestId: input.extension!.requestId, newCheckOutDate: ctx.checkOut.toISOString(), reason: why }, ...(roomChangeMarker ? { roomChange: { ...roomChangeMarker, reason: why } } : {}) }
             : isSplitOff
-              ? { splitOff: { roomIds: [...splitSet], to: input.splitOff!.toLabel, reason } }
+              ? { splitOff: { roomIds: [...splitSet], to: input.splitOff!.toLabel, reason: why } }
             : setupOnly
-              ? { setupChange: { roomId: input.fromRoomId, adjustments: input.adjustments ?? null, reason, ...(repairSeating ? { seatingRepair: true } : {}) } }
-              : { roomChange: { fromRoomId: input.fromRoomId, toRoomId, toRoomIds: distinctTargets, reason, ...(move?.moveId ? { moveId: move.moveId } : {}) } }),
+              ? { setupChange: { roomId: input.fromRoomId, adjustments: input.adjustments ?? null, reason: why, ...(repairSeating ? { seatingRepair: true } : {}) } }
+              : { roomChange: { fromRoomId: input.fromRoomId, toRoomId, toRoomIds: distinctTargets, reason: why, ...(move?.moveId ? { moveId: move.moveId } : {}) } }),
           recalledFromSegmentNumber: currentSegment.segmentNumber,
         } as Prisma.InputJsonValue,
         resultSet: (ctx.sealedConfig?.resultSet ?? {}) as Prisma.InputJsonValue,
@@ -2794,18 +2799,18 @@ async function changeRoomToNewSegmentInner(
   try {
     const draft: QuotationDraftInput = {
       notes: isSplitOff
-        ? `Room ${targetsLabel} (${reason})`
+        ? `Room ${targetsLabel}${whyParen}`
         : isDateShift
-        ? `Stay moved: ${targetsLabel} (${reason})`
+        ? `Stay moved: ${targetsLabel}${whyParen}`
         : isExtension
-        ? `Stay extended to ${ctx.checkOut.toISOString().slice(0, 10)} (${reason})`
+        ? `Stay extended to ${ctx.checkOut.toISOString().slice(0, 10)}${whyParen}`
         : repairSeating
-        ? `Guest seating restored (${reason})`
+        ? `Guest seating restored${whyParen}`
         : setupOnly
-          ? `Setup change on Room ${ctx.fromRoom.roomNumber} (${reason})`
+          ? `Setup change on Room ${ctx.fromRoom.roomNumber}${whyParen}`
           : move
-            ? `Room move${move.moveId ? ` ${move.moveId}` : ""}: ${ctx.fromRoom.roomNumber} → ${targetsLabel}${move.partnerLabel ? ` (switched with ${move.partnerLabel})` : ""} (${reason})`
-            : `Room change: ${ctx.fromRoom.roomNumber} → ${targetsLabel} (${reason})`,
+            ? `Room move${move.moveId ? ` ${move.moveId}` : ""}: ${ctx.fromRoom.roomNumber} → ${targetsLabel}${move.partnerLabel ? ` (switched with ${move.partnerLabel})` : ""}${whyParen}`
+            : `Room change: ${ctx.fromRoom.roomNumber} → ${targetsLabel}${whyParen}`,
       ...(newCompositions ? { roomCompositions: newCompositions } : {}),
       ...(priorDiscount ? { requestedDiscount: priorDiscount } : {}),
       actorLevel: effectiveLevel,
@@ -3001,7 +3006,7 @@ async function changeRoomToNewSegmentInner(
           stageContext: Stage.S3,
           inquiryId: entry.inquiryId,
           entryId: input.entryId,
-          payload: { entryId: input.entryId, fromRoomId: input.fromRoomId, toRoomId, toRoomIds: distinctTargets, reason },
+          payload: { entryId: input.entryId, fromRoomId: input.fromRoomId, toRoomId, toRoomIds: distinctTargets, reason: why },
           createdBy: actor.actorId,
         },
       }).catch(() => {});
@@ -3145,11 +3150,11 @@ async function changeRoomToNewSegmentInner(
       await recordCommunicationAcknowledgement(prisma, voucherComm.id, actor, {
         method: "VERBAL",
         verbatimNote: isSplitOff
-          ? `Room ${targetsLabel} at the guest's request: ${reason}. The rest of the stay is unchanged, so the guest's answer to the earlier voucher stands.`
+          ? `Room ${targetsLabel} at the guest's request${whyColon}. The rest of the stay is unchanged, so the guest's answer to the earlier voucher stands.`
           : isDateShift
           ? ctx.trimmed
-            ? `The stay was shortened (${datesLabel}) — the other nights went to bookings of their own at the guest's request: ${reason}. The guest keeps the price agreed for the nights kept.`
-            : `The stay moved to other dates (${datesLabel}${dateRoomMap.size ? `, rooms ${datePairsLabel}` : ""}): ${reason}. ${
+            ? `The stay was shortened (${datesLabel}) — the other nights went to bookings of their own at the guest's request${whyColon}. The guest keeps the price agreed for the nights kept.`
+            : `The stay moved to other dates (${datesLabel}${dateRoomMap.size ? `, rooms ${datePairsLabel}` : ""})${whyColon}. ${
               [input.dateShift!.priceMode, ...Object.values(input.dateShift!.priceModes ?? {})].includes("NEW_DATES")
                 ? `Priced at the new dates where chosen. The guest agreed: ${input.dateShift!.guestAgreedNote ?? "(no note)"}`
                 : "The guest keeps the price agreed. The move itself is the guest's answer to the re-issued voucher."
@@ -3157,14 +3162,14 @@ async function changeRoomToNewSegmentInner(
           : move
           ? move.priceMode === "NEW_TYPE" && !sameType
             ? `Room moved by the hotel (${move.moveId ?? "room move"}${move.partnerLabel ? `, switched with ${move.partnerLabel}` : ""}): ${ctx.fromRoom.roomNumber} → ${targetsLabel}, re-priced at the new room type. The guest agreed: ${move.guestAgreedNote ?? "(no note)"}`
-            : `Room moved by the hotel (${move.moveId ?? "room move"}${move.partnerLabel ? `, switched with ${move.partnerLabel}` : ""}): ${ctx.fromRoom.roomNumber} → ${targetsLabel}. ${reason}. The stay's terms are unchanged apart from the room, so the guest's answer to the earlier voucher stands.`
+            : `Room moved by the hotel (${move.moveId ?? "room move"}${move.partnerLabel ? `, switched with ${move.partnerLabel}` : ""}): ${ctx.fromRoom.roomNumber} → ${targetsLabel}.${why ? ` ${why}.` : ""} The stay's terms are unchanged apart from the room, so the guest's answer to the earlier voucher stands.`
           : isExtension
-          ? `Guest asked to extend the stay to ${ctx.checkOut.toISOString().slice(0, 10)}: ${reason}. The paid interim invoice and the request itself are the guest's answer to the re-issued voucher.`
+          ? `Guest asked to extend the stay to ${ctx.checkOut.toISOString().slice(0, 10)}${whyColon}. The paid interim invoice and the request itself are the guest's answer to the re-issued voucher.`
           : repairSeating
-          ? `Guest seating restored on the booking (${reason}) — no commercial change asked by the guest; the re-issued voucher restates the same stay.`
+          ? `Guest seating restored on the booking${whyParen} — no commercial change asked by the guest; the re-issued voucher restates the same stay.`
           : setupOnly
-          ? `Guest asked for the setup change on Room ${ctx.fromRoom.roomNumber}: ${reason}. The change itself is the guest's answer to the re-issued voucher.`
-          : `Guest requested the room change (${ctx.fromRoom.roomNumber} → ${targetsLabel}): ${reason}. The change itself is the guest's answer to the re-issued voucher.`,
+          ? `Guest asked for the setup change on Room ${ctx.fromRoom.roomNumber}${whyColon}. The change itself is the guest's answer to the re-issued voucher.`
+          : `Guest requested the room change (${ctx.fromRoom.roomNumber} → ${targetsLabel})${whyColon}. The change itself is the guest's answer to the re-issued voucher.`,
       });
     }
   } catch {
@@ -3367,7 +3372,7 @@ async function changeRoomToNewSegmentInner(
               fromRoomId: input.fromRoomId,
               toRoomId,
               setupOnly,
-              reason,
+              reason: why,
               compressedPer: "SIG-S6 §102 / SIG-S7 §42",
             },
             createdBy: actor.actorId,

@@ -136,7 +136,7 @@ export const negotiationAmendmentRequestSchema = z
         message: "Name the rooms — roomId, roomIds, perNight or byType.",
       })
       .optional(),
-    reason: z.string().trim().min(1, "A reason is required.").max(500),
+    reason: z.string().trim().max(500).optional(),
     expectedVersion: z.coerce.number().int().optional(),
   })
   .refine((b) => !!b.party || !!b.rooms || !!b.dates, {
@@ -183,7 +183,7 @@ export const changeStayInPlaceRequestSchema = z.object({
           .optional(),
   }),
   roomCompositions: z.array(roomCompositionInputSchema).min(1).max(60),
-  reason: z.string().trim().min(1, "Type why the stay is changing.").max(500),
+  reason: z.string().trim().max(500).optional(),
   expectedVersion: z.coerce.number().int().optional(),
 });
 export type ChangeStayInPlaceRequestDto = z.infer<typeof changeStayInPlaceRequestSchema>;

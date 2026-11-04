@@ -1229,6 +1229,11 @@ export type RatePackageAdmin = {
   notes: string | null;
   createdBy: string;
   overrides?: RatePackageOverride[];
+  /** Each meal plan against what its meals add up to: the server's reading, never worked out here. */
+  planCheck?: Array<{ key: "cpRate" | "mapLunchRate" | "mapDinnerRate" | "apRate"; rate: string | null; meals: string | null; matches: boolean; differs: boolean }>;
+  /** On a save: the live bookings with no quotation that moved to this version, and those that keep the earlier one. */
+  bookingsFollowing?: number;
+  bookingsKept?: number;
 };
 
 /** Owner: exactly one id, or neither for the COMMON house package. */

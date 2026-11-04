@@ -105,7 +105,8 @@ export type NegotiationAmendmentInput = {
     /** INTERNAL ONLY — the booking rooms already placed (the in-place change); never on the HTTP body. */
     bookingRooms?: BookingRoom[];
   };
-  reason: string;
+  /** Optional since 2026-11-04: the desk no longer asks why (the summary says what changed). */
+  reason?: string;
   expectedVersion?: number;
 };
 
@@ -268,7 +269,7 @@ async function amendNegotiationConfigurationInner(
   /** Set only by `decideNegotiationAmendmentRequest` — an approval never re-queues itself. */
   opts?: { applyingRequestId?: string },
 ): Promise<NegotiationAmendmentOutcome> {
-  if (!input?.reason?.trim()) throw new ValidationError("A reason is required to change the configuration.");
+  const why = input?.reason?.trim() || null;
   if (!input.party && !input.rooms && !input.dates) {
     throw new ValidationError("Nothing to change — send the dates, the party, the rooms, or any of them.");
   }
@@ -564,7 +565,7 @@ async function amendNegotiationConfigurationInner(
           stageContext: Stage.S2,
           inquiryId: entry.inquiryId,
           entryId,
-          payload: { priorState: q.state, reason: input.reason.trim(), referenceNumber: q.referenceNumber },
+          payload: { priorState: q.state, reason: why, referenceNumber: q.referenceNumber },
           createdBy: actor.actorId,
         });
       }
@@ -599,7 +600,7 @@ async function amendNegotiationConfigurationInner(
     // must be REPORTED, not turned into a failure that hides a change which has happened.
     try {
       await releaseSpeculativeHold(prisma, entryId, activeHold.id, actor, {
-        releaseReason: `${datesChanged ? "Dates" : "Rooms"} changed at Negotiation — ${input.reason.trim()}`,
+        releaseReason: `${datesChanged ? "Dates" : "Rooms"} changed at Negotiation${why ? ` — ${why}` : ""}`,
         internalReMark: true,
       });
       const anchor = newRoomIds[0] ?? null;
@@ -610,7 +611,7 @@ async function amendNegotiationConfigurationInner(
           const placed = await placeSpeculativeHold(prisma, entryId, actor, {
             roomId: anchor,
             ttlSeconds: secondsLeft,
-            commercialBasis: activeHold.notes ?? `Re-marked after a configuration change — ${input.reason.trim()}`,
+            commercialBasis: activeHold.notes ?? `Re-marked after a configuration change${why ? ` — ${why}` : ""}`,
             notes: datesChanged
               ? "Re-placed over the new nights; the original deadline stands."
               : "Re-placed over the new rooms; the original deadline stands.",
@@ -741,7 +742,7 @@ async function amendNegotiationConfigurationInner(
       requestedBy: actor.actorId,
       authorisedBy: actor.actorId,
       authorityBasis: `GUEST_COMPOSITION_CHANGE · ${actor.actorLevel}`,
-      reason: input.reason.trim(),
+      reason: why ?? summary,
       newTermsSummary: summary,
       priorTermsRef: quotationsInvalidated[0]?.referenceNumber,
       stageAtAmendment: Stage.S2,
@@ -761,7 +762,7 @@ async function amendNegotiationConfigurationInner(
     inquiryId: entry.inquiryId,
     entryId,
     payload: {
-      reason: input.reason.trim(),
+      reason: why,
       summary,
       partyChanged,
       roomsChanged,
@@ -806,7 +807,7 @@ async function amendNegotiationConfigurationInner(
       inquiryId: entry.inquiryId,
       entryId,
       payload: {
-        reason: input.reason.trim(),
+        reason: why,
         via: "NEGOTIATION_AMENDMENT",
         from: {
           checkInDate: before.checkIn ? ymdUtc(before.checkIn) : null,
@@ -940,7 +941,7 @@ async function raiseNegotiationAmendmentRequest(
       segmentId,
       proposal: input as unknown as PrismaNS.InputJsonValue,
       summary,
-      reason: input.reason.trim(),
+      reason: input.reason?.trim() || summary,
       requestedBy: actor.actorId,
     },
   });
@@ -957,7 +958,7 @@ async function raiseNegotiationAmendmentRequest(
     payload: {
       requestId: req.id,
       summary,
-      reason: input.reason.trim(),
+      reason: input.reason?.trim() || null,
       because: ctx.whyNot,
       ...(ctx.newStay ? { proposedDates: { checkInDate: ymdUtc(ctx.newStay.checkIn), checkOutDate: ymdUtc(ctx.newStay.checkOut) } } : {}),
     },

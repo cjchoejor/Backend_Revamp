@@ -189,7 +189,7 @@ export async function validateInquiryParty(
 
   // A package must belong to the party it is being quoted for. Without this check a booking
   // could carry another agency's package and be priced on their negotiated rate.
-  const ratePackageId = input.ratePackageId?.trim() || null;
+  let ratePackageId = input.ratePackageId?.trim() || null;
   if (ratePackageId) {
     const pkg = await prisma.ratePackage.findUnique({
       where: { id: ratePackageId },
@@ -197,7 +197,15 @@ export async function validateInquiryParty(
     });
     if (!pkg) throw new ValidationError(`Rate package ${ratePackageId} not found`);
     if (pkg.effectiveTo && pkg.effectiveTo <= new Date()) {
-      throw new ValidationError(`Rate package "${pkg.name}" is no longer active`);
+      // A screen opened before the package was saved again names its old version: the booking takes
+      // the package as it stands now (2026-11-04). Retired with nothing after it is a refusal.
+      const current = await prisma.ratePackage.findFirst({
+        where: { scope: pkg.scope, travelAgentId: pkg.travelAgentId, corporateAccountId: pkg.corporateAccountId, name: pkg.name, effectiveTo: null },
+        orderBy: { effectiveFrom: "desc" },
+        select: { id: true },
+      });
+      if (!current) throw new ValidationError(`Rate package "${pkg.name}" is no longer active`);
+      ratePackageId = current.id;
     }
     if (!travelAgentId && !corporateAccountId) {
       throw new ValidationError("A rate package can only be chosen for a travel agent or corporate booking");

@@ -68,7 +68,8 @@ export type BookingChangeInput = {
   };
   /** The S2 table for the new rooms — who sleeps where, meals, beds, rates. */
   roomCompositions: RoomCompositionServiceInput[];
-  reason: string;
+  /** Optional since 2026-11-04: the desk no longer asks why (the summary says what changed). */
+  reason?: string;
   expectedVersion?: number;
 };
 
@@ -100,8 +101,7 @@ export async function changeBookingInPlace(
   actor: Actor,
   input: BookingChangeInput,
 ): Promise<BookingChangeOutcome> {
-  const reason = input.reason?.trim();
-  if (!reason) throw new ValidationError("Type why the stay is changing — it goes on the booking's record.");
+  const reason = input.reason?.trim() || null;
 
   const entry = await prisma.entry.findUnique({
     where: { id: entryId },
@@ -302,7 +302,7 @@ export async function changeBookingInPlace(
     await freezeUnrenderedProformasForEntry(prisma, entryId, actor.actorId).catch(() => {});
   }
   await backflowRoomChangeToS2(prisma, entryId, actor, {
-    reason: `Change of the stay: ${summary} (${reason})`,
+    reason: `Change of the stay: ${summary}${reason ? ` (${reason})` : ""}`,
     fromStage: stage,
     cancelTimerCodes: ["NO_SHOW_CUTOFF_W5", "ROOM_READINESS_SLA_W23", "PRE_ARRIVAL_COUNTDOWN_W4", ...(newStay ? ["NIGHT_AUDIT_STAY_NIGHT_W37"] : [])],
     hooks: async (tx) => {
@@ -324,7 +324,7 @@ export async function changeBookingInPlace(
       guestCount: party.adultCount + party.childCount,
     })) as { configuration: { id: string } };
     const out = await amendNegotiationConfiguration(prisma, entryId, actor, {
-      reason: `Changed at ${stage === Stage.S3 ? "Set up" : stage === Stage.S4 ? "Reserve" : "Arrival"}: ${reason}`,
+      reason: `Changed at ${stage === Stage.S3 ? "Set up" : stage === Stage.S4 ? "Reserve" : "Arrival"}${reason ? `: ${reason}` : ""}`,
       ...(newStay ? { dates: { checkInDate: ymd(checkIn), checkOutDate: ymd(checkOut) } } : {}),
       party: { adultCount: party.adultCount, childCount: party.childCount, childAges: party.childAges, numberOfRooms: party.numberOfRooms },
       rooms: { configurationId: search.configuration.id, perNight, ...(byTypePlan ? { bookingRooms: byTypePlan.bookingRooms } : {}) },
@@ -335,7 +335,7 @@ export async function changeBookingInPlace(
   // 3. Priced again from the desk's table — the papers are made again; nothing goes to the guest.
   await step("QUOTATION", async () => {
     const q = await createQuotation(prisma, entryId, actor.actorId, {
-      notes: `Stay changed at the desk: ${summary} (${reason})`,
+      notes: `Stay changed at the desk: ${summary}${reason ? ` (${reason})` : ""}`,
       roomCompositions: comps,
       ...(carriedDiscount ? { requestedDiscount: carriedDiscount } : {}),
       actorLevel: quoteLevel,
@@ -362,7 +362,7 @@ export async function changeBookingInPlace(
     await step("HOLD", async () =>
       s3HoldService.placeCommittedHold(prisma, entryId, actor, {
         roomId: anchor,
-        commercialJustification: `Stay changed: ${reason}`,
+        commercialJustification: `Stay changed: ${reason ?? summary}`,
         trigger: "ROOM_CHANGE",
         expiresAtCarry: stage === Stage.S3 ? (entry.committedHold?.expiresAt ?? null) : null,
       }),
@@ -429,7 +429,7 @@ export async function changeBookingInPlace(
         if (voucher && voucher.acknowledgementStatus !== "RECEIVED" && priorAnswered) {
           await recordCommunicationAcknowledgement(prisma, voucher.id, actor, {
             method: "VERBAL",
-            verbatimNote: `The guest asked for the change (${summary}): ${reason}. The change itself is the guest's answer to the new voucher.`,
+            verbatimNote: `The guest asked for the change (${summary})${reason ? `: ${reason}` : ""}. The change itself is the guest's answer to the new voucher.`,
           });
         }
       } catch {
