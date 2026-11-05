@@ -50,7 +50,8 @@ import { callerNameOf } from "@/lib/ds/status";
 import { fmtDay } from "@/lib/ds/format";
 import { hasAnyContact } from "@/lib/desk/workspace";
 import type { EntryDetail } from "@/types/api";
-import { Choice, DsDialog, StepCard, toastRefusal, useFlowUnsaved, useRefreshEntry } from "./kit";
+import { Choice, DsDialog, StepCard, toastRefusal, useFlowUnsaved, useOpenFileTab, useRefreshEntry } from "./kit";
+import { usePublishRateChoice } from "@/components/ds/rate-sheet";
 import {
   CameInTicks,
   GuestLine,
@@ -59,6 +60,7 @@ import {
   PartySearch,
   PickList,
   PresetOrCustom,
+  RatePackageField,
   ReqMark,
   USE_TYPES,
   cameInAsOf,
@@ -66,6 +68,7 @@ import {
   contactsProblem,
   defaultContactFor,
   type ChannelKey,
+  type PartyKind,
 } from "./new-inquiry-parts";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -115,17 +118,21 @@ export function TheCaller({ entry, editable }: { entry: EntryDetail; editable: b
   const recPkg = inq.ratePackageId ?? null;
   const recRef = inq.corporateClientRef ?? "";
 
+  // Booked through a party the caller on record IS the party, not someone who rang, so the caller's
+  // own fields start empty: they are for a tick that leaves the party.
   const seed = () => ({
     came: (came === "DIRECT_VOICE" ? null : came) as ChannelKey | null,
     party: recParty,
     pkg: recPkg,
     ref: recRef,
     contacts: contactsOnRecord(entry),
-    title: inq.callerTitle ?? "",
-    name: fullNameOf(old ? g?.firstName : inq.callerFirstName, old ? g?.lastName : inq.callerLastName),
-    phone: (old ? g?.phone : inq.callerPhone) ?? "",
-    email: (old ? g?.email : inq.callerEmail) ?? "",
-    onWhatsApp: inq.callerOnWhatsApp ?? null,
+    title: recParty ? "" : (inq.callerTitle ?? ""),
+    name: recParty ? "" : fullNameOf(old ? g?.firstName : inq.callerFirstName, old ? g?.lastName : inq.callerLastName),
+    phone: recParty ? "" : ((old ? g?.phone : inq.callerPhone) ?? ""),
+    email: recParty ? "" : ((old ? g?.email : inq.callerEmail) ?? ""),
+    onWhatsApp: recParty ? null : (inq.callerOnWhatsApp ?? null),
+    // What each kind of party holds while another tick is on (2026-11-05, operator).
+    stash: {} as Partial<Record<PartyKind, { party: LookupPartyMatch | null; pkg: string | null; ref: string; contacts: CoordinatorContact[] }>>,
   });
   type Draft = ReturnType<typeof seed>;
   const [d, setD] = useState<Draft>(seed);
@@ -173,24 +180,28 @@ export function TheCaller({ entry, editable }: { entry: EntryDetail; editable: b
     set({ pkg: items.find((pp) => pp.isDefault)?.id ?? null });
   }, [packages.data, owner?.travelAgentId, owner?.corporateAccountId]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // The file follows a person's act, never a re-read: a tick, a party or a package picked opens
+  // Charges › Package on what is chosen (2026-11-05, operator), and the page stays where it is.
+  const openFile = useOpenFileTab();
+  const showPackage = () => {
+    if (editable) openFile("money", "package");
+  };
+  // A party belongs to one kind — a travel agent must never ride into a company booking. Each kind
+  // keeps what was input while another tick is on, and it comes back with its tick (2026-11-05,
+  // operator): a box clicked by accident loses nothing. The caller's own fields stay as typed too.
   const pickCame = (k: ChannelKey | null) => {
     const nextKind = channelDef(k ?? "DIRECT_VOICE")?.party ?? null;
     setD((x) => {
-      const samePartyKind = !!nextKind && nextKind === partyKind;
-      // A party belongs to one kind — a travel agent must never ride into a company booking. Leaving
-      // a party, the caller on record is the party, not someone who rang: the form starts empty.
-      const leavingParty = !nextKind && !!partyKind;
-      return {
-        ...x,
-        came: k,
-        party: samePartyKind ? x.party : null,
-        pkg: samePartyKind ? x.pkg : null,
-        contacts: samePartyKind ? x.contacts : [],
-        ...(leavingParty ? { title: "", name: "", phone: "", email: "", onWhatsApp: null } : {}),
-      };
+      const fromKind = channelDef(x.came ?? "DIRECT_VOICE")?.party ?? null;
+      if (nextKind === fromKind) return { ...x, came: k };
+      const stash = fromKind ? { ...x.stash, [fromKind]: { party: x.party, pkg: x.pkg, ref: x.ref, contacts: x.contacts } } : x.stash;
+      const back = nextKind ? stash[nextKind] : null;
+      return { ...x, came: k, stash, party: back?.party ?? null, pkg: back?.pkg ?? null, ref: back?.ref ?? "", contacts: back?.contacts ?? [] };
     });
+    showPackage();
   };
   const setParty = (pp: LookupPartyMatch | null) => {
+    if (pp && pp.id !== d.party?.id) showPackage();
     setD((x) => {
       if (pp && pp.id === x.party?.id) return { ...x, party: pp };
       const next = { ...x, party: pp, pkg: pp && pp.id === recParty?.id ? recPkg : null, contacts: pp ? (pp.id === recParty?.id ? contactsOnRecord(entry) : [defaultContactFor(pp)]) : [] };
@@ -198,6 +209,17 @@ export function TheCaller({ entry, editable }: { entry: EntryDetail; editable: b
       return next;
     });
   };
+  // Until it is saved the file's Package tab reads what is on this card.
+  usePublishRateChoice(
+    entry.id,
+    editable && dirty
+      ? {
+          travelAgentId: partyKind === "TRAVEL_AGENT" ? (d.party?.id ?? null) : null,
+          corporateAccountId: partyKind === "CORPORATE" ? (d.party?.id ?? null) : null,
+          ratePackageId: d.party ? d.pkg : null,
+        }
+      : null,
+  );
 
   const emailBad = d.email.trim() !== "" && !EMAIL_RE.test(d.email.trim());
   const phoneBad = problemOfPhone(phoneRules, d.phone);
@@ -256,10 +278,9 @@ export function TheCaller({ entry, editable }: { entry: EntryDetail; editable: b
   });
 
   const pkgItems = packages.data?.items ?? [];
-  const pkgOnRecordListed = !d.pkg || pkgItems.some((x) => x.id === d.pkg);
   const pkg = pkgItems.find((x) => x.id === d.pkg) ?? null;
-  const pkgWord = !d.party ? "Published rates" : pkg ? pkg.name : d.pkg ? "a package no longer listed" : "the hotel's common package";
-  const plans = pkg ? [pkg.cpRate ? "CP" : null, pkg.mapLunchRate ? "MAP + lunch" : null, pkg.mapDinnerRate ? "MAP + dinner" : null, pkg.apRate ? "AP" : null].filter(Boolean).join(" · ") : "";
+  const pkgWord = pkg ? pkg.name : d.pkg ? "a package no longer listed" : pkgItems.length ? "not chosen" : "The hotel's common package";
+  const hasRight = !!d.party || (isCorp && !!d.ref);
   const kindWord = USE_TYPES.find(([k]) => k === entry.useType)?.[1] ?? null;
   const recContacts = contactsOnRecord(entry);
   const name = callerNameOf(old ? { callerFirstName: g?.firstName, callerLastName: g?.lastName } : inq);
@@ -297,21 +318,46 @@ export function TheCaller({ entry, editable }: { entry: EntryDetail; editable: b
           <CameInTicks value={d.came} disabled={!editable || save.isPending} onChange={pickCame} />
         </div>
         {partyKind ? (
-          <>
-            {editable ? (
-              <PartySearch kind={partyKind} party={d.party} setParty={setParty} />
-            ) : (
-              <div className="wide field">
-                <label>{partyKind === "CORPORATE" ? "Company" : "Travel agent"}</label>
-                <input className="input" readOnly value={d.party?.displayName ?? ""} placeholder="none on file" />
+          <div className={`wide caller-party${hasRight ? "" : " solo"}`}>
+            <div className="caller-party-who">
+              {editable ? (
+                <PartySearch kind={partyKind} party={d.party} setParty={setParty} />
+              ) : (
+                <div className="field">
+                  <label>{partyKind === "CORPORATE" ? "Company" : "Travel agent"}</label>
+                  <input className="input" readOnly value={d.party?.displayName ?? ""} placeholder="none on file" />
+                </div>
+              )}
+              {d.party ? (
+                <PartyContacts kind={partyKind} party={d.party} setParty={(pp) => setParty(pp)} contacts={d.contacts} setContacts={(contacts) => set({ contacts })} readOnly={!editable} />
+              ) : (
+                <span className="hint warn-ink">search {partyWord} by name</span>
+              )}
+            </div>
+            {hasRight ? (
+              <div className="caller-party-rate">
+                {d.party ? (
+                  <RatePackageField
+                    packages={packages.data?.items ?? null}
+                    loading={packages.isLoading}
+                    value={d.pkg}
+                    readOnly={!editable}
+                    word={pkgWord}
+                    onChange={(id) => {
+                      set({ pkg: id });
+                      showPackage();
+                    }}
+                  />
+                ) : null}
+                {isCorp ? (
+                  <div className="field">
+                    <label>Their PO or authorisation</label>
+                    <input className="input" readOnly={!editable} value={d.ref} maxLength={200} placeholder="none given" onChange={(e) => set({ ref: e.target.value })} />
+                  </div>
+                ) : null}
               </div>
-            )}
-            {d.party ? (
-              <PartyContacts kind={partyKind} party={d.party} setParty={(pp) => setParty(pp)} contacts={d.contacts} setContacts={(contacts) => set({ contacts })} readOnly={!editable} />
-            ) : (
-              <span className="wide hint warn-ink">search {partyWord} by name</span>
-            )}
-          </>
+            ) : null}
+          </div>
         ) : (
           <>
             <div className="field">
@@ -353,39 +399,6 @@ export function TheCaller({ entry, editable }: { entry: EntryDetail; editable: b
             </div>
           </>
         )}
-        <div className="field">
-          <label>
-            Rate package
-            <Help label="About the rate package">{d.party ? "The party's own rates — the room and the meal plans." : "A walk-in is priced from the house's published rates."}</Help>
-          </label>
-          {editable && d.party && pkgItems.length ? (
-            <select className="input" value={d.pkg ?? ""} onChange={(e) => set({ pkg: e.target.value || null })}>
-              {pkgOnRecordListed ? null : <option value={d.pkg ?? ""}>a package no longer listed (on record)</option>}
-              <option value="">the hotel&rsquo;s common package</option>
-              {pkgItems.map((pp) => (
-                <option key={pp.id} value={pp.id}>
-                  {pp.name}
-                  {pp.isDefault ? " · their default" : ""}
-                </option>
-              ))}
-            </select>
-          ) : (
-            <input className="input" readOnly value={pkgWord} />
-          )}
-        </div>
-        <div className="field">
-          <label>
-            Meal plans priced
-            <Help label="About meal plans">Each room&rsquo;s plan is chosen at Negotiation.</Help>
-          </label>
-          <input className="input" readOnly value={plans || (d.party ? "none in the package" : "from the house tariff")} />
-        </div>
-        {isCorp ? (
-          <div className="wide field">
-            <label>Their PO or authorisation</label>
-            <input className="input" readOnly={!editable} value={d.ref} maxLength={200} placeholder="none given" onChange={(e) => set({ ref: e.target.value })} />
-          </div>
-        ) : null}
         <div className="wide field">
           <label>
             What kind of stay

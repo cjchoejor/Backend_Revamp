@@ -2058,17 +2058,38 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .camein-tick.off { cursor: default; opacity: .75; }
 .ds .camein-word { font-size: 13px; }
 
-/* ---- The contact persons on a booking through an agency or a company (2026-11-05). */
-.ds .contact-rows { display: grid; gap: 10px; }
-.ds .contact-row { display: grid; grid-template-columns: 96px minmax(130px, 1fr) minmax(250px, 1.25fr) minmax(130px, 1fr) auto; gap: 8px 10px; align-items: start; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; }
-.ds .contact-row .contact-remove { align-self: end; }
-.ds .contact-row.first { border-color: var(--line-2); }
-.ds .contact-note { grid-column: 1 / -1; }
-@media (max-width: 1500px) {
-  .ds .contact-row { grid-template-columns: 96px minmax(0, 1fr) minmax(0, 1.2fr); }
-  .ds .contact-row .contact-mail { grid-column: 1 / 3; }
-  .ds .contact-row .contact-remove { justify-self: end; }
-}
+/* ---- Through an agency or a company (2026-11-05): who it is and who to ring on the left, one line
+   a person; which of its rates on the right. The booking file's Package tab sets the rates out. */
+.ds .caller-party { display: grid; grid-template-columns: minmax(0, 1fr) minmax(190px, 270px); gap: 12px 24px; align-items: start; }
+.ds .caller-party.solo { grid-template-columns: minmax(0, 1fr); }
+.ds .caller-party-who, .ds .caller-party-rate { display: grid; gap: 10px; min-width: 0; }
+@media (max-width: 1100px) { .ds .caller-party { grid-template-columns: minmax(0, 1fr); } }
+
+.ds .contact-block { display: grid; gap: 6px; min-width: 0; }
+.ds .contact-head { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; font-weight: 600; color: var(--ink); }
+.ds .contact-lines { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.ds .contact-line { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 2px 6px; min-height: 30px; padding: 2px 4px 2px 10px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); }
+.ds .contact-line:hover { background: var(--line); }
+.ds .contact-line.open { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+.ds .contact-line.bad { border-color: var(--danger); }
+.ds button.contact-words, .ds span.contact-words { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; min-width: 0; padding: 2px 0; border: 0; background: none; color: var(--ink); font: inherit; font-size: 13px; text-align: left; }
+.ds button.contact-words { cursor: pointer; }
+.ds .contact-num { font-variant-numeric: tabular-nums; }
+.ds .contact-mail { color: var(--ink-2); font-size: 12px; overflow-wrap: anywhere; }
+.ds button.contact-x { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border: 1px solid transparent; border-radius: 3px; background: none; color: var(--danger); font-size: 16px; font-weight: 700; line-height: 1; cursor: pointer; }
+.ds button.contact-x:hover { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); }
+.ds .contact-bad { grid-column: 1 / -1; font-size: 12px; font-weight: 700; color: var(--danger); }
 .ds .contact-add { display: grid; gap: 8px; padding: 10px 12px; border: 1px dashed var(--line-2); border-radius: 6px; }
-.ds .contact-add-row { display: grid; grid-template-columns: 96px minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 1fr); gap: 8px 10px; align-items: start; }
-@media (max-width: 1500px) { .ds .contact-add-row { grid-template-columns: 96px minmax(0, 1fr) minmax(0, 1.2fr); } }
+.ds .contact-add-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 8px 10px; align-items: start; }
+
+/* ---- The Package tab (2026-11-05): the rates a booking is priced on, as one table. */
+.ds .rate-sheet-wrap { overflow-x: auto; }
+.ds .rate-sheet { width: 100%; border-collapse: collapse; font-size: 13px; }
+.ds .rate-sheet th { padding: 6px 0 4px; font-size: 12px; font-weight: 700; color: var(--ink); text-align: left; border-bottom: 1px solid var(--line-2); }
+.ds .rate-sheet th.num { padding-left: 12px; font-weight: 500; color: var(--ink-2); text-align: right; }
+.ds .rate-sheet .grp th { padding-top: 14px; }
+.ds .rate-sheet td { padding: 4px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+.ds .rate-sheet td.num { padding-left: 12px; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ds .rate-sheet td.num + td.num { font-weight: 600; }
+.ds .rate-sheet-blank { padding-left: 12px; text-align: right; color: var(--ink-2); font-size: 12px; }
+.ds .rate-sheet-note { display: block; color: var(--ink-2); font-size: 11.5px; }

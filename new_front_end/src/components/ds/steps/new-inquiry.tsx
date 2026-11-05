@@ -45,9 +45,10 @@ import { checkBedRequest, listRooms } from "@/lib/api/rooms";
 import { bookingHref } from "@/components/ds/ui";
 import { fmtRange, money, plural } from "@/lib/ds/format";
 import { StayDates } from "@/components/ds/stay-dates";
+import { RateSheetCard, type RateChoice } from "@/components/ds/rate-sheet";
 import { STEP_NAMES, STEP_NEEDS } from "@/lib/ds/steps";
 import type { EntryDetail } from "@/types/api";
-import { Choice, Fact, Facts, FlowProgress, StepCanvas, StepCard, StepFlow, anchorFor, atLeast, numberFlow, revealCard, toastRefusal, useFlowStanding } from "./kit";
+import { Choice, Fact, Facts, FlowProgress, StepCanvas, StepCard, StepFlow, SubTabs, anchorFor, atLeast, numberFlow, revealCard, toastRefusal, useFlowStanding } from "./kit";
 import { useMeasuredVar } from "@/hooks/use-stage-head";
 import { ApiError } from "@/lib/api/client";
 import {
@@ -58,6 +59,7 @@ import {
   PartyContacts,
   PartySearch,
   PickList,
+  RatePackageField,
   ReqMark,
   contactsProblem,
   partyPersonOf,
@@ -71,6 +73,7 @@ import {
   moreRoomsNeedGuests,
   type ChannelKey,
   type GateLine,
+  type PartyKind,
   type UseTypeKey,
 } from "./new-inquiry-parts";
 import { Help } from "@/components/ds/help";
@@ -98,6 +101,9 @@ const INTAKE_FILE_TABS: ReadonlyArray<[IntakeFileTab, string, string]> = [
 
 // The guest card is a flow card, so its anchor is the flow's (the focus helper below reads it).
 const GUEST_CARD_ID = anchorFor("caller");
+
+/** What one kind of party holds while another tick is on: an accidental tick loses nothing. */
+type PartySets = Partial<Record<PartyKind, { party: LookupPartyMatch | null; contacts: CoordinatorContact[]; ratePackageId: string | null; corpRef: string }>>;
 
 export function NewInquiryCanvas() {
   const router = useRouter();
@@ -131,7 +137,7 @@ export function NewInquiryCanvas() {
   // booking came in. It used to open on Leisure and a channel then re-filled it, so the field
   // read as answered before anyone had answered it. The intake gate already holds the submit.
   const [useType, setUseType] = useState<string>("");
-  const [party, setParty] = useState<LookupPartyMatch | null>(null);
+  const [party, setPartyNow] = useState<LookupPartyMatch | null>(null);
   // Who to ring at the agency or company, first one first. The first is the booking's contact
   // unless someone else is named as arriving.
   const [contacts, setContacts] = useState<CoordinatorContact[]>([]);
@@ -162,6 +168,9 @@ export function NewInquiryCanvas() {
     channelKey: ChannelKey | null;
     party: LookupPartyMatch | null;
     contacts: CoordinatorContact[];
+    ratePackageId: string | null;
+    corpRef: string;
+    set: PartySets;
   } | null>(null);
   // Who leads the party on the day. Blank → the agency's contact person, else the guest.
   const [arrivingTitle, setArrivingTitle] = useState("");
@@ -181,8 +190,14 @@ export function NewInquiryCanvas() {
   // "5 King + 2 Twin" — optional, may be partial.
   const [beds, setBeds] = useState<Record<string, string>>({});
   const [notes, setNotes] = useState("");
-  // The booking file's open tab — Booking until the desk picks another.
+  // The booking file's open tab — Booking until the desk picks another. A tick, a party or a package
+  // picked brings it to Charges › Package (2026-11-05, operator).
   const [fileTab, setFileTab] = useState<IntakeFileTab>("details");
+  const [fileSub, setFileSub] = useState("price");
+  const showPackage = () => {
+    setFileTab("money");
+    setFileSub("package");
+  };
   // A check-in brought from the house chart is a typed date — the hotel's today never replaces it.
   const checkInDefaulted = useRef(!!fromChart.checkIn);
 
@@ -199,51 +214,38 @@ export function NewInquiryCanvas() {
     document.getElementById(GUEST_CARD_ID)?.querySelector<HTMLElement>("input.input:not([disabled]):not([readonly]):not([type=date])")?.focus();
   }, [channelKey]);
 
+  // A party belongs to one kind — a travel agent must never ride into a company booking. So each kind
+  // keeps its own party, people, package and reference while another tick is on (2026-11-05, operator:
+  // a box clicked by accident must not lose what was input), and they come back with its tick.
+  const partySets = useRef<PartySets>({});
+  const movePartyKind = (from: PartyKind | null, to: PartyKind | null) => {
+    if (from === to) return;
+    if (from) partySets.current = { ...partySets.current, [from]: { party, contacts, ratePackageId, corpRef } };
+    const back = to ? partySets.current[to] : null;
+    setPartyNow(back?.party ?? null);
+    setContacts(back?.contacts ?? []);
+    setRatePackageId(back?.ratePackageId ?? null);
+    setCorpRef(back?.corpRef ?? "");
+  };
   const pickChannel = (k: ChannelKey | null) => {
+    const to = channelDef(k ?? "DIRECT_VOICE")?.party ?? null;
+    movePartyKind(partyKind, to);
     setChannelKey(k);
-    if (channelDef(k)?.party) focusNext.current = true;
+    if (to && !partySets.current[to]?.party) focusNext.current = true;
+    showPackage();
   };
 
-  // A caller picked from the list who rings for an agency or a company brings that party and
-  // themselves as its contact (2026-10-27) — held here across the two effects below, which
-  // otherwise clear the party on a change of kind and reset the contact on a change of party.
-  const pendingParty = useRef<{ party: LookupPartyMatch; contacts: CoordinatorContact[] | null } | null>(null);
-
-  // A party belongs to one kind — a travel agent must never ride into a company booking.
-  useEffect(() => {
-    const p = pendingParty.current;
-    if (p && partyKind) {
-      setParty(p.party);
-      return;
-    }
-    setParty(null);
-    setContacts([]);
-  }, [partyKind]);
-
-  // A new party brings its own contact: the first person on file, else the party's own name and
-  // number (2026-11-05, operator) — or the caller, when the caller's pick brought the party.
-  useEffect(() => {
-    const p = pendingParty.current;
-    if (p && party && p.party.id === party.id) {
-      pendingParty.current = null;
-      setContacts(p.contacts ?? [defaultContactFor(party)]);
-      return;
-    }
-    setContacts(party ? [defaultContactFor(party)] : []);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [party?.id]);
-
-  // The company's reference is cleared when the channel no longer needs it…
-  useEffect(() => {
-    if (!needsCorp) setCorpRef("");
-  }, [needsCorp]);
-  // …and inherited from the picked company's contract references (spec §2.6.2).
-  useEffect(() => {
-    if (partyKind !== "CORPORATE" || !party) return;
-    const refs = party.contractRefs ?? [];
-    if (refs.length > 0) setCorpRef(refs[0]);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [party?.id]);
+  // A new party brings its own contact: the first person on file, else the party's own name and number
+  // (2026-11-05, operator), and a company its first contract reference (spec §2.6.2). The same party
+  // back, with someone just filed on it, keeps what the booking holds.
+  const setParty = (p: LookupPartyMatch | null) => {
+    setPartyNow(p);
+    if (p?.id === party?.id) return;
+    setContacts(p ? [defaultContactFor(p)] : []);
+    setRatePackageId(null);
+    setCorpRef(p?.contractRefs?.[0] ?? "");
+    if (p) showPackage();
+  };
 
   const packagesQuery = useQuery({
     queryKey: ["lookup-rate-packages", partyKind, party?.id],
@@ -267,19 +269,6 @@ export function NewInquiryCanvas() {
     setRatePackageId((cur) => (cur && packages.some((p) => p.id === cur) ? cur : (packages.find((p) => p.isDefault)?.id ?? null)));
   }, [party?.id, packages]);
   const chosenPackage = packages?.find((p) => p.id === ratePackageId) ?? null;
-  // Which meal plans the rates price — shown under Who is asking and in the file's Charges tab.
-  const mealPlansWord = chosenPackage
-    ? [
-        chosenPackage.cpRate ? "CP" : null,
-        chosenPackage.mapLunchRate ? "MAP + lunch" : null,
-        chosenPackage.mapDinnerRate ? "MAP + dinner" : null,
-        chosenPackage.apRate ? "AP" : null,
-      ]
-        .filter(Boolean)
-        .join(" · ") || "none in the package"
-    : party
-      ? "from their package"
-      : "from the house tariff";
   // The rates the booking will be priced on, in words (the Rate package field's own reading).
   const ratesWord = !party
     ? "Published rates"
@@ -467,7 +456,7 @@ export function NewInquiryCanvas() {
   const callerMatches = callerLookupOn ? (callerQuery.data?.matches ?? []) : [];
 
   const adoptCaller = (m: CallerMatch) => {
-    beforePick.current = { callerTitle, name, phone, email, onWhatsApp, channelKey, party, contacts };
+    beforePick.current = { callerTitle, name, phone, email, onWhatsApp, channelKey, party, contacts, ratePackageId, corpRef, set: partySets.current };
     setSelectedCaller(m);
     // An agency's or a company's caller is the party itself (2026-10-27, operator): nothing more is
     // asked of the caller, and the contact person is listed with the party.
@@ -481,18 +470,15 @@ export function NewInquiryCanvas() {
     if (m.phone) setPhone(m.phone);
     if (m.party) {
       // The person at the party; for its own line, the first person on its list.
-      const p = { party: m.party, contacts: [person ?? defaultContactFor(m.party)] };
-      const key: ChannelKey = m.party.kind === "TRAVEL_AGENT" ? "AGENT" : "CORPORATE";
-      if (partyKind === m.party.kind) {
-        if (party?.id === m.party.id) setContacts(p.contacts);
-        else {
-          pendingParty.current = p;
-          setParty(m.party);
-        }
-      } else {
-        pendingParty.current = p;
-        setChannelKey(key);
+      movePartyKind(partyKind, m.party.kind);
+      if (partyKind !== m.party.kind) setChannelKey(m.party.kind === "TRAVEL_AGENT" ? "AGENT" : "CORPORATE");
+      setPartyNow(m.party);
+      setContacts([person ?? defaultContactFor(m.party)]);
+      if (partyKind !== m.party.kind || party?.id !== m.party.id) {
+        setRatePackageId(null);
+        setCorpRef(m.party.contractRefs?.[0] ?? "");
       }
+      showPackage();
       toast.success(`${m.kind === "TRAVEL_AGENT" ? "Travel agent" : "Company"} caller — ${m.party.displayName} is filled in`);
     } else {
       toast.success("The caller is filled in from the last time they rang");
@@ -508,19 +494,13 @@ export function NewInquiryCanvas() {
     setPhone(b.phone);
     setEmail(b.email);
     setOnWhatsApp(b.onWhatsApp);
-    // What the pick filled goes back too — through the same hand-over the pick used, since a change
-    // of kind would otherwise clear the party being put back.
-    if (b.channelKey !== channelKey) {
-      pendingParty.current = b.party ? { party: b.party, contacts: b.contacts } : null;
-      setChannelKey(b.channelKey);
-    } else if (b.party && b.party.id !== party?.id) {
-      pendingParty.current = { party: b.party, contacts: b.contacts };
-      setParty(b.party);
-    } else {
-      pendingParty.current = null;
-      setParty(b.party);
-      setContacts(b.contacts);
-    }
+    // What the pick filled goes back too.
+    setChannelKey(b.channelKey);
+    setPartyNow(b.party);
+    setContacts(b.contacts);
+    setRatePackageId(b.ratePackageId);
+    setCorpRef(b.corpRef);
+    partySets.current = b.set;
   };
 
   const fullPhone = phone;
@@ -832,14 +812,51 @@ export function NewInquiryCanvas() {
                     ) : null}
 
                     {partyKind ? (
-                      <>
-                        <PartySearch kind={partyKind} party={party} setParty={setParty} />
-                        {party ? <PartyContacts kind={partyKind} party={party} setParty={setParty} contacts={contacts} setContacts={setContacts} /> : null}
-                        {!party ? <span className="wide hint warn-ink">search {partyWord} by name</span> : null}
-                        {party && !partyReached ? (
-                          <span className="wide hint stop-ink">{party.displayName} has no phone or email on file — add a contact person with one</span>
+                      <div className={`wide caller-party${party ? "" : " solo"}`}>
+                        <div className="caller-party-who">
+                          <PartySearch kind={partyKind} party={party} setParty={setParty} />
+                          {party ? <PartyContacts kind={partyKind} party={party} setParty={setParty} contacts={contacts} setContacts={setContacts} /> : null}
+                          {!party ? <span className="hint warn-ink">search {partyWord} by name</span> : null}
+                          {party && !partyReached ? (
+                            <span className="hint stop-ink">{party.displayName} has no phone or email on file — add a contact person with one</span>
+                          ) : null}
+                        </div>
+                        {party ? (
+                          <div className="caller-party-rate">
+                            <RatePackageField
+                              packages={packages}
+                              loading={packagesQuery.isLoading}
+                              value={ratePackageId}
+                              onChange={(id) => {
+                                setRatePackageId(id);
+                                showPackage();
+                              }}
+                              word="The hotel's common package"
+                            />
+                            {needsCorp ? (
+                              <div className="field">
+                                <label>
+                                  Their PO or authorisation
+                                  <Help label="About the PO">The company is billed on it.</Help>
+                                </label>
+                                {(party.contractRefs ?? []).length > 0 ? (
+                                  <select className="input" value={corpRef} onChange={(e) => setCorpRef(e.target.value)}>
+                                    <option value="">— pick their reference —</option>
+                                    {(party.contractRefs ?? []).map((r) => (
+                                      <option key={r} value={r}>
+                                        {r}
+                                      </option>
+                                    ))}
+                                  </select>
+                                ) : (
+                                  <input className="input" value={corpRef} placeholder="PO, account or authorisation" onChange={(e) => setCorpRef(e.target.value)} />
+                                )}
+                                {corpRef.trim() ? null : <span className="hint warn-ink">needed</span>}
+                              </div>
+                            ) : null}
+                          </div>
                         ) : null}
-                      </>
+                      </div>
                     ) : (
                       <>
                         <div className="field">
@@ -911,69 +928,6 @@ export function NewInquiryCanvas() {
                         </div>
                       </>
                     )}
-
-                    {/* Which of their rates was agreed belongs WITH the party (2026-09-29). An agency
-                        like Bhutan INC carries Season · Off season · Premium. */}
-                    <div className="field">
-                      <label>Rate package</label>
-                      {!party ? (
-                        <input className="input" readOnly value="Published rates" />
-                      ) : packagesQuery.isLoading ? (
-                        <input className="input" readOnly value="Reading their packages…" />
-                      ) : !packages || packages.length === 0 ? (
-                        <input className="input" readOnly value="The hotel's common package" />
-                      ) : (
-                        <select className="input" value={ratePackageId ?? ""} onChange={(e) => setRatePackageId(e.target.value || null)}>
-                          {!packages.some((p) => p.isDefault) ? <option value="">— not chosen · pricing takes their newest —</option> : null}
-                          {packages.map((p) => (
-                            <option key={p.id} value={p.id}>
-                              {p.name}
-                              {p.isDefault ? " · their default" : ""} — {money(p.roomBaseRate, p.currency)} a night
-                            </option>
-                          ))}
-                        </select>
-                      )}
-                      <span className="hint">
-                        {!party
-                          ? partyKind
-                            ? "pick the agency or company and its packages follow"
-                            : "carries the meal plan and the rate"
-                          : !packages || packages.length === 0
-                            ? `no package on file for ${party.displayName}`
-                            : packages.length === 1
-                              ? "the only package on file for them"
-                              : `${packages.length} packages on file — the rate differs, so pick the one agreed`}
-                      </span>
-                    </div>
-                    <div className="field">
-                      <label>
-                        Meal plans priced
-                        <Help label="About meal plans">Each room&rsquo;s plan is chosen at Negotiation.</Help>
-                      </label>
-                      <input className="input" readOnly value={mealPlansWord} />
-                    </div>
-
-                    {needsCorp ? (
-                      <div className="wide field">
-                        <label>
-                          Their PO or authorisation
-                          <Help label="About the PO">The company is billed on it.</Help>
-                        </label>
-                        {party && (party.contractRefs ?? []).length > 0 ? (
-                          <select className="input" value={corpRef} onChange={(e) => setCorpRef(e.target.value)}>
-                            <option value="">— pick their reference —</option>
-                            {(party.contractRefs ?? []).map((r) => (
-                              <option key={r} value={r}>
-                                {r}
-                              </option>
-                            ))}
-                          </select>
-                        ) : (
-                          <input className="input" value={corpRef} placeholder="PO, account or authorisation" onChange={(e) => setCorpRef(e.target.value)} />
-                        )}
-                        {corpRef.trim() ? null : <span className="hint warn-ink">needed</span>}
-                      </div>
-                    ) : null}
 
                     <div className="wide field">
                       <label>What kind of stay</label>
@@ -1402,7 +1356,21 @@ export function NewInquiryCanvas() {
           </div>
           <div className="fbody">
             {fileTab !== "details" ? (
-              <IntakeFilePanel tab={fileTab} ratesWord={ratesWord} mealPlansWord={mealPlansWord} notes={notes} setNotes={setNotes} />
+              <IntakeFilePanel
+                tab={fileTab}
+                sub={fileSub}
+                onSub={setFileSub}
+                ratesWord={ratesWord}
+                rates={{
+                  travelAgentId: partyKind === "TRAVEL_AGENT" ? (party?.id ?? null) : null,
+                  corporateAccountId: partyKind === "CORPORATE" ? (party?.id ?? null) : null,
+                  ratePackageId: party ? ratePackageId : null,
+                }}
+                checkIn={checkIn}
+                checkOut={checkOut}
+                notes={notes}
+                setNotes={setNotes}
+              />
             ) : (
             <dl className="pv">
               <dt>The caller</dt>
@@ -1483,32 +1451,55 @@ export function NewInquiryCanvas() {
  */
 function IntakeFilePanel({
   tab,
+  sub,
+  onSub,
   ratesWord,
-  mealPlansWord,
+  rates,
+  checkIn,
+  checkOut,
   notes,
   setNotes,
 }: {
   tab: Exclude<IntakeFileTab, "details">;
+  sub: string;
+  onSub: (key: string) => void;
   ratesWord: string;
-  mealPlansWord: string;
+  rates: RateChoice;
+  checkIn: string;
+  checkOut: string;
   notes: string;
   setNotes: (v: string) => void;
 }) {
   if (tab === "money")
     return (
-      <>
-        <StepCard
-          title="The price"
-          status={<span className="warn-ink"><b>Nothing priced yet — no rooms chosen</b></span>}
-          meta="The rooms are chosen at The house, once the inquiry is started. Their bill shows here then."
-        >
-          <Facts>
-            <Fact k="Rates">{ratesWord}</Fact>
-            <Fact k="Meal plans priced">{mealPlansWord}</Fact>
-          </Facts>
-        </StepCard>
-        <StepCard title="Money received" status={<b>Nothing received</b>} meta="An advance is asked for at Set up." />
-      </>
+      <SubTabs
+        label="Charges"
+        value={sub}
+        onPick={onSub}
+        tabs={[
+          {
+            key: "price",
+            label: "The price",
+            content: (
+              <StepCard
+                title="The price"
+                status={<span className="warn-ink"><b>Nothing priced yet — no rooms chosen</b></span>}
+                meta="The rooms are chosen at The house, once the inquiry is started. Their bill shows here then."
+              >
+                <Facts>
+                  <Fact k="Rates">{ratesWord}</Fact>
+                </Facts>
+              </StepCard>
+            ),
+          },
+          { key: "package", label: "Package", content: <RateSheetCard choice={rates} checkIn={checkIn} checkOut={checkOut} /> },
+          {
+            key: "money",
+            label: "Money received",
+            content: <StepCard title="Money received" status={<b>Nothing received</b>} meta="An advance is asked for at Set up." />,
+          },
+        ]}
+      />
     );
   if (tab === "requests")
     return (

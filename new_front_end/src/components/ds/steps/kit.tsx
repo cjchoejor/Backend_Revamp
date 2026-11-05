@@ -1759,15 +1759,29 @@ export function OtherWaysTabs({ tabs }: { tabs: ReadonlyArray<OtherWayTab | null
  */
 export type SubTab = { key: string; label: ReactNode; content: ReactNode };
 
-export function SubTabs({ tabs, label, param = "sub" }: { tabs: ReadonlyArray<SubTab | null | false | undefined>; label: string; param?: string }) {
+export function SubTabs({
+  tabs,
+  label,
+  param = "sub",
+  value,
+  onPick,
+}: {
+  tabs: ReadonlyArray<SubTab | null | false | undefined>;
+  label: string;
+  param?: string;
+  /** Held by the caller instead of the address (the new inquiry, which has no booking to come back to). */
+  value?: string;
+  onPick?: (key: string) => void;
+}) {
   const params = useSearchParams();
   const router = useRouter();
   const pathname = usePathname();
   const live = tabs.filter((t): t is SubTab => !!t);
   if (live.length === 0) return null;
-  const want = params.get(param);
+  const want = value ?? params.get(param);
   const current = live.find((t) => t.key === want) ?? live[0];
   const pick = (key: string) => {
+    if (onPick) return onPick(key);
     const p = new URLSearchParams(params.toString());
     p.set(param, key);
     router.replace(`${pathname}?${p.toString()}`, { scroll: false });

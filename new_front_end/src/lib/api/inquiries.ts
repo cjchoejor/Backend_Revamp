@@ -277,6 +277,35 @@ export type LookupRatePackage = {
   currency: string;
 };
 
+/** The rates a booking is priced on, as one sheet: every figure the server's. */
+export type RateSheet = {
+  source: "PACKAGE" | "COMMON" | "PUBLISHED" | "NO_PACKAGE";
+  party: { kind: "TRAVEL_AGENT" | "CORPORATE"; id: string; name: string } | null;
+  packageName: string | null;
+  currency: string;
+  serviceChargePercent: string;
+  gstPercent: string;
+  rooms: Array<{ roomTypeId: string; code: string | null; name: string; rate: string | null; withTax: string | null }>;
+  extraBed: { rate: string | null; withTax: string | null };
+  meals: Array<{ key: "breakfast" | "lunch" | "dinner"; rate: string | null; withTax: string | null }>;
+  plans: Array<{
+    key: "cp" | "mapLunch" | "mapDinner" | "ap";
+    rate: string | null;
+    withTax: string | null;
+    fromMeals: boolean;
+    mealsAddUpTo: string | null;
+  }>;
+};
+
+export async function getRateSheet(
+  session: Session,
+  q: { travelAgentId?: string | null; corporateAccountId?: string | null; ratePackageId?: string | null; checkIn?: string | null; checkOut?: string | null },
+) {
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(q)) if (v) qs.set(k, v);
+  return apiRequest<RateSheet>(`/api/lookups/rate-sheet?${qs}`, { session });
+}
+
 export async function listRatePackagesLookup(
   session: Session,
   owner: { travelAgentId?: string; corporateAccountId?: string },

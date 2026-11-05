@@ -15,6 +15,7 @@
  * What these tabs hold was taken OUT of the steps, the side panel and the header, so nothing on
  * the booking is shown twice (the operator's rule for this pass).
  */
+import { BookingRateSheet } from "@/components/ds/rate-sheet";
 import { useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -225,6 +226,11 @@ export function ChargesView({
         </StepCard>
                 </>
               ),
+            },
+            {
+              key: "package",
+              label: "Package",
+              content: <BookingRateSheet entry={entry} />,
             },
             {
               key: "bill",

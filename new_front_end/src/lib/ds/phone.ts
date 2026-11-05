@@ -44,10 +44,12 @@ export function parsePhone(raw: string | null | undefined, rules: PhoneRules): P
       const rest = digits.slice(c.code.length - 1);
       if (rest.startsWith("0") && fits(c, rest.slice(1))) return { code: c.code, number: rest.slice(1), sure: "CLEAR" };
     }
+    // A code marked off by a space or a dash IS a code, so what follows is its number, right or wrong.
     const marked = v.match(/^\+(\d{1,4})[\s-]+(.+)$/);
-    if (marked && !ruleOf(`+${marked[1]}`)) {
+    if (marked) {
       const rest = marked[2].replace(/\D/g, "");
-      if (fits(rules.anyCode, rest)) return { code: `+${marked[1]}`, number: rest, sure: "CLEAR" };
+      if (!ruleOf(`+${marked[1]}`) && fits(rules.anyCode, rest)) return { code: `+${marked[1]}`, number: rest, sure: "CLEAR" };
+      return { code: `+${marked[1]}`, number: rest, sure: "UNCLEAR" };
     }
     const local = byPattern(digits);
     if (local) return local;
