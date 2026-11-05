@@ -2220,7 +2220,7 @@ export function RoomCompositionsTable({
           <Help label="How this table works">
             <p>One row per room: who sleeps there by age, their meal plans and any extra bed. Occ adds itself up from the guest columns.</p>
             <p>Arrow keys and Enter move between cells. Distribute party spreads the guests over the rooms; Everyone on… puts every room on one meal plan.</p>
-            <p>Edit rates opens the negotiated rates, and pressing it again puts them away. A meal&rsquo;s rate opens for a room once its plan includes that meal; with no plan (EP) only the room and the extra bed are negotiated.</p>
+            <p>Edit rates opens the negotiated rates. Edit counts puts them away and goes back to the guest counts. A meal&rsquo;s rate opens for a room once its plan includes that meal; with no plan (EP) only the room and the extra bed are negotiated.</p>
             <p>Count children on the meal plans — under 6 eat free, 6 to 10 at the child rate.</p>
             {nightsEditable && (
               <p>
@@ -2279,8 +2279,9 @@ export function RoomCompositionsTable({
               <th colSpan={3}>Charges</th>
               <th className="ratebtn" rowSpan={2}>
                 <div className="rct-corner">
-                  <button type="button" className={`rcb-mini${ratesOpen ? " on" : ""}`} aria-pressed={ratesOpen} onClick={() => setRatesOpen((v) => !v)}>
-                    {readOnly || lockCommercial ? "See rates" : "Edit rates"}
+                  {/* It says what a press does next (2026-11-05, operator). Rates can be locked while counts are not. */}
+                  <button type="button" className="rct-rates-btn" onClick={() => setRatesOpen((v) => !v)}>
+                    {ratesOpen ? (readOnly ? "See counts" : "Edit counts") : readOnly || lockCommercial ? "See rates" : "Edit rates"}
                   </button>
                 </div>
               </th>

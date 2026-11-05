@@ -13,7 +13,6 @@ export default function AdminTimeLimitsPage() {
           title: "How long a booking can wait",
           keys: [
             "expiry.s1.defaultTtlSeconds",
-            "expiry.s2.negotiationTtlSeconds",
             "expiry.s2.speculativeHoldTtlSeconds",
             "expiry.s3.committedHoldTtlSeconds",
             "expiry.parking.followUpDays",

@@ -137,12 +137,6 @@ const TIME_LIMITS = page("/admin/timers-workers", "Time limits", [
     summary: (v) => durationInWords(asRec(v).DEFAULT ?? 0, "seconds"),
   },
   {
-    key: "expiry.s2.negotiationTtlSeconds",
-    title: "A negotiation lapses after",
-    about: "How long a booking can sit at Negotiation before it lapses. A quotation stretches this to the end of its validity. A booking that has reached Set up never lapses this way.",
-    form: seconds(undefined, "Lapses after", 60),
-  },
-  {
     key: "expiry.s2.speculativeHoldTtlSeconds",
     title: "A provisional block lasts",
     about: "How long a provisional block marks the rooms at Negotiation before they are let go.",
