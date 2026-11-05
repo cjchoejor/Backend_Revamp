@@ -30,7 +30,7 @@ import { expiryModeForPlanDue, resolveCreditExpiry, type CreditExpiryChoice } fr
 import { fmtDate, fmtDateTime, fmtStamp, money, plural } from "@/lib/ds/format";
 import { STEP_NAMES, stepNoOfStage } from "@/lib/ds/steps";
 import type { AdvancePaymentPlanSummary, EntryDetail, InvoiceSummary, PaymentStatusSummary } from "@/types/api";
-import { ActionRow, Choice, DsDialog, Fact, Facts, Live, SeeRow, StepCard, goToStepCard, toastRefusal, useFinishWhenDone, useStepFlow } from "./kit";
+import { ActionRow, Choice, DsDialog, Fact, Facts, Live, NotSentChip, SeeRow, StepCard, goToStepCard, toastRefusal, useFinishWhenDone, useStepFlow } from "./kit";
 import { hotelLocalToIso, isoToHotelLocal } from "./s2-shared";
 import { Help, HelpHere } from "@/components/ds/help";
 import { DateTimeInput } from "@/components/ds/date-input";
@@ -223,7 +223,9 @@ export function PaymentPlanCard({
   const summary = !status
     ? undefined
     : status.requiredAmount === 0 && received === 0
-      ? "No advance asked"
+      ? setUp && !bill.proforma
+        ? "The advance is not answered yet"
+        : "No advance asked"
       : status.paidInFull
         ? `Received ${money(received, cur)} of ${money(status.requiredAmount, cur)}`
         : status.satisfied
@@ -245,7 +247,8 @@ export function PaymentPlanCard({
   return (
     <StepCard
       flow={setUp ? "money" : undefined}
-      flowAfter={setUp ? "proforma" : undefined}
+      // Not after the proforma: a yes to an advance is answered in this card's box, and the proforma waits for it.
+      flowAfter={setUp ? "billing-model" : undefined}
       title={setUp ? "The payment plan" : "The advance"}
       right={stateChip}
       summary={setUp ? summary : undefined}
@@ -260,7 +263,7 @@ export function PaymentPlanCard({
           {nothingAsked ? (
             <BindingBox family="bound" stateWord="no advance" style={{ marginBottom: 10 }}>
               <div className="sm" style={{ paddingRight: 90 }}>
-                No advance is asked for this booking
+                {setUp && !bill.proforma ? "The advance is not answered yet" : "No advance is asked for this booking"}
               </div>
             </BindingBox>
           ) : null}
@@ -334,7 +337,7 @@ export function PaymentPlanCard({
                       {bill.notAsked ? null : bill.answered ? " · their answer is on record" : " · awaiting their answer"}
                     </span>
                   ) : (
-                    <span className="meta"> · generated, not sent</span>
+                    <> <NotSentChip /></>
                   )}
                 </>
               ) : (

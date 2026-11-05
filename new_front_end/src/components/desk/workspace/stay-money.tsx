@@ -125,7 +125,7 @@ function BlockH({ children, expanded, onToggle }: { children: ReactNode; expande
 /** Interim-request states in desk words. */
 const STATE_TAG: Record<string, { label: string; cls: string }> = {
   SUGGESTED: { label: "Due — set the amount", cls: "tag warn" },
-  REQUESTED: { label: "Bill ready to send", cls: "tag" },
+  REQUESTED: { label: "Bill generated · not sent", cls: "tag warn" },
   BILLED: { label: "Bill sent — awaiting payment", cls: "tag warn" },
   PAID: { label: "Paid", cls: "tag ok" },
   WITHDRAWN: { label: "Withdrawn", cls: "tag" },
@@ -133,7 +133,7 @@ const STATE_TAG: Record<string, { label: string; cls: string }> = {
 };
 /** Extension states — "Paid" alone would read as finished, but the commit is still ahead. */
 const EXT_TAG: Record<string, { label: string; cls: string }> = {
-  REQUESTED: { label: "Nights held — bill ready to send", cls: "tag" },
+  REQUESTED: { label: "Nights held — bill generated · not sent", cls: "tag warn" },
   BILLED: { label: "Bill sent — awaiting payment", cls: "tag warn" },
   PAID: { label: "Paid — ready to commit", cls: "tag ok" },
   COMMITTED: { label: "Extended", cls: "tag ok" },
@@ -402,7 +402,7 @@ function InterimRequestPanel({
   const f = request.figures;
   const askLabel = f?.askLabel ?? (request.askMode === "PERCENT" ? `${request.askValue}% of the projected total` : money(request.askValue ?? 0, currency));
 
-  const billStateLabel = !dispatched ? "Ready to send" : paid ? "Paid" : "Sent";
+  const billStateLabel = !dispatched ? "generated · not sent" : paid ? "Paid" : "Sent";
   const billStep: StepItem = {
     key: "bill",
     label: "Interim bill generated",
@@ -422,7 +422,7 @@ function InterimRequestPanel({
                 <span style={{ color: "var(--ink-3)" }}>due now {money(dueNow, currency)}</span>
               </span>
               <span style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                <span className={`tag${paid ? " ok" : ""}`}>{billStateLabel}</span>
+                <span className={`tag${paid ? " ok" : !dispatched ? " warn" : ""}`}>{billStateLabel}</span>
                 <button
                   type="button"
                   className="btn btn-ghost btn-sm"

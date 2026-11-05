@@ -34,7 +34,7 @@ import { JourneySummaryPanel } from "@/components/desk/workspace/journey-summary
 import { PLAN_LABEL, dueLabel } from "@/components/desk/workspace/advance-settlement";
 import { PaymentPlanCard } from "./s3-money";
 import type { EntryDetail, PaymentStatusSummary, QuotationSummary } from "@/types/api";
-import { DsDialog, FactBox, FactLine, Facts, Fact, Live, OnRecord, PaperDrawer, SendPaperPanel, StepCanvas, StepCard, Tool, AnswerLine, useReplyAsked, atLeast, currentPassStart, goToStepCard, latestDispatched, toastRefusal, useCommunications, useFinishWhenDone, useRefreshEntry, useStepMode, useStepPane, words, type FactState, type PaperRef, NightsChoice } from "./kit";
+import { DsDialog, FactBox, FactLine, Facts, Fact, Live, OnRecord, PaperDrawer, SendPaperPanel, StepCanvas, StepCard, Tool, AnswerLine, useReplyAsked, atLeast, currentPassStart, goToStepCard, latestDispatched, toastRefusal, useCommunications, useFinishWhenDone, useRefreshEntry, useStepMode, useStepPane, words, type FactState, type PaperRef, NightsChoice, NotSentChip } from "./kit";
 import { BookingOtherWays } from "./s4-other-ways";
 import { roomsHeldWord } from "./s2-shared";
 import { Help } from "@/components/ds/help";
@@ -42,7 +42,7 @@ import { Help } from "@/components/ds/help";
 /* ------------------------------------------------------------------ vocabulary */
 
 const QUOTE_WORD: Record<string, string> = {
-  DRAFT: "ready to send",
+  DRAFT: "generated · not sent",
   SENT: "sent",
   ACCEPTED: "accepted",
   EXPIRED: "lapsed",
@@ -398,7 +398,8 @@ function BeforeYouReserve({
     label: piAsked || piAnswer ? "Proforma and the answer" : "Proforma",
     value: pi ? (
       <>
-        {pi.invoiceNumber ?? pi.id} · {piSent ? `sent${pi.dispatchedTo ? ` to ${pi.dispatchedTo}` : ""}` : "generated, not sent"}
+        {pi.invoiceNumber ?? pi.id}
+        {piSent ? ` · sent${pi.dispatchedTo ? ` to ${pi.dispatchedTo}` : ""}` : <> <NotSentChip /></>}
         {piSent ? (piAnswer ? ` · ${piAnswer}` : piComm?.acknowledgementStatus === "NOT_ASKED" ? "" : " · their answer is not on record — Set up") : ""}
         {!metOr("Proforma sent to guest") ? " · money came in, so it must go out first" : ""}
       </>
@@ -1042,10 +1043,8 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
           <Chip tone="success" icon="check">
             {onWhatsApp ? "sent on WhatsApp" : "sent"}
           </Chip>
-        ) : held ? (
-          <Chip tone="warning">not sent yet</Chip>
-        ) : failed ? (
-          <Chip tone="warning">not sent</Chip>
+        ) : held || failed ? (
+          <NotSentChip />
         ) : notSent ? (
           <Chip tone="quiet">not sent</Chip>
         ) : (

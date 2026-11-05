@@ -49,7 +49,7 @@ const ICON: Record<FolioDocumentKind, React.ComponentType<{ style?: React.CSSPro
 };
 
 const INVOICE_STATE_LABEL: Record<string, string> = {
-  DRAFT: "Issued · ready to send",
+  DRAFT: "issued · not sent",
   DISPATCHED: "Issued · sent",
   PAYMENT_TRACKED: "Issued · payment tracked",
   RECONCILED: "Issued · reconciled",

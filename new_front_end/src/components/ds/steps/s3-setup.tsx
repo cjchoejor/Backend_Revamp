@@ -30,7 +30,7 @@ import {
   confirmCoordinator,
   dispatchInvoice,
   ensureProvisionalFolio,
-  getPaymentStatus,
+  generateProforma,
   getPayerChoices,
   getHoldWindow,
   initiateS3ReEntryToS1,
@@ -46,7 +46,7 @@ import { payerChoiceWord, payerPartyOf } from "@/lib/ds/payer-words";
 import { fmtDateTime, fmtStamp, hotelFormParts, money, plural } from "@/lib/ds/format";
 import { optionSelectedRoomIds, preferredHoldRoomId, type EntryDetail, type InvoiceSummary, type PaymentStatusSummary } from "@/types/api";
 import { replySettled } from "@/lib/api/entries";
-import { AnswerLine, useReplyAsked, Choice, DsDialog, Fact, Facts, Live, OnRecord, PaperDrawer, ReasonDialog, SeeRow, SendPaperPanel, StepCanvas, StepCard, atLeast, currentPassStart, toastRefusal, useCommunications, useRefreshEntry, useStepMode, words, type PaperRef, type ChangeBookingItem, ChangeBookingMenu, StageActs, useFlowUnsaved, useFinishWhenDone, useStepFlow, goToStepCard, revealCard, useOpenAlsoWay, useStepPane, OtherWaysTabs, InlineWay, ShutWay, parkTab, NightsChoice } from "./kit";
+import { AnswerLine, useReplyAsked, Choice, DsDialog, Fact, Facts, Live, OnRecord, PaperDrawer, ReasonDialog, SeeRow, SendPaperPanel, StepCanvas, StepCard, atLeast, currentPassStart, toastRefusal, useCommunications, useRefreshEntry, useStepMode, words, type PaperRef, type ChangeBookingItem, ChangeBookingMenu, StageActs, useFlowUnsaved, useFinishWhenDone, useStepFlow, goToStepCard, revealCard, useOpenAlsoWay, useStepPane, OtherWaysTabs, InlineWay, ShutWay, parkTab, NightsChoice, NotSentChip } from "./kit";
 import { SendToField, useSendTo } from "./s8-parts";
 import { CancellationFiguresLine, WaiverTick, useRefundHow } from "./cancel-figures";
 import { CompetingClaimsCard, passesOf, roomsHeldWord, useRoomNumbers, useRoomTypeNames } from "./s2-shared";
@@ -287,6 +287,7 @@ export function S3SetUp({
         passStart={passStart}
         answered={answered}
         replyNotAsked={replyNotAsked}
+        onAskAdvance={() => setAskAdvance((n) => n + 1)}
         onChanged={changed}
       />
 
@@ -439,31 +440,34 @@ function BillingModelCard({
   // Setting the payer finishes the section — no Done to press after it (2026-10-28).
   const finish = useFinishWhenDone("billing-model");
   /**
-   * Whether to ask for an advance comes with the first choice of who pays (2026-11-05, operator: it
-   * followed the terms, which the system records now: "show that when the user clicks set who
-   * pays"). Only when nothing is asked: a travel agent's or company's own percentage has already
-   * asked it. The question writes nothing; the amount set is the record.
+   * Setting who pays asks about an advance, when nothing is asked yet (2026-11-05, operator: it
+   * followed the terms, which the system records now). The server says when: a travel agent's or
+   * company's own percentage has already asked. The proforma, which prints the advance, waits for
+   * the answer: No makes it now, Yes when the advance is saved. Closing the question decides
+   * nothing, and the proforma's card asks it again.
    */
   const [askAdvance, setAskAdvance] = useState(false);
   const save = useMutation({
-    mutationFn: async () => {
-      const first = !savedModel;
-      await ensureProvisionalFolio(session!, entry.id, { billingModel: model! });
-      if (!first) return { ask: false };
-      const st = await getPaymentStatus(session!, entry.id).catch(() => null);
-      return { ask: !!st && st.requiredAmount === 0 && st.totalReceived === 0 && !st.creditExtensionActive };
-    },
-    onSuccess: ({ ask }) => {
+    mutationFn: () => ensureProvisionalFolio(session!, entry.id, { billingModel: model!, askAdvanceFirst: true }),
+    onSuccess: (out) => {
       // Keyed on a model being SET, not on the folio existing — the folio opens at Set up with no
       // model, so the first choice read as a change (2026-09-18).
-      toast.success(
-        !folio ? "The provisional bill is open — the proforma is generated with it" : savedModel ? "Who pays is changed" : "Who pays is set",
-      );
+      toast.success(savedModel ? "Who pays is changed" : "Who pays is set");
       onChanged();
-      if (ask) setAskAdvance(true);
+      if (out.advanceQuestion) setAskAdvance(true);
       else finish();
     },
     onError: (e) => toastRefusal(e, "Who pays could not be set"),
+  });
+  const noAdvance = useMutation({
+    mutationFn: () => generateProforma(session!, entry.id),
+    onSuccess: () => {
+      toast.success("No advance asked · the proforma is generated, not sent");
+      setAskAdvance(false);
+      onChanged();
+      finish({ next: "hold" });
+    },
+    onError: (e) => toastRefusal(e, "The proforma could not be generated"),
   });
   const dirty = !savedModel || model !== savedModel;
   // A payer changed and not saved keeps the section open, and holds the move (2026-10-28).
@@ -482,7 +486,7 @@ function BillingModelCard({
           during the stay. It is chosen here, and can still be changed on the Stay step while the guest is staying.
           {preselectedWhy ? ` Pre-selected — ${preselectedWhy}; change it if they settle differently.` : ""}
           {group ? " A group has one bill for everyone." : ""}
-          {folio ? "" : " The provisional bill opens with this choice, and the proforma with it."}
+          {folio ? "" : " The provisional bill opens with this choice."}
         </>
       }
     >
@@ -518,25 +522,21 @@ function BillingModelCard({
         <DsDialog
           open
           closeX
+          busy={noAdvance.isPending}
           onClose={() => {
             setAskAdvance(false);
             finish();
           }}
           title="Ask the guest for an advance?"
           caseLines={["Nothing is asked of this booking so far"]}
-          help="With an advance, the guest pays it before the booking is reserved and the proforma shows the amount. With none, the rooms are blocked next."
+          help="The proforma prints the advance, so it is generated once this is answered. With an advance, it is generated when the amount is saved, and the guest pays it before the booking is reserved. With none, it is generated now and the rooms are blocked next."
           footer={
             <>
-              <Button
-                kind="secondary"
-                onClick={() => {
-                  setAskAdvance(false);
-                  finish();
-                }}
-              >
+              <Button kind="secondary" state={noAdvance.isPending ? "working" : "default"} workingLabel="Generating…" onClick={() => noAdvance.mutate()}>
                 No advance
               </Button>
               <Button
+                state={noAdvance.isPending ? "inert" : "default"}
                 onClick={() => {
                   setAskAdvance(false);
                   finish({ next: "money" });
@@ -1103,6 +1103,7 @@ function ProformaCard({
   passStart,
   answered,
   replyNotAsked,
+  onAskAdvance,
   onChanged,
 }: {
   entry: EntryDetail;
@@ -1116,9 +1117,12 @@ function ProformaCard({
   answered: boolean;
   /** …because their reply is not asked for (the admin console's setting). */
   replyNotAsked: boolean;
+  /** The desk said yes to an advance here: the payment plan's advance box opens. */
+  onAskAdvance: () => void;
   onChanged: () => void;
 }) {
   const { session } = useSession();
+  const flow = useStepFlow();
   const passes = passesOf(entry);
   const [paper, setPaper] = useState<PaperRef | null>(null);
   const [sendOpen, setSendOpen] = useState(false);
@@ -1129,6 +1133,15 @@ function ProformaCard({
   const [to, setTo] = useSendTo(entry);
   const finish = useFinishWhenDone("proforma");
   const replyAsked = useReplyAsked(entry.id, "PROFORMA_INVOICE");
+  const generate = useMutation({
+    mutationFn: () => generateProforma(session!, entry.id),
+    onSuccess: () => {
+      toast.success("The proforma is generated, not sent");
+      onChanged();
+      finish();
+    },
+    onError: (e) => toastRefusal(e, "The proforma could not be generated"),
+  });
 
   const draft = proformas.find((i) => i.state === "DRAFT") ?? null;
   const sendTarget = draft ?? proformas[0] ?? null;
@@ -1167,15 +1180,48 @@ function ProformaCard({
   }, [justSent, answerDue]);
 
   if (proformas.length === 0) {
+    // Who pays is set and the advance is not answered: the question stands here, so a page closed or
+    // read again never leaves the booking with no way to its bill (2026-11-05).
+    const payerSet = !!entry.folio?.billingModel;
+    const asked = (status?.requiredAmount ?? 0) > 0;
     return (
       <StepCard
         flow="proforma"
         flowAfter="billing-model"
         title="Proforma"
         icon="file"
-        meta="Generated together with the provisional bill. Not a tax invoice; the tax invoice is issued at check-out."
+        right={payerSet ? <Chip tone="warning">not generated yet</Chip> : null}
+        meta="It prints the advance, so it is generated once who pays is set and the advance is answered. Not a tax invoice; the tax invoice is issued at check-out."
       >
-        <span className="sm">Choose who pays above — the proforma is generated with it.</span>
+        {!payerSet ? (
+          <span className="sm">Choose who pays above — the proforma follows it.</span>
+        ) : !editable ? (
+          <span className="sm">Not generated.</span>
+        ) : asked ? (
+          <Button className="go" state={generate.isPending ? "working" : "default"} workingLabel="Generating…" onClick={() => generate.mutate()}>
+            Generate the proforma
+          </Button>
+        ) : (
+          <>
+            <p className="sm" style={{ marginBottom: 10 }}>
+              <b>Does the hotel want an advance on this booking?</b>
+            </p>
+            <div className="row-acts">
+              <Button kind="secondary" state={generate.isPending ? "working" : "default"} workingLabel="Generating…" onClick={() => generate.mutate()}>
+                No advance
+              </Button>
+              <Button
+                state={generate.isPending ? "inert" : "default"}
+                onClick={() => {
+                  flow.open("money");
+                  onAskAdvance();
+                }}
+              >
+                Yes, ask for an advance
+              </Button>
+            </div>
+          </>
+        )}
       </StepCard>
     );
   }
@@ -1223,17 +1269,31 @@ function ProformaCard({
       // nothing to scroll to (2026-10-06). The empty-state card above always had it.
       flow="proforma"
       flowAfter="billing-model"
+      keepRight
       // The number is in the title; the line says where the bill stands.
       summary={[
         asks,
-        shown.dispatchedAt ? `sent ${fmtStamp(shown.dispatchedAt, tz)}` : "not sent",
+        shown.dispatchedAt ? `sent ${fmtStamp(shown.dispatchedAt, tz)}` : null,
         shown.dispatchedAt && !replyNotAsked ? (answered ? "the guest's answer recorded" : "the guest's answer awaited") : null,
       ]
         .filter(Boolean)
         .join(" · ")}
       title={`Proforma · ${no}${(shown.versionNumber ?? 1) > 1 ? ` · v${shown.versionNumber}` : ""}`}
       icon="file"
-      right={asks ? <Chip tone="quiet">{asks}</Chip> : null}
+      // Where it stands with the guest, on the paper's own line as on the quotation (2026-11-05).
+      right={
+        !shown.dispatchedAt ? (
+          <NotSentChip />
+        ) : replyNotAsked ? (
+          <Chip tone="quiet">sent</Chip>
+        ) : answered ? (
+          <Chip tone="success" icon="check">
+            sent · answered
+          </Chip>
+        ) : (
+          <Chip tone="warning">sent · awaiting the answer</Chip>
+        )
+      }
       meta="Not a tax invoice — the tax invoice is issued at check-out. Sending is optional, unless money is to be taken against it: a payment is logged against the bill the guest received."
       acts={
         <>
@@ -1267,7 +1327,8 @@ function ProformaCard({
       ) : null}
       <div className="meta">
         Generated {fmtStamp(shown.createdAt, tz)}
-        {shown.dispatchedAt ? ` · sent ${fmtStamp(shown.dispatchedAt, tz)}${shown.dispatchedTo ? ` to ${shown.dispatchedTo}` : ""}` : " · not sent"}
+        {shown.dispatchedAt ? ` · sent ${fmtStamp(shown.dispatchedAt, tz)}${shown.dispatchedTo ? ` to ${shown.dispatchedTo}` : ""}` : ""}
+        {asks ? ` · ${asks}` : ""}
       </div>
 
       {answerDue ? (
@@ -1330,7 +1391,7 @@ function ProformaCard({
                   <td>
                     <Chip tone={isCurrent ? "success" : "quiet"}>{isCurrent ? "current" : "replaced"}</Chip>{" "}
                     <span className="meta">
-                      {inv.dispatchedAt ? "sent" : inv.state === "DRAFT" ? "ready to send" : words(inv.state).toLowerCase()}
+                      {inv.dispatchedAt ? "sent" : inv.state === "DRAFT" ? "generated · not sent" : words(inv.state).toLowerCase()}
                     </span>
                   </td>
                   <td>

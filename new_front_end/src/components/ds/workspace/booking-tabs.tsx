@@ -45,7 +45,7 @@ import { fmtDateTime, fmtDay, fmtStamp, hotelFormParts, money, plural } from "@/
 import { STEP_NAMES, stepNoOfStage } from "@/lib/ds/steps";
 import { isHousekeeping, traceWords } from "@/lib/ds/trace-words";
 import type { TraceEvent } from "@/lib/trace/humanize";
-import { Choice, DsDialog, Fact, Facts, PapersCard, ReasonDialog, StepCard, SubTabs, Tool, atLeast, toastRefusal, useRefreshEntry } from "@/components/ds/steps/kit";
+import { Choice, DsDialog, Fact, Facts, PapersCard, ReasonDialog, StepCard, SubTabs, Tool, atLeast, toastRefusal, useRefreshEntry, NotSentChip } from "@/components/ds/steps/kit";
 import { FolioDocumentsBlock } from "@/components/desk/workspace/folio-documents";
 import { useHeldDocuments } from "@/components/ds/workspace/held-papers";
 import { PLAN_LABEL, dueLabel } from "@/components/desk/workspace/advance-settlement";
@@ -1402,7 +1402,7 @@ function SentPapers({
                   ) : c.acknowledgementStatus === "NOT_ASKED" ? (
                     <Chip tone="quiet">no answer needed</Chip>
                   ) : c.held ? (
-                    <Chip tone="quiet">held — not sent yet</Chip>
+                    <NotSentChip />
                   ) : sent ? (
                     <Chip tone="warning">{c.isOverdue ? "no answer — chase it" : "awaiting"}</Chip>
                   ) : (

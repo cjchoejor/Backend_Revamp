@@ -17,7 +17,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/design-system";
 import { Help } from "@/components/ds/help";
-import { Choice as PickOne, NightsChoice, PaperDrawer, toastRefusal, type PaperRef } from "@/components/ds/steps/kit";
+import { Choice as PickOne, NightsChoice, NotSentChip, PaperDrawer, toastRefusal, type PaperRef } from "@/components/ds/steps/kit";
 import { useSession } from "@/hooks/use-session";
 import { usePhoneRules } from "@/hooks/use-phone-rules";
 import { problemOfPhone } from "@/lib/ds/phone";
@@ -100,6 +100,7 @@ export function HeldPaperRow({ h, tz, onView }: { h: HeldDocument; tz?: string; 
       <div className="heldp-what">
         <b>{KIND_WORD[h.kind]}</b>
         <span className="mono sm">{h.documentNumber ?? h.documentId}</span>
+        <NotSentChip />
         <span className="sm muted">
           {REASON_WORD[h.reason] ?? "held"} · {fmtDateTime(h.heldAt, tz)}
         </span>

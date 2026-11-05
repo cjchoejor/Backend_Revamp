@@ -22,13 +22,18 @@ export async function getPayerChoices(session: Session, entryId: string) {
 export async function ensureProvisionalFolio(
   session: Session,
   entryId: string,
-  body: { billingModel: string },
+  body: { billingModel: string; askAdvanceFirst?: boolean },
 ) {
-  return apiRequest<FolioDetail>(`/api/entries/${entryId}/folio/provisional`, {
+  return apiRequest<FolioDetail & { advanceQuestion?: boolean }>(`/api/entries/${entryId}/folio/provisional`, {
     method: "POST",
     session,
     body,
   });
+}
+
+/** "No advance": the proforma held back for that answer is made now (2026-11-05). */
+export async function generateProforma(session: Session, entryId: string) {
+  return apiRequest<{ generated: boolean }>(`/api/entries/${entryId}/proforma`, { method: "POST", session });
 }
 
 export async function recordCancellationDisclosure(

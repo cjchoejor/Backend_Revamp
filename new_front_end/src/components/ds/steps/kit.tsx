@@ -667,6 +667,15 @@ export function useFinishWhenMet(card: string) {
   }, [done]);
 }
 
+/**
+ * A paper made and not gone out, the same amber on every paper (2026-11-05, operator: "show generated
+ * and not sent prominently like quotation, do for all papers"). The guest has not got it, which is
+ * the thing to see. A tax invoice is issued, the others generated.
+ */
+export function NotSentChip({ made = "generated" }: { made?: "generated" | "issued" }) {
+  return <Chip tone="warning">{made} · not sent</Chip>;
+}
+
 export function useStepFlow() {
   const { on, done, open, opened } = useContext(FlowCtx);
   // `opened`: the sections opened again with their Edit — a card can show its tools at once then.
@@ -2701,6 +2710,7 @@ export function PapersCard({
   const [sendQuote, setSendQuote] = useState<QuotationSummary | null>(null);
   const [sendInvoice, setSendInvoice] = useState<InvoiceSummary | null>(null);
   const refresh = useRefreshEntry(entry.id);
+  const commsForVoucher = useCommunications(entry.id);
   const folioLive = !!entry.folio && ["LIVE", "OUTSTANDING", "SETTLED", "CLOSED"].includes(entry.folio.state);
   const folioDocs = useQuery({
     queryKey: ["folio-documents", entry.id, entry.currentStage, entry.folio?.state ?? null],
@@ -2767,6 +2777,11 @@ export function PapersCard({
 
   const liveQuote = (q: QuotationSummary) => q.state === "DRAFT" || q.state === "SENT" || q.state === "ACCEPTED";
   const liveInvoice = (i: InvoiceSummary) => i.state !== "SUPERSEDED";
+  // The voucher in force: sent if any send of it went out, else what became of the newest.
+  const voucherComms = (commsForVoucher.data?.items ?? []).filter((c) => c.commType === "CONFIRMATION_VOUCHER" && c.inForce !== false);
+  const voucherSend = voucherComms.some((c) => c.sendStatus === "DISPATCHED")
+    ? "DISPATCHED"
+    : [...voucherComms].sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]?.sendStatus ?? null;
 
   return (
     <StepCard title={title}>
@@ -2780,7 +2795,7 @@ export function PapersCard({
                 <b>{q.referenceNumber}</b>
                 {(q.versionNumber ?? 1) > 1 ? <span className="v"> · v{q.versionNumber}</span> : null}
               </span>
-              <Chip tone={liveQuote(q) ? "success" : "quiet"}>{QUOTE_WORD[q.state] ?? q.state.toLowerCase()}</Chip>
+              {q.state === "DRAFT" ? <NotSentChip /> : <Chip tone={liveQuote(q) ? "success" : "quiet"}>{QUOTE_WORD[q.state] ?? q.state.toLowerCase()}</Chip>}
               <span className="when">{q.createdAt ? fmtStamp(q.createdAt) : ""}</span>
               <span className="acts">
                 <Button kind="quiet" compact icon="eye" onClick={() => setOpen({ kind: "quotation", id: q.id, label: `Quotation ${q.referenceNumber}`, frozen: !liveQuote(q) && !!q.pdfStorageKey })}>
@@ -2813,7 +2828,11 @@ export function PapersCard({
                 <span className="v"> · {INVOICE_WORD[i.invoiceType] ?? "Invoice"}</span>
                 {(i.versionNumber ?? 1) > 1 ? <span className="v"> · v{i.versionNumber}</span> : null}
               </span>
-              <Chip tone={liveInvoice(i) ? "success" : "quiet"}>{i.state === "SUPERSEDED" ? "replaced" : i.dispatchedAt ? "sent" : i.state.toLowerCase()}</Chip>
+              {i.state === "DRAFT" && !i.dispatchedAt ? (
+                <NotSentChip made={i.invoiceType === "FINAL" ? "issued" : "generated"} />
+              ) : (
+                <Chip tone={liveInvoice(i) ? "success" : "quiet"}>{i.state === "SUPERSEDED" ? "replaced" : i.dispatchedAt ? "sent" : i.state.toLowerCase()}</Chip>
+              )}
               <span className="when">{i.dispatchedAt ? `sent ${fmtStamp(i.dispatchedAt)}` : i.createdAt ? fmtStamp(i.createdAt) : ""}</span>
               <span className="acts">
                 <Button kind="quiet" compact icon="eye" onClick={() => setOpen({ kind: "invoice", id: i.id, label: `${INVOICE_WORD[i.invoiceType] ?? "Invoice"} ${i.invoiceNumber ?? i.id}`, issued: i.invoiceType === "FINAL", invoiceType: i.invoiceType })}>
@@ -2847,7 +2866,15 @@ export function PapersCard({
                   <b>{v.number ?? v.id}</b>
                   <span className="v"> · {v.id}</span>
                 </span>
-                <Chip tone={inForce ? "success" : "quiet"}>{inForce ? "in force" : "replaced"}</Chip>
+                {!inForce ? (
+                  <Chip tone="quiet">replaced</Chip>
+                ) : voucherSend === "HELD" ? (
+                  <NotSentChip />
+                ) : voucherSend === "NOT_SENT" ? (
+                  <Chip tone="quiet">not sent</Chip>
+                ) : (
+                  <Chip tone="success">{voucherSend === "DISPATCHED" ? "sent" : "in force"}</Chip>
+                )}
                 <span className="when">{v.confirmedAt ? `confirmed ${fmtStamp(v.confirmedAt)}` : ""}</span>
                 <span className="acts">
                   <Button kind="quiet" compact icon="eye" onClick={() => setOpen({ kind: "voucher", reservationId: v.id, label })}>

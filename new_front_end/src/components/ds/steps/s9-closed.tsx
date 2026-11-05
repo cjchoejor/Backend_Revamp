@@ -68,7 +68,7 @@ import {
   useStepPane,
   words,
   type PaperRef,
-  type StepPane,
+  type StepPane, NotSentChip,
 } from "./kit";
 import { BillFigures, BillLines } from "./s8-checkout";
 import {
@@ -699,7 +699,8 @@ function TaxInvoicePane({ entry, tz }: { entry: EntryDetail; tz: string }) {
   const row = (inv: InvoiceSummary) => (
     <div key={inv.id} className="row-acts sm">
       <span className={inv.state === "SUPERSEDED" ? "meta" : undefined}>
-        <b>{invoiceLabel(inv)}</b> · {INVOICE_TYPE_WORD[inv.invoiceType] ?? words(inv.invoiceType)} · {INVOICE_STATE_WORD[inv.state] ?? words(inv.state)}
+        <b>{invoiceLabel(inv)}</b> · {INVOICE_TYPE_WORD[inv.invoiceType] ?? words(inv.invoiceType)}
+        {inv.state === "DRAFT" && !inv.dispatchedAt ? <> <NotSentChip made={inv.invoiceType === "FINAL" ? "issued" : "generated"} /></> : ` · ${INVOICE_STATE_WORD[inv.state] ?? words(inv.state)}`}
         {inv.dispatchedAt ? (
           <span className="meta">
             {" "}
@@ -1227,7 +1228,12 @@ function SealedPapers({ entry, tz }: { entry: EntryDetail; tz: string }) {
           {issued ? (
             <span className="row-acts sm">
               <span>
-                {issued.invoiceNumber ?? issued.id} <span className="meta">· {INVOICE_STATE_WORD[issued.state] ?? words(issued.state)} · the copy that was sent</span>
+                {issued.invoiceNumber ?? issued.id}{" "}
+                {issued.state === "DRAFT" && !issued.dispatchedAt ? (
+                  <NotSentChip made="issued" />
+                ) : (
+                  <span className="meta">· {INVOICE_STATE_WORD[issued.state] ?? words(issued.state)} · the copy that was sent</span>
+                )}
               </span>
               <Button kind="quiet" compact icon="eye" onClick={() => setPaper({ kind: "invoice", id: issued.id, issued: true, label: `Tax invoice ${issued.invoiceNumber ?? issued.id}` })}>
                 Preview
