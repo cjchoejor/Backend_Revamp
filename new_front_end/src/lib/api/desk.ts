@@ -55,7 +55,13 @@ export type DeskListRow = {
     corporateAccount: { id: string; displayName: string } | null;
   } | null;
   reservation: { id: string; confirmedAt: string; confirmationVoucherSent: boolean } | null;
-  folio: { id: string; state: string; billingModel: string | null } | null;
+  folio: {
+    id: string;
+    state: string;
+    billingModel: string | null;
+    /** The proforma in force (2026-11-05). */
+    invoices?: Array<{ validUntil: string | null; lapsedAt: string | null; dispatchedAt: string | null }>;
+  } | null;
   committedHold: { state: string; expiresAt: string } | null;
   speculativeHolds: Array<{ expiresAt: string }>;
   quotations: Array<{ referenceNumber: string; state: string; validUntil: string | null; sentAt: string | null }>;

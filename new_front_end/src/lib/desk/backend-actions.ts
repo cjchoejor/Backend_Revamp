@@ -88,6 +88,7 @@ export const STAGE_ACTIONS: Record<string, Record<string, BackendItem[]>> = {
       { name: "W3 — committed hold expiry", ref: "COMMITTED_HOLD_EXPIRY_W3 · w3 · registry.holdExpiry.minutes", detail: "Releases the committed hold if not confirmed before TTL.", trace: "^COMMITTED_HOLD\\.EXPIRY_TRIGGERED$" },
     ],
     dispatch: [
+      { name: "How long the proforma stands", ref: "setProformaValidity · POST /invoices/:id/validity", detail: "The quote's rule: to check-in, or the rest of today. A paper already opened or sent is made again as a new version. When its time ends it is made again; the booking stays.", trace: "^PROFORMA\\.(VALIDITY_SET|LAPSED)$|^QUOTATION\\.VALIDITY_STOPPED$" },
       { name: "dispatchInvoice (PROFORMA)", ref: "stage-email-helpers · PROFORMA_INVOICE_EMAIL", detail: "Issues + emails the proforma invoice with the balance due.", trace: "^PROFORMA_INVOICE_EMAIL" },
     ],
     group: [

@@ -234,6 +234,7 @@ export function s3Readiness(
     {
       label: "Quote generated",
       met: liveQuotesThisPass(entry).length > 0,
+      todo: "This pass has no live quote. Change booking, Renegotiate the price makes one",
     },
     // The order below is the order the desk works in (2026-09-25), because the side panel numbers
     // it and each card waits for the one before: the guest's contact, then the payer, the bill,
@@ -242,17 +243,24 @@ export function s3Readiness(
     {
       label: "A contact on file",
       met: hasAnyContact(entry),
+      todo: "A phone or an email for the guest",
     },
-    { label: "Who pays chosen", met: !!folio?.billingModel && folio?.state === "PROVISIONAL", card: "billing-model" },
+    { label: "Who pays chosen", met: !!folio?.billingModel && folio?.state === "PROVISIONAL", card: "billing-model", todo: "Choose who pays" },
     // GENERATING the proforma is mandatory; SENDING it is not (operator ruling — only when an
     // advance is demanded or the guest asks). So "generated" is the standing item, and the
     // dispatch/settlement items below appear only when they actually apply — a vacuously-true
     // green line ("sent ✓" when nothing was ever sent or owed) misreads as work done.
-    { label: "Proforma invoice generated", met: proforma, card: "proforma" },
+    { label: "Proforma invoice generated", met: proforma, card: "proforma", todo: "Generate the proforma" },
+    // Its time ended with the guest still to answer: it is made again (2026-11-05).
+    ...(proformas.some((i) => i.state !== "SUPERSEDED" && i.lapsedAt)
+      ? [{ label: "Proforma made again (it ran out)", met: false, card: "proforma", todo: "The proforma ran out. Make it again" }]
+      : []),
     // The proforma prints the money, so nothing goes ahead until the desk says what happens to it.
-    ...(opts?.earlierAdvanceAsked ? [{ label: "The advance paid before: kept or refunded", met: false, card: "proforma" }] : []),
+    ...(opts?.earlierAdvanceAsked
+      ? [{ label: "The advance paid before: kept or refunded", met: false, card: "proforma", todo: "Say what happens to the advance paid before" }]
+      : []),
     // A block whose time ended holds the booking until the FOM or GM decides (2026-11-05).
-    ...(blockTimeEnded(entry) ? [{ label: "The block's time ended: the FOM or GM decides", met: false, card: "hold" }] : []),
+    ...(blockTimeEnded(entry) ? [{ label: "The block's time ended: the FOM or GM decides", met: false, card: "hold", todo: "The block's time ended. The FOM or GM decides" }] : []),
     // Money was received → the bill it was paid against must have gone out (backend p40 +
     // the bill-before-money guard). Hidden when nothing has been received: nothing to document.
     ...(advanceReceived > 0
@@ -261,6 +269,7 @@ export function s3Readiness(
             label: "Proforma sent to guest (advance was received)",
             met: proformaDispatched,
             card: "proforma",
+            todo: "Send the proforma",
           },
         ]
       : []),
@@ -294,6 +303,7 @@ export function s3Readiness(
           label: "Guest's answer to the proforma recorded",
           card: "proforma",
           met: inForce?.acknowledgementStatus === "RECEIVED",
+          todo: "Record the guest's answer to the proforma",
         },
       ];
     })()),
@@ -302,7 +312,7 @@ export function s3Readiness(
     // is unknown (status not fetched — conservative). With required = 0 the hotel asks for
     // nothing, and a green "settled ✓" over zero activity misreads as a payment having happened.
     ...(typeof opts?.requiredAmount !== "number" || opts.requiredAmount > 0 || advanceReceived > 0
-      ? [{ label: "Advance settled or credit extended", met: advanceSatisfied, card: "money" }]
+      ? [{ label: "Advance settled or credit extended", met: advanceSatisfied, card: "money", todo: "The advance is still to come. Record it, or extend credit" }]
       : []),
     // NOTE: advance-payment RECONCILIATION (folio.advancePaymentReconciliationComplete) is a
     // Stage 5 pre-arrival gate (Policy 28), NOT an S3→S4 confirmation prerequisite. The backend
@@ -778,6 +788,8 @@ export type Precondition = {
   card?: string;
   /** A section's changes on screen, not saved yet (2026-10-27) — holds the move until saved. */
   unsaved?: boolean;
+  /** What to do about it, said beside Set up's move while it waits (2026-11-05). */
+  todo?: string;
 };
 
 /** Real-state preconditions surfaced in the gate bar for each step. */

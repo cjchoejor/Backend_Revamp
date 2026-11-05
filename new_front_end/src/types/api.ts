@@ -229,6 +229,10 @@ export type InvoiceSummary = {
   dispatchedAt?: string | null;
   dispatchedTo?: string | null;
   createdAt: string;
+  /** How long a proforma stands (2026-11-05), by the quote's rule. */
+  validUntil?: string | null;
+  /** Its time ended with the guest still to answer. It is made again; the booking does not lapse. */
+  lapsedAt?: string | null;
   /** JSON metadata blob. Group invoices set `{ groupBooking: true, roomCount, guestCount, groupLeader }`. */
   metadata?: Record<string, unknown> | null;
 };

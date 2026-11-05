@@ -36,6 +36,11 @@ export async function generateProforma(session: Session, entryId: string) {
   return apiRequest<{ generated: boolean }>(`/api/entries/${entryId}/proforma`, { method: "POST", session });
 }
 
+/** How long this proforma stands, on the quote's rule (2026-11-05). */
+export async function setProformaValidity(session: Session, invoiceId: string, body: { validDays?: number; validHours?: number }) {
+  return apiRequest<{ validUntil: string; invoiceId: string; madeAgain: boolean }>(`/api/invoices/${invoiceId}/validity`, { method: "POST", session, body });
+}
+
 export async function recordCancellationDisclosure(
   session: Session,
   entryId: string,

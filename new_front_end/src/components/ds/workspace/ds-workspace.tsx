@@ -1243,6 +1243,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   // move (Sealed, Resume, Go to). On the stage layout the move leaves the bar and floats into the
   // work column's bottom-right corner only once it is ready (2026-10-28, operator).
   let moveReady: boolean | null = null;
+  // Set up's move stands on the page all the time (2026-11-05), and says what it waits for.
+  let moveFirst: { words: string; card?: string } | null = null;
   if (sealed || (step.key === "closed" && entry.status === "CLOSED")) {
     forward = (
       <Chip tone="quiet" icon="lock">
@@ -1308,12 +1310,25 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     // saved holds it (2026-10-28).
     const ok = readyToMoveOn && !preconds.some((p) => p.unsaved);
     moveReady = ok;
+    const first = ok ? null : preconds.find((p) => !p.met) ?? null;
+    if (first) {
+      const short = paymentStatusQuery.data?.shortfall ?? 0;
+      moveFirst = {
+        card: first.card,
+        words:
+          first.card === "money" && short > 0
+            ? `${money(short)} of the advance is still to come. Record it, or extend credit`
+            : first.unsaved
+              ? first.label.replace(/^Changes to (.*) saved$/, "Save the changes to $1")
+              : first.todo ?? first.label,
+      };
+    }
     forward = (
       <Button
         className="go"
         state={blockMutation.isPending ? "working" : ok ? "default" : "inert"}
         workingLabel="Blocking the rooms…"
-        reason={ok ? "blocks the rooms and opens Reserve; the booking stays at Set up until you reserve it" : firstNote}
+        reason={ok ? "blocks the rooms and opens Reserve; the booking stays at Set up until you reserve it" : undefined}
         onClick={() => blockMutation.mutate()}
       >
         Move to Reserve
@@ -2064,6 +2079,19 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                     guests) the step's move waits for its own page (2026-10-29). */}
                 {moveReady && !inPage ? (
                   <div className="move-float" role="region" aria-label="Move on">
+                    {forward}
+                  </div>
+                ) : moveFirst && !inPage ? (
+                  <div className="move-float move-waiting" role="region" aria-label="Move on">
+                    {moveFirst.card ? (
+                      <button type="button" className="move-first" onClick={() => goToCard(moveFirst?.card)}>
+                        First: {moveFirst.words}
+                      </button>
+                    ) : (
+                      <span className="move-first" role="status">
+                        First: {moveFirst.words}
+                      </span>
+                    )}
                     {forward}
                   </div>
                 ) : heldBy.length ? (

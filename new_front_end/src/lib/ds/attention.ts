@@ -155,6 +155,15 @@ export function attentionItems(rows: DeskListRow[], now: number, hotelToday: str
         push(r, { need: "No answer recorded", band: "waiting", work: "followups", since: new Date(r.updatedAt).getTime() });
       }
     } else if (step === 3) {
+      // The proforma's own time, as a quote's (2026-11-05).
+      const pf = r.folio?.invoices?.[0];
+      // Its running clock, not its date: a proforma whose advance is paid no longer runs out.
+      const pfClock = r.timers?.find((t) => t.timerType === "PROFORMA_VALIDITY_W43")?.firesAt;
+      if (pf?.lapsedAt) {
+        push(r, { need: "The proforma ran out. Make it again", band: "overdue", work: "holds", deadline: { label: "Ran out", at: new Date(pf.lapsedAt).getTime() } });
+      } else if (pfClock && new Date(pfClock).getTime() - now < DAY) {
+        push(r, { need: "The proforma is running out", band: "soon", work: "holds", deadline: { label: "Proforma valid", at: new Date(pfClock).getTime() } });
+      }
       const hold = r.committedHold;
       if (hold && hold.state === "PLACED" && new Date(hold.expiresAt).getTime() <= now) {
         // Said above.

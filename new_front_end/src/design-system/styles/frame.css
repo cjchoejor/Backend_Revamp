@@ -2170,3 +2170,29 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .refund-grid h5 { margin: 0 0 4px; font-size: 12px; font-weight: 700; color: var(--ink-2); }
 .ds .refund-pay { margin-bottom: 3px; }
 .ds .refund-paper { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+
+/* A proforma's time, set as a quote's is (2026-11-05). The quote's own rules live under .desk-root. */
+.ds .pf-valid { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+.ds .pf-valid .lbl { font-size: 13.5px; font-weight: 700; color: var(--ink); white-space: nowrap; }
+.ds .pf-valid .stepper { display: inline-flex; align-items: stretch; height: 36px; border: 1px solid var(--line-2); border-radius: 4px; background: #fff; overflow: hidden; }
+.ds .pf-valid .stepper:focus-within { border-color: var(--accent); }
+.ds .pf-valid .stepper.bad { border-color: var(--danger); }
+.ds .pf-valid .stepper button { width: 32px; padding: 0; border: 0; background: var(--surface-2); color: var(--ink); font-size: 17px; font-weight: 700; line-height: 1; cursor: pointer; }
+.ds .pf-valid .stepper button:first-child { border-right: 1px solid var(--line-2); }
+.ds .pf-valid .stepper button:last-child { border-left: 1px solid var(--line-2); }
+.ds .pf-valid .stepper button:hover:not(:disabled) { background: var(--line); }
+.ds .pf-valid .stepper button:disabled { color: var(--ink-4); cursor: not-allowed; }
+.ds .pf-valid .stepper input { width: 46px; border: 0; outline: 0; padding: 0 4px; text-align: right; font: inherit; font-size: 15px; font-weight: 700; background: transparent; color: var(--ink); }
+.ds .pf-valid .stepper .unit { align-self: center; padding: 0 8px 0 4px; font-size: 13px; color: var(--ink-2); }
+.ds .pf-valid .until { font-size: 13.5px; color: var(--ink-2); }
+.ds .pf-valid-line { display: block; margin-top: 6px; }
+.ds .pf-valid .pf-valid-line { flex-basis: 100%; margin-top: 0; }
+.ds .notice.pf-lapsed:not(.desk-root *) { margin-top: 10px; }
+.ds .notice.pf-lapsed .btn { flex: none; margin-left: auto; }
+
+/* Set up's move stands on the page all the time, and says what it waits for (2026-11-05). */
+.ds .ws-top .move-dock .move-waiting:not(.desk-root *) { display: flex; align-items: center; justify-content: flex-end; gap: 10px; width: max-content; max-width: 94%; }
+.ds .ws-top .move-dock .move-first:not(.desk-root *) { display: block; max-width: 520px; padding: 10px 14px; border: 1px solid var(--warning); border-radius: 6px; background: var(--warning-soft); color: var(--ink); font: inherit; font-size: 14px; font-weight: 600; line-height: 1.35; text-align: left; box-shadow: 0 6px 18px rgba(9, 30, 66, 0.16); }
+.ds .ws-top .move-dock button.move-first:not(.desk-root *) { cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+.ds .ws-top .move-dock button.move-first:hover:not(.desk-root *) { border-color: var(--ink-2); filter: brightness(0.97); }
+.ds .ws-top .move-dock .move-waiting .btn:not(.desk-root *) { flex: none; }

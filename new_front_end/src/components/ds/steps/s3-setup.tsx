@@ -11,6 +11,7 @@
  * Figures come from the backend only: the advance from payment-status, the proforma as the
  * backend composes it. Nothing is added up here.
  */
+import { ProformaValidity } from "./s3-proforma-validity";
 import { StayDates } from "@/components/ds/stay-dates";
 import { PersonName } from "@/components/ds/person-name";
 import { joinTitled, splitTitle } from "@/lib/ds/person";
@@ -1257,9 +1258,13 @@ function ProformaCard({
   // bill-before-money and answer-before-money rules): while an advance is asked, the card says
   // which comes first, and Send is the main act (2026-10-28).
   const advanceAsked = !!status && status.requiredAmount > 0 && !status.paidInFull;
-  const nextUp = !editable ? null : advanceAsked && !sentLive ? "send" : answerDue ? "answer" : null;
+  // Its time ended with the guest still to answer: it is made again (2026-11-05).
+  const lapsed = !!shown.lapsedAt && shown.state !== "SUPERSEDED";
+  const nextUp = !editable || lapsed ? null : advanceAsked && !sentLive ? "send" : answerDue ? "answer" : null;
   const sendLock = !editable
     ? "not at this step"
+    : lapsed
+      ? "it ran out. Make it again first"
     : status?.earlierAdvance?.asked
       ? "first say what happens to the advance paid before"
     : !draft
@@ -1296,6 +1301,7 @@ function ProformaCard({
         asks,
         shown.dispatchedAt ? `sent ${fmtStamp(shown.dispatchedAt, tz)}` : null,
         shown.dispatchedAt && !replyNotAsked ? (answered ? "the guest's answer recorded" : "the guest's answer awaited") : null,
+        shown.validUntil && !lapsed && !(status && status.requiredAmount > 0 && status.paidInFull) ? `valid until ${fmtDateTime(shown.validUntil, tz)}` : null,
       ]
         .filter(Boolean)
         .join(" · ")}
@@ -1303,7 +1309,9 @@ function ProformaCard({
       icon="file"
       // Where it stands with the guest, on the paper's own line as on the quotation (2026-11-05).
       right={
-        !shown.dispatchedAt ? (
+        lapsed ? (
+          <Chip tone="danger">ran out</Chip>
+        ) : !shown.dispatchedAt ? (
           <NotSentChip />
         ) : replyNotAsked ? (
           <Chip tone="quiet">sent</Chip>
@@ -1351,6 +1359,23 @@ function ProformaCard({
         {shown.dispatchedAt ? ` · sent ${fmtStamp(shown.dispatchedAt, tz)}${shown.dispatchedTo ? ` to ${shown.dispatchedTo}` : ""}` : ""}
         {asks ? ` · ${asks}` : ""}
       </div>
+
+      {lapsed && editable ? (
+        <div className="notice ended pf-lapsed" role="alert">
+          <span className="ended-mark" aria-hidden>
+            !
+          </span>
+          <span>
+            <b>This proforma ran out{shown.validUntil ? ` on ${fmtDateTime(shown.validUntil, tz)}` : ""}.</b>{" "}
+            <span className="rest">The booking stays as it is. Make it again, then it can go out and the booking can move on.</span>
+          </span>
+          <Button className="go" state={generate.isPending ? "working" : "default"} workingLabel="Making it…" onClick={() => generate.mutate()}>
+            Make it again
+          </Button>
+        </div>
+      ) : !lapsed ? (
+        <ProformaValidity entry={entry} inv={shown} status={status} editable={editable} tz={tz} onChanged={onChanged} />
+      ) : null}
 
       {answerDue ? (
         // Sent and not yet answered: the answer is the next thing to do here (2026-10-28, operator:

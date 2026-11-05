@@ -137,6 +137,7 @@ const S3: StageBackend = {
     { name: "Pricing pipeline engine", ref: "engines/pricing-pipeline-engine.ts", detail: "Prices the proforma invoice and the advance requirement." },
   ],
   workersTimers: [
+    { name: "W43 — Proforma validity", ref: "PROFORMA_VALIDITY_W43 · w43-proforma-validity-worker.ts", detail: "Marks a proforma whose time ended with the guest still to answer. The booking stays; the desk makes it again." },
     { name: "W3 — Committed hold expiry", ref: "COMMITTED_HOLD_EXPIRY_W3 · w3-committed-hold-expiry-worker.ts", detail: "Releases the committed hold if not confirmed before TTL." },
     { name: "W34 — Advance-payment follow-up", ref: "ADVANCE_PAYMENT_FOLLOW_UP_W34 · w34-advance-payment-follow-up-worker.ts", detail: "Chases the advance payment within its window." },
     { name: "W38 — Advance payment promise", ref: "ADVANCE_PROMISE_DEADLINE_W38 · w38-advance-promise-worker.ts", detail: "Fires at the guest's promised pay-by date; traces the lapse if the advance is still short." },

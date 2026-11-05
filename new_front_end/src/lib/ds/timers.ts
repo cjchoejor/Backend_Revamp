@@ -19,6 +19,7 @@ const LABELS: Record<string, string | null> = {
   ENTRY_EXPIRY: "The inquiry lapses",
   NEGOTIATION_EXPIRY: "The negotiation lapses",
   QUOTATION_VALIDITY_W15: "Quote valid",
+  PROFORMA_VALIDITY_W43: "Proforma valid",
   SPECULATIVE_HOLD_EXPIRY_W2: "Marker ends",
   COMMITTED_HOLD_EXPIRY_W3: "Block ends",
   ADVANCE_PAYMENT_FOLLOW_UP_W34: "Advance follow-up",
