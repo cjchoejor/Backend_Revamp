@@ -94,22 +94,23 @@ export function ReferenceField({
 export function settleMethodsFor(model: string | null, agentBooked: boolean, partyBooked: boolean) {
   if (model === "DIRECT_BILL") return SETTLE_METHODS.filter(([v]) => v === "DIRECT_BILL");
   return SETTLE_METHODS.filter(([v]) =>
-    v === "VOUCHER" ? agentBooked || model === "TOUR_OPERATOR_VOUCHER" : v === "DIRECT_BILL" ? partyBooked || model === "GOVERNMENT" : true,
+    // A company takes the package too since 2026-11-05: it is invoiced, it issues no voucher.
+    v === "VOUCHER" ? agentBooked || (model === "TOUR_OPERATOR_VOUCHER" && !partyBooked) : v === "DIRECT_BILL" ? partyBooked || model === "GOVERNMENT" : true,
   );
 }
 
 /** What "How they pay" starts at — the billing model's own way, not cash at the desk. */
-export function defaultSettleMethod(model: string | null): SettleMethod {
+export function defaultSettleMethod(model: string | null, company = false): SettleMethod {
   if (model === "DIRECT_BILL" || model === "GOVERNMENT") return "DIRECT_BILL";
-  if (model === "TOUR_OPERATOR_VOUCHER") return "VOUCHER";
+  if (model === "TOUR_OPERATOR_VOUCHER") return company ? "DIRECT_BILL" : "VOUCHER";
   return "CASH";
 }
 
 /** The ways ONE payer's share can be settled: the guest's own share is money at the desk. */
-function shareMethods(model: string) {
+function shareMethods(model: string, company = false) {
   if (model === "GUEST_PAY") return SETTLE_METHODS.filter(([v]) => v !== "DIRECT_BILL" && v !== "VOUCHER");
   if (model === "DIRECT_BILL") return SETTLE_METHODS.filter(([v]) => v === "DIRECT_BILL");
-  if (model === "TOUR_OPERATOR_VOUCHER") return SETTLE_METHODS;
+  if (model === "TOUR_OPERATOR_VOUCHER") return company ? SETTLE_METHODS.filter(([v]) => v !== "VOUCHER") : SETTLE_METHODS;
   return SETTLE_METHODS.filter(([v]) => v !== "VOUCHER");
 }
 
@@ -198,10 +199,11 @@ function ShareRow({
   const folio = entry.folio ?? null;
   const title = shareTitle(share.billingModel, booked);
   const payer = share.billingModel === "GUEST_PAY" ? booked.guest : booked.party ?? booked.payer;
-  const methods = shareMethods(share.billingModel);
+  const company = booked.kind === "Company";
+  const methods = shareMethods(share.billingModel, company);
   const owes = share.outstanding;
 
-  const [method, setMethod] = useState<SettleMethod>(defaultSettleMethod(share.billingModel));
+  const [method, setMethod] = useState<SettleMethod>(defaultSettleMethod(share.billingModel, company));
   const [ref, setRef] = useState("");
   const [paidNow, setPaidNow] = useState("");
   const paidTouched = useRef(false);

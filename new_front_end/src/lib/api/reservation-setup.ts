@@ -8,6 +8,17 @@ import type {
 import type { Session } from "@/types/session";
 import { apiRequest } from "./client";
 
+/** Who the bill may go to at Set up, and which it starts on. */
+export type PayerChoices = {
+  party: "TRAVEL_AGENT" | "CORPORATE" | null;
+  choices: string[];
+  defaultChoice: string;
+};
+
+export async function getPayerChoices(session: Session, entryId: string) {
+  return apiRequest<PayerChoices>(`/api/entries/${entryId}/payer-choices`, { session });
+}
+
 export async function ensureProvisionalFolio(
   session: Session,
   entryId: string,

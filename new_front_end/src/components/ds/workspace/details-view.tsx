@@ -9,6 +9,7 @@
  * operator's rule for that pass was that nothing on the booking shows twice. Nothing is edited
  * here: at Inquiry the Edit button opens the Inquiry step, where every section edits in place.
  */
+import { payerChoiceWord, payerPartyOf } from "@/lib/ds/payer-words";
 import Link from "next/link";
 import { useState } from "react";
 import { Button } from "@/design-system";
@@ -27,12 +28,6 @@ import { TripCard } from "@/components/ds/workspace/return-stay";
 import { GuestBookingsCard } from "@/components/ds/workspace/guest-bookings";
 import type { EntryDetail } from "@/types/api";
 import { HelpHere } from "@/components/ds/help";
-
-const BILLING_WORD: Record<string, string> = {
-  TOUR_OPERATOR_VOUCHER: "The package to the account · anything beyond it to the guest",
-  DIRECT_BILL: "Everything to the account",
-  GUEST_PAY: "Everything to the guest",
-};
 
 type Scalars = { corporateClientRef?: string | null };
 type Contact = { contactPersonName?: string | null; contactPersonPhone?: string | null };
@@ -126,7 +121,7 @@ export function DetailsView({
                     : undefined
               }
             />
-            <FactBox k="Billed to" v={model ? BILLING_WORD[model] ?? model : "not set yet"} meta={model ? undefined : "chosen at Set up"} />
+            <FactBox k="Billed to" v={model ? payerChoiceWord(model, payerPartyOf(entry)) : "not set yet"} meta={model ? undefined : "chosen at Set up"} />
           </div>
           <Facts wide style={{ marginTop: 10 }}>
             <Fact k="Arriving">{[contact.contactPersonName, contact.contactPersonPhone].filter(Boolean).join(" · ")}</Fact>

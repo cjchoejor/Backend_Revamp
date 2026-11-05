@@ -168,7 +168,6 @@ const NEGOTIATION_SECTIONS: Record<string, string> = {
  * backend takes them: who is who, who pays, the terms, the bill, the money, then the rooms held.
  */
 const SETUP_SECTIONS: Record<string, string> = {
-  parties: "The three parties",
   "billing-model": "Who pays",
   terms: "Cancellation terms",
   proforma: "The proforma",

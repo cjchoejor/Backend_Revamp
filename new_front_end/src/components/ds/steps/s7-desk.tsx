@@ -29,7 +29,7 @@ import { refusalText } from "@/lib/ds/translate";
 import { useBookedBy } from "./s8-parts";
 import type { DeficientConditionSummary, DisputeSummary, EntryDetail, HandoffSummary } from "@/types/api";
 import { Choice, DsDialog, Fact, Facts, Live, ReasonDialog, StepCard, atLeast, toastRefusal, useRefreshEntry, useStepMode, words, NotNow, useInlineWay } from "./kit";
-import { BILLING_WORD } from "./s7-folio";
+import { payerChoiceWord, payerPartyOf } from "@/lib/ds/payer-words";
 import { Help } from "@/components/ds/help";
 
 /* ------------------------------------------------------------------ vocabulary */
@@ -621,7 +621,8 @@ const KIND_WORDS: Array<[string, string]> = [
 export function payerWord(model: string, party: string | null): string {
   if (model === "GUEST_PAY") return "the guest";
   if (model === "DIRECT_BILL") return party ? `${party}, on account` : "the account";
-  if (model === "TOUR_OPERATOR_VOUCHER") return party ? `${party}, by voucher` : "the agent, by voucher";
+  // A company takes this too since 2026-11-05, so it does not say "by voucher".
+  if (model === "TOUR_OPERATOR_VOUCHER") return party ?? "the agent";
   if (model === "GOVERNMENT") return "the government account";
   return words(model);
 }
@@ -721,7 +722,7 @@ export function WhoPaysCard({ entry, tz }: { entry: EntryDetail; tz: string }) {
             <div className="wide field">
               <label>Bill it to</label>
               <Choice
-                options={allowed.map((m) => [m, payerWord(m, booked.party)] as const)}
+                options={allowed.map((m) => [m, payerChoiceWord(m, payerPartyOf(entry))] as const)}
                 value={to}
                 onChange={(v) => setTo(v)}
               />

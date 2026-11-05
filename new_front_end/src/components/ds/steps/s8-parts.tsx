@@ -56,16 +56,6 @@ export const INVOICE_TYPE_WORD: Record<string, string> = {
   ADVANCE: "advance invoice",
 };
 
-export const BILLING_MODEL_WORD: Record<string, string> = {
-  GUEST_PAY: "the guest pays",
-  // "on account" — a company, an agency, or a direct group's tour leader (2026-09-18).
-  DIRECT_BILL: "billed on account",
-  TOUR_OPERATOR_VOUCHER: "the agent's voucher",
-  GOVERNMENT: "billed to the government",
-  OTA_PREPAID: "prepaid through the OTA",
-  SPLIT: "split between the account and the guest",
-};
-
 export const HANDOFF_STATE_WORD: Record<string, string> = {
   CREATED: "raised",
   ASSIGNED: "assigned",

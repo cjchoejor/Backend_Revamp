@@ -241,7 +241,6 @@ export function s3Readiness(
     {
       label: "A contact on file",
       met: hasAnyContact(entry),
-      card: "parties",
     },
     { label: "Who pays chosen", met: !!folio?.billingModel && folio?.state === "PROVISIONAL", card: "billing-model" },
     { label: "Cancellation terms recorded", met: !!entry.cancellationDisclosure, card: "terms" },

@@ -12,6 +12,7 @@
  * answer to it (Arrival waits for that answer), the pre-arrival tasks Reserve opened, and the
  * advance, which can still come in before Arrival.
  */
+import { payerChoiceWord, payerPartyOf } from "@/lib/ds/payer-words";
 import { StayDates } from "@/components/ds/stay-dates";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
@@ -39,24 +40,6 @@ import { roomsHeldWord } from "./s2-shared";
 import { Help } from "@/components/ds/help";
 
 /* ------------------------------------------------------------------ vocabulary */
-
-const BILLING_WORD: Record<string, string> = {
-  TOUR_OPERATOR_VOUCHER: "The package to the account · anything beyond it to the guest",
-  DIRECT_BILL: "Everything to the account",
-  GUEST_PAY: "Everything to the guest",
-};
-
-/** The billing model in the desk's words (ruling S1). */
-export function billingWord(code?: string | null): string {
-  if (!code) return "";
-  return BILLING_WORD[code] ?? words(code);
-}
-
-export const BILLING_CHOICES = [
-  ["TOUR_OPERATOR_VOUCHER", BILLING_WORD.TOUR_OPERATOR_VOUCHER],
-  ["DIRECT_BILL", BILLING_WORD.DIRECT_BILL],
-  ["GUEST_PAY", BILLING_WORD.GUEST_PAY],
-] as const;
 
 const QUOTE_WORD: Record<string, string> = {
   DRAFT: "ready to send",
@@ -348,7 +331,7 @@ function BeforeYouReserve({
   lines.push({
     key: "billing",
     label: "Who pays",
-    value: folio?.billingModel ? billingWord(folio.billingModel) : "not set — Set up",
+    value: folio?.billingModel ? payerChoiceWord(folio.billingModel, payerPartyOf(entry)) : "not set — Set up",
     who: folio?.billingModel
       ? lastModelChange
         ? `set ${fmtStamp(lastModelChange.createdAt, tz)}`
@@ -903,7 +886,7 @@ function WhatReserveDecided({ entry }: { entry: EntryDetail }) {
         <Fact k="Quotation" meta={quoteAnswer ?? undefined}>
           {quoteRef ? `${quoteRef}${journey?.s2Quote.state ? ` · ${QUOTE_WORD[journey.s2Quote.state] ?? words(journey.s2Quote.state)}` : ""}` : null}
         </Fact>
-        <Fact k="Who pays">{billingWord(res.frozenBillingModel) || null}</Fact>
+        <Fact k="Who pays">{payerChoiceWord(res.frozenBillingModel, payerPartyOf(entry)) || null}</Fact>
         <Fact k="Rooms" meta={held ? "the advance is not fully paid — the rooms read Reserved once it is" : undefined}>
           {held ? <Chip tone="warning">Held · not yet Reserved</Chip> : <Chip tone="success">Reserved</Chip>}{" "}
           {/* The booking's own rooms first — each with its type, and whether the system may still move it. */}

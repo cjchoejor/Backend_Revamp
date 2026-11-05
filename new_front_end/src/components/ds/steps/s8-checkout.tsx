@@ -13,6 +13,7 @@
  * balance, the payment-status position. The desk compares a typed amount with the balance only
  * to say, before the click, the rule the backend will apply (partial settlement needs the FOM).
  */
+import { payerChoiceWord, payerPartyOf } from "@/lib/ds/payer-words";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -74,7 +75,6 @@ import {
   type StepPane,
 } from "./kit";
 import {
-  BILLING_MODEL_WORD,
   BillByPart,
   DEFICIENCY_WORD,
   DisputesCard,
@@ -789,12 +789,13 @@ function HowSettled({
   const shares = sharesToSettle(sharesQ.data?.buckets, folio?.state);
 
   const model0 = folio?.billingModel ?? null;
-  const [method, setMethodRaw] = useState<SettleMethod>(defaultSettleMethod(model0));
+  const companyBooked = booked.kind === "Company";
+  const [method, setMethodRaw] = useState<SettleMethod>(defaultSettleMethod(model0, companyBooked));
   // The default follows the billing model until the operator picks — never over a choice.
   const methodTouched = useRef(false);
   useEffect(() => {
-    if (!methodTouched.current) setMethodRaw(defaultSettleMethod(model0));
-  }, [model0]);
+    if (!methodTouched.current) setMethodRaw(defaultSettleMethod(model0, companyBooked));
+  }, [model0, companyBooked]);
   const setMethod = (m: SettleMethod) => {
     methodTouched.current = true;
     setMethodRaw(m);
@@ -950,7 +951,7 @@ function HowSettled({
       <UnauditedLastNight entry={entry} live={live} onBackToStay={onBackToStay} goToStep={goToStep} />
       <PayLaterNote entry={entry} at="checkout" />
       <div className="row-acts">
-        <Chip tone="accent">by the billing model · {model ? BILLING_MODEL_WORD[model] ?? words(model) : "not set"}</Chip>
+        <Chip tone="accent">who pays · {model ? payerChoiceWord(model, payerPartyOf(entry)) : "not set"}</Chip>
         {entry.groupBillingMode === "GROUP_MASTER" ? <Chip tone="quiet">one bill for the party</Chip> : null}
         {folio ? (
           <SeeRow

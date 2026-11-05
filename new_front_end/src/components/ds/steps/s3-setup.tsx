@@ -3,7 +3,7 @@
 /**
  * Step 3 · Set up — "hold & deposit" (SS03 §6, prototype `stepCanvas[3]`, Storyboard 03).
  *
- * The three parties, the billing model, the committed hold, the payment plan (the advance as a
+ * Who pays, the committed hold, the payment plan (the advance as a
  * chain — see s3-money.tsx), the terms disclosed, the proforma with the guest's answer, and —
  * when the booking is a group or a company's — the coordinator, free-of-charge rooms and payment
  * milestones. Nothing is frozen here; that happens at Reserve, from the gate bar.
@@ -14,7 +14,6 @@
 import { StayDates } from "@/components/ds/stay-dates";
 import { PersonName } from "@/components/ds/person-name";
 import { joinTitled, splitTitle } from "@/lib/ds/person";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
@@ -25,13 +24,13 @@ import { useBookingRooms } from "@/hooks/use-booking-rooms";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
 import { usePaymentStatus } from "@/hooks/use-payment-status";
 import { openInvoicePdf } from "@/lib/api/documents";
-import { getInquiry } from "@/lib/api/inquiries";
 import {
   approveFocGm,
   cancelEntryAtS3,
   confirmCoordinator,
   dispatchInvoice,
   ensureProvisionalFolio,
+  getPayerChoices,
   getHoldWindow,
   initiateS3ReEntryToS1,
   initiateS3ReEntryToS2,
@@ -43,10 +42,11 @@ import {
   schedulePaymentMilestones,
 } from "@/lib/api/reservation-setup";
 import { guestNameOf } from "@/lib/ds/status";
+import { payerChoiceWord, payerPartyOf } from "@/lib/ds/payer-words";
 import { fmtDateTime, fmtStamp, hotelFormParts, money, plural } from "@/lib/ds/format";
 import { optionSelectedRoomIds, preferredHoldRoomId, type EntryDetail, type InvoiceSummary, type PaymentStatusSummary } from "@/types/api";
 import { replySettled } from "@/lib/api/entries";
-import { AnswerLine, useReplyAsked, Choice, DsDialog, Fact, FactBox, Facts, Live, OnRecord, PaperDrawer, ReasonDialog, SeeRow, SendPaperPanel, StepCanvas, StepCard, atLeast, currentPassStart, toastRefusal, useCommunications, useRefreshEntry, useStepMode, words, type PaperRef, type ChangeBookingItem, ChangeBookingMenu, StageActs, useFlowUnsaved, useFinishWhenDone, useStepFlow, goToStepCard, revealCard, useOpenAlsoWay, useStepPane, OtherWaysTabs, InlineWay, ShutWay, parkTab, NightsChoice } from "./kit";
+import { AnswerLine, useReplyAsked, Choice, DsDialog, Fact, Facts, Live, OnRecord, PaperDrawer, ReasonDialog, SeeRow, SendPaperPanel, StepCanvas, StepCard, atLeast, currentPassStart, toastRefusal, useCommunications, useRefreshEntry, useStepMode, words, type PaperRef, type ChangeBookingItem, ChangeBookingMenu, StageActs, useFlowUnsaved, useFinishWhenDone, useStepFlow, goToStepCard, revealCard, useOpenAlsoWay, useStepPane, OtherWaysTabs, InlineWay, ShutWay, parkTab, NightsChoice } from "./kit";
 import { SendToField, useSendTo } from "./s8-parts";
 import { CancellationFiguresLine, WaiverTick, useRefundHow } from "./cancel-figures";
 import { CompetingClaimsCard, passesOf, roomsHeldWord, useRoomNumbers, useRoomTypeNames } from "./s2-shared";
@@ -56,12 +56,6 @@ import { DateInput, TimeInput } from "@/components/ds/date-input";
 
 /* ------------------------------------------------------------------ vocabulary */
 
-const BILLING_WORD: Record<string, string> = {
-  TOUR_OPERATOR_VOUCHER: "The package to the account · anything beyond it to the guest",
-  DIRECT_BILL: "Everything to the account",
-  GUEST_PAY: "Everything to the guest",
-};
-const BILLING_ORDER = ["TOUR_OPERATOR_VOUCHER", "DIRECT_BILL", "GUEST_PAY"] as const;
 /** The two models a group can take without the GM (the backend refuses the rest below L3). */
 const GROUP_FRIENDLY = new Set(["DIRECT_BILL", "TOUR_OPERATOR_VOUCHER"]);
 
@@ -80,10 +74,6 @@ type InquiryScalars = {
   travelAgentId?: string | null;
   corporateAccountId?: string | null;
   corporateCoordinator?: string | null;
-};
-type InquiryRecord = {
-  travelAgent?: { displayName?: string | null } | null;
-  corporateAccount?: { displayName?: string | null } | null;
 };
 type EntryContact = { contactPersonName?: string | null; contactPersonPhone?: string | null };
 
@@ -124,14 +114,6 @@ export function S3SetUp({
   const extraKeys: ReadonlyArray<ReadonlyArray<unknown>> = [["invoice-preview"], ["competing-claims", entry.id]];
   const changed = () => refresh(extraKeys);
 
-  const inquiryQuery = useQuery({
-    queryKey: ["inquiry", entry.inquiryId],
-    queryFn: () => getInquiry(session!, entry.inquiryId),
-    enabled: !!session && !!entry.inquiryId,
-  });
-  const inquiryRec = (inquiryQuery.data ?? null) as InquiryRecord | null;
-  const partyName = inquiryRec?.travelAgent?.displayName ?? inquiryRec?.corporateAccount?.displayName ?? null;
-
   const payment = usePaymentStatus(entry.id, { enabled: !!folio });
   const status = payment.data;
   // "Yes, ask for an advance" after the terms (2026-10-28) opens the payment plan's advance box.
@@ -140,27 +122,32 @@ export function S3SetUp({
   const [blockAsk, setBlockAsk] = useState<{ until: string | null; n: number } | null>(null);
 
   /* ---- the billing model the desk is choosing ---- */
-  const isAgentBooking = !!inq.travelAgentId || inq.sourceChannel === "TRAVEL_AGENT" || inq.sourceChannel === "AGENT";
-  // A company's booking, or a group on one master bill, starts on "everything to the account"
-  // (2026-09-18): it started on the guest paying, which the group rules then refuse — the
-  // operator had to work out which model a group may use.
-  const isCompanyBooking = !isAgentBooking && (!!inq.corporateAccountId || inq.sourceChannel === "CORPORATE");
-  const isGroupMaster = entry.groupBillingMode === "GROUP_MASTER";
-  const defaultModel = isAgentBooking ? "TOUR_OPERATOR_VOUCHER" : isCompanyBooking || isGroupMaster ? "DIRECT_BILL" : "GUEST_PAY";
-  const preselectedWhy = isAgentBooking
-    ? "this booking came through a travel agent"
-    : isCompanyBooking
-      ? "a company made this booking"
-      : isGroupMaster
-        ? "a group bills to one master bill"
-        : null;
+  // What is offered and what it starts on are the server's (2026-11-05): the package to a travel
+  // agent or a company first, the guest alone when there is nobody else to bill.
+  const payerChoices = useQuery({
+    queryKey: ["payer-choices", entry.id],
+    queryFn: () => getPayerChoices(session!, entry.id),
+    enabled: !!session,
+  });
+  const party = payerPartyOf(entry);
+  const preselectedWhy =
+    party === "TRAVEL_AGENT"
+      ? "this booking came through a travel agent"
+      : party === "CORPORATE"
+        ? "a company made this booking"
+        : entry.groupBillingMode === "GROUP_MASTER"
+          ? "a group bills to one master bill"
+          : null;
   const savedModel = folio?.billingModel ?? null;
   // Split off another booking (2026-10-14): its payer carries until the desk chooses otherwise.
   const carriedModel = entry.carryOver?.billingModel ?? null;
-  const [model, setModel] = useState<string>(savedModel ?? carriedModel ?? defaultModel);
+  const offeredCarry = carriedModel && payerChoices.data?.choices.includes(carriedModel) ? carriedModel : null;
+  const defaultModel = payerChoices.data?.defaultChoice ?? null;
+  const [picked, setPicked] = useState<string | null>(null);
   useEffect(() => {
-    if (savedModel) setModel(savedModel);
+    setPicked(null);
   }, [savedModel]);
+  const model = picked ?? savedModel ?? offeredCarry ?? defaultModel;
 
   /* ---- the rooms chosen at Inquiry ---- */
   const sealedPreferred = (entry.availabilityConfigs ?? []).find((c) => c.sealedAt && c.optionSelected);
@@ -270,15 +257,14 @@ export function S3SetUp({
       <StageActs>
         <ChangeBookingMenu items={changeItems} />
       </StageActs>
-      <PartiesCard entry={entry} inq={inq} partyName={partyName} model={savedModel ?? model} modelSaved={!!savedModel} status={status} />
-
       <BillingModelCard
         entry={entry}
         editable={editable}
         gm={gm}
         model={model}
-        setModel={setModel}
+        setModel={setPicked}
         savedModel={savedModel}
+        offered={payerChoices.data?.choices ?? null}
         preselectedWhy={
           !savedModel && carriedModel && model === carriedModel
             ? `it carries from ${entry.carryOver!.fromEntryId}, the booking these rooms came from`
@@ -423,77 +409,6 @@ export function S3SetUp({
   );
 }
 
-/* ------------------------------------------------------------------ the three parties */
-
-function PartiesCard({
-  entry,
-  inq,
-  partyName,
-  model,
-  modelSaved,
-  status,
-}: {
-  entry: EntryDetail;
-  inq: InquiryScalars;
-  partyName: string | null;
-  model: string;
-  modelSaved: boolean;
-  status: PaymentStatusSummary | undefined;
-}) {
-  const g = entry.guestProfile ?? entry.inquiry?.guestProfile ?? null;
-  const contact = entry as EntryDetail & EntryContact;
-  const guest = guestNameOf(g);
-  const bookerKind = inq.travelAgentId
-    ? "Travel agent"
-    : inq.corporateAccountId
-      ? "Company"
-      : inq.sourceChannel === "OTA"
-        ? "OTA"
-        : inq.sourceChannel === "WALK_IN"
-          ? "Walk-in"
-          : "Direct";
-  const advanceRule = !status
-    ? null
-    : status.requiredAmount === 0
-      ? "no advance asked"
-      : status.requirementBasis?.mode === "PERCENT"
-        ? `advance ${status.requirementBasis.percent}%`
-        : `advance ${money(status.requiredAmount)}`;
-  const account = partyName ?? (bookerKind === "Direct" || bookerKind === "Walk-in" ? null : "the account");
-  const billedTo =
-    model === "GUEST_PAY" ? guest : model === "DIRECT_BILL" || model === "TOUR_OPERATOR_VOUCHER" ? (account ?? "the account") : words(model);
-  return (
-    <StepCard
-      flow="parties"
-      title="The three parties"
-      summary={`${guest} · booked by ${partyName ?? (bookerKind === "Walk-in" ? "walk-in" : "the guest, direct")} · billed to ${billedTo}`}
-    >
-      <div className="grid3">
-        <FactBox
-          k="Guest"
-          v={g?.id && g ? <Link href={`/guests/${g.id}`}>{guest}</Link> : <i>{inq.travelAgentId ? "to come from the agent" : inq.corporateAccountId ? "to come from the company" : "to be named"}</i>}
-          meta={
-            contact.contactPersonName
-              ? `contact · ${contact.contactPersonName}${contact.contactPersonPhone ? ` · ${contact.contactPersonPhone}` : ""}`
-              : (g?.email ?? g?.phone ?? "no contact of their own on file")
-          }
-        />
-        <FactBox
-          k="Booked by"
-          v={partyName ?? (bookerKind === "Walk-in" ? "Walk-in" : "the guest, direct")}
-          meta={[bookerKind, advanceRule].filter(Boolean).join(" · ")}
-        />
-        <FactBox k="Billed to" v={billedTo} meta={`${modelSaved ? "" : "not set yet · "}${(BILLING_WORD[model] ?? words(model)).toLowerCase()}`} />
-      </div>
-      {partyName && model === "GUEST_PAY" ? (
-        <div className="meta" style={{ marginTop: 8 }}>
-          Booked by {partyName}, billed to the guest — the account pays nothing on this booking.
-        </div>
-      ) : null}
-    </StepCard>
-  );
-}
-
 /* ------------------------------------------------------------------ the billing model */
 
 function BillingModelCard({
@@ -503,15 +418,18 @@ function BillingModelCard({
   model,
   setModel,
   savedModel,
+  offered,
   preselectedWhy,
   onChanged,
 }: {
   entry: EntryDetail;
   editable: boolean;
   gm: boolean;
-  model: string;
+  model: string | null;
   setModel: (m: string) => void;
   savedModel: string | null;
+  /** What the server offers this booking; null until it has answered. */
+  offered: string[] | null;
   /** Why the model shown was chosen for the desk — null when the desk chose it. */
   preselectedWhy: string | null;
   onChanged: () => void;
@@ -519,40 +437,43 @@ function BillingModelCard({
   const { session } = useSession();
   const folio = entry.folio ?? null;
   const group = entry.groupBillingMode === "GROUP_MASTER";
+  const party = payerPartyOf(entry);
+  // A booking from before this rule keeps what it has on the list, so the choice still reads true.
   const options = useMemo(() => {
-    const base: Array<readonly [string, string]> = BILLING_ORDER.map((k) => [k, BILLING_WORD[k]] as const);
-    if (savedModel && !BILLING_WORD[savedModel]) base.push([savedModel, words(savedModel)] as const);
-    return base;
-  }, [savedModel]);
+    const keys = [...(offered ?? [])];
+    if (savedModel && !keys.includes(savedModel)) keys.push(savedModel);
+    return keys.map((k) => [k, payerChoiceWord(k, party)] as const);
+  }, [offered, savedModel, party]);
   // Setting the payer finishes the section — no Done to press after it (2026-10-28).
   const finish = useFinishWhenDone("billing-model");
   const save = useMutation({
-    mutationFn: () => ensureProvisionalFolio(session!, entry.id, { billingModel: model }),
+    mutationFn: () => ensureProvisionalFolio(session!, entry.id, { billingModel: model! }),
     onSuccess: () => {
       // Keyed on a model being SET, not on the folio existing — the folio opens at Set up with no
       // model, so the first choice read as a change (2026-09-18).
       toast.success(
-        !folio ? "The provisional bill is open — the proforma is generated with it" : savedModel ? "The billing model is changed" : "The billing model is set",
+        !folio ? "The provisional bill is open — the proforma is generated with it" : savedModel ? "Who pays is changed" : "Who pays is set",
       );
       onChanged();
       finish();
     },
-    onError: (e) => toastRefusal(e, "The billing model could not be set"),
+    onError: (e) => toastRefusal(e, "Who pays could not be set"),
   });
   const dirty = !savedModel || model !== savedModel;
   // A payer changed and not saved keeps the section open, and holds the move (2026-10-28).
   useFlowUnsaved("billing-model", editable && !!savedModel && model !== savedModel, "Changes to who pays saved");
   const groupLock =
-    group && !GROUP_FRIENDLY.has(model) && !gm ? "for a group, only the account or the voucher — anything else is the GM's call" : null;
+    group && !!model && !GROUP_FRIENDLY.has(model) && !gm ? "for a group, only the account or the package — anything else is the GM's call" : null;
   return (
     <StepCard
       flow="billing-model"
       title="Who pays"
-      summary={savedModel ? (BILLING_WORD[savedModel] ?? words(savedModel)) : undefined}
+      summary={savedModel ? payerChoiceWord(savedModel, party) : undefined}
       right={savedModel && !dirty ? <OnRecord /> : null}
       meta={
         <>
-          Who the bill is made out to. It is chosen here, and can still be changed on the Stay step while the guest is staying.
+          Who the bill is made out to. The package is the rooms, extra beds and meal plans on the quotation; extras are anything else charged
+          during the stay. It is chosen here, and can still be changed on the Stay step while the guest is staying.
           {preselectedWhy ? ` Pre-selected — ${preselectedWhy}; change it if they settle differently.` : ""}
           {group ? " A group has one bill for everyone." : ""}
           {folio ? "" : " The provisional bill opens with this choice, and the proforma with it."}
@@ -571,13 +492,13 @@ function BillingModelCard({
             <Button
               compact
               // Green once it can be pressed — the act that finishes the section (2026-10-28, as at Inquiry).
-              className={groupLock ? undefined : "go"}
-              state={save.isPending ? "working" : groupLock ? "inert" : "default"}
+              className={groupLock || !model ? undefined : "go"}
+              state={save.isPending ? "working" : groupLock || !model ? "inert" : "default"}
               title={groupLock ?? undefined}
               workingLabel="Saving…"
               onClick={() => save.mutate()}
             >
-              {!folio ? "Open the provisional bill" : savedModel ? "Change to this model" : "Set this model"}
+              {!folio ? "Open the provisional bill" : savedModel ? "Change who pays" : "Set who pays"}
             </Button>
             {savedModel ? (
               <Button kind="quiet" compact onClick={() => setModel(savedModel)}>
@@ -718,7 +639,7 @@ function HoldCard({
   const placeLock = !anchorRoomId
     ? "choose the rooms at Inquiry first"
     : !entry.folio?.billingModel
-      ? "set the billing model first"
+      ? "choose who pays first"
       : !entry.cancellationDisclosure
         ? "record that the terms were disclosed first"
         : moneyLock
@@ -1368,7 +1289,7 @@ function ProformaCard({
         icon="file"
         meta="Generated together with the provisional bill. Not a tax invoice; the tax invoice is issued at check-out."
       >
-        <span className="sm">Set the billing model above — the proforma is generated with it.</span>
+        <span className="sm">Choose who pays above — the proforma is generated with it.</span>
       </StepCard>
     );
   }

@@ -15,6 +15,7 @@
  * What these tabs hold was taken OUT of the steps, the side panel and the header, so nothing on
  * the booking is shown twice (the operator's rule for this pass).
  */
+import { payerChoiceWord, payerPartyOf } from "@/lib/ds/payer-words";
 import { BookingRateSheet } from "@/components/ds/rate-sheet";
 import { useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
@@ -69,12 +70,6 @@ export const BOOKING_TABS: ReadonlyArray<readonly [BookingTab, string]> = [
 const stepWord = (stage?: string | null) => (stage && /^S[1-9]$/.test(stage) ? STEP_NAMES[stepNoOfStage(stage) - 1] : null);
 
 /* ================================================================== Charges & payments */
-
-const BILLING_WORD: Record<string, string> = {
-  TOUR_OPERATOR_VOUCHER: "The package to the account · anything beyond it to the guest",
-  DIRECT_BILL: "Everything to the account",
-  GUEST_PAY: "Everything to the guest",
-};
 
 type PaymentRow = {
   id: string;
@@ -235,7 +230,7 @@ export function ChargesView({
                 </>,
               content: (
                 <>
-        <StepCard title="The bill" status={entry.folio?.billingModel ? BILLING_WORD[entry.folio.billingModel] ?? entry.folio.billingModel : "who pays is chosen at Set up"}>
+        <StepCard title="The bill" status={entry.folio?.billingModel ? payerChoiceWord(entry.folio.billingModel, payerPartyOf(entry)) : "who pays is chosen at Set up"}>
           {!fo ? (
             <p className="meta">
               No bill yet.
