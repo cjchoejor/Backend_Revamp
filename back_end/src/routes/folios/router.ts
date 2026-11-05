@@ -1,3 +1,5 @@
+import { deleteAdvancePayment, describeRecordedPayments } from "../../services/domain/advance-payment-delete-service.js";
+import { whoMayReconcile } from "../../lib/reconcile-permission.js";
 import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../../db.js";
@@ -28,6 +30,7 @@ import {
   recordInvoicePaymentEventRequestSchema,
   updateBillingModelDefaultsRequestSchema,
   writeOffOutstandingBalanceRequestSchema,
+  deleteFolioPaymentRequestSchema,
 } from "../../dtos/07-folios/request-schemas.js";
 import { AuthorizationError, NotFoundError } from "../../lib/errors.js";
 import { requireActorLevel } from "../../middleware/auth.js";
@@ -93,6 +96,26 @@ foliosRouter.post(
   },
 );
 
+/** A payment recorded by mistake (2026-11-05): L1 for their own, the FOM for anyone's; the service says. */
+foliosRouter.post(
+  "/folios/:id/payments/:paymentId/delete",
+  requireActorLevel("L1"),
+  validateBody(deleteFolioPaymentRequestSchema),
+  async (req, res, next) => {
+    try {
+      const { entryId, reason } = req.body;
+      const out = await deleteAdvancePayment(
+        prisma,
+        { folioId: req.params.id, paymentId: req.params.paymentId, entryId, reason },
+        { actorId: req.actor!.actorId, actorLevel: req.actor!.level },
+      );
+      res.json(out);
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
 foliosRouter.post(
   "/folios/:id/advance-payment/reconcile",
   requireActorLevel("L1"),
@@ -120,7 +143,15 @@ foliosRouter.get("/entries/:id/payment-status", requireActorLevel("L1"), async (
       return;
     }
     const out = await s3PaymentService.getPaymentStatus(prisma, { entryId: entry.id, folioId: entry.folio.id });
-    res.json(out);
+    const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level };
+    const who = await whoMayReconcile(prisma);
+    res.json({
+      ...out,
+      // What this person may do, so the desk draws no rule of its own (2026-11-05).
+      mayReconcile: who.levels.includes(actor.actorLevel),
+      reconcileBy: who.words,
+      recordedPayments: await describeRecordedPayments(prisma, entry.folio.id, actor),
+    });
   } catch (e) {
     next(e);
   }

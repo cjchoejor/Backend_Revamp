@@ -12,6 +12,8 @@ export async function runCommittedHoldExpiryWorker(prisma: PrismaClient, input: 
   if (!hold) return { skipped: true, reason: "HOLD_NOT_FOUND" } as const;
   const { eligible } = enforceCommittedHoldEligibleForExpiryTransition({ state: hold.state });
   if (!eligible) return { skipped: true, reason: "ALREADY_RESOLVED" } as const;
+  // The block's own time decides: one moved or placed again since this job was armed has not ended.
+  if (hold.expiresAt.getTime() > now.getTime() + 5000) return { skipped: true, reason: "NOT_DUE" } as const;
 
   await prisma.$transaction(async (tx) => {
     await tx.committedHold.update({

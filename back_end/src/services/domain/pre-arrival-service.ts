@@ -1,3 +1,4 @@
+import { enforceMayReconcile } from "../../lib/reconcile-permission.js";
 import type { PrismaClient } from "@prisma/client";
 import { guestDisplayName } from "../../lib/guest-display-name.js";
 import { PreArrivalTaskType, Stage, TaskCategory, TaskStatus } from "@prisma/client";
@@ -510,6 +511,7 @@ export async function updatePreArrivalTask(
   actorId: string,
   action: "COMPLETE" | "WAIVE",
   waivedReason?: string,
+  actorLevel?: "L1" | "L2" | "L3" | "L4",
 ) {
   const task = await prisma.preArrivalTask.findUnique({ where: { id: taskId } });
   if (!task) throw new NotFoundError("PreArrivalTask");
@@ -518,6 +520,13 @@ export async function updatePreArrivalTask(
 
   if (action === "COMPLETE") {
     if (task.taskType === PreArrivalTaskType.PAYMENT_RECONCILIATION) {
+      // Ticking this signs the money off as Mark reconciled does, so with the advance not paid in
+      // full (covered by credit) it is for the same people (2026-11-05).
+      const folio = await prisma.folio.findUnique({ where: { entryId: task.entryId }, select: { id: true } });
+      if (folio && actorLevel) {
+        const ev = await evaluateAdvancePaymentCondition(prisma, { entryId: task.entryId, folioId: folio.id });
+        if (ev.satisfied && !ev.paidInFull) await enforceMayReconcile(prisma, actorLevel);
+      }
       const r = await reconcileAdvancePayments(prisma, task.entryId, actorId);
       if (!r.reconciled) {
         throw new PolicyGateBlockedError(

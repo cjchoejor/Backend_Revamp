@@ -1,5 +1,6 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
-import { NotFoundError } from "../../lib/errors.js";
+import { NotFoundError, ValidationError } from "../../lib/errors.js";
+import { getConfigKeyMeta } from "../../lib/admin/config-key-registry.js";
 import { getActiveConfigEntry } from "../../lib/config-store.js";
 import { isSystemSeedSetBy, supersedeConfigurationEntry } from "../../lib/admin/supersede-configuration.js";
 
@@ -8,6 +9,7 @@ export const FINANCIAL_CONFIG_KEYS = [
   "billing.serviceChargeRate",
   "advancePayment.followUpWindowSeconds",
   "advancePayment.escalationWindowSeconds",
+  "advancePayment.reconciliation.alsoAllowed",
   "payment.followUp.intervals",
   "payment.followUp.ttlDays",
   "invoice.templates",
@@ -50,6 +52,8 @@ export async function setFinancialConfig(
   actorId: string,
   notes?: string | null,
 ) {
+  const invalid = getConfigKeyMeta(configKey)?.validate?.(configValue);
+  if (invalid) throw new ValidationError(`${configKey} ${invalid}`);
   return prisma.$transaction((tx) =>
     supersedeConfigurationEntry(tx, {
       configKey,

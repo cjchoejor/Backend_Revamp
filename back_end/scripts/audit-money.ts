@@ -520,6 +520,16 @@ async function main() {
   }
 
   // ── Report ──────────────────────────────────────────────────────────────────────────────
+  // A13 — a payment deleted is gone (2026-11-05): the history says so, and no row still counts it.
+  const deletedPayments = await prisma.traceEvent.findMany({ where: { eventType: "FOLIO.PAYMENT_DELETED" }, select: { entityId: true, entryId: true } });
+  if (deletedPayments.length) {
+    const stillThere = await prisma.paymentRecord.findMany({ where: { id: { in: deletedPayments.map((t) => t.entityId) } }, select: { id: true, amount: true } });
+    for (const row of stillThere) {
+      const entryId = deletedPayments.find((t) => t.entityId === row.id)?.entryId ?? "?";
+      add("CRITICAL", "A13_DELETED_PAYMENT_STILL_COUNTED", `${row.id} (${entryId})`, `recorded as deleted, yet ${money(D(row.amount))} still counts as received`);
+    }
+  }
+
   const bySeverity: Record<Severity, Finding[]> = { CRITICAL: [], WARN: [], INFO: [] };
   for (const f of findings) bySeverity[f.severity].push(f);
   console.log(`\n════ MONEY AUDIT — ${new Date().toISOString().slice(0, 16)} ════`);

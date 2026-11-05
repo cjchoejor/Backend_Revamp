@@ -338,7 +338,7 @@ reservationsRouter.post("/entries/:id/conference/verify", requireActorLevel("L2"
 reservationsRouter.patch("/pre-arrival-tasks/:id", requireActorLevel("L1"), validateBody(patchPreArrivalTaskRequestSchema), async (req, res, next) => {
   try {
     const { action, waivedReason } = req.body;
-    const updated = await preArrivalService.updatePreArrivalTask(prisma, req.params.id, req.actor!.actorId, action, waivedReason);
+    const updated = await preArrivalService.updatePreArrivalTask(prisma, req.params.id, req.actor!.actorId, action, waivedReason, req.actor!.level);
     res.json(updated);
   } catch (e) {
     next(e);
@@ -484,6 +484,16 @@ reservationsRouter.post("/entries/:id/holds/committed", requireActorLevel("L1"),
   try {
     const out = await s3HoldService.placeCommittedHold(prisma, req.params.id, { actorId: req.actor!.actorId, actorLevel: req.actor!.level }, req.body);
     res.status(201).json(out);
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** Move to Reserve blocks the rooms (2026-11-05): a block still running is left as it is. */
+reservationsRouter.post("/entries/:id/holds/committed/block", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const out = await s3HoldService.blockRoomsForReserve(prisma, req.params.id, { actorId: req.actor!.actorId, actorLevel: req.actor!.level });
+    res.json(out);
   } catch (e) {
     next(e);
   }

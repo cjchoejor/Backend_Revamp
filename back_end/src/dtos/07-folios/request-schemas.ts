@@ -379,3 +379,8 @@ export const reassignFolioLinesBulkRequestSchema = z.object({
   reason: z.string().min(1, "reason is required"),
 });
 export type ReassignFolioLinesBulkRequestDto = z.infer<typeof reassignFolioLinesBulkRequestSchema>;
+
+export const deleteFolioPaymentRequestSchema = z.object({
+  entryId: z.string().min(1),
+  reason: z.string().trim().min(1, "Say why the payment is being deleted").max(500),
+});

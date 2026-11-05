@@ -53,7 +53,8 @@ import {
   enforceEntryNotSealedForWorkingAction,
   enforceEntryStageForHoldExpiryChange,
 } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
-import { hotelLocalTimeOn, ymdUtc } from "../../lib/stay-dates.js";
+import { hotelLocalTimeOn, hotelTodayUtc, ymdUtc } from "../../lib/stay-dates.js";
+import { readExpectedRoomFlags } from "../../lib/room-flag-repair.js";
 import { enforceFolioPresentBeforeCommittedHoldS3 } from "../../policies/13-billing-model/p31-folio-required-before-committed-hold-s3.js";
 import {
   claimFlagReportsPhysicalState,
@@ -417,6 +418,19 @@ export async function placeCommittedHold(
     });
 
     const engine = await getTimerEngine();
+    // One block, one clock: a block placed again over one whose time has just passed keeps the same
+    // row, so an earlier job still waiting would end the new block.
+    const earlierClocks = await tx.timerRecord.findMany({
+      where: { entityType: "CommittedHold", entityId: hold.id, status: "SCHEDULED" },
+      select: { id: true, pgBossJobId: true },
+    });
+    if (earlierClocks.length) {
+      await Promise.all(earlierClocks.map((t) => (t.pgBossJobId ? engine.cancel(t.pgBossJobId) : Promise.resolve())));
+      await tx.timerRecord.updateMany({
+        where: { id: { in: earlierClocks.map((t) => t.id) } },
+        data: { status: "CANCELLED", cancelledAt: now, cancelledBy: actor.actorId, cancelledReason: "HOLD_PLACED_AGAIN" },
+      });
+    }
     const jobId = await engine.schedule("COMMITTED_HOLD_EXPIRY_W3", { committedHoldId: hold.id }, { startAfter: expiresAt });
     await tx.timerRecord.create({
       data: {
@@ -493,6 +507,81 @@ export type AdvancePaymentAutoHoldOutcome =
       holdId?: string;
     };
 
+/**
+ * The room a block is placed on: the room claimed on the most nights of a per-night seal (ties →
+ * first), else the first sealed room. Matches the desk's `preferredHoldRoomId` pick so the
+ * speculative-hold upgrade lands on the same room the S2 hold targeted.
+ */
+function sealedAnchorRoom(optionSelected: unknown): string | null {
+  const sealed = readOptionSelected(optionSelected as never);
+  let primary: string | null = null;
+  if ((sealed.perNight?.length ?? 0) > 0) {
+    const counts = new Map<string, number>();
+    for (const night of sealed.perNight!) {
+      for (const roomId of night.roomIds) counts.set(roomId, (counts.get(roomId) ?? 0) + 1);
+    }
+    let best = -1;
+    for (const [roomId, n] of counts) {
+      if (n > best) {
+        best = n;
+        primary = roomId;
+      }
+    }
+  }
+  return primary ?? firstRoomId(sealed) ?? null;
+}
+
+/**
+ * Move to Reserve blocks the rooms (2026-11-05, operator: "combine block the rooms button to move to
+ * reserve button, as soon as that button is clicked, it will also block"). A block still running is
+ * left as it is; otherwise one is placed, with every gate a block has. It runs for the hotel's time
+ * from the admin console, or the time set for this booking, on the same clock as ever.
+ */
+export async function blockRoomsForReserve(
+  prisma: PrismaClient,
+  entryId: string,
+  actor: { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" },
+  opts?: { justification?: string },
+): Promise<{ placed: boolean; expiresAt: string; source: "BOOKING" | "HOUSE"; houseWindowMinutes: number; roomCount: number }> {
+  const entry = await prisma.entry.findUnique({
+    where: { id: entryId },
+    select: {
+      status: true,
+      currentStage: true,
+      holdExpiresAtOverride: true,
+      committedHold: { select: { state: true, expiresAt: true } },
+      availabilityConfigs: {
+        where: { sealedAt: { not: null }, optionSelected: { not: Prisma.DbNull } },
+        orderBy: { sealedAt: "desc" },
+        take: 1,
+        select: { optionSelected: true },
+      },
+    },
+  });
+  if (!entry) throw new NotFoundError("Entry");
+  enforceEntryNotSealedForWorkingAction({ status: entry.status });
+  enforceEntryAtS3ForS3DomainOperations({ currentStage: entry.currentStage });
+  if (entry.status === EntryStatus.PARKED) throw new PolicyGateBlockedError("ENTRY_PARKED", "This booking is parked. Resume it first.");
+
+  const now = new Date();
+  const seal = entry.availabilityConfigs[0]?.optionSelected ?? null;
+  const roomCount = Math.max(1, readOptionSelected(seal as never).distinctRoomIds.length);
+  const houseWindowMinutes = Math.round((await resolveHouseHoldWindow(prisma)).seconds / 60);
+  const source = entry.holdExpiresAtOverride && entry.holdExpiresAtOverride.getTime() > now.getTime() ? ("BOOKING" as const) : ("HOUSE" as const);
+
+  const held = entry.committedHold;
+  if (held && (held.state === HoldState.PLACED || held.state === HoldState.UPGRADED) && held.expiresAt.getTime() > now.getTime()) {
+    return { placed: false, expiresAt: held.expiresAt.toISOString(), source, houseWindowMinutes, roomCount };
+  }
+  const roomId = sealedAnchorRoom(seal);
+  if (!roomId) throw new ValidationError("Choose the rooms at Inquiry first.");
+  const hold = await placeCommittedHold(prisma, entryId, actor, {
+    roomId,
+    commercialJustification: opts?.justification?.trim() || "Blocked on moving to Reserve",
+  });
+  return { placed: true, expiresAt: hold.expiresAt.toISOString(), source, houseWindowMinutes, roomCount };
+}
+
 export async function autoPlaceCommittedHoldOnAdvancePayment(
   prisma: PrismaClient,
   payment: { id: string; entryId: string },
@@ -525,25 +614,7 @@ export async function autoPlaceCommittedHoldOnAdvancePayment(
   if (holdState === "PLACED" || holdState === "CONFIRMED") {
     return { placed: false, reason: "ALREADY_HELD", holdId: entry.committedHold!.id, message: "a committed hold is already in place" };
   }
-  const sealed = readOptionSelected(entry.availabilityConfigs[0]?.optionSelected ?? null);
-  // Primary room = the anchor: the room claimed on the most nights of a per-night seal (ties →
-  // first), else the first sealed room. Matches the desk's `preferredHoldRoomId` pick so the
-  // speculative-hold upgrade lands on the same room the S2 hold targeted.
-  let primary: string | null = null;
-  if ((sealed.perNight?.length ?? 0) > 0) {
-    const counts = new Map<string, number>();
-    for (const night of sealed.perNight!) {
-      for (const roomId of night.roomIds) counts.set(roomId, (counts.get(roomId) ?? 0) + 1);
-    }
-    let best = -1;
-    for (const [roomId, n] of counts) {
-      if (n > best) {
-        best = n;
-        primary = roomId;
-      }
-    }
-  }
-  primary ??= firstRoomId(sealed) ?? null;
+  const primary = sealedAnchorRoom(entry.availabilityConfigs[0]?.optionSelected ?? null);
   if (!primary) {
     return { placed: false, reason: "NO_SEALED_SELECTION", message: "no sealed room selection from Inquiry" };
   }
@@ -748,6 +819,72 @@ export async function confirmHeldRoomsAfterFullPaymentTx(
 }
 
 /**
+ * The other way (2026-11-05): a payment deleted, and the advance is no longer paid in full, so a
+ * reserved booking's rooms read Held again, the same rule `confirmReservation` applies. They block
+ * other bookings just the same; only the label moves.
+ */
+export async function holdRoomsAgainAfterPaymentDeletedTx(
+  tx: Prisma.TransactionClient,
+  input: {
+    entryId: string;
+    actor: { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" };
+    paidInFull: boolean;
+    balanceDueAt: string | null;
+  },
+) {
+  const entry = await tx.entry.findUnique({
+    where: { id: input.entryId },
+    select: { reservationPaymentPending: true, currentReservationId: true, inquiryId: true, currentStage: true },
+  });
+  if (!entry?.currentReservationId || entry.reservationPaymentPending) return { held: 0, flagged: false };
+  if (input.paidInFull || input.balanceDueAt === "AT_CHECKOUT") return { held: 0, flagged: false };
+
+  const hold = await tx.committedHold.findUnique({ where: { entryId: input.entryId } });
+  const now = new Date();
+  let held = 0;
+  await tx.entry.update({ where: { id: input.entryId }, data: { reservationPaymentPending: true } });
+  if (hold && hold.state === HoldState.CONFIRMED) {
+    // The flag is one per room: another booking's reservation on other nights keeps it Reserved.
+    const rooms = await tx.room.findMany({ where: { id: { in: allHeldRoomIds(hold) } }, select: { id: true, currentClaimState: true } });
+    const { expected } = await readExpectedRoomFlags(tx as unknown as PrismaClient, rooms, hotelTodayUtc(now));
+    for (const room of rooms) {
+      const roomId = room.id;
+      if (room.currentClaimState !== InventoryClaimState.CONFIRMED || expected.get(roomId) !== InventoryClaimState.COMMITTED_HELD) continue;
+      await tx.room.update({ where: { id: roomId }, data: { currentClaimState: InventoryClaimState.COMMITTED_HELD } });
+      await tx.roomClaimStateEvent.create({
+        data: {
+          roomId,
+          entryId: input.entryId,
+          fromState: InventoryClaimState.CONFIRMED,
+          toState: InventoryClaimState.COMMITTED_HELD,
+          actorId: input.actor.actorId,
+          reason: "ADVANCE_PAYMENT_DELETED",
+          effectiveFrom: now,
+        },
+      });
+      held += 1;
+    }
+  }
+  await tx.traceEvent.create({
+    data: {
+      eventType: "RESERVATION.ROOMS_HELD_PAYMENT_PENDING",
+      actorId: input.actor.actorId,
+      actorLevel: input.actor.actorLevel,
+      entityType: "Reservation",
+      entityId: entry.currentReservationId,
+      operation: "UPDATE",
+      timestamp: now,
+      stageContext: entry.currentStage,
+      inquiryId: entry.inquiryId,
+      entryId: input.entryId,
+      payload: { entryId: input.entryId, reservationId: entry.currentReservationId, cause: "ADVANCE_PAYMENT_DELETED", roomsBackToHeld: held },
+      createdBy: input.actor.actorId,
+    },
+  });
+  return { held, flagged: true };
+}
+
+/**
  * SIG-S6 room change — release the entry's committed hold regardless of state (PLACED or
  * CONFIRMED) so the old room is freed and a fresh hold can be placed for the newly chosen room.
  * Frees the held room, cancels W3 expiry timers, and writes a trace event. Idempotent: a hold
@@ -773,13 +910,15 @@ export async function setCommittedHoldExpiry(
   prisma: PrismaClient,
   entryId: string,
   actor: { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" },
-  input: { date?: string; time?: string; clear?: boolean; reason?: string },
+  input: { date?: string; time?: string; clear?: boolean; reason?: string; blockNow?: boolean },
 ): Promise<{
   heldUntil: string | null;
   source: "BOOKING" | "HOUSE";
   holdUpdated: boolean;
   houseWindowMinutes: number;
   note?: string;
+  /** Why the rooms could not be blocked on saving the time, which stays remembered. */
+  blockRefused?: string;
 }> {
   const entry = await prisma.entry.findUnique({
     where: { id: entryId },
@@ -913,12 +1052,27 @@ export async function setCommittedHoldExpiry(
     });
   });
 
+  // Setting a block time is how the desk blocks the rooms at Set up (2026-11-05, operator: "if someone
+  // is going to block they will use set block time for stage 3"). The time stays remembered if the
+  // block is refused, and Move to Reserve runs to it.
+  let blockRefused: string | undefined;
+  if (input.blockNow && target && !liveHold && entry.currentStage === Stage.S3) {
+    try {
+      const blocked = await blockRoomsForReserve(prisma, entryId, actor, { justification: input.reason?.trim() || "Block time set for this booking" });
+      holdUpdated = true;
+      effective = new Date(blocked.expiresAt);
+    } catch (e) {
+      blockRefused = e instanceof Error ? e.message : "The rooms could not be blocked.";
+    }
+  }
+
   return {
     heldUntil: (effective ?? target)?.toISOString() ?? null,
     source: target ? "BOOKING" : "HOUSE",
     holdUpdated,
     houseWindowMinutes,
     ...(note ? { note } : {}),
+    ...(blockRefused ? { blockRefused } : {}),
   };
 }
 
@@ -1138,8 +1292,10 @@ export async function releaseOnReEntry(
   // Which re-entry is releasing — stamped on the claim events, timer cancellations and trace.
   // Default preserves what the original (S3→S1-only) call sites recorded.
   reason: string = "REENTRY_S3_TO_S1",
+  /** The act that releases it carries its own gates: a deleted payment takes the block it placed. */
+  opts?: { byTheSystem?: boolean },
 ) {
-  enforceCommittedHoldReleaseOnReEntryAuthority({ actorLevel: actor.actorLevel });
+  if (!opts?.byTheSystem) enforceCommittedHoldReleaseOnReEntryAuthority({ actorLevel: actor.actorLevel });
   const tx = prisma as any;
   const hold = await tx.committedHold.findUnique({ where: { entryId } });
   // No hold yet (operator re-entered before placing one) — nothing to release, not an error.
@@ -1170,7 +1326,7 @@ export async function releaseOnReEntry(
 
   await tx.traceEvent.create({
     data: {
-      eventType: "HOLD.RELEASED_ON_REENTRY",
+      eventType: opts?.byTheSystem ? "COMMITTED_HOLD.RELEASED" : "HOLD.RELEASED_ON_REENTRY",
       actorId: actor.actorId,
       actorLevel: actor.actorLevel,
       entityType: "CommittedHold",

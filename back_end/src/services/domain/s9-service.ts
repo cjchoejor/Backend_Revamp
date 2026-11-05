@@ -19,7 +19,7 @@ import { postChargeTaxCompanionsTx } from "./s7-folio-lines-service.js";
 import { describeInterimPromise, markInterimInvoiceDispatchedTx, type InterimFigures } from "./interim-payment-service.js";
 import { resolveChargeRates } from "../infrastructure/compute-stay-charges.js";
 import { mulMoney, round2, sumMoneyBy, toDecimal } from "../../lib/money.js";
-import { describeAdvancePaymentPlan, evaluateAdvancePaymentConditionTx, resolveAdvancePaymentPlan } from "./s3-payment-service.js";
+import { armAdvanceFollowUpTx, describeAdvancePaymentPlan, evaluateAdvancePaymentConditionTx, resolveAdvancePaymentPlan } from "./s3-payment-service.js";
 import { formatMoment as formatEmailDate } from "../infrastructure/stage-email-helpers.js";
 import { buildFinalInvoiceFigures, generateOrLoadInvoicePdf, loadInvoiceForRender, proformaEmailFigures, renderProformaPdfFace } from "./invoice-pdf-service.js";
 import { releaseEntryRoomsToFree } from "../../lib/room-claim-state.js";
@@ -270,59 +270,7 @@ async function dispatchInvoiceInner(
         // what was set on the booking, so a booking asked for an advance was never followed up.
         const advance = await evaluateAdvancePaymentConditionTx(prisma, tx, { entryId: updated.entryId, folioId: entry.folio.id });
         if (!advance.satisfied) {
-          // Policy registry override: `registry.advancePaymentFollowUp.windowSeconds` (when
-          // enabled) replaces the legacy `advancePayment.followUpWindowSeconds`. Escalation
-          // window remains ConfigurationEntry-driven.
-          const advancePolicy = await getRegistryPolicy(tx as any, "registry.advancePaymentFollowUp.windowSeconds");
-          const registryFollowUp =
-            advancePolicy && advancePolicy.enabled !== false && typeof advancePolicy.seconds === "number"
-              ? (advancePolicy.seconds as number)
-              : null;
-          const followUpSeconds =
-            registryFollowUp ?? Number(await requireActiveConfigValue<number>(tx as any, "advancePayment.followUpWindowSeconds"));
-          const escalationSeconds = Number(await requireActiveConfigValue<number>(tx as any, "advancePayment.escalationWindowSeconds"));
-          const t1At = new Date(now.getTime() + followUpSeconds * 1000);
-          const t2At = new Date(now.getTime() + escalationSeconds * 1000);
-
-          const t1Id = randomUUID();
-          const t2Id = randomUUID();
-          const j1 = await engine.schedule("ADVANCE_PAYMENT_FOLLOW_UP_W34", { entryId: updated.entryId, invoiceId: updated.id, tier: 1, timerRecordId: t1Id }, { startAfter: t1At });
-          const j2 = await engine.schedule("ADVANCE_PAYMENT_FOLLOW_UP_W34", { entryId: updated.entryId, invoiceId: updated.id, tier: 2, timerRecordId: t2Id }, { startAfter: t2At });
-
-          await tx.timerRecord.createMany({
-            data: [
-              {
-                id: t1Id,
-                entryId: updated.entryId,
-                entityType: "Invoice",
-                entityId: updated.id,
-                timerType: "ADVANCE_PAYMENT_FOLLOW_UP_W34",
-                timerCode: "ADVANCE_PAYMENT_FOLLOW_UP_W34",
-                stageContext: Stage.S3,
-                dueAt: t1At,
-                firesAt: t1At,
-                status: "SCHEDULED",
-                createdBy: actorId,
-                pgBossJobId: j1,
-                payload: { entryId: updated.entryId, invoiceId: updated.id, tier: 1, timerRecordId: t1Id } as any,
-              },
-              {
-                id: t2Id,
-                entryId: updated.entryId,
-                entityType: "Invoice",
-                entityId: updated.id,
-                timerType: "ADVANCE_PAYMENT_FOLLOW_UP_W34",
-                timerCode: "ADVANCE_PAYMENT_FOLLOW_UP_W34",
-                stageContext: Stage.S3,
-                dueAt: t2At,
-                firesAt: t2At,
-                status: "SCHEDULED",
-                createdBy: actorId,
-                pgBossJobId: j2,
-                payload: { entryId: updated.entryId, invoiceId: updated.id, tier: 2, timerRecordId: t2Id } as any,
-              },
-            ] as any,
-          });
+          await armAdvanceFollowUpTx(tx, { entryId: updated.entryId, invoiceId: updated.id, stage: Stage.S3, now, actorId });
         }
       }
     }

@@ -12,6 +12,8 @@ import { maxZeroSub, pctOf, round2, sumMoneyBy, toDecimal } from "../../lib/mone
 import { resolveOperativeQuotation } from "../../lib/operative-quotation.js";
 import { hotelCalendarYmd, hotelDayEndUtc } from "../../lib/stay-dates.js";
 import { retireSupersededReplyWaitsBestEffort } from "../../lib/reply-waits.js";
+import { requireActiveConfigValue } from "../../lib/config-store.js";
+import { enforceMayReconcile } from "../../lib/reconcile-permission.js";
 
 /**
  * The advance asked of THIS booking, scoped to the CURRENT segment (2026-08-02 operator ruling).
@@ -379,7 +381,7 @@ function quotationStayTotal(
  * The W38 promise clock for a dated "before check-in" promise — one live clock per booking (the
  * caller cancels what was armed before). Shared by the plan setter and the carry across a new pass.
  */
-async function armAdvancePromiseDeadlineTx(
+export async function armAdvancePromiseDeadlineTx(
   tx: Prisma.TransactionClient,
   input: { entryId: string; folioId: string; promisedBy: string; stage: Stage; actorId: string },
 ) {
@@ -652,7 +654,7 @@ async function setAdvanceRequirementInner(
  * Callers that supersede FROZEN artifacts must run `freezeUnrenderedProformasForEntry`
  * BEFORE their transaction (2026-08-02 ruling — old versions retain their figures).
  */
-async function reissueProformaTx(
+export async function reissueProformaTx(
   tx: Prisma.TransactionClient,
   input: {
     entryId: string;
@@ -1213,6 +1215,50 @@ export async function getPaymentStatus(prisma: PrismaClient, input: { entryId: s
   return evaluateAdvancePaymentCondition(prisma, input);
 }
 
+/**
+ * The two reminders about an advance still to come, counted from `now`: on sending the proforma, and
+ * again when a deleted payment leaves the advance short. They write to History; nothing is emailed.
+ */
+export async function armAdvanceFollowUpTx(
+  tx: Prisma.TransactionClient,
+  input: { entryId: string; invoiceId: string; stage: Stage; now: Date; actorId: string },
+) {
+  const { entryId, invoiceId, stage, now, actorId } = input;
+  const engine = await getTimerEngine();
+  // Policy registry override: `registry.advancePaymentFollowUp.windowSeconds` (when enabled) replaces
+  // the legacy `advancePayment.followUpWindowSeconds`. Escalation window remains ConfigurationEntry-driven.
+  const advancePolicy = await getRegistryPolicy(tx as any, "registry.advancePaymentFollowUp.windowSeconds");
+  const registryFollowUp =
+    advancePolicy && advancePolicy.enabled !== false && typeof advancePolicy.seconds === "number" ? (advancePolicy.seconds as number) : null;
+  const followUpSeconds = registryFollowUp ?? Number(await requireActiveConfigValue<number>(tx as any, "advancePayment.followUpWindowSeconds"));
+  const escalationSeconds = Number(await requireActiveConfigValue<number>(tx as any, "advancePayment.escalationWindowSeconds"));
+  const tiers = [
+    { tier: 1, at: new Date(now.getTime() + followUpSeconds * 1000), id: randomUUID() },
+    { tier: 2, at: new Date(now.getTime() + escalationSeconds * 1000), id: randomUUID() },
+  ];
+  const rows = [];
+  for (const t of tiers) {
+    const payload = { entryId, invoiceId, tier: t.tier, timerRecordId: t.id };
+    const jobId = await engine.schedule("ADVANCE_PAYMENT_FOLLOW_UP_W34", payload, { startAfter: t.at });
+    rows.push({
+      id: t.id,
+      entryId,
+      entityType: "Invoice",
+      entityId: invoiceId,
+      timerType: "ADVANCE_PAYMENT_FOLLOW_UP_W34",
+      timerCode: "ADVANCE_PAYMENT_FOLLOW_UP_W34",
+      stageContext: stage,
+      dueAt: t.at,
+      firesAt: t.at,
+      status: "SCHEDULED",
+      createdBy: actorId,
+      pgBossJobId: jobId,
+      payload,
+    });
+  }
+  await tx.timerRecord.createMany({ data: rows as any });
+}
+
 export async function cancelScheduledAdvancePaymentFollowUpForEntry(
   tx: Prisma.TransactionClient,
   entryId: string,
@@ -1358,6 +1404,7 @@ export async function markAdvancePaymentReconciled(
   input: { entryId: string; folioId: string; note?: string },
   actor: { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" },
 ) {
+  await enforceMayReconcile(prisma, actor.actorLevel);
   const folio = await prisma.folio.findUnique({ where: { id: input.folioId }, include: { payments: true } });
   if (!folio) throw new ValidationError("folioId invalid");
   if (folio.entryId !== input.entryId) throw new ValidationError("entryId/folioId mismatch");

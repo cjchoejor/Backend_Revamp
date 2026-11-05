@@ -15,6 +15,8 @@
  * Storage / immutability: same append-only pattern as the quotation and invoice services.
  * If a voucher was previously rendered we serve the stored file rather than regenerating.
  */
+import { computeStayCharges, stayBreakdownFromTerms } from "../infrastructure/compute-stay-charges.js";
+import { sumMoneyBy } from "../../lib/money.js";
 import { type PrismaClient } from "@prisma/client";
 import { NotFoundError } from "../../lib/errors.js";
 import { allocateReadableId } from "../../lib/readable-id.js";
@@ -301,6 +303,16 @@ export async function generateOrLoadConfirmationVoucherPdf(
         .join(" · ")
     : `${nights} night${nights === 1 ? "" : "s"} total`;
 
+  const voucherFolio = await prisma.folio.findUnique({
+    where: { entryId: entry.id },
+    select: { payments: { where: { paymentDirection: "IN" }, select: { amount: true } } },
+  });
+  const advanceHeld = Number(sumMoneyBy(voucherFolio?.payments ?? [], "amount").toFixed(2));
+  const stayTotal = (
+    stayBreakdownFromTerms(reservation.frozenCommercialTerms) ??
+    (await computeStayCharges(prisma, Number(reservation.frozenRate ?? 0), nights, Math.max(1, Number((reservation.frozenCommercialTerms as { roomCount?: unknown } | null)?.roomCount) || entry.numberOfRooms || 1)))
+  ).total;
+
   const html = renderLegphelConfirmationVoucherHtml({
     masthead: mastheadFromHotelProfile(hotel),
     voucherNo: voucherNumber,
@@ -316,8 +328,10 @@ export async function generateOrLoadConfirmationVoucherPdf(
     reCheckOut: null,
     roomAndPlan: roomsSummary,
     advanceReceiptRef: null,
-    advanceHeld: formatMoney(0),
-    balanceAtCheckout: formatMoney(0),
+    // What was frozen less what has come in (2026-11-05). Both were printed as 0.00 on every voucher,
+    // telling the guest nothing is owed at check-out.
+    advanceHeld: formatMoney(advanceHeld),
+    balanceAtCheckout: formatMoney(Math.max(0, Number((stayTotal - advanceHeld).toFixed(2)))),
     closingNote:
       `Inclusions per plan · Wi-Fi · parking. Early check-in and late check-out subject to ` +
       `availability. Please carry photo ID for all adult guests. ${DEFAULT_POLICIES.cancellation}`,
@@ -364,6 +378,8 @@ export async function generateOrLoadConfirmationVoucherPdf(
         confirmationVoucherInputSnapshot: {
           documentTitle: "CONFIRMATION VOUCHER",
           voucherNumber,
+          advanceHeld: formatMoney(advanceHeld),
+          balanceAtCheckout: formatMoney(Math.max(0, Number((stayTotal - advanceHeld).toFixed(2)))),
           bookingReference: entry.inquiryId,
           guestName: guestFullName,
           contactPersonName,

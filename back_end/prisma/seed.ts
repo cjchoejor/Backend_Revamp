@@ -275,6 +275,7 @@ async function main() {
     { configKey: "proformaInvoice.templates", configValue: { DEFAULT: "proforma-v1" }, notes: "PI templates per billing model (minimal)" },
     { configKey: "advancePayment.followUpWindowSeconds", configValue: 3600, notes: "W34 tier-1 follow-up window" },
     { configKey: "advancePayment.escalationWindowSeconds", configValue: 7200, notes: "W34 tier-2 escalation window" },
+    { configKey: "advancePayment.reconciliation.alsoAllowed", configValue: [], notes: "Who else may mark the money reconciled; the GM and admins always can" },
     { configKey: "paymentMilestone.scheduleTemplates", configValue: {}, notes: "Milestone templates (placeholder)" },
     { configKey: "foc.configuration", configValue: { enabled: false }, notes: "FOC config (placeholder)" },
 
