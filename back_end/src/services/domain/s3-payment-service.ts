@@ -765,11 +765,7 @@ export async function ensureProformaOfThisPassTx(
   input: { entryId: string; folioId: string; passStartedAt: Date | null; basis?: string; now?: Date },
   actor: { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" },
 ) {
-  const live = await tx.invoice.findMany({
-    where: { folioId: input.folioId, invoiceType: InvoiceType.PROFORMA, state: { not: InvoiceState.SUPERSEDED } },
-    select: { id: true, createdAt: true },
-  });
-  const ofThisPass = input.passStartedAt ? live.some((i) => i.createdAt.getTime() >= input.passStartedAt!.getTime()) : live.length > 0;
+  const { live, ofThisPass } = await liveProformasTx(tx, input.folioId, input.passStartedAt);
   if (ofThisPass) return null;
   return reissueProformaTx(
     tx,
@@ -783,6 +779,30 @@ export async function ensureProformaOfThisPassTx(
     },
     actor,
   );
+}
+
+async function liveProformasTx(tx: Prisma.TransactionClient, folioId: string, passStartedAt: Date | null) {
+  const live = await tx.invoice.findMany({
+    where: { folioId, invoiceType: InvoiceType.PROFORMA, state: { not: InvoiceState.SUPERSEDED } },
+    select: { id: true, createdAt: true },
+  });
+  return { live, ofThisPass: passStartedAt ? live.some((i) => i.createdAt.getTime() >= passStartedAt.getTime()) : live.length > 0 };
+}
+
+/**
+ * Whether this pass's proforma should wait for the desk's answer about an advance (2026-11-05,
+ * operator: "if the user clicks on pay advance then wait until the set the advance is completed then
+ * only generate the proforma, if the user click not paying advance then it can generate the
+ * proforma"). The proforma prints the advance, so one made before the answer would be replaced at
+ * once. Only when nothing is asked yet, nothing is in, no credit stands, and this pass has no bill.
+ */
+export async function proformaAwaitsAdvanceAnswerTx(
+  tx: Prisma.TransactionClient,
+  input: { entryId: string; folioId: string; passStartedAt: Date | null },
+): Promise<boolean> {
+  const advance = await computeAdvancePaymentEvaluation(tx, { entryId: input.entryId, folioId: input.folioId });
+  if (advance.requiredAmount > 0 || advance.totalReceived > 0 || advance.creditExtensionActive) return false;
+  return !(await liveProformasTx(tx, input.folioId, input.passStartedAt)).ofThisPass;
 }
 
 /** Stages where the advance can still be planned/collected — S3 (setup) through S6 (check-in);

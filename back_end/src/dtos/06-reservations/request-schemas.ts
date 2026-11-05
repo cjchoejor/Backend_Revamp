@@ -67,6 +67,8 @@ export type AllocateConferenceSpaceRequestDto = z.infer<typeof allocateConferenc
 
 export const ensureProvisionalFolioRequestSchema = z.object({
   billingModel: z.string().min(1),
+  /** The desk asks about an advance first, so the proforma waits for the answer (2026-11-05). */
+  askAdvanceFirst: z.boolean().optional(),
 });
 export type EnsureProvisionalFolioRequestDto = z.infer<typeof ensureProvisionalFolioRequestSchema>;
 

@@ -7,7 +7,7 @@ import { enforceBillingModelAllowlistFromConfig } from "../../policies/13-billin
 import { enforceEntryAtS3ForS3DomainOperations } from "../../policies/01-availability/p01-entry-at-s3-for-s3-domain-operations.js";
 import { enforceGroupBillingSplitConfigured } from "../../policies/26-group-foc-billing/p66-group-foc-and-billing-split.js";
 import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.js";
-import { applyPartyAdvanceRuleTx, ensureProformaOfThisPassTx } from "./s3-payment-service.js";
+import { applyPartyAdvanceRuleTx, ensureProformaOfThisPassTx, proformaAwaitsAdvanceAnswerTx } from "./s3-payment-service.js";
 import { retireSupersededReplyWaitsBestEffort } from "../../lib/reply-waits.js";
 import { buildInitialBillingModelDefaults } from "../../lib/billing-model-defaults.js";
 import { payerChoicesFor, type PayerChoices } from "../../lib/payer-choices.js";
@@ -35,12 +35,33 @@ const PAYER_NOT_OFFERED: Record<"TRAVEL_AGENT" | "CORPORATE" | "NONE", string> =
   NONE: "This booking has no travel agent or company to bill, so everything goes to the guest",
 };
 
+/**
+ * "No advance": the proforma the desk was holding back is made now (2026-11-05). Pressing it again
+ * makes no second one. A "yes" makes its proforma when the advance is saved.
+ */
+export async function generateProformaOfThisPass(prisma: PrismaClient, entryId: string, actorId: string) {
+  const entry = await prisma.entry.findUnique({
+    where: { id: entryId },
+    include: { folio: true, segments: { orderBy: { segmentNumber: "desc" }, take: 1, select: { startedAt: true } } },
+  });
+  if (!entry) throw new NotFoundError("Entry");
+  enforceEntryNotSealedForWorkingAction({ status: entry.status });
+  enforceEntryAtS3ForS3DomainOperations({ currentStage: entry.currentStage });
+  if (!entry.folio?.billingModel) throw new ValidationError("Choose who pays first — the proforma is made out to them");
+  const folioId = entry.folio.id;
+  const made = await prisma.$transaction((tx) =>
+    ensureProformaOfThisPassTx(tx, { entryId, folioId, passStartedAt: entry.segments[0]?.startedAt ?? null, basis: "NO_ADVANCE_ASKED" }, { actorId, actorLevel: "L1" }),
+  );
+  await retireSupersededReplyWaitsBestEffort(prisma, entryId, actorId);
+  return { generated: !!made, proforma: made };
+}
+
 export async function ensureProvisionalFolioAndBillingModel(
   prisma: PrismaClient,
   entryId: string,
   actorId: string,
   actorLevel: ActorLevel,
-  input: { billingModel: string },
+  input: { billingModel: string; askAdvanceFirst?: boolean },
   // A booking split off another carries that booking's payer, whatever it was (2026-11-05).
   opts?: { carried?: boolean },
 ) {
@@ -142,13 +163,16 @@ export async function ensureProvisionalFolioAndBillingModel(
     // A booking through a travel agent or a company takes its own advance here too, before the
     // bill that prints it — for one already at Set up when the percentage was set (2026-11-05).
     await applyPartyAdvanceRuleTx(tx, { entryId, folioId: folio.id, segmentId, actorId, now: new Date() });
-    await ensureProformaOfThisPassTx(
-      tx,
-      { entryId, folioId: folio.id, passStartedAt: entry.segments[0]?.startedAt ?? null, basis: "S3 setup" },
-      { actorId, actorLevel: "L1" },
-    );
+    // The desk asks about an advance first when nothing is asked yet: the proforma, which prints
+    // it, waits for the answer (2026-11-05). Everyone else gets it now, as before.
+    const passStartedAt = entry.segments[0]?.startedAt ?? null;
+    const advanceQuestion =
+      input.askAdvanceFirst === true && (await proformaAwaitsAdvanceAnswerTx(tx, { entryId, folioId: folio.id, passStartedAt }));
+    if (!advanceQuestion) {
+      await ensureProformaOfThisPassTx(tx, { entryId, folioId: folio.id, passStartedAt, basis: "S3 setup" }, { actorId, actorLevel: "L1" });
+    }
 
-    return tx.folio.findUniqueOrThrow({ where: { id: folio.id }, include: { invoices: true } });
+    return { ...(await tx.folio.findUniqueOrThrow({ where: { id: folio.id }, include: { invoices: true } })), advanceQuestion };
   });
   // An earlier pass's proforma replaced here is no longer waiting for an answer.
   await retireSupersededReplyWaitsBestEffort(prisma, entryId, actorId);

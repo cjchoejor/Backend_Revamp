@@ -472,6 +472,14 @@ reservationsRouter.post("/entries/:id/folio/provisional", requireActorLevel("L1"
   }
 });
 
+reservationsRouter.post("/entries/:id/proforma", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.status(201).json(await s3ReservationSetupService.generateProformaOfThisPass(prisma, req.params.id, req.actor!.actorId));
+  } catch (e) {
+    next(e);
+  }
+});
+
 reservationsRouter.post("/entries/:id/holds/committed", requireActorLevel("L1"), validateBody(placeCommittedHoldRequestSchema), async (req, res, next) => {
   try {
     const out = await s3HoldService.placeCommittedHold(prisma, req.params.id, { actorId: req.actor!.actorId, actorLevel: req.actor!.level }, req.body);
