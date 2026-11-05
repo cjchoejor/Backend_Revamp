@@ -11,7 +11,7 @@ import { enforceDiscountApprovalAuthority, resolveActorDiscountCeilings } from "
 import { getRegistryPolicy } from "../../lib/policy-registry-runtime.js";
 import { dispatchStageEmailBestEffort } from "../infrastructure/stage-email-helpers.js";
 import { renderQuotationEmail } from "../infrastructure/stage-email-templates.js";
-import { computeStayCharges } from "../infrastructure/compute-stay-charges.js";
+import { computeStayCharges, stayBreakdownFromTerms } from "../infrastructure/compute-stay-charges.js";
 import { validateDiscountRequestAgainstAuthorityBands } from "../../policies/09-discount/p23-discount-request-constraints.js";
 import { enforceAckOpenLoopResolutionRequiresFom } from "../../policies/20-communication-acknowledgement-tracking/p52-ack-open-loop-resolution-requires-fom.js";
 import {
@@ -2213,7 +2213,9 @@ async function sendQuotationEmailBestEffort(
   // createGroupQuotation) or fall back to entry.numberOfRooms. Falls back to 1 for legacy
   // pre-multi-room quotations that don't have the field.
   const roomCount = Math.max(1, Number((terms as any).roomCount) || entry.numberOfRooms || 1);
-  const breakdown = await computeStayCharges(prisma, nightly, nights, roomCount);
+  // What the paper prints, not rate × nights × rooms, which left out meals, beds and each room's own rate.
+  const priced = stayBreakdownFromTerms(terms);
+  const breakdown = priced ?? (await computeStayCharges(prisma, nightly, nights, roomCount));
   // Who the quote goes to — the invoices' rule (2026-09-19): the address typed at the desk, else
   // the agency or company that booked (the quote carries their rates — it is never sent to the
   // traveller by default), else the guest. Lazy import: s9-service pulls in half the domain.
@@ -2227,7 +2229,7 @@ async function sendQuotationEmailBestEffort(
     checkInDate: ci,
     checkOutDate: co,
     guestCount: entry.guestCount ?? 1,
-    nightlyRate: nightly,
+    nightlyRate: priced ? null : nightly,
     currency,
     breakdown,
     validUntil: q.validUntil ?? new Date(),

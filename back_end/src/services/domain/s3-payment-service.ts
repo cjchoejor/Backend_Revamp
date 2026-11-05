@@ -319,7 +319,7 @@ export async function applyPartyAdvanceRuleTx(
   if (lastBasis?.mode === "NONE") return none;
   if (entry.currentReservationId && lastBasis?.source !== "PARTY") return none;
 
-  const quotations = await tx.quotation.findMany({ where: { entryId: input.entryId, segmentId: input.segmentId } });
+  const quotations = await tx.quotation.findMany({ where: { entryId: input.entryId, segmentId: input.segmentId }, orderBy: { createdAt: "desc" } });
   const quote = resolveOperativeQuotation(quotations, input.segmentId) ?? quotations.find((q) => q.state !== "SUPERSEDED") ?? null;
   if (!quote) return none;
 

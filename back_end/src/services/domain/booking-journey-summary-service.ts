@@ -3,6 +3,7 @@ import { guestDisplayName } from "../../lib/guest-display-name.js";
 import type { EntryStatus, EntryUseType, GroupBillingMode, Stage } from "@prisma/client";
 import { NotFoundError } from "../../lib/errors.js";
 import { readOptionSelected } from "../../lib/option-selected-reader.js";
+import { resolveBillQuotation } from "../../lib/operative-quotation.js";
 import { getPaymentStatus } from "./s3-payment-service.js";
 
 /**
@@ -289,7 +290,7 @@ export async function buildBookingJourneySummary(prisma: Db, entryId: string): P
       },
       segments: { orderBy: { segmentNumber: "desc" }, take: 1 },
       availabilityConfigs: { orderBy: { createdAt: "desc" } },
-      quotations: { orderBy: { versionNumber: "desc" }, include: { lines: { orderBy: { createdAt: "asc" } } } },
+      quotations: { orderBy: { createdAt: "desc" }, include: { lines: { orderBy: { createdAt: "asc" } } } },
       speculativeHolds: { orderBy: { placedAt: "desc" }, take: 1, include: { room: { select: { roomNumber: true } } } },
       folio: {
         include: {
@@ -366,12 +367,8 @@ export async function buildBookingJourneySummary(prisma: Db, entryId: string): P
   const contractRef = inq?.corporateClientRef ?? (Array.isArray(corp?.contractRefs) ? corp?.contractRefs[0] ?? null : null);
 
   // --- S2: the quotation that represents the commercial outcome ------------------------------
-  // Prefer the ACCEPTED quotation for the current segment; fall back to the latest version.
-  const acceptedQuote =
-    entry.quotations.find((q) => q.segmentId === currentSegmentId && q.state === "ACCEPTED") ??
-    entry.quotations.find((q) => q.state === "ACCEPTED") ??
-    entry.quotations[0] ??
-    null;
+  // The one the bills read (an older pass's acceptance must not stand in for this pass's price).
+  const acceptedQuote = resolveBillQuotation(entry.quotations, currentSegmentId);
   const terms = (acceptedQuote?.commercialTerms ?? null) as Record<string, unknown> | null;
   const pricingBreakdown = (terms?.pricingBreakdown ?? null) as Record<string, unknown> | null;
 

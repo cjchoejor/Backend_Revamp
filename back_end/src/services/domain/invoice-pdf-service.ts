@@ -49,13 +49,13 @@ import { mastheadFromHotelProfile, primaryContactNumber } from "../infrastructur
 import { formatDocDate, formatDocDateTimeLocal, formatStayLines, formatDocDateLocal } from "../infrastructure/pdf-templates/legphel-document-format.js";
 import { guestDisplayName } from "../../lib/guest-display-name.js";
 import { renderLegphelTaxInvoiceHtml } from "../infrastructure/pdf-templates/legphel-tax-invoice-template.js";
-import { computeStayCharges, resolveChargeRates } from "../infrastructure/compute-stay-charges.js";
+import { computeStayCharges, resolveChargeRates, stayBreakdownFromTerms } from "../infrastructure/compute-stay-charges.js";
 import {
   describeAdvancePaymentPlan,
   resolveAdvancePaymentPlan,
   resolveOperatorAdvanceRequirement,
 } from "./s3-payment-service.js";
-import { resolveOperativeQuotation } from "../../lib/operative-quotation.js";
+import { resolveBillQuotation } from "../../lib/operative-quotation.js";
 import { assignedRoomNights, roomsWithNightsLine, type NightsMode } from "../../lib/room-nights-for-entry.js";
 import { quotationPaperPrices } from "./quotation-pdf-service.js";
 import { priceRowsNote, type LegphelPriceBlock } from "../infrastructure/pdf-templates/legphel-quotation-template.js";
@@ -125,13 +125,9 @@ export async function loadInvoiceForRender(prisma: PrismaClient, invoiceId: stri
 
 /** Shared derivations both branches (and the proforma preview) start from. */
 function invoicePrelude(inv: LoadedInvoice) {
-  // The commercial basis: the operative quotation of the current segment (matches
-  // resolveOperativeQuotation everywhere else), falling back to the newest ACCEPTED, then the
-  // newest of any state — the document should show the best terms on file, not blanks.
+  // The commercial basis — the document should show the best terms on file, not blanks.
   const segmentId = inv.entry.segments?.[0]?.id ?? null;
-  const operative = segmentId ? resolveOperativeQuotation(inv.entry.quotations, segmentId) : null;
-  const quotation =
-    operative ?? inv.entry.quotations.find((q) => q.state === "ACCEPTED") ?? inv.entry.quotations[0] ?? null;
+  const quotation = resolveBillQuotation(inv.entry.quotations, segmentId);
   const terms = (quotation?.commercialTerms as QuotationTerms) ?? null;
 
   const checkIn = inv.entry.reservation?.frozenCheckInDate ?? inv.entry.checkInDate ?? new Date();
@@ -176,6 +172,50 @@ type ProformaPrintLine = {
   extraBeds: string | null;
   amount: string | number;
 };
+
+/**
+ * The money taken and still to come, as the proforma states it: its paper and its email both read
+ * this. The requirement is what is on the bill for this pass, else null — nothing is asked. It is
+ * SEGMENT-SCOPED (2026-08-02, shared resolver): one set in a prior segment doesn't survive a
+ * re-entry, so a new segment's proforma does not print the old segment's figure.
+ */
+async function proformaAdvanceFigures(prisma: PrismaClient, inv: LoadedInvoice, totalAmount: number) {
+  const inPayments = (inv.folio?.payments ?? []).filter((pay) => pay.paymentDirection === "IN");
+  const advanceReceived = inPayments.reduce((s, pay) => s + Number(toDecimal(pay.amount).toFixed(2)), 0);
+  const currentSegment = await prisma.segment.findFirst({
+    where: { entryId: inv.entryId },
+    orderBy: { segmentNumber: "desc" },
+    select: { startedAt: true },
+  });
+  const pinnedAdvance = inv.folio ? resolveOperatorAdvanceRequirement(inv.folio, currentSegment?.startedAt ?? null) : null;
+  const requiredAdvance: number | null = pinnedAdvance != null && pinnedAdvance > 0 ? Number(toDecimal(pinnedAdvance).toFixed(2)) : null;
+  const basis = (inv.folio?.advanceRequiredBasis ?? null) as { mode?: string; percent?: number } | null;
+  const advanceDueQualifier =
+    requiredAdvance != null && basis?.mode === "PERCENT" && typeof basis.percent === "number" ? `(${basis.percent}% of quote)` : null;
+  const advanceDueNow = requiredAdvance == null ? 0 : Math.max(0, Number((requiredAdvance - advanceReceived).toFixed(2)));
+  return {
+    segmentStartedAt: currentSegment?.startedAt ?? null,
+    advanceReceived,
+    paymentCount: inPayments.length,
+    requiredAdvance,
+    advanceDueQualifier,
+    advanceDueNow,
+    balanceAtCheckout: Math.max(0, Number((totalAmount - advanceReceived - advanceDueNow).toFixed(2))),
+  };
+}
+
+/**
+ * What the proforma's email states: the priced totals of the quotation the paper prints and the
+ * paper's own advance rows (2026-11-05). It worked out rate × nights × rooms for itself, which came
+ * to Nu 0 with no accepted quotation and no reservation and left out meals and extra beds with one,
+ * and it named a balance but never the advance the paper asks for.
+ */
+export async function proformaEmailFigures(prisma: PrismaClient, invoiceId: string) {
+  const inv = await loadInvoiceForRender(prisma, invoiceId);
+  const p = invoicePrelude(inv);
+  const breakdown = stayBreakdownFromTerms(p.terms) ?? (await computeStayCharges(prisma, p.nightlyRate, p.nights, p.roomCount));
+  return { breakdown, ...(await proformaAdvanceFigures(prisma, inv, breakdown.total)) };
+}
 
 /**
  * Compose the A2 house-format proforma from the invoice's CURRENT data. Pure read — no
@@ -282,37 +322,14 @@ async function buildProformaDocRender(prisma: PrismaClient, inv: LoadedInvoice, 
   };
 
   // === Advance figures ===
-  const inPayments = (inv.folio?.payments ?? []).filter((pay) => pay.paymentDirection === "IN");
-  const advanceReceived = inPayments.reduce((s, pay) => s + Number(toDecimal(pay.amount).toFixed(2)), 0);
-
-  // The requirement: what is on the bill for this pass, else null — nothing is asked. It is
-  // SEGMENT-SCOPED (2026-08-02, shared resolver): one set in a prior segment doesn't survive a
-  // re-entry, so a new segment's proforma does not print the old segment's figure.
-  const currentSegmentForAdvance = await prisma.segment.findFirst({
-    where: { entryId: inv.entryId },
-    orderBy: { segmentNumber: "desc" },
-    select: { startedAt: true },
-  });
-  const pinnedAdvance = inv.folio
-    ? resolveOperatorAdvanceRequirement(inv.folio, currentSegmentForAdvance?.startedAt ?? null)
-    : null;
-  const requiredAdvance: number | null = pinnedAdvance != null && pinnedAdvance > 0 ? Number(toDecimal(pinnedAdvance).toFixed(2)) : null;
-  let advanceDueQualifier: string | null = null;
-  const basis = (inv.folio?.advanceRequiredBasis ?? null) as { mode?: string; percent?: number } | null;
-  if (requiredAdvance != null && basis?.mode === "PERCENT" && typeof basis.percent === "number") {
-    advanceDueQualifier = `(${basis.percent}% of quote)`;
-  }
-
-  const advanceDueNow = requiredAdvance == null ? 0 : Math.max(0, Number((requiredAdvance - advanceReceived).toFixed(2)));
+  const { segmentStartedAt, advanceReceived, paymentCount, requiredAdvance, advanceDueQualifier, advanceDueNow, balanceAtCheckout } =
+    await proformaAdvanceFigures(prisma, inv, totalAmount);
   const totalPayable = Number((totalAmount - advanceReceived).toFixed(2));
-  const balanceAtCheckout = Math.max(0, Number((totalAmount - advanceReceived - advanceDueNow).toFixed(2)));
 
   // The guest's payment plan (2026-08-08, operator ruling: "select one and reflect that in the
   // PI") — segment-scoped like the requirement pin, printed only when one is recorded. The same
   // resolver feeds payment-status, so the document and the desk cannot disagree.
-  const paymentPlan = inv.folio
-    ? resolveAdvancePaymentPlan(inv.folio, currentSegmentForAdvance?.startedAt ?? null)
-    : null;
+  const paymentPlan = inv.folio ? resolveAdvancePaymentPlan(inv.folio, segmentStartedAt) : null;
   const advancePlanLabel = describeAdvancePaymentPlan(paymentPlan, formatDocDateLocal);
 
   // The advance deadline — mirrors payment-status `advanceWindow.deadline`: the advance is due
@@ -346,7 +363,7 @@ async function buildProformaDocRender(prisma: PrismaClient, inv: LoadedInvoice, 
     advancePlanLabel,
     advanceReceived: advanceReceived > 0 ? formatMoney(advanceReceived) : null,
     // "(2 payments)" once installments are in — the guest sees how many they've made so far.
-    advanceReceivedQualifier: inPayments.length > 1 ? `(${inPayments.length} payments)` : null,
+    advanceReceivedQualifier: paymentCount > 1 ? `(${paymentCount} payments)` : null,
     advanceDueQualifier,
     advanceDueNow: requiredAdvance == null ? null : formatMoney(advanceDueNow),
     balanceAtCheckout: formatMoney(balanceAtCheckout),

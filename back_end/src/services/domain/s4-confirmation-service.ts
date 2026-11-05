@@ -35,7 +35,7 @@ import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.
 import { dispatchStageEmailBestEffort } from "../infrastructure/stage-email-helpers.js";
 import { renderReservationConfirmationEmail } from "../infrastructure/stage-email-templates.js";
 import { generateOrLoadConfirmationVoucherPdf } from "./confirmation-voucher-pdf-service.js";
-import { computeStayCharges } from "../infrastructure/compute-stay-charges.js";
+import { computeStayCharges, stayBreakdownFromTerms } from "../infrastructure/compute-stay-charges.js";
 import { initialiseTasks as initialisePreArrivalTasks } from "./pre-arrival-service.js";
 import { latestDispatchedInForce, retireSupersededReplyWaitsBestEffort } from "../../lib/reply-waits.js";
 import { recordHeldDocument } from "../../lib/held-documents.js";
@@ -532,7 +532,9 @@ async function confirmReservationInner(
   // set at quote creation), fall back to entry.numberOfRooms, fall back to 1.
   const acceptedTerms = accepted.commercialTerms as { roomCount?: number } | null;
   const bookingRoomCount = Math.max(1, Number(acceptedTerms?.roomCount) || entry.numberOfRooms || 1);
-  const breakdown = await computeStayCharges(prisma, frozenRate, nights, bookingRoomCount);
+  // What was frozen, not rate × nights × rooms, which left out meals, beds and each room's own rate.
+  const priced = stayBreakdownFromTerms(result.reservation.frozenCommercialTerms);
+  const breakdown = priced ?? (await computeStayCharges(prisma, frozenRate, nights, bookingRoomCount));
   // Group-oriented content when the entry is GROUP_MASTER. Group leader defaults to the
   // on-site contact person (a group in operational terms) with fall-back to the guest
   // profile display name.
@@ -545,7 +547,7 @@ async function confirmReservationInner(
     checkInDate: ciDate,
     checkOutDate: coDate,
     guestCount: result.reservation.frozenGuestCount ?? entry.guestCount ?? 1,
-    nightlyRate: frozenRate,
+    nightlyRate: priced ? null : frozenRate,
     currency,
     breakdown,
     isGroup,
@@ -673,7 +675,8 @@ async function resendConfirmationVoucherInner(
   const displayName =
     guestDisplayName(entry.guestProfile) || "Guest";
   const bookingRoomCount = Math.max(1, Number(operativeTerms?.roomCount) || entry.numberOfRooms || 1);
-  const breakdown = await computeStayCharges(prisma, frozenRate, nights, bookingRoomCount);
+  const priced = stayBreakdownFromTerms(reservation.frozenCommercialTerms);
+  const breakdown = priced ?? (await computeStayCharges(prisma, frozenRate, nights, bookingRoomCount));
   const isGroup = entry.groupBillingMode === "GROUP_MASTER";
   const content = renderReservationConfirmationEmail({
     guestDisplayName: displayName,
@@ -681,7 +684,7 @@ async function resendConfirmationVoucherInner(
     checkInDate: ciDate,
     checkOutDate: coDate,
     guestCount: reservation.frozenGuestCount ?? entry.guestCount ?? 1,
-    nightlyRate: frozenRate,
+    nightlyRate: priced ? null : frozenRate,
     currency,
     breakdown,
     isGroup,

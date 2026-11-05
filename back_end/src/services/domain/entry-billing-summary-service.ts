@@ -184,7 +184,7 @@ export async function buildEntryBillingSummary(prisma: Db, entryId: string): Pro
   const entry = await prisma.entry.findUnique({
     where: { id: entryId },
     include: {
-      quotations: { orderBy: { versionNumber: "desc" } },
+      quotations: { orderBy: { createdAt: "desc" } },
       segments: { orderBy: { segmentNumber: "desc" }, select: { id: true, segmentNumber: true } },
       reservation: { select: { segmentId: true, frozenCheckInDate: true, frozenCheckOutDate: true, frozenCommercialTerms: true } },
       folio: { select: { id: true, state: true, outstandingBalance: true } },

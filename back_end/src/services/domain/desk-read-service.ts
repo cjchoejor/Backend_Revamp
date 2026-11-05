@@ -79,7 +79,7 @@ const listSelect = {
     select: { expiresAt: true },
   },
   quotations: {
-    orderBy: { versionNumber: "desc" as const },
+    orderBy: { createdAt: "desc" as const },
     take: 1,
     select: { referenceNumber: true, state: true, validUntil: true, sentAt: true },
   },

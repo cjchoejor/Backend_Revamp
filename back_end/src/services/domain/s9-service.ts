@@ -17,11 +17,11 @@ import { dispatchStageEmailBestEffort } from "../infrastructure/stage-email-help
 import { renderFinalInvoiceEmail, renderInterimInvoiceEmail, renderPostStayChargeEmail, renderProformaInvoiceEmail } from "../infrastructure/stage-email-templates.js";
 import { postChargeTaxCompanionsTx } from "./s7-folio-lines-service.js";
 import { describeInterimPromise, markInterimInvoiceDispatchedTx, type InterimFigures } from "./interim-payment-service.js";
-import { computeStayCharges, resolveChargeRates } from "../infrastructure/compute-stay-charges.js";
+import { resolveChargeRates } from "../infrastructure/compute-stay-charges.js";
 import { mulMoney, round2, sumMoneyBy, toDecimal } from "../../lib/money.js";
-import { describeAdvancePaymentPlan, evaluateAdvancePaymentCondition, evaluateAdvancePaymentConditionTx, resolveAdvancePaymentPlan } from "./s3-payment-service.js";
+import { describeAdvancePaymentPlan, evaluateAdvancePaymentConditionTx, resolveAdvancePaymentPlan } from "./s3-payment-service.js";
 import { formatMoment as formatEmailDate } from "../infrastructure/stage-email-helpers.js";
-import { buildFinalInvoiceFigures, generateOrLoadInvoicePdf, loadInvoiceForRender, renderProformaPdfFace } from "./invoice-pdf-service.js";
+import { buildFinalInvoiceFigures, generateOrLoadInvoicePdf, loadInvoiceForRender, proformaEmailFigures, renderProformaPdfFace } from "./invoice-pdf-service.js";
 import { releaseEntryRoomsToFree } from "../../lib/room-claim-state.js";
 import { resolveBillingModelForNewLine } from "../../lib/billing-model-defaults.js";
 import { computeOutstandingForBillingModel, listBillingModelBucketsForFolio } from "../../lib/folio-outstanding-per-billing-model.js";
@@ -490,16 +490,13 @@ async function sendInvoiceEmailBestEffort(
         ? invoiceImpliedNightly
         : 0;
   const currency = quotationTerms?.currency ?? "BTN";
-  // Multi-room: get roomCount from the quotation's commercialTerms (single source of truth),
-  // fall back to entry.numberOfRooms, then to 1. S9 needs this so the final invoice /
-  // reconciliation reflects the total for all rooms, not just one.
-  const s9RoomCount = Math.max(1, Number((quotationTerms as any)?.roomCount) || entry.numberOfRooms || 1);
   const isPI = inv.invoiceType === InvoiceType.PROFORMA;
   const isInterim = inv.invoiceType === InvoiceType.INTERIM;
   // The FINAL invoice email prints the LEDGER figures — the same pure builder the PDF renders
   // from (2026-08-18). It used to re-derive frozenRate × nights × rooms + tax, a third figure
   // that matched neither the PDF nor the desk's bill.
-  let breakdown = isPI ? await computeStayCharges(prisma, nightlyRate, nights, s9RoomCount) : null;
+  const pi = isPI ? await proformaEmailFigures(prisma, invoiceId) : null;
+  let breakdown = pi?.breakdown ?? null;
   let amountPaid = paid;
   if (!isPI && !isInterim) {
     const loaded = await loadInvoiceForRender(prisma, invoiceId);
@@ -523,11 +520,6 @@ async function sendInvoiceEmailBestEffort(
     : null;
   const interimFigures = (interimReq?.figures ?? null) as InterimFigures | null;
   const interimPromise = interimReq ? describeInterimPromise(interimReq, formatEmailDate) : null;
-  // Whether the guest is asked for an advance at all: with none, the email must not ask for one.
-  const advanceAsked =
-    isPI && inv.folio
-      ? ((await evaluateAdvancePaymentCondition(prisma, { entryId: entry.id, folioId: inv.folio.id }).catch(() => null))?.requiredAmount ?? 0) > 0
-      : false;
   const content = isInterim
     ? renderInterimInvoiceEmail({
         guestDisplayName: displayName,
@@ -560,9 +552,12 @@ async function sendInvoiceEmailBestEffort(
         guestCount: entry.reservation?.frozenGuestCount ?? entry.guestCount ?? 1,
         currency,
         breakdown: breakdown!,
-        amountPaid: paid,
-        paymentCount: inv.folio?.payments?.length ?? 0,
-        advanceAsked,
+        advanceReceived: pi!.advanceReceived,
+        paymentCount: pi!.paymentCount,
+        advanceAsked: pi!.requiredAdvance != null,
+        advanceDueNow: pi!.advanceDueNow,
+        advanceDueQualifier: pi!.advanceDueQualifier,
+        balanceAtCheckout: pi!.balanceAtCheckout,
         // Real columns only — `ci` is today-defaulted above, and the template must not print a
         // fabricated pay-by date for a dateless entry.
         advanceDueBy: entry.reservation?.frozenCheckInDate ?? entry.checkInDate ?? null,

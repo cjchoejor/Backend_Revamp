@@ -378,7 +378,7 @@ export async function postCharge(
   //   5. Fallback: BTN.
   const acceptedQ = await prisma.quotation.findFirst({
     where: { entryId: input.entryId, state: "ACCEPTED" as any },
-    orderBy: { versionNumber: "desc" },
+    orderBy: { createdAt: "desc" },
     select: { currency: true, commercialTerms: true },
   });
   const quotationCurrency =
