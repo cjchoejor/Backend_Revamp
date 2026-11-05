@@ -251,6 +251,7 @@ export function ChargesView({
                 </Fact>
                 <Fact k="Payments received">{money(fo.paymentsReceived, cur)}</Fact>
                 {fo.refunded ? <Fact k="Refunded">{money(fo.refunded, cur)}</Fact> : null}
+                {fo.refundWaiting ? <Fact k="Waiting to be refunded">{money(fo.refundWaiting, cur)}</Fact> : null}
                 {fo.writtenOff ? <Fact k="Written off">{money(fo.writtenOff, cur)}</Fact> : null}
                 {fo.overpaid ? <Fact k="Paid above the bill">{money(fo.overpaid, cur)}</Fact> : null}
               </Facts>

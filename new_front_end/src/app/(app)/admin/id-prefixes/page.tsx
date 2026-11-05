@@ -33,6 +33,7 @@ const ENTITY_LABEL: Record<string, string> = {
   EARLY_DEPARTURE: "Early departure",
   ROOM_MOVE: "Room move",
   VOUCHER: "Confirmation voucher",
+  REFUND: "Refund",
   TRAVEL_AGENT: "Travel agent",
   CORPORATE_ACCOUNT: "Corporate account",
   RATE_CARD: "Rate card",

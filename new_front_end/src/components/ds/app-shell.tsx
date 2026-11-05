@@ -9,6 +9,9 @@
  * only. Panels hang from the control that opened them and close on an outside click, Escape, or
  * the control again.
  */
+import { useRefunds } from "@/hooks/use-refunds";
+import { RefundCoin } from "@/components/ds/refund-bits";
+import { money } from "@/lib/ds/format";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -97,6 +100,9 @@ export function AppShell({ children }: { children: ReactNode }) {
   // a late room holds up the next guest.
   const housekeeping = useHousekeepingBoard();
   const lateRooms = (housekeeping.data?.rooms ?? []).filter((r) => r.state === "TO_CLEAN" && r.toClean?.overdue);
+  // Money to give back, for the FOM, GM and admin (2026-11-05): a row of its own, with the money sign.
+  const fom = !!session && session.actorLevel !== "L1";
+  const refundsWaiting = useRefunds("waiting").data?.items ?? [];
   const secondPage = SECOND.some((s) => isOn(pathname, s.href));
   // The six main pages take the stages' blue palette (2026-10-30, operator: "make the theme colour of
   // that page like how we have in the stages UI"); the pages under "more" keep the desk's own.
@@ -115,10 +121,15 @@ export function AppShell({ children }: { children: ReactNode }) {
   // The one coloured count: things that are overdue or due within the next hours.
   const urgent = useMemo(() => {
     const rows = bookings.data?.items ?? [];
-    return attentionItems(rows, clock.now, hotelDay?.today ?? null, clock.tz).filter((i) => i.band !== "waiting");
+    return attentionItems(rows, clock.now, hotelDay?.today ?? null, clock.tz)
+      .filter((i) => i.band !== "waiting")
+      // A block whose time ended goes to the FOM and GM, first on their list (2026-11-05).
+      .filter((i) => fom || !i.critical)
+      .sort((a, b) => Number(!!b.critical) - Number(!!a.critical));
     // clock.now moves every 15 s; the list only needs to follow it loosely
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bookings.data, hotelDay?.today, Math.floor(clock.now / 60_000)]);
+  }, [bookings.data, hotelDay?.today, fom, Math.floor(clock.now / 60_000)]);
+  const bellCount = urgent.length + (lateRooms.length ? 1 : 0) + refundsWaiting.length;
 
   // Unreachable server (DSS §6): a network failure, not a refusal.
   const offlineSince = useRef<number | null>(null);
@@ -181,9 +192,9 @@ export function AppShell({ children }: { children: ReactNode }) {
           <TopbarClock />
 
           <div ref={bell.ref} style={{ position: "relative" }}>
-            <button type="button" className="notif" aria-label={`${urgent.length + (lateRooms.length ? 1 : 0)} notifications`} aria-expanded={bell.open} onClick={() => bell.setOpen((o) => !o)}>
+            <button type="button" className="notif" aria-label={`${bellCount} notifications`} aria-expanded={bell.open} onClick={() => bell.setOpen((o) => !o)}>
               <Icon name="bell" size="lg" />
-              <span className={`count${urgent.length + (lateRooms.length ? 1 : 0) === 0 ? " zero" : ""}`}>{urgent.length + (lateRooms.length ? 1 : 0)}</span>
+              <span className={`count${bellCount === 0 ? " zero" : ""}`}>{bellCount}</span>
             </button>
             {bell.open ? (
               <div className="drawer open panel-from-bar" role="dialog" aria-label="Notifications">
@@ -195,6 +206,29 @@ export function AppShell({ children }: { children: ReactNode }) {
                     See all notifications
                   </Link>
                 </div>
+                {refundsWaiting.slice(0, 6).map((r) => (
+                  <Link
+                    key={r.id}
+                    href={`/notifications?view=refunds&refund=${encodeURIComponent(r.id)}`}
+                    className="panel-row refund-bell"
+                    data-bell-refund={r.id}
+                    style={{ marginTop: 8 }}
+                    onClick={() => bell.setOpen(false)}
+                  >
+                    <RefundCoin />
+                    <span className="refund-bell-text">
+                      <b>Refund {money(r.amountAsked, r.currency)}</b>
+                      <span className="sm">
+                        {r.guest.name ?? r.booking.id} · {r.booking.id}
+                      </span>
+                    </span>
+                  </Link>
+                ))}
+                {refundsWaiting.length > 6 ? (
+                  <Link href="/notifications?view=refunds" className="sm" style={{ display: "block", marginTop: 6 }} onClick={() => bell.setOpen(false)}>
+                    and {refundsWaiting.length - 6} more refunds
+                  </Link>
+                ) : null}
                 {lateRooms.length ? (
                   <Link href="/housekeeping" className="panel-row hk-bell" style={{ marginTop: 8 }} onClick={() => bell.setOpen(false)}>
                     <b>{lateRooms.length === 1 ? `Room ${lateRooms[0].roomNumber}` : `Rooms ${lateRooms.map((r) => r.roomNumber).join(", ")}`}</b>
@@ -202,15 +236,17 @@ export function AppShell({ children }: { children: ReactNode }) {
                     <span className="timer overdue"><Icon name="alert" />late</span>
                   </Link>
                 ) : null}
-                {urgent.length === 0 && !lateRooms.length ? (
+                {urgent.length === 0 && !lateRooms.length && !refundsWaiting.length ? (
                   <p className="meta" style={{ marginTop: 6 }}>Nothing is overdue or due in the next hours.</p>
                 ) : urgent.length === 0 ? null : (
                   <div className="stack" style={{ marginTop: 8 }}>
                     {urgent.slice(0, 20).map((it) => {
                       const w = waitingText(it, clock.now, clock.tz);
                       return (
-                        <Link key={it.key} href={`/bookings/${encodeURIComponent(it.entryId)}?step=${it.step}`} className="panel-row" onClick={() => bell.setOpen(false)}>
-                          <b>{it.named ? it.name : <i>{it.name}</i>}</b>
+                        <Link key={it.key} href={`/bookings/${encodeURIComponent(it.entryId)}?step=${it.step}`} className={`panel-row${it.critical ? " crit-bell" : ""}`} data-bell-critical={it.critical ? it.entryId : undefined} onClick={() => bell.setOpen(false)}>
+                          <b>
+                            {it.critical ? <span className="crit-tag">Critical</span> : null} {it.named ? it.name : <i>{it.name}</i>}
+                          </b>
                           <span className="sm">{it.need}</span>
                           {w.text ? <span className={`timer ${w.tone}`}><Icon name={w.tone === "overdue" ? "alert" : "clock"} />{w.text}</span> : null}
                         </Link>

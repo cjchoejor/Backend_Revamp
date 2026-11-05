@@ -12,6 +12,7 @@
  * Every figure is `GET /api/entries/:id/payment-status` — received, required, remaining — summed
  * server-side in Decimal. Nothing is added up here.
  */
+import { RefundStanding } from "../refund-bits";
 import { useEffect, useState, type ReactNode } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -231,6 +232,8 @@ export function PaymentPlanCard({
       ? setUp && !bill.proforma
         ? "The advance is not answered yet"
         : "No advance asked"
+      : status.requiredAmount === 0
+        ? `Received ${money(received, cur)} · no advance asked`
       : status.paidInFull
         ? `Received ${money(received, cur)} of ${money(status.requiredAmount, cur)}`
         : status.satisfied
@@ -259,6 +262,7 @@ export function PaymentPlanCard({
       summary={setUp ? summary : undefined}
       restsFolded={setUp && nothingAsked}
     >
+      <RefundStanding status={status} currency={cur} tz={tz} />
       {!folio ? (
         <span className="meta">The plan is set once the provisional bill exists — choose the billing model above.</span>
       ) : !status ? (

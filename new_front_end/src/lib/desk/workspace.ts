@@ -198,6 +198,8 @@ export function s3Readiness(
     requiredAmount?: number | null;
     /** Newest-first items from GET /api/entries/:id/communications. */
     communications?: CommForReadiness[] | null;
+    /** Money paid in an earlier pass still has no answer (2026-11-05): `earlierAdvance.asked`. */
+    earlierAdvanceAsked?: boolean;
   },
 ): Precondition[] {
   const folio = entry.folio;
@@ -247,6 +249,10 @@ export function s3Readiness(
     // dispatch/settlement items below appear only when they actually apply — a vacuously-true
     // green line ("sent ✓" when nothing was ever sent or owed) misreads as work done.
     { label: "Proforma invoice generated", met: proforma, card: "proforma" },
+    // The proforma prints the money, so nothing goes ahead until the desk says what happens to it.
+    ...(opts?.earlierAdvanceAsked ? [{ label: "The advance paid before: kept or refunded", met: false, card: "proforma" }] : []),
+    // A block whose time ended holds the booking until the FOM or GM decides (2026-11-05).
+    ...(blockTimeEnded(entry) ? [{ label: "The block's time ended: the FOM or GM decides", met: false, card: "hold" }] : []),
     // Money was received → the bill it was paid against must have gone out (backend p40 +
     // the bill-before-money guard). Hidden when nothing has been received: nothing to document.
     ...(advanceReceived > 0
@@ -305,6 +311,16 @@ export function s3Readiness(
 }
 
 /**
+ * A block at Set up whose time has ended (2026-11-05, operator: "if a block ends dont release it
+ * directly, mark it very Crtical"). It still holds the rooms, read from the time itself, so the desk
+ * says so whether or not the clock's job has run yet.
+ */
+export function blockTimeEnded(entry: Pick<EntryDetail, "committedHold" | "currentStage">): boolean {
+  const hold = entry.committedHold;
+  return entry.currentStage === "S3" && hold?.state === "PLACED" && new Date(hold.expiresAt).getTime() <= Date.now();
+}
+
+/**
  * Reserve's gate: Set up's list and the rooms blocked. Move to Reserve itself blocks them
  * (2026-11-05), so Set up does not wait for it, and this line stands on the Reserve page, where a
  * block whose time ran out holds Reserve the booking.
@@ -314,7 +330,7 @@ export function confirmReadiness(
   opts?: Parameters<typeof s3Readiness>[1],
 ): Precondition[] {
   const hold = entry.committedHold;
-  return [...s3Readiness(entry, opts), { label: "Rooms blocked", met: hold?.state === "PLACED" || hold?.state === "UPGRADED", card: "hold" }];
+  return [...s3Readiness(entry, opts), { label: "Rooms blocked", met: (hold?.state === "PLACED" || hold?.state === "UPGRADED") && !blockTimeEnded(entry), card: "hold" }];
 }
 
 export function canConfirm(
@@ -519,6 +535,8 @@ export function canProgressS5(entry: EntryDetail, guestPresent: boolean, hotelTo
 export function s6Readiness(
   entry: EntryDetail,
   opts?: {
+    /** Money waiting to go back holds check-in (2026-11-05): the server's `refundWaiting`. */
+    refundWaiting?: number | null;
     guestDetails?: { satisfied: boolean; vipExempt: boolean; filledSlots: number; totalSlots: number } | null;
     identityVerified?: boolean;
     /** The desk's two attestations at the counter (2026-09-25) — listed when the caller has them. */
@@ -547,7 +565,9 @@ export function s6Readiness(
   // In the order the page reads (2026-09-25): the document and the guests, the registration
   // card, the money, the VIP notice, then the rooms and their keys. The handoff is Arrival's and
   // has no section here.
+  const refundLine = (opts?.refundWaiting ?? 0) > 0 ? [{ label: "The refund waiting: recorded by the FOM or GM", met: false, card: "advance" }] : [];
   return [
+    ...refundLine,
     { label: "Identity verified", met: opts?.identityVerified ?? false, card: "identity" },
     ...(gd && !gd.vipExempt
       ? [{ label: `Guest details recorded (${gd.filledSlots}/${gd.totalSlots})`, met: gd.satisfied, card: "identity" }]

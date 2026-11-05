@@ -161,7 +161,7 @@ export async function listDeskActivity(session: Session, q: { date: string; acto
 
 /* ---------- the alerts the system sent (2026-10-23) ---------- */
 
-export type DeskAlertKind = "STAGE_DWELL" | "EXPIRED" | "PAYMENT_REMINDER" | "PAY_LATER_ASKED" | "VIP_ARRIVAL" | "OTHER";
+export type DeskAlertKind = "STAGE_DWELL" | "EXPIRED" | "PAYMENT_REMINDER" | "PAY_LATER_ASKED" | "VIP_ARRIVAL" | "BLOCK_ENDED" | "REFUND_DUE" | "OTHER";
 export type DeskAlertTarget = "OPERATOR" | "FOM" | "GM";
 
 export type DeskAlert = {

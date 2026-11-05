@@ -536,8 +536,17 @@ function BeforeYouReserve({
           <b>
             {holdWord ?? "The rooms"} {holdRooms.length === 1 ? "is" : "are"} blocked until {fmtDateTime(hold!.expiresAt, tz)} · {span(blockLeft)} left.
           </b>{" "}
-          Reserve the booking before then, or {holdRooms.length === 1 ? "it goes" : "they go"} back on sale.
+          Reserve the booking before then. If the time ends first, the FOM and GM are told and they decide.
         </span>
+      </div>
+    ) : hold?.state === "PLACED" ? (
+      <div className="notice block-soon block-ended" role="alert" data-block-notice style={{ marginBottom: 10 }}>
+        <span>
+          <b className="crit-tag">Critical</b> <b>This block ended at {fmtDateTime(hold.expiresAt, tz)}. The rooms are still held.</b> The FOM and GM have been told, and Reserve waits for what they decide.
+        </span>
+        <Button kind="secondary" compact onClick={() => goToStep(3)}>
+          Back to Set up
+        </Button>
       </div>
     ) : (
       <div className="notice block-soon" role="alert" data-block-notice style={{ marginBottom: 10 }}>

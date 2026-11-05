@@ -346,6 +346,29 @@ export type PaymentStatusSummary = {
   reconcileBy?: string;
   /** The money received, newest first, each saying whether this person may delete it (2026-11-05). */
   recordedPayments?: RecordedPayment[];
+  /** Waiting to go back: still on the bill, no longer counted in totalReceived (2026-11-05). */
+  refundWaiting?: number;
+  /** Money that has gone back. */
+  refunded?: number;
+  /** Money paid in an earlier pass, and whether the desk still has to answer for it. */
+  earlierAdvance?: {
+    asked: boolean;
+    amount: number;
+    payments: Array<{ id: string; amount: number; method: string | null; notes: string | null; receivedAt: string }>;
+    paidOn: { id: string; number: string; version: number; sentAt: string | null; stored: boolean } | null;
+    answer: { answer: "CARRY" | "REFUND"; answeredAt: string | null } | null;
+    refund: {
+      id: string;
+      status: "WAITING" | "REFUNDED" | "KEPT" | "CANCELLED";
+      cause: "RENEGOTIATED" | "LAPSED";
+      amountAsked: number;
+      refundedAmount: number | null;
+      refundMethod: string | null;
+      raisedAt: string;
+      closedAt: string | null;
+      closeNote: string | null;
+    } | null;
+  };
   /** Every payment so far, oldest first — the installment history. */
   installments?: Array<{ id: string; amount: number; receivedAt: string; stage: string | null; notes?: string | null }>;
   creditExtensionActive: boolean;

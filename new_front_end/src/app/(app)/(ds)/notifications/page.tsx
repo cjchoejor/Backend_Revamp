@@ -12,6 +12,8 @@
  *    payment reminder, a VIP arrival), read from `GET /api/desk/alerts`, by hotel day, with who
  *    each was for and how the booking stands now.
  */
+import { useRefunds } from "@/hooks/use-refunds";
+import { RefundsTab } from "@/components/ds/refunds-tab";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useMemo, useState } from "react";
@@ -39,7 +41,7 @@ import { WORK_KINDS, attentionItems, waitingText, type AttentionItem, type Band 
 import { fmtLongDate, fmtTime, plural } from "@/lib/ds/format";
 import { stepNoOfStage } from "@/lib/ds/steps";
 
-type View = "now" | "sent";
+type View = "now" | "sent" | "refunds";
 const BAND_WORD: Record<Band, string> = { overdue: "Overdue", soon: "Due soon", waiting: "Waiting" };
 const BAND_TONE: Record<Band, "danger" | "warning" | "quiet"> = { overdue: "danger", soon: "warning", waiting: "quiet" };
 const RANGES = [1, 7, 14, 31] as const;
@@ -57,7 +59,11 @@ function Notifications() {
   const router = useRouter();
   const pathname = usePathname() ?? "/notifications";
   const search = useSearchParams();
-  const view: View = search.get("view") === "sent" ? "sent" : "now";
+  const { session } = useSession();
+  const fom = !!session && session.actorLevel !== "L1";
+  const asked = search.get("view");
+  const view: View = asked === "sent" ? "sent" : asked === "refunds" && fom ? "refunds" : "now";
+  const refundsWaiting = useRefunds("waiting").data?.items.length ?? 0;
   const pickView = (v: string) => {
     const p = new URLSearchParams(search.toString());
     p.set("view", v);
@@ -68,10 +74,14 @@ function Notifications() {
   const hotelDay = useHotelDay();
   const bookings = useDeskBookings();
   const items = useMemo(
-    () => attentionItems(bookings.data?.items ?? [], clock.now, hotelDay?.today ?? null, clock.tz, bookings.data?.repliesOff),
+    // A block whose time ended goes to the FOM and GM, and leads their list (2026-11-05).
+    () =>
+      attentionItems(bookings.data?.items ?? [], clock.now, hotelDay?.today ?? null, clock.tz, bookings.data?.repliesOff)
+        .filter((i) => fom || !i.critical)
+        .sort((a, b) => Number(!!b.critical) - Number(!!a.critical)),
     // clock.now moves every 30 s; the list follows it by the minute
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [bookings.data, hotelDay?.today, Math.floor(clock.now / 60_000)],
+    [bookings.data, hotelDay?.today, fom, Math.floor(clock.now / 60_000)],
   );
 
   return (
@@ -85,12 +95,15 @@ function Notifications() {
           items={[
             { id: "now", label: "Needs a person", count: items.length },
             { id: "sent", label: "Alerts sent" },
+            ...(fom ? [{ id: "refunds", label: "Refunds", count: refundsWaiting }] : []),
           ]}
           selected={view}
           onSelect={pickView}
         />
       </div>
-      {view === "now" ? (
+      {view === "refunds" ? (
+        <RefundsTab tz={clock.tz} focusId={search.get("refund")} />
+      ) : view === "now" ? (
         bookings.error && !bookings.data ? (
           <LoadFailed what="the bookings" onRetry={() => void bookings.refetch()} />
         ) : bookings.isLoading || !hotelDay ? (
@@ -174,7 +187,7 @@ function WorkGroup({ id, title, items, now, tz }: { id: string; title: string; i
             <OpenRow key={it.key} entryId={it.entryId} step={it.step}>
               <td>
                 <span className="ntf-need">
-                  <Chip tone={BAND_TONE[it.band]}>{BAND_WORD[it.band]}</Chip>
+                  {it.critical ? <span className="crit-tag">Critical</span> : <Chip tone={BAND_TONE[it.band]}>{BAND_WORD[it.band]}</Chip>}
                   <b>{it.need}</b>
                 </span>
               </td>

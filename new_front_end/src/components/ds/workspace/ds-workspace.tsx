@@ -348,6 +348,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const paymentSatisfied = paymentStatusQuery.data?.satisfied;
   const totalReceived = paymentStatusQuery.data?.totalReceived ?? null;
   const requiredAmount = paymentStatusQuery.data?.requiredAmount ?? null;
+  const earlierAdvanceAsked = !!paymentStatusQuery.data?.earlierAdvance?.asked;
 
   const billingQuery = useQuery({
     queryKey: ["billing-summary", entryId, entry?.updatedAt ?? ""],
@@ -460,9 +461,9 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const stableSetSelected = useMemo(() => (n: number) => setSelectedRef.current(n), []);
 
   const currentOrder = entry ? currentStepOrder(entry) : 1;
-  const readyToConfirm = entry ? canConfirm(entry, { paymentSatisfied, totalReceived, requiredAmount, communications }) : false;
+  const readyToConfirm = entry ? canConfirm(entry, { paymentSatisfied, totalReceived, requiredAmount, communications, earlierAdvanceAsked }) : false;
   // A finished Set up opens the Reserve page, where the booking is reserved (2026-10-29).
-  const readyToMoveOn = entry ? canMoveToReserve(entry, { paymentSatisfied, totalReceived, requiredAmount, communications }) : false;
+  const readyToMoveOn = entry ? canMoveToReserve(entry, { paymentSatisfied, totalReceived, requiredAmount, communications, earlierAdvanceAsked }) : false;
   const maxReach = !entry ? 1 : entry.currentStage === "S3" && !readyToMoveOn ? Math.min(maxReachableOrder(entry), 3) : maxReachableOrder(entry);
 
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -646,7 +647,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
       setMoved({
         title: out.placed && out.source === "HOUSE" ? `${subject} for ${blockWindowWords(out.houseWindowMinutes)}` : `${subject} until ${until}`,
         who: [out.placed && out.source === "HOUSE" ? `Until ${until}` : null, [g?.title, g?.firstName, g?.lastName].filter(Boolean).join(" ") || null, entry!.id].filter(Boolean).join(" · "),
-        next: `Reserve the booking before then, or ${out.roomCount === 1 ? "it goes" : "they go"} back on sale.`,
+        next: "Reserve the booking before then. If the time ends first, the FOM and GM are told and they decide.",
         sticky: true,
       });
     },
@@ -989,7 +990,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const issuedKeyCount = checkInRoomIds.filter((id) => issuedKeyRooms[id]).length;
   const keysValid = checkInRoomIds.length > 0 && issuedKeyCount === checkInRoomIds.length;
   const canCheckIn =
-    s6Readiness(entry, { guestDetails: guestDetailsCoverage, identityVerified: stayIdentityVerified, balance: checkInBalance }).every((c) => c.met) &&
+    s6Readiness(entry, { guestDetails: guestDetailsCoverage, identityVerified: stayIdentityVerified, balance: checkInBalance, refundWaiting: paymentStatusQuery.data?.refundWaiting }).every((c) => c.met) &&
     registrationConfirmed &&
     keysValid;
 
@@ -1055,9 +1056,9 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const preconds0: Precondition[] = sealed
     ? []
     : confirmStepActive
-      ? [...confirmReadiness(entry, { paymentSatisfied, totalReceived, requiredAmount, communications }), ...reserveExtras.map((label) => ({ label, met: false }))]
+      ? [...confirmReadiness(entry, { paymentSatisfied, totalReceived, requiredAmount, communications, earlierAdvanceAsked }), ...reserveExtras.map((label) => ({ label, met: false }))]
       : setupStepActive
-        ? withUnsaved(s3Readiness(entry, { paymentSatisfied, totalReceived, requiredAmount, communications }), unsavedSections)
+        ? withUnsaved(s3Readiness(entry, { paymentSatisfied, totalReceived, requiredAmount, communications, earlierAdvanceAsked }), unsavedSections)
       : inquiryStepActive
         ? withUnsaved(s1Readiness(entry), unsavedSections)
         : quoteStepActive
@@ -1066,6 +1067,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
             ? s5Readiness(entry, hotelToday, { guestPresent })
             : checkInStepActive
               ? s6Readiness(entry, {
+                  refundWaiting: paymentStatusQuery.data?.refundWaiting,
                   guestDetails: guestDetailsCoverage,
                   identityVerified: stayIdentityVerified,
                   balance: checkInBalance,

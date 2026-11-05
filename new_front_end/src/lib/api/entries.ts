@@ -623,6 +623,8 @@ export type EntryBillingSummary = {
     lineCount: number;
     paymentsReceived: number | null;
     refunded: number | null;
+    /** Waiting to go back: still on the bill, no longer counting for this booking. */
+    refundWaiting?: number | null;
     writtenOff: number | null;
     outstandingBalance: number | null;
     /** Money paid above the bill — the balance floors at zero, so only this shows it (2026-09-18). */

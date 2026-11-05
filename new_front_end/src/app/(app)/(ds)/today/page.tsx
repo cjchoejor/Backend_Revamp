@@ -98,7 +98,9 @@ function AttentionTable({ rows, now, tz }: { rows: Array<AttentionItem | Fold>; 
               <td>
                 <StepChip step={it.step} />
               </td>
-              <td>{it.need}</td>
+              <td>
+                {it.critical ? <span className="crit-tag">Critical</span> : null} {it.need}
+              </td>
               <td>
                 <TimerText w={waitingText(it, now, tz)} />
               </td>

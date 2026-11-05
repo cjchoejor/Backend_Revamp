@@ -45,6 +45,7 @@ import { payerChoiceWord, payerPartyOf } from "@/lib/ds/payer-words";
 import { blockWindowWords, fmtDateTime, fmtStamp, hotelFormParts, money, plural } from "@/lib/ds/format";
 import { optionSelectedRoomIds, type EntryDetail, type InvoiceSummary, type PaymentStatusSummary } from "@/types/api";
 import { replySettled } from "@/lib/api/entries";
+import { EarlierAdvanceQuestion } from "./s3-earlier-advance";
 import { AnswerLine, useReplyAsked, Choice, DsDialog, Fact, Facts, Live, OnRecord, PaperDrawer, ReasonDialog, SeeRow, SendPaperPanel, StepCanvas, StepCard, atLeast, currentPassStart, toastRefusal, useCommunications, useRefreshEntry, useStepMode, words, type PaperRef, type ChangeBookingItem, ChangeBookingMenu, StageActs, useFlowUnsaved, useFinishWhenDone, useStepFlow, goToStepCard, revealCard, useOpenAlsoWay, useStepPane, OtherWaysTabs, InlineWay, ShutWay, parkTab, NightsChoice, NotSentChip } from "./kit";
 import { SendToField, useSendTo } from "./s8-parts";
 import { CancellationFiguresLine, WaiverTick, useRefundHow } from "./cancel-figures";
@@ -275,6 +276,9 @@ export function S3SetUp({
       {/* The order the desk works in (2026-09-25): the payer, then the bill and the money — and
           the rooms last, the only order the backend accepts them in. The terms are recorded by the
           system when a booking reaches Set up (2026-11-05). */}
+      {/* Money from before this booking was sent back: on the new proforma, or refunded (2026-11-05). */}
+      <EarlierAdvanceQuestion entry={entry} status={status} tz={tz} onChanged={changed} />
+
       <ProformaCard
         entry={entry}
         editable={editable}
@@ -306,6 +310,7 @@ export function S3SetUp({
         entry={entry}
         editable={editable}
         gm={gm}
+        fom={atLeast(session?.actorLevel, "L2")}
         tz={tz}
         nowMs={clock.now}
         roomIds={sealedRoomIds}
@@ -557,6 +562,7 @@ function HoldCard({
   entry,
   editable,
   gm,
+  fom,
   tz,
   nowMs,
   roomIds,
@@ -567,6 +573,7 @@ function HoldCard({
   entry: EntryDetail;
   editable: boolean;
   gm: boolean;
+  fom: boolean;
   tz: string;
   nowMs: number;
   roomIds: string[];
@@ -633,7 +640,7 @@ function HoldCard({
   const release = useMutation({
     mutationFn: (reason: string) => releaseCommittedHold(session!, entry.id, { releaseReason: reason }),
     onSuccess: () => {
-      toast.success("The hold is released — the rooms are back on sale");
+      toast.success("The block is released — the rooms are back on sale");
       setDetails(false);
       setReleaseOpen(false);
       onChanged();
@@ -648,7 +655,12 @@ function HoldCard({
   const rooms = roomsHeldWord(heldIds.map((id) => ({ number: roomNos.get(id) ?? null, typeName: typeNames.get(id) ?? null, quiet: roomNames.has(id) })));
   const houseWords = house ? blockWindowWords(house.minutes) : null;
   const count = roomIds.length || 1;
+  // The block's time has ended: the rooms stay held, it is critical, and the FOM or GM decides
+  // (2026-11-05). So Release and a new time are theirs from here, and the page says so.
   const lapsing = hold ? new Date(hold.expiresAt).getTime() < nowMs : false;
+  const mayRelease = gm || (fom && lapsing);
+  const mayRetime = !lapsing || fom;
+  const openAlsoWay = useOpenAlsoWay();
   // A standing block is one line; Edit opens its facts and its acts (2026-10-28, operator: "the
   // user no longer has to see it unless they have to release it or change the block time"). A
   // block whose time has passed, and a step looked back at, show everything.
@@ -666,7 +678,7 @@ function HoldCard({
       flow="hold"
       flowAfter="proforma"
       title="Block the Entry"
-      summary={hold ? `${rooms} ${count > 1 ? "are" : "is"} blocked until ${fmtDateTime(hold.expiresAt, tz)}` : undefined}
+      summary={hold ? (lapsing ? `Critical · the block ended ${fmtDateTime(hold.expiresAt, tz)}` : `${rooms} ${count > 1 ? "are" : "is"} blocked until ${fmtDateTime(hold.expiresAt, tz)}`) : undefined}
       acts={
         past || !showDetails ? undefined : (
           <Live>
@@ -679,15 +691,23 @@ function HoldCard({
                     ? `the hotel blocks for ${houseWords ?? "its own time"} — set this booking's own time`
                     : "blocks the rooms now, until the time you set"
               }
-              onClick={editable ? () => setTimeOpen(true) : undefined}
-              reason={editable ? undefined : "not at this step"}
+              onClick={editable && mayRetime ? () => setTimeOpen(true) : undefined}
+              reason={!editable ? "not at this step" : mayRetime ? undefined : "the FOM's or GM's call now"}
             />
             {hold ? (
               <SeeRow
                 label="Release"
                 note="frees the rooms with a reason — they return to sale"
-                onClick={editable && gm ? () => setReleaseOpen(true) : undefined}
-                reason={!editable ? "not at this step" : gm ? undefined : "releasing a block is the GM's call"}
+                onClick={editable && mayRelease ? () => setReleaseOpen(true) : undefined}
+                reason={!editable ? "not at this step" : mayRelease ? undefined : lapsing ? "the FOM's or GM's call" : "releasing a block is the GM's call"}
+              />
+            ) : null}
+            {hold && lapsing ? (
+              <SeeRow
+                label="Cancel booking"
+                note="after talking to the guest"
+                onClick={editable && fom ? () => openAlsoWay("cancel") : undefined}
+                reason={!editable ? "not at this step" : fom ? undefined : "the FOM's or GM's call"}
               />
             ) : null}
           </Live>
@@ -723,8 +743,13 @@ function HoldCard({
           </Facts>
           ) : null}
           {lapsing ? (
-            <div className="sm warn-ink" style={{ marginTop: 6 }}>
-              The block time has passed, so the rooms are going back on sale. Move to Reserve blocks them again.
+            <div className="notice block-soon block-ended" role="alert" data-block-ended style={{ marginTop: 8 }}>
+              <span>
+                <b className="crit-tag">Critical</b> <b>This block ended at {fmtDateTime(hold.expiresAt, tz)}. The rooms are still held.</b>{" "}
+                {fom
+                  ? "Talk to the guest, then cancel the booking, release the rooms, or set a new block time if they still want it."
+                  : "The FOM and GM have been told. They talk to the guest, then cancel the booking or release the rooms."}
+              </span>
             </div>
           ) : null}
         </>
@@ -766,7 +791,7 @@ function HoldCard({
           }}
           title="The rooms are blocked"
           caseLines={[`${rooms} · until ${fmtDateTime(blockedUntil, tz)}`]}
-          help="The payment blocked the rooms. They stay blocked until this time; if the booking is not reserved by then, they go back on sale."
+          help="The payment blocked the rooms until this time. If the booking is not reserved by then, the FOM and GM are told and they decide."
           footer={
             <>
               <Button
@@ -813,19 +838,93 @@ function HoldCard({
           }}
         />
       ) : null}
-      <ReasonDialog
-        open={releaseOpen}
-        danger
-        onClose={() => setReleaseOpen(false)}
-        busy={release.isPending}
-        title="Release the block"
-        caseLines={hold ? [`${rooms} held until ${fmtDateTime(hold.expiresAt, tz)}`] : undefined}
-        lead="The rooms go back on sale at once. This booking keeps its place at Set up, and Move to Reserve blocks them again."
-        confirmLabel="Release"
-        placeholder="why the rooms are freed"
-        onConfirm={(r) => release.mutate(r)}
-      />
+      {releaseOpen ? (
+        <ReleaseDialog
+          caseLine={hold ? `${rooms} · ${lapsing ? "the block ended" : "blocked until"} ${fmtDateTime(hold.expiresAt, tz)}` : null}
+          busy={release.isPending}
+          onClose={() => setReleaseOpen(false)}
+          onRelease={(r) => release.mutate(r)}
+          onCancelBooking={() => {
+            setReleaseOpen(false);
+            openAlsoWay("cancel");
+          }}
+        />
+      ) : null}
     </StepCard>
+  );
+}
+
+/**
+ * Release asks first whether the booking goes too (2026-11-05, operator: "whenever release is clicked,
+ * prompt the user here in set up if booking should be cancelled or not"). Nothing is chosen for the
+ * desk. Yes opens the booking's own cancel form, which prices the charge and any refund and releases
+ * the rooms as part of it; no asks why and releases them, and the booking stays at Set up.
+ */
+function ReleaseDialog({
+  caseLine,
+  busy,
+  onClose,
+  onRelease,
+  onCancelBooking,
+}: {
+  caseLine: string | null;
+  busy: boolean;
+  onClose: () => void;
+  onRelease: (reason: string) => void;
+  onCancelBooking: () => void;
+}) {
+  const [choice, setChoice] = useState<"KEEP" | "CANCEL" | null>(null);
+  const [why, setWhy] = useState("");
+  return (
+    <DsDialog
+      open
+      closeX
+      onClose={onClose}
+      busy={busy}
+      title="Release the block"
+      caseLines={caseLine ? [caseLine] : undefined}
+      footer={
+        choice === "CANCEL" ? (
+          <Button kind="danger" onClick={onCancelBooking}>
+            Go on to Cancel booking
+          </Button>
+        ) : choice === "KEEP" ? (
+          <Button kind="danger" state={busy ? "working" : why.trim() ? "default" : "inert"} workingLabel="Releasing…" reason={why.trim() ? undefined : "say why the rooms are freed"} onClick={() => onRelease(why.trim())}>
+            Release the rooms
+          </Button>
+        ) : (
+          <span className="sm warn-ink">First: should the booking be cancelled?</span>
+        )
+      }
+    >
+      <div className="field">
+        <label>Should the booking be cancelled as well?</label>
+        <Choice
+          options={[
+            ["KEEP", "No, only release the rooms"],
+            ["CANCEL", "Yes, cancel the booking"],
+          ]}
+          value={choice}
+          onChange={setChoice}
+        />
+      </div>
+      {choice === "KEEP" ? (
+        <>
+          <p className="sm" style={{ margin: "0 0 10px" }}>
+            The rooms go back on sale at once. The booking stays at Set up, and Move to Reserve blocks them again.
+          </p>
+          <div className="field">
+            <label>Why?</label>
+            <input value={why} onChange={(e) => setWhy(e.target.value)} placeholder="why the rooms are freed" maxLength={500} autoFocus />
+          </div>
+        </>
+      ) : null}
+      {choice === "CANCEL" ? (
+        <p className="sm" style={{ margin: 0 }}>
+          The cancel form shows any charge and any refund. Cancelling releases the rooms too.
+        </p>
+      ) : null}
+    </DsDialog>
   );
 }
 
@@ -871,8 +970,7 @@ function HoldLine({
         <b>{rooms}</b> {lapsed ? (many ? "were" : "was") : many ? "are" : "is"} blocked until <b>{until}</b>
         <span className="hold-whose"> · {whose}</span>
         <Help label="About the block">
-          The block takes these rooms from anyone else&rsquo;s marker. If the booking is not reserved by then, {many ? "they go" : "it goes"} back
-          on sale.
+          The block takes these rooms from anyone else&rsquo;s marker. If the booking is not reserved by then, the rooms stay held, and the FOM and GM are told and decide.
         </Help>
       </span>
       {canToggle ? (
@@ -1162,6 +1260,8 @@ function ProformaCard({
   const nextUp = !editable ? null : advanceAsked && !sentLive ? "send" : answerDue ? "answer" : null;
   const sendLock = !editable
     ? "not at this step"
+    : status?.earlierAdvance?.asked
+      ? "first say what happens to the advance paid before"
     : !draft
       ? shown.dispatchedAt
         ? "already sent — a changed amount or plan issues a new version to send"
