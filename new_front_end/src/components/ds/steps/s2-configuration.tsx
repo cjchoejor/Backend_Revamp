@@ -496,7 +496,7 @@ export function ChangeConfiguration({
       }
       if (o.quotationsInvalidated.length > 0) {
         toast.info(
-          `${plural(o.quotationsInvalidated.length, "quotation")} retired — price it again before moving to Set up.`,
+          `${plural(o.quotationsInvalidated.length, "quotation")} retired — save & quote it again before moving to Set up.`,
         );
       }
       if (o.hold?.action === "REPLACED") {
@@ -817,7 +817,7 @@ export function ChangeConfiguration({
               </p>
             ) : (
               <p>
-                Saving retires any quotation priced on the old configuration — price it again before moving to Set up. A provisional block moves
+                Saving retires any quotation priced on the old configuration — save & quote it again before moving to Set up. A provisional block moves
                 to the new rooms and nights and keeps its deadline.
               </p>
             )}
@@ -908,7 +908,7 @@ export function WaitingConfigurationChange({ entry }: { entry: EntryDetail }) {
       if (r.state === "APPROVED") {
         toast.success(`Approved — ${r.outcome?.summary ?? "the configuration is changed"}`);
         if ((r.outcome?.quotationsInvalidated ?? []).length > 0) {
-          toast.info("The quotation it was priced on is retired — price it again before Set up.");
+          toast.info("The quotation it was priced on is retired — save & quote it again before Set up.");
         }
       } else {
         toast.success("Turned down — the desk sees your note");

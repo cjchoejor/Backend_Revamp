@@ -2290,6 +2290,11 @@
     color: var(--ink-2);
     cursor: pointer;
   }
+  & .rcb-mini.on {
+    border-color: var(--green);
+    background: var(--green-l, #fff);
+    color: var(--green-d);
+  }
   & .rcb-mini:hover {
     border-color: var(--green);
     color: var(--green-d);

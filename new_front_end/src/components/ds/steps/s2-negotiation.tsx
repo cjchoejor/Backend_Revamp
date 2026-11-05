@@ -11,6 +11,7 @@
  * 2026-07-28). Every figure is the backend's: the table prices itself through the live preview,
  * the paper's total comes from the billing summary. Nothing is added up here.
  */
+import { liveQuotesThisPass } from "@/lib/desk/workspace";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -30,6 +31,7 @@ import {
   resolveQuotationAckOpenLoop,
   sendQuotation,
   supersedeQuotation,
+  getQuoteValidityWindow,
   type RoomCompositionInput,
 } from "@/lib/api/quotations";
 import { RoomCompositionPlanner } from "@/components/desk/workspace/room-compositions-board";
@@ -81,6 +83,7 @@ type MarkFor = (typeof MARK_FOR)[number][0];
 
 const DEFAULT_MARK_BASIS = "Provisional block while the guest decides — quotation generated";
 const DAY_MS = 86_400_000;
+const HOUR_MS = 3_600_000;
 
 type RecordedDiscount = { unit: "percent" | "amount"; value: number; basis: string };
 
@@ -103,7 +106,7 @@ function readDiscountAuthority(q: QuotationSummary | undefined | null): { level:
 }
 
 function discountWords(d: RecordedDiscount, currency?: string): string {
-  return d.unit === "percent" ? `${d.value}% off the total` : `${money(d.value, currency)} off the total`;
+  return d.unit === "percent" ? `${d.value}% off the net value` : `${money(d.value, currency)} off the net value`;
 }
 
 /** Every room a marker covers — the anchor and each room of its per-night snapshot. */
@@ -372,39 +375,45 @@ export function S2Negotiation({
     return discountUnit === "amount" ? { discountAmount: n, discountBasis: basis } : { discountPercent: n, discountBasis: basis };
   })();
 
-  /* ---- validity: whole days from now, capped at 30 and at check-in (the server re-checks) ---- */
-  const [validDays, setValidDays] = useState("2");
+  /* ---- validity: up to check-in, in days; in hours when check-in is today. The rule is the server's. ---- */
+  const validityQuery = useQuery({
+    queryKey: ["quote-validity", entry.id, entry.checkInDate],
+    queryFn: () => getQuoteValidityWindow(session!, entry.id),
+    enabled: !!session,
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+  });
+  const validWindow = validityQuery.data ?? null;
+  const inHours = validWindow?.mode === "HOURS";
+  const validUnitMs = inHours ? HOUR_MS : DAY_MS;
+  const validUnit = inHours ? "hour" : "day";
+  const maxValid = validWindow?.max ?? 0;
+  const [validCount, setValidCount] = useState("");
   /**
    * The validity is written by the Save, so changing it after the quote was priced is an unsaved
    * change too (2026-10-12) — without this the Save stayed on "Saved" and the new validity could
    * never be applied. Cleared when a save lands.
    */
   const [validTouched, setValidTouched] = useState(false);
-  const changeValidDays = (v: string) => {
-    setValidDays(v);
+  const changeValid = (v: string) => {
+    setValidCount(v);
     setValidTouched(true);
   };
-  const checkInMs = entry.checkInDate ? new Date(entry.checkInDate).getTime() : Number.NaN;
-  // Mirrors resolveQuotationValidity: the check-in caps the window only while it is still ahead.
-  // A same-day booking's check-in (stored at the day's start) has already passed, and capping at
-  // it showed a validity that had ended before the quote existed (2026-09-18).
-  const checkInAhead = Number.isFinite(checkInMs) && checkInMs > clock.now;
-  const maxValidDays = checkInAhead ? Math.max(1, Math.min(30, Math.floor((checkInMs - clock.now) / DAY_MS))) : 30;
+  // It starts as long as it may stand (2026-11-05, operator: "the validity of the quote will be till the
+  // check in date"), or at what is left of the quotation on file: a shorter time set stays shorter.
+  const offerUntil = liveQuotesThisPass(entry)[0]?.validUntil ?? null;
   useEffect(() => {
-    const n = Number(validDays);
-    if (Number.isFinite(n) && n > maxValidDays) setValidDays(String(maxValidDays));
+    if (!validWindow || validTouched) return;
+    const left = offerUntil ? Math.ceil((new Date(offerUntil).getTime() - clock.now) / validUnitMs) : 0;
+    setValidCount(String(left >= 1 ? Math.min(left, validWindow.max) : validWindow.max));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [maxValidDays]);
-  const validDaysNumber = (() => {
-    const n = Number(validDays);
-    return Number.isInteger(n) && n >= 1 ? Math.min(n, maxValidDays) : null;
+  }, [validWindow?.mode, validWindow?.max, offerUntil, validTouched]);
+  const validNumber = (() => {
+    const n = Number(validCount);
+    return validWindow && validCount !== "" && Number.isInteger(n) && n >= 1 ? Math.min(n, maxValid) : null;
   })();
-  const validityEnd =
-    validDaysNumber == null
-      ? null
-      : checkInAhead
-        ? Math.min(clock.now + validDaysNumber * DAY_MS, checkInMs)
-        : clock.now + validDaysNumber * DAY_MS;
+  const validityEnd = validNumber == null ? null : clock.now + validNumber * validUnitMs;
+  const validityBody = () => (validNumber == null ? {} : inHours ? { validHours: validNumber } : { validDays: validNumber });
 
   const markSeconds =
     Math.max(0, Math.floor(Number(mark.d) || 0)) * 86_400 +
@@ -412,7 +421,7 @@ export function S2Negotiation({
     Math.max(0, Math.floor(Number(mark.m) || 0)) * 60;
 
   const createBody = () => ({
-    validDays: validDaysNumber ?? undefined,
+    ...validityBody(),
     requestedDiscount: discountPayload ?? undefined,
     roomCompositions: roomCompositions.length > 0 ? roomCompositions : undefined,
   });
@@ -463,7 +472,7 @@ export function S2Negotiation({
     mutationFn: () => {
       if (!working) throw new Error("There is no quotation to generate again");
       return supersedeQuotation(session!, working.id, {
-        validDays: validDaysNumber ?? undefined,
+        ...validityBody(),
         requestedDiscount: discountPayload ?? (recordedDiscount ? null : undefined),
         roomCompositions: roomCompositions.length > 0 ? roomCompositions : undefined,
       });
@@ -534,8 +543,8 @@ export function S2Negotiation({
     tableReason ??
     (markFor === "CUSTOM" && markSeconds <= 0
       ? "set at least a minute"
-      : validDaysNumber == null && !working && !accepted
-        ? `the validity is 1–${maxValidDays} days`
+      : validNumber == null && !working && !accepted
+        ? `how long the quote stands: 1 to ${plural(maxValid, validUnit)}`
         : null);
 
   const markedCount = activeHold ? holdRoomIds(activeHold).length : sealedRoomIds.length;
@@ -742,7 +751,7 @@ export function S2Negotiation({
               roomDates={roomDates}
               roomLabels={bookingRooms.labels}
               onSave={() => (working ? regenerateM.mutate() : generateM.mutate())}
-              saveLabel={working ? "Save & price it again" : "Save & price it"}
+              saveLabel={working ? "Save & quote it again" : "Save & quote it"}
               saving={generateM.isPending || regenerateM.isPending}
               unsaved={tableUnsaved || validTouched}
               saveAside={
@@ -751,39 +760,38 @@ export function S2Negotiation({
                 // the end date it gives beside it, and the rule behind a "?".
                 <div className="rct-valid">
                   <span className="lbl">Quote valid for</span>
-                  <span className={`stepper${validDaysNumber == null ? " bad" : ""}`}>
+                  <span className={`stepper${validNumber == null ? " bad" : ""}`}>
                     <button
                       type="button"
-                      aria-label="One day less"
-                      disabled={!editable || validDaysNumber == null || validDaysNumber <= 1}
-                      onClick={() => changeValidDays(String(Math.max(1, (validDaysNumber ?? 2) - 1)))}
+                      aria-label={`One ${validUnit} less`}
+                      disabled={!editable || validNumber == null || validNumber <= 1}
+                      onClick={() => changeValid(String(Math.max(1, (validNumber ?? 2) - 1)))}
                     >
                       −
                     </button>
                     <input
                       inputMode="numeric"
-                      aria-label="Quote valid for, in days"
-                      value={validDays}
-                      readOnly={!editable}
+                      aria-label={`Quote valid for, in ${validUnit}s`}
+                      value={validCount}
+                      readOnly={!editable || !validWindow}
                       onChange={(e) => {
                         const v = e.target.value.replace(/\D/g, "");
-                        const n = Number(v);
-                        changeValidDays(v !== "" && n > maxValidDays ? String(maxValidDays) : v);
+                        changeValid(v !== "" && Number(v) > maxValid ? String(maxValid) : v);
                       }}
                     />
-                    <span className="unit">{validDaysNumber === 1 ? "day" : "days"}</span>
+                    <span className="unit">{validNumber === 1 ? validUnit : `${validUnit}s`}</span>
                     <button
                       type="button"
-                      aria-label="One day more"
-                      disabled={!editable || (validDaysNumber ?? 0) >= maxValidDays}
-                      onClick={() => changeValidDays(String(Math.min(maxValidDays, (validDaysNumber ?? 0) + 1)))}
+                      aria-label={`One ${validUnit} more`}
+                      disabled={!editable || (validNumber ?? maxValid) >= maxValid}
+                      onClick={() => changeValid(String(Math.min(maxValid, (validNumber ?? 0) + 1)))}
                     >
                       +
                     </button>
                   </span>
-                  <span className={`until${validDaysNumber == null ? " stop-ink" : ""}`}>
-                    {validDaysNumber == null ? (
-                      `Enter 1 to ${maxValidDays}`
+                  <span className={`until${validWindow && validNumber == null ? " stop-ink" : ""}`}>
+                    {!validWindow ? null : validNumber == null ? (
+                      `Enter 1 to ${maxValid}`
                     ) : (
                       <>
                         until <b>{fmtDateTime(validityEnd, tz)}</b>
@@ -791,10 +799,11 @@ export function S2Negotiation({
                     )}
                   </span>
                   <Help label="About how long the quote is valid">
-                    <p>How long the guest has to accept this price. The time starts when the table is saved and priced.</p>
+                    <p>How long the guest has to accept this price. The time starts when the table is saved. Sending the quote later does not restart it.</p>
                     <p>
-                      Anything from 1 to {plural(maxValidDays, "day")}
-                      {checkInAhead ? ", and it always ends before check-in" : ""}. Sending the quote later does not restart it.
+                      {inHours
+                        ? `Check-in is today, so it is set in hours, up to ${plural(maxValid, "hour")}: the rest of today.`
+                        : `It runs up to check-in, ${plural(maxValid, "day")} from today. It can be made shorter, not longer.`}
                     </p>
                   </Help>
                 </div>

@@ -55,7 +55,7 @@ function ResultView({ result, tz }: { result: RoomSplitResult; tz?: string }) {
       <div className="spl-part">
         <p className={`rmv-status ${sourceBlocked ? "stop" : "ok"}`} role="status">
           {s.route === "NEGOTIATION"
-            ? "This booking keeps its other rooms — price it again at the table."
+            ? "This booking keeps its other rooms — save & quote it again at the table."
             : sourceBlocked
               ? `This booking stopped part-way at ${sourceBlocked.atStep.toLowerCase().replace(/_/g, " ")} — ${sourceBlocked.message}. Finish it on the booking.`
               : `This booking keeps its other rooms, back at ${stepWord(s.walk?.walk.reachedStage)}.`}

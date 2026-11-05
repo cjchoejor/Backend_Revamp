@@ -47,7 +47,7 @@ function ResultView({ result, tz }: { result: DateMoveResult; tz?: string }) {
       <div className="rmv-result">
         <p className={`rmv-status ${o.applied ? "ok" : "warn"}`} role="status">
           {o.applied
-            ? `Done — the stay is now ${fmtStay(o.newDates.checkInDate, o.newDates.checkOutDate)}. Price it again at the table.`
+            ? `Done — the stay is now ${fmtStay(o.newDates.checkInDate, o.newDates.checkOutDate)}. Save & quote it again at the table.`
             : "Sent to the FOM — the change waits for their approval; nothing has moved yet."}
         </p>
         {o.applied && o.quotationsInvalidated.length ? (

@@ -76,7 +76,7 @@ function ResultView({ result, tz, manyRooms }: { result: NightMoveResult; tz?: s
           {s.route === "NEGOTIATION"
             ? s.amendment && !s.amendment.applied
               ? "The change waits for the FOM's approval — nothing has moved yet."
-              : "This booking changed inside its pass — price it again at the table."
+              : "This booking changed inside its pass — save & quote it again at the table."
             : sourceBlocked
               ? `This booking stopped part-way at ${blockedWords(sourceBlocked)}. Finish it on the booking.`
               : `This booking is back at ${stepWord(s.walk?.walk.reachedStage)}.`}

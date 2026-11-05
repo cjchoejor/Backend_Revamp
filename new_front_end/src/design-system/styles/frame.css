@@ -1534,9 +1534,11 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .ws-top .file .fhead { display: grid; gap: var(--s3); padding: var(--s3) var(--s4); border-bottom: 1px solid var(--line-2); }
 .ds .ws-top .file .fclocks { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: center; min-height: 28px; }
 .ds .ws-top .file .fstay { display: grid; gap: 6px; justify-items: start; min-width: 0; }
-.ds .ws-top .file .ffacts-line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px var(--s3); font-size: var(--t-sm); color: var(--ink-2); }
+.ds .ws-top .file .ffacts-line { display: flex; flex-wrap: wrap; align-items: center; row-gap: 4px; font-size: var(--t-sm); color: var(--ink-2); }
+/* A thin line between nights, rooms and how it came in (2026-11-05, operator): a box read as a button. */
+.ds .ws-top .file .ffacts-line > span + span { margin-left: 10px; padding-left: 10px; border-left: 1px solid var(--line-2); }
 .ds .ws-top .file .ffacts-line b { color: var(--ink); font-weight: 700; }
-.ds .ws-top .file .ffacts-line .camein { padding: 1px 8px; border: 1px solid var(--line-2); border-radius: var(--r-control); background: var(--surface-2); color: var(--ink); font-weight: 600; }
+.ds .ws-top .file .ffacts-line .camein { color: var(--ink); font-weight: 700; }
 
 /* the head is one line (2026-10-27, operator's picture): the name, the enquiry's number in the box
    where the standing chip was, a line, then the booking's number */

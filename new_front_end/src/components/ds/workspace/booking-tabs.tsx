@@ -428,16 +428,13 @@ function previewFigures(p: QuotationLivePreview): PriceLinesFigures {
     lines: p.lines,
     datesShown: p.datesShown,
     net: p.subtotal,
-    serviceChargeLabel: p.serviceChargeRate > 0 ? `Service charge ${pctWord(p.serviceChargeRate)} of net value` : "Service charge",
-    serviceCharge: p.serviceCharge,
+    netAfterDiscount: d ? p.payableSubtotal : null,
+    serviceChargeLabel: p.serviceChargeRate > 0 ? `Service charge ${pctWord(p.serviceChargeRate)} of ${d ? "net after discount" : "net value"}` : "Service charge",
+    serviceCharge: p.payableServiceCharge,
     gstLabel: p.gstRate > 0 ? `GST @ ${pctWord(p.gstRate)} of net + service charge` : "GST",
-    gst: p.gst,
-    discountLabel: !d
-      ? null
-      : d.requestedPercent != null
-        ? `Discount ${Number(d.requestedPercent.toFixed(2))}%`
-        : `Discount · ${(d.requestedAmount ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} off the total`,
-    discountAmount: d ? d.amountOffTotal : null,
+    gst: p.payableGst,
+    discountLabel: !d ? null : d.requestedPercent != null ? `Discount ${Number(d.requestedPercent.toFixed(2))}%` : "Discount",
+    discountAmount: d ? d.netReduction : null,
     discountNote: null,
     total: p.payable,
   };

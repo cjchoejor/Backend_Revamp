@@ -117,6 +117,8 @@ export type QuotationPriceLines = {
   datesShown: boolean;
   rowsAreNet: boolean;
   net: number;
+  /** The net after a discount taken off it; null with none, or on an older flat-rate quotation. */
+  netAfterDiscount: number | null;
   serviceChargeLabel: string;
   serviceCharge: number;
   gstLabel: string;
@@ -173,7 +175,7 @@ export async function previewQuotationPricing(
   entryId: string,
   body: {
     roomCompositions: RoomCompositionInput[];
-    /** Percent or flat amount off the grand total — at most one. */
+    /** Percent or flat amount off the net value — at most one. */
     discount?: { percent?: number | null; amount?: number | null } | null;
     /** The nights each room is priced for, when the table knows better than the booking (a room change). */
     roomNights?: Record<string, number>;
@@ -195,10 +197,11 @@ export async function createQuotation(
   entryId: string,
   body?: {
     notes?: string;
-    /** Percent or flat amount — exactly one; both are measured against the grand total. */
+    /** Percent or flat amount — exactly one; both come off the net value. */
     requestedDiscount?: { discountPercent?: number; discountAmount?: number; discountBasis: string } | null;
-    /** Validity window in days, 1–30, ending before check-in — the clock starts at generation. */
+    /** How long the offer stands: days up to check-in, or hours when check-in is today. */
     validDays?: number;
+    validHours?: number;
     currency?: string;
     focRoomsRequested?: number;
     belowMsrGmWaiver?: { acknowledged: true; rationale: string };
@@ -220,10 +223,11 @@ export async function supersedeQuotation(
   quotationId: string,
   body?: {
     notes?: string;
-    /** Percent or flat amount — exactly one; both are measured against the grand total. */
+    /** Percent or flat amount — exactly one; both come off the net value. */
     requestedDiscount?: { discountPercent?: number; discountAmount?: number; discountBasis: string } | null;
     /** Validity of the regenerated draft — same rules as create, re-anchored to now. */
     validDays?: number;
+    validHours?: number;
     /**
      * Renegotiated per-room compositions (2026-07-28). Send the editor's current state so
      * meal-plan / extra-bed / negotiated-rate changes re-price on the regenerated draft.
@@ -264,6 +268,7 @@ export async function sendQuotation(
   quotationId: string,
   body: {
     validDays?: number;
+    validHours?: number;
     sentTo?: string;
     channel?: string;
     recipientAddress?: string;
@@ -343,4 +348,11 @@ export async function releaseSpeculativeHold(
     `/api/entries/${entryId}/holds/speculative/${holdId}/release`,
     { method: "POST", session, body },
   );
+}
+
+/** How long a quotation on this booking may stand: the hotel's rule, never a setting (2026-11-05). */
+export type QuoteValidityWindow = { mode: "DAYS" | "HOURS"; max: number; checkIn: string | null };
+
+export async function getQuoteValidityWindow(session: Session, entryId: string) {
+  return apiRequest<QuoteValidityWindow>(`/api/entries/${entryId}/quote-validity`, { session });
 }

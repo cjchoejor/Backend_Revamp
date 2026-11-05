@@ -150,13 +150,6 @@ const TIME_LIMITS = page("/admin/timers-workers", "Time limits", [
     decidedBy: { policyId: "registry.s2HoldExpiry.minutes", title: "A provisional block lasts", read: (p) => durationInWords(p.minutes, "minutes") },
   },
   {
-    key: "expiry.s2.quotationValidityDays",
-    title: "A quotation stays valid for",
-    about: "How many days a quotation stays open when the desk does not say otherwise.",
-    form: days(undefined, "Valid for", 1),
-    decidedBy: { policyId: "registry.quotationValidity.days", title: "A quotation stays valid for", read: (p) => durationInWords(p.days, "days") },
-  },
-  {
     key: "expiry.s3.committedHoldTtlSeconds",
     title: "Rooms stay blocked for",
     about: "How long rooms stay blocked at Set up before they are let go, unless the booking has a block time of its own.",
@@ -1302,7 +1295,6 @@ export const POLICIES: PolicyDef[] = [
   rule("registry.s1Expiry.minutes", "EXPIRY", "Time limits", "An inquiry lapses after", "How long an inquiry can sit with nothing happening before it lapses by itself. While this rule is off, the time under Time limits applies.", [minutes("minutes", "Lapses after", 1)], { minutes: 60 }),
   rule("registry.s2HoldExpiry.minutes", "EXPIRY", "Time limits", "A provisional block lasts", "How long a provisional block marks the rooms at Negotiation before they are let go. While this rule is off, the time under Time limits applies.", [minutes("minutes", "Lasts", 1)], { minutes: 15 }),
   rule("registry.holdExpiry.minutes", "AVAILABILITY", "Time limits", "Rooms stay blocked for", "How long rooms stay blocked at Set up before they are let go, unless the booking has a block time of its own. While this rule is off, the time under Time limits applies.", [minutes("minutes", "Blocked for", 1)], { minutes: 60 }),
-  rule("registry.quotationValidity.days", "EXPIRY", "Time limits", "A quotation stays valid for", "How many days a quotation stays open when the desk does not say otherwise. While this rule is off, the time under Time limits applies.", [days("days", "Valid for", 1)], { days: 7 }),
   rule("registry.noShow.graceMinutes", "CANCELLATION", "Time limits", "A guest counts as a no-show after", "How long after the guest was expected they count as a no-show. While this rule is off, the time under Daily schedule applies.", [minutes("graceMinutes", "After", 0)], { graceMinutes: 120 }),
 
   rule("registry.vipArrivalAck.seconds", "COMMUNICATION", "Reminders and answers", "Answering a VIP arrival", "How long staff have to answer a VIP arrival before it is escalated.", [seconds("seconds", "Within", 60)], { seconds: 3600 }),

@@ -101,7 +101,7 @@ function CombineDialog({ entry, other, onClose }: { entry: EntryDetail; other: S
       refresh([["guest-bookings", entry.id]]);
       for (const k of [["entry", out.combinedFrom], ["room-chart"], ["desk-bookings"]]) void qc.invalidateQueries({ queryKey: k });
       toast.success(`${out.combinedFrom} combined into this booking — ${partyWords(out.adults, out.children)} in Room ${out.rooms.join(", ")}`, {
-        description: entry.currentStage === "S2" ? "Its quotation was withdrawn — price it again at Negotiation." : undefined,
+        description: entry.currentStage === "S2" ? "Its quotation was withdrawn — save & quote it again at Negotiation." : undefined,
         duration: 8000,
       });
       if (out.otherEndRefused) toast.warning(out.otherEndRefused, { duration: 10000 });

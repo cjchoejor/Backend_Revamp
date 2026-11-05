@@ -5,8 +5,8 @@
  * prices are shown in quotation, like how the meals and extra beds and all come under one column,
  * that way the user can just scroll down to look at it instead of scrolling horizontally").
  *
- * Each room is a row, its extra beds and its meals indented beneath it; then the net value, the
- * service charge, the GST, any discount and the total. Every row and figure is the server's —
+ * Each room is a row, its extra beds and its meals indented beneath it; then the net value, any
+ * discount and the net after it, the service charge, the GST and the total. Every row and figure is the server's —
  * built by the same code that writes the quotation (`lib/quotation-price-lines.ts`), so the tab
  * and the paper cannot disagree. Nothing is added up here.
  *
@@ -22,6 +22,8 @@ export type PriceLinesFigures = {
   lines: QuotationPriceLine[];
   datesShown: boolean;
   net: number;
+  /** The net after a discount taken off it; null with none, or on an older flat-rate quotation. */
+  netAfterDiscount: number | null;
   serviceChargeLabel: string;
   serviceCharge: number;
   gstLabel: string;
@@ -76,11 +78,19 @@ export function PriceLinesTable({ f, currency, totalLabel = "Total" }: { f: Pric
     <div className="pl-foot">
       <span>Net value</span>
       <b>{plain(f.net)}</b>
+      {f.netAfterDiscount != null && f.discountLabel ? (
+        <>
+          <span>{f.discountLabel}</span>
+          <b>− {plain(f.discountAmount ?? 0)}</b>
+          <span>Net after discount</span>
+          <b>{plain(f.netAfterDiscount)}</b>
+        </>
+      ) : null}
       <span>{f.serviceChargeLabel}</span>
       <b>{plain(f.serviceCharge)}</b>
       <span>{f.gstLabel}</span>
       <b>{plain(f.gst)}</b>
-      {f.discountLabel ? (
+      {f.netAfterDiscount == null && f.discountLabel ? (
         <>
           <span>{f.discountLabel}</span>
           <b>{f.discountAmount != null ? `− ${plain(f.discountAmount)}` : f.discountNote ?? ""}</b>

@@ -272,7 +272,7 @@ export function RoomsTable({
           {editing ? (
             <>
               <span className="rooms-hint editing">
-                Editing who sleeps where, the meals and the beds — Save &amp; price it again below.
+                Editing who sleeps where, the meals and the beds — Save &amp; quote it again below.
               </span>
               <Button
                 kind="secondary"
@@ -353,7 +353,7 @@ export function RoomsTable({
         onChange={editing ? setDraft : () => { /* read-first until "Change configuration" is pressed */ }}
         onFaultsChange={editing ? setFaults : undefined}
         onSave={editing ? () => setConfirmOpen(true) : undefined}
-        saveLabel="Save & price it again"
+        saveLabel="Save & quote it again"
         saving={saveM.isPending}
         unsaved={unsaved}
       />
@@ -393,8 +393,8 @@ export function RoomsTable({
             <Button kind="quiet" state={saveM.isPending ? "inert" : "default"} onClick={() => setConfirmOpen(false)}>
               Not now
             </Button>
-            <Button className="go" state={saveM.isPending ? "working" : "default"} workingLabel="Pricing…" onClick={() => saveM.mutate()}>
-              Price it again
+            <Button className="go" state={saveM.isPending ? "working" : "default"} workingLabel="Quoting…" onClick={() => saveM.mutate()}>
+              Quote it again
             </Button>
           </>
         }

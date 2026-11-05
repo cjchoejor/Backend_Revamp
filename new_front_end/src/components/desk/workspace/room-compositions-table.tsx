@@ -1,6 +1,5 @@
 "use client";
 
-import { StayDates } from "@/components/ds/stay-dates";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowDownToLine, ChevronLeft, ChevronRight, Maximize2, Minimize2, Wand2 } from "lucide-react";
@@ -126,7 +125,7 @@ function cnt(v: string): number {
 /**
  * Booking-wide discount, edited from inside the composition panel. The figure can be a percent
  * OR a flat Nu amount (2026-08-06, operator request) — `discountUnit` says which; both are
- * measured against the grand total server-side (`applyBookingDiscountToTotals`).
+ * taken off the net value server-side (`applyBookingDiscountToTotals`).
  */
 export type DiscountUnit = "percent" | "amount";
 export type DiscountEdit = {
@@ -141,7 +140,7 @@ export type DiscountEdit = {
  * or amount, and the basis is not needed"). The backend still records a basis on every discount; the
  * callers send their usual word, so nothing is asked for it here.
  *
- * The discount is BOOKING-WIDE, not per room, and comes off the grand total, meals and extra beds
+ * The discount is BOOKING-WIDE, not per room, and comes off the net value, meals and extra beds
  * included (`applyBookingDiscountToTotals`). NO MONEY IS COMPUTED HERE: the live total under this
  * button is the server's, and so is the quotation's.
  */
@@ -195,8 +194,8 @@ export function FixedDiscount({
         title="Fixed discount"
         help={
           <>
-            <p>One discount for the whole booking. It comes off the grand total, meals and extra beds included.</p>
-            <p>Service charge and GST follow the discounted figure. A discount larger than the bill brings it to zero; it is never a refund.</p>
+            <p>One discount for the whole booking. It comes off the net value, meals and extra beds included, and service charge and GST are worked out on what is left.</p>
+            <p>A discount larger than the net value brings the bill to zero; it is never a refund.</p>
           </>
         }
         footer={
@@ -241,7 +240,7 @@ export function FixedDiscount({
           </div>
           {unit === "percent" ? (
             <div className="field">
-              <label htmlFor="fixed-discount-figure">Percent off the total</label>
+              <label htmlFor="fixed-discount-figure">Percent off the net value</label>
               <div className="suffix">
                 <input id="fixed-discount-figure" key="percent" className="input narrow" inputMode="decimal" value={value} onChange={(e) => typed(e.target.value)} autoFocus />
                 <span aria-hidden="true">%</span>
@@ -249,7 +248,7 @@ export function FixedDiscount({
             </div>
           ) : unit === "amount" ? (
             <div className="field">
-              <label htmlFor="fixed-discount-figure">Amount off the total</label>
+              <label htmlFor="fixed-discount-figure">Amount off the net value</label>
               <MoneyInput id="fixed-discount-figure" key="amount" value={value} onChange={(e) => typed(e.target.value)} autoFocus />
             </div>
           ) : null}
@@ -1995,7 +1994,7 @@ export function RoomCompositionsTable({
         <td colSpan={colCount}>
           <div className="nb-in">
             <b className="nb-date">
-              <StayDates checkIn={ciIso} checkOut={coIso} />
+              Check-in {nightLabel(ciIso)} · Check-out {nightLabel(coIso)}
             </b>
             <span className="nb-meta">
               {stayNights} night{stayNights === 1 ? "" : "s"}
@@ -2221,7 +2220,7 @@ export function RoomCompositionsTable({
           <Help label="How this table works">
             <p>One row per room: who sleeps there by age, their meal plans and any extra bed. Occ adds itself up from the guest columns.</p>
             <p>Arrow keys and Enter move between cells. Distribute party spreads the guests over the rooms; Everyone on… puts every room on one meal plan.</p>
-            <p>Rates + opens the negotiated rates. A meal&rsquo;s rate opens for a room once its plan includes that meal; with no plan (EP) only the room and the extra bed are negotiated.</p>
+            <p>Edit rates opens the negotiated rates, and pressing it again puts them away. A meal&rsquo;s rate opens for a room once its plan includes that meal; with no plan (EP) only the room and the extra bed are negotiated.</p>
             <p>Count children on the meal plans — under 6 eat free, 6 to 10 at the child rate.</p>
             {nightsEditable && (
               <p>
@@ -2280,8 +2279,8 @@ export function RoomCompositionsTable({
               <th colSpan={3}>Charges</th>
               <th className="ratebtn" rowSpan={2}>
                 <div className="rct-corner">
-                  <button type="button" className="rcb-mini" onClick={() => setRatesOpen((v) => !v)}>
-                    {ratesOpen ? "Rates −" : "Rates +"}
+                  <button type="button" className={`rcb-mini${ratesOpen ? " on" : ""}`} aria-pressed={ratesOpen} onClick={() => setRatesOpen((v) => !v)}>
+                    {readOnly || lockCommercial ? "See rates" : "Edit rates"}
                   </button>
                 </div>
               </th>
@@ -2588,10 +2587,10 @@ export function RoomCompositionsTable({
               {preview ? (
                 <>
                   <td className="money" title="Service charge across every room — whole stay">
-                    {fmtNu(preview.serviceCharge)}
+                    {fmtNu(preview.payableServiceCharge)}
                   </td>
                   <td className="money" title="GST across every room — whole stay">
-                    {fmtNu(preview.gst)}
+                    {fmtNu(preview.payableGst)}
                   </td>
                   <td />
                 </>
@@ -2599,8 +2598,8 @@ export function RoomCompositionsTable({
                 <td colSpan={3} />
               )}
               {ratesOpen && preview ? (
-                <td className="rowtot" title="Grand total including service charge & GST">
-                  {fmtNu(preview.grandTotal)}
+                <td className="rowtot" title="Grand total, after any discount, with service charge & GST">
+                  {fmtNu(preview.payable)}
                 </td>
               ) : (
                 <td />
@@ -2618,21 +2617,20 @@ export function RoomCompositionsTable({
         <div className="rct-live">
           <span className="k">Live total</span>
           <span className="parts">
-            <i>Net</i> {fmtNu(preview.subtotal)} <i>+ SC</i> {fmtNu(preview.serviceCharge)} <i>+ GST</i> {fmtNu(preview.gst)}
+            <i>Net</i> {fmtNu(preview.subtotal)}
+            {preview.discount ? (
+              <>
+                {" "}
+                <i>− discount</i> {fmtNu(preview.discount.netReduction)} <i>=</i> {fmtNu(preview.payableSubtotal)}
+              </>
+            ) : null}{" "}
+            <i>+ SC</i> {fmtNu(preview.payableServiceCharge)} <i>+ GST</i> {fmtNu(preview.payableGst)}
           </span>
           {/* What the booking costs — the one figure the whole table is for, so it is read at a
               glance and never mistaken for another number in the row (2026-09-29, "UIappeal"). */}
           <b className="tot">
-            {preview.currency} {fmtNu(preview.grandTotal)}
+            {preview.currency} {fmtNu(preview.payable)}
           </b>
-          {preview.discount && (
-            <span className="disc">
-              − {fmtNu(preview.discount.amountOffTotal)} discount → payable{" "}
-              <b className="tot">
-                {preview.currency} {fmtNu(preview.payable)}
-              </b>
-            </span>
-          )}
           <span className="ln" />
           {!quiet && <span className="src">the quote will show the same figures</span>}
         </div>
@@ -2697,8 +2695,8 @@ export function RoomCompositionsTable({
           ) : unsaved ? (
             <span className="stop-ink" style={{ fontWeight: 700 }} role="status">
               {quiet
-                ? "Changed since it was priced — save it"
-                : "Changed since it was priced — save it, or the quotation still says the old figures."}
+                ? "Changed since it was quoted — save it"
+                : "Changed since it was quoted — save it, or the quotation still says the old figures."}
             </span>
           ) : quiet ? (
             <span />
@@ -2717,12 +2715,12 @@ export function RoomCompositionsTable({
               faults.length > 0
                 ? `Put right what is listed first — ${faults.length} thing${faults.length === 1 ? "" : "s"} to fix`
                 : unsaved
-                  ? "Saves this table by pricing it: the house generates the quotation from these rows"
+                  ? "Saves this table and makes the quotation from it"
                   : "Nothing to save — the quotation already carries this table"
             }
             onClick={() => onSave()}
           >
-            {saving ? "Saving…" : !unsaved && faults.length === 0 ? "Saved" : (saveLabel ?? "Save & price it")}
+            {saving ? "Saving…" : !unsaved && faults.length === 0 ? "Saved" : (saveLabel ?? "Save & quote it")}
           </button>
           </div>
         </div>

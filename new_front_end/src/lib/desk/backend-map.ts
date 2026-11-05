@@ -116,7 +116,6 @@ const S2: StageBackend = {
     { name: "s2-hold-service", ref: "services/domain/s2-hold-service.ts", detail: "Places/releases speculative holds within threshold." },
   ],
   configKeys: [
-    { name: "registry.quotationValidity.days", detail: "Validity window for a sent quotation (W15)." },
     { name: "registry.discount.actorCeiling", detail: "Per-level discount ceiling (Policy 23)." },
     { name: "registry.s2HoldExpiry.minutes", detail: "Speculative-hold TTL (W2)." },
   ],
