@@ -5,6 +5,7 @@
  * lower authority bar so a receptionist can look up a travel agent / corporate account when
  * taking a phone-call inquiry. Read-only.
  */
+import { buildRateSheet } from "../../services/domain/rate-sheet-service.js";
 import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../../db.js";
@@ -372,5 +373,32 @@ lookupsRouter.get("/lookups/rate-packages", L1, async (req, res, next) => {
     const corporateAccountId = typeof req.query.corporateAccountId === "string" && req.query.corporateAccountId ? req.query.corporateAccountId : null;
     const items = await listPackagesForParty(prisma, { travelAgentId, corporateAccountId });
     res.json({ items, count: items.length });
+  } catch (e) { next(e); }
+});
+
+/**
+ * The rates a booking is priced on, as one sheet (2026-11-05): the party's package, the hotel's common
+ * one, or the published rates and the house tariff. Takes the choice as it stands on the desk, saved
+ * or not, so the sheet follows a pick before it is on record. Read-only.
+ */
+const YMD = /^\d{4}-\d{2}-\d{2}$/;
+lookupsRouter.get("/lookups/rate-sheet", L1, async (req, res, next) => {
+  try {
+    const text = (v: unknown) => (typeof v === "string" && v ? v : null);
+    const travelAgentId = text(req.query.travelAgentId);
+    const corporateAccountId = text(req.query.corporateAccountId);
+    if (travelAgentId && corporateAccountId) {
+      res.status(400).json({ message: "A booking comes through a travel agent or a company, not both" });
+      return;
+    }
+    const checkIn = text(req.query.checkIn);
+    const checkOut = text(req.query.checkOut);
+    const stay =
+      checkIn && checkOut && YMD.test(checkIn) && YMD.test(checkOut) && checkIn < checkOut
+        ? { checkIn: new Date(`${checkIn}T00:00:00.000Z`), checkOut: new Date(`${checkOut}T00:00:00.000Z`) }
+        : undefined;
+    const sheet = await buildRateSheet(prisma, { travelAgentId, corporateAccountId, ratePackageId: text(req.query.ratePackageId), stay });
+    res.setHeader("Cache-Control", "no-store");
+    res.json(sheet);
   } catch (e) { next(e); }
 });
