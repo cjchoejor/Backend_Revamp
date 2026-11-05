@@ -744,7 +744,7 @@ export function NewInquiryCanvas() {
                   <p className="chart-from">
                     <b>From the house chart</b>
                     {fromChart.room ? <> · Room {fromChart.room}</> : null}
-                    {fromChart.checkIn ? <> · {fmtStay(fromChart.checkIn, addNightsIso(fromChart.checkIn, Math.max(1, parseInt(fromChart.nights ?? "1", 10))))}</> : null}
+                    {fromChart.checkIn ? <> · <StayDates checkIn={fromChart.checkIn} checkOut={addNightsIso(fromChart.checkIn, Math.max(1, parseInt(fromChart.nights ?? "1", 10)))} /></> : null}
                     <span> — fill in the caller; the room is picked on the booking, once the house is asked</span>
                   </p>
                 ) : null}
@@ -944,7 +944,7 @@ export function NewInquiryCanvas() {
                   }}
                   summary={
                     <>
-                      <b>{datesSet ? fmtStay(checkIn, checkOut) : "no dates"}</b>
+                      {datesSet ? <StayDates checkIn={checkIn} checkOut={checkOut} /> : <b>no dates</b>}
                       {datesSet ? <> · {plural(stayNights, "night")}</> : null} · {plural(adultsN, "adult")}
                       {childN > 0 ? <>, {plural(childN, "child", "children")}{agesComplete ? ` (${ages.join(", ")})` : ""}</> : null} ·{" "}
                       {plural(roomsN, "room")}
@@ -1208,7 +1208,7 @@ export function NewInquiryCanvas() {
               {/* ------------------------------------------------ the house */}
                 <StepCard
                   flow="house"
-                  title={datesSet ? `The house · ${fmtStay(checkIn, checkOut)}` : "The house"}
+                  title={datesSet ? <>The house · <StayDates checkIn={checkIn} checkOut={checkOut} /></> : "The house"}
                   meta="The house is asked on the booking, where the free rooms for these dates and what they cost, night by night and for the stay, appear while you are still on the phone."
                   heldFor={
                     <>

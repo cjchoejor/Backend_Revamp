@@ -13,6 +13,7 @@
  *
  * Figures are the backend's: the billing summary, the folio's balance, payment-status.
  */
+import { StayDates } from "@/components/ds/stay-dates";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -35,7 +36,7 @@ import {
 } from "@/lib/api/post-stay";
 import { openCancellationConfirmationPdf, openFolioDocumentPdf, openInvoicePdf } from "@/lib/api/documents";
 import { activeQuotation, deriveFinancials, effectiveCheckOutIso } from "@/lib/desk/workspace";
-import { fmtDateTime, fmtDay, fmtInstantDate, fmtStay, fmtStamp, instantYmd, money, nightsOf, plural } from "@/lib/ds/format";
+import { fmtDateTime, fmtDay, fmtInstantDate, fmtStamp, instantYmd, money, nightsOf, plural } from "@/lib/ds/format";
 import { rateWords } from "@/lib/ds/rates";
 import { FolioLinesTable, spaceNamesFromAllocations } from "@/components/desk/workspace/folio-lines";
 import { SplitSettlementBlock } from "@/components/desk/workspace/split-settlement";
@@ -202,10 +203,8 @@ function WhatTheStayWas({ entry }: { entry: EntryDetail }) {
         <div>
           <div className="meta">Stay</div>
           <div>
-            <b>
-              {fmtStay(ci, co)}
-              {nights ? ` · ${plural(nights, "night")}` : ""}
-            </b>
+            <StayDates checkIn={ci} checkOut={co} />
+            {nights ? <b> · {plural(nights, "night")}</b> : null}
           </div>
           <div className="meta">
             {noShow

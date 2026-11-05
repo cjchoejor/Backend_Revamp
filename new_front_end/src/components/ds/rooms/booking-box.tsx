@@ -15,6 +15,7 @@
  * The room-by-night picture is read from the chart's own endpoint over the booking's stay, so the box
  * and the chart cannot describe the booking differently.
  */
+import { StayDates } from "@/components/ds/stay-dates";
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { Button } from "@/design-system";
@@ -23,7 +24,7 @@ import { DsDialog } from "@/components/ds/steps/kit";
 import { useSession } from "@/hooks/use-session";
 import { getRoomChart, type ChartBarKind, type RoomChartBooking } from "@/lib/api/rooms";
 import type { DateMoveInput, RoomMoveLegInput } from "@/lib/api/room-moves";
-import { fmtRange, fmtStay } from "@/lib/ds/format";
+import { fmtRange } from "@/lib/ds/format";
 import { rowNameOf } from "@/lib/ds/status";
 import { STEP_NAMES, stepNoOfStage } from "@/lib/ds/steps";
 import type { NightMove } from "./night-move-dialog";
@@ -194,7 +195,7 @@ export function BookingBox({
           {label}
           <span className="bbox-sub">
             {booking.entryId} · {step}
-            {ci && co ? ` · ${fmtStay(ci, co)}` : ""}
+            {ci && co ? <> · <StayDates checkIn={ci} checkOut={co} /></> : null}
           </span>
         </span>
       }

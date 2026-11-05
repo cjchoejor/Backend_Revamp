@@ -13,6 +13,7 @@
  * (started at Inquiry, filled in) — and runs it (`POST /date-moves/split`). Every figure and every
  * refusal is the server's; what happens step by step sits behind the "?".
  */
+import { StayDates } from "@/components/ds/stay-dates";
 import Link from "next/link";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
@@ -290,9 +291,9 @@ export function SplitMoveDialog({ move, onClose, tz }: { move: SplitMove | null;
                 </span>
               </div>
               <div className="rmv-rooms">
-                <span className="rmv-room">{fmtStay(preview.from.checkInDate, preview.from.checkOutDate)}</span>
+                <StayDates checkIn={preview.from.checkInDate} checkOut={preview.from.checkOutDate} />
                 <span className="rmv-arrow">→</span>
-                <span className="rmv-room to">{fmtStay(preview.to.checkInDate, preview.to.checkOutDate)}</span>
+                <StayDates checkIn={preview.to.checkInDate} checkOut={preview.to.checkOutDate} />
                 <span className="rmv-type">
                   {plural(preview.to.nights, "night")} · {shiftWords(preview.shiftDays)}
                 </span>

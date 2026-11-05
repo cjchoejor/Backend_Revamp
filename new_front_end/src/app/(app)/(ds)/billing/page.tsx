@@ -6,7 +6,7 @@
  * here, so there are no account totals until the backend reports them (receivables by account,
  * register BE-31; statements of account, BE-48).
  */
-import { StayLines } from "@/components/ds/stay-dates";
+import { StayDates } from "@/components/ds/stay-dates";
 import { useMemo } from "react";
 import { EmptyState, NotAvailableYet } from "@/design-system";
 import { GuestLink, LoadFailed, LoadingBlock, OpenRow, RowStanding, bookingMeta } from "@/components/ds/ui";
@@ -104,7 +104,7 @@ export default function BillingPage() {
                           <GuestLink row={r} />
                           <div className="meta">{bookingMeta(r)}</div>
                         </td>
-                        <td className="nowrap"><StayLines checkIn={r.checkInDate} checkOut={r.actualCheckOutDate ?? r.checkOutDate} /></td>
+                        <td className="nowrap"><StayDates stacked checkIn={r.checkInDate} checkOut={r.actualCheckOutDate ?? r.checkOutDate} /></td>
                         <td>
                           <RowStanding row={r} hotelToday={today} balance={x?.folio?.outstandingBalance ?? null} />
                         </td>
@@ -148,7 +148,7 @@ export default function BillingPage() {
                           <GuestLink row={r} />
                           <div className="meta">{r.id}</div>
                         </td>
-                        <td className="nowrap"><StayLines checkIn={r.checkInDate} checkOut={r.actualCheckOutDate ?? r.checkOutDate} /></td>
+                        <td className="nowrap"><StayDates stacked checkIn={r.checkInDate} checkOut={r.actualCheckOutDate ?? r.checkOutDate} /></td>
                         <Cell v={x?.folio?.outstandingBalance} cur={x?.currency} />
                       </OpenRow>
                     );

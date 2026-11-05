@@ -5,7 +5,7 @@
  * is not in the backend yet (there is no update route and no change trail, register BE-32), so
  * the record reads only.
  */
-import { StayLines } from "@/components/ds/stay-dates";
+import { StayDates } from "@/components/ds/stay-dates";
 import { use, useMemo, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
@@ -170,7 +170,7 @@ export default function GuestRecordPage({ params }: { params: Promise<{ id: stri
                         {booker && (booker.kind === "agent" || booker.kind === "company") ? ` · ${booker.name}` : ""}
                       </div>
                     </td>
-                    <td className="nowrap"><StayLines checkIn={r.checkInDate} checkOut={r.actualCheckOutDate ?? r.checkOutDate} /></td>
+                    <td className="nowrap"><StayDates stacked checkIn={r.checkInDate} checkOut={r.actualCheckOutDate ?? r.checkOutDate} /></td>
                     <td>{r.roomNumbers.length ? r.roomNumbers.join(", ") : (r.numberOfRooms ?? "—")}</td>
                     <td>
                       <RowStanding row={r} hotelToday={today} balance={x?.folio?.outstandingBalance ?? null} />

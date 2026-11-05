@@ -16,6 +16,7 @@
  * FOM from Set up on (at Negotiation the change of configuration's own rule). What happens and why
  * sits behind the "?" — only what needs reading stays on screen.
  */
+import { StayDates } from "@/components/ds/stay-dates";
 import Link from "next/link";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
@@ -277,9 +278,9 @@ export function DateMoveDialog({ move, onClose, tz }: { move: (DateMoveInput & {
                 </span>
               </div>
               <div className="rmv-rooms">
-                <span className="rmv-room">{fmtStay(preview.from.checkInDate, preview.from.checkOutDate)}</span>
+                <StayDates checkIn={preview.from.checkInDate} checkOut={preview.from.checkOutDate} />
                 <span className="rmv-arrow">→</span>
-                <span className="rmv-room to">{fmtStay(preview.to.checkInDate, preview.to.checkOutDate)}</span>
+                <StayDates checkIn={preview.to.checkInDate} checkOut={preview.to.checkOutDate} />
                 <span className="rmv-type">
                   {plural(preview.to.nights, "night")} · {shiftWords(preview.shiftDays)}
                 </span>

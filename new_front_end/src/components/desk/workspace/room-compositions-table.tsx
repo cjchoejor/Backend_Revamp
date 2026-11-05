@@ -1,5 +1,6 @@
 "use client";
 
+import { StayDates } from "@/components/ds/stay-dates";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowDownToLine, ChevronLeft, ChevronRight, Maximize2, Minimize2, Wand2 } from "lucide-react";
@@ -1994,7 +1995,7 @@ export function RoomCompositionsTable({
         <td colSpan={colCount}>
           <div className="nb-in">
             <b className="nb-date">
-              Check-in {nightLabel(ciIso)} · Check-out {nightLabel(coIso)}
+              <StayDates checkIn={ciIso} checkOut={coIso} />
             </b>
             <span className="nb-meta">
               {stayNights} night{stayNights === 1 ? "" : "s"}

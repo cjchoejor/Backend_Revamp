@@ -9,6 +9,7 @@
  * A booking for the same nights can be combined into this one while both are still at Inquiry or
  * Negotiation — the server's preview says what it would do and refuses everything else in words.
  */
+import { StayDates } from "@/components/ds/stay-dates";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
@@ -20,7 +21,7 @@ import { bookingHref } from "@/components/ds/ui";
 import { useSession } from "@/hooks/use-session";
 import { combineBookings, listSameGuestBookings, previewCombineBookings, type SameGuestBooking } from "@/lib/api/guest-bookings";
 import { endingOf } from "@/lib/ds/status";
-import { fmtDate, fmtStay, plural } from "@/lib/ds/format";
+import { fmtDate, plural } from "@/lib/ds/format";
 import type { EntryDetail } from "@/types/api";
 
 const partyWords = (adults: number, children: number) =>
@@ -54,7 +55,7 @@ export function GuestBookingsCard({ entry }: { entry: EntryDetail }) {
         {rows.map((b) => (
           <div key={b.entryId} className={`gb-row${b.overlapsThis ? " overlap" : ""}${b.live ? "" : " ended"}`}>
             <span className="gb-dates">
-              <b>{b.checkInDate && b.checkOutDate ? fmtStay(b.checkInDate, b.checkOutDate) : "no dates yet"}</b>
+              {b.checkInDate && b.checkOutDate ? <StayDates checkIn={b.checkInDate} checkOut={b.checkOutDate} /> : <b>no dates yet</b>}
               {b.rooms.length ? <span className="sm"> · Room {b.rooms.join(", ")}</span> : null}
               <span className="sm muted"> · {standingOf(b)}</span>
             </span>

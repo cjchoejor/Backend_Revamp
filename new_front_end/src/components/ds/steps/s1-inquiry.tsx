@@ -11,6 +11,7 @@
  * are chosen and asks what the guest did not give at the start: their phone or email, who is
  * arriving, and any notes.
  */
+import { StayDates } from "@/components/ds/stay-dates";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -41,7 +42,7 @@ import {
   roomStatusRows,
   type RoomStatusRow,
 } from "@/components/desk/workspace/room-status-table";
-import { fmtDay, fmtStay, money, plural } from "@/lib/ds/format";
+import { fmtDay, money, plural } from "@/lib/ds/format";
 import { currentPassConfigs, pickFitsStay } from "@/lib/desk/workspace";
 import {
   optionSelectedRoomIds,
@@ -404,7 +405,7 @@ function TheStay({
       }
       summary={
         <>
-          <b>{entry.checkInDate ? fmtStay(entry.checkInDate, entry.checkOutDate) : "no dates"}</b>
+          {entry.checkInDate ? <StayDates checkIn={entry.checkInDate} checkOut={entry.checkOutDate} /> : <b>no dates</b>}
           {saved.checkIn ? <> · {plural(parseInt(saved.nights, 10) || 1, "night")}</> : null} ·{" "}
           {plural(parseInt(saved.adults, 10) || 0, "adult")}
           {(parseInt(saved.children, 10) || 0) > 0
@@ -1132,10 +1133,6 @@ function TheHouse({
             ? `only ${chosenRow.full.length} ${chosenRow.name} free on every night — choose the rooms by night instead`
             : null;
 
-  const range = fmtStay(
-    searched.checkIn ?? entry.checkInDate,
-    searched.checkOut ?? entry.checkOutDate,
-  );
   const savedNumbers = savedIds
     .map(
       (id) =>
@@ -1153,7 +1150,13 @@ function TheHouse({
         revealAtTop
         title={
           <>
-            {hasResults || entry.checkInDate ? `The house · ${range}` : "The house"}
+            {hasResults || entry.checkInDate ? (
+              <>
+                The house · <StayDates checkIn={searched.checkIn ?? entry.checkInDate} checkOut={searched.checkOut ?? entry.checkOutDate} />
+              </>
+            ) : (
+              "The house"
+            )}
             {houseShort?.kind === "SHORT" ? (
               <span className="house-short" role="alert">
                 Not enough rooms · {numberOfRooms} asked,{" "}

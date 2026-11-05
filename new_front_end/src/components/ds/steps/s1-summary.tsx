@@ -10,6 +10,7 @@
  * Every figure is the server's: the same bill the Inquiry step prints (`price-pick`), priced on
  * the rooms as SAVED — the move to Negotiation carries the saved pick, never an unsaved one.
  */
+import { StayDates } from "@/components/ds/stay-dates";
 import { useBookingRooms } from "@/hooks/use-booking-rooms";
 import { useMemo } from "react";
 import { Button } from "@/design-system";
@@ -19,7 +20,7 @@ import { enumerateNights } from "./use-room-selection";
 import { USE_TYPES, bedWord } from "./new-inquiry-parts";
 import { currentPassConfigs } from "@/lib/desk/workspace";
 import { callerNameOf, channelWord } from "@/lib/ds/status";
-import { fmtStay, plural } from "@/lib/ds/format";
+import { plural } from "@/lib/ds/format";
 import { guestName } from "@/lib/desk/model";
 import type { AvailabilityOptionSelected, EntryDetail } from "@/types/api";
 
@@ -123,7 +124,10 @@ export function InquirySummaryDialog({
         <section>
           <b className="cfg-n">The stay</b>
           <Facts wide>
-            <Fact k="The stay">{`${fmtStay(entry.checkInDate, entry.checkOutDate)}${nights ? ` · ${plural(nights, "night")}` : ""}`}</Fact>
+            <Fact k="The stay">
+              <StayDates checkIn={entry.checkInDate} checkOut={entry.checkOutDate} />
+              {nights ? ` · ${plural(nights, "night")}` : ""}
+            </Fact>
             <Fact k="Guests">
               {`${plural(entry.adultCount ?? entry.guestCount ?? 0, "adult")}${
                 ages.length ? ` · ${plural(ages.length, "child", "children")} (aged ${ages.join(", ")})` : ""

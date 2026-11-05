@@ -11,6 +11,7 @@
  * Figures come from the backend only: the advance from payment-status, the proforma as the
  * backend composes it. Nothing is added up here.
  */
+import { StayDates } from "@/components/ds/stay-dates";
 import { PersonName } from "@/components/ds/person-name";
 import { joinTitled, splitTitle } from "@/lib/ds/person";
 import Link from "next/link";
@@ -42,7 +43,7 @@ import {
   schedulePaymentMilestones,
 } from "@/lib/api/reservation-setup";
 import { guestNameOf } from "@/lib/ds/status";
-import { fmtDateTime, fmtStay, fmtStamp, hotelFormParts, money, plural } from "@/lib/ds/format";
+import { fmtDateTime, fmtStamp, hotelFormParts, money, plural } from "@/lib/ds/format";
 import { optionSelectedRoomIds, preferredHoldRoomId, type EntryDetail, type InvoiceSummary, type PaymentStatusSummary } from "@/types/api";
 import { replySettled } from "@/lib/api/entries";
 import { AnswerLine, useReplyAsked, Choice, DsDialog, Fact, FactBox, Facts, Live, OnRecord, PaperDrawer, ReasonDialog, SeeRow, StepCanvas, StepCard, atLeast, currentPassStart, toastRefusal, useCommunications, useRefreshEntry, useStepMode, words, type PaperRef, type ChangeBookingItem, ChangeBookingMenu, StageActs, useFlowUnsaved, useFinishWhenDone, useStepFlow, goToStepCard, revealCard, useOpenAlsoWay, useStepPane, OtherWaysTabs, InlineWay, ShutWay, parkTab, NightsChoice } from "./kit";
@@ -368,7 +369,7 @@ export function S3SetUp({
                         onClose={() => undefined}
                         busy={cancelM.isPending || leaving}
                         title="Cancel this booking"
-                        caseLines={[fmtStay(entry.checkInDate, entry.checkOutDate)]}
+                        caseLines={[<StayDates key="stay" checkIn={entry.checkInDate} checkOut={entry.checkOutDate} />]}
                         lead={
                           <>
                             Cancelling at Set up is final. The committed hold is released and the rooms return to sale; the proforma is withdrawn and its
@@ -851,7 +852,7 @@ function HoldCard({
           onClose={() => setPlaceOpen(false)}
           busy={place.isPending}
           title="Block the rooms"
-          caseLines={[`${rooms} · ${fmtStay(entry.checkInDate, entry.checkOutDate)}`]}
+          caseLines={[<span key="stay">{rooms} · <StayDates checkIn={entry.checkInDate} checkOut={entry.checkOutDate} /></span>]}
           footer={
             <>
               <Button kind="quiet" state={place.isPending ? "inert" : "default"} onClick={() => setPlaceOpen(false)}>

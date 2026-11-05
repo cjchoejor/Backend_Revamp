@@ -97,7 +97,7 @@ export function TripStays({ entry }: { entry: EntryDetail }) {
           <div key={s.id} className="trip-stay">
             <span className="meta">Stay {i + 1}</span>
             <span className={standing.off ? "dash" : "sm"}>
-              <b>{fmtStay(s.checkInDate, s.checkOutDate)}</b>
+              <StayDates checkIn={s.checkInDate} checkOut={s.checkOutDate} />
               {s.numberOfRooms ? ` · ${plural(s.numberOfRooms, "room")}` : ""}
               {` · ${standing.words}`}
             </span>
@@ -351,7 +351,7 @@ function ReturnStayDialog({ entry, fromAfter, onClose }: { entry: EntryDetail; f
         register="report"
         width={560}
         title={`Stay ${stayNo} is added. How should it be set up?`}
-        caseLines={[stage.created.id, fmtStay(stage.created.checkInDate, stage.created.checkOutDate)]}
+        caseLines={[stage.created.id, <StayDates key="stay" checkIn={stage.created.checkInDate} checkOut={stage.created.checkOutDate} />]}
         footer={<span className="meta">Either way you stay on this stay. Open the new one from the list at the top of the page.</span>}
       >
         <div className="rs-opts">
@@ -486,7 +486,7 @@ export function ShortRoomsDialog({
         register="danger"
         width={600}
         title={`Stay ${stayNo} cannot take the same rooms`}
-        caseLines={[stayId, fmtStay(checkIn, checkOut)]}
+        caseLines={[stayId, <StayDates key="stay" checkIn={checkIn} checkOut={checkOut} />]}
         footer={
           <>
             <Button kind="quiet" state={save.isPending ? "inert" : "default"} onClick={onClose}>
@@ -577,7 +577,7 @@ function FreeTypesDialog({
       register="report"
       width={520}
       title="Free room types"
-      caseLines={[fmtStay(checkIn, checkOut), `${plural(missing, "more room")} to choose`]}
+      caseLines={[<StayDates key="stay" checkIn={checkIn} checkOut={checkOut} />, `${plural(missing, "more room")} to choose`]}
       help="Free means a room of the type is open for every night of this stay."
       footer={
         <Button kind="quiet" onClick={onClose}>

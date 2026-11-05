@@ -46,8 +46,8 @@ export function fmtDmy(value?: string | null, dash = "—"): string {
 
 /**
  * `Check-in 5 Nov 2026 · Check-out 6 Nov 2026`: a guest's stay in the hotel's own words (2026-11-05,
- * operator: "it should be shown as check in and check out date"). Boxes are `StayDates`; a table cell
- * with room for two lines is `StayLines`.
+ * operator: "it should be shown as check in and check out date"), for where only words will do: a toast,
+ * a History line, a hint. A stay standing on its own on a screen is `StayDates`, in green and grey.
  */
 export function fmtStay(checkIn?: string | null, checkOut?: string | null): string {
   if (!checkIn && !checkOut) return "—";

@@ -93,7 +93,7 @@ import {
 } from "@/lib/desk/workspace";
 import { arrivalNightRoomIds, heldRoomIds, roomsInUseFor } from "@/lib/desk/party-rooms";
 import { channelWord, endingOf, factsFromEntry, rowNameOf, standingOf } from "@/lib/ds/status";
-import { fmtDateTime, fmtDay, fmtStay, money, nightsOf, plural } from "@/lib/ds/format";
+import { fmtDateTime, fmtDay, money, nightsOf, plural } from "@/lib/ds/format";
 import { PHASES, BOUNDARY_STEPS, STEP_NAMES, STEP_NEEDS, stepNoOfStage, type StepNo } from "@/lib/ds/steps";
 import { timerLabel } from "@/lib/ds/timers";
 import { BackendRailSlotContext } from "@/components/desk/workspace/backend-inline";
@@ -1627,7 +1627,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                   {trip.others.slice(0, 2).map((s, i) => (
                     <span key={s.id}>
                       {i ? ", " : ""}
-                      <Link href={bookingHref(s.id)}>{fmtStay(s.checkInDate, s.checkOutDate)}</Link>
+                      <Link href={bookingHref(s.id)}><StayDates checkIn={s.checkInDate} checkOut={s.checkOutDate} /></Link>
                     </span>
                   ))}
                   {trip.others.length > 2 ? ` and ${trip.others.length - 2} more` : ""}
@@ -1737,7 +1737,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
         <CommitDialog
           open={confirmOpen}
           title="Reserve the booking"
-          caseLines={[<b key="n">{name}</b>, `${entry.id} · ${fmtStay(entry.checkInDate, entry.checkOutDate)}`]}
+          caseLines={[<b key="n">{name}</b>, <span key="stay">{entry.id} · <StayDates checkIn={entry.checkInDate} checkOut={entry.checkOutDate} /></span>]}
           lines={[
             fin.indicativeTotal !== null ? `The price freezes at ${money(fin.indicativeTotal, fin.currency)} — the guest is held to it.` : "The price freezes — the guest is held to it.",
             "The rooms lock — no longer offerable to anyone else.",

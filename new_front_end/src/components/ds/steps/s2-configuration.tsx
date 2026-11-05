@@ -25,6 +25,7 @@
  * change makes untrue, and moving the provisional block to the new rooms with its original
  * deadline. Nothing here writes to the booking on its own.
  */
+import { StayDates } from "@/components/ds/stay-dates";
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -48,7 +49,7 @@ import { RoomCountField } from "./new-inquiry-parts";
 import { listRooms } from "@/lib/api/rooms";
 import { RoomStatusTable, roomStatusRows } from "@/components/desk/workspace/room-status-table";
 import { currentPassConfigs } from "@/lib/desk/workspace";
-import { fmtDateTime, fmtStay, plural } from "@/lib/ds/format";
+import { fmtDateTime, plural } from "@/lib/ds/format";
 import { optionSelectedRoomIds, type AvailabilityOptionSelected, type EntryDetail } from "@/types/api";
 import { Tool, atLeast, toastRefusal, useRefreshEntry } from "./kit";
 import { Help } from "@/components/ds/help";
@@ -594,8 +595,8 @@ export function ChangeConfiguration({
         </div>
         {datesMoved ? (
           <p className="cfg-move" role="status">
-            Moving the stay from <b>{fmtStay(oldIn, oldOut)}</b> ({plural(enumerateNights(oldIn, oldOut).length, "night")}) to{" "}
-            <b>{fmtStay(checkIn, checkOut)}</b> ({plural(nightsN, "night")}).
+            Moving the stay from <StayDates checkIn={oldIn} checkOut={oldOut} /> ({plural(enumerateNights(oldIn, oldOut).length, "night")}) to{" "}
+            <StayDates checkIn={checkIn} checkOut={checkOut} /> ({plural(nightsN, "night")}).
           </p>
         ) : null}
         <div className="form2" style={{ marginTop: 8 }}>
@@ -667,11 +668,11 @@ export function ChangeConfiguration({
           </Button>
           {result ? (
             <span className="sm">
-              {plural(available.length, "room")} free · {fmtStay(checkIn, checkOut)}
+              {plural(available.length, "room")} free · <StayDates checkIn={checkIn} checkOut={checkOut} />
             </span>
           ) : answerOutdated ? (
             <span className="warn-ink sm" style={{ fontWeight: 600 }}>
-              The dates changed — ask the house again for {fmtStay(checkIn, checkOut)}.
+              The dates changed — ask the house again for <StayDates checkIn={checkIn} checkOut={checkOut} />
             </span>
           ) : null}
         </div>

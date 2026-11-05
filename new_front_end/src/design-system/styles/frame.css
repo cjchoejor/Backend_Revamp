@@ -492,7 +492,6 @@
 /* Charges & payments: the stay total is the figure the card exists for (UIappeal). */
 /* The stay's total is what the price is read for (2026-11-05, operator: "can this be prominent, maybe
    light blue highlight"): a light blue band, the figure large in the blue's own ink. */
-.ds .staylines { display: inline-grid; gap: 1px; }
 .ds .bigfig, .ds .pickbill .pb-total { display: flex; align-items: baseline; gap: 4px 12px; flex-wrap: wrap; flex-basis: 100%; padding: 10px 14px; border: 1px solid var(--accent-line); border-radius: 6px; background: var(--accent-soft); color: var(--accent-ink); }
 .ds .bigfig { margin-bottom: var(--s2); }
 .ds .bigfig > .meta:first-child, .ds .pickbill .pb-total-word { font-size: var(--t-sm); font-weight: 600; color: var(--accent-ink); }
@@ -1845,9 +1844,11 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .staydates { display: inline-flex; align-items: center; gap: var(--s2); flex-wrap: wrap; vertical-align: middle; }
 .ds .staydates .sd { display: inline-flex; align-items: stretch; border: 1px solid var(--line-2); border-radius: var(--r-control); overflow: hidden; background: var(--surface); line-height: 1.2; }
 .ds .staydates .sd .lbl { display: inline-flex; align-items: center; padding: 2px 7px; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: #FFFFFF; }
+.ds .staydates.stacked { display: inline-grid; gap: 3px; }
+.ds .staydates.stacked .sd .lbl { min-width: 76px; }
 .ds .staydates .sd.in .lbl { background: var(--success); }
 .ds .staydates .sd.out .lbl { background: var(--ink-2); }
-.ds .staydates .sd b { display: inline-flex; align-items: center; padding: 2px 8px; color: var(--ink); font-weight: 700; font-variant-numeric: tabular-nums; }
+.ds .staydates .sd b { display: inline-flex; align-items: center; padding: 2px 8px; color: var(--ink); font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; }
 
 /* The step's other ways in the middle of the screen, over a dimmed, blurred page (2026-10-27). Below a
    dialog opened from inside a way (85), above everything on the page. */

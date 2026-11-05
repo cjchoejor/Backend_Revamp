@@ -12,6 +12,7 @@
  * answer to it (Arrival waits for that answer), the pre-arrival tasks Reserve opened, and the
  * advance, which can still come in before Arrival.
  */
+import { StayDates } from "@/components/ds/stay-dates";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -878,7 +879,7 @@ function WhatReserveDecided({ entry }: { entry: EntryDetail }) {
     >
       <Facts wide>
         <Fact k="Reservation">
-          <b>{res.id}</b> · dates frozen: {fmtStay(res.frozenCheckInDate, res.frozenCheckOutDate)}
+          <b>{res.id}</b> · dates frozen: <StayDates checkIn={res.frozenCheckInDate} checkOut={res.frozenCheckOutDate} />
           {nights ? ` · ${plural(nights, "night")}` : ""}
         </Fact>
         <Fact k={roomRates && roomRates.length > 1 ? "Rates frozen" : "Rate frozen"} meta={preDiscount ? "before the booking discount — the price below is after it" : undefined}>

@@ -18,6 +18,7 @@
  * keeps its own run of nights, the result says each room's walk, and stays that leave on the same
  * dates are one booking holding all their rooms.
  */
+import { StayDates } from "@/components/ds/stay-dates";
 import Link from "next/link";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
@@ -35,7 +36,7 @@ import {
   type NightMoveResult,
   type SplitTarget,
 } from "@/lib/api/room-moves";
-import { fmtStay, money } from "@/lib/ds/format";
+import { money } from "@/lib/ds/format";
 import { STEP_NAMES, stepNoOfStage } from "@/lib/ds/steps";
 
 /** What the chart hands over: every room's nights that move, the one dragged first. */
@@ -93,9 +94,7 @@ function ResultView({ result, tz, manyRooms }: { result: NightMoveResult; tz?: s
       {result.created.map((c) => (
         <div className="spl-part" key={c.entryId}>
           <p className={`rmv-status ${c.blocked ? "warn" : "ok"}`} role="status">
-            <b>
-              {roomLabel(c.roomNumber)} · {fmtStay(c.checkInDate, c.checkOutDate)}
-            </b>
+            <b>{roomLabel(c.roomNumber)}</b> · <StayDates checkIn={c.checkInDate} checkOut={c.checkOutDate} />
             {" — "}
             {c.newInquiry
               ? `its booking ${c.entryId} on the new enquiry ${c.inquiryId} starts at Inquiry, filled in — its room is picked, not held, until it is reserved.`
@@ -367,9 +366,9 @@ export function NightMoveDialog({ move, onClose, tz }: { move: NightMove | null;
                   <div className="nmv-k">{preview.pieces.length === 1 ? "A booking of its own" : `${preview.pieces.length} bookings of their own`}</div>
                   {preview.pieces.map((p) => (
                     <div className={`nmv-piece${p.kind === "MOVED" ? " moved" : ""}`} key={`${p.kind}${p.checkInDate}${p.roomNumber}`}>
-                      <b>
-                        {roomLabel(p.roomNumber)} · {fmtStay(p.checkInDate, p.checkOutDate)}
-                      </b>
+                      <span>
+                        <b>{roomLabel(p.roomNumber)}</b> · <StayDates checkIn={p.checkInDate} checkOut={p.checkOutDate} />
+                      </span>
                       <span className="muted">
                         {plural(p.nights, "night")} · {p.guests} · {p.kind === "MOVED" ? (manyRooms ? "the nights moved" : "the night moved") : "left at its own dates"}
                       </span>
