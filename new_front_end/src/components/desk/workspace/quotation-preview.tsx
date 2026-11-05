@@ -217,8 +217,9 @@ function FrozenPdfFrame({ path, title }: { path: string; title: string }) {
     return (
       <iframe
         title={title}
-        src={`${url}#view=FitH`}
-        style={{ width: "100%", height: "calc(100vh - 150px)", minHeight: 480, display: "block", border: 0, background: "#fff" }}
+        // The viewer's own bar and thumbnails take room from the paper; the panel has PDF and Print.
+        src={`${url}#toolbar=0&view=FitH`}
+        style={{ width: "100%", height: "100%", minHeight: 480, display: "block", border: 0, background: "#fff" }}
       />
     );
   }
