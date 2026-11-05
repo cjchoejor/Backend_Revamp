@@ -107,6 +107,13 @@ export function InquirySummaryDialog({
             >
               {g ? guestName(g) : null}
             </Fact>
+            {entry.inquiry?.partyContacts?.length ? (
+              <Fact k={entry.inquiry.partyContacts.length > 1 ? "Their contact persons" : "Their contact person"}>
+                {entry.inquiry.partyContacts.map((c, i) => (
+                  <div key={i}>{[[c.title, c.name].filter(Boolean).join(" "), c.phone].filter(Boolean).join(" · ")}</div>
+                ))}
+              </Fact>
+            ) : null}
             {entry.contactPersonName || entry.contactPersonPhone ? (
               <Fact k="Who is arriving">{[entry.contactPersonName, entry.contactPersonPhone].filter(Boolean).join(" · ")}</Fact>
             ) : null}

@@ -1,5 +1,7 @@
 "use client";
 
+import { PhoneField, PhoneListField } from "@/components/ds/phone-field";
+import { TitleSelect } from "@/components/ds/person-name";
 import { AdmField } from "@/components/admin/field-title";
 import { FieldTitle } from "@/components/admin/field-title";
 import { Help } from "@/components/ds/help";
@@ -23,7 +25,6 @@ import { RatePackagesEditor } from "@/components/admin/rate-packages-editor";
 import { RatePackageHistory } from "@/components/admin/rate-package-history";
 import { VersionsTab } from "@/components/admin/versions-tab";
 import { useSelectionParam } from "@/hooks/use-selection-param";
-import { Control } from "@/components/admin/setting-form";
 import { PartyList } from "@/components/admin/party-list";
 
 const CONTACT_MODES: ContactMode[] = ["PHONE", "EMAIL", "WHATSAPP", "IN_PERSON", "OTHER"];
@@ -110,6 +111,7 @@ export default function AdminCorporateAccountsPage() {
     mutationFn: () => updateCorporateAccount(session!, selectedId!, draft),
     onSuccess: (updated) => {
       toast.success("Saved");
+      selectAccount(updated);
       void queryClient.invalidateQueries({ queryKey: ["admin", "corporate-accounts"] });
       void queryClient.invalidateQueries({ queryKey: ["admin", "versions", "CorporateAccount", updated.id] });
     },
@@ -171,13 +173,9 @@ export default function AdminCorporateAccountsPage() {
                   </label>
                   <div className="sf-field">
                     <span className="sf-label">Contact numbers</span>
-                    <Control
-                      f={{ kind: "tags", label: "Contact numbers", placeholder: "17123456", addLabel: "Add" }}
-                      value={draft.contactNumbers ?? []}
-                      onChange={(v) => setDraft({ ...draft, contactNumbers: v as string[] })}
-                    />
+                    <PhoneListField value={draft.contactNumbers ?? []} onChange={(v) => setDraft({ ...draft, contactNumbers: v })} />
                   </div>
-                  <label className="block space-y-1">
+                  <label className="block space-y-1 self-start">
                     <span className="admin-muted text-xs">Email</span>
                     <input className="admin-input" type="email" value={draft.contactEmail ?? ""} onChange={(e) => setDraft({ ...draft, contactEmail: e.target.value })} />
                   </label>
@@ -243,14 +241,14 @@ export default function AdminCorporateAccountsPage() {
                       // "Saved" here means: present on the row the server returned, and unedited.
                       const savedList = (selected?.coordinators ?? []) as typeof draft.coordinators;
                       const savedMatch = (savedList ?? []).find(
-                        (sc) => sc.name === c.name && (sc.phone ?? "") === (c.phone ?? "") && (sc.email ?? "") === (c.email ?? ""),
+                        (sc) => (sc.title ?? "") === (c.title ?? "") && sc.name === c.name && (sc.phone ?? "") === (c.phone ?? "") && (sc.email ?? "") === (c.email ?? ""),
                       );
                       const isSaved = !!savedMatch && !editingContacts[i];
 
                       if (isSaved) {
                         return (
                           <div key={i} className="flex flex-wrap items-center gap-2 rounded border border-black/10 bg-black/[0.02] px-3 py-2">
-                            <span className="text-sm">{c.name}</span>
+                            <span className="text-sm">{[c.title, c.name].filter(Boolean).join(" ")}</span>
                             {c.phone && <span className="admin-muted font-mono text-xs">{c.phone}</span>}
                             {c.email && <span className="admin-muted text-xs">{c.email}</span>}
                             <span className="admin-tag admin-tag-ok text-[10px]">saved</span>
@@ -270,13 +268,16 @@ export default function AdminCorporateAccountsPage() {
                       }
                       return (
                         <div key={i} className="flex flex-wrap items-end gap-2">
-                          <AdmField label="Name" style={{ flex: "1 1 30%" }}>
+                          <AdmField label="Title" style={{ flex: "0 0 96px" }}>
+                            <TitleSelect className="admin-input" value={c.title} onChange={(title) => update({ title: title || null })} />
+                          </AdmField>
+                          <AdmField label="Name" style={{ flex: "1 1 22%" }}>
                             <input className="admin-input" value={c.name} onChange={(e) => update({ name: e.target.value })} />
                           </AdmField>
-                          <AdmField label="Phone" style={{ flex: "1 1 25%" }}>
-                            <input className="admin-input" value={c.phone ?? ""} onChange={(e) => update({ phone: e.target.value })} />
+                          <AdmField label="Phone" group style={{ flex: "1 1 30%" }}>
+                            <PhoneField inputClass="admin-input" value={c.phone} onChange={(phone) => update({ phone: phone || null })} />
                           </AdmField>
-                          <AdmField label="Email" style={{ flex: "1 1 25%" }}>
+                          <AdmField label="Email" style={{ flex: "1 1 20%" }}>
                             <input className="admin-input" value={c.email ?? ""} onChange={(e) => update({ email: e.target.value })} />
                           </AdmField>
                           <button type="button" className="admin-btn admin-btn-ghost admin-btn-sm" onClick={remove}>
@@ -289,7 +290,7 @@ export default function AdminCorporateAccountsPage() {
                       type="button"
                       className="admin-btn admin-btn-ghost admin-btn-sm"
                       onClick={() =>
-                        setDraft({ ...draft, coordinators: [...(draft.coordinators ?? []), { name: "", phone: "", email: "" }] })
+                        setDraft({ ...draft, coordinators: [...(draft.coordinators ?? []), { title: null, name: "", phone: "", email: "" }] })
                       }
                     >
                       + Add coordinator

@@ -152,10 +152,9 @@ function withUnsaved(base: Precondition[], unsaved: UnsavedSection[]): Precondit
   return [...base, ...extra];
 }
 
-/** Inquiry's five sections, by the cards the readiness list names (Stage 1 since 2026-10-10). */
+/** Inquiry's four sections, by the cards the readiness list names (four since 2026-11-05). */
 const INQUIRY_SECTIONS: Record<string, string> = {
   caller: "The caller",
-  asking: "Who is asking",
   stay: "The stay",
   house: "The house",
   wrap: "Wrap up",

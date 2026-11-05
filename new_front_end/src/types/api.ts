@@ -685,6 +685,10 @@ export type EntryDetail = EntryListItem & {
     partyContactName?: string | null;
     partyContactPhone?: string | null;
     partyContactEmail?: string | null;
+    ratePackageId?: string | null;
+    corporateClientRef?: string | null;
+    /** Every contact person on the enquiry, first one first (2026-11-05). Null on one from before. */
+    partyContacts?: Array<{ title?: string | null; name: string; phone?: string | null; email?: string | null }> | null;
     guestProfileId?: string | null;
     /** Full Inquiry scalars come through the entry include; declared as needed. */
     sourceChannel?: string | null;
@@ -717,6 +721,9 @@ export type BookingPartySummary = {
   displayName: string;
   contactNumbers: string[];
   contactEmail: string | null;
+  /** The party's people on file, for "Add another contact" (2026-11-05). */
+  coordinators?: Array<{ title?: string | null; name: string; phone?: string | null; email?: string | null }> | null;
+  contractRefs?: string[] | null;
 };
 
 export type TripStaySummary = {

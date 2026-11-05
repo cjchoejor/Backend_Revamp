@@ -1,5 +1,7 @@
 "use client";
 
+import { TitleSelect } from "@/components/ds/person-name";
+import { joinTitled, splitTitle } from "@/lib/ds/person";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Check, ChevronDown, ChevronRight, Eraser, FileText, Fingerprint, Lock, ScanLine, Smartphone, Upload, X } from "lucide-react";
@@ -1549,16 +1551,26 @@ export function IdentityProofBlock({
                       onBlur={() => saveIfChanged(slot)}
                     />
                   </td>
-                  <td style={{ ...td, minWidth: 140 }}>
-                    <input
-                      className="dinput"
-                      style={cell}
-                      placeholder={slot.placeholder}
-                      disabled={locked}
-                      value={draft.name}
-                      onChange={(e) => setDraft(slot.key, { name: e.target.value })}
-                      onBlur={() => saveIfChanged(slot)}
-                    />
+                  <td style={{ ...td, minWidth: 220 }}>
+                    {/* The title beside the name (2026-11-05); kept as one line, "Mr Dorji". */}
+                    <span style={{ display: "flex", gap: 4 }} onBlur={() => saveIfChanged(slot)}>
+                      <TitleSelect
+                        className="dinput"
+                        style={{ width: 66, flex: "0 0 66px", minWidth: 66 }}
+                        ariaLabel={`${displayName}'s title`}
+                        disabled={locked}
+                        value={splitTitle(draft.name).title}
+                        onChange={(t) => setDraft(slot.key, { name: joinTitled(t, splitTitle(draft.name).name) })}
+                      />
+                      <input
+                        className="dinput"
+                        style={{ ...cell, flex: 1, minWidth: 0 }}
+                        placeholder={slot.placeholder}
+                        disabled={locked}
+                        value={splitTitle(draft.name).name}
+                        onChange={(e) => setDraft(slot.key, { name: joinTitled(splitTitle(draft.name).title, e.target.value) })}
+                      />
+                    </span>
                   </td>
                   <td style={{ ...td, minWidth: 154 }}>
                     <DobField

@@ -27,6 +27,11 @@ import type { AllowedRoomCountsResponse } from "@/lib/api/child-policy";
 import { fmtDay, fmtInstantDate, plural } from "@/lib/ds/format";
 import { toastRefusal } from "./kit";
 import { Help, HelpHere } from "@/components/ds/help";
+import { PhoneField } from "@/components/ds/phone-field";
+import { TitleSelect } from "@/components/ds/person-name";
+import { usePhoneRules } from "@/hooks/use-phone-rules";
+import { problemOfPhone, type PhoneRules } from "@/lib/ds/phone";
+import { titled } from "@/lib/ds/person";
 
 /* ------------------------------------------------------------------ vocabulary */
 
@@ -55,7 +60,7 @@ export const CHANNELS: ReadonlyArray<ChannelDef> = [
   { key: "AGENT", label: "Travel agent", channel: "AGENT", cameInAs: "TRAVEL_AGENT", party: "TRAVEL_AGENT", useType: "LEISURE" },
   // A company's booking is a corporate stay unless the desk says otherwise (2026-09-18) — it
   // defaulted to leisure, which hid the payment milestones a company booking is scheduled on.
-  { key: "CORPORATE", label: "Corporation", channel: "CORPORATE", cameInAs: "CORPORATE", party: "CORPORATE", useType: "CORPORATE" },
+  { key: "CORPORATE", label: "Corporate", channel: "CORPORATE", cameInAs: "CORPORATE", party: "CORPORATE", useType: "CORPORATE" },
   { key: "GROUP", label: "Group / MICE", channel: "DIRECT", cameInAs: "GROUP_MICE", party: null, useType: "GROUP" },
 ];
 
@@ -91,6 +96,34 @@ export function cameInAsOf(
   return null;
 }
 
+/** The ticks, in the prototype's order. None ticked is Direct voice. */
+const TICKED: ReadonlyArray<ChannelKey> = ["WALK_IN", "DIRECT_ONLINE", "OTA", "AGENT", "CORPORATE", "GROUP"];
+
+/**
+ * How they came in, as ticks at the head of The caller (2026-11-05, operator: "incorporate the came
+ * in as options there, if none of the boxes are clicked, default it to direct voice"). One at a time:
+ * a tick takes the place of the last one, and taking it off goes back to Direct voice.
+ */
+export function CameInTicks({ value, onChange, disabled }: { value: ChannelKey | null; onChange: (k: ChannelKey | null) => void; disabled?: boolean }) {
+  const none = !value || value === "DIRECT_VOICE";
+  return (
+    <div className="field">
+      <div className="camein-ticks" role="group" aria-label="How they came in">
+        {TICKED.map((k) => {
+          const on = value === k;
+          return (
+            <label key={k} className={`camein-tick${on ? " on" : ""}${disabled ? " off" : ""}`}>
+              <input type="checkbox" checked={on} disabled={disabled} onChange={() => onChange(on ? null : k)} />
+              {channelDef(k)?.label}
+            </label>
+          );
+        })}
+      </div>
+      <span className="hint camein-word">{none ? "None ticked — Direct voice: they rang the hotel" : null}</span>
+    </div>
+  );
+}
+
 export const USE_TYPES = [
   ["LEISURE", "Leisure"],
   ["CORPORATE", "Corporate"],
@@ -100,43 +133,12 @@ export const USE_TYPES = [
 ] as const;
 export type UseTypeKey = (typeof USE_TYPES)[number][0];
 
-export const PHONE_CODES = ["+975", "+91", "+61"];
 export const NATIONALITIES = ["Bhutanese", "Indian"];
 
 export const BED_ORDER = ["KING", "QUEEN", "TWIN", "SINGLE"];
 export const bedWord = (t: string) => t.charAt(0) + t.slice(1).toLowerCase();
 
 /* ------------------------------------------------------------------ small helpers */
-
-/**
- * A stored phone split back into the code + number pair the form edits. Adopting a guest found
- * from a few typed digits must replace that fragment with the guest's real number, or the
- * fragment flows into the booking's contact person.
- */
-export function splitStoredPhone(full: string | null | undefined): { code: string; number: string } {
-  const v = (full ?? "").trim();
-  if (!v) return { code: PHONE_CODES[0], number: "" };
-  const strip = (s: string) => s.replace(/^[\s-]+/, "").trim();
-  const preset = PHONE_CODES.find((c) => v.startsWith(c));
-  if (preset) return { code: preset, number: strip(v.slice(preset.length)) };
-  const m = v.match(/^(\+\d{1,4})[\s-]*(.*)$/);
-  if (m) return { code: m[1], number: strip(m[2]) };
-  // Most imported numbers carry no dialling code; leave it blank rather than assume one.
-  return { code: "", number: v };
-}
-
-/**
- * The code and the number as one stored phone. A listed code is joined straight on ("+97517…"),
- * as numbers always were; any other code keeps a space after it ("+66 812…"), because without one
- * "+66812…" reads back as the code "+6681" and the desk's next visit shows the wrong code.
- */
-export function joinPhone(code: string, number: string): string {
-  const n = number.trim();
-  if (!n) return "";
-  const c = code.trim();
-  if (!c) return n;
-  return PHONE_CODES.includes(c) ? `${c}${n}` : `${c} ${n}`;
-}
 
 /**
  * The room counts just past what the party allows, for a Rooms dropdown to list shut with what each
@@ -334,38 +336,6 @@ export function PresetOrCustom({
   );
 }
 
-/** A dialling code and a number, side by side. */
-export function PhoneInput({
-  code,
-  setCode,
-  number,
-  setNumber,
-  placeholder = "17 88 21 04",
-  ariaLabel = "Phone",
-}: {
-  code: string;
-  setCode: (v: string) => void;
-  number: string;
-  setNumber: (v: string) => void;
-  placeholder?: string;
-  ariaLabel?: string;
-}) {
-  return (
-    <span style={{ display: "flex", gap: 6 }}>
-      <PresetOrCustom presets={PHONE_CODES} value={code} onChange={setCode} placeholder="+__" width={118} ariaLabel="Dialling code" />
-      <input
-        className="input"
-        style={{ flex: 1, minWidth: 0 }}
-        inputMode="tel"
-        aria-label={ariaLabel}
-        placeholder={placeholder}
-        value={number}
-        onChange={(e) => setNumber(e.target.value)}
-      />
-    </span>
-  );
-}
-
 export type PickRow = { key: string; main: ReactNode; sub?: ReactNode; onPick: () => void };
 
 /** A short list to pick one from — each row is the target. */
@@ -528,7 +498,6 @@ export function PartySearch({
   // of starting the lead unlinked, which could never be attached to the agency afterwards.
   const [filing, setFiling] = useState(false);
   const [newName, setNewName] = useState("");
-  const [newCode, setNewCode] = useState(PHONE_CODES[0]);
   const [newPhone, setNewPhone] = useState("");
   const [newEmail, setNewEmail] = useState("");
   const wrap = useRef<HTMLDivElement>(null);
@@ -556,12 +525,14 @@ export function PartySearch({
   });
   const noun = kind === "TRAVEL_AGENT" ? "agency" : "company";
   const label = kind === "TRAVEL_AGENT" ? "Travel agent" : "Company";
+  const phoneRules = usePhoneRules();
+  const newPhoneBad = !!problemOfPhone(phoneRules, newPhone);
 
   const file = useMutation({
     mutationFn: () =>
       createTravelAgentLookup(session!, {
         displayName: newName.trim(),
-        phone: newPhone.trim() ? `${newCode}${newPhone.trim()}` : null,
+        phone: newPhone || null,
         email: newEmail.trim() || null,
       }),
     onSuccess: (created) => {
@@ -594,7 +565,7 @@ export function PartySearch({
         </div>
         <div className="field">
           <label>Agency phone · optional</label>
-          <PhoneInput code={newCode} setCode={setNewCode} number={newPhone} setNumber={setNewPhone} ariaLabel="Agency phone" />
+          <PhoneField value={newPhone} onChange={setNewPhone} ariaLabel="Agency phone" />
         </div>
         <div className="field">
           <label>Agency email · optional</label>
@@ -602,7 +573,7 @@ export function PartySearch({
         </div>
       </div>
       <div className="row-acts">
-        <Button compact state={file.isPending ? "working" : newName.trim() ? "default" : "inert"} reason={newName.trim() ? undefined : "the agency's name first"} workingLabel="Filing…" onClick={() => file.mutate()}>
+        <Button compact state={file.isPending ? "working" : newName.trim() && !newPhoneBad ? "default" : "inert"} reason={!newName.trim() ? "the agency's name first" : newPhoneBad ? "put the phone right first" : undefined} workingLabel="Filing…" onClick={() => file.mutate()}>
           File the agency
         </Button>
         <Button kind="quiet" compact onClick={() => setFiling(false)}>
@@ -637,11 +608,11 @@ export function PartySearch({
     <div className="wide field" ref={wrap}>
       <label>
         {label}
-        <Help label={`About ${label}`}>Optional. Pick the {noun} and its rates follow — the record carries the rates and the terms.</Help>
+        <Help label={`About ${label}`}>Pick the {noun} and its rates and its people follow.</Help>
       </label>
       <input
         className="input"
-        placeholder="start typing — the record carries the rates and the terms"
+        placeholder={`search the ${noun} by name`}
         value={q}
         onFocus={() => setOpen(true)}
         onChange={(e) => {
@@ -664,7 +635,13 @@ export function PartySearch({
                   setOpen(false);
                 },
               }))}
-              empty={term ? `No ${noun} matches “${term}”` : `No ${noun} on file`}
+              empty={
+                term
+                  ? kind === "CORPORATE"
+                    ? `No company matches “${term}” — the admin adds a company; meanwhile take the tick off and take the caller's details`
+                    : `No agency matches “${term}”`
+                  : `No ${noun} on file`
+              }
               action="Pick"
             />
           )}
@@ -689,160 +666,180 @@ export function PartySearch({
   );
 }
 
+/** Two contacts are the same person: by their number, else by their name. */
+function sameContact(a: CoordinatorContact, b: CoordinatorContact) {
+  const key = (c: CoordinatorContact) => (c.phone ?? "").replace(/\D/g, "").slice(-8);
+  return key(a) && key(b) ? key(a) === key(b) : sameName(a.name, b.name);
+}
+
+const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** What stops the contact persons being saved, in words, or null. Every one needs a name. */
+export function contactsProblem(contacts: CoordinatorContact[], rules: PhoneRules): string | null {
+  for (const c of contacts) {
+    if (!c.name?.trim()) return "a name on every contact person";
+    const bad = problemOfPhone(rules, c.phone);
+    if (bad) return `${c.name.trim()}'s phone: ${bad}`;
+    if (c.email?.trim() && !EMAIL_SHAPE.test(c.email.trim())) return `${c.name.trim()}'s email does not read as one`;
+  }
+  return null;
+}
+
 /**
- * The contact persons on the picked agency or company. An agency rarely has one voice: the ones
- * on file are offered, and a new one is filed on the party (append-only, L1) so the next booking
- * through them already has them. The pick is who the hotel rings about this stay.
+ * The contact persons on this booking (2026-11-05, operator: "we are adding another contact person in
+ * case that person doesn't respond, so it should show two contacts … there should also be a remove
+ * button … when user clicks add another contact, it should show a dropdown of them").
+ *
+ * The first is who is rung first. Removing one takes them off this booking, not off the agency: their
+ * record stays on file and the dropdown offers them again. Someone new is filed on the party (L1,
+ * append-only), so the next booking through them already has them. Corrections typed on a row are
+ * this booking's.
  */
 export function PartyContacts({
   kind,
   party,
   setParty,
-  contact,
-  setContact,
+  contacts,
+  setContacts,
+  readOnly,
 }: {
   kind: PartyKind;
   party: LookupPartyMatch;
   setParty: (p: LookupPartyMatch) => void;
-  contact: CoordinatorContact | null;
-  setContact: (c: CoordinatorContact | null) => void;
+  contacts: CoordinatorContact[];
+  setContacts: (c: CoordinatorContact[]) => void;
+  readOnly?: boolean;
 }) {
   const { session } = useSession();
-  const [adding, setAdding] = useState(false);
-  const [name, setName] = useState("");
-  const [code, setCode] = useState(PHONE_CODES[0]);
-  const [phone, setPhone] = useState("");
-  const contacts = party.coordinators ?? [];
+  const rules = usePhoneRules();
   const noun = kind === "TRAVEL_AGENT" ? "agency" : "company";
-  // Is the booking's contact someone ON FILE, or only the placeholder the pick starts with when
-  // the party has nobody on file — its own name and number (2026-09-19)? A placeholder is not a
-  // choice: the first person filed replaces it, and "Pick another" offers the people on file.
-  const pickedIsOnFile =
-    !!contact && contacts.some((c) => c.name === contact.name && (c.phone ?? "") === (contact.phone ?? ""));
+  const onFile = party.coordinators ?? [];
+  const notOnBooking = onFile.filter((c) => !contacts.some((x) => sameContact(x, c)));
+  // Adding: nothing open, the list of people on file, or someone new.
+  const [adding, setAdding] = useState<"no" | "pick" | "new">("no");
+  const [n, setN] = useState({ title: "", name: "", phone: "", email: "" });
+  const patch = (i: number, p: Partial<CoordinatorContact>) => setContacts(contacts.map((c, j) => (j === i ? { ...c, ...p } : c)));
+  const newBad = !n.name.trim() ? "write their name first" : problemOfPhone(rules, n.phone) ?? (n.email.trim() && !EMAIL_SHAPE.test(n.email.trim()) ? "the email does not read as one" : null);
 
   const add = useMutation({
     mutationFn: () =>
       addPartyContact(session!, kind, party.id, {
-        name: name.trim(),
-        phone: joinPhone(code, phone) || null,
+        title: n.title || null,
+        name: n.name.trim(),
+        phone: n.phone || null,
+        email: n.email.trim() || null,
       }),
     onSuccess: (res) => {
       setParty({ ...party, coordinators: res.coordinators });
-      // Adding with nobody picked IS the pick; with someone on file picked it only files another
-      // person. Over the placeholder (the party's own details), the person filed is the contact.
-      const adopt = !contact || !pickedIsOnFile;
-      if (adopt) setContact(res.contact);
-      setAdding(false);
-      setName("");
-      setPhone("");
-      toast.success(
-        !res.added
-          ? `${res.contact.name} was already on file${adopt ? " — now the contact for this booking" : ""}`
-          : !adopt && contact
-            ? `${res.contact.name} is filed on ${party.displayName} — ${contact.name} stays the contact for this booking`
-            : `${res.contact.name} is filed on ${party.displayName} and is the contact for this booking`,
-      );
+      setContacts([...contacts, res.contact]);
+      setAdding("no");
+      setN({ title: "", name: "", phone: "", email: "" });
+      toast.success(res.added ? `${res.contact.name} is filed on ${party.displayName} and added to this booking` : `${res.contact.name} was already on file — added to this booking`);
     },
     onError: (e) => toastRefusal(e, "The contact person could not be filed"),
   });
 
-  const addBlock = adding ? (
-    <div className="bind provisional" style={{ display: "grid", gap: 8 }}>
-      <div className="form2">
-        <div className="field">
-          <label>Their name</label>
-          <input className="input" autoFocus value={name} placeholder="the person on the phone" onChange={(e) => setName(e.target.value)} />
-        </div>
-        <div className="field">
-          <label>Their phone · optional</label>
-          <PhoneInput code={code} setCode={setCode} number={phone} setNumber={setPhone} ariaLabel="Their phone" />
-        </div>
-      </div>
-      <div className="row-acts">
-        <Button
-          compact
-          state={add.isPending ? "working" : name.trim() ? "default" : "inert"}
-          title={name.trim() ? undefined : "write their name first"}
-          workingLabel="Filing…"
-          onClick={() => add.mutate()}
-        >
-          File on the {noun}
-        </Button>
-        <Button kind="quiet" compact onClick={() => setAdding(false)}>
-          Not now
-        </Button>
-        <Help label="About filing a contact">Kept on {party.displayName}, so it is here the next time they book.</Help>
-      </div>
-    </div>
-  ) : (
-    <div className="row-acts">
-      <Button kind="quiet" compact icon="person" onClick={() => setAdding(true)}>
-        {contact ? "File another contact person" : "A new contact person"}
-      </Button>
-    </div>
-  );
-
-  if (contact) {
-    return (
-      <div className="wide" style={{ display: "grid", gap: 8 }}>
-        <div className="form3">
+  return (
+    <div className="wide contact-rows">
+      {contacts.map((c, i) => (
+        <div key={i} className={`contact-row${i === 0 ? " first" : ""}`}>
           <div className="field">
-            <label>Contact person</label>
-            <input className="input" placeholder="their name" value={contact.name ?? ""} onChange={(e) => setContact({ ...contact, name: e.target.value })} />
+            <label>Title</label>
+            <TitleSelect value={c.title} disabled={readOnly} onChange={(title) => patch(i, { title: title || null })} />
+          </div>
+          <div className="field">
+            <label>{i === 0 ? "Contact person" : "Another contact"}</label>
+            <input className="input" readOnly={readOnly} placeholder="their name" value={c.name ?? ""} onChange={(e) => patch(i, { name: e.target.value })} />
           </div>
           <div className="field">
             <label>Their phone</label>
-            <input
-              className="input"
-              inputMode="tel"
-              placeholder="+975 …"
-              value={contact.phone ?? ""}
-              onChange={(e) => setContact({ ...contact, phone: e.target.value })}
-            />
+            <PhoneField value={c.phone} readOnly={readOnly} ariaLabel={`${c.name || "Contact person"}'s phone`} onChange={(phone) => patch(i, { phone: phone || null })} />
           </div>
-          <div className="field">
+          <div className="field contact-mail">
             <label>Their email</label>
-            <input
-              className="input"
-              type="email"
-              placeholder="optional"
-              value={contact.email ?? ""}
-              onChange={(e) => setContact({ ...contact, email: e.target.value })}
-            />
+            <input className="input" type="email" readOnly={readOnly} placeholder="optional" value={c.email ?? ""} onChange={(e) => patch(i, { email: e.target.value })} />
           </div>
-          {contacts.length > 1 ? (
-            <span className="wide hint warn-ink">{contacts.length} people are on file for {party.displayName} — check it is the right one.</span>
-          ) : null}
+          {readOnly ? null : (
+            <div className="contact-remove">
+              <Button kind="quiet" compact onClick={() => setContacts(contacts.filter((_, j) => j !== i))}>
+                Remove
+              </Button>
+            </div>
+          )}
         </div>
-        {contacts.length > 1 || (contacts.length > 0 && !pickedIsOnFile) ? (
+      ))}
+      {contacts.length === 0 ? <span className="hint warn-ink">No contact person on this booking yet — add who to ring.</span> : null}
+
+      {readOnly ? null : adding === "no" ? (
+        <div className="row-acts">
+          <Button kind="secondary" compact icon="person" onClick={() => setAdding(notOnBooking.length ? "pick" : "new")}>
+            {contacts.length ? "Add another contact" : "Add a contact person"}
+          </Button>
+          <Help label="About contact persons">The first is rung first. Remove takes someone off this booking only: they stay on file with the {noun}.</Help>
+        </div>
+      ) : adding === "pick" ? (
+        <div className="contact-add">
+          <div className="field">
+            <label>Who else to ring</label>
+            <select
+              className="input"
+              autoFocus
+              value=""
+              onChange={(e) => {
+                if (e.target.value === "NEW") return setAdding("new");
+                const c = notOnBooking[Number(e.target.value)];
+                if (c) setContacts([...contacts, c]);
+                setAdding("no");
+              }}
+            >
+              <option value="" disabled>
+                {notOnBooking.length} on file for {party.displayName} — pick one
+              </option>
+              {notOnBooking.map((c, i) => (
+                <option key={i} value={i}>
+                  {[titled(c.title, c.name), c.phone, c.email].filter(Boolean).join(" · ")}
+                </option>
+              ))}
+              <option value="NEW">Someone new…</option>
+            </select>
+          </div>
           <div className="row-acts">
-            <Button kind="quiet" compact onClick={() => setContact(null)}>
-              Pick {pickedIsOnFile ? "another" : "someone"} from the {noun}
+            <Button kind="quiet" compact onClick={() => setAdding("no")}>
+              Not now
             </Button>
           </div>
-        ) : null}
-        {addBlock}
-      </div>
-    );
-  }
-
-  return (
-    <div className="wide field">
-      <label>Contact person</label>
-      {contacts.length > 0 ? (
-        <PickList
-          head={`On file for ${party.displayName}`}
-          rows={contacts.map((c, i) => ({
-            key: `${c.name}-${i}`,
-            main: <b>{c.name}</b>,
-            sub: [c.phone, c.email].filter(Boolean).join(" · ") || undefined,
-            onPick: () => setContact(c),
-          }))}
-        />
+        </div>
       ) : (
-        <span className="hint">No contact person on file for this {noun} yet — file the person you are speaking to.</span>
+        <div className="contact-add">
+          <div className="contact-add-row">
+            <div className="field">
+              <label>Title</label>
+              <TitleSelect value={n.title} onChange={(title) => setN({ ...n, title })} />
+            </div>
+            <div className="field">
+              <label>Their name</label>
+              <input className="input" autoFocus value={n.name} placeholder="the person on the phone" onChange={(e) => setN({ ...n, name: e.target.value })} />
+            </div>
+            <div className="field">
+              <label>Their phone · optional</label>
+              <PhoneField value={n.phone} ariaLabel="Their phone" onChange={(phone) => setN({ ...n, phone })} />
+            </div>
+            <div className="field">
+              <label>Their email · optional</label>
+              <input className="input" type="email" value={n.email} placeholder="optional" onChange={(e) => setN({ ...n, email: e.target.value })} />
+            </div>
+          </div>
+          <div className="row-acts">
+            <Button compact className={newBad ? undefined : "go"} state={add.isPending ? "working" : newBad ? "inert" : "default"} title={newBad ?? undefined} workingLabel="Filing…" onClick={() => add.mutate()}>
+              File on the {noun}
+            </Button>
+            <Button kind="quiet" compact onClick={() => setAdding("no")}>
+              Not now
+            </Button>
+            <Help label="About filing a contact">Kept on {party.displayName}, so it is here the next time they book.</Help>
+          </div>
+        </div>
       )}
-      {addBlock}
     </div>
   );
 }

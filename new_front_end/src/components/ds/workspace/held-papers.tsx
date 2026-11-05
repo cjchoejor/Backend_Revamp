@@ -19,6 +19,9 @@ import { Button } from "@/design-system";
 import { Help } from "@/components/ds/help";
 import { Choice as PickOne, NightsChoice, PaperDrawer, toastRefusal, type PaperRef } from "@/components/ds/steps/kit";
 import { useSession } from "@/hooks/use-session";
+import { usePhoneRules } from "@/hooks/use-phone-rules";
+import { problemOfPhone } from "@/lib/ds/phone";
+import { PhoneField } from "@/components/ds/phone-field";
 import { decideHeldDocument, listHeldDocuments, type HeldDocument } from "@/lib/api/room-moves";
 import { fmtDateTime } from "@/lib/ds/format";
 
@@ -60,6 +63,7 @@ type Choice = "EMAIL" | "WHATSAPP" | "NONE";
 
 export function HeldPaperRow({ h, tz, onView }: { h: HeldDocument; tz?: string; onView: () => void }) {
   const { session } = useSession();
+  const phoneRules = usePhoneRules();
   const qc = useQueryClient();
   const [choice, setChoice] = useState<Choice>(h.defaultRecipient.to ? "EMAIL" : h.kind === "PROFORMA" ? "EMAIL" : "WHATSAPP");
   const [to, setTo] = useState(h.defaultRecipient.to ?? "");
@@ -89,7 +93,8 @@ export function HeldPaperRow({ h, tz, onView }: { h: HeldDocument; tz?: string; 
     onError: (e) => toastRefusal(e, "The answer could not be recorded"),
   });
   const emailMissing = choice === "EMAIL" && !to.trim();
-  const blocked = emailMissing ? "Type the address it goes to" : null;
+  const numberBad = choice === "WHATSAPP" ? problemOfPhone(phoneRules, to) : null;
+  const blocked = emailMissing ? "Type the address it goes to" : numberBad;
   return (
     <div className="heldp-row">
       <div className="heldp-what">
@@ -129,7 +134,7 @@ export function HeldPaperRow({ h, tz, onView }: { h: HeldDocument; tz?: string; 
         {choice === "WHATSAPP" ? (
           <label className="field">
             <span>Number it went to · optional</span>
-            <input className="input" value={to} onChange={(e) => setTo(e.target.value)} placeholder="+975…" />
+            <PhoneField value={to} onChange={setTo} ariaLabel="Number it went to" />
           </label>
         ) : null}
         <label className="field">

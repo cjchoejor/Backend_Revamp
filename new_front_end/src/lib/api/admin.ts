@@ -26,6 +26,7 @@ export type ConfigurationActive = {
 
 export type StaffUserAdmin = {
   id: string;
+  title?: string | null;
   fullName: string;
   username: string;
   email: string | null;
@@ -142,6 +143,7 @@ export async function listStaff(session: Session, includeInactive = false) {
 export async function createStaff(
   session: Session,
   body: {
+    title?: string | null;
     fullName: string;
     username: string;
     email?: string | null;
@@ -160,6 +162,7 @@ export async function updateStaff(
   session: Session,
   id: string,
   body: Partial<{
+    title: string | null;
     fullName: string;
     username: string;
     email: string | null;
@@ -1136,7 +1139,7 @@ export async function reactivateTravelAgent(session: Session, id: string) {
 
 // ----- Corporate accounts (Phase B) -----
 
-export type CoordinatorContact = { name: string; phone?: string | null; email?: string | null };
+export type CoordinatorContact = { title?: string | null; name: string; phone?: string | null; email?: string | null };
 
 export type CorporateAccountAdmin = {
   id: string;

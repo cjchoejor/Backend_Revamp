@@ -31,6 +31,9 @@ import { readRefusal } from "@/lib/ds/translate";
 import { fmtDateTime, fmtStamp } from "@/lib/ds/format";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
 import { useInvoiceRecipient } from "@/hooks/use-invoice-recipient";
+import { usePhoneRules } from "@/hooks/use-phone-rules";
+import { problemOfPhone } from "@/lib/ds/phone";
+import { PhoneField } from "@/components/ds/phone-field";
 import { sendQuotation } from "@/lib/api/quotations";
 import { dispatchInvoice } from "@/lib/api/reservation-setup";
 import type { EntryDetail, InvoiceSummary, QuotationSummary } from "@/types/api";
@@ -2848,6 +2851,7 @@ export function QuotationSendDialog({
 }) {
   const { session } = useSession();
   const { tz } = useHotelClock(60_000);
+  const phoneRules = usePhoneRules();
   // Where the quote goes (2026-09-19): the invoices' rule — the agency or company that booked (the
   // quote carries their rates), else the guest — and the backend now sends to what is typed here.
   // The email box used to fall back to the guest's PHONE, and the toast then said "sent by email
@@ -2927,7 +2931,8 @@ export function QuotationSendDialog({
                 : "the guest's email on file"
               : "the send is recorded on the booking with this address";
   if (!target) return null;
-  const ok = channel === "WHATSAPP" ? typed.length > 0 : !typed || emailish;
+  const numberBad = channel === "WHATSAPP" ? problemOfPhone(phoneRules, typed) : null;
+  const ok = channel === "WHATSAPP" ? typed.length > 0 && !numberBad : !typed || emailish;
   return (
     <DsDialog
       open
@@ -2955,7 +2960,7 @@ export function QuotationSendDialog({
           <Button
             icon="send"
             state={send.isPending ? "working" : ok ? "default" : "inert"}
-            title={ok ? undefined : channel === "WHATSAPP" ? "put in the WhatsApp number" : "that is not an email address"}
+            title={ok ? undefined : channel === "WHATSAPP" ? (numberBad ?? "put in the WhatsApp number") : "that is not an email address"}
             workingLabel="Sending…"
             onClick={() => send.mutate()}
           >
@@ -2977,16 +2982,28 @@ export function QuotationSendDialog({
       </div>
       <div className="field">
         <label>{channel === "EMAIL" ? "Email address" : "WhatsApp number"}</label>
-        <input
-          className="input"
-          value={to}
-          onChange={(e) => {
-            setTouched(true);
-            setTo(e.target.value);
-          }}
-          placeholder={channel === "EMAIL" ? "name@example.com" : "+975 …"}
-          autoFocus
-        />
+        {channel === "EMAIL" ? (
+          <input
+            className="input"
+            value={to}
+            onChange={(e) => {
+              setTouched(true);
+              setTo(e.target.value);
+            }}
+            placeholder="name@example.com"
+            autoFocus
+          />
+        ) : (
+          <PhoneField
+            value={to}
+            ariaLabel="WhatsApp number"
+            autoFocus
+            onChange={(v) => {
+              setTouched(true);
+              setTo(v);
+            }}
+          />
+        )}
         <span className="hint">{hint}</span>
       </div>
       <div className="paper-faces in-dialog">

@@ -52,15 +52,14 @@ import { useMeasuredVar } from "@/hooks/use-stage-head";
 import { ApiError } from "@/lib/api/client";
 import {
   BED_ORDER,
-  CHANNEL_OPTIONS,
+  CameInTicks,
   ChildChargeNote,
   CallerLine,
-  PHONE_CODES,
   PartyContacts,
   PartySearch,
-  PhoneInput,
   PickList,
   ReqMark,
+  contactsProblem,
   partyPersonOf,
   USE_TYPES,
   addNightsIso,
@@ -69,19 +68,22 @@ import {
   defaultContactFor,
   diffNightsIso,
   digits,
-  joinPhone,
   moreRoomsNeedGuests,
-  splitStoredPhone,
   type ChannelKey,
   type GateLine,
   type UseTypeKey,
 } from "./new-inquiry-parts";
 import { Help } from "@/components/ds/help";
 import { DateInput } from "@/components/ds/date-input";
+import { PhoneField } from "@/components/ds/phone-field";
+import { PersonName } from "@/components/ds/person-name";
+import { usePhoneRules } from "@/hooks/use-phone-rules";
+import { nationalDigits, problemOfPhone } from "@/lib/ds/phone";
+import { fullNameOf, titled } from "@/lib/ds/person";
 
 // The sections the intake asks, as the step's line names them; the house and Wrap up are asked on
 // the booking once the lead is kept.
-const INTAKE_SECTIONS: Record<string, string> = { caller: "The caller", asking: "Who is asking", stay: "The stay" };
+const INTAKE_SECTIONS: Record<string, string> = { caller: "The caller", stay: "The stay" };
 // The booking file's tabs, as the booking shows them. Every one opens (2026-10-30, operator: they
 // were shut until the lead was kept); before then each says what it holds so far.
 type IntakeFileTab = "details" | "money" | "requests" | "notes" | "docs" | "history";
@@ -96,9 +98,6 @@ const INTAKE_FILE_TABS: ReadonlyArray<[IntakeFileTab, string, string]> = [
 
 // The guest card is a flow card, so its anchor is the flow's (the focus helper below reads it).
 const GUEST_CARD_ID = anchorFor("caller");
-
-const CALLER_TITLES = ["", "Mr", "Ms", "Mrs", "Dr", "Dasho", "Lyonpo", "Aum"];
-
 
 export function NewInquiryCanvas() {
   const router = useRouter();
@@ -122,27 +121,30 @@ export function NewInquiryCanvas() {
   // The head, measured onto the screen so a card scrolled to lands below it.
   const headRef = useMeasuredVar("--ws-head-h");
 
-  /* ---------------------------------------------------------------- who is asking */
-  // No default: the operator says how the booking reached us (the old form made it the first pick).
+  const phoneRules = usePhoneRules();
+
+  /* ---------------------------------------------------------------- how they came in, and who */
+  // One section since 2026-11-05 (operator: "i need to combine these two sections"). Nothing ticked
+  // is Direct voice: they rang the hotel.
   const [channelKey, setChannelKey] = useState<ChannelKey | null>(null);
   // No default (2026-09-25, operator): the kind of stay is the desk's to pick, like how the
   // booking came in. It used to open on Leisure and a channel then re-filled it, so the field
   // read as answered before anyone had answered it. The intake gate already holds the submit.
   const [useType, setUseType] = useState<string>("");
   const [party, setParty] = useState<LookupPartyMatch | null>(null);
-  // The agency / company person handling this booking — the booking's contact unless overridden.
-  const [partyContact, setPartyContact] = useState<CoordinatorContact | null>(null);
+  // Who to ring at the agency or company, first one first. The first is the booking's contact
+  // unless someone else is named as arriving.
+  const [contacts, setContacts] = useState<CoordinatorContact[]>([]);
+  const partyContact = contacts[0] ?? null;
   // Which negotiated package; null resolves the party's default, then the hotel's common one.
   const [ratePackageId, setRatePackageId] = useState<string | null>(null);
   // Policy 17 — a company booking records their reference and coordinator before it leaves Inquiry.
   const [corpRef, setCorpRef] = useState("");
-  const [corpCoordinator, setCorpCoordinator] = useState("");
 
   /* ---------------------------------------------------------------- the guest */
-  const [firstName, setFirstName] = useState("");
-  const [lastName, setLastName] = useState("");
-  const [phoneCode, setPhoneCode] = useState(PHONE_CODES[0]);
-  const [phoneNumber, setPhoneNumber] = useState("");
+  // One Name, split by the backend (2026-11-05). One value for the phone: "+975 17882104".
+  const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
   // The caller (2026-10-12): who rang, which is not always the guest. Title and name can wait for
   // Wrap up; a phone or an email cannot (an OTA booking needs neither).
@@ -153,17 +155,16 @@ export function NewInquiryCanvas() {
   const [selectedCaller, setSelectedCaller] = useState<CallerMatch | null>(null);
   const beforePick = useRef<{
     callerTitle: string;
-    firstName: string;
-    lastName: string;
-    phoneCode: string;
-    phoneNumber: string;
+    name: string;
+    phone: string;
     email: string;
     onWhatsApp: boolean | null;
     channelKey: ChannelKey | null;
     party: LookupPartyMatch | null;
-    partyContact: CoordinatorContact | null;
+    contacts: CoordinatorContact[];
   } | null>(null);
   // Who leads the party on the day. Blank → the agency's contact person, else the guest.
+  const [arrivingTitle, setArrivingTitle] = useState("");
   const [arrivingName, setArrivingName] = useState("");
   const [arrivingPhone, setArrivingPhone] = useState("");
 
@@ -186,30 +187,27 @@ export function NewInquiryCanvas() {
   const checkInDefaulted = useRef(!!fromChart.checkIn);
 
   /* ---------------------------------------------------------------- channel and party */
-  const channel = channelDef(channelKey);
-  const partyKind = channel?.party ?? null;
-  const needsCorp = channel?.channel === "CORPORATE";
+  const channel = channelDef(channelKey ?? "DIRECT_VOICE")!;
+  const partyKind = channel.party;
+  const needsCorp = channel.channel === "CORPORATE";
 
-  // Land the cursor on the first field a pick opened: the agency search after "Came in as".
-  const focusNext = useRef<"who" | "guest" | null>(null);
+  // Land the cursor on the search when a tick opens it.
+  const focusNext = useRef(false);
   useEffect(() => {
-    const where = focusNext.current;
-    if (!where) return;
-    focusNext.current = null;
-    const root = document.getElementById(where === "guest" ? GUEST_CARD_ID : anchorFor("asking"));
-    root?.querySelector<HTMLElement>("input.input:not([disabled]):not([readonly]):not([type=date])")?.focus();
+    if (!focusNext.current) return;
+    focusNext.current = false;
+    document.getElementById(GUEST_CARD_ID)?.querySelector<HTMLElement>("input.input:not([disabled]):not([readonly]):not([type=date])")?.focus();
   }, [channelKey]);
 
-  const pickChannel = (k: ChannelKey) => {
-    if (k === channelKey) return;
+  const pickChannel = (k: ChannelKey | null) => {
     setChannelKey(k);
-    focusNext.current = "who";
+    if (channelDef(k)?.party) focusNext.current = true;
   };
 
   // A caller picked from the list who rings for an agency or a company brings that party and
   // themselves as its contact (2026-10-27) — held here across the two effects below, which
   // otherwise clear the party on a change of kind and reset the contact on a change of party.
-  const pendingParty = useRef<{ party: LookupPartyMatch; contact: CoordinatorContact | null } | null>(null);
+  const pendingParty = useRef<{ party: LookupPartyMatch; contacts: CoordinatorContact[] | null } | null>(null);
 
   // A party belongs to one kind — a travel agent must never ride into a company booking.
   useEffect(() => {
@@ -219,41 +217,33 @@ export function NewInquiryCanvas() {
       return;
     }
     setParty(null);
-    setPartyContact(null);
+    setContacts([]);
   }, [partyKind]);
 
-  // A new party brings its own contact: the first person on file, else the party's own details —
-  // or the caller, when the caller's pick brought the party.
+  // A new party brings its own contact: the first person on file, else the party's own name and
+  // number (2026-11-05, operator) — or the caller, when the caller's pick brought the party.
   useEffect(() => {
     const p = pendingParty.current;
     if (p && party && p.party.id === party.id) {
       pendingParty.current = null;
-      setPartyContact(p.contact ?? defaultContactFor(party));
+      setContacts(p.contacts ?? [defaultContactFor(party)]);
       return;
     }
-    setPartyContact(party ? defaultContactFor(party) : null);
+    setContacts(party ? [defaultContactFor(party)] : []);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [party?.id]);
 
-  // The company context is cleared when the channel no longer needs it…
+  // The company's reference is cleared when the channel no longer needs it…
   useEffect(() => {
-    if (needsCorp) return;
-    setCorpRef("");
-    setCorpCoordinator("");
+    if (!needsCorp) setCorpRef("");
   }, [needsCorp]);
-  // …and inherited from the picked company's contract references and coordinators (spec §2.6.2).
+  // …and inherited from the picked company's contract references (spec §2.6.2).
   useEffect(() => {
     if (partyKind !== "CORPORATE" || !party) return;
     const refs = party.contractRefs ?? [];
-    const coords = party.coordinators ?? [];
     if (refs.length > 0) setCorpRef(refs[0]);
-    if (coords.length > 0) setCorpCoordinator(coords[0].name);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [party?.id]);
-  // For a company the contact person IS the coordinator — named once, not twice.
-  useEffect(() => {
-    if (needsCorp && partyContact) setCorpCoordinator(partyContact.name);
-  }, [needsCorp, partyContact]);
 
   const packagesQuery = useQuery({
     queryKey: ["lookup-rate-packages", partyKind, party?.id],
@@ -461,7 +451,7 @@ export function NewInquiryCanvas() {
   /* ---------------------------------------------------------------- the caller list */
   // Typing a number (or, with no number, an email) lists who has rung with it before — earlier
   // callers and the agencies' and companies' people — never guests (2026-10-27, operator).
-  const phoneDigits = phoneNumber.replace(/\D/g, "");
+  const phoneDigits = nationalDigits(phoneRules, phone);
   const callerQ = phoneDigits.length >= 4 ? phoneDigits : email.trim().includes("@") ? email.trim() : "";
   const [callerTerm, setCallerTerm] = useState("");
   useEffect(() => {
@@ -477,33 +467,24 @@ export function NewInquiryCanvas() {
   const callerMatches = callerLookupOn ? (callerQuery.data?.matches ?? []) : [];
 
   const adoptCaller = (m: CallerMatch) => {
-    beforePick.current = { callerTitle, firstName, lastName, phoneCode, phoneNumber, email, onWhatsApp, channelKey, party, partyContact };
+    beforePick.current = { callerTitle, name, phone, email, onWhatsApp, channelKey, party, contacts };
     setSelectedCaller(m);
-    // An agency's or a company's caller is the party itself (2026-10-27, operator: "in the first
-    // name it should be naming it as Bhutan INC, because that's the caller … the contact person is
-    // filled below in Who is asking").
+    // An agency's or a company's caller is the party itself (2026-10-27, operator): nothing more is
+    // asked of the caller, and the contact person is listed with the party.
     const person = partyPersonOf(m);
     setCallerTitle(m.party ? "" : (m.title ?? ""));
-    setFirstName(m.party ? m.party.displayName : (m.firstName ?? ""));
-    setLastName(m.party ? "" : (m.lastName ?? ""));
+    setName(m.party ? "" : fullNameOf(m.firstName, m.lastName));
     const mail = m.party ? (m.party.contactEmail ?? m.email) : m.email;
     if (mail) setEmail(mail);
     if (m.onWhatsApp != null) setOnWhatsApp(m.onWhatsApp);
-    // The number on record replaces the fragment typed to find them; one kept without its dialling
-    // code keeps the code the desk had.
-    if (m.phone) {
-      const { code, number } = splitStoredPhone(m.phone);
-      setPhoneCode(code || phoneCode);
-      setPhoneNumber(number);
-    }
-    // Ringing for an agency or a company: "Who is asking" is that party, with the caller as its
-    // contact person.
+    // The number on record replaces the fragment typed to find them.
+    if (m.phone) setPhone(m.phone);
     if (m.party) {
       // The person at the party; for its own line, the first person on its list.
-      const p = { party: m.party, contact: person ?? defaultContactFor(m.party) };
+      const p = { party: m.party, contacts: [person ?? defaultContactFor(m.party)] };
       const key: ChannelKey = m.party.kind === "TRAVEL_AGENT" ? "AGENT" : "CORPORATE";
       if (partyKind === m.party.kind) {
-        if (party?.id === m.party.id) setPartyContact(p.contact);
+        if (party?.id === m.party.id) setContacts(p.contacts);
         else {
           pendingParty.current = p;
           setParty(m.party);
@@ -512,7 +493,7 @@ export function NewInquiryCanvas() {
         pendingParty.current = p;
         setChannelKey(key);
       }
-      toast.success(`${m.kind === "TRAVEL_AGENT" ? "Travel agent" : "Company"} caller — Who is asking is filled in as ${m.party.displayName}`);
+      toast.success(`${m.kind === "TRAVEL_AGENT" ? "Travel agent" : "Company"} caller — ${m.party.displayName} is filled in`);
     } else {
       toast.success("The caller is filled in from the last time they rang");
     }
@@ -523,44 +504,48 @@ export function NewInquiryCanvas() {
     if (!b) return;
     beforePick.current = null;
     setCallerTitle(b.callerTitle);
-    setFirstName(b.firstName);
-    setLastName(b.lastName);
-    setPhoneCode(b.phoneCode);
-    setPhoneNumber(b.phoneNumber);
+    setName(b.name);
+    setPhone(b.phone);
     setEmail(b.email);
     setOnWhatsApp(b.onWhatsApp);
-    // What the pick filled in "Who is asking" goes back too — through the same hand-over the pick
-    // used, since a change of kind would otherwise clear the party being put back.
+    // What the pick filled goes back too — through the same hand-over the pick used, since a change
+    // of kind would otherwise clear the party being put back.
     if (b.channelKey !== channelKey) {
-      pendingParty.current = b.party ? { party: b.party, contact: b.partyContact } : null;
+      pendingParty.current = b.party ? { party: b.party, contacts: b.contacts } : null;
       setChannelKey(b.channelKey);
     } else if (b.party && b.party.id !== party?.id) {
-      pendingParty.current = { party: b.party, contact: b.partyContact };
+      pendingParty.current = { party: b.party, contacts: b.contacts };
       setParty(b.party);
     } else {
       pendingParty.current = null;
       setParty(b.party);
-      setPartyContact(b.partyContact);
+      setContacts(b.contacts);
     }
   };
 
-  const fullPhone = phoneCode ? joinPhone(phoneCode, phoneNumber) : "";
-  // The caller's name (title left off — it reads as a salutation, not a name).
-  const typedGuestName = [callerTitle, firstName.trim(), lastName.trim()].filter(Boolean).join(" ");
+  const fullPhone = phone;
+  const phoneBad = problemOfPhone(phoneRules, phone);
+  // The caller's name with their title (nobody writes the title into the name now).
+  const typedGuestName = titled(callerTitle, name);
   // A typed email the backend would refuse is a blocker here, not a "bad request" after the click.
   const emailBad = email.trim() !== "" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
   const isOta = channelKey === "OTA";
-  // Someone must be reachable from the first call: a phone or an email (not on an OTA booking),
-  // and "on WhatsApp?" answered whenever there is a phone.
-  const callerReachable = !!fullPhone || !!email.trim() || isOta;
-  const whatsAppAnswered = !fullPhone || onWhatsApp !== null;
-  const guestOk = callerReachable && whatsAppAnswered && !emailBad;
+  // Through an agency or a company nothing is asked of the caller: the party is reached on a contact
+  // person's number or email, else its own. Otherwise someone must be reachable from the first call —
+  // a phone or an email (not on an OTA booking), and "on WhatsApp?" answered whenever there is a phone.
+  const contactsBad = partyKind ? contactsProblem(contacts, phoneRules) : null;
+  const partyReached = !!party && (contacts.some((c) => c.phone || c.email?.trim()) || (party.contactNumbers?.length ?? 0) > 0 || !!party.contactEmail);
+  const callerReachable = partyKind ? partyReached : !!fullPhone || !!email.trim() || isOta;
+  const whatsAppAnswered = !!partyKind || !fullPhone || onWhatsApp !== null;
+  const partyWord = partyKind === "TRAVEL_AGENT" ? "the travel agent" : "the company";
+  const guestOk = partyKind ? partyReached && !contactsBad : callerReachable && whatsAppAnswered && !emailBad && !phoneBad;
 
-  usePageTitle(typedGuestName || null, "New inquiry");
+  usePageTitle(party?.displayName || typedGuestName || null, "New inquiry");
 
   /* ---------------------------------------------------------------- who is arriving */
-  const arrivingFallbackName = partyContact?.name?.trim() || typedGuestName;
+  const arrivingFallbackName = partyContact ? titled(partyContact.title, partyContact.name) : typedGuestName;
   const arrivingFallbackPhone = partyContact?.phone?.trim() || fullPhone || "";
+  const arrivingBad = problemOfPhone(phoneRules, arrivingPhone);
   const arrivingFallbackWord = partyContact?.name?.trim()
     ? `${partyContact.name.trim()}${party ? ` at ${party.displayName}` : ""}`
     : typedGuestName
@@ -568,7 +553,7 @@ export function NewInquiryCanvas() {
       : "the caller";
 
   /* ---------------------------------------------------------------- what stops the save */
-  const corpComplete = !needsCorp || (corpRef.trim() !== "" && corpCoordinator.trim() !== "");
+  const corpComplete = !needsCorp || (corpRef.trim() !== "" && !!partyContact?.name?.trim());
   const partyOk = adultsN >= 1 && agesComplete && !exceedsHotel && bedsOk && (allowedRooms.length === 0 || allowedRooms.includes(roomsN));
   const partyHow =
     adultsN < 1
@@ -589,14 +574,18 @@ export function NewInquiryCanvas() {
   const roomsGuestsSet = partyOk && roomsN >= 1;
 
   const saveBlockers: string[] = [];
-  if (!channel) saveBlockers.push("how they came in");
   // "What kind of stay" opens unanswered, and the backend refuses a booking without one — so the
   // button waits for it rather than sending a request that comes back "invalid".
   if (!useType) saveBlockers.push("what kind of stay it is");
-  if (!callerReachable) saveBlockers.push("the caller's phone or email");
+  if (partyKind && !party) saveBlockers.push(partyWord);
+  else if (partyKind && !partyReached) saveBlockers.push(`a contact person with a phone or an email — ${party!.displayName} has none on file`);
+  else if (!partyKind && !callerReachable) saveBlockers.push("the caller's phone or email");
   else if (!whatsAppAnswered) saveBlockers.push("whether the caller's number is on WhatsApp");
-  if (emailBad) saveBlockers.push("an email address that reads as one — or leave it empty");
-  if (!corpComplete) saveBlockers.push("the company's reference and their coordinator");
+  if (contactsBad) saveBlockers.push(contactsBad);
+  if (!partyKind && phoneBad) saveBlockers.push(`the phone: ${phoneBad}`);
+  if (arrivingBad) saveBlockers.push(`who is arriving: ${arrivingBad}`);
+  if (!partyKind && emailBad) saveBlockers.push("an email address that reads as one — or leave it empty");
+  if (!corpComplete) saveBlockers.push("the company's reference and a contact person");
   if (!partyOk && partyHow) saveBlockers.push(partyHow);
   if (dateProblem) saveBlockers.push(dateProblem);
 
@@ -622,20 +611,22 @@ export function NewInquiryCanvas() {
       const c = Math.max(0, childN);
       const agesOut = c > 0 && parsedAges.length === c ? parsedAges : undefined;
 
-      if (!channel) throw new Error("Say how they came in first");
       // The guest staying is named at Wrap up (2026-10-12). The caller list finds callers, never a
       // guest (2026-10-27), so nothing names one here.
       const guestProfileId: string | null = null;
       const inquiryBody = {
         guestProfileId,
-        caller: {
-          title: callerTitle || null,
-          firstName: firstName.trim() || null,
-          lastName: lastName.trim() || null,
-          phone: fullPhone || null,
-          email: email.trim() || null,
-          onWhatsApp: fullPhone ? onWhatsApp : null,
-        },
+        // Through an agency or a company the party is the caller; the backend records it so.
+        caller: partyKind
+          ? null
+          : {
+              title: callerTitle || null,
+              name: name.trim() || null,
+              phone: fullPhone || null,
+              email: email.trim() || null,
+              onWhatsApp: fullPhone ? onWhatsApp : null,
+            },
+        partyContacts: partyKind ? contacts : undefined,
         sourceChannel: channel.channel,
         cameInAs: channel.cameInAs,
         notes: notes.trim() || undefined,
@@ -656,7 +647,8 @@ export function NewInquiryCanvas() {
       if (needsCorp) {
         await captureCorporateContext(session, inquiryId, {
           corporateClientRef: corpRef.trim(),
-          corporateCoordinator: corpCoordinator.trim(),
+          // For a company the contact person IS the coordinator — named once, not twice.
+          corporateCoordinator: partyContact?.name?.trim() ?? "",
         });
       }
       // The booking's contact: who is arriving when named; else the agency's person; else the
@@ -675,8 +667,8 @@ export function NewInquiryCanvas() {
         numberOfRooms: Math.max(1, roomsN),
         bedTypeRequest: bedSum > 0 ? bedRequest : undefined,
         otaSource: channel.channel === "OTA",
-        contactPersonName: (arrivingName.trim() || arrivingFallbackName) || undefined,
-        contactPersonPhone: (arrivingPhone.trim() || arrivingFallbackPhone) || undefined,
+        contactPersonName: (titled(arrivingTitle, arrivingName) || arrivingFallbackName) || undefined,
+        contactPersonPhone: (arrivingPhone || arrivingFallbackPhone) || undefined,
         contactPersonEmail: (!overridden && partyContact?.email?.trim()) || undefined,
       });
       madeInquiry.current = null;
@@ -720,7 +712,7 @@ export function NewInquiryCanvas() {
       : useType === "CONFERENCE"
         ? { label: "Use-type requirements · the hall is added on the booking", whose: "desk", met: true }
         : { label: "Use-type requirements · none", whose: "desk", met: true };
-  const guestLineLabel = "The caller · a phone or an email";
+  const guestLineLabel = partyKind ? `${partyWord === "the company" ? "The company" : "The travel agent"}, and who to ring` : "The caller · a phone or an email";
   // The checklist, in the order the page is worked; the side panel numbers it onto the cards
   // (2026-09-25 — it sat at the foot of the page as a bare list). The house is asked on the
   // booking, once the lead is kept, so that item belongs to the booking's own list.
@@ -728,9 +720,8 @@ export function NewInquiryCanvas() {
   // then the stay.
   const flowItems = numberFlow([
     { label: guestLineLabel, met: guestOk, card: "caller" },
-    { label: "Source channel", met: !!channelKey, card: "asking" },
-    { label: "Use type", met: !!useType, card: "asking" },
-    ...(needsCorp ? [{ label: "The company's reference and coordinator", met: corpComplete, card: "asking" }] : []),
+    { label: "Use type", met: !!useType, card: "caller" },
+    ...(needsCorp ? [{ label: "The company's reference", met: corpComplete, card: "caller" }] : []),
     { label: "Dates set", met: datesSet && !dateProblem, card: "stay" },
     { label: "Rooms and guests set", met: roomsGuestsSet, card: "stay" },
   ], { bySection: true });
@@ -755,7 +746,7 @@ export function NewInquiryCanvas() {
   // refreshed and it turned back to the old UI" — this screen still had the side panel): the clocks
   // and the facts in the header, the journey and the sections as lines under it, the sections on the
   // left, the booking file on the right, and where the step stands in the bar at the foot.
-  const callerName = `${callerTitle ? `${callerTitle} ` : ""}${typedGuestName}`.trim();
+  const callerName = typedGuestName;
   const useTypeWord = useType ? (USE_TYPES.find(([k]) => k === useType)?.[1] ?? useType) : null;
   return (
     <StepFlow items={flowItems} on fold="on-move" confirm>
@@ -793,141 +784,29 @@ export function NewInquiryCanvas() {
                     <b>From the house chart</b>
                     {fromChart.room ? <> · Room {fromChart.room}</> : null}
                     {fromChart.checkIn ? <> · {fmtRange(fromChart.checkIn, addNightsIso(fromChart.checkIn, Math.max(1, parseInt(fromChart.nights ?? "1", 10))))}</> : null}
-                    <span> — fill in the caller and who is asking; the room is picked on the booking, once the house is asked</span>
+                    <span> — fill in the caller; the room is picked on the booking, once the house is asked</span>
                   </p>
                 ) : null}
                 {/* ------------------------------------------------ the caller */}
-                {/* Who rang (2026-10-12, operator, after the journey mockup): the guest, or an
-                    agency's person, a company's assistant, a VIP's secretary. The guest STAYING is
-                    named at Wrap up — the caller by default, or someone else. */}
+                {/* One section since 2026-11-05 (operator: "i need to combine these two sections"): how
+                    they came in as ticks (none is Direct voice), then either the caller, or, through
+                    an agency or a company, a search by name and its contact persons, with nothing
+                    more asked of the caller. The guest STAYING is named at Wrap up. */}
                 <StepCard
                   flow="caller"
                   title="The caller"
                   summary={
-                    (
-                      <>
-                        <b>{[callerTitle, firstName.trim(), lastName.trim()].filter(Boolean).join(" ") || "name to come"}</b>
-                        {fullPhone ? <> · {fullPhone}{onWhatsApp === true ? " · on WhatsApp" : onWhatsApp === false ? " · not on WhatsApp" : ""}</> : null}
-                        {email.trim() ? <> · {email.trim()}</> : null}
-                        {isOta && !fullPhone && !email.trim() ? <> · OTA booking</> : null}
-                        {selectedCaller?.party ? <> · for {selectedCaller.party.displayName}</> : selectedCaller ? <> · rang before</> : null}
-                      </>
-                    )
-                  }
-                >
-                  {(
-                    <div className="form2">
-                      <label className="wide sm ink-2" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                        <input
-                          type="checkbox"
-                          checked={isOta}
-                          onChange={(e) => {
-                            if (e.target.checked) setChannelKey("OTA");
-                            else if (channelKey === "OTA") setChannelKey(null);
-                          }}
-                        />
-                        <b>OTA booking</b>
-                        <Help label="About an OTA booking">It comes through the OTA, so the phone and email can wait.</Help>
-                      </label>
-                      <div className="field">
-                        <label>
-                          Phone
-                          {/* Either one will do, so the empty one stops asking once the other is in. */}
-                          {!isOta && (fullPhone || !email.trim()) ? <ReqMark /> : null}
-                          <Help label="About the phone">Typing it finds who has rung with it before — a caller, or an agency&rsquo;s or a company&rsquo;s person.</Help>
-                        </label>
-                        <PhoneInput code={phoneCode} setCode={setPhoneCode} number={phoneNumber} setNumber={setPhoneNumber} />
-                        {!callerReachable ? <span className="hint stop-ink">a phone or an email is needed to start</span> : null}
-                      </div>
-                      <div className="field">
-                        <label>
-                          Email
-                          {!isOta && (email.trim() || !fullPhone) ? <ReqMark /> : null}
-                          <Help label="About the email">Optional when there is a phone. With no phone, typing it finds who has rung with it before.</Help>
-                        </label>
-                        <input className="input" type="email" value={email} placeholder="name@example.com" onChange={(e) => setEmail(e.target.value)} />
-                        {emailBad ? (
-                          <span className="hint stop-ink">that does not read as an email address</span>
-                        ) : !callerReachable ? (
-                          <span className="hint stop-ink">or the email</span>
-                        ) : null}
-                      </div>
-                      {fullPhone ? (
-                        <div className="wide field">
-                          <label>
-                            On WhatsApp?
-                            <Help label="About WhatsApp">The quote and the confirmation can go there.</Help>
-                          </label>
-                          <Choice
-                            options={[
-                              ["YES", "Yes"],
-                              ["NO", "No"],
-                            ]}
-                            value={onWhatsApp === null ? null : onWhatsApp ? "YES" : "NO"}
-                            onChange={(v) => setOnWhatsApp(v === "YES")}
-                          />
-                          {onWhatsApp === null ? <span className="hint warn-ink">ask them</span> : null}
-                        </div>
-                      ) : null}
-                      {callerMatches.length > 0 ? (
-                        <div className="wide">
-                          <PickList
-                            head={`${callerMatches.length === 1 ? "Someone has" : "People have"} rung with this ${callerTerm.includes("@") ? "email" : "number"} before`}
-                            rows={callerMatches.map((m) => ({ key: m.key, main: <CallerLine caller={m} />, onPick: () => adoptCaller(m) }))}
-                          />
-                        </div>
-                      ) : null}
-                      {selectedCaller ? (
-                        <div className="wide bind bound" style={{ display: "grid", gap: 6 }}>
-                          <span className="sm" style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
-                            <Icon name="check" /> <CallerLine caller={selectedCaller} />
-                          </span>
-                          <div className="row-acts">
-                            <span className="meta">
-                              {selectedCaller.party ? `${selectedCaller.party.displayName} is the caller — its contact person is under Who is asking` : "the caller, as they rang before"}
-                            </span>
-                            <Help label="About the caller found">
-                              Only the caller is filled in. The guest staying is named at Wrap up, where the guests this caller brought before come first.
-                            </Help>
-                            <Button kind="quiet" compact onClick={notThisCaller}>
-                              Not this caller
-                            </Button>
-                          </div>
-                        </div>
-                      ) : null}
-                      <div className="wide" style={{ display: "grid", gridTemplateColumns: "120px minmax(0,1fr) minmax(0,1fr)", gap: "var(--s3) var(--s4)" }}>
-                        <div className="field">
-                          <label>Title</label>
-                          <select className="input" value={callerTitle} onChange={(e) => setCallerTitle(e.target.value)}>
-                            {CALLER_TITLES.map((t) => (
-                              <option key={t} value={t}>
-                                {t || "—"}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                        <div className="field">
-                          <label>First name</label>
-                          <input className="input" value={firstName} placeholder="can wait for Wrap up" onChange={(e) => setFirstName(e.target.value)} />
-                        </div>
-                        <div className="field">
-                          <label>Last name</label>
-                          <input className="input" value={lastName} placeholder="can wait for Wrap up" onChange={(e) => setLastName(e.target.value)} />
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </StepCard>
-
-                {/* ------------------------------------------------ who is asking */}
-                <StepCard
-                  title="Who is asking"
-                  flow="asking"
-                  flowAfter="caller"
-                  summary={
                     <>
-                      <b>{channel?.label ?? "—"}</b>
-                      {party ? <> — {party.displayName}</> : null}
+                      <b>{party ? party.displayName : typedGuestName || "name to come"}</b>
+                      {party ? (
+                        contacts.length ? <> · {contacts.map((c) => titled(c.title, c.name)).join(", ")}</> : null
+                      ) : (
+                        <>
+                          {fullPhone ? <> · {fullPhone}{onWhatsApp === true ? " · on WhatsApp" : onWhatsApp === false ? " · not on WhatsApp" : ""}</> : null}
+                          {email.trim() ? <> · {email.trim()}</> : null}
+                        </>
+                      )}
+                      <> · {channel.label}</>
                       {chosenPackage ? <> · {chosenPackage.name}</> : party ? null : <> · published rates</>}
                       {useType ? <> · {USE_TYPES.find(([k]) => k === useType)?.[1] ?? useType}</> : null}
                       {needsCorp && corpRef.trim() ? <> · {corpRef.trim()}</> : null}
@@ -935,125 +814,165 @@ export function NewInquiryCanvas() {
                   }
                 >
                   <div className="form2">
-                    <div className="wide field">
-                      <label>
-                        Came in as
-                        <Help label="About Came in as">It decides what the rest of this form asks for.</Help>
-                      </label>
-                      <Choice options={CHANNEL_OPTIONS} value={channelKey} onChange={pickChannel} />
-                      {!channelKey ? <span className="hint warn-ink">pick one</span> : null}
+                    <div className="wide">
+                      <CameInTicks value={channelKey} onChange={pickChannel} />
                     </div>
+
+                    {selectedCaller && partyKind ? (
+                      <div className="wide bind bound" style={{ display: "grid", gap: 6 }}>
+                        <span className="sm" style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
+                          <Icon name="check" /> <CallerLine caller={selectedCaller} />
+                        </span>
+                        <div className="row-acts">
+                          <Button kind="quiet" compact onClick={notThisCaller}>
+                            Not this caller
+                          </Button>
+                        </div>
+                      </div>
+                    ) : null}
 
                     {partyKind ? (
                       <>
                         <PartySearch kind={partyKind} party={party} setParty={setParty} />
-                        {party ? (
-                          <PartyContacts kind={partyKind} party={party} setParty={setParty} contact={partyContact} setContact={setPartyContact} />
+                        {party ? <PartyContacts kind={partyKind} party={party} setParty={setParty} contacts={contacts} setContacts={setContacts} /> : null}
+                        {!party ? <span className="wide hint warn-ink">search {partyWord} by name</span> : null}
+                        {party && !partyReached ? (
+                          <span className="wide hint stop-ink">{party.displayName} has no phone or email on file — add a contact person with one</span>
                         ) : null}
                       </>
-                    ) : null}
-
-                    {/* Which of their rates was agreed belongs WITH the party, not four cards down
-                        (2026-09-29, operator: the packages "never show" — they were at the foot of
-                        the page, in Rate and notes, long after the agency was picked). An agency
-                        like Bhutan INC carries Season · Off season · Premium, and the rate differs
-                        between them, so the choice is made where the eye already is. */}
-                    {true ? (
+                    ) : (
                       <>
-                      <div className="field">
-                        <label>Rate package</label>
-                        {!party ? (
-                          <input className="input" readOnly value="Published rates" />
-                        ) : packagesQuery.isLoading ? (
-                          <input className="input" readOnly value="Reading their packages…" />
-                        ) : !packages || packages.length === 0 ? (
-                          <input className="input" readOnly value="The hotel's common package" />
-                        ) : (
-                          <select className="input" value={ratePackageId ?? ""} onChange={(e) => setRatePackageId(e.target.value || null)}>
-                            {!packages.some((p) => p.isDefault) ? <option value="">— not chosen · pricing takes their newest —</option> : null}
-                            {packages.map((p) => (
-                              <option key={p.id} value={p.id}>
-                                {p.name}
-                                {p.isDefault ? " · their default" : ""} — {money(p.roomBaseRate, p.currency)} a night
+                        <div className="field">
+                          <label>
+                            Phone
+                            {/* Either one will do, so the empty one stops asking once the other is in. */}
+                            {!isOta && (fullPhone || !email.trim()) ? <ReqMark /> : null}
+                            <Help label="About the phone">Typing it finds who has rung with it before — a caller, or an agency&rsquo;s or a company&rsquo;s person.</Help>
+                          </label>
+                          <PhoneField value={phone} onChange={setPhone} />
+                          {!callerReachable ? <span className="hint stop-ink">a phone or an email is needed to start</span> : null}
+                        </div>
+                        <div className="field">
+                          <label>
+                            Email
+                            {!isOta && (email.trim() || !fullPhone) ? <ReqMark /> : null}
+                            <Help label="About the email">Optional when there is a phone. With no phone, typing it finds who has rung with it before.</Help>
+                          </label>
+                          <input className="input" type="email" value={email} placeholder="name@example.com" onChange={(e) => setEmail(e.target.value)} />
+                          {emailBad ? (
+                            <span className="hint stop-ink">that does not read as an email address</span>
+                          ) : !callerReachable ? (
+                            <span className="hint stop-ink">or the email</span>
+                          ) : null}
+                        </div>
+                        {fullPhone ? (
+                          <div className="wide field">
+                            <label>
+                              On WhatsApp?
+                              <Help label="About WhatsApp">The quote and the confirmation can go there.</Help>
+                            </label>
+                            <Choice
+                              options={[
+                                ["YES", "Yes"],
+                                ["NO", "No"],
+                              ]}
+                              value={onWhatsApp === null ? null : onWhatsApp ? "YES" : "NO"}
+                              onChange={(v) => setOnWhatsApp(v === "YES")}
+                            />
+                            {onWhatsApp === null ? <span className="hint warn-ink">ask them</span> : null}
+                          </div>
+                        ) : null}
+                        {callerMatches.length > 0 ? (
+                          <div className="wide">
+                            <PickList
+                              head={`${callerMatches.length === 1 ? "Someone has" : "People have"} rung with this ${callerTerm.includes("@") ? "email" : "number"} before`}
+                              rows={callerMatches.map((m) => ({ key: m.key, main: <CallerLine caller={m} />, onPick: () => adoptCaller(m) }))}
+                            />
+                          </div>
+                        ) : null}
+                        {selectedCaller ? (
+                          <div className="wide bind bound" style={{ display: "grid", gap: 6 }}>
+                            <span className="sm" style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
+                              <Icon name="check" /> <CallerLine caller={selectedCaller} />
+                            </span>
+                            <div className="row-acts">
+                              <span className="meta">the caller, as they rang before</span>
+                              <Help label="About the caller found">
+                                Only the caller is filled in. The guest staying is named at Wrap up, where the guests this caller brought before come first.
+                              </Help>
+                              <Button kind="quiet" compact onClick={notThisCaller}>
+                                Not this caller
+                              </Button>
+                            </div>
+                          </div>
+                        ) : null}
+                        <div className="wide">
+                          <PersonName title={callerTitle} name={name} onTitle={setCallerTitle} onName={setName} namePlaceholder="can wait for Wrap up" />
+                        </div>
+                      </>
+                    )}
+
+                    {/* Which of their rates was agreed belongs WITH the party (2026-09-29). An agency
+                        like Bhutan INC carries Season · Off season · Premium. */}
+                    <div className="field">
+                      <label>Rate package</label>
+                      {!party ? (
+                        <input className="input" readOnly value="Published rates" />
+                      ) : packagesQuery.isLoading ? (
+                        <input className="input" readOnly value="Reading their packages…" />
+                      ) : !packages || packages.length === 0 ? (
+                        <input className="input" readOnly value="The hotel's common package" />
+                      ) : (
+                        <select className="input" value={ratePackageId ?? ""} onChange={(e) => setRatePackageId(e.target.value || null)}>
+                          {!packages.some((p) => p.isDefault) ? <option value="">— not chosen · pricing takes their newest —</option> : null}
+                          {packages.map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.name}
+                              {p.isDefault ? " · their default" : ""} — {money(p.roomBaseRate, p.currency)} a night
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                      <span className="hint">
+                        {!party
+                          ? partyKind
+                            ? "pick the agency or company and its packages follow"
+                            : "carries the meal plan and the rate"
+                          : !packages || packages.length === 0
+                            ? `no package on file for ${party.displayName}`
+                            : packages.length === 1
+                              ? "the only package on file for them"
+                              : `${packages.length} packages on file — the rate differs, so pick the one agreed`}
+                      </span>
+                    </div>
+                    <div className="field">
+                      <label>
+                        Meal plans priced
+                        <Help label="About meal plans">Each room&rsquo;s plan is chosen at Negotiation.</Help>
+                      </label>
+                      <input className="input" readOnly value={mealPlansWord} />
+                    </div>
+
+                    {needsCorp ? (
+                      <div className="wide field">
+                        <label>
+                          Their PO or authorisation
+                          <Help label="About the PO">The company is billed on it.</Help>
+                        </label>
+                        {party && (party.contractRefs ?? []).length > 0 ? (
+                          <select className="input" value={corpRef} onChange={(e) => setCorpRef(e.target.value)}>
+                            <option value="">— pick their reference —</option>
+                            {(party.contractRefs ?? []).map((r) => (
+                              <option key={r} value={r}>
+                                {r}
                               </option>
                             ))}
                           </select>
+                        ) : (
+                          <input className="input" value={corpRef} placeholder="PO, account or authorisation" onChange={(e) => setCorpRef(e.target.value)} />
                         )}
-                        <span className="hint">
-                          {!party
-                            ? partyKind
-                              ? "pick the agency or company and its packages follow"
-                              : "carries the meal plan and the rate"
-                            : !packages || packages.length === 0
-                              ? `no package on file for ${party.displayName}`
-                              : packages.length === 1
-                                ? "the only package on file for them"
-                                : `${packages.length} packages on file — the rate differs, so pick the one agreed`}
-                        </span>
+                        {corpRef.trim() ? null : <span className="hint warn-ink">needed</span>}
                       </div>
-                      <div className="field">
-                        <label>
-                          Meal plans priced
-                          <Help label="About meal plans">Each room&rsquo;s plan is chosen at Negotiation.</Help>
-                        </label>
-                        <input
-                          className="input"
-                          readOnly
-                          value={mealPlansWord}
-                        />
-                      </div>
-                      </>
-                    ) : null}
-
-                    {needsCorp ? (
-                      <>
-                        <div className="field">
-                          <label>
-                            Their PO or authorisation
-                            <Help label="About the PO">The company is billed on it.</Help>
-                          </label>
-                          {party && (party.contractRefs ?? []).length > 0 ? (
-                            <select className="input" value={corpRef} onChange={(e) => setCorpRef(e.target.value)}>
-                              <option value="">— pick their reference —</option>
-                              {(party.contractRefs ?? []).map((r) => (
-                                <option key={r} value={r}>
-                                  {r}
-                                </option>
-                              ))}
-                            </select>
-                          ) : (
-                            <input className="input" value={corpRef} placeholder="PO, account or authorisation" onChange={(e) => setCorpRef(e.target.value)} />
-                          )}
-                          {corpRef.trim() ? null : <span className="hint warn-ink">needed</span>}
-                        </div>
-                        <div className="field">
-                          <label>
-                            Their coordinator
-                            <Help label="About the coordinator">
-                              {party && ((party.contractRefs ?? []).length > 0 || (party.coordinators ?? []).length > 0)
-                                ? `From ${party.displayName}'s account — kept there by Admin.`
-                                : "Who books for them."}
-                            </Help>
-                          </label>
-                          {party && (party.coordinators ?? []).length > 0 ? (
-                            <select className="input" value={corpCoordinator} onChange={(e) => setCorpCoordinator(e.target.value)}>
-                              <option value="">— pick their coordinator —</option>
-                              {(party.coordinators ?? []).map((c) => (
-                                <option key={c.name} value={c.name}>
-                                  {c.name}
-                                  {c.phone ? ` · ${c.phone}` : ""}
-                                </option>
-                              ))}
-                              {corpCoordinator && !(party.coordinators ?? []).some((c) => c.name === corpCoordinator) ? (
-                                <option value={corpCoordinator}>{corpCoordinator}</option>
-                              ) : null}
-                            </select>
-                          ) : (
-                            <input className="input" value={corpCoordinator} placeholder="who books for them" onChange={(e) => setCorpCoordinator(e.target.value)} />
-                          )}
-                          {corpCoordinator.trim() ? null : <span className="hint warn-ink">needed</span>}
-                        </div>
-                      </>
                     ) : null}
 
                     <div className="wide field">
@@ -1076,7 +995,7 @@ export function NewInquiryCanvas() {
                 <StepCard
                   title="The stay"
                   flow="stay"
-                  flowAfter="asking"
+                  flowAfter="caller"
                   flowAfterOnly
                   doneAction={{
                     label: primaryLabel,
@@ -1374,15 +1293,13 @@ export function NewInquiryCanvas() {
                 >
                   <div className="form2 rule-above">
                     <div className="field">
-                      <label>
-                        Who is arriving · name
-                        <Help label="About who is arriving">Who leads the party on the day.</Help>
-                      </label>
-                      <input
-                        className="input"
-                        value={arrivingName}
-                        placeholder={`blank — ${arrivingFallbackWord}`}
-                        onChange={(e) => setArrivingName(e.target.value)}
+                      <PersonName
+                        title={arrivingTitle}
+                        name={arrivingName}
+                        onTitle={setArrivingTitle}
+                        onName={setArrivingName}
+                        nameLabel="Who is arriving"
+                        namePlaceholder={`blank — ${arrivingFallbackWord}`}
                       />
                     </div>
                     <div className="field">
@@ -1390,13 +1307,8 @@ export function NewInquiryCanvas() {
                         Their phone
                         <Help label="About their phone">Needed before arrival.</Help>
                       </label>
-                      <input
-                        className="input"
-                        inputMode="tel"
-                        value={arrivingPhone}
-                        placeholder={arrivingFallbackPhone ? `blank — ${arrivingFallbackPhone}` : "+975 …"}
-                        onChange={(e) => setArrivingPhone(e.target.value)}
-                      />
+                      <PhoneField value={arrivingPhone} onChange={setArrivingPhone} ariaLabel="Who is arriving's phone" />
+                      {!arrivingPhone && arrivingFallbackPhone ? <span className="hint">blank — {arrivingFallbackPhone}</span> : null}
                     </div>
                   </div>
                 </StepCard>
@@ -1466,7 +1378,7 @@ export function NewInquiryCanvas() {
                   <b>{roomsN ? plural(roomsN, "room") : "Rooms not set"}</b>
                 </span>
                 <span className="camein">
-                  {channel ? channel.label : "How they came in · not said yet"}
+                  {channel.label}
                   {party ? ` · ${party.displayName}` : ""}
                 </span>
               </div>
@@ -1495,17 +1407,36 @@ export function NewInquiryCanvas() {
             <dl className="pv">
               <dt>The caller</dt>
               <dd>
-                {callerName || <span className="meta">no name yet</span>}
-                {fullPhone ? <div>{fullPhone}{onWhatsApp ? " · on WhatsApp" : ""}</div> : null}
-                {email.trim() ? <div>{email.trim()}</div> : null}
-                {!fullPhone && !email.trim() ? <div className={isOta ? "meta" : "warn-ink"}>{isOta ? "an OTA booking" : "no phone or email yet"}</div> : null}
+                {partyKind ? (
+                  party ? party.displayName : <span className="warn-ink">{partyWord} is not picked yet</span>
+                ) : (
+                  <>
+                    {callerName || <span className="meta">no name yet</span>}
+                    {fullPhone ? <div>{fullPhone}{onWhatsApp ? " · on WhatsApp" : ""}</div> : null}
+                    {email.trim() ? <div>{email.trim()}</div> : null}
+                    {!fullPhone && !email.trim() ? <div className={isOta ? "meta" : "warn-ink"}>{isOta ? "an OTA booking" : "no phone or email yet"}</div> : null}
+                  </>
+                )}
               </dd>
               <dt>Came in as</dt>
-              <dd>
-                {channel ? channel.label : <span className="warn-ink">not said yet</span>}
-                {party ? <div>{party.displayName}</div> : null}
-                {partyContact?.name ? <div className="meta">contact · {partyContact.name}</div> : null}
-              </dd>
+              <dd>{channel.label}</dd>
+              {party ? (
+                <>
+                  <dt>Who to ring</dt>
+                  <dd>
+                    {contacts.length ? (
+                      contacts.map((c, i) => (
+                        <div key={i}>
+                          {titled(c.title, c.name)}
+                          {c.phone ? <span className="meta"> · {c.phone}</span> : null}
+                        </div>
+                      ))
+                    ) : (
+                      <span className="warn-ink">nobody yet</span>
+                    )}
+                  </dd>
+                </>
+              ) : null}
               <dt>Kind of stay</dt>
               <dd>{useTypeWord ?? <span className="warn-ink">not said yet</span>}</dd>
               <dt>The stay</dt>

@@ -2028,3 +2028,47 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .rchart-hc .hc-clash-row { display: grid; gap: 3px; }
 .ds .rchart-hc .hc-clash-row .clash-state { border-radius: 4px; }
 .ds .rchart-hc .hc-clash-row b { font-size: 13px; }
+
+/* ---- A phone number as two fields, a person's name beside a title (2026-11-05). */
+.ds .phone-wrap { display: grid; gap: 3px; min-width: 0; }
+.ds .phone-field { display: flex; gap: 6px; min-width: 0; align-items: stretch; }
+.ds .phone-code { position: relative; flex: 0 0 84px; width: 84px; display: block; }
+/* The closed box shows the code alone; the open list names the country. */
+.ds .phone-code select { width: 100%; height: 100%; color: transparent !important; -webkit-text-fill-color: transparent; }
+.ds .phone-code select option { color: var(--ink); -webkit-text-fill-color: var(--ink); }
+.ds .phone-code select:disabled { opacity: 1; }
+.ds .phone-code-shown { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); pointer-events: none; color: var(--ink); font-size: 14px; }
+.ds .phone-code-typed { flex: 0 0 84px; width: 84px; }
+.ds .phone-number { flex: 1 1 auto; min-width: 0; font-variant-numeric: tabular-nums; }
+.ds .phone-other { flex: 0 0 34px; width: 34px; border: 1px solid var(--line-2); border-radius: 4px; background: var(--surface); color: var(--ink); font-weight: 600; cursor: pointer; }
+.ds .phone-other:hover { background: var(--line); }
+.ds .phone-count { font-size: 12px; font-weight: 600; color: var(--warning); }
+.ds .phone-problem { font-size: 12px; font-weight: 700; color: var(--danger); }
+.ds .phone-list { display: grid; gap: 8px; }
+.ds .phone-list-row { display: flex; gap: 8px; align-items: flex-start; }
+.ds .phone-list-row .phone-wrap { flex: 1 1 auto; }
+.ds .person-name { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: var(--s3) var(--s3); min-width: 0; }
+
+/* ---- How they came in, ticked (2026-11-05): none ticked is Direct voice. One at a time. */
+.ds .camein-ticks { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.ds .camein-tick { display: inline-flex; align-items: center; gap: 8px; min-height: 38px; padding: 0 12px; border: 1px solid var(--line-2); border-radius: 4px; background: var(--surface); font-weight: 500; cursor: pointer; user-select: none; }
+.ds .camein-tick:hover { background: var(--line); }
+.ds .camein-tick.on { border-color: var(--accent); background: var(--accent-soft); font-weight: 700; box-shadow: inset 0 -3px 0 var(--accent); }
+.ds .camein-tick input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
+.ds .camein-tick.off { cursor: default; opacity: .75; }
+.ds .camein-word { font-size: 13px; }
+
+/* ---- The contact persons on a booking through an agency or a company (2026-11-05). */
+.ds .contact-rows { display: grid; gap: 10px; }
+.ds .contact-row { display: grid; grid-template-columns: 96px minmax(130px, 1fr) minmax(250px, 1.25fr) minmax(130px, 1fr) auto; gap: 8px 10px; align-items: start; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; }
+.ds .contact-row .contact-remove { align-self: end; }
+.ds .contact-row.first { border-color: var(--line-2); }
+.ds .contact-note { grid-column: 1 / -1; }
+@media (max-width: 1500px) {
+  .ds .contact-row { grid-template-columns: 96px minmax(0, 1fr) minmax(0, 1.2fr); }
+  .ds .contact-row .contact-mail { grid-column: 1 / 3; }
+  .ds .contact-row .contact-remove { justify-self: end; }
+}
+.ds .contact-add { display: grid; gap: 8px; padding: 10px 12px; border: 1px dashed var(--line-2); border-radius: 6px; }
+.ds .contact-add-row { display: grid; grid-template-columns: 96px minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 1fr); gap: 8px 10px; align-items: start; }
+@media (max-width: 1500px) { .ds .contact-add-row { grid-template-columns: 96px minmax(0, 1fr) minmax(0, 1.2fr); } }

@@ -6,9 +6,12 @@
  * in the hotel, not the caller's detail … a travel agent will call for a guest, or a corporate or
  * the assistant of a VIP may call").
  *
- * 1 · The caller — whoever rang: a phone or an email (an OTA booking needs neither), "on WhatsApp?"
- *     whenever there is a phone, and a title and name that may wait.
- * 5 · Wrap up — once the rooms are chosen: the guest who is STAYING (the caller, or someone else
+ * 1 · The caller — how they came in (ticks; none is Direct voice), then whoever rang: a phone or an
+ *     email (an OTA booking needs neither), "on WhatsApp?" whenever there is a phone, a title and a
+ *     name that may wait. Through an agency or a company, the party found by name and its contact
+ *     persons instead, with nothing more asked of the caller (2026-11-05). The rates and the kind of
+ *     stay are here too.
+ * 4 · Wrap up — once the rooms are chosen: the guest who is STAYING (the caller, or someone else
  *     — one form, which finds them on file by their phone or email; an agency or a company books for
  *     someone else, so it goes straight to that form), the caller's name if it was
  *     not taken at the start, who is arriving (not asked when someone else is named — they are). The booking leaves Inquiry only with the guest staying named. The guest's
@@ -28,15 +31,42 @@ import { useSession } from "@/hooks/use-session";
 import { updateEntryIntake } from "@/lib/api/entries";
 import { ApiError } from "@/lib/api/client";
 import { findGuestsOnFile, guestFullName, sameGuestName, type GuestOnFile, type GuestProfileSummary } from "@/lib/api/guest-profiles";
-import { lookupCallers, setEntryGuest, updateEntryCaller, type SetGuestBody } from "@/lib/api/inquiries";
+import {
+  listRatePackagesLookup,
+  lookupCallers,
+  setEntryGuest,
+  updateEntryCaller,
+  updateEntrySource,
+  type CoordinatorContact,
+  type LookupPartyMatch,
+  type SetGuestBody,
+} from "@/lib/api/inquiries";
+import { PhoneField } from "@/components/ds/phone-field";
+import { PersonName } from "@/components/ds/person-name";
+import { usePhoneRules } from "@/hooks/use-phone-rules";
+import { nationalDigits, problemOfPhone } from "@/lib/ds/phone";
+import { fullNameOf, splitTitle, titled } from "@/lib/ds/person";
 import { callerNameOf } from "@/lib/ds/status";
 import { fmtDay } from "@/lib/ds/format";
 import { hasAnyContact } from "@/lib/desk/workspace";
 import type { EntryDetail } from "@/types/api";
 import { Choice, DsDialog, StepCard, toastRefusal, useFlowUnsaved, useRefreshEntry } from "./kit";
-import { GuestLine, NATIONALITIES, PHONE_CODES, PhoneInput, PickList, PresetOrCustom, ReqMark, cameInAsOf, channelDef, joinPhone, splitStoredPhone } from "./new-inquiry-parts";
-
-export const CALLER_TITLES = ["", "Mr", "Ms", "Mrs", "Dr", "Dasho", "Lyonpo", "Aum"];
+import {
+  CameInTicks,
+  GuestLine,
+  NATIONALITIES,
+  PartyContacts,
+  PartySearch,
+  PickList,
+  PresetOrCustom,
+  ReqMark,
+  USE_TYPES,
+  cameInAsOf,
+  channelDef,
+  contactsProblem,
+  defaultContactFor,
+  type ChannelKey,
+} from "./new-inquiry-parts";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -59,64 +89,164 @@ function bookedByParty(inq: Inq) {
 
 /* ------------------------------------------------------------------ 1 · the caller */
 
+/** The contact persons on record, first one first. From before the list: the one person kept. */
+function contactsOnRecord(entry: EntryDetail): CoordinatorContact[] {
+  const inq = (entry.inquiry ?? {}) as Inq;
+  if (!inq.travelAgentId && !inq.corporateAccountId) return [];
+  if (inq.partyContacts?.length) return inq.partyContacts;
+  const e = entry as EntryDetail & { contactPersonName?: string | null; contactPersonPhone?: string | null; contactPersonEmail?: string | null };
+  const kept = inq.partyContactName ? { name: inq.partyContactName, phone: inq.partyContactPhone, email: inq.partyContactEmail } : null;
+  const arriving = !entry.guestProfile && e.contactPersonName ? { name: e.contactPersonName, phone: e.contactPersonPhone, email: e.contactPersonEmail } : null;
+  const one = kept ?? arriving;
+  if (!one) return [];
+  const t = splitTitle(one.name);
+  return [{ title: t.title || null, name: t.name, phone: one.phone ?? null, email: one.email ?? null }];
+}
+
 export function TheCaller({ entry, editable }: { entry: EntryDetail; editable: boolean }) {
   const { session } = useSession();
   const refresh = useRefreshEntry(entry.id);
+  const phoneRules = usePhoneRules();
   const inq = (entry.inquiry ?? {}) as Inq;
   const g = entry.guestProfile ?? null;
   const old = legacy(inq);
-  const isOta = inq.sourceChannel === "OTA";
+  const came = cameInAsOf(inq.sourceChannel, inq.notes, entry.useType, inq.cameInAs);
+  const recParty = (inq.travelAgent ?? inq.corporateAccount ?? null) as LookupPartyMatch | null;
+  const recPkg = inq.ratePackageId ?? null;
+  const recRef = inq.corporateClientRef ?? "";
 
-  const seed = () => {
-    const phone = (old ? g?.phone : inq.callerPhone) ?? "";
-    const split = phone ? splitStoredPhone(phone) : { code: PHONE_CODES[0], number: "" };
-    return {
-      title: inq.callerTitle ?? "",
-      firstName: (old ? g?.firstName : inq.callerFirstName) ?? "",
-      lastName: (old ? g?.lastName : inq.callerLastName) ?? "",
-      code: split.code,
-      number: split.number,
-      email: (old ? g?.email : inq.callerEmail) ?? "",
-      onWhatsApp: inq.callerOnWhatsApp ?? null,
-    };
-  };
-  const [f, setF] = useState(seed);
-  // Re-read only when the CALLER on record changes (2026-10-27): keyed on the booking's version, it
-  // threw away an unsaved edit here — the dialling code with it — whenever a section below saved.
-  // An edit in progress is kept even then; only an untouched form follows the record.
-  const stamp = `${inq.callerPhone}|${inq.callerEmail}|${inq.callerFirstName}|${inq.callerLastName}|${inq.callerTitle}|${inq.callerOnWhatsApp}|${old}`;
-  const lastSeed = useRef(JSON.stringify(f));
+  const seed = () => ({
+    came: (came === "DIRECT_VOICE" ? null : came) as ChannelKey | null,
+    party: recParty,
+    pkg: recPkg,
+    ref: recRef,
+    contacts: contactsOnRecord(entry),
+    title: inq.callerTitle ?? "",
+    name: fullNameOf(old ? g?.firstName : inq.callerFirstName, old ? g?.lastName : inq.callerLastName),
+    phone: (old ? g?.phone : inq.callerPhone) ?? "",
+    email: (old ? g?.email : inq.callerEmail) ?? "",
+    onWhatsApp: inq.callerOnWhatsApp ?? null,
+  });
+  type Draft = ReturnType<typeof seed>;
+  const [d, setD] = useState<Draft>(seed);
+  const set = (patch: Partial<Draft>) => setD((p) => ({ ...p, ...patch }));
+  const canon = (x: Draft) =>
+    JSON.stringify({
+      came: x.came ?? "DIRECT_VOICE",
+      party: x.party?.id ?? null,
+      pkg: x.party ? x.pkg : null,
+      ref: x.party ? x.ref.trim() : "",
+      contacts: x.party ? x.contacts.map((c) => [c.title ?? "", c.name?.trim() ?? "", c.phone ?? "", c.email?.trim() ?? ""]) : [],
+      caller: x.party ? null : [x.title, x.name.trim(), x.phone, x.email.trim(), x.phone ? x.onWhatsApp : null],
+    });
+  // Re-read only when what is on record changes (2026-10-27): keyed on the booking's version it threw
+  // away an unsaved edit whenever a section below saved. An edit in progress is kept even then; only
+  // an untouched form follows the record.
+  const stamp = canon(seed());
+  const lastSeed = useRef(stamp);
   useEffect(() => {
-    const next = seed();
-    setF((cur) => (JSON.stringify(cur) === lastSeed.current ? next : cur));
-    lastSeed.current = JSON.stringify(next);
+    setD((cur) => (canon(cur) === lastSeed.current ? seed() : cur));
+    lastSeed.current = stamp;
   }, [stamp]); // eslint-disable-line react-hooks/exhaustive-deps
-  const set = (patch: Partial<ReturnType<typeof seed>>) => setF((p) => ({ ...p, ...patch }));
 
-  const saved = seed();
-  const fullPhone = joinPhone(f.code, f.number);
-  const emailBad = f.email.trim() !== "" && !EMAIL_RE.test(f.email.trim());
-  const reachable = !!fullPhone || !!f.email.trim() || isOta;
-  const waAnswered = !fullPhone || f.onWhatsApp !== null;
-  const dirty = JSON.stringify(f) !== JSON.stringify(saved);
+  const def = channelDef(d.came ?? "DIRECT_VOICE")!;
+  const partyKind = def.party;
+  const isOta = d.came === "OTA";
+  const isCorp = partyKind === "CORPORATE";
+  const dirty = canon(d) !== stamp;
   useFlowUnsaved("caller", editable && dirty, "Changes to the caller saved");
-  const reason = emailBad
-    ? "the email does not read as one"
-    : !reachable
-      ? "the caller's phone or email"
-      : !waAnswered
-        ? "whether the number is on WhatsApp"
-        : null;
 
+  const owner = d.party && partyKind ? (partyKind === "TRAVEL_AGENT" ? { travelAgentId: d.party.id } : { corporateAccountId: d.party.id }) : null;
+  const packages = useQuery({
+    queryKey: ["lookup", "rate-packages", owner],
+    queryFn: () => listRatePackagesLookup(session!, owner!),
+    enabled: !!session && !!owner,
+  });
+  // A new party starts on its own default package; the party on record keeps the package it was
+  // quoted on, even one since superseded.
+  useEffect(() => {
+    if (!owner) return;
+    if (d.party?.id === recParty?.id) return;
+    const items = packages.data?.items;
+    if (!items) return;
+    if (d.pkg && items.some((x) => x.id === d.pkg)) return;
+    set({ pkg: items.find((pp) => pp.isDefault)?.id ?? null });
+  }, [packages.data, owner?.travelAgentId, owner?.corporateAccountId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const pickCame = (k: ChannelKey | null) => {
+    const nextKind = channelDef(k ?? "DIRECT_VOICE")?.party ?? null;
+    setD((x) => {
+      const samePartyKind = !!nextKind && nextKind === partyKind;
+      // A party belongs to one kind — a travel agent must never ride into a company booking. Leaving
+      // a party, the caller on record is the party, not someone who rang: the form starts empty.
+      const leavingParty = !nextKind && !!partyKind;
+      return {
+        ...x,
+        came: k,
+        party: samePartyKind ? x.party : null,
+        pkg: samePartyKind ? x.pkg : null,
+        contacts: samePartyKind ? x.contacts : [],
+        ...(leavingParty ? { title: "", name: "", phone: "", email: "", onWhatsApp: null } : {}),
+      };
+    });
+  };
+  const setParty = (pp: LookupPartyMatch | null) => {
+    setD((x) => {
+      if (pp && pp.id === x.party?.id) return { ...x, party: pp };
+      const next = { ...x, party: pp, pkg: pp && pp.id === recParty?.id ? recPkg : null, contacts: pp ? (pp.id === recParty?.id ? contactsOnRecord(entry) : [defaultContactFor(pp)]) : [] };
+      if (pp && partyKind === "CORPORATE" && !x.ref.trim()) next.ref = pp.contractRefs?.[0] ?? "";
+      return next;
+    });
+  };
+
+  const emailBad = d.email.trim() !== "" && !EMAIL_RE.test(d.email.trim());
+  const phoneBad = problemOfPhone(phoneRules, d.phone);
+  const contactsBad = partyKind ? contactsProblem(d.contacts, phoneRules) : null;
+  const partyReached = !!d.party && (d.contacts.some((c) => c.phone || c.email?.trim()) || (d.party.contactNumbers?.length ?? 0) > 0 || !!d.party.contactEmail);
+  const reachable = partyKind ? partyReached : !!d.phone || !!d.email.trim() || isOta;
+  const waAnswered = !!partyKind || !d.phone || d.onWhatsApp !== null;
+  const partyWord = partyKind === "CORPORATE" ? "the company" : "the travel agent";
+  const reason = partyKind
+    ? !d.party
+      ? partyWord
+      : contactsBad
+        ? contactsBad
+        : !partyReached
+          ? `a contact person with a phone or an email — ${d.party.displayName} has none on file`
+          : isCorp && !d.contacts[0]?.name?.trim()
+            ? "a contact person"
+            : null
+    : phoneBad
+      ? `the phone: ${phoneBad}`
+      : emailBad
+        ? "the email does not read as one"
+        : !reachable
+          ? "the caller's phone or email"
+          : !waAnswered
+            ? "whether the number is on WhatsApp"
+            : null;
+
+  const setUse = useMutation({
+    mutationFn: (useType: string) => updateEntryIntake(session!, entry.id, { useType, expectedVersion: entry.version }),
+    onSuccess: () => {
+      toast.success("Kind of stay recorded");
+      refresh();
+    },
+    onError: (e) => toastRefusal(e, "The kind of stay could not be changed"),
+  });
   const save = useMutation({
     mutationFn: () =>
-      updateEntryCaller(session!, entry.id, {
-        title: f.title || null,
-        firstName: f.firstName.trim() || null,
-        lastName: f.lastName.trim() || null,
-        phone: fullPhone || null,
-        email: f.email.trim() || null,
-        onWhatsApp: fullPhone ? f.onWhatsApp : null,
+      updateEntrySource(session!, entry.id, {
+        cameInAs: def.cameInAs,
+        sourceChannel: def.channel,
+        travelAgentId: partyKind === "TRAVEL_AGENT" ? (d.party?.id ?? null) : null,
+        corporateAccountId: partyKind === "CORPORATE" ? (d.party?.id ?? null) : null,
+        ratePackageId: d.party ? d.pkg : null,
+        corporateClientRef: isCorp ? d.ref.trim() || null : null,
+        // For a company the contact person IS the coordinator — named once, not twice.
+        corporateCoordinator: isCorp ? d.contacts[0]?.name?.trim() || null : null,
+        caller: partyKind ? null : { title: d.title || null, name: d.name.trim() || null, phone: d.phone || null, email: d.email.trim() || null, onWhatsApp: d.phone ? d.onWhatsApp : null },
+        partyContacts: partyKind ? d.contacts : null,
       }),
     onSuccess: () => {
       toast.success("The caller is on record");
@@ -125,6 +255,13 @@ export function TheCaller({ entry, editable }: { entry: EntryDetail; editable: b
     onError: (e) => toastRefusal(e, "The caller could not be saved"),
   });
 
+  const pkgItems = packages.data?.items ?? [];
+  const pkgOnRecordListed = !d.pkg || pkgItems.some((x) => x.id === d.pkg);
+  const pkg = pkgItems.find((x) => x.id === d.pkg) ?? null;
+  const pkgWord = !d.party ? "Published rates" : pkg ? pkg.name : d.pkg ? "a package no longer listed" : "the hotel's common package";
+  const plans = pkg ? [pkg.cpRate ? "CP" : null, pkg.mapLunchRate ? "MAP + lunch" : null, pkg.mapDinnerRate ? "MAP + dinner" : null, pkg.apRate ? "AP" : null].filter(Boolean).join(" · ") : "";
+  const kindWord = USE_TYPES.find(([k]) => k === entry.useType)?.[1] ?? null;
+  const recContacts = contactsOnRecord(entry);
   const name = callerNameOf(old ? { callerFirstName: g?.firstName, callerLastName: g?.lastName } : inq);
   const phone = old ? g?.phone : inq.callerPhone;
   const email = old ? g?.email : inq.callerEmail;
@@ -134,105 +271,154 @@ export function TheCaller({ entry, editable }: { entry: EntryDetail; editable: b
       title="The caller"
       summary={
         <>
-          <b>{name ?? "name to come"}</b>
-          {phone ? <> · {phone}</> : null}
-          {inq.callerOnWhatsApp === true ? " · on WhatsApp" : inq.callerOnWhatsApp === false ? " · not on WhatsApp" : null}
-          {email ? <> · {email}</> : null}
-          {!phone && !email && isOta ? <> · OTA booking</> : null}
-          {name ? null : <span className="meta"> · no name yet</span>}
+          <b>{recParty ? recParty.displayName : (name ?? "name to come")}</b>
+          {recParty ? (
+            recContacts.length ? <> · {recContacts.map((c) => titled(c.title, c.name)).join(", ")}</> : null
+          ) : (
+            <>
+              {phone ? <> · {phone}</> : null}
+              {inq.callerOnWhatsApp === true ? " · on WhatsApp" : inq.callerOnWhatsApp === false ? " · not on WhatsApp" : null}
+              {email ? <> · {email}</> : null}
+            </>
+          )}
+          <> · {channelDef(came ?? "DIRECT_VOICE")?.label}</>
+          {recParty ? null : <> · published rates</>}
+          {kindWord ? <> · {kindWord}</> : <span className="warn-ink"> · the kind of stay is not set</span>}
         </>
       }
     >
-      {old ? (
+      {old && !partyKind ? (
         <HelpHere label="About this caller">
           Recorded before callers were kept — the guest&rsquo;s own details are shown; saving records them as the caller.
         </HelpHere>
       ) : null}
       <div className="form2">
-        <div className="field">
-          <label>
-            Phone
-            {/* Either one will do, so the empty one stops asking once the other is in. */}
-            {!isOta && editable && (fullPhone || !f.email.trim()) ? <ReqMark /> : null}
-            {reachable ? (
-              <Help label="About the phone">{isOta && !fullPhone ? "An OTA booking — the phone is optional." : "Where the caller can be rung back."}</Help>
+        <div className="wide">
+          <CameInTicks value={d.came} disabled={!editable || save.isPending} onChange={pickCame} />
+        </div>
+        {partyKind ? (
+          <>
+            {editable ? (
+              <PartySearch kind={partyKind} party={d.party} setParty={setParty} />
+            ) : (
+              <div className="wide field">
+                <label>{partyKind === "CORPORATE" ? "Company" : "Travel agent"}</label>
+                <input className="input" readOnly value={d.party?.displayName ?? ""} placeholder="none on file" />
+              </div>
+            )}
+            {d.party ? (
+              <PartyContacts kind={partyKind} party={d.party} setParty={(pp) => setParty(pp)} contacts={d.contacts} setContacts={(contacts) => set({ contacts })} readOnly={!editable} />
+            ) : (
+              <span className="wide hint warn-ink">search {partyWord} by name</span>
+            )}
+          </>
+        ) : (
+          <>
+            <div className="field">
+              <label>
+                Phone
+                {/* Either one will do, so the empty one stops asking once the other is in. */}
+                {!isOta && editable && (d.phone || !d.email.trim()) ? <ReqMark /> : null}
+                {reachable ? <Help label="About the phone">{isOta && !d.phone ? "An OTA booking — the phone is optional." : "Where the caller can be rung back."}</Help> : null}
+              </label>
+              <PhoneField value={d.phone} readOnly={!editable} onChange={(v) => set({ phone: v })} />
+              {!reachable ? <span className="hint stop-ink">a phone or an email is needed</span> : null}
+            </div>
+            <div className="field">
+              <label>
+                Email
+                {!isOta && editable && (d.email.trim() || !d.phone) ? <ReqMark /> : null}
+                <Help label="About the email">Optional when there is a phone.</Help>
+              </label>
+              <input className={`input${emailBad ? " invalid" : ""}`} type="email" value={d.email} readOnly={!editable} placeholder="name@example.com" onChange={(e) => set({ email: e.target.value })} />
+              {emailBad ? <span className="hint stop-ink">that does not read as an email address</span> : null}
+            </div>
+            {d.phone ? (
+              <div className="wide field">
+                <label>On WhatsApp?</label>
+                <Choice
+                  options={[
+                    ["YES", "Yes"],
+                    ["NO", "No"],
+                  ]}
+                  value={d.onWhatsApp === null ? null : d.onWhatsApp ? "YES" : "NO"}
+                  disabled={!editable}
+                  onChange={(v) => set({ onWhatsApp: v === "YES" })}
+                />
+                {d.onWhatsApp === null ? <span className="hint warn-ink">ask — the quote and the confirmation can go there</span> : null}
+              </div>
             ) : null}
-          </label>
-          {editable ? (
-            <PhoneInput code={f.code} setCode={(v) => set({ code: v })} number={f.number} setNumber={(v) => set({ number: v })} />
-          ) : (
-            <input className="input" readOnly value={phone ?? ""} placeholder="none given" />
-          )}
-          {!reachable ? <span className="hint stop-ink">a phone or an email is needed</span> : null}
-        </div>
+            <div className="wide">
+              <PersonName title={d.title} name={d.name} readOnly={!editable} onTitle={(title) => set({ title })} onName={(v) => set({ name: v })} namePlaceholder={editable ? "can wait for Wrap up" : undefined} />
+            </div>
+          </>
+        )}
         <div className="field">
           <label>
-            Email
-            {!isOta && editable && (f.email.trim() || !fullPhone) ? <ReqMark /> : null}
-            <Help label="About the email">Optional when there is a phone.</Help>
+            Rate package
+            <Help label="About the rate package">{d.party ? "The party's own rates — the room and the meal plans." : "A walk-in is priced from the house's published rates."}</Help>
           </label>
-          <input
-            className={`input${emailBad ? " invalid" : ""}`}
-            type="email"
-            value={f.email}
-            readOnly={!editable}
-            placeholder="name@example.com"
-            onChange={(e) => set({ email: e.target.value })}
-          />
-          {emailBad ? <span className="hint stop-ink">that does not read as an email address</span> : null}
-        </div>
-        {fullPhone ? (
-          <div className="wide field">
-            <label>On WhatsApp?</label>
-            <Choice
-              options={[
-                ["YES", "Yes"],
-                ["NO", "No"],
-              ]}
-              value={f.onWhatsApp === null ? null : f.onWhatsApp ? "YES" : "NO"}
-              disabled={!editable}
-              onChange={(v) => set({ onWhatsApp: v === "YES" })}
-            />
-            {f.onWhatsApp === null ? <span className="hint warn-ink">ask — the quote and the confirmation can go there</span> : null}
-          </div>
-        ) : null}
-        <div className="wide" style={{ display: "grid", gridTemplateColumns: "120px minmax(0,1fr) minmax(0,1fr)", gap: "var(--s3) var(--s4)" }}>
-          <div className="field">
-            <label>Title</label>
-            <select className="input" value={f.title} disabled={!editable} onChange={(e) => set({ title: e.target.value })}>
-              {CALLER_TITLES.map((t) => (
-                <option key={t} value={t}>
-                  {t || "—"}
+          {editable && d.party && pkgItems.length ? (
+            <select className="input" value={d.pkg ?? ""} onChange={(e) => set({ pkg: e.target.value || null })}>
+              {pkgOnRecordListed ? null : <option value={d.pkg ?? ""}>a package no longer listed (on record)</option>}
+              <option value="">the hotel&rsquo;s common package</option>
+              {pkgItems.map((pp) => (
+                <option key={pp.id} value={pp.id}>
+                  {pp.name}
+                  {pp.isDefault ? " · their default" : ""}
                 </option>
               ))}
             </select>
+          ) : (
+            <input className="input" readOnly value={pkgWord} />
+          )}
+        </div>
+        <div className="field">
+          <label>
+            Meal plans priced
+            <Help label="About meal plans">Each room&rsquo;s plan is chosen at Negotiation.</Help>
+          </label>
+          <input className="input" readOnly value={plans || (d.party ? "none in the package" : "from the house tariff")} />
+        </div>
+        {isCorp ? (
+          <div className="wide field">
+            <label>Their PO or authorisation</label>
+            <input className="input" readOnly={!editable} value={d.ref} maxLength={200} placeholder="none given" onChange={(e) => set({ ref: e.target.value })} />
           </div>
-          <div className="field">
-            <label>First name</label>
-            <input className="input" value={f.firstName} readOnly={!editable} placeholder={bookedByParty(inq) ? undefined : "can wait for Wrap up"} onChange={(e) => set({ firstName: e.target.value })} />
-          </div>
-          <div className="field">
-            <label>Last name</label>
-            <input className="input" value={f.lastName} readOnly={!editable} placeholder={bookedByParty(inq) ? undefined : "can wait for Wrap up"} onChange={(e) => set({ lastName: e.target.value })} />
-          </div>
+        ) : null}
+        <div className="wide field">
+          <label>
+            What kind of stay
+            {editable ? <Help label="About the kind of stay">Saved as soon as it is picked.</Help> : null}
+          </label>
+          <Choice
+            options={USE_TYPES}
+            value={entry.useType as (typeof USE_TYPES)[number][0] | null}
+            disabled={!editable || setUse.isPending}
+            onChange={(v) => v !== entry.useType && setUse.mutate(v)}
+          />
         </div>
       </div>
       {editable && dirty ? (
-        <div className="row-acts" style={{ marginTop: 10 }}>
-          <Button className="go" compact state={save.isPending ? "working" : reason ? "inert" : "default"} title={reason ?? undefined} workingLabel="Saving…" onClick={() => save.mutate()}>
+        <div className="row-acts" style={{ marginTop: 10, alignItems: "center" }}>
+          <span className="warn-ink sm">
+            <b>Changed — save it, or the booking keeps what was recorded</b>
+          </span>
+          <span style={{ flex: 1 }} />
+          {reason ? <span className="meta warn-ink">first: {reason}</span> : null}
+          <Button kind="quiet" compact onClick={() => setD(seed())}>
+            Put it back
+          </Button>
+          <Button className="go" state={save.isPending ? "working" : reason ? "inert" : "default"} title={reason ?? undefined} workingLabel="Saving…" onClick={() => save.mutate()}>
             Save the caller
           </Button>
-          <Button kind="quiet" compact onClick={() => setF(seed())}>
-            Undo
-          </Button>
-          {reason ? <span className="meta warn-ink">first: {reason}</span> : null}
         </div>
       ) : null}
     </StepCard>
   );
 }
 
-/* ------------------------------------------------------------------ 5 · wrap up */
+/* ------------------------------------------------------------------ wrap up */
 
 /**
  * The guest staying is the caller, or someone else (2026-10-28, operator: "someone on file and
@@ -280,12 +466,14 @@ const asSummary = (g: GuestOnFile): GuestProfileSummary => ({
 export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; editable: boolean; onSaved: () => void }) {
   const { session } = useSession();
   const refresh = useRefreshEntry(entry.id);
+  const phoneRules = usePhoneRules();
   const inq = (entry.inquiry ?? {}) as Inq;
   const named = entry.guestProfile ?? null;
   const contact = entry as EntryDetail & { contactPersonName?: string | null; contactPersonPhone?: string | null };
   const partyName = inq.travelAgent?.displayName ?? inq.corporateAccount?.displayName ?? null;
   const byParty = bookedByParty(inq);
-  const callerHasName = byParty || !!(inq.callerFirstName?.trim() && inq.callerLastName?.trim());
+  // One name is a name (2026-11-05, operator: "sometimes people just have one name").
+  const callerHasName = byParty || !!inq.callerFirstName?.trim();
 
   // The guest staying: the caller by default; once named, shown as named until "Change".
   const [changing, setChanging] = useState(false);
@@ -295,21 +483,18 @@ export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; edita
   const [nationality, setNationality] = useState(NATIONALITIES[0]);
   // The caller's name, when it was not taken at the start.
   const [cTitle, setCTitle] = useState("");
-  const [cFirst, setCFirst] = useState("");
-  const [cLast, setCLast] = useState("");
+  const [cName, setCName] = useState("");
   // Someone else: typed, or a guest on file picked (`linked`), or kept as new despite one on file.
   const [nTitle, setNTitle] = useState("");
-  const [nFirst, setNFirst] = useState("");
-  const [nLast, setNLast] = useState("");
-  const [nCode, setNCode] = useState(PHONE_CODES[0]);
-  const [nNumber, setNNumber] = useState("");
+  const [nName, setNName] = useState("");
+  const [nPhone, setNPhone] = useState("");
   const [nEmail, setNEmail] = useState("");
   const [linked, setLinked] = useState<GuestOnFile | null>(null);
   const [keepNew, setKeepNew] = useState(false);
   const [nameAsk, setNameAsk] = useState<NameAsk | null>(null);
 
   // The guests on file with the phone or email typed so far, read while the desk types.
-  const typedDigits = nNumber.replace(/\D/g, "");
+  const typedDigits = nationalDigits(phoneRules, nPhone);
   const typedEmail = nEmail.trim();
   const [onFileQ, setOnFileQ] = useState({ phone: "", email: "" });
   useEffect(() => {
@@ -357,36 +542,34 @@ export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; edita
   const arrivingWasTheGuest =
     !onRecordName.trim() ||
     (!!named && (sameWords(onRecordName, guestFullName({ title: named.title, firstName: named.firstName ?? "", lastName: named.lastName ?? "" })) || sameWords(onRecordName, `${named.firstName ?? ""} ${named.lastName ?? ""}`)));
-  const callerNameNow = callerNameOf(inq) ?? (cFirst.trim() && cLast.trim() ? [cTitle, cFirst.trim(), cLast.trim()].filter(Boolean).join(" ") : "");
+  const callerNameNow = callerNameOf(inq) ?? titled(cTitle, cName);
   const arrivingFollowsCaller = choosing && choice === "CALLER" && arrivingWasTheGuest;
   const seedName = arrivingFollowsCaller ? callerNameNow || onRecordName : onRecordName;
   const seedPhone = arrivingFollowsCaller ? (inq.callerPhone ?? "") : onRecordPhone;
-  const [arrName, setArrName] = useState(seedName);
+  const [arrTitle, setArrTitle] = useState(() => splitTitle(seedName).title);
+  const [arrName, setArrName] = useState(() => splitTitle(seedName).name);
   const [arrPhone, setArrPhone] = useState(seedPhone);
   useEffect(() => {
-    setArrName(seedName);
+    const t = splitTitle(seedName);
+    setArrTitle(t.title);
+    setArrName(t.name);
     setArrPhone(seedPhone);
   }, [seedName, seedPhone]);
 
   /** Name a guest on file: their record fills the form. */
   const linkGuest = (g: GuestOnFile) => {
-    const ph = splitStoredPhone(g.phone);
     setLinked(g);
     setKeepNew(false);
     setNTitle(g.title ?? "");
-    setNFirst(g.firstName);
-    setNLast(g.lastName);
-    if (g.phone) {
-      setNCode(ph.code);
-      setNNumber(ph.number);
-    }
+    setNName(fullNameOf(g.firstName, g.lastName));
+    if (g.phone) setNPhone(g.phone);
     if (g.email) setNEmail(g.email);
     if (g.nationality) setNationality(g.nationality);
   };
   /** A row picked from the dropdown: a different name already typed is asked about first. */
   const pickOnFile = (g: GuestOnFile) => {
-    const typed = { firstName: nFirst.trim(), lastName: nLast.trim() };
-    if (typed.firstName && typed.lastName && !sameGuestName(typed, g)) {
+    const typed = { firstName: nName.trim(), lastName: "" };
+    if (typed.firstName && !sameGuestName(typed, g)) {
       setNameAsk({ mode: "OTHER", typed: { title: nTitle || null, ...typed }, matches: [g], onSave: false });
       return;
     }
@@ -399,41 +582,46 @@ export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; edita
   // A contact changed after "keep the new name" is a new question.
   useEffect(() => setKeepNew(false), [typedDigits, typedEmail]);
 
-  const callerNameTyped = !!(cFirst.trim() && cLast.trim());
-  const callerNameDirty = !callerHasName && !!(cFirst.trim() || cLast.trim() || cTitle);
+  const callerNameTyped = !!cName.trim();
+  const callerNameDirty = !callerHasName && !!(cName.trim() || cTitle);
   const nEmailBad = nEmail.trim() !== "" && !EMAIL_RE.test(nEmail.trim());
+  const nPhoneBad = problemOfPhone(phoneRules, nPhone);
   const guestReason = !choosing
     ? null
     : choice === "CALLER"
       ? callerHasName || callerNameTyped
         ? null
-        : "the caller's first and last name — the guest record is made from them"
-      : !nFirst.trim() || !nLast.trim()
-        ? "the guest's first and last name"
-        : nEmailBad
-          ? "an email that reads as one"
-          : null;
+        : "the caller's name — the guest record is made from it"
+      : !nName.trim()
+        ? "the guest's name"
+        : nPhoneBad
+          ? `the guest's phone: ${nPhoneBad}`
+          : nEmailBad
+            ? "an email that reads as one"
+            : null;
   // Someone else is the one arriving — the backend fills "who is arriving" from them.
   const askArriving = !(choosing && choice === "OTHER");
-  const arrivingDirty = askArriving && (arrName.trim() !== seedName.trim() || arrPhone.trim() !== seedPhone.trim());
+  const arrivingDirty = askArriving && (titled(arrTitle, arrName) !== seedName.trim() || arrPhone.trim() !== seedPhone.trim());
+  const arrivingBad = askArriving ? problemOfPhone(phoneRules, arrPhone) : null;
+  const saveReason = guestReason ?? (arrivingBad ? `who is arriving: ${arrivingBad}` : null);
   const dirty = choosing || callerNameDirty || arrivingDirty;
   useFlowUnsaved("wrap", editable && dirty, "Changes to wrap up saved");
 
   const guestBody = (over?: { useOnFile?: string; keepNewName?: boolean }): SetGuestBody => {
-    const phone = joinPhone(nCode, nNumber) || null;
+    const phone = nPhone || null;
     const email = nEmail.trim() || null;
     if (choice === "CALLER") {
       return over?.useOnFile
         ? { mode: "EXISTING", guestProfileId: over.useOnFile, arrivingIsGuest: arrivingFollowsCaller }
         : { mode: "CALLER", nationality, keepNewName: over?.keepNewName, arrivingIsGuest: arrivingFollowsCaller };
     }
-    const typed = { firstName: nFirst.trim(), lastName: nLast.trim() };
+    const typed = { firstName: nName.trim(), lastName: "" };
     const onFileId = over?.useOnFile ?? (linked && sameGuestName(typed, linked) ? linked.id : null);
     if (onFileId) return { mode: "EXISTING", guestProfileId: onFileId, phone, email, arrivingIsGuest: true };
     return {
       mode: "NEW",
       title: nTitle || null,
-      ...typed,
+      name: nName.trim(),
       nationality,
       phone,
       email,
@@ -447,7 +635,7 @@ export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; edita
       const done: string[] = [];
       const notes: string[] = [];
       if (callerNameDirty) {
-        await updateEntryCaller(session!, entry.id, { title: cTitle || null, firstName: cFirst.trim() || null, lastName: cLast.trim() || null });
+        await updateEntryCaller(session!, entry.id, { title: cTitle || null, name: cName.trim() || null });
         done.push("the caller's name");
       }
       if (choosing) {
@@ -461,7 +649,7 @@ export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; edita
       }
       if (arrivingDirty) {
         // The version moved if the guest was just named; read it fresh rather than refuse on a stale one.
-        await updateEntryIntake(session!, entry.id, { contactPersonName: arrName.trim(), contactPersonPhone: arrPhone.trim() });
+        await updateEntryIntake(session!, entry.id, { contactPersonName: titled(arrTitle, arrName), contactPersonPhone: arrPhone.trim() });
         done.push("who is arriving");
       }
       return { done, notes };
@@ -470,13 +658,11 @@ export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; edita
       toast.success(done.length ? `On record: ${done.join(", ")}` : "Nothing to save", notes.length ? { description: notes.join(" · ") } : undefined);
       setChanging(false);
       setCTitle("");
-      setCFirst("");
-      setCLast("");
+      setCName("");
       // The form starts empty next time: the next person named must not take this one's number.
       setNTitle("");
-      setNFirst("");
-      setNLast("");
-      setNNumber("");
+      setNName("");
+      setNPhone("");
       setNEmail("");
       setLinked(null);
       setKeepNew(false);
@@ -534,7 +720,7 @@ export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; edita
           : null
       : null;
   const reachable = hasAnyContact(entry);
-  const callerWord = callerNameOf(inq) ?? (callerNameTyped ? `${cFirst.trim()} ${cLast.trim()}` : null);
+  const callerWord = callerNameOf(inq) ?? (callerNameTyped ? titled(cTitle, cName) : null);
   const typedNameNow = titledName({ title: nameAsk?.typed.title ?? null, firstName: nameAsk?.typed.firstName ?? "", lastName: nameAsk?.typed.lastName ?? "" });
   return (
     <StepCard
@@ -547,25 +733,8 @@ export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; edita
       {/* the caller's name, when it was not taken at the start */}
       {!callerHasName && editable ? (
         <div className="form2" style={{ marginBottom: 12 }}>
-          <div className="wide" style={{ display: "grid", gridTemplateColumns: "120px minmax(0,1fr) minmax(0,1fr)", gap: "var(--s3) var(--s4)" }}>
-            <div className="field">
-              <label>Caller · title</label>
-              <select className="input" value={cTitle} onChange={(e) => setCTitle(e.target.value)}>
-                {CALLER_TITLES.map((t) => (
-                  <option key={t} value={t}>
-                    {t || "—"}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="field">
-              <label>Caller · first name</label>
-              <input className="input" value={cFirst} onChange={(e) => setCFirst(e.target.value)} />
-            </div>
-            <div className="field">
-              <label>Caller · last name</label>
-              <input className="input" value={cLast} onChange={(e) => setCLast(e.target.value)} />
-            </div>
+          <div className="wide">
+            <PersonName title={cTitle} name={cName} onTitle={setCTitle} onName={setCName} nameLabel="The caller's name" />
           </div>
           <span className="wide hint warn-ink">not taken at the start — ask the caller&rsquo;s name now</span>
         </div>
@@ -649,32 +818,15 @@ export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; edita
               </div>
             ) : (
               <div className="form2" style={{ marginTop: 10 }}>
-                <div className="wide" style={{ display: "grid", gridTemplateColumns: "120px minmax(0,1fr) minmax(0,1fr)", gap: "var(--s3) var(--s4)" }}>
-                  <div className="field">
-                    <label>Title</label>
-                    <select className="input" value={nTitle} onChange={(e) => setNTitle(e.target.value)}>
-                      {CALLER_TITLES.map((t) => (
-                        <option key={t} value={t}>
-                          {t || "—"}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="field">
-                    <label>First name</label>
-                    <input className="input" aria-label="Guest's first name" value={nFirst} onChange={(e) => setNFirst(e.target.value)} />
-                  </div>
-                  <div className="field">
-                    <label>Last name</label>
-                    <input className="input" aria-label="Guest's last name" value={nLast} onChange={(e) => setNLast(e.target.value)} />
-                  </div>
+                <div className="wide">
+                  <PersonName title={nTitle} name={nName} onTitle={setNTitle} onName={setNName} ariaLabel="Guest's name" required={!nName.trim()} />
                 </div>
                 <div className="field">
                   <label>
                     Their phone · optional
                     <Help label="About the phone and email">Typing a phone or an email lists the guests already on file with it — pick one to name them.</Help>
                   </label>
-                  <PhoneInput code={nCode} setCode={setNCode} number={nNumber} setNumber={setNNumber} ariaLabel="Guest's phone" />
+                  <PhoneField value={nPhone} onChange={setNPhone} ariaLabel="Guest's phone" />
                 </div>
                 <div className="field">
                   <label>Their email · optional</label>
@@ -726,15 +878,14 @@ export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; edita
       {askArriving ? (
         <div className="form2">
           <div className="field">
-            <label>Who is arriving · name</label>
-            <input className="input" value={arrName} readOnly={!editable} placeholder="who leads the party on the day" onChange={(e) => setArrName(e.target.value)} />
+            <PersonName title={arrTitle} name={arrName} readOnly={!editable} onTitle={setArrTitle} onName={setArrName} nameLabel="Who is arriving" namePlaceholder="who leads the party on the day" />
           </div>
           <div className="field">
             <label>
               Their phone
               <Help label="About their phone">Needed before arrival.</Help>
             </label>
-            <input className="input" value={arrPhone} readOnly={!editable} placeholder="+975 …" onChange={(e) => setArrPhone(e.target.value)} />
+            <PhoneField value={arrPhone} readOnly={!editable} onChange={setArrPhone} ariaLabel="Who is arriving's phone" />
             {arrivingPhoneIsOthers ? <span className="hint warn-ink">{arrivingPhoneIsOthers}</span> : null}
           </div>
           {inq.partyContactName ? (
@@ -758,14 +909,14 @@ export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; edita
         <div className="row-acts" style={{ marginTop: 10 }}>
           <Button
             className="go"
-            state={save.isPending ? "working" : guestReason ? "inert" : "default"}
-            title={guestReason ?? undefined}
+            state={save.isPending ? "working" : saveReason ? "inert" : "default"}
+            title={saveReason ?? undefined}
             workingLabel="Saving…"
             onClick={() => save.mutate(undefined)}
           >
             Save wrap up
           </Button>
-          {guestReason ? <span className="meta warn-ink">first: {guestReason}</span> : null}
+          {saveReason ? <span className="meta warn-ink">first: {saveReason}</span> : null}
         </div>
       ) : null}
 

@@ -11,6 +11,8 @@
  * Figures come from the backend only: the advance from payment-status, the proforma as the
  * backend composes it. Nothing is added up here.
  */
+import { PersonName } from "@/components/ds/person-name";
+import { joinTitled, splitTitle } from "@/lib/ds/person";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -1651,8 +1653,13 @@ function CoordinatorCard({ entry, editable, inq, onChanged }: { entry: EntryDeta
         >
           <div className="form2">
             <div className="field">
-              <label>Name</label>
-              <input className="input" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
+              <PersonName
+                title={splitTitle(name).title}
+                name={splitTitle(name).name}
+                onTitle={(t) => setName(joinTitled(t, splitTitle(name).name))}
+                onName={(n) => setName(joinTitled(splitTitle(name).title, n))}
+                autoFocus
+              />
             </div>
             <div className="field">
               <label>Their authority</label>

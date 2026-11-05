@@ -72,7 +72,7 @@ import {
 } from "./kit";
 import { AddReturnStay, TripStays } from "@/components/ds/workspace/return-stay";
 import { enumerateNights, useRoomSelection } from "./use-room-selection";
-import { CHANNEL_OPTIONS, PartySearch, RoomCountField, cameInAsOf, channelDef, type ChannelKey } from "./new-inquiry-parts";
+import { RoomCountField } from "./new-inquiry-parts";
 import { TheCaller, WrapUp } from "./s1-caller";
 import { cleanPicks, usePickPricing, type BillNight } from "./s1-bill";
 import { RoomsByType, savedBookingRooms, type TypeDraft } from "./s1-by-type";
@@ -85,24 +85,6 @@ import { DateInput } from "@/components/ds/date-input";
 /* ------------------------------------------------------------------ vocabulary */
 
 const WEEKDAY = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-
-const CAME_IN_AS = [
-  ["WALK_IN", "Walk-in"],
-  ["DIRECT_VOICE", "Direct voice"],
-  ["DIRECT_ONLINE", "Direct online"],
-  ["OTA", "OTA"],
-  ["AGENT", "Travel agent"],
-  ["CORPORATE", "Corporation"],
-  ["GROUP", "Group / MICE"],
-] as const;
-
-const KINDS_OF_STAY = [
-  ["LEISURE", "Leisure"],
-  ["CORPORATE", "Corporate"],
-  ["GROUP", "Group"],
-  ["CONFERENCE", "Conference"],
-  ["APARTMENT", "Apartment"],
-] as const;
 
 const BED_WORD: Record<string, string> = {
   KING: "King",
@@ -127,20 +109,7 @@ function readPricing(p: unknown): IndicativePricing | null {
     : null;
 }
 
-type InquiryScalars = {
-  notes?: string | null;
-  sourceChannel?: string | null;
-  cameInAs?: string | null;
-  travelAgentId?: string | null;
-  corporateAccountId?: string | null;
-  ratePackageId?: string | null;
-  corporateClientRef?: string | null;
-  corporateCoordinator?: string | null;
-};
-
 type InquiryRecord = {
-  travelAgent?: { displayName?: string | null } | null;
-  corporateAccount?: { displayName?: string | null } | null;
   duplicateFlags?: unknown[];
 };
 
@@ -165,7 +134,6 @@ export function S1Inquiry({
 }) {
   const { session } = useSession();
   const refresh = useRefreshEntry(entry.id);
-  const inq = (entry.inquiry ?? {}) as InquiryScalars;
   const editable =
     !past && entry.currentStage === "S1" && entry.status === "ACTIVE";
 
@@ -175,10 +143,6 @@ export function S1Inquiry({
     enabled: !!session && !!entry.inquiryId,
   });
   const inquiryRec = (inquiryQuery.data ?? null) as InquiryRecord | null;
-  const partyName =
-    inquiryRec?.travelAgent?.displayName ??
-    inquiryRec?.corporateAccount?.displayName ??
-    null;
 
   const rooms = useQuery({
     queryKey: ["rooms"],
@@ -188,16 +152,10 @@ export function S1Inquiry({
 
   return (
     <StepCanvas past={past}>
-      {/* One column, in the order the call goes (2026-10-10): who the guest is, who is asking
-          for them, what they want, what the house has and what it costs, then what is left. */}
+      {/* One column, in the order the call goes (2026-10-10): who rang or who booked, what they want,
+          what the house has and what it costs, then what is left. */}
       <div className="stack">
         <TheCaller entry={entry} editable={editable} />
-        <WhoIsAsking
-          entry={entry}
-          inq={inq}
-          partyName={partyName}
-          editable={editable}
-        />
         <TheStay
           entry={entry}
           editable={editable}
@@ -226,250 +184,6 @@ export function S1Inquiry({
     </StepCanvas>
   );
 }
-
-/* ------------------------------------------------------------------ who is asking */
-
-function WhoIsAsking({
-  entry,
-  inq,
-  partyName,
-  editable,
-}: {
-  entry: EntryDetail;
-  inq: InquiryScalars;
-  partyName: string | null;
-  editable: boolean;
-}) {
-  const { session } = useSession();
-  const refresh = useRefreshEntry(entry.id);
-  const came = cameInAsOf(inq.sourceChannel, inq.notes, entry.useType, inq.cameInAs);
-  const setUse = useMutation({
-    mutationFn: (useType: string) =>
-      updateEntryIntake(session!, entry.id, {
-        useType,
-        expectedVersion: entry.version,
-      }),
-    onSuccess: () => {
-      toast.success("Kind of stay recorded");
-      refresh();
-    },
-    onError: (e) => toastRefusal(e, "The kind of stay could not be changed"),
-  });
-
-  /* ---- what is on record ---- */
-  const recParty = (entry.inquiry?.travelAgent ?? entry.inquiry?.corporateAccount ?? null) as LookupPartyMatch | null;
-  const recPkg = inq.ratePackageId ?? null;
-  const recRef = inq.corporateClientRef ?? "";
-  const recCoord = inq.corporateCoordinator ?? "";
-
-  /* ---- the draft (2026-10-12: edited here, in the booking — the separate edit screen is gone) ---- */
-  const seed = () => ({ came, party: recParty, pkg: recPkg, ref: recRef, coord: recCoord });
-  const [d, setD] = useState(seed);
-  const stamp = [inq.cameInAs, inq.sourceChannel, inq.travelAgentId, inq.corporateAccountId, recPkg, recRef, recCoord].join("|");
-  useEffect(() => setD(seed()), [stamp]); // eslint-disable-line react-hooks/exhaustive-deps
-  const def = channelDef(d.came);
-  const partyKind = def?.party ?? null;
-  const owner = d.party && partyKind ? (partyKind === "TRAVEL_AGENT" ? { travelAgentId: d.party.id } : { corporateAccountId: d.party.id }) : null;
-  const packages = useQuery({
-    queryKey: ["lookup", "rate-packages", owner],
-    queryFn: () => listRatePackagesLookup(session!, owner!),
-    enabled: !!session && !!owner,
-  });
-  // A new party starts on its own default package; the party on record keeps the package it was
-  // quoted on, even one since superseded.
-  useEffect(() => {
-    if (!owner) return;
-    if (d.party?.id === recParty?.id) return;
-    const items = packages.data?.items;
-    if (!items) return;
-    if (d.pkg && items.some((x) => x.id === d.pkg)) return;
-    setD((x) => ({ ...x, pkg: items.find((pp) => pp.isDefault)?.id ?? null }));
-  }, [packages.data, owner?.travelAgentId, owner?.corporateAccountId]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const pickCame = (k: ChannelKey) => {
-    if (k === d.came) return;
-    const nextKind = channelDef(k)?.party ?? null;
-    // A party belongs to one kind — a travel agent must never ride into a company booking.
-    setD((x) => ({ ...x, came: k, party: nextKind && nextKind === partyKind ? x.party : null, pkg: nextKind && nextKind === partyKind ? x.pkg : null }));
-  };
-  const setParty = (pp: LookupPartyMatch | null) => {
-    setD((x) => {
-      const next = { ...x, party: pp, pkg: pp && pp.id === recParty?.id ? recPkg : null };
-      // A company's contract and coordinator come with it, unless the desk has typed its own.
-      if (pp && partyKind === "CORPORATE") {
-        if (!x.ref.trim()) next.ref = pp.contractRefs?.[0] ?? "";
-        if (!x.coord.trim()) next.coord = pp.coordinators?.[0]?.name ?? "";
-      }
-      return next;
-    });
-  };
-
-  const isCorp = partyKind === "CORPORATE";
-  const dirty =
-    d.came !== came ||
-    (d.party?.id ?? null) !== (recParty?.id ?? null) ||
-    (d.party ? d.pkg : null) !== (recParty ? recPkg : null) ||
-    (isCorp && (d.ref.trim() !== recRef || d.coord.trim() !== recCoord));
-  useFlowUnsaved("asking", editable && dirty, "Changes to who is asking saved");
-  const save = useMutation({
-    mutationFn: () =>
-      updateEntrySource(session!, entry.id, {
-        cameInAs: def!.cameInAs,
-        sourceChannel: def!.channel,
-        travelAgentId: partyKind === "TRAVEL_AGENT" ? d.party?.id ?? null : null,
-        corporateAccountId: partyKind === "CORPORATE" ? d.party?.id ?? null : null,
-        ratePackageId: d.party ? d.pkg : null,
-        corporateClientRef: isCorp ? d.ref.trim() || null : null,
-        corporateCoordinator: isCorp ? d.coord.trim() || null : null,
-      }),
-    onSuccess: () => {
-      toast.success("Who is asking saved");
-      refresh([["inquiry", entry.inquiryId]]);
-    },
-    onError: (e) => toastRefusal(e, "Who is asking could not be changed"),
-  });
-
-  const pkgItems = packages.data?.items ?? [];
-  const pkgOnRecordListed = !d.pkg || pkgItems.some((x) => x.id === d.pkg);
-  const pkg = pkgItems.find((x) => x.id === d.pkg) ?? null;
-  const pkgWord = !d.party
-    ? "Published rates"
-    : pkg
-      ? pkg.name
-      : d.pkg
-        ? "a package no longer listed"
-        : "the hotel's common package";
-  const plans = pkg
-    ? [pkg.cpRate ? "CP" : null, pkg.mapLunchRate ? "MAP + lunch" : null, pkg.mapDinnerRate ? "MAP + dinner" : null, pkg.apRate ? "AP" : null]
-        .filter(Boolean)
-        .join(" · ")
-    : "";
-  const cameWord = CAME_IN_AS.find(([k]) => k === came)?.[1] ?? "—";
-  const kindWord = KINDS_OF_STAY.find(([k]) => k === entry.useType)?.[1] ?? null;
-  const recPkgWord = recParty ? (recPkg ? (pkgItems.find((x) => x.id === recPkg)?.name ?? "their package") : "their default package") : "Published rates";
-  const saveBlock = !def ? "say how the booking came in" : !dirty ? "nothing changed" : null;
-
-  return (
-    <StepCard
-      title="Who is asking"
-      flow="asking"
-      flowAfter="caller"
-      summary={
-        <>
-          <b>{cameWord}</b>
-          {partyName ? <> — {partyName}</> : null} · {recPkgWord}
-          {kindWord ? <> · {kindWord}</> : <span className="warn-ink"> · the kind of stay is not set</span>}
-        </>
-      }
-    >
-      <div className="form2">
-        <div className="wide field">
-          <label>
-            Came in as
-            <Help label="About Came in as">It decides what the rest of this section asks for.</Help>
-          </label>
-          <Choice options={CHANNEL_OPTIONS} value={d.came} disabled={!editable || save.isPending} onChange={pickCame} />
-        </div>
-        {partyKind ? (
-          editable ? (
-            <PartySearch kind={partyKind} party={d.party} setParty={setParty} />
-          ) : (
-            <div className="wide field">
-              <label>{partyKind === "CORPORATE" ? "Company" : "Travel agent"}</label>
-              <input className="input" readOnly value={partyName ?? ""} placeholder="none on file" />
-            </div>
-          )
-        ) : null}
-        {isCorp ? (
-          <>
-            <div className="field">
-              <label>Their PO or authorisation</label>
-              <input
-                className="input"
-                readOnly={!editable}
-                value={d.ref}
-                maxLength={200}
-                placeholder="none given"
-                onChange={(e) => setD((x) => ({ ...x, ref: e.target.value }))}
-              />
-            </div>
-            <div className="field">
-              <label>Their coordinator</label>
-              <input
-                className="input"
-                readOnly={!editable}
-                value={d.coord}
-                maxLength={200}
-                placeholder="none given"
-                onChange={(e) => setD((x) => ({ ...x, coord: e.target.value }))}
-              />
-            </div>
-          </>
-        ) : null}
-        <div className="field">
-          <label>
-            Rate package
-            <Help label="About the rate package">
-              {d.party ? "The party's own rates — the room and the meal plans." : "A walk-in is priced from the house's published rates."}
-            </Help>
-          </label>
-          {editable && d.party && pkgItems.length ? (
-            <select className="input" value={d.pkg ?? ""} onChange={(e) => setD((x) => ({ ...x, pkg: e.target.value || null }))}>
-              {pkgOnRecordListed ? null : <option value={d.pkg ?? ""}>a package no longer listed (on record)</option>}
-              <option value="">the hotel&rsquo;s common package</option>
-              {pkgItems.map((pp) => (
-                <option key={pp.id} value={pp.id}>
-                  {pp.name}
-                  {pp.isDefault ? " · their default" : ""}
-                </option>
-              ))}
-            </select>
-          ) : (
-            <input className="input" readOnly value={pkgWord} />
-          )}
-        </div>
-        <div className="field">
-          <label>
-            Meal plans priced
-            <Help label="About meal plans">Each room&rsquo;s plan is chosen at Negotiation.</Help>
-          </label>
-          <input className="input" readOnly value={plans || (d.party ? "none in the package" : "from the house tariff")} />
-        </div>
-        <div className="wide field">
-          <label>
-            What kind of stay
-            {editable ? <Help label="About the kind of stay">Saved as soon as it is picked.</Help> : null}
-          </label>
-          <Choice
-            options={KINDS_OF_STAY}
-            value={entry.useType as (typeof KINDS_OF_STAY)[number][0] | null}
-            disabled={!editable || setUse.isPending}
-            onChange={(v) => v !== entry.useType && setUse.mutate(v)}
-          />
-        </div>
-      </div>
-      {editable ? (
-        <div className="row-acts" style={{ marginTop: 10, alignItems: "center" }}>
-          {dirty ? (
-            <span className="warn-ink sm">
-              <b>Changed — save it, or the booking keeps what was recorded</b>
-            </span>
-          ) : null}
-          <span style={{ flex: 1 }} />
-          {dirty ? (
-            <Button kind="quiet" compact onClick={() => setD(seed())}>
-              Put it back
-            </Button>
-          ) : null}
-          <Button className="go" state={save.isPending ? "working" : saveBlock ? "inert" : "default"} reason={saveBlock ?? undefined} workingLabel="Saving…" onClick={() => save.mutate()}>
-            Save who is asking
-          </Button>
-        </div>
-      ) : null}
-    </StepCard>
-  );
-}
-
 
 /* ------------------------------------------------------------------ the stay */
 

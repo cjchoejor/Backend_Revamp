@@ -368,13 +368,13 @@ export function callerReachable(entry: EntryDetail): boolean {
 export function s1Readiness(entry: EntryDetail): Precondition[] {
   const configs = currentPassConfigs(entry);
   const preferred = configs.find((c) => c.optionSelected != null && !c.isStale);
-  // In the order of the five sections (2026-10-10, the boss's journey mockup): the caller, who is
-  // asking, the stay, the house, wrap up. The guest STAYING is named at Wrap up (2026-10-12) — the
-  // caller is often an agent or an assistant — and the move to Negotiation needs one.
+  // In the order of the four sections: the caller (with how they came in, one section since
+  // 2026-11-05), the stay, the house, wrap up. The guest STAYING is named at Wrap up (2026-10-12) —
+  // the caller is often an agent or an assistant — and the move to Negotiation needs one.
+  // How they came in is no line of its own: nothing ticked is Direct voice.
   return [
     { label: "The caller · a phone or an email", met: callerReachable(entry), card: "caller" },
-    { label: "How they came in", met: !!(entry.inquiry as { sourceChannel?: string | null } | undefined)?.sourceChannel, card: "asking" },
-    { label: "What kind of stay", met: !!entry.useType, card: "asking" },
+    { label: "What kind of stay", met: !!entry.useType, card: "caller" },
     { label: "Stay dates set", met: !!(entry.checkInDate && entry.checkOutDate), card: "stay" },
     { label: "Guest count set", met: (entry.guestCount ?? 0) >= 1, card: "stay" },
     { label: "Availability searched", met: configs.length > 0, card: "house" },
