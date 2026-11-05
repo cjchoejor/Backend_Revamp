@@ -43,12 +43,12 @@ import {
 } from "@/lib/api/inquiries";
 import { checkBedRequest, listRooms } from "@/lib/api/rooms";
 import { bookingHref } from "@/components/ds/ui";
-import { fmtRange, money, plural } from "@/lib/ds/format";
+import { fmtStay, money, plural } from "@/lib/ds/format";
 import { StayDates } from "@/components/ds/stay-dates";
 import { RateSheetCard, type RateChoice } from "@/components/ds/rate-sheet";
 import { STEP_NAMES, STEP_NEEDS } from "@/lib/ds/steps";
 import type { EntryDetail } from "@/types/api";
-import { Choice, Fact, Facts, FlowProgress, StepCanvas, StepCard, StepFlow, SubTabs, anchorFor, atLeast, numberFlow, revealCard, toastRefusal, useFlowStanding } from "./kit";
+import { Choice, Fact, Facts, FlowProgress, StepCanvas, StepCard, StepFlow, SubTabs, anchorFor, atLeast, numberFlow, revealCard, toastRefusal } from "./kit";
 import { useMeasuredVar } from "@/hooks/use-stage-head";
 import { ApiError } from "@/lib/api/client";
 import {
@@ -72,7 +72,6 @@ import {
   digits,
   moreRoomsNeedGuests,
   type ChannelKey,
-  type GateLine,
   type PartyKind,
   type UseTypeKey,
 } from "./new-inquiry-parts";
@@ -680,18 +679,6 @@ export function NewInquiryCanvas() {
   });
   const busy = run.isPending || navigating;
 
-  /* ---------------------------------------------------------------- the gate */
-  const useTypeReq: GateLine =
-    useType === "APARTMENT"
-      ? {
-          label: "Apartment terms",
-          whose: "desk",
-          met: false,
-          how: "an apartment needs its nights and rate tier before Negotiation — not on the desk yet",
-        }
-      : useType === "CONFERENCE"
-        ? { label: "Use-type requirements · the hall is added on the booking", whose: "desk", met: true }
-        : { label: "Use-type requirements · none", whose: "desk", met: true };
   const guestLineLabel = partyKind ? `${partyWord === "the company" ? "The company" : "The travel agent"}, and who to ring` : "The caller · a phone or an email";
   // The checklist, in the order the page is worked; the side panel numbers it onto the cards
   // (2026-09-25 — it sat at the foot of the page as a bare list). The house is asked on the
@@ -705,12 +692,6 @@ export function NewInquiryCanvas() {
     { label: "Dates set", met: datesSet && !dateProblem, card: "stay" },
     { label: "Rooms and guests set", met: roomsGuestsSet, card: "stay" },
   ], { bySection: true });
-  // What the system does on save — no card to go to, so listed apart.
-  const flowAlso = [
-    { label: useTypeReq.label, met: useTypeReq.met },
-    { label: "Custodian assigned · on save", met: true },
-    { label: "No duplicate found · runs on save", met: true },
-  ];
   const nextUp = flowItems.find((i) => !i.met) ?? null;
   const goToCard = (card?: string) => {
     if (!card) return;
@@ -763,7 +744,7 @@ export function NewInquiryCanvas() {
                   <p className="chart-from">
                     <b>From the house chart</b>
                     {fromChart.room ? <> · Room {fromChart.room}</> : null}
-                    {fromChart.checkIn ? <> · {fmtRange(fromChart.checkIn, addNightsIso(fromChart.checkIn, Math.max(1, parseInt(fromChart.nights ?? "1", 10))))}</> : null}
+                    {fromChart.checkIn ? <> · {fmtStay(fromChart.checkIn, addNightsIso(fromChart.checkIn, Math.max(1, parseInt(fromChart.nights ?? "1", 10))))}</> : null}
                     <span> — fill in the caller; the room is picked on the booking, once the house is asked</span>
                   </p>
                 ) : null}
@@ -963,7 +944,7 @@ export function NewInquiryCanvas() {
                   }}
                   summary={
                     <>
-                      <b>{datesSet ? fmtRange(checkIn, checkOut) : "no dates"}</b>
+                      <b>{datesSet ? fmtStay(checkIn, checkOut) : "no dates"}</b>
                       {datesSet ? <> · {plural(stayNights, "night")}</> : null} · {plural(adultsN, "adult")}
                       {childN > 0 ? <>, {plural(childN, "child", "children")}{agesComplete ? ` (${ages.join(", ")})` : ""}</> : null} ·{" "}
                       {plural(roomsN, "room")}
@@ -1014,7 +995,7 @@ export function NewInquiryCanvas() {
                           if (checkIn && checkOut && diffNightsIso(checkIn, checkOut) < 1) onCheckOut(addNightsIso(checkIn, 1));
                         }}
                       />
-                      {datesSet ? <span className="hint">{`${fmtRange(checkIn, checkOut)} · ${plural(stayNights, "night")}`}</span> : null}
+                      {datesSet ? <span className="hint">{`${fmtStay(checkIn, checkOut)} · ${plural(stayNights, "night")}`}</span> : null}
                     </div>
                     <div className="field">
                       <label>Adults{adultsN < 1 ? <ReqMark /> : null}</label>
@@ -1227,7 +1208,7 @@ export function NewInquiryCanvas() {
               {/* ------------------------------------------------ the house */}
                 <StepCard
                   flow="house"
-                  title={datesSet ? `The house · ${fmtRange(checkIn, checkOut)}` : "The house"}
+                  title={datesSet ? `The house · ${fmtStay(checkIn, checkOut)}` : "The house"}
                   meta="The house is asked on the booking, where the free rooms for these dates and what they cost, night by night and for the stay, appear while you are still on the phone."
                   heldFor={
                     <>
@@ -1305,9 +1286,6 @@ export function NewInquiryCanvas() {
           </div>
         </section>
       ) : null}
-
-          {/* What the start checks, in one place — each section, then what the system does on save. */}
-          <IntakeBeforeMove items={flowItems} also={flowAlso} onGo={goToCard} startLabel={primaryLabel} />
         </div>
 
       {/* No bar at the foot (2026-10-28): what is next is the step line's "now: …" and its list. */}
@@ -1492,12 +1470,12 @@ function IntakeFilePanel({
               </StepCard>
             ),
           },
-          { key: "package", label: "Package", content: <RateSheetCard choice={rates} checkIn={checkIn} checkOut={checkOut} /> },
           {
             key: "money",
             label: "Money received",
             content: <StepCard title="Money received" status={<b>Nothing received</b>} meta="An advance is asked for at Set up." />,
           },
+          { key: "package", label: "Package", content: <RateSheetCard choice={rates} checkIn={checkIn} checkOut={checkOut} /> },
         ]}
       />
     );
@@ -1547,64 +1525,6 @@ function IntakeFilePanel({
       status={<b>Nothing on the record yet</b>}
       meta="The history starts when the inquiry is started — every act from then on is listed here."
     />
-  );
-}
-
-type IntakeFlowProps = {
-  items: ReturnType<typeof numberFlow>;
-  also: ReadonlyArray<{ label: string; met: boolean }>;
-  onGo: (card?: string) => void;
-  startLabel: string;
-};
-
-/**
- * "Before you move on" on the new inquiry: each section, done only once its Done is pressed
- * (2026-10-27, operator: the list filled itself as fields were typed), then what the system does
- * on save. The stay's Done is the start itself.
- */
-function IntakeBeforeMove({ items, also, onGo, startLabel }: IntakeFlowProps) {
-  const standing = useFlowStanding();
-  const cards = Object.keys(INTAKE_SECTIONS).filter((c) => items.some((i) => i.card === c));
-  const toFill = cards.filter((c) => items.some((i) => i.card === c && !i.met));
-  const toPress = cards.find((c) => c !== "stay" && standing.awaitsDone(c));
-  const ready = toFill.length === 0 && !toPress;
-  return (
-    <div className="card before-move">
-      <h4>Before you move on</h4>
-      <table className="compact">
-        <tbody>
-          {cards.map((card) => {
-            const own = items.filter((i) => i.card === card);
-            const done = standing.isDone(card);
-            const awaits = standing.awaitsDone(card);
-            return (
-              <tr key={card} className="pick" onClick={() => onGo(card)}>
-                <td className={done ? "ok-ink" : "warn-ink"}>{done ? <Icon name="check" /> : "●"}</td>
-                <td>{INTAKE_SECTIONS[card]}</td>
-                <td className={awaits ? "warn-ink" : "meta"}>
-                  {done ? "done" : awaits ? (card === "stay" ? `all in — press ${startLabel}` : "all in — press Done") : own.filter((i) => !i.met).map((i) => i.label).join(" · ")}
-                </td>
-              </tr>
-            );
-          })}
-          {also.map((p) => (
-            <tr key={p.label}>
-              <td className={p.met ? "ok-ink" : "warn-ink"}>{p.met ? <Icon name="check" /> : "→"}</td>
-              <td colSpan={2} className="meta">
-                {p.label}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      <div className={`before-move-foot ${ready ? "ready" : "wait"}`}>
-        {toFill.length
-          ? `${plural(toFill.length, "section")} still to fill`
-          : toPress
-            ? `Press Done on ${INTAKE_SECTIONS[toPress]}`
-            : `Everything is in · press ${startLabel} on The stay`}
-      </div>
-    </div>
   );
 }
 

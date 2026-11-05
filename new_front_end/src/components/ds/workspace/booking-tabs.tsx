@@ -228,11 +228,6 @@ export function ChargesView({
               ),
             },
             {
-              key: "package",
-              label: "Package",
-              content: <BookingRateSheet entry={entry} />,
-            },
-            {
               key: "bill",
               label: <>
                   The bill
@@ -407,6 +402,11 @@ export function ChargesView({
         </StepCard>
                 </>
               ),
+            },
+            {
+              key: "package",
+              label: "Package",
+              content: <BookingRateSheet entry={entry} />,
             },
           ]}
         />

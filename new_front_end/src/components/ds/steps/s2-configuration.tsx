@@ -48,7 +48,7 @@ import { RoomCountField } from "./new-inquiry-parts";
 import { listRooms } from "@/lib/api/rooms";
 import { RoomStatusTable, roomStatusRows } from "@/components/desk/workspace/room-status-table";
 import { currentPassConfigs } from "@/lib/desk/workspace";
-import { fmtDateTime, fmtRange, plural } from "@/lib/ds/format";
+import { fmtDateTime, fmtStay, plural } from "@/lib/ds/format";
 import { optionSelectedRoomIds, type AvailabilityOptionSelected, type EntryDetail } from "@/types/api";
 import { Tool, atLeast, toastRefusal, useRefreshEntry } from "./kit";
 import { Help } from "@/components/ds/help";
@@ -594,8 +594,8 @@ export function ChangeConfiguration({
         </div>
         {datesMoved ? (
           <p className="cfg-move" role="status">
-            Moving the stay from <b>{fmtRange(oldIn, oldOut)}</b> ({plural(enumerateNights(oldIn, oldOut).length, "night")}) to{" "}
-            <b>{fmtRange(checkIn, checkOut)}</b> ({plural(nightsN, "night")}).
+            Moving the stay from <b>{fmtStay(oldIn, oldOut)}</b> ({plural(enumerateNights(oldIn, oldOut).length, "night")}) to{" "}
+            <b>{fmtStay(checkIn, checkOut)}</b> ({plural(nightsN, "night")}).
           </p>
         ) : null}
         <div className="form2" style={{ marginTop: 8 }}>
@@ -667,11 +667,11 @@ export function ChangeConfiguration({
           </Button>
           {result ? (
             <span className="sm">
-              {plural(available.length, "room")} free over {fmtRange(checkIn, checkOut)}
+              {plural(available.length, "room")} free · {fmtStay(checkIn, checkOut)}
             </span>
           ) : answerOutdated ? (
             <span className="warn-ink sm" style={{ fontWeight: 600 }}>
-              The dates changed — ask the house again for {fmtRange(checkIn, checkOut)}.
+              The dates changed — ask the house again for {fmtStay(checkIn, checkOut)}.
             </span>
           ) : null}
         </div>

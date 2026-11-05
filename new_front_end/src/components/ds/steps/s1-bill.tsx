@@ -102,7 +102,10 @@ export function PickBill({
           {title}
           {help ? <Help label="About this bill">{help}</Help> : null}
         </span>
-        <span className="pb-total money">{money(t.total, c)}</span>
+        <span className="pb-total">
+          <span className="pb-total-word">Indicative total</span>
+          <span className="money">{money(t.total, c)}</span>
+        </span>
         <span className="pb-sub">
           {plural(t.roomNights, "room-night")} · {plural(pricing.nights.length, "night")} · incl. {pct(pricing.serviceChargeRate)} service charge +{" "}
           {pct(pricing.gstRate)} GST · room only · {basisWords(pricing)}

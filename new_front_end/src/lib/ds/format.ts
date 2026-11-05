@@ -44,6 +44,16 @@ export function fmtDmy(value?: string | null, dash = "—"): string {
   return p ? `${String(p.d).padStart(2, "0")}/${String(p.m).padStart(2, "0")}/${p.y}` : dash;
 }
 
+/**
+ * `Check-in 5 Nov 2026 · Check-out 6 Nov 2026`: a guest's stay in the hotel's own words (2026-11-05,
+ * operator: "it should be shown as check in and check out date"). Boxes are `StayDates`; a table cell
+ * with room for two lines is `StayLines`.
+ */
+export function fmtStay(checkIn?: string | null, checkOut?: string | null): string {
+  if (!checkIn && !checkOut) return "—";
+  return `Check-in ${fmtDate(checkIn)} · Check-out ${fmtDate(checkOut)}`;
+}
+
 /** `20 Oct` — a day header, or a date where the year is obvious. */
 export function fmtDay(value?: string | null, dash = "—"): string {
   const p = ymdOf(value);
@@ -55,6 +65,7 @@ export function fmtDay(value?: string | null, dash = "—"): string {
  * A missing end reads `20 Oct 2026 → —`.
  */
 export function fmtRange(from?: string | null, to?: string | null): string {
+  // For a span that is not a guest's stay: a room's own nights, a date filter, a week. A stay is fmtStay.
   const a = ymdOf(from);
   const b = ymdOf(to);
   if (!a && !b) return "—";

@@ -35,7 +35,7 @@ import {
   type NightMoveResult,
   type SplitTarget,
 } from "@/lib/api/room-moves";
-import { fmtRange, money } from "@/lib/ds/format";
+import { fmtStay, money } from "@/lib/ds/format";
 import { STEP_NAMES, stepNoOfStage } from "@/lib/ds/steps";
 
 /** What the chart hands over: every room's nights that move, the one dragged first. */
@@ -94,7 +94,7 @@ function ResultView({ result, tz, manyRooms }: { result: NightMoveResult; tz?: s
         <div className="spl-part" key={c.entryId}>
           <p className={`rmv-status ${c.blocked ? "warn" : "ok"}`} role="status">
             <b>
-              {roomLabel(c.roomNumber)} · {fmtRange(c.checkInDate, c.checkOutDate)}
+              {roomLabel(c.roomNumber)} · {fmtStay(c.checkInDate, c.checkOutDate)}
             </b>
             {" — "}
             {c.newInquiry
@@ -368,7 +368,7 @@ export function NightMoveDialog({ move, onClose, tz }: { move: NightMove | null;
                   {preview.pieces.map((p) => (
                     <div className={`nmv-piece${p.kind === "MOVED" ? " moved" : ""}`} key={`${p.kind}${p.checkInDate}${p.roomNumber}`}>
                       <b>
-                        {roomLabel(p.roomNumber)} · {fmtRange(p.checkInDate, p.checkOutDate)}
+                        {roomLabel(p.roomNumber)} · {fmtStay(p.checkInDate, p.checkOutDate)}
                       </b>
                       <span className="muted">
                         {plural(p.nights, "night")} · {p.guests} · {p.kind === "MOVED" ? (manyRooms ? "the nights moved" : "the night moved") : "left at its own dates"}

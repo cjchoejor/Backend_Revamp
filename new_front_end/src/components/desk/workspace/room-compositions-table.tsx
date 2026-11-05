@@ -1994,7 +1994,7 @@ export function RoomCompositionsTable({
         <td colSpan={colCount}>
           <div className="nb-in">
             <b className="nb-date">
-              {nightLabel(ciIso)} → {nightLabel(coIso)}
+              Check-in {nightLabel(ciIso)} · Check-out {nightLabel(coIso)}
             </b>
             <span className="nb-meta">
               {stayNights} night{stayNights === 1 ? "" : "s"}

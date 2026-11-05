@@ -27,7 +27,7 @@ import { StayDates } from "@/components/ds/stay-dates";
 import { useSession } from "@/hooks/use-session";
 import { useHotelDay } from "@/hooks/use-hotel-day";
 import { addReturnStay, chooseFollowRooms, getTripFollow, startFollowing, stopFollowing, type FollowShortfallView, type FollowView } from "@/lib/api/entries";
-import { fmtRange, money, nightsOf, plural } from "@/lib/ds/format";
+import { fmtStay, money, nightsOf, plural } from "@/lib/ds/format";
 import { stepName, stepNoOfStage } from "@/lib/ds/steps";
 import { DsDialog, Overlay, StepCard, toastRefusal, useRefreshEntry } from "@/components/ds/steps/kit";
 import type { EntryDetail, TripStaySummary } from "@/types/api";
@@ -97,7 +97,7 @@ export function TripStays({ entry }: { entry: EntryDetail }) {
           <div key={s.id} className="trip-stay">
             <span className="meta">Stay {i + 1}</span>
             <span className={standing.off ? "dash" : "sm"}>
-              <b>{fmtRange(s.checkInDate, s.checkOutDate)}</b>
+              <b>{fmtStay(s.checkInDate, s.checkOutDate)}</b>
               {s.numberOfRooms ? ` · ${plural(s.numberOfRooms, "room")}` : ""}
               {` · ${standing.words}`}
             </span>
@@ -351,7 +351,7 @@ function ReturnStayDialog({ entry, fromAfter, onClose }: { entry: EntryDetail; f
         register="report"
         width={560}
         title={`Stay ${stayNo} is added. How should it be set up?`}
-        caseLines={[stage.created.id, fmtRange(stage.created.checkInDate, stage.created.checkOutDate)]}
+        caseLines={[stage.created.id, fmtStay(stage.created.checkInDate, stage.created.checkOutDate)]}
         footer={<span className="meta">Either way you stay on this stay. Open the new one from the list at the top of the page.</span>}
       >
         <div className="rs-opts">
@@ -402,7 +402,7 @@ function ReturnStayDialog({ entry, fromAfter, onClose }: { entry: EntryDetail; f
         <div className="field">
           <label>Nights</label>
           <input className="input" inputMode="numeric" value={nights} onChange={(e) => setNights(e.target.value.replace(/[^0-9]/g, ""))} />
-          <span className="hint">{to ? `leaving ${fmtRange(from, to)}` : "put in the day they come back"}</span>
+          <span className="hint">{to ? fmtStay(from, to) : "put in the day they come back"}</span>
         </div>
       </div>
       {trip.stays.length > 1 ? <p className="meta" style={{ marginTop: 8 }}>A night already on this enquiry is refused: that would be the same stay twice.</p> : null}
@@ -486,7 +486,7 @@ export function ShortRoomsDialog({
         register="danger"
         width={600}
         title={`Stay ${stayNo} cannot take the same rooms`}
-        caseLines={[stayId, fmtRange(checkIn, checkOut)]}
+        caseLines={[stayId, fmtStay(checkIn, checkOut)]}
         footer={
           <>
             <Button kind="quiet" state={save.isPending ? "inert" : "default"} onClick={onClose}>
@@ -577,7 +577,7 @@ function FreeTypesDialog({
       register="report"
       width={520}
       title="Free room types"
-      caseLines={[fmtRange(checkIn, checkOut), `${plural(missing, "more room")} to choose`]}
+      caseLines={[fmtStay(checkIn, checkOut), `${plural(missing, "more room")} to choose`]}
       help="Free means a room of the type is open for every night of this stay."
       footer={
         <Button kind="quiet" onClick={onClose}>

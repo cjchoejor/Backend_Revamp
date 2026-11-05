@@ -63,8 +63,6 @@ import {
   StepFlow,
   UnsavedReport,
   anchorFor,
-  flowSectionDone,
-  flowSectionWaitsOn,
   numberFlow,
   revealCard,
   type FlowItem,
@@ -95,7 +93,7 @@ import {
 } from "@/lib/desk/workspace";
 import { arrivalNightRoomIds, heldRoomIds, roomsInUseFor } from "@/lib/desk/party-rooms";
 import { channelWord, endingOf, factsFromEntry, rowNameOf, standingOf } from "@/lib/ds/status";
-import { fmtDateTime, fmtDay, fmtRange, money, nightsOf, plural } from "@/lib/ds/format";
+import { fmtDateTime, fmtDay, fmtStay, money, nightsOf, plural } from "@/lib/ds/format";
 import { PHASES, BOUNDARY_STEPS, STEP_NAMES, STEP_NEEDS, stepNoOfStage, type StepNo } from "@/lib/ds/steps";
 import { timerLabel } from "@/lib/ds/timers";
 import { BackendRailSlotContext } from "@/components/desk/workspace/backend-inline";
@@ -1629,7 +1627,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                   {trip.others.slice(0, 2).map((s, i) => (
                     <span key={s.id}>
                       {i ? ", " : ""}
-                      <Link href={bookingHref(s.id)}>{fmtRange(s.checkInDate, s.checkOutDate)}</Link>
+                      <Link href={bookingHref(s.id)}>{fmtStay(s.checkInDate, s.checkOutDate)}</Link>
                     </span>
                   ))}
                   {trip.others.length > 2 ? ` and ${trip.others.length - 2} more` : ""}
@@ -1739,7 +1737,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
         <CommitDialog
           open={confirmOpen}
           title="Reserve the booking"
-          caseLines={[<b key="n">{name}</b>, `${entry.id} · ${fmtRange(entry.checkInDate, entry.checkOutDate)}`]}
+          caseLines={[<b key="n">{name}</b>, `${entry.id} · ${fmtStay(entry.checkInDate, entry.checkOutDate)}`]}
           lines={[
             fin.indicativeTotal !== null ? `The price freezes at ${money(fin.indicativeTotal, fin.currency)} — the guest is held to it.` : "The price freezes — the guest is held to it.",
             "The rooms lock — no longer offerable to anyone else.",
@@ -1882,7 +1880,9 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     // The booking file opens on Charges & payments (2026-10-28, operator: "always make the charges tab
     // be shown in default in all stages"); Booking is a click away.
     const fileTab: "details" | BookingTab = view === "step" || view === "other" ? "money" : view;
-    const sectionsLeft = flowItems.filter((i) => !i.met).length;
+    // Every section done and still no move: what holds it belongs to no section, so nothing on the page
+    // would say why. Said where the move would be (2026-11-05, when "Before you move on" went).
+    const heldBy = moveReady === false && !viewingPast && !sealed && !inPage && flowItems.every((i) => i.met) ? inherited.filter((p) => !p.met) : [];
     // A step looked back at (from a later step's rail, or a closed booking's) offers the way back to
     // the step the booking is at — the journey line that did this is gone (2026-10-27).
     const backTo = viewingPast && viewing !== currentOrder ? currentOrder : null;
@@ -2016,56 +2016,6 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                       <OtherWaysSlot node={null}>{native}</OtherWaysSlot>
                     </AlsoBar>
                   </div>
-                  {!viewingPast && !sealed && !inPage && preconds.length ? (
-                    // What the move checks, in one place (the stage template's "Before you move on"):
-                    // each section, then what the system does when the booking moves on. The move
-                    // itself is in the bar at the foot.
-                    <div className="card before-move">
-                      <h4>Before you move on</h4>
-                      <table className="compact">
-                        <tbody>
-                          {Object.entries(sections).map(([card, title]) => {
-                            const own = flowItems.filter((i) => i.card === card);
-                            if (!own.length) return null;
-                            // A section made from one with changes not saved waits on it (2026-10-27).
-                            const met = flowSectionDone(flowItems, card, derived);
-                            const waitsOn = own.every((i) => i.met) ? flowSectionWaitsOn(flowItems, card, derived) : null;
-                            return (
-                              <tr key={card} className="pick" onClick={() => goToCard(card)}>
-                                <td className={met ? "ok-ink" : "warn-ink"}>{met ? <Icon name="check" /> : "●"}</td>
-                                <td>{title}</td>
-                                <td className="meta">
-                                  {met
-                                    ? "done"
-                                    : waitsOn
-                                      ? `waits for ${sections[waitsOn] ?? waitsOn} to be saved`
-                                      : own.filter((i) => !i.met).map((i) => i.label).join(" · ")}
-                                </td>
-                              </tr>
-                            );
-                          })}
-                          {inherited.map((p) => (
-                            <tr key={p.label}>
-                              <td className={p.met ? "ok-ink" : "warn-ink"}>{p.met ? <Icon name="check" /> : "→"}</td>
-                              <td colSpan={2} className="meta">
-                                {p.label}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                      <div className={`before-move-foot ${sectionsLeft ? "wait" : "ready"}`}>
-                        {sectionsLeft
-                          ? `${plural(sectionsLeft, "thing")} still to do`
-                          : confirmStepActive
-                            ? // Not reserved yet: the page's own button does it (2026-10-29).
-                              "Everything is on record · Reserve the booking"
-                            : closedStepActive
-                              ? "Everything is in · Close & seal the record"
-                              : `${STEP_NAMES[viewing - 1]} is done · next: ${STEP_NAMES[viewing] ?? ""}`}
-                      </div>
-                    </div>
-                  ) : null}
                 </QuietScreen>
                 {/* the old side column's "what runs here" target — kept mounted, not shown */}
                 <div ref={setRailSlot} hidden />
@@ -2073,7 +2023,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
 
               {/* No bar at the foot any more (2026-10-28, operator: "eliminate the bottom bar
                   completely") — the step's other ways sit on the step line, what is still to do is
-                  the step line's list and Before you move on. What stays is a dock with no height,
+                  the step line's list. What stays is a dock with no height,
                   sticky at the work column's foot: once everything is done the move floats there,
                   in the bottom-right corner, and stays put while the page scrolls. */}
               <div className="move-dock">
@@ -2082,6 +2032,10 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                 {moveReady && !inPage ? (
                   <div className="move-float" role="region" aria-label="Move on">
                     {forward}
+                  </div>
+                ) : heldBy.length ? (
+                  <div className="move-float move-held" role="status">
+                    To move on: {heldBy.map((p) => p.label).join(" · ")}
                   </div>
                 ) : null}
               </div>

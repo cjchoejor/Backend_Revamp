@@ -23,7 +23,7 @@ import { DsDialog } from "@/components/ds/steps/kit";
 import { useSession } from "@/hooks/use-session";
 import { getRoomChart, type ChartBarKind, type RoomChartBooking } from "@/lib/api/rooms";
 import type { DateMoveInput, RoomMoveLegInput } from "@/lib/api/room-moves";
-import { fmtRange } from "@/lib/ds/format";
+import { fmtRange, fmtStay } from "@/lib/ds/format";
 import { rowNameOf } from "@/lib/ds/status";
 import { STEP_NAMES, stepNoOfStage } from "@/lib/ds/steps";
 import type { NightMove } from "./night-move-dialog";
@@ -194,7 +194,7 @@ export function BookingBox({
           {label}
           <span className="bbox-sub">
             {booking.entryId} · {step}
-            {ci && co ? ` · ${fmtRange(ci, co)}` : ""}
+            {ci && co ? ` · ${fmtStay(ci, co)}` : ""}
           </span>
         </span>
       }

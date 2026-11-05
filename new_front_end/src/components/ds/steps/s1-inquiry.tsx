@@ -41,7 +41,7 @@ import {
   roomStatusRows,
   type RoomStatusRow,
 } from "@/components/desk/workspace/room-status-table";
-import { fmtDay, fmtRange, money, plural } from "@/lib/ds/format";
+import { fmtDay, fmtStay, money, plural } from "@/lib/ds/format";
 import { currentPassConfigs, pickFitsStay } from "@/lib/desk/workspace";
 import {
   optionSelectedRoomIds,
@@ -404,7 +404,7 @@ function TheStay({
       }
       summary={
         <>
-          <b>{entry.checkInDate ? fmtRange(entry.checkInDate, entry.checkOutDate) : "no dates"}</b>
+          <b>{entry.checkInDate ? fmtStay(entry.checkInDate, entry.checkOutDate) : "no dates"}</b>
           {saved.checkIn ? <> · {plural(parseInt(saved.nights, 10) || 1, "night")}</> : null} ·{" "}
           {plural(parseInt(saved.adults, 10) || 0, "adult")}
           {(parseInt(saved.children, 10) || 0) > 0
@@ -1132,7 +1132,7 @@ function TheHouse({
             ? `only ${chosenRow.full.length} ${chosenRow.name} free on every night — choose the rooms by night instead`
             : null;
 
-  const range = fmtRange(
+  const range = fmtStay(
     searched.checkIn ?? entry.checkInDate,
     searched.checkOut ?? entry.checkOutDate,
   );

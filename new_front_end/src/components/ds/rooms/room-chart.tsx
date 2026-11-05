@@ -55,7 +55,7 @@ import { Help } from "@/components/ds/help";
 import { LoadFailed, LoadingBlock } from "@/components/ds/ui";
 import { useSession } from "@/hooks/use-session";
 import { getRoomChart, type ChartBarKind, type RoomChart, type RoomChartBar, type RoomChartBooking, type RoomChartPick } from "@/lib/api/rooms";
-import { fmtDateTime, fmtRange, plural } from "@/lib/ds/format";
+import { fmtDateTime, fmtRange, fmtStay, plural } from "@/lib/ds/format";
 import { callerOfBooking, rowNameOf } from "@/lib/ds/status";
 import { STEP_NAMES, stepNoOfStage } from "@/lib/ds/steps";
 import type { RoomMoveLegInput } from "@/lib/api/room-moves";
@@ -2380,7 +2380,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
                         {p.parked ? " · parked" : ""}
                       </span>
                       <span>
-                        {fmtRange(p.from, p.to)} in this room{b?.checkInDate ? ` · stay ${fmtRange(b.checkInDate, b.checkOutDate)}` : ""}
+                        {fmtRange(p.from, p.to)} in this room{b?.checkInDate ? ` · ${fmtStay(b.checkInDate, b.checkOutDate)}` : ""}
                       </span>
                     </button>
                   );
@@ -2420,7 +2420,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
                         {x.parked ? " · parked" : ""}
                       </span>
                       <span>
-                        {fmtRange(x.from, x.to)} in this room{b?.checkInDate ? ` · stay ${fmtRange(b.checkInDate, b.checkOutDate)}` : ""}
+                        {fmtRange(x.from, x.to)} in this room{b?.checkInDate ? ` · ${fmtStay(b.checkInDate, b.checkOutDate)}` : ""}
                       </span>
                       <span className="pl-acts">
                         <Button kind="secondary" compact onClick={() => router.push(`/bookings/${x.entryId}`)}>
@@ -2560,7 +2560,7 @@ function HoverCard({
             {b ? (byCaller ? fact("Guest", rowNameOf(b)) : fact("Caller", callerOfBooking(b))) : null}
             {fact("Room", roomLine(room))}
             {fact("In this room", `${fmtRange(bar.from, bar.to)} · ${plural(nightsBetween(bar.from, bar.to), "night")} on the chart`)}
-            {b?.checkInDate ? fact("Stay", `${fmtRange(b.checkInDate, b.checkOutDate)}${stay ? ` · ${plural(stay, "night")}` : ""}`) : null}
+            {b?.checkInDate ? fact("Stay", `${fmtStay(b.checkInDate, b.checkOutDate)}${stay ? ` · ${plural(stay, "night")}` : ""}`) : null}
             {b ? fact("Step", <span className="hc-step">{STEP_NAMES[stepNoOfStage(b.stage) - 1]}</span>) : null}
             {fact("Booking", b ? `${b.entryId} · ${b.inquiryId}` : bar.entryId)}
             {bar.holdExpiresAt ? fact("Held until", fmtDateTime(bar.holdExpiresAt)) : null}
@@ -2623,7 +2623,7 @@ function HoverCard({
               const b = bookingOf.get(p.entryId);
               return fact(
                 b ? STEP_NAMES[stepNoOfStage(b.stage) - 1] : "Booking",
-                `${n > 1 && b ? `${rowNameOf(b)} · ` : ""}${p.entryId}${b?.checkInDate ? ` · stay ${fmtRange(b.checkInDate, b.checkOutDate)}` : ""}${p.parked ? " · parked" : ""}`,
+                `${n > 1 && b ? `${rowNameOf(b)} · ` : ""}${p.entryId}${b?.checkInDate ? ` · ${fmtStay(b.checkInDate, b.checkOutDate)}` : ""}${p.parked ? " · parked" : ""}`,
               );
             })}
           </div>

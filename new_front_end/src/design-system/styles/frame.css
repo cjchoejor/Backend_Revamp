@@ -365,7 +365,6 @@
 .ds .pickbill.loading { opacity: .65; }
 .ds .pickbill .pb-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; margin-bottom: var(--s2); }
 .ds .pickbill .pb-title { flex-basis: 100%; font-weight: 700; font-size: var(--t-sm); }
-.ds .pickbill .pb-total { font-size: var(--t-figure); font-weight: 800; color: var(--ink); font-variant-numeric: tabular-nums; }
 .ds .pickbill .pb-sub { font-size: var(--t-meta); color: var(--ink-2); }
 .ds .pickbill .table { background: var(--surface); }
 .ds .pickbill .num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
@@ -491,8 +490,13 @@
 .ds .tab .tab-n.stop { background: var(--danger); color: #fff; }
 
 /* Charges & payments: the stay total is the figure the card exists for (UIappeal). */
-.ds .bigfig { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
-.ds .bigfig b { font-size: 26px; font-weight: 800; font-variant-numeric: tabular-nums; }
+/* The stay's total is what the price is read for (2026-11-05, operator: "can this be prominent, maybe
+   light blue highlight"): a light blue band, the figure large in the blue's own ink. */
+.ds .staylines { display: inline-grid; gap: 1px; }
+.ds .bigfig, .ds .pickbill .pb-total { display: flex; align-items: baseline; gap: 4px 12px; flex-wrap: wrap; flex-basis: 100%; padding: 10px 14px; border: 1px solid var(--accent-line); border-radius: 6px; background: var(--accent-soft); color: var(--accent-ink); }
+.ds .bigfig { margin-bottom: var(--s2); }
+.ds .bigfig > .meta:first-child, .ds .pickbill .pb-total-word { font-size: var(--t-sm); font-weight: 600; color: var(--accent-ink); }
+.ds .bigfig b, .ds .pickbill .pb-total .money { font-size: 26px; font-weight: 800; color: var(--accent-ink); font-variant-numeric: tabular-nums; }
 
 /* The price as the quotation sets it out (2026-10-27): each room a row, its extra beds and meals
    indented beneath it, then the foot — net, service charge, GST, any discount, the total. In the
@@ -1510,6 +1514,8 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
    the button (48px) and the line under it (~73px in all) hang 16px off the foot */
 .ds .ws-top .ws-main:has(.move-float) .canvas:not(.desk-root *) { padding-bottom: 104px; }
 @keyframes ds-move-rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+/* Every section done, and what holds the move has no section of its own: said where the move would be. */
+.ds .ws-top .move-dock .move-held:not(.desk-root *) { width: max-content; max-width: min(560px, 80%); padding: 10px 14px; border: 1px solid var(--warning); border-radius: 6px; background: var(--warning-soft); color: var(--ink); font-size: 14px; font-weight: 600; line-height: 1.35; box-shadow: 0 6px 18px rgba(9, 30, 66, 0.16); }
 @media (prefers-reduced-motion: reduce) { .ds .ws-top .move-dock .move-float { animation: none; } }
 
 /* Two columns from the topbar down (2026-10-27, operator and the boss: "divide the screen that way"):
@@ -1522,7 +1528,6 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .ws-top.ws-cols:not(.desk-root *) { display: grid; grid-template-columns: minmax(0, 1fr) var(--file-w); grid-template-rows: auto; align-items: start; }
 .ds .ws-cols > .ws-main { min-width: 0; display: flex; flex-direction: column; min-height: calc(100vh - 53px); }
 .ds .ws-cols > .ws-main > .canvas:not(.desk-root *) { flex: 1 0 auto; padding: var(--s2) var(--s5) var(--s4); max-width: none; }
-.ds .ws-top .before-move h4 { font-size: var(--t-meta); font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); }
 .ds .ws-top .file { position: sticky; top: 53px; height: calc(100vh - 53px); min-height: 320px; display: flex; flex-direction: column; min-width: 0; background: var(--surface); border-left: 1px solid var(--line-2); }
 
 /* the file's head: the clocks, then the stay — check-in and check-out, the nights, the rooms, how it
@@ -1567,13 +1572,6 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .ws-top .file .fbody { flex: 1 1 auto; min-height: 0; padding: var(--s3) var(--s4); overflow: auto; min-width: 0; display: grid; gap: var(--s3); align-content: start; }
 
 /* what the move checks */
-.ds .ws-top .before-move:not(.desk-root *) { display: grid; gap: var(--s2); }
-.ds .ws-top .before-move table td:first-child { width: 28px; font-weight: 700; }
-.ds .ws-top .before-move tr.pick { cursor: pointer; }
-.ds .ws-top .before-move tr.pick:hover td { background: var(--surface-2); }
-.ds .ws-top .before-move-foot { padding: var(--s2) var(--s3); border-radius: var(--r-control); font-weight: 700; }
-.ds .ws-top .before-move-foot.wait { background: var(--surface-2); color: var(--ink-2); }
-.ds .ws-top .before-move-foot.ready { background: var(--success-soft); color: var(--success); }
 
 /* a way's form, in the pop-up in the middle of the screen */
 .ds .also-panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-dialog); box-shadow: var(--shadow-pop); padding: var(--s3) var(--s4) var(--s4); display: grid; gap: var(--s3); max-height: 60vh; overflow: auto; }
@@ -1755,10 +1753,10 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 
 /* The house card's bill in one line (2026-10-27): the stay's figure and the way to the bill, which
    lives in the booking file under Charges & payments › The price — each night, its rooms, the taxes. */
-.ds .pb-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px var(--s3); margin-top: var(--s3); padding: var(--s2) var(--s3); border: 1px solid var(--line-2); border-radius: var(--r-card); background: var(--surface-2); transition: opacity .15s; }
+.ds .pb-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px var(--s3); margin-top: var(--s3); padding: var(--s2) var(--s3); border: 1px solid var(--accent-line); border-radius: var(--r-card); background: var(--accent-soft); transition: opacity .15s; }
 .ds .pb-line.loading { opacity: .65; }
 .ds .pb-line .pb-line-k { flex-basis: 100%; font-weight: 700; font-size: var(--t-sm); }
-.ds .pb-line > .money { font-size: var(--t-figure); font-weight: 800; color: var(--ink); font-variant-numeric: tabular-nums; }
+.ds .pb-line > .money { font-size: 26px; font-weight: 800; color: var(--accent-ink); font-variant-numeric: tabular-nums; }
 
 /* The booking file on a smaller screen (2026-10-27, operator: "it works well on my bigger screen;
    on a small one the tabs run onto two rows and the table runs off the side"). The file is 28% of

@@ -164,7 +164,7 @@ function itemDone(i: FlowItem, confirm: boolean, confirmed: ReadonlySet<string>)
  * quotation remove its tick? The same happens for others"): every item of its own is done, AND the
  * section it is made from — `derived`, e.g. the quotation from the table, the rooms from the stay —
  * is done too. A section made from one that has changed and is not saved does not read as done.
- * One reading for the chips, the cards' ticks and "Before you move on".
+ * One reading for the step line and the cards' ticks.
  */
 export function flowSectionDone(
   items: ReadonlyArray<{ card?: string; met: boolean }>,
@@ -657,24 +657,6 @@ export function useStepFlow() {
   const { on, done, open, opened } = useContext(FlowCtx);
   // `opened`: the sections opened again with their Edit — a card can show its tools at once then.
   return { on, done, open, opened };
-}
-
-/**
- * Where a section stands, for a list that reports on the sections (the new inquiry's "Before you
- * move on"): done — in and, where asked, its Done pressed — or in but still waiting for its Done.
- */
-export function useFlowStanding() {
-  const { items, confirm, confirmed } = useContext(FlowCtx);
-  return {
-    isDone: (card: string) => {
-      const own = items.filter((i) => i.card === card);
-      return own.length > 0 && own.every((i) => itemDone(i, confirm, confirmed));
-    },
-    awaitsDone: (card: string) => {
-      const own = items.filter((i) => i.card === card);
-      return confirm && own.length > 0 && own.every((i) => i.met) && !confirmed.has(card);
-    },
-  };
 }
 
 export function anchorFor(card: string) {

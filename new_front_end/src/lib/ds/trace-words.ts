@@ -8,7 +8,7 @@
 import type { TraceEvent } from "@/lib/trace/humanize";
 import { STEP_NAMES } from "./steps";
 import { translateMessage } from "./words";
-import { fmtRange, money as fmtMoney } from "./format";
+import { fmtRange, fmtStay, money as fmtMoney } from "./format";
 import type { HistoryNames } from "./history-walks";
 
 const WORDS: Record<string, string> = {
@@ -270,8 +270,8 @@ function roomChangeWords(p: RoomChangedPayload): string {
   }
   if (p.kind === "DATES") {
     const d = p.dates ?? null;
-    if (d?.trimmed) return d.newCheckInDate && d.newCheckOutDate ? `Stay shortened to ${fmtRange(d.newCheckInDate, d.newCheckOutDate)}` : "Stay shortened";
-    return d?.newCheckInDate && d.newCheckOutDate ? `Stay moved to ${fmtRange(d.newCheckInDate, d.newCheckOutDate)}` : "Stay moved to other dates";
+    if (d?.trimmed) return d.newCheckInDate && d.newCheckOutDate ? `Stay shortened to ${fmtStay(d.newCheckInDate, d.newCheckOutDate)}` : "Stay shortened";
+    return d?.newCheckInDate && d.newCheckOutDate ? `Stay moved to ${fmtStay(d.newCheckInDate, d.newCheckOutDate)}` : "Stay moved to other dates";
   }
   if (p.kind === "SETUP") return from ? `Room ${from} set up differently` : "Room set up differently";
   if (p.moves?.length) return `${p.moves.length > 1 ? "Rooms" : "Room"} changed — ${p.moves.map((m) => `${m.from} → ${m.to}`).join(" · ")}`;
@@ -289,7 +289,7 @@ function roomChangeDetail(p: RoomChangedPayload): string[] {
   } else if (p.kind === "DATES") {
     // A date move: where the stay was, the rooms that moved with it, the rooms priced afresh.
     const d = p.dates ?? null;
-    if (d?.priorCheckInDate && d.priorCheckOutDate) bits.push(`from ${fmtRange(d.priorCheckInDate, d.priorCheckOutDate)}`);
+    if (d?.priorCheckInDate && d.priorCheckOutDate) bits.push(`from ${fmtStay(d.priorCheckInDate, d.priorCheckOutDate)}`);
     const moved = (d?.rooms ?? []).filter((r) => r.fromRoomNumber && r.toRoomNumber);
     if (moved.length) bits.push(`rooms ${moved.map((r) => `${r.fromRoomNumber} → ${r.toRoomNumber}`).join(" · ")}`);
     const fresh = Object.entries(d?.priceModes ?? {}).filter(([, m]) => m === "NEW_DATES").map(([no]) => no);
@@ -468,7 +468,7 @@ export function traceDetail(ev: TraceEvent, names?: Partial<HistoryNames>): stri
       bits.push(`from ${p.fromEntryId}`);
     }
     const to = (p.to ?? null) as { checkInDate?: string; checkOutDate?: string } | null;
-    if (to?.checkInDate && to.checkOutDate) bits.push(fmtRange(to.checkInDate, to.checkOutDate));
+    if (to?.checkInDate && to.checkOutDate) bits.push(fmtStay(to.checkInDate, to.checkOutDate));
     if (typeof p.guests === "string" && p.guests) bits.push(p.guests);
     const modes = (p.priceModes ?? null) as Record<string, string> | null;
     const atNewDates = modes ? Object.entries(modes).filter(([, m]) => m === "NEW_DATES").map(([n]) => n) : [];
@@ -504,7 +504,7 @@ export function traceDetail(ev: TraceEvent, names?: Partial<HistoryNames>): stri
     if (pieces.length) {
       bits.push(
         `${pieces.length === 1 ? "a booking" : `${pieces.length} bookings`} of their own: ${pieces
-          .map((x) => `${x.entryId ?? "?"}${x.checkInDate && x.checkOutDate ? ` (${fmtRange(x.checkInDate, x.checkOutDate)})` : ""}`)
+          .map((x) => `${x.entryId ?? "?"}${x.checkInDate && x.checkOutDate ? ` (${fmtStay(x.checkInDate, x.checkOutDate)})` : ""}`)
           .join(", ")}${p.target === "NEW_ENQUIRY" && typeof p.newInquiryId === "string" ? ` on a new enquiry, ${p.newInquiryId}` : ""}`,
       );
     }
@@ -514,7 +514,7 @@ export function traceDetail(ev: TraceEvent, names?: Partial<HistoryNames>): stri
   if (ev.eventType === "ENTRY.STAY_DATES_CHANGED") {
     const span = (v: unknown) => {
       const o = (v ?? {}) as { checkInDate?: string | null; checkOutDate?: string | null; nights?: number | null };
-      return o.checkInDate && o.checkOutDate ? `${fmtRange(o.checkInDate, o.checkOutDate)}${typeof o.nights === "number" ? ` (${o.nights} night${o.nights === 1 ? "" : "s"})` : ""}` : null;
+      return o.checkInDate && o.checkOutDate ? `${fmtStay(o.checkInDate, o.checkOutDate)}${typeof o.nights === "number" ? ` (${o.nights} night${o.nights === 1 ? "" : "s"})` : ""}` : null;
     };
     const from = span(p.from);
     const to = span(p.to);

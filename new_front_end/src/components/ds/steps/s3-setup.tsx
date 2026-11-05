@@ -42,7 +42,7 @@ import {
   schedulePaymentMilestones,
 } from "@/lib/api/reservation-setup";
 import { guestNameOf } from "@/lib/ds/status";
-import { fmtDateTime, fmtRange, fmtStamp, hotelFormParts, money, plural } from "@/lib/ds/format";
+import { fmtDateTime, fmtStay, fmtStamp, hotelFormParts, money, plural } from "@/lib/ds/format";
 import { optionSelectedRoomIds, preferredHoldRoomId, type EntryDetail, type InvoiceSummary, type PaymentStatusSummary } from "@/types/api";
 import { replySettled } from "@/lib/api/entries";
 import { AnswerLine, useReplyAsked, Choice, DsDialog, Fact, FactBox, Facts, Live, OnRecord, PaperDrawer, ReasonDialog, SeeRow, StepCanvas, StepCard, atLeast, currentPassStart, toastRefusal, useCommunications, useRefreshEntry, useStepMode, words, type PaperRef, type ChangeBookingItem, ChangeBookingMenu, StageActs, useFlowUnsaved, useFinishWhenDone, useStepFlow, goToStepCard, revealCard, useOpenAlsoWay, useStepPane, OtherWaysTabs, InlineWay, ShutWay, parkTab, NightsChoice } from "./kit";
@@ -368,7 +368,7 @@ export function S3SetUp({
                         onClose={() => undefined}
                         busy={cancelM.isPending || leaving}
                         title="Cancel this booking"
-                        caseLines={[fmtRange(entry.checkInDate, entry.checkOutDate)]}
+                        caseLines={[fmtStay(entry.checkInDate, entry.checkOutDate)]}
                         lead={
                           <>
                             Cancelling at Set up is final. The committed hold is released and the rooms return to sale; the proforma is withdrawn and its
@@ -851,7 +851,7 @@ function HoldCard({
           onClose={() => setPlaceOpen(false)}
           busy={place.isPending}
           title="Block the rooms"
-          caseLines={[`${rooms} · ${fmtRange(entry.checkInDate, entry.checkOutDate)}`]}
+          caseLines={[`${rooms} · ${fmtStay(entry.checkInDate, entry.checkOutDate)}`]}
           footer={
             <>
               <Button kind="quiet" state={place.isPending ? "inert" : "default"} onClick={() => setPlaceOpen(false)}>

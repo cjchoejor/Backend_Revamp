@@ -1,6 +1,6 @@
 "use client";
 
-import { fmtDmy } from "@/lib/ds/format";
+import { fmtDate, fmtDmy } from "@/lib/ds/format";
 
 /**
  * The stay's two dates as the hotel says them — "Check-in 27/10/2026 · Check-out 30/10/2026"
@@ -20,6 +20,16 @@ export function StayDates({ checkIn, checkOut }: { checkIn?: string | null; chec
         <span className="lbl">Check-out</span>
         <b>{fmtDmy(checkOut)}</b>
       </span>
+    </span>
+  );
+}
+
+/** The same in a table cell: one line each, so a column of stays stays narrow. */
+export function StayLines({ checkIn, checkOut }: { checkIn?: string | null; checkOut?: string | null }) {
+  return (
+    <span className="staylines">
+      <span>Check-in {fmtDate(checkIn)}</span>
+      <span>Check-out {fmtDate(checkOut)}</span>
     </span>
   );
 }

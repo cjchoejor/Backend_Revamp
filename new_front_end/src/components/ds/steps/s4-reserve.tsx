@@ -26,7 +26,7 @@ import { getBillingSummary, getEntryTrace, getJourneySummary, replySettled, type
 import { listSameGuestBookings } from "@/lib/api/guest-bookings";
 import { HeldPaperRow, HeldPapersCard, useHeldDocuments } from "@/components/ds/workspace/held-papers";
 import { confirmReadiness, reservedThisPass } from "@/lib/desk/workspace";
-import { fmtDate, fmtDateTime, fmtRange, fmtStamp, money, nightsOf, plural } from "@/lib/ds/format";
+import { fmtDate, fmtDateTime, fmtStay, fmtStamp, money, nightsOf, plural } from "@/lib/ds/format";
 import { roomRatesOf } from "@/lib/ds/rates";
 import { JourneySummaryPanel } from "@/components/desk/workspace/journey-summary";
 import { PLAN_LABEL, dueLabel } from "@/components/desk/workspace/advance-settlement";
@@ -468,8 +468,8 @@ function BeforeYouReserve({
       key: "overlap",
       label: "The guest's other booking",
       value: overlap.acknowledged
-        ? `${overlap.entryId} (${fmtRange(overlap.checkInDate, overlap.checkOutDate)}) — both bookings are meant`
-        : `${overlap.entryId} is reserved over these nights (${fmtRange(overlap.checkInDate, overlap.checkOutDate)})`,
+        ? `${overlap.entryId} (${fmtStay(overlap.checkInDate, overlap.checkOutDate)}) — both bookings are meant`
+        : `${overlap.entryId} is reserved over these nights (${fmtStay(overlap.checkInDate, overlap.checkOutDate)})`,
       who: overlap.acknowledged ? "acknowledged by the FOM" : "the FOM says whether both are meant before Reserve",
       state: overlap.acknowledged ? "on" : "missing",
       action:
@@ -878,7 +878,7 @@ function WhatReserveDecided({ entry }: { entry: EntryDetail }) {
     >
       <Facts wide>
         <Fact k="Reservation">
-          <b>{res.id}</b> · dates frozen {fmtRange(res.frozenCheckInDate, res.frozenCheckOutDate)}
+          <b>{res.id}</b> · dates frozen: {fmtStay(res.frozenCheckInDate, res.frozenCheckOutDate)}
           {nights ? ` · ${plural(nights, "night")}` : ""}
         </Fact>
         <Fact k={roomRates && roomRates.length > 1 ? "Rates frozen" : "Rate frozen"} meta={preDiscount ? "before the booking discount — the price below is after it" : undefined}>

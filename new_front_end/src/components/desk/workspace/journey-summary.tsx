@@ -200,7 +200,7 @@ export function JourneySummaryPanel({ entryId }: { entryId: string }) {
         <Row label="Came in as">{dash(s1.sourceChannel)}</Row>
         <Row label="Dates">
           {s1.dates.checkIn || s1.dates.checkOut
-            ? `${fmtDate(s1.dates.checkIn)} → ${fmtDate(s1.dates.checkOut)}${s1.dates.nights ? ` · ${s1.dates.nights} night${s1.dates.nights === 1 ? "" : "s"}` : ""}`
+            ? `Check-in ${fmtDate(s1.dates.checkIn)} · Check-out ${fmtDate(s1.dates.checkOut)}${s1.dates.nights ? ` · ${s1.dates.nights} night${s1.dates.nights === 1 ? "" : "s"}` : ""}`
             : "—"}
         </Row>
         <Row label="Party">{partyText ? `${partyText}${agesText}` : dash(s1.party.totalGuests ? `${s1.party.totalGuests} guests` : null)}</Row>
@@ -450,7 +450,7 @@ export function JourneySummaryPanel({ entryId }: { entryId: string }) {
             <Row label="Reservation">{dash(s4.reservationId)}</Row>
             <Row label="Frozen rate">{moneyOrDash(s4.frozenRate, cur)}</Row>
             <Row label="Frozen dates">
-              {`${fmtDate(s4.frozenCheckIn)} → ${fmtDate(s4.frozenCheckOut)}${
+              {`Check-in ${fmtDate(s4.frozenCheckIn)} · Check-out ${fmtDate(s4.frozenCheckOut)}${
                 s4.frozenNights ? ` · ${s4.frozenNights} night${s4.frozenNights === 1 ? "" : "s"}` : ""
               }`}
             </Row>

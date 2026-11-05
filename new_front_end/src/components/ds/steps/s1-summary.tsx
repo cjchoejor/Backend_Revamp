@@ -19,7 +19,7 @@ import { enumerateNights } from "./use-room-selection";
 import { USE_TYPES, bedWord } from "./new-inquiry-parts";
 import { currentPassConfigs } from "@/lib/desk/workspace";
 import { callerNameOf, channelWord } from "@/lib/ds/status";
-import { fmtRange, plural } from "@/lib/ds/format";
+import { fmtStay, plural } from "@/lib/ds/format";
 import { guestName } from "@/lib/desk/model";
 import type { AvailabilityOptionSelected, EntryDetail } from "@/types/api";
 
@@ -123,7 +123,7 @@ export function InquirySummaryDialog({
         <section>
           <b className="cfg-n">The stay</b>
           <Facts wide>
-            <Fact k="Dates">{`${fmtRange(entry.checkInDate, entry.checkOutDate)}${nights ? ` · ${plural(nights, "night")}` : ""}`}</Fact>
+            <Fact k="The stay">{`${fmtStay(entry.checkInDate, entry.checkOutDate)}${nights ? ` · ${plural(nights, "night")}` : ""}`}</Fact>
             <Fact k="Guests">
               {`${plural(entry.adultCount ?? entry.guestCount ?? 0, "adult")}${
                 ages.length ? ` · ${plural(ages.length, "child", "children")} (aged ${ages.join(", ")})` : ""

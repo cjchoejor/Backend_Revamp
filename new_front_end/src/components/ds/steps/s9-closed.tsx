@@ -35,7 +35,7 @@ import {
 } from "@/lib/api/post-stay";
 import { openCancellationConfirmationPdf, openFolioDocumentPdf, openInvoicePdf } from "@/lib/api/documents";
 import { activeQuotation, deriveFinancials, effectiveCheckOutIso } from "@/lib/desk/workspace";
-import { fmtDateTime, fmtDay, fmtInstantDate, fmtRange, fmtStamp, instantYmd, money, nightsOf, plural } from "@/lib/ds/format";
+import { fmtDateTime, fmtDay, fmtInstantDate, fmtStay, fmtStamp, instantYmd, money, nightsOf, plural } from "@/lib/ds/format";
 import { rateWords } from "@/lib/ds/rates";
 import { FolioLinesTable, spaceNamesFromAllocations } from "@/components/desk/workspace/folio-lines";
 import { SplitSettlementBlock } from "@/components/desk/workspace/split-settlement";
@@ -203,7 +203,7 @@ function WhatTheStayWas({ entry }: { entry: EntryDetail }) {
           <div className="meta">Stay</div>
           <div>
             <b>
-              {fmtRange(ci, co)}
+              {fmtStay(ci, co)}
               {nights ? ` · ${plural(nights, "night")}` : ""}
             </b>
           </div>
