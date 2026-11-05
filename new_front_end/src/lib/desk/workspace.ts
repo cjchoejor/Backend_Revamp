@@ -235,15 +235,14 @@ export function s3Readiness(
       met: liveQuotesThisPass(entry).length > 0,
     },
     // The order below is the order the desk works in (2026-09-25), because the side panel numbers
-    // it and each card waits for the one before: the guest's contact, then the payer, the terms,
-    // the bill, the money — and only then the rooms, which the backend refuses to hold until the
-    // folio, the disclosure and the money are all in place.
+    // it and each card waits for the one before: the guest's contact, then the payer, the bill,
+    // the money — and only then the rooms, which the backend refuses to hold until the folio and
+    // the money are in place. The terms are recorded by the system on reaching Set up (2026-11-05).
     {
       label: "A contact on file",
       met: hasAnyContact(entry),
     },
     { label: "Who pays chosen", met: !!folio?.billingModel && folio?.state === "PROVISIONAL", card: "billing-model" },
-    { label: "Cancellation terms recorded", met: !!entry.cancellationDisclosure, card: "terms" },
     // GENERATING the proforma is mandatory; SENDING it is not (operator ruling — only when an
     // advance is demanded or the guest asks). So "generated" is the standing item, and the
     // dispatch/settlement items below appear only when they actually apply — a vacuously-true

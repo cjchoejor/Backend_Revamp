@@ -1094,6 +1094,8 @@ export type TravelAgentAdmin = {
   modeOfContact: ContactMode;
   /** The agency's contact persons — the desk picks one at intake to fill the booking contact. */
   coordinators: CoordinatorContact[] | null;
+  /** The advance asked of a booking through them, a percentage of the stay. Null is not set. */
+  advancePercent: string | number | null;
   notes: string | null;
   isActive: boolean;
   createdAt: string;
@@ -1102,6 +1104,7 @@ export type TravelAgentAdmin = {
 };
 
 export type TravelAgentInput = {
+  advancePercent?: number | null;
   displayName: string;
   contactNumbers?: string[] | null;
   contactEmail?: string | null;
@@ -1152,6 +1155,8 @@ export type CorporateAccountAdmin = {
   billingAddress: string | null;
   contractRefs: string[];
   coordinators: CoordinatorContact[] | null;
+  /** The advance asked of a booking through them, a percentage of the stay. Null is not set. */
+  advancePercent: string | number | null;
   notes: string | null;
   isActive: boolean;
   createdAt: string;
@@ -1160,6 +1165,7 @@ export type CorporateAccountAdmin = {
 };
 
 export type CorporateAccountInput = {
+  advancePercent?: number | null;
   displayName: string;
   contactNumbers?: string[] | null;
   contactEmail?: string | null;

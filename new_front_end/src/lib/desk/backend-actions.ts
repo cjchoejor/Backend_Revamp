@@ -70,7 +70,7 @@ export const STAGE_ACTIONS: Record<string, Record<string, BackendItem[]>> = {
       { name: "FolioService.getOrCreate", ref: "services/domain (folio)", detail: "Creates / returns the provisional folio and sets the billing model.", trace: "^FOLIO\\.CREATED$" },
     ],
     disclosure: [
-      { name: "Policy 34 — disclosure before hold", ref: "p34 / s3-hold-service", detail: "Cancellation terms must be disclosed before a committed hold can be placed.", trace: "^CANCELLATION_DISCLOSURE\\.RECORDED$" },
+      { name: "Policy 34 — disclosure before hold", ref: "p34 / s3-hold-service", detail: "The system records the cancellation terms when a booking reaches Set up; the rooms cannot be blocked without them.", trace: "^CANCELLATION_DISCLOSURE\\.(AUTO_)?RECORDED$" },
     ],
     advance: [
       { name: "Advance payment service", ref: "services/domain (advance payment)", detail: "Records / reconciles the advance and recomputes payment status.", trace: "^FOLIO\\.PAYMENT_RECORDED$|^ADVANCE_PAYMENT\\.RECONCILED$" },

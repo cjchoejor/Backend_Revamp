@@ -52,7 +52,6 @@ export type SettingRoute = {
 const FINANCIAL = new Set([
   "billing.salesTaxRate",
   "billing.serviceChargeRate",
-  "advancePayment.thresholds",
   "advancePayment.followUpWindowSeconds",
   "advancePayment.escalationWindowSeconds",
   "payment.followUp.intervals",

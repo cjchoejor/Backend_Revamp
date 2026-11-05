@@ -121,6 +121,20 @@
 .ds .actbar { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--s3) var(--s4); margin-top: var(--s3); padding-top: var(--s3); border-top: 1px solid var(--line); }
 .ds .actbar > .actrow { border-top: 0; padding: 0; max-width: 320px; }
 .ds .actbar > .actrow .held .why { max-width: 300px; }
+/* The advance's steps, joined by a line, with credit apart at the right (2026-11-05). */
+.ds .money-flow { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--s3) var(--s4); margin-top: var(--s3); padding-top: var(--s3); border-top: 1px solid var(--line); }
+.ds .money-steps { flex: 1 1 480px; min-width: 0; display: flex; margin: 0; padding: 0; list-style: none; }
+.ds .money-step { position: relative; flex: 1 1 0; min-width: 0; padding-right: var(--s3); }
+.ds .money-step::before { content: ""; position: absolute; top: 11px; left: 24px; right: 0; height: 2px; background: var(--line-2); }
+.ds .money-step:last-child::before { display: none; }
+.ds .money-step.done::before { background: var(--success); }
+.ds .money-step .ms-n { position: relative; display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; margin-bottom: var(--s2); border: 2px solid var(--line-2); border-radius: 50%; background: var(--surface); color: var(--ink-2); font-size: 12px; font-weight: 700; }
+.ds .money-step .ms-n .icon, .ds .money-step .ms-n svg { width: 13px; height: 13px; }
+.ds .money-step.now .ms-n { border-color: var(--accent); background: var(--accent); color: #fff; }
+.ds .money-step.done .ms-n { border-color: var(--success); background: var(--success); color: #fff; }
+.ds .money-step > .actrow, .ds .money-side > .actrow { border-top: 0; padding: 0; }
+.ds .money-step > .actrow .held .why, .ds .money-side > .actrow .held .why { max-width: 100%; }
+.ds .money-side { flex: 0 1 200px; align-self: stretch; padding-left: var(--s4); border-left: 1px solid var(--line-2); }
 
 /* ------------------------------------------------------------------ the chosen room's acts
    Above the rooms table, so the acts plainly belong to the row that is lit (2026-10-06). */

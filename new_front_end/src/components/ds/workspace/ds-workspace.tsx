@@ -164,12 +164,11 @@ const NEGOTIATION_SECTIONS: Record<string, string> = {
   quotation: "The quotation",
 };
 /**
- * Set up's six sections (2026-10-28, operator: "now lets do the same for stage 3"), in the order the
- * backend takes them: who is who, who pays, the terms, the bill, the money, then the rooms held.
+ * Set up's sections (2026-10-28, operator: "now lets do the same for stage 3"), in the order the
+ * backend takes them: who pays, the bill, the money, then the rooms held.
  */
 const SETUP_SECTIONS: Record<string, string> = {
   "billing-model": "Who pays",
-  terms: "Cancellation terms",
   proforma: "The proforma",
   money: "The payment plan",
   hold: "The committed hold",
@@ -1265,7 +1264,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                   from: "Negotiation",
                   to: "Set up",
                   who: [name, entry.id].filter(Boolean).join(" · "),
-                  next: "Next: who pays, the cancellation terms, the proforma and the advance.",
+                  next: "Next: who pays, the proforma and the advance.",
                 }),
             },
           )

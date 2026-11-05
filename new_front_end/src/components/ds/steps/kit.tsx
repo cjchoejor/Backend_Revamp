@@ -118,6 +118,8 @@ type FlowCtxValue = {
   visited: ReadonlySet<string>;
   opened: ReadonlySet<string>;
   open: (card: string) => void;
+  /** Close a section opened with its Edit, back to its one line. */
+  close: (card: string) => void;
   /**
    * Fold an opened or finished section and go to the next one still to do. `reveal: false`
    * marks the next one current without scrolling to it — after Take it the bill above stays in
@@ -140,6 +142,7 @@ const FlowCtx = createContext<FlowCtxValue>({
   visited: new Set(),
   opened: new Set(),
   open: () => {},
+  close: () => {},
   done: () => {},
   derived: {},
   doneBar: true,
@@ -352,6 +355,16 @@ export function StepFlow({
     setVisited((prev) => new Set(prev).add(card));
     setActive(card);
   }, []);
+  const close = useCallback((card: string) => {
+    // The press that closed it must not put the work back on the section it was pressed in.
+    if (pressed.current) skipPress.current = true;
+    setOpened((prev) => {
+      const next = new Set(prev);
+      next.delete(card);
+      return next;
+    });
+    setActive((cur) => (cur === card ? null : cur));
+  }, []);
   const done = useCallback(
     (card: string, opts?: { reveal?: boolean; next?: string }) => {
       if (pressed.current) skipPress.current = true;
@@ -401,9 +414,9 @@ export function StepFlow({
   // a card only re-renders when its own number or standing moves.
   const key = `${on}|${fold}|${confirm}|${doneBar}|${Object.entries(derived).join(",")}|${[...confirmed].join(",")}|${current}|${active}|${[...opened].join(",")}|${[...visited].join(",")}|${items.map((i) => `${i.n}${i.met ? "1" : "0"}${i.card}`).join("~")}`;
   const value = useMemo<FlowCtxValue>(
-    () => ({ items, on, fold: on ? fold : null, confirm, confirmed, current, active, visited, opened, open, done, derived, doneBar }),
+    () => ({ items, on, fold: on ? fold : null, confirm, confirmed, current, active, visited, opened, open, close, done, derived, doneBar }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [key, open, done],
+    [key, open, close, done],
   );
   return (
     <FlowCtx.Provider value={value}>
@@ -776,6 +789,7 @@ export function StepCard({
   doneAction,
   revealAtTop = false,
   keepRight = false,
+  restsFolded = false,
 }: {
   title?: ReactNode;
   icon?: IconName;
@@ -844,6 +858,12 @@ export function StepCard({
    * centred it grew down the page with the stay still showing above it (2026-10-28).
    */
   revealAtTop?: boolean;
+  /**
+   * There is nothing to do here for now, so the section rests as its one line, with Edit to open it
+   * and Hide to close it again (2026-11-05, operator, on a booking asked for no advance: "dont open
+   * the payment plan section, but keep it open and closable").
+   */
+  restsFolded?: boolean;
 }) {
   const { n, met, done, ticked, waitsFor } = useFlowCard(flow, flowAfter, flowAfterOnly);
   const ctx = useContext(FlowCtx);
@@ -865,16 +885,19 @@ export function StepCard({
     !!flow &&
     !!summary &&
     hasBody &&
-    !!done &&
     !waiting &&
     !isOpened &&
-    (ctx.fold === "done"
-      ? ctx.active !== flow
-      : ctx.fold === "on-move"
-        ? !!ctx.active && ctx.active !== flow && ctx.visited.has(flow)
-        : false);
+    ((ctx.on && restsFolded) ||
+      (!!done &&
+        (ctx.fold === "done"
+          ? ctx.active !== flow
+          : ctx.fold === "on-move"
+            ? !!ctx.active && ctx.active !== flow && ctx.visited.has(flow)
+            : false)));
   // A finished, unfolded section offers Done: fold it and go on to the next one.
   const canDone = !!flow && !!summary && !!met && !waiting && !folded && !!ctx.fold && !noDoneBar && ctx.doneBar;
+  // Opened with its Edit and no Done to fold it: Hide closes it again.
+  const canHide = isOpened && !!summary && !waiting && !canDone && (!!done || restsFolded);
   const body = (
     <>
       {status ? <div className="meta" style={{ marginBottom: 8 }}>{status}</div> : null}
@@ -915,7 +938,16 @@ export function StepCard({
             {metaInHelp ? <Help label="About this section">{meta}</Help> : null}
             {isCurrent ? <span className="flow-here">you are here</span> : null}
           </h4>
-          {waiting || (folded && !keepRight) ? null : right ? <div className="row-acts">{right}</div> : null}
+          {waiting || (folded && !keepRight) ? null : right || canHide ? (
+            <div className="row-acts">
+              {right}
+              {canHide ? (
+                <Button kind="quiet" compact onClick={() => ctx.close(flow!)}>
+                  Hide
+                </Button>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       ) : null}
       {folded ? (

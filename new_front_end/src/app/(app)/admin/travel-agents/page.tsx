@@ -27,6 +27,7 @@ import { RatePackageHistory } from "@/components/admin/rate-package-history";
 import { VersionsTab } from "@/components/admin/versions-tab";
 import { useSelectionParam } from "@/hooks/use-selection-param";
 import { PartyList } from "@/components/admin/party-list";
+import { AdvancePercentField } from "@/components/admin/advance-percent-field";
 
 const CONTACT_MODES: ContactMode[] = ["PHONE", "EMAIL", "WHATSAPP", "IN_PERSON", "OTHER"];
 const EMPTY: TravelAgentInput = { displayName: "", modeOfContact: "PHONE" };
@@ -63,6 +64,7 @@ export default function AdminTravelAgentsPage() {
     setDraft({
       displayName: selected.displayName,
       contactNumbers: selected.contactNumbers ?? [],
+      advancePercent: selected.advancePercent == null ? null : Number(selected.advancePercent),
       contactEmail: selected.contactEmail,
       modeOfContact: selected.modeOfContact,
       coordinators: selected.coordinators ?? [],
@@ -84,6 +86,7 @@ export default function AdminTravelAgentsPage() {
     setDraft({
       displayName: a.displayName,
       contactNumbers: a.contactNumbers ?? [],
+      advancePercent: a.advancePercent == null ? null : Number(a.advancePercent),
       contactEmail: a.contactEmail,
       modeOfContact: a.modeOfContact,
       coordinators: a.coordinators ?? [],
@@ -185,6 +188,7 @@ export default function AdminTravelAgentsPage() {
                     <span className="admin-muted text-xs">Email</span>
                     <input className="admin-input" type="email" value={draft.contactEmail ?? ""} onChange={(e) => setDraft({ ...draft, contactEmail: e.target.value })} />
                   </label>
+                  <AdvancePercentField value={draft.advancePercent} onChange={(v) => setDraft({ ...draft, advancePercent: v })} whose="this agency" />
                   <div className="block space-y-1 sm:col-span-2">
                     <FieldTitle
                       label="Contact persons"

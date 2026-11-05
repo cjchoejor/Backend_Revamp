@@ -337,17 +337,10 @@ export type PaymentStatusSummary = {
   creditExtensionExpiresAt?: string | null;
   /** True when an extension exists but its clock ran out — it no longer satisfies the condition. */
   creditExtensionExpired?: boolean;
-  /** Where requiredAmount came from: the desk's per-booking requirement or the config thresholds. */
-  requirementSource?: "OPERATOR" | "CONFIG";
-  /** Present for OPERATOR requirements: { mode: "AMOUNT" } or { mode: "PERCENT", percent, baseTotal, quotationId }. */
-  requirementBasis?: { mode?: string; percent?: number; baseTotal?: number; quotationId?: string } | null;
-  /**
-   * What the CONFIG thresholds demand (incl. group boost), independent of any per-booking pin
-   * (2026-08-03). Lets the desk show "hotel minimum unchanged at X" next to a pinned figure.
-   */
-  configuredBaseAmount?: number;
-  /** Present only when the group-boost policy raised the requiredAmount above the base. */
-  groupBoostApplied?: { multiplierPercent: number; baseAmount: number };
+  /** Where requiredAmount came from: set for this booking, the party's own percentage, or nothing asked. */
+  requirementSource?: "OPERATOR" | "PARTY" | "NONE";
+  /** { mode: "AMOUNT" } or { mode: "PERCENT", percent, baseTotal, quotationId }; from a party, also its name. */
+  requirementBasis?: { mode?: string; percent?: number; baseTotal?: number; quotationId?: string; source?: string; partyName?: string } | null;
   /**
    * The advance-payment window (2026-08-01): due between proforma dispatch (`opensAt`) and the
    * check-in date (`deadline`). `active` = clock running; `overdue` = check-in passed unpaid.
@@ -360,6 +353,8 @@ export type CancellationDisclosureSummary = {
   entryId: string;
   noShowTreatmentStatement: string;
   disclosedAt: string;
+  /** "SYSTEM" when reaching Set up recorded them (2026-11-05). */
+  disclosedBy?: string;
 };
 
 export type CommittedHoldSummary = {

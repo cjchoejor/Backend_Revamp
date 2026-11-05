@@ -197,8 +197,6 @@ function ReserveAdvance({ entry, past }: { entry: EntryDetail; past: boolean }) 
       elevated={atLeast(session?.actorLevel, "L2")}
       status={payment.data}
       statusLoading={payment.isLoading}
-      refetching={payment.isFetching}
-      onRefetch={() => void payment.refetch()}
       tz={clock.tz}
       bill={{ proforma, dispatched: !!proforma?.dispatchedAt, answered: replySettled(pfComm), notAsked: pfComm?.acknowledgementStatus === "NOT_ASKED" }}
       onChanged={() => {
@@ -224,7 +222,6 @@ type Line = {
 const KNOWN = [
   "Quote generated",
   "Who pays chosen",
-  "Cancellation terms recorded",
   "Proforma invoice generated",
   "Proforma sent to guest",
   "Guest's answer to the proforma recorded",
@@ -375,10 +372,9 @@ function BeforeYouReserve({
     label: "Terms disclosed",
     value: disc
       ? `cancellation and no-show · ${disc.noShowTreatmentStatement.length > 80 ? `${disc.noShowTreatmentStatement.slice(0, 80)}…` : disc.noShowTreatmentStatement}`
-      : "not yet — Set up · record that the terms were told",
+      : "recorded when the rooms are blocked",
     who: disc ? `${discJ?.disclosedBy ? `${discJ.disclosedBy} · ` : ""}${fmtStamp(disc.disclosedAt, tz)}` : undefined,
-    state: metOr("Cancellation terms recorded") ? "on" : "missing",
-    fix: 3,
+    state: "on",
   });
 
   /* the advance */
@@ -897,7 +893,7 @@ function WhatReserveDecided({ entry }: { entry: EntryDetail }) {
               : `${plural(entry.numberOfRooms ?? 1, "room")} · numbers assigned at Arrival`}
         </Fact>
         <Fact k="Terms disclosed" meta={disc ? fmtStamp(disc.disclosedAt, tz) : undefined}>
-          {disc ? "cancellation and no-show, as told to the guest" : null}
+          {disc ? (disc.disclosedBy === "SYSTEM" ? "cancellation and no-show, recorded by the system" : "cancellation and no-show, as told to the guest") : null}
         </Fact>
         <Fact k="Advance" meta={pay?.paymentPlan ? `${PLAN_LABEL[pay.paymentPlan.plan]}${pay.paymentPlan.balanceDueAt ? ` · ${dueLabel(pay.paymentPlan.plan, pay.paymentPlan.balanceDueAt)}` : ""}` : undefined}>
           {pay ? (pay.requiredAmount > 0 || pay.totalReceived > 0 ? `${money(pay.totalReceived, cur)} received of ${money(pay.requiredAmount, cur)}` : "not required") : null}

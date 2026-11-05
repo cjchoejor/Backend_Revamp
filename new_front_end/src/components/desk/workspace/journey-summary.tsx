@@ -353,15 +353,9 @@ export function JourneySummaryPanel({ entryId }: { entryId: string }) {
               {moneyOrDash(s3.advancePayment.requiredAmount, cur)}
               {s3.advancePayment.requirementSource === "OPERATOR"
                 ? " · set by the desk for this booking"
-                : s3.advancePayment.requirementSource === "CONFIG"
-                  ? " · from the configured thresholds"
+                : s3.advancePayment.requirementSource === "PARTY"
+                  ? " · the travel agent's or company's own percentage"
                   : ""}
-              {s3.advancePayment.groupBoostApplied
-                ? ` · group boost ×${s3.advancePayment.groupBoostApplied.multiplierPercent / 100} (base ${moneyOrDash(
-                    s3.advancePayment.groupBoostApplied.baseAmount,
-                    cur,
-                  )})`
-                : ""}
             </span>
           ) : (
             "—"

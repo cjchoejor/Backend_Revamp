@@ -510,11 +510,10 @@ export type BookingJourneySummary = {
       shortfall: number | null;
       creditExtensionActive: boolean;
       ceilingAmount: number | null;
-      requirementSource: "OPERATOR" | "CONFIG" | null;
+      requirementSource: "OPERATOR" | "PARTY" | "NONE" | null;
       requirementBasis: unknown | null;
       creditExtensionExpiresAt: string | null;
       creditExtensionExpired: boolean;
-      groupBoostApplied: { multiplierPercent: number; baseAmount: number } | null;
       advanceWindow: { opensAt: string | null; deadline: string | null; active: boolean; overdue: boolean } | null;
     } | null;
     payments: Array<{

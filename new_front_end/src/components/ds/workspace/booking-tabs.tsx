@@ -308,7 +308,16 @@ export function ChargesView({
         >
           {p ? (
             <Facts wide>
-              <Fact k="Advance asked" meta={p.requirementSource === "OPERATOR" ? "set for this booking" : "the house's rule"}>
+              <Fact
+                k="Advance asked"
+                meta={
+                  p.requirementSource === "OPERATOR"
+                    ? "set for this booking"
+                    : p.requirementSource === "PARTY"
+                      ? `${p.requirementBasis?.partyName ?? "their"} rule`
+                      : undefined
+                }
+              >
                 {p.requiredAmount > 0 ? money(p.requiredAmount, cur) : "none asked"}
               </Fact>
               {/* The standing words from Arrival's old Advance and credit card live here now

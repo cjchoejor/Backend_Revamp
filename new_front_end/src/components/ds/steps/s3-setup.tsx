@@ -30,12 +30,12 @@ import {
   confirmCoordinator,
   dispatchInvoice,
   ensureProvisionalFolio,
+  getPaymentStatus,
   getPayerChoices,
   getHoldWindow,
   initiateS3ReEntryToS1,
   initiateS3ReEntryToS2,
   placeCommittedHold,
-  recordCancellationDisclosure,
   releaseCommittedHold,
   setCommittedHoldExpiry,
   listPaymentMilestoneTemplates,
@@ -66,8 +66,6 @@ const FOLIO_WORD: Record<string, string> = {
   SETTLED: "The bill is settled.",
   CLOSED: "The bill is closed.",
 };
-
-const DEFAULT_NO_SHOW = "No-show: one night room charge plus applicable taxes.";
 
 type InquiryScalars = {
   sourceChannel?: string | null;
@@ -272,20 +270,13 @@ export function S3SetUp({
               ? preselectedWhy
               : null
         }
-        onChanged={changed}
-      />
-
-      {/* The order the desk works in (2026-09-25): the payer, then the terms, the bill and
-          the money — and the rooms last, the only order the backend accepts them in. */}
-      <TermsCard
-        entry={entry}
-        editable={editable}
-        tz={tz}
-        status={status}
         onAskAdvance={() => setAskAdvance((n) => n + 1)}
         onChanged={changed}
       />
 
+      {/* The order the desk works in (2026-09-25): the payer, then the bill and the money — and
+          the rooms last, the only order the backend accepts them in. The terms are recorded by the
+          system when a booking reaches Set up (2026-11-05). */}
       <ProformaCard
         entry={entry}
         editable={editable}
@@ -305,8 +296,6 @@ export function S3SetUp({
         elevated={elevated}
         status={status}
         statusLoading={payment.isLoading}
-        refetching={payment.isFetching}
-        onRefetch={() => void payment.refetch()}
         tz={tz}
         bill={{ proforma: currentProforma, dispatched, answered, notAsked: replyNotAsked }}
         askAdvance={askAdvance}
@@ -420,6 +409,7 @@ function BillingModelCard({
   savedModel,
   offered,
   preselectedWhy,
+  onAskAdvance,
   onChanged,
 }: {
   entry: EntryDetail;
@@ -432,6 +422,8 @@ function BillingModelCard({
   offered: string[] | null;
   /** Why the model shown was chosen for the desk — null when the desk chose it. */
   preselectedWhy: string | null;
+  /** The desk said yes to an advance: the payment plan's advance box opens. */
+  onAskAdvance: () => void;
   onChanged: () => void;
 }) {
   const { session } = useSession();
@@ -446,16 +438,30 @@ function BillingModelCard({
   }, [offered, savedModel, party]);
   // Setting the payer finishes the section — no Done to press after it (2026-10-28).
   const finish = useFinishWhenDone("billing-model");
+  /**
+   * Whether to ask for an advance comes with the first choice of who pays (2026-11-05, operator: it
+   * followed the terms, which the system records now: "show that when the user clicks set who
+   * pays"). Only when nothing is asked: a travel agent's or company's own percentage has already
+   * asked it. The question writes nothing; the amount set is the record.
+   */
+  const [askAdvance, setAskAdvance] = useState(false);
   const save = useMutation({
-    mutationFn: () => ensureProvisionalFolio(session!, entry.id, { billingModel: model! }),
-    onSuccess: () => {
+    mutationFn: async () => {
+      const first = !savedModel;
+      await ensureProvisionalFolio(session!, entry.id, { billingModel: model! });
+      if (!first) return { ask: false };
+      const st = await getPaymentStatus(session!, entry.id).catch(() => null);
+      return { ask: !!st && st.requiredAmount === 0 && st.totalReceived === 0 && !st.creditExtensionActive };
+    },
+    onSuccess: ({ ask }) => {
       // Keyed on a model being SET, not on the folio existing — the folio opens at Set up with no
       // model, so the first choice read as a change (2026-09-18).
       toast.success(
         !folio ? "The provisional bill is open — the proforma is generated with it" : savedModel ? "Who pays is changed" : "Who pays is set",
       );
       onChanged();
-      finish();
+      if (ask) setAskAdvance(true);
+      else finish();
     },
     onError: (e) => toastRefusal(e, "Who pays could not be set"),
   });
@@ -508,6 +514,43 @@ function BillingModelCard({
           </div>
         ) : null}
       </Live>
+      {askAdvance ? (
+        <DsDialog
+          open
+          closeX
+          onClose={() => {
+            setAskAdvance(false);
+            finish();
+          }}
+          title="Ask the guest for an advance?"
+          caseLines={["Nothing is asked of this booking so far"]}
+          help="With an advance, the guest pays it before the booking is reserved and the proforma shows the amount. With none, the rooms are blocked next."
+          footer={
+            <>
+              <Button
+                kind="secondary"
+                onClick={() => {
+                  setAskAdvance(false);
+                  finish();
+                }}
+              >
+                No advance
+              </Button>
+              <Button
+                onClick={() => {
+                  setAskAdvance(false);
+                  finish({ next: "money" });
+                  onAskAdvance();
+                }}
+              >
+                Yes, ask for an advance
+              </Button>
+            </>
+          }
+        >
+          <p className="sm">Does the hotel want an advance on this booking?</p>
+        </DsDialog>
+      ) : null}
     </StepCard>
   );
 }
@@ -640,11 +683,9 @@ function HoldCard({
     ? "choose the rooms at Inquiry first"
     : !entry.folio?.billingModel
       ? "choose who pays first"
-      : !entry.cancellationDisclosure
-        ? "record that the terms were disclosed first"
-        : moneyLock
-          ? "the advance, or part of it, has to come in first — or the FOM extends credit"
-          : null;
+      : moneyLock
+        ? "the advance, or part of it, has to come in first — or the FOM extends credit"
+        : null;
   // The rooms by type and count — "2 Deluxe Double and 1 Executive" (2026-10-28, operator) — and a
   // room given by number by its number (2026-10-29).
   const typeNames = useRoomTypeNames();
@@ -1050,161 +1091,6 @@ function HoldTimeDialog({
   );
 }
 
-/* ------------------------------------------------------------------ the terms disclosed */
-
-function TermsCard({
-  entry,
-  editable,
-  tz,
-  status,
-  onAskAdvance,
-  onChanged,
-}: {
-  entry: EntryDetail;
-  editable: boolean;
-  tz: string;
-  /** What the guest is asked to pay — the advance question after the terms reads it. */
-  status: PaymentStatusSummary | undefined;
-  /** "Yes, ask for an advance": open the payment plan's amount box. */
-  onAskAdvance: () => void;
-  onChanged: () => void;
-}) {
-  const { session } = useSession();
-  const { past } = useStepMode();
-  const d = entry.cancellationDisclosure ?? null;
-  const [open, setOpen] = useState(false);
-  // Once the terms are recorded and nothing is asked of the guest yet, the desk is asked whether
-  // the hotel wants an advance (2026-10-28, operator: "after finishing the terms it takes the user
-  // directly to the committed hold … it can prompt the user if the hotel wishes to impose advance
-  // payment; if no, take the user to the committed hold; if yes, to the payment plan").
-  const [askAdvance, setAskAdvance] = useState(false);
-  const nothingAsked =
-    !!status && status.requiredAmount === 0 && (status.totalReceived ?? 0) === 0 && !status.creditExtensionActive;
-  // The terms the rooms were booked on carry from the booking they were split off (2026-10-14).
-  const [statement, setStatement] = useState(entry.carryOver?.cancellation?.noShowTreatmentStatement || DEFAULT_NO_SHOW);
-  const finish = useFinishWhenDone("terms");
-  const record = useMutation({
-    mutationFn: () =>
-      recordCancellationDisclosure(session!, entry.id, {
-        noShowTreatmentStatement: statement.trim(),
-        disclosedTerms: { tier: "DEFAULT" },
-      }),
-    onSuccess: () => {
-      toast.success("The terms are on record as disclosed");
-      setOpen(false);
-      onChanged();
-      if (nothingAsked) setAskAdvance(true);
-      else finish();
-    },
-    onError: (e) => toastRefusal(e, "The disclosure could not be recorded"),
-  });
-  return (
-    <StepCard
-      flow="terms"
-      flowAfter="billing-model"
-      title="Terms disclosed"
-      summary={d ? `The hotel's standard terms · disclosed ${fmtStamp(d.disclosedAt, tz)}` : undefined}
-      acts={
-        d || past ? undefined : (
-          <Live>
-            <SeeRow
-              kind="secondary"
-              label="Record that the terms were disclosed"
-              note="the no-show treatment in the words the guest was given — Reserve is refused without it"
-              onClick={editable ? () => setOpen(true) : undefined}
-              reason={editable ? undefined : "not at this step"}
-            />
-          </Live>
-        )
-      }
-    >
-      <Facts wide>
-        <Fact k="Cancellation">the hotel&rsquo;s standard terms — the charge follows the notice given</Fact>
-        <Fact k="No-show">{d ? d.noShowTreatmentStatement : statement}</Fact>
-        <Fact k="Disclosed">
-          {d ? (
-            <Chip tone="success" icon="check">
-              {fmtStamp(d.disclosedAt, tz)}
-            </Chip>
-          ) : (
-            <>
-              <Chip tone="warning">not yet</Chip>
-              <Help label="About the disclosure">The booking keeps a disclosure record before Reserve.</Help>
-            </>
-          )}
-        </Fact>
-      </Facts>
-      {open ? (
-        <DsDialog
-          open
-          onClose={() => setOpen(false)}
-          busy={record.isPending}
-          title="Terms disclosed"
-          caseLines={["Cancellation · the hotel's standard terms"]}
-          help="The record keeps the words, who recorded them, and when." 
-          footer={
-            <>
-              <Button kind="quiet" state={record.isPending ? "inert" : "default"} onClick={() => setOpen(false)}>
-                Not now
-              </Button>
-              <Button
-                state={record.isPending ? "working" : statement.trim() ? "default" : "inert"}
-                title={statement.trim() ? undefined : "the no-show treatment is needed"}
-                workingLabel="Recording…"
-                onClick={() => record.mutate()}
-              >
-                Record the disclosure
-              </Button>
-            </>
-          }
-        >
-          <div className="field">
-            <label>The no-show treatment, as the guest was told</label>
-            <textarea className="input" rows={2} value={statement} onChange={(e) => setStatement(e.target.value)} autoFocus />
-          </div>
-        </DsDialog>
-      ) : null}
-      {askAdvance ? (
-        <DsDialog
-          open
-          // Closed without an answer: nothing is asked, so the work goes on to the hold as with No.
-          onClose={() => {
-            setAskAdvance(false);
-            finish();
-          }}
-          title="Ask the guest for an advance?"
-          caseLines={["Nothing is asked now · the hotel's settings ask for no advance"]}
-          help="With an advance, the guest pays it before the booking is reserved and the proforma shows the amount. With none, the rooms are blocked next."
-          footer={
-            <>
-              <Button
-                kind="secondary"
-                onClick={() => {
-                  setAskAdvance(false);
-                  finish();
-                }}
-              >
-                No advance
-              </Button>
-              <Button
-                onClick={() => {
-                  setAskAdvance(false);
-                  finish({ next: "money" });
-                  onAskAdvance();
-                }}
-              >
-                Yes, ask for an advance
-              </Button>
-            </>
-          }
-        >
-          <p className="sm">Does the hotel want an advance on this booking?</p>
-        </DsDialog>
-      ) : null}
-    </StepCard>
-  );
-}
-
 /* ------------------------------------------------------------------ the proforma */
 
 function ProformaCard({
@@ -1284,7 +1170,7 @@ function ProformaCard({
     return (
       <StepCard
         flow="proforma"
-        flowAfter="terms"
+        flowAfter="billing-model"
         title="Proforma"
         icon="file"
         meta="Generated together with the provisional bill. Not a tax invoice; the tax invoice is issued at check-out."
@@ -1336,7 +1222,7 @@ function ProformaCard({
       // anchor: the side panel's "To do here" jump and any "go to the proforma" button found
       // nothing to scroll to (2026-10-06). The empty-state card above always had it.
       flow="proforma"
-      flowAfter="terms"
+      flowAfter="billing-model"
       // The number is in the title; the line says where the bill stands.
       summary={[
         asks,

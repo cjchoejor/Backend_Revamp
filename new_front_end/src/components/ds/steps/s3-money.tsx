@@ -12,7 +12,7 @@
  * Every figure is `GET /api/entries/:id/payment-status` — received, required, remaining — summed
  * server-side in Decimal. Nothing is added up here.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { BindingBox, Button, Chip, Icon, MoneyInput } from "@/design-system";
@@ -66,8 +66,8 @@ const REQUIREMENT_MODES = [
   ["AMOUNT", "A flat amount"],
 ] as const;
 type RequirementMode = (typeof REQUIREMENT_MODES)[number][0];
-/** The amount's choice in the advance box — "the hotel's default" is offered when this booking set its own. */
-type AmountMode = RequirementMode | "DEFAULT";
+/** The amount's choice in the advance box — "No advance" is offered when this booking has an amount. */
+type AmountMode = RequirementMode | "NONE";
 
 type Reissued = { versionNumber: number; supersededIds: string[] } | null | undefined;
 
@@ -91,8 +91,6 @@ export function PaymentPlanCard({
   elevated,
   status,
   statusLoading,
-  refetching,
-  onRefetch,
   tz,
   bill,
   askAdvance = 0,
@@ -105,12 +103,10 @@ export function PaymentPlanCard({
   elevated: boolean;
   status: PaymentStatusSummary | undefined;
   statusLoading: boolean;
-  refetching: boolean;
-  onRefetch: () => void;
   tz: string;
   /** This pass's proforma, whether it went out, and whether the guest's answer is on record. */
   bill: { proforma: InvoiceSummary | null; dispatched: boolean; answered: boolean; notAsked?: boolean };
-  /** Raised when the desk says yes to an advance after the terms: the advance box opens. */
+  /** Raised when the desk says yes to an advance on setting who pays: the advance box opens. */
   askAdvance?: number;
   /**
    * A payment came in and the rooms were blocked by it (`until`), or not (`null`) — the hold card
@@ -208,7 +204,8 @@ export function PaymentPlanCard({
         : null;
 
   const nothingAsked = !!status && status.requiredAmount === 0 && received === 0 && !status.creditExtensionActive;
-  const stateChip = !status ? null : status.paidInFull ? (
+  // With nothing asked and nothing in, the box below says so. "Paid in full" is true of zero (2026-11-05).
+  const stateChip = !status || nothingAsked ? null : status.paidInFull ? (
     <Chip tone="success" icon="check">
       received
     </Chip>
@@ -234,6 +231,14 @@ export function PaymentPlanCard({
           : `Received ${money(received, cur)} of ${money(status.requiredAmount, cur)}`;
   const basis = status?.requirementBasis ?? null;
   const advWindow = status?.advanceWindow ?? null;
+  // The advance's three steps (2026-11-05, operator: "show these ones like a step ... like a progress
+  // bar things, so connect them with a line"). Each is done on the server's facts; the first not
+  // done is the one being worked.
+  const asked = !!status && (status.requiredAmount > 0 || !!plan || received > 0);
+  const paidUp = !!status && status.paidInFull && (status.requiredAmount > 0 || received > 0);
+  const stepsDone = [asked, paidUp, reconciled];
+  const firstOpen = stepsDone.indexOf(false);
+  const stepState = (i: number): MoneyStepState => (stepsDone[i] ? "done" : i === firstOpen ? "now" : "later");
   const shortWithPlan =
     !!status && !status.paidInFull && received > 0 && !!plan && (plan.plan !== "FULL" || !!plan.balanceDueAt) && !status.creditExtensionActive;
 
@@ -244,6 +249,7 @@ export function PaymentPlanCard({
       title={setUp ? "The payment plan" : "The advance"}
       right={stateChip}
       summary={setUp ? summary : undefined}
+      restsFolded={setUp && nothingAsked}
     >
       {!folio ? (
         <span className="meta">The plan is set once the provisional bill exists — choose the billing model above.</span>
@@ -254,27 +260,27 @@ export function PaymentPlanCard({
           {nothingAsked ? (
             <BindingBox family="bound" stateWord="no advance" style={{ marginBottom: 10 }}>
               <div className="sm" style={{ paddingRight: 90 }}>
-                No advance is asked for this booking ·{" "}
-                {status.requirementSource === "OPERATOR" ? "set for this booking" : "the hotel's settings ask for nothing"}
+                No advance is asked for this booking
               </div>
             </BindingBox>
           ) : null}
+          {nothingAsked ? null : (
           <Facts wide>
             <Fact
               k="Rule"
               meta={
-                status.requirementSource === "OPERATOR"
-                  ? `set for this booking · the hotel's minimum stays ${money(status.configuredBaseAmount ?? null, cur)}`
-                  : status.groupBoostApplied
-                    ? `raised to ${status.groupBoostApplied.multiplierPercent}% for a group · the base is ${money(status.groupBoostApplied.baseAmount, cur)}`
-                    : "from the hotel's settings"
+                status.requirementSource === "PARTY"
+                  ? `${basis?.partyName ?? "their"} rule`
+                  : status.requirementSource === "OPERATOR"
+                    ? "set for this booking"
+                    : undefined
               }
             >
-              {status.requirementSource === "OPERATOR"
-                ? basis?.mode === "PERCENT"
+              {status.requirementSource === "NONE"
+                ? "no advance asked"
+                : basis?.mode === "PERCENT"
                   ? `advance ${basis.percent}% of the quotation`
-                  : "a flat advance"
-                : "the house advance"}
+                  : "a flat advance"}
             </Fact>
             <Fact
               k="Amount"
@@ -358,6 +364,7 @@ export function PaymentPlanCard({
             ) : null}
             {reconciled ? <Fact k="Signed off">yes — the money position is accepted</Fact> : null}
           </Facts>
+          )}
 
           {status.installments?.length ? (
             <table className="table compact" style={{ marginTop: 10 }}>
@@ -409,14 +416,18 @@ export function PaymentPlanCard({
           </div>
         ) : null}
         {editable && folio ? (
-          // The acts side by side, not one per line (2026-10-28, operator: "the buttons are taking
-          // needless space by being arranged vertically, make it horizontal").
-          <div className="actbar">
+          // The steps in a row, joined by a line, with credit apart: it is not a step, it is the
+          // FOM's way round the second one (2026-11-05, as 2026-10-28: "make it horizontal").
+          <div className="money-flow">
+            <ol className="money-steps">
+              <MoneyStep n={1} state={stepState(0)}>
             <ActionRow
-              label={status?.requirementSource === "OPERATOR" || plan ? "Change the advance" : "Set the advance"}
+              label={status?.requirementSource === "OPERATOR" || status?.requirementSource === "PARTY" || plan ? "Change the advance" : "Set the advance"}
               caption="How much the guest pays, and how and when. The proforma prints both, so a change issues it again."
               onClick={() => setOpen("advance")}
             />
+              </MoneyStep>
+              <MoneyStep n={2} state={stepState(1)}>
             <ActionRow
               kind="primary"
               // Green and full size once it is time (2026-10-28, operator: "more prominent than just a
@@ -434,6 +445,8 @@ export function PaymentPlanCard({
               goTo={payHold?.card}
               goToLabel={payHold?.cta}
             />
+              </MoneyStep>
+              <MoneyStep n={3} state={stepState(2)}>
             <ActionRow
               label="Mark reconciled"
               caption="Signs off the money position — ticks the arrival checklist and stops the chasing. It needs money received first; a direct-bill booking is the exception."
@@ -441,6 +454,9 @@ export function PaymentPlanCard({
               state={reconcileM.isPending ? "working" : reconcileLock ? "inert" : "default"}
               heldBy={reconcileLock}
             />
+              </MoneyStep>
+            </ol>
+            <div className="money-side">
             <ActionRow
               label="Extend credit"
               caption="Lets the booking go on without the advance, up to a ceiling and for a time."
@@ -448,12 +464,7 @@ export function PaymentPlanCard({
               state={elevated ? "default" : "inert"}
               heldBy={elevated ? null : "Extending credit is the FOM's call."}
             />
-            <ActionRow
-              label="Read the payment again"
-              caption="When money was logged on another terminal."
-              onClick={onRefetch}
-              state={refetching ? "working" : "default"}
-            />
+            </div>
           </div>
         ) : null}
       </Live>
@@ -466,6 +477,19 @@ export function PaymentPlanCard({
         <CreditDialog entry={entry} status={status} tz={tz} currency={cur} onClose={() => setOpen(null)} onDone={moneyIn} />
       ) : null}
     </StepCard>
+  );
+}
+
+/* ------------------------------------------------------------------ the steps */
+
+type MoneyStepState = "done" | "now" | "later";
+
+function MoneyStep({ n, state, children }: { n: number; state: MoneyStepState; children: ReactNode }) {
+  return (
+    <li className={`money-step ${state}`} aria-current={state === "now" ? "step" : undefined}>
+      <span className="ms-n">{state === "done" ? <Icon name="check" /> : n}</span>
+      {children}
+    </li>
   );
 }
 
@@ -500,7 +524,7 @@ function AdvanceDialog({
   // placeholder "50" read as the value already there). A first advance opens with nothing chosen,
   // and each question appears once the one before it is answered (2026-10-28, operator: "step by
   // step — ask for, the figure, how they'll pay, when the rest is coming, then save").
-  const pinned = status?.requirementSource === "OPERATOR" ? status.requirementBasis : null;
+  const pinned = status?.requirementSource === "OPERATOR" || status?.requirementSource === "PARTY" ? status.requirementBasis : null;
   const pinnedMode: AmountMode | null = pinned ? (pinned.mode === "AMOUNT" ? "AMOUNT" : "PERCENT") : null;
   const pinnedValue =
     pinned?.mode === "PERCENT" && pinned.percent != null
@@ -510,12 +534,12 @@ function AdvanceDialog({
         : "";
   const [mode, setMode] = useState<AmountMode | null>(pinnedMode);
   const [value, setValue] = useState(pinnedValue);
-  const amountModes: ReadonlyArray<readonly [AmountMode, string]> = pinned ? [...REQUIREMENT_MODES, ["DEFAULT", "The hotel's default"] as const] : REQUIREMENT_MODES;
+  const amountModes: ReadonlyArray<readonly [AmountMode, string]> = pinned ? [...REQUIREMENT_MODES, ["NONE", "No advance"] as const] : REQUIREMENT_MODES;
   const n = Number(value);
   const typed = value.trim() !== "";
-  const amountOk = mode === "DEFAULT" || (mode === "PERCENT" && isAmount(value) && n <= 100) || (mode === "AMOUNT" && isAmount(value));
+  const amountOk = mode === "NONE" || (mode === "PERCENT" && isAmount(value) && n <= 100) || (mode === "AMOUNT" && isAmount(value));
   const requirement =
-    mode === "DEFAULT"
+    mode === "NONE"
       ? pinned
         ? ({ mode: "CLEAR" } as const)
         : null
@@ -526,9 +550,8 @@ function AdvanceDialog({
           : mode === "AMOUNT"
             ? ({ mode: "AMOUNT", amount: n } as const)
             : ({ mode: "PERCENT", percent: n } as const);
-  // Back to the hotel's settings when they ask for nothing: there is nothing for the guest to pay,
-  // so there is no plan to ask about either.
-  const noAdvance = mode === "DEFAULT" && (status?.configuredBaseAmount ?? 0) <= 0;
+  // No advance: there is nothing for the guest to pay, so there is no plan to ask about either.
+  const noAdvance = mode === "NONE";
 
   /* ---- how and when they'll pay ---- */
   const saved = status?.paymentPlan ?? null;
@@ -569,7 +592,7 @@ function AdvanceDialog({
     },
     onSuccess: (res) => {
       const words = [
-        requirement ? (requirement.mode === "CLEAR" ? "the hotel's default advance applies again" : `the advance is ${money(res.requiredAmount)}`) : null,
+        requirement ? (requirement.mode === "CLEAR" ? "no advance is asked" : `the advance is ${money(res.requiredAmount)}`) : null,
         clearPlan || (noAdvance && saved) ? "how they'll pay is cleared" : planChanged ? "how they'll pay is recorded" : null,
       ].filter(Boolean);
       const said = words.join(" · ");
@@ -636,7 +659,7 @@ function AdvanceDialog({
       title="The advance"
       caseLines={[
         status
-          ? `Asked now: ${money(status.requiredAmount)} · ${status.requirementSource === "OPERATOR" ? "set for this booking" : "the hotel's default"} · received ${money(status.totalReceived)}`
+          ? `Asked now: ${money(status.requiredAmount)} · ${status.requirementSource === "OPERATOR" ? "set for this booking" : status.requirementSource === "PARTY" ? `${status.requirementBasis?.partyName ?? "their"} rule` : "nothing asked"} · received ${money(status.totalReceived)}`
           : "Nothing read yet",
       ]}
       help="The proforma prints the amount and how the guest will pay, so a change issues it again — to send again."
@@ -678,7 +701,7 @@ function AdvanceDialog({
               <Help label="About the amount">
                 {mode === "PERCENT"
                   ? "The house works the figure out from the quotation now — if the quotation changes, set it again."
-                  : "For this booking only — the hotel's minimum is untouched."}
+                  : "For this booking only."}
               </Help>
             }
           >
@@ -699,17 +722,10 @@ function AdvanceDialog({
               </div>
             )}
           </Ask>
-        ) : mode === "DEFAULT" ? (
+        ) : mode === "NONE" ? (
           <p className="meta qnote">
-            The amount set for this booking is dropped — the hotel&rsquo;s settings decide again
-            {noAdvance ? (
-              <>
-                . They ask for no advance on this booking, so there is nothing for the guest to pay
-                {saved ? <> and how they&rsquo;ll pay is cleared too</> : null}.
-              </>
-            ) : (
-              <> — they ask for {money(status?.configuredBaseAmount ?? 0)}.</>
-            )}
+            The amount is dropped, so there is nothing for the guest to pay
+            {saved ? <> and how they&rsquo;ll pay is cleared too</> : null}.
           </p>
         ) : null}
 
@@ -937,9 +953,7 @@ function PaymentDialog({
       <p className="meta">
         {entry.committedHold
           ? "The rooms are already held."
-          : entry.cancellationDisclosure
-            ? "A payment — even part of the advance — holds the rooms automatically."
-            : "A payment holds the rooms automatically only once the terms are disclosed — record the disclosure first, or place the hold by hand after."}
+          : "A payment — even part of the advance — holds the rooms automatically."}
       </p>
     </DsDialog>
   );

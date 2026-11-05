@@ -57,14 +57,6 @@ const BILLING_MODEL_OPTIONS: Opt[] = [
   { value: "GOVERNMENT", label: "Government" },
 ];
 
-const SOURCE_OPTIONS: Opt[] = [
-  { value: "DIRECT", label: "Direct" },
-  { value: "WALK_IN", label: "Walk-in" },
-  { value: "OTA", label: "Online booking sites" },
-  { value: "AGENT", label: "Travel agents" },
-  { value: "CORPORATE", label: "Companies" },
-];
-
 const dur = (base: "seconds" | "minutes" | "hours" | "days", key: string | undefined, label: string, min?: number): SField => ({
   kind: "duration",
   key,
@@ -256,21 +248,6 @@ const FINANCIAL = page("/admin/financial", "Payments and bills", [
     title: "Service charge",
     about: "The service charge added to the net value, before GST.",
     form: { kind: "percent", label: "Service charge", stored: "fraction", step: 0.5 },
-  },
-  {
-    key: "advancePayment.thresholds",
-    title: "The advance asked of a guest",
-    about: "How much advance a booking asks for by default. The desk can set a different amount on any booking at Set up. A figure for one source applies only when it is above 0.",
-    form: {
-      kind: "map",
-      label: "The advance",
-      keyLabel: "Bookings from",
-      rows: [{ key: "DEFAULT", label: "Everyone" }],
-      addLabel: "Add a source",
-      addOptions: SOURCE_OPTIONS,
-      blank: { amount: 0 },
-      value: { kind: "group", label: "", fields: [{ kind: "money", key: "amount", label: "Amount" }] },
-    },
   },
   {
     key: "advancePayment.followUpWindowSeconds",
@@ -1301,7 +1278,6 @@ export const POLICIES: PolicyDef[] = [
   rule("registry.creditCeiling.tier2Percent", "CREDIT_CEILING", "Money", "Credit: the FOM must sign off at", "When this much of a guest's credit is used, check-in and new charges wait for the FOM.", [{ kind: "percent", key: "percent", label: "At", stored: "whole", min: 1 }], { percent: 90 }),
   rule("registry.creditCeiling.softGatePercent", "CREDIT_CEILING", "Money", "Credit: extras stop at", "When this much of a guest's credit is used, extras can no longer be charged. Room nights still are. Above 100% lets a guest go over.", [{ kind: "percent", key: "percent", label: "At", stored: "whole", min: 50, max: 200 }], { percent: 100 }),
   rule("registry.creditCeiling.advisoryThresholds", "CREDIT_CEILING", "Money", "Credit: early warnings", "How much of a guest's credit can be used before the desk gets each warning at Stay. These only warn; nothing stops.", [{ kind: "percent", key: "tier1Percent", label: "First warning at", stored: "whole", min: 1 }, { kind: "percent", key: "tier2Percent", label: "Second warning at", stored: "whole", min: 1 }], { tier1Percent: 75, tier2Percent: 90 }),
-  rule("registry.groupBooking.advancePaymentBoost", "GROUP_BILLING", "Money", "Groups: a larger advance", "A group's advance is the usual advance times this. 200% asks for twice as much; 100% asks for the same. An amount the desk sets on the booking wins.", [{ kind: "percent", key: "multiplierPercent", label: "Of the usual advance", stored: "whole", min: 100, max: 500, step: 10 }], { multiplierPercent: 200 }),
   rule("registry.groupBooking.creditCeilingBoost", "GROUP_BILLING", "Money", "Groups: more credit suggested", "The credit suggested for a group is the usual figure times this. The person approving still enters the amount.", [{ kind: "percent", key: "multiplierPercent", label: "Of the usual credit", stored: "whole", min: 100, max: 500, step: 10 }], { multiplierPercent: 200 }),
   rule("registry.fomOverride.frequency", "DISPUTE", "Money", "Too many FOM overrides", "The GM is told when the FOM overrides a dispute hold more than this many times in the period.", [{ kind: "number", key: "maxFrequency", label: "More than", unit: "times", min: 1, whole: true }, days("rollingWindowDays", "In any", 1)], { rollingWindowDays: 7, maxFrequency: 3 }),
 
