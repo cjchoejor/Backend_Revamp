@@ -364,6 +364,7 @@ async function buildProformaDocRender(prisma: PrismaClient, inv: LoadedInvoice, 
     // operator request: the guest must see the deadline on the bill itself, like the quotation's
     // "Valid until" strip). See `advanceDeadline` above for where the date comes from.
     advanceDueBy: advanceDeadline && advanceDueNow > 0 ? formatDocDate(advanceDeadline) : null,
+    validUntil: inv.validUntil ? formatDocDateTimeLocal(inv.validUntil) : null,
     to: billedParty ?? (p.guest?.email ? `${p.guestName} · ${p.guest.email}` : p.guestName),
     forGuest: p.guestName,
     stay: formatStayLines(p.checkIn, p.checkOut, p.nights),

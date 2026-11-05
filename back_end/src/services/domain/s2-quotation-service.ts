@@ -1,3 +1,5 @@
+import { resolveStandsUntil } from "../../lib/quote-validity.js";
+import { stopQuoteValidityTx } from "./proforma-validity-service.js";
 import { quoteStandsUntil, quoteValidityWindow } from "../../lib/quote-validity.js";
 import type { PrismaClient } from "@prisma/client";
 import { ActorLevel, InvoiceState, InvoiceType, MealPlanType, QuotationState, Stage } from "@prisma/client";
@@ -1057,26 +1059,7 @@ export async function resolveQuotationValidity(
   ask: { validDays?: number; validHours?: number },
   now: Date,
 ): Promise<{ validUntil: Date }> {
-  const window = await quoteValidityWindow(prisma, entryId, now);
-  const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
-  if (window.mode === "HOURS") {
-    if (ask.validDays != null) throw new ValidationError(`Check-in is today, so set how long the quote stands in hours, at most ${plural(window.max, "hour")}`);
-    const hours = ask.validHours ?? window.max;
-    if (!Number.isInteger(hours) || hours < 1 || hours > window.max) {
-      throw new ValidationError(`A quote for a stay starting today stands for 1 to ${plural(window.max, "hour")}, the rest of today`);
-    }
-    return { validUntil: quoteStandsUntil("HOURS", hours, now) };
-  }
-  if (ask.validHours != null) throw new ValidationError(`Check-in is on a later day, so set how long the quote stands in days, at most ${plural(window.max, "day")}`);
-  const days = ask.validDays ?? window.max;
-  if (!Number.isInteger(days) || days < 1 || days > window.max) {
-    throw new ValidationError(
-      window.checkIn
-        ? `A quote stands until check-in at the latest: 1 to ${plural(window.max, "day")} (check-in ${window.checkIn})`
-        : `A quote stands for 1 to ${plural(window.max, "day")}`,
-    );
-  }
-  return { validUntil: quoteStandsUntil("DAYS", days, now) };
+  return resolveStandsUntil(prisma, entryId, ask, now, "quote");
 }
 
 /** Arm the W15 validity clock on a freshly created DRAFT — same record shape `sendQuotation`
@@ -1911,6 +1894,16 @@ export async function applyDiscount(
 }
 
 /** SIG-S2 §6.1 — worker entrypoint for quotation expiry (Policy 7). */
+/** A live proforma made in this quotation's pass. */
+async function proformaStandsForQuote(db: PrismaClient | Prisma.TransactionClient, q: { entryId: string; segmentId: string | null }) {
+  const seg = q.segmentId ? await db.segment.findUnique({ where: { id: q.segmentId }, select: { startedAt: true } }) : null;
+  const made = await db.invoice.findFirst({
+    where: { entryId: q.entryId, invoiceType: InvoiceType.PROFORMA, state: { not: InvoiceState.SUPERSEDED }, ...(seg ? { createdAt: { gte: seg.startedAt } } : {}) },
+    select: { id: true },
+  });
+  return !!made;
+}
+
 export async function expireQuotation(
   prisma: PrismaClient,
   input: { quotationId?: string; timerRecordId?: string },
@@ -1927,6 +1920,16 @@ export async function expireQuotation(
     return { skipped: true, reason: "NOT_EXPIRABLE_STATE" } as const;
   }
   if (q.validUntil && q.validUntil > now) return { skipped: true, reason: "NOT_DUE" } as const;
+
+  // Once a proforma of this pass is made the quote no longer runs out (2026-11-05, operator: "when a
+  // proforma is generated, the qoute validity should stop"). It lapsed 18 minutes after the guest paid.
+  if (await proformaStandsForQuote(prisma, q)) {
+    await prisma.timerRecord.updateMany({
+      where: { entityType: "Quotation", entityId: quotationId, status: "SCHEDULED", timerType: { in: ["QUOTATION_ACK_TRACKER", "QUOTATION_VALIDITY_W15"] } },
+      data: { status: "CANCELLED", cancelledAt: now, cancelledBy: "SYSTEM", cancelledReason: "PROFORMA_GENERATED" },
+    });
+    return { skipped: true, reason: "PROFORMA_GENERATED" } as const;
+  }
 
   const engine = await getTimerEngine();
   await prisma.$transaction(async (tx) => {
@@ -2142,6 +2145,8 @@ async function sendQuotationInner(
         payload: { quotationId },
       },
     });
+    // Sent after its proforma was made (from the Papers tab): it has done its work, so no clock runs.
+    if (await proformaStandsForQuote(tx, q)) await stopQuoteValidityTx(tx, { entryId: q.entryId, actorId, now });
 
     await tx.traceEvent.create({
       data: {

@@ -1,3 +1,4 @@
+import { enforceProformaNotLapsed } from "./proforma-validity-service.js";
 import { enforceEarlierAdvanceAnswered } from "../../lib/refund-money.js";
 import { ensureCancellationDisclosedTx } from "./s3-cancellation-disclosure-service.js";
 import type { PrismaClient } from "@prisma/client";
@@ -583,6 +584,7 @@ export async function blockRoomsForReserve(
   }
   const folioOf = await prisma.folio.findUnique({ where: { entryId }, select: { id: true } });
   if (folioOf) await enforceEarlierAdvanceAnswered(prisma, entryId, folioOf.id);
+  await enforceProformaNotLapsed(prisma, entryId);
   const roomId = sealedAnchorRoom(seal);
   if (!roomId) throw new ValidationError("Choose the rooms at Inquiry first.");
   const hold = await placeCommittedHold(prisma, entryId, actor, {

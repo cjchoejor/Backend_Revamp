@@ -39,6 +39,8 @@ export type LegphelProformaInput = {
   date: string;
   /** "05 Aug 2026" — bold key, crimson value. Omitted when no advance is due. */
   advanceDueBy?: string | null;
+  /** How long this proforma stands (2026-11-05), as the quotation prints its own. */
+  validUntil?: string | null;
   /** "Bhutan Online Booking Travel" — the billed party. */
   to: string;
   /** "Dr Lakshmi Menon" — the reference's "For guest" line. */
@@ -89,6 +91,7 @@ export function renderLegphelProformaHtml(input: LegphelProformaInput): string {
     row("Booking Ref", input.bookingRef, { redValue: true }),
     row("Date", input.date),
     input.advanceDueBy ? row("Advance due by", input.advanceDueBy, { boldKey: true, redValue: true }) : "",
+    input.validUntil ? row("Valid until", input.validUntil, { boldKey: true }) : "",
     section,
     row("To", input.to, { boldValue: true }),
     input.forGuest ? row("For guest", input.forGuest) : "",

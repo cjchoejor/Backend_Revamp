@@ -480,6 +480,20 @@ reservationsRouter.post("/entries/:id/proforma", requireActorLevel("L1"), async 
   }
 });
 
+/** How long this proforma stands, on the quote's rule (2026-11-05). */
+reservationsRouter.post("/invoices/:id/validity", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const body = (req.body ?? {}) as { validDays?: unknown; validHours?: unknown };
+    const ask = {
+      ...(typeof body.validDays === "number" ? { validDays: body.validDays } : {}),
+      ...(typeof body.validHours === "number" ? { validHours: body.validHours } : {}),
+    };
+    res.json(await s3ReservationSetupService.setProformaValidity(prisma, req.params.id, ask, { actorId: req.actor!.actorId, actorLevel: req.actor!.level }));
+  } catch (e) {
+    next(e);
+  }
+});
+
 reservationsRouter.post("/entries/:id/holds/committed", requireActorLevel("L1"), validateBody(placeCommittedHoldRequestSchema), async (req, res, next) => {
   try {
     const out = await s3HoldService.placeCommittedHold(prisma, req.params.id, { actorId: req.actor!.actorId, actorLevel: req.actor!.level }, req.body);

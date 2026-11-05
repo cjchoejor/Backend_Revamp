@@ -146,7 +146,7 @@ async function runBackflow(
   // validity kept counting down on the desk beside the new pass's quote — two "Quote valid" clocks
   // on one booking. A re-quote in the new pass arms its own.
   const timerCodesToCancel = Array.from(
-    new Set([...(input.cancelTimerCodes ?? []), "ACKNOWLEDGEMENT_WINDOW_W22", "ADVANCE_PROMISE_DEADLINE_W38", "QUOTATION_VALIDITY_W15"]),
+    new Set([...(input.cancelTimerCodes ?? []), "ACKNOWLEDGEMENT_WINDOW_W22", "ADVANCE_PROMISE_DEADLINE_W38", "QUOTATION_VALIDITY_W15", "PROFORMA_VALIDITY_W43"]),
   );
   await cancelEntryTimersByCode(prisma, {
     entryId: entry.id,

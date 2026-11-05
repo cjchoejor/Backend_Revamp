@@ -70,7 +70,20 @@ const listSelect = {
     },
   },
   reservation: { select: { id: true, confirmedAt: true, confirmationVoucherSent: true } },
-  folio: { select: { id: true, state: true, billingModel: true } },
+  folio: {
+    select: {
+      id: true,
+      state: true,
+      billingModel: true,
+      // The proforma in force, for "running out" and "ran out" on the lists (2026-11-05).
+      invoices: {
+        where: { invoiceType: "PROFORMA" as const, state: { not: "SUPERSEDED" as const } },
+        orderBy: { versionNumber: "desc" as const },
+        take: 1,
+        select: { validUntil: true, lapsedAt: true, dispatchedAt: true },
+      },
+    },
+  },
   committedHold: { select: { state: true, expiresAt: true } },
   speculativeHolds: {
     where: { state: "PLACED" as const },

@@ -1,3 +1,4 @@
+import { restartProformaValidityTx } from "./proforma-validity-service.js";
 import { paymentsStillHeld, waitingRefundTotal } from "../../lib/refund-money.js";
 import type { PrismaClient } from "@prisma/client";
 import { FolioState, HoldState, InvoiceState, InvoiceType, PaymentDirection, PreArrivalTaskType, Stage, TaskStatus } from "@prisma/client";
@@ -150,6 +151,7 @@ export async function deleteAdvancePayment(
     await tx.paymentRecord.delete({ where: { id: payment.id } });
     await recomputeFolioOutstandingBalance(tx, folio.id);
     const after = await evaluateAdvancePaymentConditionTx(prisma, tx, { entryId: entry.id, folioId: folio.id });
+    if (entry.currentStage === Stage.S3 && !after.paidInFull) await restartProformaValidityTx(tx, { entryId: entry.id, actorId: actor.actorId, now });
     const fresh = await tx.folio.findUnique({ where: { id: folio.id }, select: { outstandingBalance: true } });
     const stage = entry.currentStage;
 

@@ -1,3 +1,4 @@
+import { runProformaValidityWorker } from "./w43-proforma-validity-worker.js";
 import { prisma } from "../db.js";
 import { createTimerEngine } from "../lib/timer-engine.js";
 import { getActiveConfigEntry } from "../lib/config-store.js";
@@ -74,6 +75,7 @@ export async function startWorkers() {
   await (engine.boss as any).work("STAY_EXTENSION_HOLD_EXPIRY_W40", async (job: any) => runStayExtensionHoldExpiryWorker(prisma, unwrapJobData(job)));
   await (engine.boss as any).work("INTERIM_PAYMENT_REMINDER_W41", async (job: any) => runInterimPaymentReminderWorker(prisma, unwrapJobData(job)));
   await (engine.boss as any).work("CHECKIN_PAYMENT_REMINDER_W42", async (job: any) => runCheckInPaymentReminderWorker(prisma, unwrapJobData(job)));
+  await (engine.boss as any).work("PROFORMA_VALIDITY_W43", async (job: any) => runProformaValidityWorker(prisma, unwrapJobData(job)));
   // W39 identity OCR — two photos at a time (2026-10-23, operator: a phone sends a whole party's IDs
   // in a row). One photo's QR and strip are read in this process while the other's printed text is
   // read in the layout child, which takes one page at a time; the strip reader takes one at a time too.

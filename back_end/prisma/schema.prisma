@@ -1980,6 +1980,10 @@ model Invoice {
   entryId        String
   invoiceType    InvoiceType
   state          InvoiceState @default(DRAFT)
+  /// How long a proforma stands (2026-11-05), by the quote's rule. Null on one made before this.
+  validUntil     DateTime?
+  /// When its time ended with the guest still to answer. It is made again; the booking does not lapse.
+  lapsedAt       DateTime?
   invoiceNumber  String?      @unique
   totalAmount    Decimal?     @db.Decimal(15, 2)
   /// Split-billing bucket this invoice represents (Phase 3, 2026-07-25). When populated,

@@ -1,5 +1,5 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
-import { NotFoundError } from "./errors.js";
+import { NotFoundError, ValidationError } from "./errors.js";
 import { hotelDayEndUtc, hotelTodayUtc } from "./stay-dates.js";
 
 /** A booking with no dates at all has no check-in to run to. */
@@ -43,4 +43,37 @@ export async function quoteValidityWindow(
 /** The moment `count` days or hours from now. Days run from now, so the longest ends on the check-in date at the time of day it was made. */
 export function quoteStandsUntil(mode: QuoteValidityWindow["mode"], count: number, now: Date): Date {
   return new Date(now.getTime() + count * (mode === "HOURS" ? HOUR_MS : DAY_MS));
+}
+
+/**
+ * How long a paper stands: what the desk asked for, inside the window, else the longest (2026-11-05 — a
+ * proforma runs on the quote's rule). More than the window allows is refused, naming the most it can be.
+ */
+export async function resolveStandsUntil(
+  db: Prisma.TransactionClient | PrismaClient,
+  entryId: string,
+  ask: { validDays?: number; validHours?: number },
+  now: Date,
+  what: "quote" | "proforma",
+): Promise<{ validUntil: Date }> {
+  const window = await quoteValidityWindow(db, entryId, now);
+  const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+  if (window.mode === "HOURS") {
+    if (ask.validDays != null) throw new ValidationError(`Check-in is today, so set how long the ${what} stands in hours, at most ${plural(window.max, "hour")}`);
+    const hours = ask.validHours ?? window.max;
+    if (!Number.isInteger(hours) || hours < 1 || hours > window.max) {
+      throw new ValidationError(`A ${what} for a stay starting today stands for 1 to ${plural(window.max, "hour")}, the rest of today`);
+    }
+    return { validUntil: quoteStandsUntil("HOURS", hours, now) };
+  }
+  if (ask.validHours != null) throw new ValidationError(`Check-in is on a later day, so set how long the ${what} stands in days, at most ${plural(window.max, "day")}`);
+  const days = ask.validDays ?? window.max;
+  if (!Number.isInteger(days) || days < 1 || days > window.max) {
+    throw new ValidationError(
+      window.checkIn
+        ? `A ${what} stands until check-in at the latest: 1 to ${plural(window.max, "day")} (check-in ${window.checkIn})`
+        : `A ${what} stands for 1 to ${plural(window.max, "day")}`,
+    );
+  }
+  return { validUntil: quoteStandsUntil("DAYS", days, now) };
 }

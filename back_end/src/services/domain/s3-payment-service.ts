@@ -1,3 +1,4 @@
+import { afterProformaMadeTx } from "./proforma-validity-service.js";
 import { paymentsStillHeld, waitingRefundTotal } from "../../lib/refund-money.js";
 import { randomUUID } from "node:crypto";
 import type { PrismaClient } from "@prisma/client";
@@ -684,6 +685,8 @@ export async function reissueProformaTx(
     /** Extra fields for the fresh DRAFT's metadata (e.g. the new requirement / plan). */
     extraMetadata?: Record<string, unknown>;
     now: Date;
+    /** How long it stands, when the desk said; else the longest (2026-11-05). */
+    validity?: { validDays?: number; validHours?: number };
   },
   actor: { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" },
 ): Promise<{ newInvoiceId: string; supersededIds: string[]; versionNumber: number } | null> {
@@ -717,6 +720,7 @@ export async function reissueProformaTx(
       },
     },
   });
+  await afterProformaMadeTx(tx, { invoiceId: created.id, entryId, actorId: actor.actorId, now, ask: input.validity });
   if (supersedeLive) {
     await tx.invoice.updateMany({
       where: { id: { in: supersededIds } },

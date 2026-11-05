@@ -1,3 +1,4 @@
+import { enforceProformaNotLapsed, stopProformaValidityTx } from "./proforma-validity-service.js";
 import { enforceEarlierAdvanceAnswered } from "../../lib/refund-money.js";
 import type { PrismaClient } from "@prisma/client";
 import { guestDisplayName } from "../../lib/guest-display-name.js";
@@ -326,6 +327,8 @@ async function confirmReservationInner(
       data: { currentReservationId: res.id, reservationPaymentPending },
     });
 
+    // The voucher takes over from the proforma: its time stops here (2026-11-05).
+    await stopProformaValidityTx(tx, { entryId, actorId, reason: "RESERVED", now: new Date() });
     await confirmCommittedHoldTx(tx, {
       entryId,
       holdId: hold.id,
@@ -838,6 +841,7 @@ export async function confirmReservationForDesk(
 ) {
   const folioOf = await prisma.folio.findUnique({ where: { entryId }, select: { id: true } });
   if (folioOf) await enforceEarlierAdvanceAnswered(prisma, entryId, folioOf.id);
+  await enforceProformaNotLapsed(prisma, entryId);
   const out = await confirmReservation(prisma, entryId, actor.actorId, { ...(input ?? {}), holdGuestEmail: true });
   await recordHeldDocument(prisma, {
     entryId,

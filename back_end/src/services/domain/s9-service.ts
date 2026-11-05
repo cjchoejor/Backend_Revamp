@@ -3,7 +3,7 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 import { guestDisplayName } from "../../lib/guest-display-name.js";
 import { CommissionDueStatus, EntryStatus, FolioLineType, FolioState, InvoiceState, InvoiceType, Stage } from "@prisma/client";
 import { allocateReadableId, READABLE_ID_PREFIXES, allocateFolioLineId } from "../../lib/readable-id.js";
-import { AppError, MissingConfigurationError, NotFoundError, ValidationError } from "../../lib/errors.js";
+import { AppError, MissingConfigurationError, NotFoundError, PolicyGateBlockedError, ValidationError } from "../../lib/errors.js";
 import { describeBookingInspections, readBookingInspectionStanding } from "../../lib/room-inspection-standing.js";
 import { readBookingDamages, undecidedDamageRooms } from "../../lib/damage-standing.js";
 import { enforceDamageDecidedForS9Closure } from "../../policies/36-damage-assessment/p81-damage-assessment-gates.js";
@@ -205,6 +205,9 @@ async function dispatchInvoiceInner(
   // A proforma prints the advance, so it does not go out before the desk says what happens to the
   // money paid before this booking was sent back (2026-11-05).
   if (invoice.invoiceType === "PROFORMA") await enforceEarlierAdvanceAnswered(prisma, invoice.entryId, invoice.folioId);
+  if (invoice.invoiceType === "PROFORMA" && invoice.lapsedAt) {
+    throw new PolicyGateBlockedError("PROFORMA_LAPSED", "This proforma has run out. Make it again on its card, then send that one.");
+  }
   const now = new Date();
   const recipient = await resolveInvoiceRecipient(prisma, invoice.entryId, input?.dispatchedTo ?? invoice.dispatchedTo);
   const result = await prisma.$transaction(async (tx) => {
@@ -513,6 +516,7 @@ async function sendInvoiceEmailBestEffort(
         // Real columns only — `ci` is today-defaulted above, and the template must not print a
         // fabricated pay-by date for a dateless entry.
         advanceDueBy: entry.reservation?.frozenCheckInDate ?? entry.checkInDate ?? null,
+        validUntil: inv.validUntil ?? null,
         // The guest's recorded plan, worded the same way the PDF prints it (2026-08-08).
         paymentPlan: inv.folio
           ? describeAdvancePaymentPlan(

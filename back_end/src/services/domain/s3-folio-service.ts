@@ -1,3 +1,4 @@
+import { afterProformaMadeTx, stopProformaValidityTx } from "./proforma-validity-service.js";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { FolioState, InvoiceState, InvoiceType, PaymentDirection, Stage } from "@prisma/client";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
@@ -222,6 +223,12 @@ export async function recordPayment(
       // rooms visibly "Held"; the money just completed, so they earn the Reserved label now.
       // No-op for bookings that weren't payment-pending.
       await confirmHeldRoomsAfterFullPaymentTx(tx, { entryId: input.entryId, actorId });
+      // The advance asked is in: nothing is left for the guest to answer, so the proforma stops running.
+      if (evalResult.requiredAmount > 0) {
+        await stopProformaValidityTx(tx, { entryId: input.entryId, actorId, reason: "ADVANCE_PAID_IN_FULL", now: new Date() });
+        // Paid after it ran out: the guest has answered with the money, so it need not be made again.
+        await tx.invoice.updateMany({ where: { entryId: input.entryId, invoiceType: "PROFORMA", state: { not: "SUPERSEDED" }, lapsedAt: { not: null } }, data: { lapsedAt: null } });
+      }
     }
 
     const now = new Date();
@@ -297,6 +304,7 @@ export async function issueInvoice(
         metadata: { basis: "S3 issueInvoice" },
       },
     });
+    await afterProformaMadeTx(tx, { invoiceId: inv.id, entryId: input.entryId, actorId, now });
 
     await tx.traceEvent.create({
       data: {

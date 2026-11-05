@@ -1,3 +1,6 @@
+import { enforceEarlierAdvanceAnswered } from "../../lib/refund-money.js";
+import { resolveStandsUntil } from "../../lib/quote-validity.js";
+import { armProformaValidityTx } from "./proforma-validity-service.js";
 import type { PrismaClient } from "@prisma/client";
 import { FolioState, InvoiceState, InvoiceType, Stage } from "@prisma/client";
 import { AuthorizationError, NotFoundError, PolicyGateBlockedError, ValidationError } from "../../lib/errors.js";
@@ -7,7 +10,7 @@ import { enforceBillingModelAllowlistFromConfig } from "../../policies/13-billin
 import { enforceEntryAtS3ForS3DomainOperations } from "../../policies/01-availability/p01-entry-at-s3-for-s3-domain-operations.js";
 import { enforceGroupBillingSplitConfigured } from "../../policies/26-group-foc-billing/p66-group-foc-and-billing-split.js";
 import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.js";
-import { applyPartyAdvanceRuleTx, ensureProformaOfThisPassTx, proformaAwaitsAdvanceAnswerTx } from "./s3-payment-service.js";
+import { applyPartyAdvanceRuleTx, ensureProformaOfThisPassTx, proformaAwaitsAdvanceAnswerTx, reissueProformaTx } from "./s3-payment-service.js";
 import { retireSupersededReplyWaitsBestEffort } from "../../lib/reply-waits.js";
 import { buildInitialBillingModelDefaults } from "../../lib/billing-model-defaults.js";
 import { payerChoicesFor, type PayerChoices } from "../../lib/payer-choices.js";
@@ -49,11 +52,79 @@ export async function generateProformaOfThisPass(prisma: PrismaClient, entryId: 
   enforceEntryAtS3ForS3DomainOperations({ currentStage: entry.currentStage });
   if (!entry.folio?.billingModel) throw new ValidationError("Choose who pays first — the proforma is made out to them");
   const folioId = entry.folio.id;
+  // One whose time ended is made again: a new version with a new time, the old one kept (2026-11-05).
+  const lapsed = await prisma.invoice.findFirst({
+    where: { folioId, invoiceType: InvoiceType.PROFORMA, state: { not: InvoiceState.SUPERSEDED }, lapsedAt: { not: null } },
+    select: { id: true },
+  });
+  if (lapsed) {
+    await enforceEarlierAdvanceAnswered(prisma, entryId, folioId);
+    const { freezeUnrenderedProformasForEntry } = await import("./invoice-pdf-service.js");
+    await freezeUnrenderedProformasForEntry(prisma, entryId, actorId).catch(() => {});
+    const remade = await prisma.$transaction((tx) =>
+      reissueProformaTx(tx, { entryId, folioId, changed: true, basisWhenChanged: "PROFORMA_LAPSED", now: new Date() }, { actorId, actorLevel: "L1" }),
+    );
+    await retireSupersededReplyWaitsBestEffort(prisma, entryId, actorId);
+    return { generated: !!remade, proforma: remade };
+  }
   const made = await prisma.$transaction((tx) =>
     ensureProformaOfThisPassTx(tx, { entryId, folioId, passStartedAt: entry.segments[0]?.startedAt ?? null, basis: "NO_ADVANCE_ASKED" }, { actorId, actorLevel: "L1" }),
   );
   await retireSupersededReplyWaitsBestEffort(prisma, entryId, actorId);
   return { generated: !!made, proforma: made };
+}
+
+/**
+ * How long this proforma stands, on the quote's rule: shorter than the longest, or back up to it
+ * (2026-11-05). The paper prints it, so one already opened or sent is made again as a new version.
+ */
+export async function setProformaValidity(
+  prisma: PrismaClient,
+  invoiceId: string,
+  ask: { validDays?: number; validHours?: number },
+  actor: { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" },
+) {
+  const inv = await prisma.invoice.findUnique({
+    where: { id: invoiceId },
+    select: { id: true, entryId: true, folioId: true, invoiceType: true, state: true, pdfRenderedAt: true, dispatchedAt: true, lapsedAt: true, entry: { select: { status: true, currentStage: true, inquiryId: true } } },
+  });
+  if (!inv || inv.invoiceType !== InvoiceType.PROFORMA) throw new NotFoundError("Proforma");
+  enforceEntryNotSealedForWorkingAction({ status: inv.entry.status });
+  enforceEntryAtS3ForS3DomainOperations({ currentStage: inv.entry.currentStage });
+  if (inv.state === InvoiceState.SUPERSEDED) throw new ValidationError("That proforma has been replaced.");
+  if (inv.lapsedAt) throw new ValidationError("This proforma has run out. Make it again first.");
+  const now = new Date();
+  const { validUntil } = await resolveStandsUntil(prisma, inv.entryId, ask, now, "proforma");
+  const printed = !!inv.pdfRenderedAt || !!inv.dispatchedAt;
+  if (printed) {
+    const { freezeUnrenderedProformasForEntry } = await import("./invoice-pdf-service.js");
+    await freezeUnrenderedProformasForEntry(prisma, inv.entryId, actor.actorId).catch(() => {});
+  }
+  const out = await prisma.$transaction(async (tx) => {
+    const remade = printed
+      ? await reissueProformaTx(tx, { entryId: inv.entryId, folioId: inv.folioId, changed: true, basisWhenChanged: "VALIDITY_CHANGED", now, validity: ask }, actor)
+      : null;
+    if (!printed) await armProformaValidityTx(tx, { invoiceId: inv.id, entryId: inv.entryId, validUntil, actorId: actor.actorId, now });
+    await tx.traceEvent.create({
+      data: {
+        eventType: "PROFORMA.VALIDITY_SET",
+        actorId: actor.actorId,
+        actorLevel: actor.actorLevel,
+        entityType: "Invoice",
+        entityId: remade?.newInvoiceId ?? inv.id,
+        operation: "UPDATE",
+        timestamp: now,
+        stageContext: inv.entry.currentStage,
+        inquiryId: inv.entry.inquiryId,
+        entryId: inv.entryId,
+        payload: { entryId: inv.entryId, invoiceId: remade?.newInvoiceId ?? inv.id, validUntil: validUntil.toISOString(), madeAgain: !!remade },
+        createdBy: actor.actorId,
+      },
+    });
+    return remade;
+  });
+  await retireSupersededReplyWaitsBestEffort(prisma, inv.entryId, actor.actorId);
+  return { validUntil: validUntil.toISOString(), invoiceId: out?.newInvoiceId ?? inv.id, madeAgain: !!out };
 }
 
 export async function ensureProvisionalFolioAndBillingModel(

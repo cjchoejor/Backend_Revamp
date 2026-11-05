@@ -165,6 +165,8 @@ export type ProformaInvoiceEmailData = {
   /** Advance-window deadline (= check-in date). Null when the entry has no real check-in date —
    *  the caller must NOT pass a today-fallback, or the email demands payment by a made-up date. */
   advanceDueBy?: Date | null;
+  /** How long this proforma stands (2026-11-05): what the paper prints. */
+  validUntil?: Date | null;
   /** The guest's recorded payment plan, already worded ("Part now — remainder by 12 Aug 2026").
    *  Null = no plan recorded, no line printed. */
   paymentPlan?: string | null;
@@ -202,6 +204,8 @@ export function renderProformaInvoiceEmail(d: ProformaInvoiceEmailData): StageEm
     "",
     showDueBy ? `The advance is due by ${formatDate(d.advanceDueBy!)} — your check-in date.` : null,
     showDueBy ? "" : null,
+    d.validUntil ? `This proforma is valid until ${formatMoment(d.validUntil)}.` : null,
+    d.validUntil ? "" : null,
     closing,
     "",
     "— The Legphel Hotel team",
@@ -225,6 +229,7 @@ ${detailsTable([
   tableRow("Balance at check-out", formatMoney(d.balanceAtCheckout, d.currency), true, !d.advanceAsked),
 ])}
 ${showDueBy ? `<p style="font-size:13px;color:#555">The advance is due by <strong>${escapeHtml(formatDate(d.advanceDueBy!))}</strong> &mdash; your check-in date.</p>` : ""}
+${d.validUntil ? `<p style="font-size:13px;color:#555">This proforma is valid until <strong>${escapeHtml(formatMoment(d.validUntil))}</strong>.</p>` : ""}
 <p>${escapeHtml(closing)}</p>
 <p style="margin-top:24px">&mdash; The Legphel Hotel team</p>
 `);
