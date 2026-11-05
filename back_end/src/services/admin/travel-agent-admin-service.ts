@@ -6,12 +6,14 @@ import { captureSnapshotTx } from "../../lib/admin/entity-version-snapshot.js";
 import { allocateReadableId } from "../../lib/readable-id.js";
 import { appendContact, cleanCoordinators, type CoordinatorContact } from "../../lib/admin/contact-list.js";
 import { cleanPhone, loosePhone } from "../../lib/phone-numbers.js";
-import { PARTY_LOOKUP_LIMIT } from "../../lib/admin/party-lookup.js";
+import { PARTY_LOOKUP_LIMIT, cleanAdvancePercent } from "../../lib/admin/party-lookup.js";
 
 export type { CoordinatorContact };
 
 export type TravelAgentInput = {
   displayName: string;
+  /** The advance asked of a booking through them, as a percentage of the stay. Null is not set. */
+  advancePercent?: number | null;
   contactNumbers?: string[] | null;
   contactEmail?: string | null;
   modeOfContact?: ContactMode | null;
@@ -83,6 +85,7 @@ export async function createTravelAgent(
         contactEmail: input.contactEmail?.trim() || null,
         modeOfContact: mode,
         coordinators: cleanCoordinators(input.coordinators),
+        advancePercent: cleanAdvancePercent(input.advancePercent) ?? null,
         notes: input.notes?.trim() || null,
         isActive: input.isActive ?? true,
         createdBy: actorId,
@@ -170,6 +173,7 @@ export async function updateTravelAgent(
         contactEmail: input.contactEmail === undefined ? undefined : input.contactEmail?.trim() || null,
         modeOfContact: input.modeOfContact ?? undefined,
         coordinators: input.coordinators === undefined ? undefined : cleanCoordinators(input.coordinators),
+        advancePercent: cleanAdvancePercent(input.advancePercent),
         notes: input.notes === undefined ? undefined : input.notes?.trim() || null,
         isActive: input.isActive,
       },

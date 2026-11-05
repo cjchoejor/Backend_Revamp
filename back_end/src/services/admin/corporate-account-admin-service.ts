@@ -5,13 +5,15 @@ import { writeAdminAuditEvent } from "../../lib/admin/write-admin-audit.js";
 import { captureSnapshotTx } from "../../lib/admin/entity-version-snapshot.js";
 import { allocateReadableId } from "../../lib/readable-id.js";
 import { appendContact, cleanCoordinators, type CoordinatorContact } from "../../lib/admin/contact-list.js";
-import { PARTY_LOOKUP_LIMIT } from "../../lib/admin/party-lookup.js";
+import { PARTY_LOOKUP_LIMIT, cleanAdvancePercent } from "../../lib/admin/party-lookup.js";
 import { cleanNumbers, looseNumbers } from "./travel-agent-admin-service.js";
 
 export type { CoordinatorContact };
 
 export type CorporateAccountInput = {
   displayName: string;
+  /** The advance asked of a booking through them, as a percentage of the stay. Null is not set. */
+  advancePercent?: number | null;
   contactNumbers?: string[] | null;
   contactEmail?: string | null;
   modeOfContact?: ContactMode | null;
@@ -83,6 +85,7 @@ export async function createCorporateAccount(prisma: PrismaClient, input: Corpor
         billingAddress: input.billingAddress?.trim() || null,
         contractRefs: normalizeContractRefs(input.contractRefs),
         coordinators: cleanCoordinators(input.coordinators),
+        advancePercent: cleanAdvancePercent(input.advancePercent) ?? null,
         notes: input.notes?.trim() || null,
         isActive: input.isActive ?? true,
         createdBy: actorId,
@@ -126,6 +129,7 @@ export async function updateCorporateAccount(
         billingAddress: input.billingAddress === undefined ? undefined : input.billingAddress?.trim() || null,
         contractRefs: input.contractRefs === undefined ? undefined : normalizeContractRefs(input.contractRefs),
         coordinators: input.coordinators === undefined ? undefined : cleanCoordinators(input.coordinators),
+        advancePercent: cleanAdvancePercent(input.advancePercent),
         notes: input.notes === undefined ? undefined : input.notes?.trim() || null,
         isActive: input.isActive,
       },

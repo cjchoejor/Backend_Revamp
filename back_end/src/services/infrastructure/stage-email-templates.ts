@@ -154,6 +154,8 @@ export type ProformaInvoiceEmailData = {
   amountPaid?: number | null;
   /** How many payments the amountPaid arrived in — ">1" shows the installment count. */
   paymentCount?: number | null;
+  /** Whether an advance is asked of this guest. False: the email asks for none (2026-11-05). */
+  advanceAsked?: boolean;
   /** Advance-window deadline (= check-in date). Null when the entry has no real check-in date —
    *  the caller must NOT pass a today-fallback, or the email demands payment by a made-up date. */
   advanceDueBy?: Date | null;
@@ -164,7 +166,12 @@ export type ProformaInvoiceEmailData = {
 
 export function renderProformaInvoiceEmail(d: ProformaInvoiceEmailData): StageEmailContent {
   const due = Math.max(0, d.breakdown.total - (d.amountPaid ?? 0));
-  const showDueBy = due > 0 && d.advanceDueBy != null;
+  const asked = d.advanceAsked !== false;
+  const showDueBy = asked && due > 0 && d.advanceDueBy != null;
+  const dueLabel = asked ? "Balance due" : "Balance at check-out";
+  const closing = asked
+    ? "Settling this in advance helps us secure your room. Reply to this email if you need bank details or have any questions."
+    : "No advance is asked for this booking; the balance is settled at check-out. Reply to this email if you have any questions.";
   const paidLabel = `Already received${(d.paymentCount ?? 0) > 1 ? ` (${d.paymentCount} payments)` : ""}`;
   const subject = COMMON_SUBJECT;
 
@@ -183,11 +190,11 @@ export function renderProformaInvoiceEmail(d: ProformaInvoiceEmailData): StageEm
     ...breakdownLines(d.breakdown, d.currency),
     d.paymentPlan ? `Payment plan:           ${d.paymentPlan}` : null,
     d.amountPaid != null ? `${paidLabel}:  ${formatMoney(d.amountPaid, d.currency)}` : null,
-    `Balance due:            ${formatMoney(due, d.currency)}`,
+    `${dueLabel}:${asked ? "            " : "   "}${formatMoney(due, d.currency)}`,
     "",
     showDueBy ? `The advance is due by ${formatDate(d.advanceDueBy!)} — your check-in date.` : null,
     showDueBy ? "" : null,
-    "Settling this in advance helps us secure your room. Reply to this email if you need bank details or have any questions.",
+    closing,
     "",
     "— The Legphel Hotel team",
   ]
@@ -206,10 +213,10 @@ ${detailsTable([
   ...breakdownRows(d.breakdown, d.currency),
   d.paymentPlan ? tableRow("Payment plan", d.paymentPlan, false, true) : "",
   d.amountPaid != null ? tableRow(paidLabel, formatMoney(d.amountPaid, d.currency)) : "",
-  tableRow("Balance due", formatMoney(due, d.currency), true, true),
+  tableRow(dueLabel, formatMoney(due, d.currency), true, true),
 ])}
 ${showDueBy ? `<p style="font-size:13px;color:#555">The advance is due by <strong>${escapeHtml(formatDate(d.advanceDueBy!))}</strong> &mdash; your check-in date.</p>` : ""}
-<p>Settling this in advance helps us secure your room. Reply to this email if you need bank details or have any questions.</p>
+<p>${escapeHtml(closing)}</p>
 <p style="margin-top:24px">&mdash; The Legphel Hotel team</p>
 `);
 

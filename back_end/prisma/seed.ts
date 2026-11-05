@@ -267,7 +267,6 @@ async function main() {
     { configKey: "quotation.document.templateKey", configValue: "quotation-v1", notes: "SIG-S2 document generation template key" },
 
     // --- SIG-S3 required keys (Section 9) ---
-    { configKey: "advancePayment.thresholds", configValue: { DEFAULT: { amount: 1 } }, notes: "Minimal S3 advance payment thresholds (amount in BTN)" },
     { configKey: "expiry.s3.committedHoldTtlSeconds", configValue: 3600, notes: "Committed hold TTL seconds (S3)" },
     { configKey: "creditCeiling.clientTier.thresholds", configValue: { standard: 5000, preferred: 10000, caution: 2000, restricted: 0 }, notes: "Credit ceiling thresholds — all four tiers (standard/preferred/caution/restricted) required by required-control-check" },
     { configKey: "checkout.cutoffTime", configValue: "12:00", notes: "Late-checkout escalation cutoff (HH:MM, hotel-local) — W26" },

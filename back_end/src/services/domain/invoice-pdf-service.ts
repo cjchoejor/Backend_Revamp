@@ -52,7 +52,6 @@ import { renderLegphelTaxInvoiceHtml } from "../infrastructure/pdf-templates/leg
 import { computeStayCharges, resolveChargeRates } from "../infrastructure/compute-stay-charges.js";
 import {
   describeAdvancePaymentPlan,
-  evaluateAdvancePaymentCondition,
   resolveAdvancePaymentPlan,
   resolveOperatorAdvanceRequirement,
 } from "./s3-payment-service.js";
@@ -182,11 +181,12 @@ type ProformaPrintLine = {
  * here, so the two can never disagree.
  *
  * Advance semantics (2026-08-01, per the A2 reference — "the hero is the advance"):
- *   - Required = the desk's per-booking requirement (`Folio.advanceRequiredAmount`, flat or
- *     percent-resolved) when set; else the configured `advancePayment.thresholds` evaluation.
+ *   - Required = what is on the bill for this pass (`Folio.advanceRequiredAmount`, flat or a
+ *     percentage): the desk's, or the travel agent's or company's own.
  *   - "Advance received" row appears once the guest has paid something in.
- *   - "Advance due now" = required − received (floor 0); with no requirement resolvable it
- *     falls back to the full remaining balance.
+ *   - "Advance due now" = required − received (floor 0). With nothing asked there is no such row
+ *     and no due date (2026-11-05: it used to fall back to the whole stay, so a booking asked for
+ *     no advance read "Advance due now" for the full amount).
  *   - "Balance at checkout" = total − received − advance due now (floor 0).
  */
 async function buildProformaDocRender(prisma: PrismaClient, inv: LoadedInvoice, opts?: { nightsMode?: NightsMode }) {
@@ -333,10 +333,9 @@ async function buildProformaDocRender(prisma: PrismaClient, inv: LoadedInvoice, 
   const inPayments = (inv.folio?.payments ?? []).filter((pay) => pay.paymentDirection === "IN");
   const advanceReceived = inPayments.reduce((s, pay) => s + Number(toDecimal(pay.amount).toFixed(2)), 0);
 
-  // The requirement: operator-pinned (Folio.advanceRequiredAmount) wins; else the configured
-  // thresholds evaluation; else null (no requirement resolvable). The pin is SEGMENT-SCOPED
-  // (2026-08-02, shared resolver): one set in a prior segment doesn't survive a re-entry, so
-  // a new segment's proforma prints the configured default, not the old segment's figure.
+  // The requirement: what is on the bill for this pass, else null — nothing is asked. It is
+  // SEGMENT-SCOPED (2026-08-02, shared resolver): one set in a prior segment doesn't survive a
+  // re-entry, so a new segment's proforma does not print the old segment's figure.
   const currentSegmentForAdvance = await prisma.segment.findFirst({
     where: { entryId: inv.entryId },
     orderBy: { segmentNumber: "desc" },
@@ -345,22 +344,14 @@ async function buildProformaDocRender(prisma: PrismaClient, inv: LoadedInvoice, 
   const pinnedAdvance = inv.folio
     ? resolveOperatorAdvanceRequirement(inv.folio, currentSegmentForAdvance?.startedAt ?? null)
     : null;
-  let requiredAdvance: number | null = pinnedAdvance != null ? Number(toDecimal(pinnedAdvance).toFixed(2)) : null;
+  const requiredAdvance: number | null = pinnedAdvance != null && pinnedAdvance > 0 ? Number(toDecimal(pinnedAdvance).toFixed(2)) : null;
   let advanceDueQualifier: string | null = null;
   const basis = (inv.folio?.advanceRequiredBasis ?? null) as { mode?: string; percent?: number } | null;
   if (requiredAdvance != null && basis?.mode === "PERCENT" && typeof basis.percent === "number") {
     advanceDueQualifier = `(${basis.percent}% of quote)`;
   }
-  if (requiredAdvance == null && inv.folio) {
-    try {
-      const ev = await evaluateAdvancePaymentCondition(prisma, { entryId: inv.entryId, folioId: inv.folio.id });
-      requiredAdvance = ev.requiredAmount > 0 ? ev.requiredAmount : null;
-    } catch {
-      /* advancePayment.thresholds not configured — fall through to full-balance semantics */
-    }
-  }
 
-  const advanceDueNow = Math.max(0, Number(((requiredAdvance ?? totalAmount) - advanceReceived).toFixed(2)));
+  const advanceDueNow = requiredAdvance == null ? 0 : Math.max(0, Number((requiredAdvance - advanceReceived).toFixed(2)));
   const totalPayable = Number((totalAmount - advanceReceived).toFixed(2));
   const balanceAtCheckout = Math.max(0, Number((totalAmount - advanceReceived - advanceDueNow).toFixed(2)));
 
@@ -428,7 +419,7 @@ async function buildProformaDocRender(prisma: PrismaClient, inv: LoadedInvoice, 
     // "(2 payments)" once installments are in — the guest sees how many they've made so far.
     advanceReceivedQualifier: inPayments.length > 1 ? `(${inPayments.length} payments)` : null,
     advanceDueQualifier,
-    advanceDueNow: formatMoney(advanceDueNow),
+    advanceDueNow: requiredAdvance == null ? null : formatMoney(advanceDueNow),
     balanceAtCheckout: formatMoney(balanceAtCheckout),
     bank: {
       bankName: null,
@@ -436,8 +427,11 @@ async function buildProformaDocRender(prisma: PrismaClient, inv: LoadedInvoice, 
       accountsPhone: primaryContactNumber(hotel.contactNumbers) || null,
     },
     closingNote:
-      "No surcharge applies on any payment mode. The booking confirms on receipt of the advance; " +
-      "a confirmation voucher follows. Cancellation terms as disclosed for this booking.",
+      requiredAdvance == null
+        ? "No advance is asked for this booking; the balance is settled at check-out. No surcharge applies " +
+          "on any payment mode. A confirmation voucher follows. Cancellation terms as disclosed for this booking."
+        : "No surcharge applies on any payment mode. The booking confirms on receipt of the advance; " +
+          "a confirmation voucher follows. Cancellation terms as disclosed for this booking.",
     tariffVersion: "T1.0",
   });
 

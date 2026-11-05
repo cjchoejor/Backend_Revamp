@@ -20,6 +20,7 @@ const coordinatorSchema = z.object({
 
 const createSchema = z.object({
   displayName: z.string().trim().min(1).max(200),
+  advancePercent: z.number().min(0).max(100).optional().nullable(),
   contactNumbers: z.array(z.string().trim().max(50)).optional().nullable(),
   contactEmail: z.string().trim().email().max(200).optional().nullable(),
   modeOfContact: contactModeSchema,

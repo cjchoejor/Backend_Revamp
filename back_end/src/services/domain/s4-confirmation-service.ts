@@ -152,8 +152,8 @@ async function confirmReservationInner(
 
   // …and once the guest has actually paid an advance, that proforma must have gone OUT to
   // them — money changing hands has to be documented (2026-07-28). Keyed on the amount
-  // RECEIVED, not the configured threshold: `advancePayment.thresholds` can be 0 while a
-  // guest still chooses to pay something up front, and that voluntary payment needs an
+  // RECEIVED, not what is asked: nothing may be asked while a guest still chooses to pay
+  // something up front, and that voluntary payment needs an
   // invoice just the same.
   const advanceEvaluation = await evaluateAdvancePaymentCondition(prisma, { entryId, folioId: folio.id });
   // Only the ADVANCE needs the proforma (2026-09-18): money taken before check-in. A mid-stay

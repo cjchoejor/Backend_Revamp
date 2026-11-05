@@ -7,7 +7,7 @@ import { enforceBillingModelAllowlistFromConfig } from "../../policies/13-billin
 import { enforceEntryAtS3ForS3DomainOperations } from "../../policies/01-availability/p01-entry-at-s3-for-s3-domain-operations.js";
 import { enforceGroupBillingSplitConfigured } from "../../policies/26-group-foc-billing/p66-group-foc-and-billing-split.js";
 import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.js";
-import { ensureProformaOfThisPassTx } from "./s3-payment-service.js";
+import { applyPartyAdvanceRuleTx, ensureProformaOfThisPassTx } from "./s3-payment-service.js";
 import { retireSupersededReplyWaitsBestEffort } from "../../lib/reply-waits.js";
 import { buildInitialBillingModelDefaults } from "../../lib/billing-model-defaults.js";
 import { payerChoicesFor, type PayerChoices } from "../../lib/payer-choices.js";
@@ -139,6 +139,9 @@ export async function ensureProvisionalFolioAndBillingModel(
     // when no live proforma stands, and never replaces one that does.
     // …and a pass that reached Set up straight from Reserve (a change of who pays) gets its own
     // here, the earlier pass's bill replaced (2026-10-29).
+    // A booking through a travel agent or a company takes its own advance here too, before the
+    // bill that prints it — for one already at Set up when the percentage was set (2026-11-05).
+    await applyPartyAdvanceRuleTx(tx, { entryId, folioId: folio.id, segmentId, actorId, now: new Date() });
     await ensureProformaOfThisPassTx(
       tx,
       { entryId, folioId: folio.id, passStartedAt: entry.segments[0]?.startedAt ?? null, basis: "S3 setup" },

@@ -945,7 +945,8 @@ export async function walkPiece(
       await step("CANCELLATION_TERMS", async () => {
         const seg = await prisma.segment.findFirst({ where: { entryId: newId }, orderBy: { segmentNumber: "desc" }, select: { id: true } });
         const src = entry.cancellationDisclosure;
-        if (!src) throw new ValidationError("The original has no cancellation terms recorded to carry — record them at Set up");
+        // Reaching Set up has already recorded the terms on the new booking (2026-11-05).
+        if (!src) return;
         await recordCancellationDisclosure(
           prisma,
           { entryId: newId, segmentId: seg!.id, noShowTreatmentStatement: src.noShowTreatmentStatement, disclosedTerms: src.disclosedTerms },

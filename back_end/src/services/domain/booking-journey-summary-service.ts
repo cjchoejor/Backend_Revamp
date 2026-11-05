@@ -161,12 +161,11 @@ export interface BookingJourneySummary {
       shortfall: number | null;
       creditExtensionActive: boolean;
       ceilingAmount: number | null;
-      /** Where the required amount came from: operator-pinned for this booking, or config thresholds. */
-      requirementSource: "OPERATOR" | "CONFIG" | null;
+      /** Where the amount came from: set for this booking, the party's own percentage, or nothing asked. */
+      requirementSource: "OPERATOR" | "PARTY" | "NONE" | null;
       requirementBasis: unknown | null;
       creditExtensionExpiresAt: string | null;
       creditExtensionExpired: boolean;
-      groupBoostApplied: { multiplierPercent: number; baseAmount: number } | null;
       /** The advance is due between proforma dispatch (opensAt) and check-in (deadline). */
       advanceWindow: { opensAt: string | null; deadline: string | null; active: boolean; overdue: boolean } | null;
     } | null;
@@ -420,7 +419,8 @@ export async function buildBookingJourneySummary(prisma: Db, entryId: string): P
     ? await prisma.staffUser.findMany({ where: { id: { in: actorIds } }, select: { id: true, fullName: true } })
     : [];
   const staffNameById = new Map(staffRows.map((s) => [s.id, s.fullName]));
-  const who = (id: string | null | undefined): string | null => (id ? staffNameById.get(id) ?? id : null);
+  const who = (id: string | null | undefined): string | null =>
+    id === "SYSTEM" ? "The system" : id ? staffNameById.get(id) ?? id : null;
 
   // --- S3: advance-payment status (Decimal-safe, via the shared service) ---------------------
   let advancePayment: BookingJourneySummary["s3Setup"]["advancePayment"] = null;
@@ -438,11 +438,10 @@ export async function buildBookingJourneySummary(prisma: Db, entryId: string): P
         requirementBasis: ps.requirementBasis ?? null,
         creditExtensionExpiresAt: ps.creditExtensionExpiresAt ?? null,
         creditExtensionExpired: ps.creditExtensionExpired ?? false,
-        groupBoostApplied: (ps as { groupBoostApplied?: { multiplierPercent: number; baseAmount: number } }).groupBoostApplied ?? null,
         advanceWindow: ps.advanceWindow ?? null,
       };
     } catch {
-      // Missing advancePayment.thresholds config etc. — leave null rather than fail the summary.
+      // Leave null rather than fail the summary.
       advancePayment = null;
     }
   }

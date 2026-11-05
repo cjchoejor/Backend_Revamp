@@ -28,7 +28,6 @@ const KNOWN_FEATURE_DEPENDENCIES = new Set<string>([
 
 const CORE_KEYS = [
   "stageDwell.thresholds",
-  "advancePayment.thresholds",
   "billing.salesTaxRate",
   "expiry.s3.committedHoldTtlSeconds",
   "nightAudit.scheduleTime",

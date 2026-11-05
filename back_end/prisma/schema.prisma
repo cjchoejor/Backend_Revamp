@@ -2910,6 +2910,10 @@ model TravelAgent {
   // number each time. Appendable from the desk (L1) via POST /lookups/travel-agents/:id/contacts so
   // a new contact person captured mid-call is there for the next booking.
   coordinators   Json?
+  /// The advance asked of a booking through this party, as a percentage of the stay's total
+  /// (2026-11-05). Null is not set: nothing is asked unless the desk sets it on the booking. It is
+  /// copied onto the booking when it reaches Set up, so a later change leaves live bookings alone.
+  advancePercent Decimal?    @db.Decimal(5, 2)
   notes          String?
   isActive       Boolean     @default(true)
   createdAt      DateTime    @default(now())
@@ -2947,6 +2951,10 @@ model CorporateAccount {
   contractRefs   String[]    @default([])
   // coordinators: array of contact objects [{ name, phone?, email? }].
   coordinators   Json?
+  /// The advance asked of a booking through this party, as a percentage of the stay's total
+  /// (2026-11-05). Null is not set: nothing is asked unless the desk sets it on the booking. It is
+  /// copied onto the booking when it reaches Set up, so a later change leaves live bookings alone.
+  advancePercent Decimal?    @db.Decimal(5, 2)
   notes          String?
   isActive       Boolean     @default(true)
   createdAt      DateTime    @default(now())

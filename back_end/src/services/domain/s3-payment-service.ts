@@ -1,8 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { PrismaClient } from "@prisma/client";
 import { InvoiceState, InvoiceType, PaymentDirection, PreArrivalTaskType, Prisma, Stage, TaskStatus } from "@prisma/client";
-import { MissingConfigurationError, ValidationError } from "../../lib/errors.js";
-import { requireActiveConfigValue } from "../../lib/config-store.js";
+import { ValidationError } from "../../lib/errors.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import { enforceCreditExtensionConstraints } from "../../policies/18-credit-extension-ceiling/p42-credit-ceiling-mandatory-set.js";
 import { enforceAdvancePaymentReconciliationRequiresPayment } from "../../policies/12-advance-payment/p27-advance-payment-reconciliation.js";
@@ -14,21 +13,18 @@ import { resolveOperativeQuotation } from "../../lib/operative-quotation.js";
 import { hotelCalendarYmd, hotelDayEndUtc } from "../../lib/stay-dates.js";
 import { retireSupersededReplyWaitsBestEffort } from "../../lib/reply-waits.js";
 
-function toNumber(v: any): number {
-  if (typeof v === "number") return v;
-  if (typeof v === "string") return Number(v);
-  return NaN;
-}
-
 /**
- * The operator-pinned advance requirement, scoped to the CURRENT segment (2026-08-02 operator
- * ruling). The folio is a per-entry singleton, so a requirement pinned in segment 1 would
- * otherwise survive a re-entry and resurface as segment 2's threshold — but each segment must
- * start from the admin-configured `advancePayment.thresholds` until the desk pins one afresh.
- * Scoping is by set-time: a `basis.setAt` before the current segment's `startedAt` is a prior
- * segment's decision and returns null (config applies). Requirements stored before `setAt`
- * existed can't be scoped and stay honored. Shared by the payment evaluation, the
- * requirement-change detection, and the proforma composition so all three agree.
+ * The advance asked of THIS booking, scoped to the CURRENT segment (2026-08-02 operator ruling).
+ * The folio is a per-entry singleton, so a requirement pinned in segment 1 would otherwise survive
+ * a re-entry and resurface as segment 2's — but each segment starts afresh. Scoping is by set-time:
+ * a `basis.setAt` before the current segment's `startedAt` is a prior segment's decision and
+ * returns null (nothing is asked). Requirements stored before `setAt` existed can't be scoped and
+ * stay honored. Shared by the payment evaluation, the requirement-change detection, and the
+ * proforma composition so all three agree.
+ *
+ * This is the ONLY source of an advance since 2026-11-05: the hotel-wide
+ * `advancePayment.thresholds` and its group multiplier are gone. What is on the folio was set by
+ * the desk, or copied from the travel agent's or company's own percentage (`applyPartyAdvanceRuleTx`).
  */
 export function resolveOperatorAdvanceRequirement(
   folio: { advanceRequiredAmount: Prisma.Decimal | null; advanceRequiredBasis: unknown },
@@ -131,73 +127,29 @@ export function resolveAdvancePaymentPlan(
 async function computeAdvancePaymentEvaluation(
   db: PrismaClient | Prisma.TransactionClient,
   input: { entryId: string; folioId: string },
-  thresholds: any,
 ) {
   const folio = await db.folio.findUnique({ where: { id: input.folioId }, include: { payments: true } });
   if (!folio) throw new ValidationError("folioId invalid");
   if (folio.entryId !== input.entryId) throw new ValidationError("entryId/folioId mismatch");
 
-  // Resolve the base required amount. The config supports two shapes:
-  //   1) Flat: { amount: N }
-  //   2) Per-source: { DEFAULT: { amount: N }, OTA: { amount: M }, CORPORATE: { amount: P }, ... }
-  // When the entry has an ota/source, per-source overrides the DEFAULT; otherwise DEFAULT wins.
   const entry = await db.entry.findUnique({
     where: { id: input.entryId },
     include: {
-      inquiry: { select: { sourceChannel: true } },
-      // Current segment's start — scopes the operator-pinned requirement (see helper above).
+      // Current segment's start — scopes what is asked (see helper above).
       segments: { orderBy: { segmentNumber: "desc" }, take: 1, select: { startedAt: true } },
     },
-    // groupBillingMode + sourceChannel needed for both boost and per-source resolution.
   });
-  const isGroup = entry?.groupBillingMode === "GROUP_MASTER";
-  const sourceKey = String(entry?.inquiry?.sourceChannel ?? "").toUpperCase();
-  const perSourceAmount = sourceKey && thresholds && typeof thresholds === "object"
-    ? toNumber((thresholds as any)[sourceKey]?.amount)
-    : NaN;
-  const baseRequiredAmount = Number.isFinite(perSourceAmount) && perSourceAmount > 0
-    ? perSourceAmount
-    : toNumber(thresholds?.DEFAULT?.amount ?? thresholds?.amount ?? 0);
 
-  // Group booking boost — if the parent entry was classified as GROUP_MASTER (Policy 64),
-  // multiply the resolved base amount by the policy's `multiplierPercent`. 200 = 2x. This
-  // now boosts whichever source shape was resolved above (per-source OTA amount, per-source
-  // CORPORATE amount, or DEFAULT) — not only DEFAULT — which was the Loophole 3 bug.
-  let requiredAmount = baseRequiredAmount;
-  let boostApplied: { multiplierPercent: number; baseAmount: number } | null = null;
-  if (isGroup && Number.isFinite(baseRequiredAmount) && baseRequiredAmount > 0) {
-    const boostPolicy = await getRegistryPolicy(db as any, "registry.groupBooking.advancePaymentBoost");
-    if (boostPolicy && boostPolicy.enabled !== false && typeof boostPolicy.multiplierPercent === "number") {
-      const mult = Math.max(0, boostPolicy.multiplierPercent as number) / 100;
-      const boosted = baseRequiredAmount * mult;
-      if (boosted > baseRequiredAmount) {
-        requiredAmount = boosted;
-        boostApplied = { multiplierPercent: boostPolicy.multiplierPercent as number, baseAmount: baseRequiredAmount };
-      }
-    }
-  }
-
-  // Operator-set requirement (2026-08-01) — when the desk pinned an advance for THIS booking
-  // (flat amount or a percentage resolved at set time), it overrides the config thresholds AND
-  // the group boost: an explicit per-booking decision beats every derived default. Segment-
-  // scoped (2026-08-02): a pin from a PRIOR segment does not carry across a re-entry — each
-  // segment starts from the configured thresholds until the desk pins one afresh.
-  const operatorRequired = resolveOperatorAdvanceRequirement(folio, entry?.segments?.[0]?.startedAt ?? null);
-  // What the CONFIG demands (thresholds + group boost), before any per-booking pin — carried
-  // on the response so the desk can show both figures side by side: the pin lives on this
-  // booking's folio alone and never touches the configured minimum (2026-08-03, after an
-  // operator read a pinned figure as "the minimum threshold changed").
-  const configuredBaseAmount = Number.isFinite(requiredAmount) ? Number(toDecimal(requiredAmount).toFixed(2)) : 0;
-  if (operatorRequired != null) {
-    requiredAmount = operatorRequired;
-    boostApplied = null;
-  }
+  // What is asked of this booking: what is on its bill for this pass, or nothing (2026-11-05). The
+  // hotel has no amount of its own any more. A travel agent's or company's percentage reaches here
+  // by being copied onto the bill at Set up, so changing it later never moves a live booking.
+  const pinned = resolveOperatorAdvanceRequirement(folio, entry?.segments?.[0]?.startedAt ?? null);
 
   // Decimal-safe sum — reducing Number(p.amount) with `+` produced 4999.999999999999 for
   // three partial payments totalling exactly 5000 and wrongly blocked check-in at the gate.
   const inPayments = (folio.payments ?? []).filter((p) => p.paymentDirection === PaymentDirection.IN);
   const totalReceivedDec = sumMoneyBy(inPayments, "amount");
-  const requiredAmountDec = toDecimal(Number.isFinite(requiredAmount) ? requiredAmount : 0);
+  const requiredAmountDec = toDecimal(pinned ?? 0);
 
   const credit = await db.creditExtensionCeilingRecord.findUnique({ where: { folioId: folio.id } });
 
@@ -223,12 +175,11 @@ async function computeAdvancePaymentEvaluation(
   const creditExtensionExpired = !!credit?.expiresAt && credit.expiresAt.getTime() <= now.getTime();
   const creditExtensionActive = !!credit && !creditExtensionExpired;
 
-  const satisfied = creditExtensionActive
-    || (Number.isFinite(requiredAmount) ? totalReceivedDec.gte(requiredAmountDec) : totalReceivedDec.gt(0));
-  const shortfallDec = Number.isFinite(requiredAmount) ? maxZeroSub(requiredAmountDec, totalReceivedDec) : toDecimal(0);
+  const satisfied = creditExtensionActive || totalReceivedDec.gte(requiredAmountDec);
+  const shortfallDec = maxZeroSub(requiredAmountDec, totalReceivedDec);
   // Money alone — `satisfied` can be true on a credit extension while the guest still owes the
   // remainder; `paidInFull` is the fact the promise timer and the settlement ticks care about.
-  const paidInFull = Number.isFinite(requiredAmount) ? totalReceivedDec.gte(requiredAmountDec) : totalReceivedDec.gt(0);
+  const paidInFull = totalReceivedDec.gte(requiredAmountDec);
 
   // The guest's stated payment plan (2026-08-07), segment-scoped like the requirement pin.
   // `promiseOverdue` is a read-time fact — the W38 worker traces the lapse, but the desk's red
@@ -285,13 +236,15 @@ async function computeAdvancePaymentEvaluation(
     // distinguishes "there is an extension but its clock ran out" from "no extension".
     creditExtensionExpiresAt: credit?.expiresAt ? credit.expiresAt.toISOString() : null,
     creditExtensionExpired,
-    // Where the required amount came from: the operator's per-booking requirement or the
-    // configured thresholds. Basis carries the percent/base detail for display.
-    requirementSource: operatorRequired != null ? ("OPERATOR" as const) : ("CONFIG" as const),
-    requirementBasis: operatorRequired != null ? (folio.advanceRequiredBasis ?? null) : null,
-    // The config's own figure, independent of any per-booking pin — always present so the
-    // desk can state "hotel minimum unchanged at X" next to a pinned requirement.
-    configuredBaseAmount,
+    // Where the amount came from: the desk, the travel agent's or company's own percentage, or
+    // nothing is asked. Basis carries the percent, base and party for display.
+    requirementSource:
+      pinned == null
+        ? ("NONE" as const)
+        : (folio.advanceRequiredBasis as { source?: unknown } | null)?.source === "PARTY"
+          ? ("PARTY" as const)
+          : ("OPERATOR" as const),
+    requirementBasis: pinned != null ? (folio.advanceRequiredBasis ?? null) : null,
     // The payment window: opens at proforma dispatch (p27 blocks money before it), closes at
     // the check-in date. Deadline facts only — the desk renders the countdown from these.
     advanceWindow: {
@@ -300,9 +253,6 @@ async function computeAdvancePaymentEvaluation(
       active: windowActive,
       overdue: windowOverdue,
     },
-    // Present only when the group boost actually raised the required amount above the base.
-    // The frontend can show a hint on the payment card explaining WHY the amount is higher.
-    ...(boostApplied ? { groupBoostApplied: boostApplied } : {}),
   };
 }
 
@@ -310,9 +260,9 @@ async function computeAdvancePaymentEvaluation(
  * Operator-set advance requirement (2026-08-01): pin how much the guest must pay for THIS
  * booking — a flat amount, or a percentage of the operative quotation's total (resolved to an
  * amount HERE, Decimal-safe, so the stored value is unambiguous even if the quote later
- * changes; re-set the requirement to track a renegotiated quote). CLEAR reverts to the
- * configured `advancePayment.thresholds`. The resolved amount overrides config + group boost
- * in the payment evaluation and prints as "Advance due now" on the proforma.
+ * changes; re-set the requirement to track a renegotiated quote). CLEAR means no advance on this
+ * booking. The resolved amount is what the payment evaluation reads and what prints as "Advance
+ * due now" on the proforma.
  */
 /**
  * The STAY's total a quotation states (2026-09-18). A composition quote's total is the stay; a flat
@@ -320,6 +270,94 @@ async function computeAdvancePaymentEvaluation(
  * quote asked for a quarter of ONE night — a two-night group was asked Nu 1,575 of a Nu 12,600 stay.
  * Shared by the requirement setter and the carry across a new pass, so a % reads the same in both.
  */
+/**
+ * A travel agent's or company's own advance, copied onto the booking's bill (2026-11-05, operator:
+ * "set travel agent and corporate's separate advance payment rule where in each of the travel agent
+ * we can set the advance percentage"). Called when a booking reaches Set up and when its payer is
+ * set, inside the caller's transaction; idempotent.
+ *
+ * Copied rather than read live, so that setting a percentage on an agency does not suddenly ask an
+ * advance of its bookings already reserved, and hold them at the arrival gate. It is worked out on
+ * this pass's quotation and reads like any amount on the bill from there, carried or changed the
+ * same way. It stands aside for:
+ *  - an amount already in force in this pass (the desk's, or one a room-change walk carried);
+ *  - the desk's "no advance" on this booking;
+ *  - a booking already reserved, unless what lapsed was this rule — a walk must never start asking
+ *    for money the booking was not asked for. A renegotiation gets it back at the new price.
+ */
+export async function applyPartyAdvanceRuleTx(
+  tx: Prisma.TransactionClient,
+  input: { entryId: string; folioId: string; segmentId: string; actorId: string; now: Date },
+): Promise<{ applied: boolean; amount: number | null; percent: number | null }> {
+  const none = { applied: false, amount: null, percent: null };
+  const entry = await tx.entry.findUnique({
+    where: { id: input.entryId },
+    select: {
+      checkInDate: true,
+      checkOutDate: true,
+      currentReservationId: true,
+      inquiryId: true,
+      inquiry: {
+        select: {
+          travelAgent: { select: { displayName: true, advancePercent: true } },
+          corporateAccount: { select: { displayName: true, advancePercent: true } },
+        },
+      },
+    },
+  });
+  const party = entry?.inquiry?.travelAgent ?? entry?.inquiry?.corporateAccount ?? null;
+  const percent = party?.advancePercent != null ? Number(party.advancePercent.toString()) : 0;
+  if (!entry || !party || !(percent > 0)) return none;
+
+  const [folio, pass] = await Promise.all([
+    tx.folio.findUnique({ where: { id: input.folioId }, select: { advanceRequiredAmount: true, advanceRequiredBasis: true } }),
+    tx.segment.findUnique({ where: { id: input.segmentId }, select: { startedAt: true } }),
+  ]);
+  if (!folio) return none;
+  if (resolveOperatorAdvanceRequirement(folio, pass?.startedAt ?? null) != null) return none;
+  const lastBasis = (folio.advanceRequiredBasis ?? null) as { mode?: unknown; source?: unknown } | null;
+  if (lastBasis?.mode === "NONE") return none;
+  if (entry.currentReservationId && lastBasis?.source !== "PARTY") return none;
+
+  const quotations = await tx.quotation.findMany({ where: { entryId: input.entryId, segmentId: input.segmentId } });
+  const quote = resolveOperativeQuotation(quotations, input.segmentId) ?? quotations.find((q) => q.state !== "SUPERSEDED") ?? null;
+  if (!quote) return none;
+
+  const baseTotal = quotationStayTotal(quote, entry);
+  const amount = round2(pctOf(baseTotal, percent));
+  const basis = {
+    mode: "PERCENT",
+    source: "PARTY",
+    partyName: party.displayName,
+    percent,
+    baseTotal: Number(baseTotal.toFixed(2)),
+    quotationId: quote.id,
+    setBy: "SYSTEM",
+    setAt: input.now.toISOString(),
+  };
+  await tx.folio.update({
+    where: { id: input.folioId },
+    data: { advanceRequiredAmount: amount, advanceRequiredBasis: basis as Prisma.InputJsonValue },
+  });
+  await tx.traceEvent.create({
+    data: {
+      eventType: "ADVANCE_PAYMENT.PARTY_RULE_APPLIED",
+      actorId: input.actorId,
+      actorLevel: "SYSTEM",
+      entityType: "Folio",
+      entityId: input.folioId,
+      operation: "UPDATE",
+      timestamp: input.now,
+      stageContext: Stage.S3,
+      inquiryId: entry.inquiryId,
+      entryId: input.entryId,
+      payload: { entryId: input.entryId, folioId: input.folioId, requiredAmount: Number(amount.toFixed(2)), basis } as Prisma.InputJsonValue,
+      createdBy: input.actorId,
+    },
+  });
+  return { applied: true, amount: Number(amount.toFixed(2)), percent };
+}
+
 function quotationStayTotal(
   operative: { totalAmount: unknown; commercialTerms: unknown },
   entry: { checkInDate: Date | null; checkOutDate: Date | null } | null | undefined,
@@ -376,10 +414,10 @@ async function armAdvancePromiseDeadlineTx(
  * Carry the desk's advance decisions across a NEW PASS that is not a renegotiation (2026-10-12).
  *
  * The pinned advance requirement and the guest's payment plan are segment-scoped on purpose — a
- * re-entry that RENEGOTIATES starts from the house default. But a room-change walk (room change,
+ * re-entry that RENEGOTIATES starts afresh. But a room-change walk (room change,
  * room move, stay extension, setup change, seating repair) also opens a pass, and there the money
  * question was never reopened: the walk's re-freeze carries the advance condition for that very
- * reason. Without this carry the pins silently fell back to the house default after every walk,
+ * reason. Without this carry the pins were silently dropped after every walk,
  * so the advance asked of the guest could change because a room did.
  *
  * Re-stamps whatever was in force in the pass the walk left: an AMOUNT stays as it was; a PERCENT
@@ -538,8 +576,11 @@ async function resolveRequirementChange(
       setBy: actor.actorId,
       setAt: now.toISOString(),
     };
+  } else {
+    // "No advance on this booking": nothing asked, and said, so that the travel agent's or company's
+    // own percentage does not come back on the next arrival at Set up.
+    basis = { mode: "NONE", setBy: actor.actorId, setAt: now.toISOString() };
   }
-  // mode === "CLEAR" leaves requiredDec/basis null → falls back to config thresholds.
 
   const priorEffective = resolveOperatorAdvanceRequirement(folio, segmentStartedAt);
   const priorStr = priorEffective != null ? toDecimal(priorEffective).toFixed(2) : null;
@@ -1135,24 +1176,16 @@ export async function evaluateAdvancePaymentCondition(
   prisma: PrismaClient,
   input: { entryId: string; folioId: string; now?: Date },
 ) {
-  const now = input.now ?? new Date();
-  const thresholds = await requireActiveConfigValue<any>(prisma, "advancePayment.thresholds", { now }).catch(() => {
-    throw new MissingConfigurationError("advancePayment.thresholds");
-  });
-  return computeAdvancePaymentEvaluation(prisma, input, thresholds);
+  return computeAdvancePaymentEvaluation(prisma, input);
 }
 
-/** Reads folio/payments on `tx` (including uncommitted rows) while loading thresholds from the root client. */
+/** Reads folio/payments on `tx`, including uncommitted rows. */
 export async function evaluateAdvancePaymentConditionTx(
-  prisma: PrismaClient,
+  _prisma: PrismaClient,
   tx: Prisma.TransactionClient,
   input: { entryId: string; folioId: string; now?: Date },
 ) {
-  const now = input.now ?? new Date();
-  const thresholds = await requireActiveConfigValue<any>(prisma, "advancePayment.thresholds", { now }).catch(() => {
-    throw new MissingConfigurationError("advancePayment.thresholds");
-  });
-  return computeAdvancePaymentEvaluation(tx, input, thresholds);
+  return computeAdvancePaymentEvaluation(tx, input);
 }
 
 /** SIG §6.4 — façade name for API / callers. */

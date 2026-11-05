@@ -60,9 +60,9 @@ export function enforceProformaInvoicePresentForS4Confirmation(input: { hasProfo
  * advance payment lands on the folio, a merely DRAFT proforma is not enough — the guest is
  * owed the invoice their payment sits against.
  *
- * The trigger is the amount RECEIVED, deliberately not the configured requirement. Those come
- * apart in practice: `advancePayment.thresholds` may be 0 for a booking shape (no deposit
- * demanded) and the guest still chooses to pay something up front. That voluntary payment
+ * The trigger is the amount RECEIVED, deliberately not what is asked. Those come apart in
+ * practice: nothing may be asked of a booking and the guest still chooses to pay something up
+ * front. That voluntary payment
  * needs documenting exactly as much as a demanded one does.
  *
  * A proforma counts as dispatched once `dispatchedAt` is set or its state has moved past

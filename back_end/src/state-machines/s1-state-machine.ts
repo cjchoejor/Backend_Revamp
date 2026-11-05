@@ -1,3 +1,4 @@
+import { ensureCancellationDisclosedTx } from "../services/domain/s3-cancellation-disclosure-service.js";
 import type { PrismaClient } from "@prisma/client";
 import { Stage } from "@prisma/client";
 import { NotFoundError, ValidationError } from "../lib/errors.js";
@@ -228,6 +229,8 @@ export async function autoFulfilS2ToS3(prisma: PrismaClient, entryId: string, ac
         createdBy: actorId,
       },
     });
+    const pass = await tx.segment.findFirst({ where: { entryId }, orderBy: { segmentNumber: "desc" }, select: { id: true } });
+    if (pass) await ensureCancellationDisclosedTx(tx, { entryId, segmentId: pass.id, now });
     return updated;
   });
 }

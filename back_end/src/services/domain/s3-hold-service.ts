@@ -1,3 +1,4 @@
+import { ensureCancellationDisclosedTx } from "./s3-cancellation-disclosure-service.js";
 import type { PrismaClient } from "@prisma/client";
 import { releaseRoomClaimIfOwnedTx } from "../../lib/room-claim-state.js";
 import { EntryStatus, HoldState, InventoryClaimState, Prisma, Stage } from "@prisma/client";
@@ -187,7 +188,12 @@ export async function placeCommittedHold(
     | null;
   const perNightBreakdown = sealAsPerNight(opt, { checkIn: entry.checkInDate, checkOut: entry.checkOutDate });
 
-  enforceCancellationDisclosurePresent({ hasCancellationDisclosure: !!entry.cancellationDisclosure });
+  // Set up no longer asks the desk to record the terms (2026-11-05): reaching it records them, and
+  // a booking that was already there when that began records them here rather than being stranded.
+  const disclosure =
+    entry.cancellationDisclosure ??
+    (await prisma.$transaction((tx) => ensureCancellationDisclosedTx(tx, { entryId, segmentId, now: new Date() })));
+  enforceCancellationDisclosurePresent({ hasCancellationDisclosure: !!disclosure });
 
   enforceFolioPresentBeforeCommittedHoldS3({ folio: entry.folio });
 

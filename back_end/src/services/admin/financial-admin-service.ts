@@ -6,7 +6,6 @@ import { isSystemSeedSetBy, supersedeConfigurationEntry } from "../../lib/admin/
 export const FINANCIAL_CONFIG_KEYS = [
   "billing.salesTaxRate",
   "billing.serviceChargeRate",
-  "advancePayment.thresholds",
   "advancePayment.followUpWindowSeconds",
   "advancePayment.escalationWindowSeconds",
   "payment.followUp.intervals",

@@ -1,12 +1,6 @@
 import type { PrismaClient } from "@prisma/client";
 import { Stage } from "@prisma/client";
-import { requireActiveConfigValue } from "../lib/config-store.js";
-
-function toNumber(v: unknown): number {
-  if (typeof v === "number") return v;
-  if (typeof v === "string") return Number(v);
-  return NaN;
-}
+import { evaluateAdvancePaymentCondition } from "../services/domain/s3-payment-service.js";
 
 export async function runAdvancePaymentFollowUpWorker(prisma: PrismaClient, input: { entryId?: string; invoiceId?: string; tier?: 1 | 2; timerRecordId?: string }) {
   const now = new Date();
@@ -20,15 +14,12 @@ export async function runAdvancePaymentFollowUpWorker(prisma: PrismaClient, inpu
     return { skipped: true, reason: "NOT_APPLICABLE_STAGE_OR_STATUS" } as const;
   }
 
-  const totalIn = (entry.folio.payments ?? []).filter((p) => p.paymentDirection === "IN").reduce((sum, p) => sum + Number(p.amount.toString()), 0);
-  // Do NOT swallow errors here — a transient DB / config-store failure with a fallback of 0 would
-  // silently mark every follow-up as satisfied and never nudge unpaid guests. Let pg-boss retry.
-  const credit = await prisma.creditExtensionCeilingRecord.findUnique({ where: { folioId: entry.folio.id } });
-  const thresholds = await requireActiveConfigValue<any>(prisma, "advancePayment.thresholds");
-  const requiredAmount = toNumber(thresholds?.DEFAULT?.amount ?? thresholds?.amount ?? 0);
-  const satisfied =
-    !!credit || (Number.isFinite(requiredAmount) ? totalIn >= requiredAmount : totalIn > 0);
-  if (satisfied) {
+  // Do NOT swallow errors here — a transient DB failure with a fallback of 0 would silently mark
+  // every follow-up as satisfied and never nudge unpaid guests. Let pg-boss retry. The one rule the
+  // gates read (2026-11-05), so what was set on this booking counts here too.
+  const advance = await evaluateAdvancePaymentCondition(prisma, { entryId, folioId: entry.folio.id });
+  const totalIn = advance.totalReceived;
+  if (advance.satisfied) {
     await prisma.traceEvent.create({
       data: {
         eventType: "ADVANCE_PAYMENT.FOLLOW_UP_SKIPPED_CONDITION_MET",
@@ -40,7 +31,7 @@ export async function runAdvancePaymentFollowUpWorker(prisma: PrismaClient, inpu
         timestamp: now,
         stageContext: Stage.S3,
         entryId,
-        payload: { entryId, totalIn, creditExtensionActive: !!credit },
+        payload: { entryId, totalIn, creditExtensionActive: advance.creditExtensionActive },
         createdBy: "SYSTEM",
       },
     });

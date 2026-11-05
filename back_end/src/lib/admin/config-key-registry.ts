@@ -130,7 +130,6 @@ export const CONFIG_KEY_REGISTRY: Record<string, ConfigKeyMeta> = {
   "cancellation.policyTiers": own("CancellationPolicyService"),
 
   // Financial (FinancialConfigurationService)
-  "advancePayment.thresholds": own("FinancialConfigurationService", isObject),
   "advancePayment.followUpWindowSeconds": own("FinancialConfigurationService", positiveInt),
   "advancePayment.escalationWindowSeconds": own("FinancialConfigurationService", positiveInt),
   "proformaInvoice.templates": own("FinancialConfigurationService", isObject),

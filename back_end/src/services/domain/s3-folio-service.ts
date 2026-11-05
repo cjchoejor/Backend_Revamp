@@ -24,7 +24,7 @@ import {
 } from "./s3-hold-service.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.js";
-import { ensureProformaOfThisPassTx } from "./s3-payment-service.js";
+import { applyPartyAdvanceRuleTx, ensureProformaOfThisPassTx } from "./s3-payment-service.js";
 import { enforceEntryNotSealedForWorkingAction } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
 import { latestDispatchedInForce } from "../../lib/reply-waits.js";
 
@@ -82,6 +82,8 @@ export async function getOrCreateProvisionalFolioTx(
     // place (2026-09-25). Every pass has its own now (2026-10-29): an earlier pass's bill is
     // replaced, a missing one is made, this pass's own is left as it is.
     const pass = await tx.segment.findUnique({ where: { id: segmentId }, select: { startedAt: true } });
+    // Before the bill, which prints it.
+    await applyPartyAdvanceRuleTx(tx, { entryId, folioId: existing.id, segmentId, actorId, now });
     await ensureProformaOfThisPassTx(
       tx,
       { entryId, folioId: existing.id, passStartedAt: pass?.startedAt ?? null, basis: "ARRIVAL_AT_SET_UP", now },
@@ -119,6 +121,7 @@ export async function getOrCreateProvisionalFolioTx(
       createdBy: actorId,
     },
   });
+  await applyPartyAdvanceRuleTx(tx, { entryId, folioId: created.id, segmentId, actorId, now });
 
   return created;
 }

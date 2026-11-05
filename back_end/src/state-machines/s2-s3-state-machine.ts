@@ -13,6 +13,7 @@ import {
   enforceEntryAtS2ForS2ToS3Progression,
 } from "../policies/01-availability/p01-entry-progression-stage-gates.js";
 import { getOrCreateProvisionalFolioTx } from "../services/domain/s3-folio-service.js";
+import { ensureCancellationDisclosedTx } from "../services/domain/s3-cancellation-disclosure-service.js";
 import { scheduleS3StageDwellWarningMonitor } from "../lib/schedule-s3-dwell-warning-monitor.js";
 import { getTimerEngine } from "../services/infrastructure/timer-management-service.js";
 import { cancelNegotiationExpiryTx } from "../lib/negotiation-expiry.js";
@@ -103,6 +104,7 @@ export async function progressS2ToS3(prisma: PrismaClient, entryId: string, _act
       },
     });
 
+    await ensureCancellationDisclosedTx(tx, { entryId, segmentId, now });
     await getOrCreateProvisionalFolioTx(tx, entryId, segmentId, _actorId, entry.inquiryId, now);
 
     return tx.entry.findUniqueOrThrow({ where: { id: entryId } });

@@ -19,7 +19,7 @@ import { postChargeTaxCompanionsTx } from "./s7-folio-lines-service.js";
 import { describeInterimPromise, markInterimInvoiceDispatchedTx, type InterimFigures } from "./interim-payment-service.js";
 import { computeStayCharges, resolveChargeRates } from "../infrastructure/compute-stay-charges.js";
 import { mulMoney, round2, sumMoneyBy, toDecimal } from "../../lib/money.js";
-import { describeAdvancePaymentPlan, resolveAdvancePaymentPlan } from "./s3-payment-service.js";
+import { describeAdvancePaymentPlan, evaluateAdvancePaymentCondition, evaluateAdvancePaymentConditionTx, resolveAdvancePaymentPlan } from "./s3-payment-service.js";
 import { formatMoment as formatEmailDate } from "../infrastructure/stage-email-helpers.js";
 import { buildFinalInvoiceFigures, generateOrLoadInvoicePdf, loadInvoiceForRender, renderProformaPdfFace } from "./invoice-pdf-service.js";
 import { releaseEntryRoomsToFree } from "../../lib/room-claim-state.js";
@@ -266,20 +266,10 @@ async function dispatchInvoiceInner(
           },
         });
 
-        // Do NOT swallow — silently defaulting requiredAmount to 0 would let the follow-up gate
-        // pass unconditionally and skip scheduling W34 tier-1/tier-2 timers. Let PI dispatch fail
-        // loudly so the operator sees a real error instead of guests silently missing follow-ups.
-        const thresholds = await requireActiveConfigValue<any>(tx as any, "advancePayment.thresholds");
-        const requiredAmount = Number(thresholds?.DEFAULT?.amount ?? thresholds?.amount ?? 0);
-        // Decimal-safe sum — float reduce compares wrong at boundary sums (0.1+0.2 pattern).
-        const inRows = (entry.folio.payments ?? []).filter((p) => p.paymentDirection === "IN");
-        const totalInDec = sumMoneyBy(inRows, "amount");
-        const totalIn = Number(totalInDec.toFixed(2));
-        const credit = await tx.creditExtensionCeilingRecord.findUnique({ where: { folioId: entry.folio.id } });
-        // Decimal compare — never `>=` on raw JS numbers derived from money aggregates.
-        const requiredAmountDec = toDecimal(Number.isFinite(requiredAmount) ? requiredAmount : 0);
-        const satisfied = !!credit || (Number.isFinite(requiredAmount) ? totalInDec.gte(requiredAmountDec) : totalInDec.gt(0));
-        if (!satisfied) {
+        // The one rule the gates read (2026-11-05): this read the hotel-wide amount and ignored
+        // what was set on the booking, so a booking asked for an advance was never followed up.
+        const advance = await evaluateAdvancePaymentConditionTx(prisma, tx, { entryId: updated.entryId, folioId: entry.folio.id });
+        if (!advance.satisfied) {
           // Policy registry override: `registry.advancePaymentFollowUp.windowSeconds` (when
           // enabled) replaces the legacy `advancePayment.followUpWindowSeconds`. Escalation
           // window remains ConfigurationEntry-driven.
@@ -533,6 +523,11 @@ async function sendInvoiceEmailBestEffort(
     : null;
   const interimFigures = (interimReq?.figures ?? null) as InterimFigures | null;
   const interimPromise = interimReq ? describeInterimPromise(interimReq, formatEmailDate) : null;
+  // Whether the guest is asked for an advance at all: with none, the email must not ask for one.
+  const advanceAsked =
+    isPI && inv.folio
+      ? ((await evaluateAdvancePaymentCondition(prisma, { entryId: entry.id, folioId: inv.folio.id }).catch(() => null))?.requiredAmount ?? 0) > 0
+      : false;
   const content = isInterim
     ? renderInterimInvoiceEmail({
         guestDisplayName: displayName,
@@ -567,6 +562,7 @@ async function sendInvoiceEmailBestEffort(
         breakdown: breakdown!,
         amountPaid: paid,
         paymentCount: inv.folio?.payments?.length ?? 0,
+        advanceAsked,
         // Real columns only — `ci` is today-defaulted above, and the template must not print a
         // fabricated pay-by date for a dateless entry.
         advanceDueBy: entry.reservation?.frozenCheckInDate ?? entry.checkInDate ?? null,

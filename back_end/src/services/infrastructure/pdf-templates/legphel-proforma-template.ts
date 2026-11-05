@@ -67,7 +67,8 @@ export type LegphelProformaInput = {
     */
   roomNights?: string | null;
   /** The ruled total row — what must be paid now. */
-  advanceDueNow: string;
+  /** Null when nothing is asked of this booking: no such row (2026-11-05). */
+  advanceDueNow: string | null;
   /**
    * Optional qualifier appended to the "Advance due now" key, e.g. "(30% of quote)" when the
    * desk pinned the requirement as a percentage (2026-08-01). Null = plain key.
@@ -132,12 +133,17 @@ export function renderLegphelProformaHtml(input: LegphelProformaInput): string {
           input.advanceReceived,
         )
       : "",
-    row(
-      `Advance due now${input.advanceDueQualifier ? ` ${input.advanceDueQualifier}` : ""} · ${currency}`,
-      input.advanceDueNow,
-      { total: true },
-    ),
-    row("Balance at checkout", input.balanceAtCheckout),
+    // With nothing asked there is no advance to print, and the balance is the figure that matters.
+    input.advanceDueNow != null
+      ? row(
+          `Advance due now${input.advanceDueQualifier ? ` ${input.advanceDueQualifier}` : ""} · ${currency}`,
+          input.advanceDueNow,
+          { total: true },
+        )
+      : "",
+    input.advanceDueNow != null
+      ? row("Balance at checkout", input.balanceAtCheckout)
+      : row(`Balance at checkout · ${currency}`, input.balanceAtCheckout, { total: true }),
     bankStrip(bankPairs),
     note(input.closingNote, "quiet"),
     footer([input.proformaNo, input.bookingRef, input.issuanceRef ?? null, "E&OE", input.tariffVersion]),
