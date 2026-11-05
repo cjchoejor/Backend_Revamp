@@ -37,7 +37,7 @@ import {
 import { buildStorageKey, hashSha256, readDocument, writeDocument } from "../../lib/document-storage.js";
 import { formatMoney, loadHotelProfileForRender } from "../../lib/pdf-render-context.js";
 import { renderHtmlToPdf } from "../infrastructure/pdf-render-service.js";
-import { renderLegphelQuotationHtml } from "../infrastructure/pdf-templates/legphel-quotation-template.js";
+import { priceRowsNote, renderLegphelQuotationHtml, type LegphelPriceBlock } from "../infrastructure/pdf-templates/legphel-quotation-template.js";
 import { mastheadFromHotelProfile } from "../infrastructure/pdf-templates/legphel-document-shell.js";
 import { formatDocDate, formatStayLines, formatDocDateLocal } from "../infrastructure/pdf-templates/legphel-document-format.js";
 import { guestDisplayName } from "../../lib/guest-display-name.js";
@@ -160,6 +160,8 @@ export type QuotationPriceFigures = {
 type QuotationDocRender = {
   html: string;
   figures: QuotationPriceFigures;
+  /** The rows and totals as the paper prints them; the proforma prints the same block. */
+  priceBlock: LegphelPriceBlock;
   linesForTemplate: PrintLine[];
   snapshotLines: SnapshotLine[];
   nights: number;
@@ -569,19 +571,9 @@ async function buildQuotationDocRender(
     total: totalAmount,
   };
 
-  const html = renderLegphelQuotationHtml({
+  const priceBlock: LegphelPriceBlock = {
     hidePrices,
     datesShown,
-    masthead: mastheadFromHotelProfile(hotel),
-    quotationNo: q.referenceNumber,
-    bookingRef: q.entryId,
-    date: formatDocDateLocal(documentDate),
-    validityStrip: q.validUntil
-      ? `Valid until ${formatDocDateLocal(q.validUntil)} · Not a booking confirmation`
-      : "Not a booking confirmation",
-    to: toEmail ? `${guestName} · ${toEmail}` : guestName,
-    attn: null,
-    stay: formatStayLines(checkIn, checkOut, nights),
     lines: linesForTemplate.map((l) => ({
       dates: l.dates ?? null,
       description: l.description,
@@ -602,15 +594,24 @@ async function buildQuotationDocRender(
     gstLabel,
     gst: formatMoney(shownGst),
     total: formatMoney(totalAmount),
+  };
+
+  const html = renderLegphelQuotationHtml({
+    ...priceBlock,
+    masthead: mastheadFromHotelProfile(hotel),
+    quotationNo: q.referenceNumber,
+    bookingRef: q.entryId,
+    date: formatDocDateLocal(documentDate),
+    validityStrip: q.validUntil
+      ? `Valid until ${formatDocDateLocal(q.validUntil)} · Not a booking confirmation`
+      : "Not a booking confirmation",
+    to: toEmail ? `${guestName} · ${toEmail}` : guestName,
+    attn: null,
+    stay: formatStayLines(checkIn, checkOut, nights),
     closingNote: hidePrices
       ? "Prices are not shown on this copy — the rates, taxes and total for this stay are on the " +
         "priced quotation under the same number. Subject to availability at confirmation."
-      : (rowsAreNet
-        ? "Each room is billed on its own line, with its extra beds and meal plans beneath it; " +
-          "meal rates are per person per night. Line amounts are before service charge and GST, " +
-          "which are added below. "
-        : "Rates are inclusive of service charge and GST, and of the meal charges shown against " +
-          "each meal plan (those are stated before tax). ") +
+      : priceRowsNote(rowsAreNet) +
       "Subject to availability at confirmation. " +
       "A proforma invoice with advance terms follows on acceptance.",
     tariffVersion: "T1.0",
@@ -619,6 +620,7 @@ async function buildQuotationDocRender(
   return {
     html,
     figures,
+    priceBlock,
     linesForTemplate,
     snapshotLines,
     nights,
@@ -640,6 +642,20 @@ async function buildQuotationDocRender(
     documentDate,
     hotel,
   };
+}
+
+/**
+ * The quotation's rows and totals as its paper prints them, for the proforma, which sets the stay
+ * out the same way (2026-11-05). Pure read.
+ */
+export async function quotationPaperPrices(
+  prisma: PrismaClient,
+  quotationId: string,
+  opts?: { nightsMode?: NightsMode },
+): Promise<{ priceBlock: LegphelPriceBlock; rowsAreNet: boolean; total: number }> {
+  const q = await loadQuotationForRender(prisma, quotationId);
+  const model = await buildQuotationDocRender(prisma, q, { nightsMode: opts?.nightsMode });
+  return { priceBlock: model.priceBlock, rowsAreNet: model.figures.rowsAreNet, total: model.totalAmount };
 }
 
 /**

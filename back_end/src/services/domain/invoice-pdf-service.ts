@@ -56,7 +56,9 @@ import {
   resolveOperatorAdvanceRequirement,
 } from "./s3-payment-service.js";
 import { resolveOperativeQuotation } from "../../lib/operative-quotation.js";
-import { assignedRoomNights, roomNightsForEntry, roomsWithNightsLine, type NightsMode } from "../../lib/room-nights-for-entry.js";
+import { assignedRoomNights, roomsWithNightsLine, type NightsMode } from "../../lib/room-nights-for-entry.js";
+import { quotationPaperPrices } from "./quotation-pdf-service.js";
+import { priceRowsNote, type LegphelPriceBlock } from "../infrastructure/pdf-templates/legphel-quotation-template.js";
 
 type QuotationTerms = {
   roomCount?: number;
@@ -163,7 +165,7 @@ function invoicePrelude(inv: LoadedInvoice) {
   const mealPlanDisplay = mealPlanCode ? `${adultCount + childCount} ${mealPlanCode}` : "";
   const extraBeds = terms?.extraBeds != null && String(terms.extraBeds).trim() && String(terms.extraBeds) !== "0" ? String(terms.extraBeds) : "None";
 
-  return { terms, nights, roomCount, nightlyRate, guest, guestName, adultCount, childCount, occupantsString, mealPlanDisplay, extraBeds, checkIn, checkOut };
+  return { quotation, terms, nights, roomCount, nightlyRate, guest, guestName, adultCount, childCount, occupantsString, mealPlanDisplay, extraBeds, checkIn, checkOut };
 }
 
 type ProformaPrintLine = {
@@ -256,78 +258,28 @@ async function buildProformaDocRender(prisma: PrismaClient, inv: LoadedInvoice, 
     totalAmount = stayCharges.total;
   }
 
-  // The reference's single rate line — "Deluxe · 1 room · 2 adults · MAP · per night". Room
-  // type resolved from the quotation's terms; meal plans summarised across the composition
-  // ("2 CP · 1 AP") or the legacy booking-wide plan.
-  let roomTypeName: string | null = null;
-  if (p.terms?.roomTypeId) {
-    const rt = await prisma.roomType.findUnique({ where: { id: p.terms.roomTypeId }, select: { name: true } });
-    roomTypeName = rt?.name ?? null;
-  }
-  const comps: any[] = ((p.terms as any)?.roomCompositions ?? []) as any[];
-  const planAgg: Array<[string, number]> = [
-    ["CP", comps.reduce((s, c) => s + (c?.mealPlanCpCount ?? 0), 0)],
-    ["MAP+L", comps.reduce((s, c) => s + (c?.mealPlanMaplCount ?? 0), 0)],
-    ["MAP+D", comps.reduce((s, c) => s + (c?.mealPlanMapdCount ?? 0), 0)],
-    ["AP", comps.reduce((s, c) => s + (c?.mealPlanApCount ?? 0), 0)],
-    ["Others", comps.reduce((s, c) => s + (c?.mealPlanOthersCount ?? 0), 0)],
-  ];
-  const planSummary =
-    comps.length > 0
-      ? planAgg.filter(([, n]) => n > 0).map(([k, n]) => `${n} ${k}`).join(" · ") || "EP (room only)"
-      : p.mealPlanDisplay || null;
-  const rateLabel = [
-    roomTypeName,
-    `${p.roomCount} room${p.roomCount === 1 ? "" : "s"}`,
-    p.occupantsString,
-    planSummary,
-    "per night",
-  ]
-    .filter(Boolean)
-    .join(" · ");
-  // Per-night figure consistent with the printed total (composition totals are stay-wide).
-  const rateValue = Number((totalAmount / Math.max(1, p.nights)).toFixed(2));
-
-  // Each room with the nights it is held for, since this document has no per-room table to date
-  // (2026-10-06, operator: "do the same for proforma and other papers") — on every booking since
-  // 2026-10-30, the rooms the same every night or not, each night named.
-  const piRoomNights = await roomNightsForEntry(prisma, inv.entryId, { asOf: inv.createdAt }).catch(
-    () => new Map<string, string[]>(),
-  );
-  // Rooms are named by their type, not their number (2026-10-28, operator: "in the quotation and
-  // proforma invoice can it not show the room numbers, just the room type") — "2 × Deluxe Double
-  // (06 Oct) · Standard Double (07 Oct)", rooms of one type on the same nights counted together,
-  // earliest nights first.
-  let roomNightsLine: string | null = null;
-  if (piRoomNights.size > 0) {
-    const types = new Map<string, string>();
-    for (const r of await prisma.room.findMany({
-      where: { id: { in: [...piRoomNights.keys()] } },
-      select: { id: true, roomType: { select: { name: true } } },
-    })) {
-      types.set(r.id, r.roomType?.name ?? "Room");
-    }
-    roomNightsLine =
-      roomsWithNightsLine(
-        [...piRoomNights.entries()].map(([roomId, nights]) => ({ name: types.get(roomId) ?? "Room", nights })),
-        nightsMode,
-      ) || null;
-  }
-
-  // The booking's discount, read off the terms this document is priced on. It came off the net value
-  // since 2026-11-05, so that is the figure to show, beside the net the page prints below it. A
-  // quotation priced before then took a flat amount off the total, and keeps saying so.
-  const piDisc = (p.terms as { compositionDiscount?: { requestedPercent?: number | null; amountOffTotal?: number; netReduction?: number; appliesTo?: string } } | null)?.compositionDiscount ?? null;
-  const piDiscOnNet = piDisc?.appliesTo === "NET";
-  const piDiscAmount = Number((piDiscOnNet ? piDisc?.netReduction : piDisc?.amountOffTotal) ?? NaN);
-  const piDiscApplies = !!piDisc && Number.isFinite(piDiscAmount) && piDiscAmount > 0;
-  const piDiscWhere = piDiscOnNet ? "off the net value, " : "";
-  const piDiscountLabel = piDiscApplies
-    ? piDisc?.requestedPercent != null
-      ? `Discount ${Number(Number(piDisc.requestedPercent).toFixed(2))}% (${piDiscWhere}already applied)`
-      : `Discount (${piDiscWhere}already applied)`
-    : null;
-  const piDiscountValue = piDiscApplies ? formatMoney(piDiscAmount) : null;
+  // The stay, set out as the quotation is (2026-11-05, operator: "make proforma layout like
+  // quotation"): the rows and totals of the very quotation this bill is priced on, by the code that
+  // prints them there. Only a booking with no quotation at all, which has nothing priced, has one line.
+  const paper = p.quotation ? await quotationPaperPrices(prisma, p.quotation.id, { nightsMode }) : null;
+  if (paper) totalAmount = paper.total;
+  const prices: LegphelPriceBlock = paper?.priceBlock ?? {
+    datesShown: false,
+    lines: [
+      {
+        description: [`${p.roomCount} room${p.roomCount === 1 ? "" : "s"}`, p.occupantsString, p.mealPlanDisplay || null].filter(Boolean).join(" · "),
+        qty: `${p.nights} night${p.nights === 1 ? "" : "s"}`,
+        rate: formatMoney(p.nightlyRate),
+        amount: formatMoney(totalAmount),
+      },
+    ],
+    netValue: formatMoney(stayCharges.subTotal),
+    serviceChargeLabel: "Service charge",
+    serviceCharge: formatMoney(stayCharges.serviceCharge),
+    gstLabel: "GST",
+    gst: formatMoney(stayCharges.gst),
+    total: formatMoney(totalAmount),
+  };
 
   // === Advance figures ===
   const inPayments = (inv.folio?.payments ?? []).filter((pay) => pay.paymentDirection === "IN");
@@ -370,16 +322,6 @@ async function buildProformaDocRender(prisma: PrismaClient, inv: LoadedInvoice, 
   // a fabricated demand. Omitted once nothing is due (the template doc says exactly that).
   const advanceDeadline = inv.entry.reservation?.frozenCheckInDate ?? inv.entry.checkInDate ?? null;
 
-  // A2 Proforma Invoice, house format (docs/bills). The Net / Service / GST figures decompose
-  // the tax-inclusive total; they are not added to it.
-  const ctP =
-    (p.terms as unknown as {
-      compositionTotals?: {
-        subtotal?: string | number;
-        serviceCharge?: string | number;
-        gst?: string | number;
-      };
-    })?.compositionTotals ?? null;
   const invoiceRef = inv.invoiceNumber ?? inv.id;
   const docDate = inv.dispatchedAt ?? inv.issuedAt ?? new Date();
 
@@ -400,20 +342,7 @@ async function buildProformaDocRender(prisma: PrismaClient, inv: LoadedInvoice, 
     to: billedParty ?? (p.guest?.email ? `${p.guestName} · ${p.guest.email}` : p.guestName),
     forGuest: p.guestName,
     stay: formatStayLines(p.checkIn, p.checkOut, p.nights),
-    rateLabel,
-    rateValue: formatMoney(rateValue),
-    // The concession, named on the bill as it is on the quotation. The per-room totals printed
-    // above are already net of it, so this says what it WAS rather than deducting it again —
-    // the guest who sees "Discount 10% · 1,131.90" on the quote sees the same here.
-    roomNights: roomNightsLine,
-    discountLabel: piDiscountLabel,
-    discountValue: piDiscountValue,
-    totalInclusive: formatMoney(totalAmount),
-    // Composition quotes decompose from their own priced totals; legacy quotes from the
-    // stay-charge engine — never 0.00 placeholders.
-    decompositionNet: formatMoney(ctP?.subtotal ?? stayCharges.subTotal),
-    decompositionService: formatMoney(ctP?.serviceCharge ?? stayCharges.serviceCharge),
-    decompositionGst: formatMoney(ctP?.gst ?? stayCharges.gst),
+    prices,
     advancePlanLabel,
     advanceReceived: advanceReceived > 0 ? formatMoney(advanceReceived) : null,
     // "(2 payments)" once installments are in — the guest sees how many they've made so far.
@@ -427,11 +356,12 @@ async function buildProformaDocRender(prisma: PrismaClient, inv: LoadedInvoice, 
       accountsPhone: primaryContactNumber(hotel.contactNumbers) || null,
     },
     closingNote:
-      requiredAdvance == null
+      (paper ? priceRowsNote(paper.rowsAreNet) : "") +
+      (requiredAdvance == null
         ? "No advance is asked for this booking; the balance is settled at check-out. No surcharge applies " +
           "on any payment mode. A confirmation voucher follows. Cancellation terms as disclosed for this booking."
         : "No surcharge applies on any payment mode. The booking confirms on receipt of the advance; " +
-          "a confirmation voucher follows. Cancellation terms as disclosed for this booking.",
+          "a confirmation voucher follows. Cancellation terms as disclosed for this booking."),
     tariffVersion: "T1.0",
   });
 

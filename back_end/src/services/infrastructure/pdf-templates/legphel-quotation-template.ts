@@ -55,22 +55,12 @@ export type LegphelQuotationLine = {
   muted?: boolean;
 };
 
-export type LegphelQuotationInput = {
-  masthead: DocumentMasthead;
-  /** "LH/Q/26/000512" */
-  quotationNo: string;
-  /** "LH/26/E/04198" — rendered crimson. */
-  bookingRef: string;
-  /** "28 Jul 2026" */
-  date: string;
-  /** Strip under the title: "Valid until 12 Aug 2026 · Not a booking confirmation" */
-  validityStrip: string;
-  /** "Nandi Travels & Tours, Jaigaon" */
-  to: string;
-  /** "Mr Rajesh Nandi" — the reference's Attn line. Omitted when absent. */
-  attn?: string | null;
-  /** Check-in "20 Oct 2026" · Check-out "22 Oct 2026 · 2 nights" (2026-10-28). */
-  stay: StayLines | null;
+/**
+ * The rows and the totals under them, as the quotation prints them. The proforma prints this same
+ * block (2026-11-05, operator: "make proforma layout like quotation"), so the two papers cannot
+ * set the same stay out in two ways.
+ */
+export type LegphelPriceBlock = {
   lines: LegphelQuotationLine[];
   /**
    * The discount row (2026-10-06): everything above it — the rows, Net value, the service
@@ -97,9 +87,6 @@ export type LegphelQuotationInput = {
   total: string;
   /** Currency word for the total row — "Nu." in the reference. */
   currencyLabel?: string;
-  closingNote: string;
-  /** Tariff version for the footer, e.g. "T1.0". */
-  tariffVersion: string;
   /**
    * The same quotation with no money on it (2026-10-06, operator: "sometimes guest needs to be
    * sent quotation without the price"). The Rate and Amount columns go, and so does the whole
@@ -110,24 +97,46 @@ export type LegphelQuotationInput = {
   hidePrices?: boolean;
   /** Lead the table with each room's own nights — on every quotation since 2026-10-30. */
   datesShown?: boolean;
+};
+
+export type LegphelQuotationInput = LegphelPriceBlock & {
+  masthead: DocumentMasthead;
+  /** "LH/Q/26/000512" */
+  quotationNo: string;
+  /** "LH/26/E/04198" — rendered crimson. */
+  bookingRef: string;
+  /** "28 Jul 2026" */
+  date: string;
+  /** Strip under the title: "Valid until 12 Aug 2026 · Not a booking confirmation" */
+  validityStrip: string;
+  /** "Nandi Travels & Tours, Jaigaon" */
+  to: string;
+  /** "Mr Rajesh Nandi" — the reference's Attn line. Omitted when absent. */
+  attn?: string | null;
+  /** Check-in "20 Oct 2026" · Check-out "22 Oct 2026 · 2 nights" (2026-10-28). */
+  stay: StayLines | null;
+  closingNote: string;
+  /** Tariff version for the footer, e.g. "T1.0". */
+  tariffVersion: string;
   /** Optional issuance-register id for the footer's middle slot. */
   issuanceRef?: string | null;
   watermark?: DocumentWatermark;
 };
 
-export function renderLegphelQuotationHtml(input: LegphelQuotationInput): string {
+/** What the rows' amounts are, in the words both papers close on. */
+export function priceRowsNote(rowsAreNet: boolean): string {
+  return rowsAreNet
+    ? "Each room is billed on its own line, with its extra beds and meal plans beneath it; " +
+        "meal rates are per person per night. Line amounts are before service charge and GST, " +
+        "which are added below. "
+    : "Rates are inclusive of service charge and GST, and of the meal charges shown against " +
+        "each meal plan (those are stated before tax). ";
+}
+
+/** The table, then Net value down to the ruled Total. */
+export function renderPriceBlock(input: LegphelPriceBlock): string[] {
   const currency = input.currencyLabel ?? "Nu.";
-  const body = [
-    renderMasthead(input.masthead),
-    renderTitle("Quotation", input.validityStrip, true),
-    row("Quotation No", input.quotationNo, { boldValue: true }),
-    row("Booking Ref", input.bookingRef, { redValue: true }),
-    row("Date", input.date),
-    section,
-    row("To", input.to, { boldValue: true }),
-    input.attn ? row("Attn", input.attn) : "",
-    section,
-    stayRows(input.stay),
+  return [
     miniTable(
       [
         ...(input.datesShown ? [{ header: "Nights" }] : []),
@@ -167,6 +176,22 @@ export function renderLegphelQuotationHtml(input: LegphelQuotationInput): string
         ),
     input.hidePrices || input.netAfterDiscount ? "" : input.discountLabel ? row(input.discountLabel, input.discountValue ?? "") : "",
     input.hidePrices ? "" : row(`Total · ${currency}`, input.total, { total: true }),
+  ];
+}
+
+export function renderLegphelQuotationHtml(input: LegphelQuotationInput): string {
+  const body = [
+    renderMasthead(input.masthead),
+    renderTitle("Quotation", input.validityStrip, true),
+    row("Quotation No", input.quotationNo, { boldValue: true }),
+    row("Booking Ref", input.bookingRef, { redValue: true }),
+    row("Date", input.date),
+    section,
+    row("To", input.to, { boldValue: true }),
+    input.attn ? row("Attn", input.attn) : "",
+    section,
+    stayRows(input.stay),
+    ...renderPriceBlock(input),
     note(input.closingNote, "quiet"),
     footer([input.quotationNo, input.bookingRef, input.issuanceRef ?? null, "E&OE", input.tariffVersion]),
   ]

@@ -5,14 +5,14 @@
  * Row-for-row from the reference card in
  * `docs/bills/legphel-document-formats-complete-30 (1).html` (lines 213–236).
  *
- * Two things in the reference are deliberate and reproduced exactly:
- *   - The title strip is the LOUD (crimson) variant carrying the statutory disclaimer
- *     "This is not a tax invoice — a tax invoice will be issued on supply". The quotation and
- *     voucher use the muted strip; this one must not.
- *   - The Net / Service / GST decomposition is a SINGLE `.dl` row whose key holds all three
- *     figures and whose value is empty — not three separate rows as on the quotation.
+ * The title strip is the LOUD (crimson) variant carrying the statutory disclaimer "This is not a
+ * tax invoice — a tax invoice will be issued on supply". The quotation and voucher use the muted
+ * strip; this one must not.
+ *
+ * A recorded deviation from that reference (2026-11-05, operator: "make proforma layout like
+ * quotation"): where it printed one rate line and one Net · Service · GST line, the stay is set out
+ * by the quotation's own rows and totals (`renderPriceBlock`), then the advance.
  */
-import { htmlEscape } from "../../../lib/pdf-render-context.js";
 import {
   bankStrip,
   footer,
@@ -27,6 +27,7 @@ import {
   type DocumentWatermark,
 } from "./legphel-document-shell.js";
 import type { StayLines } from "./legphel-document-format.js";
+import { renderPriceBlock, type LegphelPriceBlock } from "./legphel-quotation-template.js";
 
 export type LegphelProformaInput = {
   masthead: DocumentMasthead;
@@ -44,28 +45,8 @@ export type LegphelProformaInput = {
   forGuest?: string | null;
   /** Check-in "08 Sep 2026" · Check-out "10 Sep 2026 · 2 nights" (2026-10-28 — was one "Stay" row). */
   stay: StayLines | null;
-  /** "Deluxe · 3 adults · MAP · per night" → "3,450.00" */
-  rateLabel: string;
-  rateValue: string;
-  /** "Total (incl. service & GST)" value. */
-  totalInclusive: string;
-  /** The one-line decomposition, e.g. "Net 5,974.03 · Service 597.40 · GST 328.57". */
-  decompositionNet: string;
-  decompositionService: string;
-  decompositionGst: string;
-  /**
-    * The concession the booking was given, when there was one (2026-10-06, operator: "can you
-    * also show the discount amount — check if proforma invoice and the other papers also show
-    * it"). Printed above the total, so the figures below plainly read as after it.
-    */
-  discountLabel?: string | null;
-  discountValue?: string | null;
-  /**
-    * Which room is held for which nights, when they are not all the same — "201 · 06–07 Oct ·
-    * 202 · 07–08 Oct" (2026-10-06). The proforma prints no per-room table, so without this a
-    * booking that moves rooms mid-stay says only "2 rooms" and the move is nowhere on the bill.
-    */
-  roomNights?: string | null;
+  /** The stay: the quotation's own rows, Net value down to the ruled Total (2026-11-05). */
+  prices: LegphelPriceBlock;
   /** The ruled total row — what must be paid now. */
   /** Null when nothing is asked of this booking: no such row (2026-11-05). */
   advanceDueNow: string | null;
@@ -113,19 +94,7 @@ export function renderLegphelProformaHtml(input: LegphelProformaInput): string {
     input.forGuest ? row("For guest", input.forGuest) : "",
     section,
     stayRows(input.stay),
-    row(input.rateLabel, input.rateValue),
-    input.roomNights ? row("Rooms", input.roomNights) : "",
-    section,
-    input.discountLabel && input.discountValue ? row(input.discountLabel, input.discountValue) : "",
-    row(`Total (incl. service & GST)`, input.totalInclusive),
-    // Single row, empty value — matches the reference exactly.
-    row(
-      `Net ${htmlEscape(input.decompositionNet)} · Service ${htmlEscape(
-        input.decompositionService,
-      )} · GST <i style="font-style:normal;color:var(--mute)">(expected)</i> ${htmlEscape(input.decompositionGst)}`,
-      "",
-      { rawKey: true },
-    ),
+    ...renderPriceBlock(input.prices),
     input.advancePlanLabel ? row("Payment plan", input.advancePlanLabel) : "",
     input.advanceReceived
       ? row(
@@ -133,7 +102,7 @@ export function renderLegphelProformaHtml(input: LegphelProformaInput): string {
           input.advanceReceived,
         )
       : "",
-    // With nothing asked there is no advance to print, and the balance is the figure that matters.
+    // With nothing asked there is no advance to print.
     input.advanceDueNow != null
       ? row(
           `Advance due now${input.advanceDueQualifier ? ` ${input.advanceDueQualifier}` : ""} · ${currency}`,
@@ -141,9 +110,7 @@ export function renderLegphelProformaHtml(input: LegphelProformaInput): string {
           { total: true },
         )
       : "",
-    input.advanceDueNow != null
-      ? row("Balance at checkout", input.balanceAtCheckout)
-      : row(`Balance at checkout · ${currency}`, input.balanceAtCheckout, { total: true }),
+    row("Balance at checkout", input.balanceAtCheckout),
     bankStrip(bankPairs),
     note(input.closingNote, "quiet"),
     footer([input.proformaNo, input.bookingRef, input.issuanceRef ?? null, "E&OE", input.tariffVersion]),
