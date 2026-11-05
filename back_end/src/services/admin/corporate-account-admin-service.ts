@@ -4,9 +4,9 @@ import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { writeAdminAuditEvent } from "../../lib/admin/write-admin-audit.js";
 import { captureSnapshotTx } from "../../lib/admin/entity-version-snapshot.js";
 import { allocateReadableId } from "../../lib/readable-id.js";
-import { appendContact, normalizeCoordinators, type CoordinatorContact } from "../../lib/admin/contact-list.js";
+import { appendContact, cleanCoordinators, type CoordinatorContact } from "../../lib/admin/contact-list.js";
 import { PARTY_LOOKUP_LIMIT } from "../../lib/admin/party-lookup.js";
-import { cleanNumbers } from "./travel-agent-admin-service.js";
+import { cleanNumbers, looseNumbers } from "./travel-agent-admin-service.js";
 
 export type { CoordinatorContact };
 
@@ -66,7 +66,7 @@ export async function getCorporateAccount(prisma: PrismaClient, id: string) {
   return row;
 }
 
-export async function createCorporateAccount(prisma: PrismaClient, input: CorporateAccountInput, actorId: string) {
+export async function createCorporateAccount(prisma: PrismaClient, input: CorporateAccountInput, actorId: string, opts: { source?: "ADMIN" | "IMPORT" } = {}) {
   if (!input.displayName?.trim()) throw new ValidationError("displayName is required");
   const mode = input.modeOfContact != null ? validateContactMode(input.modeOfContact) : ContactMode.EMAIL;
 
@@ -76,13 +76,13 @@ export async function createCorporateAccount(prisma: PrismaClient, input: Corpor
       data: {
         id,
         displayName: input.displayName.trim(),
-        contactNumbers: cleanNumbers(input.contactNumbers) ?? [],
+        contactNumbers: (opts.source === "IMPORT" ? looseNumbers(input.contactNumbers) : cleanNumbers(input.contactNumbers)) ?? [],
         contactEmail: input.contactEmail?.trim() || null,
         modeOfContact: mode,
         gstNumber: input.gstNumber?.trim() || null,
         billingAddress: input.billingAddress?.trim() || null,
         contractRefs: normalizeContractRefs(input.contractRefs),
-        coordinators: normalizeCoordinators(input.coordinators),
+        coordinators: cleanCoordinators(input.coordinators),
         notes: input.notes?.trim() || null,
         isActive: input.isActive ?? true,
         createdBy: actorId,
@@ -125,7 +125,7 @@ export async function updateCorporateAccount(
         gstNumber: input.gstNumber === undefined ? undefined : input.gstNumber?.trim() || null,
         billingAddress: input.billingAddress === undefined ? undefined : input.billingAddress?.trim() || null,
         contractRefs: input.contractRefs === undefined ? undefined : normalizeContractRefs(input.contractRefs),
-        coordinators: input.coordinators === undefined ? undefined : normalizeCoordinators(input.coordinators),
+        coordinators: input.coordinators === undefined ? undefined : cleanCoordinators(input.coordinators),
         notes: input.notes === undefined ? undefined : input.notes?.trim() || null,
         isActive: input.isActive,
       },

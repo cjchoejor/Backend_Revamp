@@ -27,6 +27,9 @@ import {
   withdrawNegotiationAmendmentRequestSchema,
 } from "../../dtos/03-entries/request-schemas.js";
 import { requireActorLevel } from "../../middleware/auth.js";
+import { cleanPhone } from "../../lib/phone-numbers.js";
+import { cleanCoordinators } from "../../lib/admin/contact-list.js";
+import { callerRequestSchema as callerShape, partyContactSchema } from "../../dtos/02-inquiries/request-schemas.js";
 import { validateBody } from "../../middleware/validate-body.js";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import * as s1EntryService from "../../services/domain/s1-entry-service.js";
@@ -108,6 +111,7 @@ export const entriesRouter = Router();
  */
 entriesRouter.post("/:id/caller", requireActorLevel("L1"), validateBody(callerRequestSchema), async (req, res, next) => {
   try {
+    if (req.body.phone !== undefined) req.body.phone = cleanPhone(req.body.phone, "The caller's phone");
     res.json(await updateEntryCaller(prisma, { actorId: req.actor!.actorId, level: req.actor!.level }, req.params.id, req.body));
   } catch (e) {
     next(e);
@@ -124,12 +128,17 @@ const sourceSchema = z
     ratePackageId: z.string().min(1).nullable().optional(),
     corporateClientRef: z.string().trim().max(200).nullable().optional(),
     corporateCoordinator: z.string().trim().max(200).nullable().optional(),
+    /** One section since 2026-11-05: the caller and the contact persons save with it. */
+    caller: callerShape.nullable().optional(),
+    partyContacts: z.array(partyContactSchema).max(20).nullable().optional(),
   })
   .refine((v) => !!(v.cameInAs || v.sourceChannel), { message: "Say how the booking came in", path: ["cameInAs"] })
   .refine((v) => !(v.travelAgentId && v.corporateAccountId), { message: "A travel agent OR a company, not both", path: ["travelAgentId"] });
 
 entriesRouter.post("/:id/source", requireActorLevel("L1"), validateBody(sourceSchema), async (req, res, next) => {
   try {
+    if (req.body.caller?.phone !== undefined) req.body.caller.phone = cleanPhone(req.body.caller.phone, "The caller's phone");
+    if (req.body.partyContacts) req.body.partyContacts = cleanCoordinators(req.body.partyContacts);
     res.json(await updateEntrySource(prisma, { actorId: req.actor!.actorId, level: req.actor!.level }, req.params.id, req.body));
   } catch (e) {
     next(e);
@@ -150,8 +159,10 @@ const setGuestSchema = z.discriminatedUnion("mode", [
     mode: z.literal("NEW"),
     ...guestNamingOptions,
     title: z.string().trim().max(20).nullable().optional(),
-    firstName: z.string().trim().min(1).max(80),
-    lastName: z.string().trim().min(1).max(80),
+    /** One name, as the desk asks it (2026-11-05); the service splits it. */
+    name: z.string().trim().max(160).nullable().optional(),
+    firstName: z.string().trim().max(80).nullable().optional(),
+    lastName: z.string().trim().max(80).nullable().optional(),
     nationality: z.string().trim().max(80).nullable().optional(),
     phone: z.string().trim().max(40).nullable().optional(),
     email: z.string().trim().max(200).nullable().optional(),
@@ -160,6 +171,7 @@ const setGuestSchema = z.discriminatedUnion("mode", [
 
 entriesRouter.post("/:id/guest", requireActorLevel("L1"), validateBody(setGuestSchema), async (req, res, next) => {
   try {
+    if ("phone" in req.body && req.body.phone !== undefined) req.body.phone = cleanPhone(req.body.phone, "The guest's phone");
     const named = await setEntryGuest(prisma, { actorId: req.actor!.actorId, level: req.actor!.level }, req.params.id, req.body);
     await afterStayChanged(prisma, { actorId: req.actor!.actorId, actorLevel: req.actor!.level }, req.params.id, "GUEST");
     res.json(named);
@@ -774,6 +786,7 @@ entriesRouter.get("/", requireActorLevel("L1"), async (req, res, next) => {
 
 entriesRouter.post("/", requireActorLevel("L1"), validateBody(createEntryRequestSchema), async (req, res, next) => {
   try {
+    if (req.body.contactPersonPhone) req.body.contactPersonPhone = cleanPhone(req.body.contactPersonPhone, "Their phone") ?? undefined;
     const created = await s1EntryService.createEntry(prisma, req.actor!.actorId, req.actor!.level, req.body);
     res.status(201).json(created);
   } catch (e) {
@@ -959,6 +972,7 @@ entriesRouter.post(
 /** Booking flow's step-1 Edit — narrow update for intake fields only, S1-gated server-side. */
 entriesRouter.patch("/:id", requireActorLevel("L1"), validateBody(updateEntryRequestSchema), async (req, res, next) => {
   try {
+    if (req.body.contactPersonPhone) req.body.contactPersonPhone = cleanPhone(req.body.contactPersonPhone, "Their phone") ?? undefined;
     const updated = await s1EntryService.updateEntryIntakeFields(
       prisma,
       req.params.id,

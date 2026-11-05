@@ -728,6 +728,8 @@ model StaffUser {
   // New rows should get STF-YYYYMMDD-NNNN via `allocateReadableId("STAFF_USER", ...)`.
   // uuid() default kept so existing rows work; readable IDs are additive going forward.
   id                         String     @id @default(uuid())
+  /// "Mr" · "Ms" … (2026-11-05). Shown on the staff list; fullName stays the name alone.
+  title                      String?
   fullName                   String
   // Login handle. Unique per active StaffUser; case-sensitive at the DB layer, folded on write
   // by the admin service. 4-digit PIN alone can't identify a user (10k global space); username
@@ -981,6 +983,10 @@ model Inquiry {
   partyContactName  String?
   partyContactPhone String?
   partyContactEmail String?
+  /// Every contact person on this enquiry, first one first (2026-11-05, operator: "we are adding
+  /// another contact person in case that person doesn't respond"): [{ title?, name, phone?, email? }].
+  /// partyContactName / Phone / Email hold the first. Null on an enquiry from before this.
+  partyContacts     Json?
   agentProfileId             String?
   sourceChannel              String           @default("DIRECT")
   /// How the guest came in, as the desk records it (2026-09-18). `sourceChannel` holds only the

@@ -77,8 +77,8 @@ export const entryDetailInclude = {
        * Who booked (2026-09-29): the agency or the company, with its own contact, so Booking
        * details can print who to ring about the booking without a second call.
        */
-      travelAgent: { select: { id: true, displayName: true, contactNumbers: true, contactEmail: true } },
-      corporateAccount: { select: { id: true, displayName: true, contactNumbers: true, contactEmail: true } },
+      travelAgent: { select: { id: true, displayName: true, contactNumbers: true, contactEmail: true, coordinators: true } },
+      corporateAccount: { select: { id: true, displayName: true, contactNumbers: true, contactEmail: true, coordinators: true, contractRefs: true } },
       /**
        * Every booking on this enquiry — the trip (2026-09-25). A return stay is a second booking
        * under the same enquiry, so the desk reads the other stays from here: no second call, and

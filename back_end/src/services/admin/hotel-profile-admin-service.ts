@@ -1,3 +1,4 @@
+import { cleanPhone } from "../../lib/phone-numbers.js";
 import type { PrismaClient } from "@prisma/client";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { writeAdminAuditEvent } from "../../lib/admin/write-admin-audit.js";
@@ -34,6 +35,14 @@ export async function updateHotelProfile(
     throw new ValidationError("HotelProfile was updated concurrently — refresh and retry");
   }
 
+  // Each number in the one stored form, or refused in words (2026-11-05).
+  const contactNumbers = Array.isArray(input.contactNumbers)
+    ? (input.contactNumbers as Array<{ label?: unknown; value?: unknown }>).map((c) => ({
+        label: String(c?.label ?? "").trim(),
+        value: cleanPhone(String(c?.value ?? ""), `The ${String(c?.label ?? "").trim() || "hotel's"} number`) ?? "",
+      }))
+    : input.contactNumbers;
+
   return prisma.$transaction(async (tx) => {
     await captureSnapshotTx(tx, { entityType: "HotelProfile", entityId: existing.id, actorId });
     const updated = await tx.hotelProfile.update({
@@ -42,7 +51,7 @@ export async function updateHotelProfile(
         hotelName: input.hotelName?.trim(),
         registeredAddress: input.registeredAddress?.trim(),
         tradingAddress: input.tradingAddress === undefined ? undefined : input.tradingAddress?.trim() || null,
-        contactNumbers: input.contactNumbers as never,
+        contactNumbers: contactNumbers as never,
         primaryEmail: input.primaryEmail?.trim(),
         operatingHours: input.operatingHours as never,
         publicHolidaySchedule: input.publicHolidaySchedule as never,

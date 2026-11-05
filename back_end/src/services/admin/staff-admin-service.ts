@@ -10,6 +10,7 @@ const LEVELS: ActorLevel[] = [ActorLevel.L1, ActorLevel.L2, ActorLevel.L3, Actor
 
 const STAFF_SELECT = {
   id: true,
+  title: true,
   fullName: true,
   username: true,
   email: true,
@@ -41,6 +42,7 @@ export async function getStaff(prisma: PrismaClient, id: string) {
 export async function createStaff(
   prisma: PrismaClient,
   input: {
+    title?: string | null;
     fullName: string;
     username: string;
     email?: string | null;
@@ -87,6 +89,7 @@ export async function createStaff(
     const created = await tx.staffUser.create({
       data: {
         id: staffId,
+        title: input.title?.trim() || null,
         fullName: input.fullName.trim(),
         username,
         email: input.email?.trim() || null,
@@ -118,6 +121,7 @@ export async function updateStaff(
   prisma: PrismaClient,
   id: string,
   input: {
+    title?: string | null;
     fullName?: string;
     username?: string;
     email?: string | null;
@@ -168,6 +172,7 @@ export async function updateStaff(
     const updated = await tx.staffUser.update({
       where: { id },
       data: {
+        title: input.title === undefined ? undefined : input.title?.trim() || null,
         fullName: input.fullName?.trim() ?? undefined,
         username: usernameOut,
         email: input.email === undefined ? undefined : input.email?.trim() || null,

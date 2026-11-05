@@ -2,13 +2,18 @@ import { z } from "zod";
 
 export const createGuestProfileRequestSchema = z
   .object({
-    firstName: z.string().trim().min(1),
-    lastName: z.string().trim().min(1),
+    title: z.string().trim().max(20).nullable().optional(),
+    /** One name, as the desk asks it (2026-11-05); the service splits it. */
+    name: z.string().trim().min(1).max(160).optional(),
+    firstName: z.string().trim().min(1).optional(),
+    /** Optional: some people have one name (2026-11-05). */
+    lastName: z.string().trim().optional(),
     email: z.string().trim().optional(),
     phone: z.string().trim().optional(),
     nationality: z.string().trim().optional(),
     clientTier: z.string().trim().optional(),
   })
+  .refine((data) => !!(data.name || data.firstName), { message: "The guest's name is needed", path: ["name"] })
   .refine((data) => !data.email || z.string().email().safeParse(data.email).success, {
     message: "Invalid email address",
     path: ["email"],

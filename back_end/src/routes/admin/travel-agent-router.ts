@@ -13,6 +13,7 @@ const contactModeSchema = z.enum(["PHONE", "EMAIL", "WHATSAPP", "IN_PERSON", "OT
 
 /** One contact person at the agency. Same shape as CorporateAccount.coordinators. */
 const coordinatorSchema = z.object({
+  title: z.string().trim().max(20).optional().nullable(),
   name: z.string().trim().min(1).max(200),
   phone: z.string().trim().max(50).optional().nullable(),
   email: z.string().trim().max(200).optional().nullable(),

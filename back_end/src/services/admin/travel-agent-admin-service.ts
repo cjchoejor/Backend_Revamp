@@ -4,7 +4,8 @@ import { AppError, NotFoundError, ValidationError } from "../../lib/errors.js";
 import { writeAdminAuditEvent } from "../../lib/admin/write-admin-audit.js";
 import { captureSnapshotTx } from "../../lib/admin/entity-version-snapshot.js";
 import { allocateReadableId } from "../../lib/readable-id.js";
-import { appendContact, normalizeCoordinators, type CoordinatorContact } from "../../lib/admin/contact-list.js";
+import { appendContact, cleanCoordinators, type CoordinatorContact } from "../../lib/admin/contact-list.js";
+import { cleanPhone, loosePhone } from "../../lib/phone-numbers.js";
 import { PARTY_LOOKUP_LIMIT } from "../../lib/admin/party-lookup.js";
 
 export type { CoordinatorContact };
@@ -23,7 +24,14 @@ export type TravelAgentInput = {
 /** Trim, drop blanks, de-duplicate — a stored empty string reads as "has a number" downstream. */
 export function cleanNumbers(v: string[] | null | undefined): string[] | null {
   if (v == null) return null;
-  return [...new Set(v.map((s) => String(s).trim()).filter((s) => s.length > 0))];
+  // Every number in the one stored form, or refused in words (2026-11-05).
+  return [...new Set(v.map((s) => cleanPhone(String(s), `The number "${String(s).trim()}"`)).filter((s): s is string => !!s))];
+}
+
+/** The same for numbers read from an old file: the stored form when it can be read, else as it was. */
+export function looseNumbers(v: string[] | null | undefined): string[] | null {
+  if (v == null) return null;
+  return [...new Set(v.map((s) => loosePhone(String(s))).filter((s): s is string => !!s))];
 }
 
 const ALLOWED_CONTACT_MODES: ContactMode[] = [
@@ -59,7 +67,7 @@ export async function createTravelAgent(
   prisma: PrismaClient,
   input: TravelAgentInput,
   actorId: string,
-  opts: { source?: "ADMIN" | "DESK" } = {},
+  opts: { source?: "ADMIN" | "DESK" | "IMPORT" } = {},
 ) {
   if (!input.displayName?.trim()) throw new ValidationError("displayName is required");
   const mode = input.modeOfContact != null ? validateContactMode(input.modeOfContact) : ContactMode.PHONE;
@@ -70,10 +78,11 @@ export async function createTravelAgent(
       data: {
         id,
         displayName: input.displayName.trim(),
-        contactNumbers: cleanNumbers(input.contactNumbers) ?? [],
+        // An old file's number that cannot be read is kept for a person to put right, not a stopped load.
+        contactNumbers: (opts.source === "IMPORT" ? looseNumbers(input.contactNumbers) : cleanNumbers(input.contactNumbers)) ?? [],
         contactEmail: input.contactEmail?.trim() || null,
         modeOfContact: mode,
-        coordinators: normalizeCoordinators(input.coordinators),
+        coordinators: cleanCoordinators(input.coordinators),
         notes: input.notes?.trim() || null,
         isActive: input.isActive ?? true,
         createdBy: actorId,
@@ -122,7 +131,7 @@ export async function createTravelAgentFromDesk(
       details: { code: "TRAVEL_AGENT_EXISTS", travelAgentId: existing.id },
     });
   }
-  const phone = input.phone?.trim() || null;
+  const phone = cleanPhone(input.phone, "The agency's phone");
   const email = input.email?.trim() || null;
   return createTravelAgent(
     prisma,
@@ -160,7 +169,7 @@ export async function updateTravelAgent(
         contactNumbers: input.contactNumbers === undefined ? undefined : (cleanNumbers(input.contactNumbers) ?? []),
         contactEmail: input.contactEmail === undefined ? undefined : input.contactEmail?.trim() || null,
         modeOfContact: input.modeOfContact ?? undefined,
-        coordinators: input.coordinators === undefined ? undefined : normalizeCoordinators(input.coordinators),
+        coordinators: input.coordinators === undefined ? undefined : cleanCoordinators(input.coordinators),
         notes: input.notes === undefined ? undefined : input.notes?.trim() || null,
         isActive: input.isActive,
       },

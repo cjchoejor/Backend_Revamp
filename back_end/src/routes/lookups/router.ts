@@ -10,6 +10,8 @@ import { z } from "zod";
 import { prisma } from "../../db.js";
 import { resolveHouseHoldWindow } from "../../services/domain/s3-hold-service.js";
 import { requireActorLevel } from "../../middleware/auth.js";
+import { ANY_CODE_DIGITS, DIAL_CODES } from "../../lib/phone-numbers.js";
+import { PERSON_TITLES } from "../../lib/person-name.js";
 import { validateBody } from "../../middleware/validate-body.js";
 import * as travelAgentSvc from "../../services/admin/travel-agent-admin-service.js";
 import * as corporateSvc from "../../services/admin/corporate-account-admin-service.js";
@@ -40,6 +42,14 @@ const L1 = requireActorLevel("L1");
  * So the desk asks here. The server's clock and the hotel's zone decide; the terminal's
  * settings play no part. Cheap and uncached so a poll rolls it over at midnight.
  */
+/**
+ * The country codes and how many digits each number has, and the titles offered (2026-11-05). The
+ * table is the backend's; the desk and the admin console draw their fields from it.
+ */
+lookupsRouter.get("/lookups/phone-rules", L1, (_req, res) => {
+  res.json({ codes: DIAL_CODES, anyCode: ANY_CODE_DIGITS, titles: PERSON_TITLES });
+});
+
 lookupsRouter.get("/lookups/hotel-day", L1, (_req, res) => {
   const now = new Date();
   const today = hotelTodayUtc(now);
@@ -278,6 +288,7 @@ lookupsRouter.get("/lookups/corporate-accounts/search", L1, async (req, res, nex
  * Idempotent by phone: re-posting a number the party already has returns it with `added: false`.
  */
 const addContactSchema = z.object({
+  title: z.string().trim().max(20).optional().nullable(),
   name: z.string().trim().min(1).max(200),
   phone: z.string().trim().max(50).optional().nullable(),
   email: z.string().trim().max(200).optional().nullable(),

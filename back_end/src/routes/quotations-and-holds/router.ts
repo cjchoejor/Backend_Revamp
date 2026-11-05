@@ -1,3 +1,4 @@
+import { cleanPhone } from "../../lib/phone-numbers.js";
 import { Router } from "express";
 import { prisma } from "../../db.js";
 import {
@@ -81,6 +82,12 @@ quotationsAndHoldsRouter.post("/quotations/:id/discount", requireActorLevel("L1"
 
 quotationsAndHoldsRouter.post("/quotations/:id/send", requireActorLevel("L1"), validateBody(sendQuotationRequestSchema), async (req, res, next) => {
   try {
+    // A send recorded on WhatsApp names a number; it is kept the one way (2026-11-05).
+    if (String(req.body.channel ?? "").toUpperCase() === "WHATSAPP") {
+      const number = cleanPhone(req.body.recipientAddress ?? req.body.sentTo, "The WhatsApp number");
+      req.body.recipientAddress = number ?? undefined;
+      req.body.sentTo = number ?? undefined;
+    }
     const updated = await quotationService.sendQuotation(prisma, req.params.id, req.actor!.actorId, req.body);
     res.json(updated);
   } catch (e) {

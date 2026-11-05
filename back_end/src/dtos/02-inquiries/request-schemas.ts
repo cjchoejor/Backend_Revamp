@@ -4,6 +4,8 @@ import { CAME_IN_AS_VALUES } from "../../lib/inquiry-came-in-as.js";
 /** Who called (2026-10-12). The service decides what is required; the shape is all here. */
 export const callerRequestSchema = z.object({
   title: z.string().trim().max(20).nullable().optional(),
+  /** One name, as the desk asks it (2026-11-05); the service splits it. */
+  name: z.string().trim().max(160).nullable().optional(),
   firstName: z.string().trim().max(80).nullable().optional(),
   lastName: z.string().trim().max(80).nullable().optional(),
   phone: z.string().trim().max(40).nullable().optional(),
@@ -11,11 +13,21 @@ export const callerRequestSchema = z.object({
   onWhatsApp: z.boolean().nullable().optional(),
 });
 
+/** A contact person on a booking through an agency or a company (2026-11-05). */
+export const partyContactSchema = z.object({
+  title: z.string().trim().max(20).nullable().optional(),
+  name: z.string().trim().min(1).max(200),
+  phone: z.string().trim().max(50).nullable().optional(),
+  email: z.string().trim().email().max(200).nullable().optional().or(z.literal("")),
+});
+
 export const createInquiryRequestSchema = z
   .object({
     /** The guest staying, when already known; usually named later, at Wrap up. */
     guestProfileId: z.string().min(1).nullable().optional(),
     caller: callerRequestSchema.nullable().optional(),
+    /** Who to ring at the agency or company, first one first. Booked through one, the party is the caller. */
+    partyContacts: z.array(partyContactSchema).max(20).optional(),
     /** One of the five channels custodian assignment knows. Optional when `cameInAs` is sent — it follows from it. */
     sourceChannel: z.string().min(1).optional(),
     /** How the guest came in (2026-09-18): WALK_IN · DIRECT_VOICE · DIRECT_ONLINE · OTA · TRAVEL_AGENT · CORPORATE · GROUP_MICE. */

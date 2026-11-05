@@ -27,6 +27,7 @@
  *
  * Base URL override: OLD_SYSTEM_URL=http://192.168.0.101:3800
  */
+import { loosePhone } from "../../src/lib/phone-numbers.js";
 import { PrismaClient, EntryStatus, FolioState, FolioLineType, Stage } from "@prisma/client";
 import { allocateReadableId, allocateFolioLineId } from "../../src/lib/readable-id.js";
 import { deriveCameInAs } from "../../src/lib/inquiry-came-in-as.js";
@@ -250,7 +251,7 @@ async function main() {
       await prisma.$transaction(async (tx) => {
         // 1. Guest (dedup by phone+email+name)
         const guestName = trim(h.contact_person) || "Guest (legacy)";
-        const phone = naToNull(h.contact_person_phone_no);
+        const phone = loosePhone(naToNull(h.contact_person_phone_no));
         const email = naToNull(h.contact_person_email);
         const gkey = `${phone ?? ""}::${email ?? ""}::${guestName.toLowerCase()}`;
         let guestProfileId = guestCache.get(gkey) ?? "";

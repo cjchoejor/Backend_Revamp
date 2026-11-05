@@ -1,3 +1,4 @@
+import { cleanPhone } from "../../lib/phone-numbers.js";
 import type { PrismaClient } from "@prisma/client";
 import { guestDisplayName } from "../../lib/guest-display-name.js";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
@@ -146,7 +147,7 @@ export async function decideHeldDocument(
     if (row.kind === "PROFORMA") {
       throw new ValidationError("A bill is sent by email — WhatsApp is not recorded for a bill. Send it by email, or don't send it.");
     }
-    sentTo = input.sentTo?.trim() || null;
+    sentTo = cleanPhone(input.sentTo, "The number it went to");
     // It has gone out now, so the guest's answer is awaited from now (a held voucher's clock
     // does not run while it waits for the desk).
     const windows = await requireActiveConfigValue<Record<string, number>>(prisma, "acknowledgement.windowPerType").catch(() => null);
