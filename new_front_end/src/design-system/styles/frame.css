@@ -1993,6 +1993,16 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 /* A paper's faces (2026-10-30, operator: "even in preview it should have that option, and make
    those buttons prominent") — with or without prices, the nights shortened or every night named.
    Choice buttons on a band of their own under the paper's title, and in the send boxes. */
+/* The paper's panel (2026-11-05, operator: "really small ... utilize it to show the quotation
+   bigger"): most of the screen, and its contents scroll on their own. Beside a send box the box
+   takes the room on the left; too narrow for both, the box stands alone and Preview still opens it. */
+.ds .paper-panel:not(.desk-root *) { width: min(960px, max(60vw, 680px)); max-width: 96vw; flex: none; display: flex; flex-direction: column; min-height: 0; background: var(--surface); border-left: 1px solid var(--line-2); box-shadow: var(--shadow-dialog); }
+.ds .paper-panel .paper-scroll { flex: 1; min-height: 0; overflow: auto; padding: 10px 12px; }
+.ds .scrim.open.with-paper:not(.desk-root *) { padding: 0; align-items: stretch; justify-content: flex-end; }
+.ds .scrim.with-paper .send-left:not(.desk-root *) { flex: 1 1 0; min-width: 0; display: flex; align-items: center; justify-content: center; padding: var(--s4); }
+@media (max-width: 1100px) {
+  .ds .scrim.with-paper .paper-panel:not(.desk-root *) { display: none; }
+}
 /* One line (2026-10-30, operator: "can this be fitted in one line"): short labels, the buttons a
    little tighter than elsewhere — still the choice look, still 32px. */
 .ds .paper-faces:not(.desk-root *) { display: flex; flex-wrap: nowrap; align-items: center; gap: var(--s4); padding: 8px 14px; border-bottom: 1px solid var(--line); background: var(--surface-2); overflow-x: auto; }

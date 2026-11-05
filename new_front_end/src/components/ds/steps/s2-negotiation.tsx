@@ -50,7 +50,8 @@ import { useInvoiceRecipient } from "@/hooks/use-invoice-recipient";
 /* ------------------------------------------------------------------ vocabulary */
 
 const QUOTE_STATE: Record<string, { word: string; tone: "success" | "warning" | "quiet" | "default" }> = {
-  DRAFT: { word: "generated · not sent", tone: "quiet" },
+  // Amber since 2026-11-05 (operator): the guest has not got it, which is the thing to see here.
+  DRAFT: { word: "generated · not sent", tone: "warning" },
   SENT: { word: "sent · awaiting the answer", tone: "warning" },
   ACCEPTED: { word: "accepted", tone: "success" },
   SUPERSEDED: { word: "replaced", tone: "quiet" },
@@ -1120,11 +1121,6 @@ function QuotationCard({
     onError: (e) => toastRefusal(e, "The discount could not be approved"),
   });
 
-  const pdf = () => {
-    if (!session) return;
-    openQuotationPdf(session, q.id).catch((e) => toastRefusal(e, "The PDF could not be opened"));
-  };
-
   const answerReady = how === "WRITTEN" || (how === "VERBAL" && said.trim().length > 0);
 
   return (
@@ -1174,9 +1170,6 @@ function QuotationCard({
               Send
             </Button>
           </Live>
-          <Button kind="quiet" compact icon="file" onClick={pdf}>
-            PDF
-          </Button>
         </>
       }
     >

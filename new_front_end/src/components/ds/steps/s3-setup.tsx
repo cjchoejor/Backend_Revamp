@@ -46,7 +46,7 @@ import { guestNameOf } from "@/lib/ds/status";
 import { fmtDateTime, fmtStamp, hotelFormParts, money, plural } from "@/lib/ds/format";
 import { optionSelectedRoomIds, preferredHoldRoomId, type EntryDetail, type InvoiceSummary, type PaymentStatusSummary } from "@/types/api";
 import { replySettled } from "@/lib/api/entries";
-import { AnswerLine, useReplyAsked, Choice, DsDialog, Fact, FactBox, Facts, Live, OnRecord, PaperDrawer, ReasonDialog, SeeRow, StepCanvas, StepCard, atLeast, currentPassStart, toastRefusal, useCommunications, useRefreshEntry, useStepMode, words, type PaperRef, type ChangeBookingItem, ChangeBookingMenu, StageActs, useFlowUnsaved, useFinishWhenDone, useStepFlow, goToStepCard, revealCard, useOpenAlsoWay, useStepPane, OtherWaysTabs, InlineWay, ShutWay, parkTab, NightsChoice } from "./kit";
+import { AnswerLine, useReplyAsked, Choice, DsDialog, Fact, FactBox, Facts, Live, OnRecord, PaperDrawer, ReasonDialog, SeeRow, SendPaperPanel, StepCanvas, StepCard, atLeast, currentPassStart, toastRefusal, useCommunications, useRefreshEntry, useStepMode, words, type PaperRef, type ChangeBookingItem, ChangeBookingMenu, StageActs, useFlowUnsaved, useFinishWhenDone, useStepFlow, goToStepCard, revealCard, useOpenAlsoWay, useStepPane, OtherWaysTabs, InlineWay, ShutWay, parkTab, NightsChoice } from "./kit";
 import { SendToField, useSendTo } from "./s8-parts";
 import { CancellationFiguresLine, WaiverTick, useRefundHow } from "./cancel-figures";
 import { CompetingClaimsCard, passesOf, roomsHeldWord, useRoomNumbers, useRoomTypeNames } from "./s2-shared";
@@ -1550,6 +1550,7 @@ function ProformaCard({
           onClose={() => setSendOpen(false)}
           busy={send.isPending}
           width={720}
+          beside={<SendPaperPanel paper={docRef(sendTarget)} nightsEach={nightsEach} />}
           title={`Send proforma ${sendTarget.invoiceNumber ?? sendTarget.id}`}
           caseLines={[
             asks ? `It ${asks}` : "The advance it asks for is being read",

@@ -33,7 +33,7 @@ import { JourneySummaryPanel } from "@/components/desk/workspace/journey-summary
 import { PLAN_LABEL, dueLabel } from "@/components/desk/workspace/advance-settlement";
 import { PaymentPlanCard } from "./s3-money";
 import type { EntryDetail, PaymentStatusSummary, QuotationSummary } from "@/types/api";
-import { DsDialog, FactBox, FactLine, Facts, Fact, Live, OnRecord, PaperDrawer, StepCanvas, StepCard, Tool, AnswerLine, useReplyAsked, atLeast, currentPassStart, goToStepCard, latestDispatched, toastRefusal, useCommunications, useFinishWhenDone, useRefreshEntry, useStepMode, useStepPane, words, type FactState, type PaperRef, NightsChoice } from "./kit";
+import { DsDialog, FactBox, FactLine, Facts, Fact, Live, OnRecord, PaperDrawer, SendPaperPanel, StepCanvas, StepCard, Tool, AnswerLine, useReplyAsked, atLeast, currentPassStart, goToStepCard, latestDispatched, toastRefusal, useCommunications, useFinishWhenDone, useRefreshEntry, useStepMode, useStepPane, words, type FactState, type PaperRef, NightsChoice } from "./kit";
 import { BookingOtherWays } from "./s4-other-ways";
 import { roomsHeldWord } from "./s2-shared";
 import { Help } from "@/components/ds/help";
@@ -1169,7 +1169,7 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
         open={sendOpen}
         onClose={() => setSendOpen(false)}
         busy={send.isPending}
-        width={720}
+        beside={<SendPaperPanel paper={{ kind: "voucher", reservationId: res.id, label: `Confirmation voucher · ${res.confirmationVoucherNumber ?? res.id}` }} nightsEach={nightsEach} />}
         title="Send the confirmation voucher"
         caseLines={[res.id]}
         help={`The same email and PDF Reserve sent, recorded as a new send${replyAsked ? " with a fresh reply window" : ""}.`} 

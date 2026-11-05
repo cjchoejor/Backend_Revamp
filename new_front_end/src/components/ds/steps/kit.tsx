@@ -23,6 +23,7 @@ import {
   CancellationVoucherPreview,
   FolioDocumentPreview,
   IssuedInvoicePreview,
+  PaperFill,
   ProformaPreview,
   QuotationPreview,
   VoucherPreview,
@@ -2195,6 +2196,7 @@ export function DsDialog({
   busy,
   help,
   closeX = false,
+  beside,
 }: {
   open: boolean;
   onClose: () => void;
@@ -2209,6 +2211,8 @@ export function DsDialog({
   busy?: boolean;
   /** What the dialog is for, behind a "?" beside its title. Its consequences stay in the body. */
   help?: ReactNode;
+  /** A panel at the right of the screen, with the dialog in the room left of it: `SendPaperPanel`. */
+  beside?: ReactNode;
 }) {
   const inline = useInlineWay();
   const shownTitle = help ? (
@@ -2232,15 +2236,30 @@ export function DsDialog({
   }, [open, busy, onClose, inline]);
   if (!open) return null;
   if (inline) return <WayBody register={register} title={shownTitle} caseLines={caseLines} footer={footer}>{children}</WayBody>;
+  const holder = (
+    <div style={width ? { width, maxWidth: "100%" } : undefined} className="dialog-holder">
+      <Dialog register={register} title={shownTitle} caseLines={caseLines} footer={footer} onClose={closeX && !busy ? onClose : undefined}>
+        {children}
+      </Dialog>
+    </div>
+  );
+  const pressOutside = (e: React.MouseEvent) => {
+    if (e.target === e.currentTarget && !busy) onClose();
+  };
   return (
     <Overlay>
-      <div className="scrim open" onMouseDown={(e) => e.target === e.currentTarget && !busy && onClose()}>
-        <div style={width ? { width, maxWidth: "100%" } : undefined} className="dialog-holder">
-          <Dialog register={register} title={shownTitle} caseLines={caseLines} footer={footer} onClose={closeX && !busy ? onClose : undefined}>
-            {children}
-          </Dialog>
+      {beside ? (
+        <div className="scrim open with-paper" onMouseDown={pressOutside}>
+          <div className="send-left" onMouseDown={pressOutside}>
+            {holder}
+          </div>
+          {beside}
         </div>
-      </div>
+      ) : (
+        <div className="scrim open" onMouseDown={pressOutside}>
+          {holder}
+        </div>
+      )}
     </Overlay>
   );
 }
@@ -2452,6 +2471,62 @@ export function PricesChoice({ hidden, onChange, label = "Prices" }: { hidden: b
   );
 }
 
+/** The paper itself, at the size of the panel it is in. */
+function PaperBody({
+  paper,
+  mode,
+  noPrices = false,
+  nightsEach = false,
+}: {
+  paper: PaperRef;
+  /** A preview leaves the hotel's own heading off; beside a send it stays, as the guest will see it. */
+  mode: "preview" | "send";
+  noPrices?: boolean;
+  nightsEach?: boolean;
+}) {
+  return (
+    <div className="desk-root paper-scroll">
+      <PaperFill.Provider value={mode}>
+        {paper.kind === "quotation" ? (
+          <QuotationPreview quotationId={paper.id} frozenPdf={paper.frozen} hidePrices={noPrices} nightsEach={nightsEach} />
+        ) : paper.kind === "invoice" ? (
+          paper.issued ? (
+            <IssuedInvoicePreview invoiceId={paper.id} />
+          ) : (
+            <ProformaPreview invoiceId={paper.id} frozenPdf={paper.frozen} notice={paper.notice} title={paper.label} nightsEach={nightsEach} />
+          )
+        ) : paper.kind === "voucher" ? (
+          <VoucherPreview reservationId={paper.reservationId} nightsEach={nightsEach} />
+        ) : paper.kind === "cancellation" ? (
+          <CancellationVoucherPreview entryId={paper.entryId} />
+        ) : (
+          <FolioDocumentPreview entryId={paper.entryId} kind={paper.doc} title={paper.label} refreshKey={paper.refreshKey} nightsEach={nightsEach} />
+        )}
+      </PaperFill.Provider>
+    </div>
+  );
+}
+
+/**
+ * The paper beside a send box (2026-11-05, operator: "when user clicks on send, on the right preview
+ * the paper like that, and on the left it can show the pop up of the send options so user can see
+ * what is there in quotation while sending it"). Goes in `DsDialog`'s `beside`; it follows the
+ * box's own Nights choice.
+ */
+export function SendPaperPanel({ paper, nightsEach }: { paper: PaperRef; nightsEach?: boolean }) {
+  return (
+    <aside className="paper-panel" aria-label={paper.label}>
+      <div className="card-top" style={{ padding: "12px 16px", borderBottom: "1px solid var(--line)" }}>
+        <h4 style={{ margin: 0 }}>
+          <Icon name="file" />
+          {paper.label}
+        </h4>
+      </div>
+      <PaperBody paper={paper} mode="send" nightsEach={nightsEach} />
+    </aside>
+  );
+}
+
 /** The paper opens in a side drawer — the document shell the backend rendered. */
 export function PaperDrawer({ paper, onClose }: { paper: PaperRef | null; onClose: () => void }) {
   const { session } = useSession();
@@ -2508,12 +2583,7 @@ export function PaperDrawer({ paper, onClose }: { paper: PaperRef | null; onClos
   return (
     <Overlay>
       <div className="scrim open" style={{ alignItems: "stretch", justifyContent: "flex-end", padding: 0 }} onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-        <div
-          role="dialog"
-          aria-label={paper.label}
-          // 680px so the paper's two choices sit on one line (2026-10-30, operator).
-          style={{ width: "min(680px, 96vw)", background: "var(--surface)", borderLeft: "1px solid var(--line-2)", display: "flex", flexDirection: "column", boxShadow: "var(--shadow-dialog)" }}
-        >
+        <div role="dialog" aria-label={paper.label} className="paper-panel">
           <div className="card-top" style={{ padding: "12px 16px", borderBottom: "1px solid var(--line)" }}>
             <h4 style={{ margin: 0 }}>
               <Icon name="file" />
@@ -2539,29 +2609,7 @@ export function PaperDrawer({ paper, onClose }: { paper: PaperRef | null; onClos
               {hasNights ? <NightsChoice each={nightsEach} onChange={setNightsEach} of={nightsOf} /> : null}
             </div>
           ) : null}
-          <div className="desk-root" style={{ overflow: "auto", flex: 1, padding: "8px 12px" }}>
-            {paper.kind === "quotation" ? (
-              <QuotationPreview quotationId={paper.id} frozenPdf={paper.frozen} hidePrices={noPrices} nightsEach={nightsEach} />
-            ) : paper.kind === "invoice" ? (
-              paper.issued ? (
-                <IssuedInvoicePreview invoiceId={paper.id} />
-              ) : (
-                <ProformaPreview
-                  invoiceId={paper.id}
-                  frozenPdf={paper.frozen}
-                  notice={paper.notice}
-                  title={paper.label}
-                  nightsEach={hasNights && nightsEach}
-                />
-              )
-            ) : paper.kind === "voucher" ? (
-              <VoucherPreview reservationId={paper.reservationId} nightsEach={nightsEach} />
-            ) : paper.kind === "cancellation" ? (
-              <CancellationVoucherPreview entryId={paper.entryId} />
-            ) : (
-              <FolioDocumentPreview entryId={paper.entryId} kind={paper.doc} title={paper.label} refreshKey={paper.refreshKey} nightsEach={nightsEach} />
-            )}
-          </div>
+          <PaperBody paper={paper} mode="preview" noPrices={noPrices} nightsEach={hasNights && nightsEach} />
         </div>
       </div>
     </Overlay>
@@ -2857,10 +2905,8 @@ export function QuotationSendDialog({
   const [channel, setChannel] = useState<Channel>("EMAIL");
   const [to, setTo] = useState("");
   const [touched, setTouched] = useState(false);
-  // "Sometimes guest needs to be sent quotation without the price" (2026-10-06). The offer does
-  // not change — same quotation, same number, same validity, and the stored PDF is still the
-  // priced one; only the copy the guest receives has the money taken off.
-  const [hidePrices, setHidePrices] = useState(false);
+  // A quotation goes out with its prices (2026-11-05, operator). The copy without them stays in the
+  // preview, to read and to print.
   // The copy sent names every night instead of a run as its first and last (2026-10-30).
   const [nightsEach, setNightsEach] = useState(false);
   /**
@@ -2885,11 +2931,10 @@ export function QuotationSendDialog({
         channel,
         recipientAddress: typed,
         sentTo: typed,
-        hidePrices,
         nightsEach,
       }),
     onSuccess: async () => {
-      const face = `${hidePrices ? " · without prices" : ""}${nightsEach ? " · every night named" : ""}`;
+      const face = nightsEach ? " · every night named" : "";
       const text = note.trim();
       if (text && target) {
         try {
@@ -2934,8 +2979,7 @@ export function QuotationSendDialog({
       open
       onClose={onClose}
       busy={send.isPending}
-      // Wide enough for the paper's two choices on one line (2026-10-30).
-      width={720}
+      beside={<SendPaperPanel paper={{ kind: "quotation", id: target.id, label: `Quotation ${target.referenceNumber}` }} nightsEach={nightsEach} />}
       title={`Send quotation ${target.referenceNumber}`}
       caseLines={[
         `Version ${target.versionNumber}`,
@@ -3003,7 +3047,6 @@ export function QuotationSendDialog({
         <span className="hint">{hint}</span>
       </div>
       <div className="paper-faces in-dialog">
-        <PricesChoice hidden={hidePrices} onChange={setHidePrices} />
         <NightsChoice each={nightsEach} onChange={setNightsEach} of={{ quotationId: target.id }} />
       </div>
       <div className="field">
@@ -3061,7 +3104,18 @@ function InvoiceSendDialog({
       open
       onClose={onClose}
       busy={send.isPending}
-      width={720}
+      beside={
+        <SendPaperPanel
+          paper={{
+            kind: "invoice",
+            id: target.id,
+            label: `${INVOICE_WORD[target.invoiceType] ?? "Invoice"} ${target.invoiceNumber ?? target.id}`,
+            issued: target.invoiceType === "FINAL",
+            invoiceType: target.invoiceType,
+          }}
+          nightsEach={isProforma && nightsEach}
+        />
+      }
       title={`Send ${INVOICE_WORD[target.invoiceType] ?? "invoice"} ${target.invoiceNumber ?? target.id}`}
       caseLines={[entry.id, target.dispatchedAt ? "Already sent once — this sends it again" : "Not sent yet"]}
       footer={
