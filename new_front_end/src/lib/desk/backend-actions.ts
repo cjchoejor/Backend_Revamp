@@ -74,12 +74,14 @@ export const STAGE_ACTIONS: Record<string, Record<string, BackendItem[]>> = {
     ],
     advance: [
       { name: "Advance payment service", ref: "services/domain (advance payment)", detail: "Records / reconciles the advance and recomputes payment status.", trace: "^FOLIO\\.PAYMENT_RECORDED$|^ADVANCE_PAYMENT\\.RECONCILED$" },
+      { name: "Deleting a payment", ref: "advance-payment-delete-service · POST /folios/:id/payments/:id/delete", detail: "Takes a payment recorded by mistake off the bill, with the sign-off, the checklist tick, Reserved and a block it placed; the history keeps it.", trace: "^FOLIO\\.PAYMENT_DELETED" },
       { name: "Auto-hold on payment", ref: "recordPayment → autoPlaceCommittedHoldOnAdvancePayment", detail: "Money in — partial counts — places the committed hold automatically at S3.", trace: "^COMMITTED_HOLD\\.AUTO_PLACE_ON_ADVANCE_PAYMENT_SKIPPED$" },
       { name: "Payment plan", ref: "setAdvancePaymentPlan · advance-payment-plan", detail: "Stores the guest's full / partial / installments plan and when the remainder is due.", trace: "^ADVANCE_PAYMENT\\.PLAN_" },
       { name: "W34 — advance follow-up", ref: "ADVANCE_PAYMENT_FOLLOW_UP_W34 · w34", detail: "Chases the advance within its window.", trace: "^PAYMENT_FOLLOW_UP\\.FIRED$|^ADVANCE_PAYMENT\\.FOLLOW_UP" },
       { name: "W38 — payment promise", ref: "ADVANCE_PROMISE_DEADLINE_W38 · w38", detail: "Fires at the promised pay-by date; flags the lapse if the money hasn't arrived.", trace: "^ADVANCE_PAYMENT\\.PROMISE_LAPSED$" },
     ],
     hold: [
+      { name: "Move to Reserve blocks", ref: "blockRoomsForReserve · POST /entries/:id/holds/committed/block", detail: "Places the block unless one is running, for the admin console's time or this booking's." },
       { name: "s3-hold-service", ref: "services/domain/s3-hold-service.ts", detail: "Places the committed hold against the room type.", trace: "^COMMITTED_HOLD\\.PLACED$" },
       { name: "W3 — committed hold expiry", ref: "COMMITTED_HOLD_EXPIRY_W3 · w3 · registry.holdExpiry.minutes", detail: "Releases the committed hold if not confirmed before TTL.", trace: "^COMMITTED_HOLD\\.EXPIRY_TRIGGERED$" },
     ],

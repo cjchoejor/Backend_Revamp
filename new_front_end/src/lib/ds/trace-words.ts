@@ -95,9 +95,10 @@ const WORDS: Record<string, string> = {
   "ADVANCE_PAYMENT.PARTY_RULE_APPLIED": "Advance asked for · the travel agent's or company's own percentage",
   "ADVANCE_PAYMENT.PLAN_RECORDED": "Payment plan recorded",
   "ADVANCE_PAYMENT.RECONCILED": "Money position signed off",
-  "ADVANCE_PAYMENT.RECONCILIATION_UNDONE": "Money sign-off taken back — pressed by mistake",
+  "ADVANCE_PAYMENT.RECONCILIATION_UNDONE": "Money sign-off taken back",
   "ADVANCE_PAYMENT.PROMISE_LAPSED": "Promised advance did not arrive",
   "FOLIO.PAYMENT_RECORDED": "Payment received",
+  "FOLIO.PAYMENT_DELETED": "Payment deleted",
   "FOLIO.CHARGE_POSTED": "Charge posted",
   "FOLIO.CORRECTION_POSTED": "Charge corrected",
   "CHECK_IN.COMPLETED": "Checked in",
@@ -407,6 +408,13 @@ export function traceDetail(ev: TraceEvent, names?: Partial<HistoryNames>): stri
     const moves = (p.moves as Array<{ fromRoomNumber?: string; toRoomNumber?: string }>).map((m) => `room ${m.fromRoomNumber} → ${m.toRoomNumber}`);
     bits.push(...moves);
     if (str("reason")) bits.push(str("reason")!);
+  }
+  if (ev.eventType === "ADVANCE_PAYMENT.RECONCILIATION_UNDONE") bits.push(p.cause === "PAYMENT_DELETED" ? `a payment under it was deleted (${str("paymentId")})` : "pressed by mistake");
+  if (ev.eventType === "FOLIO.PAYMENT_DELETED") {
+    const n = Number(p.amount);
+    bits.push(`${str("paymentId")} · Nu ${Number.isFinite(n) ? n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "?"}`);
+    if (str("notes")) bits.push(`its note: ${str("notes")}`);
+    if (p.blockReleased === true) bits.push("the block it placed is released");
   }
   if (ev.eventType === "COMMUNICATION.REPLY_NOT_ASKED") bits.push(PAPER_WORD[str("commType") ?? ""] ?? "paper");
   // A reply no longer awaited names the paper and what replaced it (2026-10-13).

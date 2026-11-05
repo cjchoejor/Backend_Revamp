@@ -320,6 +320,18 @@ export type AdvancePaymentPlanSummary = {
   promiseOverdue: boolean;
 };
 
+export type RecordedPayment = {
+  id: string;
+  amount: number;
+  method: string | null;
+  notes: string | null;
+  receivedAt: string;
+  stage: string | null;
+  recordedByName: string | null;
+  canDelete: boolean;
+  shutWhy: string | null;
+};
+
 export type PaymentStatusSummary = {
   satisfied: boolean;
   totalReceived: number;
@@ -329,6 +341,11 @@ export type PaymentStatusSummary = {
   paidInFull?: boolean;
   /** The guest's stated payment plan for this segment, or null when none recorded. */
   paymentPlan?: AdvancePaymentPlanSummary | null;
+  /** Whether this person may mark the money reconciled, and who may (the admin console's setting). */
+  mayReconcile?: boolean;
+  reconcileBy?: string;
+  /** The money received, newest first, each saying whether this person may delete it (2026-11-05). */
+  recordedPayments?: RecordedPayment[];
   /** Every payment so far, oldest first — the installment history. */
   installments?: Array<{ id: string; amount: number; receivedAt: string; stage: string | null; notes?: string | null }>;
   creditExtensionActive: boolean;
@@ -365,6 +382,7 @@ export type CommittedHoldSummary = {
   placedAt: string;
   expiresAt: string;
   commercialJustification?: string;
+  releaseReason?: string | null;
 };
 
 export type ReservationSummary = {

@@ -598,6 +598,8 @@ export function AdvanceSettlementBlock({
   // direct-bill-like (agent/government settles later — "no advance" is legitimate there).
   const canReconcile =
     (status?.totalReceived ?? 0) > 0 || ["DIRECT_BILL", "GOVERNMENT"].includes(folio.billingModel ?? "");
+  // Who may is the admin console's setting, and the server's answer (2026-11-05).
+  const mayReconcile = status?.mayReconcile !== false;
 
   return (
     <div className="block">
@@ -729,9 +731,11 @@ export function AdvanceSettlementBlock({
             </button>
             <button
               className="btn btn-ghost btn-sm"
-              disabled={!!folio.advancePaymentReconciliationComplete || reconcileM.isPending || !canReconcile}
+              disabled={!!folio.advancePaymentReconciliationComplete || reconcileM.isPending || !canReconcile || !mayReconcile}
               title={
-                canReconcile
+                !mayReconcile
+                  ? `This is for ${status?.reconcileBy ?? "the GM or an admin"}.`
+                  : canReconcile
                   ? "Sign off the advance position as accepted — ticks the payment-reconciliation checklist and stops follow-up chasing. Use it when a shortfall is deliberately accepted (e.g. covered by credit or agent-settled)."
                   : "Log a payment first — reconciling records that the money position was reviewed, and with nothing received there is nothing to reconcile (direct-bill folios are the exception)."
               }
@@ -748,6 +752,11 @@ export function AdvanceSettlementBlock({
               Refresh
             </button>
           </div>
+          {!mayReconcile && !folio.advancePaymentReconciliationComplete ? (
+            <div className="sm" style={{ marginTop: 6, color: "var(--warn-t)", fontWeight: 600 }}>
+              Signing off a part payment is for {status?.reconcileBy ?? "the GM or an admin"}.
+            </div>
+          ) : null}
         </>
       )}
 
@@ -756,10 +765,11 @@ export function AdvanceSettlementBlock({
           <Check style={{ width: 14, height: 14, color: "var(--green-d)" }} />
           Advance settled in full
           {folio.advancePaymentReconciliationComplete ? " · reconciled" : ""}
+          {!folio.advancePaymentReconciliationComplete && collectable && !mayReconcile ? " · tick Payment reconciliation under the tasks to sign it off" : ""}
           {/* Paid in full but never signed off (a tick recorded before 2026-09-18 completed the
               task without reconciling): the Arrival gate still waits for it, so the sign-off stays
               reachable here instead of vanishing with the payment form. */}
-          {!folio.advancePaymentReconciliationComplete && collectable && canReconcile ? (
+          {!folio.advancePaymentReconciliationComplete && collectable && canReconcile && mayReconcile ? (
             <button className="btn btn-ghost btn-sm" disabled={reconcileM.isPending} onClick={() => reconcileM.mutate()}>
               {reconcileM.isPending ? "Reconciling…" : "Mark reconciled"}
             </button>

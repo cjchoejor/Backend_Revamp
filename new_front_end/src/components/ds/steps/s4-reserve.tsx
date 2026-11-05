@@ -28,7 +28,7 @@ import { getBillingSummary, getEntryTrace, getJourneySummary, replySettled, type
 import { listSameGuestBookings } from "@/lib/api/guest-bookings";
 import { HeldPaperRow, HeldPapersCard, useHeldDocuments } from "@/components/ds/workspace/held-papers";
 import { confirmReadiness, reservedThisPass } from "@/lib/desk/workspace";
-import { fmtDate, fmtDateTime, fmtStay, fmtStamp, money, nightsOf, plural } from "@/lib/ds/format";
+import { fmtDate, fmtDateTime, fmtStay, fmtStamp, money, nightsOf, plural, span } from "@/lib/ds/format";
 import { roomRatesOf } from "@/lib/ds/rates";
 import { JourneySummaryPanel } from "@/components/desk/workspace/journey-summary";
 import { PLAN_LABEL, dueLabel } from "@/components/desk/workspace/advance-settlement";
@@ -353,11 +353,11 @@ function BeforeYouReserve({
     value: hold ? (
       <>
         {holdWord ?? "the rooms"} · {HOLD_WORD[hold.state] ?? words(hold.state)}
-        {holdOk ? ` until ${fmtDateTime(hold.expiresAt, tz)}` : hold.state === "EXPIRED" ? ` at ${fmtDateTime(hold.expiresAt, tz)} — hold them again at Set up` : " — hold them again at Set up"}
+        {holdOk ? ` until ${fmtDateTime(hold.expiresAt, tz)}` : hold.state === "EXPIRED" ? ` at ${fmtDateTime(hold.expiresAt, tz)} — Move to Reserve at Set up blocks them again` : " — hold them again at Set up"}
         {hold.commercialJustification ? ` · ${hold.commercialJustification.slice(0, 60)}` : ""}
       </>
     ) : (
-      "not held — Set up"
+      "not blocked — Move to Reserve at Set up blocks them"
     ),
     who: hold ? `placed ${fmtStamp(hold.placedAt, tz)}${holdJ?.placedBy ? ` · ${holdJ.placedBy}` : ""}` : undefined,
     state: holdOk ? "on" : "missing",
@@ -526,6 +526,30 @@ function BeforeYouReserve({
         ? reserve.reason ?? "the list at the foot of the page names what is left"
         : null;
 
+  // How long is left on the block Move to Reserve placed, on the page where it matters
+  // (2026-11-05, operator: "reserve the rooms before the time frame ends").
+  const blockLeft = hold && holdOk ? new Date(hold.expiresAt).getTime() - clock.now : null;
+  const blockNotice =
+    past || entry.currentStage !== "S3" || entry.status !== "ACTIVE" ? null : blockLeft != null && blockLeft > 0 ? (
+      <div className={`notice ${blockLeft < 10 * 60_000 ? "block-soon" : "next"}`} role="status" data-block-notice style={{ marginBottom: 10 }}>
+        <span>
+          <b>
+            {holdWord ?? "The rooms"} {holdRooms.length === 1 ? "is" : "are"} blocked until {fmtDateTime(hold!.expiresAt, tz)} · {span(blockLeft)} left.
+          </b>{" "}
+          Reserve the booking before then, or {holdRooms.length === 1 ? "it goes" : "they go"} back on sale.
+        </span>
+      </div>
+    ) : (
+      <div className="notice block-soon" role="alert" data-block-notice style={{ marginBottom: 10 }}>
+        <span>
+          <b>The rooms are not blocked.</b> {blockLeft != null ? "The block time has passed." : hold ? "The block ran out or was released." : null} Back at Set up, Move to Reserve blocks them again.
+        </span>
+        <Button kind="secondary" compact onClick={() => goToStep(3)}>
+          Back to Set up
+        </Button>
+      </div>
+    );
+
   return (
     <>
       <StepCard
@@ -544,6 +568,7 @@ function BeforeYouReserve({
           ) : undefined
         }
       >
+        {blockNotice}
         {missing.map(renderLine)}
         {done.map(renderLine)}
         {asked.items.map((w) => (

@@ -201,7 +201,6 @@ export function s3Readiness(
   },
 ): Precondition[] {
   const folio = entry.folio;
-  const hold = entry.committedHold;
   const inPayments = (folio?.payments ?? []).filter(
     (p) => /IN/i.test(p.paymentDirection ?? "") && !/OUT|REFUND/i.test(p.paymentDirection ?? ""),
   );
@@ -302,19 +301,31 @@ export function s3Readiness(
     // NOTE: advance-payment RECONCILIATION (folio.advancePaymentReconciliationComplete) is a
     // Stage 5 pre-arrival gate (Policy 28), NOT an S3→S4 confirmation prerequisite. The backend
     // confirm gate (s4-confirmation-service) never checks it, so it must not gate the freeze here.
-    { label: "Rooms blocked", met: hold?.state === "PLACED" || hold?.state === "UPGRADED", card: "hold" },
   ];
 }
 
-/** Alias — the confirm step's gate is exactly the S3 exit checklist. */
+/**
+ * Reserve's gate: Set up's list and the rooms blocked. Move to Reserve itself blocks them
+ * (2026-11-05), so Set up does not wait for it, and this line stands on the Reserve page, where a
+ * block whose time ran out holds Reserve the booking.
+ */
 export function confirmReadiness(
   entry: EntryDetail,
   opts?: Parameters<typeof s3Readiness>[1],
 ): Precondition[] {
-  return s3Readiness(entry, opts);
+  const hold = entry.committedHold;
+  return [...s3Readiness(entry, opts), { label: "Rooms blocked", met: hold?.state === "PLACED" || hold?.state === "UPGRADED", card: "hold" }];
 }
 
 export function canConfirm(
+  entry: EntryDetail,
+  opts?: Parameters<typeof s3Readiness>[1],
+): boolean {
+  return entry.currentStage === "S3" && confirmReadiness(entry, opts).every((c) => c.met);
+}
+
+/** Set up is done: Move to Reserve may be pressed, and it blocks the rooms. */
+export function canMoveToReserve(
   entry: EntryDetail,
   opts?: Parameters<typeof s3Readiness>[1],
 ): boolean {

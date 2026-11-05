@@ -160,6 +160,22 @@ export async function recordFolioPayment(
   });
 }
 
+/** A payment recorded by mistake (2026-11-05). It goes, with what it set going; the history keeps it. */
+export async function deleteFolioPayment(session: Session, folioId: string, paymentId: string, body: { entryId: string; reason: string }) {
+  return apiRequest<{
+    deleted: string;
+    amount: number;
+    receivedAfter: number;
+    shortfallAfter: number;
+    signOffUndone: boolean;
+    taskReopened: boolean;
+    roomsBackToHeld: number;
+    blockReleased: boolean;
+    proformaMadeAgain: string | null;
+    paperSaidReceived: string[];
+  }>(`/api/folios/${folioId}/payments/${paymentId}/delete`, { method: "POST", session, body });
+}
+
 export async function reconcileAdvancePayment(
   session: Session,
   folioId: string,
@@ -322,7 +338,7 @@ export async function getHoldWindow(session: Session) {
 export async function setCommittedHoldExpiry(
   session: Session,
   entryId: string,
-  body: { date?: string; time?: string; clear?: boolean; reason?: string },
+  body: { date?: string; time?: string; clear?: boolean; reason?: string; blockNow?: boolean },
 ) {
   return apiRequest<{
     heldUntil: string | null;
@@ -330,7 +346,16 @@ export async function setCommittedHoldExpiry(
     holdUpdated: boolean;
     houseWindowMinutes: number;
     note?: string;
+    blockRefused?: string;
   }>(`/api/entries/${entryId}/holds/committed/expiry`, { method: "POST", session, body });
+}
+
+/** Move to Reserve blocks the rooms (2026-11-05); a block still running is left as it is. */
+export async function blockRoomsForReserve(session: Session, entryId: string) {
+  return apiRequest<{ placed: boolean; expiresAt: string; source: "BOOKING" | "HOUSE"; houseWindowMinutes: number; roomCount: number }>(
+    `/api/entries/${entryId}/holds/committed/block`,
+    { method: "POST", session, body: {} },
+  );
 }
 
 export async function issueProformaInvoice(

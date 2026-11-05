@@ -1692,6 +1692,30 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 /* The committed hold in one line (2026-10-28): a lock, the rooms by type, until when, whose time,
    and Edit for the facts and the acts. Lit for a moment when a block was just placed or moved —
    in the section, not the centred card (which is how a step move is said). */
+/* A block running short, or gone, on the Reserve page (2026-11-05). */
+.ds .notice.block-soon:not(.desk-root *) { display: flex; align-items: center; justify-content: space-between; gap: var(--s3); border: 1px solid var(--danger); border-left-width: 4px; border-radius: var(--r-2, 4px); background: var(--danger-soft); padding: 10px 12px; color: var(--ink); }
+.ds .notice.block-soon b { font-weight: 700; }
+
+/* What is already recorded, with its Delete, above the Record payment form (2026-11-05). */
+.ds .pay-rows:not(.desk-root *) { border: 1px solid var(--line-2); border-radius: var(--r-2, 4px); margin-bottom: 14px; background: var(--paper, #F2F3F0); }
+.ds .pay-rows-h:not(.desk-root *) { display: flex; align-items: center; gap: 6px; padding: 7px 10px; font-weight: 700; font-size: 13px; border-bottom: 1px solid var(--line-2); }
+.ds .pay-list:not(.desk-root *) { max-height: 220px; overflow-y: auto; background: var(--surface); }
+.ds .pay-list:has(.pay-row.open):not(.desk-root *) { max-height: none; }
+.ds .pay-row:not(.desk-root *) { padding: 7px 10px; border-bottom: 1px solid var(--line); }
+.ds .pay-row:last-child:not(.desk-root *) { border-bottom: 0; }
+.ds .pay-row.open:not(.desk-root *) { background: var(--danger-soft); }
+.ds .pay-line:not(.desk-root *) { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.ds .pay-info:not(.desk-root *) { display: grid; grid-template-columns: auto 1fr; column-gap: 10px; align-items: baseline; min-width: 0; }
+.ds .pay-info b:not(.desk-root *) { font-size: 14px; white-space: nowrap; }
+.ds .pay-meta:not(.desk-root *) { font-size: 12.5px; color: var(--ink-2); }
+.ds .pay-note:not(.desk-root *) { grid-column: 1 / -1; font-size: 13px; color: var(--ink); overflow-wrap: anywhere; }
+.ds .pay-note.none:not(.desk-root *) { color: var(--ink-3, #8a8f8b); }
+.ds .pay-del:not(.desk-root *) { margin-top: 8px; }
+.ds .pay-del .field:not(.desk-root *) { margin-bottom: 8px; }
+.ds .pay-del-acts:not(.desk-root *) { display: flex; justify-content: flex-end; gap: 8px; }
+.ds .pay-fold:not(.desk-root *) { margin-top: 10px; }
+.ds .pay-fold .pay-rows:not(.desk-root *) { margin: 8px 0 0; }
+
 .ds .hold-line:not(.desk-root *) { display: flex; align-items: center; gap: var(--s2); border: 1px solid var(--line); border-left: 3px solid var(--success); border-radius: var(--r-control); padding: 6px var(--s2) 6px var(--s3); font-size: var(--t-base); color: var(--ink-2); }
 .ds .hold-line > .ic { flex: none; width: 15px; height: 15px; color: var(--success); }
 .ds .hold-line .hold-text { min-width: 0; flex: 1; }

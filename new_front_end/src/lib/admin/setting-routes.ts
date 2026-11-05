@@ -54,6 +54,7 @@ const FINANCIAL = new Set([
   "billing.serviceChargeRate",
   "advancePayment.followUpWindowSeconds",
   "advancePayment.escalationWindowSeconds",
+  "advancePayment.reconciliation.alsoAllowed",
   "payment.followUp.intervals",
   "payment.followUp.ttlDays",
   "invoice.templates",

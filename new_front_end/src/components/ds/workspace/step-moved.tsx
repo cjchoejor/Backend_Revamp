@@ -24,6 +24,8 @@ export type StepMovedNote = {
   who?: string;
   /** What the desk does next, one short line. */
   next?: string;
+  /** A warning the desk must read: it stays until Go on, with no bar running down. */
+  sticky?: boolean;
 };
 
 const SHOW_MS = 6000;
@@ -32,14 +34,14 @@ export function StepMoved({ note, onClose }: { note: StepMovedNote | null; onClo
   const cardRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (!note) return;
-    const t = window.setTimeout(onClose, SHOW_MS);
+    const t = note.sticky ? undefined : window.setTimeout(onClose, SHOW_MS);
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
     };
     window.addEventListener("keydown", onKey);
     window.requestAnimationFrame(() => cardRef.current?.querySelector<HTMLElement>("button")?.focus({ preventScroll: true }));
     return () => {
-      window.clearTimeout(t);
+      if (t) window.clearTimeout(t);
       window.removeEventListener("keydown", onKey);
     };
   }, [note, onClose]);
@@ -63,9 +65,11 @@ export function StepMoved({ note, onClose }: { note: StepMovedNote | null; onClo
           ) : null}
           {note.who ? <p className="sm-who">{note.who}</p> : null}
           {note.next ? <p className="sm-next">{note.next}</p> : null}
-          <div className="sm-bar" aria-hidden>
-            <i style={{ animationDuration: `${SHOW_MS}ms` }} />
-          </div>
+          {note.sticky ? null : (
+            <div className="sm-bar" aria-hidden>
+              <i style={{ animationDuration: `${SHOW_MS}ms` }} />
+            </div>
+          )}
           <Button className="go" onClick={onClose}>
             Go on
           </Button>

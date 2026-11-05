@@ -250,6 +250,25 @@ const FINANCIAL = page("/admin/financial", "Payments and bills", [
     form: { kind: "percent", label: "Service charge", stored: "fraction", step: 0.5 },
   },
   {
+    key: "advancePayment.reconciliation.alsoAllowed",
+    title: "Who may mark the money reconciled",
+    about: "Mark reconciled signs off the money on a booking, and lets a booking with part of its advance go on to check in. The GM and admins can always do it. Tick the other roles that may.",
+    form: {
+      kind: "multi",
+      label: "Also allowed",
+      options: [
+        { value: "L2", label: "Front office manager" },
+        { value: "L1", label: "Front desk" },
+      ],
+    },
+    fresh: [],
+    summary: (v) => {
+      const also = Array.isArray(v) ? v : [];
+      const names = [also.includes("L1") ? "front desk" : null, also.includes("L2") ? "front office manager" : null, "GM", "admin"].filter(Boolean) as string[];
+      return also.length ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}` : "GM and admin only";
+    },
+  },
+  {
     key: "advancePayment.followUpWindowSeconds",
     title: "First reminder about an advance",
     about: "How long after the bill goes out the desk gets the first reminder, if the advance has not come in.",

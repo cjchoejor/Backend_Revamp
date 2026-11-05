@@ -219,6 +219,11 @@ export function money(value: string | number | null | undefined, currency = "BTN
   return n < 0 ? `– ${prefix}${abs}` : `${prefix}${abs}`;
 }
 
+/** How long the hotel blocks rooms, as the admin console has it: `1 hour`, `90 minutes`. */
+export function blockWindowWords(minutes: number): string {
+  return minutes % 60 === 0 && minutes >= 60 ? plural(minutes / 60, "hour") : plural(minutes, "minute");
+}
+
 /** A span of time in words for dwell and countdowns: `18 min`, `2h 10m`, `3 days`. */
 export function span(ms: number): string {
   const mins = Math.max(0, Math.floor(ms / 60_000));

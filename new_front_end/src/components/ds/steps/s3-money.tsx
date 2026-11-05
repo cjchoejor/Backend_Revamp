@@ -18,7 +18,9 @@ import { toast } from "sonner";
 import { BindingBox, Button, Chip, Icon, MoneyInput } from "@/design-system";
 import { useSession } from "@/hooks/use-session";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
+import { usePaymentStatus } from "@/hooks/use-payment-status";
 import {
+  deleteFolioPayment,
   reconcileAdvancePayment,
   recordCreditExtension,
   ADVANCE_PAYMENT_MODES,
@@ -29,8 +31,8 @@ import {
 import { expiryModeForPlanDue, resolveCreditExpiry, type CreditExpiryChoice } from "@/components/desk/workspace/advance-settlement";
 import { fmtDate, fmtDateTime, fmtStamp, money, plural } from "@/lib/ds/format";
 import { STEP_NAMES, stepNoOfStage } from "@/lib/ds/steps";
-import type { AdvancePaymentPlanSummary, EntryDetail, InvoiceSummary, PaymentStatusSummary } from "@/types/api";
-import { ActionRow, Choice, DsDialog, Fact, Facts, Live, NotSentChip, SeeRow, StepCard, goToStepCard, toastRefusal, useFinishWhenDone, useStepFlow } from "./kit";
+import type { AdvancePaymentPlanSummary, EntryDetail, InvoiceSummary, PaymentStatusSummary, RecordedPayment } from "@/types/api";
+import { useRefreshEntry, ActionRow, Choice, DsDialog, Fact, Facts, Live, NotSentChip, SeeRow, StepCard, goToStepCard, toastRefusal, useFinishWhenDone, useStepFlow } from "./kit";
 import { hotelLocalToIso, isoToHotelLocal } from "./s2-shared";
 import { Help, HelpHere } from "@/components/ds/help";
 import { DateTimeInput } from "@/components/ds/date-input";
@@ -199,9 +201,12 @@ export function PaymentPlanCard({
     ? "open the provisional bill first"
     : reconciled
       ? "already signed off"
-      : !reconcilable
-        ? "nothing received yet"
-        : null;
+      : status?.mayReconcile === false
+        ? `This is for ${status.reconcileBy ?? "the GM or an admin"}.`
+        : !reconcilable
+          ? "nothing received yet"
+          : null;
+  const recordedCount = status?.recordedPayments?.length ?? 0;
 
   const nothingAsked = !!status && status.requiredAmount === 0 && received === 0 && !status.creditExtensionActive;
   // With nothing asked and nothing in, the box below says so. "Paid in full" is true of zero (2026-11-05).
@@ -443,10 +448,11 @@ export function PaymentPlanCard({
                   : "It goes on the booking's bill with the advance already received."
               }
               onClick={() => setOpen("pay")}
-              state={payHold ? "inert" : "default"}
-              heldBy={payHold?.why}
-              goTo={payHold?.card}
-              goToLabel={payHold?.cta}
+              // With money on record the box still opens, to delete a payment recorded by mistake.
+              state={payHold && !recordedCount ? "inert" : "default"}
+              heldBy={recordedCount ? undefined : payHold?.why}
+              goTo={recordedCount ? undefined : payHold?.card}
+              goToLabel={recordedCount ? undefined : payHold?.cta}
             />
               </MoneyStep>
               <MoneyStep n={3} state={stepState(2)}>
@@ -474,7 +480,7 @@ export function PaymentPlanCard({
 
       {open === "advance" ? <AdvanceDialog entry={entry} status={status} tz={tz} onClose={() => setOpen(null)} onDone={afterAdvance} /> : null}
       {open === "pay" && folio ? (
-        <PaymentDialog entry={entry} folioId={folio.id} status={status} currency={cur} onClose={() => setOpen(null)} onDone={paid} />
+        <PaymentDialog entry={entry} folioId={folio.id} status={status} currency={cur} tz={tz} lock={payHold?.why ?? null} onClose={() => setOpen(null)} onDone={paid} onChanged={onChanged} />
       ) : null}
       {open === "credit" ? (
         <CreditDialog entry={entry} status={status} tz={tz} currency={cur} onClose={() => setOpen(null)} onDone={moneyIn} />
@@ -840,14 +846,21 @@ function PaymentDialog({
   folioId,
   status,
   currency,
+  tz,
+  lock,
   onClose,
   onDone,
+  onChanged,
 }: {
   entry: EntryDetail;
   folioId: string;
   status: PaymentStatusSummary | undefined;
   currency?: string;
+  tz: string;
+  /** Why no new money can be recorded yet; what is recorded can still be deleted. */
+  lock: string | null;
   onClose: () => void;
+  onChanged: () => void;
   /**
    * With when the rooms are now blocked to: the time when this payment blocked them, `null` when
    * it should have and could not, `undefined` when it was not for this payment to block them.
@@ -878,7 +891,7 @@ function PaymentDialog({
       if (ah?.placed) blockedUntil = ah.expiresAt;
       else if (ah && !ah.placed && ah.reason !== "ALREADY_HELD" && ah.reason !== "NOT_AT_S3") {
         toast.warning("The rooms were not blocked automatically", {
-          description: `${ah.message} — block them by hand.`,
+          description: `${ah.message} — Move to Reserve blocks them.`,
           duration: 10000,
         });
         blockedUntil = null;
@@ -913,12 +926,22 @@ function PaymentDialog({
             disabled={!ok}
             reason={ok ? undefined : !isAmount(amount) ? "put in the amount received" : "choose how it was paid"}
             onClick={() => pay.mutate()}
+            hidden={!!lock}
           >
             Record the payment
           </Button2>
         </>
       }
     >
+      <RecordedPayments entry={entry} folioId={folioId} rows={status?.recordedPayments ?? []} currency={currency} tz={tz} onChanged={onChanged} />
+      {lock ? (
+        <p className="notice next" role="status">
+          <span>
+            <b>No new payment yet.</b> {lock}
+          </span>
+        </p>
+      ) : (
+        <>
       <div className="field">
         <label>
           Amount received
@@ -954,11 +977,130 @@ function PaymentDialog({
         <input className="input" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="QR · paid from India · ref 4471…" />
       </div>
       <p className="meta">
-        {entry.committedHold
-          ? "The rooms are already held."
-          : "A payment — even part of the advance — holds the rooms automatically."}
+        {entry.committedHold?.state === "PLACED" ? "The rooms are already blocked." : "A payment, even part of the advance, blocks the rooms."}
       </p>
+        </>
+      )}
     </DsDialog>
+  );
+}
+
+/**
+ * What is already recorded, each with its Delete (2026-11-05, operator: "if there are two recorded
+ * payment show both with the note and info (keep it efficient and prominent dont make it too big) so
+ * user can choose which one to delete, and after user clicks on delete payment, prompt user to give
+ * reason and then only submit button"). The server says who may delete which, and why not.
+ */
+export function RecordedPayments({
+  entry,
+  folioId,
+  rows,
+  currency,
+  tz,
+  onChanged,
+}: {
+  entry: EntryDetail;
+  folioId: string;
+  rows: RecordedPayment[];
+  currency?: string;
+  tz?: string;
+  onChanged: () => void;
+}) {
+  const { session } = useSession();
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [why, setWhy] = useState("");
+  const del = useMutation({
+    mutationFn: (id: string) => deleteFolioPayment(session!, folioId, id, { entryId: entry.id, reason: why.trim() }),
+    onSuccess: (out) => {
+      setOpenId(null);
+      setWhy("");
+      const also = [
+        out.blockReleased ? "The block it placed is released, and the rooms are back on sale." : null,
+        out.signOffUndone ? "The money sign-off is taken back." : null,
+        out.roomsBackToHeld ? "The rooms read Held again until the advance is paid." : null,
+        out.proformaMadeAgain ? "A new proforma is made, without this money. It has not been sent." : null,
+      ].filter(Boolean);
+      toast.success(`${money(out.amount, currency)} deleted · received now ${money(out.receivedAfter, currency)}`, also.length ? { description: also.join(" "), duration: 9000 } : undefined);
+      if (out.paperSaidReceived.length) {
+        toast.warning(`${out.paperSaidReceived.join(", ")} went out saying this money was received`, { description: "Send the guest a corrected paper.", duration: 12000 });
+      }
+      onChanged();
+    },
+    onError: (e) => toastRefusal(e, "The payment could not be deleted"),
+  });
+  if (!rows.length) return null;
+  return (
+    <div className="pay-rows" data-recorded-payments>
+      <div className="pay-rows-h">
+        Already recorded · {plural(rows.length, "payment")}
+        <Help label="About deleting a payment">
+          Delete a payment recorded by mistake or with the wrong note, then record it again. It comes off the money received and the bill. The booking&rsquo;s
+          history keeps what was deleted, by whom and why.
+        </Help>
+      </div>
+      <div className="pay-list">
+        {rows.map((r) => {
+          const mode = ADVANCE_PAYMENT_MODES.find(([v]) => v === r.method)?.[1] ?? r.method;
+          return (
+            <div key={r.id} className={`pay-row${openId === r.id ? " open" : ""}`} data-payment={r.id}>
+              <div className="pay-line">
+                <div className="pay-info">
+                  <b>{money(r.amount, currency)}</b>
+                  <span className="pay-meta">{[mode, fmtStamp(r.receivedAt, tz), r.recordedByName ? `by ${r.recordedByName}` : null].filter(Boolean).join(" · ")}</span>
+                  <span className={`pay-note${r.notes?.trim() ? "" : " none"}`}>{r.notes?.trim() || "no note"}</span>
+                </div>
+                {openId === r.id ? null : (
+                  <Button2
+                    kind="danger"
+                    disabled={!r.canDelete}
+                    reason={r.shutWhy ?? undefined}
+                    onClick={() => {
+                      setOpenId(r.id);
+                      setWhy("");
+                    }}
+                  >
+                    Delete
+                  </Button2>
+                )}
+              </div>
+              {openId === r.id ? (
+                <div className="pay-del">
+                  <div className="field">
+                    <label>Why is this payment being deleted?</label>
+                    <textarea className="input" rows={2} value={why} onChange={(e) => setWhy(e.target.value)} autoFocus placeholder="recorded twice · the wrong amount · the wrong note" />
+                  </div>
+                  <div className="pay-del-acts">
+                    <Button2 kind="quiet" disabled={del.isPending} onClick={() => setOpenId(null)}>
+                      Keep it
+                    </Button2>
+                    <Button2 kind="danger" working={del.isPending} disabled={!why.trim()} reason={why.trim() ? undefined : "say why first"} onClick={() => del.mutate(r.id)}>
+                      Delete the payment
+                    </Button2>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/** At Arrival and Check-in, where a payment is taken on the page: the same list, folded away. */
+export function RecordedPaymentsFold({ entry, tz }: { entry: EntryDetail; tz?: string }) {
+  const refresh = useRefreshEntry(entry.id);
+  const status = usePaymentStatus(entry.id, { enabled: !!entry.folio }).data;
+  const [open, setOpen] = useState(false);
+  const rows = status?.recordedPayments ?? [];
+  if (!entry.folio || !rows.length) return null;
+  return (
+    <div className="pay-fold">
+      <Button kind="quiet" compact onClick={() => setOpen((o) => !o)}>
+        {open ? "Hide the recorded payments" : `Delete a recorded payment · ${rows.length}`}
+      </Button>
+      {open ? <RecordedPayments entry={entry} folioId={entry.folio.id} rows={rows} currency={entry.folio.lines?.[0]?.currency} tz={tz} onChanged={() => refresh()} /> : null}
+    </div>
   );
 }
 
@@ -1102,17 +1244,20 @@ function Button2({
   disabled,
   reason,
   className,
+  hidden,
   onClick,
   children,
 }: {
-  kind?: "primary" | "secondary" | "quiet";
+  kind?: "primary" | "secondary" | "quiet" | "danger";
   working?: boolean;
   disabled?: boolean;
   reason?: string;
   className?: string;
+  hidden?: boolean;
   onClick: () => void;
   children: React.ReactNode;
 }) {
+  if (hidden) return null;
   return (
     <Button kind={kind} className={className} state={working ? "working" : disabled ? "inert" : "default"} title={reason} workingLabel="Working…" onClick={onClick}>
       {children}

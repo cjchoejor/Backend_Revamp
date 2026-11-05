@@ -32,6 +32,7 @@ import { s5Readiness } from "@/lib/desk/workspace";
 import { fmtDay, fmtStamp, fmtTime, instantYmd, money } from "@/lib/ds/format";
 import { TimeInput, timeInWords } from "@/components/ds/date-input";
 import { AdvanceSettlementBlock } from "@/components/desk/workspace/advance-settlement";
+import { RecordedPaymentsFold } from "@/components/ds/steps/s3-money";
 import { IdentityProofBlock } from "@/components/desk/workspace/identity-proof";
 import type { EntryDetail } from "@/types/api";
 import {
@@ -650,6 +651,7 @@ function AdvanceAndCredit({ entry, facts }: { entry: EntryDetail; facts: Facts_ 
       <Tool>
         <AdvanceSettlementBlock entry={entry} title="Advance and credit" noHeading onChanged={() => finish()} />
       </Tool>
+      <RecordedPaymentsFold entry={entry} tz={clock.tz} />
       {facts.creditNeedsAck ? (
         <FactLine
           label="Credit ceiling"

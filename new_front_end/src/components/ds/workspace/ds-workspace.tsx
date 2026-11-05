@@ -73,6 +73,8 @@ import { Help, QuietScreen } from "@/components/ds/help";
 import { findParkTimer } from "@/lib/desk/timers";
 import {
   canConfirm,
+  canMoveToReserve,
+  s3Readiness,
   canProgressS1,
   canProgressS2,
   canProgressS5,
@@ -93,7 +95,7 @@ import {
 } from "@/lib/desk/workspace";
 import { arrivalNightRoomIds, heldRoomIds, roomsInUseFor } from "@/lib/desk/party-rooms";
 import { channelWord, endingOf, factsFromEntry, rowNameOf, standingOf } from "@/lib/ds/status";
-import { fmtDateTime, fmtDay, money, nightsOf, plural } from "@/lib/ds/format";
+import { blockWindowWords, fmtDateTime, fmtDay, money, nightsOf, plural } from "@/lib/ds/format";
 import { PHASES, BOUNDARY_STEPS, STEP_NAMES, STEP_NEEDS, stepNoOfStage, type StepNo } from "@/lib/ds/steps";
 import { timerLabel } from "@/lib/ds/timers";
 import { BackendRailSlotContext } from "@/components/desk/workspace/backend-inline";
@@ -126,7 +128,7 @@ import { S8CheckOut, S8_PANES } from "@/components/ds/steps/s8-checkout";
 import { S9Closed, S9_PANES, inspectionsOwedAtClosed } from "@/components/ds/steps/s9-closed";
 import { Overlay, atLeast, useRefreshEntry, useStepPane } from "@/components/ds/steps/kit";
 import { ChangeConfiguration } from "@/components/ds/steps/s2-configuration";
-import { declineEntry } from "@/lib/api/reservation-setup";
+import { blockRoomsForReserve, declineEntry } from "@/lib/api/reservation-setup";
 const atLeastFom = (level?: string | null) => atLeast(level, "L2");
 
 // The step tools re-render only when their own props change (the parent lifts several UI flags).
@@ -171,7 +173,7 @@ const SETUP_SECTIONS: Record<string, string> = {
   "billing-model": "Who pays",
   proforma: "The proforma",
   money: "The payment plan",
-  hold: "The committed hold",
+  hold: "Block the Entry",
 };
 /**
  * Reserve's sections (2026-10-29): before the click, the facts on record that Reserve signs — the
@@ -460,7 +462,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const currentOrder = entry ? currentStepOrder(entry) : 1;
   const readyToConfirm = entry ? canConfirm(entry, { paymentSatisfied, totalReceived, requiredAmount, communications }) : false;
   // A finished Set up opens the Reserve page, where the booking is reserved (2026-10-29).
-  const maxReach = !entry ? 1 : entry.currentStage === "S3" && !readyToConfirm ? Math.min(maxReachableOrder(entry), 3) : maxReachableOrder(entry);
+  const readyToMoveOn = entry ? canMoveToReserve(entry, { paymentSatisfied, totalReceived, requiredAmount, communications }) : false;
+  const maxReach = !entry ? 1 : entry.currentStage === "S3" && !readyToMoveOn ? Math.min(maxReachableOrder(entry), 3) : maxReachableOrder(entry);
 
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [checkInOpen, setCheckInOpen] = useState(false);
@@ -624,6 +627,30 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
       setConfirmOpen(false);
       fail("Reserving failed")(e);
     },
+  });
+  /**
+   * Move to Reserve blocks the rooms and says so in the middle of the screen, until it is read
+   * (2026-11-05, operator: "it should also prominently inform the user that the rooms are blocked for
+   * 1hr ... and to reserve the rooms before the time frame ends"). The time is the server's: the
+   * admin console's, or the one set for this booking. A refusal leaves the desk at Set up.
+   */
+  const blockMutation = useMutation({
+    mutationFn: () => blockRoomsForReserve(session!, entry!.id),
+    onSuccess: async (out) => {
+      await queryClient.invalidateQueries({ queryKey: ["entry", entry!.id] });
+      refreshEntry();
+      setSelected(4);
+      const g = entry!.guestProfile ?? entry!.inquiry?.guestProfile ?? null;
+      const until = fmtDateTime(out.expiresAt, clock.tz);
+      const subject = out.roomCount === 1 ? "The room is blocked" : "The rooms are blocked";
+      setMoved({
+        title: out.placed && out.source === "HOUSE" ? `${subject} for ${blockWindowWords(out.houseWindowMinutes)}` : `${subject} until ${until}`,
+        who: [out.placed && out.source === "HOUSE" ? `Until ${until}` : null, [g?.title, g?.firstName, g?.lastName].filter(Boolean).join(" ") || null, entry!.id].filter(Boolean).join(" · "),
+        next: `Reserve the booking before then, or ${out.roomCount === 1 ? "it goes" : "they go"} back on sale.`,
+        sticky: true,
+      });
+    },
+    onError: fail("The rooms could not be blocked"),
   });
   const closeMutation = useMutation({
     mutationFn: () => closeEntryAtS9(session!, entry!.id),
@@ -1030,7 +1057,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     : confirmStepActive
       ? [...confirmReadiness(entry, { paymentSatisfied, totalReceived, requiredAmount, communications }), ...reserveExtras.map((label) => ({ label, met: false }))]
       : setupStepActive
-        ? withUnsaved(confirmReadiness(entry, { paymentSatisfied, totalReceived, requiredAmount, communications }), unsavedSections)
+        ? withUnsaved(s3Readiness(entry, { paymentSatisfied, totalReceived, requiredAmount, communications }), unsavedSections)
       : inquiryStepActive
         ? withUnsaved(s1Readiness(entry), unsavedSections)
         : quoteStepActive
@@ -1277,10 +1304,16 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     // Set up's move opens the Reserve page; the booking stays at Set up until Reserve the booking is
     // pressed there (restored 2026-10-29). Green once it can be pressed; a section with changes not
     // saved holds it (2026-10-28).
-    const ok = readyToConfirm && !preconds.some((p) => p.unsaved);
+    const ok = readyToMoveOn && !preconds.some((p) => p.unsaved);
     moveReady = ok;
     forward = (
-      <Button className="go" state={ok ? "default" : "inert"} reason={ok ? "the booking stays at Set up until you reserve it" : firstNote} onClick={() => setSelected(4)}>
+      <Button
+        className="go"
+        state={blockMutation.isPending ? "working" : ok ? "default" : "inert"}
+        workingLabel="Blocking the rooms…"
+        reason={ok ? "blocks the rooms and opens Reserve; the booking stays at Set up until you reserve it" : firstNote}
+        onClick={() => blockMutation.mutate()}
+      >
         Move to Reserve
       </Button>
     );
