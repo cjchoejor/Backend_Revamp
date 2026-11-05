@@ -105,11 +105,14 @@ export function parsePhone(raw: string | null | undefined): ParsedPhone | null {
       const rest = digits.slice(c.code.length - 1);
       if (rest.startsWith("0") && fits(c, rest.slice(1))) return { code: c.code, number: rest.slice(1), sure: "CLEAR" };
     }
-    // A code the table does not know, marked off by a space or a dash.
+    // A code marked off by a space or a dash IS a code, one the table knows or not, so what follows
+    // is its number, right or wrong. "+975 17123" is five digits short of nothing: read as a stray
+    // plus it was the eight digits 97517123, and was stored as a number nobody gave.
     const marked = v.match(/^\+(\d{1,4})[\s-]+(.+)$/);
-    if (marked && !ruleOf(`+${marked[1]}`)) {
+    if (marked) {
       const rest = marked[2].replace(/\D/g, "");
-      if (fits(ANY_CODE_DIGITS, rest)) return { code: `+${marked[1]}`, number: rest, sure: "CLEAR" };
+      if (!ruleOf(`+${marked[1]}`) && fits(ANY_CODE_DIGITS, rest)) return { code: `+${marked[1]}`, number: rest, sure: "CLEAR" };
+      return { code: `+${marked[1]}`, number: rest, sure: "UNCLEAR", note: "too many or too few digits for its code" };
     }
     // "+9302031613": a stray plus on a local number.
     const local = byPattern(digits);
