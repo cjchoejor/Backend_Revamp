@@ -81,6 +81,8 @@ export const STAGE_ACTIONS: Record<string, Record<string, BackendItem[]>> = {
       { name: "W38 — payment promise", ref: "ADVANCE_PROMISE_DEADLINE_W38 · w38", detail: "Fires at the promised pay-by date; flags the lapse if the money hasn't arrived.", trace: "^ADVANCE_PAYMENT\\.PROMISE_LAPSED$" },
     ],
     hold: [
+      { name: "An advance from an earlier pass", ref: "answerEarlierAdvance · POST /entries/:id/earlier-advance/answer", detail: "Money paid before the booking was sent back goes on the new proforma, or waits to be refunded." },
+      { name: "Recording a refund", ref: "recordRefund · POST /refunds/:id/record", detail: "The FOM, GM or admin record money going back: the amount, and the bank, account and journal unless it was cash." },
       { name: "Move to Reserve blocks", ref: "blockRoomsForReserve · POST /entries/:id/holds/committed/block", detail: "Places the block unless one is running, for the admin console's time or this booking's." },
       { name: "s3-hold-service", ref: "services/domain/s3-hold-service.ts", detail: "Places the committed hold against the room type.", trace: "^COMMITTED_HOLD\\.PLACED$" },
       { name: "W3 — committed hold expiry", ref: "COMMITTED_HOLD_EXPIRY_W3 · w3 · registry.holdExpiry.minutes", detail: "Releases the committed hold if not confirmed before TTL.", trace: "^COMMITTED_HOLD\\.EXPIRY_TRIGGERED$" },
