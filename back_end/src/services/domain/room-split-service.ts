@@ -940,7 +940,7 @@ export async function walkPiece(
       });
       await step("NEGOTIATION_TO_SET_UP", async () => progressS2ToS3(prisma, newId, actor.actorId, await version()));
       await step("PAYER", async () =>
-        ensureProvisionalFolioAndBillingModel(prisma, newId, actor.actorId, actor.actorLevel, { billingModel: entry.folio?.billingModel ?? "GUEST_PAY" }),
+        ensureProvisionalFolioAndBillingModel(prisma, newId, actor.actorId, actor.actorLevel, { billingModel: entry.folio?.billingModel ?? "GUEST_PAY" }, { carried: true }),
       );
       await step("CANCELLATION_TERMS", async () => {
         const seg = await prisma.segment.findFirst({ where: { entryId: newId }, orderBy: { segmentNumber: "desc" }, select: { id: true } });

@@ -1,6 +1,6 @@
 import type { PrismaClient } from "@prisma/client";
 import { FolioState, InvoiceState, InvoiceType, Stage } from "@prisma/client";
-import { AuthorizationError, NotFoundError, ValidationError } from "../../lib/errors.js";
+import { AuthorizationError, NotFoundError, PolicyGateBlockedError, ValidationError } from "../../lib/errors.js";
 import type { ActorLevel } from "../../types/actor.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { enforceBillingModelAllowlistFromConfig } from "../../policies/13-billing-model/p30-billing-model-allowlist-from-config.js";
@@ -10,9 +10,30 @@ import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.
 import { ensureProformaOfThisPassTx } from "./s3-payment-service.js";
 import { retireSupersededReplyWaitsBestEffort } from "../../lib/reply-waits.js";
 import { buildInitialBillingModelDefaults } from "../../lib/billing-model-defaults.js";
+import { payerChoicesFor, type PayerChoices } from "../../lib/payer-choices.js";
 import { enforceEntryNotSealedForWorkingAction } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
 
 export { progressS2ToS3 } from "../../state-machines/s2-s3-state-machine.js";
+
+/** What Set up offers this booking for who pays, and what it starts on. */
+export async function readPayerChoices(prisma: PrismaClient, entryId: string): Promise<PayerChoices> {
+  const entry = await prisma.entry.findUnique({
+    where: { id: entryId },
+    select: {
+      groupBillingMode: true,
+      useType: true,
+      inquiry: { select: { travelAgentId: true, corporateAccountId: true, sourceChannel: true } },
+    },
+  });
+  if (!entry) throw new NotFoundError("Entry");
+  return payerChoicesFor({ ...entry.inquiry, groupBillingMode: entry.groupBillingMode, useType: entry.useType });
+}
+
+const PAYER_NOT_OFFERED: Record<"TRAVEL_AGENT" | "CORPORATE" | "NONE", string> = {
+  TRAVEL_AGENT: "A booking through a travel agent goes either as the package to them with extras to the guest, or everything to them",
+  CORPORATE: "A company's booking goes either as the package to them with extras to the guest, or everything to them",
+  NONE: "This booking has no travel agent or company to bill, so everything goes to the guest",
+};
 
 export async function ensureProvisionalFolioAndBillingModel(
   prisma: PrismaClient,
@@ -20,6 +41,8 @@ export async function ensureProvisionalFolioAndBillingModel(
   actorId: string,
   actorLevel: ActorLevel,
   input: { billingModel: string },
+  // A booking split off another carries that booking's payer, whatever it was (2026-11-05).
+  opts?: { carried?: boolean },
 ) {
   if (!input.billingModel?.trim()) throw new ValidationError("billingModel is required");
   const entry = await prisma.entry.findUnique({ where: { id: entryId }, include: { folio: true, segments: { orderBy: { segmentNumber: "desc" }, take: 1 } } });
@@ -47,6 +70,14 @@ export async function ensureProvisionalFolioAndBillingModel(
   // language relying on centralized billing. An L1 receptionist should not be able to do
   // this quietly during check-in. L3 (FOM) or higher approves.
   const requestedModel = input.billingModel.trim().toUpperCase();
+  // What Set up offers is the rule, not only the desk's list. Pressing again on the payer already on
+  // the bill is not a new choice: a booking from before this rule keeps what it has.
+  if (!opts?.carried && entry.folio?.billingModel?.trim().toUpperCase() !== requestedModel) {
+    const offered = await readPayerChoices(prisma, entryId);
+    if (!offered.choices.includes(requestedModel)) {
+      throw new PolicyGateBlockedError("PAYER_NOT_OFFERED", PAYER_NOT_OFFERED[offered.party ?? "NONE"]);
+    }
+  }
   const isGroupFriendly = requestedModel === "DIRECT_BILL" || requestedModel === "TOUR_OPERATOR_VOUCHER";
   if (entry.groupBillingMode === "GROUP_MASTER" && !isGroupFriendly) {
     if (actorLevel !== "L3" && actorLevel !== "L4") {

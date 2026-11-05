@@ -447,6 +447,16 @@ reservationsRouter.post(
   },
 );
 
+/** Who the bill may go to at Set up, and which it starts on: the desk reads the rule, it does not keep a copy. */
+reservationsRouter.get("/entries/:id/payer-choices", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    res.json(await s3ReservationSetupService.readPayerChoices(prisma, req.params.id));
+  } catch (e) {
+    next(e);
+  }
+});
+
 reservationsRouter.post("/entries/:id/folio/provisional", requireActorLevel("L1"), validateBody(ensureProvisionalFolioRequestSchema), async (req, res, next) => {
   try {
     const created = await s3ReservationSetupService.ensureProvisionalFolioAndBillingModel(
