@@ -176,8 +176,8 @@ export async function progressS1ToS2(prisma: PrismaClient, entryId: string, acto
     }
     // …and the Negotiation clock starts (2026-09-29, SIG-S2 §7.6 / §428): the entry's expiry
     // outlives Inquiry, on a window of Negotiation's own — the one clock from intake ran on the
-    // 1-hour inquiry window, which is why it was cancelled here and never carried. A generated
-    // quote stretches it to the offer's validity; a booking that has been to Set up gets none.
+    // 1-hour inquiry window, which is why it was cancelled here and never carried. It runs on a
+    // quote's own rule, to check-in, and a quote sets it; a booking that has been to Set up gets none.
     await armNegotiationExpiryTx(tx, engine, { entryId, actorId, now });
     return next;
   });

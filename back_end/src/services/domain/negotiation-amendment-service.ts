@@ -67,6 +67,7 @@ import { carryBookingRooms, readBookingRooms, sealFromBookingRooms, sealHasBooki
 import { describeGuestOverlap, findOverlappingBookingOfSameGuest } from "../../policies/04-duplicate-detection/p13-multi-booking-ack-required.js";
 import { releaseSpeculativeHold, placeSpeculativeHold } from "./s2-hold-service.js";
 import { retireSupersededReplyWaitsBestEffort } from "../../lib/reply-waits.js";
+import { armNegotiationExpiryTx } from "../../lib/negotiation-expiry.js";
 
 /** A person at a terminal — `ActorLevel` also carries SYSTEM, which never takes this act. */
 export type NegotiationAmendmentActor = { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" };
@@ -838,6 +839,17 @@ async function amendNegotiationConfigurationInner(
       where: { id: opts.applyingRequestId },
       data: { appliedAmendmentId: amendmentId },
     });
+  }
+
+  // The clock read the quote just retired, or the dates just moved (2026-11-05): back on the window.
+  // Reported, not thrown: by now the change has happened.
+  if (datesChanged || quotationsInvalidated.length > 0) {
+    try {
+      const engine = await getTimerEngine();
+      await prisma.$transaction((tx) => armNegotiationExpiryTx(tx, engine, { entryId, actorId: actor.actorId }));
+    } catch (e) {
+      console.warn("[negotiation-amendment] the Negotiation clock was not moved", entryId, e);
+    }
   }
 
   return {

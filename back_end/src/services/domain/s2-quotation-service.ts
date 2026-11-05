@@ -1,10 +1,10 @@
-import { hotelDayEndUtc, hotelTodayUtc } from "../../lib/stay-dates.js";
+import { quoteStandsUntil, quoteValidityWindow } from "../../lib/quote-validity.js";
 import type { PrismaClient } from "@prisma/client";
 import { ActorLevel, InvoiceState, InvoiceType, MealPlanType, QuotationState, Stage } from "@prisma/client";
 import { NotFoundError, PolicyGateBlockedError, StateTransitionError, ValidationError } from "../../lib/errors.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
-import { extendNegotiationExpiryTx } from "../../lib/negotiation-expiry.js";
+import { followQuoteValidityTx } from "../../lib/negotiation-expiry.js";
 import * as documentGenerationService from "../infrastructure/document-generation-service.js";
 import { enforceDiscountApprovalBeforeSend } from "../../policies/09-discount/p23-discount-send-requires-approval.js";
 import { enforceDiscountApprovalAuthority, resolveActorDiscountCeilings } from "../../policies/09-discount/p23-discount-approval-authority.js";
@@ -1045,38 +1045,6 @@ async function discountAboveBandError(
   return new PolicyGateBlockedError("DISCOUNT_AUTHORITY", `This discount${pct} is above your approval band — ${who}`);
 }
 
-/** A booking with no dates at all has no check-in to run to. */
-const QUOTE_NO_DATES_MAX_DAYS = 30;
-
-/**
- * How long a quotation may stand (2026-11-05, operator: "the validity of the quote will be till the
- * check in date. so the user can set the valid days for before it so can decrease it but not increase
- * it. but say if there is a walk in or someone does reservation for today's date then, user can set
- * number of hrs"). This is the hotel's rule, with no setting: it replaced `registry.quotationValidity.days`
- * and `expiry.s2.quotationValidityDays`.
- *
- *  - Check-in on a later day: whole days, up to the days from the hotel's today to the check-in date.
- *  - Check-in today, or gone by: whole hours, up to what is left of the hotel's day; always at least one,
- *    so a walk-in at 11:30 at night can still be quoted.
- *
- * Both are the hotel's calendar, never the machine's (`hotelTodayUtc`).
- */
-export async function quoteValidityWindow(
-  prisma: PrismaClient,
-  entryId: string,
-  now: Date = new Date(),
-): Promise<{ mode: "DAYS" | "HOURS"; max: number; checkIn: string | null }> {
-  const entry = await prisma.entry.findUnique({ where: { id: entryId }, select: { checkInDate: true } });
-  if (!entry) throw new NotFoundError("Entry");
-  const checkIn = entry.checkInDate;
-  if (!checkIn) return { mode: "DAYS", max: QUOTE_NO_DATES_MAX_DAYS, checkIn: null };
-  const ymd = checkIn.toISOString().slice(0, 10);
-  const daysAhead = Math.round((Date.parse(`${ymd}T00:00:00.000Z`) - hotelTodayUtc(now).getTime()) / 86_400_000);
-  if (daysAhead >= 1) return { mode: "DAYS", max: daysAhead, checkIn: ymd };
-  const left = hotelDayEndUtc(now).getTime() - now.getTime();
-  return { mode: "HOURS", max: Math.max(1, Math.floor(left / 3_600_000)), checkIn: ymd };
-}
-
 /**
  * When a quotation's validity ends (2026-08-06, operator ruling: it is chosen when the quote is
  * GENERATED — under the generate-vs-send rule the generated quote IS the offer, so its clock starts at
@@ -1097,7 +1065,7 @@ export async function resolveQuotationValidity(
     if (!Number.isInteger(hours) || hours < 1 || hours > window.max) {
       throw new ValidationError(`A quote for a stay starting today stands for 1 to ${plural(window.max, "hour")}, the rest of today`);
     }
-    return { validUntil: new Date(now.getTime() + hours * 3_600_000) };
+    return { validUntil: quoteStandsUntil("HOURS", hours, now) };
   }
   if (ask.validHours != null) throw new ValidationError(`Check-in is on a later day, so set how long the quote stands in days, at most ${plural(window.max, "day")}`);
   const days = ask.validDays ?? window.max;
@@ -1108,7 +1076,7 @@ export async function resolveQuotationValidity(
         : `A quote stands for 1 to ${plural(window.max, "day")}`,
     );
   }
-  return { validUntil: new Date(now.getTime() + days * 86_400_000) };
+  return { validUntil: quoteStandsUntil("DAYS", days, now) };
 }
 
 /** Arm the W15 validity clock on a freshly created DRAFT — same record shape `sendQuotation`
@@ -1218,8 +1186,8 @@ async function createQuotationInner(
     // The countdown is real from this moment — W15 expires a lapsed DRAFT, and the desk's
     // timer feed shows "Quote validity" alongside the other clocks.
     await armDraftValidityTimerTx(tx, { id: created.id, entryId }, validity.validUntil, actorId);
-    // The Negotiation clock never lapses a booking while the guest holds a live offer (2026-09-29).
-    await extendNegotiationExpiryTx(tx, await getTimerEngine(), { entryId, validUntil: validity.validUntil, actorId });
+    // The Negotiation clock follows the offer: never a lapse while the guest holds it (2026-09-29; 2026-11-05).
+    await followQuoteValidityTx(tx, await getTimerEngine(), { entryId, validUntil: validity.validUntil, actorId });
     // Discount approved AT generation (2026-08-07): the generating actor held the authority
     // (checked in prepareQuotationDraft), so the approval trace lands with the creation and
     // the p23 send / S2-exit gate is satisfied from birth — no post-hoc approval step.
@@ -1660,7 +1628,7 @@ async function supersedeQuotationWithNewDraftInner(
 
     // The new draft's validity clock, armed like create's — the prior version's was cancelled above.
     await armDraftValidityTimerTx(tx, { id: created.id, entryId: prior.entryId }, validity.validUntil, actorId);
-    await extendNegotiationExpiryTx(tx, await getTimerEngine(), { entryId: prior.entryId, validUntil: validity.validUntil, actorId });
+    await followQuoteValidityTx(tx, await getTimerEngine(), { entryId: prior.entryId, validUntil: validity.validUntil, actorId });
 
     // Discount approved AT generation — same rule as createQuotation (2026-08-07): a
     // regenerated round with a discount is a fresh offer, approved by whoever generated it.
@@ -2080,7 +2048,7 @@ async function sendQuotationInner(
       { quotationId },
       { startAfter: validUntil },
     );
-    await extendNegotiationExpiryTx(tx, engine, { entryId: q.entryId, validUntil, actorId });
+    await followQuoteValidityTx(tx, engine, { entryId: q.entryId, validUntil, actorId });
     const ackWindow = await requireActiveConfigValue<Record<string, number>>(tx as any, "acknowledgement.windowPerType");
     const quotationAckSeconds = Number((ackWindow as any)?.quotation ?? 86400);
     const ackFireAt = new Date(now.getTime() + quotationAckSeconds * 1000);
