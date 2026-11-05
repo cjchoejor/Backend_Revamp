@@ -1,3 +1,4 @@
+import { hotelDayEndUtc, hotelTodayUtc } from "../../lib/stay-dates.js";
 import type { PrismaClient } from "@prisma/client";
 import { ActorLevel, InvoiceState, InvoiceType, MealPlanType, QuotationState, Stage } from "@prisma/client";
 import { NotFoundError, PolicyGateBlockedError, StateTransitionError, ValidationError } from "../../lib/errors.js";
@@ -160,8 +161,9 @@ export type RoomCompositionServiceInput = {
 export type QuotationDraftInput = {
   requestedDiscount?: { discountPercent?: number; discountAmount?: number; discountBasis: string } | null;
   notes?: string;
-  /** Validity window in days (1–30, ending before check-in) — see `resolveQuotationValidity`. */
+  /** How long the offer stands: days up to check-in, or hours when check-in is today. See `quoteValidityWindow`. */
   validDays?: number;
+  validHours?: number;
   currency?: string;
   belowMsrGmWaiver?: { acknowledged: true; rationale: string } | null;
   /**
@@ -483,13 +485,14 @@ async function prepareQuotationDraft(
   // Undiscounted reference run — populated only when a discount actually moved the room rate,
   // so the document can print ORIGINAL prices with an explicit deduction (2026-08-02).
   let compositionTotalsPreDiscount: ReturnType<typeof computeQuotationCompositionTotals> | null = null;
-  /** The booking discount as applied, once there was a grand total to measure it against. */
+  /** The booking discount as applied, once there was a net value to take it off. */
   let compositionDiscount: {
     requestedPercent: number | null;
     requestedAmount: number | null;
     amountOffTotal: number;
     effectivePercent: number;
     netReduction: number;
+    appliesTo: "NET";
     basis: string;
   } | null = null;
   /** Rooms whose mandatory extra bed was added automatically (3+ adults, none supplied). */
@@ -624,7 +627,7 @@ async function prepareQuotationDraft(
           });
           continue;
         }
-        // No discount here: under the composition model it comes off the grand total once the
+        // No discount here: under the composition model it comes off the net value once the
         // rooms are costed, so folding it into the rate as well would take it twice.
         const typePricing = await resolveRatePlanPricingForS2Quotation(prisma, {
           isDeficientGuestTier,
@@ -758,7 +761,7 @@ async function prepareQuotationDraft(
     // with a per-room negotiatedRoomRate ignore defaultRoomRate, so they price identically
     // in both runs — accurate: a negotiated rate is not a discounted one.
     /**
-     * The booking discount, taken off the GRAND TOTAL now that there is one.
+     * The booking discount, taken off the NET VALUE now that there is one (2026-11-05).
      *
      * The undiscounted run becomes `compositionTotalsPreDiscount` — the ORIGINAL prices the
      * document prints, with the deduction shown as its own line (2026-08-02 ruling). Rates are
@@ -771,7 +774,7 @@ async function prepareQuotationDraft(
         amount: requested.discountAmount ?? null,
       });
       if (applied) {
-        // The ceiling is written in percent, so an amount is measured as its share of the total
+        // The ceiling is written in percent, so an amount is measured as its share of the net value
         // before being checked — otherwise a flat figure would slip past the L1/L2/L3 bands.
         const effectivePct = Number(round2(applied.effectivePercent));
         if (requested.discountAmount != null) {
@@ -791,6 +794,9 @@ async function prepareQuotationDraft(
           amountOffTotal: Number(round2(applied.amountOffTotal)),
           effectivePercent: effectivePct,
           netReduction: Number(round2(applied.netReduction)),
+          // From 2026-11-05: off the net, tax on what is left. A quotation without this was priced
+          // with a flat amount off the total, and its stored figures stand as they were.
+          appliesTo: "NET",
           basis: requested.discountBasis,
         };
       }
@@ -969,9 +975,9 @@ async function prepareQuotationDraft(
               }
             : {}),
           // The booking discount as actually applied: what was asked for (percent OR flat
-          // amount), the money it took off the grand total, and the same figure as a share of
-          // that total — which is what the authority bands are written in and what any later
-          // reader should quote. `netReduction` is where it was taken so tax follows it.
+          // amount), the money it took off the net value and off the total, and its share of the net,
+          // which is what the authority bands are written in. `netReduction` is where it was taken,
+          // so tax follows it.
           ...(compositionDiscount ? { compositionDiscount } : {}),
         }
       : {}),
@@ -1029,7 +1035,7 @@ async function discountAboveBandError(
   measuredPercent: number | null,
 ) {
   const ceilings = await resolveActorDiscountCeilings(prisma);
-  const pct = measuredPercent != null ? ` (${Number(round2(measuredPercent))}% of the total)` : "";
+  const pct = measuredPercent != null ? ` (${Number(round2(measuredPercent))}% of the net value)` : "";
   const aboveFom = measuredPercent != null && toDecimal(measuredPercent).gt(toDecimal(ceilings.l2MaxPercent));
   const aboveGm = measuredPercent != null && toDecimal(measuredPercent).gt(toDecimal(ceilings.l3MaxPercent));
   const who =
@@ -1039,50 +1045,70 @@ async function discountAboveBandError(
   return new PolicyGateBlockedError("DISCOUNT_AUTHORITY", `This discount${pct} is above your approval band — ${who}`);
 }
 
+/** A booking with no dates at all has no check-in to run to. */
+const QUOTE_NO_DATES_MAX_DAYS = 30;
+
 /**
- * Resolve a quotation's validity window (2026-08-06, operator ruling: validity is chosen when
- * the quote is GENERATED — under the generate-vs-send rule the generated quote IS the offer, so
- * its clock starts at creation and sending does not restart it).
+ * How long a quotation may stand (2026-11-05, operator: "the validity of the quote will be till the
+ * check in date. so the user can set the valid days for before it so can decrease it but not increase
+ * it. but say if there is a walk in or someone does reservation for today's date then, user can set
+ * number of hrs"). This is the hotel's rule, with no setting: it replaced `registry.quotationValidity.days`
+ * and `expiry.s2.quotationValidityDays`.
  *
- * Rules:
- *  - An explicit ask is 1–30 whole days (hard cap 30). Omitted → `registry.quotationValidity.days`,
- *    else the `expiry.s2.quotationValidityDays` config.
- *  - The window must end BEFORE CHECK-IN — an offer for a stay cannot outlive the stay's start.
- *    An explicit over-ask is rejected naming the maximum; the admin DEFAULT is clamped silently
- *    (the operator didn't choose it, and erroring would make quotes uncreatable near arrival).
- *    Check-in within 24h clamps any window to check-in itself — no whole-day validity fits, so
- *    the largest expressible window is used.
- *  - Past or absent check-in → only the 1–30 rule applies.
+ *  - Check-in on a later day: whole days, up to the days from the hotel's today to the check-in date.
+ *  - Check-in today, or gone by: whole hours, up to what is left of the hotel's day; always at least one,
+ *    so a walk-in at 11:30 at night can still be quoted.
+ *
+ * Both are the hotel's calendar, never the machine's (`hotelTodayUtc`).
+ */
+export async function quoteValidityWindow(
+  prisma: PrismaClient,
+  entryId: string,
+  now: Date = new Date(),
+): Promise<{ mode: "DAYS" | "HOURS"; max: number; checkIn: string | null }> {
+  const entry = await prisma.entry.findUnique({ where: { id: entryId }, select: { checkInDate: true } });
+  if (!entry) throw new NotFoundError("Entry");
+  const checkIn = entry.checkInDate;
+  if (!checkIn) return { mode: "DAYS", max: QUOTE_NO_DATES_MAX_DAYS, checkIn: null };
+  const ymd = checkIn.toISOString().slice(0, 10);
+  const daysAhead = Math.round((Date.parse(`${ymd}T00:00:00.000Z`) - hotelTodayUtc(now).getTime()) / 86_400_000);
+  if (daysAhead >= 1) return { mode: "DAYS", max: daysAhead, checkIn: ymd };
+  const left = hotelDayEndUtc(now).getTime() - now.getTime();
+  return { mode: "HOURS", max: Math.max(1, Math.floor(left / 3_600_000)), checkIn: ymd };
+}
+
+/**
+ * When a quotation's validity ends (2026-08-06, operator ruling: it is chosen when the quote is
+ * GENERATED — under the generate-vs-send rule the generated quote IS the offer, so its clock starts at
+ * creation and sending does not restart it). With nothing asked it runs as long as it may. Asking for
+ * more than `quoteValidityWindow` allows is refused, naming the most it can be.
  */
 export async function resolveQuotationValidity(
   prisma: PrismaClient,
   entryId: string,
-  requestedDays: number | undefined,
+  ask: { validDays?: number; validHours?: number },
   now: Date,
-): Promise<{ validUntil: Date; validDays: number }> {
-  if (requestedDays != null && (!Number.isInteger(requestedDays) || requestedDays < 1 || requestedDays > 30)) {
-    throw new ValidationError("Quote validity must be between 1 and 30 days");
-  }
-  const policy = await getRegistryPolicy(prisma, "registry.quotationValidity.days");
-  const registryDefault =
-    policy && policy.enabled !== false && typeof policy.days === "number" ? (policy.days as number) : null;
-  const days =
-    requestedDays ?? registryDefault ?? (await requireActiveConfigValue<number>(prisma, "expiry.s2.quotationValidityDays"));
-  if (!Number.isFinite(days) || days < 1) throw new ValidationError("validDays must be >= 1");
-
-  let validUntil = new Date(now.getTime() + Number(days) * 86400_000);
-  const entry = await prisma.entry.findUnique({ where: { id: entryId }, select: { checkInDate: true } });
-  const checkIn = entry?.checkInDate ?? null;
-  if (checkIn && checkIn > now && validUntil > checkIn) {
-    const maxDays = Math.floor((checkIn.getTime() - now.getTime()) / 86400_000);
-    if (requestedDays != null && maxDays >= 1) {
-      throw new ValidationError(
-        `Quote validity must end before check-in (${checkIn.toISOString().slice(0, 10)}) — at most ${maxDays} day${maxDays === 1 ? "" : "s"} from today`,
-      );
+): Promise<{ validUntil: Date }> {
+  const window = await quoteValidityWindow(prisma, entryId, now);
+  const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+  if (window.mode === "HOURS") {
+    if (ask.validDays != null) throw new ValidationError(`Check-in is today, so set how long the quote stands in hours, at most ${plural(window.max, "hour")}`);
+    const hours = ask.validHours ?? window.max;
+    if (!Number.isInteger(hours) || hours < 1 || hours > window.max) {
+      throw new ValidationError(`A quote for a stay starting today stands for 1 to ${plural(window.max, "hour")}, the rest of today`);
     }
-    validUntil = checkIn;
+    return { validUntil: new Date(now.getTime() + hours * 3_600_000) };
   }
-  return { validUntil, validDays: Number(days) };
+  if (ask.validHours != null) throw new ValidationError(`Check-in is on a later day, so set how long the quote stands in days, at most ${plural(window.max, "day")}`);
+  const days = ask.validDays ?? window.max;
+  if (!Number.isInteger(days) || days < 1 || days > window.max) {
+    throw new ValidationError(
+      window.checkIn
+        ? `A quote stands until check-in at the latest: 1 to ${plural(window.max, "day")} (check-in ${window.checkIn})`
+        : `A quote stands for 1 to ${plural(window.max, "day")}`,
+    );
+  }
+  return { validUntil: new Date(now.getTime() + days * 86_400_000) };
 }
 
 /** Arm the W15 validity clock on a freshly created DRAFT — same record shape `sendQuotation`
@@ -1135,7 +1161,7 @@ async function createQuotationInner(
   } = await prepareQuotationDraft(prisma, entryId, actorId, input);
 
   // Validity starts NOW — at generation, not at send (2026-08-06 operator ruling).
-  const validity = await resolveQuotationValidity(prisma, entryId, input.validDays, now);
+  const validity = await resolveQuotationValidity(prisma, entryId, input, now);
 
   return prisma.$transaction(async (tx) => {
     const referenceNumber = await allocateReadableId(tx, "QUOTATION" as const);
@@ -1512,6 +1538,7 @@ async function supersedeQuotationWithNewDraftInner(
     requestedDiscount?: { discountPercent?: number; discountAmount?: number; discountBasis: string } | null;
     /** Validity of the regenerated draft — same rules as create; omitted → default, re-anchored to now. */
     validDays?: number;
+    validHours?: number;
     currency?: string;
     belowMsrGmWaiver?: { acknowledged: true; rationale: string } | null;
     roomCompositions?: RoomCompositionServiceInput[];
@@ -1577,7 +1604,7 @@ async function supersedeQuotationWithNewDraftInner(
   const now = new Date();
   // A new round is a new offer: its validity re-anchors to now (explicit ask or default),
   // never inheriting the outgoing version's remaining clock.
-  const validity = await resolveQuotationValidity(prisma, q.entryId, input.validDays, now);
+  const validity = await resolveQuotationValidity(prisma, q.entryId, input, now);
 
   return prisma.$transaction(async (tx) => {
     // Cancel every timer belonging to the prior version — both the Quotation-anchored ones
@@ -1695,7 +1722,7 @@ export async function approveDiscount(prisma: PrismaClient, quotationId: string,
   const discount = (q.commercialTerms as any)?.requestedDiscount;
   if (!discount) throw new ValidationError("No requestedDiscount present on quotation");
   // A flat-amount discount has no discountPercent — authority is measured by its share of the
-  // grand total, which the pricing run stored as compositionDiscount.effectivePercent. Without
+  // net value, which the pricing run stored as compositionDiscount.effectivePercent. Without
   // the fallback an amount-based request would be gated against NaN.
   const pct = Number(
     discount.discountPercent ?? (q.commercialTerms as any)?.compositionDiscount?.effectivePercent,
@@ -1989,6 +2016,7 @@ async function sendQuotationInner(
   actorId: string,
   input: {
     validDays?: number;
+    validHours?: number;
     sentTo?: string;
     channel?: string;
     recipientAddress?: string;
@@ -2015,13 +2043,13 @@ async function sendQuotationInner(
 
   // Validity is set at GENERATION since 2026-08-06 (operator ruling) — sending does not restart
   // the clock. A draft that carries a future `validUntil` keeps it; an explicit `validDays`
-  // still wins (API compat — same 1–30 + before-check-in rules as create), and a legacy draft
-  // with no window at all resolves the default, anchored to now.
+  // still wins (API compat — the same rule as create), and a legacy draft with no window at all
+  // resolves the default, anchored to now.
   const now = new Date();
   const validUntil =
-    input.validDays == null && q.validUntil && q.validUntil > now
+    input.validDays == null && input.validHours == null && q.validUntil && q.validUntil > now
       ? q.validUntil
-      : (await resolveQuotationValidity(prisma, q.entryId, input.validDays, now)).validUntil;
+      : (await resolveQuotationValidity(prisma, q.entryId, input, now)).validUntil;
 
   const updated = await prisma.$transaction(async (tx) => {
     const updatedRow = await tx.quotation.update({

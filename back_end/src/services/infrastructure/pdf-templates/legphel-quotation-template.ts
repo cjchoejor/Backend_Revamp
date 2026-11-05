@@ -84,6 +84,8 @@ export type LegphelQuotationInput = {
    */
   discountLabel?: string | null;
   discountValue?: string | null;
+  /** Net after the discount: with it, the discount prints under Net value, above the taxes. */
+  netAfterDiscount?: string | null;
   netValue: string;
   /** Label carries the rate, e.g. "Service charge 10%". */
   serviceChargeLabel: string;
@@ -150,6 +152,9 @@ export function renderLegphelQuotationHtml(input: LegphelQuotationInput): string
       input.datesShown ? "dated" : null,
     ),
     input.hidePrices ? "" : row("Net value", input.netValue),
+    // A discount comes off the net value, and service charge and GST follow it (2026-11-05).
+    input.hidePrices || !input.netAfterDiscount ? "" : row(input.discountLabel ?? "Discount", input.discountValue ?? ""),
+    input.hidePrices || !input.netAfterDiscount ? "" : row("Net after discount", input.netAfterDiscount),
     input.hidePrices ? "" : row(input.serviceChargeLabel, input.serviceCharge),
     // The reference annotates GST as "(expected)" on pre-stay documents — no supply has happened
     // yet, so the figure is an estimate until the tax invoice is issued.
@@ -160,7 +165,7 @@ export function renderLegphelQuotationHtml(input: LegphelQuotationInput): string
           input.gst,
           { rawKey: true },
         ),
-    input.hidePrices ? "" : input.discountLabel ? row(input.discountLabel, input.discountValue ?? "") : "",
+    input.hidePrices || input.netAfterDiscount ? "" : input.discountLabel ? row(input.discountLabel, input.discountValue ?? "") : "",
     input.hidePrices ? "" : row(`Total · ${currency}`, input.total, { total: true }),
     note(input.closingNote, "quiet"),
     footer([input.quotationNo, input.bookingRef, input.issuanceRef ?? null, "E&OE", input.tariffVersion]),

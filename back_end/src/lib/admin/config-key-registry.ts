@@ -92,7 +92,6 @@ export const CONFIG_KEY_REGISTRY: Record<string, ConfigKeyMeta> = {
   // expiry.s1.defaultTtlSeconds accepts either a raw number (uniform TTL) OR
   // { DEFAULT: number, [perSource]: number } (per-source overrides), so no shape validator.
   "expiry.s1.defaultTtlSeconds": { owner: "ConfigurationService" },
-  "expiry.s2.quotationValidityDays": { validate: positiveInt, owner: "ConfigurationService" },
   "expiry.s2.speculativeHoldTtlSeconds": { validate: positiveInt, owner: "ConfigurationService" },
   "expiry.s2.negotiationTtlSeconds": { validate: positiveInt, owner: "ConfigurationService" },
   "expiry.s3.committedHoldTtlSeconds": { validate: positiveInt, owner: "ConfigurationService" },

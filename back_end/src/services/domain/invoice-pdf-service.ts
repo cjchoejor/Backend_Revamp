@@ -314,15 +314,18 @@ async function buildProformaDocRender(prisma: PrismaClient, inv: LoadedInvoice, 
       ) || null;
   }
 
-  // The booking's discount, read off the terms this document is priced on. `amountOffTotal` is
-  // the tax-INCLUSIVE concession, which is the figure to show beside a tax-inclusive total.
-  const piDisc = (p.terms as { compositionDiscount?: { requestedPercent?: number | null; amountOffTotal?: number } } | null)?.compositionDiscount ?? null;
-  const piDiscAmount = Number(piDisc?.amountOffTotal ?? NaN);
+  // The booking's discount, read off the terms this document is priced on. It came off the net value
+  // since 2026-11-05, so that is the figure to show, beside the net the page prints below it. A
+  // quotation priced before then took a flat amount off the total, and keeps saying so.
+  const piDisc = (p.terms as { compositionDiscount?: { requestedPercent?: number | null; amountOffTotal?: number; netReduction?: number; appliesTo?: string } } | null)?.compositionDiscount ?? null;
+  const piDiscOnNet = piDisc?.appliesTo === "NET";
+  const piDiscAmount = Number((piDiscOnNet ? piDisc?.netReduction : piDisc?.amountOffTotal) ?? NaN);
   const piDiscApplies = !!piDisc && Number.isFinite(piDiscAmount) && piDiscAmount > 0;
+  const piDiscWhere = piDiscOnNet ? "off the net value, " : "";
   const piDiscountLabel = piDiscApplies
     ? piDisc?.requestedPercent != null
-      ? `Discount ${Number(Number(piDisc.requestedPercent).toFixed(2))}% (already applied)`
-      : "Discount (already applied)"
+      ? `Discount ${Number(Number(piDisc.requestedPercent).toFixed(2))}% (${piDiscWhere}already applied)`
+      : `Discount (${piDiscWhere}already applied)`
     : null;
   const piDiscountValue = piDiscApplies ? formatMoney(piDiscAmount) : null;
 
