@@ -1,3 +1,4 @@
+import { paymentsStillHeld, waitingRefundTotal } from "../../lib/refund-money.js";
 import type { PrismaClient } from "@prisma/client";
 import { FolioState, HoldState, InvoiceState, InvoiceType, PaymentDirection, PreArrivalTaskType, Stage, TaskStatus } from "@prisma/client";
 import { AuthorizationError, NotFoundError, PolicyGateBlockedError, ValidationError } from "../../lib/errors.js";
@@ -62,15 +63,21 @@ export async function describeRecordedPayments(
     select: {
       state: true,
       entry: { select: { status: true, currentStage: true } },
-      payments: { where: { paymentDirection: PaymentDirection.IN }, orderBy: { createdAt: "desc" } },
+      payments: { orderBy: { createdAt: "desc" } },
     },
   });
   if (!folio?.entry) return [];
+  // Money that went back, or is waiting to, cannot be deleted (2026-11-05): the oldest goes first.
+  const waiting = await waitingRefundTotal(prisma, folioId);
+  const allIn = folio.payments.filter((p) => p.paymentDirection === PaymentDirection.IN);
+  const gone = sumMoneyBy(folio.payments.filter((p) => p.paymentDirection === PaymentDirection.OUT), "amount").add(waiting);
+  const untouched = new Set(paymentsStillHeld(allIn, gone).filter((h) => h.whole).map((h) => h.row.id));
+  const refundWords = waiting.gt(0) ? "This money is being refunded, so it stays." : "This money was refunded, so it stays.";
   const byIds = [...new Set(folio.payments.map((p) => p.recordedBy).filter((x): x is string => !!x))];
   const staff = byIds.length ? await prisma.staffUser.findMany({ where: { id: { in: byIds } }, select: { id: true, title: true, fullName: true } }) : [];
   const nameOf = new Map(staff.map((s) => [s.id, [s.title, s.fullName].filter(Boolean).join(" ")]));
-  return folio.payments.map((p) => {
-    const stays = whyPaymentStays(p, folio, folio.entry!);
+  return allIn.map((p) => {
+    const stays = whyPaymentStays(p, folio, folio.entry!) ?? (untouched.has(p.id) ? null : refundWords);
     const shutWhy = stays ?? (mayDelete(p.recordedBy, actor) ? null : NOT_YOURS);
     return {
       id: p.id,
@@ -134,8 +141,8 @@ export async function deleteAdvancePayment(
     const others = await tx.paymentRecord.findMany({ where: { folioId: folio.id, NOT: { id: payment.id } } });
     const inLeft = sumMoneyBy(others.filter((p) => p.paymentDirection === PaymentDirection.IN), "amount");
     const outAll = sumMoneyBy(others.filter((p) => p.paymentDirection === PaymentDirection.OUT), "amount");
-    if (inLeft.lt(outAll)) {
-      throw new PolicyGateBlockedError("PAYMENT_NOT_DELETABLE", "A refund has already gone back against this money, so it stays.");
+    if (inLeft.lt(outAll.add(await waitingRefundTotal(tx, folio.id)))) {
+      throw new PolicyGateBlockedError("PAYMENT_NOT_DELETABLE", "This money has been refunded or is waiting to be, so it stays.");
     }
 
     const balanceBefore = Number(toDecimal(folio.outstandingBalance).toFixed(2));

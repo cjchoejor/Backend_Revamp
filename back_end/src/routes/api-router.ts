@@ -1,3 +1,4 @@
+import { refundsRouter } from "./refunds/router.js";
 import { Router } from "express";
 import { parseActorHeaders } from "../middleware/auth.js";
 import { concurrentEditingPassthrough } from "../middleware/concurrent-editing.js";
@@ -85,6 +86,7 @@ apiRouter.use(workOrdersRouter);
 apiRouter.use(disputesRouter);
 apiRouter.use(nightAuditRouter);
 apiRouter.use(foliosRouter);
+apiRouter.use(refundsRouter);
 apiRouter.use(amendmentsRouter);
 apiRouter.use(cancellationsRouter);
 apiRouter.use(noShowRouter);

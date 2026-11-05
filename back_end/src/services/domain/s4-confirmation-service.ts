@@ -1,3 +1,4 @@
+import { enforceEarlierAdvanceAnswered } from "../../lib/refund-money.js";
 import type { PrismaClient } from "@prisma/client";
 import { guestDisplayName } from "../../lib/guest-display-name.js";
 import { CommunicationType, InvoiceType, Stage } from "@prisma/client";
@@ -835,6 +836,8 @@ export async function confirmReservationForDesk(
   actor: { actorId: string; actorLevel?: string | null },
   input: Parameters<typeof confirmReservationInner>[3],
 ) {
+  const folioOf = await prisma.folio.findUnique({ where: { entryId }, select: { id: true } });
+  if (folioOf) await enforceEarlierAdvanceAnswered(prisma, entryId, folioOf.id);
   const out = await confirmReservation(prisma, entryId, actor.actorId, { ...(input ?? {}), holdGuestEmail: true });
   await recordHeldDocument(prisma, {
     entryId,

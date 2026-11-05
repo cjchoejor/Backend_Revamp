@@ -1,3 +1,4 @@
+import { waitingRefundTotal } from "../../lib/refund-money.js";
 import { Prisma, type PrismaClient } from "@prisma/client";
 import { NotFoundError } from "../../lib/errors.js";
 import { mulMoney, round2, sumMoneyBy, toDecimal } from "../../lib/money.js";
@@ -117,6 +118,8 @@ export interface EntryBillingSummary {
     paymentsReceived: number | null;
     /** Sum of OUT payments (refunds). Null when none. */
     refunded: number | null;
+    /** Waiting to go back: still on the bill, no longer counting for this booking (2026-11-05). */
+    refundWaiting?: number | null;
     /** Sum of write-offs. Null when none. */
     writtenOff: number | null;
     /** The stored ledger balance (`Folio.outstandingBalance`). */
@@ -397,6 +400,7 @@ export async function buildEntryBillingSummary(prisma: Db, entryId: string): Pro
       prisma.writeOffRecord.aggregate({ where: { folioId: entry.folio.id }, _sum: { writtenOffAmount: true } }),
     ]);
     const refundedDec = toDecimal(outAgg._sum.amount);
+    const refundWaitingDec = await waitingRefundTotal(prisma, entry.folio.id);
     const writtenOffDec = toDecimal(writeOffAgg._sum.writtenOffAmount);
 
     // Per-room charge subtotals (2026-08-14): Decimal-summed server-side — the desk shows,
@@ -514,6 +518,7 @@ export async function buildEntryBillingSummary(prisma: Db, entryId: string): Pro
       lineCount: whole.chargeCount,
       paymentsReceived: money(toDecimal(inAgg._sum.amount)),
       refunded: refundedDec.gt(0) ? money(refundedDec) : null,
+      refundWaiting: Number(refundWaitingDec.toFixed(2)),
       writtenOff: writtenOffDec.gt(0) ? money(writtenOffDec) : null,
       outstandingBalance: money(toDecimal(entry.folio.outstandingBalance)),
       overpaid: (() => {

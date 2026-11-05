@@ -1248,6 +1248,7 @@ model Entry {
   negotiationAmendmentRequests NegotiationAmendmentRequest[]
   roomMoveLegs                 RoomMoveLeg[]
   heldDocuments                HeldDocument[]
+  refundRequests               RefundRequest[]
   bookingNotes                 BookingNote[]
   guestRequests                GuestRequest[]
   earlyDeparture               EarlyDepartureRecord?
@@ -1952,8 +1953,13 @@ model Folio {
   /// guest said and WHEN the remainder is coming, drives the promise timer (W38) and the
   /// settlement surfaces at S4–S8. Segment-scoped by `setAt` like the requirement pin.
   advancePaymentPlan Json?
+  /// What the desk answered about money paid in an earlier pass (2026-11-05): kept on this
+  /// pass's proforma, or refunded. `{ segmentId, answer: CARRY | REFUND, cause?, answeredAt, answeredBy }`.
+  /// Only the pass it names counts, so a booking sent back again is asked again.
+  earlierAdvanceAnswer Json?
 
   entry                   Entry                          @relation(fields: [entryId], references: [id])
+  refundRequests RefundRequest[]
   payments                PaymentRecord[]
   lines                   FolioLine[]
   disputes                DisputeRecord[]
@@ -3653,4 +3659,44 @@ model AdvanceApplication {
   @@index([roomId])
   @@index([spaceId])
   @@map("advance_applications")
+}
+
+/// Money that has to go back to a guest (2026-11-05). Asked for at Set up, when a new pass finds an
+/// advance from an earlier one and the desk chooses to refund it, or raised by the system when a
+/// booking lapses holding money. WAITING money is still on the bill but no longer counts towards
+/// this booking; REFUNDED has its money-out row. The FOM, GM and admin read and answer it.
+model RefundRequest {
+  id              String    @id // readable PREFIX-YYYYMMDD-NNNN, allocated by allocateReadableId("REFUND", ...)
+  entryId         String
+  folioId         String
+  /// RENEGOTIATED (the desk chose it at Set up) · LAPSED (the booking ended holding the money).
+  cause           String
+  /// WAITING · REFUNDED · KEPT · CANCELLED (the booking's cancellation refunded it instead).
+  status          String    @default("WAITING")
+  amountAsked     Decimal   @db.Decimal(15, 2)
+  currency        String    @default("BTN")
+  note            String?
+  stage           Stage?
+  raisedBy        String
+  raisedAt        DateTime  @default(now())
+  /// The proforma the money was paid against: its stored paper can be opened from the request.
+  paidOnInvoiceId String?
+  refundedAmount  Decimal?  @db.Decimal(15, 2)
+  refundMethod    String?
+  bankName        String?
+  accountNumber   String?
+  journalNumber   String?
+  /// The money-out row this refund wrote.
+  paymentRecordId String?   @unique
+  closeNote       String?
+  closedBy        String?
+  closedAt        DateTime?
+
+  entry Entry @relation(fields: [entryId], references: [id], onUpdate: Cascade)
+  folio Folio @relation(fields: [folioId], references: [id], onUpdate: Cascade)
+
+  @@index([status, raisedAt])
+  @@index([entryId])
+  @@index([folioId])
+  @@map("refund_requests")
 }

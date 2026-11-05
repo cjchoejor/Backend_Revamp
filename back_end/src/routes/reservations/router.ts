@@ -536,7 +536,8 @@ reservationsRouter.post(
  */
 reservationsRouter.post(
   "/entries/:id/holds/committed/release",
-  requireActorLevel("L3"),
+  // The GM's while the block is running; the FOM's too once its time has ended. The service decides.
+  requireActorLevel("L2"),
   async (req, res, next) => {
     try {
       const out = await s3HoldService.releaseCommittedHoldByAuthority(

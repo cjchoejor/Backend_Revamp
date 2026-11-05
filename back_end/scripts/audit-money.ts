@@ -530,6 +530,30 @@ async function main() {
     }
   }
 
+  // A14 — a refund's record against the money itself (2026-11-05): one recorded has its money-out row
+  // for the same figure on the same bill, and one waiting never asks for more than the bill holds.
+  const refundRows = await prisma.refundRequest.findMany({ include: { entry: { select: { currentStage: true, status: true } } } });
+  for (const r of refundRows) {
+    const subject = `${r.id} (${r.entryId})`;
+    if (r.status === "REFUNDED") {
+      const out = r.paymentRecordId ? await prisma.paymentRecord.findUnique({ where: { id: r.paymentRecordId } }) : null;
+      if (!out || out.folioId !== r.folioId || out.paymentDirection !== "OUT" || !D(out.amount).eq(D(r.refundedAmount ?? 0))) {
+        add("CRITICAL", "A14_REFUND_RECORD", subject, `recorded as refunded ${money(D(r.refundedAmount ?? 0))}, but no money-out row on the bill says so`);
+      }
+    }
+    if (r.status === "WAITING") {
+      const [paidIn, paidOut] = await Promise.all([
+        prisma.paymentRecord.aggregate({ where: { folioId: r.folioId, paymentDirection: "IN" }, _sum: { amount: true } }),
+        prisma.paymentRecord.aggregate({ where: { folioId: r.folioId, paymentDirection: "OUT" }, _sum: { amount: true } }),
+      ]);
+      const held = D(paidIn._sum.amount ?? 0).sub(D(paidOut._sum.amount ?? 0));
+      if (D(r.amountAsked).gt(held)) add("CRITICAL", "A14_REFUND_RECORD", subject, `waiting to refund ${money(D(r.amountAsked))}, but the bill holds ${money(held)}`);
+      if (r.entry.status === "ACTIVE" && ["S7", "S8", "S9"].includes(r.entry.currentStage)) {
+        add("CRITICAL", "A14_REFUND_RECORD", subject, `waiting to refund on a booking past check-in (${r.entry.currentStage}), whose bill reads this money as its own`);
+      }
+    }
+  }
+
   const bySeverity: Record<Severity, Finding[]> = { CRITICAL: [], WARN: [], INFO: [] };
   for (const f of findings) bySeverity[f.severity].push(f);
   console.log(`\n════ MONEY AUDIT — ${new Date().toISOString().slice(0, 16)} ════`);

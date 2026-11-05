@@ -1,8 +1,9 @@
+import { enforceEarlierAdvanceAnswered } from "../../lib/refund-money.js";
 import { ensureCancellationDisclosedTx } from "./s3-cancellation-disclosure-service.js";
 import type { PrismaClient } from "@prisma/client";
 import { releaseRoomClaimIfOwnedTx } from "../../lib/room-claim-state.js";
 import { EntryStatus, HoldState, InventoryClaimState, Prisma, Stage } from "@prisma/client";
-import { MissingConfigurationError, NotFoundError, PolicyGateBlockedError, ValidationError } from "../../lib/errors.js";
+import { AuthorizationError, MissingConfigurationError, NotFoundError, PolicyGateBlockedError, ValidationError } from "../../lib/errors.js";
 import { firstRoomId, readOptionSelected, sealAsPerNight } from "../../lib/option-selected-reader.js";
 
 /**
@@ -573,6 +574,15 @@ export async function blockRoomsForReserve(
   if (held && (held.state === HoldState.PLACED || held.state === HoldState.UPGRADED) && held.expiresAt.getTime() > now.getTime()) {
     return { placed: false, expiresAt: held.expiresAt.toISOString(), source, houseWindowMinutes, roomCount };
   }
+  // A block whose time ended holds its rooms until the FOM or GM decides (2026-11-05).
+  if (held && held.state === HoldState.PLACED) {
+    throw new PolicyGateBlockedError(
+      "BLOCK_TIME_ENDED",
+      "This booking's block time has ended. The FOM or GM talks to the guest, then cancels the booking, releases the rooms or sets a new block time.",
+    );
+  }
+  const folioOf = await prisma.folio.findUnique({ where: { entryId }, select: { id: true } });
+  if (folioOf) await enforceEarlierAdvanceAnswered(prisma, entryId, folioOf.id);
   const roomId = sealedAnchorRoom(seal);
   if (!roomId) throw new ValidationError("Choose the rooms at Inquiry first.");
   const hold = await placeCommittedHold(prisma, entryId, actor, {
@@ -929,7 +939,7 @@ export async function setCommittedHoldExpiry(
       inquiryId: true,
       checkInDate: true,
       holdExpiresAtOverride: true,
-      committedHold: { select: { id: true, state: true, placedAt: true } },
+      committedHold: { select: { id: true, state: true, placedAt: true, expiresAt: true } },
     },
   });
   if (!entry) throw new NotFoundError("Entry");
@@ -937,6 +947,10 @@ export async function setCommittedHoldExpiry(
   enforceEntryStageForHoldExpiryChange({ currentStage: entry.currentStage });
 
   const now = new Date();
+  // Once a block's time has ended, a new time is part of the FOM's or GM's decision (2026-11-05).
+  if (entry.committedHold?.state === HoldState.PLACED && entry.committedHold.expiresAt.getTime() <= now.getTime() && actor.actorLevel === "L1") {
+    throw new AuthorizationError("This block's time has ended, so a new time is for the FOM or GM.");
+  }
   const house = await resolveHouseHoldWindow(prisma);
   const houseWindowMinutes = Math.round(house.seconds / 60);
   // Only a hold still running on its clock is moved. A CONFIRMED hold at Set up was confirmed at
@@ -1177,7 +1191,11 @@ export async function releaseCommittedHoldByAuthority(
    *  whole hold. A booking holding four rooms usually only needs to hand one back. */
   input: { releaseReason: string; roomIds?: string[] },
 ) {
-  enforceCommittedHoldReleaseAuthority({ actorLevel: actor.actorLevel });
+  const heldNow = await prisma.committedHold.findUnique({ where: { entryId }, select: { state: true, expiresAt: true } });
+  enforceCommittedHoldReleaseAuthority({
+    actorLevel: actor.actorLevel,
+    timeEnded: heldNow?.state === HoldState.PLACED && heldNow.expiresAt.getTime() <= Date.now(),
+  });
   const reason = input.releaseReason?.trim();
   if (!reason) throw new ValidationError("releaseReason is required — it is recorded against the booking that loses the room");
 

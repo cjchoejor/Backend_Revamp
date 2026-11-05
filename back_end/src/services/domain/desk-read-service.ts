@@ -340,7 +340,7 @@ export async function listDeskActivity(
 export const DESK_ALERTS_MAX = 400;
 
 /** What a sent alert was about (2026-10-23) — one word per writer in notification-service / W14. */
-export type DeskAlertKind = "STAGE_DWELL" | "EXPIRED" | "PAYMENT_REMINDER" | "PAY_LATER_ASKED" | "VIP_ARRIVAL" | "OTHER";
+export type DeskAlertKind = "STAGE_DWELL" | "EXPIRED" | "PAYMENT_REMINDER" | "PAY_LATER_ASKED" | "VIP_ARRIVAL" | "BLOCK_ENDED" | "REFUND_DUE" | "OTHER";
 /** Who an alert was routed to — the tiers `notification.routing.*` names. */
 export type DeskAlertTarget = "OPERATOR" | "FOM" | "GM";
 
@@ -351,6 +351,8 @@ const ALERT_KIND: Record<string, DeskAlertKind> = {
   "NOTIFICATION.CHECKIN_PAYMENT_REMINDER_DISPATCHED": "PAYMENT_REMINDER",
   "NOTIFICATION.CHECKIN_PAYMENT_DEFERRAL_REQUESTED": "PAY_LATER_ASKED",
   "NOTIFICATION.VIP_ARRIVAL_W14_PROCESSED": "VIP_ARRIVAL",
+  "NOTIFICATION.BLOCK_TIME_ENDED": "BLOCK_ENDED",
+  "NOTIFICATION.REFUND_DUE": "REFUND_DUE",
 };
 const TARGETS = new Set<DeskAlertTarget>(["OPERATOR", "FOM", "GM"]);
 
@@ -415,6 +417,8 @@ export async function listDeskAlerts(prisma: Db, q: { from: Date; to: Date; limi
             ? { kind: "CHECKIN", remaining: num(p.remaining), remindersSent: num(p.remindersSent), dueBy: str(p.dueBy), billed: false }
             : r.eventType === "NOTIFICATION.CHECKIN_PAYMENT_DEFERRAL_REQUESTED"
               ? { kind: "PAY_LATER", remaining: num(p.stillToPay), remindersSent: null, dueBy: null, billed: false }
+              : r.eventType === "NOTIFICATION.REFUND_DUE"
+                ? { kind: "REFUND", remaining: num(p.amount), remindersSent: null, dueBy: null, billed: false }
               : null,
       booking: entryId ? (byId.get(entryId) ?? null) : null,
     };

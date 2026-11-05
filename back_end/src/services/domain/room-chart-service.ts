@@ -28,6 +28,7 @@
  * offers them and whoever reserves first takes them. They are listed apart (`picks`), never as bars,
  * and no figure counts them; the desk draws them faintly so the demand is seen.
  */
+import { committedHoldClaimsWhere } from "../../lib/entry-inventory-claim.js";
 import type { EntryStatus, PrismaClient, Stage } from "@prisma/client";
 import { ValidationError } from "../../lib/errors.js";
 import {
@@ -263,8 +264,7 @@ export async function buildRoomChart(
     }),
     prisma.committedHold.findMany({
       where: {
-        state: { in: ["PLACED", "CONFIRMED"] },
-        expiresAt: { gt: new Date() },
+        ...committedHoldClaimsWhere(),
         entry: {
           status: { notIn: ["CANCELLED", "EXPIRED", "CLOSED"] },
           noShowDetermination: { is: null },

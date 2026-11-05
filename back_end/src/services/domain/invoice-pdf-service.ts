@@ -23,6 +23,7 @@
  * inline preview (`renderInvoicePreviewHtml`, 2026-08-01) shows the exact same document
  * WITHOUT rendering a PDF, writing storage, or snapshotting InvoiceLine rows.
  */
+import { paymentsStillHeld, waitingRefundTotal } from "../../lib/refund-money.js";
 import { InvoiceType, Prisma, type PrismaClient } from "@prisma/client";
 import { effectiveCheckOutDate } from "../../lib/stay-dates.js";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
@@ -33,7 +34,7 @@ import {
   loadHotelProfileForRender,
   type HotelProfileForRender,
 } from "../../lib/pdf-render-context.js";
-import { sumMoney, toDecimal, ZERO } from "../../lib/money.js";
+import { maxZeroSub, sumMoney, sumMoneyBy, toDecimal, ZERO } from "../../lib/money.js";
 import {
   LEDGER_COMPONENTS,
   buildFolioLedgerView,
@@ -180,8 +181,15 @@ type ProformaPrintLine = {
  * re-entry, so a new segment's proforma does not print the old segment's figure.
  */
 async function proformaAdvanceFigures(prisma: PrismaClient, inv: LoadedInvoice, totalAmount: number) {
-  const inPayments = (inv.folio?.payments ?? []).filter((pay) => pay.paymentDirection === "IN");
-  const advanceReceived = inPayments.reduce((s, pay) => s + Number(toDecimal(pay.amount).toFixed(2)), 0);
+  // What this booking holds for itself: money in, less what went back and what is waiting to
+  // (2026-11-05). It read money in alone, so a refunded advance would have stayed on the new paper.
+  const allPayments = inv.folio?.payments ?? [];
+  const inPayments = allPayments.filter((pay) => pay.paymentDirection === "IN");
+  const gone = sumMoneyBy(allPayments.filter((pay) => pay.paymentDirection === "OUT"), "amount").add(
+    inv.folio ? await waitingRefundTotal(prisma, inv.folio.id) : 0,
+  );
+  const stillHeld = paymentsStillHeld(inPayments, gone);
+  const advanceReceived = Number(maxZeroSub(sumMoneyBy(inPayments, "amount"), gone).toFixed(2));
   const currentSegment = await prisma.segment.findFirst({
     where: { entryId: inv.entryId },
     orderBy: { segmentNumber: "desc" },
@@ -196,7 +204,7 @@ async function proformaAdvanceFigures(prisma: PrismaClient, inv: LoadedInvoice, 
   return {
     segmentStartedAt: currentSegment?.startedAt ?? null,
     advanceReceived,
-    paymentCount: inPayments.length,
+    paymentCount: stillHeld.length,
     requiredAdvance,
     advanceDueQualifier,
     advanceDueNow,
@@ -375,7 +383,7 @@ async function buildProformaDocRender(prisma: PrismaClient, inv: LoadedInvoice, 
     closingNote:
       (paper ? priceRowsNote(paper.rowsAreNet) : "") +
       (requiredAdvance == null
-        ? "No advance is asked for this booking; the balance is settled at check-out. No surcharge applies " +
+        ? `${advanceReceived > 0 ? "No further advance is asked" : "No advance is asked"} for this booking; the balance is settled at check-out. No surcharge applies ` +
           "on any payment mode. A confirmation voucher follows. Cancellation terms as disclosed for this booking."
         : "No surcharge applies on any payment mode. The booking confirms on receipt of the advance; " +
           "a confirmation voucher follows. Cancellation terms as disclosed for this booking."),

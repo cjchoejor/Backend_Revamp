@@ -90,6 +90,16 @@ export async function keepStandingReservations<T extends { entryId: string; segm
   return rows.filter((r) => !sealedIds.has(r.segmentId) || holdLive.has(r.entryId));
 }
 
+/**
+ * Which committed holds still claim their rooms (2026-11-05, operator: "if a block ends dont release
+ * it directly"). A block at Set up keeps its rooms past its time until the FOM or GM decides, so a
+ * PLACED hold claims however late it is. A CONFIRMED one is read by its time as before: once it
+ * lapses the reservation answers for the rooms, night by night.
+ */
+export function committedHoldClaimsWhere(now: Date = new Date()) {
+  return { OR: [{ state: "PLACED" as const }, { state: "CONFIRMED" as const, expiresAt: { gt: now } }] };
+}
+
 /** The select needed by `reservedEntrySpans` / `roomsClaimedByReservedEntry`. */
 export const reservedEntryRoomsSelect = {
   // The row's OWN nights (2026-09-11): a room released mid-stay, a per-night split and a

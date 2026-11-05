@@ -178,7 +178,7 @@ export function renderProformaInvoiceEmail(d: ProformaInvoiceEmailData): StageEm
     ? "Settling this in advance helps us secure your room. Reply to this email if you need bank details or have any questions."
     : d.advanceAsked
       ? "The advance is received; the balance is settled at check-out. Reply to this email if you have any questions."
-      : "No advance is asked for this booking; the balance is settled at check-out. Reply to this email if you have any questions.";
+      : `${d.advanceReceived > 0 ? "No further advance is asked" : "No advance is asked"} for this booking; the balance is settled at check-out. Reply to this email if you have any questions.`;
   const paidLabel = `Already received${d.paymentCount > 1 ? ` (${d.paymentCount} payments)` : ""}`;
   const subject = COMMON_SUBJECT;
 

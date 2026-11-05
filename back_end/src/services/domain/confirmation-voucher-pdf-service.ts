@@ -15,8 +15,9 @@
  * Storage / immutability: same append-only pattern as the quotation and invoice services.
  * If a voucher was previously rendered we serve the stored file rather than regenerating.
  */
+import { waitingRefundTotal } from "../../lib/refund-money.js";
 import { computeStayCharges, stayBreakdownFromTerms } from "../infrastructure/compute-stay-charges.js";
-import { sumMoneyBy } from "../../lib/money.js";
+import { maxZeroSub, sumMoneyBy } from "../../lib/money.js";
 import { type PrismaClient } from "@prisma/client";
 import { NotFoundError } from "../../lib/errors.js";
 import { allocateReadableId } from "../../lib/readable-id.js";
@@ -305,9 +306,17 @@ export async function generateOrLoadConfirmationVoucherPdf(
 
   const voucherFolio = await prisma.folio.findUnique({
     where: { entryId: entry.id },
-    select: { payments: { where: { paymentDirection: "IN" }, select: { amount: true } } },
+    select: { id: true, payments: { select: { amount: true, paymentDirection: true } } },
   });
-  const advanceHeld = Number(sumMoneyBy(voucherFolio?.payments ?? [], "amount").toFixed(2));
+  // What this booking holds for itself: less what went back and what is waiting to (2026-11-05).
+  const advanceHeld = Number(
+    maxZeroSub(
+      sumMoneyBy((voucherFolio?.payments ?? []).filter((p) => p.paymentDirection === "IN"), "amount"),
+      sumMoneyBy((voucherFolio?.payments ?? []).filter((p) => p.paymentDirection === "OUT"), "amount").add(
+        voucherFolio ? await waitingRefundTotal(prisma, voucherFolio.id) : 0,
+      ),
+    ).toFixed(2),
+  );
   const stayTotal = (
     stayBreakdownFromTerms(reservation.frozenCommercialTerms) ??
     (await computeStayCharges(prisma, Number(reservation.frozenRate ?? 0), nights, Math.max(1, Number((reservation.frozenCommercialTerms as { roomCount?: unknown } | null)?.roomCount) || entry.numberOfRooms || 1)))

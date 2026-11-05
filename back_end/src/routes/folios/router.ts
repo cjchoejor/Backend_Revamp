@@ -1,3 +1,4 @@
+import { describeEarlierAdvance } from "../../lib/refund-money.js";
 import { deleteAdvancePayment, describeRecordedPayments } from "../../services/domain/advance-payment-delete-service.js";
 import { whoMayReconcile } from "../../lib/reconcile-permission.js";
 import { Router } from "express";
@@ -151,6 +152,7 @@ foliosRouter.get("/entries/:id/payment-status", requireActorLevel("L1"), async (
       mayReconcile: who.levels.includes(actor.actorLevel),
       reconcileBy: who.words,
       recordedPayments: await describeRecordedPayments(prisma, entry.folio.id, actor),
+      earlierAdvance: await describeEarlierAdvance(prisma, { entryId: entry.id, folioId: entry.folio.id }),
     });
   } catch (e) {
     next(e);

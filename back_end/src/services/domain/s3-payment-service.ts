@@ -1,3 +1,4 @@
+import { paymentsStillHeld, waitingRefundTotal } from "../../lib/refund-money.js";
 import { randomUUID } from "node:crypto";
 import type { PrismaClient } from "@prisma/client";
 import { InvoiceState, InvoiceType, PaymentDirection, PreArrivalTaskType, Prisma, Stage, TaskStatus } from "@prisma/client";
@@ -150,7 +151,12 @@ async function computeAdvancePaymentEvaluation(
   // Decimal-safe sum — reducing Number(p.amount) with `+` produced 4999.999999999999 for
   // three partial payments totalling exactly 5000 and wrongly blocked check-in at the gate.
   const inPayments = (folio.payments ?? []).filter((p) => p.paymentDirection === PaymentDirection.IN);
-  const totalReceivedDec = sumMoneyBy(inPayments, "amount");
+  const refundedDec = sumMoneyBy((folio.payments ?? []).filter((p) => p.paymentDirection === PaymentDirection.OUT), "amount");
+  // Money waiting to go back is still on the bill but no longer counts for this booking, and money
+  // that went back is gone (2026-11-05; lib/refund-money.ts). This read money in alone, so once a
+  // refund could happen at Set up it would have kept counting the money refunded.
+  const refundWaitingDec = await waitingRefundTotal(db, folio.id);
+  const totalReceivedDec = maxZeroSub(sumMoneyBy(inPayments, "amount"), refundedDec.add(refundWaitingDec));
   const requiredAmountDec = toDecimal(pinned ?? 0);
 
   const credit = await db.creditExtensionCeilingRecord.findUnique({ where: { folioId: folio.id } });
@@ -198,16 +204,13 @@ async function computeAdvancePaymentEvaluation(
 
   // Each payment the guest has made so far, oldest first — the installment history the desk
   // shows. Stage tells the story ("2,000 at Set up, 1,500 at Check-in").
-  const installments = inPayments
-    .slice()
-    .sort((a, b) => new Date(a.receivedAt as any).getTime() - new Date(b.receivedAt as any).getTime())
-    .map((p) => ({
-      id: p.id,
-      amount: Number(toDecimal(p.amount as unknown as string).toFixed(2)),
-      receivedAt: p.receivedAt instanceof Date ? p.receivedAt.toISOString() : String(p.receivedAt),
-      stage: (p as any).stage ?? null,
-      notes: (p as any).notes ?? null,
-    }));
+  const installments = paymentsStillHeld(inPayments, refundedDec.add(refundWaitingDec)).map(({ row: p, remaining }) => ({
+    id: p.id,
+    amount: Number(remaining.toFixed(2)),
+    receivedAt: p.receivedAt instanceof Date ? p.receivedAt.toISOString() : String(p.receivedAt),
+    stage: (p as any).stage ?? null,
+    notes: (p as any).notes ?? null,
+  }));
 
   // Window facts. `active` = the clock is running (bill went out, money still due, deadline
   // ahead); `overdue` = check-in date passed with the advance still unmet. A satisfied
@@ -223,6 +226,8 @@ async function computeAdvancePaymentEvaluation(
   return {
     satisfied,
     totalReceived: Number(totalReceivedDec.toFixed(2)),
+    refundWaiting: Number(refundWaitingDec.toFixed(2)),
+    refunded: Number(refundedDec.toFixed(2)),
     requiredAmount: Number(requiredAmountDec.toFixed(2)),
     shortfall: Number(shortfallDec.toFixed(2)),
     // Money alone (credit extension NOT counted) — what the settlement surfaces + W38 check.
@@ -440,6 +445,20 @@ export async function carryAdvancePinsAcrossNewPass(
   const newSegment = entry?.segments[0];
   if (!entry || !folio || !newSegment) return none;
   if (newSegment.startedAt.getTime() <= input.priorSegmentStartedAt.getTime()) return none;
+
+  // The money stays with the booking too, so the desk is not asked about it at Set up (2026-11-05).
+  await prisma.folio.update({
+    where: { id: folio.id },
+    data: {
+      earlierAdvanceAnswer: {
+        segmentId: newSegment.id,
+        answer: "CARRY",
+        cause: input.cause,
+        answeredAt: new Date().toISOString(),
+        answeredBy: input.actor.actorId,
+      },
+    },
+  });
 
   const requirementInForce = resolveOperatorAdvanceRequirement(folio, input.priorSegmentStartedAt) != null;
   const requirementNow = resolveOperatorAdvanceRequirement(folio, newSegment.startedAt) != null;

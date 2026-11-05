@@ -1,3 +1,4 @@
+import { enforceEarlierAdvanceAnswered } from "../../lib/refund-money.js";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { guestDisplayName } from "../../lib/guest-display-name.js";
 import { CommissionDueStatus, EntryStatus, FolioLineType, FolioState, InvoiceState, InvoiceType, Stage } from "@prisma/client";
@@ -201,6 +202,9 @@ async function dispatchInvoiceInner(
   const invoice = await prisma.invoice.findUnique({ where: { id: invoiceId } });
   if (!invoice) throw new NotFoundError("Invoice");
   if (invoice.state !== InvoiceState.DRAFT) return invoice;
+  // A proforma prints the advance, so it does not go out before the desk says what happens to the
+  // money paid before this booking was sent back (2026-11-05).
+  if (invoice.invoiceType === "PROFORMA") await enforceEarlierAdvanceAnswered(prisma, invoice.entryId, invoice.folioId);
   const now = new Date();
   const recipient = await resolveInvoiceRecipient(prisma, invoice.entryId, input?.dispatchedTo ?? invoice.dispatchedTo);
   const result = await prisma.$transaction(async (tx) => {

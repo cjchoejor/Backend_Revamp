@@ -19,7 +19,9 @@ export function enforceCommittedHoldReleaseOnReEntryAuthority(input: { actorLeve
  * side finds out only when someone tells them. That belongs with an actor who can weigh both
  * guests, not with the operator who needs the room.
  */
-export function enforceCommittedHoldReleaseAuthority(input: { actorLevel: "L1" | "L2" | "L3" | "L4" }) {
+export function enforceCommittedHoldReleaseAuthority(input: { actorLevel: "L1" | "L2" | "L3" | "L4"; timeEnded?: boolean }) {
   if (input.actorLevel === "L3" || input.actorLevel === "L4") return;
+  // Once a block's time has ended the decision is the FOM's as well as the GM's (2026-11-05).
+  if (input.actorLevel === "L2" && input.timeEnded) return;
   throw new PolicyGateBlockedError("AUTH_REQUIRED_L3", "GM authority required to release another booking's committed hold");
 }

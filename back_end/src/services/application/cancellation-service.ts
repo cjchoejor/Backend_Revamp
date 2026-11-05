@@ -1,3 +1,4 @@
+import { closeWaitingRefundsOnCancellationTx } from "../../lib/refund-money.js";
 import type { PrismaClient } from "@prisma/client";
 import { releaseRoomClaimIfOwnedTx } from "../../lib/room-claim-state.js";
 import { ActorLevel, EntryStatus, FolioLineType, FolioState, HoldState, InventoryClaimState, Stage } from "@prisma/client";
@@ -402,6 +403,9 @@ export async function cancelEntryAtS3(
       });
     }
 
+    // Its own refund, just below, covers money that was waiting to go back (2026-11-05).
+    await closeWaitingRefundsOnCancellationTx(tx, { entryId, actorId, actorLevel: traceActorLevel, now, why: "The booking was cancelled, and the cancellation deals with this money." });
+
     // 2. Refund obligation (only if net refund > 0).
     if (netRefund > 0) {
       const refundId = await allocateReadableId(tx, "PAYMENT" as const, now);
@@ -648,6 +652,9 @@ export async function cancelEntryAtS5(
         },
       });
     }
+
+    // Its own refund, just below, covers money that was waiting to go back (2026-11-05).
+    await closeWaitingRefundsOnCancellationTx(tx, { entryId, actorId, actorLevel: traceActorLevel, now, why: "The booking was cancelled, and the cancellation deals with this money." });
 
     if (netRefund > 0) {
       const refundId = await allocateReadableId(tx, "PAYMENT" as const, now);

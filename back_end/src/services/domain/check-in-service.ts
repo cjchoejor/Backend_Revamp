@@ -1,3 +1,4 @@
+import { enforceNoRefundWaiting } from "../../lib/refund-money.js";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { findEntryIdentityVerification } from "../../lib/identity-verification-path.js";
 import { HandoffState, HandoffType, InventoryClaimState, Stage } from "@prisma/client";
@@ -94,6 +95,8 @@ export async function completeCheckInToS7(
   enforceAdvancePaymentReconciledBeforeCheckInCompletion({
     advancePaymentReconciliationComplete: !!entry.folio?.advancePaymentReconciliationComplete,
   });
+  // The bill goes live here, and every figure on it must then be real money (2026-11-05).
+  if (entry.folio) await enforceNoRefundWaiting(prisma, entry.folio.id);
   // The rest of the bill, promised at check-in (2026-10-29): paid, or the FOM's word on later.
   const balance = await readCheckInPayment(prisma, entryId);
   enforceCheckInBalancePaidOrDeferred({

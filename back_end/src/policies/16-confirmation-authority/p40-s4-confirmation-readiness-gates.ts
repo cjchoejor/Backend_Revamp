@@ -129,6 +129,7 @@ export function enforceCommittedHoldReadyForS4Confirmation(input: {
         state: HoldState;
         roomId: string | null;
         perNightBreakdown?: unknown;
+        expiresAt?: Date | null;
       }
     | null
     | undefined;
@@ -136,6 +137,14 @@ export function enforceCommittedHoldReadyForS4Confirmation(input: {
   if (!input.hold) throw new StageGateBlockedError("CommittedHold required before confirmation", "MISSING_COMMITTED_HOLD");
   if (input.hold.state !== HoldState.PLACED) {
     throw new StageGateBlockedError("CommittedHold must be PLACED to confirm", "HOLD_NOT_PLACED");
+  }
+  // The rooms are still held past the block's time, but the FOM or GM decides what happens next
+  // (2026-11-05): cancel the booking, release the rooms, or give it a new time.
+  if (input.hold.expiresAt && input.hold.expiresAt.getTime() <= Date.now()) {
+    throw new StageGateBlockedError(
+      "This booking's block time has ended. The FOM or GM talks to the guest, then cancels the booking, releases the rooms or sets a new block time.",
+      "BLOCK_TIME_ENDED",
+    );
   }
   // Multi-room accept: either legacy roomId OR at least one room in the per-night snapshot.
   const hasRoomId = typeof input.hold.roomId === "string" && input.hold.roomId.length > 0;

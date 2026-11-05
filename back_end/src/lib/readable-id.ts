@@ -37,6 +37,8 @@ export const READABLE_ID_DEFAULT_PREFIXES = {
   ROOM_MOVE: "MOVE",
   // The confirmation voucher's own number (2026-10-13) - one per confirmation, on Reservation.
   VOUCHER: "VOU",
+  // Money that has to go back to a guest (2026-11-05).
+  REFUND: "RFD",
   // Phase B — travel agents, corporate accounts, rate cards
   TRAVEL_AGENT: "TA",
   CORPORATE_ACCOUNT: "CORP",
@@ -75,6 +77,7 @@ export const READABLE_ID_ENTITIES: ReadableIdEntity[] = [
   "EARLY_DEPARTURE",
   "ROOM_MOVE",
   "VOUCHER",
+  "REFUND",
   // Phase B
   "TRAVEL_AGENT",
   "CORPORATE_ACCOUNT",

@@ -299,6 +299,26 @@ export const recordFolioRefundRequestSchema = z.object({
 });
 export type RecordFolioRefundRequestDto = z.infer<typeof recordFolioRefundRequestSchema>;
 
+/** An advance from an earlier pass: on the new proforma, or refunded (2026-11-05). */
+export const answerEarlierAdvanceRequestSchema = z.object({
+  answer: z.enum(["CARRY", "REFUND"]),
+  note: z.string().trim().max(1000).nullable().optional(),
+});
+
+/** Money going back, as the FOM or GM made it. Bank details are required by the service unless cash. */
+export const recordRefundRequestSchema = z.object({
+  method: z.enum(["CASH", "BANK_TRANSFER", "CARD", "MOBILE_PAYMENT"]),
+  amount: z.number().positive(),
+  bankName: z.string().trim().max(120).nullable().optional(),
+  accountNumber: z.string().trim().max(60).nullable().optional(),
+  journalNumber: z.string().trim().max(60).nullable().optional(),
+  note: z.string().trim().max(1000).nullable().optional(),
+});
+
+export const keepRefundRequestSchema = z.object({
+  reason: z.string().trim().min(1, "Say why the money is not going back").max(1000),
+});
+
 export const dispatchInvoiceRequestSchema = z.object({
   dispatchedTo: z.string().optional(),
   /** A proforma sent with every night named, instead of a run as its first and last (2026-10-30). */
