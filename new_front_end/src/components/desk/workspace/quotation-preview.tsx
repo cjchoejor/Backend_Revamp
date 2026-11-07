@@ -10,6 +10,7 @@ import {
   fetchQuotationPreviewHtml,
   type FolioDocumentKind,
 } from "@/lib/api/documents";
+import { fetchTripPaperPreviewHtml } from "@/lib/api/trip-papers";
 import { PdfPages } from "./pdf-pages";
 
 /**
@@ -274,6 +275,21 @@ export function QuotationPreview({
       queryKey={["quotation-preview", quotationId, hidePrices ? "no-prices" : "priced", nightsEach ? "each" : "short"] as const}
       fetchHtml={() => fetchQuotationPreviewHtml(session!, quotationId, { hidePrices, nightsEach })}
       title={hidePrices ? "Quotation · without prices" : "Quotation document"}
+    />
+  );
+}
+
+/**
+ * The trip's quotation (2026-11-07): one paper made of the stays' own quotations, with its own
+ * number and version. Always composed fresh — it is drawn from the stays' quotations as they stand.
+ */
+export function TripQuotationPreview({ tripPaperId, hidePrices }: { tripPaperId: string; hidePrices?: boolean }) {
+  const { session } = useSession();
+  return (
+    <DocumentPreviewFrame
+      queryKey={["trip-paper-preview", tripPaperId, hidePrices ? "no-prices" : "priced"] as const}
+      fetchHtml={() => fetchTripPaperPreviewHtml(session!, tripPaperId, { hidePrices })}
+      title={hidePrices ? "The trip's quotation · without prices" : "The trip's quotation"}
     />
   );
 }

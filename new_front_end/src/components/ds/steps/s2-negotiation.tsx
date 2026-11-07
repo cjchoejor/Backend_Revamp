@@ -47,6 +47,7 @@ import type { ChangeBookingItem } from "./kit";
 import { CompetingClaimsCard, LEVEL_WORD, passesOf, roomsHeldWord, useCompetingClaims, useRoomNumbers, useRoomTypeNames } from "./s2-shared";
 import { useInvoiceRecipient } from "@/hooks/use-invoice-recipient";
 import { billNo, proformaBaseNo, quoteNo } from "@/lib/ds/papers";
+import { TripQuotationCard, useTripQuotation } from "./s2-trip-quotation";
 
 /* ------------------------------------------------------------------ vocabulary */
 
@@ -882,6 +883,9 @@ export function S2Negotiation({
         </StepCard>
       ) : null}
 
+      {/* A trip of several stays has one quotation of its own as well (2026-11-07, operator). */}
+      <TripQuotationCard entry={entry} editable={editable} />
+
 
       {/* "The quote" card was removed (2026-10-12, operator: "keep the internal note in the pop up
           so that there is only one send button"). The quotation's own Send… is the send; the
@@ -1071,6 +1075,8 @@ function QuotationCard({
   const [answerOpen, setAnswerOpen] = useState(false);
   const replyNotAsked = latestDispatched(useCommunications(entry.id).data?.items, "QUOTATION")?.acknowledgementStatus === "NOT_ASKED";
   const replyAsked = useReplyAsked(entry.id, "QUOTATION");
+  // On a trip of several stays the trip's quotation is the guest's paper; this stay's own Send steps back.
+  const onTrip = (useTripQuotation(entry).data?.stays.length ?? 0) > 1;
   const [how, setHow] = useState<AnswerHow | null>(null);
   const [said, setSaid] = useState("");
   const [closeLoopOpen, setCloseLoopOpen] = useState(false);
@@ -1153,7 +1159,7 @@ function QuotationCard({
           </Button>
           <Live>
             <Button
-              kind={editable && q.state === "DRAFT" ? "primary" : "quiet"}
+              kind={editable && q.state === "DRAFT" ? (onTrip ? "secondary" : "primary") : "quiet"}
               compact
               icon="send"
               state={editable && q.state === "DRAFT" ? "default" : "inert"}

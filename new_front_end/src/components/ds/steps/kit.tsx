@@ -26,8 +26,10 @@ import {
   PaperFill,
   ProformaPreview,
   QuotationPreview,
+  TripQuotationPreview,
   VoucherPreview,
 } from "@/components/desk/workspace/quotation-preview";
+import { openTripPaperPdf } from "@/lib/api/trip-papers";
 import { readRefusal } from "@/lib/ds/translate";
 import { fmtDateTime, fmtStamp } from "@/lib/ds/format";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
@@ -2427,6 +2429,7 @@ export function ReasonDialog({
 
 export type PaperRef =
   | { kind: "quotation"; id: string; frozen?: boolean; label: string }
+  | { kind: "trip"; id: string; label: string }
   | { kind: "invoice"; id: string; frozen?: boolean; label: string; notice?: string; issued?: boolean; invoiceType?: string }
   | { kind: "voucher"; reservationId: string; label: string }
   | { kind: "cancellation"; entryId: string; label: string }
@@ -2531,6 +2534,8 @@ function PaperBody({
       <PaperFill.Provider value={mode}>
         {paper.kind === "quotation" ? (
           <QuotationPreview quotationId={paper.id} frozenPdf={paper.frozen} hidePrices={noPrices} nightsEach={nightsEach} />
+        ) : paper.kind === "trip" ? (
+          <TripQuotationPreview tripPaperId={paper.id} hidePrices={noPrices} />
         ) : paper.kind === "invoice" ? (
           paper.issued ? (
             <IssuedInvoicePreview invoiceId={paper.id} />
@@ -2584,7 +2589,7 @@ export function PaperDrawer({ paper, onClose }: { paper: PaperRef | null; onClos
     setNightsEach(false);
   }, [paperKey]);
   // The paper, so the nights choice can say when it changes nothing.
-  const nightsOf: PaperOf | null = !paper
+  const nightsOf: PaperOf | null = !paper || paper.kind === "trip"
     ? null
     : paper.kind === "quotation"
       ? { quotationId: paper.id }
@@ -2613,6 +2618,8 @@ export function PaperDrawer({ paper, onClose }: { paper: PaperRef | null; onClos
     const run =
       paper.kind === "quotation"
         ? openQuotationPdf(session, paper.id, { hidePrices: noPrices, nightsEach: each })
+        : paper.kind === "trip"
+          ? openTripPaperPdf(session, paper.id, { hidePrices: noPrices })
         : paper.kind === "invoice"
           ? openInvoicePdf(session, paper.id, { nightsEach: each })
           : paper.kind === "voucher"
@@ -2645,9 +2652,9 @@ export function PaperDrawer({ paper, onClose }: { paper: PaperRef | null; onClos
           </div>
           {/* The paper's faces, as choice buttons the eye finds (2026-10-30, operator: "even in
               preview it should have that option, and make those buttons prominent"). */}
-          {paper.kind === "quotation" || hasNights ? (
+          {paper.kind === "quotation" || paper.kind === "trip" || hasNights ? (
             <div className="paper-faces">
-              {paper.kind === "quotation" ? <PricesChoice hidden={noPrices} onChange={setNoPrices} /> : null}
+              {paper.kind === "quotation" || paper.kind === "trip" ? <PricesChoice hidden={noPrices} onChange={setNoPrices} /> : null}
               {hasNights ? <NightsChoice each={nightsEach} onChange={setNightsEach} of={nightsOf} /> : null}
             </div>
           ) : null}

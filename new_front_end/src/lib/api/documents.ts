@@ -19,7 +19,7 @@ export function authHeaders(session: Session): Record<string, string> {
 }
 
 /** Fetch a PDF endpoint as a blob and open it in a new browser tab. Throws on non-2xx. */
-async function openPdf(session: Session, path: string): Promise<void> {
+export async function openPdf(session: Session, path: string): Promise<void> {
   const res = await fetch(path, { headers: authHeaders(session), credentials: "same-origin" });
   if (!res.ok) {
     let message = `Could not load PDF (HTTP ${res.status})`;

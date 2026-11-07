@@ -2206,3 +2206,11 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .ws-top .move-dock button.move-first:not(.desk-root *) { cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
 .ds .ws-top .move-dock button.move-first:hover:not(.desk-root *) { border-color: var(--ink-2); filter: brightness(0.97); }
 .ds .ws-top .move-dock .move-waiting .btn:not(.desk-root *) { flex: none; }
+
+/* The trip's quotation: its total is the figure the card exists for (2026-11-07, "UIappeal"). */
+.ds .table tr.trip-total td {
+  font-weight: 700;
+  font-size: 15px;
+  background: var(--accent-soft, #e7eef8);
+  border-top: 1px solid var(--line-2);
+}
