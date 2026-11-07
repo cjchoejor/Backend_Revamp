@@ -3,6 +3,7 @@ import { prisma } from "../../db.js";
 import {
   queryAvailabilityByEntryRequestSchema,
   priceRoomPickRequestSchema,
+  priceTripPicksRequestSchema,
   houseByTypeRequestSchema,
   sealByTypeRequestSchema,
   planByTypeRequestSchema,
@@ -13,7 +14,7 @@ import {
 import { requireActorLevel } from "../../middleware/auth.js";
 import { validateBody } from "../../middleware/validate-body.js";
 import * as s1AvailabilityService from "../../services/domain/s1-availability-service.js";
-import { priceRoomPick } from "../../services/domain/pick-pricing-service.js";
+import { priceRoomPick, priceTripPicks } from "../../services/domain/pick-pricing-service.js";
 import { releaseRoomBlock } from "../../services/domain/room-block-release-service.js";
 import { buildRoomChart } from "../../services/domain/room-chart-service.js";
 import { afterStayChanged } from "../../services/domain/trip-follow-service.js";
@@ -196,6 +197,24 @@ availabilityRouter.post(
     try {
       res.setHeader("Cache-Control", "no-store");
       res.json(await priceRoomPick(prisma, req.params.id, req.body));
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+/**
+ * A trip's stays at Inquiry priced together (2026-11-07): each stay's own bill and the trip's sums.
+ * A pure read, like the stay's own bill.
+ */
+availabilityRouter.post(
+  "/entries/:id/availability/price-pick/trip",
+  requireActorLevel("L1"),
+  validateBody(priceTripPicksRequestSchema),
+  async (req, res, next) => {
+    try {
+      res.setHeader("Cache-Control", "no-store");
+      res.json(await priceTripPicks(prisma, req.params.id, req.body));
     } catch (e) {
       next(e);
     }
