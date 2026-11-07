@@ -45,6 +45,7 @@ import {
   unparkEntry,
   type TimerRecordSummary,
   replySettled,
+  moveTripToNegotiation,
 } from "@/lib/api/entries";
 import { closeEntryAtS9 } from "@/lib/api/post-stay";
 import { useClosureReadiness } from "@/hooks/use-closure-readiness";
@@ -113,6 +114,7 @@ import { HeaderClock, SideTimer, StepDwell } from "@/components/ds/workspace/sid
 import { FoldingSide, useSideFolded } from "@/components/ds/workspace/side-panel";
 import { S1Inquiry } from "@/components/ds/steps/s1-inquiry";
 import { InquirySummaryDialog } from "@/components/ds/steps/s1-summary";
+import { useTripAtInquiry } from "@/components/ds/steps/s1-trip-shared";
 import { StepMoved, type StepMovedNote } from "@/components/ds/workspace/step-moved";
 import { StayDates } from "@/components/ds/stay-dates";
 import { S2Negotiation } from "@/components/ds/steps/s2-negotiation";
@@ -328,6 +330,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     refetchInterval: 30_000,
   });
   const entry = entryQuery.data ?? null;
+  // A trip at Inquiry: its other stays are worked on this page and move with it (2026-11-07).
+  const tripAtInquiry = useTripAtInquiry(entry);
   // Another screen moved this booking on (client.ts raises the event on a stale refusal): re-read it.
   useEffect(() => {
     const onStale = () => refreshEntry();
@@ -674,6 +678,21 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
       setSelected(n);
       // A move announced in the middle of the screen needs no toast as well.
       if (!vars.announce) toast.success(`Moved to ${STEP_NAMES[n - 1]}.`);
+    },
+    onError: fail("Couldn't move forward"),
+  });
+  /** Every stay of a trip at Inquiry to Negotiation, this one first (2026-11-07). */
+  const tripMoveMutation = useMutation({
+    mutationFn: () => moveTripToNegotiation(session!, entry!.id, entry!.version),
+    onSuccess: (r) => {
+      for (const id of r.moved) void queryClient.invalidateQueries({ queryKey: ["entry", id] });
+      refreshEntry();
+      if (r.notMoved.length) {
+        toast.warning(`${plural(r.notMoved.length, "stay")} did not move`, {
+          description: r.notMoved.map((x) => `${x.entryId}: ${x.message}`).join(" · "),
+          duration: 15000,
+        });
+      }
     },
     onError: fail("Couldn't move forward"),
   });
@@ -1052,6 +1071,19 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     </div>
   );
 
+  // A trip at Inquiry: each other stay's own items — its caller is the enquiry's, shared (2026-11-07).
+  const tripInquiryItems: Precondition[] =
+    inquiryStepActive && tripAtInquiry.combined
+      ? tripAtInquiry.loaded
+        ? tripAtInquiry.others.flatMap((o) => {
+            const n = tripAtInquiry.stayNoOf(o.id);
+            return s1Readiness(o)
+              .filter((c) => !c.met && c.card !== "caller")
+              .map((c) => ({ label: tripItemLabel(n, c.label), met: false, card: c.card }));
+          })
+        : [{ label: "Reading the trip's other stays", met: false, card: "house" }]
+      : [];
+
   const preconds0: Precondition[] = sealed
     ? []
     : confirmStepActive
@@ -1059,7 +1091,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
       : setupStepActive
         ? withUnsaved(s3Readiness(entry, { paymentSatisfied, totalReceived, requiredAmount, communications, earlierAdvanceAsked }), unsavedSections)
       : inquiryStepActive
-        ? withUnsaved(s1Readiness(entry), unsavedSections)
+        ? [...withUnsaved(s1Readiness(entry), unsavedSections), ...tripInquiryItems]
         : quoteStepActive
           ? [...s2Readiness(entry), ...negotiationExtras.map((label) => ({ label, met: false, card: "table" }))]
           : arrivalStepActive
@@ -1268,7 +1300,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     );
   } else if (inquiryStepActive) {
     // A section with changes not saved holds the move, as the Negotiation table's do (2026-10-27).
-    const ok = canProgressS1(entry) && !preconds.some((p) => p.unsaved);
+    // On a trip at Inquiry every stay moves together, so every stay's own items hold it (2026-11-07).
+    const ok = canProgressS1(entry) && !preconds.some((p) => p.unsaved) && tripInquiryItems.length === 0;
     moveReady = ok;
     forward = (
       <Button className="go" state={ok ? "default" : "inert"} reason={ok ? undefined : firstNote} onClick={() => setSummaryOpen(true)}>
@@ -1811,10 +1844,26 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
         <InquirySummaryDialog
           entry={entry}
           open={summaryOpen && inquiryStepActive}
-          busy={advanceMutation.isPending}
+          busy={advanceMutation.isPending || tripMoveMutation.isPending}
           onClose={() => setSummaryOpen(false)}
+          alsoMoving={tripAtInquiry.others}
+          stayNoOf={tripAtInquiry.stayNoOf}
           onConfirm={() =>
-            advanceMutation.mutate(
+            tripAtInquiry.combined
+              ? tripMoveMutation.mutate(undefined, {
+                  onSuccess: (r) => {
+                    setSummaryOpen(false);
+                    setSelected(2);
+                    setMoved({
+                      title: "The inquiry is made",
+                      from: "Inquiry",
+                      to: "Negotiation",
+                      who: [name, entry.inquiry?.id ?? entry.id].filter(Boolean).join(" · "),
+                      next: `${plural(r.moved.length, "stay")} at Negotiation — set who sleeps where and price each stay, then make the trip's quotation.`,
+                    });
+                  },
+                })
+              : advanceMutation.mutate(
               { targetStage: "S2", announce: true },
               {
                 onSuccess: () => {
@@ -1959,7 +2008,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                     <span className="refno" title="The enquiry's number">
                       <b>{entry.inquiry?.id ?? "—"}</b>
                     </span>
-                    <StayPicker entry={entry} />
+                    {/* At Inquiry a trip's stays are worked on one page: the enquiry's number alone (2026-11-07). */}
+                    {entry.currentStage === "S1" ? null : <StayPicker entry={entry} />}
                     {entry.guestProfile?.vipTier ? (
                       <Chip tone="accent" tier>
                         VIP
@@ -2580,4 +2630,10 @@ function runningClocks(entry: EntryDetail, timers: TimerRecordSummary[], promise
     .slice(0, 8);
 }
 
-
+/** A trip's other stay's own item at Inquiry, named with its stay. */
+function tripItemLabel(n: number, label: string): string {
+  if (label === "Preferred room selected") return `Stay ${n}'s rooms chosen`;
+  if (label === "Availability searched") return `Stay ${n} · the house asked`;
+  if (label === "The guest staying, named") return `Stay ${n} · the guest named`;
+  return `Stay ${n} · ${label.charAt(0).toLowerCase()}${label.slice(1)}`;
+}

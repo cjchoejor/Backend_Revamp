@@ -53,7 +53,12 @@ export function updateEntryCaller(session: Session, entryId: string, body: Calle
  * `arrivingIsGuest`: the guest named is the one arriving — on a direct booking "who is arriving"
  * is filled from them (2026-10-28).
  */
-type GuestNamingOptions = { keepNewName?: boolean; arrivingIsGuest?: boolean };
+type GuestNamingOptions = {
+  keepNewName?: boolean;
+  arrivingIsGuest?: boolean;
+  /** The same guest on the trip's other stays still at Inquiry (2026-11-07). */
+  alsoTripStays?: boolean;
+};
 
 export type SetGuestBody =
   | ({ mode: "CALLER"; nationality?: string | null } & GuestNamingOptions)
@@ -72,6 +77,8 @@ export function setEntryGuest(session: Session, entryId: string, body: SetGuestB
     /** A phone or email typed that differs from the record's — kept as it was, not overwritten. */
     contactKept?: string[];
     arrivingSet?: boolean;
+    /** Each other stay of the trip at Inquiry, named with the same guest or why not. */
+    tripStays?: Array<{ entryId: string; named: boolean; message: string | null }>;
   }>(
     `/api/entries/${entryId}/guest`,
     { method: "POST", session, body },

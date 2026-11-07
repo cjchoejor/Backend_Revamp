@@ -2214,3 +2214,36 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
   background: var(--accent-soft, #e7eef8);
   border-top: 1px solid var(--line-2);
 }
+
+/* A trip at Inquiry (2026-11-07, operator: "show column for both stays … stage one can be done
+   together here"). The house: each stay's columns side by side, the type names once, captions of one
+   height so the rows line up, a divider between stays. The stay: a row per stay. */
+.ds .trip-house-cols { display: flex; align-items: flex-start; overflow-x: auto; padding-bottom: 4px; }
+.ds .trip-house-col { flex: none; }
+.ds .trip-house-col + .trip-house-col { border-left: 2px solid var(--line-2); margin-left: 14px; padding-left: 14px; }
+.ds .trip-house-col .bt-scroll { overflow: visible; }
+.ds .trip-house .bt-type { white-space: nowrap; }
+.ds .trip-house .bt-cap { display: flex; flex-direction: column; gap: 6px; min-height: 64px; margin-bottom: 8px; }
+.ds .trip-house.has-multi .bt-cap { min-height: 108px; }
+.ds .trip-house .bt-cap-line { display: flex; align-items: baseline; gap: 8px; font-size: 14px; }
+.ds .trip-house .bt-cap-line b { font-size: 15px; }
+.ds .trip-house .bt-refusals, .ds .trip-house .bt-moves, .ds .trip-house .bt-fixed { max-width: 420px; }
+.ds .trip-state { display: inline-flex; flex-wrap: wrap; gap: 6px 14px; font-weight: 700; }
+.ds .trip-stay-head { display: flex; align-items: center; gap: 8px; margin: 4px 0 8px; }
+.ds .trip-stay-head b { font-size: 15px; }
+.ds .trip-stay-row { border-top: 1px solid var(--line-2); margin-top: 16px; padding-top: 12px; }
+.ds .trip-pop-h { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin: 6px 0 10px; font-size: 15px; }
+.ds .trip-pop-sec { border-top: 2px solid var(--line-2); margin-top: 18px; padding-top: 12px; }
+
+/* A trip's stays in one rooms-by-night table (2026-11-07, operator: "keep the first reserved dates for
+   both stays in one table"): a band per stay over its own nights, the dates sticking right under it,
+   and a firm line where the next stay's nights begin. */
+.ds .desk-root .rst.grouped thead tr.rst-grouprow th { top: 0; text-transform: none; letter-spacing: 0; font-size: 14px; font-weight: 700; padding: 7px 10px; background: var(--cream-2); vertical-align: middle; }
+.ds .desk-root .rst.grouped thead tr.rst-daterow th { top: var(--rst-gh, 42px); }
+.ds .desk-root .rst th.rst-group { text-align: left; }
+.ds .desk-root .rst .rst-gl { position: sticky; display: inline-flex; align-items: center; gap: 10px; white-space: nowrap; }
+.ds .desk-root .rst .rst-gstart { border-left: 3px solid var(--ink-3); }
+/* The full view over the work column's pop-up: above its blurred scrim, under a dialog opened from it. */
+.ds .fullscreen-layer.over-pop { z-index: 85; }
+.ds .trip-bynum-state { display: inline-flex; flex-wrap: wrap; gap: 6px 16px; font-weight: 700; }
+.ds .trip-fold-stay { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; margin-left: 14px; padding-left: 14px; border-left: 2px solid var(--line-2); }

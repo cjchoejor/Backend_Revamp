@@ -12,7 +12,7 @@
  * arriving, and any notes.
  */
 import { StayDates } from "@/components/ds/stay-dates";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -40,7 +40,9 @@ import { releaseSpeculativeHold } from "@/lib/api/quotations";
 import {
   RoomStatusTable,
   roomStatusRows,
+  type NightGroup,
   type RoomStatusRow,
+  type SelectAllOutcome,
 } from "@/components/desk/workspace/room-status-table";
 import { fmtDay, money, plural } from "@/lib/ds/format";
 import { currentPassConfigs, pickFitsStay } from "@/lib/desk/workspace";
@@ -68,15 +70,17 @@ import {
   useOpenFileTab,
   useFlowUnsaved,
   WorkPopup,
+  Overlay,
   anchorFor,
   revealCard,
 } from "./kit";
 import { AddReturnStay, TripStays } from "@/components/ds/workspace/return-stay";
 import { enumerateNights, useRoomSelection } from "./use-room-selection";
+import { STAY_SAVED_EVENT, useTripAtInquiry, type StaySaved } from "./s1-trip-shared";
 import { RoomCountField } from "./new-inquiry-parts";
 import { TheCaller, WrapUp } from "./s1-caller";
 import { cleanPicks, usePickPricing, type BillNight } from "./s1-bill";
-import { RoomsByType, savedBookingRooms, type TypeDraft } from "./s1-by-type";
+import { RoomsByType, TripHouse, savedBookingRooms, type TypeDraft } from "./s1-by-type";
 import { useBookingRooms } from "@/hooks/use-booking-rooms";
 import { usePublishPriceDraft } from "@/lib/ds/stay-price";
 import { Help, HelpHere } from "@/components/ds/help";
@@ -190,17 +194,12 @@ export function S1Inquiry({
 
 type Catalog = Awaited<ReturnType<typeof listRooms>>["items"];
 
-function TheStay({
-  entry,
-  editable,
-  catalog,
-}: {
-  entry: EntryDetail;
-  editable: boolean;
-  catalog: Catalog;
-}) {
+/**
+ * The stay's fields and their state, for any stay — this booking's and, on a trip at Inquiry, each
+ * other stay's own row (2026-11-07, operator: a row per stay in The stay).
+ */
+function useStayForm(entry: EntryDetail, catalog: Catalog) {
   const { session } = useSession();
-  const refresh = useRefreshEntry(entry.id);
   const policy = useQuery({
     queryKey: ["lookup", "child-policy"],
     queryFn: () => getChildPolicy(session!),
@@ -300,7 +299,6 @@ function TheStay({
     String(childN) !== saved.children ||
     ages.join(",") !== saved.ages.join(",") ||
     JSON.stringify(bedMap) !== JSON.stringify(savedBedMap);
-  useFlowUnsaved("stay", editable && dirty, "Changes to the stay saved");
 
   const writeStay = () =>
     updateEntryIntake(session!, entry.id, {
@@ -316,17 +314,284 @@ function TheStay({
         : null,
       expectedVersion: entry.version,
     });
-  // The house is asked again by itself (2026-10-27, operator: "when I make edits to the stay
-  // and click Done, can it ask the house directly, so we can remove the Ask again button").
-  // The saved figures ride on the event, since the entry on screen is still the old one.
-  const stayWasSaved = () => {
-    refresh();
+  const invalid = !f.checkIn ? "put in the check-in date" : childN > 0 && !agesOk ? "put in every child's age" : null;
+  /** The house is asked again by itself for the figures just saved — the entry on screen is still the old one. */
+  const announceSaved = () => {
     if (f.checkIn && checkOut)
       window.dispatchEvent(
         new CustomEvent(STAY_SAVED_EVENT, {
           detail: { entryId: entry.id, checkInDate: f.checkIn, checkOutDate: checkOut, guestCount: adultsN + childN },
         }),
       );
+  };
+  return {
+    f,
+    set,
+    reset: () => setF(seed()),
+    checkOut,
+    childN,
+    ages,
+    agesNum,
+    adultsN,
+    env,
+    roomsN,
+    bedTypes,
+    saved,
+    savedBedMap,
+    dirty,
+    writeStay,
+    announceSaved,
+    invalid,
+    cp: policy.data ?? null,
+  };
+}
+type StayForm = ReturnType<typeof useStayForm>;
+
+/** The stay's fields: Check-in | Nights | Check-out, Adults | Children | Rooms, ages, beds asked. */
+function StayFields({ form, ro }: { form: StayForm; ro: boolean }) {
+  const { f, set, checkOut, childN, ages, agesNum, env, roomsN, bedTypes, cp } = form;
+  const young = cp?.ageBands.youngChildMaxAge ?? 5;
+  const childMax = cp?.ageBands.childMaxAge ?? 10;
+  const minAdult = cp?.unaccompaniedMinor.minimumAge ?? 18;
+  return (
+    <div className="form3">
+      <div className="field">
+        <label>Check-in</label>
+        <DateInput
+          className="input"
+          value={f.checkIn}
+          readOnly={ro}
+          onChange={(e) => set({ checkIn: e.target.value })}
+        />
+      </div>
+      {/* The nights sit between the two dates, as on the boss's mockup (2026-10-10): the
+          check-out follows the check-in and the nights, and a picked check-out sets the nights. */}
+      <div className="field">
+        <label>Nights</label>
+        <input
+          className="input"
+          inputMode="numeric"
+          value={f.nights}
+          readOnly={ro}
+          onChange={(e) => set({ nights: e.target.value.replace(/\D/g, "") })}
+        />
+      </div>
+      <div className="field">
+        <label>Check-out</label>
+        <DateInput
+          className="input"
+          value={checkOut}
+          min={f.checkIn || undefined}
+          readOnly={ro}
+          onChange={(e) => {
+            const n = enumerateNights(f.checkIn, e.target.value).length;
+            if (n >= 1) set({ nights: String(n) });
+          }}
+        />
+      </div>
+      <div className="field">
+        <label>Adults</label>
+        <input
+          className="input"
+          inputMode="numeric"
+          value={f.adults}
+          readOnly={ro}
+          onChange={(e) => set({ adults: e.target.value.replace(/\D/g, "") })}
+        />
+      </div>
+      <div className="field">
+        <label>Children</label>
+        <input
+          className="input"
+          inputMode="numeric"
+          value={f.children}
+          readOnly={ro}
+          onChange={(e) =>
+            set({ children: e.target.value.replace(/\D/g, "") })
+          }
+        />
+      </div>
+      <RoomCountField
+        env={env}
+        rooms={roomsN}
+        disabled={ro}
+        adultFrom={childMax + 1}
+        onChange={(n) => set({ rooms: String(n) })}
+      >
+        {env && (env.exceedsHotelCapacity || roomsN < env.allowedRoomCounts.min) ? (
+          <span className="hint warn-ink">
+            {env.exceedsHotelCapacity
+              ? `${plural(env.chargeableOccupants, "chargeable guest")} — more than the hotel can sleep`
+              : `at least ${plural(env.allowedRoomCounts.min, "room")} for ${plural(env.chargeableOccupants, "chargeable guest")}`}
+          </span>
+        ) : null}
+      </RoomCountField>
+      {childN > 0 ? (
+        <div className="wide field">
+          <label>
+            Their age{childN === 1 ? "" : "s"}
+            <Help label="About children's ages">
+              The age decides the bed and the rate: under {young + 1} free, {young + 1}–{childMax} at the child rate,{" "}
+              {childMax + 1}–{minAdult - 1} charged as adults.
+            </Help>
+          </label>
+          <div className="row-acts">
+            {ages.map((a, i) => (
+              <input
+                key={i}
+                className="input narrow"
+                inputMode="numeric"
+                placeholder={`#${i + 1}`}
+                value={a}
+                readOnly={ro}
+                onChange={(e) => {
+                  const next = [...ages];
+                  next[i] = e.target.value.replace(/\D/g, "");
+                  set({ ages: next });
+                }}
+              />
+            ))}
+          </div>
+          {agesNum.some((n) => n > childMax) ? (
+            <span className="hint warn-ink">
+              {ages
+                .map((x, i) => (Number(x) > childMax ? `Child ${i + 1}` : null))
+                .filter(Boolean)
+                .join(", ")}{" "}
+              at the adult rate
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+      {bedTypes.length ? (
+        <div className="wide field">
+          <label>
+            Beds asked for · optional
+            <Help label="About the beds asked for">
+              A tally — which room is which is settled on the table at Negotiation. Here the house secures enough rooms that can take them.
+            </Help>
+          </label>
+          <div className="row-acts">
+            {bedTypes.map((t) => (
+              <span key={t} className="chip count-in">
+                {BED_WORD[t] ?? words(t)}
+                <input
+                  className="input"
+                  inputMode="numeric"
+                  placeholder="0"
+                  value={f.beds[t] ?? ""}
+                  readOnly={ro}
+                  onChange={(e) =>
+                    set({
+                      beds: {
+                        ...f.beds,
+                        [t]: e.target.value.replace(/\D/g, ""),
+                      },
+                    })
+                  }
+                />
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Another stay of the trip at Inquiry, as its own row in The stay (2026-11-07, operator: "a row per
+ * stay in The stay"): the same fields, saved on that stay with its own Save; the house is asked again
+ * for it, so its columns in The house follow.
+ */
+function OtherStayRow({
+  entry,
+  stayNo,
+  editable,
+  catalog,
+  onDirty,
+}: {
+  entry: EntryDetail;
+  stayNo: number;
+  editable: boolean;
+  catalog: Catalog;
+  onDirty: (entryId: string, dirty: boolean) => void;
+}) {
+  const form = useStayForm(entry, catalog);
+  const refresh = useRefreshEntry(entry.id);
+  useEffect(() => {
+    onDirty(entry.id, editable && form.dirty);
+    return () => onDirty(entry.id, false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entry.id, editable, form.dirty]);
+  const save = useMutation({
+    mutationFn: form.writeStay,
+    onSuccess: () => {
+      toast.success(`Stay ${stayNo} is updated — the house is asked again for its dates`);
+      refresh();
+      form.announceSaved();
+    },
+    onError: (e) => toastRefusal(e, `Stay ${stayNo} could not be updated`),
+  });
+  return (
+    <div className="trip-stay-row" data-stay={entry.id}>
+      <div className="trip-stay-head">
+        <b>Stay {stayNo}</b>
+        <span className="meta">{entry.id}</span>
+        {editable && form.dirty ? (
+          <>
+            <span className="warn-ink" style={{ marginLeft: "auto" }}>
+              Changed — save it
+            </span>
+            <Button kind="quiet" compact state={save.isPending ? "inert" : "default"} onClick={form.reset}>
+              Undo
+            </Button>
+            <Button
+              className="go"
+              compact
+              state={save.isPending ? "working" : form.invalid ? "inert" : "default"}
+              title={form.invalid ?? undefined}
+              workingLabel="Saving…"
+              onClick={() => save.mutate()}
+            >
+              Save stay {stayNo}
+            </Button>
+          </>
+        ) : null}
+      </div>
+      <StayFields form={form} ro={!editable} />
+    </div>
+  );
+}
+
+function TheStay({
+  entry,
+  editable,
+  catalog,
+}: {
+  entry: EntryDetail;
+  editable: boolean;
+  catalog: Catalog;
+}) {
+  const refresh = useRefreshEntry(entry.id);
+  const form = useStayForm(entry, catalog);
+  const { checkOut, saved, savedBedMap, dirty, writeStay, invalid } = form;
+  // A trip at Inquiry: each other stay as its own row here (2026-11-07, operator ruling).
+  const trip = useTripAtInquiry(entry);
+  const [otherDirty, setOtherDirty] = useState<Record<string, boolean>>({});
+  const onOtherDirty = useCallback(
+    (id: string, d: boolean) => setOtherDirty((p) => (p[id] === d ? p : { ...p, [id]: d })),
+    [],
+  );
+  const anyOtherDirty = Object.values(otherDirty).some(Boolean);
+  useFlowUnsaved("stay", editable && (dirty || anyOtherDirty), dirty ? "Changes to the stay saved" : "Changes to the other stay saved");
+
+  // The house is asked again by itself (2026-10-27, operator: "when I make edits to the stay
+  // and click Done, can it ask the house directly, so we can remove the Ask again button").
+  // The saved figures ride on the event, since the entry on screen is still the old one.
+  const stayWasSaved = () => {
+    refresh();
+    form.announceSaved();
   };
   // A return stay can be added as soon as the stay's fields are in (2026-11-03, operator: "after
   // the user fills in check in, nights, check out, adults, children and room, the add a return stay
@@ -350,11 +615,6 @@ function TheStay({
   });
 
   const { done: flowDone } = useStepFlow();
-  const invalid = !f.checkIn ? "put in the check-in date" : childN > 0 && !agesOk ? "put in every child's age" : null;
-  const cp = policy.data;
-  const young = cp?.ageBands.youngChildMaxAge ?? 5;
-  const childMax = cp?.ageBands.childMaxAge ?? 10;
-  const minAdult = cp?.unaccompaniedMinor.minimumAge ?? 18;
   const ro = !editable;
   const group = entry.groupBillingMode === "GROUP_MASTER";
 
@@ -395,7 +655,7 @@ function TheStay({
               workingLabel: "Saving…",
               note: <span className="warn-ink">Changed — Done saves it</span>,
               extra: (
-                <Button kind="quiet" state={save.isPending ? "inert" : "default"} onClick={() => setF(seed())}>
+                <Button kind="quiet" state={save.isPending ? "inert" : "default"} onClick={form.reset}>
                   Undo
                 </Button>
               ),
@@ -405,6 +665,7 @@ function TheStay({
       }
       summary={
         <>
+          {trip.combined ? <b>Stay {trip.stayNoOf(entry.id)} </b> : null}
           {entry.checkInDate ? <StayDates checkIn={entry.checkInDate} checkOut={entry.checkOutDate} /> : <b>no dates</b>}
           {saved.checkIn ? <> · {plural(parseInt(saved.nights, 10) || 1, "night")}</> : null} ·{" "}
           {plural(parseInt(saved.adults, 10) || 0, "adult")}
@@ -415,151 +676,34 @@ function TheStay({
           {Object.keys(savedBedMap).length
             ? <> · {Object.entries(savedBedMap).map(([t, n]) => `${n} ${BED_WORD[t] ?? words(t)}`).join(" + ")} asked</>
             : null}
+          {/* A trip at Inquiry: every stay on the folded line, so the others are seen without opening it. */}
+          {trip.others.map((o) => (
+            <span key={o.id} className="trip-fold-stay">
+              <b>Stay {trip.stayNoOf(o.id)} </b>
+              {o.checkInDate ? <StayDates checkIn={o.checkInDate} checkOut={o.checkOutDate} /> : <b>no dates</b>} · {plural(o.adultCount ?? 0, "adult")}
+              {(o.childCount ?? 0) > 0 ? <>, {plural(o.childCount ?? 0, "child", "children")}</> : null} · {plural(o.numberOfRooms ?? 1, "room")}
+            </span>
+          ))}
         </>
       }
     >
-      <div className="form3">
-        <div className="field">
-          <label>Check-in</label>
-          <DateInput
-            className="input"
-            value={f.checkIn}
-            readOnly={ro}
-            onChange={(e) => set({ checkIn: e.target.value })}
-          />
+      {trip.combined ? (
+        <div className="trip-stay-head">
+          <b>Stay {trip.stayNoOf(entry.id)}</b>
+          <span className="meta">{entry.id} · this booking</span>
         </div>
-        {/* The nights sit between the two dates, as on the boss's mockup (2026-10-10): the
-            check-out follows the check-in and the nights, and a picked check-out sets the nights. */}
-        <div className="field">
-          <label>Nights</label>
-          <input
-            className="input"
-            inputMode="numeric"
-            value={f.nights}
-            readOnly={ro}
-            onChange={(e) => set({ nights: e.target.value.replace(/\D/g, "") })}
-          />
-        </div>
-        <div className="field">
-          <label>Check-out</label>
-          <DateInput
-            className="input"
-            value={checkOut}
-            min={f.checkIn || undefined}
-            readOnly={ro}
-            onChange={(e) => {
-              const n = enumerateNights(f.checkIn, e.target.value).length;
-              if (n >= 1) set({ nights: String(n) });
-            }}
-          />
-        </div>
-        <div className="field">
-          <label>Adults</label>
-          <input
-            className="input"
-            inputMode="numeric"
-            value={f.adults}
-            readOnly={ro}
-            onChange={(e) => set({ adults: e.target.value.replace(/\D/g, "") })}
-          />
-        </div>
-        <div className="field">
-          <label>Children</label>
-          <input
-            className="input"
-            inputMode="numeric"
-            value={f.children}
-            readOnly={ro}
-            onChange={(e) =>
-              set({ children: e.target.value.replace(/\D/g, "") })
-            }
-          />
-        </div>
-        <RoomCountField
-          env={env}
-          rooms={roomsN}
-          disabled={ro}
-          adultFrom={(policy.data?.ageBands.childMaxAge ?? 10) + 1}
-          onChange={(n) => set({ rooms: String(n) })}
-        >
-          {env && (env.exceedsHotelCapacity || roomsN < env.allowedRoomCounts.min) ? (
-            <span className="hint warn-ink">
-              {env.exceedsHotelCapacity
-                ? `${plural(env.chargeableOccupants, "chargeable guest")} — more than the hotel can sleep`
-                : `at least ${plural(env.allowedRoomCounts.min, "room")} for ${plural(env.chargeableOccupants, "chargeable guest")}`}
-            </span>
-          ) : null}
-        </RoomCountField>
-        {childN > 0 ? (
-          <div className="wide field">
-            <label>
-              Their age{childN === 1 ? "" : "s"}
-              <Help label="About children's ages">
-                The age decides the bed and the rate: under {young + 1} free, {young + 1}–{childMax} at the child rate,{" "}
-                {childMax + 1}–{minAdult - 1} charged as adults.
-              </Help>
-            </label>
-            <div className="row-acts">
-              {ages.map((a, i) => (
-                <input
-                  key={i}
-                  className="input narrow"
-                  inputMode="numeric"
-                  placeholder={`#${i + 1}`}
-                  value={a}
-                  readOnly={ro}
-                  onChange={(e) => {
-                    const next = [...ages];
-                    next[i] = e.target.value.replace(/\D/g, "");
-                    set({ ages: next });
-                  }}
-                />
-              ))}
-            </div>
-            {agesNum.some((n) => n > childMax) ? (
-              <span className="hint warn-ink">
-                {ages
-                  .map((x, i) => (Number(x) > childMax ? `Child ${i + 1}` : null))
-                  .filter(Boolean)
-                  .join(", ")}{" "}
-                at the adult rate
-              </span>
-            ) : null}
-          </div>
-        ) : null}
-        {bedTypes.length ? (
-          <div className="wide field">
-            <label>
-              Beds asked for · optional
-              <Help label="About the beds asked for">
-                A tally — which room is which is settled on the table at Negotiation. Here the house secures enough rooms that can take them.
-              </Help>
-            </label>
-            <div className="row-acts">
-              {bedTypes.map((t) => (
-                <span key={t} className="chip count-in">
-                  {BED_WORD[t] ?? words(t)}
-                  <input
-                    className="input"
-                    inputMode="numeric"
-                    placeholder="0"
-                    value={f.beds[t] ?? ""}
-                    readOnly={ro}
-                    onChange={(e) =>
-                      set({
-                        beds: {
-                          ...f.beds,
-                          [t]: e.target.value.replace(/\D/g, ""),
-                        },
-                      })
-                    }
-                  />
-                </span>
-              ))}
-            </div>
-          </div>
-        ) : null}
-      </div>
+      ) : null}
+      <StayFields form={form} ro={ro} />
+      {trip.others.map((o) => (
+        <OtherStayRow
+          key={o.id}
+          entry={o}
+          stayNo={trip.stayNoOf(o.id)}
+          editable={editable}
+          catalog={catalog}
+          onDirty={onOtherDirty}
+        />
+      ))}
       {(entry.inquiry?.entries ?? []).length > 1 ? (
         <div className="rule-above">
           <span className="meta">
@@ -638,6 +782,8 @@ function TheHouse({
   const flow = useStepFlow();
   const openWay = useOpenOtherWay();
   const isGm = atLeast(session?.actorLevel, "L3");
+  // A trip at Inquiry: every stay's rooms in this one house (2026-11-07, operator ruling).
+  const trip = useTripAtInquiry(entry);
 
   // This pass's searches only — a new pass searches its dates again (2026-09-18).
   const configs = currentPassConfigs(entry);
@@ -873,26 +1019,9 @@ function TheHouse({
   });
 
   const seal = useMutation({
-    mutationFn: (body: {
-      perNight?: Array<{ date: string; roomIds: string[] }>;
-      roomIds?: string[];
-      allIds: string[];
-    }) => {
+    mutationFn: (body: PickBody) => {
       if (!configId) throw new Error("Ask the house first");
-      const deficientIds = body.allIds.filter(
-        (id) => rows.find((r) => r.roomId === id)?.bucket === "deficient",
-      );
-      return selectAvailabilityOption(session!, configId, {
-        roomIds: body.perNight ? undefined : body.roomIds,
-        perNight: body.perNight,
-        deficientAcknowledgements: deficientIds.length
-          ? deficientIds.map((roomId) => ({
-              roomId,
-              acknowledgedAt: new Date().toISOString(),
-              note: "Acknowledged when the rooms were chosen at Inquiry",
-            }))
-          : undefined,
-      });
+      return sealRoomsByNumber(session!, configId, rows, body);
     },
     onSuccess: async () => {
       toast.success("The rooms are chosen and on record");
@@ -938,7 +1067,13 @@ function TheHouse({
   const bill = usePickPricing(entry.id, billFor, hasResults);
   const pickedSaved = byTypeMode ? !!typePicks?.saved : sel.savedCanon != null && sel.savedCanon === sel.currentCanon;
   // Picks changed and not saved: the house does not read as done (2026-10-27).
-  useFlowUnsaved("house", editable && !past && !byTypeMode && sel.currentCanon !== sel.savedCanon, "The rooms picked saved");
+  // A trip's other stays picked by number in the pop-up count too (2026-11-07).
+  const [othersByNumberDirty, setOthersByNumberDirty] = useState(false);
+  useFlowUnsaved(
+    "house",
+    editable && !past && !byTypeMode && (sel.currentCanon !== sel.savedCanon || othersByNumberDirty),
+    "The rooms picked saved",
+  );
   // The bill lives in the booking file (2026-10-27, operator: "when rooms are picked, show this on
   // the right, in Charges & payments › The price, with the nights and the rooms"). A pick made by
   // hand opens it there; picks restored on arrival or a background re-read do not, and the page
@@ -1114,12 +1249,28 @@ function TheHouse({
   // The by-type grid is off the page while rooms are picked by number; what it held unsaved is
   // kept here and given back when it returns.
   const typeDraft = useRef<TypeDraft | null>(null);
+  // A trip's other stays: their counts not saved yet survive the by-number pop-up too.
+  const otherDrafts = useRef<Record<string, TypeDraft>>({});
   // Closing it without a pick saved by number goes back to picking by type, where it came from.
   const closeTool = () => {
     setToolOpen(false);
     if (!savedByNumber) setMode("TYPE");
   };
   const showTool = hasResults && !past && !byTypeMode && toolOpen;
+  // This booking's stay, as the trip's one table sees it.
+  const currentByNumber: StayByNumber = {
+    entry,
+    stayNo: trip.stayNoOf(entry.id),
+    mine: true,
+    rows,
+    perDate,
+    displayNights,
+    numberOfRooms,
+    sel,
+    configId,
+    stale,
+    nightTotals: picked.length && bill.pricing ? Object.fromEntries(bill.pricing.nights.map((n) => [n.date, money(n.total, bill.pricing!.currency)])) : undefined,
+  };
 
   const takeReason = !editable
     ? null
@@ -1150,7 +1301,9 @@ function TheHouse({
         revealAtTop
         title={
           <>
-            {hasResults || entry.checkInDate ? (
+            {trip.combined ? (
+              `The house · ${plural(trip.otherIds.length + 1, "stay")}`
+            ) : hasResults || entry.checkInDate ? (
               <>
                 The house · <StayDates checkIn={searched.checkIn ?? entry.checkInDate} checkOut={searched.checkOut ?? entry.checkOutDate} />
               </>
@@ -1229,7 +1382,49 @@ function TheHouse({
                 {chartNote.text}
               </p>
             ) : null}
-            {byTypeMode ? (
+            {byTypeMode && trip.combined ? (
+              trip.loaded ? (
+                <TripHouse
+                  entry={entry}
+                  others={trip.others}
+                  stayNoOf={trip.stayNoOf}
+                  catalog={catalog}
+                  editable={editable && !past}
+                  renderCurrent={(combined) => (
+                    <RoomsByType
+                      entry={entry}
+                      configId={configId}
+                      stale={stale}
+                      nights={stayNights}
+                      numberOfRooms={numberOfRooms}
+                      catalog={catalog}
+                      editable={editable && !past}
+                      onPicks={setTypePicks}
+                      onSaved={() => {}}
+                      onParticular={() => {}}
+                      draft={typeDraft.current}
+                      onDraft={(d) => {
+                        typeDraft.current = d;
+                      }}
+                      flowKey={null}
+                      combined={combined}
+                    />
+                  )}
+                  drafts={otherDrafts.current}
+                  onParticular={() => {
+                    setMode("NUMBER");
+                    openTool();
+                  }}
+                  onAllSaved={() => {
+                    refresh();
+                    for (const id of trip.otherIds) void qc.invalidateQueries({ queryKey: ["entry", id] });
+                    void goToWrap();
+                  }}
+                />
+              ) : (
+                <p className="meta">Reading the trip&rsquo;s other stays…</p>
+              )
+            ) : byTypeMode ? (
               <RoomsByType
                 entry={entry}
                 configId={configId}
@@ -1432,10 +1627,38 @@ function TheHouse({
 
       <WorkPopup
         open={showTool}
-        title={`Pick every room by number · ${plural(numberOfRooms, "room")} for ${plural(displayNights.length, "night")}`}
+        title={
+          trip.combined
+            ? `Pick every room by number · ${plural(trip.otherIds.length + 1, "stay")}`
+            : `Pick every room by number · ${plural(numberOfRooms, "room")} for ${plural(displayNights.length, "night")}`
+        }
         onClose={closeTool}
       >
         <div onPointerDownCapture={markHandPick} onClickCapture={markHandPick} onKeyDownCapture={markHandPick}>
+          {trip.combined ? (
+            // Every stay of the trip in ONE table, its nights side by side (2026-11-07, operator: "keep
+            // the first reserved dates for both stays in one table like how its done in room type").
+            <StayModels entries={trip.others} stayNoOf={trip.stayNoOf} catalog={catalog} acc={[currentByNumber]}>
+              {(all) => (
+                <TripByNumber
+                  stays={[...all].sort((a, b) => a.stayNo - b.stayNo)}
+                  isGm={isGm}
+                  onOthersDirty={setOthersByNumberDirty}
+                  onAllSaved={async (savedCurrent) => {
+                    setToolOpen(false);
+                    if (!savedCurrent && !savedByNumber) setMode("TYPE");
+                    refresh();
+                    for (const id of trip.otherIds) void qc.invalidateQueries({ queryKey: ["entry", id] });
+                    if (savedCurrent) await goToWrap();
+                  }}
+                  onReleased={() => {
+                    ask.mutate();
+                    for (const id of trip.otherIds) void qc.invalidateQueries({ queryKey: ["entry", id] });
+                  }}
+                />
+              )}
+            </StayModels>
+          ) : (
           <WhichRooms
             entry={entry}
             rows={rows}
@@ -1458,9 +1681,418 @@ function TheHouse({
             popup
             onReleased={() => ask.mutate()}
           />
+          )}
         </div>
       </WorkPopup>
     </>
+  );
+}
+
+/* ------------------------------------------------------------------ a trip's stays by number */
+
+type PickBody = { perNight?: Array<{ date: string; roomIds: string[] }>; roomIds?: string[]; allIds: string[] };
+
+/** Record a stay's rooms by number — the one call the house card and the trip's table share. */
+function sealRoomsByNumber(session: NonNullable<ReturnType<typeof useSession>["session"]>, configId: string, rows: RoomStatusRow[], body: PickBody) {
+  const deficientIds = body.allIds.filter((id) => rows.find((r) => r.roomId === id)?.bucket === "deficient");
+  return selectAvailabilityOption(session, configId, {
+    roomIds: body.perNight ? undefined : body.roomIds,
+    perNight: body.perNight,
+    deficientAcknowledgements: deficientIds.length
+      ? deficientIds.map((roomId) => ({ roomId, acknowledgedAt: new Date().toISOString(), note: "Acknowledged when the rooms were chosen at Inquiry" }))
+      : undefined,
+  });
+}
+
+/** One stay of a trip as the rooms-by-number table sees it: its house answer, its nights, its picks. */
+type StayByNumber = {
+  entry: EntryDetail;
+  stayNo: number;
+  mine: boolean;
+  rows: RoomStatusRow[];
+  perDate?: PerDateAvailabilityResult[];
+  displayNights: string[];
+  numberOfRooms: number;
+  sel: ReturnType<typeof useRoomSelection>;
+  configId: string | null;
+  stale: boolean;
+  /** Each night's figure for the rooms picked, already in money (this booking's stay only). */
+  nightTotals?: Record<string, string>;
+};
+
+/** Another stay of the trip, read for the table: its own house answer and its own picks. */
+function useStayByNumber(entry: EntryDetail, stayNo: number, catalog: Catalog): StayByNumber {
+  const configs = currentPassConfigs(entry);
+  const latest = configs[0] ?? null;
+  const preferred = configs.find((c) => c.optionSelected != null) ?? null;
+  const { available, deficient, unavailable, perDate } = useMemo(() => {
+    const src = latest?.resultSet ?? preferred?.resultSet ?? null;
+    const rooms = src ? roomsFromResultSet(src) : { availableRooms: [], deficientRooms: [], unavailableRooms: [] };
+    const pd = (src as { perDate?: unknown } | null)?.perDate;
+    return {
+      available: rooms.availableRooms,
+      deficient: rooms.deficientRooms,
+      unavailable: rooms.unavailableRooms,
+      perDate: Array.isArray(pd) ? (pd as PerDateAvailabilityResult[]) : undefined,
+    };
+  }, [latest, preferred]);
+  const extBeds = useMemo(
+    () => new Map(catalog.filter((r) => typeof r.roomType?.maxExtraBeds === "number").map((r) => [r.id, r.roomType!.maxExtraBeds!])),
+    [catalog],
+  );
+  const bedOf = useMemo(() => new Map(catalog.filter((r) => r.bedType).map((r) => [r.id, r.bedType!])), [catalog]);
+  const rows = useMemo(() => roomStatusRows(available, deficient, unavailable, extBeds, bedOf), [available, deficient, unavailable, extBeds, bedOf]);
+  const stayNights = useMemo(() => enumerateNights(entry.checkInDate, entry.checkOutDate), [entry.checkInDate, entry.checkOutDate]);
+  const displayNights = useMemo(() => (perDate?.length ? perDate.map((p) => p.date) : stayNights), [perDate, stayNights]);
+  const numberOfRooms = entry.numberOfRooms ?? 1;
+  const savedOption = preferred?.optionSelected as AvailabilityOptionSelected | null | undefined;
+  const sel = useRoomSelection({ entryId: entry.id, numberOfRooms, savedOption, displayNights, stayNights });
+  return { entry, stayNo, mine: false, rows, perDate, displayNights, numberOfRooms, sel, configId: latest?.id ?? null, stale: !!latest?.isStale };
+}
+
+/** Read every other stay in turn (a fixed set of hooks on each level), then hand them all over. */
+function StayModels({
+  entries,
+  stayNoOf,
+  catalog,
+  acc,
+  children,
+}: {
+  entries: EntryDetail[];
+  stayNoOf: (id: string) => number;
+  catalog: Catalog;
+  acc: StayByNumber[];
+  children: (all: StayByNumber[]) => ReactNode;
+}) {
+  if (!entries.length) return <>{children(acc)}</>;
+  return (
+    <StayModelStep key={entries[0].id} entry={entries[0]} rest={entries.slice(1)} stayNoOf={stayNoOf} catalog={catalog} acc={acc}>
+      {children}
+    </StayModelStep>
+  );
+}
+function StayModelStep({
+  entry,
+  rest,
+  stayNoOf,
+  catalog,
+  acc,
+  children,
+}: {
+  entry: EntryDetail;
+  rest: EntryDetail[];
+  stayNoOf: (id: string) => number;
+  catalog: Catalog;
+  acc: StayByNumber[];
+  children: (all: StayByNumber[]) => ReactNode;
+}) {
+  const m = useStayByNumber(entry, stayNoOf(entry.id), catalog);
+  return (
+    <StayModels entries={rest} stayNoOf={stayNoOf} catalog={catalog} acc={[...acc, m]}>
+      {children}
+    </StayModels>
+  );
+}
+
+/** A stay's bed ask against the rooms picked for it — the server's own check. */
+function StayBedTally({ stay }: { stay: StayByNumber }) {
+  const { session } = useSession();
+  const bedAsk = (stay.entry.bedTypeRequest as Record<string, number> | null) ?? null;
+  const hasBedAsk = !!bedAsk && Object.values(bedAsk).some((n) => n > 0);
+  const q = useQuery({
+    queryKey: ["bed-request-check", stay.entry.id, JSON.stringify(bedAsk), [...stay.sel.allPicked].sort().join(",")],
+    queryFn: () => checkBedRequest(session!, bedAsk ?? {}, [...stay.sel.allPicked]),
+    enabled: !!session && hasBedAsk,
+    placeholderData: (prev) => prev,
+  });
+  if (!hasBedAsk) return null;
+  return (
+    <>
+      {(q.data?.perType ?? []).map((t) => (
+        <Chip key={t.bedType} tone={t.covered >= t.asked ? "success" : "warning"}>
+          Stay {stay.stayNo} asked {t.asked} {BED_WORD[t.bedType] ?? words(t.bedType)} · {t.covered}/{t.asked}
+        </Chip>
+      ))}
+    </>
+  );
+}
+
+/**
+ * A trip's stays at Inquiry picked by number in ONE table (2026-11-07, operator: "keep the first
+ * reserved dates for both stays in one table like how its done in room type and also a full screen
+ * option, if there are more days"): the rooms down the side, each stay's nights under its own band,
+ * each stay counted against its own rooms, one Save for every stay that changed, and the full view.
+ */
+function TripByNumber({
+  stays,
+  isGm,
+  onOthersDirty,
+  onAllSaved,
+  onReleased,
+}: {
+  stays: StayByNumber[];
+  isGm: boolean;
+  onOthersDirty: (dirty: boolean) => void;
+  onAllSaved: (savedCurrent: boolean) => void | Promise<void>;
+  onReleased: () => void;
+}) {
+  const { session } = useSession();
+  const [names, setNames] = useState(false);
+  const [full, setFull] = useState(false);
+  const [release, setRelease] = useState<ReleaseTarget | null>(null);
+  // Escape leaves the full view first — caught before the pop-up's own Escape, which then stands down.
+  useEffect(() => {
+    if (!full) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || document.querySelector(".scrim.open")) return;
+      e.preventDefault();
+      setFull(false);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [full]);
+
+  const dirtyOf = (x: StayByNumber) => x.sel.currentCanon != null && x.sel.currentCanon !== x.sel.savedCanon;
+  const othersDirty = stays.some((x) => !x.mine && dirtyOf(x));
+  useEffect(() => {
+    onOthersDirty(othersDirty);
+  }, [othersDirty, onOthersDirty]);
+  useEffect(() => () => onOthersDirty(false), [onOthersDirty]);
+
+  const nights = stays.flatMap((x) => x.displayNights);
+  const perDate = stays.flatMap((x) => x.perDate ?? []);
+  const rows = useMemo(() => {
+    const seen = new Map<string, RoomStatusRow>();
+    for (const x of stays) for (const r of x.rows) if (!seen.has(r.roomId)) seen.set(r.roomId, r);
+    return [...seen.values()];
+  }, [stays]);
+  const perNightSel = Object.assign({}, ...stays.map((x) => x.sel.effectiveByNight)) as Record<string, string[]>;
+  const nightTotals = Object.assign({}, ...stays.map((x) => x.nightTotals ?? {})) as Record<string, string>;
+  const stayOf = (n: string) => stays.find((x) => x.displayNights.includes(n));
+  const groups: NightGroup[] = stays.map((x) => ({
+    key: x.entry.id,
+    label: (
+      <>
+        <span>
+          Stay {x.stayNo}
+          {x.mine ? " · this booking" : ""} · {plural(x.numberOfRooms, "room")}
+        </span>
+        <StayDates checkIn={x.entry.checkInDate} checkOut={x.entry.checkOutDate} />
+      </>
+    ),
+    nights: x.displayNights,
+    maxSelect: x.numberOfRooms,
+    referenceIds: x.sel.commonPlan,
+    rows: x.rows,
+  }));
+
+  const onEveryNight = (x: StayByNumber, id: string) => x.displayNights.every((n) => (x.sel.effectiveByNight[n] ?? x.sel.base).includes(id));
+  const toggleRow = (row: RoomStatusRow) => {
+    // On every night of every stay: off them all. Otherwise onto each stay that lacks it.
+    if (stays.every((x) => onEveryNight(x, row.roomId))) stays.forEach((x) => x.sel.toggleRow(row));
+    else stays.filter((x) => !onEveryNight(x, row.roomId)).forEach((x) => x.sel.toggleRow(row));
+  };
+  const reportSelectAll = (row: RoomStatusRow, outcome: SelectAllOutcome) => {
+    const tag = (d: string) => `Stay ${stayOf(d)?.stayNo ?? "?"} · ${fmtDay(d)}`;
+    const gaps = [
+      ...outcome.blocked.map((b) => `${tag(b.date)} — ${b.status === "held" ? "held" : b.status === "blocked" ? "out of service" : "reserved"}${b.holder ? ` (${b.holder})` : ""}`),
+      ...outcome.full.map((d) => `${tag(d)} — that night already has its rooms`),
+    ];
+    if (!gaps.length) {
+      toast.success(`Room ${row.roomNumber} taken on all ${plural(outcome.picked.length, "night")} of the trip.`);
+      return;
+    }
+    toast.warning(
+      outcome.picked.length
+        ? `Room ${row.roomNumber} taken on ${outcome.picked.length} of ${plural(nights.length, "night")}.`
+        : `Room ${row.roomNumber} is not free on any night of the trip.`,
+      { description: `Not taken: ${gaps.join(" · ")}`, duration: 10000 },
+    );
+  };
+
+  const held = useMemo(() => {
+    const m = new Map<string, { roomId: string; roomNumber: string; entryId: string; holdKind: "COMMITTED" | "SPECULATIVE"; holdId?: string; holder: string; nights: number }>();
+    const nameOf = new Map(rows.map((r) => [r.roomId, r.roomNumber]));
+    for (const d of perDate) {
+      for (const o of d.occupiedRoomIds) {
+        if (o.source !== "HOLD" || !o.entryId) continue;
+        const key = `${o.entryId}:${o.roomId}`;
+        const cur = m.get(key);
+        if (cur) cur.nights += 1;
+        else
+          m.set(key, {
+            roomId: o.roomId,
+            roomNumber: nameOf.get(o.roomId) ?? o.roomId,
+            entryId: o.entryId,
+            holdKind: ((o as { holdKind?: string }).holdKind as "COMMITTED" | "SPECULATIVE") ?? "COMMITTED",
+            holdId: (o as { holdId?: string }).holdId,
+            holder: o.guestName ?? "a guest",
+            nights: 1,
+          });
+      }
+    }
+    return [...m.values()].sort((a, b) => a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true }));
+  }, [perDate, rows]);
+  const blocked = rows.filter((r) => r.blockedReason);
+  const openRelease = (row: RoomStatusRow, occ: { entryId?: string; guestName?: string | null } | undefined, status: string) => {
+    if (!isGm) {
+      toast.info("A GM can release a held or blocked room — ask them to open this booking.");
+      return;
+    }
+    if (status === "blocked") setRelease({ kind: "BLOCK", roomId: row.roomId, roomLabel: row.roomNumber, blockedReason: row.blockedReason ?? null });
+    else if (occ?.entryId) {
+      const h = held.find((x) => x.entryId === occ.entryId && x.roomId === row.roomId);
+      setRelease({
+        kind: "HOLD",
+        entryId: occ.entryId,
+        holdKind: h?.holdKind ?? "COMMITTED",
+        holdId: h?.holdId,
+        roomId: row.roomId,
+        roomLabel: row.roomNumber,
+        holder: occ.guestName ?? "a guest",
+        siblings: held.filter((x) => x.entryId === occ.entryId).map((x) => x.roomNumber),
+      });
+    }
+  };
+
+  const saveAll = useMutation({
+    mutationFn: async () => {
+      const changed = stays.filter(dirtyOf);
+      // The other stays first, this booking's last — its save is the one that moves on to Wrap up.
+      for (const x of [...changed.filter((c) => !c.mine), ...changed.filter((c) => c.mine)]) {
+        if (!x.configId) throw new Error(`Ask the house for stay ${x.stayNo} first`);
+        const body = x.sel.payload();
+        x.sel.submittedRef.current = x.sel.currentCanon;
+        try {
+          await sealRoomsByNumber(session!, x.configId, x.rows, body);
+        } catch (e) {
+          throw new Error(`Stay ${x.stayNo}: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+      return changed;
+    },
+    onSuccess: async (changed) => {
+      toast.success(`The rooms are chosen for ${plural(changed.length, "stay")} and on record`);
+      await onAllSaved(changed.some((x) => x.mine));
+    },
+    onError: (e) => toastRefusal(e, "The rooms could not be recorded"),
+  });
+  const anyDirty = stays.some(dirtyOf);
+  const notReady = stays.find((x) => !x.sel.ready);
+  const staleStay = stays.find((x) => x.stale);
+  const reason = staleStay
+    ? `the house is being asked again for stay ${staleStay.stayNo} — your picks are kept`
+    : notReady
+      ? `stay ${notReady.stayNo}: every night needs its ${plural(notReady.numberOfRooms, "room")}`
+      : !anyDirty
+        ? "this choice is on record — change a room to edit it"
+        : null;
+
+  const band = (
+    <div className="row-acts rooms-saverow">
+      <span className="trip-bynum-state">
+        {stays.map((x) => {
+          const counter = x.sel.nightsDiffer
+            ? `${x.sel.nightsReady} of ${plural(x.displayNights.length, "night")} ready`
+            : `${x.sel.commonPlan.length} of ${x.numberOfRooms} chosen`;
+          return (
+            <span key={x.entry.id} className={x.sel.ready ? "ok-ink" : "stop-ink"}>
+              Stay {x.stayNo} · {counter}
+              {x.sel.ready && !dirtyOf(x) && x.sel.savedCanon ? " · saved" : ""}
+            </span>
+          );
+        })}
+      </span>
+      {stays.map((x) => (
+        <StayBedTally key={x.entry.id} stay={x} />
+      ))}
+      <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 12 }}>
+        <Button kind="quiet" compact icon="person" aria-pressed={names} onClick={() => setNames((v) => !v)}>
+          {names ? "Names shown" : "Show names"}
+        </Button>
+        <Button kind="quiet" compact aria-pressed={full} onClick={() => setFull((v) => !v)}>
+          {full ? "Close the full view" : "Full screen"}
+        </Button>
+        <Button
+          className="go"
+          state={saveAll.isPending ? "working" : reason ? "inert" : "default"}
+          title={reason ?? undefined}
+          workingLabel="Saving…"
+          onClick={() => saveAll.mutate()}
+        >
+          Save the rooms
+        </Button>
+      </span>
+    </div>
+  );
+  const table = (
+    <Tool>
+      <RoomStatusTable
+        rows={rows}
+        nights={nights}
+        perDate={perDate}
+        selectedIds={[]}
+        perNightSel={perNightSel}
+        maxSelect={Math.max(...stays.map((x) => x.numberOfRooms))}
+        nightGroups={groups}
+        onToggle={toggleRow}
+        onToggleCell={(row, n) => stayOf(n)?.sel.toggleCell(row, n)}
+        onSelectAllNights={reportSelectAll}
+        onBlockedCellOpen={(row, _n, occ, status) => openRelease(row, occ, status)}
+        onCappedClick={() => toast.info("Every night of the trip already has its rooms — take one off first, or click this room under a single night.")}
+        disabled={saveAll.isPending}
+        showNames={names}
+        large={full}
+        nightTotals={Object.keys(nightTotals).length ? nightTotals : undefined}
+      />
+    </Tool>
+  );
+  const notes = (
+    <>
+      {held.length || blocked.length ? (
+        <div className="sm" style={{ marginTop: 10, display: "grid", gap: 4 }}>
+          <span className="meta">Not available on these dates</span>
+          {held.map((h) => (
+            <span key={`${h.entryId}:${h.roomId}`}>
+              Room {h.roomNumber} · {h.holdKind === "SPECULATIVE" ? "marked" : "held"} for {h.holder} · {plural(h.nights, "night")}
+            </span>
+          ))}
+          {blocked.map((r) => (
+            <span key={r.roomId}>
+              Room {r.roomNumber} · out of service{r.blockedReason ? ` — ${r.blockedReason}` : ""}
+            </span>
+          ))}
+          <HelpHere label="About releasing a room">
+            {isGm ? "Double-click a held or blocked night to release it." : "A GM can release a held or blocked room."}
+          </HelpHere>
+        </div>
+      ) : null}
+      <HelpHere label="How to pick rooms in this table">
+        Each stay&rsquo;s nights sit under its own band. Click a room&rsquo;s number to use it on every night of the trip; click one night to
+        change only that night. Each stay is counted against its own rooms. Nothing is recorded until you save.
+      </HelpHere>
+    </>
+  );
+  return (
+    <div className="which-rooms-pop">
+      {full ? (
+        <Overlay>
+          <div className="fullscreen-layer over-pop">
+            <StepCard title={`Pick every room by number · ${plural(stays.length, "stay")}`}>
+              {band}
+              {table}
+            </StepCard>
+          </div>
+        </Overlay>
+      ) : (
+        <>
+          {band}
+          {table}
+          {notes}
+        </>
+      )}
+      <ReleaseDialog target={release} onClose={() => setRelease(null)} onDone={onReleased} />
+    </div>
   );
 }
 
@@ -1508,12 +2140,17 @@ function WhichRooms({
   const [release, setRelease] = useState<ReleaseTarget | null>(null);
   useEffect(() => {
     if (!full) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setFull(false);
-    window.addEventListener("keydown", onKey);
+    // Caught first, so Escape leaves the full view and the pop-up behind it stays open.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || document.querySelector(".scrim.open")) return;
+      e.preventDefault();
+      setFull(false);
+    };
+    window.addEventListener("keydown", onKey, true);
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => {
-      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keydown", onKey, true);
       document.body.style.overflow = prev;
     };
   }, [full]);
@@ -1694,8 +2331,14 @@ function WhichRooms({
         {/* The save sits at the right end of the row, apart from the tallies it acts on
             (operator, 2026-09-29): the eye reads the counts left to right and lands on the act. */}
         <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 12 }}>
-          {/* In the pop-up, Show names sits beside the save (2026-10-28, operator). */}
+          {/* In the pop-up, Show names and Full screen sit beside the save (2026-10-28; full screen 2026-11-07,
+              operator: "a full screen option, if there are more days"). */}
           {popup ? namesButton : null}
+          {popup ? (
+            <Button kind="quiet" compact aria-pressed={full} onClick={() => setFull((v) => !v)}>
+              {full ? "Close the full view" : "Full screen"}
+            </Button>
+          ) : null}
           <Button
             className="go"
             kind={showSaved ? "secondary" : "primary"}
@@ -1788,7 +2431,17 @@ function WhichRooms({
       />
     </>
   );
-  if (popup) return <div className="which-rooms-pop">{inner}</div>;
+  if (popup)
+    // The full view is drawn at the desk's root: the pop-up's blurred scrim would hold it inside itself.
+    return full ? (
+      <Overlay>
+        <div className="fullscreen-layer over-pop">
+          <StepCard title={`Which rooms · ${plural(numberOfRooms, "room")} for ${plural(displayNights.length, "night")}`}>{inner}</StepCard>
+        </div>
+      </Overlay>
+    ) : (
+      <div className="which-rooms-pop">{inner}</div>
+    );
   const body = (
     <StepCard title={`Which rooms · ${plural(numberOfRooms, "room")} for ${plural(displayNights.length, "night")}`} right={right}>
       {inner}
@@ -1890,5 +2543,4 @@ function ReleaseDialog({
 }
 
 /** The stay saved on the Inquiry step — the house card asks the house again with these figures. */
-const STAY_SAVED_EVENT = "desk:stay-saved";
-type StaySaved = { checkInDate: string; checkOutDate: string; guestCount?: number | null };
+

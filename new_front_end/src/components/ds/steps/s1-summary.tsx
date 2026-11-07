@@ -47,12 +47,17 @@ export function InquirySummaryDialog({
   busy,
   onClose,
   onConfirm,
+  alsoMoving = [],
+  stayNoOf,
 }: {
   entry: EntryDetail;
   open: boolean;
   busy: boolean;
   onClose: () => void;
   onConfirm: () => void;
+  /** A trip at Inquiry: the other stays moving with this one (2026-11-07, one Continue moves every stay). */
+  alsoMoving?: EntryDetail[];
+  stayNoOf?: (id: string) => number;
 }) {
   const picks = useMemo(() => savedPicks(entry), [entry]);
   const bill = usePickPricing(entry.id, picks, open);
@@ -87,7 +92,7 @@ export function InquirySummaryDialog({
             Go back and edit
           </Button>
           <Button kind="primary" className="go" onClick={onConfirm} state={busy ? "working" : "default"} workingLabel="Moving…">
-            Confirm and move to Negotiation
+            {alsoMoving.length ? `Confirm and move ${plural(alsoMoving.length + 1, "stay")} to Negotiation` : "Confirm and move to Negotiation"}
           </Button>
         </>
       }
@@ -148,7 +153,7 @@ export function InquirySummaryDialog({
               pricing={bill.pricing}
               roomLabels={Object.fromEntries(roomLabels)}
               loading={bill.loading}
-              title="The rooms chosen"
+              title={alsoMoving.length && stayNoOf ? `Stay ${stayNoOf(entry.id)} · the rooms chosen` : "The rooms chosen"}
               help="Indicative, not a quote. Meals, extra beds and any agreed rate are set at Negotiation."
             />
           ) : picks.length === 0 ? (
@@ -161,7 +166,49 @@ export function InquirySummaryDialog({
             <p className="meta">Pricing the rooms…</p>
           )}
         </section>
+        {alsoMoving.map((o) => (
+          <OtherStaySummary key={o.id} entry={o} stayNo={stayNoOf?.(o.id) ?? 2} open={open} />
+        ))}
       </div>
     </DsDialog>
+  );
+}
+
+/** Another stay of the trip, moving with this one: its dates, guests and rooms chosen, priced as this one's. */
+function OtherStaySummary({ entry, stayNo, open }: { entry: EntryDetail; stayNo: number; open: boolean }) {
+  const picks = useMemo(() => savedPicks(entry), [entry]);
+  const bill = usePickPricing(entry.id, picks, open);
+  const roomLabels = useBookingRooms(entry).labels;
+  const nights = enumerateNights(entry.checkInDate, entry.checkOutDate).length;
+  const ages = entry.childAges ?? [];
+  return (
+    <section>
+      <b className="cfg-n">Stay {stayNo} · moving with it</b>
+      <Facts wide>
+        <Fact k="The stay">
+          <StayDates checkIn={entry.checkInDate} checkOut={entry.checkOutDate} />
+          {nights ? ` · ${plural(nights, "night")}` : ""}
+        </Fact>
+        <Fact k="Guests">
+          {`${plural(entry.adultCount ?? entry.guestCount ?? 0, "adult")}${ages.length ? ` · ${plural(ages.length, "child", "children")} (aged ${ages.join(", ")})` : ""}`}
+        </Fact>
+        <Fact k="The guest staying">{entry.guestProfile ? guestName(entry.guestProfile) : null}</Fact>
+      </Facts>
+      {bill.pricing ? (
+        <PickBill
+          pricing={bill.pricing}
+          roomLabels={Object.fromEntries(roomLabels)}
+          loading={bill.loading}
+          title={`Stay ${stayNo} · the rooms chosen`}
+          help="Indicative, not a quote. Meals, extra beds and any agreed rate are set at Negotiation."
+        />
+      ) : picks.length === 0 ? (
+        <p className="stop-ink" role="alert">
+          No rooms are saved for stay {stayNo} yet — go back and save them first.
+        </p>
+      ) : (
+        <p className="meta">Pricing the rooms…</p>
+      )}
+    </section>
   );
 }

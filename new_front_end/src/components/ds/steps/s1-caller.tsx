@@ -47,10 +47,11 @@ import { usePhoneRules } from "@/hooks/use-phone-rules";
 import { nationalDigits, problemOfPhone } from "@/lib/ds/phone";
 import { fullNameOf, splitTitle, titled } from "@/lib/ds/person";
 import { callerNameOf } from "@/lib/ds/status";
-import { fmtDay } from "@/lib/ds/format";
+import { fmtDay, plural } from "@/lib/ds/format";
 import { hasAnyContact } from "@/lib/desk/workspace";
 import type { EntryDetail } from "@/types/api";
 import { Choice, DsDialog, StepCard, toastRefusal, useFlowUnsaved, useOpenFileTab, useRefreshEntry } from "./kit";
+import { useTripAtInquiry } from "./s1-trip-shared";
 import { usePublishRateChoice } from "@/components/ds/rate-sheet";
 import {
   CameInTicks,
@@ -479,6 +480,8 @@ const asSummary = (g: GuestOnFile): GuestProfileSummary => ({
 export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; editable: boolean; onSaved: () => void }) {
   const { session } = useSession();
   const refresh = useRefreshEntry(entry.id);
+  // A trip at Inquiry: the guest named here is named on every stay (2026-11-07, ruling "the same guest for both").
+  const trip = useTripAtInquiry(entry);
   const phoneRules = usePhoneRules();
   const inq = (entry.inquiry ?? {}) as Inq;
   const named = entry.guestProfile ?? null;
@@ -652,8 +655,11 @@ export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; edita
         done.push("the caller's name");
       }
       if (choosing) {
-        const r = await setEntryGuest(session!, entry.id, guestBody(over));
-        done.push("the guest staying");
+        const r = await setEntryGuest(session!, entry.id, { ...guestBody(over), ...(trip.combined ? { alsoTripStays: true } : {}) });
+        done.push(trip.combined ? "the guest staying, on every stay" : "the guest staying");
+        for (const t of r.tripStays ?? []) {
+          if (t.message) notes.push(`stay ${trip.stayNoOf(t.entryId)}: ${t.message}`);
+        }
         if (r.reusedOnFile) notes.push("the guest was already on file — their record is used");
         if (r.contactKept?.length) {
           notes.push(`the ${r.contactKept.join(" and ")} on file is kept — a different one was typed`);
@@ -663,6 +669,10 @@ export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; edita
       if (arrivingDirty) {
         // The version moved if the guest was just named; read it fresh rather than refuse on a stale one.
         await updateEntryIntake(session!, entry.id, { contactPersonName: titled(arrTitle, arrName), contactPersonPhone: arrPhone.trim() });
+        // The same person arrives for every stay of a trip at Inquiry.
+        for (const id of trip.otherIds) {
+          await updateEntryIntake(session!, id, { contactPersonName: titled(arrTitle, arrName), contactPersonPhone: arrPhone.trim() });
+        }
         done.push("who is arriving");
       }
       return { done, notes };
@@ -679,7 +689,7 @@ export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; edita
       setNEmail("");
       setLinked(null);
       setKeepNew(false);
-      refresh([["inquiry", entry.inquiryId]]);
+      refresh([["inquiry", entry.inquiryId], ...trip.otherIds.map((id) => ["entry", id])]);
       onSaved();
     },
     onError: (e) => {
@@ -742,6 +752,7 @@ export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; edita
       flowAfterOnly
       title="Wrap up"
       meta="The rooms are chosen — now who is staying, and what was not taken at the start."
+      status={trip.combined ? `The guest named here is named on every stay of the trip (${plural(trip.otherIds.length + 1, "stay")})` : undefined}
     >
       {/* the caller's name, when it was not taken at the start */}
       {!callerHasName && editable ? (

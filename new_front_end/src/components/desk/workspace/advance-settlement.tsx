@@ -546,7 +546,7 @@ export function AdvanceSettlementBlock({
       });
     },
     onSuccess: () => {
-      toast.success("Payment logged against the advance");
+      toast.success(status?.paidInFull ? "Payment recorded on the bill — taken off what the guest owes at check-out" : "Payment logged against the advance");
       setAmount("");
       setNotes("");
       setMode("");
@@ -601,6 +601,61 @@ export function AdvanceSettlementBlock({
     (status?.totalReceived ?? 0) > 0 || ["DIRECT_BILL", "GOVERNMENT"].includes(folio.billingModel ?? "");
   // Who may is the admin console's setting, and the server's answer (2026-11-05).
   const mayReconcile = status?.mayReconcile !== false;
+
+  // The payment's fields, shared by the advance still owed and money paid ahead once it is settled.
+  const paymentFields = (
+    <div className="frow">
+      <div className="field">
+        <label>Amount received (Nu)</label>
+        <input
+          type="number"
+          min={0.01}
+          step="0.01"
+          value={amount}
+          onChange={(e) => {
+            editedRef.current = true;
+            setAmount(e.target.value);
+          }}
+        />
+        {status && status.shortfall > 0 && (
+          <div style={{ fontSize: 10.5, color: "var(--ink-3)", marginTop: 3, lineHeight: 1.4 }}>
+            {suggestedAmount !== "" && amount === suggestedAmount ? (
+              <>Pre-filled with what&rsquo;s still owed — change it if the guest paid a different amount.</>
+            ) : (
+              <>
+                Still owed on the advance: {money(status.shortfall, currency)}.{" "}
+                <button
+                  type="button"
+                  className="rcb-mini"
+                  onClick={() => {
+                    editedRef.current = true;
+                    setAmount(String(status.shortfall));
+                  }}
+                >
+                  Use that
+                </button>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+      <div className="field">
+        <label>How it was paid</label>
+        <select value={mode} onChange={(e) => setMode(e.target.value as AdvancePaymentMode | "")}>
+          <option value="">choose…</option>
+          {ADVANCE_PAYMENT_MODES.map(([v, l]) => (
+            <option key={v} value={v}>
+              {l}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="field">
+        <label>Notes</label>
+        <input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="e.g. the slip's reference" />
+      </div>
+    </div>
+  );
 
   return (
     <div className="block">
@@ -671,57 +726,7 @@ export function AdvanceSettlementBlock({
 
       {!settled && collectable && (
         <>
-          <div className="frow">
-            <div className="field">
-              <label>Amount received (Nu)</label>
-              <input
-                type="number"
-                min={0.01}
-                step="0.01"
-                value={amount}
-                onChange={(e) => {
-                  editedRef.current = true;
-                  setAmount(e.target.value);
-                }}
-              />
-              {status && status.shortfall > 0 && (
-                <div style={{ fontSize: 10.5, color: "var(--ink-3)", marginTop: 3, lineHeight: 1.4 }}>
-                  {suggestedAmount !== "" && amount === suggestedAmount ? (
-                    <>Pre-filled with what&rsquo;s still owed — change it if the guest paid a different amount.</>
-                  ) : (
-                    <>
-                      Still owed on the advance: {money(status.shortfall, currency)}.{" "}
-                      <button
-                        type="button"
-                        className="rcb-mini"
-                        onClick={() => {
-                          editedRef.current = true;
-                          setAmount(String(status.shortfall));
-                        }}
-                      >
-                        Use that
-                      </button>
-                    </>
-                  )}
-                </div>
-              )}
-            </div>
-            <div className="field">
-              <label>How it was paid</label>
-              <select value={mode} onChange={(e) => setMode(e.target.value as AdvancePaymentMode | "")}>
-                <option value="">choose…</option>
-                {ADVANCE_PAYMENT_MODES.map(([v, l]) => (
-                  <option key={v} value={v}>
-                    {l}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="field">
-              <label>Notes</label>
-              <input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="e.g. the slip's reference" />
-            </div>
-          </div>
+          {paymentFields}
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
             <button
               className="btn btn-primary"
@@ -776,6 +781,32 @@ export function AdvanceSettlementBlock({
               {reconcileM.isPending ? "Reconciling…" : "Mark reconciled"}
             </button>
           ) : null}
+        </div>
+      )}
+
+      {/* Money can still be taken once the advance is settled or none was asked — the guest paying
+          more ahead (2026-11-07, operator: "in stage 5, the payments tab is there but not
+          functional"). Reserve's own card already allowed it; Arrival and Check-in now do too. */}
+      {settled && collectable && (
+        <div className="paid-ahead" style={{ marginTop: 10, borderTop: "1px dashed var(--line-2)", paddingTop: 10 }}>
+          <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 6 }}>
+            {status && status.requiredAmount > 0 ? "More paid ahead" : "A payment ahead"}
+            <Help label="About paying ahead">
+              The guest pays part of the stay before it is billed. It goes on the bill as money received and is taken off what
+              they owe at check-out.
+            </Help>
+          </div>
+          {paymentFields}
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
+            <button
+              className="btn btn-primary"
+              disabled={!amount || !mode || paymentM.isPending}
+              title={!amount ? "put in the amount received" : !mode ? "choose how it was paid" : undefined}
+              onClick={() => paymentM.mutate()}
+            >
+              {paymentM.isPending ? "Logging…" : "Log payment received"}
+            </button>
+          </div>
         </div>
       )}
 

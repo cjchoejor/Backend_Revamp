@@ -1371,3 +1371,12 @@ export async function changeStayInPlace(
 ) {
   return apiRequest<StayChangeOutcome>(`/api/entries/${entryId}/change-stay`, { method: "POST", session, body });
 }
+
+/** Every stay of a trip still at Inquiry to Negotiation, this one first (2026-11-07). */
+export function moveTripToNegotiation(session: Session, entryId: string, version?: number) {
+  return apiRequest<{ moved: string[]; notMoved: Array<{ entryId: string; message: string }> }>(`/api/entries/${entryId}/trip/to-negotiation`, {
+    method: "POST",
+    session,
+    body: { version },
+  });
+}

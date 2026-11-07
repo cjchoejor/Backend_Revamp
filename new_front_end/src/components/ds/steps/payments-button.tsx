@@ -6,6 +6,7 @@ import { usePaymentStatus } from "@/hooks/use-payment-status";
 import { money } from "@/lib/ds/format";
 import type { EntryDetail } from "@/types/api";
 import { StageActs, WorkPopup } from "./kit";
+import { TripPaymentBlock } from "./s3-trip-proforma";
 
 /** The section the step's list names for the advance; picking it opens Payments instead. */
 export const PAYMENTS_CARD = "advance";
@@ -74,6 +75,8 @@ export function PaymentsButton({
         </Button>
       </StageActs>
       <WorkPopup open={open} title="Payments" onClose={() => setOpen(false)}>
+        {/* A trip of several stays: a payment for the whole trip, shared between the stays (2026-11-07). */}
+        {open ? <TripPaymentBlock entry={entry} /> : null}
         {children}
       </WorkPopup>
     </>

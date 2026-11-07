@@ -111,6 +111,22 @@ function draftFromRow(row: IdentityProofSummary | undefined): DetailDraft {
   };
 }
 
+/** The title a gender gives a guest with none chosen (2026-11-07, operator): Mr for a man, Mrs for a woman. */
+const TITLE_FOR_GENDER: Record<string, string> = { MALE: "Mr", FEMALE: "Mrs" };
+
+/**
+ * The row with its title following its gender: filled when no title is chosen, switched when the
+ * title was the earlier gender's own default. A title picked by hand (Dr, Ms, Dasho …) is kept.
+ */
+function withTitleFromGender(d: DetailDraft, earlierGender?: string): DetailDraft {
+  const want = TITLE_FOR_GENDER[d.gender];
+  if (!want) return d;
+  const { title, name } = splitTitle(d.name);
+  if (title === want) return d;
+  if (title && title !== (earlierGender ? TITLE_FOR_GENDER[earlierGender] : undefined)) return d;
+  return { ...d, name: joinTitled(want, name) };
+}
+
 function sameDraft(a: DetailDraft, b: DetailDraft): boolean {
   return a.docType === b.docType && a.num === b.num && a.name === b.name && a.dob === b.dob && a.gender === b.gender;
 }
@@ -736,17 +752,27 @@ export function IdentityProofBlock({
   const allCovered = slots.length > 0 && coveredCount === slots.length;
 
   // Seed drafts from the saved detail rows — but never clobber a slot the operator has
-  // touched (a refetch mid-typing must not eat their input).
+  // touched (a refetch mid-typing must not eat their input). A row saved with a gender, a name and
+  // no title takes its gender's title and is saved so (2026-11-07, operator: "if it is male, default
+  // the first pick as Mr, and if its female, default it to Mrs") — not on a confirmed row or an
+  // ended booking.
   useEffect(() => {
     if (!listQuery.data) return;
-    setDrafts((prev) => {
-      const next = { ...prev };
-      for (const slot of slots) {
-        if (touched[slot.key]) continue;
-        next[slot.key] = draftFromRow(detailRow(slot.key));
-      }
-      return next;
-    });
+    const workable = entry.status === "ACTIVE" || entry.status === "PARKED";
+    const seeded: Record<string, DetailDraft> = {};
+    const toSave: Array<{ slot: PartySlot; draft: DetailDraft }> = [];
+    for (const slot of slots) {
+      if (touched[slot.key]) continue;
+      const fromRow = draftFromRow(detailRow(slot.key));
+      const titled = workable && !lockedFor(slot.key) && splitTitle(fromRow.name).name.trim() ? withTitleFromGender(fromRow) : fromRow;
+      seeded[slot.key] = titled;
+      if (titled !== fromRow) toSave.push({ slot, draft: titled });
+    }
+    setDrafts((prev) => ({ ...prev, ...seeded }));
+    if (toSave.length) {
+      setTouched((prev) => ({ ...prev, ...Object.fromEntries(toSave.map((x) => [x.slot.key, true])) }));
+      for (const x of toSave) saveM.mutate(x);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed off the fetched data snapshot
   }, [listQuery.data]);
 
@@ -1590,7 +1616,9 @@ export function IdentityProofBlock({
                       disabled={locked}
                       value={draft.gender}
                       onChange={(e) => {
-                        setDraft(slot.key, { gender: e.target.value });
+                        // The title follows the gender when none was chosen (2026-11-07).
+                        const next = withTitleFromGender({ ...draft, gender: e.target.value }, draft.gender);
+                        setDraft(slot.key, { gender: e.target.value, name: next.name });
                       }}
                       onBlur={() => saveIfChanged(slot)}
                     >

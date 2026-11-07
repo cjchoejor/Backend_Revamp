@@ -134,3 +134,45 @@ export function recordTripPayment(
     autoHolds: Array<{ entryId: string; autoHold: { placed: boolean; expiresAt?: string; reason?: string; message?: string } | null }>;
   }>(`/api/trip-papers/${tripPaperId}/payment`, { method: "POST", session, body });
 }
+
+/** A trip's stays as a payment sees them (2026-11-07) — by the booking, with or without a trip proforma. */
+export type TripPaymentStay = {
+  stayNo: number;
+  entryId: string;
+  stage: string;
+  checkIn: string | null;
+  checkOut: string | null;
+  number: string | null;
+  payable: boolean;
+  why: string | null;
+  advanceAsked: string | null;
+  received: string;
+  dueNow: string;
+  canTake: string;
+  share?: string;
+};
+
+export type TripPaymentStanding = {
+  inquiryId: string;
+  tripPaper: { id: string; number: string } | null;
+  stays: TripPaymentStay[];
+  received: string;
+  dueNow: string;
+  canTake: string;
+};
+
+export function getTripPayment(session: Session, entryId: string) {
+  return apiRequest<TripPaymentStanding>(`/api/entries/${entryId}/trip-payment`, { session });
+}
+
+export function previewTripPaymentForEntry(session: Session, entryId: string, body: { amount?: number | null; shares?: TripPaymentShare[] | null }) {
+  return apiRequest<Omit<TripPaymentPreview, "stays"> & { stays: TripPaymentStay[] }>(`/api/entries/${entryId}/trip-payment/preview`, { method: "POST", session, body });
+}
+
+export function recordTripPaymentForEntry(
+  session: Session,
+  entryId: string,
+  body: { amount: number; paymentMethod?: string; notes?: string; shares?: TripPaymentShare[] | null },
+) {
+  return apiRequest<Awaited<ReturnType<typeof recordTripPayment>>>(`/api/entries/${entryId}/trip-payment`, { method: "POST", session, body });
+}
