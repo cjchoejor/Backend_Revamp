@@ -149,8 +149,25 @@ export async function recordPayment(
   input: { entryId: string; amount: number; notes?: string | null; paymentMethod?: string | null },
   actorLevel?: "L1" | "L2" | "L3" | "L4",
 ) {
+  const txResult = await prisma.$transaction((tx) => recordPaymentTx(prisma, tx, folioId, actorId, input));
+  const autoHold = await afterPaymentRecorded(prisma, { paymentId: txResult.created.id, entryId: input.entryId, stageAtPayment: txResult.stageAtPayment }, actorId, actorLevel);
+  return { ...txResult.created, autoHold };
+}
+
+/**
+ * The payment's own writes and checks, inside the caller's transaction — so the trip's proforma can
+ * write several stays' shares of one payment together, all or none (2026-11-07). Every check a
+ * stay's own payment has runs here.
+ */
+export async function recordPaymentTx(
+  prisma: PrismaClient,
+  tx: Prisma.TransactionClient,
+  folioId: string,
+  actorId: string,
+  input: { entryId: string; amount: number; notes?: string | null; paymentMethod?: string | null },
+) {
   const amountNum = input.amount;
-  const txResult = await prisma.$transaction(async (tx) => {
+  {
     const folio = await tx.folio.findUnique({ where: { id: folioId }, include: { entry: true, invoices: true } });
     if (!folio?.entry) throw new NotFoundError("Folio");
     if (folio.entryId !== input.entryId) throw new ValidationError("entryId/folioId mismatch");
@@ -251,24 +268,27 @@ export async function recordPayment(
     });
 
     return { created, stageAtPayment };
-  });
+  }
+}
 
+/** What follows a payment once it is written: the rooms blocked at Set up, a moot pay-later ask closed. */
+export async function afterPaymentRecorded(
+  prisma: PrismaClient,
+  p: { paymentId: string; entryId: string; stageAtPayment: Stage },
+  actorId: string,
+  actorLevel?: "L1" | "L2" | "L3" | "L4",
+): Promise<AdvancePaymentAutoHoldOutcome | null> {
   const autoHold: AdvancePaymentAutoHoldOutcome | null =
-    txResult.stageAtPayment === Stage.S3
-      ? await autoPlaceCommittedHoldOnAdvancePayment(
-          prisma,
-          { id: txResult.created.id, entryId: input.entryId },
-          { actorId, actorLevel: actorLevel ?? "L1" },
-        )
+    p.stageAtPayment === Stage.S3
+      ? await autoPlaceCommittedHoldOnAdvancePayment(prisma, { id: p.paymentId, entryId: p.entryId }, { actorId, actorLevel: actorLevel ?? "L1" })
       : null;
 
   // A request to let the guest pay the rest later is moot once nothing is left to pay (2026-10-29).
-  if (txResult.stageAtPayment === Stage.S5 || txResult.stageAtPayment === Stage.S6) {
+  if (p.stageAtPayment === Stage.S5 || p.stageAtPayment === Stage.S6) {
     const { closeMootCheckInPaymentRequests } = await import("./checkin-payment-service.js");
-    await closeMootCheckInPaymentRequests(prisma, input.entryId, "PAID").catch(() => {});
+    await closeMootCheckInPaymentRequests(prisma, p.entryId, "PAID").catch(() => {});
   }
-
-  return { ...txResult.created, autoHold };
+  return autoHold;
 }
 
 /**

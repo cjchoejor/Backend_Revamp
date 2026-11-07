@@ -403,14 +403,44 @@ async function buildProformaDocRender(prisma: PrismaClient, inv: LoadedInvoice, 
     linesForTemplate,
     perNightAmount,
     totalAmount,
+    prices,
     advanceReceived,
+    paymentCount,
     requiredAdvance,
+    advanceDueQualifier,
     advanceDueNow,
     balanceAtCheckout,
+    advancePlanLabel,
+    advanceDeadline,
     totalPayable,
     invoiceRef,
     hotel,
     prelude: p,
+  };
+}
+
+/**
+ * A proforma's own rows and figures, exactly as its paper prints them — read by the trip's proforma
+ * (2026-11-07), which sets each stay out as that stay's own proforma does and adds them up.
+ */
+export async function proformaPaperFigures(prisma: PrismaClient, invoiceId: string, opts?: { nightsMode?: NightsMode }) {
+  const inv = await loadInvoiceForRender(prisma, invoiceId);
+  if (inv.invoiceType !== "PROFORMA") throw new ValidationError("Not a proforma");
+  const r = await buildProformaDocRender(prisma, inv, opts);
+  return {
+    invoiceRef: r.invoiceRef,
+    prices: r.prices,
+    total: r.totalAmount,
+    advanceReceived: r.advanceReceived,
+    paymentCount: r.paymentCount,
+    requiredAdvance: r.requiredAdvance,
+    advanceDueQualifier: r.advanceDueQualifier,
+    advanceDueNow: r.advanceDueNow,
+    balanceAtCheckout: r.balanceAtCheckout,
+    advancePlanLabel: r.advancePlanLabel,
+    advanceDeadline: r.advanceDeadline,
+    validUntil: inv.validUntil ?? null,
+    guestName: r.prelude.guestName,
   };
 }
 

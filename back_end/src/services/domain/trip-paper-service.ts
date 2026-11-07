@@ -30,7 +30,7 @@ import { recordCommunicationAcknowledgement } from "./communication-acknowledgem
  * each stay's. Made and sent while the stays are at Negotiation or Set up; read at any time.
  */
 
-type Actor = { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" };
+export type Actor = { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" };
 
 export type TripMember = {
   entryId: string;
@@ -46,7 +46,7 @@ export type TripMember = {
 
 const WORKING_STAGES: Stage[] = [Stage.S2, Stage.S3];
 
-async function tripOfEntry(prisma: PrismaClient, entryId: string) {
+export async function tripOfEntry(prisma: PrismaClient, entryId: string) {
   const entry = await prisma.entry.findUnique({ where: { id: entryId }, select: { inquiryId: true } });
   if (!entry) throw new NotFoundError("Entry");
   return entry.inquiryId;
@@ -103,7 +103,7 @@ function standing(stays: Awaited<ReturnType<typeof readMembers>>) {
   return { canMake: true, reason: null as string | null };
 }
 
-const sameMembers = (a: TripMember[], b: TripMember[]) =>
+export const sameMembers = (a: Array<{ entryId: string; paperId: string }>, b: Array<{ entryId: string; paperId: string }>) =>
   a.length === b.length && a.every((m, i) => m.entryId === b[i].entryId && m.paperId === b[i].paperId);
 
 /** The trip's quotation as it stands: the stays, the latest made, whether it still matches them. */
@@ -169,24 +169,53 @@ export async function makeTripQuotation(prisma: PrismaClient, entryId: string, a
   const members = stays.map((x) => x.member!) as TripMember[];
   const validUntils = stays.map((x) => x.quote?.validUntil).filter((d): d is Date => !!d);
   const validUntil = validUntils.length ? new Date(Math.min(...validUntils.map((d) => d.getTime()))) : null;
+  return saveTripPaperVersion(prisma, {
+    inquiryId,
+    kind: "QUOTATION",
+    counter: "QUOTATION",
+    members,
+    validUntil,
+    actor,
+    traceMembers: members.map((x) => ({ entryId: x.entryId, quotationId: x.paperId, number: paperNumber(x.number, x.versionNumber), total: x.total })),
+  });
+}
+
+/**
+ * One version of a trip's paper (2026-11-07): nothing new while the latest in force holds exactly
+ * these stays' papers; otherwise the next version of the trip's number (a new number from the
+ * counter the first time), the earlier one marked replaced. Its total is only the stays' totals.
+ */
+export async function saveTripPaperVersion(
+  prisma: PrismaClient,
+  input: {
+    inquiryId: string;
+    kind: "QUOTATION" | "PROFORMA";
+    counter: "QUOTATION" | "INVOICE";
+    members: Array<{ entryId: string; paperId: string; total: string }>;
+    validUntil: Date | null;
+    actor: Actor;
+    traceMembers: unknown[];
+  },
+) {
+  const { inquiryId, kind, members, actor } = input;
   return prisma.$transaction(async (tx) => {
-    await tx.$executeRawUnsafe("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", `trip-paper:${inquiryId}:QUOTATION`);
-    const latest = await tx.tripPaper.findFirst({ where: { inquiryId, kind: "QUOTATION" }, orderBy: { versionNumber: "desc" } });
+    await tx.$executeRawUnsafe("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", `trip-paper:${inquiryId}:${kind}`);
+    const latest = await tx.tripPaper.findFirst({ where: { inquiryId, kind }, orderBy: { versionNumber: "desc" } });
     if (latest?.state === "LIVE" && sameMembers(latest.members as unknown as TripMember[], members)) return { made: false, paper: latest };
     const now = new Date();
-    const number = latest?.documentNumber ?? (await allocateReadableId(tx, "QUOTATION" as const, now));
+    const number = latest?.documentNumber ?? (await allocateReadableId(tx, input.counter, now));
     const versionNumber = (latest?.versionNumber ?? 0) + 1;
-    await tx.tripPaper.updateMany({ where: { inquiryId, kind: "QUOTATION", state: "LIVE" }, data: { state: "SUPERSEDED", supersededAt: now } });
+    await tx.tripPaper.updateMany({ where: { inquiryId, kind, state: "LIVE" }, data: { state: "SUPERSEDED", supersededAt: now } });
     const paper = await tx.tripPaper.create({
       data: {
         id: versionNumber > 1 ? `${number}-v${versionNumber}` : number,
         inquiryId,
-        kind: "QUOTATION",
+        kind,
         documentNumber: number,
         versionNumber,
         members: members as unknown as Prisma.InputJsonValue,
         totalAmount: sumMoney(members.map((m) => m.total)),
-        validUntil,
+        validUntil: input.validUntil,
         createdBy: actor.actorId,
       },
     });
@@ -202,12 +231,7 @@ export async function makeTripQuotation(prisma: PrismaClient, entryId: string, a
           timestamp: now,
           inquiryId,
           entryId: m.entryId,
-          payload: {
-            tripPaperId: paper.id,
-            number: paperNumber(number, versionNumber),
-            members: members.map((x) => ({ entryId: x.entryId, quotationId: x.paperId, number: paperNumber(x.number, x.versionNumber), total: x.total })),
-            total: paper.totalAmount.toFixed(2),
-          },
+          payload: { tripPaperId: paper.id, kind, number: paperNumber(number, versionNumber), members: input.traceMembers as Prisma.InputJsonValue, total: paper.totalAmount.toFixed(2) },
           createdBy: actor.actorId,
         },
       });

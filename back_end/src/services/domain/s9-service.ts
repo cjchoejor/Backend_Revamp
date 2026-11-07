@@ -180,7 +180,12 @@ async function dispatchInvoiceInner(
   prisma: PrismaClient,
   invoiceId: string,
   actorId: string,
-  input?: { dispatchedTo?: string; nightsEach?: boolean },
+  input?: {
+    dispatchedTo?: string;
+    nightsEach?: boolean;
+    /** Sent with the trip's proforma (2026-11-07): its email is the trip's, so none goes from here. */
+    viaTripPaper?: { id: string; number: string; channel: "EMAIL" | "WHATSAPP" };
+  },
 ) {
   const invoice = await prisma.invoice.findUnique({ where: { id: invoiceId } });
   if (!invoice) throw new NotFoundError("Invoice");
@@ -192,7 +197,10 @@ async function dispatchInvoiceInner(
     throw new PolicyGateBlockedError("PROFORMA_LAPSED", "This proforma has run out. Make it again on its card, then send that one.");
   }
   const now = new Date();
-  const recipient = await resolveInvoiceRecipient(prisma, invoice.entryId, input?.dispatchedTo ?? invoice.dispatchedTo);
+  const via = input?.viaTripPaper ?? null;
+  const recipient = via
+    ? { to: input?.dispatchedTo?.trim() || null, greetName: "", skipReason: null }
+    : await resolveInvoiceRecipient(prisma, invoice.entryId, input?.dispatchedTo ?? invoice.dispatchedTo);
   const result = await prisma.$transaction(async (tx) => {
     const updated = await tx.invoice.update({
       where: { id: invoiceId },
@@ -220,7 +228,7 @@ async function dispatchInvoiceInner(
           data: {
             id: commId,
             entryId: updated.entryId,
-            channel: "EMAIL",
+            channel: via?.channel ?? "EMAIL",
             // `PROFORMA_INVOICE` has been in the CommunicationType enum all along; this used to
             // write INVOICE_SUPERSEDED_NOTICE as a temporary dodge around a Windows Prisma-generate
             // issue, which mislabelled every PI dispatch and made the ack loop unfindable by type.
@@ -232,8 +240,8 @@ async function dispatchInvoiceInner(
             acknowledgementTimeoutAt: ackFireAt,
             acknowledgementReceivedAt: null,
             actorId,
-            contentSummary: "Proforma invoice dispatched",
-            payload: { invoiceId: updated.id, dispatchedTo: updated.dispatchedTo ?? null },
+            contentSummary: via ? `Proforma invoice sent with the trip's proforma ${via.number}` : "Proforma invoice dispatched",
+            payload: { invoiceId: updated.id, dispatchedTo: updated.dispatchedTo ?? null, ...(via ? { tripPaperId: via.id } : {}) },
             createdBy: actorId,
           },
         });
@@ -373,7 +381,7 @@ async function dispatchInvoiceInner(
 
   // Phase 3 — outbound invoice email (best-effort, post-tx).
   // PROFORMA → S3 PI email; final invoices (RECEIPT_BASED / FOLIO / etc.) → S8/S9 final invoice email.
-  await sendInvoiceEmailBestEffort(prisma, actorId, result.id, recipient, { nightsEach: input?.nightsEach === true });
+  if (!via) await sendInvoiceEmailBestEffort(prisma, actorId, result.id, recipient, { nightsEach: input?.nightsEach === true });
 
   return result;
 }
