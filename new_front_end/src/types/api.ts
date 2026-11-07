@@ -221,6 +221,8 @@ export type InvoiceSummary = {
   invoiceType: string;
   state: string;
   invoiceNumber?: string | null;
+  /** The number every version of a proforma shares (2026-11-07); null on one made before. */
+  documentNumber?: string | null;
   versionNumber?: number;
   supersededById?: string | null;
   /** Set once the PDF artifact was rendered — the frozen document that went out. */

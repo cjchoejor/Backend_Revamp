@@ -54,6 +54,7 @@ import { CompetingClaimsCard, passesOf, roomsHeldWord, useRoomNumbers, useRoomTy
 import { PaymentPlanCard } from "./s3-money";
 import { Help, HelpHere } from "@/components/ds/help";
 import { DateInput, TimeInput } from "@/components/ds/date-input";
+import { billNo, proformaBaseNo, quoteNo } from "@/lib/ds/papers";
 
 /* ------------------------------------------------------------------ vocabulary */
 
@@ -1247,7 +1248,7 @@ function ProformaCard({
   }
 
   const shown = current ?? proformas[0];
-  const no = shown.invoiceNumber ?? shown.id;
+  const no = billNo(shown);
   const basis = status?.requirementBasis ?? null;
   const asks = !status
     ? null
@@ -1279,7 +1280,7 @@ function ProformaCard({
       kind: "invoice",
       id: inv.id,
       invoiceType: "PROFORMA",
-      label: `Proforma ${inv.invoiceNumber ?? inv.id}${(inv.versionNumber ?? 1) > 1 ? ` · v${inv.versionNumber}` : ""}`,
+      label: `Proforma ${proformaBaseNo(inv)}${(inv.versionNumber ?? 1) > 1 ? ` · v${inv.versionNumber}` : ""}`,
       frozen: old && kept,
       notice:
         old && !kept
@@ -1430,7 +1431,7 @@ function ProformaCard({
               return (
                 <tr key={inv.id} className="static" style={isCurrent ? undefined : { opacity: 0.7 }}>
                   <td>
-                    {inv.invoiceNumber ?? inv.id} · v{inv.versionNumber ?? 1}
+                    {proformaBaseNo(inv)} · v{inv.versionNumber ?? 1}
                     <span className="sub">{fmtStamp(inv.createdAt, tz)}</span>
                   </td>
                   {passes.many ? <td>{passNo != null ? `Pass ${passNo}${passNo === passes.currentNumber ? " · now" : ""}` : "earlier"}</td> : null}
@@ -1465,7 +1466,7 @@ function ProformaCard({
           busy={send.isPending}
           width={720}
           beside={<SendPaperPanel paper={docRef(sendTarget)} nightsEach={nightsEach} />}
-          title={`Send proforma ${sendTarget.invoiceNumber ?? sendTarget.id}`}
+          title={`Send proforma ${billNo(sendTarget)}`}
           caseLines={[
             asks ? `It ${asks}` : "The advance it asks for is being read",
             ...(replyAsked ? ["Once it goes out, the guest's answer is needed before money is logged"] : []),

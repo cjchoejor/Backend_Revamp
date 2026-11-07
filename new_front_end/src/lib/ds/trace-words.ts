@@ -10,6 +10,7 @@ import { STEP_NAMES } from "./steps";
 import { translateMessage } from "./words";
 import { fmtRange, fmtStay, money as fmtMoney } from "./format";
 import type { HistoryNames } from "./history-walks";
+import { paperIdWords } from "@/lib/ds/papers";
 
 const WORDS: Record<string, string> = {
   "ENTRY.CREATED": "Booking recorded",
@@ -311,7 +312,7 @@ function roomChangeDetail(p: RoomChangedPayload): string[] {
   }
   if (p.moveId) bits.push(p.moveId);
   if (typeof p.newSegmentNumber === "number") bits.push(`pass ${p.newSegmentNumber}`);
-  if (p.quotationId) bits.push(`re-priced on ${p.quotationId}`);
+  if (p.quotationId) bits.push(`re-priced on ${paperIdWords(p.quotationId)}`);
   if (p.voucherNumber) bits.push(`new voucher ${p.voucherNumber}`);
   const held = (p.heldPapers ?? []).map((h) => h.number).filter((n): n is string => !!n);
   if (held.length) bits.push(`held for the desk to send: ${held.join(", ")}`);
@@ -397,7 +398,7 @@ export function traceDetail(ev: TraceEvent, names?: Partial<HistoryNames>): stri
     const no = roomNo(p.roomId);
     if (no) bits.push(`room ${no}`);
   }
-  if (ev.eventType.startsWith("QUOTATION.") && str("quotationId")) bits.push(str("quotationId")!);
+  if (ev.eventType.startsWith("QUOTATION.") && str("quotationId")) bits.push(paperIdWords(str("quotationId")!));
   if (ev.eventType === "RESERVATION_CONFIRMED") {
     const res = str("reservationId");
     if (res) bits.push(`${res}${voucherNo(res) ? ` · voucher ${voucherNo(res)}` : ""}`);

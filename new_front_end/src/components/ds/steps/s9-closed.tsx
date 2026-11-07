@@ -87,6 +87,7 @@ import {
   useSendTo,
 } from "./s8-parts";
 import { Help } from "@/components/ds/help";
+import { billNo, proformaBaseNo, quoteNo } from "@/lib/ds/papers";
 
 /* ------------------------------------------------------------------ vocabulary */
 
@@ -1217,7 +1218,7 @@ function SealedPapers({ entry, tz }: { entry: EntryDetail; tz: string }) {
   return (
     <StepCard title="Sealed papers" sealed>
       <Facts wide>
-        {quote ? <Fact k="Quotation">{quote.referenceNumber}</Fact> : null}
+        {quote ? <Fact k="Quotation">{quoteNo(quote)}</Fact> : null}
         {proforma ? <Fact k="Proforma">{invoiceLabel(proforma)}</Fact> : null}
         {entry.reservation ? (
           <Fact k="Reservation" meta={`confirmed ${fmtInstantDate(entry.reservation.confirmedAt, tz)}`}>

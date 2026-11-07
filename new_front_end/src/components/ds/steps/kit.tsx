@@ -42,6 +42,7 @@ import { getEntryBedPlan, setEntryBedPlan } from "@/lib/api/rooms";
 import { addBookingNote, listBookingNotes } from "@/lib/api/booking-notes";
 import type { BedAskSummary, BedPlanCell } from "@/components/desk/workspace/room-compositions-table";
 import { Help, HelpHere, useQuietScreen } from "@/components/ds/help";
+import { billNo, proformaBaseNo, quoteNo } from "@/lib/ds/papers";
 
 /** How a paper leaves the desk. WhatsApp is a RECORD of a hand-over, not a send. */
 const CHANNELS = [
@@ -2798,7 +2799,7 @@ export function PapersCard({
               {q.state === "DRAFT" ? <NotSentChip /> : <Chip tone={liveQuote(q) ? "success" : "quiet"}>{QUOTE_WORD[q.state] ?? q.state.toLowerCase()}</Chip>}
               <span className="when">{q.createdAt ? fmtStamp(q.createdAt) : ""}</span>
               <span className="acts">
-                <Button kind="quiet" compact icon="eye" onClick={() => setOpen({ kind: "quotation", id: q.id, label: `Quotation ${q.referenceNumber}`, frozen: !liveQuote(q) && !!q.pdfStorageKey })}>
+                <Button kind="quiet" compact icon="eye" onClick={() => setOpen({ kind: "quotation", id: q.id, label: `Quotation ${quoteNo(q)}`, frozen: !liveQuote(q) && !!q.pdfStorageKey })}>
                   Preview
                 </Button>
                 <Live>
@@ -2824,7 +2825,7 @@ export function PapersCard({
             <Fragment key={i.id}>
             <div className="paperrow">
               <span className="nm">
-                <b>{i.invoiceNumber ?? i.id}</b>
+                <b>{proformaBaseNo(i)}</b>
                 <span className="v"> · {INVOICE_WORD[i.invoiceType] ?? "Invoice"}</span>
                 {(i.versionNumber ?? 1) > 1 ? <span className="v"> · v{i.versionNumber}</span> : null}
               </span>
@@ -2835,7 +2836,7 @@ export function PapersCard({
               )}
               <span className="when">{i.dispatchedAt ? `sent ${fmtStamp(i.dispatchedAt)}` : i.createdAt ? fmtStamp(i.createdAt) : ""}</span>
               <span className="acts">
-                <Button kind="quiet" compact icon="eye" onClick={() => setOpen({ kind: "invoice", id: i.id, label: `${INVOICE_WORD[i.invoiceType] ?? "Invoice"} ${i.invoiceNumber ?? i.id}`, issued: i.invoiceType === "FINAL", invoiceType: i.invoiceType })}>
+                <Button kind="quiet" compact icon="eye" onClick={() => setOpen({ kind: "invoice", id: i.id, label: `${INVOICE_WORD[i.invoiceType] ?? "Invoice"} ${billNo(i)}`, issued: i.invoiceType === "FINAL", invoiceType: i.invoiceType })}>
                   Preview
                 </Button>
                 <Live>
@@ -3005,10 +3006,10 @@ export function QuotationSendDialog({
       }
       toast.success(
         channel === "WHATSAPP"
-          ? `${target?.referenceNumber} recorded as sent on WhatsApp to ${typed}${face}`
+          ? `${target ? quoteNo(target) : ""} recorded as sent on WhatsApp to ${typed}${face}`
           : typed
-            ? `${target?.referenceNumber} sent by email to ${typed}${face}`
-            : `${target?.referenceNumber} recorded as sent — nothing was emailed (no address on file); hand it over or send it on WhatsApp`,
+            ? `${target ? quoteNo(target) : ""} sent by email to ${typed}${face}`
+            : `${target ? quoteNo(target) : ""} recorded as sent — nothing was emailed (no address on file); hand it over or send it on WhatsApp`,
       );
       onSent();
     },
@@ -3042,8 +3043,8 @@ export function QuotationSendDialog({
       open
       onClose={onClose}
       busy={send.isPending}
-      beside={<SendPaperPanel paper={{ kind: "quotation", id: target.id, label: `Quotation ${target.referenceNumber}` }} nightsEach={nightsEach} />}
-      title={`Send quotation ${target.referenceNumber}`}
+      beside={<SendPaperPanel paper={{ kind: "quotation", id: target.id, label: `Quotation ${quoteNo(target)}` }} nightsEach={nightsEach} />}
+      title={`Send quotation ${quoteNo(target)}`}
       caseLines={[
         `Version ${target.versionNumber}`,
         target.validUntil ? `Price valid until ${fmtDateTime(target.validUntil, tz)} — sending does not restart the clock` : "No validity recorded",
@@ -3156,7 +3157,7 @@ function InvoiceSendDialog({
   const send = useMutation({
     mutationFn: () => dispatchInvoice(session!, target!.id, { dispatchedTo: typed || undefined, nightsEach: isProforma && nightsEach }),
     onSuccess: () => {
-      toast.success(typed ? `${target?.invoiceNumber ?? "The bill"} sent to ${typed}` : `${target?.invoiceNumber ?? "The bill"} recorded as sent — nothing was emailed; hand it over`);
+      toast.success(typed ? `${target ? billNo(target) : "The bill"} sent to ${typed}` : `${target ? billNo(target) : "The bill"} recorded as sent — nothing was emailed; hand it over`);
       onSent();
     },
     onError: (e) => toastRefusal(e, "The bill could not be sent"),
@@ -3172,14 +3173,14 @@ function InvoiceSendDialog({
           paper={{
             kind: "invoice",
             id: target.id,
-            label: `${INVOICE_WORD[target.invoiceType] ?? "Invoice"} ${target.invoiceNumber ?? target.id}`,
+            label: `${INVOICE_WORD[target.invoiceType] ?? "Invoice"} ${billNo(target)}`,
             issued: target.invoiceType === "FINAL",
             invoiceType: target.invoiceType,
           }}
           nightsEach={isProforma && nightsEach}
         />
       }
-      title={`Send ${INVOICE_WORD[target.invoiceType] ?? "invoice"} ${target.invoiceNumber ?? target.id}`}
+      title={`Send ${INVOICE_WORD[target.invoiceType] ?? "invoice"} ${billNo(target)}`}
       caseLines={[entry.id, target.dispatchedAt ? "Already sent once — this sends it again" : "Not sent yet"]}
       footer={
         <>

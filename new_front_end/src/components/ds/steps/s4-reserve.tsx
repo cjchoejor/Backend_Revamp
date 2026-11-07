@@ -40,6 +40,7 @@ import { DsDialog, FactBox, FactLine, Facts, Fact, Live, OnRecord, PaperDrawer, 
 import { BookingOtherWays } from "./s4-other-ways";
 import { roomsHeldWord } from "./s2-shared";
 import { Help } from "@/components/ds/help";
+import { billNo, proformaBaseNo, quoteNo } from "@/lib/ds/papers";
 
 /* ------------------------------------------------------------------ vocabulary */
 
@@ -295,7 +296,7 @@ function BeforeYouReserve({
     label: quote?.state === "ACCEPTED" ? "Accepted quotation" : "Quotation",
     value: quote ? (
       <>
-        {quote.referenceNumber} · {QUOTE_WORD[quote.state] ?? words(quote.state)}
+        {quoteNo(quote)} · {QUOTE_WORD[quote.state] ?? words(quote.state)}
         {quoteAnswer ? ` · ${quoteAnswer}` : ""}
       </>
     ) : (
@@ -415,7 +416,7 @@ function BeforeYouReserve({
     label: piAsked || piAnswer ? "Proforma and the answer" : "Proforma",
     value: pi ? (
       <>
-        {pi.invoiceNumber ?? pi.id}
+        {billNo(pi)}
         {piSent ? ` · sent${pi.dispatchedTo ? ` to ${pi.dispatchedTo}` : ""}` : <> <NotSentChip /></>}
         {piSent ? (piAnswer ? ` · ${piAnswer}` : piComm?.acknowledgementStatus === "NOT_ASKED" ? "" : " · their answer is not on record — Set up") : ""}
         {!metOr("Proforma sent to guest") ? " · money came in, so it must go out first" : ""}

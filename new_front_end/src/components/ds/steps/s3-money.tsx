@@ -37,6 +37,7 @@ import { useRefreshEntry, ActionRow, Choice, DsDialog, Fact, Facts, Live, NotSen
 import { hotelLocalToIso, isoToHotelLocal } from "./s2-shared";
 import { Help, HelpHere } from "@/components/ds/help";
 import { DateTimeInput } from "@/components/ds/date-input";
+import { billNo, proformaBaseNo, quoteNo } from "@/lib/ds/papers";
 
 /* ------------------------------------------------------------------ words */
 
@@ -338,7 +339,7 @@ export function PaymentPlanCard({
             <Fact k="The bill">
               {bill.proforma ? (
                 <>
-                  Proforma {bill.proforma.invoiceNumber ?? bill.proforma.id}
+                  Proforma {billNo(bill.proforma)}
                   {bill.dispatched ? (
                     <span className="meta">
                       {" "}

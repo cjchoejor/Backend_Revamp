@@ -46,6 +46,7 @@ import { Help } from "@/components/ds/help";
 import type { ChangeBookingItem } from "./kit";
 import { CompetingClaimsCard, LEVEL_WORD, passesOf, roomsHeldWord, useCompetingClaims, useRoomNumbers, useRoomTypeNames } from "./s2-shared";
 import { useInvoiceRecipient } from "@/hooks/use-invoice-recipient";
+import { billNo, proformaBaseNo, quoteNo } from "@/lib/ds/papers";
 
 /* ------------------------------------------------------------------ vocabulary */
 
@@ -462,7 +463,7 @@ export function S2Negotiation({
   const generateM = useMutation({
     mutationFn: () => createQuotation(session!, entry.id, createBody()),
     onSuccess: async (q) => {
-      toast.success(`Quotation ${q.referenceNumber} generated — nothing sent, no rooms marked`);
+      toast.success(`Quotation ${quoteNo(q)} generated — nothing sent, no rooms marked`);
       setValidTouched(false);
       refresh(extraKeys);
       await goToQuotation();
@@ -1095,7 +1096,7 @@ function QuotationCard({
         verbatimNote: how === "VERBAL" ? said.trim() : undefined,
       }),
     onSuccess: () => {
-      toast.success(`${q.referenceNumber} accepted — the answer is on record`);
+      toast.success(`${quoteNo(q)} accepted — the answer is on record`);
       setAnswerOpen(false);
       setHow(null);
       setSaid("");
@@ -1143,7 +1144,7 @@ function QuotationCard({
               setPaper({
                 kind: "quotation",
                 id: q.id,
-                label: `Quotation ${q.referenceNumber}`,
+                label: `Quotation ${quoteNo(q)}`,
                 frozen: (q.state === "SUPERSEDED" || q.state === "EXPIRED") && !!q.pdfStorageKey,
               })
             }
@@ -1300,7 +1301,7 @@ function QuotationCard({
         onClose={() => setCloseLoopOpen(false)}
         busy={closeLoopM.isPending}
         title="Close the reply window"
-        caseLines={[`${q.referenceNumber} · sent ${fmtStamp(q.sentAt, tz)}`]}
+        caseLines={[`${quoteNo(q)} · sent ${fmtStamp(q.sentAt, tz)}`]}
         lead="No answer came from the guest. This records the FOM's decision in place of their answer."
         confirmLabel="Record the decision"
         placeholder="agent confirmed by phone to the FOM"
