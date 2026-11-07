@@ -21,6 +21,7 @@
  * 2026-08-01) shows the exact same document WITHOUT rendering a PDF, writing storage, or
  * snapshotting QuotationLine rows — pure read, always from the quotation's current terms.
  */
+import { paperNumber, printedProformaNumber, printedQuotationNumber, proformaNumberOf } from "../../lib/document-numbers.js";
 import { Prisma, type PrismaClient, type QuotationLine } from "@prisma/client";
 import { NotFoundError } from "../../lib/errors.js";
 import { labelRoomNights, roomNightsForEntry, stayNightDates, type NightsMode } from "../../lib/room-nights-for-entry.js";
@@ -599,7 +600,7 @@ async function buildQuotationDocRender(
   const html = renderLegphelQuotationHtml({
     ...priceBlock,
     masthead: mastheadFromHotelProfile(hotel),
-    quotationNo: q.referenceNumber,
+    quotationNo: await printedQuotationNumber(prisma, q),
     bookingRef: q.entryId,
     date: formatDocDateLocal(documentDate),
     validityStrip: q.validUntil

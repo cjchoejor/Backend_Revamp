@@ -1,3 +1,4 @@
+import { paperNumber, printedProformaNumber, printedQuotationNumber, proformaNumberOf } from "../../lib/document-numbers.js";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { guestDisplayName } from "../../lib/guest-display-name.js";
 import type { EntryStatus, EntryUseType, GroupBillingMode, Stage } from "@prisma/client";
@@ -613,7 +614,7 @@ export async function buildBookingJourneySummary(prisma: Db, entryId: string): P
       proforma: proforma
         ? {
             id: proforma.id,
-            invoiceNumber: proforma.invoiceNumber ?? null,
+            invoiceNumber: printedProformaNumber(proforma),
             versionNumber: proforma.versionNumber,
             state: proforma.state,
             totalAmount: money(proforma.totalAmount ?? null),

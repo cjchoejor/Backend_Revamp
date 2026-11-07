@@ -1,3 +1,4 @@
+import { paperNumber, printedProformaNumber, printedQuotationNumber, proformaNumberOf } from "../../lib/document-numbers.js";
 import { cleanPhone } from "../../lib/phone-numbers.js";
 import type { PrismaClient } from "@prisma/client";
 import { resolveSendTo } from "../../lib/send-to.js";
@@ -101,10 +102,19 @@ export async function listHeldDocuments(prisma: PrismaClient, entryId: string): 
 
 /** A voucher row names its reservation; the paper carries the voucher's own number. */
 async function voucherNumbersFor(prisma: PrismaClient, rows: { kind: string; documentId: string }[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
   const ids = rows.filter((r) => r.kind === "CONFIRMATION_VOUCHER").map((r) => r.documentId);
-  if (!ids.length) return new Map();
-  const res = await prisma.reservation.findMany({ where: { id: { in: ids } }, select: { id: true, confirmationVoucherNumber: true } });
-  return new Map(res.filter((r) => r.confirmationVoucherNumber).map((r) => [r.id, r.confirmationVoucherNumber!]));
+  if (ids.length) {
+    const res = await prisma.reservation.findMany({ where: { id: { in: ids } }, select: { id: true, confirmationVoucherNumber: true } });
+    for (const r of res) if (r.confirmationVoucherNumber) out.set(r.id, r.confirmationVoucherNumber);
+  }
+  // A proforma's number with its version (2026-11-07): a later version's record id is `INV-…-v2`.
+  const pf = rows.filter((r) => r.kind === "PROFORMA").map((r) => r.documentId);
+  if (pf.length) {
+    const inv = await prisma.invoice.findMany({ where: { id: { in: pf } }, select: { id: true, documentNumber: true, invoiceNumber: true, versionNumber: true } });
+    for (const i of inv) out.set(i.id, printedProformaNumber(i));
+  }
+  return out;
 }
 
 export async function decideHeldDocument(

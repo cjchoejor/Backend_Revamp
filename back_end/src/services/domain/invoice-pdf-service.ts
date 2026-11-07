@@ -23,6 +23,7 @@
  * inline preview (`renderInvoicePreviewHtml`, 2026-08-01) shows the exact same document
  * WITHOUT rendering a PDF, writing storage, or snapshotting InvoiceLine rows.
  */
+import { paperNumber, printedProformaNumber, printedQuotationNumber, proformaNumberOf } from "../../lib/document-numbers.js";
 import { paymentsStillHeld, waitingRefundTotal } from "../../lib/refund-money.js";
 import { InvoiceType, Prisma, type PrismaClient } from "@prisma/client";
 import { effectiveCheckOutDate } from "../../lib/stay-dates.js";
@@ -79,6 +80,11 @@ export type InvoicePdfArtifact = {
 };
 
 /** Nice filename for downloads / email attachments. */
+/** A file name's number: the shared number with its version from the second one on (2026-11-07). */
+function fileRefOf(inv: { documentNumber?: string | null; invoiceNumber?: string | null; id: string; versionNumber?: number | null }): string {
+  return inv.documentNumber && (inv.versionNumber ?? 1) > 1 ? `${inv.documentNumber}-v${inv.versionNumber}` : proformaNumberOf(inv);
+}
+
 function filenameFor(invoiceType: InvoiceType, invoiceRef: string): string {
   const label = invoiceType === InvoiceType.PROFORMA ? "proforma" : invoiceType === InvoiceType.INTERIM ? "interim-invoice" : "tax-invoice";
   return `${invoiceRef}-${label}.pdf`;
@@ -347,7 +353,8 @@ async function buildProformaDocRender(prisma: PrismaClient, inv: LoadedInvoice, 
   // a fabricated demand. Omitted once nothing is due (the template doc says exactly that).
   const advanceDeadline = inv.entry.reservation?.frozenCheckInDate ?? inv.entry.checkInDate ?? null;
 
-  const invoiceRef = inv.invoiceNumber ?? inv.id;
+  // The number as printed, with its version from the second one on (2026-11-07).
+  const invoiceRef = printedProformaNumber(inv);
   const docDate = inv.dispatchedAt ?? inv.issuedAt ?? new Date();
 
   // The billed party — the reference's "To" is the agency/corporate when one books
@@ -502,7 +509,7 @@ export async function renderProformaPdfFace(
   const inv = await loadInvoiceForRender(prisma, invoiceId);
   if (inv.invoiceType !== InvoiceType.PROFORMA) throw new ValidationError("Only a proforma has a copy with every night named");
   const m = await buildProformaDocRender(prisma, inv, face);
-  const base = filenameFor(inv.invoiceType, inv.invoiceNumber ?? inv.id).replace(/\.pdf$/, "");
+  const base = filenameFor(inv.invoiceType, fileRefOf(inv)).replace(/\.pdf$/, "");
   return { bytes: await renderHtmlToPdf(m.html, { fitToPage: true }), filename: `${base}${face.nightsMode === "EACH" ? "-each-night" : ""}.pdf` };
 }
 
@@ -919,11 +926,12 @@ export async function generateOrLoadInvoicePdf(
       storageKey: inv.pdfStorageKey,
       checksum: inv.pdfChecksum,
       bytes,
-      filename: filenameFor(inv.invoiceType, inv.invoiceNumber ?? inv.id),
+      filename: filenameFor(inv.invoiceType, fileRefOf(inv)),
     };
   }
 
-  const invoiceRef = inv.invoiceNumber ?? inv.id;
+  // The number shared by a proforma's versions; each stored file adds its own version.
+  const invoiceRef = proformaNumberOf(inv);
   const now = new Date();
 
   // ================================================================

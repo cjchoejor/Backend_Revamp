@@ -1,3 +1,4 @@
+import { nextProformaNumberTx } from "../../lib/document-numbers.js";
 import { afterProformaMadeTx } from "./proforma-validity-service.js";
 import { paymentsStillHeld, waitingRefundTotal } from "../../lib/refund-money.js";
 import { randomUUID } from "node:crypto";
@@ -700,11 +701,13 @@ export async function reissueProformaTx(
   const supersedeLive = changed && live.length > 0;
   const basis = changed ? basisWhenChanged : "REISSUED_AFTER_REENTRY";
   const supersededIds = supersedeLive ? live.map((i) => i.id) : [];
-  const nextVersion = proformas.length > 0 ? Math.max(...proformas.map((i) => i.versionNumber ?? 1)) + 1 : 1;
-  const newId = await allocateReadableId(tx, "INVOICE" as const, now);
+  // The same number as the proforma it replaces, its next version (2026-11-07).
+  const num = await nextProformaNumberTx(tx, entryId, folioId, now);
+  const nextVersion = num.versionNumber;
   const created = await tx.invoice.create({
     data: {
-      id: newId,
+      id: num.id,
+      documentNumber: num.documentNumber,
       folioId,
       entryId,
       invoiceType: InvoiceType.PROFORMA,

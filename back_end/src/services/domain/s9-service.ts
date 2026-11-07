@@ -1,3 +1,4 @@
+import { paperNumber, printedProformaNumber, printedQuotationNumber, proformaNumberOf } from "../../lib/document-numbers.js";
 import { enforceEarlierAdvanceAnswered } from "../../lib/refund-money.js";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { resolveSendTo } from "../../lib/send-to.js";
@@ -483,7 +484,7 @@ async function sendInvoiceEmailBestEffort(
     : isPI
     ? renderProformaInvoiceEmail({
         guestDisplayName: displayName,
-        invoiceRef: inv.id,
+        invoiceRef: printedProformaNumber(inv),
         checkInDate: ci,
         checkOutDate: co,
         guestCount: entry.reservation?.frozenGuestCount ?? entry.guestCount ?? 1,

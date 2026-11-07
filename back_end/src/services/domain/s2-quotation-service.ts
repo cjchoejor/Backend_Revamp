@@ -36,6 +36,7 @@ import { resolveBelowMsrGmWaiverForS2 } from "../../policies/08-pricing-rate-pla
 import { enforceFocEntitlementForS2GroupQuotation } from "../../policies/15-foc/p37-foc-entitlement-for-s2-group-quotation.js";
 import * as communicationService from "./communication-service.js";
 import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.js";
+import { nextQuotationNumberTx, printedQuotationNumber } from "../../lib/document-numbers.js";
 import { resolveRatePackageForBooking, type AgentRateBreakdown } from "../../lib/rate-package-resolution.js";
 import { loadChildPolicyBundle, computeGroupMealCharge } from "./child-policy-service.js";
 import { readOptionSelected, firstRoomId } from "../../lib/option-selected-reader.js";
@@ -1115,17 +1116,18 @@ async function createQuotationInner(
   const validity = await resolveQuotationValidity(prisma, entryId, input, now);
 
   return prisma.$transaction(async (tx) => {
-    const referenceNumber = await allocateReadableId(tx, "QUOTATION" as const);
+    // The booking's number, its next version (2026-11-07): a new booking takes a number, every
+    // later quotation of it keeps that number as a new version.
+    const num = await nextQuotationNumberTx(tx, entryId);
     const created = await tx.quotation.create({
       data: {
-        // Use the readable QUO-YYYYMMDD-NNNN as the primary key so downstream FKs
-        // (QuotationLine.quotationId) hold the readable value, not a UUID. Matches the
-        // Invoice pattern.
-        id: referenceNumber,
+        // The readable number is the primary key on a first version (QUO-YYYYMMDD-NNNN) and
+        // `QUO-…-vN` on a later one, so downstream FKs (QuotationLine.quotationId) stay readable.
+        id: num.id,
         entryId,
         segmentId,
-        versionNumber: nextVersion,
-        referenceNumber,
+        versionNumber: num.versionNumber,
+        referenceNumber: num.referenceNumber,
         state: QuotationState.DRAFT,
         validUntil: validity.validUntil,
         commercialTerms: commercialTerms as any,
@@ -1159,7 +1161,7 @@ async function createQuotationInner(
           quotationId: created.id,
           entryId,
           segmentId,
-          versionNumber: nextVersion,
+          versionNumber: created.versionNumber,
           validUntil: validity.validUntil.toISOString(),
           msrGmWaiver: Boolean(msrWaiver),
         },
@@ -1343,15 +1345,15 @@ export async function createGroupQuotation(
 
   return prisma.$transaction(async (tx) => {
     const now = new Date();
-    const referenceNumber = await allocateReadableId(tx, "QUOTATION" as const, now);
+    const num = await nextQuotationNumberTx(tx, entryId, now);
     const created = await tx.quotation.create({
       data: {
         // Readable ID as primary key — see comment in createQuotation above.
-        id: referenceNumber,
+        id: num.id,
         entryId,
         segmentId,
-        versionNumber: nextVersion,
-        referenceNumber,
+        versionNumber: num.versionNumber,
+        referenceNumber: num.referenceNumber,
         state: QuotationState.DRAFT,
         commercialTerms: commercialTerms as any,
         // Group quotations: same shape as single-party — totalAmount = per-room rate × roomCount.
@@ -1582,15 +1584,16 @@ async function supersedeQuotationWithNewDraftInner(
       data: { state: QuotationState.SUPERSEDED, supersededAt: now },
     });
 
-    const referenceNumber = await allocateReadableId(tx, "QUOTATION" as const, now);
+    // The same number as the quotation it replaces, its next version (2026-11-07).
+    const num = await nextQuotationNumberTx(tx, prior.entryId, now);
     const created = await tx.quotation.create({
       data: {
         // Readable ID as primary key — see comment in createQuotation above.
-        id: referenceNumber,
+        id: num.id,
         entryId: prior.entryId,
         segmentId: prior.segmentId,
-        versionNumber: prep.nextVersion,
-        referenceNumber,
+        versionNumber: num.versionNumber,
+        referenceNumber: num.referenceNumber,
         state: QuotationState.DRAFT,
         validUntil: validity.validUntil,
         commercialTerms: prep.commercialTerms as any,
@@ -1654,7 +1657,7 @@ async function supersedeQuotationWithNewDraftInner(
           priorQuotationId: prior.id,
           newQuotationId: created.id,
           priorVersion: prior.versionNumber,
-          newVersion: prep.nextVersion,
+          newVersion: num.versionNumber,
           priorTotalAmount: prior.totalAmount?.toString?.() ?? null,
           newTotalAmount: created.totalAmount?.toString?.() ?? null,
           ...diff,
@@ -2230,7 +2233,7 @@ async function sendQuotationEmailBestEffort(
   const content = renderQuotationEmail({
     guestDisplayName: recipient.greetName,
     inquiryReadableId: entry.inquiryId,
-    quotationRef: q.referenceNumber ?? q.id,
+    quotationRef: q.referenceNumber ? await printedQuotationNumber(prisma, q) : q.id,
     checkInDate: ci,
     checkOutDate: co,
     guestCount: entry.guestCount ?? 1,

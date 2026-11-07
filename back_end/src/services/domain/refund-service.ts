@@ -1,3 +1,4 @@
+import { paperNumber, printedProformaNumber, printedQuotationNumber, proformaNumberOf } from "../../lib/document-numbers.js";
 import type { PrismaClient } from "@prisma/client";
 import { InvoiceState, InvoiceType, PaymentDirection, Prisma } from "@prisma/client";
 import { NotFoundError, PolicyGateBlockedError, ValidationError } from "../../lib/errors.js";
@@ -234,7 +235,7 @@ export async function listRefunds(prisma: PrismaClient, view: "waiting" | "done"
   });
   const invoiceIds = [...new Set(rows.map((r) => r.paidOnInvoiceId).filter((x): x is string => !!x))];
   const invoices = invoiceIds.length
-    ? await prisma.invoice.findMany({ where: { id: { in: invoiceIds } }, select: { id: true, invoiceNumber: true, versionNumber: true, dispatchedAt: true, pdfStorageKey: true } })
+    ? await prisma.invoice.findMany({ where: { id: { in: invoiceIds } }, select: { id: true, invoiceNumber: true, documentNumber: true, versionNumber: true, dispatchedAt: true, pdfStorageKey: true } })
     : [];
   const invoiceOf = new Map(invoices.map((i) => [i.id, i]));
   const staffIds = [
@@ -292,7 +293,7 @@ export async function listRefunds(prisma: PrismaClient, view: "waiting" | "done"
           receivedAt: (p.receivedAt ?? p.createdAt).toISOString(),
           recordedByName: person(p.recordedBy),
         })),
-      paidOn: paper ? { id: paper.id, number: paper.invoiceNumber ?? paper.id, version: paper.versionNumber ?? 1, sentAt: paper.dispatchedAt?.toISOString() ?? null, stored: !!paper.pdfStorageKey } : null,
+      paidOn: paper ? { id: paper.id, number: proformaNumberOf(paper), version: paper.versionNumber ?? 1, sentAt: paper.dispatchedAt?.toISOString() ?? null, stored: !!paper.pdfStorageKey } : null,
       refundedAmount: r.refundedAmount == null ? null : Number(toDecimal(r.refundedAmount).toFixed(2)),
       refundMethod: r.refundMethod,
       bankName: r.bankName,

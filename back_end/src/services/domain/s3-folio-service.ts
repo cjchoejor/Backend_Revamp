@@ -1,3 +1,4 @@
+import { nextProformaNumberTx } from "../../lib/document-numbers.js";
 import { afterProformaMadeTx, stopProformaValidityTx } from "./proforma-validity-service.js";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { FolioState, InvoiceState, InvoiceType, PaymentDirection, Stage } from "@prisma/client";
@@ -290,10 +291,13 @@ export async function issueInvoice(
     }
 
     const now = new Date();
-    const invoiceId = await allocateReadableId(tx, "INVOICE" as const, now);
+    // A booking's proformas share one number, each a version of it (2026-11-07).
+    const num = await nextProformaNumberTx(tx, input.entryId, folioId, now);
     const inv = await tx.invoice.create({
       data: {
-        id: invoiceId,
+        id: num.id,
+        documentNumber: num.documentNumber,
+        versionNumber: num.versionNumber,
         folioId,
         entryId: input.entryId,
         invoiceType: InvoiceType.PROFORMA,

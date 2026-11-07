@@ -1999,6 +1999,10 @@ model Invoice {
   dispatchedTo   String?
   supersededById String?
   versionNumber  Int          @default(1)
+  /// The number the paper prints, shared by every version of a proforma (2026-11-07): "INV-20261107-0004",
+  /// printed with " · v2" from the second version. The record's own id is `INV-20261107-0004-v2`. Null on a
+  /// paper made before this, which prints its id.
+  documentNumber String?
   metadata       Json?
   createdAt      DateTime     @default(now())
 
@@ -2020,6 +2024,7 @@ model Invoice {
   lines                 InvoiceLine[]
   interimPaymentRequest InterimPaymentRequest?
 
+  @@index([documentNumber])
   @@map("invoices")
 }
 

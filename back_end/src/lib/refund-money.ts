@@ -1,3 +1,4 @@
+import { paperNumber, printedProformaNumber, printedQuotationNumber, proformaNumberOf } from "./document-numbers.js";
 import { InvoiceType, PaymentDirection, Prisma, type PrismaClient, type Stage } from "@prisma/client";
 import { PolicyGateBlockedError } from "./errors.js";
 import { maxZeroSub, sumMoney, toDecimal, ZERO } from "./money.js";
@@ -52,7 +53,7 @@ export function paymentsStillHeld<T extends Row>(rows: readonly T[], gone: Prism
 
 /** The proforma the money was paid against: the one out when it came in, else the one in hand then. */
 export async function proformaMoneyWasPaidOn(db: Db, folioId: string, paidAt: Date) {
-  const select = { id: true, invoiceNumber: true, versionNumber: true, dispatchedAt: true, pdfStorageKey: true, state: true } as const;
+  const select = { id: true, invoiceNumber: true, documentNumber: true, versionNumber: true, dispatchedAt: true, pdfStorageKey: true, state: true } as const;
   const sent = await db.invoice.findFirst({
     where: { folioId, invoiceType: InvoiceType.PROFORMA, dispatchedAt: { not: null, lte: paidAt } },
     orderBy: { dispatchedAt: "desc" },
@@ -128,7 +129,7 @@ export async function describeEarlierAdvance(db: Db, input: { entryId: string; f
       receivedAt: (h.row.receivedAt ?? h.row.createdAt).toISOString(),
     })),
     paidOn: paid
-      ? { id: paid.id, number: paid.invoiceNumber ?? paid.id, version: paid.versionNumber ?? 1, sentAt: paid.dispatchedAt?.toISOString() ?? null, stored: !!paid.pdfStorageKey }
+      ? { id: paid.id, number: proformaNumberOf(paid), version: paid.versionNumber ?? 1, sentAt: paid.dispatchedAt?.toISOString() ?? null, stored: !!paid.pdfStorageKey }
       : null,
     answer,
     refund,

@@ -1,3 +1,4 @@
+import { paperNumber, printedProformaNumber, printedQuotationNumber, proformaNumberOf } from "../../lib/document-numbers.js";
 import { restartProformaValidityTx } from "./proforma-validity-service.js";
 import { paymentsStillHeld, waitingRefundTotal } from "../../lib/refund-money.js";
 import type { PrismaClient } from "@prisma/client";
@@ -295,7 +296,7 @@ export async function deleteAdvancePayment(
       blockReleased,
       proformaMadeAgain: reissued?.newInvoiceId ?? null,
       // Once reserved no paper is made again: the desk is told which one printed this money.
-      paperSaidReceived: remake ? [] : printedIt.filter((i) => i.dispatchedAt).map((i) => i.invoiceNumber ?? i.id),
+      paperSaidReceived: remake ? [] : printedIt.filter((i) => i.dispatchedAt).map((i) => printedProformaNumber(i)),
     };
   });
 
