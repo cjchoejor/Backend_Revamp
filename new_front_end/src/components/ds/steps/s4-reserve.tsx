@@ -35,7 +35,7 @@ import { JourneySummaryPanel } from "@/components/desk/workspace/journey-summary
 import { PLAN_LABEL, dueLabel } from "@/components/desk/workspace/advance-settlement";
 import { PaymentPlanCard } from "./s3-money";
 import type { EntryDetail, PaymentStatusSummary, QuotationSummary } from "@/types/api";
-import { StageActs, WorkPopup } from "./kit";
+import { PaymentsButton } from "./payments-button";
 import { DsDialog, FactBox, FactLine, Facts, Fact, Live, OnRecord, PaperDrawer, SendPaperPanel, StepCanvas, StepCard, Tool, AnswerLine, useReplyAsked, atLeast, currentPassStart, goToStepCard, latestDispatched, toastRefusal, useCommunications, useFinishWhenDone, useRefreshEntry, useStepMode, useStepPane, words, type FactState, type PaperRef, NightsChoice, NotSentChip } from "./kit";
 import { BookingOtherWays } from "./s4-other-ways";
 import { roomsHeldWord } from "./s2-shared";
@@ -183,29 +183,10 @@ export function S4Reserve({
  * server's own figure — amber while there is time, red once the check-in it was due by has come.
  */
 function ReservePayments({ entry, past }: { entry: EntryDetail; past: boolean }) {
-  const [open, setOpen] = useState(false);
-  const payment = usePaymentStatus(entry.id, { enabled: !!entry.folio });
-  if (!entry.folio) return null;
-  const st = payment.data;
-  const toCome = st && !st.satisfied && Number(st.shortfall) > 0 ? st.shortfall : null;
-  const late = !!st?.advanceWindow?.overdue;
   return (
-    <>
-      <StageActs>
-        <Button
-          kind="secondary"
-          className={toCome != null ? `stage-pay${late ? " late" : ""}` : undefined}
-          onClick={() => setOpen(true)}
-          title={toCome != null ? `${money(toCome)} of the advance is still to come${late ? " — it was due by check-in" : ""}` : undefined}
-        >
-          Payments
-          {toCome != null ? <span className="pay-n">{money(toCome)} to come</span> : null}
-        </Button>
-      </StageActs>
-      <WorkPopup open={open} title="Payments" onClose={() => setOpen(false)}>
-        <ReserveAdvance entry={entry} past={past} />
-      </WorkPopup>
-    </>
+    <PaymentsButton entry={entry}>
+      <ReserveAdvance entry={entry} past={past} />
+    </PaymentsButton>
   );
 }
 
@@ -918,7 +899,7 @@ function WhatReserveDecided({ entry }: { entry: EntryDetail }) {
   for (const r of bookingRooms.data?.rooms ?? []) if (r.roomNumber) typeOfNo.set(r.roomNumber, r.typeName);
   for (const r of billing?.rooms ?? []) if (r.roomNumber && r.roomTypeName && !typeOfNo.has(r.roomNumber)) typeOfNo.set(r.roomNumber, r.roomTypeName);
   for (const r of journey?.s3Setup.committedHold?.rooms ?? []) if (r.roomNumber && r.roomTypeName && !typeOfNo.has(r.roomNumber)) typeOfNo.set(r.roomNumber, r.roomTypeName);
-  const tasks = entry.preArrivalTasks ?? [];
+  const recipient = useInvoiceRecipient(entry);
   const emailEvents = trace.filter((t) => t.eventType.startsWith("RESERVATION_CONFIRMATION_EMAIL"));
   const sent = emailEvents.some((t) => t.eventType.endsWith(".SENT"));
   const disc = entry.cancellationDisclosure ?? null;
@@ -971,10 +952,7 @@ function WhatReserveDecided({ entry }: { entry: EntryDetail }) {
         </Fact>
         {res.creditCeilingIfExtended != null ? <Fact k="Credit ceiling">{money(res.creditCeilingIfExtended, cur)}</Fact> : null}
         <Fact k="Voucher" meta={sent ? "sent" : emailEvents.length ? "the email did not go out" : undefined}>
-          confirmation voucher · to {entry.guestProfile?.email ?? "no email on file"}
-        </Fact>
-        <Fact k="Pre-arrival">
-          {plural(tasks.length, "task")} opened for {fmtDate(res.frozenCheckInDate)} · {tasks.filter((t) => t.status === "PENDING").length} open
+          confirmation voucher · goes to {recipient.defaultTo || "no email on file"}
         </Fact>
       </Facts>
     </StepCard>

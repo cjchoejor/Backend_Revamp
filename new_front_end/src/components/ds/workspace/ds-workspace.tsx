@@ -188,8 +188,7 @@ const RESERVE_SECTIONS: Record<string, string> = {
 /** Arrival's five sections (2026-10-29), in the order the desk works them; the handoff records itself once the first three are done. */
 const ARRIVAL_SECTIONS: Record<string, string> = {
   rooms: "The rooms",
-  tasks: "Pre-arrival tasks",
-  advance: "The advance",
+  advance: "The advance · in Payments",
   handoff: "The front-desk handoff",
   present: "The guest is here",
 };
@@ -1163,6 +1162,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const sections = STEP_SECTIONS[viewing] ?? {};
   const goToCard = (card?: string) => {
     if (!card) return;
+    // A section that lives behind a step-line button (Payments, 2026-11-07) is opened by it.
+    if (!window.dispatchEvent(new CustomEvent("desk:go-to-card", { detail: card, cancelable: true }))) return;
     // A section asked for from the step line leaves Set up's rooms view first (2026-10-28).
     if (topLayout && paneParam) setPane(null);
     // The card may live in one of the step's panes: open that pane first, then scroll once the

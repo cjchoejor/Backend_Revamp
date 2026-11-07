@@ -493,7 +493,6 @@ export function s5Readiness(
             met: hotelToday !== null && hotelToday >= checkInYmd,
           },
         ];
-  const tasks = entry.preArrivalTasks ?? [];
   // Mirrors p44 (2026-08-14): the FOM tier-2 acknowledgement is required only when the folio
   // balance is NEAR the extended ceiling (registry `tier2Percent`, default 90%) — NOT merely
   // because a ceiling exists. The frozen reservation carries `creditCeilingIfExtended`
@@ -510,11 +509,8 @@ export function s5Readiness(
     // The handoff records itself once the room, the tasks and the money are done, so it is
     // listed last — the order the desk works and the order the page reads (2026-09-25).
     { label: "Room assigned", met: (entry.roomAssignments ?? []).length > 0, card: "rooms" },
-    {
-      card: "tasks",
-      label: "Pre-arrival tasks done",
-      met: tasks.length > 0 && tasks.every((t) => t.status === "COMPLETE" || t.status === "WAIVED"),
-    },
+    // The pre-arrival tasks are the system's for now (2026-11-07): closed when Arrival opens and
+    // again before Check-in, so the desk does not list them.
     { label: "Advance reconciled", met: entry.folio?.advancePaymentReconciliationComplete === true, card: "advance" },
     {
       card: "advance",
