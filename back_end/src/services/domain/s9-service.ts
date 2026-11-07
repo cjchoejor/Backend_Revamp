@@ -1,5 +1,6 @@
 import { enforceEarlierAdvanceAnswered } from "../../lib/refund-money.js";
 import type { Prisma, PrismaClient } from "@prisma/client";
+import { resolveSendTo } from "../../lib/send-to.js";
 import { guestDisplayName } from "../../lib/guest-display-name.js";
 import { CommissionDueStatus, EntryStatus, FolioLineType, FolioState, InvoiceState, InvoiceType, Stage } from "@prisma/client";
 import { allocateReadableId, READABLE_ID_PREFIXES, allocateFolioLineId } from "../../lib/readable-id.js";
@@ -145,17 +146,16 @@ export type InvoiceRecipient = {
 };
 
 /**
- * Where a governed invoice email goes (2026-09-18). Every invoice document — the proforma, the
- * interim bill and the tax invoice — is addressed to the agency or company whenever one booked
- * ("To: <party> · For guest: <name>"), so its email follows the addressee:
+ * Where a governed invoice email goes (2026-09-18; the default is `resolveSendTo` since
+ * 2026-11-07). Every invoice document — the proforma, the interim bill and the tax invoice — is
+ * addressed to the agency or company whenever one booked ("To: <party> · For guest: <name>"):
  *   1. the address the desk typed;
- *   2. else that party's email on file;
- *   3. else the guest's email — only when no party is linked.
+ *   2. else the booking's contact person at that party, else the party's own email on file;
+ *   3. on a booking with no party, the guest's email, then who is arriving, then the caller.
  * A party-addressed invoice is never mailed to the traveller by default: it carries the party's
- * own negotiated rates, and almost no party has an email on file, so a guest fallback would send
- * nearly every agency's rates to its guests. With no address the invoice is still dispatched
- * (the desk hands it over) and the skipped email is traced with its reason. The address it went
- * to is recorded on the invoice, so the desk can say where the bill went.
+ * own negotiated rates. With no address the invoice is still dispatched (the desk hands it over)
+ * and the skipped email is traced with its reason. The address it went to is recorded on the
+ * invoice, so the desk can say where the bill went.
  */
 export async function resolveInvoiceRecipient(
   db: DbClient,
@@ -164,33 +164,15 @@ export async function resolveInvoiceRecipient(
 ): Promise<InvoiceRecipient> {
   const entry = await db.entry.findUnique({
     where: { id: entryId },
-    select: {
-      contactPersonName: true,
-      guestProfile: { select: { title: true, firstName: true, lastName: true, email: true } },
-      inquiry: {
-        select: {
-          travelAgent: { select: { displayName: true, contactEmail: true } },
-          corporateAccount: { select: { displayName: true, contactEmail: true } },
-        },
-      },
-    },
+    select: { contactPersonName: true, guestProfile: { select: { title: true, firstName: true, lastName: true } } },
   });
-  const guestName =
-    guestDisplayName(entry?.guestProfile) ||
-    entry?.contactPersonName?.trim() ||
-    "Guest";
-  const party = entry?.inquiry?.travelAgent ?? entry?.inquiry?.corporateAccount ?? null;
-  const greetName = party?.displayName ?? guestName;
+  const guestName = guestDisplayName(entry?.guestProfile) || entry?.contactPersonName?.trim() || "Guest";
+  const sendTo = await resolveSendTo(db, entryId);
+  const greetName = sendTo.party ?? guestName;
   const typedTo = typed?.trim();
   if (typedTo) return { to: typedTo, greetName, skipReason: null };
-  if (party) {
-    const partyTo = party.contactEmail?.trim();
-    return partyTo
-      ? { to: partyTo, greetName, skipReason: null }
-      : { to: null, greetName, skipReason: "BILLED_PARTY_HAS_NO_EMAIL" };
-  }
-  const guestTo = entry?.guestProfile?.email?.trim();
-  return guestTo ? { to: guestTo, greetName, skipReason: null } : { to: null, greetName, skipReason: "GUEST_HAS_NO_EMAIL" };
+  if (sendTo.email) return { to: sendTo.email, greetName, skipReason: null };
+  return { to: null, greetName, skipReason: sendTo.party ? "BILLED_PARTY_HAS_NO_EMAIL" : "GUEST_HAS_NO_EMAIL" };
 }
 
 async function dispatchInvoiceInner(

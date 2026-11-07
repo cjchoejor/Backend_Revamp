@@ -1,11 +1,11 @@
 import { cleanPhone } from "../../lib/phone-numbers.js";
 import type { PrismaClient } from "@prisma/client";
-import { guestDisplayName } from "../../lib/guest-display-name.js";
+import { resolveSendTo } from "../../lib/send-to.js";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { resendConfirmationVoucher } from "./s4-confirmation-service.js";
 import { armVoucherReplyWindow } from "./communication-service.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
-import { dispatchInvoice, resolveInvoiceRecipient } from "./s9-service.js";
+import { dispatchInvoice } from "./s9-service.js";
 
 /**
  * Answering a HELD PAPER (2026-10-12, operator ruling: "no paper goes to a guest unless the desk
@@ -41,21 +41,17 @@ export type HeldDocumentView = {
   note: string | null;
   decidedAt: string | null;
   decidedBy: string | null;
-  /** Where an email would go by default — the guest for a voucher, whom the bill is made out to for a proforma. */
-  defaultRecipient: { to: string | null; whose: string | null };
+  /**
+   * Where the paper would go by default (lib/send-to.ts, 2026-11-07): through an agency or a company,
+   * the booking's contact person there, else the party itself; on a direct booking the guest. `to`
+   * is the email, `phone` the number a WhatsApp send starts with.
+   */
+  defaultRecipient: { to: string | null; whose: string | null; phone: string | null; phoneWhose: string | null };
 };
 
-async function defaultRecipientFor(prisma: PrismaClient, row: { entryId: string; kind: string }) {
-  if (row.kind === "PROFORMA") {
-    const r = await resolveInvoiceRecipient(prisma, row.entryId).catch(() => null);
-    return { to: r?.to ?? null, whose: r?.to ? r.greetName : null };
-  }
-  const entry = await prisma.entry.findUnique({
-    where: { id: row.entryId },
-    select: { guestProfile: { select: { email: true, title: true, firstName: true, lastName: true } } },
-  });
-  const name = guestDisplayName(entry?.guestProfile);
-  return { to: entry?.guestProfile?.email ?? null, whose: entry?.guestProfile?.email ? (name ? `${name} (the guest)` : "the guest") : null };
+async function defaultRecipientFor(prisma: PrismaClient, row: { entryId: string; kind: string }): Promise<HeldDocumentView["defaultRecipient"]> {
+  const sendTo = await resolveSendTo(prisma, row.entryId);
+  return { to: sendTo.email, whose: sendTo.emailWhose, phone: sendTo.phone, phoneWhose: sendTo.phoneWhose };
 }
 
 function view(row: {
@@ -98,7 +94,7 @@ export async function listHeldDocuments(prisma: PrismaClient, entryId: string): 
   const voucherNos = await voucherNumbersFor(prisma, rows);
   const out: HeldDocumentView[] = [];
   for (const r of rows) {
-    out.push(view(r, r.decision == null ? await defaultRecipientFor(prisma, r) : { to: null, whose: null }, voucherNos.get(r.documentId)));
+    out.push(view(r, r.decision == null ? await defaultRecipientFor(prisma, r) : { to: null, whose: null, phone: null, phoneWhose: null }, voucherNos.get(r.documentId)));
   }
   return out;
 }
@@ -201,5 +197,5 @@ export async function decideHeldDocument(
       },
     })
     .catch(() => {});
-  return view(updated, { to: null, whose: null }, (await voucherNumbersFor(prisma, [updated])).get(updated.documentId));
+  return view(updated, { to: null, whose: null, phone: null, phoneWhose: null }, (await voucherNumbersFor(prisma, [updated])).get(updated.documentId));
 }

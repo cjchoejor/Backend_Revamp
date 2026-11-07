@@ -1,3 +1,4 @@
+import { resolveSendTo } from "../../lib/send-to.js";
 import { enforceProformaNotLapsed, stopProformaValidityTx } from "./proforma-validity-service.js";
 import { enforceEarlierAdvanceAnswered } from "../../lib/refund-money.js";
 import type { PrismaClient } from "@prisma/client";
@@ -662,9 +663,11 @@ async function resendConfirmationVoucherInner(
   if (!reservation.confirmedAt) throw new ValidationError("This reservation was never confirmed — nothing to send");
   const entry = reservation.entry;
 
-  const recipient = input.dispatchedTo?.trim() || entry.guestProfile?.email?.trim() || null;
+  // Typed, else whom the booking's papers go to (lib/send-to.ts, 2026-11-07): the contact person at
+  // the agency or company, else the party; on a direct booking the guest.
+  const recipient = input.dispatchedTo?.trim() || (await resolveSendTo(prisma, entry.id)).email || null;
   if (!recipient) {
-    throw new ValidationError("No email address — enter one, or add it to the guest profile first");
+    throw new ValidationError("No email address — type the address it goes to");
   }
 
   // Same email body the confirmation sent, composed from the frozen snapshot.
