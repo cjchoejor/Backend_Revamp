@@ -14,7 +14,10 @@ import {
 } from "../../services/domain/trip-paper-service.js";
 import {
   answerTripProforma,
+  describeTripPayment,
   describeTripProforma,
+  previewTripPaymentForEntry,
+  recordTripPaymentForEntry,
   makeTripProforma,
   previewTripPayment,
   recordTripPayment,
@@ -143,6 +146,50 @@ tripPapersRouter.post("/trip-papers/:id/answer", requireActorLevel("L1"), valida
 /* A payment for the trip (2026-11-07): the first stay's advance first, or as the desk types it. */
 const shares = z.array(z.object({ entryId: z.string().min(1), amount: z.coerce.number().refine((n) => Number.isFinite(n) && n >= 0, "a share is zero or more") })).max(20);
 const amount = z.coerce.number().refine((n) => Number.isFinite(n) && n > 0, "amount must be positive");
+
+/* The same by the booking — at Reserve, Arrival or Check-in a trip may have no trip proforma. */
+tripPapersRouter.get("/entries/:id/trip-payment", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.set("Cache-Control", "no-store");
+    res.json(await describeTripPayment(prisma, req.params.id));
+  } catch (error) {
+    next(error);
+  }
+});
+
+tripPapersRouter.post(
+  "/entries/:id/trip-payment/preview",
+  requireActorLevel("L1"),
+  validateBody(z.object({ amount: amount.nullable().optional(), shares: shares.nullable().optional() })),
+  async (req, res, next) => {
+    try {
+      res.set("Cache-Control", "no-store");
+      res.json(await previewTripPaymentForEntry(prisma, req.params.id, req.body));
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+tripPapersRouter.post(
+  "/entries/:id/trip-payment",
+  requireActorLevel("L1"),
+  validateBody(
+    z.object({
+      amount,
+      paymentMethod: z.string().trim().min(1).max(40).optional(),
+      notes: z.string().trim().max(500).optional(),
+      shares: shares.nullable().optional(),
+    }),
+  ),
+  async (req, res, next) => {
+    try {
+      res.status(201).json(await recordTripPaymentForEntry(prisma, req.params.id, actorOf(req as never), req.body));
+    } catch (error) {
+      next(error);
+    }
+  },
+);
 
 tripPapersRouter.post(
   "/trip-papers/:id/payment/preview",

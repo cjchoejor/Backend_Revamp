@@ -1,6 +1,6 @@
 import { Prisma, Stage, type PrismaClient } from "@prisma/client";
 import { AppError, NotFoundError, ValidationError } from "../../lib/errors.js";
-import { paperNumber } from "../../lib/document-numbers.js";
+import { paperNumber, printedProformaNumber } from "../../lib/document-numbers.js";
 import { guestDisplayName } from "../../lib/guest-display-name.js";
 import { resolveSendTo } from "../../lib/send-to.js";
 import { maxZeroSub, sumMoney, toDecimal } from "../../lib/money.js";
@@ -17,6 +17,8 @@ import { dispatchStageEmailBestEffort } from "../infrastructure/stage-email-help
 import { proformaEmailFigures, proformaPaperFigures } from "./invoice-pdf-service.js";
 import { dispatchInvoice } from "./s9-service.js";
 import { afterPaymentRecorded, recordPaymentTx } from "./s3-folio-service.js";
+import { evaluateAdvancePaymentCondition } from "./s3-payment-service.js";
+import { buildEntryBillingSummary } from "./entry-billing-summary-service.js";
 import { recordCommunicationAcknowledgement } from "./communication-acknowledgement-service.js";
 import { saveTripPaperVersion, sameMembers, tripOfEntry, type Actor } from "./trip-paper-service.js";
 
@@ -441,31 +443,98 @@ export async function answerTripProforma(
 
 export type TripPaymentShareInput = { entryId: string; amount: number };
 
+/** The steps a stay's own payment is taken at — Set up to Check-in (`recordPaymentTx`'s window). */
+const PAYABLE_STAGES: Stage[] = [Stage.S3, Stage.S4, Stage.S5, Stage.S6];
+
+/**
+ * Each live stay of the trip with what a payment can do for it (2026-11-07): its advance still asked
+ * and what it still costs, from the readers the payment gates and the header read — the advance
+ * evaluation and the billing summary — so a trip payment is shared the same way at Set up, Reserve,
+ * Arrival or Check-in, with a trip proforma or without one.
+ */
+async function readPaymentStays(prisma: PrismaClient, inquiryId: string) {
+  const entries = await prisma.entry.findMany({
+    where: { inquiryId, status: { in: ["ACTIVE", "PARKED"] } },
+    orderBy: [{ checkInDate: "asc" }, { createdAt: "asc" }],
+    select: {
+      id: true,
+      currentStage: true,
+      checkInDate: true,
+      checkOutDate: true,
+      folio: {
+        select: {
+          id: true,
+          state: true,
+          invoices: {
+            where: { invoiceType: "PROFORMA", state: { not: "SUPERSEDED" } },
+            orderBy: [{ versionNumber: "desc" }, { createdAt: "desc" }],
+            take: 1,
+            select: { id: true, documentNumber: true, versionNumber: true },
+          },
+        },
+      },
+    },
+  });
+  const zero = toDecimal(0);
+  return Promise.all(
+    entries.map(async (e, i) => {
+      const base = {
+        stayNo: i + 1,
+        entryId: e.id,
+        stage: e.currentStage,
+        checkIn: ymd(e.checkInDate),
+        checkOut: ymd(e.checkOutDate),
+        folioId: e.folio?.id ?? null,
+        number: e.folio?.invoices[0] ? printedProformaNumber(e.folio.invoices[0]) : null,
+      };
+      if (!e.folio) {
+        return { ...base, payable: false, why: "not set up yet — no bill to take money on", advanceAsked: null, received: zero, dueNow: zero, canTake: zero };
+      }
+      const ev = await evaluateAdvancePaymentCondition(prisma, { entryId: e.id, folioId: e.folio.id });
+      const summary = await buildEntryBillingSummary(prisma, e.id);
+      const received = toDecimal(ev.totalReceived);
+      const total = summary.stayTotal.amount != null ? toDecimal(summary.stayTotal.amount) : null;
+      const dueNow = toDecimal(ev.shortfall);
+      const canTake = total ? maxZeroSub(total, received) : dueNow;
+      const payable = PAYABLE_STAGES.includes(e.currentStage as Stage) && e.folio.state === "PROVISIONAL";
+      return {
+        ...base,
+        payable,
+        why: payable ? null : PAYABLE_STAGES.includes(e.currentStage as Stage) ? "its bill is no longer open for an advance" : "in house or after — its bill takes money at the desk",
+        advanceAsked: ev.requiredAmount > 0 ? toDecimal(ev.requiredAmount) : null,
+        received,
+        dueNow: payable ? dueNow : zero,
+        canTake: payable ? canTake : zero,
+      };
+    }),
+  );
+}
+type PaymentStay = Awaited<ReturnType<typeof readPaymentStays>>[number];
+
 /**
  * How a payment for the trip is shared (2026-11-07, operator: way B, with way C as an option).
  * B: each stay's advance still asked, the first stay first; then anything beyond, each stay up to
  * what it still costs, in the same order. C: as the desk typed it, each stay at most what it still
- * costs. Decimal throughout; the answer says in words what is wrong with it, nothing is written.
+ * costs, a stay that cannot take money given none. Decimal throughout; the answer says in words what
+ * is wrong with it, nothing is written.
  */
-function shareTripPayment(stays: TripStay[], input: { amount?: number | null; shares?: TripPaymentShareInput[] | null }) {
-  const rows = stays.map((s) => ({
-    stayNo: s.stayNo,
-    entryId: s.entry.id,
-    number: s.figures?.invoiceRef ?? null,
-    dueNow: s.dueNow ?? toDecimal(0),
-    canTake: s.canTake ?? toDecimal(0),
-    share: toDecimal(0),
-  }));
+function shareTripPayment(stays: PaymentStay[], input: { amount?: number | null; shares?: TripPaymentShareInput[] | null }) {
+  const rows = stays.map((s) => ({ ...s, share: toDecimal(0) }));
   let problem: string | null = null;
-  const typed = input.shares && input.shares.length > 0;
+  const typed = !!input.shares && input.shares.length > 0;
+  const mode = typed ? ("AS_TYPED" as const) : ("FIRST_STAY_FIRST" as const);
   if (typed) {
     for (const t of input.shares!) {
       const r = rows.find((x) => x.entryId === t.entryId);
-      if (!r) return { rows, mode: "AS_TYPED" as const, problem: `${t.entryId} is not a stay of this trip.`, sharesTotal: toDecimal(0) };
-      if (!Number.isFinite(t.amount) || t.amount < 0) return { rows, mode: "AS_TYPED" as const, problem: `Stay ${r.stayNo}'s share must be zero or more.`, sharesTotal: toDecimal(0) };
+      if (!r) return { rows, mode, problem: `${t.entryId} is not a stay of this trip.`, sharesTotal: toDecimal(0) };
+      if (!Number.isFinite(t.amount) || t.amount < 0) return { rows, mode, problem: `Stay ${r.stayNo}'s share must be zero or more.`, sharesTotal: toDecimal(0) };
       r.share = toDecimal(t.amount).toDecimalPlaces(2);
     }
     for (const r of rows) {
+      if (r.share.gt(0) && !r.payable) {
+        problem = `Stay ${r.stayNo} cannot take a payment here — ${r.why}.`;
+        break;
+      }
       if (r.share.gt(r.canTake)) {
         problem = `Stay ${r.stayNo} would get more than it still costs — at most Nu ${formatMoney(r.canTake.toFixed(2))}.`;
         break;
@@ -479,8 +548,7 @@ function shareTripPayment(stays: TripStay[], input: { amount?: number | null; sh
       left = left.sub(take);
     }
     for (const r of rows) {
-      const room = maxZeroSub(r.canTake, r.share);
-      const take = Prisma.Decimal.min(left, room);
+      const take = Prisma.Decimal.min(left, maxZeroSub(r.canTake, r.share));
       r.share = r.share.add(take);
       left = left.sub(take);
     }
@@ -490,59 +558,98 @@ function shareTripPayment(stays: TripStay[], input: { amount?: number | null; sh
   if (!problem && input.amount != null && typed && !sharesTotal.equals(toDecimal(input.amount).toDecimalPlaces(2))) {
     problem = `The shares come to Nu ${formatMoney(sharesTotal.toFixed(2))}, not the Nu ${formatMoney(toDecimal(input.amount).toFixed(2))} received.`;
   }
-  if (!problem && sharesTotal.lte(0)) problem = "Put in the amount received.";
-  return { rows, mode: typed ? ("AS_TYPED" as const) : ("FIRST_STAY_FIRST" as const), problem, sharesTotal };
+  if (!problem && sharesTotal.lte(0)) problem = rows.some((r) => r.payable) ? "Put in the amount received." : "No stay of this trip can take a payment here.";
+  return { rows, mode, problem, sharesTotal };
 }
 
-function sharesOut(r: ReturnType<typeof shareTripPayment>) {
+const stayOut = (x: PaymentStay & { share?: Prisma.Decimal }) => ({
+  stayNo: x.stayNo,
+  entryId: x.entryId,
+  stage: x.stage,
+  checkIn: x.checkIn,
+  checkOut: x.checkOut,
+  number: x.number,
+  payable: x.payable,
+  why: x.why,
+  advanceAsked: x.advanceAsked ? x.advanceAsked.toFixed(2) : null,
+  received: x.received.toFixed(2),
+  dueNow: x.dueNow.toFixed(2),
+  canTake: x.canTake.toFixed(2),
+  ...(x.share ? { share: x.share.toFixed(2) } : {}),
+});
+
+/** The live trip proforma, if one is in force — named on each payment's note. */
+async function liveTripProformaNumber(prisma: PrismaClient, inquiryId: string) {
+  const p = await prisma.tripPaper.findFirst({ where: { inquiryId, kind: "PROFORMA", state: "LIVE" }, select: { id: true, documentNumber: true, versionNumber: true } });
+  return p ? { id: p.id, number: paperNumber(p.documentNumber, p.versionNumber) } : null;
+}
+
+/** A trip's stays as a payment sees them: each one's advance, what it holds and what it can take. */
+export async function describeTripPayment(prisma: PrismaClient, entryId: string) {
+  const inquiryId = await tripOfEntry(prisma, entryId);
+  const stays = await readPaymentStays(prisma, inquiryId);
   return {
-    mode: r.mode,
-    problem: r.problem,
-    sharesTotal: r.sharesTotal.toFixed(2),
-    stays: r.rows.map((x) => ({ stayNo: x.stayNo, entryId: x.entryId, number: x.number, dueNow: x.dueNow.toFixed(2), canTake: x.canTake.toFixed(2), share: x.share.toFixed(2) })),
+    inquiryId,
+    tripPaper: await liveTripProformaNumber(prisma, inquiryId),
+    stays: stays.map(stayOut),
+    received: sumMoney(stays.map((s) => s.received)).toFixed(2),
+    dueNow: sumMoney(stays.map((s) => s.dueNow)).toFixed(2),
+    canTake: sumMoney(stays.map((s) => s.canTake)).toFixed(2),
   };
 }
 
 /** How a payment would be shared between the stays, and what is wrong with it — nothing written. */
-export async function previewTripPayment(prisma: PrismaClient, tripPaperId: string, input: { amount?: number | null; shares?: TripPaymentShareInput[] | null }) {
-  const { stays } = await liveAndCurrent(prisma, tripPaperId);
+async function previewForInquiry(prisma: PrismaClient, inquiryId: string, input: { amount?: number | null; shares?: TripPaymentShareInput[] | null }) {
+  const stays = await readPaymentStays(prisma, inquiryId);
   const r = shareTripPayment(stays, input);
   return {
-    ...sharesOut(r),
-    tripDueNow: sumMoney(stays.map((s) => s.dueNow ?? toDecimal(0))).toFixed(2),
-    tripCanTake: sumMoney(stays.map((s) => s.canTake ?? toDecimal(0))).toFixed(2),
+    mode: r.mode,
+    problem: r.problem,
+    sharesTotal: r.sharesTotal.toFixed(2),
+    stays: r.rows.map(stayOut),
+    tripDueNow: sumMoney(stays.map((s) => s.dueNow)).toFixed(2),
+    tripCanTake: sumMoney(stays.map((s) => s.canTake)).toFixed(2),
   };
+}
+
+export async function previewTripPaymentForEntry(prisma: PrismaClient, entryId: string, input: { amount?: number | null; shares?: TripPaymentShareInput[] | null }) {
+  return previewForInquiry(prisma, await tripOfEntry(prisma, entryId), input);
+}
+
+export async function previewTripPayment(prisma: PrismaClient, tripPaperId: string, input: { amount?: number | null; shares?: TripPaymentShareInput[] | null }) {
+  return previewForInquiry(prisma, (await loadPaper(prisma, tripPaperId)).inquiryId, input);
 }
 
 /**
  * Record a payment for the trip: each stay's share on its own bill, through the stay's own payment
  * checks, every share in ONE transaction — all land or none does. Then each stay's after-steps (its
  * rooms blocked at Set up). One payment from the guest becomes one payment record per stay, each
- * naming the trip's paper and the whole amount.
+ * naming the trip (its proforma when one is in force) and the whole amount.
  */
-export async function recordTripPayment(
+async function recordForInquiry(
   prisma: PrismaClient,
-  tripPaperId: string,
+  inquiryId: string,
   actor: Actor,
   input: { amount: number; paymentMethod?: string | null; notes?: string | null; shares?: TripPaymentShareInput[] | null },
 ) {
-  const paper = await loadPaper(prisma, tripPaperId);
-  const number = paperNumber(paper.documentNumber, paper.versionNumber);
+  const paper = await liveTripProformaNumber(prisma, inquiryId);
+  const named = paper?.number ?? inquiryId;
   const written = await prisma.$transaction(
     async (tx) => {
-      await tx.$executeRawUnsafe("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", `trip-payment:${paper.inquiryId}`);
-      const { stays } = await liveAndCurrent(prisma, tripPaperId);
+      await tx.$executeRawUnsafe("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", `trip-payment:${inquiryId}`);
+      const stays = await readPaymentStays(prisma, inquiryId);
       const r = shareTripPayment(stays, input);
       if (r.problem) throw new ValidationError(r.problem);
       const whole = r.sharesTotal.toFixed(2);
       const out: Array<{ stayNo: number; entryId: string; amount: string; paymentId: string; stage: Stage }> = [];
       for (const row of r.rows) {
         if (row.share.lte(0)) continue;
-        const stay = stays.find((s) => s.entry.id === row.entryId)!;
-        if (!stay.folioId) throw new ValidationError(`Stay ${row.stayNo} (${row.entryId}) has no bill yet.`);
-        const note = [`Part of Nu ${formatMoney(whole)} paid for the trip (${number}) · Nu ${formatMoney(row.share.toFixed(2))} to this stay`, input.notes?.trim() || null].filter(Boolean).join(" · ");
+        if (!row.folioId) throw new ValidationError(`Stay ${row.stayNo} (${row.entryId}) has no bill yet.`);
+        const note = [`Part of Nu ${formatMoney(whole)} paid for the trip (${named}) · Nu ${formatMoney(row.share.toFixed(2))} to this stay`, input.notes?.trim() || null]
+          .filter(Boolean)
+          .join(" · ");
         try {
-          const { created, stageAtPayment } = await recordPaymentTx(prisma, tx, stay.folioId, actor.actorId, {
+          const { created, stageAtPayment } = await recordPaymentTx(prisma, tx, row.folioId, actor.actorId, {
             entryId: row.entryId,
             amount: Number(row.share.toFixed(2)),
             notes: note,
@@ -566,15 +673,15 @@ export async function recordTripPayment(
             eventType: "TRIP_PAPER.PAYMENT_SHARED",
             actorId: actor.actorId,
             actorLevel: actor.actorLevel,
-            entityType: "TripPaper",
-            entityId: paper.id,
+            entityType: paper ? "TripPaper" : "Inquiry",
+            entityId: paper?.id ?? inquiryId,
             operation: "CREATE",
             timestamp: now,
-            inquiryId: paper.inquiryId,
+            inquiryId,
             entryId: o.entryId,
             payload: {
-              tripPaperId: paper.id,
-              number,
+              tripPaperId: paper?.id ?? null,
+              number: paper?.number ?? null,
               amount: whole,
               mode: r.mode,
               paymentMethod: input.paymentMethod ?? null,
@@ -594,4 +701,14 @@ export async function recordTripPayment(
     autoHolds.push({ entryId: o.entryId, autoHold });
   }
   return { amount: written.whole, mode: written.mode, shares: written.out.map(({ stage: _s, ...x }) => x), autoHolds };
+}
+
+type RecordInput = { amount: number; paymentMethod?: string | null; notes?: string | null; shares?: TripPaymentShareInput[] | null };
+
+export async function recordTripPaymentForEntry(prisma: PrismaClient, entryId: string, actor: Actor, input: RecordInput) {
+  return recordForInquiry(prisma, await tripOfEntry(prisma, entryId), actor, input);
+}
+
+export async function recordTripPayment(prisma: PrismaClient, tripPaperId: string, actor: Actor, input: RecordInput) {
+  return recordForInquiry(prisma, (await loadPaper(prisma, tripPaperId)).inquiryId, actor, input);
 }

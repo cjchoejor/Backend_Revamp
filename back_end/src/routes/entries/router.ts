@@ -57,6 +57,7 @@ import {
   stopFollowing,
 } from "../../services/domain/trip-follow-service.js";
 import { setEntryGuest, updateEntryCaller, updateEntrySource } from "../../services/domain/inquiry-caller-service.js";
+import { moveTripToNegotiation, nameGuestOnTripStays } from "../../services/domain/trip-inquiry-service.js";
 import { CAME_IN_AS_VALUES } from "../../lib/inquiry-came-in-as.js";
 import { callerRequestSchema } from "../../dtos/02-inquiries/request-schemas.js";
 import { runPostCheckoutInspectionWorker } from "../../workers/w9-post-checkout-inspection-worker.js";
@@ -145,7 +146,12 @@ entriesRouter.post("/:id/source", requireActorLevel("L1"), validateBody(sourceSc
   }
 });
 
-const guestNamingOptions = { keepNewName: z.boolean().optional(), arrivingIsGuest: z.boolean().optional() };
+const guestNamingOptions = {
+  keepNewName: z.boolean().optional(),
+  arrivingIsGuest: z.boolean().optional(),
+  /** The same guest on the trip's other stays still at Inquiry (2026-11-07). */
+  alsoTripStays: z.boolean().optional(),
+};
 const setGuestSchema = z.discriminatedUnion("mode", [
   z.object({ mode: z.literal("CALLER"), nationality: z.string().trim().max(80).nullable().optional(), ...guestNamingOptions }),
   z.object({
@@ -172,9 +178,28 @@ const setGuestSchema = z.discriminatedUnion("mode", [
 entriesRouter.post("/:id/guest", requireActorLevel("L1"), validateBody(setGuestSchema), async (req, res, next) => {
   try {
     if ("phone" in req.body && req.body.phone !== undefined) req.body.phone = cleanPhone(req.body.phone, "The guest's phone");
-    const named = await setEntryGuest(prisma, { actorId: req.actor!.actorId, level: req.actor!.level }, req.params.id, req.body);
+    const { alsoTripStays, ...naming } = req.body as typeof req.body & { alsoTripStays?: boolean };
+    const actor = { actorId: req.actor!.actorId, level: req.actor!.level };
+    const named = await setEntryGuest(prisma, actor, req.params.id, naming);
     await afterStayChanged(prisma, { actorId: req.actor!.actorId, actorLevel: req.actor!.level }, req.params.id, "GUEST");
-    res.json(named);
+    // A trip at Inquiry names one guest for every stay (2026-11-07, ruling "the same guest for both").
+    const tripStays = alsoTripStays
+      ? await nameGuestOnTripStays(prisma, actor, req.params.id, named.guestProfileId, { arrivingIsGuest: naming.arrivingIsGuest })
+      : [];
+    res.json({ ...named, tripStays });
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
+ * Move every stay of a trip still at Inquiry to Negotiation (2026-11-07, operator ruling: one
+ * Continue moves every stay). Each stay through its own move; a refusal names the stay.
+ */
+entriesRouter.post("/:id/trip/to-negotiation", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const version = typeof req.body?.version === "number" ? req.body.version : undefined;
+    res.json(await moveTripToNegotiation(prisma, { actorId: req.actor!.actorId, level: req.actor!.level }, req.params.id, version));
   } catch (e) {
     next(e);
   }
