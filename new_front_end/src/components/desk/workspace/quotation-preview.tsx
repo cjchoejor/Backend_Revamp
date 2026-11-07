@@ -10,6 +10,7 @@ import {
   fetchQuotationPreviewHtml,
   type FolioDocumentKind,
 } from "@/lib/api/documents";
+import { PdfPages } from "./pdf-pages";
 
 /**
  * Inside the paper's own panel the paper fills the panel's width (2026-11-05, operator: "when
@@ -196,6 +197,8 @@ function FrozenPdfFrame({ path, title }: { path: string; title: string }) {
   // A fresh address for each time the frame is shown, freed when it goes. The file stays cached;
   // caching the address instead handed a revoked one to the next opening — the broken-file icon.
   const [url, setUrl] = useState<string | null>(null);
+  // The browser's own viewer, when the paper could not be drawn on the page.
+  const [viewerOnly, setViewerOnly] = useState(false);
   useEffect(() => {
     if (!query.data) return;
     const u = URL.createObjectURL(query.data);
@@ -212,6 +215,11 @@ function FrozenPdfFrame({ path, title }: { path: string; title: string }) {
         {query.error instanceof Error ? query.error.message : "Could not load the document."}
       </p>
     );
+  }
+  if (fill && !viewerOnly) {
+    // Drawn on the page, so a preview can leave the hotel's heading off as a live paper does
+    // (2026-11-07); beside a send the heading stays.
+    return <PdfPages blob={query.data} title={title} hideHeading={fill === "preview"} onFail={() => setViewerOnly(true)} />;
   }
   if (fill) {
     return (

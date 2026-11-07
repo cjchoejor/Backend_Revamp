@@ -158,7 +158,8 @@ export type HeldDocument = {
   note: string | null;
   decidedAt: string | null;
   decidedBy: string | null;
-  defaultRecipient: { to: string | null; whose: string | null };
+  /** Whom it goes to by default (2026-11-07): the email (`to`) and the WhatsApp number, and whose. */
+  defaultRecipient: { to: string | null; whose: string | null; phone: string | null; phoneWhose: string | null };
 };
 
 export async function listHeldDocuments(session: Session, entryId: string) {

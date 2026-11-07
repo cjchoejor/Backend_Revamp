@@ -1014,6 +1014,10 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .heldp-row { background: var(--surface); border: 1px solid var(--line-2); border-radius: 8px; padding: 8px 10px; display: grid; gap: 8px; }
 .ds .heldp-what { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
 .ds .heldp-what b { font-size: 14px; }
+/* View reads as the act it is (2026-11-07, operator: "the view button to be prominent"): full size,
+   the accent's edge and ink, bold — the paper is read before it is sent. */
+.ds .heldp-what .btn.heldp-view { height: 34px; padding: 0 14px; font-weight: 700; font-size: 13.5px; color: var(--accent-ink); border: 1.5px solid var(--accent); background: var(--accent-soft); }
+.ds .heldp-what .btn.heldp-view:hover { background: var(--surface); }
 .ds .heldp-choices { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 13px; }
 .ds .heldp-choices label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
 .ds .heldp-choices label.on { font-weight: 700; color: var(--accent-ink); }
@@ -1462,6 +1466,12 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .ws-top .stagebar .also-btns .btn[data-way="decline"]:hover:not(.desk-root *) { background: var(--danger-soft); }
 .ds .ws-top .stagebar .also-btns .btn.on:not(.desk-root *) { border-color: var(--accent); box-shadow: inset 0 -3px 0 var(--accent); }
 .ds .ws-top .stagebar .stage-acts:empty { display: none; }
+/* Reserve's Payments with money still to come (2026-11-07): amber while there is time, red once
+   check-in has come — the figure is the server's. */
+.ds .ws-top .stagebar .stage-acts .btn.stage-pay:not(.desk-root *) { border-color: var(--warning); color: var(--ink); font-weight: 600; }
+.ds .ws-top .stagebar .stage-acts .btn.stage-pay .pay-n { display: inline-block; margin-left: 8px; padding: 0 8px; border-radius: 10px; background: var(--warning-soft); color: var(--warning); border: 1px solid var(--warning); font-size: 12px; font-weight: 700; line-height: 20px; }
+.ds .ws-top .stagebar .stage-acts .btn.stage-pay.late:not(.desk-root *) { border-color: var(--danger); }
+.ds .ws-top .stagebar .stage-acts .btn.stage-pay.late .pay-n { background: var(--danger); color: #fff; border-color: var(--danger); }
 .ds .cb-btn .btn { gap: 6px; }
 .ds .cb-chev { transform: rotate(90deg); transition: transform 120ms ease; }
 .ds .cb-btn .btn.on .cb-chev { transform: rotate(-90deg); }

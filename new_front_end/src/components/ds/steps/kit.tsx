@@ -2960,7 +2960,7 @@ export function QuotationSendDialog({
   // The email box used to fall back to the guest's PHONE, and the toast then said "sent by email
   // to +975…" while nothing was emailed.
   const recipient = useInvoiceRecipient(entry);
-  const phoneOnFile = (entry.guestProfile?.phone ?? entry.inquiry?.guestProfile?.phone ?? "").trim();
+  const phoneOnFile = recipient.phone;
   const [channel, setChannel] = useState<Channel>("EMAIL");
   const [to, setTo] = useState("");
   const [touched, setTouched] = useState(false);
@@ -3016,15 +3016,19 @@ export function QuotationSendDialog({
   });
   const hint =
     channel === "WHATSAPP"
-      ? "send it on WhatsApp yourself — the desk records the send with this number"
+      ? recipient.phoneWhose && typed === recipient.phone
+        ? `${recipient.phoneWhose} — send it on WhatsApp yourself; the desk records the send with this number`
+        : "send it on WhatsApp yourself — the desk records the send with this number"
       : !typed
         ? recipient.party
-          ? `${recipient.party} has no email on file — type the address, or send it with none and hand the quote over`
+          ? `No email for ${recipient.party} or its contact person — type the address, or send it with none and hand the quote over`
           : "no email on file — type one, or send it with none and hand the quote over"
         : !emailish
           ? "that is not an email address"
-          : recipient.party && typed === recipient.partyEmail
-            ? `${recipient.party}'s email on file — the quote shows their rates`
+          : recipient.defaultWhose && typed === recipient.defaultTo
+            ? recipient.party
+              ? `${recipient.defaultWhose} — the quote shows ${recipient.party}'s rates`
+              : recipient.defaultWhose
             : recipient.guestEmail && typed === recipient.guestEmail
               ? recipient.party
                 ? `this is the guest's email — the quote is made out to ${recipient.party} and shows its rates`

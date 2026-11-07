@@ -65,8 +65,14 @@ export function HeldPaperRow({ h, tz, onView }: { h: HeldDocument; tz?: string; 
   const { session } = useSession();
   const phoneRules = usePhoneRules();
   const qc = useQueryClient();
-  const [choice, setChoice] = useState<Choice>(h.defaultRecipient.to ? "EMAIL" : h.kind === "PROFORMA" ? "EMAIL" : "WHATSAPP");
-  const [to, setTo] = useState(h.defaultRecipient.to ?? "");
+  const rec = h.defaultRecipient;
+  const [choice, setChoice] = useState<Choice>(rec.to || h.kind === "PROFORMA" || !rec.phone ? "EMAIL" : "WHATSAPP");
+  // The email and the number are kept apart, each starting at whom the paper goes to by default
+  // (2026-11-07): the contact person at the agency or company, else the party; on a direct booking
+  // the guest. Switching between them never carries one into the other's box.
+  const [email, setEmail] = useState(rec.to ?? "");
+  const [phone, setPhone] = useState(rec.phone ?? "");
+  const to = choice === "WHATSAPP" ? phone : email;
   const [note, setNote] = useState("");
   // Every night named on the copy emailed (2026-10-30).
   const [nightsEach, setNightsEach] = useState(false);
@@ -104,7 +110,8 @@ export function HeldPaperRow({ h, tz, onView }: { h: HeldDocument; tz?: string; 
         <span className="sm muted">
           {REASON_WORD[h.reason] ?? "held"} · {fmtDateTime(h.heldAt, tz)}
         </span>
-        <Button kind="quiet" compact onClick={onView}>
+        {/* The paper is read before it is sent, so View is a real button (2026-11-07, operator: "the view button to be prominent"). */}
+        <Button kind="secondary" compact icon="eye" className="heldp-view" onClick={onView}>
           View
         </Button>
       </div>
@@ -123,8 +130,8 @@ export function HeldPaperRow({ h, tz, onView }: { h: HeldDocument; tz?: string; 
       <div className="heldp-fields">
         {choice === "EMAIL" ? (
           <label className="field">
-            <span>Send to{h.defaultRecipient.whose ? <span className="muted"> · {h.defaultRecipient.whose}</span> : null}</span>
-            <input className="input" type="email" value={to} onChange={(e) => setTo(e.target.value)} placeholder="name@example.com" />
+            <span>Send to{rec.whose && email.trim() === rec.to ? <span className="muted"> · {rec.whose}</span> : null}</span>
+            <input className="input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@example.com" />
           </label>
         ) : null}
         {choice === "EMAIL" ? (
@@ -134,8 +141,8 @@ export function HeldPaperRow({ h, tz, onView }: { h: HeldDocument; tz?: string; 
         ) : null}
         {choice === "WHATSAPP" ? (
           <label className="field">
-            <span>Number it went to · optional</span>
-            <PhoneField value={to} onChange={setTo} ariaLabel="Number it went to" />
+            <span>Number it went to · optional{rec.phoneWhose && phone.trim() === rec.phone ? <span className="muted"> · {rec.phoneWhose}</span> : null}</span>
+            <PhoneField value={phone} onChange={setPhone} ariaLabel="Number it went to" />
           </label>
         ) : null}
         <label className="field">

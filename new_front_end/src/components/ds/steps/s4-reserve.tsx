@@ -21,6 +21,7 @@ import { Button, Chip, Refusal } from "@/design-system";
 import { useSession } from "@/hooks/use-session";
 import { useBookingRooms } from "@/hooks/use-booking-rooms";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
+import { recipientHint, useInvoiceRecipient } from "@/hooks/use-invoice-recipient";
 import { usePaymentStatus } from "@/hooks/use-payment-status";
 import { useStaffNames } from "@/hooks/use-desk-data";
 import { acknowledgeMultiBooking, resendConfirmationVoucher, verifyConference } from "@/lib/api/confirmation";
@@ -34,6 +35,7 @@ import { JourneySummaryPanel } from "@/components/desk/workspace/journey-summary
 import { PLAN_LABEL, dueLabel } from "@/components/desk/workspace/advance-settlement";
 import { PaymentPlanCard } from "./s3-money";
 import type { EntryDetail, PaymentStatusSummary, QuotationSummary } from "@/types/api";
+import { StageActs, WorkPopup } from "./kit";
 import { DsDialog, FactBox, FactLine, Facts, Fact, Live, OnRecord, PaperDrawer, SendPaperPanel, StepCanvas, StepCard, Tool, AnswerLine, useReplyAsked, atLeast, currentPassStart, goToStepCard, latestDispatched, toastRefusal, useCommunications, useFinishWhenDone, useRefreshEntry, useStepMode, useStepPane, words, type FactState, type PaperRef, NightsChoice, NotSentChip } from "./kit";
 import { BookingOtherWays } from "./s4-other-ways";
 import { roomsHeldWord } from "./s2-shared";
@@ -155,7 +157,9 @@ export function S4Reserve({
           <VoucherCard entry={entry} />
           {/* The pre-arrival tasks are Arrival's (SIG-S5 §2.5 — "created and updated at S5"; the
               operator, 2026-10-29: "if it's for stage 5 then keep it at stage 5"). */}
-          <ReserveAdvance entry={entry} past={past} />
+          {/* The advance moved to the step line's Payments (2026-11-07, operator: "the advance section
+              here in s4 to be moved to menu buttons, maybe with a name as payments"). */}
+          <ReservePayments entry={entry} past={past} />
           <WhatReserveDecided entry={entry} />
         </>
       ) : (
@@ -170,6 +174,38 @@ export function S4Reserve({
         onChangeStay={past ? undefined : onChangeStay}
       />
     </StepCanvas>
+  );
+}
+
+/**
+ * Payments on Reserve's step line, beside Change booking (2026-11-07): the advance card in a pop-up
+ * over the work, the booking file clear beside it. The button carries what is still to come, the
+ * server's own figure — amber while there is time, red once the check-in it was due by has come.
+ */
+function ReservePayments({ entry, past }: { entry: EntryDetail; past: boolean }) {
+  const [open, setOpen] = useState(false);
+  const payment = usePaymentStatus(entry.id, { enabled: !!entry.folio });
+  if (!entry.folio) return null;
+  const st = payment.data;
+  const toCome = st && !st.satisfied && Number(st.shortfall) > 0 ? st.shortfall : null;
+  const late = !!st?.advanceWindow?.overdue;
+  return (
+    <>
+      <StageActs>
+        <Button
+          kind="secondary"
+          className={toCome != null ? `stage-pay${late ? " late" : ""}` : undefined}
+          onClick={() => setOpen(true)}
+          title={toCome != null ? `${money(toCome)} of the advance is still to come${late ? " — it was due by check-in" : ""}` : undefined}
+        >
+          Payments
+          {toCome != null ? <span className="pay-n">{money(toCome)} to come</span> : null}
+        </Button>
+      </StageActs>
+      <WorkPopup open={open} title="Payments" onClose={() => setOpen(false)}>
+        <ReserveAdvance entry={entry} past={past} />
+      </WorkPopup>
+    </>
   );
 }
 
@@ -958,7 +994,10 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
   const [sendOpen, setSendOpen] = useState(false);
   // Every night named on the copy sent (2026-10-30).
   const [nightsEach, setNightsEach] = useState(false);
-  const guestEmail = entry.guestProfile?.email?.trim() ?? "";
+  // Whom the voucher goes to (2026-11-07): the contact person at the agency or company, else the
+  // party; on a direct booking the guest — the server's own rule (lib/send-to.ts).
+  const recipient = useInvoiceRecipient(entry);
+  const guestEmail = recipient.defaultTo;
   const [sendTo, setSendTo] = useState(guestEmail);
   useEffect(() => {
     if (sendOpen) setSendTo(guestEmail);
@@ -1199,9 +1238,13 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
         <div className="field">
           <label>
             To
-            <Help label="About the address">Prefilled from the guest&rsquo;s record — change it to correct a wrong address.</Help>
+            <Help label="About the address">
+              Through a travel agent or a company it is their contact person for this booking, else the agency or company itself; on
+              a direct booking the guest. Change it to send it somewhere else.
+            </Help>
           </label>
-          <input className="input" type="email" value={sendTo} onChange={(e) => setSendTo(e.target.value)} placeholder="guest@example.com" />
+          <input className="input" type="email" value={sendTo} onChange={(e) => setSendTo(e.target.value)} placeholder="name@example.com" />
+          {recipientHint(recipient, sendTo) ? <span className="hint">{recipientHint(recipient, sendTo)}</span> : null}
         </div>
         <div className="paper-faces in-dialog">
           <NightsChoice each={nightsEach} onChange={setNightsEach} of={{ reservationId: res.id }} />
