@@ -6,6 +6,9 @@ import { StageGateBlockedError } from "../../lib/errors.js";
  */
 export function enforceAdvancePaymentReconciliationComplete(input: { isReconciled: boolean }) {
   if (input.isReconciled) return;
-  throw new StageGateBlockedError("Advance payment reconciliation not complete", "RECONCILIATION_INCOMPLETE");
+  throw new StageGateBlockedError(
+    "The advance is not signed off yet — open Payments: record the rest of it, or the GM marks it reconciled",
+    "RECONCILIATION_INCOMPLETE",
+  );
 }
 

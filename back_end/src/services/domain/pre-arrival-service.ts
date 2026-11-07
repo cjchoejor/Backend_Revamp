@@ -53,6 +53,88 @@ export function listStayNightIsoDates(checkIn: Date, checkOut: Date): string[] {
   return nights;
 }
 
+/**
+ * THE PRE-ARRIVAL TASKS ARE THE SYSTEM'S FOR NOW (2026-11-07, operator: "the prearrivals task be
+ * made done from backend for now and not shown here in this stage at the moment, in the future we
+ * will implement it"). While this is false the desk shows no tasks and `completeTasksBySystem`
+ * closes them: at the moment Arrival opens, and again just before the move to Check-in, so a task
+ * opened again in between (a payment deleted, a guest's details cleared) never holds the move with
+ * nothing on screen to explain it. Set it true to give them back to the desk.
+ */
+export const PRE_ARRIVAL_TASKS_AT_DESK = false;
+
+/**
+ * Close every open pre-arrival task as the system, doing what closing it does where that is safe:
+ *   - the night reminders are registered (NIGHT_AUDIT_TIMER_REGISTRATION, idempotent);
+ *   - the pre-arrival message is NOT sent (no paper goes to a guest unless the desk chooses);
+ *   - the money: PAYMENT_RECONCILIATION closes only when the advance is paid in full or none is
+ *     asked, and then signs it off exactly as the front desk's tick did. Short, or covered only by
+ *     credit, it stays open: a payment in full closes it, or the GM's Mark reconciled.
+ * Traced `PRE_ARRIVAL_TASK.COMPLETED_BY_SYSTEM`. Does nothing when the tasks are the desk's.
+ */
+export async function completeTasksBySystem(prisma: PrismaClient, entryId: string, actorId = "SYSTEM") {
+  const none = { completed: [] as string[], leftOpen: [] as string[] };
+  if (PRE_ARRIVAL_TASKS_AT_DESK) return none;
+  const open = await prisma.preArrivalTask.findMany({ where: { entryId, status: TaskStatus.PENDING } });
+  if (open.length === 0) return none;
+  const entry = await prisma.entry.findUnique({
+    where: { id: entryId },
+    select: { inquiryId: true, currentStage: true, folio: { select: { id: true } } },
+  });
+  const completed: string[] = [];
+  const leftOpen: string[] = [];
+  const notes: Record<string, string> = {};
+  for (const t of open) {
+    if (t.taskType === PreArrivalTaskType.PAYMENT_RECONCILIATION) {
+      const paidInFull = entry?.folio
+        ? (await evaluateAdvancePaymentCondition(prisma, { entryId, folioId: entry.folio.id })).paidInFull === true
+        : false;
+      if (!paidInFull) {
+        leftOpen.push(t.taskType);
+        continue;
+      }
+      // Closes the task and signs the advance off in one transaction: the front desk's own tick.
+      await prisma.$transaction((tx) =>
+        autoCompletePaymentReconciliationTaskTx(tx, entryId, { actorId, actorLevel: "L1" }, "ADVANCE_PAID_IN_FULL"),
+      );
+      completed.push(t.taskType);
+      continue;
+    }
+    if (t.taskType === PreArrivalTaskType.NIGHT_AUDIT_TIMER_REGISTRATION) {
+      try {
+        await registerNightAuditTimers(prisma, entryId, actorId);
+      } catch (e) {
+        notes[t.taskType] = `the night reminders could not be registered: ${e instanceof Error ? e.message : String(e)}`;
+      }
+    }
+    if (t.taskType === PreArrivalTaskType.PRE_ARRIVAL_COMMUNICATION) notes[t.taskType] = "nothing was sent to the guest";
+    const done = await prisma.preArrivalTask.updateMany({
+      where: { id: t.id, status: TaskStatus.PENDING },
+      data: { status: TaskStatus.COMPLETE, completedAt: new Date(), completedBy: actorId },
+    });
+    if (done.count) completed.push(t.taskType);
+  }
+  if (completed.length || leftOpen.length) {
+    await prisma.traceEvent.create({
+      data: {
+        eventType: "PRE_ARRIVAL_TASK.COMPLETED_BY_SYSTEM",
+        actorId,
+        actorLevel: "SYSTEM",
+        entityType: "Entry",
+        entityId: entryId,
+        operation: "UPDATE",
+        timestamp: new Date(),
+        stageContext: entry?.currentStage ?? null,
+        inquiryId: entry?.inquiryId ?? null,
+        entryId,
+        payload: { reason: "Pre-arrival tasks are not worked at the desk yet (2026-11-07)", completed, leftOpen, notes },
+        createdBy: actorId,
+      },
+    });
+  }
+  return { completed, leftOpen };
+}
+
 export async function initialiseTasks(prisma: PrismaClient, entryId: string, actorId: string) {
   const entry = await prisma.entry.findUnique({ where: { id: entryId }, include: { reservation: true } });
   if (!entry) throw new NotFoundError("Entry");

@@ -103,6 +103,7 @@ reservationsRouter.post("/entries/:id/activate-pre-arrival", requireActorLevel("
       const taskCount = await prisma.preArrivalTask.count({ where: { entryId } });
       if (taskCount === 0) {
         await preArrivalService.initialiseTasks(prisma, entryId, actorId);
+        await preArrivalService.completeTasksBySystem(prisma, entryId, "SYSTEM");
         entry = await loadEntryDetail(entryId);
       }
     }

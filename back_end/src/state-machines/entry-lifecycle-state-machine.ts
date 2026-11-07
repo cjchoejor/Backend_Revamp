@@ -16,6 +16,7 @@ import { releaseEntryRoomsToFree } from "../lib/room-claim-state.js";
 import { loadEntryDetail } from "../lib/entry-detail-include.js";
 import { enforceDisputeGateAllowsProgress } from "../policies/21-service-recovery-dispute/p54-dispute-gate-stage-progression.js";
 import { enforceNoPendingPreArrivalTasks } from "../policies/03-expiry-parking/p09-s5-normal-exit-pre-arrival-tasks-terminal.js";
+import { PRE_ARRIVAL_TASKS_AT_DESK, completeTasksBySystem } from "../services/domain/pre-arrival-service.js";
 import { enforceCreditCeilingTier2Acknowledged } from "../policies/18-credit-extension-ceiling/p44-credit-ceiling-proximity-check.js";
 import { enforceH1FulfilledBeforeCheckIn } from "../policies/02-ownership-custodian-assignment/p05-h1-fulfilled-required-for-checkin.js";
 import { enforceNotAwaitingWrittenConfirmation } from "../policies/22-no-show/p56-awaiting-written-confirmation-blocks-s5-exit.js";
@@ -57,6 +58,11 @@ export async function progressStageS5ToS6(
   if (clientVersion == null || clientVersion === undefined) {
     throw new OptimisticLockError();
   }
+
+  // The pre-arrival tasks are the system's for now (2026-11-07): any opened again since Arrival
+  // opened (a payment deleted, a guest's details cleared) are closed here, so nothing holds the
+  // move that the desk cannot see.
+  await completeTasksBySystem(prisma, entryId, actorId);
 
   const entry = await prisma.entry.findUnique({
     where: { id: entryId },
@@ -126,7 +132,13 @@ export async function progressStageS5ToS6(
   }
   const room = assignment.room;
 
-  enforceNoPendingPreArrivalTasks({ tasks: entry.preArrivalTasks.map((t) => ({ status: t.status, taskType: t.taskType })) });
+  // While the tasks are the system's, the money task is read by the advance's own gate just below,
+  // in its own words (2026-11-07).
+  enforceNoPendingPreArrivalTasks({
+    tasks: entry.preArrivalTasks
+      .filter((t) => PRE_ARRIVAL_TASKS_AT_DESK || t.taskType !== "PAYMENT_RECONCILIATION")
+      .map((t) => ({ status: t.status, taskType: t.taskType })),
+  });
 
   enforceFolioProvisionalForS5ToS6({ folio: entry.folio });
   const folio = entry.folio!;
