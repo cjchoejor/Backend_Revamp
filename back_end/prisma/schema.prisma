@@ -3709,3 +3709,33 @@ model RefundRequest {
   @@index([folioId])
   @@map("refund_requests")
 }
+
+/// A TRIP'S PAPER (2026-11-07, operator: "keep their numbers and add version numbers" — each stay
+/// keeps its own quotation, and the trip has a combined one of its own: QUO-0003, then QUO-0003 v2
+/// when a stay changes). One row per version. `members` names the stays' own papers it is made of
+/// (entry, paper id, number, version, total); its total is only their sum — it has no price of its own.
+model TripPaper {
+  id             String    @id
+  inquiryId      String
+  /// QUOTATION (the proforma may follow).
+  kind           String
+  documentNumber String
+  versionNumber  Int       @default(1)
+  members        Json
+  totalAmount    Decimal   @db.Decimal(15, 2)
+  currency       String    @default("BTN")
+  /// LIVE | SUPERSEDED
+  state          String    @default("LIVE")
+  validUntil     DateTime?
+  sentAt         DateTime?
+  sentTo         String?
+  sentChannel    String?
+  answeredAt     DateTime?
+  answeredBy     String?
+  createdAt      DateTime  @default(now())
+  createdBy      String
+  supersededAt   DateTime?
+
+  @@index([inquiryId, kind])
+  @@map("trip_papers")
+}

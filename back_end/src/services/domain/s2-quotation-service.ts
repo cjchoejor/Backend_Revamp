@@ -2003,6 +2003,11 @@ async function sendQuotationInner(
     hidePrices?: boolean;
     /** Name every night on the copy sent (2026-10-30) — the stored PDF writes runs short. */
     nightsEach?: boolean;
+    /**
+     * Sent as part of the trip's combined paper (2026-11-07): recorded as sent like any other, but
+     * not emailed on its own — the trip's paper is the one email. Internal; never on an HTTP body.
+     */
+    viaTripPaper?: { id: string; number: string };
   },
 ) {
   const q = await prisma.quotation.findUnique({ where: { id: quotationId } });
@@ -2184,7 +2189,7 @@ async function sendQuotationInner(
   // one), else the guest's own — it used to go to the guest's address whatever was typed, the
   // quotation twin of issue 41. A send the desk records as made on WhatsApp is not also emailed.
   const channel = (input.channel ?? "EMAIL").toUpperCase();
-  if (channel === "EMAIL") {
+  if (channel === "EMAIL" && !input.viaTripPaper) {
     const typed = (input.recipientAddress ?? input.sentTo ?? "").trim();
     await sendQuotationEmailBestEffort(
       prisma,

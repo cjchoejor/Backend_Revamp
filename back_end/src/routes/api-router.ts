@@ -1,4 +1,5 @@
 import { refundsRouter } from "./refunds/router.js";
+import { tripPapersRouter } from "./trip-papers/router.js";
 import { Router } from "express";
 import { parseActorHeaders } from "../middleware/auth.js";
 import { concurrentEditingPassthrough } from "../middleware/concurrent-editing.js";
@@ -95,6 +96,7 @@ apiRouter.use(deficientConditionsRouter);
 apiRouter.use(lookupsRouter);
 apiRouter.use(backflowsRouter);
 apiRouter.use(documentsRouter);
+apiRouter.use(tripPapersRouter);
 apiRouter.use(bookingNotesRouter);
 apiRouter.use(roomMovesRouter);
 apiRouter.use(guestBookingsRouter);
