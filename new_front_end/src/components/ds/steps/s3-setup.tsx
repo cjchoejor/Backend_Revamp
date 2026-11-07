@@ -48,6 +48,7 @@ import { optionSelectedRoomIds, type EntryDetail, type InvoiceSummary, type Paym
 import { replySettled } from "@/lib/api/entries";
 import { EarlierAdvanceQuestion } from "./s3-earlier-advance";
 import { AnswerLine, useReplyAsked, Choice, DsDialog, Fact, Facts, Live, OnRecord, PaperDrawer, ReasonDialog, SeeRow, SendPaperPanel, StepCanvas, StepCard, atLeast, currentPassStart, toastRefusal, useCommunications, useRefreshEntry, useStepMode, words, type PaperRef, type ChangeBookingItem, ChangeBookingMenu, StageActs, useFlowUnsaved, useFinishWhenDone, useStepFlow, goToStepCard, revealCard, useOpenAlsoWay, useStepPane, OtherWaysTabs, InlineWay, ShutWay, parkTab, NightsChoice, NotSentChip } from "./kit";
+import { TripProformaCard, useTripProforma } from "./s3-trip-proforma";
 import { SendToField, useSendTo } from "./s8-parts";
 import { CancellationFiguresLine, WaiverTick, useRefundHow } from "./cancel-figures";
 import { CompetingClaimsCard, passesOf, roomsHeldWord, useRoomNumbers, useRoomTypeNames } from "./s2-shared";
@@ -294,6 +295,9 @@ export function S3SetUp({
         onAskAdvance={() => setAskAdvance((n) => n + 1)}
         onChanged={changed}
       />
+
+      {/* A trip of several stays has one proforma of its own as well (2026-11-07, operator). */}
+      <TripProformaCard entry={entry} editable={editable} />
 
       <PaymentPlanCard
         entry={entry}
@@ -1154,6 +1158,8 @@ function ProformaCard({
   const [to, setTo] = useSendTo(entry);
   const finish = useFinishWhenDone("proforma");
   const replyAsked = useReplyAsked(entry.id, "PROFORMA_INVOICE");
+  // On a trip of several stays the trip's proforma is the guest's paper; this stay's own Send steps back.
+  const onTrip = (useTripProforma(entry).data?.stays.length ?? 0) > 1;
   const generate = useMutation({
     mutationFn: () => generateProforma(session!, entry.id),
     onSuccess: () => {
@@ -1306,7 +1312,7 @@ function ProformaCard({
       ]
         .filter(Boolean)
         .join(" · ")}
-      title={`Proforma · ${no}${(shown.versionNumber ?? 1) > 1 ? ` · v${shown.versionNumber}` : ""}`}
+      title={`Proforma · ${no}`}
       icon="file"
       // Where it stands with the guest, on the paper's own line as on the quotation (2026-11-05).
       right={
@@ -1332,7 +1338,7 @@ function ProformaCard({
           </Button>
           <Live>
             <Button
-              kind={nextUp === "send" && !sendLock ? "primary" : "quiet"}
+              kind={nextUp === "send" && !sendLock ? (onTrip ? "secondary" : "primary") : "quiet"}
               compact
               icon="send"
               state={sendLock ? "inert" : "default"}

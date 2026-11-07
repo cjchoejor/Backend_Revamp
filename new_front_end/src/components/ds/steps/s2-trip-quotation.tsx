@@ -118,7 +118,7 @@ export function TripQuotationCard({ entry, editable }: { entry: EntryDetail; edi
           </Button>
         ) : null}
         {cur ? (
-          <Button kind="secondary" compact icon="eye" onClick={() => setPaper({ kind: "trip", id: cur.id, label })}>
+          <Button kind="secondary" compact icon="eye" onClick={() => setPaper({ kind: "trip", id: cur.id, label, tripKind: "QUOTATION" })}>
             Preview
           </Button>
         ) : null}
@@ -145,7 +145,22 @@ export function TripQuotationCard({ entry, editable }: { entry: EntryDetail; edi
   );
 }
 
-function TripSendDialog({ entry, tripId, label, onClose, onSent }: { entry: EntryDetail; tripId: string; label: string; onClose: () => void; onSent: () => void }) {
+/** Send a trip's paper — its quotation or its proforma — by email or WhatsApp, the paper beside the box. */
+export function TripSendDialog({
+  entry,
+  tripId,
+  label,
+  word = "quotation",
+  onClose,
+  onSent,
+}: {
+  entry: EntryDetail;
+  tripId: string;
+  label: string;
+  word?: "quotation" | "proforma";
+  onClose: () => void;
+  onSent: () => void;
+}) {
   const { session } = useSession();
   const recipient = useInvoiceRecipient(entry);
   const phoneRules = usePhoneRules();
@@ -166,15 +181,15 @@ function TripSendDialog({ entry, tripId, label, onClose, onSent }: { entry: Entr
     onSuccess: (r) => {
       toast.success(
         r.channel === "WHATSAPP"
-          ? `${r.number} recorded as sent on WhatsApp${r.sentTo ? ` to ${r.sentTo}` : ""} — each stay's quotation with it`
+          ? `${r.number} recorded as sent on WhatsApp${r.sentTo ? ` to ${r.sentTo}` : ""} — each stay's ${word} with it`
           : r.sentTo
-            ? `${r.number} sent by email to ${r.sentTo} — each stay's quotation with it`
+            ? `${r.number} sent by email to ${r.sentTo} — each stay's ${word} with it`
             : `${r.number} recorded as sent — nothing was emailed (no address); hand it over`,
       );
       onSent();
       onClose();
     },
-    onError: (e) => toastRefusal(e, "The trip's quotation could not be sent"),
+    onError: (e) => toastRefusal(e, `The trip's ${word} could not be sent`),
   });
   const blocked = channel === "EMAIL" ? (emailBad ? "that is not an email address" : null) : phoneBad;
   return (
@@ -182,9 +197,9 @@ function TripSendDialog({ entry, tripId, label, onClose, onSent }: { entry: Entr
       open
       onClose={onClose}
       busy={send.isPending}
-      beside={<SendPaperPanel paper={{ kind: "trip", id: tripId, label }} />}
-      title={`Send ${label.replace("The trip's quotation ", "")}`}
-      help="One email with the trip's paper; each stay's quotation that is still a draft is marked sent with it."
+      beside={<SendPaperPanel paper={{ kind: "trip", id: tripId, label, tripKind: word === "proforma" ? "PROFORMA" : "QUOTATION" }} />}
+      title={`Send ${label.replace(`The trip's ${word} `, "")}`}
+      help={`One email with the trip's paper; each stay's ${word} not sent yet is sent with it, with no email of its own.`}
       footer={
         <>
           <Button kind="quiet" onClick={onClose}>
@@ -243,14 +258,25 @@ function TripSendDialog({ entry, tripId, label, onClose, onSent }: { entry: Entr
   );
 }
 
-function TripAnswerDialog({ tripId, onClose, onDone }: { tripId: string; onClose: () => void; onDone: () => void }) {
+/** The guest's answer to a trip's paper, recorded on each stay's paper it was sent with. */
+export function TripAnswerDialog({
+  tripId,
+  word = "quotation",
+  onClose,
+  onDone,
+}: {
+  tripId: string;
+  word?: "quotation" | "proforma";
+  onClose: () => void;
+  onDone: () => void;
+}) {
   const { session } = useSession();
   const [method, setMethod] = useState<"WRITTEN" | "VERBAL" | "">("");
   const [said, setSaid] = useState("");
   const answer = useMutation({
     mutationFn: () => answerTripQuotation(session!, tripId, { method: method as "WRITTEN" | "VERBAL", verbatimNote: said.trim() || null }),
     onSuccess: (r) => {
-      toast.success(r.recorded ? `The guest's answer is recorded on ${r.recorded} stays' quotations` : "The answer is recorded");
+      toast.success(r.recorded ? `The guest's answer is recorded on ${r.recorded === 1 ? "1 stay's" : `${r.recorded} stays'`} ${word}${r.recorded === 1 ? "" : "s"}` : "The answer is recorded");
       onDone();
       onClose();
     },
@@ -262,7 +288,7 @@ function TripAnswerDialog({ tripId, onClose, onDone }: { tripId: string; onClose
       open
       onClose={onClose}
       busy={answer.isPending}
-      title="The guest's answer to the trip's quotation"
+      title={`The guest's answer to the trip's ${word}`}
       footer={
         <>
           <Button kind="quiet" onClick={onClose}>
@@ -277,7 +303,7 @@ function TripAnswerDialog({ tripId, onClose, onDone }: { tripId: string; onClose
       <div className="field">
         <label>
           How they answered
-          <Help label="About the answer">It is recorded on each stay&rsquo;s quotation the trip&rsquo;s was sent with.</Help>
+          <Help label="About the answer">It is recorded on each stay&rsquo;s {word} the trip&rsquo;s was sent with.</Help>
         </label>
         <Choice
           options={[

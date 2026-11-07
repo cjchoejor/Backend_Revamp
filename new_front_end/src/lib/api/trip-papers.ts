@@ -69,3 +69,68 @@ export async function fetchTripPaperPreviewHtml(session: Session, id: string, op
 export function openTripPaperPdf(session: Session, id: string, opts?: { hidePrices?: boolean; nightsEach?: boolean }): Promise<void> {
   return openPdf(session, `/api/trip-papers/${id}/pdf${face(opts)}`);
 }
+
+/** Either trip paper is sent and answered by its own id. */
+export const sendTripPaper = sendTripQuotation;
+export const answerTripPaper = answerTripQuotation;
+
+/**
+ * A trip's proforma (2026-11-07): each stay keeps its own proforma and the trip has one made of
+ * them — `GET/POST /api/entries/:id/trip-proforma`. Every figure is the server's.
+ */
+export type TripProforma = {
+  inquiryId: string;
+  stays: Array<{
+    stayNo: number;
+    entryId: string;
+    stage: string;
+    checkIn: string | null;
+    checkOut: string | null;
+    proforma: { id: string; number: string; sent: boolean; lapsed: boolean; total: string; advanceAsked: string | null; received: string; dueNow: string } | null;
+  }>;
+  total: string | null;
+  advanceAsked: string | null;
+  received: string;
+  dueNow: string | null;
+  canMake: boolean;
+  reason: string | null;
+  current: TripQuotation["current"];
+  versions: TripQuotation["versions"];
+};
+
+export function getTripProforma(session: Session, entryId: string) {
+  return apiRequest<TripProforma>(`/api/entries/${entryId}/trip-proforma`, { session });
+}
+
+export function makeTripProforma(session: Session, entryId: string) {
+  return apiRequest<{ made: boolean; id: string }>(`/api/entries/${entryId}/trip-proforma`, { method: "POST", session, body: {} });
+}
+
+export type TripPaymentShare = { entryId: string; amount: number };
+
+/** How a payment for the trip would be shared, and what is wrong with it — the server's figures. */
+export type TripPaymentPreview = {
+  mode: "FIRST_STAY_FIRST" | "AS_TYPED";
+  problem: string | null;
+  sharesTotal: string;
+  stays: Array<{ stayNo: number; entryId: string; number: string | null; dueNow: string; canTake: string; share: string }>;
+  tripDueNow: string;
+  tripCanTake: string;
+};
+
+export function previewTripPayment(session: Session, tripPaperId: string, body: { amount?: number | null; shares?: TripPaymentShare[] | null }) {
+  return apiRequest<TripPaymentPreview>(`/api/trip-papers/${tripPaperId}/payment/preview`, { method: "POST", session, body });
+}
+
+export function recordTripPayment(
+  session: Session,
+  tripPaperId: string,
+  body: { amount: number; paymentMethod?: string; notes?: string; shares?: TripPaymentShare[] | null },
+) {
+  return apiRequest<{
+    amount: string;
+    mode: "FIRST_STAY_FIRST" | "AS_TYPED";
+    shares: Array<{ stayNo: number; entryId: string; amount: string; paymentId: string }>;
+    autoHolds: Array<{ entryId: string; autoHold: { placed: boolean; expiresAt?: string; reason?: string; message?: string } | null }>;
+  }>(`/api/trip-papers/${tripPaperId}/payment`, { method: "POST", session, body });
+}
