@@ -693,6 +693,7 @@ export function TripHouse({
   onParticular,
   onAllSaved,
   drafts,
+  onOtherPicks,
 }: {
   entry: EntryDetail;
   others: EntryDetail[];
@@ -705,6 +706,8 @@ export function TripHouse({
   onAllSaved: () => void;
   /** The other stays' counts not saved yet, kept while the by-number pop-up is open (held by the house card). */
   drafts?: Record<string, TypeDraft>;
+  /** Another stay's rooms as its grid has them, for the trip's figure (null while they do not fit). */
+  onOtherPicks?: (entryId: string, p: TypePicks | null) => void;
 }) {
   const typeOrder = useMemo(() => typeOrderOf(catalog), [catalog]);
   const stays = [entry, ...others].sort((a, b) => stayNoOf(a.id) - stayNoOf(b.id));
@@ -781,6 +784,7 @@ export function TripHouse({
                 combined={combinedFor(e, i === 0)}
                 draft={drafts?.[e.id] ?? null}
                 onDraft={drafts ? (d) => void (drafts[e.id] = d) : undefined}
+                onPicks={onOtherPicks ? (p) => onOtherPicks(e.id, p) : undefined}
               />
             )}
           </div>
@@ -828,6 +832,7 @@ function OtherStayTypeColumn({
   combined,
   draft,
   onDraft,
+  onPicks,
 }: {
   entry: EntryDetail;
   stayNo: number;
@@ -836,6 +841,7 @@ function OtherStayTypeColumn({
   combined: CombinedProps;
   draft?: TypeDraft | null;
   onDraft?: (d: TypeDraft) => void;
+  onPicks?: (p: TypePicks | null) => void;
 }) {
   const { session } = useSession();
   const qc = useQueryClient();
@@ -919,7 +925,7 @@ function OtherStayTypeColumn({
       numberOfRooms={entry.numberOfRooms ?? 1}
       catalog={catalog}
       editable={editable}
-      onPicks={() => {}}
+      onPicks={onPicks ?? (() => {})}
       onSaved={() => {}}
       onParticular={() => {}}
       flowKey={null}

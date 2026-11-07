@@ -211,3 +211,19 @@ export type PickPricing = {
 export function pricePick(session: Session, entryId: string, body: { perNight: Array<{ date: string; roomIds: string[] }> }) {
   return apiRequest<PickPricing>(`/api/entries/${entryId}/availability/price-pick`, { method: "POST", session, body });
 }
+
+/** A trip's stays at Inquiry priced together (2026-11-07): each stay's own bill, and the trip's sums — the server's. */
+export type TripPickPricing = {
+  inquiryId: string;
+  currency: string;
+  serviceChargeRate: number;
+  gstRate: number;
+  stays: Array<{ entryId: string; checkIn: string | null; checkOut: string | null; pricing: PickPricing | null }>;
+  totals: { roomNights: number; net: number; serviceCharge: number; gst: number; total: number };
+  /** Every stay asked has rooms priced. */
+  complete: boolean;
+};
+
+export function priceTripPicks(session: Session, entryId: string, body: { stays: Array<{ entryId: string; perNight: Array<{ date: string; roomIds: string[] }> }> }) {
+  return apiRequest<TripPickPricing>(`/api/entries/${entryId}/availability/price-pick/trip`, { method: "POST", session, body });
+}

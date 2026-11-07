@@ -52,7 +52,7 @@ import { PLAN_LABEL, dueLabel } from "@/components/desk/workspace/advance-settle
 import { useStayPrice, type StayPrice } from "@/lib/ds/stay-price";
 import { getQuotationPriceLines, type QuotationLivePreview } from "@/lib/api/quotations";
 import { PriceLinesTable, type PriceLinesFigures } from "@/components/ds/workspace/price-lines";
-import { PickBill } from "@/components/ds/steps/s1-bill";
+import { PickBill, TripPickBill } from "@/components/ds/steps/s1-bill";
 import type { EntryDetail } from "@/types/api";
 import { Help, HelpHere } from "@/components/ds/help";
 import { DateInput, TimeInput } from "@/components/ds/date-input";
@@ -515,6 +515,25 @@ function TablePrice({ sp }: { sp: StayPrice }) {
  */
 function PicksPrice({ sp }: { sp: StayPrice }) {
   const p = sp.pick;
+  // A trip at Inquiry: every stay in one bill, together or stay by stay (2026-11-07).
+  if (sp.trip) {
+    const t = sp.trip;
+    return (
+      <TripPickBill
+        trip={t.pricing}
+        entries={t.entries}
+        stayNoOf={t.stayNoOf}
+        currentId={t.entries[0]?.id ?? ""}
+        labelsOverride={t.labels}
+        loading={t.loading}
+        title={t.unsaved ? "The rooms picked · not all saved yet" : "The rooms chosen"}
+        caption={
+          t.unsaved ? <span className="warn-ink">Save the rooms on the Inquiry step to keep this choice — the figures follow every pick.</span> : undefined
+        }
+        help="Indicative, not a quote — rooms only. Meals, extra beds and any agreed rate are added at Negotiation, where each stay's quotation prices them."
+      />
+    );
+  }
   if (!p) return null;
   return (
     <PickBill

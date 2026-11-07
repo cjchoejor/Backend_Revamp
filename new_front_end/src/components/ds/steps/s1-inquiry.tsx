@@ -79,10 +79,10 @@ import { enumerateNights, useRoomSelection } from "./use-room-selection";
 import { STAY_SAVED_EVENT, useTripAtInquiry, type StaySaved } from "./s1-trip-shared";
 import { RoomCountField } from "./new-inquiry-parts";
 import { TheCaller, WrapUp } from "./s1-caller";
-import { cleanPicks, usePickPricing, type BillNight } from "./s1-bill";
+import { TripPickLine, cleanPicks, usePickPricing, useTripPickPricing, type BillNight } from "./s1-bill";
 import { RoomsByType, TripHouse, savedBookingRooms, type TypeDraft } from "./s1-by-type";
 import { useBookingRooms } from "@/hooks/use-booking-rooms";
-import { usePublishPriceDraft } from "@/lib/ds/stay-price";
+import { savedPickNights, usePublishPriceDraft } from "@/lib/ds/stay-price";
 import { Help, HelpHere } from "@/components/ds/help";
 import type { PickPricing } from "@/lib/api/availability";
 import { DateInput } from "@/components/ds/date-input";
@@ -1066,6 +1066,29 @@ function TheHouse({
   const billFor = picked.length ? picked : candidate;
   const bill = usePickPricing(entry.id, billFor, hasResults);
   const pickedSaved = byTypeMode ? !!typePicks?.saved : sel.savedCanon != null && sel.savedCanon === sel.currentCanon;
+  // A trip at Inquiry: every stay's rooms priced together (2026-11-07, operator: "the charges show
+  // for only first stay, show for both"). Another stay's rooms are its grid's as they stand, else
+  // its saved pick; null from its grid means they do not fit yet.
+  const [otherPicks, setOtherPicks] = useState<Record<string, { perNight: BillNight[]; labels: Record<string, string>; saved: boolean } | null>>({});
+  const onOtherPicks = useCallback(
+    (id: string, p: { perNight: BillNight[]; labels: Map<string, string>; saved: boolean } | null) =>
+      setOtherPicks((prev) => {
+        const next = p ? { perNight: p.perNight, labels: Object.fromEntries(p.labels), saved: p.saved } : null;
+        return JSON.stringify(prev[id]) === JSON.stringify(next) ? prev : { ...prev, [id]: next };
+      }),
+    [],
+  );
+  const otherNights = (o: EntryDetail): BillNight[] => {
+    const got = byTypeMode ? otherPicks[o.id] : undefined;
+    return got === undefined ? savedPickNights(o) : (got?.perNight ?? []);
+  };
+  const tripStays =
+    trip.combined && trip.loaded ? [{ entryId: entry.id, picks: billFor }, ...trip.others.map((o) => ({ entryId: o.id, picks: otherNights(o) }))] : [];
+  const tripBill = useTripPickPricing(entry.id, tripStays, hasResults && tripStays.length > 1);
+  const othersSaved = trip.others.every((o) => {
+    const got = byTypeMode ? otherPicks[o.id] : undefined;
+    return got === undefined ? savedPickNights(o).length > 0 : !!got?.saved;
+  });
   // Picks changed and not saved: the house does not read as done (2026-10-27).
   // A trip's other stays picked by number in the pop-up count too (2026-11-07).
   const [othersByNumberDirty, setOthersByNumberDirty] = useState(false);
@@ -1096,7 +1119,23 @@ function TheHouse({
   const pickLabels = byTypeMode ? (typePicks?.labels ?? bookingRoomsView.labels) : bookingRoomsView.labels;
   usePublishPriceDraft(
     entry.id,
-    editable ? { kind: "PICKS", perNight: picked, saved: pickedSaved, labels: Object.fromEntries(pickLabels) } : null,
+    editable
+      ? {
+          kind: "PICKS",
+          perNight: picked,
+          saved: pickedSaved,
+          labels: Object.fromEntries(pickLabels),
+          // The trip's other stays, as this page has them (2026-11-07).
+          trip: trip.combined
+            ? trip.others.map((o) => ({
+                entryId: o.id,
+                perNight: otherNights(o),
+                saved: byTypeMode && otherPicks[o.id] !== undefined ? !!otherPicks[o.id]?.saved : true,
+                labels: otherPicks[o.id]?.labels,
+              }))
+            : undefined,
+        }
+      : null,
   );
   const billTitle = picked.length
     ? pickedSaved
@@ -1411,6 +1450,7 @@ function TheHouse({
                     />
                   )}
                   drafts={otherDrafts.current}
+                  onOtherPicks={onOtherPicks}
                   onParticular={() => {
                     setMode("NUMBER");
                     openTool();
@@ -1515,7 +1555,16 @@ function TheHouse({
               </tbody>
             </table>
             )}
-            {bill.pricing ? (
+            {tripBill.pricing ? (
+              <TripPickLine
+                trip={tripBill.pricing}
+                stayNoOf={trip.stayNoOf}
+                currentId={entry.id}
+                loading={tripBill.loading}
+                title={pickedSaved && othersSaved ? "The rooms chosen" : "The rooms picked · not all saved yet"}
+                help="Indicative, not a quote. Meals, extra beds and any agreed rate are set at Negotiation. The bill for every stay — together, or stay by stay — is in the booking file, under Charges & payments."
+              />
+            ) : bill.pricing ? (
               <div className={`pb-line${bill.loading ? " loading" : ""}`}>
                 <span className="pb-line-k">{billTitle}</span>
                 <b className="money">{money(bill.pricing.totals.total, bill.pricing.currency)}</b>
