@@ -13,11 +13,12 @@ import { useBookingRooms } from "@/hooks/use-booking-rooms";
 import { createQuotation, getQuoteValidityWindow, supersedeQuotation, type RoomCompositionInput } from "@/lib/api/quotations";
 import { nightOverridesCanon } from "@/components/desk/workspace/room-compositions-table";
 import { Help } from "@/components/ds/help";
+import { Button } from "@/design-system";
 import { liveQuotesThisPass } from "@/lib/desk/workspace";
 import { operativeRoomCompositions, roomNightsByRoom, roomStayRangesByRoom } from "@/lib/desk/party-rooms";
 import { fmtDateTime, plural } from "@/lib/ds/format";
 import { optionSelectedRoomIds, preferredHoldRoomId, type EntryDetail, type QuotationSummary } from "@/types/api";
-import { useBedPlan } from "./kit";
+import { DsDialog, useBedPlan } from "./kit";
 import { passesOf } from "./s2-shared";
 
 const DAY_MS = 86_400_000;
@@ -345,6 +346,38 @@ export function useStayTable(entry: EntryDetail, opts: { past: boolean; allowPar
 }
 
 export type StayTable = ReturnType<typeof useStayTable>;
+
+/** How long a stay's quote stands, in a small button: the table of several stays keeps its band to one line. */
+export function ValidityChip({ t }: { t: StayTable }) {
+  const [open, setOpen] = useState(false);
+  const end = t.validNumber == null ? null : fmtDateTime(t.validityEnd, t.tz).split(",")[0];
+  return (
+    <>
+      <button
+        type="button"
+        className={`rct-mini-btn${end ? "" : " bad"}`}
+        title="How long the guest has to accept this stay's price"
+        onClick={() => setOpen(true)}
+      >
+        {end ? `Valid to ${end}` : "Set validity"}
+      </button>
+      <DsDialog
+        open={open}
+        onClose={() => setOpen(false)}
+        title="How long the quote is valid"
+        footer={
+          <Button kind="quiet" onClick={() => setOpen(false)}>
+            Done
+          </Button>
+        }
+      >
+        <div className="desk-root">
+          <QuoteValidityField t={t} />
+        </div>
+      </DsDialog>
+    </>
+  );
+}
 
 /**
  * A field that reads as one (2026-10-12, operator: "valid for 2 days doesn't seem like something that

@@ -2198,16 +2198,40 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                   )}
                 </div>
                 <div className="fstay">
-                  <StayDates checkIn={entry.checkInDate} checkOut={co} />
-                  <div className="ffacts-line">
-                    <span>
-                      <b>{nights ? plural(nights, "night") : "No dates yet"}</b>
-                    </span>
-                    <span>
-                      <b>{roomsCount ? plural(roomsCount, "room") : "Rooms not set"}</b>
-                    </span>
-                    <span className="camein">{cameInAs}</span>
-                  </div>
+                  {together.active ? (
+                    <>
+                      {[entry, ...together.others]
+                        .sort((a, b) => together.stayNoOf(a.id) - together.stayNoOf(b.id))
+                        .map((e) => {
+                          const n = nightsOf(e.checkInDate, e.checkOutDate);
+                          return (
+                            <div key={e.id} className="fstay-row">
+                              <b>Stay {together.stayNoOf(e.id)}</b>
+                              <StayDates checkIn={e.checkInDate} checkOut={e.checkOutDate} />
+                              <span className="fstay-n">
+                                {n ? plural(n, "night") : "No dates yet"} · {e.numberOfRooms ? plural(e.numberOfRooms, "room") : "Rooms not set"}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      <div className="ffacts-line">
+                        <span className="camein">{cameInAs}</span>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <StayDates checkIn={entry.checkInDate} checkOut={co} />
+                      <div className="ffacts-line">
+                        <span>
+                          <b>{nights ? plural(nights, "night") : "No dates yet"}</b>
+                        </span>
+                        <span>
+                          <b>{roomsCount ? plural(roomsCount, "room") : "Rooms not set"}</b>
+                        </span>
+                        <span className="camein">{cameInAs}</span>
+                      </div>
+                    </>
+                  )}
                 </div>
               </div>
               <div className="ftabs" role="tablist">

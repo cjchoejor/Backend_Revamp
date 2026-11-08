@@ -17,7 +17,7 @@ import { fmtStay, nightsOf, plural } from "@/lib/ds/format";
 import { quoteNo } from "@/lib/ds/papers";
 import type { EntryDetail, QuotationSummary } from "@/types/api";
 import { toastRefusal } from "./kit";
-import { QuoteValidityField, useStayTable, type StayTable } from "./s2-stay-table";
+import { ValidityChip, useStayTable, type StayTable } from "./s2-stay-table";
 
 type Report = {
   stayNo: number;
@@ -25,6 +25,7 @@ type Report = {
   unsaved: boolean;
   faults: string[];
   hasQuote: boolean;
+  quotationId: string | null;
   negotiated: boolean;
   input: TripPreviewStayInput;
 };
@@ -76,6 +77,7 @@ function StaySection({
     unsaved: t.tableOpen && (t.tableUnsaved || t.validTouched),
     faults: t.tableOpen ? t.tableFaults : [],
     hasQuote: !!(t.working ?? t.accepted),
+    quotationId: (t.working ?? t.accepted)?.id ?? null,
     negotiated: negotiatedIn(snapshotRef.current ?? undefined),
     input: { entryId: entry.id, roomCompositions: t.roomCompositions, discount: t.discountForPreview, ...roomNightMaps(t) },
   };
@@ -89,25 +91,17 @@ function StaySection({
   const ages = entry.childAges ?? [];
   const band = (
     <>
-      <b className="nb-date">
+      <b className="nb-date" title={`${entry.id}${mine ? " · this booking" : ""}`}>
         Stay {stayNo} · {fmtStay(entry.checkInDate, entry.checkOutDate)}
       </b>
       <span className="nb-meta">
-        {[
-          nights ? plural(nights, "night") : null,
-          plural(t.sealedRoomIds.length, "room"),
-          ages.length ? `children ${ages.join(", ")}` : null,
-          entry.id,
-          mine ? "this booking" : null,
-        ]
-          .filter(Boolean)
-          .join(" · ")}
+        {[nights ? plural(nights, "night") : null, plural(t.sealedRoomIds.length, "room"), ages.length ? `ages ${ages.join(", ")}` : null].filter(Boolean).join(" · ")}
       </span>
     </>
   );
   return (
     <RoomCompositionsTable
-      grouped={{ ...grouped, band, foot: t.tableOpen ? <QuoteValidityField t={t} /> : null }}
+      grouped={{ ...grouped, band, foot: t.tableOpen ? <ValidityChip t={t} /> : null }}
       readOnly={!t.tableOpen}
       bedPlan={t.beds.byRoom}
       onBedChange={t.beds.set}
@@ -147,7 +141,15 @@ export function TripNegotiationTable({
   stayNoOf,
   onOthersUnsaved,
   onSaved,
+  latest,
+  onFaults,
+  onInputs,
 }: {
+  /** Each stay's table, for the acts outside it: the provisional block. */
+  latest: React.MutableRefObject<Record<string, StayTable>>;
+  onFaults: (faults: string[]) => void;
+  /** Every stay as the table has it, for the booking file's price. */
+  onInputs: (stays: Array<TripPreviewStayInput & { stayNo: number; saved: boolean }>) => void;
   entry: EntryDetail;
   own: StayTable;
   others: EntryDetail[];
@@ -157,7 +159,6 @@ export function TripNegotiationTable({
   onSaved: () => void;
 }) {
   const qc = useQueryClient();
-  const latest = useRef<Record<string, StayTable>>({});
   const [reports, setReports] = useState<Record<string, Report>>({});
   const onReport = useRef((id: string, r: Report) => setReports((prev) => ({ ...prev, [id]: r }))).current;
   const stays = useMemo(() => [entry, ...others].sort((a, b) => stayNoOf(a.id) - stayNoOf(b.id)), [entry, others]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -178,6 +179,16 @@ export function TripNegotiationTable({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [othersKey]);
   useEffect(() => () => onOthersUnsaved([]), []); // eslint-disable-line react-hooks/exhaustive-deps
+  const faultsKey = faults.join("|");
+  useEffect(() => {
+    onFaults(faults);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [faultsKey]);
+  const inputsKey = JSON.stringify(list.map((r) => [r.input, r.unsaved, r.quotationId]));
+  useEffect(() => {
+    if (list.length === stays.length) onInputs(list.map((r) => ({ ...r.input, quotationId: r.quotationId, stayNo: r.stayNo, saved: !r.unsaved && !!r.quotationId })));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inputsKey, stays.length]);
 
   const saveM = useMutation({
     mutationFn: async () => {

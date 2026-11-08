@@ -17,7 +17,7 @@
  */
 import { payerChoiceWord, payerPartyOf } from "@/lib/ds/payer-words";
 import { BookingRateSheet } from "@/components/ds/rate-sheet";
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button, Chip, EmptyState } from "@/design-system";
@@ -41,7 +41,7 @@ import {
 import { acknowledgeCommunication, getEntryTrace, replySettled, type EntryBillingSummary, type EntryCommunication } from "@/lib/api/entries";
 import { updateInquiryNotes } from "@/lib/api/inquiries";
 import { resendConfirmationVoucher } from "@/lib/api/confirmation";
-import { fmtDateTime, fmtDay, fmtStamp, hotelFormParts, money, plural } from "@/lib/ds/format";
+import { fmtDateTime, fmtDay, fmtStamp, fmtStay, hotelFormParts, money, plural } from "@/lib/ds/format";
 import { STEP_NAMES, stepNoOfStage } from "@/lib/ds/steps";
 import { isHousekeeping, traceWords } from "@/lib/ds/trace-words";
 import type { TraceEvent } from "@/lib/trace/humanize";
@@ -51,7 +51,9 @@ import { useHeldDocuments } from "@/components/ds/workspace/held-papers";
 import { PLAN_LABEL, dueLabel } from "@/components/desk/workspace/advance-settlement";
 import { useStayPrice, type StayPrice } from "@/lib/ds/stay-price";
 import { getQuotationPriceLines, type QuotationLivePreview } from "@/lib/api/quotations";
-import { PriceLinesTable, type PriceLinesFigures } from "@/components/ds/workspace/price-lines";
+import { PriceLineRows, PriceLinesHead, PriceLinesTable, type PriceLinesFigures } from "@/components/ds/workspace/price-lines";
+import { StayDates } from "@/components/ds/stay-dates";
+import { useTripBillView } from "@/components/ds/steps/s1-bill";
 import { PickBill, TripPickBill } from "@/components/ds/steps/s1-bill";
 import type { EntryDetail } from "@/types/api";
 import { Help, HelpHere } from "@/components/ds/help";
@@ -143,8 +145,10 @@ export function ChargesView({
               label: "The price",
               content: (
                 <>
-        <StepCard title="The price" status={sp.source === "QUOTE" ? (tag ?? undefined) : sp.source === "PICKS" ? undefined : sp.kind || undefined}>
-          {sp.source === "TABLE" ? (
+        <StepCard title="The price" status={sp.tableTrip ? undefined : sp.source === "QUOTE" ? (tag ?? undefined) : sp.source === "PICKS" ? undefined : sp.kind || undefined}>
+          {sp.tableTrip ? (
+            <TripTablePrice sp={sp} />
+          ) : sp.source === "TABLE" ? (
             <TablePrice sp={sp} />
           ) : sp.source === "PICKS" ? (
             <PicksPrice sp={sp} />
@@ -478,6 +482,93 @@ function QuotePriceLines({ quotationId, rooms, stayTotal, currency }: { quotatio
           The quotation&rsquo;s total is for the stay as booked; the stay total above is what this stay comes to.
         </p>
       ) : null}
+    </>
+  );
+}
+
+/**
+ * The stays set up the same, at Negotiation (2026-11-09, operator: the panel "shows only the stay
+ * whose page you are on"): every stay's rows in one table, or stay by stay. Each stay is its own
+ * figure from the server, as quoted when it is saved; the trip's are those added up there.
+ */
+function TripTablePrice({ sp }: { sp: StayPrice }) {
+  const [view, setView] = useTripBillView();
+  const t = sp.tableTrip!;
+  const cur = t.data.currency;
+  const stays = [...t.data.stays]
+    .sort((a, b) => t.stayNoOf(a.entryId) - t.stayNoOf(b.entryId))
+    .map((s) => ({ s, n: t.stayNoOf(s.entryId), f: (s.quote ?? (s.preview ? previewFigures(s.preview) : null)) as PriceLinesFigures | null }));
+  const dated = stays.some((x) => x.f?.datesShown);
+  const first = stays.find((x) => x.f)?.f ?? null;
+  const tt = t.data.totals;
+  const plain = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const quotedWord = (x: (typeof stays)[number]) =>
+    x.s.source === "QUOTE" ? `As quoted · ${x.s.quote!.referenceNumber}${x.s.quote!.versionNumber > 1 ? ` · v${x.s.quote!.versionNumber}` : ""}` : "as on the table · not saved yet";
+  const head = (x: (typeof stays)[number]) => (
+    <>
+      <span className="trip-stay-name">Stay {x.n}</span>
+      <StayDates checkIn={x.s.checkIn} checkOut={x.s.checkOut} />
+      <span className="meta">{quotedWord(x)}</span>
+    </>
+  );
+  return (
+    <>
+      <div className="bigfig">
+        <span className="meta">Trip total · {plural(stays.length, "stay")}</span>
+        <b>{money(tt.payable, cur)}</b>
+        {t.loading ? <span className="meta">updating…</span> : null}
+      </div>
+      <div className="trip-bill-switch">
+        <Choice options={[["TOGETHER", "Together"], ["EACH", "Stay by stay"]] as const} value={view} onChange={setView} />
+      </div>
+      {view === "TOGETHER" ? (
+        <div className="plines-wrap">
+          {stays.map((x, i) => (
+            <Fragment key={x.s.entryId}>
+              <div className="trip-stay-band">
+                <span>
+                  <span className="trip-stay-name">Stay {x.n}</span> <span className="meta">{quotedWord(x)}</span>
+                  <span className="sm trip-stay-when">{fmtStay(x.s.checkIn, x.s.checkOut)}</span>
+                </span>
+                <b className="money">{money(x.s.payable, cur)}</b>
+              </div>
+              <table className={`table compact plines${dated ? " dated" : ""}`}>
+                {i === 0 ? <PriceLinesHead datesShown={dated} currency={cur} /> : null}
+                <tbody>{x.f ? <PriceLineRows lines={x.f.lines} datesShown={dated} /> : null}</tbody>
+              </table>
+            </Fragment>
+          ))}
+          <div className="pl-foot">
+            <span>Net value · the trip</span>
+            <b>{plain(tt.subtotal)}</b>
+            {tt.netReduction > 0 ? (
+              <>
+                <span>Discount</span>
+                <b>− {plain(tt.netReduction)}</b>
+                <span>Net after discount</span>
+                <b>{plain(tt.payableSubtotal)}</b>
+              </>
+            ) : null}
+            <span>{first?.serviceChargeLabel ?? "Service charge"}</span>
+            <b>{plain(tt.payableServiceCharge)}</b>
+            <span>{first?.gstLabel ?? "GST"}</span>
+            <b>{plain(tt.payableGst)}</b>
+            <span className="total">Trip total</span>
+            <b className="total">{money(tt.payable, cur)}</b>
+          </div>
+        </div>
+      ) : (
+        stays.map((x) => (
+          <div key={x.s.entryId} className="trip-stay-block">
+            <div className="trip-stay-h-in">
+              {head(x)}
+            </div>
+            {x.f ? <PriceLinesTable f={x.f} currency={cur} /> : null}
+          </div>
+        ))
+      )}
+      {t.unsaved ? <p className="warn-ink sm" style={{ margin: "6px 0 0" }}>A stay has changes not saved yet — save the table to put them on its quotation.</p> : null}
+      <HelpHere label="About these figures">Each stay is priced by the hotel server on its own, and each keeps its own quotation. The trip&rsquo;s figures are those added up.</HelpHere>
     </>
   );
 }

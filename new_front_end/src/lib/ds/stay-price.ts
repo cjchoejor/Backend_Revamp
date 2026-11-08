@@ -20,7 +20,7 @@ import { useBookingRooms } from "@/hooks/use-booking-rooms";
 import { useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSession } from "@/hooks/use-session";
-import { previewQuotationPricing, type QuotationLivePreview, type RoomCompositionInput } from "@/lib/api/quotations";
+import { previewQuotationPricing, previewTripQuotations, type QuotationLivePreview, type RoomCompositionInput, type TripPreviewStayInput } from "@/lib/api/quotations";
 import type { EntryBillingSummary } from "@/lib/api/entries";
 import type { PickPricing, TripPickPricing } from "@/lib/api/availability";
 import { currentPassConfigs } from "@/lib/desk/workspace";
@@ -44,6 +44,8 @@ export type PriceDraft =
       roomCompositions: RoomCompositionInput[];
       discount: { percent?: number | null; amount?: number | null } | null;
       saved: boolean;
+      /** The stays set up the same, each as the table has it (2026-11-09). A saved stay names its quotation. */
+      together?: Array<TripPreviewStayInput & { stayNo: number; saved: boolean }>;
     };
 
 const draftKey = (entryId: string) => ["price-draft", entryId] as const;
@@ -114,6 +116,13 @@ export type StayPrice = {
     unsaved: boolean;
     loading: boolean;
   } | null;
+  /** The stays set up the same, at Negotiation: every stay's price, together or stay by stay (2026-11-09). */
+  tableTrip?: {
+    data: Awaited<ReturnType<typeof previewTripQuotations>>;
+    stayNoOf: (id: string) => number;
+    unsaved: boolean;
+    loading: boolean;
+  } | null;
 };
 
 export function useStayPrice(entry: EntryDetail | null, billing: EntryBillingSummary | null): StayPrice {
@@ -134,6 +143,26 @@ export function useStayPrice(entry: EntryDetail | null, billing: EntryBillingSum
     placeholderData: (prev) => prev,
     staleTime: 30_000,
   });
+
+  // The stays set up the same: each read as the table has it, or as quoted when it is saved.
+  const together = table?.together && table.together.length > 1 && table.together.every((s) => s.roomCompositions.length > 0) ? table.together : null;
+  const tripBody = together?.map(({ stayNo: _n, saved, quotationId, ...s }) => ({ ...s, quotationId: saved ? quotationId : null })) ?? null;
+  const tripTable = useQuery({
+    queryKey: ["stay-price-trip", entryId, tripBody ? JSON.stringify(tripBody) : ""],
+    queryFn: () => previewTripQuotations(session!, entryId, tripBody!),
+    enabled: !!session && !!tripBody,
+    placeholderData: (prev) => prev,
+    staleTime: 30_000,
+  });
+  const tableTrip =
+    together && tripTable.data
+      ? {
+          data: tripTable.data,
+          stayNoOf: (id: string) => together.find((s) => s.entryId === id)?.stayNo ?? 0,
+          unsaved: together.some((s) => !s.saved),
+          loading: tripTable.isFetching,
+        }
+      : null;
 
   const picksDraft = live && entry?.currentStage === "S1" && draft?.kind === "PICKS" && cleanPicks(draft.perNight).length > 0 ? draft : null;
   const atInquiryOrNegotiation = live && (entry?.currentStage === "S1" || entry?.currentStage === "S2");
@@ -176,10 +205,11 @@ export function useStayPrice(entry: EntryDetail | null, billing: EntryBillingSum
       preview: p,
       pick: null,
       loading: preview.isFetching,
+      tableTrip,
     };
   }
   if (quoteAmount != null) {
-    return { source: "QUOTE", amount: quoteAmount, currency, kind: "", unsaved: false, savedQuoteAmount: null, preview: null, pick: null, loading: false };
+    return { source: "QUOTE", amount: quoteAmount, currency, kind: "", unsaved: false, savedQuoteAmount: null, preview: null, pick: null, loading: false, tableTrip };
   }
   if (pick.pricing) {
     const unsaved = !!picksDraft && !picksDraft.saved;

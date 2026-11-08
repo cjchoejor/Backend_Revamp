@@ -2277,7 +2277,7 @@ export function RoomCompositionsTable({
                 aria-label="Night shown"
                 title={nightsShort.length ? `Short of guests on ${nightsShort.map(shortNight).join(", ")}` : "Every night holds the whole party"}
               >
-                {!splitStay && <option value="stay">Whole stay · {pickerNights.length} nights</option>}
+                {!splitStay && <option value="stay">{grouped ? "Whole stay" : `Whole stay · ${pickerNights.length} nights`}</option>}
                 <option value="all">All nights · {pickerNights.length}</option>
                 {pickerNights.map((n, i) => {
                   const ids = roomsOnNight(n);
@@ -2604,11 +2604,25 @@ export function RoomCompositionsTable({
             <div className="nb-in">
               {grouped.band}
               {partySize > 0 && (
-                <span className={`nb-tally${(splitStay ? nightsShort.length > 0 : totalGuests !== partySize) ? " off" : ""}`}>
-                  {totalGuests} of {partySize} guests placed
+                <span className={`nb-tally${(splitStay ? nightsShort.length > 0 : totalGuests !== partySize) ? " off" : ""}`} title={`${totalGuests} of ${partySize} guests placed in rooms`}>
+                  {totalGuests}/{partySize} guests
                 </span>
               )}
-              {nightPicker}
+              <span className="st-right">
+                {nightPicker}
+                <FixedDiscount discountValue={discountValue} discountUnit={discountUnit} onDiscountChange={onDiscountChange} lockCommercial={lockCommercial || readOnly} />
+                {grouped.foot}
+                <b
+                  className="st-total"
+                  title={
+                    preview
+                      ? `Net ${fmtNu(preview.subtotal)}${preview.discount ? ` − discount ${fmtNu(preview.discount.netReduction)} = ${fmtNu(preview.payableSubtotal)}` : ""} + service charge ${fmtNu(preview.payableServiceCharge)} + GST ${fmtNu(preview.payableGst)}`
+                      : undefined
+                  }
+                >
+                  {preview ? `${preview.currency} ${fmtNu(preview.payable)}` : "…"}
+                </b>
+              </span>
             </div>
           </td>
         </tr>
@@ -2648,16 +2662,8 @@ export function RoomCompositionsTable({
           </tr>
         )}
         {bodyRows}
-        {sumRow}
-        <tr className="rct-fullrow stayfoot">
-          <td colSpan={colCount}>
-            <div className="rct-full-in">
-              <FixedDiscount discountValue={discountValue} discountUnit={discountUnit} onDiscountChange={onDiscountChange} lockCommercial={lockCommercial || readOnly} />
-              {liveTotal}
-              {grouped.foot}
-            </div>
-          </td>
-        </tr>
+        {/* With one room the band already says it; a Σ earns its row only over several rooms. */}
+        {sealedRoomIds.length > 1 ? sumRow : null}
       </tbody>
     );
   }

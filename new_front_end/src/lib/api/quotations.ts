@@ -199,6 +199,19 @@ export type TripPreviewStayInput = {
   discount?: { percent?: number | null; amount?: number | null } | null;
   roomNights?: Record<string, number>;
   roomNightDates?: Record<string, string[]>;
+  /** The quotation it is saved on: its own rows are read instead of the table's. */
+  quotationId?: string | null;
+};
+
+/** One stay of the trip's price: as quoted, or as the table stands. */
+export type TripPriceStay = {
+  entryId: string;
+  checkIn: string | null;
+  checkOut: string | null;
+  source: "QUOTE" | "TABLE";
+  quote: QuotationPriceLines | null;
+  preview: QuotationLivePreview | null;
+  payable: number;
 };
 
 /** The stays worked in one table priced together: the trip's figures are added up on the server. */
@@ -206,7 +219,7 @@ export async function previewTripQuotations(session: Session, entryId: string, s
   return apiRequest<{
     inquiryId: string;
     currency: string;
-    stays: Array<{ entryId: string; payable: number }>;
+    stays: TripPriceStay[];
     totals: { subtotal: number; netReduction: number; payableSubtotal: number; payableServiceCharge: number; payableGst: number; payable: number };
   }>(`/api/entries/${entryId}/quotation-preview/trip`, { method: "POST", session, body: { stays } });
 }

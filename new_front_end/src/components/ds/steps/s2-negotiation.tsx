@@ -19,7 +19,7 @@ import { BindingBox, Button, Chip, Icon } from "@/design-system";
 import { useSession } from "@/hooks/use-session";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
 import { useBookingRooms } from "@/hooks/use-booking-rooms";
-import { QuoteValidityField, canonComps, readDiscount, shownQuotation, useStayTable, type RecordedDiscount } from "./s2-stay-table";
+import { QuoteValidityField, canonComps, readDiscount, shownQuotation, useStayTable, type RecordedDiscount, type StayTable } from "./s2-stay-table";
 import { useStaysTogether } from "./s2-together";
 import { TripNegotiationTable } from "./s2-trip-table";
 import { getChildPolicy } from "@/lib/api/child-policy";
@@ -34,12 +34,13 @@ import {
   resolveQuotationAckOpenLoop,
   sendQuotation,
   supersedeQuotation,
+  type TripPreviewStayInput,
 } from "@/lib/api/quotations";
 import { RoomCompositionPlanner } from "@/components/desk/workspace/room-compositions-board";
 import { ChangeConfiguration, DecidedConfigurationChanges, WaitingConfigurationChange } from "./s2-configuration";
 import { fmtDateTime, fmtStamp, money, plural } from "@/lib/ds/format";
 import type { EntryDetail, QuotationSummary, SpeculativeHoldSummary } from "@/types/api";
-import { Choice, latestDispatched, useCommunications, useReplyAsked, DsDialog, Live, Notice, OtherWaysTabs, ChangeBookingMenu, StageActs, useOpenAlsoWay, PaperDrawer, QuotationSendDialog, ReasonDialog, SeeRow, StepCanvas, StepCard, Tool, atLeast, toastRefusal, type PaperRef, useBedPlan, useOpenFileTab, useRefreshEntry, useStepFlow, useFlowCard, anchorFor, revealCard, words, parkTab, declineTab } from "./kit";
+import { Choice, latestDispatched, useCommunications, useReplyAsked, DsDialog, Live, Notice, OtherWaysTabs, SubTabs, ChangeBookingMenu, StageActs, useOpenAlsoWay, PaperDrawer, QuotationSendDialog, ReasonDialog, SeeRow, StepCanvas, StepCard, Tool, atLeast, toastRefusal, type PaperRef, useBedPlan, useOpenFileTab, useRefreshEntry, useStepFlow, useFlowCard, anchorFor, revealCard, words, parkTab, declineTab } from "./kit";
 import { usePublishPriceDraft } from "@/lib/ds/stay-price";
 import { Help } from "@/components/ds/help";
 import type { ChangeBookingItem } from "./kit";
@@ -147,6 +148,8 @@ export function S2Negotiation({
   const together = useStaysTogether(past ? null : entry);
   const { passes, passId, editable, quotations, accepted, working, shown, sealedPreferred, sealedRoomIds, beds, anchorRoomId, tableFaults, setTableFaults, roomDates, proformaLocked, roomCompositions, setRoomCompositions, discountValue, setDiscountValue, discountUnit, setDiscountUnit, recordedDiscount, discountForPreview, tableUnsaved, validWindow, inHours, validUnit, maxValid, validTouched, setValidTouched, validNumber, seedCompositions, createBody, supersedeBody, tableOpen } = stay;
   const elevated = atLeast(session?.actorLevel, "L2");
+  // The server's rule (`enforceSpeculativeHoldReleaseAuthority`).
+  const mayRelease = atLeast(session?.actorLevel, "L3");
   const extraKeys: ReadonlyArray<ReadonlyArray<unknown>> = [["quotation-preview"], ["competing-claims", entry.id]];
 
   /* ---- the quotations of this pass, and of every pass ---- */
@@ -168,6 +171,28 @@ export function S2Negotiation({
   const holds = (entry.speculativeHolds ?? []).filter((h) => !passId || h.segmentId === passId);
   const activeHold = holds.find((h) => h.state === "PLACED" || h.state === "UPGRADED") ?? null;
   const lastHold = activeHold ? null : (holds[0] ?? null);
+
+  /* ---- the stays worked together: the block and the change reach all of them (2026-11-09) ---- */
+  const stayTables = useRef<Record<string, StayTable>>({});
+  const groupStays = useMemo(
+    () => (together.active ? [entry, ...together.others].sort((a, b) => together.stayNoOf(a.id) - together.stayNoOf(b.id)) : [entry]),
+    [entry, together.active, together.others], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+  const [groupFaults, setGroupFaults] = useState<string[]>([]);
+  const [groupInputs, setGroupInputs] = useState<Array<TripPreviewStayInput & { stayNo: number; saved: boolean }>>([]);
+  const tableOf = (e: EntryDetail): StayTable | undefined => (e.id === entry.id ? stay : stayTables.current[e.id]);
+  const activeHoldOf = (e: EntryDetail) => {
+    const pid = passesOf(e).current?.id ?? null;
+    return (e.speculativeHolds ?? []).filter((h) => !pid || h.segmentId === pid).find((h) => h.state === "PLACED" || h.state === "UPGRADED") ?? null;
+  };
+  const markedStays = groupStays.flatMap((e) => {
+    const hold = activeHoldOf(e);
+    return hold ? [{ e, hold }] : [];
+  });
+  const staysToMark = groupStays.filter((e) => !activeHoldOf(e));
+  const stayWord = (e: EntryDetail) => (together.active ? `Stay ${together.stayNoOf(e.id)} · ` : "");
+  const heldWordOf = (e: EntryDetail, ids: string[]) =>
+    roomsHeldWord(ids.map((id) => ({ number: roomNos.get(id) ?? null, typeName: typeNames.get(id) ?? null, quiet: tableOf(e)?.bookingRooms.named.has(id) ?? false })));
 
   /* ---- what the doors hold ---- */
   const [holdWhy, setHoldWhy] = useState("");
@@ -201,6 +226,7 @@ export function S2Negotiation({
           kind: "TABLE",
           roomCompositions,
           discount: discountForPreview,
+          ...(together.active && groupInputs.length === groupStays.length ? { together: groupInputs } : {}),
           saved: !tableUnsaved,
         }
       : null,
@@ -266,40 +292,56 @@ export function S2Negotiation({
     },
     onError: (e) => toastRefusal(e, "The quotation could not be generated again"),
   });
+  const refreshGroup = () => refresh([...extraKeys, ...together.others.map((o) => ["entry", o.id])]);
   const blockM = useMutation({
     mutationFn: async () => {
       createdRef.current = false;
-      if (!anchorRoomId) throw new Error("Choose the rooms at Inquiry first");
-      if (!working && !accepted) {
-        await createQuotation(session!, entry.id, createBody());
-        createdRef.current = true;
+      const done: Array<{ e: EntryDetail; h: SpeculativeHoldSummary }> = [];
+      const failed: Array<{ e: EntryDetail; err: unknown }> = [];
+      for (const e of together.active ? staysToMark : [entry]) {
+        try {
+          const t = tableOf(e);
+          if (!t?.anchorRoomId) throw new Error("Choose the rooms at Inquiry first");
+          if (!t.working && !t.accepted) {
+            await createQuotation(session!, e.id, t.createBody());
+            createdRef.current = true;
+          }
+          const h = await placeSpeculativeHold(session!, e.id, {
+            roomId: t.anchorRoomId,
+            ttlSeconds: markFor === "CUSTOM" ? markSeconds : undefined,
+            commercialBasis: holdWhy.trim() || DEFAULT_MARK_BASIS,
+          });
+          done.push({ e, h });
+        } catch (err) {
+          failed.push({ e, err });
+        }
       }
-      return placeSpeculativeHold(session!, entry.id, {
-        roomId: anchorRoomId,
-        ttlSeconds: markFor === "CUSTOM" ? markSeconds : undefined,
-        commercialBasis: holdWhy.trim() || DEFAULT_MARK_BASIS,
-      });
+      if (done.length === 0 && failed.length > 0) throw failed[0].err;
+      return { done, failed };
     },
-    onSuccess: (h) => {
+    onSuccess: ({ done, failed }) => {
       toast.success(
-        `${createdRef.current ? "Quotation generated · " : ""}${plural(holdRoomIds(h).length, "room")} marked until ${fmtDateTime(h.expiresAt, tz)} · nothing sent`,
+        `${createdRef.current ? "Quotation generated · " : ""}${done
+          .map(({ e, h }) => `${stayWord(e)}${plural(holdRoomIds(h).length, "room")} marked until ${fmtDateTime(h.expiresAt, tz)}`)
+          .join(" · ")} · nothing sent`,
       );
-      refresh(extraKeys);
+      for (const f of failed) toastRefusal(f.err, `${stayWord(f.e)}the rooms could not be marked`);
+      refreshGroup();
     },
     onError: (e) => {
       toastRefusal(e, createdRef.current ? "The quotation was generated, but the rooms could not be marked" : "The rooms could not be marked");
-      if (createdRef.current) refresh(extraKeys);
+      if (createdRef.current) refreshGroup();
     },
   });
   const releaseM = useMutation({
-    mutationFn: (reason: string) => {
-      if (!activeHold) throw new Error("No rooms are marked");
-      return releaseSpeculativeHold(session!, entry.id, activeHold.id, { releaseReason: reason });
+    mutationFn: async (reason: string) => {
+      if (markedStays.length === 0) throw new Error("No rooms are marked");
+      for (const { e, hold } of markedStays) await releaseSpeculativeHold(session!, e.id, hold.id, { releaseReason: reason });
     },
     onSuccess: () => {
       toast.success("The rooms are no longer marked — the quotation stands");
       setReleaseOpen(false);
-      refresh(extraKeys);
+      refreshGroup();
     },
     onError: (e) => toastRefusal(e, "The rooms could not be released"),
   });
@@ -322,22 +364,34 @@ export function S2Negotiation({
     onOpenItems?.(openKey ? openKey.split("|") : []);
   }, [openKey, onOpenItems]);
   useEffect(() => () => onOpenItems?.([]), [onOpenItems]);
-  const noRooms = !sealedPreferred || !anchorRoomId ? "choose the rooms at Inquiry first" : null;
+  const noRooms = together.active
+    ? staysToMark.some((e) => !tableOf(e)?.anchorRoomId)
+      ? "choose the rooms at Inquiry first"
+      : null
+    : !sealedPreferred || !anchorRoomId
+      ? "choose the rooms at Inquiry first"
+      : null;
+  const faultsNow = together.active ? groupFaults : tableFaults;
   /** A table with a fault in it cannot be sent, marked or priced — it is the same basis. */
   const tableReason =
-    tableFaults.length > 0
-      ? `put the table right first — ${tableFaults[0]}${tableFaults.length > 1 ? ` (and ${tableFaults.length - 1} more)` : ""}`
+    faultsNow.length > 0
+      ? `put the table right first — ${faultsNow[0]}${faultsNow.length > 1 ? ` (and ${faultsNow.length - 1} more)` : ""}`
       : null;
   const blockReason =
     noRooms ??
     tableReason ??
     (markFor === "CUSTOM" && markSeconds <= 0
       ? "set at least a minute"
-      : validNumber == null && !working && !accepted
+      : !together.active && validNumber == null && !working && !accepted
         ? `how long the quote stands: 1 to ${plural(maxValid, validUnit)}`
         : null);
 
-  const markedCount = activeHold ? holdRoomIds(activeHold).length : sealedRoomIds.length;
+  const markedCount = together.active
+    ? staysToMark.reduce((n, e) => n + (tableOf(e)?.sealedRoomIds.length ?? 0), 0)
+    : activeHold
+      ? holdRoomIds(activeHold).length
+      : sealedRoomIds.length;
+  const anyQuotedToMark = together.active ? staysToMark.every((e) => tableOf(e)?.working || tableOf(e)?.accepted) : !!(working || accepted);
   const markLength =
     markFor === "SETTING"
       ? "for the time the settings give"
@@ -426,14 +480,15 @@ export function S2Negotiation({
           </div>
         ) : null}
       </div>
-      {activeHold ? (
-        <BindingBox family="provisional" stateWord={new Date(activeHold.expiresAt).getTime() < clock.now ? "expired" : "marked"} style={{ marginTop: 4 }}>
+      {markedStays.map(({ e, hold }) => (
+        <BindingBox key={e.id} family="provisional" stateWord={new Date(hold.expiresAt).getTime() < clock.now ? "expired" : "marked"} style={{ marginTop: 4 }}>
           <div className="sm" style={{ paddingRight: 80 }}>
-            {heldWord(holdRoomIds(activeHold))} marked until <b>{fmtDateTime(activeHold.expiresAt, tz)}</b> · others can still be sold
-            if someone commits first
+            {stayWord(e)}
+            {heldWordOf(e, holdRoomIds(hold))} marked until <b>{fmtDateTime(hold.expiresAt, tz)}</b> · others can still be sold if someone commits first
           </div>
         </BindingBox>
-      ) : lastHold ? (
+      ))}
+      {markedStays.length === 0 && lastHold ? (
         <div className="sm">
           The last marker {lastHold.state === "EXPIRED" || lastHold.releaseReason === "EXPIRY" ? "ran out" : "was released"}
           {lastHold.releasedAt ? ` on ${fmtStamp(lastHold.releasedAt, tz)}` : ` — it was set to end ${fmtDateTime(lastHold.expiresAt, tz)}`}.
@@ -442,23 +497,24 @@ export function S2Negotiation({
       {otherMarkers.length ? <div className="sm">Also marked by {otherMarkers.map((o) => o.reference ?? o.entryId).join(" · ")}</div> : null}
       <Live>
         <div style={{ marginTop: 6, display: "grid", gap: 6 }}>
-          {activeHold ? (
+          {markedStays.length > 0 ? (
             <SeeRow
               label="Release"
-              note="Frees the rooms, with a reason. The quotation stands."
-              onClick={editable && elevated ? () => setReleaseOpen(true) : undefined}
-              reason={!editable ? "not at this step" : elevated ? undefined : "releasing a marker early is the FOM's call"}
+              note={together.active ? "Frees the rooms of every stay marked, with a reason. The quotations stand." : "Frees the rooms, with a reason. The quotation stands."}
+              onClick={editable && mayRelease ? () => setReleaseOpen(true) : undefined}
+              reason={!editable ? "not at this step" : mayRelease ? undefined : "releasing a marker early is the GM's call"}
             />
-          ) : (
+          ) : null}
+          {staysToMark.length > 0 ? (
             <SeeRow
               kind="primary"
-              label="Mark the rooms"
-              note={`${working || accepted ? "Marks" : "Prices the quotation from the table and marks"} ${plural(markedCount || 1, "room")} ${markLength}. Nothing is sent to the guest. The reason and the time above are used by this block only.`}
+              label={together.active ? (markedStays.length ? "Mark the rest" : staysToMark.length > 2 ? "Mark every stay's rooms" : "Mark both stays' rooms") : "Mark the rooms"}
+              note={`${anyQuotedToMark ? "Marks" : "Prices the quotation from the table and marks"} ${plural(markedCount || 1, "room")} ${markLength}. Nothing is sent to the guest. The reason and the time above are used by this block only.`}
               onClick={editable ? () => blockM.mutate() : undefined}
               state={blockM.isPending ? "working" : editable && !blockReason ? "default" : "inert"}
               reason={!editable ? "not at this step" : (blockReason ?? undefined)}
             />
-          )}
+          ) : null}
           <SeeRow
             label="Extend"
             note="Gives the marked rooms more time — once by the desk, then by the FOM. It never re-prices the quotation."
@@ -488,9 +544,9 @@ export function S2Negotiation({
     : [
         {
           key: "configuration",
-          label: together.active ? `Change stay ${together.stayNoOf(entry.id)}'s configuration` : "Change configuration",
+          label: "Change configuration",
           note: together.active
-            ? "This stay's dates, rooms and party. For another stay, pick it from the booking's number at the top of the page."
+            ? "Either stay's dates, rooms, adults, children and ages. A quotation priced on the old configuration is retired."
             : "The dates, the rooms, the adults, the children and their ages. A quotation priced on the old configuration is retired.",
           onSelect: editable ? openChange : undefined,
           reason: editable ? undefined : entry.status === "PARKED" ? "Resume the booking first" : "Not possible on this booking now",
@@ -524,7 +580,9 @@ export function S2Negotiation({
         title={together.active ? `Who sleeps where, and their meals · ${together.label.toLowerCase()} together` : "Who sleeps where, and their meals"}
         meta="One row per room: the guests by age, their meal plans, extra beds, any negotiated rate and the booking's discount. Saving the table prices it — that is the quotation."
       >
-        {changing ? (
+        {changing && together.active ? (
+          <ChangeBothStays stays={groupStays} stayNoOf={together.stayNoOf} firstId={entry.id} onClose={() => setChanging(false)} onChanged={refreshGroup} />
+        ) : changing ? (
           <ChangeConfiguration
             entry={entry}
             onClose={() => setChanging(false)}
@@ -542,6 +600,9 @@ export function S2Negotiation({
                 others={together.others}
                 stayNoOf={together.stayNoOf}
                 onOthersUnsaved={setOthersUnsaved}
+                latest={stayTables}
+                onFaults={setGroupFaults}
+                onInputs={setGroupInputs}
                 onSaved={() => {
                   refresh(extraKeys);
                   void goToQuotation();
@@ -606,18 +667,21 @@ export function S2Negotiation({
         {/* The rooms and the party are changed HERE, not by re-entering to Inquiry (2026-09-30,
             operator ruling). It sits under the table it changes, and closes while the change is
             being made so there is only ever one plan on screen. */}
-        {!changing ? <WaitingConfigurationChange entry={entry} /> : null}
+        {!changing ? groupStays.map((e) => <WaitingConfigurationChange key={e.id} entry={e} />) : null}
         {/* Change configuration moved into "Change booking" at the end of the step's line, beside
             Cancel booking (2026-10-27, operator). The provisional block is placed from the bar at the
             foot. A marker in place is a state, so it is still said here. */}
-        {!changing && !past && activeHold ? (
-          <div className="row-acts" style={{ marginTop: 12, alignItems: "center", gap: 10 }}>
-            <span className="sm">
-              <Icon name="clock" /> {heldWord(holdRoomIds(activeHold))} marked until <b>{fmtDateTime(activeHold.expiresAt, tz)}</b>
-            </span>
-          </div>
-        ) : null}
-        {!changing ? <DecidedConfigurationChanges entry={entry} /> : null}
+        {!changing && !past
+          ? markedStays.map(({ e, hold }) => (
+              <div key={e.id} className="row-acts" style={{ marginTop: 12, alignItems: "center", gap: 10 }}>
+                <span className="sm">
+                  <Icon name="clock" /> {stayWord(e)}
+                  {heldWordOf(e, holdRoomIds(hold))} marked until <b>{fmtDateTime(hold.expiresAt, tz)}</b>
+                </span>
+              </div>
+            ))
+          : null}
+        {!changing ? groupStays.map((e) => <DecidedConfigurationChanges key={e.id} entry={e} />) : null}
       </StepCard>
 
       {/* The live quotation sits directly under the table that priced it (2026-09-30, operator).
@@ -713,13 +777,63 @@ export function S2Negotiation({
         onClose={() => setReleaseOpen(false)}
         busy={releaseM.isPending}
         title="Release the rooms"
-        caseLines={activeHold ? [`${heldWord(holdRoomIds(activeHold))} marked until ${fmtDateTime(activeHold.expiresAt, tz)}`] : undefined}
+        caseLines={markedStays.length ? markedStays.map(({ e, hold }) => `${stayWord(e)}${heldWordOf(e, holdRoomIds(hold))} marked until ${fmtDateTime(hold.expiresAt, tz)}`) : undefined}
         lead="The marker is removed. The quotation stands and can still be accepted if the rooms are free then."
         confirmLabel="Release"
         placeholder="agent went elsewhere"
         onConfirm={(r) => releaseM.mutate(r)}
       />
     </StepCanvas>
+  );
+}
+
+/**
+ * Change configuration for the stays worked together (2026-11-09): one panel, a tab per stay. Each
+ * keeps what is typed while the other is looked at; saving one goes on to the next not yet changed.
+ */
+function ChangeBothStays({
+  stays,
+  stayNoOf,
+  firstId,
+  onClose,
+  onChanged,
+}: {
+  stays: EntryDetail[];
+  stayNoOf: (id: string) => number;
+  firstId: string;
+  onClose: () => void;
+  onChanged: () => void;
+}) {
+  const [at, setAt] = useState(firstId);
+  const [saved, setSaved] = useState<Set<string>>(new Set());
+  return (
+    <SubTabs
+      label="Which stay"
+      value={at}
+      onPick={setAt}
+      tabs={stays.map((e) => ({
+        key: e.id,
+        label: `Stay ${stayNoOf(e.id)}${saved.has(e.id) ? " ✓" : ""}`,
+        content: (
+          <ChangeConfiguration
+            entry={e}
+            onClose={onClose}
+            onDone={() => {
+              onChanged();
+              const now = new Set(saved).add(e.id);
+              setSaved(now);
+              const next = stays.find((s) => !now.has(s.id));
+              if (next) {
+                setAt(next.id);
+                toast.success(`Stay ${stayNoOf(e.id)} is changed`, { description: `Stay ${stayNoOf(next.id)} is open — change it too, or close.` });
+              } else {
+                onClose();
+              }
+            }}
+          />
+        ),
+      }))}
+    />
   );
 }
 

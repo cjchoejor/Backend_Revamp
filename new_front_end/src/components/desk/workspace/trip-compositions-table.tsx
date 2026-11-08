@@ -149,6 +149,17 @@ export function TripCompositionsTable({
   const trip = previewQ.data ?? null;
   const fmtNu = (n: number | null | undefined) => (n == null ? "—" : n.toLocaleString("en-IN", { maximumFractionDigits: 2 }));
 
+  // The stay bands stay as wide as the visible box, so each stay's total sits at its right edge.
+  useEffect(() => {
+    const box = scrollRef.current;
+    if (!box) return;
+    const put = () => box.style.setProperty("--rct-w", `${box.clientWidth}px`);
+    put();
+    const ro = new ResizeObserver(put);
+    ro.observe(box);
+    return () => ro.disconnect();
+  }, [expanded]);
+
   const offsets = useMemo(() => {
     const out: Record<string, number> = {};
     let at = 0;
@@ -254,24 +265,6 @@ export function TripCompositionsTable({
           )}
         </table>
       </div>
-      {trip && (
-        <div className="rct-live rct-live-trip">
-          <span className="k">Trip total</span>
-          <span className="parts">
-            <i>Net</i> {fmtNu(trip.totals.subtotal)}
-            {trip.totals.netReduction > 0 ? (
-              <>
-                {" "}
-                <i>− discount</i> {fmtNu(trip.totals.netReduction)} <i>=</i> {fmtNu(trip.totals.payableSubtotal)}
-              </>
-            ) : null}{" "}
-            <i>+ SC</i> {fmtNu(trip.totals.payableServiceCharge)} <i>+ GST</i> {fmtNu(trip.totals.payableGst)}
-          </span>
-          <b className="tot">
-            {trip.currency} {fmtNu(trip.totals.payable)}
-          </b>
-        </div>
-      )}
       <div className="rct-save">
         {faults.length > 0 ? (
           <ul className="rct-faults" role="alert" aria-live="polite">
@@ -287,6 +280,14 @@ export function TripCompositionsTable({
           <span />
         )}
         <div className="rct-save-act">
+          {trip && (
+            <span
+              className="rct-triptot"
+              title={`Net ${fmtNu(trip.totals.subtotal)}${trip.totals.netReduction > 0 ? ` − discount ${fmtNu(trip.totals.netReduction)} = ${fmtNu(trip.totals.payableSubtotal)}` : ""} + service charge ${fmtNu(trip.totals.payableServiceCharge)} + GST ${fmtNu(trip.totals.payableGst)}`}
+            >
+              Trip total <b>{trip.currency} {fmtNu(trip.totals.payable)}</b>
+            </span>
+          )}
           <button
             type="button"
             className={`btn btn-primary rct-save-btn${faults.length > 0 ? "" : unsaved ? " dirty" : " clean"}`}
