@@ -46,6 +46,7 @@ import {
   type TimerRecordSummary,
   replySettled,
   moveTripToNegotiation,
+  moveTripToSetUp,
 } from "@/lib/api/entries";
 import { closeEntryAtS9 } from "@/lib/api/post-stay";
 import { useClosureReadiness } from "@/hooks/use-closure-readiness";
@@ -115,6 +116,7 @@ import { FoldingSide, useSideFolded } from "@/components/ds/workspace/side-panel
 import { S1Inquiry } from "@/components/ds/steps/s1-inquiry";
 import { InquirySummaryDialog } from "@/components/ds/steps/s1-summary";
 import { useTripAtInquiry } from "@/components/ds/steps/s1-trip-shared";
+import { useStaysTogether } from "@/components/ds/steps/s2-together";
 import { StepMoved, type StepMovedNote } from "@/components/ds/workspace/step-moved";
 import { StayDates } from "@/components/ds/stay-dates";
 import { S2Negotiation } from "@/components/ds/steps/s2-negotiation";
@@ -332,6 +334,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const entry = entryQuery.data ?? null;
   // A trip at Inquiry: its other stays are worked on this page and move with it (2026-11-07).
   const tripAtInquiry = useTripAtInquiry(entry);
+  const together = useStaysTogether(entry);
   // Another screen moved this booking on (client.ts raises the event on a stale refusal): re-read it.
   useEffect(() => {
     const onStale = () => refreshEntry();
@@ -684,6 +687,21 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   /** Every stay of a trip at Inquiry to Negotiation, this one first (2026-11-07). */
   const tripMoveMutation = useMutation({
     mutationFn: () => moveTripToNegotiation(session!, entry!.id, entry!.version),
+    onSuccess: (r) => {
+      for (const id of r.moved) void queryClient.invalidateQueries({ queryKey: ["entry", id] });
+      refreshEntry();
+      if (r.notMoved.length) {
+        toast.warning(`${plural(r.notMoved.length, "stay")} did not move`, {
+          description: r.notMoved.map((x) => `${x.entryId}: ${x.message}`).join(" · "),
+          duration: 15000,
+        });
+      }
+    },
+    onError: fail("Couldn't move forward"),
+  });
+  /** The stays worked in one table, on to Set up together, this one first (2026-11-09). */
+  const tripSetUpMutation = useMutation({
+    mutationFn: () => moveTripToSetUp(session!, entry!.id, entry!.version),
     onSuccess: (r) => {
       for (const id of r.moved) void queryClient.invalidateQueries({ queryKey: ["entry", id] });
       refreshEntry();
@@ -1316,11 +1334,24 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     forward = (
       <Button
         className="go"
-        state={advanceMutation.isPending ? "working" : ok ? "default" : "inert"}
+        state={advanceMutation.isPending || tripSetUpMutation.isPending ? "working" : ok ? "default" : "inert"}
         reason={ok ? undefined : firstNote}
         workingLabel="Moving…"
         onClick={() =>
-          advanceMutation.mutate(
+          together.active
+            ? tripSetUpMutation.mutate(undefined, {
+                onSuccess: (r) => {
+                  setSelected(3);
+                  setMoved({
+                    title: "Negotiation is done",
+                    from: "Negotiation",
+                    to: "Set up",
+                    who: [name, entry.inquiry?.id ?? entry.id].filter(Boolean).join(" · "),
+                    next: `${plural(r.moved.length, "stay")} at Set up — who pays, the proforma and the advance.`,
+                  });
+                },
+              })
+            : advanceMutation.mutate(
             { targetStage: "S3", announce: true },
             {
               onSuccess: () =>

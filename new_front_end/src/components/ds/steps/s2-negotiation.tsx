@@ -11,7 +11,7 @@
  * 2026-07-28). Every figure is the backend's: the table prices itself through the live preview,
  * the paper's total comes from the billing summary. Nothing is added up here.
  */
-import { liveQuotesThisPass } from "@/lib/desk/workspace";
+import { s2Readiness } from "@/lib/desk/workspace";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -19,6 +19,9 @@ import { BindingBox, Button, Chip, Icon } from "@/design-system";
 import { useSession } from "@/hooks/use-session";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
 import { useBookingRooms } from "@/hooks/use-booking-rooms";
+import { QuoteValidityField, canonComps, readDiscount, shownQuotation, useStayTable, type RecordedDiscount } from "./s2-stay-table";
+import { useStaysTogether } from "./s2-together";
+import { TripNegotiationTable } from "./s2-trip-table";
 import { getChildPolicy } from "@/lib/api/child-policy";
 import { openQuotationPdf } from "@/lib/api/documents";
 import { getBillingSummary } from "@/lib/api/entries";
@@ -31,15 +34,11 @@ import {
   resolveQuotationAckOpenLoop,
   sendQuotation,
   supersedeQuotation,
-  getQuoteValidityWindow,
-  type RoomCompositionInput,
 } from "@/lib/api/quotations";
 import { RoomCompositionPlanner } from "@/components/desk/workspace/room-compositions-board";
-import { nightOverridesCanon } from "@/components/desk/workspace/room-compositions-table";
 import { ChangeConfiguration, DecidedConfigurationChanges, WaitingConfigurationChange } from "./s2-configuration";
-import { operativeRoomCompositions, roomNightsByRoom, roomStayRangesByRoom } from "@/lib/desk/party-rooms";
 import { fmtDateTime, fmtStamp, money, plural } from "@/lib/ds/format";
-import { optionSelectedRoomIds, preferredHoldRoomId, type EntryDetail, type QuotationSummary, type SpeculativeHoldSummary } from "@/types/api";
+import type { EntryDetail, QuotationSummary, SpeculativeHoldSummary } from "@/types/api";
 import { Choice, latestDispatched, useCommunications, useReplyAsked, DsDialog, Live, Notice, OtherWaysTabs, ChangeBookingMenu, StageActs, useOpenAlsoWay, PaperDrawer, QuotationSendDialog, ReasonDialog, SeeRow, StepCanvas, StepCard, Tool, atLeast, toastRefusal, type PaperRef, useBedPlan, useOpenFileTab, useRefreshEntry, useStepFlow, useFlowCard, anchorFor, revealCard, words, parkTab, declineTab } from "./kit";
 import { usePublishPriceDraft } from "@/lib/ds/stay-price";
 import { Help } from "@/components/ds/help";
@@ -88,18 +87,6 @@ const DEFAULT_MARK_BASIS = "Provisional block while the guest decides — quotat
 const DAY_MS = 86_400_000;
 const HOUR_MS = 3_600_000;
 
-type RecordedDiscount = { unit: "percent" | "amount"; value: number; basis: string };
-
-function readDiscount(q: QuotationSummary | undefined | null): RecordedDiscount | null {
-  const terms = q?.commercialTerms as Record<string, unknown> | null | undefined;
-  const d = terms?.requestedDiscount as { discountPercent?: unknown; discountAmount?: unknown; discountBasis?: unknown } | undefined;
-  if (!d) return null;
-  const basis = typeof d.discountBasis === "string" && d.discountBasis.trim() ? d.discountBasis : "negotiation";
-  if (typeof d.discountPercent === "number" && d.discountPercent > 0) return { unit: "percent", value: d.discountPercent, basis };
-  if (typeof d.discountAmount === "number" && d.discountAmount > 0) return { unit: "amount", value: d.discountAmount, basis };
-  return null;
-}
-
 function readDiscountAuthority(q: QuotationSummary | undefined | null): { level: string; at: string | null } | null {
   const terms = q?.commercialTerms as Record<string, unknown> | null | undefined;
   const auth = terms?.discountAuthority as { approvedLevel?: unknown; approvedAt?: unknown } | undefined;
@@ -120,46 +107,6 @@ function holdRoomIds(h: SpeculativeHoldSummary): string[] {
 }
 
 /* ------------------------------------------------------------------ the step */
-
-/**
- * Is the table still what the quotation was priced on? Compared field by field over what the
- * grid actually controls, so a stored row carrying extra keys — or a rate stored as a string —
- * does not read as a change. Nothing else is inferred: no quotation at all means unsaved by
- * definition, since there is nothing for the table to match.
- */
-function canonComps(list: readonly RoomCompositionInput[] | undefined): string {
-  const n = (v: unknown) => (v == null || v === "" ? "" : String(Number(v)));
-  return [...(list ?? [])]
-    .map((c) =>
-      [
-        c.roomId,
-        n(c.adultCount ?? 0),
-        n(c.cnb6To10Count ?? 0),
-        n(c.cnbUnder6Count ?? 0),
-        n(c.extraBedCount ?? 0),
-        n(c.mealPlanCpCount ?? 0),
-        n(c.mealPlanMaplCount ?? 0),
-        n(c.mealPlanMapdCount ?? 0),
-        n(c.mealPlanApCount ?? 0),
-        n(c.mealPlanOthersCount ?? 0),
-        n(c.othersBreakfastPax),
-        n(c.othersLunchPax),
-        n(c.othersDinnerPax),
-        n(c.negotiatedRoomRate),
-        n(c.negotiatedExtraBedRate),
-        n(c.negotiatedBreakfastRate),
-        n(c.negotiatedLunchRate),
-        n(c.negotiatedDinnerRate),
-        c.serviceChargeApplies === false ? "0" : "1",
-        c.gstApplies === false ? "0" : "1",
-        c.isFoc === true ? "1" : "0",
-        nightOverridesCanon(c.nightMealOverrides),
-      ].join("~"),
-    )
-    .sort()
-    .join("//");
-}
-
 
 export function S2Negotiation({
   entry,
@@ -196,14 +143,13 @@ export function S2Negotiation({
   const typeNames = useRoomTypeNames();
   const heldWord = (ids: string[]) =>
     roomsHeldWord(ids.map((id) => ({ number: roomNos.get(id) ?? null, typeName: typeNames.get(id) ?? null, quiet: bookingRooms.named.has(id) })));
-  const passes = useMemo(() => passesOf(entry), [entry.segments]); // eslint-disable-line react-hooks/exhaustive-deps
-  const passId = passes.current?.id ?? null;
-  const editable = !past && entry.currentStage === "S2" && entry.status === "ACTIVE";
+  const stay = useStayTable(entry, { past });
+  const together = useStaysTogether(past ? null : entry);
+  const { passes, passId, editable, quotations, accepted, working, shown, sealedPreferred, sealedRoomIds, beds, anchorRoomId, tableFaults, setTableFaults, roomDates, proformaLocked, roomCompositions, setRoomCompositions, discountValue, setDiscountValue, discountUnit, setDiscountUnit, recordedDiscount, discountForPreview, tableUnsaved, validWindow, inHours, validUnit, maxValid, validTouched, setValidTouched, validNumber, seedCompositions, createBody, supersedeBody, tableOpen } = stay;
   const elevated = atLeast(session?.actorLevel, "L2");
   const extraKeys: ReadonlyArray<ReadonlyArray<unknown>> = [["quotation-preview"], ["competing-claims", entry.id]];
 
   /* ---- the quotations of this pass, and of every pass ---- */
-  const quotations = useMemo(() => (entry.quotations ?? []).filter((q) => !passId || q.segmentId === passId), [entry.quotations, passId]);
   const allQuotations = useMemo(
     () =>
       [...(entry.quotations ?? [])].sort((a, b) => {
@@ -213,128 +159,20 @@ export function S2Negotiation({
       }),
     [entry.quotations, passes.numberById],
   );
-  const draft = quotations.find((q) => q.state === "DRAFT");
-  const sent = quotations.find((q) => q.state === "SENT");
-  const accepted = quotations.find((q) => q.state === "ACCEPTED");
-  const working = draft ?? sent;
-  const shown = accepted ?? working ?? quotations[0] ?? null;
-  // The table opens on the terms the live quote was priced on (2026-09-18). Without a seed it
-  // restored only this browser's unsaved edits, so on another terminal — or once the browser's
-  // storage was cleared — it opened with the party auto-distributed and NO meals, and "Generate
-  // the quote again" would have re-priced the stay without the meals the guest was quoted.
-  // After a re-entry it starts from the last terms in force. Read once, at the table's mount.
-  // A booking split off another (2026-10-14) and never priced starts from what its rooms carried —
-  // their guests, meals, extra beds and the rates they kept.
-  const seedCompositions = useMemo(
-    () =>
-      operativeRoomCompositions(entry) ??
-      ((entry.carryOver?.compositions?.length ? entry.carryOver.compositions : null) as ReturnType<typeof operativeRoomCompositions>) ??
-      undefined,
-    [entry.id], // eslint-disable-line react-hooks/exhaustive-deps
-  );
-  /**
-   * What the QUOTATION is priced on right now — re-read on every refresh, unlike the seed above,
-   * which is deliberately read once so a save does not yank the operator's grid out from under
-   * them. This is the baseline the table is compared against to decide whether it has unsaved
-   * changes (2026-09-30).
-   */
-  const pricedCompositions = useMemo(() => operativeRoomCompositions(entry) ?? [], [entry]);
-
-  /* ---- the rooms chosen at Inquiry, and the marker on them ---- */
-  const sealedPreferred = (entry.availabilityConfigs ?? []).find((c) => c.sealedAt && c.optionSelected);
-  const sealedRoomIds = useMemo(() => optionSelectedRoomIds(sealedPreferred?.optionSelected), [sealedPreferred?.optionSelected]);
-  const beds = useBedPlan(entry.id, entry.updatedAt);
-  const anchorRoomId = preferredHoldRoomId(sealedPreferred?.optionSelected ?? null);
   /**
    * "Change configuration" (2026-09-30; dates since 2026-10-12) — the stay, the rooms and the party, changed here rather than by
    * re-entering to Inquiry. It takes over this card while it is open: the composition table
    * prices a plan, and editing the plan underneath it would be two tables for one booking.
    */
   const [changing, setChanging] = useState(false);
-  /**
-   * What the composition table says is wrong with itself (2026-09-30). The table is the ONE
-   * judge of whether the configuration may be priced — the step reads its verdict rather than
-   * re-deriving one, so the grid's red cells and this page's shut doors always agree.
-   */
-  const [tableFaults, setTableFaults] = useState<string[]>([]);
-  /**
-   * Which nights each chosen room actually holds, for the table's leading Dates column
-   * (2026-09-30, operator). Derived HERE rather than in the grid because this is where the
-   * booking is: `roomStayRangesByRoom` reads the newest sealed pick, then dated assignment
-   * rows, then falls back to the whole stay for a uniform plan — the same fold the S5-S7 room
-   * rows print, so the desk states one room's nights one way everywhere.
-   */
-  const roomDates = useMemo(() => {
-    // `dates` lets the table reconcile per NIGHT — on a booking that moves rooms mid-stay the
-    // rooms are not in use together, so their guests are the same people (2026-10-06).
-    const nights = roomNightsByRoom(entry);
-    const out: Record<string, { label: string; nights: number; dates?: string[] }> = {};
-    for (const [roomId, r] of roomStayRangesByRoom(entry)) {
-      out[roomId] = { label: r.label, nights: r.nightCount, dates: nights.get(roomId) ?? [] };
-    }
-    return out;
-  }, [entry]);
   const holds = (entry.speculativeHolds ?? []).filter((h) => !passId || h.segmentId === passId);
   const activeHold = holds.find((h) => h.state === "PLACED" || h.state === "UPGRADED") ?? null;
   const lastHold = activeHold ? null : (holds[0] ?? null);
 
-  /** Once this pass's proforma exists, the quotation's terms are final (2026-08-06 ruling). */
-  const proformaLocked = useMemo(() => {
-    const start = passes.startedAt ? new Date(passes.startedAt).getTime() : null;
-    return (entry.folio?.invoices ?? []).some(
-      (inv) =>
-        inv.invoiceType === "PROFORMA" &&
-        inv.state !== "SUPERSEDED" &&
-        !inv.supersededById &&
-        (start == null || new Date(inv.createdAt).getTime() >= start),
-    );
-  }, [entry.folio?.invoices, passes.startedAt]);
-
-  /* ---- what the table and the doors hold ---- */
-  const [roomCompositions, setRoomCompositions] = useState<RoomCompositionInput[]>([]);
+  /* ---- what the doors hold ---- */
   const [holdWhy, setHoldWhy] = useState("");
   const [markFor, setMarkFor] = useState<MarkFor>("SETTING");
   const [mark, setMark] = useState({ d: "0", h: "0", m: "15" });
-  const [discountValue, setDiscountValue] = useState("");
-  const [discountUnit, setDiscountUnit] = useState<"percent" | "amount">("percent");
-  const [discountBasis, setDiscountBasis] = useState("negotiation");
-  const recordedDiscount = useMemo(() => readDiscount(working ?? accepted), [working, accepted]);
-  // `undefined` until the first run: with no quotation yet the id is null, and starting at null
-  // skipped the first run, so a discount carried from another booking never reached the table.
-  const seededFor = useRef<string | null | undefined>(undefined);
-  useEffect(() => {
-    const id = (working ?? accepted)?.id ?? null;
-    if (seededFor.current === id) return;
-    seededFor.current = id;
-    if (recordedDiscount) {
-      setDiscountValue(String(recordedDiscount.value));
-      setDiscountUnit(recordedDiscount.unit);
-      setDiscountBasis(recordedDiscount.basis);
-    } else if (!id && entry.carryOver?.discount?.discountPercent) {
-      // Not priced yet, split off a booking that had a percentage off: it carries.
-      setDiscountValue(String(entry.carryOver.discount.discountPercent));
-      setDiscountUnit("percent");
-      setDiscountBasis(entry.carryOver.discount.discountBasis || "negotiation");
-    } else if (!id && entry.followsEntryId && entry.carryOver?.discount?.discountAmount) {
-      // A stay set up the same as another copies a flat amount off too (2026-11-03). A booking split
-      // off another does not: that amount stays with the original.
-      setDiscountValue(String(entry.carryOver.discount.discountAmount));
-      setDiscountUnit("amount");
-      setDiscountBasis(entry.carryOver.discount.discountBasis || "negotiation");
-    }
-  }, [working, accepted, recordedDiscount]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  /** A blank or zero figure is "no discount"; clearing a recorded one must be said as `null`. */
-  /**
-   * The discount rides on the same save, so a changed one counts as an unsaved change — the
-   * quotation would otherwise still carry the old concession while the bar shows the new one.
-   */
-  const discountMoved =
-    (discountValue.trim() === "" ? null : Number(discountValue)) !== (recordedDiscount?.value ?? null) ||
-    (recordedDiscount != null && discountUnit !== recordedDiscount.unit);
-  const tableUnsaved =
-    !working || canonComps(roomCompositions) !== canonComps(pricedCompositions) || discountMoved;
-
   // The table edited by hand opens the booking file on the price (2026-10-27, as the rooms picked
   // at Inquiry do): Charges & payments › The price, room by room, beside the grid. The seed and a
   // background re-read do not, and the page never moves — only the file's tab changes.
@@ -362,72 +200,16 @@ export function S2Negotiation({
       ? {
           kind: "TABLE",
           roomCompositions,
-          discount: (() => {
-            const n = Number(discountValue);
-            return discountValue.trim() && Number.isFinite(n) && n > 0 ? (discountUnit === "amount" ? { amount: n } : { percent: n }) : null;
-          })(),
+          discount: discountForPreview,
           saved: !tableUnsaved,
         }
       : null,
   );
 
-  const discountPayload = (() => {
-    const n = Number(discountValue);
-    if (!discountValue.trim() || !Number.isFinite(n) || n <= 0) return null;
-    const basis = discountBasis.trim() || "negotiation";
-    return discountUnit === "amount" ? { discountAmount: n, discountBasis: basis } : { discountPercent: n, discountBasis: basis };
-  })();
-
-  /* ---- validity: up to check-in, in days; in hours when check-in is today. The rule is the server's. ---- */
-  const validityQuery = useQuery({
-    queryKey: ["quote-validity", entry.id, entry.checkInDate],
-    queryFn: () => getQuoteValidityWindow(session!, entry.id),
-    enabled: !!session,
-    staleTime: 30_000,
-    refetchInterval: 60_000,
-  });
-  const validWindow = validityQuery.data ?? null;
-  const inHours = validWindow?.mode === "HOURS";
-  const validUnitMs = inHours ? HOUR_MS : DAY_MS;
-  const validUnit = inHours ? "hour" : "day";
-  const maxValid = validWindow?.max ?? 0;
-  const [validCount, setValidCount] = useState("");
-  /**
-   * The validity is written by the Save, so changing it after the quote was priced is an unsaved
-   * change too (2026-10-12) — without this the Save stayed on "Saved" and the new validity could
-   * never be applied. Cleared when a save lands.
-   */
-  const [validTouched, setValidTouched] = useState(false);
-  const changeValid = (v: string) => {
-    setValidCount(v);
-    setValidTouched(true);
-  };
-  // It starts as long as it may stand (2026-11-05, operator: "the validity of the quote will be till the
-  // check in date"), or at what is left of the quotation on file: a shorter time set stays shorter.
-  const offerUntil = liveQuotesThisPass(entry)[0]?.validUntil ?? null;
-  useEffect(() => {
-    if (!validWindow || validTouched) return;
-    const left = offerUntil ? Math.ceil((new Date(offerUntil).getTime() - clock.now) / validUnitMs) : 0;
-    setValidCount(String(left >= 1 ? Math.min(left, validWindow.max) : validWindow.max));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [validWindow?.mode, validWindow?.max, offerUntil, validTouched]);
-  const validNumber = (() => {
-    const n = Number(validCount);
-    return validWindow && validCount !== "" && Number.isInteger(n) && n >= 1 ? Math.min(n, maxValid) : null;
-  })();
-  const validityEnd = validNumber == null ? null : clock.now + validNumber * validUnitMs;
-  const validityBody = () => (validNumber == null ? {} : inHours ? { validHours: validNumber } : { validDays: validNumber });
-
   const markSeconds =
     Math.max(0, Math.floor(Number(mark.d) || 0)) * 86_400 +
     Math.max(0, Math.floor(Number(mark.h) || 0)) * 3_600 +
     Math.max(0, Math.floor(Number(mark.m) || 0)) * 60;
-
-  const createBody = () => ({
-    ...validityBody(),
-    requestedDiscount: discountPayload ?? undefined,
-    roomCompositions: roomCompositions.length > 0 ? roomCompositions : undefined,
-  });
 
   /* ---- the acts ---- */
   // Save & price it is also the table's Done (2026-10-27, operator: "when I click Save, or Save &
@@ -457,7 +239,7 @@ export function S2Negotiation({
     const el = document.getElementById(anchorFor("quotation"));
     if (el) revealCard(el);
   };
-  const [sendTarget, setSendTarget] = useState<QuotationSummary | null>(null);
+  const [sendTarget, setSendTarget] = useState<{ entry: EntryDetail; q: QuotationSummary } | null>(null);
   const [releaseOpen, setReleaseOpen] = useState(false);
   const createdRef = useRef(false);
 
@@ -474,11 +256,7 @@ export function S2Negotiation({
   const regenerateM = useMutation({
     mutationFn: () => {
       if (!working) throw new Error("There is no quotation to generate again");
-      return supersedeQuotation(session!, working.id, {
-        ...validityBody(),
-        requestedDiscount: discountPayload ?? (recordedDiscount ? null : undefined),
-        roomCompositions: roomCompositions.length > 0 ? roomCompositions : undefined,
-      });
+      return supersedeQuotation(session!, working.id, supersedeBody());
     },
     onSuccess: async (q) => {
       toast.success(`Version ${q.versionNumber} generated — the earlier one is kept`);
@@ -528,12 +306,21 @@ export function S2Negotiation({
 
 
   /* ---- reasons a door stays shut ---- */
-  const tableOpen = editable && !accepted && !proformaLocked && !!sealedPreferred;
   // Only once something is priced: before that, "Quote generated" already holds the move.
   const unsavedItem = tableOpen && !changing && !!working && (tableUnsaved || validTouched) ? "Table changes saved and priced" : null;
+  // Stays worked together move on together, so what each still needs is on this list (2026-11-09).
+  const [othersUnsaved, setOthersUnsaved] = useState<string[]>([]);
+  const othersOpen = together.active
+    ? together.others.flatMap((o) =>
+        s2Readiness(o)
+          .filter((c) => !c.met)
+          .map((c) => `Stay ${together.stayNoOf(o.id)} · ${c.label.charAt(0).toLowerCase()}${c.label.slice(1)}`),
+      )
+    : [];
+  const openKey = [...(unsavedItem ? [unsavedItem] : []), ...othersOpen, ...(together.active ? othersUnsaved : [])].join("|");
   useEffect(() => {
-    onOpenItems?.(unsavedItem ? [unsavedItem] : []);
-  }, [unsavedItem, onOpenItems]);
+    onOpenItems?.(openKey ? openKey.split("|") : []);
+  }, [openKey, onOpenItems]);
   useEffect(() => () => onOpenItems?.([]), [onOpenItems]);
   const noRooms = !sealedPreferred || !anchorRoomId ? "choose the rooms at Inquiry first" : null;
   /** A table with a fault in it cannot be sent, marked or priced — it is the same basis. */
@@ -578,7 +365,15 @@ export function S2Negotiation({
   ]
     .filter(Boolean)
     .join(" · ");
-  const tableSummary = pricedQuote
+  const tableSummary = together.active
+    ? [entry, ...together.others]
+        .sort((a, b) => together.stayNoOf(a.id) - together.stayNoOf(b.id))
+        .map((e) => {
+          const q = shownQuotation(e);
+          return `Stay ${together.stayNoOf(e.id)}: ${q ? `${q.referenceNumber} · v${q.versionNumber}` : "not priced"}`;
+        })
+        .join(" · ")
+    : pricedQuote
     ? [
         sealedRoomIds.length ? heldWord(sealedRoomIds) : null,
         partyWords || null,
@@ -693,8 +488,10 @@ export function S2Negotiation({
     : [
         {
           key: "configuration",
-          label: "Change configuration",
-          note: "The dates, the rooms, the adults, the children and their ages. A quotation priced on the old configuration is retired.",
+          label: together.active ? `Change stay ${together.stayNoOf(entry.id)}'s configuration` : "Change configuration",
+          note: together.active
+            ? "This stay's dates, rooms and party. For another stay, pick it from the booking's number at the top of the page."
+            : "The dates, the rooms, the adults, the children and their ages. A quotation priced on the old configuration is retired.",
           onSelect: editable ? openChange : undefined,
           reason: editable ? undefined : entry.status === "PARKED" ? "Resume the booking first" : "Not possible on this booking now",
         },
@@ -724,7 +521,7 @@ export function S2Negotiation({
         // fold once the table is priced (its item is the quotation), so the placeholder never shows.
         summary={tableSummary ?? "Not priced yet"}
         noDoneBar
-        title="Who sleeps where, and their meals"
+        title={together.active ? `Who sleeps where, and their meals · ${together.label.toLowerCase()} together` : "Who sleeps where, and their meals"}
         meta="One row per room: the guests by age, their meal plans, extra beds, any negotiated rate and the booking's discount. Saving the table prices it — that is the quotation."
       >
         {changing ? (
@@ -736,6 +533,22 @@ export function S2Negotiation({
               refresh();
             }}
           />
+        ) : together.active ? (
+          <Tool>
+            <div onPointerDownCapture={markHandEdit} onKeyDownCapture={markHandEdit} onInputCapture={markHandEdit}>
+              <TripNegotiationTable
+                entry={entry}
+                own={stay}
+                others={together.others}
+                stayNoOf={together.stayNoOf}
+                onOthersUnsaved={setOthersUnsaved}
+                onSaved={() => {
+                  refresh(extraKeys);
+                  void goToQuotation();
+                }}
+              />
+            </div>
+          </Tool>
         ) : tableOpen ? (
           <Tool>
             <div onPointerDownCapture={markHandEdit} onKeyDownCapture={markHandEdit} onInputCapture={markHandEdit}>
@@ -757,60 +570,7 @@ export function S2Negotiation({
               saveLabel={working ? "Save & quote it again" : "Save & quote it"}
               saving={generateM.isPending || regenerateM.isPending}
               unsaved={tableUnsaved || validTouched}
-              saveAside={
-                // A field that reads as one (2026-10-12, operator: "valid for 2 days doesn't seem
-                // like something that can be edited at first glance"): a bordered box with − and +,
-                // the end date it gives beside it, and the rule behind a "?".
-                <div className="rct-valid">
-                  <span className="lbl">Quote valid for</span>
-                  <span className={`stepper${validNumber == null ? " bad" : ""}`}>
-                    <button
-                      type="button"
-                      aria-label={`One ${validUnit} less`}
-                      disabled={!editable || validNumber == null || validNumber <= 1}
-                      onClick={() => changeValid(String(Math.max(1, (validNumber ?? 2) - 1)))}
-                    >
-                      −
-                    </button>
-                    <input
-                      inputMode="numeric"
-                      aria-label={`Quote valid for, in ${validUnit}s`}
-                      value={validCount}
-                      readOnly={!editable || !validWindow}
-                      onChange={(e) => {
-                        const v = e.target.value.replace(/\D/g, "");
-                        changeValid(v !== "" && Number(v) > maxValid ? String(maxValid) : v);
-                      }}
-                    />
-                    <span className="unit">{validNumber === 1 ? validUnit : `${validUnit}s`}</span>
-                    <button
-                      type="button"
-                      aria-label={`One ${validUnit} more`}
-                      disabled={!editable || (validNumber ?? maxValid) >= maxValid}
-                      onClick={() => changeValid(String(Math.min(maxValid, (validNumber ?? 0) + 1)))}
-                    >
-                      +
-                    </button>
-                  </span>
-                  <span className={`until${validWindow && validNumber == null ? " stop-ink" : ""}`}>
-                    {!validWindow ? null : validNumber == null ? (
-                      `Enter 1 to ${maxValid}`
-                    ) : (
-                      <>
-                        until <b>{fmtDateTime(validityEnd, tz)}</b>
-                      </>
-                    )}
-                  </span>
-                  <Help label="About how long the quote is valid">
-                    <p>How long the guest has to accept this price. The time starts when the table is saved. Sending the quote later does not restart it.</p>
-                    <p>
-                      {inHours
-                        ? `Check-in is today, so it is set in hours, up to ${plural(maxValid, "hour")}: the rest of today.`
-                        : `It runs up to check-in, ${plural(maxValid, "day")} from today. It can be made shorter, not longer.`}
-                    </p>
-                  </Help>
-                </div>
-              }
+              saveAside={<QuoteValidityField t={stay} />}
               onFaultsChange={setTableFaults}
               persistKey={entry.id}
               persistBasis={(working ?? accepted)?.id ?? "none"}
@@ -842,7 +602,7 @@ export function S2Negotiation({
             <CompositionSummary entry={entry} />
           </>
         )}
-        <ChildrenAges entry={entry} />
+        {together.active ? null : <ChildrenAges entry={entry} />}
         {/* The rooms and the party are changed HERE, not by re-entering to Inquiry (2026-09-30,
             operator ruling). It sits under the table it changes, and closes while the change is
             being made so there is only ever one plan on screen. */}
@@ -865,7 +625,38 @@ export function S2Negotiation({
           it — so the round trip "price it · read what that produced" ran down the whole step and
           back. Its VERSION LIST stays at the foot of the step: it is a record to look up, not
           part of the work, and the two swapped places rather than travelling together. */}
-      {shown ? (
+      {together.active ? (
+        <>
+          {[entry, ...together.others]
+            .sort((a, b) => together.stayNoOf(a.id) - together.stayNoOf(b.id))
+            .map((e) => {
+              const q = shownQuotation(e);
+              const n = together.stayNoOf(e.id);
+              if (!q) {
+                return e.id === entry.id ? (
+                  <StepCard key={e.id} flow="quotation" flowAfter="table" title={`Stay ${n} · The quotation`} icon="file">
+                    <span className="sm">Nothing is priced yet — the table&rsquo;s Save makes the quotation.</span>
+                  </StepCard>
+                ) : null;
+              }
+              return (
+                <QuotationCard
+                  key={e.id}
+                  entry={e}
+                  q={q}
+                  stayNo={n}
+                  plain={e.id !== entry.id}
+                  editable={e.status === "ACTIVE" || e.status === "PARKED" ? editable || e.id !== entry.id : false}
+                  elevated={elevated}
+                  tz={tz}
+                  nowMs={clock.now}
+                  onSend={() => setSendTarget({ entry: e, q })}
+                  refreshKeys={extraKeys}
+                />
+              );
+            })}
+        </>
+      ) : shown ? (
         <QuotationCard
           entry={entry}
           q={shown}
@@ -873,7 +664,7 @@ export function S2Negotiation({
           elevated={elevated}
           tz={tz}
           nowMs={clock.now}
-          onSend={() => setSendTarget(shown)}
+          onSend={() => setSendTarget({ entry, q: shown })}
           refreshKeys={extraKeys}
         />
       ) : !past ? (
@@ -907,12 +698,13 @@ export function S2Negotiation({
       />
 
       <QuotationSendDialog
-        entry={entry}
-        target={sendTarget}
+        entry={sendTarget?.entry ?? entry}
+        target={sendTarget?.q ?? null}
         onClose={() => setSendTarget(null)}
         onSent={() => {
+          const other = sendTarget && sendTarget.entry.id !== entry.id ? sendTarget.entry.id : null;
           setSendTarget(null);
-          refresh(extraKeys);
+          refresh(other ? [...extraKeys, ["entry", other]] : extraKeys);
         }}
       />
       <ReasonDialog
@@ -1059,7 +851,13 @@ function QuotationCard({
   nowMs,
   onSend,
   refreshKeys,
+  stayNo,
+  plain,
 }: {
+  /** Named with its stay, when several stays' quotations are on one page (2026-11-09). */
+  stayNo?: number;
+  /** Not one of the step's numbered sections: the other stays' cards. */
+  plain?: boolean;
   entry: EntryDetail;
   q: QuotationSummary;
   editable: boolean;
@@ -1132,8 +930,8 @@ function QuotationCard({
 
   return (
     <StepCard
-      flow="quotation"
-      title={`Quotation · ${q.referenceNumber} · v${q.versionNumber}`}
+      flow={plain ? undefined : "quotation"}
+      title={`${stayNo ? `Stay ${stayNo} · ` : ""}Quotation · ${q.referenceNumber} · v${q.versionNumber}`}
       icon="file"
       right={
         <Chip tone={state.tone} icon={q.state === "ACCEPTED" ? "check" : undefined}>

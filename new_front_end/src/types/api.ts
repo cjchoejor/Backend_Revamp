@@ -649,6 +649,8 @@ export type EntryDetail = EntryListItem & {
   carryOver?: EntryCarryOver | null;
   /** The stay of this enquiry this one copies, until it is priced or changed by hand (2026-11-03). */
   followsEntryId?: string | null;
+  /** "Same as this stay": worked in one table with that stay at Negotiation (2026-11-09). */
+  sameSetupAs?: string | null;
   /** Who is arriving / who booked it — the booking's own contact (the agency's person on an agency booking). */
   contactPersonName?: string | null;
   contactPersonPhone?: string | null;

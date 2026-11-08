@@ -2943,7 +2943,7 @@
   & .rct-t tbody tr.foc td:not(.room) {
     opacity: 0.72;
   }
-  & .rct-t tfoot td {
+  & .rct-t tfoot td, & .rct-t tr.sumrow td {
     font-family: var(--deskmono);
     font-weight: 700;
     font-size: 11px;
@@ -2952,7 +2952,7 @@
     padding: 4px 5px;
     border-bottom: 0;
   }
-  & .rct-t tfoot .room {
+  & .rct-t tfoot .room, & .rct-t tr.sumrow .room {
     background: var(--cream);
     font-size: 12px;
   }
@@ -2976,7 +2976,7 @@
     padding: 5px 2px;
   }
   /* Σ money cells — each rate column's whole-stay total (net of tax), from the live preview. */
-  & .rct-t tfoot td.money {
+  & .rct-t tfoot td.money, & .rct-t tr.sumrow td.money {
     font-size: 10.5px;
     color: var(--green-d);
     white-space: nowrap;

@@ -1380,3 +1380,17 @@ export function moveTripToNegotiation(session: Session, entryId: string, version
     body: { version },
   });
 }
+
+/** The stays worked in one table at Negotiation (2026-11-09). Empty when this stay stands alone. */
+export async function getStaysTogether(session: Session, entryId: string) {
+  return apiRequest<{ stayIds: string[] }>(`/api/entries/${entryId}/trip/together`, { session });
+}
+
+/** Those stays on to Set up together, this one first. */
+export async function moveTripToSetUp(session: Session, entryId: string, version?: number) {
+  return apiRequest<{ moved: string[]; notMoved: Array<{ entryId: string; message: string }> }>(`/api/entries/${entryId}/trip/to-set-up`, {
+    method: "POST",
+    session,
+    body: { version },
+  });
+}

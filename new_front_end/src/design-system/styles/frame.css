@@ -2280,3 +2280,20 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .trip-line-each-btn:hover { background: var(--paper); }
 .ds .trip-line-each-btn[aria-expanded="true"] { border-color: var(--accent); background: var(--accent-soft); }
 .ds .trip-bill-missing { margin: 6px 0; }
+
+/* One table for the stays set up the same (2026-11-09): a band for each stay, its own rows, its Σ,
+   and a line under them for what is that stay's own. */
+.ds .desk-root .rct-t tbody tr.nightband.stayhead td { background: var(--accent-soft); color: var(--ink); border-top: 2px solid var(--accent); padding: 8px 10px; }
+.ds .desk-root .rct-t tbody.rct-stay:not(:first-of-type) tr.nightband.stayhead td { border-top: 2px solid var(--accent); }
+.ds .desk-root .rct-t tbody tr.nightband.stayhead .nb-in { align-items: center; flex-wrap: wrap; }
+.ds .desk-root .rct-t tbody tr.nightband.stayhead .nb-date { color: var(--ink); }
+.ds .desk-root .rct-t tbody tr.nightband.stayhead .nb-meta { color: var(--ink-2); }
+.ds .desk-root .rct-t tr.rct-fullrow td { background: var(--surface); text-align: left; padding: 6px 10px; }
+.ds .desk-root .rct-t tr.rct-fullrow .rct-full-in { position: sticky; left: 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; width: fit-content; max-width: 100%; }
+.ds .desk-root .rct-t tr.rct-fullrow.stayfoot td { background: var(--paper); border-bottom: 2px solid var(--line-2); }
+.ds .desk-root .rct-t tr.rct-fullrow.stayfoot .rct-disc { margin-top: 0; }
+.ds .desk-root .rct-t tr.rct-fullrow.stayfoot .rct-live { margin: 0; }
+.ds .desk-root .rct-live-trip { border-color: var(--accent); background: var(--accent-soft); }
+.ds .stay-item.as-btn { width: 100%; text-align: left; font: inherit; border: 0; background: transparent; cursor: pointer; }
+.ds .stay-item.as-btn:hover { background: var(--surface-2); }
+.ds .desk-root .rct-t tbody tr.nightband.stayhead .rce-night select { max-width: 170px; }

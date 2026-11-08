@@ -1075,6 +1075,70 @@ function MiniNum({ label, value, onChange }: { label: string; value?: string; on
 }
 
 /**
+ * The table's unsaved edits, kept per booking (2026-08-01). Shared by the one stay's table and by the
+ * stays worked together (2026-11-09, operator: "if the user viewed it separately and did config retain
+ * those configs when user later views it together"): the same copy, whichever view wrote it.
+ */
+export function usePersistedCompositions(props: {
+  persistKey?: string;
+  persistBasis?: string;
+  sealedRoomIds: string[];
+  initialCompositions?: RoomCompositionInput[];
+  onChange: (compositions: RoomCompositionInput[]) => void;
+}) {
+  // Last emitted compositions — the seed for whichever mode mounts next. A ref, not
+  // state: emissions must not re-render the planner (the active editor already did).
+  // Hydrated ONCE from sessionStorage (2026-08-01) so leaving the workspace and coming
+  // back resumes the edits — hydration must happen before the first child mounts (the
+  // editors read `initial` at mount), so it's a lazy ref init, not an effect. This
+  // component only ever renders client-side (behind the entry fetch), so no SSR risk.
+  const storeKey = props.persistKey ? `desk:rcomp:${props.persistKey}` : null;
+  const snapshotRef = useRef<RoomCompositionInput[] | null>(null);
+  /** The last table this screen wrote (or restored) — a re-render with the same table writes nothing. */
+  const lastWrittenRef = useRef<string | null>(null);
+  if (snapshotRef.current === null) {
+    // `initialCompositions` is what the booking is priced on TODAY (2026-08-19) — the post-freeze
+    // re-price panel opens on the terms in force, not on an auto-distributed default that would
+    // quietly overwrite a negotiated rate the moment it was saved. A persisted in-progress edit
+    // still wins over it: that is the operator's own unfinished work.
+    snapshotRef.current = props.initialCompositions ?? [];
+    if (storeKey && typeof window !== "undefined") {
+      // Restored only when it was written on the SAME quotation, holds a row for every room the
+      // booking has now, and is not empty (2026-10-19, operator: the table "switched to ... no meal
+      // plans" after work on another screen). A copy in the old shape (a bare array) is ignored:
+      // an empty or out-of-date one outranked the saved quotation and opened the grid with no meals.
+      try {
+        const raw = localStorage.getItem(storeKey);
+        const v = raw ? (JSON.parse(raw) as { v?: number; basis?: string; compositions?: RoomCompositionInput[] }) : null;
+        const comps = v && !Array.isArray(v) && v.v === 2 && v.basis === (props.persistBasis ?? "none") ? v.compositions : null;
+        const rooms = new Set((comps ?? []).map((c) => c.roomId));
+        if (comps && comps.length > 0 && rooms.size === props.sealedRoomIds.length && props.sealedRoomIds.every((id) => rooms.has(id))) {
+          snapshotRef.current = comps;
+          lastWrittenRef.current = JSON.stringify(comps);
+        }
+      } catch {
+        /* corrupt / private mode — start from the quotation */
+      }
+    }
+  }
+  const { onChange } = props;
+  const handleChange = (compositions: RoomCompositionInput[]) => {
+    snapshotRef.current = compositions;
+    const json = JSON.stringify(compositions);
+    if (storeKey && compositions.length > 0 && json !== lastWrittenRef.current) {
+      lastWrittenRef.current = json;
+      try {
+        localStorage.setItem(storeKey, JSON.stringify({ v: 2, basis: props.persistBasis ?? "none", compositions }));
+      } catch {
+        /* non-fatal — the edits just won't survive navigation */
+      }
+    }
+    onChange(compositions);
+  };
+  return { snapshotRef, handleChange };
+}
+
+/**
  * Mode wrapper the quote step mounts. Two modes: the spreadsheet-style table
  * (`RoomCompositionsTable`, default — one row per room, derived Occ, arrow-key cell
  * navigation, bulk fills) and the guest board above (chips into bins). The board needs
@@ -1162,55 +1226,7 @@ export function RoomCompositionPlanner(props: DiscountEdit & {
    * point of the affordance. Survives mode switches.
    */
   const [focusRoomId, setFocusRoomId] = useState<string | null>(null);
-  // Last emitted compositions — the seed for whichever mode mounts next. A ref, not
-  // state: emissions must not re-render the planner (the active editor already did).
-  // Hydrated ONCE from sessionStorage (2026-08-01) so leaving the workspace and coming
-  // back resumes the edits — hydration must happen before the first child mounts (the
-  // editors read `initial` at mount), so it's a lazy ref init, not an effect. This
-  // component only ever renders client-side (behind the entry fetch), so no SSR risk.
-  const storeKey = props.persistKey ? `desk:rcomp:${props.persistKey}` : null;
-  const snapshotRef = useRef<RoomCompositionInput[] | null>(null);
-  /** The last table this screen wrote (or restored) — a re-render with the same table writes nothing. */
-  const lastWrittenRef = useRef<string | null>(null);
-  if (snapshotRef.current === null) {
-    // `initialCompositions` is what the booking is priced on TODAY (2026-08-19) — the post-freeze
-    // re-price panel opens on the terms in force, not on an auto-distributed default that would
-    // quietly overwrite a negotiated rate the moment it was saved. A persisted in-progress edit
-    // still wins over it: that is the operator's own unfinished work.
-    snapshotRef.current = props.initialCompositions ?? [];
-    if (storeKey && typeof window !== "undefined") {
-      // Restored only when it was written on the SAME quotation, holds a row for every room the
-      // booking has now, and is not empty (2026-10-19, operator: the table "switched to ... no meal
-      // plans" after work on another screen). A copy in the old shape (a bare array) is ignored:
-      // an empty or out-of-date one outranked the saved quotation and opened the grid with no meals.
-      try {
-        const raw = localStorage.getItem(storeKey);
-        const v = raw ? (JSON.parse(raw) as { v?: number; basis?: string; compositions?: RoomCompositionInput[] }) : null;
-        const comps = v && !Array.isArray(v) && v.v === 2 && v.basis === (props.persistBasis ?? "none") ? v.compositions : null;
-        const rooms = new Set((comps ?? []).map((c) => c.roomId));
-        if (comps && comps.length > 0 && rooms.size === props.sealedRoomIds.length && props.sealedRoomIds.every((id) => rooms.has(id))) {
-          snapshotRef.current = comps;
-          lastWrittenRef.current = JSON.stringify(comps);
-        }
-      } catch {
-        /* corrupt / private mode — start from the quotation */
-      }
-    }
-  }
-  const { onChange } = props;
-  const handleChange = (compositions: RoomCompositionInput[]) => {
-    snapshotRef.current = compositions;
-    const json = JSON.stringify(compositions);
-    if (storeKey && compositions.length > 0 && json !== lastWrittenRef.current) {
-      lastWrittenRef.current = json;
-      try {
-        localStorage.setItem(storeKey, JSON.stringify({ v: 2, basis: props.persistBasis ?? "none", compositions }));
-      } catch {
-        /* non-fatal — the edits just won't survive navigation */
-      }
-    }
-    onChange(compositions);
-  };
+  const { snapshotRef, handleChange } = usePersistedCompositions(props);
   // The TABLE carries its own sticky copy above the grid (its rate cells are what the reference
   // anchors), so the strip is rendered here only for the guest board.
   const rateRef = props.entryId ? <RateReferenceStrip entryId={props.entryId} /> : null;

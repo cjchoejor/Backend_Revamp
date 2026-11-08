@@ -90,9 +90,9 @@ const EMPTY_ROW: RowState = {
   foc: false,
 };
 
-type NumCol = Exclude<keyof RowState, "sc" | "gst" | "foc">;
-const MEAL_COLS: NumCol[] = ["cp", "ml", "md", "ap", "ot"];
-const MEAL_META: Record<string, { chip: string; th: string; title: string }> = {
+export type NumCol = Exclude<keyof RowState, "sc" | "gst" | "foc">;
+export const MEAL_COLS: NumCol[] = ["cp", "ml", "md", "ap", "ot"];
+export const MEAL_META: Record<string, { chip: string; th: string; title: string }> = {
   cp: { chip: "CP", th: "CP", title: "Breakfast only" },
   ml: { chip: "MAP+L", th: "M+L", title: "Breakfast + lunch" },
   md: { chip: "MAP+D", th: "M+D", title: "Breakfast + dinner" },
@@ -108,7 +108,7 @@ const MEAL_META: Record<string, { chip: string; th: string; title: string }> = {
  * & bed alone; three CP rooms + one MAP+L show Breakfast for all and Lunch for that one
  * room; no plan with dinner → no Dinner column at all.
  */
-type RateCol = "rRoom" | "rBed" | "rBf" | "rLu" | "rDi";
+export type RateCol = "rRoom" | "rBed" | "rBf" | "rLu" | "rDi";
 const RATE_META: Record<RateCol, { th: string; meal: string | null }> = {
   rRoom: { th: "Room", meal: null },
   rBed: { th: "Extra bed", meal: null },
@@ -530,7 +530,139 @@ function BedCell({
   );
 }
 
+/**
+ * One stay's rows inside a table shared by several stays (2026-11-09, operator: "show both the stays
+ * configuration in the same table"). The stay keeps everything that is its own — its party, its
+ * rates, its live price, its discount, its faults — and the table above it owns the columns.
+ */
+export type GroupedColumns = { kids: boolean; meals: NumCol[]; others: boolean; rateCols: RateCol[]; beds: boolean; ratesOpen: boolean; justOn: NumCol | null };
+export type SectionFacts = { pax: NumCol[]; kids: boolean; beds: boolean; rows: number };
+export type CopySource = { vals: Record<string, string>; row: Record<string, unknown>; roomLevel: boolean };
+export type SectionApi = {
+  distribute: () => void;
+  everyoneOn: (col: NumCol | "none") => void;
+  planOff: (col: NumCol) => void;
+  copySource: () => CopySource | null;
+  applyCopy: (src: CopySource, skipFirst: boolean) => void;
+};
+export type GroupedSection = {
+  columns: GroupedColumns;
+  rowOffset: number;
+  totalRows: number;
+  scrollRef: React.RefObject<HTMLDivElement | null>;
+  band: React.ReactNode;
+  foot?: React.ReactNode;
+  onFacts: (facts: SectionFacts) => void;
+  apiRef: (api: SectionApi | null) => void;
+};
+
+/** The table's two header rows — shared by one stay's table and by several stays' in one. */
+export function CompositionsHead({
+  kids,
+  meals,
+  others,
+  rateCols,
+  beds,
+  ratesOpen,
+  justOn,
+  readOnly,
+  lockCommercial,
+  onToggleRates,
+}: {
+  kids: boolean;
+  meals: NumCol[];
+  others: boolean;
+  rateCols: RateCol[];
+  beds: boolean;
+  ratesOpen: boolean;
+  justOn: NumCol | null;
+  readOnly?: boolean;
+  lockCommercial?: boolean;
+  onToggleRates: () => void;
+}) {
+  return (
+    <thead>
+      <tr className="grp">
+        <th className="room" />
+        {beds && <th />}
+        <th />
+        <th colSpan={kids ? 4 : 2}>Guests</th>
+        {meals.length > 0 && <th className="mealcol" colSpan={meals.length}>Meal-plan pax</th>}
+        {others && <th colSpan={3}>Others à-la-carte pax</th>}
+        {ratesOpen && (
+          <th
+            colSpan={rateCols.length}
+            title="Columns follow the meal plans in use — room & bed always; a meal appears only while some room's plan includes it"
+          >
+            Negotiated rates (Nu., optional{rateCols.length === 2 ? " · EP — room only" : ""})
+          </th>
+        )}
+        {/* Charges sits at the far right, beside the total it changes (2026-09-29, operator).
+            SC / GST / FOC are set once and rarely touched; between the pax counts and the
+            rate columns they broke the typing path — pax, then the rate that prices it. */}
+        <th colSpan={3}>Charges</th>
+        <th className="ratebtn" rowSpan={2}>
+          <div className="rct-corner">
+            {/* It says what a press does next (2026-11-05, operator). Rates can be locked while counts are not. */}
+            <button type="button" className="rct-rates-btn" onClick={onToggleRates}>
+              {ratesOpen ? (readOnly ? "See counts" : "Edit counts") : readOnly || lockCommercial ? "See rates" : "Edit rates"}
+            </button>
+          </div>
+        </th>
+      </tr>
+      <tr>
+        <th className="room">Room</th>
+        {beds && (
+          <th className="bedcol" title="How the room is made up for this stay">
+            Bed type
+          </th>
+        )}
+        <th title="Occupants — derived: adults + children">Occ</th>
+        <th>Adult</th>
+        {kids && (
+          <>
+            <th title="Children 6–10">6–10</th>
+            <th title="Children under 6">&lt;6</th>
+          </>
+        )}
+        <th title="Extra beds">Extra bed</th>
+        {meals.map((c) => (
+          <th key={c} className={`mealcol${justOn === c ? " just-on" : ""}`} title={MEAL_META[c].title}>
+            {MEAL_META[c].th}
+          </th>
+        ))}
+        {others && (
+          <>
+            <th>B'fast</th>
+            <th>Lunch</th>
+            <th>Dinner</th>
+          </>
+        )}
+        {ratesOpen &&
+          rateCols.map((c) => (
+            <th
+              key={c}
+              title={
+                RATE_META[c].meal
+                  ? `Per-person ${RATE_META[c].meal} rate — editable only for rooms whose plan includes ${RATE_META[c].meal}`
+                  : c === "rRoom"
+                    ? "Per-night room rate"
+                    : "Per-bed per-night extra-bed rate"
+              }
+            >
+              {RATE_META[c].th}
+            </th>
+          ))}
+        <th title="Service charge applies">SC</th>
+        <th title="GST applies">GST</th>
+        <th title="Free of charge — room priced at zero">FOC</th>
+      </tr>
+    </thead>
+  );
+}
+
 export function RoomCompositionsTable({
+  grouped,
   entryId,
   sealedRoomIds,
   entryCheckIn,
@@ -565,6 +697,8 @@ export function RoomCompositionsTable({
   readOnly,
   previewStay,
 }: DiscountEdit & {
+  /** This stay's rows inside a table shared by several stays (2026-11-09). */
+  grouped?: GroupedSection;
   /** Price for a stay the booking does not hold yet — a change of dates on the step (2026-10-29). */
   previewStay?: { checkInDate: string; checkOutDate: string } | null;
   /**
@@ -822,11 +956,12 @@ export function RoomCompositionsTable({
     if (ds && ds.length > 0) return ds.map((d) => d.slice(0, 10));
     return roomDates ? stayNightList : [];
   };
-  const [ratesOpen, setRatesOpen] = useState(
+  const [ratesOpenOwn, setRatesOpen] = useState(
     () => (initial ?? []).some((c) =>
       [c.negotiatedRoomRate, c.negotiatedExtraBedRate, c.negotiatedBreakfastRate, c.negotiatedLunchRate, c.negotiatedDinnerRate].some((v) => v != null),
     ),
   );
+  const ratesOpen = grouped ? grouped.columns.ratesOpen : ratesOpenOwn;
   // Full-screen layer, same affordance as the S1 room table: with the rate columns open the grid
   // is wider than the canvas column, so reading rooms against their rates meant scrolling
   // sideways. Reuses the .rst-expandwrap / .rst-expandbar styles.
@@ -855,7 +990,8 @@ export function RoomCompositionsTable({
   // row carries pax for it — a column with data can never silently disappear.
   const [activePlans, setActivePlans] = useState<Set<NumCol>>(new Set());
   /** The meal plan just switched on: its column flashes, and its first cell takes the cursor. */
-  const [justOn, setJustOn] = useState<NumCol | null>(null);
+  const [justOnOwn, setJustOn] = useState<NumCol | null>(null);
+  const justOn = grouped ? grouped.columns.justOn : justOnOwn;
   // CNB columns exist automatically when the intake party has children, or when saved
   // data already carries child counts — the manual "Kids +" toggle was removed
   // (2026-07-31, operator request); only the Rates toggle remains in the corner.
@@ -863,7 +999,8 @@ export function RoomCompositionsTable({
   const [childColsManual] = useState(
     () => !hasKids && (initial ?? []).some((c) => (c.cnb6To10Count ?? 0) > 0 || (c.cnbUnder6Count ?? 0) > 0),
   );
-  const childColsVisible = hasKids || childColsManual;
+  const childColsOwn = hasKids || childColsManual;
+  const childColsVisible = grouped ? grouped.columns.kids : childColsOwn;
 
   useEffect(() => {
     setRows((prev) => {
@@ -1141,7 +1278,7 @@ export function RoomCompositionsTable({
         cnt(rows[id]?.[col] ?? "0") > 0 ||
         (isNightCol(col) && Object.values(nightVals[id] ?? {}).some((v) => cnt(v[col]) > 0)),
     );
-  const visibleMeals = MEAL_COLS.filter((c) => activePlans.has(c) || paxAnywhere(c));
+  const visibleMeals = grouped ? grouped.columns.meals : MEAL_COLS.filter((c) => activePlans.has(c) || paxAnywhere(c));
 
   // ---- Which rate columns exist (2026-08-07) ---------------------------------------
   // Room + Bed are the default pair; a meal's rate column exists only while that meal is in
@@ -1151,13 +1288,15 @@ export function RoomCompositionsTable({
   const bfInPlay = ["cp", "ml", "md", "ap"].some((c) => visibleMeals.includes(c as NumCol)) || anyPax("obf");
   const luInPlay = ["ml", "ap"].some((c) => visibleMeals.includes(c as NumCol)) || anyPax("olu");
   const diInPlay = ["md", "ap"].some((c) => visibleMeals.includes(c as NumCol)) || anyPax("odi");
-  const rateCols: RateCol[] = [
-    "rRoom",
-    "rBed",
-    ...(bfInPlay ? (["rBf"] as const) : []),
-    ...(luInPlay ? (["rLu"] as const) : []),
-    ...(diInPlay ? (["rDi"] as const) : []),
-  ];
+  const rateCols: RateCol[] = grouped
+    ? grouped.columns.rateCols
+    : [
+        "rRoom",
+        "rBed",
+        ...(bfInPlay ? (["rBf"] as const) : []),
+        ...(luInPlay ? (["rLu"] as const) : []),
+        ...(diInPlay ? (["rDi"] as const) : []),
+      ];
   /** Whether THIS row consumes each meal — its rate cell is editable only then; the other
    *  rooms see a dash (their plan doesn't buy that meal, so there's nothing to negotiate). */
   const rowConsumes = (r: RowState): Record<"rBf" | "rLu" | "rDi", boolean> => ({
@@ -1374,19 +1513,20 @@ export function RoomCompositionsTable({
    *  never the guest bands (copying people would double the party). Beds and meal pax
    *  are clamped per target row (its own bed limit / its own occupancy), so the copy
    *  can't write what typing wouldn't have allowed. */
-  const copyFirstDown = () => {
-    // The first row ON SCREEN onto every other row on screen (2026-10-22, operator: "if only one
-    // date is picked, copy row should only happen for the rooms for that date"). Meals and extra
-    // beds go to the night each row stands under. Rates and the charges belong to the room for
-    // every night it is held, so they are copied only when every night is on screen.
-    const order = sections.flatMap((s) => s.ids.map((id) => ({ id, night: s.night })));
-    if (order.length < 2) return;
+  const copyOrder = () => sections.flatMap((s) => s.ids.map((id) => ({ id, night: s.night })));
+  const copySource = (): CopySource | null => {
+    const order = copyOrder();
+    if (order.length === 0) return null;
     const src = order[0];
-    const srcVals = pickNight(rowAt(src.id, src.night));
-    const srcRow = rows[src.id] ?? EMPTY_ROW;
-    const roomLevel = !viewNight;
-    const roomDone = new Set<string>([src.id]);
-    for (const t of order.slice(1)) {
+    return { vals: pickNight(rowAt(src.id, src.night)) as unknown as Record<string, string>, row: (rows[src.id] ?? EMPTY_ROW) as unknown as Record<string, unknown>, roomLevel: !viewNight };
+  };
+  const applyCopy = (src: CopySource, skipFirst: boolean) => {
+    const order = copyOrder();
+    const srcVals = src.vals as unknown as NightVals;
+    const srcRow = src.row as unknown as RowState;
+    const roomLevel = src.roomLevel && !viewNight;
+    const roomDone = new Set<string>(skipFirst && order[0] ? [order[0].id] : []);
+    for (const t of skipFirst ? order.slice(1) : order) {
       const target = rows[t.id] ?? EMPTY_ROW;
       const v: NightVals = { ...srcVals };
       // Bed bounds per target room: capped at its type's max, floored at what its own adults
@@ -1416,6 +1556,15 @@ export function RoomCompositionsTable({
         });
       }
     }
+  };
+  const copyFirstDown = () => {
+    // The first row ON SCREEN onto every other row on screen (2026-10-22, operator: "if only one
+    // date is picked, copy row should only happen for the rooms for that date"). Meals and extra
+    // beds go to the night each row stands under. Rates and the charges belong to the room for
+    // every night it is held, so they are copied only when every night is on screen.
+    if (copyOrder().length < 2) return;
+    const src = copySource();
+    if (src) applyCopy(src, true);
   };
 
   // Per-night overrides carried in from the board, keyed by room. Read from the mount-time
@@ -1601,7 +1750,7 @@ export function RoomCompositionsTable({
     n == null ? "—" : n.toLocaleString("en-IN", { maximumFractionDigits: 2 });
 
   // Others à-la-carte columns appear only once someone is on the Others plan.
-  const othersVisible = paxAnywhere("ot");
+  const othersVisible = grouped ? grouped.columns.others : paxAnywhere("ot");
 
   // ---- Which nights each room is for (2026-09-30) ----------------------------------
   // Operator: "the reservation is from 30 Sept to 3 Oct but we don't know which dates the rooms
@@ -1610,7 +1759,8 @@ export function RoomCompositionsTable({
   // reads "12 – 15 Oct · 204" before any of its counts mean anything. The labels are the
   // caller's (see `roomDates`); the table only prints them.
   const datesShown = !!roomDates && sealedRoomIds.some((id) => roomDates[id]);
-  const bedsShown = !!bedPlan && sealedRoomIds.some((id) => bedPlan[id]);
+  const bedsOwn = !!bedPlan && sealedRoomIds.some((id) => bedPlan[id]);
+  const bedsShown = grouped ? grouped.columns.beds : bedsOwn;
   /** The stay's own night count — a room that differs from it is the interesting case. */
   const ciIso = dayToIso(entryCheckIn);
   const coIso = dayToIso(entryCheckOut);
@@ -1626,7 +1776,7 @@ export function RoomCompositionsTable({
   // on the table that row is active"): the cursor goes to its first cell, ready to type. A wide
   // table scrolls sideways inside its own box; the page stays where it is.
   useEffect(() => {
-    if (!justOn) return;
+    if (!justOn || grouped) return;
     const box = wrapRef.current;
     const cell = box?.querySelector<HTMLInputElement>(`input[data-cell$=":${justOn}"]:not([readonly])`);
     if (box && cell) {
@@ -1648,8 +1798,9 @@ export function RoomCompositionsTable({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [othersVisible, ratesOpen, childColsVisible, visibleMeals.join(","), rateCols.join(",")]);
 
+  const cellScope = () => grouped?.scrollRef ?? wrapRef;
   const focusCell = (rowIdx: number, col: string) => {
-    const el = wrapRef.current?.querySelector<HTMLInputElement>(`[data-cell="${rowIdx}:${col}"]`);
+    const el = cellScope().current?.querySelector<HTMLInputElement>(`[data-cell="${rowIdx}:${col}"]`);
     if (el) {
       el.focus();
       if (el.type === "text") el.select();
@@ -1659,7 +1810,7 @@ export function RoomCompositionsTable({
    *  rows whose plan doesn't include that meal, and the walk must not dead-end on them. */
   const focusSideways = (rowIdx: number, fromCi: number, dir: 1 | -1) => {
     for (let i = fromCi + dir; i >= 0 && i < visibleCols.length; i += dir) {
-      const el = wrapRef.current?.querySelector<HTMLInputElement>(`[data-cell="${rowIdx}:${visibleCols[i]}"]`);
+      const el = cellScope().current?.querySelector<HTMLInputElement>(`[data-cell="${rowIdx}:${visibleCols[i]}"]`);
       if (el) {
         el.focus();
         if (el.type === "text") el.select();
@@ -1676,7 +1827,7 @@ export function RoomCompositionsTable({
       (input.selectionStart === input.value.length && input.selectionEnd === input.value.length);
     if (e.key === "ArrowDown" || e.key === "Enter") {
       e.preventDefault();
-      focusCell(Math.min(displayRowCount - 1, rowIdx + 1), col);
+      focusCell(Math.min((grouped?.totalRows ?? displayRowCount) - 1, rowIdx + 1), col);
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
       focusCell(Math.max(0, rowIdx - 1), col);
@@ -1843,6 +1994,63 @@ export function RoomCompositionsTable({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [faults.join("|")]);
 
+  // ---- one stay's rows in a table shared by several stays (2026-11-09) ----------------------
+  const paxCols = (["cp", "ml", "md", "ap", "ot", "obf", "olu", "odi"] as NumCol[]).filter((c) => paxAnywhere(c));
+  const factsKey = JSON.stringify([paxCols, childColsOwn, bedsOwn, displayRowCount]);
+  useEffect(() => {
+    grouped?.onFacts({ pax: paxCols, kids: childColsOwn, beds: bedsOwn, rows: displayRowCount });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [factsKey]);
+  const sectionApi: SectionApi = {
+    distribute: () => {
+      if (!readOnly) distribute();
+    },
+    everyoneOn: (col) => {
+      if (!readOnly) everyoneOn(col);
+    },
+    planOff: (c) => {
+      if (readOnly) return;
+      for (const id of sealedRoomIds) {
+        writeAllNights(id, { [c]: "0", ...(c === "ot" ? { obf: "", olu: "", odi: "" } : {}) } as Partial<NightVals>);
+      }
+    },
+    copySource,
+    applyCopy: (src, skipFirst) => {
+      if (!readOnly) applyCopy(src, skipFirst);
+    },
+  };
+  const sectionApiRef = useRef(sectionApi);
+  sectionApiRef.current = sectionApi;
+  useEffect(() => {
+    if (!grouped) return;
+    const reg = grouped.apiRef;
+    reg({
+      distribute: () => sectionApiRef.current.distribute(),
+      everyoneOn: (c) => sectionApiRef.current.everyoneOn(c),
+      planOff: (c) => sectionApiRef.current.planOff(c),
+      copySource: () => sectionApiRef.current.copySource(),
+      applyCopy: (src, skip) => sectionApiRef.current.applyCopy(src, skip),
+    });
+    return () => reg(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [!!grouped]);
+
+  if (sealedRoomIds.length === 0 && grouped) {
+    return (
+      <tbody>
+        <tr className="nightband stayhead">
+          <td colSpan={99}>
+            <div className="nb-in">{grouped.band}</div>
+          </td>
+        </tr>
+        <tr className="rct-fullrow">
+          <td colSpan={99}>
+            <div className="rct-full-in stop-ink">No rooms are saved for this stay — choose them on its own page first.</div>
+          </td>
+        </tr>
+      </tbody>
+    );
+  }
   if (sealedRoomIds.length === 0) {
     return (
       <div style={{ padding: 10, fontSize: 11.5, color: "var(--ink-3)" }}>
@@ -2049,119 +2257,7 @@ export function RoomCompositionsTable({
       </td>
     );
 
-  return (
-    <div className={`${expanded ? "rct rst-expandwrap on" : "rct"}${readOnly ? " ro" : ""}`}>
-      {expanded && (
-        <div className="rst-expandbar">
-          <b>Room composition · {sealedRoomIds.length} room{sealedRoomIds.length === 1 ? "" : "s"}</b>
-          <span className="ln" />
-          <button type="button" className="btn btn-ghost" onClick={() => setExpanded(false)}>
-            <Minimize2 style={{ width: 13, height: 13 }} /> Close
-          </button>
-        </div>
-      )}
-      {/* Reference rates ride above the grid in NORMAL PAGE FLOW (2026-08-03, operator request).
-          The old `position: sticky` wrapper pinned the strip to the viewport whenever the canvas
-          scrolled — so it hung over unrelated blocks inline, and in the expanded layer it drifted
-          across the close bar. Inline it now simply scrolls away with the panel; expanded, the
-          layer is a flex column in which only `.rct-scroll` scrolls, so this strip, the close bar
-          and the toolbar are held at the top structurally rather than by sticky positioning. */}
-      {bedAsk && bedsShown && <BedAskStrip ask={bedAsk} />}
-      {entryId && (
-        <RateReferenceStrip
-          entryId={entryId}
-          compact
-          roomIds={sealedRoomIds}
-          // The system's rooms are counted, never named — their number is not a promise until Arrival.
-          quietNumbers={new Set(sealedRoomIds.filter((id) => roomLabels?.has(id)).map((id) => roomById.get(id)?.roomNumber ?? "").filter(Boolean))}
-        />
-      )}
-      <div className="rce-bar">
-        {!readOnly && (
-        <>
-        {partySize > 0 && (
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm"
-            onClick={distribute}
-            title="Spread the booking's party across the rows (children stay together on the first room)"
-          >
-            <Wand2 style={{ width: 13, height: 13 }} /> Distribute party
-          </button>
-        )}
-        <select
-          className="rce-allsel"
-          style={{ marginLeft: 0 }}
-          value=""
-          onChange={(e) => {
-            if (e.target.value) everyoneOn(e.target.value as NumCol | "none");
-          }}
-          title="Set every room's meal-plan pax to its occupancy on one plan"
-        >
-          <option value="">Everyone on…</option>
-          <option value="none">None (EP)</option>
-          <option value="cp">CP · breakfast</option>
-          <option value="ml">MAP · +lunch</option>
-          <option value="md">MAP · +dinner</option>
-          <option value="ap">AP · all meals</option>
-          <option value="ot">Others</option>
-        </select>
-        {sealedRoomIds.length > 1 && (
-          <button
-            type="button"
-            className="rcb-mini"
-            onClick={copyFirstDown}
-            title="Copy the first row on screen onto every other row on screen — meals and extra beds for the night each stands under; rates and charges too when every night is shown (guest counts stay put)"
-          >
-            <ArrowDownToLine style={{ width: 11, height: 11 }} /> Copy row 1 ↓
-          </button>
-        )}
-        <span className="rce-lbl">Meals</span>
-        {MEAL_COLS.map((c) => {
-          const on = visibleMeals.includes(c);
-          return (
-            <button
-              key={c}
-              type="button"
-              className={`rct-chip${on ? " on" : ""}`}
-              onClick={() => togglePlan(c)}
-              title={
-                on
-                  ? `${MEAL_META[c].title} — click to remove the column (zeroes its pax)`
-                  : `${MEAL_META[c].title} — click to add the column`
-              }
-            >
-              {MEAL_META[c].chip}
-            </button>
-          );
-        })}
-        </>
-        )}
-        <span className="ln" />
-        {/* Compact tallies — the long forms crowded the row until "Expand" wrapped onto its own
-            orphan line. Full wording rides on hover. */}
-        {roomMin != null && (
-          <span
-            className={`rce-tally${sealedRoomIds.length < roomMin ? " off" : ""}`}
-            title={`This party needs at least ${roomMin} room${roomMin === 1 ? "" : "s"} — ${sealedRoomIds.length} chosen`}
-          >
-            {sealedRoomIds.length} room{sealedRoomIds.length === 1 ? "" : "s"} · needs ≥{roomMin}
-          </span>
-        )}
-        {partySize > 0 && (
-          <span
-            className={`rce-tally${(splitStay ? nightsShort.length > 0 : totalGuests !== partySize) ? " off" : ""}`}
-            title={
-              splitStay
-                ? `${totalGuests} of ${partySize} guests placed on ${shortNight(busiestNight ?? "")}` +
-                  (nightsShort.length ? ` · short on ${nightsShort.map(shortNight).join(", ")}` : " · every night covered")
-                : `${totalGuests} of ${partySize} intake guests placed in rooms`
-            }
-          >
-            {totalGuests}/{partySize} placed
-          </span>
-        )}
-        {nightsEditable && (() => {
+  const nightPicker = nightsEditable && (() => {
           const idx = viewNight ? pickerNights.indexOf(viewNight) : -1;
           return (
             <span className={`rce-night${nightsShort.length ? " off" : ""}`}>
@@ -2205,141 +2301,12 @@ export function RoomCompositionsTable({
               </button>
             </span>
           );
-        })()}
-        {!expanded && (
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm"
-            onClick={() => setExpanded(true)}
-            title="Expand to full screen — fits every room and the rate columns on one screen"
-          >
-            <Maximize2 style={{ width: 13, height: 13 }} /> Expand
-          </button>
-        )}
-        {quiet && (
-          <Help label="How this table works">
-            <p>One row per room: who sleeps there by age, their meal plans and any extra bed. Occ adds itself up from the guest columns.</p>
-            <p>Arrow keys and Enter move between cells. Distribute party spreads the guests over the rooms; Everyone on… puts every room on one meal plan.</p>
-            <p>Edit rates opens the negotiated rates. Edit counts puts them away and goes back to the guest counts. A meal&rsquo;s rate opens for a room once its plan includes that meal; with no plan (EP) only the room and the extra bed are negotiated.</p>
-            <p>Count children on the meal plans — under 6 eat free, 6 to 10 at the child rate.</p>
-            {nightsEditable && (
-              <p>
-                Pick one night beside Expand, or All nights, to set meals and extra beds night by night — under a
-                night a change is that night&rsquo;s only. Who sleeps in a room, its rates and its charges are the
-                room&rsquo;s for every night it is held. Whole stay sets every night at once; a cell reading
-                &ldquo;varies&rdquo; differs between nights. A small amber corner on a cell: that night is not like
-                the room&rsquo;s other nights (when its nights split evenly, each one is marked). Copy row 1 and Everyone on… work on the rows on screen.
-              </p>
-            )}
-            <p>Every figure is priced by the hotel&rsquo;s server, the same way the quotation will be.</p>
-          </Help>
-        )}
-      </div>
-      {/* A refusal of what was just typed — the loudest thing on the table while it shows
-          (2026-09-29, "UIappeal"): it appears with a flash, reads at the table's own size in the
-          stop colour, and says what was capped. It clears itself after five seconds. */}
-      {limitMsg && (
-        <p className="rct-refusal" role="alert" aria-live="assertive">
-          <span className="ic" aria-hidden="true">
-            !
-          </span>
-          <span>{limitMsg}</span>
-        </p>
-      )}
-      {!onSave && roomMin != null && sealedRoomIds.length < roomMin && (
-        <p className="rce-block">
-          {roomEnvelopeQuery.data?.chargeableOccupants} chargeable guest
-          {(roomEnvelopeQuery.data?.chargeableOccupants ?? 0) === 1 ? "" : "s"} won&rsquo;t fit in{" "}
-          {sealedRoomIds.length} room{sealedRoomIds.length === 1 ? "" : "s"} — go back to Inquiry and seal at
-          least {roomMin}.
-        </p>
-      )}
-
-      <div className="rct-scroll" ref={wrapRef}>
-        <table className="rct-t">
-          <thead>
-            <tr className="grp">
-              <th className="room" />
-              {bedsShown && <th />}
-              <th />
-              <th colSpan={childColsVisible ? 4 : 2}>Guests</th>
-              {visibleMeals.length > 0 && <th className="mealcol" colSpan={visibleMeals.length}>Meal-plan pax</th>}
-              {othersVisible && <th colSpan={3}>Others à-la-carte pax</th>}
-              {ratesOpen && (
-                <th
-                  colSpan={rateCols.length}
-                  title="Columns follow the meal plans in use — room & bed always; a meal appears only while some room's plan includes it"
-                >
-                  Negotiated rates (Nu., optional{rateCols.length === 2 ? " · EP — room only" : ""})
-                </th>
-              )}
-              {/* Charges sits at the far right, beside the total it changes (2026-09-29, operator).
-                  SC / GST / FOC are set once and rarely touched; between the pax counts and the
-                  rate columns they broke the typing path — pax, then the rate that prices it. */}
-              <th colSpan={3}>Charges</th>
-              <th className="ratebtn" rowSpan={2}>
-                <div className="rct-corner">
-                  {/* It says what a press does next (2026-11-05, operator). Rates can be locked while counts are not. */}
-                  <button type="button" className="rct-rates-btn" onClick={() => setRatesOpen((v) => !v)}>
-                    {ratesOpen ? (readOnly ? "See counts" : "Edit counts") : readOnly || lockCommercial ? "See rates" : "Edit rates"}
-                  </button>
-                </div>
-              </th>
-            </tr>
-            <tr>
-              <th className="room">Room</th>
-              {bedsShown && (
-                <th className="bedcol" title="How the room is made up for this stay">
-                  Bed type
-                </th>
-              )}
-              <th title="Occupants — derived: adults + children">Occ</th>
-              <th>Adult</th>
-              {childColsVisible && (
-                <>
-                  <th title="Children 6–10">6–10</th>
-                  <th title="Children under 6">&lt;6</th>
-                </>
-              )}
-              <th title="Extra beds">Extra bed</th>
-              {visibleMeals.map((c) => (
-                <th key={c} className={`mealcol${justOn === c ? " just-on" : ""}`} title={MEAL_META[c].title}>
-                  {MEAL_META[c].th}
-                </th>
-              ))}
-              {othersVisible && (
-                <>
-                  <th>B'fast</th>
-                  <th>Lunch</th>
-                  <th>Dinner</th>
-                </>
-              )}
-              {ratesOpen &&
-                rateCols.map((c) => (
-                  <th
-                    key={c}
-                    title={
-                      RATE_META[c].meal
-                        ? `Per-person ${RATE_META[c].meal} rate — editable only for rooms whose plan includes ${RATE_META[c].meal}`
-                        : c === "rRoom"
-                          ? "Per-night room rate"
-                          : "Per-bed per-night extra-bed rate"
-                    }
-                  >
-                    {RATE_META[c].th}
-                  </th>
-                ))}
-              <th title="Service charge applies">SC</th>
-              <th title="GST applies">GST</th>
-              <th title="Free of charge — room priced at zero">FOC</th>
-            </tr>
-          </thead>
-          <tbody>
-            {sections.map((sec, si) => (
+        })();
+  const bodyRows = sections.map((sec, si) => (
               <Fragment key={sec.night ?? "stay"}>
-                {sec.night ? nightBand(sec.night, sec.ids) : datesShown ? stayBand : null}
+                {sec.night ? nightBand(sec.night, sec.ids) : datesShown && !grouped ? stayBand : null}
                 {sec.ids.map((id, k) => {
-                  const rowIdx = sectionStarts[si] + k;
+                  const rowIdx = sectionStarts[si] + k + (grouped?.rowOffset ?? 0);
                   const r = rows[id] ?? EMPTY_ROW;
                   const room = roomById.get(id);
                   const occ = cnt(r.ad) + cnt(r.c6) + cnt(r.u6);
@@ -2521,10 +2488,9 @@ export function RoomCompositionsTable({
                   );
                 })}
               </Fragment>
-            ))}
-          </tbody>
-          <tfoot>
-            <tr>
+            ));
+  const sumRow = (
+            <tr className="sumrow">
               <td
                 className="room"
                 title={
@@ -2606,15 +2572,8 @@ export function RoomCompositionsTable({
                 <td />
               )}
             </tr>
-          </tfoot>
-        </table>
-      </div>
-
-      <FixedDiscount discountValue={discountValue} discountUnit={discountUnit} onDiscountChange={onDiscountChange} lockCommercial={lockCommercial || readOnly} />
-
-      {/* Running total, backend-priced (2026-08-07): the same figures the generated quote will
-          carry — net, taxes, grand total, and the discount's effect when one is set. */}
-      {preview && (
+  );
+  const liveTotal = preview && (
         <div className="rct-live">
           <span className="k">Live total</span>
           <span className="parts">
@@ -2635,7 +2594,260 @@ export function RoomCompositionsTable({
           <span className="ln" />
           {!quiet && <span className="src">the quote will show the same figures</span>}
         </div>
+      );
+
+  if (grouped) {
+    return (
+      <tbody className="rct-stay">
+        <tr className="nightband stayhead">
+          <td colSpan={colCount}>
+            <div className="nb-in">
+              {grouped.band}
+              {partySize > 0 && (
+                <span className={`nb-tally${(splitStay ? nightsShort.length > 0 : totalGuests !== partySize) ? " off" : ""}`}>
+                  {totalGuests} of {partySize} guests placed
+                </span>
+              )}
+              {nightPicker}
+            </div>
+          </td>
+        </tr>
+        {bedAsk && bedsOwn && (
+          <tr className="rct-fullrow">
+            <td colSpan={colCount}>
+              <div className="rct-full-in">
+                <BedAskStrip ask={bedAsk} />
+              </div>
+            </td>
+          </tr>
+        )}
+        {entryId && ratesOpen && (
+          <tr className="rct-fullrow">
+            <td colSpan={colCount}>
+              <div className="rct-full-in">
+                <RateReferenceStrip
+                  entryId={entryId}
+                  compact
+                  roomIds={sealedRoomIds}
+                  quietNumbers={new Set(sealedRoomIds.filter((id) => roomLabels?.has(id)).map((id) => roomById.get(id)?.roomNumber ?? "").filter(Boolean))}
+                />
+              </div>
+            </td>
+          </tr>
+        )}
+        {limitMsg && (
+          <tr className="rct-fullrow">
+            <td colSpan={colCount}>
+              <p className="rct-refusal rct-full-in" role="alert" aria-live="assertive">
+                <span className="ic" aria-hidden="true">
+                  !
+                </span>
+                <span>{limitMsg}</span>
+              </p>
+            </td>
+          </tr>
+        )}
+        {bodyRows}
+        {sumRow}
+        <tr className="rct-fullrow stayfoot">
+          <td colSpan={colCount}>
+            <div className="rct-full-in">
+              <FixedDiscount discountValue={discountValue} discountUnit={discountUnit} onDiscountChange={onDiscountChange} lockCommercial={lockCommercial || readOnly} />
+              {liveTotal}
+              {grouped.foot}
+            </div>
+          </td>
+        </tr>
+      </tbody>
+    );
+  }
+
+  return (
+    <div className={`${expanded ? "rct rst-expandwrap on" : "rct"}${readOnly ? " ro" : ""}`}>
+      {expanded && (
+        <div className="rst-expandbar">
+          <b>Room composition · {sealedRoomIds.length} room{sealedRoomIds.length === 1 ? "" : "s"}</b>
+          <span className="ln" />
+          <button type="button" className="btn btn-ghost" onClick={() => setExpanded(false)}>
+            <Minimize2 style={{ width: 13, height: 13 }} /> Close
+          </button>
+        </div>
       )}
+      {/* Reference rates ride above the grid in NORMAL PAGE FLOW (2026-08-03, operator request).
+          The old `position: sticky` wrapper pinned the strip to the viewport whenever the canvas
+          scrolled — so it hung over unrelated blocks inline, and in the expanded layer it drifted
+          across the close bar. Inline it now simply scrolls away with the panel; expanded, the
+          layer is a flex column in which only `.rct-scroll` scrolls, so this strip, the close bar
+          and the toolbar are held at the top structurally rather than by sticky positioning. */}
+      {bedAsk && bedsShown && <BedAskStrip ask={bedAsk} />}
+      {entryId && (
+        <RateReferenceStrip
+          entryId={entryId}
+          compact
+          roomIds={sealedRoomIds}
+          // The system's rooms are counted, never named — their number is not a promise until Arrival.
+          quietNumbers={new Set(sealedRoomIds.filter((id) => roomLabels?.has(id)).map((id) => roomById.get(id)?.roomNumber ?? "").filter(Boolean))}
+        />
+      )}
+      <div className="rce-bar">
+        {!readOnly && (
+        <>
+        {partySize > 0 && (
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={distribute}
+            title="Spread the booking's party across the rows (children stay together on the first room)"
+          >
+            <Wand2 style={{ width: 13, height: 13 }} /> Distribute party
+          </button>
+        )}
+        <select
+          className="rce-allsel"
+          style={{ marginLeft: 0 }}
+          value=""
+          onChange={(e) => {
+            if (e.target.value) everyoneOn(e.target.value as NumCol | "none");
+          }}
+          title="Set every room's meal-plan pax to its occupancy on one plan"
+        >
+          <option value="">Everyone on…</option>
+          <option value="none">None (EP)</option>
+          <option value="cp">CP · breakfast</option>
+          <option value="ml">MAP · +lunch</option>
+          <option value="md">MAP · +dinner</option>
+          <option value="ap">AP · all meals</option>
+          <option value="ot">Others</option>
+        </select>
+        {sealedRoomIds.length > 1 && (
+          <button
+            type="button"
+            className="rcb-mini"
+            onClick={copyFirstDown}
+            title="Copy the first row on screen onto every other row on screen — meals and extra beds for the night each stands under; rates and charges too when every night is shown (guest counts stay put)"
+          >
+            <ArrowDownToLine style={{ width: 11, height: 11 }} /> Copy row 1 ↓
+          </button>
+        )}
+        <span className="rce-lbl">Meals</span>
+        {MEAL_COLS.map((c) => {
+          const on = visibleMeals.includes(c);
+          return (
+            <button
+              key={c}
+              type="button"
+              className={`rct-chip${on ? " on" : ""}`}
+              onClick={() => togglePlan(c)}
+              title={
+                on
+                  ? `${MEAL_META[c].title} — click to remove the column (zeroes its pax)`
+                  : `${MEAL_META[c].title} — click to add the column`
+              }
+            >
+              {MEAL_META[c].chip}
+            </button>
+          );
+        })}
+        </>
+        )}
+        <span className="ln" />
+        {/* Compact tallies — the long forms crowded the row until "Expand" wrapped onto its own
+            orphan line. Full wording rides on hover. */}
+        {roomMin != null && (
+          <span
+            className={`rce-tally${sealedRoomIds.length < roomMin ? " off" : ""}`}
+            title={`This party needs at least ${roomMin} room${roomMin === 1 ? "" : "s"} — ${sealedRoomIds.length} chosen`}
+          >
+            {sealedRoomIds.length} room{sealedRoomIds.length === 1 ? "" : "s"} · needs ≥{roomMin}
+          </span>
+        )}
+        {partySize > 0 && (
+          <span
+            className={`rce-tally${(splitStay ? nightsShort.length > 0 : totalGuests !== partySize) ? " off" : ""}`}
+            title={
+              splitStay
+                ? `${totalGuests} of ${partySize} guests placed on ${shortNight(busiestNight ?? "")}` +
+                  (nightsShort.length ? ` · short on ${nightsShort.map(shortNight).join(", ")}` : " · every night covered")
+                : `${totalGuests} of ${partySize} intake guests placed in rooms`
+            }
+          >
+            {totalGuests}/{partySize} placed
+          </span>
+        )}
+        {nightPicker}
+        {!expanded && (
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={() => setExpanded(true)}
+            title="Expand to full screen — fits every room and the rate columns on one screen"
+          >
+            <Maximize2 style={{ width: 13, height: 13 }} /> Expand
+          </button>
+        )}
+        {quiet && (
+          <Help label="How this table works">
+            <p>One row per room: who sleeps there by age, their meal plans and any extra bed. Occ adds itself up from the guest columns.</p>
+            <p>Arrow keys and Enter move between cells. Distribute party spreads the guests over the rooms; Everyone on… puts every room on one meal plan.</p>
+            <p>Edit rates opens the negotiated rates. Edit counts puts them away and goes back to the guest counts. A meal&rsquo;s rate opens for a room once its plan includes that meal; with no plan (EP) only the room and the extra bed are negotiated.</p>
+            <p>Count children on the meal plans — under 6 eat free, 6 to 10 at the child rate.</p>
+            {nightsEditable && (
+              <p>
+                Pick one night beside Expand, or All nights, to set meals and extra beds night by night — under a
+                night a change is that night&rsquo;s only. Who sleeps in a room, its rates and its charges are the
+                room&rsquo;s for every night it is held. Whole stay sets every night at once; a cell reading
+                &ldquo;varies&rdquo; differs between nights. A small amber corner on a cell: that night is not like
+                the room&rsquo;s other nights (when its nights split evenly, each one is marked). Copy row 1 and Everyone on… work on the rows on screen.
+              </p>
+            )}
+            <p>Every figure is priced by the hotel&rsquo;s server, the same way the quotation will be.</p>
+          </Help>
+        )}
+      </div>
+      {/* A refusal of what was just typed — the loudest thing on the table while it shows
+          (2026-09-29, "UIappeal"): it appears with a flash, reads at the table's own size in the
+          stop colour, and says what was capped. It clears itself after five seconds. */}
+      {limitMsg && (
+        <p className="rct-refusal" role="alert" aria-live="assertive">
+          <span className="ic" aria-hidden="true">
+            !
+          </span>
+          <span>{limitMsg}</span>
+        </p>
+      )}
+      {!onSave && roomMin != null && sealedRoomIds.length < roomMin && (
+        <p className="rce-block">
+          {roomEnvelopeQuery.data?.chargeableOccupants} chargeable guest
+          {(roomEnvelopeQuery.data?.chargeableOccupants ?? 0) === 1 ? "" : "s"} won&rsquo;t fit in{" "}
+          {sealedRoomIds.length} room{sealedRoomIds.length === 1 ? "" : "s"} — go back to Inquiry and seal at
+          least {roomMin}.
+        </p>
+      )}
+
+      <div className="rct-scroll" ref={wrapRef}>
+        <table className="rct-t">
+          <CompositionsHead
+            kids={childColsVisible}
+            meals={visibleMeals}
+            others={othersVisible}
+            rateCols={rateCols}
+            beds={bedsShown}
+            ratesOpen={ratesOpen}
+            justOn={justOn}
+            readOnly={readOnly}
+            lockCommercial={lockCommercial}
+            onToggleRates={() => setRatesOpen((v) => !v)}
+          />
+          <tbody>{bodyRows}</tbody>
+          <tfoot>{sumRow}</tfoot>
+        </table>
+      </div>
+
+      <FixedDiscount discountValue={discountValue} discountUnit={discountUnit} onDiscountChange={onDiscountChange} lockCommercial={lockCommercial || readOnly} />
+
+      {/* Running total, backend-priced (2026-08-07): the same figures the generated quote will
+          carry — net, taxes, grand total, and the discount's effect when one is set. */}
+      {liveTotal}
 
       {/* A room nobody sleeps in, or a room of children with no adult — named, because the red
           cell says WHICH box and this says what it means ("UIappeal", 2026-09-30). Shown only

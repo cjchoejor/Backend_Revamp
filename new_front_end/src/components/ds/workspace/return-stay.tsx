@@ -15,7 +15,8 @@
  *
  * Since 2026-11-03 (operator): adding a return stay leaves the desk on the stay it was on, the
  * booking head chooses between the stays, and the new stay is set up either the same as this one
- * — it then copies it through Negotiation — or with different settings.
+ * — its guests and rooms are copied at Inquiry and the two are set in one table at Negotiation
+ * (2026-11-09) — or with different settings.
  */
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -30,6 +31,7 @@ import { addReturnStay, chooseFollowRooms, getTripFollow, startFollowing, stopFo
 import { fmtStay, money, nightsOf, plural } from "@/lib/ds/format";
 import { stepName, stepNoOfStage } from "@/lib/ds/steps";
 import { DsDialog, Overlay, StepCard, toastRefusal, useRefreshEntry } from "@/components/ds/steps/kit";
+import { useStaysTogether } from "@/components/ds/steps/s2-together";
 import type { EntryDetail, TripStaySummary } from "@/types/api";
 import { DateInput } from "@/components/ds/date-input";
 
@@ -120,6 +122,7 @@ export function TripStays({ entry }: { entry: EntryDetail }) {
 export function StayPicker({ entry }: { entry: EntryDetail }) {
   const trip = tripOf(entry);
   const follow = useTripFollow(entry);
+  const together = useStaysTogether(entry);
   const [open, setOpen] = useState(false);
   const [at, setAt] = useState<{ top: number; left: number } | null>(null);
   const btnRef = useRef<HTMLButtonElement | null>(null);
@@ -164,17 +167,42 @@ export function StayPicker({ entry }: { entry: EntryDetail }) {
   return (
     <span className="refid">
       <button ref={btnRef} type="button" className="stay-pick" aria-haspopup="menu" aria-expanded={open} title="Choose a stay of this trip" onClick={() => setOpen((v) => !v)}>
-        {entry.id}
-        <span className="meta">
-          stay {trip.position} of {trip.stays.length}
-        </span>
+        {together.active ? (
+          `${together.label} together`
+        ) : (
+          <>
+            {entry.id}
+            <span className="meta">
+              stay {trip.position} of {trip.stays.length}
+            </span>
+          </>
+        )}
         <Icon name="chev" className="cb-chev" />
       </button>
       {open && at ? (
         <Overlay>
           <div className="stay-menu" role="menu" aria-label="The stays of this trip" ref={menuRef} style={{ top: at.top, left: at.left }}>
+            {together.canBeTogether ? (
+              <button
+                type="button"
+                className={`stay-item as-btn${together.view === "together" ? " here" : ""}`}
+                role="menuitem"
+                aria-current={together.view === "together" || undefined}
+                onClick={() => {
+                  together.setView("together");
+                  setOpen(false);
+                }}
+              >
+                <span className="si-head">
+                  <b>{together.label} together</b>
+                  {together.view === "together" ? <Chip tone="accent">open now</Chip> : null}
+                </span>
+                <span className="si-line">One table for their rooms, guests, meals and rates</span>
+              </button>
+            ) : null}
             {trip.stays.map((s, i) => {
               const here = s.id === entry.id;
+              const openNow = here && !(together.canBeTogether && together.view === "together");
               const standing = stayStanding(s);
               const nights = nightsOf(s.checkInDate, s.checkOutDate);
               const body = (
@@ -182,7 +210,7 @@ export function StayPicker({ entry }: { entry: EntryDetail }) {
                   <span className="si-head">
                     <b>Stay {i + 1}</b>
                     <span className="si-id">{s.id}</span>
-                    {here ? <Chip tone="accent">open now</Chip> : null}
+                    {openNow ? <Chip tone="accent">open now</Chip> : null}
                   </span>
                   <StayDates checkIn={s.checkInDate} checkOut={s.checkOutDate} />
                   <span className={standing.off ? "si-line stop-ink" : "si-line"}>
@@ -191,12 +219,28 @@ export function StayPicker({ entry }: { entry: EntryDetail }) {
                   {shortOf.has(s.id) ? <span className="si-short">Its rooms need choosing</span> : null}
                 </>
               );
+              if (here && together.canBeTogether && !openNow) {
+                return (
+                  <button
+                    key={s.id}
+                    type="button"
+                    className="stay-item as-btn"
+                    role="menuitem"
+                    onClick={() => {
+                      together.setView("one");
+                      setOpen(false);
+                    }}
+                  >
+                    {body}
+                  </button>
+                );
+              }
               return here ? (
                 <div key={s.id} className="stay-item here" role="menuitem" aria-current="true">
                   {body}
                 </div>
               ) : (
-                <Link key={s.id} className="stay-item" role="menuitem" href={bookingHref(s.id)}>
+                <Link key={s.id} className="stay-item" role="menuitem" href={bookingHref(s.id)} onClick={() => together.canBeTogether && together.stayIds.includes(s.id) && together.setView("one")}>
                   {body}
                 </Link>
               );
@@ -324,8 +368,8 @@ function ReturnStayDialog({ entry, fromAfter, onClose }: { entry: EntryDetail; f
       toast.success(
         out.changed.includes("rooms")
           ? `Stay ${stayNo} is set up the same as this stay`
-          : `Stay ${stayNo} copies this stay — its rooms and meal plans follow as you choose them here`,
-        { description: "It stays the same until it is priced at Negotiation." },
+          : `Stay ${stayNo} copies this stay — its guests and rooms follow as you choose them here`,
+        { description: "At Negotiation both stays are set in one table." },
       );
       onClose();
     },
@@ -357,7 +401,7 @@ function ReturnStayDialog({ entry, fromAfter, onClose }: { entry: EntryDetail; f
         <div className="rs-opts">
           <button type="button" className="rs-opt" disabled={same.isPending} onClick={() => same.mutate()}>
             <b>{same.isPending ? "Copying…" : "Same as this stay"}</b>
-            <span>The guests, children&apos;s ages, rooms, room types, meal plans and extra beds are copied from {entry.id}. They stay the same until stay {stayNo} is priced at Negotiation.</span>
+            <span>The guests, children&apos;s ages, rooms and room types start from {entry.id}. At Negotiation both stays are set in one table, and either can still be opened alone.</span>
           </button>
           <button type="button" className="rs-opt" disabled={same.isPending} onClick={different}>
             <b>Different settings</b>
@@ -639,15 +683,12 @@ export function FollowNotice({ entry }: { entry: EntryDetail }) {
   if (!from) return null;
   const view = follow.data?.following ?? null;
   const at = trip.stays.findIndex((s) => s.id === from);
-  const atInquiry = entry.currentStage === "S1";
   return (
     <>
       <div className="notice follow">
         <span className="sm">
           <b>Same as {at >= 0 ? `stay ${at + 1}` : from}</b> · {from} —{" "}
-          {atInquiry
-            ? "its guests, rooms, meal plans and extra beds are copied here until this stay is priced. Changing any of them here ends the copying."
-            : "its meal plans and extra beds are copied here until this stay is priced. Its rooms are this stay's own now."}
+          its guests and rooms are copied here at Inquiry. Changing any of them here ends the copying. At Negotiation the stays are set in one table.
         </span>
         <Button kind="quiet" compact state={stop.isPending ? "working" : "default"} workingLabel="Saving…" onClick={() => stop.mutate()}>
           Set its own

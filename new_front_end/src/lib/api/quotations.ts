@@ -192,6 +192,25 @@ export async function previewQuotationPricing(
   });
 }
 
+/** One stay's table in the trip's live price. */
+export type TripPreviewStayInput = {
+  entryId: string;
+  roomCompositions: RoomCompositionInput[];
+  discount?: { percent?: number | null; amount?: number | null } | null;
+  roomNights?: Record<string, number>;
+  roomNightDates?: Record<string, string[]>;
+};
+
+/** The stays worked in one table priced together: the trip's figures are added up on the server. */
+export async function previewTripQuotations(session: Session, entryId: string, stays: TripPreviewStayInput[]) {
+  return apiRequest<{
+    inquiryId: string;
+    currency: string;
+    stays: Array<{ entryId: string; payable: number }>;
+    totals: { subtotal: number; netReduction: number; payableSubtotal: number; payableServiceCharge: number; payableGst: number; payable: number };
+  }>(`/api/entries/${entryId}/quotation-preview/trip`, { method: "POST", session, body: { stays } });
+}
+
 export async function createQuotation(
   session: Session,
   entryId: string,
