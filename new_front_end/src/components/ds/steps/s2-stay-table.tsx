@@ -355,7 +355,7 @@ export function ValidityChip({ t }: { t: StayTable }) {
     <>
       <button
         type="button"
-        className={`rct-mini-btn${end ? "" : " bad"}`}
+        className={`glass-btn${end ? "" : " bad"}`}
         title="How long the guest has to accept this stay's price"
         onClick={() => setOpen(true)}
       >

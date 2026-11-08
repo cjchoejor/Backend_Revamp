@@ -2308,10 +2308,6 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .desk-root .rct-t tbody tr.nightband.stayhead .rce-night .rcb-mini { display: none; }
 .ds .desk-root .rct-t tbody tr.nightband.stayhead .rce-night select { width: 108px; max-width: 108px; height: 26px; font-size: 12px; }
 .ds .desk-root .rct-t tbody tr.nightband.stayhead .rct-disc { margin: 0; }
-.ds .desk-root .rct-t tbody tr.nightband.stayhead .rct-disc .btn,
-.ds .desk-root .rct-mini-btn { height: 26px; min-height: 26px; padding: 0 8px; font-size: 12px; font-weight: 600; border: 1px solid var(--line-2); border-radius: 4px; background: var(--surface); color: var(--ink); cursor: pointer; white-space: nowrap; }
-.ds .desk-root .rct-mini-btn:hover { background: var(--surface-2); }
-.ds .desk-root .rct-mini-btn.bad { border-color: var(--danger); color: var(--danger); }
 .ds .desk-root .rct-t tbody tr.nightband.stayhead .st-total { font-size: 15px; font-weight: 800; color: var(--ink); min-width: 84px; text-align: right; white-space: nowrap; }
 .ds .desk-root .rct-triptot { font-size: 13px; color: var(--ink-2); white-space: nowrap; margin-right: 8px; }
 .ds .desk-root .rct-triptot b { font-size: 17px; font-weight: 800; color: var(--ink); margin-left: 4px; }
@@ -2349,4 +2345,41 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 @media (max-width: 1500px) {
   .ds .cfg-stays-h, .ds .cfg-stay-row { grid-template-columns: 52px minmax(112px, 1fr) 56px minmax(112px, 1fr) 56px 56px minmax(84px, 0.8fr); gap: 6px; }
   .ds .cfg-stays.has-ages .cfg-stays-h, .ds .cfg-stays.has-ages .cfg-stay-row { grid-template-columns: 52px minmax(112px, 1fr) 56px minmax(112px, 1fr) 56px 56px minmax(84px, 0.8fr) minmax(70px, 0.9fr); }
+}
+
+/* Fixed discount and Valid to (2026-11-09, operator: "like glass which shadow behind it"): raised
+   glass with a soft shadow, so they read as things to press. The one place the desk draws a button
+   this way, at the operator's word; --glass is the state's colour. */
+.ds .desk-root .glass-btn {
+  --glass: var(--accent);
+  display: inline-flex; align-items: center; justify-content: center;
+  height: 34px; padding: 0 14px;
+  font: inherit; font-size: 13.5px; font-weight: 600; line-height: 1; white-space: nowrap;
+  color: color-mix(in srgb, var(--glass) 84%, black);
+  cursor: pointer;
+  border: 1px solid color-mix(in srgb, var(--glass) 36%, white);
+  border-radius: 8px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.94) 0%, rgba(255, 255, 255, 0.58) 48%, color-mix(in srgb, var(--glass) 16%, rgba(255, 255, 255, 0.6)) 100%);
+  -webkit-backdrop-filter: blur(6px) saturate(150%);
+  backdrop-filter: blur(6px) saturate(150%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.95), inset 0 -1px 0 color-mix(in srgb, var(--glass) 12%, transparent), 0 1px 2px color-mix(in srgb, var(--glass) 30%, transparent), 0 4px 10px color-mix(in srgb, var(--glass) 26%, transparent);
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+.ds .desk-root .glass-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.95), inset 0 -1px 0 color-mix(in srgb, var(--glass) 12%, transparent), 0 2px 3px color-mix(in srgb, var(--glass) 32%, transparent), 0 7px 16px color-mix(in srgb, var(--glass) 34%, transparent);
+}
+.ds .desk-root .glass-btn:active:not(:disabled) {
+  transform: translateY(1px);
+  box-shadow: inset 0 1px 3px color-mix(in srgb, var(--glass) 30%, transparent), 0 1px 1px color-mix(in srgb, var(--glass) 24%, transparent);
+}
+.ds .desk-root .glass-btn:focus-visible { outline: 2px solid var(--glass); outline-offset: 2px; }
+.ds .desk-root .glass-btn.on { --glass: var(--success); font-weight: 700; }
+.ds .desk-root .glass-btn.bad { --glass: var(--danger); }
+.ds .desk-root .glass-btn:disabled { cursor: default; color: var(--ink-2); border-color: var(--line-2); background: var(--surface-2); box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
+.ds .desk-root .glass-btn.on:disabled { color: color-mix(in srgb, var(--glass) 84%, black); border-color: color-mix(in srgb, var(--glass) 36%, white); }
+.ds .desk-root .rct-t tbody tr.nightband.stayhead .glass-btn { height: 28px; padding: 0 10px; font-size: 12px; border-radius: 6px; }
+@media (prefers-reduced-motion: reduce) {
+  .ds .desk-root .glass-btn { transition: none; }
+  .ds .desk-root .glass-btn:hover:not(:disabled), .ds .desk-root .glass-btn:active:not(:disabled) { transform: none; }
 }

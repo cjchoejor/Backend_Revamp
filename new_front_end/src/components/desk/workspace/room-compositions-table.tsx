@@ -177,7 +177,7 @@ export function FixedDiscount({
     <div className="rct-disc">
       <button
         type="button"
-        className={`btn btn-ghost${live ? " on" : ""}`}
+        className={`glass-btn${live ? " on" : ""}`}
         disabled={lockCommercial}
         title={lockCommercial ? "The discount cannot be changed here" : undefined}
         onClick={() => {
