@@ -1209,6 +1209,10 @@ model Entry {
   /// What was last copied, so a save that changes nothing copies nothing, and any room type that
   /// could not be copied, for the desk to ask about.
   followState      Json?
+  /// The desk's answer "Same as this stay" (2026-11-09, operator): the stays set up the same are
+  /// worked in ONE table at Negotiation. It outlives the copying above, which ends at Inquiry; only
+  /// "Set its own" takes it off. A soft link, like `splitFromEntryId`.
+  sameSetupAs      String?
 
   inquiry                      Inquiry                       @relation(fields: [inquiryId], references: [id])
   guestProfile                 GuestProfile?                 @relation(fields: [guestProfileId], references: [id])
@@ -1262,6 +1266,7 @@ model Entry {
   @@index([currentStage, status])
   @@index([splitFromEntryId])
   @@index([followsEntryId])
+  @@index([sameSetupAs])
   @@map("entries")
 }
 

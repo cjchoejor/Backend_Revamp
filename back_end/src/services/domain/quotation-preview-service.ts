@@ -15,7 +15,7 @@
  */
 import type { PrismaClient } from "@prisma/client";
 import { Prisma } from "@prisma/client";
-import { NotFoundError } from "../../lib/errors.js";
+import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { round2 } from "../../lib/money.js";
 import {
   applyBookingDiscountToTotals,
@@ -195,6 +195,46 @@ function discountRatio(grandTotal: Prisma.Decimal, off: Prisma.Decimal): Prisma.
   if (grandTotal.lte(ZERO)) return new Prisma.Decimal(1);
   const capped = off.gt(grandTotal) ? grandTotal : off;
   return grandTotal.sub(capped).div(grandTotal);
+}
+
+/** One stay's table for the trip's live price. */
+export type TripPreviewStay = {
+  entryId: string;
+  input: { roomCompositions: PreviewRoomComposition[]; discount?: PreviewDiscount | null };
+  opts?: Parameters<typeof buildQuotationPreview>[3];
+};
+
+/**
+ * Stays worked in one table priced together (2026-11-09): each stay through its own preview, unchanged,
+ * and the trip's figures only those added up in Decimal, so the trip and its stays cannot disagree.
+ * Writes nothing.
+ */
+export async function buildTripQuotationPreview(prisma: PrismaClient, entryId: string, stays: TripPreviewStay[]) {
+  const entry = await prisma.entry.findUnique({ where: { id: entryId }, select: { inquiryId: true } });
+  if (!entry) throw new NotFoundError("Entry");
+  const ids = [...new Set(stays.map((s) => s.entryId))];
+  if (ids.length !== stays.length) throw new ValidationError("A stay is named twice");
+  const onTrip = await prisma.entry.findMany({ where: { id: { in: ids } }, select: { id: true, inquiryId: true } });
+  for (const id of ids) {
+    const e = onTrip.find((x) => x.id === id);
+    if (!e) throw new NotFoundError(`Entry ${id}`);
+    if (e.inquiryId !== entry.inquiryId) throw new ValidationError(`${id} is not a stay of this trip`);
+  }
+  const priced = await Promise.all(stays.map((s) => buildQuotationPreview(prisma, s.entryId, s.input, s.opts)));
+  const sum = (f: (p: QuotationPreview) => number) => n2(priced.reduce((a, p) => a.add(new Prisma.Decimal(f(p))), new Prisma.Decimal(0)));
+  return {
+    inquiryId: entry.inquiryId,
+    currency: priced[0]?.currency ?? "BTN",
+    stays: priced.map((p) => ({ entryId: p.entryId, payable: p.payable })),
+    totals: {
+      subtotal: sum((p) => p.subtotal),
+      netReduction: sum((p) => p.discount?.netReduction ?? 0),
+      payableSubtotal: sum((p) => p.payableSubtotal),
+      payableServiceCharge: sum((p) => p.payableServiceCharge),
+      payableGst: sum((p) => p.payableGst),
+      payable: sum((p) => p.payable),
+    },
+  };
 }
 
 export async function buildQuotationPreview(

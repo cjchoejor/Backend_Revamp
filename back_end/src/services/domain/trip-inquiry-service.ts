@@ -2,6 +2,7 @@ import type { PrismaClient } from "@prisma/client";
 import { AppError, NotFoundError, ValidationError } from "../../lib/errors.js";
 import { setEntryGuest } from "./inquiry-caller-service.js";
 import { progressS1ToS2 } from "../../state-machines/s1-state-machine.js";
+import { progressS2ToS3 } from "../../state-machines/s2-s3-state-machine.js";
 import { unparkEntry } from "./s1-entry-service.js";
 import { parkedByTripSwitch } from "./trip-switch-service.js";
 
@@ -85,6 +86,69 @@ export async function moveTripToNegotiation(prisma: PrismaClient, actor: Actor, 
       moved.push(s.id);
     } catch (e) {
       notMoved.push({ entryId: s.id, message: words(e) });
+    }
+  }
+  return { moved, notMoved };
+}
+
+/**
+ * THE STAYS WORKED IN ONE TABLE AT NEGOTIATION (2026-11-09, operator: "if the user picks same
+ * configuration, then in s2 can it show both the stays configuration in the same table"). A stay and
+ * those set up "the same as" it (`Entry.sameSetupAs`, followed to the first of them), still live and
+ * at Negotiation. Empty when this stay stands alone, so a stay set up differently is left as it was.
+ */
+export async function staysTogether(prisma: PrismaClient, entryId: string): Promise<string[]> {
+  const entry = await prisma.entry.findUnique({ where: { id: entryId }, select: { inquiryId: true, currentStage: true, status: true } });
+  if (!entry) throw new NotFoundError("Entry");
+  if (entry.currentStage !== "S2" || (entry.status !== "ACTIVE" && entry.status !== "PARKED")) return [];
+  const all = await prisma.entry.findMany({
+    where: { inquiryId: entry.inquiryId },
+    orderBy: [{ checkInDate: "asc" }, { createdAt: "asc" }],
+    select: { id: true, sameSetupAs: true, status: true, currentStage: true },
+  });
+  const linkOf = new Map(all.map((e) => [e.id, e.sameSetupAs] as const));
+  const rootOf = (id: string) => {
+    let at = id;
+    for (let i = 0; i < 20; i++) {
+      const up = linkOf.get(at);
+      if (!up || !linkOf.has(up)) break;
+      at = up;
+    }
+    return at;
+  };
+  const mine = rootOf(entryId);
+  const group = all.filter((e) => rootOf(e.id) === mine && e.currentStage === "S2" && (e.status === "ACTIVE" || e.status === "PARKED")).map((e) => e.id);
+  return group.length > 1 ? group : [];
+}
+
+/**
+ * Move the stays worked in one table on to Set up together, as one Continue moves a trip on from
+ * Inquiry. This stay first, through its own move and every gate it has; a stay refused stays at
+ * Negotiation and is named with the reason.
+ */
+export async function moveTripToSetUp(prisma: PrismaClient, actor: Actor, entryId: string, clientVersion?: number) {
+  const entry = await prisma.entry.findUnique({ where: { id: entryId }, select: { currentStage: true, version: true } });
+  if (!entry) throw new NotFoundError("Entry");
+  if (entry.currentStage !== "S2") throw new ValidationError("This stay is not at Negotiation.");
+  const others = (await staysTogether(prisma, entryId)).filter((id) => id !== entryId);
+  await progressS2ToS3(prisma, entryId, actor.actorId, clientVersion ?? entry.version);
+  const moved: string[] = [entryId];
+  const notMoved: Array<{ entryId: string; message: string }> = [];
+  for (const id of others) {
+    try {
+      const s = await prisma.entry.findUnique({ where: { id }, select: { status: true } });
+      if (s?.status === "PARKED") {
+        if (!(await parkedByTripSwitch(prisma, id))) {
+          notMoved.push({ entryId: id, message: "It was parked by a person — resume it, then move it on its own page." });
+          continue;
+        }
+        await unparkEntry(prisma, id, actor.actorId, { cause: "TRIP_MOVES_ON", movedWith: entryId });
+      }
+      const now = await prisma.entry.findUnique({ where: { id }, select: { version: true } });
+      await progressS2ToS3(prisma, id, actor.actorId, now?.version);
+      moved.push(id);
+    } catch (e) {
+      notMoved.push({ entryId: id, message: words(e) });
     }
   }
   return { moved, notMoved };
