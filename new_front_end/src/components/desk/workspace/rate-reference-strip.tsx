@@ -1,8 +1,8 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useQueries, useQuery } from "@tanstack/react-query";
 import { useSession } from "@/hooks/use-session";
-import { getRateReference } from "@/lib/api/entries";
+import { getRateReference, type EntryRateReference } from "@/lib/api/entries";
 import { moneyOrDash } from "@/lib/desk/workspace";
 import { Help } from "@/components/ds/help";
 
@@ -78,7 +78,59 @@ export function RateReferenceStrip({
 
   const ref = query.data;
   if (!ref || ref.roomTypes.length === 0) return null;
+  return <RateReferenceView ref_={ref} compact={compact} quietNumbers={quietNumbers} />;
+}
 
+/**
+ * The rates of the stays worked in one table, once, above it (2026-11-09, operator: "this rate at
+ * nights can be shown above the table as one"). A room type at the same rates on every stay is one
+ * line; a type a stay does not have, or at other rates on another stay, says which stay it is for.
+ */
+export function TripRateReferenceStrip({ stays }: { stays: Array<{ entryId: string; roomIds: string[]; stayNo: number }> }) {
+  const { session } = useSession();
+  const reads = useQueries({
+    queries: stays.map((s) => ({
+      queryKey: ["rate-reference", s.entryId, s.roomIds.join(",")],
+      queryFn: () => getRateReference(session!, s.entryId, s.roomIds),
+      enabled: !!session && s.roomIds.length > 0,
+      staleTime: 30_000,
+    })),
+  });
+  const refs = reads.map((r) => r.data);
+  if (stays.length === 0 || refs.some((r) => !r)) return null;
+  type Row = EntryRateReference["roomTypes"][number];
+  const groups = new Map<string, { t: Row; stayNos: number[] }>();
+  refs.forEach((ref, i) => {
+    for (const t of ref!.roomTypes) {
+      const key = JSON.stringify([t.roomTypeId, t.roomRate, t.extraBedRate, t.breakfastRate, t.lunchRate, t.dinnerRate, t.roomRateSource, t.packageName, t.msrValue]);
+      const g = groups.get(key);
+      if (g) g.stayNos.push(stays[i].stayNo);
+      else groups.set(key, { t, stayNos: [stays[i].stayNo] });
+    }
+  });
+  const list = [...groups.values()];
+  const note = new Map<Row, string>();
+  for (const g of list) {
+    const everyStay = g.stayNos.length === stays.length;
+    note.set(g.t, everyStay ? "" : g.stayNos.length === 1 ? `stay ${g.stayNos[0]}` : `stays ${g.stayNos.join(" and ")}`);
+  }
+  const first = refs[0]!;
+  const plansOff = [...new Map(refs.flatMap((r) => r!.plansOff ?? []).map((p) => [JSON.stringify(p), p])).values()];
+  return <RateReferenceView ref_={{ ...first, roomTypes: list.map((g) => g.t), plansOff }} compact noteOf={(t) => note.get(t) ?? ""} />;
+}
+
+function RateReferenceView({
+  ref_: ref,
+  compact,
+  quietNumbers,
+  noteOf,
+}: {
+  ref_: EntryRateReference;
+  compact?: boolean;
+  quietNumbers?: Set<string>;
+  /** In place of the rooms beside a type's name. */
+  noteOf?: (t: EntryRateReference["roomTypes"][number]) => string;
+}) {
   const pct = (rate: number) => `${(rate * 100).toLocaleString(undefined, { maximumFractionDigits: 2 })}%`;
   const visibleAddOns = ADD_ON_COLS.filter(([key]) => ref.roomTypes.some((t) => t[key] != null));
   const roomsWord = (numbers: string[]) => {
@@ -105,7 +157,7 @@ export function RateReferenceStrip({
     >
       {ref.roomTypes.map((t, i) => (
         <div
-          key={t.roomTypeId}
+          key={`${t.roomTypeId}${i}`}
           style={{
             display: "flex",
             flexWrap: "wrap",
@@ -134,7 +186,7 @@ export function RateReferenceStrip({
           )}
           <span style={{ minWidth: 150 }}>
             <b style={{ color: "var(--ink, #1e1c19)", fontSize: 13 }}>{t.name}</b>
-            <span> · {roomsWord(t.roomNumbers)}</span>
+            {noteOf ? (noteOf(t) ? <span> · {noteOf(t)}</span> : null) : <span> · {roomsWord(t.roomNumbers)}</span>}
           </span>
           <span>
             Room <b className="mono" style={RATE}>{moneyOrDash(t.roomRate, ref.currency)}</b>

@@ -6,6 +6,7 @@ import { ArrowDownToLine, Maximize2, Minimize2, Wand2 } from "lucide-react";
 import { useSession } from "@/hooks/use-session";
 import { Help } from "@/components/ds/help";
 import { previewTripQuotations, type TripPreviewStayInput } from "@/lib/api/quotations";
+import { TripRateReferenceStrip } from "./rate-reference-strip";
 import {
   CompositionsHead,
   MEAL_COLS,
@@ -38,7 +39,10 @@ export function TripCompositionsTable({
   saveLabel,
   onSave,
   allReadOnly,
+  rateStays,
 }: {
+  /** The rooms of each stay, for the one strip of rates above the table. */
+  rateStays: Array<{ entryId: string; roomIds: string[]; stayNo: number }>;
   entryId: string;
   stays: TripTableStay[];
   ratesStartOpen: boolean;
@@ -181,6 +185,7 @@ export function TripCompositionsTable({
           </button>
         </div>
       )}
+      {ratesOpen ? <TripRateReferenceStrip stays={rateStays} /> : null}
       <div className="rce-bar">
         {!allReadOnly && (
           <>

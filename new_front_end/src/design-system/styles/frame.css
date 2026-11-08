@@ -2327,3 +2327,26 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .trip-stay-when { display: block; }
 .ds .trip-stay-band { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; padding: 7px 8px; margin-top: 8px; background: var(--paper); border-top: 2px solid var(--line-2); }
 .ds .trip-stay-band .money { font-weight: 700; white-space: nowrap; }
+
+/* Change configuration for the stays worked together (2026-11-09): a line per stay, then their room
+   types side by side, as the Inquiry step sets them. The panel keeps to its card: only the rooms scroll. */
+.ds .cfg-change.cfg-trip { grid-template-columns: minmax(0, 1fr); }
+.ds .cfg-stays { display: grid; gap: 6px; margin-top: 8px; }
+.ds .cfg-stays-h, .ds .cfg-stay-row { display: grid; grid-template-columns: 58px minmax(120px, 1fr) 64px minmax(120px, 1fr) 64px 64px minmax(92px, 0.8fr); gap: 8px; align-items: start; }
+.ds .cfg-stays.has-ages .cfg-stays-h, .ds .cfg-stays.has-ages .cfg-stay-row { grid-template-columns: 58px minmax(120px, 1fr) 64px minmax(120px, 1fr) 64px 64px minmax(92px, 0.8fr) minmax(90px, 0.9fr); }
+.ds .cfg-stays-h span { font-size: var(--t-meta); font-weight: 600; color: var(--ink-2); }
+.ds .cfg-stay-row { padding: 6px 0; border-top: 1px solid var(--line); }
+.ds .cfg-stay-row .field { margin: 0; min-width: 0; }
+.ds .cfg-stay-row .field > label { display: none; }
+.ds .cfg-stay-row .input { width: 100%; min-width: 0; }
+.ds .cfg-stay-no { padding-top: 7px; font-weight: 700; line-height: 1.15; }
+.ds .cfg-stay-no small { display: block; font-weight: 600; font-size: 11.5px; color: var(--warning); }
+.ds .cfg-stay-ages { display: flex; flex-wrap: wrap; gap: 4px; padding-top: 3px; }
+.ds .cfg-stay-ages .input { width: 44px; }
+.ds .cfg-stay-msg { grid-column: 1 / -1; margin: 0; }
+.ds .cfg-rooms-status { margin-left: 8px; font-weight: 500; }
+.ds .cfg-numbers { margin-top: 12px; }
+@media (max-width: 1500px) {
+  .ds .cfg-stays-h, .ds .cfg-stay-row { grid-template-columns: 52px minmax(112px, 1fr) 56px minmax(112px, 1fr) 56px 56px minmax(84px, 0.8fr); gap: 6px; }
+  .ds .cfg-stays.has-ages .cfg-stays-h, .ds .cfg-stays.has-ages .cfg-stay-row { grid-template-columns: 52px minmax(112px, 1fr) 56px minmax(112px, 1fr) 56px 56px minmax(84px, 0.8fr) minmax(70px, 0.9fr); }
+}

@@ -2635,20 +2635,6 @@ export function RoomCompositionsTable({
             </td>
           </tr>
         )}
-        {entryId && ratesOpen && (
-          <tr className="rct-fullrow">
-            <td colSpan={colCount}>
-              <div className="rct-full-in">
-                <RateReferenceStrip
-                  entryId={entryId}
-                  compact
-                  roomIds={sealedRoomIds}
-                  quietNumbers={new Set(sealedRoomIds.filter((id) => roomLabels?.has(id)).map((id) => roomById.get(id)?.roomNumber ?? "").filter(Boolean))}
-                />
-              </div>
-            </td>
-          </tr>
-        )}
         {limitMsg && (
           <tr className="rct-fullrow">
             <td colSpan={colCount}>

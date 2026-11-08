@@ -27,6 +27,7 @@ type Report = {
   hasQuote: boolean;
   quotationId: string | null;
   negotiated: boolean;
+  roomIds: string[];
   input: TripPreviewStayInput;
 };
 
@@ -79,6 +80,7 @@ function StaySection({
     hasQuote: !!(t.working ?? t.accepted),
     quotationId: (t.working ?? t.accepted)?.id ?? null,
     negotiated: negotiatedIn(snapshotRef.current ?? undefined),
+    roomIds: t.sealedRoomIds,
     input: { entryId: entry.id, roomCompositions: t.roomCompositions, discount: t.discountForPreview, ...roomNightMaps(t) },
   };
   const key = JSON.stringify(report);
@@ -228,6 +230,7 @@ export function TripNegotiationTable({
       saveLabel={`Save & quote ${whichWord}${anyQuote ? " again" : ""}`}
       onSave={() => saveM.mutate()}
       allReadOnly={list.length > 0 && openCount === 0}
+      rateStays={stays.flatMap((s) => (reports[s.id] ? [{ entryId: s.id, roomIds: reports[s.id].roomIds, stayNo: stayNoOf(s.id) }] : []))}
       stays={stays.map((s) => ({
         key: s.id,
         render: (grouped) =>

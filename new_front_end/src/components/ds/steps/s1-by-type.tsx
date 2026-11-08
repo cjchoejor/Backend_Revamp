@@ -655,7 +655,7 @@ type Catalog = Array<{ id: string; roomNumber: string; roomTypeId?: string; room
 type CombinedProps = NonNullable<Parameters<typeof RoomsByType>[0]["combined"]>;
 
 /** Every type in one order for every stay of a trip's house — by the hotel's rooms, lowest room first. */
-function typeOrderOf(catalog: Catalog) {
+export function typeOrderOf(catalog: Catalog) {
   const seen = new Map<string, string>();
   const rooms = [...catalog].sort((a, b) => a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true }));
   for (const r of rooms) if (r.roomTypeId && !seen.has(r.roomTypeId)) seen.set(r.roomTypeId, r.roomType?.name ?? "Room");

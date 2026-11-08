@@ -22,6 +22,7 @@ import { useBookingRooms } from "@/hooks/use-booking-rooms";
 import { QuoteValidityField, canonComps, readDiscount, shownQuotation, useStayTable, type RecordedDiscount, type StayTable } from "./s2-stay-table";
 import { useStaysTogether } from "./s2-together";
 import { TripNegotiationTable } from "./s2-trip-table";
+import { ChangeStaysTogether } from "./s2-change-together";
 import { getChildPolicy } from "@/lib/api/child-policy";
 import { openQuotationPdf } from "@/lib/api/documents";
 import { getBillingSummary } from "@/lib/api/entries";
@@ -40,7 +41,7 @@ import { RoomCompositionPlanner } from "@/components/desk/workspace/room-composi
 import { ChangeConfiguration, DecidedConfigurationChanges, WaitingConfigurationChange } from "./s2-configuration";
 import { fmtDateTime, fmtStamp, money, plural } from "@/lib/ds/format";
 import type { EntryDetail, QuotationSummary, SpeculativeHoldSummary } from "@/types/api";
-import { Choice, latestDispatched, useCommunications, useReplyAsked, DsDialog, Live, Notice, OtherWaysTabs, SubTabs, ChangeBookingMenu, StageActs, useOpenAlsoWay, PaperDrawer, QuotationSendDialog, ReasonDialog, SeeRow, StepCanvas, StepCard, Tool, atLeast, toastRefusal, type PaperRef, useBedPlan, useOpenFileTab, useRefreshEntry, useStepFlow, useFlowCard, anchorFor, revealCard, words, parkTab, declineTab } from "./kit";
+import { Choice, latestDispatched, useCommunications, useReplyAsked, DsDialog, Live, Notice, OtherWaysTabs, ChangeBookingMenu, StageActs, useOpenAlsoWay, PaperDrawer, QuotationSendDialog, ReasonDialog, SeeRow, StepCanvas, StepCard, Tool, atLeast, toastRefusal, type PaperRef, useBedPlan, useOpenFileTab, useRefreshEntry, useStepFlow, useFlowCard, anchorFor, revealCard, words, parkTab, declineTab } from "./kit";
 import { usePublishPriceDraft } from "@/lib/ds/stay-price";
 import { Help } from "@/components/ds/help";
 import type { ChangeBookingItem } from "./kit";
@@ -581,7 +582,7 @@ export function S2Negotiation({
         meta="One row per room: the guests by age, their meal plans, extra beds, any negotiated rate and the booking's discount. Saving the table prices it — that is the quotation."
       >
         {changing && together.active ? (
-          <ChangeBothStays stays={groupStays} stayNoOf={together.stayNoOf} firstId={entry.id} onClose={() => setChanging(false)} onChanged={refreshGroup} />
+          <ChangeStaysTogether stays={groupStays} stayNoOf={together.stayNoOf} onClose={() => setChanging(false)} onChanged={refreshGroup} />
         ) : changing ? (
           <ChangeConfiguration
             entry={entry}
@@ -784,56 +785,6 @@ export function S2Negotiation({
         onConfirm={(r) => releaseM.mutate(r)}
       />
     </StepCanvas>
-  );
-}
-
-/**
- * Change configuration for the stays worked together (2026-11-09): one panel, a tab per stay. Each
- * keeps what is typed while the other is looked at; saving one goes on to the next not yet changed.
- */
-function ChangeBothStays({
-  stays,
-  stayNoOf,
-  firstId,
-  onClose,
-  onChanged,
-}: {
-  stays: EntryDetail[];
-  stayNoOf: (id: string) => number;
-  firstId: string;
-  onClose: () => void;
-  onChanged: () => void;
-}) {
-  const [at, setAt] = useState(firstId);
-  const [saved, setSaved] = useState<Set<string>>(new Set());
-  return (
-    <SubTabs
-      label="Which stay"
-      value={at}
-      onPick={setAt}
-      tabs={stays.map((e) => ({
-        key: e.id,
-        label: `Stay ${stayNoOf(e.id)}${saved.has(e.id) ? " ✓" : ""}`,
-        content: (
-          <ChangeConfiguration
-            entry={e}
-            onClose={onClose}
-            onDone={() => {
-              onChanged();
-              const now = new Set(saved).add(e.id);
-              setSaved(now);
-              const next = stays.find((s) => !now.has(s.id));
-              if (next) {
-                setAt(next.id);
-                toast.success(`Stay ${stayNoOf(e.id)} is changed`, { description: `Stay ${stayNoOf(next.id)} is open — change it too, or close.` });
-              } else {
-                onClose();
-              }
-            }}
-          />
-        ),
-      }))}
-    />
   );
 }
 
