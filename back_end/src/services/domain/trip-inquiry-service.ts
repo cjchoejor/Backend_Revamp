@@ -5,6 +5,7 @@ import { progressS1ToS2 } from "../../state-machines/s1-state-machine.js";
 import { progressS2ToS3 } from "../../state-machines/s2-s3-state-machine.js";
 import { unparkEntry } from "./s1-entry-service.js";
 import { parkedByTripSwitch } from "./trip-switch-service.js";
+import { confirmReservationForDesk } from "./s4-confirmation-service.js";
 
 /**
  * A TRIP AT INQUIRY (2026-11-07, operator: "stage one can be done together here"; rulings the same
@@ -100,12 +101,19 @@ export async function moveTripToNegotiation(prisma: PrismaClient, actor: Actor, 
 export async function staysTogether(prisma: PrismaClient, entryId: string): Promise<string[]> {
   const entry = await prisma.entry.findUnique({ where: { id: entryId }, select: { inquiryId: true, currentStage: true, status: true } });
   if (!entry) throw new NotFoundError("Entry");
-  if (entry.currentStage !== "S2" || (entry.status !== "ACTIVE" && entry.status !== "PARKED")) return [];
+  if (entry.status !== "ACTIVE" && entry.status !== "PARKED") return [];
+  if (entry.currentStage !== "S2" && entry.currentStage !== "S3" && entry.currentStage !== "S4") return [];
   const all = await prisma.entry.findMany({
     where: { inquiryId: entry.inquiryId },
     orderBy: [{ checkInDate: "asc" }, { createdAt: "asc" }],
     select: { id: true, sameSetupAs: true, status: true, currentStage: true },
   });
+  // At Set up and Reserve together is about the papers (2026-11-09), so every stay at this step
+  // can be viewed together, set up the same or not. Only Negotiation's shared table needs the same setup.
+  if (entry.currentStage !== "S2") {
+    const here = all.filter((e) => e.currentStage === entry.currentStage && (e.status === "ACTIVE" || e.status === "PARKED")).map((e) => e.id);
+    return here.length > 1 ? here : [];
+  }
   const linkOf = new Map(all.map((e) => [e.id, e.sameSetupAs] as const));
   const rootOf = (id: string) => {
     let at = id;
@@ -146,6 +154,33 @@ export async function moveTripToSetUp(prisma: PrismaClient, actor: Actor, entryI
       }
       const now = await prisma.entry.findUnique({ where: { id }, select: { version: true } });
       await progressS2ToS3(prisma, id, actor.actorId, now?.version);
+      moved.push(id);
+    } catch (e) {
+      notMoved.push({ entryId: id, message: words(e) });
+    }
+  }
+  return { moved, notMoved };
+}
+
+/**
+ * Reserve the stays viewed together (2026-11-09, operator: "do the same for proforma and reserve").
+ * This stay first, through its own reservation and every check it has; then each other stay at Set
+ * up. A stay refused stays at Set up and is named with the reason. Each stay freezes its own price
+ * and gets its own voucher; nothing is sent.
+ */
+export async function reserveTrip(prisma: PrismaClient, actor: Actor, entryId: string, clientVersion?: number) {
+  const entry = await prisma.entry.findUnique({ where: { id: entryId }, select: { currentStage: true, version: true } });
+  if (!entry) throw new NotFoundError("Entry");
+  if (entry.currentStage !== "S3") throw new ValidationError("This stay is not at Set up.");
+  const others = (await staysTogether(prisma, entryId)).filter((id) => id !== entryId);
+  const by = { actorId: actor.actorId, actorLevel: actor.level };
+  await confirmReservationForDesk(prisma, entryId, by, { version: clientVersion ?? entry.version });
+  const moved: string[] = [entryId];
+  const notMoved: Array<{ entryId: string; message: string }> = [];
+  for (const id of others) {
+    try {
+      const now = await prisma.entry.findUnique({ where: { id }, select: { version: true } });
+      await confirmReservationForDesk(prisma, id, by, { version: now?.version });
       moved.push(id);
     } catch (e) {
       notMoved.push({ entryId: id, message: words(e) });

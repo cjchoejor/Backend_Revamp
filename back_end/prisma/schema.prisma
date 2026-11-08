@@ -3722,7 +3722,7 @@ model RefundRequest {
 model TripPaper {
   id             String    @id
   inquiryId      String
-  /// QUOTATION (the proforma may follow).
+  /// QUOTATION | PROFORMA | VOUCHER
   kind           String
   documentNumber String
   versionNumber  Int       @default(1)

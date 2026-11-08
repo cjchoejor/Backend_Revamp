@@ -1,4 +1,4 @@
-import { Prisma, Stage, type PrismaClient } from "@prisma/client";
+import { Prisma, Stage, type ActorLevel, type PrismaClient } from "@prisma/client";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { allocateReadableId } from "../../lib/readable-id.js";
 import { printedQuotationNumber, paperNumber } from "../../lib/document-numbers.js";
@@ -31,6 +31,11 @@ import { recordCommunicationAcknowledgement } from "./communication-acknowledgem
  */
 
 export type Actor = { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" };
+
+/** Who makes a trip's paper when nobody pressed anything (2026-11-09): it is kept in step by itself. */
+export const SYSTEM_ACTOR: TripPaperMaker = { actorId: "SYSTEM", actorLevel: "SYSTEM" as ActorLevel };
+
+export type TripPaperMaker = { actorId: string; actorLevel: ActorLevel };
 
 export type TripMember = {
   entryId: string;
@@ -161,7 +166,7 @@ export async function describeTripQuotation(prisma: PrismaClient, entryId: strin
  * its own from the quotation counter, after that the next version of the same number. Nothing is
  * made when the latest already holds exactly these stays' papers.
  */
-export async function makeTripQuotation(prisma: PrismaClient, entryId: string, actor: Actor) {
+export async function makeTripQuotation(prisma: PrismaClient, entryId: string, actor: TripPaperMaker) {
   const inquiryId = await tripOfEntry(prisma, entryId);
   const stays = await readMembers(prisma, inquiryId);
   const s = standing(stays);
@@ -181,6 +186,23 @@ export async function makeTripQuotation(prisma: PrismaClient, entryId: string, a
 }
 
 /**
+ * The trip's quotation made by itself (2026-11-09, operator: "it should generated the trips quotation
+ * automatically, even if the configurations are done separetly"). Run on every read of it, so it
+ * follows whatever made a stay's quotation change: a save at Negotiation, a room change, a date move.
+ * It has no figures of its own and makes nothing while it already holds these stays' papers. It
+ * never stops the read; a trip that cannot have one yet says why on the card.
+ */
+export async function keepTripQuotationInStep(prisma: PrismaClient, entryId: string) {
+  try {
+    const inquiryId = await tripOfEntry(prisma, entryId);
+    if (!standing(await readMembers(prisma, inquiryId)).canMake) return;
+    await makeTripQuotation(prisma, entryId, SYSTEM_ACTOR);
+  } catch (e) {
+    console.error("[trip-quotation] could not be kept in step", entryId, e);
+  }
+}
+
+/**
  * One version of a trip's paper (2026-11-07): nothing new while the latest in force holds exactly
  * these stays' papers; otherwise the next version of the trip's number (a new number from the
  * counter the first time), the earlier one marked replaced. Its total is only the stays' totals.
@@ -189,11 +211,11 @@ export async function saveTripPaperVersion(
   prisma: PrismaClient,
   input: {
     inquiryId: string;
-    kind: "QUOTATION" | "PROFORMA";
-    counter: "QUOTATION" | "INVOICE";
+    kind: "QUOTATION" | "PROFORMA" | "VOUCHER";
+    counter: "QUOTATION" | "INVOICE" | "VOUCHER";
     members: Array<{ entryId: string; paperId: string; total: string }>;
     validUntil: Date | null;
-    actor: Actor;
+    actor: TripPaperMaker;
     traceMembers: unknown[];
   },
 ) {

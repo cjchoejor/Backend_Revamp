@@ -20,7 +20,7 @@ import { afterPaymentRecorded, recordPaymentTx } from "./s3-folio-service.js";
 import { evaluateAdvancePaymentCondition } from "./s3-payment-service.js";
 import { buildEntryBillingSummary } from "./entry-billing-summary-service.js";
 import { recordCommunicationAcknowledgement } from "./communication-acknowledgement-service.js";
-import { saveTripPaperVersion, sameMembers, tripOfEntry, type Actor } from "./trip-paper-service.js";
+import { saveTripPaperVersion, sameMembers, SYSTEM_ACTOR, tripOfEntry, type Actor, type TripPaperMaker } from "./trip-paper-service.js";
 
 /**
  * A TRIP'S PROFORMA (2026-11-07, operator: each stay keeps its own proforma, the trip has one of its
@@ -192,7 +192,7 @@ export async function describeTripProforma(prisma: PrismaClient, entryId: string
 }
 
 /** Make the trip's proforma from the stays' own proformas of this pass. */
-export async function makeTripProforma(prisma: PrismaClient, entryId: string, actor: Actor) {
+export async function makeTripProforma(prisma: PrismaClient, entryId: string, actor: TripPaperMaker) {
   const inquiryId = await tripOfEntry(prisma, entryId);
   const stays = await readStays(prisma, inquiryId);
   const reason = standing(stays);
@@ -208,6 +208,17 @@ export async function makeTripProforma(prisma: PrismaClient, entryId: string, ac
     actor,
     traceMembers: members.map((m) => ({ entryId: m.entryId, invoiceId: m.paperId, number: paperNumber(m.number, m.versionNumber), total: m.total, advanceAsked: m.advanceAsked })),
   });
+}
+
+/** The trip's proforma, made by itself on every read, as the trip's quotation is (2026-11-09). */
+export async function keepTripProformaInStep(prisma: PrismaClient, entryId: string) {
+  try {
+    const inquiryId = await tripOfEntry(prisma, entryId);
+    if (standing(await readStays(prisma, inquiryId))) return;
+    await makeTripProforma(prisma, entryId, SYSTEM_ACTOR);
+  } catch (e) {
+    console.error("[trip-proforma] could not be kept in step", entryId, e);
+  }
 }
 
 async function loadPaper(prisma: PrismaClient, tripPaperId: string) {

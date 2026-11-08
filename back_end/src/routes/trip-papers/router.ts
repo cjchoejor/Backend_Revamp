@@ -11,7 +11,17 @@ import {
   renderTripQuotationHtml,
   renderTripQuotationPdf,
   sendTripQuotation,
+  keepTripQuotationInStep,
 } from "../../services/domain/trip-paper-service.js";
+import {
+  answerTripVoucher,
+  describeTripVoucher,
+  keepTripVoucherInStep,
+  markTripVoucherNotSent,
+  renderTripVoucherHtml,
+  renderTripVoucherPdf,
+  sendTripVoucher,
+} from "../../services/domain/trip-voucher-service.js";
 import {
   answerTripProforma,
   describeTripPayment,
@@ -24,9 +34,10 @@ import {
   renderTripProformaHtml,
   renderTripProformaPdf,
   sendTripProforma,
+  keepTripProformaInStep,
 } from "../../services/domain/trip-proforma-service.js";
 
-/** Which kind of trip paper an id names — the paper routes serve both. */
+/** Which kind of trip paper an id names — the paper routes serve all three. */
 async function kindOf(id: string) {
   const p = await prisma.tripPaper.findUnique({ where: { id }, select: { kind: true } });
   return p?.kind ?? "QUOTATION";
@@ -46,6 +57,7 @@ const actorOf = (req: { actor?: { actorId: string; level: "L1" | "L2" | "L3" | "
 tripPapersRouter.get("/entries/:id/trip-quotation", requireActorLevel("L1"), async (req, res, next) => {
   try {
     res.set("Cache-Control", "no-store");
+    await keepTripQuotationInStep(prisma, req.params.id);
     res.json(await describeTripQuotation(prisma, req.params.id));
   } catch (error) {
     next(error);
@@ -64,6 +76,7 @@ tripPapersRouter.post("/entries/:id/trip-quotation", requireActorLevel("L1"), as
 tripPapersRouter.get("/entries/:id/trip-proforma", requireActorLevel("L1"), async (req, res, next) => {
   try {
     res.set("Cache-Control", "no-store");
+    await keepTripProformaInStep(prisma, req.params.id);
     res.json(await describeTripProforma(prisma, req.params.id));
   } catch (error) {
     next(error);
@@ -79,13 +92,26 @@ tripPapersRouter.post("/entries/:id/trip-proforma", requireActorLevel("L1"), asy
   }
 });
 
+tripPapersRouter.get("/entries/:id/trip-voucher", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.set("Cache-Control", "no-store");
+    await keepTripVoucherInStep(prisma, req.params.id);
+    res.json(await describeTripVoucher(prisma, req.params.id));
+  } catch (error) {
+    next(error);
+  }
+});
+
 tripPapersRouter.get("/trip-papers/:id/preview-html", requireActorLevel("L1"), async (req, res, next) => {
   try {
     const opts = { hidePrices: req.query.prices === "none", nightsMode: readNightsMode(req.query.nights) };
+    const kind = await kindOf(req.params.id);
     const { html } =
-      (await kindOf(req.params.id)) === "PROFORMA"
-        ? await renderTripProformaHtml(prisma, req.params.id, opts)
-        : await renderTripQuotationHtml(prisma, req.params.id, opts);
+      kind === "VOUCHER"
+        ? await renderTripVoucherHtml(prisma, req.params.id, opts)
+        : kind === "PROFORMA"
+          ? await renderTripProformaHtml(prisma, req.params.id, opts)
+          : await renderTripQuotationHtml(prisma, req.params.id, opts);
     res.set("Cache-Control", "no-store");
     res.type("html").send(html);
   } catch (error) {
@@ -96,10 +122,13 @@ tripPapersRouter.get("/trip-papers/:id/preview-html", requireActorLevel("L1"), a
 tripPapersRouter.get("/trip-papers/:id/pdf", requireActorLevel("L1"), async (req, res, next) => {
   try {
     const opts = { hidePrices: req.query.prices === "none", nightsMode: readNightsMode(req.query.nights) };
+    const kind = await kindOf(req.params.id);
     const { bytes, filename } =
-      (await kindOf(req.params.id)) === "PROFORMA"
-        ? await renderTripProformaPdf(prisma, req.params.id, opts)
-        : await renderTripQuotationPdf(prisma, req.params.id, opts);
+      kind === "VOUCHER"
+        ? await renderTripVoucherPdf(prisma, req.params.id, opts)
+        : kind === "PROFORMA"
+          ? await renderTripProformaPdf(prisma, req.params.id, opts)
+          : await renderTripQuotationPdf(prisma, req.params.id, opts);
     res.set("Content-Type", "application/pdf");
     res.set("Content-Disposition", `inline; filename="${filename}"`);
     res.send(bytes);
@@ -116,10 +145,13 @@ const sendSchema = z.object({
 
 tripPapersRouter.post("/trip-papers/:id/send", requireActorLevel("L1"), validateBody(sendSchema), async (req, res, next) => {
   try {
+    const kind = await kindOf(req.params.id);
     res.json(
-      (await kindOf(req.params.id)) === "PROFORMA"
-        ? await sendTripProforma(prisma, req.params.id, actorOf(req as never), req.body)
-        : await sendTripQuotation(prisma, req.params.id, actorOf(req as never), req.body),
+      kind === "VOUCHER"
+        ? await sendTripVoucher(prisma, req.params.id, actorOf(req as never), req.body)
+        : kind === "PROFORMA"
+          ? await sendTripProforma(prisma, req.params.id, actorOf(req as never), req.body)
+          : await sendTripQuotation(prisma, req.params.id, actorOf(req as never), req.body),
     );
   } catch (error) {
     next(error);
@@ -133,11 +165,24 @@ const answerSchema = z.object({
 
 tripPapersRouter.post("/trip-papers/:id/answer", requireActorLevel("L1"), validateBody(answerSchema), async (req, res, next) => {
   try {
+    const kind = await kindOf(req.params.id);
     res.json(
-      (await kindOf(req.params.id)) === "PROFORMA"
-        ? await answerTripProforma(prisma, req.params.id, actorOf(req as never), req.body)
-        : await answerTripQuotation(prisma, req.params.id, actorOf(req as never), req.body),
+      kind === "VOUCHER"
+        ? await answerTripVoucher(prisma, req.params.id, actorOf(req as never), req.body)
+        : kind === "PROFORMA"
+          ? await answerTripProforma(prisma, req.params.id, actorOf(req as never), req.body)
+          : await answerTripQuotation(prisma, req.params.id, actorOf(req as never), req.body),
     );
+  } catch (error) {
+    next(error);
+  }
+});
+
+const notSentSchema = z.object({ note: z.string().trim().max(500).nullable().optional() });
+
+tripPapersRouter.post("/trip-papers/:id/not-sent", requireActorLevel("L1"), validateBody(notSentSchema), async (req, res, next) => {
+  try {
+    res.json(await markTripVoucherNotSent(prisma, req.params.id, actorOf(req as never), req.body));
   } catch (error) {
     next(error);
   }

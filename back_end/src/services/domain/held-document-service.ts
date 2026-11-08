@@ -1,6 +1,6 @@
 import { paperNumber, printedProformaNumber, printedQuotationNumber, proformaNumberOf } from "../../lib/document-numbers.js";
 import { cleanPhone } from "../../lib/phone-numbers.js";
-import type { PrismaClient } from "@prisma/client";
+import { CommunicationChannel, type PrismaClient } from "@prisma/client";
 import { resolveSendTo } from "../../lib/send-to.js";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { resendConfirmationVoucher } from "./s4-confirmation-service.js";
@@ -115,6 +115,53 @@ async function voucherNumbersFor(prisma: PrismaClient, rows: { kind: string; doc
     for (const i of inv) out.set(i.id, printedProformaNumber(i));
   }
   return out;
+}
+
+/**
+ * A stay's held voucher went out as part of its trip's voucher (2026-11-09): one email or WhatsApp,
+ * the trip's. The desk's choice is answered here for this stay and the guest's answer is awaited
+ * from now, as for a voucher sent on its own. A voucher already answered for is left as it is.
+ */
+export async function sendHeldVoucherWithTrip(
+  prisma: PrismaClient,
+  input: { entryId: string; reservationId: string; actor: Actor; channel: CommunicationChannel; sentTo: string | null; tripNumber: string },
+) {
+  const row = await prisma.heldDocument.findFirst({
+    where: { entryId: input.entryId, kind: "CONFIRMATION_VOUCHER", documentId: input.reservationId, decision: null },
+  });
+  if (!row) return false;
+  const note = `Sent with the trip's voucher ${input.tripNumber}`;
+  const windows = await requireActiveConfigValue<Record<string, number>>(prisma, "acknowledgement.windowPerType").catch(() => null);
+  await armVoucherReplyWindow(prisma, {
+    reservationId: input.reservationId,
+    actorId: input.actor.actorId,
+    voucherAckSeconds: Number((windows as Record<string, number> | null)?.voucher ?? 172800),
+    channel: input.channel,
+    summary: `Confirmation voucher sent with the trip's voucher ${input.tripNumber}`,
+  });
+  const now = new Date();
+  const decision = input.channel === CommunicationChannel.EMAIL ? "SENT_EMAIL" : "SENT_WHATSAPP";
+  await prisma.heldDocument.update({
+    where: { id: row.id },
+    data: { decision, sentTo: input.sentTo, note, decidedAt: now, decidedBy: input.actor.actorId },
+  });
+  await prisma.traceEvent
+    .create({
+      data: {
+        eventType: "DOCUMENT.SENT",
+        actorId: input.actor.actorId,
+        actorLevel: input.actor.actorLevel,
+        entityType: "HeldDocument",
+        entityId: row.id,
+        operation: "UPDATE",
+        timestamp: now,
+        entryId: row.entryId,
+        payload: { heldDocumentId: row.id, kind: row.kind, documentId: row.documentId, reason: row.reason, channel: input.channel, sentTo: input.sentTo, note, viaTripPaper: input.tripNumber },
+        createdBy: input.actor.actorId,
+      },
+    })
+    .catch(() => {});
+  return true;
 }
 
 export async function decideHeldDocument(

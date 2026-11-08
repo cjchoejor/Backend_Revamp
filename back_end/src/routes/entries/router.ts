@@ -57,7 +57,7 @@ import {
   stopFollowing,
 } from "../../services/domain/trip-follow-service.js";
 import { setEntryGuest, updateEntryCaller, updateEntrySource } from "../../services/domain/inquiry-caller-service.js";
-import { moveTripToNegotiation, nameGuestOnTripStays, moveTripToSetUp, staysTogether } from "../../services/domain/trip-inquiry-service.js";
+import { moveTripToNegotiation, nameGuestOnTripStays, moveTripToSetUp, reserveTrip, staysTogether } from "../../services/domain/trip-inquiry-service.js";
 import { CAME_IN_AS_VALUES } from "../../lib/inquiry-came-in-as.js";
 import { callerRequestSchema } from "../../dtos/02-inquiries/request-schemas.js";
 import { runPostCheckoutInspectionWorker } from "../../workers/w9-post-checkout-inspection-worker.js";
@@ -220,6 +220,16 @@ entriesRouter.post("/:id/trip/to-set-up", requireActorLevel("L1"), async (req, r
   try {
     const version = typeof req.body?.version === "number" ? req.body.version : undefined;
     res.json(await moveTripToSetUp(prisma, { actorId: req.actor!.actorId, level: req.actor!.level }, req.params.id, version));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** The stays viewed together reserved at once, each through its own checks; a refusal names the stay. */
+entriesRouter.post("/:id/trip/reserve", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const version = typeof req.body?.version === "number" ? req.body.version : undefined;
+    res.json(await reserveTrip(prisma, { actorId: req.actor!.actorId, level: req.actor!.level }, req.params.id, version));
   } catch (e) {
     next(e);
   }
