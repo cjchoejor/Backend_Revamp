@@ -2429,7 +2429,7 @@ export function ReasonDialog({
 
 export type PaperRef =
   | { kind: "quotation"; id: string; frozen?: boolean; label: string }
-  | { kind: "trip"; id: string; label: string; tripKind?: "QUOTATION" | "PROFORMA" }
+  | { kind: "trip"; id: string; label: string; tripKind?: "QUOTATION" | "PROFORMA" | "VOUCHER" }
   | { kind: "invoice"; id: string; frozen?: boolean; label: string; notice?: string; issued?: boolean; invoiceType?: string }
   | { kind: "voucher"; reservationId: string; label: string }
   | { kind: "cancellation"; entryId: string; label: string }
@@ -2652,9 +2652,9 @@ export function PaperDrawer({ paper, onClose }: { paper: PaperRef | null; onClos
           </div>
           {/* The paper's faces, as choice buttons the eye finds (2026-10-30, operator: "even in
               preview it should have that option, and make those buttons prominent"). */}
-          {paper.kind === "quotation" || (paper.kind === "trip" && paper.tripKind !== "PROFORMA") || hasNights ? (
+          {paper.kind === "quotation" || (paper.kind === "trip" && (paper.tripKind ?? "QUOTATION") === "QUOTATION") || hasNights ? (
             <div className="paper-faces">
-              {paper.kind === "quotation" || (paper.kind === "trip" && paper.tripKind !== "PROFORMA") ? <PricesChoice hidden={noPrices} onChange={setNoPrices} /> : null}
+              {paper.kind === "quotation" || (paper.kind === "trip" && (paper.tripKind ?? "QUOTATION") === "QUOTATION") ? <PricesChoice hidden={noPrices} onChange={setNoPrices} /> : null}
               {hasNights ? <NightsChoice each={nightsEach} onChange={setNightsEach} of={nightsOf} /> : null}
             </div>
           ) : null}
@@ -3389,6 +3389,9 @@ export function useRefreshEntry(entryId: string) {
       ["closure-readiness", entryId],
       ["room-inspections", entryId],
       ["held-documents", entryId],
+      ["trip-quotation"],
+      ["trip-proforma"],
+      ["trip-voucher"],
       ["room-chart"],
       ...extra,
     ];

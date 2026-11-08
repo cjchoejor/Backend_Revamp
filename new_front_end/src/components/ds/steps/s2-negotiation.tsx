@@ -690,37 +690,10 @@ export function S2Negotiation({
           it — so the round trip "price it · read what that produced" ran down the whole step and
           back. Its VERSION LIST stays at the foot of the step: it is a record to look up, not
           part of the work, and the two swapped places rather than travelling together. */}
+      {/* Viewing the stays together shows only the trip's quotation, and Send sends that one; each
+          stay's own shows when they are viewed one at a time (2026-11-09, operator). */}
       {together.active ? (
-        <>
-          {[entry, ...together.others]
-            .sort((a, b) => together.stayNoOf(a.id) - together.stayNoOf(b.id))
-            .map((e) => {
-              const q = shownQuotation(e);
-              const n = together.stayNoOf(e.id);
-              if (!q) {
-                return e.id === entry.id ? (
-                  <StepCard key={e.id} flow="quotation" flowAfter="table" title={`Stay ${n} · The quotation`} icon="file">
-                    <span className="sm">Nothing is priced yet — the table&rsquo;s Save makes the quotation.</span>
-                  </StepCard>
-                ) : null;
-              }
-              return (
-                <QuotationCard
-                  key={e.id}
-                  entry={e}
-                  q={q}
-                  stayNo={n}
-                  plain={e.id !== entry.id}
-                  editable={e.status === "ACTIVE" || e.status === "PARKED" ? editable || e.id !== entry.id : false}
-                  elevated={elevated}
-                  tz={tz}
-                  nowMs={clock.now}
-                  onSend={() => setSendTarget({ entry: e, q })}
-                  refreshKeys={extraKeys}
-                />
-              );
-            })}
-        </>
+        <TripQuotationCard entry={entry} editable={editable} inFlow />
       ) : shown ? (
         <QuotationCard
           entry={entry}
@@ -739,8 +712,6 @@ export function S2Negotiation({
         </StepCard>
       ) : null}
 
-      {/* A trip of several stays has one quotation of its own as well (2026-11-07, operator). */}
-      <TripQuotationCard entry={entry} editable={editable} />
 
 
       {/* "The quote" card was removed (2026-10-12, operator: "keep the internal note in the pop up

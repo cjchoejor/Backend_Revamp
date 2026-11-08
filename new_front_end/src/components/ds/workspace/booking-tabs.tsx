@@ -45,6 +45,7 @@ import { fmtDateTime, fmtDay, fmtStamp, fmtStay, hotelFormParts, money, plural }
 import { STEP_NAMES, stepNoOfStage } from "@/lib/ds/steps";
 import { isHousekeeping, traceWords } from "@/lib/ds/trace-words";
 import type { TraceEvent } from "@/lib/trace/humanize";
+import { StayBand, TripPapersShelf, useTripStays } from "./trip-papers-shelf";
 import { Choice, DsDialog, Fact, Facts, PapersCard, ReasonDialog, StepCard, SubTabs, Tool, atLeast, toastRefusal, useRefreshEntry, NotSentChip } from "@/components/ds/steps/kit";
 import { FolioDocumentsBlock } from "@/components/desk/workspace/folio-documents";
 import { useHeldDocuments } from "@/components/ds/workspace/held-papers";
@@ -1338,11 +1339,18 @@ export function DocumentsView({
   const heldOpen = sealed ? 0 : heldDocs.filter((h) => h.decision == null).length;
   // One sub-tab per kind of paper (2026-10-12, operator: "for papers it should be divided among
   // different types of papers"). A kind with nothing in it has no tab.
-  const quotes = (entry.quotations ?? []).length;
   const invoices = entry.folio?.invoices ?? [];
-  const proformas = invoices.filter((i) => i.invoiceType === "PROFORMA").length;
   const bills = invoices.filter((i) => i.invoiceType !== "PROFORMA").length;
-  const vouchers = Math.max(entry.reservations?.length ?? 0, entry.reservation?.id ? 1 : 0) + (entry.status === "CANCELLED" ? 1 : 0);
+  // A trip's papers: together (the trip's own) or stay by stay (2026-11-09, operator).
+  const trip = useTripStays(entry);
+  const quotesOf = (e: EntryDetail) => (e.quotations ?? []).length;
+  const proformasOf = (e: EntryDetail) => (e.folio?.invoices ?? []).filter((i) => i.invoiceType === "PROFORMA").length;
+  const vouchersOf = (e: EntryDetail) => Math.max(e.reservations?.length ?? 0, e.reservation?.id ? 1 : 0) + (e.status === "CANCELLED" ? 1 : 0);
+  const sumOf = (f: (e: EntryDetail) => number) => trip.stays.reduce((n, e) => n + f(e), 0);
+  const quotes = sumOf(quotesOf);
+  const proformas = sumOf(proformasOf);
+  const vouchers = sumOf(vouchersOf);
+  const otherBills = trip.stays.filter((e) => e.id !== entry.id && (e.folio?.invoices ?? []).some((i) => i.invoiceType !== "PROFORMA"));
   const sent = communications.filter((c) => c.direction !== "INBOUND");
   // A replaced paper awaits no answer — only the one in force does (2026-10-13).
   const awaiting = sent.filter((c) => c.sendStatus === "DISPATCHED" && !replySettled(c) && !c.superseded && !c.held).length;
@@ -1368,11 +1376,21 @@ export function DocumentsView({
           <SubTabs
             label="Documents"
             tabs={[
-              quotes ? { key: "quotations", label: <>Quotations{count(quotes)}</>, content: <PapersCard entry={entry} show="quotes" title="Quotations" /> } : null,
-              proformas
-                ? { key: "proformas", label: <>Proforma invoices{count(proformas)}</>, content: <PapersCard entry={entry} show="proformas" title="Proforma invoices" /> }
+              quotes
+                ? {
+                    key: "quotations",
+                    label: <>Quotations{count(quotes)}</>,
+                    content: trip.isTrip ? <TripPapersShelf entry={entry} show="quotes" title="Quotations" sealed={sealed} has={(e) => quotesOf(e) > 0} /> : <PapersCard entry={entry} show="quotes" title="Quotations" />,
+                  }
                 : null,
-              bills || folioLive
+              proformas
+                ? {
+                    key: "proformas",
+                    label: <>Proforma invoices{count(proformas)}</>,
+                    content: trip.isTrip ? <TripPapersShelf entry={entry} show="proformas" title="Proforma invoices" sealed={sealed} has={(e) => proformasOf(e) > 0} /> : <PapersCard entry={entry} show="proformas" title="Proforma invoices" />,
+                  }
+                : null,
+              bills || folioLive || otherBills.length
                 ? {
                     key: "bills",
                     label: <>Bills &amp; statements{count(bills)}</>,
@@ -1386,12 +1404,23 @@ export function DocumentsView({
                             <FolioDocumentsBlock entry={entry} stage="S7" />
                           </Tool>
                         ) : null}
+                        {otherBills.map((e) => (
+                          // A stay's bill is its own, so a trip has no bill together.
+                          <div key={e.id} className="trip-stay-block">
+                            <StayBand stay={e} stayNo={trip.stayNoOf(e.id)} />
+                            <PapersCard entry={e} show="bills" title="Bills" withFolioDocs={false} />
+                          </div>
+                        ))}
                       </>
                     ),
                   }
                 : null,
               vouchers
-                ? { key: "vouchers", label: <>Vouchers{count(vouchers)}</>, content: <PapersCard entry={entry} show="others" title="Vouchers" withFolioDocs={false} /> }
+                ? {
+                    key: "vouchers",
+                    label: <>Vouchers{count(vouchers)}</>,
+                    content: trip.isTrip ? <TripPapersShelf entry={entry} show="others" title="Vouchers" sealed={sealed} has={(e) => vouchersOf(e) > 0} /> : <PapersCard entry={entry} show="others" title="Vouchers" withFolioDocs={false} />,
+                  }
                 : null,
               sent.length
                 ? {

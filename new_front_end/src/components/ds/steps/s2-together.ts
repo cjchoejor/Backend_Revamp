@@ -8,6 +8,9 @@ import type { EntryDetail } from "@/types/api";
 
 export type TripView = "together" | "one";
 
+/** Negotiation's shared table, and from there the trip's papers at Set up and Reserve (2026-11-09). */
+const WORKED_TOGETHER: string[] = ["S2", "S3", "S4"];
+
 const VIEW_EVENT = "desk:trip-view";
 const keyOf = (inquiryId: string) => `desk:trip-view:${inquiryId}`;
 
@@ -57,9 +60,9 @@ export function useStaysTogether(entry: EntryDetail | null) {
   const q = useQuery({
     queryKey: ["trip-together", entry?.id, entry?.updatedAt],
     queryFn: () => getStaysTogether(session!, entry!.id),
-    enabled: !!session && !!entry && many && entry.currentStage === "S2",
+    enabled: !!session && !!entry && many && WORKED_TOGETHER.includes(entry.currentStage),
   });
-  const stayIds = entry?.currentStage === "S2" ? (q.data?.stayIds ?? []) : [];
+  const stayIds = entry && WORKED_TOGETHER.includes(entry.currentStage) ? (q.data?.stayIds ?? []) : [];
   const otherIds = stayIds.filter((id) => id !== entry?.id);
   const reads = useQueries({
     queries: otherIds.map((id) => ({

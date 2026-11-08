@@ -36,6 +36,8 @@ import { PLAN_LABEL, dueLabel } from "@/components/desk/workspace/advance-settle
 import { PaymentPlanCard } from "./s3-money";
 import type { EntryDetail, PaymentStatusSummary, QuotationSummary } from "@/types/api";
 import { PaymentsButton } from "./payments-button";
+import { useStaysTogether } from "./s2-together";
+import { TripVoucherCard, useTripVoucher } from "./s4-trip-voucher";
 import { DsDialog, FactBox, FactLine, Facts, Fact, Live, OnRecord, PaperDrawer, SendPaperPanel, StepCanvas, StepCard, Tool, AnswerLine, useReplyAsked, atLeast, currentPassStart, goToStepCard, latestDispatched, toastRefusal, useCommunications, useFinishWhenDone, useRefreshEntry, useStepMode, useStepPane, words, type FactState, type PaperRef, NightsChoice, NotSentChip } from "./kit";
 import { BookingOtherWays } from "./s4-other-ways";
 import { roomsHeldWord } from "./s2-shared";
@@ -149,18 +151,29 @@ export function S4Reserve({
   // Reserve in the stage layout (2026-10-29, operator: "now can we make the new UI changes to stage
   // 4 and 5"): its Rooms tab became Change booking's "Move a room", opened in the page as at Set up.
   const stepPane = useStepPane();
+  // Viewing the stays together shows only the trip's voucher, once every stay is reserved (2026-11-09).
+  const together = useStaysTogether(past ? null : entry);
+  const tripVoucher = useTripVoucher(entry);
+  const tripVoucherShown = together.active && !!tripVoucher.data?.current;
   return (
     <StepCanvas past={past}>
       {confirmed ? (
         <>
           {/* The work first — the voucher and the guest's answer, which Arrival waits for — then
               the record of what was reserved. */}
-          <VoucherCard entry={entry} />
+          {tripVoucherShown ? <TripVoucherCard entry={entry} editable={!past} inFlow /> : <VoucherCard entry={entry} />}
           {/* The pre-arrival tasks are Arrival's (SIG-S5 §2.5 — "created and updated at S5"; the
               operator, 2026-10-29: "if it's for stage 5 then keep it at stage 5"). */}
           {/* The advance moved to the step line's Payments (2026-11-07, operator: "the advance section
               here in s4 to be moved to menu buttons, maybe with a name as payments"). */}
           <ReservePayments entry={entry} past={past} />
+          {together.active ? (
+            <p className="notice next" role="status">
+              <span>
+                What follows is <b>Stay {together.stayNoOf(entry.id)}</b>&rsquo;s — open the other stay from the top to see its own.
+              </span>
+            </p>
+          ) : null}
           <WhatReserveDecided entry={entry} />
         </>
       ) : (
@@ -999,7 +1012,9 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
   const onWhatsApp = decided?.decision === "SENT_WHATSAPP";
   const notSent = decided?.decision === "NOT_SENT";
   const emailed = emailEvents.some((t) => t.eventType.endsWith(".SENT"));
-  const sent = emailed || onWhatsApp;
+  // Gone out inside the trip's voucher, one email for the stays (2026-11-09).
+  const withTrip = decided?.decision === "SENT_EMAIL" && /trip's voucher/.test(decided.note ?? "");
+  const sent = emailed || onWhatsApp || withTrip;
   // Said the way it went out, on the answer line (2026-10-29).
   const answerWords = { sentAt: onWhatsApp && !emailed ? decided?.decidedAt ?? null : null };
   // A guest with no email on file is not a failed send — there was nobody to send to, and the
@@ -1050,6 +1065,11 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
     <span className="meta">checking what was sent…</span>
   ) : held ? (
     <span className="meta">{held.reason === "RESERVE" ? "Made at Reserve" : "Made again after the change"}, not sent yet — you choose below</span>
+  ) : withTrip ? (
+    <span>
+      {decided?.note}
+      {decided?.sentTo ? ` to ${decided.sentTo}` : ""} · {fmtStamp(decided?.decidedAt ?? null, tz)}
+    </span>
   ) : onWhatsApp ? (
     <span>
       Sent on WhatsApp{decided?.sentTo ? ` to ${decided.sentTo}` : ""} · {fmtStamp(decided?.decidedAt ?? null, tz)}

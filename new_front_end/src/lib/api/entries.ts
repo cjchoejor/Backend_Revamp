@@ -1387,6 +1387,11 @@ export async function getStaysTogether(session: Session, entryId: string) {
 }
 
 /** Those stays on to Set up together, this one first. */
+/** The stays viewed together reserved at once; a stay refused is named and stays at Set up. */
+export async function reserveTrip(session: Session, entryId: string, version?: number) {
+  return apiRequest<{ moved: string[]; notMoved: Array<{ entryId: string; message: string }> }>(`/api/entries/${entryId}/trip/reserve`, { method: "POST", session, body: { version } });
+}
+
 export async function moveTripToSetUp(session: Session, entryId: string, version?: number) {
   return apiRequest<{ moved: string[]; notMoved: Array<{ entryId: string; message: string }> }>(`/api/entries/${entryId}/trip/to-set-up`, {
     method: "POST",

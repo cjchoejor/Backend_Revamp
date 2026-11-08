@@ -12,7 +12,7 @@ import { PhoneField } from "@/components/ds/phone-field";
 import { StayDates } from "@/components/ds/stay-dates";
 import { Help } from "@/components/ds/help";
 import { money } from "@/lib/ds/format";
-import { answerTripQuotation, getTripQuotation, makeTripQuotation, sendTripQuotation } from "@/lib/api/trip-papers";
+import { answerTripQuotation, getTripQuotation, sendTripQuotation } from "@/lib/api/trip-papers";
 import type { EntryDetail } from "@/types/api";
 import { Choice, DsDialog, NotSentChip, PaperDrawer, SendPaperPanel, StepCard, toastRefusal, useRefreshEntry, useReplyAsked, type PaperRef } from "./kit";
 
@@ -33,8 +33,7 @@ export function useTripQuotation(entry: EntryDetail) {
   });
 }
 
-export function TripQuotationCard({ entry, editable }: { entry: EntryDetail; editable: boolean }) {
-  const { session } = useSession();
+export function TripQuotationCard({ entry, editable, inFlow = false }: { entry: EntryDetail; editable: boolean; inFlow?: boolean }) {
   const qc = useQueryClient();
   const refresh = useRefreshEntry(entry.id);
   const replyAsked = useReplyAsked(entry.id, "QUOTATION");
@@ -46,21 +45,13 @@ export function TripQuotationCard({ entry, editable }: { entry: EntryDetail; edi
     void qc.invalidateQueries({ queryKey: ["trip-quotation"] });
     refresh((t?.stays ?? []).flatMap((s) => [["entry", s.entryId], ["entry-communications", s.entryId]]));
   };
-  const make = useMutation({
-    mutationFn: () => makeTripQuotation(session!, entry.id),
-    onSuccess: (r) => {
-      toast.success(r.made ? "The trip's quotation is made" : "The trip's quotation already holds these stays");
-      after();
-    },
-    onError: (e) => toastRefusal(e, "The trip's quotation could not be made"),
-  });
   const t = trip.data;
   if (!t || t.stays.length < 2) return null;
   const cur = t.current;
   const outOfDate = !!cur && !cur.upToDate;
   const label = cur ? `The trip's quotation ${cur.number}` : "The trip's quotation";
   const chip = !cur ? (
-    <Chip tone="quiet">not made yet</Chip>
+    <Chip tone="quiet">waits for every stay</Chip>
   ) : outOfDate ? (
     <Chip tone="warning">a stay changed</Chip>
   ) : cur.sentAt ? (
@@ -70,13 +61,15 @@ export function TripQuotationCard({ entry, editable }: { entry: EntryDetail; edi
   );
   return (
     <StepCard
+      flow={inFlow ? "quotation" : undefined}
+      flowAfter={inFlow ? "table" : undefined}
       title={cur ? `The trip's quotation · ${cur.number}` : "The trip's quotation"}
       icon="file"
       right={chip}
       status={`${t.stays.length} stays · each keeps its own quotation · the trip's is made of them`}
-      meta="The guest gets this one by default. Its total is only the stays' totals added up. A change to a stay makes the trip's quotation again, as its next version."
+      meta="Made by itself. The guest gets this one when the stays are viewed together. Its total is only the stays' totals added up. A change to a stay makes it again, as its next version."
     >
-      <table className="table compact">
+      <table className="table compact resp trip-papers">
         <thead>
           <tr>
             <th>Stay</th>
@@ -92,11 +85,11 @@ export function TripQuotationCard({ entry, editable }: { entry: EntryDetail; edi
                 Stay {s.stayNo}
                 {s.entryId === entry.id ? <span className="sub">this booking</span> : <span className="sub">{s.entryId}</span>}
               </td>
-              <td>
+              <td data-label="Dates">
                 <StayDates checkIn={s.checkIn} checkOut={s.checkOut} stacked />
               </td>
-              <td>{s.quotation ? s.quotation.number : <span className="warn-ink">not priced yet</span>}</td>
-              <td style={{ textAlign: "right" }}>{s.quotation ? money(s.quotation.total) : "—"}</td>
+              <td data-label="Its own quotation">{s.quotation ? s.quotation.number : <span className="warn-ink">not priced yet</span>}</td>
+              <td data-label="Total" style={{ textAlign: "right" }}>{s.quotation ? money(s.quotation.total) : "—"}</td>
             </tr>
           ))}
           <tr className="static trip-total">
@@ -106,17 +99,7 @@ export function TripQuotationCard({ entry, editable }: { entry: EntryDetail; edi
         </tbody>
       </table>
       {!t.canMake && t.reason ? <p className="sm warn-ink" style={{ marginTop: 8 }}>{t.reason}</p> : null}
-      {outOfDate ? (
-        <p className="sm warn-ink" style={{ marginTop: 8 }}>
-          A stay&rsquo;s quotation changed since {cur!.number} was made — make it again before sending.
-        </p>
-      ) : null}
       <div className="row-acts" style={{ marginTop: 10, flexWrap: "wrap", gap: 8 }}>
-        {editable && t.canMake && (!cur || outOfDate) ? (
-          <Button className="go" compact state={make.isPending ? "working" : "default"} workingLabel="Making…" onClick={() => make.mutate()}>
-            {cur ? "Make it again" : "Make the trip's quotation"}
-          </Button>
-        ) : null}
         {cur ? (
           <Button kind="secondary" compact icon="eye" onClick={() => setPaper({ kind: "trip", id: cur.id, label, tripKind: "QUOTATION" })}>
             Preview
@@ -157,7 +140,7 @@ export function TripSendDialog({
   entry: EntryDetail;
   tripId: string;
   label: string;
-  word?: "quotation" | "proforma";
+  word?: "quotation" | "proforma" | "voucher";
   onClose: () => void;
   onSent: () => void;
 }) {
@@ -197,7 +180,7 @@ export function TripSendDialog({
       open
       onClose={onClose}
       busy={send.isPending}
-      beside={<SendPaperPanel paper={{ kind: "trip", id: tripId, label, tripKind: word === "proforma" ? "PROFORMA" : "QUOTATION" }} />}
+      beside={<SendPaperPanel paper={{ kind: "trip", id: tripId, label, tripKind: word === "proforma" ? "PROFORMA" : word === "voucher" ? "VOUCHER" : "QUOTATION" }} />}
       title={`Send ${label.replace(`The trip's ${word} `, "")}`}
       help={`One email with the trip's paper; each stay's ${word} not sent yet is sent with it, with no email of its own.`}
       footer={
@@ -266,7 +249,7 @@ export function TripAnswerDialog({
   onDone,
 }: {
   tripId: string;
-  word?: "quotation" | "proforma";
+  word?: "quotation" | "proforma" | "voucher";
   onClose: () => void;
   onDone: () => void;
 }) {

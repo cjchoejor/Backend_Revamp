@@ -49,6 +49,7 @@ import { replySettled } from "@/lib/api/entries";
 import { EarlierAdvanceQuestion } from "./s3-earlier-advance";
 import { AnswerLine, useReplyAsked, Choice, DsDialog, Fact, Facts, Live, OnRecord, PaperDrawer, ReasonDialog, SeeRow, SendPaperPanel, StepCanvas, StepCard, atLeast, currentPassStart, toastRefusal, useCommunications, useRefreshEntry, useStepMode, words, type PaperRef, type ChangeBookingItem, ChangeBookingMenu, StageActs, useFlowUnsaved, useFinishWhenDone, useStepFlow, goToStepCard, revealCard, useOpenAlsoWay, useStepPane, OtherWaysTabs, InlineWay, ShutWay, parkTab, NightsChoice, NotSentChip } from "./kit";
 import { TripProformaCard, useTripProforma } from "./s3-trip-proforma";
+import { useStaysTogether } from "./s2-together";
 import { SendToField, useSendTo } from "./s8-parts";
 import { CancellationFiguresLine, WaiverTick, useRefundHow } from "./cancel-figures";
 import { CompetingClaimsCard, passesOf, roomsHeldWord, useRoomNumbers, useRoomTypeNames } from "./s2-shared";
@@ -157,6 +158,9 @@ export function S3SetUp({
   /* ---- the proforma and the guest's answer to it (this pass) ---- */
   const proformas = (folio?.invoices ?? []).filter((i) => i.invoiceType === "PROFORMA");
   const currentProforma = proformas.find((i) => i.state !== "SUPERSEDED") ?? null;
+  const together = useStaysTogether(past ? null : entry);
+  const tripProforma = useTripProforma(entry);
+  const tripProformaShown = together.active && !!tripProforma.data?.current?.upToDate;
   const dispatched = proformas.some((i) => i.state !== "SUPERSEDED" && i.dispatchedAt != null);
   const comms = useCommunications(entry.id);
   const passStart = currentPassStart(entry);
@@ -257,6 +261,13 @@ export function S3SetUp({
       <StageActs>
         <ChangeBookingMenu items={changeItems} />
       </StageActs>
+      {together.active ? (
+        <p className="notice next" role="status">
+          <span>
+            Viewing {together.label.toLowerCase()} together: the proforma is the trip&rsquo;s. Who pays, the advance and the block on this page are <b>Stay {together.stayNoOf(entry.id)}</b>&rsquo;s — open the other stay from the top to set its own. Move to Reserve blocks every stay&rsquo;s rooms.
+          </span>
+        </p>
+      ) : null}
       <BillingModelCard
         entry={entry}
         editable={editable}
@@ -282,6 +293,9 @@ export function S3SetUp({
       {/* Money from before this booking was sent back: on the new proforma, or refunded (2026-11-05). */}
       <EarlierAdvanceQuestion entry={entry} status={status} tz={tz} onChanged={changed} />
 
+      {/* Viewing the stays together shows only the trip's proforma, once there is one; Send sends
+          that one (2026-11-09, operator). A stay still without its own makes it here first. */}
+      {tripProformaShown ? <TripProformaCard entry={entry} editable={editable} inFlow /> : (
       <ProformaCard
         entry={entry}
         editable={editable}
@@ -295,9 +309,8 @@ export function S3SetUp({
         onAskAdvance={() => setAskAdvance((n) => n + 1)}
         onChanged={changed}
       />
-
-      {/* A trip of several stays has one proforma of its own as well (2026-11-07, operator). */}
-      <TripProformaCard entry={entry} editable={editable} />
+      )}
+      {together.active && !tripProformaShown ? <TripProformaCard entry={entry} editable={editable} /> : null}
 
       <PaymentPlanCard
         entry={entry}

@@ -33,21 +33,7 @@ import { useBookingRooms } from "@/hooks/use-booking-rooms";
 import { roomsHeldWord } from "@/components/ds/steps/s2-shared";
 import { usePageTitle } from "@/hooks/use-page-title";
 import { useDeskBookings, useRoomsList } from "@/hooks/use-desk-data";
-import {
-  getBillingSummary,
-  getEntry,
-  getEntryTimers,
-  getEntryTrace,
-  listEntryCommunications,
-  parkEntry,
-  progressStage,
-  switchStay,
-  unparkEntry,
-  type TimerRecordSummary,
-  replySettled,
-  moveTripToNegotiation,
-  moveTripToSetUp,
-} from "@/lib/api/entries";
+import { getBillingSummary, getEntry, getEntryTimers, getEntryTrace, listEntryCommunications, parkEntry, progressStage, switchStay, unparkEntry, type TimerRecordSummary, replySettled, moveTripToNegotiation, moveTripToSetUp, reserveTrip } from "@/lib/api/entries";
 import { closeEntryAtS9 } from "@/lib/api/post-stay";
 import { useClosureReadiness } from "@/hooks/use-closure-readiness";
 import { useRoomInspections } from "@/hooks/use-room-inspections";
@@ -335,6 +321,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   // A trip at Inquiry: its other stays are worked on this page and move with it (2026-11-07).
   const tripAtInquiry = useTripAtInquiry(entry);
   const together = useStaysTogether(entry);
+  const reservingTogether = together.active && entry?.currentStage === "S3";
   // Another screen moved this booking on (client.ts raises the event on a stale refusal): re-read it.
   useEffect(() => {
     const onStale = () => refreshEntry();
@@ -611,15 +598,25 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const fail = (fallback: string) => (e: unknown) => toast.error(e instanceof ApiError ? e.message : fallback);
 
   const confirmMutation = useMutation({
-    mutationFn: () => progressStage(session!, entry!.id, { targetStage: "S4", version: entry!.version }),
-    onSuccess: (updated) => {
+    // Viewing the stays together, Reserve reserves them all, each through its own checks (2026-11-09).
+    mutationFn: async () => {
+      if (reservingTogether) {
+        const r = await reserveTrip(session!, entry!.id, entry!.version);
+        return { updated: await getEntry(session!, entry!.id), notMoved: r.notMoved, moved: r.moved };
+      }
+      const updated = await progressStage(session!, entry!.id, { targetStage: "S4", version: entry!.version });
+      return { updated, notMoved: [] as Array<{ entryId: string; message: string }>, moved: [entry!.id] };
+    },
+    onSuccess: ({ updated, notMoved, moved: reserved }) => {
       afterMove(updated);
       setConfirmOpen(false);
       setSelected(4);
+      refreshEntry(together.others.map((o) => ["entry", o.id]));
+      for (const n of notMoved) toast.warning(`Stay ${together.stayNoOf(n.entryId)} was not reserved — ${n.message}`);
       // Said in the middle of the screen, as the other moves are (2026-10-29).
       const g = updated.guestProfile ?? updated.inquiry?.guestProfile ?? null;
       setMoved({
-        title: "The booking is reserved",
+        title: reserved.length > 1 ? `${plural(reserved.length, "stay")} reserved` : "The booking is reserved",
         from: "Set up",
         to: "Reserve",
         who: [[g?.title, g?.firstName, g?.lastName].filter(Boolean).join(" ") || null, updated.id].filter(Boolean).join(" · "),
@@ -642,9 +639,21 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
    * admin console's, or the one set for this booking. A refusal leaves the desk at Set up.
    */
   const blockMutation = useMutation({
-    mutationFn: () => blockRoomsForReserve(session!, entry!.id),
+    mutationFn: async () => {
+      const out = await blockRoomsForReserve(session!, entry!.id);
+      // Viewing the stays together, the other stays' rooms are blocked with it (2026-11-09).
+      if (reservingTogether) {
+        for (const o of together.others) {
+          await blockRoomsForReserve(session!, o.id).catch((e) =>
+            toast.warning(`Stay ${together.stayNoOf(o.id)}'s rooms were not blocked — ${e instanceof ApiError ? e.message : "it could not be done"}`),
+          );
+        }
+      }
+      return out;
+    },
     onSuccess: async (out) => {
       await queryClient.invalidateQueries({ queryKey: ["entry", entry!.id] });
+      for (const o of together.others) void queryClient.invalidateQueries({ queryKey: ["entry", o.id] });
       refreshEntry();
       setSelected(4);
       const g = entry!.guestProfile ?? entry!.inquiry?.guestProfile ?? null;
@@ -1849,10 +1858,11 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
 
         <CommitDialog
           open={confirmOpen}
-          title="Reserve the booking"
+          title={reservingTogether ? `Reserve ${together.label.toLowerCase()} together` : "Reserve the booking"}
           caseLines={[<b key="n">{name}</b>, <span key="stay">{entry.id} · <StayDates checkIn={entry.checkInDate} checkOut={entry.checkOutDate} /></span>]}
           lines={[
-            fin.indicativeTotal !== null ? `The price freezes at ${money(fin.indicativeTotal, fin.currency)} — the guest is held to it.` : "The price freezes — the guest is held to it.",
+            ...(reservingTogether ? ["Every stay is reserved with this press, each through its own checks. A stay that cannot be is named and stays at Set up."] : []),
+            reservingTogether ? "Each stay's price freezes — the guest is held to it." : fin.indicativeTotal !== null ? `The price freezes at ${money(fin.indicativeTotal, fin.currency)} — the guest is held to it.` : "The price freezes — the guest is held to it.",
             "The rooms lock — no longer offerable to anyone else.",
             "The confirmation voucher is made — nothing is sent; you send it next, or not.",
             "Any later change opens a new pass; it never edits what is frozen.",

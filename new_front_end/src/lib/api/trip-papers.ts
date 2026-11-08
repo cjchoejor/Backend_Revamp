@@ -176,3 +176,38 @@ export function recordTripPaymentForEntry(
 ) {
   return apiRequest<Awaited<ReturnType<typeof recordTripPayment>>>(`/api/entries/${entryId}/trip-payment`, { method: "POST", session, body });
 }
+
+/** A trip's confirmation voucher (2026-11-09): made of the stays' own once every stay is reserved. */
+export type TripVoucher = {
+  inquiryId: string;
+  stays: Array<{
+    stayNo: number;
+    entryId: string;
+    stage: string;
+    checkIn: string | null;
+    checkOut: string | null;
+    voucher: { reservationId: string; number: string; held: boolean; decision: string | null } | null;
+  }>;
+  canMake: boolean;
+  reason: string | null;
+  current: {
+    id: string;
+    number: string;
+    versionNumber: number;
+    sentAt: string | null;
+    sentTo: string | null;
+    sentChannel: string | null;
+    notSent: boolean;
+    answeredAt: string | null;
+    upToDate: boolean;
+  } | null;
+  versions: Array<{ id: string; number: string; state: string; createdAt: string; sentAt: string | null }>;
+};
+
+export function getTripVoucher(session: Session, entryId: string) {
+  return apiRequest<TripVoucher>(`/api/entries/${entryId}/trip-voucher`, { session });
+}
+
+export function markTripVoucherNotSent(session: Session, tripPaperId: string, body: { note?: string | null }) {
+  return apiRequest<{ number: string }>(`/api/trip-papers/${tripPaperId}/not-sent`, { method: "POST", session, body });
+}

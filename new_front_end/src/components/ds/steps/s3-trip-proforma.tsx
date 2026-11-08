@@ -9,7 +9,7 @@ import { StayDates } from "@/components/ds/stay-dates";
 import { Help } from "@/components/ds/help";
 import { money } from "@/lib/ds/format";
 import { ADVANCE_PAYMENT_MODES, type AdvancePaymentMode } from "@/lib/api/reservation-setup";
-import { getTripPayment, getTripProforma, makeTripProforma, previewTripPaymentForEntry, recordTripPaymentForEntry, type TripPaymentShare } from "@/lib/api/trip-papers";
+import { getTripPayment, getTripProforma, previewTripPaymentForEntry, recordTripPaymentForEntry, type TripPaymentShare } from "@/lib/api/trip-papers";
 import type { EntryDetail } from "@/types/api";
 import { Choice, DsDialog, NotSentChip, PaperDrawer, StepCard, toastRefusal, useRefreshEntry, useReplyAsked, type PaperRef } from "./kit";
 import { TripAnswerDialog, TripSendDialog } from "./s2-trip-quotation";
@@ -30,8 +30,7 @@ export function useTripProforma(entry: EntryDetail) {
   });
 }
 
-export function TripProformaCard({ entry, editable }: { entry: EntryDetail; editable: boolean }) {
-  const { session } = useSession();
+export function TripProformaCard({ entry, editable, inFlow = false }: { entry: EntryDetail; editable: boolean; inFlow?: boolean }) {
   const qc = useQueryClient();
   const refresh = useRefreshEntry(entry.id);
   const replyAsked = useReplyAsked(entry.id, "PROFORMA_INVOICE");
@@ -53,21 +52,13 @@ export function TripProformaCard({ entry, editable }: { entry: EntryDetail; edit
       ]),
     );
   };
-  const make = useMutation({
-    mutationFn: () => makeTripProforma(session!, entry.id),
-    onSuccess: (r) => {
-      toast.success(r.made ? "The trip's proforma is made" : "The trip's proforma already holds these stays");
-      after();
-    },
-    onError: (e) => toastRefusal(e, "The trip's proforma could not be made"),
-  });
   if (!t || t.stays.length < 2) return null;
   const cur = t.current;
   const outOfDate = !!cur && !cur.upToDate;
   const label = cur ? `The trip's proforma ${cur.number}` : "The trip's proforma";
   const due = t.dueNow != null ? Number(t.dueNow) : null;
   const chip = !cur ? (
-    <Chip tone="quiet">not made yet</Chip>
+    <Chip tone="quiet">waits for every stay</Chip>
   ) : outOfDate ? (
     <Chip tone="warning">a stay changed</Chip>
   ) : cur.sentAt ? (
@@ -77,13 +68,17 @@ export function TripProformaCard({ entry, editable }: { entry: EntryDetail; edit
   );
   return (
     <StepCard
+      flow={inFlow ? "proforma" : undefined}
+      flowAfter={inFlow ? "billing-model" : undefined}
+      summary={inFlow && cur?.sentAt ? `${cur.number} · sent${cur.answeredAt ? " · the guest's answer recorded" : ""}` : undefined}
+      keepRight
       title={cur ? `The trip's proforma · ${cur.number}` : "The trip's proforma"}
       icon="file"
       right={chip}
       status={`${t.stays.length} stays · a payment for the trip goes to the first stay's advance first`}
       meta="Each stay keeps its own proforma; this one is made of them and is the guest's paper by default. Its totals are only the stays' added up. A change to a stay's proforma makes this one again, as its next version."
     >
-      <table className="table compact">
+      <table className="table compact resp trip-papers">
         <thead>
           <tr>
             <th>Stay</th>
@@ -102,10 +97,10 @@ export function TripProformaCard({ entry, editable }: { entry: EntryDetail; edit
                 Stay {s.stayNo}
                 {s.entryId === entry.id ? <span className="sub">this booking</span> : <span className="sub">{s.entryId}</span>}
               </td>
-              <td>
+              <td data-label="Dates">
                 <StayDates checkIn={s.checkIn} checkOut={s.checkOut} stacked />
               </td>
-              <td>
+              <td data-label="Its own proforma">
                 {s.proforma ? (
                   <>
                     {s.proforma.number}
@@ -115,37 +110,27 @@ export function TripProformaCard({ entry, editable }: { entry: EntryDetail; edit
                   <span className="warn-ink">none yet</span>
                 )}
               </td>
-              <td style={{ textAlign: "right" }}>{s.proforma ? money(s.proforma.total) : "—"}</td>
-              <td style={{ textAlign: "right" }}>{s.proforma?.advanceAsked ? money(s.proforma.advanceAsked) : "none"}</td>
-              <td style={{ textAlign: "right" }}>{s.proforma ? money(s.proforma.received) : "—"}</td>
-              <td style={{ textAlign: "right" }} className={s.proforma?.advanceAsked ? (Number(s.proforma.dueNow) > 0 ? "stop-ink" : "ok-ink") : undefined}>
+              <td data-label="Total" style={{ textAlign: "right" }}>{s.proforma ? money(s.proforma.total) : "—"}</td>
+              <td data-label="Advance asked" style={{ textAlign: "right" }}>{s.proforma?.advanceAsked ? money(s.proforma.advanceAsked) : "none"}</td>
+              <td data-label="Received" style={{ textAlign: "right" }}>{s.proforma ? money(s.proforma.received) : "—"}</td>
+              <td data-label="Due now" style={{ textAlign: "right" }} className={s.proforma?.advanceAsked ? (Number(s.proforma.dueNow) > 0 ? "stop-ink" : "ok-ink") : undefined}>
                 {s.proforma?.advanceAsked ? money(s.proforma.dueNow) : "—"}
               </td>
             </tr>
           ))}
           <tr className="static trip-total">
             <td colSpan={3}>The trip</td>
-            <td style={{ textAlign: "right" }}>{t.total ? money(t.total) : "—"}</td>
-            <td style={{ textAlign: "right" }}>{t.advanceAsked ? money(t.advanceAsked) : "none"}</td>
-            <td style={{ textAlign: "right" }}>{money(t.received)}</td>
-            <td style={{ textAlign: "right" }} className={due != null ? (due > 0 ? "stop-ink" : "ok-ink") : undefined}>
+            <td data-label="Total" style={{ textAlign: "right" }}>{t.total ? money(t.total) : "—"}</td>
+            <td data-label="Advance asked" style={{ textAlign: "right" }}>{t.advanceAsked ? money(t.advanceAsked) : "none"}</td>
+            <td data-label="Received" style={{ textAlign: "right" }}>{money(t.received)}</td>
+            <td data-label="Due now" style={{ textAlign: "right" }} className={due != null ? (due > 0 ? "stop-ink" : "ok-ink") : undefined}>
               {t.dueNow != null ? money(t.dueNow) : "—"}
             </td>
           </tr>
         </tbody>
       </table>
       {!t.canMake && t.reason ? <p className="sm warn-ink" style={{ marginTop: 8 }}>{t.reason}</p> : null}
-      {outOfDate ? (
-        <p className="sm warn-ink" style={{ marginTop: 8 }}>
-          A stay&rsquo;s proforma changed since {cur!.number} was made — make it again before sending it or taking money against it.
-        </p>
-      ) : null}
       <div className="row-acts" style={{ marginTop: 10, flexWrap: "wrap", gap: 8 }}>
-        {editable && t.canMake && (!cur || outOfDate) ? (
-          <Button className="go" compact state={make.isPending ? "working" : "default"} workingLabel="Making…" onClick={() => make.mutate()}>
-            {cur ? "Make it again" : "Make the trip's proforma"}
-          </Button>
-        ) : null}
         {cur ? (
           <Button kind="secondary" compact icon="eye" onClick={() => setPaper({ kind: "trip", id: cur.id, label, tripKind: "PROFORMA" })}>
             Preview
