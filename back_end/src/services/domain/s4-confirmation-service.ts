@@ -38,7 +38,6 @@ import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.
 import { dispatchStageEmailBestEffort } from "../infrastructure/stage-email-helpers.js";
 import { renderReservationConfirmationEmail } from "../infrastructure/stage-email-templates.js";
 import { generateOrLoadConfirmationVoucherPdf } from "./confirmation-voucher-pdf-service.js";
-import { computeStayCharges, stayBreakdownFromTerms } from "../infrastructure/compute-stay-charges.js";
 import { initialiseTasks as initialisePreArrivalTasks } from "./pre-arrival-service.js";
 import { latestDispatchedInForce, retireSupersededReplyWaitsBestEffort } from "../../lib/reply-waits.js";
 import { recordHeldDocument } from "../../lib/held-documents.js";
@@ -526,20 +525,12 @@ async function confirmReservationInner(
   // Phase 3 — refactored to use the shared best-effort helper + bundled template.
   const ciDate = result.reservation.frozenCheckInDate;
   const coDate = result.reservation.frozenCheckOutDate;
-  const frozenRate = Number(result.reservation.frozenRate?.toString?.() ?? result.reservation.frozenRate ?? 0);
-  const ms = coDate.getTime() - ciDate.getTime();
-  const nights = Math.max(1, Math.round(ms / 86400_000));
-  const currency = (accepted.commercialTerms as any)?.currency ?? "BTN";
   const displayName =
     guestDisplayName(entry.guestProfile) || "Guest";
-  // Room count is needed BEFORE computeStayCharges so the stay total reflects all rooms.
   // Read from the accepted quotation's commercialTerms.roomCount (single source of truth
   // set at quote creation), fall back to entry.numberOfRooms, fall back to 1.
   const acceptedTerms = accepted.commercialTerms as { roomCount?: number } | null;
   const bookingRoomCount = Math.max(1, Number(acceptedTerms?.roomCount) || entry.numberOfRooms || 1);
-  // What was frozen, not rate × nights × rooms, which left out meals, beds and each room's own rate.
-  const priced = stayBreakdownFromTerms(result.reservation.frozenCommercialTerms);
-  const breakdown = priced ?? (await computeStayCharges(prisma, frozenRate, nights, bookingRoomCount));
   // Group-oriented content when the entry is GROUP_MASTER. Group leader defaults to the
   // on-site contact person (a group in operational terms) with fall-back to the guest
   // profile display name.
@@ -552,9 +543,6 @@ async function confirmReservationInner(
     checkInDate: ciDate,
     checkOutDate: coDate,
     guestCount: result.reservation.frozenGuestCount ?? entry.guestCount ?? 1,
-    nightlyRate: priced ? null : frozenRate,
-    currency,
-    breakdown,
     isGroup,
     roomCount,
     billingModel: entry.folio?.billingModel ?? null,
@@ -673,17 +661,12 @@ async function resendConfirmationVoucherInner(
   // Same email body the confirmation sent, composed from the frozen snapshot.
   const ciDate = reservation.frozenCheckInDate;
   const coDate = reservation.frozenCheckOutDate;
-  const frozenRate = Number(reservation.frozenRate?.toString?.() ?? reservation.frozenRate ?? 0);
-  const nights = Math.max(1, Math.round((coDate.getTime() - ciDate.getTime()) / 86400_000));
   const segmentId = entry.segments[0]?.id ?? reservation.segmentId;
   const operative = resolveOperativeQuotation(entry.quotations, segmentId);
-  const operativeTerms = (operative?.commercialTerms ?? null) as { currency?: string; roomCount?: number } | null;
-  const currency = operativeTerms?.currency ?? "BTN";
+  const operativeTerms = (operative?.commercialTerms ?? null) as { roomCount?: number } | null;
   const displayName =
     guestDisplayName(entry.guestProfile) || "Guest";
   const bookingRoomCount = Math.max(1, Number(operativeTerms?.roomCount) || entry.numberOfRooms || 1);
-  const priced = stayBreakdownFromTerms(reservation.frozenCommercialTerms);
-  const breakdown = priced ?? (await computeStayCharges(prisma, frozenRate, nights, bookingRoomCount));
   const isGroup = entry.groupBillingMode === "GROUP_MASTER";
   const content = renderReservationConfirmationEmail({
     guestDisplayName: displayName,
@@ -691,9 +674,6 @@ async function resendConfirmationVoucherInner(
     checkInDate: ciDate,
     checkOutDate: coDate,
     guestCount: reservation.frozenGuestCount ?? entry.guestCount ?? 1,
-    nightlyRate: priced ? null : frozenRate,
-    currency,
-    breakdown,
     isGroup,
     roomCount: isGroup ? bookingRoomCount : undefined,
     billingModel: entry.folio?.billingModel ?? null,

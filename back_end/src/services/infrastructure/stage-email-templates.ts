@@ -336,16 +336,13 @@ ${d.holdExpiresAt ? `<p style="font-size:13px;color:#555">The extra nights are h
 // S4 — Reservation confirmation
 // =============================================================================
 
+/** No figures, like the voucher it carries (2026-11-09, operator): the price is the quotation's and the proforma's. */
 export type ReservationConfirmationEmailData = {
   guestDisplayName: string;
   reservationReadableId: string;
   checkInDate: Date;
   checkOutDate: Date;
   guestCount: number;
-  /** Null when the rooms have rates of their own, so no one figure is the stay's rate. */
-  nightlyRate: number | null;
-  currency: string;
-  breakdown: StayChargeBreakdown;
   ratePlanName?: string | null;
   roomTypeName?: string | null;
   /** Group-specific fields — only used when isGroup === true. */
@@ -390,9 +387,6 @@ export function renderReservationConfirmationEmail(d: ReservationConfirmationEma
     `Stay: ${nights} ${nights === 1 ? "night" : "nights"} · ${guests}`,
     d.roomTypeName ? `Room type: ${d.roomTypeName}` : null,
     d.ratePlanName ? `Rate plan: ${d.ratePlanName}` : null,
-    d.nightlyRate != null ? `Nightly rate: ${formatMoney(d.nightlyRate, d.currency)}` : null,
-    "",
-    ...breakdownLines(d.breakdown, d.currency),
     "",
     "If anything needs to change, just reply to this email and our front desk will take care of it.",
     "",
@@ -407,7 +401,6 @@ export function renderReservationConfirmationEmail(d: ReservationConfirmationEma
   // card, cancellation / extra-guest / pet / child-age policy cards (colour-coded), footer with
   // hotel contact. The voucher PDF is separately attached to the email so guests can archive
   // the formal document; this HTML body is the human-readable summary.
-  const total = formatMoney(d.breakdown.total, d.currency);
   const nightsLabel = `${nights} ${nights === 1 ? "night" : "nights"}`;
 
   const html = `<!doctype html>
@@ -446,7 +439,6 @@ export function renderReservationConfirmationEmail(d: ReservationConfirmationEma
         <div><strong>Check out:</strong> ${escapeHtml(formatDate(d.checkOutDate))}</div>
         <div><strong>Rooms:</strong> ${d.roomCount ?? 1}</div>
         <div><strong>Stay:</strong> ${escapeHtml(nightsLabel)} · ${escapeHtml(guests)}</div>
-        <div><strong>Total Payable Amount:</strong> ${escapeHtml(total)}</div>
       </div>
       <div style="margin-top:12px;padding-top:10px;border-top:1px dashed #e2e5ec;font-size:12px;color:#555;">
         📎 Kindly find the attachment below for detailed reservation information.
