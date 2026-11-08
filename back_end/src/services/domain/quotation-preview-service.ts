@@ -202,6 +202,8 @@ export type TripPreviewStay = {
   entryId: string;
   input: { roomCompositions: PreviewRoomComposition[]; discount?: PreviewDiscount | null };
   opts?: Parameters<typeof buildQuotationPreview>[3];
+  /** The quotation this stay is saved on: its own rows and figures are read instead of the table's. */
+  quotationId?: string | null;
 };
 
 /**
@@ -214,24 +216,64 @@ export async function buildTripQuotationPreview(prisma: PrismaClient, entryId: s
   if (!entry) throw new NotFoundError("Entry");
   const ids = [...new Set(stays.map((s) => s.entryId))];
   if (ids.length !== stays.length) throw new ValidationError("A stay is named twice");
-  const onTrip = await prisma.entry.findMany({ where: { id: { in: ids } }, select: { id: true, inquiryId: true } });
+  const onTrip = await prisma.entry.findMany({ where: { id: { in: ids } }, select: { id: true, inquiryId: true, checkInDate: true, checkOutDate: true } });
   for (const id of ids) {
     const e = onTrip.find((x) => x.id === id);
     if (!e) throw new NotFoundError(`Entry ${id}`);
     if (e.inquiryId !== entry.inquiryId) throw new ValidationError(`${id} is not a stay of this trip`);
   }
-  const priced = await Promise.all(stays.map((s) => buildQuotationPreview(prisma, s.entryId, s.input, s.opts)));
-  const sum = (f: (p: QuotationPreview) => number) => n2(priced.reduce((a, p) => a.add(new Prisma.Decimal(f(p))), new Prisma.Decimal(0)));
+  const { quotationPriceLines } = await import("./quotation-pdf-service.js");
+  const priced = await Promise.all(
+    stays.map(async (s) => {
+      const on = onTrip.find((x) => x.id === s.entryId)!;
+      const dates = { checkIn: on.checkInDate ? on.checkInDate.toISOString().slice(0, 10) : null, checkOut: on.checkOutDate ? on.checkOutDate.toISOString().slice(0, 10) : null };
+      if (s.quotationId) {
+        const owner = await prisma.quotation.findUnique({ where: { id: s.quotationId }, select: { entryId: true } });
+        if (owner?.entryId !== s.entryId) throw new ValidationError(`${s.quotationId} is not this stay's quotation`);
+        const quote = await quotationPriceLines(prisma, s.quotationId);
+        return {
+          entryId: s.entryId,
+          ...dates,
+          source: "QUOTE" as const,
+          quote,
+          preview: null,
+          currency: null as string | null,
+          net: quote.net,
+          discountOff: quote.netAfterDiscount != null ? (quote.discountAmount ?? 0) : 0,
+          netAfter: quote.netAfterDiscount ?? quote.net,
+          serviceCharge: quote.serviceCharge,
+          gst: quote.gst,
+          payable: quote.total,
+        };
+      }
+      const preview = await buildQuotationPreview(prisma, s.entryId, s.input, s.opts);
+      return {
+        entryId: s.entryId,
+        ...dates,
+        source: "TABLE" as const,
+        quote: null,
+        preview,
+        currency: preview.currency as string | null,
+        net: preview.subtotal,
+        discountOff: preview.discount?.netReduction ?? 0,
+        netAfter: preview.payableSubtotal,
+        serviceCharge: preview.payableServiceCharge,
+        gst: preview.payableGst,
+        payable: preview.payable,
+      };
+    }),
+  );
+  const sum = (f: (p: (typeof priced)[number]) => number) => n2(priced.reduce((a, p) => a.add(new Prisma.Decimal(f(p))), new Prisma.Decimal(0)));
   return {
     inquiryId: entry.inquiryId,
-    currency: priced[0]?.currency ?? "BTN",
-    stays: priced.map((p) => ({ entryId: p.entryId, payable: p.payable })),
+    currency: priced.find((p) => p.currency)?.currency ?? "BTN",
+    stays: priced,
     totals: {
-      subtotal: sum((p) => p.subtotal),
-      netReduction: sum((p) => p.discount?.netReduction ?? 0),
-      payableSubtotal: sum((p) => p.payableSubtotal),
-      payableServiceCharge: sum((p) => p.payableServiceCharge),
-      payableGst: sum((p) => p.payableGst),
+      subtotal: sum((p) => p.net),
+      netReduction: sum((p) => p.discountOff),
+      payableSubtotal: sum((p) => p.netAfter),
+      payableServiceCharge: sum((p) => p.serviceCharge),
+      payableGst: sum((p) => p.gst),
       payable: sum((p) => p.payable),
     },
   };

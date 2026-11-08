@@ -49,10 +49,11 @@
  * AmendmentEventRecord's summary, and `ENTRY.INTAKE_UPDATED` from the intake write itself.
  */
 import type { PrismaClient, Prisma as PrismaNS } from "@prisma/client";
-import { QuotationState, Stage } from "@prisma/client";
+import { QuotationState, Stage, EntryStatus } from "@prisma/client";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { readOptionSelected } from "../../lib/option-selected-reader.js";
 import { requireActiveMode } from "../../lib/mode-registry-runtime.js";
+import { parkedByTripSwitch } from "./trip-switch-service.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import * as auditService from "../infrastructure/audit-service.js";
 import {
@@ -286,7 +287,10 @@ async function amendNegotiationConfigurationInner(
   if (!entry) throw new NotFoundError("Entry");
 
   // ---- gates, all before anything is written -------------------------------------
-  enforceEntryAtS2ForNegotiationAmendment({ currentStage: entry.currentStage, status: entry.status });
+  // A stay parked only because the desk moved to another stay of its trip is still being worked:
+  // the stays set up the same are changed from one page (2026-11-09). One a person parked stays shut.
+  const parkedBySwitch = entry.status === "PARKED" && (await parkedByTripSwitch(prisma, entry.id));
+  enforceEntryAtS2ForNegotiationAmendment({ currentStage: entry.currentStage, status: parkedBySwitch ? EntryStatus.ACTIVE : entry.status });
   if (input.expectedVersion != null && entry.version !== input.expectedVersion) {
     throw new ValidationError("This booking changed on another screen — reload it and try again.");
   }

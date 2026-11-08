@@ -748,7 +748,7 @@ entriesRouter.post("/:id/quotation-preview/trip", requireActorLevel("L1"), async
     res.setHeader("Cache-Control", "no-store");
     const stays = Array.isArray(req.body?.stays) ? (req.body.stays as Array<Record<string, unknown>>) : [];
     if (stays.length < 2 || stays.length > 12 || stays.some((s) => typeof s?.entryId !== "string")) throw new ValidationError("Name the stays to price together");
-    res.json(await buildTripQuotationPreview(prisma, req.params.id, stays.map((s) => ({ entryId: s.entryId as string, ...previewArgs(s) }))));
+    res.json(await buildTripQuotationPreview(prisma, req.params.id, stays.map((s) => ({ entryId: s.entryId as string, quotationId: typeof s.quotationId === "string" ? s.quotationId : null, ...previewArgs(s) }))));
   } catch (e) {
     next(e);
   }
