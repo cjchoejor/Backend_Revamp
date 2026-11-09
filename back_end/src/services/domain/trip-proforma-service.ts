@@ -704,12 +704,8 @@ async function recordForInquiry(
     },
     { timeout: 60_000, maxWait: 30_000 },
   );
-  const autoHolds = [];
-  for (const o of written.out) {
-    const autoHold = await afterPaymentRecorded(prisma, { paymentId: o.paymentId, entryId: o.entryId, stageAtPayment: o.stage }, actor.actorId, actor.actorLevel);
-    autoHolds.push({ entryId: o.entryId, autoHold });
-  }
-  return { amount: written.whole, mode: written.mode, shares: written.out.map(({ stage: _s, ...x }) => x), autoHolds };
+  for (const o of written.out) await afterPaymentRecorded(prisma, { entryId: o.entryId, stageAtPayment: o.stage });
+  return { amount: written.whole, mode: written.mode, shares: written.out.map(({ stage: _s, ...x }) => x) };
 }
 
 type RecordInput = { amount: number; paymentMethod?: string | null; notes?: string | null; shares?: TripPaymentShareInput[] | null };

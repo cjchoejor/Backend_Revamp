@@ -20,9 +20,7 @@ import {
   evaluateAdvancePaymentConditionTx,
 } from "./s3-payment-service.js";
 import {
-  autoPlaceCommittedHoldOnAdvancePayment,
   confirmHeldRoomsAfterFullPaymentTx,
-  type AdvancePaymentAutoHoldOutcome,
 } from "./s3-hold-service.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.js";
@@ -135,12 +133,8 @@ export async function getOrCreateProvisionalFolioTx(
  * arrival, at the check-in desk, or — via S8 settlement, not this path — at check-out. The
  * payment row is stamped with the stage it was actually taken at.
  *
- * Money received at S3 auto-places the committed hold (2026-08-10 operator ruling, replacing
- * the 2026-08-08 dispatch-time auto-hold): a PARTIAL payment counts — the guest putting money
- * down is the commercial basis for pinning the rooms. Best-effort and post-tx (the payment is
- * durable first; a hold that can't be placed is reported back on `autoHold` for the desk to
- * say "place it manually"). S4–S6 remainder collection never attempts it — the hold is
- * confirmed at the freeze.
+ * A payment does not block the rooms (2026-11-09, operator, replacing the 2026-08-10 ruling): the
+ * desk is asked to set a block time, and Move to Reserve blocks them if nobody did.
  */
 export async function recordPayment(
   prisma: PrismaClient,
@@ -150,8 +144,8 @@ export async function recordPayment(
   actorLevel?: "L1" | "L2" | "L3" | "L4",
 ) {
   const txResult = await prisma.$transaction((tx) => recordPaymentTx(prisma, tx, folioId, actorId, input));
-  const autoHold = await afterPaymentRecorded(prisma, { paymentId: txResult.created.id, entryId: input.entryId, stageAtPayment: txResult.stageAtPayment }, actorId, actorLevel);
-  return { ...txResult.created, autoHold };
+  await afterPaymentRecorded(prisma, { entryId: input.entryId, stageAtPayment: txResult.stageAtPayment });
+  return txResult.created;
 }
 
 /**
@@ -272,23 +266,12 @@ export async function recordPaymentTx(
 }
 
 /** What follows a payment once it is written: the rooms blocked at Set up, a moot pay-later ask closed. */
-export async function afterPaymentRecorded(
-  prisma: PrismaClient,
-  p: { paymentId: string; entryId: string; stageAtPayment: Stage },
-  actorId: string,
-  actorLevel?: "L1" | "L2" | "L3" | "L4",
-): Promise<AdvancePaymentAutoHoldOutcome | null> {
-  const autoHold: AdvancePaymentAutoHoldOutcome | null =
-    p.stageAtPayment === Stage.S3
-      ? await autoPlaceCommittedHoldOnAdvancePayment(prisma, { id: p.paymentId, entryId: p.entryId }, { actorId, actorLevel: actorLevel ?? "L1" })
-      : null;
-
+export async function afterPaymentRecorded(prisma: PrismaClient, p: { entryId: string; stageAtPayment: Stage }): Promise<void> {
   // A request to let the guest pay the rest later is moot once nothing is left to pay (2026-10-29).
   if (p.stageAtPayment === Stage.S5 || p.stageAtPayment === Stage.S6) {
     const { closeMootCheckInPaymentRequests } = await import("./checkin-payment-service.js");
     await closeMootCheckInPaymentRequests(prisma, p.entryId, "PAID").catch(() => {});
   }
-  return autoHold;
 }
 
 /**

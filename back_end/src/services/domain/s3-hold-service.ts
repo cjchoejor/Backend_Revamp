@@ -118,25 +118,12 @@ export async function placeCommittedHold(
     roomsRequested?: number;
     focRoomsRequested?: number;
     /**
-     * "ADVANCE_PAYMENT" = system placement fired by an advance payment being recorded at S3
-     * (2026-08-10 operator ruling, superseding the 2026-08-08 dispatch-time auto-hold: money
-     * in hand — even a PARTIAL payment — is the commercial basis for holding the rooms; a
-     * dispatched-but-unpaid PI no longer holds anything). This trigger skips ONLY the
-     * advance-satisfied gate (p42): the payment that fired it IS the money evidence, and a
-     * partial payment would fail the satisfied-in-full test by construction. The hold's own
-     * W3 TTL is the protection while the remainder follows, and the S4 freeze / S5–S6
-     * arrival gates still demand the full advance (or an FOM credit extension). Every other
-     * guard (S3 stage, folio, cancellation disclosure, date-overlap conflicts) applies
-     * unchanged. Omitted = manual placement, all gates as before.
-     *
      * "ROOM_CHANGE" = system placement inside the room-change re-walk (2026-08-12 operator
      * ruling): the new segment re-places its hold on the substituted selection, and the money
      * story was already settled in the prior segment (the advance carried on the folio), so the
      * p42 satisfied-in-full gate is skipped the same way. Everything else applies unchanged.
      */
-    trigger?: "ADVANCE_PAYMENT" | "ROOM_CHANGE";
-    /** The payment whose recording fired the auto-placement — recorded on the trace. */
-    triggerPaymentId?: string;
+    trigger?: "ROOM_CHANGE";
     /**
      * ROOM_CHANGE only (2026-10-12): the moment the hold this placement replaces was due to run
      * out. A room-change walk from Set up releases the hold and places a new one on the new rooms;
@@ -200,17 +187,12 @@ export async function placeCommittedHold(
 
   enforceFolioPresentBeforeCommittedHoldS3({ folio: entry.folio });
 
-  // The advance gate applies to MANUAL placement only — see the `trigger` doc above: the
-  // payment-fired placement carries its own money evidence (and the room-change re-walk's
-  // money story was settled in the prior segment), so demanding the requirement be satisfied
-  // IN FULL here would refuse exactly the cases those triggers cover.
+  // The advance gate applies to MANUAL placement only: the room-change re-walk's money story
+  // was settled in the prior segment.
   if (input.trigger == null) {
     const payment = await paymentService.evaluateAdvancePaymentCondition(prisma, { entryId, folioId: entry.folio!.id });
-    // Money already in hand is the same evidence the payment-fired hold relies on (2026-09-18).
-    // A part payment logged BEFORE the terms were disclosed skips the automatic hold (the hold
-    // needs the disclosure), and the manual hold then refused the same booking for not having
-    // the whole advance — a dead end reached purely by the order of clicks. Nothing received at
-    // all still needs the full advance or the FOM's credit extension, as before.
+    // Money already in hand is enough to block the rooms, even part of the advance (2026-09-18).
+    // Nothing received at all still needs the full advance or the FOM's credit extension.
     enforceAdvancePaymentSatisfiedOrCreditExtensionPresent({ isAdvancePaymentSatisfied: payment.satisfied || payment.totalReceived > 0 });
   }
 
@@ -484,7 +466,6 @@ export async function placeCommittedHold(
           upgradedFromSpeculative: !!spec,
           expirySource: window.source,
           trigger: input.trigger ?? "MANUAL",
-          ...(input.triggerPaymentId ? { triggerPaymentId: input.triggerPaymentId } : {}),
         },
         createdBy: actor.actorId,
       },
@@ -493,21 +474,6 @@ export async function placeCommittedHold(
     return hold;
   });
 }
-
-/**
- * Outcome of the automatic committed-hold placement fired by recording an advance payment
- * (2026-08-10 operator ruling: money received — full OR partial — holds the rooms; the PI
- * dispatch no longer does). Best-effort: the payment itself never fails because the hold
- * couldn't be placed — the desk reads this to tell the operator what happened.
- */
-export type AdvancePaymentAutoHoldOutcome =
-  | { placed: true; holdId: string; roomId: string; expiresAt: string }
-  | {
-      placed: false;
-      reason: "NOT_AT_S3" | "ENTRY_NOT_ACTIVE" | "ALREADY_HELD" | "NO_SEALED_SELECTION" | "PLACEMENT_FAILED";
-      message: string;
-      holdId?: string;
-    };
 
 /**
  * The room a block is placed on: the room claimed on the most nights of a per-night seal (ties →
@@ -592,76 +558,6 @@ export async function blockRoomsForReserve(
     commercialJustification: opts?.justification?.trim() || "Blocked on moving to Reserve",
   });
   return { placed: true, expiresAt: hold.expiresAt.toISOString(), source, houseWindowMinutes, roomCount };
-}
-
-export async function autoPlaceCommittedHoldOnAdvancePayment(
-  prisma: PrismaClient,
-  payment: { id: string; entryId: string },
-  actor: { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" },
-): Promise<AdvancePaymentAutoHoldOutcome | null> {
-  const entry = await prisma.entry.findUnique({
-    where: { id: payment.entryId },
-    select: {
-      id: true,
-      currentStage: true,
-      status: true,
-      inquiryId: true,
-      committedHold: { select: { id: true, state: true } },
-      availabilityConfigs: {
-        where: { sealedAt: { not: null } },
-        orderBy: { sealedAt: "desc" },
-        take: 1,
-        select: { optionSelected: true },
-      },
-    },
-  });
-  if (!entry) return null;
-  if (entry.currentStage !== Stage.S3) {
-    return { placed: false, reason: "NOT_AT_S3", message: "the booking isn't at Set up" };
-  }
-  if (entry.status !== EntryStatus.ACTIVE) {
-    return { placed: false, reason: "ENTRY_NOT_ACTIVE", message: `the booking is ${String(entry.status).toLowerCase()}` };
-  }
-  const holdState = entry.committedHold?.state ?? null;
-  if (holdState === "PLACED" || holdState === "CONFIRMED") {
-    return { placed: false, reason: "ALREADY_HELD", holdId: entry.committedHold!.id, message: "a committed hold is already in place" };
-  }
-  const primary = sealedAnchorRoom(entry.availabilityConfigs[0]?.optionSelected ?? null);
-  if (!primary) {
-    return { placed: false, reason: "NO_SEALED_SELECTION", message: "no sealed room selection from Inquiry" };
-  }
-  try {
-    const hold = await placeCommittedHold(prisma, entry.id, actor, {
-      roomId: primary,
-      commercialJustification: `Auto-held on advance payment (${payment.id})`,
-      trigger: "ADVANCE_PAYMENT",
-      triggerPaymentId: payment.id,
-    });
-    return { placed: true, holdId: hold.id, roomId: primary, expiresAt: hold.expiresAt.toISOString() };
-  } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
-    // The payment already committed — surface the miss to the operator AND the audit trail,
-    // never fail the payment over it.
-    await prisma.traceEvent
-      .create({
-        data: {
-          eventType: "COMMITTED_HOLD.AUTO_PLACE_ON_ADVANCE_PAYMENT_SKIPPED",
-          actorId: actor.actorId,
-          actorLevel: actor.actorLevel,
-          entityType: "PaymentRecord",
-          entityId: payment.id,
-          operation: "UPDATE",
-          timestamp: new Date(),
-          stageContext: Stage.S3,
-          inquiryId: entry.inquiryId,
-          entryId: entry.id,
-          payload: { paymentId: payment.id, message },
-          createdBy: actor.actorId,
-        } as any,
-      })
-      .catch(() => {});
-    return { placed: false, reason: "PLACEMENT_FAILED", message };
-  }
 }
 
 /**
