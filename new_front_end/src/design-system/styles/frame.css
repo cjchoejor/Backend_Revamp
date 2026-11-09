@@ -2399,3 +2399,10 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .ws-top .file .table.resp.trip-papers tr:not(.desk-root *) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .ds .trip-stay-block + .trip-stay-block { margin-top: 12px; }
 .ds .trip-bill-switch + .card, .ds .trip-bill-switch + section { margin-top: 10px; }
+
+/* Which stays go on to Arrival (2026-11-09). */
+.ds .arrival-pick { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.ds .arrival-row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--line-2); border-radius: 4px; background: var(--surface, #fff); cursor: pointer; }
+.ds .arrival-row:hover { background: var(--paper); }
+.ds .arrival-row.on { border-color: var(--accent); background: var(--accent-soft); }
+.ds .arrival-row .mono { margin-left: auto; }

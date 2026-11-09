@@ -394,7 +394,7 @@ export function TripPaymentDialog({ entryId, onClose, onDone }: { entryId: strin
                     <b>{row?.share != null ? money(row.share) : "—"}</b>
                   )}
                   {row?.overAsked && Number(row.overAsked) !== 0 && (how === "TYPED" ? Object.values(typed).some((v) => v !== "") : Number(row.share ?? 0) > 0) ? (
-                    <span className="sub warn-ink" style={{ fontWeight: 700 }} data-over-asked title={Number(row.overAsked) > 0 ? "More than this stay's advance still asked" : "Less than this stay's advance still asked"}>
+                    <span className="sub" style={{ fontWeight: 700, color: Number(row.overAsked) > 0 ? "var(--success)" : "var(--danger)" }} data-over-asked title={Number(row.overAsked) > 0 ? "More than this stay's advance still asked" : "Less than this stay's advance still asked"}>
                       {Number(row.overAsked) > 0 ? "+ " : "\u2212 "}
                       {Math.abs(Number(row.overAsked)).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </span>

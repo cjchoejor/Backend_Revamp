@@ -6,8 +6,9 @@
  *
  * Every room-change walk (a room change, a stay extension, a setup change, a seating repair, a
  * re-price, a room move from the house chart) re-issues the booking's voucher — or at Set up, its
- * proforma — and HOLDS it. This card lists what is still held and asks once, per paper: send it
- * by email, mark it sent on WhatsApp, or don't send it. The answer is recorded on the booking.
+ * proforma — and HOLDS it. This card lists what has not gone out: send it by email or mark it sent
+ * on WhatsApp. A paper that is not to be sent is simply left (2026-11-09, operator: "if you dont send
+ * it anyway why would you need that button"), so above the step it is one quiet line.
  *
  * Shown above every step of the booking (so whichever walk ran, the question is on screen), on the
  * Documents tab, and in the room move's result. Nothing is decided here — the server sends.
@@ -59,9 +60,11 @@ function paperOf(h: HeldDocument): PaperRef {
     : { kind: "voucher", reservationId: h.documentId, label: `Confirmation voucher ${h.documentNumber ?? h.documentId}` };
 }
 
-type Choice = "EMAIL" | "WHATSAPP" | "NONE";
+type Choice = "EMAIL" | "WHATSAPP";
 
-export function HeldPaperRow({ h, tz, onView }: { h: HeldDocument; tz?: string; onView: () => void }) {
+export function HeldPaperRow({ h, tz, onView, foldable = false }: { h: HeldDocument; tz?: string; onView: () => void; foldable?: boolean }) {
+  // Above the step the paper is one line until Send is pressed: it may never need to go out.
+  const [formOpen, setFormOpen] = useState(!foldable);
   const { session } = useSession();
   const phoneRules = usePhoneRules();
   const qc = useQueryClient();
@@ -80,17 +83,13 @@ export function HeldPaperRow({ h, tz, onView }: { h: HeldDocument; tz?: string; 
     mutationFn: () =>
       decideHeldDocument(session!, h.id, {
         action: choice,
-        sentTo: choice === "NONE" ? null : to.trim() || null,
+        sentTo: to.trim() || null,
         note: note.trim() || null,
         nightsEach: choice === "EMAIL" && nightsEach,
       }),
     onSuccess: (r) => {
       toast.success(
-        choice === "EMAIL"
-          ? `${KIND_WORD[h.kind]} sent by email${r.sentTo ? ` to ${r.sentTo}` : ""}`
-          : choice === "WHATSAPP"
-            ? `${KIND_WORD[h.kind]} recorded as sent on WhatsApp`
-            : `${KIND_WORD[h.kind]} not sent — recorded`,
+        choice === "EMAIL" ? `${KIND_WORD[h.kind]} sent by email${r.sentTo ? ` to ${r.sentTo}` : ""}` : `${KIND_WORD[h.kind]} recorded as sent on WhatsApp`,
       );
       for (const k of [["held-documents", h.entryId], ["entry-communications", h.entryId], ["entry-trace", h.entryId], ["entry", h.entryId]]) {
         void qc.invalidateQueries({ queryKey: k });
@@ -114,19 +113,25 @@ export function HeldPaperRow({ h, tz, onView }: { h: HeldDocument; tz?: string; 
         <Button kind="secondary" compact icon="eye" className="heldp-view" onClick={onView}>
           View
         </Button>
+        {foldable && !formOpen ? (
+          <Button kind="primary" compact icon="send" onClick={() => setFormOpen(true)}>
+            Send
+          </Button>
+        ) : null}
       </div>
-      {/* Choice buttons, as every pick-one on the desk (2026-10-29). */}
-      <div aria-label={`What to do with the ${KIND_WORD[h.kind].toLowerCase()}`}>
-        <PickOne<Choice>
-          options={[
-            ["EMAIL", "Send by email"],
-            ...(h.kind === "CONFIRMATION_VOUCHER" ? ([["WHATSAPP", "Sent on WhatsApp"]] as const) : []),
-            ["NONE", "Don't send"],
-          ]}
-          value={choice}
-          onChange={setChoice}
-        />
-      </div>
+      {formOpen && h.kind === "CONFIRMATION_VOUCHER" ? (
+        <div aria-label={`How the ${KIND_WORD[h.kind].toLowerCase()} goes out`}>
+          <PickOne<Choice>
+            options={[
+              ["EMAIL", "Send by email"],
+              ["WHATSAPP", "Sent on WhatsApp"],
+            ]}
+            value={choice}
+            onChange={setChoice}
+          />
+        </div>
+      ) : null}
+      {formOpen ? (
       <div className="heldp-fields">
         {choice === "EMAIL" ? (
           <label className="field">
@@ -146,20 +151,21 @@ export function HeldPaperRow({ h, tz, onView }: { h: HeldDocument; tz?: string; 
           </label>
         ) : null}
         <label className="field">
-          <span>{choice === "NONE" ? "Why not · optional" : "Note · optional"}</span>
+          <span>Note · optional</span>
           <input className="input" value={note} onChange={(e) => setNote(e.target.value)} />
         </label>
         <Button
-          kind={choice === "NONE" ? "secondary" : "primary"}
-          className={choice === "NONE" ? undefined : "go"}
+          kind="primary"
+          className="go"
           compact
           state={blocked || decide.isPending ? "inert" : "default"}
           onClick={() => !blocked && decide.mutate()}
         >
-          {decide.isPending ? "Recording…" : choice === "EMAIL" ? "Send it" : choice === "WHATSAPP" ? "Record it as sent" : "Don't send it"}
+          {decide.isPending ? "Recording…" : choice === "EMAIL" ? "Send it" : "Record it as sent"}
         </Button>
         {blocked ? <span className="stop-ink sm">{blocked}</span> : null}
       </div>
+      ) : null}
     </div>
   );
 }
@@ -187,16 +193,16 @@ export function HeldPapersCard({
   const open = (q.data ?? []).filter((h) => h.decision == null && (!onlyIds || onlyIds.includes(h.id)) && !skip?.(h));
   if (open.length === 0) return null;
   return (
-    <section className="heldp" aria-label="Papers waiting to be sent or not">
+    <section className="heldp" aria-label="Papers not sent yet">
       <div className="heldp-head">
-        <b>{title ?? (open.length === 1 ? "A paper is waiting — send it or not" : `${open.length} papers are waiting — send them or not`)}</b>
+        <b>{title ?? (open.length === 1 ? "A paper has not been sent" : `${open.length} papers have not been sent`)}</b>
         <Help label="Why is this held?">
-          <p>A change to the booking re-issued this paper. Nothing goes to the guest until you choose.</p>
-          <p>Send it by email, record that you shared it on WhatsApp, or record that it was not sent. A bill is sent by email only.</p>
+          <p>A change to the booking made this paper again. Nothing goes to the guest until you send it, and it can simply be left if it does not need to go.</p>
+          <p>Send it by email, or record that you shared it on WhatsApp. A bill is sent by email only.</p>
         </Help>
       </div>
       {open.map((h) => (
-        <HeldPaperRow key={h.id} h={h} tz={tz} onView={() => setPaper(paperOf(h))} />
+        <HeldPaperRow key={h.id} h={h} tz={tz} foldable={!onlyIds} onView={() => setPaper(paperOf(h))} />
       ))}
       <PaperDrawer paper={paper} onClose={() => setPaper(null)} />
     </section>

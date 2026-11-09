@@ -1379,7 +1379,7 @@ export function DocumentsView({
         {heldOpen > 0 ? (
           <p className="notice next" role="status" style={{ margin: "0 0 10px" }}>
             <span>
-              {heldOpen === 1 ? "A paper is" : `${heldOpen} papers are`} waiting to be sent or not — you choose on the step.
+              {heldOpen === 1 ? "A paper has" : `${heldOpen} papers have`} not been sent — send from the step, or leave it if it need not go.
             </span>
           </p>
         ) : null}

@@ -92,6 +92,7 @@ import { ReEnterMenu } from "@/components/desk/workspace/re-enter-menu";
 import type { EntryDetail } from "@/types/api";
 import { CaseCards } from "@/components/ds/steps/case-cards";
 import { HeldPapersCard } from "@/components/ds/workspace/held-papers";
+import { ArrivalPickDialog } from "@/components/ds/steps/s4-arrival-pick";
 import { ActiveRoomMoves } from "@/components/ds/rooms/room-move-dialog";
 import { HistoryView } from "@/components/ds/workspace/history-view";
 import { DetailsView } from "@/components/ds/workspace/details-view";
@@ -744,6 +745,54 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
         to: "Arrival",
         who: [[g?.title, g?.firstName, g?.lastName].filter(Boolean).join(" ") || null, updated.id].filter(Boolean).join(" · "),
         next: "Next: the rooms, the pre-arrival tasks and the advance — then the guest is checked in.",
+      });
+    },
+    onError: fail("Couldn't open Arrival yet"),
+  });
+  // Viewing the stays together, the desk picks which go on to Arrival (2026-11-09). Each goes through
+  // its own route and checks; a stay refused is named and stays at Reserve. The open stay goes last,
+  // since its page changes when it moves.
+  const [arrivalPickOpen, setArrivalPickOpen] = useState(false);
+  const movingToArrivalTogether = together.active && entry?.currentStage === "S4";
+  const arrivalTripMutation = useMutation({
+    mutationFn: async (ids: string[]) => {
+      const moved: string[] = [];
+      const notMoved: Array<{ entryId: string; message: string }> = [];
+      let updated: EntryDetail | null = null;
+      for (const id of [...ids].sort((a, b) => Number(a === entry!.id) - Number(b === entry!.id))) {
+        try {
+          const out = await activatePreArrival(session!, id);
+          moved.push(id);
+          if (id === entry!.id) updated = out;
+        } catch (e) {
+          notMoved.push({ entryId: id, message: e instanceof ApiError ? e.message : "It could not be moved." });
+        }
+      }
+      return { moved, notMoved, updated };
+    },
+    onSuccess: ({ moved, notMoved, updated }) => {
+      const stayWord = (id: string) => `Stay ${together.stayNoOf(id)}`;
+      for (const n of notMoved) toast.warning(`${stayWord(n.entryId)} stayed at Reserve — ${n.message}`);
+      if (!moved.length) return;
+      setArrivalPickOpen(false);
+      refreshEntry([["trip-together"], ...moved.filter((id) => id !== entry!.id).map((id) => ["entry", id])]);
+      if (!updated) {
+        void queryClient.invalidateQueries({ queryKey: ["entry", entry!.id] });
+        toast.success(`${moved.map(stayWord).join(" and ")} moved to Arrival`, { description: "This stay carries on at Reserve, on its own page." });
+        return;
+      }
+      afterMove(updated);
+      setSelected(5);
+      const g = (updated as EntryDetail).guestProfile ?? (updated as EntryDetail).inquiry?.guestProfile ?? null;
+      const left = together.stayIds.filter((id) => !moved.includes(id));
+      setMoved({
+        title: moved.length > 1 ? `${plural(moved.length, "stay")} moved to Arrival` : "Reserve is done",
+        from: "Reserve",
+        to: "Arrival",
+        who: [[g?.title, g?.firstName, g?.lastName].filter(Boolean).join(" ") || null, (updated as EntryDetail).id].filter(Boolean).join(" · "),
+        next: left.length
+          ? `${left.map(stayWord).join(" and ")} carries on at Reserve. From here each stay has its own page.`
+          : "From here each stay has its own page. Next: the rooms and the advance — then the guest is checked in.",
       });
     },
     onError: fail("Couldn't open Arrival yet"),
@@ -1439,10 +1488,10 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     forward = (
       <Button
         className="go"
-        state={activateMutation.isPending ? "working" : voucherAnswerRecorded ? "default" : "inert"}
+        state={activateMutation.isPending || arrivalTripMutation.isPending ? "working" : voucherAnswerRecorded ? "default" : "inert"}
         reason={voucherAnswerRecorded ? undefined : "the voucher went to the guest — record their answer first"}
         workingLabel="Opening…"
-        onClick={() => activateMutation.mutate()}
+        onClick={() => (movingToArrivalTogether ? setArrivalPickOpen(true) : activateMutation.mutate())}
       >
         Move to Arrival
       </Button>
@@ -1882,6 +1931,15 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     <>
         <StepMoved note={moved} onClose={closeMoved} />
 
+        {arrivalPickOpen && movingToArrivalTogether ? (
+          <ArrivalPickDialog
+            stays={[entry, ...together.others].sort((a, b) => together.stayNoOf(a.id) - together.stayNoOf(b.id))}
+            stayNoOf={together.stayNoOf}
+            busy={arrivalTripMutation.isPending}
+            onClose={() => setArrivalPickOpen(false)}
+            onMove={(ids) => arrivalTripMutation.mutate(ids)}
+          />
+        ) : null}
         <CommitDialog
           open={confirmOpen}
           title={reservingTogether ? `Reserve ${together.label.toLowerCase()} together` : "Reserve the booking"}
