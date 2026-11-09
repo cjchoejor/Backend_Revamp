@@ -161,7 +161,13 @@ export function S4Reserve({
         <>
           {/* The work first — the voucher and the guest's answer, which Arrival waits for — then
               the record of what was reserved. */}
-          {tripVoucherShown ? <TripVoucherCard entry={entry} editable={!past} inFlow /> : <VoucherCard entry={entry} />}
+          {together.deciding || (together.active && !tripVoucher.data?.current && tripVoucher.isFetching) ? (
+            <span className="meta">Reading the stays…</span>
+          ) : tripVoucherShown ? (
+            <TripVoucherCard entry={entry} editable={!past} inFlow />
+          ) : (
+            <VoucherCard entry={entry} />
+          )}
           {/* The pre-arrival tasks are Arrival's (SIG-S5 §2.5 — "created and updated at S5"; the
               operator, 2026-10-29: "if it's for stage 5 then keep it at stage 5"). */}
           {/* The advance moved to the step line's Payments (2026-11-07, operator: "the advance section

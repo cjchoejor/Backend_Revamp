@@ -12,6 +12,7 @@ import { HeldPapersCard, useHeldDocuments } from "@/components/ds/workspace/held
 import { useHotelClock } from "@/hooks/use-hotel-clock";
 import { DsDialog, NotSentChip, PaperDrawer, StepCard, toastRefusal, useRefreshEntry, useReplyAsked, type PaperRef } from "./kit";
 import { TripAnswerDialog, TripSendDialog } from "./s2-trip-quotation";
+import { tripStamp } from "@/components/ds/steps/s2-together";
 
 /**
  * THE TRIP'S CONFIRMATION VOUCHER (2026-11-09, operator: "do the same for proforma and reserve and
@@ -21,7 +22,8 @@ import { TripAnswerDialog, TripSendDialog } from "./s2-trip-quotation";
 export function useTripVoucher(entry: EntryDetail) {
   const { session } = useSession();
   return useQuery({
-    queryKey: ["trip-voucher", entry.id, entry.updatedAt ?? ""],
+    queryKey: ["trip-voucher", entry.id, tripStamp(entry)],
+    placeholderData: (prev) => prev,
     queryFn: () => getTripVoucher(session!, entry.id),
     enabled: !!session,
   });

@@ -10,7 +10,7 @@ import type { EntryDetail } from "@/types/api";
 import { fmtStamp } from "@/lib/ds/format";
 import { getTripProforma, getTripQuotation, getTripVoucher } from "@/lib/api/trip-papers";
 import { Choice, Live, NotSentChip, PaperDrawer, PapersCard, StepCard, useRefreshEntry, useReplyAsked, type PaperRef } from "@/components/ds/steps/kit";
-import { useStaysTogether } from "@/components/ds/steps/s2-together";
+import { useStaysTogether, tripStamp } from "@/components/ds/steps/s2-together";
 import { TripAnswerDialog, TripSendDialog } from "@/components/ds/steps/s2-trip-quotation";
 
 /** Every stay of this booking's trip, read in full, in the order the trip has them. */
@@ -61,7 +61,8 @@ function TripPaperRows({ entry, show, title, sealed }: { entry: EntryDetail; sho
   const K = KINDS[show];
   const replyAsked = useReplyAsked(entry.id, K.comm);
   const q = useQuery({
-    queryKey: [K.key, entry.id, entry.updatedAt ?? ""],
+    queryKey: [K.key, entry.id, tripStamp(entry)],
+    placeholderData: (prev) => prev,
     queryFn: (): Promise<TripPaperRead> => K.get(session!, entry.id),
     enabled: !!session,
   });
@@ -146,7 +147,8 @@ export function TripPapersShelf({
   const together = useStaysTogether(entry);
   const K = KINDS[show];
   const tripPaper = useQuery({
-    queryKey: [K.key, entry.id, entry.updatedAt ?? ""],
+    queryKey: [K.key, entry.id, tripStamp(entry)],
+    placeholderData: (prev) => prev,
     queryFn: (): Promise<TripPaperRead> => K.get(session!, entry.id),
     enabled: !!session,
   }).data;

@@ -13,6 +13,7 @@ import { getTripPayment, getTripProforma, previewTripPaymentForEntry, recordTrip
 import type { EntryDetail } from "@/types/api";
 import { Choice, DsDialog, NotSentChip, PaperDrawer, StepCard, toastRefusal, useRefreshEntry, useReplyAsked, type PaperRef } from "./kit";
 import { TripAnswerDialog, TripSendDialog } from "./s2-trip-quotation";
+import { tripStamp } from "@/components/ds/steps/s2-together";
 
 /**
  * THE TRIP'S PROFORMA (2026-11-07, operator: each stay keeps its own proforma and the trip has one
@@ -24,7 +25,8 @@ import { TripAnswerDialog, TripSendDialog } from "./s2-trip-quotation";
 export function useTripProforma(entry: EntryDetail) {
   const { session } = useSession();
   return useQuery({
-    queryKey: ["trip-proforma", entry.id, entry.updatedAt ?? ""],
+    queryKey: ["trip-proforma", entry.id, tripStamp(entry)],
+    placeholderData: (prev) => prev,
     queryFn: () => getTripProforma(session!, entry.id),
     enabled: !!session,
   });

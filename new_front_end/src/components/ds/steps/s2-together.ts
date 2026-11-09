@@ -49,6 +49,15 @@ export function useTripView(inquiryId: string | null | undefined): [TripView, (v
 }
 
 /**
+ * What a read about the whole trip is filed under (2026-11-09, operator: the view "switches to
+ * individual stay, and confirmation voucher also switches to one stay only"). Filed under this stay's
+ * own last change, an answer given while the other stay was a step behind stood for good.
+ */
+export function tripStamp(entry: EntryDetail | null | undefined): string {
+  return [entry?.updatedAt ?? "", ...(entry?.inquiry?.entries ?? []).map((st) => `${st.id}:${st.currentStage ?? ""}:${st.status ?? ""}:${st.updatedAt ?? ""}`)].join("|");
+}
+
+/**
  * The stays set up the same, worked in one table at Negotiation (2026-11-09, operator: "if the user
  * picks same configuration, then in s2 can it show both the stays configuration in the same table").
  * Which stays those are is the server's (`GET /entries/:id/trip/together`). `active` is the table
@@ -58,7 +67,7 @@ export function useStaysTogether(entry: EntryDetail | null) {
   const { session } = useSession();
   const many = (entry?.inquiry?.entries ?? []).length > 1;
   const q = useQuery({
-    queryKey: ["trip-together", entry?.id, entry?.updatedAt],
+    queryKey: ["trip-together", entry?.id, tripStamp(entry)],
     queryFn: () => getStaysTogether(session!, entry!.id),
     enabled: !!session && !!entry && many && WORKED_TOGETHER.includes(entry.currentStage),
     // The key moves with every change to the booking. Keeping the last answer meanwhile stops the

@@ -772,6 +772,7 @@ export type BookingPartySummary = {
 
 export type TripStaySummary = {
   id: string;
+  updatedAt?: string | null;
   checkInDate?: string | null;
   checkOutDate?: string | null;
   currentStage?: string | null;

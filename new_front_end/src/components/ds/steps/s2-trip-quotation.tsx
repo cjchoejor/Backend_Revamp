@@ -14,6 +14,7 @@ import { fmtDateTime, fmtStamp, money } from "@/lib/ds/format";
 import { answerTripQuotation, getTripQuotation, sendTripQuotation } from "@/lib/api/trip-papers";
 import type { EntryDetail } from "@/types/api";
 import { Choice, DsDialog, NotSentChip, PaperDrawer, SendPaperPanel, StepCard, toastRefusal, useRefreshEntry, useReplyAsked, type PaperRef } from "./kit";
+import { tripStamp } from "@/components/ds/steps/s2-together";
 
 /**
  * THE TRIP'S QUOTATION (2026-11-07, operator: each stay keeps its own quotation and the trip has
@@ -26,7 +27,8 @@ import { Choice, DsDialog, NotSentChip, PaperDrawer, SendPaperPanel, StepCard, t
 export function useTripQuotation(entry: EntryDetail) {
   const { session } = useSession();
   return useQuery({
-    queryKey: ["trip-quotation", entry.id, entry.updatedAt ?? ""],
+    queryKey: ["trip-quotation", entry.id, tripStamp(entry)],
+    placeholderData: (prev) => prev,
     queryFn: () => getTripQuotation(session!, entry.id),
     enabled: !!session,
   });

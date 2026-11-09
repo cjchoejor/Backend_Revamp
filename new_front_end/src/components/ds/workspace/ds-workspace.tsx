@@ -620,7 +620,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
       afterMove(updated);
       setConfirmOpen(false);
       setSelected(4);
-      refreshEntry(together.others.map((o) => ["entry", o.id]));
+      refreshEntry(reserved.filter((id) => id !== updated.id).map((id) => ["entry", id]));
       for (const n of notMoved) toast.warning(`Stay ${together.stayNoOf(n.entryId)} was not reserved — ${n.message}`);
       // Said in the middle of the screen, as the other moves are (2026-10-29).
       const g = updated.guestProfile ?? updated.inquiry?.guestProfile ?? null;
