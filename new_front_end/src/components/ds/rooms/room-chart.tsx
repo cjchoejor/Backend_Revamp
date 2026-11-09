@@ -2534,8 +2534,8 @@ function HoverCard({
 }) {
   const style = placeBeside(hover.rect, 320);
   const roomLine = (r: ChartRoom) => `Room ${r.roomNumber} · ${typeName(r.roomTypeId)}${r.bedType ? ` · ${BED_WORD[r.bedType] ?? r.bedType}` : ""}`;
-  const fact = (k: string, v: ReactNode) => (
-    <div className="hc-fact" key={k}>
+  const fact = (k: string, v: ReactNode, key: string = k) => (
+    <div className="hc-fact" key={key}>
       <span>{k}</span>
       <b>{v}</b>
     </div>
@@ -2564,12 +2564,12 @@ function HoverCard({
             {b ? fact("Step", <span className="hc-step">{STEP_NAMES[stepNoOfStage(b.stage) - 1]}</span>) : null}
             {fact("Booking", b ? `${b.entryId} · ${b.inquiryId}` : bar.entryId)}
             {bar.holdExpiresAt ? fact("Held until", fmtDateTime(bar.holdExpiresAt)) : null}
-            {bar.quiet ? fact("Room", "not chosen yet — the system keeps a room of this type and may move it until Arrival") : null}
+            {bar.quiet ? fact("Final room", "not chosen yet — the system keeps a room of this type and may move it until Arrival") : null}
             {bar.moveId ? fact("Room move", bar.moveId) : null}
             {showPicks
               ? uniquePicks((chart.picks ?? []).filter((p) => p.roomId === room.id && p.entryId !== bar.entryId && p.from < bar.to && p.to > bar.from)).map((p) => {
                   const pb = bookingOf.get(p.entryId);
-                  return fact("Also picked by", `${pb ? rowNameOf(pb) : "Booking"} · ${p.entryId} · ${fmtRange(p.from, p.to)}`);
+                  return fact("Also picked by", `${pb ? rowNameOf(pb) : "Booking"} · ${p.entryId} · ${fmtRange(p.from, p.to)}`, `pick-${p.entryId}`);
                 })
               : null}
           </div>
