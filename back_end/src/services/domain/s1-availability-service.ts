@@ -1,3 +1,4 @@
+import { committedHoldClaimsWhere } from "../../lib/entry-inventory-claim.js";
 import { Prisma, PartyType } from "@prisma/client";
 import { guestDisplayName } from "../../lib/guest-display-name.js";
 import type { Entry, PrismaClient } from "@prisma/client";
@@ -146,9 +147,8 @@ export async function runAvailabilityEngineForEntry(
       where: {
         // Not narrowed by roomId — a multi-room hold names only its primary room there, and its
         // other rooms live in the per-night breakdown. `committedHoldSpans` resolves both.
-        state: { in: ["PLACED", "CONFIRMED"] },
+        ...committedHoldClaimsWhere(),
         NOT: { entryId: entry.id },
-        expiresAt: { gt: new Date() },
         entry: {
           ...stillHoldsInventory,
           checkInDate: { lt: checkOut },

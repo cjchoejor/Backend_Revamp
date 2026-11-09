@@ -11,6 +11,8 @@
  *  - Arrival:             cancel (FOM; the GM waives) · no-show after the cut-off (FOM) · backflow to Inquiry (FOM)
  */
 import { CancellationFiguresLine, WaiverTick, useRefundHow } from "./cancel-figures";
+import { useStaysTogether } from "./s2-together";
+import { TripCancelWay } from "./s3-trip-cancel";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { determineNoShow, previewNoShow } from "@/lib/api/no-show";
@@ -65,6 +67,7 @@ export function BookingOtherWays({
   const stage = entry.currentStage;
   const active = entry.status === "ACTIVE";
   const fom = atLeast(session?.actorLevel, "L2");
+  const together = useStaysTogether(entry);
   const cutoffAt = (entry as EntryDetail & EntryScalars).noShowCutoffReachedAt ?? null;
   const checkIn = entry.reservation?.frozenCheckInDate ?? entry.checkInDate ?? null;
   const here = active && (stage === "S3" || stage === "S4" || stage === "S5");
@@ -81,6 +84,8 @@ export function BookingOtherWays({
         content:
           stage === "S3" ? (
             <InlineWay render={(done) => <CancelAtSetupDialog entry={entry} onClose={done} />} />
+          ) : fom && together.active ? (
+            <TripCancelWay entry={entry} stays={[entry, ...together.others]} stayNoOf={together.stayNoOf} />
           ) : fom ? (
             <InlineWay render={(done) => <CancelAtArrivalDialog entry={entry} onClose={done} />} />
           ) : (

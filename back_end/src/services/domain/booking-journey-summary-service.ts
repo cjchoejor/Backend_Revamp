@@ -1,8 +1,10 @@
+import { paperNumber, printedProformaNumber, printedQuotationNumber, proformaNumberOf } from "../../lib/document-numbers.js";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { guestDisplayName } from "../../lib/guest-display-name.js";
 import type { EntryStatus, EntryUseType, GroupBillingMode, Stage } from "@prisma/client";
 import { NotFoundError } from "../../lib/errors.js";
 import { readOptionSelected } from "../../lib/option-selected-reader.js";
+import { resolveBillQuotation } from "../../lib/operative-quotation.js";
 import { getPaymentStatus } from "./s3-payment-service.js";
 
 /**
@@ -161,12 +163,11 @@ export interface BookingJourneySummary {
       shortfall: number | null;
       creditExtensionActive: boolean;
       ceilingAmount: number | null;
-      /** Where the required amount came from: operator-pinned for this booking, or config thresholds. */
-      requirementSource: "OPERATOR" | "CONFIG" | null;
+      /** Where the amount came from: set for this booking, the party's own percentage, or nothing asked. */
+      requirementSource: "OPERATOR" | "PARTY" | "NONE" | null;
       requirementBasis: unknown | null;
       creditExtensionExpiresAt: string | null;
       creditExtensionExpired: boolean;
-      groupBoostApplied: { multiplierPercent: number; baseAmount: number } | null;
       /** The advance is due between proforma dispatch (opensAt) and check-in (deadline). */
       advanceWindow: { opensAt: string | null; deadline: string | null; active: boolean; overdue: boolean } | null;
     } | null;
@@ -290,7 +291,7 @@ export async function buildBookingJourneySummary(prisma: Db, entryId: string): P
       },
       segments: { orderBy: { segmentNumber: "desc" }, take: 1 },
       availabilityConfigs: { orderBy: { createdAt: "desc" } },
-      quotations: { orderBy: { versionNumber: "desc" }, include: { lines: { orderBy: { createdAt: "asc" } } } },
+      quotations: { orderBy: { createdAt: "desc" }, include: { lines: { orderBy: { createdAt: "asc" } } } },
       speculativeHolds: { orderBy: { placedAt: "desc" }, take: 1, include: { room: { select: { roomNumber: true } } } },
       folio: {
         include: {
@@ -367,12 +368,8 @@ export async function buildBookingJourneySummary(prisma: Db, entryId: string): P
   const contractRef = inq?.corporateClientRef ?? (Array.isArray(corp?.contractRefs) ? corp?.contractRefs[0] ?? null : null);
 
   // --- S2: the quotation that represents the commercial outcome ------------------------------
-  // Prefer the ACCEPTED quotation for the current segment; fall back to the latest version.
-  const acceptedQuote =
-    entry.quotations.find((q) => q.segmentId === currentSegmentId && q.state === "ACCEPTED") ??
-    entry.quotations.find((q) => q.state === "ACCEPTED") ??
-    entry.quotations[0] ??
-    null;
+  // The one the bills read (an older pass's acceptance must not stand in for this pass's price).
+  const acceptedQuote = resolveBillQuotation(entry.quotations, currentSegmentId);
   const terms = (acceptedQuote?.commercialTerms ?? null) as Record<string, unknown> | null;
   const pricingBreakdown = (terms?.pricingBreakdown ?? null) as Record<string, unknown> | null;
 
@@ -420,7 +417,8 @@ export async function buildBookingJourneySummary(prisma: Db, entryId: string): P
     ? await prisma.staffUser.findMany({ where: { id: { in: actorIds } }, select: { id: true, fullName: true } })
     : [];
   const staffNameById = new Map(staffRows.map((s) => [s.id, s.fullName]));
-  const who = (id: string | null | undefined): string | null => (id ? staffNameById.get(id) ?? id : null);
+  const who = (id: string | null | undefined): string | null =>
+    id === "SYSTEM" ? "The system" : id ? staffNameById.get(id) ?? id : null;
 
   // --- S3: advance-payment status (Decimal-safe, via the shared service) ---------------------
   let advancePayment: BookingJourneySummary["s3Setup"]["advancePayment"] = null;
@@ -438,11 +436,10 @@ export async function buildBookingJourneySummary(prisma: Db, entryId: string): P
         requirementBasis: ps.requirementBasis ?? null,
         creditExtensionExpiresAt: ps.creditExtensionExpiresAt ?? null,
         creditExtensionExpired: ps.creditExtensionExpired ?? false,
-        groupBoostApplied: (ps as { groupBoostApplied?: { multiplierPercent: number; baseAmount: number } }).groupBoostApplied ?? null,
         advanceWindow: ps.advanceWindow ?? null,
       };
     } catch {
-      // Missing advancePayment.thresholds config etc. — leave null rather than fail the summary.
+      // Leave null rather than fail the summary.
       advancePayment = null;
     }
   }
@@ -617,7 +614,7 @@ export async function buildBookingJourneySummary(prisma: Db, entryId: string): P
       proforma: proforma
         ? {
             id: proforma.id,
-            invoiceNumber: proforma.invoiceNumber ?? null,
+            invoiceNumber: printedProformaNumber(proforma),
             versionNumber: proforma.versionNumber,
             state: proforma.state,
             totalAmount: money(proforma.totalAmount ?? null),

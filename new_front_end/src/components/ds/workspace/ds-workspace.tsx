@@ -19,7 +19,7 @@
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button, Chip, Dialog, EmptyState, Icon } from "@/design-system";
 import { StandingChip, bookingHref } from "@/components/ds/ui";
@@ -27,25 +27,14 @@ import { FollowNotice, StayPicker, TripFollowPrompt, tripOf } from "@/components
 import { useSession } from "@/hooks/use-session";
 import { useHotelDay } from "@/hooks/use-hotel-day";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
+import { getPaymentStatus } from "@/lib/api/reservation-setup";
 import { usePaymentStatus } from "@/hooks/use-payment-status";
 import { useCheckInPayment } from "@/hooks/use-checkin-payment";
 import { useBookingRooms } from "@/hooks/use-booking-rooms";
 import { roomsHeldWord } from "@/components/ds/steps/s2-shared";
 import { usePageTitle } from "@/hooks/use-page-title";
 import { useDeskBookings, useRoomsList } from "@/hooks/use-desk-data";
-import {
-  getBillingSummary,
-  getEntry,
-  getEntryTimers,
-  getEntryTrace,
-  listEntryCommunications,
-  parkEntry,
-  progressStage,
-  switchStay,
-  unparkEntry,
-  type TimerRecordSummary,
-  replySettled,
-} from "@/lib/api/entries";
+import { getBillingSummary, getEntry, getEntryTimers, getEntryTrace, listEntryCommunications, parkEntry, progressStage, switchStay, unparkEntry, type TimerRecordSummary, replySettled, moveTripToNegotiation, moveTripToSetUp, reserveTrip } from "@/lib/api/entries";
 import { closeEntryAtS9 } from "@/lib/api/post-stay";
 import { useClosureReadiness } from "@/hooks/use-closure-readiness";
 import { useRoomInspections } from "@/hooks/use-room-inspections";
@@ -63,8 +52,6 @@ import {
   StepFlow,
   UnsavedReport,
   anchorFor,
-  flowSectionDone,
-  flowSectionWaitsOn,
   numberFlow,
   revealCard,
   type FlowItem,
@@ -75,6 +62,8 @@ import { Help, QuietScreen } from "@/components/ds/help";
 import { findParkTimer } from "@/lib/desk/timers";
 import {
   canConfirm,
+  canMoveToReserve,
+  s3Readiness,
   canProgressS1,
   canProgressS2,
   canProgressS5,
@@ -95,14 +84,14 @@ import {
 } from "@/lib/desk/workspace";
 import { arrivalNightRoomIds, heldRoomIds, roomsInUseFor } from "@/lib/desk/party-rooms";
 import { channelWord, endingOf, factsFromEntry, rowNameOf, standingOf } from "@/lib/ds/status";
-import { fmtDateTime, fmtDay, fmtRange, money, nightsOf, plural } from "@/lib/ds/format";
+import { blockWindowWords, fmtDateTime, fmtDay, money, nightsOf, plural } from "@/lib/ds/format";
 import { PHASES, BOUNDARY_STEPS, STEP_NAMES, STEP_NEEDS, stepNoOfStage, type StepNo } from "@/lib/ds/steps";
 import { timerLabel } from "@/lib/ds/timers";
 import { BackendRailSlotContext } from "@/components/desk/workspace/backend-inline";
 import { ReEnterMenu } from "@/components/desk/workspace/re-enter-menu";
 import type { EntryDetail } from "@/types/api";
 import { CaseCards } from "@/components/ds/steps/case-cards";
-import { HeldPapersCard } from "@/components/ds/workspace/held-papers";
+import { ArrivalPickDialog } from "@/components/ds/steps/s4-arrival-pick";
 import { ActiveRoomMoves } from "@/components/ds/rooms/room-move-dialog";
 import { HistoryView } from "@/components/ds/workspace/history-view";
 import { DetailsView } from "@/components/ds/workspace/details-view";
@@ -113,6 +102,8 @@ import { HeaderClock, SideTimer, StepDwell } from "@/components/ds/workspace/sid
 import { FoldingSide, useSideFolded } from "@/components/ds/workspace/side-panel";
 import { S1Inquiry } from "@/components/ds/steps/s1-inquiry";
 import { InquirySummaryDialog } from "@/components/ds/steps/s1-summary";
+import { useTripAtInquiry } from "@/components/ds/steps/s1-trip-shared";
+import { useStaysTogether } from "@/components/ds/steps/s2-together";
 import { StepMoved, type StepMovedNote } from "@/components/ds/workspace/step-moved";
 import { StayDates } from "@/components/ds/stay-dates";
 import { S2Negotiation } from "@/components/ds/steps/s2-negotiation";
@@ -128,7 +119,7 @@ import { S8CheckOut, S8_PANES } from "@/components/ds/steps/s8-checkout";
 import { S9Closed, S9_PANES, inspectionsOwedAtClosed } from "@/components/ds/steps/s9-closed";
 import { Overlay, atLeast, useRefreshEntry, useStepPane } from "@/components/ds/steps/kit";
 import { ChangeConfiguration } from "@/components/ds/steps/s2-configuration";
-import { declineEntry } from "@/lib/api/reservation-setup";
+import { blockRoomsForReserve, declineEntry } from "@/lib/api/reservation-setup";
 const atLeastFom = (level?: string | null) => atLeast(level, "L2");
 
 // The step tools re-render only when their own props change (the parent lifts several UI flags).
@@ -152,10 +143,9 @@ function withUnsaved(base: Precondition[], unsaved: UnsavedSection[]): Precondit
   return [...base, ...extra];
 }
 
-/** Inquiry's five sections, by the cards the readiness list names (Stage 1 since 2026-10-10). */
+/** Inquiry's four sections, by the cards the readiness list names (four since 2026-11-05). */
 const INQUIRY_SECTIONS: Record<string, string> = {
   caller: "The caller",
-  asking: "Who is asking",
   stay: "The stay",
   house: "The house",
   wrap: "Wrap up",
@@ -167,16 +157,14 @@ const NEGOTIATION_SECTIONS: Record<string, string> = {
   quotation: "The quotation",
 };
 /**
- * Set up's six sections (2026-10-28, operator: "now lets do the same for stage 3"), in the order the
- * backend takes them: who is who, who pays, the terms, the bill, the money, then the rooms held.
+ * Set up's sections (2026-10-28, operator: "now lets do the same for stage 3"), in the order the
+ * backend takes them: who pays, the bill, the money, then the rooms held.
  */
 const SETUP_SECTIONS: Record<string, string> = {
-  parties: "The three parties",
   "billing-model": "Who pays",
-  terms: "Cancellation terms",
   proforma: "The proforma",
   money: "The payment plan",
-  hold: "The committed hold",
+  hold: "Block the Entry",
 };
 /**
  * Reserve's sections (2026-10-29): before the click, the facts on record that Reserve signs — the
@@ -191,8 +179,7 @@ const RESERVE_SECTIONS: Record<string, string> = {
 /** Arrival's five sections (2026-10-29), in the order the desk works them; the handoff records itself once the first three are done. */
 const ARRIVAL_SECTIONS: Record<string, string> = {
   rooms: "The rooms",
-  tasks: "Pre-arrival tasks",
-  advance: "The advance",
+  advance: "The advance · in Payments",
   handoff: "The front-desk handoff",
   present: "The guest is here",
 };
@@ -311,6 +298,9 @@ function BackToStep({ name, doing, onBack }: { name: string; doing: string; onBa
   );
 }
 
+/** A move said on the page of the stay the desk goes on to, rather than the one it left. */
+const movedNoteFor = new Map<string, StepMovedNote>();
+
 export function DsWorkspace({ entryId }: { entryId: string }) {
   const { session, isLoading: sessionLoading } = useSession();
   const router = useRouter();
@@ -332,6 +322,10 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     refetchInterval: 30_000,
   });
   const entry = entryQuery.data ?? null;
+  // A trip at Inquiry: its other stays are worked on this page and move with it (2026-11-07).
+  const tripAtInquiry = useTripAtInquiry(entry);
+  const together = useStaysTogether(entry);
+  const reservingTogether = together.active && entry?.currentStage === "S3";
   // Another screen moved this booking on (client.ts raises the event on a stale refusal): re-read it.
   useEffect(() => {
     const onStale = () => refreshEntry();
@@ -347,10 +341,19 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   // A room the system chose and may still move reads "Deluxe Double · room 1" until Arrival.
   const bookingRoomNames = useBookingRooms(entry);
 
+  // Viewing the stays together at Set up, the other stays' money and answers hold the move too (2026-11-09).
+  const setUpOthers = reservingTogether ? together.others : [];
+  const otherPayReads = useQueries({
+    queries: setUpOthers.map((o) => ({ queryKey: ["payment-status", o.id], queryFn: () => getPaymentStatus(session!, o.id), enabled: !!session && !!o.folio, retry: false })),
+  });
+  const otherCommReads = useQueries({
+    queries: setUpOthers.map((o) => ({ queryKey: ["entry-communications", o.id], queryFn: () => listEntryCommunications(session!, o.id), enabled: !!session })),
+  });
   const paymentStatusQuery = usePaymentStatus(entryId, { enabled: !!entry?.folio });
   const paymentSatisfied = paymentStatusQuery.data?.satisfied;
   const totalReceived = paymentStatusQuery.data?.totalReceived ?? null;
   const requiredAmount = paymentStatusQuery.data?.requiredAmount ?? null;
+  const earlierAdvanceAsked = !!paymentStatusQuery.data?.earlierAdvance?.asked;
 
   const billingQuery = useQuery({
     queryKey: ["billing-summary", entryId, entry?.updatedAt ?? ""],
@@ -463,9 +466,13 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const stableSetSelected = useMemo(() => (n: number) => setSelectedRef.current(n), []);
 
   const currentOrder = entry ? currentStepOrder(entry) : 1;
-  const readyToConfirm = entry ? canConfirm(entry, { paymentSatisfied, totalReceived, requiredAmount, communications }) : false;
+  const readyToConfirm = entry ? canConfirm(entry, { paymentSatisfied, totalReceived, requiredAmount, communications, earlierAdvanceAsked }) : false;
   // A finished Set up opens the Reserve page, where the booking is reserved (2026-10-29).
-  const maxReach = !entry ? 1 : entry.currentStage === "S3" && !readyToConfirm ? Math.min(maxReachableOrder(entry), 3) : maxReachableOrder(entry);
+  const readyToMoveOn = entry ? canMoveToReserve(entry, { paymentSatisfied, totalReceived, requiredAmount, communications, earlierAdvanceAsked }) : false;
+  // Set up's reads still on their way decide nothing: the Reserve page held in the address must not
+  // drop to Set up for a moment on arrival (2026-11-09).
+  const setUpReadsKnown = !entry?.folio || (!paymentStatusQuery.isLoading && !commsQuery.isLoading);
+  const maxReach = !entry ? 1 : entry.currentStage === "S3" && setUpReadsKnown && !readyToMoveOn ? Math.min(maxReachableOrder(entry), 3) : maxReachableOrder(entry);
 
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [checkInOpen, setCheckInOpen] = useState(false);
@@ -606,15 +613,25 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const fail = (fallback: string) => (e: unknown) => toast.error(e instanceof ApiError ? e.message : fallback);
 
   const confirmMutation = useMutation({
-    mutationFn: () => progressStage(session!, entry!.id, { targetStage: "S4", version: entry!.version }),
-    onSuccess: (updated) => {
+    // Viewing the stays together, Reserve reserves them all, each through its own checks (2026-11-09).
+    mutationFn: async () => {
+      if (reservingTogether) {
+        const r = await reserveTrip(session!, entry!.id, entry!.version);
+        return { updated: await getEntry(session!, entry!.id), notMoved: r.notMoved, moved: r.moved };
+      }
+      const updated = await progressStage(session!, entry!.id, { targetStage: "S4", version: entry!.version });
+      return { updated, notMoved: [] as Array<{ entryId: string; message: string }>, moved: [entry!.id] };
+    },
+    onSuccess: ({ updated, notMoved, moved: reserved }) => {
       afterMove(updated);
       setConfirmOpen(false);
       setSelected(4);
+      refreshEntry(reserved.filter((id) => id !== updated.id).map((id) => ["entry", id]));
+      for (const n of notMoved) toast.warning(`Stay ${together.stayNoOf(n.entryId)} was not reserved — ${n.message}`);
       // Said in the middle of the screen, as the other moves are (2026-10-29).
       const g = updated.guestProfile ?? updated.inquiry?.guestProfile ?? null;
       setMoved({
-        title: "The booking is reserved",
+        title: reserved.length > 1 ? `${plural(reserved.length, "stay")} reserved` : "The booking is reserved",
         from: "Set up",
         to: "Reserve",
         who: [[g?.title, g?.firstName, g?.lastName].filter(Boolean).join(" ") || null, updated.id].filter(Boolean).join(" · "),
@@ -630,6 +647,42 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
       fail("Reserving failed")(e);
     },
   });
+  /**
+   * Move to Reserve blocks the rooms and says so in the middle of the screen, until it is read
+   * (2026-11-05, operator: "it should also prominently inform the user that the rooms are blocked for
+   * 1hr ... and to reserve the rooms before the time frame ends"). The time is the server's: the
+   * admin console's, or the one set for this booking. A refusal leaves the desk at Set up.
+   */
+  const blockMutation = useMutation({
+    mutationFn: async () => {
+      const out = await blockRoomsForReserve(session!, entry!.id);
+      // Viewing the stays together, the other stays' rooms are blocked with it (2026-11-09).
+      if (reservingTogether) {
+        for (const o of together.others) {
+          await blockRoomsForReserve(session!, o.id).catch((e) =>
+            toast.warning(`Stay ${together.stayNoOf(o.id)}'s rooms were not blocked — ${e instanceof ApiError ? e.message : "it could not be done"}`),
+          );
+        }
+      }
+      return out;
+    },
+    onSuccess: async (out) => {
+      await queryClient.invalidateQueries({ queryKey: ["entry", entry!.id] });
+      for (const o of together.others) void queryClient.invalidateQueries({ queryKey: ["entry", o.id] });
+      refreshEntry();
+      setSelected(4);
+      const g = entry!.guestProfile ?? entry!.inquiry?.guestProfile ?? null;
+      const until = fmtDateTime(out.expiresAt, clock.tz);
+      const subject = reservingTogether ? `The rooms of ${together.label.toLowerCase()} are blocked` : out.roomCount === 1 ? "The room is blocked" : "The rooms are blocked";
+      setMoved({
+        title: out.placed && out.source === "HOUSE" ? `${subject} for ${blockWindowWords(out.houseWindowMinutes)}` : `${subject} until ${until}`,
+        who: [out.placed && out.source === "HOUSE" ? `Until ${until}` : null, [g?.title, g?.firstName, g?.lastName].filter(Boolean).join(" ") || null, entry!.id].filter(Boolean).join(" · "),
+        next: "Reserve the booking before then. If the time ends first, the FOM and GM are told and they decide.",
+        sticky: true,
+      });
+    },
+    onError: fail("The rooms could not be blocked"),
+  });
   const closeMutation = useMutation({
     mutationFn: () => closeEntryAtS9(session!, entry!.id),
     onSuccess: (updated) => {
@@ -642,6 +695,12 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const [summaryOpen, setSummaryOpen] = useState(false);
   /** A move said in the middle of the screen (2026-10-27) — the Inquiry's move to Negotiation. */
   const [moved, setMoved] = useState<StepMovedNote | null>(null);
+  useEffect(() => {
+    const note = movedNoteFor.get(entryId);
+    if (!note) return;
+    movedNoteFor.delete(entryId);
+    setMoved(note);
+  }, [entryId]);
   const closeMoved = useCallback(() => setMoved(null), []);
   const advanceMutation = useMutation({
     mutationFn: (vars: { targetStage: string; guestPhysicallyPresent?: boolean; announce?: boolean }) =>
@@ -652,6 +711,36 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
       setSelected(n);
       // A move announced in the middle of the screen needs no toast as well.
       if (!vars.announce) toast.success(`Moved to ${STEP_NAMES[n - 1]}.`);
+    },
+    onError: fail("Couldn't move forward"),
+  });
+  /** Every stay of a trip at Inquiry to Negotiation, this one first (2026-11-07). */
+  const tripMoveMutation = useMutation({
+    mutationFn: () => moveTripToNegotiation(session!, entry!.id, entry!.version),
+    onSuccess: (r) => {
+      for (const id of r.moved) void queryClient.invalidateQueries({ queryKey: ["entry", id] });
+      refreshEntry();
+      if (r.notMoved.length) {
+        toast.warning(`${plural(r.notMoved.length, "stay")} did not move`, {
+          description: r.notMoved.map((x) => `${x.entryId}: ${x.message}`).join(" · "),
+          duration: 15000,
+        });
+      }
+    },
+    onError: fail("Couldn't move forward"),
+  });
+  /** The stays worked in one table, on to Set up together, this one first (2026-11-09). */
+  const tripSetUpMutation = useMutation({
+    mutationFn: () => moveTripToSetUp(session!, entry!.id, entry!.version),
+    onSuccess: (r) => {
+      for (const id of r.moved) void queryClient.invalidateQueries({ queryKey: ["entry", id] });
+      refreshEntry();
+      if (r.notMoved.length) {
+        toast.warning(`${plural(r.notMoved.length, "stay")} did not move`, {
+          description: r.notMoved.map((x) => `${x.entryId}: ${x.message}`).join(" · "),
+          duration: 15000,
+        });
+      }
     },
     onError: fail("Couldn't move forward"),
   });
@@ -668,6 +757,60 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
         who: [[g?.title, g?.firstName, g?.lastName].filter(Boolean).join(" ") || null, updated.id].filter(Boolean).join(" · "),
         next: "Next: the rooms, the pre-arrival tasks and the advance — then the guest is checked in.",
       });
+    },
+    onError: fail("Couldn't open Arrival yet"),
+  });
+  // Viewing the stays together, the desk picks which go on to Arrival (2026-11-09). Each goes through
+  // its own route and checks; a stay refused is named and stays at Reserve. The open stay goes last,
+  // since its page changes when it moves.
+  const [arrivalPickOpen, setArrivalPickOpen] = useState(false);
+  const movingToArrivalTogether = together.active && entry?.currentStage === "S4";
+  const arrivalTripMutation = useMutation({
+    mutationFn: async (ids: string[]) => {
+      const moved: string[] = [];
+      const notMoved: Array<{ entryId: string; message: string }> = [];
+      let updated: EntryDetail | null = null;
+      for (const id of [...ids].sort((a, b) => Number(a === entry!.id) - Number(b === entry!.id))) {
+        try {
+          const out = await activatePreArrival(session!, id);
+          moved.push(id);
+          if (id === entry!.id) updated = out;
+        } catch (e) {
+          notMoved.push({ entryId: id, message: e instanceof ApiError ? e.message : "It could not be moved." });
+        }
+      }
+      return { moved, notMoved, updated };
+    },
+    onSuccess: ({ moved, notMoved, updated }, ids) => {
+      const stayWord = (id: string) => `Stay ${together.stayNoOf(id)}`;
+      for (const n of notMoved) toast.warning(`${stayWord(n.entryId)} stayed at Reserve — ${n.message}`);
+      if (!moved.length) return;
+      setArrivalPickOpen(false);
+      refreshEntry([["trip-together"], ...moved.filter((id) => id !== entry!.id).map((id) => ["entry", id])]);
+      // The desk goes on with the stay it picked first (2026-11-09, operator: "it should let the user
+      // go with the flow and open the one that was selected first"), whichever stay was open.
+      const lead = ids.find((id) => moved.includes(id))!;
+      const leadEntry = lead === entry!.id ? (updated ?? entry!) : (together.others.find((o) => o.id === lead) ?? entry!);
+      const g = leadEntry.guestProfile ?? leadEntry.inquiry?.guestProfile ?? null;
+      const left = together.stayIds.filter((id) => !moved.includes(id));
+      const note: StepMovedNote = {
+        title: moved.length > 1 ? `${plural(moved.length, "stay")} moved to Arrival` : "Reserve is done",
+        from: "Reserve",
+        to: "Arrival",
+        who: [[g?.title, g?.firstName, g?.lastName].filter(Boolean).join(" ") || null, lead].filter(Boolean).join(" · "),
+        next: left.length
+          ? `${left.map(stayWord).join(" and ")} carries on at Reserve. From here each stay has its own page.`
+          : "From here each stay has its own page. Next: the rooms and the advance — then the guest is checked in.",
+      };
+      if (updated) afterMove(updated);
+      if (lead === entry!.id) {
+        setSelected(5);
+        setMoved(note);
+        return;
+      }
+      // Another stay's page is a new page: it says the move when it opens.
+      movedNoteFor.set(lead, note);
+      router.push(bookingHref(lead, 5));
     },
     onError: fail("Couldn't open Arrival yet"),
   });
@@ -818,6 +961,10 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     return m && tripKey.split(",").includes(m[1]) ? m[1] : null;
   };
   const switchingRef = useRef(false);
+  // The Reserve page is a page ahead of the booking, held only in the address: a stay stays at Set up
+  // until Reserve is pressed. Moving between the stays keeps the desk on it, or the next stay reads as
+  // a step behind and coming back drops this one too (2026-11-09, operator).
+  const aheadStep = entry?.currentStage === "S3" && viewing === 4 ? 4 : null;
   useEffect(() => {
     if (!session || !tripKey) return;
     const siblings = tripKey.split(",");
@@ -831,6 +978,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
       if (!to) return;
       e.preventDefault();
       e.stopPropagation();
+      if (a.dataset.viewAlone) together.setView("one");
       if (switchingRef.current) return;
       switchingRef.current = true;
       void (async () => {
@@ -851,14 +999,14 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
           toast.error(`Moved to ${to}, but ${entryId} could not be parked — ${err instanceof Error ? err.message : "try parking it by hand"}`);
         } finally {
           switchingRef.current = false;
-          router.push(href);
+          router.push(aheadStep && !/[?&]step=/.test(href) ? bookingHref(to, aheadStep) : href);
         }
       })();
     };
     document.addEventListener("click", onTripClick, true);
     return () => document.removeEventListener("click", onTripClick, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session, entryId, tripKey]);
+  }, [session, entryId, tripKey, aheadStep]);
 
   // Leaving an unfinished inquiry or negotiation offers the park on the way out — Back, the bar,
   // any link that leaves this booking.
@@ -967,7 +1115,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const issuedKeyCount = checkInRoomIds.filter((id) => issuedKeyRooms[id]).length;
   const keysValid = checkInRoomIds.length > 0 && issuedKeyCount === checkInRoomIds.length;
   const canCheckIn =
-    s6Readiness(entry, { guestDetails: guestDetailsCoverage, identityVerified: stayIdentityVerified, balance: checkInBalance }).every((c) => c.met) &&
+    s6Readiness(entry, { guestDetails: guestDetailsCoverage, identityVerified: stayIdentityVerified, balance: checkInBalance, refundWaiting: paymentStatusQuery.data?.refundWaiting }).every((c) => c.met) &&
     registrationConfirmed &&
     keysValid;
 
@@ -988,7 +1136,6 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const voucherAnswerRecorded = !voucherSent || replySettled(voucherSent);
   const voucherReplyOff = (commsQuery.data?.repliesOff ?? []).includes("CONFIRMATION_VOUCHER") || voucherSent?.acknowledgementStatus === "NOT_ASKED";
 
-  const ready = readyToConfirm && reserveExtras.length === 0;
   // A no-show says so — the imported ones sit EXPIRED at the end, and read "Expired" (2026-09-18).
   // Since 2026-10-01 the ending itself is on the row, so this reads the same words the lists do
   // (the stage could not say: the cancellation routes wipe it to TERMINAL), and adds what the
@@ -1030,20 +1177,52 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     </div>
   );
 
+  // A trip at Inquiry: each other stay's own items — its caller is the enquiry's, shared (2026-11-07).
+  const tripInquiryItems: Precondition[] =
+    inquiryStepActive && tripAtInquiry.combined
+      ? tripAtInquiry.loaded
+        ? tripAtInquiry.others.flatMap((o) => {
+            const n = tripAtInquiry.stayNoOf(o.id);
+            return s1Readiness(o)
+              .filter((c) => !c.met && c.card !== "caller")
+              .map((c) => ({ label: tripItemLabel(n, c.label), met: false, card: c.card }));
+          })
+        : [{ label: "Reading the trip's other stays", met: false, card: "house" }]
+      : [];
+
+  // Every other stay viewed together, by its own list (2026-11-09, operator: "it should do it for both stays together").
+  const otherStayItems = (read: typeof s3Readiness): Precondition[] =>
+    setUpOthers.flatMap((o, i) => {
+      const p = otherPayReads[i]?.data;
+      return read(o, {
+        paymentSatisfied: p?.satisfied,
+        totalReceived: p?.totalReceived ?? null,
+        requiredAmount: p?.requiredAmount ?? null,
+        communications: otherCommReads[i]?.data?.items,
+        earlierAdvanceAsked: !!p?.earlierAdvance?.asked,
+      })
+        .filter((c) => !c.met)
+        .map((c) => ({ label: tripItemLabel(together.stayNoOf(o.id), c.label), met: false, card: c.card, todo: c.todo ? tripItemLabel(together.stayNoOf(o.id), c.todo) : undefined }));
+    });
+  const setUpOtherItems = otherStayItems(s3Readiness);
+  // Viewed together, Reserve signs for every stay, so it waits for every stay (2026-11-09).
+  const ready = readyToConfirm && reserveExtras.length === 0 && otherStayItems(confirmReadiness).length === 0;
+
   const preconds0: Precondition[] = sealed
     ? []
     : confirmStepActive
-      ? [...confirmReadiness(entry, { paymentSatisfied, totalReceived, requiredAmount, communications }), ...reserveExtras.map((label) => ({ label, met: false }))]
+      ? [...confirmReadiness(entry, { paymentSatisfied, totalReceived, requiredAmount, communications, earlierAdvanceAsked }), ...otherStayItems(confirmReadiness), ...reserveExtras.map((label) => ({ label, met: false }))]
       : setupStepActive
-        ? withUnsaved(confirmReadiness(entry, { paymentSatisfied, totalReceived, requiredAmount, communications }), unsavedSections)
+        ? [...withUnsaved(s3Readiness(entry, { paymentSatisfied, totalReceived, requiredAmount, communications, earlierAdvanceAsked }), unsavedSections), ...setUpOtherItems]
       : inquiryStepActive
-        ? withUnsaved(s1Readiness(entry), unsavedSections)
+        ? [...withUnsaved(s1Readiness(entry), unsavedSections), ...tripInquiryItems]
         : quoteStepActive
           ? [...s2Readiness(entry), ...negotiationExtras.map((label) => ({ label, met: false, card: "table" }))]
           : arrivalStepActive
             ? s5Readiness(entry, hotelToday, { guestPresent })
             : checkInStepActive
               ? s6Readiness(entry, {
+                  refundWaiting: paymentStatusQuery.data?.refundWaiting,
                   guestDetails: guestDetailsCoverage,
                   identityVerified: stayIdentityVerified,
                   balance: checkInBalance,
@@ -1139,6 +1318,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const sections = STEP_SECTIONS[viewing] ?? {};
   const goToCard = (card?: string) => {
     if (!card) return;
+    // A section that lives behind a step-line button (Payments, 2026-11-07) is opened by it.
+    if (!window.dispatchEvent(new CustomEvent("desk:go-to-card", { detail: card, cancelable: true }))) return;
     // A section asked for from the step line leaves Set up's rooms view first (2026-10-28).
     if (topLayout && paneParam) setPane(null);
     // The card may live in one of the step's panes: open that pane first, then scroll once the
@@ -1219,6 +1400,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   // move (Sealed, Resume, Go to). On the stage layout the move leaves the bar and floats into the
   // work column's bottom-right corner only once it is ready (2026-10-28, operator).
   let moveReady: boolean | null = null;
+  // Set up's move stands on the page all the time (2026-11-05), and says what it waits for.
+  let moveFirst: { words: string; card?: string } | null = null;
   if (sealed || (step.key === "closed" && entry.status === "CLOSED")) {
     forward = (
       <Chip tone="quiet" icon="lock">
@@ -1241,7 +1424,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     );
   } else if (inquiryStepActive) {
     // A section with changes not saved holds the move, as the Negotiation table's do (2026-10-27).
-    const ok = canProgressS1(entry) && !preconds.some((p) => p.unsaved);
+    // On a trip at Inquiry every stay moves together, so every stay's own items hold it (2026-11-07).
+    const ok = canProgressS1(entry) && !preconds.some((p) => p.unsaved) && tripInquiryItems.length === 0;
     moveReady = ok;
     forward = (
       <Button className="go" state={ok ? "default" : "inert"} reason={ok ? undefined : firstNote} onClick={() => setSummaryOpen(true)}>
@@ -1256,11 +1440,24 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     forward = (
       <Button
         className="go"
-        state={advanceMutation.isPending ? "working" : ok ? "default" : "inert"}
+        state={advanceMutation.isPending || tripSetUpMutation.isPending ? "working" : ok ? "default" : "inert"}
         reason={ok ? undefined : firstNote}
         workingLabel="Moving…"
         onClick={() =>
-          advanceMutation.mutate(
+          together.active
+            ? tripSetUpMutation.mutate(undefined, {
+                onSuccess: (r) => {
+                  setSelected(3);
+                  setMoved({
+                    title: "Negotiation is done",
+                    from: "Negotiation",
+                    to: "Set up",
+                    who: [name, entry.inquiry?.id ?? entry.id].filter(Boolean).join(" · "),
+                    next: `${plural(r.moved.length, "stay")} at Set up — who pays, the proforma and the advance.`,
+                  });
+                },
+              })
+            : advanceMutation.mutate(
             { targetStage: "S3", announce: true },
             {
               onSuccess: () =>
@@ -1269,7 +1466,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                   from: "Negotiation",
                   to: "Set up",
                   who: [name, entry.id].filter(Boolean).join(" · "),
-                  next: "Next: who pays, the cancellation terms, the proforma and the advance.",
+                  next: "Next: who pays, the proforma and the advance.",
                 }),
             },
           )
@@ -1282,10 +1479,29 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     // Set up's move opens the Reserve page; the booking stays at Set up until Reserve the booking is
     // pressed there (restored 2026-10-29). Green once it can be pressed; a section with changes not
     // saved holds it (2026-10-28).
-    const ok = readyToConfirm && !preconds.some((p) => p.unsaved);
+    const ok = readyToMoveOn && !preconds.some((p) => p.unsaved) && setUpOtherItems.length === 0;
     moveReady = ok;
+    const first = ok ? null : preconds.find((p) => !p.met) ?? null;
+    if (first) {
+      const short = paymentStatusQuery.data?.shortfall ?? 0;
+      moveFirst = {
+        card: first.card,
+        words:
+          first.card === "money" && short > 0
+            ? `${money(short)} of the advance is still to come. Record it, or extend credit`
+            : first.unsaved
+              ? first.label.replace(/^Changes to (.*) saved$/, "Save the changes to $1")
+              : first.todo ?? first.label,
+      };
+    }
     forward = (
-      <Button className="go" state={ok ? "default" : "inert"} reason={ok ? "the booking stays at Set up until you reserve it" : firstNote} onClick={() => setSelected(4)}>
+      <Button
+        className="go"
+        state={blockMutation.isPending ? "working" : ok ? "default" : "inert"}
+        workingLabel="Blocking the rooms…"
+        reason={ok ? "blocks the rooms and opens Reserve; the booking stays at Set up until you reserve it" : undefined}
+        onClick={() => blockMutation.mutate()}
+      >
         Move to Reserve
       </Button>
     );
@@ -1294,10 +1510,10 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     forward = (
       <Button
         className="go"
-        state={activateMutation.isPending ? "working" : voucherAnswerRecorded ? "default" : "inert"}
+        state={activateMutation.isPending || arrivalTripMutation.isPending ? "working" : voucherAnswerRecorded ? "default" : "inert"}
         reason={voucherAnswerRecorded ? undefined : "the voucher went to the guest — record their answer first"}
         workingLabel="Opening…"
-        onClick={() => activateMutation.mutate()}
+        onClick={() => (movingToArrivalTogether ? setArrivalPickOpen(true) : activateMutation.mutate())}
       >
         Move to Arrival
       </Button>
@@ -1630,7 +1846,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                   {trip.others.slice(0, 2).map((s, i) => (
                     <span key={s.id}>
                       {i ? ", " : ""}
-                      <Link href={bookingHref(s.id)}>{fmtRange(s.checkInDate, s.checkOutDate)}</Link>
+                      <Link href={bookingHref(s.id)}><StayDates checkIn={s.checkInDate} checkOut={s.checkOutDate} /></Link>
                     </span>
                   ))}
                   {trip.others.length > 2 ? ` and ${trip.others.length - 2} more` : ""}
@@ -1725,24 +1941,26 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     </>
   );
   // Reserve's voucher is sent, or not, on its own card (2026-10-29) — not asked twice on that step.
-  // Reserved, Reserve's voucher section decides every paper the change made — the voucher and the
-  // pass's proforma — so the card above the step says nothing twice (2026-10-29).
-  const reserveVoucherOnCard =
-    viewing === 4 && entry.currentStage === "S4"
-      ? () => true
-      : viewing === 4
-        ? (h: { kind: string; documentId: string }) => h.kind === "CONFIRMATION_VOUCHER" && h.documentId === entry.reservation?.id
-        : undefined;
   const dialogs = (
     <>
         <StepMoved note={moved} onClose={closeMoved} />
 
+        {arrivalPickOpen && movingToArrivalTogether ? (
+          <ArrivalPickDialog
+            stays={[entry, ...together.others].sort((a, b) => together.stayNoOf(a.id) - together.stayNoOf(b.id))}
+            stayNoOf={together.stayNoOf}
+            busy={arrivalTripMutation.isPending}
+            onClose={() => setArrivalPickOpen(false)}
+            onMove={(ids) => arrivalTripMutation.mutate(ids)}
+          />
+        ) : null}
         <CommitDialog
           open={confirmOpen}
-          title="Reserve the booking"
-          caseLines={[<b key="n">{name}</b>, `${entry.id} · ${fmtRange(entry.checkInDate, entry.checkOutDate)}`]}
+          title={reservingTogether ? `Reserve ${together.label.toLowerCase()} together` : "Reserve the booking"}
+          caseLines={[<b key="n">{name}</b>, <span key="stay">{entry.id} · <StayDates checkIn={entry.checkInDate} checkOut={entry.checkOutDate} /></span>]}
           lines={[
-            fin.indicativeTotal !== null ? `The price freezes at ${money(fin.indicativeTotal, fin.currency)} — the guest is held to it.` : "The price freezes — the guest is held to it.",
+            ...(reservingTogether ? ["Every stay is reserved with this press, each through its own checks. A stay that cannot be is named and stays at Set up."] : []),
+            reservingTogether ? "Each stay's price freezes — the guest is held to it." : fin.indicativeTotal !== null ? `The price freezes at ${money(fin.indicativeTotal, fin.currency)} — the guest is held to it.` : "The price freezes — the guest is held to it.",
             "The rooms lock — no longer offerable to anyone else.",
             "The confirmation voucher is made — nothing is sent; you send it next, or not.",
             "Any later change opens a new pass; it never edits what is frozen.",
@@ -1765,10 +1983,26 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
         <InquirySummaryDialog
           entry={entry}
           open={summaryOpen && inquiryStepActive}
-          busy={advanceMutation.isPending}
+          busy={advanceMutation.isPending || tripMoveMutation.isPending}
           onClose={() => setSummaryOpen(false)}
+          alsoMoving={tripAtInquiry.others}
+          stayNoOf={tripAtInquiry.stayNoOf}
           onConfirm={() =>
-            advanceMutation.mutate(
+            tripAtInquiry.combined
+              ? tripMoveMutation.mutate(undefined, {
+                  onSuccess: (r) => {
+                    setSummaryOpen(false);
+                    setSelected(2);
+                    setMoved({
+                      title: "The inquiry is made",
+                      from: "Inquiry",
+                      to: "Negotiation",
+                      who: [name, entry.inquiry?.id ?? entry.id].filter(Boolean).join(" · "),
+                      next: `${plural(r.moved.length, "stay")} at Negotiation — set who sleeps where and price each stay, then make the trip's quotation.`,
+                    });
+                  },
+                })
+              : advanceMutation.mutate(
               { targetStage: "S2", announce: true },
               {
                 onSuccess: () => {
@@ -1883,7 +2117,9 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     // The booking file opens on Charges & payments (2026-10-28, operator: "always make the charges tab
     // be shown in default in all stages"); Booking is a click away.
     const fileTab: "details" | BookingTab = view === "step" || view === "other" ? "money" : view;
-    const sectionsLeft = flowItems.filter((i) => !i.met).length;
+    // Every section done and still no move: what holds it belongs to no section, so nothing on the page
+    // would say why. Said where the move would be (2026-11-05, when "Before you move on" went).
+    const heldBy = moveReady === false && !viewingPast && !sealed && !inPage && flowItems.every((i) => i.met) ? inherited.filter((p) => !p.met) : [];
     // A step looked back at (from a later step's rail, or a closed booking's) offers the way back to
     // the step the booking is at — the journey line that did this is gone (2026-10-27).
     const backTo = viewingPast && viewing !== currentOrder ? currentOrder : null;
@@ -1911,7 +2147,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                     <span className="refno" title="The enquiry's number">
                       <b>{entry.inquiry?.id ?? "—"}</b>
                     </span>
-                    <StayPicker entry={entry} />
+                    {/* At Inquiry a trip's stays are worked on one page: the enquiry's number alone (2026-11-07). */}
+                    {entry.currentStage === "S1" ? null : <StayPicker entry={entry} />}
                     {entry.guestProfile?.vipTier ? (
                       <Chip tone="accent" tier>
                         VIP
@@ -1983,7 +2220,6 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                     </div>
                   ) : null}
                   {!sealed ? <ActiveRoomMoves entryId={entry.id} tz={clock.tz} /> : null}
-                  {!sealed ? <HeldPapersCard entryId={entry.id} tz={clock.tz} skip={reserveVoucherOnCard} /> : null}
                   {!sealed && !viewingPast ? <FollowNotice entry={entry} /> : null}
                   {!sealed ? <TripFollowPrompt entry={entry} /> : null}
                   <CaseCards
@@ -2017,56 +2253,6 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                       <OtherWaysSlot node={null}>{native}</OtherWaysSlot>
                     </AlsoBar>
                   </div>
-                  {!viewingPast && !sealed && !inPage && preconds.length ? (
-                    // What the move checks, in one place (the stage template's "Before you move on"):
-                    // each section, then what the system does when the booking moves on. The move
-                    // itself is in the bar at the foot.
-                    <div className="card before-move">
-                      <h4>Before you move on</h4>
-                      <table className="compact">
-                        <tbody>
-                          {Object.entries(sections).map(([card, title]) => {
-                            const own = flowItems.filter((i) => i.card === card);
-                            if (!own.length) return null;
-                            // A section made from one with changes not saved waits on it (2026-10-27).
-                            const met = flowSectionDone(flowItems, card, derived);
-                            const waitsOn = own.every((i) => i.met) ? flowSectionWaitsOn(flowItems, card, derived) : null;
-                            return (
-                              <tr key={card} className="pick" onClick={() => goToCard(card)}>
-                                <td className={met ? "ok-ink" : "warn-ink"}>{met ? <Icon name="check" /> : "●"}</td>
-                                <td>{title}</td>
-                                <td className="meta">
-                                  {met
-                                    ? "done"
-                                    : waitsOn
-                                      ? `waits for ${sections[waitsOn] ?? waitsOn} to be saved`
-                                      : own.filter((i) => !i.met).map((i) => i.label).join(" · ")}
-                                </td>
-                              </tr>
-                            );
-                          })}
-                          {inherited.map((p) => (
-                            <tr key={p.label}>
-                              <td className={p.met ? "ok-ink" : "warn-ink"}>{p.met ? <Icon name="check" /> : "→"}</td>
-                              <td colSpan={2} className="meta">
-                                {p.label}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                      <div className={`before-move-foot ${sectionsLeft ? "wait" : "ready"}`}>
-                        {sectionsLeft
-                          ? `${plural(sectionsLeft, "thing")} still to do`
-                          : confirmStepActive
-                            ? // Not reserved yet: the page's own button does it (2026-10-29).
-                              "Everything is on record · Reserve the booking"
-                            : closedStepActive
-                              ? "Everything is in · Close & seal the record"
-                              : `${STEP_NAMES[viewing - 1]} is done · next: ${STEP_NAMES[viewing] ?? ""}`}
-                      </div>
-                    </div>
-                  ) : null}
                 </QuietScreen>
                 {/* the old side column's "what runs here" target — kept mounted, not shown */}
                 <div ref={setRailSlot} hidden />
@@ -2074,7 +2260,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
 
               {/* No bar at the foot any more (2026-10-28, operator: "eliminate the bottom bar
                   completely") — the step's other ways sit on the step line, what is still to do is
-                  the step line's list and Before you move on. What stays is a dock with no height,
+                  the step line's list. What stays is a dock with no height,
                   sticky at the work column's foot: once everything is done the move floats there,
                   in the bottom-right corner, and stays put while the page scrolls. */}
               <div className="move-dock">
@@ -2083,6 +2269,14 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                 {moveReady && !inPage ? (
                   <div className="move-float" role="region" aria-label="Move on">
                     {forward}
+                  </div>
+                ) : moveFirst && !inPage ? (
+                  <div className="move-float move-waiting" role="region" aria-label="Move on" title={moveFirst.words}>
+                    {forward}
+                  </div>
+                ) : heldBy.length ? (
+                  <div className="move-float move-held" role="status">
+                    To move on: {heldBy.map((p) => p.label).join(" · ")}
                   </div>
                 ) : null}
               </div>
@@ -2102,16 +2296,40 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                   )}
                 </div>
                 <div className="fstay">
-                  <StayDates checkIn={entry.checkInDate} checkOut={co} />
-                  <div className="ffacts-line">
-                    <span>
-                      <b>{nights ? plural(nights, "night") : "No dates yet"}</b>
-                    </span>
-                    <span>
-                      <b>{roomsCount ? plural(roomsCount, "room") : "Rooms not set"}</b>
-                    </span>
-                    <span className="camein">{cameInAs}</span>
-                  </div>
+                  {together.active || (tripAtInquiry.combined && tripAtInquiry.loaded) ? (
+                    <>
+                      {[entry, ...(together.active ? together.others : tripAtInquiry.others)]
+                        .sort((a, b) => (together.active ? together.stayNoOf(a.id) - together.stayNoOf(b.id) : tripAtInquiry.stayNoOf(a.id) - tripAtInquiry.stayNoOf(b.id)))
+                        .map((e) => {
+                          const n = nightsOf(e.checkInDate, e.checkOutDate);
+                          return (
+                            <div key={e.id} className="fstay-row">
+                              <b>Stay {together.active ? together.stayNoOf(e.id) : tripAtInquiry.stayNoOf(e.id)}</b>
+                              <StayDates checkIn={e.checkInDate} checkOut={e.checkOutDate} />
+                              <span className="fstay-n">
+                                {n ? plural(n, "night") : "No dates yet"} · {e.numberOfRooms ? plural(e.numberOfRooms, "room") : "Rooms not set"}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      <div className="ffacts-line">
+                        <span className="camein">{cameInAs}</span>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <StayDates checkIn={entry.checkInDate} checkOut={co} />
+                      <div className="ffacts-line">
+                        <span>
+                          <b>{nights ? plural(nights, "night") : "No dates yet"}</b>
+                        </span>
+                        <span>
+                          <b>{roomsCount ? plural(roomsCount, "room") : "Rooms not set"}</b>
+                        </span>
+                        <span className="camein">{cameInAs}</span>
+                      </div>
+                    </>
+                  )}
                 </div>
               </div>
               <div className="ftabs" role="tablist">
@@ -2346,9 +2564,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                   )
                 ) : null}
                 <div hidden={view !== "step"}>
-                {/* Papers a walk re-issued and held — whichever walk ran, the send-or-not question is here. */}
                 {!sealed ? <ActiveRoomMoves entryId={entry.id} tz={clock.tz} /> : null}
-                {!sealed ? <HeldPapersCard entryId={entry.id} tz={clock.tz} skip={reserveVoucherOnCard} /> : null}
                 <CaseCards
                     entry={entry}
                     step={viewing}
@@ -2565,4 +2781,10 @@ function runningClocks(entry: EntryDetail, timers: TimerRecordSummary[], promise
     .slice(0, 8);
 }
 
-
+/** A trip's other stay's own item at Inquiry, named with its stay. */
+function tripItemLabel(n: number, label: string): string {
+  if (label === "Preferred room selected") return `Stay ${n}'s rooms chosen`;
+  if (label === "Availability searched") return `Stay ${n} · the house asked`;
+  if (label === "The guest staying, named") return `Stay ${n} · the guest named`;
+  return `Stay ${n} · ${label.charAt(0).toLowerCase()}${label.slice(1)}`;
+}

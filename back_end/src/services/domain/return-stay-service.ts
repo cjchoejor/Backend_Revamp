@@ -21,6 +21,12 @@
  * to the new one, show the old one by default but create the new entry"). So the new stay is parked
  * as a move between stays parks one: its inquiry clock would otherwise run out while nobody is on
  * it. Opening it from the booking head resumes it with a fresh clock.
+ *
+ * Added while the first stay is still at Inquiry, nothing is asked about how it is set up
+ * (2026-11-09, operator: "while inquiring in s1 for the first it doesn't have to give the option
+ * different or same configuration since we are doing it anyway in s1 and s2 combine"): the stays
+ * are worked on one page at Inquiry and in one table at Negotiation, so it is marked as set up with
+ * the first. Nothing is copied. From Negotiation on the desk is asked, and "Same" copies.
  */
 import type { ActorLevel, PrismaClient } from "@prisma/client";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
@@ -131,6 +137,9 @@ export async function addReturnStay(
     contactPersonEmail: source.contactPersonEmail ?? undefined,
   });
 
+  const setUpTogether = source.currentStage === "S1";
+  if (setUpTogether) await prisma.entry.update({ where: { id: created.id }, data: { sameSetupAs: source.id } });
+
   // Both bookings carry the link, so either one opened alone says the trip has another stay.
   await auditService.emit(prisma, { actorId: actor.actorId, actorLevel: actor.actorLevel }, {
     eventType: "ENTRY.RETURN_STAY_ADDED",
@@ -150,7 +159,7 @@ export async function addReturnStay(
     timestamp: new Date(),
     inquiryId: source.inquiry.id,
     entryId: created.id,
-    payload: { fromEntryId: source.id },
+    payload: { fromEntryId: source.id, setUpTogether },
   });
 
   let parked = false;

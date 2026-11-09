@@ -265,7 +265,7 @@ export function RatePackagesEditor({ owner, ownerLabel }: { owner: PackageOwner;
 
   // The desk reads these rates on its own screens: a change here shows there at once.
   const refreshDesk = () => {
-    for (const k of [["rate-reference"], ["price-pick"], ["quotation-live-preview"], ["lookup", "rate-packages"], ["lookup-rate-packages"]]) {
+    for (const k of [["rate-sheet"], ["rate-reference"], ["price-pick"], ["quotation-live-preview"], ["lookup", "rate-packages"], ["lookup-rate-packages"]]) {
       void queryClient.invalidateQueries({ queryKey: k });
     }
   };

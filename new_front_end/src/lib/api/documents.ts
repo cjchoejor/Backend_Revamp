@@ -19,7 +19,7 @@ export function authHeaders(session: Session): Record<string, string> {
 }
 
 /** Fetch a PDF endpoint as a blob and open it in a new browser tab. Throws on non-2xx. */
-async function openPdf(session: Session, path: string): Promise<void> {
+export async function openPdf(session: Session, path: string): Promise<void> {
   const res = await fetch(path, { headers: authHeaders(session), credentials: "same-origin" });
   if (!res.ok) {
     let message = `Could not load PDF (HTTP ${res.status})`;
@@ -217,5 +217,26 @@ export async function getNightsShorten(session: Session, of: PaperOf): Promise<{
   const q = new URLSearchParams(Object.entries(of).filter(([, v]) => !!v) as Array<[string, string]>);
   const res = await fetch(`/api/papers/nights-shorten?${q.toString()}`, { headers: authHeaders(session), credentials: "same-origin" });
   if (!res.ok) throw new Error(`Could not read the paper's nights (HTTP ${res.status})`);
+  return res.json();
+}
+
+/**
+ * Whom a paper goes to by default (2026-11-07, `GET /api/entries/:id/send-to`): through an agency
+ * or a company, the booking's contact person there, else the party itself; on a direct booking the
+ * guest, then who is arriving, then the caller. The email and the WhatsApp number, and whose they are.
+ */
+export type SendTo = {
+  party: string | null;
+  email: string | null;
+  emailWhose: string | null;
+  phone: string | null;
+  phoneWhose: string | null;
+  partyEmail: string | null;
+  guestEmail: string | null;
+};
+
+export async function getSendTo(session: Session, entryId: string): Promise<SendTo> {
+  const res = await fetch(`/api/entries/${entryId}/send-to`, { headers: authHeaders(session), credentials: "same-origin" });
+  if (!res.ok) throw new Error(`Could not read whom the papers go to (HTTP ${res.status})`);
   return res.json();
 }

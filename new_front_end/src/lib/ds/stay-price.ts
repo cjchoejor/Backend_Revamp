@@ -20,22 +20,33 @@ import { useBookingRooms } from "@/hooks/use-booking-rooms";
 import { useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSession } from "@/hooks/use-session";
-import { previewQuotationPricing, type QuotationLivePreview, type RoomCompositionInput } from "@/lib/api/quotations";
+import { previewQuotationPricing, previewTripQuotations, type QuotationLivePreview, type RoomCompositionInput, type TripPreviewStayInput } from "@/lib/api/quotations";
 import type { EntryBillingSummary } from "@/lib/api/entries";
-import type { PickPricing } from "@/lib/api/availability";
+import type { PickPricing, TripPickPricing } from "@/lib/api/availability";
 import { currentPassConfigs } from "@/lib/desk/workspace";
-import { cleanPicks, usePickPricing, type BillNight } from "@/components/ds/steps/s1-bill";
+import { cleanPicks, usePickPricing, useTripPickPricing, type BillNight } from "@/components/ds/steps/s1-bill";
+import { useTripAtInquiry } from "@/components/ds/steps/s1-trip-shared";
+import { tripStamp, useStaysTogether } from "@/components/ds/steps/s2-together";
 import type { AvailabilityOptionSelected, EntryDetail } from "@/types/api";
 
 export type PriceDraft =
   /** The Inquiry step's rooms, per night — `saved` when they are what is on record. */
-  | { kind: "PICKS"; perNight: BillNight[]; saved: boolean; labels?: Record<string, string> }
+  | {
+      kind: "PICKS";
+      perNight: BillNight[];
+      saved: boolean;
+      labels?: Record<string, string>;
+      /** A trip at Inquiry: its other stays' rooms as the page has them (2026-11-07). */
+      trip?: Array<{ entryId: string; perNight: BillNight[]; saved: boolean; labels?: Record<string, string> }>;
+    }
   /** The Negotiation table — `saved` when it matches the quotation on file. */
   | {
       kind: "TABLE";
       roomCompositions: RoomCompositionInput[];
       discount: { percent?: number | null; amount?: number | null } | null;
       saved: boolean;
+      /** The stays set up the same, each as the table has it (2026-11-09). A saved stay names its quotation. */
+      together?: Array<TripPreviewStayInput & { stayNo: number; saved: boolean }>;
     };
 
 const draftKey = (entryId: string) => ["price-draft", entryId] as const;
@@ -97,6 +108,22 @@ export type StayPrice = {
   /** Rooms the system chose quietly, named by their type (2026-10-28). */
   labels?: Record<string, string> | null;
   loading: boolean;
+  /** A trip at Inquiry: every stay's rooms priced together (2026-11-07), with what the bill needs to name them. */
+  trip?: {
+    pricing: TripPickPricing;
+    entries: EntryDetail[];
+    stayNoOf: (id: string) => number;
+    labels: Record<string, Record<string, string> | undefined>;
+    unsaved: boolean;
+    loading: boolean;
+  } | null;
+  /** The stays set up the same, at Negotiation: every stay's price, together or stay by stay (2026-11-09). */
+  tableTrip?: {
+    data: Awaited<ReturnType<typeof previewTripQuotations>>;
+    stayNoOf: (id: string) => number;
+    unsaved: boolean;
+    loading: boolean;
+  } | null;
 };
 
 export function useStayPrice(entry: EntryDetail | null, billing: EntryBillingSummary | null): StayPrice {
@@ -118,11 +145,67 @@ export function useStayPrice(entry: EntryDetail | null, billing: EntryBillingSum
     staleTime: 30_000,
   });
 
+  // The stays set up the same: each read as the table has it, or as quoted when it is saved.
+  const together = table?.together && table.together.length > 1 && table.together.every((s) => s.roomCompositions.length > 0) ? table.together : null;
+  const tripBody = together?.map(({ stayNo: _n, saved, quotationId, ...s }) => ({ ...s, quotationId: saved ? quotationId : null })) ?? null;
+  const tripTable = useQuery({
+    queryKey: ["stay-price-trip", entryId, tripBody ? JSON.stringify(tripBody) : ""],
+    queryFn: () => previewTripQuotations(session!, entryId, tripBody!),
+    enabled: !!session && !!tripBody,
+    placeholderData: (prev) => prev,
+    staleTime: 30_000,
+  });
+  // Past Negotiation the stays viewed together read as the quotations their bills read (2026-11-09,
+  // operator: "it is not showing the price for the trip but one of the stays").
+  const quoted = useStaysTogether(live && (entry?.currentStage === "S3" || entry?.currentStage === "S4") ? entry : null);
+  const quotedBody = quoted.active && entry ? [entry.id, ...quoted.others.map((o) => o.id)].map((id) => ({ entryId: id, roomCompositions: [], billQuotation: true })) : null;
+  const tripQuoted = useQuery({
+    queryKey: ["stay-price-trip-quoted", entryId, tripStamp(entry)],
+    queryFn: () => previewTripQuotations(session!, entryId, quotedBody!),
+    enabled: !!session && !!quotedBody && quotedBody.length > 1,
+    placeholderData: (prev) => prev,
+    staleTime: 30_000,
+  });
+  const tableTrip =
+    together && tripTable.data
+      ? {
+          data: tripTable.data,
+          stayNoOf: (id: string) => together.find((s) => s.entryId === id)?.stayNo ?? 0,
+          unsaved: together.some((s) => !s.saved),
+          loading: tripTable.isFetching,
+        }
+      : quotedBody && tripQuoted.data
+        ? { data: tripQuoted.data, stayNoOf: quoted.stayNoOf, unsaved: false, loading: tripQuoted.isFetching }
+        : null;
+
   const picksDraft = live && entry?.currentStage === "S1" && draft?.kind === "PICKS" && cleanPicks(draft.perNight).length > 0 ? draft : null;
   const atInquiryOrNegotiation = live && (entry?.currentStage === "S1" || entry?.currentStage === "S2");
   const pickNights = entry && !useTable && quoteAmount == null && atInquiryOrNegotiation ? (picksDraft?.perNight ?? savedPickNights(entry)) : [];
   const pick = usePickPricing(entryId, pickNights, pickNights.length > 0);
   const bookingRooms = useBookingRooms(entry);
+
+  // A trip at Inquiry: the other stays' rooms as the page has them, else as saved.
+  const tripAt = useTripAtInquiry(live && entry?.currentStage === "S1" ? entry : null);
+  const tripDraft = picksDraft?.trip ?? (draft?.kind === "PICKS" ? draft.trip : undefined);
+  const otherNights = (o: EntryDetail) => tripDraft?.find((x) => x.entryId === o.id)?.perNight ?? savedPickNights(o);
+  const tripStays =
+    entry && tripAt.combined && tripAt.loaded && !useTable && quoteAmount == null
+      ? [{ entryId, picks: pickNights }, ...tripAt.others.map((o) => ({ entryId: o.id, picks: otherNights(o) }))]
+      : [];
+  const tripPick = useTripPickPricing(entryId, tripStays, tripStays.length > 1);
+  const trip = tripPick.pricing
+    ? {
+        pricing: tripPick.pricing,
+        entries: entry ? [entry, ...tripAt.others] : tripAt.others,
+        stayNoOf: tripAt.stayNoOf,
+        labels: {
+          [entryId]: picksDraft?.labels ?? Object.fromEntries(bookingRooms.labels),
+          ...Object.fromEntries((tripDraft ?? []).map((x) => [x.entryId, x.labels])),
+        },
+        unsaved: (!!picksDraft && !picksDraft.saved) || (tripDraft ?? []).some((x) => !x.saved),
+        loading: tripPick.loading,
+      }
+    : null;
 
   if (useTable) {
     const p = preview.data ?? null;
@@ -136,10 +219,11 @@ export function useStayPrice(entry: EntryDetail | null, billing: EntryBillingSum
       preview: p,
       pick: null,
       loading: preview.isFetching,
+      tableTrip,
     };
   }
   if (quoteAmount != null) {
-    return { source: "QUOTE", amount: quoteAmount, currency, kind: "", unsaved: false, savedQuoteAmount: null, preview: null, pick: null, loading: false };
+    return { source: "QUOTE", amount: quoteAmount, currency, kind: "", unsaved: false, savedQuoteAmount: null, preview: null, pick: null, loading: false, tableTrip };
   }
   if (pick.pricing) {
     const unsaved = !!picksDraft && !picksDraft.saved;
@@ -154,6 +238,22 @@ export function useStayPrice(entry: EntryDetail | null, billing: EntryBillingSum
       pick: pick.pricing,
       labels: picksDraft?.labels ?? Object.fromEntries(bookingRooms.labels),
       loading: pick.loading,
+      trip,
+    };
+  }
+  if (trip) {
+    // This stay has nothing picked, but another stay of the trip has.
+    return {
+      source: "PICKS",
+      amount: null,
+      currency: trip.pricing.currency,
+      kind: "rooms only — meals and extras are added at Negotiation",
+      unsaved: trip.unsaved,
+      savedQuoteAmount: null,
+      preview: null,
+      pick: null,
+      loading: trip.loading,
+      trip,
     };
   }
   return { source: null, amount: null, currency, kind: "", unsaved: false, savedQuoteAmount: null, preview: null, pick: null, loading: pick.loading || preview.isFetching };

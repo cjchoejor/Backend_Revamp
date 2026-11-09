@@ -12,6 +12,8 @@ export async function getInquiry(session: Session, inquiryId: string) {
 
 export type CallerDetails = {
   title?: string | null;
+  /** One name (2026-11-05); the backend splits it. */
+  name?: string | null;
   firstName?: string | null;
   lastName?: string | null;
   phone?: string | null;
@@ -31,6 +33,10 @@ export function updateEntrySource(
     ratePackageId?: string | null;
     corporateClientRef?: string | null;
     corporateCoordinator?: string | null;
+    /** A direct booking's caller, saved with the rest (2026-11-05). */
+    caller?: CallerDetails | null;
+    /** Who to ring at the agency or company, first one first. */
+    partyContacts?: CoordinatorContact[] | null;
   },
 ) {
   return apiRequest<unknown>(`/api/entries/${entryId}/source`, { method: "POST", session, body });
@@ -47,12 +53,17 @@ export function updateEntryCaller(session: Session, entryId: string, body: Calle
  * `arrivingIsGuest`: the guest named is the one arriving — on a direct booking "who is arriving"
  * is filled from them (2026-10-28).
  */
-type GuestNamingOptions = { keepNewName?: boolean; arrivingIsGuest?: boolean };
+type GuestNamingOptions = {
+  keepNewName?: boolean;
+  arrivingIsGuest?: boolean;
+  /** The same guest on the trip's other stays still at Inquiry (2026-11-07). */
+  alsoTripStays?: boolean;
+};
 
 export type SetGuestBody =
   | ({ mode: "CALLER"; nationality?: string | null } & GuestNamingOptions)
   | ({ mode: "EXISTING"; guestProfileId: string; phone?: string | null; email?: string | null } & GuestNamingOptions)
-  | ({ mode: "NEW"; title?: string | null; firstName: string; lastName: string; nationality?: string | null; phone?: string | null; email?: string | null } & GuestNamingOptions);
+  | ({ mode: "NEW"; title?: string | null; name: string; nationality?: string | null; phone?: string | null; email?: string | null } & GuestNamingOptions);
 
 /** Name the guest who is staying — the caller, a guest on file, or someone new (Inquiry only). */
 export function setEntryGuest(session: Session, entryId: string, body: SetGuestBody) {
@@ -66,6 +77,8 @@ export function setEntryGuest(session: Session, entryId: string, body: SetGuestB
     /** A phone or email typed that differs from the record's — kept as it was, not overwritten. */
     contactKept?: string[];
     arrivingSet?: boolean;
+    /** Each other stay of the trip at Inquiry, named with the same guest or why not. */
+    tripStays?: Array<{ entryId: string; named: boolean; message: string | null }>;
   }>(
     `/api/entries/${entryId}/guest`,
     { method: "POST", session, body },
@@ -79,6 +92,8 @@ export async function createInquiry(
     guestProfileId?: string | null;
     /** Who called (2026-10-12): a phone or an email (not on an OTA), "on WhatsApp?" with a phone. */
     caller?: CallerDetails | null;
+    /** Who to ring at the agency or company, first one first (2026-11-05). Booked through one, it is the caller. */
+    partyContacts?: CoordinatorContact[];
     sourceChannel: string;
     /** How the guest came in; the backend checks it belongs to `sourceChannel`. */
     cameInAs?: string;
@@ -138,7 +153,7 @@ export async function updateInquiryNotes(session: Session, inquiryId: string, no
 
 // ----- Phase C operational lookups (L1-accessible search) -----
 
-export type CoordinatorContact = { name: string; phone?: string | null; email?: string | null };
+export type CoordinatorContact = { title?: string | null; name: string; phone?: string | null; email?: string | null };
 
 export type LookupPartyMatch = {
   id: string;
@@ -268,6 +283,35 @@ export type LookupRatePackage = {
   apRate: string | null;
   currency: string;
 };
+
+/** The rates a booking is priced on, as one sheet: every figure the server's. */
+export type RateSheet = {
+  source: "PACKAGE" | "COMMON" | "PUBLISHED" | "NO_PACKAGE";
+  party: { kind: "TRAVEL_AGENT" | "CORPORATE"; id: string; name: string } | null;
+  packageName: string | null;
+  currency: string;
+  serviceChargePercent: string;
+  gstPercent: string;
+  rooms: Array<{ roomTypeId: string; code: string | null; name: string; rate: string | null; withTax: string | null }>;
+  extraBed: { rate: string | null; withTax: string | null };
+  meals: Array<{ key: "breakfast" | "lunch" | "dinner"; rate: string | null; withTax: string | null }>;
+  plans: Array<{
+    key: "cp" | "mapLunch" | "mapDinner" | "ap";
+    rate: string | null;
+    withTax: string | null;
+    fromMeals: boolean;
+    mealsAddUpTo: string | null;
+  }>;
+};
+
+export async function getRateSheet(
+  session: Session,
+  q: { travelAgentId?: string | null; corporateAccountId?: string | null; ratePackageId?: string | null; checkIn?: string | null; checkOut?: string | null },
+) {
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(q)) if (v) qs.set(k, v);
+  return apiRequest<RateSheet>(`/api/lookups/rate-sheet?${qs}`, { session });
+}
 
 export async function listRatePackagesLookup(
   session: Session,

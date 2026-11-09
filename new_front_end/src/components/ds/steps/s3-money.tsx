@@ -12,13 +12,17 @@
  * Every figure is `GET /api/entries/:id/payment-status` — received, required, remaining — summed
  * server-side in Decimal. Nothing is added up here.
  */
-import { useEffect, useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { RefundStanding } from "../refund-bits";
+import { useEffect, useState, type ReactNode } from "react";
+import { useMutation, useQueries } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { BindingBox, Button, Chip, Icon, MoneyInput } from "@/design-system";
 import { useSession } from "@/hooks/use-session";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
+import { usePaymentStatus } from "@/hooks/use-payment-status";
 import {
+  deleteFolioPayment,
+  getPaymentStatus,
   reconcileAdvancePayment,
   recordCreditExtension,
   ADVANCE_PAYMENT_MODES,
@@ -29,11 +33,15 @@ import {
 import { expiryModeForPlanDue, resolveCreditExpiry, type CreditExpiryChoice } from "@/components/desk/workspace/advance-settlement";
 import { fmtDate, fmtDateTime, fmtStamp, money, plural } from "@/lib/ds/format";
 import { STEP_NAMES, stepNoOfStage } from "@/lib/ds/steps";
-import type { AdvancePaymentPlanSummary, EntryDetail, InvoiceSummary, PaymentStatusSummary } from "@/types/api";
-import { ActionRow, Choice, DsDialog, Fact, Facts, Live, SeeRow, StepCard, goToStepCard, toastRefusal, useFinishWhenDone, useStepFlow } from "./kit";
+import type { AdvancePaymentPlanSummary, EntryDetail, InvoiceSummary, PaymentStatusSummary, RecordedPayment } from "@/types/api";
+import { listEntryCommunications, replySettled } from "@/lib/api/entries";
+import { TripPaymentDialog, useTripProforma } from "./s3-trip-proforma";
+import type { TripProforma } from "@/lib/api/trip-papers";
+import { useRefreshEntry, ActionRow, Choice, DsDialog, Fact, Facts, Live, NotSentChip, SeeRow, StepCard, currentPassStart, goToStepCard, latestDispatched, toastRefusal, useFinishWhenDone, useStepFlow } from "./kit";
 import { hotelLocalToIso, isoToHotelLocal } from "./s2-shared";
 import { Help, HelpHere } from "@/components/ds/help";
 import { DateTimeInput } from "@/components/ds/date-input";
+import { billNo, proformaBaseNo, quoteNo } from "@/lib/ds/papers";
 
 /* ------------------------------------------------------------------ words */
 
@@ -66,8 +74,8 @@ const REQUIREMENT_MODES = [
   ["AMOUNT", "A flat amount"],
 ] as const;
 type RequirementMode = (typeof REQUIREMENT_MODES)[number][0];
-/** The amount's choice in the advance box — "the hotel's default" is offered when this booking set its own. */
-type AmountMode = RequirementMode | "DEFAULT";
+/** The amount's choice in the advance box — "No advance" is offered when this booking has an amount. */
+type AmountMode = RequirementMode | "NONE";
 
 type Reissued = { versionNumber: number; supersededIds: string[] } | null | undefined;
 
@@ -91,12 +99,11 @@ export function PaymentPlanCard({
   elevated,
   status,
   statusLoading,
-  refetching,
-  onRefetch,
   tz,
   bill,
   askAdvance = 0,
-  onRoomsBlocked,
+  onAskAdvanceSeen,
+  onPaymentRecorded,
   onChanged,
   setUp = true,
 }: {
@@ -105,18 +112,19 @@ export function PaymentPlanCard({
   elevated: boolean;
   status: PaymentStatusSummary | undefined;
   statusLoading: boolean;
-  refetching: boolean;
-  onRefetch: () => void;
   tz: string;
   /** This pass's proforma, whether it went out, and whether the guest's answer is on record. */
   bill: { proforma: InvoiceSummary | null; dispatched: boolean; answered: boolean; notAsked?: boolean };
-  /** Raised when the desk says yes to an advance after the terms: the advance box opens. */
+  /** Raised when the desk says yes to an advance on setting who pays: the advance box opens. */
   askAdvance?: number;
+  /** The ask was acted on, so a redraw of this card does not open the box again (2026-11-09). */
+  onAskAdvanceSeen?: () => void;
   /**
    * A payment came in and the rooms were blocked by it (`until`), or not (`null`) — the hold card
    * then asks whether to set a block time, or shows itself to block them by hand (2026-10-28).
    */
-  onRoomsBlocked?: (until: string | null) => void;
+  /** A payment came in at Set up: the block card asks whether to block the rooms. */
+  onPaymentRecorded?: () => void;
   onChanged: () => void;
   /**
    * Reserve's advance (2026-10-29, operator: "sometimes the advance can be paid even in stage 4 … it
@@ -131,7 +139,11 @@ export function PaymentPlanCard({
   const folio = entry.folio ?? null;
   const [open, setOpen] = useState<null | "advance" | "pay" | "credit">(null);
   useEffect(() => {
-    if (askAdvance > 0) setOpen("advance");
+    if (askAdvance > 0) {
+      setOpen("advance");
+      onAskAdvanceSeen?.();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [askAdvance]);
   // Money in, or credit extended, finishes the section once it covers the advance (2026-10-28).
   const finish = useFinishWhenDone("money");
@@ -159,9 +171,9 @@ export function PaymentPlanCard({
     if (askedNow > 0 && (reissued || !bill.dispatched)) goToProforma();
   };
   /** A payment came in: the money section finishes, and the hold card takes it from there. */
-  const paid = (blockedUntil: string | null | undefined) => {
+  const paid = () => {
     moneyIn();
-    if (blockedUntil !== undefined) onRoomsBlocked?.(blockedUntil);
+    onPaymentRecorded?.();
   };
 
   const inPayments = (folio?.payments ?? []).filter((p) => /IN/i.test(p.paymentDirection ?? "") && !/OUT|REFUND/i.test(p.paymentDirection ?? ""));
@@ -203,12 +215,16 @@ export function PaymentPlanCard({
     ? "open the provisional bill first"
     : reconciled
       ? "already signed off"
-      : !reconcilable
-        ? "nothing received yet"
-        : null;
+      : status?.mayReconcile === false
+        ? `This is for ${status.reconcileBy ?? "the GM or an admin"}.`
+        : !reconcilable
+          ? "nothing received yet"
+          : null;
+  const recordedCount = status?.recordedPayments?.length ?? 0;
 
   const nothingAsked = !!status && status.requiredAmount === 0 && received === 0 && !status.creditExtensionActive;
-  const stateChip = !status ? null : status.paidInFull ? (
+  // With nothing asked and nothing in, the box below says so. "Paid in full" is true of zero (2026-11-05).
+  const stateChip = !status || nothingAsked ? null : status.paidInFull ? (
     <Chip tone="success" icon="check">
       received
     </Chip>
@@ -226,7 +242,11 @@ export function PaymentPlanCard({
   const summary = !status
     ? undefined
     : status.requiredAmount === 0 && received === 0
-      ? "No advance asked"
+      ? setUp && !bill.proforma
+        ? "The advance is not answered yet"
+        : "No advance asked"
+      : status.requiredAmount === 0
+        ? `Received ${money(received, cur)} · no advance asked`
       : status.paidInFull
         ? `Received ${money(received, cur)} of ${money(status.requiredAmount, cur)}`
         : status.satisfied
@@ -234,17 +254,28 @@ export function PaymentPlanCard({
           : `Received ${money(received, cur)} of ${money(status.requiredAmount, cur)}`;
   const basis = status?.requirementBasis ?? null;
   const advWindow = status?.advanceWindow ?? null;
+  // The advance's three steps (2026-11-05, operator: "show these ones like a step ... like a progress
+  // bar things, so connect them with a line"). Each is done on the server's facts; the first not
+  // done is the one being worked.
+  const asked = !!status && (status.requiredAmount > 0 || !!plan || received > 0);
+  const paidUp = !!status && status.paidInFull && (status.requiredAmount > 0 || received > 0);
+  const stepsDone = [asked, paidUp, reconciled];
+  const firstOpen = stepsDone.indexOf(false);
+  const stepState = (i: number): MoneyStepState => (stepsDone[i] ? "done" : i === firstOpen ? "now" : "later");
   const shortWithPlan =
     !!status && !status.paidInFull && received > 0 && !!plan && (plan.plan !== "FULL" || !!plan.balanceDueAt) && !status.creditExtensionActive;
 
   return (
     <StepCard
       flow={setUp ? "money" : undefined}
-      flowAfter={setUp ? "proforma" : undefined}
+      // Not after the proforma: a yes to an advance is answered in this card's box, and the proforma waits for it.
+      flowAfter={setUp ? "billing-model" : undefined}
       title={setUp ? "The payment plan" : "The advance"}
       right={stateChip}
       summary={setUp ? summary : undefined}
+      restsFolded={setUp && nothingAsked}
     >
+      <RefundStanding status={status} currency={cur} tz={tz} />
       {!folio ? (
         <span className="meta">The plan is set once the provisional bill exists — choose the billing model above.</span>
       ) : !status ? (
@@ -254,27 +285,27 @@ export function PaymentPlanCard({
           {nothingAsked ? (
             <BindingBox family="bound" stateWord="no advance" style={{ marginBottom: 10 }}>
               <div className="sm" style={{ paddingRight: 90 }}>
-                No advance is asked for this booking ·{" "}
-                {status.requirementSource === "OPERATOR" ? "set for this booking" : "the hotel's settings ask for nothing"}
+                {setUp && !bill.proforma ? "The advance is not answered yet" : "No advance is asked for this booking"}
               </div>
             </BindingBox>
           ) : null}
+          {nothingAsked ? null : (
           <Facts wide>
             <Fact
               k="Rule"
               meta={
-                status.requirementSource === "OPERATOR"
-                  ? `set for this booking · the hotel's minimum stays ${money(status.configuredBaseAmount ?? null, cur)}`
-                  : status.groupBoostApplied
-                    ? `raised to ${status.groupBoostApplied.multiplierPercent}% for a group · the base is ${money(status.groupBoostApplied.baseAmount, cur)}`
-                    : "from the hotel's settings"
+                status.requirementSource === "PARTY"
+                  ? `${basis?.partyName ?? "their"} rule`
+                  : status.requirementSource === "OPERATOR"
+                    ? "set for this booking"
+                    : undefined
               }
             >
-              {status.requirementSource === "OPERATOR"
-                ? basis?.mode === "PERCENT"
+              {status.requirementSource === "NONE"
+                ? "no advance asked"
+                : basis?.mode === "PERCENT"
                   ? `advance ${basis.percent}% of the quotation`
-                  : "a flat advance"
-                : "the house advance"}
+                  : "a flat advance"}
             </Fact>
             <Fact
               k="Amount"
@@ -320,7 +351,7 @@ export function PaymentPlanCard({
             <Fact k="The bill">
               {bill.proforma ? (
                 <>
-                  Proforma {bill.proforma.invoiceNumber ?? bill.proforma.id}
+                  Proforma {billNo(bill.proforma)}
                   {bill.dispatched ? (
                     <span className="meta">
                       {" "}
@@ -328,7 +359,7 @@ export function PaymentPlanCard({
                       {bill.notAsked ? null : bill.answered ? " · their answer is on record" : " · awaiting their answer"}
                     </span>
                   ) : (
-                    <span className="meta"> · generated, not sent</span>
+                    <> <NotSentChip /></>
                   )}
                 </>
               ) : (
@@ -338,6 +369,11 @@ export function PaymentPlanCard({
             <Fact k="Received" meta={(status.installments?.length ?? 0) > 1 ? `in ${status.installments!.length} payments` : undefined}>
               <span className="money">{money(status.totalReceived, cur)}</span> <span className="meta">of {money(status.requiredAmount, cur)}</span>
             </Fact>
+            {(status.coveredByTrip ?? 0) > 0 ? (
+              <Fact k="Covered by the trip" meta="paid for the trip, held on another stay's bill">
+                <span className="money">{money(status.coveredByTrip, cur)}</span>
+              </Fact>
+            ) : null}
             <Fact k="The remainder" meta={status.shortfall > 0 && plan ? (dueWords(plan.plan, plan.balanceDueAt) ?? undefined) : undefined}>
               {status.shortfall > 0 ? <span className="money">{money(status.shortfall, cur)}</span> : "nothing left to pay on the advance"}
             </Fact>
@@ -358,6 +394,7 @@ export function PaymentPlanCard({
             ) : null}
             {reconciled ? <Fact k="Signed off">yes — the money position is accepted</Fact> : null}
           </Facts>
+          )}
 
           {status.installments?.length ? (
             <table className="table compact" style={{ marginTop: 10 }}>
@@ -409,14 +446,18 @@ export function PaymentPlanCard({
           </div>
         ) : null}
         {editable && folio ? (
-          // The acts side by side, not one per line (2026-10-28, operator: "the buttons are taking
-          // needless space by being arranged vertically, make it horizontal").
-          <div className="actbar">
+          // The steps in a row, joined by a line, with credit apart: it is not a step, it is the
+          // FOM's way round the second one (2026-11-05, as 2026-10-28: "make it horizontal").
+          <div className="money-flow">
+            <ol className="money-steps">
+              <MoneyStep n={1} state={stepState(0)}>
             <ActionRow
-              label={status?.requirementSource === "OPERATOR" || plan ? "Change the advance" : "Set the advance"}
+              label={status?.requirementSource === "OPERATOR" || status?.requirementSource === "PARTY" || plan ? "Change the advance" : "Set the advance"}
               caption="How much the guest pays, and how and when. The proforma prints both, so a change issues it again."
               onClick={() => setOpen("advance")}
             />
+              </MoneyStep>
+              <MoneyStep n={2} state={stepState(1)}>
             <ActionRow
               kind="primary"
               // Green and full size once it is time (2026-10-28, operator: "more prominent than just a
@@ -425,15 +466,18 @@ export function PaymentPlanCard({
               label="Record payment"
               caption={
                 setUp
-                  ? "The rooms are blocked automatically when money comes in — even part of it."
+                  ? "It goes on the bill. You are asked about blocking the rooms next."
                   : "It goes on the booking's bill with the advance already received."
               }
               onClick={() => setOpen("pay")}
-              state={payHold ? "inert" : "default"}
-              heldBy={payHold?.why}
-              goTo={payHold?.card}
-              goToLabel={payHold?.cta}
+              // With money on record the box still opens, to delete a payment recorded by mistake.
+              state={payHold && !recordedCount ? "inert" : "default"}
+              heldBy={recordedCount ? undefined : payHold?.why}
+              goTo={recordedCount ? undefined : payHold?.card}
+              goToLabel={recordedCount ? undefined : payHold?.cta}
             />
+              </MoneyStep>
+              <MoneyStep n={3} state={stepState(2)}>
             <ActionRow
               label="Mark reconciled"
               caption="Signs off the money position — ticks the arrival checklist and stops the chasing. It needs money received first; a direct-bill booking is the exception."
@@ -441,6 +485,9 @@ export function PaymentPlanCard({
               state={reconcileM.isPending ? "working" : reconcileLock ? "inert" : "default"}
               heldBy={reconcileLock}
             />
+              </MoneyStep>
+            </ol>
+            <div className="money-side">
             <ActionRow
               label="Extend credit"
               caption="Lets the booking go on without the advance, up to a ceiling and for a time."
@@ -448,24 +495,46 @@ export function PaymentPlanCard({
               state={elevated ? "default" : "inert"}
               heldBy={elevated ? null : "Extending credit is the FOM's call."}
             />
-            <ActionRow
-              label="Read the payment again"
-              caption="When money was logged on another terminal."
-              onClick={onRefetch}
-              state={refetching ? "working" : "default"}
-            />
+            </div>
           </div>
         ) : null}
       </Live>
 
       {open === "advance" ? <AdvanceDialog entry={entry} status={status} tz={tz} onClose={() => setOpen(null)} onDone={afterAdvance} /> : null}
       {open === "pay" && folio ? (
-        <PaymentDialog entry={entry} folioId={folio.id} status={status} currency={cur} onClose={() => setOpen(null)} onDone={paid} />
+        <PaymentDialog entry={entry} folioId={folio.id} status={status} currency={cur} tz={tz} lock={payHold?.why ?? null} onClose={() => setOpen(null)} onDone={paid} onChanged={onChanged} />
       ) : null}
       {open === "credit" ? (
         <CreditDialog entry={entry} status={status} tz={tz} currency={cur} onClose={() => setOpen(null)} onDone={moneyIn} />
       ) : null}
     </StepCard>
+  );
+}
+
+/* ------------------------------------------------------------------ the steps */
+
+type MoneyStepState = "done" | "now" | "later";
+
+/** A stay the advance box or the credit box is for. */
+type AdvanceStay = { entry: EntryDetail; stayNo: number; status: PaymentStatusSummary | undefined };
+const pinnedOf = (st: PaymentStatusSummary | undefined) => (st?.requirementSource === "OPERATOR" || st?.requirementSource === "PARTY" ? st.requirementBasis : null);
+const pinnedModeOf = (st: PaymentStatusSummary | undefined): AmountMode | null => {
+  const pin = pinnedOf(st);
+  return pin ? (pin.mode === "AMOUNT" ? "AMOUNT" : "PERCENT") : null;
+};
+const pinnedValueOf = (st: PaymentStatusSummary | undefined): string => {
+  const pin = pinnedOf(st);
+  return pin?.mode === "PERCENT" && pin.percent != null ? String(pin.percent) : pin?.mode === "AMOUNT" && st?.requiredAmount != null ? String(st.requiredAmount) : "";
+};
+/** The one value every item has, or null when they differ. */
+const oneOf = <T,>(xs: T[]): T | null => (xs.every((x) => x === xs[0]) ? xs[0] : null);
+
+function MoneyStep({ n, state, children }: { n: number; state: MoneyStepState; children: ReactNode }) {
+  return (
+    <li className={`money-step ${state}`} aria-current={state === "now" ? "step" : undefined}>
+      <span className="ms-n">{state === "done" ? <Icon name="check" /> : n}</span>
+      {children}
+    </li>
   );
 }
 
@@ -480,12 +549,15 @@ export function PaymentPlanCard({
 function AdvanceDialog({
   entry,
   status,
+  stays,
   tz,
   onClose,
   onDone,
 }: {
   entry: EntryDetail;
   status: PaymentStatusSummary | undefined;
+  /** Viewing stays together (2026-11-09): the box is for every one of them. */
+  stays?: AdvanceStay[];
   tz: string;
   onClose: () => void;
   /** With the amount now asked, and whether the proforma was issued again. */
@@ -500,40 +572,53 @@ function AdvanceDialog({
   // placeholder "50" read as the value already there). A first advance opens with nothing chosen,
   // and each question appears once the one before it is answered (2026-10-28, operator: "step by
   // step — ask for, the figure, how they'll pay, when the rest is coming, then save").
-  const pinned = status?.requirementSource === "OPERATOR" ? status.requirementBasis : null;
-  const pinnedMode: AmountMode | null = pinned ? (pinned.mode === "AMOUNT" ? "AMOUNT" : "PERCENT") : null;
-  const pinnedValue =
-    pinned?.mode === "PERCENT" && pinned.percent != null
-      ? String(pinned.percent)
-      : pinned?.mode === "AMOUNT" && status?.requiredAmount != null
-        ? String(status.requiredAmount)
-        : "";
+  const list: AdvanceStay[] = stays ?? [{ entry, stayNo: 1, status }];
+  const many = list.length > 1;
+  const anyPinned = list.some((x) => !!pinnedOf(x.status));
+  const pinnedMode = oneOf(list.map((x) => pinnedModeOf(x.status)));
+  const pinnedValue = oneOf(list.map((x) => pinnedValueOf(x.status))) ?? "";
   const [mode, setMode] = useState<AmountMode | null>(pinnedMode);
   const [value, setValue] = useState(pinnedValue);
-  const amountModes: ReadonlyArray<readonly [AmountMode, string]> = pinned ? [...REQUIREMENT_MODES, ["DEFAULT", "The hotel's default"] as const] : REQUIREMENT_MODES;
+  // A flat amount is typed per stay (2026-11-09, operator); blank asks nothing of that stay.
+  const [amounts, setAmounts] = useState<Record<string, string>>(() =>
+    Object.fromEntries(list.map((x) => [x.entry.id, pinnedModeOf(x.status) === "AMOUNT" ? pinnedValueOf(x.status) : ""])),
+  );
+  const amountModes: ReadonlyArray<readonly [AmountMode, string]> = anyPinned ? [...REQUIREMENT_MODES, ["NONE", "No advance"] as const] : REQUIREMENT_MODES;
   const n = Number(value);
-  const typed = value.trim() !== "";
-  const amountOk = mode === "DEFAULT" || (mode === "PERCENT" && isAmount(value) && n <= 100) || (mode === "AMOUNT" && isAmount(value));
-  const requirement =
-    mode === "DEFAULT"
-      ? pinned
-        ? ({ mode: "CLEAR" } as const)
-        : null
-      : !mode || !amountOk
-        ? null
-        : pinnedMode === mode && pinnedValue === value.trim()
-          ? null
-          : mode === "AMOUNT"
-            ? ({ mode: "AMOUNT", amount: n } as const)
-            : ({ mode: "PERCENT", percent: n } as const);
-  // Back to the hotel's settings when they ask for nothing: there is nothing for the guest to pay,
-  // so there is no plan to ask about either.
-  const noAdvance = mode === "DEFAULT" && (status?.configuredBaseAmount ?? 0) <= 0;
+  const amountsIn = list.map((x) => (amounts[x.entry.id] ?? "").trim());
+  const typed = many && mode === "AMOUNT" ? amountsIn.some(Boolean) : value.trim() !== "";
+  const amountOk =
+    mode === "NONE" ||
+    (mode === "PERCENT" && isAmount(value) && n <= 100) ||
+    (mode === "AMOUNT" && (many ? amountsIn.some(Boolean) && amountsIn.every((a) => !a || isAmount(a)) : isAmount(value)));
+  /** What to save on one stay: nothing when it already reads this way. */
+  const requirementFor = (x: AdvanceStay) => {
+    const pin = pinnedOf(x.status);
+    const pm = pinnedModeOf(x.status);
+    const pv = pinnedValueOf(x.status);
+    if (mode === "NONE") return pin ? ({ mode: "CLEAR" } as const) : null;
+    if (!mode || !amountOk) return null;
+    if (mode === "PERCENT") return pm === "PERCENT" && pv === value.trim() ? null : ({ mode: "PERCENT", percent: n } as const);
+    const typedHere = (many ? amounts[x.entry.id] ?? "" : value).trim();
+    if (!typedHere) return pin ? ({ mode: "CLEAR" } as const) : null;
+    return pm === "AMOUNT" && pv === typedHere ? null : ({ mode: "AMOUNT", amount: Number(typedHere) } as const);
+  };
+  // No advance: there is nothing for the guest to pay, so there is no plan to ask about either.
+  const noAdvance = mode === "NONE";
 
   /* ---- how and when they'll pay ---- */
-  const saved = status?.paymentPlan ?? null;
-  const savedDue: Due | null = saved ? (saved.balanceDueAt ? (saved.balanceDueAt === "AT_CHECKOUT" ? "AT_CHECKIN" : saved.balanceDueAt) : "") : null;
-  const savedPromised = saved?.promisedBy ? isoToHotelLocal(saved.promisedBy, tz) : "";
+  const planKey = (x: AdvanceStay) => {
+    const q = x.status?.paymentPlan;
+    return JSON.stringify([q?.plan ?? null, q?.balanceDueAt ?? null, q?.promisedBy ?? null, q?.note ?? null]);
+  };
+  // The stays' plan when they share one; with different plans the box starts empty.
+  const saved = oneOf(list.map(planKey)) != null ? (list[0].status?.paymentPlan ?? null) : null;
+  const anySaved = list.some((x) => !!x.status?.paymentPlan);
+  const dueOfPlan = (q: AdvancePaymentPlanSummary | null | undefined): Due | null =>
+    q ? (q.balanceDueAt ? (q.balanceDueAt === "AT_CHECKOUT" ? "AT_CHECKIN" : q.balanceDueAt) : "") : null;
+  const promisedOfPlan = (q: AdvancePaymentPlanSummary | null | undefined) => (q?.promisedBy ? isoToHotelLocal(q.promisedBy, tz) : "");
+  const savedDue = dueOfPlan(saved);
+  const savedPromised = promisedOfPlan(saved);
   // Nothing is picked until the desk picks it — opening the box to change the amount must not
   // record "the whole amount, now" on the guest's behalf.
   const [plan, setPlan] = useState<PlanKind | null>(saved?.plan ?? null);
@@ -543,42 +628,60 @@ function AdvanceDialog({
   const [clearPlan, setClearPlan] = useState(false);
   // A plan is asked for whenever there is an advance to pay; clearing it is an answer too.
   const planAsked = !noAdvance && !clearPlan;
-  const planChanged =
-    clearPlan || (noAdvance && !!saved)
-      ? !!saved
-      : plan != null &&
-        due != null &&
-        (plan !== (saved?.plan ?? null) || due !== savedDue || promised !== savedPromised || note.trim() !== (saved?.note ?? "").trim());
-  const planBody = (): NonNullable<Parameters<typeof setAdvanceTerms>[2]["plan"]> | null => {
-    if (clearPlan || noAdvance) return saved ? { plan: "CLEAR" } : null;
-    if (!plan || due == null || !planChanged) return null;
+  /** What to save on one stay: nothing when it already says this. */
+  const planFor = (x: AdvanceStay): NonNullable<Parameters<typeof setAdvanceTerms>[2]["plan"]> | null => {
+    const had = x.status?.paymentPlan ?? null;
+    if (clearPlan || noAdvance) return had ? { plan: "CLEAR" } : null;
+    if (!plan || due == null) return null;
     const note_ = note.trim() || null;
+    const same = plan === (had?.plan ?? null) && due === dueOfPlan(had) && promised === promisedOfPlan(had) && note.trim() === (had?.note ?? "").trim();
+    if (same) return null;
     if (due === "") return { plan, note: note_ };
     if (due === "BEFORE_CHECKIN") {
       const iso = hotelLocalToIso(promised, tz);
-      if (!iso) throw new Error("Pick the date the guest promised");
-      return { plan, balanceDueAt: due, promisedBy: iso, note: note_ };
+      return iso ? { plan, balanceDueAt: due, promisedBy: iso, note: note_ } : null;
     }
     return { plan, balanceDueAt: due, note: note_ };
   };
+  const planChanged = list.some((x) => !!planFor(x));
 
   const save = useMutation({
-    mutationFn: () => {
-      const p = planBody();
-      return setAdvanceTerms(session!, entry.id, { ...(requirement ? { requirement } : {}), ...(p ? { plan: p } : {}) });
+    mutationFn: async () => {
+      const done: Array<{ x: AdvanceStay; res: Awaited<ReturnType<typeof setAdvanceTerms>> }> = [];
+      const failed: Array<{ x: AdvanceStay; error: unknown }> = [];
+      for (const x of list) {
+        const r = requirementFor(x);
+        const q = planFor(x);
+        if (!r && !q) continue;
+        try {
+          done.push({ x, res: await setAdvanceTerms(session!, x.entry.id, { ...(r ? { requirement: r } : {}), ...(q ? { plan: q } : {}) }) });
+        } catch (error) {
+          if (!many) throw error;
+          failed.push({ x, error });
+        }
+      }
+      return { done, failed };
     },
-    onSuccess: (res) => {
-      const words = [
-        requirement ? (requirement.mode === "CLEAR" ? "the hotel's default advance applies again" : `the advance is ${money(res.requiredAmount)}`) : null,
-        clearPlan || (noAdvance && saved) ? "how they'll pay is cleared" : planChanged ? "how they'll pay is recorded" : null,
-      ].filter(Boolean);
-      const said = words.join(" · ");
-      toast.success(said.charAt(0).toUpperCase() + said.slice(1), {
-        description: reissueWords(res.reissuedProforma) ?? undefined,
-        duration: res.reissuedProforma ? 9000 : undefined,
-      });
+    onSuccess: ({ done, failed }) => {
+      const first = done[0]?.res;
+      const reissued = done.find((d) => d.res.reissuedProforma)?.res.reissuedProforma;
+      if (many) {
+        if (done.length) toast.success(`The advance is saved · ${done.map((d) => `stay ${d.x.stayNo}: ${money(d.res.requiredAmount)}`).join(" · ")}`, { duration: 9000 });
+        for (const f of failed) toastRefusal(f.error, `Stay ${f.x.stayNo}'s advance was not saved`);
+      } else if (first) {
+        const r = requirementFor(list[0]);
+        const words = [
+          r ? (r.mode === "CLEAR" ? "no advance is asked" : `the advance is ${money(first.requiredAmount)}`) : null,
+          clearPlan || (noAdvance && anySaved) ? "how they'll pay is cleared" : planChanged ? "how they'll pay is recorded" : null,
+        ].filter(Boolean);
+        const said = words.join(" · ");
+        toast.success(said.charAt(0).toUpperCase() + said.slice(1), {
+          description: reissueWords(reissued) ?? undefined,
+          duration: reissued ? 9000 : undefined,
+        });
+      }
       onClose();
-      onDone(Number(res.requiredAmount ?? 0), !!res.reissuedProforma);
+      onDone(done.some((d) => Number(d.res.requiredAmount ?? 0) > 0) ? 1 : 0, !!reissued);
     },
     onError: (e) => toastRefusal(e, "The advance could not be saved"),
   });
@@ -601,7 +704,7 @@ function AdvanceDialog({
   const planIn = figureIn && (!planAsked || plan != null);
   const dueIn = planIn && (!planAsked || due != null);
   const dateIn = dueIn && (!planAsked || due !== "BEFORE_CHECKIN" || !!promised);
-  const changed = !!requirement || planChanged;
+  const changed = list.some((x) => !!requirementFor(x)) || planChanged;
   const holdReason = !askedFor
     ? "Choose how much to ask for"
     : !figureIn
@@ -635,9 +738,11 @@ function AdvanceDialog({
       width={620}
       title="The advance"
       caseLines={[
-        status
-          ? `Asked now: ${money(status.requiredAmount)} · ${status.requirementSource === "OPERATOR" ? "set for this booking" : "the hotel's default"} · received ${money(status.totalReceived)}`
-          : "Nothing read yet",
+        many
+          ? `Asked now: ${list.map((x) => `stay ${x.stayNo} ${money(x.status?.requiredAmount ?? 0)}`).join(" · ")}`
+          : status
+            ? `Asked now: ${money(status.requiredAmount)} · ${status.requirementSource === "OPERATOR" ? "set for this booking" : status.requirementSource === "PARTY" ? `${status.requirementBasis?.partyName ?? "the party"}'s rule` : "nothing asked"}`
+            : "Nothing read yet",
       ]}
       help="The proforma prints the amount and how the guest will pay, so a change issues it again — to send again."
       footer={
@@ -677,12 +782,30 @@ function AdvanceDialog({
             help={
               <Help label="About the amount">
                 {mode === "PERCENT"
-                  ? "The house works the figure out from the quotation now — if the quotation changes, set it again."
-                  : "For this booking only — the hotel's minimum is untouched."}
+                  ? many
+                    ? "The same percent of each stay's own quotation, worked out by the house now. If a quotation changes, set it again."
+                    : "The house works the figure out from the quotation now — if the quotation changes, set it again."
+                  : many
+                    ? "One amount for each stay, on that stay's own bill. Leave a stay blank to ask nothing of it."
+                    : "For this booking only."}
               </Help>
             }
           >
-            {mode === "AMOUNT" ? (
+            {mode === "AMOUNT" && many ? (
+              <div className="adv-stays">
+                {list.map((x, i) => (
+                  <div key={x.entry.id} className="adv-stay">
+                    <span>Stay {x.stayNo}</span>
+                    <MoneyInput
+                      aria-label={`Amount for stay ${x.stayNo}`}
+                      value={amounts[x.entry.id] ?? ""}
+                      onChange={(e) => /^\d*\.?\d{0,2}$/.test(e.target.value) && setAmounts((prev) => ({ ...prev, [x.entry.id]: e.target.value }))}
+                      autoFocus={i === 0}
+                    />
+                  </div>
+                ))}
+              </div>
+            ) : mode === "AMOUNT" ? (
               <MoneyInput key="amount" value={value} onChange={(e) => /^\d*\.?\d{0,2}$/.test(e.target.value) && setValue(e.target.value)} autoFocus />
             ) : (
               <div className="suffix">
@@ -699,17 +822,10 @@ function AdvanceDialog({
               </div>
             )}
           </Ask>
-        ) : mode === "DEFAULT" ? (
+        ) : mode === "NONE" ? (
           <p className="meta qnote">
-            The amount set for this booking is dropped — the hotel&rsquo;s settings decide again
-            {noAdvance ? (
-              <>
-                . They ask for no advance on this booking, so there is nothing for the guest to pay
-                {saved ? <> and how they&rsquo;ll pay is cleared too</> : null}.
-              </>
-            ) : (
-              <> — they ask for {money(status?.configuredBaseAmount ?? 0)}.</>
-            )}
+            The amount is dropped, so there is nothing for the guest to pay
+            {anySaved ? <> and how they&rsquo;ll pay is cleared too</> : null}.
           </p>
         ) : null}
 
@@ -724,7 +840,7 @@ function AdvanceDialog({
                 if (next !== "FULL" && due === "") setDue(null);
               }}
             />
-            {saved ? (
+            {anySaved ? (
               <div style={{ marginTop: 8 }}>
                 <Button2 kind="quiet" onClick={() => setClearPlan(true)}>
                   Clear how they&rsquo;ll pay
@@ -821,19 +937,26 @@ function PaymentDialog({
   folioId,
   status,
   currency,
+  tz,
+  lock,
   onClose,
   onDone,
+  onChanged,
 }: {
   entry: EntryDetail;
   folioId: string;
   status: PaymentStatusSummary | undefined;
   currency?: string;
+  tz: string;
+  /** Why no new money can be recorded yet; what is recorded can still be deleted. */
+  lock: string | null;
   onClose: () => void;
+  onChanged: () => void;
   /**
    * With when the rooms are now blocked to: the time when this payment blocked them, `null` when
    * it should have and could not, `undefined` when it was not for this payment to block them.
    */
-  onDone: (blockedUntil: string | null | undefined) => void;
+  onDone: () => void;
 }) {
   const { session } = useSession();
   // Prefilled with what is owed only while nothing has been paid (2026-08-07 ruling) — after a
@@ -850,22 +973,10 @@ function PaymentDialog({
         notes: notes.trim() || undefined,
         paymentMethod: mode ?? undefined,
       }),
-    onSuccess: (res) => {
+    onSuccess: () => {
       toast.success(`${money(Number(amount), currency)} recorded`);
-      const ah = res.autoHold;
-      // A block placed by this payment is asked about on the hold card — keep the time, or set
-      // one (2026-10-28). One the payment could not place is said here, and the card shows itself.
-      let blockedUntil: string | null | undefined;
-      if (ah?.placed) blockedUntil = ah.expiresAt;
-      else if (ah && !ah.placed && ah.reason !== "ALREADY_HELD" && ah.reason !== "NOT_AT_S3") {
-        toast.warning("The rooms were not blocked automatically", {
-          description: `${ah.message} — block them by hand.`,
-          duration: 10000,
-        });
-        blockedUntil = null;
-      }
       onClose();
-      onDone(blockedUntil);
+      onDone();
     },
     onError: (e) => toastRefusal(e, "The payment could not be recorded"),
   });
@@ -894,12 +1005,22 @@ function PaymentDialog({
             disabled={!ok}
             reason={ok ? undefined : !isAmount(amount) ? "put in the amount received" : "choose how it was paid"}
             onClick={() => pay.mutate()}
+            hidden={!!lock}
           >
             Record the payment
           </Button2>
         </>
       }
     >
+      <RecordedPayments entry={entry} folioId={folioId} rows={status?.recordedPayments ?? []} currency={currency} tz={tz} onChanged={onChanged} />
+      {lock ? (
+        <p className="notice next" role="status">
+          <span>
+            <b>No new payment yet.</b> {lock}
+          </span>
+        </p>
+      ) : (
+        <>
       <div className="field">
         <label>
           Amount received
@@ -935,13 +1056,130 @@ function PaymentDialog({
         <input className="input" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="QR · paid from India · ref 4471…" />
       </div>
       <p className="meta">
-        {entry.committedHold
-          ? "The rooms are already held."
-          : entry.cancellationDisclosure
-            ? "A payment — even part of the advance — holds the rooms automatically."
-            : "A payment holds the rooms automatically only once the terms are disclosed — record the disclosure first, or place the hold by hand after."}
+        {entry.committedHold?.state === "PLACED" ? "The rooms are already blocked." : "A payment does not block the rooms by itself. You can set a block time next."}
       </p>
+        </>
+      )}
     </DsDialog>
+  );
+}
+
+/**
+ * What is already recorded, each with its Delete (2026-11-05, operator: "if there are two recorded
+ * payment show both with the note and info (keep it efficient and prominent dont make it too big) so
+ * user can choose which one to delete, and after user clicks on delete payment, prompt user to give
+ * reason and then only submit button"). The server says who may delete which, and why not.
+ */
+export function RecordedPayments({
+  entry,
+  folioId,
+  rows,
+  currency,
+  tz,
+  onChanged,
+}: {
+  entry: EntryDetail;
+  folioId: string;
+  rows: RecordedPayment[];
+  currency?: string;
+  tz?: string;
+  onChanged: () => void;
+}) {
+  const { session } = useSession();
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [why, setWhy] = useState("");
+  const del = useMutation({
+    mutationFn: (id: string) => deleteFolioPayment(session!, folioId, id, { entryId: entry.id, reason: why.trim() }),
+    onSuccess: (out) => {
+      setOpenId(null);
+      setWhy("");
+      const also = [
+        out.blockReleased ? "The block it placed is released, and the rooms are back on sale." : null,
+        out.signOffUndone ? "The money sign-off is taken back." : null,
+        out.roomsBackToHeld ? "The rooms read Held again until the advance is paid." : null,
+        out.proformaMadeAgain ? "A new proforma is made, without this money. It has not been sent." : null,
+      ].filter(Boolean);
+      toast.success(`${money(out.amount, currency)} deleted · received now ${money(out.receivedAfter, currency)}`, also.length ? { description: also.join(" "), duration: 9000 } : undefined);
+      if (out.paperSaidReceived.length) {
+        toast.warning(`${out.paperSaidReceived.join(", ")} went out saying this money was received`, { description: "Send the guest a corrected paper.", duration: 12000 });
+      }
+      onChanged();
+    },
+    onError: (e) => toastRefusal(e, "The payment could not be deleted"),
+  });
+  if (!rows.length) return null;
+  return (
+    <div className="pay-rows" data-recorded-payments>
+      <div className="pay-rows-h">
+        Already recorded · {plural(rows.length, "payment")}
+        <Help label="About deleting a payment">
+          Delete a payment recorded by mistake or with the wrong note, then record it again. It comes off the money received and the bill. The booking&rsquo;s
+          history keeps what was deleted, by whom and why.
+        </Help>
+      </div>
+      <div className="pay-list">
+        {rows.map((r) => {
+          const mode = ADVANCE_PAYMENT_MODES.find(([v]) => v === r.method)?.[1] ?? r.method;
+          return (
+            <div key={r.id} className={`pay-row${openId === r.id ? " open" : ""}`} data-payment={r.id}>
+              <div className="pay-line">
+                <div className="pay-info">
+                  <b>{money(r.amount, currency)}</b>
+                  <span className="pay-meta">{[mode, fmtStamp(r.receivedAt, tz), r.recordedByName ? `by ${r.recordedByName}` : null].filter(Boolean).join(" · ")}</span>
+                  <span className={`pay-note${r.notes?.trim() ? "" : " none"}`}>{r.notes?.trim() || "no note"}</span>
+                </div>
+                {openId === r.id ? null : (
+                  <Button2
+                    kind="danger"
+                    disabled={!r.canDelete}
+                    reason={r.shutWhy ?? undefined}
+                    onClick={() => {
+                      setOpenId(r.id);
+                      setWhy("");
+                    }}
+                  >
+                    Delete
+                  </Button2>
+                )}
+              </div>
+              {openId === r.id ? (
+                <div className="pay-del">
+                  <div className="field">
+                    <label>Why is this payment being deleted?</label>
+                    <textarea className="input" rows={2} value={why} onChange={(e) => setWhy(e.target.value)} autoFocus placeholder="recorded twice · the wrong amount · the wrong note" />
+                  </div>
+                  <div className="pay-del-acts">
+                    <Button2 kind="quiet" disabled={del.isPending} onClick={() => setOpenId(null)}>
+                      Keep it
+                    </Button2>
+                    <Button2 kind="danger" working={del.isPending} disabled={!why.trim()} reason={why.trim() ? undefined : "say why first"} onClick={() => del.mutate(r.id)}>
+                      Delete the payment
+                    </Button2>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/** At Arrival and Check-in, where a payment is taken on the page: the same list, folded away. */
+export function RecordedPaymentsFold({ entry, tz }: { entry: EntryDetail; tz?: string }) {
+  const refresh = useRefreshEntry(entry.id);
+  const status = usePaymentStatus(entry.id, { enabled: !!entry.folio }).data;
+  const [open, setOpen] = useState(false);
+  const rows = status?.recordedPayments ?? [];
+  if (!entry.folio || !rows.length) return null;
+  return (
+    <div className="pay-fold">
+      <Button kind="quiet" compact onClick={() => setOpen((o) => !o)}>
+        {open ? "Hide the recorded payments" : `Delete a recorded payment · ${rows.length}`}
+      </Button>
+      {open ? <RecordedPayments entry={entry} folioId={entry.folio.id} rows={rows} currency={entry.folio.lines?.[0]?.currency} tz={tz} onChanged={() => refresh()} /> : null}
+    </div>
   );
 }
 
@@ -950,6 +1188,7 @@ function PaymentDialog({
 function CreditDialog({
   entry,
   status,
+  stays,
   tz,
   currency,
   onClose,
@@ -957,46 +1196,65 @@ function CreditDialog({
 }: {
   entry: EntryDetail;
   status: PaymentStatusSummary | undefined;
+  /** Viewing stays together: a ceiling for each, one reason. */
+  stays?: AdvanceStay[];
   tz: string;
   currency?: string;
   onClose: () => void;
   onDone: () => void;
 }) {
   const { session } = useSession();
-  const anchors = {
-    promisedBy: status?.paymentPlan?.promisedBy ?? null,
-    checkInDate: entry.checkInDate ?? null,
-    checkOutDate: entry.checkOutDate ?? null,
-  };
+  const list: AdvanceStay[] = stays ?? [{ entry, stayNo: 1, status }];
+  const many = list.length > 1;
+  const anchorsOf = (x: AdvanceStay) => ({
+    promisedBy: x.status?.paymentPlan?.promisedBy ?? null,
+    checkInDate: x.entry.checkInDate ?? null,
+    checkOutDate: x.entry.checkOutDate ?? null,
+  });
+  const anchors = anchorsOf(list[0]);
   const [ceiling, setCeiling] = useState(status && status.shortfall > 0 ? String(status.shortfall) : "");
+  const [ceilings, setCeilings] = useState<Record<string, string>>(() =>
+    Object.fromEntries(list.map((x) => [x.entry.id, x.status && x.status.shortfall > 0 ? String(x.status.shortfall) : ""])),
+  );
   const [reason, setReason] = useState("");
   const [choice, setChoice] = useState<CreditExpiryChoice>(() => ({
-    mode: expiryModeForPlanDue(status?.paymentPlan?.balanceDueAt ?? null, anchors) ?? "NONE",
+    mode: (many ? null : expiryModeForPlanDue(status?.paymentPlan?.balanceDueAt ?? null, anchors)) ?? "NONE",
     hours: "",
   }));
+  const ceilingOf = (x: AdvanceStay) => (many ? ceilings[x.entry.id] ?? "" : ceiling).trim();
   const extend = useMutation({
-    mutationFn: () =>
-      recordCreditExtension(session!, entry.id, {
-        ceilingAmount: Number(ceiling),
-        reason: reason.trim(),
-        ...resolveCreditExpiry(choice, anchors),
-      }),
-    onSuccess: () => {
-      toast.success(`Credit extended up to ${money(Number(ceiling), currency)}`);
+    mutationFn: async () => {
+      const failed: Array<{ x: AdvanceStay; error: unknown }> = [];
+      for (const x of list) {
+        const c = ceilingOf(x);
+        if (!c) continue;
+        try {
+          await recordCreditExtension(session!, x.entry.id, { ceilingAmount: Number(c), reason: reason.trim(), ...resolveCreditExpiry(choice, anchorsOf(x)) });
+        } catch (error) {
+          if (!many) throw error;
+          failed.push({ x, error });
+        }
+      }
+      return failed;
+    },
+    onSuccess: (failed) => {
+      toast.success(many ? "Credit extended on the stays" : `Credit extended up to ${money(Number(ceiling), currency)}`);
+      for (const f of failed) toastRefusal(f.error, `Stay ${f.x.stayNo}'s credit was not extended`);
       onClose();
       onDone();
     },
     onError: (e) => toastRefusal(e, "The credit could not be extended"),
   });
   const hoursOk = choice.mode !== "HOURS" || isAmount(choice.hours);
-  const ok = isAmount(ceiling) && reason.trim().length > 0 && hoursOk;
+  const ceilingsOk = many ? list.some((x) => !!ceilingOf(x)) && list.every((x) => !ceilingOf(x) || isAmount(ceilingOf(x))) : isAmount(ceiling);
+  const ok = ceilingsOk && reason.trim().length > 0 && hoursOk;
   return (
     <DsDialog
       open
       onClose={onClose}
       busy={extend.isPending}
       title="Extend credit"
-      caseLines={status ? [`Still owed on the advance: ${money(status.shortfall, currency)}`] : undefined}
+      caseLines={many ? [`Still owed: ${list.map((x) => `stay ${x.stayNo} ${money(x.status?.shortfall ?? 0, currency)}`).join(" · ")}`] : status ? [`Still owed on the advance: ${money(status.shortfall, currency)}`] : undefined}
       footer={
         <>
           <Button2 kind="quiet" disabled={extend.isPending} onClick={onClose}>
@@ -1005,7 +1263,7 @@ function CreditDialog({
           <Button2
             working={extend.isPending}
             disabled={!ok}
-            reason={ok ? undefined : !isAmount(ceiling) ? "a ceiling amount" : !reason.trim() ? "the commercial reason" : "the number of hours"}
+            reason={ok ? undefined : !ceilingsOk ? "a ceiling amount" : !reason.trim() ? "the commercial reason" : "the number of hours"}
             onClick={() => extend.mutate()}
           >
             Extend the credit
@@ -1021,8 +1279,23 @@ function CreditDialog({
             is due again.
           </Help>
         </label>
-        <MoneyInput value={ceiling} onChange={(e) => /^\d*\.?\d{0,2}$/.test(e.target.value) && setCeiling(e.target.value)} />
-        {status && status.shortfall > 0 && ceiling !== String(status.shortfall) ? (
+        {many ? (
+          <div className="adv-stays">
+            {list.map((x) => (
+              <div key={x.entry.id} className="adv-stay">
+                <span>Stay {x.stayNo}</span>
+                <MoneyInput
+                  aria-label={`Ceiling for stay ${x.stayNo}`}
+                  value={ceilings[x.entry.id] ?? ""}
+                  onChange={(e) => /^\d*\.?\d{0,2}$/.test(e.target.value) && setCeilings((prev) => ({ ...prev, [x.entry.id]: e.target.value }))}
+                />
+              </div>
+            ))}
+          </div>
+        ) : (
+          <MoneyInput value={ceiling} onChange={(e) => /^\d*\.?\d{0,2}$/.test(e.target.value) && setCeiling(e.target.value)} />
+        )}
+        {!many && status && status.shortfall > 0 && ceiling !== String(status.shortfall) ? (
           <span className="hint">
             still owed {money(status.shortfall, currency)} ·{" "}
             <a
@@ -1054,9 +1327,9 @@ function CreditDialog({
         </label>
         <select className="input" value={choice.mode} onChange={(e) => setChoice({ ...choice, mode: e.target.value as CreditExpiryChoice["mode"] })}>
           <option value="NONE">No time limit</option>
-          {anchors.promisedBy ? <option value="PROMISE">The date the guest promised · {fmtDateTime(anchors.promisedBy, tz)}</option> : null}
-          {anchors.checkInDate ? <option value="CHECKIN">Check-in · {fmtDate(anchors.checkInDate)}</option> : null}
-          {anchors.checkOutDate ? <option value="CHECKOUT">Check-out · {fmtDate(anchors.checkOutDate)}</option> : null}
+          {!many && anchors.promisedBy ? <option value="PROMISE">The date the guest promised · {fmtDateTime(anchors.promisedBy, tz)}</option> : null}
+          {anchors.checkInDate ? <option value="CHECKIN">{many ? "Each stay's check-in" : `Check-in · ${fmtDate(anchors.checkInDate)}`}</option> : null}
+          {anchors.checkOutDate ? <option value="CHECKOUT">{many ? "Each stay's check-out" : `Check-out · ${fmtDate(anchors.checkOutDate)}`}</option> : null}
           <option value="HOURS">A number of hours…</option>
         </select>
       </div>
@@ -1076,6 +1349,335 @@ function CreditDialog({
   );
 }
 
+/* ------------------------------------------------------------------ the stays together */
+
+/**
+ * The payment plan for every stay viewed together (2026-11-09, operator: "it should be doing for
+ * together like how it was done in stage 2"). A line per stay, the trip's sums, and one set of acts:
+ * the advance (a percent of each stay's own quotation, or an amount typed for each), a payment shared
+ * between the stays, the sign-off and credit. Every figure is the server's.
+ */
+/**
+ * What each stay is asked and holds, the trip's sums (the server's), and every payment on record
+ * (2026-11-09, operator: "already recorded is not showing in stays 1 and 2 together").
+ */
+function TripMoneyTables({
+  list,
+  trip,
+  planWords,
+  tz,
+}: {
+  list: AdvanceStay[];
+  trip: TripProforma | undefined;
+  planWords?: (q: AdvancePaymentPlanSummary | null | undefined) => string | null;
+  tz: string;
+}) {
+  const payments = list
+    .flatMap((x) => (x.status?.installments ?? []).map((p) => ({ ...p, stayNo: x.stayNo })))
+    .sort((a, b) => a.receivedAt.localeCompare(b.receivedAt) || a.stayNo - b.stayNo);
+  return (
+    <>
+      <table className="table compact">
+        <thead>
+          <tr>
+            <th>Stay</th>
+            <th style={{ textAlign: "right" }}>Asked</th>
+            <th style={{ textAlign: "right" }}>Received</th>
+            <th style={{ textAlign: "right" }}>Still to come</th>
+            {planWords ? <th>How they&rsquo;ll pay</th> : null}
+          </tr>
+        </thead>
+        <tbody>
+          {list.map((x) => (
+            <tr key={x.entry.id} className="static">
+              <td className="nowrap">Stay {x.stayNo}</td>
+              <td className="money" style={{ textAlign: "right" }}>
+                {x.status ? money(x.status.requiredAmount) : "\u2014"}
+              </td>
+              <td className="money" style={{ textAlign: "right" }}>
+                {x.status ? money(x.status.totalReceived) : "\u2014"}
+              </td>
+              <td className="money" style={{ textAlign: "right" }}>
+                {x.status ? money(x.status.shortfall) : "\u2014"}
+                {(x.status?.coveredByTrip ?? 0) > 0 ? <span className="sub ok-ink">{money(x.status!.coveredByTrip)} covered by the trip</span> : null}
+              </td>
+              {planWords ? <td>{planWords(x.status?.paymentPlan) ?? <span className="dash">not recorded yet</span>}</td> : null}
+            </tr>
+          ))}
+          {trip?.advanceAsked ? (
+            <tr className="static">
+              <td className="nowrap">
+                <b>The trip</b>
+              </td>
+              <td className="money" style={{ textAlign: "right" }}>
+                <b>{money(trip.advanceAsked)}</b>
+              </td>
+              <td className="money" style={{ textAlign: "right" }}>
+                <b>{money(trip.received)}</b>
+              </td>
+              <td className="money" style={{ textAlign: "right" }}>
+                <b>{trip.dueNow != null ? money(trip.dueNow) : "\u2014"}</b>
+              </td>
+              {planWords ? <td /> : null}
+            </tr>
+          ) : null}
+        </tbody>
+      </table>
+      {payments.length ? (
+        <table className="table compact" style={{ marginTop: 10 }} data-trip-payments>
+          <thead>
+            <tr>
+              <th>Stay</th>
+              <th>Received</th>
+              <th>At</th>
+              <th>Note</th>
+              <th style={{ textAlign: "right" }}>Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            {payments.map((p) => (
+              <tr key={p.id} className="static">
+                <td className="nowrap">Stay {p.stayNo}</td>
+                <td className="nowrap">{fmtStamp(p.receivedAt, tz)}</td>
+                <td>{p.stage ? STEP_NAMES[stepNoOfStage(p.stage) - 1] : <span className="dash">\u2014</span>}</td>
+                <td>{p.notes || <span className="dash">\u2014</span>}</td>
+                <td className="money" style={{ textAlign: "right" }}>
+                  {money(p.amount)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : null}
+    </>
+  );
+}
+
+/** The booking file's Money received while the stays are viewed together. */
+export function TripMoneyReceived({ entry, stays, stayNoOf, tz }: { entry: EntryDetail; stays: EntryDetail[]; stayNoOf: (id: string) => number; tz: string }) {
+  const { session } = useSession();
+  const statusReads = useQueries({
+    queries: stays.map((st) => ({ queryKey: ["payment-status", st.id], queryFn: () => getPaymentStatus(session!, st.id), enabled: !!session && !!st.folio, retry: false })),
+  });
+  const trip = useTripProforma(entry).data;
+  const list: AdvanceStay[] = stays.map((st, i) => ({ entry: st, stayNo: stayNoOf(st.id), status: statusReads[i]?.data }));
+  return <TripMoneyTables list={list} trip={trip} tz={tz} />;
+}
+
+export function TogetherPaymentPlan({
+  entry,
+  stays,
+  stayNoOf,
+  editable,
+  elevated,
+  tz,
+  askAdvance,
+  onAskAdvanceSeen,
+  onPaymentRecorded,
+  onChanged,
+}: {
+  entry: EntryDetail;
+  stays: EntryDetail[];
+  stayNoOf: (id: string) => number;
+  editable: boolean;
+  elevated: boolean;
+  tz: string;
+  askAdvance: number;
+  onAskAdvanceSeen: () => void;
+  onPaymentRecorded: () => void;
+  onChanged: () => void;
+}) {
+  const { session } = useSession();
+  const [open, setOpen] = useState<null | "advance" | "pay" | "credit">(null);
+  useEffect(() => {
+    if (askAdvance > 0) {
+      setOpen("advance");
+      onAskAdvanceSeen();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [askAdvance]);
+  const finish = useFinishWhenDone("money");
+  const flow = useStepFlow();
+  const statusReads = useQueries({
+    queries: stays.map((st) => ({ queryKey: ["payment-status", st.id], queryFn: () => getPaymentStatus(session!, st.id), enabled: !!session && !!st.folio, retry: false })),
+  });
+  const commReads = useQueries({
+    queries: stays.map((st) => ({ queryKey: ["entry-communications", st.id], queryFn: () => listEntryCommunications(session!, st.id), enabled: !!session })),
+  });
+  const trip = useTripProforma(entry).data;
+  const list: AdvanceStay[] = stays.map((st, i) => ({ entry: st, stayNo: stayNoOf(st.id), status: statusReads[i]?.data }));
+
+  const bills = stays.map((st, i) => {
+    const since = currentPassStart(st);
+    const live = (st.folio?.invoices ?? []).filter((inv) => inv.invoiceType === "PROFORMA" && inv.state !== "SUPERSEDED" && (!since || (inv.createdAt ?? "") >= since));
+    return {
+      stayNo: stayNoOf(st.id),
+      hasFolio: !!st.folio,
+      dispatched: live.some((inv) => inv.dispatchedAt != null),
+      answered: replySettled(latestDispatched(commReads[i]?.data?.items, "PROFORMA_INVOICE", since)),
+    };
+  });
+  const noBill = bills.find((b) => !b.hasFolio);
+  const unsent = bills.find((b) => !b.dispatched);
+  const unanswered = bills.find((b) => !b.answered);
+  const payHold = noBill
+    ? { why: "Set who pays first — money has nowhere to land until there is a bill.", card: "billing-model", cta: "Go to who pays" }
+    : unsent
+      ? { why: "Send the proforma first — money is logged against the bill the guest received.", card: "proforma", cta: "Go to the proforma" }
+      : unanswered
+        ? { why: "Record the guest's answer to the proforma first.", card: "proforma", cta: "Go to the proforma" }
+        : null;
+  const payDue = !payHold && list.some((x) => !!x.status && x.status.requiredAmount > 0 && !x.status.paidInFull && x.status.shortfall > 0);
+
+  const nothingAsked = list.every((x) => !!x.status && x.status.requiredAmount === 0 && x.status.totalReceived === 0 && !x.status.creditExtensionActive);
+  const asked = list.some((x) => !!x.status && (x.status.requiredAmount > 0 || !!x.status.paymentPlan || x.status.totalReceived > 0));
+  const paidUp = asked && list.every((x) => !!x.status && x.status.paidInFull);
+  const reconciled = list.every((x) => !!x.entry.folio?.advancePaymentReconciliationComplete);
+  const stepsDone = [asked, paidUp, reconciled];
+  const firstOpen = stepsDone.indexOf(false);
+  const stepState = (i: number): MoneyStepState => (stepsDone[i] ? "done" : i === firstOpen ? "now" : "later");
+
+  const canReconcile = (x: AdvanceStay) =>
+    !!x.entry.folio && !x.entry.folio.advancePaymentReconciliationComplete && x.status?.mayReconcile !== false && ((x.status?.totalReceived ?? 0) > 0 || (x.status?.coveredByTrip ?? 0) > 0 || ["DIRECT_BILL", "GOVERNMENT"].includes(x.entry.folio?.billingModel ?? ""));
+  const reconcileTargets = list.filter(canReconcile);
+  const blockedBy = list.find((x) => x.status?.mayReconcile === false);
+  const reconcileLock = reconcileTargets.length ? null : reconciled ? "already signed off" : blockedBy ? `This is for ${blockedBy.status?.reconcileBy ?? "the GM or an admin"}.` : "nothing received yet";
+  const reconcileM = useMutation({
+    mutationFn: async () => {
+      const failed: Array<{ x: AdvanceStay; error: unknown }> = [];
+      for (const x of reconcileTargets) {
+        try {
+          await reconcileAdvancePayment(session!, x.entry.folio!.id, { entryId: x.entry.id });
+        } catch (error) {
+          failed.push({ x, error });
+        }
+      }
+      return failed;
+    },
+    onSuccess: (failed) => {
+      if (failed.length < reconcileTargets.length) toast.success("The money position is signed off");
+      for (const f of failed) toastRefusal(f.error, `Stay ${f.x.stayNo} could not be signed off`);
+      onChanged();
+    },
+  });
+
+  const summary = nothingAsked
+    ? trip?.current || trip?.stays.every((t) => t.proforma)
+      ? "No advance asked"
+      : "The advance is not answered yet"
+    : trip?.advanceAsked
+      ? `Received ${money(trip.received)} of ${money(trip.advanceAsked)}`
+      : undefined;
+  const moneyIn = () => {
+    onChanged();
+    finish();
+  };
+  const goToProforma = () => {
+    if (flow.on) flow.open("proforma");
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => goToStepCard("proforma")));
+  };
+  const planWords = (q: AdvancePaymentPlanSummary | null | undefined) =>
+    q ? [q.plan === "FULL" && q.balanceDueAt ? "The whole amount" : PLAN_WORD[q.plan], dueWords(q.plan, q.balanceDueAt)].filter(Boolean).join(" · ") : null;
+
+  return (
+    <StepCard flow="money" flowAfter="billing-model" title="The payment plan" summary={summary} restsFolded={nothingAsked}>
+      {list.map((x) => (
+        <RefundStanding key={x.entry.id} status={x.status} tz={tz} />
+      ))}
+      {nothingAsked ? (
+        <BindingBox family="bound" stateWord="no advance" style={{ marginBottom: 10 }}>
+          <div className="sm" style={{ paddingRight: 90 }}>
+            No advance is asked for these stays
+          </div>
+        </BindingBox>
+      ) : (
+        <TripMoneyTables list={list} trip={trip} planWords={planWords} tz={tz} />
+      )}
+
+      <Live>
+        {editable && payDue ? (
+          <div className="notice next" role="status" style={{ marginTop: 12, marginBottom: 0 }}>
+            <span>
+              <b>Record the payment now.</b> {trip?.dueNow != null ? `${money(trip.dueNow)} of the advance is still to come.` : null}
+            </span>
+          </div>
+        ) : null}
+        {editable ? (
+          <div className="money-flow">
+            <ol className="money-steps">
+              <MoneyStep n={1} state={stepState(0)}>
+                <ActionRow
+                  label={asked ? "Change the advance" : "Set the advance"}
+                  caption="For every stay: the same percent of each stay's own quotation, or an amount typed for each. A change issues each proforma again."
+                  onClick={() => setOpen("advance")}
+                  state={noBill ? "inert" : "default"}
+                  heldBy={noBill ? "Set who pays first." : null}
+                />
+              </MoneyStep>
+              <MoneyStep n={2} state={stepState(1)}>
+                <ActionRow
+                  kind="primary"
+                  className={payDue ? "go big" : undefined}
+                  label="Record payment"
+                  caption="One payment, shared between the stays' bills. You are asked about blocking the rooms next."
+                  onClick={() => setOpen("pay")}
+                  state={payHold ? "inert" : "default"}
+                  heldBy={payHold?.why}
+                  goTo={payHold?.card}
+                  goToLabel={payHold?.cta}
+                />
+              </MoneyStep>
+              <MoneyStep n={3} state={stepState(2)}>
+                <ActionRow
+                  label="Mark reconciled"
+                  caption="Signs off the money position of every stay that has money received."
+                  onClick={() => reconcileM.mutate()}
+                  state={reconcileM.isPending ? "working" : reconcileLock ? "inert" : "default"}
+                  heldBy={reconcileLock}
+                />
+              </MoneyStep>
+            </ol>
+            <div className="money-side">
+              <ActionRow
+                label="Extend credit"
+                caption="Lets the stays go on without the advance, up to a ceiling for each."
+                onClick={elevated ? () => setOpen("credit") : undefined}
+                state={elevated ? "default" : "inert"}
+                heldBy={elevated ? null : "Extending credit is the FOM's call."}
+              />
+            </div>
+          </div>
+        ) : null}
+      </Live>
+
+      {open === "advance" ? (
+        <AdvanceDialog
+          entry={entry}
+          status={list[0]?.status}
+          stays={list}
+          tz={tz}
+          onClose={() => setOpen(null)}
+          onDone={(askedNow, reissued) => {
+            onChanged();
+            if (askedNow > 0 && (reissued || unsent)) goToProforma();
+          }}
+        />
+      ) : null}
+      {open === "pay" ? (
+        <TripPaymentDialog
+          entryId={entry.id}
+          onClose={() => setOpen(null)}
+          onDone={() => {
+            moneyIn();
+            onPaymentRecorded();
+          }}
+        />
+      ) : null}
+      {open === "credit" ? <CreditDialog entry={entry} status={list[0]?.status} stays={list} tz={tz} onClose={() => setOpen(null)} onDone={moneyIn} /> : null}
+    </StepCard>
+  );
+}
+
 /* ------------------------------------------------------------------ a footer button */
 
 /** The design-system button with the dialog footer's three states spelled out. */
@@ -1085,17 +1687,20 @@ function Button2({
   disabled,
   reason,
   className,
+  hidden,
   onClick,
   children,
 }: {
-  kind?: "primary" | "secondary" | "quiet";
+  kind?: "primary" | "secondary" | "quiet" | "danger";
   working?: boolean;
   disabled?: boolean;
   reason?: string;
   className?: string;
+  hidden?: boolean;
   onClick: () => void;
   children: React.ReactNode;
 }) {
+  if (hidden) return null;
   return (
     <Button kind={kind} className={className} state={working ? "working" : disabled ? "inert" : "default"} title={reason} workingLabel="Working…" onClick={onClick}>
       {children}

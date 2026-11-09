@@ -1,3 +1,4 @@
+import { cleanPhone } from "../../lib/phone-numbers.js";
 import { Router } from "express";
 import { prisma } from "../../db.js";
 import {
@@ -16,6 +17,7 @@ import { validateBody } from "../../middleware/validate-body.js";
 import * as s1EntryService from "../../services/domain/s1-entry-service.js";
 import * as holdService from "../../services/domain/hold-service.js";
 import * as quotationService from "../../services/domain/quotation-service.js";
+import { quoteValidityWindow } from "../../lib/quote-validity.js";
 import { afterStayChanged } from "../../services/domain/trip-follow-service.js";
 
 export const quotationsAndHoldsRouter = Router();
@@ -43,6 +45,16 @@ quotationsAndHoldsRouter.post("/entries/:id/quotations", requireActorLevel("L1")
           });
     await afterStayChanged(prisma, { actorId: req.actor!.actorId, actorLevel: req.actor!.level }, req.params.id, "PRICED");
     res.status(201).json(created);
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** How long a quotation on this booking may stand: the hotel's rule, for the desk's box. Read-only. */
+quotationsAndHoldsRouter.get("/entries/:id/quote-validity", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    res.json(await quoteValidityWindow(prisma, req.params.id));
   } catch (e) {
     next(e);
   }
@@ -81,6 +93,12 @@ quotationsAndHoldsRouter.post("/quotations/:id/discount", requireActorLevel("L1"
 
 quotationsAndHoldsRouter.post("/quotations/:id/send", requireActorLevel("L1"), validateBody(sendQuotationRequestSchema), async (req, res, next) => {
   try {
+    // A send recorded on WhatsApp names a number; it is kept the one way (2026-11-05).
+    if (String(req.body.channel ?? "").toUpperCase() === "WHATSAPP") {
+      const number = cleanPhone(req.body.recipientAddress ?? req.body.sentTo, "The WhatsApp number");
+      req.body.recipientAddress = number ?? undefined;
+      req.body.sentTo = number ?? undefined;
+    }
     const updated = await quotationService.sendQuotation(prisma, req.params.id, req.actor!.actorId, req.body);
     res.json(updated);
   } catch (e) {

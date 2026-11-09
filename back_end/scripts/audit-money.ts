@@ -35,6 +35,7 @@
  *      per-room buckets + unassigned = whole)
  *   H. Global tallies (printed at the end)
  */
+import { evaluateAdvancePaymentCondition } from "../src/services/domain/s3-payment-service.js";
 import { resolveCompositionBasis } from "../src/lib/party-seating.js";
 import { PrismaClient, Prisma } from "@prisma/client";
 import { round2, sumMoney, toDecimal, ZERO } from "../src/lib/money.js";
@@ -520,6 +521,71 @@ async function main() {
   }
 
   // ── Report ──────────────────────────────────────────────────────────────────────────────
+  // A13 — a payment deleted is gone (2026-11-05): the history says so, and no row still counts it.
+  const deletedPayments = await prisma.traceEvent.findMany({ where: { eventType: "FOLIO.PAYMENT_DELETED" }, select: { entityId: true, entryId: true } });
+  if (deletedPayments.length) {
+    const stillThere = await prisma.paymentRecord.findMany({ where: { id: { in: deletedPayments.map((t) => t.entityId) } }, select: { id: true, amount: true } });
+    for (const row of stillThere) {
+      const entryId = deletedPayments.find((t) => t.entityId === row.id)?.entryId ?? "?";
+      add("CRITICAL", "A13_DELETED_PAYMENT_STILL_COUNTED", `${row.id} (${entryId})`, `recorded as deleted, yet ${money(D(row.amount))} still counts as received`);
+    }
+  }
+
+  // A14 — a refund's record against the money itself (2026-11-05): one recorded has its money-out row
+  // for the same figure on the same bill, and one waiting never asks for more than the bill holds.
+  const refundRows = await prisma.refundRequest.findMany({ include: { entry: { select: { currentStage: true, status: true } } } });
+  for (const r of refundRows) {
+    const subject = `${r.id} (${r.entryId})`;
+    if (r.status === "REFUNDED") {
+      const out = r.paymentRecordId ? await prisma.paymentRecord.findUnique({ where: { id: r.paymentRecordId } }) : null;
+      if (!out || out.folioId !== r.folioId || out.paymentDirection !== "OUT" || !D(out.amount).eq(D(r.refundedAmount ?? 0))) {
+        add("CRITICAL", "A14_REFUND_RECORD", subject, `recorded as refunded ${money(D(r.refundedAmount ?? 0))}, but no money-out row on the bill says so`);
+      }
+    }
+    if (r.status === "WAITING") {
+      const [paidIn, paidOut] = await Promise.all([
+        prisma.paymentRecord.aggregate({ where: { folioId: r.folioId, paymentDirection: "IN" }, _sum: { amount: true } }),
+        prisma.paymentRecord.aggregate({ where: { folioId: r.folioId, paymentDirection: "OUT" }, _sum: { amount: true } }),
+      ]);
+      const held = D(paidIn._sum.amount ?? 0).sub(D(paidOut._sum.amount ?? 0));
+      if (D(r.amountAsked).gt(held)) add("CRITICAL", "A14_REFUND_RECORD", subject, `waiting to refund ${money(D(r.amountAsked))}, but the bill holds ${money(held)}`);
+      if (r.entry.status === "ACTIVE" && ["S7", "S8", "S9"].includes(r.entry.currentStage)) {
+        add("CRITICAL", "A14_REFUND_RECORD", subject, `waiting to refund on a booking past check-in (${r.entry.currentStage}), whose bill reads this money as its own`);
+      }
+    }
+  }
+
+  // A15 (2026-11-09): a trip's money is counted once. A payment for the trip can cover one stay's
+  // advance from another stay's bill, so across the live stays what still reads short can never be
+  // less than what the trip was asked and does not hold.
+  const tripPaid = await prisma.paymentRecord.findMany({ where: { paidForTrip: true }, select: { folio: { select: { entry: { select: { inquiryId: true } } } } } });
+  for (const inquiryId of new Set(tripPaid.map((p) => p.folio.entry.inquiryId))) {
+    const stays = await prisma.entry.findMany({ where: { inquiryId, status: { in: ["ACTIVE", "PARKED"] } }, select: { id: true, folio: { select: { id: true } } } });
+    let asked = D(0), held = D(0), short = D(0);
+    for (const st of stays) {
+      if (!st.folio) continue;
+      const ev = await evaluateAdvancePaymentCondition(prisma, { entryId: st.id, folioId: st.folio.id });
+      asked = asked.add(D(ev.requiredAmount));
+      held = held.add(D(ev.totalReceived));
+      short = short.add(D(ev.shortfall));
+    }
+    if (short.lt(asked.sub(held).sub(D(0.005)))) {
+      add("CRITICAL", "A15_TRIP_MONEY_COUNTED_TWICE", inquiryId, `the stays read ${money(short)} short, but the trip was asked ${money(asked)} and holds ${money(held)}`);
+    }
+  }
+
+  // A16 (2026-11-09): money moved between a trip's stays moves no money. Each reference is exactly one
+  // money-out row and one money-in row of the same amount.
+  const moved = await prisma.paymentRecord.findMany({ where: { tripTransferRef: { not: null } }, select: { tripTransferRef: true, paymentDirection: true, amount: true } });
+  const moveRows = new Map<string, typeof moved>();
+  for (const m of moved) moveRows.set(m.tripTransferRef!, [...(moveRows.get(m.tripTransferRef!) ?? []), m]);
+  for (const [ref, pair] of moveRows) {
+    const out = pair.filter((x) => x.paymentDirection === "OUT"), inn = pair.filter((x) => x.paymentDirection === "IN");
+    if (out.length !== 1 || inn.length !== 1 || !D(out[0].amount).eq(D(inn[0].amount))) {
+      add("CRITICAL", "A16_TRIP_MOVE_UNBALANCED", ref, `${out.length} out and ${inn.length} in, which do not balance`);
+    }
+  }
+
   const bySeverity: Record<Severity, Finding[]> = { CRITICAL: [], WARN: [], INFO: [] };
   for (const f of findings) bySeverity[f.severity].push(f);
   console.log(`\n════ MONEY AUDIT — ${new Date().toISOString().slice(0, 16)} ════`);

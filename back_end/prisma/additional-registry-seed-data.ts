@@ -89,15 +89,6 @@ export const ADDITIONAL_REGISTRY_POLICIES: RegistryPolicySeedRow[] = [
     },
   },
   {
-    policyId: "registry.quotationValidity.days",
-    policyClass: "EXPIRY",
-    definition: {
-      enabled: true,
-      description: "Default quotation validity in days — overrides expiry.s2.quotationValidityDays.",
-      days: 7,
-    },
-  },
-  {
     policyId: "registry.advancePaymentFollowUp.windowSeconds",
     policyClass: "PAYMENT",
     definition: {

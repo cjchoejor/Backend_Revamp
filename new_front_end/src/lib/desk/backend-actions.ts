@@ -70,20 +70,24 @@ export const STAGE_ACTIONS: Record<string, Record<string, BackendItem[]>> = {
       { name: "FolioService.getOrCreate", ref: "services/domain (folio)", detail: "Creates / returns the provisional folio and sets the billing model.", trace: "^FOLIO\\.CREATED$" },
     ],
     disclosure: [
-      { name: "Policy 34 — disclosure before hold", ref: "p34 / s3-hold-service", detail: "Cancellation terms must be disclosed before a committed hold can be placed.", trace: "^CANCELLATION_DISCLOSURE\\.RECORDED$" },
+      { name: "Policy 34 — disclosure before hold", ref: "p34 / s3-hold-service", detail: "The system records the cancellation terms when a booking reaches Set up; the rooms cannot be blocked without them.", trace: "^CANCELLATION_DISCLOSURE\\.(AUTO_)?RECORDED$" },
     ],
     advance: [
       { name: "Advance payment service", ref: "services/domain (advance payment)", detail: "Records / reconciles the advance and recomputes payment status.", trace: "^FOLIO\\.PAYMENT_RECORDED$|^ADVANCE_PAYMENT\\.RECONCILED$" },
-      { name: "Auto-hold on payment", ref: "recordPayment → autoPlaceCommittedHoldOnAdvancePayment", detail: "Money in — partial counts — places the committed hold automatically at S3.", trace: "^COMMITTED_HOLD\\.AUTO_PLACE_ON_ADVANCE_PAYMENT_SKIPPED$" },
+      { name: "Deleting a payment", ref: "advance-payment-delete-service · POST /folios/:id/payments/:id/delete", detail: "Takes a payment recorded by mistake off the bill, with the sign-off, the checklist tick, Reserved and a block it placed; the history keeps it.", trace: "^FOLIO\\.PAYMENT_DELETED" },
       { name: "Payment plan", ref: "setAdvancePaymentPlan · advance-payment-plan", detail: "Stores the guest's full / partial / installments plan and when the remainder is due.", trace: "^ADVANCE_PAYMENT\\.PLAN_" },
       { name: "W34 — advance follow-up", ref: "ADVANCE_PAYMENT_FOLLOW_UP_W34 · w34", detail: "Chases the advance within its window.", trace: "^PAYMENT_FOLLOW_UP\\.FIRED$|^ADVANCE_PAYMENT\\.FOLLOW_UP" },
       { name: "W38 — payment promise", ref: "ADVANCE_PROMISE_DEADLINE_W38 · w38", detail: "Fires at the promised pay-by date; flags the lapse if the money hasn't arrived.", trace: "^ADVANCE_PAYMENT\\.PROMISE_LAPSED$" },
     ],
     hold: [
+      { name: "An advance from an earlier pass", ref: "answerEarlierAdvance · POST /entries/:id/earlier-advance/answer", detail: "Money paid before the booking was sent back goes on the new proforma, or waits to be refunded." },
+      { name: "Recording a refund", ref: "recordRefund · POST /refunds/:id/record", detail: "The FOM, GM or admin record money going back: the amount, and the bank, account and journal unless it was cash." },
+      { name: "Move to Reserve blocks", ref: "blockRoomsForReserve · POST /entries/:id/holds/committed/block", detail: "Places the block unless one is running, for the admin console's time or this booking's." },
       { name: "s3-hold-service", ref: "services/domain/s3-hold-service.ts", detail: "Places the committed hold against the room type.", trace: "^COMMITTED_HOLD\\.PLACED$" },
       { name: "W3 — committed hold expiry", ref: "COMMITTED_HOLD_EXPIRY_W3 · w3 · registry.holdExpiry.minutes", detail: "Releases the committed hold if not confirmed before TTL.", trace: "^COMMITTED_HOLD\\.EXPIRY_TRIGGERED$" },
     ],
     dispatch: [
+      { name: "How long the proforma stands", ref: "setProformaValidity · POST /invoices/:id/validity", detail: "The quote's rule: to check-in, or the rest of today. A paper already opened or sent is made again as a new version. When its time ends it is made again; the booking stays.", trace: "^PROFORMA\\.(VALIDITY_SET|LAPSED)$|^QUOTATION\\.VALIDITY_STOPPED$" },
       { name: "dispatchInvoice (PROFORMA)", ref: "stage-email-helpers · PROFORMA_INVOICE_EMAIL", detail: "Issues + emails the proforma invoice with the balance due.", trace: "^PROFORMA_INVOICE_EMAIL" },
     ],
     group: [

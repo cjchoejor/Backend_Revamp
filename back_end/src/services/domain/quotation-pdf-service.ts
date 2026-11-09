@@ -21,6 +21,7 @@
  * 2026-08-01) shows the exact same document WITHOUT rendering a PDF, writing storage, or
  * snapshotting QuotationLine rows — pure read, always from the quotation's current terms.
  */
+import { paperNumber, printedProformaNumber, printedQuotationNumber, proformaNumberOf } from "../../lib/document-numbers.js";
 import { Prisma, type PrismaClient, type QuotationLine } from "@prisma/client";
 import { NotFoundError } from "../../lib/errors.js";
 import { labelRoomNights, roomNightsForEntry, stayNightDates, type NightsMode } from "../../lib/room-nights-for-entry.js";
@@ -37,7 +38,7 @@ import {
 import { buildStorageKey, hashSha256, readDocument, writeDocument } from "../../lib/document-storage.js";
 import { formatMoney, loadHotelProfileForRender } from "../../lib/pdf-render-context.js";
 import { renderHtmlToPdf } from "../infrastructure/pdf-render-service.js";
-import { renderLegphelQuotationHtml } from "../infrastructure/pdf-templates/legphel-quotation-template.js";
+import { priceRowsNote, renderLegphelQuotationHtml, type LegphelPriceBlock } from "../infrastructure/pdf-templates/legphel-quotation-template.js";
 import { mastheadFromHotelProfile } from "../infrastructure/pdf-templates/legphel-document-shell.js";
 import { formatDocDate, formatStayLines, formatDocDateLocal } from "../infrastructure/pdf-templates/legphel-document-format.js";
 import { guestDisplayName } from "../../lib/guest-display-name.js";
@@ -143,6 +144,8 @@ export type QuotationPriceFigures = {
   /** True when the rows are before tax (composition path); false on the legacy flat path. */
   rowsAreNet: boolean;
   net: number;
+  /** The net after a discount taken off it; null with no discount, or on an older flat-rate quote. */
+  netAfterDiscount: number | null;
   serviceChargeLabel: string;
   serviceCharge: number;
   gstLabel: string;
@@ -158,6 +161,8 @@ export type QuotationPriceFigures = {
 type QuotationDocRender = {
   html: string;
   figures: QuotationPriceFigures;
+  /** The rows and totals as the paper prints them; the proforma prints the same block. */
+  priceBlock: LegphelPriceBlock;
   linesForTemplate: PrintLine[];
   snapshotLines: SnapshotLine[];
   nights: number;
@@ -329,7 +334,7 @@ async function buildQuotationDocRender(
    * line that says so, and it is measured the same way as the flat path's: printed rows minus
    * what the guest is actually charged, which is exactly the concession.
    */
-  const compDiscount = (terms as { compositionDiscount?: { requestedPercent?: number | null; requestedAmount?: number | null; effectivePercent?: number; netReduction?: number; amountOffTotal?: number; basis?: string } })?.compositionDiscount ?? null;
+  const compDiscount = (terms as { compositionDiscount?: { requestedPercent?: number | null; requestedAmount?: number | null; appliesTo?: string; effectivePercent?: number; netReduction?: number; amountOffTotal?: number; basis?: string } })?.compositionDiscount ?? null;
   const compDiscountNet = Number(compDiscount?.netReduction ?? NaN);
   const compDiscountApplies = !!compDiscount && Number.isFinite(compDiscountNet) && compDiscountNet > 0;
   const discountApplied = rateMoved || compDiscountApplies;
@@ -507,25 +512,26 @@ async function buildQuotationDocRender(
   // net rows are measured against Net value and tax-inclusive rows against the Total. Older
   // discounted quotes with no original to print fall back to the rate-movement disclosure.
   /**
-   * The concession comes off the TOTAL, at the foot of the document (2026-10-06). So everything
-   * above it is the stay before it: the rows, Net value, the service charge and the GST are all
-   * pre-discount, and the deduction is the tax-inclusive figure that was agreed — Nu 1,000 off
-   * reads as 1,000, not as the 865.80 it is net of tax.
+   * The concession comes off the NET VALUE, under it (2026-11-05, operator: "net should be 900 and then
+   * service charge and gst should be applied on top of it"). So the rows and Net value are the stay
+   * before it, then the deduction, the net after it, and the service charge and GST on that: the ladder
+   * adds up as it reads. Measured from the two nets printed, so it holds for a quotation priced before
+   * this too, whose flat amount came off the total: its stored figures stand, and its label says so.
    */
   const preDiscountTotals = terms?.compositionTotalsPreDiscount ?? null;
   const preNet = Number(preDiscountTotals?.subtotal ?? NaN);
-  const preService = Number(preDiscountTotals?.serviceCharge ?? NaN);
-  const preGst = Number(preDiscountTotals?.gst ?? NaN);
-  const showPre = compDiscountApplies && Number.isFinite(preNet) && Number.isFinite(preService) && Number.isFinite(preGst);
-  const shownNet = showPre ? preNet : netValue;
-  const shownService = showPre ? preService : serviceCharge;
-  const shownGst = showPre ? preGst : gstValue;
+  const discountOnNet = compDiscountApplies && Number.isFinite(preNet);
+  const shownNet = discountOnNet ? preNet : netValue;
+  const shownService = serviceCharge;
+  const shownGst = gstValue;
   const discountBaseline = rowsAreNet ? netValue : totalAmount;
-  const discountAmount = compDiscountApplies
-    ? Number(compDiscount?.amountOffTotal ?? 0)
-    : originalsPrinted
-      ? printedRowsTotal - discountBaseline
-      : 0;
+  const discountAmount = discountOnNet
+    ? Number((preNet - netValue).toFixed(2))
+    : compDiscountApplies
+      ? Number(compDiscount?.amountOffTotal ?? 0)
+      : originalsPrinted
+        ? printedRowsTotal - discountBaseline
+        : 0;
   // What the guest was told the concession IS: the percent when one was asked for, the money
   // when a flat amount was. The figure beside it is always the money, so a percent reads as a
   // percent of a total the page prints.
@@ -535,12 +541,11 @@ async function buildQuotationDocRender(
     : compDiscountApplies
       ? compDiscount?.requestedPercent != null
         ? `Discount ${pctWord(Number(compDiscount.requestedPercent))}%`
-        : // A flat ask is "Nu 1,000 off the TOTAL", but the rows are net, so the deduction beside
-          // them has to be net too or the column stops adding up — 1,000 off the total is 865.80
-          // off the net. The label therefore carries the figure that was agreed, and the amount
-          // column carries the one that reconciles (2026-10-06, operator: "the discount is 865
-          // when it was 1000, why is it shown that way").
-          `Discount · ${formatMoney(Number(compDiscount?.requestedAmount ?? 0))} off the total`
+        : compDiscount?.appliesTo === "NET"
+          ? "Discount"
+          : // Priced before 2026-11-05: "Nu 1,000 off the TOTAL" is 865.80 off the net. The label
+            // keeps the figure that was agreed, the column the one that adds up.
+            `Discount · ${formatMoney(Number(compDiscount?.requestedAmount ?? 0))} off the total`
       : `Discount ${discountPercent}%`;
   const discountValue = !discountApplied
     ? null
@@ -548,13 +553,15 @@ async function buildQuotationDocRender(
       ? `− ${formatMoney(discountAmount)}`
       : `${formatMoney(preDiscountRate)} → ${formatMoney(postDiscountRate)} / room / night`;
 
-  const serviceChargeLabel = scRate > 0 ? `Service charge ${formatRate(scRate)} of net value` : "Service charge";
+  const serviceChargeLabel =
+    scRate > 0 ? `Service charge ${formatRate(scRate)} of ${discountOnNet ? "net after discount" : "net value"}` : "Service charge";
   const gstLabel = gstRate > 0 ? `GST @ ${formatRate(gstRate)} of net + service charge` : "GST";
   const figures: QuotationPriceFigures = {
     lines: linesForTemplate,
     datesShown,
     rowsAreNet,
     net: shownNet,
+    netAfterDiscount: discountOnNet ? netValue : null,
     serviceChargeLabel,
     serviceCharge: shownService,
     gstLabel,
@@ -565,19 +572,9 @@ async function buildQuotationDocRender(
     total: totalAmount,
   };
 
-  const html = renderLegphelQuotationHtml({
+  const priceBlock: LegphelPriceBlock = {
     hidePrices,
     datesShown,
-    masthead: mastheadFromHotelProfile(hotel),
-    quotationNo: q.referenceNumber,
-    bookingRef: q.entryId,
-    date: formatDocDateLocal(documentDate),
-    validityStrip: q.validUntil
-      ? `Valid until ${formatDocDateLocal(q.validUntil)} · Not a booking confirmation`
-      : "Not a booking confirmation",
-    to: toEmail ? `${guestName} · ${toEmail}` : guestName,
-    attn: null,
-    stay: formatStayLines(checkIn, checkOut, nights),
     lines: linesForTemplate.map((l) => ({
       dates: l.dates ?? null,
       description: l.description,
@@ -590,6 +587,7 @@ async function buildQuotationDocRender(
     discountLabel,
     discountValue,
     netValue: formatMoney(shownNet),
+    netAfterDiscount: discountOnNet ? formatMoney(netValue) : null,
     serviceChargeLabel,
     serviceCharge: formatMoney(shownService),
     // GST is compound, so the label says what it is charged ON — otherwise "5%" next to a figure
@@ -597,15 +595,24 @@ async function buildQuotationDocRender(
     gstLabel,
     gst: formatMoney(shownGst),
     total: formatMoney(totalAmount),
+  };
+
+  const html = renderLegphelQuotationHtml({
+    ...priceBlock,
+    masthead: mastheadFromHotelProfile(hotel),
+    quotationNo: await printedQuotationNumber(prisma, q),
+    bookingRef: q.entryId,
+    date: formatDocDateLocal(documentDate),
+    validityStrip: q.validUntil
+      ? `Valid until ${formatDocDateLocal(q.validUntil)} · Not a booking confirmation`
+      : "Not a booking confirmation",
+    to: toEmail ? `${guestName} · ${toEmail}` : guestName,
+    attn: null,
+    stay: formatStayLines(checkIn, checkOut, nights),
     closingNote: hidePrices
       ? "Prices are not shown on this copy — the rates, taxes and total for this stay are on the " +
         "priced quotation under the same number. Subject to availability at confirmation."
-      : (rowsAreNet
-        ? "Each room is billed on its own line, with its extra beds and meal plans beneath it; " +
-          "meal rates are per person per night. Line amounts are before service charge and GST, " +
-          "which are added below. "
-        : "Rates are inclusive of service charge and GST, and of the meal charges shown against " +
-          "each meal plan (those are stated before tax). ") +
+      : priceRowsNote(rowsAreNet) +
       "Subject to availability at confirmation. " +
       "A proforma invoice with advance terms follows on acceptance.",
     tariffVersion: "T1.0",
@@ -614,6 +621,7 @@ async function buildQuotationDocRender(
   return {
     html,
     figures,
+    priceBlock,
     linesForTemplate,
     snapshotLines,
     nights,
@@ -635,6 +643,20 @@ async function buildQuotationDocRender(
     documentDate,
     hotel,
   };
+}
+
+/**
+ * The quotation's rows and totals as its paper prints them, for the proforma, which sets the stay
+ * out the same way (2026-11-05). Pure read.
+ */
+export async function quotationPaperPrices(
+  prisma: PrismaClient,
+  quotationId: string,
+  opts?: { nightsMode?: NightsMode },
+): Promise<{ priceBlock: LegphelPriceBlock; figures: QuotationPriceFigures; rowsAreNet: boolean; total: number }> {
+  const q = await loadQuotationForRender(prisma, quotationId);
+  const model = await buildQuotationDocRender(prisma, q, { nightsMode: opts?.nightsMode });
+  return { priceBlock: model.priceBlock, figures: model.figures, rowsAreNet: model.figures.rowsAreNet, total: model.totalAmount };
 }
 
 /**

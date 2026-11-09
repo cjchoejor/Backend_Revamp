@@ -223,8 +223,6 @@ async function main() {
     },
 
     // --- SIG-S2 required keys (Section 9) ---
-    { configKey: "expiry.s2.quotationValidityDays", configValue: 2, notes: "S2 quotation validity (days)" },
-    { configKey: "expiry.s2.negotiationTtlSeconds", configValue: 86400, notes: "S2 Negotiation window (seconds) — W20 lapses a booking that stalls at Negotiation; a live quote stretches it to its validity (2026-09-29, SIG-S2 §7.6)" },
     { configKey: "guestRequest.kinds", configValue: ["Airport pickup", "Airport drop", "Early check-in", "Late check-out", "Celebration (cake, flowers)", "Room set-up", "Food and drink", "Something else"], notes: "Guest requests (BE-64, 2026-10-12) — the kinds the desk picks from; order is the order on the desk" },
     { configKey: "expiry.s2.speculativeHoldTtlSeconds", configValue: 900, notes: "S2 speculative hold default TTL seconds" },
     { configKey: "discount.fom.maxPercentage", configValue: 10, notes: "Front desk discount threshold (percent)" },
@@ -269,7 +267,6 @@ async function main() {
     { configKey: "quotation.document.templateKey", configValue: "quotation-v1", notes: "SIG-S2 document generation template key" },
 
     // --- SIG-S3 required keys (Section 9) ---
-    { configKey: "advancePayment.thresholds", configValue: { DEFAULT: { amount: 1 } }, notes: "Minimal S3 advance payment thresholds (amount in BTN)" },
     { configKey: "expiry.s3.committedHoldTtlSeconds", configValue: 3600, notes: "Committed hold TTL seconds (S3)" },
     { configKey: "creditCeiling.clientTier.thresholds", configValue: { standard: 5000, preferred: 10000, caution: 2000, restricted: 0 }, notes: "Credit ceiling thresholds — all four tiers (standard/preferred/caution/restricted) required by required-control-check" },
     { configKey: "checkout.cutoffTime", configValue: "12:00", notes: "Late-checkout escalation cutoff (HH:MM, hotel-local) — W26" },
@@ -278,6 +275,7 @@ async function main() {
     { configKey: "proformaInvoice.templates", configValue: { DEFAULT: "proforma-v1" }, notes: "PI templates per billing model (minimal)" },
     { configKey: "advancePayment.followUpWindowSeconds", configValue: 3600, notes: "W34 tier-1 follow-up window" },
     { configKey: "advancePayment.escalationWindowSeconds", configValue: 7200, notes: "W34 tier-2 escalation window" },
+    { configKey: "advancePayment.reconciliation.alsoAllowed", configValue: [], notes: "Who else may mark the money reconciled; the GM and admins always can" },
     { configKey: "paymentMilestone.scheduleTemplates", configValue: {}, notes: "Milestone templates (placeholder)" },
     { configKey: "foc.configuration", configValue: { enabled: false }, notes: "FOC config (placeholder)" },
 

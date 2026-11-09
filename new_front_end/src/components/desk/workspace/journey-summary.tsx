@@ -1,5 +1,6 @@
 "use client";
 
+import { StayDates } from "@/components/ds/stay-dates";
 import { useQuery } from "@tanstack/react-query";
 import { ClipboardList, User } from "lucide-react";
 import { useSession } from "@/hooks/use-session";
@@ -199,9 +200,14 @@ export function JourneySummaryPanel({ entryId }: { entryId: string }) {
         </Row>
         <Row label="Came in as">{dash(s1.sourceChannel)}</Row>
         <Row label="Dates">
-          {s1.dates.checkIn || s1.dates.checkOut
-            ? `${fmtDate(s1.dates.checkIn)} → ${fmtDate(s1.dates.checkOut)}${s1.dates.nights ? ` · ${s1.dates.nights} night${s1.dates.nights === 1 ? "" : "s"}` : ""}`
-            : "—"}
+          {s1.dates.checkIn || s1.dates.checkOut ? (
+            <>
+              <StayDates checkIn={s1.dates.checkIn} checkOut={s1.dates.checkOut} />
+              {s1.dates.nights ? ` · ${s1.dates.nights} night${s1.dates.nights === 1 ? "" : "s"}` : ""}
+            </>
+          ) : (
+            "—"
+          )}
         </Row>
         <Row label="Party">{partyText ? `${partyText}${agesText}` : dash(s1.party.totalGuests ? `${s1.party.totalGuests} guests` : null)}</Row>
         <Row label="Rooms requested">{dash(s1.party.roomsRequested)}</Row>
@@ -347,15 +353,9 @@ export function JourneySummaryPanel({ entryId }: { entryId: string }) {
               {moneyOrDash(s3.advancePayment.requiredAmount, cur)}
               {s3.advancePayment.requirementSource === "OPERATOR"
                 ? " · set by the desk for this booking"
-                : s3.advancePayment.requirementSource === "CONFIG"
-                  ? " · from the configured thresholds"
+                : s3.advancePayment.requirementSource === "PARTY"
+                  ? " · the travel agent's or company's own percentage"
                   : ""}
-              {s3.advancePayment.groupBoostApplied
-                ? ` · group boost ×${s3.advancePayment.groupBoostApplied.multiplierPercent / 100} (base ${moneyOrDash(
-                    s3.advancePayment.groupBoostApplied.baseAmount,
-                    cur,
-                  )})`
-                : ""}
             </span>
           ) : (
             "—"
@@ -450,9 +450,8 @@ export function JourneySummaryPanel({ entryId }: { entryId: string }) {
             <Row label="Reservation">{dash(s4.reservationId)}</Row>
             <Row label="Frozen rate">{moneyOrDash(s4.frozenRate, cur)}</Row>
             <Row label="Frozen dates">
-              {`${fmtDate(s4.frozenCheckIn)} → ${fmtDate(s4.frozenCheckOut)}${
-                s4.frozenNights ? ` · ${s4.frozenNights} night${s4.frozenNights === 1 ? "" : "s"}` : ""
-              }`}
+              <StayDates checkIn={s4.frozenCheckIn} checkOut={s4.frozenCheckOut} />
+              {s4.frozenNights ? ` · ${s4.frozenNights} night${s4.frozenNights === 1 ? "" : "s"}` : ""}
             </Row>
             <Row label="Frozen billing">{dash(s4.frozenBillingModel)}</Row>
             <Row label="Frozen guests">{dash(s4.frozenGuestCount)}</Row>

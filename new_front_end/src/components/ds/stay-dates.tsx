@@ -9,9 +9,9 @@ import { fmtDmy } from "@/lib/ds/format";
  * and the check-out's dark, so the two are told apart at a glance. Stay dates are calendar days, so
  * no time zone is involved.
  */
-export function StayDates({ checkIn, checkOut }: { checkIn?: string | null; checkOut?: string | null }) {
+export function StayDates({ checkIn, checkOut, stacked }: { checkIn?: string | null; checkOut?: string | null; stacked?: boolean }) {
   return (
-    <span className="staydates">
+    <span className={`staydates${stacked ? " stacked" : ""}`}>
       <span className="sd in">
         <span className="lbl">Check-in</span>
         <b>{fmtDmy(checkIn)}</b>

@@ -70,6 +70,22 @@ export const priceRoomPickRequestSchema = z
   .refine((v) => !(v.roomIds?.length && v.perNight?.length), { message: "Send roomIds or perNight, not both" });
 export type PriceRoomPickRequestDto = z.infer<typeof priceRoomPickRequestSchema>;
 
+/** A trip's stays priced together at Inquiry (2026-11-07): each stay's rooms per night, saved or not. */
+export const priceTripPicksRequestSchema = z.object({
+  stays: z
+    .array(
+      z.object({
+        entryId: z.string().min(1),
+        perNight: z
+          .array(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "date must be YYYY-MM-DD"), roomIds: z.array(z.string().min(1)).max(100) }))
+          .max(366)
+          .optional(),
+      }),
+    )
+    .min(1)
+    .max(12),
+});
+
 /**
  * The house by room type over a booking's stay, and whether its rooms fit with one room for each
  * guest's whole stay (2026-10-28). Read-only. Dates default to the booking's; `bookingRooms`

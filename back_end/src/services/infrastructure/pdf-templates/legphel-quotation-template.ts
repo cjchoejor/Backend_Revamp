@@ -55,7 +55,54 @@ export type LegphelQuotationLine = {
   muted?: boolean;
 };
 
-export type LegphelQuotationInput = {
+/**
+ * The rows and the totals under them, as the quotation prints them. The proforma prints this same
+ * block (2026-11-05, operator: "make proforma layout like quotation"), so the two papers cannot
+ * set the same stay out in two ways.
+ */
+export type LegphelPriceBlock = {
+  lines: LegphelQuotationLine[];
+  /**
+   * The discount row (2026-10-06): everything above it — the rows, Net value, the service
+   * charge and the GST — is what the stay costs BEFORE the concession, and this row takes it
+   * off the total. Printed between GST and Total, at the operator's reading: "just show the net
+   * value first, service charge, GST, and then the discount and then the total."
+   *
+   * It sits there because that is the only place a flat ask reads as itself. "Nu 1,000 off" is
+   * off the TOTAL; above Net value it had to be stated net of tax (865.80) and the figure the
+   * guest was promised appeared nowhere. Omitted when no discount applied.
+   */
+  discountLabel?: string | null;
+  discountValue?: string | null;
+  /** Net after the discount: with it, the discount prints under Net value, above the taxes. */
+  netAfterDiscount?: string | null;
+  netValue: string;
+  /** Label carries the rate, e.g. "Service charge 10%". */
+  serviceChargeLabel: string;
+  serviceCharge: string;
+  /** Label carries the rate, e.g. "GST @ 5%" — "(expected)" is appended by the template. */
+  gstLabel: string;
+  gst: string;
+  /** Grand total, tax-inclusive. */
+  total: string;
+  /** On a trip's paper, an older stay's flat amount off the total, beside a newer stay's discount off the net. */
+  alsoOffTotalLabel?: string | null;
+  alsoOffTotalValue?: string | null;
+  /** Currency word for the total row — "Nu." in the reference. */
+  currencyLabel?: string;
+  /**
+   * The same quotation with no money on it (2026-10-06, operator: "sometimes guest needs to be
+   * sent quotation without the price"). The Rate and Amount columns go, and so does the whole
+   * totals block — what is left is what the guest is being offered: the rooms, who is in them,
+   * their meal plans and their nights. One document, two faces; the stored PDF and the record
+   * are always the priced one.
+   */
+  hidePrices?: boolean;
+  /** Lead the table with each room's own nights — on every quotation since 2026-10-30. */
+  datesShown?: boolean;
+};
+
+export type LegphelQuotationInput = LegphelPriceBlock & {
   masthead: DocumentMasthead;
   /** "LH/Q/26/000512" */
   quotationNo: string;
@@ -71,61 +118,28 @@ export type LegphelQuotationInput = {
   attn?: string | null;
   /** Check-in "20 Oct 2026" · Check-out "22 Oct 2026 · 2 nights" (2026-10-28). */
   stay: StayLines | null;
-  lines: LegphelQuotationLine[];
-  /**
-   * The discount row (2026-10-06): everything above it — the rows, Net value, the service
-   * charge and the GST — is what the stay costs BEFORE the concession, and this row takes it
-   * off the total. Printed between GST and Total, at the operator's reading: "just show the net
-   * value first, service charge, GST, and then the discount and then the total."
-   *
-   * It sits there because that is the only place a flat ask reads as itself. "Nu 1,000 off" is
-   * off the TOTAL; above Net value it had to be stated net of tax (865.80) and the figure the
-   * guest was promised appeared nowhere. Omitted when no discount applied.
-   */
-  discountLabel?: string | null;
-  discountValue?: string | null;
-  netValue: string;
-  /** Label carries the rate, e.g. "Service charge 10%". */
-  serviceChargeLabel: string;
-  serviceCharge: string;
-  /** Label carries the rate, e.g. "GST @ 5%" — "(expected)" is appended by the template. */
-  gstLabel: string;
-  gst: string;
-  /** Grand total, tax-inclusive. */
-  total: string;
-  /** Currency word for the total row — "Nu." in the reference. */
-  currencyLabel?: string;
   closingNote: string;
   /** Tariff version for the footer, e.g. "T1.0". */
   tariffVersion: string;
-  /**
-   * The same quotation with no money on it (2026-10-06, operator: "sometimes guest needs to be
-   * sent quotation without the price"). The Rate and Amount columns go, and so does the whole
-   * totals block — what is left is what the guest is being offered: the rooms, who is in them,
-   * their meal plans and their nights. One document, two faces; the stored PDF and the record
-   * are always the priced one.
-   */
-  hidePrices?: boolean;
-  /** Lead the table with each room's own nights — on every quotation since 2026-10-30. */
-  datesShown?: boolean;
   /** Optional issuance-register id for the footer's middle slot. */
   issuanceRef?: string | null;
   watermark?: DocumentWatermark;
 };
 
-export function renderLegphelQuotationHtml(input: LegphelQuotationInput): string {
+/** What the rows' amounts are, in the words both papers close on. */
+export function priceRowsNote(rowsAreNet: boolean): string {
+  return rowsAreNet
+    ? "Each room is billed on its own line, with its extra beds and meal plans beneath it; " +
+        "meal rates are per person per night. Line amounts are before service charge and GST, " +
+        "which are added below. "
+    : "Rates are inclusive of service charge and GST, and of the meal charges shown against " +
+        "each meal plan (those are stated before tax). ";
+}
+
+/** The table, then Net value down to the ruled Total. */
+export function renderPriceBlock(input: LegphelPriceBlock): string[] {
   const currency = input.currencyLabel ?? "Nu.";
-  const body = [
-    renderMasthead(input.masthead),
-    renderTitle("Quotation", input.validityStrip, true),
-    row("Quotation No", input.quotationNo, { boldValue: true }),
-    row("Booking Ref", input.bookingRef, { redValue: true }),
-    row("Date", input.date),
-    section,
-    row("To", input.to, { boldValue: true }),
-    input.attn ? row("Attn", input.attn) : "",
-    section,
-    stayRows(input.stay),
+  return [
     miniTable(
       [
         ...(input.datesShown ? [{ header: "Nights" }] : []),
@@ -150,6 +164,9 @@ export function renderLegphelQuotationHtml(input: LegphelQuotationInput): string
       input.datesShown ? "dated" : null,
     ),
     input.hidePrices ? "" : row("Net value", input.netValue),
+    // A discount comes off the net value, and service charge and GST follow it (2026-11-05).
+    input.hidePrices || !input.netAfterDiscount ? "" : row(input.discountLabel ?? "Discount", input.discountValue ?? ""),
+    input.hidePrices || !input.netAfterDiscount ? "" : row("Net after discount", input.netAfterDiscount),
     input.hidePrices ? "" : row(input.serviceChargeLabel, input.serviceCharge),
     // The reference annotates GST as "(expected)" on pre-stay documents — no supply has happened
     // yet, so the figure is an estimate until the tax invoice is issued.
@@ -160,8 +177,25 @@ export function renderLegphelQuotationHtml(input: LegphelQuotationInput): string
           input.gst,
           { rawKey: true },
         ),
-    input.hidePrices ? "" : input.discountLabel ? row(input.discountLabel, input.discountValue ?? "") : "",
+    input.hidePrices || input.netAfterDiscount ? "" : input.discountLabel ? row(input.discountLabel, input.discountValue ?? "") : "",
+    input.hidePrices || !input.alsoOffTotalValue ? "" : row(input.alsoOffTotalLabel ?? "Discount", input.alsoOffTotalValue),
     input.hidePrices ? "" : row(`Total · ${currency}`, input.total, { total: true }),
+  ];
+}
+
+export function renderLegphelQuotationHtml(input: LegphelQuotationInput): string {
+  const body = [
+    renderMasthead(input.masthead),
+    renderTitle("Quotation", input.validityStrip, true),
+    row("Quotation No", input.quotationNo, { boldValue: true }),
+    row("Booking Ref", input.bookingRef, { redValue: true }),
+    row("Date", input.date),
+    section,
+    row("To", input.to, { boldValue: true }),
+    input.attn ? row("Attn", input.attn) : "",
+    section,
+    stayRows(input.stay),
+    ...renderPriceBlock(input),
     note(input.closingNote, "quiet"),
     footer([input.quotationNo, input.bookingRef, input.issuanceRef ?? null, "E&OE", input.tariffVersion]),
   ]

@@ -1,3 +1,4 @@
+import { waitingRefundTotal } from "../../lib/refund-money.js";
 import type { PrismaClient } from "@prisma/client";
 import { PaymentDirection, Prisma, Stage } from "@prisma/client";
 import { NotFoundError, PolicyGateBlockedError, ValidationError } from "../../lib/errors.js";
@@ -86,7 +87,8 @@ async function netReceived(prisma: Db, folioId: string) {
     prisma.paymentRecord.aggregate({ where: { folioId, paymentDirection: PaymentDirection.IN }, _sum: { amount: true } }),
     prisma.paymentRecord.aggregate({ where: { folioId, paymentDirection: PaymentDirection.OUT }, _sum: { amount: true } }),
   ]);
-  return round2(toDecimal(inAgg._sum.amount).sub(toDecimal(outAgg._sum.amount)));
+  // Money waiting to go back no longer counts for this booking (2026-11-05).
+  return round2(toDecimal(inAgg._sum.amount).sub(toDecimal(outAgg._sum.amount)).sub(await waitingRefundTotal(prisma, folioId)));
 }
 
 function shapeDeferral(d: DeferralRow) {

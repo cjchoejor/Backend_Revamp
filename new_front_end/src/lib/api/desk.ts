@@ -55,7 +55,13 @@ export type DeskListRow = {
     corporateAccount: { id: string; displayName: string } | null;
   } | null;
   reservation: { id: string; confirmedAt: string; confirmationVoucherSent: boolean } | null;
-  folio: { id: string; state: string; billingModel: string | null } | null;
+  folio: {
+    id: string;
+    state: string;
+    billingModel: string | null;
+    /** The proforma in force (2026-11-05). */
+    invoices?: Array<{ validUntil: string | null; lapsedAt: string | null; dispatchedAt: string | null }>;
+  } | null;
   committedHold: { state: string; expiresAt: string } | null;
   speculativeHolds: Array<{ expiresAt: string }>;
   quotations: Array<{ referenceNumber: string; state: string; validUntil: string | null; sentAt: string | null }>;
@@ -161,7 +167,7 @@ export async function listDeskActivity(session: Session, q: { date: string; acto
 
 /* ---------- the alerts the system sent (2026-10-23) ---------- */
 
-export type DeskAlertKind = "STAGE_DWELL" | "EXPIRED" | "PAYMENT_REMINDER" | "PAY_LATER_ASKED" | "VIP_ARRIVAL" | "OTHER";
+export type DeskAlertKind = "STAGE_DWELL" | "EXPIRED" | "PAYMENT_REMINDER" | "PAY_LATER_ASKED" | "VIP_ARRIVAL" | "BLOCK_ENDED" | "REFUND_DUE" | "OTHER";
 export type DeskAlertTarget = "OPERATOR" | "FOM" | "GM";
 
 export type DeskAlert = {
@@ -190,6 +196,56 @@ export type DeskAlert = {
     inquiry: { callerTitle: string | null; callerFirstName: string | null; callerLastName: string | null; callerPhone: string | null; callerEmail: string | null } | null;
   } | null;
 };
+
+export type BillFigures = {
+  net: number;
+  serviceCharge: number;
+  gst: number;
+  total: number;
+  received: number;
+  refunded: number;
+  writtenOff: number;
+  settledBefore: number;
+  balance: number;
+  paidAhead: number;
+};
+
+export type BillStay = {
+  entryId: string;
+  stayNo: number;
+  status: string;
+  stage: string;
+  folioId: string | null;
+  folioState: string | null;
+  checkIn: string | null;
+  checkOut: string | null;
+  nights: number | null;
+  rooms: string[];
+  roomCount: number;
+  guest: string | null;
+  rows: Array<{ key: string; when: string; place: string | null; description: string; qty: number; rate: number; amount: number }>;
+  figures: BillFigures;
+  taxInvoices: Array<{ id: string; number: string }>;
+};
+
+/** A booking's bill, with every other stay of its trip that has one — `GET /api/desk/bills/:id`. */
+export type BillView = {
+  entryId: string;
+  inquiryId: string;
+  currency: string;
+  asAt: string;
+  hotel: { name: string; address: string; phone: string | null; email: string; tpn: string | null; gstTpn: string | null; logo: string | null };
+  billedTo: string;
+  forGuest: string | null;
+  customerTpn: string | null;
+  stays: BillStay[];
+  payments: Array<{ id: string; stayNo: number; at: string; method: string | null; direction: "IN" | "OUT"; amount: number; note: string | null }>;
+  figures: BillFigures;
+};
+
+export async function getBillView(session: Session, entryId: string) {
+  return apiRequest<BillView>(`/api/desk/bills/${encodeURIComponent(entryId)}`, { session });
+}
 
 /** The alerts sent over the last `days` hotel days, today included — newest first. */
 export async function listDeskAlerts(session: Session, q: { days: number }) {

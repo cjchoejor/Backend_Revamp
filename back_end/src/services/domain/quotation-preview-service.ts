@@ -13,9 +13,10 @@
  * generated quote cannot disagree. Nothing is written: no Quotation, no QuotationLine, no trace,
  * no PDF. Re-running it has no effect on the booking.
  */
+import { resolveBillQuotation } from "../../lib/operative-quotation.js";
 import type { PrismaClient } from "@prisma/client";
 import { Prisma } from "@prisma/client";
-import { NotFoundError } from "../../lib/errors.js";
+import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { round2 } from "../../lib/money.js";
 import {
   applyBookingDiscountToTotals,
@@ -195,6 +196,102 @@ function discountRatio(grandTotal: Prisma.Decimal, off: Prisma.Decimal): Prisma.
   if (grandTotal.lte(ZERO)) return new Prisma.Decimal(1);
   const capped = off.gt(grandTotal) ? grandTotal : off;
   return grandTotal.sub(capped).div(grandTotal);
+}
+
+/** One stay's table for the trip's live price. */
+export type TripPreviewStay = {
+  entryId: string;
+  input: { roomCompositions: PreviewRoomComposition[]; discount?: PreviewDiscount | null };
+  opts?: Parameters<typeof buildQuotationPreview>[3];
+  /** The quotation this stay is saved on: its own rows and figures are read instead of the table's. */
+  quotationId?: string | null;
+  /** Past Negotiation: read the quotation this stay's bill reads, found here (2026-11-09). */
+  billQuotation?: boolean;
+};
+
+async function billQuotationIdOf(prisma: PrismaClient, entryId: string) {
+  const entry = await prisma.entry.findUnique({
+    where: { id: entryId },
+    select: { segments: { orderBy: { segmentNumber: "desc" }, take: 1, select: { id: true } }, quotations: { orderBy: { createdAt: "desc" } } },
+  });
+  if (!entry) return null;
+  return resolveBillQuotation(entry.quotations, entry.segments[0]?.id ?? null)?.id ?? null;
+}
+
+/**
+ * Stays worked in one table priced together (2026-11-09): each stay through its own preview, unchanged,
+ * and the trip's figures only those added up in Decimal, so the trip and its stays cannot disagree.
+ * Writes nothing.
+ */
+export async function buildTripQuotationPreview(prisma: PrismaClient, entryId: string, stays: TripPreviewStay[]) {
+  const entry = await prisma.entry.findUnique({ where: { id: entryId }, select: { inquiryId: true } });
+  if (!entry) throw new NotFoundError("Entry");
+  const ids = [...new Set(stays.map((s) => s.entryId))];
+  if (ids.length !== stays.length) throw new ValidationError("A stay is named twice");
+  const onTrip = await prisma.entry.findMany({ where: { id: { in: ids } }, select: { id: true, inquiryId: true, checkInDate: true, checkOutDate: true } });
+  for (const id of ids) {
+    const e = onTrip.find((x) => x.id === id);
+    if (!e) throw new NotFoundError(`Entry ${id}`);
+    if (e.inquiryId !== entry.inquiryId) throw new ValidationError(`${id} is not a stay of this trip`);
+  }
+  const { quotationPriceLines } = await import("./quotation-pdf-service.js");
+  const priced = await Promise.all(
+    stays.map(async (s) => {
+      const on = onTrip.find((x) => x.id === s.entryId)!;
+      const dates = { checkIn: on.checkInDate ? on.checkInDate.toISOString().slice(0, 10) : null, checkOut: on.checkOutDate ? on.checkOutDate.toISOString().slice(0, 10) : null };
+      // Past Negotiation there is no table: the stay's price is the quotation its bill reads.
+      const quotationId = s.quotationId ?? (s.billQuotation ? await billQuotationIdOf(prisma, s.entryId) : null);
+      if (s.billQuotation && !quotationId) throw new ValidationError(`${s.entryId} has no quotation yet`);
+      if (quotationId) {
+        const owner = await prisma.quotation.findUnique({ where: { id: quotationId }, select: { entryId: true } });
+        if (owner?.entryId !== s.entryId) throw new ValidationError(`${quotationId} is not this stay's quotation`);
+        const quote = await quotationPriceLines(prisma, quotationId);
+        return {
+          entryId: s.entryId,
+          ...dates,
+          source: "QUOTE" as const,
+          quote,
+          preview: null,
+          currency: null as string | null,
+          net: quote.net,
+          discountOff: quote.netAfterDiscount != null ? (quote.discountAmount ?? 0) : 0,
+          netAfter: quote.netAfterDiscount ?? quote.net,
+          serviceCharge: quote.serviceCharge,
+          gst: quote.gst,
+          payable: quote.total,
+        };
+      }
+      const preview = await buildQuotationPreview(prisma, s.entryId, s.input, s.opts);
+      return {
+        entryId: s.entryId,
+        ...dates,
+        source: "TABLE" as const,
+        quote: null,
+        preview,
+        currency: preview.currency as string | null,
+        net: preview.subtotal,
+        discountOff: preview.discount?.netReduction ?? 0,
+        netAfter: preview.payableSubtotal,
+        serviceCharge: preview.payableServiceCharge,
+        gst: preview.payableGst,
+        payable: preview.payable,
+      };
+    }),
+  );
+  const sum = (f: (p: (typeof priced)[number]) => number) => n2(priced.reduce((a, p) => a.add(new Prisma.Decimal(f(p))), new Prisma.Decimal(0)));
+  return {
+    inquiryId: entry.inquiryId,
+    currency: priced.find((p) => p.currency)?.currency ?? "BTN",
+    stays: priced,
+    totals: {
+      subtotal: sum((p) => p.net),
+      netReduction: sum((p) => p.discountOff),
+      payableSubtotal: sum((p) => p.netAfter),
+      payableServiceCharge: sum((p) => p.serviceCharge),
+      payableGst: sum((p) => p.gst),
+      payable: sum((p) => p.payable),
+    },
+  };
 }
 
 export async function buildQuotationPreview(

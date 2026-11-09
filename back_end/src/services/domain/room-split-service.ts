@@ -33,6 +33,7 @@ import { loadChildPolicyBundle } from "./child-policy-service.js";
 import { validateCapacity } from "./capacity-validation-service.js";
 import { createEntry } from "./s1-entry-service.js";
 import { createInquiry } from "./s1-inquiry-service.js";
+import { normalizeCoordinators } from "../../lib/admin/contact-list.js";
 import { createQuotation, type RoomCompositionServiceInput } from "./s2-quotation-service.js";
 import { placeSpeculativeHold } from "./s2-hold-service.js";
 import { ensureProvisionalFolioAndBillingModel } from "./s3-reservation-setup-service.js";
@@ -723,6 +724,7 @@ export async function createSplitInquiry(
             onWhatsApp: inq.callerOnWhatsApp ?? null,
           }
         : null,
+    partyContacts: normalizeCoordinators((inq as { partyContacts?: unknown }).partyContacts),
     sourceChannel: inq.sourceChannel ?? undefined,
     cameInAs: inq.cameInAs ?? undefined,
     notes: inq.notes ?? undefined,
@@ -938,12 +940,13 @@ export async function walkPiece(
       });
       await step("NEGOTIATION_TO_SET_UP", async () => progressS2ToS3(prisma, newId, actor.actorId, await version()));
       await step("PAYER", async () =>
-        ensureProvisionalFolioAndBillingModel(prisma, newId, actor.actorId, actor.actorLevel, { billingModel: entry.folio?.billingModel ?? "GUEST_PAY" }),
+        ensureProvisionalFolioAndBillingModel(prisma, newId, actor.actorId, actor.actorLevel, { billingModel: entry.folio?.billingModel ?? "GUEST_PAY" }, { carried: true }),
       );
       await step("CANCELLATION_TERMS", async () => {
         const seg = await prisma.segment.findFirst({ where: { entryId: newId }, orderBy: { segmentNumber: "desc" }, select: { id: true } });
         const src = entry.cancellationDisclosure;
-        if (!src) throw new ValidationError("The original has no cancellation terms recorded to carry — record them at Set up");
+        // Reaching Set up has already recorded the terms on the new booking (2026-11-05).
+        if (!src) return;
         await recordCancellationDisclosure(
           prisma,
           { entryId: newId, segmentId: seg!.id, noShowTreatmentStatement: src.noShowTreatmentStatement, disclosedTerms: src.disclosedTerms },

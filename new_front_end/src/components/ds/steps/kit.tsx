@@ -23,14 +23,20 @@ import {
   CancellationVoucherPreview,
   FolioDocumentPreview,
   IssuedInvoicePreview,
+  PaperFill,
   ProformaPreview,
   QuotationPreview,
+  TripQuotationPreview,
   VoucherPreview,
 } from "@/components/desk/workspace/quotation-preview";
+import { openTripPaperPdf } from "@/lib/api/trip-papers";
 import { readRefusal } from "@/lib/ds/translate";
 import { fmtDateTime, fmtStamp } from "@/lib/ds/format";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
 import { useInvoiceRecipient } from "@/hooks/use-invoice-recipient";
+import { usePhoneRules } from "@/hooks/use-phone-rules";
+import { problemOfPhone } from "@/lib/ds/phone";
+import { PhoneField } from "@/components/ds/phone-field";
 import { sendQuotation } from "@/lib/api/quotations";
 import { dispatchInvoice } from "@/lib/api/reservation-setup";
 import type { EntryDetail, InvoiceSummary, QuotationSummary } from "@/types/api";
@@ -38,6 +44,7 @@ import { getEntryBedPlan, setEntryBedPlan } from "@/lib/api/rooms";
 import { addBookingNote, listBookingNotes } from "@/lib/api/booking-notes";
 import type { BedAskSummary, BedPlanCell } from "@/components/desk/workspace/room-compositions-table";
 import { Help, HelpHere, useQuietScreen } from "@/components/ds/help";
+import { billNo, proformaBaseNo, quoteNo } from "@/lib/ds/papers";
 
 /** How a paper leaves the desk. WhatsApp is a RECORD of a hand-over, not a send. */
 const CHANNELS = [
@@ -114,6 +121,8 @@ type FlowCtxValue = {
   visited: ReadonlySet<string>;
   opened: ReadonlySet<string>;
   open: (card: string) => void;
+  /** Close a section opened with its Edit, back to its one line. */
+  close: (card: string) => void;
   /**
    * Fold an opened or finished section and go to the next one still to do. `reveal: false`
    * marks the next one current without scrolling to it — after Take it the bill above stays in
@@ -136,6 +145,7 @@ const FlowCtx = createContext<FlowCtxValue>({
   visited: new Set(),
   opened: new Set(),
   open: () => {},
+  close: () => {},
   done: () => {},
   derived: {},
   doneBar: true,
@@ -161,7 +171,7 @@ function itemDone(i: FlowItem, confirm: boolean, confirmed: ReadonlySet<string>)
  * quotation remove its tick? The same happens for others"): every item of its own is done, AND the
  * section it is made from — `derived`, e.g. the quotation from the table, the rooms from the stay —
  * is done too. A section made from one that has changed and is not saved does not read as done.
- * One reading for the chips, the cards' ticks and "Before you move on".
+ * One reading for the step line and the cards' ticks.
  */
 export function flowSectionDone(
   items: ReadonlyArray<{ card?: string; met: boolean }>,
@@ -348,6 +358,16 @@ export function StepFlow({
     setVisited((prev) => new Set(prev).add(card));
     setActive(card);
   }, []);
+  const close = useCallback((card: string) => {
+    // The press that closed it must not put the work back on the section it was pressed in.
+    if (pressed.current) skipPress.current = true;
+    setOpened((prev) => {
+      const next = new Set(prev);
+      next.delete(card);
+      return next;
+    });
+    setActive((cur) => (cur === card ? null : cur));
+  }, []);
   const done = useCallback(
     (card: string, opts?: { reveal?: boolean; next?: string }) => {
       if (pressed.current) skipPress.current = true;
@@ -397,9 +417,9 @@ export function StepFlow({
   // a card only re-renders when its own number or standing moves.
   const key = `${on}|${fold}|${confirm}|${doneBar}|${Object.entries(derived).join(",")}|${[...confirmed].join(",")}|${current}|${active}|${[...opened].join(",")}|${[...visited].join(",")}|${items.map((i) => `${i.n}${i.met ? "1" : "0"}${i.card}`).join("~")}`;
   const value = useMemo<FlowCtxValue>(
-    () => ({ items, on, fold: on ? fold : null, confirm, confirmed, current, active, visited, opened, open, done, derived, doneBar }),
+    () => ({ items, on, fold: on ? fold : null, confirm, confirmed, current, active, visited, opened, open, close, done, derived, doneBar }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [key, open, done],
+    [key, open, close, done],
   );
   return (
     <FlowCtx.Provider value={value}>
@@ -650,28 +670,19 @@ export function useFinishWhenMet(card: string) {
   }, [done]);
 }
 
+/**
+ * A paper made and not gone out, the same amber on every paper (2026-11-05, operator: "show generated
+ * and not sent prominently like quotation, do for all papers"). The guest has not got it, which is
+ * the thing to see. A tax invoice is issued, the others generated.
+ */
+export function NotSentChip({ made = "generated" }: { made?: "generated" | "issued" }) {
+  return <Chip tone="warning">{made} · not sent</Chip>;
+}
+
 export function useStepFlow() {
   const { on, done, open, opened } = useContext(FlowCtx);
   // `opened`: the sections opened again with their Edit — a card can show its tools at once then.
   return { on, done, open, opened };
-}
-
-/**
- * Where a section stands, for a list that reports on the sections (the new inquiry's "Before you
- * move on"): done — in and, where asked, its Done pressed — or in but still waiting for its Done.
- */
-export function useFlowStanding() {
-  const { items, confirm, confirmed } = useContext(FlowCtx);
-  return {
-    isDone: (card: string) => {
-      const own = items.filter((i) => i.card === card);
-      return own.length > 0 && own.every((i) => itemDone(i, confirm, confirmed));
-    },
-    awaitsDone: (card: string) => {
-      const own = items.filter((i) => i.card === card);
-      return confirm && own.length > 0 && own.every((i) => i.met) && !confirmed.has(card);
-    },
-  };
 }
 
 export function anchorFor(card: string) {
@@ -790,6 +801,7 @@ export function StepCard({
   doneAction,
   revealAtTop = false,
   keepRight = false,
+  restsFolded = false,
 }: {
   title?: ReactNode;
   icon?: IconName;
@@ -858,6 +870,12 @@ export function StepCard({
    * centred it grew down the page with the stay still showing above it (2026-10-28).
    */
   revealAtTop?: boolean;
+  /**
+   * There is nothing to do here for now, so the section rests as its one line, with Edit to open it
+   * and Hide to close it again (2026-11-05, operator, on a booking asked for no advance: "dont open
+   * the payment plan section, but keep it open and closable").
+   */
+  restsFolded?: boolean;
 }) {
   const { n, met, done, ticked, waitsFor } = useFlowCard(flow, flowAfter, flowAfterOnly);
   const ctx = useContext(FlowCtx);
@@ -879,16 +897,19 @@ export function StepCard({
     !!flow &&
     !!summary &&
     hasBody &&
-    !!done &&
     !waiting &&
     !isOpened &&
-    (ctx.fold === "done"
-      ? ctx.active !== flow
-      : ctx.fold === "on-move"
-        ? !!ctx.active && ctx.active !== flow && ctx.visited.has(flow)
-        : false);
+    ((ctx.on && restsFolded) ||
+      (!!done &&
+        (ctx.fold === "done"
+          ? ctx.active !== flow
+          : ctx.fold === "on-move"
+            ? !!ctx.active && ctx.active !== flow && ctx.visited.has(flow)
+            : false)));
   // A finished, unfolded section offers Done: fold it and go on to the next one.
   const canDone = !!flow && !!summary && !!met && !waiting && !folded && !!ctx.fold && !noDoneBar && ctx.doneBar;
+  // Opened with its Edit and no Done to fold it: Hide closes it again.
+  const canHide = isOpened && !!summary && !waiting && !canDone && (!!done || restsFolded);
   const body = (
     <>
       {status ? <div className="meta" style={{ marginBottom: 8 }}>{status}</div> : null}
@@ -929,7 +950,16 @@ export function StepCard({
             {metaInHelp ? <Help label="About this section">{meta}</Help> : null}
             {isCurrent ? <span className="flow-here">you are here</span> : null}
           </h4>
-          {waiting || (folded && !keepRight) ? null : right ? <div className="row-acts">{right}</div> : null}
+          {waiting || (folded && !keepRight) ? null : right || canHide ? (
+            <div className="row-acts">
+              {right}
+              {canHide ? (
+                <Button kind="quiet" compact onClick={() => ctx.close(flow!)}>
+                  Hide
+                </Button>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       ) : null}
       {folded ? (
@@ -1604,6 +1634,12 @@ export function ChangeBookingMenu({
   );
 }
 
+const CloseAlsoWayCtx = createContext<() => void>(() => undefined);
+/** Closes the way's pop-up, for a way whose act leaves the booking open (2026-11-09). */
+export function useCloseAlsoWay() {
+  return useContext(CloseAlsoWayCtx);
+}
+
 function AlsoBarWays({ live, slots }: { live: OtherWayTab[]; slots: AlsoBarSlots }) {
   const params = useSearchParams();
   const router = useRouter();
@@ -1695,7 +1731,7 @@ function AlsoBarWays({ live, slots }: { live: OtherWayTab[]; slots: AlsoBarSlots
             </div>
             {live.map((t) => (
               <div key={t.key} hidden={t.key !== open}>
-                {t.content}
+                <CloseAlsoWayCtx.Provider value={() => go(null)}>{t.content}</CloseAlsoWayCtx.Provider>
               </div>
             ))}
           </div>
@@ -1756,15 +1792,29 @@ export function OtherWaysTabs({ tabs }: { tabs: ReadonlyArray<OtherWayTab | null
  */
 export type SubTab = { key: string; label: ReactNode; content: ReactNode };
 
-export function SubTabs({ tabs, label, param = "sub" }: { tabs: ReadonlyArray<SubTab | null | false | undefined>; label: string; param?: string }) {
+export function SubTabs({
+  tabs,
+  label,
+  param = "sub",
+  value,
+  onPick,
+}: {
+  tabs: ReadonlyArray<SubTab | null | false | undefined>;
+  label: string;
+  param?: string;
+  /** Held by the caller instead of the address (the new inquiry, which has no booking to come back to). */
+  value?: string;
+  onPick?: (key: string) => void;
+}) {
   const params = useSearchParams();
   const router = useRouter();
   const pathname = usePathname();
   const live = tabs.filter((t): t is SubTab => !!t);
   if (live.length === 0) return null;
-  const want = params.get(param);
+  const want = value ?? params.get(param);
   const current = live.find((t) => t.key === want) ?? live[0];
   const pick = (key: string) => {
+    if (onPick) return onPick(key);
     const p = new URLSearchParams(params.toString());
     p.set(param, key);
     router.replace(`${pathname}?${p.toString()}`, { scroll: false });
@@ -2196,6 +2246,7 @@ export function DsDialog({
   busy,
   help,
   closeX = false,
+  beside,
 }: {
   open: boolean;
   onClose: () => void;
@@ -2210,6 +2261,8 @@ export function DsDialog({
   busy?: boolean;
   /** What the dialog is for, behind a "?" beside its title. Its consequences stay in the body. */
   help?: ReactNode;
+  /** A panel at the right of the screen, with the dialog in the room left of it: `SendPaperPanel`. */
+  beside?: ReactNode;
 }) {
   const inline = useInlineWay();
   const shownTitle = help ? (
@@ -2233,15 +2286,30 @@ export function DsDialog({
   }, [open, busy, onClose, inline]);
   if (!open) return null;
   if (inline) return <WayBody register={register} title={shownTitle} caseLines={caseLines} footer={footer}>{children}</WayBody>;
+  const holder = (
+    <div style={width ? { width, maxWidth: "100%" } : undefined} className="dialog-holder">
+      <Dialog register={register} title={shownTitle} caseLines={caseLines} footer={footer} onClose={closeX && !busy ? onClose : undefined}>
+        {children}
+      </Dialog>
+    </div>
+  );
+  const pressOutside = (e: React.MouseEvent) => {
+    if (e.target === e.currentTarget && !busy) onClose();
+  };
   return (
     <Overlay>
-      <div className="scrim open" onMouseDown={(e) => e.target === e.currentTarget && !busy && onClose()}>
-        <div style={width ? { width, maxWidth: "100%" } : undefined} className="dialog-holder">
-          <Dialog register={register} title={shownTitle} caseLines={caseLines} footer={footer} onClose={closeX && !busy ? onClose : undefined}>
-            {children}
-          </Dialog>
+      {beside ? (
+        <div className="scrim open with-paper" onMouseDown={pressOutside}>
+          <div className="send-left" onMouseDown={pressOutside}>
+            {holder}
+          </div>
+          {beside}
         </div>
-      </div>
+      ) : (
+        <div className="scrim open" onMouseDown={pressOutside}>
+          {holder}
+        </div>
+      )}
     </Overlay>
   );
 }
@@ -2367,6 +2435,7 @@ export function ReasonDialog({
 
 export type PaperRef =
   | { kind: "quotation"; id: string; frozen?: boolean; label: string }
+  | { kind: "trip"; id: string; label: string; tripKind?: "QUOTATION" | "PROFORMA" | "VOUCHER" }
   | { kind: "invoice"; id: string; frozen?: boolean; label: string; notice?: string; issued?: boolean; invoiceType?: string }
   | { kind: "voucher"; reservationId: string; label: string }
   | { kind: "cancellation"; entryId: string; label: string }
@@ -2453,6 +2522,64 @@ export function PricesChoice({ hidden, onChange, label = "Prices" }: { hidden: b
   );
 }
 
+/** The paper itself, at the size of the panel it is in. */
+function PaperBody({
+  paper,
+  mode,
+  noPrices = false,
+  nightsEach = false,
+}: {
+  paper: PaperRef;
+  /** A preview leaves the hotel's own heading off; beside a send it stays, as the guest will see it. */
+  mode: "preview" | "send";
+  noPrices?: boolean;
+  nightsEach?: boolean;
+}) {
+  return (
+    <div className="desk-root paper-scroll">
+      <PaperFill.Provider value={mode}>
+        {paper.kind === "quotation" ? (
+          <QuotationPreview quotationId={paper.id} frozenPdf={paper.frozen} hidePrices={noPrices} nightsEach={nightsEach} />
+        ) : paper.kind === "trip" ? (
+          <TripQuotationPreview tripPaperId={paper.id} hidePrices={noPrices} />
+        ) : paper.kind === "invoice" ? (
+          paper.issued ? (
+            <IssuedInvoicePreview invoiceId={paper.id} />
+          ) : (
+            <ProformaPreview invoiceId={paper.id} frozenPdf={paper.frozen} notice={paper.notice} title={paper.label} nightsEach={nightsEach} />
+          )
+        ) : paper.kind === "voucher" ? (
+          <VoucherPreview reservationId={paper.reservationId} nightsEach={nightsEach} />
+        ) : paper.kind === "cancellation" ? (
+          <CancellationVoucherPreview entryId={paper.entryId} />
+        ) : (
+          <FolioDocumentPreview entryId={paper.entryId} kind={paper.doc} title={paper.label} refreshKey={paper.refreshKey} nightsEach={nightsEach} />
+        )}
+      </PaperFill.Provider>
+    </div>
+  );
+}
+
+/**
+ * The paper beside a send box (2026-11-05, operator: "when user clicks on send, on the right preview
+ * the paper like that, and on the left it can show the pop up of the send options so user can see
+ * what is there in quotation while sending it"). Goes in `DsDialog`'s `beside`; it follows the
+ * box's own Nights choice.
+ */
+export function SendPaperPanel({ paper, nightsEach }: { paper: PaperRef; nightsEach?: boolean }) {
+  return (
+    <aside className="paper-panel" aria-label={paper.label}>
+      <div className="card-top" style={{ padding: "12px 16px", borderBottom: "1px solid var(--line)" }}>
+        <h4 style={{ margin: 0 }}>
+          <Icon name="file" />
+          {paper.label}
+        </h4>
+      </div>
+      <PaperBody paper={paper} mode="send" nightsEach={nightsEach} />
+    </aside>
+  );
+}
+
 /** The paper opens in a side drawer — the document shell the backend rendered. */
 export function PaperDrawer({ paper, onClose }: { paper: PaperRef | null; onClose: () => void }) {
   const { session } = useSession();
@@ -2468,7 +2595,7 @@ export function PaperDrawer({ paper, onClose }: { paper: PaperRef | null; onClos
     setNightsEach(false);
   }, [paperKey]);
   // The paper, so the nights choice can say when it changes nothing.
-  const nightsOf: PaperOf | null = !paper
+  const nightsOf: PaperOf | null = !paper || paper.kind === "trip"
     ? null
     : paper.kind === "quotation"
       ? { quotationId: paper.id }
@@ -2497,6 +2624,8 @@ export function PaperDrawer({ paper, onClose }: { paper: PaperRef | null; onClos
     const run =
       paper.kind === "quotation"
         ? openQuotationPdf(session, paper.id, { hidePrices: noPrices, nightsEach: each })
+        : paper.kind === "trip"
+          ? openTripPaperPdf(session, paper.id, { hidePrices: noPrices })
         : paper.kind === "invoice"
           ? openInvoicePdf(session, paper.id, { nightsEach: each })
           : paper.kind === "voucher"
@@ -2509,12 +2638,7 @@ export function PaperDrawer({ paper, onClose }: { paper: PaperRef | null; onClos
   return (
     <Overlay>
       <div className="scrim open" style={{ alignItems: "stretch", justifyContent: "flex-end", padding: 0 }} onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-        <div
-          role="dialog"
-          aria-label={paper.label}
-          // 680px so the paper's two choices sit on one line (2026-10-30, operator).
-          style={{ width: "min(680px, 96vw)", background: "var(--surface)", borderLeft: "1px solid var(--line-2)", display: "flex", flexDirection: "column", boxShadow: "var(--shadow-dialog)" }}
-        >
+        <div role="dialog" aria-label={paper.label} className="paper-panel">
           <div className="card-top" style={{ padding: "12px 16px", borderBottom: "1px solid var(--line)" }}>
             <h4 style={{ margin: 0 }}>
               <Icon name="file" />
@@ -2534,35 +2658,13 @@ export function PaperDrawer({ paper, onClose }: { paper: PaperRef | null; onClos
           </div>
           {/* The paper's faces, as choice buttons the eye finds (2026-10-30, operator: "even in
               preview it should have that option, and make those buttons prominent"). */}
-          {paper.kind === "quotation" || hasNights ? (
+          {paper.kind === "quotation" || (paper.kind === "trip" && (paper.tripKind ?? "QUOTATION") === "QUOTATION") || hasNights ? (
             <div className="paper-faces">
-              {paper.kind === "quotation" ? <PricesChoice hidden={noPrices} onChange={setNoPrices} /> : null}
+              {paper.kind === "quotation" || (paper.kind === "trip" && (paper.tripKind ?? "QUOTATION") === "QUOTATION") ? <PricesChoice hidden={noPrices} onChange={setNoPrices} /> : null}
               {hasNights ? <NightsChoice each={nightsEach} onChange={setNightsEach} of={nightsOf} /> : null}
             </div>
           ) : null}
-          <div className="desk-root" style={{ overflow: "auto", flex: 1, padding: "8px 12px" }}>
-            {paper.kind === "quotation" ? (
-              <QuotationPreview quotationId={paper.id} frozenPdf={paper.frozen} hidePrices={noPrices} nightsEach={nightsEach} />
-            ) : paper.kind === "invoice" ? (
-              paper.issued ? (
-                <IssuedInvoicePreview invoiceId={paper.id} />
-              ) : (
-                <ProformaPreview
-                  invoiceId={paper.id}
-                  frozenPdf={paper.frozen}
-                  notice={paper.notice}
-                  title={paper.label}
-                  nightsEach={hasNights && nightsEach}
-                />
-              )
-            ) : paper.kind === "voucher" ? (
-              <VoucherPreview reservationId={paper.reservationId} nightsEach={nightsEach} />
-            ) : paper.kind === "cancellation" ? (
-              <CancellationVoucherPreview entryId={paper.entryId} />
-            ) : (
-              <FolioDocumentPreview entryId={paper.entryId} kind={paper.doc} title={paper.label} refreshKey={paper.refreshKey} nightsEach={nightsEach} />
-            )}
-          </div>
+          <PaperBody paper={paper} mode="preview" noPrices={noPrices} nightsEach={hasNights && nightsEach} />
         </div>
       </div>
     </Overlay>
@@ -2622,6 +2724,7 @@ export function PapersCard({
   const [sendQuote, setSendQuote] = useState<QuotationSummary | null>(null);
   const [sendInvoice, setSendInvoice] = useState<InvoiceSummary | null>(null);
   const refresh = useRefreshEntry(entry.id);
+  const commsForVoucher = useCommunications(entry.id);
   const folioLive = !!entry.folio && ["LIVE", "OUTSTANDING", "SETTLED", "CLOSED"].includes(entry.folio.state);
   const folioDocs = useQuery({
     queryKey: ["folio-documents", entry.id, entry.currentStage, entry.folio?.state ?? null],
@@ -2688,6 +2791,11 @@ export function PapersCard({
 
   const liveQuote = (q: QuotationSummary) => q.state === "DRAFT" || q.state === "SENT" || q.state === "ACCEPTED";
   const liveInvoice = (i: InvoiceSummary) => i.state !== "SUPERSEDED";
+  // The voucher in force: sent if any send of it went out, else what became of the newest.
+  const voucherComms = (commsForVoucher.data?.items ?? []).filter((c) => c.commType === "CONFIRMATION_VOUCHER" && c.inForce !== false);
+  const voucherSend = voucherComms.some((c) => c.sendStatus === "DISPATCHED")
+    ? "DISPATCHED"
+    : [...voucherComms].sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]?.sendStatus ?? null;
 
   return (
     <StepCard title={title}>
@@ -2701,10 +2809,10 @@ export function PapersCard({
                 <b>{q.referenceNumber}</b>
                 {(q.versionNumber ?? 1) > 1 ? <span className="v"> · v{q.versionNumber}</span> : null}
               </span>
-              <Chip tone={liveQuote(q) ? "success" : "quiet"}>{QUOTE_WORD[q.state] ?? q.state.toLowerCase()}</Chip>
+              {q.state === "DRAFT" ? <NotSentChip /> : <Chip tone={liveQuote(q) ? "success" : "quiet"}>{QUOTE_WORD[q.state] ?? q.state.toLowerCase()}</Chip>}
               <span className="when">{q.createdAt ? fmtStamp(q.createdAt) : ""}</span>
               <span className="acts">
-                <Button kind="quiet" compact icon="eye" onClick={() => setOpen({ kind: "quotation", id: q.id, label: `Quotation ${q.referenceNumber}`, frozen: !liveQuote(q) && !!q.pdfStorageKey })}>
+                <Button kind="quiet" compact icon="eye" onClick={() => setOpen({ kind: "quotation", id: q.id, label: `Quotation ${quoteNo(q)}`, frozen: !liveQuote(q) && !!q.pdfStorageKey })}>
                   Preview
                 </Button>
                 <Live>
@@ -2730,14 +2838,18 @@ export function PapersCard({
             <Fragment key={i.id}>
             <div className="paperrow">
               <span className="nm">
-                <b>{i.invoiceNumber ?? i.id}</b>
+                <b>{proformaBaseNo(i)}</b>
                 <span className="v"> · {INVOICE_WORD[i.invoiceType] ?? "Invoice"}</span>
                 {(i.versionNumber ?? 1) > 1 ? <span className="v"> · v{i.versionNumber}</span> : null}
               </span>
-              <Chip tone={liveInvoice(i) ? "success" : "quiet"}>{i.state === "SUPERSEDED" ? "replaced" : i.dispatchedAt ? "sent" : i.state.toLowerCase()}</Chip>
+              {i.state === "DRAFT" && !i.dispatchedAt ? (
+                <NotSentChip made={i.invoiceType === "FINAL" ? "issued" : "generated"} />
+              ) : (
+                <Chip tone={liveInvoice(i) ? "success" : "quiet"}>{i.state === "SUPERSEDED" ? "replaced" : i.dispatchedAt ? "sent" : i.state.toLowerCase()}</Chip>
+              )}
               <span className="when">{i.dispatchedAt ? `sent ${fmtStamp(i.dispatchedAt)}` : i.createdAt ? fmtStamp(i.createdAt) : ""}</span>
               <span className="acts">
-                <Button kind="quiet" compact icon="eye" onClick={() => setOpen({ kind: "invoice", id: i.id, label: `${INVOICE_WORD[i.invoiceType] ?? "Invoice"} ${i.invoiceNumber ?? i.id}`, issued: i.invoiceType === "FINAL", invoiceType: i.invoiceType })}>
+                <Button kind="quiet" compact icon="eye" onClick={() => setOpen({ kind: "invoice", id: i.id, label: `${INVOICE_WORD[i.invoiceType] ?? "Invoice"} ${billNo(i)}`, issued: i.invoiceType === "FINAL", invoiceType: i.invoiceType })}>
                   Preview
                 </Button>
                 <Live>
@@ -2768,7 +2880,15 @@ export function PapersCard({
                   <b>{v.number ?? v.id}</b>
                   <span className="v"> · {v.id}</span>
                 </span>
-                <Chip tone={inForce ? "success" : "quiet"}>{inForce ? "in force" : "replaced"}</Chip>
+                {!inForce ? (
+                  <Chip tone="quiet">replaced</Chip>
+                ) : voucherSend === "HELD" ? (
+                  <NotSentChip />
+                ) : voucherSend === "NOT_SENT" ? (
+                  <Chip tone="quiet">not sent</Chip>
+                ) : (
+                  <Chip tone="success">{voucherSend === "DISPATCHED" ? "sent" : "in force"}</Chip>
+                )}
                 <span className="when">{v.confirmedAt ? `confirmed ${fmtStamp(v.confirmedAt)}` : ""}</span>
                 <span className="acts">
                   <Button kind="quiet" compact icon="eye" onClick={() => setOpen({ kind: "voucher", reservationId: v.id, label })}>
@@ -2848,19 +2968,18 @@ export function QuotationSendDialog({
 }) {
   const { session } = useSession();
   const { tz } = useHotelClock(60_000);
+  const phoneRules = usePhoneRules();
   // Where the quote goes (2026-09-19): the invoices' rule — the agency or company that booked (the
   // quote carries their rates), else the guest — and the backend now sends to what is typed here.
   // The email box used to fall back to the guest's PHONE, and the toast then said "sent by email
   // to +975…" while nothing was emailed.
   const recipient = useInvoiceRecipient(entry);
-  const phoneOnFile = (entry.guestProfile?.phone ?? entry.inquiry?.guestProfile?.phone ?? "").trim();
+  const phoneOnFile = recipient.phone;
   const [channel, setChannel] = useState<Channel>("EMAIL");
   const [to, setTo] = useState("");
   const [touched, setTouched] = useState(false);
-  // "Sometimes guest needs to be sent quotation without the price" (2026-10-06). The offer does
-  // not change — same quotation, same number, same validity, and the stored PDF is still the
-  // priced one; only the copy the guest receives has the money taken off.
-  const [hidePrices, setHidePrices] = useState(false);
+  // A quotation goes out with its prices (2026-11-05, operator). The copy without them stays in the
+  // preview, to read and to print.
   // The copy sent names every night instead of a run as its first and last (2026-10-30).
   const [nightsEach, setNightsEach] = useState(false);
   /**
@@ -2885,11 +3004,10 @@ export function QuotationSendDialog({
         channel,
         recipientAddress: typed,
         sentTo: typed,
-        hidePrices,
         nightsEach,
       }),
     onSuccess: async () => {
-      const face = `${hidePrices ? " · without prices" : ""}${nightsEach ? " · every night named" : ""}`;
+      const face = nightsEach ? " · every night named" : "";
       const text = note.trim();
       if (text && target) {
         try {
@@ -2901,10 +3019,10 @@ export function QuotationSendDialog({
       }
       toast.success(
         channel === "WHATSAPP"
-          ? `${target?.referenceNumber} recorded as sent on WhatsApp to ${typed}${face}`
+          ? `${target ? quoteNo(target) : ""} recorded as sent on WhatsApp to ${typed}${face}`
           : typed
-            ? `${target?.referenceNumber} sent by email to ${typed}${face}`
-            : `${target?.referenceNumber} recorded as sent — nothing was emailed (no address on file); hand it over or send it on WhatsApp`,
+            ? `${target ? quoteNo(target) : ""} sent by email to ${typed}${face}`
+            : `${target ? quoteNo(target) : ""} recorded as sent — nothing was emailed (no address on file); hand it over or send it on WhatsApp`,
       );
       onSent();
     },
@@ -2912,30 +3030,34 @@ export function QuotationSendDialog({
   });
   const hint =
     channel === "WHATSAPP"
-      ? "send it on WhatsApp yourself — the desk records the send with this number"
+      ? recipient.phoneWhose && typed === recipient.phone
+        ? `${recipient.phoneWhose} — send it on WhatsApp yourself; the desk records the send with this number`
+        : "send it on WhatsApp yourself — the desk records the send with this number"
       : !typed
         ? recipient.party
-          ? `${recipient.party} has no email on file — type the address, or send it with none and hand the quote over`
+          ? `No email for ${recipient.party} or its contact person — type the address, or send it with none and hand the quote over`
           : "no email on file — type one, or send it with none and hand the quote over"
         : !emailish
           ? "that is not an email address"
-          : recipient.party && typed === recipient.partyEmail
-            ? `${recipient.party}'s email on file — the quote shows their rates`
+          : recipient.defaultWhose && typed === recipient.defaultTo
+            ? recipient.party
+              ? `${recipient.defaultWhose} — the quote shows ${recipient.party}'s rates`
+              : recipient.defaultWhose
             : recipient.guestEmail && typed === recipient.guestEmail
               ? recipient.party
                 ? `this is the guest's email — the quote is made out to ${recipient.party} and shows its rates`
                 : "the guest's email on file"
               : "the send is recorded on the booking with this address";
   if (!target) return null;
-  const ok = channel === "WHATSAPP" ? typed.length > 0 : !typed || emailish;
+  const numberBad = channel === "WHATSAPP" ? problemOfPhone(phoneRules, typed) : null;
+  const ok = channel === "WHATSAPP" ? typed.length > 0 && !numberBad : !typed || emailish;
   return (
     <DsDialog
       open
       onClose={onClose}
       busy={send.isPending}
-      // Wide enough for the paper's two choices on one line (2026-10-30).
-      width={720}
-      title={`Send quotation ${target.referenceNumber}`}
+      beside={<SendPaperPanel paper={{ kind: "quotation", id: target.id, label: `Quotation ${quoteNo(target)}` }} nightsEach={nightsEach} />}
+      title={`Send quotation ${quoteNo(target)}`}
       caseLines={[
         `Version ${target.versionNumber}`,
         target.validUntil ? `Price valid until ${fmtDateTime(target.validUntil, tz)} — sending does not restart the clock` : "No validity recorded",
@@ -2955,7 +3077,7 @@ export function QuotationSendDialog({
           <Button
             icon="send"
             state={send.isPending ? "working" : ok ? "default" : "inert"}
-            title={ok ? undefined : channel === "WHATSAPP" ? "put in the WhatsApp number" : "that is not an email address"}
+            title={ok ? undefined : channel === "WHATSAPP" ? (numberBad ?? "put in the WhatsApp number") : "that is not an email address"}
             workingLabel="Sending…"
             onClick={() => send.mutate()}
           >
@@ -2977,20 +3099,31 @@ export function QuotationSendDialog({
       </div>
       <div className="field">
         <label>{channel === "EMAIL" ? "Email address" : "WhatsApp number"}</label>
-        <input
-          className="input"
-          value={to}
-          onChange={(e) => {
-            setTouched(true);
-            setTo(e.target.value);
-          }}
-          placeholder={channel === "EMAIL" ? "name@example.com" : "+975 …"}
-          autoFocus
-        />
+        {channel === "EMAIL" ? (
+          <input
+            className="input"
+            value={to}
+            onChange={(e) => {
+              setTouched(true);
+              setTo(e.target.value);
+            }}
+            placeholder="name@example.com"
+            autoFocus
+          />
+        ) : (
+          <PhoneField
+            value={to}
+            ariaLabel="WhatsApp number"
+            autoFocus
+            onChange={(v) => {
+              setTouched(true);
+              setTo(v);
+            }}
+          />
+        )}
         <span className="hint">{hint}</span>
       </div>
       <div className="paper-faces in-dialog">
-        <PricesChoice hidden={hidePrices} onChange={setHidePrices} />
         <NightsChoice each={nightsEach} onChange={setNightsEach} of={{ quotationId: target.id }} />
       </div>
       <div className="field">
@@ -3037,7 +3170,7 @@ function InvoiceSendDialog({
   const send = useMutation({
     mutationFn: () => dispatchInvoice(session!, target!.id, { dispatchedTo: typed || undefined, nightsEach: isProforma && nightsEach }),
     onSuccess: () => {
-      toast.success(typed ? `${target?.invoiceNumber ?? "The bill"} sent to ${typed}` : `${target?.invoiceNumber ?? "The bill"} recorded as sent — nothing was emailed; hand it over`);
+      toast.success(typed ? `${target ? billNo(target) : "The bill"} sent to ${typed}` : `${target ? billNo(target) : "The bill"} recorded as sent — nothing was emailed; hand it over`);
       onSent();
     },
     onError: (e) => toastRefusal(e, "The bill could not be sent"),
@@ -3048,8 +3181,19 @@ function InvoiceSendDialog({
       open
       onClose={onClose}
       busy={send.isPending}
-      width={720}
-      title={`Send ${INVOICE_WORD[target.invoiceType] ?? "invoice"} ${target.invoiceNumber ?? target.id}`}
+      beside={
+        <SendPaperPanel
+          paper={{
+            kind: "invoice",
+            id: target.id,
+            label: `${INVOICE_WORD[target.invoiceType] ?? "Invoice"} ${billNo(target)}`,
+            issued: target.invoiceType === "FINAL",
+            invoiceType: target.invoiceType,
+          }}
+          nightsEach={isProforma && nightsEach}
+        />
+      }
+      title={`Send ${INVOICE_WORD[target.invoiceType] ?? "invoice"} ${billNo(target)}`}
       caseLines={[entry.id, target.dispatchedAt ? "Already sent once — this sends it again" : "Not sent yet"]}
       footer={
         <>
@@ -3251,6 +3395,9 @@ export function useRefreshEntry(entryId: string) {
       ["closure-readiness", entryId],
       ["room-inspections", entryId],
       ["held-documents", entryId],
+      ["trip-quotation"],
+      ["trip-proforma"],
+      ["trip-voucher"],
       ["room-chart"],
       ...extra,
     ];

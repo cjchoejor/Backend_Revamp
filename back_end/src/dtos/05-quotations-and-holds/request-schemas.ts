@@ -102,12 +102,13 @@ export const createQuotationRequestSchema = z.object({
   requestedDiscount: discountShape.nullable().optional(),
   notes: z.string().optional(),
   /**
-   * Validity window in days, chosen when the quote is GENERATED (2026-08-06, operator ruling —
+   * How long the offer stands, chosen when the quote is GENERATED (2026-08-06, operator ruling —
    * the generated quote IS the offer under the generate-vs-send rule, so its clock starts at
-   * creation). 1–30; must also end before check-in (service-enforced, since the stay dates
-   * aren't known here). Omitted → registry.quotationValidity.days / config default.
+   * creation). Days up to check-in, or hours when check-in is today (2026-11-05): the service
+   * enforces both, since the stay dates aren't known here. Omitted → as long as it may.
    */
-  validDays: z.coerce.number().int().min(1).max(30).optional(),
+  validDays: z.coerce.number().int().min(1).max(3660).optional(),
+  validHours: z.coerce.number().int().min(1).max(24).optional(),
   currency: z.string().optional(),
   focRoomsRequested: z.coerce.number().int().min(1).optional(),
   belowMsrGmWaiver: belowMsrGmWaiverSchema.optional(),
@@ -128,8 +129,9 @@ export type CreateQuotationRequestDto = z.infer<typeof createQuotationRequestSch
 export const supersedeQuotationRequestSchema = z.object({
   notes: z.string().optional(),
   requestedDiscount: discountShape.nullable().optional(),
-  /** Validity of the regenerated draft — same rules as create (1–30, before check-in). */
-  validDays: z.coerce.number().int().min(1).max(30).optional(),
+  /** Validity of the regenerated draft — the same rule as create. */
+  validDays: z.coerce.number().int().min(1).max(3660).optional(),
+  validHours: z.coerce.number().int().min(1).max(24).optional(),
   currency: z.string().optional(),
   /** GM waiver when the renegotiated rate falls below MSR (same shape as create). */
   belowMsrGmWaiver: z.object({ acknowledged: z.literal(true), rationale: z.string().min(3).max(4000) }).optional(),
@@ -144,6 +146,7 @@ export type SupersedeQuotationRequestDto = z.infer<typeof supersedeQuotationRequ
 
 export const sendQuotationRequestSchema = z.object({
   validDays: z.coerce.number().int().min(1).optional(),
+  validHours: z.coerce.number().int().min(1).max(24).optional(),
   sentTo: z.string().optional(),
   channel: z.string().optional(),
   recipientAddress: z.string().optional(),

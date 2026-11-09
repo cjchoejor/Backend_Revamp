@@ -26,7 +26,7 @@ import { mulMoney, round2 as round2Dec, toDecimal } from "../../lib/money.js";
 type Db = PrismaClient | Prisma.TransactionClient;
 
 export type StayChargeBreakdown = {
-  /** Room nights only — before service charge or GST. */
+  /** The net value — before service charge or GST. */
   subTotal: number;
   /** Decimal service-charge rate read from config (e.g. 0.10 = 10%). */
   serviceChargeRate: number;
@@ -39,6 +39,32 @@ export type StayChargeBreakdown = {
   /** Final amount the guest pays. */
   total: number;
 };
+
+/**
+ * The stay as it was priced on a quotation or frozen on a reservation: its own stored totals, which
+ * carry the meals, the extra beds, each room's rate and the discount (2026-11-05). What an email
+ * states must be what its paper prints. Null on an old flat quotation, which has no such totals.
+ * The rates are worked back from the figures, so an older paper is never labelled with today's.
+ */
+export function stayBreakdownFromTerms(terms: unknown): StayChargeBreakdown | null {
+  const ct = (terms as { compositionTotals?: Record<string, unknown> } | null)?.compositionTotals;
+  if (!ct || ct.total == null) return null;
+  const subTotal = Number(ct.subtotal ?? 0);
+  const serviceCharge = Number(ct.serviceCharge ?? 0);
+  const gst = Number(ct.gst ?? 0);
+  const total = Number(ct.total);
+  if (![subTotal, serviceCharge, gst, total].every(Number.isFinite)) return null;
+  // To a hundredth of a percent: each room's tax was rounded to the paisa, so the share is a hair off.
+  const share = (part: number, of: number) => (of > 0 ? Math.round((part / of) * 10000) / 10000 : 0);
+  return {
+    subTotal,
+    serviceChargeRate: share(serviceCharge, subTotal),
+    serviceCharge,
+    gstRate: share(gst, subTotal + serviceCharge),
+    gst,
+    total,
+  };
+}
 
 function rateFromConfig(raw: unknown, fallback: number): number {
   if (typeof raw === "number" && Number.isFinite(raw)) return raw;

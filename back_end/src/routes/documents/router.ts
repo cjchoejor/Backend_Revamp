@@ -7,6 +7,7 @@
  * Auth: L1+ (any authenticated staff) can download. Guest-facing links come via email
  * attachment, not this API — this surface is for staff reprint / audit only.
  */
+import { resolveSendTo } from "../../lib/send-to.js";
 import { Router } from "express";
 import { prisma } from "../../db.js";
 import { requireActorLevel } from "../../middleware/auth.js";
@@ -95,6 +96,19 @@ documentsRouter.get("/quotations/:id/preview-html", requireActorLevel("L1"), asy
     res.send(html);
   } catch (e) {
     next(e);
+  }
+});
+
+/**
+ * GET /api/entries/:id/send-to — whom a paper goes to by default (2026-11-07, lib/send-to.ts): the
+ * email and the WhatsApp number every send box starts with, and whose they are. Read-only.
+ */
+documentsRouter.get("/entries/:id/send-to", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.set("Cache-Control", "no-store");
+    res.json(await resolveSendTo(prisma, req.params.id));
+  } catch (error) {
+    next(error);
   }
 });
 

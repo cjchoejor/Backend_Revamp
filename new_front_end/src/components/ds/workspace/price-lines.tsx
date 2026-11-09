@@ -5,8 +5,8 @@
  * prices are shown in quotation, like how the meals and extra beds and all come under one column,
  * that way the user can just scroll down to look at it instead of scrolling horizontally").
  *
- * Each room is a row, its extra beds and its meals indented beneath it; then the net value, the
- * service charge, the GST, any discount and the total. Every row and figure is the server's —
+ * Each room is a row, its extra beds and its meals indented beneath it; then the net value, any
+ * discount and the net after it, the service charge, the GST and the total. Every row and figure is the server's —
  * built by the same code that writes the quotation (`lib/quotation-price-lines.ts`), so the tab
  * and the paper cannot disagree. Nothing is added up here.
  *
@@ -22,6 +22,8 @@ export type PriceLinesFigures = {
   lines: QuotationPriceLine[];
   datesShown: boolean;
   net: number;
+  /** The net after a discount taken off it; null with none, or on an older flat-rate quotation. */
+  netAfterDiscount: number | null;
   serviceChargeLabel: string;
   serviceCharge: number;
   gstLabel: string;
@@ -37,20 +39,25 @@ const plain = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: 
 // narrow file, the whole name on hover.
 const shortWhat = (d: string) => d.replace(/\s*\([^()]*\)\s*$/, "") || d;
 
-export function PriceLinesTable({ f, currency, totalLabel = "Total" }: { f: PriceLinesFigures; currency: string; totalLabel?: string }) {
+export function PriceLinesHead({ datesShown, currency }: { datesShown: boolean; currency: string }) {
   return (
-    <div className="plines-wrap">
-    <table className={`table compact plines${f.datesShown ? " dated" : ""}`}>
       <thead>
         <tr>
-          {f.datesShown ? <th className="pl-dates">Nights</th> : null}
+          {datesShown ? <th className="pl-dates">Nights</th> : null}
           <th>Description</th>
           <th className="pl-qty">Qty</th>
           <th className="num pl-rate">Rate</th>
           <th className="num">Amount ({currency === "BTN" ? "Nu." : currency})</th>
         </tr>
       </thead>
-      <tbody>
+  );
+}
+
+/** The rows of one stay, room by room — also set under each stay's heading in a trip's one table. */
+export function PriceLineRows({ lines, datesShown }: { lines: QuotationPriceLine[]; datesShown: boolean }) {
+  const f = { lines, datesShown };
+  return (
+    <>
         {f.lines.map((l, i) => (
           <tr key={i} className={`${l.indent ? "pl-sub" : "pl-room"}${l.muted ? " pl-muted" : ""}`}>
             {/* A line under a room names its own nights when they are not all the room's (2026-10-30). */}
@@ -70,17 +77,36 @@ export function PriceLinesTable({ f, currency, totalLabel = "Total" }: { f: Pric
             <td className="num">{l.muted ? "—" : plain(l.amount)}</td>
           </tr>
         ))}
+    </>
+  );
+}
+
+export function PriceLinesTable({ f, currency, totalLabel = "Total" }: { f: PriceLinesFigures; currency: string; totalLabel?: string }) {
+  return (
+    <div className="plines-wrap">
+    <table className={`table compact plines${f.datesShown ? " dated" : ""}`}>
+      <PriceLinesHead datesShown={f.datesShown} currency={currency} />
+      <tbody>
+        <PriceLineRows lines={f.lines} datesShown={f.datesShown} />
       </tbody>
     </table>
     {/* The foot sits outside the table, so folding the Qty and Rate columns cannot misalign it. */}
     <div className="pl-foot">
       <span>Net value</span>
       <b>{plain(f.net)}</b>
+      {f.netAfterDiscount != null && f.discountLabel ? (
+        <>
+          <span>{f.discountLabel}</span>
+          <b>− {plain(f.discountAmount ?? 0)}</b>
+          <span>Net after discount</span>
+          <b>{plain(f.netAfterDiscount)}</b>
+        </>
+      ) : null}
       <span>{f.serviceChargeLabel}</span>
       <b>{plain(f.serviceCharge)}</b>
       <span>{f.gstLabel}</span>
       <b>{plain(f.gst)}</b>
-      {f.discountLabel ? (
+      {f.netAfterDiscount == null && f.discountLabel ? (
         <>
           <span>{f.discountLabel}</span>
           <b>{f.discountAmount != null ? `− ${plain(f.discountAmount)}` : f.discountNote ?? ""}</b>

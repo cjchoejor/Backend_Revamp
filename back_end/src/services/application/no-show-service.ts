@@ -1,3 +1,4 @@
+import { closeWaitingRefundsOnCancellationTx } from "../../lib/refund-money.js";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { guestDisplayName } from "../../lib/guest-display-name.js";
 import { EntryStatus, FolioLineType, FolioState, Stage } from "@prisma/client";
@@ -342,6 +343,8 @@ export async function finaliseNoShowTx(
     });
   }
 
+  // Its own refund, just below, covers money that was waiting to go back (2026-11-05).
+  await closeWaitingRefundsOnCancellationTx(tx, { entryId, actorId, actorLevel: "L2", now, why: "The booking became a no-show, and the no-show deals with this money." });
   if (figures.refund > 0) {
     await tx.paymentRecord.create({
       data: {

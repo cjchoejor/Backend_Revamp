@@ -1,5 +1,6 @@
 "use client";
 
+import { PhoneField } from "@/components/ds/phone-field";
 import { AdmField } from "@/components/admin/field-title";
 import { Help } from "@/components/ds/help";
 import { useEffect, useMemo, useState } from "react";
@@ -136,8 +137,8 @@ export default function AdminHotelProfilePage() {
                 <AdmField label="Label" className="flex-1">
                   <input className="admin-input" value={c.label} onChange={(e) => setContacts(contacts.map((x, j) => (j === i ? { ...x, label: e.target.value } : x)))} />
                 </AdmField>
-                <AdmField label="Phone number" className="flex-[2]">
-                  <input className="admin-input" value={c.value} onChange={(e) => setContacts(contacts.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)))} />
+                <AdmField label="Phone number" group className="flex-[2]">
+                  <PhoneField inputClass="admin-input" value={c.value} onChange={(value) => setContacts(contacts.map((x, j) => (j === i ? { ...x, value } : x)))} />
                 </AdmField>
                 <button type="button" className="admin-btn text-[10px]" onClick={() => setContacts(contacts.filter((_, j) => j !== i))}>
                   Remove

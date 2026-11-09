@@ -1,8 +1,11 @@
+import { paperNumber, printedProformaNumber, printedQuotationNumber, proformaNumberOf } from "../../lib/document-numbers.js";
+import { enforceEarlierAdvanceAnswered } from "../../lib/refund-money.js";
 import type { Prisma, PrismaClient } from "@prisma/client";
+import { resolveSendTo } from "../../lib/send-to.js";
 import { guestDisplayName } from "../../lib/guest-display-name.js";
 import { CommissionDueStatus, EntryStatus, FolioLineType, FolioState, InvoiceState, InvoiceType, Stage } from "@prisma/client";
 import { allocateReadableId, READABLE_ID_PREFIXES, allocateFolioLineId } from "../../lib/readable-id.js";
-import { AppError, MissingConfigurationError, NotFoundError, ValidationError } from "../../lib/errors.js";
+import { AppError, MissingConfigurationError, NotFoundError, PolicyGateBlockedError, ValidationError } from "../../lib/errors.js";
 import { describeBookingInspections, readBookingInspectionStanding } from "../../lib/room-inspection-standing.js";
 import { readBookingDamages, undecidedDamageRooms } from "../../lib/damage-standing.js";
 import { enforceDamageDecidedForS9Closure } from "../../policies/36-damage-assessment/p81-damage-assessment-gates.js";
@@ -17,11 +20,11 @@ import { dispatchStageEmailBestEffort } from "../infrastructure/stage-email-help
 import { renderFinalInvoiceEmail, renderInterimInvoiceEmail, renderPostStayChargeEmail, renderProformaInvoiceEmail } from "../infrastructure/stage-email-templates.js";
 import { postChargeTaxCompanionsTx } from "./s7-folio-lines-service.js";
 import { describeInterimPromise, markInterimInvoiceDispatchedTx, type InterimFigures } from "./interim-payment-service.js";
-import { computeStayCharges, resolveChargeRates } from "../infrastructure/compute-stay-charges.js";
+import { resolveChargeRates } from "../infrastructure/compute-stay-charges.js";
 import { mulMoney, round2, sumMoneyBy, toDecimal } from "../../lib/money.js";
-import { describeAdvancePaymentPlan, resolveAdvancePaymentPlan } from "./s3-payment-service.js";
+import { armAdvanceFollowUpTx, describeAdvancePaymentPlan, evaluateAdvancePaymentConditionTx, resolveAdvancePaymentPlan } from "./s3-payment-service.js";
 import { formatMoment as formatEmailDate } from "../infrastructure/stage-email-helpers.js";
-import { buildFinalInvoiceFigures, generateOrLoadInvoicePdf, loadInvoiceForRender, renderProformaPdfFace } from "./invoice-pdf-service.js";
+import { buildFinalInvoiceFigures, generateOrLoadInvoicePdf, loadInvoiceForRender, proformaEmailFigures, renderProformaPdfFace } from "./invoice-pdf-service.js";
 import { releaseEntryRoomsToFree } from "../../lib/room-claim-state.js";
 import { resolveBillingModelForNewLine } from "../../lib/billing-model-defaults.js";
 import { computeOutstandingForBillingModel, listBillingModelBucketsForFolio } from "../../lib/folio-outstanding-per-billing-model.js";
@@ -144,17 +147,16 @@ export type InvoiceRecipient = {
 };
 
 /**
- * Where a governed invoice email goes (2026-09-18). Every invoice document — the proforma, the
- * interim bill and the tax invoice — is addressed to the agency or company whenever one booked
- * ("To: <party> · For guest: <name>"), so its email follows the addressee:
+ * Where a governed invoice email goes (2026-09-18; the default is `resolveSendTo` since
+ * 2026-11-07). Every invoice document — the proforma, the interim bill and the tax invoice — is
+ * addressed to the agency or company whenever one booked ("To: <party> · For guest: <name>"):
  *   1. the address the desk typed;
- *   2. else that party's email on file;
- *   3. else the guest's email — only when no party is linked.
+ *   2. else the booking's contact person at that party, else the party's own email on file;
+ *   3. on a booking with no party, the guest's email, then who is arriving, then the caller.
  * A party-addressed invoice is never mailed to the traveller by default: it carries the party's
- * own negotiated rates, and almost no party has an email on file, so a guest fallback would send
- * nearly every agency's rates to its guests. With no address the invoice is still dispatched
- * (the desk hands it over) and the skipped email is traced with its reason. The address it went
- * to is recorded on the invoice, so the desk can say where the bill went.
+ * own negotiated rates. With no address the invoice is still dispatched (the desk hands it over)
+ * and the skipped email is traced with its reason. The address it went to is recorded on the
+ * invoice, so the desk can say where the bill went.
  */
 export async function resolveInvoiceRecipient(
   db: DbClient,
@@ -163,46 +165,42 @@ export async function resolveInvoiceRecipient(
 ): Promise<InvoiceRecipient> {
   const entry = await db.entry.findUnique({
     where: { id: entryId },
-    select: {
-      contactPersonName: true,
-      guestProfile: { select: { title: true, firstName: true, lastName: true, email: true } },
-      inquiry: {
-        select: {
-          travelAgent: { select: { displayName: true, contactEmail: true } },
-          corporateAccount: { select: { displayName: true, contactEmail: true } },
-        },
-      },
-    },
+    select: { contactPersonName: true, guestProfile: { select: { title: true, firstName: true, lastName: true } } },
   });
-  const guestName =
-    guestDisplayName(entry?.guestProfile) ||
-    entry?.contactPersonName?.trim() ||
-    "Guest";
-  const party = entry?.inquiry?.travelAgent ?? entry?.inquiry?.corporateAccount ?? null;
-  const greetName = party?.displayName ?? guestName;
+  const guestName = guestDisplayName(entry?.guestProfile) || entry?.contactPersonName?.trim() || "Guest";
+  const sendTo = await resolveSendTo(db, entryId);
+  const greetName = sendTo.party ?? guestName;
   const typedTo = typed?.trim();
   if (typedTo) return { to: typedTo, greetName, skipReason: null };
-  if (party) {
-    const partyTo = party.contactEmail?.trim();
-    return partyTo
-      ? { to: partyTo, greetName, skipReason: null }
-      : { to: null, greetName, skipReason: "BILLED_PARTY_HAS_NO_EMAIL" };
-  }
-  const guestTo = entry?.guestProfile?.email?.trim();
-  return guestTo ? { to: guestTo, greetName, skipReason: null } : { to: null, greetName, skipReason: "GUEST_HAS_NO_EMAIL" };
+  if (sendTo.email) return { to: sendTo.email, greetName, skipReason: null };
+  return { to: null, greetName, skipReason: sendTo.party ? "BILLED_PARTY_HAS_NO_EMAIL" : "GUEST_HAS_NO_EMAIL" };
 }
 
 async function dispatchInvoiceInner(
   prisma: PrismaClient,
   invoiceId: string,
   actorId: string,
-  input?: { dispatchedTo?: string; nightsEach?: boolean },
+  input?: {
+    dispatchedTo?: string;
+    nightsEach?: boolean;
+    /** Sent with the trip's proforma (2026-11-07): its email is the trip's, so none goes from here. */
+    viaTripPaper?: { id: string; number: string; channel: "EMAIL" | "WHATSAPP" };
+  },
 ) {
   const invoice = await prisma.invoice.findUnique({ where: { id: invoiceId } });
   if (!invoice) throw new NotFoundError("Invoice");
   if (invoice.state !== InvoiceState.DRAFT) return invoice;
+  // A proforma prints the advance, so it does not go out before the desk says what happens to the
+  // money paid before this booking was sent back (2026-11-05).
+  if (invoice.invoiceType === "PROFORMA") await enforceEarlierAdvanceAnswered(prisma, invoice.entryId, invoice.folioId);
+  if (invoice.invoiceType === "PROFORMA" && invoice.lapsedAt) {
+    throw new PolicyGateBlockedError("PROFORMA_LAPSED", "This proforma has run out. Make it again on its card, then send that one.");
+  }
   const now = new Date();
-  const recipient = await resolveInvoiceRecipient(prisma, invoice.entryId, input?.dispatchedTo ?? invoice.dispatchedTo);
+  const via = input?.viaTripPaper ?? null;
+  const recipient = via
+    ? { to: input?.dispatchedTo?.trim() || null, greetName: "", skipReason: null }
+    : await resolveInvoiceRecipient(prisma, invoice.entryId, input?.dispatchedTo ?? invoice.dispatchedTo);
   const result = await prisma.$transaction(async (tx) => {
     const updated = await tx.invoice.update({
       where: { id: invoiceId },
@@ -230,7 +228,7 @@ async function dispatchInvoiceInner(
           data: {
             id: commId,
             entryId: updated.entryId,
-            channel: "EMAIL",
+            channel: via?.channel ?? "EMAIL",
             // `PROFORMA_INVOICE` has been in the CommunicationType enum all along; this used to
             // write INVOICE_SUPERSEDED_NOTICE as a temporary dodge around a Windows Prisma-generate
             // issue, which mislabelled every PI dispatch and made the ack loop unfindable by type.
@@ -242,8 +240,8 @@ async function dispatchInvoiceInner(
             acknowledgementTimeoutAt: ackFireAt,
             acknowledgementReceivedAt: null,
             actorId,
-            contentSummary: "Proforma invoice dispatched",
-            payload: { invoiceId: updated.id, dispatchedTo: updated.dispatchedTo ?? null },
+            contentSummary: via ? `Proforma invoice sent with the trip's proforma ${via.number}` : "Proforma invoice dispatched",
+            payload: { invoiceId: updated.id, dispatchedTo: updated.dispatchedTo ?? null, ...(via ? { tripPaperId: via.id } : {}) },
             createdBy: actorId,
           },
         });
@@ -266,73 +264,11 @@ async function dispatchInvoiceInner(
           },
         });
 
-        // Do NOT swallow — silently defaulting requiredAmount to 0 would let the follow-up gate
-        // pass unconditionally and skip scheduling W34 tier-1/tier-2 timers. Let PI dispatch fail
-        // loudly so the operator sees a real error instead of guests silently missing follow-ups.
-        const thresholds = await requireActiveConfigValue<any>(tx as any, "advancePayment.thresholds");
-        const requiredAmount = Number(thresholds?.DEFAULT?.amount ?? thresholds?.amount ?? 0);
-        // Decimal-safe sum — float reduce compares wrong at boundary sums (0.1+0.2 pattern).
-        const inRows = (entry.folio.payments ?? []).filter((p) => p.paymentDirection === "IN");
-        const totalInDec = sumMoneyBy(inRows, "amount");
-        const totalIn = Number(totalInDec.toFixed(2));
-        const credit = await tx.creditExtensionCeilingRecord.findUnique({ where: { folioId: entry.folio.id } });
-        // Decimal compare — never `>=` on raw JS numbers derived from money aggregates.
-        const requiredAmountDec = toDecimal(Number.isFinite(requiredAmount) ? requiredAmount : 0);
-        const satisfied = !!credit || (Number.isFinite(requiredAmount) ? totalInDec.gte(requiredAmountDec) : totalInDec.gt(0));
-        if (!satisfied) {
-          // Policy registry override: `registry.advancePaymentFollowUp.windowSeconds` (when
-          // enabled) replaces the legacy `advancePayment.followUpWindowSeconds`. Escalation
-          // window remains ConfigurationEntry-driven.
-          const advancePolicy = await getRegistryPolicy(tx as any, "registry.advancePaymentFollowUp.windowSeconds");
-          const registryFollowUp =
-            advancePolicy && advancePolicy.enabled !== false && typeof advancePolicy.seconds === "number"
-              ? (advancePolicy.seconds as number)
-              : null;
-          const followUpSeconds =
-            registryFollowUp ?? Number(await requireActiveConfigValue<number>(tx as any, "advancePayment.followUpWindowSeconds"));
-          const escalationSeconds = Number(await requireActiveConfigValue<number>(tx as any, "advancePayment.escalationWindowSeconds"));
-          const t1At = new Date(now.getTime() + followUpSeconds * 1000);
-          const t2At = new Date(now.getTime() + escalationSeconds * 1000);
-
-          const t1Id = randomUUID();
-          const t2Id = randomUUID();
-          const j1 = await engine.schedule("ADVANCE_PAYMENT_FOLLOW_UP_W34", { entryId: updated.entryId, invoiceId: updated.id, tier: 1, timerRecordId: t1Id }, { startAfter: t1At });
-          const j2 = await engine.schedule("ADVANCE_PAYMENT_FOLLOW_UP_W34", { entryId: updated.entryId, invoiceId: updated.id, tier: 2, timerRecordId: t2Id }, { startAfter: t2At });
-
-          await tx.timerRecord.createMany({
-            data: [
-              {
-                id: t1Id,
-                entryId: updated.entryId,
-                entityType: "Invoice",
-                entityId: updated.id,
-                timerType: "ADVANCE_PAYMENT_FOLLOW_UP_W34",
-                timerCode: "ADVANCE_PAYMENT_FOLLOW_UP_W34",
-                stageContext: Stage.S3,
-                dueAt: t1At,
-                firesAt: t1At,
-                status: "SCHEDULED",
-                createdBy: actorId,
-                pgBossJobId: j1,
-                payload: { entryId: updated.entryId, invoiceId: updated.id, tier: 1, timerRecordId: t1Id } as any,
-              },
-              {
-                id: t2Id,
-                entryId: updated.entryId,
-                entityType: "Invoice",
-                entityId: updated.id,
-                timerType: "ADVANCE_PAYMENT_FOLLOW_UP_W34",
-                timerCode: "ADVANCE_PAYMENT_FOLLOW_UP_W34",
-                stageContext: Stage.S3,
-                dueAt: t2At,
-                firesAt: t2At,
-                status: "SCHEDULED",
-                createdBy: actorId,
-                pgBossJobId: j2,
-                payload: { entryId: updated.entryId, invoiceId: updated.id, tier: 2, timerRecordId: t2Id } as any,
-              },
-            ] as any,
-          });
+        // The one rule the gates read (2026-11-05): this read the hotel-wide amount and ignored
+        // what was set on the booking, so a booking asked for an advance was never followed up.
+        const advance = await evaluateAdvancePaymentConditionTx(prisma, tx, { entryId: updated.entryId, folioId: entry.folio.id });
+        if (!advance.satisfied) {
+          await armAdvanceFollowUpTx(tx, { entryId: updated.entryId, invoiceId: updated.id, stage: Stage.S3, now, actorId });
         }
       }
     }
@@ -445,7 +381,7 @@ async function dispatchInvoiceInner(
 
   // Phase 3 — outbound invoice email (best-effort, post-tx).
   // PROFORMA → S3 PI email; final invoices (RECEIPT_BASED / FOLIO / etc.) → S8/S9 final invoice email.
-  await sendInvoiceEmailBestEffort(prisma, actorId, result.id, recipient, { nightsEach: input?.nightsEach === true });
+  if (!via) await sendInvoiceEmailBestEffort(prisma, actorId, result.id, recipient, { nightsEach: input?.nightsEach === true });
 
   return result;
 }
@@ -500,16 +436,13 @@ async function sendInvoiceEmailBestEffort(
         ? invoiceImpliedNightly
         : 0;
   const currency = quotationTerms?.currency ?? "BTN";
-  // Multi-room: get roomCount from the quotation's commercialTerms (single source of truth),
-  // fall back to entry.numberOfRooms, then to 1. S9 needs this so the final invoice /
-  // reconciliation reflects the total for all rooms, not just one.
-  const s9RoomCount = Math.max(1, Number((quotationTerms as any)?.roomCount) || entry.numberOfRooms || 1);
   const isPI = inv.invoiceType === InvoiceType.PROFORMA;
   const isInterim = inv.invoiceType === InvoiceType.INTERIM;
   // The FINAL invoice email prints the LEDGER figures — the same pure builder the PDF renders
   // from (2026-08-18). It used to re-derive frozenRate × nights × rooms + tax, a third figure
   // that matched neither the PDF nor the desk's bill.
-  let breakdown = isPI ? await computeStayCharges(prisma, nightlyRate, nights, s9RoomCount) : null;
+  const pi = isPI ? await proformaEmailFigures(prisma, invoiceId) : null;
+  let breakdown = pi?.breakdown ?? null;
   let amountPaid = paid;
   if (!isPI && !isInterim) {
     const loaded = await loadInvoiceForRender(prisma, invoiceId);
@@ -559,17 +492,22 @@ async function sendInvoiceEmailBestEffort(
     : isPI
     ? renderProformaInvoiceEmail({
         guestDisplayName: displayName,
-        invoiceRef: inv.id,
+        invoiceRef: printedProformaNumber(inv),
         checkInDate: ci,
         checkOutDate: co,
         guestCount: entry.reservation?.frozenGuestCount ?? entry.guestCount ?? 1,
         currency,
         breakdown: breakdown!,
-        amountPaid: paid,
-        paymentCount: inv.folio?.payments?.length ?? 0,
+        advanceReceived: pi!.advanceReceived,
+        paymentCount: pi!.paymentCount,
+        advanceAsked: pi!.requiredAdvance != null,
+        advanceDueNow: pi!.advanceDueNow,
+        advanceDueQualifier: pi!.advanceDueQualifier,
+        balanceAtCheckout: pi!.balanceAtCheckout,
         // Real columns only — `ci` is today-defaulted above, and the template must not print a
         // fabricated pay-by date for a dateless entry.
         advanceDueBy: entry.reservation?.frozenCheckInDate ?? entry.checkInDate ?? null,
+        validUntil: inv.validUntil ?? null,
         // The guest's recorded plan, worded the same way the PDF prints it (2026-08-08).
         paymentPlan: inv.folio
           ? describeAdvancePaymentPlan(

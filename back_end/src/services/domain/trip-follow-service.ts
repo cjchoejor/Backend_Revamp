@@ -13,10 +13,16 @@
  *  - **The rooms by type** are saved on its own nights (night by night, by position in the stay; a
  *    longer stay repeats the last night), the system choosing its own rooms. A room the first stay
  *    fixed by number is kept when it is free then. Past Inquiry its rooms are its own.
+ *
  *  - **The table** — guests per room, meal plans, extra beds, rates, the discount, the bed plan — is
- *    kept in `carryOver`, on this stay's rooms, for its Negotiation table to open with, while it has
- *    no quotation of its own. It is never priced here: its own Save & price it prices it, for its
- *    own dates. A rate negotiated for another room type is left behind.
+ *    kept in `carryOver`, on this stay's rooms, when the stay it follows has been quoted (2026-11-09,
+ *    operator: "from stage 2 and above if user add a return stay then it can ask that where if chosen
+ *    same, it can pull the same room types, configuration and stay details as stay 1"). It is never
+ *    priced here: this stay's own Save prices it, for its own dates. A rate negotiated for another
+ *    room type is left behind.
+ *
+ * Only while it sits at Inquiry. The choice itself stays on `Entry.sameSetupAs`, and at Negotiation
+ * those stays are one table: nothing is copied there.
  *
  * A pick holds nothing at Inquiry, so copying takes no room from anyone. Each write goes through the
  * ordinary service, with every one of its checks, and is traced on the stay it changes.
@@ -34,8 +40,8 @@ import * as auditService from "../infrastructure/audit-service.js";
 import { setEntryGuest } from "./inquiry-caller-service.js";
 import { planRoomsByTypeForStay, sealBookingRoomsByType, type SealByTypeInput } from "./quiet-rooms-service.js";
 import { buildEntryRateReference } from "./rate-reference-service.js";
-import { effectiveAllowedBedTypes } from "./room-bed-type-service.js";
 import { answerHouseByType, currentPassSeal, sealSelect } from "./room-placement-service.js";
+import { effectiveAllowedBedTypes } from "./room-bed-type-service.js";
 import { queryAvailability } from "./s1-availability-service.js";
 import { updateEntryIntakeFields } from "./s1-entry-service.js";
 
@@ -60,11 +66,11 @@ const stayFields = {
   guestCount: true,
   numberOfRooms: true,
   bedTypeRequest: true,
+  bedPlan: true,
   useType: true,
   contactPersonName: true,
   contactPersonPhone: true,
   contactPersonEmail: true,
-  bedPlan: true,
   ...sealSelect,
   quotations: { select: { id: true, segmentId: true, state: true, versionNumber: true, createdAt: true, commercialTerms: true } },
 } as const;
@@ -122,34 +128,10 @@ async function roomLookup(prisma: PrismaClient) {
 }
 
 function bookingRoomsOf(s: Stay, typeOf: Map<string, string>): BookingRoom[] {
-  const seal = currentPassSeal(s);
+  // A stay sent back to Negotiation keeps the rooms of its last pass until they are chosen again.
+  const seal = currentPassSeal(s) ?? (s.currentStage !== "S1" ? (s.availabilityConfigs.find((c) => c.optionSelected != null)?.optionSelected ?? null) : null);
   if (!seal || !s.checkInDate || !s.checkOutDate) return [];
   return readBookingRooms(seal, { checkIn: utcDateOnly(s.checkInDate), checkOut: utcDateOnly(s.checkOutDate) }, (id) => typeOf.get(id));
-}
-
-type TypeCount = { roomTypeId: string; count: number };
-
-/** The first stay's rooms as what they ask for: the mix of types by position in the stay, and the rooms fixed by number. */
-function roomsAsked(source: Stay, typeOf: Map<string, string>): { mix: TypeCount[][]; fixed: string[] } | null {
-  const rooms = bookingRoomsOf(source, typeOf);
-  if (rooms.length === 0) return null;
-  const counts = typeCountsPerNight(rooms);
-  const mix = nightsOf(source)
-    .map((d) =>
-      [...(counts.get(d) ?? new Map<string, number>()).entries()]
-        .map(([roomTypeId, count]) => ({ roomTypeId, count }))
-        .sort((a, b) => a.roomTypeId.localeCompare(b.roomTypeId)),
-    )
-    .filter((m) => m.length > 0);
-  if (mix.length === 0) return null;
-  const fixed = [...new Set(rooms.flatMap((r) => r.nights.filter((n) => n.fixed && n.roomId).map((n) => n.roomId!)))].sort();
-  return { mix, fixed };
-}
-
-function wantedOf(mix: TypeCount[][]): TypeCount[] {
-  const most = new Map<string, number>();
-  for (const night of mix) for (const t of night) most.set(t.roomTypeId, Math.max(most.get(t.roomTypeId) ?? 0, t.count));
-  return [...most.entries()].map(([roomTypeId, count]) => ({ roomTypeId, count }));
 }
 
 /** The real rooms of a set of booking rooms, in order, each with its type and nights. */
@@ -209,6 +191,31 @@ export function mapTableToStay(input: {
     pairs.push([input.rows[at].roomId, room.roomId]);
   }
   return { rows, pairs };
+}
+
+type TypeCount = { roomTypeId: string; count: number };
+
+/** The first stay's rooms as what they ask for: the mix of types by position in the stay, and the rooms fixed by number. */
+function roomsAsked(source: Stay, typeOf: Map<string, string>): { mix: TypeCount[][]; fixed: string[] } | null {
+  const rooms = bookingRoomsOf(source, typeOf);
+  if (rooms.length === 0) return null;
+  const counts = typeCountsPerNight(rooms);
+  const mix = nightsOf(source)
+    .map((d) =>
+      [...(counts.get(d) ?? new Map<string, number>()).entries()]
+        .map(([roomTypeId, count]) => ({ roomTypeId, count }))
+        .sort((a, b) => a.roomTypeId.localeCompare(b.roomTypeId)),
+    )
+    .filter((m) => m.length > 0);
+  if (mix.length === 0) return null;
+  const fixed = [...new Set(rooms.flatMap((r) => r.nights.filter((n) => n.fixed && n.roomId).map((n) => n.roomId!)))].sort();
+  return { mix, fixed };
+}
+
+function wantedOf(mix: TypeCount[][]): TypeCount[] {
+  const most = new Map<string, number>();
+  for (const night of mix) for (const t of night) most.set(t.roomTypeId, Math.max(most.get(t.roomTypeId) ?? 0, t.count));
+  return [...most.entries()].map(([roomTypeId, count]) => ({ roomTypeId, count }));
 }
 
 /** A fresh answer from the house for the stay, and the pick saved on it. */
@@ -273,12 +280,11 @@ export async function syncFollower(prisma: PrismaClient, actor: Actor, stayId: s
     await endFollowing(prisma, actor, stay, "PRICED");
     return none;
   }
-  if (stay.currentStage !== "S1" && stay.currentStage !== "S2") {
+  if (stay.currentStage !== "S1") {
     await endFollowing(prisma, actor, stay, "MOVED_ON");
     return none;
   }
 
-  const atInquiry = stay.currentStage === "S1";
   const state = stateOf(stay);
   const next: FollowState = { ...state };
   const changed: string[] = [];
@@ -286,7 +292,7 @@ export async function syncFollower(prisma: PrismaClient, actor: Actor, stayId: s
   const { typeOf, numberOf } = await roomLookup(prisma);
 
   // ---- the guests, the rooms asked for, the bed ask, the kind of stay, who is arriving ----------
-  if (atInquiry && partyCanon(source) !== partyCanon(stay)) {
+  if (partyCanon(source) !== partyCanon(stay)) {
     try {
       await updateEntryIntakeFields(prisma, stay.id, actor.actorId, actor.actorLevel, {
         adultCount: source.adultCount ?? undefined,
@@ -307,7 +313,7 @@ export async function syncFollower(prisma: PrismaClient, actor: Actor, stayId: s
   }
 
   // ---- the guest staying --------------------------------------------------------------------------
-  if (atInquiry && source.guestProfileId && source.guestProfileId !== stay.guestProfileId) {
+  if (source.guestProfileId && source.guestProfileId !== stay.guestProfileId) {
     try {
       await setEntryGuest(prisma, { actorId: actor.actorId, level: actor.actorLevel }, stay.id, { mode: "EXISTING", guestProfileId: source.guestProfileId });
       changed.push("guest staying");
@@ -317,43 +323,41 @@ export async function syncFollower(prisma: PrismaClient, actor: Actor, stayId: s
   }
 
   // ---- the rooms by type ---------------------------------------------------------------------------
-  if (atInquiry) {
-    const current: Stay = (await loadStay(prisma, stayId))!;
-    stay = current;
-    const asked = roomsAsked(source, typeOf);
-    const nights = nightsOf(current);
-    if (asked && nights.length > 0) {
-      const canon = JSON.stringify({ mix: asked.mix, fixed: asked.fixed, stay: [nights[0], nights.length], rooms: current.numberOfRooms });
-      if (canon !== state.roomsCanon || (state.shortfall && state.shortfall.key === canon)) {
-        const perNight = nights.map((date, i) => ({ date, types: asked.mix[Math.min(i, asked.mix.length - 1)] }));
-        const plan = (fixedRoomIds: string[]) =>
-          planRoomsByTypeForStay(prisma, current.id, {
-            checkInDate: nights[0],
-            checkOutDate: ymdUtc(current.checkOutDate!),
-            numberOfRooms: current.numberOfRooms ?? 0,
-            perNight,
-            fixedRoomIds,
-          });
-        let fixedRoomIds = asked.fixed;
-        let answer = await plan(fixedRoomIds);
-        if (!answer.fits && fixedRoomIds.length > 0) {
-          const byTypeOnly = await plan([]);
-          if (byTypeOnly.fits) {
-            const named = fixedRoomIds.map((r) => numberOf.get(r)).join(", ");
-            notes.push(`${fixedRoomIds.length === 1 ? `Room ${named} is` : `Rooms ${named} are`} not free on these nights — the system keeps another room of the same type.`);
-            fixedRoomIds = [];
-            answer = byTypeOnly;
-          }
+  const current: Stay = (await loadStay(prisma, stayId))!;
+  stay = current;
+  const asked = roomsAsked(source, typeOf);
+  const nights = nightsOf(current);
+  if (asked && nights.length > 0) {
+    const canon = JSON.stringify({ mix: asked.mix, fixed: asked.fixed, stay: [nights[0], nights.length], rooms: current.numberOfRooms });
+    if (canon !== state.roomsCanon || (state.shortfall && state.shortfall.key === canon)) {
+      const perNight = nights.map((date, i) => ({ date, types: asked.mix[Math.min(i, asked.mix.length - 1)] }));
+      const plan = (fixedRoomIds: string[]) =>
+        planRoomsByTypeForStay(prisma, current.id, {
+          checkInDate: nights[0],
+          checkOutDate: ymdUtc(current.checkOutDate!),
+          numberOfRooms: current.numberOfRooms ?? 0,
+          perNight,
+          fixedRoomIds,
+        });
+      let fixedRoomIds = asked.fixed;
+      let answer = await plan(fixedRoomIds);
+      if (!answer.fits && fixedRoomIds.length > 0) {
+        const byTypeOnly = await plan([]);
+        if (byTypeOnly.fits) {
+          const named = fixedRoomIds.map((r) => numberOf.get(r)).join(", ");
+          notes.push(`${fixedRoomIds.length === 1 ? `Room ${named} is` : `Rooms ${named} are`} not free on these nights — the system keeps another room of the same type.`);
+          fixedRoomIds = [];
+          answer = byTypeOnly;
         }
-        if (answer.fits) {
-          await saveRooms(prisma, actor, current, perNight, fixedRoomIds);
-          next.roomsCanon = canon;
-          next.shortfall = null;
-          changed.push("rooms");
-        } else {
-          if (state.shortfall?.key !== canon) await trace(prisma, actor, current, "ENTRY.FOLLOW_ROOMS_SHORT", { fromEntryId: source.id, refusals: answer.refusals });
-          next.shortfall = { key: canon, refusals: answer.refusals, wanted: wantedOf(asked.mix) };
-        }
+      }
+      if (answer.fits) {
+        await saveRooms(prisma, actor, current, perNight, fixedRoomIds);
+        next.roomsCanon = canon;
+        next.shortfall = null;
+        changed.push("rooms");
+      } else {
+        if (state.shortfall?.key !== canon) await trace(prisma, actor, current, "ENTRY.FOLLOW_ROOMS_SHORT", { fromEntryId: source.id, refusals: answer.refusals });
+        next.shortfall = { key: canon, refusals: answer.refusals, wanted: wantedOf(asked.mix) };
       }
     }
   }
@@ -497,7 +501,7 @@ export async function startFollowing(prisma: PrismaClient, actor: Actor, stayId:
   }
   // Asked again for the same stay, it keeps what it copied: nothing is copied twice.
   if (stay.followsEntryId !== source.id) {
-    await prisma.entry.update({ where: { id: stay.id }, data: { followsEntryId: source.id, followState: {} as Prisma.InputJsonValue } });
+    await prisma.entry.update({ where: { id: stay.id }, data: { followsEntryId: source.id, sameSetupAs: source.id, followState: {} as Prisma.InputJsonValue } });
     await trace(prisma, actor, stay, "ENTRY.FOLLOW_STARTED", { fromEntryId: source.id });
   }
   const outcome = await syncFollower(prisma, actor, stay.id);
@@ -515,6 +519,7 @@ export async function stopFollowing(prisma: PrismaClient, actor: Actor, stayId: 
   if (!stay) throw new NotFoundError("Entry");
   if (!stay.followsEntryId) throw new ValidationError("This stay's settings are already its own");
   await endFollowing(prisma, actor, stay, "SET_ITS_OWN");
+  await prisma.entry.update({ where: { id: stay.id }, data: { sameSetupAs: null } });
   return { following: false };
 }
 

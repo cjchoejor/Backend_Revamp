@@ -9,6 +9,8 @@ import {
   updateInquiryNotesRequestSchema,
 } from "../../dtos/02-inquiries/request-schemas.js";
 import { requireActorLevel } from "../../middleware/auth.js";
+import { cleanPhone } from "../../lib/phone-numbers.js";
+import { cleanCoordinators } from "../../lib/admin/contact-list.js";
 import { validateBody } from "../../middleware/validate-body.js";
 import { ValidationError } from "../../lib/errors.js";
 import * as s1InquiryService from "../../services/domain/s1-inquiry-service.js";
@@ -37,6 +39,8 @@ inquiriesRouter.get("/:id", requireActorLevel("L1"), async (req, res, next) => {
 
 inquiriesRouter.post("/", requireActorLevel("L1"), validateBody(createInquiryRequestSchema), async (req, res, next) => {
   try {
+    if (req.body.caller) req.body.caller.phone = cleanPhone(req.body.caller.phone, "The caller's phone");
+    if (req.body.partyContacts) req.body.partyContacts = cleanCoordinators(req.body.partyContacts);
     const created = await s1InquiryService.createInquiry(prisma, req.actor!.actorId, req.actor!.level, req.body);
     res.status(201).json(created);
   } catch (e) {

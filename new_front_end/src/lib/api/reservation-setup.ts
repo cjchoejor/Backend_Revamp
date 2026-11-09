@@ -8,16 +8,37 @@ import type {
 import type { Session } from "@/types/session";
 import { apiRequest } from "./client";
 
+/** Who the bill may go to at Set up, and which it starts on. */
+export type PayerChoices = {
+  party: "TRAVEL_AGENT" | "CORPORATE" | null;
+  choices: string[];
+  defaultChoice: string;
+};
+
+export async function getPayerChoices(session: Session, entryId: string) {
+  return apiRequest<PayerChoices>(`/api/entries/${entryId}/payer-choices`, { session });
+}
+
 export async function ensureProvisionalFolio(
   session: Session,
   entryId: string,
-  body: { billingModel: string },
+  body: { billingModel: string; askAdvanceFirst?: boolean },
 ) {
-  return apiRequest<FolioDetail>(`/api/entries/${entryId}/folio/provisional`, {
+  return apiRequest<FolioDetail & { advanceQuestion?: boolean }>(`/api/entries/${entryId}/folio/provisional`, {
     method: "POST",
     session,
     body,
   });
+}
+
+/** "No advance": the proforma held back for that answer is made now (2026-11-05). */
+export async function generateProforma(session: Session, entryId: string) {
+  return apiRequest<{ generated: boolean }>(`/api/entries/${entryId}/proforma`, { method: "POST", session });
+}
+
+/** How long this proforma stands, on the quote's rule (2026-11-05). */
+export async function setProformaValidity(session: Session, invoiceId: string, body: { validDays?: number; validHours?: number }) {
+  return apiRequest<{ validUntil: string; invoiceId: string; madeAgain: boolean }>(`/api/invoices/${invoiceId}/validity`, { method: "POST", session, body });
 }
 
 export async function recordCancellationDisclosure(
@@ -42,7 +63,23 @@ export type CancellationPreview = {
   chargeCapped: number;
   hoursUntilCheckIn: number;
   waived: boolean;
+  /** Money moved between a trip's stays' bills first, when money paid for the trip is involved. */
+  tripMoves?: TripMoneyMove[];
 };
+
+export type TripMoneyMove = { fromEntryId: string; toEntryId: string; fromStayNo: number; toStayNo: number; amount: number };
+
+export type TripCancellationPreview = {
+  stays: Array<{ entryId: string; advanceReceived: number; charge: number; chargeBeforeCap: number; chargeCapped: number; refund: number }>;
+  moves: TripMoneyMove[];
+  totalCharge: number;
+  totalRefund: number;
+  waived: boolean;
+};
+
+export async function previewTripCancellation(session: Session, entryId: string, body: { stayIds: string[]; waive?: boolean }) {
+  return apiRequest<TripCancellationPreview>(`/api/entries/${entryId}/trip-cancellation-preview`, { method: "POST", session, body });
+}
 
 export async function previewCancellation(session: Session, entryId: string, waive = false) {
   return apiRequest<CancellationPreview>(`/api/entries/${entryId}/cancellation-preview${waive ? "?waive=true" : ""}`, { session });
@@ -109,16 +146,6 @@ export async function getPaymentStatus(session: Session, entryId: string) {
 }
 
 /**
- * Outcome of the backend's automatic committed-hold placement on an S3 advance payment
- * (2026-08-10: money received — full or partial — holds the rooms; the PI dispatch no longer
- * does). `placed: false` carries a desk-readable `message` — the operator is told to hold
- * manually. Null / absent when the payment was taken past S3 (the hold is already confirmed).
- */
-export type AdvanceAutoHold =
-  | { placed: true; holdId: string; roomId: string; expiresAt: string }
-  | { placed: false; reason: string; message: string; holdId?: string };
-
-/**
  * How advance money came in, and the code the ledger stores for it (2026-09-18) — the same codes
  * check-out and the post-stay payments use, so a cash count reads one vocabulary.
  */
@@ -137,11 +164,27 @@ export async function recordFolioPayment(
   folioId: string,
   body: { entryId: string; amount: number; notes?: string; paymentMethod?: string },
 ) {
-  return apiRequest<{ id: string; autoHold?: AdvanceAutoHold | null }>(`/api/folios/${folioId}/payments`, {
+  return apiRequest<{ id: string }>(`/api/folios/${folioId}/payments`, {
     method: "POST",
     session,
     body,
   });
+}
+
+/** A payment recorded by mistake (2026-11-05). It goes, with what it set going; the history keeps it. */
+export async function deleteFolioPayment(session: Session, folioId: string, paymentId: string, body: { entryId: string; reason: string }) {
+  return apiRequest<{
+    deleted: string;
+    amount: number;
+    receivedAfter: number;
+    shortfallAfter: number;
+    signOffUndone: boolean;
+    taskReopened: boolean;
+    roomsBackToHeld: number;
+    blockReleased: boolean;
+    proformaMadeAgain: string | null;
+    paperSaidReceived: string[];
+  }>(`/api/folios/${folioId}/payments/${paymentId}/delete`, { method: "POST", session, body });
 }
 
 export async function reconcileAdvancePayment(
@@ -306,7 +349,7 @@ export async function getHoldWindow(session: Session) {
 export async function setCommittedHoldExpiry(
   session: Session,
   entryId: string,
-  body: { date?: string; time?: string; clear?: boolean; reason?: string },
+  body: { date?: string; time?: string; clear?: boolean; reason?: string; blockNow?: boolean },
 ) {
   return apiRequest<{
     heldUntil: string | null;
@@ -314,7 +357,16 @@ export async function setCommittedHoldExpiry(
     holdUpdated: boolean;
     houseWindowMinutes: number;
     note?: string;
+    blockRefused?: string;
   }>(`/api/entries/${entryId}/holds/committed/expiry`, { method: "POST", session, body });
+}
+
+/** Move to Reserve blocks the rooms (2026-11-05); a block still running is left as it is. */
+export async function blockRoomsForReserve(session: Session, entryId: string) {
+  return apiRequest<{ placed: boolean; expiresAt: string; source: "BOOKING" | "HOUSE"; houseWindowMinutes: number; roomCount: number }>(
+    `/api/entries/${entryId}/holds/committed/block`,
+    { method: "POST", session, body: {} },
+  );
 }
 
 export async function issueProformaInvoice(

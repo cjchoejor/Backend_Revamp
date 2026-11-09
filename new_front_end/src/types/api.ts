@@ -221,6 +221,8 @@ export type InvoiceSummary = {
   invoiceType: string;
   state: string;
   invoiceNumber?: string | null;
+  /** The number every version of a proforma shares (2026-11-07); null on one made before. */
+  documentNumber?: string | null;
   versionNumber?: number;
   supersededById?: string | null;
   /** Set once the PDF artifact was rendered — the frozen document that went out. */
@@ -229,6 +231,10 @@ export type InvoiceSummary = {
   dispatchedAt?: string | null;
   dispatchedTo?: string | null;
   createdAt: string;
+  /** How long a proforma stands (2026-11-05), by the quote's rule. */
+  validUntil?: string | null;
+  /** Its time ended with the guest still to answer. It is made again; the booking does not lapse. */
+  lapsedAt?: string | null;
   /** JSON metadata blob. Group invoices set `{ groupBooking: true, roomCount, guestCount, groupLeader }`. */
   metadata?: Record<string, unknown> | null;
 };
@@ -320,7 +326,21 @@ export type AdvancePaymentPlanSummary = {
   promiseOverdue: boolean;
 };
 
+export type RecordedPayment = {
+  id: string;
+  amount: number;
+  method: string | null;
+  notes: string | null;
+  receivedAt: string;
+  stage: string | null;
+  recordedByName: string | null;
+  canDelete: boolean;
+  shutWhy: string | null;
+};
+
 export type PaymentStatusSummary = {
+  /** Of the advance asked, what the trip's payment covers from another stay's bill (2026-11-09). */
+  coveredByTrip?: number;
   satisfied: boolean;
   totalReceived: number;
   requiredAmount: number;
@@ -329,6 +349,34 @@ export type PaymentStatusSummary = {
   paidInFull?: boolean;
   /** The guest's stated payment plan for this segment, or null when none recorded. */
   paymentPlan?: AdvancePaymentPlanSummary | null;
+  /** Whether this person may mark the money reconciled, and who may (the admin console's setting). */
+  mayReconcile?: boolean;
+  reconcileBy?: string;
+  /** The money received, newest first, each saying whether this person may delete it (2026-11-05). */
+  recordedPayments?: RecordedPayment[];
+  /** Waiting to go back: still on the bill, no longer counted in totalReceived (2026-11-05). */
+  refundWaiting?: number;
+  /** Money that has gone back. */
+  refunded?: number;
+  /** Money paid in an earlier pass, and whether the desk still has to answer for it. */
+  earlierAdvance?: {
+    asked: boolean;
+    amount: number;
+    payments: Array<{ id: string; amount: number; method: string | null; notes: string | null; receivedAt: string }>;
+    paidOn: { id: string; number: string; version: number; sentAt: string | null; stored: boolean } | null;
+    answer: { answer: "CARRY" | "REFUND"; answeredAt: string | null } | null;
+    refund: {
+      id: string;
+      status: "WAITING" | "REFUNDED" | "KEPT" | "CANCELLED";
+      cause: "RENEGOTIATED" | "LAPSED";
+      amountAsked: number;
+      refundedAmount: number | null;
+      refundMethod: string | null;
+      raisedAt: string;
+      closedAt: string | null;
+      closeNote: string | null;
+    } | null;
+  };
   /** Every payment so far, oldest first — the installment history. */
   installments?: Array<{ id: string; amount: number; receivedAt: string; stage: string | null; notes?: string | null }>;
   creditExtensionActive: boolean;
@@ -337,17 +385,10 @@ export type PaymentStatusSummary = {
   creditExtensionExpiresAt?: string | null;
   /** True when an extension exists but its clock ran out — it no longer satisfies the condition. */
   creditExtensionExpired?: boolean;
-  /** Where requiredAmount came from: the desk's per-booking requirement or the config thresholds. */
-  requirementSource?: "OPERATOR" | "CONFIG";
-  /** Present for OPERATOR requirements: { mode: "AMOUNT" } or { mode: "PERCENT", percent, baseTotal, quotationId }. */
-  requirementBasis?: { mode?: string; percent?: number; baseTotal?: number; quotationId?: string } | null;
-  /**
-   * What the CONFIG thresholds demand (incl. group boost), independent of any per-booking pin
-   * (2026-08-03). Lets the desk show "hotel minimum unchanged at X" next to a pinned figure.
-   */
-  configuredBaseAmount?: number;
-  /** Present only when the group-boost policy raised the requiredAmount above the base. */
-  groupBoostApplied?: { multiplierPercent: number; baseAmount: number };
+  /** Where requiredAmount came from: set for this booking, the party's own percentage, or nothing asked. */
+  requirementSource?: "OPERATOR" | "PARTY" | "NONE";
+  /** { mode: "AMOUNT" } or { mode: "PERCENT", percent, baseTotal, quotationId }; from a party, also its name. */
+  requirementBasis?: { mode?: string; percent?: number; baseTotal?: number; quotationId?: string; source?: string; partyName?: string } | null;
   /**
    * The advance-payment window (2026-08-01): due between proforma dispatch (`opensAt`) and the
    * check-in date (`deadline`). `active` = clock running; `overdue` = check-in passed unpaid.
@@ -360,6 +401,8 @@ export type CancellationDisclosureSummary = {
   entryId: string;
   noShowTreatmentStatement: string;
   disclosedAt: string;
+  /** "SYSTEM" when reaching Set up recorded them (2026-11-05). */
+  disclosedBy?: string;
 };
 
 export type CommittedHoldSummary = {
@@ -370,6 +413,7 @@ export type CommittedHoldSummary = {
   placedAt: string;
   expiresAt: string;
   commercialJustification?: string;
+  releaseReason?: string | null;
 };
 
 export type ReservationSummary = {
@@ -607,6 +651,8 @@ export type EntryDetail = EntryListItem & {
   carryOver?: EntryCarryOver | null;
   /** The stay of this enquiry this one copies, until it is priced or changed by hand (2026-11-03). */
   followsEntryId?: string | null;
+  /** "Same as this stay": worked in one table with that stay at Negotiation (2026-11-09). */
+  sameSetupAs?: string | null;
   /** Who is arriving / who booked it — the booking's own contact (the agency's person on an agency booking). */
   contactPersonName?: string | null;
   contactPersonPhone?: string | null;
@@ -685,6 +731,10 @@ export type EntryDetail = EntryListItem & {
     partyContactName?: string | null;
     partyContactPhone?: string | null;
     partyContactEmail?: string | null;
+    ratePackageId?: string | null;
+    corporateClientRef?: string | null;
+    /** Every contact person on the enquiry, first one first (2026-11-05). Null on one from before. */
+    partyContacts?: Array<{ title?: string | null; name: string; phone?: string | null; email?: string | null }> | null;
     guestProfileId?: string | null;
     /** Full Inquiry scalars come through the entry include; declared as needed. */
     sourceChannel?: string | null;
@@ -717,10 +767,14 @@ export type BookingPartySummary = {
   displayName: string;
   contactNumbers: string[];
   contactEmail: string | null;
+  /** The party's people on file, for "Add another contact" (2026-11-05). */
+  coordinators?: Array<{ title?: string | null; name: string; phone?: string | null; email?: string | null }> | null;
+  contractRefs?: string[] | null;
 };
 
 export type TripStaySummary = {
   id: string;
+  updatedAt?: string | null;
   checkInDate?: string | null;
   checkOutDate?: string | null;
   currentStage?: string | null;

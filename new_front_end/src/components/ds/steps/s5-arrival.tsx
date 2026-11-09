@@ -29,9 +29,11 @@ import {
   type HandoffChecklistItem,
 } from "@/lib/api/pre-arrival";
 import { s5Readiness } from "@/lib/desk/workspace";
+import { guestNameOf } from "@/lib/ds/status";
 import { fmtDay, fmtStamp, fmtTime, instantYmd, money } from "@/lib/ds/format";
 import { TimeInput, timeInWords } from "@/components/ds/date-input";
 import { AdvanceSettlementBlock } from "@/components/desk/workspace/advance-settlement";
+import { RecordedPaymentsFold } from "@/components/ds/steps/s3-money";
 import { IdentityProofBlock } from "@/components/desk/workspace/identity-proof";
 import type { EntryDetail } from "@/types/api";
 import {
@@ -58,7 +60,7 @@ import {
   type FactState,
 } from "./kit";
 import { BookingOtherWays } from "./s4-other-ways";
-import { PreArrivalTasksCard } from "./s5-pre-arrival-tasks";
+import { PaymentsButton, openPayments } from "./payments-button";
 import { AssignRoomsCard, roomReady } from "./s5-rooms";
 import { Help } from "@/components/ds/help";
 
@@ -66,7 +68,7 @@ type EntryScalars = { contactPersonName?: string | null; contactPersonPhone?: st
 
 const HANDOFF_WORD: Record<string, string> = {
   CREATED: "waiting to be accepted",
-  ACCEPTED: "accepted — fulfilled once the room, the tasks and the advance are in order",
+  ACCEPTED: "accepted — fulfilled once the room and the advance are in order",
   FULFILLED: "fulfilled",
   REJECTED: "turned back",
   ESCALATED: "with the FOM",
@@ -91,8 +93,6 @@ function useArrivalFacts(entry: EntryDetail) {
   const readinessConfirmed = multi ? assignments.length > 0 && assignments.every((a) => roomReady(a)) : roomReady(latest);
   const reconciled = entry.folio?.advancePaymentReconciliationComplete === true;
   const paymentReconciled = reconciled || pay?.satisfied === true;
-  const tasks = entry.preArrivalTasks ?? [];
-  const tasksComplete = tasks.length > 0 && tasks.every((t) => t.status === "COMPLETE" || t.status === "WAIVED");
   // The gate's own reading of "near the frozen ceiling" (p44) — no figure is worked out here.
   const ceilingLine = s5Readiness(entry).find((l) => l.label === "Credit ceiling acknowledged");
   const hasCeiling = entry.reservation?.creditCeilingIfExtended != null;
@@ -101,7 +101,7 @@ function useArrivalFacts(entry: EntryDetail) {
   // full — showed "the balance is near the credit the FOM extended" as a missing item the gate
   // (and p44) did not require.
   const creditNeedsAck = hasCeiling && !entry.creditCeilingTier2AcknowledgedAt && ceilingLine?.met === false;
-  return { pay, assignments, latest, readinessConfirmed, reconciled, paymentReconciled, tasks, tasksComplete, creditNeedsAck };
+  return { pay, assignments, latest, readinessConfirmed, reconciled, paymentReconciled, creditNeedsAck };
 }
 
 /* ------------------------------------------------------------------ the step */
@@ -141,19 +141,19 @@ export function S5Arrival({
           <IdentityProofBlock entry={entry} collapsible />
         </Tool>
       </StepCard>
-      <PreArrivalTasksCard
+      {/* The pre-arrival tasks are the system's for now (2026-11-07, operator: "made done from backend
+          for now and not shown here"): closed when Arrival opens, and again before Check-in. */}
+      {/* The advance moved to Payments on the step line (2026-11-07, operator: "in stage 5, the
+          advance section to be moved to payment menu buttons"). It is still on the step's list:
+          picking it there opens Payments. */}
+      <PaymentsButton
         entry={entry}
-        title="Pre-arrival tasks"
-        meta="Opened by Reserve. The desk completes or waives its tasks here; the guest-details task ticks itself when the guest table is full."
-        actionable="all"
-        guestDetailsHint
-        flow="tasks"
-        flowAfter="rooms"
-      />
-      {/* A section of its own, folding to one line once it is in order (2026-10-29). */}
-      <AdvanceAndCredit entry={entry} facts={facts} />
-      {/* The handoff records itself once the room, the tasks and the money are done — so it sits
-          after them, where the list has it (2026-09-25). */}
+        signOffHere
+        alsoDue={facts.creditNeedsAck ? "credit to acknowledge" : null}
+      >
+        <AdvanceAndCredit entry={entry} facts={facts} />
+      </PaymentsButton>
+      {/* The handoff records itself once the room and the money are done (2026-09-25). */}
       <FrontDeskHandoff entry={entry} facts={facts} />
       <GuestHereCard guestPresent={guestPresent} setGuestPresent={setGuestPresent} />
       <PreArrivalAnswerCard entryId={entry.id} since={since} tz={clock.tz} />
@@ -402,21 +402,45 @@ function GuestHereCard({ guestPresent, setGuestPresent }: { guestPresent: boolea
  * overview only said them twice (operator: "remove this part, it is repetitive").
  */
 function WhenTheyArrive({ entry }: { entry: EntryDetail }) {
-  const contact = entry as EntryDetail & EntryScalars;
+  const e = entry as EntryDetail & EntryScalars;
+  const g = entry.guestProfile ?? entry.inquiry?.guestProfile ?? null;
+  const guest = guestNameOf(g);
+  const inq = entry.inquiry;
+  const party = inq?.travelAgent?.displayName ?? inq?.corporateAccount?.displayName ?? null;
+  const plain = (s?: string | null) => (s ?? "").toLowerCase().replace(/^(mr|mrs|ms|miss|dr|dasho|aum|ap)\.?\s+/, "").replace(/\s+/g, " ").trim();
+  // Who is arriving follows the guest (2026-11-03); shown apart only when it is someone else.
+  const arrivingElse = !!e.contactPersonName && plain(e.contactPersonName) !== plain(guest);
+  const line = (...parts: Array<string | null | undefined>) => parts.filter((x) => !!x && x.trim()).join(" · ");
   return (
     <StepCard title="When they arrive">
       <Facts wide>
         <ExpectedArrivalFact entry={entry} />
-        <Fact k="Contact person">
-          {contact.contactPersonName ? (
-            `${contact.contactPersonName}${contact.contactPersonPhone ? ` · ${contact.contactPersonPhone}` : ""}`
-          ) : (
-            <>
-              <span className="warn-ink">not on file</span>
-              <Help label="About the contact person">The move to Arrival asks for it.</Help>
-            </>
-          )}
-        </Fact>
+        {/* The guest and the contact person, each as themselves (2026-11-07, operator: "the contact
+            person is shown as the guest, when it is someone else, guest and contact person both to
+            be shown"). The number on who is arriving can be borrowed from the contact person, so it
+            is not shown under the guest's name. */}
+        <Fact k="Guest">{line(guest, g?.phone, g?.email) || "—"}</Fact>
+        {arrivingElse ? <Fact k="Who is arriving">{line(e.contactPersonName, e.contactPersonPhone)}</Fact> : null}
+        {party ? (
+          <Fact k="Contact person" meta={party}>
+            {inq?.partyContactName ? (
+              line(inq.partyContactName, inq.partyContactPhone, inq.partyContactEmail)
+            ) : (
+              <span className="warn-ink">nobody named at {party}</span>
+            )}
+          </Fact>
+        ) : !arrivingElse && !g?.phone && !g?.email ? (
+          <Fact k="Contact">
+            {e.contactPersonPhone ? (
+              line(e.contactPersonPhone)
+            ) : (
+              <>
+                <span className="warn-ink">no number on file</span>
+                <Help label="About the contact">The move to Arrival asks for one.</Help>
+              </>
+            )}
+          </Fact>
+        ) : null}
       </Facts>
     </StepCard>
   );
@@ -430,7 +454,7 @@ function FrontDeskHandoff({ entry, facts }: { entry: EntryDetail; facts: Facts_ 
   const refresh = useRefreshEntry(entry.id);
   const { past } = useStepMode();
   const h1 = (entry.handoffs ?? []).find((h) => h.handoffType === "H1") ?? null;
-  const { latest, readinessConfirmed, paymentReconciled, tasksComplete, creditNeedsAck } = facts;
+  const { latest, readinessConfirmed, paymentReconciled, creditNeedsAck } = facts;
   // Fulfilled — by hand or by itself — finishes the section (2026-10-29).
   const finish = useFinishWhenDone("handoff");
 
@@ -443,7 +467,7 @@ function FrontDeskHandoff({ entry, facts }: { entry: EntryDetail; facts: Facts_ 
   const [ticks, setTicks] = useState<Record<string, boolean>>({});
   const mandatoryDone = items.filter((i) => i.mandatory).every((i) => ticks[i.code] === true);
   const canAccept = h1?.state === "CREATED" && (items.length === 0 || mandatoryDone);
-  const canFulfil = h1?.state === "ACCEPTED" && !!latest && readinessConfirmed && paymentReconciled && tasksComplete;
+  const canFulfil = h1?.state === "ACCEPTED" && !!latest && readinessConfirmed && paymentReconciled;
 
   const accept = useMutation({
     mutationFn: () => {
@@ -481,10 +505,10 @@ function FrontDeskHandoff({ entry, facts }: { entry: EntryDetail; facts: Facts_ 
       fulfilHandoff(session!, h1!.id, {
         ...evidence(),
         autoRecorded: true,
-        autoRecordedNote: "Recorded automatically when the room, tasks and advance were all in order.",
+        autoRecordedNote: "Recorded automatically when the room and the advance were in order.",
       }),
     onSuccess: () => {
-      toast.success("The front-desk handoff recorded itself — the room, the tasks and the advance are in order");
+      toast.success("The front-desk handoff recorded itself — the room and the advance are in order");
       refresh();
       finish();
     },
@@ -514,15 +538,13 @@ function FrontDeskHandoff({ entry, facts }: { entry: EntryDetail; facts: Facts_ 
   const needs: Array<{ label: string; met: boolean; value: string }> = [
     { label: "A room assigned", met: !!latest, value: latest ? `Room ${latest.room?.roomNumber ?? "—"}` : "assign the rooms above" },
     { label: "Rooms ready", met: readinessConfirmed, value: readinessConfirmed ? "housekeeping has them clean" : "waiting on housekeeping" },
-    { label: "Pre-arrival tasks", met: tasksComplete, value: tasksComplete ? "done or waived" : "some are still open — below" },
-    { label: "Advance", met: paymentReconciled, value: paymentReconciled ? "in order" : "not yet reconciled — below" },
-    { label: "Credit ceiling", met: !creditNeedsAck, value: creditNeedsAck ? "the FOM acknowledges it — below" : "nothing to acknowledge" },
+    { label: "Advance", met: paymentReconciled, value: paymentReconciled ? "in order" : "not yet in order — in Payments" },
+    { label: "Credit ceiling", met: !creditNeedsAck, value: creditNeedsAck ? "the FOM acknowledges it — in Payments" : "nothing to acknowledge" },
   ];
 
   return (
     <StepCard
       flow="handoff"
-      flowAfter="advance"
       title="The front-desk handoff"
       summary={h1.fulfilledAt ? `Fulfilled ${fmtStamp(h1.fulfilledAt, clock.tz)}` : "Fulfilled"}
       right={
@@ -585,7 +607,19 @@ function FrontDeskHandoff({ entry, facts }: { entry: EntryDetail; facts: Facts_ 
       {h1.state === "ACCEPTED" ? (
         <div style={{ marginTop: 10 }}>
           {needs.map((n) => (
-            <FactLine key={n.label} label={n.label} value={n.value} state={(n.met ? "on" : "missing") as FactState} />
+            <FactLine
+              key={n.label}
+              label={n.label}
+              value={n.value}
+              state={(n.met ? "on" : "missing") as FactState}
+              action={
+                !n.met && (n.label === "Advance" || n.label === "Credit ceiling") ? (
+                  <Button kind="secondary" compact onClick={() => openPayments()}>
+                    Open Payments
+                  </Button>
+                ) : undefined
+              }
+            />
           ))}
           <Live>
             <div className="row-acts" style={{ marginTop: 8, alignItems: "center" }}>
@@ -620,36 +654,16 @@ function AdvanceAndCredit({ entry, facts }: { entry: EntryDetail; facts: Facts_ 
     onSuccess: () => {
       toast.success("The credit ceiling is acknowledged");
       refresh();
-      finish();
     },
     onError: (e) => toastRefusal(e, "The credit ceiling could not be acknowledged"),
   });
   const acked = entry.creditCeilingTier2AcknowledgedAt ?? null;
-  // A payment, a credit extension, the sign-off or the ceiling acknowledged finishes the section
-  // once it reads done (2026-10-29); a part payment leaves it open.
-  const finish = useFinishWhenDone("advance");
-  const pay = facts.pay;
-  const cur = entry.folio?.lines?.[0]?.currency;
-  const signed = facts.reconciled ? " · signed off" : "";
-  const summary = pay
-    ? pay.requiredAmount > 0
-      ? `Received ${money(pay.totalReceived, cur)} of ${money(pay.requiredAmount, cur)}${signed}`
-      : pay.totalReceived > 0
-        ? `No advance asked · ${money(pay.totalReceived, cur)} received${signed}`
-        : `No advance asked${signed}`
-    : facts.reconciled
-      ? "Signed off"
-      : undefined;
   return (
-    <StepCard
-      flow="advance"
-      title="The advance"
-      meta="Settle the advance before the guest arrives: log any remainder they send, or have the FOM cover the gap so check-in isn't held up."
-      summary={summary}
-    >
+    <StepCard title="The advance" meta="Settle the advance before the guest arrives: log any remainder they send, or have the FOM cover the gap so check-in isn't held up.">
       <Tool>
-        <AdvanceSettlementBlock entry={entry} title="Advance and credit" noHeading onChanged={() => finish()} />
+        <AdvanceSettlementBlock entry={entry} title="Advance and credit" noHeading onChanged={() => refresh()} />
       </Tool>
+      <RecordedPaymentsFold entry={entry} tz={clock.tz} />
       {facts.creditNeedsAck ? (
         <FactLine
           label="Credit ceiling"

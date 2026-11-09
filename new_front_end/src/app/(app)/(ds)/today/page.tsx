@@ -7,6 +7,7 @@
  * own Today feed is register item SS01-P1. Money on the Leaving list is the booking header's
  * billing summary, read per row — nothing is worked out here.
  */
+import { StayDates } from "@/components/ds/stay-dates";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo } from "react";
@@ -97,7 +98,9 @@ function AttentionTable({ rows, now, tz }: { rows: Array<AttentionItem | Fold>; 
               <td>
                 <StepChip step={it.step} />
               </td>
-              <td>{it.need}</td>
+              <td>
+                {it.critical ? <span className="crit-tag">Critical</span> : null} {it.need}
+              </td>
               <td>
                 <TimerText w={waitingText(it, now, tz)} />
               </td>
@@ -385,7 +388,7 @@ function WeekTable({ rows, today, href }: { rows: DeskListRow[]; today: string |
             </td>
             <td>
               <span className="stay-range">
-                <b>{fmtRange(r.checkInDate, r.checkOutDate)}</b>
+                <StayDates stacked checkIn={r.checkInDate} checkOut={r.checkOutDate} />
               </span>
             </td>
             <td>{r.roomNumbers.length || r.numberOfRooms || "—"}</td>

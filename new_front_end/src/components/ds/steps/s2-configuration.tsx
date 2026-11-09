@@ -25,6 +25,8 @@
  * change makes untrue, and moving the provisional block to the new rooms with its original
  * deadline. Nothing here writes to the booking on its own.
  */
+import { AddReturnStay } from "@/components/ds/workspace/return-stay";
+import { StayDates } from "@/components/ds/stay-dates";
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -48,7 +50,7 @@ import { RoomCountField } from "./new-inquiry-parts";
 import { listRooms } from "@/lib/api/rooms";
 import { RoomStatusTable, roomStatusRows } from "@/components/desk/workspace/room-status-table";
 import { currentPassConfigs } from "@/lib/desk/workspace";
-import { fmtDateTime, fmtRange, plural } from "@/lib/ds/format";
+import { fmtDateTime, plural } from "@/lib/ds/format";
 import { optionSelectedRoomIds, type AvailabilityOptionSelected, type EntryDetail } from "@/types/api";
 import { Tool, atLeast, toastRefusal, useRefreshEntry } from "./kit";
 import { Help } from "@/components/ds/help";
@@ -65,7 +67,7 @@ import { RoomsByType, type TypePicks } from "./s1-by-type";
  * broken input. The real ceiling for a party is the house's own, which the backend answers with;
  * these caps are only there to stop a typo becoming a 900-guest lookup.
  */
-function Count({
+export function Count({
   label,
   value,
   onChange,
@@ -115,21 +117,24 @@ function Count({
   );
 }
 
-export function ChangeConfiguration({
+/**
+ * One stay's change: what is typed, what the house said, the rooms picked and the acts. The panel for
+ * one stay and the panel for the stays worked together are both drawn from this (2026-11-09).
+ */
+export function useChangeConfiguration({
   entry,
-  onClose,
   onDone,
   inPlace = false,
+  quiet = false,
+  prefix = "",
 }: {
   entry: EntryDetail;
-  onClose: () => void;
   onDone: () => void;
-  /**
-   * Set up, Reserve and Arrival (2026-10-29, operator: "the backend goes back but the user stays on
-   * the current page"): the same editor, plus who sleeps where, saved through the in-place walk —
-   * the booking goes back through Negotiation and returns to this step with its papers made again.
-   */
   inPlace?: boolean;
+  /** Says nothing when the house answers: the panel for several stays says it once. */
+  quiet?: boolean;
+  /** "Stay 2 · ", in front of what is said about this stay. */
+  prefix?: string;
 }) {
   const { session } = useSession();
   const refresh = useRefreshEntry(entry.id);
@@ -228,7 +233,7 @@ export function ChangeConfiguration({
     },
     onSuccess: (a) => {
       setAnswer(a);
-      toast.success(typeMode ? "The house has answered — set the room types below" : "The house has answered — tick or untick the rooms below");
+      if (!quiet) toast.success(typeMode ? "The house has answered — set the room types below" : "The house has answered — tick or untick the rooms below");
       /**
        * On new dates, a carried room that is not free on every new night is unticked — and named,
        * never silently (2026-10-12). Done here, where the answer lands, rather than in an effect:
@@ -475,12 +480,12 @@ export function ChangeConfiguration({
     onSuccess: (o) => {
       if (!o.applied) {
         // The operator prepared it; nothing on the booking has moved (2026-09-30 ruling).
-        toast.success(`Sent for approval — ${o.summary}`);
+        toast.success(`${prefix}Sent for approval — ${o.summary}`);
         toast.info("The FOM sees it on this step. Nothing has changed on the booking yet.");
         onDone();
         return;
       }
-      toast.success(`The configuration is changed — ${o.summary}`);
+      toast.success(`${prefix}The configuration is changed — ${o.summary}`);
       if (o.holdTimeCleared) {
         toast.info("The hold time set for this booking ran past the new arrival day — it is back to the house window.");
       }
@@ -495,7 +500,7 @@ export function ChangeConfiguration({
       }
       if (o.quotationsInvalidated.length > 0) {
         toast.info(
-          `${plural(o.quotationsInvalidated.length, "quotation")} retired — price it again before moving to Set up.`,
+          `${plural(o.quotationsInvalidated.length, "quotation")} retired — save & quote it again before moving to Set up.`,
         );
       }
       if (o.hold?.action === "REPLACED") {
@@ -536,6 +541,114 @@ export function ChangeConfiguration({
     (inPlace && (!configId || !roomsReady || comps.length === 0 || tableFaults.length > 0)) ||
     pending;
 
+  const saveReason =
+              typeMode && !!result && !typePicks && !needsRepick && !needsNightPick
+                ? `Set ${plural(roomCount, "room")} for every night in the grid`
+                : nothingMoved
+                ? "Nothing has changed yet"
+                : startsBeforeToday
+                  ? "The stay can start today or later"
+                  : needsNightPick
+                    ? !configId
+                      ? "The dates changed — ask the house for them, then pick the rooms"
+                      : typeMode
+                        ? "Set the room types for every new night — the grid says what is short"
+                        : `Pick the rooms for every new night — ${sel.nightsReady} of ${plural(stayNights.length, "night")} ready`
+                    : needsRepick
+                  ? !configId
+                    ? countMoved
+                      ? `The rooms asked for changed to ${roomCount} — ask the house and pick them`
+                      : "Ask the house before saving rooms"
+                    : typeMode
+                      ? `Set ${plural(roomCount, "room")} for every night in the grid`
+                      : sel.nightsDiffer
+                        ? `Every night needs ${plural(roomCount, "room")} — ${sel.nightsReady} of ${plural(displayNights.length, "night")} ${sel.nightsReady === 1 ? "has" : "have"} them`
+                        : `Pick ${plural(roomCount, "room")} below — ${sel.commonPlan.length} ${sel.commonPlan.length === 1 ? "is" : "are"} ticked`
+                  : inPlace && !configId
+                    ? "Ask the house for the stay first"
+                    : inPlace && !roomsReady
+                      ? typeMode
+                        ? "Set the room types for every night"
+                        : "Pick the rooms for every night"
+                      : inPlace && tableFaults.length > 0
+                        ? "Put right what the table lists first"
+                        : !agesReady
+                      ? "Every child needs an age"
+                      : roomsMoved && !configId
+                        ? "Ask the house before saving rooms"
+                        : undefined;
+
+  return { entry, oldIn, oldOut, checkIn, setCheckIn, nights, setNights, nightsN, checkOut, datesMoved, startsBeforeToday, hotelDay, adults, setAdults, children, setChildren, ages, setAges, rooms, setRooms, byNumber, setByNumber, typeMode, typePicks, setTypePicks, childCount, adultCount, roomCount, agesReady, ageInputs, env, envMin, envMax, policy, answer, datesKey, result, answerOutdated, ask, catalog, configId, available, deficient, unavailable, perDate, rows, stayNights, displayNights, priorRoomIds, sel, roomNo, picked, dropped, added, roomsMoved, roomsReady, partyMoved, countMoved, pickComplete, needsRepick, needsNightPick, pickedRoomIds, pickedRoomDates, seedComps, comps, setComps, autoSeat, tableFaults, setTableFaults, tableReady, overCapacity, roomsOutOfRange, change, save, needsApproval, pending, nothingMoved, blocked, saveReason };
+}
+
+export type ChangeConfig = ReturnType<typeof useChangeConfiguration>;
+
+/** Every room by number, for one stay of the change — the table the Inquiry step uses. */
+export function RoomsByNumberPick({ c }: { c: ChangeConfig }) {
+  const { setByNumber, pickComplete, sel, displayNights, roomCount, roomsMoved, dropped, added, roomNo, rows, perDate, pending } = c;
+  return (
+    <>
+      <div className="row-acts" style={{ margin: "8px 0" }}>
+        <Button kind="quiet" compact onClick={() => setByNumber(false)}>
+          Back to room types
+        </Button>
+        <span className={pickComplete ? "ok-ink" : "stop-ink"} style={{ fontWeight: 700 }}>
+          {sel.nightsDiffer
+            ? `${sel.nightsReady} of ${plural(displayNights.length, "night")} ${sel.nightsReady === 1 ? "has" : "have"} ${plural(roomCount, "room")}`
+            : `${sel.commonPlan.length} of ${plural(roomCount, "room")} chosen`}
+        </span>
+        {roomsMoved ? (
+          <span className="sm">
+            {dropped.length ? `dropping ${dropped.map(roomNo).join(", ")}` : ""}
+            {dropped.length && added.length ? " · " : ""}
+            {added.length ? `adding ${added.map(roomNo).join(", ")}` : ""}
+            {!dropped.length && !added.length ? "the same rooms, on different nights" : ""}
+          </span>
+        ) : (
+          <span className="sm">the same rooms as now</span>
+        )}
+      </div>
+      <Tool>
+        <RoomStatusTable
+          rows={rows}
+          nights={displayNights}
+          perDate={perDate}
+          selectedIds={sel.base}
+          perNightSel={sel.effectiveByNight}
+          referenceIds={sel.commonPlan}
+          maxSelect={roomCount}
+          onToggle={sel.toggleRow}
+          onToggleCell={sel.toggleCell}
+          onSelectAllNights={sel.reportSelectAll}
+          onCappedClick={() =>
+            toast.info(`All ${plural(roomCount, "room")} are chosen — untick one first to swap it.`)
+          }
+          disabled={pending}
+        />
+      </Tool>
+    </>
+  );
+}
+
+export function ChangeConfiguration({
+  entry,
+  onClose,
+  onDone,
+  inPlace = false,
+}: {
+  entry: EntryDetail;
+  onClose: () => void;
+  onDone: () => void;
+  /**
+   * Set up, Reserve and Arrival (2026-10-29, operator: "the backend goes back but the user stays on
+   * the current page"): the same editor, plus who sleeps where, saved through the in-place walk —
+   * the booking goes back through Negotiation and returns to this step with its papers made again.
+   */
+  inPlace?: boolean;
+}) {
+  const c = useChangeConfiguration({ entry, onDone, inPlace });
+  const { oldIn, oldOut, checkIn, setCheckIn, nights, setNights, nightsN, checkOut, datesMoved, startsBeforeToday, adults, setAdults, children, setChildren, ages, setAges, rooms, setRooms, byNumber, setByNumber, typeMode, typePicks, setTypePicks, childCount, adultCount, roomCount, agesReady, ageInputs, env, envMin, envMax, policy, answer, datesKey, result, answerOutdated, ask, catalog, configId, available, deficient, unavailable, perDate, rows, stayNights, displayNights, priorRoomIds, sel, roomNo, picked, dropped, added, roomsMoved, roomsReady, partyMoved, countMoved, pickComplete, needsRepick, needsNightPick, pickedRoomIds, pickedRoomDates, seedComps, comps, setComps, autoSeat, tableFaults, setTableFaults, tableReady, overCapacity, roomsOutOfRange, change, save, needsApproval, pending, nothingMoved, blocked, saveReason, hotelDay } = c;
+
   return (
     <div className="cfg-change">
       <div className="cfg-head">
@@ -555,9 +668,12 @@ export function ChangeConfiguration({
             ) : null}
           </Help>
         </div>
-        <Button kind="quiet" compact onClick={onClose}>
-          Cancel
-        </Button>
+        <div className="row-acts" style={{ gap: 8 }}>
+          <AddReturnStay entry={entry} />
+          <Button kind="quiet" compact onClick={onClose}>
+            Cancel
+          </Button>
+        </div>
       </div>
 
       {/* 1 ---------------------------------------------------------------- the stay */}
@@ -594,8 +710,8 @@ export function ChangeConfiguration({
         </div>
         {datesMoved ? (
           <p className="cfg-move" role="status">
-            Moving the stay from <b>{fmtRange(oldIn, oldOut)}</b> ({plural(enumerateNights(oldIn, oldOut).length, "night")}) to{" "}
-            <b>{fmtRange(checkIn, checkOut)}</b> ({plural(nightsN, "night")}).
+            Moving the stay from <StayDates checkIn={oldIn} checkOut={oldOut} /> ({plural(enumerateNights(oldIn, oldOut).length, "night")}) to{" "}
+            <StayDates checkIn={checkIn} checkOut={checkOut} /> ({plural(nightsN, "night")}).
           </p>
         ) : null}
         <div className="form2" style={{ marginTop: 8 }}>
@@ -651,7 +767,7 @@ export function ChangeConfiguration({
         )}
         {!overCapacity && roomsOutOfRange && env && (
           <p className="cfg-stop" role="alert">
-            {roomCount < envMin
+            {roomCount < (envMin ?? 0)
               ? `${plural(env.chargeableOccupants, "chargeable guest")} will not fit in ${plural(roomCount, "room")} — ask for at least ${envMin}.`
               : `${plural(roomCount, "room")} is more than this party needs — at most ${envMax}.`}
           </p>
@@ -667,11 +783,11 @@ export function ChangeConfiguration({
           </Button>
           {result ? (
             <span className="sm">
-              {plural(available.length, "room")} free over {fmtRange(checkIn, checkOut)}
+              {plural(available.length, "room")} free · <StayDates checkIn={checkIn} checkOut={checkOut} />
             </span>
           ) : answerOutdated ? (
             <span className="warn-ink sm" style={{ fontWeight: 600 }}>
-              The dates changed — ask the house again for {fmtRange(checkIn, checkOut)}.
+              The dates changed — ask the house again for <StayDates checkIn={checkIn} checkOut={checkOut} />
             </span>
           ) : null}
         </div>
@@ -708,46 +824,7 @@ export function ChangeConfiguration({
             />
           </div>
         ) : (
-          <>
-            <div className="row-acts" style={{ margin: "8px 0" }}>
-              <Button kind="quiet" compact onClick={() => setByNumber(false)}>
-                Back to room types
-              </Button>
-              <span className={pickComplete ? "ok-ink" : "stop-ink"} style={{ fontWeight: 700 }}>
-                {sel.nightsDiffer
-                  ? `${sel.nightsReady} of ${plural(displayNights.length, "night")} ${sel.nightsReady === 1 ? "has" : "have"} ${plural(roomCount, "room")}`
-                  : `${sel.commonPlan.length} of ${plural(roomCount, "room")} chosen`}
-              </span>
-              {roomsMoved ? (
-                <span className="sm">
-                  {dropped.length ? `dropping ${dropped.map(roomNo).join(", ")}` : ""}
-                  {dropped.length && added.length ? " · " : ""}
-                  {added.length ? `adding ${added.map(roomNo).join(", ")}` : ""}
-                  {!dropped.length && !added.length ? "the same rooms, on different nights" : ""}
-                </span>
-              ) : (
-                <span className="sm">the same rooms as now</span>
-              )}
-            </div>
-            <Tool>
-              <RoomStatusTable
-                rows={rows}
-                nights={displayNights}
-                perDate={perDate}
-                selectedIds={sel.base}
-                perNightSel={sel.effectiveByNight}
-                referenceIds={sel.commonPlan}
-                maxSelect={roomCount}
-                onToggle={sel.toggleRow}
-                onToggleCell={sel.toggleCell}
-                onSelectAllNights={sel.reportSelectAll}
-                onCappedClick={() =>
-                  toast.info(`All ${plural(roomCount, "room")} are chosen — untick one first to swap it.`)
-                }
-                disabled={pending}
-              />
-            </Tool>
-          </>
+          <RoomsByNumberPick c={c} />
         )}
       </section>
 
@@ -816,7 +893,7 @@ export function ChangeConfiguration({
               </p>
             ) : (
               <p>
-                Saving retires any quotation priced on the old configuration — price it again before moving to Set up. A provisional block moves
+                Saving retires any quotation priced on the old configuration — save & quote it again before moving to Set up. A provisional block moves
                 to the new rooms and nights and keeps its deadline.
               </p>
             )}
@@ -828,43 +905,7 @@ export function ChangeConfiguration({
             className={!blocked ? "go" : undefined}
             onClick={() => (inPlace ? change.mutate() : save.mutate())}
             state={blocked ? "inert" : "default"}
-            reason={
-              typeMode && !!result && !typePicks && !needsRepick && !needsNightPick
-                ? `Set ${plural(roomCount, "room")} for every night in the grid`
-                : nothingMoved
-                ? "Nothing has changed yet"
-                : startsBeforeToday
-                  ? "The stay can start today or later"
-                  : needsNightPick
-                    ? !configId
-                      ? "The dates changed — ask the house for them, then pick the rooms"
-                      : typeMode
-                        ? "Set the room types for every new night — the grid says what is short"
-                        : `Pick the rooms for every new night — ${sel.nightsReady} of ${plural(stayNights.length, "night")} ready`
-                    : needsRepick
-                  ? !configId
-                    ? countMoved
-                      ? `The rooms asked for changed to ${roomCount} — ask the house and pick them`
-                      : "Ask the house before saving rooms"
-                    : typeMode
-                      ? `Set ${plural(roomCount, "room")} for every night in the grid`
-                      : sel.nightsDiffer
-                        ? `Every night needs ${plural(roomCount, "room")} — ${sel.nightsReady} of ${plural(displayNights.length, "night")} ${sel.nightsReady === 1 ? "has" : "have"} them`
-                        : `Pick ${plural(roomCount, "room")} below — ${sel.commonPlan.length} ${sel.commonPlan.length === 1 ? "is" : "are"} ticked`
-                  : inPlace && !configId
-                    ? "Ask the house for the stay first"
-                    : inPlace && !roomsReady
-                      ? typeMode
-                        ? "Set the room types for every night"
-                        : "Pick the rooms for every night"
-                      : inPlace && tableFaults.length > 0
-                        ? "Put right what the table lists first"
-                        : !agesReady
-                      ? "Every child needs an age"
-                      : roomsMoved && !configId
-                        ? "Ask the house before saving rooms"
-                        : undefined
-            }
+            reason={saveReason}
           >
             {inPlace
               ? change.isPending
@@ -907,7 +948,7 @@ export function WaitingConfigurationChange({ entry }: { entry: EntryDetail }) {
       if (r.state === "APPROVED") {
         toast.success(`Approved — ${r.outcome?.summary ?? "the configuration is changed"}`);
         if ((r.outcome?.quotationsInvalidated ?? []).length > 0) {
-          toast.info("The quotation it was priced on is retired — price it again before Set up.");
+          toast.info("The quotation it was priced on is retired — save & quote it again before Set up.");
         }
       } else {
         toast.success("Turned down — the desk sees your note");

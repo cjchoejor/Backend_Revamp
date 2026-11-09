@@ -1,3 +1,6 @@
+import { resolveSendTo } from "../../lib/send-to.js";
+import { enforceProformaNotLapsed, stopProformaValidityTx } from "./proforma-validity-service.js";
+import { enforceEarlierAdvanceAnswered } from "../../lib/refund-money.js";
 import type { PrismaClient } from "@prisma/client";
 import { guestDisplayName } from "../../lib/guest-display-name.js";
 import { CommunicationType, InvoiceType, Stage } from "@prisma/client";
@@ -35,7 +38,6 @@ import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.
 import { dispatchStageEmailBestEffort } from "../infrastructure/stage-email-helpers.js";
 import { renderReservationConfirmationEmail } from "../infrastructure/stage-email-templates.js";
 import { generateOrLoadConfirmationVoucherPdf } from "./confirmation-voucher-pdf-service.js";
-import { computeStayCharges } from "../infrastructure/compute-stay-charges.js";
 import { initialiseTasks as initialisePreArrivalTasks } from "./pre-arrival-service.js";
 import { latestDispatchedInForce, retireSupersededReplyWaitsBestEffort } from "../../lib/reply-waits.js";
 import { recordHeldDocument } from "../../lib/held-documents.js";
@@ -152,8 +154,8 @@ async function confirmReservationInner(
 
   // …and once the guest has actually paid an advance, that proforma must have gone OUT to
   // them — money changing hands has to be documented (2026-07-28). Keyed on the amount
-  // RECEIVED, not the configured threshold: `advancePayment.thresholds` can be 0 while a
-  // guest still chooses to pay something up front, and that voluntary payment needs an
+  // RECEIVED, not what is asked: nothing may be asked while a guest still chooses to pay
+  // something up front, and that voluntary payment needs an
   // invoice just the same.
   const advanceEvaluation = await evaluateAdvancePaymentCondition(prisma, { entryId, folioId: folio.id });
   // Only the ADVANCE needs the proforma (2026-09-18): money taken before check-in. A mid-stay
@@ -325,6 +327,8 @@ async function confirmReservationInner(
       data: { currentReservationId: res.id, reservationPaymentPending },
     });
 
+    // The voucher takes over from the proforma: its time stops here (2026-11-05).
+    await stopProformaValidityTx(tx, { entryId, actorId, reason: "RESERVED", now: new Date() });
     await confirmCommittedHoldTx(tx, {
       entryId,
       holdId: hold.id,
@@ -521,18 +525,12 @@ async function confirmReservationInner(
   // Phase 3 — refactored to use the shared best-effort helper + bundled template.
   const ciDate = result.reservation.frozenCheckInDate;
   const coDate = result.reservation.frozenCheckOutDate;
-  const frozenRate = Number(result.reservation.frozenRate?.toString?.() ?? result.reservation.frozenRate ?? 0);
-  const ms = coDate.getTime() - ciDate.getTime();
-  const nights = Math.max(1, Math.round(ms / 86400_000));
-  const currency = (accepted.commercialTerms as any)?.currency ?? "BTN";
   const displayName =
     guestDisplayName(entry.guestProfile) || "Guest";
-  // Room count is needed BEFORE computeStayCharges so the stay total reflects all rooms.
   // Read from the accepted quotation's commercialTerms.roomCount (single source of truth
   // set at quote creation), fall back to entry.numberOfRooms, fall back to 1.
   const acceptedTerms = accepted.commercialTerms as { roomCount?: number } | null;
   const bookingRoomCount = Math.max(1, Number(acceptedTerms?.roomCount) || entry.numberOfRooms || 1);
-  const breakdown = await computeStayCharges(prisma, frozenRate, nights, bookingRoomCount);
   // Group-oriented content when the entry is GROUP_MASTER. Group leader defaults to the
   // on-site contact person (a group in operational terms) with fall-back to the guest
   // profile display name.
@@ -545,9 +543,6 @@ async function confirmReservationInner(
     checkInDate: ciDate,
     checkOutDate: coDate,
     guestCount: result.reservation.frozenGuestCount ?? entry.guestCount ?? 1,
-    nightlyRate: frozenRate,
-    currency,
-    breakdown,
     isGroup,
     roomCount,
     billingModel: entry.folio?.billingModel ?? null,
@@ -656,24 +651,22 @@ async function resendConfirmationVoucherInner(
   if (!reservation.confirmedAt) throw new ValidationError("This reservation was never confirmed — nothing to send");
   const entry = reservation.entry;
 
-  const recipient = input.dispatchedTo?.trim() || entry.guestProfile?.email?.trim() || null;
+  // Typed, else whom the booking's papers go to (lib/send-to.ts, 2026-11-07): the contact person at
+  // the agency or company, else the party; on a direct booking the guest.
+  const recipient = input.dispatchedTo?.trim() || (await resolveSendTo(prisma, entry.id)).email || null;
   if (!recipient) {
-    throw new ValidationError("No email address — enter one, or add it to the guest profile first");
+    throw new ValidationError("No email address — type the address it goes to");
   }
 
   // Same email body the confirmation sent, composed from the frozen snapshot.
   const ciDate = reservation.frozenCheckInDate;
   const coDate = reservation.frozenCheckOutDate;
-  const frozenRate = Number(reservation.frozenRate?.toString?.() ?? reservation.frozenRate ?? 0);
-  const nights = Math.max(1, Math.round((coDate.getTime() - ciDate.getTime()) / 86400_000));
   const segmentId = entry.segments[0]?.id ?? reservation.segmentId;
   const operative = resolveOperativeQuotation(entry.quotations, segmentId);
-  const operativeTerms = (operative?.commercialTerms ?? null) as { currency?: string; roomCount?: number } | null;
-  const currency = operativeTerms?.currency ?? "BTN";
+  const operativeTerms = (operative?.commercialTerms ?? null) as { roomCount?: number } | null;
   const displayName =
     guestDisplayName(entry.guestProfile) || "Guest";
   const bookingRoomCount = Math.max(1, Number(operativeTerms?.roomCount) || entry.numberOfRooms || 1);
-  const breakdown = await computeStayCharges(prisma, frozenRate, nights, bookingRoomCount);
   const isGroup = entry.groupBillingMode === "GROUP_MASTER";
   const content = renderReservationConfirmationEmail({
     guestDisplayName: displayName,
@@ -681,9 +674,6 @@ async function resendConfirmationVoucherInner(
     checkInDate: ciDate,
     checkOutDate: coDate,
     guestCount: reservation.frozenGuestCount ?? entry.guestCount ?? 1,
-    nightlyRate: frozenRate,
-    currency,
-    breakdown,
     isGroup,
     roomCount: isGroup ? bookingRoomCount : undefined,
     billingModel: entry.folio?.billingModel ?? null,
@@ -832,6 +822,9 @@ export async function confirmReservationForDesk(
   actor: { actorId: string; actorLevel?: string | null },
   input: Parameters<typeof confirmReservationInner>[3],
 ) {
+  const folioOf = await prisma.folio.findUnique({ where: { entryId }, select: { id: true } });
+  if (folioOf) await enforceEarlierAdvanceAnswered(prisma, entryId, folioOf.id);
+  await enforceProformaNotLapsed(prisma, entryId);
   const out = await confirmReservation(prisma, entryId, actor.actorId, { ...(input ?? {}), holdGuestEmail: true });
   await recordHeldDocument(prisma, {
     entryId,

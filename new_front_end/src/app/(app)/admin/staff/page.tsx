@@ -1,5 +1,6 @@
 "use client";
 
+import { TitleSelect } from "@/components/ds/person-name";
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -34,6 +35,7 @@ export default function AdminStaffPage() {
   const prompt = usePrompt();
   const [showInactive, setShowInactive] = useState(false);
   const [form, setForm] = useState({
+    title: "",
     fullName: "",
     username: "",
     email: "",
@@ -77,6 +79,7 @@ export default function AdminStaffPage() {
         throw new Error("Pick a role from the dropdown.");
       }
       return createStaff(session!, {
+        title: form.title || null,
         fullName: form.fullName,
         username: form.username.trim().toLowerCase(),
         email: form.email || null,
@@ -90,7 +93,7 @@ export default function AdminStaffPage() {
     },
     onSuccess: () => {
       toast.success("Staff created");
-      setForm((prev) => ({ ...prev, fullName: "", username: "", email: "", pin: "" }));
+      setForm((prev) => ({ ...prev, title: "", fullName: "", username: "", email: "", pin: "" }));
       void queryClient.invalidateQueries({ queryKey: ["admin", "staff"] });
     },
     onError: (e) => toast.error(e instanceof ApiError ? e.message : e instanceof Error ? e.message : "Create failed"),
@@ -134,7 +137,7 @@ export default function AdminStaffPage() {
 
   // Editing a row inline — we track a single editing row at a time. The row expands under itself
   // with editable name / username / role / level.
-  const [editing, setEditing] = useState<{ id: string; fullName: string; username: string; roleId: string; actorLevel: ActorLevel } | null>(null);
+  const [editing, setEditing] = useState<{ id: string; title: string; fullName: string; username: string; roleId: string; actorLevel: ActorLevel } | null>(null);
   const editingRolesForLevel = useMemo(
     () => (editing ? roles.filter((r) => r.actorLevel === editing.actorLevel && r.isActive) : []),
     [roles, editing],
@@ -153,15 +156,21 @@ export default function AdminStaffPage() {
       <div className="admin-panel grid gap-4 p-5 md:grid-cols-2">
         <h2 className="admin-display col-span-full text-lg">Create staff</h2>
 
-        <label className="col-span-full text-xs opacity-70 md:col-span-1">
-          Full name
-          <input
-            className="admin-input mt-1"
-            placeholder="Sonam Wangchuk"
-            value={form.fullName}
-            onChange={(e) => setForm({ ...form, fullName: e.target.value })}
-          />
-        </label>
+        <div className="col-span-full grid grid-cols-[96px_1fr] gap-3 md:col-span-1">
+          <label className="text-xs opacity-70">
+            Title
+            <TitleSelect className="admin-select mt-1" value={form.title} onChange={(title) => setForm({ ...form, title })} />
+          </label>
+          <label className="text-xs opacity-70">
+            Name
+            <input
+              className="admin-input mt-1"
+              placeholder="Sonam Wangchuk"
+              value={form.fullName}
+              onChange={(e) => setForm({ ...form, fullName: e.target.value })}
+            />
+          </label>
+        </div>
 
         <label className="col-span-full text-xs opacity-70 md:col-span-1">
           Username (for login)
@@ -294,6 +303,7 @@ export default function AdminStaffPage() {
                 onStartEdit={() =>
                   setEditing({
                     id: row.id,
+                    title: row.title ?? "",
                     fullName: row.fullName,
                     username: row.username,
                     roleId: row.roleId ?? row.roleRef?.id ?? "",
@@ -311,6 +321,7 @@ export default function AdminStaffPage() {
                   updateMutation.mutate({
                     id: editing.id,
                     body: {
+                      title: editing.title || null,
                       fullName: editing.fullName,
                       username: editing.username.trim().toLowerCase(),
                       actorLevel: editing.actorLevel,
@@ -372,12 +383,12 @@ export default function AdminStaffPage() {
 
 function StaffRow(props: {
   row: StaffUserAdmin;
-  editing: { id: string; fullName: string; username: string; roleId: string; actorLevel: ActorLevel } | null;
+  editing: { id: string; title: string; fullName: string; username: string; roleId: string; actorLevel: ActorLevel } | null;
   editingRolesForLevel: RoleAdmin[];
   allRoles: RoleAdmin[];
   onStartEdit: () => void;
   onCancelEdit: () => void;
-  onEditingChange: (next: Partial<{ fullName: string; username: string; roleId: string; actorLevel: ActorLevel }>) => void;
+  onEditingChange: (next: Partial<{ title: string; fullName: string; username: string; roleId: string; actorLevel: ActorLevel }>) => void;
   onSaveEdit: () => void;
   onResetPin: () => void;
   onDeactivate: () => void;
@@ -389,14 +400,20 @@ function StaffRow(props: {
       <tr>
         <td colSpan={7} className="!p-0">
           <div className="grid gap-3 border-l-4 border-[var(--admin-accent)] bg-[var(--admin-panel-alt)] p-4 md:grid-cols-4">
-            <label className="text-xs opacity-70">
-              Full name
-              <input
-                className="admin-input mt-1"
-                value={editing.fullName}
-                onChange={(e) => props.onEditingChange({ fullName: e.target.value })}
-              />
-            </label>
+            <div className="grid grid-cols-[96px_1fr] gap-3">
+              <label className="text-xs opacity-70">
+                Title
+                <TitleSelect className="admin-select mt-1" value={editing.title} onChange={(title) => props.onEditingChange({ title })} />
+              </label>
+              <label className="text-xs opacity-70">
+                Name
+                <input
+                  className="admin-input mt-1"
+                  value={editing.fullName}
+                  onChange={(e) => props.onEditingChange({ fullName: e.target.value })}
+                />
+              </label>
+            </div>
             <label className="text-xs opacity-70">
               Username
               <input
@@ -452,7 +469,7 @@ function StaffRow(props: {
   return (
     <tr>
       <td>
-        <strong>{row.fullName}</strong>
+        <strong>{[row.title, row.fullName].filter(Boolean).join(" ")}</strong>
         {row.email && <div className="text-xs opacity-70">{row.email}</div>}
       </td>
       <td className="font-mono text-xs">{row.username}</td>

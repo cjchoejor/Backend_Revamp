@@ -161,7 +161,7 @@ export async function buildCompetingClaims(prisma: PrismaClient, entryId: string
   const now = new Date();
   const hold = entry.committedHold;
   const holdsItsRooms =
-    (!!hold && (hold.state === "CONFIRMED" || (hold.state === "PLACED" && hold.expiresAt > now))) ||
+    (!!hold && (hold.state === "CONFIRMED" || hold.state === "PLACED")) ||
     entry.speculativeHolds.some((h) => h.expiresAt > now);
 
   // Rooms, their types and names — to read every booking's rooms by type.

@@ -10,16 +10,17 @@
  * Every figure is the server's: the same bill the Inquiry step prints (`price-pick`), priced on
  * the rooms as SAVED — the move to Negotiation carries the saved pick, never an unsaved one.
  */
+import { StayDates } from "@/components/ds/stay-dates";
 import { useBookingRooms } from "@/hooks/use-booking-rooms";
 import { useMemo } from "react";
 import { Button } from "@/design-system";
 import { DsDialog, Fact, Facts } from "./kit";
-import { PickBill, usePickPricing, type BillNight } from "./s1-bill";
+import { PickBill, TripPickBill, usePickPricing, useTripPickPricing, type BillNight } from "./s1-bill";
 import { enumerateNights } from "./use-room-selection";
 import { USE_TYPES, bedWord } from "./new-inquiry-parts";
 import { currentPassConfigs } from "@/lib/desk/workspace";
 import { callerNameOf, channelWord } from "@/lib/ds/status";
-import { fmtRange, plural } from "@/lib/ds/format";
+import { plural } from "@/lib/ds/format";
 import { guestName } from "@/lib/desk/model";
 import type { AvailabilityOptionSelected, EntryDetail } from "@/types/api";
 
@@ -46,16 +47,29 @@ export function InquirySummaryDialog({
   busy,
   onClose,
   onConfirm,
+  alsoMoving = [],
+  stayNoOf,
 }: {
   entry: EntryDetail;
   open: boolean;
   busy: boolean;
   onClose: () => void;
   onConfirm: () => void;
+  /** A trip at Inquiry: the other stays moving with this one (2026-11-07, one Continue moves every stay). */
+  alsoMoving?: EntryDetail[];
+  stayNoOf?: (id: string) => number;
 }) {
   const picks = useMemo(() => savedPicks(entry), [entry]);
-  const bill = usePickPricing(entry.id, picks, open);
+  const bill = usePickPricing(entry.id, picks, open && !alsoMoving.length);
   const roomLabels = useBookingRooms(entry).labels;
+  // A trip: every stay moving together, priced together on the rooms as SAVED (2026-11-07).
+  const tripEntries = useMemo(
+    () => (alsoMoving.length ? [entry, ...alsoMoving].sort((a, b) => (stayNoOf?.(a.id) ?? 0) - (stayNoOf?.(b.id) ?? 0)) : []),
+    [entry, alsoMoving, stayNoOf],
+  );
+  const tripStays = tripEntries.map((e) => ({ entryId: e.id, picks: savedPicks(e) }));
+  const tripBill = useTripPickPricing(entry.id, tripStays, open && tripEntries.length > 1);
+  const noRooms = tripEntries.filter((e) => savedPicks(e).length === 0);
 
   const inq = entry.inquiry;
   const caller = callerNameOf(inq);
@@ -76,7 +90,8 @@ export function InquirySummaryDialog({
       open={open}
       onClose={onClose}
       busy={busy}
-      width={760}
+      // A trip's stays each read on one line (2026-11-07).
+      width={alsoMoving.length ? 940 : 760}
       title="Check the inquiry before Negotiation"
       help="What the Inquiry step recorded, in one place. The prices are indicative — the room only, as the house prices it today. Meals, extra beds and any agreed rate are set at Negotiation, where the quotation prices them exactly."
       caseLines={[<b key="n">{g ? guestName(g) : caller ?? "—"}</b>, entry.id]}
@@ -86,7 +101,7 @@ export function InquirySummaryDialog({
             Go back and edit
           </Button>
           <Button kind="primary" className="go" onClick={onConfirm} state={busy ? "working" : "default"} workingLabel="Moving…">
-            Confirm and move to Negotiation
+            {alsoMoving.length ? `Confirm and move ${plural(alsoMoving.length + 1, "stay")} to Negotiation` : "Confirm and move to Negotiation"}
           </Button>
         </>
       }
@@ -107,16 +122,41 @@ export function InquirySummaryDialog({
             >
               {g ? guestName(g) : null}
             </Fact>
+            {entry.inquiry?.partyContacts?.length ? (
+              <Fact k={entry.inquiry.partyContacts.length > 1 ? "Their contact persons" : "Their contact person"}>
+                {entry.inquiry.partyContacts.map((c, i) => (
+                  <div key={i}>{[[c.title, c.name].filter(Boolean).join(" "), c.phone].filter(Boolean).join(" · ")}</div>
+                ))}
+              </Fact>
+            ) : null}
             {entry.contactPersonName || entry.contactPersonPhone ? (
               <Fact k="Who is arriving">{[entry.contactPersonName, entry.contactPersonPhone].filter(Boolean).join(" · ")}</Fact>
             ) : null}
           </Facts>
         </section>
 
+        {tripEntries.length ? (
+          <section>
+            <b className="cfg-n">The stays · {plural(tripEntries.length, "stay")}</b>
+            <div className="stay-strips">
+              {tripEntries.map((e) => (
+                <StayStrip key={e.id} entry={e} stayNo={stayNoOf?.(e.id) ?? 1} firstGuestId={tripEntries[0].guestProfile?.id ?? null} />
+              ))}
+            </div>
+            {inq?.notes ? (
+              <Facts wide>
+                <Fact k="Preference">{inq.notes}</Fact>
+              </Facts>
+            ) : null}
+          </section>
+        ) : (
         <section>
           <b className="cfg-n">The stay</b>
           <Facts wide>
-            <Fact k="Dates">{`${fmtRange(entry.checkInDate, entry.checkOutDate)}${nights ? ` · ${plural(nights, "night")}` : ""}`}</Fact>
+            <Fact k="The stay">
+              <StayDates checkIn={entry.checkInDate} checkOut={entry.checkOutDate} />
+              {nights ? ` · ${plural(nights, "night")}` : ""}
+            </Fact>
             <Fact k="Guests">
               {`${plural(entry.adultCount ?? entry.guestCount ?? 0, "adult")}${
                 ages.length ? ` · ${plural(ages.length, "child", "children")} (aged ${ages.join(", ")})` : ""
@@ -130,14 +170,34 @@ export function InquirySummaryDialog({
             {inq?.notes ? <Fact k="Preference">{inq.notes}</Fact> : null}
           </Facts>
         </section>
+        )}
 
         <section>
-          {bill.pricing ? (
+          {tripEntries.length ? (
+            noRooms.length ? (
+              <p className="stop-ink" role="alert">
+                No rooms are saved for {noRooms.map((e) => `stay ${stayNoOf?.(e.id) ?? "?"}`).join(" and ")} yet — go back and save them first.
+              </p>
+            ) : tripBill.pricing ? (
+              <TripPickBill
+                trip={tripBill.pricing}
+                entries={tripEntries}
+                stayNoOf={stayNoOf ?? (() => 1)}
+                loading={tripBill.loading}
+                title="The rooms chosen"
+                help="Indicative, not a quote. Meals, extra beds and any agreed rate are set at Negotiation, where each stay's quotation prices them."
+              />
+            ) : tripBill.error ? (
+              <p className="warn-ink">The rooms could not be priced just now — the move does not depend on it.</p>
+            ) : (
+              <p className="meta">Pricing the rooms…</p>
+            )
+          ) : bill.pricing ? (
             <PickBill
               pricing={bill.pricing}
               roomLabels={Object.fromEntries(roomLabels)}
               loading={bill.loading}
-              title="The rooms chosen"
+              title={alsoMoving.length && stayNoOf ? `Stay ${stayNoOf(entry.id)} · the rooms chosen` : "The rooms chosen"}
               help="Indicative, not a quote. Meals, extra beds and any agreed rate are set at Negotiation."
             />
           ) : picks.length === 0 ? (
@@ -152,5 +212,45 @@ export function InquirySummaryDialog({
         </section>
       </div>
     </DsDialog>
+  );
+}
+
+/**
+ * One stay of a trip on one line (2026-11-07, operator: "the stay can show, stay 1 and stay 2, and
+ * their infos can be shown in the same line — the guest, rooms and kind of stay — in a creative
+ * way"): its number, its dates, then each fact as a small labelled box, like the dates' own.
+ */
+function StayStrip({ entry, stayNo, firstGuestId }: { entry: EntryDetail; stayNo: number; firstGuestId: string | null }) {
+  const nights = enumerateNights(entry.checkInDate, entry.checkOutDate).length;
+  const ages = entry.childAges ?? [];
+  const kind = USE_TYPES.find(([k]) => k === entry.useType)?.[1] ?? entry.useType ?? null;
+  const beds = Object.entries(entry.bedTypeRequest ?? {}).filter(([, n]) => n > 0);
+  // The guest is the trip's; a stay naming someone else says so.
+  const otherGuest = entry.guestProfile && entry.guestProfile.id !== firstGuestId ? guestName(entry.guestProfile) : null;
+  const box = (k: string, v: string | null) =>
+    v ? (
+      <span className="sfact">
+        <span className="lbl">{k}</span>
+        <b>{v}</b>
+      </span>
+    ) : null;
+  return (
+    <div className="stay-strip">
+      <span className="ss-no">
+        Stay {stayNo}
+      </span>
+      <StayDates checkIn={entry.checkInDate} checkOut={entry.checkOutDate} />
+      {nights ? <span className="ss-nights">{plural(nights, "night")}</span> : null}
+      <span className="ss-facts">
+        {box(
+          "Guests",
+          `${plural(entry.adultCount ?? entry.guestCount ?? 0, "adult")}${ages.length ? `, ${plural(ages.length, "child", "children")} (${ages.join(", ")})` : ""}`,
+        )}
+        {box("Rooms", entry.numberOfRooms != null ? String(entry.numberOfRooms) : null)}
+        {box("Stay", kind)}
+        {beds.length ? box("Beds", beds.map(([t, n]) => `${n} ${bedWord(t)}`).join(" · ")) : null}
+        {otherGuest ? box("Guest", otherGuest) : null}
+      </span>
+    </div>
   );
 }

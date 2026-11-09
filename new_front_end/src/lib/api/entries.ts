@@ -510,11 +510,10 @@ export type BookingJourneySummary = {
       shortfall: number | null;
       creditExtensionActive: boolean;
       ceilingAmount: number | null;
-      requirementSource: "OPERATOR" | "CONFIG" | null;
+      requirementSource: "OPERATOR" | "PARTY" | "NONE" | null;
       requirementBasis: unknown | null;
       creditExtensionExpiresAt: string | null;
       creditExtensionExpired: boolean;
-      groupBoostApplied: { multiplierPercent: number; baseAmount: number } | null;
       advanceWindow: { opensAt: string | null; deadline: string | null; active: boolean; overdue: boolean } | null;
     } | null;
     payments: Array<{
@@ -624,6 +623,8 @@ export type EntryBillingSummary = {
     lineCount: number;
     paymentsReceived: number | null;
     refunded: number | null;
+    /** Waiting to go back: still on the bill, no longer counting for this booking. */
+    refundWaiting?: number | null;
     writtenOff: number | null;
     outstandingBalance: number | null;
     /** Money paid above the bill — the balance floors at zero, so only this shows it (2026-09-18). */
@@ -1369,4 +1370,41 @@ export async function changeStayInPlace(
   },
 ) {
   return apiRequest<StayChangeOutcome>(`/api/entries/${entryId}/change-stay`, { method: "POST", session, body });
+}
+
+/** Every stay of a trip still at Inquiry to Negotiation, this one first (2026-11-07). */
+export function moveTripToNegotiation(session: Session, entryId: string, version?: number) {
+  return apiRequest<{ moved: string[]; notMoved: Array<{ entryId: string; message: string }> }>(`/api/entries/${entryId}/trip/to-negotiation`, {
+    method: "POST",
+    session,
+    body: { version },
+  });
+}
+
+/** The stays worked in one table at Negotiation (2026-11-09). Empty when this stay stands alone. */
+export async function getStaysTogether(session: Session, entryId: string) {
+  return apiRequest<{ stayIds: string[] }>(`/api/entries/${entryId}/trip/together`, { session });
+}
+
+/** Those stays on to Set up together, this one first. */
+/** The stays viewed together reserved at once; a stay refused is named and stays at Set up. */
+export async function reserveTrip(session: Session, entryId: string, version?: number) {
+  return apiRequest<{ moved: string[]; notMoved: Array<{ entryId: string; message: string }> }>(`/api/entries/${entryId}/trip/reserve`, { method: "POST", session, body: { version } });
+}
+
+/** The stays viewed together back to Negotiation for a fresh quotation; a stay refused is named. */
+export async function renegotiateTrip(session: Session, entryId: string, reason: string) {
+  return apiRequest<{ moved: string[]; notMoved: Array<{ entryId: string; message: string }> }>(`/api/entries/${entryId}/trip/renegotiate`, {
+    method: "POST",
+    session,
+    body: { reason },
+  });
+}
+
+export async function moveTripToSetUp(session: Session, entryId: string, version?: number) {
+  return apiRequest<{ moved: string[]; notMoved: Array<{ entryId: string; message: string }> }>(`/api/entries/${entryId}/trip/to-set-up`, {
+    method: "POST",
+    session,
+    body: { version },
+  });
 }

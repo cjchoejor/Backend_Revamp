@@ -325,7 +325,7 @@ async function main() {
           modeOfContact: p.modeOfContact,
           notes,
           isActive: true,
-        }, ACTOR_ID);
+        }, ACTOR_ID, { source: "IMPORT" });
         partyId = agent.id;
         okAgents++;
       } else {
@@ -338,7 +338,7 @@ async function main() {
           billingAddress: null,   // backfill later in admin UI
           notes,
           isActive: true,
-        }, ACTOR_ID);
+        }, ACTOR_ID, { source: "IMPORT" });
         partyId = corp.id;
         okCorps++;
       }

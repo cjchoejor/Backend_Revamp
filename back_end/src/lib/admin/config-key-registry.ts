@@ -92,9 +92,7 @@ export const CONFIG_KEY_REGISTRY: Record<string, ConfigKeyMeta> = {
   // expiry.s1.defaultTtlSeconds accepts either a raw number (uniform TTL) OR
   // { DEFAULT: number, [perSource]: number } (per-source overrides), so no shape validator.
   "expiry.s1.defaultTtlSeconds": { owner: "ConfigurationService" },
-  "expiry.s2.quotationValidityDays": { validate: positiveInt, owner: "ConfigurationService" },
   "expiry.s2.speculativeHoldTtlSeconds": { validate: positiveInt, owner: "ConfigurationService" },
-  "expiry.s2.negotiationTtlSeconds": { validate: positiveInt, owner: "ConfigurationService" },
   "expiry.s3.committedHoldTtlSeconds": { validate: positiveInt, owner: "ConfigurationService" },
   "expiry.defaults": { validate: isObject, owner: "ConfigurationService" },
   // Park-expiry threshold (Part 13 §Seeded Defaults — 30 days from park date). Accepts a raw
@@ -132,9 +130,12 @@ export const CONFIG_KEY_REGISTRY: Record<string, ConfigKeyMeta> = {
   "cancellation.policyTiers": own("CancellationPolicyService"),
 
   // Financial (FinancialConfigurationService)
-  "advancePayment.thresholds": own("FinancialConfigurationService", isObject),
   "advancePayment.followUpWindowSeconds": own("FinancialConfigurationService", positiveInt),
   "advancePayment.escalationWindowSeconds": own("FinancialConfigurationService", positiveInt),
+  // Who else may mark the money reconciled; the GM and admins always can (2026-11-05).
+  "advancePayment.reconciliation.alsoAllowed": own("FinancialConfigurationService", (value) =>
+    Array.isArray(value) && value.every((v) => v === "L1" || v === "L2") ? null : "must be a list of L1 and L2",
+  ),
   "proformaInvoice.templates": own("FinancialConfigurationService", isObject),
   "damage.rateList": own("FinancialConfigurationService"),
   "payment.followUpIntervalDays": own("FinancialConfigurationService", positiveInt),

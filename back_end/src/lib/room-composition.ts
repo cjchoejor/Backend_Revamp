@@ -651,28 +651,25 @@ export type BookingDiscountRequest = { percent?: number | null; amount?: number 
 export type BookingDiscountResult = {
   /** Totals after the deduction — same shape as the undiscounted run. */
   totals: CompositionTotals;
-  /** Money off the grand total, exactly as promised to the guest. */
+  /** What the grand total falls by: the net taken off, and the service charge and GST on it. */
   amountOffTotal: Prisma.Decimal;
-  /** The same deduction as a share of the grand total. Authority ceilings are measured in this. */
+  /** The deduction as a share of the net value. Authority ceilings are measured in this. */
   effectivePercent: Prisma.Decimal;
-  /** The net-level reduction that produces it. */
+  /** The money taken off the net value: exactly the amount asked for. */
   netReduction: Prisma.Decimal;
 };
 
 /**
- * Take a booking discount off the composition GRAND TOTAL — percent or flat amount, same result.
+ * Take a booking discount off the NET VALUE — percent or flat amount — and work service charge and
+ * GST out on what is left (2026-11-05, operator: "net value is 1000 and discount amount of 100 is done,
+ * then net should be 900 and then service charge and gst should be applied on top of it"). It replaces
+ * the 2026-08-04 reading, where a flat amount came off the grand total: Nu 100 there took only Nu 86.58
+ * off the net. A percent comes to the same figures either way, since tax is proportional to the net.
  *
- * Operator ruling 2026-08-04: a discount applies to everything in the table, meals and extra beds
- * included, not to the room rate alone. Per-room negotiated rates are a separate mechanism — they
- * decide what a room costs, and the discount then comes off whatever the table adds up to.
- *
- * The deduction is applied to each room's NET rather than subtracted from the tax-inclusive
- * total. Subtracting at the end would leave service charge and GST computed on the undiscounted
- * figure, so the hotel would remit GST on money it never received. Because
- * `total = net × (1 + sc) × (1 + gst)` for every room, scaling all nets by one ratio scales the
- * grand total by that same ratio — the guest sees exactly the figure asked for, and each room's
- * tax follows the true consideration. Rooms differ in whether SC/GST apply at all, which is why
- * this recomputes tax per room instead of working back through one blended factor.
+ * It applies to everything in the table, meals and extra beds included. Per-room negotiated rates are
+ * a separate mechanism: they decide what a room costs, and the discount comes off what the table adds
+ * up to. Every room's net moves by one ratio, and tax is worked out again per room, since rooms differ
+ * in whether service charge and GST apply at all.
  *
  * Displayed RATES are left untouched: they are what the operator negotiated, and the document
  * prints them as the original prices with the deduction shown as its own line.
@@ -688,13 +685,13 @@ export function applyBookingDiscountToTotals(
   const wantsAmount = amt != null && amt > 0;
   if (!wantsPercent && !wantsAmount) return null;
 
-  const grand = totals.total;
-  if (grand.lte(ZERO)) return null;
+  const net = totals.subtotal;
+  if (net.lte(ZERO)) return null;
 
-  const asked = wantsAmount ? new Prisma.Decimal(amt as number) : grand.mul(new Prisma.Decimal(pct as number)).div(100);
-  // A discount bigger than the bill settles the bill; it never turns into a refund.
-  const off = asked.gt(grand) ? grand : asked;
-  const ratio = grand.sub(off).div(grand);
+  const asked = wantsAmount ? new Prisma.Decimal(amt as number) : net.mul(new Prisma.Decimal(pct as number)).div(100);
+  // A discount bigger than the net value settles the bill; it never turns into a refund.
+  const off = asked.gt(net) ? net : asked;
+  const ratio = net.sub(off).div(net);
 
   const perRoom = totals.perRoom.map((r, i) => {
     const ctx = rooms[i]?.ctx;
@@ -721,9 +718,9 @@ export function applyBookingDiscountToTotals(
       gst: sum((r) => r.gst),
       total: sum((r) => r.total),
     },
-    amountOffTotal: off,
-    effectivePercent: off.div(grand).mul(100),
-    netReduction: totals.subtotal.sub(sum((r) => r.subtotal)),
+    amountOffTotal: totals.total.sub(sum((r) => r.total)),
+    effectivePercent: off.div(net).mul(100),
+    netReduction: off,
   };
 }
 

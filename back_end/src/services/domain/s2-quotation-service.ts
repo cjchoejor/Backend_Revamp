@@ -1,16 +1,19 @@
+import { resolveStandsUntil } from "../../lib/quote-validity.js";
+import { stopQuoteValidityTx } from "./proforma-validity-service.js";
+import { quoteStandsUntil, quoteValidityWindow } from "../../lib/quote-validity.js";
 import type { PrismaClient } from "@prisma/client";
 import { ActorLevel, InvoiceState, InvoiceType, MealPlanType, QuotationState, Stage } from "@prisma/client";
 import { NotFoundError, PolicyGateBlockedError, StateTransitionError, ValidationError } from "../../lib/errors.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
-import { extendNegotiationExpiryTx } from "../../lib/negotiation-expiry.js";
+import { followQuoteValidityTx } from "../../lib/negotiation-expiry.js";
 import * as documentGenerationService from "../infrastructure/document-generation-service.js";
 import { enforceDiscountApprovalBeforeSend } from "../../policies/09-discount/p23-discount-send-requires-approval.js";
 import { enforceDiscountApprovalAuthority, resolveActorDiscountCeilings } from "../../policies/09-discount/p23-discount-approval-authority.js";
 import { getRegistryPolicy } from "../../lib/policy-registry-runtime.js";
 import { dispatchStageEmailBestEffort } from "../infrastructure/stage-email-helpers.js";
 import { renderQuotationEmail } from "../infrastructure/stage-email-templates.js";
-import { computeStayCharges } from "../infrastructure/compute-stay-charges.js";
+import { computeStayCharges, stayBreakdownFromTerms } from "../infrastructure/compute-stay-charges.js";
 import { validateDiscountRequestAgainstAuthorityBands } from "../../policies/09-discount/p23-discount-request-constraints.js";
 import { enforceAckOpenLoopResolutionRequiresFom } from "../../policies/20-communication-acknowledgement-tracking/p52-ack-open-loop-resolution-requires-fom.js";
 import {
@@ -33,6 +36,7 @@ import { resolveBelowMsrGmWaiverForS2 } from "../../policies/08-pricing-rate-pla
 import { enforceFocEntitlementForS2GroupQuotation } from "../../policies/15-foc/p37-foc-entitlement-for-s2-group-quotation.js";
 import * as communicationService from "./communication-service.js";
 import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.js";
+import { nextQuotationNumberTx, printedQuotationNumber } from "../../lib/document-numbers.js";
 import { resolveRatePackageForBooking, type AgentRateBreakdown } from "../../lib/rate-package-resolution.js";
 import { loadChildPolicyBundle, computeGroupMealCharge } from "./child-policy-service.js";
 import { readOptionSelected, firstRoomId } from "../../lib/option-selected-reader.js";
@@ -160,8 +164,9 @@ export type RoomCompositionServiceInput = {
 export type QuotationDraftInput = {
   requestedDiscount?: { discountPercent?: number; discountAmount?: number; discountBasis: string } | null;
   notes?: string;
-  /** Validity window in days (1–30, ending before check-in) — see `resolveQuotationValidity`. */
+  /** How long the offer stands: days up to check-in, or hours when check-in is today. See `quoteValidityWindow`. */
   validDays?: number;
+  validHours?: number;
   currency?: string;
   belowMsrGmWaiver?: { acknowledged: true; rationale: string } | null;
   /**
@@ -483,13 +488,14 @@ async function prepareQuotationDraft(
   // Undiscounted reference run — populated only when a discount actually moved the room rate,
   // so the document can print ORIGINAL prices with an explicit deduction (2026-08-02).
   let compositionTotalsPreDiscount: ReturnType<typeof computeQuotationCompositionTotals> | null = null;
-  /** The booking discount as applied, once there was a grand total to measure it against. */
+  /** The booking discount as applied, once there was a net value to take it off. */
   let compositionDiscount: {
     requestedPercent: number | null;
     requestedAmount: number | null;
     amountOffTotal: number;
     effectivePercent: number;
     netReduction: number;
+    appliesTo: "NET";
     basis: string;
   } | null = null;
   /** Rooms whose mandatory extra bed was added automatically (3+ adults, none supplied). */
@@ -624,7 +630,7 @@ async function prepareQuotationDraft(
           });
           continue;
         }
-        // No discount here: under the composition model it comes off the grand total once the
+        // No discount here: under the composition model it comes off the net value once the
         // rooms are costed, so folding it into the rate as well would take it twice.
         const typePricing = await resolveRatePlanPricingForS2Quotation(prisma, {
           isDeficientGuestTier,
@@ -758,7 +764,7 @@ async function prepareQuotationDraft(
     // with a per-room negotiatedRoomRate ignore defaultRoomRate, so they price identically
     // in both runs — accurate: a negotiated rate is not a discounted one.
     /**
-     * The booking discount, taken off the GRAND TOTAL now that there is one.
+     * The booking discount, taken off the NET VALUE now that there is one (2026-11-05).
      *
      * The undiscounted run becomes `compositionTotalsPreDiscount` — the ORIGINAL prices the
      * document prints, with the deduction shown as its own line (2026-08-02 ruling). Rates are
@@ -771,7 +777,7 @@ async function prepareQuotationDraft(
         amount: requested.discountAmount ?? null,
       });
       if (applied) {
-        // The ceiling is written in percent, so an amount is measured as its share of the total
+        // The ceiling is written in percent, so an amount is measured as its share of the net value
         // before being checked — otherwise a flat figure would slip past the L1/L2/L3 bands.
         const effectivePct = Number(round2(applied.effectivePercent));
         if (requested.discountAmount != null) {
@@ -791,6 +797,9 @@ async function prepareQuotationDraft(
           amountOffTotal: Number(round2(applied.amountOffTotal)),
           effectivePercent: effectivePct,
           netReduction: Number(round2(applied.netReduction)),
+          // From 2026-11-05: off the net, tax on what is left. A quotation without this was priced
+          // with a flat amount off the total, and its stored figures stand as they were.
+          appliesTo: "NET",
           basis: requested.discountBasis,
         };
       }
@@ -969,9 +978,9 @@ async function prepareQuotationDraft(
               }
             : {}),
           // The booking discount as actually applied: what was asked for (percent OR flat
-          // amount), the money it took off the grand total, and the same figure as a share of
-          // that total — which is what the authority bands are written in and what any later
-          // reader should quote. `netReduction` is where it was taken so tax follows it.
+          // amount), the money it took off the net value and off the total, and its share of the net,
+          // which is what the authority bands are written in. `netReduction` is where it was taken,
+          // so tax follows it.
           ...(compositionDiscount ? { compositionDiscount } : {}),
         }
       : {}),
@@ -1029,7 +1038,7 @@ async function discountAboveBandError(
   measuredPercent: number | null,
 ) {
   const ceilings = await resolveActorDiscountCeilings(prisma);
-  const pct = measuredPercent != null ? ` (${Number(round2(measuredPercent))}% of the total)` : "";
+  const pct = measuredPercent != null ? ` (${Number(round2(measuredPercent))}% of the net value)` : "";
   const aboveFom = measuredPercent != null && toDecimal(measuredPercent).gt(toDecimal(ceilings.l2MaxPercent));
   const aboveGm = measuredPercent != null && toDecimal(measuredPercent).gt(toDecimal(ceilings.l3MaxPercent));
   const who =
@@ -1040,49 +1049,18 @@ async function discountAboveBandError(
 }
 
 /**
- * Resolve a quotation's validity window (2026-08-06, operator ruling: validity is chosen when
- * the quote is GENERATED — under the generate-vs-send rule the generated quote IS the offer, so
- * its clock starts at creation and sending does not restart it).
- *
- * Rules:
- *  - An explicit ask is 1–30 whole days (hard cap 30). Omitted → `registry.quotationValidity.days`,
- *    else the `expiry.s2.quotationValidityDays` config.
- *  - The window must end BEFORE CHECK-IN — an offer for a stay cannot outlive the stay's start.
- *    An explicit over-ask is rejected naming the maximum; the admin DEFAULT is clamped silently
- *    (the operator didn't choose it, and erroring would make quotes uncreatable near arrival).
- *    Check-in within 24h clamps any window to check-in itself — no whole-day validity fits, so
- *    the largest expressible window is used.
- *  - Past or absent check-in → only the 1–30 rule applies.
+ * When a quotation's validity ends (2026-08-06, operator ruling: it is chosen when the quote is
+ * GENERATED — under the generate-vs-send rule the generated quote IS the offer, so its clock starts at
+ * creation and sending does not restart it). With nothing asked it runs as long as it may. Asking for
+ * more than `quoteValidityWindow` allows is refused, naming the most it can be.
  */
 export async function resolveQuotationValidity(
   prisma: PrismaClient,
   entryId: string,
-  requestedDays: number | undefined,
+  ask: { validDays?: number; validHours?: number },
   now: Date,
-): Promise<{ validUntil: Date; validDays: number }> {
-  if (requestedDays != null && (!Number.isInteger(requestedDays) || requestedDays < 1 || requestedDays > 30)) {
-    throw new ValidationError("Quote validity must be between 1 and 30 days");
-  }
-  const policy = await getRegistryPolicy(prisma, "registry.quotationValidity.days");
-  const registryDefault =
-    policy && policy.enabled !== false && typeof policy.days === "number" ? (policy.days as number) : null;
-  const days =
-    requestedDays ?? registryDefault ?? (await requireActiveConfigValue<number>(prisma, "expiry.s2.quotationValidityDays"));
-  if (!Number.isFinite(days) || days < 1) throw new ValidationError("validDays must be >= 1");
-
-  let validUntil = new Date(now.getTime() + Number(days) * 86400_000);
-  const entry = await prisma.entry.findUnique({ where: { id: entryId }, select: { checkInDate: true } });
-  const checkIn = entry?.checkInDate ?? null;
-  if (checkIn && checkIn > now && validUntil > checkIn) {
-    const maxDays = Math.floor((checkIn.getTime() - now.getTime()) / 86400_000);
-    if (requestedDays != null && maxDays >= 1) {
-      throw new ValidationError(
-        `Quote validity must end before check-in (${checkIn.toISOString().slice(0, 10)}) — at most ${maxDays} day${maxDays === 1 ? "" : "s"} from today`,
-      );
-    }
-    validUntil = checkIn;
-  }
-  return { validUntil, validDays: Number(days) };
+): Promise<{ validUntil: Date }> {
+  return resolveStandsUntil(prisma, entryId, ask, now, "quote");
 }
 
 /** Arm the W15 validity clock on a freshly created DRAFT — same record shape `sendQuotation`
@@ -1135,20 +1113,21 @@ async function createQuotationInner(
   } = await prepareQuotationDraft(prisma, entryId, actorId, input);
 
   // Validity starts NOW — at generation, not at send (2026-08-06 operator ruling).
-  const validity = await resolveQuotationValidity(prisma, entryId, input.validDays, now);
+  const validity = await resolveQuotationValidity(prisma, entryId, input, now);
 
   return prisma.$transaction(async (tx) => {
-    const referenceNumber = await allocateReadableId(tx, "QUOTATION" as const);
+    // The booking's number, its next version (2026-11-07): a new booking takes a number, every
+    // later quotation of it keeps that number as a new version.
+    const num = await nextQuotationNumberTx(tx, entryId);
     const created = await tx.quotation.create({
       data: {
-        // Use the readable QUO-YYYYMMDD-NNNN as the primary key so downstream FKs
-        // (QuotationLine.quotationId) hold the readable value, not a UUID. Matches the
-        // Invoice pattern.
-        id: referenceNumber,
+        // The readable number is the primary key on a first version (QUO-YYYYMMDD-NNNN) and
+        // `QUO-…-vN` on a later one, so downstream FKs (QuotationLine.quotationId) stay readable.
+        id: num.id,
         entryId,
         segmentId,
-        versionNumber: nextVersion,
-        referenceNumber,
+        versionNumber: num.versionNumber,
+        referenceNumber: num.referenceNumber,
         state: QuotationState.DRAFT,
         validUntil: validity.validUntil,
         commercialTerms: commercialTerms as any,
@@ -1182,7 +1161,7 @@ async function createQuotationInner(
           quotationId: created.id,
           entryId,
           segmentId,
-          versionNumber: nextVersion,
+          versionNumber: created.versionNumber,
           validUntil: validity.validUntil.toISOString(),
           msrGmWaiver: Boolean(msrWaiver),
         },
@@ -1192,8 +1171,8 @@ async function createQuotationInner(
     // The countdown is real from this moment — W15 expires a lapsed DRAFT, and the desk's
     // timer feed shows "Quote validity" alongside the other clocks.
     await armDraftValidityTimerTx(tx, { id: created.id, entryId }, validity.validUntil, actorId);
-    // The Negotiation clock never lapses a booking while the guest holds a live offer (2026-09-29).
-    await extendNegotiationExpiryTx(tx, await getTimerEngine(), { entryId, validUntil: validity.validUntil, actorId });
+    // The Negotiation clock follows the offer: never a lapse while the guest holds it (2026-09-29; 2026-11-05).
+    await followQuoteValidityTx(tx, await getTimerEngine(), { entryId, validUntil: validity.validUntil, actorId });
     // Discount approved AT generation (2026-08-07): the generating actor held the authority
     // (checked in prepareQuotationDraft), so the approval trace lands with the creation and
     // the p23 send / S2-exit gate is satisfied from birth — no post-hoc approval step.
@@ -1366,15 +1345,15 @@ export async function createGroupQuotation(
 
   return prisma.$transaction(async (tx) => {
     const now = new Date();
-    const referenceNumber = await allocateReadableId(tx, "QUOTATION" as const, now);
+    const num = await nextQuotationNumberTx(tx, entryId, now);
     const created = await tx.quotation.create({
       data: {
         // Readable ID as primary key — see comment in createQuotation above.
-        id: referenceNumber,
+        id: num.id,
         entryId,
         segmentId,
-        versionNumber: nextVersion,
-        referenceNumber,
+        versionNumber: num.versionNumber,
+        referenceNumber: num.referenceNumber,
         state: QuotationState.DRAFT,
         commercialTerms: commercialTerms as any,
         // Group quotations: same shape as single-party — totalAmount = per-room rate × roomCount.
@@ -1512,6 +1491,7 @@ async function supersedeQuotationWithNewDraftInner(
     requestedDiscount?: { discountPercent?: number; discountAmount?: number; discountBasis: string } | null;
     /** Validity of the regenerated draft — same rules as create; omitted → default, re-anchored to now. */
     validDays?: number;
+    validHours?: number;
     currency?: string;
     belowMsrGmWaiver?: { acknowledged: true; rationale: string } | null;
     roomCompositions?: RoomCompositionServiceInput[];
@@ -1577,7 +1557,7 @@ async function supersedeQuotationWithNewDraftInner(
   const now = new Date();
   // A new round is a new offer: its validity re-anchors to now (explicit ask or default),
   // never inheriting the outgoing version's remaining clock.
-  const validity = await resolveQuotationValidity(prisma, q.entryId, input.validDays, now);
+  const validity = await resolveQuotationValidity(prisma, q.entryId, input, now);
 
   return prisma.$transaction(async (tx) => {
     // Cancel every timer belonging to the prior version — both the Quotation-anchored ones
@@ -1604,15 +1584,16 @@ async function supersedeQuotationWithNewDraftInner(
       data: { state: QuotationState.SUPERSEDED, supersededAt: now },
     });
 
-    const referenceNumber = await allocateReadableId(tx, "QUOTATION" as const, now);
+    // The same number as the quotation it replaces, its next version (2026-11-07).
+    const num = await nextQuotationNumberTx(tx, prior.entryId, now);
     const created = await tx.quotation.create({
       data: {
         // Readable ID as primary key — see comment in createQuotation above.
-        id: referenceNumber,
+        id: num.id,
         entryId: prior.entryId,
         segmentId: prior.segmentId,
-        versionNumber: prep.nextVersion,
-        referenceNumber,
+        versionNumber: num.versionNumber,
+        referenceNumber: num.referenceNumber,
         state: QuotationState.DRAFT,
         validUntil: validity.validUntil,
         commercialTerms: prep.commercialTerms as any,
@@ -1633,7 +1614,7 @@ async function supersedeQuotationWithNewDraftInner(
 
     // The new draft's validity clock, armed like create's — the prior version's was cancelled above.
     await armDraftValidityTimerTx(tx, { id: created.id, entryId: prior.entryId }, validity.validUntil, actorId);
-    await extendNegotiationExpiryTx(tx, await getTimerEngine(), { entryId: prior.entryId, validUntil: validity.validUntil, actorId });
+    await followQuoteValidityTx(tx, await getTimerEngine(), { entryId: prior.entryId, validUntil: validity.validUntil, actorId });
 
     // Discount approved AT generation — same rule as createQuotation (2026-08-07): a
     // regenerated round with a discount is a fresh offer, approved by whoever generated it.
@@ -1676,7 +1657,7 @@ async function supersedeQuotationWithNewDraftInner(
           priorQuotationId: prior.id,
           newQuotationId: created.id,
           priorVersion: prior.versionNumber,
-          newVersion: prep.nextVersion,
+          newVersion: num.versionNumber,
           priorTotalAmount: prior.totalAmount?.toString?.() ?? null,
           newTotalAmount: created.totalAmount?.toString?.() ?? null,
           ...diff,
@@ -1695,7 +1676,7 @@ export async function approveDiscount(prisma: PrismaClient, quotationId: string,
   const discount = (q.commercialTerms as any)?.requestedDiscount;
   if (!discount) throw new ValidationError("No requestedDiscount present on quotation");
   // A flat-amount discount has no discountPercent — authority is measured by its share of the
-  // grand total, which the pricing run stored as compositionDiscount.effectivePercent. Without
+  // net value, which the pricing run stored as compositionDiscount.effectivePercent. Without
   // the fallback an amount-based request would be gated against NaN.
   const pct = Number(
     discount.discountPercent ?? (q.commercialTerms as any)?.compositionDiscount?.effectivePercent,
@@ -1916,6 +1897,16 @@ export async function applyDiscount(
 }
 
 /** SIG-S2 §6.1 — worker entrypoint for quotation expiry (Policy 7). */
+/** A live proforma made in this quotation's pass. */
+async function proformaStandsForQuote(db: PrismaClient | Prisma.TransactionClient, q: { entryId: string; segmentId: string | null }) {
+  const seg = q.segmentId ? await db.segment.findUnique({ where: { id: q.segmentId }, select: { startedAt: true } }) : null;
+  const made = await db.invoice.findFirst({
+    where: { entryId: q.entryId, invoiceType: InvoiceType.PROFORMA, state: { not: InvoiceState.SUPERSEDED }, ...(seg ? { createdAt: { gte: seg.startedAt } } : {}) },
+    select: { id: true },
+  });
+  return !!made;
+}
+
 export async function expireQuotation(
   prisma: PrismaClient,
   input: { quotationId?: string; timerRecordId?: string },
@@ -1932,6 +1923,16 @@ export async function expireQuotation(
     return { skipped: true, reason: "NOT_EXPIRABLE_STATE" } as const;
   }
   if (q.validUntil && q.validUntil > now) return { skipped: true, reason: "NOT_DUE" } as const;
+
+  // Once a proforma of this pass is made the quote no longer runs out (2026-11-05, operator: "when a
+  // proforma is generated, the qoute validity should stop"). It lapsed 18 minutes after the guest paid.
+  if (await proformaStandsForQuote(prisma, q)) {
+    await prisma.timerRecord.updateMany({
+      where: { entityType: "Quotation", entityId: quotationId, status: "SCHEDULED", timerType: { in: ["QUOTATION_ACK_TRACKER", "QUOTATION_VALIDITY_W15"] } },
+      data: { status: "CANCELLED", cancelledAt: now, cancelledBy: "SYSTEM", cancelledReason: "PROFORMA_GENERATED" },
+    });
+    return { skipped: true, reason: "PROFORMA_GENERATED" } as const;
+  }
 
   const engine = await getTimerEngine();
   await prisma.$transaction(async (tx) => {
@@ -1989,6 +1990,7 @@ async function sendQuotationInner(
   actorId: string,
   input: {
     validDays?: number;
+    validHours?: number;
     sentTo?: string;
     channel?: string;
     recipientAddress?: string;
@@ -2001,6 +2003,11 @@ async function sendQuotationInner(
     hidePrices?: boolean;
     /** Name every night on the copy sent (2026-10-30) — the stored PDF writes runs short. */
     nightsEach?: boolean;
+    /**
+     * Sent as part of the trip's combined paper (2026-11-07): recorded as sent like any other, but
+     * not emailed on its own — the trip's paper is the one email. Internal; never on an HTTP body.
+     */
+    viaTripPaper?: { id: string; number: string };
   },
 ) {
   const q = await prisma.quotation.findUnique({ where: { id: quotationId } });
@@ -2015,13 +2022,13 @@ async function sendQuotationInner(
 
   // Validity is set at GENERATION since 2026-08-06 (operator ruling) — sending does not restart
   // the clock. A draft that carries a future `validUntil` keeps it; an explicit `validDays`
-  // still wins (API compat — same 1–30 + before-check-in rules as create), and a legacy draft
-  // with no window at all resolves the default, anchored to now.
+  // still wins (API compat — the same rule as create), and a legacy draft with no window at all
+  // resolves the default, anchored to now.
   const now = new Date();
   const validUntil =
-    input.validDays == null && q.validUntil && q.validUntil > now
+    input.validDays == null && input.validHours == null && q.validUntil && q.validUntil > now
       ? q.validUntil
-      : (await resolveQuotationValidity(prisma, q.entryId, input.validDays, now)).validUntil;
+      : (await resolveQuotationValidity(prisma, q.entryId, input, now)).validUntil;
 
   const updated = await prisma.$transaction(async (tx) => {
     const updatedRow = await tx.quotation.update({
@@ -2052,7 +2059,7 @@ async function sendQuotationInner(
       { quotationId },
       { startAfter: validUntil },
     );
-    await extendNegotiationExpiryTx(tx, engine, { entryId: q.entryId, validUntil, actorId });
+    await followQuoteValidityTx(tx, engine, { entryId: q.entryId, validUntil, actorId });
     const ackWindow = await requireActiveConfigValue<Record<string, number>>(tx as any, "acknowledgement.windowPerType");
     const quotationAckSeconds = Number((ackWindow as any)?.quotation ?? 86400);
     const ackFireAt = new Date(now.getTime() + quotationAckSeconds * 1000);
@@ -2146,6 +2153,8 @@ async function sendQuotationInner(
         payload: { quotationId },
       },
     });
+    // Sent after its proforma was made (from the Papers tab): it has done its work, so no clock runs.
+    if (await proformaStandsForQuote(tx, q)) await stopQuoteValidityTx(tx, { entryId: q.entryId, actorId, now });
 
     await tx.traceEvent.create({
       data: {
@@ -2180,7 +2189,7 @@ async function sendQuotationInner(
   // one), else the guest's own — it used to go to the guest's address whatever was typed, the
   // quotation twin of issue 41. A send the desk records as made on WhatsApp is not also emailed.
   const channel = (input.channel ?? "EMAIL").toUpperCase();
-  if (channel === "EMAIL") {
+  if (channel === "EMAIL" && !input.viaTripPaper) {
     const typed = (input.recipientAddress ?? input.sentTo ?? "").trim();
     await sendQuotationEmailBestEffort(
       prisma,
@@ -2217,7 +2226,9 @@ async function sendQuotationEmailBestEffort(
   // createGroupQuotation) or fall back to entry.numberOfRooms. Falls back to 1 for legacy
   // pre-multi-room quotations that don't have the field.
   const roomCount = Math.max(1, Number((terms as any).roomCount) || entry.numberOfRooms || 1);
-  const breakdown = await computeStayCharges(prisma, nightly, nights, roomCount);
+  // What the paper prints, not rate × nights × rooms, which left out meals, beds and each room's own rate.
+  const priced = stayBreakdownFromTerms(terms);
+  const breakdown = priced ?? (await computeStayCharges(prisma, nightly, nights, roomCount));
   // Who the quote goes to — the invoices' rule (2026-09-19): the address typed at the desk, else
   // the agency or company that booked (the quote carries their rates — it is never sent to the
   // traveller by default), else the guest. Lazy import: s9-service pulls in half the domain.
@@ -2227,11 +2238,11 @@ async function sendQuotationEmailBestEffort(
   const content = renderQuotationEmail({
     guestDisplayName: recipient.greetName,
     inquiryReadableId: entry.inquiryId,
-    quotationRef: q.referenceNumber ?? q.id,
+    quotationRef: q.referenceNumber ? await printedQuotationNumber(prisma, q) : q.id,
     checkInDate: ci,
     checkOutDate: co,
     guestCount: entry.guestCount ?? 1,
-    nightlyRate: nightly,
+    nightlyRate: priced ? null : nightly,
     currency,
     breakdown,
     validUntil: q.validUntil ?? new Date(),

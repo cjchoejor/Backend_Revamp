@@ -8,8 +8,9 @@
 import type { TraceEvent } from "@/lib/trace/humanize";
 import { STEP_NAMES } from "./steps";
 import { translateMessage } from "./words";
-import { fmtRange, money as fmtMoney } from "./format";
+import { fmtRange, fmtStay, money as fmtMoney } from "./format";
 import type { HistoryNames } from "./history-walks";
+import { paperIdWords } from "@/lib/ds/papers";
 
 const WORDS: Record<string, string> = {
   "ENTRY.CREATED": "Booking recorded",
@@ -34,6 +35,14 @@ const WORDS: Record<string, string> = {
   "COMMITTED_HOLD.PLACED": "Rooms blocked",
   "COMMITTED_HOLD.RELEASED": "Block released",
   "COMMITTED_HOLD.EXPIRED": "Block ran out",
+  "COMMITTED_HOLD.TIME_ENDED": "Block time ended · the rooms stay held and the FOM and GM were told",
+  "NOTIFICATION.BLOCK_TIME_ENDED": "The FOM and GM were told the block's time ended",
+  "NOTIFICATION.REFUND_DUE": "The FOM, GM and admin were told a refund is due",
+  "ADVANCE_PAYMENT.EARLIER_CARRIED": "The advance paid before went on the new proforma",
+  "REFUND.ASKED": "Refund asked for",
+  "REFUND.RECORDED": "Refund recorded",
+  "REFUND.KEPT": "No refund · the money was kept",
+  "REFUND.CLOSED_BY_CANCELLATION": "Refund closed · the cancellation dealt with the money",
   "COMMITTED_HOLD.CONFIRMED": "Block confirmed on reserving",
   "COMMITTED_HOLD.EXPIRY_SET": "Hold time set for this booking",
   "COMMITTED_HOLD.EXPIRY_CLEARED": "Hold time back to the house window",
@@ -74,6 +83,9 @@ const WORDS: Record<string, string> = {
   "ROOM.BED_TYPE_RESET_TO_USUAL": "Room's beds back to its usual setup",
   "RESERVATION.CONFIRMATION_VOUCHER_REMADE": "Confirmation voucher made again",
   "DOCUMENT.SENT": "Held paper sent",
+  "TRIP_PAPER.MADE": "The trip's paper made",
+  "TRIP_PAPER.SENT": "The trip's paper sent",
+  "TRIP_PAPER.PAYMENT_SHARED": "A payment for the trip shared between the stays",
   "DOCUMENT.NOT_SENT": "Held paper not sent",
   "ADVANCE_PAYMENT.REQUIREMENT_CARRIED": "Advance asked carried to the new pass",
   "ADVANCE_PAYMENT.PLAN_CARRIED": "Payment plan carried to the new pass",
@@ -92,11 +104,16 @@ const WORDS: Record<string, string> = {
   "PRE_ARRIVAL_EMAIL.SENT": "Pre-arrival message emailed",
   "ADVANCE_PAYMENT.RECORDED": "Advance received",
   "ADVANCE_PAYMENT.REQUIREMENT_SET": "Advance asked for",
+  "ADVANCE_PAYMENT.PARTY_RULE_APPLIED": "Advance asked for · the travel agent's or company's own percentage",
   "ADVANCE_PAYMENT.PLAN_RECORDED": "Payment plan recorded",
   "ADVANCE_PAYMENT.RECONCILED": "Money position signed off",
-  "ADVANCE_PAYMENT.RECONCILIATION_UNDONE": "Money sign-off taken back — pressed by mistake",
+  "ADVANCE_PAYMENT.COVERED_BY_TRIP": "Advance covered by the trip's payment",
+  "FOLIO.TRIP_MONEY_MOVED": "The trip's money moved between the stays' bills",
+  "TRIP_PAPER.REPLACED": "The trip's paper replaced — the stays changed",
+  "ADVANCE_PAYMENT.RECONCILIATION_UNDONE": "Money sign-off taken back",
   "ADVANCE_PAYMENT.PROMISE_LAPSED": "Promised advance did not arrive",
   "FOLIO.PAYMENT_RECORDED": "Payment received",
+  "FOLIO.PAYMENT_DELETED": "Payment deleted",
   "FOLIO.CHARGE_POSTED": "Charge posted",
   "FOLIO.CORRECTION_POSTED": "Charge corrected",
   "CHECK_IN.COMPLETED": "Checked in",
@@ -142,6 +159,7 @@ const WORDS: Record<string, string> = {
   "RESERVATION.CONFIRMATION_VOUCHER_PDF_GENERATED": "Voucher printed to PDF",
   "CANCELLATION_CONFIRMATION.RENDERED": "Cancellation confirmation printed",
   "CANCELLATION_DISCLOSURE.RECORDED": "Cancellation terms disclosed",
+  "CANCELLATION_DISCLOSURE.AUTO_RECORDED": "Cancellation terms recorded by the system",
   "GUEST_PROFILE.CREATED": "Guest record created",
   "GUEST.IDENTITY_DETAILS_UNLOCKED": "Guest details opened for changes",
   "GUEST.IDENTITY_VERIFIED": "Identity verified",
@@ -270,8 +288,8 @@ function roomChangeWords(p: RoomChangedPayload): string {
   }
   if (p.kind === "DATES") {
     const d = p.dates ?? null;
-    if (d?.trimmed) return d.newCheckInDate && d.newCheckOutDate ? `Stay shortened to ${fmtRange(d.newCheckInDate, d.newCheckOutDate)}` : "Stay shortened";
-    return d?.newCheckInDate && d.newCheckOutDate ? `Stay moved to ${fmtRange(d.newCheckInDate, d.newCheckOutDate)}` : "Stay moved to other dates";
+    if (d?.trimmed) return d.newCheckInDate && d.newCheckOutDate ? `Stay shortened to ${fmtStay(d.newCheckInDate, d.newCheckOutDate)}` : "Stay shortened";
+    return d?.newCheckInDate && d.newCheckOutDate ? `Stay moved to ${fmtStay(d.newCheckInDate, d.newCheckOutDate)}` : "Stay moved to other dates";
   }
   if (p.kind === "SETUP") return from ? `Room ${from} set up differently` : "Room set up differently";
   if (p.moves?.length) return `${p.moves.length > 1 ? "Rooms" : "Room"} changed — ${p.moves.map((m) => `${m.from} → ${m.to}`).join(" · ")}`;
@@ -289,7 +307,7 @@ function roomChangeDetail(p: RoomChangedPayload): string[] {
   } else if (p.kind === "DATES") {
     // A date move: where the stay was, the rooms that moved with it, the rooms priced afresh.
     const d = p.dates ?? null;
-    if (d?.priorCheckInDate && d.priorCheckOutDate) bits.push(`from ${fmtRange(d.priorCheckInDate, d.priorCheckOutDate)}`);
+    if (d?.priorCheckInDate && d.priorCheckOutDate) bits.push(`from ${fmtStay(d.priorCheckInDate, d.priorCheckOutDate)}`);
     const moved = (d?.rooms ?? []).filter((r) => r.fromRoomNumber && r.toRoomNumber);
     if (moved.length) bits.push(`rooms ${moved.map((r) => `${r.fromRoomNumber} → ${r.toRoomNumber}`).join(" · ")}`);
     const fresh = Object.entries(d?.priceModes ?? {}).filter(([, m]) => m === "NEW_DATES").map(([no]) => no);
@@ -300,7 +318,7 @@ function roomChangeDetail(p: RoomChangedPayload): string[] {
   }
   if (p.moveId) bits.push(p.moveId);
   if (typeof p.newSegmentNumber === "number") bits.push(`pass ${p.newSegmentNumber}`);
-  if (p.quotationId) bits.push(`re-priced on ${p.quotationId}`);
+  if (p.quotationId) bits.push(`re-priced on ${paperIdWords(p.quotationId)}`);
   if (p.voucherNumber) bits.push(`new voucher ${p.voucherNumber}`);
   const held = (p.heldPapers ?? []).map((h) => h.number).filter((n): n is string => !!n);
   if (held.length) bits.push(`held for the desk to send: ${held.join(", ")}`);
@@ -386,7 +404,7 @@ export function traceDetail(ev: TraceEvent, names?: Partial<HistoryNames>): stri
     const no = roomNo(p.roomId);
     if (no) bits.push(`room ${no}`);
   }
-  if (ev.eventType.startsWith("QUOTATION.") && str("quotationId")) bits.push(str("quotationId")!);
+  if (ev.eventType.startsWith("QUOTATION.") && str("quotationId")) bits.push(paperIdWords(str("quotationId")!));
   if (ev.eventType === "RESERVATION_CONFIRMED") {
     const res = str("reservationId");
     if (res) bits.push(`${res}${voucherNo(res) ? ` · voucher ${voucherNo(res)}` : ""}`);
@@ -405,6 +423,13 @@ export function traceDetail(ev: TraceEvent, names?: Partial<HistoryNames>): stri
     const moves = (p.moves as Array<{ fromRoomNumber?: string; toRoomNumber?: string }>).map((m) => `room ${m.fromRoomNumber} → ${m.toRoomNumber}`);
     bits.push(...moves);
     if (str("reason")) bits.push(str("reason")!);
+  }
+  if (ev.eventType === "ADVANCE_PAYMENT.RECONCILIATION_UNDONE") bits.push(p.cause === "PAYMENT_DELETED" ? `a payment under it was deleted (${str("paymentId")})` : "pressed by mistake");
+  if (ev.eventType === "FOLIO.PAYMENT_DELETED") {
+    const n = Number(p.amount);
+    bits.push(`${str("paymentId")} · Nu ${Number.isFinite(n) ? n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "?"}`);
+    if (str("notes")) bits.push(`its note: ${str("notes")}`);
+    if (p.blockReleased === true) bits.push("the block it placed is released");
   }
   if (ev.eventType === "COMMUNICATION.REPLY_NOT_ASKED") bits.push(PAPER_WORD[str("commType") ?? ""] ?? "paper");
   // A reply no longer awaited names the paper and what replaced it (2026-10-13).
@@ -468,7 +493,7 @@ export function traceDetail(ev: TraceEvent, names?: Partial<HistoryNames>): stri
       bits.push(`from ${p.fromEntryId}`);
     }
     const to = (p.to ?? null) as { checkInDate?: string; checkOutDate?: string } | null;
-    if (to?.checkInDate && to.checkOutDate) bits.push(fmtRange(to.checkInDate, to.checkOutDate));
+    if (to?.checkInDate && to.checkOutDate) bits.push(fmtStay(to.checkInDate, to.checkOutDate));
     if (typeof p.guests === "string" && p.guests) bits.push(p.guests);
     const modes = (p.priceModes ?? null) as Record<string, string> | null;
     const atNewDates = modes ? Object.entries(modes).filter(([, m]) => m === "NEW_DATES").map(([n]) => n) : [];
@@ -504,7 +529,7 @@ export function traceDetail(ev: TraceEvent, names?: Partial<HistoryNames>): stri
     if (pieces.length) {
       bits.push(
         `${pieces.length === 1 ? "a booking" : `${pieces.length} bookings`} of their own: ${pieces
-          .map((x) => `${x.entryId ?? "?"}${x.checkInDate && x.checkOutDate ? ` (${fmtRange(x.checkInDate, x.checkOutDate)})` : ""}`)
+          .map((x) => `${x.entryId ?? "?"}${x.checkInDate && x.checkOutDate ? ` (${fmtStay(x.checkInDate, x.checkOutDate)})` : ""}`)
           .join(", ")}${p.target === "NEW_ENQUIRY" && typeof p.newInquiryId === "string" ? ` on a new enquiry, ${p.newInquiryId}` : ""}`,
       );
     }
@@ -514,7 +539,7 @@ export function traceDetail(ev: TraceEvent, names?: Partial<HistoryNames>): stri
   if (ev.eventType === "ENTRY.STAY_DATES_CHANGED") {
     const span = (v: unknown) => {
       const o = (v ?? {}) as { checkInDate?: string | null; checkOutDate?: string | null; nights?: number | null };
-      return o.checkInDate && o.checkOutDate ? `${fmtRange(o.checkInDate, o.checkOutDate)}${typeof o.nights === "number" ? ` (${o.nights} night${o.nights === 1 ? "" : "s"})` : ""}` : null;
+      return o.checkInDate && o.checkOutDate ? `${fmtStay(o.checkInDate, o.checkOutDate)}${typeof o.nights === "number" ? ` (${o.nights} night${o.nights === 1 ? "" : "s"})` : ""}` : null;
     };
     const from = span(p.from);
     const to = span(p.to);

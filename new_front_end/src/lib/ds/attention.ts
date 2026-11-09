@@ -36,6 +36,8 @@ export type AttentionItem = {
   deadline?: { label: string; at: number };
   /** How long it has waited (instant ms). */
   since?: number;
+  /** A block whose time ended: the FOM's and GM's, drawn apart from the rest (2026-11-05). */
+  critical?: boolean;
   /** For folding identical work from one source (SS01 §3.2). */
   foldKey: string;
   sourceWord: string;
@@ -81,6 +83,19 @@ export function attentionItems(rows: DeskListRow[], now: number, hotelToday: str
     const step = stepNoOfStage(r.currentStage);
     const ci = r.checkInDate?.slice(0, 10) ?? null;
     const co = effectiveCheckout(r);
+
+    // A block whose time ended holds its rooms until the FOM or GM decides (2026-11-05). First, and
+    // whether or not the booking is parked or its arrival has passed, since nothing else lets go of them.
+    const ended = r.committedHold;
+    if (step === 3 && (r.status === "ACTIVE" || r.status === "PARKED") && ended?.state === "PLACED" && new Date(ended.expiresAt).getTime() <= now) {
+      push(r, {
+        need: "The block's time ended and the rooms are still held. The FOM or GM talks to the guest",
+        band: "overdue",
+        work: "holds",
+        critical: true,
+        deadline: { label: "Block ended", at: new Date(ended.expiresAt).getTime() },
+      });
+    }
 
     if (r.status === "PARKED") {
       if (r.parkFollowUpAt && new Date(r.parkFollowUpAt).getTime() <= now) {
@@ -140,10 +155,20 @@ export function attentionItems(rows: DeskListRow[], now: number, hotelToday: str
         push(r, { need: "No answer recorded", band: "waiting", work: "followups", since: new Date(r.updatedAt).getTime() });
       }
     } else if (step === 3) {
+      // The proforma's own time, as a quote's (2026-11-05).
+      const pf = r.folio?.invoices?.[0];
+      // Its running clock, not its date: a proforma whose advance is paid no longer runs out.
+      const pfClock = r.timers?.find((t) => t.timerType === "PROFORMA_VALIDITY_W43")?.firesAt;
+      if (pf?.lapsedAt) {
+        push(r, { need: "The proforma ran out. Make it again", band: "overdue", work: "holds", deadline: { label: "Ran out", at: new Date(pf.lapsedAt).getTime() } });
+      } else if (pfClock && new Date(pfClock).getTime() - now < DAY) {
+        push(r, { need: "The proforma is running out", band: "soon", work: "holds", deadline: { label: "Proforma valid", at: new Date(pfClock).getTime() } });
+      }
       const hold = r.committedHold;
-      if (hold && (hold.state === "PLACED") && new Date(hold.expiresAt).getTime() - now < DAY) {
-        const at = new Date(hold.expiresAt).getTime();
-        push(r, { need: at <= now ? "The block ran out" : "The block is running out", band: at <= now ? "overdue" : "soon", work: "holds", deadline: { label: "Block ends", at } });
+      if (hold && hold.state === "PLACED" && new Date(hold.expiresAt).getTime() <= now) {
+        // Said above.
+      } else if (hold && hold.state === "PLACED" && new Date(hold.expiresAt).getTime() - now < DAY) {
+        push(r, { need: "The block is running out", band: "soon", work: "holds", deadline: { label: "Block ends", at: new Date(hold.expiresAt).getTime() } });
       } else if (!hold) {
         push(r, { need: "Not yet blocked", band: "waiting", work: "holds", since: new Date(r.updatedAt).getTime() });
       }

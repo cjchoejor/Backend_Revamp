@@ -63,7 +63,7 @@ export const LEGPHEL_DOCUMENT_CSS = `
   .dlogo { width:30px;height:30px;border:1.5px solid var(--brand);border-radius:50%;
     display:inline-flex;align-items:center;justify-content:center;
     font-family:var(--serif);font-weight:700;font-size:12px;color:var(--brand);margin-bottom:4px }
-  .dlogo img { width:100%;height:100%;object-fit:contain;border-radius:50% }
+  .dlogo-img { display:block;height:64px;width:auto;margin:0 auto 6px }
   .dname { font-family:var(--serif);font-size:14.5px;font-weight:700;letter-spacing:.12em;margin:0 }
   .daddr { font-size:8px;color:var(--slate);margin:3px 0 0;line-height:1.55 }
   .daddr b { font-family:var(--mono);font-size:8px;color:var(--ink);font-weight:500 }
@@ -156,7 +156,7 @@ export type DocumentMasthead = {
 
 export function renderMasthead(m: DocumentMasthead): string {
   const logo = m.logoDataUri
-    ? `<div class="dlogo"><img src="${m.logoDataUri}" alt="" /></div>`
+    ? `<img class="dlogo-img" src="${m.logoDataUri}" alt="Legphel Hotel" />`
     : `<div class="dlogo">ལེ</div>`;
   return `<div class="dmast">${logo}<div class="dname">${htmlEscape(m.hotelName)}</div>
         <p class="daddr">${htmlEscape(m.addressLine)}${m.taxLine ? `<br><b>${htmlEscape(m.taxLine)}</b>` : ""}</p></div>`;
@@ -190,10 +190,8 @@ export function mastheadFromHotelProfile(hotel: {
     hotelName: hotel.hotelName,
     addressLine,
     taxLine: taxParts.length > 0 ? taxParts.join(" · ") : null,
-    // Deliberately NOT the HotelProfile PNG: the house format's mark is the "ལེ" glyph disc
-    // (operator ruling 2026-07-30 — "keep it like in the html, same to same"). The shell still
-    // supports an image for any future document that opts in explicitly.
-    logoDataUri: null,
+    // The hotel's own logo (2026-11-09, operator), in place of the house format's glyph disc.
+    logoDataUri: hotel.logoDataUri,
   };
 }
 

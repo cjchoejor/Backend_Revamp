@@ -16,6 +16,7 @@
  * FOM from Set up on (at Negotiation the change of configuration's own rule). What happens and why
  * sits behind the "?" — only what needs reading stays on screen.
  */
+import { StayDates } from "@/components/ds/stay-dates";
 import Link from "next/link";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
@@ -26,7 +27,7 @@ import { DsDialog, toastRefusal } from "@/components/ds/steps/kit";
 import { HeldPapersCard } from "@/components/ds/workspace/held-papers";
 import { useSession } from "@/hooks/use-session";
 import { executeDateMove, previewDateMove, type DateMoveInput, type DateMovePreview, type DateMoveResult } from "@/lib/api/room-moves";
-import { fmtDate, fmtRange, money } from "@/lib/ds/format";
+import { fmtDate, fmtStay, money } from "@/lib/ds/format";
 import { STEP_NAMES, stepNoOfStage } from "@/lib/ds/steps";
 
 type PriceMode = "KEEP" | "NEW_DATES";
@@ -46,7 +47,7 @@ function ResultView({ result, tz }: { result: DateMoveResult; tz?: string }) {
       <div className="rmv-result">
         <p className={`rmv-status ${o.applied ? "ok" : "warn"}`} role="status">
           {o.applied
-            ? `Done — the stay is now ${fmtRange(o.newDates.checkInDate, o.newDates.checkOutDate)}. Price it again at the table.`
+            ? `Done — the stay is now ${fmtStay(o.newDates.checkInDate, o.newDates.checkOutDate)}. Save & quote it again at the table.`
             : "Sent to the FOM — the change waits for their approval; nothing has moved yet."}
         </p>
         {o.applied && o.quotationsInvalidated.length ? (
@@ -65,7 +66,7 @@ function ResultView({ result, tz }: { result: DateMoveResult; tz?: string }) {
       <p className={`rmv-status ${blocked ? "stop" : "ok"}`} role="status">
         {blocked
           ? `Stopped part-way at ${blocked.atStep.toLowerCase().replace(/_/g, " ")} — ${blocked.message}. Finish it on the booking.`
-          : `Done — the stay is now ${fmtRange(o.dateShift?.newCheckInDate ?? null, o.dateShift?.newCheckOutDate ?? null)}, at ${stepWord(o.walk.reachedStage)}${
+          : `Done — the stay is now ${fmtStay(o.dateShift?.newCheckInDate ?? null, o.dateShift?.newCheckOutDate ?? null)}, at ${stepWord(o.walk.reachedStage)}${
               o.dateShift?.arrivalOpensOn ? `; Arrival opens on ${fmtDate(o.dateShift.arrivalOpensOn)}` : ""
             }.`}
       </p>
@@ -277,9 +278,9 @@ export function DateMoveDialog({ move, onClose, tz }: { move: (DateMoveInput & {
                 </span>
               </div>
               <div className="rmv-rooms">
-                <span className="rmv-room">{fmtRange(preview.from.checkInDate, preview.from.checkOutDate)}</span>
+                <StayDates checkIn={preview.from.checkInDate} checkOut={preview.from.checkOutDate} />
                 <span className="rmv-arrow">→</span>
-                <span className="rmv-room to">{fmtRange(preview.to.checkInDate, preview.to.checkOutDate)}</span>
+                <StayDates checkIn={preview.to.checkInDate} checkOut={preview.to.checkOutDate} />
                 <span className="rmv-type">
                   {plural(preview.to.nights, "night")} · {shiftWords(preview.shiftDays)}
                 </span>

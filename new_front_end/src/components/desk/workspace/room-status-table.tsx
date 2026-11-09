@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, type CSSProperties } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Check } from "lucide-react";
 import { formatDMY } from "@/lib/desk/model";
 import type { AvailabilityRoomResult, PerDateAvailabilityResult } from "@/lib/api/availability";
@@ -75,6 +75,20 @@ export function roomStatusRows(
   // Sort by room number so floors read in order like the legacy screen.
   return out.sort((a, b) => a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true }));
 }
+
+/** One stay's nights in a table that holds several (2026-11-07). */
+export type NightGroup = {
+  key: string;
+  /** Over the stay's columns: which stay, its rooms, its dates. */
+  label: ReactNode;
+  nights: string[];
+  /** The rooms each of its nights needs. */
+  maxSelect: number;
+  /** The plan most of its nights share — a night off it carries the dot. */
+  referenceIds?: string[];
+  /** Its own house answer — a room can be free for one stay and not another. */
+  rows?: RoomStatusRow[];
+};
 
 export type CellStatus = "vacant" | "reserved" | "held" | "deficient" | "blocked";
 
@@ -194,6 +208,7 @@ export function RoomStatusTable({
   large,
   showNames,
   nightTotals,
+  nightGroups,
 }: {
   rows: RoomStatusRow[];
   /** ISO YYYY-MM-DD for every night of the stay (check-in inclusive, check-out exclusive). */
@@ -236,6 +251,13 @@ export function RoomStatusTable({
    * bill — the table adds nothing up.
    */
   nightTotals?: Record<string, string>;
+  /**
+   * Several stays in one table (2026-11-07, operator: "keep the first reserved dates for both stays
+   * in one table"): `nights` is every stay's nights in turn, and each group says which are whose —
+   * its own label over its columns, its own number of rooms a night, its own plan to compare with,
+   * and its own house answer (`rows`), since a room can be free for one stay and not the other.
+   */
+  nightGroups?: NightGroup[];
 }) {
   // night → roomId → who holds it that night. Keeps the whole occupancy context, not just the
   // id, so each cell can name the holder. The engine includes CLAIMED rooms in `perDate`, so
@@ -261,21 +283,70 @@ export function RoomStatusTable({
     return s;
   }, [perDate]);
 
+  /** night → its group, where it sits in it, that stay's own rooms and the rooms it has a per-night answer for. */
+  const groupOfNight = useMemo(() => {
+    const m = new Map<string, { g: NightGroup; at: number; groupNo: number; rowById: Map<string, RoomStatusRow>; truth: Set<string> }>();
+    (nightGroups ?? []).forEach((g, groupNo) => {
+      const rowById = new Map((g.rows ?? []).map((r) => [r.roomId, r] as const));
+      const own = new Set(g.nights);
+      const truth = new Set<string>();
+      for (const pd of perDate ?? []) {
+        if (!own.has(pd.date)) continue;
+        pd.availableRoomIds.forEach((id) => truth.add(id));
+        pd.deficientRoomIds.forEach((id) => truth.add(id));
+        pd.occupiedRoomIds.forEach((o) => truth.add(o.roomId));
+      }
+      g.nights.forEach((n, at) => m.set(n, { g, at, groupNo, rowById, truth }));
+    });
+    return m;
+  }, [nightGroups, perDate]);
+  /** The rooms a night needs — its stay's own number when the table holds several stays. */
+  const maxOn = (n: string) => groupOfNight.get(n)?.g.maxSelect ?? maxSelect;
+  /** The room as that night's stay's house answer has it. */
+  const rowOn = (row: RoomStatusRow, n: string) => groupOfNight.get(n)?.rowById.get(row.roomId) ?? row;
+  /** A night that starts another stay's columns — drawn with a line before it. */
+  const startsGroup = (n: string) => {
+    const x = groupOfNight.get(n);
+    return !!x && x.at === 0 && x.groupNo > 0;
+  };
+
   const cellStatus = (row: RoomStatusRow, night: string): { status: CellStatus; label?: string; occ?: OccupantLike } => {
     const occ = occupiedByNight.get(night)?.get(row.roomId);
     if (occ) return { status: occ.source === "HOLD" ? "held" : "reserved", occ };
     // Per-night data is authoritative when the engine computed it for this room — a room can be
     // booked on some nights of the window and free on others. Only fall back to the whole-stay
     // bucket when there's no per-night answer (e.g. BLOCKED rooms, which never enter perDate).
-    if (!perNightRoomIds.has(row.roomId) && row.bucket === "unavailable") return reasonLabel(row.unavailabilityReason);
-    if (row.bucket === "deficient") return { status: "deficient" };
+    const g = groupOfNight.get(night);
+    const r = g?.rowById.get(row.roomId) ?? row;
+    const truth = g ? g.truth : perNightRoomIds;
+    if (!truth.has(row.roomId) && r.bucket === "unavailable") return reasonLabel(r.unavailabilityReason);
+    if (r.bucket === "deficient") return { status: "deficient" };
     return { status: "vacant" };
   };
 
   // A room is pickable for the whole stay only when every night is vacant/deficient (deficient
   // stays selectable — the acknowledgement is recorded on seal, same as the old picker).
   const pickable = (row: RoomStatusRow) =>
-    row.bucket !== "unavailable" && nights.every((n) => !occupiedByNight.get(n)?.has(row.roomId));
+    nights.length > 0
+      ? nights.every((n) => rowOn(row, n).bucket !== "unavailable" && !occupiedByNight.get(n)?.has(row.roomId))
+      : row.bucket !== "unavailable";
+
+  // Two header rows stick: the stays' band on top, the dates right under it at its measured height.
+  const tableRef = useRef<HTMLTableElement | null>(null);
+  const groupRowRef = useRef<HTMLTableRowElement | null>(null);
+  const [groupRowH, setGroupRowH] = useState(0);
+  useLayoutEffect(() => {
+    const el = groupRowRef.current;
+    if (!el) {
+      setGroupRowH(0);
+      return;
+    }
+    const read = () => setGroupRowH(el.getBoundingClientRect().height);
+    read();
+    const ro = new ResizeObserver(read);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [nightGroups]);
 
   const anyExtBeds = rows.some((r) => r.extBeds != null);
   // Bed setup gets its OWN pinned column (2026-08-13 — it started as a "· Twin" suffix inside
@@ -330,11 +401,25 @@ export function RoomStatusTable({
   const lastPin = pinWidths.length - 1;
   const pinCls = (i: number) => `rst-pin${i === lastPin ? " rst-pin-edge" : ""}`;
 
+  const grouped = !!nightGroups?.length;
   return (
     <div className={`rst-wrap${dense ? " dense" : ""}${large ? " large" : ""}`}>
-      <table className="rst">
+      <table className={`rst${grouped ? " grouped" : ""}`} ref={tableRef} style={groupRowH ? ({ "--rst-gh": `${groupRowH}px` } as CSSProperties) : undefined}>
         <thead>
-          <tr>
+          {grouped ? (
+            <tr className="rst-grouprow" ref={groupRowRef}>
+              <th className={pinCls(lastPin)} colSpan={pinWidths.length} style={{ left: 0, width: pinLefts[lastPin] + pinWidths[lastPin], minWidth: pinLefts[lastPin] + pinWidths[lastPin] }} />
+              {nightGroups!.map((g, i) => (
+                <th key={g.key} colSpan={g.nights.length} className={`rst-group${i > 0 ? " rst-gstart" : ""}`}>
+                  {/* Kept in view beside the pinned columns while the nights scroll under it. */}
+                  <span className="rst-gl" style={{ left: pinLefts[lastPin] + pinWidths[lastPin] + 10 }}>
+                    {g.label}
+                  </span>
+                </th>
+              ))}
+            </tr>
+          ) : null}
+          <tr className={grouped ? "rst-daterow" : undefined}>
             <th className={pinCls(0)} style={pin(0)}>
               Room No
             </th>
@@ -366,7 +451,9 @@ export function RoomStatusTable({
             )}
             {nights.map((n, i) => {
               const count = nightSel(n).length;
-              const differs = !setEq(nightSel(n), referenceIds ?? selectedIds);
+              const maxSelect = maxOn(n);
+              const g = groupOfNight.get(n);
+              const differs = !setEq(nightSel(n), g?.g.referenceIds ?? referenceIds ?? selectedIds);
               // The tally under each night is the one figure the operator must not miss: it says
               // whether that night has all its rooms. It is always printed (a night short of rooms
               // on a uniform pick was invisible here), and its colour is its state — red while
@@ -374,8 +461,8 @@ export function RoomStatusTable({
               const full = maxSelect > 0 && count >= maxSelect;
               const left = Math.max(0, maxSelect - count);
               return (
-                <th key={n} style={{ textAlign: "center" }} title={differs ? "This night has its own rooms" : undefined}>
-                  {formatDMY(n) || n} <span style={{ fontWeight: 500 }}>({i + 1})</span>
+                <th key={n} className={startsGroup(n) ? "rst-gstart" : undefined} style={{ textAlign: "center" }} title={differs ? "This night has its own rooms" : undefined}>
+                  {formatDMY(n) || n} <span style={{ fontWeight: 500 }}>({(g?.at ?? i) + 1})</span>
                   {differs && <span style={{ color: "var(--warn)", fontWeight: 700 }}> •</span>}
                   {maxSelect > 0 && (
                     <span
@@ -408,10 +495,9 @@ export function RoomStatusTable({
             // Single-room mode never hits it: clicking another room SWITCHES to it.
             const atCap =
               !sel &&
-              maxSelect > 1 &&
               (nights.length > 0
-                ? nights.some((n) => !nightSel(n).includes(row.roomId) && nightSel(n).length >= maxSelect)
-                : selectedIds.length >= maxSelect);
+                ? nights.some((n) => maxOn(n) > 1 && !nightSel(n).includes(row.roomId) && nightSel(n).length >= maxOn(n))
+                : maxSelect > 1 && selectedIds.length >= maxSelect);
             const rowClickable = canPick && !disabled && !atCap;
             /**
              * Nights this room could still be added to — free on that night, and that night not
@@ -429,7 +515,7 @@ export function RoomStatusTable({
               const s = cellStatus(row, n).status;
               if (s !== "vacant" && s !== "deficient") return false;
               if (nightSel(n).includes(row.roomId)) return false;
-              return maxSelect <= 1 || nightSel(n).length < maxSelect;
+              return maxOn(n) <= 1 || nightSel(n).length < maxOn(n);
             }).length;
             const unusable = !sel && openNights === 0;
             /**
@@ -452,7 +538,7 @@ export function RoomStatusTable({
                 blocked.push({ date: n, status, holder: occ ? occupantName(occ) : row.blockedReason ?? undefined });
               } else if (nightSel(n).includes(row.roomId)) {
                 alreadyPicked.push(n);
-              } else if (maxSelect > 1 && nightSel(n).length >= maxSelect) {
+              } else if (maxOn(n) > 1 && nightSel(n).length >= maxOn(n)) {
                 full.push(n);
               } else {
                 picked.push(n);
@@ -572,9 +658,9 @@ export function RoomStatusTable({
                   if (selectable && onToggleCell) {
                     const cellSel = nightSel(n).includes(row.roomId);
                     // Single-room bookings switch on click (parent replaces), so never "full".
-                    const nightFull = !cellSel && maxSelect > 1 && nightSel(n).length >= maxSelect;
+                    const nightFull = !cellSel && maxOn(n) > 1 && nightSel(n).length >= maxOn(n);
                     return (
-                      <td key={n} style={{ textAlign: "center" }}>
+                      <td key={n} className={startsGroup(n) ? "rst-gstart" : undefined} style={{ textAlign: "center" }}>
                         <button
                           type="button"
                           className={`rst-chip ${cellSel ? "sel" : status}`}
@@ -603,7 +689,7 @@ export function RoomStatusTable({
                   // booking's room is released by cancelling or amending it, not from here.
                   const releasable = status === "held" || status === "blocked";
                   return (
-                    <td key={n} style={{ textAlign: "center" }}>
+                    <td key={n} className={startsGroup(n) ? "rst-gstart" : undefined} style={{ textAlign: "center" }}>
                       <span
                         className={`rst-chip ${status}${showNames && occ ? " named" : ""}${
                           releasable && onBlockedCellOpen ? " actionable" : ""

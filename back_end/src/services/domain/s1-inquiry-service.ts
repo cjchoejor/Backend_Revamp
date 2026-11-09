@@ -1,4 +1,7 @@
-import type { ActorLevel, PrismaClient } from "@prisma/client";
+import { normalizeCoordinators, type CoordinatorContact } from "../../lib/admin/contact-list.js";
+import { personFromName, titledName } from "../../lib/person-name.js";
+import { loosePhone } from "../../lib/phone-numbers.js";
+import { Prisma, type ActorLevel, type PrismaClient } from "@prisma/client";
 import { AppError, AuthorizationError, NotFoundError, ValidationError } from "../../lib/errors.js";
 import { enforceCustodianReassignmentAuthority } from "../../policies/02-ownership-custodian-assignment/p04-custodian-reassignment.js";
 import { resolveInitialCustodianActorId } from "../../policies/02-ownership-custodian-assignment/p03-initial-custodian-assignment.js";
@@ -24,6 +27,8 @@ export async function createInquiry(
     guestProfileId?: string | null;
     /** Who called. A phone or an email is needed unless the booking came from an OTA. */
     caller?: CallerInput | null;
+    /** Who to ring at the agency or company, first one first (2026-11-05). */
+    partyContacts?: CoordinatorContact[] | null;
     sourceChannel?: string;
     /** How the guest came in — the channel follows from it (lib/inquiry-came-in-as). */
     cameInAs?: string;
@@ -55,10 +60,17 @@ export async function createInquiry(
   // The caller (2026-10-12): someone must be reachable from the first call — a phone or an
   // email — except on an OTA booking, which comes through the OTA. A booking with a known guest
   // and no caller block is the older API shape and stays accepted.
-  const caller = normaliseCaller(input.caller);
-  if (input.caller || !guestProfileId) assertCallerReachable(caller, channel.sourceChannel);
-
   const { travelAgentId, corporateAccountId, ratePackageId } = await validateInquiryParty(prisma, input);
+  const partyContacts = normalizeCoordinators(input.partyContacts);
+  // Booked through an agency or a company, the party is the caller and the desk asks nothing more
+  // (2026-11-05): reached on the first contact person who has a number or an email, else its own.
+  const caller =
+    !input.caller && (travelAgentId || corporateAccountId)
+      ? await partyCaller(prisma, { travelAgentId, corporateAccountId }, partyContacts)
+      : normaliseCaller(input.caller);
+  if (input.caller || !guestProfileId || travelAgentId || corporateAccountId) {
+    assertCallerReachable(caller, channel.sourceChannel, { byParty: !!(travelAgentId || corporateAccountId) });
+  }
 
   // Policy 12 (SIG-S1 §6.1): a confirmed duplicate blocks creation until the FOM resolves it —
   // the operator sees the conflicting booking, and the FOM either goes ahead with a recorded
@@ -97,6 +109,7 @@ export async function createInquiry(
         referenceNumber: id,
         guestProfileId,
         ...callerColumns(caller),
+        ...partyContactColumns(partyContacts),
         sourceChannel: channel.sourceChannel,
         cameInAs: channel.cameInAs,
         defaultCustodianId: custodian,
@@ -225,6 +238,8 @@ export async function validateInquiryParty(
 
 export type CallerInput = {
   title?: string | null;
+  /** One name, as the desk asks it (2026-11-05): split here, and beats firstName / lastName. */
+  name?: string | null;
   firstName?: string | null;
   lastName?: string | null;
   phone?: string | null;
@@ -235,11 +250,12 @@ type Caller = { title: string | null; firstName: string | null; lastName: string
 
 function normaliseCaller(c: CallerInput | null | undefined): Caller {
   const t = (v: string | null | undefined) => v?.trim() || null;
-  const phone = t(c?.phone);
+  const phone = loosePhone(c?.phone);
+  const person = c?.name != null ? personFromName({ title: c?.title, name: c.name }) : null;
   return {
-    title: t(c?.title),
-    firstName: t(c?.firstName),
-    lastName: t(c?.lastName),
+    title: person ? person.title : t(c?.title),
+    firstName: person ? person.firstName || null : t(c?.firstName),
+    lastName: person ? person.lastName || null : t(c?.lastName),
     phone,
     email: t(c?.email),
     // "On WhatsApp?" is a question about a number; with no number it has no answer.
@@ -247,15 +263,56 @@ function normaliseCaller(c: CallerInput | null | undefined): Caller {
   };
 }
 
-/** A phone or an email (not on an OTA booking), and "on WhatsApp?" answered for a phone. */
-export function assertCallerReachable(c: Caller, sourceChannel: string | null | undefined) {
+/**
+ * The caller when an agency or a company booked (2026-11-05, operator: "it can skip the user to fill
+ * this section"). Recorded as the party itself, as a caller picked from the list always was, on the
+ * first contact person who has a number or an email, else on the party's own.
+ */
+export async function partyCaller(
+  prisma: PrismaClient,
+  ids: { travelAgentId?: string | null; corporateAccountId?: string | null },
+  contacts: CoordinatorContact[],
+): Promise<Caller> {
+  const party = ids.travelAgentId
+    ? await prisma.travelAgent.findUnique({ where: { id: ids.travelAgentId }, select: { displayName: true, contactNumbers: true, contactEmail: true } })
+    : await prisma.corporateAccount.findUnique({ where: { id: ids.corporateAccountId! }, select: { displayName: true, contactNumbers: true, contactEmail: true } });
+  return {
+    title: null,
+    firstName: party?.displayName ?? null,
+    lastName: null,
+    phone: contacts.find((c) => c.phone)?.phone ?? loosePhone(party?.contactNumbers?.[0]),
+    email: contacts.find((c) => c.email)?.email ?? party?.contactEmail ?? null,
+    onWhatsApp: null,
+  };
+}
+
+/** The list, and the first person on it where one person is read (the voucher, the booking file). */
+export function partyContactColumns(contacts: CoordinatorContact[]) {
+  const first = contacts[0] ?? null;
+  return {
+    partyContacts: contacts.length ? (contacts as unknown as Prisma.InputJsonValue) : Prisma.JsonNull,
+    partyContactName: first ? titledName(first) : null,
+    partyContactPhone: first?.phone ?? null,
+    partyContactEmail: first?.email ?? null,
+  };
+}
+
+/**
+ * A phone or an email (not on an OTA booking), and "on WhatsApp?" answered for a phone. `byParty`:
+ * an agency's or a company's booking asks neither of the desk, so what is missing is a contact person.
+ */
+export function assertCallerReachable(c: Caller, sourceChannel: string | null | undefined, opts: { byParty?: boolean } = {}) {
   if (c.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(c.email)) {
     throw new ValidationError("The caller's email does not read as an email address");
   }
   if (!c.phone && !c.email && sourceChannel !== "OTA") {
-    throw new ValidationError("Take the caller's phone or email — one of the two is needed to start the inquiry");
+    throw new ValidationError(
+      opts.byParty
+        ? `${c.firstName ?? "This party"} has no phone or email on file — add a contact person with one`
+        : "Take the caller's phone or email — one of the two is needed to start the inquiry",
+    );
   }
-  if (c.phone && c.onWhatsApp == null) {
+  if (c.phone && c.onWhatsApp == null && !opts.byParty) {
     throw new ValidationError("Ask whether the caller's number is on WhatsApp");
   }
 }

@@ -28,6 +28,7 @@ import {
 import { guestName } from "@/lib/desk/model";
 import { fmtDate, fmtDay, fmtStamp, money, plural } from "@/lib/ds/format";
 import { AdvanceSettlementBlock } from "@/components/desk/workspace/advance-settlement";
+import { RecordedPaymentsFold } from "@/components/ds/steps/s3-money";
 import { IdentityProofBlock } from "@/components/desk/workspace/identity-proof";
 import { InitialSelectionCell } from "@/components/desk/workspace/room-change-control";
 import type { EntryDetail, RoomAssignmentSummary } from "@/types/api";
@@ -298,6 +299,7 @@ function CheckInAdvanceCard({ entry, tz }: { entry: EntryDetail; tz?: string }) 
         <Tool>
           <AdvanceSettlementBlock entry={entry} title="The advance" noHeading hidePlan={!!balance?.promisedAtCheckIn} onChanged={() => finish()} />
         </Tool>
+        <RecordedPaymentsFold entry={entry} tz={tz} />
       </StepCard>
     </div>
   );

@@ -13,6 +13,7 @@
  * (started at Inquiry, filled in) — and runs it (`POST /date-moves/split`). Every figure and every
  * refusal is the server's; what happens step by step sits behind the "?".
  */
+import { StayDates } from "@/components/ds/stay-dates";
 import Link from "next/link";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
@@ -30,7 +31,7 @@ import {
   type RoomSplitResult,
   type SplitTarget,
 } from "@/lib/api/room-moves";
-import { fmtRange, money } from "@/lib/ds/format";
+import { fmtStay, money } from "@/lib/ds/format";
 import { STEP_NAMES, stepNoOfStage } from "@/lib/ds/steps";
 
 type PriceMode = "KEEP" | "NEW_DATES";
@@ -54,7 +55,7 @@ function ResultView({ result, tz }: { result: RoomSplitResult; tz?: string }) {
       <div className="spl-part">
         <p className={`rmv-status ${sourceBlocked ? "stop" : "ok"}`} role="status">
           {s.route === "NEGOTIATION"
-            ? "This booking keeps its other rooms — price it again at the table."
+            ? "This booking keeps its other rooms — save & quote it again at the table."
             : sourceBlocked
               ? `This booking stopped part-way at ${sourceBlocked.atStep.toLowerCase().replace(/_/g, " ")} — ${sourceBlocked.message}. Finish it on the booking.`
               : `This booking keeps its other rooms, back at ${stepWord(s.walk?.walk.reachedStage)}.`}
@@ -68,10 +69,10 @@ function ResultView({ result, tz }: { result: RoomSplitResult; tz?: string }) {
         <div className="spl-part">
           <p className={`rmv-status ${c.blocked ? "warn" : "ok"}`} role="status">
             {c.newInquiry
-              ? `A new enquiry, ${c.inquiryId}: its booking ${c.entryId} starts at Inquiry, filled in — ${fmtRange(c.checkInDate, c.checkOutDate)}. Its room is picked, not held, until it is reserved.`
+              ? `A new enquiry, ${c.inquiryId}: its booking ${c.entryId} starts at Inquiry, filled in — ${fmtStay(c.checkInDate, c.checkOutDate)}. Its room is picked, not held, until it is reserved.`
               : c.blocked
                 ? `The new booking ${c.entryId} stopped at ${stepWord(c.reachedStage)} — ${c.blocked.message}. Finish it on the booking.`
-                : `The new booking ${c.entryId} is at ${stepWord(c.reachedStage)} — ${fmtRange(c.checkInDate, c.checkOutDate)}.`}
+                : `The new booking ${c.entryId} is at ${stepWord(c.reachedStage)} — ${fmtStay(c.checkInDate, c.checkOutDate)}.`}
           </p>
           {c.notes.length ? (
             <ul className="rmv-follow">
@@ -290,9 +291,9 @@ export function SplitMoveDialog({ move, onClose, tz }: { move: SplitMove | null;
                 </span>
               </div>
               <div className="rmv-rooms">
-                <span className="rmv-room">{fmtRange(preview.from.checkInDate, preview.from.checkOutDate)}</span>
+                <StayDates checkIn={preview.from.checkInDate} checkOut={preview.from.checkOutDate} />
                 <span className="rmv-arrow">→</span>
-                <span className="rmv-room to">{fmtRange(preview.to.checkInDate, preview.to.checkOutDate)}</span>
+                <StayDates checkIn={preview.to.checkInDate} checkOut={preview.to.checkOutDate} />
                 <span className="rmv-type">
                   {plural(preview.to.nights, "night")} · {shiftWords(preview.shiftDays)}
                 </span>

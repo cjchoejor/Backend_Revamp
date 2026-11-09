@@ -62,13 +62,16 @@ export function computePostCheckInEarlyDeparturePenalty(input: { policyTiers: Ca
 
 /** Sum of `PaymentDirection.IN` rows for the folio (advance payments). Used by Policy 35 cancellation and Policy 57 no-show penalty cap. */
 export async function sumAdvancePaymentInTotalForFolio(prisma: PrismaClient, folioId: string): Promise<number> {
-  const paid = await prisma.paymentRecord.aggregate({
-    where: { folioId, paymentDirection: PaymentDirection.IN },
-    _sum: { amount: true },
-  });
+  const [paid, returned] = await Promise.all([
+    prisma.paymentRecord.aggregate({ where: { folioId, paymentDirection: PaymentDirection.IN }, _sum: { amount: true } }),
+    prisma.paymentRecord.aggregate({ where: { folioId, paymentDirection: PaymentDirection.OUT }, _sum: { amount: true } }),
+  ]);
+  // Net of money already gone back (2026-11-05). It counted money in alone, so cancelling after a
+  // refund at Set up would have refunded the same money a second time and charged against it.
+  const held = toDecimal(paid._sum.amount).sub(toDecimal(returned._sum.amount));
   // Round to 2dp via Decimal before coercing to number — protects against float drift when
   // a penalty is expressed as a % of this value further downstream.
-  return Number(toDecimal(paid._sum.amount).toFixed(2));
+  return Number((held.gt(0) ? held : toDecimal(0)).toFixed(2));
 }
 
 /** SIG invariant: penalty cannot exceed total advance payment collected (Policy 35 / Policy 57). */

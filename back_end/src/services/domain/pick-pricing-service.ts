@@ -287,3 +287,69 @@ export async function priceRoomPick(prisma: PrismaClient, entryId: string, input
     unpricedTypes: byType.filter((t) => t.rate == null).map((t) => ({ roomTypeId: t.roomTypeId, name: t.name })),
   };
 }
+
+/* ------------------------------------------------------------------ a trip's stays together */
+
+export type TripPickPricingInput = {
+  /** Each stay of the trip with its rooms as they stand — saved or not. A stay with none is listed, unpriced. */
+  stays: Array<{ entryId: string; perNight?: Array<{ date: string; roomIds: string[] }> }>;
+};
+
+export type TripPickPricing = {
+  inquiryId: string;
+  currency: string;
+  serviceChargeRate: number;
+  gstRate: number;
+  /** In the order asked, each with its own bill — the very bill `priceRoomPick` gives that stay alone. */
+  stays: Array<{ entryId: string; checkIn: string | null; checkOut: string | null; pricing: PickPricing | null }>;
+  /** The trip's sums — of the stays priced, never of a stay with no rooms yet. */
+  totals: { roomNights: number; net: Money; serviceCharge: Money; gst: Money; total: Money };
+  /** Every stay asked has rooms priced. */
+  complete: boolean;
+};
+
+/**
+ * A trip's rooms at Inquiry, every stay at once (2026-11-07, operator: "the charges show for only
+ * first stay, show for both, also an option to see all entries' total separately"). Each stay is
+ * priced exactly as it is alone; the trip's figures are only those stays' own figures added up, in
+ * Decimal, so the trip and its stays can never disagree. A pure read, like the stay's own bill.
+ */
+export async function priceTripPicks(prisma: PrismaClient, entryId: string, input: TripPickPricingInput): Promise<TripPickPricing> {
+  const entry = await prisma.entry.findUnique({ where: { id: entryId }, select: { inquiryId: true } });
+  if (!entry) throw new NotFoundError("Entry");
+  const ids = [...new Set(input.stays.map((s) => s.entryId))];
+  if (ids.length !== input.stays.length) throw new ValidationError("A stay is named twice");
+  const onTrip = await prisma.entry.findMany({ where: { id: { in: ids } }, select: { id: true, inquiryId: true, checkInDate: true, checkOutDate: true } });
+  const byId = new Map(onTrip.map((e) => [e.id, e]));
+  for (const id of ids) {
+    const e = byId.get(id);
+    if (!e) throw new NotFoundError(`Entry ${id}`);
+    if (e.inquiryId !== entry.inquiryId) throw new ValidationError(`${id} is not a stay of this trip`);
+  }
+  const stays: TripPickPricing["stays"] = [];
+  for (const s of input.stays) {
+    const e = byId.get(s.entryId)!;
+    const picks = (s.perNight ?? []).filter((n) => n.roomIds.length > 0);
+    const pricing = picks.length ? await priceRoomPick(prisma, s.entryId, { perNight: picks }) : null;
+    stays.push({ entryId: s.entryId, checkIn: e.checkInDate ? isoDay(e.checkInDate) : null, checkOut: e.checkOutDate ? isoDay(e.checkOutDate) : null, pricing });
+  }
+  const priced = stays.map((s) => s.pricing).filter((x): x is PickPricing => !!x);
+  const sum = (f: (p: PickPricing) => Money) => priced.reduce((a, p) => a.add(dec(f(p))), dec(0));
+  const rates = priced[0] ?? null;
+  const fallback = rates ? null : await resolveChargeRates(prisma);
+  return {
+    inquiryId: entry.inquiryId,
+    currency: rates?.currency ?? "BTN",
+    serviceChargeRate: rates?.serviceChargeRate ?? fallback!.serviceChargeRate,
+    gstRate: rates?.gstRate ?? fallback!.gstRate,
+    stays,
+    totals: {
+      roomNights: priced.reduce((a, p) => a + p.totals.roomNights, 0),
+      net: out(sum((p) => p.totals.net)),
+      serviceCharge: out(sum((p) => p.totals.serviceCharge)),
+      gst: out(sum((p) => p.totals.gst)),
+      total: out(sum((p) => p.totals.total)),
+    },
+    complete: priced.length === stays.length,
+  };
+}

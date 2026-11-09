@@ -53,7 +53,7 @@ function percentLabel(rate: number): string {
 /** Generate the four breakdown rows shared by Quotation / PI / Confirmation / Final-invoice templates. */
 function breakdownRows(b: StayChargeBreakdown, currency: string): string[] {
   return [
-    tableRow("Sub-total (room)", formatMoney(b.subTotal, currency)),
+    tableRow("Net value", formatMoney(b.subTotal, currency)),
     tableRow(`Service charge (${percentLabel(b.serviceChargeRate)})`, formatMoney(b.serviceCharge, currency), true),
     tableRow(`GST (${percentLabel(b.gstRate)})`, formatMoney(b.gst, currency)),
     tableRow("Total", formatMoney(b.total, currency), true, true),
@@ -63,7 +63,7 @@ function breakdownRows(b: StayChargeBreakdown, currency: string): string[] {
 /** Plain-text equivalent of the breakdown for the text/plain part of the email. */
 function breakdownLines(b: StayChargeBreakdown, currency: string): string[] {
   return [
-    `Sub-total (room):       ${formatMoney(b.subTotal, currency)}`,
+    `Net value:              ${formatMoney(b.subTotal, currency)}`,
     `Service charge (${percentLabel(b.serviceChargeRate)}):  ${formatMoney(b.serviceCharge, currency)}`,
     `GST (${percentLabel(b.gstRate)}):              ${formatMoney(b.gst, currency)}`,
     `Total:                  ${formatMoney(b.total, currency)}`,
@@ -81,7 +81,8 @@ export type QuotationEmailData = {
   checkInDate: Date;
   checkOutDate: Date;
   guestCount: number;
-  nightlyRate: number;
+  /** Null when the rooms have rates of their own, so no one figure is the stay's rate. */
+  nightlyRate: number | null;
   currency: string;
   breakdown: StayChargeBreakdown;
   validUntil: Date;
@@ -105,7 +106,7 @@ export function renderQuotationEmail(d: QuotationEmailData): StageEmailContent {
     `Check-out: ${formatDate(d.checkOutDate)}`,
     `Stay: ${nights} ${nights === 1 ? "night" : "nights"} · ${guests}`,
     d.ratePlanName ? `Rate plan: ${d.ratePlanName}` : null,
-    `Nightly rate: ${formatMoney(d.nightlyRate, d.currency)}`,
+    d.nightlyRate != null ? `Nightly rate: ${formatMoney(d.nightlyRate, d.currency)}` : null,
     "",
     ...breakdownLines(d.breakdown, d.currency),
     "",
@@ -128,7 +129,7 @@ ${detailsTable([
   tableRow("Check-out", formatDate(d.checkOutDate)),
   tableRow("Stay", `${nights} ${nights === 1 ? "night" : "nights"} · ${guests}`, true),
   d.ratePlanName ? tableRow("Rate plan", d.ratePlanName) : "",
-  tableRow("Nightly rate", formatMoney(d.nightlyRate, d.currency), !d.ratePlanName),
+  d.nightlyRate != null ? tableRow("Nightly rate", formatMoney(d.nightlyRate, d.currency), !d.ratePlanName) : "",
   ...breakdownRows(d.breakdown, d.currency),
 ])}
 <p style="font-size:13px;color:#555">This quotation is valid until <strong>${escapeHtml(formatMoment(d.validUntil))}</strong>.</p>
@@ -151,21 +152,36 @@ export type ProformaInvoiceEmailData = {
   guestCount: number;
   currency: string;
   breakdown: StayChargeBreakdown;
-  amountPaid?: number | null;
-  /** How many payments the amountPaid arrived in — ">1" shows the installment count. */
-  paymentCount?: number | null;
+  /** The paper's own rows (2026-11-05, `proformaEmailFigures`). */
+  advanceReceived: number;
+  /** How many payments it arrived in — ">1" shows the installment count. */
+  paymentCount: number;
+  /** Whether an advance is asked of this guest. False: the email asks for none. */
+  advanceAsked: boolean;
+  advanceDueNow: number;
+  /** "(50% of quote)", or null. */
+  advanceDueQualifier: string | null;
+  balanceAtCheckout: number;
   /** Advance-window deadline (= check-in date). Null when the entry has no real check-in date —
    *  the caller must NOT pass a today-fallback, or the email demands payment by a made-up date. */
   advanceDueBy?: Date | null;
+  /** How long this proforma stands (2026-11-05): what the paper prints. */
+  validUntil?: Date | null;
   /** The guest's recorded payment plan, already worded ("Part now — remainder by 12 Aug 2026").
    *  Null = no plan recorded, no line printed. */
   paymentPlan?: string | null;
 };
 
 export function renderProformaInvoiceEmail(d: ProformaInvoiceEmailData): StageEmailContent {
-  const due = Math.max(0, d.breakdown.total - (d.amountPaid ?? 0));
-  const showDueBy = due > 0 && d.advanceDueBy != null;
-  const paidLabel = `Already received${(d.paymentCount ?? 0) > 1 ? ` (${d.paymentCount} payments)` : ""}`;
+  const owing = d.advanceAsked && d.advanceDueNow > 0;
+  const showDueBy = owing && d.advanceDueBy != null;
+  const dueLabel = `Advance due now${d.advanceDueQualifier ? ` ${d.advanceDueQualifier}` : ""}`;
+  const closing = owing
+    ? "Settling this in advance helps us secure your room. Reply to this email if you need bank details or have any questions."
+    : d.advanceAsked
+      ? "The advance is received; the balance is settled at check-out. Reply to this email if you have any questions."
+      : `${d.advanceReceived > 0 ? "No further advance is asked" : "No advance is asked"} for this booking; the balance is settled at check-out. Reply to this email if you have any questions.`;
+  const paidLabel = `Already received${d.paymentCount > 1 ? ` (${d.paymentCount} payments)` : ""}`;
   const subject = COMMON_SUBJECT;
 
   const text = [
@@ -182,12 +198,15 @@ export function renderProformaInvoiceEmail(d: ProformaInvoiceEmailData): StageEm
     "",
     ...breakdownLines(d.breakdown, d.currency),
     d.paymentPlan ? `Payment plan:           ${d.paymentPlan}` : null,
-    d.amountPaid != null ? `${paidLabel}:  ${formatMoney(d.amountPaid, d.currency)}` : null,
-    `Balance due:            ${formatMoney(due, d.currency)}`,
+    d.advanceReceived > 0 ? `${paidLabel}:  ${formatMoney(d.advanceReceived, d.currency)}` : null,
+    d.advanceAsked ? `${dueLabel}:  ${formatMoney(d.advanceDueNow, d.currency)}` : null,
+    `Balance at check-out:   ${formatMoney(d.balanceAtCheckout, d.currency)}`,
     "",
     showDueBy ? `The advance is due by ${formatDate(d.advanceDueBy!)} — your check-in date.` : null,
     showDueBy ? "" : null,
-    "Settling this in advance helps us secure your room. Reply to this email if you need bank details or have any questions.",
+    d.validUntil ? `This proforma is valid until ${formatMoment(d.validUntil)}.` : null,
+    d.validUntil ? "" : null,
+    closing,
     "",
     "— The Legphel Hotel team",
   ]
@@ -205,11 +224,13 @@ ${detailsTable([
   tableRow("Guests", String(d.guestCount), true),
   ...breakdownRows(d.breakdown, d.currency),
   d.paymentPlan ? tableRow("Payment plan", d.paymentPlan, false, true) : "",
-  d.amountPaid != null ? tableRow(paidLabel, formatMoney(d.amountPaid, d.currency)) : "",
-  tableRow("Balance due", formatMoney(due, d.currency), true, true),
+  d.advanceReceived > 0 ? tableRow(paidLabel, formatMoney(d.advanceReceived, d.currency)) : "",
+  d.advanceAsked ? tableRow(dueLabel, formatMoney(d.advanceDueNow, d.currency), true, true) : "",
+  tableRow("Balance at check-out", formatMoney(d.balanceAtCheckout, d.currency), true, !d.advanceAsked),
 ])}
 ${showDueBy ? `<p style="font-size:13px;color:#555">The advance is due by <strong>${escapeHtml(formatDate(d.advanceDueBy!))}</strong> &mdash; your check-in date.</p>` : ""}
-<p>Settling this in advance helps us secure your room. Reply to this email if you need bank details or have any questions.</p>
+${d.validUntil ? `<p style="font-size:13px;color:#555">This proforma is valid until <strong>${escapeHtml(formatMoment(d.validUntil))}</strong>.</p>` : ""}
+<p>${escapeHtml(closing)}</p>
 <p style="margin-top:24px">&mdash; The Legphel Hotel team</p>
 `);
 
@@ -315,15 +336,13 @@ ${d.holdExpiresAt ? `<p style="font-size:13px;color:#555">The extra nights are h
 // S4 — Reservation confirmation
 // =============================================================================
 
+/** No figures, like the voucher it carries (2026-11-09, operator): the price is the quotation's and the proforma's. */
 export type ReservationConfirmationEmailData = {
   guestDisplayName: string;
   reservationReadableId: string;
   checkInDate: Date;
   checkOutDate: Date;
   guestCount: number;
-  nightlyRate: number;
-  currency: string;
-  breakdown: StayChargeBreakdown;
   ratePlanName?: string | null;
   roomTypeName?: string | null;
   /** Group-specific fields — only used when isGroup === true. */
@@ -368,9 +387,6 @@ export function renderReservationConfirmationEmail(d: ReservationConfirmationEma
     `Stay: ${nights} ${nights === 1 ? "night" : "nights"} · ${guests}`,
     d.roomTypeName ? `Room type: ${d.roomTypeName}` : null,
     d.ratePlanName ? `Rate plan: ${d.ratePlanName}` : null,
-    `Nightly rate: ${formatMoney(d.nightlyRate, d.currency)}`,
-    "",
-    ...breakdownLines(d.breakdown, d.currency),
     "",
     "If anything needs to change, just reply to this email and our front desk will take care of it.",
     "",
@@ -385,7 +401,6 @@ export function renderReservationConfirmationEmail(d: ReservationConfirmationEma
   // card, cancellation / extra-guest / pet / child-age policy cards (colour-coded), footer with
   // hotel contact. The voucher PDF is separately attached to the email so guests can archive
   // the formal document; this HTML body is the human-readable summary.
-  const total = formatMoney(d.breakdown.total, d.currency);
   const nightsLabel = `${nights} ${nights === 1 ? "night" : "nights"}`;
 
   const html = `<!doctype html>
@@ -424,7 +439,6 @@ export function renderReservationConfirmationEmail(d: ReservationConfirmationEma
         <div><strong>Check out:</strong> ${escapeHtml(formatDate(d.checkOutDate))}</div>
         <div><strong>Rooms:</strong> ${d.roomCount ?? 1}</div>
         <div><strong>Stay:</strong> ${escapeHtml(nightsLabel)} · ${escapeHtml(guests)}</div>
-        <div><strong>Total Payable Amount:</strong> ${escapeHtml(total)}</div>
       </div>
       <div style="margin-top:12px;padding-top:10px;border-top:1px dashed #e2e5ec;font-size:12px;color:#555;">
         📎 Kindly find the attachment below for detailed reservation information.

@@ -1,3 +1,4 @@
+import { raiseRefundForLapsedBookingTx } from "../../lib/refund-money.js";
 import type { ActorLevel, PrismaClient } from "@prisma/client";
 import { EntryStatus, Prisma, Stage, StageDwellMode } from "@prisma/client";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
@@ -825,6 +826,9 @@ export async function expireEntry(
       fresh.currentStage === Stage.S1 || fresh.currentStage === Stage.S2
         ? await lapseNegotiationRecordsTx(tx, await getTimerEngine(), { entryId, now })
         : null;
+    // Money on a booking that lapsed (2026-11-05): nothing refunded it or told anyone. It stays on
+    // the bill, and the FOM, GM and admin see it under Notifications › Refunds.
+    const refundRaised = await raiseRefundForLapsedBookingTx(tx, { entryId, inquiryId: fresh.inquiryId, stage: fresh.currentStage, now });
     await auditService.emit(tx as any, auditService.systemActor(), {
       eventType: "ENTRY.EXPIRED",
       entityType: "Entry",
@@ -832,7 +836,7 @@ export async function expireEntry(
       operation: "TRANSITION",
       timestamp: now,
       stageContext: fresh.currentStage as any,
-      payload: { entryId, fromStatus: fresh.status, toStatus: "EXPIRED", closedAs, fromParkFollowUp, negotiation: fromNegotiation, lapsedAt: fresh.currentStage, ...(lapsed ?? {}) },
+      payload: { entryId, fromStatus: fresh.status, toStatus: "EXPIRED", closedAs, fromParkFollowUp, negotiation: fromNegotiation, lapsedAt: fresh.currentStage, refundRequestId: refundRaised?.id ?? null, ...(lapsed ?? {}) },
       inquiryId: fresh.inquiryId,
       entryId: entryId,
       createdBy: "SYSTEM",

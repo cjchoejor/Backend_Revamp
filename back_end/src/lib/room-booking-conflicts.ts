@@ -1,3 +1,4 @@
+import { committedHoldClaimsWhere } from "./entry-inventory-claim.js";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import {
   committedHoldSpans,
@@ -122,9 +123,8 @@ export async function findRoomBookingConflicts(
         // NOT narrowed by roomId: a multi-room hold pins every sealed room but names only one
         // here, so filtering on it missed rooms 2..N entirely. The room filter happens below,
         // against the spans `committedHoldSpans` resolves.
-        state: { in: ["PLACED", "CONFIRMED"] },
+        ...committedHoldClaimsWhere(),
         NOT: { entryId: input.excludeEntryId },
-        expiresAt: { gt: new Date() },
         entry: {
           ...stillHoldsInventory,
           checkInDate: { lt: input.checkOut },

@@ -125,7 +125,7 @@ function BlockH({ children, expanded, onToggle }: { children: ReactNode; expande
 /** Interim-request states in desk words. */
 const STATE_TAG: Record<string, { label: string; cls: string }> = {
   SUGGESTED: { label: "Due — set the amount", cls: "tag warn" },
-  REQUESTED: { label: "Bill ready to send", cls: "tag" },
+  REQUESTED: { label: "Bill generated · not sent", cls: "tag warn" },
   BILLED: { label: "Bill sent — awaiting payment", cls: "tag warn" },
   PAID: { label: "Paid", cls: "tag ok" },
   WITHDRAWN: { label: "Withdrawn", cls: "tag" },
@@ -133,7 +133,7 @@ const STATE_TAG: Record<string, { label: string; cls: string }> = {
 };
 /** Extension states — "Paid" alone would read as finished, but the commit is still ahead. */
 const EXT_TAG: Record<string, { label: string; cls: string }> = {
-  REQUESTED: { label: "Nights held — bill ready to send", cls: "tag" },
+  REQUESTED: { label: "Nights held — bill generated · not sent", cls: "tag warn" },
   BILLED: { label: "Bill sent — awaiting payment", cls: "tag warn" },
   PAID: { label: "Paid — ready to commit", cls: "tag ok" },
   COMMITTED: { label: "Extended", cls: "tag ok" },
@@ -402,7 +402,7 @@ function InterimRequestPanel({
   const f = request.figures;
   const askLabel = f?.askLabel ?? (request.askMode === "PERCENT" ? `${request.askValue}% of the projected total` : money(request.askValue ?? 0, currency));
 
-  const billStateLabel = !dispatched ? "Ready to send" : paid ? "Paid" : "Sent";
+  const billStateLabel = !dispatched ? "generated · not sent" : paid ? "Paid" : "Sent";
   const billStep: StepItem = {
     key: "bill",
     label: "Interim bill generated",
@@ -422,7 +422,7 @@ function InterimRequestPanel({
                 <span style={{ color: "var(--ink-3)" }}>due now {money(dueNow, currency)}</span>
               </span>
               <span style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                <span className={`tag${paid ? " ok" : ""}`}>{billStateLabel}</span>
+                <span className={`tag${paid ? " ok" : !dispatched ? " warn" : ""}`}>{billStateLabel}</span>
                 <button
                   type="button"
                   className="btn btn-ghost btn-sm"
@@ -1025,7 +1025,7 @@ export function StayExtensionBlock({ entry, onChanged }: { entry: EntryDetail; o
     key: "date",
     label: "New checkout",
     state: previewFresh ? "done" : "cur",
-    summary: previewFresh ? `${fmtDay(currentCheckOut)} → ${fmtDay(newDate)} · ${plural(extraNights, "more night")}` : `currently ${fmtDay(currentCheckOut)}`,
+    summary: previewFresh ? `Check-out ${fmtDay(currentCheckOut)} → ${fmtDay(newDate)} · ${plural(extraNights, "more night")}` : `currently ${fmtDay(currentCheckOut)}`,
     body: (
       <div style={{ ...row, gap: 10 }}>
         <div className="field" style={fieldTight}>
@@ -1315,7 +1315,7 @@ export function StayExtensionBlock({ entry, onChanged }: { entry: EntryDetail; o
         <div style={{ display: "grid", gap: 8 }}>
           <div className="fact b-transit" style={{ padding: "7px 11px", fontSize: 12.5, width: "100%", display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
             <span>
-              Checkout <b>{fmtDay(active.priorCheckOutDate)}</b> → <b>{fmtDay(active.newCheckOutDate)}</b> ({plural(new Set(active.extraNights.map((n) => n.date)).size, "more night")})
+              Check-out <b>{fmtDay(active.priorCheckOutDate)}</b> → <b>{fmtDay(active.newCheckOutDate)}</b> ({plural(new Set(active.extraNights.map((n) => n.date)).size, "more night")})
             </span>
             <span>{movesText(active.pricingPreview?.moves, active.priorCheckOutDate) ?? `Same room${new Set(active.extraNights.map((n) => n.roomId)).size > 1 ? "s" : ""} — the guest stays put`}</span>
             {active.pricingPreview?.pricing && (
@@ -1357,7 +1357,7 @@ export function StayExtensionBlock({ entry, onChanged }: { entry: EntryDetail; o
           <DeskConfirmModal
             open={commitOpen}
             title="Commit the stay extension"
-            subtitle={`Checkout ${fmtDay(active.priorCheckOutDate)} → ${fmtDay(active.newCheckOutDate)}`}
+            subtitle={`Check-out ${fmtDay(active.priorCheckOutDate)} → ${fmtDay(active.newCheckOutDate)}`}
             why="The payment is in. Committing makes the booking's papers again for the longer stay — a new quotation and a new reservation with the new check-out date — and brings the booking back to the Stay step."
             consequences={[
               "A new reservation is made with the new check-out date; the earlier one is kept as it was. The extra nights are added to the night audit.",
@@ -1385,7 +1385,7 @@ export function StayExtensionBlock({ entry, onChanged }: { entry: EntryDetail; o
             <DeskConfirmModal
               open={confirmOpen}
               title="Hold the nights & generate the bill"
-              subtitle={`Checkout ${fmtDay(preview.currentCheckOut)} → ${fmtDay(preview.newCheckOut)}`}
+              subtitle={`Check-out ${fmtDay(preview.currentCheckOut)} → ${fmtDay(preview.newCheckOut)}`}
               why="The extra nights are held for the guest while the bill goes out and the payment comes in. Nothing about the booking changes until you commit — after the money."
               consequences={[
                 `The extra nights are claimed for this guest for ${Math.round(preview.holdTtlSeconds / 3600)} hours — other bookings see them as held; they release if unpaid by then.`,
@@ -1408,7 +1408,7 @@ export function StayExtensionBlock({ entry, onChanged }: { entry: EntryDetail; o
             <div key={r.id} style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12, padding: "4px 0", borderTop: "1px dashed var(--line)" }}>
               <span className={EXT_TAG[r.state]?.cls ?? "tag"}>{EXT_TAG[r.state]?.label ?? r.state}</span>
               <span>
-                {fmtDay(r.priorCheckOutDate)} → {fmtDay(r.newCheckOutDate)} · {r.reason}
+                Check-out {fmtDay(r.priorCheckOutDate)} → {fmtDay(r.newCheckOutDate)} · {r.reason}
               </span>
               <span style={{ color: "var(--ink-3)", marginLeft: "auto" }}>{(r.committedAt ?? r.closedAt ?? r.requestedAt).slice(0, 10)}</span>
             </div>

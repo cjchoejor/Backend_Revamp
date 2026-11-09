@@ -1,3 +1,4 @@
+import { paperNumber, printedProformaNumber, printedQuotationNumber, proformaNumberOf } from "../../lib/document-numbers.js";
 import type { ActorLevel, Prisma, PrismaClient } from "@prisma/client";
 import { AuthorizationError, NotFoundError, ValidationError } from "../../lib/errors.js";
 import * as auditService from "../infrastructure/audit-service.js";
@@ -56,7 +57,7 @@ async function paperLabels(prisma: PrismaClient, entryId: string) {
     }),
     prisma.invoice.findMany({
       where: { folio: { entryId } },
-      select: { id: true, invoiceNumber: true, invoiceType: true, versionNumber: true },
+      select: { id: true, invoiceNumber: true, documentNumber: true, invoiceType: true, versionNumber: true },
     }),
   ]);
   const labels = new Map<string, { kind: NotePaperKind; label: string }>();
@@ -64,7 +65,7 @@ async function paperLabels(prisma: PrismaClient, entryId: string) {
   for (const i of invoices) {
     labels.set(i.id, {
       kind: "INVOICE",
-      label: `${INVOICE_WORD[i.invoiceType] ?? "Invoice"} ${i.invoiceNumber ?? i.id}${i.versionNumber > 1 ? ` · v${i.versionNumber}` : ""}`,
+      label: `${INVOICE_WORD[i.invoiceType] ?? "Invoice"} ${proformaNumberOf(i)}${i.versionNumber > 1 ? ` · v${i.versionNumber}` : ""}`,
     });
   }
   return { labels, quotes };

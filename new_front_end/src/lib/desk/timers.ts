@@ -29,6 +29,7 @@ const TIMER_LABELS: Record<string, string> = {
   ENTRY_EXPIRY: "Inquiry expiry",
   OTA_EMAIL_PARSER_POLL: "OTA email poll",
   QUOTATION_VALIDITY_W15: "Quote validity",
+  PROFORMA_VALIDITY_W43: "Proforma validity",
   QUOTATION_ACK_TRACKER: "Quotation acknowledgement tracker",
   SPECULATIVE_HOLD_EXPIRY_W2: "Speculative hold expiry",
   COMMITTED_HOLD_EXPIRY_W3: "Committed hold expiry",

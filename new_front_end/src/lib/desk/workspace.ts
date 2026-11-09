@@ -198,10 +198,11 @@ export function s3Readiness(
     requiredAmount?: number | null;
     /** Newest-first items from GET /api/entries/:id/communications. */
     communications?: CommForReadiness[] | null;
+    /** Money paid in an earlier pass still has no answer (2026-11-05): `earlierAdvance.asked`. */
+    earlierAdvanceAsked?: boolean;
   },
 ): Precondition[] {
   const folio = entry.folio;
-  const hold = entry.committedHold;
   const inPayments = (folio?.payments ?? []).filter(
     (p) => /IN/i.test(p.paymentDirection ?? "") && !/OUT|REFUND/i.test(p.paymentDirection ?? ""),
   );
@@ -233,23 +234,33 @@ export function s3Readiness(
     {
       label: "Quote generated",
       met: liveQuotesThisPass(entry).length > 0,
+      todo: "This pass has no live quote. Change booking, Renegotiate the price makes one",
     },
     // The order below is the order the desk works in (2026-09-25), because the side panel numbers
-    // it and each card waits for the one before: the guest's contact, then the payer, the terms,
-    // the bill, the money — and only then the rooms, which the backend refuses to hold until the
-    // folio, the disclosure and the money are all in place.
+    // it and each card waits for the one before: the guest's contact, then the payer, the bill,
+    // the money — and only then the rooms, which the backend refuses to hold until the folio and
+    // the money are in place. The terms are recorded by the system on reaching Set up (2026-11-05).
     {
       label: "A contact on file",
       met: hasAnyContact(entry),
-      card: "parties",
+      todo: "A phone or an email for the guest",
     },
-    { label: "Who pays chosen", met: !!folio?.billingModel && folio?.state === "PROVISIONAL", card: "billing-model" },
-    { label: "Cancellation terms recorded", met: !!entry.cancellationDisclosure, card: "terms" },
+    { label: "Who pays chosen", met: !!folio?.billingModel && folio?.state === "PROVISIONAL", card: "billing-model", todo: "Choose who pays" },
     // GENERATING the proforma is mandatory; SENDING it is not (operator ruling — only when an
     // advance is demanded or the guest asks). So "generated" is the standing item, and the
     // dispatch/settlement items below appear only when they actually apply — a vacuously-true
     // green line ("sent ✓" when nothing was ever sent or owed) misreads as work done.
-    { label: "Proforma invoice generated", met: proforma, card: "proforma" },
+    { label: "Proforma invoice generated", met: proforma, card: "proforma", todo: "Generate the proforma" },
+    // Its time ended with the guest still to answer: it is made again (2026-11-05).
+    ...(proformas.some((i) => i.state !== "SUPERSEDED" && i.lapsedAt)
+      ? [{ label: "Proforma made again (it ran out)", met: false, card: "proforma", todo: "The proforma ran out. Make it again" }]
+      : []),
+    // The proforma prints the money, so nothing goes ahead until the desk says what happens to it.
+    ...(opts?.earlierAdvanceAsked
+      ? [{ label: "The advance paid before: kept or refunded", met: false, card: "proforma", todo: "Say what happens to the advance paid before" }]
+      : []),
+    // A block whose time ended holds the booking until the FOM or GM decides (2026-11-05).
+    ...(blockTimeEnded(entry) ? [{ label: "The block's time ended: the FOM or GM decides", met: false, card: "hold", todo: "The block's time ended. The FOM or GM decides" }] : []),
     // Money was received → the bill it was paid against must have gone out (backend p40 +
     // the bill-before-money guard). Hidden when nothing has been received: nothing to document.
     ...(advanceReceived > 0
@@ -258,6 +269,7 @@ export function s3Readiness(
             label: "Proforma sent to guest (advance was received)",
             met: proformaDispatched,
             card: "proforma",
+            todo: "Send the proforma",
           },
         ]
       : []),
@@ -291,6 +303,7 @@ export function s3Readiness(
           label: "Guest's answer to the proforma recorded",
           card: "proforma",
           met: inForce?.acknowledgementStatus === "RECEIVED",
+          todo: "Record the guest's answer to the proforma",
         },
       ];
     })()),
@@ -299,24 +312,46 @@ export function s3Readiness(
     // is unknown (status not fetched — conservative). With required = 0 the hotel asks for
     // nothing, and a green "settled ✓" over zero activity misreads as a payment having happened.
     ...(typeof opts?.requiredAmount !== "number" || opts.requiredAmount > 0 || advanceReceived > 0
-      ? [{ label: "Advance settled or credit extended", met: advanceSatisfied, card: "money" }]
+      ? [{ label: "Advance settled or credit extended", met: advanceSatisfied, card: "money", todo: "The advance is still to come. Record it, or extend credit" }]
       : []),
     // NOTE: advance-payment RECONCILIATION (folio.advancePaymentReconciliationComplete) is a
     // Stage 5 pre-arrival gate (Policy 28), NOT an S3→S4 confirmation prerequisite. The backend
     // confirm gate (s4-confirmation-service) never checks it, so it must not gate the freeze here.
-    { label: "Rooms blocked", met: hold?.state === "PLACED" || hold?.state === "UPGRADED", card: "hold" },
   ];
 }
 
-/** Alias — the confirm step's gate is exactly the S3 exit checklist. */
+/**
+ * A block at Set up whose time has ended (2026-11-05, operator: "if a block ends dont release it
+ * directly, mark it very Crtical"). It still holds the rooms, read from the time itself, so the desk
+ * says so whether or not the clock's job has run yet.
+ */
+export function blockTimeEnded(entry: Pick<EntryDetail, "committedHold" | "currentStage">): boolean {
+  const hold = entry.committedHold;
+  return entry.currentStage === "S3" && hold?.state === "PLACED" && new Date(hold.expiresAt).getTime() <= Date.now();
+}
+
+/**
+ * Reserve's gate: Set up's list and the rooms blocked. Move to Reserve itself blocks them
+ * (2026-11-05), so Set up does not wait for it, and this line stands on the Reserve page, where a
+ * block whose time ran out holds Reserve the booking.
+ */
 export function confirmReadiness(
   entry: EntryDetail,
   opts?: Parameters<typeof s3Readiness>[1],
 ): Precondition[] {
-  return s3Readiness(entry, opts);
+  const hold = entry.committedHold;
+  return [...s3Readiness(entry, opts), { label: "Rooms blocked", met: (hold?.state === "PLACED" || hold?.state === "UPGRADED") && !blockTimeEnded(entry), card: "hold" }];
 }
 
 export function canConfirm(
+  entry: EntryDetail,
+  opts?: Parameters<typeof s3Readiness>[1],
+): boolean {
+  return entry.currentStage === "S3" && confirmReadiness(entry, opts).every((c) => c.met);
+}
+
+/** Set up is done: Move to Reserve may be pressed, and it blocks the rooms. */
+export function canMoveToReserve(
   entry: EntryDetail,
   opts?: Parameters<typeof s3Readiness>[1],
 ): boolean {
@@ -368,13 +403,13 @@ export function callerReachable(entry: EntryDetail): boolean {
 export function s1Readiness(entry: EntryDetail): Precondition[] {
   const configs = currentPassConfigs(entry);
   const preferred = configs.find((c) => c.optionSelected != null && !c.isStale);
-  // In the order of the five sections (2026-10-10, the boss's journey mockup): the caller, who is
-  // asking, the stay, the house, wrap up. The guest STAYING is named at Wrap up (2026-10-12) — the
-  // caller is often an agent or an assistant — and the move to Negotiation needs one.
+  // In the order of the four sections: the caller (with how they came in, one section since
+  // 2026-11-05), the stay, the house, wrap up. The guest STAYING is named at Wrap up (2026-10-12) —
+  // the caller is often an agent or an assistant — and the move to Negotiation needs one.
+  // How they came in is no line of its own: nothing ticked is Direct voice.
   return [
     { label: "The caller · a phone or an email", met: callerReachable(entry), card: "caller" },
-    { label: "How they came in", met: !!(entry.inquiry as { sourceChannel?: string | null } | undefined)?.sourceChannel, card: "asking" },
-    { label: "What kind of stay", met: !!entry.useType, card: "asking" },
+    { label: "What kind of stay", met: !!entry.useType, card: "caller" },
     { label: "Stay dates set", met: !!(entry.checkInDate && entry.checkOutDate), card: "stay" },
     { label: "Guest count set", met: (entry.guestCount ?? 0) >= 1, card: "stay" },
     { label: "Availability searched", met: configs.length > 0, card: "house" },
@@ -458,7 +493,6 @@ export function s5Readiness(
             met: hotelToday !== null && hotelToday >= checkInYmd,
           },
         ];
-  const tasks = entry.preArrivalTasks ?? [];
   // Mirrors p44 (2026-08-14): the FOM tier-2 acknowledgement is required only when the folio
   // balance is NEAR the extended ceiling (registry `tier2Percent`, default 90%) — NOT merely
   // because a ceiling exists. The frozen reservation carries `creditCeilingIfExtended`
@@ -475,11 +509,8 @@ export function s5Readiness(
     // The handoff records itself once the room, the tasks and the money are done, so it is
     // listed last — the order the desk works and the order the page reads (2026-09-25).
     { label: "Room assigned", met: (entry.roomAssignments ?? []).length > 0, card: "rooms" },
-    {
-      card: "tasks",
-      label: "Pre-arrival tasks done",
-      met: tasks.length > 0 && tasks.every((t) => t.status === "COMPLETE" || t.status === "WAIVED"),
-    },
+    // The pre-arrival tasks are the system's for now (2026-11-07): closed when Arrival opens and
+    // again before Check-in, so the desk does not list them.
     { label: "Advance reconciled", met: entry.folio?.advancePaymentReconciliationComplete === true, card: "advance" },
     {
       card: "advance",
@@ -510,6 +541,8 @@ export function canProgressS5(entry: EntryDetail, guestPresent: boolean, hotelTo
 export function s6Readiness(
   entry: EntryDetail,
   opts?: {
+    /** Money waiting to go back holds check-in (2026-11-05): the server's `refundWaiting`. */
+    refundWaiting?: number | null;
     guestDetails?: { satisfied: boolean; vipExempt: boolean; filledSlots: number; totalSlots: number } | null;
     identityVerified?: boolean;
     /** The desk's two attestations at the counter (2026-09-25) — listed when the caller has them. */
@@ -538,7 +571,9 @@ export function s6Readiness(
   // In the order the page reads (2026-09-25): the document and the guests, the registration
   // card, the money, the VIP notice, then the rooms and their keys. The handoff is Arrival's and
   // has no section here.
+  const refundLine = (opts?.refundWaiting ?? 0) > 0 ? [{ label: "The refund waiting: recorded by the FOM or GM", met: false, card: "advance" }] : [];
   return [
+    ...refundLine,
     { label: "Identity verified", met: opts?.identityVerified ?? false, card: "identity" },
     ...(gd && !gd.vipExempt
       ? [{ label: `Guest details recorded (${gd.filledSlots}/${gd.totalSlots})`, met: gd.satisfied, card: "identity" }]
@@ -749,6 +784,8 @@ export type Precondition = {
   card?: string;
   /** A section's changes on screen, not saved yet (2026-10-27) — holds the move until saved. */
   unsaved?: boolean;
+  /** What to do about it, said beside Set up's move while it waits (2026-11-05). */
+  todo?: string;
 };
 
 /** Real-state preconditions surfaced in the gate bar for each step. */

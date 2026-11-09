@@ -1,5 +1,6 @@
 "use client";
 
+import { RefundStanding } from "@/components/ds/refund-bits";
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Banknote, Check, Clock } from "lucide-react";
@@ -545,7 +546,7 @@ export function AdvanceSettlementBlock({
       });
     },
     onSuccess: () => {
-      toast.success("Payment logged against the advance");
+      toast.success(status?.paidInFull ? "Payment recorded on the bill — taken off what the guest owes at check-out" : "Payment logged against the advance");
       setAmount("");
       setNotes("");
       setMode("");
@@ -598,6 +599,63 @@ export function AdvanceSettlementBlock({
   // direct-bill-like (agent/government settles later — "no advance" is legitimate there).
   const canReconcile =
     (status?.totalReceived ?? 0) > 0 || ["DIRECT_BILL", "GOVERNMENT"].includes(folio.billingModel ?? "");
+  // Who may is the admin console's setting, and the server's answer (2026-11-05).
+  const mayReconcile = status?.mayReconcile !== false;
+
+  // The payment's fields, shared by the advance still owed and money paid ahead once it is settled.
+  const paymentFields = (
+    <div className="frow">
+      <div className="field">
+        <label>Amount received (Nu)</label>
+        <input
+          type="number"
+          min={0.01}
+          step="0.01"
+          value={amount}
+          onChange={(e) => {
+            editedRef.current = true;
+            setAmount(e.target.value);
+          }}
+        />
+        {status && status.shortfall > 0 && (
+          <div style={{ fontSize: 10.5, color: "var(--ink-3)", marginTop: 3, lineHeight: 1.4 }}>
+            {suggestedAmount !== "" && amount === suggestedAmount ? (
+              <>Pre-filled with what&rsquo;s still owed — change it if the guest paid a different amount.</>
+            ) : (
+              <>
+                Still owed on the advance: {money(status.shortfall, currency)}.{" "}
+                <button
+                  type="button"
+                  className="rcb-mini"
+                  onClick={() => {
+                    editedRef.current = true;
+                    setAmount(String(status.shortfall));
+                  }}
+                >
+                  Use that
+                </button>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+      <div className="field">
+        <label>How it was paid</label>
+        <select value={mode} onChange={(e) => setMode(e.target.value as AdvancePaymentMode | "")}>
+          <option value="">choose…</option>
+          {ADVANCE_PAYMENT_MODES.map(([v, l]) => (
+            <option key={v} value={v}>
+              {l}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="field">
+        <label>Notes</label>
+        <input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="e.g. the slip's reference" />
+      </div>
+    </div>
+  );
 
   return (
     <div className="block">
@@ -642,6 +700,7 @@ export function AdvanceSettlementBlock({
           </div>
         )}
 
+      <RefundStanding status={status} currency={currency} />
       {hidePlan ? null : <AdvancePlanFacts status={status} />}
       <InstallmentHistory status={status} currency={currency} />
 
@@ -667,57 +726,7 @@ export function AdvanceSettlementBlock({
 
       {!settled && collectable && (
         <>
-          <div className="frow">
-            <div className="field">
-              <label>Amount received (Nu)</label>
-              <input
-                type="number"
-                min={0.01}
-                step="0.01"
-                value={amount}
-                onChange={(e) => {
-                  editedRef.current = true;
-                  setAmount(e.target.value);
-                }}
-              />
-              {status && status.shortfall > 0 && (
-                <div style={{ fontSize: 10.5, color: "var(--ink-3)", marginTop: 3, lineHeight: 1.4 }}>
-                  {suggestedAmount !== "" && amount === suggestedAmount ? (
-                    <>Pre-filled with what&rsquo;s still owed — change it if the guest paid a different amount.</>
-                  ) : (
-                    <>
-                      Still owed on the advance: {money(status.shortfall, currency)}.{" "}
-                      <button
-                        type="button"
-                        className="rcb-mini"
-                        onClick={() => {
-                          editedRef.current = true;
-                          setAmount(String(status.shortfall));
-                        }}
-                      >
-                        Use that
-                      </button>
-                    </>
-                  )}
-                </div>
-              )}
-            </div>
-            <div className="field">
-              <label>How it was paid</label>
-              <select value={mode} onChange={(e) => setMode(e.target.value as AdvancePaymentMode | "")}>
-                <option value="">choose…</option>
-                {ADVANCE_PAYMENT_MODES.map(([v, l]) => (
-                  <option key={v} value={v}>
-                    {l}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="field">
-              <label>Notes</label>
-              <input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="e.g. the slip's reference" />
-            </div>
-          </div>
+          {paymentFields}
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
             <button
               className="btn btn-primary"
@@ -729,9 +738,11 @@ export function AdvanceSettlementBlock({
             </button>
             <button
               className="btn btn-ghost btn-sm"
-              disabled={!!folio.advancePaymentReconciliationComplete || reconcileM.isPending || !canReconcile}
+              disabled={!!folio.advancePaymentReconciliationComplete || reconcileM.isPending || !canReconcile || !mayReconcile}
               title={
-                canReconcile
+                !mayReconcile
+                  ? `This is for ${status?.reconcileBy ?? "the GM or an admin"}.`
+                  : canReconcile
                   ? "Sign off the advance position as accepted — ticks the payment-reconciliation checklist and stops follow-up chasing. Use it when a shortfall is deliberately accepted (e.g. covered by credit or agent-settled)."
                   : "Log a payment first — reconciling records that the money position was reviewed, and with nothing received there is nothing to reconcile (direct-bill folios are the exception)."
               }
@@ -748,6 +759,11 @@ export function AdvanceSettlementBlock({
               Refresh
             </button>
           </div>
+          {!mayReconcile && !folio.advancePaymentReconciliationComplete ? (
+            <div className="sm" style={{ marginTop: 6, color: "var(--warn-t)", fontWeight: 600 }}>
+              Signing off a part payment is for {status?.reconcileBy ?? "the GM or an admin"}.
+            </div>
+          ) : null}
         </>
       )}
 
@@ -756,14 +772,41 @@ export function AdvanceSettlementBlock({
           <Check style={{ width: 14, height: 14, color: "var(--green-d)" }} />
           Advance settled in full
           {folio.advancePaymentReconciliationComplete ? " · reconciled" : ""}
+          {!folio.advancePaymentReconciliationComplete && collectable && !mayReconcile ? " · tick Payment reconciliation under the tasks to sign it off" : ""}
           {/* Paid in full but never signed off (a tick recorded before 2026-09-18 completed the
               task without reconciling): the Arrival gate still waits for it, so the sign-off stays
               reachable here instead of vanishing with the payment form. */}
-          {!folio.advancePaymentReconciliationComplete && collectable && canReconcile ? (
+          {!folio.advancePaymentReconciliationComplete && collectable && canReconcile && mayReconcile ? (
             <button className="btn btn-ghost btn-sm" disabled={reconcileM.isPending} onClick={() => reconcileM.mutate()}>
               {reconcileM.isPending ? "Reconciling…" : "Mark reconciled"}
             </button>
           ) : null}
+        </div>
+      )}
+
+      {/* Money can still be taken once the advance is settled or none was asked — the guest paying
+          more ahead (2026-11-07, operator: "in stage 5, the payments tab is there but not
+          functional"). Reserve's own card already allowed it; Arrival and Check-in now do too. */}
+      {settled && collectable && (
+        <div className="paid-ahead" style={{ marginTop: 10, borderTop: "1px dashed var(--line-2)", paddingTop: 10 }}>
+          <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 6 }}>
+            {status && status.requiredAmount > 0 ? "More paid ahead" : "A payment ahead"}
+            <Help label="About paying ahead">
+              The guest pays part of the stay before it is billed. It goes on the bill as money received and is taken off what
+              they owe at check-out.
+            </Help>
+          </div>
+          {paymentFields}
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
+            <button
+              className="btn btn-primary"
+              disabled={!amount || !mode || paymentM.isPending}
+              title={!amount ? "put in the amount received" : !mode ? "choose how it was paid" : undefined}
+              onClick={() => paymentM.mutate()}
+            >
+              {paymentM.isPending ? "Logging…" : "Log payment received"}
+            </button>
+          </div>
         </div>
       )}
 

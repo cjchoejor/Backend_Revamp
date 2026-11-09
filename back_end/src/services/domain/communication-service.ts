@@ -115,7 +115,7 @@ export async function dispatchConfirmationVoucherTx(tx: Prisma.TransactionClient
  */
 export async function armVoucherReplyWindow(
   prisma: Prisma.TransactionClient | import("@prisma/client").PrismaClient,
-  input: { reservationId: string; actorId: string; voucherAckSeconds: number },
+  input: { reservationId: string; actorId: string; voucherAckSeconds: number; channel?: CommunicationChannel; summary?: string },
 ): Promise<string | null> {
   const comm = await prisma.communicationRecord.findFirst({
     where: {
@@ -132,7 +132,7 @@ export async function armVoucherReplyWindow(
   if (comm.sendStatus === "HELD") {
     await prisma.communicationRecord.update({
       where: { id: comm.id },
-      data: { sendStatus: "DISPATCHED", channel: CommunicationChannel.WHATSAPP, contentSummary: "Confirmation voucher sent on WhatsApp" },
+      data: { sendStatus: "DISPATCHED", channel: input.channel ?? CommunicationChannel.WHATSAPP, contentSummary: input.summary ?? "Confirmation voucher sent on WhatsApp" },
     });
   }
   // Its reply setting is off: nothing is asked of the guest, and no clock runs (2026-11-03).

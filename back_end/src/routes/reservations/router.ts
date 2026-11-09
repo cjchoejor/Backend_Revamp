@@ -103,6 +103,7 @@ reservationsRouter.post("/entries/:id/activate-pre-arrival", requireActorLevel("
       const taskCount = await prisma.preArrivalTask.count({ where: { entryId } });
       if (taskCount === 0) {
         await preArrivalService.initialiseTasks(prisma, entryId, actorId);
+        await preArrivalService.completeTasksBySystem(prisma, entryId, "SYSTEM");
         entry = await loadEntryDetail(entryId);
       }
     }
@@ -338,7 +339,7 @@ reservationsRouter.post("/entries/:id/conference/verify", requireActorLevel("L2"
 reservationsRouter.patch("/pre-arrival-tasks/:id", requireActorLevel("L1"), validateBody(patchPreArrivalTaskRequestSchema), async (req, res, next) => {
   try {
     const { action, waivedReason } = req.body;
-    const updated = await preArrivalService.updatePreArrivalTask(prisma, req.params.id, req.actor!.actorId, action, waivedReason);
+    const updated = await preArrivalService.updatePreArrivalTask(prisma, req.params.id, req.actor!.actorId, action, waivedReason, req.actor!.level);
     res.json(updated);
   } catch (e) {
     next(e);
@@ -447,6 +448,16 @@ reservationsRouter.post(
   },
 );
 
+/** Who the bill may go to at Set up, and which it starts on: the desk reads the rule, it does not keep a copy. */
+reservationsRouter.get("/entries/:id/payer-choices", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    res.json(await s3ReservationSetupService.readPayerChoices(prisma, req.params.id));
+  } catch (e) {
+    next(e);
+  }
+});
+
 reservationsRouter.post("/entries/:id/folio/provisional", requireActorLevel("L1"), validateBody(ensureProvisionalFolioRequestSchema), async (req, res, next) => {
   try {
     const created = await s3ReservationSetupService.ensureProvisionalFolioAndBillingModel(
@@ -462,10 +473,42 @@ reservationsRouter.post("/entries/:id/folio/provisional", requireActorLevel("L1"
   }
 });
 
+reservationsRouter.post("/entries/:id/proforma", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.status(201).json(await s3ReservationSetupService.generateProformaOfThisPass(prisma, req.params.id, req.actor!.actorId));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** How long this proforma stands, on the quote's rule (2026-11-05). */
+reservationsRouter.post("/invoices/:id/validity", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const body = (req.body ?? {}) as { validDays?: unknown; validHours?: unknown };
+    const ask = {
+      ...(typeof body.validDays === "number" ? { validDays: body.validDays } : {}),
+      ...(typeof body.validHours === "number" ? { validHours: body.validHours } : {}),
+    };
+    res.json(await s3ReservationSetupService.setProformaValidity(prisma, req.params.id, ask, { actorId: req.actor!.actorId, actorLevel: req.actor!.level }));
+  } catch (e) {
+    next(e);
+  }
+});
+
 reservationsRouter.post("/entries/:id/holds/committed", requireActorLevel("L1"), validateBody(placeCommittedHoldRequestSchema), async (req, res, next) => {
   try {
     const out = await s3HoldService.placeCommittedHold(prisma, req.params.id, { actorId: req.actor!.actorId, actorLevel: req.actor!.level }, req.body);
     res.status(201).json(out);
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** Move to Reserve blocks the rooms (2026-11-05): a block still running is left as it is. */
+reservationsRouter.post("/entries/:id/holds/committed/block", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const out = await s3HoldService.blockRoomsForReserve(prisma, req.params.id, { actorId: req.actor!.actorId, actorLevel: req.actor!.level });
+    res.json(out);
   } catch (e) {
     next(e);
   }
@@ -508,7 +551,8 @@ reservationsRouter.post(
  */
 reservationsRouter.post(
   "/entries/:id/holds/committed/release",
-  requireActorLevel("L3"),
+  // The GM's while the block is running; the FOM's too once its time has ended. The service decides.
+  requireActorLevel("L2"),
   async (req, res, next) => {
     try {
       const out = await s3HoldService.releaseCommittedHoldByAuthority(

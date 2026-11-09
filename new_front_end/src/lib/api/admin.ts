@@ -26,6 +26,7 @@ export type ConfigurationActive = {
 
 export type StaffUserAdmin = {
   id: string;
+  title?: string | null;
   fullName: string;
   username: string;
   email: string | null;
@@ -142,6 +143,7 @@ export async function listStaff(session: Session, includeInactive = false) {
 export async function createStaff(
   session: Session,
   body: {
+    title?: string | null;
     fullName: string;
     username: string;
     email?: string | null;
@@ -160,6 +162,7 @@ export async function updateStaff(
   session: Session,
   id: string,
   body: Partial<{
+    title: string | null;
     fullName: string;
     username: string;
     email: string | null;
@@ -1091,6 +1094,8 @@ export type TravelAgentAdmin = {
   modeOfContact: ContactMode;
   /** The agency's contact persons — the desk picks one at intake to fill the booking contact. */
   coordinators: CoordinatorContact[] | null;
+  /** The advance asked of a booking through them, a percentage of the stay. Null is not set. */
+  advancePercent: string | number | null;
   notes: string | null;
   isActive: boolean;
   createdAt: string;
@@ -1099,6 +1104,7 @@ export type TravelAgentAdmin = {
 };
 
 export type TravelAgentInput = {
+  advancePercent?: number | null;
   displayName: string;
   contactNumbers?: string[] | null;
   contactEmail?: string | null;
@@ -1136,7 +1142,7 @@ export async function reactivateTravelAgent(session: Session, id: string) {
 
 // ----- Corporate accounts (Phase B) -----
 
-export type CoordinatorContact = { name: string; phone?: string | null; email?: string | null };
+export type CoordinatorContact = { title?: string | null; name: string; phone?: string | null; email?: string | null };
 
 export type CorporateAccountAdmin = {
   id: string;
@@ -1149,6 +1155,8 @@ export type CorporateAccountAdmin = {
   billingAddress: string | null;
   contractRefs: string[];
   coordinators: CoordinatorContact[] | null;
+  /** The advance asked of a booking through them, a percentage of the stay. Null is not set. */
+  advancePercent: string | number | null;
   notes: string | null;
   isActive: boolean;
   createdAt: string;
@@ -1157,6 +1165,7 @@ export type CorporateAccountAdmin = {
 };
 
 export type CorporateAccountInput = {
+  advancePercent?: number | null;
   displayName: string;
   contactNumbers?: string[] | null;
   contactEmail?: string | null;

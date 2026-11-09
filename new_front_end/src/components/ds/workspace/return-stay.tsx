@@ -15,7 +15,8 @@
  *
  * Since 2026-11-03 (operator): adding a return stay leaves the desk on the stay it was on, the
  * booking head chooses between the stays, and the new stay is set up either the same as this one
- * — it then copies it through Negotiation — or with different settings.
+ * — its guests and rooms are copied at Inquiry and the two are set in one table at Negotiation
+ * (2026-11-09) — or with different settings.
  */
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -27,9 +28,14 @@ import { StayDates } from "@/components/ds/stay-dates";
 import { useSession } from "@/hooks/use-session";
 import { useHotelDay } from "@/hooks/use-hotel-day";
 import { addReturnStay, chooseFollowRooms, getTripFollow, startFollowing, stopFollowing, type FollowShortfallView, type FollowView } from "@/lib/api/entries";
-import { fmtRange, money, nightsOf, plural } from "@/lib/ds/format";
+import { fmtStay, money, nightsOf, plural } from "@/lib/ds/format";
 import { stepName, stepNoOfStage } from "@/lib/ds/steps";
+import { s1Readiness, s2Readiness, s3Readiness } from "@/lib/desk/workspace";
+import { usePaymentStatus } from "@/hooks/use-payment-status";
 import { DsDialog, Overlay, StepCard, toastRefusal, useRefreshEntry } from "@/components/ds/steps/kit";
+import { useStaysTogether } from "@/components/ds/steps/s2-together";
+import { useCommunications } from "@/components/ds/steps/kit";
+import { useTripStays } from "@/components/ds/workspace/trip-papers-shelf";
 import type { EntryDetail, TripStaySummary } from "@/types/api";
 import { DateInput } from "@/components/ds/date-input";
 
@@ -97,7 +103,7 @@ export function TripStays({ entry }: { entry: EntryDetail }) {
           <div key={s.id} className="trip-stay">
             <span className="meta">Stay {i + 1}</span>
             <span className={standing.off ? "dash" : "sm"}>
-              <b>{fmtRange(s.checkInDate, s.checkOutDate)}</b>
+              <StayDates checkIn={s.checkInDate} checkOut={s.checkOutDate} />
               {s.numberOfRooms ? ` · ${plural(s.numberOfRooms, "room")}` : ""}
               {` · ${standing.words}`}
             </span>
@@ -117,9 +123,80 @@ export function TripStays({ entry }: { entry: EntryDetail }) {
  * it can show check in date and check out date as extra info"). With one stay it is just the number.
  * Each other stay is a link, so moving to it parks and resumes as any move between stays does.
  */
+/** What a stay still has to do at its step, as that step's own list says it. */
+function StillToDo({ stay }: { stay: EntryDetail }) {
+  const atSetUp = stay.currentStage === "S3";
+  const pay = usePaymentStatus(stay.id, { enabled: atSetUp && !!stay.folio });
+  const comms = useCommunications(stay.id).data?.items;
+  const items =
+    stay.currentStage === "S1"
+      ? s1Readiness(stay)
+      : stay.currentStage === "S2"
+        ? s2Readiness(stay)
+        : atSetUp
+          ? s3Readiness(stay, {
+              paymentSatisfied: pay.data?.satisfied,
+              totalReceived: pay.data?.totalReceived ?? null,
+              requiredAmount: pay.data?.requiredAmount ?? null,
+              communications: comms,
+              earlierAdvanceAsked: !!pay.data?.earlierAdvance?.asked,
+            })
+          : [];
+  const open = items.filter((i) => !i.met);
+  const step = stepName(stepNoOfStage(stay.currentStage));
+  if (open.length === 0) return <p className="sm">Everything at {step} is done. Open it and move it on.</p>;
+  return (
+    <>
+      <span className="meta">Still to do at {step}:</span>
+      <ul className="apart-todo">
+        {open.map((i) => (
+          <li key={i.label}>{i.label}</li>
+        ))}
+      </ul>
+    </>
+  );
+}
+
+/** Why the stays cannot be viewed together, and what the stays behind still have to do (2026-11-09). */
+function StaysApartDialog({ stays, stayNoOf, onClose }: { stays: EntryDetail[]; stayNoOf: (id: string) => number; onClose: () => void }) {
+  const furthest = Math.max(...stays.map((s) => stepNoOfStage(s.currentStage)));
+  return (
+    <DsDialog open onClose={onClose} closeX register="danger" width={560} title="These stays cannot be viewed together yet" footer={<Button kind="quiet" onClick={onClose}>Close</Button>}>
+      <p className="stop-ink" style={{ fontWeight: 600 }}>
+        They are not at the same step, and have not been through the same work. Bring them to {stepName(furthest)} to view them together.
+      </p>
+      <div className="apart-stays">
+        {stays.map((s) => {
+          const no = stepNoOfStage(s.currentStage);
+          return (
+            <div key={s.id} className="apart-stay">
+              <div className="apart-head">
+                <b>Stay {stayNoOf(s.id)}</b>
+                <span className="meta">{s.id}</span>
+                <span className="si-step">
+                  Step {no} · {stepName(no)}
+                </span>
+              </div>
+              <StayDates checkIn={s.checkInDate} checkOut={s.checkOutDate} />
+              {no < furthest ? (
+                <StillToDo stay={s} />
+              ) : (
+                <span className="meta">Furthest along</span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </DsDialog>
+  );
+}
+
 export function StayPicker({ entry }: { entry: EntryDetail }) {
   const trip = tripOf(entry);
   const follow = useTripFollow(entry);
+  const together = useStaysTogether(entry);
+  const tripStays = useTripStays(entry);
+  const [apartOpen, setApartOpen] = useState(false);
   const [open, setOpen] = useState(false);
   const [at, setAt] = useState<{ top: number; left: number } | null>(null);
   const btnRef = useRef<HTMLButtonElement | null>(null);
@@ -159,22 +236,70 @@ export function StayPicker({ entry }: { entry: EntryDetail }) {
       </span>
     );
   }
+  // Live stays, none yet past Reserve, at different steps: together is offered, shut, and says why.
+  const liveStays = trip.stays.filter((s) => s.status === "ACTIVE" || s.status === "PARKED");
+  const apart =
+    !together.canBeTogether &&
+    liveStays.length > 1 &&
+    liveStays.every((s) => ["S1", "S2", "S3", "S4"].includes(s.currentStage ?? "")) &&
+    new Set(liveStays.map((s) => s.currentStage)).size > 1;
+  const apartStays = tripStays.stays.filter((s) => s.status === "ACTIVE" || s.status === "PARKED");
   const shortOf = new Set((follow.data?.followers ?? []).filter((f) => f.shortfall).map((f) => f.entryId));
   if (follow.data?.following?.shortfall) shortOf.add(entry.id);
   return (
     <span className="refid">
       <button ref={btnRef} type="button" className="stay-pick" aria-haspopup="menu" aria-expanded={open} title="Choose a stay of this trip" onClick={() => setOpen((v) => !v)}>
-        {entry.id}
-        <span className="meta">
-          stay {trip.position} of {trip.stays.length}
-        </span>
+        {together.active ? (
+          `${together.label} together`
+        ) : (
+          <>
+            {entry.id}
+            <span className="meta">
+              stay {trip.position} of {trip.stays.length}
+            </span>
+          </>
+        )}
         <Icon name="chev" className="cb-chev" />
       </button>
       {open && at ? (
         <Overlay>
           <div className="stay-menu" role="menu" aria-label="The stays of this trip" ref={menuRef} style={{ top: at.top, left: at.left }}>
+            {together.canBeTogether ? (
+              <button
+                type="button"
+                className={`stay-item as-btn${together.view === "together" ? " here" : ""}`}
+                role="menuitem"
+                aria-current={together.view === "together" || undefined}
+                onClick={() => {
+                  together.setView("together");
+                  setOpen(false);
+                }}
+              >
+                <span className="si-head">
+                  <b>{together.label} together</b>
+                  {together.view === "together" ? <Chip tone="accent">open now</Chip> : null}
+                </span>
+                <span className="si-line">One table for their rooms, guests, meals and rates</span>
+              </button>
+            ) : apart ? (
+              <button
+                type="button"
+                className="stay-item as-btn apart"
+                role="menuitem"
+                onClick={() => {
+                  setApartOpen(true);
+                  setOpen(false);
+                }}
+              >
+                <span className="si-head">
+                  <b>Stays together</b>
+                </span>
+                <span className="si-line">Not at the same step yet · see what is left</span>
+              </button>
+            ) : null}
             {trip.stays.map((s, i) => {
               const here = s.id === entry.id;
+              const openNow = here && !(together.canBeTogether && together.view === "together");
               const standing = stayStanding(s);
               const nights = nightsOf(s.checkInDate, s.checkOutDate);
               const body = (
@@ -182,7 +307,12 @@ export function StayPicker({ entry }: { entry: EntryDetail }) {
                   <span className="si-head">
                     <b>Stay {i + 1}</b>
                     <span className="si-id">{s.id}</span>
-                    {here ? <Chip tone="accent">open now</Chip> : null}
+                    {openNow ? <Chip tone="accent">open now</Chip> : null}
+                    {standing.off ? null : (
+                      <span className="si-step" title={stepName(stepNoOfStage(s.currentStage))}>
+                        Step {stepNoOfStage(s.currentStage)}
+                      </span>
+                    )}
                   </span>
                   <StayDates checkIn={s.checkInDate} checkOut={s.checkOutDate} />
                   <span className={standing.off ? "si-line stop-ink" : "si-line"}>
@@ -191,12 +321,28 @@ export function StayPicker({ entry }: { entry: EntryDetail }) {
                   {shortOf.has(s.id) ? <span className="si-short">Its rooms need choosing</span> : null}
                 </>
               );
+              if (here && together.canBeTogether && !openNow) {
+                return (
+                  <button
+                    key={s.id}
+                    type="button"
+                    className="stay-item as-btn"
+                    role="menuitem"
+                    onClick={() => {
+                      together.setView("one");
+                      setOpen(false);
+                    }}
+                  >
+                    {body}
+                  </button>
+                );
+              }
               return here ? (
                 <div key={s.id} className="stay-item here" role="menuitem" aria-current="true">
                   {body}
                 </div>
               ) : (
-                <Link key={s.id} className="stay-item" role="menuitem" href={bookingHref(s.id)}>
+                <Link key={s.id} className="stay-item" role="menuitem" href={bookingHref(s.id)} data-view-alone={together.canBeTogether && together.stayIds.includes(s.id) ? "1" : undefined}>
                   {body}
                 </Link>
               );
@@ -204,6 +350,7 @@ export function StayPicker({ entry }: { entry: EntryDetail }) {
           </div>
         </Overlay>
       ) : null}
+      {apartOpen ? <StaysApartDialog stays={apartStays} stayNoOf={tripStays.stayNoOf} onClose={() => setApartOpen(false)} /> : null}
     </span>
   );
 }
@@ -299,6 +446,12 @@ function ReturnStayDialog({ entry, fromAfter, onClose }: { entry: EntryDetail; f
     onSuccess: (created) => {
       // The desk stays where it is (2026-11-03): the new stay shows in the head's list.
       refresh([["trip-follow", entry.id]]);
+      // At Inquiry the stays are set on one page, and at Negotiation in one table: nothing to ask (2026-11-09).
+      if (entry.currentStage === "S1") {
+        toast.success("The return stay is added", { description: "Its dates and rooms are on this page, beside this stay's." });
+        onClose();
+        return;
+      }
       setStage({ at: "options", created: { id: created.id, checkInDate: from, checkOutDate: to } });
     },
     onError: (e) => toastRefusal(e, "The return stay was not added."),
@@ -324,8 +477,8 @@ function ReturnStayDialog({ entry, fromAfter, onClose }: { entry: EntryDetail; f
       toast.success(
         out.changed.includes("rooms")
           ? `Stay ${stayNo} is set up the same as this stay`
-          : `Stay ${stayNo} copies this stay — its rooms and meal plans follow as you choose them here`,
-        { description: "It stays the same until it is priced at Negotiation." },
+          : `Stay ${stayNo} copies this stay — its guests and rooms follow as you choose them here`,
+        { description: "At Negotiation both stays are set in one table." },
       );
       onClose();
     },
@@ -351,13 +504,13 @@ function ReturnStayDialog({ entry, fromAfter, onClose }: { entry: EntryDetail; f
         register="report"
         width={560}
         title={`Stay ${stayNo} is added. How should it be set up?`}
-        caseLines={[stage.created.id, fmtRange(stage.created.checkInDate, stage.created.checkOutDate)]}
+        caseLines={[stage.created.id, <StayDates key="stay" checkIn={stage.created.checkInDate} checkOut={stage.created.checkOutDate} />]}
         footer={<span className="meta">Either way you stay on this stay. Open the new one from the list at the top of the page.</span>}
       >
         <div className="rs-opts">
           <button type="button" className="rs-opt" disabled={same.isPending} onClick={() => same.mutate()}>
             <b>{same.isPending ? "Copying…" : "Same as this stay"}</b>
-            <span>The guests, children&apos;s ages, rooms, room types, meal plans and extra beds are copied from {entry.id}. They stay the same until stay {stayNo} is priced at Negotiation.</span>
+            <span>The guests, children&apos;s ages, room types, meal plans, extra beds and rates start from {entry.id}. It prices them for its own dates, and at Negotiation both stays are set in one table.</span>
           </button>
           <button type="button" className="rs-opt" disabled={same.isPending} onClick={different}>
             <b>Different settings</b>
@@ -402,7 +555,7 @@ function ReturnStayDialog({ entry, fromAfter, onClose }: { entry: EntryDetail; f
         <div className="field">
           <label>Nights</label>
           <input className="input" inputMode="numeric" value={nights} onChange={(e) => setNights(e.target.value.replace(/[^0-9]/g, ""))} />
-          <span className="hint">{to ? `leaving ${fmtRange(from, to)}` : "put in the day they come back"}</span>
+          <span className="hint">{to ? fmtStay(from, to) : "put in the day they come back"}</span>
         </div>
       </div>
       {trip.stays.length > 1 ? <p className="meta" style={{ marginTop: 8 }}>A night already on this enquiry is refused: that would be the same stay twice.</p> : null}
@@ -486,7 +639,7 @@ export function ShortRoomsDialog({
         register="danger"
         width={600}
         title={`Stay ${stayNo} cannot take the same rooms`}
-        caseLines={[stayId, fmtRange(checkIn, checkOut)]}
+        caseLines={[stayId, <StayDates key="stay" checkIn={checkIn} checkOut={checkOut} />]}
         footer={
           <>
             <Button kind="quiet" state={save.isPending ? "inert" : "default"} onClick={onClose}>
@@ -577,7 +730,7 @@ function FreeTypesDialog({
       register="report"
       width={520}
       title="Free room types"
-      caseLines={[fmtRange(checkIn, checkOut), `${plural(missing, "more room")} to choose`]}
+      caseLines={[<StayDates key="stay" checkIn={checkIn} checkOut={checkOut} />, `${plural(missing, "more room")} to choose`]}
       help="Free means a room of the type is open for every night of this stay."
       footer={
         <Button kind="quiet" onClick={onClose}>
@@ -639,15 +792,12 @@ export function FollowNotice({ entry }: { entry: EntryDetail }) {
   if (!from) return null;
   const view = follow.data?.following ?? null;
   const at = trip.stays.findIndex((s) => s.id === from);
-  const atInquiry = entry.currentStage === "S1";
   return (
     <>
       <div className="notice follow">
         <span className="sm">
           <b>Same as {at >= 0 ? `stay ${at + 1}` : from}</b> · {from} —{" "}
-          {atInquiry
-            ? "its guests, rooms, meal plans and extra beds are copied here until this stay is priced. Changing any of them here ends the copying."
-            : "its meal plans and extra beds are copied here until this stay is priced. Its rooms are this stay's own now."}
+          its guests and rooms are copied here at Inquiry. Changing any of them here ends the copying. At Negotiation the stays are set in one table.
         </span>
         <Button kind="quiet" compact state={stop.isPending ? "working" : "default"} workingLabel="Saving…" onClick={() => stop.mutate()}>
           Set its own

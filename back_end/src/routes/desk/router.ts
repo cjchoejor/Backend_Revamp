@@ -22,6 +22,7 @@ import {
   listDeskBookings,
   listStaffNames,
 } from "../../services/domain/desk-read-service.js";
+import { buildBillView } from "../../services/domain/bill-view-service.js";
 
 export const deskRouter = Router();
 const L1 = requireActorLevel("L1");
@@ -54,6 +55,15 @@ deskRouter.post("/bookings/money", L1, validateBody(moneyBody), async (req, res,
   try {
     const items = await deskMoneyFor(prisma, (req.body as z.infer<typeof moneyBody>).entryIds);
     res.set("Cache-Control", "no-store").json({ items, count: items.length });
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** The bill on the Billing page: a booking's, with every other stay of its trip that has one. */
+deskRouter.get("/bills/:entryId", L1, async (req, res, next) => {
+  try {
+    res.set("Cache-Control", "no-store").json(await buildBillView(prisma, String(req.params.entryId)));
   } catch (e) {
     next(e);
   }

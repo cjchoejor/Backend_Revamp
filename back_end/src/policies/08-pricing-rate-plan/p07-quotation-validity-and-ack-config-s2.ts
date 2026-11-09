@@ -3,12 +3,10 @@ import { MissingConfigurationError } from "../../lib/errors.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 
 /**
- * SIG-S2 Policy 7 (validity window) + Policy 52 prerequisite — configuration must exist before send.
+ * Policy 52 prerequisite — the reply windows must exist before send. Policy 7's validity window is the
+ * hotel's rule since 2026-11-05 (`quoteValidityWindow`), with no setting to check.
  */
 export async function enforceQuotationSendTimeGovernanceConfig(prisma: PrismaClient) {
-  await requireActiveConfigValue<number>(prisma, "expiry.s2.quotationValidityDays").catch(() => {
-    throw new MissingConfigurationError("expiry.s2.quotationValidityDays");
-  });
   await requireActiveConfigValue<Record<string, number>>(prisma, "acknowledgement.windowPerType").catch(() => {
     throw new MissingConfigurationError("acknowledgement.windowPerType");
   });

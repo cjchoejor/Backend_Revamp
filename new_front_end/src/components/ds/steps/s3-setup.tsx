@@ -3,7 +3,7 @@
 /**
  * Step 3 · Set up — "hold & deposit" (SS03 §6, prototype `stepCanvas[3]`, Storyboard 03).
  *
- * The three parties, the billing model, the committed hold, the payment plan (the advance as a
+ * Who pays, the committed hold, the payment plan (the advance as a
  * chain — see s3-money.tsx), the terms disclosed, the proforma with the guest's answer, and —
  * when the booking is a group or a company's — the coordinator, free-of-charge rooms and payment
  * milestones. Nothing is frozen here; that happens at Reserve, from the gate bar.
@@ -11,10 +11,13 @@
  * Figures come from the backend only: the advance from payment-status, the proforma as the
  * backend composes it. Nothing is added up here.
  */
-import Link from "next/link";
+import { ProformaValidity } from "./s3-proforma-validity";
+import { StayDates } from "@/components/ds/stay-dates";
+import { PersonName } from "@/components/ds/person-name";
+import { joinTitled, splitTitle } from "@/lib/ds/person";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useQueryClient, useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button, Chip, Icon } from "@/design-system";
 import { useSession } from "@/hooks/use-session";
@@ -22,43 +25,42 @@ import { useBookingRooms } from "@/hooks/use-booking-rooms";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
 import { usePaymentStatus } from "@/hooks/use-payment-status";
 import { openInvoicePdf } from "@/lib/api/documents";
-import { getInquiry } from "@/lib/api/inquiries";
 import {
   approveFocGm,
   cancelEntryAtS3,
   confirmCoordinator,
   dispatchInvoice,
   ensureProvisionalFolio,
+  generateProforma,
+  getPayerChoices,
   getHoldWindow,
   initiateS3ReEntryToS1,
   initiateS3ReEntryToS2,
-  placeCommittedHold,
-  recordCancellationDisclosure,
   releaseCommittedHold,
   setCommittedHoldExpiry,
   listPaymentMilestoneTemplates,
   schedulePaymentMilestones,
 } from "@/lib/api/reservation-setup";
 import { guestNameOf } from "@/lib/ds/status";
-import { fmtDateTime, fmtRange, fmtStamp, hotelFormParts, money, plural } from "@/lib/ds/format";
-import { optionSelectedRoomIds, preferredHoldRoomId, type EntryDetail, type InvoiceSummary, type PaymentStatusSummary } from "@/types/api";
-import { replySettled } from "@/lib/api/entries";
-import { AnswerLine, useReplyAsked, Choice, DsDialog, Fact, FactBox, Facts, Live, OnRecord, PaperDrawer, ReasonDialog, SeeRow, StepCanvas, StepCard, atLeast, currentPassStart, toastRefusal, useCommunications, useRefreshEntry, useStepMode, words, type PaperRef, type ChangeBookingItem, ChangeBookingMenu, StageActs, useFlowUnsaved, useFinishWhenDone, useStepFlow, goToStepCard, revealCard, useOpenAlsoWay, useStepPane, OtherWaysTabs, InlineWay, ShutWay, parkTab, NightsChoice } from "./kit";
+import { payerChoiceWord, payerPartyOf } from "@/lib/ds/payer-words";
+import { blockWindowWords, fmtDateTime, fmtStamp, hotelFormParts, money, plural } from "@/lib/ds/format";
+import { optionSelectedRoomIds, type EntryDetail, type InvoiceSummary, type PaymentStatusSummary } from "@/types/api";
+import { renegotiateTrip, replySettled } from "@/lib/api/entries";
+import { EarlierAdvanceQuestion } from "./s3-earlier-advance";
+import { AnswerLine, useReplyAsked, Choice, DsDialog, Fact, Facts, Live, OnRecord, PaperDrawer, ReasonDialog, SeeRow, SendPaperPanel, StepCanvas, StepCard, atLeast, currentPassStart, toastRefusal, useCommunications, useRefreshEntry, useStepMode, words, type PaperRef, type ChangeBookingItem, ChangeBookingMenu, StageActs, useFlowUnsaved, useFinishWhenDone, useStepFlow, goToStepCard, revealCard, useOpenAlsoWay, useStepPane, OtherWaysTabs, InlineWay, ShutWay, parkTab, NightsChoice, NotSentChip } from "./kit";
+import { TripProformaCard, useTripProforma } from "./s3-trip-proforma";
+import { useStaysTogether } from "./s2-together";
+import { TripCancelWay } from "./s3-trip-cancel";
 import { SendToField, useSendTo } from "./s8-parts";
 import { CancellationFiguresLine, WaiverTick, useRefundHow } from "./cancel-figures";
 import { CompetingClaimsCard, passesOf, roomsHeldWord, useRoomNumbers, useRoomTypeNames } from "./s2-shared";
-import { PaymentPlanCard } from "./s3-money";
+import { PaymentPlanCard, TogetherPaymentPlan } from "./s3-money";
 import { Help, HelpHere } from "@/components/ds/help";
 import { DateInput, TimeInput } from "@/components/ds/date-input";
+import { billNo, proformaBaseNo, quoteNo } from "@/lib/ds/papers";
 
 /* ------------------------------------------------------------------ vocabulary */
 
-const BILLING_WORD: Record<string, string> = {
-  TOUR_OPERATOR_VOUCHER: "The package to the account · anything beyond it to the guest",
-  DIRECT_BILL: "Everything to the account",
-  GUEST_PAY: "Everything to the guest",
-};
-const BILLING_ORDER = ["TOUR_OPERATOR_VOUCHER", "DIRECT_BILL", "GUEST_PAY"] as const;
 /** The two models a group can take without the GM (the backend refuses the rest below L3). */
 const GROUP_FRIENDLY = new Set(["DIRECT_BILL", "TOUR_OPERATOR_VOUCHER"]);
 
@@ -70,17 +72,11 @@ const FOLIO_WORD: Record<string, string> = {
   CLOSED: "The bill is closed.",
 };
 
-const DEFAULT_NO_SHOW = "No-show: one night room charge plus applicable taxes.";
-
 type InquiryScalars = {
   sourceChannel?: string | null;
   travelAgentId?: string | null;
   corporateAccountId?: string | null;
   corporateCoordinator?: string | null;
-};
-type InquiryRecord = {
-  travelAgent?: { displayName?: string | null } | null;
-  corporateAccount?: { displayName?: string | null } | null;
 };
 type EntryContact = { contactPersonName?: string | null; contactPersonPhone?: string | null };
 
@@ -121,52 +117,81 @@ export function S3SetUp({
   const extraKeys: ReadonlyArray<ReadonlyArray<unknown>> = [["invoice-preview"], ["competing-claims", entry.id]];
   const changed = () => refresh(extraKeys);
 
-  const inquiryQuery = useQuery({
-    queryKey: ["inquiry", entry.inquiryId],
-    queryFn: () => getInquiry(session!, entry.inquiryId),
-    enabled: !!session && !!entry.inquiryId,
-  });
-  const inquiryRec = (inquiryQuery.data ?? null) as InquiryRecord | null;
-  const partyName = inquiryRec?.travelAgent?.displayName ?? inquiryRec?.corporateAccount?.displayName ?? null;
-
   const payment = usePaymentStatus(entry.id, { enabled: !!folio });
   const status = payment.data;
   // "Yes, ask for an advance" after the terms (2026-10-28) opens the payment plan's advance box.
   const [askAdvance, setAskAdvance] = useState(0);
   // A payment that blocked the rooms — the hold card asks whether to set a block time (2026-10-28).
-  const [blockAsk, setBlockAsk] = useState<{ until: string | null; n: number } | null>(null);
+  const [blockAsk, setBlockAsk] = useState<number>(0);
 
   /* ---- the billing model the desk is choosing ---- */
-  const isAgentBooking = !!inq.travelAgentId || inq.sourceChannel === "TRAVEL_AGENT" || inq.sourceChannel === "AGENT";
-  // A company's booking, or a group on one master bill, starts on "everything to the account"
-  // (2026-09-18): it started on the guest paying, which the group rules then refuse — the
-  // operator had to work out which model a group may use.
-  const isCompanyBooking = !isAgentBooking && (!!inq.corporateAccountId || inq.sourceChannel === "CORPORATE");
-  const isGroupMaster = entry.groupBillingMode === "GROUP_MASTER";
-  const defaultModel = isAgentBooking ? "TOUR_OPERATOR_VOUCHER" : isCompanyBooking || isGroupMaster ? "DIRECT_BILL" : "GUEST_PAY";
-  const preselectedWhy = isAgentBooking
-    ? "this booking came through a travel agent"
-    : isCompanyBooking
-      ? "a company made this booking"
-      : isGroupMaster
-        ? "a group bills to one master bill"
-        : null;
+  // What is offered and what it starts on are the server's (2026-11-05): the package to a travel
+  // agent or a company first, the guest alone when there is nobody else to bill.
+  const payerChoices = useQuery({
+    queryKey: ["payer-choices", entry.id],
+    queryFn: () => getPayerChoices(session!, entry.id),
+    enabled: !!session,
+  });
+  const party = payerPartyOf(entry);
+  const preselectedWhy =
+    party === "TRAVEL_AGENT"
+      ? "this booking came through a travel agent"
+      : party === "CORPORATE"
+        ? "a company made this booking"
+        : entry.groupBillingMode === "GROUP_MASTER"
+          ? "a group bills to one master bill"
+          : null;
   const savedModel = folio?.billingModel ?? null;
   // Split off another booking (2026-10-14): its payer carries until the desk chooses otherwise.
   const carriedModel = entry.carryOver?.billingModel ?? null;
-  const [model, setModel] = useState<string>(savedModel ?? carriedModel ?? defaultModel);
+  const offeredCarry = carriedModel && payerChoices.data?.choices.includes(carriedModel) ? carriedModel : null;
+  const defaultModel = payerChoices.data?.defaultChoice ?? null;
+  const [picked, setPicked] = useState<string | null>(null);
   useEffect(() => {
-    if (savedModel) setModel(savedModel);
+    setPicked(null);
   }, [savedModel]);
+  const model = picked ?? savedModel ?? offeredCarry ?? defaultModel;
 
   /* ---- the rooms chosen at Inquiry ---- */
   const sealedPreferred = (entry.availabilityConfigs ?? []).find((c) => c.sealedAt && c.optionSelected);
   const sealedRoomIds = useMemo(() => optionSelectedRoomIds(sealedPreferred?.optionSelected), [sealedPreferred?.optionSelected]);
-  const anchorRoomId = preferredHoldRoomId(sealedPreferred?.optionSelected ?? null);
 
   /* ---- the proforma and the guest's answer to it (this pass) ---- */
   const proformas = (folio?.invoices ?? []).filter((i) => i.invoiceType === "PROFORMA");
   const currentProforma = proformas.find((i) => i.state !== "SUPERSEDED") ?? null;
+  const together = useStaysTogether(past ? null : entry);
+  const tripProforma = useTripProforma(entry);
+  // Viewing the stays together, every section of this page acts on all of them (2026-11-09, operator).
+  const groupStays = useMemo(
+    () => (together.active ? [entry, ...together.others].sort((a, b) => together.stayNoOf(a.id) - together.stayNoOf(b.id)) : [entry]),
+    [entry, together.active, together.others], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+  const qc = useQueryClient();
+  const changedAll = () => {
+    void qc.invalidateQueries({ queryKey: ["trip-proforma"] });
+    refresh([...extraKeys, ...groupStays.flatMap((st) => [["entry", st.id], ["payment-status", st.id], ["entry-communications", st.id], ["billing-summary", st.id]])]);
+  };
+  const missingProforma = (tripProforma.data?.stays ?? []).filter((st) => !st.proforma).map((st) => st.entryId);
+  /** "No advance": each stay's proforma, the box closing once the page has them. */
+  const generateProformas = useMutation({
+    mutationFn: async (ids: string[]) => {
+      const failed: Array<{ id: string; error: unknown }> = [];
+      for (const id of ids) {
+        try {
+          await generateProforma(session!, id);
+        } catch (error) {
+          failed.push({ id, error });
+        }
+      }
+      await Promise.all([...ids.map((id) => qc.refetchQueries({ queryKey: ["entry", id] })), qc.refetchQueries({ queryKey: ["trip-proforma"] })]);
+      return failed;
+    },
+    onSuccess: (failed, ids) => {
+      if (failed.length < ids.length) toast.success("No advance asked · the proforma is generated, not sent");
+      for (const f of failed) toastRefusal(f.error, `Stay ${together.stayNoOf(f.id)}'s proforma could not be generated`);
+      changedAll();
+    },
+  });
   const dispatched = proformas.some((i) => i.state !== "SUPERSEDED" && i.dispatchedAt != null);
   const comms = useCommunications(entry.id);
   const passStart = currentPassStart(entry);
@@ -207,13 +232,19 @@ export function S3SetUp({
     onError: (e) => toastRefusal(e, "The booking could not be cancelled"),
   });
   const reentryM = useMutation({
-    mutationFn: (v: { to: "S2" | "S1"; reason: string }) =>
-      v.to === "S2"
-        ? initiateS3ReEntryToS2(session!, entry.id, { reason: v.reason })
-        : initiateS3ReEntryToS1(session!, entry.id, { reason: v.reason }),
-    onSuccess: (_res, v) => {
-      toast.success(v.to === "S2" ? "A new pass is open at Negotiation" : "A new pass is open at Inquiry");
-      refresh(extraKeys);
+    mutationFn: async (v: { to: "S2" | "S1"; reason: string }): Promise<{ notMoved?: Array<{ entryId: string; message: string }> }> => {
+      if (v.to === "S1") {
+        await initiateS3ReEntryToS1(session!, entry.id, { reason: v.reason });
+        return {};
+      }
+      if (together.active) return renegotiateTrip(session!, entry.id, v.reason);
+      await initiateS3ReEntryToS2(session!, entry.id, { reason: v.reason });
+      return {};
+    },
+    onSuccess: (res, v) => {
+      toast.success(v.to === "S1" ? "A new pass is open at Inquiry" : together.active ? `${together.label} are back at Negotiation` : "A new pass is open at Negotiation");
+      for (const n of res.notMoved ?? []) toast.warning(`${n.entryId} stayed at Set up — ${n.message}`);
+      refresh([...extraKeys, ...together.others.map((o) => ["entry", o.id])]);
       goToStep(v.to === "S2" ? 2 : 1);
     },
     onError: (e) => toastRefusal(e, "A new pass could not be opened"),
@@ -241,7 +272,9 @@ export function S3SetUp({
         {
           key: "renegotiate",
           label: "Renegotiate the price",
-          note: "Back to Negotiation for a fresh quotation. The hold is released and the proforma replaced.",
+          note: together.active
+            ? `${together.label} go back to Negotiation for fresh quotations. Each stay's hold is released and its proforma replaced.`
+            : "Back to Negotiation for a fresh quotation. The hold is released and the proforma replaced.",
           onSelect: editable && elevated ? () => openAlsoWay("renegotiate") : undefined,
           reason: !editable ? notNow : elevated ? undefined : "The FOM's call",
         },
@@ -267,15 +300,70 @@ export function S3SetUp({
       <StageActs>
         <ChangeBookingMenu items={changeItems} />
       </StageActs>
-      <PartiesCard entry={entry} inq={inq} partyName={partyName} model={savedModel ?? model} modelSaved={!!savedModel} status={status} />
-
+      {together.deciding ? (
+        <span className="meta">Reading the stays…</span>
+      ) : together.active ? (
+        <>
+          <TogetherWhoPays
+            entry={entry}
+            stays={groupStays}
+            stayNoOf={together.stayNoOf}
+            editable={editable}
+            gm={gm}
+            generate={generateProformas}
+            onAskAdvance={() => setAskAdvance((n) => n + 1)}
+            onChanged={changedAll}
+          />
+          {groupStays.map((st) => (
+            <StayEarlierAdvance key={st.id} stay={st} tz={tz} onChanged={changedAll} />
+          ))}
+          <TripProformaCard
+            entry={entry}
+            editable={editable}
+            inFlow
+            advanceAsk={
+              editable && missingProforma.length > 0 && groupStays.every((st) => !missingProforma.includes(st.id) || !!st.folio?.billingModel)
+                ? { busy: generateProformas.isPending, onNo: () => generateProformas.mutate(missingProforma), onYes: () => setAskAdvance((n) => n + 1) }
+                : null
+            }
+          />
+          <TogetherPaymentPlan
+            entry={entry}
+            stays={groupStays}
+            stayNoOf={together.stayNoOf}
+            editable={editable}
+            elevated={elevated}
+            tz={tz}
+            askAdvance={askAdvance}
+            onAskAdvanceSeen={() => setAskAdvance(0)}
+            onPaymentRecorded={() => setBlockAsk((n) => n + 1)}
+            onChanged={changedAll}
+          />
+          <TogetherHold
+            entry={entry}
+            stays={groupStays}
+            stayNoOf={together.stayNoOf}
+            editable={editable}
+            gm={gm}
+            fom={atLeast(session?.actorLevel, "L2")}
+            tz={tz}
+            nowMs={clock.now}
+            roomNos={roomNos}
+            blockAsk={blockAsk}
+            onBlockAskSeen={() => setBlockAsk(0)}
+            onChanged={changedAll}
+          />
+        </>
+      ) : (
+        <>
       <BillingModelCard
         entry={entry}
         editable={editable}
         gm={gm}
         model={model}
-        setModel={setModel}
+        setModel={setPicked}
         savedModel={savedModel}
+        offered={payerChoices.data?.choices ?? null}
         preselectedWhy={
           !savedModel && carriedModel && model === carriedModel
             ? `it carries from ${entry.carryOver!.fromEntryId}, the booking these rooms came from`
@@ -283,20 +371,18 @@ export function S3SetUp({
               ? preselectedWhy
               : null
         }
-        onChanged={changed}
-      />
-
-      {/* The order the desk works in (2026-09-25): the payer, then the terms, the bill and
-          the money — and the rooms last, the only order the backend accepts them in. */}
-      <TermsCard
-        entry={entry}
-        editable={editable}
-        tz={tz}
-        status={status}
         onAskAdvance={() => setAskAdvance((n) => n + 1)}
         onChanged={changed}
       />
 
+      {/* The order the desk works in (2026-09-25): the payer, then the bill and the money — and
+          the rooms last, the only order the backend accepts them in. The terms are recorded by the
+          system when a booking reaches Set up (2026-11-05). */}
+      {/* Money from before this booking was sent back: on the new proforma, or refunded (2026-11-05). */}
+      <EarlierAdvanceQuestion entry={entry} status={status} tz={tz} onChanged={changed} />
+
+      {/* Viewing the stays together shows only the trip's proforma, once there is one; Send sends
+          that one (2026-11-09, operator). A stay still without its own makes it here first. */}
       <ProformaCard
         entry={entry}
         editable={editable}
@@ -307,6 +393,7 @@ export function S3SetUp({
         passStart={passStart}
         answered={answered}
         replyNotAsked={replyNotAsked}
+        onAskAdvance={() => setAskAdvance((n) => n + 1)}
         onChanged={changed}
       />
 
@@ -316,12 +403,11 @@ export function S3SetUp({
         elevated={elevated}
         status={status}
         statusLoading={payment.isLoading}
-        refetching={payment.isFetching}
-        onRefetch={() => void payment.refetch()}
         tz={tz}
         bill={{ proforma: currentProforma, dispatched, answered, notAsked: replyNotAsked }}
         askAdvance={askAdvance}
-        onRoomsBlocked={(until) => setBlockAsk((prev) => ({ until, n: (prev?.n ?? 0) + 1 }))}
+        onAskAdvanceSeen={() => setAskAdvance(0)}
+        onPaymentRecorded={() => setBlockAsk((n) => n + 1)}
         onChanged={changed}
       />
 
@@ -329,15 +415,17 @@ export function S3SetUp({
         entry={entry}
         editable={editable}
         gm={gm}
+        fom={atLeast(session?.actorLevel, "L2")}
         tz={tz}
         nowMs={clock.now}
         roomIds={sealedRoomIds}
         roomNos={roomNos}
-        anchorRoomId={anchorRoomId}
-        defaultWhy={acceptedQuote ? `Quotation ${acceptedQuote.referenceNumber} accepted` : "Reservation set-up — the rooms held for this booking"}
         blockAsk={blockAsk}
+        onBlockAskSeen={() => setBlockAsk(0)}
         onChanged={changed}
       />
+        </>
+      )}
       {/* What Reserve asks that the sections above do not — the page between Set up and Reserve
           is gone (2026-10-29), and Reserve the booking floats in here. */}
 
@@ -357,7 +445,9 @@ export function S3SetUp({
                 key: "cancel",
                 label: "Cancel booking",
                 inBar: false,
-                content: (
+                content: together.active ? (
+                  <TripCancelWay entry={entry} stays={groupStays} stayNoOf={together.stayNoOf} />
+                ) : (
                   <InlineWay
                     render={() => (
                       <ReasonDialog
@@ -366,10 +456,10 @@ export function S3SetUp({
                         onClose={() => undefined}
                         busy={cancelM.isPending || leaving}
                         title="Cancel this booking"
-                        caseLines={[fmtRange(entry.checkInDate, entry.checkOutDate)]}
+                        caseLines={[<StayDates key="stay" checkIn={entry.checkInDate} checkOut={entry.checkOutDate} />]}
                         lead={
                           <>
-                            Cancelling at Set up is final. The committed hold is released and the rooms return to sale; the proforma is withdrawn and its
+                            Cancelling at Set up is final. The block is released and the rooms return to sale; the proforma is withdrawn and its
                             clocks stop; the <b>disclosed cancellation charge</b>, if any, is posted and the rest of the advance is refunded. It cannot be
                             undone.
                           </>
@@ -400,10 +490,14 @@ export function S3SetUp({
                         open
                         onClose={() => undefined}
                         busy={reentryM.isPending}
-                        title="Renegotiate the price"
-                        caseLines={["A new pass opens at Negotiation"]}
-                        lead="This pass is sealed as it stands. The committed hold is released, the proforma replaced, and a fresh quotation is made in the new pass."
-                        confirmLabel="Open a new pass"
+                        title={together.active ? `Renegotiate the price · ${together.label.toLowerCase()}` : "Renegotiate the price"}
+                        caseLines={[together.active ? "A new pass opens at Negotiation for each stay" : "A new pass opens at Negotiation"]}
+                        lead={
+                          together.active
+                            ? "Each stay's pass is sealed as it stands. Each block is released, each proforma replaced, and a fresh quotation is made for each stay in its new pass."
+                            : "This pass is sealed as it stands. The block is released, the proforma replaced, and a fresh quotation is made in the new pass."
+                        }
+                        confirmLabel={together.active ? "Open a new pass for each" : "Open a new pass"}
                         placeholder="agent asked for a better rate"
                         onConfirm={(r) => reentryM.mutate({ to: "S2", reason: r })}
                       />
@@ -420,77 +514,6 @@ export function S3SetUp({
   );
 }
 
-/* ------------------------------------------------------------------ the three parties */
-
-function PartiesCard({
-  entry,
-  inq,
-  partyName,
-  model,
-  modelSaved,
-  status,
-}: {
-  entry: EntryDetail;
-  inq: InquiryScalars;
-  partyName: string | null;
-  model: string;
-  modelSaved: boolean;
-  status: PaymentStatusSummary | undefined;
-}) {
-  const g = entry.guestProfile ?? entry.inquiry?.guestProfile ?? null;
-  const contact = entry as EntryDetail & EntryContact;
-  const guest = guestNameOf(g);
-  const bookerKind = inq.travelAgentId
-    ? "Travel agent"
-    : inq.corporateAccountId
-      ? "Company"
-      : inq.sourceChannel === "OTA"
-        ? "OTA"
-        : inq.sourceChannel === "WALK_IN"
-          ? "Walk-in"
-          : "Direct";
-  const advanceRule = !status
-    ? null
-    : status.requiredAmount === 0
-      ? "no advance asked"
-      : status.requirementBasis?.mode === "PERCENT"
-        ? `advance ${status.requirementBasis.percent}%`
-        : `advance ${money(status.requiredAmount)}`;
-  const account = partyName ?? (bookerKind === "Direct" || bookerKind === "Walk-in" ? null : "the account");
-  const billedTo =
-    model === "GUEST_PAY" ? guest : model === "DIRECT_BILL" || model === "TOUR_OPERATOR_VOUCHER" ? (account ?? "the account") : words(model);
-  return (
-    <StepCard
-      flow="parties"
-      title="The three parties"
-      summary={`${guest} · booked by ${partyName ?? (bookerKind === "Walk-in" ? "walk-in" : "the guest, direct")} · billed to ${billedTo}`}
-    >
-      <div className="grid3">
-        <FactBox
-          k="Guest"
-          v={g?.id && g ? <Link href={`/guests/${g.id}`}>{guest}</Link> : <i>{inq.travelAgentId ? "to come from the agent" : inq.corporateAccountId ? "to come from the company" : "to be named"}</i>}
-          meta={
-            contact.contactPersonName
-              ? `contact · ${contact.contactPersonName}${contact.contactPersonPhone ? ` · ${contact.contactPersonPhone}` : ""}`
-              : (g?.email ?? g?.phone ?? "no contact of their own on file")
-          }
-        />
-        <FactBox
-          k="Booked by"
-          v={partyName ?? (bookerKind === "Walk-in" ? "Walk-in" : "the guest, direct")}
-          meta={[bookerKind, advanceRule].filter(Boolean).join(" · ")}
-        />
-        <FactBox k="Billed to" v={billedTo} meta={`${modelSaved ? "" : "not set yet · "}${(BILLING_WORD[model] ?? words(model)).toLowerCase()}`} />
-      </div>
-      {partyName && model === "GUEST_PAY" ? (
-        <div className="meta" style={{ marginTop: 8 }}>
-          Booked by {partyName}, billed to the guest — the account pays nothing on this booking.
-        </div>
-      ) : null}
-    </StepCard>
-  );
-}
-
 /* ------------------------------------------------------------------ the billing model */
 
 function BillingModelCard({
@@ -500,59 +523,92 @@ function BillingModelCard({
   model,
   setModel,
   savedModel,
+  offered,
   preselectedWhy,
+  onAskAdvance,
   onChanged,
 }: {
   entry: EntryDetail;
   editable: boolean;
   gm: boolean;
-  model: string;
+  model: string | null;
   setModel: (m: string) => void;
   savedModel: string | null;
+  /** What the server offers this booking; null until it has answered. */
+  offered: string[] | null;
   /** Why the model shown was chosen for the desk — null when the desk chose it. */
   preselectedWhy: string | null;
+  /** The desk said yes to an advance: the payment plan's advance box opens. */
+  onAskAdvance: () => void;
   onChanged: () => void;
 }) {
   const { session } = useSession();
   const folio = entry.folio ?? null;
   const group = entry.groupBillingMode === "GROUP_MASTER";
+  const party = payerPartyOf(entry);
+  // A booking from before this rule keeps what it has on the list, so the choice still reads true.
   const options = useMemo(() => {
-    const base: Array<readonly [string, string]> = BILLING_ORDER.map((k) => [k, BILLING_WORD[k]] as const);
-    if (savedModel && !BILLING_WORD[savedModel]) base.push([savedModel, words(savedModel)] as const);
-    return base;
-  }, [savedModel]);
+    const keys = [...(offered ?? [])];
+    if (savedModel && !keys.includes(savedModel)) keys.push(savedModel);
+    return keys.map((k) => [k, payerChoiceWord(k, party)] as const);
+  }, [offered, savedModel, party]);
   // Setting the payer finishes the section — no Done to press after it (2026-10-28).
   const finish = useFinishWhenDone("billing-model");
+  /**
+   * Setting who pays asks about an advance, when nothing is asked yet (2026-11-05, operator: it
+   * followed the terms, which the system records now). The server says when: a travel agent's or
+   * company's own percentage has already asked. The proforma, which prints the advance, waits for
+   * the answer: No makes it now, Yes when the advance is saved. Closing the question decides
+   * nothing, and the proforma's card asks it again.
+   */
+  const qc = useQueryClient();
+  const [askAdvance, setAskAdvance] = useState(false);
   const save = useMutation({
-    mutationFn: () => ensureProvisionalFolio(session!, entry.id, { billingModel: model }),
-    onSuccess: () => {
+    mutationFn: () => ensureProvisionalFolio(session!, entry.id, { billingModel: model!, askAdvanceFirst: true }),
+    onSuccess: (out) => {
       // Keyed on a model being SET, not on the folio existing — the folio opens at Set up with no
       // model, so the first choice read as a change (2026-09-18).
-      toast.success(
-        !folio ? "The provisional bill is open — the proforma is generated with it" : savedModel ? "The billing model is changed" : "The billing model is set",
-      );
+      toast.success(savedModel ? "Who pays is changed" : "Who pays is set");
       onChanged();
-      finish();
+      if (out.advanceQuestion) setAskAdvance(true);
+      else finish();
     },
-    onError: (e) => toastRefusal(e, "The billing model could not be set"),
+    onError: (e) => toastRefusal(e, "Who pays could not be set"),
+  });
+  const noAdvance = useMutation({
+    // The box closes once the page holds the new booking (2026-11-09, operator): closing it first
+    // showed the sections as they were for a moment, then a refresh.
+    mutationFn: async () => {
+      const out = await generateProforma(session!, entry.id);
+      await qc.refetchQueries({ queryKey: ["entry", entry.id] });
+      return out;
+    },
+    onSuccess: () => {
+      toast.success("No advance asked · the proforma is generated, not sent");
+      setAskAdvance(false);
+      onChanged();
+      finish({ next: "hold" });
+    },
+    onError: (e) => toastRefusal(e, "The proforma could not be generated"),
   });
   const dirty = !savedModel || model !== savedModel;
   // A payer changed and not saved keeps the section open, and holds the move (2026-10-28).
   useFlowUnsaved("billing-model", editable && !!savedModel && model !== savedModel, "Changes to who pays saved");
   const groupLock =
-    group && !GROUP_FRIENDLY.has(model) && !gm ? "for a group, only the account or the voucher — anything else is the GM's call" : null;
+    group && !!model && !GROUP_FRIENDLY.has(model) && !gm ? "for a group, only the account or the package — anything else is the GM's call" : null;
   return (
     <StepCard
       flow="billing-model"
       title="Who pays"
-      summary={savedModel ? (BILLING_WORD[savedModel] ?? words(savedModel)) : undefined}
+      summary={savedModel ? payerChoiceWord(savedModel, party) : undefined}
       right={savedModel && !dirty ? <OnRecord /> : null}
       meta={
         <>
-          Who the bill is made out to. It is chosen here, and can still be changed on the Stay step while the guest is staying.
+          Who the bill is made out to. The package is the rooms, extra beds and meal plans on the quotation; extras are anything else charged
+          during the stay. It is chosen here, and can still be changed on the Stay step while the guest is staying.
           {preselectedWhy ? ` Pre-selected — ${preselectedWhy}; change it if they settle differently.` : ""}
           {group ? " A group has one bill for everyone." : ""}
-          {folio ? "" : " The provisional bill opens with this choice, and the proforma with it."}
+          {folio ? "" : " The provisional bill opens with this choice."}
         </>
       }
     >
@@ -568,13 +624,13 @@ function BillingModelCard({
             <Button
               compact
               // Green once it can be pressed — the act that finishes the section (2026-10-28, as at Inquiry).
-              className={groupLock ? undefined : "go"}
-              state={save.isPending ? "working" : groupLock ? "inert" : "default"}
+              className={groupLock || !model ? undefined : "go"}
+              state={save.isPending ? "working" : groupLock || !model ? "inert" : "default"}
               title={groupLock ?? undefined}
               workingLabel="Saving…"
               onClick={() => save.mutate()}
             >
-              {!folio ? "Open the provisional bill" : savedModel ? "Change to this model" : "Set this model"}
+              {!folio ? "Open the provisional bill" : savedModel ? "Change who pays" : "Set who pays"}
             </Button>
             {savedModel ? (
               <Button kind="quiet" compact onClick={() => setModel(savedModel)}>
@@ -584,6 +640,378 @@ function BillingModelCard({
           </div>
         ) : null}
       </Live>
+      {askAdvance ? (
+        <DsDialog
+          open
+          closeX
+          busy={noAdvance.isPending}
+          onClose={() => {
+            setAskAdvance(false);
+            finish();
+          }}
+          title="Ask the guest for an advance?"
+          caseLines={["Nothing is asked of this booking so far"]}
+          help="The proforma prints the advance, so it is generated once this is answered. With an advance, it is generated when the amount is saved, and the guest pays it before the booking is reserved. With none, it is generated now and the rooms are blocked next."
+          footer={
+            <>
+              <Button kind="secondary" state={noAdvance.isPending ? "working" : "default"} workingLabel="Generating…" onClick={() => noAdvance.mutate()}>
+                No advance
+              </Button>
+              <Button
+                state={noAdvance.isPending ? "inert" : "default"}
+                onClick={() => {
+                  setAskAdvance(false);
+                  finish({ next: "money" });
+                  onAskAdvance();
+                }}
+              >
+                Yes, ask for an advance
+              </Button>
+            </>
+          }
+        >
+          <p className="sm">Does the hotel want an advance on this booking?</p>
+        </DsDialog>
+      ) : null}
+    </StepCard>
+  );
+}
+
+/* ------------------------------------------------------------------ the stays together */
+
+/**
+ * Viewing the stays together at Set up, each section acts on every stay (2026-11-09, operator: "it
+ * should be doing for together like how it was done in stage 2"). Who pays is one choice, set on each
+ * stay through its own checks; a stay refused is named.
+ */
+function TogetherWhoPays({
+  entry,
+  stays,
+  stayNoOf,
+  editable,
+  gm,
+  generate,
+  onAskAdvance,
+  onChanged,
+}: {
+  entry: EntryDetail;
+  stays: EntryDetail[];
+  stayNoOf: (id: string) => number;
+  editable: boolean;
+  gm: boolean;
+  generate: { isPending: boolean; mutateAsync: (ids: string[]) => Promise<unknown> };
+  onAskAdvance: () => void;
+  onChanged: () => void;
+}) {
+  const { session } = useSession();
+  const qc = useQueryClient();
+  const choices = useQuery({ queryKey: ["payer-choices", entry.id], queryFn: () => getPayerChoices(session!, entry.id), enabled: !!session });
+  const party = payerPartyOf(entry);
+  const group = entry.groupBillingMode === "GROUP_MASTER";
+  const saved = stays.map((st) => st.folio?.billingModel ?? null);
+  const savedKey = saved.join("|");
+  const common = saved.every((m) => m === saved[0]) ? saved[0] : null;
+  const [picked, setPicked] = useState<string | null>(null);
+  useEffect(() => setPicked(null), [savedKey]);
+  const model = picked ?? common ?? choices.data?.defaultChoice ?? null;
+  const options = useMemo(() => {
+    const keys = [...(choices.data?.choices ?? [])];
+    for (const m of saved) if (m && !keys.includes(m)) keys.push(m);
+    return keys.map((k) => [k, payerChoiceWord(k, party)] as const);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [choices.data?.choices, savedKey, party]);
+  const finish = useFinishWhenDone("billing-model");
+  const dirty = stays.some((st) => st.folio?.billingModel !== model);
+  useFlowUnsaved("billing-model", editable && !!common && model !== common, "Changes to who pays saved");
+  const groupLock = group && !!model && !GROUP_FRIENDLY.has(model) && !gm ? "for a group, only the account or the package — anything else is the GM's call" : null;
+  const [ask, setAsk] = useState<string[]>([]);
+  const save = useMutation({
+    mutationFn: async () => {
+      const asks: string[] = [];
+      const failed: Array<{ id: string; error: unknown }> = [];
+      for (const st of stays) {
+        if (st.folio?.billingModel === model) continue;
+        try {
+          const out = await ensureProvisionalFolio(session!, st.id, { billingModel: model!, askAdvanceFirst: true });
+          if (out.advanceQuestion) asks.push(st.id);
+        } catch (error) {
+          failed.push({ id: st.id, error });
+        }
+      }
+      await Promise.all([...stays.map((st) => qc.refetchQueries({ queryKey: ["entry", st.id] })), qc.refetchQueries({ queryKey: ["trip-proforma"] })]);
+      return { asks, failed };
+    },
+    onSuccess: ({ asks, failed }) => {
+      if (failed.length < stays.length) toast.success("Who pays is set on every stay");
+      for (const f of failed) toastRefusal(f.error, `Who pays could not be set on stay ${stayNoOf(f.id)}`);
+      onChanged();
+      if (asks.length) setAsk(asks);
+      else finish();
+    },
+  });
+  return (
+    <StepCard
+      flow="billing-model"
+      title="Who pays"
+      summary={common ? payerChoiceWord(common, party) : undefined}
+      right={common && !dirty ? <OnRecord /> : null}
+      meta="One choice for every stay viewed together. Who the bill is made out to; each stay keeps its own bill."
+    >
+      <Choice options={options} value={model} onChange={editable ? setPicked : undefined} disabled={!editable} />
+      {!common && saved.some(Boolean) ? (
+        <p className="sm warn-ink" style={{ marginTop: 6 }}>
+          {stays.map((st) => `Stay ${stayNoOf(st.id)}: ${st.folio?.billingModel ? payerChoiceWord(st.folio.billingModel, party) : "not set"}`).join(" · ")}
+        </p>
+      ) : null}
+      <Live>
+        {editable && dirty ? (
+          <div className="row-acts" style={{ marginTop: 10 }}>
+            <Button
+              compact
+              className={groupLock || !model ? undefined : "go"}
+              state={save.isPending ? "working" : groupLock || !model ? "inert" : "default"}
+              title={groupLock ?? undefined}
+              workingLabel="Saving…"
+              onClick={() => save.mutate()}
+            >
+              {common ? "Change who pays" : "Set who pays"}
+            </Button>
+            {common ? (
+              <Button kind="quiet" compact onClick={() => setPicked(common)}>
+                Undo
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
+      </Live>
+      {ask.length ? (
+        <DsDialog
+          open
+          closeX
+          busy={generate.isPending}
+          onClose={() => {
+            setAsk([]);
+            finish();
+          }}
+          title="Ask the guest for an advance?"
+          caseLines={["Nothing is asked of these stays so far"]}
+          help="Each proforma prints the advance, so they are generated once this is answered."
+          footer={
+            <>
+              <Button
+                kind="secondary"
+                state={generate.isPending ? "working" : "default"}
+                workingLabel="Generating…"
+                onClick={() => {
+                  void generate.mutateAsync(ask).then(() => {
+                    setAsk([]);
+                    finish({ next: "hold" });
+                  });
+                }}
+              >
+                No advance
+              </Button>
+              <Button
+                state={generate.isPending ? "inert" : "default"}
+                onClick={() => {
+                  setAsk([]);
+                  finish({ next: "money" });
+                  onAskAdvance();
+                }}
+              >
+                Yes, ask for an advance
+              </Button>
+            </>
+          }
+        >
+          <p className="sm">Does the hotel want an advance on these stays?</p>
+        </DsDialog>
+      ) : null}
+    </StepCard>
+  );
+}
+
+/** A stay's own question about money from an earlier pass, on the page viewing all the stays. */
+function StayEarlierAdvance({ stay, tz, onChanged }: { stay: EntryDetail; tz: string; onChanged: () => void }) {
+  const status = usePaymentStatus(stay.id, { enabled: !!stay.folio }).data;
+  return <EarlierAdvanceQuestion entry={stay} status={status} tz={tz} onChanged={onChanged} />;
+}
+
+/** The block a stay holds in this pass: one kept by an earlier pass's reservation does not count. */
+const heldOf = (st: EntryDetail) => {
+  const raw = st.committedHold ?? null;
+  return raw && raw.state !== "RELEASED" && raw.state !== "EXPIRED" && raw.state !== "CONFIRMED" ? raw : null;
+};
+
+function StayHoldRow({ stay, stayNo, tz, nowMs, roomNos, houseWords }: { stay: EntryDetail; stayNo: number; tz: string; nowMs: number; roomNos: Map<string, string>; houseWords: string | null }) {
+  const roomNames = useBookingRooms(stay).named;
+  const typeNames = useRoomTypeNames();
+  const sealed = (stay.availabilityConfigs ?? []).find((c) => c.sealedAt && c.optionSelected);
+  const ids = optionSelectedRoomIds(sealed?.optionSelected);
+  const hold = heldOf(stay);
+  const heldIds = ids.length ? ids : hold?.roomId ? [hold.roomId] : [];
+  const rooms = roomsHeldWord(heldIds.map((id) => ({ number: roomNos.get(id) ?? null, typeName: typeNames.get(id) ?? null, quiet: roomNames.has(id) })));
+  const many = heldIds.length > 1;
+  if (!hold) {
+    return (
+      <div className="sm" style={{ marginBottom: 4 }}>
+        <b>Stay {stayNo}</b> · {rooms} not blocked yet
+      </div>
+    );
+  }
+  const lapsed = new Date(hold.expiresAt).getTime() < nowMs;
+  const whose = stay.holdExpiresAtOverride ? "the time set for this booking" : houseWords ? `the hotel's ${houseWords}` : "the hotel's time";
+  return (
+    <div className={`hold-line${lapsed ? " lapsed" : ""}`} style={{ marginBottom: 4 }}>
+      <Icon name="lock" />
+      <span className="hold-text">
+        <b>Stay {stayNo}</b> · <b>{rooms}</b> {lapsed ? (many ? "were" : "was") : many ? "are" : "is"} blocked until <b>{fmtDateTime(hold.expiresAt, tz)}</b>
+        <span className="hold-whose"> · {whose}</span>
+        {lapsed ? <b className="crit-tag" style={{ marginLeft: 8 }}>Critical</b> : null}
+      </span>
+    </div>
+  );
+}
+
+/** Block the Entry for every stay viewed together: one block time, one release. */
+function TogetherHold({
+  entry,
+  stays,
+  stayNoOf,
+  editable,
+  gm,
+  fom,
+  tz,
+  nowMs,
+  roomNos,
+  blockAsk,
+  onBlockAskSeen,
+  onChanged,
+}: {
+  entry: EntryDetail;
+  stays: EntryDetail[];
+  stayNoOf: (id: string) => number;
+  editable: boolean;
+  gm: boolean;
+  fom: boolean;
+  tz: string;
+  nowMs: number;
+  roomNos: Map<string, string>;
+  blockAsk: number;
+  onBlockAskSeen: () => void;
+  onChanged: () => void;
+}) {
+  const { session } = useSession();
+  const flow = useStepFlow();
+  const [askBlock, setAskBlock] = useState(false);
+  const [timeOpen, setTimeOpen] = useState(false);
+  const [releaseOpen, setReleaseOpen] = useState(false);
+  const allHeld = stays.every((st) => !!heldOf(st));
+  useEffect(() => {
+    if (!blockAsk) return;
+    // Answered once: this card is drawn afresh whenever the view changes (2026-11-09).
+    onBlockAskSeen();
+    if (allHeld) return;
+    if (flow.on) flow.open("hold");
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => goToStepCard("hold")));
+    setAskBlock(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [blockAsk]);
+  const house = useQuery({ queryKey: ["hold-window"], queryFn: () => getHoldWindow(session!), enabled: !!session, staleTime: 600_000 }).data ?? null;
+  const houseWords = house ? blockWindowWords(house.minutes) : null;
+  const held = stays.filter((st) => !!heldOf(st));
+  const lapsing = held.some((st) => new Date(heldOf(st)!.expiresAt).getTime() < nowMs);
+  const mayRelease = gm || (fom && lapsing);
+  const mayRetime = !lapsing || fom;
+  const release = useMutation({
+    mutationFn: async (reason: string) => {
+      const failed: Array<{ id: string; error: unknown }> = [];
+      for (const st of held) {
+        try {
+          await releaseCommittedHold(session!, st.id, { releaseReason: reason });
+        } catch (error) {
+          failed.push({ id: st.id, error });
+        }
+      }
+      return failed;
+    },
+    onSuccess: (failed) => {
+      if (failed.length < held.length) toast.success("The blocks are released — the rooms are back on sale");
+      for (const f of failed) toastRefusal(f.error, `Stay ${stayNoOf(f.id)}'s block could not be released`);
+      setReleaseOpen(false);
+      onChanged();
+    },
+  });
+  const own = stays.find((st) => st.holdExpiresAtOverride) ?? null;
+  return (
+    <StepCard
+      flow="hold"
+      flowAfter="proforma"
+      title="Block the Entry"
+      acts={
+        <Live>
+          <SeeRow
+            label="Set block time"
+            note="the same time for every stay"
+            onClick={editable && mayRetime ? () => setTimeOpen(true) : undefined}
+            reason={!editable ? "not at this step" : mayRetime ? undefined : "the FOM's or GM's call now"}
+          />
+          {held.length ? (
+            <SeeRow
+              label="Release"
+              note="frees every stay's rooms, with a reason"
+              onClick={editable && mayRelease ? () => setReleaseOpen(true) : undefined}
+              reason={!editable ? "not at this step" : mayRelease ? undefined : lapsing ? "the FOM's or GM's call" : "releasing a block is the GM's call"}
+            />
+          ) : null}
+        </Live>
+      }
+    >
+      {stays.map((st) => (
+        <StayHoldRow key={st.id} stay={st} stayNo={stayNoOf(st.id)} tz={tz} nowMs={nowMs} roomNos={roomNos} houseWords={houseWords} />
+      ))}
+      {!allHeld ? <span className="meta">Move to Reserve blocks every stay&rsquo;s rooms not blocked yet.</span> : null}
+      {askBlock && !timeOpen ? (
+        <DsDialog
+          open
+          onClose={() => setAskBlock(false)}
+          title="Block the rooms now?"
+          footer={
+            <>
+              <Button kind="secondary" onClick={() => setAskBlock(false)}>
+                Close
+              </Button>
+              <Button
+                icon="clock"
+                onClick={() => {
+                  setAskBlock(false);
+                  setTimeOpen(true);
+                }}
+              >
+                Set block time
+              </Button>
+            </>
+          }
+        >
+          <p className="sm">The payment is recorded. Set a block time to hold every stay&rsquo;s rooms until then. If you close this, they stay on sale until a block time is set here or you press Move to Reserve.</p>
+        </DsDialog>
+      ) : null}
+      {timeOpen ? (
+        <HoldTimeDialog
+          entry={entry}
+          tz={tz}
+          houseWords={houseWords}
+          currentIso={heldOf(entry)?.expiresAt ?? entry.holdExpiresAtOverride ?? own?.holdExpiresAtOverride ?? null}
+          hasOwnTime={!!own}
+          holdLive={!!heldOf(entry)}
+          alsoFor={stays.filter((st) => st.id !== entry.id).map((st) => ({ id: st.id, stayNo: stayNoOf(st.id), holdLive: !!heldOf(st) }))}
+          onClose={() => setTimeOpen(false)}
+          onChanged={onChanged}
+        />
+      ) : null}
+      {releaseOpen ? (
+        <ReleaseDialog onlyRelease caseLine={`${held.length} stays blocked`} busy={release.isPending} onClose={() => setReleaseOpen(false)} onRelease={(r) => release.mutate(r)} onCancelBooking={() => undefined} />
+      ) : null}
     </StepCard>
   );
 }
@@ -594,26 +1022,26 @@ function HoldCard({
   entry,
   editable,
   gm,
+  fom,
   tz,
   nowMs,
   roomIds,
   roomNos,
-  anchorRoomId,
-  defaultWhy,
   blockAsk,
+  onBlockAskSeen,
   onChanged,
 }: {
   entry: EntryDetail;
   editable: boolean;
   gm: boolean;
+  fom: boolean;
   tz: string;
   nowMs: number;
   roomIds: string[];
   roomNos: Map<string, string>;
-  anchorRoomId: string | null;
-  defaultWhy: string;
-  /** A payment just came in: `until` is when it blocked the rooms to, `null` when it could not. */
-  blockAsk: { until: string | null; n: number } | null;
+  /** Counts the payments just recorded here: each one asks about blocking the rooms. */
+  blockAsk: number;
+  onBlockAskSeen: () => void;
   onChanged: () => void;
 }) {
   const { session } = useSession();
@@ -626,26 +1054,18 @@ function HoldCard({
   // Set up from a later step, a confirmed hold is this pass's and reads as held.
   const carried = !past && raw?.state === "CONFIRMED" ? raw : null;
   const hold = raw && !carried && raw.state !== "RELEASED" && raw.state !== "EXPIRED" ? raw : null;
-  const [placeOpen, setPlaceOpen] = useState(false);
-  const [why, setWhy] = useState(defaultWhy);
   const [releaseOpen, setReleaseOpen] = useState(false);
   const [timeOpen, setTimeOpen] = useState(false);
-  useEffect(() => {
-    if (placeOpen) setWhy(defaultWhy);
-  }, [placeOpen, defaultWhy]);
-
   /**
-   * After a payment (2026-10-28, operator: "as soon as the payment is recorded it should take the
-   * user to the committed hold section and ask if they wish to set a block time, otherwise it
-   * blocks according to the system time — after paying an advance the guest by default commits
-   * to a hold"). The payment blocked the rooms on the hotel's time (or this booking's own); the
-   * card comes into view and asks whether to keep it. One that could not be placed just shows the
-   * card, to block the rooms by hand.
+   * After a payment (2026-11-09, operator: "we should prompt the user set block time or close option,
+   * if closed it wont block until user sets the block time in the block the entry section, but move
+   * to reserve will be enable"). A payment no longer blocks the rooms by itself; the card comes into
+   * view and asks. Move to Reserve blocks them if nobody set a time.
    */
   const flow = useStepFlow();
   // A room the system chose and may still move reads "Deluxe Double · room 1" until Arrival.
   const roomNames = useBookingRooms(entry).named;
-  const [blockedUntil, setBlockedUntil] = useState<string | null>(null);
+  const [askBlock, setAskBlock] = useState(false);
   /**
    * Once the block time is settled, the hold section says so (2026-10-28, operator: "show a message
    * saying these rooms are blocked … for this many hours"). It is said by the section's own line,
@@ -655,12 +1075,6 @@ function HoldCard({
    */
   const [flash, setFlash] = useState(0);
   const [details, setDetails] = useState(false);
-  // Opened again from its folded line with Edit, the section shows its tools at once — a second
-  // Edit on the line inside would only ask the same question twice.
-  const reopened = flow.opened.has("hold");
-  useEffect(() => {
-    if (reopened) setDetails(true);
-  }, [reopened]);
   const sayBlocked = (untilIso: string | null) => {
     if (!untilIso) return;
     setDetails(false);
@@ -668,11 +1082,13 @@ function HoldCard({
   };
   useEffect(() => {
     if (!blockAsk) return;
+    onBlockAskSeen();
+    if (hold) return;
     if (flow.on) flow.open("hold");
     window.requestAnimationFrame(() => window.requestAnimationFrame(() => goToStepCard("hold")));
-    if (blockAsk.until) setBlockedUntil(blockAsk.until);
+    setAskBlock(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [blockAsk?.n]);
+  }, [blockAsk]);
 
   // The house's own window, so the card can say what it gives beside a time set for one booking.
   const house = useQuery({
@@ -683,24 +1099,10 @@ function HoldCard({
   }).data ?? null;
   const ownTime = entry.holdExpiresAtOverride ?? null;
 
-  const finish = useFinishWhenDone("hold");
-  const place = useMutation({
-    mutationFn: () => {
-      if (!anchorRoomId) throw new Error("Choose the rooms at Inquiry first");
-      return placeCommittedHold(session!, entry.id, { roomId: anchorRoomId, commercialJustification: why.trim() });
-    },
-    onSuccess: (h) => {
-      setPlaceOpen(false);
-      sayBlocked(h.expiresAt);
-      onChanged();
-      finish();
-    },
-    onError: (e) => toastRefusal(e, "The rooms could not be held"),
-  });
   const release = useMutation({
     mutationFn: (reason: string) => releaseCommittedHold(session!, entry.id, { releaseReason: reason }),
     onSuccess: () => {
-      toast.success("The hold is released — the rooms are back on sale");
+      toast.success("The block is released — the rooms are back on sale");
       setDetails(false);
       setReleaseOpen(false);
       onChanged();
@@ -708,27 +1110,19 @@ function HoldCard({
     onError: (e) => toastRefusal(e, "The hold could not be released"),
   });
 
-  // Mirrors the backend's manual-hold gate (2026-09-18): the advance satisfied, OR any of it
-  // received, OR the FOM's credit extension. With none of the three the click is refused.
-  const payment = usePaymentStatus(entry.id, { enabled: !!entry.folio }).data ?? null;
-  const moneyLock = payment && !payment.satisfied && payment.totalReceived <= 0 && !payment.creditExtensionActive;
-  const placeLock = !anchorRoomId
-    ? "choose the rooms at Inquiry first"
-    : !entry.folio?.billingModel
-      ? "set the billing model first"
-      : !entry.cancellationDisclosure
-        ? "record that the terms were disclosed first"
-        : moneyLock
-          ? "the advance, or part of it, has to come in first — or the FOM extends credit"
-          : null;
   // The rooms by type and count — "2 Deluxe Double and 1 Executive" (2026-10-28, operator) — and a
   // room given by number by its number (2026-10-29).
   const typeNames = useRoomTypeNames();
   const heldIds = roomIds.length ? roomIds : hold?.roomId ? [hold.roomId] : [];
   const rooms = roomsHeldWord(heldIds.map((id) => ({ number: roomNos.get(id) ?? null, typeName: typeNames.get(id) ?? null, quiet: roomNames.has(id) })));
-  const houseWords = house ? (house.minutes % 60 === 0 && house.minutes >= 60 ? plural(house.minutes / 60, "hour") : plural(house.minutes, "minute")) : null;
+  const houseWords = house ? blockWindowWords(house.minutes) : null;
   const count = roomIds.length || 1;
+  // The block's time has ended: the rooms stay held, it is critical, and the FOM or GM decides
+  // (2026-11-05). So Release and a new time are theirs from here, and the page says so.
   const lapsing = hold ? new Date(hold.expiresAt).getTime() < nowMs : false;
+  const mayRelease = gm || (fom && lapsing);
+  const mayRetime = !lapsing || fom;
+  const openAlsoWay = useOpenAlsoWay();
   // A standing block is one line; Edit opens its facts and its acts (2026-10-28, operator: "the
   // user no longer has to see it unless they have to release it or change the block time"). A
   // block whose time has passed, and a step looked back at, show everything.
@@ -745,8 +1139,8 @@ function HoldCard({
     <StepCard
       flow="hold"
       flowAfter="proforma"
-      title="The committed hold"
-      summary={hold ? `${rooms} ${count > 1 ? "are" : "is"} blocked until ${fmtDateTime(hold.expiresAt, tz)}` : undefined}
+      title="Block the Entry"
+      summary={hold ? (lapsing ? `Critical · the block ended ${fmtDateTime(hold.expiresAt, tz)}` : `${rooms} ${count > 1 ? "are" : "is"} blocked until ${fmtDateTime(hold.expiresAt, tz)}`) : undefined}
       acts={
         past || !showDetails ? undefined : (
           <Live>
@@ -755,27 +1149,29 @@ function HoldCard({
               note={
                 ownTime
                   ? `blocked to ${fmtDateTime(ownTime, tz)} — set for this booking`
-                  : `the hotel blocks for ${houseWords ?? "its own time"} — set this booking's own time`
+                  : hold
+                    ? `the hotel blocks for ${houseWords ?? "its own time"} — set this booking's own time`
+                    : "blocks the rooms now, until the time you set"
               }
-              onClick={editable ? () => setTimeOpen(true) : undefined}
-              reason={editable ? undefined : "not at this step"}
+              onClick={editable && mayRetime ? () => setTimeOpen(true) : undefined}
+              reason={!editable ? "not at this step" : mayRetime ? undefined : "the FOM's or GM's call now"}
             />
             {hold ? (
               <SeeRow
                 label="Release"
                 note="frees the rooms with a reason — they return to sale"
-                onClick={editable && gm ? () => setReleaseOpen(true) : undefined}
-                reason={!editable ? "not at this step" : gm ? undefined : "releasing a committed hold is the GM's call"}
+                onClick={editable && mayRelease ? () => setReleaseOpen(true) : undefined}
+                reason={!editable ? "not at this step" : mayRelease ? undefined : lapsing ? "the FOM's or GM's call" : "releasing a block is the GM's call"}
               />
-            ) : (
+            ) : null}
+            {hold && lapsing ? (
               <SeeRow
-                kind="secondary"
-                label="Block the rooms"
-                note="with the reason these rooms are blocked — a block needs one"
-                onClick={editable && !placeLock ? () => setPlaceOpen(true) : undefined}
-                reason={!editable ? "not at this step" : (placeLock ?? undefined)}
+                label="Cancel booking"
+                note="after talking to the guest"
+                onClick={editable && fom ? () => openAlsoWay("cancel") : undefined}
+                reason={!editable ? "not at this step" : fom ? undefined : "the FOM's or GM's call"}
               />
-            )}
+            ) : null}
           </Live>
         )
       }
@@ -809,8 +1205,13 @@ function HoldCard({
           </Facts>
           ) : null}
           {lapsing ? (
-            <div className="sm warn-ink" style={{ marginTop: 6 }}>
-              The block time has passed — the block lapses on the next sweep. Block the rooms again before Reserve.
+            <div className="notice block-soon block-ended" role="alert" data-block-ended style={{ marginTop: 8 }}>
+              <span>
+                <b className="crit-tag">Critical</b> <b>This block ended at {fmtDateTime(hold.expiresAt, tz)}. The rooms are still held.</b>{" "}
+                {fom
+                  ? "Talk to the guest, then cancel the booking, release the rooms, or set a new block time if they still want it."
+                  : "The FOM and GM have been told. They talk to the guest, then cancel the booking or release the rooms."}
+              </span>
             </div>
           ) : null}
         </>
@@ -818,21 +1219,16 @@ function HoldCard({
         <>
           {carried ? (
             <p className="warn-ink" style={{ margin: "0 0 6px", fontWeight: 700 }} role="status">
-              {rooms} {roomIds.length > 1 ? "are" : "is"} still kept for this booking by the reservation from an earlier pass. This pass needs its own block before Reserve — block the rooms again.
+              {rooms} {roomIds.length > 1 ? "are" : "is"} still kept for this booking by the reservation from an earlier pass. Move to Reserve gives this pass its own block.
             </p>
           ) : null}
           <span className="meta">
             {carried
               ? `The earlier hold was placed ${fmtStamp(carried.placedAt, tz)}.`
               : raw
-              ? `The last block ${raw.state === "EXPIRED" ? "ran out" : "was released"} — block the rooms again before Reserve.`
-              : "Not blocked yet."}
-            {!carried && !raw ? (
-              <Help label="How the rooms are blocked">
-                Recording an advance payment — even part of it — blocks {count === 1 ? "the room" : `all ${count} rooms`} automatically. Block them
-                by hand when the rooms should be kept before any money arrives.
-              </Help>
-            ) : null}
+              ? `The last block ${raw.state === "EXPIRED" || raw.releaseReason === "EXPIRY" ? "ran out" : "was released"}, so the rooms are back on sale. Move to Reserve blocks them again.`
+              : `Not blocked yet. Move to Reserve blocks ${count === 1 ? "the room" : `all ${count} rooms`} for ${ownTime ? "the time set for this booking" : houseWords ? `the hotel's ${houseWords}` : "the hotel's time"}.`}
+            {!carried && !raw ? <Help label="How the rooms are blocked">To block them before that, for a time you choose, use Set block time.</Help> : null}
           </span>
           {ownTime ? (
             <div className="sm" style={{ marginTop: 6 }}>
@@ -843,66 +1239,21 @@ function HoldCard({
         </>
       )}
 
-      {placeOpen ? (
+      {askBlock && !timeOpen ? (
         <DsDialog
           open
-          onClose={() => setPlaceOpen(false)}
-          busy={place.isPending}
-          title="Block the rooms"
-          caseLines={[`${rooms} · ${fmtRange(entry.checkInDate, entry.checkOutDate)}`]}
+          onClose={() => setAskBlock(false)}
+          title="Block the rooms now?"
+          caseLines={[rooms]}
           footer={
             <>
-              <Button kind="quiet" state={place.isPending ? "inert" : "default"} onClick={() => setPlaceOpen(false)}>
-                Not now
-              </Button>
-              <Button
-                icon="lock"
-                state={place.isPending ? "working" : why.trim() ? "default" : "inert"}
-                title={why.trim() ? undefined : "write why the rooms are blocked"}
-                workingLabel="Blocking…"
-                onClick={() => place.mutate()}
-              >
-                Block the rooms
-              </Button>
-            </>
-          }
-        >
-          <p className="sm">The rooms are taken from anyone else&rsquo;s marker. The first block wins.</p>
-          <div className="field">
-            <label>
-              Why these rooms are blocked for this booking
-              <Help label="About the reason">The reason recorded against the block. It runs for the hotel&rsquo;s time, or the block time set for this booking.</Help>
-            </label>
-            <textarea className="input" rows={2} value={why} onChange={(e) => setWhy(e.target.value)} autoFocus />
-          </div>
-        </DsDialog>
-      ) : null}
-      {blockedUntil && !timeOpen ? (
-        <DsDialog
-          open
-          onClose={() => {
-            setBlockedUntil(null);
-            setDetails(false);
-          }}
-          title="The rooms are blocked"
-          caseLines={[`${rooms} · until ${fmtDateTime(blockedUntil, tz)}`]}
-          help="The payment blocked the rooms. They stay blocked until this time; if the booking is not reserved by then, they go back on sale."
-          footer={
-            <>
-              <Button
-                kind="secondary"
-                onClick={() => {
-                  const until = blockedUntil;
-                  setBlockedUntil(null);
-                  sayBlocked(until);
-                }}
-              >
-                Keep this time
+              <Button kind="secondary" onClick={() => setAskBlock(false)}>
+                Close
               </Button>
               <Button
                 icon="clock"
                 onClick={() => {
-                  setBlockedUntil(null);
+                  setAskBlock(false);
                   setTimeOpen(true);
                 }}
               >
@@ -912,9 +1263,7 @@ function HoldCard({
           }
         >
           <p className="sm">
-            The advance came in, so {rooms} {count > 1 ? "are" : "is"} blocked until <b>{fmtDateTime(blockedUntil, tz)}</b> —{" "}
-            {ownTime ? "the block time set for this booking" : houseWords ? `the hotel's ${houseWords}` : "the hotel's own time"}. Set a different
-            block time?
+            The payment is recorded. Set a block time to hold {rooms} until then. If you close this, the {count > 1 ? "rooms stay" : "room stays"} on sale until a block time is set here or you press Move to Reserve.
           </p>
         </DsDialog>
       ) : null}
@@ -923,9 +1272,9 @@ function HoldCard({
           entry={entry}
           tz={tz}
           houseWords={houseWords}
-          currentIso={hold?.expiresAt ?? blockAsk?.until ?? ownTime ?? null}
+          currentIso={hold?.expiresAt ?? ownTime ?? null}
           hasOwnTime={!!ownTime}
-          holdLive={!!hold || !!blockAsk?.until}
+          holdLive={!!hold}
           onClose={() => setTimeOpen(false)}
           onChanged={onChanged}
           onSet={(until, whose, live) => {
@@ -933,19 +1282,98 @@ function HoldCard({
           }}
         />
       ) : null}
-      <ReasonDialog
-        open={releaseOpen}
-        danger
-        onClose={() => setReleaseOpen(false)}
-        busy={release.isPending}
-        title="Release the committed hold"
-        caseLines={hold ? [`${rooms} held until ${fmtDateTime(hold.expiresAt, tz)}`] : undefined}
-        lead="The rooms go back on sale at once. This booking keeps its place at Set up and needs a new hold before Reserve."
-        confirmLabel="Release"
-        placeholder="why the rooms are freed"
-        onConfirm={(r) => release.mutate(r)}
-      />
+      {releaseOpen ? (
+        <ReleaseDialog
+          caseLine={hold ? `${rooms} · ${lapsing ? "the block ended" : "blocked until"} ${fmtDateTime(hold.expiresAt, tz)}` : null}
+          busy={release.isPending}
+          onClose={() => setReleaseOpen(false)}
+          onRelease={(r) => release.mutate(r)}
+          onCancelBooking={() => {
+            setReleaseOpen(false);
+            openAlsoWay("cancel");
+          }}
+        />
+      ) : null}
     </StepCard>
+  );
+}
+
+/**
+ * Release asks first whether the booking goes too (2026-11-05, operator: "whenever release is clicked,
+ * prompt the user here in set up if booking should be cancelled or not"). Nothing is chosen for the
+ * desk. Yes opens the booking's own cancel form, which prices the charge and any refund and releases
+ * the rooms as part of it; no asks why and releases them, and the booking stays at Set up.
+ */
+function ReleaseDialog({
+  caseLine,
+  busy,
+  onClose,
+  onRelease,
+  onCancelBooking,
+  onlyRelease = false,
+}: {
+  /** Several stays at once: cancelling is each stay's own act, so it is not asked here. */
+  onlyRelease?: boolean;
+  caseLine: string | null;
+  busy: boolean;
+  onClose: () => void;
+  onRelease: (reason: string) => void;
+  onCancelBooking: () => void;
+}) {
+  const [choice, setChoice] = useState<"KEEP" | "CANCEL" | null>(onlyRelease ? "KEEP" : null);
+  const [why, setWhy] = useState("");
+  return (
+    <DsDialog
+      open
+      closeX
+      onClose={onClose}
+      busy={busy}
+      title="Release the block"
+      caseLines={caseLine ? [caseLine] : undefined}
+      footer={
+        choice === "CANCEL" ? (
+          <Button kind="danger" onClick={onCancelBooking}>
+            Go on to Cancel booking
+          </Button>
+        ) : choice === "KEEP" ? (
+          <Button kind="danger" state={busy ? "working" : why.trim() ? "default" : "inert"} workingLabel="Releasing…" reason={why.trim() ? undefined : "say why the rooms are freed"} onClick={() => onRelease(why.trim())}>
+            Release the rooms
+          </Button>
+        ) : (
+          <span className="sm warn-ink">First: should the booking be cancelled?</span>
+        )
+      }
+    >
+      {onlyRelease ? null : (
+        <div className="field">
+          <label>Should the booking be cancelled as well?</label>
+          <Choice
+            options={[
+              ["KEEP", "No, only release the rooms"],
+              ["CANCEL", "Yes, cancel the booking"],
+            ]}
+            value={choice}
+            onChange={setChoice}
+          />
+        </div>
+      )}
+      {choice === "KEEP" ? (
+        <>
+          <p className="sm" style={{ margin: "0 0 10px" }}>
+            The rooms go back on sale at once. The booking stays at Set up, and Move to Reserve blocks them again.
+          </p>
+          <div className="field">
+            <label>Why?</label>
+            <input value={why} onChange={(e) => setWhy(e.target.value)} placeholder="why the rooms are freed" maxLength={500} autoFocus />
+          </div>
+        </>
+      ) : null}
+      {choice === "CANCEL" ? (
+        <p className="sm" style={{ margin: 0 }}>
+          The cancel form shows any charge and any refund. Cancelling releases the rooms too.
+        </p>
+      ) : null}
+    </DsDialog>
   );
 }
 
@@ -991,8 +1419,7 @@ function HoldLine({
         <b>{rooms}</b> {lapsed ? (many ? "were" : "was") : many ? "are" : "is"} blocked until <b>{until}</b>
         <span className="hold-whose"> · {whose}</span>
         <Help label="About the block">
-          The block takes these rooms from anyone else&rsquo;s marker. If the booking is not reserved by then, {many ? "they go" : "it goes"} back
-          on sale.
+          The block takes these rooms from anyone else&rsquo;s marker. If the booking is not reserved by then, the rooms stay held, and the FOM and GM are told and decide.
         </Help>
       </span>
       {canToggle ? (
@@ -1028,6 +1455,7 @@ function HoldTimeDialog({
   onClose,
   onChanged,
   onSet,
+  alsoFor,
 }: {
   entry: EntryDetail;
   tz: string;
@@ -1039,6 +1467,8 @@ function HoldTimeDialog({
   onChanged: () => void;
   /** What the block now runs to, whose time that is, and whether a block stands now. */
   onSet?: (until: string | null, whose: "BOOKING" | "HOUSE", live: boolean) => void;
+  /** Viewing stays together: the same time for these stays too. */
+  alsoFor?: Array<{ id: string; stayNo: number; holdLive: boolean }>;
 }) {
   const { session } = useSession();
   const seed = hotelFormParts(currentIso ?? new Date(Date.now() + 60 * 60_000).toISOString(), tz);
@@ -1047,12 +1477,24 @@ function HoldTimeDialog({
   const [why, setWhy] = useState("");
 
   const save = useMutation({
-    mutationFn: (clear: boolean) =>
-      setCommittedHoldExpiry(session!, entry.id, clear ? { clear: true, reason: why.trim() || undefined } : { date, time, reason: why.trim() || undefined }),
+    mutationFn: async (clear: boolean) => {
+      // Setting a block time is how the desk blocks the rooms at Set up (2026-11-05).
+      const body = (live: boolean) => (clear ? { clear: true, reason: why.trim() || undefined } : { date, time, reason: why.trim() || undefined, blockNow: !live });
+      const out = await setCommittedHoldExpiry(session!, entry.id, body(holdLive));
+      for (const o of alsoFor ?? []) {
+        await setCommittedHoldExpiry(session!, o.id, body(o.holdLive))
+          .then((r) => {
+            if (r.blockRefused) toast.warning(`Stay ${o.stayNo}'s rooms are not blocked yet`, { description: r.blockRefused, duration: 10000 });
+          })
+          .catch((e) => toastRefusal(e, `Stay ${o.stayNo}'s block time was not changed`));
+      }
+      return out;
+    },
     onSuccess: (out) => {
-      // A block standing now is said in the middle of the screen; one still to be placed, or a note
-      // from the server, keeps its toast.
-      if (!out.holdUpdated || out.note) {
+      // A block standing now is said on its line; one that could not be placed says why.
+      if (out.blockRefused) {
+        toast.warning("The block time is saved, but the rooms are not blocked yet", { description: out.blockRefused, duration: 10000 });
+      } else if (!out.holdUpdated || out.note) {
         toast.success(
           out.source === "BOOKING"
             ? `The rooms are blocked until ${fmtDateTime(out.heldUntil, tz)}${out.holdUpdated ? "" : " — from the moment they are blocked"}`
@@ -1075,7 +1517,7 @@ function HoldTimeDialog({
       busy={save.isPending}
       width={560}
       title="Set block time"
-      caseLines={[entry.id, houseWords ? `the hotel blocks for ${houseWords}` : "the hotel's own time"]}
+      caseLines={[alsoFor?.length ? "The same time for every stay" : entry.id, houseWords ? `the hotel blocks for ${houseWords}` : "the hotel's own time"]}
       footer={
         <>
           <Button kind="quiet" state={save.isPending ? "inert" : "default"} onClick={onClose}>
@@ -1098,8 +1540,8 @@ function HoldTimeDialog({
         </>
       }
     >
-      {holdLive ? <p className="sm">The block standing now moves to this time.</p> : null}
-      <div className="form2" style={{ marginTop: holdLive ? 10 : 0 }}>
+      <p className="sm">{holdLive ? "The block standing now moves to this time." : "The rooms are blocked now, until this time."}</p>
+      <div className="form2" style={{ marginTop: 10 }}>
         <div className="field">
           <label>
             Blocked until · day
@@ -1126,161 +1568,6 @@ function HoldTimeDialog({
   );
 }
 
-/* ------------------------------------------------------------------ the terms disclosed */
-
-function TermsCard({
-  entry,
-  editable,
-  tz,
-  status,
-  onAskAdvance,
-  onChanged,
-}: {
-  entry: EntryDetail;
-  editable: boolean;
-  tz: string;
-  /** What the guest is asked to pay — the advance question after the terms reads it. */
-  status: PaymentStatusSummary | undefined;
-  /** "Yes, ask for an advance": open the payment plan's amount box. */
-  onAskAdvance: () => void;
-  onChanged: () => void;
-}) {
-  const { session } = useSession();
-  const { past } = useStepMode();
-  const d = entry.cancellationDisclosure ?? null;
-  const [open, setOpen] = useState(false);
-  // Once the terms are recorded and nothing is asked of the guest yet, the desk is asked whether
-  // the hotel wants an advance (2026-10-28, operator: "after finishing the terms it takes the user
-  // directly to the committed hold … it can prompt the user if the hotel wishes to impose advance
-  // payment; if no, take the user to the committed hold; if yes, to the payment plan").
-  const [askAdvance, setAskAdvance] = useState(false);
-  const nothingAsked =
-    !!status && status.requiredAmount === 0 && (status.totalReceived ?? 0) === 0 && !status.creditExtensionActive;
-  // The terms the rooms were booked on carry from the booking they were split off (2026-10-14).
-  const [statement, setStatement] = useState(entry.carryOver?.cancellation?.noShowTreatmentStatement || DEFAULT_NO_SHOW);
-  const finish = useFinishWhenDone("terms");
-  const record = useMutation({
-    mutationFn: () =>
-      recordCancellationDisclosure(session!, entry.id, {
-        noShowTreatmentStatement: statement.trim(),
-        disclosedTerms: { tier: "DEFAULT" },
-      }),
-    onSuccess: () => {
-      toast.success("The terms are on record as disclosed");
-      setOpen(false);
-      onChanged();
-      if (nothingAsked) setAskAdvance(true);
-      else finish();
-    },
-    onError: (e) => toastRefusal(e, "The disclosure could not be recorded"),
-  });
-  return (
-    <StepCard
-      flow="terms"
-      flowAfter="billing-model"
-      title="Terms disclosed"
-      summary={d ? `The hotel's standard terms · disclosed ${fmtStamp(d.disclosedAt, tz)}` : undefined}
-      acts={
-        d || past ? undefined : (
-          <Live>
-            <SeeRow
-              kind="secondary"
-              label="Record that the terms were disclosed"
-              note="the no-show treatment in the words the guest was given — Reserve is refused without it"
-              onClick={editable ? () => setOpen(true) : undefined}
-              reason={editable ? undefined : "not at this step"}
-            />
-          </Live>
-        )
-      }
-    >
-      <Facts wide>
-        <Fact k="Cancellation">the hotel&rsquo;s standard terms — the charge follows the notice given</Fact>
-        <Fact k="No-show">{d ? d.noShowTreatmentStatement : statement}</Fact>
-        <Fact k="Disclosed">
-          {d ? (
-            <Chip tone="success" icon="check">
-              {fmtStamp(d.disclosedAt, tz)}
-            </Chip>
-          ) : (
-            <>
-              <Chip tone="warning">not yet</Chip>
-              <Help label="About the disclosure">The booking keeps a disclosure record before Reserve.</Help>
-            </>
-          )}
-        </Fact>
-      </Facts>
-      {open ? (
-        <DsDialog
-          open
-          onClose={() => setOpen(false)}
-          busy={record.isPending}
-          title="Terms disclosed"
-          caseLines={["Cancellation · the hotel's standard terms"]}
-          help="The record keeps the words, who recorded them, and when." 
-          footer={
-            <>
-              <Button kind="quiet" state={record.isPending ? "inert" : "default"} onClick={() => setOpen(false)}>
-                Not now
-              </Button>
-              <Button
-                state={record.isPending ? "working" : statement.trim() ? "default" : "inert"}
-                title={statement.trim() ? undefined : "the no-show treatment is needed"}
-                workingLabel="Recording…"
-                onClick={() => record.mutate()}
-              >
-                Record the disclosure
-              </Button>
-            </>
-          }
-        >
-          <div className="field">
-            <label>The no-show treatment, as the guest was told</label>
-            <textarea className="input" rows={2} value={statement} onChange={(e) => setStatement(e.target.value)} autoFocus />
-          </div>
-        </DsDialog>
-      ) : null}
-      {askAdvance ? (
-        <DsDialog
-          open
-          // Closed without an answer: nothing is asked, so the work goes on to the hold as with No.
-          onClose={() => {
-            setAskAdvance(false);
-            finish();
-          }}
-          title="Ask the guest for an advance?"
-          caseLines={["Nothing is asked now · the hotel's settings ask for no advance"]}
-          help="With an advance, the guest pays it before the booking is reserved and the proforma shows the amount. With none, the rooms are blocked next."
-          footer={
-            <>
-              <Button
-                kind="secondary"
-                onClick={() => {
-                  setAskAdvance(false);
-                  finish();
-                }}
-              >
-                No advance
-              </Button>
-              <Button
-                onClick={() => {
-                  setAskAdvance(false);
-                  finish({ next: "money" });
-                  onAskAdvance();
-                }}
-              >
-                Yes, ask for an advance
-              </Button>
-            </>
-          }
-        >
-          <p className="sm">Does the hotel want an advance on this booking?</p>
-        </DsDialog>
-      ) : null}
-    </StepCard>
-  );
-}
-
 /* ------------------------------------------------------------------ the proforma */
 
 function ProformaCard({
@@ -1293,6 +1580,7 @@ function ProformaCard({
   passStart,
   answered,
   replyNotAsked,
+  onAskAdvance,
   onChanged,
 }: {
   entry: EntryDetail;
@@ -1306,9 +1594,12 @@ function ProformaCard({
   answered: boolean;
   /** …because their reply is not asked for (the admin console's setting). */
   replyNotAsked: boolean;
+  /** The desk said yes to an advance here: the payment plan's advance box opens. */
+  onAskAdvance: () => void;
   onChanged: () => void;
 }) {
   const { session } = useSession();
+  const flow = useStepFlow();
   const passes = passesOf(entry);
   const [paper, setPaper] = useState<PaperRef | null>(null);
   const [sendOpen, setSendOpen] = useState(false);
@@ -1319,6 +1610,22 @@ function ProformaCard({
   const [to, setTo] = useSendTo(entry);
   const finish = useFinishWhenDone("proforma");
   const replyAsked = useReplyAsked(entry.id, "PROFORMA_INVOICE");
+  // On a trip of several stays the trip's proforma is the guest's paper; this stay's own Send steps back.
+  const onTrip = (useTripProforma(entry).data?.stays.length ?? 0) > 1;
+  const qc = useQueryClient();
+  const generate = useMutation({
+    mutationFn: async () => {
+      const out = await generateProforma(session!, entry.id);
+      await qc.refetchQueries({ queryKey: ["entry", entry.id] });
+      return out;
+    },
+    onSuccess: () => {
+      toast.success("The proforma is generated, not sent");
+      onChanged();
+      finish();
+    },
+    onError: (e) => toastRefusal(e, "The proforma could not be generated"),
+  });
 
   const draft = proformas.find((i) => i.state === "DRAFT") ?? null;
   const sendTarget = draft ?? proformas[0] ?? null;
@@ -1357,21 +1664,54 @@ function ProformaCard({
   }, [justSent, answerDue]);
 
   if (proformas.length === 0) {
+    // Who pays is set and the advance is not answered: the question stands here, so a page closed or
+    // read again never leaves the booking with no way to its bill (2026-11-05).
+    const payerSet = !!entry.folio?.billingModel;
+    const asked = (status?.requiredAmount ?? 0) > 0;
     return (
       <StepCard
         flow="proforma"
-        flowAfter="terms"
+        flowAfter="billing-model"
         title="Proforma"
         icon="file"
-        meta="Generated together with the provisional bill. Not a tax invoice; the tax invoice is issued at check-out."
+        right={payerSet ? <Chip tone="warning">not generated yet</Chip> : null}
+        meta="It prints the advance, so it is generated once who pays is set and the advance is answered. Not a tax invoice; the tax invoice is issued at check-out."
       >
-        <span className="sm">Set the billing model above — the proforma is generated with it.</span>
+        {!payerSet ? (
+          <span className="sm">Choose who pays above — the proforma follows it.</span>
+        ) : !editable ? (
+          <span className="sm">Not generated.</span>
+        ) : asked ? (
+          <Button className="go" state={generate.isPending ? "working" : "default"} workingLabel="Generating…" onClick={() => generate.mutate()}>
+            Generate the proforma
+          </Button>
+        ) : (
+          <>
+            <p className="sm" style={{ marginBottom: 10 }}>
+              <b>Does the hotel want an advance on this booking?</b>
+            </p>
+            <div className="row-acts">
+              <Button kind="secondary" state={generate.isPending ? "working" : "default"} workingLabel="Generating…" onClick={() => generate.mutate()}>
+                No advance
+              </Button>
+              <Button
+                state={generate.isPending ? "inert" : "default"}
+                onClick={() => {
+                  flow.open("money");
+                  onAskAdvance();
+                }}
+              >
+                Yes, ask for an advance
+              </Button>
+            </div>
+          </>
+        )}
       </StepCard>
     );
   }
 
   const shown = current ?? proformas[0];
-  const no = shown.invoiceNumber ?? shown.id;
+  const no = billNo(shown);
   const basis = status?.requirementBasis ?? null;
   const asks = !status
     ? null
@@ -1382,9 +1722,15 @@ function ProformaCard({
   // bill-before-money and answer-before-money rules): while an advance is asked, the card says
   // which comes first, and Send is the main act (2026-10-28).
   const advanceAsked = !!status && status.requiredAmount > 0 && !status.paidInFull;
-  const nextUp = !editable ? null : advanceAsked && !sentLive ? "send" : answerDue ? "answer" : null;
+  // Its time ended with the guest still to answer: it is made again (2026-11-05).
+  const lapsed = !!shown.lapsedAt && shown.state !== "SUPERSEDED";
+  const nextUp = !editable || lapsed ? null : advanceAsked && !sentLive ? "send" : answerDue ? "answer" : null;
   const sendLock = !editable
     ? "not at this step"
+    : lapsed
+      ? "it ran out. Make it again first"
+    : status?.earlierAdvance?.asked
+      ? "first say what happens to the advance paid before"
     : !draft
       ? shown.dispatchedAt
         ? "already sent — a changed amount or plan issues a new version to send"
@@ -1397,7 +1743,7 @@ function ProformaCard({
       kind: "invoice",
       id: inv.id,
       invoiceType: "PROFORMA",
-      label: `Proforma ${inv.invoiceNumber ?? inv.id}${(inv.versionNumber ?? 1) > 1 ? ` · v${inv.versionNumber}` : ""}`,
+      label: `Proforma ${proformaBaseNo(inv)}${(inv.versionNumber ?? 1) > 1 ? ` · v${inv.versionNumber}` : ""}`,
       frozen: old && kept,
       notice:
         old && !kept
@@ -1412,18 +1758,35 @@ function ProformaCard({
       // anchor: the side panel's "To do here" jump and any "go to the proforma" button found
       // nothing to scroll to (2026-10-06). The empty-state card above always had it.
       flow="proforma"
-      flowAfter="terms"
+      flowAfter="billing-model"
+      keepRight
       // The number is in the title; the line says where the bill stands.
       summary={[
         asks,
-        shown.dispatchedAt ? `sent ${fmtStamp(shown.dispatchedAt, tz)}` : "not sent",
+        shown.dispatchedAt ? `sent ${fmtStamp(shown.dispatchedAt, tz)}` : null,
         shown.dispatchedAt && !replyNotAsked ? (answered ? "the guest's answer recorded" : "the guest's answer awaited") : null,
+        shown.validUntil && !lapsed && !(status && status.requiredAmount > 0 && status.paidInFull) ? `valid until ${fmtDateTime(shown.validUntil, tz)}` : null,
       ]
         .filter(Boolean)
         .join(" · ")}
-      title={`Proforma · ${no}${(shown.versionNumber ?? 1) > 1 ? ` · v${shown.versionNumber}` : ""}`}
+      title={`Proforma · ${no}`}
       icon="file"
-      right={asks ? <Chip tone="quiet">{asks}</Chip> : null}
+      // Where it stands with the guest, on the paper's own line as on the quotation (2026-11-05).
+      right={
+        lapsed ? (
+          <Chip tone="danger">ran out</Chip>
+        ) : !shown.dispatchedAt ? (
+          <NotSentChip />
+        ) : replyNotAsked ? (
+          <Chip tone="quiet">sent</Chip>
+        ) : answered ? (
+          <Chip tone="success" icon="check">
+            sent · answered
+          </Chip>
+        ) : (
+          <Chip tone="warning">sent · awaiting the answer</Chip>
+        )
+      }
       meta="Not a tax invoice — the tax invoice is issued at check-out. Sending is optional, unless money is to be taken against it: a payment is logged against the bill the guest received."
       acts={
         <>
@@ -1432,7 +1795,7 @@ function ProformaCard({
           </Button>
           <Live>
             <Button
-              kind={nextUp === "send" && !sendLock ? "primary" : "quiet"}
+              kind={nextUp === "send" && !sendLock ? (onTrip ? "secondary" : "primary") : "quiet"}
               compact
               icon="send"
               state={sendLock ? "inert" : "default"}
@@ -1457,8 +1820,26 @@ function ProformaCard({
       ) : null}
       <div className="meta">
         Generated {fmtStamp(shown.createdAt, tz)}
-        {shown.dispatchedAt ? ` · sent ${fmtStamp(shown.dispatchedAt, tz)}${shown.dispatchedTo ? ` to ${shown.dispatchedTo}` : ""}` : " · not sent"}
+        {shown.dispatchedAt ? ` · sent ${fmtStamp(shown.dispatchedAt, tz)}${shown.dispatchedTo ? ` to ${shown.dispatchedTo}` : ""}` : ""}
+        {asks ? ` · ${asks}` : ""}
       </div>
+
+      {lapsed && editable ? (
+        <div className="notice ended pf-lapsed" role="alert">
+          <span className="ended-mark" aria-hidden>
+            !
+          </span>
+          <span>
+            <b>This proforma ran out{shown.validUntil ? ` on ${fmtDateTime(shown.validUntil, tz)}` : ""}.</b>{" "}
+            <span className="rest">The booking stays as it is. Make it again, then it can go out and the booking can move on.</span>
+          </span>
+          <Button className="go" state={generate.isPending ? "working" : "default"} workingLabel="Making it…" onClick={() => generate.mutate()}>
+            Make it again
+          </Button>
+        </div>
+      ) : !lapsed ? (
+        <ProformaValidity entry={entry} inv={shown} status={status} editable={editable} tz={tz} onChanged={onChanged} />
+      ) : null}
 
       {answerDue ? (
         // Sent and not yet answered: the answer is the next thing to do here (2026-10-28, operator:
@@ -1513,14 +1894,14 @@ function ProformaCard({
               return (
                 <tr key={inv.id} className="static" style={isCurrent ? undefined : { opacity: 0.7 }}>
                   <td>
-                    {inv.invoiceNumber ?? inv.id} · v{inv.versionNumber ?? 1}
+                    {proformaBaseNo(inv)} · v{inv.versionNumber ?? 1}
                     <span className="sub">{fmtStamp(inv.createdAt, tz)}</span>
                   </td>
                   {passes.many ? <td>{passNo != null ? `Pass ${passNo}${passNo === passes.currentNumber ? " · now" : ""}` : "earlier"}</td> : null}
                   <td>
                     <Chip tone={isCurrent ? "success" : "quiet"}>{isCurrent ? "current" : "replaced"}</Chip>{" "}
                     <span className="meta">
-                      {inv.dispatchedAt ? "sent" : inv.state === "DRAFT" ? "ready to send" : words(inv.state).toLowerCase()}
+                      {inv.dispatchedAt ? "sent" : inv.state === "DRAFT" ? "generated · not sent" : words(inv.state).toLowerCase()}
                     </span>
                   </td>
                   <td>
@@ -1547,7 +1928,8 @@ function ProformaCard({
           onClose={() => setSendOpen(false)}
           busy={send.isPending}
           width={720}
-          title={`Send proforma ${sendTarget.invoiceNumber ?? sendTarget.id}`}
+          beside={<SendPaperPanel paper={docRef(sendTarget)} nightsEach={nightsEach} />}
+          title={`Send proforma ${billNo(sendTarget)}`}
           caseLines={[
             asks ? `It ${asks}` : "The advance it asks for is being read",
             ...(replyAsked ? ["Once it goes out, the guest's answer is needed before money is logged"] : []),
@@ -1651,8 +2033,13 @@ function CoordinatorCard({ entry, editable, inq, onChanged }: { entry: EntryDeta
         >
           <div className="form2">
             <div className="field">
-              <label>Name</label>
-              <input className="input" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
+              <PersonName
+                title={splitTitle(name).title}
+                name={splitTitle(name).name}
+                onTitle={(t) => setName(joinTitled(t, splitTitle(name).name))}
+                onName={(n) => setName(joinTitled(splitTitle(name).title, n))}
+                autoFocus
+              />
             </div>
             <div className="field">
               <label>Their authority</label>

@@ -22,6 +22,7 @@ import {
   type DocumentMasthead,
   type DocumentWatermark,
 } from "./legphel-document-shell.js";
+import { renderPriceBlock, type LegphelPriceBlock, type LegphelQuotationLine } from "./legphel-quotation-template.js";
 
 export type LegphelConfirmationVoucherInput = {
   masthead: DocumentMasthead;
@@ -44,16 +45,16 @@ export type LegphelConfirmationVoucherInput = {
   /** Split-stay second block. Both omitted together when the stay is one continuous block. */
   reCheckIn?: string | null;
   reCheckOut?: string | null;
-  /** "Deluxe · MAP · 2 nights total" */
+  /** "Deluxe · MAP · 2 nights total" — printed only when there are no rooms to set out (`lines`). */
   roomAndPlan: string;
   /**
-   * The reference puts the money-receipt reference INTO the label:
-   * "Advance held · LH/MR/26/002741". Pass the receipt ref to reproduce that; omit for
-   * "Advance held" alone.
+   * The rooms as the quotation sets them out, without prices (2026-11-07, operator: "the paper make
+   * it look like how quotation and proforma looks, but without prices ... since confirmation voucher
+   * is usually sent without prices"): each room, its extra beds and meal plans beneath it, the
+   * nights each is for. No rate, amount, total, advance or balance.
    */
-  advanceReceiptRef?: string | null;
-  advanceHeld: string;
-  balanceAtCheckout: string;
+  lines?: LegphelQuotationLine[];
+  datesShown?: boolean;
   /** Inclusions + ID requirement. */
   closingNote: string;
   tariffVersion: string;
@@ -62,7 +63,6 @@ export type LegphelConfirmationVoucherInput = {
 };
 
 export function renderLegphelConfirmationVoucherHtml(input: LegphelConfirmationVoucherInput): string {
-  const advanceLabel = input.advanceReceiptRef ? `Advance held · ${input.advanceReceiptRef}` : "Advance held";
   const hasSplit = !!(input.reCheckIn || input.reCheckOut);
 
   const body = [
@@ -79,10 +79,9 @@ export function renderLegphelConfirmationVoucherHtml(input: LegphelConfirmationV
     row("Check-out", input.checkOut),
     hasSplit ? row("Re check-in", input.reCheckIn ?? "", { boldKey: true, boldValue: true }) : "",
     hasSplit ? row("Re check-out", input.reCheckOut ?? "") : "",
-    row("Room · plan", input.roomAndPlan),
-    section,
-    row(advanceLabel, input.advanceHeld),
-    row("Balance at checkout", input.balanceAtCheckout, { boldValue: true }),
+    ...(input.lines?.length
+      ? renderPriceBlock({ lines: input.lines, datesShown: input.datesShown, hidePrices: true } as LegphelPriceBlock)
+      : [row("Room · plan", input.roomAndPlan)]),
     note(input.closingNote, "quiet"),
     footer([input.voucherNo, input.bookingRef, input.issuanceRef ?? null, "E&OE", input.tariffVersion]),
   ]

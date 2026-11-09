@@ -15,7 +15,9 @@
  * What these tabs hold was taken OUT of the steps, the side panel and the header, so nothing on
  * the booking is shown twice (the operator's rule for this pass).
  */
-import { useMemo, useState } from "react";
+import { payerChoiceWord, payerPartyOf } from "@/lib/ds/payer-words";
+import { BookingRateSheet } from "@/components/ds/rate-sheet";
+import { Fragment, useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button, Chip, EmptyState } from "@/design-system";
@@ -39,18 +41,24 @@ import {
 import { acknowledgeCommunication, getEntryTrace, replySettled, type EntryBillingSummary, type EntryCommunication } from "@/lib/api/entries";
 import { updateInquiryNotes } from "@/lib/api/inquiries";
 import { resendConfirmationVoucher } from "@/lib/api/confirmation";
-import { fmtDateTime, fmtDay, fmtStamp, hotelFormParts, money, plural } from "@/lib/ds/format";
+import { fmtDateTime, fmtDay, fmtStamp, fmtStay, hotelFormParts, money, plural } from "@/lib/ds/format";
 import { STEP_NAMES, stepNoOfStage } from "@/lib/ds/steps";
 import { isHousekeeping, traceWords } from "@/lib/ds/trace-words";
 import type { TraceEvent } from "@/lib/trace/humanize";
-import { Choice, DsDialog, Fact, Facts, PapersCard, ReasonDialog, StepCard, SubTabs, Tool, atLeast, toastRefusal, useRefreshEntry } from "@/components/ds/steps/kit";
+import { StayBand, TripPapersShelf, useTripStays } from "./trip-papers-shelf";
+import { useStaysTogether } from "@/components/ds/steps/s2-together";
+import { TripMoneyReceived } from "@/components/ds/steps/s3-money";
+import { Choice, DsDialog, Fact, Facts, PapersCard, ReasonDialog, StepCard, SubTabs, Tool, atLeast, toastRefusal, useRefreshEntry, NotSentChip } from "@/components/ds/steps/kit";
 import { FolioDocumentsBlock } from "@/components/desk/workspace/folio-documents";
-import { useHeldDocuments } from "@/components/ds/workspace/held-papers";
+import { HeldSendDialog, useHeldDocuments } from "@/components/ds/workspace/held-papers";
+import type { HeldDocument } from "@/lib/api/room-moves";
 import { PLAN_LABEL, dueLabel } from "@/components/desk/workspace/advance-settlement";
 import { useStayPrice, type StayPrice } from "@/lib/ds/stay-price";
 import { getQuotationPriceLines, type QuotationLivePreview } from "@/lib/api/quotations";
-import { PriceLinesTable, type PriceLinesFigures } from "@/components/ds/workspace/price-lines";
-import { PickBill } from "@/components/ds/steps/s1-bill";
+import { PriceLineRows, PriceLinesHead, PriceLinesTable, type PriceLinesFigures } from "@/components/ds/workspace/price-lines";
+import { StayDates } from "@/components/ds/stay-dates";
+import { useTripBillView } from "@/components/ds/steps/s1-bill";
+import { PickBill, TripPickBill } from "@/components/ds/steps/s1-bill";
 import type { EntryDetail } from "@/types/api";
 import { Help, HelpHere } from "@/components/ds/help";
 import { DateInput, TimeInput } from "@/components/ds/date-input";
@@ -69,12 +77,6 @@ const stepWord = (stage?: string | null) => (stage && /^S[1-9]$/.test(stage) ? S
 
 /* ================================================================== Charges & payments */
 
-const BILLING_WORD: Record<string, string> = {
-  TOUR_OPERATOR_VOUCHER: "The package to the account · anything beyond it to the guest",
-  DIRECT_BILL: "Everything to the account",
-  GUEST_PAY: "Everything to the guest",
-};
-
 type PaymentRow = {
   id: string;
   amount: string | number;
@@ -86,7 +88,7 @@ type PaymentRow = {
   stage?: string | null;
 };
 
-const METHOD_WORD: Record<string, string> = {
+export const METHOD_WORD: Record<string, string> = {
   CASH: "cash",
   MOBILE_PAYMENT: "QR / mobile",
   BANK_TRANSFER: "bank transfer",
@@ -110,6 +112,9 @@ export function ChargesView({
   const pay = usePaymentStatus(entry.id, { enabled: !!entry.folio });
   // The price as it stands — the table or the picks while nothing is saved (2026-10-12).
   const sp = useStayPrice(entry, billing);
+  // Viewing the stays together, Money received is the trip's (2026-11-09).
+  const together = useStaysTogether(entry);
+  const tripMoney = together.active && entry.currentStage !== "S2";
   const cur = billing?.currency ?? "BTN";
   const st = billing?.stayTotal ?? null;
   const fo = billing?.folio ?? null;
@@ -147,8 +152,10 @@ export function ChargesView({
               label: "The price",
               content: (
                 <>
-        <StepCard title="The price" status={sp.source === "QUOTE" ? (tag ?? undefined) : sp.source === "PICKS" ? undefined : sp.kind || undefined}>
-          {sp.source === "TABLE" ? (
+        <StepCard title="The price" status={sp.tableTrip ? undefined : sp.source === "QUOTE" ? (tag ?? undefined) : sp.source === "PICKS" ? undefined : sp.kind || undefined}>
+          {sp.tableTrip ? (
+            <TripTablePrice sp={sp} />
+          ) : sp.source === "TABLE" ? (
             <TablePrice sp={sp} />
           ) : sp.source === "PICKS" ? (
             <PicksPrice sp={sp} />
@@ -234,7 +241,7 @@ export function ChargesView({
                 </>,
               content: (
                 <>
-        <StepCard title="The bill" status={entry.folio?.billingModel ? BILLING_WORD[entry.folio.billingModel] ?? entry.folio.billingModel : "who pays is chosen at Set up"}>
+        <StepCard title="The bill" status={entry.folio?.billingModel ? payerChoiceWord(entry.folio.billingModel, payerPartyOf(entry)) : "who pays is chosen at Set up"}>
           {!fo ? (
             <p className="meta">
               No bill yet.
@@ -255,6 +262,7 @@ export function ChargesView({
                 </Fact>
                 <Fact k="Payments received">{money(fo.paymentsReceived, cur)}</Fact>
                 {fo.refunded ? <Fact k="Refunded">{money(fo.refunded, cur)}</Fact> : null}
+                {fo.refundWaiting ? <Fact k="Waiting to be refunded">{money(fo.refundWaiting, cur)}</Fact> : null}
                 {fo.writtenOff ? <Fact k="Written off">{money(fo.writtenOff, cur)}</Fact> : null}
                 {fo.overpaid ? <Fact k="Paid above the bill">{money(fo.overpaid, cur)}</Fact> : null}
               </Facts>
@@ -298,9 +306,13 @@ export function ChargesView({
               key: "money",
               label: <>
                   Money received
-                  {payments.length ? <span className="n">{payments.length}</span> : null}
+                  {tripMoney ? null : payments.length ? <span className="n">{payments.length}</span> : null}
                 </>,
-              content: (
+              content: tripMoney ? (
+                <StepCard title="Money received">
+                  <TripMoneyReceived entry={entry} stays={[entry, ...together.others].sort((a, b) => together.stayNoOf(a.id) - together.stayNoOf(b.id))} stayNoOf={together.stayNoOf} tz={tz} />
+                </StepCard>
+              ) : (
                 <>
         <StepCard
           title="Money received"
@@ -312,7 +324,16 @@ export function ChargesView({
         >
           {p ? (
             <Facts wide>
-              <Fact k="Advance asked" meta={p.requirementSource === "OPERATOR" ? "set for this booking" : "the house's rule"}>
+              <Fact
+                k="Advance asked"
+                meta={
+                  p.requirementSource === "OPERATOR"
+                    ? "set for this booking"
+                    : p.requirementSource === "PARTY"
+                      ? `${p.requirementBasis?.partyName ?? "their"} rule`
+                      : undefined
+                }
+              >
                 {p.requiredAmount > 0 ? money(p.requiredAmount, cur) : "none asked"}
               </Fact>
               {/* The standing words from Arrival's old Advance and credit card live here now
@@ -402,6 +423,11 @@ export function ChargesView({
                 </>
               ),
             },
+            {
+              key: "package",
+              label: "Package",
+              content: <BookingRateSheet entry={entry} />,
+            },
           ]}
         />
       </div>
@@ -422,16 +448,13 @@ function previewFigures(p: QuotationLivePreview): PriceLinesFigures {
     lines: p.lines,
     datesShown: p.datesShown,
     net: p.subtotal,
-    serviceChargeLabel: p.serviceChargeRate > 0 ? `Service charge ${pctWord(p.serviceChargeRate)} of net value` : "Service charge",
-    serviceCharge: p.serviceCharge,
+    netAfterDiscount: d ? p.payableSubtotal : null,
+    serviceChargeLabel: p.serviceChargeRate > 0 ? `Service charge ${pctWord(p.serviceChargeRate)} of ${d ? "net after discount" : "net value"}` : "Service charge",
+    serviceCharge: p.payableServiceCharge,
     gstLabel: p.gstRate > 0 ? `GST @ ${pctWord(p.gstRate)} of net + service charge` : "GST",
-    gst: p.gst,
-    discountLabel: !d
-      ? null
-      : d.requestedPercent != null
-        ? `Discount ${Number(d.requestedPercent.toFixed(2))}%`
-        : `Discount · ${(d.requestedAmount ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} off the total`,
-    discountAmount: d ? d.amountOffTotal : null,
+    gst: p.payableGst,
+    discountLabel: !d ? null : d.requestedPercent != null ? `Discount ${Number(d.requestedPercent.toFixed(2))}%` : "Discount",
+    discountAmount: d ? d.netReduction : null,
     discountNote: null,
     total: p.payable,
   };
@@ -474,6 +497,93 @@ function QuotePriceLines({ quotationId, rooms, stayTotal, currency }: { quotatio
   );
 }
 
+/**
+ * The stays set up the same, at Negotiation (2026-11-09, operator: the panel "shows only the stay
+ * whose page you are on"): every stay's rows in one table, or stay by stay. Each stay is its own
+ * figure from the server, as quoted when it is saved; the trip's are those added up there.
+ */
+function TripTablePrice({ sp }: { sp: StayPrice }) {
+  const [view, setView] = useTripBillView();
+  const t = sp.tableTrip!;
+  const cur = t.data.currency;
+  const stays = [...t.data.stays]
+    .sort((a, b) => t.stayNoOf(a.entryId) - t.stayNoOf(b.entryId))
+    .map((s) => ({ s, n: t.stayNoOf(s.entryId), f: (s.quote ?? (s.preview ? previewFigures(s.preview) : null)) as PriceLinesFigures | null }));
+  const dated = stays.some((x) => x.f?.datesShown);
+  const first = stays.find((x) => x.f)?.f ?? null;
+  const tt = t.data.totals;
+  const plain = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const quotedWord = (x: (typeof stays)[number]) =>
+    x.s.source === "QUOTE" ? `As quoted · ${x.s.quote!.referenceNumber}${x.s.quote!.versionNumber > 1 ? ` · v${x.s.quote!.versionNumber}` : ""}` : "as on the table · not saved yet";
+  const head = (x: (typeof stays)[number]) => (
+    <>
+      <span className="trip-stay-name">Stay {x.n}</span>
+      <StayDates checkIn={x.s.checkIn} checkOut={x.s.checkOut} />
+      <span className="meta">{quotedWord(x)}</span>
+    </>
+  );
+  return (
+    <>
+      <div className="bigfig">
+        <span className="meta">Trip total · {plural(stays.length, "stay")}</span>
+        <b>{money(tt.payable, cur)}</b>
+        {t.loading ? <span className="meta">updating…</span> : null}
+      </div>
+      <div className="trip-bill-switch">
+        <Choice options={[["TOGETHER", "Together"], ["EACH", "Stay by stay"]] as const} value={view} onChange={setView} />
+      </div>
+      {view === "TOGETHER" ? (
+        <div className="plines-wrap">
+          {stays.map((x, i) => (
+            <Fragment key={x.s.entryId}>
+              <div className="trip-stay-band">
+                <span>
+                  <span className="trip-stay-name">Stay {x.n}</span> <span className="meta">{quotedWord(x)}</span>
+                  <span className="sm trip-stay-when">{fmtStay(x.s.checkIn, x.s.checkOut)}</span>
+                </span>
+                <b className="money">{money(x.s.payable, cur)}</b>
+              </div>
+              <table className={`table compact plines${dated ? " dated" : ""}`}>
+                {i === 0 ? <PriceLinesHead datesShown={dated} currency={cur} /> : null}
+                <tbody>{x.f ? <PriceLineRows lines={x.f.lines} datesShown={dated} /> : null}</tbody>
+              </table>
+            </Fragment>
+          ))}
+          <div className="pl-foot">
+            <span>Net value · the trip</span>
+            <b>{plain(tt.subtotal)}</b>
+            {tt.netReduction > 0 ? (
+              <>
+                <span>Discount</span>
+                <b>− {plain(tt.netReduction)}</b>
+                <span>Net after discount</span>
+                <b>{plain(tt.payableSubtotal)}</b>
+              </>
+            ) : null}
+            <span>{first?.serviceChargeLabel ?? "Service charge"}</span>
+            <b>{plain(tt.payableServiceCharge)}</b>
+            <span>{first?.gstLabel ?? "GST"}</span>
+            <b>{plain(tt.payableGst)}</b>
+            <span className="total">Trip total</span>
+            <b className="total">{money(tt.payable, cur)}</b>
+          </div>
+        </div>
+      ) : (
+        stays.map((x) => (
+          <div key={x.s.entryId} className="trip-stay-block">
+            <div className="trip-stay-h-in">
+              {head(x)}
+            </div>
+            {x.f ? <PriceLinesTable f={x.f} currency={cur} /> : null}
+          </div>
+        ))
+      )}
+      {t.unsaved ? <p className="warn-ink sm" style={{ margin: "6px 0 0" }}>A stay has changes not saved yet — save the table to put them on its quotation.</p> : null}
+      <HelpHere label="About these figures">Each stay is priced by the hotel server on its own, and each keeps its own quotation. The trip&rsquo;s figures are those added up.</HelpHere>
+    </>
+  );
+}
+
 /** The Negotiation table, priced by the server as it stands — saved or not. */
 function TablePrice({ sp }: { sp: StayPrice }) {
   const p = sp.preview;
@@ -507,6 +617,24 @@ function TablePrice({ sp }: { sp: StayPrice }) {
  */
 function PicksPrice({ sp }: { sp: StayPrice }) {
   const p = sp.pick;
+  // A trip at Inquiry: every stay in one bill, together or stay by stay (2026-11-07).
+  if (sp.trip) {
+    const t = sp.trip;
+    return (
+      <TripPickBill
+        trip={t.pricing}
+        entries={t.entries}
+        stayNoOf={t.stayNoOf}
+        labelsOverride={t.labels}
+        loading={t.loading}
+        title={t.unsaved ? "The rooms picked · not all saved yet" : "The rooms chosen"}
+        caption={
+          t.unsaved ? <span className="warn-ink">Save the rooms on the Inquiry step to keep this choice — the figures follow every pick.</span> : undefined
+        }
+        help="Indicative, not a quote — rooms only. Meals, extra beds and any agreed rate are added at Negotiation, where each stay's quotation prices them."
+      />
+    );
+  }
   if (!p) return null;
   return (
     <PickBill
@@ -1220,11 +1348,22 @@ export function DocumentsView({
   const heldOpen = sealed ? 0 : heldDocs.filter((h) => h.decision == null).length;
   // One sub-tab per kind of paper (2026-10-12, operator: "for papers it should be divided among
   // different types of papers"). A kind with nothing in it has no tab.
-  const quotes = (entry.quotations ?? []).length;
   const invoices = entry.folio?.invoices ?? [];
-  const proformas = invoices.filter((i) => i.invoiceType === "PROFORMA").length;
   const bills = invoices.filter((i) => i.invoiceType !== "PROFORMA").length;
-  const vouchers = Math.max(entry.reservations?.length ?? 0, entry.reservation?.id ? 1 : 0) + (entry.status === "CANCELLED" ? 1 : 0);
+  // A trip's papers: viewing the stays together, the trip's own or stay by stay (2026-11-09). On one
+  // stay's own page only that stay's (same day, operator: "i am in stay one but it is showing stay 2s
+  // proforma").
+  const trip = useTripStays(entry);
+  const together = useStaysTogether(entry);
+  const shownStays = together.active ? trip.stays.filter((e) => together.stayIds.includes(e.id)) : [entry];
+  const quotesOf = (e: EntryDetail) => (e.quotations ?? []).length;
+  const proformasOf = (e: EntryDetail) => (e.folio?.invoices ?? []).filter((i) => i.invoiceType === "PROFORMA").length;
+  const vouchersOf = (e: EntryDetail) => Math.max(e.reservations?.length ?? 0, e.reservation?.id ? 1 : 0) + (e.status === "CANCELLED" ? 1 : 0);
+  const sumOf = (f: (e: EntryDetail) => number) => shownStays.reduce((n, e) => n + f(e), 0);
+  const quotes = sumOf(quotesOf);
+  const proformas = sumOf(proformasOf);
+  const vouchers = sumOf(vouchersOf);
+  const otherBills = shownStays.filter((e) => e.id !== entry.id && (e.folio?.invoices ?? []).some((i) => i.invoiceType !== "PROFORMA"));
   const sent = communications.filter((c) => c.direction !== "INBOUND");
   // A replaced paper awaits no answer — only the one in force does (2026-10-13).
   const awaiting = sent.filter((c) => c.sendStatus === "DISPATCHED" && !replySettled(c) && !c.superseded && !c.held).length;
@@ -1235,12 +1374,11 @@ export function DocumentsView({
         Documents <span className="need">every paper, every version, and what the guest said back</span>
       </h3>
       <div className="steps-canvas">
-        {/* The send-or-not choice lives on the step, once (2026-10-29, operator: "the same
-            confirmation voucher is showed twice, keep only once"); the file only says so. */}
+        {/* A paper not sent is sent from Sent & answers (2026-11-09); the tab opens on Quotations, so it says so. */}
         {heldOpen > 0 ? (
           <p className="notice next" role="status" style={{ margin: "0 0 10px" }}>
             <span>
-              {heldOpen === 1 ? "A paper is" : `${heldOpen} papers are`} waiting to be sent or not — you choose on the step.
+              {heldOpen === 1 ? "A paper has" : `${heldOpen} papers have`} not been sent — it is under Sent &amp; answers. Leave it if it need not go.
             </span>
           </p>
         ) : null}
@@ -1250,11 +1388,21 @@ export function DocumentsView({
           <SubTabs
             label="Documents"
             tabs={[
-              quotes ? { key: "quotations", label: <>Quotations{count(quotes)}</>, content: <PapersCard entry={entry} show="quotes" title="Quotations" /> } : null,
-              proformas
-                ? { key: "proformas", label: <>Proforma invoices{count(proformas)}</>, content: <PapersCard entry={entry} show="proformas" title="Proforma invoices" /> }
+              quotes
+                ? {
+                    key: "quotations",
+                    label: <>Quotations{count(quotes)}</>,
+                    content: trip.isTrip ? <TripPapersShelf entry={entry} show="quotes" title="Quotations" sealed={sealed} has={(e) => quotesOf(e) > 0} /> : <PapersCard entry={entry} show="quotes" title="Quotations" />,
+                  }
                 : null,
-              bills || folioLive
+              proformas
+                ? {
+                    key: "proformas",
+                    label: <>Proforma invoices{count(proformas)}</>,
+                    content: trip.isTrip ? <TripPapersShelf entry={entry} show="proformas" title="Proforma invoices" sealed={sealed} has={(e) => proformasOf(e) > 0} /> : <PapersCard entry={entry} show="proformas" title="Proforma invoices" />,
+                  }
+                : null,
+              bills || folioLive || otherBills.length
                 ? {
                     key: "bills",
                     label: <>Bills &amp; statements{count(bills)}</>,
@@ -1268,20 +1416,31 @@ export function DocumentsView({
                             <FolioDocumentsBlock entry={entry} stage="S7" />
                           </Tool>
                         ) : null}
+                        {otherBills.map((e) => (
+                          // A stay's bill is its own, so a trip has no bill together.
+                          <div key={e.id} className="trip-stay-block">
+                            <StayBand stay={e} stayNo={trip.stayNoOf(e.id)} />
+                            <PapersCard entry={e} show="bills" title="Bills" withFolioDocs={false} />
+                          </div>
+                        ))}
                       </>
                     ),
                   }
                 : null,
               vouchers
-                ? { key: "vouchers", label: <>Vouchers{count(vouchers)}</>, content: <PapersCard entry={entry} show="others" title="Vouchers" withFolioDocs={false} /> }
+                ? {
+                    key: "vouchers",
+                    label: <>Vouchers{count(vouchers)}</>,
+                    content: trip.isTrip ? <TripPapersShelf entry={entry} show="others" title="Vouchers" sealed={sealed} has={(e) => vouchersOf(e) > 0} /> : <PapersCard entry={entry} show="others" title="Vouchers" withFolioDocs={false} />,
+                  }
                 : null,
-              sent.length
+              sent.length || heldOpen
                 ? {
                     key: "sent",
                     label: (
                       <>
                         Sent &amp; answers
-                        {awaiting ? <span className="n warn">{awaiting}</span> : count(sent.length)}
+                        {awaiting + heldOpen ? <span className="n warn">{awaiting + heldOpen}</span> : count(sent.length)}
                       </>
                     ),
                     content: <SentPapers entry={entry} communications={communications} tz={tz} sealed={sealed} onGo={onGo} />,
@@ -1328,6 +1487,12 @@ function SentPapers({
   const { session } = useSession();
   const refresh = useRefreshEntry(entry.id);
   const papers = communications.filter((c) => c.direction !== "INBOUND");
+  // A paper made and not sent yet. A bill has no line in the list until it goes out, so it gets one here.
+  const heldDocs = useHeldDocuments(entry.id).data ?? [];
+  const openHeld = sealed ? [] : heldDocs.filter((h) => h.decision == null);
+  const heldOf = (c: EntryCommunication) => (c.held ? openHeld.find((h) => h.documentId === paperIdOf(c)) : undefined);
+  const heldWithNoLine = openHeld.filter((h) => !papers.some((c) => paperIdOf(c) === h.documentId));
+  const [sending, setSending] = useState<HeldDocument | null>(null);
   const [recording, setRecording] = useState<EntryCommunication | null>(null);
   const [method, setMethod] = useState<"WRITTEN" | "VERBAL" | null>(null);
   const [said, setSaid] = useState("");
@@ -1352,7 +1517,12 @@ function SentPapers({
     if (c.commType === "CONFIRMATION_VOUCHER" && entry.reservation?.id) resend.mutate();
     else if (PAPER_STEP[c.commType]) onGo(PAPER_STEP[c.commType]);
   };
-  if (papers.length === 0) return null;
+  if (papers.length === 0 && heldWithNoLine.length === 0) return null;
+  const sendButton = (h: HeldDocument) => (
+    <Button kind="primary" compact icon="send" onClick={() => setSending(h)}>
+      Send
+    </Button>
+  );
   return (
     <StepCard title="Sent, and what they said">
       <table className="table compact">
@@ -1365,6 +1535,25 @@ function SentPapers({
           </tr>
         </thead>
         <tbody>
+          {heldWithNoLine.map((h) => (
+            <tr key={h.id}>
+              <td>
+                <b>{PAPER_NAME[h.kind === "PROFORMA" ? "PROFORMA_INVOICE" : h.kind] ?? h.kind}</b>
+                <span className="mono sm"> {h.documentNumber ?? h.documentId}</span>
+              </td>
+              <td>
+                <span className="meta">—</span>
+              </td>
+              <td>
+                <NotSentChip />
+              </td>
+              <td>
+                <span className="row-acts" style={{ justifyContent: "flex-end" }}>
+                  {sendButton(h)}
+                </span>
+              </td>
+            </tr>
+          ))}
           {papers.map((c) => {
             const answered = c.acknowledgementStatus === "RECEIVED";
             const sent = c.sendStatus === "DISPATCHED";
@@ -1395,7 +1584,7 @@ function SentPapers({
                   ) : c.acknowledgementStatus === "NOT_ASKED" ? (
                     <Chip tone="quiet">no answer needed</Chip>
                   ) : c.held ? (
-                    <Chip tone="quiet">held — not sent yet</Chip>
+                    <NotSentChip />
                   ) : sent ? (
                     <Chip tone="warning">{c.isOverdue ? "no answer — chase it" : "awaiting"}</Chip>
                   ) : (
@@ -1417,9 +1606,11 @@ function SentPapers({
                         Record their answer
                       </Button>
                     ) : null}
-                    {!answered && !replaced && !sealed && (c.commType === "CONFIRMATION_VOUCHER" ? !!entry.reservation?.id : !!PAPER_STEP[c.commType]) ? (
+                    {heldOf(c) ? (
+                      sendButton(heldOf(c)!)
+                    ) : !answered && !replaced && !sealed && (c.commType === "CONFIRMATION_VOUCHER" ? !!entry.reservation?.id : !!PAPER_STEP[c.commType]) ? (
                       <Button kind="quiet" compact state={resend.isPending ? "working" : "default"} onClick={() => sendAgain(c)}>
-                        Send again
+                        {c.held ? "Send" : "Send again"}
                       </Button>
                     ) : null}
                   </span>
@@ -1429,6 +1620,7 @@ function SentPapers({
           })}
         </tbody>
       </table>
+      {sending ? <HeldSendDialog h={sending} tz={tz} onClose={() => setSending(null)} /> : null}
       <DsDialog
         open={!!recording}
         onClose={() => setRecording(null)}

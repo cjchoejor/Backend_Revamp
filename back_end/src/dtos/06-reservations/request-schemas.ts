@@ -67,6 +67,8 @@ export type AllocateConferenceSpaceRequestDto = z.infer<typeof allocateConferenc
 
 export const ensureProvisionalFolioRequestSchema = z.object({
   billingModel: z.string().min(1),
+  /** The desk asks about an advance first, so the proforma waits for the answer (2026-11-05). */
+  askAdvanceFirst: z.boolean().optional(),
 });
 export type EnsureProvisionalFolioRequestDto = z.infer<typeof ensureProvisionalFolioRequestSchema>;
 
@@ -91,6 +93,8 @@ export const setCommittedHoldExpiryRequestSchema = z
     time: z.string().trim().regex(/^\d{2}:\d{2}$/, "time must be HH:MM").optional(),
     clear: z.boolean().optional(),
     reason: z.string().trim().max(500).optional(),
+    /** Block the rooms to this time now, when no block is running (Set up, 2026-11-05). */
+    blockNow: z.boolean().optional(),
   })
   .refine((v) => (v.clear === true ? !v.date && !v.time : !!v.date && !!v.time), {
     message: "Give the day and the time the hold should run to, or clear it back to the house window",

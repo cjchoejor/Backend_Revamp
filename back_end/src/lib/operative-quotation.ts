@@ -71,6 +71,29 @@ export function resolveOperativeQuotation<T extends QuotationLike>(
   });
 }
 
+/**
+ * The quotation a bill reads when it needs the terms (2026-11-05). The operative one; else this
+ * pass's newest that was not replaced (a quotation lapses on its clock while the booking goes on);
+ * else the newest accepted; else the newest of all.
+ *
+ * Newest by when it was made, because every pass numbers its quotations from 1: the bill used to
+ * take "the highest version", two passes tied, and the database returned either, so one proforma
+ * could print one pass's figures and then another's.
+ */
+export function resolveBillQuotation<T extends QuotationLike>(quotations: readonly T[], segmentId: string | null): T | null {
+  const operative = segmentId ? resolveOperativeQuotation(quotations, segmentId) : null;
+  if (operative) return operative;
+  const newestFirst = [...quotations].sort(
+    (a, b) => (b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0) || (b.versionNumber ?? 0) - (a.versionNumber ?? 0),
+  );
+  return (
+    (segmentId ? newestFirst.find((q) => q.segmentId === segmentId && q.state !== QuotationState.SUPERSEDED) : null) ??
+    newestFirst.find((q) => q.state === QuotationState.ACCEPTED) ??
+    newestFirst[0] ??
+    null
+  );
+}
+
 /** True when the operative quotation represents an acceptance the guest actually gave. */
 export function isAcceptedQuotation(q: QuotationLike | null | undefined): boolean {
   return q?.state === QuotationState.ACCEPTED;

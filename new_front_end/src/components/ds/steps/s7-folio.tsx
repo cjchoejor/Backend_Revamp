@@ -127,14 +127,6 @@ const FOLIO_WORD: Record<string, string> = {
   CLOSED: "closed",
 };
 
-/** Who a charge is billed to, read from the folio's billing model. */
-export const BILLING_WORD: Record<string, string> = {
-  GUEST_PAY: "Everything to the guest",
-  DIRECT_BILL: "Everything to the account",
-  TOUR_OPERATOR_VOUCHER: "The package to the agent · anything beyond it to the guest",
-  GOVERNMENT: "Everything to the government account",
-};
-
 /* ------------------------------------------------------------------ shared reads */
 
 export function useBillingSummary(entry: EntryDetail) {

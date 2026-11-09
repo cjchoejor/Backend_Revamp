@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useSession } from "@/hooks/use-session";
 import {
@@ -10,6 +10,46 @@ import {
   fetchQuotationPreviewHtml,
   type FolioDocumentKind,
 } from "@/lib/api/documents";
+import { fetchTripPaperPreviewHtml } from "@/lib/api/trip-papers";
+import { PdfPages } from "./pdf-pages";
+
+/**
+ * Inside the paper's own panel the paper fills the panel's width (2026-11-05, operator: "when
+ * previewing it, it is really small, the user has to squint ... many empty white spaces beside and
+ * above it"). Elsewhere it keeps the small inline frame.
+ */
+export const PaperFill = createContext<false | "preview" | "send">(false);
+
+/** The width the paper lays out at before it is scaled up to its panel: its own proportions, kept. */
+const PAPER_LAYOUT_WIDTH = 540;
+/** The room the paper's own page margin takes on paper is empty space on a screen. */
+const PAPER_FILL_CSS = ".sheet{padding:8px 12px 12px 8px}html,body{background:#fff}";
+/**
+ * The desk knows its own hotel (2026-11-05, operator: "when user previews the paper, can it not show
+ * the hotel logo and name address ... that way it saves more screen. but while sending it can show").
+ * Only the screen's copy: the PDF and what the guest receives keep it.
+ */
+const PAPER_NO_MASTHEAD_CSS = ".dmast{display:none}";
+
+function fillPaper(html: string, mode: "preview" | "send"): string {
+  const style = `<style>${PAPER_FILL_CSS}${mode === "preview" ? PAPER_NO_MASTHEAD_CSS : ""}</style>`;
+  return html.includes("</head>") ? html.replace("</head>", `${style}</head>`) : style + html;
+}
+
+function useElementWidth() {
+  const [width, setWidth] = useState(0);
+  const observer = useRef<ResizeObserver | null>(null);
+  const ref = useCallback((el: HTMLElement | null) => {
+    observer.current?.disconnect();
+    observer.current = null;
+    if (!el) return;
+    setWidth(el.clientWidth);
+    const o = new ResizeObserver((entries) => setWidth(entries[0].contentRect.width));
+    o.observe(el);
+    observer.current = o;
+  }, []);
+  return [ref, width] as const;
+}
 
 /**
  * Inline document views (2026-08-01, operator request): the A1 quotation / A2 proforma in
@@ -34,14 +74,19 @@ function DocumentPreviewFrame({
   /** Amber caveat strip above the frame — e.g. "reconstruction, no frozen copy exists". */
   notice?: string;
 }) {
+  const fill = useContext(PaperFill);
   const [height, setHeight] = useState(480);
+  const [wrapRef, wrapWidth] = useElementWidth();
   const query = useQuery({
     queryKey,
     queryFn: fetchHtml,
     // Always recompose — the whole point is tracking the live record.
     staleTime: 0,
     refetchOnMount: "always",
+    // Changing a paper's face keeps the paper on screen until the new one is here.
+    placeholderData: (previous) => previous,
   });
+  const srcDoc = useMemo(() => (fill && query.data ? fillPaper(query.data, fill) : query.data), [fill, query.data]);
 
   if (query.isLoading) {
     return (
@@ -68,13 +113,44 @@ function DocumentPreviewFrame({
           borderRadius: 6,
           padding: "5px 9px",
           margin: "6px auto 0",
-          width: "min(100%, 470px)",
+          width: fill ? "100%" : "min(100%, 470px)",
           lineHeight: 1.5,
         }}
       >
         {notice}
       </p>
     ) : null}
+    {fill ? (
+      // Laid out at the paper's own width and scaled to the panel, so every proportion stays as
+      // printed and only the size changes. A paper shorter than the frame leaves no gap under it.
+      <div ref={wrapRef} style={{ width: "100%", height: wrapWidth ? height * (wrapWidth / PAPER_LAYOUT_WIDTH) : height, overflow: "hidden" }}>
+        <iframe
+          title={title}
+          sandbox="allow-same-origin"
+          srcDoc={srcDoc}
+          scrolling="no"
+          onLoad={(e) => {
+            const frame = e.currentTarget;
+            const measure = () => {
+              const doc = frame.contentDocument;
+              const h = (doc?.querySelector(".sheet") ?? doc?.body)?.getBoundingClientRect().height;
+              if (h && Number.isFinite(h)) setHeight(Math.ceil(h));
+            };
+            measure();
+            void frame.contentDocument?.fonts?.ready.then(measure);
+          }}
+          style={{
+            width: PAPER_LAYOUT_WIDTH,
+            height,
+            display: "block",
+            border: 0,
+            background: "#fff",
+            transform: `scale(${wrapWidth ? wrapWidth / PAPER_LAYOUT_WIDTH : 1})`,
+            transformOrigin: "top left",
+          }}
+        />
+      </div>
+    ) : (
     <iframe
       title={title}
       sandbox="allow-same-origin"
@@ -97,6 +173,7 @@ function DocumentPreviewFrame({
         margin: "6px auto 4px",
       }}
     />
+    )}
     </>
   );
 }
@@ -110,6 +187,7 @@ function DocumentPreviewFrame({
  */
 function FrozenPdfFrame({ path, title }: { path: string; title: string }) {
   const { session } = useSession();
+  const fill = useContext(PaperFill);
   const query = useQuery({
     queryKey: ["pdf-blob", path] as const,
     queryFn: () => fetchPdfBlob(session!, path),
@@ -120,6 +198,8 @@ function FrozenPdfFrame({ path, title }: { path: string; title: string }) {
   // A fresh address for each time the frame is shown, freed when it goes. The file stays cached;
   // caching the address instead handed a revoked one to the next opening — the broken-file icon.
   const [url, setUrl] = useState<string | null>(null);
+  // The browser's own viewer, when the paper could not be drawn on the page.
+  const [viewerOnly, setViewerOnly] = useState(false);
   useEffect(() => {
     if (!query.data) return;
     const u = URL.createObjectURL(query.data);
@@ -135,6 +215,21 @@ function FrozenPdfFrame({ path, title }: { path: string; title: string }) {
       <p style={{ fontSize: 11.5, color: "var(--warn)", margin: "6px 0" }}>
         {query.error instanceof Error ? query.error.message : "Could not load the document."}
       </p>
+    );
+  }
+  if (fill && !viewerOnly) {
+    // Drawn on the page, so a preview can leave the hotel's heading off as a live paper does
+    // (2026-11-07); beside a send the heading stays.
+    return <PdfPages blob={query.data} title={title} hideHeading={fill === "preview"} onFail={() => setViewerOnly(true)} />;
+  }
+  if (fill) {
+    return (
+      <iframe
+        title={title}
+        // The viewer's own bar and thumbnails take room from the paper; the panel has PDF and Print.
+        src={`${url}#toolbar=0&view=FitH`}
+        style={{ width: "100%", height: "100%", minHeight: 480, display: "block", border: 0, background: "#fff" }}
+      />
     );
   }
   return (
@@ -180,6 +275,21 @@ export function QuotationPreview({
       queryKey={["quotation-preview", quotationId, hidePrices ? "no-prices" : "priced", nightsEach ? "each" : "short"] as const}
       fetchHtml={() => fetchQuotationPreviewHtml(session!, quotationId, { hidePrices, nightsEach })}
       title={hidePrices ? "Quotation · without prices" : "Quotation document"}
+    />
+  );
+}
+
+/**
+ * The trip's quotation (2026-11-07): one paper made of the stays' own quotations, with its own
+ * number and version. Always composed fresh — it is drawn from the stays' quotations as they stand.
+ */
+export function TripQuotationPreview({ tripPaperId, hidePrices }: { tripPaperId: string; hidePrices?: boolean }) {
+  const { session } = useSession();
+  return (
+    <DocumentPreviewFrame
+      queryKey={["trip-paper-preview", tripPaperId, hidePrices ? "no-prices" : "priced"] as const}
+      fetchHtml={() => fetchTripPaperPreviewHtml(session!, tripPaperId, { hidePrices })}
+      title={hidePrices ? "The trip's quotation · without prices" : "The trip's quotation"}
     />
   );
 }

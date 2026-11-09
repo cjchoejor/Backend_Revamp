@@ -1,6 +1,6 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { QuotationState, Stage } from "@prisma/client";
-import { requireActiveConfigValue } from "./config-store.js";
+import { quoteStandsUntil, quoteValidityWindow } from "./quote-validity.js";
 import type { getTimerEngine } from "../services/infrastructure/timer-management-service.js";
 
 /**
@@ -13,9 +13,13 @@ import type { getTimerEngine } from "../services/infrastructure/timer-management
  * booking an hour after intake, mid-conversation. The answer is a window of Negotiation's own,
  * not no window:
  *
- *  - armed on the forward move to Negotiation from `expiry.s2.negotiationTtlSeconds` (24h);
- *  - a generated or sent quote STRETCHES it to the offer's validity (never shortens it), so a
- *    booking is never lapsed while the guest holds a live offer;
+ *  - armed on the forward move to Negotiation, on the rule a quotation's validity follows
+ *    (2026-11-05, operator: "we can set it as how the quotation validity is set, so this also
+ *    becomes system driven"): to the check-in date, or to the end of the hotel's day when check-in
+ *    is today (`quoteValidityWindow`). There is no setting; `expiry.s2.negotiationTtlSeconds` is gone;
+ *  - a quote of this pass sets the moment, longer or shorter: a minute after its validity, so a
+ *    booking is never lapsed while the guest holds a live offer, and lapses when the offer does;
+ *  - a retired quote or a moved stay puts it back on the window (`amendNegotiationConfiguration`);
  *  - a booking that has been to Set up (it has a folio — it may hold money) never gets the
  *    clock: that booking is the desk's to end, not a clock's;
  *  - the park pauses it (the park cancels every ENTRY_EXPIRY row and arms its own 30-day
@@ -27,36 +31,39 @@ import type { getTimerEngine } from "../services/infrastructure/timer-management
  * which `expireEntry` requires before it will lapse a booking at S2.
  */
 export const NEGOTIATION_EXPIRY_CODE = "NEGOTIATION_EXPIRY";
-export const NEGOTIATION_TTL_KEY = "expiry.s2.negotiationTtlSeconds";
-export const DEFAULT_NEGOTIATION_TTL_SECONDS = 86_400;
 /** The entry lapses a minute AFTER the quote's own clock, so W15 has expired the offer first. */
 export const NEGOTIATION_LAPSE_GRACE_MS = 60_000;
 
 type Tx = Prisma.TransactionClient;
 type Engine = Awaited<ReturnType<typeof getTimerEngine>>;
 
-/** The configured window, in seconds; the default when the key is not seeded. */
-export async function resolveNegotiationTtlSeconds(db: Tx | PrismaClient): Promise<number> {
-  try {
-    const v = await requireActiveConfigValue<number | { DEFAULT?: number }>(db as any, NEGOTIATION_TTL_KEY);
-    const n = typeof v === "number" ? v : Number((v as { DEFAULT?: number })?.DEFAULT);
-    return Number.isFinite(n) && n > 0 ? n : DEFAULT_NEGOTIATION_TTL_SECONDS;
-  } catch {
-    return DEFAULT_NEGOTIATION_TTL_SECONDS;
-  }
-}
-
-/** When the negotiation would lapse: the window from `now`, stretched to a live quote's validity. */
-export async function negotiationLapseAt(tx: Tx, entryId: string, now = new Date()): Promise<{ firesAt: Date; ttlSeconds: number }> {
-  const ttlSeconds = await resolveNegotiationTtlSeconds(tx);
-  let firesAt = new Date(now.getTime() + ttlSeconds * 1000);
+/**
+ * When the negotiation lapses: a minute after the live quote of this pass, else as long as a quote
+ * could stand from `now`. An earlier pass's quote says nothing about this one.
+ */
+export async function negotiationLapseAt(
+  tx: Tx | PrismaClient,
+  entryId: string,
+  now = new Date(),
+): Promise<{ firesAt: Date; basis: "QUOTE" | "WINDOW" }> {
+  const pass = await tx.segment.findFirst({
+    where: { entryId, sealedAt: null },
+    orderBy: { segmentNumber: "desc" },
+    select: { id: true },
+  });
   const live = await tx.quotation.findFirst({
-    where: { entryId, state: { in: [QuotationState.DRAFT, QuotationState.SENT, QuotationState.ACCEPTED] }, validUntil: { gt: firesAt } },
-    orderBy: { validUntil: "desc" },
+    where: {
+      entryId,
+      ...(pass ? { segmentId: pass.id } : {}),
+      state: { in: [QuotationState.DRAFT, QuotationState.SENT, QuotationState.ACCEPTED] },
+      validUntil: { gt: now },
+    },
+    orderBy: { createdAt: "desc" },
     select: { validUntil: true },
   });
-  if (live?.validUntil) firesAt = new Date(live.validUntil.getTime() + NEGOTIATION_LAPSE_GRACE_MS);
-  return { firesAt, ttlSeconds };
+  if (live?.validUntil) return { firesAt: new Date(live.validUntil.getTime() + NEGOTIATION_LAPSE_GRACE_MS), basis: "QUOTE" };
+  const window = await quoteValidityWindow(tx, entryId, now);
+  return { firesAt: quoteStandsUntil(window.mode, window.max, now), basis: "WINDOW" };
 }
 
 /** Cancel the live Negotiation clock, if any. Returns how many rows were cancelled. */
@@ -86,12 +93,12 @@ export async function armNegotiationExpiryTx(
   tx: Tx,
   engine: Engine,
   args: { entryId: string; actorId: string; now?: Date },
-): Promise<{ firesAt: Date; ttlSeconds: number } | null> {
+): Promise<{ firesAt: Date; basis: "QUOTE" | "WINDOW" } | null> {
   const now = args.now ?? new Date();
   const folio = await tx.folio.findUnique({ where: { entryId: args.entryId }, select: { id: true } });
   if (folio) return null;
   await cancelNegotiationExpiryTx(tx, engine, { entryId: args.entryId, actorId: args.actorId, reason: "REARMED", now });
-  const { firesAt, ttlSeconds } = await negotiationLapseAt(tx, args.entryId, now);
+  const { firesAt, basis } = await negotiationLapseAt(tx, args.entryId, now);
   const jobId = await engine.schedule("ENTRY_EXPIRY", { entryId: args.entryId, negotiation: true }, { startAfter: firesAt });
   await tx.timerRecord.create({
     data: {
@@ -104,19 +111,19 @@ export async function armNegotiationExpiryTx(
       firesAt,
       dueAt: firesAt,
       status: "SCHEDULED",
-      payload: { entryId: args.entryId, negotiation: true, ttlSeconds },
+      payload: { entryId: args.entryId, negotiation: true, basis },
       pgBossJobId: jobId,
       createdBy: args.actorId,
     },
   });
-  return { firesAt, ttlSeconds };
+  return { firesAt, basis };
 }
 
 /**
- * A generated or sent quote stretches the clock to the offer's validity (plus the grace), never
- * shortens it. Returns the new moment, or null when there was no clock or it already ran later.
+ * A generated or sent quote sets the clock: a minute after its validity, whether that is sooner or
+ * later than it stood. Returns the new moment, or null when there is no clock or it is already there.
  */
-export async function extendNegotiationExpiryTx(
+export async function followQuoteValidityTx(
   tx: Tx,
   engine: Engine,
   args: { entryId: string; validUntil: Date; actorId: string },
@@ -127,13 +134,13 @@ export async function extendNegotiationExpiryTx(
   });
   if (!row) return null;
   const target = new Date(args.validUntil.getTime() + NEGOTIATION_LAPSE_GRACE_MS);
-  if (row.firesAt.getTime() >= target.getTime()) return null;
+  if (row.firesAt.getTime() === target.getTime()) return null;
   if (row.pgBossJobId) await engine.cancel(row.pgBossJobId);
   const jobId = await engine.schedule("ENTRY_EXPIRY", { entryId: args.entryId, negotiation: true }, { startAfter: target });
   const prior = (row.payload && typeof row.payload === "object" ? (row.payload as Record<string, unknown>) : {}) as Record<string, unknown>;
   await tx.timerRecord.update({
     where: { id: row.id },
-    data: { firesAt: target, dueAt: target, pgBossJobId: jobId, payload: { ...prior, extendedToQuoteValidity: args.validUntil.toISOString(), extendedBy: args.actorId } },
+    data: { firesAt: target, dueAt: target, pgBossJobId: jobId, payload: { ...prior, basis: "QUOTE", followsQuoteUntil: args.validUntil.toISOString(), movedBy: args.actorId } },
   });
   return target;
 }

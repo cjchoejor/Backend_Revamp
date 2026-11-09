@@ -1,3 +1,4 @@
+import { splitPersonName, splitTitle } from "../../lib/person-name.js";
 import type { PrismaClient } from "@prisma/client";
 import { normalizeCoordinators, type CoordinatorContact } from "../../lib/admin/contact-list.js";
 
@@ -80,9 +81,9 @@ const phoneKey = (v: string | null | undefined) => {
 };
 
 function splitName(name: string): { firstName: string | null; lastName: string | null } {
-  const parts = name.trim().split(/\s+/).filter(Boolean);
-  if (!parts.length) return { firstName: null, lastName: null };
-  return { firstName: parts[0], lastName: parts.slice(1).join(" ") || null };
+  // The one way a name is split (2026-11-05), so a person found here keys the same as one recorded.
+  const { firstName, lastName } = splitPersonName(splitTitle(name).name);
+  return { firstName: firstName || null, lastName: lastName || null };
 }
 
 export async function lookupCallers(

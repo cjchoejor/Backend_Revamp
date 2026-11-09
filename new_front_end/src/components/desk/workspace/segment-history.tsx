@@ -1,5 +1,6 @@
 "use client";
 
+import { StayDates } from "@/components/ds/stay-dates";
 import { useState } from "react";
 import { fmtDateTime as dsDateTime, fmtInstantDate as dsInstantDate } from "@/lib/ds/format";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -121,7 +122,7 @@ function StageBreakdown({ seg }: { seg: SegmentHistoryItem }) {
           for (const c of seg.availabilityConfigs) {
             rows.push(
               <div key={c.id}>
-                {c.checkInDate && c.checkOutDate ? `${fmtDate(c.checkInDate)} → ${fmtDate(c.checkOutDate)}` : "Dates not recorded"}
+                {c.checkInDate && c.checkOutDate ? <StayDates checkIn={c.checkInDate} checkOut={c.checkOutDate} /> : "Dates not recorded"}
                 {c.guestCount != null ? ` · ${c.guestCount} guest${c.guestCount === 1 ? "" : "s"}` : ""}
                 {c.rooms.length
                   ? ` · ${c.rooms.map((r) => r.roomNumber ?? r.roomId.slice(0, 6)).join(", ")}`
@@ -175,7 +176,7 @@ function StageBreakdown({ seg }: { seg: SegmentHistoryItem }) {
           rows.push(
             <div key={seg.reservation.id}>
               {seg.reservation.id} · {moneyOrDash(seg.reservation.frozenRate, null)}/night ·{" "}
-              {fmtDate(seg.reservation.frozenCheckIn)} → {fmtDate(seg.reservation.frozenCheckOut)}
+              <StayDates checkIn={seg.reservation.frozenCheckIn} checkOut={seg.reservation.frozenCheckOut} />
               {seg.reservation.frozenGuestCount != null ? ` · ${seg.reservation.frozenGuestCount} guests` : ""}
               {seg.reservation.frozenBillingModel ? ` · ${seg.reservation.frozenBillingModel}` : ""}
               {seg.reservation.confirmedAt ? ` · confirmed ${fmtDateTime(seg.reservation.confirmedAt)}` : ""}
@@ -357,8 +358,7 @@ function RoundCard({
 
       {seg.reservation ? (
         <Row label="Confirmed at">
-          {moneyOrDash(seg.reservation.frozenRate, null)} / night · {fmtDate(seg.reservation.frozenCheckIn)} →{" "}
-          {fmtDate(seg.reservation.frozenCheckOut)}
+          {moneyOrDash(seg.reservation.frozenRate, null)} / night · <StayDates checkIn={seg.reservation.frozenCheckIn} checkOut={seg.reservation.frozenCheckOut} />
           {seg.reservation.confirmedByName ? ` · by ${seg.reservation.confirmedByName}` : ""}
         </Row>
       ) : null}

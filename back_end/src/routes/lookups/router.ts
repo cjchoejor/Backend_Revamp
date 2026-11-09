@@ -5,11 +5,14 @@
  * lower authority bar so a receptionist can look up a travel agent / corporate account when
  * taking a phone-call inquiry. Read-only.
  */
+import { buildRateSheet } from "../../services/domain/rate-sheet-service.js";
 import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../../db.js";
 import { resolveHouseHoldWindow } from "../../services/domain/s3-hold-service.js";
 import { requireActorLevel } from "../../middleware/auth.js";
+import { ANY_CODE_DIGITS, DIAL_CODES } from "../../lib/phone-numbers.js";
+import { PERSON_TITLES } from "../../lib/person-name.js";
 import { validateBody } from "../../middleware/validate-body.js";
 import * as travelAgentSvc from "../../services/admin/travel-agent-admin-service.js";
 import * as corporateSvc from "../../services/admin/corporate-account-admin-service.js";
@@ -40,6 +43,14 @@ const L1 = requireActorLevel("L1");
  * So the desk asks here. The server's clock and the hotel's zone decide; the terminal's
  * settings play no part. Cheap and uncached so a poll rolls it over at midnight.
  */
+/**
+ * The country codes and how many digits each number has, and the titles offered (2026-11-05). The
+ * table is the backend's; the desk and the admin console draw their fields from it.
+ */
+lookupsRouter.get("/lookups/phone-rules", L1, (_req, res) => {
+  res.json({ codes: DIAL_CODES, anyCode: ANY_CODE_DIGITS, titles: PERSON_TITLES });
+});
+
 lookupsRouter.get("/lookups/hotel-day", L1, (_req, res) => {
   const now = new Date();
   const today = hotelTodayUtc(now);
@@ -278,6 +289,7 @@ lookupsRouter.get("/lookups/corporate-accounts/search", L1, async (req, res, nex
  * Idempotent by phone: re-posting a number the party already has returns it with `added: false`.
  */
 const addContactSchema = z.object({
+  title: z.string().trim().max(20).optional().nullable(),
   name: z.string().trim().min(1).max(200),
   phone: z.string().trim().max(50).optional().nullable(),
   email: z.string().trim().max(200).optional().nullable(),
@@ -361,5 +373,32 @@ lookupsRouter.get("/lookups/rate-packages", L1, async (req, res, next) => {
     const corporateAccountId = typeof req.query.corporateAccountId === "string" && req.query.corporateAccountId ? req.query.corporateAccountId : null;
     const items = await listPackagesForParty(prisma, { travelAgentId, corporateAccountId });
     res.json({ items, count: items.length });
+  } catch (e) { next(e); }
+});
+
+/**
+ * The rates a booking is priced on, as one sheet (2026-11-05): the party's package, the hotel's common
+ * one, or the published rates and the house tariff. Takes the choice as it stands on the desk, saved
+ * or not, so the sheet follows a pick before it is on record. Read-only.
+ */
+const YMD = /^\d{4}-\d{2}-\d{2}$/;
+lookupsRouter.get("/lookups/rate-sheet", L1, async (req, res, next) => {
+  try {
+    const text = (v: unknown) => (typeof v === "string" && v ? v : null);
+    const travelAgentId = text(req.query.travelAgentId);
+    const corporateAccountId = text(req.query.corporateAccountId);
+    if (travelAgentId && corporateAccountId) {
+      res.status(400).json({ message: "A booking comes through a travel agent or a company, not both" });
+      return;
+    }
+    const checkIn = text(req.query.checkIn);
+    const checkOut = text(req.query.checkOut);
+    const stay =
+      checkIn && checkOut && YMD.test(checkIn) && YMD.test(checkOut) && checkIn < checkOut
+        ? { checkIn: new Date(`${checkIn}T00:00:00.000Z`), checkOut: new Date(`${checkOut}T00:00:00.000Z`) }
+        : undefined;
+    const sheet = await buildRateSheet(prisma, { travelAgentId, corporateAccountId, ratePackageId: text(req.query.ratePackageId), stay });
+    res.setHeader("Cache-Control", "no-store");
+    res.json(sheet);
   } catch (e) { next(e); }
 });

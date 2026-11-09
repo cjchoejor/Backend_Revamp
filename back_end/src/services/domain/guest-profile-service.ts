@@ -5,6 +5,8 @@ import * as auditService from "../infrastructure/audit-service.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { enforceAcceptedIdentityDocumentType } from "../../policies/06-guest-identity/p16-accepted-document-types.js";
 import { resolveLeadSubjectKey } from "../../lib/lead-guest.js";
+import { cleanPhone } from "../../lib/phone-numbers.js";
+import { personFromName } from "../../lib/person-name.js";
 
 type VerificationPath = "FIRST_TIME" | "RETURNING_VALID" | "RETURNING_EXPIRED" | "VIP";
 
@@ -30,27 +32,33 @@ export async function createGuestProfile(
   actorId: string,
   actorLevel: string,
   input: {
-    firstName: string;
-    lastName: string;
+    title?: string | null;
+    name?: string;
+    firstName?: string;
+    lastName?: string;
     email?: string;
     phone?: string;
     nationality?: string;
     clientTier?: string;
   },
 ) {
+  // One Name field, split here (2026-11-05). One word is a first name alone.
+  const person = input.name ? personFromName({ title: input.title, name: input.name }) : { title: input.title?.trim() || null, firstName: input.firstName?.trim() ?? "", lastName: input.lastName?.trim() ?? "" };
+  if (!person.firstName) throw new ValidationError("The guest's name is needed");
   // Neither is required on the guest's own record (2026-10-06, operator: "can the phone number be
   // not mandatory like email ... we usually just need it when travel agents come, but we cover
   // that on the top"). The booking still needs SOME way to reach someone before Negotiation —
   // Policy 16's S1 exit gate asks for it, and the agency's or the arriving person's number counts.
   const email = input.email?.trim() || null;
-  const phone = input.phone?.trim() || null;
+  const phone = cleanPhone(input.phone, "The guest's phone");
 
   const now = new Date();
   return prisma.$transaction(async (tx) => {
     const created = await tx.guestProfile.create({
       data: {
-        firstName: input.firstName.trim(),
-        lastName: input.lastName.trim(),
+        title: person.title,
+        firstName: person.firstName,
+        lastName: person.lastName,
         email,
         phone,
         nationality: input.nationality?.trim() || null,
@@ -93,7 +101,7 @@ export async function addGuestProfileContact(
   guestProfileId: string,
   input: { phone?: string | null; email?: string | null; entryId?: string | null },
 ) {
-  const phone = input.phone?.trim() || null;
+  const phone = cleanPhone(input.phone, "The guest's phone");
   const email = input.email?.trim() || null;
   if (!phone && !email) throw new ValidationError("Give the phone, the email, or both");
 

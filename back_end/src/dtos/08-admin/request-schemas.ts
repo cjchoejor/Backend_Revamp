@@ -17,6 +17,7 @@ const usernameSchema = z
 const pinSchema = z.string().regex(/^\d{4}$/u, "pin must be exactly 4 digits");
 
 export const createStaffRequestSchema = z.object({
+  title: z.string().trim().max(20).optional().nullable(),
   fullName: z.string().min(1),
   username: usernameSchema,
   email: z.string().email().optional().nullable(),
@@ -30,6 +31,7 @@ export const createStaffRequestSchema = z.object({
 });
 
 export const updateStaffRequestSchema = z.object({
+  title: z.string().trim().max(20).optional().nullable(),
   fullName: z.string().min(1).optional(),
   username: usernameSchema.optional(),
   email: z.string().email().optional().nullable(),

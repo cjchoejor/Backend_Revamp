@@ -5,7 +5,10 @@ import { findGuestsOnFile, sameGuestName } from "./guest-profile-service.js";
 import { enforceEntryNotSealedForWorkingAction } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
 import { recordDuplicateDetectionFlagIfPresent } from "../../policies/04-duplicate-detection/p12-duplicate-flag-create-on-inquiry.js";
 import * as auditService from "../infrastructure/audit-service.js";
-import { assertCallerReachable, callerColumns, normaliseCaller, validateInquiryParty, type CallerInput } from "./s1-inquiry-service.js";
+import { assertCallerReachable, callerColumns, normaliseCaller, partyCaller, partyContactColumns, validateInquiryParty, type CallerInput } from "./s1-inquiry-service.js";
+import { normalizeCoordinators, type CoordinatorContact } from "../../lib/admin/contact-list.js";
+import { loosePhone } from "../../lib/phone-numbers.js";
+import { personFromName, titledName } from "../../lib/person-name.js";
 import { resolveInquiryChannel } from "../../lib/inquiry-came-in-as.js";
 
 /**
@@ -43,6 +46,7 @@ async function loadEntry(prisma: PrismaClient, entryId: string) {
           sourceChannel: true,
           partyContactName: true,
           partyContactPhone: true,
+          partyContacts: true,
           callerTitle: true,
           callerFirstName: true,
           callerLastName: true,
@@ -60,6 +64,18 @@ async function loadEntry(prisma: PrismaClient, entryId: string) {
   return entry;
 }
 
+/** What was typed over what is on record. `name` is the one Name field (2026-11-05). */
+function mergeCaller(inq: Awaited<ReturnType<typeof loadEntry>>["inquiry"], input: CallerInput) {
+  const pick = <K extends keyof CallerInput>(k: K, current: CallerInput[K]) => (input[k] === undefined ? current : input[k]);
+  return normaliseCaller({
+    title: pick("title", inq.callerTitle),
+    ...(input.name !== undefined ? { name: input.name } : { firstName: pick("firstName", inq.callerFirstName), lastName: pick("lastName", inq.callerLastName) }),
+    phone: pick("phone", inq.callerPhone),
+    email: pick("email", inq.callerEmail),
+    onWhatsApp: pick("onWhatsApp", inq.callerOnWhatsApp),
+  });
+}
+
 /**
  * Fill in or correct the caller's details. Fields not sent keep what is on record; an empty
  * string clears one. The result must still reach someone (a phone or an email, not on an OTA).
@@ -68,16 +84,8 @@ export async function updateEntryCaller(prisma: PrismaClient, actor: Actor, entr
   const entry = await loadEntry(prisma, entryId);
   enforceEntryNotSealedForWorkingAction({ status: entry.status });
   const inq = entry.inquiry;
-  const pick = <K extends keyof CallerInput>(k: K, current: CallerInput[K]) => (input[k] === undefined ? current : input[k]);
-  const next = normaliseCaller({
-    title: pick("title", inq.callerTitle),
-    firstName: pick("firstName", inq.callerFirstName),
-    lastName: pick("lastName", inq.callerLastName),
-    phone: pick("phone", inq.callerPhone),
-    email: pick("email", inq.callerEmail),
-    onWhatsApp: pick("onWhatsApp", inq.callerOnWhatsApp),
-  });
-  assertCallerReachable(next, inq.sourceChannel);
+  const next = mergeCaller(inq, input);
+  assertCallerReachable(next, inq.sourceChannel, { byParty: !!(inq.travelAgentId || inq.corporateAccountId) });
 
   const now = new Date();
   return prisma.$transaction(async (tx) => {
@@ -122,8 +130,10 @@ export type SetGuestInput =
   | ({
       mode: "NEW";
       title?: string | null;
-      firstName: string;
-      lastName: string;
+      /** One name, as the desk asks it (2026-11-05); split here, and beats firstName / lastName. */
+      name?: string | null;
+      firstName?: string | null;
+      lastName?: string | null;
       nationality?: string | null;
       phone?: string | null;
       email?: string | null;
@@ -166,29 +176,29 @@ export async function setEntryGuest(prisma: PrismaClient, actor: Actor, entryId:
     existingId = g.id;
     const email = t(input.email);
     if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new ValidationError("The guest's email does not read as an email address");
-    fill = { title: null, nationality: null, phone: t(input.phone), email };
+    fill = { title: null, nationality: null, phone: loosePhone(input.phone), email };
   } else if (input.mode === "CALLER") {
-    if (!inq.callerFirstName || !inq.callerLastName) {
-      throw new ValidationError("Take the caller's first and last name first — the guest record is made from them");
+    // One name is a name (2026-11-05, operator: "sometimes people just have one name").
+    if (!inq.callerFirstName?.trim()) {
+      throw new ValidationError("Take the caller's name first — the guest record is made from it");
     }
     // The caller's title comes with their name (2026-10-28 — it was left behind, so the papers
     // printed "pema lhaden wangchuk" for a caller taken as "Ms pema lhaden wangchuk").
     create = {
       title: inq.callerTitle?.trim() || null,
       firstName: inq.callerFirstName,
-      lastName: inq.callerLastName,
+      lastName: inq.callerLastName ?? "",
       nationality: t(input.nationality),
       phone: inq.callerPhone,
       email: inq.callerEmail,
     };
   } else {
-    const firstName = t(input.firstName);
-    const lastName = t(input.lastName);
-    if (!firstName || !lastName) throw new ValidationError("The guest's first and last name are needed");
+    const person = input.name != null ? personFromName({ title: input.title, name: input.name }) : { title: t(input.title), firstName: t(input.firstName) ?? "", lastName: t(input.lastName) ?? "" };
+    if (!person.firstName) throw new ValidationError("The guest's name is needed");
     const email = t(input.email);
     if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new ValidationError("The guest's email does not read as an email address");
     // The title typed at Wrap up is kept (2026-10-28 — the request carried it and it was dropped).
-    create = { title: t(input.title), firstName, lastName, nationality: t(input.nationality), phone: t(input.phone), email };
+    create = { ...person, nationality: t(input.nationality), phone: loosePhone(input.phone), email };
   }
 
   if (create && (create.phone || create.email)) {
@@ -206,7 +216,7 @@ export async function setEntryGuest(prisma: PrismaClient, actor: Actor, entryId:
       const named = (g: (typeof onFile)[number]) => [g.title, g.firstName, g.lastName].filter(Boolean).join(" ");
       throw new PolicyGateBlockedError(
         "GUEST_ON_FILE_DIFFERENT_NAME",
-        `${onFile[0].matchedBy.length === 2 ? "This phone and email are" : `This ${what(onFile[0])} is`} on file for ${named(onFile[0])} — name them as the guest, or keep ${typed.firstName} ${typed.lastName} as a new guest`,
+        `${onFile[0].matchedBy.length === 2 ? "This phone and email are" : `This ${what(onFile[0])} is`} on file for ${named(onFile[0])} — name them as the guest, or keep ${`${typed.firstName} ${typed.lastName}`.trim()} as a new guest`,
         {
           typed: { title: typed.title, firstName: typed.firstName, lastName: typed.lastName },
           matches: onFile.map((g) => ({
@@ -370,6 +380,10 @@ export type SourceInput = {
   ratePackageId?: string | null;
   corporateClientRef?: string | null;
   corporateCoordinator?: string | null;
+  /** A direct booking's caller, saved with the rest of the section (2026-11-05). */
+  caller?: CallerInput | null;
+  /** Who to ring at the agency or company, first one first (2026-11-05). */
+  partyContacts?: CoordinatorContact[] | null;
 };
 
 /**
@@ -380,6 +394,11 @@ export type SourceInput = {
  * Inquiry (or ended) — a change here would re-price a stay that has already moved on.
  *
  * The custodian is left as assigned; the caller must still be reachable under the new channel.
+ *
+ * One section since 2026-11-05 (operator: "i need to combine these two sections"): the caller and
+ * the contact persons save with it. Booked through an agency or a company, the party is the caller;
+ * until the guest is named, who is arriving follows the first contact person (or a direct caller),
+ * unless someone else was typed there by hand.
  */
 export async function updateEntrySource(prisma: PrismaClient, actor: Actor, entryId: string, input: SourceInput) {
   const entry = await loadEntry(prisma, entryId);
@@ -397,18 +416,29 @@ export async function updateEntrySource(prisma: PrismaClient, actor: Actor, entr
   const channel = resolveInquiryChannel({ cameInAs: input.cameInAs ?? undefined, sourceChannel: input.sourceChannel ?? undefined });
   const party = await validateInquiryParty(prisma, input);
   const inq = entry.inquiry;
+  const byParty = !!(party.travelAgentId || party.corporateAccountId);
+  const contacts = byParty ? normalizeCoordinators(input.partyContacts !== undefined ? input.partyContacts : inq.partyContacts) : [];
+  const caller = byParty ? await partyCaller(prisma, party, contacts) : mergeCaller(inq, input.caller ?? {});
   // The caller must still be reachable: leaving OTA with no phone or email is refused.
-  assertCallerReachable(
-    normaliseCaller({
-      title: inq.callerTitle,
-      firstName: inq.callerFirstName,
-      lastName: inq.callerLastName,
-      phone: inq.callerPhone,
-      email: inq.callerEmail,
-      onWhatsApp: inq.callerOnWhatsApp,
-    }),
-    channel.sourceChannel,
+  assertCallerReachable(caller, channel.sourceChannel, { byParty });
+
+  // Who is arriving follows while nobody was typed there by hand and no guest is named.
+  const wasByParty = !!(inq.travelAgentId || inq.corporateAccountId);
+  const low = (v: string | null | undefined) => (v ?? "").trim().replace(/\s+/g, " ").toLowerCase();
+  const stoodThere = low(entry.contactPersonName);
+  const followed = new Set(
+    [inq.partyContactName, titledName({ title: inq.callerTitle, name: [inq.callerFirstName, inq.callerLastName].filter(Boolean).join(" ") }), [inq.callerFirstName, inq.callerLastName].filter(Boolean).join(" ")].map(low).filter(Boolean),
   );
+  const follows = !entry.guestProfileId && (!stoodThere || followed.has(stoodThere) || (wasByParty && inq.partyContacts == null));
+  const first = contacts[0] ?? null;
+  const callerName = titledName({ title: caller.title, name: [caller.firstName, caller.lastName].filter(Boolean).join(" ") });
+  const arriving = follows
+    ? first
+      ? { contactPersonName: titledName(first), contactPersonPhone: first.phone ?? caller.phone, contactPersonEmail: first.email ?? null }
+      : !byParty
+        ? { contactPersonName: callerName || null, contactPersonPhone: caller.phone, contactPersonEmail: caller.email }
+        : null
+    : null;
   const corporate = !!party.corporateAccountId || channel.sourceChannel === "CORPORATE";
   const t = (v: string | null | undefined) => v?.trim() || null;
   const now = new Date();
@@ -416,6 +446,8 @@ export async function updateEntrySource(prisma: PrismaClient, actor: Actor, entr
     const updated = await tx.inquiry.update({
       where: { id: inq.id },
       data: {
+        ...callerColumns(caller),
+        ...partyContactColumns(contacts),
         sourceChannel: channel.sourceChannel,
         cameInAs: channel.cameInAs,
         travelAgentId: party.travelAgentId,
@@ -431,6 +463,7 @@ export async function updateEntrySource(prisma: PrismaClient, actor: Actor, entr
       where: { inquiryId: inq.id, currentStage: "S1" },
       data: { otaSource: channel.sourceChannel === "OTA" },
     });
+    if (arriving) await tx.entry.update({ where: { id: entry.id }, data: arriving });
     await auditService.emit(tx as any, { actorId: actor.actorId, actorLevel: actor.level }, {
       eventType: "INQUIRY.SOURCE_CHANGED",
       entityType: "Inquiry",
@@ -442,6 +475,8 @@ export async function updateEntrySource(prisma: PrismaClient, actor: Actor, entr
       payload: {
         from: { sourceChannel: inq.sourceChannel },
         to: { sourceChannel: updated.sourceChannel, cameInAs: updated.cameInAs, travelAgentId: updated.travelAgentId, corporateAccountId: updated.corporateAccountId, ratePackageId: updated.ratePackageId },
+        contactPersons: contacts.length,
+        arrivingFollowed: !!arriving,
       },
     });
     return { sourceChannel: updated.sourceChannel, cameInAs: updated.cameInAs, travelAgentId: updated.travelAgentId, corporateAccountId: updated.corporateAccountId, ratePackageId: updated.ratePackageId };

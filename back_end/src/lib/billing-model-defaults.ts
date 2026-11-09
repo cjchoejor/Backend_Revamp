@@ -69,6 +69,15 @@ function leisureDefaults(primaryModel: string): Record<FolioLineType, string> {
 }
 
 /**
+ * The per-type map for a primary model. With a party, the package goes to the primary and extras to
+ * the guest — except DIRECT_BILL, which is "everything to the account" (2026-11-05): it used to send
+ * food, services and other charges to the guest while the desk said everything went to the account.
+ */
+function defaultsFor(primaryModel: string, hasThirdParty: boolean): Record<FolioLineType, string> {
+  return hasThirdParty && primaryModel !== BILLING_MODEL_DIRECT_BILL ? agentDefaults(primaryModel) : leisureDefaults(primaryModel);
+}
+
+/**
  * Resolve which billing model a NEW folio line should carry when posted.
  *
  * Reads `Folio.billingModelDefaults` first; when absent, derives a sensible default from the
@@ -105,7 +114,7 @@ export async function resolveBillingModelForNewLine(
   // 2. Derive from primary model + party linkage.
   const primary = folio.billingModel?.trim() || BILLING_MODEL_GUEST_PAY;
   const hasThirdParty = !!(folio.entry?.inquiry?.travelAgentId || folio.entry?.inquiry?.corporateAccountId);
-  const map = hasThirdParty ? agentDefaults(primary) : leisureDefaults(primary);
+  const map = defaultsFor(primary, hasThirdParty);
   return map[lineType] ?? primary;
 }
 
@@ -115,7 +124,8 @@ export async function resolveBillingModelForNewLine(
  * the initial per-type split so subsequent line posts have a stable map to read from.
  *
  * When the entry has a linked travel agent / corporate account, the map uses the split shape
- * (ROOM_CHARGE→primary, everything else→GUEST_PAY). Otherwise all types → primary.
+ * (ROOM_CHARGE→primary, everything else→GUEST_PAY), unless the primary is DIRECT_BILL ("everything to
+ * the account"). Otherwise all types → primary.
  */
 export async function buildInitialBillingModelDefaults(
   tx: TxClient,
@@ -135,5 +145,5 @@ export async function buildInitialBillingModelDefaults(
     },
   });
   const hasThirdParty = !!(folio?.entry?.inquiry?.travelAgentId || folio?.entry?.inquiry?.corporateAccountId);
-  return hasThirdParty ? agentDefaults(primaryModel.trim()) : leisureDefaults(primaryModel.trim());
+  return defaultsFor(primaryModel.trim(), hasThirdParty);
 }

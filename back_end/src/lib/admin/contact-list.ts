@@ -9,7 +9,10 @@
  * Normalisation and dedupe live here so the two services can't drift apart.
  */
 
-export type CoordinatorContact = { name: string; phone?: string | null; email?: string | null };
+import { cleanPhone, loosePhone } from "../phone-numbers.js";
+import { splitTitle } from "../person-name.js";
+
+export type CoordinatorContact = { title?: string | null; name: string; phone?: string | null; email?: string | null };
 
 /** Digits-only form of a phone, for comparing "+975 17 88 21 04" with "97517882104". */
 function phoneKey(phone: string | null | undefined): string {
@@ -27,8 +30,10 @@ function contactKey(c: CoordinatorContact): string {
 
 /**
  * Normalise a coordinators array: each entry must have a non-empty name; phone/email are optional
- * and blank strings collapse to null. Entries that are duplicates of an earlier one (same phone,
- * or same name when neither has a phone) are dropped. Anything that isn't an object is skipped.
+ * and blank strings collapse to null. A title typed into the name moves to `title` and a phone takes
+ * the stored form when it can be read (2026-11-05). Entries that are duplicates of an earlier one
+ * (same phone, or same name when neither has a phone) are dropped. Anything that isn't an object is
+ * skipped.
  */
 export function normalizeCoordinators(v: unknown): CoordinatorContact[] {
   if (!Array.isArray(v)) return [];
@@ -37,17 +42,27 @@ export function normalizeCoordinators(v: unknown): CoordinatorContact[] {
   for (const c of v) {
     if (!c || typeof c !== "object") continue;
     const obj = c as Record<string, unknown>;
-    const name = typeof obj.name === "string" ? obj.name.trim() : "";
-    if (!name) continue;
-    const phone = typeof obj.phone === "string" && obj.phone.trim() ? obj.phone.trim() : null;
+    const typed = splitTitle(typeof obj.name === "string" ? obj.name : "");
+    if (!typed.name) continue;
+    const title = (typeof obj.title === "string" && obj.title.trim()) || typed.title;
+    const phone = typeof obj.phone === "string" ? loosePhone(obj.phone) : null;
     const email = typeof obj.email === "string" && obj.email.trim() ? obj.email.trim() : null;
-    const contact: CoordinatorContact = { name, phone, email };
+    const contact: CoordinatorContact = { title: title || null, name: typed.name, phone, email };
     const key = contactKey(contact);
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(contact);
   }
   return out;
+}
+
+/**
+ * The same, for a list a person is saving: a phone that cannot be read is refused in words, naming
+ * whose it is, rather than kept (2026-11-05). A number that can be read is stored the one way.
+ */
+export function cleanCoordinators(v: unknown): CoordinatorContact[] {
+  const list = normalizeCoordinators(v);
+  return list.map((c) => ({ ...c, phone: cleanPhone(c.phone, `${c.name}'s phone`) }));
 }
 
 export type AppendContactResult = {
@@ -67,7 +82,7 @@ export type AppendContactResult = {
  */
 export function appendContact(existing: unknown, incoming: CoordinatorContact): AppendContactResult {
   const list = normalizeCoordinators(existing);
-  const [normalized] = normalizeCoordinators([incoming]);
+  const [normalized] = cleanCoordinators([incoming]);
   if (!normalized) {
     throw new Error("contact requires a non-empty name");
   }
@@ -80,6 +95,7 @@ export function appendContact(existing: unknown, incoming: CoordinatorContact): 
 
   const current = list[index];
   const merged: CoordinatorContact = {
+    title: current.title ?? normalized.title ?? null,
     name: current.name,
     phone: current.phone ?? normalized.phone ?? null,
     email: current.email ?? normalized.email ?? null,

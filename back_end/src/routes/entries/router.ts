@@ -1,3 +1,4 @@
+import { s3ReEntryRequestSchema } from "../../dtos/06-reservations/request-schemas.js";
 import { Router } from "express";
 import { prisma } from "../../db.js";
 import {
@@ -27,6 +28,9 @@ import {
   withdrawNegotiationAmendmentRequestSchema,
 } from "../../dtos/03-entries/request-schemas.js";
 import { requireActorLevel } from "../../middleware/auth.js";
+import { cleanPhone } from "../../lib/phone-numbers.js";
+import { cleanCoordinators } from "../../lib/admin/contact-list.js";
+import { callerRequestSchema as callerShape, partyContactSchema } from "../../dtos/02-inquiries/request-schemas.js";
 import { validateBody } from "../../middleware/validate-body.js";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import * as s1EntryService from "../../services/domain/s1-entry-service.js";
@@ -54,6 +58,7 @@ import {
   stopFollowing,
 } from "../../services/domain/trip-follow-service.js";
 import { setEntryGuest, updateEntryCaller, updateEntrySource } from "../../services/domain/inquiry-caller-service.js";
+import { moveTripToNegotiation, nameGuestOnTripStays, moveTripToSetUp, renegotiateTrip, reserveTrip, staysTogether } from "../../services/domain/trip-inquiry-service.js";
 import { CAME_IN_AS_VALUES } from "../../lib/inquiry-came-in-as.js";
 import { callerRequestSchema } from "../../dtos/02-inquiries/request-schemas.js";
 import { runPostCheckoutInspectionWorker } from "../../workers/w9-post-checkout-inspection-worker.js";
@@ -66,7 +71,7 @@ import { recallSegmentConfiguration, duplicateSegmentIntoNew } from "../../servi
 import { listEntryCommunications } from "../../services/domain/communication-acknowledgement-service.js";
 import { buildEntryRateReference } from "../../services/domain/rate-reference-service.js";
 import { previewEarlyDeparture, recordEarlyDeparture } from "../../services/domain/early-departure-service.js";
-import { buildQuotationPreview } from "../../services/domain/quotation-preview-service.js";
+import { buildQuotationPreview, buildTripQuotationPreview } from "../../services/domain/quotation-preview-service.js";
 import { buildCompetingClaims } from "../../services/domain/competing-claims-service.js";
 import { changeRoomToNewSegment, listRoomChangeCandidates, buildRoomPlanHistory } from "../../services/domain/room-change-service.js";
 import { makeWayForRoom } from "../../services/domain/quiet-rooms-service.js";
@@ -108,6 +113,7 @@ export const entriesRouter = Router();
  */
 entriesRouter.post("/:id/caller", requireActorLevel("L1"), validateBody(callerRequestSchema), async (req, res, next) => {
   try {
+    if (req.body.phone !== undefined) req.body.phone = cleanPhone(req.body.phone, "The caller's phone");
     res.json(await updateEntryCaller(prisma, { actorId: req.actor!.actorId, level: req.actor!.level }, req.params.id, req.body));
   } catch (e) {
     next(e);
@@ -124,19 +130,29 @@ const sourceSchema = z
     ratePackageId: z.string().min(1).nullable().optional(),
     corporateClientRef: z.string().trim().max(200).nullable().optional(),
     corporateCoordinator: z.string().trim().max(200).nullable().optional(),
+    /** One section since 2026-11-05: the caller and the contact persons save with it. */
+    caller: callerShape.nullable().optional(),
+    partyContacts: z.array(partyContactSchema).max(20).nullable().optional(),
   })
   .refine((v) => !!(v.cameInAs || v.sourceChannel), { message: "Say how the booking came in", path: ["cameInAs"] })
   .refine((v) => !(v.travelAgentId && v.corporateAccountId), { message: "A travel agent OR a company, not both", path: ["travelAgentId"] });
 
 entriesRouter.post("/:id/source", requireActorLevel("L1"), validateBody(sourceSchema), async (req, res, next) => {
   try {
+    if (req.body.caller?.phone !== undefined) req.body.caller.phone = cleanPhone(req.body.caller.phone, "The caller's phone");
+    if (req.body.partyContacts) req.body.partyContacts = cleanCoordinators(req.body.partyContacts);
     res.json(await updateEntrySource(prisma, { actorId: req.actor!.actorId, level: req.actor!.level }, req.params.id, req.body));
   } catch (e) {
     next(e);
   }
 });
 
-const guestNamingOptions = { keepNewName: z.boolean().optional(), arrivingIsGuest: z.boolean().optional() };
+const guestNamingOptions = {
+  keepNewName: z.boolean().optional(),
+  arrivingIsGuest: z.boolean().optional(),
+  /** The same guest on the trip's other stays still at Inquiry (2026-11-07). */
+  alsoTripStays: z.boolean().optional(),
+};
 const setGuestSchema = z.discriminatedUnion("mode", [
   z.object({ mode: z.literal("CALLER"), nationality: z.string().trim().max(80).nullable().optional(), ...guestNamingOptions }),
   z.object({
@@ -150,8 +166,10 @@ const setGuestSchema = z.discriminatedUnion("mode", [
     mode: z.literal("NEW"),
     ...guestNamingOptions,
     title: z.string().trim().max(20).nullable().optional(),
-    firstName: z.string().trim().min(1).max(80),
-    lastName: z.string().trim().min(1).max(80),
+    /** One name, as the desk asks it (2026-11-05); the service splits it. */
+    name: z.string().trim().max(160).nullable().optional(),
+    firstName: z.string().trim().max(80).nullable().optional(),
+    lastName: z.string().trim().max(80).nullable().optional(),
     nationality: z.string().trim().max(80).nullable().optional(),
     phone: z.string().trim().max(40).nullable().optional(),
     email: z.string().trim().max(200).nullable().optional(),
@@ -160,9 +178,68 @@ const setGuestSchema = z.discriminatedUnion("mode", [
 
 entriesRouter.post("/:id/guest", requireActorLevel("L1"), validateBody(setGuestSchema), async (req, res, next) => {
   try {
-    const named = await setEntryGuest(prisma, { actorId: req.actor!.actorId, level: req.actor!.level }, req.params.id, req.body);
+    if ("phone" in req.body && req.body.phone !== undefined) req.body.phone = cleanPhone(req.body.phone, "The guest's phone");
+    const { alsoTripStays, ...naming } = req.body as typeof req.body & { alsoTripStays?: boolean };
+    const actor = { actorId: req.actor!.actorId, level: req.actor!.level };
+    const named = await setEntryGuest(prisma, actor, req.params.id, naming);
     await afterStayChanged(prisma, { actorId: req.actor!.actorId, actorLevel: req.actor!.level }, req.params.id, "GUEST");
-    res.json(named);
+    // A trip at Inquiry names one guest for every stay (2026-11-07, ruling "the same guest for both").
+    const tripStays = alsoTripStays
+      ? await nameGuestOnTripStays(prisma, actor, req.params.id, named.guestProfileId, { arrivingIsGuest: naming.arrivingIsGuest })
+      : [];
+    res.json({ ...named, tripStays });
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
+ * Move every stay of a trip still at Inquiry to Negotiation (2026-11-07, operator ruling: one
+ * Continue moves every stay). Each stay through its own move; a refusal names the stay.
+ */
+entriesRouter.post("/:id/trip/to-negotiation", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const version = typeof req.body?.version === "number" ? req.body.version : undefined;
+    res.json(await moveTripToNegotiation(prisma, { actorId: req.actor!.actorId, level: req.actor!.level }, req.params.id, version));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** Which stays are worked in one table at Negotiation (2026-11-09). Empty when this stay stands alone. */
+entriesRouter.get("/:id/trip/together", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ stayIds: await staysTogether(prisma, req.params.id) });
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** Those stays on to Set up together, each through its own move; a refusal names the stay. */
+entriesRouter.post("/:id/trip/to-set-up", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const version = typeof req.body?.version === "number" ? req.body.version : undefined;
+    res.json(await moveTripToSetUp(prisma, { actorId: req.actor!.actorId, level: req.actor!.level }, req.params.id, version));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** The stays viewed together back to Negotiation for a fresh quotation; a refusal names the stay. */
+entriesRouter.post("/:id/trip/renegotiate", requireActorLevel("L2"), validateBody(s3ReEntryRequestSchema), async (req, res, next) => {
+  try {
+    res.json(await renegotiateTrip(prisma, { actorId: req.actor!.actorId, level: req.actor!.level }, req.params.id, req.body));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** The stays viewed together reserved at once, each through its own checks; a refusal names the stay. */
+entriesRouter.post("/:id/trip/reserve", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const version = typeof req.body?.version === "number" ? req.body.version : undefined;
+    res.json(await reserveTrip(prisma, { actorId: req.actor!.actorId, level: req.actor!.level }, req.params.id, version));
   } catch (e) {
     next(e);
   }
@@ -615,6 +692,55 @@ entriesRouter.get("/:id/competing-claims", requireActorLevel("L1"), async (req, 
   }
 });
 
+/** A preview's table, and the nights and stay it is priced for, as the desk sends them. */
+function previewArgs(raw: unknown) {
+  const body = raw as { roomCompositions?: unknown; discount?: unknown; roomNights?: unknown; roomNightDates?: unknown; stay?: unknown };
+  const roomCompositions = Array.isArray(body?.roomCompositions) ? (body.roomCompositions as Array<{ roomId?: unknown }>) : [];
+  // Each room prices at its own type's rate even when the booking does not hold it yet (the
+  // room-change panel), and for the nights the desk says it takes — a count from 1 to 366.
+  const roomNights = new Map<string, number>();
+  if (body?.roomNights && typeof body.roomNights === "object" && !Array.isArray(body.roomNights)) {
+    for (const [rid, n] of Object.entries(body.roomNights as Record<string, unknown>)) {
+      if (typeof n === "number" && Number.isInteger(n) && n >= 1 && n <= 366) roomNights.set(rid, n);
+    }
+  }
+  // And which nights, as YYYY-MM-DD, so a room's per-night meals and beds price on them (2026-10-22).
+  const roomNightDates = new Map<string, string[]>();
+  if (body?.roomNightDates && typeof body.roomNightDates === "object" && !Array.isArray(body.roomNightDates)) {
+    for (const [rid, ds] of Object.entries(body.roomNightDates as Record<string, unknown>)) {
+      if (!Array.isArray(ds) || ds.length < 1 || ds.length > 366) continue;
+      if (!ds.every((d) => typeof d === "string" && /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(d))) continue;
+      roomNightDates.set(rid, ds as string[]);
+    }
+  }
+  // Priced for a stay the booking does not hold yet (2026-10-29, a change of dates on the step):
+  // the rates resolve for those nights.
+  const stayIn = (body?.stay as { checkInDate?: unknown } | undefined)?.checkInDate;
+  const stayOut = (body?.stay as { checkOutDate?: unknown } | undefined)?.checkOutDate;
+  const stayOverride =
+    typeof stayIn === "string" && typeof stayOut === "string" && /^\d{4}-\d{2}-\d{2}$/.test(stayIn) && /^\d{4}-\d{2}-\d{2}$/.test(stayOut) && stayOut > stayIn
+      ? {
+          checkIn: new Date(`${stayIn}T00:00:00.000Z`),
+          checkOut: new Date(`${stayOut}T00:00:00.000Z`),
+          perRoomNightCounts: new Map(
+            roomCompositions
+              .map((c) => c.roomId)
+              .filter((id): id is string => typeof id === "string")
+              .map((id) => [id, roomNights.get(id) ?? Math.round((Date.parse(stayOut) - Date.parse(stayIn)) / 86_400_000)] as [string, number]),
+          ),
+        }
+      : null;
+  return {
+    input: { roomCompositions: roomCompositions as never[], discount: (body?.discount ?? null) as never },
+    opts: {
+      planRoomIds: roomCompositions.map((c) => c.roomId).filter((id): id is string => typeof id === "string"),
+      ...(roomNights.size ? { roomNights } : {}),
+      ...(roomNightDates.size ? { roomNightDates } : {}),
+      ...(stayOverride ? { stayOverride } : {}),
+    },
+  };
+}
+
 /**
  * Live pricing for the composition table — the quote's own arithmetic with nothing persisted.
  *
@@ -625,56 +751,24 @@ entriesRouter.get("/:id/competing-claims", requireActorLevel("L1"), async (req, 
  */
 entriesRouter.post("/:id/quotation-preview", requireActorLevel("L1"), async (req, res, next) => {
   try {
-    const body = req.body as { roomCompositions?: unknown; discount?: unknown; roomNights?: unknown; roomNightDates?: unknown; stay?: unknown };
     res.setHeader("Cache-Control", "no-store");
-    const roomCompositions = Array.isArray(body?.roomCompositions) ? (body.roomCompositions as Array<{ roomId?: unknown }>) : [];
-    // Each room prices at its own type's rate even when the booking does not hold it yet (the
-    // room-change panel), and for the nights the desk says it takes — a count from 1 to 366.
-    const roomNights = new Map<string, number>();
-    if (body?.roomNights && typeof body.roomNights === "object" && !Array.isArray(body.roomNights)) {
-      for (const [rid, n] of Object.entries(body.roomNights as Record<string, unknown>)) {
-        if (typeof n === "number" && Number.isInteger(n) && n >= 1 && n <= 366) roomNights.set(rid, n);
-      }
-    }
-    // And which nights, as YYYY-MM-DD, so a room's per-night meals and beds price on them (2026-10-22).
-    const roomNightDates = new Map<string, string[]>();
-    if (body?.roomNightDates && typeof body.roomNightDates === "object" && !Array.isArray(body.roomNightDates)) {
-      for (const [rid, ds] of Object.entries(body.roomNightDates as Record<string, unknown>)) {
-        if (!Array.isArray(ds) || ds.length < 1 || ds.length > 366) continue;
-        if (!ds.every((d) => typeof d === "string" && /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(d))) continue;
-        roomNightDates.set(rid, ds as string[]);
-      }
-    }
-    // Priced for a stay the booking does not hold yet (2026-10-29, a change of dates on the step):
-    // the rates resolve for those nights.
-    const stayIn = (body?.stay as { checkInDate?: unknown } | undefined)?.checkInDate;
-    const stayOut = (body?.stay as { checkOutDate?: unknown } | undefined)?.checkOutDate;
-    const stayOverride =
-      typeof stayIn === "string" && typeof stayOut === "string" && /^\d{4}-\d{2}-\d{2}$/.test(stayIn) && /^\d{4}-\d{2}-\d{2}$/.test(stayOut) && stayOut > stayIn
-        ? {
-            checkIn: new Date(`${stayIn}T00:00:00.000Z`),
-            checkOut: new Date(`${stayOut}T00:00:00.000Z`),
-            perRoomNightCounts: new Map(
-              roomCompositions
-                .map((c) => c.roomId)
-                .filter((id): id is string => typeof id === "string")
-                .map((id) => [id, roomNights.get(id) ?? Math.round((Date.parse(stayOut) - Date.parse(stayIn)) / 86_400_000)] as [string, number]),
-            ),
-          }
-        : null;
-    res.json(
-      await buildQuotationPreview(
-        prisma,
-        req.params.id,
-        { roomCompositions: roomCompositions as never[], discount: (body?.discount ?? null) as never },
-        {
-          planRoomIds: roomCompositions.map((c) => c.roomId).filter((id): id is string => typeof id === "string"),
-          ...(roomNights.size ? { roomNights } : {}),
-          ...(roomNightDates.size ? { roomNightDates } : {}),
-          ...(stayOverride ? { stayOverride } : {}),
-        },
-      ),
-    );
+    const { input, opts } = previewArgs(req.body);
+    res.json(await buildQuotationPreview(prisma, req.params.id, input, opts));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
+ * The stays worked in one table priced together (2026-11-09): each stay's own preview, and the
+ * trip's figures added up on the server. Writes nothing.
+ */
+entriesRouter.post("/:id/quotation-preview/trip", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    const stays = Array.isArray(req.body?.stays) ? (req.body.stays as Array<Record<string, unknown>>) : [];
+    if (stays.length < 2 || stays.length > 12 || stays.some((s) => typeof s?.entryId !== "string")) throw new ValidationError("Name the stays to price together");
+    res.json(await buildTripQuotationPreview(prisma, req.params.id, stays.map((s) => ({ entryId: s.entryId as string, quotationId: typeof s.quotationId === "string" ? s.quotationId : null, billQuotation: s.billQuotation === true, ...previewArgs(s) }))));
   } catch (e) {
     next(e);
   }
@@ -774,6 +868,7 @@ entriesRouter.get("/", requireActorLevel("L1"), async (req, res, next) => {
 
 entriesRouter.post("/", requireActorLevel("L1"), validateBody(createEntryRequestSchema), async (req, res, next) => {
   try {
+    if (req.body.contactPersonPhone) req.body.contactPersonPhone = cleanPhone(req.body.contactPersonPhone, "Their phone") ?? undefined;
     const created = await s1EntryService.createEntry(prisma, req.actor!.actorId, req.actor!.level, req.body);
     res.status(201).json(created);
   } catch (e) {
@@ -959,6 +1054,7 @@ entriesRouter.post(
 /** Booking flow's step-1 Edit — narrow update for intake fields only, S1-gated server-side. */
 entriesRouter.patch("/:id", requireActorLevel("L1"), validateBody(updateEntryRequestSchema), async (req, res, next) => {
   try {
+    if (req.body.contactPersonPhone) req.body.contactPersonPhone = cleanPhone(req.body.contactPersonPhone, "Their phone") ?? undefined;
     const updated = await s1EntryService.updateEntryIntakeFields(
       prisma,
       req.params.id,

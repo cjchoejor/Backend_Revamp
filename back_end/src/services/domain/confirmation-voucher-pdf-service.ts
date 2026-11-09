@@ -15,6 +15,9 @@
  * Storage / immutability: same append-only pattern as the quotation and invoice services.
  * If a voucher was previously rendered we serve the stored file rather than regenerating.
  */
+import { waitingRefundTotal } from "../../lib/refund-money.js";
+import { computeStayCharges, stayBreakdownFromTerms } from "../infrastructure/compute-stay-charges.js";
+import { maxZeroSub, sumMoneyBy } from "../../lib/money.js";
 import { type PrismaClient } from "@prisma/client";
 import { NotFoundError } from "../../lib/errors.js";
 import { allocateReadableId } from "../../lib/readable-id.js";
@@ -37,6 +40,8 @@ import { mastheadFromHotelProfile } from "../infrastructure/pdf-templates/legphe
 import { formatDocDate, formatDocDateTime, formatDocDateLocal } from "../infrastructure/pdf-templates/legphel-document-format.js";
 import { guestDisplayName } from "../../lib/guest-display-name.js";
 import { type ConfirmationVoucherLine } from "../infrastructure/pdf-templates/confirmation-voucher-template.js";
+import { resolveBillQuotation } from "../../lib/operative-quotation.js";
+import { quotationPaperPrices } from "./quotation-pdf-service.js";
 
 /** Static policy text — matches the reference voucher. Would live in ConfigurationEntry once
  *  the admin console gets a policy editor. Kept inline for now so the voucher renders even
@@ -301,6 +306,33 @@ export async function generateOrLoadConfirmationVoucherPdf(
         .join(" · ")
     : `${nights} night${nights === 1 ? "" : "s"} total`;
 
+  const voucherFolio = await prisma.folio.findUnique({
+    where: { entryId: entry.id },
+    select: { id: true, payments: { select: { amount: true, paymentDirection: true } } },
+  });
+  // What this booking holds for itself: less what went back and what is waiting to (2026-11-05).
+  const advanceHeld = Number(
+    maxZeroSub(
+      sumMoneyBy((voucherFolio?.payments ?? []).filter((p) => p.paymentDirection === "IN"), "amount"),
+      sumMoneyBy((voucherFolio?.payments ?? []).filter((p) => p.paymentDirection === "OUT"), "amount").add(
+        voucherFolio ? await waitingRefundTotal(prisma, voucherFolio.id) : 0,
+      ),
+    ).toFixed(2),
+  );
+  const stayTotal = (
+    stayBreakdownFromTerms(reservation.frozenCommercialTerms) ??
+    (await computeStayCharges(prisma, Number(reservation.frozenRate ?? 0), nights, Math.max(1, Number((reservation.frozenCommercialTerms as { roomCount?: unknown } | null)?.roomCount) || entry.numberOfRooms || 1)))
+  ).total;
+
+  // The reserved pass's quotation, its rooms as its paper sets them out (2026-11-07) — the same
+  // choice the proforma makes (`resolveBillQuotation`).
+  const passQuotes = await prisma.quotation.findMany({
+    where: { entryId: entry.id },
+    select: { id: true, segmentId: true, state: true, versionNumber: true, createdAt: true },
+  });
+  const passQuote = resolveBillQuotation(passQuotes, reservation.segmentId);
+  const paper = passQuote ? await quotationPaperPrices(prisma, passQuote.id, { nightsMode }).catch(() => null) : null;
+
   const html = renderLegphelConfirmationVoucherHtml({
     masthead: mastheadFromHotelProfile(hotel),
     voucherNo: voucherNumber,
@@ -315,9 +347,9 @@ export async function generateOrLoadConfirmationVoucherPdf(
     reCheckIn: null,
     reCheckOut: null,
     roomAndPlan: roomsSummary,
-    advanceReceiptRef: null,
-    advanceHeld: formatMoney(0),
-    balanceAtCheckout: formatMoney(0),
+    // The rooms as the quotation sets them out, no prices (2026-11-07).
+    lines: paper?.priceBlock.lines,
+    datesShown: paper?.priceBlock.datesShown,
     closingNote:
       `Inclusions per plan · Wi-Fi · parking. Early check-in and late check-out subject to ` +
       `availability. Please carry photo ID for all adult guests. ${DEFAULT_POLICIES.cancellation}`,
@@ -364,6 +396,10 @@ export async function generateOrLoadConfirmationVoucherPdf(
         confirmationVoucherInputSnapshot: {
           documentTitle: "CONFIRMATION VOUCHER",
           voucherNumber,
+          // No money on the voucher (2026-11-07): its rooms as the quotation sets them out.
+          pricesShown: false,
+          quotationId: passQuote?.id ?? null,
+          lines: paper?.priceBlock.lines ?? null,
           bookingReference: entry.inquiryId,
           guestName: guestFullName,
           contactPersonName,

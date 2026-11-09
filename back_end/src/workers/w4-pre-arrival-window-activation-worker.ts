@@ -248,6 +248,8 @@ async function activate(
   if (!opts?.skipTaskReset) {
     await preArrivalService.resetTasksForArrivalVerification(prisma, entryId, "SYSTEM");
   }
+  // The tasks are the system's for now (2026-11-07): closed as Arrival opens.
+  await preArrivalService.completeTasksBySystem(prisma, entryId, "SYSTEM");
 
   await scheduleS5StageDwellWarningMonitor(prisma, entryId, "SYSTEM");
 

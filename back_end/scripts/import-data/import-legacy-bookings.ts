@@ -22,6 +22,7 @@
  *
  * Dry-run by default; pass --commit to write.
  */
+import { loosePhone } from "../../src/lib/phone-numbers.js";
 import { PrismaClient, EntryStatus, FolioState, FolioLineType, HandoffType, HandoffState, HoldState, InventoryClaimState, PaymentDirection, QuotationState, Stage } from "@prisma/client";
 import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
@@ -479,7 +480,7 @@ async function main() {
       await prisma.$transaction(async (tx) => {
         /* ---- 1. Guest profile (dedup by phone+email) ---- */
         const guestName = trim(inq.contact_person) || trim(arb?.name) || "Guest (legacy)";
-        const phone = naToNull(trim(inq.contact_person_phone_no));
+        const phone = loosePhone(naToNull(trim(inq.contact_person_phone_no)));
         const email = naToNull(trim(inq.contact_person_email));
         const guestKey = `${phone ?? ""}::${email ?? ""}::${guestName.toLowerCase()}`;
         let guestProfileId: string;

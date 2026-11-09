@@ -728,6 +728,8 @@ model StaffUser {
   // New rows should get STF-YYYYMMDD-NNNN via `allocateReadableId("STAFF_USER", ...)`.
   // uuid() default kept so existing rows work; readable IDs are additive going forward.
   id                         String     @id @default(uuid())
+  /// "Mr" · "Ms" … (2026-11-05). Shown on the staff list; fullName stays the name alone.
+  title                      String?
   fullName                   String
   // Login handle. Unique per active StaffUser; case-sensitive at the DB layer, folded on write
   // by the admin service. 4-digit PIN alone can't identify a user (10k global space); username
@@ -981,6 +983,10 @@ model Inquiry {
   partyContactName  String?
   partyContactPhone String?
   partyContactEmail String?
+  /// Every contact person on this enquiry, first one first (2026-11-05, operator: "we are adding
+  /// another contact person in case that person doesn't respond"): [{ title?, name, phone?, email? }].
+  /// partyContactName / Phone / Email hold the first. Null on an enquiry from before this.
+  partyContacts     Json?
   agentProfileId             String?
   sourceChannel              String           @default("DIRECT")
   /// How the guest came in, as the desk records it (2026-09-18). `sourceChannel` holds only the
@@ -1203,6 +1209,10 @@ model Entry {
   /// What was last copied, so a save that changes nothing copies nothing, and any room type that
   /// could not be copied, for the desk to ask about.
   followState      Json?
+  /// The desk's answer "Same as this stay" (2026-11-09, operator): the stays set up the same are
+  /// worked in ONE table at Negotiation. It outlives the copying above, which ends at Inquiry; only
+  /// "Set its own" takes it off. A soft link, like `splitFromEntryId`.
+  sameSetupAs      String?
 
   inquiry                      Inquiry                       @relation(fields: [inquiryId], references: [id])
   guestProfile                 GuestProfile?                 @relation(fields: [guestProfileId], references: [id])
@@ -1242,6 +1252,7 @@ model Entry {
   negotiationAmendmentRequests NegotiationAmendmentRequest[]
   roomMoveLegs                 RoomMoveLeg[]
   heldDocuments                HeldDocument[]
+  refundRequests               RefundRequest[]
   bookingNotes                 BookingNote[]
   guestRequests                GuestRequest[]
   earlyDeparture               EarlyDepartureRecord?
@@ -1255,6 +1266,7 @@ model Entry {
   @@index([currentStage, status])
   @@index([splitFromEntryId])
   @@index([followsEntryId])
+  @@index([sameSetupAs])
   @@map("entries")
 }
 
@@ -1946,8 +1958,13 @@ model Folio {
   /// guest said and WHEN the remainder is coming, drives the promise timer (W38) and the
   /// settlement surfaces at S4–S8. Segment-scoped by `setAt` like the requirement pin.
   advancePaymentPlan Json?
+  /// What the desk answered about money paid in an earlier pass (2026-11-05): kept on this
+  /// pass's proforma, or refunded. `{ segmentId, answer: CARRY | REFUND, cause?, answeredAt, answeredBy }`.
+  /// Only the pass it names counts, so a booking sent back again is asked again.
+  earlierAdvanceAnswer Json?
 
   entry                   Entry                          @relation(fields: [entryId], references: [id])
+  refundRequests RefundRequest[]
   payments                PaymentRecord[]
   lines                   FolioLine[]
   disputes                DisputeRecord[]
@@ -1968,6 +1985,10 @@ model Invoice {
   entryId        String
   invoiceType    InvoiceType
   state          InvoiceState @default(DRAFT)
+  /// How long a proforma stands (2026-11-05), by the quote's rule. Null on one made before this.
+  validUntil     DateTime?
+  /// When its time ended with the guest still to answer. It is made again; the booking does not lapse.
+  lapsedAt       DateTime?
   invoiceNumber  String?      @unique
   totalAmount    Decimal?     @db.Decimal(15, 2)
   /// Split-billing bucket this invoice represents (Phase 3, 2026-07-25). When populated,
@@ -1983,6 +2004,10 @@ model Invoice {
   dispatchedTo   String?
   supersededById String?
   versionNumber  Int          @default(1)
+  /// The number the paper prints, shared by every version of a proforma (2026-11-07): "INV-20261107-0004",
+  /// printed with " · v2" from the second version. The record's own id is `INV-20261107-0004-v2`. Null on a
+  /// paper made before this, which prints its id.
+  documentNumber String?
   metadata       Json?
   createdAt      DateTime     @default(now())
 
@@ -2004,6 +2029,7 @@ model Invoice {
   lines                 InvoiceLine[]
   interimPaymentRequest InterimPaymentRequest?
 
+  @@index([documentNumber])
   @@map("invoices")
 }
 
@@ -2188,6 +2214,14 @@ model PaymentRecord {
   /// or an extension's conditional payment. NULL for advances and settlements.
   interimPaymentRequestId String?
 
+  /// Recorded as one payment for a whole trip (2026-11-09). What it pays beyond this stay's advance
+  /// counts towards the other stays' advances (lib/trip-advance-cover.ts).
+  paidForTrip Boolean @default(false)
+
+  /// One half of money moved between two stays' bills when a stay of the trip is cancelled
+  /// (2026-11-09). A money-out row and a money-in row share it; together they move no money.
+  tripTransferRef String?
+
   /// Which room / space this money settles (2026-09-09, PMS-237). Charges have carried a room
   /// since 2026-08-14 but payments never did, so "room 202 is paid, 203 still owes" could not
   /// be answered — a per-room balance is that room's charges MINUS its payments, and only the
@@ -2203,6 +2237,7 @@ model PaymentRecord {
 
   @@index([roomId])
   @@index([spaceId])
+  @@index([tripTransferRef])
   @@map("payment_records")
 }
 
@@ -2904,6 +2939,10 @@ model TravelAgent {
   // number each time. Appendable from the desk (L1) via POST /lookups/travel-agents/:id/contacts so
   // a new contact person captured mid-call is there for the next booking.
   coordinators   Json?
+  /// The advance asked of a booking through this party, as a percentage of the stay's total
+  /// (2026-11-05). Null is not set: nothing is asked unless the desk sets it on the booking. It is
+  /// copied onto the booking when it reaches Set up, so a later change leaves live bookings alone.
+  advancePercent Decimal?    @db.Decimal(5, 2)
   notes          String?
   isActive       Boolean     @default(true)
   createdAt      DateTime    @default(now())
@@ -2941,6 +2980,10 @@ model CorporateAccount {
   contractRefs   String[]    @default([])
   // coordinators: array of contact objects [{ name, phone?, email? }].
   coordinators   Json?
+  /// The advance asked of a booking through this party, as a percentage of the stay's total
+  /// (2026-11-05). Null is not set: nothing is asked unless the desk sets it on the booking. It is
+  /// copied onto the booking when it reaches Set up, so a later change leaves live bookings alone.
+  advancePercent Decimal?    @db.Decimal(5, 2)
   notes          String?
   isActive       Boolean     @default(true)
   createdAt      DateTime    @default(now())
@@ -3639,4 +3682,74 @@ model AdvanceApplication {
   @@index([roomId])
   @@index([spaceId])
   @@map("advance_applications")
+}
+
+/// Money that has to go back to a guest (2026-11-05). Asked for at Set up, when a new pass finds an
+/// advance from an earlier one and the desk chooses to refund it, or raised by the system when a
+/// booking lapses holding money. WAITING money is still on the bill but no longer counts towards
+/// this booking; REFUNDED has its money-out row. The FOM, GM and admin read and answer it.
+model RefundRequest {
+  id              String    @id // readable PREFIX-YYYYMMDD-NNNN, allocated by allocateReadableId("REFUND", ...)
+  entryId         String
+  folioId         String
+  /// RENEGOTIATED (the desk chose it at Set up) · LAPSED (the booking ended holding the money).
+  cause           String
+  /// WAITING · REFUNDED · KEPT · CANCELLED (the booking's cancellation refunded it instead).
+  status          String    @default("WAITING")
+  amountAsked     Decimal   @db.Decimal(15, 2)
+  currency        String    @default("BTN")
+  note            String?
+  stage           Stage?
+  raisedBy        String
+  raisedAt        DateTime  @default(now())
+  /// The proforma the money was paid against: its stored paper can be opened from the request.
+  paidOnInvoiceId String?
+  refundedAmount  Decimal?  @db.Decimal(15, 2)
+  refundMethod    String?
+  bankName        String?
+  accountNumber   String?
+  journalNumber   String?
+  /// The money-out row this refund wrote.
+  paymentRecordId String?   @unique
+  closeNote       String?
+  closedBy        String?
+  closedAt        DateTime?
+
+  entry Entry @relation(fields: [entryId], references: [id], onUpdate: Cascade)
+  folio Folio @relation(fields: [folioId], references: [id], onUpdate: Cascade)
+
+  @@index([status, raisedAt])
+  @@index([entryId])
+  @@index([folioId])
+  @@map("refund_requests")
+}
+
+/// A TRIP'S PAPER (2026-11-07, operator: "keep their numbers and add version numbers" — each stay
+/// keeps its own quotation, and the trip has a combined one of its own: QUO-0003, then QUO-0003 v2
+/// when a stay changes). One row per version. `members` names the stays' own papers it is made of
+/// (entry, paper id, number, version, total); its total is only their sum — it has no price of its own.
+model TripPaper {
+  id             String    @id
+  inquiryId      String
+  /// QUOTATION | PROFORMA | VOUCHER
+  kind           String
+  documentNumber String
+  versionNumber  Int       @default(1)
+  members        Json
+  totalAmount    Decimal   @db.Decimal(15, 2)
+  currency       String    @default("BTN")
+  /// LIVE | SUPERSEDED
+  state          String    @default("LIVE")
+  validUntil     DateTime?
+  sentAt         DateTime?
+  sentTo         String?
+  sentChannel    String?
+  answeredAt     DateTime?
+  answeredBy     String?
+  createdAt      DateTime  @default(now())
+  createdBy      String
+  supersededAt   DateTime?
+
+  @@index([inquiryId, kind])
+  @@map("trip_papers")
 }

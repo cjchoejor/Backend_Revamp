@@ -1,3 +1,5 @@
+import { nextProformaNumberTx } from "../../lib/document-numbers.js";
+import { afterProformaMadeTx, stopProformaValidityTx } from "./proforma-validity-service.js";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { FolioState, InvoiceState, InvoiceType, PaymentDirection, Stage } from "@prisma/client";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
@@ -18,13 +20,11 @@ import {
   evaluateAdvancePaymentConditionTx,
 } from "./s3-payment-service.js";
 import {
-  autoPlaceCommittedHoldOnAdvancePayment,
   confirmHeldRoomsAfterFullPaymentTx,
-  type AdvancePaymentAutoHoldOutcome,
 } from "./s3-hold-service.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.js";
-import { ensureProformaOfThisPassTx } from "./s3-payment-service.js";
+import { applyPartyAdvanceRuleTx, ensureProformaOfThisPassTx } from "./s3-payment-service.js";
 import { enforceEntryNotSealedForWorkingAction } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
 import { latestDispatchedInForce } from "../../lib/reply-waits.js";
 
@@ -82,6 +82,8 @@ export async function getOrCreateProvisionalFolioTx(
     // place (2026-09-25). Every pass has its own now (2026-10-29): an earlier pass's bill is
     // replaced, a missing one is made, this pass's own is left as it is.
     const pass = await tx.segment.findUnique({ where: { id: segmentId }, select: { startedAt: true } });
+    // Before the bill, which prints it.
+    await applyPartyAdvanceRuleTx(tx, { entryId, folioId: existing.id, segmentId, actorId, now });
     await ensureProformaOfThisPassTx(
       tx,
       { entryId, folioId: existing.id, passStartedAt: pass?.startedAt ?? null, basis: "ARRIVAL_AT_SET_UP", now },
@@ -119,6 +121,7 @@ export async function getOrCreateProvisionalFolioTx(
       createdBy: actorId,
     },
   });
+  await applyPartyAdvanceRuleTx(tx, { entryId, folioId: created.id, segmentId, actorId, now });
 
   return created;
 }
@@ -130,12 +133,8 @@ export async function getOrCreateProvisionalFolioTx(
  * arrival, at the check-in desk, or — via S8 settlement, not this path — at check-out. The
  * payment row is stamped with the stage it was actually taken at.
  *
- * Money received at S3 auto-places the committed hold (2026-08-10 operator ruling, replacing
- * the 2026-08-08 dispatch-time auto-hold): a PARTIAL payment counts — the guest putting money
- * down is the commercial basis for pinning the rooms. Best-effort and post-tx (the payment is
- * durable first; a hold that can't be placed is reported back on `autoHold` for the desk to
- * say "place it manually"). S4–S6 remainder collection never attempts it — the hold is
- * confirmed at the freeze.
+ * A payment does not block the rooms (2026-11-09, operator, replacing the 2026-08-10 ruling): the
+ * desk is asked to set a block time, and Move to Reserve blocks them if nobody did.
  */
 export async function recordPayment(
   prisma: PrismaClient,
@@ -144,8 +143,65 @@ export async function recordPayment(
   input: { entryId: string; amount: number; notes?: string | null; paymentMethod?: string | null },
   actorLevel?: "L1" | "L2" | "L3" | "L4",
 ) {
+  const txResult = await prisma.$transaction((tx) => recordPaymentTx(prisma, tx, folioId, actorId, input));
+  await afterPaymentRecorded(prisma, { entryId: input.entryId, stageAtPayment: txResult.stageAtPayment });
+  return txResult.created;
+}
+
+/**
+ * What the advance being met sets in motion: the follow-ups stop, the promise stands down, the rooms
+ * earn Reserved, the proforma stops running. Also run for a stay covered by a trip payment it got no
+ * share of (2026-11-09). Each step does nothing when there is nothing to do.
+ */
+export async function applyAdvanceStandingTx(
+  prisma: PrismaClient,
+  tx: Prisma.TransactionClient,
+  input: { entryId: string; folioId: string; actorId: string },
+) {
+  const evalResult = await evaluateAdvancePaymentConditionTx(prisma, tx, { entryId: input.entryId, folioId: input.folioId });
+  if (evalResult.satisfied) {
+    await cancelScheduledAdvancePaymentFollowUpForEntry(tx, input.entryId, input.actorId, "ADVANCE_PAYMENT_CONDITION_MET");
+  }
+  // Promise kept — the W38 deadline (and the S5 settlement tick) only stand while money is
+  // still owed. `paidInFull` (money alone), not `satisfied`: a credit extension covers the
+  // gate but the guest's payment promise stands.
+  if (evalResult.paidInFull) {
+    await cancelScheduledAdvancePromiseDeadlinesForEntry(tx, input.entryId, input.actorId, "ADVANCE_PAID_IN_FULL");
+    await autoCompletePaymentReconciliationTaskTx(
+      tx,
+      input.entryId,
+      { actorId: input.actorId, actorLevel: "L1" },
+      "ADVANCE_PAID_IN_FULL",
+    );
+    // Held → Reserved (2026-08-07): a booking confirmed while the advance was short kept its
+    // rooms visibly "Held"; the money just completed, so they earn the Reserved label now.
+    // No-op for bookings that weren't payment-pending.
+    await confirmHeldRoomsAfterFullPaymentTx(tx, { entryId: input.entryId, actorId: input.actorId });
+    // The advance asked is in: nothing is left for the guest to answer, so the proforma stops running.
+    if (evalResult.requiredAmount > 0) {
+      await stopProformaValidityTx(tx, { entryId: input.entryId, actorId: input.actorId, reason: "ADVANCE_PAID_IN_FULL", now: new Date() });
+      // Paid after it ran out: the guest has answered with the money, so it need not be made again.
+      await tx.invoice.updateMany({ where: { entryId: input.entryId, invoiceType: "PROFORMA", state: { not: "SUPERSEDED" }, lapsedAt: { not: null } }, data: { lapsedAt: null } });
+    }
+  }
+
+  return evalResult;
+}
+
+/**
+ * The payment's own writes and checks, inside the caller's transaction — so the trip's proforma can
+ * write several stays' shares of one payment together, all or none (2026-11-07). Every check a
+ * stay's own payment has runs here.
+ */
+export async function recordPaymentTx(
+  prisma: PrismaClient,
+  tx: Prisma.TransactionClient,
+  folioId: string,
+  actorId: string,
+  input: { entryId: string; amount: number; notes?: string | null; paymentMethod?: string | null; paidForTrip?: boolean },
+) {
   const amountNum = input.amount;
-  const txResult = await prisma.$transaction(async (tx) => {
+  {
     const folio = await tx.folio.findUnique({ where: { id: folioId }, include: { entry: true, invoices: true } });
     if (!folio?.entry) throw new NotFoundError("Folio");
     if (folio.entryId !== input.entryId) throw new ValidationError("entryId/folioId mismatch");
@@ -194,32 +250,14 @@ export async function recordPayment(
         recordedBy: actorId,
         stage: stageAtPayment,
         notes: input.notes ?? null,
+        ...(input.paidForTrip ? { paidForTrip: true } : {}),
         // How it came (2026-09-18) — every advance used to be stored as CASH, the column default.
         ...(input.paymentMethod?.trim() ? { paymentMethod: input.paymentMethod.trim() } : {}),
       },
     });
     await applyInboundPaymentToFolioOutstanding(tx, folioId, amountNum);
 
-    const evalResult = await evaluateAdvancePaymentConditionTx(prisma, tx, { entryId: input.entryId, folioId });
-    if (evalResult.satisfied) {
-      await cancelScheduledAdvancePaymentFollowUpForEntry(tx, input.entryId, actorId, "ADVANCE_PAYMENT_CONDITION_MET");
-    }
-    // Promise kept — the W38 deadline (and the S5 settlement tick) only stand while money is
-    // still owed. `paidInFull` (money alone), not `satisfied`: a credit extension covers the
-    // gate but the guest's payment promise stands.
-    if (evalResult.paidInFull) {
-      await cancelScheduledAdvancePromiseDeadlinesForEntry(tx, input.entryId, actorId, "ADVANCE_PAID_IN_FULL");
-      await autoCompletePaymentReconciliationTaskTx(
-        tx,
-        input.entryId,
-        { actorId, actorLevel: "L1" },
-        "ADVANCE_PAID_IN_FULL",
-      );
-      // Held → Reserved (2026-08-07): a booking confirmed while the advance was short kept its
-      // rooms visibly "Held"; the money just completed, so they earn the Reserved label now.
-      // No-op for bookings that weren't payment-pending.
-      await confirmHeldRoomsAfterFullPaymentTx(tx, { entryId: input.entryId, actorId });
-    }
+    const evalResult = await applyAdvanceStandingTx(prisma, tx, { entryId: input.entryId, folioId, actorId });
 
     const now = new Date();
     await tx.traceEvent.create({
@@ -240,24 +278,16 @@ export async function recordPayment(
     });
 
     return { created, stageAtPayment };
-  });
-
-  const autoHold: AdvancePaymentAutoHoldOutcome | null =
-    txResult.stageAtPayment === Stage.S3
-      ? await autoPlaceCommittedHoldOnAdvancePayment(
-          prisma,
-          { id: txResult.created.id, entryId: input.entryId },
-          { actorId, actorLevel: actorLevel ?? "L1" },
-        )
-      : null;
-
-  // A request to let the guest pay the rest later is moot once nothing is left to pay (2026-10-29).
-  if (txResult.stageAtPayment === Stage.S5 || txResult.stageAtPayment === Stage.S6) {
-    const { closeMootCheckInPaymentRequests } = await import("./checkin-payment-service.js");
-    await closeMootCheckInPaymentRequests(prisma, input.entryId, "PAID").catch(() => {});
   }
+}
 
-  return { ...txResult.created, autoHold };
+/** What follows a payment once it is written: the rooms blocked at Set up, a moot pay-later ask closed. */
+export async function afterPaymentRecorded(prisma: PrismaClient, p: { entryId: string; stageAtPayment: Stage }): Promise<void> {
+  // A request to let the guest pay the rest later is moot once nothing is left to pay (2026-10-29).
+  if (p.stageAtPayment === Stage.S5 || p.stageAtPayment === Stage.S6) {
+    const { closeMootCheckInPaymentRequests } = await import("./checkin-payment-service.js");
+    await closeMootCheckInPaymentRequests(prisma, p.entryId, "PAID").catch(() => {});
+  }
 }
 
 /**
@@ -280,10 +310,13 @@ export async function issueInvoice(
     }
 
     const now = new Date();
-    const invoiceId = await allocateReadableId(tx, "INVOICE" as const, now);
+    // A booking's proformas share one number, each a version of it (2026-11-07).
+    const num = await nextProformaNumberTx(tx, input.entryId, folioId, now);
     const inv = await tx.invoice.create({
       data: {
-        id: invoiceId,
+        id: num.id,
+        documentNumber: num.documentNumber,
+        versionNumber: num.versionNumber,
         folioId,
         entryId: input.entryId,
         invoiceType: InvoiceType.PROFORMA,
@@ -294,6 +327,7 @@ export async function issueInvoice(
         metadata: { basis: "S3 issueInvoice" },
       },
     });
+    await afterProformaMadeTx(tx, { invoiceId: inv.id, entryId: input.entryId, actorId, now });
 
     await tx.traceEvent.create({
       data: {
