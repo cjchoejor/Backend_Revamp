@@ -50,7 +50,8 @@ import { useStaysTogether } from "@/components/ds/steps/s2-together";
 import { TripMoneyReceived } from "@/components/ds/steps/s3-money";
 import { Choice, DsDialog, Fact, Facts, PapersCard, ReasonDialog, StepCard, SubTabs, Tool, atLeast, toastRefusal, useRefreshEntry, NotSentChip } from "@/components/ds/steps/kit";
 import { FolioDocumentsBlock } from "@/components/desk/workspace/folio-documents";
-import { useHeldDocuments } from "@/components/ds/workspace/held-papers";
+import { HeldSendDialog, useHeldDocuments } from "@/components/ds/workspace/held-papers";
+import type { HeldDocument } from "@/lib/api/room-moves";
 import { PLAN_LABEL, dueLabel } from "@/components/desk/workspace/advance-settlement";
 import { useStayPrice, type StayPrice } from "@/lib/ds/stay-price";
 import { getQuotationPriceLines, type QuotationLivePreview } from "@/lib/api/quotations";
@@ -1373,12 +1374,11 @@ export function DocumentsView({
         Documents <span className="need">every paper, every version, and what the guest said back</span>
       </h3>
       <div className="steps-canvas">
-        {/* The send-or-not choice lives on the step, once (2026-10-29, operator: "the same
-            confirmation voucher is showed twice, keep only once"); the file only says so. */}
+        {/* A paper not sent is sent from Sent & answers (2026-11-09); the tab opens on Quotations, so it says so. */}
         {heldOpen > 0 ? (
           <p className="notice next" role="status" style={{ margin: "0 0 10px" }}>
             <span>
-              {heldOpen === 1 ? "A paper has" : `${heldOpen} papers have`} not been sent — send from the step, or leave it if it need not go.
+              {heldOpen === 1 ? "A paper has" : `${heldOpen} papers have`} not been sent — it is under Sent &amp; answers. Leave it if it need not go.
             </span>
           </p>
         ) : null}
@@ -1434,13 +1434,13 @@ export function DocumentsView({
                     content: trip.isTrip ? <TripPapersShelf entry={entry} show="others" title="Vouchers" sealed={sealed} has={(e) => vouchersOf(e) > 0} /> : <PapersCard entry={entry} show="others" title="Vouchers" withFolioDocs={false} />,
                   }
                 : null,
-              sent.length
+              sent.length || heldOpen
                 ? {
                     key: "sent",
                     label: (
                       <>
                         Sent &amp; answers
-                        {awaiting ? <span className="n warn">{awaiting}</span> : count(sent.length)}
+                        {awaiting + heldOpen ? <span className="n warn">{awaiting + heldOpen}</span> : count(sent.length)}
                       </>
                     ),
                     content: <SentPapers entry={entry} communications={communications} tz={tz} sealed={sealed} onGo={onGo} />,
@@ -1487,6 +1487,12 @@ function SentPapers({
   const { session } = useSession();
   const refresh = useRefreshEntry(entry.id);
   const papers = communications.filter((c) => c.direction !== "INBOUND");
+  // A paper made and not sent yet. A bill has no line in the list until it goes out, so it gets one here.
+  const heldDocs = useHeldDocuments(entry.id).data ?? [];
+  const openHeld = sealed ? [] : heldDocs.filter((h) => h.decision == null);
+  const heldOf = (c: EntryCommunication) => (c.held ? openHeld.find((h) => h.documentId === paperIdOf(c)) : undefined);
+  const heldWithNoLine = openHeld.filter((h) => !papers.some((c) => paperIdOf(c) === h.documentId));
+  const [sending, setSending] = useState<HeldDocument | null>(null);
   const [recording, setRecording] = useState<EntryCommunication | null>(null);
   const [method, setMethod] = useState<"WRITTEN" | "VERBAL" | null>(null);
   const [said, setSaid] = useState("");
@@ -1511,7 +1517,12 @@ function SentPapers({
     if (c.commType === "CONFIRMATION_VOUCHER" && entry.reservation?.id) resend.mutate();
     else if (PAPER_STEP[c.commType]) onGo(PAPER_STEP[c.commType]);
   };
-  if (papers.length === 0) return null;
+  if (papers.length === 0 && heldWithNoLine.length === 0) return null;
+  const sendButton = (h: HeldDocument) => (
+    <Button kind="primary" compact icon="send" onClick={() => setSending(h)}>
+      Send
+    </Button>
+  );
   return (
     <StepCard title="Sent, and what they said">
       <table className="table compact">
@@ -1524,6 +1535,25 @@ function SentPapers({
           </tr>
         </thead>
         <tbody>
+          {heldWithNoLine.map((h) => (
+            <tr key={h.id}>
+              <td>
+                <b>{PAPER_NAME[h.kind === "PROFORMA" ? "PROFORMA_INVOICE" : h.kind] ?? h.kind}</b>
+                <span className="mono sm"> {h.documentNumber ?? h.documentId}</span>
+              </td>
+              <td>
+                <span className="meta">—</span>
+              </td>
+              <td>
+                <NotSentChip />
+              </td>
+              <td>
+                <span className="row-acts" style={{ justifyContent: "flex-end" }}>
+                  {sendButton(h)}
+                </span>
+              </td>
+            </tr>
+          ))}
           {papers.map((c) => {
             const answered = c.acknowledgementStatus === "RECEIVED";
             const sent = c.sendStatus === "DISPATCHED";
@@ -1576,9 +1606,11 @@ function SentPapers({
                         Record their answer
                       </Button>
                     ) : null}
-                    {!answered && !replaced && !sealed && (c.commType === "CONFIRMATION_VOUCHER" ? !!entry.reservation?.id : !!PAPER_STEP[c.commType]) ? (
+                    {heldOf(c) ? (
+                      sendButton(heldOf(c)!)
+                    ) : !answered && !replaced && !sealed && (c.commType === "CONFIRMATION_VOUCHER" ? !!entry.reservation?.id : !!PAPER_STEP[c.commType]) ? (
                       <Button kind="quiet" compact state={resend.isPending ? "working" : "default"} onClick={() => sendAgain(c)}>
-                        Send again
+                        {c.held ? "Send" : "Send again"}
                       </Button>
                     ) : null}
                   </span>
@@ -1588,6 +1620,7 @@ function SentPapers({
           })}
         </tbody>
       </table>
+      {sending ? <HeldSendDialog h={sending} tz={tz} onClose={() => setSending(null)} /> : null}
       <DsDialog
         open={!!recording}
         onClose={() => setRecording(null)}

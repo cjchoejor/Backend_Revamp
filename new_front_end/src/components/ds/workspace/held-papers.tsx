@@ -8,17 +8,18 @@
  * re-price, a room move from the house chart) re-issues the booking's voucher — or at Set up, its
  * proforma — and HOLDS it. This card lists what has not gone out: send it by email or mark it sent
  * on WhatsApp. A paper that is not to be sent is simply left (2026-11-09, operator: "if you dont send
- * it anyway why would you need that button"), so above the step it is one quiet line.
+ * it anyway why would you need that button").
  *
- * Shown above every step of the booking (so whichever walk ran, the question is on screen), on the
- * Documents tab, and in the room move's result. Nothing is decided here — the server sends.
+ * A paper not sent lives in the booking file, Papers › Sent & answers (2026-11-09, operator: the box
+ * above the step "doesn't have to show here"), and Reserve's voucher section and a move's result still
+ * ask it where the desk is working. Nothing is decided here — the server sends.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/design-system";
 import { Help } from "@/components/ds/help";
-import { Choice as PickOne, NightsChoice, NotSentChip, PaperDrawer, toastRefusal, type PaperRef } from "@/components/ds/steps/kit";
+import { Choice as PickOne, DsDialog, NightsChoice, NotSentChip, PaperDrawer, SendPaperPanel, toastRefusal, type PaperRef } from "@/components/ds/steps/kit";
 import { useSession } from "@/hooks/use-session";
 import { usePhoneRules } from "@/hooks/use-phone-rules";
 import { problemOfPhone } from "@/lib/ds/phone";
@@ -62,9 +63,21 @@ function paperOf(h: HeldDocument): PaperRef {
 
 type Choice = "EMAIL" | "WHATSAPP";
 
-export function HeldPaperRow({ h, tz, onView, foldable = false }: { h: HeldDocument; tz?: string; onView: () => void; foldable?: boolean }) {
-  // Above the step the paper is one line until Send is pressed: it may never need to go out.
-  const [formOpen, setFormOpen] = useState(!foldable);
+export function HeldPaperRow({
+  h,
+  tz,
+  onView,
+  onDone,
+  onNightsEach,
+}: {
+  h: HeldDocument;
+  tz?: string;
+  onView: () => void;
+  /** It has gone out. */
+  onDone?: () => void;
+  /** The Nights choice, for a paper shown beside this form. */
+  onNightsEach?: (each: boolean) => void;
+}) {
   const { session } = useSession();
   const phoneRules = usePhoneRules();
   const qc = useQueryClient();
@@ -94,6 +107,7 @@ export function HeldPaperRow({ h, tz, onView, foldable = false }: { h: HeldDocum
       for (const k of [["held-documents", h.entryId], ["entry-communications", h.entryId], ["entry-trace", h.entryId], ["entry", h.entryId]]) {
         void qc.invalidateQueries({ queryKey: k });
       }
+      onDone?.();
     },
     onError: (e) => toastRefusal(e, "The answer could not be recorded"),
   });
@@ -113,13 +127,8 @@ export function HeldPaperRow({ h, tz, onView, foldable = false }: { h: HeldDocum
         <Button kind="secondary" compact icon="eye" className="heldp-view" onClick={onView}>
           View
         </Button>
-        {foldable && !formOpen ? (
-          <Button kind="primary" compact icon="send" onClick={() => setFormOpen(true)}>
-            Send
-          </Button>
-        ) : null}
       </div>
-      {formOpen && h.kind === "CONFIRMATION_VOUCHER" ? (
+      {h.kind === "CONFIRMATION_VOUCHER" ? (
         <div aria-label={`How the ${KIND_WORD[h.kind].toLowerCase()} goes out`}>
           <PickOne<Choice>
             options={[
@@ -131,7 +140,6 @@ export function HeldPaperRow({ h, tz, onView, foldable = false }: { h: HeldDocum
           />
         </div>
       ) : null}
-      {formOpen ? (
       <div className="heldp-fields">
         {choice === "EMAIL" ? (
           <label className="field">
@@ -141,7 +149,14 @@ export function HeldPaperRow({ h, tz, onView, foldable = false }: { h: HeldDocum
         ) : null}
         {choice === "EMAIL" ? (
           <div className="paper-faces in-dialog">
-            <NightsChoice each={nightsEach} onChange={setNightsEach} of={{ entryId: h.entryId }} />
+            <NightsChoice
+              each={nightsEach}
+              onChange={(each) => {
+                setNightsEach(each);
+                onNightsEach?.(each);
+              }}
+              of={{ entryId: h.entryId }}
+            />
           </div>
         ) : null}
         {choice === "WHATSAPP" ? (
@@ -165,7 +180,6 @@ export function HeldPaperRow({ h, tz, onView, foldable = false }: { h: HeldDocum
         </Button>
         {blocked ? <span className="stop-ink sm">{blocked}</span> : null}
       </div>
-      ) : null}
     </div>
   );
 }
@@ -179,18 +193,15 @@ export function HeldPapersCard({
   onlyIds,
   tz,
   title,
-  skip,
 }: {
   entryId: string;
   onlyIds?: string[];
   tz?: string;
   title?: string;
-  /** Papers answered somewhere else on the screen — Reserve's voucher is answered on its own card (2026-10-29). */
-  skip?: (h: HeldDocument) => boolean;
 }) {
   const q = useHeldDocuments(entryId);
   const [paper, setPaper] = useState<PaperRef | null>(null);
-  const open = (q.data ?? []).filter((h) => h.decision == null && (!onlyIds || onlyIds.includes(h.id)) && !skip?.(h));
+  const open = (q.data ?? []).filter((h) => h.decision == null && (!onlyIds || onlyIds.includes(h.id)));
   if (open.length === 0) return null;
   return (
     <section className="heldp" aria-label="Papers not sent yet">
@@ -202,9 +213,34 @@ export function HeldPapersCard({
         </Help>
       </div>
       {open.map((h) => (
-        <HeldPaperRow key={h.id} h={h} tz={tz} foldable={!onlyIds} onView={() => setPaper(paperOf(h))} />
+        <HeldPaperRow key={h.id} h={h} tz={tz} onView={() => setPaper(paperOf(h))} />
       ))}
       <PaperDrawer paper={paper} onClose={() => setPaper(null)} />
     </section>
+  );
+}
+
+/** Sending a paper not sent yet, from Papers › Sent & answers: the choices, with the paper beside them. */
+export function HeldSendDialog({ h, tz, onClose }: { h: HeldDocument; tz?: string; onClose: () => void }) {
+  const [paper, setPaper] = useState<PaperRef | null>(null);
+  const [nightsEach, setNightsEach] = useState(false);
+  return (
+    <>
+      <DsDialog
+        open
+        closeX
+        onClose={onClose}
+        title={`Send the ${KIND_WORD[h.kind].toLowerCase()}`}
+        beside={<SendPaperPanel paper={paperOf(h)} nightsEach={nightsEach} />}
+        footer={
+          <Button kind="quiet" onClick={onClose}>
+            Not now
+          </Button>
+        }
+      >
+        <HeldPaperRow h={h} tz={tz} onView={() => setPaper(paperOf(h))} onDone={onClose} onNightsEach={setNightsEach} />
+      </DsDialog>
+      <PaperDrawer paper={paper} onClose={() => setPaper(null)} />
+    </>
   );
 }

@@ -91,7 +91,6 @@ import { BackendRailSlotContext } from "@/components/desk/workspace/backend-inli
 import { ReEnterMenu } from "@/components/desk/workspace/re-enter-menu";
 import type { EntryDetail } from "@/types/api";
 import { CaseCards } from "@/components/ds/steps/case-cards";
-import { HeldPapersCard } from "@/components/ds/workspace/held-papers";
 import { ArrivalPickDialog } from "@/components/ds/steps/s4-arrival-pick";
 import { ActiveRoomMoves } from "@/components/ds/rooms/room-move-dialog";
 import { HistoryView } from "@/components/ds/workspace/history-view";
@@ -1942,14 +1941,6 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     </>
   );
   // Reserve's voucher is sent, or not, on its own card (2026-10-29) — not asked twice on that step.
-  // Reserved, Reserve's voucher section decides every paper the change made — the voucher and the
-  // pass's proforma — so the card above the step says nothing twice (2026-10-29).
-  const reserveVoucherOnCard =
-    viewing === 4 && entry.currentStage === "S4"
-      ? () => true
-      : viewing === 4
-        ? (h: { kind: string; documentId: string }) => h.kind === "CONFIRMATION_VOUCHER" && h.documentId === entry.reservation?.id
-        : undefined;
   const dialogs = (
     <>
         <StepMoved note={moved} onClose={closeMoved} />
@@ -2229,7 +2220,6 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                     </div>
                   ) : null}
                   {!sealed ? <ActiveRoomMoves entryId={entry.id} tz={clock.tz} /> : null}
-                  {!sealed ? <HeldPapersCard entryId={entry.id} tz={clock.tz} skip={reserveVoucherOnCard} /> : null}
                   {!sealed && !viewingPast ? <FollowNotice entry={entry} /> : null}
                   {!sealed ? <TripFollowPrompt entry={entry} /> : null}
                   <CaseCards
@@ -2574,9 +2564,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                   )
                 ) : null}
                 <div hidden={view !== "step"}>
-                {/* Papers a walk re-issued and held — whichever walk ran, the send-or-not question is here. */}
                 {!sealed ? <ActiveRoomMoves entryId={entry.id} tz={clock.tz} /> : null}
-                {!sealed ? <HeldPapersCard entryId={entry.id} tz={clock.tz} skip={reserveVoucherOnCard} /> : null}
                 <CaseCards
                     entry={entry}
                     step={viewing}
