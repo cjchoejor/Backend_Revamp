@@ -17,7 +17,7 @@ import { PersonName } from "@/components/ds/person-name";
 import { joinTitled, splitTitle } from "@/lib/ds/person";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useQueryClient, useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button, Chip, Icon } from "@/design-system";
 import { useSession } from "@/hooks/use-session";
@@ -121,7 +121,7 @@ export function S3SetUp({
   // "Yes, ask for an advance" after the terms (2026-10-28) opens the payment plan's advance box.
   const [askAdvance, setAskAdvance] = useState(0);
   // A payment that blocked the rooms — the hold card asks whether to set a block time (2026-10-28).
-  const [blockAsk, setBlockAsk] = useState<{ until: string | null; n: number } | null>(null);
+  const [blockAsk, setBlockAsk] = useState<number>(0);
 
   /* ---- the billing model the desk is choosing ---- */
   // What is offered and what it starts on are the server's (2026-11-05): the package to a travel
@@ -329,7 +329,7 @@ export function S3SetUp({
         tz={tz}
         bill={{ proforma: currentProforma, dispatched, answered, notAsked: replyNotAsked }}
         askAdvance={askAdvance}
-        onRoomsBlocked={(until) => setBlockAsk((prev) => ({ until, n: (prev?.n ?? 0) + 1 }))}
+        onPaymentRecorded={() => setBlockAsk((n) => n + 1)}
         onChanged={changed}
       />
 
@@ -478,6 +478,7 @@ function BillingModelCard({
    * the answer: No makes it now, Yes when the advance is saved. Closing the question decides
    * nothing, and the proforma's card asks it again.
    */
+  const qc = useQueryClient();
   const [askAdvance, setAskAdvance] = useState(false);
   const save = useMutation({
     mutationFn: () => ensureProvisionalFolio(session!, entry.id, { billingModel: model!, askAdvanceFirst: true }),
@@ -492,7 +493,13 @@ function BillingModelCard({
     onError: (e) => toastRefusal(e, "Who pays could not be set"),
   });
   const noAdvance = useMutation({
-    mutationFn: () => generateProforma(session!, entry.id),
+    // The box closes once the page holds the new booking (2026-11-09, operator): closing it first
+    // showed the sections as they were for a moment, then a refresh.
+    mutationFn: async () => {
+      const out = await generateProforma(session!, entry.id);
+      await qc.refetchQueries({ queryKey: ["entry", entry.id] });
+      return out;
+    },
     onSuccess: () => {
       toast.success("No advance asked · the proforma is generated, not sent");
       setAskAdvance(false);
@@ -609,8 +616,8 @@ function HoldCard({
   nowMs: number;
   roomIds: string[];
   roomNos: Map<string, string>;
-  /** A payment just came in: `until` is when it blocked the rooms to, `null` when it could not. */
-  blockAsk: { until: string | null; n: number } | null;
+  /** Counts the payments just recorded here: each one asks about blocking the rooms. */
+  blockAsk: number;
   onChanged: () => void;
 }) {
   const { session } = useSession();
@@ -626,17 +633,15 @@ function HoldCard({
   const [releaseOpen, setReleaseOpen] = useState(false);
   const [timeOpen, setTimeOpen] = useState(false);
   /**
-   * After a payment (2026-10-28, operator: "as soon as the payment is recorded it should take the
-   * user to the committed hold section and ask if they wish to set a block time, otherwise it
-   * blocks according to the system time — after paying an advance the guest by default commits
-   * to a hold"). The payment blocked the rooms on the hotel's time (or this booking's own); the
-   * card comes into view and asks whether to keep it. One that could not be placed just shows the
-   * card, to block the rooms by hand.
+   * After a payment (2026-11-09, operator: "we should prompt the user set block time or close option,
+   * if closed it wont block until user sets the block time in the block the entry section, but move
+   * to reserve will be enable"). A payment no longer blocks the rooms by itself; the card comes into
+   * view and asks. Move to Reserve blocks them if nobody set a time.
    */
   const flow = useStepFlow();
   // A room the system chose and may still move reads "Deluxe Double · room 1" until Arrival.
   const roomNames = useBookingRooms(entry).named;
-  const [blockedUntil, setBlockedUntil] = useState<string | null>(null);
+  const [askBlock, setAskBlock] = useState(false);
   /**
    * Once the block time is settled, the hold section says so (2026-10-28, operator: "show a message
    * saying these rooms are blocked … for this many hours"). It is said by the section's own line,
@@ -652,12 +657,12 @@ function HoldCard({
     setFlash(Date.now());
   };
   useEffect(() => {
-    if (!blockAsk) return;
+    if (!blockAsk || hold) return;
     if (flow.on) flow.open("hold");
     window.requestAnimationFrame(() => window.requestAnimationFrame(() => goToStepCard("hold")));
-    if (blockAsk.until) setBlockedUntil(blockAsk.until);
+    setAskBlock(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [blockAsk?.n]);
+  }, [blockAsk]);
 
   // The house's own window, so the card can say what it gives beside a time set for one booking.
   const house = useQuery({
@@ -797,12 +802,7 @@ function HoldCard({
               : raw
               ? `The last block ${raw.state === "EXPIRED" || raw.releaseReason === "EXPIRY" ? "ran out" : "was released"}, so the rooms are back on sale. Move to Reserve blocks them again.`
               : `Not blocked yet. Move to Reserve blocks ${count === 1 ? "the room" : `all ${count} rooms`} for ${ownTime ? "the time set for this booking" : houseWords ? `the hotel's ${houseWords}` : "the hotel's time"}.`}
-            {!carried && !raw ? (
-              <Help label="How the rooms are blocked">
-                Recording an advance payment, even part of it, blocks {count === 1 ? "the room" : `all ${count} rooms`} too. To block them before
-                that, for a time you choose, use Set block time.
-              </Help>
-            ) : null}
+            {!carried && !raw ? <Help label="How the rooms are blocked">To block them before that, for a time you choose, use Set block time.</Help> : null}
           </span>
           {ownTime ? (
             <div className="sm" style={{ marginTop: 6 }}>
@@ -813,32 +813,21 @@ function HoldCard({
         </>
       )}
 
-      {blockedUntil && !timeOpen ? (
+      {askBlock && !timeOpen ? (
         <DsDialog
           open
-          onClose={() => {
-            setBlockedUntil(null);
-            setDetails(false);
-          }}
-          title="The rooms are blocked"
-          caseLines={[`${rooms} · until ${fmtDateTime(blockedUntil, tz)}`]}
-          help="The payment blocked the rooms until this time. If the booking is not reserved by then, the FOM and GM are told and they decide."
+          onClose={() => setAskBlock(false)}
+          title="Block the rooms now?"
+          caseLines={[rooms]}
           footer={
             <>
-              <Button
-                kind="secondary"
-                onClick={() => {
-                  const until = blockedUntil;
-                  setBlockedUntil(null);
-                  sayBlocked(until);
-                }}
-              >
-                Keep this time
+              <Button kind="secondary" onClick={() => setAskBlock(false)}>
+                Close
               </Button>
               <Button
                 icon="clock"
                 onClick={() => {
-                  setBlockedUntil(null);
+                  setAskBlock(false);
                   setTimeOpen(true);
                 }}
               >
@@ -848,9 +837,7 @@ function HoldCard({
           }
         >
           <p className="sm">
-            The advance came in, so {rooms} {count > 1 ? "are" : "is"} blocked until <b>{fmtDateTime(blockedUntil, tz)}</b> —{" "}
-            {ownTime ? "the block time set for this booking" : houseWords ? `the hotel's ${houseWords}` : "the hotel's own time"}. Set a different
-            block time?
+            The payment is recorded. Set a block time to hold {rooms} until then. If you close this, the {count > 1 ? "rooms stay" : "room stays"} on sale until a block time is set here or you press Move to Reserve.
           </p>
         </DsDialog>
       ) : null}
@@ -859,7 +846,7 @@ function HoldCard({
           entry={entry}
           tz={tz}
           houseWords={houseWords}
-          currentIso={hold?.expiresAt ?? blockAsk?.until ?? ownTime ?? null}
+          currentIso={hold?.expiresAt ?? ownTime ?? null}
           hasOwnTime={!!ownTime}
           holdLive={!!hold}
           onClose={() => setTimeOpen(false)}
@@ -1185,8 +1172,13 @@ function ProformaCard({
   const replyAsked = useReplyAsked(entry.id, "PROFORMA_INVOICE");
   // On a trip of several stays the trip's proforma is the guest's paper; this stay's own Send steps back.
   const onTrip = (useTripProforma(entry).data?.stays.length ?? 0) > 1;
+  const qc = useQueryClient();
   const generate = useMutation({
-    mutationFn: () => generateProforma(session!, entry.id),
+    mutationFn: async () => {
+      const out = await generateProforma(session!, entry.id);
+      await qc.refetchQueries({ queryKey: ["entry", entry.id] });
+      return out;
+    },
     onSuccess: () => {
       toast.success("The proforma is generated, not sent");
       onChanged();

@@ -131,7 +131,6 @@ export function recordTripPayment(
     amount: string;
     mode: "FIRST_STAY_FIRST" | "AS_TYPED";
     shares: Array<{ stayNo: number; entryId: string; amount: string; paymentId: string }>;
-    autoHolds: Array<{ entryId: string; autoHold: { placed: boolean; expiresAt?: string; reason?: string; message?: string } | null }>;
   }>(`/api/trip-papers/${tripPaperId}/payment`, { method: "POST", session, body });
 }
 

@@ -291,8 +291,6 @@ export function TripPaymentDialog({ entryId, onClose, onDone }: { entryId: strin
       toast.success(`${money(r.amount)} recorded for the trip`, {
         description: r.shares.map((s) => `${money(s.amount)} to stay ${s.stayNo}`).join(" · "),
       });
-      const notBlocked = r.autoHolds.filter((h) => h.autoHold && !h.autoHold.placed && h.autoHold.reason !== "ALREADY_HELD" && h.autoHold.reason !== "NOT_AT_S3");
-      if (notBlocked.length) toast.warning("Some rooms were not blocked automatically", { description: "Move to Reserve blocks them.", duration: 10000 });
       onDone();
       onClose();
     },

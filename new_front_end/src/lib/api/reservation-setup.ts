@@ -130,16 +130,6 @@ export async function getPaymentStatus(session: Session, entryId: string) {
 }
 
 /**
- * Outcome of the backend's automatic committed-hold placement on an S3 advance payment
- * (2026-08-10: money received — full or partial — holds the rooms; the PI dispatch no longer
- * does). `placed: false` carries a desk-readable `message` — the operator is told to hold
- * manually. Null / absent when the payment was taken past S3 (the hold is already confirmed).
- */
-export type AdvanceAutoHold =
-  | { placed: true; holdId: string; roomId: string; expiresAt: string }
-  | { placed: false; reason: string; message: string; holdId?: string };
-
-/**
  * How advance money came in, and the code the ledger stores for it (2026-09-18) — the same codes
  * check-out and the post-stay payments use, so a cash count reads one vocabulary.
  */
@@ -158,7 +148,7 @@ export async function recordFolioPayment(
   folioId: string,
   body: { entryId: string; amount: number; notes?: string; paymentMethod?: string },
 ) {
-  return apiRequest<{ id: string; autoHold?: AdvanceAutoHold | null }>(`/api/folios/${folioId}/payments`, {
+  return apiRequest<{ id: string }>(`/api/folios/${folioId}/payments`, {
     method: "POST",
     session,
     body,

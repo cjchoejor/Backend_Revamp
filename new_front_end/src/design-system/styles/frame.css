@@ -2202,9 +2202,6 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 
 /* Set up's move stands on the page all the time, and says what it waits for (2026-11-05). */
 .ds .ws-top .move-dock .move-waiting:not(.desk-root *) { display: flex; align-items: center; justify-content: flex-end; gap: 10px; width: max-content; max-width: 94%; }
-.ds .ws-top .move-dock .move-first:not(.desk-root *) { display: block; max-width: 520px; padding: 10px 14px; border: 1px solid var(--warning); border-radius: 6px; background: var(--warning-soft); color: var(--ink); font: inherit; font-size: 14px; font-weight: 600; line-height: 1.35; text-align: left; box-shadow: 0 6px 18px rgba(9, 30, 66, 0.16); }
-.ds .ws-top .move-dock button.move-first:not(.desk-root *) { cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
-.ds .ws-top .move-dock button.move-first:hover:not(.desk-root *) { border-color: var(--ink-2); filter: brightness(0.97); }
 .ds .ws-top .move-dock .move-waiting .btn:not(.desk-root *) { flex: none; }
 
 /* The trip's quotation: its total is the figure the card exists for (2026-11-07, "UIappeal"). */

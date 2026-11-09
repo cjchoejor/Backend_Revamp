@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button, Chip } from "@/design-system";
 import { useSession } from "@/hooks/use-session";
@@ -10,7 +10,7 @@ import type { EntryDetail } from "@/types/api";
 import { fmtStamp } from "@/lib/ds/format";
 import { getTripProforma, getTripQuotation, getTripVoucher } from "@/lib/api/trip-papers";
 import { Choice, Live, NotSentChip, PaperDrawer, PapersCard, StepCard, useRefreshEntry, useReplyAsked, type PaperRef } from "@/components/ds/steps/kit";
-import { useTripView } from "@/components/ds/steps/s2-together";
+import { useStaysTogether } from "@/components/ds/steps/s2-together";
 import { TripAnswerDialog, TripSendDialog } from "@/components/ds/steps/s2-trip-quotation";
 
 /** Every stay of this booking's trip, read in full, in the order the trip has them. */
@@ -123,8 +123,8 @@ function TripPaperRows({ entry, show, title, sealed }: { entry: EntryDetail; sho
 /**
  * A trip's papers in the booking file (2026-11-09, operator: "on the right panel, it can both together
  * and separate stays quote, do it for all the papers. keep options to view like that"). Together is
- * the trip's own paper; Stay by stay is each stay's papers, with every version. It opens the way the
- * booking head is viewing the stays.
+ * the trip's own paper; Stay by stay is each stay's papers, with every version. Only while the stays
+ * are viewed together: on one stay's own page the file lists that stay's papers alone.
  */
 export function TripPapersShelf({
   entry,
@@ -141,18 +141,16 @@ export function TripPapersShelf({
   has: (stay: EntryDetail) => boolean;
 }) {
   const { stays, stayNoOf } = useTripStays(entry);
-  const [head] = useTripView(entry.inquiry?.id);
-  const [pick, setPick] = useState<"TOGETHER" | "EACH" | null>(null);
-  useEffect(() => setPick(null), [head]);
-  const view = pick ?? (head === "together" ? "TOGETHER" : "EACH");
+  const together = useStaysTogether(entry);
+  const [view, setView] = useState<"TOGETHER" | "EACH">("TOGETHER");
   return (
     <>
       <div className="trip-bill-switch">
-        <Choice options={[["TOGETHER", "Together"], ["EACH", "Stay by stay"]] as const} value={view} onChange={setPick} />
+        <Choice options={[["TOGETHER", "Together"], ["EACH", "Stay by stay"]] as const} value={view} onChange={setView} />
       </div>
       {view === "TOGETHER"
         ? <TripPaperRows entry={entry} show={show} title={title} sealed={sealed} />
-        : stays.filter(has).map((s) => (
+        : stays.filter((s) => together.stayIds.includes(s.id) && has(s)).map((s) => (
             <div key={s.id} className="trip-stay-block">
               <StayBand stay={s} stayNo={stayNoOf(s.id)} />
               <PapersCard entry={s} show={show} title={title} withFolioDocs={false} />

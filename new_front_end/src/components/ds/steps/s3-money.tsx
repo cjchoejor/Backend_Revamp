@@ -98,7 +98,7 @@ export function PaymentPlanCard({
   tz,
   bill,
   askAdvance = 0,
-  onRoomsBlocked,
+  onPaymentRecorded,
   onChanged,
   setUp = true,
 }: {
@@ -116,7 +116,8 @@ export function PaymentPlanCard({
    * A payment came in and the rooms were blocked by it (`until`), or not (`null`) — the hold card
    * then asks whether to set a block time, or shows itself to block them by hand (2026-10-28).
    */
-  onRoomsBlocked?: (until: string | null) => void;
+  /** A payment came in at Set up: the block card asks whether to block the rooms. */
+  onPaymentRecorded?: () => void;
   onChanged: () => void;
   /**
    * Reserve's advance (2026-10-29, operator: "sometimes the advance can be paid even in stage 4 … it
@@ -159,9 +160,9 @@ export function PaymentPlanCard({
     if (askedNow > 0 && (reissued || !bill.dispatched)) goToProforma();
   };
   /** A payment came in: the money section finishes, and the hold card takes it from there. */
-  const paid = (blockedUntil: string | null | undefined) => {
+  const paid = () => {
     moneyIn();
-    if (blockedUntil !== undefined) onRoomsBlocked?.(blockedUntil);
+    onPaymentRecorded?.();
   };
 
   const inPayments = (folio?.payments ?? []).filter((p) => /IN/i.test(p.paymentDirection ?? "") && !/OUT|REFUND/i.test(p.paymentDirection ?? ""));
@@ -870,7 +871,7 @@ function PaymentDialog({
    * With when the rooms are now blocked to: the time when this payment blocked them, `null` when
    * it should have and could not, `undefined` when it was not for this payment to block them.
    */
-  onDone: (blockedUntil: string | null | undefined) => void;
+  onDone: () => void;
 }) {
   const { session } = useSession();
   // Prefilled with what is owed only while nothing has been paid (2026-08-07 ruling) — after a
@@ -887,22 +888,10 @@ function PaymentDialog({
         notes: notes.trim() || undefined,
         paymentMethod: mode ?? undefined,
       }),
-    onSuccess: (res) => {
+    onSuccess: () => {
       toast.success(`${money(Number(amount), currency)} recorded`);
-      const ah = res.autoHold;
-      // A block placed by this payment is asked about on the hold card — keep the time, or set
-      // one (2026-10-28). One the payment could not place is said here, and the card shows itself.
-      let blockedUntil: string | null | undefined;
-      if (ah?.placed) blockedUntil = ah.expiresAt;
-      else if (ah && !ah.placed && ah.reason !== "ALREADY_HELD" && ah.reason !== "NOT_AT_S3") {
-        toast.warning("The rooms were not blocked automatically", {
-          description: `${ah.message} — Move to Reserve blocks them.`,
-          duration: 10000,
-        });
-        blockedUntil = null;
-      }
       onClose();
-      onDone(blockedUntil);
+      onDone();
     },
     onError: (e) => toastRefusal(e, "The payment could not be recorded"),
   });
@@ -982,7 +971,7 @@ function PaymentDialog({
         <input className="input" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="QR · paid from India · ref 4471…" />
       </div>
       <p className="meta">
-        {entry.committedHold?.state === "PLACED" ? "The rooms are already blocked." : "A payment, even part of the advance, blocks the rooms."}
+        {entry.committedHold?.state === "PLACED" ? "The rooms are already blocked." : "A payment does not block the rooms by itself. You can set a block time next."}
       </p>
         </>
       )}

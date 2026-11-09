@@ -2175,16 +2175,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                     {forward}
                   </div>
                 ) : moveFirst && !inPage ? (
-                  <div className="move-float move-waiting" role="region" aria-label="Move on">
-                    {moveFirst.card ? (
-                      <button type="button" className="move-first" onClick={() => goToCard(moveFirst?.card)}>
-                        First: {moveFirst.words}
-                      </button>
-                    ) : (
-                      <span className="move-first" role="status">
-                        First: {moveFirst.words}
-                      </span>
-                    )}
+                  <div className="move-float move-waiting" role="region" aria-label="Move on" title={moveFirst.words}>
                     {forward}
                   </div>
                 ) : heldBy.length ? (
