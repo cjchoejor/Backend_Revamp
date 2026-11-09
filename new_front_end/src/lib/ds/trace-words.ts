@@ -108,6 +108,8 @@ const WORDS: Record<string, string> = {
   "ADVANCE_PAYMENT.PLAN_RECORDED": "Payment plan recorded",
   "ADVANCE_PAYMENT.RECONCILED": "Money position signed off",
   "ADVANCE_PAYMENT.COVERED_BY_TRIP": "Advance covered by the trip's payment",
+  "FOLIO.TRIP_MONEY_MOVED": "The trip's money moved between the stays' bills",
+  "TRIP_PAPER.REPLACED": "The trip's paper replaced — the stays changed",
   "ADVANCE_PAYMENT.RECONCILIATION_UNDONE": "Money sign-off taken back",
   "ADVANCE_PAYMENT.PROMISE_LAPSED": "Promised advance did not arrive",
   "FOLIO.PAYMENT_RECORDED": "Payment received",

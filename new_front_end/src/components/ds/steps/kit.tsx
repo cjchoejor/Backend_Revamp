@@ -1634,6 +1634,12 @@ export function ChangeBookingMenu({
   );
 }
 
+const CloseAlsoWayCtx = createContext<() => void>(() => undefined);
+/** Closes the way's pop-up, for a way whose act leaves the booking open (2026-11-09). */
+export function useCloseAlsoWay() {
+  return useContext(CloseAlsoWayCtx);
+}
+
 function AlsoBarWays({ live, slots }: { live: OtherWayTab[]; slots: AlsoBarSlots }) {
   const params = useSearchParams();
   const router = useRouter();
@@ -1725,7 +1731,7 @@ function AlsoBarWays({ live, slots }: { live: OtherWayTab[]; slots: AlsoBarSlots
             </div>
             {live.map((t) => (
               <div key={t.key} hidden={t.key !== open}>
-                {t.content}
+                <CloseAlsoWayCtx.Provider value={() => go(null)}>{t.content}</CloseAlsoWayCtx.Provider>
               </div>
             ))}
           </div>

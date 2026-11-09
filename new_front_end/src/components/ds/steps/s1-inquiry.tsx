@@ -77,6 +77,7 @@ import {
 import { AddReturnStay, TripStays } from "@/components/ds/workspace/return-stay";
 import { enumerateNights, useRoomSelection } from "./use-room-selection";
 import { STAY_SAVED_EVENT, useTripAtInquiry, type StaySaved } from "./s1-trip-shared";
+import { TripCancelWay } from "./s3-trip-cancel";
 import { RoomCountField } from "./new-inquiry-parts";
 import { TheCaller, WrapUp } from "./s1-caller";
 import { TripPickLine, cleanPicks, usePickPricing, useTripPickPricing, type BillNight } from "./s1-bill";
@@ -137,6 +138,8 @@ export function S1Inquiry({
   declineNow?: (reason: string) => void;
   declining?: boolean;
 }) {
+  // A trip's stays at Inquiry are worked on one page (2026-11-07); Cancel inquiry asks which (2026-11-09).
+  const tripAtInquiry = useTripAtInquiry(past ? null : entry);
   const { session } = useSession();
   const refresh = useRefreshEntry(entry.id);
   const editable =
@@ -185,7 +188,14 @@ export function S1Inquiry({
       {/* On the step line's right, beside each other (2026-10-28, operator: "the guest said no, which
           is cancel") — the same form as Negotiation's Cancel booking, named for what it is here: "in
           inquiry it isn't a booking yet, so name it cancel inquiry, just for here". */}
-      <OtherWaysTabs tabs={[parkTab(parkNow, parking), declineTab(declineNow, declining, { label: "Cancel inquiry", act: "Cancel the inquiry" })]} />
+      <OtherWaysTabs
+        tabs={[
+          parkTab(parkNow, parking),
+          tripAtInquiry.combined
+            ? { key: "decline", label: "Cancel inquiry", content: <TripCancelWay entry={entry} stays={[entry, ...tripAtInquiry.others]} stayNoOf={tripAtInquiry.stayNoOf} word="inquiry" /> }
+            : declineTab(declineNow, declining, { label: "Cancel inquiry", act: "Cancel the inquiry" }),
+        ]}
+      />
     </StepCanvas>
   );
 }

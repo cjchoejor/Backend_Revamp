@@ -63,7 +63,23 @@ export type CancellationPreview = {
   chargeCapped: number;
   hoursUntilCheckIn: number;
   waived: boolean;
+  /** Money moved between a trip's stays' bills first, when money paid for the trip is involved. */
+  tripMoves?: TripMoneyMove[];
 };
+
+export type TripMoneyMove = { fromEntryId: string; toEntryId: string; fromStayNo: number; toStayNo: number; amount: number };
+
+export type TripCancellationPreview = {
+  stays: Array<{ entryId: string; advanceReceived: number; charge: number; chargeBeforeCap: number; chargeCapped: number; refund: number }>;
+  moves: TripMoneyMove[];
+  totalCharge: number;
+  totalRefund: number;
+  waived: boolean;
+};
+
+export async function previewTripCancellation(session: Session, entryId: string, body: { stayIds: string[]; waive?: boolean }) {
+  return apiRequest<TripCancellationPreview>(`/api/entries/${entryId}/trip-cancellation-preview`, { method: "POST", session, body });
+}
 
 export async function previewCancellation(session: Session, entryId: string, waive = false) {
   return apiRequest<CancellationPreview>(`/api/entries/${entryId}/cancellation-preview${waive ? "?waive=true" : ""}`, { session });

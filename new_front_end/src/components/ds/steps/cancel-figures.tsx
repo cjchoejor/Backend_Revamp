@@ -32,6 +32,12 @@ export function CancellationFiguresLine({ entryId, waive = false, currency }: { 
         {f.waived && f.chargeCapped > 0 ? ` (the ${money(f.chargeCapped, cur)} charge waived)` : ""}
         {!f.waived && f.chargeBeforeCap > f.chargeCapped ? ` (the terms ask ${money(f.chargeBeforeCap, cur)} — never more than was received)` : ""} ·
         refunded <b className="money">{money(f.refund, cur)}</b>
+        {f.tripMoves?.length ? (
+          <span style={{ display: "block", marginTop: 4 }} data-trip-moves>
+            Money paid for the trip counts as one:{" "}
+            {f.tripMoves.map((m) => `${money(m.amount, cur)} moves from Stay ${m.fromStayNo}'s bill to Stay ${m.toStayNo}'s`).join(" · ")}
+          </span>
+        ) : null}
       </span>
     </div>
   );

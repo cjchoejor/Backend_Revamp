@@ -21,6 +21,7 @@ import { useHotelClock } from "@/hooks/use-hotel-clock";
 import { useBookingRooms } from "@/hooks/use-booking-rooms";
 import { QuoteValidityField, canonComps, readDiscount, shownQuotation, useStayTable, type RecordedDiscount, type StayTable } from "./s2-stay-table";
 import { useStaysTogether } from "./s2-together";
+import { TripCancelWay } from "./s3-trip-cancel";
 import { TripNegotiationTable } from "./s2-trip-table";
 import { ChangeStaysTogether } from "./s2-change-together";
 import { getChildPolicy } from "@/lib/api/child-policy";
@@ -729,7 +730,9 @@ export function S2Negotiation({
           parkTab(parkNow, parking),
           // The answer the house had no way to write down (2026-10-01) — see the Inquiry step.
           // The guest said no is Cancel booking here, opened from Change booking (2026-10-27, operator).
-          declineTab(declineNow, declining, { label: "Cancel booking", act: "Cancel the booking", inBar: false }),
+          together.active
+            ? { key: "decline", label: "Cancel booking", inBar: false, content: <TripCancelWay entry={entry} stays={[entry, ...together.others]} stayNoOf={together.stayNoOf} /> }
+            : declineTab(declineNow, declining, { label: "Cancel booking", act: "Cancel the booking", inBar: false }),
           // The Counter-offer way was taken off (2026-10-27, operator: "remove the counter offer") —
           // it could record nothing; the discount on the table is how a counter-offer is met.
         ]}

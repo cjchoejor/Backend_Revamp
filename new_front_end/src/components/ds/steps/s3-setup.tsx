@@ -50,6 +50,7 @@ import { EarlierAdvanceQuestion } from "./s3-earlier-advance";
 import { AnswerLine, useReplyAsked, Choice, DsDialog, Fact, Facts, Live, OnRecord, PaperDrawer, ReasonDialog, SeeRow, SendPaperPanel, StepCanvas, StepCard, atLeast, currentPassStart, toastRefusal, useCommunications, useRefreshEntry, useStepMode, words, type PaperRef, type ChangeBookingItem, ChangeBookingMenu, StageActs, useFlowUnsaved, useFinishWhenDone, useStepFlow, goToStepCard, revealCard, useOpenAlsoWay, useStepPane, OtherWaysTabs, InlineWay, ShutWay, parkTab, NightsChoice, NotSentChip } from "./kit";
 import { TripProformaCard, useTripProforma } from "./s3-trip-proforma";
 import { useStaysTogether } from "./s2-together";
+import { TripCancelWay } from "./s3-trip-cancel";
 import { SendToField, useSendTo } from "./s8-parts";
 import { CancellationFiguresLine, WaiverTick, useRefundHow } from "./cancel-figures";
 import { CompetingClaimsCard, passesOf, roomsHeldWord, useRoomNumbers, useRoomTypeNames } from "./s2-shared";
@@ -444,7 +445,9 @@ export function S3SetUp({
                 key: "cancel",
                 label: "Cancel booking",
                 inBar: false,
-                content: (
+                content: together.active ? (
+                  <TripCancelWay entry={entry} stays={groupStays} stayNoOf={together.stayNoOf} />
+                ) : (
                   <InlineWay
                     render={() => (
                       <ReasonDialog
