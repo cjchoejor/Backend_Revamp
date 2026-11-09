@@ -85,6 +85,9 @@ export type LegphelPriceBlock = {
   gst: string;
   /** Grand total, tax-inclusive. */
   total: string;
+  /** On a trip's paper, an older stay's flat amount off the total, beside a newer stay's discount off the net. */
+  alsoOffTotalLabel?: string | null;
+  alsoOffTotalValue?: string | null;
   /** Currency word for the total row — "Nu." in the reference. */
   currencyLabel?: string;
   /**
@@ -175,6 +178,7 @@ export function renderPriceBlock(input: LegphelPriceBlock): string[] {
           { rawKey: true },
         ),
     input.hidePrices || input.netAfterDiscount ? "" : input.discountLabel ? row(input.discountLabel, input.discountValue ?? "") : "",
+    input.hidePrices || !input.alsoOffTotalValue ? "" : row(input.alsoOffTotalLabel ?? "Discount", input.alsoOffTotalValue),
     input.hidePrices ? "" : row(`Total · ${currency}`, input.total, { total: true }),
   ];
 }

@@ -60,6 +60,7 @@ import {
 import { resolveBillQuotation } from "../../lib/operative-quotation.js";
 import { assignedRoomNights, roomsWithNightsLine, type NightsMode } from "../../lib/room-nights-for-entry.js";
 import { quotationPaperPrices } from "./quotation-pdf-service.js";
+import type { TripPaperFigures } from "./trip-paper-prices.js";
 import { priceRowsNote, type LegphelPriceBlock } from "../infrastructure/pdf-templates/legphel-quotation-template.js";
 
 type QuotationTerms = {
@@ -335,6 +336,19 @@ async function buildProformaDocRender(prisma: PrismaClient, inv: LoadedInvoice, 
     total: formatMoney(totalAmount),
   };
 
+  // The same figures as numbers, for a trip's paper to add up (2026-11-09).
+  const priceFigures: TripPaperFigures = paper?.figures ?? {
+    net: stayCharges.subTotal,
+    netAfterDiscount: null,
+    serviceChargeLabel: "Service charge",
+    serviceCharge: stayCharges.serviceCharge,
+    gstLabel: "GST",
+    gst: stayCharges.gst,
+    discountLabel: null,
+    discountAmount: null,
+    total: totalAmount,
+  };
+
   // === Advance figures ===
   const { segmentStartedAt, advanceReceived, paymentCount, requiredAdvance, advanceDueQualifier, advanceDueNow, balanceAtCheckout } =
     await proformaAdvanceFigures(prisma, inv, totalAmount);
@@ -404,6 +418,8 @@ async function buildProformaDocRender(prisma: PrismaClient, inv: LoadedInvoice, 
     perNightAmount,
     totalAmount,
     prices,
+    priceFigures,
+    rowsAreNet: paper?.rowsAreNet ?? true,
     advanceReceived,
     paymentCount,
     requiredAdvance,
@@ -430,6 +446,8 @@ export async function proformaPaperFigures(prisma: PrismaClient, invoiceId: stri
   return {
     invoiceRef: r.invoiceRef,
     prices: r.prices,
+    priceFigures: r.priceFigures,
+    rowsAreNet: r.rowsAreNet,
     total: r.totalAmount,
     advanceReceived: r.advanceReceived,
     paymentCount: r.paymentCount,

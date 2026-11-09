@@ -653,10 +653,10 @@ export async function quotationPaperPrices(
   prisma: PrismaClient,
   quotationId: string,
   opts?: { nightsMode?: NightsMode },
-): Promise<{ priceBlock: LegphelPriceBlock; rowsAreNet: boolean; total: number }> {
+): Promise<{ priceBlock: LegphelPriceBlock; figures: QuotationPriceFigures; rowsAreNet: boolean; total: number }> {
   const q = await loadQuotationForRender(prisma, quotationId);
   const model = await buildQuotationDocRender(prisma, q, { nightsMode: opts?.nightsMode });
-  return { priceBlock: model.priceBlock, rowsAreNet: model.figures.rowsAreNet, total: model.totalAmount };
+  return { priceBlock: model.priceBlock, figures: model.figures, rowsAreNet: model.figures.rowsAreNet, total: model.totalAmount };
 }
 
 /**

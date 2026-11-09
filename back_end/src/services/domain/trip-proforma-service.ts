@@ -9,7 +9,8 @@ import { formatMoney, loadHotelProfileForRender } from "../../lib/pdf-render-con
 import type { NightsMode } from "../../lib/room-nights-for-entry.js";
 import { renderHtmlToPdf } from "../infrastructure/pdf-render-service.js";
 import { mastheadFromHotelProfile, primaryContactNumber } from "../infrastructure/pdf-templates/legphel-document-shell.js";
-import { formatDocDate, formatDocDateLocal, formatDocDateTimeLocal, formatStayLines } from "../infrastructure/pdf-templates/legphel-document-format.js";
+import { formatDocDate, formatDocDateLocal, formatDocDateTimeLocal } from "../infrastructure/pdf-templates/legphel-document-format.js";
+import { priceRowsNote } from "../infrastructure/pdf-templates/legphel-quotation-template.js";
 import { renderLegphelTripProformaHtml } from "../infrastructure/pdf-templates/legphel-trip-proforma-template.js";
 import type { StayChargeBreakdown } from "../infrastructure/compute-stay-charges.js";
 import { renderProformaInvoiceEmail } from "../infrastructure/stage-email-templates.js";
@@ -20,6 +21,7 @@ import { afterPaymentRecorded, recordPaymentTx } from "./s3-folio-service.js";
 import { evaluateAdvancePaymentCondition } from "./s3-payment-service.js";
 import { buildEntryBillingSummary } from "./entry-billing-summary-service.js";
 import { recordCommunicationAcknowledgement } from "./communication-acknowledgement-service.js";
+import { combineTripPriceBlocks, tripStayDates, type TripPricePart, type TripStayDates } from "./trip-paper-prices.js";
 import { saveTripPaperVersion, sameMembers, SYSTEM_ACTOR, tripOfEntry, type Actor, type TripPaperMaker } from "./trip-paper-service.js";
 
 /**
@@ -252,46 +254,42 @@ export async function renderTripProformaHtml(prisma: PrismaClient, tripPaperId: 
     },
   });
   const hotel = await loadHotelProfileForRender(prisma);
-  const stays = [];
+  const parts: TripPricePart[] = [];
+  const stays: TripStayDates[] = [];
+  const plans: Array<{ stayNo: number; label: string | null }> = [];
+  const qualifiers: Array<string | null> = [];
   const received: Prisma.Decimal[] = [];
   const due: Prisma.Decimal[] = [];
   const balance: Prisma.Decimal[] = [];
   const deadlines: Date[] = [];
   let anyAsked = false;
+  let rowsAreNet = true;
   for (const m of members) {
     const f = await proformaPaperFigures(prisma, m.paperId, { nightsMode: opts?.nightsMode });
-    const ci = m.checkIn ? new Date(`${m.checkIn}T00:00:00Z`) : null;
-    const co = m.checkOut ? new Date(`${m.checkOut}T00:00:00Z`) : null;
-    const nights = ci && co ? Math.round((co.getTime() - ci.getTime()) / 86_400_000) : null;
-    const advanceRows: Array<{ label: string; value: string }> = [];
-    if (f.advancePlanLabel) advanceRows.push({ label: "Payment plan", value: f.advancePlanLabel });
-    if (f.requiredAdvance != null) advanceRows.push({ label: `Advance asked${f.advanceDueQualifier ? ` ${f.advanceDueQualifier}` : ""}`, value: formatMoney(f.requiredAdvance) });
-    if (f.advanceReceived > 0) advanceRows.push({ label: `Advance received${f.paymentCount > 1 ? ` (${f.paymentCount} payments)` : ""}`, value: formatMoney(f.advanceReceived) });
-    if (f.requiredAdvance != null) advanceRows.push({ label: "Advance due now", value: formatMoney(f.advanceDueNow) });
-    if (f.requiredAdvance != null) anyAsked = true;
+    parts.push({ stayNo: m.stayNo, block: f.prices, figures: f.priceFigures });
+    rowsAreNet = rowsAreNet && f.rowsAreNet;
+    stays.push(tripStayDates(m.stayNo, m.checkIn ? new Date(`${m.checkIn}T00:00:00Z`) : null, m.checkOut ? new Date(`${m.checkOut}T00:00:00Z`) : null, formatDocDate));
+    plans.push({ stayNo: m.stayNo, label: f.advancePlanLabel ?? null });
+    if (f.requiredAdvance != null) {
+      anyAsked = true;
+      qualifiers.push(f.advanceDueQualifier ?? null);
+    }
     if (f.advanceDueNow > 0 && f.advanceDeadline) deadlines.push(f.advanceDeadline);
     received.push(toDecimal(f.advanceReceived));
     due.push(toDecimal(f.advanceDueNow));
     balance.push(toDecimal(f.balanceAtCheckout));
-    stays.push({
-      heading: `Stay ${m.stayNo} · ${f.invoiceRef}`,
-      stay: formatStayLines(ci, co, nights),
-      block: f.prices,
-      advanceRows,
-      row: {
-        stay: `Stay ${m.stayNo}`,
-        ownNumber: f.invoiceRef,
-        checkIn: ci ? formatDocDate(ci) : "—",
-        checkOut: co ? formatDocDate(co) : "—",
-        total: formatMoney(f.total),
-        advanceDueNow: f.requiredAdvance != null ? formatMoney(f.advanceDueNow) : "—",
-      },
-    });
   }
   const receivedTotal = sumMoney(received);
   const firstDeadline = deadlines.length ? new Date(Math.min(...deadlines.map((d) => d.getTime()))) : null;
   const to = inquiry?.travelAgent?.displayName ?? inquiry?.corporateAccount?.displayName ?? (guestDisplayName(inquiry?.guestProfile) || "Guest");
   const number = paperNumber(paper.documentNumber, paper.versionNumber);
+  // One payment plan row when the stays share it; a row for each stay when they do not.
+  const planned = plans.filter((p) => p.label);
+  const planRows =
+    planned.length === plans.length && new Set(planned.map((p) => p.label)).size === 1
+      ? [{ label: "Payment plan", value: planned[0].label! }]
+      : planned.map((p) => ({ label: `Payment plan · Stay ${p.stayNo}`, value: p.label! }));
+  const qualifier = new Set(qualifiers).size === 1 ? qualifiers[0] : null;
   const html = renderLegphelTripProformaHtml({
     masthead: mastheadFromHotelProfile(hotel),
     proformaNo: number,
@@ -301,9 +299,10 @@ export async function renderTripProformaHtml(prisma: PrismaClient, tripPaperId: 
     validUntil: paper.validUntil ? formatDocDateTimeLocal(paper.validUntil) : null,
     to,
     stays,
-    summary: stays.map((s) => s.row),
-    tripTotal: formatMoney(paper.totalAmount),
+    prices: combineTripPriceBlocks(parts),
+    planRows,
     advanceReceived: receivedTotal.gt(0) ? formatMoney(receivedTotal) : null,
+    advanceDueNowLabel: `Advance due now${qualifier ? ` ${qualifier}` : ""} · Nu.`,
     advanceDueNow: anyAsked ? formatMoney(sumMoney(due)) : null,
     balanceAtCheckout: formatMoney(sumMoney(balance)),
     bank: {
@@ -312,8 +311,7 @@ export async function renderTripProformaHtml(prisma: PrismaClient, tripPaperId: 
     },
     sharingNote:
       "A payment for this trip goes to the first stay's advance first, then to the next stay's. Anything paid beyond the advances goes to the stays in the same order.",
-    closingNote:
-      "Each stay keeps its own proforma, named above. The trip total is the stays' totals added up. No surcharge applies on any payment mode. Cancellation terms as disclosed for each stay.",
+    closingNote: `${priceRowsNote(rowsAreNet)}No surcharge applies on any payment mode. Cancellation terms as disclosed for each stay.`,
   });
   return { html, number, paper };
 }

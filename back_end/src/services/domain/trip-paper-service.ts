@@ -1,21 +1,23 @@
 import { Prisma, Stage, type ActorLevel, type PrismaClient } from "@prisma/client";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { allocateReadableId } from "../../lib/readable-id.js";
-import { printedQuotationNumber, paperNumber } from "../../lib/document-numbers.js";
+import { paperNumber } from "../../lib/document-numbers.js";
 import { resolveOperativeQuotation } from "../../lib/operative-quotation.js";
 import { guestDisplayName } from "../../lib/guest-display-name.js";
 import { resolveSendTo } from "../../lib/send-to.js";
 import { sumMoney, toDecimal } from "../../lib/money.js";
-import { formatMoney, loadHotelProfileForRender } from "../../lib/pdf-render-context.js";
+import { loadHotelProfileForRender } from "../../lib/pdf-render-context.js";
 import type { NightsMode } from "../../lib/room-nights-for-entry.js";
 import { renderHtmlToPdf } from "../infrastructure/pdf-render-service.js";
 import { mastheadFromHotelProfile } from "../infrastructure/pdf-templates/legphel-document-shell.js";
-import { formatDocDate, formatDocDateLocal, formatStayLines } from "../infrastructure/pdf-templates/legphel-document-format.js";
+import { formatDocDate, formatDocDateLocal } from "../infrastructure/pdf-templates/legphel-document-format.js";
+import { priceRowsNote } from "../infrastructure/pdf-templates/legphel-quotation-template.js";
 import { renderLegphelTripQuotationHtml } from "../infrastructure/pdf-templates/legphel-trip-quotation-template.js";
 import { stayBreakdownFromTerms, type StayChargeBreakdown } from "../infrastructure/compute-stay-charges.js";
 import { renderQuotationEmail } from "../infrastructure/stage-email-templates.js";
 import { dispatchStageEmailBestEffort } from "../infrastructure/stage-email-helpers.js";
 import { quotationPaperPrices } from "./quotation-pdf-service.js";
+import { combineTripPriceBlocks, tripStayDates, type TripPricePart, type TripStayDates } from "./trip-paper-prices.js";
 import { sendQuotation } from "./s2-quotation-service.js";
 import { recordCommunicationAcknowledgement } from "./communication-acknowledgement-service.js";
 
@@ -281,25 +283,14 @@ export async function renderTripQuotationHtml(
     },
   });
   const hotel = await loadHotelProfileForRender(prisma);
-  const stays = [];
+  const parts: TripPricePart[] = [];
+  const stays: TripStayDates[] = [];
+  let rowsAreNet = true;
   for (const m of members) {
-    const q = await prisma.quotation.findUnique({ where: { id: m.paperId }, select: { referenceNumber: true, versionNumber: true } });
-    const { priceBlock } = await quotationPaperPrices(prisma, m.paperId, { nightsMode: opts?.nightsMode });
-    const ci = m.checkIn ? new Date(`${m.checkIn}T00:00:00Z`) : null;
-    const co = m.checkOut ? new Date(`${m.checkOut}T00:00:00Z`) : null;
-    const nights = ci && co ? Math.round((co.getTime() - ci.getTime()) / 86_400_000) : null;
-    stays.push({
-      heading: `Stay ${m.stayNo} · ${q ? await printedQuotationNumber(prisma, q) : paperNumber(m.number, m.versionNumber)}`,
-      stay: formatStayLines(ci, co, nights),
-      block: priceBlock,
-      row: {
-        stay: `Stay ${m.stayNo}`,
-        ownNumber: paperNumber(m.number, m.versionNumber),
-        checkIn: ci ? formatDocDate(ci) : "—",
-        checkOut: co ? formatDocDate(co) : "—",
-        total: formatMoney(m.total),
-      },
-    });
+    const prices = await quotationPaperPrices(prisma, m.paperId, { nightsMode: opts?.nightsMode });
+    parts.push({ stayNo: m.stayNo, block: prices.priceBlock, figures: prices.figures });
+    rowsAreNet = rowsAreNet && prices.rowsAreNet;
+    stays.push(tripStayDates(m.stayNo, m.checkIn ? new Date(`${m.checkIn}T00:00:00Z`) : null, m.checkOut ? new Date(`${m.checkOut}T00:00:00Z`) : null, formatDocDate));
   }
   const to =
     inquiry?.travelAgent?.displayName ?? inquiry?.corporateAccount?.displayName ?? (guestDisplayName(inquiry?.guestProfile) || "Guest");
@@ -313,12 +304,10 @@ export async function renderTripQuotationHtml(
       : "Not a booking confirmation",
     to,
     stays,
-    summary: stays.map((s) => s.row),
-    tripTotal: formatMoney(paper.totalAmount),
+    prices: combineTripPriceBlocks(parts, { hidePrices: opts?.hidePrices }),
     closingNote: opts?.hidePrices
-      ? "Rates for these stays are not shown on this copy. Each stay keeps its own quotation, named above."
-      : "Each stay keeps its own quotation, named above, with its own rooms and totals. The trip total is the stays' totals added up.",
-    hidePrices: opts?.hidePrices,
+      ? "Prices are not shown on this copy — the rates, taxes and total for these stays are on the priced quotation under the same number. Subject to availability at confirmation."
+      : `${priceRowsNote(rowsAreNet)}Subject to availability at confirmation. A proforma invoice with advance terms follows on acceptance.`,
   });
   return { html, number: paperNumber(paper.documentNumber, paper.versionNumber), paper };
 }

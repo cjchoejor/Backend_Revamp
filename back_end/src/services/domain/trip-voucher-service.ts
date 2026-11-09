@@ -4,7 +4,8 @@ import { resolveBillQuotation } from "../../lib/operative-quotation.js";
 import { guestDisplayName } from "../../lib/guest-display-name.js";
 import { resolveSendTo } from "../../lib/send-to.js";
 import { cleanPhone } from "../../lib/phone-numbers.js";
-import { formatDocDate, formatDocDateLocal, formatStayLines } from "../infrastructure/pdf-templates/legphel-document-format.js";
+import { formatDocDate, formatDocDateLocal } from "../infrastructure/pdf-templates/legphel-document-format.js";
+import type { LegphelQuotationLine } from "../infrastructure/pdf-templates/legphel-quotation-template.js";
 import { loadHotelProfileForRender } from "../../lib/pdf-render-context.js";
 import type { NightsMode } from "../../lib/room-nights-for-entry.js";
 import { renderHtmlToPdf } from "../infrastructure/pdf-render-service.js";
@@ -15,6 +16,7 @@ import { dispatchStageEmailBestEffort } from "../infrastructure/stage-email-help
 import { quotationPaperPrices } from "./quotation-pdf-service.js";
 import { recordCommunicationAcknowledgement } from "./communication-acknowledgement-service.js";
 import { decideHeldDocument, sendHeldVoucherWithTrip } from "./held-document-service.js";
+import { tripStayDates, type TripStayDates } from "./trip-paper-prices.js";
 import { saveTripPaperVersion, sameMembers, SYSTEM_ACTOR, tripOfEntry, type Actor, type TripPaperMaker } from "./trip-paper-service.js";
 import { paperNumber } from "../../lib/document-numbers.js";
 
@@ -200,7 +202,9 @@ export async function renderTripVoucherHtml(prisma: PrismaClient, tripPaperId: s
     },
   });
   const hotel = await loadHotelProfileForRender(prisma);
-  const stays = [];
+  const stays: TripStayDates[] = [];
+  const lines: LegphelQuotationLine[] = [];
+  let datesShown = false;
   for (const m of members) {
     const res = await prisma.reservation.findUnique({ where: { id: m.paperId }, select: { segmentId: true } });
     const quotes = await prisma.quotation.findMany({
@@ -209,16 +213,9 @@ export async function renderTripVoucherHtml(prisma: PrismaClient, tripPaperId: s
     });
     const q = res ? resolveBillQuotation(quotes, res.segmentId) : null;
     const prices = q ? await quotationPaperPrices(prisma, q.id, { nightsMode: opts?.nightsMode }).catch(() => null) : null;
-    const ci = m.checkIn ? new Date(`${m.checkIn}T00:00:00Z`) : null;
-    const co = m.checkOut ? new Date(`${m.checkOut}T00:00:00Z`) : null;
-    const nights = ci && co ? Math.round((co.getTime() - ci.getTime()) / 86_400_000) : null;
-    stays.push({
-      heading: `Stay ${m.stayNo} · ${m.number}`,
-      stay: formatStayLines(ci, co, nights),
-      lines: prices?.priceBlock.lines,
-      datesShown: prices?.priceBlock.datesShown,
-      row: { stay: `Stay ${m.stayNo}`, ownNumber: m.number, checkIn: ci ? formatDocDate(ci) : "—", checkOut: co ? formatDocDate(co) : "—" },
-    });
+    stays.push(tripStayDates(m.stayNo, m.checkIn ? new Date(`${m.checkIn}T00:00:00Z`) : null, m.checkOut ? new Date(`${m.checkOut}T00:00:00Z`) : null, formatDocDate));
+    lines.push(...(prices?.priceBlock.lines ?? []));
+    datesShown = datesShown || !!prices?.priceBlock.datesShown;
   }
   const number = paperNumber(paper.documentNumber, paper.versionNumber);
   const html = renderLegphelTripVoucherHtml({
@@ -229,9 +226,9 @@ export async function renderTripVoucherHtml(prisma: PrismaClient, tripPaperId: s
     guest: guestDisplayName(inquiry?.guestProfile) || "Guest",
     bookedBy: inquiry?.travelAgent?.displayName ?? inquiry?.corporateAccount?.displayName ?? null,
     stays,
-    summary: stays.map((s) => s.row),
-    closingNote:
-      "Each stay keeps its own voucher, named above. Inclusions per plan · Wi-Fi · parking. Early check-in and late check-out subject to availability. Please carry photo ID for all adult guests.",
+    lines,
+    datesShown,
+    closingNote: "Inclusions per plan · Wi-Fi · parking. Early check-in and late check-out subject to availability. Please carry photo ID for all adult guests.",
   });
   return { html, number, paper };
 }
