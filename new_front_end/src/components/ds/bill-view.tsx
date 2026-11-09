@@ -6,6 +6,7 @@
  * booking option inside"). A trip is one bill: each stay's lines under its own band, then one ladder.
  * Every figure is the server's (`GET /api/desk/bills/:entryId`); nothing is added up here.
  */
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
@@ -49,6 +50,15 @@ export function BillPage({ entryId }: { entryId: string }) {
   const { session } = useSession();
   const router = useRouter();
   const { tz } = useHotelClock(60_000);
+  // Back to the tab, search and order the bill was opened from.
+  const [backTo, setBackTo] = useState("/billing");
+  useEffect(() => {
+    try {
+      setBackTo(sessionStorage.getItem("desk:billing-list") ?? "/billing");
+    } catch {
+      /* the first tab, then */
+    }
+  }, []);
   const q = useQuery({
     queryKey: ["bill-view", entryId],
     queryFn: () => getBillView(session!, entryId),
@@ -72,7 +82,7 @@ export function BillPage({ entryId }: { entryId: string }) {
   return (
     <div className="page bill-page">
       <div className="bill-bar">
-        <Link href="/billing" className="bill-back">
+        <Link href={backTo} className="bill-back">
           ← Billing
         </Link>
         <div className="bill-bar-right">

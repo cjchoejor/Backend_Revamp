@@ -1247,6 +1247,9 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .bill-band .bb-cell.owed.clear .bb-k, .ds .bill-band .bb-cell.owed.clear .bb-v { color: var(--success); }
 .ds .bill-band .bb-cell.owed.over { background: var(--warning-soft); box-shadow: inset 3px 0 0 var(--warning); }
 .ds .bill-band .bb-cell.owed.over .bb-k, .ds .bill-band .bb-cell.owed.over .bb-v { color: var(--warning); }
+.ds .billing-page .filters:not(.desk-root *) { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; margin-bottom: var(--s3); }
+.ds .billing-page .sortwrap:not(.desk-root *) { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
+.ds .billing-page .sortwrap select.input:not(.desk-root *) { width: auto; min-width: 250px; }
 /* The bill on the Billing page (2026-11-09): a hotel's bill, the desk's acts above it. */
 .ds .bill-page { max-width: 1080px; margin: 0 auto; }
 .ds .bill-bar { display: flex; align-items: center; justify-content: space-between; gap: var(--s3); flex-wrap: wrap; margin-bottom: var(--s3); }
