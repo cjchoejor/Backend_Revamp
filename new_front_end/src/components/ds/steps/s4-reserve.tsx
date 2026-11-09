@@ -22,7 +22,7 @@ import { useSession } from "@/hooks/use-session";
 import { quietRoomsByNumber, useBookingRooms } from "@/hooks/use-booking-rooms";
 import { getBookingRooms } from "@/lib/api/booking-rooms";
 import { getPaymentStatus } from "@/lib/api/reservation-setup";
-import type { TripProforma, TripQuotation } from "@/lib/api/trip-papers";
+import type { TripProforma, TripQuotation, TripVoucher } from "@/lib/api/trip-papers";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
 import { recipientHint, useInvoiceRecipient } from "@/hooks/use-invoice-recipient";
 import { usePaymentStatus } from "@/hooks/use-payment-status";
@@ -96,24 +96,6 @@ function useTrace(entryId: string) {
   });
 }
 
-function useJourney(entryId: string) {
-  const { session } = useSession();
-  return useQuery({
-    queryKey: ["journey-summary", entryId],
-    queryFn: () => getJourneySummary(session!, entryId),
-    enabled: !!session,
-  });
-}
-
-function useBilling(entry: EntryDetail) {
-  const { session } = useSession();
-  return useQuery({
-    queryKey: ["billing-summary", entry.id, entry.updatedAt ?? ""],
-    queryFn: () => getBillingSummary(session!, entry.id),
-    enabled: !!session,
-  });
-}
-
 /** The quotation the freeze would take as its basis — the gate's own choice, within this pass. */
 function operativeQuote(entry: EntryDetail): QuotationSummary | null {
   const segId = entry.segments?.[0]?.id ?? null;
@@ -160,6 +142,8 @@ export function S4Reserve({
   const together = useStaysTogether(past ? null : entry);
   const tripVoucher = useTripVoucher(entry);
   const tripVoucherShown = together.active && !!tripVoucher.data?.current;
+  // Reading a stay reserved on its own would have nothing to say about the others.
+  const stays = together.active ? [entry, ...together.others].filter((s) => !confirmed || !!s.reservation).sort((a, b) => together.stayNoOf(a.id) - together.stayNoOf(b.id)) : [entry];
   return (
     <StepCanvas past={past}>
       {confirmed ? (
@@ -178,14 +162,8 @@ export function S4Reserve({
           {/* The advance moved to the step line's Payments (2026-11-07, operator: "the advance section
               here in s4 to be moved to menu buttons, maybe with a name as payments"). */}
           <ReservePayments entry={entry} past={past} />
-          {together.active ? (
-            <p className="notice next" role="status">
-              <span>
-                What follows is <b>Stay {together.stayNoOf(entry.id)}</b>&rsquo;s — open the other stay from the top to see its own.
-              </span>
-            </p>
-          ) : null}
-          <WhatReserveDecided entry={entry} />
+          {/* Viewed together it is every stay's record (2026-11-09, operator: "even here it should be showing info of both stays"). */}
+          {together.deciding ? null : <WhatReserveDecided entry={entry} stays={stays} stayNoOf={together.stayNoOf} />}
         </>
       ) : (
         // Before the click (restored 2026-10-29): what Reserve will sign, each fact with its Fix.
@@ -195,7 +173,7 @@ export function S4Reserve({
         ) : (
           <BeforeYouReserve
             entry={entry}
-            stays={together.active ? [entry, ...together.others].sort((a, b) => together.stayNoOf(a.id) - together.stayNoOf(b.id)) : [entry]}
+            stays={stays}
             stayNoOf={together.stayNoOf}
             stayLabel={together.label}
             goToStep={goToStep}
@@ -299,6 +277,7 @@ type StayFactsRead = {
   trace: TraceItem[];
   overlap: Awaited<ReturnType<typeof listSameGuestBookings>>["reserveOverlap"] | null;
   roomByNo: Map<string, string>;
+  bookingRooms: Awaited<ReturnType<typeof getBookingRooms>> | null;
 };
 
 function useStayFactReads(stays: EntryDetail[]): StayFactsRead[] {
@@ -333,6 +312,7 @@ function useStayFactReads(stays: EntryDetail[]): StayFactsRead[] {
     trace: traces[i]?.data?.items ?? [],
     overlap: overlaps[i]?.data?.reserveOverlap ?? null,
     roomByNo: quietRoomsByNumber(rooms[i]?.data),
+    bookingRooms: rooms[i]?.data ?? null,
   }));
 }
 
@@ -580,6 +560,7 @@ function stayFacts(
 }
 
 type StayGroup = { entry: EntryDetail; stayNo: number; read: StayFactsRead; facts: StayFacts };
+type StayLines = { entryId: string; stayNo: number; lines: Line[] };
 
 /** The words a line says, so two stays that say the same thing are said once. */
 function nodeText(n: React.ReactNode): string {
@@ -597,12 +578,12 @@ const WORST_FIRST: FactState[] = ["missing", "waiting", "word", "on", "system"];
  * be showing for both of the stays together"). A fact both stays share is said once; one that differs
  * names each stay on a line of its own inside the row.
  */
-function mergeStayLines(groups: StayGroup[]): Line[] {
+function mergeStayLines(groups: StayLines[]): Line[] {
   const keys: string[] = [];
-  for (const g of groups) for (const l of g.facts.lines) if (!keys.includes(l.key)) keys.push(l.key);
+  for (const g of groups) for (const l of g.lines) if (!keys.includes(l.key)) keys.push(l.key);
   return keys.map((key) => {
     const rows = groups.flatMap((g) => {
-      const line = g.facts.lines.find((l) => l.key === key);
+      const line = g.lines.find((l) => l.key === key);
       return line ? [{ stayNo: g.stayNo, line }] : [];
     });
     const first = rows[0]!.line;
@@ -737,7 +718,7 @@ function BeforeYouReserve({
     read: reads[i]!,
     facts: stayFacts(s, reads[i]!, { tz, past, fom, many, onOverlap: setOverlapFor, onVerify: setVerifyFor }),
   }));
-  const lines = many ? withTripFacts(mergeStayLines(groups), groups, tripQuote.data, tripProforma.data, cur, tz) : groups[0]!.facts.lines;
+  const lines = many ? withTripFacts(mergeStayLines(groups.map((g) => ({ entryId: g.entry.id, stayNo: g.stayNo, lines: g.facts.lines }))), groups, tripQuote.data, tripProforma.data, cur, tz) : groups[0]!.facts.lines;
 
   const missing = lines.filter((l) => l.state === "missing");
   const done = lines.filter((l) => l.state !== "missing");
@@ -1131,26 +1112,17 @@ function OverlapDialog({ entry, open, onClose }: { entry: EntryDetail; open: boo
 
 /* ------------------------------------------------------------------ after the click */
 
-function WhatReserveDecided({ entry }: { entry: EntryDetail }) {
-  // A room the system chose and may still move reads "Deluxe Double · room 1" until Arrival.
-  const bookingRooms = useBookingRooms(entry);
-  const roomByNo = bookingRooms.byNumber;
-  const clock = useHotelClock(60_000);
-  const tz = clock.tz;
-  const staff = useStaffNames();
+/** What Reserve froze for one stay. The same lines a stay's own page has always shown. */
+function decidedLines(entry: EntryDetail, read: StayFactsRead, ctx: { tz: string; recipientTo: string }): Line[] {
+  const { pay, comms, journey, billing, trace, roomByNo, bookingRooms } = read;
+  const { tz, recipientTo } = ctx;
   const res = entry.reservation!;
-  const journey = useJourney(entry.id).data ?? null;
-  const billing = useBilling(entry).data ?? null;
-  const pay = usePaymentStatus(entry.id, { enabled: !!entry.folio }).data;
-  const comms = useCommunications(entry.id).data?.items;
-  const trace = useTrace(entry.id).data?.items ?? [];
   const cur = billing?.currency ?? "BTN";
-  const by = staff.get(res.confirmedBy) ?? journey?.s4Confirmation.confirmedByName ?? null;
   const held = !!(entry as EntryDetail & EntryScalars).reservationPaymentPending;
   const nights = nightsOf(res.frozenCheckInDate, res.frozenCheckOutDate);
   const quoteRef = journey?.s2Quote.reference ?? null;
   const since = currentPassStart(entry);
-  const quoteAnswer = answerWords(latestDispatched(comms, "QUOTATION", since));
+  const quoteAnswer = answerWords(latestDispatched(comms ?? undefined, "QUOTATION", since));
   // Every room the booking holds: the priced rooms, the assigned rooms and the hold's rooms.
   const roomRates = roomRatesOf(billing);
   const preDiscount = (billing?.rooms ?? []).some((r) => r.componentsPreDiscount);
@@ -1165,64 +1137,172 @@ function WhatReserveDecided({ entry }: { entry: EntryDetail }) {
     .sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
   // Each room's type, by number — the booking's rooms, the priced rooms, the hold's rooms.
   const typeOfNo = new Map<string, string>();
-  for (const r of bookingRooms.data?.rooms ?? []) if (r.roomNumber) typeOfNo.set(r.roomNumber, r.typeName);
+  for (const r of bookingRooms?.rooms ?? []) if (r.roomNumber) typeOfNo.set(r.roomNumber, r.typeName);
   for (const r of billing?.rooms ?? []) if (r.roomNumber && r.roomTypeName && !typeOfNo.has(r.roomNumber)) typeOfNo.set(r.roomNumber, r.roomTypeName);
   for (const r of journey?.s3Setup.committedHold?.rooms ?? []) if (r.roomNumber && r.roomTypeName && !typeOfNo.has(r.roomNumber)) typeOfNo.set(r.roomNumber, r.roomTypeName);
-  const recipient = useInvoiceRecipient(entry);
   const emailEvents = trace.filter((t) => t.eventType.startsWith("RESERVATION_CONFIRMATION_EMAIL"));
   const sent = emailEvents.some((t) => t.eventType.endsWith(".SENT"));
   const disc = entry.cancellationDisclosure ?? null;
-  return (
-    <StepCard
-      title={`What Reserve decided · ${fmtDateTime(res.confirmedAt, tz)}${by ? ` · ${by}` : ""}`}
-      meta="This is what was reserved. A change from here makes the booking's papers again — the quotation and the voucher — and keeps these as they were."
-    >
-      <Facts wide>
-        <Fact k="Reservation">
+  const moneyAsked = !!pay && (pay.requiredAmount > 0 || pay.totalReceived > 0);
+  const planWords = pay?.paymentPlan ? `${PLAN_LABEL[pay.paymentPlan.plan]}${pay.paymentPlan.balanceDueAt ? ` · ${dueLabel(pay.paymentPlan.plan, pay.paymentPlan.balanceDueAt)}` : ""}` : null;
+  const lines: Line[] = [
+    {
+      key: "reservation",
+      label: "Reservation",
+      state: "on",
+      perStay: true,
+      value: (
+        <>
           <b>{res.id}</b> · dates frozen: <StayDates checkIn={res.frozenCheckInDate} checkOut={res.frozenCheckOutDate} />
           {nights ? ` · ${plural(nights, "night")}` : ""}
-        </Fact>
-        <Fact k={roomRates && roomRates.length > 1 ? "Rates frozen" : "Rate frozen"} meta={preDiscount ? "before the booking discount — the price below is after it" : undefined}>
-          {roomRates ? (
-            <div style={{ display: "grid", gap: 2 }}>
-              {roomRates.map((r) => (
-                <span key={r.roomNumber ?? r.roomTypeName ?? String(r.rate)}>
-                  {r.roomNumber && roomByNo.has(r.roomNumber) ? roomByNo.get(r.roomNumber) : `Room ${r.roomNumber ?? "—"}`}
-                  {r.roomTypeName && !(r.roomNumber && roomByNo.has(r.roomNumber)) ? <span className="meta"> · {r.roomTypeName}</span> : null} ·{" "}
-                  <span className="money">{money(r.rate, cur)}</span> / night
-                </span>
-              ))}
-            </div>
-          ) : (
-            `${money(res.frozenRate, cur)} / night`
-          )}
-        </Fact>
-        <Fact k="The price" meta={billing?.stayTotal.frozen ? "as confirmed" : billing ? "indicative" : undefined}>
-          {billing?.stayTotal.amount != null ? money(billing.stayTotal.amount, cur) : null}
-        </Fact>
-        <Fact k="Quotation" meta={quoteAnswer ?? undefined}>
-          {quoteRef ? `${quoteRef}${journey?.s2Quote.state ? ` · ${QUOTE_WORD[journey.s2Quote.state] ?? words(journey.s2Quote.state)}` : ""}` : null}
-        </Fact>
-        <Fact k="Who pays">{payerChoiceWord(res.frozenBillingModel, payerPartyOf(entry)) || null}</Fact>
-        <Fact k="Rooms" meta={held ? "the advance is not fully paid — the rooms read Reserved once it is" : undefined}>
+        </>
+      ),
+    },
+    {
+      key: "rates",
+      label: roomRates && roomRates.length > 1 ? "Rates frozen" : "Rate frozen",
+      state: "on",
+      who: preDiscount ? "before the booking discount — the price below is after it" : undefined,
+      value: roomRates ? (
+        <div style={{ display: "grid", gap: 2 }}>
+          {roomRates.map((r) => (
+            <span key={r.roomNumber ?? r.roomTypeName ?? String(r.rate)}>
+              {r.roomNumber && roomByNo.has(r.roomNumber) ? roomByNo.get(r.roomNumber) : `Room ${r.roomNumber ?? "—"}`}
+              {r.roomTypeName && !(r.roomNumber && roomByNo.has(r.roomNumber)) ? <span className="meta"> · {r.roomTypeName}</span> : null} ·{" "}
+              <span className="money">{money(r.rate, cur)}</span> / night
+            </span>
+          ))}
+        </div>
+      ) : (
+        `${money(res.frozenRate, cur)} / night`
+      ),
+    },
+    {
+      key: "price",
+      label: "The price",
+      state: "on",
+      who: billing?.stayTotal.frozen ? "as confirmed" : billing ? "indicative" : undefined,
+      value: billing?.stayTotal.amount != null ? money(billing.stayTotal.amount, cur) : null,
+    },
+    {
+      key: "quote",
+      label: "Quotation",
+      state: "on",
+      who: quoteAnswer ?? undefined,
+      value: quoteRef ? `${quoteRef}${journey?.s2Quote.state ? ` · ${QUOTE_WORD[journey.s2Quote.state] ?? words(journey.s2Quote.state)}` : ""}` : null,
+    },
+    { key: "billing", label: "Who pays", state: "on", value: payerChoiceWord(res.frozenBillingModel, payerPartyOf(entry)) || null },
+    {
+      key: "rooms",
+      label: "Rooms",
+      state: "on",
+      perStay: true,
+      who: held ? "the advance is not fully paid — the rooms read Reserved once it is" : undefined,
+      value: (
+        <>
           {held ? <Chip tone="warning">Held · not yet Reserved</Chip> : <Chip tone="success">Reserved</Chip>}{" "}
           {/* The booking's own rooms first — each with its type, and whether the system may still move it. */}
-          {bookingRooms.data?.rooms.length
-            ? roomsHeldWord(bookingRooms.data.rooms.map((r) => ({ number: r.roomNumber, typeName: r.typeName, quiet: r.quiet && !bookingRooms.atArrival })))
+          {bookingRooms?.rooms.length
+            ? roomsHeldWord(bookingRooms.rooms.map((r) => ({ number: r.roomNumber, typeName: r.typeName, quiet: r.quiet && bookingRooms.atArrival !== true })))
             : rooms.length
               ? roomsHeldWord(rooms.map((n) => ({ number: n, typeName: typeOfNo.get(n) ?? null, quiet: roomByNo.has(n) })))
               : `${plural(entry.numberOfRooms ?? 1, "room")} · numbers assigned at Arrival`}
-        </Fact>
-        <Fact k="Terms disclosed" meta={disc ? fmtStamp(disc.disclosedAt, tz) : undefined}>
-          {disc ? (disc.disclosedBy === "SYSTEM" ? "cancellation and no-show, recorded by the system" : "cancellation and no-show, as told to the guest") : null}
-        </Fact>
-        <Fact k="Advance" meta={pay?.paymentPlan ? `${PLAN_LABEL[pay.paymentPlan.plan]}${pay.paymentPlan.balanceDueAt ? ` · ${dueLabel(pay.paymentPlan.plan, pay.paymentPlan.balanceDueAt)}` : ""}` : undefined}>
-          {pay ? (pay.requiredAmount > 0 || pay.totalReceived > 0 ? `${money(pay.totalReceived, cur)} received of ${money(pay.requiredAmount, cur)}` : "not required") : null}
-        </Fact>
-        {res.creditCeilingIfExtended != null ? <Fact k="Credit ceiling">{money(res.creditCeilingIfExtended, cur)}</Fact> : null}
-        <Fact k="Voucher" meta={sent ? "sent" : emailEvents.length ? "the email did not go out" : undefined}>
-          confirmation voucher · goes to {recipient.defaultTo || "no email on file"}
-        </Fact>
+        </>
+      ),
+    },
+    {
+      key: "terms",
+      label: "Terms disclosed",
+      state: "on",
+      who: disc ? fmtStamp(disc.disclosedAt, tz) : undefined,
+      value: disc ? (disc.disclosedBy === "SYSTEM" ? "cancellation and no-show, recorded by the system" : "cancellation and no-show, as told to the guest") : null,
+    },
+    {
+      key: "advance",
+      label: "Advance",
+      state: "on",
+      perStay: moneyAsked,
+      who: [(pay?.coveredByTrip ?? 0) > 0 ? `${money(pay!.coveredByTrip, cur)} covered by the trip's payment` : null, planWords].filter(Boolean).join(" · ") || undefined,
+      value: pay ? (moneyAsked ? `${money(pay.totalReceived, cur)} received of ${money(pay.requiredAmount, cur)}` : "not required") : null,
+    },
+  ];
+  if (res.creditCeilingIfExtended != null) {
+    lines.push({ key: "credit", label: "Credit ceiling", state: "on", perStay: true, value: money(res.creditCeilingIfExtended, cur) });
+  }
+  lines.push({
+    key: "voucher",
+    label: "Voucher",
+    state: "on",
+    who: sent ? "sent" : emailEvents.length ? "the email did not go out" : undefined,
+    value: `confirmation voucher · goes to ${recipientTo || "no email on file"}`,
+  });
+  return lines;
+}
+
+/** Viewed together the trip's papers and sums stand in, every figure the server's. */
+function withTripDecided(lines: Line[], groups: StayLines[], quote: TripQuotation | undefined, proforma: TripProforma | undefined, voucher: TripVoucher | undefined, recipientTo: string, cur: string, tz: string, totalOf: (entryId: string) => number | null | undefined): Line[] {
+  const q = quote?.current?.upToDate ? quote.current : null;
+  const v = voucher?.current ?? null;
+  const tripTotal = proforma?.total ?? quote?.total ?? null;
+  const stayTotals = groups.map((g) => `Stay ${g.stayNo} ${money(totalOf(g.entryId) ?? null, cur)}`).join(" · ");
+  return lines.map((l) => {
+    if (l.key === "price" && tripTotal) return { ...l, merged: false, value: `${money(tripTotal, cur)} for the trip`, who: `${stayTotals} · as confirmed` };
+    if (l.key === "quote" && q) return { ...l, merged: false, value: `${q.number} · ${q.sentAt ? "sent" : QUOTE_WORD.DRAFT}`, who: q.answeredAt ? "the guest's answer recorded" : undefined };
+    if (l.key === "voucher" && v) return { ...l, merged: false, value: `${v.number} · goes to ${recipientTo || "no email on file"}`, who: v.sentAt ? `sent ${fmtStamp(v.sentAt, tz)}` : "not sent yet" };
+    if (l.key === "advance" && l.merged && proforma?.advanceAsked != null) {
+      return {
+        ...l,
+        value: (
+          <>
+            <span className="fact-trip" data-trip-advance>
+              <b>The trip</b> {money(proforma.received, cur)} received of {money(proforma.advanceAsked, cur)}
+            </span>
+            {l.value}
+          </>
+        ),
+      };
+    }
+    return l;
+  });
+}
+
+function WhatReserveDecided({ entry, stays, stayNoOf }: { entry: EntryDetail; stays: EntryDetail[]; stayNoOf: (id: string) => number }) {
+  const clock = useHotelClock(60_000);
+  const tz = clock.tz;
+  const staff = useStaffNames();
+  const many = stays.length > 1;
+  const reads = useStayFactReads(stays);
+  // Whom the voucher goes to is the enquiry's, the same for every stay of a trip.
+  const recipientTo = useInvoiceRecipient(entry).defaultTo;
+  const tripQuote = useTripQuotation(entry, { enabled: many });
+  const tripProforma = useTripProforma(entry, { enabled: many });
+  const tripVoucher = useTripVoucher(entry);
+  const cur = reads[0]?.billing?.currency ?? "BTN";
+  const groups: StayLines[] = stays.map((s, i) => ({ entryId: s.id, stayNo: stayNoOf(s.id), lines: decidedLines(s, reads[i]!, { tz, recipientTo }) }));
+  const stampOf = (s: EntryDetail, i: number) => {
+    const by = staff.get(s.reservation!.confirmedBy) ?? reads[i]?.journey?.s4Confirmation.confirmedByName ?? null;
+    return `${fmtDateTime(s.reservation!.confirmedAt, tz)}${by ? ` · ${by}` : ""}`;
+  };
+  const stamps = stays.map(stampOf);
+  const oneStamp = stamps.every((x) => x === stamps[0]);
+  if (many && !oneStamp) {
+    // Reserved at different moments: each stay's reservation says when, and by whom.
+    for (const [i, g] of groups.entries()) g.lines = g.lines.map((l) => (l.key === "reservation" ? { ...l, who: stamps[i] } : l));
+  }
+  const lines = many
+    ? withTripDecided(mergeStayLines(groups), groups, tripQuote.data, tripProforma.data, tripVoucher.data, recipientTo, cur, tz, (id) => reads[stays.findIndex((s) => s.id === id)]?.billing?.stayTotal.amount)
+    : groups[0]!.lines;
+  return (
+    <StepCard
+      title={`What Reserve decided${oneStamp ? ` · ${stamps[0]}` : ""}`}
+      meta="This is what was reserved. A change from here makes the booking's papers again — the quotation and the voucher — and keeps these as they were."
+    >
+      <Facts wide>
+        {lines.map((l) => (
+          <Fact key={l.key} k={l.label} meta={l.who}>
+            {l.value}
+          </Fact>
+        ))}
       </Facts>
     </StepCard>
   );
