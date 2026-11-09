@@ -11,6 +11,14 @@ import { getBookingRooms } from "@/lib/api/booking-rooms";
 /** A room the system chose and may still move: its type, its number within the type, its label. */
 export type RoomByType = { typeName: string; ordinal: number | null; label: string };
 
+/** A room's label by its NUMBER, while the system may still move it. Nothing once at Arrival. */
+export function quietRoomsByNumber(data: Awaited<ReturnType<typeof getBookingRooms>> | null | undefined): Map<string, string> {
+  const out = new Map<string, string>();
+  if (!data || data.atArrival === true) return out;
+  for (const r of data.rooms) if (r.quiet && r.roomNumber) out.set(r.roomNumber, r.label);
+  return out;
+}
+
 export function useBookingRooms(entry: { id: string; updatedAt?: string | null } | null | undefined) {
   const { session } = useSession();
   const q = useQuery({

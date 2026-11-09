@@ -24,13 +24,13 @@ import { tripStamp } from "@/components/ds/steps/s2-together";
  * quotation above stays the separate view.
  */
 /** The trip this booking is a stay of, with the trip's quotation — one read shared by the cards. */
-export function useTripQuotation(entry: EntryDetail) {
+export function useTripQuotation(entry: EntryDetail, opts?: { enabled?: boolean }) {
   const { session } = useSession();
   return useQuery({
     queryKey: ["trip-quotation", entry.id, tripStamp(entry)],
     placeholderData: (prev) => prev,
     queryFn: () => getTripQuotation(session!, entry.id),
-    enabled: !!session,
+    enabled: !!session && opts?.enabled !== false,
   });
 }
 

@@ -467,7 +467,10 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const readyToConfirm = entry ? canConfirm(entry, { paymentSatisfied, totalReceived, requiredAmount, communications, earlierAdvanceAsked }) : false;
   // A finished Set up opens the Reserve page, where the booking is reserved (2026-10-29).
   const readyToMoveOn = entry ? canMoveToReserve(entry, { paymentSatisfied, totalReceived, requiredAmount, communications, earlierAdvanceAsked }) : false;
-  const maxReach = !entry ? 1 : entry.currentStage === "S3" && !readyToMoveOn ? Math.min(maxReachableOrder(entry), 3) : maxReachableOrder(entry);
+  // Set up's reads still on their way decide nothing: the Reserve page held in the address must not
+  // drop to Set up for a moment on arrival (2026-11-09).
+  const setUpReadsKnown = !entry?.folio || (!paymentStatusQuery.isLoading && !commsQuery.isLoading);
+  const maxReach = !entry ? 1 : entry.currentStage === "S3" && setUpReadsKnown && !readyToMoveOn ? Math.min(maxReachableOrder(entry), 3) : maxReachableOrder(entry);
 
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [checkInOpen, setCheckInOpen] = useState(false);
@@ -944,6 +947,10 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     return m && tripKey.split(",").includes(m[1]) ? m[1] : null;
   };
   const switchingRef = useRef(false);
+  // The Reserve page is a page ahead of the booking, held only in the address: a stay stays at Set up
+  // until Reserve is pressed. Moving between the stays keeps the desk on it, or the next stay reads as
+  // a step behind and coming back drops this one too (2026-11-09, operator).
+  const aheadStep = entry?.currentStage === "S3" && viewing === 4 ? 4 : null;
   useEffect(() => {
     if (!session || !tripKey) return;
     const siblings = tripKey.split(",");
@@ -978,14 +985,14 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
           toast.error(`Moved to ${to}, but ${entryId} could not be parked — ${err instanceof Error ? err.message : "try parking it by hand"}`);
         } finally {
           switchingRef.current = false;
-          router.push(href);
+          router.push(aheadStep && !/[?&]step=/.test(href) ? bookingHref(to, aheadStep) : href);
         }
       })();
     };
     document.addEventListener("click", onTripClick, true);
     return () => document.removeEventListener("click", onTripClick, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session, entryId, tripKey]);
+  }, [session, entryId, tripKey, aheadStep]);
 
   // Leaving an unfinished inquiry or negotiation offers the park on the way out — Back, the bar,
   // any link that leaves this booking.
@@ -1115,7 +1122,6 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const voucherAnswerRecorded = !voucherSent || replySettled(voucherSent);
   const voucherReplyOff = (commsQuery.data?.repliesOff ?? []).includes("CONFIRMATION_VOUCHER") || voucherSent?.acknowledgementStatus === "NOT_ASKED";
 
-  const ready = readyToConfirm && reserveExtras.length === 0;
   // A no-show says so — the imported ones sit EXPIRED at the end, and read "Expired" (2026-09-18).
   // Since 2026-10-01 the ending itself is on the row, so this reads the same words the lists do
   // (the stage could not say: the cancellation routes wipe it to TERMINAL), and adds what the
@@ -1185,6 +1191,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
         .map((c) => ({ label: tripItemLabel(together.stayNoOf(o.id), c.label), met: false, card: c.card, todo: c.todo ? tripItemLabel(together.stayNoOf(o.id), c.todo) : undefined }));
     });
   const setUpOtherItems = otherStayItems(s3Readiness);
+  // Viewed together, Reserve signs for every stay, so it waits for every stay (2026-11-09).
+  const ready = readyToConfirm && reserveExtras.length === 0 && otherStayItems(confirmReadiness).length === 0;
 
   const preconds0: Precondition[] = sealed
     ? []

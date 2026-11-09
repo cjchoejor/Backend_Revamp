@@ -14,18 +14,21 @@
  */
 import { payerChoiceWord, payerPartyOf } from "@/lib/ds/payer-words";
 import { StayDates } from "@/components/ds/stay-dates";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { isValidElement, useEffect, useMemo, useRef, useState } from "react";
+import { useMutation, useQueries, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button, Chip, Refusal } from "@/design-system";
 import { useSession } from "@/hooks/use-session";
-import { useBookingRooms } from "@/hooks/use-booking-rooms";
+import { quietRoomsByNumber, useBookingRooms } from "@/hooks/use-booking-rooms";
+import { getBookingRooms } from "@/lib/api/booking-rooms";
+import { getPaymentStatus } from "@/lib/api/reservation-setup";
+import type { TripProforma, TripQuotation } from "@/lib/api/trip-papers";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
 import { recipientHint, useInvoiceRecipient } from "@/hooks/use-invoice-recipient";
 import { usePaymentStatus } from "@/hooks/use-payment-status";
 import { useStaffNames } from "@/hooks/use-desk-data";
 import { acknowledgeMultiBooking, resendConfirmationVoucher, verifyConference } from "@/lib/api/confirmation";
-import { getBillingSummary, getEntryTrace, getJourneySummary, replySettled, type EntryCommunication } from "@/lib/api/entries";
+import { getBillingSummary, getEntryTrace, getJourneySummary, listEntryCommunications, replySettled, type EntryCommunication } from "@/lib/api/entries";
 import { listSameGuestBookings } from "@/lib/api/guest-bookings";
 import { HeldPaperRow, HeldPapersCard, useHeldDocuments } from "@/components/ds/workspace/held-papers";
 import { confirmReadiness, reservedThisPass } from "@/lib/desk/workspace";
@@ -38,6 +41,8 @@ import type { EntryDetail, PaymentStatusSummary, QuotationSummary } from "@/type
 import { PaymentsButton } from "./payments-button";
 import { useStaysTogether } from "./s2-together";
 import { TripVoucherCard, useTripVoucher } from "./s4-trip-voucher";
+import { useTripQuotation } from "./s2-trip-quotation";
+import { useTripProforma } from "./s3-trip-proforma";
 import { DsDialog, FactBox, FactLine, Facts, Fact, Live, OnRecord, PaperDrawer, SendPaperPanel, StepCanvas, StepCard, Tool, AnswerLine, useReplyAsked, atLeast, currentPassStart, goToStepCard, latestDispatched, toastRefusal, useCommunications, useFinishWhenDone, useRefreshEntry, useStepMode, useStepPane, words, type FactState, type PaperRef, NightsChoice, NotSentChip } from "./kit";
 import { BookingOtherWays } from "./s4-other-ways";
 import { roomsHeldWord } from "./s2-shared";
@@ -184,7 +189,20 @@ export function S4Reserve({
         </>
       ) : (
         // Before the click (restored 2026-10-29): what Reserve will sign, each fact with its Fix.
-        <BeforeYouReserve entry={entry} goToStep={goToStep} reserve={reserve} onOpenItems={onOpenItems} />
+        // Viewed together it is every stay's list, as Reserve signs for every stay (2026-11-09).
+        together.deciding ? (
+          <span className="meta">Reading the stays…</span>
+        ) : (
+          <BeforeYouReserve
+            entry={entry}
+            stays={together.active ? [entry, ...together.others].sort((a, b) => together.stayNoOf(a.id) - together.stayNoOf(b.id)) : [entry]}
+            stayNoOf={together.stayNoOf}
+            stayLabel={together.label}
+            goToStep={goToStep}
+            reserve={reserve}
+            onOpenItems={onOpenItems}
+          />
+        )
       )}
       <BookingOtherWays
         entry={entry}
@@ -254,6 +272,10 @@ type Line = {
   state: FactState;
   fix?: number;
   action?: React.ReactNode;
+  /** Viewed together, each stay says this for itself even when the words match. */
+  perStay?: boolean;
+  /** Viewed together, this line names each stay. */
+  merged?: boolean;
 };
 
 const KNOWN = [
@@ -267,32 +289,73 @@ const KNOWN = [
   "A contact on file",
 ];
 
-function BeforeYouReserve({
-  entry,
-  goToStep,
-  reserve,
-  onOpenItems,
-}: {
-  entry: EntryDetail;
-  goToStep: (n: number) => void;
-  reserve: { onClick: () => void; ready: boolean; reason?: string } | null;
-  onOpenItems?: (items: string[]) => void;
-}) {
-  // A room the system chose and may still move reads "Deluxe Double · room 1" until Arrival.
-  const roomByNo = useBookingRooms(entry).byNumber;
+/** Everything the list needs to know about one stay, read the same way one stay's page reads it. */
+type StayFactsRead = {
+  pay: PaymentStatusSummary | undefined;
+  comms: EntryCommunication[] | null;
+  repliesOff: string[];
+  journey: Awaited<ReturnType<typeof getJourneySummary>> | null;
+  billing: Awaited<ReturnType<typeof getBillingSummary>> | null;
+  trace: TraceItem[];
+  overlap: Awaited<ReturnType<typeof listSameGuestBookings>>["reserveOverlap"] | null;
+  roomByNo: Map<string, string>;
+};
+
+function useStayFactReads(stays: EntryDetail[]): StayFactsRead[] {
   const { session } = useSession();
-  const { past } = useStepMode();
-  const clock = useHotelClock(60_000);
-  const tz = clock.tz;
-  const pay = usePaymentStatus(entry.id, { enabled: !!entry.folio }).data;
-  const comms = useCommunications(entry.id).data?.items ?? null;
-  const journey = useJourney(entry.id).data ?? null;
-  const billing = useBilling(entry).data ?? null;
-  const trace = useTrace(entry.id).data?.items ?? [];
-  const asked = useRequestWords(entry, session?.displayName ?? session?.username ?? "the desk");
+  const pays = useQueries({
+    queries: stays.map((s) => ({ queryKey: ["payment-status", s.id], queryFn: () => getPaymentStatus(session!, s.id), enabled: !!session && !!s.folio, retry: false })),
+  });
+  const comms = useQueries({
+    queries: stays.map((s) => ({ queryKey: ["entry-communications", s.id], queryFn: () => listEntryCommunications(session!, s.id), enabled: !!session })),
+  });
+  const journeys = useQueries({
+    queries: stays.map((s) => ({ queryKey: ["journey-summary", s.id], queryFn: () => getJourneySummary(session!, s.id), enabled: !!session })),
+  });
+  const billings = useQueries({
+    queries: stays.map((s) => ({ queryKey: ["billing-summary", s.id, s.updatedAt ?? ""], queryFn: () => getBillingSummary(session!, s.id), enabled: !!session })),
+  });
+  const traces = useQueries({
+    queries: stays.map((s) => ({ queryKey: ["entry-trace", s.id], queryFn: () => getEntryTrace(session!, s.id, 80), enabled: !!session })),
+  });
+  const overlaps = useQueries({
+    queries: stays.map((s) => ({ queryKey: ["guest-bookings", s.id, "reserve", s.updatedAt], queryFn: () => listSameGuestBookings(session!, s.id), enabled: !!session })),
+  });
+  const rooms = useQueries({
+    queries: stays.map((s) => ({ queryKey: ["booking-rooms", s.id, s.updatedAt ?? ""], queryFn: () => getBookingRooms(session!, s.id), enabled: !!session, staleTime: 15_000 })),
+  });
+  return stays.map((_, i) => ({
+    pay: pays[i]?.data,
+    comms: comms[i]?.data?.items ?? null,
+    repliesOff: comms[i]?.data?.repliesOff ?? [],
+    journey: journeys[i]?.data ?? null,
+    billing: billings[i]?.data ?? null,
+    trace: traces[i]?.data?.items ?? [],
+    overlap: overlaps[i]?.data?.reserveOverlap ?? null,
+    roomByNo: quietRoomsByNumber(rooms[i]?.data),
+  }));
+}
+
+type StayFacts = {
+  lines: Line[];
+  hold: EntryDetail["committedHold"] | null;
+  holdOk: boolean;
+  holdWord: string | null;
+  holdCount: number;
+  overlapOpen: boolean;
+  conferenceOpen: boolean;
+};
+
+/** One stay's facts: what Reserve would sign for it. Nothing here is worked out on the desk. */
+function stayFacts(
+  entry: EntryDetail,
+  read: StayFactsRead,
+  ctx: { tz: string; past: boolean; fom: boolean; many: boolean; onOverlap: (e: EntryDetail) => void; onVerify: (e: EntryDetail) => void },
+): StayFacts {
+  const { pay, comms, journey, billing, trace, overlap, roomByNo } = read;
+  const { tz, past, fom, many } = ctx;
   const since = currentPassStart(entry);
   const cur = billing?.currency ?? "BTN";
-
   const checks = confirmReadiness(entry, {
     paymentSatisfied: pay?.satisfied,
     totalReceived: pay?.totalReceived ?? null,
@@ -301,7 +364,7 @@ function BeforeYouReserve({
   });
   const check = (prefix: string) => checks.find((c) => c.label.startsWith(prefix));
   const metOr = (prefix: string, dflt = true) => check(prefix)?.met ?? dflt;
-  const proformaReplyAsked = useReplyAsked(entry.id, "PROFORMA_INVOICE");
+  const proformaReplyAsked = !read.repliesOff.includes("PROFORMA_INVOICE");
 
   const lines: Line[] = [];
 
@@ -332,7 +395,7 @@ function BeforeYouReserve({
     fix: 2,
   });
 
-  /* the parties and the rate */
+  /* the parties and the rate — viewed together, the figures are the trip's (added below) */
   const party = journey?.s1Inquiry.commercialContext;
   const guest = entry.guestProfile ?? entry.inquiry?.guestProfile ?? null;
   const guestName = [guest?.title, guest?.firstName, guest?.lastName].filter(Boolean).join(" ") || guest?.displayName || "the guest";
@@ -343,8 +406,8 @@ function BeforeYouReserve({
     value: quote ? (
       <>
         <b>{party?.partyName ?? "Direct"}</b> for {guestName}
-        {jq?.nightlyRate != null && sameQuote ? ` · ${money(jq.nightlyRate, jq.currency ?? cur)} / night` : ""}
-        {billing?.stayTotal.amount != null ? ` · ${money(billing.stayTotal.amount, cur)} for the stay` : ""}
+        {!many && jq?.nightlyRate != null && sameQuote ? ` · ${money(jq.nightlyRate, jq.currency ?? cur)} / night` : ""}
+        {!many && billing?.stayTotal.amount != null ? ` · ${money(billing.stayTotal.amount, cur)} for the stay` : ""}
       </>
     ) : (
       "the price comes with the quotation"
@@ -399,6 +462,7 @@ function BeforeYouReserve({
     who: hold ? `placed ${fmtStamp(hold.placedAt, tz)}${holdJ?.placedBy ? ` · ${holdJ.placedBy}` : ""}` : undefined,
     state: holdOk ? "on" : "missing",
     fix: 3,
+    perStay: true,
   });
 
   /* the terms disclosed */
@@ -469,18 +533,9 @@ function BeforeYouReserve({
   /* conference verification — a gate the backend applies at the click */
   const conference = entry.useType === "CONFERENCE";
   const conferenceDone = trace.some((t) => t.eventType === "CONFERENCE.VERIFIED");
-  const [verifyOpen, setVerifyOpen] = useState(false);
-  const [overlapOpen, setOverlapOpen] = useState(false);
-  const fom = atLeast(session?.actorLevel, "L2");
   // The guest's other reserved booking over these nights — what Reserve asks the FOM about
   // (Policy 13), read the gate's own way (2026-10-29). Said here with its act, only when it is so.
-  const overlapQ = useQuery({
-    queryKey: ["guest-bookings", entry.id, "reserve", entry.updatedAt],
-    queryFn: () => listSameGuestBookings(session!, entry.id),
-    enabled: !!session,
-  });
-  const overlap = overlapQ.data?.reserveOverlap ?? null;
-  const overlapOpenItem = !!overlap && !overlap.acknowledged;
+  const overlapOpen = !!overlap && !overlap.acknowledged;
   if (overlap) {
     lines.push({
       key: "overlap",
@@ -490,6 +545,7 @@ function BeforeYouReserve({
         : `${overlap.entryId} is reserved over these nights (${fmtStay(overlap.checkInDate, overlap.checkOutDate)})`,
       who: overlap.acknowledged ? "acknowledged by the FOM" : "the FOM says whether both are meant before Reserve",
       state: overlap.acknowledged ? "on" : "missing",
+      perStay: true,
       action:
         overlap.acknowledged || past ? undefined : (
           <Button
@@ -497,7 +553,7 @@ function BeforeYouReserve({
             state={fom ? "default" : "inert"}
             title={fom ? undefined : "needs the FOM"}
             reason={fom ? undefined : "The FOM's call"}
-            onClick={() => setOverlapOpen(true)}
+            onClick={() => ctx.onOverlap(entry)}
           >
             Acknowledge the overlap
           </Button>
@@ -511,13 +567,177 @@ function BeforeYouReserve({
       value: conferenceDone ? "venue, catering and AV verified" : "venue, catering and AV not yet verified",
       who: conferenceDone ? "by the FOM" : "the FOM verifies it before Reserve",
       state: conferenceDone ? "on" : "missing",
+      perStay: true,
       action: conferenceDone || past ? undefined : (
-        <Button kind="secondary" compact state={fom ? "default" : "inert"} title={fom ? undefined : "needs the FOM"} onClick={() => setVerifyOpen(true)}>
+        <Button kind="secondary" compact state={fom ? "default" : "inert"} title={fom ? undefined : "needs the FOM"} onClick={() => ctx.onVerify(entry)}>
           Verify
         </Button>
       ),
     });
   }
+
+  return { lines, hold, holdOk, holdWord, holdCount: holdRooms.length, overlapOpen, conferenceOpen: conference && !conferenceDone };
+}
+
+type StayGroup = { entry: EntryDetail; stayNo: number; read: StayFactsRead; facts: StayFacts };
+
+/** The words a line says, so two stays that say the same thing are said once. */
+function nodeText(n: React.ReactNode): string {
+  if (n === null || n === undefined || typeof n === "boolean") return "";
+  if (typeof n === "string" || typeof n === "number") return String(n);
+  if (Array.isArray(n)) return n.map(nodeText).join("");
+  if (isValidElement(n)) return nodeText((n.props as { children?: React.ReactNode }).children);
+  return "";
+}
+
+const WORST_FIRST: FactState[] = ["missing", "waiting", "word", "on", "system"];
+
+/**
+ * One row per fact, whichever stays it is about (2026-11-09, operator: "here in this page, it should
+ * be showing for both of the stays together"). A fact both stays share is said once; one that differs
+ * names each stay on a line of its own inside the row.
+ */
+function mergeStayLines(groups: StayGroup[]): Line[] {
+  const keys: string[] = [];
+  for (const g of groups) for (const l of g.facts.lines) if (!keys.includes(l.key)) keys.push(l.key);
+  return keys.map((key) => {
+    const rows = groups.flatMap((g) => {
+      const line = g.facts.lines.find((l) => l.key === key);
+      return line ? [{ stayNo: g.stayNo, line }] : [];
+    });
+    const first = rows[0]!.line;
+    const same = rows.length === groups.length && !first.perStay && rows.every((r) => r.line.state === first.state && nodeText(r.line.value) === nodeText(first.value));
+    if (same) return first;
+    const label = rows.map((r) => r.line.label).reduce((a, b) => (b.length < a.length ? b : a));
+    return {
+      key,
+      label,
+      merged: true,
+      state: WORST_FIRST.find((s) => rows.some((r) => r.line.state === s)) ?? first.state,
+      fix: rows.find((r) => r.line.state === "missing" && r.line.fix)?.line.fix,
+      value: (
+        <span className="fact-stays">
+          {rows.map(({ stayNo, line }) => (
+            <span key={stayNo} className={`fs ${line.state}`} data-stay-fact={stayNo}>
+              <span className="no">Stay {stayNo}</span>
+              <span className="val">
+                {line.value}
+                {line.who ? <span className="who">{line.who}</span> : null}
+              </span>
+              {line.action ? <span className="act">{line.action}</span> : null}
+            </span>
+          ))}
+        </span>
+      ),
+    };
+  });
+}
+
+/** Viewed together the trip's own papers and sums stand in, every figure the server's. */
+function withTripFacts(lines: Line[], groups: StayGroup[], quote: TripQuotation | undefined, proforma: TripProforma | undefined, cur: string, tz: string): Line[] {
+  const allOn = (key: string) => groups.every((g) => g.facts.lines.find((l) => l.key === key)?.state === "on");
+  const q = quote?.current?.upToDate ? quote.current : null;
+  const p = proforma?.current?.upToDate ? proforma.current : null;
+  const tripTotal = proforma?.total ?? quote?.total ?? null;
+  const stayTotals = groups.map((g) => `Stay ${g.stayNo} ${money(g.read.billing?.stayTotal.amount ?? null, cur)}`).join(" · ");
+  const answered = (at: string | null) => (at ? " · the guest's answer recorded" : "");
+  const sentWho = (c: NonNullable<TripQuotation["current"]>) => (c.sentAt ? `sent ${fmtStamp(c.sentAt, tz)}${c.sentTo ? ` to ${c.sentTo}` : ""}` : "sending it is optional");
+  return lines.map((l) => {
+    if (l.key === "quote" && q && allOn("quote")) {
+      return { ...l, label: "Quotation", merged: false, value: `${q.number} · ${q.sentAt ? `sent${answered(q.answeredAt)}` : QUOTE_WORD.DRAFT}`, who: sentWho(q) };
+    }
+    if (l.key === "proforma" && p && allOn("proforma")) {
+      return {
+        ...l,
+        label: "Proforma",
+        merged: false,
+        value: p.sentAt ? (
+          `${p.number} · sent${p.sentTo ? ` to ${p.sentTo}` : ""}${answered(p.answeredAt)}`
+        ) : (
+          <>
+            {p.number} <NotSentChip />
+          </>
+        ),
+        who: sentWho(p),
+      };
+    }
+    if (l.key === "rate") {
+      const trip = tripTotal ? `${money(tripTotal, cur)} for the trip` : null;
+      if (l.merged) return { ...l, who: [trip, stayTotals].filter(Boolean).join(" · ") };
+      return {
+        ...l,
+        value: (
+          <>
+            {l.value}
+            {trip ? ` · ${trip}` : ""}
+          </>
+        ),
+        who: (
+          <>
+            {stayTotals}
+            {l.who ? <> · {l.who}</> : null}
+          </>
+        ),
+      };
+    }
+    if (l.key === "advance" && l.merged && proforma?.advanceAsked != null) {
+      return {
+        ...l,
+        value: (
+          <>
+            <span className="fact-trip" data-trip-advance>
+              <b>The trip</b> {money(proforma.received, cur)} received of {money(proforma.advanceAsked, cur)}
+            </span>
+            {l.value}
+          </>
+        ),
+      };
+    }
+    return l;
+  });
+}
+
+function BeforeYouReserve({
+  entry,
+  stays,
+  stayNoOf,
+  stayLabel,
+  goToStep,
+  reserve,
+  onOpenItems,
+}: {
+  entry: EntryDetail;
+  /** This stay alone, or every stay viewed together, in the trip's order. */
+  stays: EntryDetail[];
+  stayNoOf: (id: string) => number;
+  /** "Stays 1 and 2" */
+  stayLabel: string;
+  goToStep: (n: number) => void;
+  reserve: { onClick: () => void; ready: boolean; reason?: string } | null;
+  onOpenItems?: (items: string[]) => void;
+}) {
+  const { session } = useSession();
+  const { past } = useStepMode();
+  const clock = useHotelClock(60_000);
+  const tz = clock.tz;
+  const many = stays.length > 1;
+  const reads = useStayFactReads(stays);
+  const tripQuote = useTripQuotation(entry, { enabled: many });
+  const tripProforma = useTripProforma(entry, { enabled: many });
+  // What only the desk can know is read off the enquiry's notes, which every stay of a trip shares.
+  const asked = useRequestWords(entry, session?.displayName ?? session?.username ?? "the desk");
+  const fom = atLeast(session?.actorLevel, "L2");
+  const [verifyFor, setVerifyFor] = useState<EntryDetail | null>(null);
+  const [overlapFor, setOverlapFor] = useState<EntryDetail | null>(null);
+  const cur = reads[0]?.billing?.currency ?? "BTN";
+
+  const groups: StayGroup[] = stays.map((s, i) => ({
+    entry: s,
+    stayNo: stayNoOf(s.id),
+    read: reads[i]!,
+    facts: stayFacts(s, reads[i]!, { tz, past, fom, many, onOverlap: setOverlapFor, onVerify: setVerifyFor }),
+  }));
+  const lines = many ? withTripFacts(mergeStayLines(groups), groups, tripQuote.data, tripProforma.data, cur, tz) : groups[0]!.facts.lines;
 
   const missing = lines.filter((l) => l.state === "missing");
   const done = lines.filter((l) => l.state !== "missing");
@@ -541,9 +761,11 @@ function BeforeYouReserve({
     />
   );
 
+  const named = (g: StayGroup, item: string) => (many ? `Stay ${g.stayNo}: ${item}` : item);
+  const overlapOpenItem = groups.some((g) => g.facts.overlapOpen);
   const extraOpen = [
-    ...(conference && !conferenceDone ? ["The conference verified by the FOM"] : []),
-    ...(overlapOpenItem ? ["The guest's other booking acknowledged by the FOM"] : []),
+    ...groups.filter((g) => g.facts.conferenceOpen).map((g) => named(g, "The conference verified by the FOM")),
+    ...groups.filter((g) => g.facts.overlapOpen).map((g) => named(g, "The guest's other booking acknowledged by the FOM")),
     ...(openWords ? [`${openWords === 1 ? "One thing" : `${openWords} things`} only you can know, said`] : []),
   ].join("|");
   useEffect(() => {
@@ -562,39 +784,62 @@ function BeforeYouReserve({
       : reserve && !reserve.ready
         ? reserve.reason ?? "the list at the foot of the page names what is left"
         : null;
+  const parked = groups.filter((g) => g.entry.status === "PARKED");
 
   // How long is left on the block Move to Reserve placed, on the page where it matters
-  // (2026-11-05, operator: "reserve the rooms before the time frame ends").
-  const blockLeft = hold && holdOk ? new Date(hold.expiresAt).getTime() - clock.now : null;
-  const blockNotice =
-    past || entry.currentStage !== "S3" || entry.status !== "ACTIVE" ? null : blockLeft != null && blockLeft > 0 ? (
-      <div className={`notice ${blockLeft < 10 * 60_000 ? "block-soon" : "next"}`} role="status" data-block-notice style={{ marginBottom: 10 }}>
+  // (2026-11-05, operator: "reserve the rooms before the time frame ends"). Viewed together, the
+  // first to run out is the one that counts, and a stay with no block running says so by name.
+  const inPlay = past ? [] : groups.filter((g) => g.entry.currentStage === "S3" && g.entry.status === "ACTIVE");
+  const blockEnd = (g: StayGroup) => (g.facts.hold && g.facts.holdOk ? new Date(g.facts.hold.expiresAt).getTime() : null);
+  const runningOn = (g: StayGroup) => {
+    const end = blockEnd(g);
+    return end !== null && end > clock.now;
+  };
+  const stopped = inPlay.filter((g) => !runningOn(g));
+  const stayTag = (g: StayGroup) => (many ? `Stay ${g.stayNo} · ` : "");
+  let blockNotice: React.ReactNode = null;
+  if (inPlay.length && !stopped.length) {
+    const ends = inPlay.map((g) => blockEnd(g)!);
+    const first = Math.min(...ends);
+    const left = first - clock.now;
+    const one = inPlay.find((g) => blockEnd(g) === first)!;
+    const firstAt = fmtDateTime(new Date(first).toISOString(), tz);
+    const oneTime = Math.max(...ends) - first < 60_000;
+    blockNotice = (
+      <div className={`notice ${left < 10 * 60_000 ? "block-soon" : "next"}`} role="status" data-block-notice style={{ marginBottom: 10 }}>
         <span>
           <b>
-            {holdWord ?? "The rooms"} {holdRooms.length === 1 ? "is" : "are"} blocked until {fmtDateTime(hold!.expiresAt, tz)} · {span(blockLeft)} left.
+            {many ? `The rooms of ${stayLabel} are blocked ${oneTime ? `until ${firstAt}` : `— the first until ${firstAt}`}` : `${one.facts.holdWord ?? "The rooms"} ${one.facts.holdCount === 1 ? "is" : "are"} blocked until ${firstAt}`} · {span(left)} left.
           </b>{" "}
           Reserve the booking before then. If the time ends first, the FOM and GM are told and they decide.
         </span>
       </div>
-    ) : hold?.state === "PLACED" ? (
-      <div className="notice block-soon block-ended" role="alert" data-block-notice style={{ marginBottom: 10 }}>
-        <span>
-          <b className="crit-tag">Critical</b> <b>This block ended at {fmtDateTime(hold.expiresAt, tz)}. The rooms are still held.</b> The FOM and GM have been told, and Reserve waits for what they decide.
-        </span>
-        <Button kind="secondary" compact onClick={() => goToStep(3)}>
-          Back to Set up
-        </Button>
-      </div>
-    ) : (
-      <div className="notice block-soon" role="alert" data-block-notice style={{ marginBottom: 10 }}>
-        <span>
-          <b>The rooms are not blocked.</b> {blockLeft != null ? "The block time has passed." : hold ? "The block ran out or was released." : null} Back at Set up, Move to Reserve blocks them again.
-        </span>
-        <Button kind="secondary" compact onClick={() => goToStep(3)}>
-          Back to Set up
-        </Button>
-      </div>
     );
+  } else if (stopped.length) {
+    blockNotice = stopped.map((g) => {
+      const hold = g.facts.hold;
+      const end = blockEnd(g);
+      return hold?.state === "PLACED" ? (
+        <div key={g.entry.id} className="notice block-soon block-ended" role="alert" data-block-notice style={{ marginBottom: 10 }}>
+          <span>
+            <b className="crit-tag">Critical</b> <b>{stayTag(g)}This block ended at {fmtDateTime(hold.expiresAt, tz)}. The rooms are still held.</b> The FOM and GM have been told, and Reserve waits for what they decide.
+          </span>
+          <Button kind="secondary" compact onClick={() => goToStep(3)}>
+            Back to Set up
+          </Button>
+        </div>
+      ) : (
+        <div key={g.entry.id} className="notice block-soon" role="alert" data-block-notice style={{ marginBottom: 10 }}>
+          <span>
+            <b>{stayTag(g)}The rooms are not blocked.</b> {end !== null ? "The block time has passed." : hold ? "The block ran out or was released." : null} Back at Set up, Move to Reserve blocks them again.
+          </span>
+          <Button kind="secondary" compact onClick={() => goToStep(3)}>
+            Back to Set up
+          </Button>
+        </div>
+      );
+    });
+  }
 
   return (
     <>
@@ -607,10 +852,10 @@ function BeforeYouReserve({
         status={
           inertWhy ? (
             <span className="warn-ink">{inertWhy}</span>
-          ) : entry.status === "PARKED" ? (
-            <span className="warn-ink">Parked — resume the booking to reserve it</span>
+          ) : parked.length ? (
+            <span className="warn-ink">{many ? `${parked.map((g) => `Stay ${g.stayNo}`).join(" and ")} parked — resume to reserve` : "Parked — resume the booking to reserve it"}</span>
           ) : reserve ? (
-            <span className="ok-ink">Everything is on record — Reserve the booking</span>
+            <span className="ok-ink">Everything is on record{many ? ` for ${stayLabel}` : ""} — Reserve the booking</span>
           ) : undefined
         }
       >
@@ -622,8 +867,8 @@ function BeforeYouReserve({
         ))}
       </StepCard>
 
-      <ConferenceVerifyDialog entry={entry} open={verifyOpen} onClose={() => setVerifyOpen(false)} />
-      <OverlapDialog entry={entry} open={overlapOpen} onClose={() => setOverlapOpen(false)} />
+      {verifyFor ? <ConferenceVerifyDialog entry={verifyFor} open onClose={() => setVerifyFor(null)} /> : null}
+      {overlapFor ? <OverlapDialog entry={overlapFor} open onClose={() => setOverlapFor(null)} /> : null}
     </>
   );
 }
@@ -651,8 +896,11 @@ function advanceLine(pay: PaymentStatusSummary | undefined, met: boolean | null,
         : pay.creditExtensionActive
           ? `${money(pay.totalReceived, cur)} received of ${money(pay.requiredAmount, cur)} · the rest on credit up to ${money(pay.ceilingAmount, cur)}`
           : `${money(pay.totalReceived, cur)} received of ${money(pay.requiredAmount, cur)}`,
-      who: [last ? `last payment ${fmtStamp(last.receivedAt, tz)}` : null, planWords].filter(Boolean).join(" · ") || undefined,
+      who:
+        [(pay.coveredByTrip ?? 0) > 0 ? `${money(pay.coveredByTrip, cur)} covered by the trip's payment` : null, last ? `last payment ${fmtStamp(last.receivedAt, tz)}` : null, planWords].filter(Boolean).join(" · ") ||
+        undefined,
       state: "on",
+      perStay: true,
     };
   }
   return {
@@ -662,6 +910,7 @@ function advanceLine(pay: PaymentStatusSummary | undefined, met: boolean | null,
     who: planWords ?? (pay.totalReceived > 0 ? `${money(pay.totalReceived, cur)} received so far` : "nothing received yet"),
     state: "missing",
     fix: 3,
+    perStay: true,
   };
 }
 

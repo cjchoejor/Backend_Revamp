@@ -92,6 +92,12 @@
 .ds .fact.line .v .who { display: block; margin-left: 0; color: var(--ink-3); font-size: var(--t-meta); }
 .ds .fact.line.missing .v, .ds .fact.line.word .v { color: var(--warning); }
 .ds .fact.line .r { justify-self: end; }
+/* Before you reserve, the stays viewed together: one row per fact, each stay on a line of its own. */
+.ds .fact-stays { display: grid; gap: 6px; }
+.ds .fact-stays .fs { display: grid; grid-template-columns: 52px minmax(0, 1fr) auto; align-items: baseline; gap: 0 8px; }
+.ds .fact-stays .no { font-weight: 600; color: var(--ink-2); white-space: nowrap; }
+.ds .fact.line.missing .fact-stays .fs:not(.missing) .val { color: var(--ink); }
+.ds .fact-trip { display: block; margin-bottom: 6px; }
 .ds .warn-ink { color: var(--warning); }
 .ds .ok-ink { color: var(--success); }
 .ds .stop-ink { color: var(--danger); font-weight: 600; }

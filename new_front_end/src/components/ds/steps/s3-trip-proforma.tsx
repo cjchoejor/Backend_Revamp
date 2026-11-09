@@ -22,13 +22,13 @@ import { tripStamp } from "@/components/ds/steps/s2-together";
  * advance, the trip's sums (all the server's), and Make · Preview · Send · the answer · a payment
  * for the trip. The stay's own proforma above stays its own.
  */
-export function useTripProforma(entry: EntryDetail) {
+export function useTripProforma(entry: EntryDetail, opts?: { enabled?: boolean }) {
   const { session } = useSession();
   return useQuery({
     queryKey: ["trip-proforma", entry.id, tripStamp(entry)],
     placeholderData: (prev) => prev,
     queryFn: () => getTripProforma(session!, entry.id),
-    enabled: !!session,
+    enabled: !!session && opts?.enabled !== false,
   });
 }
 
