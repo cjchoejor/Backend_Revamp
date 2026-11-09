@@ -201,6 +201,8 @@ export type TripPreviewStayInput = {
   roomNightDates?: Record<string, string[]>;
   /** The quotation it is saved on: its own rows are read instead of the table's. */
   quotationId?: string | null;
+  /** Past Negotiation: the quotation this stay's bill reads, found by the server. */
+  billQuotation?: boolean;
 };
 
 /** One stay of the trip's price: as quoted, or as the table stands. */

@@ -113,7 +113,7 @@ export type TripPaymentPreview = {
   mode: "FIRST_STAY_FIRST" | "AS_TYPED";
   problem: string | null;
   sharesTotal: string;
-  stays: Array<{ stayNo: number; entryId: string; number: string | null; dueNow: string; canTake: string; share: string }>;
+  stays: Array<{ stayNo: number; entryId: string; number: string | null; dueNow: string; canTake: string; overAsked?: string; share: string }>;
   tripDueNow: string;
   tripCanTake: string;
 };
@@ -149,6 +149,8 @@ export type TripPaymentStay = {
   dueNow: string;
   canTake: string;
   share?: string;
+  /** How far the share is from the advance still asked: + more, - less. */
+  overAsked?: string;
 };
 
 export type TripPaymentStanding = {

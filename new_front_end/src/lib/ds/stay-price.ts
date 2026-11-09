@@ -26,6 +26,7 @@ import type { PickPricing, TripPickPricing } from "@/lib/api/availability";
 import { currentPassConfigs } from "@/lib/desk/workspace";
 import { cleanPicks, usePickPricing, useTripPickPricing, type BillNight } from "@/components/ds/steps/s1-bill";
 import { useTripAtInquiry } from "@/components/ds/steps/s1-trip-shared";
+import { tripStamp, useStaysTogether } from "@/components/ds/steps/s2-together";
 import type { AvailabilityOptionSelected, EntryDetail } from "@/types/api";
 
 export type PriceDraft =
@@ -154,6 +155,17 @@ export function useStayPrice(entry: EntryDetail | null, billing: EntryBillingSum
     placeholderData: (prev) => prev,
     staleTime: 30_000,
   });
+  // Past Negotiation the stays viewed together read as the quotations their bills read (2026-11-09,
+  // operator: "it is not showing the price for the trip but one of the stays").
+  const quoted = useStaysTogether(live && (entry?.currentStage === "S3" || entry?.currentStage === "S4") ? entry : null);
+  const quotedBody = quoted.active && entry ? [entry.id, ...quoted.others.map((o) => o.id)].map((id) => ({ entryId: id, roomCompositions: [], billQuotation: true })) : null;
+  const tripQuoted = useQuery({
+    queryKey: ["stay-price-trip-quoted", entryId, tripStamp(entry)],
+    queryFn: () => previewTripQuotations(session!, entryId, quotedBody!),
+    enabled: !!session && !!quotedBody && quotedBody.length > 1,
+    placeholderData: (prev) => prev,
+    staleTime: 30_000,
+  });
   const tableTrip =
     together && tripTable.data
       ? {
@@ -162,7 +174,9 @@ export function useStayPrice(entry: EntryDetail | null, billing: EntryBillingSum
           unsaved: together.some((s) => !s.saved),
           loading: tripTable.isFetching,
         }
-      : null;
+      : quotedBody && tripQuoted.data
+        ? { data: tripQuoted.data, stayNoOf: quoted.stayNoOf, unsaved: false, loading: tripQuoted.isFetching }
+        : null;
 
   const picksDraft = live && entry?.currentStage === "S1" && draft?.kind === "PICKS" && cleanPicks(draft.perNight).length > 0 ? draft : null;
   const atInquiryOrNegotiation = live && (entry?.currentStage === "S1" || entry?.currentStage === "S2");

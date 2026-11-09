@@ -47,6 +47,7 @@ import { isHousekeeping, traceWords } from "@/lib/ds/trace-words";
 import type { TraceEvent } from "@/lib/trace/humanize";
 import { StayBand, TripPapersShelf, useTripStays } from "./trip-papers-shelf";
 import { useStaysTogether } from "@/components/ds/steps/s2-together";
+import { TripMoneyReceived } from "@/components/ds/steps/s3-money";
 import { Choice, DsDialog, Fact, Facts, PapersCard, ReasonDialog, StepCard, SubTabs, Tool, atLeast, toastRefusal, useRefreshEntry, NotSentChip } from "@/components/ds/steps/kit";
 import { FolioDocumentsBlock } from "@/components/desk/workspace/folio-documents";
 import { useHeldDocuments } from "@/components/ds/workspace/held-papers";
@@ -110,6 +111,9 @@ export function ChargesView({
   const pay = usePaymentStatus(entry.id, { enabled: !!entry.folio });
   // The price as it stands — the table or the picks while nothing is saved (2026-10-12).
   const sp = useStayPrice(entry, billing);
+  // Viewing the stays together, Money received is the trip's (2026-11-09).
+  const together = useStaysTogether(entry);
+  const tripMoney = together.active && entry.currentStage !== "S2";
   const cur = billing?.currency ?? "BTN";
   const st = billing?.stayTotal ?? null;
   const fo = billing?.folio ?? null;
@@ -301,9 +305,13 @@ export function ChargesView({
               key: "money",
               label: <>
                   Money received
-                  {payments.length ? <span className="n">{payments.length}</span> : null}
+                  {tripMoney ? null : payments.length ? <span className="n">{payments.length}</span> : null}
                 </>,
-              content: (
+              content: tripMoney ? (
+                <StepCard title="Money received">
+                  <TripMoneyReceived entry={entry} stays={[entry, ...together.others].sort((a, b) => together.stayNoOf(a.id) - together.stayNoOf(b.id))} stayNoOf={together.stayNoOf} tz={tz} />
+                </StepCard>
+              ) : (
                 <>
         <StepCard
           title="Money received"

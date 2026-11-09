@@ -334,6 +334,7 @@ export function S3SetUp({
             elevated={elevated}
             tz={tz}
             askAdvance={askAdvance}
+            onAskAdvanceSeen={() => setAskAdvance(0)}
             onPaymentRecorded={() => setBlockAsk((n) => n + 1)}
             onChanged={changedAll}
           />
@@ -348,6 +349,7 @@ export function S3SetUp({
             nowMs={clock.now}
             roomNos={roomNos}
             blockAsk={blockAsk}
+            onBlockAskSeen={() => setBlockAsk(0)}
             onChanged={changedAll}
           />
         </>
@@ -403,6 +405,7 @@ export function S3SetUp({
         tz={tz}
         bill={{ proforma: currentProforma, dispatched, answered, notAsked: replyNotAsked }}
         askAdvance={askAdvance}
+        onAskAdvanceSeen={() => setAskAdvance(0)}
         onPaymentRecorded={() => setBlockAsk((n) => n + 1)}
         onChanged={changed}
       />
@@ -417,6 +420,7 @@ export function S3SetUp({
         roomIds={sealedRoomIds}
         roomNos={roomNos}
         blockAsk={blockAsk}
+        onBlockAskSeen={() => setBlockAsk(0)}
         onChanged={changed}
       />
         </>
@@ -878,6 +882,7 @@ function TogetherHold({
   nowMs,
   roomNos,
   blockAsk,
+  onBlockAskSeen,
   onChanged,
 }: {
   entry: EntryDetail;
@@ -890,6 +895,7 @@ function TogetherHold({
   nowMs: number;
   roomNos: Map<string, string>;
   blockAsk: number;
+  onBlockAskSeen: () => void;
   onChanged: () => void;
 }) {
   const { session } = useSession();
@@ -899,7 +905,10 @@ function TogetherHold({
   const [releaseOpen, setReleaseOpen] = useState(false);
   const allHeld = stays.every((st) => !!heldOf(st));
   useEffect(() => {
-    if (!blockAsk || allHeld) return;
+    if (!blockAsk) return;
+    // Answered once: this card is drawn afresh whenever the view changes (2026-11-09).
+    onBlockAskSeen();
+    if (allHeld) return;
     if (flow.on) flow.open("hold");
     window.requestAnimationFrame(() => window.requestAnimationFrame(() => goToStepCard("hold")));
     setAskBlock(true);
@@ -1016,6 +1025,7 @@ function HoldCard({
   roomIds,
   roomNos,
   blockAsk,
+  onBlockAskSeen,
   onChanged,
 }: {
   entry: EntryDetail;
@@ -1028,6 +1038,7 @@ function HoldCard({
   roomNos: Map<string, string>;
   /** Counts the payments just recorded here: each one asks about blocking the rooms. */
   blockAsk: number;
+  onBlockAskSeen: () => void;
   onChanged: () => void;
 }) {
   const { session } = useSession();
@@ -1067,7 +1078,9 @@ function HoldCard({
     setFlash(Date.now());
   };
   useEffect(() => {
-    if (!blockAsk || hold) return;
+    if (!blockAsk) return;
+    onBlockAskSeen();
+    if (hold) return;
     if (flow.on) flow.open("hold");
     window.requestAnimationFrame(() => window.requestAnimationFrame(() => goToStepCard("hold")));
     setAskBlock(true);

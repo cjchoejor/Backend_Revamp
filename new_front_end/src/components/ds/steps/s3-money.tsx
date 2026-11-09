@@ -36,6 +36,7 @@ import { STEP_NAMES, stepNoOfStage } from "@/lib/ds/steps";
 import type { AdvancePaymentPlanSummary, EntryDetail, InvoiceSummary, PaymentStatusSummary, RecordedPayment } from "@/types/api";
 import { listEntryCommunications, replySettled } from "@/lib/api/entries";
 import { TripPaymentDialog, useTripProforma } from "./s3-trip-proforma";
+import type { TripProforma } from "@/lib/api/trip-papers";
 import { useRefreshEntry, ActionRow, Choice, DsDialog, Fact, Facts, Live, NotSentChip, SeeRow, StepCard, currentPassStart, goToStepCard, latestDispatched, toastRefusal, useFinishWhenDone, useStepFlow } from "./kit";
 import { hotelLocalToIso, isoToHotelLocal } from "./s2-shared";
 import { Help, HelpHere } from "@/components/ds/help";
@@ -101,6 +102,7 @@ export function PaymentPlanCard({
   tz,
   bill,
   askAdvance = 0,
+  onAskAdvanceSeen,
   onPaymentRecorded,
   onChanged,
   setUp = true,
@@ -115,6 +117,8 @@ export function PaymentPlanCard({
   bill: { proforma: InvoiceSummary | null; dispatched: boolean; answered: boolean; notAsked?: boolean };
   /** Raised when the desk says yes to an advance on setting who pays: the advance box opens. */
   askAdvance?: number;
+  /** The ask was acted on, so a redraw of this card does not open the box again (2026-11-09). */
+  onAskAdvanceSeen?: () => void;
   /**
    * A payment came in and the rooms were blocked by it (`until`), or not (`null`) — the hold card
    * then asks whether to set a block time, or shows itself to block them by hand (2026-10-28).
@@ -135,7 +139,11 @@ export function PaymentPlanCard({
   const folio = entry.folio ?? null;
   const [open, setOpen] = useState<null | "advance" | "pay" | "credit">(null);
   useEffect(() => {
-    if (askAdvance > 0) setOpen("advance");
+    if (askAdvance > 0) {
+      setOpen("advance");
+      onAskAdvanceSeen?.();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [askAdvance]);
   // Money in, or credit extended, finishes the section once it covers the advance (2026-10-28).
   const finish = useFinishWhenDone("money");
@@ -361,6 +369,11 @@ export function PaymentPlanCard({
             <Fact k="Received" meta={(status.installments?.length ?? 0) > 1 ? `in ${status.installments!.length} payments` : undefined}>
               <span className="money">{money(status.totalReceived, cur)}</span> <span className="meta">of {money(status.requiredAmount, cur)}</span>
             </Fact>
+            {(status.coveredByTrip ?? 0) > 0 ? (
+              <Fact k="Covered by the trip" meta="paid for the trip, held on another stay's bill">
+                <span className="money">{money(status.coveredByTrip, cur)}</span>
+              </Fact>
+            ) : null}
             <Fact k="The remainder" meta={status.shortfall > 0 && plan ? (dueWords(plan.plan, plan.balanceDueAt) ?? undefined) : undefined}>
               {status.shortfall > 0 ? <span className="money">{money(status.shortfall, cur)}</span> : "nothing left to pay on the advance"}
             </Fact>
@@ -1344,6 +1357,113 @@ function CreditDialog({
  * the advance (a percent of each stay's own quotation, or an amount typed for each), a payment shared
  * between the stays, the sign-off and credit. Every figure is the server's.
  */
+/**
+ * What each stay is asked and holds, the trip's sums (the server's), and every payment on record
+ * (2026-11-09, operator: "already recorded is not showing in stays 1 and 2 together").
+ */
+function TripMoneyTables({
+  list,
+  trip,
+  planWords,
+  tz,
+}: {
+  list: AdvanceStay[];
+  trip: TripProforma | undefined;
+  planWords?: (q: AdvancePaymentPlanSummary | null | undefined) => string | null;
+  tz: string;
+}) {
+  const payments = list
+    .flatMap((x) => (x.status?.installments ?? []).map((p) => ({ ...p, stayNo: x.stayNo })))
+    .sort((a, b) => a.receivedAt.localeCompare(b.receivedAt) || a.stayNo - b.stayNo);
+  return (
+    <>
+      <table className="table compact">
+        <thead>
+          <tr>
+            <th>Stay</th>
+            <th style={{ textAlign: "right" }}>Asked</th>
+            <th style={{ textAlign: "right" }}>Received</th>
+            <th style={{ textAlign: "right" }}>Still to come</th>
+            {planWords ? <th>How they&rsquo;ll pay</th> : null}
+          </tr>
+        </thead>
+        <tbody>
+          {list.map((x) => (
+            <tr key={x.entry.id} className="static">
+              <td className="nowrap">Stay {x.stayNo}</td>
+              <td className="money" style={{ textAlign: "right" }}>
+                {x.status ? money(x.status.requiredAmount) : "\u2014"}
+              </td>
+              <td className="money" style={{ textAlign: "right" }}>
+                {x.status ? money(x.status.totalReceived) : "\u2014"}
+              </td>
+              <td className="money" style={{ textAlign: "right" }}>
+                {x.status ? money(x.status.shortfall) : "\u2014"}
+                {(x.status?.coveredByTrip ?? 0) > 0 ? <span className="sub ok-ink">{money(x.status!.coveredByTrip)} covered by the trip</span> : null}
+              </td>
+              {planWords ? <td>{planWords(x.status?.paymentPlan) ?? <span className="dash">not recorded yet</span>}</td> : null}
+            </tr>
+          ))}
+          {trip?.advanceAsked ? (
+            <tr className="static">
+              <td className="nowrap">
+                <b>The trip</b>
+              </td>
+              <td className="money" style={{ textAlign: "right" }}>
+                <b>{money(trip.advanceAsked)}</b>
+              </td>
+              <td className="money" style={{ textAlign: "right" }}>
+                <b>{money(trip.received)}</b>
+              </td>
+              <td className="money" style={{ textAlign: "right" }}>
+                <b>{trip.dueNow != null ? money(trip.dueNow) : "\u2014"}</b>
+              </td>
+              {planWords ? <td /> : null}
+            </tr>
+          ) : null}
+        </tbody>
+      </table>
+      {payments.length ? (
+        <table className="table compact" style={{ marginTop: 10 }} data-trip-payments>
+          <thead>
+            <tr>
+              <th>Stay</th>
+              <th>Received</th>
+              <th>At</th>
+              <th>Note</th>
+              <th style={{ textAlign: "right" }}>Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            {payments.map((p) => (
+              <tr key={p.id} className="static">
+                <td className="nowrap">Stay {p.stayNo}</td>
+                <td className="nowrap">{fmtStamp(p.receivedAt, tz)}</td>
+                <td>{p.stage ? STEP_NAMES[stepNoOfStage(p.stage) - 1] : <span className="dash">\u2014</span>}</td>
+                <td>{p.notes || <span className="dash">\u2014</span>}</td>
+                <td className="money" style={{ textAlign: "right" }}>
+                  {money(p.amount)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : null}
+    </>
+  );
+}
+
+/** The booking file's Money received while the stays are viewed together. */
+export function TripMoneyReceived({ entry, stays, stayNoOf, tz }: { entry: EntryDetail; stays: EntryDetail[]; stayNoOf: (id: string) => number; tz: string }) {
+  const { session } = useSession();
+  const statusReads = useQueries({
+    queries: stays.map((st) => ({ queryKey: ["payment-status", st.id], queryFn: () => getPaymentStatus(session!, st.id), enabled: !!session && !!st.folio, retry: false })),
+  });
+  const trip = useTripProforma(entry).data;
+  const list: AdvanceStay[] = stays.map((st, i) => ({ entry: st, stayNo: stayNoOf(st.id), status: statusReads[i]?.data }));
+  return <TripMoneyTables list={list} trip={trip} tz={tz} />;
+}
+
 export function TogetherPaymentPlan({
   entry,
   stays,
@@ -1352,6 +1472,7 @@ export function TogetherPaymentPlan({
   elevated,
   tz,
   askAdvance,
+  onAskAdvanceSeen,
   onPaymentRecorded,
   onChanged,
 }: {
@@ -1362,13 +1483,18 @@ export function TogetherPaymentPlan({
   elevated: boolean;
   tz: string;
   askAdvance: number;
+  onAskAdvanceSeen: () => void;
   onPaymentRecorded: () => void;
   onChanged: () => void;
 }) {
   const { session } = useSession();
   const [open, setOpen] = useState<null | "advance" | "pay" | "credit">(null);
   useEffect(() => {
-    if (askAdvance > 0) setOpen("advance");
+    if (askAdvance > 0) {
+      setOpen("advance");
+      onAskAdvanceSeen();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [askAdvance]);
   const finish = useFinishWhenDone("money");
   const flow = useStepFlow();
@@ -1412,7 +1538,7 @@ export function TogetherPaymentPlan({
   const stepState = (i: number): MoneyStepState => (stepsDone[i] ? "done" : i === firstOpen ? "now" : "later");
 
   const canReconcile = (x: AdvanceStay) =>
-    !!x.entry.folio && !x.entry.folio.advancePaymentReconciliationComplete && x.status?.mayReconcile !== false && ((x.status?.totalReceived ?? 0) > 0 || ["DIRECT_BILL", "GOVERNMENT"].includes(x.entry.folio?.billingModel ?? ""));
+    !!x.entry.folio && !x.entry.folio.advancePaymentReconciliationComplete && x.status?.mayReconcile !== false && ((x.status?.totalReceived ?? 0) > 0 || (x.status?.coveredByTrip ?? 0) > 0 || ["DIRECT_BILL", "GOVERNMENT"].includes(x.entry.folio?.billingModel ?? ""));
   const reconcileTargets = list.filter(canReconcile);
   const blockedBy = list.find((x) => x.status?.mayReconcile === false);
   const reconcileLock = reconcileTargets.length ? null : reconciled ? "already signed off" : blockedBy ? `This is for ${blockedBy.status?.reconcileBy ?? "the GM or an admin"}.` : "nothing received yet";
@@ -1465,51 +1591,7 @@ export function TogetherPaymentPlan({
           </div>
         </BindingBox>
       ) : (
-        <table className="table compact">
-          <thead>
-            <tr>
-              <th>Stay</th>
-              <th style={{ textAlign: "right" }}>Asked</th>
-              <th style={{ textAlign: "right" }}>Received</th>
-              <th style={{ textAlign: "right" }}>Still to come</th>
-              <th>How they&rsquo;ll pay</th>
-            </tr>
-          </thead>
-          <tbody>
-            {list.map((x) => (
-              <tr key={x.entry.id} className="static">
-                <td className="nowrap">Stay {x.stayNo}</td>
-                <td className="money" style={{ textAlign: "right" }}>
-                  {x.status ? money(x.status.requiredAmount) : "—"}
-                </td>
-                <td className="money" style={{ textAlign: "right" }}>
-                  {x.status ? money(x.status.totalReceived) : "—"}
-                </td>
-                <td className="money" style={{ textAlign: "right" }}>
-                  {x.status ? money(x.status.shortfall) : "—"}
-                </td>
-                <td>{planWords(x.status?.paymentPlan) ?? <span className="dash">not recorded yet</span>}</td>
-              </tr>
-            ))}
-            {trip?.advanceAsked ? (
-              <tr className="static">
-                <td className="nowrap">
-                  <b>The trip</b>
-                </td>
-                <td className="money" style={{ textAlign: "right" }}>
-                  <b>{money(trip.advanceAsked)}</b>
-                </td>
-                <td className="money" style={{ textAlign: "right" }}>
-                  <b>{money(trip.received)}</b>
-                </td>
-                <td className="money" style={{ textAlign: "right" }}>
-                  <b>{trip.dueNow != null ? money(trip.dueNow) : "—"}</b>
-                </td>
-                <td />
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
+        <TripMoneyTables list={list} trip={trip} planWords={planWords} tz={tz} />
       )}
 
       <Live>

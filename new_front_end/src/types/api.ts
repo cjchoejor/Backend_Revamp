@@ -339,6 +339,8 @@ export type RecordedPayment = {
 };
 
 export type PaymentStatusSummary = {
+  /** Of the advance asked, what the trip's payment covers from another stay's bill (2026-11-09). */
+  coveredByTrip?: number;
   satisfied: boolean;
   totalReceived: number;
   requiredAmount: number;
