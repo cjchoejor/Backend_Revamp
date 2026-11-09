@@ -20,6 +20,7 @@ import { RoomCountField } from "./new-inquiry-parts";
 import { Count, RoomsByNumberPick, useChangeConfiguration, type ChangeConfig } from "./s2-configuration";
 import { RoomsByType, typeOrderOf } from "./s1-by-type";
 import { toastRefusal } from "./kit";
+import { AddReturnStay } from "@/components/ds/workspace/return-stay";
 
 /** Every stay's change, each from its own hook, handed on together. */
 function StayChanges({
@@ -126,7 +127,7 @@ function StayLine({ c, stayNo, showAges }: { c: ChangeConfig; stayNo: number; sh
   );
 }
 
-function Panel({ list, stayNoOf, onClose, onChanged }: { list: ChangeConfig[]; stayNoOf: (id: string) => number; onClose: () => void; onChanged: () => void }) {
+function Panel({ first, list, stayNoOf, onClose, onChanged }: { first: EntryDetail; list: ChangeConfig[]; stayNoOf: (id: string) => number; onClose: () => void; onChanged: () => void }) {
   const noState = useRef(() => {}).current;
   const noSaveRef = useRef(() => {}).current;
   const typeOrder = useMemo(() => typeOrderOf(list[0].catalog), [list[0].catalog]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -190,9 +191,12 @@ function Panel({ list, stayNoOf, onClose, onChanged }: { list: ChangeConfig[]; s
             <p>Each stay is saved as its own change, and any quotation priced on the old configuration is retired.</p>
           </Help>
         </div>
-        <Button kind="quiet" compact onClick={onClose}>
-          Cancel
-        </Button>
+        <div className="row-acts" style={{ gap: 8 }}>
+          <AddReturnStay entry={first} />
+          <Button kind="quiet" compact onClick={onClose}>
+            Cancel
+          </Button>
+        </div>
       </div>
 
       <section>
@@ -335,7 +339,7 @@ export function ChangeStaysTogether({
       stayNoOf={stayNoOf}
       at={0}
       got={[]}
-      render={(list) => <Panel list={list} stayNoOf={stayNoOf} onClose={onClose} onChanged={onChanged} />}
+      render={(list) => <Panel first={stays[0]} list={list} stayNoOf={stayNoOf} onClose={onClose} onChanged={onChanged} />}
     />
   );
 }

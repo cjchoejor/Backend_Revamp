@@ -25,6 +25,7 @@
  * change makes untrue, and moving the provisional block to the new rooms with its original
  * deadline. Nothing here writes to the booking on its own.
  */
+import { AddReturnStay } from "@/components/ds/workspace/return-stay";
 import { StayDates } from "@/components/ds/stay-dates";
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
@@ -667,9 +668,12 @@ export function ChangeConfiguration({
             ) : null}
           </Help>
         </div>
-        <Button kind="quiet" compact onClick={onClose}>
-          Cancel
-        </Button>
+        <div className="row-acts" style={{ gap: 8 }}>
+          <AddReturnStay entry={entry} />
+          <Button kind="quiet" compact onClick={onClose}>
+            Cancel
+          </Button>
+        </div>
       </div>
 
       {/* 1 ---------------------------------------------------------------- the stay */}

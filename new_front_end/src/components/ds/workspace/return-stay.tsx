@@ -30,8 +30,12 @@ import { useHotelDay } from "@/hooks/use-hotel-day";
 import { addReturnStay, chooseFollowRooms, getTripFollow, startFollowing, stopFollowing, type FollowShortfallView, type FollowView } from "@/lib/api/entries";
 import { fmtStay, money, nightsOf, plural } from "@/lib/ds/format";
 import { stepName, stepNoOfStage } from "@/lib/ds/steps";
+import { s1Readiness, s2Readiness, s3Readiness } from "@/lib/desk/workspace";
+import { usePaymentStatus } from "@/hooks/use-payment-status";
 import { DsDialog, Overlay, StepCard, toastRefusal, useRefreshEntry } from "@/components/ds/steps/kit";
 import { useStaysTogether } from "@/components/ds/steps/s2-together";
+import { useCommunications } from "@/components/ds/steps/kit";
+import { useTripStays } from "@/components/ds/workspace/trip-papers-shelf";
 import type { EntryDetail, TripStaySummary } from "@/types/api";
 import { DateInput } from "@/components/ds/date-input";
 
@@ -119,10 +123,80 @@ export function TripStays({ entry }: { entry: EntryDetail }) {
  * it can show check in date and check out date as extra info"). With one stay it is just the number.
  * Each other stay is a link, so moving to it parks and resumes as any move between stays does.
  */
+/** What a stay still has to do at its step, as that step's own list says it. */
+function StillToDo({ stay }: { stay: EntryDetail }) {
+  const atSetUp = stay.currentStage === "S3";
+  const pay = usePaymentStatus(stay.id, { enabled: atSetUp && !!stay.folio });
+  const comms = useCommunications(stay.id).data?.items;
+  const items =
+    stay.currentStage === "S1"
+      ? s1Readiness(stay)
+      : stay.currentStage === "S2"
+        ? s2Readiness(stay)
+        : atSetUp
+          ? s3Readiness(stay, {
+              paymentSatisfied: pay.data?.satisfied,
+              totalReceived: pay.data?.totalReceived ?? null,
+              requiredAmount: pay.data?.requiredAmount ?? null,
+              communications: comms,
+              earlierAdvanceAsked: !!pay.data?.earlierAdvance?.asked,
+            })
+          : [];
+  const open = items.filter((i) => !i.met);
+  const step = stepName(stepNoOfStage(stay.currentStage));
+  if (open.length === 0) return <p className="sm">Everything at {step} is done. Open it and move it on.</p>;
+  return (
+    <>
+      <span className="meta">Still to do at {step}:</span>
+      <ul className="apart-todo">
+        {open.map((i) => (
+          <li key={i.label}>{i.label}</li>
+        ))}
+      </ul>
+    </>
+  );
+}
+
+/** Why the stays cannot be viewed together, and what the stays behind still have to do (2026-11-09). */
+function StaysApartDialog({ stays, stayNoOf, onClose }: { stays: EntryDetail[]; stayNoOf: (id: string) => number; onClose: () => void }) {
+  const furthest = Math.max(...stays.map((s) => stepNoOfStage(s.currentStage)));
+  return (
+    <DsDialog open onClose={onClose} closeX register="danger" width={560} title="These stays cannot be viewed together yet" footer={<Button kind="quiet" onClick={onClose}>Close</Button>}>
+      <p className="stop-ink" style={{ fontWeight: 600 }}>
+        They are not at the same step, and have not been through the same work. Bring them to {stepName(furthest)} to view them together.
+      </p>
+      <div className="apart-stays">
+        {stays.map((s) => {
+          const no = stepNoOfStage(s.currentStage);
+          return (
+            <div key={s.id} className="apart-stay">
+              <div className="apart-head">
+                <b>Stay {stayNoOf(s.id)}</b>
+                <span className="meta">{s.id}</span>
+                <span className="si-step">
+                  Step {no} · {stepName(no)}
+                </span>
+              </div>
+              <StayDates checkIn={s.checkInDate} checkOut={s.checkOutDate} />
+              {no < furthest ? (
+                <StillToDo stay={s} />
+              ) : (
+                <span className="meta">Furthest along</span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </DsDialog>
+  );
+}
+
 export function StayPicker({ entry }: { entry: EntryDetail }) {
   const trip = tripOf(entry);
   const follow = useTripFollow(entry);
   const together = useStaysTogether(entry);
+  const tripStays = useTripStays(entry);
+  const [apartOpen, setApartOpen] = useState(false);
   const [open, setOpen] = useState(false);
   const [at, setAt] = useState<{ top: number; left: number } | null>(null);
   const btnRef = useRef<HTMLButtonElement | null>(null);
@@ -162,6 +236,14 @@ export function StayPicker({ entry }: { entry: EntryDetail }) {
       </span>
     );
   }
+  // Live stays, none yet past Reserve, at different steps: together is offered, shut, and says why.
+  const liveStays = trip.stays.filter((s) => s.status === "ACTIVE" || s.status === "PARKED");
+  const apart =
+    !together.canBeTogether &&
+    liveStays.length > 1 &&
+    liveStays.every((s) => ["S1", "S2", "S3", "S4"].includes(s.currentStage ?? "")) &&
+    new Set(liveStays.map((s) => s.currentStage)).size > 1;
+  const apartStays = tripStays.stays.filter((s) => s.status === "ACTIVE" || s.status === "PARKED");
   const shortOf = new Set((follow.data?.followers ?? []).filter((f) => f.shortfall).map((f) => f.entryId));
   if (follow.data?.following?.shortfall) shortOf.add(entry.id);
   return (
@@ -199,6 +281,21 @@ export function StayPicker({ entry }: { entry: EntryDetail }) {
                 </span>
                 <span className="si-line">One table for their rooms, guests, meals and rates</span>
               </button>
+            ) : apart ? (
+              <button
+                type="button"
+                className="stay-item as-btn apart"
+                role="menuitem"
+                onClick={() => {
+                  setApartOpen(true);
+                  setOpen(false);
+                }}
+              >
+                <span className="si-head">
+                  <b>Stays together</b>
+                </span>
+                <span className="si-line">Not at the same step yet · see what is left</span>
+              </button>
             ) : null}
             {trip.stays.map((s, i) => {
               const here = s.id === entry.id;
@@ -211,6 +308,11 @@ export function StayPicker({ entry }: { entry: EntryDetail }) {
                     <b>Stay {i + 1}</b>
                     <span className="si-id">{s.id}</span>
                     {openNow ? <Chip tone="accent">open now</Chip> : null}
+                    {standing.off ? null : (
+                      <span className="si-step" title={stepName(stepNoOfStage(s.currentStage))}>
+                        Step {stepNoOfStage(s.currentStage)}
+                      </span>
+                    )}
                   </span>
                   <StayDates checkIn={s.checkInDate} checkOut={s.checkOutDate} />
                   <span className={standing.off ? "si-line stop-ink" : "si-line"}>
@@ -240,7 +342,7 @@ export function StayPicker({ entry }: { entry: EntryDetail }) {
                   {body}
                 </div>
               ) : (
-                <Link key={s.id} className="stay-item" role="menuitem" href={bookingHref(s.id)} onClick={() => together.canBeTogether && together.stayIds.includes(s.id) && together.setView("one")}>
+                <Link key={s.id} className="stay-item" role="menuitem" href={bookingHref(s.id)} data-view-alone={together.canBeTogether && together.stayIds.includes(s.id) ? "1" : undefined}>
                   {body}
                 </Link>
               );
@@ -248,6 +350,7 @@ export function StayPicker({ entry }: { entry: EntryDetail }) {
           </div>
         </Overlay>
       ) : null}
+      {apartOpen ? <StaysApartDialog stays={apartStays} stayNoOf={tripStays.stayNoOf} onClose={() => setApartOpen(false)} /> : null}
     </span>
   );
 }
@@ -343,6 +446,12 @@ function ReturnStayDialog({ entry, fromAfter, onClose }: { entry: EntryDetail; f
     onSuccess: (created) => {
       // The desk stays where it is (2026-11-03): the new stay shows in the head's list.
       refresh([["trip-follow", entry.id]]);
+      // At Inquiry the stays are set on one page, and at Negotiation in one table: nothing to ask (2026-11-09).
+      if (entry.currentStage === "S1") {
+        toast.success("The return stay is added", { description: "Its dates and rooms are on this page, beside this stay's." });
+        onClose();
+        return;
+      }
       setStage({ at: "options", created: { id: created.id, checkInDate: from, checkOutDate: to } });
     },
     onError: (e) => toastRefusal(e, "The return stay was not added."),
@@ -401,7 +510,7 @@ function ReturnStayDialog({ entry, fromAfter, onClose }: { entry: EntryDetail; f
         <div className="rs-opts">
           <button type="button" className="rs-opt" disabled={same.isPending} onClick={() => same.mutate()}>
             <b>{same.isPending ? "Copying…" : "Same as this stay"}</b>
-            <span>The guests, children&apos;s ages, rooms and room types start from {entry.id}. At Negotiation both stays are set in one table, and either can still be opened alone.</span>
+            <span>The guests, children&apos;s ages, room types, meal plans, extra beds and rates start from {entry.id}. It prices them for its own dates, and at Negotiation both stays are set in one table.</span>
           </button>
           <button type="button" className="rs-opt" disabled={same.isPending} onClick={different}>
             <b>Different settings</b>

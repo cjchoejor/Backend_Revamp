@@ -99,11 +99,6 @@ export function TripQuotationCard({ entry, editable, inFlow = false }: { entry: 
           </Button>
         ) : null}
       </div>
-      {t.versions.length > 1 ? (
-        <p className="meta" style={{ marginTop: 8 }}>
-          Earlier: {t.versions.filter((v) => v.state !== "LIVE").map((v) => v.number).join(" · ")}
-        </p>
-      ) : null}
       <PaperDrawer paper={paper} onClose={() => setPaper(null)} />
       {sendOpen && cur ? <TripSendDialog entry={entry} tripId={cur.id} label={label} onClose={() => setSendOpen(false)} onSent={after} /> : null}
       {answerOpen && cur ? <TripAnswerDialog tripId={cur.id} onClose={() => setAnswerOpen(false)} onDone={after} /> : null}

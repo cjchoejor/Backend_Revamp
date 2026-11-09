@@ -2296,6 +2296,15 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .desk-root .rct-live-trip { border-color: var(--accent); background: var(--accent-soft); }
 .ds .stay-item.as-btn { width: 100%; text-align: left; font: inherit; border: 0; background: transparent; cursor: pointer; }
 .ds .stay-item.as-btn:hover { background: var(--surface-2); }
+/* Which step each stay is at, on the right of its line; together shut while they are apart (2026-11-09). */
+.ds .si-step { margin-left: auto; padding: 1px 8px; border-radius: 3px; background: var(--accent-soft); color: var(--accent); font-size: var(--t-sm); font-weight: 700; white-space: nowrap; }
+.ds .stay-item.as-btn.apart { background: var(--danger-soft); box-shadow: inset 3px 0 0 var(--danger); color: var(--danger); }
+.ds .stay-item.as-btn.apart:hover { background: var(--danger-soft); filter: brightness(0.97); }
+.ds .stay-item.apart .si-line { color: var(--danger); font-weight: 600; }
+.ds .apart-stays { display: grid; gap: 10px; margin-top: 12px; }
+.ds .apart-stay { display: grid; gap: 6px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; }
+.ds .apart-head { display: flex; align-items: center; gap: 8px; }
+.ds .apart-todo { margin: 0; padding-left: 18px; font-size: var(--t-sm); display: grid; gap: 2px; }
 .ds .desk-root .rct-t tbody tr.nightband.stayhead .rce-night select { max-width: 170px; }
 
 /* The stays' one table, kept short (2026-11-09, operator: "the table looks very overwhelming"): each

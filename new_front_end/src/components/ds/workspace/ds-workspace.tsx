@@ -899,6 +899,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
       if (!to) return;
       e.preventDefault();
       e.stopPropagation();
+      if (a.dataset.viewAlone) together.setView("one");
       if (switchingRef.current) return;
       switchingRef.current = true;
       void (async () => {
@@ -2208,15 +2209,15 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                   )}
                 </div>
                 <div className="fstay">
-                  {together.active ? (
+                  {together.active || (tripAtInquiry.combined && tripAtInquiry.loaded) ? (
                     <>
-                      {[entry, ...together.others]
-                        .sort((a, b) => together.stayNoOf(a.id) - together.stayNoOf(b.id))
+                      {[entry, ...(together.active ? together.others : tripAtInquiry.others)]
+                        .sort((a, b) => (together.active ? together.stayNoOf(a.id) - together.stayNoOf(b.id) : tripAtInquiry.stayNoOf(a.id) - tripAtInquiry.stayNoOf(b.id)))
                         .map((e) => {
                           const n = nightsOf(e.checkInDate, e.checkOutDate);
                           return (
                             <div key={e.id} className="fstay-row">
-                              <b>Stay {together.stayNoOf(e.id)}</b>
+                              <b>Stay {together.active ? together.stayNoOf(e.id) : tripAtInquiry.stayNoOf(e.id)}</b>
                               <StayDates checkIn={e.checkInDate} checkOut={e.checkOutDate} />
                               <span className="fstay-n">
                                 {n ? plural(n, "night") : "No dates yet"} · {e.numberOfRooms ? plural(e.numberOfRooms, "room") : "Rooms not set"}

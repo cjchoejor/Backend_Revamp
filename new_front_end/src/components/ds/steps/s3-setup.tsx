@@ -45,7 +45,7 @@ import { guestNameOf } from "@/lib/ds/status";
 import { payerChoiceWord, payerPartyOf } from "@/lib/ds/payer-words";
 import { blockWindowWords, fmtDateTime, fmtStamp, hotelFormParts, money, plural } from "@/lib/ds/format";
 import { optionSelectedRoomIds, type EntryDetail, type InvoiceSummary, type PaymentStatusSummary } from "@/types/api";
-import { replySettled } from "@/lib/api/entries";
+import { renegotiateTrip, replySettled } from "@/lib/api/entries";
 import { EarlierAdvanceQuestion } from "./s3-earlier-advance";
 import { AnswerLine, useReplyAsked, Choice, DsDialog, Fact, Facts, Live, OnRecord, PaperDrawer, ReasonDialog, SeeRow, SendPaperPanel, StepCanvas, StepCard, atLeast, currentPassStart, toastRefusal, useCommunications, useRefreshEntry, useStepMode, words, type PaperRef, type ChangeBookingItem, ChangeBookingMenu, StageActs, useFlowUnsaved, useFinishWhenDone, useStepFlow, goToStepCard, revealCard, useOpenAlsoWay, useStepPane, OtherWaysTabs, InlineWay, ShutWay, parkTab, NightsChoice, NotSentChip } from "./kit";
 import { TripProformaCard, useTripProforma } from "./s3-trip-proforma";
@@ -201,13 +201,19 @@ export function S3SetUp({
     onError: (e) => toastRefusal(e, "The booking could not be cancelled"),
   });
   const reentryM = useMutation({
-    mutationFn: (v: { to: "S2" | "S1"; reason: string }) =>
-      v.to === "S2"
-        ? initiateS3ReEntryToS2(session!, entry.id, { reason: v.reason })
-        : initiateS3ReEntryToS1(session!, entry.id, { reason: v.reason }),
-    onSuccess: (_res, v) => {
-      toast.success(v.to === "S2" ? "A new pass is open at Negotiation" : "A new pass is open at Inquiry");
-      refresh(extraKeys);
+    mutationFn: async (v: { to: "S2" | "S1"; reason: string }): Promise<{ notMoved?: Array<{ entryId: string; message: string }> }> => {
+      if (v.to === "S1") {
+        await initiateS3ReEntryToS1(session!, entry.id, { reason: v.reason });
+        return {};
+      }
+      if (together.active) return renegotiateTrip(session!, entry.id, v.reason);
+      await initiateS3ReEntryToS2(session!, entry.id, { reason: v.reason });
+      return {};
+    },
+    onSuccess: (res, v) => {
+      toast.success(v.to === "S1" ? "A new pass is open at Inquiry" : together.active ? `${together.label} are back at Negotiation` : "A new pass is open at Negotiation");
+      for (const n of res.notMoved ?? []) toast.warning(`${n.entryId} stayed at Set up — ${n.message}`);
+      refresh([...extraKeys, ...together.others.map((o) => ["entry", o.id])]);
       goToStep(v.to === "S2" ? 2 : 1);
     },
     onError: (e) => toastRefusal(e, "A new pass could not be opened"),
@@ -235,7 +241,9 @@ export function S3SetUp({
         {
           key: "renegotiate",
           label: "Renegotiate the price",
-          note: "Back to Negotiation for a fresh quotation. The hold is released and the proforma replaced.",
+          note: together.active
+            ? `${together.label} go back to Negotiation for fresh quotations. Each stay's hold is released and its proforma replaced.`
+            : "Back to Negotiation for a fresh quotation. The hold is released and the proforma replaced.",
           onSelect: editable && elevated ? () => openAlsoWay("renegotiate") : undefined,
           reason: !editable ? notNow : elevated ? undefined : "The FOM's call",
         },
@@ -399,10 +407,14 @@ export function S3SetUp({
                         open
                         onClose={() => undefined}
                         busy={reentryM.isPending}
-                        title="Renegotiate the price"
-                        caseLines={["A new pass opens at Negotiation"]}
-                        lead="This pass is sealed as it stands. The block is released, the proforma replaced, and a fresh quotation is made in the new pass."
-                        confirmLabel="Open a new pass"
+                        title={together.active ? `Renegotiate the price · ${together.label.toLowerCase()}` : "Renegotiate the price"}
+                        caseLines={[together.active ? "A new pass opens at Negotiation for each stay" : "A new pass opens at Negotiation"]}
+                        lead={
+                          together.active
+                            ? "Each stay's pass is sealed as it stands. Each block is released, each proforma replaced, and a fresh quotation is made for each stay in its new pass."
+                            : "This pass is sealed as it stands. The block is released, the proforma replaced, and a fresh quotation is made in the new pass."
+                        }
+                        confirmLabel={together.active ? "Open a new pass for each" : "Open a new pass"}
                         placeholder="agent asked for a better rate"
                         onConfirm={(r) => reentryM.mutate({ to: "S2", reason: r })}
                       />

@@ -41,7 +41,7 @@ import { RoomCompositionPlanner } from "@/components/desk/workspace/room-composi
 import { ChangeConfiguration, DecidedConfigurationChanges, WaitingConfigurationChange } from "./s2-configuration";
 import { fmtDateTime, fmtStamp, money, plural } from "@/lib/ds/format";
 import type { EntryDetail, QuotationSummary, SpeculativeHoldSummary } from "@/types/api";
-import { Choice, latestDispatched, useCommunications, useReplyAsked, DsDialog, Live, Notice, OtherWaysTabs, ChangeBookingMenu, StageActs, useOpenAlsoWay, PaperDrawer, QuotationSendDialog, ReasonDialog, SeeRow, StepCanvas, StepCard, Tool, atLeast, toastRefusal, type PaperRef, useBedPlan, useOpenFileTab, useRefreshEntry, useStepFlow, useFlowCard, anchorFor, revealCard, words, parkTab, declineTab } from "./kit";
+import { Choice, latestDispatched, useCommunications, useReplyAsked, DsDialog, Live, Notice, OtherWaysTabs, ChangeBookingMenu, StageActs, useOpenAlsoWay, NotSentChip, PaperDrawer, QuotationSendDialog, ReasonDialog, SeeRow, StepCanvas, StepCard, Tool, atLeast, toastRefusal, type PaperRef, useBedPlan, useOpenFileTab, useRefreshEntry, useStepFlow, useFlowCard, anchorFor, revealCard, words, parkTab, declineTab } from "./kit";
 import { usePublishPriceDraft } from "@/lib/ds/stay-price";
 import { Help } from "@/components/ds/help";
 import type { ChangeBookingItem } from "./kit";
@@ -717,7 +717,7 @@ export function S2Negotiation({
       {/* "The quote" card was removed (2026-10-12, operator: "keep the internal note in the pop up
           so that there is only one send button"). The quotation's own Send… is the send; the
           internal note is typed in the send dialog and kept as a note filed with the quotation. */}
-      {allQuotations.length > 1 ? <QuoteHistoryCard entry={entry} quotations={allQuotations} tz={tz} /> : null}
+      {together.active ? <TripQuoteHistoryCard entry={entry} tz={tz} /> : allQuotations.length > 1 ? <QuoteHistoryCard entry={entry} quotations={allQuotations} tz={tz} /> : null}
 
       <CompetingClaimsCard entryId={entry.id} />
       {/* Other ways as sub-tabs (2026-10-12, operator), each panel what its button used to open. */}
@@ -1152,6 +1152,53 @@ function QuotationCard({
 }
 
 /* ------------------------------------------------------------------ earlier versions */
+
+/** Viewing the stays together, the versions are the trip's own (2026-11-09); each stay's are on its page. */
+function TripQuoteHistoryCard({ entry, tz }: { entry: EntryDetail; tz: string }) {
+  const q = useTripQuotation(entry);
+  const [paper, setPaper] = useState<PaperRef | null>(null);
+  const versions = [...(q.data?.versions ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  if (versions.length < 2) return null;
+  return (
+    <StepCard title="Every version of the quotation" meta="The trip's own quotation, with the total each version was made at. Each stay's own versions are on its own page, from the list at the top.">
+      <table className="table compact">
+        <thead>
+          <tr>
+            <th>Quotation</th>
+            <th>Standing</th>
+            <th style={{ textAlign: "right" }}>Total</th>
+            <th />
+          </tr>
+        </thead>
+        <tbody>
+          {versions.map((v) => {
+            const live = v.state === "LIVE";
+            return (
+              <tr key={v.id} className="static" style={live ? undefined : { opacity: 0.7 }}>
+                <td>
+                  {v.number}
+                  <span className="sub">{fmtStamp(v.createdAt, tz)}</span>
+                </td>
+                <td>{!live ? <Chip tone="quiet">replaced</Chip> : v.sentAt ? <Chip tone="success">sent</Chip> : <NotSentChip />}</td>
+                <td className="money" style={{ textAlign: "right" }}>
+                  {money(v.total)}
+                </td>
+                <td>
+                  <div className="row-acts" style={{ justifyContent: "flex-end" }}>
+                    <Button kind="quiet" compact icon="eye" onClick={() => setPaper({ kind: "trip", id: v.id, label: `The trip's quotation ${v.number}`, tripKind: "QUOTATION" })}>
+                      Preview
+                    </Button>
+                  </div>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <PaperDrawer paper={paper} onClose={() => setPaper(null)} />
+    </StepCard>
+  );
+}
 
 function QuoteHistoryCard({ entry, quotations, tz }: { entry: EntryDetail; quotations: QuotationSummary[]; tz: string }) {
   const { session } = useSession();

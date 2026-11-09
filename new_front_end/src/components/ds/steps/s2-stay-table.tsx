@@ -121,12 +121,15 @@ export function useStayTable(entry: EntryDetail, opts: { past: boolean; allowPar
   // After a re-entry it starts from the last terms in force. Read once, at the table's mount.
   // A booking split off another (2026-10-14) and never priced starts from what its rooms carried —
   // their guests, meals, extra beds and the rates they kept.
+  // Read again when the quotation changes (2026-11-09, operator: "automatically loses the
+  // configurations"): this state outlives the table, so a table opened after a save — the other view
+  // of the same stays — started from the figures before the save, and wrote them back as unsaved work.
   const seedCompositions = useMemo(
     () =>
       operativeRoomCompositions(entry) ??
       ((entry.carryOver?.compositions?.length ? entry.carryOver.compositions : null) as ReturnType<typeof operativeRoomCompositions>) ??
       undefined,
-    [entry.id], // eslint-disable-line react-hooks/exhaustive-deps
+    [entry.id, persistBasis], // eslint-disable-line react-hooks/exhaustive-deps
   );
   /**
    * What the QUOTATION is priced on right now — re-read on every refresh, unlike the seed above,
@@ -198,11 +201,12 @@ export function useStayTable(entry: EntryDetail, opts: { past: boolean; allowPar
       setDiscountValue(String(recordedDiscount.value));
       setDiscountUnit(recordedDiscount.unit);
       setDiscountBasis(recordedDiscount.basis);
-    } else if (!id && entry.carryOver?.discount?.discountPercent) {
-      // Not priced yet, split off a booking that had a percentage off: it carries.
-      setDiscountValue(String(entry.carryOver.discount.discountPercent));
-      setDiscountUnit("percent");
-      setDiscountBasis(entry.carryOver.discount.discountBasis || "negotiation");
+    } else if (!id && (entry.carryOver?.discount?.discountPercent || entry.carryOver?.discount?.discountAmount)) {
+      // Not priced yet, carrying a discount from the stay or booking it came from.
+      const carried = entry.carryOver.discount;
+      setDiscountValue(String(carried.discountPercent || carried.discountAmount));
+      setDiscountUnit(carried.discountPercent ? "percent" : "amount");
+      setDiscountBasis(carried.discountBasis || "negotiation");
     }
   }, [working, accepted, recordedDiscount]); // eslint-disable-line react-hooks/exhaustive-deps
 

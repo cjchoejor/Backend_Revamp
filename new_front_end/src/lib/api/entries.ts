@@ -1392,6 +1392,15 @@ export async function reserveTrip(session: Session, entryId: string, version?: n
   return apiRequest<{ moved: string[]; notMoved: Array<{ entryId: string; message: string }> }>(`/api/entries/${entryId}/trip/reserve`, { method: "POST", session, body: { version } });
 }
 
+/** The stays viewed together back to Negotiation for a fresh quotation; a stay refused is named. */
+export async function renegotiateTrip(session: Session, entryId: string, reason: string) {
+  return apiRequest<{ moved: string[]; notMoved: Array<{ entryId: string; message: string }> }>(`/api/entries/${entryId}/trip/renegotiate`, {
+    method: "POST",
+    session,
+    body: { reason },
+  });
+}
+
 export async function moveTripToSetUp(session: Session, entryId: string, version?: number) {
   return apiRequest<{ moved: string[]; notMoved: Array<{ entryId: string; message: string }> }>(`/api/entries/${entryId}/trip/to-set-up`, {
     method: "POST",

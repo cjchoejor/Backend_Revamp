@@ -1107,10 +1107,12 @@ export function usePersistedCompositions(props: {
       // booking has now, and is not empty (2026-10-19, operator: the table "switched to ... no meal
       // plans" after work on another screen). A copy in the old shape (a bare array) is ignored:
       // an empty or out-of-date one outranked the saved quotation and opened the grid with no meals.
+      // Copies before `v: 3` are ignored too (2026-11-09): a stay viewed alone after a save could write
+      // the figures from before it, under the new quotation, which reads as the desk's own unsaved work.
       try {
         const raw = localStorage.getItem(storeKey);
         const v = raw ? (JSON.parse(raw) as { v?: number; basis?: string; compositions?: RoomCompositionInput[] }) : null;
-        const comps = v && !Array.isArray(v) && v.v === 2 && v.basis === (props.persistBasis ?? "none") ? v.compositions : null;
+        const comps = v && !Array.isArray(v) && v.v === 3 && v.basis === (props.persistBasis ?? "none") ? v.compositions : null;
         const rooms = new Set((comps ?? []).map((c) => c.roomId));
         if (comps && comps.length > 0 && rooms.size === props.sealedRoomIds.length && props.sealedRoomIds.every((id) => rooms.has(id))) {
           snapshotRef.current = comps;
@@ -1128,7 +1130,7 @@ export function usePersistedCompositions(props: {
     if (storeKey && compositions.length > 0 && json !== lastWrittenRef.current) {
       lastWrittenRef.current = json;
       try {
-        localStorage.setItem(storeKey, JSON.stringify({ v: 2, basis: props.persistBasis ?? "none", compositions }));
+        localStorage.setItem(storeKey, JSON.stringify({ v: 3, basis: props.persistBasis ?? "none", compositions }));
       } catch {
         /* non-fatal — the edits just won't survive navigation */
       }
