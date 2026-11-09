@@ -2218,6 +2218,10 @@ model PaymentRecord {
   /// counts towards the other stays' advances (lib/trip-advance-cover.ts).
   paidForTrip Boolean @default(false)
 
+  /// One half of money moved between two stays' bills when a stay of the trip is cancelled
+  /// (2026-11-09). A money-out row and a money-in row share it; together they move no money.
+  tripTransferRef String?
+
   /// Which room / space this money settles (2026-09-09, PMS-237). Charges have carried a room
   /// since 2026-08-14 but payments never did, so "room 202 is paid, 203 still owes" could not
   /// be answered — a per-room balance is that room's charges MINUS its payments, and only the
@@ -2233,6 +2237,7 @@ model PaymentRecord {
 
   @@index([roomId])
   @@index([spaceId])
+  @@index([tripTransferRef])
   @@map("payment_records")
 }
 

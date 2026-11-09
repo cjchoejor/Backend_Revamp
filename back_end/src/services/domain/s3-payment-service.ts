@@ -4,7 +4,7 @@ import { afterProformaMadeTx } from "./proforma-validity-service.js";
 import { paymentsStillHeld, waitingRefundTotal } from "../../lib/refund-money.js";
 import { randomUUID } from "node:crypto";
 import type { PrismaClient } from "@prisma/client";
-import { InvoiceState, InvoiceType, PaymentDirection, PreArrivalTaskType, Prisma, Stage, TaskStatus } from "@prisma/client";
+import { FolioState, InvoiceState, InvoiceType, PaymentDirection, PreArrivalTaskType, Prisma, Stage, TaskStatus } from "@prisma/client";
 import { ValidationError } from "../../lib/errors.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import { enforceCreditExtensionConstraints } from "../../policies/18-credit-extension-ceiling/p42-credit-ceiling-mandatory-set.js";
@@ -130,39 +130,55 @@ export function resolveAdvancePaymentPlan(
   };
 }
 
+export type TripAdvanceStanding = TripAdvanceRow & { folioId: string; folioOpen: boolean; stage: Stage; stayNo: number };
+
+/**
+ * Each live stay of the enquiry as the trip's money sees it, in stay order. Empty unless some stay
+ * holds money paid for the trip, so a booking that never had a trip payment reads nothing more.
+ */
+export async function readTripAdvanceRows(db: PrismaClient | Prisma.TransactionClient, inquiryId: string): Promise<TripAdvanceStanding[]> {
+  const paid = await db.paymentRecord.count({ where: { paidForTrip: true, paymentDirection: PaymentDirection.IN, folio: { entry: { inquiryId } } } });
+  if (paid === 0) return [];
+  const stays = await db.entry.findMany({
+    where: { inquiryId, status: { in: ["ACTIVE", "PARKED"] } },
+    orderBy: [{ checkInDate: "asc" }, { createdAt: "asc" }],
+    select: {
+      id: true,
+      currentStage: true,
+      folio: { include: { payments: true } },
+      segments: { orderBy: { segmentNumber: "desc" }, take: 1, select: { startedAt: true } },
+    },
+  });
+  // A stay keeps its number when another is cancelled, as the desk shows it.
+  const every = await db.entry.findMany({ where: { inquiryId }, orderBy: [{ checkInDate: "asc" }, { createdAt: "asc" }], select: { id: true } });
+  const rows: TripAdvanceStanding[] = [];
+  for (const st of stays) {
+    if (!st.folio) continue;
+    const moneyIn = st.folio.payments.filter((p) => p.paymentDirection === PaymentDirection.IN);
+    const moneyOut = st.folio.payments.filter((p) => p.paymentDirection === PaymentDirection.OUT);
+    const out = sumMoneyBy(moneyOut, "amount");
+    rows.push({
+      entryId: st.id,
+      folioId: st.folio.id,
+      folioOpen: st.folio.state === FolioState.PROVISIONAL,
+      stage: st.currentStage,
+      stayNo: every.findIndex((e) => e.id === st.id) + 1,
+      asked: toDecimal(resolveOperatorAdvanceRequirement(st.folio, st.segments[0]?.startedAt ?? null) ?? 0),
+      held: maxZeroSub(sumMoneyBy(moneyIn, "amount"), out.add(await waitingRefundTotal(db, st.folio.id))),
+      paidForTrip: maxZeroSub(sumMoneyBy(moneyIn.filter((p) => p.paidForTrip), "amount"), sumMoneyBy(moneyOut.filter((p) => !!p.tripTransferRef), "amount")),
+    });
+  }
+  return rows;
+}
+
 /**
  * How much of this stay's advance the trip's payment covers (2026-11-09; lib/trip-advance-cover.ts).
- * Stays in stay order, the live ones only. Zero unless some stay of the enquiry holds money paid for
- * the trip.
  */
 export async function readTripAdvanceCover(db: PrismaClient | Prisma.TransactionClient, entryId: string): Promise<Prisma.Decimal> {
   const zero = toDecimal(0);
   const me = await db.entry.findUnique({ where: { id: entryId }, select: { inquiryId: true } });
   if (!me) return zero;
-  const paid = await db.paymentRecord.count({ where: { paidForTrip: true, paymentDirection: PaymentDirection.IN, folio: { entry: { inquiryId: me.inquiryId } } } });
-  if (paid === 0) return zero;
-  const stays = await db.entry.findMany({
-    where: { inquiryId: me.inquiryId, status: { in: ["ACTIVE", "PARKED"] } },
-    orderBy: [{ checkInDate: "asc" }, { createdAt: "asc" }],
-    select: {
-      id: true,
-      folio: { include: { payments: true } },
-      segments: { orderBy: { segmentNumber: "desc" }, take: 1, select: { startedAt: true } },
-    },
-  });
-  const rows: TripAdvanceRow[] = [];
-  for (const st of stays) {
-    if (!st.folio) continue;
-    const moneyIn = st.folio.payments.filter((p) => p.paymentDirection === PaymentDirection.IN);
-    const out = sumMoneyBy(st.folio.payments.filter((p) => p.paymentDirection === PaymentDirection.OUT), "amount");
-    rows.push({
-      entryId: st.id,
-      asked: toDecimal(resolveOperatorAdvanceRequirement(st.folio, st.segments[0]?.startedAt ?? null) ?? 0),
-      held: maxZeroSub(sumMoneyBy(moneyIn, "amount"), out.add(await waitingRefundTotal(db, st.folio.id))),
-      paidForTrip: sumMoneyBy(moneyIn.filter((p) => p.paidForTrip), "amount"),
-    });
-  }
-  return shareTripAdvanceCover(rows).get(entryId) ?? zero;
+  return shareTripAdvanceCover(await readTripAdvanceRows(db, me.inquiryId)).get(entryId) ?? zero;
 }
 
 async function computeAdvancePaymentEvaluation(

@@ -22,7 +22,7 @@ import { evaluateAdvancePaymentCondition } from "./s3-payment-service.js";
 import { buildEntryBillingSummary } from "./entry-billing-summary-service.js";
 import { recordCommunicationAcknowledgement } from "./communication-acknowledgement-service.js";
 import { combineTripPriceBlocks, tripStayDates, type TripPricePart, type TripStayDates } from "./trip-paper-prices.js";
-import { saveTripPaperVersion, sameMembers, SYSTEM_ACTOR, tripOfEntry, type Actor, type TripPaperMaker } from "./trip-paper-service.js";
+import { retireTripPaperIfStaysChanged, saveTripPaperVersion, sameMembers, SYSTEM_ACTOR, tripOfEntry, type Actor, type TripPaperMaker } from "./trip-paper-service.js";
 
 /**
  * A TRIP'S PROFORMA (2026-11-07, operator: each stay keeps its own proforma, the trip has one of its
@@ -216,7 +216,11 @@ export async function makeTripProforma(prisma: PrismaClient, entryId: string, ac
 export async function keepTripProformaInStep(prisma: PrismaClient, entryId: string) {
   try {
     const inquiryId = await tripOfEntry(prisma, entryId);
-    if (standing(await readStays(prisma, inquiryId))) return;
+    const stays = await readStays(prisma, inquiryId);
+    if (standing(stays)) {
+      await retireTripPaperIfStaysChanged(prisma, inquiryId, "PROFORMA", stays.map((s) => s.entry.id));
+      return;
+    }
     await makeTripProforma(prisma, entryId, SYSTEM_ACTOR);
   } catch (e) {
     console.error("[trip-proforma] could not be kept in step", entryId, e);

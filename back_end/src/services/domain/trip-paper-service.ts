@@ -100,6 +100,37 @@ async function readMembers(prisma: PrismaClient, inquiryId: string) {
   return stays;
 }
 
+/**
+ * A trip's paper that can't be made again and no longer names the live stays is marked replaced
+ * (2026-11-09, operator): it never names a cancelled stay as if it stood, or leaves out one added
+ * since. Called when the paper cannot be remade; when it can, the new version replaces it anyway.
+ */
+export async function retireTripPaperIfStaysChanged(prisma: PrismaClient, inquiryId: string, kind: "QUOTATION" | "PROFORMA" | "VOUCHER", liveEntryIds: string[]) {
+  const live = await prisma.tripPaper.findFirst({ where: { inquiryId, kind, state: "LIVE" } });
+  if (!live) return;
+  const named = ((live.members ?? []) as unknown as Array<{ entryId: string }>).map((m) => m.entryId);
+  if (named.length === liveEntryIds.length && named.every((id) => liveEntryIds.includes(id))) return;
+  await prisma.tripPaper.update({ where: { id: live.id }, data: { state: "SUPERSEDED" } });
+  const now = new Date();
+  for (const entryId of liveEntryIds) {
+    await prisma.traceEvent.create({
+      data: {
+        eventType: "TRIP_PAPER.REPLACED",
+        actorId: SYSTEM_ACTOR.actorId,
+        actorLevel: SYSTEM_ACTOR.actorLevel,
+        entityType: "TripPaper",
+        entityId: live.id,
+        operation: "UPDATE",
+        timestamp: now,
+        inquiryId,
+        entryId,
+        payload: { kind, number: paperNumber(live.documentNumber, live.versionNumber), reason: "STAYS_CHANGED", named, live: liveEntryIds },
+        createdBy: SYSTEM_ACTOR.actorId,
+      },
+    });
+  }
+}
+
 /** Whether the trip's quotation can be made now, and why not in words. */
 function standing(stays: Awaited<ReturnType<typeof readMembers>>) {
   if (stays.length < 2) return { canMake: false, reason: "This trip has one stay — its own quotation is the paper." };
@@ -197,7 +228,11 @@ export async function makeTripQuotation(prisma: PrismaClient, entryId: string, a
 export async function keepTripQuotationInStep(prisma: PrismaClient, entryId: string) {
   try {
     const inquiryId = await tripOfEntry(prisma, entryId);
-    if (!standing(await readMembers(prisma, inquiryId)).canMake) return;
+    const stays = await readMembers(prisma, inquiryId);
+    if (!standing(stays).canMake) {
+      await retireTripPaperIfStaysChanged(prisma, inquiryId, "QUOTATION", stays.map((s) => s.entry.id));
+      return;
+    }
     await makeTripQuotation(prisma, entryId, SYSTEM_ACTOR);
   } catch (e) {
     console.error("[trip-quotation] could not be kept in step", entryId, e);

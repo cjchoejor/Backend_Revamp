@@ -55,6 +55,8 @@ const NOT_YOURS = "Only the person who recorded it, or the FOM, can delete it.";
 const mayDelete = (recordedBy: string | null, actor: Actor) => actor.actorLevel !== "L1" || recordedBy === actor.actorId;
 
 /** The payments the desk lists, newest first, each saying whether this person may delete it. */
+const MOVED_BETWEEN_STAYS = "This money was moved between the stays when one was cancelled, so it stays.";
+
 export async function describeRecordedPayments(
   prisma: PrismaClient,
   folioId: string,
@@ -79,7 +81,7 @@ export async function describeRecordedPayments(
   const staff = byIds.length ? await prisma.staffUser.findMany({ where: { id: { in: byIds } }, select: { id: true, title: true, fullName: true } }) : [];
   const nameOf = new Map(staff.map((s) => [s.id, [s.title, s.fullName].filter(Boolean).join(" ")]));
   return allIn.map((p) => {
-    const stays = whyPaymentStays(p, folio, folio.entry!) ?? (untouched.has(p.id) ? null : refundWords);
+    const stays = (p.tripTransferRef ? MOVED_BETWEEN_STAYS : null) ?? whyPaymentStays(p, folio, folio.entry!) ?? (untouched.has(p.id) ? null : refundWords);
     const shutWhy = stays ?? (mayDelete(p.recordedBy, actor) ? null : NOT_YOURS);
     return {
       id: p.id,
@@ -119,7 +121,7 @@ export async function deleteAdvancePayment(
   const entry = folio.entry;
   if (!entry || folio.entryId !== input.entryId) throw new ValidationError("entryId/folioId mismatch");
 
-  const stays = whyPaymentStays(payment, folio, entry);
+  const stays = (payment.tripTransferRef ? MOVED_BETWEEN_STAYS : null) ?? whyPaymentStays(payment, folio, entry);
   if (stays) throw new PolicyGateBlockedError("PAYMENT_NOT_DELETABLE", stays);
   if (!mayDelete(payment.recordedBy, actor)) throw new AuthorizationError(NOT_YOURS);
 

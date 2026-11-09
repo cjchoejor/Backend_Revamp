@@ -17,7 +17,7 @@ import { quotationPaperPrices } from "./quotation-pdf-service.js";
 import { recordCommunicationAcknowledgement } from "./communication-acknowledgement-service.js";
 import { decideHeldDocument, sendHeldVoucherWithTrip } from "./held-document-service.js";
 import { tripStayDates, type TripStayDates } from "./trip-paper-prices.js";
-import { saveTripPaperVersion, sameMembers, SYSTEM_ACTOR, tripOfEntry, type Actor, type TripPaperMaker } from "./trip-paper-service.js";
+import { retireTripPaperIfStaysChanged, saveTripPaperVersion, sameMembers, SYSTEM_ACTOR, tripOfEntry, type Actor, type TripPaperMaker } from "./trip-paper-service.js";
 import { paperNumber } from "../../lib/document-numbers.js";
 
 /**
@@ -165,7 +165,11 @@ export async function makeTripVoucher(prisma: PrismaClient, entryId: string, act
 export async function keepTripVoucherInStep(prisma: PrismaClient, entryId: string) {
   try {
     const inquiryId = await tripOfEntry(prisma, entryId);
-    if (standing(await readStays(prisma, inquiryId))) return;
+    const stays = await readStays(prisma, inquiryId);
+    if (standing(stays)) {
+      await retireTripPaperIfStaysChanged(prisma, inquiryId, "VOUCHER", stays.map((s) => s.entry.id));
+      return;
+    }
     await makeTripVoucher(prisma, entryId, SYSTEM_ACTOR);
   } catch (e) {
     console.error("[trip-voucher] could not be kept in step", entryId, e);

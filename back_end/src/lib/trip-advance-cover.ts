@@ -32,3 +32,84 @@ export function shareTripAdvanceCover(rows: TripAdvanceRow[]): Map<string, Prism
   }
   return cover;
 }
+
+export type TripMove = { from: string; to: string; amount: Prisma.Decimal };
+
+/**
+ * ONE POT WHEN A STAY OF A TRIP IS CANCELLED (2026-11-09, operator). Money. What the desk recorded for
+ * the trip is one pot, wherever it was shared to. The moves put the money where it would have been
+ * had each stay held its own advance, so the stay's ordinary cancellation (a charge, the rest
+ * refunded) then comes out right:
+ *   1. a stay covered by another's money brings its covered share onto its own bill;
+ *   2. what the cancelled stay holds beyond its charge goes first to the advances the other stays
+ *      still lack, and only the rest is refunded;
+ *   3. if its bill still cannot pay the charge, the rest of the charge comes from money paid for the
+ *      trip on the other bills: the charge is collected even if that leaves another stay short.
+ * Only money paid for the trip ever moves. `rows` are in stay order, the bills that can still take
+ * or give money. A waived charge is passed as zero.
+ */
+export function planTripCancelMoves(rows: TripAdvanceRow[], cancelledId: string, charge: Prisma.Decimal): TripMove[] {
+  const found = rows.find((r) => r.entryId === cancelledId);
+  if (!found || rows.length < 2) return [];
+  const x = { ...found };
+  const others = rows.filter((r) => r.entryId !== cancelledId).map((r) => ({ ...r }));
+  const moves: TripMove[] = [];
+  const shift = (from: TripAdvanceRow, to: TripAdvanceRow, amount: Prisma.Decimal) => {
+    moves.push({ from: from.entryId, to: to.entryId, amount });
+    from.held = from.held.sub(amount);
+    from.paidForTrip = from.paidForTrip.sub(amount);
+    to.held = to.held.add(amount);
+    to.paidForTrip = to.paidForTrip.add(amount);
+  };
+
+  let want = shareTripAdvanceCover(rows).get(cancelledId) ?? toDecimal(0);
+  for (const r of others) {
+    if (want.lte(0)) break;
+    const t = Prisma.Decimal.min(want, Prisma.Decimal.min(maxZeroSub(r.held, r.asked), r.paidForTrip));
+    if (t.gt(0)) {
+      shift(r, x, t);
+      want = want.sub(t);
+    }
+  }
+
+  const covered = shareTripAdvanceCover(others);
+  let giveable = Prisma.Decimal.min(maxZeroSub(x.held, charge), x.paidForTrip);
+  for (const r of others) {
+    if (giveable.lte(0)) break;
+    const t = Prisma.Decimal.min(giveable, maxZeroSub(r.asked, r.held.add(covered.get(r.entryId) ?? toDecimal(0))));
+    if (t.gt(0)) {
+      shift(x, r, t);
+      giveable = giveable.sub(t);
+    }
+  }
+
+  let missing = maxZeroSub(charge, x.held);
+  for (const r of [...others].reverse()) {
+    if (missing.lte(0)) break;
+    const t = Prisma.Decimal.min(missing, Prisma.Decimal.min(r.held, r.paidForTrip));
+    if (t.gt(0)) {
+      shift(r, x, t);
+      missing = missing.sub(t);
+    }
+  }
+  return moves;
+}
+
+/** Several stays cancelled one after another, in the order given: what each would hold, and the moves. */
+export function simulateTripCancels(rows: TripAdvanceRow[], picks: Array<{ entryId: string; charge: Prisma.Decimal }>) {
+  let live = rows.map((r) => ({ ...r }));
+  return picks.map((p) => {
+    const moves = planTripCancelMoves(live, p.entryId, p.charge);
+    for (const m of moves) {
+      const from = live.find((r) => r.entryId === m.from)!;
+      const to = live.find((r) => r.entryId === m.to)!;
+      from.held = from.held.sub(m.amount);
+      from.paidForTrip = from.paidForTrip.sub(m.amount);
+      to.held = to.held.add(m.amount);
+      to.paidForTrip = to.paidForTrip.add(m.amount);
+    }
+    const x = live.find((r) => r.entryId === p.entryId);
+    live = live.filter((r) => r.entryId !== p.entryId);
+    return { entryId: p.entryId, moves, held: x?.held ?? null };
+  });
+}

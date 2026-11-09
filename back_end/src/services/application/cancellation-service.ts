@@ -1,5 +1,8 @@
 import { closeWaitingRefundsOnCancellationTx } from "../../lib/refund-money.js";
-import type { PrismaClient } from "@prisma/client";
+import type { Prisma, PrismaClient } from "@prisma/client";
+import { planTripCancelMoves, simulateTripCancels, type TripMove } from "../../lib/trip-advance-cover.js";
+import { applyAdvanceStandingTx } from "../domain/s3-folio-service.js";
+import { readTripAdvanceRows } from "../domain/s3-payment-service.js";
 import { releaseRoomClaimIfOwnedTx } from "../../lib/room-claim-state.js";
 import { ActorLevel, EntryStatus, FolioLineType, FolioState, HoldState, InventoryClaimState, Stage } from "@prisma/client";
 import { NotFoundError, StateTransitionError, ValidationError } from "../../lib/errors.js";
@@ -153,6 +156,7 @@ export async function declineEntryBeforeSetup(
 }
 
 export type CancellationFigures = {
+  tripMoves: Array<{ fromEntryId: string; toEntryId: string; fromStayNo: number; toStayNo: number; amount: number }>;
   /** The step the booking is cancelled at — Set up (S3) or Arrival (S5). */
   stage: "S3" | "S5";
   /** Money received against the booking (the advance). */
@@ -180,6 +184,7 @@ export type CancellationFigures = {
 async function cancellationFigures(
   prisma: PrismaClient,
   input: {
+    entryId: string;
     stage: "S3" | "S5";
     folioId: string;
     checkInDate: Date;
@@ -200,21 +205,13 @@ async function cancellationFigures(
       `This bill already has charges from the stay on it (Nu ${Number(sum).toLocaleString("en-US", { minimumFractionDigits: 2 })}), so the booking can't be cancelled — cancelling would hand back money the guest owes. The bill has to be settled instead.`,
     );
   }
-  const advanceReceived = await sumAdvancePaymentInTotalForFolio(prisma, input.folioId);
-  // Arrival bubbles a config-store failure (never a silent zero charge); Set up falls back to the
-  // disclosed terms alone, as it always has.
-  const policyTiers =
-    input.stage === "S5"
-      ? await requireActiveConfigValue<CancellationPolicyTiersConfig>(prisma, "cancellation.policyTiers")
-      : await requireActiveConfigValue<CancellationPolicyTiersConfig>(prisma, "cancellation.policyTiers").catch(
-          () => null as CancellationPolicyTiersConfig | null,
-        );
-  const { rawPenalty, hoursUntilCheckIn } = computeS5PreArrivalCancellationPenalty({
-    now: input.now,
-    checkInDate: input.checkInDate,
-    frozenCancellationTerms: input.terms,
-    policyTiers,
-  });
+  const ownHeld = await sumAdvancePaymentInTotalForFolio(prisma, input.folioId);
+  const { rawPenalty, hoursUntilCheckIn } = await rawCancellationCharge(prisma, input);
+  // Money paid for the trip is one pot (2026-11-09): this stay's bill first gets, or gives up, what
+  // the other stays' advances mean it should hold. Then the ordinary cancellation runs on that.
+  const plan = await tripCancelPlan(prisma, input.entryId, toDecimal(ownHeld), toDecimal(input.waiver ? 0 : rawPenalty));
+  const netIn = plan.moves.reduce((sum, m) => (m.to === input.entryId ? sum.add(m.amount) : m.from === input.entryId ? sum.sub(m.amount) : sum), toDecimal(0));
+  const advanceReceived = Number(toDecimal(ownHeld).add(netIn).toFixed(2));
   const capped = capCancellationPenaltyAtAdvancePayment(rawPenalty, advanceReceived);
   const charge = input.waiver ? 0 : capped;
   // Decimal-safe: the refund is the received total less the charge, to the cent.
@@ -228,7 +225,163 @@ async function cancellationFigures(
     chargeCapped: capped,
     hoursUntilCheckIn,
     waived: input.waiver,
+    tripMoves: moveWords(plan.moves, plan.rows),
   };
+}
+
+async function rawCancellationCharge(
+  prisma: PrismaClient,
+  input: { stage: "S3" | "S5"; checkInDate: Date; terms: Record<string, unknown>; now: Date },
+) {
+  // Arrival bubbles a config-store failure (never a silent zero charge); Set up falls back to the
+  // disclosed terms alone, as it always has.
+  const policyTiers =
+    input.stage === "S5"
+      ? await requireActiveConfigValue<CancellationPolicyTiersConfig>(prisma, "cancellation.policyTiers")
+      : await requireActiveConfigValue<CancellationPolicyTiersConfig>(prisma, "cancellation.policyTiers").catch(
+          () => null as CancellationPolicyTiersConfig | null,
+        );
+  return computeS5PreArrivalCancellationPenalty({
+    now: input.now,
+    checkInDate: input.checkInDate,
+    frozenCancellationTerms: input.terms,
+    policyTiers,
+  });
+}
+
+type TripRows = Awaited<ReturnType<typeof readTripAdvanceRows>>;
+
+const moveWords = (moves: TripMove[], rows: TripRows) =>
+  moves.map((m) => {
+    const from = rows.find((r) => r.entryId === m.from);
+    const to = rows.find((r) => r.entryId === m.to);
+    return { fromEntryId: m.from, toEntryId: m.to, fromStayNo: from?.stayNo ?? 0, toStayNo: to?.stayNo ?? 0, amount: Number(m.amount.toFixed(2)) };
+  });
+
+/** The bills that can still give or take money, this stay's holding what the cancellation reads. */
+async function tripCancelPlan(db: PrismaClient | Prisma.TransactionClient, entryId: string, ownHeld: Prisma.Decimal, charge: Prisma.Decimal) {
+  const me = await db.entry.findUnique({ where: { id: entryId }, select: { inquiryId: true } });
+  if (!me) return { inquiryId: null as string | null, rows: [] as TripRows, moves: [] as TripMove[] };
+  const rows = (await readTripAdvanceRows(db, me.inquiryId))
+    .filter((r) => r.entryId === entryId || r.folioOpen)
+    .map((r) => (r.entryId === entryId ? { ...r, held: ownHeld } : r));
+  return { inquiryId: me.inquiryId, rows, moves: planTripCancelMoves(rows, entryId, charge) };
+}
+
+/**
+ * Put the trip's money where it belongs before this stay is cancelled: one money-out row and one
+ * money-in row per move, sharing a reference, so the two bills change and the hotel's money does not.
+ * Worked out again under the trip's lock, and refused if it no longer matches what the desk was shown.
+ */
+async function applyTripMovesTx(
+  prisma: PrismaClient,
+  tx: Prisma.TransactionClient,
+  input: { entryId: string; folioId: string; charge: number; shown: Array<{ fromEntryId: string; toEntryId: string; amount: number }>; actorId: string; actorLevel: ActorLevel; now: Date },
+) {
+  if (!input.shown.length) return;
+  const own = await sumAdvancePaymentInTotalForFolio(prisma, input.folioId);
+  const first = await tx.entry.findUnique({ where: { id: input.entryId }, select: { inquiryId: true } });
+  await tx.$executeRawUnsafe("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", `trip-payment:${first!.inquiryId}`);
+  const plan = await tripCancelPlan(tx, input.entryId, toDecimal(own), toDecimal(input.charge));
+  const same =
+    plan.moves.length === input.shown.length &&
+    plan.moves.every((m, i) => m.from === input.shown[i].fromEntryId && m.to === input.shown[i].toEntryId && m.amount.equals(toDecimal(input.shown[i].amount)));
+  if (!same) throw new ValidationError("The trip's money has just changed. Look at the figures again.");
+  for (const [i, m] of plan.moves.entries()) {
+    const from = plan.rows.find((r) => r.entryId === m.from)!;
+    const to = plan.rows.find((r) => r.entryId === m.to)!;
+    const ref = `cancel:${input.entryId}:${i + 1}`;
+    const method = await resolveRefundMethod(tx, from.folioId);
+    const words = `Trip's money moved from stay ${from.stayNo} to stay ${to.stayNo} when ${input.entryId} was cancelled`;
+    for (const side of [
+      { row: from, direction: "OUT" as const },
+      { row: to, direction: "IN" as const },
+    ]) {
+      await tx.paymentRecord.create({
+        data: {
+          id: await allocateReadableId(tx, "PAYMENT" as const, input.now),
+          folioId: side.row.folioId,
+          entryId: side.row.entryId,
+          amount: m.amount,
+          paymentDirection: side.direction,
+          paymentMethod: method,
+          receivedAt: input.now,
+          recordedBy: input.actorId,
+          stage: side.row.stage,
+          notes: words,
+          paidForTrip: side.direction === "IN",
+          tripTransferRef: ref,
+        },
+      });
+      await recomputeFolioOutstandingBalance(tx, side.row.folioId);
+      await tx.traceEvent.create({
+        data: {
+          eventType: "FOLIO.TRIP_MONEY_MOVED",
+          actorId: input.actorId,
+          actorLevel: input.actorLevel,
+          entityType: "Folio",
+          entityId: side.row.folioId,
+          operation: "UPDATE",
+          timestamp: input.now,
+          stageContext: side.row.stage,
+          inquiryId: first!.inquiryId,
+          entryId: side.row.entryId,
+          payload: { reference: ref, direction: side.direction, amount: m.amount.toFixed(2), fromEntryId: m.from, toEntryId: m.to, cancelledEntryId: input.entryId },
+          createdBy: input.actorId,
+        },
+      });
+    }
+  }
+  for (const r of plan.rows) {
+    if (r.entryId !== input.entryId) await applyAdvanceStandingTx(prisma, tx, { entryId: r.entryId, folioId: r.folioId, actorId: input.actorId });
+  }
+}
+
+/**
+ * What cancelling several stays of a trip would charge and refund, one after another in stay order,
+ * with the money that moves between them. Nothing written.
+ */
+export async function previewTripCancellation(prisma: PrismaClient, entryId: string, input: { stayIds: string[]; waive?: boolean }) {
+  const me = await prisma.entry.findUnique({ where: { id: entryId }, select: { inquiryId: true } });
+  if (!me) throw new NotFoundError("Entry");
+  const stays = await prisma.entry.findMany({
+    where: { inquiryId: me.inquiryId, id: { in: input.stayIds } },
+    orderBy: [{ checkInDate: "asc" }, { createdAt: "asc" }],
+    include: { folio: true, reservation: true, cancellationDisclosure: true },
+  });
+  if (stays.length !== new Set(input.stayIds).size) throw new ValidationError("One of those is not a stay of this trip.");
+  const now = new Date();
+  const waive = input.waive === true;
+  const picks: Array<{ entryId: string; own: number; raw: number }> = [];
+  for (const st of stays) {
+    if (!st.folio) throw new ValidationError(`${st.id} has no bill yet — nothing to charge or refund.`);
+    const atSetUp = st.currentStage === Stage.S3;
+    const { rawPenalty } = await rawCancellationCharge(prisma, {
+      stage: atSetUp ? "S3" : "S5",
+      checkInDate: atSetUp ? (st.checkInDate ?? new Date(now.getTime() + 86400_000)) : st.reservation!.frozenCheckInDate,
+      terms: ((atSetUp ? st.cancellationDisclosure?.disclosedTerms : st.reservation?.frozenCancellationTerms) as Record<string, unknown>) ?? {},
+      now,
+    });
+    picks.push({ entryId: st.id, own: await sumAdvancePaymentInTotalForFolio(prisma, st.folio.id), raw: rawPenalty });
+  }
+  const all = await readTripAdvanceRows(prisma, me.inquiryId);
+  const rows = all
+    .filter((r) => r.folioOpen || picks.some((p) => p.entryId === r.entryId))
+    .map((r) => {
+      const p = picks.find((x) => x.entryId === r.entryId);
+      return p ? { ...r, held: toDecimal(p.own) } : r;
+    });
+  const out = simulateTripCancels(rows, picks.map((p) => ({ entryId: p.entryId, charge: toDecimal(waive ? 0 : p.raw) })));
+  const lines = await Promise.all(
+    picks.map(async (p, i) => {
+      const held = out[i].held != null ? Number(out[i].held!.toFixed(2)) : p.own;
+      const capped = capCancellationPenaltyAtAdvancePayment(p.raw, held);
+      const charge = waive ? 0 : capped;
+      return { entryId: p.entryId, advanceReceived: held, charge, chargeBeforeCap: p.raw, chargeCapped: capped, refund: Number(toDecimal(held).sub(toDecimal(charge)).toFixed(2)) };
+    }),
+  );
+  const sum = (k: "charge" | "refund") => Number(lines.reduce((t, l) => t.add(toDecimal(l[k])), toDecimal(0)).toFixed(2));
+  return { stays: lines, moves: moveWords(out.flatMap((x) => x.moves), rows), totalCharge: sum("charge"), totalRefund: sum("refund"), waived: waive };
 }
 
 /**
@@ -253,6 +406,7 @@ export async function previewCancellation(prisma: PrismaClient, entryId: string,
   const now = new Date();
   if (entry.currentStage === Stage.S3) {
     return cancellationFigures(prisma, {
+      entryId: entry.id,
       stage: "S3",
       folioId: entry.folio.id,
       checkInDate: entry.checkInDate ?? new Date(now.getTime() + 86400_000),
@@ -263,6 +417,7 @@ export async function previewCancellation(prisma: PrismaClient, entryId: string,
   }
   if (!entry.reservation) throw new ValidationError("No reservation on the booking");
   return cancellationFigures(prisma, {
+    entryId: entry.id,
     stage: "S5",
     folioId: entry.folio.id,
     checkInDate: entry.reservation.frozenCheckInDate,
@@ -362,6 +517,7 @@ export async function cancelEntryAtS3(
   const disclosedTerms =
     (entry.cancellationDisclosure?.disclosedTerms as Record<string, unknown>) ?? {};
   const fig = await cancellationFigures(prisma, {
+    entryId,
     stage: "S3",
     folioId: folio.id,
     checkInDate,
@@ -383,6 +539,9 @@ export async function cancelEntryAtS3(
   });
 
   const updated = await prisma.$transaction(async (tx) => {
+    // The trip's money goes where it belongs first (2026-11-09).
+    await applyTripMovesTx(prisma, tx, { entryId, folioId: folio.id, charge: waiver ? 0 : rawPenalty, shown: fig.tripMoves, actorId, actorLevel: traceActorLevel, now });
+
     // 1. Penalty line (only if non-zero).
     if (penalty > 0) {
       const penaltyBillingModel = await resolveBillingModelForNewLine(tx, folio.id, FolioLineType.SERVICE);
@@ -614,6 +773,7 @@ export async function cancelEntryAtS5(
   // fallback for anything not frozen. Bubble errors so the operator sees them instead of processing
   // a zero-penalty cancellation. The same helper the desk's preview reads.
   const fig = await cancellationFigures(prisma, {
+    entryId,
     stage: "S5",
     folioId: folio.id,
     checkInDate: reservation.frozenCheckInDate,
@@ -635,6 +795,8 @@ export async function cancelEntryAtS5(
   });
 
   const updated = await prisma.$transaction(async (tx) => {
+    await applyTripMovesTx(prisma, tx, { entryId, folioId: folio.id, charge: waiver ? 0 : rawPenalty, shown: fig.tripMoves, actorId, actorLevel: traceActorLevel, now });
+
     if (penalty > 0) {
       const penaltyBillingModel = await resolveBillingModelForNewLine(tx, folio.id, FolioLineType.SERVICE);
       await tx.folioLine.create({

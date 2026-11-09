@@ -574,6 +574,18 @@ async function main() {
     }
   }
 
+  // A16 (2026-11-09): money moved between a trip's stays moves no money. Each reference is exactly one
+  // money-out row and one money-in row of the same amount.
+  const moved = await prisma.paymentRecord.findMany({ where: { tripTransferRef: { not: null } }, select: { tripTransferRef: true, paymentDirection: true, amount: true } });
+  const moveRows = new Map<string, typeof moved>();
+  for (const m of moved) moveRows.set(m.tripTransferRef!, [...(moveRows.get(m.tripTransferRef!) ?? []), m]);
+  for (const [ref, pair] of moveRows) {
+    const out = pair.filter((x) => x.paymentDirection === "OUT"), inn = pair.filter((x) => x.paymentDirection === "IN");
+    if (out.length !== 1 || inn.length !== 1 || !D(out[0].amount).eq(D(inn[0].amount))) {
+      add("CRITICAL", "A16_TRIP_MOVE_UNBALANCED", ref, `${out.length} out and ${inn.length} in, which do not balance`);
+    }
+  }
+
   const bySeverity: Record<Severity, Finding[]> = { CRITICAL: [], WARN: [], INFO: [] };
   for (const f of findings) bySeverity[f.severity].push(f);
   console.log(`\n════ MONEY AUDIT — ${new Date().toISOString().slice(0, 16)} ════`);

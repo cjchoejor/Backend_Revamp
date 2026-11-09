@@ -16,6 +16,17 @@ import * as s3DisclosureService from "../../services/domain/s3-cancellation-disc
 export const cancellationsRouter = Router();
 
 /** What cancelling now would charge and refund — nothing written (2026-09-18). */
+cancellationsRouter.post("/entries/:id/trip-cancellation-preview", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    const stayIds = Array.isArray(req.body?.stayIds) ? (req.body.stayIds as unknown[]).filter((x): x is string => typeof x === "string") : [];
+    if (!stayIds.length || stayIds.length > 12) throw new ValidationError("Name the stays.");
+    res.json(await cancellationService.previewTripCancellation(prisma, req.params.id, { stayIds, waive: req.body?.waive === true }));
+  } catch (e) {
+    next(e);
+  }
+});
+
 cancellationsRouter.get("/entries/:id/cancellation-preview", requireActorLevel("L1"), async (req, res, next) => {
   try {
     res.setHeader("Cache-Control", "no-store");
