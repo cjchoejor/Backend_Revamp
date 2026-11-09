@@ -91,6 +91,7 @@ export const entryDetailInclude = {
           checkInDate: true,
           checkOutDate: true,
           currentStage: true,
+          updatedAt: true,
           status: true,
           numberOfRooms: true,
         },
