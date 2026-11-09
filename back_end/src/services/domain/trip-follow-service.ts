@@ -14,9 +14,15 @@
  *    longer stay repeats the last night), the system choosing its own rooms. A room the first stay
  *    fixed by number is kept when it is free then. Past Inquiry its rooms are its own.
  *
- * Only while it sits at Inquiry (2026-11-09, operator: "before it used to copy paste stay 1 on stay 2
- * but now scratch that, user will configure both stays in the same table"). The choice itself stays
- * on `Entry.sameSetupAs`, and at Negotiation those stays are one table: nothing is copied there.
+ *  - **The table** — guests per room, meal plans, extra beds, rates, the discount, the bed plan — is
+ *    kept in `carryOver`, on this stay's rooms, when the stay it follows has been quoted (2026-11-09,
+ *    operator: "from stage 2 and above if user add a return stay then it can ask that where if chosen
+ *    same, it can pull the same room types, configuration and stay details as stay 1"). It is never
+ *    priced here: this stay's own Save prices it, for its own dates. A rate negotiated for another
+ *    room type is left behind.
+ *
+ * Only while it sits at Inquiry. The choice itself stays on `Entry.sameSetupAs`, and at Negotiation
+ * those stays are one table: nothing is copied there.
  *
  * A pick holds nothing at Inquiry, so copying takes no room from anyone. Each write goes through the
  * ordinary service, with every one of its checks, and is traced on the stay it changes.
@@ -28,12 +34,14 @@ import { Prisma, type ActorLevel, type PrismaClient } from "@prisma/client";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { enforceEntryNotSealedForWorkingAction } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
 import { readBookingRooms, typeCountsPerNight, type BookingRoom } from "../../lib/booking-rooms.js";
+import { resolveOperativeQuotation } from "../../lib/operative-quotation.js";
 import { listNightYmdsUtc, utcDateOnly, ymdUtc } from "../../lib/stay-dates.js";
 import * as auditService from "../infrastructure/audit-service.js";
 import { setEntryGuest } from "./inquiry-caller-service.js";
 import { planRoomsByTypeForStay, sealBookingRoomsByType, type SealByTypeInput } from "./quiet-rooms-service.js";
 import { buildEntryRateReference } from "./rate-reference-service.js";
 import { answerHouseByType, currentPassSeal, sealSelect } from "./room-placement-service.js";
+import { effectiveAllowedBedTypes } from "./room-bed-type-service.js";
 import { queryAvailability } from "./s1-availability-service.js";
 import { updateEntryIntakeFields } from "./s1-entry-service.js";
 
@@ -58,12 +66,13 @@ const stayFields = {
   guestCount: true,
   numberOfRooms: true,
   bedTypeRequest: true,
+  bedPlan: true,
   useType: true,
   contactPersonName: true,
   contactPersonPhone: true,
   contactPersonEmail: true,
   ...sealSelect,
-  quotations: { select: { id: true, segmentId: true, state: true } },
+  quotations: { select: { id: true, segmentId: true, state: true, versionNumber: true, createdAt: true, commercialTerms: true } },
 } as const;
 
 async function loadStay(prisma: PrismaClient, id: string) {
@@ -80,6 +89,7 @@ export type FollowShortfall = {
 
 type FollowState = {
   roomsCanon?: string;
+  tableCanon?: string;
   shortfall?: FollowShortfall | null;
   notes?: string[];
 };
@@ -118,9 +128,69 @@ async function roomLookup(prisma: PrismaClient) {
 }
 
 function bookingRoomsOf(s: Stay, typeOf: Map<string, string>): BookingRoom[] {
-  const seal = currentPassSeal(s);
+  // A stay sent back to Negotiation keeps the rooms of its last pass until they are chosen again.
+  const seal = currentPassSeal(s) ?? (s.currentStage !== "S1" ? (s.availabilityConfigs.find((c) => c.optionSelected != null)?.optionSelected ?? null) : null);
   if (!seal || !s.checkInDate || !s.checkOutDate) return [];
   return readBookingRooms(seal, { checkIn: utcDateOnly(s.checkInDate), checkOut: utcDateOnly(s.checkOutDate) }, (id) => typeOf.get(id));
+}
+
+/** The real rooms of a set of booking rooms, in order, each with its type and nights. */
+function realRooms(rooms: BookingRoom[]): Array<{ roomId: string; roomTypeId: string; nights: string[] }> {
+  const out = new Map<string, { roomId: string; roomTypeId: string; nights: string[] }>();
+  for (const r of rooms) {
+    for (const n of r.nights) {
+      if (!n.roomId) continue;
+      const row = out.get(n.roomId) ?? { roomId: n.roomId, roomTypeId: n.roomTypeId, nights: [] };
+      row.nights.push(n.date);
+      out.set(n.roomId, row);
+    }
+  }
+  return [...out.values()];
+}
+
+export type TableRow = Record<string, unknown> & { roomId: string };
+
+/**
+ * The first stay's table on this stay's rooms. Each room here takes a row from a room of its own
+ * type, else any row left; a row taken by another type leaves its negotiated room rate behind, since
+ * that rate was agreed for the other type. A night's own meals go to the night at the same place in
+ * this stay, and are dropped when this stay has no such night. A row with no room here is dropped.
+ */
+export function mapTableToStay(input: {
+  rows: TableRow[];
+  typeOfSourceRoom: (roomId: string) => string | null | undefined;
+  stayRooms: Array<{ roomId: string; roomTypeId: string; nights: string[] }>;
+  sourceNights: string[];
+  stayNights: string[];
+}): { rows: TableRow[]; pairs: Array<[string, string]> } {
+  const used = new Set<number>();
+  const rows: TableRow[] = [];
+  const pairs: Array<[string, string]> = [];
+  for (const room of input.stayRooms) {
+    let at = input.rows.findIndex((r, i) => !used.has(i) && input.typeOfSourceRoom(r.roomId) === room.roomTypeId);
+    const sameType = at >= 0;
+    if (!sameType) at = input.rows.findIndex((_r, i) => !used.has(i));
+    if (at < 0) continue;
+    used.add(at);
+    const row: TableRow = { ...input.rows[at], roomId: room.roomId };
+    delete row.startDate;
+    delete row.endDate;
+    delete row.nightDates;
+    if (!sameType) delete row.negotiatedRoomRate;
+    if (Array.isArray(row.nightMealOverrides)) {
+      const moved: unknown[] = [];
+      for (const o of row.nightMealOverrides as Array<Record<string, unknown>>) {
+        const offset = input.sourceNights.indexOf(String(o.date ?? "").slice(0, 10));
+        const night = offset >= 0 ? input.stayNights[offset] : undefined;
+        if (night && room.nights.includes(night)) moved.push({ ...o, date: night });
+      }
+      if (moved.length) row.nightMealOverrides = moved;
+      else delete row.nightMealOverrides;
+    }
+    rows.push(row);
+    pairs.push([input.rows[at].roomId, room.roomId]);
+  }
+  return { rows, pairs };
 }
 
 type TypeCount = { roomTypeId: string; count: number };
@@ -292,12 +362,61 @@ export async function syncFollower(prisma: PrismaClient, actor: Actor, stayId: s
     }
   }
 
+  // ---- the table: guests per room, meals, extra beds, rates, the discount, the bed plan -----------
   const latest: Stay = (await loadStay(prisma, stayId))!;
+  const sourcePass = source.segments[0]?.id ?? null;
+  const operative = sourcePass ? resolveOperativeQuotation(source.quotations as never[], sourcePass) : null;
+  const terms = ((operative as { commercialTerms?: unknown } | null)?.commercialTerms ?? null) as { roomCompositions?: TableRow[]; requestedDiscount?: unknown } | null;
+  const sourceRows = Array.isArray(terms?.roomCompositions) ? terms!.roomCompositions! : [];
+  const stayRooms = realRooms(bookingRoomsOf(latest, typeOf));
+  const data: Prisma.EntryUpdateInput = {};
+  if (sourceRows.length > 0 && stayRooms.length > 0) {
+    const canon = JSON.stringify({ rows: sourceRows, discount: terms?.requestedDiscount ?? null, beds: source.bedPlan ?? null, rooms: stayRooms.map((r) => r.roomId) });
+    if (canon !== state.tableCanon) {
+      const mapped = mapTableToStay({
+        rows: sourceRows,
+        typeOfSourceRoom: (id) => typeOf.get(id),
+        stayRooms,
+        sourceNights: nightsOf(source),
+        stayNights: nightsOf(latest),
+      });
+      data.carryOver = {
+        fromEntryId: source.id,
+        fromInquiryId: source.inquiryId,
+        at: new Date().toISOString(),
+        by: actor.actorId,
+        reason: `Same as ${source.id}`,
+        target: "SAME_ENQUIRY",
+        rooms: [],
+        compositions: mapped.rows,
+        discount: terms?.requestedDiscount ?? null,
+        billingModel: null,
+        cancellation: null,
+        guestAgreedNote: null,
+      } as unknown as Prisma.InputJsonValue;
+      const planned = (source.bedPlan ?? null) as Record<string, string> | null;
+      if (planned) {
+        const roomsHere = await prisma.room.findMany({
+          where: { id: { in: mapped.pairs.map(([, to]) => to) } },
+          select: { id: true, allowedBedTypes: true, roomType: { select: { allowedBedTypes: true } } },
+        });
+        const beds: Record<string, string> = {};
+        for (const [from, to] of mapped.pairs) {
+          const room = roomsHere.find((r) => r.id === to);
+          const allowed = room ? (effectiveAllowedBedTypes(room.allowedBedTypes as never, room.roomType?.allowedBedTypes as never) as string[]) : [];
+          if (planned[from] && allowed.includes(planned[from])) beds[to] = planned[from];
+        }
+        if (Object.keys(beds).length) data.bedPlan = beds as Prisma.InputJsonValue;
+      }
+      next.tableCanon = canon;
+      changed.push("meals and table");
+    }
+  }
 
   next.notes = notes;
   await prisma.entry.update({
     where: { id: latest.id },
-    data: { followState: next as unknown as Prisma.InputJsonValue },
+    data: { ...data, followState: next as unknown as Prisma.InputJsonValue, ...(data.carryOver ? { version: { increment: 1 } } : {}) },
   });
   if (changed.length > 0) {
     await trace(prisma, actor, latest, "ENTRY.FOLLOW_APPLIED", { fromEntryId: source.id, changed, notes });

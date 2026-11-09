@@ -1,3 +1,4 @@
+import { initiateS3ToS2Backflow } from "../../state-machines/s3-reentry-state-machine.js";
 import type { PrismaClient } from "@prisma/client";
 import { AppError, NotFoundError, ValidationError } from "../../lib/errors.js";
 import { setEntryGuest } from "./inquiry-caller-service.js";
@@ -154,6 +155,40 @@ export async function moveTripToSetUp(prisma: PrismaClient, actor: Actor, entryI
       }
       const now = await prisma.entry.findUnique({ where: { id }, select: { version: true } });
       await progressS2ToS3(prisma, id, actor.actorId, now?.version);
+      moved.push(id);
+    } catch (e) {
+      notMoved.push({ entryId: id, message: words(e) });
+    }
+  }
+  return { moved, notMoved };
+}
+
+/**
+ * Renegotiate the stays viewed together at Set up (2026-11-09, operator: "when i change booking and
+ * chhose renegotiate price, it takes stay 2 of 2 only not whole together"). This stay first, through
+ * its own way back and every gate it has; then each other stay. A stay refused stays at Set up and is
+ * named with the reason. Each stay's block is released and its proforma replaced, as for one stay.
+ */
+export async function renegotiateTrip(prisma: PrismaClient, actor: Actor, entryId: string, input?: { reason?: string }) {
+  const entry = await prisma.entry.findUnique({ where: { id: entryId }, select: { currentStage: true } });
+  if (!entry) throw new NotFoundError("Entry");
+  if (entry.currentStage !== "S3") throw new ValidationError("This stay is not at Set up.");
+  const others = (await staysTogether(prisma, entryId)).filter((id) => id !== entryId);
+  const by = { actorId: actor.actorId, actorLevel: actor.level };
+  await initiateS3ToS2Backflow(prisma, entryId, by, input);
+  const moved: string[] = [entryId];
+  const notMoved: Array<{ entryId: string; message: string }> = [];
+  for (const id of others) {
+    try {
+      const s = await prisma.entry.findUnique({ where: { id }, select: { status: true } });
+      if (s?.status === "PARKED") {
+        if (!(await parkedByTripSwitch(prisma, id))) {
+          notMoved.push({ entryId: id, message: "It was parked by a person — resume it, then renegotiate it on its own page." });
+          continue;
+        }
+        await unparkEntry(prisma, id, actor.actorId, { cause: "TRIP_MOVES_ON", movedWith: entryId });
+      }
+      await initiateS3ToS2Backflow(prisma, id, by, input);
       moved.push(id);
     } catch (e) {
       notMoved.push({ entryId: id, message: words(e) });
