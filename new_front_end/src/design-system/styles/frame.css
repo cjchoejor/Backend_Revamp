@@ -1247,6 +1247,55 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .bill-band .bb-cell.owed.clear .bb-k, .ds .bill-band .bb-cell.owed.clear .bb-v { color: var(--success); }
 .ds .bill-band .bb-cell.owed.over { background: var(--warning-soft); box-shadow: inset 3px 0 0 var(--warning); }
 .ds .bill-band .bb-cell.owed.over .bb-k, .ds .bill-band .bb-cell.owed.over .bb-v { color: var(--warning); }
+/* The bill on the Billing page (2026-11-09): a hotel's bill, the desk's acts above it. */
+.ds .bill-page { max-width: 1080px; margin: 0 auto; }
+.ds .bill-bar { display: flex; align-items: center; justify-content: space-between; gap: var(--s3); flex-wrap: wrap; margin-bottom: var(--s3); }
+.ds .bill-back { font-weight: 600; color: var(--accent-ink); }
+.ds .bill-bar-right { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; }
+.ds .bill-owed { display: flex; align-items: baseline; gap: 8px; padding: 6px 14px; border-radius: var(--r-card); margin-right: var(--s2); }
+.ds .bill-owed .k { font-size: 13px; font-weight: 600; }
+.ds .bill-owed b { font-size: 22px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.ds .bill-owed.due { background: var(--danger-soft); color: var(--danger); }
+.ds .bill-owed.clear { background: var(--success-soft); color: var(--success); }
+.ds .bill-sheet { background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--r-card); padding: var(--s5) var(--s6); }
+.ds .bill-mast { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--s4); padding-bottom: var(--s3); border-bottom: 2px solid var(--ink); }
+.ds .bill-hotel { display: flex; align-items: center; gap: var(--s3); }
+.ds .bill-hotel img { height: 68px; width: auto; }
+.ds .bill-hotel h3 { margin: 0 0 2px; font-size: 20px; font-weight: 700; }
+.ds .bill-title { text-align: right; }
+.ds .bill-title h2 { margin: 0 0 2px; font-size: 22px; font-weight: 700; }
+.ds .bill-parties { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--s2) var(--s4); margin: var(--s3) 0; }
+.ds .bill-parties .wide { grid-column: 1 / -1; }
+.ds .bill-parties dt { font-size: 12px; font-weight: 600; color: var(--ink-3); }
+.ds .bill-parties dd { margin: 0; font-size: 15px; }
+.ds .bill-staydd { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; }
+.ds .bill-lines th { font-size: 12.5px; }
+.ds .bill-lines td { vertical-align: top; }
+.ds .bill-stay td { background: var(--accent-soft); vertical-align: middle; border-top: 1px solid var(--line-2); }
+.ds .bill-stay .bs { display: flex; align-items: center; gap: var(--s2) var(--s3); flex-wrap: wrap; }
+.ds .bill-stay .bill-open { margin-left: auto; }
+.ds .bill-foot { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: var(--s6); margin-top: var(--s4); align-items: start; }
+.ds .bill-pays h4 { margin: 0 0 var(--s1); font-size: 14px; font-weight: 700; }
+.ds .bill-ladder { margin: 0; }
+.ds .bill-ladder .rung { display: flex; justify-content: space-between; gap: var(--s3); padding: 5px 0; }
+.ds .bill-ladder dt { color: var(--ink-2); }
+.ds .bill-ladder dd { margin: 0; font-variant-numeric: tabular-nums; }
+.ds .bill-ladder .rung.total { border-top: 1px solid var(--ink); margin-top: 4px; padding-top: 8px; font-weight: 700; }
+.ds .bill-ladder .rung.total dt { color: var(--ink); }
+.ds .bill-ladder .rung.balance { border-top: 2px solid var(--ink); margin-top: 6px; padding: 10px 12px; border-radius: 0 0 6px 6px; font-weight: 800; }
+.ds .bill-ladder .rung.balance dd { font-size: 22px; }
+.ds .bill-ladder .rung.balance.due { background: var(--danger-soft); }
+.ds .bill-ladder .rung.balance.due dt, .ds .bill-ladder .rung.balance.due dd { color: var(--danger); }
+.ds .bill-ladder .rung.balance.clear { background: var(--success-soft); }
+.ds .bill-ladder .rung.balance.clear dt, .ds .bill-ladder .rung.balance.clear dd { color: var(--success); }
+.ds .bill-ladder .rung.ahead dt, .ds .bill-ladder .rung.ahead dd { color: var(--success); font-weight: 600; }
+@media (max-width: 860px) { .ds .bill-foot { grid-template-columns: 1fr; } .ds .bill-parties { grid-template-columns: 1fr; } }
+@media print {
+  .ds .topbar, .ds .bill-bar, .ds .bill-open { display: none !important; }
+  .ds .bill-page { max-width: none; margin: 0; padding: 0; }
+  .ds .bill-sheet { border: 0; padding: 0; }
+  .ds .bill-stay td { background: none; }
+}
 .ds .bill-lines-row { display: flex; align-items: center; justify-content: space-between; gap: var(--s2); margin-top: var(--s3); }
 .ds .bill-lines-row .bl-n { font-size: 13px; font-weight: 600; color: var(--ink-2); }
 

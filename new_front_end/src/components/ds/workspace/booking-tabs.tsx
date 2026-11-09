@@ -88,7 +88,7 @@ type PaymentRow = {
   stage?: string | null;
 };
 
-const METHOD_WORD: Record<string, string> = {
+export const METHOD_WORD: Record<string, string> = {
   CASH: "cash",
   MOBILE_PAYMENT: "QR / mobile",
   BANK_TRANSFER: "bank transfer",

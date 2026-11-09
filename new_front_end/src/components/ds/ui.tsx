@@ -36,10 +36,10 @@ export function RowStanding({ row, hotelToday, balance }: { row: DeskListRow; ho
 }
 
 /** The guest's name as the row's link; italic when the agent has not named them yet. */
-export function GuestLink({ row, step }: { row: DeskListRow; step?: number }) {
+export function GuestLink({ row, step, href }: { row: DeskListRow; step?: number; href?: string }) {
   const name = rowNameOf(row);
   return (
-    <Link className={`row-link${isNamed(row.guestProfile) ? "" : " name-i"}`} href={bookingHref(row.id, step)} aria-label={`Open ${row.id}`} onClick={(e) => e.stopPropagation()}>
+    <Link className={`row-link${isNamed(row.guestProfile) ? "" : " name-i"}`} href={href ?? bookingHref(row.id, step)} aria-label={`Open ${row.id}`} onClick={(e) => e.stopPropagation()}>
       {name}
     </Link>
   );
@@ -62,9 +62,11 @@ export function TimerText({ w }: { w: WaitingText }) {
 }
 
 /** A table row that opens a booking; the name link inside it is the keyboard target. */
-export function OpenRow({ entryId, step, locked, selected, onSelect, children }: {
+export function OpenRow({ entryId, step, href, locked, selected, onSelect, children }: {
   entryId: string;
   step?: number;
+  /** Open this page rather than the booking. */
+  href?: string;
   locked?: boolean;
   selected?: boolean;
   /**
@@ -75,7 +77,7 @@ export function OpenRow({ entryId, step, locked, selected, onSelect, children }:
   children: ReactNode;
 }) {
   const router = useRouter();
-  const open = () => router.push(bookingHref(entryId, step));
+  const open = () => router.push(href ?? bookingHref(entryId, step));
   const waiting = useRef<number | null>(null);
   const stopWaiting = () => {
     if (waiting.current !== null) window.clearTimeout(waiting.current);

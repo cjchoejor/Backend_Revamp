@@ -99,9 +99,9 @@ export default function BillingPage() {
                   {open.map((r) => {
                     const x = get(r.id);
                     return (
-                      <OpenRow key={r.id} entryId={r.id}>
+                      <OpenRow key={r.id} entryId={r.id} href={`/billing/${encodeURIComponent(r.id)}`}>
                         <td>
-                          <GuestLink row={r} />
+                          <GuestLink row={r} href={`/billing/${encodeURIComponent(r.id)}`} />
                           <div className="meta">{bookingMeta(r)}</div>
                         </td>
                         <td className="nowrap"><StayDates stacked checkIn={r.checkInDate} checkOut={r.actualCheckOutDate ?? r.checkOutDate} /></td>
@@ -142,10 +142,10 @@ export default function BillingPage() {
                     const acct = accountOf(r);
                     const first = i === 0 || accountOf(owing[i - 1]) !== acct;
                     return (
-                      <OpenRow key={r.id} entryId={r.id}>
+                      <OpenRow key={r.id} entryId={r.id} href={`/billing/${encodeURIComponent(r.id)}`}>
                         <td>{first ? <b>{acct}</b> : null}</td>
                         <td>
-                          <GuestLink row={r} />
+                          <GuestLink row={r} href={`/billing/${encodeURIComponent(r.id)}`} />
                           <div className="meta">{r.id}</div>
                         </td>
                         <td className="nowrap"><StayDates stacked checkIn={r.checkInDate} checkOut={r.actualCheckOutDate ?? r.checkOutDate} /></td>

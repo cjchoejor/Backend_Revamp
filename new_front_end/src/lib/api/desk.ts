@@ -197,6 +197,56 @@ export type DeskAlert = {
   } | null;
 };
 
+export type BillFigures = {
+  net: number;
+  serviceCharge: number;
+  gst: number;
+  total: number;
+  received: number;
+  refunded: number;
+  writtenOff: number;
+  settledBefore: number;
+  balance: number;
+  paidAhead: number;
+};
+
+export type BillStay = {
+  entryId: string;
+  stayNo: number;
+  status: string;
+  stage: string;
+  folioId: string | null;
+  folioState: string | null;
+  checkIn: string | null;
+  checkOut: string | null;
+  nights: number | null;
+  rooms: string[];
+  roomCount: number;
+  guest: string | null;
+  rows: Array<{ key: string; when: string; place: string | null; description: string; qty: number; rate: number; amount: number }>;
+  figures: BillFigures;
+  taxInvoices: Array<{ id: string; number: string }>;
+};
+
+/** A booking's bill, with every other stay of its trip that has one — `GET /api/desk/bills/:id`. */
+export type BillView = {
+  entryId: string;
+  inquiryId: string;
+  currency: string;
+  asAt: string;
+  hotel: { name: string; address: string; phone: string | null; email: string; tpn: string | null; gstTpn: string | null; logo: string | null };
+  billedTo: string;
+  forGuest: string | null;
+  customerTpn: string | null;
+  stays: BillStay[];
+  payments: Array<{ id: string; stayNo: number; at: string; method: string | null; direction: "IN" | "OUT"; amount: number; note: string | null }>;
+  figures: BillFigures;
+};
+
+export async function getBillView(session: Session, entryId: string) {
+  return apiRequest<BillView>(`/api/desk/bills/${encodeURIComponent(entryId)}`, { session });
+}
+
 /** The alerts sent over the last `days` hotel days, today included — newest first. */
 export async function listDeskAlerts(session: Session, q: { days: number }) {
   return apiRequest<{ items: DeskAlert[]; count: number; from: string; to: string; limit: number }>(`/api/desk/alerts?days=${q.days}`, { session });
