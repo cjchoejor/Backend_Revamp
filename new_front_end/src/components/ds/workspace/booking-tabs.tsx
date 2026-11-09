@@ -624,7 +624,6 @@ function PicksPrice({ sp }: { sp: StayPrice }) {
         trip={t.pricing}
         entries={t.entries}
         stayNoOf={t.stayNoOf}
-        currentId={t.entries[0]?.id ?? ""}
         labelsOverride={t.labels}
         loading={t.loading}
         title={t.unsaved ? "The rooms picked · not all saved yet" : "The rooms chosen"}

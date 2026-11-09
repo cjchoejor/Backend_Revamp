@@ -700,7 +700,7 @@ function TheStay({
       {trip.combined ? (
         <div className="trip-stay-head">
           <b>Stay {trip.stayNoOf(entry.id)}</b>
-          <span className="meta">{entry.id} · this booking</span>
+          <span className="meta">{entry.id}</span>
         </div>
       ) : null}
       <StayFields form={form} ro={ro} />
@@ -1569,7 +1569,6 @@ function TheHouse({
               <TripPickLine
                 trip={tripBill.pricing}
                 stayNoOf={trip.stayNoOf}
-                currentId={entry.id}
                 loading={tripBill.loading}
                 title={pickedSaved && othersSaved ? "The rooms chosen" : "The rooms picked · not all saved yet"}
                 help="Indicative, not a quote. Meals, extra beds and any agreed rate are set at Negotiation. The bill for every stay — together, or stay by stay — is in the booking file, under Charges & payments."
@@ -1933,8 +1932,7 @@ function TripByNumber({
     label: (
       <>
         <span>
-          Stay {x.stayNo}
-          {x.mine ? " · this booking" : ""} · {plural(x.numberOfRooms, "room")}
+          Stay {x.stayNo} · {plural(x.numberOfRooms, "room")}
         </span>
         <StayDates checkIn={x.entry.checkInDate} checkOut={x.entry.checkOutDate} />
       </>

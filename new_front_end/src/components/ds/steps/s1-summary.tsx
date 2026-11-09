@@ -140,7 +140,7 @@ export function InquirySummaryDialog({
             <b className="cfg-n">The stays · {plural(tripEntries.length, "stay")}</b>
             <div className="stay-strips">
               {tripEntries.map((e) => (
-                <StayStrip key={e.id} entry={e} stayNo={stayNoOf?.(e.id) ?? 1} mine={e.id === entry.id} firstGuestId={tripEntries[0].guestProfile?.id ?? null} />
+                <StayStrip key={e.id} entry={e} stayNo={stayNoOf?.(e.id) ?? 1} firstGuestId={tripEntries[0].guestProfile?.id ?? null} />
               ))}
             </div>
             {inq?.notes ? (
@@ -183,7 +183,6 @@ export function InquirySummaryDialog({
                 trip={tripBill.pricing}
                 entries={tripEntries}
                 stayNoOf={stayNoOf ?? (() => 1)}
-                currentId={entry.id}
                 loading={tripBill.loading}
                 title="The rooms chosen"
                 help="Indicative, not a quote. Meals, extra beds and any agreed rate are set at Negotiation, where each stay's quotation prices them."
@@ -221,7 +220,7 @@ export function InquirySummaryDialog({
  * their infos can be shown in the same line — the guest, rooms and kind of stay — in a creative
  * way"): its number, its dates, then each fact as a small labelled box, like the dates' own.
  */
-function StayStrip({ entry, stayNo, mine, firstGuestId }: { entry: EntryDetail; stayNo: number; mine: boolean; firstGuestId: string | null }) {
+function StayStrip({ entry, stayNo, firstGuestId }: { entry: EntryDetail; stayNo: number; firstGuestId: string | null }) {
   const nights = enumerateNights(entry.checkInDate, entry.checkOutDate).length;
   const ages = entry.childAges ?? [];
   const kind = USE_TYPES.find(([k]) => k === entry.useType)?.[1] ?? entry.useType ?? null;
@@ -236,10 +235,9 @@ function StayStrip({ entry, stayNo, mine, firstGuestId }: { entry: EntryDetail; 
       </span>
     ) : null;
   return (
-    <div className={`stay-strip${mine ? " mine" : ""}`}>
+    <div className="stay-strip">
       <span className="ss-no">
         Stay {stayNo}
-        {mine ? <small>this booking</small> : null}
       </span>
       <StayDates checkIn={entry.checkInDate} checkOut={entry.checkOutDate} />
       {nights ? <span className="ss-nights">{plural(nights, "night")}</span> : null}

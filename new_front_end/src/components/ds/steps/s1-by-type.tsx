@@ -662,13 +662,13 @@ export function typeOrderOf(catalog: Catalog) {
   return [...seen].map(([roomTypeId, name]) => ({ roomTypeId, name }));
 }
 
-function StayCaption({ entry, stayNo, mine }: { entry: EntryDetail; stayNo: number; mine: boolean }) {
+function StayCaption({ entry, stayNo }: { entry: EntryDetail; stayNo: number }) {
   return (
     <>
       <span className="bt-cap-line">
         <b>Stay {stayNo}</b>
         <span className="meta">
-          {mine ? "this booking" : entry.id} · {plural(entry.numberOfRooms ?? 1, "room")}
+          {entry.id} · {plural(entry.numberOfRooms ?? 1, "room")}
         </span>
       </span>
       <StayDates checkIn={entry.checkInDate} checkOut={entry.checkOutDate} />
@@ -723,7 +723,7 @@ export function TripHouse({
       savers.current[id] = fn;
     });
   const combinedFor = (e: EntryDetail, first: boolean): CombinedProps => ({
-    caption: <StayCaption entry={e} stayNo={stayNoOf(e.id)} mine={e.id === entry.id} />,
+    caption: <StayCaption entry={e} stayNo={stayNoOf(e.id)} />,
     typeOrder,
     showTypeColumn: first,
     onState,

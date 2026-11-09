@@ -282,7 +282,6 @@ export function TripPickBill({
   trip,
   entries,
   stayNoOf,
-  currentId,
   labelsOverride,
   loading,
   title,
@@ -293,8 +292,6 @@ export function TripPickBill({
   /** Every stay of the trip in this bill, read in full — their dates and their rooms' names. */
   entries: EntryDetail[];
   stayNoOf: (id: string) => number;
-  /** This booking's stay — marked "this booking". */
-  currentId: string;
   /** Rooms named by type for picks not saved yet (the grids' own labels). */
   labelsOverride?: Record<string, Record<string, string> | undefined>;
   loading?: boolean;
@@ -308,7 +305,7 @@ export function TripPickBill({
   const c = trip.currency;
   const t = trip.totals;
   const stays = [...trip.stays].sort((a, b) => stayNoOf(a.entryId) - stayNoOf(b.entryId));
-  const name = (id: string) => `Stay ${stayNoOf(id)}${id === currentId ? " · this booking" : ""}`;
+  const name = (id: string) => `Stay ${stayNoOf(id)}`;
   const missing = stays.filter((s) => !s.pricing);
   const nights = stays.reduce((a, s) => a + (s.pricing?.nights.length ?? 0), 0);
   return (
@@ -464,14 +461,12 @@ export function TripPickBill({
 export function TripPickLine({
   trip,
   stayNoOf,
-  currentId,
   title,
   loading,
   help,
 }: {
   trip: TripPickPricing;
   stayNoOf: (id: string) => number;
-  currentId: string;
   title: ReactNode;
   loading?: boolean;
   help?: ReactNode;
@@ -500,7 +495,6 @@ export function TripPickLine({
             <span key={s.entryId} className="trip-each">
               <span className="trip-stay-name">
                 Stay {stayNoOf(s.entryId)}
-                {s.entryId === currentId ? " · this booking" : ""}
               </span>
               {s.checkIn ? <StayDates checkIn={s.checkIn} checkOut={s.checkOut} /> : null}
               {s.pricing ? (
