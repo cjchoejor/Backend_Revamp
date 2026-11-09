@@ -299,6 +299,9 @@ function BackToStep({ name, doing, onBack }: { name: string; doing: string; onBa
   );
 }
 
+/** A move said on the page of the stay the desk goes on to, rather than the one it left. */
+const movedNoteFor = new Map<string, StepMovedNote>();
+
 export function DsWorkspace({ entryId }: { entryId: string }) {
   const { session, isLoading: sessionLoading } = useSession();
   const router = useRouter();
@@ -693,6 +696,12 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const [summaryOpen, setSummaryOpen] = useState(false);
   /** A move said in the middle of the screen (2026-10-27) — the Inquiry's move to Negotiation. */
   const [moved, setMoved] = useState<StepMovedNote | null>(null);
+  useEffect(() => {
+    const note = movedNoteFor.get(entryId);
+    if (!note) return;
+    movedNoteFor.delete(entryId);
+    setMoved(note);
+  }, [entryId]);
   const closeMoved = useCallback(() => setMoved(null), []);
   const advanceMutation = useMutation({
     mutationFn: (vars: { targetStage: string; guestPhysicallyPresent?: boolean; announce?: boolean }) =>
@@ -773,30 +782,36 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
       }
       return { moved, notMoved, updated };
     },
-    onSuccess: ({ moved, notMoved, updated }) => {
+    onSuccess: ({ moved, notMoved, updated }, ids) => {
       const stayWord = (id: string) => `Stay ${together.stayNoOf(id)}`;
       for (const n of notMoved) toast.warning(`${stayWord(n.entryId)} stayed at Reserve — ${n.message}`);
       if (!moved.length) return;
       setArrivalPickOpen(false);
       refreshEntry([["trip-together"], ...moved.filter((id) => id !== entry!.id).map((id) => ["entry", id])]);
-      if (!updated) {
-        void queryClient.invalidateQueries({ queryKey: ["entry", entry!.id] });
-        toast.success(`${moved.map(stayWord).join(" and ")} moved to Arrival`, { description: "This stay carries on at Reserve, on its own page." });
-        return;
-      }
-      afterMove(updated);
-      setSelected(5);
-      const g = (updated as EntryDetail).guestProfile ?? (updated as EntryDetail).inquiry?.guestProfile ?? null;
+      // The desk goes on with the stay it picked first (2026-11-09, operator: "it should let the user
+      // go with the flow and open the one that was selected first"), whichever stay was open.
+      const lead = ids.find((id) => moved.includes(id))!;
+      const leadEntry = lead === entry!.id ? (updated ?? entry!) : (together.others.find((o) => o.id === lead) ?? entry!);
+      const g = leadEntry.guestProfile ?? leadEntry.inquiry?.guestProfile ?? null;
       const left = together.stayIds.filter((id) => !moved.includes(id));
-      setMoved({
+      const note: StepMovedNote = {
         title: moved.length > 1 ? `${plural(moved.length, "stay")} moved to Arrival` : "Reserve is done",
         from: "Reserve",
         to: "Arrival",
-        who: [[g?.title, g?.firstName, g?.lastName].filter(Boolean).join(" ") || null, (updated as EntryDetail).id].filter(Boolean).join(" · "),
+        who: [[g?.title, g?.firstName, g?.lastName].filter(Boolean).join(" ") || null, lead].filter(Boolean).join(" · "),
         next: left.length
           ? `${left.map(stayWord).join(" and ")} carries on at Reserve. From here each stay has its own page.`
           : "From here each stay has its own page. Next: the rooms and the advance — then the guest is checked in.",
-      });
+      };
+      if (updated) afterMove(updated);
+      if (lead === entry!.id) {
+        setSelected(5);
+        setMoved(note);
+        return;
+      }
+      // Another stay's page is a new page: it says the move when it opens.
+      movedNoteFor.set(lead, note);
+      router.push(bookingHref(lead, 5));
     },
     onError: fail("Couldn't open Arrival yet"),
   });
