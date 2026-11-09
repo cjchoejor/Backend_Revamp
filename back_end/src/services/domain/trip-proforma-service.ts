@@ -121,7 +121,7 @@ function standing(stays: TripStay[]) {
     const stage = s.entry.currentStage;
     if (stage === Stage.S1 || stage === Stage.S2) return `Stay ${s.stayNo} (${s.entry.id}) is not set up yet — bring it to Set up first.`;
     if (stage !== Stage.S3) return `Stay ${s.stayNo} (${s.entry.id}) is past Set up — each stay goes on with its own papers from Reserve.`;
-    if (!s.invoice) return `Stay ${s.stayNo} (${s.entry.id}) has no proforma yet — set who pays and the advance on its Set up first.`;
+    if (!s.invoice) return `Stay ${s.stayNo} (${s.entry.id}) has no proforma yet — set who pays first.`;
     if (s.invoice.lapsedAt) return `Stay ${s.stayNo}'s proforma ran out — make it again on its Set up first.`;
   }
   return null;
