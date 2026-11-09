@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button, Chip } from "@/design-system";
 import { useSession } from "@/hooks/use-session";
@@ -123,8 +123,9 @@ function TripPaperRows({ entry, show, title, sealed }: { entry: EntryDetail; sho
 /**
  * A trip's papers in the booking file (2026-11-09, operator: "on the right panel, it can both together
  * and separate stays quote, do it for all the papers. keep options to view like that"). Together is
- * the trip's own paper; Stay by stay is each stay's papers, with every version. Only while the stays
- * are viewed together: on one stay's own page the file lists that stay's papers alone.
+ * the trip's own paper; Stay by stay is each stay's papers, with every version. On one stay's own
+ * page the file lists that stay's papers alone (same day, operator: "i am in stay one but it is
+ * showing stay 2s proforma"), with the trip's paper a click away when there is one.
  */
 export function TripPapersShelf({
   entry,
@@ -140,22 +141,43 @@ export function TripPapersShelf({
   /** Whether a stay has any paper of this kind. */
   has: (stay: EntryDetail) => boolean;
 }) {
+  const { session } = useSession();
   const { stays, stayNoOf } = useTripStays(entry);
   const together = useStaysTogether(entry);
-  const [view, setView] = useState<"TOGETHER" | "EACH">("TOGETHER");
+  const K = KINDS[show];
+  const tripPaper = useQuery({
+    queryKey: [K.key, entry.id, entry.updatedAt ?? ""],
+    queryFn: (): Promise<TripPaperRead> => K.get(session!, entry.id),
+    enabled: !!session,
+  }).data;
+  const [pick, setPick] = useState<"TOGETHER" | "EACH" | "OWN" | null>(null);
+  useEffect(() => setPick(null), [together.active]);
+  const view = pick ?? (together.active ? "TOGETHER" : "OWN");
+  const options = together.active
+    ? ([["TOGETHER", "Together"], ["EACH", "Stay by stay"]] as const)
+    : ([["OWN", "This stay"], ["TOGETHER", "The trip's"]] as const);
+  const showSwitch = together.active || (tripPaper?.versions.length ?? 0) > 0;
   return (
     <>
-      <div className="trip-bill-switch">
-        <Choice options={[["TOGETHER", "Together"], ["EACH", "Stay by stay"]] as const} value={view} onChange={setView} />
-      </div>
-      {view === "TOGETHER"
-        ? <TripPaperRows entry={entry} show={show} title={title} sealed={sealed} />
-        : stays.filter((s) => together.stayIds.includes(s.id) && has(s)).map((s) => (
+      {showSwitch ? (
+        <div className="trip-bill-switch">
+          <Choice options={options} value={view} onChange={setPick} />
+        </div>
+      ) : null}
+      {view === "TOGETHER" ? (
+        <TripPaperRows entry={entry} show={show} title={title} sealed={sealed} />
+      ) : view === "OWN" ? (
+        <PapersCard entry={entry} show={show} title={title} withFolioDocs={false} />
+      ) : (
+        stays
+          .filter((s) => together.stayIds.includes(s.id) && has(s))
+          .map((s) => (
             <div key={s.id} className="trip-stay-block">
               <StayBand stay={s} stayNo={stayNoOf(s.id)} />
               <PapersCard entry={s} show={show} title={title} withFolioDocs={false} />
             </div>
-          ))}
+          ))
+      )}
     </>
   );
 }

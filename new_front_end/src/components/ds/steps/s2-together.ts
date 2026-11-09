@@ -61,8 +61,13 @@ export function useStaysTogether(entry: EntryDetail | null) {
     queryKey: ["trip-together", entry?.id, entry?.updatedAt],
     queryFn: () => getStaysTogether(session!, entry!.id),
     enabled: !!session && !!entry && many && WORKED_TOGETHER.includes(entry.currentStage),
+    // The key moves with every change to the booking. Keeping the last answer meanwhile stops the
+    // page dropping to one stay's view, and back, on each save.
+    placeholderData: (prev) => prev,
   });
-  const stayIds = entry && WORKED_TOGETHER.includes(entry.currentStage) ? (q.data?.stayIds ?? []) : [];
+  const worked = !!entry && WORKED_TOGETHER.includes(entry.currentStage);
+  const answered = q.data?.stayIds ?? [];
+  const stayIds = worked && (answered.length === 0 || answered.includes(entry!.id)) ? answered : [];
   const otherIds = stayIds.filter((id) => id !== entry?.id);
   const reads = useQueries({
     queries: otherIds.map((id) => ({
@@ -79,6 +84,11 @@ export function useStaysTogether(entry: EntryDetail | null) {
   const canBeTogether = stayIds.length > 1;
   const loaded = others.length === otherIds.length;
   return {
+    /**
+     * Not known yet which view this is (2026-11-09). A table drawn for one stay in the meantime saved
+     * an empty copy before it had seated anyone, and the together view then opened on it.
+     */
+    deciding: many && worked && (q.isLoading || (q.isPlaceholderData && !answered.includes(entry!.id)) || (canBeTogether && view === "together" && !loaded)),
     canBeTogether,
     active: canBeTogether && loaded && view === "together",
     view,

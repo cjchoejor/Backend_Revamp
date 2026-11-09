@@ -1385,14 +1385,14 @@ export function DocumentsView({
                 ? {
                     key: "quotations",
                     label: <>Quotations{count(quotes)}</>,
-                    content: together.active ? <TripPapersShelf entry={entry} show="quotes" title="Quotations" sealed={sealed} has={(e) => quotesOf(e) > 0} /> : <PapersCard entry={entry} show="quotes" title="Quotations" />,
+                    content: trip.isTrip ? <TripPapersShelf entry={entry} show="quotes" title="Quotations" sealed={sealed} has={(e) => quotesOf(e) > 0} /> : <PapersCard entry={entry} show="quotes" title="Quotations" />,
                   }
                 : null,
               proformas
                 ? {
                     key: "proformas",
                     label: <>Proforma invoices{count(proformas)}</>,
-                    content: together.active ? <TripPapersShelf entry={entry} show="proformas" title="Proforma invoices" sealed={sealed} has={(e) => proformasOf(e) > 0} /> : <PapersCard entry={entry} show="proformas" title="Proforma invoices" />,
+                    content: trip.isTrip ? <TripPapersShelf entry={entry} show="proformas" title="Proforma invoices" sealed={sealed} has={(e) => proformasOf(e) > 0} /> : <PapersCard entry={entry} show="proformas" title="Proforma invoices" />,
                   }
                 : null,
               bills || folioLive || otherBills.length
@@ -1424,7 +1424,7 @@ export function DocumentsView({
                 ? {
                     key: "vouchers",
                     label: <>Vouchers{count(vouchers)}</>,
-                    content: together.active ? <TripPapersShelf entry={entry} show="others" title="Vouchers" sealed={sealed} has={(e) => vouchersOf(e) > 0} /> : <PapersCard entry={entry} show="others" title="Vouchers" withFolioDocs={false} />,
+                    content: trip.isTrip ? <TripPapersShelf entry={entry} show="others" title="Vouchers" sealed={sealed} has={(e) => vouchersOf(e) > 0} /> : <PapersCard entry={entry} show="others" title="Vouchers" withFolioDocs={false} />,
                   }
                 : null,
               sent.length

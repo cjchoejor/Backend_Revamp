@@ -53,7 +53,7 @@ import { useStaysTogether } from "./s2-together";
 import { SendToField, useSendTo } from "./s8-parts";
 import { CancellationFiguresLine, WaiverTick, useRefundHow } from "./cancel-figures";
 import { CompetingClaimsCard, passesOf, roomsHeldWord, useRoomNumbers, useRoomTypeNames } from "./s2-shared";
-import { PaymentPlanCard } from "./s3-money";
+import { PaymentPlanCard, TogetherPaymentPlan } from "./s3-money";
 import { Help, HelpHere } from "@/components/ds/help";
 import { DateInput, TimeInput } from "@/components/ds/date-input";
 import { billNo, proformaBaseNo, quoteNo } from "@/lib/ds/papers";
@@ -160,7 +160,37 @@ export function S3SetUp({
   const currentProforma = proformas.find((i) => i.state !== "SUPERSEDED") ?? null;
   const together = useStaysTogether(past ? null : entry);
   const tripProforma = useTripProforma(entry);
-  const tripProformaShown = together.active && !!tripProforma.data?.current?.upToDate;
+  // Viewing the stays together, every section of this page acts on all of them (2026-11-09, operator).
+  const groupStays = useMemo(
+    () => (together.active ? [entry, ...together.others].sort((a, b) => together.stayNoOf(a.id) - together.stayNoOf(b.id)) : [entry]),
+    [entry, together.active, together.others], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+  const qc = useQueryClient();
+  const changedAll = () => {
+    void qc.invalidateQueries({ queryKey: ["trip-proforma"] });
+    refresh([...extraKeys, ...groupStays.flatMap((st) => [["entry", st.id], ["payment-status", st.id], ["entry-communications", st.id], ["billing-summary", st.id]])]);
+  };
+  const missingProforma = (tripProforma.data?.stays ?? []).filter((st) => !st.proforma).map((st) => st.entryId);
+  /** "No advance": each stay's proforma, the box closing once the page has them. */
+  const generateProformas = useMutation({
+    mutationFn: async (ids: string[]) => {
+      const failed: Array<{ id: string; error: unknown }> = [];
+      for (const id of ids) {
+        try {
+          await generateProforma(session!, id);
+        } catch (error) {
+          failed.push({ id, error });
+        }
+      }
+      await Promise.all([...ids.map((id) => qc.refetchQueries({ queryKey: ["entry", id] })), qc.refetchQueries({ queryKey: ["trip-proforma"] })]);
+      return failed;
+    },
+    onSuccess: (failed, ids) => {
+      if (failed.length < ids.length) toast.success("No advance asked · the proforma is generated, not sent");
+      for (const f of failed) toastRefusal(f.error, `Stay ${together.stayNoOf(f.id)}'s proforma could not be generated`);
+      changedAll();
+    },
+  });
   const dispatched = proformas.some((i) => i.state !== "SUPERSEDED" && i.dispatchedAt != null);
   const comms = useCommunications(entry.id);
   const passStart = currentPassStart(entry);
@@ -269,13 +299,60 @@ export function S3SetUp({
       <StageActs>
         <ChangeBookingMenu items={changeItems} />
       </StageActs>
-      {together.active ? (
-        <p className="notice next" role="status">
-          <span>
-            Viewing {together.label.toLowerCase()} together: the proforma is the trip&rsquo;s. Who pays, the advance and the block on this page are <b>Stay {together.stayNoOf(entry.id)}</b>&rsquo;s — open the other stay from the top to set its own. Move to Reserve blocks every stay&rsquo;s rooms.
-          </span>
-        </p>
-      ) : null}
+      {together.deciding ? (
+        <span className="meta">Reading the stays…</span>
+      ) : together.active ? (
+        <>
+          <TogetherWhoPays
+            entry={entry}
+            stays={groupStays}
+            stayNoOf={together.stayNoOf}
+            editable={editable}
+            gm={gm}
+            generate={generateProformas}
+            onAskAdvance={() => setAskAdvance((n) => n + 1)}
+            onChanged={changedAll}
+          />
+          {groupStays.map((st) => (
+            <StayEarlierAdvance key={st.id} stay={st} tz={tz} onChanged={changedAll} />
+          ))}
+          <TripProformaCard
+            entry={entry}
+            editable={editable}
+            inFlow
+            advanceAsk={
+              editable && missingProforma.length > 0 && groupStays.every((st) => !missingProforma.includes(st.id) || !!st.folio?.billingModel)
+                ? { busy: generateProformas.isPending, onNo: () => generateProformas.mutate(missingProforma), onYes: () => setAskAdvance((n) => n + 1) }
+                : null
+            }
+          />
+          <TogetherPaymentPlan
+            entry={entry}
+            stays={groupStays}
+            stayNoOf={together.stayNoOf}
+            editable={editable}
+            elevated={elevated}
+            tz={tz}
+            askAdvance={askAdvance}
+            onPaymentRecorded={() => setBlockAsk((n) => n + 1)}
+            onChanged={changedAll}
+          />
+          <TogetherHold
+            entry={entry}
+            stays={groupStays}
+            stayNoOf={together.stayNoOf}
+            editable={editable}
+            gm={gm}
+            fom={atLeast(session?.actorLevel, "L2")}
+            tz={tz}
+            nowMs={clock.now}
+            roomNos={roomNos}
+            blockAsk={blockAsk}
+            onChanged={changedAll}
+          />
+        </>
+      ) : (
+        <>
       <BillingModelCard
         entry={entry}
         editable={editable}
@@ -303,7 +380,6 @@ export function S3SetUp({
 
       {/* Viewing the stays together shows only the trip's proforma, once there is one; Send sends
           that one (2026-11-09, operator). A stay still without its own makes it here first. */}
-      {tripProformaShown ? <TripProformaCard entry={entry} editable={editable} inFlow /> : (
       <ProformaCard
         entry={entry}
         editable={editable}
@@ -317,8 +393,6 @@ export function S3SetUp({
         onAskAdvance={() => setAskAdvance((n) => n + 1)}
         onChanged={changed}
       />
-      )}
-      {together.active && !tripProformaShown ? <TripProformaCard entry={entry} editable={editable} /> : null}
 
       <PaymentPlanCard
         entry={entry}
@@ -345,6 +419,8 @@ export function S3SetUp({
         blockAsk={blockAsk}
         onChanged={changed}
       />
+        </>
+      )}
       {/* What Reserve asks that the sections above do not — the page between Set up and Reserve
           is gone (2026-10-29), and Reserve the booking floats in here. */}
 
@@ -589,6 +665,340 @@ function BillingModelCard({
         >
           <p className="sm">Does the hotel want an advance on this booking?</p>
         </DsDialog>
+      ) : null}
+    </StepCard>
+  );
+}
+
+/* ------------------------------------------------------------------ the stays together */
+
+/**
+ * Viewing the stays together at Set up, each section acts on every stay (2026-11-09, operator: "it
+ * should be doing for together like how it was done in stage 2"). Who pays is one choice, set on each
+ * stay through its own checks; a stay refused is named.
+ */
+function TogetherWhoPays({
+  entry,
+  stays,
+  stayNoOf,
+  editable,
+  gm,
+  generate,
+  onAskAdvance,
+  onChanged,
+}: {
+  entry: EntryDetail;
+  stays: EntryDetail[];
+  stayNoOf: (id: string) => number;
+  editable: boolean;
+  gm: boolean;
+  generate: { isPending: boolean; mutateAsync: (ids: string[]) => Promise<unknown> };
+  onAskAdvance: () => void;
+  onChanged: () => void;
+}) {
+  const { session } = useSession();
+  const qc = useQueryClient();
+  const choices = useQuery({ queryKey: ["payer-choices", entry.id], queryFn: () => getPayerChoices(session!, entry.id), enabled: !!session });
+  const party = payerPartyOf(entry);
+  const group = entry.groupBillingMode === "GROUP_MASTER";
+  const saved = stays.map((st) => st.folio?.billingModel ?? null);
+  const savedKey = saved.join("|");
+  const common = saved.every((m) => m === saved[0]) ? saved[0] : null;
+  const [picked, setPicked] = useState<string | null>(null);
+  useEffect(() => setPicked(null), [savedKey]);
+  const model = picked ?? common ?? choices.data?.defaultChoice ?? null;
+  const options = useMemo(() => {
+    const keys = [...(choices.data?.choices ?? [])];
+    for (const m of saved) if (m && !keys.includes(m)) keys.push(m);
+    return keys.map((k) => [k, payerChoiceWord(k, party)] as const);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [choices.data?.choices, savedKey, party]);
+  const finish = useFinishWhenDone("billing-model");
+  const dirty = stays.some((st) => st.folio?.billingModel !== model);
+  useFlowUnsaved("billing-model", editable && !!common && model !== common, "Changes to who pays saved");
+  const groupLock = group && !!model && !GROUP_FRIENDLY.has(model) && !gm ? "for a group, only the account or the package — anything else is the GM's call" : null;
+  const [ask, setAsk] = useState<string[]>([]);
+  const save = useMutation({
+    mutationFn: async () => {
+      const asks: string[] = [];
+      const failed: Array<{ id: string; error: unknown }> = [];
+      for (const st of stays) {
+        if (st.folio?.billingModel === model) continue;
+        try {
+          const out = await ensureProvisionalFolio(session!, st.id, { billingModel: model!, askAdvanceFirst: true });
+          if (out.advanceQuestion) asks.push(st.id);
+        } catch (error) {
+          failed.push({ id: st.id, error });
+        }
+      }
+      await Promise.all([...stays.map((st) => qc.refetchQueries({ queryKey: ["entry", st.id] })), qc.refetchQueries({ queryKey: ["trip-proforma"] })]);
+      return { asks, failed };
+    },
+    onSuccess: ({ asks, failed }) => {
+      if (failed.length < stays.length) toast.success("Who pays is set on every stay");
+      for (const f of failed) toastRefusal(f.error, `Who pays could not be set on stay ${stayNoOf(f.id)}`);
+      onChanged();
+      if (asks.length) setAsk(asks);
+      else finish();
+    },
+  });
+  return (
+    <StepCard
+      flow="billing-model"
+      title="Who pays"
+      summary={common ? payerChoiceWord(common, party) : undefined}
+      right={common && !dirty ? <OnRecord /> : null}
+      meta="One choice for every stay viewed together. Who the bill is made out to; each stay keeps its own bill."
+    >
+      <Choice options={options} value={model} onChange={editable ? setPicked : undefined} disabled={!editable} />
+      {!common && saved.some(Boolean) ? (
+        <p className="sm warn-ink" style={{ marginTop: 6 }}>
+          {stays.map((st) => `Stay ${stayNoOf(st.id)}: ${st.folio?.billingModel ? payerChoiceWord(st.folio.billingModel, party) : "not set"}`).join(" · ")}
+        </p>
+      ) : null}
+      <Live>
+        {editable && dirty ? (
+          <div className="row-acts" style={{ marginTop: 10 }}>
+            <Button
+              compact
+              className={groupLock || !model ? undefined : "go"}
+              state={save.isPending ? "working" : groupLock || !model ? "inert" : "default"}
+              title={groupLock ?? undefined}
+              workingLabel="Saving…"
+              onClick={() => save.mutate()}
+            >
+              {common ? "Change who pays" : "Set who pays"}
+            </Button>
+            {common ? (
+              <Button kind="quiet" compact onClick={() => setPicked(common)}>
+                Undo
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
+      </Live>
+      {ask.length ? (
+        <DsDialog
+          open
+          closeX
+          busy={generate.isPending}
+          onClose={() => {
+            setAsk([]);
+            finish();
+          }}
+          title="Ask the guest for an advance?"
+          caseLines={["Nothing is asked of these stays so far"]}
+          help="Each proforma prints the advance, so they are generated once this is answered."
+          footer={
+            <>
+              <Button
+                kind="secondary"
+                state={generate.isPending ? "working" : "default"}
+                workingLabel="Generating…"
+                onClick={() => {
+                  void generate.mutateAsync(ask).then(() => {
+                    setAsk([]);
+                    finish({ next: "hold" });
+                  });
+                }}
+              >
+                No advance
+              </Button>
+              <Button
+                state={generate.isPending ? "inert" : "default"}
+                onClick={() => {
+                  setAsk([]);
+                  finish({ next: "money" });
+                  onAskAdvance();
+                }}
+              >
+                Yes, ask for an advance
+              </Button>
+            </>
+          }
+        >
+          <p className="sm">Does the hotel want an advance on these stays?</p>
+        </DsDialog>
+      ) : null}
+    </StepCard>
+  );
+}
+
+/** A stay's own question about money from an earlier pass, on the page viewing all the stays. */
+function StayEarlierAdvance({ stay, tz, onChanged }: { stay: EntryDetail; tz: string; onChanged: () => void }) {
+  const status = usePaymentStatus(stay.id, { enabled: !!stay.folio }).data;
+  return <EarlierAdvanceQuestion entry={stay} status={status} tz={tz} onChanged={onChanged} />;
+}
+
+/** The block a stay holds in this pass: one kept by an earlier pass's reservation does not count. */
+const heldOf = (st: EntryDetail) => {
+  const raw = st.committedHold ?? null;
+  return raw && raw.state !== "RELEASED" && raw.state !== "EXPIRED" && raw.state !== "CONFIRMED" ? raw : null;
+};
+
+function StayHoldRow({ stay, stayNo, tz, nowMs, roomNos, houseWords }: { stay: EntryDetail; stayNo: number; tz: string; nowMs: number; roomNos: Map<string, string>; houseWords: string | null }) {
+  const roomNames = useBookingRooms(stay).named;
+  const typeNames = useRoomTypeNames();
+  const sealed = (stay.availabilityConfigs ?? []).find((c) => c.sealedAt && c.optionSelected);
+  const ids = optionSelectedRoomIds(sealed?.optionSelected);
+  const hold = heldOf(stay);
+  const heldIds = ids.length ? ids : hold?.roomId ? [hold.roomId] : [];
+  const rooms = roomsHeldWord(heldIds.map((id) => ({ number: roomNos.get(id) ?? null, typeName: typeNames.get(id) ?? null, quiet: roomNames.has(id) })));
+  const many = heldIds.length > 1;
+  if (!hold) {
+    return (
+      <div className="sm" style={{ marginBottom: 4 }}>
+        <b>Stay {stayNo}</b> · {rooms} not blocked yet
+      </div>
+    );
+  }
+  const lapsed = new Date(hold.expiresAt).getTime() < nowMs;
+  const whose = stay.holdExpiresAtOverride ? "the time set for this booking" : houseWords ? `the hotel's ${houseWords}` : "the hotel's time";
+  return (
+    <div className={`hold-line${lapsed ? " lapsed" : ""}`} style={{ marginBottom: 4 }}>
+      <Icon name="lock" />
+      <span className="hold-text">
+        <b>Stay {stayNo}</b> · <b>{rooms}</b> {lapsed ? (many ? "were" : "was") : many ? "are" : "is"} blocked until <b>{fmtDateTime(hold.expiresAt, tz)}</b>
+        <span className="hold-whose"> · {whose}</span>
+        {lapsed ? <b className="crit-tag" style={{ marginLeft: 8 }}>Critical</b> : null}
+      </span>
+    </div>
+  );
+}
+
+/** Block the Entry for every stay viewed together: one block time, one release. */
+function TogetherHold({
+  entry,
+  stays,
+  stayNoOf,
+  editable,
+  gm,
+  fom,
+  tz,
+  nowMs,
+  roomNos,
+  blockAsk,
+  onChanged,
+}: {
+  entry: EntryDetail;
+  stays: EntryDetail[];
+  stayNoOf: (id: string) => number;
+  editable: boolean;
+  gm: boolean;
+  fom: boolean;
+  tz: string;
+  nowMs: number;
+  roomNos: Map<string, string>;
+  blockAsk: number;
+  onChanged: () => void;
+}) {
+  const { session } = useSession();
+  const flow = useStepFlow();
+  const [askBlock, setAskBlock] = useState(false);
+  const [timeOpen, setTimeOpen] = useState(false);
+  const [releaseOpen, setReleaseOpen] = useState(false);
+  const allHeld = stays.every((st) => !!heldOf(st));
+  useEffect(() => {
+    if (!blockAsk || allHeld) return;
+    if (flow.on) flow.open("hold");
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => goToStepCard("hold")));
+    setAskBlock(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [blockAsk]);
+  const house = useQuery({ queryKey: ["hold-window"], queryFn: () => getHoldWindow(session!), enabled: !!session, staleTime: 600_000 }).data ?? null;
+  const houseWords = house ? blockWindowWords(house.minutes) : null;
+  const held = stays.filter((st) => !!heldOf(st));
+  const lapsing = held.some((st) => new Date(heldOf(st)!.expiresAt).getTime() < nowMs);
+  const mayRelease = gm || (fom && lapsing);
+  const mayRetime = !lapsing || fom;
+  const release = useMutation({
+    mutationFn: async (reason: string) => {
+      const failed: Array<{ id: string; error: unknown }> = [];
+      for (const st of held) {
+        try {
+          await releaseCommittedHold(session!, st.id, { releaseReason: reason });
+        } catch (error) {
+          failed.push({ id: st.id, error });
+        }
+      }
+      return failed;
+    },
+    onSuccess: (failed) => {
+      if (failed.length < held.length) toast.success("The blocks are released — the rooms are back on sale");
+      for (const f of failed) toastRefusal(f.error, `Stay ${stayNoOf(f.id)}'s block could not be released`);
+      setReleaseOpen(false);
+      onChanged();
+    },
+  });
+  const own = stays.find((st) => st.holdExpiresAtOverride) ?? null;
+  return (
+    <StepCard
+      flow="hold"
+      flowAfter="proforma"
+      title="Block the Entry"
+      acts={
+        <Live>
+          <SeeRow
+            label="Set block time"
+            note="the same time for every stay"
+            onClick={editable && mayRetime ? () => setTimeOpen(true) : undefined}
+            reason={!editable ? "not at this step" : mayRetime ? undefined : "the FOM's or GM's call now"}
+          />
+          {held.length ? (
+            <SeeRow
+              label="Release"
+              note="frees every stay's rooms, with a reason"
+              onClick={editable && mayRelease ? () => setReleaseOpen(true) : undefined}
+              reason={!editable ? "not at this step" : mayRelease ? undefined : lapsing ? "the FOM's or GM's call" : "releasing a block is the GM's call"}
+            />
+          ) : null}
+        </Live>
+      }
+    >
+      {stays.map((st) => (
+        <StayHoldRow key={st.id} stay={st} stayNo={stayNoOf(st.id)} tz={tz} nowMs={nowMs} roomNos={roomNos} houseWords={houseWords} />
+      ))}
+      {!allHeld ? <span className="meta">Move to Reserve blocks every stay&rsquo;s rooms not blocked yet.</span> : null}
+      {askBlock && !timeOpen ? (
+        <DsDialog
+          open
+          onClose={() => setAskBlock(false)}
+          title="Block the rooms now?"
+          footer={
+            <>
+              <Button kind="secondary" onClick={() => setAskBlock(false)}>
+                Close
+              </Button>
+              <Button
+                icon="clock"
+                onClick={() => {
+                  setAskBlock(false);
+                  setTimeOpen(true);
+                }}
+              >
+                Set block time
+              </Button>
+            </>
+          }
+        >
+          <p className="sm">The payment is recorded. Set a block time to hold every stay&rsquo;s rooms until then. If you close this, they stay on sale until a block time is set here or you press Move to Reserve.</p>
+        </DsDialog>
+      ) : null}
+      {timeOpen ? (
+        <HoldTimeDialog
+          entry={entry}
+          tz={tz}
+          houseWords={houseWords}
+          currentIso={heldOf(entry)?.expiresAt ?? entry.holdExpiresAtOverride ?? own?.holdExpiresAtOverride ?? null}
+          hasOwnTime={!!own}
+          holdLive={!!heldOf(entry)}
+          alsoFor={stays.filter((st) => st.id !== entry.id).map((st) => ({ id: st.id, stayNo: stayNoOf(st.id), holdLive: !!heldOf(st) }))}
+          onClose={() => setTimeOpen(false)}
+          onChanged={onChanged}
+        />
+      ) : null}
+      {releaseOpen ? (
+        <ReleaseDialog onlyRelease caseLine={`${held.length} stays blocked`} busy={release.isPending} onClose={() => setReleaseOpen(false)} onRelease={(r) => release.mutate(r)} onCancelBooking={() => undefined} />
       ) : null}
     </StepCard>
   );
@@ -884,14 +1294,17 @@ function ReleaseDialog({
   onClose,
   onRelease,
   onCancelBooking,
+  onlyRelease = false,
 }: {
+  /** Several stays at once: cancelling is each stay's own act, so it is not asked here. */
+  onlyRelease?: boolean;
   caseLine: string | null;
   busy: boolean;
   onClose: () => void;
   onRelease: (reason: string) => void;
   onCancelBooking: () => void;
 }) {
-  const [choice, setChoice] = useState<"KEEP" | "CANCEL" | null>(null);
+  const [choice, setChoice] = useState<"KEEP" | "CANCEL" | null>(onlyRelease ? "KEEP" : null);
   const [why, setWhy] = useState("");
   return (
     <DsDialog
@@ -915,17 +1328,19 @@ function ReleaseDialog({
         )
       }
     >
-      <div className="field">
-        <label>Should the booking be cancelled as well?</label>
-        <Choice
-          options={[
-            ["KEEP", "No, only release the rooms"],
-            ["CANCEL", "Yes, cancel the booking"],
-          ]}
-          value={choice}
-          onChange={setChoice}
-        />
-      </div>
+      {onlyRelease ? null : (
+        <div className="field">
+          <label>Should the booking be cancelled as well?</label>
+          <Choice
+            options={[
+              ["KEEP", "No, only release the rooms"],
+              ["CANCEL", "Yes, cancel the booking"],
+            ]}
+            value={choice}
+            onChange={setChoice}
+          />
+        </div>
+      )}
       {choice === "KEEP" ? (
         <>
           <p className="sm" style={{ margin: "0 0 10px" }}>
@@ -1024,6 +1439,7 @@ function HoldTimeDialog({
   onClose,
   onChanged,
   onSet,
+  alsoFor,
 }: {
   entry: EntryDetail;
   tz: string;
@@ -1035,6 +1451,8 @@ function HoldTimeDialog({
   onChanged: () => void;
   /** What the block now runs to, whose time that is, and whether a block stands now. */
   onSet?: (until: string | null, whose: "BOOKING" | "HOUSE", live: boolean) => void;
+  /** Viewing stays together: the same time for these stays too. */
+  alsoFor?: Array<{ id: string; stayNo: number; holdLive: boolean }>;
 }) {
   const { session } = useSession();
   const seed = hotelFormParts(currentIso ?? new Date(Date.now() + 60 * 60_000).toISOString(), tz);
@@ -1043,13 +1461,19 @@ function HoldTimeDialog({
   const [why, setWhy] = useState("");
 
   const save = useMutation({
-    mutationFn: (clear: boolean) =>
-      setCommittedHoldExpiry(
-        session!,
-        entry.id,
-        // Setting a block time is how the desk blocks the rooms at Set up (2026-11-05).
-        clear ? { clear: true, reason: why.trim() || undefined } : { date, time, reason: why.trim() || undefined, blockNow: !holdLive },
-      ),
+    mutationFn: async (clear: boolean) => {
+      // Setting a block time is how the desk blocks the rooms at Set up (2026-11-05).
+      const body = (live: boolean) => (clear ? { clear: true, reason: why.trim() || undefined } : { date, time, reason: why.trim() || undefined, blockNow: !live });
+      const out = await setCommittedHoldExpiry(session!, entry.id, body(holdLive));
+      for (const o of alsoFor ?? []) {
+        await setCommittedHoldExpiry(session!, o.id, body(o.holdLive))
+          .then((r) => {
+            if (r.blockRefused) toast.warning(`Stay ${o.stayNo}'s rooms are not blocked yet`, { description: r.blockRefused, duration: 10000 });
+          })
+          .catch((e) => toastRefusal(e, `Stay ${o.stayNo}'s block time was not changed`));
+      }
+      return out;
+    },
     onSuccess: (out) => {
       // A block standing now is said on its line; one that could not be placed says why.
       if (out.blockRefused) {
@@ -1077,7 +1501,7 @@ function HoldTimeDialog({
       busy={save.isPending}
       width={560}
       title="Set block time"
-      caseLines={[entry.id, houseWords ? `the hotel blocks for ${houseWords}` : "the hotel's own time"]}
+      caseLines={[alsoFor?.length ? "The same time for every stay" : entry.id, houseWords ? `the hotel blocks for ${houseWords}` : "the hotel's own time"]}
       footer={
         <>
           <Button kind="quiet" state={save.isPending ? "inert" : "default"} onClick={onClose}>

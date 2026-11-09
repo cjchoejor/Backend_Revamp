@@ -19,7 +19,7 @@
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button, Chip, Dialog, EmptyState, Icon } from "@/design-system";
 import { StandingChip, bookingHref } from "@/components/ds/ui";
@@ -27,6 +27,7 @@ import { FollowNotice, StayPicker, TripFollowPrompt, tripOf } from "@/components
 import { useSession } from "@/hooks/use-session";
 import { useHotelDay } from "@/hooks/use-hotel-day";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
+import { getPaymentStatus } from "@/lib/api/reservation-setup";
 import { usePaymentStatus } from "@/hooks/use-payment-status";
 import { useCheckInPayment } from "@/hooks/use-checkin-payment";
 import { useBookingRooms } from "@/hooks/use-booking-rooms";
@@ -337,6 +338,14 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   // A room the system chose and may still move reads "Deluxe Double · room 1" until Arrival.
   const bookingRoomNames = useBookingRooms(entry);
 
+  // Viewing the stays together at Set up, the other stays' money and answers hold the move too (2026-11-09).
+  const setUpOthers = reservingTogether ? together.others : [];
+  const otherPayReads = useQueries({
+    queries: setUpOthers.map((o) => ({ queryKey: ["payment-status", o.id], queryFn: () => getPaymentStatus(session!, o.id), enabled: !!session && !!o.folio, retry: false })),
+  });
+  const otherCommReads = useQueries({
+    queries: setUpOthers.map((o) => ({ queryKey: ["entry-communications", o.id], queryFn: () => listEntryCommunications(session!, o.id), enabled: !!session })),
+  });
   const paymentStatusQuery = usePaymentStatus(entryId, { enabled: !!entry?.folio });
   const paymentSatisfied = paymentStatusQuery.data?.satisfied;
   const totalReceived = paymentStatusQuery.data?.totalReceived ?? null;
@@ -658,7 +667,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
       setSelected(4);
       const g = entry!.guestProfile ?? entry!.inquiry?.guestProfile ?? null;
       const until = fmtDateTime(out.expiresAt, clock.tz);
-      const subject = out.roomCount === 1 ? "The room is blocked" : "The rooms are blocked";
+      const subject = reservingTogether ? `The rooms of ${together.label.toLowerCase()} are blocked` : out.roomCount === 1 ? "The room is blocked" : "The rooms are blocked";
       setMoved({
         title: out.placed && out.source === "HOUSE" ? `${subject} for ${blockWindowWords(out.houseWindowMinutes)}` : `${subject} until ${until}`,
         who: [out.placed && out.source === "HOUSE" ? `Until ${until}` : null, [g?.title, g?.firstName, g?.lastName].filter(Boolean).join(" ") || null, entry!.id].filter(Boolean).join(" · "),
@@ -1112,12 +1121,28 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
         : [{ label: "Reading the trip's other stays", met: false, card: "house" }]
       : [];
 
+  // Every other stay viewed together, by its own list (2026-11-09, operator: "it should do it for both stays together").
+  const otherStayItems = (read: typeof s3Readiness): Precondition[] =>
+    setUpOthers.flatMap((o, i) => {
+      const p = otherPayReads[i]?.data;
+      return read(o, {
+        paymentSatisfied: p?.satisfied,
+        totalReceived: p?.totalReceived ?? null,
+        requiredAmount: p?.requiredAmount ?? null,
+        communications: otherCommReads[i]?.data?.items,
+        earlierAdvanceAsked: !!p?.earlierAdvance?.asked,
+      })
+        .filter((c) => !c.met)
+        .map((c) => ({ label: tripItemLabel(together.stayNoOf(o.id), c.label), met: false, card: c.card, todo: c.todo ? tripItemLabel(together.stayNoOf(o.id), c.todo) : undefined }));
+    });
+  const setUpOtherItems = otherStayItems(s3Readiness);
+
   const preconds0: Precondition[] = sealed
     ? []
     : confirmStepActive
-      ? [...confirmReadiness(entry, { paymentSatisfied, totalReceived, requiredAmount, communications, earlierAdvanceAsked }), ...reserveExtras.map((label) => ({ label, met: false }))]
+      ? [...confirmReadiness(entry, { paymentSatisfied, totalReceived, requiredAmount, communications, earlierAdvanceAsked }), ...otherStayItems(confirmReadiness), ...reserveExtras.map((label) => ({ label, met: false }))]
       : setupStepActive
-        ? withUnsaved(s3Readiness(entry, { paymentSatisfied, totalReceived, requiredAmount, communications, earlierAdvanceAsked }), unsavedSections)
+        ? [...withUnsaved(s3Readiness(entry, { paymentSatisfied, totalReceived, requiredAmount, communications, earlierAdvanceAsked }), unsavedSections), ...setUpOtherItems]
       : inquiryStepActive
         ? [...withUnsaved(s1Readiness(entry), unsavedSections), ...tripInquiryItems]
         : quoteStepActive
@@ -1383,7 +1408,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     // Set up's move opens the Reserve page; the booking stays at Set up until Reserve the booking is
     // pressed there (restored 2026-10-29). Green once it can be pressed; a section with changes not
     // saved holds it (2026-10-28).
-    const ok = readyToMoveOn && !preconds.some((p) => p.unsaved);
+    const ok = readyToMoveOn && !preconds.some((p) => p.unsaved) && setUpOtherItems.length === 0;
     moveReady = ok;
     const first = ok ? null : preconds.find((p) => !p.met) ?? null;
     if (first) {

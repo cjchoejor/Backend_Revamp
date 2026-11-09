@@ -592,6 +592,8 @@ export function S2Negotiation({
               refresh();
             }}
           />
+        ) : together.deciding ? (
+          <span className="meta">Reading the stays…</span>
         ) : together.active ? (
           <Tool>
             <div onPointerDownCapture={markHandEdit} onKeyDownCapture={markHandEdit} onInputCapture={markHandEdit}>

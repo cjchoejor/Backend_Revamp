@@ -1079,6 +1079,8 @@ function MiniNum({ label, value, onChange }: { label: string; value?: string; on
  * stays worked together (2026-11-09, operator: "if the user viewed it separately and did config retain
  * those configs when user later views it together"): the same copy, whichever view wrote it.
  */
+const anyoneSeated = (list: RoomCompositionInput[]) => list.some((c) => (c.adultCount ?? 0) > 0 || (c.occupantCount ?? 0) > 0);
+
 export function usePersistedCompositions(props: {
   persistKey?: string;
   persistBasis?: string;
@@ -1114,7 +1116,7 @@ export function usePersistedCompositions(props: {
         const v = raw ? (JSON.parse(raw) as { v?: number; basis?: string; compositions?: RoomCompositionInput[] }) : null;
         const comps = v && !Array.isArray(v) && v.v === 3 && v.basis === (props.persistBasis ?? "none") ? v.compositions : null;
         const rooms = new Set((comps ?? []).map((c) => c.roomId));
-        if (comps && comps.length > 0 && rooms.size === props.sealedRoomIds.length && props.sealedRoomIds.every((id) => rooms.has(id))) {
+        if (comps && comps.length > 0 && anyoneSeated(comps) && rooms.size === props.sealedRoomIds.length && props.sealedRoomIds.every((id) => rooms.has(id))) {
           snapshotRef.current = comps;
           lastWrittenRef.current = JSON.stringify(comps);
         }
@@ -1127,7 +1129,7 @@ export function usePersistedCompositions(props: {
   const handleChange = (compositions: RoomCompositionInput[]) => {
     snapshotRef.current = compositions;
     const json = JSON.stringify(compositions);
-    if (storeKey && compositions.length > 0 && json !== lastWrittenRef.current) {
+    if (storeKey && compositions.length > 0 && anyoneSeated(compositions) && json !== lastWrittenRef.current) {
       lastWrittenRef.current = json;
       try {
         localStorage.setItem(storeKey, JSON.stringify({ v: 3, basis: props.persistBasis ?? "none", compositions }));

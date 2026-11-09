@@ -30,7 +30,18 @@ export function useTripProforma(entry: EntryDetail) {
   });
 }
 
-export function TripProformaCard({ entry, editable, inFlow = false }: { entry: EntryDetail; editable: boolean; inFlow?: boolean }) {
+export function TripProformaCard({
+  entry,
+  editable,
+  inFlow = false,
+  advanceAsk,
+}: {
+  entry: EntryDetail;
+  editable: boolean;
+  inFlow?: boolean;
+  /** A stay's proforma waits for this answer: it prints the advance (2026-11-09). */
+  advanceAsk?: { busy: boolean; onNo: () => void; onYes: () => void } | null;
+}) {
   const qc = useQueryClient();
   const refresh = useRefreshEntry(entry.id);
   const replyAsked = useReplyAsked(entry.id, "PROFORMA_INVOICE");
@@ -38,7 +49,6 @@ export function TripProformaCard({ entry, editable, inFlow = false }: { entry: E
   const [paper, setPaper] = useState<PaperRef | null>(null);
   const [sendOpen, setSendOpen] = useState(false);
   const [answerOpen, setAnswerOpen] = useState(false);
-  const [payOpen, setPayOpen] = useState(false);
   const t = trip.data;
   const after = () => {
     void qc.invalidateQueries({ queryKey: ["trip-proforma"] });
@@ -98,7 +108,21 @@ export function TripProformaCard({ entry, editable, inFlow = false }: { entry: E
           ) : null}
         </>
       ) : null}
-      {!t.canMake && t.reason ? <p className="sm warn-ink" style={{ marginTop: 8 }}>{t.reason}</p> : null}
+      {advanceAsk ? (
+        <div className="notice next" role="status" style={{ marginTop: 8 }}>
+          <span>The proforma is not generated yet. Does the hotel want an advance on these stays?</span>
+          <div className="row-acts" style={{ marginTop: 8, gap: 8 }}>
+            <Button kind="secondary" compact state={advanceAsk.busy ? "working" : "default"} workingLabel="Generating…" onClick={advanceAsk.onNo}>
+              No advance
+            </Button>
+            <Button compact state={advanceAsk.busy ? "inert" : "default"} onClick={advanceAsk.onYes}>
+              Yes, ask for an advance
+            </Button>
+          </div>
+        </div>
+      ) : !t.canMake && t.reason ? (
+        <p className="sm warn-ink" style={{ marginTop: 8 }}>{t.reason}</p>
+      ) : null}
       <div className="row-acts" style={{ marginTop: 10, flexWrap: "wrap", gap: 8 }}>
         {cur ? (
           <Button kind="secondary" compact icon="eye" onClick={() => setPaper({ kind: "trip", id: cur.id, label, tripKind: "PROFORMA" })}>
@@ -115,16 +139,6 @@ export function TripProformaCard({ entry, editable, inFlow = false }: { entry: E
             Record the guest&rsquo;s answer
           </Button>
         ) : null}
-        {editable && cur && !outOfDate ? (
-          <Button
-            className={due != null && due > 0 && cur.sentAt ? "go" : undefined}
-            kind={due != null && due > 0 && cur.sentAt ? "primary" : "secondary"}
-            compact
-            onClick={() => setPayOpen(true)}
-          >
-            Record a payment for the trip
-          </Button>
-        ) : null}
       </div>
       {t.versions.length > 1 ? (
         <p className="meta" style={{ marginTop: 8 }}>
@@ -134,16 +148,6 @@ export function TripProformaCard({ entry, editable, inFlow = false }: { entry: E
       <PaperDrawer paper={paper} onClose={() => setPaper(null)} />
       {sendOpen && cur ? <TripSendDialog entry={entry} tripId={cur.id} label={label} word="proforma" onClose={() => setSendOpen(false)} onSent={after} /> : null}
       {answerOpen && cur ? <TripAnswerDialog tripId={cur.id} word="proforma" onClose={() => setAnswerOpen(false)} onDone={after} /> : null}
-      {payOpen && cur ? (
-        <TripPaymentDialog
-          entryId={entry.id}
-          onClose={() => setPayOpen(false)}
-          onDone={() => {
-            void qc.invalidateQueries({ queryKey: ["trip-payment"] });
-            after();
-          }}
-        />
-      ) : null}
     </StepCard>
   );
 }

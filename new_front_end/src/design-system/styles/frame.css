@@ -2298,6 +2298,9 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .stay-item.as-btn.apart { background: var(--danger-soft); box-shadow: inset 3px 0 0 var(--danger); color: var(--danger); }
 .ds .stay-item.as-btn.apart:hover { background: var(--danger-soft); filter: brightness(0.97); }
 .ds .stay-item.apart .si-line { color: var(--danger); font-weight: 600; }
+.ds .adv-stays { display: grid; gap: 8px; }
+.ds .adv-stay { display: flex; align-items: center; gap: 10px; }
+.ds .adv-stay > span:first-child { min-width: 56px; font-weight: 600; }
 .ds .apart-stays { display: grid; gap: 10px; margin-top: 12px; }
 .ds .apart-stay { display: grid; gap: 6px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; }
 .ds .apart-head { display: flex; align-items: center; gap: 8px; }
