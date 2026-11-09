@@ -149,6 +149,46 @@ export async function recordPayment(
 }
 
 /**
+ * What the advance being met sets in motion: the follow-ups stop, the promise stands down, the rooms
+ * earn Reserved, the proforma stops running. Also run for a stay covered by a trip payment it got no
+ * share of (2026-11-09). Each step does nothing when there is nothing to do.
+ */
+export async function applyAdvanceStandingTx(
+  prisma: PrismaClient,
+  tx: Prisma.TransactionClient,
+  input: { entryId: string; folioId: string; actorId: string },
+) {
+  const evalResult = await evaluateAdvancePaymentConditionTx(prisma, tx, { entryId: input.entryId, folioId: input.folioId });
+  if (evalResult.satisfied) {
+    await cancelScheduledAdvancePaymentFollowUpForEntry(tx, input.entryId, input.actorId, "ADVANCE_PAYMENT_CONDITION_MET");
+  }
+  // Promise kept — the W38 deadline (and the S5 settlement tick) only stand while money is
+  // still owed. `paidInFull` (money alone), not `satisfied`: a credit extension covers the
+  // gate but the guest's payment promise stands.
+  if (evalResult.paidInFull) {
+    await cancelScheduledAdvancePromiseDeadlinesForEntry(tx, input.entryId, input.actorId, "ADVANCE_PAID_IN_FULL");
+    await autoCompletePaymentReconciliationTaskTx(
+      tx,
+      input.entryId,
+      { actorId: input.actorId, actorLevel: "L1" },
+      "ADVANCE_PAID_IN_FULL",
+    );
+    // Held → Reserved (2026-08-07): a booking confirmed while the advance was short kept its
+    // rooms visibly "Held"; the money just completed, so they earn the Reserved label now.
+    // No-op for bookings that weren't payment-pending.
+    await confirmHeldRoomsAfterFullPaymentTx(tx, { entryId: input.entryId, actorId: input.actorId });
+    // The advance asked is in: nothing is left for the guest to answer, so the proforma stops running.
+    if (evalResult.requiredAmount > 0) {
+      await stopProformaValidityTx(tx, { entryId: input.entryId, actorId: input.actorId, reason: "ADVANCE_PAID_IN_FULL", now: new Date() });
+      // Paid after it ran out: the guest has answered with the money, so it need not be made again.
+      await tx.invoice.updateMany({ where: { entryId: input.entryId, invoiceType: "PROFORMA", state: { not: "SUPERSEDED" }, lapsedAt: { not: null } }, data: { lapsedAt: null } });
+    }
+  }
+
+  return evalResult;
+}
+
+/**
  * The payment's own writes and checks, inside the caller's transaction — so the trip's proforma can
  * write several stays' shares of one payment together, all or none (2026-11-07). Every check a
  * stay's own payment has runs here.
@@ -158,7 +198,7 @@ export async function recordPaymentTx(
   tx: Prisma.TransactionClient,
   folioId: string,
   actorId: string,
-  input: { entryId: string; amount: number; notes?: string | null; paymentMethod?: string | null },
+  input: { entryId: string; amount: number; notes?: string | null; paymentMethod?: string | null; paidForTrip?: boolean },
 ) {
   const amountNum = input.amount;
   {
@@ -210,38 +250,14 @@ export async function recordPaymentTx(
         recordedBy: actorId,
         stage: stageAtPayment,
         notes: input.notes ?? null,
+        ...(input.paidForTrip ? { paidForTrip: true } : {}),
         // How it came (2026-09-18) — every advance used to be stored as CASH, the column default.
         ...(input.paymentMethod?.trim() ? { paymentMethod: input.paymentMethod.trim() } : {}),
       },
     });
     await applyInboundPaymentToFolioOutstanding(tx, folioId, amountNum);
 
-    const evalResult = await evaluateAdvancePaymentConditionTx(prisma, tx, { entryId: input.entryId, folioId });
-    if (evalResult.satisfied) {
-      await cancelScheduledAdvancePaymentFollowUpForEntry(tx, input.entryId, actorId, "ADVANCE_PAYMENT_CONDITION_MET");
-    }
-    // Promise kept — the W38 deadline (and the S5 settlement tick) only stand while money is
-    // still owed. `paidInFull` (money alone), not `satisfied`: a credit extension covers the
-    // gate but the guest's payment promise stands.
-    if (evalResult.paidInFull) {
-      await cancelScheduledAdvancePromiseDeadlinesForEntry(tx, input.entryId, actorId, "ADVANCE_PAID_IN_FULL");
-      await autoCompletePaymentReconciliationTaskTx(
-        tx,
-        input.entryId,
-        { actorId, actorLevel: "L1" },
-        "ADVANCE_PAID_IN_FULL",
-      );
-      // Held → Reserved (2026-08-07): a booking confirmed while the advance was short kept its
-      // rooms visibly "Held"; the money just completed, so they earn the Reserved label now.
-      // No-op for bookings that weren't payment-pending.
-      await confirmHeldRoomsAfterFullPaymentTx(tx, { entryId: input.entryId, actorId });
-      // The advance asked is in: nothing is left for the guest to answer, so the proforma stops running.
-      if (evalResult.requiredAmount > 0) {
-        await stopProformaValidityTx(tx, { entryId: input.entryId, actorId, reason: "ADVANCE_PAID_IN_FULL", now: new Date() });
-        // Paid after it ran out: the guest has answered with the money, so it need not be made again.
-        await tx.invoice.updateMany({ where: { entryId: input.entryId, invoiceType: "PROFORMA", state: { not: "SUPERSEDED" }, lapsedAt: { not: null } }, data: { lapsedAt: null } });
-      }
-    }
+    const evalResult = await applyAdvanceStandingTx(prisma, tx, { entryId: input.entryId, folioId, actorId });
 
     const now = new Date();
     await tx.traceEvent.create({

@@ -17,7 +17,7 @@ import { renderProformaInvoiceEmail } from "../infrastructure/stage-email-templa
 import { dispatchStageEmailBestEffort } from "../infrastructure/stage-email-helpers.js";
 import { proformaEmailFigures, proformaPaperFigures } from "./invoice-pdf-service.js";
 import { dispatchInvoice } from "./s9-service.js";
-import { afterPaymentRecorded, recordPaymentTx } from "./s3-folio-service.js";
+import { afterPaymentRecorded, applyAdvanceStandingTx, recordPaymentTx } from "./s3-folio-service.js";
 import { evaluateAdvancePaymentCondition } from "./s3-payment-service.js";
 import { buildEntryBillingSummary } from "./entry-billing-summary-service.js";
 import { recordCommunicationAcknowledgement } from "./communication-acknowledgement-service.js";
@@ -584,7 +584,8 @@ const stayOut = (x: PaymentStay & { share?: Prisma.Decimal }) => ({
   received: x.received.toFixed(2),
   dueNow: x.dueNow.toFixed(2),
   canTake: x.canTake.toFixed(2),
-  ...(x.share ? { share: x.share.toFixed(2) } : {}),
+  // How far the share is from the advance still asked: + more, - less.
+  ...(x.share ? { share: x.share.toFixed(2), overAsked: x.share.sub(x.dueNow).toFixed(2) } : {}),
 });
 
 /** The live trip proforma, if one is in force — named on each payment's note. */
@@ -663,6 +664,7 @@ async function recordForInquiry(
             amount: Number(row.share.toFixed(2)),
             notes: note,
             paymentMethod: input.paymentMethod ?? null,
+            paidForTrip: true,
           });
           out.push({ stayNo: row.stayNo, entryId: row.entryId, amount: row.share.toFixed(2), paymentId: created.id, stage: stageAtPayment });
         } catch (e) {
@@ -675,7 +677,31 @@ async function recordForInquiry(
           throw e;
         }
       }
+      // Every stay is read again now all the shares are in: one stay's money can cover another's advance.
+      const covered: Array<{ entryId: string; amount: number }> = [];
+      for (const row of r.rows) {
+        if (!row.folioId || !row.payable) continue;
+        const ev = await applyAdvanceStandingTx(prisma, tx, { entryId: row.entryId, folioId: row.folioId, actorId: actor.actorId });
+        if (ev.coveredByTrip > 0) covered.push({ entryId: row.entryId, amount: ev.coveredByTrip });
+      }
       const now = new Date();
+      for (const c of covered) {
+        await tx.traceEvent.create({
+          data: {
+            eventType: "ADVANCE_PAYMENT.COVERED_BY_TRIP",
+            actorId: actor.actorId,
+            actorLevel: actor.actorLevel,
+            entityType: paper ? "TripPaper" : "Inquiry",
+            entityId: paper?.id ?? inquiryId,
+            operation: "UPDATE",
+            timestamp: now,
+            inquiryId,
+            entryId: c.entryId,
+            payload: { tripPaperId: paper?.id ?? null, number: paper?.number ?? null, covered: c.amount },
+            createdBy: actor.actorId,
+          },
+        });
+      }
       for (const o of out) {
         await tx.traceEvent.create({
           data: {

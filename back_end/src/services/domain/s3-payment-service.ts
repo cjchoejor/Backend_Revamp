@@ -1,3 +1,4 @@
+import { shareTripAdvanceCover, type TripAdvanceRow } from "../../lib/trip-advance-cover.js";
 import { nextProformaNumberTx } from "../../lib/document-numbers.js";
 import { afterProformaMadeTx } from "./proforma-validity-service.js";
 import { paymentsStillHeld, waitingRefundTotal } from "../../lib/refund-money.js";
@@ -129,6 +130,41 @@ export function resolveAdvancePaymentPlan(
   };
 }
 
+/**
+ * How much of this stay's advance the trip's payment covers (2026-11-09; lib/trip-advance-cover.ts).
+ * Stays in stay order, the live ones only. Zero unless some stay of the enquiry holds money paid for
+ * the trip.
+ */
+export async function readTripAdvanceCover(db: PrismaClient | Prisma.TransactionClient, entryId: string): Promise<Prisma.Decimal> {
+  const zero = toDecimal(0);
+  const me = await db.entry.findUnique({ where: { id: entryId }, select: { inquiryId: true } });
+  if (!me) return zero;
+  const paid = await db.paymentRecord.count({ where: { paidForTrip: true, paymentDirection: PaymentDirection.IN, folio: { entry: { inquiryId: me.inquiryId } } } });
+  if (paid === 0) return zero;
+  const stays = await db.entry.findMany({
+    where: { inquiryId: me.inquiryId, status: { in: ["ACTIVE", "PARKED"] } },
+    orderBy: [{ checkInDate: "asc" }, { createdAt: "asc" }],
+    select: {
+      id: true,
+      folio: { include: { payments: true } },
+      segments: { orderBy: { segmentNumber: "desc" }, take: 1, select: { startedAt: true } },
+    },
+  });
+  const rows: TripAdvanceRow[] = [];
+  for (const st of stays) {
+    if (!st.folio) continue;
+    const moneyIn = st.folio.payments.filter((p) => p.paymentDirection === PaymentDirection.IN);
+    const out = sumMoneyBy(st.folio.payments.filter((p) => p.paymentDirection === PaymentDirection.OUT), "amount");
+    rows.push({
+      entryId: st.id,
+      asked: toDecimal(resolveOperatorAdvanceRequirement(st.folio, st.segments[0]?.startedAt ?? null) ?? 0),
+      held: maxZeroSub(sumMoneyBy(moneyIn, "amount"), out.add(await waitingRefundTotal(db, st.folio.id))),
+      paidForTrip: sumMoneyBy(moneyIn.filter((p) => p.paidForTrip), "amount"),
+    });
+  }
+  return shareTripAdvanceCover(rows).get(entryId) ?? zero;
+}
+
 async function computeAdvancePaymentEvaluation(
   db: PrismaClient | Prisma.TransactionClient,
   input: { entryId: string; folioId: string },
@@ -185,11 +221,15 @@ async function computeAdvancePaymentEvaluation(
   const creditExtensionExpired = !!credit?.expiresAt && credit.expiresAt.getTime() <= now.getTime();
   const creditExtensionActive = !!credit && !creditExtensionExpired;
 
-  const satisfied = creditExtensionActive || totalReceivedDec.gte(requiredAmountDec);
-  const shortfallDec = maxZeroSub(requiredAmountDec, totalReceivedDec);
+  // What the trip's payment covers of this stay's advance. It counts towards what is asked; the money
+  // itself stays on the bill it was shared to, so `totalReceived` below is still this bill's own.
+  const coveredByTripDec = await readTripAdvanceCover(db, input.entryId);
+  const countedDec = totalReceivedDec.add(coveredByTripDec);
+  const satisfied = creditExtensionActive || countedDec.gte(requiredAmountDec);
+  const shortfallDec = maxZeroSub(requiredAmountDec, countedDec);
   // Money alone — `satisfied` can be true on a credit extension while the guest still owes the
   // remainder; `paidInFull` is the fact the promise timer and the settlement ticks care about.
-  const paidInFull = totalReceivedDec.gte(requiredAmountDec);
+  const paidInFull = countedDec.gte(requiredAmountDec);
 
   // The guest's stated payment plan (2026-08-07), segment-scoped like the requirement pin.
   // `promiseOverdue` is a read-time fact — the W38 worker traces the lapse, but the desk's red
@@ -228,6 +268,8 @@ async function computeAdvancePaymentEvaluation(
   return {
     satisfied,
     totalReceived: Number(totalReceivedDec.toFixed(2)),
+    // Of the advance asked, what the trip's payment covers from another stay's bill.
+    coveredByTrip: Number(coveredByTripDec.toFixed(2)),
     refundWaiting: Number(refundWaitingDec.toFixed(2)),
     refunded: Number(refundedDec.toFixed(2)),
     requiredAmount: Number(requiredAmountDec.toFixed(2)),
@@ -1440,7 +1482,9 @@ export async function markAdvancePaymentReconciled(
     .reduce((sum, p) => sum + Number(p.amount.toString()), 0);
   const billingModel = String((folio as any).billingModel ?? "").trim();
   const isDirectBillLike = billingModel === "DIRECT_BILL" || billingModel === "GOVERNMENT";
-  enforceAdvancePaymentReconciliationRequiresPayment({ isDirectBillLike, totalInPayments: totalIn });
+  // A stay covered by the trip's payment has money behind it, on another stay's bill.
+  const covered = Number((await readTripAdvanceCover(prisma, input.entryId)).toFixed(2));
+  enforceAdvancePaymentReconciliationRequiresPayment({ isDirectBillLike, totalInPayments: totalIn + covered });
 
   const now = new Date();
   return prisma.$transaction(async (tx) => {

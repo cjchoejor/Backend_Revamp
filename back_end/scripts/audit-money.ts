@@ -35,6 +35,7 @@
  *      per-room buckets + unassigned = whole)
  *   H. Global tallies (printed at the end)
  */
+import { evaluateAdvancePaymentCondition } from "../src/services/domain/s3-payment-service.js";
 import { resolveCompositionBasis } from "../src/lib/party-seating.js";
 import { PrismaClient, Prisma } from "@prisma/client";
 import { round2, sumMoney, toDecimal, ZERO } from "../src/lib/money.js";
@@ -551,6 +552,25 @@ async function main() {
       if (r.entry.status === "ACTIVE" && ["S7", "S8", "S9"].includes(r.entry.currentStage)) {
         add("CRITICAL", "A14_REFUND_RECORD", subject, `waiting to refund on a booking past check-in (${r.entry.currentStage}), whose bill reads this money as its own`);
       }
+    }
+  }
+
+  // A15 (2026-11-09): a trip's money is counted once. A payment for the trip can cover one stay's
+  // advance from another stay's bill, so across the live stays what still reads short can never be
+  // less than what the trip was asked and does not hold.
+  const tripPaid = await prisma.paymentRecord.findMany({ where: { paidForTrip: true }, select: { folio: { select: { entry: { select: { inquiryId: true } } } } } });
+  for (const inquiryId of new Set(tripPaid.map((p) => p.folio.entry.inquiryId))) {
+    const stays = await prisma.entry.findMany({ where: { inquiryId, status: { in: ["ACTIVE", "PARKED"] } }, select: { id: true, folio: { select: { id: true } } } });
+    let asked = D(0), held = D(0), short = D(0);
+    for (const st of stays) {
+      if (!st.folio) continue;
+      const ev = await evaluateAdvancePaymentCondition(prisma, { entryId: st.id, folioId: st.folio.id });
+      asked = asked.add(D(ev.requiredAmount));
+      held = held.add(D(ev.totalReceived));
+      short = short.add(D(ev.shortfall));
+    }
+    if (short.lt(asked.sub(held).sub(D(0.005)))) {
+      add("CRITICAL", "A15_TRIP_MONEY_COUNTED_TWICE", inquiryId, `the stays read ${money(short)} short, but the trip was asked ${money(asked)} and holds ${money(held)}`);
     }
   }
 

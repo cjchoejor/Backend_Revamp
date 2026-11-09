@@ -55,7 +55,7 @@ import { computeStayCharges, resolveChargeRates, stayBreakdownFromTerms } from "
 import {
   describeAdvancePaymentPlan,
   resolveAdvancePaymentPlan,
-  resolveOperatorAdvanceRequirement,
+  readTripAdvanceCover, resolveOperatorAdvanceRequirement,
 } from "./s3-payment-service.js";
 import { resolveBillQuotation } from "../../lib/operative-quotation.js";
 import { assignedRoomNights, roomsWithNightsLine, type NightsMode } from "../../lib/room-nights-for-entry.js";
@@ -207,7 +207,9 @@ async function proformaAdvanceFigures(prisma: PrismaClient, inv: LoadedInvoice, 
   const basis = (inv.folio?.advanceRequiredBasis ?? null) as { mode?: string; percent?: number } | null;
   const advanceDueQualifier =
     requiredAdvance != null && basis?.mode === "PERCENT" && typeof basis.percent === "number" ? `(${basis.percent}% of quote)` : null;
-  const advanceDueNow = requiredAdvance == null ? 0 : Math.max(0, Number((requiredAdvance - advanceReceived).toFixed(2)));
+  // What the trip's payment covers from another stay's bill is not due again on this one (2026-11-09).
+  const coveredByTrip = Number((await readTripAdvanceCover(prisma, inv.entryId)).toFixed(2));
+  const advanceDueNow = requiredAdvance == null ? 0 : Math.max(0, Number((requiredAdvance - advanceReceived - coveredByTrip).toFixed(2)));
   return {
     segmentStartedAt: currentSegment?.startedAt ?? null,
     advanceReceived,

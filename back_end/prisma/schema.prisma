@@ -2214,6 +2214,10 @@ model PaymentRecord {
   /// or an extension's conditional payment. NULL for advances and settlements.
   interimPaymentRequestId String?
 
+  /// Recorded as one payment for a whole trip (2026-11-09). What it pays beyond this stay's advance
+  /// counts towards the other stays' advances (lib/trip-advance-cover.ts).
+  paidForTrip Boolean @default(false)
+
   /// Which room / space this money settles (2026-09-09, PMS-237). Charges have carried a room
   /// since 2026-08-14 but payments never did, so "room 202 is paid, 203 still owes" could not
   /// be answered — a per-room balance is that room's charges MINUS its payments, and only the

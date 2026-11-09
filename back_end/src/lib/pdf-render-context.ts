@@ -22,8 +22,8 @@ export type HotelProfileForRender = {
   propertyCurrency: string;
 };
 
-/** Fallback logo path relative to repo root — the "no background" PNG the boss provided. */
-const FALLBACK_LOGO_PATH = "images/legphel_logo without background.png";
+/** The hotel's logo on the papers (2026-11-09, operator), relative to `back_end/`. */
+const FALLBACK_LOGO_PATH = "assets/legphel-logo-paper.png";
 
 async function loadLogoAsDataUri(prisma: PrismaClient, key: string | null): Promise<string | null> {
   // Preferred: HotelProfile.logoStorageKey set → read from the document-storage layer.
@@ -41,9 +41,8 @@ async function loadLogoAsDataUri(prisma: PrismaClient, key: string | null): Prom
   // Fallback: the reference logo file shipped in the repo. Convenient during rollout
   // before the admin has uploaded the real logo via /admin/hotel-profile.
   try {
-    // Resolved from the backend process's CWD which is `back_end/` — go up one level to
-    // reach the repo root where `images/` lives.
-    const path = resolve(process.cwd(), "..", FALLBACK_LOGO_PATH);
+    // Resolved from the backend process's CWD, which is `back_end/`.
+    const path = resolve(process.cwd(), FALLBACK_LOGO_PATH);
     const bytes = await readFile(path);
     return `data:image/png;base64,${bytes.toString("base64")}`;
   } catch {
