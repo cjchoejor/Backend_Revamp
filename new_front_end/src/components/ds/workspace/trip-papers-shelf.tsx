@@ -1,16 +1,17 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
-import { useQueries } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
+import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Button, Chip } from "@/design-system";
 import { useSession } from "@/hooks/use-session";
 import { StayDates } from "@/components/ds/stay-dates";
 import { getEntry } from "@/lib/api/entries";
 import type { EntryDetail } from "@/types/api";
-import { Choice, PapersCard } from "@/components/ds/steps/kit";
+import { fmtStamp } from "@/lib/ds/format";
+import { getTripProforma, getTripQuotation, getTripVoucher } from "@/lib/api/trip-papers";
+import { Choice, Live, NotSentChip, PaperDrawer, PapersCard, StepCard, useRefreshEntry, useReplyAsked, type PaperRef } from "@/components/ds/steps/kit";
 import { useTripView } from "@/components/ds/steps/s2-together";
-import { TripQuotationCard } from "@/components/ds/steps/s2-trip-quotation";
-import { TripProformaCard } from "@/components/ds/steps/s3-trip-proforma";
-import { TripVoucherCard } from "@/components/ds/steps/s4-trip-voucher";
+import { TripAnswerDialog, TripSendDialog } from "@/components/ds/steps/s2-trip-quotation";
 
 /** Every stay of this booking's trip, read in full, in the order the trip has them. */
 export function useTripStays(entry: EntryDetail) {
@@ -38,6 +39,87 @@ export function StayBand({ stay, stayNo }: { stay: EntryDetail; stayNo: number }
 
 export type TripPaperKind = "quotes" | "proformas" | "others";
 
+const KINDS = {
+  quotes: { key: "trip-quotation", get: getTripQuotation, word: "quotation", tripKind: "QUOTATION", comm: "QUOTATION" },
+  proformas: { key: "trip-proforma", get: getTripProforma, word: "proforma", tripKind: "PROFORMA", comm: "PROFORMA_INVOICE" },
+  others: { key: "trip-voucher", get: getTripVoucher, word: "voucher", tripKind: "VOUCHER", comm: "CONFIRMATION_VOUCHER" },
+} as const;
+
+type TripPaperRead = {
+  stays: Array<{ entryId: string }>;
+  canMake: boolean;
+  reason: string | null;
+  current: { id: string; number: string; upToDate: boolean; answeredAt: string | null } | null;
+  versions: Array<{ id: string; number: string; state: string; createdAt: string; sentAt: string | null }>;
+};
+
+/** The trip's paper in the file, a row for each version, as a stay's own papers are listed (2026-11-09). */
+function TripPaperRows({ entry, show, title, sealed }: { entry: EntryDetail; show: TripPaperKind; title: string; sealed: boolean }) {
+  const { session } = useSession();
+  const qc = useQueryClient();
+  const refresh = useRefreshEntry(entry.id);
+  const K = KINDS[show];
+  const replyAsked = useReplyAsked(entry.id, K.comm);
+  const q = useQuery({
+    queryKey: [K.key, entry.id, entry.updatedAt ?? ""],
+    queryFn: (): Promise<TripPaperRead> => K.get(session!, entry.id),
+    enabled: !!session,
+  });
+  const [open, setOpen] = useState<PaperRef | null>(null);
+  const [sendOpen, setSendOpen] = useState(false);
+  const [answerOpen, setAnswerOpen] = useState(false);
+  const t = q.data;
+  if (!t || t.stays.length < 2) return null;
+  const cur = t.current;
+  const after = () => {
+    void qc.invalidateQueries({ queryKey: [K.key] });
+    refresh(t.stays.flatMap((s) => [["entry", s.entryId], ["entry-communications", s.entryId], ["held-documents", s.entryId]]));
+  };
+  const label = cur ? `The trip's ${K.word} ${cur.number}` : `The trip's ${K.word}`;
+  const canSend = !sealed && !!cur?.upToDate && t.canMake;
+  return (
+    <StepCard title={title}>
+      {t.versions.length === 0 && t.reason ? <span className="sm">{t.reason}</span> : null}
+      <div className="papergrp">
+        {t.versions.map((v) => {
+          const live = v.state === "LIVE";
+          return (
+            <div className="paperrow" key={v.id}>
+              <span className="nm">
+                <b>{v.number}</b>
+              </span>
+              {!live ? <Chip tone="quiet">replaced</Chip> : v.sentAt ? <Chip tone="success">sent</Chip> : <NotSentChip />}
+              <span className="when">{v.sentAt ? `sent ${fmtStamp(v.sentAt)}` : fmtStamp(v.createdAt)}</span>
+              <span className="acts">
+                <Button kind="quiet" compact icon="eye" onClick={() => setOpen({ kind: "trip", id: v.id, label: `The trip's ${K.word} ${v.number}`, tripKind: K.tripKind })}>
+                  Preview
+                </Button>
+                {live && canSend ? (
+                  <Live>
+                    <Button kind="quiet" compact icon="send" onClick={() => setSendOpen(true)}>
+                      {v.sentAt ? "Send again" : "Send"}
+                    </Button>
+                  </Live>
+                ) : null}
+                {live && !sealed && v.sentAt && !cur?.answeredAt && replyAsked ? (
+                  <Live>
+                    <Button kind="quiet" compact onClick={() => setAnswerOpen(true)}>
+                      Record the answer
+                    </Button>
+                  </Live>
+                ) : null}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+      <PaperDrawer paper={open} onClose={() => setOpen(null)} />
+      {sendOpen && cur ? <TripSendDialog entry={entry} tripId={cur.id} label={label} word={K.word} onClose={() => setSendOpen(false)} onSent={after} /> : null}
+      {answerOpen && cur ? <TripAnswerDialog tripId={cur.id} word={K.word} onClose={() => setAnswerOpen(false)} onDone={after} /> : null}
+    </StepCard>
+  );
+}
+
 /**
  * A trip's papers in the booking file (2026-11-09, operator: "on the right panel, it can both together
  * and separate stays quote, do it for all the papers. keep options to view like that"). Together is
@@ -63,18 +145,13 @@ export function TripPapersShelf({
   const [pick, setPick] = useState<"TOGETHER" | "EACH" | null>(null);
   useEffect(() => setPick(null), [head]);
   const view = pick ?? (head === "together" ? "TOGETHER" : "EACH");
-  const editable = !sealed;
-  let together: ReactNode;
-  if (show === "quotes") together = <TripQuotationCard entry={entry} editable={editable} />;
-  else if (show === "proformas") together = <TripProformaCard entry={entry} editable={editable} />;
-  else together = <TripVoucherCard entry={entry} editable={editable} />;
   return (
     <>
       <div className="trip-bill-switch">
         <Choice options={[["TOGETHER", "Together"], ["EACH", "Stay by stay"]] as const} value={view} onChange={setPick} />
       </div>
       {view === "TOGETHER"
-        ? together
+        ? <TripPaperRows entry={entry} show={show} title={title} sealed={sealed} />
         : stays.filter(has).map((s) => (
             <div key={s.id} className="trip-stay-block">
               <StayBand stay={s} stayNo={stayNoOf(s.id)} />

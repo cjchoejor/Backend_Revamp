@@ -5,8 +5,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button, Chip } from "@/design-system";
 import { useSession } from "@/hooks/use-session";
-import { StayDates } from "@/components/ds/stay-dates";
 import { getTripVoucher, markTripVoucherNotSent } from "@/lib/api/trip-papers";
+import { fmtStamp } from "@/lib/ds/format";
 import type { EntryDetail } from "@/types/api";
 import { HeldPapersCard, useHeldDocuments } from "@/components/ds/workspace/held-papers";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
@@ -26,9 +26,6 @@ export function useTripVoucher(entry: EntryDetail) {
     enabled: !!session,
   });
 }
-
-const stayWord = (s: { voucher: { held: boolean; decision: string | null } | null }) =>
-  !s.voucher ? "not reserved yet" : s.voucher.held ? "not sent" : s.voucher.decision === "NOT_SENT" ? "not sent, by choice" : "sent";
 
 export function TripVoucherCard({ entry, editable, inFlow = false }: { entry: EntryDetail; editable: boolean; inFlow?: boolean }) {
   const { session } = useSession();
@@ -82,46 +79,19 @@ export function TripVoucherCard({ entry, editable, inFlow = false }: { entry: En
   return (
     <StepCard
       flow={inFlow ? "voucher" : undefined}
-      title={cur ? `The trip's voucher · ${cur.number}` : "The trip's voucher"}
+      title={cur ? `Confirmation voucher · ${cur.number}` : "Confirmation voucher"}
       icon="file"
       right={chip}
       keepRight
       summary={inFlow && !otherHeld.length ? (cur?.answeredAt || cur?.notSent || (cur?.sentAt && !replyAsked) ? summary : undefined) : undefined}
-      status={`${t.stays.length} stays · each keeps its own voucher · the trip's is made of them`}
-      meta="The guest gets this one. It prints no prices. A change to a stay makes it again, as its next version."
+      meta="One voucher for the stays, made by itself once every stay is reserved. It prints no prices. A change to a stay makes it again, as its next version."
     >
-      <table className="table compact resp trip-papers">
-        <thead>
-          <tr>
-            <th>Stay</th>
-            <th>Dates</th>
-            <th>Its own voucher</th>
-          </tr>
-        </thead>
-        <tbody>
-          {t.stays.map((s) => (
-            <tr key={s.entryId} className="static">
-              <td>
-                Stay {s.stayNo}
-                {s.entryId === entry.id ? <span className="sub">this booking</span> : <span className="sub">{s.entryId}</span>}
-              </td>
-              <td data-label="Dates">
-                <StayDates checkIn={s.checkIn} checkOut={s.checkOut} stacked />
-              </td>
-              <td data-label="Its own voucher">
-                {s.voucher ? (
-                  <>
-                    {s.voucher.number}
-                    <span className="sub">{stayWord(s)}</span>
-                  </>
-                ) : (
-                  <span className="warn-ink">not reserved yet</span>
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      {cur?.sentAt ? (
+        <div className="sm">
+          Sent {fmtStamp(cur.sentAt)}
+          {cur.sentTo ? <span className="meta"> · to {cur.sentTo}</span> : null}
+        </div>
+      ) : null}
       {!t.canMake && t.reason ? <p className="sm warn-ink" style={{ marginTop: 8 }}>{t.reason}</p> : null}
       <div className="row-acts" style={{ marginTop: 10, flexWrap: "wrap", gap: 8 }}>
         {cur ? (

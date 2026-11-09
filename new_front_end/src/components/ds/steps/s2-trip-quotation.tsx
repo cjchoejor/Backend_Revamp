@@ -9,9 +9,8 @@ import { useInvoiceRecipient } from "@/hooks/use-invoice-recipient";
 import { usePhoneRules } from "@/hooks/use-phone-rules";
 import { problemOfPhone } from "@/lib/ds/phone";
 import { PhoneField } from "@/components/ds/phone-field";
-import { StayDates } from "@/components/ds/stay-dates";
 import { Help } from "@/components/ds/help";
-import { money } from "@/lib/ds/format";
+import { fmtDateTime, fmtStamp, money } from "@/lib/ds/format";
 import { answerTripQuotation, getTripQuotation, sendTripQuotation } from "@/lib/api/trip-papers";
 import type { EntryDetail } from "@/types/api";
 import { Choice, DsDialog, NotSentChip, PaperDrawer, SendPaperPanel, StepCard, toastRefusal, useRefreshEntry, useReplyAsked, type PaperRef } from "./kit";
@@ -63,41 +62,25 @@ export function TripQuotationCard({ entry, editable, inFlow = false }: { entry: 
     <StepCard
       flow={inFlow ? "quotation" : undefined}
       flowAfter={inFlow ? "table" : undefined}
-      title={cur ? `The trip's quotation · ${cur.number}` : "The trip's quotation"}
+      title={cur ? `Quotation · ${cur.number}` : "Quotation"}
       icon="file"
       right={chip}
-      status={`${t.stays.length} stays · each keeps its own quotation · the trip's is made of them`}
-      meta="Made by itself. The guest gets this one when the stays are viewed together. Its total is only the stays' totals added up. A change to a stay makes it again, as its next version."
+      meta="One quotation for the stays, made by itself from each stay's own. Sending it sends each stay's with it. A change to a stay makes it again, as its next version."
     >
-      <table className="table compact resp trip-papers">
-        <thead>
-          <tr>
-            <th>Stay</th>
-            <th>Dates</th>
-            <th>Its own quotation</th>
-            <th style={{ textAlign: "right" }}>Total</th>
-          </tr>
-        </thead>
-        <tbody>
-          {t.stays.map((s) => (
-            <tr key={s.entryId} className="static">
-              <td>
-                Stay {s.stayNo}
-                {s.entryId === entry.id ? <span className="sub">this booking</span> : <span className="sub">{s.entryId}</span>}
-              </td>
-              <td data-label="Dates">
-                <StayDates checkIn={s.checkIn} checkOut={s.checkOut} stacked />
-              </td>
-              <td data-label="Its own quotation">{s.quotation ? s.quotation.number : <span className="warn-ink">not priced yet</span>}</td>
-              <td data-label="Total" style={{ textAlign: "right" }}>{s.quotation ? money(s.quotation.total) : "—"}</td>
-            </tr>
-          ))}
-          <tr className="static trip-total">
-            <td colSpan={3}>Trip total</td>
-            <td style={{ textAlign: "right" }}>{t.total ? money(t.total) : "—"}</td>
-          </tr>
-        </tbody>
-      </table>
+      {cur ? (
+        <>
+          <div className="sm">
+            <b>{money(cur.total)}</b> quoted for the {t.stays.length} stays
+          </div>
+          {cur.validUntil ? <div className="sm">Price valid until {fmtDateTime(cur.validUntil)}</div> : null}
+          {cur.sentAt ? (
+            <div className="sm">
+              Sent {fmtStamp(cur.sentAt)}
+              {cur.sentTo ? <span className="meta"> · to {cur.sentTo}</span> : null}
+            </div>
+          ) : null}
+        </>
+      ) : null}
       {!t.canMake && t.reason ? <p className="sm warn-ink" style={{ marginTop: 8 }}>{t.reason}</p> : null}
       <div className="row-acts" style={{ marginTop: 10, flexWrap: "wrap", gap: 8 }}>
         {cur ? (

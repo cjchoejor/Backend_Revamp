@@ -7,7 +7,7 @@ import { Button, Chip, MoneyInput } from "@/design-system";
 import { useSession } from "@/hooks/use-session";
 import { StayDates } from "@/components/ds/stay-dates";
 import { Help } from "@/components/ds/help";
-import { money } from "@/lib/ds/format";
+import { fmtStamp, money } from "@/lib/ds/format";
 import { ADVANCE_PAYMENT_MODES, type AdvancePaymentMode } from "@/lib/api/reservation-setup";
 import { getTripPayment, getTripProforma, previewTripPaymentForEntry, recordTripPaymentForEntry, type TripPaymentShare } from "@/lib/api/trip-papers";
 import type { EntryDetail } from "@/types/api";
@@ -72,63 +72,32 @@ export function TripProformaCard({ entry, editable, inFlow = false }: { entry: E
       flowAfter={inFlow ? "billing-model" : undefined}
       summary={inFlow && cur?.sentAt ? `${cur.number} · sent${cur.answeredAt ? " · the guest's answer recorded" : ""}` : undefined}
       keepRight
-      title={cur ? `The trip's proforma · ${cur.number}` : "The trip's proforma"}
+      title={cur ? `Proforma · ${cur.number}` : "Proforma"}
       icon="file"
       right={chip}
-      status={`${t.stays.length} stays · a payment for the trip goes to the first stay's advance first`}
-      meta="Each stay keeps its own proforma; this one is made of them and is the guest's paper by default. Its totals are only the stays' added up. A change to a stay's proforma makes this one again, as its next version."
+      meta="One proforma for the stays, made by itself from each stay's own. Sending it sends each stay's with it. A payment for the trip goes to the first stay's advance first."
     >
-      <table className="table compact resp trip-papers">
-        <thead>
-          <tr>
-            <th>Stay</th>
-            <th>Dates</th>
-            <th>Its own proforma</th>
-            <th style={{ textAlign: "right" }}>Total</th>
-            <th style={{ textAlign: "right" }}>Advance asked</th>
-            <th style={{ textAlign: "right" }}>Received</th>
-            <th style={{ textAlign: "right" }}>Due now</th>
-          </tr>
-        </thead>
-        <tbody>
-          {t.stays.map((s) => (
-            <tr key={s.entryId} className="static">
-              <td>
-                Stay {s.stayNo}
-                {s.entryId === entry.id ? <span className="sub">this booking</span> : <span className="sub">{s.entryId}</span>}
-              </td>
-              <td data-label="Dates">
-                <StayDates checkIn={s.checkIn} checkOut={s.checkOut} stacked />
-              </td>
-              <td data-label="Its own proforma">
-                {s.proforma ? (
-                  <>
-                    {s.proforma.number}
-                    <span className="sub">{s.proforma.lapsed ? "ran out" : s.proforma.sent ? "sent" : "not sent"}</span>
-                  </>
-                ) : (
-                  <span className="warn-ink">none yet</span>
-                )}
-              </td>
-              <td data-label="Total" style={{ textAlign: "right" }}>{s.proforma ? money(s.proforma.total) : "—"}</td>
-              <td data-label="Advance asked" style={{ textAlign: "right" }}>{s.proforma?.advanceAsked ? money(s.proforma.advanceAsked) : "none"}</td>
-              <td data-label="Received" style={{ textAlign: "right" }}>{s.proforma ? money(s.proforma.received) : "—"}</td>
-              <td data-label="Due now" style={{ textAlign: "right" }} className={s.proforma?.advanceAsked ? (Number(s.proforma.dueNow) > 0 ? "stop-ink" : "ok-ink") : undefined}>
-                {s.proforma?.advanceAsked ? money(s.proforma.dueNow) : "—"}
-              </td>
-            </tr>
-          ))}
-          <tr className="static trip-total">
-            <td colSpan={3}>The trip</td>
-            <td data-label="Total" style={{ textAlign: "right" }}>{t.total ? money(t.total) : "—"}</td>
-            <td data-label="Advance asked" style={{ textAlign: "right" }}>{t.advanceAsked ? money(t.advanceAsked) : "none"}</td>
-            <td data-label="Received" style={{ textAlign: "right" }}>{money(t.received)}</td>
-            <td data-label="Due now" style={{ textAlign: "right" }} className={due != null ? (due > 0 ? "stop-ink" : "ok-ink") : undefined}>
-              {t.dueNow != null ? money(t.dueNow) : "—"}
-            </td>
-          </tr>
-        </tbody>
-      </table>
+      {cur ? (
+        <>
+          <div className="sm">
+            <b>{money(cur.total)}</b> for the {t.stays.length} stays
+            {t.advanceAsked ? <> · advance asked {money(t.advanceAsked)}</> : " · no advance asked"}
+            {Number(t.received) > 0 ? <> · received {money(t.received)}</> : null}
+            {t.dueNow != null ? (
+              <>
+                {" · "}
+                <span className={due != null && due > 0 ? "stop-ink" : "ok-ink"}>due now {money(t.dueNow)}</span>
+              </>
+            ) : null}
+          </div>
+          {cur.sentAt ? (
+            <div className="sm">
+              Sent {fmtStamp(cur.sentAt)}
+              {cur.sentTo ? <span className="meta"> · to {cur.sentTo}</span> : null}
+            </div>
+          ) : null}
+        </>
+      ) : null}
       {!t.canMake && t.reason ? <p className="sm warn-ink" style={{ marginTop: 8 }}>{t.reason}</p> : null}
       <div className="row-acts" style={{ marginTop: 10, flexWrap: "wrap", gap: 8 }}>
         {cur ? (
