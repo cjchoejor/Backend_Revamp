@@ -519,6 +519,12 @@
 .ds .bigfig .meta, .ds .pickbill .pb-total .meta { color: rgba(255, 255, 255, 0.86); }
 .ds .bigfig .bf-parts { flex-basis: 100%; font-size: var(--t-sm); }
 .ds .bigfig { margin-bottom: var(--s2); }
+/* The price card on Charges is drawn in the accent (2026-11-10, operator: "need the price box in blue
+   lines so the user sees it prominent"): a 2px blue edge and its title on a light blue band. */
+.ds .card.price-card { --pc-pad: var(--s4); border: 2px solid var(--accent); }
+.ds .ws-top .file .card.price-card { --pc-pad: var(--s3); }
+.ds .card.price-card > .card-top { margin: calc(-1 * var(--pc-pad)) calc(-1 * var(--pc-pad)) var(--s3); padding: 10px var(--pc-pad); background: var(--accent-soft); border-bottom: 1px solid var(--accent); border-radius: 4px 4px 0 0; }
+.ds .card.price-card > .card-top h4 { color: var(--accent); }
 /* The price at Stay: what was added during the stay, then the stay with it (2026-11-10). */
 .ds .added-stay { margin-top: var(--s4); padding-top: var(--s3); border-top: 1px solid var(--line); }
 .ds .added-stay .added-h { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; font-size: var(--t-base); }
