@@ -1457,7 +1457,7 @@ async function sendPostStayChargeNoticeBestEffort(
     total: number;
     balanceNow: number;
   },
-): Promise<{ sent: boolean; to: string | null; reason: string | null }> {
+): Promise<{ sent: boolean; to: string | null; reason: string | null; queued?: boolean }> {
   try {
     const entry = await prisma.entry.findUnique({
       where: { id: d.entryId },
@@ -1495,7 +1495,9 @@ async function sendPostStayChargeNoticeBestEffort(
       total: d.total,
       balanceNow: d.balanceNow,
     });
-    await dispatchStageEmailBestEffort(
+    // The notice's record follows the send's outcome, which on the API server arrives after the
+    // answer (2026-11-10): the desk is told it is on its way.
+    const out = await dispatchStageEmailBestEffort(
       {
         prisma,
         entryId: d.entryId,
@@ -1505,24 +1507,22 @@ async function sendPostStayChargeNoticeBestEffort(
         skipReason: recipient.skipReason,
         stage: Stage.S9,
         eventTypePrefix: "POST_STAY_CHARGE_EMAIL",
+        after: async (o) => {
+          const sent = o.status === "SENT";
+          const reason = sent ? null : (o.reason ?? recipient.skipReason ?? "NOT_SENT");
+          await prisma.communicationRecord.update({
+            where: { id: d.commId },
+            data: {
+              sendStatus: sent ? "DISPATCHED" : "NOT_SENT",
+              contentSummary: sent ? `Post-stay charge notice emailed to ${recipient.to}` : `Post-stay charge notice not emailed (${reason})`,
+            },
+          });
+        },
       },
       content,
     );
-    const sentTrace = await prisma.traceEvent.findFirst({
-      where: { entryId: d.entryId, eventType: { startsWith: "POST_STAY_CHARGE_EMAIL." } },
-      orderBy: { timestamp: "desc" },
-      select: { eventType: true, payload: true },
-    });
-    const sent = sentTrace?.eventType === "POST_STAY_CHARGE_EMAIL.SENT";
-    const reason = sent ? null : ((sentTrace?.payload as { reason?: string; message?: string } | null)?.reason ?? (sentTrace?.payload as { message?: string } | null)?.message ?? recipient.skipReason ?? "NOT_SENT");
-    await prisma.communicationRecord.update({
-      where: { id: d.commId },
-      data: {
-        sendStatus: sent ? "DISPATCHED" : "NOT_SENT",
-        contentSummary: sent ? `Post-stay charge notice emailed to ${recipient.to}` : `Post-stay charge notice not emailed (${reason})`,
-      },
-    });
-    return { sent, to: recipient.to, reason };
+    if (out.status === "QUEUED") return { sent: true, queued: true, to: recipient.to, reason: null };
+    return { sent: out.status === "SENT", to: recipient.to, reason: out.status === "SENT" ? null : (out.reason ?? recipient.skipReason ?? "NOT_SENT") };
   } catch (e) {
     return { sent: false, to: null, reason: e instanceof Error ? e.message : String(e) };
   }

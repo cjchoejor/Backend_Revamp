@@ -17,6 +17,7 @@ import {
 import { resolveChargeRates } from "../infrastructure/compute-stay-charges.js";
 import { renderHtmlToPdf } from "../infrastructure/pdf-render-service.js";
 import { sendEmail } from "../infrastructure/email-service.js";
+import { emailsGoAfterAnswer, runAfterAnswer } from "../../lib/outbox.js";
 import { renderFolioStatementEmail } from "../infrastructure/stage-email-templates.js";
 import { cleanPhone } from "../../lib/phone-numbers.js";
 import { resolveInvoiceRecipient } from "./s9-service.js";
@@ -535,6 +536,8 @@ export type FolioDocumentSendOutcome = {
   to: string;
   /** EMAIL: whether the mail went out; false with the reason when it was switched off or failed. */
   emailed: boolean;
+  /** EMAIL on the API server: on its way, sent right after this answer (2026-11-10). */
+  queued?: boolean;
   reason: string | null;
   reprintOrdinal: number | null;
 };
@@ -591,41 +594,70 @@ export async function sendFolioDocument(
       balance: Number(toDecimal(entry.folio!.outstandingBalance).toFixed(2)),
       stillStaying: entry.currentStage === "S7" && !c.sealedAt,
     });
-    const result = await sendEmail(prisma, {
-      to,
-      subject: content.subject,
-      text: content.text,
-      html: content.html,
-      threadEntryId: entryId,
-      threadReadableId: entry.inquiryId,
-      attachments: [{ filename: pdf.filename, content: pdf.bytes, contentType: "application/pdf" }],
-    });
-    if (result.status === "sent") {
-      emailed = true;
-      messageId = result.messageId;
-    } else {
-      reason = result.status === "skipped" ? "Email is switched off on this server" : result.message;
+    // The desk does not wait for the mail server (2026-11-10): on the API server the email goes
+    // right after the answer, and the send is recorded once it went.
+    const deliver = async () => {
+      const result = await sendEmail(prisma, {
+        to,
+        subject: content.subject,
+        text: content.text,
+        html: content.html,
+        threadEntryId: entryId,
+        threadReadableId: entry.inquiryId,
+        attachments: [{ filename: pdf.filename, content: pdf.bytes, contentType: "application/pdf" }],
+      });
+      if (result.status === "sent") {
+        emailed = true;
+        messageId = result.messageId;
+        await recordSent();
+      } else {
+        reason = result.status === "skipped" ? "Email is switched off on this server" : result.message;
+        await prisma.traceEvent.create({
+          data: {
+            eventType: "FOLIO.DOCUMENT_NOT_EMAILED",
+            actorId,
+            actorLevel: "SYSTEM",
+            entityType: "Folio",
+            entityId: entry.folio!.id,
+            operation: "DISPATCH",
+            timestamp: new Date(),
+            stageContext: entry.currentStage,
+            inquiryId: entry.inquiryId,
+            entryId,
+            payload: { kind, paper: doc.title, to, reason },
+            createdBy: actorId,
+          } as Prisma.TraceEventUncheckedCreateInput,
+        });
+      }
+    };
+    if (emailsGoAfterAnswer() && (process.env.EMAIL_DISABLE ?? "").toLowerCase() !== "true") {
+      await runAfterAnswer(entryId, `${doc.title} for ${entryId}`, deliver);
+      return { kind, channel: input.channel, to, emailed: true, queued: true, reason: null, reprintOrdinal };
     }
+    await deliver();
+    return { kind, channel: input.channel, to, emailed, reason, reprintOrdinal };
   }
 
+  await recordSent();
+  return { kind, channel: input.channel, to, emailed, reason, reprintOrdinal };
+
   // Recorded only when it went: an email that failed is not a send.
-  if (input.channel === "WHATSAPP" || emailed) {
+  async function recordSent() {
     await prisma.traceEvent.create({
       data: {
         eventType: FOLIO_DOCUMENT_SENT_EVENT,
         actorId,
         actorLevel: "SYSTEM",
         entityType: "Folio",
-        entityId: entry.folio!.id,
+        entityId: entry!.folio!.id,
         operation: "DISPATCH",
         timestamp: new Date(),
-        stageContext: entry.currentStage,
-        inquiryId: entry.inquiryId,
+        stageContext: entry!.currentStage,
+        inquiryId: entry!.inquiryId,
         entryId,
-        payload: { kind, paper: doc.title, channel: input.channel, to, reprintOrdinal, messageId },
+        payload: { kind, paper: doc!.title, channel: input.channel, to, reprintOrdinal, messageId },
         createdBy: actorId,
       } as Prisma.TraceEventUncheckedCreateInput,
     });
   }
-  return { kind, channel: input.channel, to, emailed, reason, reprintOrdinal };
 }
