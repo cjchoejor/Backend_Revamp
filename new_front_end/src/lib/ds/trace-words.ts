@@ -181,6 +181,8 @@ const WORDS: Record<string, string> = {
   "HANDOFF.H3_ACCEPTED": "Kitchen and bar accepted the guest",
   "HANDOFF.H1_FULFILLED": "Front-desk handoff done",
   "HANDOFF.H1_CLOSED": "Front-desk handoff closed",
+  "HANDOFF.H5_FULFILLED": "After-stay handoff done — nothing left to settle",
+  "HANDOFF.H5_REOPENED": "After-stay handoff opened again — money owed after a late charge",
   "HANDOFF.ACCEPTANCE_WINDOW_EXPIRED": "A handoff was not accepted in time",
   "HANDOFF.FOM_ALERTED": "The FOM was alerted about a handoff",
   "CHECK_IN.ESCORT_COMPLETE": "Guest escorted to the room",

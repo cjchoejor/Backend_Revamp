@@ -462,6 +462,8 @@ export type HandoffSummary = {
   slaDeadlineAt?: string | null;
   deficientConditionStatus?: string | null;
   isAutoFulfilled?: boolean;
+  /** What closed it — the after-stay handoff carries `resolutionBasis` and, when the system closed it, `autoRecorded`. */
+  fulfilmentEvidence?: Record<string, unknown> | null;
   rejectedAt?: string | null;
 };
 
