@@ -28,6 +28,28 @@ function Cell({ v, cur }: { v: number | null | undefined; cur?: string | null })
   return <td className={`num ${v != null ? "money" : "dash"}`}>{v != null ? money(v, cur ?? "BTN") : "—"}</td>;
 }
 
+/**
+ * A row's money: a trip's when the booking is one of several stays (2026-11-10, operator: "it only
+ * pulls one stay") — the bill is the trip's, so the list reads the trip's figures, the server's sums.
+ */
+function figuresOf(x: DeskMoneyRow | undefined) {
+  if (!x) return null;
+  if (x.trip) {
+    return { total: x.trip.totalAmount, billed: x.trip.billedSoFar, paid: x.trip.paymentsReceived, balance: x.trip.outstandingBalance, paidAhead: x.trip.paidAhead };
+  }
+  return { total: x.totalAmount, billed: x.folio?.billedSoFar ?? null, paid: x.folio?.paymentsReceived ?? null, balance: x.folio?.outstandingBalance ?? null, paidAhead: 0 };
+}
+
+/** One row per enquiry: a trip's stays are one bill. The first row of each enquiry stands for it. */
+function onePerTrip(rows: DeskListRow[], skip: Set<string> = new Set()): DeskListRow[] {
+  const seen = new Set<string>(skip);
+  return rows.filter((r) => {
+    if (seen.has(r.inquiryId)) return false;
+    seen.add(r.inquiryId);
+    return true;
+  });
+}
+
 function accountOf(r: DeskListRow): string {
   const b = bookerOfRow(r);
   return b && (b.kind === "agent" || b.kind === "company") ? b.name : "the guest";
@@ -92,7 +114,7 @@ function haystack(r: DeskListRow): string {
 /** Comparing the server's figures, never adding them. A row with no value goes to the end. */
 function sortRows(rows: DeskListRow[], sort: Sort, moneyOf: (id: string) => DeskMoneyRow | undefined): DeskListRow[] {
   const value = (r: DeskListRow): string | number | null | undefined => {
-    const f = moneyOf(r.id)?.folio;
+    const f = figuresOf(moneyOf(r.id));
     switch (sort.key) {
       case "checkout":
         return checkOutOf(r);
@@ -103,13 +125,13 @@ function sortRows(rows: DeskListRow[], sort: Sort, moneyOf: (id: string) => Desk
       case "account":
         return accountOf(r).toLowerCase();
       case "balance":
-        return f?.outstandingBalance;
+        return f?.balance;
       case "billed":
-        return f?.billedSoFar;
+        return f?.billed;
       case "total":
-        return moneyOf(r.id)?.totalAmount;
+        return f?.total;
       case "paid":
-        return f?.paymentsReceived;
+        return f?.paid;
     }
   };
   return [...rows].sort((a, b) => {
@@ -179,19 +201,26 @@ function BillingScreen() {
     }
   }, [params]);
 
+  // A trip is one bill (2026-11-10): one row per enquiry — under Open bills while any stay is in house
+  // or checking out, else under Still owed — reading the whole trip's figures.
   const open = useMemo(
     () =>
-      rows
-        .filter((r) => r.status === "ACTIVE" && r.folio && [7, 8].includes(stepNoOfStage(r.currentStage)))
-        .sort((a, b) => (a.checkOutDate ?? "").localeCompare(b.checkOutDate ?? "")),
+      onePerTrip(
+        rows
+          .filter((r) => r.status === "ACTIVE" && r.folio && [7, 8].includes(stepNoOfStage(r.currentStage)))
+          .sort((a, b) => (a.checkOutDate ?? "").localeCompare(b.checkOutDate ?? "")),
+      ),
     [rows],
   );
   const after = useMemo(
     () =>
-      rows
-        .filter((r) => r.folio && (r.folio.state === "OUTSTANDING" || (stepNoOfStage(r.currentStage) === 9 && r.folio.state !== "SETTLED" && r.folio.state !== "CLOSED")))
-        .filter((r) => !open.includes(r))
-        .sort((a, b) => accountOf(a).localeCompare(accountOf(b)) || (a.checkOutDate ?? "").localeCompare(b.checkOutDate ?? "")),
+      onePerTrip(
+        rows
+          .filter((r) => r.folio && (r.folio.state === "OUTSTANDING" || (stepNoOfStage(r.currentStage) === 9 && r.folio.state !== "SETTLED" && r.folio.state !== "CLOSED")))
+          .filter((r) => !open.includes(r))
+          .sort((a, b) => accountOf(a).localeCompare(accountOf(b)) || (a.checkOutDate ?? "").localeCompare(b.checkOutDate ?? "")),
+        new Set(open.map((r) => r.inquiryId)),
+      ),
     [rows, open],
   );
   const ids = useMemo(() => [...open, ...after].map((r) => r.id), [open, after]);
@@ -203,7 +232,7 @@ function BillingScreen() {
   const owing = useMemo(
     () =>
       after.filter((r) => {
-        const b = m.byId.get(r.id)?.folio?.outstandingBalance;
+        const b = figuresOf(m.byId.get(r.id))?.balance;
         return b == null || b > 0;
       }),
     [after, m.byId],
@@ -306,20 +335,21 @@ function BillingScreen() {
                 <tbody>
                   {shown.map((r) => {
                     const x = get(r.id);
+                    const f = figuresOf(x);
                     return (
                       <OpenRow key={r.id} entryId={r.id} href={billHref(r.id)}>
                         <td>
                           <GuestLink row={r} href={billHref(r.id)} />
-                          <div className="meta">{bookingMeta(r)}</div>
+                          <div className="meta">{x?.trip ? `Trip · ${x.trip.stays.length} stays · ${r.inquiryId}` : bookingMeta(r)}</div>
                         </td>
-                        <td className="nowrap"><StayDates stacked checkIn={r.checkInDate} checkOut={checkOutOf(r)} /></td>
+                        <td className="nowrap"><TripDates row={r} x={x} /></td>
                         <td>
                           <RowStanding row={r} hotelToday={today} balance={x?.folio?.outstandingBalance ?? null} />
                         </td>
-                        <Cell v={x?.totalAmount} cur={x?.currency} />
-                        <Cell v={x?.folio?.billedSoFar} cur={x?.currency} />
-                        <Cell v={x?.folio?.paymentsReceived} cur={x?.currency} />
-                        <Cell v={x?.folio?.outstandingBalance} cur={x?.currency} />
+                        <Cell v={f?.total} cur={x?.currency} />
+                        <Cell v={f?.billed} cur={x?.currency} />
+                        <Cell v={f?.paid} cur={x?.currency} />
+                        <BalanceCell f={f} cur={x?.currency} />
                       </OpenRow>
                     );
                   })}
@@ -343,6 +373,7 @@ function BillingScreen() {
               <tbody>
                 {shown.map((r, i) => {
                   const x = get(r.id);
+                  const f = figuresOf(x);
                   const acct = accountOf(r);
                   const first = !groupByAccount || i === 0 || accountOf(shown[i - 1]!) !== acct;
                   return (
@@ -350,10 +381,10 @@ function BillingScreen() {
                       <td>{first ? <b>{acct}</b> : null}</td>
                       <td>
                         <GuestLink row={r} href={billHref(r.id)} />
-                        <div className="meta">{r.id}</div>
+                        <div className="meta">{x?.trip ? `Trip · ${x.trip.stays.length} stays · ${r.inquiryId}` : r.id}</div>
                       </td>
-                      <td className="nowrap"><StayDates stacked checkIn={r.checkInDate} checkOut={checkOutOf(r)} /></td>
-                      <Cell v={x?.folio?.outstandingBalance} cur={x?.currency} />
+                      <td className="nowrap"><TripDates row={r} x={x} /></td>
+                      <BalanceCell f={f} cur={x?.currency} />
                     </OpenRow>
                   );
                 })}
@@ -367,6 +398,29 @@ function BillingScreen() {
         </>
       )}
     </div>
+  );
+}
+
+/** The stay's dates — a trip's from its first check-in to its last check-out, with how many stays. */
+function TripDates({ row, x }: { row: DeskListRow; x: DeskMoneyRow | undefined }) {
+  const stays = x?.trip?.stays ?? null;
+  if (!stays) return <StayDates stacked checkIn={row.checkInDate} checkOut={checkOutOf(row)} />;
+  return (
+    <>
+      <StayDates stacked checkIn={stays[0]?.checkIn ?? row.checkInDate} checkOut={stays[stays.length - 1]?.checkOut ?? checkOutOf(row)} />
+      <div className="meta" style={{ marginTop: 2 }}>{stays.length} stays</div>
+    </>
+  );
+}
+
+/** The balance, and money a stay paid ahead — kept apart, as the bill keeps it. */
+function BalanceCell({ f, cur }: { f: ReturnType<typeof figuresOf>; cur?: string | null }) {
+  const v = f?.balance;
+  return (
+    <td className={`num ${v != null ? "money" : "dash"}`}>
+      {v != null ? money(v, cur ?? "BTN") : "—"}
+      {f && f.paidAhead > 0 ? <div className="meta">{money(f.paidAhead, cur ?? "BTN")} paid ahead</div> : null}
+    </td>
   );
 }
 

@@ -112,6 +112,16 @@ export type DeskMoneyRow = {
   /** The stay as priced plus what was added to it; null with no priced stay total (2026-11-10). */
   totalAmount: number | null;
   shortened: boolean;
+  /** The whole trip when the booking is one stay of several — the stays' own figures added up by the server. */
+  trip: {
+    inquiryId: string;
+    stays: Array<{ entryId: string; stayNo: number; checkIn: string | null; checkOut: string | null; stage: string; status: string }>;
+    totalAmount: number | null;
+    billedSoFar: number;
+    paymentsReceived: number;
+    outstandingBalance: number;
+    paidAhead: number;
+  } | null;
 };
 
 export async function deskMoneyFor(session: Session, entryIds: string[]) {

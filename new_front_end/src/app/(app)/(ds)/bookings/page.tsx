@@ -568,6 +568,10 @@ function BookingsScreen() {
                       </td>
                       <td className={`num ${t.amount ? "money" : "dash"}`} title={t.kind}>
                         {t.amount ?? "—"}
+                        {/* One stay of a trip (2026-11-10, operator): the trip's own total under it. */}
+                        {m?.trip?.totalAmount != null ? (
+                          <div className="meta">trip {money(m.trip.totalAmount, m.currency ?? "BTN")}</div>
+                        ) : null}
                       </td>
                     </OpenRow>
                     </Fragment>
@@ -711,6 +715,17 @@ function Preview({
         <dd>
           {t.amount ? <span className="money">{t.amount}</span> : <span className="dash">—</span>} <span className="meta">{t.kind}</span>
         </dd>
+        {m?.trip ? (
+          <>
+            <dt>The trip</dt>
+            <dd>
+              {m.trip.totalAmount != null ? <span className="money">{money(m.trip.totalAmount, m.currency ?? "BTN")}</span> : <span className="dash">—</span>}{" "}
+              <span className="meta">
+                {m.trip.stays.length} stays · billed {money(m.trip.billedSoFar, m.currency ?? "BTN")} · balance {money(m.trip.outstandingBalance, m.currency ?? "BTN")}
+              </span>
+            </dd>
+          </>
+        ) : null}
         {m?.folio ? (
           <>
             <dt>Paid</dt>
