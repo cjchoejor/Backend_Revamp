@@ -22,7 +22,34 @@ export function enforceHandoffInCreatedStateForAccept(input: { handoffType: Hand
     if (input.state !== HandoffState.CREATED) {
       throw new StateTransitionError(`Handoff must be in CREATED state to accept (current: ${input.state})`);
     }
+    return;
   }
+  // H4 (2026-11-10): accepted when told, or late once its window passed (ESCALATED) — the move to
+  // Check-out waits for an accepted one. Never from FULFILLED: that would undo the departure handoff.
+  if (input.handoffType === HandoffType.H4) {
+    if (input.state !== HandoffState.CREATED && input.state !== HandoffState.ESCALATED) {
+      throw new StateTransitionError(
+        `The handoff before check-out can be accepted only while it waits for it (now: ${input.state.toLowerCase()})`,
+        "H4_NOT_WAITING_FOR_ACCEPTANCE",
+      );
+    }
+  }
+}
+
+/**
+ * H4 is finished at Check-out, from the room inspection (2026-11-10, operator: "yes do it"). At Stay
+ * the desk tells the departments and accepts it; marking it done there recorded, on the desk's word,
+ * that every room was inspected and any damage assessed before any inspection had happened, and
+ * left Check-out's departure handoff reading as done. A same-day departure's handoff is written by
+ * the move itself (`createH4` / the S7→S8 transition), not through here.
+ */
+export function enforceH4FulfilledAtCheckout(input: { handoffType: HandoffType; currentStage: string | null | undefined }) {
+  if (input.handoffType !== HandoffType.H4) return;
+  if (input.currentStage === "S8") return;
+  throw new StateTransitionError(
+    "The departure handoff is finished at Check-out, from the room inspection. At Stay, tell the departments the guest is leaving and accept it.",
+    "H4_FULFIL_AT_CHECKOUT_ONLY",
+  );
 }
 
 export function enforceHandoffFulfilTypeSupported(

@@ -8,6 +8,7 @@ import { enforceDeficientCarryIntoH2 } from "../../policies/19-deficient-conditi
 import { enforceHandoffFulfilmentEvidence, enforceMandatoryChecklistItemsCompleted } from "../../policies/25-handoff/p63-handoff-lifecycle-gates.js";
 import {
   enforceHandoffAcceptTypeSupported,
+  enforceH4FulfilledAtCheckout,
   enforceHandoffConfigKeyPresentForH4,
   enforceHandoffFulfilStateH1,
   enforceHandoffFulfilStateH4,
@@ -112,6 +113,10 @@ export async function fulfilHandoff(
   enforceHandoffFulfilStateH1({ handoffType, state: handoff.state });
   enforceHandoffFulfilStateH4({ handoffType, state: handoff.state });
   enforceHandoffFulfilStateH5({ handoffType, state: handoff.state });
+  if (handoffType === HandoffType.H4) {
+    const entry = await prisma.entry.findUnique({ where: { id: handoff.entryId }, select: { currentStage: true } });
+    enforceH4FulfilledAtCheckout({ handoffType, currentStage: entry?.currentStage ?? null });
+  }
 
   const ev = fulfilmentEvidence ?? {};
   const enforcedEvidence = enforceHandoffFulfilmentEvidence({
