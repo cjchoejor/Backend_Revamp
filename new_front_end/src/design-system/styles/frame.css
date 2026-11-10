@@ -2473,3 +2473,20 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 /* The payment box's offer to send the tax invoice (2026-11-10): the line, then its button on the same row. */
 .ds .pay-send-invoice { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; margin-bottom: var(--s3); }
 .ds .pay-send-invoice > span { flex: 1 1 260px; }
+
+/* A child's age on the guest table, put right at Arrival and Check-in (2026-11-10). */
+.ds .age-btn { margin-left: 8px; display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: 4px; border: 1px solid var(--accent); background: var(--accent-soft); color: var(--accent); font-size: 11.5px; font-weight: 600; cursor: pointer; vertical-align: middle; }
+.ds .age-btn:hover { background: var(--accent); color: #fff; }
+.ds .rct-refusal .age-offer { margin-left: auto; height: 28px; padding: 0 12px; font-size: 12.5px; white-space: nowrap; }
+.ds .notice.age-adult { display: flex; gap: var(--s3); border: 1px solid var(--danger); border-left: 5px solid var(--danger); background: var(--danger-soft, #fbeae8); color: var(--ink); padding: var(--s3) var(--s4); border-radius: var(--r-control); font-size: var(--t-base); margin: var(--s3) 0; }
+.ds .notice.age-adult b { color: var(--danger); }
+.ds .age-choices { display: grid; gap: var(--s2); margin: var(--s2) 0 var(--s3); }
+.ds .age-choice { display: flex; align-items: flex-start; gap: 10px; text-align: left; width: 100%; padding: 10px 12px; border: 1px solid var(--line-2); border-radius: var(--r-control); background: var(--surface, #fff); color: var(--ink); cursor: pointer; font: inherit; }
+.ds .age-choice:hover:not(:disabled) { border-color: var(--accent); }
+.ds .age-choice .dot { flex: none; width: 14px; height: 14px; margin-top: 2px; border-radius: 999px; border: 2px solid var(--line-3, #999); }
+.ds .age-choice.on { border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+.ds .age-choice.on .dot { border-color: var(--accent); background: var(--accent); box-shadow: inset 0 0 0 2px #fff; }
+.ds .age-choice .what { display: grid; gap: 2px; }
+.ds .age-choice .sub { font-size: 12.5px; color: var(--ink-3); }
+.ds .age-choice .sub.why { color: var(--danger); }
+.ds .age-choice.shut { border-style: dashed; cursor: not-allowed; opacity: 0.75; }
