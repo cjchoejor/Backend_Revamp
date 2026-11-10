@@ -590,7 +590,7 @@ const CANCELLATION = page("/admin/cancellation-policies", "Cancellation policies
           kind: "rows",
           key: "tiers",
           label: "Or by time left before check-in",
-          help: "Any line here takes the place of the charges above for a cancellation before arrival. The line with the most time that still fits decides.",
+          help: "Any line here takes the place of the charges above for a cancellation before arrival. Time left is counted to the hotel's check-in time on the arrival day. The line with the most time that still fits decides; a cancellation later than every line — on the arrival day, or after the check-in time — pays the last line. A cancellation nearer the arrival can't cost less than one further out.",
           addLabel: "Add a line",
           word: ["line", "lines"],
           emptyText: "No lines: the charges above apply.",
