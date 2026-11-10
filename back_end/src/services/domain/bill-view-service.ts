@@ -55,9 +55,16 @@ export type BillPayment = {
   stayNo: number;
   at: string;
   method: string | null;
-  direction: "IN" | "OUT";
+  /** MOVE (2026-11-10): money paid for the trip moved from one stay's bill to another's — the two
+   *  halves of the move as one row. Neither paid by the guest nor given back. */
+  direction: "IN" | "OUT" | "MOVE";
   amount: number;
   note: string | null;
+  /** A MOVE's two stays. */
+  fromStayNo?: number;
+  toStayNo?: number;
+  /** The move's reference, for pairing its two halves. */
+  moveRef?: string | null;
 };
 
 export type BillFigures = {
@@ -225,6 +232,7 @@ async function billOfStay(prisma: PrismaClient, entry: BillEntry, stayNo: number
     direction: p.paymentDirection === "OUT" ? "OUT" : "IN",
     amount: n(p.amount),
     note: p.tripTransferRef ? "moved between the stays" : p.paidForTrip ? "paid for the trip" : null,
+    moveRef: p.tripTransferRef ?? null,
   }));
   return {
     stay: {
@@ -251,6 +259,41 @@ export function stayIsOnTripBill(e: { status: string; folio?: { lines?: unknown[
 
 const sumOf = (stays: BillStay[], key: keyof BillFigures) => n(sumMoney(stays.map((s) => s.figures[key])).add(ZERO));
 
+/**
+ * The two halves of each move between the stays as one row, and what they came to: a move is one
+ * row out of one bill and one into another, the same amount, sharing `tripTransferRef`.
+ */
+export function pairTripMoves(list: BillPayment[]): { rows: BillPayment[]; movedIn: Prisma.Decimal; movedOut: Prisma.Decimal } {
+  const byRef = new Map<string, BillPayment[]>();
+  for (const p of list) if (p.moveRef) byRef.set(p.moveRef, [...(byRef.get(p.moveRef) ?? []), p]);
+  let movedIn = ZERO;
+  let movedOut = ZERO;
+  const paired = new Set<string>();
+  const merged: BillPayment[] = [];
+  for (const [ref, halves] of byRef) {
+    const out = halves.find((h) => h.direction === "OUT");
+    const into = halves.find((h) => h.direction === "IN");
+    if (!out || !into || halves.length !== 2) continue;
+    movedIn = movedIn.add(toDecimal(into.amount));
+    movedOut = movedOut.add(toDecimal(out.amount));
+    paired.add(out.id).add(into.id);
+    merged.push({
+      id: `move:${ref}`,
+      stayNo: into.stayNo,
+      at: out.at < into.at ? out.at : into.at,
+      method: out.method ?? into.method,
+      direction: "MOVE",
+      amount: into.amount,
+      note: "money paid for the trip, moved to pay a cancelled stay's charge or a stay's advance",
+      fromStayNo: out.stayNo,
+      toStayNo: into.stayNo,
+      moveRef: ref,
+    });
+  }
+  const rows = [...list.filter((p) => !paired.has(p.id)), ...merged].sort((a, b) => a.at.localeCompare(b.at) || a.id.localeCompare(b.id));
+  return { rows, movedIn, movedOut };
+}
+
 /** The bill of a booking, with every other stay of its trip that has one. */
 export async function buildBillView(prisma: PrismaClient, entryId: string): Promise<BillView> {
   const asked = await prisma.entry.findUnique({ where: { id: entryId }, select: { inquiryId: true } });
@@ -261,7 +304,11 @@ export async function buildBillView(prisma: PrismaClient, entryId: string): Prom
   const [hotel, { gstRate, serviceChargeRate: svcRate }] = await Promise.all([loadHotelProfileForRender(prisma), resolveChargeRates(prisma)]);
   const billed = await Promise.all(shown.map((e) => billOfStay(prisma, e, entries.indexOf(e) + 1, { gstRate, svcRate })));
   const stays = billed.map((b) => b.stay);
-  const payments = billed.flatMap((b) => b.payments).sort((a, b) => a.at.localeCompare(b.at));
+  // Money moved between the stays is one row, and it is neither received nor refunded for the
+  // trip (2026-11-10, operator, on INQ-20261109-0190: Received read Nu 5,570.75 for Nu 5,370.75
+  // the guest paid, Refunded Nu 5,270.75 for Nu 5,070.75 given back — the Nu 200 moved counted in
+  // both). A move whose other half is not on this bill stays as it is.
+  const { rows: payments, movedIn, movedOut } = pairTripMoves(billed.flatMap((b) => b.payments));
   const parties = taxInvoicePartiesFromEntry(entries.find((e) => e.id === entryId)!);
   return {
     entryId,
@@ -287,8 +334,8 @@ export async function buildBillView(prisma: PrismaClient, entryId: string): Prom
       serviceCharge: sumOf(stays, "serviceCharge"),
       gst: sumOf(stays, "gst"),
       total: sumOf(stays, "total"),
-      received: sumOf(stays, "received"),
-      refunded: sumOf(stays, "refunded"),
+      received: n(toDecimal(sumOf(stays, "received")).sub(movedIn)),
+      refunded: n(toDecimal(sumOf(stays, "refunded")).sub(movedOut)),
       writtenOff: sumOf(stays, "writtenOff"),
       settledBefore: sumOf(stays, "settledBefore"),
       balance: sumOf(stays, "balance"),
