@@ -518,17 +518,28 @@ function BillingScreen() {
 }
 
 /**
- * The stay's dates. A trip's stays each on a line of their own (2026-11-10, operator: "it doesn't show
- * which stays are there"): Stay 1 and its check-in and check-out, then Stay 2, kept small.
+ * The stay's dates, one line a stay, the same small boxes on every row (2026-11-10, operator: "it
+ * doesn't show which stays are there", then "this doesn't look good, make it better"): a trip's stays
+ * each on a line, "Stay 1" right beside its own dates.
  */
 function TripDates({ row, x }: { row: DeskListRow; x: DeskMoneyRow | undefined }) {
   const stays = x?.trip?.stays ?? null;
-  if (!stays) return <StayDates stacked checkIn={row.checkInDate} checkOut={checkOutOf(row)} />;
+  if (!stays) {
+    return (
+      <div className="bill-stays">
+        <div className="bill-stay">
+          {/* Room where a trip says "Stay 1", so every row's dates line up down the column. */}
+          <span className="bs-n" aria-hidden />
+          <StayDates compact checkIn={row.checkInDate} checkOut={checkOutOf(row)} />
+        </div>
+      </div>
+    );
+  }
   return (
-    <div className="trip-stays">
+    <div className="bill-stays trip">
       {stays.map((s) => (
-        <div key={s.entryId} className="trip-stay">
-          <span className="ts-n">Stay {s.stayNo}</span>
+        <div key={s.entryId} className="bill-stay">
+          <span className="bs-n">Stay {s.stayNo}</span>
           <StayDates compact checkIn={s.checkIn} checkOut={s.checkOut} />
         </div>
       ))}

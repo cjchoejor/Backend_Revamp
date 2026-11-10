@@ -2515,9 +2515,9 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .staydates.compact { gap: 4px; }
 .ds .staydates.compact .sd .lbl { padding: 1px 5px; font-size: 10px; }
 .ds .staydates.compact .sd b { padding: 1px 6px; font-size: 12.5px; }
-.ds .trip-stays { display: grid; gap: 3px; }
-.ds .trip-stay { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
-.ds .trip-stay .ts-n { min-width: 44px; font-size: 11.5px; font-weight: 700; color: var(--ink-2); }
+.ds .bill-stays { display: grid; gap: 4px; justify-items: start; }
+.ds .bill-stay { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.ds .bill-stay .bs-n { width: 40px; font-size: 11.5px; font-weight: 700; color: var(--ink-2); }
 .ds .stay-of { display: inline-flex; align-items: center; margin-left: 6px; padding: 0 6px; height: 18px; border: 1px solid var(--accent-line); border-radius: 3px; background: var(--accent-soft); color: var(--accent-ink); font-size: 11px; font-weight: 700; white-space: nowrap; vertical-align: 1px; }
 
 /* Post a charge: the room is picked first (2026-11-10). */
