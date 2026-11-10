@@ -16,6 +16,10 @@ import {
 } from "../infrastructure/pdf-templates/legphel-folio-statement-templates.js";
 import { resolveChargeRates } from "../infrastructure/compute-stay-charges.js";
 import { renderHtmlToPdf } from "../infrastructure/pdf-render-service.js";
+import { sendEmail } from "../infrastructure/email-service.js";
+import { renderFolioStatementEmail } from "../infrastructure/stage-email-templates.js";
+import { cleanPhone } from "../../lib/phone-numbers.js";
+import { resolveInvoiceRecipient } from "./s9-service.js";
 import {
   buildFinalInvoiceFigures,
   composeTaxInvoiceHtml,
@@ -138,6 +142,8 @@ export type FolioDocumentEntry = {
   /** Sealed Master Bill: how many prints so far. */
   reprintCount: number | null;
   frozenAt: string | null;
+  /** The last time the desk sent it (2026-11-10): by email or recorded as sent on WhatsApp. */
+  sent: { at: string; channel: "EMAIL" | "WHATSAPP"; to: string | null } | null;
   /** Issued tax invoice: the Invoice row to open via `/api/invoices/:id/pdf`. */
   invoice: {
     id: string;
@@ -171,24 +177,26 @@ export async function listFolioDocuments(prisma: PrismaClient, entryId: string):
   const stage = entry.currentStage;
   const finalInvoice = newestFinalInvoice(folio);
   const reprintCount = folio && sealedAt ? await masterBillPrintCount(prisma, entryId, sealedAt) : null;
+  const sentOf = await lastSentByKind(prisma, entryId);
 
-  const noFolio = !folio ? "No folio yet — the bill starts at Set up (S3) and goes live at check-in." : null;
-  const notLive = folio && folio.state === "PROVISIONAL" ? "The folio goes live at check-in — nothing is posted before that." : null;
+  const noFolio = !folio ? "No bill yet — it starts at Set up and goes live at check-in." : null;
+  const notLive = folio && folio.state === "PROVISIONAL" ? "The bill goes live at check-in — nothing is charged before that." : null;
 
   const interim: FolioDocumentEntry = {
     kind: "interim-statement",
     title: "Tentative invoice",
-    subtitle: "Interim folio statement (C5)",
+    subtitle: "Where the guest stands so far",
     purpose:
-      "The mid-stay handout: where the guest stands right now — charges to date by component, money received, the position. Not a bill for settlement; every print is a fresh snapshot.",
+      "What the guest has been charged so far and what they have paid — to hand over during the stay. It is not the final bill: charges continue until check-out, and each copy shows the moment it was made.",
     available: !!folio && live && stage === "S7",
     unavailableReason:
       noFolio ??
       notLive ??
-      (sealedAt ? "The stay is settled — the Master Bill is the position now." : stage !== "S7" ? "Only during the stay (S7) — at check-out the Master Bill is the bill." : null),
+      (sealedAt ? "The bill is settled — the master bill is the bill now." : stage !== "S7" ? "Only during the stay — at check-out the master bill is the bill." : null),
     state: !!folio && live && stage === "S7" ? "SNAPSHOT" : "NONE",
     reprintCount: null,
     frozenAt: null,
+    sent: sentOf.get("interim-statement") ?? null,
     invoice: null,
   };
 
@@ -196,15 +204,16 @@ export async function listFolioDocuments(prisma: PrismaClient, entryId: string):
   const master: FolioDocumentEntry = {
     kind: "master-bill",
     title: "Master bill",
-    subtitle: "Master Bill (C1) — the rollup",
+    subtitle: "Every charge by kind, and what is owed",
     purpose: sealedAt
-      ? "Content frozen at the folio seal (settlement). Reprints carry an ordinal; the figures never move."
-      : "The rollup by component with the settlement position — the bill presented for signature at check-out. In-stay it is the same rollup, indicative, as at printing.",
+      ? "The final bill: every charge by kind and what was paid. It no longer changes; each copy printed or sent is numbered."
+      : "Every charge by kind and what has been paid so far — the bill the guest signs at check-out. Until then it shows the bill as it stands.",
     available: masterAvailable,
-    unavailableReason: noFolio ?? notLive ?? (!hasLines ? "Nothing posted on the folio yet." : null),
+    unavailableReason: noFolio ?? notLive ?? (!hasLines ? "Nothing charged on the bill yet." : null),
     state: !masterAvailable ? "NONE" : sealedAt ? "FROZEN" : "INDICATIVE",
     reprintCount,
     frozenAt: sealedAt?.toISOString() ?? null,
+    sent: sentOf.get("master-bill") ?? null,
     invoice: null,
   };
 
@@ -212,15 +221,16 @@ export async function listFolioDocuments(prisma: PrismaClient, entryId: string):
   const tax: FolioDocumentEntry = {
     kind: "tax-invoice",
     title: "Tax invoice",
-    subtitle: finalInvoice ? "Tax Invoice (B1) — issued" : "Tax Invoice (B1) — draft",
+    subtitle: "The numbered bill for tax",
     purpose: finalInvoice
-      ? "The fiscal document, issued once and never revised. Served from the stored original; corrections travel as adjustment notes."
-      : "The fiscal document as it would issue now — a DRAFT with no serial, for checking the billed-to party, TPN, descriptions and the GST ladder before the one original is issued at settlement. Not a handout.",
+      ? "The numbered bill for tax, issued once and never changed. Every copy is the same original."
+      : "How the tax invoice will read — to check the name, the tax number and the charges before it is issued. It gets its number when the bill is settled, and is not handed to the guest before then.",
     available: !!finalInvoice || draftAvailable,
-    unavailableReason: finalInvoice ? null : noFolio ?? notLive ?? (!hasLines ? "Nothing posted on the folio yet." : null),
+    unavailableReason: finalInvoice ? null : noFolio ?? notLive ?? (!hasLines ? "Nothing charged on the bill yet." : null),
     state: finalInvoice ? "ISSUED" : draftAvailable ? "DRAFT" : "NONE",
     reprintCount: null,
     frozenAt: null,
+    sent: null,
     invoice: finalInvoice
       ? {
           id: finalInvoice.id,
@@ -492,4 +502,130 @@ export async function printFolioDocumentPdf(
     });
   }
   return { bytes, filename: filenameFor(entryId, kind), reprintOrdinal };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Sending (2026-11-10, operator: "make the view like how we view other papers, also show the send
+// button"). The statement so far and the master bill go out by email with the paper attached, or
+// are recorded as sent on WhatsApp. A tax invoice goes out once it is issued, from its own row —
+// a draft has no number and is never sent.
+// ---------------------------------------------------------------------------------------------
+
+export const FOLIO_DOCUMENT_SENT_EVENT = "FOLIO.DOCUMENT_SENT";
+
+async function lastSentByKind(prisma: PrismaClient, entryId: string): Promise<Map<FolioDocumentKind, NonNullable<FolioDocumentEntry["sent"]>>> {
+  const rows = await prisma.traceEvent.findMany({
+    where: { entryId, eventType: FOLIO_DOCUMENT_SENT_EVENT },
+    orderBy: { timestamp: "desc" },
+    take: 20,
+    select: { timestamp: true, payload: true },
+  });
+  const out = new Map<FolioDocumentKind, NonNullable<FolioDocumentEntry["sent"]>>();
+  for (const r of rows) {
+    const p = (r.payload ?? {}) as { kind?: string; channel?: string; to?: string | null };
+    if (!p.kind || !isFolioDocumentKind(p.kind) || out.has(p.kind)) continue;
+    out.set(p.kind, { at: r.timestamp.toISOString(), channel: p.channel === "WHATSAPP" ? "WHATSAPP" : "EMAIL", to: p.to ?? null });
+  }
+  return out;
+}
+
+export type FolioDocumentSendOutcome = {
+  kind: FolioDocumentKind;
+  channel: "EMAIL" | "WHATSAPP";
+  to: string;
+  /** EMAIL: whether the mail went out; false with the reason when it was switched off or failed. */
+  emailed: boolean;
+  reason: string | null;
+  reprintOrdinal: number | null;
+};
+
+export async function sendFolioDocument(
+  prisma: PrismaClient,
+  entryId: string,
+  kind: FolioDocumentKind,
+  actorId: string,
+  input: { channel: "EMAIL" | "WHATSAPP"; to?: string | null; nightsMode?: NightsMode },
+): Promise<FolioDocumentSendOutcome> {
+  if (kind === "tax-invoice") {
+    throw new PolicyGateBlockedError(
+      "TAX_INVOICE_SENT_FROM_ITS_OWN_ROW",
+      "A tax invoice is sent once it is issued, with its number — a draft is never sent. Issue it, then send it from its own row.",
+    );
+  }
+  const index = await listFolioDocuments(prisma, entryId);
+  const doc = index.documents.find((d) => d.kind === kind);
+  if (!doc?.available) throw new ValidationError(doc?.unavailableReason ?? "This paper is not available on this booking now.");
+  const entry = await loadContext(prisma, entryId);
+  const paperName = kind === "master-bill" ? "Your bill" : "Your bill so far";
+
+  let to: string;
+  if (input.channel === "WHATSAPP") {
+    const phone = cleanPhone(input.to, "The WhatsApp number");
+    if (!phone) throw new ValidationError("Type the WhatsApp number it was sent to.");
+    to = phone;
+  } else {
+    const r = await resolveInvoiceRecipient(prisma, entryId, input.to);
+    if (!r.to) throw new ValidationError("There is no email on file for this booking — type the address to send it to.");
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(r.to)) throw new ValidationError(`"${r.to}" is not an email address.`);
+    to = r.to;
+  }
+
+  let emailed = false;
+  let reason: string | null = null;
+  let reprintOrdinal: number | null = null;
+  let messageId: string | null = null;
+  if (input.channel === "EMAIL") {
+    // The copy that goes out is a print like any other — a sealed master bill's carries its number.
+    const pdf = await printFolioDocumentPdf(prisma, entryId, kind, actorId, { nightsMode: input.nightsMode });
+    reprintOrdinal = pdf.reprintOrdinal;
+    const c = await compose(prisma, entryId);
+    const who = await resolveInvoiceRecipient(prisma, entryId, to);
+    const content = renderFolioStatementEmail({
+      recipientName: who.greetName,
+      bookingRef: entryId,
+      paperName,
+      checkInDate: c.stay.checkIn,
+      checkOutDate: c.stay.checkOut,
+      currency: entry.folio?.lines?.[0]?.currency ?? "BTN",
+      total: c.figures.ladder.total,
+      balance: Number(toDecimal(entry.folio!.outstandingBalance).toFixed(2)),
+      stillStaying: entry.currentStage === "S7" && !c.sealedAt,
+    });
+    const result = await sendEmail(prisma, {
+      to,
+      subject: content.subject,
+      text: content.text,
+      html: content.html,
+      threadEntryId: entryId,
+      threadReadableId: entry.inquiryId,
+      attachments: [{ filename: pdf.filename, content: pdf.bytes, contentType: "application/pdf" }],
+    });
+    if (result.status === "sent") {
+      emailed = true;
+      messageId = result.messageId;
+    } else {
+      reason = result.status === "skipped" ? "Email is switched off on this server" : result.message;
+    }
+  }
+
+  // Recorded only when it went: an email that failed is not a send.
+  if (input.channel === "WHATSAPP" || emailed) {
+    await prisma.traceEvent.create({
+      data: {
+        eventType: FOLIO_DOCUMENT_SENT_EVENT,
+        actorId,
+        actorLevel: "SYSTEM",
+        entityType: "Folio",
+        entityId: entry.folio!.id,
+        operation: "DISPATCH",
+        timestamp: new Date(),
+        stageContext: entry.currentStage,
+        inquiryId: entry.inquiryId,
+        entryId,
+        payload: { kind, paper: doc.title, channel: input.channel, to, reprintOrdinal, messageId },
+        createdBy: actorId,
+      } as Prisma.TraceEventUncheckedCreateInput,
+    });
+  }
+  return { kind, channel: input.channel, to, emailed, reason, reprintOrdinal };
 }

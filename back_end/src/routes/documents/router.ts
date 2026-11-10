@@ -24,7 +24,17 @@ import {
   listFolioDocuments,
   printFolioDocumentPdf,
   renderFolioDocumentHtml,
+  sendFolioDocument,
 } from "../../services/domain/folio-statement-service.js";
+import { z } from "zod";
+import { validateBody } from "../../middleware/validate-body.js";
+
+/** Send the statement so far or the master bill (2026-11-10). */
+const sendFolioDocumentSchema = z.object({
+  channel: z.enum(["EMAIL", "WHATSAPP"]),
+  to: z.string().trim().max(200).optional().nullable(),
+  nightsEach: z.boolean().optional(),
+});
 
 export const documentsRouter = Router();
 
@@ -327,6 +337,27 @@ documentsRouter.get("/entries/:id/folio-documents/:kind/preview-html", requireAc
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("Cache-Control", "no-store");
     res.send(html);
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
+ * POST /api/entries/:id/folio-documents/:kind/send — by email with the paper attached, or recorded
+ * as sent on WhatsApp (2026-11-10). The statement so far and the master bill only: a tax invoice is
+ * sent from its own row once issued.
+ */
+documentsRouter.post("/entries/:id/folio-documents/:kind/send", requireActorLevel("L1"), validateBody(sendFolioDocumentSchema), async (req, res, next) => {
+  try {
+    const kind = req.params.kind;
+    if (!isFolioDocumentKind(kind)) throw new NotFoundError("Folio document");
+    const body = req.body as z.infer<typeof sendFolioDocumentSchema>;
+    const out = await sendFolioDocument(prisma, req.params.id, kind, req.actor?.actorId ?? "SYSTEM", {
+      channel: body.channel,
+      to: body.to ?? null,
+      nightsMode: body.nightsEach ? "EACH" : "SHORT",
+    });
+    res.json(out);
   } catch (e) {
     next(e);
   }

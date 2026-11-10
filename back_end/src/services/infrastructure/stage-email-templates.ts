@@ -690,6 +690,68 @@ ${detailsTable(rows)}
 }
 
 // =============================================================================
+// S7 – S9 — the statement so far and the master bill, sent from the desk (2026-11-10)
+// =============================================================================
+
+export type FolioStatementEmailData = {
+  recipientName: string;
+  bookingRef: string;
+  /** "Your bill" (the master bill) or "Your bill so far" (the statement during the stay). */
+  paperName: string;
+  checkInDate: Date | null;
+  checkOutDate: Date | null;
+  currency: string;
+  /** The paper's own figures: everything charged, and what is still to pay. */
+  total: number;
+  balance: number;
+  stillStaying: boolean;
+};
+
+/**
+ * The covering note for a bill sent from the desk. It states the two figures its paper prints —
+ * the total charged and what is still to pay — and nothing worked out here.
+ */
+export function renderFolioStatementEmail(d: FolioStatementEmailData): StageEmailContent {
+  const subject = COMMON_SUBJECT;
+  const stay = d.checkInDate && d.checkOutDate ? `${formatDate(d.checkInDate)} to ${formatDate(d.checkOutDate)}` : null;
+  const owing = d.balance > 0;
+  const closing = d.stillStaying
+    ? "Charges continue until you check out, so the final bill may differ. If anything here is not right, simply reply to this email."
+    : owing
+      ? "If anything here is not right, simply reply to this email."
+      : "Thank you — nothing is left to pay. If anything here is not right, simply reply to this email.";
+  const text = [
+    d.paperName,
+    "",
+    `Dear ${d.recipientName},`,
+    "",
+    `Please find your ${d.paperName.toLowerCase()} attached${stay ? ` for your stay ${stay}` : ""} (booking ${d.bookingRef}).`,
+    "",
+    `  Charged in all:         ${formatMoney(d.total, d.currency)}`,
+    `  ${owing ? "Still to pay:" : "To pay:      "}           ${formatMoney(Math.max(0, d.balance), d.currency)}`,
+    "",
+    closing,
+    "",
+    "— The Legphel Hotel team",
+  ].join("\n");
+  const rows = [
+    tableRow("Booking", d.bookingRef),
+    ...(stay ? [tableRow("Stay", stay, true)] : []),
+    tableRow("Charged in all", formatMoney(d.total, d.currency)),
+    tableRow(owing ? "Still to pay" : "To pay", formatMoney(Math.max(0, d.balance), d.currency), true, true),
+  ];
+  const html = htmlShell(`
+${emailHeading(d.paperName)}
+<p>Dear ${escapeHtml(d.recipientName)},</p>
+<p>Please find your ${escapeHtml(d.paperName.toLowerCase())} attached.</p>
+${detailsTable(rows)}
+<p>${escapeHtml(closing)}</p>
+<p style="margin-top:24px">&mdash; The Legphel Hotel team</p>
+`);
+  return { subject, text, html };
+}
+
+// =============================================================================
 // S8 / S9 — Final invoice (post-checkout)
 // =============================================================================
 
