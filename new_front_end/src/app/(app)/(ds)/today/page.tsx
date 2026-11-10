@@ -12,6 +12,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo } from "react";
 import { Button, EmptyState } from "@/design-system";
+import { Help } from "@/components/ds/help";
 import {
   GuestLink,
   LoadFailed,
@@ -211,7 +212,8 @@ export default function TodayPage() {
                 {waiting.length ? (
                   <details className="fold" style={{ marginTop: 12 }}>
                     <summary>
-                      Waiting · {waiting.length} <span className="meta">· nothing here is due yet · open to see it</span>
+                      Waiting · {waiting.length}
+                      <Help label="About waiting">Nothing here is due yet. Open it to see each one.</Help>
                     </summary>
                     <div className="fold-body">
                       <AttentionTable rows={foldAttention(waiting)} now={clock.now} tz={clock.tz} />
@@ -227,28 +229,34 @@ export default function TodayPage() {
           {lists.noOutcome.length || lists.noDate.length ? (
             <section className="block">
               <div className="block-head">
-                <h3>The record is incomplete</h3>
-                <span className="meta">a quiet-hour job · nothing here can be acted on today</span>
+                <h3>
+                  The record is incomplete
+                  <Help label="About this list">A quiet-hour job: nothing here can be done for a guest today. It is the record to tidy.</Help>
+                </h3>
               </div>
               <div className="grid2">
                 <div>
                   <div className="fact">
-                    <span className="k">{lists.noOutcome.length} outcomes never recorded</span>
-                    <span className="v">
-                      Inquiries whose dates have passed with nothing written down — we cannot tell which were lost to a full house and which went elsewhere.
+                    <span className="k">
+                      {plural(lists.noOutcome.length, "outcome")} never recorded
+                      <Help label="About outcomes never recorded">
+                        Inquiries whose dates have passed with nothing written down — nobody can tell which were lost to a full house and
+                        which went elsewhere. Open each and cancel it with the guest&apos;s words, so the reason is kept.
+                      </Help>
                     </span>
                   </div>
                   <div className="row-acts">
                     <Button kind="secondary" compact onClick={() => router.push("/bookings?view=nooutcome")}>
                       Open the list
                     </Button>
-                    <span className="meta">turn each down under Other ways › The guest said no, so the reason is kept</span>
                   </div>
                 </div>
                 <div>
                   <div className="fact">
-                    <span className="k">{lists.noDate.length} with no dates</span>
-                    <span className="v">Open inquiries with no stay dates. They are recorded, but nothing can chase them until a date is entered.</span>
+                    <span className="k">
+                      {plural(lists.noDate.length, "inquiry", "inquiries")} with no dates
+                      <Help label="About inquiries with no dates">Open inquiries with no stay dates. They are recorded, but nothing can chase them until a date is entered.</Help>
+                    </span>
                   </div>
                   <div className="row-acts">
                     <Button kind="secondary" compact onClick={() => router.push("/bookings?view=nodate")}>

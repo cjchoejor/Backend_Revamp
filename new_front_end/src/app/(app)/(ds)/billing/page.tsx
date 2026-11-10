@@ -15,6 +15,10 @@ import { Help } from "@/components/ds/help";
 import { GuestLink, LoadFailed, LoadingBlock, OpenRow, RowStanding, bookingMeta } from "@/components/ds/ui";
 import { useDeskBookings, useDeskMoney } from "@/hooks/use-desk-data";
 import { useHotelDay } from "@/hooks/use-hotel-day";
+import { useHotelClock } from "@/hooks/use-hotel-clock";
+import { useSession } from "@/hooks/use-session";
+import { useRefunds } from "@/hooks/use-refunds";
+import { RefundsTab } from "@/components/ds/refunds-tab";
 import type { DeskListRow, DeskMoneyRow } from "@/lib/api/desk";
 import { money, plural } from "@/lib/ds/format";
 import { bookerOfRow, rowNameOf } from "@/lib/ds/status";
@@ -32,7 +36,7 @@ function accountOf(r: DeskListRow): string {
 const checkOutOf = (r: DeskListRow) => r.actualCheckOutDate ?? r.checkOutDate;
 const billHref = (id: string) => `/billing/${encodeURIComponent(id)}`;
 
-type TabId = "open" | "owed" | "accounts";
+type TabId = "open" | "owed" | "accounts" | "refunds";
 type SortKey = "checkout" | "checkin" | "name" | "account" | "balance" | "billed" | "paid" | "total";
 type Sort = { id: string; key: SortKey; dir: 1 | -1; label: string };
 
@@ -126,10 +130,16 @@ function BillingScreen() {
   const bookings = useDeskBookings();
   const rows = useMemo(() => bookings.data?.items ?? [], [bookings.data]);
 
+  // Refunds waiting to go back moved here from Notifications (2026-11-10, operator): money going
+  // out is billing's work. The FOM's and above — the list carries bank details.
+  const { session } = useSession();
+  const fom = !!session && session.actorLevel !== "L1";
+  const clock = useHotelClock(60_000);
+  const refundsWaiting = useRefunds("waiting").data?.items.length ?? 0;
   const tabParam = params.get("tab");
-  const tab: TabId = tabParam === "owed" || tabParam === "accounts" ? tabParam : "open";
+  const tab: TabId = tabParam === "owed" || tabParam === "accounts" ? tabParam : tabParam === "refunds" && fom ? "refunds" : "open";
   const q = params.get("q") ?? "";
-  const go = (next: Partial<Record<"tab" | "q" | "sort", string>>) => {
+  const go = (next: Partial<Record<"tab" | "q" | "sort" | "refund", string>>) => {
     const p = new URLSearchParams(params.toString());
     for (const [k, v] of Object.entries(next)) {
       if (v) p.set(k, v);
@@ -228,9 +238,10 @@ function BillingScreen() {
             { id: "open", label: <>Open bills<span className="tab-n">{open.length}</span></> },
             { id: "owed", label: <>Still owed after the stay<span className={`tab-n${owing.length ? " warn" : ""}`}>{owing.length}</span></> },
             { id: "accounts", label: "Outstanding by account" },
+            ...(fom ? [{ id: "refunds", label: <>Refunds<span className={`tab-n${refundsWaiting ? " warn" : ""}`}>{refundsWaiting}</span></> }] : []),
           ]}
           selected={tab}
-          onSelect={(id) => go({ tab: id, sort: "" })}
+          onSelect={(id) => go({ tab: id, sort: "", refund: "" })}
         />
       </div>
 
@@ -238,6 +249,8 @@ function BillingScreen() {
         <LoadFailed what="the bills" onRetry={() => void bookings.refetch()} />
       ) : bookings.isLoading ? (
         <LoadingBlock />
+      ) : tab === "refunds" ? (
+        <RefundsTab tz={clock.tz} focusId={params.get("refund")} />
       ) : tab === "accounts" ? (
         <NotAvailableYet what="Each agent's and company's total owed, with their statement of account," />
       ) : (
