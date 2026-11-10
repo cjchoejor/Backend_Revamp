@@ -381,7 +381,12 @@ export async function issueProformaInvoice(
   });
 }
 
-export async function dispatchInvoice(session: Session, invoiceId: string, body?: { dispatchedTo?: string; nightsEach?: boolean }) {
+export async function dispatchInvoice(
+  session: Session,
+  invoiceId: string,
+  /** `channel: "WHATSAPP"` records it as sent on WhatsApp to the number in `dispatchedTo`; nothing is emailed. */
+  body?: { dispatchedTo?: string; nightsEach?: boolean; channel?: "EMAIL" | "WHATSAPP" },
+) {
   return apiRequest<InvoiceSummary>(`/api/invoices/${invoiceId}/dispatch`, {
     method: "POST",
     session,
