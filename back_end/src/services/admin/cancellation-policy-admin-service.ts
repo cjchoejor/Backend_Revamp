@@ -34,7 +34,25 @@ export async function setCancellationCharges(prisma: PrismaClient, input: Cancel
   const value: Record<string, unknown> = { sameDayPenaltyAmount: input.sameDayPenaltyAmount };
   if (input.preArrivalPenaltyAmount != null) value.preArrivalPenaltyAmount = input.preArrivalPenaltyAmount;
   if (input.postCheckInEarlyDeparturePenaltyAmount != null) value.postCheckInEarlyDeparturePenaltyAmount = input.postCheckInEarlyDeparturePenaltyAmount;
-  if (input.tiers?.length) value.tiers = input.tiers;
+  if (input.tiers?.length) {
+    // The lines must make sense (ACIG §6.2.12, DEV-SPEC-001 Part 12 §73, 2026-11-10): one line for
+    // each time left, and a cancellation nearer the arrival never costing less than one further out.
+    const lines = [...input.tiers].sort((a, b) => b.minHoursBeforeCheckIn - a.minHoursBeforeCheckIn);
+    const words = (h: number) => (h % 24 === 0 && h > 0 ? `${h / 24} day${h === 24 ? "" : "s"}` : `${h} hour${h === 1 ? "" : "s"}`);
+    for (let i = 1; i < lines.length; i++) {
+      const farther = lines[i - 1]!;
+      const nearer = lines[i]!;
+      if (nearer.minHoursBeforeCheckIn === farther.minHoursBeforeCheckIn) {
+        throw new ValidationError(`Two lines say ${words(nearer.minHoursBeforeCheckIn)} left — keep one.`);
+      }
+      if (nearer.penaltyAmount < farther.penaltyAmount) {
+        throw new ValidationError(
+          `A cancellation nearer the arrival can't cost less than one further out: with ${words(nearer.minHoursBeforeCheckIn)} left it is Nu ${nearer.penaltyAmount}, with ${words(farther.minHoursBeforeCheckIn)} left Nu ${farther.penaltyAmount}.`,
+        );
+      }
+    }
+    value.tiers = lines;
+  }
 
   return prisma.$transaction(async (tx) => {
     const before = await getActiveConfigEntry(tx as unknown as PrismaClient, CHARGES_KEY);

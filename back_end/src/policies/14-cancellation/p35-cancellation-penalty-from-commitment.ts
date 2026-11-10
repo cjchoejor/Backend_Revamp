@@ -25,10 +25,16 @@ export type CancellationPolicyTiersConfig = {
 export function computeS5PreArrivalCancellationPenalty(input: {
   now: Date;
   checkInDate: Date;
+  /**
+   * The hotel's check-in time on the arrival day (2026-11-10). Time left is counted to it; it was
+   * counted to the stored date's start, which is 6 AM in Bhutan. Absent: the stored date.
+   */
+  checkInAt?: Date | null;
   frozenCancellationTerms: Record<string, unknown> | null | undefined;
   policyTiers: CancellationPolicyTiersConfig | null | undefined;
 }): { rawPenalty: number; hoursUntilCheckIn: number } {
-  const hoursUntilCheckIn = (input.checkInDate.getTime() - input.now.getTime()) / 3600_000;
+  const anchor = input.checkInAt ?? input.checkInDate;
+  const hoursUntilCheckIn = (anchor.getTime() - input.now.getTime()) / 3600_000;
   const terms = input.frozenCancellationTerms ?? {};
   const fromTerms = num(
     (terms as any).sameDayPenaltyAmount ?? (terms as any).preArrivalPenaltyAmount ?? (terms as any).penaltyAmount,
@@ -45,7 +51,11 @@ export function computeS5PreArrivalCancellationPenalty(input: {
         return { rawPenalty: num(t.penaltyAmount), hoursUntilCheckIn };
       }
     }
-    return { rawPenalty: 0, hoursUntilCheckIn };
+    // Later than every line — nearer the arrival than the last line, on the arrival day, or past the
+    // check-in time: the last line applies (2026-11-10). It charged Nu 0, so a same-day
+    // cancellation cost nothing once lines were set. The spec's tiers cover "far out to
+    // day-of-arrival" (DEV-SPEC-001 Part 12 §73), and the nearest line is that cover.
+    return { rawPenalty: num(sorted[sorted.length - 1]!.penaltyAmount), hoursUntilCheckIn };
   }
 
   const fromCfg = num(cfg?.preArrivalPenaltyAmount ?? cfg?.sameDayPenaltyAmount);

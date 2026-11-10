@@ -1,4 +1,6 @@
 import { closeWaitingRefundsOnCancellationTx } from "../../lib/refund-money.js";
+import { hotelLocalTimeOn } from "../../lib/stay-dates.js";
+import { resolveStandardCheckInTime } from "../../lib/expected-arrival.js";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { planTripCancelMoves, simulateTripCancels, type TripMove } from "../../lib/trip-advance-cover.js";
 import { applyAdvanceStandingTx } from "../domain/s3-folio-service.js";
@@ -241,9 +243,12 @@ async function rawCancellationCharge(
       : await requireActiveConfigValue<CancellationPolicyTiersConfig>(prisma, "cancellation.policyTiers").catch(
           () => null as CancellationPolicyTiersConfig | null,
         );
+  // Time left is counted to the hotel's check-in time on the arrival day (2026-11-10).
+  const checkInAt = hotelLocalTimeOn(input.checkInDate, await resolveStandardCheckInTime(prisma));
   return computeS5PreArrivalCancellationPenalty({
     now: input.now,
     checkInDate: input.checkInDate,
+    checkInAt,
     frozenCancellationTerms: input.terms,
     policyTiers,
   });

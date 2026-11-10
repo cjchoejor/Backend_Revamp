@@ -21,7 +21,8 @@ import { releaseRoomOnNoShowTerminalTx } from "../../lib/release-room-on-no-show
 import { releaseEntryRoomsToFree } from "../../lib/room-claim-state.js";
 import { resolveBillingModelForNewLine } from "../../lib/billing-model-defaults.js";
 import { frozenCompositionByRoom, splitFrozenRow } from "../../lib/frozen-room-composition.js";
-import { nightsBetweenUtc, utcDateOnly } from "../../lib/stay-dates.js";
+import { hotelLocalTimeOn, nightsBetweenUtc, utcDateOnly } from "../../lib/stay-dates.js";
+import { resolveStandardCheckInTime } from "../../lib/expected-arrival.js";
 import { dispatchStageEmailBestEffort } from "../infrastructure/stage-email-helpers.js";
 import { renderNoShowNoticeEmail } from "../infrastructure/stage-email-templates.js";
 import { resolveInvoiceRecipient } from "../domain/s9-service.js";
@@ -219,9 +220,11 @@ export async function computeNoShowFigures(db: Db, entryId: string): Promise<NoS
       // Nothing more specific configured — the same-day cancellation tier (spec: a no-show is
       // aligned with it). Judged at the check-in instant.
       const tiers = await requireActiveConfigValue<CancellationPolicyTiersConfig>(db as PrismaClient, "cancellation.policyTiers").catch(() => null);
+      const checkInAt = hotelLocalTimeOn(entry.reservation.frozenCheckInDate, await resolveStandardCheckInTime(db as PrismaClient));
       const { rawPenalty } = computeS5PreArrivalCancellationPenalty({
-        now: entry.reservation.frozenCheckInDate,
+        now: checkInAt,
         checkInDate: entry.reservation.frozenCheckInDate,
+        checkInAt,
         frozenCancellationTerms: terms,
         policyTiers: tiers,
       });
