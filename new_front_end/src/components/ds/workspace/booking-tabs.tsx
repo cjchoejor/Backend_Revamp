@@ -49,7 +49,7 @@ import { StayBand, TripPapersShelf, useTripStays } from "./trip-papers-shelf";
 import { useStaysTogether } from "@/components/ds/steps/s2-together";
 import { TripMoneyReceived } from "@/components/ds/steps/s3-money";
 import { Choice, DsDialog, Fact, Facts, PapersCard, ReasonDialog, StepCard, SubTabs, Tool, atLeast, toastRefusal, useRefreshEntry, NotSentChip } from "@/components/ds/steps/kit";
-import { FolioDocumentsBlock } from "@/components/desk/workspace/folio-documents";
+import { FolioPapersCard } from "@/components/ds/workspace/folio-papers";
 import { HeldSendDialog, useHeldDocuments } from "@/components/ds/workspace/held-papers";
 import type { HeldDocument } from "@/lib/api/room-moves";
 import { PLAN_LABEL, dueLabel } from "@/components/desk/workspace/advance-settlement";
@@ -1408,14 +1408,12 @@ export function DocumentsView({
                     label: <>Bills &amp; statements{count(bills)}</>,
                     content: (
                       <>
-                        {bills ? <PapersCard entry={entry} show="bills" title="Bills" withFolioDocs={!folioLive} /> : null}
                         {folioLive ? (
-                          // The interim statement, the master bill and the tax invoice — views of the
-                          // bill as it stands (moved here from Stay's own tab, 2026-10-12).
-                          <Tool inert={false}>
-                            <FolioDocumentsBlock entry={entry} stage="S7" />
-                          </Tool>
+                          // The tentative invoice, the master bill and the tax invoice before it is
+                          // issued — paper rows with Preview and Send since 2026-11-10.
+                          <FolioPapersCard entry={entry} />
                         ) : null}
+                        {bills ? <PapersCard entry={entry} show="bills" title="Issued and sent bills" withFolioDocs={!folioLive} /> : null}
                         {otherBills.map((e) => (
                           // A stay's bill is its own, so a trip has no bill together.
                           <div key={e.id} className="trip-stay-block">

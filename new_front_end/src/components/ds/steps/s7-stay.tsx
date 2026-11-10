@@ -40,7 +40,7 @@ import {
   type ChangeBookingItem,
   type StepPane,
 } from "./kit";
-import { WhoPaysCard, DisputesCard, FaultsCard, HandoffsCard, RaiseDisputeDialog, TermsChangeCard, usePayerWords } from "./s7-desk";
+import { WhoPaysCard, DisputesCard, FaultsCard, HandoffsCard, RaiseDisputeDialog, usePayerWords } from "./s7-desk";
 import { FolioCard } from "./s7-folio";
 import { NightsCard } from "./s7-nights";
 import { FlagDeficientDialog, KeysCard, KeysDueNotice, RoomsInUseCard, keysDue, keysDueWords } from "./s7-rooms";
@@ -139,7 +139,6 @@ export function S7Stay({
           setTarget={setChargeTarget}
         />
         <HandoffsCard entry={entry} tz={tz} />
-        <TermsChangeCard entry={entry} />
       </div>
 
       {/* From the step line: each in a pop-up over the work column, the booking file clear. */}

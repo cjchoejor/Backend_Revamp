@@ -35,6 +35,7 @@ import {
 import { getNightAuditRecord, openDispute } from "@/lib/api/in-stay";
 import { recordCreditExtension } from "@/lib/api/reservation-setup";
 import { openFolioDocumentPdf, openInvoicePdf } from "@/lib/api/documents";
+import { FolioSendDialog } from "@/components/ds/workspace/folio-papers";
 import { deriveFinancials, effectiveCheckOutIso } from "@/lib/desk/workspace";
 import { fmtDate, fmtDateTime, fmtStamp, money, plural } from "@/lib/ds/format";
 import { PLAN_LABEL, dueLabel } from "@/components/desk/workspace/advance-settlement";
@@ -680,6 +681,8 @@ function MasterBill({
   // The lines wait for "Show the lines" (2026-10-30, operator).
   const [showLines, setShowLines] = useState(false);
   const doc = index.data?.documents.find((d) => d.kind === "master-bill") ?? null;
+  // Sent by email or on WhatsApp like any other paper (2026-11-10).
+  const [sending, setSending] = useState(false);
   const fo = billing.data?.folio ?? null;
   const cur = billing.data?.currency ?? entry.folio?.lines?.[0]?.currency ?? "BTN";
   const frozen = doc?.state === "FROZEN";
@@ -722,6 +725,16 @@ function MasterBill({
           >
             {frozen ? "Print a copy" : "Print master bill"}
           </Button>
+          <Button
+            kind="quiet"
+            compact
+            icon="send"
+            state={doc?.available ? "default" : "inert"}
+            title={doc?.available ? undefined : doc?.unavailableReason ?? "the master bill is not available yet"}
+            onClick={() => setSending(true)}
+          >
+            {doc?.sent ? "Send again" : "Send"}
+          </Button>
           {onAddCharge ? (
             <Button kind="secondary" compact onClick={onAddCharge}>
               Add or correct a charge
@@ -741,6 +754,7 @@ function MasterBill({
       </div>
       {showLines ? <BillLines entry={entry} onTab={onTab} /> : null}
       <PaperDrawer paper={paper} onClose={() => setPaper(null)} />
+      {sending && doc ? <FolioSendDialog entry={entry} doc={doc} refreshKey={`${entry.updatedAt}|${index.data?.asAt ?? ""}`} onClose={() => setSending(false)} /> : null}
     </StepCard>
   );
 }

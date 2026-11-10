@@ -2,7 +2,7 @@
 
 /**
  * Stay — the work around the guest: the departments told at check-in and the one before
- * check-out, disputes, faults in the room, a change to the terms, and who the bill goes to.
+ * check-out, disputes, faults in the room, and who the bill goes to.
  * Operator words only; the departments' handoffs are named by what they are for.
  */
 import { useEffect, useMemo, useState } from "react";
@@ -12,7 +12,6 @@ import { Button, Chip } from "@/design-system";
 import { useSession } from "@/hooks/use-session";
 import {
   acceptHandoff,
-  amendEntry,
   createH4Handoff,
   finalizeDeficientCondition,
   getHandoffChecklist,
@@ -50,13 +49,6 @@ const FAULT_WORD: Record<string, string> = {
   DEFICIENT_UNRESOLVED_AT_CHECKOUT: "still open at check-out",
 };
 const faultSettled = (s: string) => s === "RESOLVED" || s === "UNRESOLVED" || s === "DEFICIENT_UNRESOLVED_AT_CHECKOUT";
-
-const AMEND_KINDS = [
-  ["INCLUSION_CHANGE", "What's included"],
-  ["MEAL_PLAN_CHANGE", "Meal plan"],
-  ["DISCOUNT", "Discount"],
-] as const;
-type AmendKind = (typeof AMEND_KINDS)[number][0];
 
 function handoffWord(h: HandoffSummary) {
   if (h.rejectedAt) return "turned back";
@@ -519,66 +511,6 @@ export function FaultsCard({ entry, tz, onFlag }: { entry: EntryDetail; tz: stri
           </span>
         </div>
       ))}
-    </StepCard>
-  );
-}
-
-/* ------------------------------------------------------------------ a change to the terms */
-
-export function TermsChangeCard({ entry }: { entry: EntryDetail }) {
-  const { session } = useSession();
-  const { past } = useStepMode();
-  const refresh = useRefreshEntry(entry.id);
-  const [kind, setKind] = useState<AmendKind>("INCLUSION_CHANGE");
-  const [reason, setReason] = useState("");
-  const [terms, setTerms] = useState("");
-  const save = useMutation({
-    mutationFn: () => {
-      const segmentId = entry.segments?.[0]?.id;
-      if (!segmentId) throw new Error("This booking has no open pass to record it against");
-      return amendEntry(session!, entry.id, {
-        amendmentType: kind,
-        segmentId,
-        amendmentPath: "PATH_2",
-        requestedBy: session!.userId,
-        authorisedBy: session!.userId,
-        authorityBasis: "FOM mid-stay amendment",
-        reason: reason.trim(),
-        newTermsSummary: terms.trim(),
-        stageAtAmendment: "S7",
-      });
-    },
-    onSuccess: () => {
-      toast.success("The change to the terms is recorded");
-      setReason("");
-      setTerms("");
-      refresh();
-    },
-    onError: (e) => toastRefusal(e, "The change could not be recorded"),
-  });
-  if (past || !atLeast(session?.actorLevel, "L2")) return null;
-  const missing = !reason.trim() ? "the reason" : !terms.trim() ? "the new terms, in a sentence" : null;
-  return (
-    <StepCard title="A change to the terms · the FOM" icon="pen" meta="Recorded by the FOM. To move the guest to a room of another type, use Change room on that room, above.">
-      <div className="form2">
-        <div className="wide field">
-          <label>What changes</label>
-          <Choice options={AMEND_KINDS} value={kind} onChange={setKind} />
-        </div>
-        <div className="field">
-          <label>Reason</label>
-          <input className="input" value={reason} placeholder="the guest asked for dinner every night" onChange={(e) => setReason(e.target.value)} />
-        </div>
-        <div className="field">
-          <label>The new terms</label>
-          <input className="input" value={terms} placeholder="MAP + dinner from 13 Sep" onChange={(e) => setTerms(e.target.value)} />
-        </div>
-      </div>
-      <div className="row-acts" style={{ marginTop: 10 }}>
-        <Button compact state={save.isPending ? "working" : missing ? "inert" : "default"} title={missing ?? undefined} workingLabel="Recording…" onClick={() => save.mutate()}>
-          Record the change
-        </Button>
-      </div>
     </StepCard>
   );
 }

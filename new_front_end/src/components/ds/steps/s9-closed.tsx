@@ -35,6 +35,7 @@ import {
   writeOffOutstanding,
 } from "@/lib/api/post-stay";
 import { openCancellationConfirmationPdf, openFolioDocumentPdf, openInvoicePdf } from "@/lib/api/documents";
+import { FolioSendDialog } from "@/components/ds/workspace/folio-papers";
 import { activeQuotation, deriveFinancials, effectiveCheckOutIso } from "@/lib/desk/workspace";
 import { fmtDateTime, fmtDay, fmtInstantDate, fmtStamp, instantYmd, money, nightsOf, plural } from "@/lib/ds/format";
 import { rateWords } from "@/lib/ds/rates";
@@ -54,6 +55,7 @@ import {
   Live,
   NotNow,
   PaperDrawer,
+  InvoiceSendDialog,
   ReasonDialog,
   StepCanvas,
   StepCard,
@@ -1203,6 +1205,10 @@ function SealedPapers({ entry, tz }: { entry: EntryDetail; tz: string }) {
   const master = index.data?.documents.find((d) => d.kind === "master-bill") ?? null;
   const tax = index.data?.documents.find((d) => d.kind === "tax-invoice") ?? null;
   const issued = tax?.state === "ISSUED" ? tax.invoice : null;
+  // Sent from here like any other paper (2026-11-10).
+  const [sendingMaster, setSendingMaster] = useState(false);
+  const [sendingTax, setSendingTax] = useState(false);
+  const issuedRow = issued ? (invoices.find((i) => i.id === issued.id) ?? null) : null;
   const keyReturn = (entry.keyReturnRecords ?? [])[0] ?? null;
   const audited = useMemo(
     () =>
@@ -1242,6 +1248,11 @@ function SealedPapers({ entry, tz }: { entry: EntryDetail; tz: string }) {
               <Button kind="quiet" compact icon="file" onClick={() => session && openInvoicePdf(session, issued.id).catch((e) => toastRefusal(e, "The PDF could not be opened"))}>
                 PDF
               </Button>
+              {issuedRow ? (
+                <Button kind="quiet" compact icon="send" onClick={() => setSendingTax(true)}>
+                  {issued.dispatchedAt ? "Send again" : "Send"}
+                </Button>
+              ) : null}
             </span>
           ) : tax ? (
             <span className="meta">{tax.available ? "not issued" : tax.unavailableReason ?? "not issued"}</span>
@@ -1265,6 +1276,9 @@ function SealedPapers({ entry, tz }: { entry: EntryDetail; tz: string }) {
               <Button kind="quiet" compact icon="print" onClick={printMaster}>
                 Print a copy
               </Button>
+              <Button kind="quiet" compact icon="send" onClick={() => setSendingMaster(true)}>
+                {master.sent ? "Send again" : "Send"}
+              </Button>
             </span>
           ) : master ? (
             <span className="meta">{master.unavailableReason ?? "not available"}</span>
@@ -1275,6 +1289,18 @@ function SealedPapers({ entry, tz }: { entry: EntryDetail; tz: string }) {
         <Fact k="Nights audited">{audited.length ? audited.map((d) => fmtDay(d)).join(", ") : null}</Fact>
       </Facts>
       <PaperDrawer paper={paper} onClose={() => setPaper(null)} />
+      {sendingMaster && master ? (
+        <FolioSendDialog entry={entry} doc={master} refreshKey={`${entry.updatedAt}|${index.data?.asAt ?? ""}`} onClose={() => setSendingMaster(false)} />
+      ) : null}
+      <InvoiceSendDialog
+        entry={entry}
+        target={sendingTax ? issuedRow : null}
+        onClose={() => setSendingTax(false)}
+        onSent={() => {
+          setSendingTax(false);
+          refresh();
+        }}
+      />
     </StepCard>
   );
 }

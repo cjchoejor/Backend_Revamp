@@ -168,6 +168,8 @@ export type FolioDocumentEntry = {
   state: "SNAPSHOT" | "INDICATIVE" | "FROZEN" | "DRAFT" | "ISSUED" | "NONE";
   reprintCount: number | null;
   frozenAt: string | null;
+  /** The last time the desk sent it (2026-11-10). */
+  sent?: { at: string; channel: "EMAIL" | "WHATSAPP"; to: string | null } | null;
   invoice: {
     id: string;
     invoiceNumber: string | null;
@@ -203,6 +205,28 @@ export function fetchFolioDocumentPreviewHtml(session: Session, entryId: string,
 /** The document as a PDF, rendered fresh (never stored). A sealed master bill print counts as a reprint. */
 export function openFolioDocumentPdf(session: Session, entryId: string, kind: FolioDocumentKind, opts?: PaperFace): Promise<void> {
   return openPdf(session, `/api/entries/${entryId}/folio-documents/${kind}/pdf${faceQuery({ nightsEach: opts?.nightsEach })}`);
+}
+
+export type FolioDocumentSendOutcome = {
+  kind: FolioDocumentKind;
+  channel: "EMAIL" | "WHATSAPP";
+  to: string;
+  emailed: boolean;
+  reason: string | null;
+  reprintOrdinal: number | null;
+};
+
+/**
+ * Send the statement so far or the master bill (2026-11-10): by email with the paper attached, or
+ * recorded as sent on WhatsApp. `POST /api/entries/:id/folio-documents/:kind/send`.
+ */
+export function sendFolioDocument(
+  session: Session,
+  entryId: string,
+  kind: FolioDocumentKind,
+  body: { channel: "EMAIL" | "WHATSAPP"; to?: string | null; nightsEach?: boolean },
+): Promise<FolioDocumentSendOutcome> {
+  return apiRequest<FolioDocumentSendOutcome>(`/api/entries/${entryId}/folio-documents/${kind}/send`, { method: "POST", session, body });
 }
 
 /** Which paper — any one id finds its booking. */
