@@ -120,6 +120,8 @@ Also for Stage 1 (2026-10-10), outside the desk router: `POST /api/entries/:id/a
    They still show a few old words, such as "min threshold".
 2. Build the second-row boards, the walk-in, the agent record and the accounts as their backend items land.
 
+**Charges › The price at Stay (2026-11-10).** Under the quoted lines, what was added during the stay and the stay with it: `billing-summary.folio.addedDuringStay` and `stayWithAdded`. **The after-stay handoff (2026-11-10)**: Mark it done shut while money is owed, a pop-up once nothing is; the backend refuses it too (`H5_MONEY_STILL_OWED`).
+
 **Papers › Bills & statements (2026-11-10).** Paper rows (`FolioPapersCard`): the tentative invoice, the master bill and the draft tax invoice, each with Preview in the paper panel and Send (`POST /api/entries/:id/folio-documents/:kind/send`, email with the paper attached or recorded on WhatsApp; a draft tax invoice is never sent). Check-out's master bill and the Closed step's Sealed papers have Send too. No reference codes on screen.
 
 **Papers — shortened or every night (2026-10-30).** Every paper that names nights (quotation, proforma, voucher, interim statement, master bill, tax invoice) has two faces, like the quotation's with/without prices: the nights shortened (default — "10–19 Mar") or every night named. The preview drawer and the send boxes carry them as choice buttons (`NightsChoice`, `PricesChoice` in kit.tsx); `?nights=each` / `nightsEach`. The lines under a room carry their own nights when an extra bed or a meal plan changes part-way.
