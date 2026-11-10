@@ -1340,7 +1340,8 @@ function LateCharge({ entry, open, onClose }: { entry: EntryDetail; open: boolea
     onSuccess: (r) => {
       const total = r?.total != null ? ` — ${money(Number(r.total), "Nu.")} with service charge and GST` : "";
       toast.success(`The charge is posted${total}`);
-      if (r?.notice?.sent) toast.success(`The notice was emailed to ${r.notice.to}`);
+      if (r?.notice?.queued) toast.success(`The notice is on its way by email to ${r.notice.to}`);
+      else if (r?.notice?.sent) toast.success(`The notice was emailed to ${r.notice.to}`);
       else toast.warning("The notice could not be emailed — there is no address on file. Tell them another way.");
       onClose();
       refresh([["settlement-targets"], ["entry-communications", entry.id]]);

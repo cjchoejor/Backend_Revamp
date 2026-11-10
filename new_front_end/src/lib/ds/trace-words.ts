@@ -140,6 +140,7 @@ const WORDS: Record<string, string> = {
   "SETTLEMENT.PARTIAL": "Settled in part — the rest is owed",
   "SETTLEMENT.OUTSTANDING": "Settled on account — the balance is invoiced",
   "FINAL_INVOICE_EMAIL.SKIPPED": "Tax invoice not emailed",
+  "FOLIO.DOCUMENT_NOT_EMAILED": "Bill not emailed",
   "INVOICE.SETTLEMENT_DISPATCH_FAILED": "The invoice did not go out",
   "GUEST.IDENTITY_PROOF_CAPTURED": "ID photo stored",
   "GUEST.IDENTITY_DETAIL_RECORDED": "Guest details recorded",
@@ -355,6 +356,8 @@ const HOUSEKEEPING = [
   /_PDF_GENERATED$/,
   /^ADMIN\./,
   /\.W\d+_FIRED$/,
+  // An email recorded as on its way (2026-11-10): its sent / not sent line follows seconds later.
+  /_EMAIL\.QUEUED$/,
 ];
 
 export function isHousekeeping(eventType: string): boolean {
