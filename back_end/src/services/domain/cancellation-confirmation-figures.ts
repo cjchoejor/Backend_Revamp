@@ -60,10 +60,12 @@ export async function readCancellationFiguresFromTrace(
     advanceHeld,
     retained,
     refundIssued: Math.max(0, netRefund),
-    // The band label isn't in the payload (the engine records the computed penalty, not which tier
-    // produced it). Left null so the document prints the neutral "Refundable per terms" rather than
-    // asserting a band that might be wrong.
-    bandLabel: null,
+    // The line of the policy that applied, recorded on the trace since 2026-11-10. An older
+    // cancellation did not record it: the paper then prints the neutral "Refundable per terms".
+    bandLabel:
+      p.penaltyWaiverRequested !== true && p.rule && typeof (p.rule as { label?: unknown }).label === "string"
+        ? String((p.rule as { label: string }).label)
+        : null,
     refundReceiptNo: refund?.id ?? null,
     advanceReceiptRef: null,
     penaltyWaived: p.penaltyWaiverRequested === true && retained === 0,

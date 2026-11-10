@@ -2,6 +2,21 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 import { Stage } from "@prisma/client";
 import { ValidationError } from "../../lib/errors.js";
 import { enforceNoShowTreatmentStatementPresent } from "../../policies/14-cancellation/p34-no-show-treatment-statement-required.js";
+import { getActiveConfigEntry } from "../../lib/config-store.js";
+import { cancellationPolicySnapshot, policyInTerms } from "../../lib/cancellation-policy.js";
+
+/**
+ * The terms with the hotel's cancellation policy kept on them (2026-11-10): the setting as it is
+ * now, so the guest pays what they were told even if the setting changes later. Terms that already
+ * carry a policy (a booking split off another) keep theirs.
+ */
+async function withPolicyKept(db: Prisma.TransactionClient | PrismaClient, terms: unknown, now: Date): Promise<Record<string, unknown>> {
+  const base = terms && typeof terms === "object" && !Array.isArray(terms) ? { ...(terms as Record<string, unknown>) } : {};
+  if (policyInTerms(base)) return base;
+  const setting = (await getActiveConfigEntry(db as PrismaClient, "cancellation.policyTiers"))?.configValue ?? null;
+  const policy = cancellationPolicySnapshot(setting, now);
+  return policy ? { ...base, policy } : base;
+}
 
 /** What a no-show costs, as Set up has always recorded it. */
 export const DEFAULT_NO_SHOW_STATEMENT = "No-show: one night room charge plus applicable taxes.";
@@ -24,12 +39,13 @@ export async function ensureCancellationDisclosedTx(
   const entry = await tx.entry.findUnique({ where: { id: input.entryId }, select: { inquiryId: true, carryOver: true } });
   const carried = (entry?.carryOver as { cancellation?: { noShowTreatmentStatement?: unknown; disclosedTerms?: unknown } | null } | null)?.cancellation ?? null;
   const statement = typeof carried?.noShowTreatmentStatement === "string" ? carried.noShowTreatmentStatement.trim() : "";
+  const terms = await withPolicyKept(tx, carried?.disclosedTerms ?? { tier: "DEFAULT" }, input.now);
   const rec = await tx.cancellationDisclosureRecord.create({
     data: {
       entryId: input.entryId,
       segmentId: input.segmentId,
       noShowTreatmentStatement: statement || DEFAULT_NO_SHOW_STATEMENT,
-      disclosedTerms: (carried?.disclosedTerms ?? { tier: "DEFAULT" }) as Prisma.InputJsonValue,
+      disclosedTerms: terms as Prisma.InputJsonValue,
       disclosedAt: input.now,
       disclosedBy: "SYSTEM",
     },
@@ -46,7 +62,7 @@ export async function ensureCancellationDisclosedTx(
       stageContext: Stage.S3,
       inquiryId: entry?.inquiryId ?? null,
       entryId: input.entryId,
-      payload: { entryId: input.entryId, segmentId: input.segmentId, auto: true, cause: "REACHED_SET_UP", carried: !!carried },
+      payload: { entryId: input.entryId, segmentId: input.segmentId, auto: true, cause: "REACHED_SET_UP", carried: !!carried, policyKept: !!terms.policy },
       createdBy: "SYSTEM",
     },
   });
@@ -62,20 +78,21 @@ export async function recordCancellationDisclosure(
 
   const now = new Date();
   return prisma.$transaction(async (tx) => {
+    const terms = await withPolicyKept(tx, input.disclosedTerms, now);
     const rec = await tx.cancellationDisclosureRecord.upsert({
       where: { entryId: input.entryId },
       create: {
         entryId: input.entryId,
         segmentId: input.segmentId,
         noShowTreatmentStatement: input.noShowTreatmentStatement.trim(),
-        disclosedTerms: (input.disclosedTerms ?? {}) as any,
+        disclosedTerms: terms as Prisma.InputJsonValue,
         disclosedAt: now,
         disclosedBy: actor.actorId,
       },
       update: {
         segmentId: input.segmentId,
         noShowTreatmentStatement: input.noShowTreatmentStatement.trim(),
-        disclosedTerms: (input.disclosedTerms ?? {}) as any,
+        disclosedTerms: terms as Prisma.InputJsonValue,
         disclosedAt: now,
         disclosedBy: actor.actorId,
       },

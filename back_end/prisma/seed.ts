@@ -330,7 +330,21 @@ async function main() {
     { configKey: "vipNotification.routingPerTier", configValue: { PLATINUM: ["FOM", "GM"], GOLD: ["FOM"], DEFAULT: ["FOM"] } },
     { configKey: "noShow.cutoffWindowMinutes", configValue: 120 },
     { configKey: "noShow.awaitingConfirmationWindowMinutes", configValue: 180, notes: "Minutes to await written confirmation after no-show cutoff (S5)" },
-    { configKey: "cancellation.policyTiers", configValue: { sameDayPenaltyAmount: 100, postCheckInEarlyDeparturePenaltyAmount: 150 } },
+    // The hotel's cancellation policy, as its voucher states it (2026-11-10): 45 days or more before
+    // arrival, the advance refunded in full; 30 to 44 days, half kept; less than 30, all kept.
+    {
+      configKey: "cancellation.policyTiers",
+      configValue: {
+        enabled: true,
+        sameDayPenaltyAmount: 100,
+        postCheckInEarlyDeparturePenaltyAmount: 150,
+        tiers: [
+          { minDaysBeforeArrival: 45, basis: "PERCENT_OF_PAID", value: 0 },
+          { minDaysBeforeArrival: 30, basis: "PERCENT_OF_PAID", value: 50 },
+          { minDaysBeforeArrival: 0, basis: "PERCENT_OF_PAID", value: 100 },
+        ],
+      },
+    },
     { configKey: "creditCeiling.proximityThresholds", configValue: { tier1Percent: 75, tier2Percent: 90 } },
     { configKey: "billing.salesTaxRate", configValue: 0.05, notes: "GST 5% — compound, applied to (net value + service charge) everywhere (quotes, charge posting, invoices). 0 disables automatic tax lines." },
     { configKey: "billing.serviceChargeRate", configValue: 0.1, notes: "Service charge 10% of net value. GST is computed on top of (net + this)." },

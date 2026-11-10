@@ -56,11 +56,23 @@ export const purgeStaffRequestSchema = z.object({
 export const cancellationChargesRequestSchema = z.object({
   value: z
     .object({
+      /** Off: a cancellation before arrival costs nothing (2026-11-10). */
+      enabled: z.boolean().optional(),
       sameDayPenaltyAmount: z.number().min(0),
       preArrivalPenaltyAmount: z.number().min(0).nullable().optional(),
       postCheckInEarlyDeparturePenaltyAmount: z.number().min(0).nullable().optional(),
+      /** Lines by whole days before the arrival day: a percent of the advance paid, or a set amount. */
       tiers: z
-        .array(z.object({ minHoursBeforeCheckIn: z.number().min(0), penaltyAmount: z.number().min(0) }))
+        .array(
+          z
+            .object({
+              minDaysBeforeArrival: z.number().int().min(0).max(730),
+              basis: z.enum(["PERCENT_OF_PAID", "AMOUNT"]),
+              value: z.number().min(0),
+            })
+            .strict()
+            .refine((t) => t.basis !== "PERCENT_OF_PAID" || t.value <= 100, { message: "A share of the advance paid is at most 100%." }),
+        )
         .optional(),
     })
     .strict(),

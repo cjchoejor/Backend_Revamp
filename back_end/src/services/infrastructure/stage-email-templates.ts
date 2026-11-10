@@ -350,6 +350,8 @@ export type ReservationConfirmationEmailData = {
   roomCount?: number;
   billingModel?: string | null;
   groupLeaderName?: string | null;
+  /** The booking's own cancellation policy in sentences (lib/cancellation-policy.ts, 2026-11-10). */
+  cancellationPolicy: string[];
 };
 
 export function renderReservationConfirmationEmail(d: ReservationConfirmationEmailData): StageEmailContent {
@@ -387,6 +389,9 @@ export function renderReservationConfirmationEmail(d: ReservationConfirmationEma
     `Stay: ${nights} ${nights === 1 ? "night" : "nights"} · ${guests}`,
     d.roomTypeName ? `Room type: ${d.roomTypeName}` : null,
     d.ratePlanName ? `Rate plan: ${d.ratePlanName}` : null,
+    "",
+    "Cancellation:",
+    ...d.cancellationPolicy.map((line) => `- ${line}`),
     "",
     "If anything needs to change, just reply to this email and our front desk will take care of it.",
     "",
@@ -448,9 +453,7 @@ export function renderReservationConfirmationEmail(d: ReservationConfirmationEma
     <!-- Cancellation policy (red) -->
     <div style="border:1px solid #fbc9c9;background:#fdf2f2;border-radius:8px;padding:14px 16px;margin:12px 0;font-size:12.5px;line-height:1.55;">
       <div style="font-weight:700;color:#b03a2e;margin-bottom:6px;">⚠️ Cancellation Policy</div>
-      <div>• 100% refund if cancelled 45 days or more before scheduled date.</div>
-      <div>• 50% refund if cancelled between 30 and 44 days before scheduled date.</div>
-      <div>• No refund for cancellations less than 30 days before scheduled date.</div>
+      ${d.cancellationPolicy.map((line) => `<div>• ${escapeHtml(line)}</div>`).join("")}
     </div>
 
     <!-- Extra guest policy (green) -->

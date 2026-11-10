@@ -1,3 +1,4 @@
+import { cancellationChargeOn } from "../../lib/cancellation-policy.js";
 import { closeWaitingRefundsOnCancellationTx } from "../../lib/refund-money.js";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { guestDisplayName } from "../../lib/guest-display-name.js";
@@ -221,14 +222,15 @@ export async function computeNoShowFigures(db: Db, entryId: string): Promise<NoS
       // aligned with it). Judged at the check-in instant.
       const tiers = await requireActiveConfigValue<CancellationPolicyTiersConfig>(db as PrismaClient, "cancellation.policyTiers").catch(() => null);
       const checkInAt = hotelLocalTimeOn(entry.reservation.frozenCheckInDate, await resolveStandardCheckInTime(db as PrismaClient));
-      const { rawPenalty } = computeS5PreArrivalCancellationPenalty({
+      const { rule } = computeS5PreArrivalCancellationPenalty({
         now: checkInAt,
         checkInDate: entry.reservation.frozenCheckInDate,
         checkInAt,
         frozenCancellationTerms: terms,
         policyTiers: tiers,
       });
-      penaltyBeforeCap = Number(toDecimal(rawPenalty).toFixed(2));
+      // A share of the advance paid is taken of the money received (2026-11-10).
+      penaltyBeforeCap = cancellationChargeOn(rule, advanceReceived);
       basis = penaltyBeforeCap > 0 ? "SAME_DAY_CANCELLATION" : "NONE";
       explanation = penaltyBeforeCap > 0 ? "the same-day cancellation charge" : "no no-show charge is configured";
     }

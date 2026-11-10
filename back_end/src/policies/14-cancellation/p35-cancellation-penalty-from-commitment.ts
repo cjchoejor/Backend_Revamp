@@ -2,6 +2,8 @@ import type { PrismaClient } from "@prisma/client";
 import { PaymentDirection } from "@prisma/client";
 import { StageGateBlockedError } from "../../lib/errors.js";
 import { toDecimal } from "../../lib/money.js";
+import { chooseCancellationRule, daysBeforeArrival, policyInTerms, readCancellationPolicy, type CancellationRule } from "../../lib/cancellation-policy.js";
+export { cancellationChargeOn, type CancellationRule } from "../../lib/cancellation-policy.js";
 
 function num(v: unknown): number {
   if (typeof v === "number" && Number.isFinite(v)) return Math.max(0, v);
@@ -9,57 +11,59 @@ function num(v: unknown): number {
   return 0;
 }
 
-/** `cancellation.policyTiers` — flat amounts and/or hour-bucket tiers (SIG-S5 Policy 35). */
+/**
+ * `cancellation.policyTiers` — the hotel's cancellation policy (read by lib/cancellation-policy.ts):
+ * on or off, the flat amounts, and lines by days before arrival (a share of the advance paid or a
+ * set amount). Lines saved before 2026-11-10 count hours to the check-in time.
+ */
 export type CancellationPolicyTiersConfig = {
+  enabled?: unknown;
   sameDayPenaltyAmount?: unknown;
   preArrivalPenaltyAmount?: unknown;
   /** SIG-S6 Policy 35 — optional override for post-check-in early departure; falls back to `sameDayPenaltyAmount`. */
   postCheckInEarlyDeparturePenaltyAmount?: unknown;
-  tiers?: Array<{ minHoursBeforeCheckIn?: unknown; penaltyAmount?: unknown }>;
+  tiers?: Array<{ minDaysBeforeArrival?: unknown; minHoursBeforeCheckIn?: unknown; basis?: unknown; value?: unknown; penaltyAmount?: unknown }>;
 };
 
 /**
- * Policy 35 — derive raw cancellation penalty from commitment snapshot (`Reservation.frozenCancellationTerms`)
- * first, then optional `cancellation.policyTiers` configuration.
+ * Policy 35 — which rule a cancellation before arrival pays (2026-11-10). In order:
+ *   1. a charge of the booking's own on its terms;
+ *   2. the policy the booking keeps from Set up (`terms.policy`) — the guest pays what they were told;
+ *   3. the setting as it is now (a booking set up before the policy was kept).
+ * The rule may be a share of the advance paid: `cancellationChargeOn` puts it on what was paid.
  */
 export function computeS5PreArrivalCancellationPenalty(input: {
   now: Date;
   checkInDate: Date;
   /**
-   * The hotel's check-in time on the arrival day (2026-11-10). Time left is counted to it; it was
-   * counted to the stored date's start, which is 6 AM in Bhutan. Absent: the stored date.
+   * The hotel's check-in time on the arrival day (2026-11-10). Time left in hours (an older line) is
+   * counted to it. Absent: the stored date.
    */
   checkInAt?: Date | null;
   frozenCancellationTerms: Record<string, unknown> | null | undefined;
   policyTiers: CancellationPolicyTiersConfig | null | undefined;
-}): { rawPenalty: number; hoursUntilCheckIn: number } {
+}): { rule: CancellationRule; hoursUntilCheckIn: number; daysBeforeArrival: number } {
   const anchor = input.checkInAt ?? input.checkInDate;
   const hoursUntilCheckIn = (anchor.getTime() - input.now.getTime()) / 3600_000;
+  const days = daysBeforeArrival(input.now, input.checkInDate);
   const terms = input.frozenCancellationTerms ?? {};
   const fromTerms = num(
     (terms as any).sameDayPenaltyAmount ?? (terms as any).preArrivalPenaltyAmount ?? (terms as any).penaltyAmount,
   );
-  if (fromTerms > 0) return { rawPenalty: fromTerms, hoursUntilCheckIn };
-
-  const cfg = input.policyTiers;
-  if (cfg && Array.isArray(cfg.tiers) && cfg.tiers.length > 0) {
-    const sorted = [...cfg.tiers].sort(
-      (a, b) => num(b.minHoursBeforeCheckIn) - num(a.minHoursBeforeCheckIn),
-    );
-    for (const t of sorted) {
-      if (hoursUntilCheckIn >= num(t.minHoursBeforeCheckIn)) {
-        return { rawPenalty: num(t.penaltyAmount), hoursUntilCheckIn };
-      }
-    }
-    // Later than every line — nearer the arrival than the last line, on the arrival day, or past the
-    // check-in time: the last line applies (2026-11-10). It charged Nu 0, so a same-day
-    // cancellation cost nothing once lines were set. The spec's tiers cover "far out to
-    // day-of-arrival" (DEV-SPEC-001 Part 12 §73), and the nearest line is that cover.
-    return { rawPenalty: num(sorted[sorted.length - 1]!.penaltyAmount), hoursUntilCheckIn };
+  if (fromTerms > 0) {
+    return {
+      rule: { basis: "AMOUNT", value: fromTerms, label: `The booking's own charge · Nu ${fromTerms}`, from: "BOOKING" },
+      hoursUntilCheckIn,
+      daysBeforeArrival: days,
+    };
   }
-
-  const fromCfg = num(cfg?.preArrivalPenaltyAmount ?? cfg?.sameDayPenaltyAmount);
-  return { rawPenalty: fromCfg, hoursUntilCheckIn };
+  const kept = policyInTerms(terms);
+  const rule = chooseCancellationRule(
+    readCancellationPolicy(kept ?? input.policyTiers),
+    { daysBeforeArrival: days, hoursUntilCheckIn },
+    kept ? "BOOKING_TERMS" : "SETTING",
+  );
+  return { rule, hoursUntilCheckIn, daysBeforeArrival: days };
 }
 
 /** SIG-S6 Policy 35 — penalty for early departure after check-in (folio LIVE); uses dedicated config or falls back to same-day amount. */

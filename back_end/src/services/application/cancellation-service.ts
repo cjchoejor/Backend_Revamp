@@ -2,7 +2,8 @@ import { closeWaitingRefundsOnCancellationTx } from "../../lib/refund-money.js";
 import { hotelLocalTimeOn } from "../../lib/stay-dates.js";
 import { resolveStandardCheckInTime } from "../../lib/expected-arrival.js";
 import type { Prisma, PrismaClient } from "@prisma/client";
-import { planTripCancelMoves, simulateTripCancels, type TripMove } from "../../lib/trip-advance-cover.js";
+import { heldAfterTripCover, planTripCancelMoves, simulateTripCancels, type TripCancelCharge, type TripMove } from "../../lib/trip-advance-cover.js";
+import { cancellationChargeOn, type CancellationRule } from "../../lib/cancellation-policy.js";
 import { applyAdvanceStandingTx } from "../domain/s3-folio-service.js";
 import { readTripAdvanceRows } from "../domain/s3-payment-service.js";
 import { releaseRoomClaimIfOwnedTx } from "../../lib/room-claim-state.js";
@@ -172,6 +173,10 @@ export type CancellationFigures = {
   /** The charge after the cap, before any waiver. */
   chargeCapped: number;
   hoursUntilCheckIn: number;
+  /** Whole days from the hotel's today to the arrival day (2026-11-10). */
+  daysBeforeArrival: number;
+  /** The line of the policy that applied, with its words ("30 to 44 days before arrival · 50% of the advance paid"). */
+  rule: { basis: CancellationRule["basis"]; value: number; label: string; from: CancellationRule["from"] };
   waived: boolean;
 };
 
@@ -208,10 +213,14 @@ async function cancellationFigures(
     );
   }
   const ownHeld = await sumAdvancePaymentInTotalForFolio(prisma, input.folioId);
-  const { rawPenalty, hoursUntilCheckIn } = await rawCancellationCharge(prisma, input);
+  const { rule, hoursUntilCheckIn, daysBeforeArrival } = await rawCancellationCharge(prisma, input);
   // Money paid for the trip is one pot (2026-11-09): this stay's bill first gets, or gives up, what
   // the other stays' advances mean it should hold. Then the ordinary cancellation runs on that.
-  const plan = await tripCancelPlan(prisma, input.entryId, toDecimal(ownHeld), toDecimal(input.waiver ? 0 : rawPenalty));
+  // A share of the advance paid (2026-11-10) is taken of what the stay holds once its cover from
+  // the trip's money is home, as if it had paid its own advance.
+  const withCharge = await tripCancelPlan(prisma, input.entryId, toDecimal(ownHeld), (paid) => toDecimal(cancellationChargeOn(rule, paid ?? ownHeld)));
+  const rawPenalty = Number(withCharge.charge.toFixed(2));
+  const plan = input.waiver ? await tripCancelPlan(prisma, input.entryId, toDecimal(ownHeld), toDecimal(0)) : withCharge;
   const netIn = plan.moves.reduce((sum, m) => (m.to === input.entryId ? sum.add(m.amount) : m.from === input.entryId ? sum.sub(m.amount) : sum), toDecimal(0));
   const advanceReceived = Number(toDecimal(ownHeld).add(netIn).toFixed(2));
   const capped = capCancellationPenaltyAtAdvancePayment(rawPenalty, advanceReceived);
@@ -226,6 +235,8 @@ async function cancellationFigures(
     chargeBeforeCap: rawPenalty,
     chargeCapped: capped,
     hoursUntilCheckIn,
+    daysBeforeArrival,
+    rule: { basis: rule.basis, value: rule.value, label: rule.label, from: rule.from },
     waived: input.waiver,
     tripMoves: moveWords(plan.moves, plan.rows),
   };
@@ -264,13 +275,15 @@ const moveWords = (moves: TripMove[], rows: TripRows) =>
   });
 
 /** The bills that can still give or take money, this stay's holding what the cancellation reads. */
-async function tripCancelPlan(db: PrismaClient | Prisma.TransactionClient, entryId: string, ownHeld: Prisma.Decimal, charge: Prisma.Decimal) {
+async function tripCancelPlan(db: PrismaClient | Prisma.TransactionClient, entryId: string, ownHeld: Prisma.Decimal, charge: TripCancelCharge) {
   const me = await db.entry.findUnique({ where: { id: entryId }, select: { inquiryId: true } });
-  if (!me) return { inquiryId: null as string | null, rows: [] as TripRows, moves: [] as TripMove[] };
+  const at = (rows: TripRows) => (typeof charge === "function" ? charge(heldAfterTripCover(rows, entryId) ?? ownHeld) : charge);
+  if (!me) return { inquiryId: null as string | null, rows: [] as TripRows, moves: [] as TripMove[], charge: at([]) };
   const rows = (await readTripAdvanceRows(db, me.inquiryId))
     .filter((r) => r.entryId === entryId || r.folioOpen)
     .map((r) => (r.entryId === entryId ? { ...r, held: ownHeld } : r));
-  return { inquiryId: me.inquiryId, rows, moves: planTripCancelMoves(rows, entryId, charge) };
+  const c = at(rows);
+  return { inquiryId: me.inquiryId, rows, moves: planTripCancelMoves(rows, entryId, c), charge: c };
 }
 
 /**
@@ -357,17 +370,17 @@ export async function previewTripCancellation(prisma: PrismaClient, entryId: str
   if (stays.length !== new Set(input.stayIds).size) throw new ValidationError("One of those is not a stay of this trip.");
   const now = new Date();
   const waive = input.waive === true;
-  const picks: Array<{ entryId: string; own: number; raw: number }> = [];
+  const picks: Array<{ entryId: string; own: number; rule: CancellationRule }> = [];
   for (const st of stays) {
     if (!st.folio) throw new ValidationError(`${st.id} has no bill yet — nothing to charge or refund.`);
     const atSetUp = st.currentStage === Stage.S3;
-    const { rawPenalty } = await rawCancellationCharge(prisma, {
+    const { rule } = await rawCancellationCharge(prisma, {
       stage: atSetUp ? "S3" : "S5",
       checkInDate: atSetUp ? (st.checkInDate ?? new Date(now.getTime() + 86400_000)) : st.reservation!.frozenCheckInDate,
       terms: ((atSetUp ? st.cancellationDisclosure?.disclosedTerms : st.reservation?.frozenCancellationTerms) as Record<string, unknown>) ?? {},
       now,
     });
-    picks.push({ entryId: st.id, own: await sumAdvancePaymentInTotalForFolio(prisma, st.folio.id), raw: rawPenalty });
+    picks.push({ entryId: st.id, own: await sumAdvancePaymentInTotalForFolio(prisma, st.folio.id), rule });
   }
   const all = await readTripAdvanceRows(prisma, me.inquiryId);
   const rows = all
@@ -376,13 +389,19 @@ export async function previewTripCancellation(prisma: PrismaClient, entryId: str
       const p = picks.find((x) => x.entryId === r.entryId);
       return p ? { ...r, held: toDecimal(p.own) } : r;
     });
-  const out = simulateTripCancels(rows, picks.map((p) => ({ entryId: p.entryId, charge: toDecimal(waive ? 0 : p.raw) })));
+  // Each stay's charge as the policy puts it (a share of the advance is taken of what it holds once
+  // its cover is home); a waiver then runs the same stays with no charge.
+  // With no money paid for the trip there are no trip rows: a stay's share is of its own money.
+  const charged = simulateTripCancels(rows, picks.map((p) => ({ entryId: p.entryId, charge: (paid: Prisma.Decimal | null) => toDecimal(cancellationChargeOn(p.rule, paid ?? p.own)) })));
+  const out = waive ? simulateTripCancels(rows, picks.map((p) => ({ entryId: p.entryId, charge: toDecimal(0) }))) : charged;
   const lines = await Promise.all(
     picks.map(async (p, i) => {
+      const raw = Number(charged[i].charge.toFixed(2));
+      const heldCharged = charged[i].held != null ? Number(charged[i].held!.toFixed(2)) : p.own;
       const held = out[i].held != null ? Number(out[i].held!.toFixed(2)) : p.own;
-      const capped = capCancellationPenaltyAtAdvancePayment(p.raw, held);
+      const capped = capCancellationPenaltyAtAdvancePayment(raw, heldCharged);
       const charge = waive ? 0 : capped;
-      return { entryId: p.entryId, advanceReceived: held, charge, chargeBeforeCap: p.raw, chargeCapped: capped, refund: Number(toDecimal(held).sub(toDecimal(charge)).toFixed(2)) };
+      return { entryId: p.entryId, advanceReceived: held, charge, chargeBeforeCap: raw, chargeCapped: capped, rule: p.rule.label, refund: Number(toDecimal(held).sub(toDecimal(charge)).toFixed(2)) };
     }),
   );
   const sum = (k: "charge" | "refund") => Number(lines.reduce((t, l) => t.add(toDecimal(l[k])), toDecimal(0)).toFixed(2));
@@ -451,7 +470,7 @@ export async function previewCancellation(prisma: PrismaClient, entryId: string,
 async function emitCancellationConfirmationBestEffort(
   prisma: PrismaClient,
   entryId: string,
-  figures: { advanceHeld: number; retained: number; refundIssued: number; penaltyWaived: boolean },
+  figures: { advanceHeld: number; retained: number; refundIssued: number; penaltyWaived: boolean; bandLabel?: string | null },
 ): Promise<void> {
   try {
     await generateCancellationConfirmationPdf(prisma, entryId, {
@@ -459,6 +478,7 @@ async function emitCancellationConfirmationBestEffort(
       retained: figures.retained,
       refundIssued: figures.refundIssued,
       penaltyWaived: figures.penaltyWaived,
+      bandLabel: figures.bandLabel ?? null,
     });
   } catch (e) {
     console.error(`[cancellation] confirmation PDF failed for ${entryId}:`, e);
@@ -677,6 +697,9 @@ export async function cancelEntryAtS3(
           advanceTotal,
           netRefund,
           hoursUntilCheckIn,
+          daysBeforeArrival: fig.daysBeforeArrival,
+          // The line of the policy that applied (2026-11-10) — the cancellation paper states it.
+          rule: fig.rule,
           penaltyWaiverRequested: waiver,
         },
         createdBy: actorId,
@@ -716,6 +739,7 @@ export async function cancelEntryAtS3(
     retained: penalty,
     refundIssued: Math.max(0, netRefund),
     penaltyWaived: waiver && penalty === 0,
+    bandLabel: waiver ? null : fig.rule.label,
   });
 
   return updated;
@@ -861,6 +885,9 @@ export async function cancelEntryAtS5(
           netRefund,
           rawPenalty,
           hoursUntilCheckIn,
+          daysBeforeArrival: fig.daysBeforeArrival,
+          // The line of the policy that applied (2026-11-10) — the cancellation paper states it.
+          rule: fig.rule,
           penaltyWaiverRequested: waiver,
         },
         createdBy: actorId,
@@ -956,6 +983,7 @@ export async function cancelEntryAtS5(
     retained: penalty,
     refundIssued: Math.max(0, netRefund),
     penaltyWaived: waiver && penalty === 0,
+    bandLabel: waiver ? null : fig.rule.label,
   });
 
   return updated;

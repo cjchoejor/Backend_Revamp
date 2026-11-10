@@ -15,10 +15,11 @@ import { getActiveConfigEntry } from "../../lib/config-store.js";
 const CHARGES_KEY = "cancellation.policyTiers";
 
 export type CancellationChargesInput = {
+  enabled?: boolean;
   sameDayPenaltyAmount: number;
   preArrivalPenaltyAmount?: number | null;
   postCheckInEarlyDeparturePenaltyAmount?: number | null;
-  tiers?: Array<{ minHoursBeforeCheckIn: number; penaltyAmount: number }>;
+  tiers?: Array<{ minDaysBeforeArrival: number; basis: "PERCENT_OF_PAID" | "AMOUNT"; value: number }>;
 };
 
 export async function getCancellationCharges(prisma: PrismaClient) {
@@ -26,32 +27,57 @@ export async function getCancellationCharges(prisma: PrismaClient) {
   const stored = row?.configValue ?? null;
   // A list here is what a saved policy left behind: Policy 35 reads no charge from it.
   const overwritten = Array.isArray(stored);
-  return { value: overwritten ? null : stored, overwritten };
+  if (overwritten || !stored || typeof stored !== "object") return { value: overwritten ? null : stored, overwritten };
+  // The form edits days, a basis and a figure (2026-11-10). A line saved before counted hours to the
+  // check-in time and charged an amount: shown in whole days, it is saved that way the next time.
+  const o = { ...(stored as Record<string, unknown>) };
+  // A value saved before the switch existed is on.
+  o.enabled = o.enabled !== false;
+  if (Array.isArray(o.tiers)) {
+    o.tiers = o.tiers.map((t) => {
+      const r = (t ?? {}) as Record<string, unknown>;
+      if (r.minDaysBeforeArrival != null) return r;
+      return { minDaysBeforeArrival: Math.floor(Number(r.minHoursBeforeCheckIn ?? 0) / 24), basis: "AMOUNT", value: Number(r.penaltyAmount ?? 0) };
+    });
+  }
+  return { value: o, overwritten };
 }
 
 export async function setCancellationCharges(prisma: PrismaClient, input: CancellationChargesInput, actorId: string, notes?: string | null) {
   // Nothing typed means "use the usual charge", which is what a missing field does in Policy 35.
-  const value: Record<string, unknown> = { sameDayPenaltyAmount: input.sameDayPenaltyAmount };
+  const value: Record<string, unknown> = { enabled: input.enabled !== false, sameDayPenaltyAmount: input.sameDayPenaltyAmount };
   if (input.preArrivalPenaltyAmount != null) value.preArrivalPenaltyAmount = input.preArrivalPenaltyAmount;
   if (input.postCheckInEarlyDeparturePenaltyAmount != null) value.postCheckInEarlyDeparturePenaltyAmount = input.postCheckInEarlyDeparturePenaltyAmount;
   if (input.tiers?.length) {
     // The lines must make sense (ACIG §6.2.12, DEV-SPEC-001 Part 12 §73, 2026-11-10): one line for
-    // each time left, and a cancellation nearer the arrival never costing less than one further out.
-    const lines = [...input.tiers].sort((a, b) => b.minHoursBeforeCheckIn - a.minHoursBeforeCheckIn);
-    const words = (h: number) => (h % 24 === 0 && h > 0 ? `${h / 24} day${h === 24 ? "" : "s"}` : `${h} hour${h === 1 ? "" : "s"}`);
+    // each day count, and a cancellation nearer the arrival never costing less than one further out.
+    // A share and an amount cannot be set against each other, except that nothing is less than either.
+    const lines = [...input.tiers].sort((a, b) => b.minDaysBeforeArrival - a.minDaysBeforeArrival);
+    const days = (d: number) => `${d} day${d === 1 ? "" : "s"}`;
+    const what = (t: { basis: string; value: number }) => (t.basis === "PERCENT_OF_PAID" ? `${t.value}% of the advance paid` : `Nu ${t.value}`);
+    for (const t of lines) {
+      if (t.basis === "PERCENT_OF_PAID" && t.value > 100) throw new ValidationError("A share of the advance paid is at most 100%.");
+    }
     for (let i = 1; i < lines.length; i++) {
       const farther = lines[i - 1]!;
       const nearer = lines[i]!;
-      if (nearer.minHoursBeforeCheckIn === farther.minHoursBeforeCheckIn) {
-        throw new ValidationError(`Two lines say ${words(nearer.minHoursBeforeCheckIn)} left — keep one.`);
-      }
-      if (nearer.penaltyAmount < farther.penaltyAmount) {
-        throw new ValidationError(
-          `A cancellation nearer the arrival can't cost less than one further out: with ${words(nearer.minHoursBeforeCheckIn)} left it is Nu ${nearer.penaltyAmount}, with ${words(farther.minHoursBeforeCheckIn)} left Nu ${farther.penaltyAmount}.`,
-        );
+      if (nearer.minDaysBeforeArrival === farther.minDaysBeforeArrival) {
+        throw new ValidationError(`Two lines start at ${days(nearer.minDaysBeforeArrival)} before arrival — keep one.`);
       }
     }
-    value.tiers = lines;
+    for (let i = 0; i < lines.length; i++) {
+      for (let j = i + 1; j < lines.length; j++) {
+        const farther = lines[i]!;
+        const nearer = lines[j]!;
+        const comparable = nearer.basis === farther.basis || nearer.value === 0 || farther.value === 0;
+        if (comparable && nearer.value < farther.value) {
+          throw new ValidationError(
+            `A cancellation nearer the arrival can't cost less than one further out: from ${days(nearer.minDaysBeforeArrival)} before arrival it is ${what(nearer)}, from ${days(farther.minDaysBeforeArrival)} ${what(farther)}.`,
+          );
+        }
+      }
+    }
+    value.tiers = lines.map((t) => ({ minDaysBeforeArrival: t.minDaysBeforeArrival, basis: t.basis, value: t.value }));
   }
 
   return prisma.$transaction(async (tx) => {
