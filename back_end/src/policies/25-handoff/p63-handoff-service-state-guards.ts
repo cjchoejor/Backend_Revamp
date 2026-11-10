@@ -1,5 +1,5 @@
 import { HandoffState, HandoffType } from "@prisma/client";
-import { StateTransitionError } from "../../lib/errors.js";
+import { PolicyGateBlockedError, StateTransitionError } from "../../lib/errors.js";
 
 /**
  * Policy 63 — Handoff lifecycle: accept / fulfil / reject state-machine guards
@@ -81,6 +81,22 @@ export function enforceHandoffFulfilStateH5(input: { handoffType: HandoffType; s
   if (input.state === HandoffState.REJECTED || input.state === HandoffState.CLOSED) {
     throw new StateTransitionError(`H5 cannot be fulfilled from state ${input.state}`);
   }
+}
+
+/**
+ * The after-stay handoff is done only when no bill is left to settle (2026-11-10, operator: "it
+ * shouldn't even be clickable if the bill is still outstanding, or wasn't written off by higher
+ * authority"). It is raised at check-out because money was still owed; marking it done while some
+ * is owed would close the follow-up on money nobody collected. `owed` is the folio's balance when
+ * above zero, null otherwise — a write-off brings it to zero.
+ */
+export function enforceH5NothingLeftToSettle(input: { handoffType: HandoffType; owed: string | null }) {
+  if (input.handoffType !== HandoffType.H5) return;
+  if (input.owed == null) return;
+  throw new PolicyGateBlockedError(
+    "H5_MONEY_STILL_OWED",
+    `Nu ${input.owed} is still owed on this booking — record the payment, or the GM writes it off, then mark the after-stay handoff done.`,
+  );
 }
 
 export function enforceHandoffRejectTypeSupported(input: { handoffType: HandoffType }) {
