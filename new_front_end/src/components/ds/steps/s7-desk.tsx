@@ -640,6 +640,19 @@ function splitWords(map: Record<string, string> | null, fallback: string | null,
   return [...byPayer].map(([m, kinds]) => `${kinds.join(", ")} → ${payerWord(m, party)}`).join(" · ");
 }
 
+/** Who pays, in words, for the Charges menu's line (the same read as the card's, so the two agree). */
+export function usePayerWords(entry: EntryDetail): string {
+  const { session } = useSession();
+  const booked = useBookedBy(entry);
+  const folio = entry.folio ?? null;
+  const read = useQuery({
+    queryKey: ["payer", entry.id, entry.updatedAt],
+    queryFn: () => getPayer(session!, entry.id),
+    enabled: !!session && !!folio,
+  });
+  return splitWords(read.data?.map ?? null, read.data?.current ?? folio?.billingModel ?? null, booked.party);
+}
+
 /**
  * Who pays (2026-10-26, operator ruling) — changed here, while the guest is staying. It replaced
  * the Re-enter item that sent the booking back to Set up with no way back to Stay. The FOM picks
