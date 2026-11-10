@@ -449,7 +449,7 @@ function BookingsScreen() {
           <LoadingBlock />
         ) : (
           <div className="table-scroll">
-            <table className="table compact">
+            <table className="table compact zebra">
               <thead>
                 <tr>
                   {(
@@ -495,7 +495,11 @@ function BookingsScreen() {
                 </tr>
               </thead>
               <tbody>
-                {shown.map((r, i) => {
+                {(() => {
+                  // Striped rows (2026-11-10, operator: "grey highlight on the rows … in bookings as
+                  // well"), starting afresh under each date band.
+                  let stripe = 0;
+                  return shown.map((r, i) => {
                   const ci = checkInOf(r);
                   const co = checkOutOf(r);
                   const nights = nightsOf(ci, co);
@@ -503,6 +507,8 @@ function BookingsScreen() {
                   const t = totalWord(m);
                   const band = bandOf(r, sortKey, today);
                   const opensBand = band && band.id !== (i > 0 ? bandOf(shown[i - 1], sortKey, today)?.id : null);
+                  if (opensBand) stripe = 0;
+                  const alt = stripe++ % 2 === 1;
                   const when =
                     sortKey === "booked"
                       ? `booked ${fmtStamp(r.createdAt, hotelDay?.timezone)}`
@@ -519,7 +525,7 @@ function BookingsScreen() {
                         </td>
                       </tr>
                     ) : null}
-                    <OpenRow entryId={r.id} locked={r.status !== "ACTIVE"} selected={previewId === r.id} onSelect={() => setPreviewId((p) => (p === r.id ? null : r.id))}>
+                    <OpenRow entryId={r.id} locked={r.status !== "ACTIVE"} selected={previewId === r.id} alt={alt} onSelect={() => setPreviewId((p) => (p === r.id ? null : r.id))}>
                       <td>
                         <GuestLink row={r} />
                         <StayOf row={r} />
@@ -577,7 +583,8 @@ function BookingsScreen() {
                     </OpenRow>
                     </Fragment>
                   );
-                })}
+                  });
+                })()}
               </tbody>
             </table>
             {rows.length === 0 ? <EmptyState title="No bookings match">Clear a filter, or check the dates.</EmptyState> : null}

@@ -75,8 +75,10 @@ export function TimerText({ w }: { w: WaitingText }) {
 }
 
 /** A table row that opens a booking; the name link inside it is the keyboard target. */
-export function OpenRow({ entryId, step, href, locked, selected, onSelect, children }: {
+export function OpenRow({ entryId, step, href, locked, selected, alt, onSelect, children }: {
   entryId: string;
+  /** Every other row is shaded grey in a striped table (2026-11-10, operator). */
+  alt?: boolean;
   step?: number;
   /** Open this page rather than the booking. */
   href?: string;
@@ -105,7 +107,7 @@ export function OpenRow({ entryId, step, href, locked, selected, onSelect, child
       onSelect?.();
     }, 260);
   };
-  const cls = [selected ? "selected" : "", locked ? "locked" : ""].filter(Boolean).join(" ") || undefined;
+  const cls = [selected ? "selected" : "", locked ? "locked" : "", alt ? "alt" : ""].filter(Boolean).join(" ") || undefined;
   return (
     <tr
       className={cls}

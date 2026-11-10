@@ -2522,3 +2522,16 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 
 /* Post a charge: the room is picked first (2026-11-10). */
 .ds .input.pick-first { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); color: var(--ink-3); }
+
+/* Striped rows (2026-11-10, operator: "grey highlight on the rows to distinguish them"): Billing and
+   Bookings. Painted on the cells so a sticky first column is striped too; hover and the selected row
+   stay above the grey. */
+.ds { --row-alt: #F0F1EE; --row-hover: #E3E6E0; }
+.ds .table.zebra tbody tr.alt td:not(.desk-root *) { background: var(--row-alt); }
+.ds .table.zebra tbody tr:hover:not(.static):not(.list-band) td:not(.desk-root *) { background: var(--row-hover); }
+.ds .table.zebra tbody tr.selected td:not(.desk-root *), .ds .table.zebra tbody tr.selected:hover td:not(.desk-root *) { background: var(--accent-soft); }
+.ds .table.zebra tbody tr.selected td:first-child:not(.desk-root *) { box-shadow: inset 3px 0 0 var(--accent); }
+/* A date band keeps its own grey in the frozen-column list (Bookings) — the sticky first cell painted
+   it white — and does not change under the pointer: it is a heading, not a row. */
+.ds .table-scroll tbody tr.list-band td:not(.desk-root *), .ds .table-scroll tbody tr.list-band:hover td:not(.desk-root *) { background: var(--surface-3); }
+.ds .table-scroll tbody tr.list-band.today td:not(.desk-root *), .ds .table-scroll tbody tr.list-band.today:hover td:not(.desk-root *) { background: var(--accent-soft); }

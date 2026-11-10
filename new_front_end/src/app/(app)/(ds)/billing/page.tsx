@@ -377,7 +377,7 @@ function BillingScreen() {
 
           {tab === "open" ? (
             shown.length ? (
-              <table className="table">
+              <table className="table zebra">
                 <thead>
                   <tr>
                     <th>Booking</th>
@@ -402,11 +402,11 @@ function BillingScreen() {
                   </tr>
                 </thead>
                 <tbody>
-                  {shown.map((r) => {
+                  {shown.map((r, i) => {
                     const x = get(r.id);
                     const f = figuresOf(x);
                     return (
-                      <OpenRow key={r.id} entryId={r.id} href={billHref(r.id)}>
+                      <OpenRow key={r.id} entryId={r.id} href={billHref(r.id)} alt={i % 2 === 1}>
                         <td>
                           <GuestLink row={r} href={billHref(r.id)} />
                           <div className="meta">{x?.trip ? `Trip · ${x.trip.stays.length} stays · ${r.inquiryId}` : bookingMeta(r)}</div>
@@ -431,7 +431,7 @@ function BillingScreen() {
             )
           ) : tab === "closed" ? (
             shown.length ? (
-              <table className="table">
+              <table className="table zebra">
                 <thead>
                   <tr>
                     <th>Booking</th>
@@ -443,12 +443,12 @@ function BillingScreen() {
                   </tr>
                 </thead>
                 <tbody>
-                  {closedPage.shown.map((r) => {
+                  {closedPage.shown.map((r, i) => {
                     const x = mc.byId.get(r.id) ?? get(r.id);
                     const f = figuresOf(x);
                     const how = closedWord(r, f);
                     return (
-                      <OpenRow key={r.id} entryId={r.id} href={billHref(r.id)}>
+                      <OpenRow key={r.id} entryId={r.id} href={billHref(r.id)} alt={i % 2 === 1}>
                         <td>
                           <GuestLink row={r} href={billHref(r.id)} />
                           <div className="meta">{x?.trip ? `Trip · ${x.trip.stays.length} stays · ${r.inquiryId}` : r.id}</div>
@@ -477,7 +477,7 @@ function BillingScreen() {
               <EmptyState title="No closed bills yet" />
             )
           ) : shown.length ? (
-            <table className="table">
+            <table className="table zebra">
               <thead>
                 <tr>
                   <th>Who pays</th>
@@ -493,7 +493,7 @@ function BillingScreen() {
                   const acct = accountOf(r);
                   const first = !groupByAccount || i === 0 || accountOf(shown[i - 1]!) !== acct;
                   return (
-                    <OpenRow key={r.id} entryId={r.id} href={billHref(r.id)}>
+                    <OpenRow key={r.id} entryId={r.id} href={billHref(r.id)} alt={i % 2 === 1}>
                       <td>{first ? <b>{acct}</b> : null}</td>
                       <td>
                         <GuestLink row={r} href={billHref(r.id)} />
