@@ -200,6 +200,9 @@ export type DeskMoneyRow = {
   currency: string | null;
   headline: { amount: number | null; kind: "STAY_TOTAL" | "BILLED_SO_FAR" | null; frozen: boolean };
   folio: { state: string; billedSoFar: number | null; paymentsReceived: number | null; outstandingBalance: number | null } | null;
+  /** What the whole stay comes to (2026-11-10): the stay as priced plus what was added to it — the
+   *  billing summary's `stayWithAdded`. Null when the booking has no priced stay total. */
+  totalAmount: number | null;
   shortened: boolean;
 };
 
@@ -291,6 +294,7 @@ export async function deskMoneyFor(prisma: Db, entryIds: string[]): Promise<Desk
               outstandingBalance: s.folio.outstandingBalance,
             }
           : null,
+        totalAmount: s.stayWithAdded,
         shortened: !!s.stayTotal.earlyDeparture,
       });
     }
