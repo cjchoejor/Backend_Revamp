@@ -1,3 +1,4 @@
+import { cancellationWordsForTerms } from "../../lib/cancellation-policy.js";
 import { resolveSendTo } from "../../lib/send-to.js";
 import { enforceProformaNotLapsed, stopProformaValidityTx } from "./proforma-validity-service.js";
 import { enforceEarlierAdvanceAnswered } from "../../lib/refund-money.js";
@@ -547,6 +548,7 @@ async function confirmReservationInner(
     roomCount,
     billingModel: entry.folio?.billingModel ?? null,
     groupLeaderName,
+    cancellationPolicy: await cancellationWordsForTerms(prisma, result.reservation.frozenCancellationTerms),
   });
 
   // Generate the confirmation-voucher PDF and attach it to the outbound email. Idempotent —
@@ -678,6 +680,7 @@ async function resendConfirmationVoucherInner(
     roomCount: isGroup ? bookingRoomCount : undefined,
     billingModel: entry.folio?.billingModel ?? null,
     groupLeaderName: isGroup ? entry.contactPersonName ?? displayName : undefined,
+    cancellationPolicy: await cancellationWordsForTerms(prisma, reservation.frozenCancellationTerms),
   });
 
   const ackWindows = await requireActiveConfigValue<Record<string, number>>(prisma, "acknowledgement.windowPerType").catch(

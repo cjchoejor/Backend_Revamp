@@ -153,7 +153,7 @@ export function ChargesView({
               label: "The price",
               content: (
                 <>
-        <StepCard title="The price" status={sp.tableTrip ? undefined : sp.source === "QUOTE" ? (tag ?? undefined) : sp.source === "PICKS" ? undefined : sp.kind || undefined}>
+        <StepCard title="The price" className="price-card" status={sp.tableTrip ? undefined : sp.source === "QUOTE" ? (tag ?? undefined) : sp.source === "PICKS" ? undefined : sp.kind || undefined}>
           {sp.tableTrip ? (
             <TripTablePrice sp={sp} />
           ) : sp.source === "TABLE" ? (
@@ -193,7 +193,7 @@ export function ChargesView({
                 </p>
               ) : null}
               {st.quotationId ? (
-                <QuotePriceLines quotationId={st.quotationId} rooms={roomsNamed(entry, st.quotationId)} stayTotal={st.amount} currency={cur} />
+                <QuotePriceLines quotationId={st.quotationId} rooms={roomsNamed(entry, st.quotationId)} stayTotal={st.amount} shortened={!!st.earlyDeparture} currency={cur} />
               ) : billing?.rooms?.length ? (
                 <table className="table compact resp" style={{ marginTop: 8 }}>
                   <thead>
@@ -525,7 +525,7 @@ function roomsNamed(entry: EntryDetail, quotationId: string): string {
 }
 
 /** The saved quotation's own rows, read from the server — the paper set out on the tab. */
-function QuotePriceLines({ quotationId, rooms, stayTotal, currency }: { quotationId: string; rooms: string; stayTotal: number | null; currency: string }) {
+function QuotePriceLines({ quotationId, rooms, stayTotal, shortened, currency }: { quotationId: string; rooms: string; stayTotal: number | null; shortened: boolean; currency: string }) {
   const { session } = useSession();
   const q = useQuery({
     queryKey: ["quotation-price-lines", quotationId, rooms],
@@ -544,7 +544,13 @@ function QuotePriceLines({ quotationId, rooms, stayTotal, currency }: { quotatio
       <PriceLinesTable f={f} currency={currency} />
       {stayTotal != null && Math.abs(stayTotal - f.total) > 0.005 ? (
         <p className="meta" style={{ marginTop: 6 }}>
-          The quotation&rsquo;s total is for the stay as booked; the stay as it stands comes to {money(stayTotal, currency)}.
+          {/* Only a shortened stay changes the stay from the quotation. A chhertum between the two is a
+              quotation priced before 10 Nov 2026, whose stored total could miss its rows by one. */}
+          {shortened
+            ? <>The quotation&rsquo;s total is for the stay as booked; the stay as it stands comes to {money(stayTotal, currency)}.</>
+            : Math.abs(stayTotal - f.total) < 1
+              ? <>This quotation&rsquo;s own record reads {money(stayTotal, currency)}: it was priced before 10 Nov 2026, when its total could miss its rows by a chhertum.</>
+              : <>The stay total reads {money(stayTotal, currency)}.</>}
         </p>
       ) : null}
     </>

@@ -62,6 +62,10 @@ export type CancellationPreview = {
   chargeBeforeCap: number;
   chargeCapped: number;
   hoursUntilCheckIn: number;
+  /** Whole days from the hotel's today to the arrival day. */
+  daysBeforeArrival?: number;
+  /** The line of the policy that applied, with its words (2026-11-10). */
+  rule?: { basis: "PERCENT_OF_PAID" | "AMOUNT"; value: number; label: string; from: "BOOKING" | "BOOKING_TERMS" | "SETTING" | "NONE" };
   waived: boolean;
   /** Money moved between a trip's stays' bills first, when money paid for the trip is involved. */
   tripMoves?: TripMoneyMove[];
@@ -70,7 +74,7 @@ export type CancellationPreview = {
 export type TripMoneyMove = { fromEntryId: string; toEntryId: string; fromStayNo: number; toStayNo: number; amount: number };
 
 export type TripCancellationPreview = {
-  stays: Array<{ entryId: string; advanceReceived: number; charge: number; chargeBeforeCap: number; chargeCapped: number; refund: number }>;
+  stays: Array<{ entryId: string; advanceReceived: number; charge: number; chargeBeforeCap: number; chargeCapped: number; refund: number; rule?: string }>;
   moves: TripMoneyMove[];
   totalCharge: number;
   totalRefund: number;

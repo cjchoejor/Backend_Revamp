@@ -18,6 +18,8 @@ type Common = {
   help?: string;
   /** A blank is allowed (it saves as nothing). */
   optional?: boolean;
+  /** In a rows table: the field this row draws instead, such as Nu or a percent by the row's choice. */
+  perRow?: (row: Rec) => SField | undefined;
 };
 
 export type SField =

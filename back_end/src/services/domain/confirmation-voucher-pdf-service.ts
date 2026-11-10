@@ -15,6 +15,7 @@
  * Storage / immutability: same append-only pattern as the quotation and invoice services.
  * If a voucher was previously rendered we serve the stored file rather than regenerating.
  */
+import { cancellationWordsForTerms } from "../../lib/cancellation-policy.js";
 import { waitingRefundTotal } from "../../lib/refund-money.js";
 import { computeStayCharges, stayBreakdownFromTerms } from "../infrastructure/compute-stay-charges.js";
 import { maxZeroSub, sumMoneyBy } from "../../lib/money.js";
@@ -43,12 +44,9 @@ import { type ConfirmationVoucherLine } from "../infrastructure/pdf-templates/co
 import { resolveBillQuotation } from "../../lib/operative-quotation.js";
 import { quotationPaperPrices } from "./quotation-pdf-service.js";
 
-/** Static policy text — matches the reference voucher. Would live in ConfigurationEntry once
- *  the admin console gets a policy editor. Kept inline for now so the voucher renders even
- *  before that admin surface exists. */
+/** Static policy text — matches the reference voucher. The cancellation policy is the booking's own
+ *  since 2026-11-10 (lib/cancellation-policy.ts): the one the system charges by, not fixed words. */
 const DEFAULT_POLICIES = {
-  cancellation:
-    "If cancellation is made 45 days or more before the scheduled date, a 100% refund will be provided. For cancellations made between 30 and 44 days before the scheduled date, a 50% refund will be issued. Cancellations made less than 30 days before the scheduled date are not eligible for any refund.",
   extraGuest:
     "Legphel Hotel operates on a double occupancy basis per room, with a maximum capacity of up to 3 guests. Additional guests over the age of 12 accommodated in the same room with two adults, requiring an extra bed, may do so for an additional charge. This policy applies to bookings in Deluxe Rooms, Executive Rooms, and Suite Rooms.",
   pet: "No pets are allowed",
@@ -138,6 +136,8 @@ export async function generateOrLoadConfirmationVoucherPdf(
 
   const checkIn = reservation.frozenCheckInDate;
   const checkOut = reservation.frozenCheckOutDate;
+  // The cancellation policy this booking keeps (2026-11-10): what it is charged by if it is cancelled.
+  const cancellationWords = await cancellationWordsForTerms(prisma, reservation.frozenCancellationTerms);
   const nights = Math.max(
     1,
     Math.round((checkOut.getTime() - checkIn.getTime()) / 86_400_000),
@@ -352,7 +352,7 @@ export async function generateOrLoadConfirmationVoucherPdf(
     datesShown: paper?.priceBlock.datesShown,
     closingNote:
       `Inclusions per plan · Wi-Fi · parking. Early check-in and late check-out subject to ` +
-      `availability. Please carry photo ID for all adult guests. ${DEFAULT_POLICIES.cancellation}`,
+      `availability. Please carry photo ID for all adult guests. Cancellation: ${cancellationWords.join(" ")}`,
     tariffVersion: "T1.0",
   });
 
@@ -414,7 +414,7 @@ export async function generateOrLoadConfirmationVoucherPdf(
             mealPlan: r.mealPlan,
             extraBeds: r.extraBeds,
           })),
-          policies: DEFAULT_POLICIES,
+          policies: { ...DEFAULT_POLICIES, cancellation: cancellationWords.join(" ") },
           hotel: {
             hotelName: hotel.hotelName,
             registeredAddress: hotel.registeredAddress,

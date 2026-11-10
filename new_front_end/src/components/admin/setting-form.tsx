@@ -319,9 +319,10 @@ function RowsTable({ f, value, onChange, disabled }: { f: Extract<SField, { kind
                   {fixed ? <td className="row-name">{f.fixedNames?.[String(asRec(row)[fixed])] ?? String(asRec(row)[fixed] ?? "")}</td> : null}
                   {f.columns.map((c) => {
                     const o = asRec(row);
+                    const cf = c.perRow?.(o) ?? c;
                     return (
                       <td key={c.key ?? c.label}>
-                        <Control f={c} value={c.key ? o[c.key] : row} disabled={disabled} onChange={(v) => setRow(i, c.key ? { ...o, [c.key]: v } : v)} />
+                        <Control f={cf} value={c.key ? o[c.key] : row} disabled={disabled} onChange={(v) => setRow(i, c.key ? { ...o, [c.key]: v } : v)} />
                       </td>
                     );
                   })}

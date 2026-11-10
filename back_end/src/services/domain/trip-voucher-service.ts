@@ -1,3 +1,4 @@
+import { cancellationWordsForStays } from "../../lib/cancellation-policy.js";
 import { CommunicationChannel, Stage, type PrismaClient } from "@prisma/client";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { resolveBillQuotation } from "../../lib/operative-quotation.js";
@@ -300,7 +301,7 @@ export async function sendTripVoucher(
 async function emailTripVoucher(prisma: PrismaClient, tripPaperId: string, members: TripVoucherMember[], to: string, number: string, nightsEach: boolean) {
   const entries = await prisma.entry.findMany({
     where: { id: { in: members.map((m) => m.entryId) } },
-    select: { id: true, inquiryId: true, guestCount: true, guestProfile: { select: { title: true, firstName: true, lastName: true } } },
+    select: { id: true, inquiryId: true, guestCount: true, guestProfile: { select: { title: true, firstName: true, lastName: true } }, reservation: { select: { frozenCancellationTerms: true } } },
   });
   const first = entries.find((e) => e.id === members[0].entryId);
   if (!first) return;
@@ -312,6 +313,11 @@ async function emailTripVoucher(prisma: PrismaClient, tripPaperId: string, membe
     checkInDate: new Date(`${ins[0]}T00:00:00Z`),
     checkOutDate: new Date(`${outs[outs.length - 1]}T00:00:00Z`),
     guestCount: Math.max(1, ...entries.map((e) => e.guestCount ?? 1)),
+    // Each stay's own cancellation policy; one list when they read the same (2026-11-10).
+    cancellationPolicy: await cancellationWordsForStays(
+      prisma,
+      members.map((m) => ({ stayNo: m.stayNo, terms: entries.find((e) => e.id === m.entryId)?.reservation?.frozenCancellationTerms ?? null })),
+    ),
   });
   try {
     const pdf = await renderTripVoucherPdf(prisma, tripPaperId, { nightsMode: nightsEach ? "EACH" : "SHORT" });

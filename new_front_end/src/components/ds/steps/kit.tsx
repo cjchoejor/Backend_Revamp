@@ -782,6 +782,7 @@ export function FlowTodo({
 
 export function StepCard({
   title,
+  className,
   icon,
   right,
   acts,
@@ -804,6 +805,8 @@ export function StepCard({
   restsFolded = false,
 }: {
   title?: ReactNode;
+  /** A class of its own on the card, such as the price's blue outline. */
+  className?: string;
   icon?: IconName;
   right?: ReactNode;
   /** `right` stays on the card's top line while the section is folded to its summary. */
@@ -926,6 +929,7 @@ export function StepCard({
     <div
       className={[
         "card",
+        className ?? "",
         sealed ? "sealed" : "",
         quiet ? "quiet" : "",
         n ? "flowed" : "",

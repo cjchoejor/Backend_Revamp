@@ -391,6 +391,23 @@ async function addTripMoney(prisma: Db, rows: DeskMoneyRow[]): Promise<void> {
       : Number(sumMoney(sums.map((x) => x!.stayWithAdded ?? x!.headline.amount ?? 0)).toFixed(2));
     const add = (pick: (x: NonNullable<(typeof sums)[number]>) => number | null | undefined) =>
       Number(sumMoney(sums.map((x) => (x ? toDecimal(pick(x) ?? 0) : toDecimal(0)))).toFixed(2));
+    // Money moved between the stays is neither received nor refunded for the trip (2026-11-10) —
+    // the trip's bill's own rule (pairTripMoves): a move whose two halves are both on it.
+    const moves = await prisma.paymentRecord.findMany({
+      where: { folio: { entryId: { in: onBill.map((s) => s.id) } }, tripTransferRef: { not: null } },
+      select: { amount: true, paymentDirection: true, tripTransferRef: true },
+    });
+    const byRef = new Map<string, typeof moves>();
+    for (const m of moves) byRef.set(m.tripTransferRef!, [...(byRef.get(m.tripTransferRef!) ?? []), m]);
+    let movedIn = toDecimal(0);
+    let movedOut = toDecimal(0);
+    for (const halves of byRef.values()) {
+      const out = halves.find((h) => h.paymentDirection === "OUT");
+      const into = halves.find((h) => h.paymentDirection === "IN");
+      if (!out || !into || halves.length !== 2) continue;
+      movedIn = movedIn.add(toDecimal(into.amount));
+      movedOut = movedOut.add(toDecimal(out.amount));
+    }
     r.trip = {
       inquiryId: inq!,
       stays: onBill.map((s) => ({
@@ -403,10 +420,10 @@ async function addTripMoney(prisma: Db, rows: DeskMoneyRow[]): Promise<void> {
       })),
       totalAmount: total,
       billedSoFar: add((x) => x.folio?.billedSoFar),
-      paymentsReceived: add((x) => x.folio?.paymentsReceived),
+      paymentsReceived: Number(toDecimal(add((x) => x.folio?.paymentsReceived)).sub(movedIn).toFixed(2)),
       outstandingBalance: add((x) => x.folio?.outstandingBalance),
       paidAhead: add((x) => x.folio?.overpaid),
-      refunded: add((x) => x.folio?.refunded),
+      refunded: Number(toDecimal(add((x) => x.folio?.refunded)).sub(movedOut).toFixed(2)),
       writtenOff: add((x) => x.folio?.writtenOff),
     };
   }

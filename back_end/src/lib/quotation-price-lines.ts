@@ -11,6 +11,14 @@
 
 import { labelRoomNights, type NightsMode } from "./room-nights-for-entry.js";
 
+/**
+ * Two money figures are the same to the chhertum (2026-11-10). The checks below compared
+ * `Math.abs(a - b) < 0.01`, and in floating point 640.70 − 640.69 is 0.00999…, so a split a chhertum
+ * off its room passed: the hotel's QUO-20261104-0003 printed Room 301's meals at Nu 640.70 against a
+ * stored Nu 640.69, and its rows came to Nu 8,190.48 under a net value of Nu 8,190.47.
+ */
+const sameCents = (a: number, b: number) => Math.round(a * 100) === Math.round(b * 100);
+
 export type PriceLine = {
   /**
    * The nights this line is for (2026-10-06; on every room since 2026-10-30). A line under a room
@@ -185,7 +193,7 @@ export function buildRoomPriceLines(r: PriceLineRoom): PriceLine[] {
     .filter((g) => Number(g.key) > 0)
     .map((g) => ({ count: Number(g.key), dates: g.dates, amount: bedRate * Number(g.key) * g.dates.length }));
   const bedSplitFits =
-    !!bedsByNight && Math.abs(bedLines.reduce((t, l) => t + l.amount, 0) - Number(r.extraBedSubtotal ?? 0)) < 0.01;
+    !!bedsByNight && sameCents(bedLines.reduce((t, l) => t + l.amount, 0), Number(r.extraBedSubtotal ?? 0));
   if (bedSplitFits) {
     for (const l of bedLines) {
       lines.push({
@@ -226,7 +234,7 @@ export function buildRoomPriceLines(r: PriceLineRoom): PriceLine[] {
   // nights on the same plans, from each night's own figure, so the lines add up to the room's
   // meals exactly; a night with no meals reads "Room only · no meals" and charges nothing.
   const mealsByNight = r.mealsVaryByNight && mealsSubtotal > 0 && nb.length ? mealLinesByNight(raw, nb, { bf, lu, di }) : null;
-  if (mealsByNight && Math.abs(mealsByNight.reduce((t, l) => t + l.amount, 0) - mealsSubtotal) < 0.01) {
+  if (mealsByNight && sameCents(mealsByNight.reduce((t, l) => t + l.amount, 0), mealsSubtotal)) {
     for (const l of mealsByNight) {
       lines.push({
         dates: subDates(l.dates),
@@ -268,7 +276,7 @@ export function buildRoomPriceLines(r: PriceLineRoom): PriceLine[] {
       (Number(raw?.othersBreakfastPax ?? 0) * bf + Number(raw?.othersLunchPax ?? 0) * lu + Number(raw?.othersDinnerPax ?? 0) * di) *
       nightsN;
     const splitTotal = split.reduce((t, pl) => t + pl.amount, 0) + alaCarteTotal;
-    const splitReconciles = mealsSubtotal <= 0 || Math.abs(splitTotal - mealsSubtotal) < 0.01;
+    const splitReconciles = mealsSubtotal <= 0 || sameCents(splitTotal, mealsSubtotal);
     if (!splitReconciles) {
       // The pax ARE stored even when the rates are not, so a room on a single plan still prints
       // the row every other room prints — same words, same "N pax × N nights", and the per-head
@@ -400,7 +408,7 @@ function mealLinesByNight(
     ];
     const othersUnpriced = c.mealPlanOthersCount > 0 && alaCarte.length === 0;
     const splitFits =
-      !othersUnpriced && split.length > 0 && split.every((x) => x.rate > 0) && Math.abs(split.reduce((t, x) => t + x.amount, 0) - amount) < 0.01;
+      !othersUnpriced && split.length > 0 && split.every((x) => x.rate > 0) && sameCents(split.reduce((t, x) => t + x.amount, 0), amount);
     if (splitFits) {
       for (const x of split) out.push({ dates: g.dates, ...x, muted: false });
       continue;

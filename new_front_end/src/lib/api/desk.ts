@@ -263,7 +263,18 @@ export type BillView = {
   forGuest: string | null;
   customerTpn: string | null;
   stays: BillStay[];
-  payments: Array<{ id: string; stayNo: number; at: string; method: string | null; direction: "IN" | "OUT"; amount: number; note: string | null }>;
+  /** MOVE (2026-11-10): money paid for the trip moved from one stay's bill to another's, as one row. */
+  payments: Array<{
+    id: string;
+    stayNo: number;
+    at: string;
+    method: string | null;
+    direction: "IN" | "OUT" | "MOVE";
+    amount: number;
+    note: string | null;
+    fromStayNo?: number;
+    toStayNo?: number;
+  }>;
   figures: BillFigures;
 };
 

@@ -152,7 +152,7 @@ export function BillPage({ entryId }: { entryId: string }) {
           ) : null}
         </dl>
 
-        <table className="table bill-lines">
+        <table className="table bill-lines zebra">
           <thead>
             <tr>
               <th style={{ width: 120 }}>Date</th>
@@ -174,20 +174,33 @@ export function BillPage({ entryId }: { entryId: string }) {
           <section className="bill-pays" aria-label="Payments">
             <h4>Payments</h4>
             {b.payments.length ? (
-              <table className="table compact">
+              <table className="table compact zebra">
                 <tbody>
-                  {b.payments.map((p) => (
-                    <tr key={p.id} className="static">
-                      <td className="nowrap">{fmtDateTime(p.at, tz)}</td>
-                      <td>
-                        {p.direction === "OUT" ? "Refund" : "Received"}
-                        {p.method ? ` · ${METHOD_WORD[p.method] ?? p.method.toLowerCase()}` : ""}
-                        {many ? ` · Stay ${p.stayNo}` : ""}
-                        {p.note ? <span className="sub">{p.note}</span> : null}
-                      </td>
-                      <td className="num money nowrap">{p.direction === "OUT" ? money(-p.amount, cur) : money(p.amount, cur)}</td>
-                    </tr>
-                  ))}
+                  {b.payments.map((p, pi) =>
+                    p.direction === "MOVE" ? (
+                      // Money moved between the stays (2026-11-10): not paid by the guest, not given
+                      // back — so it carries no sign and counts in neither total.
+                      <tr key={p.id} className={`static bill-move${pi % 2 ? " alt" : ""}`} data-bill-move>
+                        <td className="nowrap">{fmtDateTime(p.at, tz)}</td>
+                        <td>
+                          Moved from Stay {p.fromStayNo} to Stay {p.toStayNo}
+                          {p.note ? <span className="sub">{p.note}</span> : null}
+                        </td>
+                        <td className="num money nowrap muted">{money(p.amount, cur)}</td>
+                      </tr>
+                    ) : (
+                      <tr key={p.id} className={`static${pi % 2 ? " alt" : ""}`}>
+                        <td className="nowrap">{fmtDateTime(p.at, tz)}</td>
+                        <td>
+                          {p.direction === "OUT" ? "Refund" : "Received"}
+                          {p.method ? ` · ${METHOD_WORD[p.method] ?? p.method.toLowerCase()}` : ""}
+                          {many ? ` · Stay ${p.stayNo}` : ""}
+                          {p.note ? <span className="sub">{p.note}</span> : null}
+                        </td>
+                        <td className="num money nowrap">{p.direction === "OUT" ? money(-p.amount, cur) : money(p.amount, cur)}</td>
+                      </tr>
+                    ),
+                  )}
                 </tbody>
               </table>
             ) : (
@@ -255,8 +268,9 @@ function StayRows({ s, many, cur, onOpen }: { s: BillStay; many: boolean; cur: s
         </tr>
       ) : null}
       {s.rows.length
-        ? s.rows.map((r) => (
-            <tr key={r.key} className="static">
+        ? s.rows.map((r, i) => (
+            // Every other line grey, afresh under each stay (2026-11-10, operator).
+            <tr key={r.key} className={`static${i % 2 ? " alt" : ""}`}>
               <td className="nowrap">{r.when}</td>
               <td>
                 {r.description}

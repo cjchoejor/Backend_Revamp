@@ -159,6 +159,7 @@ function TripCancelForm({
                   <td className="money" style={{ textAlign: "right" }}>
                     {money(s.charge)}
                     {!p.waived && s.chargeBeforeCap > s.chargeCapped ? <span className="sub">the terms ask {money(s.chargeBeforeCap)}</span> : null}
+                    {s.rule ? <span className="sub" data-cancel-rule>{s.rule}</span> : null}
                   </td>
                   <td className="money" style={{ textAlign: "right" }}>
                     {money(s.refund)}

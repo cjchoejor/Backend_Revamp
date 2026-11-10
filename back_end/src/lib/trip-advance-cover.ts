@@ -62,15 +62,7 @@ export function planTripCancelMoves(rows: TripAdvanceRow[], cancelledId: string,
     to.paidForTrip = to.paidForTrip.add(amount);
   };
 
-  let want = shareTripAdvanceCover(rows).get(cancelledId) ?? toDecimal(0);
-  for (const r of others) {
-    if (want.lte(0)) break;
-    const t = Prisma.Decimal.min(want, Prisma.Decimal.min(maxZeroSub(r.held, r.asked), r.paidForTrip));
-    if (t.gt(0)) {
-      shift(r, x, t);
-      want = want.sub(t);
-    }
-  }
+  bringCoverHome(rows, x, others, shift);
 
   const covered = shareTripAdvanceCover(others);
   let giveable = Prisma.Decimal.min(maxZeroSub(x.held, charge), x.paidForTrip);
@@ -95,11 +87,57 @@ export function planTripCancelMoves(rows: TripAdvanceRow[], cancelledId: string,
   return moves;
 }
 
-/** Several stays cancelled one after another, in the order given: what each would hold, and the moves. */
-export function simulateTripCancels(rows: TripAdvanceRow[], picks: Array<{ entryId: string; charge: Prisma.Decimal }>) {
+/** Step 1 of the one pot: a stay covered by another's trip money brings its covered share home. */
+function bringCoverHome(
+  rows: TripAdvanceRow[],
+  x: TripAdvanceRow,
+  others: TripAdvanceRow[],
+  shift: (from: TripAdvanceRow, to: TripAdvanceRow, amount: Prisma.Decimal) => void,
+) {
+  let want = shareTripAdvanceCover(rows).get(x.entryId) ?? toDecimal(0);
+  for (const r of others) {
+    if (want.lte(0)) break;
+    const t = Prisma.Decimal.min(want, Prisma.Decimal.min(maxZeroSub(r.held, r.asked), r.paidForTrip));
+    if (t.gt(0)) {
+      shift(r, x, t);
+      want = want.sub(t);
+    }
+  }
+}
+
+/**
+ * What a stay holds as its advance paid once its covered share of the trip's money has come home
+ * (2026-11-10) — the base a cancellation line "a percent of the advance paid" is taken of, so a stay
+ * covered by the trip's payment pays its share as if it had paid its own advance. Null when the stay
+ * is not among the rows.
+ */
+export function heldAfterTripCover(rows: TripAdvanceRow[], cancelledId: string): Prisma.Decimal | null {
+  const found = rows.find((r) => r.entryId === cancelledId);
+  if (!found) return null;
+  if (rows.length < 2) return found.held;
+  const x = { ...found };
+  const others = rows.filter((r) => r.entryId !== cancelledId).map((r) => ({ ...r }));
+  bringCoverHome(rows, x, others, (from, to, amount) => {
+    from.held = from.held.sub(amount);
+    from.paidForTrip = from.paidForTrip.sub(amount);
+    to.held = to.held.add(amount);
+    to.paidForTrip = to.paidForTrip.add(amount);
+  });
+  return x.held;
+}
+
+/**
+ * A stay's charge, or how to work it out from what it holds once its cover is home — null when the
+ * stay is not among the rows (no money was paid for the trip), the caller then takes its own money.
+ */
+export type TripCancelCharge = Prisma.Decimal | ((paid: Prisma.Decimal | null) => Prisma.Decimal);
+
+/** Several stays cancelled one after another, in the order given: what each would hold, the moves, and its charge. */
+export function simulateTripCancels(rows: TripAdvanceRow[], picks: Array<{ entryId: string; charge: TripCancelCharge }>) {
   let live = rows.map((r) => ({ ...r }));
   return picks.map((p) => {
-    const moves = planTripCancelMoves(live, p.entryId, p.charge);
+    const charge = typeof p.charge === "function" ? p.charge(heldAfterTripCover(live, p.entryId)) : p.charge;
+    const moves = planTripCancelMoves(live, p.entryId, charge);
     for (const m of moves) {
       const from = live.find((r) => r.entryId === m.from)!;
       const to = live.find((r) => r.entryId === m.to)!;
@@ -110,6 +148,6 @@ export function simulateTripCancels(rows: TripAdvanceRow[], picks: Array<{ entry
     }
     const x = live.find((r) => r.entryId === p.entryId);
     live = live.filter((r) => r.entryId !== p.entryId);
-    return { entryId: p.entryId, moves, held: x?.held ?? null };
+    return { entryId: p.entryId, moves, held: x?.held ?? null, charge };
   });
 }

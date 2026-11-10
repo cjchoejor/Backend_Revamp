@@ -1,3 +1,4 @@
+import { cancellationChargeOn } from "../../lib/cancellation-policy.js";
 import { closeWaitingRefundsOnCancellationTx } from "../../lib/refund-money.js";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { guestDisplayName } from "../../lib/guest-display-name.js";
@@ -21,7 +22,8 @@ import { releaseRoomOnNoShowTerminalTx } from "../../lib/release-room-on-no-show
 import { releaseEntryRoomsToFree } from "../../lib/room-claim-state.js";
 import { resolveBillingModelForNewLine } from "../../lib/billing-model-defaults.js";
 import { frozenCompositionByRoom, splitFrozenRow } from "../../lib/frozen-room-composition.js";
-import { nightsBetweenUtc, utcDateOnly } from "../../lib/stay-dates.js";
+import { hotelLocalTimeOn, nightsBetweenUtc, utcDateOnly } from "../../lib/stay-dates.js";
+import { resolveStandardCheckInTime } from "../../lib/expected-arrival.js";
 import { dispatchStageEmailBestEffort } from "../infrastructure/stage-email-helpers.js";
 import { renderNoShowNoticeEmail } from "../infrastructure/stage-email-templates.js";
 import { resolveInvoiceRecipient } from "../domain/s9-service.js";
@@ -219,13 +221,16 @@ export async function computeNoShowFigures(db: Db, entryId: string): Promise<NoS
       // Nothing more specific configured — the same-day cancellation tier (spec: a no-show is
       // aligned with it). Judged at the check-in instant.
       const tiers = await requireActiveConfigValue<CancellationPolicyTiersConfig>(db as PrismaClient, "cancellation.policyTiers").catch(() => null);
-      const { rawPenalty } = computeS5PreArrivalCancellationPenalty({
-        now: entry.reservation.frozenCheckInDate,
+      const checkInAt = hotelLocalTimeOn(entry.reservation.frozenCheckInDate, await resolveStandardCheckInTime(db as PrismaClient));
+      const { rule } = computeS5PreArrivalCancellationPenalty({
+        now: checkInAt,
         checkInDate: entry.reservation.frozenCheckInDate,
+        checkInAt,
         frozenCancellationTerms: terms,
         policyTiers: tiers,
       });
-      penaltyBeforeCap = Number(toDecimal(rawPenalty).toFixed(2));
+      // A share of the advance paid is taken of the money received (2026-11-10).
+      penaltyBeforeCap = cancellationChargeOn(rule, advanceReceived);
       basis = penaltyBeforeCap > 0 ? "SAME_DAY_CANCELLATION" : "NONE";
       explanation = penaltyBeforeCap > 0 ? "the same-day cancellation charge" : "no no-show charge is configured";
     }

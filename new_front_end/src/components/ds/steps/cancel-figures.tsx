@@ -24,9 +24,22 @@ export function CancellationFiguresLine({ entryId, waive = false, currency }: { 
   if (!q.data) return <p className="meta warn-ink">The charge could not be read — the cancellation still applies the disclosed terms.</p>;
   const f = q.data;
   const cur = currency ?? "Nu.";
+  // Which line of the policy decides the charge, in the policy's words (2026-11-10).
+  const rule = f.rule
+    ? f.rule.from === "BOOKING_TERMS"
+      ? `By the policy this booking keeps: ${f.rule.label}`
+      : f.rule.from === "SETTING"
+        ? `By the hotel's policy: ${f.rule.label}`
+        : f.rule.label
+    : null;
   return (
     <div className="notice inert" style={{ margin: "8px 0" }}>
       <span className="sm">
+        {rule ? (
+          <span style={{ display: "block", marginBottom: 4 }} data-cancel-rule>
+            {rule}
+          </span>
+        ) : null}
         Received <b className="money">{money(f.advanceReceived, cur)}</b> · charged{" "}
         <b className="money">{money(f.charge, cur)}</b>
         {f.waived && f.chargeCapped > 0 ? ` (the ${money(f.chargeCapped, cur)} charge waived)` : ""}
