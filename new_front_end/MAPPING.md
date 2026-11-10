@@ -136,3 +136,7 @@ Also for Stage 1 (2026-10-10), outside the desk router: `POST /api/entries/:id/a
 - **Billing › Refunds** (FOM+): `GET /refunds`, `POST /refunds/:id/record|keep` — moved from Notifications. Notifications in the blue palette; Today's explanations behind "?".
 - **The bell**: red count while overdue, amber otherwise; a card names what is new (`bellReady` waits for the first reads).
 - **Billing / Bookings**: `POST /desk/bookings/money` → `trip` (the stays' sums). Billing lists one row per trip with the trip's total, billed, paid, balance and paid ahead; Bookings shows "trip Nu …" under each stay's total and in the preview.
+- **Billing › a trip row** lists each stay's dates (`StayDates compact`). **Billing › Closed bills**: settled, paid in full, written off or nothing billed; money for the page on screen; `refunded` / `writtenOff` from `POST /desk/bookings/money`.
+- **Bookings**: "Stay 1 of 2" (`StayOf`) from `GET /desk/bookings` → `stay`.
+- **Post a charge**: no chit number; the room first, then the date.
+- **Charges › The price**: the stay with what was added at the top once something was added; the band solid blue.
