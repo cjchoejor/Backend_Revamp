@@ -269,11 +269,9 @@ export function AppShell({ children }: { children: ReactNode }) {
             {user.open ? (
               <div className="drawer open panel-from-bar" role="dialog" aria-label="Signed in">
                 <h4>{name}</h4>
-                <p className="meta">{role} · terminal {session.terminalId}</p>
+                <p className="meta">{role}</p>
+                {/* Switch user was Sign out by another name (2026-11-10, operator): one Sign out, a real button. */}
                 <div className="stack" style={{ marginTop: 12 }}>
-                  <button type="button" className="btn btn-secondary" onClick={() => void signOut()}>
-                    Switch user
-                  </button>
                   <button type="button" className="btn btn-secondary" onClick={() => void lock()}>
                     <Icon name="lock" />
                     Lock the terminal
@@ -283,7 +281,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                       The console
                     </button>
                   ) : null}
-                  <button type="button" className="btn btn-quiet" onClick={() => void signOut()}>
+                  <button type="button" className="btn btn-secondary" onClick={() => void signOut()}>
                     Sign out
                   </button>
                 </div>

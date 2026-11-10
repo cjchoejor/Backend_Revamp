@@ -33,7 +33,7 @@ const checkOutOf = (r: DeskListRow) => r.actualCheckOutDate ?? r.checkOutDate;
 const billHref = (id: string) => `/billing/${encodeURIComponent(id)}`;
 
 type TabId = "open" | "owed" | "accounts";
-type SortKey = "checkout" | "checkin" | "name" | "account" | "balance" | "billed" | "paid";
+type SortKey = "checkout" | "checkin" | "name" | "account" | "balance" | "billed" | "paid" | "total";
 type Sort = { id: string; key: SortKey; dir: 1 | -1; label: string };
 
 const s = (key: SortKey, dir: 1 | -1, label: string): Sort => ({ id: `${key}-${dir === 1 ? "asc" : "desc"}`, key, dir, label });
@@ -45,6 +45,8 @@ const OPEN_SORTS: Sort[] = [
   s("checkin", -1, "Check-in · latest first"),
   s("balance", -1, "Balance · highest first"),
   s("balance", 1, "Balance · lowest first"),
+  s("total", -1, "Total amount · highest first"),
+  s("total", 1, "Total amount · lowest first"),
   s("billed", -1, "Billed so far · highest first"),
   s("billed", 1, "Billed so far · lowest first"),
   s("paid", -1, "Paid · highest first"),
@@ -100,6 +102,8 @@ function sortRows(rows: DeskListRow[], sort: Sort, moneyOf: (id: string) => Desk
         return f?.outstandingBalance;
       case "billed":
         return f?.billedSoFar;
+      case "total":
+        return moneyOf(r.id)?.totalAmount;
       case "paid":
         return f?.paymentsReceived;
     }
@@ -268,7 +272,20 @@ function BillingScreen() {
                     <th>Booking</th>
                     <th>Stay</th>
                     <th>Status</th>
-                    <th className="num">Billed so far</th>
+                    <th className="num">
+                      Total amount
+                      <Help label="About the total amount">
+                        What the whole stay comes to: the stay as priced, with everything added to it during the stay. It is known before
+                        the nights are billed.
+                      </Help>
+                    </th>
+                    <th className="num">
+                      Billed so far
+                      <Help label="About billed so far">
+                        What is on the bill now: each night is added by the night audit once it has passed, and each charge as it is posted.
+                        A guest still in the hotel has nights to come, so this is less than the total.
+                      </Help>
+                    </th>
                     <th className="num">Paid</th>
                     <th className="num">Balance</th>
                   </tr>
@@ -286,6 +303,7 @@ function BillingScreen() {
                         <td>
                           <RowStanding row={r} hotelToday={today} balance={x?.folio?.outstandingBalance ?? null} />
                         </td>
+                        <Cell v={x?.totalAmount} cur={x?.currency} />
                         <Cell v={x?.folio?.billedSoFar} cur={x?.currency} />
                         <Cell v={x?.folio?.paymentsReceived} cur={x?.currency} />
                         <Cell v={x?.folio?.outstandingBalance} cur={x?.currency} />
