@@ -50,6 +50,8 @@ type PerRoomRow = {
   roomRate?: unknown;
   extraBedSubtotal?: unknown;
   mealsSubtotal?: unknown;
+  accommodationNet?: unknown;
+  mealsNet?: unknown;
 };
 
 function perRoomRows(terms: Prisma.JsonValue | null | undefined): PerRoomRow[] {
@@ -78,6 +80,12 @@ export function frozenCompositionByRoom(
       const roomId = typeof r.roomId === "string" ? r.roomId : null;
       if (!roomId || out.has(roomId)) continue;
       const nights = Math.max(1, Math.round(n(r.nights) || 1));
+      // A quotation priced from 2026-11-10 stores the split itself — the room line and the meal
+      // line after any discount, exactly as its tax was worked out — so it is read as stored.
+      if (r.accommodationNet != null && r.mealsNet != null && r.subtotal != null) {
+        out.set(roomId, { nights, subtotal: n(r.subtotal), accommodation: n(r.accommodationNet), meals: n(r.mealsNet) });
+        continue;
+      }
       const mealsRaw = n(r.mealsSubtotal);
       // `roomSubtotal` is the modern field; older rows carry only `roomRate` (per night).
       const room = r.roomSubtotal != null ? n(r.roomSubtotal) : n(r.roomRate) * nights;

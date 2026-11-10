@@ -11,7 +11,8 @@
  */
 
 import { Prisma } from "@prisma/client";
-import { toDecimal } from "./money.js";
+import { round2, toDecimal } from "./money.js";
+import { roomStayTax, type PostingTaxRule } from "./stay-posting.js";
 
 const ZERO = new Prisma.Decimal(0);
 
@@ -338,6 +339,10 @@ export function computeRoomComposition(
    *  describes the room and consumers should print the subtotal as "varies by night". */
   extraBedsVaryByNight: boolean;
   subtotal: Prisma.Decimal;
+  /** The room and its extra beds, NET — what the night audit posts on the room's own line. */
+  accommodationNet: Prisma.Decimal;
+  /** The meals, NET, to the chhertum — what the night audit posts on the meal-plan line. */
+  mealsNet: Prisma.Decimal;
   serviceCharge: Prisma.Decimal;
   gst: Prisma.Decimal;
   total: Prisma.Decimal;
@@ -367,6 +372,8 @@ export function computeRoomComposition(
       extraBedSubtotal: ZERO,
       extraBedsVaryByNight: false,
       subtotal: ZERO,
+      accommodationNet: ZERO,
+      mealsNet: ZERO,
       serviceCharge: ZERO,
       gst: ZERO,
       total: ZERO,
@@ -400,6 +407,14 @@ export function computeRoomComposition(
    *
    * With no children in the room, or with the policy disabled, this is `rate × pax` to the cent —
    * so nothing changes for the bookings that were already correct.
+   *
+   * **A child's meal is priced to the chhertum (2026-11-10, operator: "fix it").** 70% of a
+   * Nu 277.06 breakfast is Nu 193.942, and carried unrounded it left a quotation's total Nu 0.01
+   * from what its rooms' own figures — the ones the night audit bills — add up to (seen on the
+   * hotel's server: QUO-20261104-0002 and -0003, Nu 9,459.99 against rooms of Nu 9,460.00). A
+   * band priced at a share of the rate is now that share rounded to Nu 0.01, per cover; a band at
+   * the full rate keeps the rate as it is, so a plan's price shared across its meals still adds
+   * back to the plan's price.
    */
   const bandedMealCost = (rate: Prisma.Decimal, pax: number): Prisma.Decimal => {
     const pricing = ctx.childMealPricing;
@@ -412,11 +427,12 @@ export function computeRoomComposition(
     const kidCovers = Math.min(pax - adultCovers, kids);
     const youngCovers = Math.min(pax - adultCovers - kidCovers, young);
     const unbanded = pax - adultCovers - kidCovers - youngCovers;
-    const weight =
-      (adultCovers + unbanded) * pricing.adultPercent +
-      kidCovers * pricing.childPercent +
-      youngCovers * pricing.youngChildPercent;
-    return toDecimal(rate).mul(weight).div(100);
+    const r = toDecimal(rate);
+    const cover = (percent: number) => (percent === 100 ? r : round2(r.mul(percent).div(100)));
+    return cover(pricing.adultPercent)
+      .mul(adultCovers + unbanded)
+      .add(cover(pricing.childPercent).mul(kidCovers))
+      .add(cover(pricing.youngChildPercent).mul(youngCovers));
   };
 
   /** One night's meals for a given distribution, split by meal — the split is what the
@@ -536,17 +552,23 @@ export function computeRoomComposition(
     }
   }
 
-  const subtotal = perNightRoom.mul(nights).add(extraBedSubtotal).add(mealsSubtotal);
-  const serviceCharge =
-    input.serviceChargeApplies !== false && ctx.serviceChargeRate > 0
-      ? subtotal.mul(ctx.serviceChargeRate)
-      : ZERO;
-  // GST is compounded on (subtotal + serviceCharge) per the hotel-wide rule (see
-  // compute-stay-charges.ts + the invoice PDF renderer).
-  const gst =
-    input.gstApplies !== false && ctx.gstRate > 0
-      ? subtotal.add(serviceCharge).mul(ctx.gstRate)
-      : ZERO;
+  // The room is billed in whole chhertum, and its tax is what the night audit will post
+  // (2026-11-10): each night's room line and meal-plan line taxed on their own, every figure
+  // rounded to Nu 0.01 as the folio rounds every line (`stay-posting.ts`). The room's total is
+  // net + those taxes, and a quotation's totals are the plain sum of its rooms', so the quotation
+  // can never read a chhertum away from what the stay is billed. GST is compounded on (net +
+  // service charge), the hotel-wide rule. The net is whole chhertum whenever the rates are;
+  // rounding the meals covers a plan price shared across its meals in proportions that do not
+  // divide evenly.
+  const mealsNet = round2(mealsSubtotal);
+  const subtotal = round2(perNightRoom.mul(nights).add(extraBedSubtotal)).add(mealsNet);
+  const accommodationNet = subtotal.sub(mealsNet);
+  const { serviceCharge, gst } = roomStayTax({
+    accommodation: accommodationNet,
+    meals: mealsNet,
+    nights,
+    rule: taxRuleFor(input, ctx),
+  });
   const total = subtotal.add(serviceCharge).add(gst);
 
   return {
@@ -571,9 +593,24 @@ export function computeRoomComposition(
     extraBedSubtotal,
     extraBedsVaryByNight,
     subtotal,
+    accommodationNet,
+    mealsNet,
     serviceCharge,
     gst,
     total,
+  };
+}
+
+/** Whether a room's lines carry service charge and GST, and at what rates. */
+export function taxRuleFor(
+  input: Pick<RoomCompositionInput, "serviceChargeApplies" | "gstApplies" | "isFoc"> | undefined,
+  ctx: Pick<RoomCompositionRateContext, "serviceChargeRate" | "gstRate"> | undefined,
+): PostingTaxRule {
+  return {
+    serviceChargeApplies: input?.isFoc !== true && input?.serviceChargeApplies !== false,
+    gstApplies: input?.isFoc !== true && input?.gstApplies !== false,
+    serviceChargeRate: ctx?.serviceChargeRate ?? 0,
+    gstRate: ctx?.gstRate ?? 0,
   };
 }
 
@@ -688,24 +725,36 @@ export function applyBookingDiscountToTotals(
   const net = totals.subtotal;
   if (net.lte(ZERO)) return null;
 
-  const asked = wantsAmount ? new Prisma.Decimal(amt as number) : net.mul(new Prisma.Decimal(pct as number)).div(100);
+  // Whole chhertum throughout (2026-11-10): the money off is rounded to Nu 0.01, each room's
+  // net after it is too, and any chhertum the rooms' rounding leaves over goes on the room with
+  // the largest net, so the rooms add up to exactly the net less the money off.
+  const asked = round2(wantsAmount ? new Prisma.Decimal(amt as number) : net.mul(new Prisma.Decimal(pct as number)).div(100));
   // A discount bigger than the net value settles the bill; it never turns into a refund.
   const off = asked.gt(net) ? net : asked;
   const ratio = net.sub(off).div(net);
+  const nets = totals.perRoom.map((r) => round2(r.subtotal.mul(ratio)));
+  const left = net.sub(off).sub(nets.reduce<Prisma.Decimal>((acc, x) => acc.add(x), ZERO));
+  if (!left.isZero()) {
+    let largest = 0;
+    totals.perRoom.forEach((r, i) => {
+      if (r.subtotal.gt(totals.perRoom[largest].subtotal)) largest = i;
+    });
+    nets[largest] = nets[largest].add(left);
+  }
 
   const perRoom = totals.perRoom.map((r, i) => {
-    const ctx = rooms[i]?.ctx;
-    const flags = rooms[i]?.input;
-    const subtotal = r.subtotal.mul(ratio);
-    const serviceCharge =
-      flags?.serviceChargeApplies !== false && (ctx?.serviceChargeRate ?? 0) > 0
-        ? subtotal.mul(ctx!.serviceChargeRate)
-        : ZERO;
-    const gst =
-      flags?.gstApplies !== false && (ctx?.gstRate ?? 0) > 0
-        ? subtotal.add(serviceCharge).mul(ctx!.gstRate)
-        : ZERO;
-    return { ...r, subtotal, serviceCharge, gst, total: subtotal.add(serviceCharge).add(gst) };
+    const subtotal = nets[i];
+    // The meals keep their share of the room's net; the room line takes the rest. Stored on the
+    // quotation, so the night audit splits the frozen room exactly the same way.
+    const mealsNet = r.subtotal.gt(0) ? round2(r.mealsNet.mul(subtotal).div(r.subtotal)) : ZERO;
+    const accommodationNet = subtotal.sub(mealsNet);
+    const { serviceCharge, gst } = roomStayTax({
+      accommodation: accommodationNet,
+      meals: mealsNet,
+      nights: r.nights,
+      rule: taxRuleFor(rooms[i]?.input, rooms[i]?.ctx),
+    });
+    return { ...r, subtotal, accommodationNet, mealsNet, serviceCharge, gst, total: subtotal.add(serviceCharge).add(gst) };
   });
   const sum = (pick: (r: (typeof perRoom)[number]) => Prisma.Decimal) =>
     perRoom.reduce<Prisma.Decimal>((acc, r) => acc.add(pick(r)), ZERO);

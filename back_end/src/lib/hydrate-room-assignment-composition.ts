@@ -1,6 +1,7 @@
 import { resolveCompositionBasis } from "./party-seating.js";
 import type { Prisma, PrismaClient } from "@prisma/client";
-import { computeRoomComposition, nightKeys, type RoomCompositionInput, type RoomCompositionRateContext } from "./room-composition.js";
+import { computeRoomComposition, nightKeys, taxRuleFor, type RoomCompositionInput, type RoomCompositionRateContext } from "./room-composition.js";
+import { roomStayTax } from "./stay-posting.js";
 import { round2, toDecimal } from "./money.js";
 import { resolveOperativeQuotation } from "./operative-quotation.js";
 import { resolveChargeRates } from "../services/infrastructure/compute-stay-charges.js";
@@ -262,15 +263,16 @@ export async function hydrateRoomAssignmentComposition(
     const ratio = bookingDiscountRatio(terms);
     if (ratio && !ratio.eq(1)) {
       frozenSubtotal = round2(computed.subtotal.mul(ratio));
-      const sc =
-        compositionInput.serviceChargeApplies !== false && serviceChargeRate > 0
-          ? frozenSubtotal.mul(serviceChargeRate)
-          : toDecimal(0);
-      const gst =
-        compositionInput.gstApplies !== false && gstRate > 0
-          ? frozenSubtotal.add(sc).mul(gstRate)
-          : toDecimal(0);
-      frozenTotal = round2(frozenSubtotal.add(sc).add(gst));
+      // Taxed as the night audit will post it, room line and meal line night by night, as
+      // `applyBookingDiscountToTotals` does (2026-11-10).
+      const meals = round2(computed.mealsNet.mul(ratio));
+      const tax = roomStayTax({
+        accommodation: frozenSubtotal.sub(meals),
+        meals,
+        nights: computed.nights,
+        rule: taxRuleFor(compositionInput, ctx),
+      });
+      frozenTotal = frozenSubtotal.add(tax.serviceCharge).add(tax.gst);
     }
   }
 
