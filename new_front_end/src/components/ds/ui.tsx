@@ -45,6 +45,19 @@ export function GuestLink({ row, step, href }: { row: DeskListRow; step?: number
   );
 }
 
+/**
+ * "Stay 1 of 2" beside a name when the booking is one stay of a trip (2026-11-10, operator: "show
+ * stay 1 of 2 or something like that, prominently but subtle"). The server numbers the stays.
+ */
+export function StayOf({ row }: { row: DeskListRow }) {
+  if (!row.stay) return null;
+  return (
+    <span className="stay-of" title={`Stay ${row.stay.no} of ${row.stay.of} on enquiry ${row.inquiryId}`}>
+      Stay {row.stay.no} of {row.stay.of}
+    </span>
+  );
+}
+
 /** "ENT-… · KNG RESERVATION" — the grey line under a name. */
 export function bookingMeta(row: DeskListRow, withRef = true): string {
   const booker = bookerOfRow(row);

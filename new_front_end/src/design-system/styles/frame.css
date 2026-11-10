@@ -513,15 +513,19 @@
 /* Charges & payments: the stay total is the figure the card exists for (UIappeal). */
 /* The stay's total is what the price is read for (2026-11-05, operator: "can this be prominent, maybe
    light blue highlight"): a light blue band, the figure large in the blue's own ink. */
-.ds .bigfig, .ds .pickbill .pb-total { display: flex; align-items: baseline; gap: 4px 12px; flex-wrap: wrap; flex-basis: 100%; padding: 10px 14px; border: 1px solid var(--accent-line); border-radius: 6px; background: var(--accent-soft); color: var(--accent-ink); }
+/* …and since 2026-11-10 (operator: "can the whole box be like blue highlight so it looks prominent")
+   the band is solid blue, the figures white. */
+.ds .bigfig, .ds .pickbill .pb-total { display: flex; align-items: baseline; gap: 4px 12px; flex-wrap: wrap; flex-basis: 100%; padding: 12px 16px; border: 1px solid var(--accent); border-radius: 6px; background: var(--accent); color: #fff; }
+.ds .bigfig .meta, .ds .pickbill .pb-total .meta { color: rgba(255, 255, 255, 0.86); }
+.ds .bigfig .bf-parts { flex-basis: 100%; font-size: var(--t-sm); }
 .ds .bigfig { margin-bottom: var(--s2); }
 /* The price at Stay: what was added during the stay, then the stay with it (2026-11-10). */
 .ds .added-stay { margin-top: var(--s4); padding-top: var(--s3); border-top: 1px solid var(--line); }
 .ds .added-stay .added-h { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; font-size: var(--t-base); }
 .ds .added-stay .added-sum { display: flex; justify-content: flex-end; gap: 12px; padding: 8px 4px; font-size: var(--t-base); border-top: 1px solid var(--line-2); margin-bottom: var(--s2); }
 .ds .added-stay .added-sum b { min-width: 110px; text-align: right; }
-.ds .bigfig > .meta:first-child, .ds .pickbill .pb-total-word { font-size: var(--t-sm); font-weight: 600; color: var(--accent-ink); }
-.ds .bigfig b, .ds .pickbill .pb-total .money { font-size: 26px; font-weight: 800; color: var(--accent-ink); font-variant-numeric: tabular-nums; }
+.ds .bigfig > .meta:first-child, .ds .pickbill .pb-total-word { font-size: var(--t-sm); font-weight: 600; color: #fff; }
+.ds .bigfig b, .ds .pickbill .pb-total .money { font-size: 26px; font-weight: 800; color: #fff; font-variant-numeric: tabular-nums; }
 
 /* The price as the quotation sets it out (2026-10-27): each room a row, its extra beds and meals
    indented beneath it, then the foot — net, service charge, GST, any discount, the total. In the
@@ -2506,3 +2510,15 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .bell-new-text .sm { color: var(--ink-3); font-size: 12px; }
 .ds .bell-new-x { border: 0; background: transparent; font-size: 18px; line-height: 1; color: var(--ink-3); cursor: pointer; padding: 0 2px; }
 .ds .bell-new-x:hover { color: var(--ink); }
+
+/* A trip's stays, each on a line (Billing, 2026-11-10), and "Stay 1 of 2" beside a name (Bookings). */
+.ds .staydates.compact { gap: 4px; }
+.ds .staydates.compact .sd .lbl { padding: 1px 5px; font-size: 10px; }
+.ds .staydates.compact .sd b { padding: 1px 6px; font-size: 12.5px; }
+.ds .trip-stays { display: grid; gap: 3px; }
+.ds .trip-stay { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.ds .trip-stay .ts-n { min-width: 44px; font-size: 11.5px; font-weight: 700; color: var(--ink-2); }
+.ds .stay-of { display: inline-flex; align-items: center; margin-left: 6px; padding: 0 6px; height: 18px; border: 1px solid var(--accent-line); border-radius: 3px; background: var(--accent-soft); color: var(--accent-ink); font-size: 11px; font-weight: 700; white-space: nowrap; vertical-align: 1px; }
+
+/* Post a charge: the room is picked first (2026-11-10). */
+.ds .input.pick-first { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); color: var(--ink-3); }

@@ -10,9 +10,9 @@
 import { StayDates } from "@/components/ds/stay-dates";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { EmptyState, Input, NotAvailableYet, Tabs } from "@/design-system";
+import { Chip, EmptyState, Input, NotAvailableYet, Tabs } from "@/design-system";
 import { Help } from "@/components/ds/help";
-import { GuestLink, LoadFailed, LoadingBlock, OpenRow, RowStanding, bookingMeta } from "@/components/ds/ui";
+import { GuestLink, LoadFailed, LoadingBlock, MoreRow, OpenRow, RowStanding, bookingMeta, usePaged } from "@/components/ds/ui";
 import { useDeskBookings, useDeskMoney } from "@/hooks/use-desk-data";
 import { useHotelDay } from "@/hooks/use-hotel-day";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
@@ -35,9 +35,25 @@ function Cell({ v, cur }: { v: number | null | undefined; cur?: string | null })
 function figuresOf(x: DeskMoneyRow | undefined) {
   if (!x) return null;
   if (x.trip) {
-    return { total: x.trip.totalAmount, billed: x.trip.billedSoFar, paid: x.trip.paymentsReceived, balance: x.trip.outstandingBalance, paidAhead: x.trip.paidAhead };
+    return {
+      total: x.trip.totalAmount,
+      billed: x.trip.billedSoFar,
+      paid: x.trip.paymentsReceived,
+      balance: x.trip.outstandingBalance,
+      paidAhead: x.trip.paidAhead,
+      refunded: x.trip.refunded,
+      writtenOff: x.trip.writtenOff,
+    };
   }
-  return { total: x.totalAmount, billed: x.folio?.billedSoFar ?? null, paid: x.folio?.paymentsReceived ?? null, balance: x.folio?.outstandingBalance ?? null, paidAhead: 0 };
+  return {
+    total: x.totalAmount,
+    billed: x.folio?.billedSoFar ?? null,
+    paid: x.folio?.paymentsReceived ?? null,
+    balance: x.folio?.outstandingBalance ?? null,
+    paidAhead: 0,
+    refunded: x.folio?.refunded ?? 0,
+    writtenOff: x.folio?.writtenOff ?? 0,
+  };
 }
 
 /** One row per enquiry: a trip's stays are one bill. The first row of each enquiry stands for it. */
@@ -58,7 +74,7 @@ function accountOf(r: DeskListRow): string {
 const checkOutOf = (r: DeskListRow) => r.actualCheckOutDate ?? r.checkOutDate;
 const billHref = (id: string) => `/billing/${encodeURIComponent(id)}`;
 
-type TabId = "open" | "owed" | "accounts" | "refunds";
+type TabId = "open" | "owed" | "closed" | "accounts" | "refunds";
 type SortKey = "checkout" | "checkin" | "name" | "account" | "balance" | "billed" | "paid" | "total";
 type Sort = { id: string; key: SortKey; dir: 1 | -1; label: string };
 
@@ -91,6 +107,27 @@ const OWED_SORTS: Sort[] = [
   s("name", 1, "Guest · A to Z"),
   s("name", -1, "Guest · Z to A"),
 ];
+
+// Closed bills sort by the stay and the guest only: their money is read for the page on screen.
+const CLOSED_SORTS: Sort[] = [
+  s("checkout", -1, "Check-out · latest first"),
+  s("checkout", 1, "Check-out · oldest first"),
+  s("name", 1, "Guest · A to Z"),
+  s("name", -1, "Guest · Z to A"),
+  s("account", 1, "Who pays · A to Z"),
+];
+
+/** A bill with nothing left on it: settled, written off, or its balance at zero. */
+const CLOSED_STATES = new Set(["SETTLED", "CLOSED", "WRITTEN_OFF"]);
+
+/** How a closed bill ended, in the desk's words. A bill that never carried anything says so. */
+function closedWord(r: DeskListRow, f: ReturnType<typeof figuresOf>): { word: string; tone: "success" | "warning" | "quiet" } {
+  const st = r.folio?.state;
+  if (st === "WRITTEN_OFF") return { word: "Written off", tone: "warning" };
+  if (f && !f.billed && !f.paid) return { word: r.status === "CANCELLED" ? "Cancelled · nothing billed" : "Nothing billed", tone: "quiet" };
+  if (r.status === "CANCELLED") return { word: "Cancelled · settled", tone: "quiet" };
+  return { word: st === "SETTLED" || st === "CLOSED" ? "Settled" : "Paid in full", tone: "success" };
+}
 
 function haystack(r: DeskListRow): string {
   return [
@@ -159,7 +196,8 @@ function BillingScreen() {
   const clock = useHotelClock(60_000);
   const refundsWaiting = useRefunds("waiting").data?.items.length ?? 0;
   const tabParam = params.get("tab");
-  const tab: TabId = tabParam === "owed" || tabParam === "accounts" ? tabParam : tabParam === "refunds" && fom ? "refunds" : "open";
+  const tab: TabId =
+    tabParam === "owed" || tabParam === "closed" || tabParam === "accounts" ? tabParam : tabParam === "refunds" && fom ? "refunds" : "open";
   const q = params.get("q") ?? "";
   const go = (next: Partial<Record<"tab" | "q" | "sort" | "refund", string>>) => {
     const p = new URLSearchParams(params.toString());
@@ -238,10 +276,31 @@ function BillingScreen() {
     [after, m.byId],
   );
 
-  const sorts = tab === "owed" ? OWED_SORTS : OPEN_SORTS;
+  // Closed bills (2026-11-10, operator: "where are the bills that are closed shown"): a bill with
+  // nothing left on it — settled, written off, or at zero by the server's balance — and no stay of
+  // its trip still open or owing. Newest check-out first.
+  const closedAll = useMemo(() => {
+    const busy = new Set([...open, ...owing].map((r) => r.inquiryId));
+    const zeroAfter = new Set(
+      after
+        .filter((r) => {
+          const b = figuresOf(m.byId.get(r.id))?.balance;
+          return b != null && Math.abs(b) < 0.005;
+        })
+        .map((r) => r.id),
+    );
+    return onePerTrip(
+      rows
+        .filter((r) => r.folio && !busy.has(r.inquiryId) && (zeroAfter.has(r.id) || CLOSED_STATES.has(r.folio.state)))
+        .sort((a, b) => (checkOutOf(b) ?? "").localeCompare(checkOutOf(a) ?? "")),
+      busy,
+    );
+  }, [rows, open, owing, after, m.byId]);
+
+  const sorts = tab === "owed" ? OWED_SORTS : tab === "closed" ? CLOSED_SORTS : OPEN_SORTS;
   const chosen = sorts.find((x) => x.id === params.get("sort")) ?? null;
   const sort = chosen ?? sorts[0]!;
-  const all = tab === "owed" ? owing : open;
+  const all = tab === "owed" ? owing : tab === "closed" ? closedAll : open;
   const needle = q.toLowerCase();
   const shown = useMemo(
     () => sortRows(needle ? all.filter((r) => haystack(r).includes(needle)) : all, sort, (id) => m.byId.get(id)),
@@ -249,6 +308,9 @@ function BillingScreen() {
     [all, needle, sort.id, m.byId],
   );
   const groupByAccount = sort.key === "account";
+  // A closed bill's money is read for the page on screen only — there can be hundreds.
+  const closedPage = usePaged(tab === "closed" ? shown : [], 25);
+  const mc = useDeskMoney(useMemo(() => closedPage.shown.map((r) => r.id), [closedPage.shown]));
   const nothingMatches = (
     <EmptyState title="No bill matches">Nothing here for &ldquo;{q}&rdquo;. Try a name, booking number, room or agency.</EmptyState>
   );
@@ -266,6 +328,7 @@ function BillingScreen() {
           items={[
             { id: "open", label: <>Open bills<span className="tab-n">{open.length}</span></> },
             { id: "owed", label: <>Still owed after the stay<span className={`tab-n${owing.length ? " warn" : ""}`}>{owing.length}</span></> },
+            { id: "closed", label: <>Closed bills<span className="tab-n">{closedAll.length}</span></> },
             { id: "accounts", label: "Outstanding by account" },
             ...(fom ? [{ id: "refunds", label: <>Refunds<span className={`tab-n${refundsWaiting ? " warn" : ""}`}>{refundsWaiting}</span></> }] : []),
           ]}
@@ -291,7 +354,13 @@ function BillingScreen() {
             <span className="meta" data-bill-count>
               {needle ? `${shown.length} of ${all.length}` : plural(all.length, "bill")}
               <Help label="What is on this list">
-                {tab === "open" ? <p>Guests in-house or checking out. The tax invoice is issued at check-out.</p> : <p>Money still owed once the stay is over, by who pays. Each row is that booking&apos;s own balance.</p>}
+                {tab === "open" ? (
+                  <p>Guests in-house or checking out. The tax invoice is issued at check-out.</p>
+                ) : tab === "closed" ? (
+                  <p>Bills with nothing left on them: settled, paid in full after the stay, or written off by the GM. A trip shows once.</p>
+                ) : (
+                  <p>Money still owed once the stay is over, by who pays. Each row is that booking&apos;s own balance.</p>
+                )}
               </Help>
             </span>
             <label className="sortwrap">
@@ -360,6 +429,53 @@ function BillingScreen() {
             ) : (
               <EmptyState title="No open bills">Nobody is in-house.</EmptyState>
             )
+          ) : tab === "closed" ? (
+            shown.length ? (
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Booking</th>
+                    <th>Stay</th>
+                    <th>Who pays</th>
+                    <th>How it closed</th>
+                    <th className="num">Billed</th>
+                    <th className="num">Paid</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {closedPage.shown.map((r) => {
+                    const x = mc.byId.get(r.id) ?? get(r.id);
+                    const f = figuresOf(x);
+                    const how = closedWord(r, f);
+                    return (
+                      <OpenRow key={r.id} entryId={r.id} href={billHref(r.id)}>
+                        <td>
+                          <GuestLink row={r} href={billHref(r.id)} />
+                          <div className="meta">{x?.trip ? `Trip · ${x.trip.stays.length} stays · ${r.inquiryId}` : r.id}</div>
+                        </td>
+                        <td className="nowrap"><TripDates row={r} x={x} /></td>
+                        <td>{accountOf(r)}</td>
+                        <td>
+                          <Chip tone={how.tone}>{how.word}</Chip>
+                        </td>
+                        <Cell v={f?.billed} cur={x?.currency} />
+                        <td className={`num ${f?.paid != null ? "money" : "dash"}`}>
+                          {f?.paid != null ? money(f.paid, x?.currency ?? "BTN") : "—"}
+                          {/* Where money paid went (2026-11-10): a cancelled stay's advance given back, the GM's write-off. */}
+                          {f && f.refunded > 0 ? <div className="meta">{money(f.refunded, x?.currency ?? "BTN")} refunded</div> : null}
+                          {f && f.writtenOff > 0 ? <div className="meta">{money(f.writtenOff, x?.currency ?? "BTN")} written off</div> : null}
+                        </td>
+                      </OpenRow>
+                    );
+                  })}
+                  <MoreRow more={closedPage.more} colSpan={6} onMore={closedPage.showMore} step={25} />
+                </tbody>
+              </table>
+            ) : needle ? (
+              nothingMatches
+            ) : (
+              <EmptyState title="No closed bills yet" />
+            )
           ) : shown.length ? (
             <table className="table">
               <thead>
@@ -401,15 +517,22 @@ function BillingScreen() {
   );
 }
 
-/** The stay's dates — a trip's from its first check-in to its last check-out, with how many stays. */
+/**
+ * The stay's dates. A trip's stays each on a line of their own (2026-11-10, operator: "it doesn't show
+ * which stays are there"): Stay 1 and its check-in and check-out, then Stay 2, kept small.
+ */
 function TripDates({ row, x }: { row: DeskListRow; x: DeskMoneyRow | undefined }) {
   const stays = x?.trip?.stays ?? null;
   if (!stays) return <StayDates stacked checkIn={row.checkInDate} checkOut={checkOutOf(row)} />;
   return (
-    <>
-      <StayDates stacked checkIn={stays[0]?.checkIn ?? row.checkInDate} checkOut={stays[stays.length - 1]?.checkOut ?? checkOutOf(row)} />
-      <div className="meta" style={{ marginTop: 2 }}>{stays.length} stays</div>
-    </>
+    <div className="trip-stays">
+      {stays.map((s) => (
+        <div key={s.entryId} className="trip-stay">
+          <span className="ts-n">Stay {s.stayNo}</span>
+          <StayDates compact checkIn={s.checkIn} checkOut={s.checkOut} />
+        </div>
+      ))}
+    </div>
   );
 }
 

@@ -11,7 +11,7 @@
 import { useRouter, useSearchParams } from "next/navigation";
 import { Fragment, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Chip, EmptyState, Icon, Input } from "@/design-system";
-import { GuestLink, LoadFailed, LoadingBlock, OpenRow, RowStanding, StandingChip, StepChip, bookingHref } from "@/components/ds/ui";
+import { GuestLink, LoadFailed, LoadingBlock, OpenRow, RowStanding, StandingChip, StayOf, StepChip, bookingHref } from "@/components/ds/ui";
 import { useDeskBookings, useDeskMoney, useDeskTimers } from "@/hooks/use-desk-data";
 import { RowTimer, RowTimerList } from "@/components/ds/row-timer";
 import { useHotelDay } from "@/hooks/use-hotel-day";
@@ -522,6 +522,7 @@ function BookingsScreen() {
                     <OpenRow entryId={r.id} locked={r.status !== "ACTIVE"} selected={previewId === r.id} onSelect={() => setPreviewId((p) => (p === r.id ? null : r.id))}>
                       <td>
                         <GuestLink row={r} />
+                        <StayOf row={r} />
                         {r.guestProfile?.vipTier ? (
                           <>
                             {" "}
