@@ -515,20 +515,20 @@ function TripDates({ row, x }: { row: DeskListRow; x: DeskMoneyRow | undefined }
   const stays = x?.trip?.stays ?? null;
   if (!stays) {
     return (
-      <div className="bill-stays">
-        <div className="bill-stay">
+      <div className="bl-stays">
+        <div className="bl-stay">
           {/* Room where a trip says "Stay 1", so every row's dates line up down the column. */}
-          <span className="bs-n" aria-hidden />
+          <span className="bl-stayno" aria-hidden />
           <StayDates compact checkIn={row.checkInDate} checkOut={checkOutOf(row)} />
         </div>
       </div>
     );
   }
   return (
-    <div className="bill-stays trip">
+    <div className="bl-stays trip">
       {stays.map((s) => (
-        <div key={s.entryId} className="bill-stay">
-          <span className="bs-n">Stay {s.stayNo}</span>
+        <div key={s.entryId} className="bl-stay">
+          <span className="bl-stayno">Stay {s.stayNo}</span>
           <StayDates compact checkIn={s.checkIn} checkOut={s.checkOut} />
         </div>
       ))}

@@ -1304,6 +1304,7 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 @media (max-width: 860px) { .ds .bill-foot { grid-template-columns: 1fr; } .ds .bill-parties { grid-template-columns: 1fr; } }
 @media print {
   .ds .topbar, .ds .bill-bar, .ds .bill-open { display: none !important; }
+  .ds .table.zebra tbody tr.alt td { background: none !important; }
   .ds .bill-page { max-width: none; margin: 0; padding: 0; }
   .ds .bill-sheet { border: 0; padding: 0; }
   .ds .bill-stay td { background: none; }
@@ -2515,10 +2516,11 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .staydates.compact { gap: 4px; }
 .ds .staydates.compact .sd .lbl { padding: 1px 5px; font-size: 10px; }
 .ds .staydates.compact .sd b { padding: 1px 6px; font-size: 12.5px; }
-.ds .bill-stays { display: grid; gap: 4px; justify-items: start; }
-.ds .bill-stay { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
-.ds .bill-stay .staydates { flex-wrap: nowrap; }
-.ds .bill-stay .bs-n { width: 40px; font-size: 11.5px; font-weight: 700; color: var(--ink-2); }
+/* Named apart from the bill page's .bill-stay row (2026-11-10): sharing it made that row a flex box. */
+.ds .bl-stays { display: grid; gap: 4px; justify-items: start; }
+.ds .bl-stay { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.ds .bl-stay .staydates { flex-wrap: nowrap; }
+.ds .bl-stay .bl-stayno { width: 40px; font-size: 11.5px; font-weight: 700; color: var(--ink-2); }
 .ds .stay-of { display: inline-flex; align-items: center; margin-left: 6px; padding: 0 6px; height: 18px; border: 1px solid var(--accent-line); border-radius: 3px; background: var(--accent-soft); color: var(--accent-ink); font-size: 11px; font-weight: 700; white-space: nowrap; vertical-align: 1px; }
 
 /* Post a charge: the room is picked first (2026-11-10). */
