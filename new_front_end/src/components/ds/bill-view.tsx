@@ -176,18 +176,31 @@ export function BillPage({ entryId }: { entryId: string }) {
             {b.payments.length ? (
               <table className="table compact">
                 <tbody>
-                  {b.payments.map((p) => (
-                    <tr key={p.id} className="static">
-                      <td className="nowrap">{fmtDateTime(p.at, tz)}</td>
-                      <td>
-                        {p.direction === "OUT" ? "Refund" : "Received"}
-                        {p.method ? ` · ${METHOD_WORD[p.method] ?? p.method.toLowerCase()}` : ""}
-                        {many ? ` · Stay ${p.stayNo}` : ""}
-                        {p.note ? <span className="sub">{p.note}</span> : null}
-                      </td>
-                      <td className="num money nowrap">{p.direction === "OUT" ? money(-p.amount, cur) : money(p.amount, cur)}</td>
-                    </tr>
-                  ))}
+                  {b.payments.map((p) =>
+                    p.direction === "MOVE" ? (
+                      // Money moved between the stays (2026-11-10): not paid by the guest, not given
+                      // back — so it carries no sign and counts in neither total.
+                      <tr key={p.id} className="static bill-move" data-bill-move>
+                        <td className="nowrap">{fmtDateTime(p.at, tz)}</td>
+                        <td>
+                          Moved from Stay {p.fromStayNo} to Stay {p.toStayNo}
+                          {p.note ? <span className="sub">{p.note}</span> : null}
+                        </td>
+                        <td className="num money nowrap muted">{money(p.amount, cur)}</td>
+                      </tr>
+                    ) : (
+                      <tr key={p.id} className="static">
+                        <td className="nowrap">{fmtDateTime(p.at, tz)}</td>
+                        <td>
+                          {p.direction === "OUT" ? "Refund" : "Received"}
+                          {p.method ? ` · ${METHOD_WORD[p.method] ?? p.method.toLowerCase()}` : ""}
+                          {many ? ` · Stay ${p.stayNo}` : ""}
+                          {p.note ? <span className="sub">{p.note}</span> : null}
+                        </td>
+                        <td className="num money nowrap">{p.direction === "OUT" ? money(-p.amount, cur) : money(p.amount, cur)}</td>
+                      </tr>
+                    ),
+                  )}
                 </tbody>
               </table>
             ) : (
