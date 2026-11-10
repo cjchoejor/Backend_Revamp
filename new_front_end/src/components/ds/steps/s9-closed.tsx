@@ -439,11 +439,6 @@ function AfterTheStay({ entry, tz, openPane }: { entry: EntryDetail; tz: string;
               onClick: gm && folio.state === "OUTSTANDING" ? () => setWriting(true) : undefined,
               reason: !gm ? "only the GM can write off" : folio.state !== "OUTSTANDING" ? "nothing is owed to write off" : undefined,
             },
-            {
-              key: "credit",
-              label: "Credit note",
-              reason: "not possible once the bill is settled",
-            },
           ]}
         />
         {byPart ? (
