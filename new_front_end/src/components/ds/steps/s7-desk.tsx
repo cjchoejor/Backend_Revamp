@@ -13,10 +13,8 @@ import { useSession } from "@/hooks/use-session";
 import {
   acceptHandoff,
   amendEntry,
-  buildH4FulfilmentEvidence,
   createH4Handoff,
   finalizeDeficientCondition,
-  fulfilHandoff,
   getHandoffChecklist,
   openDispute,
   progressDispute,
@@ -42,14 +40,6 @@ const HANDOFF_WORD: Record<string, string> = {
   CANCELLED: "withdrawn",
   ESCALATED: "not accepted in time — passed to the FOM",
 };
-
-const FINAL_FAULT = [
-  ["NOT_APPLICABLE", "No fault to report"],
-  ["RESOLVED", "Fault fixed"],
-  ["UNRESOLVED_AT_CHECKOUT", "Fault still open at check-out"],
-  ["RECORDED", "Fault recorded"],
-] as const;
-type FinalFault = (typeof FINAL_FAULT)[number][0];
 
 const DISPUTE_WORD: Record<string, string> = { OPEN: "open", IN_PROGRESS: "being reviewed", RESOLVED: "resolved" };
 
@@ -176,15 +166,17 @@ export function HandoffsCard({ entry, tz }: { entry: EntryDetail; tz: string }) 
   const housekeeping = handoffs.filter((h) => h.handoffType === "H2" && h.state !== "CANCELLED");
   const kitchen = handoffs.filter((h) => h.handoffType === "H3" && h.state !== "CANCELLED");
   const before = handoffs.find((h) => h.handoffType === "H4") ?? null;
+  // Accepted when told, or late once nobody accepted it in time. It is finished at Check-out, from
+  // the room inspection (2026-11-10) — no fault question and no Mark it done here.
+  const waiting = !!before && !before.rejectedAt && (before.state === "CREATED" || before.state === "ESCALATED");
 
   const checklist = useQuery({
     queryKey: ["handoff-checklist", "H4"],
     queryFn: () => getHandoffChecklist(session!, "H4"),
-    enabled: !!session && before?.state === "CREATED",
+    enabled: !!session && waiting,
   });
   const items = (checklist.data?.items ?? []) as HandoffChecklistItem[];
   const [ticks, setTicks] = useState<Record<string, boolean>>({});
-  const [fault, setFault] = useState<FinalFault>("NOT_APPLICABLE");
   const allTicked = items.filter((i) => i.mandatory).every((i) => ticks[i.code] === true);
 
   const start = useMutation({
@@ -206,14 +198,6 @@ export function HandoffsCard({ entry, tz }: { entry: EntryDetail; tz: string }) 
       refresh();
     },
     onError: (e) => toastRefusal(e, "The handoff could not be accepted"),
-  });
-  const done = useMutation({
-    mutationFn: () => fulfilHandoff(session!, before!.id, buildH4FulfilmentEvidence(fault)),
-    onSuccess: () => {
-      toast.success("Before check-out · done");
-      refresh();
-    },
-    onError: (e) => toastRefusal(e, "The handoff could not be marked done"),
   });
 
   return (
@@ -238,8 +222,13 @@ export function HandoffsCard({ entry, tz }: { entry: EntryDetail; tz: string }) 
             Tell the departments the guest is leaving
           </Button>
         </div>
-      ) : before.state === "CREATED" ? (
+      ) : waiting ? (
         <div className="bind provisional" style={{ marginTop: 10, display: "grid", gap: 6 }}>
+          {before.state === "ESCALATED" ? (
+            <span className="sm warn-ink" style={{ fontWeight: 600 }}>
+              Nobody accepted it in time. Accept it on the departments&rsquo; word — the move to Check-out waits for it.
+            </span>
+          ) : null}
           {items.length === 0 ? (
             <span className="meta">{checklist.isLoading ? "Reading the checklist…" : "No checklist for this handoff."}</span>
           ) : (
@@ -265,23 +254,10 @@ export function HandoffsCard({ entry, tz }: { entry: EntryDetail; tz: string }) 
             </Button>
           </div>
         </div>
-      ) : before.state === "ACCEPTED" || before.state === "ESCALATED" ? (
-        <div className="bind provisional" style={{ marginTop: 10, display: "grid", gap: 8 }}>
-          {before.state === "ESCALATED" ? (
-            <span className="sm warn-ink" style={{ fontWeight: 600 }}>
-              Nobody accepted it in time. Mark it done once the room is checked — the move to Check-out waits for it.
-            </span>
-          ) : null}
-          <div className="field">
-            <label>Any fault in the room, at the end</label>
-            <Choice options={FINAL_FAULT} value={fault} onChange={setFault} />
-          </div>
-          <div className="row-acts">
-            <Button compact state={done.isPending ? "working" : "default"} workingLabel="Saving…" onClick={() => done.mutate()}>
-              Mark it done
-            </Button>
-          </div>
-        </div>
+      ) : before.state === "ACCEPTED" ? (
+        <p className="sm" style={{ marginTop: 8 }}>
+          It is finished at Check-out, from the room inspection.
+        </p>
       ) : null}
     </StepCard>
   );

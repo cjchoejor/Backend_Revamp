@@ -678,7 +678,7 @@ export function s7Readiness(entry: EntryDetail, hotelToday: string | null = null
         !h4Init && leavingToday
           ? "Pre-checkout handoff — raised at the move (leaving today)"
           : h4?.state === "ESCALATED" && !h4.rejectedAt
-            ? "Pre-checkout handoff — not accepted in time, mark it done"
+            ? "Pre-checkout handoff — not accepted in time, accept it"
             : "Pre-checkout handoff started",
       met: h4Init || leavingToday,
     },
