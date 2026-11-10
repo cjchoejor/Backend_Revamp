@@ -1,6 +1,7 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { PaymentDirection } from "@prisma/client";
-import { maxZeroSub, round2, toDecimal } from "./money.js";
+import { round2, toDecimal } from "./money.js";
+import { syncAfterStayHandoffTx } from "./after-stay-handoff.js";
 
 type Tx = Prisma.TransactionClient | PrismaClient;
 
@@ -20,6 +21,23 @@ type Tx = Prisma.TransactionClient | PrismaClient;
  * comes from **folio lines** and **payments** (plus write-offs above). Adding invoice amounts here would double-count.
  */
 export async function recomputeFolioOutstandingBalance(tx: Tx, folioId: string): Promise<void> {
+  const net = await folioNetBalance(tx, folioId);
+  const next = round2(net.isNegative() ? toDecimal(0) : net);
+
+  await tx.folio.update({
+    where: { id: folioId },
+    data: { outstandingBalance: next },
+  });
+  // The after-stay handoff follows the money (2026-11-10): closed by the system once the bill comes
+  // to exactly zero, opened again if a late charge leaves money owed. See `after-stay-handoff.ts`.
+  await syncAfterStayHandoffTx(tx, folioId, net);
+}
+
+/**
+ * The bill's balance before it is floored at zero: lines − money in + money out − write-offs.
+ * Above zero the guest owes; below zero the guest paid over and the hotel owes them.
+ */
+export async function folioNetBalance(tx: Tx, folioId: string) {
   const [lineAgg, inAgg, outAgg, writeOffAgg] = await Promise.all([
     tx.folioLine.aggregate({
       where: { folioId },
@@ -47,12 +65,8 @@ export async function recomputeFolioOutstandingBalance(tx: Tx, folioId: string):
   const outTotal = toDecimal(outAgg._sum.amount);
   const writeOffTotal = toDecimal(writeOffAgg._sum.writtenOffAmount);
   const gross = lineTotal.sub(inTotal).add(outTotal);
-  const next = round2(maxZeroSub(gross, writeOffTotal));
-
-  await tx.folio.update({
-    where: { id: folioId },
-    data: { outstandingBalance: next },
-  });
+  // The stored balance is this floored at zero (`recomputeFolioOutstandingBalance`).
+  return round2(gross.sub(writeOffTotal));
 }
 
 /**

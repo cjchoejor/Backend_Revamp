@@ -90,13 +90,22 @@ export function enforceHandoffFulfilStateH5(input: { handoffType: HandoffType; s
  * is owed would close the follow-up on money nobody collected. `owed` is the folio's balance when
  * above zero, null otherwise — a write-off brings it to zero.
  */
-export function enforceH5NothingLeftToSettle(input: { handoffType: HandoffType; owed: string | null }) {
+export function enforceH5NothingLeftToSettle(input: { handoffType: HandoffType; owed: string | null; owedToGuest?: string | null }) {
   if (input.handoffType !== HandoffType.H5) return;
-  if (input.owed == null) return;
-  throw new PolicyGateBlockedError(
-    "H5_MONEY_STILL_OWED",
-    `Nu ${input.owed} is still owed on this booking — record the payment, or the GM writes it off, then mark the after-stay handoff done.`,
-  );
+  if (input.owed != null) {
+    throw new PolicyGateBlockedError(
+      "H5_MONEY_STILL_OWED",
+      `Nu ${input.owed} is still owed on this booking — record the payment, or the GM writes it off. The after-stay handoff closes itself then.`,
+    );
+  }
+  // The guest paid more than the bill (2026-11-10): the hotel owes them money back, so something
+  // is still left to settle until the refund is recorded.
+  if (input.owedToGuest != null) {
+    throw new PolicyGateBlockedError(
+      "H5_REFUND_STILL_OWED",
+      `The guest paid Nu ${input.owedToGuest} more than the bill — record the refund. The after-stay handoff closes itself then.`,
+    );
+  }
 }
 
 export function enforceHandoffRejectTypeSupported(input: { handoffType: HandoffType }) {
