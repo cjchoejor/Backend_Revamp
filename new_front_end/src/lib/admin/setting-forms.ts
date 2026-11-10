@@ -567,46 +567,107 @@ const COMMERCIAL = page("/admin/commercial", "Limits", [
   },
 ]);
 
+/** The cancellation policy's lines, checked as the server checks them (2026-11-10). */
+function cancellationLinesProblem(v: unknown): string | null {
+  const lines = (Array.isArray(asRec(v).tiers) ? (asRec(v).tiers as unknown[]) : []).map((t) => asRec(t));
+  const days = (d: number) => `${d} day${d === 1 ? "" : "s"}`;
+  const what = (t: Rec) => (t.basis === "AMOUNT" ? `Nu ${Number(t.value ?? 0)}` : `${Number(t.value ?? 0)}% of the advance paid`);
+  for (const t of lines) {
+    if (t.minDaysBeforeArrival == null || t.value == null || !t.basis) return "Every line needs its days, what is kept and how much.";
+    if (t.basis === "PERCENT_OF_PAID" && Number(t.value) > 100) return "A share of the advance paid is at most 100%.";
+  }
+  const sorted = [...lines].sort((a, b) => Number(b.minDaysBeforeArrival) - Number(a.minDaysBeforeArrival));
+  for (let i = 1; i < sorted.length; i++) {
+    if (Number(sorted[i]!.minDaysBeforeArrival) === Number(sorted[i - 1]!.minDaysBeforeArrival)) {
+      return `Two lines start at ${days(Number(sorted[i]!.minDaysBeforeArrival))} before arrival — keep one.`;
+    }
+  }
+  for (let i = 0; i < sorted.length; i++) {
+    for (let j = i + 1; j < sorted.length; j++) {
+      const farther = sorted[i]!;
+      const nearer = sorted[j]!;
+      const fv = Number(farther.value), nv = Number(nearer.value);
+      if ((nearer.basis === farther.basis || nv === 0 || fv === 0) && nv < fv) {
+        return `A cancellation nearer the arrival can't cost less than one further out: from ${days(Number(nearer.minDaysBeforeArrival))} before arrival it is ${what(nearer)}, from ${days(Number(farther.minDaysBeforeArrival))} ${what(farther)}.`;
+      }
+    }
+  }
+  return null;
+}
+
 const CANCELLATION = page("/admin/cancellation-policies", "Cancellation policies", [
   {
     key: "cancellation.policyTiers",
-    title: "What the desk charges on a cancellation",
-    about: "The charge when a booking is cancelled, or a guest walks out after check-in, unless the booking was given a charge of its own. It is never more than the money received. A no-show pays this too when no no-show charge is set.",
+    title: "The hotel's cancellation policy",
+    about:
+      "What a guest pays when a booking is cancelled before arrival. Each booking keeps the policy it was set up under, and its voucher prints it, so a change here reaches the bookings set up from then on. It is never more than the money received. A walk-out after check-in pays the walk-out charge below; a no-show pays its own charge, or this one when none is set.",
     form: {
       kind: "group",
       label: "",
       lines: true,
       fields: [
         {
-          kind: "group",
-          label: "",
-          fields: [
-            { kind: "money", key: "sameDayPenaltyAmount", label: "The usual charge" },
-            { kind: "money", key: "preArrivalPenaltyAmount", label: "Instead, before arrival", optional: true, blank: "The usual charge", help: "Leave it empty to charge the usual amount." },
-            { kind: "money", key: "postCheckInEarlyDeparturePenaltyAmount", label: "A walk-out after check-in", optional: true, blank: "The usual charge", help: "Leave it empty, or at 0, to charge the usual amount." },
-          ],
+          kind: "toggle",
+          key: "enabled",
+          label: "Cancellation charges",
+          on: "Charged by this policy",
+          off: "Off — cancelling before arrival is free",
+          help: "Off, a booking set up while it is off is refunded in full if cancelled before arrival, and its voucher says so. A booking set up while it was on keeps its policy; the GM can waive its charge when it is cancelled.",
         },
         {
           kind: "rows",
           key: "tiers",
-          label: "Or by time left before check-in",
-          help: "Any line here takes the place of the charges above for a cancellation before arrival. Time left is counted to the hotel's check-in time on the arrival day. The line with the most time that still fits decides; a cancellation later than every line — on the arrival day, or after the check-in time — pays the last line. A cancellation nearer the arrival can't cost less than one further out.",
+          label: "By days before arrival",
+          help: "Days are counted on the hotel's calendar to the arrival day: 45 means the cancellation is made 45 days or more before it. The line with the most days that still fits decides; a cancellation later than every line pays the last line. A share of the advance paid is taken of the money the booking holds. A cancellation nearer the arrival can't cost less than one further out.",
           addLabel: "Add a line",
           word: ["line", "lines"],
-          emptyText: "No lines: the charges above apply.",
-          blank: { minHoursBeforeCheckIn: 24, penaltyAmount: 0 },
+          emptyText: "No lines: the usual charge below applies.",
+          blank: { minDaysBeforeArrival: 30, basis: "PERCENT_OF_PAID", value: 50 },
           columns: [
-            { kind: "duration", key: "minHoursBeforeCheckIn", label: "With at least this long left", base: "hours", units: ["days", "hours"] },
-            { kind: "money", key: "penaltyAmount", label: "They pay" },
+            { kind: "number", key: "minDaysBeforeArrival", label: "From this many days before arrival", unit: "days or more", min: 0, whole: true },
+            {
+              kind: "select",
+              key: "basis",
+              label: "Kept",
+              options: [
+                { value: "PERCENT_OF_PAID", label: "A share of the advance paid" },
+                { value: "AMOUNT", label: "A set amount" },
+              ],
+            },
+            {
+              kind: "number",
+              key: "value",
+              label: "How much",
+              unit: "% of the advance paid",
+              min: 0,
+              max: 100,
+              perRow: (row) => (row.basis === "AMOUNT" ? { kind: "money", key: "value", label: "How much" } : undefined),
+            },
+          ],
+        },
+        {
+          kind: "group",
+          label: "",
+          fields: [
+            { kind: "money", key: "sameDayPenaltyAmount", label: "The usual charge", help: "Charged when there are no lines above." },
+            { kind: "money", key: "preArrivalPenaltyAmount", label: "Instead, before arrival", optional: true, blank: "The usual charge", help: "Leave it empty to charge the usual amount. Used only when there are no lines above." },
+            { kind: "money", key: "postCheckInEarlyDeparturePenaltyAmount", label: "A walk-out after check-in", optional: true, blank: "The usual charge", help: "Leave it empty, or at 0, to charge the usual amount." },
           ],
         },
       ],
     },
+    check: cancellationLinesProblem,
     summary: (v) => {
       const o = asRec(v);
       if (o.sameDayPenaltyAmount == null) return "Not set";
-      const lines = Array.isArray(o.tiers) && o.tiers.length ? ` · ${o.tiers.length} lines by time left` : "";
-      return `Nu ${o.sameDayPenaltyAmount}${o.postCheckInEarlyDeparturePenaltyAmount ? ` · walk-out Nu ${o.postCheckInEarlyDeparturePenaltyAmount}` : ""}${lines}`;
+      if (o.enabled === false) return "Off · cancelling before arrival is free";
+      const lines = (Array.isArray(o.tiers) ? (o.tiers as unknown[]) : []).map((t) => asRec(t));
+      const walk = o.postCheckInEarlyDeparturePenaltyAmount ? ` · walk-out Nu ${o.postCheckInEarlyDeparturePenaltyAmount}` : "";
+      if (!lines.length) return `Nu ${o.sameDayPenaltyAmount} before arrival${walk}`;
+      const words = lines
+        .map((t) => `${t.minDaysBeforeArrival ?? "?"} days+ ${t.basis === "AMOUNT" ? `Nu ${t.value}` : `${t.value}%`}`)
+        .join(" · ");
+      return `${words}${walk}`;
     },
   },
 ]);
