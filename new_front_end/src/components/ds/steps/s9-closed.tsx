@@ -601,42 +601,97 @@ function AfterStayHandoff({ entry, live, tz }: { entry: EntryDetail; live: boole
   const refresh = useRefreshEntry(entry.id);
   const h5 = (entry.handoffs ?? []).find((h) => h.handoffType === "H5") ?? null;
   const h5Open = !!h5 && (h5.state === "CREATED" || h5.state === "ASSIGNED" || h5.state === "ACCEPTED");
-  const [basis, setBasis] = useState("Nothing left to settle");
+  // Done only when no bill is left to settle (2026-11-10, operator: "it shouldn't even be clickable
+  // if the bill is still outstanding, or wasn't written off by higher authority"). The backend
+  // refuses it too; the figure is the server's.
+  const pay = usePaymentStatus(entry.id, { enabled: h5Open });
+  const fin = deriveFinancials(entry, { paymentStatus: pay.data });
+  const writtenOff = entry.folio?.state === "WRITTEN_OFF";
+  const owed = !writtenOff && fin.outstanding != null && fin.outstanding > 0 ? fin.outstanding : null;
+  const known = fin.outstanding != null || writtenOff;
+  const [basis, setBasis] = useState("Paid in full");
+  const [asking, setAsking] = useState(false);
   const finish = useFinishWhenDone("handoff");
   const done = useMutation({
     mutationFn: () => fulfilHandoff(session!, h5!.id, { resolutionBasis: basis.trim() }),
     onSuccess: () => {
-      toast.success("The after-stay handoff is done");
+      toast.success("The after-stay handoff is done — nothing is left to settle");
+      setAsking(false);
       refresh();
       finish();
     },
     onError: (e) => toastRefusal(e, "The after-stay handoff could not be completed"),
   });
+  useEffect(() => {
+    if (writtenOff) setBasis((b) => (b === "Paid in full" ? "Written off by the GM" : b));
+  }, [writtenOff]);
   if (!h5) return null;
   const word = HANDOFF_STATE_WORD[h5.state] ?? words(h5.state);
   const state = word ? word[0].toUpperCase() + word.slice(1) : word;
+  const cur = entry.folio?.lines?.[0]?.currency ?? fin.currency;
   return (
     <StepCard
       flow="handoff"
       title="The after-stay handoff"
-      meta="It is done once the money is all in, written off, or there is nothing left to do."
-      status={h5Open ? <span className="warn-ink">{state} — say what settled it and mark it done</span> : <span className="ok-ink">{state}</span>}
+      meta="Raised at check-out because money was still owed. It is done once every bill is settled: paid in full, or written off by the GM."
+      status={
+        !h5Open ? (
+          <span className="ok-ink">{state}</span>
+        ) : owed != null ? (
+          <span className="stop-ink" role="status">
+            <b>{money(owed, cur)} still owed</b> — record the payment, or the GM writes it off, before this can be marked done
+          </span>
+        ) : (
+          <span className="warn-ink">{state} — nothing is owed now; mark it done</span>
+        )
+      }
       summary={`${state}${h5.fulfilledAt ? ` · ${fmtStamp(h5.fulfilledAt, tz)}` : ""}`}
     >
       {h5Open && live ? (
         <Live>
           <div className="row-acts">
-            <input className="input" style={{ flex: 1, minWidth: 220 }} value={basis} aria-label="What settled it" onChange={(e) => setBasis(e.target.value)} />
             <Button
-              className={basis.trim() ? "go" : undefined}
-              state={done.isPending ? "working" : basis.trim() ? "default" : "inert"}
-              title={basis.trim() ? undefined : "say what settled it"}
-              workingLabel="Recording…"
-              onClick={() => done.mutate()}
+              className={owed == null && known ? "go" : undefined}
+              state={owed != null || !known ? "inert" : "default"}
+              title={owed != null ? `${money(owed, cur)} is still owed` : !known ? "reading the bill" : undefined}
+              onClick={() => setAsking(true)}
             >
               Mark it done
             </Button>
           </div>
+          <DsDialog
+            open={asking}
+            onClose={() => setAsking(false)}
+            busy={done.isPending}
+            closeX
+            title="Mark the after-stay handoff done?"
+            caseLines={[entry.id, writtenOff ? "The bill was written off by the GM" : "Nothing is owed on this booking now"]}
+            footer={
+              <>
+                <Button kind="quiet" state={done.isPending ? "inert" : "default"} onClick={() => setAsking(false)}>
+                  Not now
+                </Button>
+                <Button
+                  className="go"
+                  state={done.isPending ? "working" : basis.trim() ? "default" : "inert"}
+                  title={basis.trim() ? undefined : "say what settled it"}
+                  workingLabel="Recording…"
+                  onClick={() => done.mutate()}
+                >
+                  Yes, nothing is left to settle
+                </Button>
+              </>
+            }
+          >
+            <p style={{ marginTop: 0 }}>
+              This says <b>no bill is left to settle</b> on this booking: everything is paid, or written off by the GM. The follow-up on
+              this booking&rsquo;s money ends.
+            </p>
+            <div className="field">
+              <label>What settled it</label>
+              <input className="input" value={basis} maxLength={500} onChange={(e) => setBasis(e.target.value)} />
+            </div>
+          </DsDialog>
         </Live>
       ) : null}
     </StepCard>

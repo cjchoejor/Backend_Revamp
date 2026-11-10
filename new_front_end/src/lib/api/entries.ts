@@ -655,7 +655,24 @@ export type EntryBillingSummary = {
     unassignedCharges: { charges: number; lineCount: number; base: number; serviceCharge: number; gst: number } | null;
     /** Whole-ledger tax split — base + serviceCharge + gst = billedSoFar. Null when no lines. */
     chargeBreakdown: { base: number; serviceCharge: number; gst: number; total: number } | null;
+    /** What was added to the stay as priced — food, services, extras, fees, corrections — each with its own tax (2026-11-10). */
+    addedDuringStay?: {
+      total: number;
+      lines: Array<{
+        id: string;
+        date: string;
+        description: string;
+        lineType: string;
+        place: string | null;
+        net: number;
+        serviceCharge: number;
+        gst: number;
+        total: number;
+      }>;
+    } | null;
   } | null;
+  /** The stay as priced plus what was added to it (2026-11-10). */
+  stayWithAdded?: number | null;
 };
 
 export async function getBillingSummary(session: Session, entryId: string) {

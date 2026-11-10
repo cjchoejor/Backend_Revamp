@@ -219,6 +219,55 @@ export function ChargesView({
                   </tbody>
                 </table>
               ) : null}
+              {/* What was added to the stay as priced (2026-11-10, operator: "when charges are added to
+                  the folio … the price sub tab should also get updated"). The server's own split. */}
+              {fo?.addedDuringStay ? (
+                <div className="added-stay" data-added-stay>
+                  <div className="added-h">
+                    <b>Added during the stay</b>
+                    <Help label="About what was added">
+                      Every charge on the bill that is not the stay as priced: food and drink, services, extras, a fee, a correction
+                      or a credit note. Each is shown with its service charge and GST.
+                    </Help>
+                  </div>
+                  <table className="table compact resp">
+                    <thead>
+                      <tr>
+                        <th style={{ width: 92 }}>Date</th>
+                        <th>What</th>
+                        <th style={{ width: 96 }}>Room</th>
+                        <th className="num">With tax</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {fo.addedDuringStay.lines.map((l) => (
+                        <tr key={l.id}>
+                          <td data-label="Date">{fmtDay(l.date)}</td>
+                          <td data-label="What">{l.description}</td>
+                          <td data-label="Room">{l.place ?? "—"}</td>
+                          <td
+                            className="num money"
+                            data-label="With tax"
+                            title={`${money(l.net, cur)} + service charge ${money(l.serviceCharge, cur)} + GST ${money(l.gst, cur)}`}
+                          >
+                            {money(l.total, cur)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <div className="added-sum">
+                    <span>Added</span>
+                    <b className="money">{money(fo.addedDuringStay.total, cur)}</b>
+                  </div>
+                  {billing?.stayWithAdded != null ? (
+                    <div className="bigfig" data-stay-with-added>
+                      <span className="meta">The stay with what was added</span>
+                      <b>{money(billing.stayWithAdded, cur)}</b>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
               {st.segmentNumber != null && (entry.segmentNumber ?? 1) > 1 ? (
                 <p className="meta" style={{ marginTop: 6 }}>Priced on pass {st.segmentNumber}.</p>
               ) : null}
