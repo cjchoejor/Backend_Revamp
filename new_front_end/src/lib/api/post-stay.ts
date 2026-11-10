@@ -133,7 +133,7 @@ export type PostStayChargeResult = FolioLineSummary & {
   balanceNow?: string;
   folioState?: string;
   /** Whether the notice was emailed, and where — or why not. */
-  notice?: { sent: boolean; to: string | null; reason: string | null };
+  notice?: { sent: boolean; to: string | null; reason: string | null; queued?: boolean };
 };
 
 export async function postStayCharge(

@@ -10,6 +10,7 @@
 
 import type { PrismaClient, Stage } from "@prisma/client";
 import { sendEmail } from "./email-service.js";
+import { emailsGoAfterAnswer, runAfterAnswer } from "../../lib/outbox.js";
 
 export type StageEmailContent = {
   subject: string;
@@ -35,21 +36,54 @@ export type StageEmailContext = {
   stage: Stage;
   /** Prefix for trace event types — e.g. "QUOTATION_EMAIL", "PROFORMA_INVOICE_EMAIL". */
   eventTypePrefix: string;
+  /** Run once the send has its outcome — after the desk's answer on the API server (2026-11-10). */
+  after?: (outcome: StageEmailFinal) => Promise<void>;
 };
 
-export async function dispatchStageEmailBestEffort(ctx: StageEmailContext, content: StageEmailContent): Promise<void> {
+/** How a send ended. */
+export type StageEmailFinal = { status: "SENT" | "SKIPPED" | "ERROR"; reason: string | null };
+/** What the caller learns: the end, or that it is on its way (the API server sends after answering). */
+export type StageEmailOutcome = StageEmailFinal | { status: "QUEUED"; reason: null };
+
+export async function dispatchStageEmailBestEffort(ctx: StageEmailContext, content: StageEmailContent): Promise<StageEmailOutcome> {
   const { prisma, entryId, actorId, inquiryId, guestEmail, stage, eventTypePrefix } = ctx;
+  const traceCtx = { prisma, entryId, actorId, inquiryId, stage };
 
   if (!guestEmail) {
-    await writeStageEmailTrace({ prisma, entryId, actorId, inquiryId, stage }, `${eventTypePrefix}.SKIPPED`, {
-      reason: ctx.skipReason ?? "GUEST_HAS_NO_EMAIL",
-    });
-    return;
+    const reason = ctx.skipReason ?? "GUEST_HAS_NO_EMAIL";
+    await writeStageEmailTrace(traceCtx, `${eventTypePrefix}.SKIPPED`, { reason });
+    const out: StageEmailFinal = { status: "SKIPPED", reason };
+    await ctx.after?.(out);
+    return out;
   }
 
+  const send = async (): Promise<StageEmailFinal> => {
+    const out = await sendNow(ctx, content);
+    await ctx.after?.(out).catch((e) => console.error(`[email] after ${eventTypePrefix}:`, e instanceof Error ? e.message : e));
+    return out;
+  };
+
+  // The desk does not wait for the mail server (2026-11-10): the send is recorded as on its way,
+  // then runs right after the answer. With email switched off there is nothing to wait for.
+  const disabled = (process.env.EMAIL_DISABLE ?? "").toLowerCase() === "true";
+  if (!emailsGoAfterAnswer() || disabled) return send();
+  const redirect = process.env.EMAIL_REDIRECT_ALL_TO?.trim() || null;
+  await writeStageEmailTrace(traceCtx, `${eventTypePrefix}.QUEUED`, {
+    intendedRecipient: guestEmail,
+    actualRecipient: redirect ?? guestEmail,
+    redirected: !!redirect,
+  });
+  await runAfterAnswer(entryId, `${eventTypePrefix} for ${entryId}`, async () => {
+    await send();
+  });
+  return { status: "QUEUED", reason: null };
+}
+
+async function sendNow(ctx: StageEmailContext, content: StageEmailContent): Promise<StageEmailFinal> {
+  const { prisma, entryId, actorId, inquiryId, guestEmail, stage, eventTypePrefix } = ctx;
   try {
     const result = await sendEmail(prisma, {
-      to: guestEmail,
+      to: guestEmail!,
       subject: content.subject,
       text: content.text,
       html: content.html,
@@ -64,19 +98,22 @@ export async function dispatchStageEmailBestEffort(ctx: StageEmailContext, conte
         actualRecipient: result.actualRecipient,
         redirected: result.redirected,
       });
-    } else if (result.status === "skipped") {
+      return { status: "SENT", reason: null };
+    }
+    if (result.status === "skipped") {
       await writeStageEmailTrace({ prisma, entryId, actorId, inquiryId, stage }, `${eventTypePrefix}.SKIPPED`, {
         reason: result.reason,
       });
-    } else {
-      await writeStageEmailTrace({ prisma, entryId, actorId, inquiryId, stage }, `${eventTypePrefix}.ERROR`, {
-        message: result.message,
-      });
+      return { status: "SKIPPED", reason: result.reason };
     }
-  } catch (e) {
     await writeStageEmailTrace({ prisma, entryId, actorId, inquiryId, stage }, `${eventTypePrefix}.ERROR`, {
-      message: e instanceof Error ? e.message : String(e),
+      message: result.message,
     });
+    return { status: "ERROR", reason: result.message };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    await writeStageEmailTrace({ prisma, entryId, actorId, inquiryId, stage }, `${eventTypePrefix}.ERROR`, { message }).catch(() => undefined);
+    return { status: "ERROR", reason: message };
   }
 }
 

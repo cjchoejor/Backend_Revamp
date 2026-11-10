@@ -159,10 +159,17 @@ export function FolioSendDialog({ entry, doc, refreshKey, onClose }: { entry: En
     mutationFn: () => sendFolioDocument(session!, entry.id, doc.kind, { channel, to: typed, nightsEach }),
     onSuccess: (r) => {
       if (r.channel === "WHATSAPP") toast.success(`${doc.title} recorded as sent on WhatsApp to ${r.to}`);
+      else if (r.queued) toast.success(`${doc.title} is on its way by email to ${r.to}`);
       else if (r.emailed) toast.success(`${doc.title} sent by email to ${r.to}`);
       else toast.error(`${doc.title} was not sent: ${r.reason ?? "the email did not go"}`);
       void qc.invalidateQueries({ queryKey: ["folio-documents", entry.id] });
       void qc.invalidateQueries({ queryKey: ["entry-trace", entry.id] });
+      // The email goes right after the answer: read the papers again once it has had time to go.
+      if (r.queued) {
+        for (const ms of [6000, 15000]) {
+          window.setTimeout(() => void qc.invalidateQueries({ queryKey: ["folio-documents", entry.id] }), ms);
+        }
+      }
       if (r.channel === "WHATSAPP" || r.emailed) onClose();
     },
     onError: (e) => toastRefusal(e, `${doc.title} could not be sent`),

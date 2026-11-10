@@ -88,11 +88,18 @@ type TraceItem = { eventType: string; timestamp: string; payload: unknown };
 
 function useTrace(entryId: string) {
   const { session } = useSession();
-  // Same key and limit as the old voucher panel, so the two share one read.
+  // Same key and limit as the old voucher panel, so the two share one read. While the voucher's
+  // email is on its way (2026-11-10: sent right after the answer), it is read again every 2 seconds
+  // until it says how it went.
   return useQuery({
     queryKey: ["entry-trace", entryId],
     queryFn: () => getEntryTrace(session!, entryId, 80),
     enabled: !!session,
+    refetchInterval: (q) => {
+      const items = ((q.state.data as { items?: TraceItem[] } | undefined)?.items ?? []) as TraceItem[];
+      const last = items.find((t) => t.eventType.startsWith("RESERVATION_CONFIRMATION_EMAIL."));
+      return last?.eventType.endsWith(".QUEUED") && Date.now() - new Date(last.timestamp).getTime() < 120_000 ? 2000 : false;
+    },
   });
 }
 
@@ -1142,6 +1149,9 @@ function decidedLines(entry: EntryDetail, read: StayFactsRead, ctx: { tz: string
   for (const r of journey?.s3Setup.committedHold?.rooms ?? []) if (r.roomNumber && r.roomTypeName && !typeOfNo.has(r.roomNumber)) typeOfNo.set(r.roomNumber, r.roomTypeName);
   const emailEvents = trace.filter((t) => t.eventType.startsWith("RESERVATION_CONFIRMATION_EMAIL"));
   const sent = emailEvents.some((t) => t.eventType.endsWith(".SENT"));
+  // The newest line first: an email on its way (2026-11-10) is not one that failed.
+  const newest = [...emailEvents].sort((a, b) => b.timestamp.localeCompare(a.timestamp))[0];
+  const onItsWay = !sent && !!newest?.eventType.endsWith(".QUEUED") && Date.now() - new Date(newest.timestamp).getTime() < 120_000;
   const disc = entry.cancellationDisclosure ?? null;
   const moneyAsked = !!pay && (pay.requiredAmount > 0 || pay.totalReceived > 0);
   const planWords = pay?.paymentPlan ? `${PLAN_LABEL[pay.paymentPlan.plan]}${pay.paymentPlan.balanceDueAt ? ` · ${dueLabel(pay.paymentPlan.plan, pay.paymentPlan.balanceDueAt)}` : ""}` : null;
@@ -1233,7 +1243,7 @@ function decidedLines(entry: EntryDetail, read: StayFactsRead, ctx: { tz: string
     key: "voucher",
     label: "Voucher",
     state: "on",
-    who: sent ? "sent" : emailEvents.length ? "the email did not go out" : undefined,
+    who: sent ? "sent" : onItsWay ? "being emailed" : emailEvents.length ? "the email did not go out" : undefined,
     value: `confirmation voucher · goes to ${recipientTo || "no email on file"}`,
   });
   return lines;
@@ -1346,7 +1356,11 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
   const otherHeld = (heldQ.data ?? []).filter((h) => h.decision == null && !(h.kind === "CONFIRMATION_VOUCHER" && h.documentId === res.id));
   const onWhatsApp = decided?.decision === "SENT_WHATSAPP";
   const notSent = decided?.decision === "NOT_SENT";
-  const emailed = emailEvents.some((t) => t.eventType.endsWith(".SENT"));
+  // On its way counts as gone out (2026-11-10): the email is sent right after the answer, and a
+  // failure arrives as the newest line.
+  const onItsWay = !!last?.eventType.endsWith(".QUEUED");
+  const stuck = onItsWay && Date.now() - new Date(last!.timestamp).getTime() > 120_000;
+  const emailed = emailEvents.some((t) => t.eventType.endsWith(".SENT")) || (onItsWay && !stuck);
   // Gone out inside the trip's voucher, one email for the stays (2026-11-09).
   const withTrip = decided?.decision === "SENT_EMAIL" && /trip's voucher/.test(decided.note ?? "");
   const sent = emailed || onWhatsApp || withTrip;
@@ -1359,7 +1373,7 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
   const reasonOf = (t: TraceItem) => (t.payload as { reason?: string } | null)?.reason;
   const noAddress = (t: TraceItem) => reasonOf(t) === "GUEST_HAS_NO_EMAIL";
   const heldSkip = (t: TraceItem) => reasonOf(t) === "HELD_FOR_DESK_DECISION";
-  const failed = !sent && emailEvents.some((t) => !noAddress(t) && !heldSkip(t));
+  const failed = !sent && emailEvents.some((t) => !noAddress(t) && !heldSkip(t) && !t.eventType.endsWith(".QUEUED"));
   // The voucher that went out, if any — a held or not-sent voucher is not one (2026-10-29).
   const voucherComm = latestDispatched(comms, "CONFIRMATION_VOUCHER", since);
   const answered = voucherComm?.acknowledgementStatus === "RECEIVED";
@@ -1411,6 +1425,10 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
     </span>
   ) : notSent && !last?.eventType.endsWith(".SENT") ? (
     <span className="meta">Not sent{decided?.note ? ` — ${decided.note}` : ""} · {fmtStamp(decided?.decidedAt ?? null, tz)}</span>
+  ) : onItsWay && !stuck ? (
+    <span>Being emailed to {lastPayload?.actualRecipient ?? lastPayload?.intendedRecipient ?? guestEmail}…</span>
+  ) : stuck ? (
+    <span className="warn-ink">The email has not said it went — send it again</span>
   ) : last?.eventType.endsWith(".SENT") ? (
     <span>
       Emailed to {lastPayload?.actualRecipient ?? lastPayload?.intendedRecipient ?? guestEmail} · {fmtStamp(last.timestamp, tz)}

@@ -212,6 +212,8 @@ export type FolioDocumentSendOutcome = {
   channel: "EMAIL" | "WHATSAPP";
   to: string;
   emailed: boolean;
+  /** On its way: sent right after this answer (2026-11-10). */
+  queued?: boolean;
   reason: string | null;
   reprintOrdinal: number | null;
 };

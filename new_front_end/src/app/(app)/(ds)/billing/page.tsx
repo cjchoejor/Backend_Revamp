@@ -102,6 +102,9 @@ const OWED_SORTS: Sort[] = [
   s("account", -1, "Who pays · Z to A"),
   s("balance", -1, "Balance · highest first"),
   s("balance", 1, "Balance · lowest first"),
+  s("total", -1, "Total amount · highest first"),
+  s("billed", -1, "Billed so far · highest first"),
+  s("paid", -1, "Paid · highest first"),
   s("checkout", -1, "Check-out · latest first"),
   s("checkout", 1, "Check-out · oldest first"),
   s("name", 1, "Guest · A to Z"),
@@ -383,22 +386,7 @@ function BillingScreen() {
                     <th>Booking</th>
                     <th>Stay</th>
                     <th>Status</th>
-                    <th className="num">
-                      Total amount
-                      <Help label="About the total amount">
-                        What the whole stay comes to: the stay as priced, with everything added to it during the stay. It is known before
-                        the nights are billed.
-                      </Help>
-                    </th>
-                    <th className="num">
-                      Billed so far
-                      <Help label="About billed so far">
-                        What is on the bill now: each night is added by the night audit once it has passed, and each charge as it is posted.
-                        A guest still in the hotel has nights to come, so this is less than the total.
-                      </Help>
-                    </th>
-                    <th className="num">Paid</th>
-                    <th className="num">Balance</th>
+                    <MoneyHeads />
                   </tr>
                 </thead>
                 <tbody>
@@ -415,10 +403,7 @@ function BillingScreen() {
                         <td>
                           <RowStanding row={r} hotelToday={today} balance={x?.folio?.outstandingBalance ?? null} />
                         </td>
-                        <Cell v={f?.total} cur={x?.currency} />
-                        <Cell v={f?.billed} cur={x?.currency} />
-                        <Cell v={f?.paid} cur={x?.currency} />
-                        <BalanceCell f={f} cur={x?.currency} />
+                        <MoneyCells f={f} cur={x?.currency} />
                       </OpenRow>
                     );
                   })}
@@ -483,7 +468,8 @@ function BillingScreen() {
                   <th>Who pays</th>
                   <th>Booking</th>
                   <th>Stay</th>
-                  <th className="num">Balance</th>
+                  <th>Status</th>
+                  <MoneyHeads />
                 </tr>
               </thead>
               <tbody>
@@ -500,7 +486,10 @@ function BillingScreen() {
                         <div className="meta">{x?.trip ? `Trip · ${x.trip.stays.length} stays · ${r.inquiryId}` : r.id}</div>
                       </td>
                       <td className="nowrap"><TripDates row={r} x={x} /></td>
-                      <BalanceCell f={f} cur={x?.currency} />
+                      <td>
+                        <RowStanding row={r} hotelToday={today} balance={x?.folio?.outstandingBalance ?? null} />
+                      </td>
+                      <MoneyCells f={f} cur={x?.currency} />
                     </OpenRow>
                   );
                 })}
@@ -544,6 +533,44 @@ function TripDates({ row, x }: { row: DeskListRow; x: DeskMoneyRow | undefined }
         </div>
       ))}
     </div>
+  );
+}
+
+/**
+ * The money columns, the same on Open bills and Still owed (2026-11-10, operator: "this needs column
+ * names like in open bills"). Every figure is the server's.
+ */
+function MoneyHeads() {
+  return (
+    <>
+      <th className="num">
+        Total amount
+        <Help label="About the total amount">
+          What the whole stay comes to: the stay as priced, with everything added to it during the stay. It is known before the nights
+          are billed.
+        </Help>
+      </th>
+      <th className="num">
+        Billed so far
+        <Help label="About billed so far">
+          What is on the bill now: each night is added by the night audit once it has passed, and each charge as it is posted. A guest
+          still in the hotel has nights to come, so this is less than the total.
+        </Help>
+      </th>
+      <th className="num">Paid</th>
+      <th className="num">Balance</th>
+    </>
+  );
+}
+
+function MoneyCells({ f, cur }: { f: ReturnType<typeof figuresOf>; cur?: string | null }) {
+  return (
+    <>
+      <Cell v={f?.total} cur={cur} />
+      <Cell v={f?.billed} cur={cur} />
+      <Cell v={f?.paid} cur={cur} />
+      <BalanceCell f={f} cur={cur} />
+    </>
   );
 }
 

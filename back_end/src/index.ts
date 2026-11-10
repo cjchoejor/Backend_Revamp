@@ -3,6 +3,10 @@ import express from "express";
 import { AppError } from "./lib/errors.js";
 import { apiRouter } from "./routes/api-router.js";
 import { startWorkers } from "./workers/runner.js";
+import { flushOutbox, outboxSize, sendEmailsAfterAnswer } from "./lib/outbox.js";
+
+// Emails go out right after the desk's answer, not inside it (2026-11-10): see lib/outbox.ts.
+sendEmailsAfterAnswer(true);
 
 const app = express();
 app.use(cors());
@@ -27,6 +31,15 @@ app.listen(port, host, () => {
     console.log("  LAN devices use the front-end URL only; /api is proxied by Next.js rewrites.");
   }
 });
+
+// An email still on its way is let finish before the server stops (up to 15 seconds).
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
+  process.once(signal, () => {
+    const n = outboxSize();
+    if (n) console.log(`[outbox] ${n} email${n === 1 ? "" : "s"} still on the way — waiting before stopping`);
+    void flushOutbox(15_000).finally(() => process.exit(0));
+  });
+}
 
 if (process.env.RUN_WORKERS === "true") {
   startWorkers().then(

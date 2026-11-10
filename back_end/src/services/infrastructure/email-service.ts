@@ -35,11 +35,16 @@ function getTransporter(): Transporter {
     );
   }
 
+  // One kept-open connection reused between sends (2026-11-10): a fresh connection and sign-in
+  // cost about 1.2 s before every email. The pool reconnects by itself when the server drops it.
   cachedTransporter = nodemailer.createTransport({
     host,
     port,
     secure,
     auth: { user, pass },
+    pool: true,
+    maxConnections: 2,
+    maxMessages: 100,
   });
   return cachedTransporter;
 }
@@ -175,8 +180,8 @@ export async function sendEmail(prisma: PrismaClient, args: SendArgs): Promise<S
   };
 
   let info: { messageId: string };
-  try {
-    info = await transporter.sendMail({
+  const mail = () =>
+    transporter.sendMail({
       from,
       to: actualRecipient,
       replyTo,
@@ -196,6 +201,16 @@ export async function sendEmail(prisma: PrismaClient, args: SendArgs): Promise<S
         contentType: a.contentType ?? "application/pdf",
       })),
     });
+  try {
+    try {
+      info = await mail();
+    } catch (e) {
+      // A kept-open connection the mail server has closed fails once; send again on a new one.
+      const msg = e instanceof Error ? e.message : String(e);
+      const code = (e as { code?: string } | null)?.code ?? "";
+      if (!/ECONNECTION|ESOCKET|ETIMEDOUT|ECONNRESET|EPIPE/.test(code) && !/closed|reset|timeout/i.test(msg)) throw e;
+      info = await mail();
+    }
   } catch (e) {
     return { status: "error", message: e instanceof Error ? e.message : String(e) };
   }
