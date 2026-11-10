@@ -91,6 +91,8 @@ export type DeskListRow = {
   parkReason: string | null;
   parkFollowUpAt: string | null;
   roomNumbers: string[];
+  /** Which stay of its enquiry this booking is, when there are several (2026-11-10). */
+  stay: { no: number; of: number } | null;
 };
 
 export async function listDeskBookings(session: Session, q: { status?: EntryStatus; stage?: Stage; guestProfileId?: string; limit?: number } = {}) {
@@ -108,10 +110,30 @@ export type DeskMoneyRow = {
   entryId: string;
   currency: string | null;
   headline: { amount: number | null; kind: "STAY_TOTAL" | "BILLED_SO_FAR" | null; frozen: boolean };
-  folio: { state: string; billedSoFar: number | null; paymentsReceived: number | null; outstandingBalance: number | null } | null;
+  /** `refunded` and `writtenOff` (2026-11-10) say where money paid went on a closed bill. */
+  folio: {
+    state: string;
+    billedSoFar: number | null;
+    paymentsReceived: number | null;
+    outstandingBalance: number | null;
+    refunded: number | null;
+    writtenOff: number | null;
+  } | null;
   /** The stay as priced plus what was added to it; null with no priced stay total (2026-11-10). */
   totalAmount: number | null;
   shortened: boolean;
+  /** The whole trip when the booking is one stay of several — the stays' own figures added up by the server. */
+  trip: {
+    inquiryId: string;
+    stays: Array<{ entryId: string; stayNo: number; checkIn: string | null; checkOut: string | null; stage: string; status: string }>;
+    totalAmount: number | null;
+    billedSoFar: number;
+    paymentsReceived: number;
+    outstandingBalance: number;
+    paidAhead: number;
+    refunded: number;
+    writtenOff: number;
+  } | null;
 };
 
 export async function deskMoneyFor(session: Session, entryIds: string[]) {

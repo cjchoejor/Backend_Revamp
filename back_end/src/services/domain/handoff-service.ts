@@ -5,6 +5,7 @@ import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { getRegistryPolicy } from "../../lib/policy-registry-runtime.js";
 import { allocateReadableId } from "../../lib/readable-id.js";
 import { toDecimal } from "../../lib/money.js";
+import { folioNetBalance } from "../../lib/folio-outstanding-from-payment.js";
 import { enforceDeficientCarryIntoH2 } from "../../policies/19-deficient-condition/p49-deficient-carry-into-h2.js";
 import { enforceHandoffFulfilmentEvidence, enforceMandatoryChecklistItemsCompleted } from "../../policies/25-handoff/p63-handoff-lifecycle-gates.js";
 import {
@@ -120,11 +121,13 @@ export async function fulfilHandoff(
     enforceH4FulfilledAtCheckout({ handoffType, currentStage: entry?.currentStage ?? null });
   }
   if (handoffType === HandoffType.H5) {
-    const folio = await prisma.folio.findUnique({ where: { entryId: handoff.entryId }, select: { outstandingBalance: true } });
-    const owed = toDecimal(folio?.outstandingBalance ?? 0);
+    const folio = await prisma.folio.findUnique({ where: { entryId: handoff.entryId }, select: { id: true } });
+    const net = folio ? await folioNetBalance(prisma, folio.id) : toDecimal(0);
+    const words = (d: typeof net) => Number(d.abs().toFixed(2)).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     enforceH5NothingLeftToSettle({
       handoffType,
-      owed: owed.gt(0) ? Number(owed.toFixed(2)).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : null,
+      owed: net.gt(0) ? words(net) : null,
+      owedToGuest: net.lt(0) ? words(net) : null,
     });
   }
 

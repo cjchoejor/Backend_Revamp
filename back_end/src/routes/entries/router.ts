@@ -93,6 +93,7 @@ import {
   withdrawStayExtension,
 } from "../../services/domain/stay-extension-service.js";
 import { buildPartySeatingStatus, repairPartySeatingForEntry } from "../../services/domain/party-seating-service.js";
+import { changeChildAge, previewChildAgeChange } from "../../services/domain/child-age-service.js";
 import { getExpectedArrival, setExpectedArrival } from "../../services/domain/expected-arrival-service.js";
 import { resolveNoShowGraceMinutes, timerShowsFrom } from "../../lib/expected-arrival.js";
 import { buildEntryBedPlan, setEntryBedPlanRoom } from "../../services/domain/entry-bed-plan-service.js";
@@ -492,6 +493,45 @@ entriesRouter.post(
     try {
       const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
       res.json(await repairPartySeatingForEntry(prisma, actor, req.params.id, req.body?.reason ?? null));
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+/**
+ * A child's age, put right at Arrival or Check-in (2026-11-10). The preview says the hotel's rule for
+ * the new age and, when the band changes, each way the room can take it — stay (with an extra bed for
+ * a third adult) or move to another room of the booking with their meal plan — each with the stay's
+ * total after, the server's figures. The change records the age and, across bands, re-prices the
+ * booking through the governed walk (new papers, held). See `child-age-service.ts`.
+ */
+const childAgeBody = z.object({
+  childIndex: z.coerce.number().int().min(0),
+  newAge: z.coerce.number().int().min(0).max(30),
+  mealPlan: z.enum(["CP", "MAPL", "MAPD", "AP", "EP"]).nullable().optional(),
+});
+entriesRouter.post("/:id/child-age/preview", requireActorLevel("L1"), validateBody(childAgeBody), async (req, res, next) => {
+  try {
+    res.set("Cache-Control", "no-store").json(await previewChildAgeChange(prisma, req.params.id, req.body));
+  } catch (e) {
+    next(e);
+  }
+});
+entriesRouter.post(
+  "/:id/child-age",
+  requireActorLevel("L1"),
+  validateBody(
+    childAgeBody.extend({
+      placement: z.enum(["STAY", "MOVE"]).optional(),
+      toRoomId: z.string().min(1).nullable().optional(),
+      reason: z.string().max(500).nullable().optional(),
+    }),
+  ),
+  async (req, res, next) => {
+    try {
+      const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
+      res.json(await changeChildAge(prisma, actor, req.params.id, req.body));
     } catch (e) {
       next(e);
     }

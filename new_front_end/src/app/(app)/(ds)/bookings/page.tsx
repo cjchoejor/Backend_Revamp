@@ -11,7 +11,7 @@
 import { useRouter, useSearchParams } from "next/navigation";
 import { Fragment, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Chip, EmptyState, Icon, Input } from "@/design-system";
-import { GuestLink, LoadFailed, LoadingBlock, OpenRow, RowStanding, StandingChip, StepChip, bookingHref } from "@/components/ds/ui";
+import { GuestLink, LoadFailed, LoadingBlock, OpenRow, RowStanding, StandingChip, StayOf, StepChip, bookingHref } from "@/components/ds/ui";
 import { useDeskBookings, useDeskMoney, useDeskTimers } from "@/hooks/use-desk-data";
 import { RowTimer, RowTimerList } from "@/components/ds/row-timer";
 import { useHotelDay } from "@/hooks/use-hotel-day";
@@ -449,7 +449,7 @@ function BookingsScreen() {
           <LoadingBlock />
         ) : (
           <div className="table-scroll">
-            <table className="table compact">
+            <table className="table compact zebra">
               <thead>
                 <tr>
                   {(
@@ -495,7 +495,11 @@ function BookingsScreen() {
                 </tr>
               </thead>
               <tbody>
-                {shown.map((r, i) => {
+                {(() => {
+                  // Striped rows (2026-11-10, operator: "grey highlight on the rows … in bookings as
+                  // well"), starting afresh under each date band.
+                  let stripe = 0;
+                  return shown.map((r, i) => {
                   const ci = checkInOf(r);
                   const co = checkOutOf(r);
                   const nights = nightsOf(ci, co);
@@ -503,6 +507,8 @@ function BookingsScreen() {
                   const t = totalWord(m);
                   const band = bandOf(r, sortKey, today);
                   const opensBand = band && band.id !== (i > 0 ? bandOf(shown[i - 1], sortKey, today)?.id : null);
+                  if (opensBand) stripe = 0;
+                  const alt = stripe++ % 2 === 1;
                   const when =
                     sortKey === "booked"
                       ? `booked ${fmtStamp(r.createdAt, hotelDay?.timezone)}`
@@ -519,9 +525,10 @@ function BookingsScreen() {
                         </td>
                       </tr>
                     ) : null}
-                    <OpenRow entryId={r.id} locked={r.status !== "ACTIVE"} selected={previewId === r.id} onSelect={() => setPreviewId((p) => (p === r.id ? null : r.id))}>
+                    <OpenRow entryId={r.id} locked={r.status !== "ACTIVE"} selected={previewId === r.id} alt={alt} onSelect={() => setPreviewId((p) => (p === r.id ? null : r.id))}>
                       <td>
                         <GuestLink row={r} />
+                        <StayOf row={r} />
                         {r.guestProfile?.vipTier ? (
                           <>
                             {" "}
@@ -568,11 +575,16 @@ function BookingsScreen() {
                       </td>
                       <td className={`num ${t.amount ? "money" : "dash"}`} title={t.kind}>
                         {t.amount ?? "—"}
+                        {/* One stay of a trip (2026-11-10, operator): the trip's own total under it. */}
+                        {m?.trip?.totalAmount != null ? (
+                          <div className="meta">trip {money(m.trip.totalAmount, m.currency ?? "BTN")}</div>
+                        ) : null}
                       </td>
                     </OpenRow>
                     </Fragment>
                   );
-                })}
+                  });
+                })()}
               </tbody>
             </table>
             {rows.length === 0 ? <EmptyState title="No bookings match">Clear a filter, or check the dates.</EmptyState> : null}
@@ -711,6 +723,17 @@ function Preview({
         <dd>
           {t.amount ? <span className="money">{t.amount}</span> : <span className="dash">—</span>} <span className="meta">{t.kind}</span>
         </dd>
+        {m?.trip ? (
+          <>
+            <dt>The trip</dt>
+            <dd>
+              {m.trip.totalAmount != null ? <span className="money">{money(m.trip.totalAmount, m.currency ?? "BTN")}</span> : <span className="dash">—</span>}{" "}
+              <span className="meta">
+                {m.trip.stays.length} stays · billed {money(m.trip.billedSoFar, m.currency ?? "BTN")} · balance {money(m.trip.outstandingBalance, m.currency ?? "BTN")}
+              </span>
+            </dd>
+          </>
+        ) : null}
         {m?.folio ? (
           <>
             <dt>Paid</dt>

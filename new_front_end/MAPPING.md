@@ -127,3 +127,16 @@ Also for Stage 1 (2026-10-10), outside the desk router: `POST /api/entries/:id/a
 **Papers › Bills & statements (2026-11-10).** Paper rows (`FolioPapersCard`): the tentative invoice, the master bill and the draft tax invoice, each with Preview in the paper panel and Send (`POST /api/entries/:id/folio-documents/:kind/send`, email with the paper attached or recorded on WhatsApp; a draft tax invoice is never sent). Check-out's master bill and the Closed step's Sealed papers have Send too. No reference codes on screen.
 
 **Papers — shortened or every night (2026-10-30).** Every paper that names nights (quotation, proforma, voucher, interim statement, master bill, tax invoice) has two faces, like the quotation's with/without prices: the nights shortened (default — "10–19 Mar") or every night named. The preview drawer and the send boxes carry them as choice buttons (`NightsChoice`, `PricesChoice` in kit.tsx); `?nights=each` / `nightsEach`. The lines under a room carry their own nights when an extra bed or a meal plan changes part-way.
+
+
+## 2026-11-10 — the after-stay handoff, a child's age, Refunds, the bell, a trip's money
+
+- **Closed › After-stay handoff**: no button; `syncAfterStayHandoffTx` closes it when the bill is at zero (paid, written off, refunded) and opens it again on a late charge. The card says what is owed or what settled it.
+- **Arrival / Check-in › guest table**: a child's age is a button → `ChildAgeDialog` → `POST /entries/:id/child-age/preview` and `/child-age`. Across age bands the booking is priced again through the room-change walk (stay with an extra bed, or move to another room of the booking with the meal plan); papers held.
+- **Billing › Refunds** (FOM+): `GET /refunds`, `POST /refunds/:id/record|keep` — moved from Notifications. Notifications in the blue palette; Today's explanations behind "?".
+- **The bell**: red count while overdue, amber otherwise; a card names what is new (`bellReady` waits for the first reads).
+- **Billing / Bookings**: `POST /desk/bookings/money` → `trip` (the stays' sums). Billing lists one row per trip with the trip's total, billed, paid, balance and paid ahead; Bookings shows "trip Nu …" under each stay's total and in the preview.
+- **Billing › a trip row** lists each stay's dates (`StayDates compact`). **Billing › Closed bills**: settled, paid in full, written off or nothing billed; money for the page on screen; `refunded` / `writtenOff` from `POST /desk/bookings/money`.
+- **Bookings**: "Stay 1 of 2" (`StayOf`) from `GET /desk/bookings` → `stay`.
+- **Post a charge**: no chit number; the room first, then the date.
+- **Charges › The price**: the stay with what was added at the top once something was added; the band solid blue.

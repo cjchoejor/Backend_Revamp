@@ -227,7 +227,6 @@ const CLOSED_SECTIONS: Record<string, string> = {
   money: "The money after the stay",
   inspections: "The inspections",
   damage: "Damage found",
-  handoff: "The after-stay handoff",
 };
 /** Which section each of the backend's close checks belongs to; the rest are listed apart. */
 const CLOSED_CHECK_CARD: Record<string, string> = {
@@ -238,7 +237,9 @@ const CLOSED_CHECK_CARD: Record<string, string> = {
   FOLIO: "money",
   INSPECTION: "inspections",
   DAMAGE: "damage",
-  H5: "handoff",
+  // The after-stay handoff closes itself once the bill comes to zero (2026-11-10): what is left to do
+  // is the money's, so its line sits with the money section, where the payment and write-off are.
+  H5: "money",
 };
 /** The steps drawn in the stage-template layout, with their sections (every step since 2026-10-30). */
 const STEP_SECTIONS: Partial<Record<number, Record<string, string>>> = {
@@ -1257,9 +1258,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                           const drawn = (card?: string) =>
                             card === "inspections"
                               ? inspectionsOwedAtClosed(entry, closure.inspections?.rooms ?? [])
-                              : card === "handoff"
-                                ? (entry.handoffs ?? []).some((h) => h.handoffType === "H5")
-                                : !!card;
+                              : !!card;
                           const items: Precondition[] = closure.checks.map((c) => {
                             const card = CLOSED_CHECK_CARD[c.code];
                             return { label: c.label, met: c.met, card: drawn(card) ? card : undefined };

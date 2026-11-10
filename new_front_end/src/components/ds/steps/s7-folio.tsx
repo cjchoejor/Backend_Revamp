@@ -161,10 +161,50 @@ function targetWord(line: { roomId?: string | null; spaceId?: string | null }, t
 
 /** The one place a charge is filed against a room, a space, or neither — same list, same values
  *  (`room:<id>` / `space:<id>`) as the old desk's select. */
-function TargetSelect({ value, onChange, targets }: { value: string; onChange: (v: string) => void; targets: ReturnType<typeof useChargeTargets> }) {
+const PICK_FIRST = "__pick__";
+const WHOLE_BOOKING = "__whole__";
+
+/**
+ * The room a charge is for. With `pickFirst` it starts empty and asks to be picked (2026-11-10,
+ * operator: "show an empty field in the room section where it should prompt the user to pick one
+ * first"); no room at all is then a choice of its own, never a default.
+ */
+function TargetSelect({
+  value,
+  onChange,
+  targets,
+  pickFirst,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  targets: ReturnType<typeof useChargeTargets>;
+  pickFirst?: { picked: boolean; onPicked: () => void };
+}) {
+  const shown = pickFirst ? (pickFirst.picked ? value || WHOLE_BOOKING : PICK_FIRST) : value;
   return (
-    <select className="input" value={value} onChange={(e) => onChange(e.target.value)}>
-      <option value="">No room / space</option>
+    <select
+      className={`input${pickFirst && !pickFirst.picked ? " pick-first" : ""}`}
+      value={shown}
+      aria-label="The room"
+      onChange={(e) => {
+        const v = e.target.value;
+        if (v === PICK_FIRST) return;
+        onChange(v === WHOLE_BOOKING ? "" : v);
+        pickFirst?.onPicked();
+      }}
+    >
+      {pickFirst ? (
+        <>
+          {!pickFirst.picked ? (
+            <option value={PICK_FIRST} disabled>
+              Pick the room…
+            </option>
+          ) : null}
+          <option value={WHOLE_BOOKING}>No room · the whole booking</option>
+        </>
+      ) : (
+        <option value="">No room / space</option>
+      )}
       {targets.rooms.map((r) => (
         <option key={r.roomId} value={`room:${r.roomId}`}>
           Room {r.roomNumber}
@@ -347,7 +387,14 @@ export function PostChargeDialog({
   const targets = useChargeTargets(entry);
   const o = OUTLETS.find((x) => x.id === outlet) ?? null;
 
-  const [chit, setChit] = useState("");
+  // The room is picked first, and opens the date below (2026-11-10, operator: "remove the chit
+  // number field … prompt the user to pick one first there to open the field below"). A room tab of
+  // the folio that chose the room already counts as picked.
+  const [roomPicked, setRoomPicked] = useState(false);
+  useEffect(() => {
+    if (open) setRoomPicked(target !== "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
   const [consumedOn, setConsumedOn] = useState("");
   const [at, setAt] = useState("");
   const [what, setWhat] = useState("");
@@ -366,23 +413,18 @@ export function PostChargeDialog({
 
   const lineType: Kind = (o?.lineType as Kind | null) ?? kind;
   const amt = Number.parseFloat(amount);
-  const needsChit = o?.id !== "other";
   const missing = !o
     ? "choose the outlet"
-    : needsChit && !chit.trim()
-      ? "the chit number — it is how the posting is matched to the outlet later"
+    : !roomPicked
+      ? "the room — or no room, the whole booking"
       : !what.trim()
         ? "what it was"
         : !Number.isFinite(amt) || amt === 0
           ? "a net amount"
           : null;
-  const lines = entry.folio?.lines ?? [];
-  const chitSeen =
-    !!o && !!chit.trim() && lines.some((l) => l.description.toLowerCase().includes(`${o.label} · chit ${chit.trim()}`.toLowerCase()));
-
   const description = () => {
     if (!o) return what.trim();
-    const parts = [o.id === "other" ? null : o.label, chit.trim() ? `chit ${chit.trim()}` : null, what.trim(), at.trim() ? `at ${timeInWords(at)}` : null, servedBy.trim() ? `served by ${servedBy.trim()}` : null];
+    const parts = [o.id === "other" ? null : o.label, what.trim(), at.trim() ? `at ${timeInWords(at)}` : null, servedBy.trim() ? `served by ${servedBy.trim()}` : null];
     return parts.filter(Boolean).join(" · ");
   };
 
@@ -402,7 +444,6 @@ export function PostChargeDialog({
       refresh();
       setReceipt(line);
       setOutlet(null);
-      setChit("");
       setAt("");
       setWhat("");
       setAmount("");
@@ -421,7 +462,7 @@ export function PostChargeDialog({
   const payerModel = payer.data?.map?.[lineType] ?? payer.data?.current ?? entry.folio?.billingModel ?? null;
   const goesTo = payerModel ? `Goes to ${payerWord(payerModel, booked.party)}` : "Goes to the payer set under Who pays";
   const whatWords = (o ? WHAT_WORDS[o.id] : null) ?? (["What it was for", ""] as const);
-  const billDone = !!o && (!needsChit || !!chit.trim()) && !!consumedOn;
+  const billDone = !!o && roomPicked && !!consumedOn;
   const whatDone = !!what.trim() && Number.isFinite(amt) && amt !== 0;
 
   return (
@@ -432,7 +473,7 @@ export function PostChargeDialog({
         register="commit"
         title="Post a charge"
         width={720}
-        help="Type it in from the paper bill (the chit): where it's from, its number, when it was had, the room and the amount." 
+        help="Type it in from the paper bill: where it's from, the room, when it was had and the amount." 
         busy={post.isPending}
         footer={
           <>
@@ -451,30 +492,31 @@ export function PostChargeDialog({
           </>
         }
       >
-        {/* Step by step (2026-10-29, operator): where it's from, then the chit, the room and when, then what it
-            was and the amount, then who it goes to — each question once the one before it is answered. */}
+        {/* Step by step (2026-10-29, operator): where it's from, then the room and when, then what it was
+            and the amount, then who it goes to — each question once the one before it is answered. */}
         <div className="qsteps">
           <ChargeStep n={1} done={!!o} title="Where is it from?">
             <Choice options={OUTLETS.map((x) => [x.id, x.label] as const)} value={outlet} onChange={(v) => setOutletState(v)} />
           </ChargeStep>
           {o ? (
-            <ChargeStep n={2} done={billDone} title="The chit, the room and when">
+            <ChargeStep n={2} done={billDone} title="The room and when">
               <div className="form2">
                 <div className="field">
                   <label>
-                    Chit number{needsChit ? "" : " · optional"}
-                    <Help label="About the chit">The number on the paper bill the outlet wrote. A chit posts once.</Help>
-                  </label>
-                  <input className="input" value={chit} placeholder={`${o.prefix}-1182`} onChange={(e) => setChit(e.target.value)} />
-                  {chitSeen ? <span className="hint warn-ink">a chit with this number is already on the folio — a chit posts once</span> : null}
-                </div>
-                <div className="field">
-                  <label>
                     Room
-                    <Help label="About the room">The room the charge belongs to — or the whole booking.</Help>
+                    <Help label="About the room">The room the charge belongs to — or no room, the whole booking.</Help>
                   </label>
-                  <TargetSelect value={target} onChange={setTarget} targets={targets} />
+                  <TargetSelect
+                    value={target}
+                    onChange={setTarget}
+                    targets={targets}
+                    pickFirst={{ picked: roomPicked, onPicked: () => setRoomPicked(true) }}
+                  />
+                  {!roomPicked ? <span className="hint">Pick the room first — the date opens below it</span> : null}
                 </div>
+              </div>
+              {roomPicked ? (
+              <div className="form2" style={{ marginTop: 8 }}>
                 <div className="field">
                   <label>
                     Consumed on
@@ -495,6 +537,7 @@ export function PostChargeDialog({
                   <TimeInput className="input" value={at} onChange={(e) => setAt(e.target.value)} />
                 </div>
               </div>
+              ) : null}
             </ChargeStep>
           ) : null}
           {o && billDone ? (

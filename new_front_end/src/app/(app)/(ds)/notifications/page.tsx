@@ -12,11 +12,9 @@
  *    payment reminder, a VIP arrival), read from `GET /api/desk/alerts`, by hotel day, with who
  *    each was for and how the booking stands now.
  */
-import { useRefunds } from "@/hooks/use-refunds";
-import { RefundsTab } from "@/components/ds/refunds-tab";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Button, Chip, EmptyState, Tabs } from "@/design-system";
 import { LoadFailed, LoadingBlock, MoreRow, OpenRow, StepChip, TimerText, usePaged } from "@/components/ds/ui";
@@ -41,7 +39,7 @@ import { WORK_KINDS, attentionItems, waitingText, type AttentionItem, type Band 
 import { fmtLongDate, fmtTime, plural } from "@/lib/ds/format";
 import { stepNoOfStage } from "@/lib/ds/steps";
 
-type View = "now" | "sent" | "refunds";
+type View = "now" | "sent";
 const BAND_WORD: Record<Band, string> = { overdue: "Overdue", soon: "Due soon", waiting: "Waiting" };
 const BAND_TONE: Record<Band, "danger" | "warning" | "quiet"> = { overdue: "danger", soon: "warning", waiting: "quiet" };
 const RANGES = [1, 7, 14, 31] as const;
@@ -62,8 +60,13 @@ function Notifications() {
   const { session } = useSession();
   const fom = !!session && session.actorLevel !== "L1";
   const asked = search.get("view");
-  const view: View = asked === "sent" ? "sent" : asked === "refunds" && fom ? "refunds" : "now";
-  const refundsWaiting = useRefunds("waiting").data?.items.length ?? 0;
+  const view: View = asked === "sent" ? "sent" : "now";
+  // Refunds moved to Billing (2026-11-10): an old address lands there.
+  useEffect(() => {
+    if (asked !== "refunds") return;
+    const refund = search.get("refund");
+    router.replace(`/billing?tab=refunds${refund ? `&refund=${encodeURIComponent(refund)}` : ""}`);
+  }, [asked, search, router]);
   const pickView = (v: string) => {
     const p = new URLSearchParams(search.toString());
     p.set("view", v);
@@ -93,17 +96,21 @@ function Notifications() {
         </div>
         <Tabs
           items={[
-            { id: "now", label: "Needs a person", count: items.length },
+            {
+              id: "now",
+              label: (
+                <>
+                  Needs a person<span className={`tab-n${items.some((i) => i.band === "overdue") ? " warn" : ""}`}>{items.length}</span>
+                </>
+              ),
+            },
             { id: "sent", label: "Alerts sent" },
-            ...(fom ? [{ id: "refunds", label: "Refunds", count: refundsWaiting }] : []),
           ]}
           selected={view}
           onSelect={pickView}
         />
       </div>
-      {view === "refunds" ? (
-        <RefundsTab tz={clock.tz} focusId={search.get("refund")} />
-      ) : view === "now" ? (
+      {view === "now" ? (
         bookings.error && !bookings.data ? (
           <LoadFailed what="the bookings" onRetry={() => void bookings.refetch()} />
         ) : bookings.isLoading || !hotelDay ? (

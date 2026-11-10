@@ -102,11 +102,14 @@ export function AppShell({ children }: { children: ReactNode }) {
   const lateRooms = (housekeeping.data?.rooms ?? []).filter((r) => r.state === "TO_CLEAN" && r.toClean?.overdue);
   // Money to give back, for the FOM, GM and admin (2026-11-05): a row of its own, with the money sign.
   const fom = !!session && session.actorLevel !== "L1";
-  const refundsWaiting = useRefunds("waiting").data?.items ?? [];
+  const refundsQ = useRefunds("waiting");
+  const refundsWaiting = refundsQ.data?.items ?? [];
   const secondPage = SECOND.some((s) => isOn(pathname, s.href));
   // The six main pages take the stages' blue palette (2026-10-30, operator: "make the theme colour of
   // that page like how we have in the stages UI"); the pages under "more" keep the desk's own.
-  const bluePage = MAIN.some((m) => isOn(pathname, m.href));
+  // Notifications too (2026-11-10, operator: "notification page to have the ui style like how it is in
+  // the other stages and pages").
+  const bluePage = MAIN.some((m) => isOn(pathname, m.href)) || isOn(pathname, "/notifications");
   const [secondOpen, setSecondOpen] = useState(false);
   const bell = usePanel();
   const user = usePanel();
@@ -130,6 +133,39 @@ export function AppShell({ children }: { children: ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bookings.data, hotelDay?.today, fom, Math.floor(clock.now / 60_000)]);
   const bellCount = urgent.length + (lateRooms.length ? 1 : 0) + refundsWaiting.length;
+  // The bell says itself (2026-11-10, operator: "when notifications is there and also arrives, can it
+  // show in the ui a little prominently"): the count is red while something is overdue, amber
+  // otherwise; and when something new arrives the bell shakes once and a card under it names it.
+  const bellOverdue = urgent.some((i) => i.band === "overdue" || i.critical) || lateRooms.length > 0;
+  const bellItems = useMemo(
+    () => [
+      ...urgent.map((i) => ({ key: `a:${i.key}`, text: i.need, who: i.name, href: `/bookings/${i.entryId}` })),
+      ...(lateRooms.length
+        ? [{ key: "rooms-late", text: `${lateRooms.length === 1 ? `Room ${lateRooms[0].roomNumber}` : `${lateRooms.length} rooms`} past the clean-by time`, who: "Housekeeping", href: "/housekeeping" }]
+        : []),
+      ...refundsWaiting.map((r) => ({ key: `r:${r.id}`, text: `A refund of ${money(r.amountAsked, r.currency)} to make`, who: r.guest.name ?? r.booking.id, href: `/billing?tab=refunds&refund=${encodeURIComponent(r.id)}` })),
+    ],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [urgent, lateRooms.length, refundsWaiting],
+  );
+  const seenBell = useRef<Set<string> | null>(null);
+  const [arrived, setArrived] = useState<{ text: string; who: string; href: string; more: number; at: number } | null>(null);
+  // Watching starts once every list the bell reads has come in, so what was already there is not news.
+  const bellReady = !!bookings.data && !!hotelDay?.today && !housekeeping.isLoading && !refundsQ.isLoading;
+  useEffect(() => {
+    if (!bellReady) return;
+    const keys = new Set(bellItems.map((x) => x.key));
+    const before = seenBell.current;
+    seenBell.current = keys;
+    if (!before) return; // the first reading is what was already there
+    const fresh = bellItems.filter((x) => !before.has(x.key));
+    if (fresh.length) setArrived({ text: fresh[0].text, who: fresh[0].who, href: fresh[0].href, more: fresh.length - 1, at: Date.now() });
+  }, [bellItems, bellReady]);
+  useEffect(() => {
+    if (!arrived) return;
+    const t = window.setTimeout(() => setArrived(null), 9000);
+    return () => window.clearTimeout(t);
+  }, [arrived]);
 
   // Unreachable server (DSS §6): a network failure, not a refusal.
   const offlineSince = useRef<number | null>(null);
@@ -192,10 +228,40 @@ export function AppShell({ children }: { children: ReactNode }) {
           <TopbarClock />
 
           <div ref={bell.ref} style={{ position: "relative" }}>
-            <button type="button" className="notif" aria-label={`${bellCount} notifications`} aria-expanded={bell.open} onClick={() => bell.setOpen((o) => !o)}>
+            <button
+              type="button"
+              className={`notif${bellCount ? (bellOverdue ? " has overdue" : " has") : ""}${arrived ? " ringing" : ""}`}
+              key={arrived?.at ?? "bell"}
+              aria-label={`${bellCount} notifications${bellOverdue ? ", something overdue" : ""}`}
+              aria-expanded={bell.open}
+              onClick={() => {
+                setArrived(null);
+                bell.setOpen((o) => !o);
+              }}
+            >
               <Icon name="bell" size="lg" />
               <span className={`count${bellCount === 0 ? " zero" : ""}`}>{bellCount}</span>
             </button>
+            {arrived && !bell.open ? (
+              <div className="bell-new" role="status" aria-live="polite">
+                <span className="bell-new-mark" aria-hidden>
+                  <Icon name="bell" />
+                </span>
+                <span className="bell-new-text">
+                  <b>New · {arrived.text}</b>
+                  <span className="sm">
+                    {arrived.who}
+                    {arrived.more > 0 ? ` · and ${arrived.more} more` : ""}
+                  </span>
+                </span>
+                <Link href={arrived.href} className="btn btn-secondary compact" onClick={() => setArrived(null)}>
+                  Open
+                </Link>
+                <button type="button" className="bell-new-x" aria-label="Close" onClick={() => setArrived(null)}>
+                  ×
+                </button>
+              </div>
+            ) : null}
             {bell.open ? (
               <div className="drawer open panel-from-bar" role="dialog" aria-label="Notifications">
                 {/* The whole list, grouped by kind of work, and the alerts the system sent (2026-10-23) — on
@@ -209,7 +275,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 {refundsWaiting.slice(0, 6).map((r) => (
                   <Link
                     key={r.id}
-                    href={`/notifications?view=refunds&refund=${encodeURIComponent(r.id)}`}
+                    href={`/billing?tab=refunds&refund=${encodeURIComponent(r.id)}`}
                     className="panel-row refund-bell"
                     data-bell-refund={r.id}
                     style={{ marginTop: 8 }}
@@ -225,7 +291,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                   </Link>
                 ))}
                 {refundsWaiting.length > 6 ? (
-                  <Link href="/notifications?view=refunds" className="sm" style={{ display: "block", marginTop: 6 }} onClick={() => bell.setOpen(false)}>
+                  <Link href="/billing?tab=refunds" className="sm" style={{ display: "block", marginTop: 6 }} onClick={() => bell.setOpen(false)}>
                     and {refundsWaiting.length - 6} more refunds
                   </Link>
                 ) : null}

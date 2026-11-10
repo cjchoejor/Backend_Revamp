@@ -239,6 +239,16 @@ async function billOfStay(prisma: PrismaClient, entry: BillEntry, stayNo: number
   };
 }
 
+/**
+ * Whether a stay of a trip is on the trip's bill (2026-11-10, shared with the desk's lists so the bill
+ * and the lists agree on what a trip comes to): every live stay, and an ended one only when its bill
+ * carries something — a cancelled stay with nothing on it has nothing to say.
+ */
+export function stayIsOnTripBill(e: { status: string; folio?: { lines?: unknown[] | number; payments?: unknown[] | number } | null }): boolean {
+  const count = (v: unknown[] | number | undefined) => (typeof v === "number" ? v : v?.length ?? 0);
+  return !["CANCELLED", "EXPIRED"].includes(e.status) || count(e.folio?.lines) > 0 || count(e.folio?.payments) > 0;
+}
+
 const sumOf = (stays: BillStay[], key: keyof BillFigures) => n(sumMoney(stays.map((s) => s.figures[key])).add(ZERO));
 
 /** The bill of a booking, with every other stay of its trip that has one. */
@@ -247,9 +257,7 @@ export async function buildBillView(prisma: PrismaClient, entryId: string): Prom
   if (!asked) throw new NotFoundError("Entry");
   const entries = await prisma.entry.findMany({ where: { inquiryId: asked.inquiryId }, orderBy: { checkInDate: "asc" }, include: BILL_ENTRY_INCLUDE });
   // A stay that ended with nothing on its bill has nothing to say here.
-  const shown = entries.filter(
-    (e) => e.id === entryId || !["CANCELLED", "EXPIRED"].includes(e.status) || (e.folio?.lines.length ?? 0) > 0 || (e.folio?.payments.length ?? 0) > 0,
-  );
+  const shown = entries.filter((e) => e.id === entryId || stayIsOnTripBill(e));
   const [hotel, { gstRate, serviceChargeRate: svcRate }] = await Promise.all([loadHotelProfileForRender(prisma), resolveChargeRates(prisma)]);
   const billed = await Promise.all(shown.map((e) => billOfStay(prisma, e, entries.indexOf(e) + 1, { gstRate, svcRate })));
   const stays = billed.map((b) => b.stay);

@@ -120,13 +120,14 @@ export function ChargesView({
   const fo = billing?.folio ?? null;
   const tag = !billing
     ? null
-    : billing.headline.kind === "BILLED_SO_FAR"
-      ? "billed so far"
-      : st?.earlyDeparture
-        ? "shortened stay"
-        : st?.frozen
-          ? "as confirmed"
-          : "indicative — not a promise until it is agreed";
+    : st?.earlyDeparture
+      ? "shortened stay"
+      : st?.frozen
+        ? "as confirmed"
+        : "indicative — not a promise until it is agreed";
+  // Once something was added during the stay, the figure at the top is the stay with it (2026-11-10,
+  // operator: "that is where the user will mostly see, so there show the stay with what was added").
+  const withAdded = fo?.addedDuringStay && billing?.stayWithAdded != null ? billing.stayWithAdded : null;
   const payments = ((entry.folio?.payments ?? []) as PaymentRow[]).slice().sort((a, b) => (b.receivedAt ?? "").localeCompare(a.receivedAt ?? ""));
   const paymentsIn = payments.filter((x) => x.paymentDirection !== "OUT").length;
   const balance = fo?.outstandingBalance ?? null;
@@ -167,15 +168,25 @@ export function ChargesView({
             </p>
           ) : (
             <>
-              <div className="bigfig">
-                <span className="meta">Stay total</span>
-                <b>{money(st.amount, cur)}</b>
-                {st.basis === "PER_NIGHT_TIMES_NIGHTS" && st.perNightAmount != null ? (
-                  <span className="meta">
-                    {money(st.perNightAmount, cur)} a night{st.nights != null ? ` · ${plural(st.nights, "night")}` : ""}
+              {withAdded != null && fo?.addedDuringStay ? (
+                <div className="bigfig" data-stay-with-added>
+                  <span className="meta">The stay with what was added</span>
+                  <b>{money(withAdded, cur)}</b>
+                  <span className="meta bf-parts">
+                    the stay {money(st.amount, cur)} + added during the stay {money(fo.addedDuringStay.total, cur)}
                   </span>
-                ) : null}
-              </div>
+                </div>
+              ) : (
+                <div className="bigfig">
+                  <span className="meta">Stay total</span>
+                  <b>{money(st.amount, cur)}</b>
+                  {st.basis === "PER_NIGHT_TIMES_NIGHTS" && st.perNightAmount != null ? (
+                    <span className="meta">
+                      {money(st.perNightAmount, cur)} a night{st.nights != null ? ` · ${plural(st.nights, "night")}` : ""}
+                    </span>
+                  ) : null}
+                </div>
+              )}
               {st.earlyDeparture ? (
                 <p className="meta">
                   Shortened: {st.earlyDeparture.sleptNights} nights slept · {money(st.earlyDeparture.forgoneRoomTotal, cur)} not charged
@@ -260,12 +271,6 @@ export function ChargesView({
                     <span>Added</span>
                     <b className="money">{money(fo.addedDuringStay.total, cur)}</b>
                   </div>
-                  {billing?.stayWithAdded != null ? (
-                    <div className="bigfig" data-stay-with-added>
-                      <span className="meta">The stay with what was added</span>
-                      <b>{money(billing.stayWithAdded, cur)}</b>
-                    </div>
-                  ) : null}
                 </div>
               ) : null}
               {st.segmentNumber != null && (entry.segmentNumber ?? 1) > 1 ? (
@@ -539,7 +544,7 @@ function QuotePriceLines({ quotationId, rooms, stayTotal, currency }: { quotatio
       <PriceLinesTable f={f} currency={currency} />
       {stayTotal != null && Math.abs(stayTotal - f.total) > 0.005 ? (
         <p className="meta" style={{ marginTop: 6 }}>
-          The quotation&rsquo;s total is for the stay as booked; the stay total above is what this stay comes to.
+          The quotation&rsquo;s total is for the stay as booked; the stay as it stands comes to {money(stayTotal, currency)}.
         </p>
       ) : null}
     </>

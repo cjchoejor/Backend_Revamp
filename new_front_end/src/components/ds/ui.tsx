@@ -45,6 +45,19 @@ export function GuestLink({ row, step, href }: { row: DeskListRow; step?: number
   );
 }
 
+/**
+ * "Stay 1 of 2" beside a name when the booking is one stay of a trip (2026-11-10, operator: "show
+ * stay 1 of 2 or something like that, prominently but subtle"). The server numbers the stays.
+ */
+export function StayOf({ row }: { row: DeskListRow }) {
+  if (!row.stay) return null;
+  return (
+    <span className="stay-of" title={`Stay ${row.stay.no} of ${row.stay.of} on enquiry ${row.inquiryId}`}>
+      Stay {row.stay.no} of {row.stay.of}
+    </span>
+  );
+}
+
 /** "ENT-… · KNG RESERVATION" — the grey line under a name. */
 export function bookingMeta(row: DeskListRow, withRef = true): string {
   const booker = bookerOfRow(row);
@@ -62,8 +75,10 @@ export function TimerText({ w }: { w: WaitingText }) {
 }
 
 /** A table row that opens a booking; the name link inside it is the keyboard target. */
-export function OpenRow({ entryId, step, href, locked, selected, onSelect, children }: {
+export function OpenRow({ entryId, step, href, locked, selected, alt, onSelect, children }: {
   entryId: string;
+  /** Every other row is shaded grey in a striped table (2026-11-10, operator). */
+  alt?: boolean;
   step?: number;
   /** Open this page rather than the booking. */
   href?: string;
@@ -92,7 +107,7 @@ export function OpenRow({ entryId, step, href, locked, selected, onSelect, child
       onSelect?.();
     }, 260);
   };
-  const cls = [selected ? "selected" : "", locked ? "locked" : ""].filter(Boolean).join(" ") || undefined;
+  const cls = [selected ? "selected" : "", locked ? "locked" : "", alt ? "alt" : ""].filter(Boolean).join(" ") || undefined;
   return (
     <tr
       className={cls}

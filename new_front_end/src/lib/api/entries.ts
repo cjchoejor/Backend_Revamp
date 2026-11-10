@@ -1425,3 +1425,49 @@ export async function moveTripToSetUp(session: Session, entryId: string, version
     body: { version },
   });
 }
+
+/** A child's age put right at Arrival or Check-in (2026-11-10) — see back_end child-age-service. */
+export type ChildAgeMealPlan = "CP" | "MAPL" | "MAPD" | "AP" | "EP";
+export type ChildAgeChoice = {
+  kind: "STAY" | "MOVE";
+  roomId: string;
+  roomNumber: string | null;
+  possible: boolean;
+  why: string | null;
+  extraBeds: number;
+  addsExtraBed: boolean;
+  mealPlan: ChildAgeMealPlan | null;
+  totalAfter: number | null;
+  change: number | null;
+  summary: string;
+};
+export type ChildAgePreview = {
+  entryId: string;
+  childIndex: number;
+  oldAge: number;
+  newAge: number;
+  oldBand: "ADULT" | "C6TO10" | "UNDER6";
+  newBand: "ADULT" | "C6TO10" | "UNDER6";
+  policy: string;
+  ageOnly: boolean;
+  room: { roomId: string; roomNumber: string | null; guests: string } | null;
+  totalBefore: number | null;
+  choices: ChildAgeChoice[];
+  mealPlans: ChildAgeMealPlan[];
+  refusal: string | null;
+};
+
+export async function previewChildAge(session: Session, entryId: string, body: { childIndex: number; newAge: number; mealPlan?: ChildAgeMealPlan | null }) {
+  return apiRequest<ChildAgePreview>(`/api/entries/${entryId}/child-age/preview`, { method: "POST", session, body });
+}
+
+export async function changeChildAge(
+  session: Session,
+  entryId: string,
+  body: { childIndex: number; newAge: number; placement?: "STAY" | "MOVE"; toRoomId?: string | null; mealPlan?: ChildAgeMealPlan | null },
+) {
+  return apiRequest<{ ageOnly: boolean; oldAge: number; newAge: number; choice: ChildAgeChoice | null; walk: RoomChangeOutcome | null }>(
+    `/api/entries/${entryId}/child-age`,
+    { method: "POST", session, body },
+  );
+}

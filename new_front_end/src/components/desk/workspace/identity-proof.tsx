@@ -44,6 +44,7 @@ import type { EntryDetail } from "@/types/api";
 import { fmtDateTime, fmtTime, HOTEL_TZ_DEFAULT } from "@/lib/ds/format";
 import { Help, HelpHere } from "@/components/ds/help";
 import { DsDialog, NotNow } from "@/components/ds/steps/kit";
+import { ChildAgeDialog } from "@/components/ds/steps/child-age-dialog";
 import { Button } from "@/design-system";
 
 /**
@@ -551,6 +552,9 @@ export function IdentityProofBlock({
   const [busySlot, setBusySlot] = useState<string | null>(null);
   // Clearing a guest's row (2026-10-23): which guest, and what of theirs goes.
   const [clearFor, setClearFor] = useState<PartySlot | null>(null);
+  // A child's age put right (2026-11-10): at Arrival and Check-in, while the booking is live.
+  const [ageFor, setAgeFor] = useState<{ index: number; age: number } | null>(null);
+  const ageEditable = (entry.currentStage === "S5" || entry.currentStage === "S6") && entry.status === "ACTIVE";
   const [clearDetails, setClearDetails] = useState(false);
   const [clearPhoto, setClearPhoto] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -1457,6 +1461,12 @@ export function IdentityProofBlock({
                 savedDetail?.ageCheck && !savedDetail.ageCheck.ok && draft.dob === (savedDetail.dateOfBirth?.slice(0, 10) ?? "")
                   ? savedDetail.ageCheck.message
                   : null;
+              // A child's row whose date of birth says another age offers that age (2026-11-10).
+              const childIndex = slot.key.startsWith("K") ? Number(slot.key.slice(1)) : -1;
+              const recordedAge = childIndex >= 0 ? (entry.childAges ?? [])[childIndex] : undefined;
+              const saysAge = savedDetail?.ageCheck?.ageAtCheckIn;
+              const offerAge =
+                ageEditable && childIndex >= 0 && saysAge != null && saysAge >= 0 && saysAge <= 17 && saysAge !== recordedAge ? saysAge : null;
               const ageRow = ageWarn ? (
                 <tr key={`${slot.key}-age`}>
                   <td colSpan={7} style={{ padding: "0 6px 6px" }}>
@@ -1465,6 +1475,11 @@ export function IdentityProofBlock({
                       <span>
                         {slot.label}: {ageWarn}
                       </span>
+                      {offerAge != null ? (
+                        <button type="button" className="btn btn-primary go age-offer" onClick={() => setAgeFor({ index: childIndex, age: offerAge })}>
+                          Change the age to {offerAge}
+                        </button>
+                      ) : null}
                     </div>
                   </td>
                 </tr>
@@ -1483,8 +1498,21 @@ export function IdentityProofBlock({
                         <span style={{ width: 12, height: 12, borderRadius: 999, border: "1.5px solid var(--line-3)", display: "inline-block" }} />
                       )}
                       {displayName}
-                      {typedName && slot.sub && <span style={{ color: "var(--ink-3)", fontWeight: 400 }}> · {slot.sub}</span>}
+                      {typedName && slot.sub && !(ageEditable && childIndex >= 0) && (
+                        <span style={{ color: "var(--ink-3)", fontWeight: 400 }}> · {slot.sub}</span>
+                      )}
                     </span>
+                    {/* The age, put right here at Arrival and Check-in (2026-11-10). */}
+                    {ageEditable && childIndex >= 0 && recordedAge != null ? (
+                      <button
+                        type="button"
+                        className="age-btn"
+                        title={`Change Child ${childIndex + 1}'s age`}
+                        onClick={() => setAgeFor({ index: childIndex, age: recordedAge })}
+                      >
+                        {recordedAge} {recordedAge === 1 ? "yr" : "yrs"} · change
+                      </button>
+                    ) : null}
                     {/* The lead mark (2026-10-23): one adult row is the lead — the guest the
                         check-in verification is for. A child row never carries it. */}
                     {slot.key.startsWith("A") &&
@@ -1830,6 +1858,7 @@ export function IdentityProofBlock({
       )}
 
       <IdPhotoViewerHost />
+      {ageFor ? <ChildAgeDialog entry={entry} childIndex={ageFor.index} startAge={ageFor.age} onClose={() => setAgeFor(null)} /> : null}
 
       {clearFor &&
         (() => {
