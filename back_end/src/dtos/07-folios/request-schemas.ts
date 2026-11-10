@@ -321,6 +321,9 @@ export const keepRefundRequestSchema = z.object({
 
 export const dispatchInvoiceRequestSchema = z.object({
   dispatchedTo: z.string().optional(),
+  /** EMAIL (the default) emails it; WHATSAPP records it as sent on WhatsApp to the number in
+   *  `dispatchedTo`, and emails nothing (2026-11-10). */
+  channel: z.enum(["EMAIL", "WHATSAPP"]).optional(),
   /** A proforma sent with every night named, instead of a run as its first and last (2026-10-30). */
   nightsEach: z.boolean().optional(),
 });

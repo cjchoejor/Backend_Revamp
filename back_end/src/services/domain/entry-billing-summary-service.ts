@@ -4,6 +4,7 @@ import { NotFoundError } from "../../lib/errors.js";
 import { mulMoney, round2, sumMoneyBy, toDecimal } from "../../lib/money.js";
 import { resolveOperativeQuotation } from "../../lib/operative-quotation.js";
 import { classifyFolioLine, splitCombinedTax } from "../../lib/folio-tax-lines.js";
+import { splitStayAndExtras } from "../../lib/folio-stay-extras.js";
 import { resolveChargeRates } from "../infrastructure/compute-stay-charges.js";
 
 /**
@@ -161,7 +162,29 @@ export interface EntryBillingSummary {
     unassignedCharges: { charges: number; lineCount: number; base: number; serviceCharge: number; gst: number } | null;
     /** The whole ledger's tax breakdown — base + serviceCharge + gst = billedSoFar. Null when no lines. */
     chargeBreakdown: { base: number; serviceCharge: number; gst: number; total: number } | null;
+    /**
+     * What was added to the stay as priced (2026-11-10): every charge that is not the night audit's
+     * room or meal-plan line — food, services, extras, fees, corrections, credit notes — each with
+     * its own service charge and GST (lib/folio-stay-extras, the mid-stay payment's rule too).
+     * `total` = billedSoFar − the stay's own posted nights. Null when nothing was added.
+     */
+    addedDuringStay: {
+      total: number;
+      lines: Array<{
+        id: string;
+        date: string;
+        description: string;
+        lineType: string;
+        place: string | null;
+        net: number;
+        serviceCharge: number;
+        gst: number;
+        total: number;
+      }>;
+    } | null;
   } | null;
+  /** The stay as priced plus what was added to it (2026-11-10). Null without a priced stay or a bill. */
+  stayWithAdded: number | null;
 }
 
 function money(d: Prisma.Decimal | null): number | null {
@@ -382,6 +405,8 @@ export async function buildEntryBillingSummary(prisma: Db, entryId: string): Pro
 
   // --- Folio ledger — mirrors recomputeFolioOutstandingBalance's aggregates exactly ----------
   let folioBlock: EntryBillingSummary["folio"] = null;
+  // What was added to the stay as priced, for `stayWithAdded` (2026-11-10).
+  let addedTotalDec: Prisma.Decimal | null = null;
   if (entry.folio) {
     // Only the RATES are needed to split a legacy combined tax back into its parts — the ratio
     // svc : gst(1+svc) does not depend on what it was charged on. See `splitCombinedTax`.
@@ -390,7 +415,8 @@ export async function buildEntryBillingSummary(prisma: Db, entryId: string): Pro
       prisma.folioLine.findMany({
         where: { folioId: entry.folio.id },
         select: {
-          amount: true, roomId: true, spaceId: true, lineType: true, description: true,
+          id: true, amount: true, roomId: true, spaceId: true, lineType: true, description: true,
+          chargeDate: true, postedAt: true, createdAt: true, nightAuditRecordId: true,
           room: { select: { roomNumber: true } },
           space: { select: { name: true, code: true } },
         },
@@ -512,6 +538,9 @@ export async function buildEntryBillingSummary(prisma: Db, entryId: string): Pro
                 .sort((a, b) => (a.spaceName ?? "").localeCompare(b.spaceName ?? ""))
             : null;
 
+    const stayExtras = splitStayAndExtras(lines);
+    const placeOf = (l: (typeof lines)[number]) => (l.room?.roomNumber ? `Room ${l.room.roomNumber}` : l.space ? l.space.name ?? l.space.code ?? null : null);
+    addedTotalDec = stayExtras.extras.length ? stayExtras.extrasTotal : null;
     folioBlock = {
       state: entry.folio.state,
       billedSoFar: lines.length > 0 ? money(sumMoneyBy(lines, "amount")) : null,
@@ -547,6 +576,22 @@ export async function buildEntryBillingSummary(prisma: Db, entryId: string): Pro
               total: money(whole.sum) ?? 0,
             }
           : null,
+      addedDuringStay: stayExtras.extras.length
+        ? {
+            total: money(stayExtras.extrasTotal) ?? 0,
+            lines: stayExtras.extras.map((x) => ({
+              id: x.line.id,
+              date: x.line.chargeDate.toISOString().slice(0, 10),
+              description: x.line.description,
+              lineType: String(x.line.lineType),
+              place: placeOf(x.line),
+              net: money(x.net) ?? 0,
+              serviceCharge: money(x.serviceCharge) ?? 0,
+              gst: money(x.gst) ?? 0,
+              total: money(x.total) ?? 0,
+            })),
+          }
+        : null,
     };
   }
 
@@ -610,5 +655,6 @@ export async function buildEntryBillingSummary(prisma: Db, entryId: string): Pro
     },
     rooms,
     folio: folioBlock,
+    stayWithAdded: stayTotalDec != null && folioBlock ? money(stayTotalDec.add(addedTotalDec ?? 0)) : null,
   };
 }

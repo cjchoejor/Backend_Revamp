@@ -109,6 +109,8 @@ export type DeskMoneyRow = {
   currency: string | null;
   headline: { amount: number | null; kind: "STAY_TOTAL" | "BILLED_SO_FAR" | null; frozen: boolean };
   folio: { state: string; billedSoFar: number | null; paymentsReceived: number | null; outstandingBalance: number | null } | null;
+  /** The stay as priced plus what was added to it; null with no priced stay total (2026-11-10). */
+  totalAmount: number | null;
   shortened: boolean;
 };
 

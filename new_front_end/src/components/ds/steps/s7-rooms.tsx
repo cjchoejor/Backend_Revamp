@@ -16,6 +16,7 @@ import { useHotelDay } from "@/hooks/use-hotel-day";
 import { useSession } from "@/hooks/use-session";
 import { declareRoomKeyLost, issueAllRoomKeys, issueRoomKey, returnRoomKey } from "@/lib/api/entries";
 import { currentRoomAssignments, roomStayRangesByRoom } from "@/lib/desk/party-rooms";
+import { effectiveCheckOutIso } from "@/lib/desk/workspace";
 import { fmtDay, fmtStamp, plural } from "@/lib/ds/format";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
 import { DeficiencyPanel } from "@/components/deficiency/deficiency-panel";
@@ -106,6 +107,8 @@ type KeyRow = {
 export function keyPlan(entry: EntryDetail, hotelToday: string | null): KeyRow[] {
   const stayByRoom = roomStayRangesByRoom(entry);
   const rows = entry.roomAssignments ?? [];
+  // The stay's last morning: a room kept to it is left at check-out, not mid-stay (2026-11-10).
+  const stayEnd = effectiveCheckOutIso(entry)?.slice(0, 10) ?? null;
   const byRoom = new Map<string, typeof rows>();
   for (const a of rows) byRoom.set(a.roomId, [...(byRoom.get(a.roomId) ?? []), a]);
   const items = Array.from(byRoom.entries()).map(([roomId, rs]) => {
@@ -114,7 +117,11 @@ export function keyPlan(entry: EntryDetail, hotelToday: string | null): KeyRow[]
     const lostRow = keyOut ? null : (rs.find((r) => r.keyLostAt) ?? null);
     const keyReturned = !keyOut && !lostRow && rs.some((r) => r.keyReturnedAt);
     // Vacated only once every range of the room has reached its move-out morning; never on a guess.
-    const vacated = !!hotelToday && rs.length > 0 && rs.every((r) => r.endDate && String(r.endDate).slice(0, 10) <= hotelToday);
+    // A room kept to the end of the stay is not vacated: on the check-out day its key comes back at
+    // Check-out, not as a swap (2026-11-10, operator: the Keys card read both rooms "moved out" on
+    // the guests' own check-out day).
+    const runsToCheckout = rs.some((r) => !r.endDate || (stayEnd != null && String(r.endDate).slice(0, 10) >= stayEnd));
+    const vacated = !!hotelToday && rs.length > 0 && !runsToCheckout && rs.every((r) => r.endDate && String(r.endDate).slice(0, 10) <= hotelToday);
     return {
       roomId,
       roomNumber: rs[0].room?.roomNumber ?? roomId.slice(0, 8),

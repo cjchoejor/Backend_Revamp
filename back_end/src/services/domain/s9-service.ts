@@ -5,6 +5,7 @@ import { resolveSendTo } from "../../lib/send-to.js";
 import { guestDisplayName } from "../../lib/guest-display-name.js";
 import { CommissionDueStatus, EntryStatus, FolioLineType, FolioState, InvoiceState, InvoiceType, Stage } from "@prisma/client";
 import { allocateReadableId, READABLE_ID_PREFIXES, allocateFolioLineId } from "../../lib/readable-id.js";
+import { cleanPhone } from "../../lib/phone-numbers.js";
 import { AppError, MissingConfigurationError, NotFoundError, PolicyGateBlockedError, ValidationError } from "../../lib/errors.js";
 import { describeBookingInspections, readBookingInspectionStanding } from "../../lib/room-inspection-standing.js";
 import { readBookingDamages, undecidedDamageRooms } from "../../lib/damage-standing.js";
@@ -185,6 +186,9 @@ async function dispatchInvoiceInner(
     nightsEach?: boolean;
     /** Sent with the trip's proforma (2026-11-07): its email is the trip's, so none goes from here. */
     viaTripPaper?: { id: string; number: string; channel: "EMAIL" | "WHATSAPP" };
+    /** WHATSAPP (2026-11-10): the desk sends it on WhatsApp itself; this records the send and the
+     *  number (`dispatchedTo`) and emails nothing. EMAIL, the default, emails it. */
+    channel?: "EMAIL" | "WHATSAPP";
   },
 ) {
   const invoice = await prisma.invoice.findUnique({ where: { id: invoiceId } });
@@ -198,9 +202,15 @@ async function dispatchInvoiceInner(
   }
   const now = new Date();
   const via = input?.viaTripPaper ?? null;
+  const onWhatsApp = !via && input?.channel === "WHATSAPP";
+  const whatsAppTo = onWhatsApp ? cleanPhone(input?.dispatchedTo, "The WhatsApp number") : null;
+  if (onWhatsApp && !whatsAppTo) throw new ValidationError("Put in the WhatsApp number it was sent to");
+  const channel: "EMAIL" | "WHATSAPP" = via?.channel ?? (onWhatsApp ? "WHATSAPP" : "EMAIL");
   const recipient = via
     ? { to: input?.dispatchedTo?.trim() || null, greetName: "", skipReason: null }
-    : await resolveInvoiceRecipient(prisma, invoice.entryId, input?.dispatchedTo ?? invoice.dispatchedTo);
+    : onWhatsApp
+      ? { to: whatsAppTo, greetName: "", skipReason: null }
+      : await resolveInvoiceRecipient(prisma, invoice.entryId, input?.dispatchedTo ?? invoice.dispatchedTo);
   const result = await prisma.$transaction(async (tx) => {
     const updated = await tx.invoice.update({
       where: { id: invoiceId },
@@ -228,7 +238,7 @@ async function dispatchInvoiceInner(
           data: {
             id: commId,
             entryId: updated.entryId,
-            channel: via?.channel ?? "EMAIL",
+            channel,
             // `PROFORMA_INVOICE` has been in the CommunicationType enum all along; this used to
             // write INVOICE_SUPERSEDED_NOTICE as a temporary dodge around a Windows Prisma-generate
             // issue, which mislabelled every PI dispatch and made the ack loop unfindable by type.
@@ -240,7 +250,11 @@ async function dispatchInvoiceInner(
             acknowledgementTimeoutAt: ackFireAt,
             acknowledgementReceivedAt: null,
             actorId,
-            contentSummary: via ? `Proforma invoice sent with the trip's proforma ${via.number}` : "Proforma invoice dispatched",
+            contentSummary: via
+              ? `Proforma invoice sent with the trip's proforma ${via.number}`
+              : onWhatsApp
+                ? `Proforma invoice sent on WhatsApp to ${whatsAppTo}`
+                : "Proforma invoice dispatched",
             payload: { invoiceId: updated.id, dispatchedTo: updated.dispatchedTo ?? null, ...(via ? { tripPaperId: via.id } : {}) },
             createdBy: actorId,
           },
@@ -286,7 +300,7 @@ async function dispatchInvoiceInner(
         data: {
           id: commId,
           entryId: updated.entryId,
-          channel: "EMAIL",
+          channel,
           commType: "INTERIM_INVOICE",
           stageContext: Stage.S7,
           direction: "OUTBOUND",
@@ -295,7 +309,7 @@ async function dispatchInvoiceInner(
           acknowledgementTimeoutAt: ackFireAt,
           acknowledgementReceivedAt: null,
           actorId,
-          contentSummary: "Interim invoice dispatched",
+          contentSummary: onWhatsApp ? `Interim invoice sent on WhatsApp to ${whatsAppTo}` : "Interim invoice dispatched",
           payload: { invoiceId: updated.id, dispatchedTo: updated.dispatchedTo ?? null },
           createdBy: actorId,
         },
@@ -339,7 +353,7 @@ async function dispatchInvoiceInner(
         data: {
           id: commId,
           entryId: updated.entryId,
-          channel: "EMAIL",
+          channel,
           commType: "FINAL_INVOICE",
           stageContext: entryRow?.currentStage ?? Stage.S9,
           direction: "OUTBOUND",
@@ -348,7 +362,7 @@ async function dispatchInvoiceInner(
           acknowledgementTimeoutAt: ackFireAt,
           acknowledgementReceivedAt: null,
           actorId,
-          contentSummary: "Final invoice dispatched",
+          contentSummary: onWhatsApp ? `Tax invoice sent on WhatsApp to ${whatsAppTo}` : "Final invoice dispatched",
           payload: { invoiceId: updated.id, dispatchedTo: updated.dispatchedTo ?? null },
           createdBy: actorId,
         },
@@ -381,7 +395,7 @@ async function dispatchInvoiceInner(
 
   // Phase 3 — outbound invoice email (best-effort, post-tx).
   // PROFORMA → S3 PI email; final invoices (RECEIPT_BASED / FOLIO / etc.) → S8/S9 final invoice email.
-  if (!via) await sendInvoiceEmailBestEffort(prisma, actorId, result.id, recipient, { nightsEach: input?.nightsEach === true });
+  if (!via && !onWhatsApp) await sendInvoiceEmailBestEffort(prisma, actorId, result.id, recipient, { nightsEach: input?.nightsEach === true });
 
   return result;
 }

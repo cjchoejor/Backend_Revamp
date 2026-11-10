@@ -9,8 +9,9 @@
  * worked on every day in whatever order the day takes. The rest opens from the step line (same day,
  * operator: "move night audit, disputes, guest details and ID proof, and faults in the room from the
  * main page … categorize them well … shown as a pop-up blurring the left panel, with a clear sign to
- * close it"): Charges › Night audit · Disputes, Guests and rooms › Guest details & ID proof · Faults in
- * the room, each in a pop-up over the work column; what needs doing from them is one line on the page.
+ * close it"): Charges › Night audit · Who pays (since 2026-11-10) · Disputes, Guests and rooms › Guest
+ * details & ID proof · Faults in the room, each in a pop-up over the work column; what needs doing from
+ * them is one line on the page.
  * The keys, Move a room, Extend the stay and Leaving early open in the page, with the way back. Move to
  * Check-out floats in once everything is done.
  */
@@ -39,7 +40,7 @@ import {
   type ChangeBookingItem,
   type StepPane,
 } from "./kit";
-import { WhoPaysCard, DisputesCard, FaultsCard, HandoffsCard, RaiseDisputeDialog, TermsChangeCard } from "./s7-desk";
+import { WhoPaysCard, DisputesCard, FaultsCard, HandoffsCard, RaiseDisputeDialog, usePayerWords } from "./s7-desk";
 import { FolioCard } from "./s7-folio";
 import { NightsCard } from "./s7-nights";
 import { FlagDeficientDialog, KeysCard, KeysDueNotice, RoomsInUseCard, keysDue, keysDueWords } from "./s7-rooms";
@@ -48,9 +49,10 @@ import { PayLaterNote } from "./s6-balance";
 import { effectiveCheckOutIso } from "@/lib/desk/workspace";
 
 /** The sections that open from the step line, each in a pop-up over the work column. */
-type StayPopup = "nights" | "disputes" | "guests" | "faults";
+type StayPopup = "nights" | "payer" | "disputes" | "guests" | "faults";
 const POPUP_TITLE: Record<StayPopup, string> = {
   nights: "Night audit",
+  payer: "Who pays",
   disputes: "Disputes",
   guests: "Guest details & ID proof",
   faults: "Faults in the room",
@@ -137,13 +139,15 @@ export function S7Stay({
           setTarget={setChargeTarget}
         />
         <HandoffsCard entry={entry} tz={tz} />
-        <TermsChangeCard entry={entry} />
-        <WhoPaysCard entry={entry} tz={tz} />
       </div>
 
       {/* From the step line: each in a pop-up over the work column, the booking file clear. */}
       <WorkPopup open={popup === "nights"} keepMounted title={POPUP_TITLE.nights} onClose={() => setPopup(null)}>
         <NightsCard entry={entry} setNightAuditOk={reportNight} />
+      </WorkPopup>
+      {/* Who pays moved here from the page (2026-11-10, operator: "move the who pays section to charges"). */}
+      <WorkPopup open={popup === "payer"} title={POPUP_TITLE.payer} onClose={() => setPopup(null)}>
+        <WhoPaysCard entry={entry} tz={tz} />
       </WorkPopup>
       <WorkPopup open={popup === "disputes"} title={POPUP_TITLE.disputes} onClose={() => setPopup(null)}>
         <DisputesCard
@@ -333,12 +337,19 @@ function StayActs({
   const owedWords = keysDueWords(due);
   const notNow = "Not possible on this booking now";
   const openDisputes = (entry.disputes ?? []).filter((d) => d.status === "OPEN" || d.status === "IN_PROGRESS").length;
+  const payer = usePayerWords(entry);
   const charges: ChangeBookingItem[] = [
     {
       key: "nights",
       label: "Night audit",
       note: "Each night of the stay and its room charge. Tonight is posted when the guest checks in; the hotel's run posts the rest each morning.",
       onSelect: () => onPopup("nights"),
+    },
+    {
+      key: "payer",
+      label: "Who pays",
+      note: entry.folio ? `${payer}. The FOM can change it while the guest is staying.` : "Who each kind of charge goes to.",
+      onSelect: () => onPopup("payer"),
     },
     {
       key: "disputes",

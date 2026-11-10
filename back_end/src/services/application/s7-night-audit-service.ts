@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import { recalculateNextDayTimers } from "../infrastructure/next-day-timer-service.js";
 import { allocateReadableId, allocateFolioLineId } from "../../lib/readable-id.js";
 import { frozenCompositionByRoom, splitFrozenRow } from "../../lib/frozen-room-composition.js";
+import { lineTax, shareForNight } from "../../lib/stay-posting.js";
 import { maybePromptInterimPaymentTx } from "../domain/interim-payment-service.js";
 import { enforceFolioLiveForNightAuditProcessing } from "../../policies/13-billing-model/p31-folio-live-charge-and-night-audit-context.js";
 import { recomputeFolioOutstandingBalance } from "../../lib/folio-outstanding-from-payment.js";
@@ -273,8 +274,17 @@ export async function planNightForEntries(
         });
 
         // Legacy row with no composition anywhere: one flat room line, exactly as before.
-        const accommodationPerNight = split ? num(split.accommodation) / split.nights : fallbackRate;
-        const mealsPerNight = split ? num(split.meals) / split.nights : 0;
+        // Otherwise each part is shared over the row's nights in whole chhertum, the last night
+        // taking what is left (`stay-posting.ts`, 2026-11-10), so the nights add up to exactly
+        // the frozen figures — the rule the quotation priced the room's tax on.
+        const rowStart = a.startDate ?? entry.reservation?.frozenCheckInDate ?? entry.checkInDate ?? null;
+        const nightIndex = rowStart
+          ? Math.round((opTime - operatingDateUtc(rowStart).getTime()) / 86_400_000)
+          : 0;
+        const accommodationPerNight = split
+          ? Number(shareForNight(split.accommodation, split.nights, nightIndex).toFixed(2))
+          : fallbackRate;
+        const mealsPerNight = split ? Number(shareForNight(split.meals, split.nights, nightIndex).toFixed(2)) : 0;
 
         perRoomPostCandidates.push({
           assignmentId: a.id,
@@ -555,11 +565,15 @@ async function postEntryNightPlanTx(
       if (roomAmount.gt(0)) {
         // Same companion pair `postCharge` writes, stamped with the audit record so the
         // invoice can pair them with their room line. Service charge first, then GST on
-        // (net + service charge) — the hotel-wide compound rule.
-        const serviceCharge =
-          post.serviceChargeApplies && serviceChargeRate > 0
-            ? round2(mulMoney(roomAmount, serviceChargeRate))
-            : ZERO;
+        // (net + service charge) — the hotel-wide compound rule, the one the quotation priced
+        // the room's tax on (`lineTax`, 2026-11-10).
+        const tax = lineTax(roomAmount, {
+          serviceChargeApplies: post.serviceChargeApplies,
+          gstApplies: post.gstApplies,
+          serviceChargeRate,
+          gstRate,
+        });
+        const serviceCharge = tax.serviceCharge;
         if (serviceCharge.gt(0)) {
           await tx.folioLine.create({
             data: {
@@ -578,8 +592,7 @@ async function postEntryNightPlanTx(
             },
           });
         }
-        const gst =
-          post.gstApplies && gstRate > 0 ? round2(mulMoney(roomAmount.add(serviceCharge), gstRate)) : ZERO;
+        const gst = tax.gst;
         if (gst.gt(0)) {
           await tx.folioLine.create({
             data: {

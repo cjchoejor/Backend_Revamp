@@ -2,7 +2,7 @@
 
 /**
  * Stay — the work around the guest: the departments told at check-in and the one before
- * check-out, disputes, faults in the room, a change to the terms, and who the bill goes to.
+ * check-out, disputes, faults in the room, and who the bill goes to.
  * Operator words only; the departments' handoffs are named by what they are for.
  */
 import { useEffect, useMemo, useState } from "react";
@@ -12,11 +12,8 @@ import { Button, Chip } from "@/design-system";
 import { useSession } from "@/hooks/use-session";
 import {
   acceptHandoff,
-  amendEntry,
-  buildH4FulfilmentEvidence,
   createH4Handoff,
   finalizeDeficientCondition,
-  fulfilHandoff,
   getHandoffChecklist,
   openDispute,
   progressDispute,
@@ -43,14 +40,6 @@ const HANDOFF_WORD: Record<string, string> = {
   ESCALATED: "not accepted in time — passed to the FOM",
 };
 
-const FINAL_FAULT = [
-  ["NOT_APPLICABLE", "No fault to report"],
-  ["RESOLVED", "Fault fixed"],
-  ["UNRESOLVED_AT_CHECKOUT", "Fault still open at check-out"],
-  ["RECORDED", "Fault recorded"],
-] as const;
-type FinalFault = (typeof FINAL_FAULT)[number][0];
-
 const DISPUTE_WORD: Record<string, string> = { OPEN: "open", IN_PROGRESS: "being reviewed", RESOLVED: "resolved" };
 
 const FAULT_WORD: Record<string, string> = {
@@ -60,13 +49,6 @@ const FAULT_WORD: Record<string, string> = {
   DEFICIENT_UNRESOLVED_AT_CHECKOUT: "still open at check-out",
 };
 const faultSettled = (s: string) => s === "RESOLVED" || s === "UNRESOLVED" || s === "DEFICIENT_UNRESOLVED_AT_CHECKOUT";
-
-const AMEND_KINDS = [
-  ["INCLUSION_CHANGE", "What's included"],
-  ["MEAL_PLAN_CHANGE", "Meal plan"],
-  ["DISCOUNT", "Discount"],
-] as const;
-type AmendKind = (typeof AMEND_KINDS)[number][0];
 
 function handoffWord(h: HandoffSummary) {
   if (h.rejectedAt) return "turned back";
@@ -176,15 +158,17 @@ export function HandoffsCard({ entry, tz }: { entry: EntryDetail; tz: string }) 
   const housekeeping = handoffs.filter((h) => h.handoffType === "H2" && h.state !== "CANCELLED");
   const kitchen = handoffs.filter((h) => h.handoffType === "H3" && h.state !== "CANCELLED");
   const before = handoffs.find((h) => h.handoffType === "H4") ?? null;
+  // Accepted when told, or late once nobody accepted it in time. It is finished at Check-out, from
+  // the room inspection (2026-11-10) — no fault question and no Mark it done here.
+  const waiting = !!before && !before.rejectedAt && (before.state === "CREATED" || before.state === "ESCALATED");
 
   const checklist = useQuery({
     queryKey: ["handoff-checklist", "H4"],
     queryFn: () => getHandoffChecklist(session!, "H4"),
-    enabled: !!session && before?.state === "CREATED",
+    enabled: !!session && waiting,
   });
   const items = (checklist.data?.items ?? []) as HandoffChecklistItem[];
   const [ticks, setTicks] = useState<Record<string, boolean>>({});
-  const [fault, setFault] = useState<FinalFault>("NOT_APPLICABLE");
   const allTicked = items.filter((i) => i.mandatory).every((i) => ticks[i.code] === true);
 
   const start = useMutation({
@@ -206,14 +190,6 @@ export function HandoffsCard({ entry, tz }: { entry: EntryDetail; tz: string }) 
       refresh();
     },
     onError: (e) => toastRefusal(e, "The handoff could not be accepted"),
-  });
-  const done = useMutation({
-    mutationFn: () => fulfilHandoff(session!, before!.id, buildH4FulfilmentEvidence(fault)),
-    onSuccess: () => {
-      toast.success("Before check-out · done");
-      refresh();
-    },
-    onError: (e) => toastRefusal(e, "The handoff could not be marked done"),
   });
 
   return (
@@ -238,8 +214,13 @@ export function HandoffsCard({ entry, tz }: { entry: EntryDetail; tz: string }) 
             Tell the departments the guest is leaving
           </Button>
         </div>
-      ) : before.state === "CREATED" ? (
+      ) : waiting ? (
         <div className="bind provisional" style={{ marginTop: 10, display: "grid", gap: 6 }}>
+          {before.state === "ESCALATED" ? (
+            <span className="sm warn-ink" style={{ fontWeight: 600 }}>
+              Nobody accepted it in time. Accept it on the departments&rsquo; word — the move to Check-out waits for it.
+            </span>
+          ) : null}
           {items.length === 0 ? (
             <span className="meta">{checklist.isLoading ? "Reading the checklist…" : "No checklist for this handoff."}</span>
           ) : (
@@ -265,23 +246,10 @@ export function HandoffsCard({ entry, tz }: { entry: EntryDetail; tz: string }) 
             </Button>
           </div>
         </div>
-      ) : before.state === "ACCEPTED" || before.state === "ESCALATED" ? (
-        <div className="bind provisional" style={{ marginTop: 10, display: "grid", gap: 8 }}>
-          {before.state === "ESCALATED" ? (
-            <span className="sm warn-ink" style={{ fontWeight: 600 }}>
-              Nobody accepted it in time. Mark it done once the room is checked — the move to Check-out waits for it.
-            </span>
-          ) : null}
-          <div className="field">
-            <label>Any fault in the room, at the end</label>
-            <Choice options={FINAL_FAULT} value={fault} onChange={setFault} />
-          </div>
-          <div className="row-acts">
-            <Button compact state={done.isPending ? "working" : "default"} workingLabel="Saving…" onClick={() => done.mutate()}>
-              Mark it done
-            </Button>
-          </div>
-        </div>
+      ) : before.state === "ACCEPTED" ? (
+        <p className="sm" style={{ marginTop: 8 }}>
+          It is finished at Check-out, from the room inspection.
+        </p>
       ) : null}
     </StepCard>
   );
@@ -547,66 +515,6 @@ export function FaultsCard({ entry, tz, onFlag }: { entry: EntryDetail; tz: stri
   );
 }
 
-/* ------------------------------------------------------------------ a change to the terms */
-
-export function TermsChangeCard({ entry }: { entry: EntryDetail }) {
-  const { session } = useSession();
-  const { past } = useStepMode();
-  const refresh = useRefreshEntry(entry.id);
-  const [kind, setKind] = useState<AmendKind>("INCLUSION_CHANGE");
-  const [reason, setReason] = useState("");
-  const [terms, setTerms] = useState("");
-  const save = useMutation({
-    mutationFn: () => {
-      const segmentId = entry.segments?.[0]?.id;
-      if (!segmentId) throw new Error("This booking has no open pass to record it against");
-      return amendEntry(session!, entry.id, {
-        amendmentType: kind,
-        segmentId,
-        amendmentPath: "PATH_2",
-        requestedBy: session!.userId,
-        authorisedBy: session!.userId,
-        authorityBasis: "FOM mid-stay amendment",
-        reason: reason.trim(),
-        newTermsSummary: terms.trim(),
-        stageAtAmendment: "S7",
-      });
-    },
-    onSuccess: () => {
-      toast.success("The change to the terms is recorded");
-      setReason("");
-      setTerms("");
-      refresh();
-    },
-    onError: (e) => toastRefusal(e, "The change could not be recorded"),
-  });
-  if (past || !atLeast(session?.actorLevel, "L2")) return null;
-  const missing = !reason.trim() ? "the reason" : !terms.trim() ? "the new terms, in a sentence" : null;
-  return (
-    <StepCard title="A change to the terms · the FOM" icon="pen" meta="Recorded by the FOM. To move the guest to a room of another type, use Change room on that room, above.">
-      <div className="form2">
-        <div className="wide field">
-          <label>What changes</label>
-          <Choice options={AMEND_KINDS} value={kind} onChange={setKind} />
-        </div>
-        <div className="field">
-          <label>Reason</label>
-          <input className="input" value={reason} placeholder="the guest asked for dinner every night" onChange={(e) => setReason(e.target.value)} />
-        </div>
-        <div className="field">
-          <label>The new terms</label>
-          <input className="input" value={terms} placeholder="MAP + dinner from 13 Sep" onChange={(e) => setTerms(e.target.value)} />
-        </div>
-      </div>
-      <div className="row-acts" style={{ marginTop: 10 }}>
-        <Button compact state={save.isPending ? "working" : missing ? "inert" : "default"} title={missing ?? undefined} workingLabel="Recording…" onClick={() => save.mutate()}>
-          Record the change
-        </Button>
-      </div>
-    </StepCard>
-  );
-}
-
 /* ------------------------------------------------------------------ who pays */
 
 /** The kinds of charge, in the words of a bill. */
@@ -638,6 +546,19 @@ function splitWords(map: Record<string, string> | null, fallback: string | null,
   if (byPayer.size === 0) return "not set";
   if (byPayer.size === 1) return `Everything to ${payerWord([...byPayer.keys()][0], party)}`;
   return [...byPayer].map(([m, kinds]) => `${kinds.join(", ")} → ${payerWord(m, party)}`).join(" · ");
+}
+
+/** Who pays, in words, for the Charges menu's line (the same read as the card's, so the two agree). */
+export function usePayerWords(entry: EntryDetail): string {
+  const { session } = useSession();
+  const booked = useBookedBy(entry);
+  const folio = entry.folio ?? null;
+  const read = useQuery({
+    queryKey: ["payer", entry.id, entry.updatedAt],
+    queryFn: () => getPayer(session!, entry.id),
+    enabled: !!session && !!folio,
+  });
+  return splitWords(read.data?.map ?? null, read.data?.current ?? folio?.billingModel ?? null, booked.party);
 }
 
 /**

@@ -35,17 +35,25 @@ import {
   writeOffOutstanding,
 } from "@/lib/api/post-stay";
 import { openCancellationConfirmationPdf, openFolioDocumentPdf, openInvoicePdf } from "@/lib/api/documents";
+import { FolioSendDialog } from "@/components/ds/workspace/folio-papers";
 import { activeQuotation, deriveFinancials, effectiveCheckOutIso } from "@/lib/desk/workspace";
 import { fmtDateTime, fmtDay, fmtInstantDate, fmtStamp, instantYmd, money, nightsOf, plural } from "@/lib/ds/format";
 import { rateWords } from "@/lib/ds/rates";
 import { FolioLinesTable, spaceNamesFromAllocations } from "@/components/desk/workspace/folio-lines";
 import { SplitSettlementBlock } from "@/components/desk/workspace/split-settlement";
 import type { EntryDetail, InvoiceSummary } from "@/types/api";
-import { sentWords } from "@/hooks/use-invoice-recipient";
+import { sentWords, useInvoiceRecipient } from "@/hooks/use-invoice-recipient";
+import { usePhoneRules } from "@/hooks/use-phone-rules";
+import { problemOfPhone } from "@/lib/ds/phone";
+import { PhoneField } from "@/components/ds/phone-field";
+import { issueFinalInvoice } from "@/lib/api/checkout";
+import { dispatchInvoice } from "@/lib/api/reservation-setup";
 import { OverpaidCard } from "./refund-card";
 import {
   ActTiles,
   AnswerLine,
+  Choice,
+  SendPaperPanel,
   useReplyAsked,
   DocCard,
   DsDialog,
@@ -54,6 +62,7 @@ import {
   Live,
   NotNow,
   PaperDrawer,
+  InvoiceSendDialog,
   ReasonDialog,
   StepCanvas,
   StepCard,
@@ -329,6 +338,9 @@ function AfterTheStay({ entry, tz, openPane }: { entry: EntryDetail; tz: string;
   const followUps = entry.followUpTasks ?? [];
 
   const [paying, setPaying] = useState(false);
+  // The tax invoice sent from the payment box (2026-11-10): the box closes, the invoice is sent
+  // beside its paper, and the box opens again on it.
+  const [sendingTax, setSendingTax] = useState(false);
   const [writing, setWriting] = useState(false);
   const [byPart, setByPart] = useState(false);
 
@@ -437,11 +449,6 @@ function AfterTheStay({ entry, tz, openPane }: { entry: EntryDetail; tz: string;
               onClick: gm && folio.state === "OUTSTANDING" ? () => setWriting(true) : undefined,
               reason: !gm ? "only the GM can write off" : folio.state !== "OUTSTANDING" ? "nothing is owed to write off" : undefined,
             },
-            {
-              key: "credit",
-              label: "Credit note",
-              reason: "not possible once the bill is settled",
-            },
           ]}
         />
         {byPart ? (
@@ -541,7 +548,31 @@ function AfterTheStay({ entry, tz, openPane }: { entry: EntryDetail; tz: string;
         ) : null}
       </Facts>
 
-      <RecordPayment entry={entry} open={paying} onClose={() => setPaying(false)} invoices={inv.invoices} outstanding={outstanding} answerPending={answerPending} currency={cur} payer={booked.payer} />
+      <RecordPayment
+        entry={entry}
+        open={paying}
+        onClose={() => setPaying(false)}
+        invoices={inv.invoices}
+        outstanding={outstanding}
+        answerPending={answerPending}
+        currency={cur}
+        payer={booked.payer}
+        onSendInvoice={() => {
+          setPaying(false);
+          setSendingTax(true);
+        }}
+      />
+      {sendingTax ? (
+        <TaxInvoiceSendDialog
+          entry={entry}
+          target={inv.finals.find((i) => !i.dispatchedAt) ?? null}
+          onClose={() => setSendingTax(false)}
+          onSent={() => {
+            setSendingTax(false);
+            setPaying(true);
+          }}
+        />
+      ) : null}
       <WriteOff entry={entry} open={writing} onClose={() => setWriting(false)} outstanding={outstanding} currency={cur} payer={booked.payer} />
     </StepCard>
   );
@@ -599,42 +630,97 @@ function AfterStayHandoff({ entry, live, tz }: { entry: EntryDetail; live: boole
   const refresh = useRefreshEntry(entry.id);
   const h5 = (entry.handoffs ?? []).find((h) => h.handoffType === "H5") ?? null;
   const h5Open = !!h5 && (h5.state === "CREATED" || h5.state === "ASSIGNED" || h5.state === "ACCEPTED");
-  const [basis, setBasis] = useState("Nothing left to settle");
+  // Done only when no bill is left to settle (2026-11-10, operator: "it shouldn't even be clickable
+  // if the bill is still outstanding, or wasn't written off by higher authority"). The backend
+  // refuses it too; the figure is the server's.
+  const pay = usePaymentStatus(entry.id, { enabled: h5Open });
+  const fin = deriveFinancials(entry, { paymentStatus: pay.data });
+  const writtenOff = entry.folio?.state === "WRITTEN_OFF";
+  const owed = !writtenOff && fin.outstanding != null && fin.outstanding > 0 ? fin.outstanding : null;
+  const known = fin.outstanding != null || writtenOff;
+  const [basis, setBasis] = useState("Paid in full");
+  const [asking, setAsking] = useState(false);
   const finish = useFinishWhenDone("handoff");
   const done = useMutation({
     mutationFn: () => fulfilHandoff(session!, h5!.id, { resolutionBasis: basis.trim() }),
     onSuccess: () => {
-      toast.success("The after-stay handoff is done");
+      toast.success("The after-stay handoff is done — nothing is left to settle");
+      setAsking(false);
       refresh();
       finish();
     },
     onError: (e) => toastRefusal(e, "The after-stay handoff could not be completed"),
   });
+  useEffect(() => {
+    if (writtenOff) setBasis((b) => (b === "Paid in full" ? "Written off by the GM" : b));
+  }, [writtenOff]);
   if (!h5) return null;
   const word = HANDOFF_STATE_WORD[h5.state] ?? words(h5.state);
   const state = word ? word[0].toUpperCase() + word.slice(1) : word;
+  const cur = entry.folio?.lines?.[0]?.currency ?? fin.currency;
   return (
     <StepCard
       flow="handoff"
       title="The after-stay handoff"
-      meta="It is done once the money is all in, written off, or there is nothing left to do."
-      status={h5Open ? <span className="warn-ink">{state} — say what settled it and mark it done</span> : <span className="ok-ink">{state}</span>}
+      meta="Raised at check-out because money was still owed. It is done once every bill is settled: paid in full, or written off by the GM."
+      status={
+        !h5Open ? (
+          <span className="ok-ink">{state}</span>
+        ) : owed != null ? (
+          <span className="stop-ink" role="status">
+            <b>{money(owed, cur)} still owed</b> — record the payment, or the GM writes it off, before this can be marked done
+          </span>
+        ) : (
+          <span className="warn-ink">{state} — nothing is owed now; mark it done</span>
+        )
+      }
       summary={`${state}${h5.fulfilledAt ? ` · ${fmtStamp(h5.fulfilledAt, tz)}` : ""}`}
     >
       {h5Open && live ? (
         <Live>
           <div className="row-acts">
-            <input className="input" style={{ flex: 1, minWidth: 220 }} value={basis} aria-label="What settled it" onChange={(e) => setBasis(e.target.value)} />
             <Button
-              className={basis.trim() ? "go" : undefined}
-              state={done.isPending ? "working" : basis.trim() ? "default" : "inert"}
-              title={basis.trim() ? undefined : "say what settled it"}
-              workingLabel="Recording…"
-              onClick={() => done.mutate()}
+              className={owed == null && known ? "go" : undefined}
+              state={owed != null || !known ? "inert" : "default"}
+              title={owed != null ? `${money(owed, cur)} is still owed` : !known ? "reading the bill" : undefined}
+              onClick={() => setAsking(true)}
             >
               Mark it done
             </Button>
           </div>
+          <DsDialog
+            open={asking}
+            onClose={() => setAsking(false)}
+            busy={done.isPending}
+            closeX
+            title="Mark the after-stay handoff done?"
+            caseLines={[entry.id, writtenOff ? "The bill was written off by the GM" : "Nothing is owed on this booking now"]}
+            footer={
+              <>
+                <Button kind="quiet" state={done.isPending ? "inert" : "default"} onClick={() => setAsking(false)}>
+                  Not now
+                </Button>
+                <Button
+                  className="go"
+                  state={done.isPending ? "working" : basis.trim() ? "default" : "inert"}
+                  title={basis.trim() ? undefined : "say what settled it"}
+                  workingLabel="Recording…"
+                  onClick={() => done.mutate()}
+                >
+                  Yes, nothing is left to settle
+                </Button>
+              </>
+            }
+          >
+            <p style={{ marginTop: 0 }}>
+              This says <b>no bill is left to settle</b> on this booking: everything is paid, or written off by the GM. The follow-up on
+              this booking&rsquo;s money ends.
+            </p>
+            <div className="field">
+              <label>What settled it</label>
+              <input className="input" value={basis} maxLength={500} onChange={(e) => setBasis(e.target.value)} />
+            </div>
+          </DsDialog>
         </Live>
       ) : null}
     </StepCard>
@@ -861,6 +947,163 @@ function IssueTaxInvoice({ entry, open, onDone, hasOne }: { entry: EntryDetail; 
   );
 }
 
+/* ------------------------------------------------------------------ send the tax invoice */
+
+const SEND_CHANNELS = [
+  ["EMAIL", "Email"],
+  ["WHATSAPP", "WhatsApp"],
+] as const;
+
+/**
+ * Send the tax invoice from the payment box (2026-11-10, operator: "when send invoice is clicked, show
+ * the page like how we show for other paper sends, where on the right it views the invoice and on the
+ * left it shows the send by WhatsApp or email option"). The invoice issued and not sent, or — when
+ * none is issued — the draft, which is issued with a new number on the press.
+ */
+function TaxInvoiceSendDialog({
+  entry,
+  target,
+  onClose,
+  onSent,
+}: {
+  entry: EntryDetail;
+  target: InvoiceSummary | null;
+  onClose: () => void;
+  onSent: () => void;
+}) {
+  const { session } = useSession();
+  const refresh = useRefreshEntry(entry.id);
+  const recipient = useInvoiceRecipient(entry);
+  const phoneRules = usePhoneRules();
+  const replyAsked = useReplyAsked(entry.id, "FINAL_INVOICE");
+  const index = useFolioIndex(entry);
+  const [channel, setChannel] = useState<"EMAIL" | "WHATSAPP">("EMAIL");
+  const [to, setTo] = useState("");
+  const [touched, setTouched] = useState(false);
+  useEffect(() => {
+    if (touched) return;
+    setTo(channel === "EMAIL" ? recipient.defaultTo : recipient.phone);
+  }, [channel, touched, recipient.defaultTo, recipient.phone]);
+  const typed = to.trim();
+  const emailish = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(typed);
+  const numberBad = channel === "WHATSAPP" ? problemOfPhone(phoneRules, typed) : null;
+  const ok = channel === "WHATSAPP" ? typed.length > 0 && !numberBad : emailish;
+  const send = useMutation({
+    mutationFn: async () => {
+      let id = target?.id ?? null;
+      let number = target ? invoiceLabel(target) : null;
+      if (!id) {
+        if (!entry.folio) throw new Error("There is no bill on this booking");
+        const issued = (await issueFinalInvoice(session!, entry.folio.id, entry.id, "final-v1")) as { id?: string; invoiceNumber?: string | null } | null;
+        if (!issued?.id) throw new Error("The tax invoice could not be issued");
+        id = issued.id;
+        number = issued.invoiceNumber ?? issued.id;
+      }
+      await dispatchInvoice(session!, id, { dispatchedTo: typed, channel });
+      return number;
+    },
+    onSuccess: (number) => {
+      toast.success(
+        channel === "WHATSAPP"
+          ? `Tax invoice ${number} recorded as sent on WhatsApp to ${typed}`
+          : `Tax invoice ${number} sent by email to ${typed}${replyAsked ? " — their answer is awaited" : ""}`,
+      );
+      refresh([["settlement-targets"], ["folio-documents", entry.id], ["entry-communications", entry.id]]);
+      onSent();
+    },
+    onError: (e) => {
+      toastRefusal(e, "The tax invoice could not be sent");
+      refresh();
+    },
+  });
+  const paper: PaperRef = target
+    ? { kind: "invoice", id: target.id, label: `Tax invoice ${invoiceLabel(target)}`, issued: true, invoiceType: "FINAL" }
+    : { kind: "folio", entryId: entry.id, doc: "tax-invoice", label: "Tax invoice · not issued yet", refreshKey: `${entry.updatedAt}|${index.data?.asAt ?? ""}` };
+  const hint =
+    channel === "WHATSAPP"
+      ? recipient.phoneWhose && typed === recipient.phone
+        ? `${recipient.phoneWhose} — send it on WhatsApp yourself; the desk records the send with this number`
+        : "send it on WhatsApp yourself — the desk records the send with this number"
+      : !typed
+        ? "no email on file — type one"
+        : !emailish
+          ? "that is not an email address"
+          : recipient.defaultWhose && typed === recipient.defaultTo
+            ? recipient.defaultWhose
+            : "the send is recorded on the booking with this address";
+  return (
+    <DsDialog
+      open
+      onClose={onClose}
+      busy={send.isPending}
+      beside={<SendPaperPanel paper={paper} nightsEach={false} />}
+      title={target ? `Send tax invoice ${invoiceLabel(target)}` : "Issue and send the tax invoice"}
+      caseLines={[entry.id, target ? "Issued, not sent yet" : "Not issued yet"]}
+      footer={
+        <>
+          <Button kind="quiet" state={send.isPending ? "inert" : "default"} onClick={onClose}>
+            Not now
+          </Button>
+          <Button
+            className="go"
+            icon={target ? "send" : "lock"}
+            state={send.isPending ? "working" : ok ? "default" : "inert"}
+            title={ok ? undefined : channel === "WHATSAPP" ? (numberBad ?? "put in the WhatsApp number") : "type an email address"}
+            workingLabel={target ? "Sending…" : "Issuing…"}
+            onClick={() => send.mutate()}
+          >
+            {target ? "Send now" : "Issue and send"}
+          </Button>
+        </>
+      }
+    >
+      {!target ? (
+        <p className="sm">
+          This cannot be undone: the tax invoice is made for the bill as it stands now, with a new number, and that is the copy they
+          receive.
+        </p>
+      ) : null}
+      <div className="field">
+        <label>Send via</label>
+        <Choice
+          options={SEND_CHANNELS}
+          value={channel}
+          onChange={(c) => {
+            setChannel(c);
+            setTouched(false);
+          }}
+        />
+      </div>
+      <div className="field">
+        <label>{channel === "EMAIL" ? "Email address" : "WhatsApp number"}</label>
+        {channel === "EMAIL" ? (
+          <input
+            className="input"
+            value={to}
+            onChange={(e) => {
+              setTouched(true);
+              setTo(e.target.value);
+            }}
+            placeholder="name@example.com"
+            autoFocus
+          />
+        ) : (
+          <PhoneField
+            value={to}
+            ariaLabel="WhatsApp number"
+            autoFocus
+            onChange={(v) => {
+              setTouched(true);
+              setTo(v);
+            }}
+          />
+        )}
+        <span className="hint">{hint}</span>
+      </div>
+    </DsDialog>
+  );
+}
+
 /* ------------------------------------------------------------------ record a payment */
 
 /** How money arrives after the stay — the guest has gone, so a transfer is the usual way. */
@@ -880,6 +1123,7 @@ function RecordPayment({
   answerPending,
   currency,
   payer,
+  onSendInvoice,
 }: {
   entry: EntryDetail;
   open: boolean;
@@ -889,6 +1133,8 @@ function RecordPayment({
   answerPending: boolean;
   currency: string;
   payer: string;
+  /** Send the tax invoice (issuing it first when there is none) — offered while none has gone out. */
+  onSendInvoice: () => void;
 }) {
   const { session } = useSession();
   const refresh = useRefreshEntry(entry.id);
@@ -897,6 +1143,10 @@ function RecordPayment({
   // refuses it (2026-09-18).
   const payable = invoices.filter((i) => i.state === "DISPATCHED" || i.state === "PAYMENT_TRACKED");
   const preferred = payable.find((i) => i.invoiceType === "FINAL") ?? payable[0] ?? null;
+  // No tax invoice has gone out (2026-11-10, operator): the money is matched to one, so the box
+  // offers to send it — the one issued and not sent, else issue one first.
+  const finalSent = payable.some((i) => i.invoiceType === "FINAL");
+  const unsentFinal = invoices.find((i) => i.invoiceType === "FINAL" && i.state !== "SUPERSEDED" && !i.dispatchedAt) ?? null;
   const [invoiceId, setInvoiceId] = useState("");
   const [amount, setAmount] = useState("");
   const [ref, setRef] = useState("");
@@ -992,11 +1242,23 @@ function RecordPayment({
       {answerPending ? (
         <p className="sm warn-ink">Their answer to the tax invoice is not on record yet — record what they said first, then the money.</p>
       ) : null}
+      {!finalSent ? (
+        <div className="notice next pay-send-invoice" data-send-invoice>
+          <span>
+            {unsentFinal
+              ? `Tax invoice ${invoiceLabel(unsentFinal)} is issued but has not gone out. Send it, then record the money against it.`
+              : "No tax invoice has gone out yet. Issue and send it, then record the money against it."}
+          </span>
+          <Button className="go" icon="send" onClick={onSendInvoice}>
+            {unsentFinal ? "Send the tax invoice" : "Issue and send the tax invoice"}
+          </Button>
+        </div>
+      ) : null}
       <div className="form2">
         <div className="wide field">
           <label>For the invoice</label>
           <select className="input" value={target} onChange={(e) => setInvoiceId(e.target.value)} disabled={answerPending || !payable.length}>
-            {payable.length ? null : <option value="">no invoice has gone out yet — send the tax invoice first</option>}
+            {payable.length ? null : <option value="">no invoice has gone out yet</option>}
             {payable.map((inv) => (
               <option key={inv.id} value={inv.id}>
                 {invoiceLabel(inv)} · {INVOICE_TYPE_WORD[inv.invoiceType] ?? words(inv.invoiceType)} · {INVOICE_STATE_WORD[inv.state] ?? words(inv.state)}
@@ -1203,6 +1465,10 @@ function SealedPapers({ entry, tz }: { entry: EntryDetail; tz: string }) {
   const master = index.data?.documents.find((d) => d.kind === "master-bill") ?? null;
   const tax = index.data?.documents.find((d) => d.kind === "tax-invoice") ?? null;
   const issued = tax?.state === "ISSUED" ? tax.invoice : null;
+  // Sent from here like any other paper (2026-11-10).
+  const [sendingMaster, setSendingMaster] = useState(false);
+  const [sendingTax, setSendingTax] = useState(false);
+  const issuedRow = issued ? (invoices.find((i) => i.id === issued.id) ?? null) : null;
   const keyReturn = (entry.keyReturnRecords ?? [])[0] ?? null;
   const audited = useMemo(
     () =>
@@ -1242,6 +1508,11 @@ function SealedPapers({ entry, tz }: { entry: EntryDetail; tz: string }) {
               <Button kind="quiet" compact icon="file" onClick={() => session && openInvoicePdf(session, issued.id).catch((e) => toastRefusal(e, "The PDF could not be opened"))}>
                 PDF
               </Button>
+              {issuedRow ? (
+                <Button kind="quiet" compact icon="send" onClick={() => setSendingTax(true)}>
+                  {issued.dispatchedAt ? "Send again" : "Send"}
+                </Button>
+              ) : null}
             </span>
           ) : tax ? (
             <span className="meta">{tax.available ? "not issued" : tax.unavailableReason ?? "not issued"}</span>
@@ -1265,6 +1536,9 @@ function SealedPapers({ entry, tz }: { entry: EntryDetail; tz: string }) {
               <Button kind="quiet" compact icon="print" onClick={printMaster}>
                 Print a copy
               </Button>
+              <Button kind="quiet" compact icon="send" onClick={() => setSendingMaster(true)}>
+                {master.sent ? "Send again" : "Send"}
+              </Button>
             </span>
           ) : master ? (
             <span className="meta">{master.unavailableReason ?? "not available"}</span>
@@ -1275,6 +1549,18 @@ function SealedPapers({ entry, tz }: { entry: EntryDetail; tz: string }) {
         <Fact k="Nights audited">{audited.length ? audited.map((d) => fmtDay(d)).join(", ") : null}</Fact>
       </Facts>
       <PaperDrawer paper={paper} onClose={() => setPaper(null)} />
+      {sendingMaster && master ? (
+        <FolioSendDialog entry={entry} doc={master} refreshKey={`${entry.updatedAt}|${index.data?.asAt ?? ""}`} onClose={() => setSendingMaster(false)} />
+      ) : null}
+      <InvoiceSendDialog
+        entry={entry}
+        target={sendingTax ? issuedRow : null}
+        onClose={() => setSendingTax(false)}
+        onSent={() => {
+          setSendingTax(false);
+          refresh();
+        }}
+      />
     </StepCard>
   );
 }

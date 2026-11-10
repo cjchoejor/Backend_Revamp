@@ -25,8 +25,11 @@
  *                              (CRITICAL — the guest is charged what they were told they would not
  *                              be), or lacks one it was posted with; its corrections included
  *   B. Payments: non-positive amounts; refunds exceeding receipts
- *   C. Frozen layer: frozenTotal vs frozenSubtotal × (era tax multipliers); audit per-night posts
- *      vs frozenSubtotal ÷ nights; frozen rows with null dates
+ *   C. Frozen layer: frozenTotal vs frozenSubtotal × (era tax multipliers) or as the night audit
+ *      posts it (room line and meal line taxed night by night, 2026-11-10); audit per-night room
+ *      posts vs the frozen room line's share of the night; frozen rows with null dates
+ *   Q. A17 (2026-11-10): a quotation's total is not what its rooms' own totals add up to — the
+ *      rooms are what the night audit bills, so the guest is quoted a chhertum away from the bill
  *   D. Night coverage: completed stays (S8/S9/CLOSED) missing a room charge for a stay night
  *   E. Interim requests & invoices: dueNow = max(0, ask − received); INTERIM invoice amount =
  *      request.dueNow; PAID backed by linked payments; broken supersede chains
@@ -48,6 +51,8 @@ import {
 } from "../src/lib/folio-tax-lines.js";
 import { effectiveCheckOutDate } from "../src/lib/stay-dates.js";
 import { buildFolioLedgerView } from "../src/lib/folio-ledger-view.js";
+import { frozenCompositionByRoom, splitFrozenRow } from "../src/lib/frozen-room-composition.js";
+import { roomStayTax, shareForNight } from "../src/lib/stay-posting.js";
 import { buildEntryBillingSummary } from "../src/services/domain/entry-billing-summary-service.js";
 
 const prisma = new PrismaClient();
@@ -385,16 +390,32 @@ async function main() {
     if (outSum.gt(inSum.add(0.005))) add("WARN", "B2_REFUND_EXCEEDS_RECEIPTS", tag, `OUT ${money(outSum)} > IN ${money(inSum)}`);
 
     // C — frozen layer.
+    const frozenComp = frozenCompositionByRoom([entry.reservation?.frozenCommercialTerms ?? null]);
     for (const a of entry.roomAssignments ?? []) {
       if (a.frozenSubtotal == null) continue;
       const sub = D(a.frozenSubtotal);
       const roomNo = a.room?.roomNumber ?? a.roomId.slice(0, 6);
+      // The row split as the night audit splits it: the room line and the meal-plan line.
+      const rowNights = a.startDate && a.endDate ? Math.max(1, Math.round((a.endDate.getTime() - a.startDate.getTime()) / 86_400_000)) : null;
+      const split = splitFrozenRow({ roomId: a.roomId, rowSubtotal: sub, rowNights, composition: frozenComp.get(a.roomId) });
       if (a.frozenTotal != null) {
         const total = D(a.frozenTotal);
         const scOn = a.isFoc ? false : a.serviceChargeApplies !== false;
         const gstOn = a.isFoc ? false : a.gstApplies !== false;
         const flagged = round2(sub.mul(scOn ? 1 + scRate : 1).mul(gstOn ? 1 + gstRate : 1));
+        const posted = split
+          ? (() => {
+              const t = roomStayTax({
+                accommodation: split.accommodation,
+                meals: split.meals,
+                nights: split.nights,
+                rule: { serviceChargeApplies: scOn, gstApplies: gstOn, serviceChargeRate: scRate, gstRate },
+              });
+              return sub.add(t.serviceCharge).add(t.gst);
+            })()
+          : null;
         const eras = [
+          ...(posted ? [{ label: "as the night audit posts it", v: posted }] : []),
           { label: "flags@current rates", v: flagged },
           { label: "net only (pre-tax era)", v: round2(sub) },
           { label: "SC only (GST-off era)", v: round2(sub.mul(1 + scRate)) },
@@ -402,7 +423,7 @@ async function main() {
         const hit = eras.find((e) => near(total, e.v, 0.02));
         if (!hit) {
           add("WARN", "C1_FROZEN_TOTAL_MATH", `${entry.id} ${a.id}`, `room ${roomNo}: frozenTotal ${money(total)} matches no rule from frozenSubtotal ${money(sub)} (flags→${money(flagged)})`);
-        } else if (hit.label !== "flags@current rates") {
+        } else if (hit.label !== "flags@current rates" && hit.label !== "as the night audit posts it") {
           add("INFO", "C1_FROZEN_ERA", `${entry.id} ${a.id}`, `room ${roomNo}: frozenTotal ${money(total)} = ${hit.label}`);
         }
       }
@@ -410,13 +431,19 @@ async function main() {
         add("INFO", "C4_NULL_DATED_FROZEN_ROW", `${entry.id} ${a.id}`, `room ${roomNo}: frozenSubtotal ${money(sub)} on a row with ${a.startDate == null ? "null startDate" : ""}${a.endDate == null ? " null endDate" : ""} — audit falls back to frozenRate for it`);
         continue;
       }
-      // C2 — audited per-night posts vs frozenSubtotal ÷ nights.
+      // C2 — audited per-night room posts vs the frozen room line's share of that night (since
+      // 2026-09-11 the meals are their own line, so the room line is the accommodation part; since
+      // 2026-11-10 the last night takes what the even shares leave).
       const nights = Math.max(1, Math.round((a.endDate.getTime() - a.startDate.getTime()) / 86_400_000));
-      const perNight = round2(sub.div(nights));
+      const roomPart = split ? split.accommodation : sub;
       const auditPosts = charges.filter((l) => l.lineType === "ROOM_CHARGE" && l.nightAuditRecordId && l.roomId === a.roomId && l.chargeDate >= a.startDate! && l.chargeDate < a.endDate!);
       for (const p of auditPosts) {
-        if (!near(D(p.amount), perNight, 0.02)) {
-          add("WARN", "C2_AUDIT_VS_FROZEN", `${entry.id} ${a.id}`, `room ${roomNo} night ${ymd(p.chargeDate)}: posted ${money(D(p.amount))} vs frozen per-night ${money(perNight)} (${money(sub)}/${nights})`);
+        const index = Math.round((p.chargeDate.getTime() - a.startDate.getTime()) / 86_400_000);
+        const perNight = shareForNight(roomPart, nights, index);
+        // A room posted with its meals inside it (audited before 2026-09-11) reads against the whole.
+        const whole = round2(sub.div(nights));
+        if (!near(D(p.amount), perNight, 0.02) && !near(D(p.amount), whole, 0.02)) {
+          add("WARN", "C2_AUDIT_VS_FROZEN", `${entry.id} ${a.id}`, `room ${roomNo} night ${ymd(p.chargeDate)}: posted ${money(D(p.amount))} vs the room line's share ${money(perNight)} (${money(roomPart)}/${nights})`);
         }
       }
       if (sumMoney(auditPosts.map((p) => p.amount)).gt(sub.add(0.05))) {
@@ -572,6 +599,22 @@ async function main() {
     if (short.lt(asked.sub(held).sub(D(0.005)))) {
       add("CRITICAL", "A15_TRIP_MONEY_COUNTED_TWICE", inquiryId, `the stays read ${money(short)} short, but the trip was asked ${money(asked)} and holds ${money(held)}`);
     }
+  }
+
+  // A17 (2026-11-10): a quotation's total is what its rooms' own totals add up to. The rooms are
+  // what the night audit bills (each frozen row takes its room's total), so a total that is not
+  // their sum quotes the guest a figure the bill will not come to. WARN on a quotation still in
+  // play on a live booking, INFO otherwise.
+  const quotes = await prisma.quotation.findMany({
+    select: { id: true, state: true, totalAmount: true, commercialTerms: true, entry: { select: { status: true } } },
+  });
+  for (const q of quotes) {
+    const ct = (q.commercialTerms as { compositionTotals?: { total?: number; perRoom?: Array<{ total?: number }> } } | null)?.compositionTotals;
+    if (!ct?.perRoom?.length || ct.total == null) continue;
+    const rooms = sumMoney(ct.perRoom.map((r) => D(r.total ?? 0)));
+    if (rooms.eq(D(ct.total))) continue;
+    const live = ["ACTIVE", "PARKED"].includes(String(q.entry?.status)) && ["DRAFT", "SENT", "ACCEPTED"].includes(String(q.state));
+    add(live ? "WARN" : "INFO", "A17_QUOTE_NOT_ITS_ROOMS", q.id, `total ${money(D(ct.total))}, its rooms add up to ${money(rooms)} (${q.state})`);
   }
 
   // A16 (2026-11-09): money moved between a trip's stays moves no money. Each reference is exactly one

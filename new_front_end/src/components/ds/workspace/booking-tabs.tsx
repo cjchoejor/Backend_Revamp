@@ -49,7 +49,7 @@ import { StayBand, TripPapersShelf, useTripStays } from "./trip-papers-shelf";
 import { useStaysTogether } from "@/components/ds/steps/s2-together";
 import { TripMoneyReceived } from "@/components/ds/steps/s3-money";
 import { Choice, DsDialog, Fact, Facts, PapersCard, ReasonDialog, StepCard, SubTabs, Tool, atLeast, toastRefusal, useRefreshEntry, NotSentChip } from "@/components/ds/steps/kit";
-import { FolioDocumentsBlock } from "@/components/desk/workspace/folio-documents";
+import { FolioPapersCard } from "@/components/ds/workspace/folio-papers";
 import { HeldSendDialog, useHeldDocuments } from "@/components/ds/workspace/held-papers";
 import type { HeldDocument } from "@/lib/api/room-moves";
 import { PLAN_LABEL, dueLabel } from "@/components/desk/workspace/advance-settlement";
@@ -218,6 +218,55 @@ export function ChargesView({
                     ))}
                   </tbody>
                 </table>
+              ) : null}
+              {/* What was added to the stay as priced (2026-11-10, operator: "when charges are added to
+                  the folio … the price sub tab should also get updated"). The server's own split. */}
+              {fo?.addedDuringStay ? (
+                <div className="added-stay" data-added-stay>
+                  <div className="added-h">
+                    <b>Added during the stay</b>
+                    <Help label="About what was added">
+                      Every charge on the bill that is not the stay as priced: food and drink, services, extras, a fee, a correction
+                      or a credit note. Each is shown with its service charge and GST.
+                    </Help>
+                  </div>
+                  <table className="table compact resp">
+                    <thead>
+                      <tr>
+                        <th style={{ width: 92 }}>Date</th>
+                        <th>What</th>
+                        <th style={{ width: 96 }}>Room</th>
+                        <th className="num">With tax</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {fo.addedDuringStay.lines.map((l) => (
+                        <tr key={l.id}>
+                          <td data-label="Date">{fmtDay(l.date)}</td>
+                          <td data-label="What">{l.description}</td>
+                          <td data-label="Room">{l.place ?? "—"}</td>
+                          <td
+                            className="num money"
+                            data-label="With tax"
+                            title={`${money(l.net, cur)} + service charge ${money(l.serviceCharge, cur)} + GST ${money(l.gst, cur)}`}
+                          >
+                            {money(l.total, cur)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <div className="added-sum">
+                    <span>Added</span>
+                    <b className="money">{money(fo.addedDuringStay.total, cur)}</b>
+                  </div>
+                  {billing?.stayWithAdded != null ? (
+                    <div className="bigfig" data-stay-with-added>
+                      <span className="meta">The stay with what was added</span>
+                      <b>{money(billing.stayWithAdded, cur)}</b>
+                    </div>
+                  ) : null}
+                </div>
               ) : null}
               {st.segmentNumber != null && (entry.segmentNumber ?? 1) > 1 ? (
                 <p className="meta" style={{ marginTop: 6 }}>Priced on pass {st.segmentNumber}.</p>
@@ -1408,14 +1457,12 @@ export function DocumentsView({
                     label: <>Bills &amp; statements{count(bills)}</>,
                     content: (
                       <>
-                        {bills ? <PapersCard entry={entry} show="bills" title="Bills" withFolioDocs={!folioLive} /> : null}
                         {folioLive ? (
-                          // The interim statement, the master bill and the tax invoice — views of the
-                          // bill as it stands (moved here from Stay's own tab, 2026-10-12).
-                          <Tool inert={false}>
-                            <FolioDocumentsBlock entry={entry} stage="S7" />
-                          </Tool>
+                          // The tentative invoice, the master bill and the tax invoice before it is
+                          // issued — paper rows with Preview and Send since 2026-11-10.
+                          <FolioPapersCard entry={entry} />
                         ) : null}
+                        {bills ? <PapersCard entry={entry} show="bills" title="Issued and sent bills" withFolioDocs={!folioLive} /> : null}
                         {otherBills.map((e) => (
                           // A stay's bill is its own, so a trip has no bill together.
                           <div key={e.id} className="trip-stay-block">

@@ -937,6 +937,11 @@ async function prepareQuotationDraft(
                   lunchRate: Number(r.lunchRate.toFixed(2)),
                   dinnerRate: Number(r.dinnerRate.toFixed(2)),
                   subtotal: Number(r.subtotal.toFixed(2)),
+                  // The room's net as the night audit will post it (2026-11-10): the room line
+                  // and the meal-plan line, after any booking discount. The night audit reads
+                  // these, so the frozen room is split exactly as it was priced.
+                  accommodationNet: Number(r.accommodationNet.toFixed(2)),
+                  mealsNet: Number(r.mealsNet.toFixed(2)),
                   serviceCharge: Number(r.serviceCharge.toFixed(2)),
                   gst: Number(r.gst.toFixed(2)),
                   total: Number(r.total.toFixed(2)),

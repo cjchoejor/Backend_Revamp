@@ -3144,7 +3144,7 @@ export function QuotationSendDialog({
   );
 }
 /** A bill goes out by email; the backend records no WhatsApp send for one. */
-function InvoiceSendDialog({
+export function InvoiceSendDialog({
   entry,
   target,
   onClose,

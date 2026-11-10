@@ -114,6 +114,8 @@ const WORDS: Record<string, string> = {
   "ADVANCE_PAYMENT.PROMISE_LAPSED": "Promised advance did not arrive",
   "FOLIO.PAYMENT_RECORDED": "Payment received",
   "FOLIO.PAYMENT_DELETED": "Payment deleted",
+  "FOLIO.DOCUMENT_SENT": "Bill sent",
+  "FOLIO.MASTER_BILL_PRINTED": "Master bill printed",
   "FOLIO.CHARGE_POSTED": "Charge posted",
   "FOLIO.CORRECTION_POSTED": "Charge corrected",
   "CHECK_IN.COMPLETED": "Checked in",
@@ -431,6 +433,7 @@ export function traceDetail(ev: TraceEvent, names?: Partial<HistoryNames>): stri
     if (str("notes")) bits.push(`its note: ${str("notes")}`);
     if (p.blockReleased === true) bits.push("the block it placed is released");
   }
+  if (ev.eventType === "FOLIO.DOCUMENT_SENT") bits.push(`${str("paper") ?? "the bill"} ${p.channel === "WHATSAPP" ? "on WhatsApp" : "by email"} to ${str("to") ?? "?"}`);
   if (ev.eventType === "COMMUNICATION.REPLY_NOT_ASKED") bits.push(PAPER_WORD[str("commType") ?? ""] ?? "paper");
   // A reply no longer awaited names the paper and what replaced it (2026-10-13).
   if (ev.eventType === "COMMUNICATION.REPLY_NO_LONGER_AWAITED") {

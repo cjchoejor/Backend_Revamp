@@ -4,7 +4,7 @@ import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { allocateReadableId } from "../../lib/readable-id.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { applyInboundPaymentToFolioOutstanding } from "../../lib/folio-outstanding-from-payment.js";
-import { NIGHT_AUDIT_MEAL_PLAN_DESCRIPTION_PREFIX, classifyFolioLine, companionBaseDescription } from "../../lib/folio-tax-lines.js";
+import { splitStayAndExtras } from "../../lib/folio-stay-extras.js";
 import { round2, sumMoney, toDecimal, ZERO } from "../../lib/money.js";
 import {
   enforceInterimGuestAnswerRecordedBeforePayment,
@@ -367,28 +367,11 @@ export async function computeInterimFigures(
   // as-is. (2026-10-26: this read the audit-run stamp to find the tax, which the per-booking audit
   // does not write, and counted the meal-plan line as an extra; both pushed the projected total —
   // and so the ask — above what the stay costs.)
-  const lines = entry.folio?.lines ?? [];
-  const roomLineTypes = new Set<string>(["ROOM_CHARGE", "STAY"]);
-  const dayOf = (d: Date) => d.toISOString().slice(0, 10);
-  const stayKey = (roomId: string | null, chargeDate: Date, description: string) => `${roomId ?? ""}|${dayOf(chargeDate)}|${description}`;
-  const isStayCharge = (l: (typeof lines)[number]) =>
-    classifyFolioLine(l) === "CHARGE" &&
-    (roomLineTypes.has(String(l.lineType)) ||
-      (String(l.lineType) === "F_AND_B" && l.description.startsWith(NIGHT_AUDIT_MEAL_PLAN_DESCRIPTION_PREFIX)));
-  const stayKeys = new Set(lines.filter(isStayCharge).map((l) => stayKey(l.roomId ?? null, l.chargeDate, l.description)));
-  let roomPosted = ZERO;
-  let billed = ZERO;
-  for (const l of lines) {
-    const amt = toDecimal(l.amount);
-    billed = billed.add(amt);
-    const cls = classifyFolioLine(l);
-    const base = cls === "SERVICE_CHARGE" || cls === "GST" ? companionBaseDescription(l.description) : null;
-    const isStayTax =
-      (cls === "SERVICE_CHARGE" || cls === "GST") &&
-      ((!!base && stayKeys.has(stayKey(l.roomId ?? null, l.chargeDate, base))) || !!l.nightAuditRecordId);
-    if (isStayCharge(l) || isStayTax) roomPosted = roomPosted.add(amt);
-  }
-  const otherCharges = billed.sub(roomPosted);
+  // One rule with the billing summary's "added during the stay" (2026-11-10): lib/folio-stay-extras.
+  const split = splitStayAndExtras(entry.folio?.lines ?? []);
+  const roomPosted = split.stayPosted;
+  const billed = split.billed;
+  const otherCharges = split.extrasTotal;
 
   let projectedRoom: Prisma.Decimal;
   let projectionSource: InterimFigures["projectionSource"];

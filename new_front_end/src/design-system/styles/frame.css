@@ -515,6 +515,11 @@
    light blue highlight"): a light blue band, the figure large in the blue's own ink. */
 .ds .bigfig, .ds .pickbill .pb-total { display: flex; align-items: baseline; gap: 4px 12px; flex-wrap: wrap; flex-basis: 100%; padding: 10px 14px; border: 1px solid var(--accent-line); border-radius: 6px; background: var(--accent-soft); color: var(--accent-ink); }
 .ds .bigfig { margin-bottom: var(--s2); }
+/* The price at Stay: what was added during the stay, then the stay with it (2026-11-10). */
+.ds .added-stay { margin-top: var(--s4); padding-top: var(--s3); border-top: 1px solid var(--line); }
+.ds .added-stay .added-h { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; font-size: var(--t-base); }
+.ds .added-stay .added-sum { display: flex; justify-content: flex-end; gap: 12px; padding: 8px 4px; font-size: var(--t-base); border-top: 1px solid var(--line-2); margin-bottom: var(--s2); }
+.ds .added-stay .added-sum b { min-width: 110px; text-align: right; }
 .ds .bigfig > .meta:first-child, .ds .pickbill .pb-total-word { font-size: var(--t-sm); font-weight: 600; color: var(--accent-ink); }
 .ds .bigfig b, .ds .pickbill .pb-total .money { font-size: 26px; font-weight: 800; color: var(--accent-ink); font-variant-numeric: tabular-nums; }
 
@@ -2464,3 +2469,7 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .arrival-row:hover { background: var(--paper); }
 .ds .arrival-row.on { border-color: var(--accent); background: var(--accent-soft); }
 .ds .arrival-row .mono { margin-left: auto; }
+
+/* The payment box's offer to send the tax invoice (2026-11-10): the line, then its button on the same row. */
+.ds .pay-send-invoice { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; margin-bottom: var(--s3); }
+.ds .pay-send-invoice > span { flex: 1 1 260px; }
