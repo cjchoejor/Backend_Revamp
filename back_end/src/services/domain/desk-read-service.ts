@@ -132,6 +132,12 @@ export type DeskListRow = Prisma.EntryGetPayload<{ select: typeof listSelect }> 
   parkFollowUpAt: string | null;
   /** Distinct room numbers the booking holds, in number order. */
   roomNumbers: string[];
+  /**
+   * Which stay of its enquiry this booking is, when the enquiry has more than one (2026-11-10,
+   * operator: "show stay 1 of 2"). Numbered as the booking's own head numbers them: every stay on
+   * the enquiry, by check-in. Null for a booking on its own.
+   */
+  stay: { no: number; of: number } | null;
 };
 
 /**
@@ -170,6 +176,18 @@ export async function listDeskBookings(
         select: { entryId: true, payload: true },
       })
     : [];
+  // Which stay of its trip each booking is — one query for every enquiry on the page.
+  const inquiryIds = [...new Set(rows.map((r) => r.inquiryId))];
+  const siblings = inquiryIds.length
+    ? await prisma.entry.findMany({
+        where: { inquiryId: { in: inquiryIds } },
+        orderBy: [{ checkInDate: "asc" }, { createdAt: "asc" }],
+        select: { id: true, inquiryId: true },
+      })
+    : [];
+  const staysOf = new Map<string, string[]>();
+  for (const s of siblings) staysOf.set(s.inquiryId, [...(staysOf.get(s.inquiryId) ?? []), s.id]);
+
   const reasonOf = new Map<string, string>();
   for (const t of parkTraces) {
     if (!t.entryId || reasonOf.has(t.entryId)) continue;
@@ -193,6 +211,10 @@ export async function listDeskBookings(
       parkReason: reasonOf.get(r.id) ?? null,
       parkFollowUpAt: r.status === "PARKED" && follow ? follow.firesAt.toISOString() : null,
       roomNumbers: [...numbers].sort((a, b) => a.localeCompare(b, "en", { numeric: true })),
+      stay: (() => {
+        const all = staysOf.get(r.inquiryId) ?? [];
+        return all.length > 1 ? { no: all.indexOf(r.id) + 1, of: all.length } : null;
+      })(),
     };
   });
 }
@@ -201,7 +223,15 @@ export type DeskMoneyRow = {
   entryId: string;
   currency: string | null;
   headline: { amount: number | null; kind: "STAY_TOTAL" | "BILLED_SO_FAR" | null; frozen: boolean };
-  folio: { state: string; billedSoFar: number | null; paymentsReceived: number | null; outstandingBalance: number | null } | null;
+  /** `refunded` and `writtenOff` (2026-11-10) say where money paid went on a closed bill. */
+  folio: {
+    state: string;
+    billedSoFar: number | null;
+    paymentsReceived: number | null;
+    outstandingBalance: number | null;
+    refunded: number | null;
+    writtenOff: number | null;
+  } | null;
   /** What the whole stay comes to (2026-11-10): the stay as priced plus what was added to it — the
    *  billing summary's `stayWithAdded`. Null when the booking has no priced stay total. */
   totalAmount: number | null;
@@ -220,6 +250,8 @@ export type DeskMoneyRow = {
     outstandingBalance: number;
     /** Money paid over on a stay — kept as that stay's, never netted against another's balance. */
     paidAhead: number;
+    refunded: number;
+    writtenOff: number;
   } | null;
 };
 
@@ -309,6 +341,8 @@ export async function deskMoneyFor(prisma: Db, entryIds: string[]): Promise<Desk
               billedSoFar: s.folio.billedSoFar,
               paymentsReceived: s.folio.paymentsReceived,
               outstandingBalance: s.folio.outstandingBalance,
+              refunded: s.folio.refunded,
+              writtenOff: s.folio.writtenOff,
             }
           : null,
         totalAmount: s.stayWithAdded,
@@ -372,6 +406,8 @@ async function addTripMoney(prisma: Db, rows: DeskMoneyRow[]): Promise<void> {
       paymentsReceived: add((x) => x.folio?.paymentsReceived),
       outstandingBalance: add((x) => x.folio?.outstandingBalance),
       paidAhead: add((x) => x.folio?.overpaid),
+      refunded: add((x) => x.folio?.refunded),
+      writtenOff: add((x) => x.folio?.writtenOff),
     };
   }
 }
