@@ -276,6 +276,11 @@ async function main() {
     { configKey: "advancePayment.followUpWindowSeconds", configValue: 3600, notes: "W34 tier-1 follow-up window" },
     { configKey: "advancePayment.escalationWindowSeconds", configValue: 7200, notes: "W34 tier-2 escalation window" },
     { configKey: "advancePayment.reconciliation.alsoAllowed", configValue: [], notes: "Who else may mark the money reconciled; the GM and admins always can" },
+    {
+      configKey: "payment.banks",
+      configValue: ["Bank of Bhutan", "Bhutan National Bank", "BDBL", "Punjab National Bank", "DK Bank", "UPI"],
+      notes: "The banks a card, QR, transfer or remittance can go through",
+    },
     { configKey: "paymentMilestone.scheduleTemplates", configValue: {}, notes: "Milestone templates (placeholder)" },
     { configKey: "foc.configuration", configValue: { enabled: false }, notes: "FOC config (placeholder)" },
 

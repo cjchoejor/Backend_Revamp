@@ -1,4 +1,5 @@
 import { paperNumber, printedProformaNumber, printedQuotationNumber, proformaNumberOf } from "../../lib/document-numbers.js";
+import { cleanPaymentBank } from "../../lib/payment-bank.js";
 import { enforceEarlierAdvanceAnswered } from "../../lib/refund-money.js";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { resolveSendTo } from "../../lib/send-to.js";
@@ -601,6 +602,8 @@ export async function recordInvoicePaymentEvent(
     receivedAt?: string;
     referenceNumber?: string;
     proofAttachmentId?: string;
+    bankName?: string;
+    journalNumber?: string;
   },
 ) {
   if (input.nextState !== "PAYMENT_TRACKED" && input.nextState !== "RECONCILED") throw new ValidationError("nextState must be PAYMENT_TRACKED or RECONCILED");
@@ -655,6 +658,12 @@ export async function recordInvoicePaymentEvent(
     }
   }
 
+  // The bank and journal number of money through a bank (2026-11-12).
+  const bank =
+    amount != null && input.nextState === "PAYMENT_TRACKED"
+      ? await cleanPaymentBank(prisma, { method: input.paymentMethod?.trim() || "CASH", bankName: input.bankName, journalNumber: input.journalNumber })
+      : { bankName: null, journalNumber: null };
+
   return prisma.$transaction(async (tx) => {
     // SIG-S9 §8.6: record a payment event (optional in this repo for backwards compatibility).
     if (amount != null) {
@@ -668,6 +677,8 @@ export async function recordInvoicePaymentEvent(
           amount,
           paymentDirection: "IN",
           paymentMethod: input.paymentMethod?.trim() ? input.paymentMethod.trim() : "CASH",
+          bankName: bank.bankName,
+          journalNumber: bank.journalNumber,
           receivedAt: receivedAt ?? now,
           recordedBy: actorId,
           stage: Stage.S9,

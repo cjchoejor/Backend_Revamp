@@ -2200,6 +2200,10 @@ model PaymentRecord {
   exchangeRate          Decimal?         @db.Decimal(10, 6)
   paymentMethod         String?          @default("CASH")
   paymentDirection      PaymentDirection
+  /// The bank money through a bank went by, and its journal number (2026-11-12): card, QR / mobile,
+  /// bank transfer and inward remittance, in or out (lib/payment-bank.ts). Null for cash and the rest.
+  bankName              String?
+  journalNumber         String?
   createdAt             DateTime         @default(now())
   receivedAt            DateTime?
   recordedBy            String?

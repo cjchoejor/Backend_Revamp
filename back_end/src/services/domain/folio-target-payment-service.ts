@@ -1,4 +1,5 @@
 import { PaymentDirection, Stage } from "@prisma/client";
+import { cleanPaymentBank } from "../../lib/payment-bank.js";
 import type { Prisma } from "@prisma/client";
 import type { PrismaClient } from "@prisma/client";
 import { prisma as defaultPrisma } from "../../db.js";
@@ -45,6 +46,8 @@ export type RecordTargetPaymentInput = {
   paymentMethod?: string;
   /** Bank / wallet reference — required for CASH and MOBILE_PAYMENT, as at settlement. */
   paymentVerificationRef?: string;
+  bankName?: string;
+  journalNumber?: string;
   notes?: string;
   /**
    * Is this room's guest still here? (2026-09-09, operator ruling — "if someone pays for the
@@ -174,8 +177,11 @@ export async function recordTargetPayment(
   if (!amountDec.isFinite() || amountDec.lt(0)) throw new ValidationError("amount must be a positive number");
 
   const method = input.paymentMethod?.trim() || "CASH";
-  if (amountDec.gt(0) && (method === "CASH" || method === "MOBILE_PAYMENT") && !input.paymentVerificationRef?.trim()) {
-    throw new ValidationError("paymentVerificationRef is required for CASH and MOBILE_PAYMENT");
+  // Cash keeps its receipt reference; money through a bank gives its bank and journal number
+  // instead (2026-11-12) — a QR payment's journal number is its proof.
+  const bank = amountDec.gt(0) ? await cleanPaymentBank(prisma, { method, bankName: input.bankName, journalNumber: input.journalNumber }) : { bankName: null, journalNumber: null };
+  if (amountDec.gt(0) && method === "CASH" && !input.paymentVerificationRef?.trim()) {
+    throw new ValidationError("Type the reference of the cash payment");
   }
 
   const target: SettlementTarget = roomId ? { roomId } : spaceId ? { spaceId } : "UNASSIGNED";
@@ -258,6 +264,8 @@ export async function recordTargetPayment(
           amount: amountDec,
           paymentDirection: PaymentDirection.IN,
           paymentMethod: method,
+          bankName: bank.bankName,
+          journalNumber: bank.journalNumber,
           receivedAt: new Date(),
           recordedBy: actorId,
           stage,
@@ -265,7 +273,7 @@ export async function recordTargetPayment(
           spaceId,
           notes:
             input.notes?.trim() ||
-            `${method}${input.paymentVerificationRef?.trim() ? `:${input.paymentVerificationRef.trim()}` : ""}`,
+            `${method}${(input.paymentVerificationRef?.trim() || bank.journalNumber) ? `:${input.paymentVerificationRef?.trim() || bank.journalNumber}` : ""}`,
         },
       });
     }

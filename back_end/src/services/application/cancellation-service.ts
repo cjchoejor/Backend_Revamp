@@ -1,4 +1,5 @@
 import { closeWaitingRefundsOnCancellationTx } from "../../lib/refund-money.js";
+import { cleanPaymentBank } from "../../lib/payment-bank.js";
 import { hotelLocalTimeOn } from "../../lib/stay-dates.js";
 import { resolveStandardCheckInTime } from "../../lib/expected-arrival.js";
 import type { Prisma, PrismaClient } from "@prisma/client";
@@ -178,6 +179,8 @@ export type CancellationFigures = {
   /** The line of the policy that applied, with its words ("30 to 44 days before arrival · 50% of the advance paid"). */
   rule: { basis: CancellationRule["basis"]; value: number; label: string; from: CancellationRule["from"] };
   waived: boolean;
+  /** How a refund goes back when the desk leaves it to the way the money came in (2026-11-12). */
+  refundWayItCame: string;
 };
 
 /**
@@ -239,6 +242,7 @@ async function cancellationFigures(
     rule: { basis: rule.basis, value: rule.value, label: rule.label, from: rule.from },
     waived: input.waiver,
     tripMoves: moveWords(plan.moves, plan.rows),
+    refundWayItCame: await resolveRefundMethod(prisma, input.folioId),
   };
 }
 
@@ -370,7 +374,7 @@ export async function previewTripCancellation(prisma: PrismaClient, entryId: str
   if (stays.length !== new Set(input.stayIds).size) throw new ValidationError("One of those is not a stay of this trip.");
   const now = new Date();
   const waive = input.waive === true;
-  const picks: Array<{ entryId: string; own: number; rule: CancellationRule }> = [];
+  const picks: Array<{ entryId: string; folioId: string; own: number; rule: CancellationRule }> = [];
   for (const st of stays) {
     if (!st.folio) throw new ValidationError(`${st.id} has no bill yet — nothing to charge or refund.`);
     const atSetUp = st.currentStage === Stage.S3;
@@ -380,7 +384,7 @@ export async function previewTripCancellation(prisma: PrismaClient, entryId: str
       terms: ((atSetUp ? st.cancellationDisclosure?.disclosedTerms : st.reservation?.frozenCancellationTerms) as Record<string, unknown>) ?? {},
       now,
     });
-    picks.push({ entryId: st.id, own: await sumAdvancePaymentInTotalForFolio(prisma, st.folio.id), rule });
+    picks.push({ entryId: st.id, folioId: st.folio.id, own: await sumAdvancePaymentInTotalForFolio(prisma, st.folio.id), rule });
   }
   const all = await readTripAdvanceRows(prisma, me.inquiryId);
   const rows = all
@@ -401,7 +405,16 @@ export async function previewTripCancellation(prisma: PrismaClient, entryId: str
       const held = out[i].held != null ? Number(out[i].held!.toFixed(2)) : p.own;
       const capped = capCancellationPenaltyAtAdvancePayment(raw, heldCharged);
       const charge = waive ? 0 : capped;
-      return { entryId: p.entryId, advanceReceived: held, charge, chargeBeforeCap: raw, chargeCapped: capped, rule: p.rule.label, refund: Number(toDecimal(held).sub(toDecimal(charge)).toFixed(2)) };
+      return {
+        entryId: p.entryId,
+        advanceReceived: held,
+        charge,
+        chargeBeforeCap: raw,
+        chargeCapped: capped,
+        rule: p.rule.label,
+        refund: Number(toDecimal(held).sub(toDecimal(charge)).toFixed(2)),
+        refundWayItCame: await resolveRefundMethod(prisma, p.folioId),
+      };
     }),
   );
   const sum = (k: "charge" | "refund") => Number(lines.reduce((t, l) => t.add(toDecimal(l[k])), toDecimal(0)).toFixed(2));
@@ -496,6 +509,8 @@ export async function cancelEntryAtS3(
     /** How the money owed back leaves the hotel — defaults to the way it came (2026-09-19). */
     refundMethod?: string | null;
     refundReference?: string | null;
+    refundBank?: string | null;
+    refundJournal?: string | null;
   },
 ) {
   const entry = await prisma.entry.findUnique({
@@ -592,6 +607,8 @@ export async function cancelEntryAtS3(
 
     // 2. Refund obligation (only if net refund > 0).
     if (netRefund > 0) {
+      const refundMethod = await resolveRefundMethod(tx, folio.id, opts?.refundMethod);
+      const bank = await cleanPaymentBank(tx, { method: refundMethod, bankName: opts?.refundBank, journalNumber: opts?.refundJournal }, "refund");
       const refundId = await allocateReadableId(tx, "PAYMENT" as const, now);
       await tx.paymentRecord.create({
         data: {
@@ -600,7 +617,9 @@ export async function cancelEntryAtS3(
           entryId,
           amount: netRefund,
           paymentDirection: "OUT",
-          paymentMethod: await resolveRefundMethod(tx, folio.id, opts?.refundMethod),
+          paymentMethod: refundMethod,
+          bankName: bank.bankName,
+          journalNumber: bank.journalNumber,
           recordedBy: actorId,
           stage: Stage.S3,
           notes: `Refund obligation after S3 cancellation${opts?.refundReference?.trim() ? ` · ${opts.refundReference.trim()}` : ""}`,
@@ -757,6 +776,8 @@ export async function cancelEntryAtS5(
     /** How the money owed back leaves the hotel — defaults to the way it came (2026-09-19). */
     refundMethod?: string | null;
     refundReference?: string | null;
+    refundBank?: string | null;
+    refundJournal?: string | null;
   },
 ) {
   const entry = await prisma.entry.findUnique({
@@ -848,6 +869,8 @@ export async function cancelEntryAtS5(
     await closeWaitingRefundsOnCancellationTx(tx, { entryId, actorId, actorLevel: traceActorLevel, now, why: "The booking was cancelled, and the cancellation deals with this money." });
 
     if (netRefund > 0) {
+      const refundMethod = await resolveRefundMethod(tx, folio.id, opts?.refundMethod);
+      const bank = await cleanPaymentBank(tx, { method: refundMethod, bankName: opts?.refundBank, journalNumber: opts?.refundJournal }, "refund");
       const refundId = await allocateReadableId(tx, "PAYMENT" as const, now);
       await tx.paymentRecord.create({
         data: {
@@ -856,7 +879,9 @@ export async function cancelEntryAtS5(
           entryId,
           amount: netRefund,
           paymentDirection: "OUT",
-          paymentMethod: await resolveRefundMethod(tx, folio.id, opts?.refundMethod),
+          paymentMethod: refundMethod,
+          bankName: bank.bankName,
+          journalNumber: bank.journalNumber,
           recordedBy: actorId,
           stage: cancelStage,
           notes: `Refund obligation after ${atCheckIn ? "a cancellation at check-in" : "pre-arrival cancellation"}${opts?.refundReference?.trim() ? ` · ${opts.refundReference.trim()}` : ""}`,

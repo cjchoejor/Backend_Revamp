@@ -1,4 +1,5 @@
 import type { PrismaClient } from "@prisma/client";
+import { cleanPaymentBank } from "../../lib/payment-bank.js";
 import { PaymentDirection } from "@prisma/client";
 import { NotFoundError, StateTransitionError, ValidationError } from "../../lib/errors.js";
 import { allocateReadableId } from "../../lib/readable-id.js";
@@ -37,7 +38,7 @@ export async function recordFolioRefund(
   prisma: PrismaClient,
   folioId: string,
   actor: { actorId: string; actorLevel: string },
-  input: { amount: number; paymentMethod: string; reference?: string | null; reason: string },
+  input: { amount: number; paymentMethod: string; reference?: string | null; reason: string; bankName?: string | null; journalNumber?: string | null },
 ) {
   const folio = await prisma.folio.findUnique({
     where: { id: folioId },
@@ -58,6 +59,7 @@ export async function recordFolioRefund(
         : "Nothing has been paid above the bill — there is nothing to refund",
     );
   }
+  const bank = await cleanPaymentBank(prisma, { method: input.paymentMethod, bankName: input.bankName, journalNumber: input.journalNumber }, "refund");
   const now = new Date();
   return prisma.$transaction(async (tx) => {
     const id = await allocateReadableId(tx, "PAYMENT" as const, now);
@@ -69,6 +71,8 @@ export async function recordFolioRefund(
         amount,
         paymentDirection: PaymentDirection.OUT,
         paymentMethod: input.paymentMethod.trim(),
+        bankName: bank.bankName,
+        journalNumber: bank.journalNumber,
         receivedAt: now,
         recordedBy: actor.actorId,
         stage: folio.entry!.currentStage,
