@@ -2545,8 +2545,47 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .table-scroll tbody tr.list-band td:not(.desk-root *), .ds .table-scroll tbody tr.list-band:hover td:not(.desk-root *) { background: var(--surface-3); }
 .ds .table-scroll tbody tr.list-band.today td:not(.desk-root *), .ds .table-scroll tbody tr.list-band.today:hover td:not(.desk-root *) { background: var(--accent-soft); }
 
-/* Today as tabs (2026-11-12, operator: "todays' tab to be made into tabs instead just single page"):
-   the tab row under the title, the Billing tabs' look; each tab's list keeps the page at least as
-   tall as the screen, so changing to a short tab never shortens the page from under the person. */
-.ds .page-head.today-tabs { margin-top: calc(-1 * var(--s3)); }
-.ds .today-page [data-today-tab] { min-height: calc(100vh - 190px); align-content: start; }
+/* Today, the day at a glance (2026-11-12, operator: "can the todays' page be shown in a very creative
+   and efficient way"): a row of tiles, one per list. Each tile is a tab: its number large, one line on
+   what is in it in the colour of how it stands, and for the arrivals and departures a thin bar of how
+   far the day has got. Flat, after Atlassian: a hairline and a white surface at rest, a darker edge on
+   hover, the open tile the accent's tint, edge and a 3px underline (colour plus a second cue). A tile
+   with nothing in it reads quiet. The list below keeps the page at least the screen's height, so a
+   short list never shortens the page from under the person. */
+.ds .today-acts { display: flex; align-items: center; gap: var(--s5); }
+.ds .occ-meter { display: grid; grid-template-columns: auto auto; column-gap: var(--s3); row-gap: 4px; align-items: baseline; min-width: 210px; }
+.ds .occ-meter .occ-k { font-size: 12px; font-weight: 600; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.04em; }
+.ds .occ-meter .occ-n { font-size: 13px; color: var(--ink-2); text-align: right; }
+.ds .occ-meter .occ-n b { font-size: 18px; color: var(--ink); font-variant-numeric: tabular-nums; }
+.ds .occ-meter .occ-bar { grid-column: 1 / -1; height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.ds .occ-meter .occ-bar > i { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+
+.ds .glance { display: grid; grid-template-columns: repeat(var(--tiles, 8), minmax(0, 1fr)); gap: var(--s2); }
+@media (max-width: 1100px) { .ds .glance { grid-template-columns: repeat(auto-fit, minmax(138px, 1fr)); } }
+.ds .glance-tile {
+  display: grid; align-content: start; gap: 4px; min-height: 104px; padding: 12px 14px 12px;
+  text-align: left; font: inherit; color: var(--ink); cursor: pointer;
+  background: var(--surface); border: 1px solid var(--line-2); border-radius: 6px;
+  transition: background-color 0.12s ease, border-color 0.12s ease;
+}
+.ds .glance-tile:hover { background: var(--surface-2); border-color: var(--ink-3); }
+.ds .glance-tile:active { background: var(--surface-3); }
+.ds .glance-tile[aria-selected="true"] { background: var(--accent-soft); border-color: var(--accent); box-shadow: inset 0 -3px 0 var(--accent); }
+.ds .glance-tile .gt-label { font-size: 13px; font-weight: 600; color: var(--ink-2); }
+.ds .glance-tile[aria-selected="true"] .gt-label { color: var(--accent); }
+.ds .glance-tile .gt-n { font-size: 30px; font-weight: 700; line-height: 1.05; font-variant-numeric: tabular-nums; }
+.ds .glance-tile .gt-sub { font-size: 12px; line-height: 1.35; color: var(--ink-2); }
+.ds .glance-tile .gt-sub .stop-ink, .ds .glance-tile .gt-sub .warn-ink { font-weight: 700; }
+.ds .glance-tile.stop { border-left: 4px solid var(--danger); }
+.ds .glance-tile.stop .gt-n { color: var(--danger); }
+.ds .glance-tile.warn { border-left: 4px solid var(--warning); }
+.ds .glance-tile.warn .gt-n { color: var(--warning); }
+.ds .glance-tile.ok .gt-n { color: var(--success); }
+.ds .glance-tile.zero:not(.ok):not([aria-selected="true"]) .gt-n { color: var(--ink-3); font-weight: 600; }
+.ds .glance-tile .gt-bar { height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; margin: 2px 0 1px; }
+.ds .glance-tile .gt-bar > i { display: block; height: 100%; background: var(--success); border-radius: 2px; }
+@media (prefers-reduced-motion: reduce) {
+  .ds .glance-tile { transition: none; }
+}
+.ds .list-band.done-band td { background: var(--success-soft); color: var(--success); border-bottom-color: var(--line); }
+.ds .today-page [data-today-tab] { min-height: calc(100vh - 40px); align-content: start; }
