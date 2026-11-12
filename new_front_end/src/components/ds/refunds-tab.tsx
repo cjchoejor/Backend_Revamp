@@ -7,6 +7,7 @@
  * journal number, if cash no need, and then saved"). For the FOM, GM and admin: the route refuses the
  * front desk, since it carries bank details. Every figure is the server's.
  */
+import { usePaymentBanks } from "@/components/ds/bank-fields";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -55,6 +56,7 @@ function RecordDialog({ row, tz, onClose }: { row: RefundRow; tz: string; onClos
   const qc = useQueryClient();
   const [method, setMethod] = useState<string | null>(null);
   const [amount, setAmount] = useState(String(row.amountAsked));
+  const banks = usePaymentBanks().data?.banks ?? [];
   const [bank, setBank] = useState("");
   const [account, setAccount] = useState("");
   const [journal, setJournal] = useState("");
@@ -70,7 +72,7 @@ function RecordDialog({ row, tz, onClose }: { row: RefundRow; tz: string; onClos
     : !amountOk
       ? `an amount up to ${money(row.amountAsked, row.currency)}`
       : !detailsOk
-        ? "the bank's name, the account number and the journal number"
+        ? "the bank, the account number and the journal number"
         : undefined;
   const save = useMutation({
     mutationFn: () =>
@@ -122,8 +124,15 @@ function RecordDialog({ row, tz, onClose }: { row: RefundRow; tz: string; onClos
       {needsDetails ? (
         <>
           <div className="field">
-            <label>Bank name</label>
-            <input value={bank} onChange={(e) => setBank(e.target.value)} maxLength={120} autoFocus />
+            <label>Bank</label>
+            <select className="input" value={bank} onChange={(e) => setBank(e.target.value)} aria-label="Bank" data-bank-select>
+              <option value="">Pick the bank</option>
+              {banks.map((b) => (
+                <option key={b} value={b}>
+                  {b}
+                </option>
+              ))}
+            </select>
           </div>
           <div className="form2">
             <div className="field">

@@ -1,5 +1,6 @@
 "use client";
 
+import { BankFields, useBankEntry } from "@/components/ds/bank-fields";
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Split } from "lucide-react";
@@ -45,6 +46,7 @@ export function SplitSettlementBlock({
   const [collecting, setCollecting] = useState<string | null>(null);
   const [amount, setAmount] = useState("");
   const [method, setMethod] = useState("CASH");
+  const bank = useBankEntry();
   const [ref, setRef] = useState("");
   // Is this room's guest still here? (2026-09-09, operator ruling.) Deliberately starts unset:
   // paying for a room says nothing about whether anyone is still in it, and a payment must
@@ -116,7 +118,8 @@ export function SplitSettlementBlock({
         ...(activeRow.spaceId ? { spaceId: activeRow.spaceId } : {}),
         amount: amt,
         paymentMethod: method,
-        ...(ref.trim() ? { paymentVerificationRef: ref.trim() } : {}),
+        ...(ref.trim() && !bank.needs(method) ? { paymentVerificationRef: ref.trim() } : {}),
+        ...(amt > 0 ? bank.body(method) : {}),
         ...(roomStatus ? { roomStatus } : {}),
         ...(roomStatus === "LEFT" && departureReason.trim() ? { departureReason: departureReason.trim() } : {}),
         ...(advMode
@@ -169,7 +172,8 @@ export function SplitSettlementBlock({
     onError: (e: unknown) => toast.error(e instanceof ApiError ? e.message : (e as Error)?.message ?? "Couldn't record that payment"),
   });
 
-  const needsRef = method === "CASH" || method === "MOBILE_PAYMENT";
+  // Cash keeps its receipt reference; a card, QR or transfer gives its bank and journal number (2026-11-12).
+  const needsRef = method === "CASH";
   const settled = data?.folioState === "SETTLED" || data?.folioState === "CLOSED";
 
   const tally = useMemo(() => {
@@ -360,11 +364,14 @@ export function SplitSettlementBlock({
                     <option value="BANK_TRANSFER">Bank transfer</option>
                   </select>
                 </div>
-                <div className="field">
-                  <label>Reference{needsRef ? "" : " (optional)"}</label>
-                  <input value={ref} onChange={(e) => setRef(e.target.value)} placeholder="receipt / txn no." />
-                </div>
+                {bank.needs(method) ? null : (
+                  <div className="field">
+                    <label>Reference{needsRef ? "" : " (optional)"}</label>
+                    <input value={ref} onChange={(e) => setRef(e.target.value)} placeholder="receipt / txn no." />
+                  </div>
+                )}
               </div>
+              {Number.parseFloat(amount) > 0 ? <BankFields entry={bank} method={method} /> : null}
               {/* Use the advance for this slice (2026-09-11). Offered only when the booking
                   actually holds unapplied money and this part still owes something — there is
                   nothing to decide otherwise. No money moves: this records which slice the
@@ -453,13 +460,16 @@ export function SplitSettlementBlock({
                   (!(Number.parseFloat(amount) > 0) && !advMode) ||
                   // A reference belongs to money changing hands — an advance-only entry takes none.
                   (Number.parseFloat(amount) > 0 && needsRef && !ref.trim()) ||
+                  (Number.parseFloat(amount) > 0 && !!bank.missing(method)) ||
                   (advMode !== "" && advMode !== "ALL" && !advValue.trim())
                 }
                 onClick={() => payM.mutate()}
                 title={
                   Number.parseFloat(amount) > 0 && needsRef && !ref.trim()
-                    ? "Cash and mobile payments need a reference"
-                    : undefined
+                    ? "A cash payment needs its reference"
+                    : Number.parseFloat(amount) > 0 && bank.missing(method)
+                      ? (bank.missing(method) ?? undefined)
+                      : undefined
                 }
               >
                 {payM.isPending

@@ -219,7 +219,7 @@ export function S3SetUp({
   // (2026-09-19) — this dialog offered neither: a GM could not waive a Set-up cancellation from
   // the desk, and every refund was written down as cash.
   const [cancelWaive, setCancelWaive] = useState(false);
-  const refundHow = useRefundHow();
+  const refundHow = useRefundHow({ entryId: entry.id, waive: gm && cancelWaive });
   const cancelM = useMutation({
     mutationFn: (reason: string) =>
       cancelEntryAtS3(session!, entry.id, { reason, ...(gm && cancelWaive ? { penaltyWaiverRequested: true } : {}), ...refundHow.body }),
@@ -467,6 +467,8 @@ export function S3SetUp({
                         confirmLabel="Cancel the booking"
                         placeholder="guest changed their plans"
                         onConfirm={(r) => cancelM.mutate(r)}
+                        extraValid={!refundHow.missing}
+                        extraReason={refundHow.missing ?? undefined}
                       >
                         <CancellationFiguresLine entryId={entry.id} waive={gm && cancelWaive} />
                         <WaiverTick checked={cancelWaive} onChange={setCancelWaive} gm={gm} />

@@ -12,6 +12,7 @@
  * Every figure is `GET /api/entries/:id/payment-status` — received, required, remaining — summed
  * server-side in Decimal. Nothing is added up here.
  */
+import { BankFields, useBankEntry } from "@/components/ds/bank-fields";
 import { RefundStanding } from "../refund-bits";
 import { useEffect, useState, type ReactNode } from "react";
 import { useMutation, useQueries } from "@tanstack/react-query";
@@ -965,6 +966,8 @@ function PaymentDialog({
   const [notes, setNotes] = useState("");
   // How it came in (2026-09-18) — stored on the payment; every advance used to be recorded as cash.
   const [mode, setMode] = useState<AdvancePaymentMode | null>(null);
+  // The bank and journal number of a card, QR or transfer (2026-11-12).
+  const bank = useBankEntry();
   const pay = useMutation({
     mutationFn: () =>
       recordFolioPayment(session!, folioId, {
@@ -972,6 +975,7 @@ function PaymentDialog({
         amount: Number(amount),
         notes: notes.trim() || undefined,
         paymentMethod: mode ?? undefined,
+        ...bank.body(mode),
       }),
     onSuccess: () => {
       toast.success(`${money(Number(amount), currency)} recorded`);
@@ -980,7 +984,8 @@ function PaymentDialog({
     },
     onError: (e) => toastRefusal(e, "The payment could not be recorded"),
   });
-  const ok = isAmount(amount) && !!mode;
+  const bankWait = bank.missing(mode);
+  const ok = isAmount(amount) && !!mode && !bankWait;
   const prefilled = !!status && status.shortfall > 0 && amount === String(status.shortfall);
   return (
     <DsDialog
@@ -1003,7 +1008,7 @@ function PaymentDialog({
           <Button2
             working={pay.isPending}
             disabled={!ok}
-            reason={ok ? undefined : !isAmount(amount) ? "put in the amount received" : "choose how it was paid"}
+            reason={ok ? undefined : !isAmount(amount) ? "put in the amount received" : !mode ? "choose how it was paid" : (bankWait ?? undefined)}
             onClick={() => pay.mutate()}
             hidden={!!lock}
           >
@@ -1046,11 +1051,12 @@ function PaymentDialog({
         <label>
           How it was paid
           <Help label="About the payment">
-            Put the bank slip&rsquo;s or the transfer&rsquo;s reference in the note. The payment is recorded with today&rsquo;s date — if it was paid on another day, say so in the note. A printed receipt can&rsquo;t be made yet.
+            A card, QR, transfer or remittance asks for its bank and journal number. The payment is recorded with today&rsquo;s date — if it was paid on another day, say so in the note. A printed receipt can&rsquo;t be made yet.
           </Help>
         </label>
         <Choice options={ADVANCE_PAYMENT_MODES} value={mode} onChange={setMode} />
       </div>
+      <BankFields entry={bank} method={mode} />
       <div className="field">
         <label>Note</label>
         <input className="input" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="QR · paid from India · ref 4471…" />

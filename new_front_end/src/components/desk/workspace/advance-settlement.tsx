@@ -1,5 +1,6 @@
 "use client";
 
+import { BankFields, useBankEntry } from "@/components/ds/bank-fields";
 import { RefundStanding } from "@/components/ds/refund-bits";
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -489,6 +490,7 @@ export function AdvanceSettlementBlock({
   const [notes, setNotes] = useState("");
   // How it came in (2026-09-18) — stored on the payment; it used to be recorded as cash always.
   const [mode, setMode] = useState<AdvancePaymentMode | "">("");
+  const bank = useBankEntry();
   const [ceiling, setCeiling] = useState("");
   const [creditReason, setCreditReason] = useState("");
   const [creditExpiry, setCreditExpiry] = useState<CreditExpiryChoice>({ mode: "NONE", hours: "" });
@@ -543,6 +545,7 @@ export function AdvanceSettlementBlock({
         amount: Number(amount),
         notes: notes.trim() || undefined,
         paymentMethod: mode || undefined,
+        ...bank.body(mode),
       });
     },
     onSuccess: () => {
@@ -550,6 +553,7 @@ export function AdvanceSettlementBlock({
       setAmount("");
       setNotes("");
       setMode("");
+      bank.reset();
       editedRef.current = false;
       ceilingEditedRef.current = false;
       invalidate();
@@ -650,9 +654,10 @@ export function AdvanceSettlementBlock({
           ))}
         </select>
       </div>
+      <BankFields entry={bank} method={mode} />
       <div className="field">
         <label>Notes</label>
-        <input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="e.g. the slip's reference" />
+        <input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="anything worth knowing" />
       </div>
     </div>
   );
@@ -730,8 +735,8 @@ export function AdvanceSettlementBlock({
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
             <button
               className="btn btn-primary"
-              disabled={!amount || !mode || paymentM.isPending}
-              title={!mode ? "choose how it was paid" : undefined}
+              disabled={!amount || !mode || !!bank.missing(mode) || paymentM.isPending}
+              title={!mode ? "choose how it was paid" : (bank.missing(mode) ?? undefined)}
               onClick={() => paymentM.mutate()}
             >
               {paymentM.isPending ? "Logging…" : "Log payment received"}
@@ -800,8 +805,8 @@ export function AdvanceSettlementBlock({
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
             <button
               className="btn btn-primary"
-              disabled={!amount || !mode || paymentM.isPending}
-              title={!amount ? "put in the amount received" : !mode ? "choose how it was paid" : undefined}
+              disabled={!amount || !mode || !!bank.missing(mode) || paymentM.isPending}
+              title={!amount ? "put in the amount received" : !mode ? "choose how it was paid" : (bank.missing(mode) ?? undefined)}
               onClick={() => paymentM.mutate()}
             >
               {paymentM.isPending ? "Logging…" : "Log payment received"}

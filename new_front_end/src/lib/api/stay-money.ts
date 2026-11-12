@@ -110,7 +110,7 @@ export async function createInterimPayment(
 export async function recordInterimPayment(
   session: Session,
   requestId: string,
-  body: { amount: number; paymentMethod?: string; notes?: string },
+  body: { amount: number; paymentMethod?: string; bankName?: string; journalNumber?: string; notes?: string },
 ) {
   return apiRequest<{ payment: { id: string; amount: number }; request: InterimPaymentRow; paidInFull: boolean; receivedAgainstAsk: number; remaining: number }>(
     `/api/interim-payments/${requestId}/record-payment`,

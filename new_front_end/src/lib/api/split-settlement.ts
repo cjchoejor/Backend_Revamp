@@ -94,6 +94,8 @@ export async function recordTargetPayment(
     amount: number;
     paymentMethod?: string;
     paymentVerificationRef?: string;
+    bankName?: string;
+    journalNumber?: string;
     notes?: string;
     /**
      * Is this room's guest still here? Only meaningful with `roomId`. Omitted means "don't

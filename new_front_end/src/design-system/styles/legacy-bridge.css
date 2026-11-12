@@ -208,3 +208,7 @@
 /* tables the old tools draw */
 .ds .desk-root table { font-variant-numeric: tabular-nums lining-nums; }
 .ds .desk-root th { font-size: 13px; letter-spacing: 0; text-transform: none; }
+
+/* The bank and journal number side by side inside the old tools too (2026-11-12). */
+.ds .desk-root .bank-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 11px; }
+@media (max-width: 700px) { .ds .desk-root .bank-fields { grid-template-columns: minmax(0, 1fr); } }
