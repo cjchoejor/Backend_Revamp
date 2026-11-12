@@ -19,6 +19,8 @@ export type StageEmailContent = {
   html: string;
   /** Optional PDF attachments — passed straight through to sendEmail. */
   attachments?: Array<{ filename: string; content: Buffer; contentType?: string }>;
+  /** False when the email carries the hotel's name and numbers itself: no signature under it. */
+  signature?: boolean;
 };
 
 export type StageEmailContext = {
@@ -95,6 +97,7 @@ async function sendNow(ctx: StageEmailContext, content: StageEmailContent): Prom
       threadReadableId: inquiryId,
       attachments: content.attachments,
       paperKind: paperKindOfEmail(eventTypePrefix),
+      signature: content.signature,
     });
     if (result.status === "sent") {
       await writeStageEmailTrace({ prisma, entryId, actorId, inquiryId, stage }, `${eventTypePrefix}.SENT`, {

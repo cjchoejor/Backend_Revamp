@@ -18,7 +18,14 @@
 
 import nodemailer, { type Transporter } from "nodemailer";
 import type { PrismaClient } from "@prisma/client";
-import { formatPhone, parsePhone } from "../../lib/phone-numbers.js";
+import {
+  HOTEL_LOGO_CID,
+  loadEmailContact,
+  loadEmailLogo,
+  logoImg,
+  phoneOnEmail,
+  type HotelEmailContact,
+} from "./hotel-email-identity.js";
 
 let cachedTransporter: Transporter | null = null;
 
@@ -79,6 +86,11 @@ type SendArgs = {
   attachments?: Array<{ filename: string; content: Buffer; contentType?: string }>;
   /** Which paper it carries (QUOTATION, PROFORMA_INVOICE, …), for the enquiry's conversation. */
   paperKind?: string | null;
+  /**
+   * False for an email that carries the hotel's name and numbers itself (the confirmation, with
+   * its reservation-team header and footer): no second signature under it.
+   */
+  signature?: boolean;
 };
 
 type SendResult =
@@ -95,80 +107,33 @@ type SendResult =
   | { status: "error"; message: string };
 
 /**
- * The hotel's signature under every email (2026-11-12), from the hotel profile: its name, where it
- * is, and its front-desk number when one is on file that reads as a number. It said "Thimphu" and
- * "This is an automated message from the hotel's property management system" — the wrong town,
- * and words that make a paper read as machine mail rather than the hotel writing to its guest.
+ * The hotel's signature under every email (2026-11-12): the logo, the hotel's name and town, and
+ * the reservation team's numbers (`hotel-email-identity.ts`). It said "Thimphu" and "This is an
+ * automated message from the hotel's property management system" — the wrong town, and words that
+ * make a paper read as machine mail rather than the hotel writing to its guest.
  */
 type Signature = { text: string; html: string };
-let signatureCache: { at: number; sig: Signature } | null = null;
-const SIGNATURE_TTL_MS = 60_000;
 
 function escapeHtml(v: string): string {
   return v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
-/** The first number on the profile that reads as a phone number, with its label. */
-export function signaturePhone(contactNumbers: unknown): { label: string; number: string } | null {
-  const entries: Array<{ label: string | null; value: string }> = [];
-  const add = (label: unknown, value: unknown) => {
-    if (typeof value === "string" && value.trim()) entries.push({ label: typeof label === "string" ? label : null, value });
-  };
-  if (typeof contactNumbers === "string") add(null, contactNumbers);
-  else if (Array.isArray(contactNumbers)) {
-    for (const v of contactNumbers) {
-      if (typeof v === "string") add(null, v);
-      else if (v && typeof v === "object") {
-        const o = v as Record<string, unknown>;
-        add(o.label, o.value ?? o.number ?? o.phone);
-      }
-    }
-  } else if (contactNumbers && typeof contactNumbers === "object") {
-    for (const [k, v] of Object.entries(contactNumbers as Record<string, unknown>)) add(k, v);
-  }
-  for (const e of entries) {
-    const parsed = parsePhone(e.value);
-    // "+0000000000" is a placeholder, not a number: it is left off rather than printed.
-    if (!parsed || parsed.sure === "UNCLEAR" || !/[1-9]/.test(parsed.number)) continue;
-    const label = e.label && !/^(primary|phone|main)$/i.test(e.label) ? e.label : "Front desk";
-    return { label, number: formatPhone(parsed.code, parsed.number) };
-  }
-  return null;
-}
-
-export function buildSignature(profile: {
-  hotelName?: string | null;
-  tradingAddress?: string | null;
-  registeredAddress?: string | null;
-  contactNumbers?: unknown;
-} | null): Signature {
-  const name = profile?.hotelName?.trim() || "Legphel Hotel";
-  const place = profile?.tradingAddress?.trim() || profile?.registeredAddress?.trim() || null;
-  const phone = signaturePhone(profile?.contactNumbers);
-  const lines = [name, place, phone ? `${phone.label}: ${phone.number}` : null].filter((l): l is string => !!l);
+export function buildSignature(contact: HotelEmailContact, opts: { logo: boolean }): Signature {
+  const phones = contact.phones.map(phoneOnEmail);
+  const team = phones.length ? `Reservation team: ${phones.join(" · ")}` : null;
+  const lines = [contact.name, contact.place, team].filter((l): l is string => !!l);
   const text = `—\n${lines.join("\n")}\nReply to this email to reach the front desk.`;
-  const html = `<hr style="border:none;border-top:1px solid #ddd;margin:24px 0 12px"/>
-<p style="color:#666;font-size:12px;line-height:1.5;margin:0">
-  <strong>${escapeHtml(name)}</strong>${place ? ` · ${escapeHtml(place)}` : ""}<br/>
-  ${phone ? `${escapeHtml(phone.label)}: ${escapeHtml(phone.number)}<br/>` : ""}Reply to this email to reach the front desk.
-</p>`;
+  const words = `<strong style="color:#222">${escapeHtml(contact.name)}</strong>${contact.place ? ` · ${escapeHtml(contact.place)}` : ""}<br/>
+  ${team ? `${escapeHtml(team)}<br/>` : ""}Reply to this email to reach the front desk.`;
+  const html = opts.logo
+    ? `<hr style="border:none;border-top:1px solid #ddd;margin:24px 0 12px"/>
+<table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse:collapse"><tr>
+<td style="vertical-align:middle;padding:0 14px 0 0">${logoImg(48)}</td>
+<td style="vertical-align:middle;color:#666;font-size:12px;line-height:1.55">${words}</td>
+</tr></table>`
+    : `<hr style="border:none;border-top:1px solid #ddd;margin:24px 0 12px"/>
+<p style="color:#666;font-size:12px;line-height:1.55;margin:0">${words}</p>`;
   return { text, html };
-}
-
-async function loadSignature(prisma: PrismaClient): Promise<Signature> {
-  if (signatureCache && Date.now() - signatureCache.at < SIGNATURE_TTL_MS) return signatureCache.sig;
-  let profile: Parameters<typeof buildSignature>[0] = null;
-  try {
-    profile = await prisma.hotelProfile.findFirst({
-      orderBy: { updatedAt: "desc" },
-      select: { hotelName: true, tradingAddress: true, registeredAddress: true, contactNumbers: true },
-    });
-  } catch {
-    profile = null;
-  }
-  const sig = buildSignature(profile);
-  signatureCache = { at: Date.now(), sig };
-  return sig;
 }
 
 /** "Re: <their subject>", as a person replying would write it — never "Re: Re:". */
@@ -318,8 +283,20 @@ export async function sendEmail(prisma: PrismaClient, args: SendArgs): Promise<S
   let subject = guestThread ? guestThread.subject : applySubjectPrefix(args.subject, args.threadReadableId);
   if (redirectTo) subject = applyRedirectPrefix(subject, intendedRecipient);
 
-  // 3. The hotel's signature under the body.
-  const body = appendSignature(args.text, args.html, await loadSignature(prisma));
+  // 3. The hotel's signature under the body, and its logo wherever the HTML names it.
+  const logo = await loadEmailLogo(prisma);
+  const body =
+    args.signature === false
+      ? { text: args.text, html: args.html }
+      : appendSignature(args.text, args.html, buildSignature(await loadEmailContact(prisma), { logo: !!logo }));
+  const logoCid = `cid:${HOTEL_LOGO_CID}`;
+  const namesLogo = !!body.html?.includes(logoCid);
+  // No logo to send: an image that would show broken is taken out instead.
+  if (namesLogo && !logo && body.html) body.html = body.html.replace(/<img\b[^>]*cid:hotel-logo@legphel[^>]*>/gi, "");
+  const inline =
+    namesLogo && logo
+      ? [{ filename: "legphel-hotel.png", content: logo, contentType: "image/png", cid: HOTEL_LOGO_CID, contentDisposition: "inline" as const }]
+      : [];
 
   // 4. Send.
   const transporter = getTransporter();
@@ -351,11 +328,14 @@ export async function sendEmail(prisma: PrismaClient, args: SendArgs): Promise<S
       headers: extraHeaders,
       // PDFs the guest should receive alongside the email body (quotation, proforma,
       // confirmation voucher, final invoice). Buffer form — no disk read at send time.
-      attachments: args.attachments?.map((a) => ({
-        filename: a.filename,
-        content: a.content,
-        contentType: a.contentType ?? "application/pdf",
-      })),
+      attachments: [
+        ...inline,
+        ...(args.attachments ?? []).map((a) => ({
+          filename: a.filename,
+          content: a.content,
+          contentType: a.contentType ?? "application/pdf",
+        })),
+      ],
     });
   try {
     try {

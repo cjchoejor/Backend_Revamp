@@ -458,6 +458,8 @@ function attachmentsOf(node: MessageStructureObject | undefined): InboxEmailRead
       return;
     }
     const type = (n.type ?? "").toLowerCase();
+    // An image shown inside the email (the hotel's logo, a signature picture) is not an attachment.
+    if (/inline/i.test(n.disposition ?? "") && n.id && type.startsWith("image/")) return;
     const name = n.dispositionParameters?.filename ?? n.parameters?.name ?? null;
     const isAttachment = /attachment/i.test(n.disposition ?? "") || (!!name && !type.startsWith("text/"));
     if (isAttachment) out.push({ name: name ?? "unnamed", type, size: n.size ?? null });
