@@ -853,7 +853,11 @@ function HowSettled({
   const balanceNum = balance ?? 0;
   const typed = paidNow.trim() === "" ? Number.NaN : Number.parseFloat(paidNow);
   const guestPays = method !== "DIRECT_BILL" && method !== "VOUCHER";
-  const partial = guestPays && Number.isFinite(typed) && typed >= 0 && balanceNum > 0 && typed < balanceNum;
+  // Paid in full before Check-out — by the advance, a mid-stay payment — leaves nothing to take:
+  // the card says so and closes the bill with no money (2026-11-12, operator: "if payment is fully
+  // done, then it should show payment is done, nothing is owed"). The server's balance decides.
+  const paidInFull = balance != null && balanceNum <= 0 && guestPays && !(folio?.billingModel && ON_ACCOUNT_MODELS.has(folio.billingModel));
+  const partial = guestPays && !paidInFull && Number.isFinite(typed) && typed >= 0 && balanceNum > 0 && typed < balanceNum;
   const creditCovers = partial && creditActive && ps?.ceilingAmount != null && ps.ceilingAmount >= balanceNum - typed;
   const partialLocked = partial && !fom && !creditCovers;
   // The FOM's sign-off is asked only where the backend asks for it (Policy 46): the booking was
@@ -884,9 +888,10 @@ function HowSettled({
       if (method === "VOUCHER") {
         // The backend requires what the voucher covers; anything it leaves is invoiced to the agency.
         if (voucherValid) body.voucherAmount = voucherTyped;
-      } else if (guestPays && paidNow.trim() !== "" && Number.isFinite(typed) && typed >= 0) {
+      } else if (guestPays && !paidInFull && Number.isFinite(typed) && typed >= 0) {
         // Zero is a real answer: the guest pays nothing now and the balance leaves on credit.
-        // Empty means the full balance. A direct bill takes no money at the desk.
+        // The amount is always typed (it starts at the balance); a direct bill takes no money at
+        // the desk, and a bill paid in full takes none (2026-11-12).
         body.partialAmount = typed;
       }
       if (invoicesParty && invoiceTo.trim()) body.invoiceDispatchedTo = invoiceTo.trim();
@@ -896,7 +901,9 @@ function HowSettled({
     onSuccess: () => {
       setConfirmOpen(false);
       toast.success(
-        partial
+        paidInFull
+          ? "The bill is closed — nothing was owed; the rooms go to housekeeping"
+          : partial
           ? "Settled in part — the rest stays owed and is collected after the stay; the rooms are released"
           : method === "DIRECT_BILL"
             ? `Settled — the balance is invoiced to ${booked.payer}; the tax invoice is below`
@@ -931,9 +938,18 @@ function HowSettled({
   const guest = booked.guest;
 
   const methods = settleMethodsFor(model, booked.kind === "Travel agent", !!booked.party);
-  // Cash and QR carry a reference whenever money is taken — the backend refuses them without one.
-  // Empty "paid now" means the whole balance — which takes nothing when the balance is zero.
-  const takesMoney = guestPays && (Number.isFinite(typed) ? typed > 0 : balanceNum > 0);
+  // Cash carries a reference and money through a bank its bank and journal number, whenever money
+  // is taken — the backend refuses them without. Paid now is always typed (2026-11-12, operator:
+  // "it should not even be clickable if there is nothing written in the paid now field").
+  const takesMoney = guestPays && !paidInFull && Number.isFinite(typed) && typed > 0;
+  const paidWait =
+    !guestPays || paidInFull
+      ? undefined
+      : !Number.isFinite(typed) || typed < 0
+        ? "type what the guest pays now"
+        : typed > balanceNum + 0.004
+          ? `more than the ${money(balance, cur)} still owed`
+          : undefined;
   const settleReason = !folioLive
     ? "the bill must be live to settle"
     : damageWhy
@@ -944,6 +960,8 @@ function HowSettled({
         ? "the bill has no billing model"
         : method === "VOUCHER" && !voucherValid
           ? "put in what the voucher covers"
+          : paidWait
+            ? paidWait
           : !methods.some(([v]) => v === method)
             ? "this billing model does not settle that way"
             : method === "CASH" && takesMoney && !ref.trim()
@@ -972,7 +990,7 @@ function HowSettled({
       <div className="row-acts">
         <Chip tone="accent">who pays · {model ? payerChoiceWord(model, payerPartyOf(entry)) : "not set"}</Chip>
         {entry.groupBillingMode === "GROUP_MASTER" ? <Chip tone="quiet">one bill for the party</Chip> : null}
-        {folio ? (
+        {folio && !paidInFull ? (
           <SeeRow
             label="Settle part by part"
             note="each room or space pays its own part — the money is filed against it; the bill stays one"
@@ -1072,6 +1090,21 @@ function HowSettled({
           ) : null}
 
           <Live>
+            {paidInFull ? (
+              <div className="notice paid" role="status" data-paid-in-full style={{ marginTop: 12 }}>
+                <span className="paid-mark" aria-hidden>
+                  ✓
+                </span>
+                <span>
+                  <b>Paid in full — nothing is owed.</b>{" "}
+                  <span className="rest">
+                    {money(fin.advanceReceived, cur)} received against a bill of {money(billing.data?.folio?.chargeBreakdown?.total ?? null, cur)}. Closing the bill takes no money; it
+                    releases the rooms to housekeeping.
+                  </span>
+                </span>
+              </div>
+            ) : (
+              <>
             {/* How they pay · the reference · the amount, in one line (2026-10-30, operator). */}
             <div className="form3 settle-row" style={{ marginTop: 12 }}>
               <div className="field">
@@ -1117,7 +1150,7 @@ function HowSettled({
                     className="input money"
                     inputMode="decimal"
                     value={paidNow}
-                    placeholder="empty = the full balance"
+                    placeholder="what the guest pays now"
                     onChange={(e) => {
                       paidTouched.current = true;
                       setPaidNow(e.target.value);
@@ -1129,6 +1162,7 @@ function HowSettled({
                 </div>
               )}
             </div>
+            {takesMoney ? <BankFields entry={bank} method={method} /> : null}
             {method === "VOUCHER" || (overCeiling && fom) ? (
             <div className="form2 settle-row" style={{ marginTop: 10 }}>
               {method === "VOUCHER" ? <SendToField entry={entry} value={invoiceTo} onChange={setInvoiceTo} label="Send the invoice to" /> : null}
@@ -1157,6 +1191,8 @@ function HowSettled({
                 />
               </div>
             ) : null}
+              </>
+            )}
             <div className="row-acts" style={{ marginTop: 12 }}>
               <Button
                 className={live && !settleReason ? "go" : undefined}
@@ -1165,9 +1201,9 @@ function HowSettled({
                 reason={live ? settleReason : "only while the booking is at Check-out"}
                 onClick={() => setConfirmOpen(true)}
               >
-                Take payment &amp; settle
+                {paidInFull ? "Close the bill" : <>Take payment &amp; settle</>}
               </Button>
-              {fom ? (
+              {fom && !paidInFull ? (
                 <Button kind="secondary" state={live ? "default" : "inert"} onClick={() => setCreditOpen(true)}>
                   {creditActive || creditExpired ? "Change the credit extension" : "Let the guest leave owing"}
                 </Button>
@@ -1231,7 +1267,7 @@ function HowSettled({
       <DsDialog
         open={confirmOpen}
         onClose={() => setConfirmOpen(false)}
-        title="Take payment and settle"
+        title={paidInFull ? "Close the bill" : "Take payment and settle"}
         caseLines={[<b key="g">{guest}</b>, `${entry.id} · balance ${money(balance, cur)}`]}
         busy={settle.isPending}
         footer={
@@ -1240,7 +1276,7 @@ function HowSettled({
               Not yet
             </Button>
             <Button icon="lock" state={settle.isPending ? "working" : "default"} workingLabel="Settling…" onClick={() => settle.mutate()}>
-              Take payment
+              {paidInFull ? "Close the bill" : "Take payment"}
             </Button>
           </>
         }
@@ -1248,7 +1284,9 @@ function HowSettled({
         <p className="sm">This cannot be undone. What becomes binding:</p>
         <ul className="plain-list sm" style={{ margin: 0, paddingLeft: 18, display: "grid", gap: 4 }}>
           <li>
-            {partial ? (
+            {paidInFull ? (
+              <>Nothing is owed — no money is taken.</>
+            ) : partial ? (
               <>
                 The guest pays <b className="money">{money(typed, cur)}</b> now — the rest of the {money(balance, cur)} balance stays owed and is collected after the stay.
                 {fom ? " Your authority as FOM covers it." : creditCovers ? " The credit extension on file covers it." : ""}

@@ -227,7 +227,15 @@ function ShareRow({
   const partialLocked = partial && !fom && !creditCovers;
   const voucherTyped = voucherCovers.trim() === "" ? Number.NaN : Number.parseFloat(voucherCovers);
   const voucherValid = Number.isFinite(voucherTyped) && voucherTyped >= 0;
-  const takesMoney = guestPays && (!Number.isFinite(typed) || typed > 0);
+  // Paid now is always typed (it starts at the share), never more than the share (2026-11-12).
+  const takesMoney = guestPays && Number.isFinite(typed) && typed > 0;
+  const paidWait = !guestPays
+    ? undefined
+    : !Number.isFinite(typed) || typed < 0
+      ? "type what is paid now"
+      : typed > owes + 0.004
+        ? `more than the ${money(owes, currency)} share`
+        : undefined;
   const needsRef = method === "CASH" && takesMoney && !ref.trim();
   const bank = useBankEntry();
   const bankWait = takesMoney ? bank.missing(method) : null;
@@ -241,7 +249,9 @@ function ShareRow({
       ? "a part-payment needs the FOM or a credit extension"
       : method === "VOUCHER" && !voucherValid
         ? "put in what the voucher covers"
-        : needsRef
+        : paidWait
+          ? paidWait
+          : needsRef
           ? "cash needs its payment reference"
           : bankWait
             ? bankWait
@@ -259,7 +269,7 @@ function ShareRow({
       if (takesMoney) Object.assign(body, bank.body(method));
       if (method === "VOUCHER") {
         if (voucherValid) body.voucherAmount = voucherTyped;
-      } else if (guestPays && paidNow.trim() !== "" && Number.isFinite(typed) && typed >= 0) {
+      } else if (guestPays && Number.isFinite(typed) && typed >= 0) {
         body.partialAmount = typed;
       }
       if ((method === "DIRECT_BILL" || method === "VOUCHER") && invoiceTo.trim()) body.invoiceDispatchedTo = invoiceTo.trim();
@@ -340,7 +350,7 @@ function ShareRow({
                   className="input money"
                   inputMode="decimal"
                   value={paidNow}
-                  placeholder="empty = the whole share"
+                  placeholder="what is paid now"
                   onChange={(e) => {
                     paidTouched.current = true;
                     setPaidNow(e.target.value);
