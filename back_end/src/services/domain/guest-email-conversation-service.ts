@@ -60,6 +60,7 @@ export async function recordSentEmail(
     attachmentNames?: string[];
     inReplyTo?: string | null;
     snippet?: string;
+    at?: Date;
   },
 ): Promise<void> {
   try {
@@ -73,7 +74,7 @@ export async function recordSentEmail(
       toAddresses: [input.to],
       subject: input.subject,
       snippet: (input.snippet ?? "").slice(0, 240),
-      at: new Date(),
+      at: input.at ?? new Date(),
       paperKind: input.paperKind ?? null,
       attachmentNames: input.attachmentNames ?? [],
       inReplyTo: input.inReplyTo ?? null,
@@ -302,6 +303,8 @@ export type ConversationEmail = {
   paperKind: string | null;
   attachmentNames: string[];
   answersKind: string | null;
+  /** The email it replies to, when it is a reply. */
+  inReplyTo: string | null;
   seen: boolean;
   answered: { communicationId: string; at: string | null; by: string | null } | null;
 };
@@ -321,6 +324,7 @@ function shape(r: Prisma.InquiryEmailGetPayload<object>): ConversationEmail {
     paperKind: r.paperKind,
     attachmentNames: r.attachmentNames,
     answersKind: r.answersKind,
+    inReplyTo: r.inReplyTo,
     seen: r.kind !== "REPLY" || !!r.seenAt,
     answered: r.answeredCommunicationId
       ? { communicationId: r.answeredCommunicationId, at: r.answeredAt?.toISOString() ?? null, by: r.answeredBy }
@@ -338,7 +342,22 @@ async function inquiryOfEntry(prisma: PrismaClient, entryId: string): Promise<st
 export async function listConversation(prisma: PrismaClient, entryId: string) {
   const inquiryId = await inquiryOfEntry(prisma, entryId);
   const rows = await prisma.inquiryEmail.findMany({ where: { inquiryId }, orderBy: { at: "asc" } });
+  // A reply always comes after the email it answers: an email's date counts whole seconds only.
   const emails = rows.map(shape);
+  for (let moved = true, guard = 0; moved && guard < emails.length; guard++) {
+    moved = false;
+    for (let i = 0; i < emails.length; i++) {
+      const e = emails[i];
+      if (e.kind !== "REPLY" || !e.inReplyTo) continue;
+      const j = emails.findIndex((x) => x.messageId === e.inReplyTo);
+      if (j > i) {
+        emails.splice(i, 1);
+        emails.splice(j, 0, e);
+        moved = true;
+        break;
+      }
+    }
+  }
   return {
     inquiryId,
     mailbox: inboxAddress(),
@@ -421,27 +440,9 @@ export async function recordReplyAsAnswer(
   const full = await readInboxEmailInFull(reply.messageId);
   const words = newPartOf(full?.text ?? reply.snippet).slice(0, 2000) || reply.snippet || "(their email)";
   const verbatimNote = `By email, ${reply.fromName ?? reply.fromAddress ?? "the guest"}: ${words}`;
-  // A quotation's answer is the guest accepting it — the same act as the quotation's own Record the
-  // answer, so the quotation reads accepted (and its answer is recorded with it).
-  const quotation = await prisma.quotation.findFirst({
-    where: { communicationRecordId: communicationId },
-    select: { id: true, state: true },
-  });
-  if (quotation) {
-    if (quotation.state !== "SENT") {
-      throw new ValidationError(
-        quotation.state === "ACCEPTED" ? "The quotation is already accepted" : "That quotation is no longer waiting for an answer",
-      );
-    }
-    const { acceptQuotation } = await import("./s2-quotation-service.js");
-    await acceptQuotation(prisma, quotation.id, actor.actorId, { acceptanceMethod: "WRITTEN", verbatimNote });
-    const now = new Date();
-    await prisma.inquiryEmail.update({
-      where: { id: replyId },
-      data: { answeredCommunicationId: communicationId, answeredAt: now, answeredBy: actor.actorId, seenAt: reply.seenAt ?? now, seenBy: reply.seenBy ?? actor.actorId },
-    });
-    return { recorded: true, words, accepted: quotation.id };
-  }
+  // A reply never accepts a quotation (same day, operator: "a reply shouldnt accept the quotation"):
+  // it is recorded as their reply to it, and the quotation stays sent until the desk accepts it with
+  // the quotation's own Record the answer.
   await recordCommunicationAcknowledgement(
     prisma,
     communicationId,

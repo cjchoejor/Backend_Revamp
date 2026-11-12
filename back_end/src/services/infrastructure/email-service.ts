@@ -224,6 +224,8 @@ export async function sendEmail(prisma: PrismaClient, args: SendArgs): Promise<S
   };
 
   let info: { messageId: string };
+  // When it was sent, as its Date header says: the conversation lists it at this time.
+  const sentAt = new Date();
   const mail = () =>
     transporter.sendMail({
       from,
@@ -282,6 +284,7 @@ export async function sendEmail(prisma: PrismaClient, args: SendArgs): Promise<S
       attachmentNames: (args.attachments ?? []).map((a) => a.filename),
       inReplyTo: inReplyTo ?? null,
       snippet: firstLines.slice(0, 240),
+      at: sentAt,
     });
   }
   // Ours is now the latest in the guest's conversation; the next reply names it too. Not when the

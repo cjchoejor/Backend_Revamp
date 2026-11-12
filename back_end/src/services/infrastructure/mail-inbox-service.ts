@@ -403,7 +403,7 @@ async function withMessage<T>(
     const inInbox = await look("INBOX");
     if (inInbox) return inInbox;
     try {
-      const all = (await client.list()).find((b) => b.specialUse === "\All");
+      const all = (await client.list()).find((b) => b.specialUse === String.raw`\All`);
       if (all) return await look(all.path);
     } catch {
       /* the inbox alone */
@@ -428,6 +428,10 @@ export type InboxEmailRead = InboxEmail & {
   to: string[];
   cc: string[];
   text: string;
+  /** What the person wrote, and the earlier email they quoted, apart (a reply). */
+  fresh: string;
+  quoteHeader: string | null;
+  quoted: string;
   /** The words were cut at the reading limit. */
   cut: boolean;
   attachments: Array<{ name: string; type: string; size: number | null }>;
@@ -493,9 +497,11 @@ export async function readInboxEmailInFull(messageId: string): Promise<InboxEmai
         cut = buf.length >= READ_LIMIT;
       }
     }
+    const parts = splitReply(text);
     return {
       ...email,
       snippet: snippetOf(text),
+      ...parts,
       references: refs.length ? refs.join(" ") : null,
       to: addressWords(m.envelope?.to),
       cc: addressWords(m.envelope?.cc),
@@ -581,18 +587,42 @@ export function rescanInboxFromWindow(): void {
 
 /** The words a person wrote in a reply: what follows "On … wrote:" and quoted lines left out. */
 export function newPartOf(text: string): string {
+  return splitReply(text).fresh;
+}
+
+/**
+ * A reply in two parts (2026-11-12, operator: "beautify and make it readable"): what the person
+ * wrote, and the earlier email they quoted — its "On … wrote:" line and its words without the ">"
+ * marks — so the desk can show the first and fold the second.
+ */
+export function splitReply(text: string): { fresh: string; quoteHeader: string | null; quoted: string } {
   const lines = text.replace(/\r\n?/g, "\n").split("\n");
-  const out: string[] = [];
+  const tidy = (s: string) => s.replace(/\n{3,}/g, "\n\n").trim();
+  const unquote = (rest: string[]) =>
+    tidy(
+      rest
+        .map((l) => l.replace(/^\s*(>\s?)+/, ""))
+        .join("\n"),
+    );
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
-    if (line.startsWith(">")) break;
-    if (/^-{2,}\s*original message\s*-{2,}$/i.test(line)) break;
+    const fresh = () => tidy(lines.slice(0, i).join("\n"));
+    if (line.startsWith(">")) return { fresh: fresh(), quoteHeader: null, quoted: unquote(lines.slice(i)) };
+    if (/^-{2,}\s*original message\s*-{2,}$/i.test(line)) {
+      return { fresh: fresh(), quoteHeader: "Original message", quoted: unquote(lines.slice(i + 1)) };
+    }
     // "On Thu, 12 Nov 2026 … <someone@…> wrote:" — it may wrap over two or three lines.
     if (/^on\s/i.test(line)) {
-      const joined = [line, (lines[i + 1] ?? "").trim(), (lines[i + 2] ?? "").trim()].join(" ");
-      if (/^on\s[^\n]{0,300}?\bwrote:/i.test(joined)) break;
+      for (let n = 0; n < 3; n++) {
+        const joined = lines
+          .slice(i, i + n + 1)
+          .map((l) => l.trim())
+          .join(" ");
+        if (/^on\s[^\n]{0,300}?\bwrote:\s*$/i.test(joined)) {
+          return { fresh: fresh(), quoteHeader: joined.replace(/\s+/g, " "), quoted: unquote(lines.slice(i + n + 1)) };
+        }
+      }
     }
-    out.push(lines[i]);
   }
-  return out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  return { fresh: tidy(text), quoteHeader: null, quoted: "" };
 }
