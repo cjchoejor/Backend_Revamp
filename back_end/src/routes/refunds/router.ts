@@ -4,6 +4,7 @@ import { requireActorLevel } from "../../middleware/auth.js";
 import { validateBody } from "../../middleware/validate-body.js";
 import { answerEarlierAdvanceRequestSchema, keepRefundRequestSchema, recordRefundRequestSchema } from "../../dtos/07-folios/request-schemas.js";
 import { answerEarlierAdvance, keepRefund, listRefunds, recordRefund } from "../../services/domain/refund-service.js";
+import { listRefundsMade } from "../../services/domain/refund-history-service.js";
 
 export const refundsRouter = Router();
 
@@ -22,6 +23,16 @@ refundsRouter.get("/refunds", requireActorLevel("L2"), async (req, res, next) =>
     res.setHeader("Cache-Control", "no-store");
     const view = req.query.view === "done" ? "done" : "waiting";
     res.json({ items: await listRefunds(prisma, view) });
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** Refunds made, booking by booking (2026-11-12): every money-out row that went back to a guest. */
+refundsRouter.get("/refunds/made", requireActorLevel("L2"), async (_req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    res.json(await listRefundsMade(prisma));
   } catch (e) {
     next(e);
   }
