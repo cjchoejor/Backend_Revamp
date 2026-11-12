@@ -30,12 +30,15 @@ export function middleware(request: NextRequest) {
 
   if (isProtected(pathname) && !hasAuth) {
     const login = new URL("/login", request.url);
-    login.searchParams.set("from", pathname);
+    // The page and its query (2026-11-12) — a booking opens again on the step it was on.
+    login.searchParams.set("from", `${pathname}${request.nextUrl.search}`);
     return NextResponse.redirect(login);
   }
 
   if (AUTH_PATHS.includes(pathname) && hasAuth) {
-    return NextResponse.redirect(new URL(HOME, request.url));
+    const from = request.nextUrl.searchParams.get("from");
+    const back = from && from.startsWith("/") && !from.startsWith("//") && !from.startsWith("/login") ? from : HOME;
+    return NextResponse.redirect(new URL(back, request.url));
   }
 
   return NextResponse.next();

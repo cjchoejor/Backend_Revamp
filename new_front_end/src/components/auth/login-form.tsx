@@ -11,8 +11,9 @@ import { authenticate } from "@/lib/api/auth";
 import { ApiError } from "@/lib/api/client";
 import { DEFAULT_TERMINAL_ID } from "@/lib/auth/constants";
 import { enrichSession } from "@/lib/auth/session-enrich";
-import { clearStaleAuth, persistSessionToServer, setClientSession } from "@/lib/auth/session";
-import { redirectAfterLogin, redirectToLogin } from "@/lib/auth/sign-out";
+import { clearStaleAuth, persistSessionToServer } from "@/lib/auth/session";
+import { redirectAfterLogin, redirectToLogin, safeFrom } from "@/lib/auth/sign-out";
+import { useSession } from "@/components/providers/session-provider";
 import { cn } from "@/lib/utils";
 import type { Session } from "@/types/session";
 
@@ -44,6 +45,7 @@ const cardStyle = {
 export function LoginForm() {
   const searchParams = useSearchParams();
   const reduceMotion = useReducedMotion();
+  const { saveSession } = useSession();
   const logoRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -95,7 +97,9 @@ export function LoginForm() {
           // Prefer full name for the welcome toast + sidebar; falls back to username, never UUID.
           displayName: res.fullName ?? res.username,
         });
-        setClientSession(session);
+        // The provider's own copy too (2026-11-12): the page left behind can still move to a desk
+        // page before the hard navigation lands (a slow first load), and must not read "nobody".
+        saveSession(session);
         await persistSessionToServer(session);
 
         const name = session.displayName ?? session.username ?? session.userId;
@@ -113,8 +117,7 @@ export function LoginForm() {
           setFloatFrom({ dx: startCX - cx, dy: startCY - cy, scale: startSize / 88 });
         }
 
-        const from = searchParams.get("from") ?? "/today";
-        const target = from.startsWith("/") ? from : "/today";
+        const target = safeFrom(searchParams.get("from"));
         setLeaving(name);
         setTimeout(() => redirectAfterLogin(target), reduceMotion ? 700 : 1550);
       } catch (e) {
@@ -133,7 +136,7 @@ export function LoginForm() {
         setLoading(false);
       }
     },
-    [loading, searchParams, username, reduceMotion],
+    [loading, searchParams, username, reduceMotion, saveSession],
   );
 
   const status: PinStatus =
@@ -293,6 +296,11 @@ export function LoginForm() {
                   />
                 </div>
 
+                {searchParams.get("ended") === "1" && !statusMessage ? (
+                  <p className="mb-2 text-center text-sm font-semibold" role="status" style={{ color: "#8b1a1a" }} data-signin-ended>
+                    Your sign-in has ended — sign in again, and you go back to the page you were on.
+                  </p>
+                ) : null}
                 <div className="min-h-[1.25rem] text-center text-sm" role="status" aria-live="polite">
                   {status === "verifying" && (
                     <p className="inline-flex items-center gap-2 text-muted-foreground">

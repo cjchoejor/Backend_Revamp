@@ -25,18 +25,31 @@ export function clearClientSession(): void {
   sessionStorage.removeItem(STORAGE_KEY);
 }
 
-export async function hydrateSessionFromServer(): Promise<Session | null> {
-  try {
-    const res = await fetch("/api/session", { credentials: "same-origin" });
-    if (!res.ok) return null;
-    const data = (await res.json()) as { session: Session | null };
-    if (!data.session) return null;
-    const enriched = enrich(data.session);
-    setClientSession(enriched);
-    return enriched;
-  } catch {
-    return null;
+/**
+ * The sign-in the cookie holds (2026-11-12). `ok: false` means the cookie could not be read (the
+ * desk's server was busy or unreachable) — not that nobody is signed in, so nothing may be cleared on
+ * it. Tried three times, a second apart, before giving up.
+ */
+export async function readServerSession(): Promise<{ ok: boolean; session: Session | null }> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const res = await fetch("/api/session", { credentials: "same-origin", cache: "no-store" });
+      if (res.ok) {
+        const data = (await res.json()) as { session: Session | null };
+        return { ok: true, session: data.session ? enrich(data.session) : null };
+      }
+    } catch {
+      /* try again */
+    }
+    await new Promise((r) => setTimeout(r, 1000));
   }
+  return { ok: false, session: null };
+}
+
+export async function hydrateSessionFromServer(): Promise<Session | null> {
+  const { session } = await readServerSession();
+  if (session) setClientSession(session);
+  return session;
 }
 
 export async function persistSessionToServer(session: Session): Promise<void> {

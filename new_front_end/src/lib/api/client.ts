@@ -14,6 +14,14 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Raised when the backend says the sign-in a request carried no longer works (2026-11-12): expired,
+ * signed out, locked, or the person is off the staff list. The session provider answers it: it reads
+ * the cookie, takes a newer sign-in made on another tab, else sends the person to sign in. `token` is
+ * the one that was refused, so a refusal of an older token does nothing.
+ */
+export const SIGNIN_ENDED_EVENT = "desk:signin-ended";
+
 export type ApiRequestOptions = {
   method?: string;
   body?: unknown;
@@ -72,6 +80,9 @@ export async function apiRequest<T>(path: string, options: ApiRequestOptions = {
         /^(NOT_AT_S[1-9]|ENTRY_SEALED_READ_ONLY)$/.test(String((err as { blockingCondition?: unknown } | null)?.blockingCondition ?? "")) ||
         /^Entry (?:must be|is not) at S[1-9]\b/.test(err?.message ?? ""));
     if (stale && typeof window !== "undefined") window.dispatchEvent(new CustomEvent("desk:stale-booking"));
+    if (res.status === 401 && err?.error === "SignInRequired" && typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent(SIGNIN_ENDED_EVENT, { detail: { token: session?.jwtToken ?? null } }));
+    }
     throw new ApiError(
       res.status,
       err?.error ?? "RequestError",

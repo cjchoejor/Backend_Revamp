@@ -18,6 +18,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { Icon, IconSprite, OfflineBanner } from "@/design-system";
 import { useSession, redirectToLogin } from "@/hooks/use-session";
+import { goToSignIn } from "@/lib/auth/sign-out";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
 import { useHotelDay } from "@/hooks/use-hotel-day";
 import { useDeskBookings } from "@/hooks/use-desk-data";
@@ -91,7 +92,7 @@ function TopbarClock() {
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname() ?? "";
   const router = useRouter();
-  const { session, isLoading, isAuthenticated, clearSession } = useSession();
+  const { session, isLoading, isAuthenticated, clearSession, recheck } = useSession();
   const [redirecting, setRedirecting] = useState(false);
   const clock = useHotelClock(15_000);
   const hotelDay = useHotelDay();
@@ -114,12 +115,21 @@ export function AppShell({ children }: { children: ReactNode }) {
   const bell = usePanel();
   const user = usePanel();
 
+  // No sign-in in hand (2026-11-12): look again — the sign-in page may have just written one, or the
+  // cookie may hold one — and only then go to sign in, wiping nothing. Deleting the cookie here was
+  // what signed people out a moment after they had signed in.
   useEffect(() => {
-    if (!isLoading && !isAuthenticated && !redirecting) {
+    if (isLoading || isAuthenticated || redirecting) return;
+    let cancelled = false;
+    void recheck().then((s) => {
+      if (cancelled || s) return;
       setRedirecting(true);
-      void redirectToLogin();
-    }
-  }, [isLoading, isAuthenticated, redirecting]);
+      goToSignIn();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isLoading, isAuthenticated, redirecting, recheck]);
 
   // The one coloured count: things that are overdue or due within the next hours.
   const urgent = useMemo(() => {
