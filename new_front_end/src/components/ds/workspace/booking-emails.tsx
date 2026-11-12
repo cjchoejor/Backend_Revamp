@@ -20,6 +20,7 @@ import { useConversation } from "@/hooks/use-conversation";
 import {
   PAPER_WORDS,
   checkConversation,
+  cleanSubject,
   markConversationSeen,
   recordReplyAsAnswer,
   type ConversationEmail,
@@ -117,7 +118,7 @@ export function EmailsView({
                     </span>
                     <span className="conv-when">{fmtDateTime(e.at)}</span>
                   </span>
-                  <span className="conv-subject">{e.subject}</span>
+                  <span className="conv-subject">{cleanSubject(e.subject)}</span>
                   {e.snippet ? <span className="conv-snippet">{e.snippet}</span> : null}
                   {e.attachmentNames.length ? (
                     <span className="conv-files">
@@ -132,12 +133,12 @@ export function EmailsView({
                   {e.kind === "REPLY" ? (
                     e.answered ? (
                       <span className="sm ok-ink conv-answered">
-                        <Icon name="check" /> Recorded as their answer
+                        <Icon name="check" /> Recorded as their reply
                         {answeredTo ? <> to the {(PAPER_WORDS[answeredTo.commType] ?? "paper").toLowerCase()}</> : null}
                       </span>
                     ) : !sealed ? (
                       <Button kind="secondary" compact onClick={() => setAnswering(e)} data-record-answer>
-                        Record as their answer
+                        Record as their reply
                       </Button>
                     ) : null
                   ) : null}
@@ -182,7 +183,7 @@ function AnswerDialog({
     mutationFn: () => recordReplyAsAnswer(session!, reply.id, pick),
     onSuccess: async () => {
       const c = waiting.find((x) => x.id === pick);
-      toast.success(`Their answer to the ${(PAPER_WORDS[c?.commType ?? ""] ?? "paper").toLowerCase()} is recorded, in their words`);
+      toast.success(`Their reply to the ${(PAPER_WORDS[c?.commType ?? ""] ?? "paper").toLowerCase()} is recorded, in their words`);
       void qc.invalidateQueries({ queryKey: ["conversation", entry.id] });
       await refresh();
       onClose();
@@ -202,7 +203,7 @@ function AnswerDialog({
       register="report"
       onClose={onClose}
       busy={save.isPending}
-      title="Record their reply as their answer"
+      title="Record their reply to a paper"
       footer={
         <>
           <Button kind="quiet" onClick={onClose}>
@@ -211,10 +212,10 @@ function AnswerDialog({
           <Button
             className={pick ? "go" : undefined}
             state={save.isPending ? "working" : pick ? "default" : "inert"}
-            reason={waiting.length ? "pick the paper it answers" : "no paper is waiting for an answer"}
+            reason={pick ? undefined : waiting.length ? "pick the paper it answers" : "no paper is waiting for an answer"}
             onClick={() => save.mutate()}
           >
-            Record their answer
+            Record their reply
           </Button>
         </>
       }
@@ -236,12 +237,11 @@ function AnswerDialog({
         )}
         {waiting.find((c) => c.id === pick)?.commType === "QUOTATION" ? (
           <div className="notice next" role="status">
-            For a quotation, their answer is that they accept it: the quotation will read accepted.
+            This does not accept the quotation. It records that they replied, in their words; when they agree, accept it
+            with the quotation&rsquo;s own Record the answer.
           </div>
         ) : null}
-        <div className="sm muted">
-          Their words above the quoted mail are recorded as their written answer.
-        </div>
+        <div className="sm muted">Their words above the quoted email are recorded as their written reply.</div>
       </div>
     </DsDialog>
   );

@@ -11,6 +11,7 @@
  * 2026-07-28). Every figure is the backend's: the table prices itself through the live preview,
  * the paper's total comes from the billing summary. Nothing is added up here.
  */
+import { useConversation } from "@/hooks/use-conversation";
 import { s2Readiness } from "@/lib/desk/workspace";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -62,8 +63,13 @@ const QUOTE_STATE: Record<string, { word: string; tone: "success" | "warning" | 
   EXPIRED: { word: "lapsed", tone: "warning" },
 };
 
-/** A quotation's standing. With its reply off nobody is waiting on the guest, so it reads "sent" (2026-11-03). */
-function quoteStanding(state: string, replyNotAsked: boolean) {
+/**
+ * A quotation's standing. With its reply off nobody is waiting on the guest, so it reads "sent"
+ * (2026-11-03). A reply by email is not an acceptance (2026-11-12): it reads "they replied" until the
+ * desk records that they accept it.
+ */
+function quoteStanding(state: string, replyNotAsked: boolean, replied = false) {
+  if (state === "SENT" && replied) return { word: "sent · they replied", tone: "warning" as const };
   if (state === "SENT" && replyNotAsked) return { word: "sent", tone: "quiet" as const };
   return QUOTE_STATE[state] ?? { word: words(state), tone: "default" as const };
 }
@@ -912,8 +918,15 @@ function QuotationCard({
   const refresh = useRefreshEntry(entry.id);
   const [paper, setPaper] = useState<PaperRef | null>(null);
   const [answerOpen, setAnswerOpen] = useState(false);
-  const replyNotAsked = latestDispatched(useCommunications(entry.id).data?.items, "QUOTATION")?.acknowledgementStatus === "NOT_ASKED";
+  const quoteComm = latestDispatched(useCommunications(entry.id).data?.items, "QUOTATION");
+  const replyNotAsked = quoteComm?.acknowledgementStatus === "NOT_ASKED";
   const replyAsked = useReplyAsked(entry.id, "QUOTATION");
+  // Their reply by email, recorded against the quotation without accepting it (2026-11-12).
+  const conversation = useConversation(entry.id);
+  const replied = q.state === "SENT" && quoteComm?.acknowledgementStatus === "RECEIVED";
+  const theirReply = replied
+    ? (conversation.data?.emails ?? []).find((e) => e.kind === "REPLY" && e.answered?.communicationId === quoteComm?.id) ?? null
+    : null;
   // On a trip of several stays the trip's quotation is the guest's paper; this stay's own Send steps back.
   const onTrip = (useTripQuotation(entry).data?.stays.length ?? 0) > 1;
   const [how, setHow] = useState<AnswerHow | null>(null);
@@ -928,7 +941,7 @@ function QuotationCard({
   const st = billing.data?.stayTotal;
   const figure = st && st.quotationId === q.id ? st.amount : q.totalAmount;
   const perNight = st && st.quotationId === q.id && st.basis === "PER_NIGHT_TIMES_NIGHTS" ? st.perNightAmount : null;
-  const state = quoteStanding(q.state, replyNotAsked);
+  const state = quoteStanding(q.state, replyNotAsked, replied);
   const discount = readDiscount(q);
   const authority = readDiscountAuthority(q);
   const validMs = q.validUntil ? new Date(q.validUntil).getTime() : Number.NaN;
@@ -1073,9 +1086,19 @@ function QuotationCard({
             </span>
           ) : q.state === "SENT" ? (
             <>
-              <span className="sm">
-                <Icon name="clock" /> Awaiting their answer{q.validUntil ? ` — the price holds until ${fmtDateTime(q.validUntil, tz)}` : ""}
-              </span>
+              {replied ? (
+                <div className="quote-replied" data-quote-replied>
+                  <span className="sm">
+                    <Icon name="send" /> <b>They replied by email</b>
+                    {theirReply ? <> · {fmtDateTime(theirReply.at, tz)}</> : null} — not accepted yet. Record the answer when they agree.
+                  </span>
+                  {theirReply?.snippet ? <span className="quote-replied-words">&ldquo;{theirReply.snippet}&rdquo;</span> : null}
+                </div>
+              ) : (
+                <span className="sm">
+                  <Icon name="clock" /> Awaiting their answer{q.validUntil ? ` — the price holds until ${fmtDateTime(q.validUntil, tz)}` : ""}
+                </span>
+              )}
               <Live>
                 {!answerOpen ? (
                   <div style={{ display: "grid", gap: 4 }}>

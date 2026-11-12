@@ -2629,11 +2629,7 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .notice.stop:not(.desk-root *) { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s2); border: 1px solid var(--danger-line); border-left: 5px solid var(--danger); background: var(--danger-soft); color: var(--danger); padding: var(--s2) var(--s3); border-radius: var(--r-control); font-weight: 600; }
 .ds .email-pick-from { display: flex; align-items: center; justify-content: space-between; gap: var(--s2); }
 .ds .email-read { display: grid; gap: var(--s3); }
-.ds .email-read-head { display: grid; grid-template-columns: max-content 1fr; gap: 4px var(--s3); margin: 0; font-size: var(--t-sm); }
-.ds .email-read-head dt { color: var(--ink-2); }
-.ds .email-read-head dd { margin: 0; overflow-wrap: break-word; min-width: 0; }
 .ds .email-read-file { display: inline-flex; align-items: center; gap: 4px; margin-right: var(--s3); }
-.ds .email-read-text { white-space: pre-wrap; overflow-wrap: break-word; border: 1px solid var(--line-2); border-radius: var(--r-control); background: var(--surface); padding: var(--s3) var(--s4); max-height: min(56vh, 520px); overflow: auto; line-height: 1.5; }
 .ds .email-read-text:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 /* A booking's emails, under Papers (2026-11-12). */
 .ds .emails-view { display: grid; gap: var(--s3); }
@@ -2659,3 +2655,35 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .conv-answered { display: inline-flex; align-items: center; gap: 4px; }
 .ds .mail-bell { display: flex; align-items: center; gap: var(--s2); border-left: 3px solid var(--accent); }
 .ds .mail-bell-mark { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); flex: none; }
+/* Reading one email (2026-11-12): who wrote it, their words, the earlier email folded. */
+.ds .email-read-head { display: flex; align-items: flex-start; gap: var(--s3); }
+.ds .email-read-avatar { display: inline-grid; place-items: center; width: 36px; height: 36px; border-radius: 50%; background: var(--accent); color: #fff; font-weight: 700; flex: none; }
+.ds .email-read-who { display: grid; gap: 1px; min-width: 0; flex: 1; }
+.ds .email-read-who b { font-size: var(--t-lead); }
+.ds .email-read-addr, .ds .email-read-to { color: var(--ink-2); font-size: var(--t-sm); overflow-wrap: break-word; }
+.ds .email-read-when { color: var(--ink-2); font-size: var(--t-sm); white-space: nowrap; }
+.ds .email-read-files { display: flex; flex-wrap: wrap; gap: 6px; }
+.ds .email-read-files .email-read-file { border: 1px solid var(--line-2); border-radius: var(--r-control); padding: 3px 8px; background: var(--paper); font-size: var(--t-sm); margin: 0; }
+.ds .email-read-text { overflow-wrap: break-word; border: 1px solid var(--line-2); border-radius: var(--r-control); background: var(--surface); padding: var(--s4); max-height: min(56vh, 520px); overflow: auto; }
+.ds .email-words { max-width: 72ch; line-height: 1.6; font-size: var(--t-base); }
+.ds .email-words p { margin: 0 0 var(--s3); }
+.ds .email-words p:last-child { margin-bottom: 0; }
+.ds .email-quoted { margin-top: var(--s4); border-top: 1px solid var(--line-2); padding-top: var(--s2); }
+.ds .email-quoted-toggle { all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; font-weight: 600; color: var(--accent); padding: 4px 0; }
+.ds .email-quoted-toggle .ic { transition: transform .15s; }
+.ds .email-quoted.open .email-quoted-toggle .ic { transform: rotate(90deg); }
+.ds .email-quoted-said { color: var(--ink-2); font-size: var(--t-sm); padding-left: 22px; }
+.ds .email-quoted-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ds .email-quoted-body { margin-top: var(--s2); border-left: 3px solid var(--line-2); padding-left: var(--s3); color: var(--ink-2); }
+.ds .email-quoted-body .email-words { font-size: var(--t-sm); }
+@media (prefers-reduced-motion: reduce) { .ds .email-quoted-toggle .ic { transition: none; } }
+/* The email the papers reply to, said plainly (2026-11-12). */
+.ds .email-line.linked:not(.desk-root *) { border: 1px solid var(--accent); border-left: 5px solid var(--accent); background: var(--accent-soft); align-items: flex-start; padding: var(--s3); }
+.ds .email-line-mark { display: inline-grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; background: var(--accent); color: #fff; flex: none; }
+.ds .email-line.linked .email-line-lead { color: var(--accent); font-weight: 700; font-size: var(--t-sm); flex-basis: 100%; }
+.ds .email-line.linked .email-line-subject { font-size: var(--t-lead); }
+.ds .email-line.linked .email-line-from { flex-basis: 100%; }
+.ds .btn.btn-quiet.email-unlink:not(.desk-root *) { color: var(--danger); border-color: var(--danger-line); }
+.ds .btn.btn-quiet.email-unlink:not(.desk-root *):hover { background: var(--danger-soft); border-color: var(--danger); }
+.ds .quote-replied { display: grid; gap: 4px; border-left: 3px solid var(--accent); background: var(--accent-soft); padding: var(--s2) var(--s3); border-radius: var(--r-control); }
+.ds .quote-replied-words { font-style: italic; color: var(--ink); overflow-wrap: break-word; }

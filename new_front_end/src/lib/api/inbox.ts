@@ -39,6 +39,10 @@ export type InboxEmailRead = InboxEmail & {
   to: string[];
   cc: string[];
   text: string;
+  /** What the person wrote, and the earlier email they quoted, apart. */
+  fresh: string;
+  quoteHeader: string | null;
+  quoted: string;
   cut: boolean;
   attachments: Array<{ name: string; type: string; size: number | null }>;
 };
@@ -61,6 +65,18 @@ export function clearInquiryEmail(session: Session, inquiryId: string) {
     session,
     body: {},
   });
+}
+
+/**
+ * A subject as a person reads it: the test redirect's "[→someone]" mark left out, and "Re: Re:"
+ * written once.
+ */
+export function cleanSubject(subject: string | null | undefined): string {
+  const s = (subject ?? "")
+    .replace(/\[→[^\]]*\]\s*/g, "")
+    .replace(/^(\s*(re|aw|sv)\s*:\s*)+/i, "Re: ")
+    .trim();
+  return s || "(no subject)";
 }
 
 /** The enquiry's linked email off the booking payload, or null. */
@@ -98,6 +114,7 @@ export type ConversationEmail = {
   paperKind: string | null;
   attachmentNames: string[];
   answersKind: string | null;
+  inReplyTo: string | null;
   seen: boolean;
   answered: { communicationId: string; at: string | null; by: string | null } | null;
 };

@@ -21,6 +21,7 @@ import { Help } from "@/components/ds/help";
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
 import {
+  cleanSubject,
   clearInquiryEmail,
   emailThreadOf,
   linkInquiryEmail,
@@ -57,6 +58,7 @@ export function GuestEmailField({
 }) {
   const [open, setOpen] = useState(false);
   const [reading, setReading] = useState(false);
+  const [unlinking, setUnlinking] = useState(false);
   return (
     <div className="field guest-email" data-guest-email>
       <label>
@@ -68,36 +70,39 @@ export function GuestEmailField({
         </Help>
       </label>
       {thread ? (
-        <div className="email-line" data-email-linked>
-          <Icon name="send" />
+        // Said so it cannot be missed (same day, operator: "telling the user we are going to reply
+        // to this email"): every paper goes out as a reply to it.
+        <div className="email-line linked" data-email-linked>
+          <span className="email-line-mark" aria-hidden>
+            <Icon name="send" />
+          </span>
           <span className="email-line-main">
-            <span className="email-line-lead">Papers reply in</span>
-            <b className="email-line-subject">{thread.subject}</b>
+            <span className="email-line-lead">Every paper is sent as a reply to this email</span>
+            <b className="email-line-subject">{cleanSubject(thread.subject)}</b>
             <span className="email-line-from">
               from {who(thread.fromName, thread.fromAddress)}
               {thread.receivedAt ? <> · {fmtDateTime(thread.receivedAt)}</> : null}
             </span>
           </span>
           <span className="email-line-acts">
-            <Button kind="quiet" compact onClick={() => setReading(true)} data-read-email>
+            <Button kind="secondary" compact onClick={() => setReading(true)} data-read-email>
               Read
             </Button>
             {!disabled ? (
               <>
-              <Button kind="quiet" compact state={busy ? "working" : "default"} onClick={() => setOpen(true)}>
-                Change
-              </Button>
-              <Button
-                kind="quiet"
-                compact
-                iconOnly
-                aria-label="Unlink the email"
-                title="Unlink the email — the papers start a conversation of their own"
-                state={busy ? "inert" : "default"}
-                onClick={() => void onClear()}
-              >
-                <Icon name="x" />
-              </Button>
+                <Button kind="secondary" compact state={busy ? "working" : "default"} onClick={() => setOpen(true)}>
+                  Change
+                </Button>
+                <Button
+                  kind="quiet"
+                  compact
+                  className="email-unlink"
+                  state={busy ? "inert" : "default"}
+                  onClick={() => setUnlinking(true)}
+                  data-unlink-email
+                >
+                  <Icon name="x" /> Unlink
+                </Button>
               </>
             ) : null}
           </span>
@@ -113,6 +118,48 @@ export function GuestEmailField({
           )}
         </div>
       )}
+      {unlinking && thread ? (
+        // Unlinking deletes nothing (same day, operator: "a direct click on it shouldn't … it should
+        // ask user for confirmation"): it is asked first, and says what it does and does not do.
+        <DsDialog
+          open
+          closeX
+          width={520}
+          register="danger"
+          onClose={() => setUnlinking(false)}
+          title="Stop replying in this email?"
+          footer={
+            <>
+              <Button kind="quiet" onClick={() => setUnlinking(false)}>
+                Keep it
+              </Button>
+              <Button
+                kind="danger"
+                solid
+                data-confirm-unlink
+                onClick={async () => {
+                  try {
+                    await onClear();
+                    setUnlinking(false);
+                  } catch {
+                    /* the refusal is already said in a toast */
+                  }
+                }}
+              >
+                Unlink the email
+              </Button>
+            </>
+          }
+        >
+          <div className="email-read">
+            <div>
+              Papers will no longer be sent as replies to <b>{cleanSubject(thread.subject)}</b> from {who(thread.fromName, thread.fromAddress)}.
+              From now on they start a conversation of their own.
+            </div>
+            <div className="sm muted">Nothing is deleted: the email stays in the hotel&rsquo;s mailbox, and you can pick it again.</div>
+          </div>
+        </DsDialog>
+      ) : null}
       {reading && thread ? (
         <EmailReadDialog messageId={thread.messageId} currentId={thread.messageId} inquiryId={inquiryId} onClose={() => setReading(false)} />
       ) : null}
@@ -191,7 +238,7 @@ function EmailPickDialog({
           <Button
             className={ready ? "go" : undefined}
             state={saving ? "working" : ready ? "default" : "inert"}
-            reason={picked && picked.messageId === currentId ? "this is the email already picked" : "pick an email first"}
+            reason={ready ? undefined : picked && picked.messageId === currentId ? "this is the email already picked" : "pick an email first"}
             onClick={async () => {
               if (!picked) return;
               setSaving(true);
@@ -297,7 +344,7 @@ function EmailPickDialog({
                       {e.fromName && e.fromAddress ? <span className="email-row-addr">{e.fromAddress}</span> : null}
                       <span className="email-row-when">{e.receivedAt ? fmtDateTime(e.receivedAt) : ""}</span>
                     </span>
-                    <span className="email-row-subject">{e.subject}</span>
+                    <span className="email-row-subject">{cleanSubject(e.subject)}</span>
                     {e.snippet ? <span className="email-row-snippet">{e.snippet}</span> : null}
                     {current ? <span className="email-row-note ok-ink">picked for this enquiry</span> : null}
                     {others.length ? (
@@ -376,7 +423,7 @@ export function EmailReadDialog({
       register="report"
       onClose={onClose}
       busy={saving}
-      title={m?.subject ?? "The email"}
+      title={m ? cleanSubject(m.subject) : "The email"}
       footer={
         <>
           <Button kind="quiet" onClick={onClose}>
@@ -386,7 +433,7 @@ export function EmailReadDialog({
             <Button
               className={m && !isCurrent ? "go" : undefined}
               state={saving ? "working" : m && !isCurrent ? "default" : "inert"}
-              reason={isCurrent ? "this is the email already picked" : "the email is still being read"}
+              reason={m && !isCurrent ? undefined : isCurrent ? "this is the email already picked" : "the email is still being read"}
               onClick={async () => {
                 if (!m) return;
                 setSaving(true);
@@ -413,36 +460,31 @@ export function EmailReadDialog({
         <div className="muted">Reading the email…</div>
       ) : (
         <div className="email-read" data-email-read>
-          <dl className="email-read-head">
-            <dt>From</dt>
-            <dd>{who(m.fromName, m.fromAddress)}</dd>
-            {m.to.length ? (
-              <>
-                <dt>To</dt>
-                <dd>{m.to.join(", ")}</dd>
-              </>
-            ) : null}
-            {m.cc.length ? (
-              <>
-                <dt>Cc</dt>
-                <dd>{m.cc.join(", ")}</dd>
-              </>
-            ) : null}
-            <dt>When</dt>
-            <dd>{m.receivedAt ? fmtDateTime(m.receivedAt) : "—"}</dd>
-            {m.attachments.length ? (
-              <>
-                <dt>Attached</dt>
-                <dd>
-                  {m.attachments.map((a, i) => (
-                    <span key={`${a.name}-${i}`} className="email-read-file">
-                      <Icon name="file" /> {a.name}
-                    </span>
-                  ))}
-                </dd>
-              </>
-            ) : null}
-          </dl>
+          {/* Who wrote it, to whom and when, as an email program sets it out (same day, operator:
+              "beautify and make it readable"). */}
+          <div className="email-read-head">
+            <span className="email-read-avatar" aria-hidden>
+              {(m.fromName || m.fromAddress || "?").trim().charAt(0).toUpperCase()}
+            </span>
+            <span className="email-read-who">
+              <b>{m.fromName || m.fromAddress || "Someone"}</b>
+              {m.fromName && m.fromAddress ? <span className="email-read-addr">{m.fromAddress}</span> : null}
+              <span className="email-read-to">
+                to {m.to.join(", ") || "—"}
+                {m.cc.length ? <> · cc {m.cc.join(", ")}</> : null}
+              </span>
+            </span>
+            <span className="email-read-when">{m.receivedAt ? fmtDateTime(m.receivedAt) : ""}</span>
+          </div>
+          {m.attachments.length ? (
+            <div className="email-read-files">
+              {m.attachments.map((a, i) => (
+                <span key={`${a.name}-${i}`} className="email-read-file">
+                  <Icon name="file" /> {a.name}
+                </span>
+              ))}
+            </div>
+          ) : null}
           {isCurrent ? <div className="sm ok-ink">The papers reply in this email</div> : null}
           {m.linkedTo.some((o) => o.inquiryId !== inquiryId) ? (
             <div className="sm warn-ink">
@@ -454,7 +496,8 @@ export function EmailReadDialog({
             </div>
           ) : null}
           <div className="email-read-text" tabIndex={0}>
-            {m.text || <span className="muted">No words in this email — only what is attached.</span>}
+            {(m.fresh || m.text) ? <EmailWords text={m.fresh || m.text} /> : <span className="muted">No words in this email — only what is attached.</span>}
+            {m.quoted ? <QuotedEmail header={m.quoteHeader} text={m.quoted} /> : null}
           </div>
           {m.cut ? <div className="sm muted">The email is longer than the desk shows — the rest is in the mailbox.</div> : null}
         </div>
@@ -495,5 +538,53 @@ export function BookingEmailField({ entry, editable, suggest }: { entry: EntryDe
       onPick={(email) => link.mutateAsync(email)}
       onClear={() => clear.mutateAsync()}
     />
+  );
+}
+
+/** An email's words: paragraphs as written, line breaks kept, *word* in bold as plain-text email marks it. */
+function EmailWords({ text }: { text: string }) {
+  const paras = text.split(/\n\s*\n/).filter((p) => p.trim());
+  return (
+    <div className="email-words">
+      {paras.map((p, i) => (
+        <p key={i}>
+          {p.split("\n").map((line, j, all) => (
+            <span key={j}>
+              {line.split(/(\*[^*\n]{1,80}\*)/g).map((seg, k) =>
+                /^\*[^*\n]{1,80}\*$/.test(seg) ? <b key={k}>{seg.slice(1, -1)}</b> : <span key={k}>{seg}</span>,
+              )}
+              {j < all.length - 1 ? <br /> : null}
+            </span>
+          ))}
+        </p>
+      ))}
+    </div>
+  );
+}
+
+/** The earlier email a reply quoted, folded until asked for. */
+function QuotedEmail({ header, text }: { header: string | null; text: string }) {
+  const [open, setOpen] = useState(false);
+  // "On Thu, 12 Nov 2026 at 19:23, Legphel Hotel Reservations <x@y> wrote:" → who and when, plainly.
+  const said = header
+    ? header
+        .replace(/\s*wrote:\s*$/i, "")
+        .replace(/^on\s+/i, "")
+        .replace(/\s*<[^>]*>?\s*$/, "")
+        .replace(/\s*<\s*$/, "")
+        .trim()
+    : null;
+  return (
+    <div className={`email-quoted${open ? " open" : ""}`}>
+      <button type="button" className="email-quoted-toggle" aria-expanded={open} onClick={() => setOpen((v) => !v)} data-quoted-toggle>
+        <Icon name="chev" /> {open ? "Hide" : "Show"} the earlier email
+      </button>
+      {said ? <div className="email-quoted-said">{said}</div> : null}
+      {open ? (
+        <div className="email-quoted-body">
+          <EmailWords text={text} />
+        </div>
+      ) : null}
+    </div>
   );
 }
