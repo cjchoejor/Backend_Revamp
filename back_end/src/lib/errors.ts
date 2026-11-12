@@ -28,6 +28,18 @@ export class AuthorizationError extends AppError {
   }
 }
 
+/**
+ * The caller's sign-in no longer works (2026-11-12): no token, a token that has expired or does not
+ * read, a session that was signed out or locked, or a person taken off the staff list. 401, not 403:
+ * "sign in again" is a different answer from "your role may not do this", and the desk acts on it.
+ * `blockingCondition` says which, for the record; the desk shows the one sentence.
+ */
+export class SignInRequiredError extends AppError {
+  constructor(blockingCondition: string, message = "Your sign-in has ended — sign in again") {
+    super(401, { error: "SignInRequired", message, blockingCondition });
+  }
+}
+
 export class NotFoundError extends AppError {
   constructor(resource: string) {
     super(404, { error: "NotFoundError", message: `${resource} not found` });

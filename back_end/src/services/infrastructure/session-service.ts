@@ -1,7 +1,7 @@
 import type { PrismaClient } from "@prisma/client";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
-import { AuthorizationError, ValidationError } from "../../lib/errors.js";
+import { AuthorizationError, SignInRequiredError, ValidationError } from "../../lib/errors.js";
 import { enforceValidPin } from "../../policies/29-session-management/p69-session-management-and-pin-authentication.js";
 import { allocateReadableId } from "../../lib/readable-id.js";
 
@@ -48,7 +48,7 @@ function signJwt(payload: SessionJwtPayload) {
   return jwt.sign(payload, resolveJwtSecret(), { expiresIn: "12h" });
 }
 
-/** Verify a JWT and return the payload, or throw AuthorizationError on any failure. */
+/** Verify a JWT and return the payload, or throw SignInRequiredError (401) on any failure. */
 export function verifySessionJwt(token: string): SessionJwtPayload {
   try {
     const decoded = jwt.verify(token, resolveJwtSecret()) as jwt.JwtPayload;
@@ -60,7 +60,7 @@ export function verifySessionJwt(token: string): SessionJwtPayload {
       typeof decoded.actorLevel !== "string" ||
       typeof decoded.terminalId !== "string"
     ) {
-      throw new AuthorizationError("Malformed session token");
+      throw new SignInRequiredError("TOKEN_MALFORMED");
     }
     return {
       sessionId: decoded.sessionId,
@@ -70,8 +70,8 @@ export function verifySessionJwt(token: string): SessionJwtPayload {
       terminalId: decoded.terminalId,
     };
   } catch (e) {
-    if (e instanceof AuthorizationError) throw e;
-    throw new AuthorizationError("Invalid or expired session token");
+    if (e instanceof SignInRequiredError) throw e;
+    throw new SignInRequiredError(e instanceof jwt.TokenExpiredError ? "TOKEN_EXPIRED" : "TOKEN_INVALID");
   }
 }
 
