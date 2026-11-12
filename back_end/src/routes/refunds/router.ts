@@ -4,7 +4,7 @@ import { requireActorLevel } from "../../middleware/auth.js";
 import { validateBody } from "../../middleware/validate-body.js";
 import { answerEarlierAdvanceRequestSchema, keepRefundRequestSchema, recordRefundRequestSchema } from "../../dtos/07-folios/request-schemas.js";
 import { answerEarlierAdvance, keepRefund, listRefunds, recordRefund } from "../../services/domain/refund-service.js";
-import { listRefundsMade } from "../../services/domain/refund-history-service.js";
+import { bookingRefundsMade, listRefundsMade } from "../../services/domain/refund-history-service.js";
 
 export const refundsRouter = Router();
 
@@ -33,6 +33,16 @@ refundsRouter.get("/refunds/made", requireActorLevel("L2"), async (_req, res, ne
   try {
     res.setHeader("Cache-Control", "no-store");
     res.json(await listRefundsMade(prisma));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** One booking's refunds made, for its page under Billing › Refunds. */
+refundsRouter.get("/refunds/made/:entryId", requireActorLevel("L2"), async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    res.json(await bookingRefundsMade(prisma, req.params.entryId));
   } catch (e) {
     next(e);
   }

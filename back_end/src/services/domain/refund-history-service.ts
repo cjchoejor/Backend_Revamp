@@ -14,6 +14,7 @@
 import type { PrismaClient } from "@prisma/client";
 import { PaymentDirection, Prisma } from "@prisma/client";
 import { guestDisplayName } from "../../lib/guest-display-name.js";
+import { AppError } from "../../lib/errors.js";
 import { toDecimal } from "../../lib/money.js";
 
 /** Why the money went back, as one kind. */
@@ -27,9 +28,12 @@ const REQUEST_CAUSE_WORDS: Record<string, string> = {
 const money2 = (d: Prisma.Decimal) => Number(d.toFixed(2));
 const ending = (account: string | null) => (account ? account.replace(/\s+/g, "").slice(-4) : null);
 
-export async function listRefundsMade(prisma: PrismaClient) {
+export async function listRefundsMade(prisma: PrismaClient, opts: { entryId?: string } = {}) {
   const outs = await prisma.paymentRecord.findMany({
-    where: { paymentDirection: PaymentDirection.OUT },
+    where: {
+      paymentDirection: PaymentDirection.OUT,
+      ...(opts.entryId ? { OR: [{ entryId: opts.entryId }, { folio: { entryId: opts.entryId } }] } : {}),
+    },
     orderBy: { createdAt: "desc" },
     select: {
       id: true,
@@ -202,4 +206,12 @@ export async function listRefundsMade(prisma: PrismaClient) {
     bookings,
     totals: { bookings: bookings.length, refunds: refunds.filter((r) => !!entryIdOf(r)).length, amount: money2(all), currency: bookings[0]?.currency ?? "BTN" },
   };
+}
+
+/** One booking's refunds, for its own page. */
+export async function bookingRefundsMade(prisma: PrismaClient, entryId: string) {
+  const { bookings } = await listRefundsMade(prisma, { entryId });
+  const one = bookings.find((b) => b.entryId === entryId);
+  if (!one) throw new AppError(404, { error: "NotFoundError", message: "No refund was made on this booking" });
+  return one;
 }
