@@ -1,5 +1,6 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { cleanPaymentBank } from "../../lib/payment-bank.js";
+import { nuWords } from "./checkin-payment-service.js";
 import { guestDisplayName } from "../../lib/guest-display-name.js";
 import { effectiveCheckOutDate } from "../../lib/stay-dates.js";
 import { FolioState, InvoiceState, InvoiceType, PaymentDirection, Stage } from "@prisma/client";
@@ -404,6 +405,13 @@ export async function initiateSettlement(
 
   // Bucket-scoped outstanding is authoritative for split settlements; whole-folio otherwise.
   const outstandingDec = outstandingDecScoped;
+  // Money paid now is never more than what is owed (2026-11-12): it used to be cut down to the
+  // balance in silence, so the record could say less than the guest handed over. Refused in words.
+  if (method !== "VOUCHER" && partialDec != null && partialDec.gt(outstandingDec)) {
+    throw new ValidationError(
+      `${nuWords(partialDec)} is more than the ${nuWords(outstandingDec.lt(0) ? 0 : outstandingDec)} still owed — type what the guest pays now`,
+    );
+  }
   const settleAmountDec =
     method === "VOUCHER"
       ? minMoney(voucherDec ?? 0, outstandingDec)
