@@ -359,41 +359,129 @@ export function forgetInboxList(): void {
 
 /* ---------- one email ---------- */
 
-export async function readInboxEmail(messageId: string): Promise<InboxEmailFull | null> {
+/**
+ * Find one email by its Message-ID — the inbox first, then Gmail's All Mail (archived since it came
+ * in) — and run `use` on it while its mailbox is open.
+ */
+async function withMessage<T>(
+  messageId: string,
+  query: Parameters<ImapFlow["fetchAll"]>[1],
+  use: (client: ImapFlow, m: FetchMessageObject) => Promise<T | null>,
+): Promise<T | null> {
   const id = messageId.trim();
   if (!id) return null;
   return withInbox(async (client) => {
-    const look = async (box: string): Promise<InboxEmailFull | null> => {
+    const look = async (box: string): Promise<T | null> => {
       const lock = await client.getMailboxLock(box, { readOnly: true });
       try {
         const found = await client.search({ header: { "message-id": id } }, { uid: true });
         const uids = Array.isArray(found) ? found : [];
         if (!uids.length) return null;
-        const msgs = await client.fetchAll(
-          uids.join(","),
-          { uid: true, envelope: true, internalDate: true, headers: HEADER_KEYS },
-          { uid: true },
-        );
+        const msgs = await client.fetchAll(uids.join(","), { ...query, uid: true, envelope: true }, { uid: true });
         const m = msgs.find((x) => x.envelope?.messageId?.trim() === id);
-        if (!m) return null;
-        const headers = parseHeaders(m.headers);
-        const email = summary(m, headers);
-        if (!email) return null;
-        const refs = (headers["references"] ?? "").match(/<[^<>\s]+>/g) ?? [];
-        return { ...email, references: refs.length ? refs.join(" ") : null };
+        return m ? await use(client, m) : null;
       } finally {
         lock.release();
       }
     };
     const inInbox = await look("INBOX");
     if (inInbox) return inInbox;
-    // Archived since it came in: Gmail's All Mail still holds it.
     try {
-      const all = (await client.list()).find((b) => b.specialUse === "\\All");
+      const all = (await client.list()).find((b) => b.specialUse === "\All");
       if (all) return await look(all.path);
     } catch {
       /* the inbox alone */
     }
     return null;
+  });
+}
+
+export async function readInboxEmail(messageId: string): Promise<InboxEmailFull | null> {
+  return withMessage(messageId, { internalDate: true, headers: HEADER_KEYS }, async (_c, m) => {
+    const headers = parseHeaders(m.headers);
+    const email = summary(m, headers);
+    if (!email) return null;
+    const refs = (headers["references"] ?? "").match(/<[^<>\s]+>/g) ?? [];
+    return { ...email, references: refs.length ? refs.join(" ") : null };
+  });
+}
+
+/** One email in full, to read on the desk: who it went to, all its words, its attachments' names. */
+export type InboxEmailRead = InboxEmail & {
+  to: string[];
+  cc: string[];
+  text: string;
+  /** The words were cut at the reading limit. */
+  cut: boolean;
+  attachments: Array<{ name: string; type: string; size: number | null }>;
+};
+
+const READ_LIMIT = 300_000;
+
+function addressWords(list: Array<{ name?: string; address?: string }> | undefined): string[] {
+  return (list ?? [])
+    .map((a) => {
+      const name = a.name?.trim() ?? "";
+      const address = a.address?.trim() ?? "";
+      return name && address && name.toLowerCase() !== address.toLowerCase() ? `${name} <${address}>` : address || name;
+    })
+    .filter(Boolean);
+}
+
+function attachmentsOf(node: MessageStructureObject | undefined): InboxEmailRead["attachments"] {
+  const out: InboxEmailRead["attachments"] = [];
+  const walk = (n: MessageStructureObject | undefined) => {
+    if (!n) return;
+    if (n.childNodes?.length) {
+      for (const c of n.childNodes) walk(c);
+      return;
+    }
+    const type = (n.type ?? "").toLowerCase();
+    const name = n.dispositionParameters?.filename ?? n.parameters?.name ?? null;
+    const isAttachment = /attachment/i.test(n.disposition ?? "") || (!!name && !type.startsWith("text/"));
+    if (isAttachment) out.push({ name: name ?? "unnamed", type, size: n.size ?? null });
+  };
+  walk(node);
+  return out;
+}
+
+/** The words as written: line breaks kept, runs of blank lines and trailing spaces closed up. */
+function tidyText(text: string): string {
+  return text
+    .replace(/\r\n?/g, "\n")
+    .replace(/[ \t ]+\n/g, "\n")
+    .replace(/[ \t ]{2,}/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+export async function readInboxEmailInFull(messageId: string): Promise<InboxEmailRead | null> {
+  return withMessage(messageId, { internalDate: true, bodyStructure: true, headers: HEADER_KEYS }, async (client, m) => {
+    const email = summary(m, parseHeaders(m.headers));
+    if (!email) return null;
+    const part = findTextPart(m.bodyStructure);
+    let text = "";
+    let cut = false;
+    if (part) {
+      const got = await client.fetchAll(
+        String(m.uid),
+        { uid: true, bodyParts: [{ key: part.key, start: 0, maxLength: READ_LIMIT }] },
+        { uid: true },
+      );
+      const buf = got[0]?.bodyParts?.get(part.key);
+      if (buf) {
+        text = tidyText(decodePart(buf, part, !!got[0]?.binaryParts?.has(part.key)));
+        cut = buf.length >= READ_LIMIT;
+      }
+    }
+    return {
+      ...email,
+      snippet: snippetOf(text),
+      to: addressWords(m.envelope?.to),
+      cc: addressWords(m.envelope?.cc),
+      text,
+      cut,
+      attachments: attachmentsOf(m.bodyStructure),
+    };
   });
 }
