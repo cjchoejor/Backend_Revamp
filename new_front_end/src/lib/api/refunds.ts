@@ -84,6 +84,10 @@ export async function listRefundsMade(session: Session) {
   return apiRequest<RefundsMade>("/api/refunds/made", { method: "GET", session });
 }
 
+export async function getBookingRefunds(session: Session, entryId: string) {
+  return apiRequest<BookingRefunds>(`/api/refunds/made/${encodeURIComponent(entryId)}`, { method: "GET", session });
+}
+
 export async function listRefunds(session: Session, view: "waiting" | "done") {
   return apiRequest<{ items: RefundRow[] }>(`/api/refunds?view=${view}`, { method: "GET", session });
 }

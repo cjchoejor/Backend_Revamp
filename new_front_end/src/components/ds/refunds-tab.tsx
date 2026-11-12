@@ -8,11 +8,12 @@
  * front desk, since it carries bank details. Every figure is the server's.
  */
 import Link from "next/link";
-import { Fragment, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button, Chip, EmptyState, Input, MoneyInput } from "@/design-system";
-import { LoadFailed, LoadingBlock, MoreRow, usePaged } from "@/components/ds/ui";
+import { LoadFailed, LoadingBlock, MoreRow, OpenRow, usePaged } from "@/components/ds/ui";
+import { Help } from "@/components/ds/help";
 import { StayDates } from "@/components/ds/stay-dates";
 import { useRefunds, useRefundsMade } from "@/hooks/use-refunds";
 import { useSession } from "@/hooks/use-session";
@@ -279,9 +280,9 @@ function WaitingCard({ row, tz, focus }: { row: RefundRow; tz: string; focus: bo
 
 /* ------------------------------------------------------------------ refunds made */
 
-const methodWord = (m: string | null) => (m ? (REFUND_METHOD_WORD[m] ?? m.charAt(0) + m.slice(1).toLowerCase().replace(/_/g, " ")) : "—");
+export const methodWord = (m: string | null) => (m ? (REFUND_METHOD_WORD[m] ?? m.charAt(0) + m.slice(1).toLowerCase().replace(/_/g, " ")) : "—");
 
-function standing(b: BookingRefunds) {
+export function refundStanding(b: BookingRefunds) {
   if (b.status === "ACTIVE" || b.status === "PARKED") return `${b.status === "PARKED" ? "Parked at " : "At "}${stepName(stepNoOfStage(b.stage ?? "S1"))}`;
   return endingOf(b.closedAs)?.word ?? (b.status === "CANCELLED" ? "Cancelled" : b.status === "CLOSED" ? "Closed" : "Ended");
 }
@@ -293,7 +294,7 @@ function standing(b: BookingRefunds) {
  */
 function RefundsMadeTable({ tz }: { tz: string }) {
   const made = useRefundsMade();
-  const [open, setOpen] = useState<Set<string>>(new Set());
+  const [picked, setPicked] = useState<string | null>(null);
   const [q, setQ] = useState("");
   const bookings = made.data?.bookings ?? [];
   const needle = q.trim().toLowerCase();
@@ -301,20 +302,16 @@ function RefundsMadeTable({ tz }: { tz: string }) {
     ? bookings.filter((b) => [b.guestName, b.entryId, b.inquiryId, b.party].filter(Boolean).join(" ").toLowerCase().includes(needle))
     : bookings;
   const paged = usePaged(shown, 25);
-  const toggle = (id: string) =>
-    setOpen((o) => {
-      const n = new Set(o);
-      if (n.has(id)) n.delete(id);
-      else n.add(id);
-      return n;
-    });
   if (made.isLoading) return <LoadingBlock />;
   if (made.error) return <LoadFailed what="the refunds made" onRetry={() => void made.refetch()} />;
   const t = made.data!.totals;
   return (
     <section className="block refunds-made" data-refunds-made>
       <div className="block-head">
-        <h3>Refunds made</h3>
+        <h3>
+          Refunds made
+          <Help label="About this list">Double-click a booking to see its refunds.</Help>
+        </h3>
         {t.refunds ? (
           <span className="meta" data-refunds-total>
             {plural(t.refunds, "refund")} to {plural(t.bookings, "booking")} · <b className="money">{money(t.amount, t.currency)}</b> in all
@@ -339,93 +336,36 @@ function RefundsMadeTable({ tz }: { tz: string }) {
                 <th>Where it stands</th>
                 <th>Last refund</th>
                 <th className="num">Refunded</th>
-                <th aria-label="Show the refunds" />
               </tr>
             </thead>
             <tbody>
-              {paged.shown.map((b, i) => {
-                const isOpen = open.has(b.entryId);
-                return (
-                  <Fragment key={b.entryId}>
-                    <tr className={`refund-row${i % 2 ? " alt" : ""}${isOpen ? " open" : ""}`} onClick={() => toggle(b.entryId)} data-refund-booking={b.entryId}>
-                      <td>
-                        <Link className="row-link" href={`/bookings/${encodeURIComponent(b.entryId)}`} onClick={(e) => e.stopPropagation()}>
-                          {b.guestName ?? b.entryId}
-                        </Link>
-                        <div className="meta">{[b.entryId, b.party].filter(Boolean).join(" · ")}</div>
-                      </td>
-                      <td>
-                        <StayDates stacked compact checkIn={b.checkInDate} checkOut={b.checkOutDate} />
-                      </td>
-                      <td className="ink-2">{standing(b)}</td>
-                      <td className="ink-2">{fmtDateTime(b.lastAt, tz)}</td>
-                      <td className="num">
-                        <b className="money">{money(b.total, b.currency)}</b>
-                        {b.count > 1 ? <div className="meta">{plural(b.count, "refund")}</div> : null}
-                      </td>
-                      <td className="refund-chev">
-                        <button
-                          type="button"
-                          className="btn btn-quiet compact"
-                          aria-expanded={isOpen}
-                          aria-label={isOpen ? "Hide the refunds" : "Show the refunds"}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            toggle(b.entryId);
-                          }}
-                        >
-                          {isOpen ? "Hide" : "Show"}
-                        </button>
-                      </td>
-                    </tr>
-                    {isOpen ? (
-                      <tr className="static refund-detail" data-refund-detail={b.entryId}>
-                        <td colSpan={6}>
-                          <table className="table compact refund-lines">
-                            <thead>
-                              <tr>
-                                <th>When</th>
-                                <th>Step</th>
-                                <th className="num">Amount</th>
-                                <th>Back by</th>
-                                <th>Why</th>
-                                <th>By</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {b.refunds.map((r) => (
-                                <tr key={r.id} data-refund-line={r.id}>
-                                  <td>{fmtDateTime(r.at, tz)}</td>
-                                  <td>{r.stage ? stepName(stepNoOfStage(r.stage)) : "—"}</td>
-                                  <td className="num">
-                                    <b className="money">{money(r.amount, r.currency)}</b>
-                                  </td>
-                                  <td>
-                                    {methodWord(r.method)}
-                                    {r.bank ? <div className="meta">{r.bank}</div> : null}
-                                    {r.reference ? <div className="meta">{r.reference}</div> : null}
-                                  </td>
-                                  <td>
-                                    {r.why}
-                                    {r.reason ? <div className="meta">&ldquo;{r.reason}&rdquo;</div> : null}
-                                  </td>
-                                  <td>{r.by ?? "—"}</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                          {b.movedToTrip ? (
-                            <p className="meta refund-moved">
-                              {money(b.movedToTrip, b.currency)} also moved to another stay of the trip. It stays the hotel&apos;s, so it is not a refund.
-                            </p>
-                          ) : null}
-                        </td>
-                      </tr>
-                    ) : null}
-                  </Fragment>
-                );
-              })}
-              <MoreRow more={paged.more} onMore={paged.showMore} colSpan={6} step={25} />
+              {paged.shown.map((b, i) => (
+                <OpenRow
+                  key={b.entryId}
+                  entryId={b.entryId}
+                  href={`/billing/refunds/${encodeURIComponent(b.entryId)}`}
+                  alt={i % 2 === 1}
+                  selected={picked === b.entryId}
+                  onSelect={() => setPicked((p) => (p === b.entryId ? null : b.entryId))}
+                >
+                  <td data-refund-booking={b.entryId}>
+                    <Link className="row-link" href={`/bookings/${encodeURIComponent(b.entryId)}`} onClick={(e) => e.stopPropagation()}>
+                      {b.guestName ?? b.entryId}
+                    </Link>
+                    <div className="meta">{[b.entryId, b.party].filter(Boolean).join(" · ")}</div>
+                  </td>
+                  <td>
+                    <StayDates stacked compact checkIn={b.checkInDate} checkOut={b.checkOutDate} />
+                  </td>
+                  <td className="ink-2">{refundStanding(b)}</td>
+                  <td className="ink-2">{fmtDateTime(b.lastAt, tz)}</td>
+                  <td className="num">
+                    <b className="money">{money(b.total, b.currency)}</b>
+                    {b.count > 1 ? <div className="meta">{plural(b.count, "refund")}</div> : null}
+                  </td>
+                </OpenRow>
+              ))}
+              <MoreRow more={paged.more} onMore={paged.showMore} colSpan={5} step={25} />
             </tbody>
           </table>
         </>
