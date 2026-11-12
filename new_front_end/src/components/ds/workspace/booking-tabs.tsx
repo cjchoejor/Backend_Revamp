@@ -15,6 +15,8 @@
  * What these tabs hold was taken OUT of the steps, the side panel and the header, so nothing on
  * the booking is shown twice (the operator's rule for this pass).
  */
+import { EmailsView } from "@/components/ds/workspace/booking-emails";
+import { useConversation } from "@/hooks/use-conversation";
 import { payerChoiceWord, payerPartyOf } from "@/lib/ds/payer-words";
 import { BookingRateSheet } from "@/components/ds/rate-sheet";
 import { Fragment, useMemo, useState } from "react";
@@ -1428,6 +1430,20 @@ export function DocumentsView({
   // A replaced paper awaits no answer — only the one in force does (2026-10-13).
   const awaiting = sent.filter((c) => c.sendStatus === "DISPATCHED" && !replySettled(c) && !c.superseded && !c.held).length;
   const count = (n: number) => (n ? <span className="n">{n}</span> : null);
+  // The conversation by email (2026-11-12): their first email, what we sent, their replies.
+  const conv = useConversation(entry.id);
+  const mails = conv.data?.emails.length ?? 0;
+  const newReplies = conv.data?.unseen ?? 0;
+  const emailsTab = {
+    key: "emails",
+    label: (
+      <>
+        Emails
+        {newReplies ? <span className="n warn">{newReplies} new</span> : count(mails)}
+      </>
+    ),
+    content: <EmailsView entry={entry} communications={communications} sealed={sealed} />,
+  };
   return (
     <>
       <h3>
@@ -1443,7 +1459,10 @@ export function DocumentsView({
           </p>
         ) : null}
         {quotes + invoices.length + vouchers + sent.length === 0 && !folioLive ? (
-          <EmptyState title="No papers yet">A quotation is the first — it is generated at Negotiation.</EmptyState>
+          <>
+            <EmptyState title="No papers yet">A quotation is the first — it is generated at Negotiation.</EmptyState>
+            <SubTabs label="Documents" tabs={[emailsTab]} />
+          </>
         ) : (
           <SubTabs
             label="Documents"
@@ -1504,6 +1523,7 @@ export function DocumentsView({
                     content: <SentPapers entry={entry} communications={communications} tz={tz} sealed={sealed} onGo={onGo} />,
                   }
                 : null,
+              emailsTab,
             ]}
           />
         )}

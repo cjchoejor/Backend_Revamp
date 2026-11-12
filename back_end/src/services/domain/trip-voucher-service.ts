@@ -20,6 +20,7 @@ import { decideHeldDocument, sendHeldVoucherWithTrip } from "./held-document-ser
 import { tripStayDates, type TripStayDates } from "./trip-paper-prices.js";
 import { retireTripPaperIfStaysChanged, saveTripPaperVersion, sameMembers, SYSTEM_ACTOR, tripOfEntry, type Actor, type TripPaperMaker } from "./trip-paper-service.js";
 import { paperNumber } from "../../lib/document-numbers.js";
+import { loadEmailContact } from "../infrastructure/hotel-email-identity.js";
 
 /**
  * A TRIP'S CONFIRMATION VOUCHER (2026-11-09, operator: "do the same for proforma and reserve and
@@ -308,6 +309,7 @@ async function emailTripVoucher(prisma: PrismaClient, tripPaperId: string, membe
   const ins = members.map((m) => m.checkIn).filter(Boolean).sort();
   const outs = members.map((m) => m.checkOut).filter(Boolean).sort();
   const content = renderReservationConfirmationEmail({
+    contact: await loadEmailContact(prisma),
     guestDisplayName: guestDisplayName(first.guestProfile) || "Guest",
     reservationReadableId: number,
     checkInDate: new Date(`${ins[0]}T00:00:00Z`),

@@ -27,6 +27,7 @@ import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button } from "@/design-system";
+import { BookingEmailField } from "@/components/ds/guest-email";
 import { useSession } from "@/hooks/use-session";
 import { updateEntryIntake } from "@/lib/api/entries";
 import { ApiError } from "@/lib/api/client";
@@ -304,6 +305,7 @@ export function TheCaller({ entry, editable }: { entry: EntryDetail; editable: b
             </>
           )}
           <> · {channelDef(came ?? "DIRECT_VOICE")?.label}</>
+          {entry.inquiry?.emailThreadMessageId ? <> · replying in their email</> : null}
           {recParty ? null : <> · published rates</>}
           {kindWord ? <> · {kindWord}</> : <span className="warn-ink"> · the kind of stay is not set</span>}
         </>
@@ -317,6 +319,9 @@ export function TheCaller({ entry, editable }: { entry: EntryDetail; editable: b
       <div className="form2">
         <div className="wide">
           <CameInTicks value={d.came} disabled={!editable || save.isPending} onChange={pickCame} />
+        </div>
+        <div className="wide">
+          <BookingEmailField entry={entry} editable={editable} suggest={inq.callerEmail ?? d.party?.displayName ?? undefined} />
         </div>
         {partyKind ? (
           <div className={`wide caller-party${hasRight ? "" : " solo"}`}>

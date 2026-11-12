@@ -8,6 +8,7 @@
  * S2 (no reservation yet) through S9.
  */
 
+import { paperKindOfEmail } from "../domain/guest-email-conversation-service.js";
 import type { PrismaClient, Stage } from "@prisma/client";
 import { sendEmail } from "./email-service.js";
 import { emailsGoAfterAnswer, runAfterAnswer } from "../../lib/outbox.js";
@@ -18,6 +19,8 @@ export type StageEmailContent = {
   html: string;
   /** Optional PDF attachments — passed straight through to sendEmail. */
   attachments?: Array<{ filename: string; content: Buffer; contentType?: string }>;
+  /** False when the email carries the hotel's name and numbers itself: no signature under it. */
+  signature?: boolean;
 };
 
 export type StageEmailContext = {
@@ -67,7 +70,10 @@ export async function dispatchStageEmailBestEffort(ctx: StageEmailContext, conte
   // then runs right after the answer. With email switched off there is nothing to wait for.
   const disabled = (process.env.EMAIL_DISABLE ?? "").toLowerCase() === "true";
   if (!emailsGoAfterAnswer() || disabled) return send();
-  const redirect = process.env.EMAIL_REDIRECT_ALL_TO?.trim() || null;
+  // The same rule as the send: a redirect to the guest's own address redirects nothing.
+  const redirectEnv = process.env.EMAIL_REDIRECT_ALL_TO?.trim() || null;
+  const redirect =
+    redirectEnv && redirectEnv.toLowerCase() !== guestEmail.trim().toLowerCase() ? redirectEnv : null;
   await writeStageEmailTrace(traceCtx, `${eventTypePrefix}.QUEUED`, {
     intendedRecipient: guestEmail,
     actualRecipient: redirect ?? guestEmail,
@@ -90,6 +96,8 @@ async function sendNow(ctx: StageEmailContext, content: StageEmailContent): Prom
       threadEntryId: entryId,
       threadReadableId: inquiryId,
       attachments: content.attachments,
+      paperKind: paperKindOfEmail(eventTypePrefix),
+      signature: content.signature,
     });
     if (result.status === "sent") {
       await writeStageEmailTrace({ prisma, entryId, actorId, inquiryId, stage }, `${eventTypePrefix}.SENT`, {
@@ -97,6 +105,7 @@ async function sendNow(ctx: StageEmailContext, content: StageEmailContent): Prom
         intendedRecipient: result.intendedRecipient,
         actualRecipient: result.actualRecipient,
         redirected: result.redirected,
+        repliedInGuestEmail: !!result.repliedInGuestEmail,
       });
       return { status: "SENT", reason: null };
     }

@@ -605,6 +605,7 @@ export async function sendFolioDocument(
         threadEntryId: entryId,
         threadReadableId: entry.inquiryId,
         attachments: [{ filename: pdf.filename, content: pdf.bytes, contentType: "application/pdf" }],
+        paperKind: "BILL",
       });
       if (result.status === "sent") {
         emailed = true;

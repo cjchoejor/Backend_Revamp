@@ -9,6 +9,7 @@ import { assertS9Readiness } from "../lib/s9-readiness.js";
 
 import { sessionAndAuthenticationRouter } from "./session-and-authentication/router.js";
 import { inquiriesRouter } from "./inquiries/router.js";
+import { inboxRouter } from "./inbox/router.js";
 import { duplicateFlagsRouter } from "./inquiries/duplicate-flags-router.js";
 import { entriesRouter } from "./entries/router.js";
 import { availabilityRouter } from "./availability/router.js";
@@ -74,6 +75,7 @@ apiRouter.use(rateLimitingPassthrough());
 
 // Cat 10 #2
 apiRouter.use("/inquiries", inquiriesRouter);
+apiRouter.use("/inbox", inboxRouter);
 apiRouter.use("/duplicate-flags", duplicateFlagsRouter);
 apiRouter.use("/entries", entriesRouter);
 apiRouter.use("/communications", communicationsRouter);

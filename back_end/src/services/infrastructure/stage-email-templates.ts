@@ -11,6 +11,7 @@
 
 import { escapeHtml, formatDate, formatMoment, formatMoney, htmlShell, type StageEmailContent } from "./stage-email-helpers.js";
 import type { StayChargeBreakdown } from "./compute-stay-charges.js";
+import { emailContactFrom, logoImg, phoneOnEmail, type HotelEmailContact } from "./hotel-email-identity.js";
 
 /**
  * Every email for one guest journey uses an identical subject so Gmail's personal-account
@@ -352,9 +353,13 @@ export type ReservationConfirmationEmailData = {
   groupLeaderName?: string | null;
   /** The booking's own cancellation policy in sentences (lib/cancellation-policy.ts, 2026-11-10). */
   cancellationPolicy: string[];
+  /** The hotel's name, town, numbers and email (hotel-email-identity.ts); the reservation team's when left out. */
+  contact?: HotelEmailContact;
 };
 
 export function renderReservationConfirmationEmail(d: ReservationConfirmationEmailData): StageEmailContent {
+  const contact = d.contact ?? emailContactFrom(null);
+  const phones = contact.phones.map(phoneOnEmail);
   const nights = nightsBetween(d.checkInDate, d.checkOutDate);
   const guests = d.guestCount === 1 ? "1 guest" : `${d.guestCount} guests`;
   const subject = COMMON_SUBJECT;
@@ -398,6 +403,9 @@ export function renderReservationConfirmationEmail(d: ReservationConfirmationEma
     "We look forward to welcoming you.",
     "",
     "— The Legphel Hotel team",
+    [contact.name, contact.place].filter(Boolean).join(" · "),
+    phones.length ? `Reservation team: ${phones.join(" · ")}` : null,
+    contact.email,
   ]
     .filter((l) => l !== null)
     .join("\n");
@@ -416,14 +424,12 @@ export function renderReservationConfirmationEmail(d: ReservationConfirmationEma
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#fff;padding:20px 24px;border-bottom:1px solid #eee;">
     <tr>
       <td style="vertical-align:middle;">
-        <div style="font-size:20px;font-weight:800;color:#b32d2d;">LEGPHEL</div>
-        <div style="font-size:9px;letter-spacing:2px;color:#666;">H O T E L</div>
+        ${logoImg(56)}
       </td>
       <td style="text-align:right;vertical-align:middle;font-size:11px;color:#555;line-height:1.55;">
         <div style="font-weight:700;color:#222;">RESERVATION TEAM</div>
-        <div>(+975) 17772393</div>
-        <div>(+975) 77772393</div>
-        <div><a href="mailto:legphel.hotel@gmail.com" style="color:#b32d2d;text-decoration:none;">legphel.hotel@gmail.com</a></div>
+        ${phones.map((ph) => `<div>${escapeHtml(ph)}</div>`).join("\n        ")}
+        <div><a href="mailto:${escapeHtml(contact.email)}" style="color:#b32d2d;text-decoration:none;">${escapeHtml(contact.email)}</a></div>
       </td>
     </tr>
   </table>
@@ -432,7 +438,7 @@ export function renderReservationConfirmationEmail(d: ReservationConfirmationEma
   <div style="padding:24px 28px;">
     <h1 style="font-size:22px;margin:8px 0 12px;font-weight:700;">Reservation Confirmation</h1>
     <p style="margin:6px 0;">Dear ${escapeHtml(greetingName)},</p>
-    <p style="margin:6px 0 22px;">${escapeHtml(openingLine)} Your reservation is confirmed.</p>
+    <p style="margin:6px 0 22px;">${escapeHtml(openingLine)}</p>
 
     <!-- Reservation details card -->
     <div style="border:1px solid #dfe3ea;border-radius:8px;padding:16px 18px;margin:12px 0;">
@@ -480,9 +486,9 @@ export function renderReservationConfirmationEmail(d: ReservationConfirmationEma
 
     <div style="text-align:center;margin-top:24px;font-size:12.5px;color:#555;">
       We look forward to welcoming you.<br/>
-      <strong style="color:#222;">Legphel Hotel</strong><br/>
-      Phuentsholing, Bhutan<br/>
-      (+975) 17772393 · <a href="mailto:legphel.hotel@gmail.com" style="color:#b32d2d;text-decoration:none;">legphel.hotel@gmail.com</a>
+      <strong style="color:#222;">${escapeHtml(contact.name)}</strong><br/>
+      ${contact.place ? `${escapeHtml(contact.place)}<br/>` : ""}
+      ${phones[0] ? `${escapeHtml(phones[0])} · ` : ""}<a href="mailto:${escapeHtml(contact.email)}" style="color:#b32d2d;text-decoration:none;">${escapeHtml(contact.email)}</a>
     </div>
   </div>
 
@@ -493,7 +499,8 @@ export function renderReservationConfirmationEmail(d: ReservationConfirmationEma
 </body>
 </html>`;
 
-  return { subject, text, html };
+  // Its own header and footer carry the hotel's name and numbers: no second signature under them.
+  return { subject, text, html, signature: false };
 }
 
 // =============================================================================

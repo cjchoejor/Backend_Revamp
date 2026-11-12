@@ -42,6 +42,7 @@ import { generateOrLoadConfirmationVoucherPdf } from "./confirmation-voucher-pdf
 import { initialiseTasks as initialisePreArrivalTasks } from "./pre-arrival-service.js";
 import { latestDispatchedInForce, retireSupersededReplyWaitsBestEffort } from "../../lib/reply-waits.js";
 import { recordHeldDocument } from "../../lib/held-documents.js";
+import { loadEmailContact } from "../infrastructure/hotel-email-identity.js";
 
 function commercialTermsHaveRateBasis(terms: unknown): boolean {
   if (!terms || typeof terms !== "object") return false;
@@ -539,6 +540,7 @@ async function confirmReservationInner(
   const roomCount = isGroup ? bookingRoomCount : undefined;
   const groupLeaderName = isGroup ? entry.contactPersonName ?? displayName : undefined;
   const content = renderReservationConfirmationEmail({
+    contact: await loadEmailContact(prisma),
     guestDisplayName: displayName,
     reservationReadableId: result.reservation.id,
     checkInDate: ciDate,
@@ -671,6 +673,7 @@ async function resendConfirmationVoucherInner(
   const bookingRoomCount = Math.max(1, Number(operativeTerms?.roomCount) || entry.numberOfRooms || 1);
   const isGroup = entry.groupBillingMode === "GROUP_MASTER";
   const content = renderReservationConfirmationEmail({
+    contact: await loadEmailContact(prisma),
     guestDisplayName: displayName,
     reservationReadableId: reservation.id,
     checkInDate: ciDate,
