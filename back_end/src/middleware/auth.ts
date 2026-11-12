@@ -1,6 +1,6 @@
 import type { RequestHandler } from "express";
 import { runWithRequestActor } from "../lib/request-actor-context.js";
-import { AuthorizationError, ValidationError } from "../lib/errors.js";
+import { AuthorizationError, SignInRequiredError, ValidationError } from "../lib/errors.js";
 import { verifySessionJwt } from "../services/infrastructure/session-service.js";
 import { prisma } from "../db.js";
 import type { ActorLevel, RequestActor } from "../types/actor.js";
@@ -53,16 +53,16 @@ export function parseActorHeaders(): RequestHandler {
       const authHeader = req.header("authorization") ?? req.header("Authorization");
       if (authHeader && /^Bearer\s+/i.test(authHeader)) {
         const token = authHeader.replace(/^Bearer\s+/i, "").trim();
-        if (!token) throw new AuthorizationError("Empty bearer token");
+        if (!token) throw new SignInRequiredError("TOKEN_MISSING");
 
         const payload = verifySessionJwt(token);
         const session = await prisma.sessionRecord.findUnique({
           where: { id: payload.sessionId },
           include: { user: { select: { id: true, actorLevel: true, isActive: true, username: true } } },
         });
-        if (!session) throw new AuthorizationError("Session not found");
-        if (session.status !== "ACTIVE") throw new AuthorizationError(`Session is ${session.status}`);
-        if (!session.user || !session.user.isActive) throw new AuthorizationError("Staff user inactive");
+        if (!session) throw new SignInRequiredError("SESSION_NOT_FOUND");
+        if (session.status !== "ACTIVE") throw new SignInRequiredError(`SESSION_${session.status}`);
+        if (!session.user || !session.user.isActive) throw new SignInRequiredError("STAFF_INACTIVE", "This sign-in is no longer on the staff list — ask an admin");
         // DB is authoritative for level — token could be stale if the admin changed it.
         req.actor = { actorId: session.user.id, level: session.user.actorLevel as ActorLevel };
         // Fire-and-forget lastActive touch; the caller shouldn't wait on it.
@@ -86,7 +86,7 @@ export function parseActorHeaders(): RequestHandler {
         return;
       }
 
-      next(new AuthorizationError("Missing Authorization: Bearer <token>"));
+      next(new SignInRequiredError("TOKEN_MISSING"));
     } catch (e) {
       next(e);
     }
@@ -97,7 +97,7 @@ export function requireActorLevel(min: ActorLevel): RequestHandler {
   return (req, _res, next) => {
     const actor = req.actor;
     if (!actor) {
-      next(new AuthorizationError("Actor context missing"));
+      next(new SignInRequiredError("TOKEN_MISSING"));
       return;
     }
     if (rank[actor.level as ActorLevel] < rank[min]) {

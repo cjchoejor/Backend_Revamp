@@ -11,12 +11,13 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Button, Chip, EmptyState, MoneyInput } from "@/design-system";
-import { LoadFailed, LoadingBlock, MoreRow, usePaged } from "@/components/ds/ui";
+import { Button, Chip, EmptyState, Input, MoneyInput } from "@/design-system";
+import { LoadFailed, LoadingBlock, MoreRow, OpenRow, usePaged } from "@/components/ds/ui";
+import { Help } from "@/components/ds/help";
 import { StayDates } from "@/components/ds/stay-dates";
-import { useRefunds } from "@/hooks/use-refunds";
+import { useRefunds, useRefundsMade } from "@/hooks/use-refunds";
 import { useSession } from "@/hooks/use-session";
-import { keepRefund, recordRefund, type RefundRow } from "@/lib/api/refunds";
+import { keepRefund, recordRefund, type BookingRefunds, type RefundRow } from "@/lib/api/refunds";
 import { fmtDateTime, money, plural } from "@/lib/ds/format";
 import { endingOf } from "@/lib/ds/status";
 import { stepName, stepNoOfStage } from "@/lib/ds/steps";
@@ -277,66 +278,98 @@ function WaitingCard({ row, tz, focus }: { row: RefundRow; tz: string; focus: bo
   );
 }
 
-const DONE_WORD: Record<string, string> = { REFUNDED: "Refunded", KEPT: "Kept", CANCELLED: "Closed by a cancellation" };
+/* ------------------------------------------------------------------ refunds made */
 
-function DoneTable({ tz }: { tz: string }) {
-  const done = useRefunds("done");
-  const rows = done.data?.items ?? [];
-  const paged = usePaged(rows);
-  if (done.isLoading) return <LoadingBlock />;
-  if (done.error) return <LoadFailed what="the refunds" onRetry={() => void done.refetch()} />;
-  if (rows.length === 0) return null;
+export const methodWord = (m: string | null) => (m ? (REFUND_METHOD_WORD[m] ?? m.charAt(0) + m.slice(1).toLowerCase().replace(/_/g, " ")) : "—");
+
+export function refundStanding(b: BookingRefunds) {
+  if (b.status === "ACTIVE" || b.status === "PARKED") return `${b.status === "PARKED" ? "Parked at " : "At "}${stepName(stepNoOfStage(b.stage ?? "S1"))}`;
+  return endingOf(b.closedAs)?.word ?? (b.status === "CANCELLED" ? "Cancelled" : b.status === "CLOSED" ? "Closed" : "Ended");
+}
+
+/**
+ * Refunds made, booking by booking (2026-11-12, operator: "the list of refunds made to a booking … the
+ * total refund made to that booking, when clicked on it, which refunds were made, when, at what stage,
+ * reason if there is, by who, to be human readable, avoid unnecessary words"). The server sums.
+ */
+function RefundsMadeTable({ tz }: { tz: string }) {
+  const made = useRefundsMade();
+  const [picked, setPicked] = useState<string | null>(null);
+  const [q, setQ] = useState("");
+  const bookings = made.data?.bookings ?? [];
+  const needle = q.trim().toLowerCase();
+  const shown = needle
+    ? bookings.filter((b) => [b.guestName, b.entryId, b.inquiryId, b.party].filter(Boolean).join(" ").toLowerCase().includes(needle))
+    : bookings;
+  const paged = usePaged(shown, 25);
+  if (made.isLoading) return <LoadingBlock />;
+  if (made.error) return <LoadFailed what="the refunds made" onRetry={() => void made.refetch()} />;
+  const t = made.data!.totals;
   return (
-    <section className="block" style={{ marginTop: 24 }}>
+    <section className="block refunds-made" data-refunds-made>
       <div className="block-head">
         <h3>
-          Answered <span className="meta">{rows.length}</span>
+          Refunds made
+          <Help label="About this list">Double-click a booking to see its refunds.</Help>
         </h3>
+        {t.refunds ? (
+          <span className="meta" data-refunds-total>
+            {plural(t.refunds, "refund")} to {plural(t.bookings, "booking")} · <b className="money">{money(t.amount, t.currency)}</b> in all
+          </span>
+        ) : null}
       </div>
-      <table className="table">
-        <thead>
-          <tr>
-            <th>Refund</th>
-            <th>Booking</th>
-            <th>What happened</th>
-            <th>How it went back</th>
-            <th>When</th>
-          </tr>
-        </thead>
-        <tbody>
-          {paged.shown.map((r) => (
-            <tr key={r.id} data-refund-done={r.id}>
-              <td>
-                <b>{r.guest.name ?? "—"}</b>
-                <div className="meta">{r.id}</div>
-              </td>
-              <td>
-                <Link className="row-link" href={`/bookings/${encodeURIComponent(r.booking.id)}`}>
-                  {r.booking.id}
-                </Link>
-              </td>
-              <td>
-                {DONE_WORD[r.status] ?? r.status} <b className="money">{money(r.status === "REFUNDED" ? r.refundedAmount : r.amountAsked, r.currency)}</b>
-                {r.status === "REFUNDED" && r.refundedAmount != null && r.refundedAmount < r.amountAsked ? (
-                  <div className="meta">of {money(r.amountAsked, r.currency)} · the rest stayed on the bill</div>
-                ) : null}
-                {r.closeNote ? <div className="meta">{r.closeNote}</div> : null}
-              </td>
-              <td>
-                {r.refundMethod ? (REFUND_METHOD_WORD[r.refundMethod] ?? r.refundMethod) : "—"}
-                {r.bankName ? <div className="meta">{r.bankName}</div> : null}
-                {r.accountNumber ? <div className="meta">Account {r.accountNumber}</div> : null}
-                {r.journalNumber ? <div className="meta">Journal {r.journalNumber}</div> : null}
-              </td>
-              <td>
-                {r.closedAt ? fmtDateTime(r.closedAt, tz) : "—"}
-                {r.closedByName ? <div className="meta">{r.closedByName}</div> : null}
-              </td>
-            </tr>
-          ))}
-          <MoreRow more={paged.more} onMore={paged.showMore} colSpan={5} />
-        </tbody>
-      </table>
+      {!bookings.length ? (
+        <EmptyState title="No refund made yet" />
+      ) : (
+        <>
+          <div className="filters">
+            <div className="field searchwrap" style={{ width: 320 }}>
+              <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Name, booking or agency" aria-label="Search the refunds" />
+            </div>
+            {needle ? <span className="meta">{shown.length} of {bookings.length}</span> : null}
+          </div>
+          <table className="table zebra refund-table">
+            <thead>
+              <tr>
+                <th>Booking</th>
+                <th>Stay</th>
+                <th>Where it stands</th>
+                <th>Last refund</th>
+                <th className="num">Refunded</th>
+              </tr>
+            </thead>
+            <tbody>
+              {paged.shown.map((b, i) => (
+                <OpenRow
+                  key={b.entryId}
+                  entryId={b.entryId}
+                  href={`/billing/refunds/${encodeURIComponent(b.entryId)}`}
+                  alt={i % 2 === 1}
+                  selected={picked === b.entryId}
+                  onSelect={() => setPicked((p) => (p === b.entryId ? null : b.entryId))}
+                >
+                  <td data-refund-booking={b.entryId}>
+                    <Link className="row-link" href={`/bookings/${encodeURIComponent(b.entryId)}`} onClick={(e) => e.stopPropagation()}>
+                      {b.guestName ?? b.entryId}
+                    </Link>
+                    <div className="meta">{[b.entryId, b.party].filter(Boolean).join(" · ")}</div>
+                  </td>
+                  <td>
+                    <StayDates stacked compact checkIn={b.checkInDate} checkOut={b.checkOutDate} />
+                  </td>
+                  <td className="ink-2">{refundStanding(b)}</td>
+                  <td className="ink-2">{fmtDateTime(b.lastAt, tz)}</td>
+                  <td className="num">
+                    <b className="money">{money(b.total, b.currency)}</b>
+                    {b.count > 1 ? <div className="meta">{plural(b.count, "refund")}</div> : null}
+                  </td>
+                </OpenRow>
+              ))}
+              <MoreRow more={paged.more} onMore={paged.showMore} colSpan={5} step={25} />
+            </tbody>
+          </table>
+        </>
+      )}
     </section>
   );
 }
@@ -350,16 +383,21 @@ export function RefundsTab({ tz, focusId }: { tz: string; focusId: string | null
         <LoadingBlock />
       ) : waiting.error ? (
         <LoadFailed what="the refunds" onRetry={() => void waiting.refetch()} />
-      ) : rows.length === 0 ? (
-        <EmptyState title="No refund is waiting">Money that has to go back to a guest shows here.</EmptyState>
-      ) : (
-        <div className="refund-list">
-          {rows.map((r) => (
-            <WaitingCard key={r.id} row={r} tz={tz} focus={focusId === r.id} />
-          ))}
-        </div>
-      )}
-      <DoneTable tz={tz} />
+      ) : rows.length ? (
+        <section className="block">
+          <div className="block-head">
+            <h3>
+              To make <span className="meta">{rows.length}</span>
+            </h3>
+          </div>
+          <div className="refund-list">
+            {rows.map((r) => (
+              <WaitingCard key={r.id} row={r} tz={tz} focus={focusId === r.id} />
+            ))}
+          </div>
+        </section>
+      ) : null}
+      <RefundsMadeTable tz={tz} />
     </>
   );
 }
