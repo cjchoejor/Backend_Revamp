@@ -16,6 +16,7 @@
  * a refresh. The step canvases are the working tools the desk has always used, rendered inside
  * `.desk-root` and re-dressed by the bridge stylesheet; they are redesigned one by one.
  */
+import { useConversation } from "@/hooks/use-conversation";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -398,6 +399,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     enabled: !!session && !sessionLoading,
     refetchInterval: 60_000,
   });
+  // Replies by email nobody has read yet put a "new" on the Papers tab (2026-11-12).
+  const conversation = useConversation(entryId);
 
   const timersQuery = useQuery({
     queryKey: ["entry-timers", entryId],
@@ -1730,6 +1733,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const native = <UnsavedReport onChange={reportUnsaved}>{nativeBody()}</UnsavedReport>;
 
   /* ---- the five tabs' counts ---- */
+  // (The booking's email conversation is read above, with the other reads: `conversation`.)
   const tabCount = (k: BookingTab): ReactNode => {
     if (k === "requests") {
       const open = requestsQuery.data?.counts.open ?? 0;
@@ -1748,7 +1752,13 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     }
     if (k === "docs") {
       const n = (entry.quotations ?? []).length + (entry.folio?.invoices ?? []).length + (entry.reservation ? 1 : 0);
-      return n ? <span className="tab-n">{n}</span> : null;
+      const fresh = conversation.data?.unseen ?? 0;
+      return (
+        <>
+          {n ? <span className="tab-n">{n}</span> : null}
+          {fresh ? <span className="tab-n warn" title="A reply by email nobody has read yet">{fresh} new</span> : null}
+        </>
+      );
     }
     return null;
   };

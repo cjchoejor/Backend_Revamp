@@ -332,7 +332,7 @@ function EmailPickDialog({
  * mail content"): who wrote, who it went to, when, its words as written and its attachments' names.
  * Over the list it was opened from, with Reply in this email; on its own, to read again.
  */
-function EmailReadDialog({
+export function EmailReadDialog({
   messageId,
   currentId = null,
   inquiryId = null,

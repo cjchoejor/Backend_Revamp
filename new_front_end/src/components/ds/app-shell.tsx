@@ -10,6 +10,7 @@
  * the control again.
  */
 import { useRefunds } from "@/hooks/use-refunds";
+import { useUnseenReplies } from "@/hooks/use-conversation";
 import { RefundCoin } from "@/components/ds/refund-bits";
 import { money } from "@/lib/ds/format";
 import Link from "next/link";
@@ -105,6 +106,10 @@ export function AppShell({ children }: { children: ReactNode }) {
   const fom = !!session && session.actorLevel !== "L1";
   const refundsQ = useRefunds("waiting");
   const refundsWaiting = refundsQ.data?.items ?? [];
+  // A guest's reply by email nobody has read yet (2026-11-12): a row each, opening the booking's Emails.
+  const repliesQ = useUnseenReplies();
+  const replies = repliesQ.data?.items ?? [];
+  const replyHref = (r: { entryId: string | null }) => (r.entryId ? `/bookings/${encodeURIComponent(r.entryId)}?view=docs&sub=emails` : "/bookings");
   const secondPage = SECOND.some((s) => isOn(pathname, s.href));
   // The six main pages take the stages' blue palette (2026-10-30, operator: "make the theme colour of
   // that page like how we have in the stages UI"); the pages under "more" keep the desk's own.
@@ -142,7 +147,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     // clock.now moves every 15 s; the list only needs to follow it loosely
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bookings.data, hotelDay?.today, fom, Math.floor(clock.now / 60_000)]);
-  const bellCount = urgent.length + (lateRooms.length ? 1 : 0) + refundsWaiting.length;
+  const bellCount = urgent.length + (lateRooms.length ? 1 : 0) + refundsWaiting.length + replies.length;
   // The bell says itself (2026-11-10, operator: "when notifications is there and also arrives, can it
   // show in the ui a little prominently"): the count is red while something is overdue, amber
   // otherwise; and when something new arrives the bell shakes once and a card under it names it.
@@ -154,14 +159,15 @@ export function AppShell({ children }: { children: ReactNode }) {
         ? [{ key: "rooms-late", text: `${lateRooms.length === 1 ? `Room ${lateRooms[0].roomNumber}` : `${lateRooms.length} rooms`} past the clean-by time`, who: "Housekeeping", href: "/housekeeping" }]
         : []),
       ...refundsWaiting.map((r) => ({ key: `r:${r.id}`, text: `A refund of ${money(r.amountAsked, r.currency)} to make`, who: r.guest.name ?? r.booking.id, href: `/billing?tab=refunds&refund=${encodeURIComponent(r.id)}` })),
+      ...replies.map((r) => ({ key: `m:${r.id}`, text: `${r.fromName ?? r.fromAddress ?? "The guest"} replied by email`, who: r.guest ?? r.referenceNumber, href: replyHref(r) })),
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [urgent, lateRooms.length, refundsWaiting],
+    [urgent, lateRooms.length, refundsWaiting, replies],
   );
   const seenBell = useRef<Set<string> | null>(null);
   const [arrived, setArrived] = useState<{ text: string; who: string; href: string; more: number; at: number } | null>(null);
   // Watching starts once every list the bell reads has come in, so what was already there is not news.
-  const bellReady = !!bookings.data && !!hotelDay?.today && !housekeeping.isLoading && !refundsQ.isLoading;
+  const bellReady = !!bookings.data && !!hotelDay?.today && !housekeeping.isLoading && !refundsQ.isLoading && !repliesQ.isLoading;
   useEffect(() => {
     if (!bellReady) return;
     const keys = new Set(bellItems.map((x) => x.key));
@@ -282,6 +288,27 @@ export function AppShell({ children }: { children: ReactNode }) {
                     See all notifications
                   </Link>
                 </div>
+                {replies.slice(0, 6).map((r) => (
+                  <Link
+                    key={r.id}
+                    href={replyHref(r)}
+                    className="panel-row mail-bell"
+                    data-bell-reply={r.id}
+                    style={{ marginTop: 8 }}
+                    onClick={() => bell.setOpen(false)}
+                  >
+                    <span className="mail-bell-mark" aria-hidden>
+                      <Icon name="send" />
+                    </span>
+                    <span className="refund-bell-text">
+                      <b>Reply from {r.fromName ?? r.fromAddress ?? "the guest"}</b>
+                      <span className="sm">
+                        {r.subject} · {r.guest ?? r.referenceNumber}
+                      </span>
+                    </span>
+                  </Link>
+                ))}
+                {replies.length > 6 ? <span className="sm" style={{ display: "block", marginTop: 6 }}>and {replies.length - 6} more replies</span> : null}
                 {refundsWaiting.slice(0, 6).map((r) => (
                   <Link
                     key={r.id}
@@ -312,7 +339,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                     <span className="timer overdue"><Icon name="alert" />late</span>
                   </Link>
                 ) : null}
-                {urgent.length === 0 && !lateRooms.length && !refundsWaiting.length ? (
+                {urgent.length === 0 && !lateRooms.length && !refundsWaiting.length && !replies.length ? (
                   <p className="meta" style={{ marginTop: 6 }}>Nothing is overdue or due in the next hours.</p>
                 ) : urgent.length === 0 ? null : (
                   <div className="stack" style={{ marginTop: 8 }}>

@@ -80,3 +80,88 @@ export function emailThreadOf(inq: {
     receivedAt: inq.emailThreadReceivedAt ?? null,
   };
 }
+
+/* ---------- a booking's conversation (2026-11-12) ---------- */
+
+/** One email of an enquiry's conversation: their first email, what we sent, their replies. */
+export type ConversationEmail = {
+  id: string;
+  kind: "FIRST" | "SENT" | "REPLY";
+  messageId: string;
+  entryId: string | null;
+  fromAddress: string | null;
+  fromName: string | null;
+  to: string[];
+  subject: string;
+  snippet: string;
+  at: string;
+  paperKind: string | null;
+  attachmentNames: string[];
+  answersKind: string | null;
+  seen: boolean;
+  answered: { communicationId: string; at: string | null; by: string | null } | null;
+};
+
+export type Conversation = { inquiryId: string; mailbox: string | null; emails: ConversationEmail[]; unseen: number };
+
+export function getConversation(session: Session, entryId: string) {
+  return apiRequest<Conversation>(`/api/inbox/conversations/${encodeURIComponent(entryId)}`, { session });
+}
+
+/** Look in the mailbox for replies now. */
+export function checkConversation(session: Session, entryId: string) {
+  return apiRequest<Conversation & { found: number }>(`/api/inbox/conversations/${encodeURIComponent(entryId)}/check`, {
+    method: "POST",
+    session,
+    body: {},
+  });
+}
+
+export function markConversationSeen(session: Session, entryId: string) {
+  return apiRequest<{ marked: number }>(`/api/inbox/conversations/${encodeURIComponent(entryId)}/seen`, {
+    method: "POST",
+    session,
+    body: {},
+  });
+}
+
+export type UnseenReply = {
+  id: string;
+  inquiryId: string;
+  referenceNumber: string;
+  entryId: string | null;
+  guest: string | null;
+  fromName: string | null;
+  fromAddress: string | null;
+  subject: string;
+  snippet: string;
+  at: string;
+  answersKind: string | null;
+};
+
+export function listUnseenReplies(session: Session) {
+  return apiRequest<{ items: UnseenReply[] }>(`/api/inbox/replies/unseen`, { session });
+}
+
+/** A reply recorded as the guest's answer to one of the booking's papers. */
+export function recordReplyAsAnswer(session: Session, replyId: string, communicationId: string) {
+  return apiRequest<{ recorded: boolean; words: string }>(`/api/inbox/replies/${encodeURIComponent(replyId)}/answer`, {
+    method: "POST",
+    session,
+    body: { communicationId },
+  });
+}
+
+/** What a paper is called on the desk. */
+export const PAPER_WORDS: Record<string, string> = {
+  QUOTATION: "Quotation",
+  PROFORMA_INVOICE: "Proforma invoice",
+  CONFIRMATION_VOUCHER: "Confirmation voucher",
+  PRE_ARRIVAL_REMINDER: "Pre-arrival message",
+  INTERIM_INVOICE: "Mid-stay bill",
+  FINAL_INVOICE: "Tax invoice",
+  BILL: "Bill",
+  FEEDBACK: "Feedback request",
+  NO_SHOW: "No-show notice",
+  OTHER: "Email",
+};
