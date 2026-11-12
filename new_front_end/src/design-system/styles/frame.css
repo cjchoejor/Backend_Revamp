@@ -2544,3 +2544,9 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
    it white — and does not change under the pointer: it is a heading, not a row. */
 .ds .table-scroll tbody tr.list-band td:not(.desk-root *), .ds .table-scroll tbody tr.list-band:hover td:not(.desk-root *) { background: var(--surface-3); }
 .ds .table-scroll tbody tr.list-band.today td:not(.desk-root *), .ds .table-scroll tbody tr.list-band.today:hover td:not(.desk-root *) { background: var(--accent-soft); }
+
+/* Today as tabs (2026-11-12, operator: "todays' tab to be made into tabs instead just single page"):
+   the tab row under the title, the Billing tabs' look; each tab's list keeps the page at least as
+   tall as the screen, so changing to a short tab never shortens the page from under the person. */
+.ds .page-head.today-tabs { margin-top: calc(-1 * var(--s3)); }
+.ds .today-page [data-today-tab] { min-height: calc(100vh - 190px); align-content: start; }
