@@ -1,4 +1,5 @@
 import { runProformaValidityWorker } from "./w43-proforma-validity-worker.js";
+import { pollInboxForReplies } from "../services/domain/guest-email-conversation-service.js";
 import { prisma } from "../db.js";
 import { createTimerEngine } from "../lib/timer-engine.js";
 import { getActiveConfigEntry } from "../lib/config-store.js";
@@ -167,6 +168,25 @@ export async function startWorkers() {
   };
   await sweep("start-up");
   setInterval(() => void sweep("hourly"), 60 * 60_000).unref();
+
+  // Guests' replies (2026-11-12): the hotel's mailbox is looked at every couple of minutes for emails
+  // that answer ours, and each is filed on its enquiry (guest-email-conversation-service.ts). Read
+  // only; a mailbox that cannot be read is said in the log and tried again next time.
+  const mailOn = (process.env.INBOX_DISABLE ?? "").toLowerCase() !== "true" && !!(process.env.IMAP_USER ?? process.env.SMTP_USER);
+  if (mailOn) {
+    const every = Math.max(30, Number(process.env.INBOX_POLL_SECONDS ?? 120) || 120);
+    const look = async (when: string) => {
+      const r = await pollInboxForReplies(prisma);
+      if (r.found) {
+        // eslint-disable-next-line no-console
+        console.log(`[workers] Guest replies (${when}): ${r.found} filed on ${r.inquiries.join(", ")}`);
+      }
+    };
+    void look("start-up");
+    setInterval(() => void look("every " + every + " s"), every * 1000).unref();
+    // eslint-disable-next-line no-console
+    console.log(`[workers] Guest replies: the mailbox is looked at every ${every} s`);
+  }
 
   return engine;
 }

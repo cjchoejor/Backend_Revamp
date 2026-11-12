@@ -75,6 +75,8 @@ type SendArgs = {
    * Attachments carry the actual guest-facing artifact so recipients can archive it locally.
    */
   attachments?: Array<{ filename: string; content: Buffer; contentType?: string }>;
+  /** Which paper it carries (QUOTATION, PROFORMA_INVOICE, …), for the enquiry's conversation. */
+  paperKind?: string | null;
 };
 
 type SendResult =
@@ -264,6 +266,22 @@ export async function sendEmail(prisma: PrismaClient, args: SendArgs): Promise<S
     await prisma.entry.update({
       where: { id: args.threadEntryId },
       data: { emailThreadRootMessageId: info.messageId },
+    });
+  }
+  // Every email for a stay is a line of its enquiry's conversation (2026-11-12), so a reply to it
+  // can be found and filed. Never fails the send.
+  if (args.threadEntryId && info.messageId) {
+    const firstLines = (args.text ?? "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean).join(" ");
+    const { recordSentEmail } = await import("../domain/guest-email-conversation-service.js");
+    await recordSentEmail(prisma, {
+      entryId: args.threadEntryId,
+      messageId: info.messageId,
+      to: intendedRecipient,
+      subject,
+      paperKind: args.paperKind ?? null,
+      attachmentNames: (args.attachments ?? []).map((a) => a.filename),
+      inReplyTo: inReplyTo ?? null,
+      snippet: firstLines.slice(0, 240),
     });
   }
   // Ours is now the latest in the guest's conversation; the next reply names it too. Not when the

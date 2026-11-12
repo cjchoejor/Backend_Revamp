@@ -130,6 +130,22 @@ async function openClient(): Promise<ImapFlow> {
   return client;
 }
 
+/**
+ * Open a mailbox for a look, read only, afresh: on a connection kept open, a mailbox left selected
+ * does not show mail that came in since (Gmail shows it once the mailbox is opened again), so the
+ * one selected is closed first. Closing a mailbox opened read only removes nothing.
+ */
+async function lockFresh(client: ImapFlow, box: string) {
+  if (client.mailbox) {
+    try {
+      await client.mailboxClose();
+    } catch {
+      /* not open after all */
+    }
+  }
+  return client.getMailboxLock(box, { readOnly: true });
+}
+
 /* ---------- reading a message's parts ---------- */
 
 function parseHeaders(buf: Buffer | undefined): Record<string, string> {
@@ -230,7 +246,7 @@ function decodePart(buf: Buffer, part: TextPart, alreadyDecoded: boolean): strin
 /** The first lines a person wrote: quoted earlier mail and signatures' dashes left out. */
 function snippetOf(text: string): string {
   const lines: string[] = [];
-  for (const raw of text.split(/\r?\n/)) {
+  for (const raw of newPartOf(text).split(/\r?\n/)) {
     const line = raw.trim();
     if (!line) continue;
     if (line.startsWith(">")) continue;
@@ -316,7 +332,7 @@ export async function listInboxEmails(opts: {
     all = cached.value;
   } else {
     all = await withInbox(async (client) => {
-      const lock = await client.getMailboxLock("INBOX", { readOnly: true });
+      const lock = await lockFresh(client, "INBOX");
       try {
         const since = new Date(Date.now() - days * 86_400_000);
         const found = await client.search({ since }, { uid: true });
@@ -372,7 +388,7 @@ async function withMessage<T>(
   if (!id) return null;
   return withInbox(async (client) => {
     const look = async (box: string): Promise<T | null> => {
-      const lock = await client.getMailboxLock(box, { readOnly: true });
+      const lock = await lockFresh(client, box);
       try {
         const found = await client.search({ header: { "message-id": id } }, { uid: true });
         const uids = Array.isArray(found) ? found : [];
@@ -408,6 +424,7 @@ export async function readInboxEmail(messageId: string): Promise<InboxEmailFull 
 
 /** One email in full, to read on the desk: who it went to, all its words, its attachments' names. */
 export type InboxEmailRead = InboxEmail & {
+  references: string | null;
   to: string[];
   cc: string[];
   text: string;
@@ -457,8 +474,10 @@ function tidyText(text: string): string {
 
 export async function readInboxEmailInFull(messageId: string): Promise<InboxEmailRead | null> {
   return withMessage(messageId, { internalDate: true, bodyStructure: true, headers: HEADER_KEYS }, async (client, m) => {
-    const email = summary(m, parseHeaders(m.headers));
+    const headers = parseHeaders(m.headers);
+    const email = summary(m, headers);
     if (!email) return null;
+    const refs = (headers["references"] ?? "").match(/<[^<>\s]+>/g) ?? [];
     const part = findTextPart(m.bodyStructure);
     let text = "";
     let cut = false;
@@ -477,6 +496,7 @@ export async function readInboxEmailInFull(messageId: string): Promise<InboxEmai
     return {
       ...email,
       snippet: snippetOf(text),
+      references: refs.length ? refs.join(" ") : null,
       to: addressWords(m.envelope?.to),
       cc: addressWords(m.envelope?.cc),
       text,
@@ -484,4 +504,95 @@ export async function readInboxEmailInFull(messageId: string): Promise<InboxEmai
       attachments: attachmentsOf(m.bodyStructure),
     };
   });
+}
+
+/* ---------- watching for replies ---------- */
+
+/** An email newly in the inbox, with what it answers (2026-11-12). */
+export type ScannedEmail = InboxEmail & {
+  uid: number;
+  inReplyTo: string | null;
+  /** In-Reply-To and References together: every email of the conversation it names. */
+  answers: string[];
+};
+
+const SCAN_KEYS = [...HEADER_KEYS, "in-reply-to"];
+let scanState: { uidValidity: string; lastUid: number } | null = null;
+
+/**
+ * The emails that came into the inbox since the last look — on the first look after a start, those
+ * of the last `lookbackDays` days. `pick` is asked, with the mailbox still open, which of them
+ * matter; only those have their first lines read. Read only, like everything here.
+ */
+export async function scanInboxForNew(opts: {
+  lookbackDays: number;
+  pick: (emails: ScannedEmail[]) => Promise<Set<string>>;
+}): Promise<ScannedEmail[]> {
+  return withInbox(async (client) => {
+    const lock = await lockFresh(client, "INBOX");
+    try {
+      const box = client.mailbox as { uidValidity?: bigint; uidNext?: number } | false;
+      const validity = box ? String(box.uidValidity ?? "") : "";
+      const since = scanState && scanState.uidValidity === validity ? scanState.lastUid : null;
+      const found =
+        since != null
+          ? await client.search({ uid: `${since + 1}:*` }, { uid: true })
+          : await client.search({ since: new Date(Date.now() - opts.lookbackDays * 86_400_000) }, { uid: true });
+      const uids = (Array.isArray(found) ? found : []).filter((u) => since == null || u > since);
+      if (!uids.length) {
+        if (since == null) scanState = { uidValidity: validity, lastUid: box && box.uidNext ? box.uidNext - 1 : 0 };
+        return [];
+      }
+      const msgs = await client.fetchAll(
+        uids.join(","),
+        { uid: true, envelope: true, internalDate: true, bodyStructure: true, headers: SCAN_KEYS },
+        { uid: true },
+      );
+      const items: Array<{ uid: number; email: ScannedEmail; part: TextPart | null }> = [];
+      for (const m of msgs) {
+        const headers = parseHeaders(m.headers);
+        const base = summary(m, headers);
+        if (!base) continue;
+        // Machine mail is no person's reply: our own emails and out-of-office answers say so.
+        const auto = (headers["auto-submitted"] ?? "").toLowerCase();
+        if (auto && auto !== "no") continue;
+        const ids = (s: string | undefined) => (s ?? "").match(/<[^<>\s]+>/g) ?? [];
+        const inReplyTo = ids(headers["in-reply-to"])[0] ?? m.envelope?.inReplyTo?.trim() ?? null;
+        const answers = [...new Set([...(inReplyTo ? [inReplyTo] : []), ...ids(headers["references"])])];
+        if (!answers.length) continue;
+        items.push({ uid: m.uid, email: { ...base, uid: m.uid, inReplyTo, answers }, part: findTextPart(m.bodyStructure) });
+      }
+      scanState = { uidValidity: validity, lastUid: Math.max(since ?? 0, ...uids) };
+      if (!items.length) return [];
+      const wanted = await opts.pick(items.map((i) => i.email));
+      const picked = items.filter((i) => wanted.has(i.email.messageId));
+      await fillSnippets(client, picked);
+      return picked.map((i) => i.email);
+    } finally {
+      lock.release();
+    }
+  });
+}
+
+/** Look again from the start of the window, as after a restart (a test, or the desk's "look now"). */
+export function rescanInboxFromWindow(): void {
+  scanState = null;
+}
+
+/** The words a person wrote in a reply: what follows "On … wrote:" and quoted lines left out. */
+export function newPartOf(text: string): string {
+  const lines = text.replace(/\r\n?/g, "\n").split("\n");
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (line.startsWith(">")) break;
+    if (/^-{2,}\s*original message\s*-{2,}$/i.test(line)) break;
+    // "On Thu, 12 Nov 2026 … <someone@…> wrote:" — it may wrap over two or three lines.
+    if (/^on\s/i.test(line)) {
+      const joined = [line, (lines[i + 1] ?? "").trim(), (lines[i + 2] ?? "").trim()].join(" ");
+      if (/^on\s[^\n]{0,300}?\bwrote:/i.test(joined)) break;
+    }
+    out.push(lines[i]);
+  }
+  return out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }

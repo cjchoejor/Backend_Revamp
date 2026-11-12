@@ -1003,6 +1003,8 @@ model Inquiry {
   emailThreadLinkedBy   String?
   /// Our latest email in that conversation, added to the next one's References.
   emailThreadLastSentId String?
+  /// The conversation, email by email (2026-11-12): their first email, what we sent, their replies.
+  emails                InquiryEmail[]
   agentProfileId             String?
   sourceChannel              String           @default("DIRECT")
   /// How the guest came in, as the desk records it (2026-09-18). `sourceChannel` holds only the
@@ -3773,4 +3775,43 @@ model TripPaper {
 
   @@index([inquiryId, kind])
   @@map("trip_papers")
+}
+
+/// One email of an enquiry's conversation (2026-11-12, operator: "showing the guest's replies on the
+/// booking … do it"). FIRST — the guest's own email the desk linked; SENT — an email the system sent
+/// for a stay of the enquiry (every paper, linked or not); REPLY — an email in the hotel's mailbox
+/// that answers one of these, found by its In-Reply-To / References. The words stay in the mailbox:
+/// only who, when, the subject and the first lines are kept, to list it.
+model InquiryEmail {
+  id              String    @id @default(uuid())
+  inquiryId       String
+  inquiry         Inquiry   @relation(fields: [inquiryId], references: [id])
+  /// The stay it was sent for (SENT), or the stay whose paper it answers (REPLY). Soft.
+  entryId         String?
+  kind            String
+  messageId       String
+  fromAddress     String?
+  fromName        String?
+  toAddresses     String[]  @default([])
+  subject         String
+  snippet         String    @default("")
+  at              DateTime
+  /// SENT: which paper it carried (QUOTATION, PROFORMA_INVOICE, CONFIRMATION_VOUCHER, …).
+  paperKind       String?
+  attachmentNames String[]  @default([])
+  inReplyTo       String?
+  /// REPLY: the kind of paper the email it answers carried.
+  answersKind     String?
+  seenAt          DateTime?
+  seenBy          String?
+  /// REPLY recorded as the guest's answer to a paper (a CommunicationRecord).
+  answeredCommunicationId String?
+  answeredAt      DateTime?
+  answeredBy      String?
+  createdAt       DateTime  @default(now())
+
+  @@unique([inquiryId, messageId])
+  @@index([inquiryId, at])
+  @@index([kind, seenAt])
+  @@map("inquiry_emails")
 }

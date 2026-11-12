@@ -8,6 +8,7 @@
  * S2 (no reservation yet) through S9.
  */
 
+import { paperKindOfEmail } from "../domain/guest-email-conversation-service.js";
 import type { PrismaClient, Stage } from "@prisma/client";
 import { sendEmail } from "./email-service.js";
 import { emailsGoAfterAnswer, runAfterAnswer } from "../../lib/outbox.js";
@@ -90,6 +91,7 @@ async function sendNow(ctx: StageEmailContext, content: StageEmailContent): Prom
       threadEntryId: entryId,
       threadReadableId: inquiryId,
       attachments: content.attachments,
+      paperKind: paperKindOfEmail(eventTypePrefix),
     });
     if (result.status === "sent") {
       await writeStageEmailTrace({ prisma, entryId, actorId, inquiryId, stage }, `${eventTypePrefix}.SENT`, {

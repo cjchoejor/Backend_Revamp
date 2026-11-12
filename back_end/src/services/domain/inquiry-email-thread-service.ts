@@ -10,7 +10,8 @@
 import type { PrismaClient } from "@prisma/client";
 import * as auditService from "../infrastructure/audit-service.js";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
-import { forgetInboxList, readInboxEmail } from "../infrastructure/mail-inbox-service.js";
+import { forgetInboxList, readInboxEmailInFull } from "../infrastructure/mail-inbox-service.js";
+import { recordFirstEmail, removeFirstEmail } from "./guest-email-conversation-service.js";
 
 type Actor = { actorId: string; level: string };
 
@@ -100,7 +101,7 @@ export async function linkInquiryEmail(
   actor: Actor,
 ): Promise<EmailThreadSummary> {
   const { inq, live } = await loadInquiry(prisma, inquiryId);
-  const email = await readInboxEmail(messageId);
+  const email = await readInboxEmailInFull(messageId);
   if (!email) {
     throw new ValidationError("That email is not in the hotel's mailbox any more — pick another one");
   }
@@ -121,6 +122,7 @@ export async function linkInquiryEmail(
     },
   });
   forgetInboxList();
+  await recordFirstEmail(prisma, inquiryId, email, actor.actorId);
   await traceOnStays(prisma, actor, inquiryId, live.map((e) => e.id), "INQUIRY.EMAIL_LINKED", {
     messageId: email.messageId,
     subject: email.subject,
@@ -151,6 +153,7 @@ export async function clearInquiryEmail(prisma: PrismaClient, inquiryId: string,
       emailThreadLastSentId: null,
     },
   });
+  await removeFirstEmail(prisma, inquiryId);
   await traceOnStays(prisma, actor, inquiryId, live.map((e) => e.id), "INQUIRY.EMAIL_UNLINKED", {
     messageId: inq.emailThreadMessageId,
     subject: inq.emailThreadSubject,
