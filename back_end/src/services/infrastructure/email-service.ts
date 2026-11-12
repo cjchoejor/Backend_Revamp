@@ -78,7 +78,15 @@ type SendArgs = {
 };
 
 type SendResult =
-  | { status: "sent"; messageId: string; redirected: boolean; intendedRecipient: string; actualRecipient: string }
+  | {
+      status: "sent";
+      messageId: string;
+      redirected: boolean;
+      intendedRecipient: string;
+      actualRecipient: string;
+      /** It went as a reply inside the guest's own email (the enquiry's linked conversation). */
+      repliedInGuestEmail?: boolean;
+    }
   | { status: "skipped"; reason: "EMAIL_DISABLE" }
   | { status: "error"; message: string };
 
@@ -89,6 +97,18 @@ const FOOTER_HTML = `<hr style="border:none;border-top:1px solid #ddd;margin:24p
   This is an automated message from the hotel's property management system. Reply to this email
   to reach the front desk directly.
 </p>`;
+
+/** "Re: <their subject>", as a person replying would write it — never "Re: Re:". */
+export function replySubject(subject: string | null | undefined): string {
+  const s = (subject ?? "").trim() || "(no subject)";
+  return /^(re|aw|sv|antw)\s*:/i.test(s) ? s : `Re: ${s}`;
+}
+
+/** The References of a reply: the conversation before, their email, then ours, each once. */
+function referencesFor(prior: string | null, theirs: string, ours: string | null): string {
+  const ids = [...(prior?.match(/<[^<>\s]+>/g) ?? []), theirs, ...(ours ? [ours] : [])];
+  return [...new Set(ids)].slice(-20).join(" ");
+}
 
 function applySubjectPrefix(subject: string, threadReadableId: string | undefined): string {
   if (!threadReadableId) return subject;
@@ -135,13 +155,34 @@ export async function sendEmail(prisma: PrismaClient, args: SendArgs): Promise<S
   let inReplyTo: string | undefined;
   let references: string | undefined;
   let isFirstInThread = false;
+  // The guest's own email, when the desk linked one to the enquiry (2026-11-12): every paper goes
+  // out as a reply inside it — "Re: <their subject>", In-Reply-To their email, References the whole
+  // conversation — so the guest and the hotel's mailbox both see one conversation.
+  let guestThread: { inquiryId: string; subject: string } | null = null;
 
   if (args.threadEntryId) {
     const entry = await prisma.entry.findUnique({
       where: { id: args.threadEntryId },
-      select: { emailThreadRootMessageId: true },
+      select: {
+        emailThreadRootMessageId: true,
+        inquiry: {
+          select: {
+            id: true,
+            emailThreadMessageId: true,
+            emailThreadSubject: true,
+            emailThreadReferences: true,
+            emailThreadLastSentId: true,
+          },
+        },
+      },
     });
-    if (entry?.emailThreadRootMessageId) {
+    const linked = entry?.inquiry?.emailThreadMessageId ? entry.inquiry : null;
+    if (linked) {
+      inReplyTo = linked.emailThreadMessageId!;
+      references = referencesFor(linked.emailThreadReferences, linked.emailThreadMessageId!, linked.emailThreadLastSentId);
+      guestThread = { inquiryId: linked.id, subject: replySubject(linked.emailThreadSubject) };
+      if (!entry?.emailThreadRootMessageId) isFirstInThread = true;
+    } else if (entry?.emailThreadRootMessageId) {
       // Subsequent email in an established thread.
       inReplyTo = entry.emailThreadRootMessageId;
       references = entry.emailThreadRootMessageId;
@@ -154,7 +195,8 @@ export async function sendEmail(prisma: PrismaClient, args: SendArgs): Promise<S
   const intendedRecipient = args.to;
   const redirectTo = process.env.EMAIL_REDIRECT_ALL_TO?.trim();
   const actualRecipient = redirectTo || intendedRecipient;
-  let subject = applySubjectPrefix(args.subject, args.threadReadableId);
+  // A reply keeps the guest's subject exactly: a changed subject splits the conversation.
+  let subject = guestThread ? guestThread.subject : applySubjectPrefix(args.subject, args.threadReadableId);
   if (redirectTo) subject = applyRedirectPrefix(subject, intendedRecipient);
 
   // 3. Append footer to body.
@@ -224,6 +266,14 @@ export async function sendEmail(prisma: PrismaClient, args: SendArgs): Promise<S
       data: { emailThreadRootMessageId: info.messageId },
     });
   }
+  // Ours is now the latest in the guest's conversation; the next reply names it too. Not when the
+  // test redirect sent it elsewhere: the guest never had it.
+  if (guestThread && info.messageId && !redirectTo) {
+    await prisma.inquiry.update({
+      where: { id: guestThread.inquiryId },
+      data: { emailThreadLastSentId: info.messageId },
+    });
+  }
 
   return {
     status: "sent",
@@ -231,6 +281,7 @@ export async function sendEmail(prisma: PrismaClient, args: SendArgs): Promise<S
     redirected: !!redirectTo,
     intendedRecipient,
     actualRecipient,
+    repliedInGuestEmail: !!guestThread,
   };
 }
 

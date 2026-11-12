@@ -97,6 +97,7 @@ async function sendNow(ctx: StageEmailContext, content: StageEmailContent): Prom
         intendedRecipient: result.intendedRecipient,
         actualRecipient: result.actualRecipient,
         redirected: result.redirected,
+        repliedInGuestEmail: !!result.repliedInGuestEmail,
       });
       return { status: "SENT", reason: null };
     }

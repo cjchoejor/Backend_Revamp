@@ -15,6 +15,10 @@ type DbClient = PrismaClient | Prisma.TransactionClient;
  *     party's email.
  *   - Anyone else: the guest's own email and number; then who is arriving; then the caller.
  *
+ *   - Whoever the email is, when the desk linked the guest's own email to the enquiry (2026-11-12):
+ *     the papers reply inside that conversation, so they go to the person who wrote it. Their
+ *     number is looked for as above.
+ *
  * One rule for every paper and every send box: the quotation, the proforma, the voucher, the
  * mid-stay bill and the tax invoice (`resolveInvoiceRecipient` reads it), so the box on the desk
  * and the address the server uses when nothing is typed are always the same.
@@ -46,6 +50,8 @@ export async function resolveSendTo(db: DbClient, entryId: string): Promise<Send
         select: {
           callerPhone: true,
           callerEmail: true,
+          emailThreadFrom: true,
+          emailThreadFromName: true,
           partyContactName: true,
           partyContactPhone: true,
           partyContactEmail: true,
@@ -62,6 +68,8 @@ export async function resolveSendTo(db: DbClient, entryId: string): Promise<Send
   const partyPhone = clean(partyRow?.contactNumbers?.find((n) => clean(n)));
   const guestEmail = clean(entry?.guestProfile?.email);
   const guestPhone = clean(entry?.guestProfile?.phone);
+  const wrote = clean(inquiry?.emailThreadFrom);
+  const wroteWords = wrote ? `${clean(inquiry?.emailThreadFromName) ?? wrote} · wrote the email` : null;
 
   if (party) {
     const person = clean(inquiry?.partyContactName);
@@ -70,8 +78,8 @@ export async function resolveSendTo(db: DbClient, entryId: string): Promise<Send
     const personWords = person ? `${person} · ${party}'s contact person` : `${party}'s contact person`;
     return {
       party,
-      email: personEmail ?? partyEmail,
-      emailWhose: personEmail ? personWords : partyEmail ? `${party}'s email on file` : null,
+      email: wrote ?? personEmail ?? partyEmail,
+      emailWhose: wrote ? wroteWords : personEmail ? personWords : partyEmail ? `${party}'s email on file` : null,
       phone: personPhone ?? partyPhone,
       phoneWhose: personPhone ? personWords : partyPhone ? `${party}'s number on file` : null,
       partyEmail,
@@ -90,6 +98,7 @@ export async function resolveSendTo(db: DbClient, entryId: string): Promise<Send
     return [null, null];
   };
   const [email, emailWhose] = pick([
+    [wrote, wroteWords ?? "wrote the email"],
     [guestEmail, guestWords],
     [clean(entry?.contactPersonEmail), arrivingWords],
     [clean(inquiry?.callerEmail), "the caller"],

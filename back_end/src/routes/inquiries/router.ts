@@ -14,6 +14,8 @@ import { cleanCoordinators } from "../../lib/admin/contact-list.js";
 import { validateBody } from "../../middleware/validate-body.js";
 import { ValidationError } from "../../lib/errors.js";
 import * as s1InquiryService from "../../services/domain/s1-inquiry-service.js";
+import { z } from "zod";
+import { clearInquiryEmail, linkInquiryEmail } from "../../services/domain/inquiry-email-thread-service.js";
 
 export const inquiriesRouter = Router();
 
@@ -100,6 +102,26 @@ inquiriesRouter.patch("/:id/notes", requireActorLevel("L1"), validateBody(update
   try {
     const updated = await s1InquiryService.updateInquiryNotes(prisma, req.params.id, req.actor!.actorId, req.body.notes);
     res.json(updated);
+  } catch (e) {
+    next(e);
+  }
+});
+
+// The guest's own email (2026-11-12): every paper of every stay on the enquiry replies inside it.
+const linkEmailSchema = z.object({ messageId: z.string().trim().min(3).max(998) }).strict();
+inquiriesRouter.post("/:id/email-thread", requireActorLevel("L1"), validateBody(linkEmailSchema), async (req, res, next) => {
+  try {
+    const thread = await linkInquiryEmail(prisma, req.params.id, req.body.messageId, { actorId: req.actor!.actorId, level: req.actor!.level });
+    res.json({ emailThread: thread });
+  } catch (e) {
+    next(e);
+  }
+});
+
+inquiriesRouter.post("/:id/email-thread/clear", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    await clearInquiryEmail(prisma, req.params.id, { actorId: req.actor!.actorId, level: req.actor!.level });
+    res.json({ emailThread: null });
   } catch (e) {
     next(e);
   }

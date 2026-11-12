@@ -987,6 +987,22 @@ model Inquiry {
   /// another contact person in case that person doesn't respond"): [{ title?, name, phone?, email? }].
   /// partyContactName / Phone / Email hold the first. Null on an enquiry from before this.
   partyContacts     Json?
+  /// The guest's own email this enquiry came in by (2026-11-12, operator: "when we send an email like
+  /// quotation and other papers, how can we send it in that same thread of the first email guest
+  /// sent"). Picked by the desk from the hotel's mailbox; every paper of every stay on the enquiry
+  /// then goes out as a reply inside that conversation (In-Reply-To / References, "Re: <subject>").
+  /// Null when nobody linked one: the papers start the system's own conversation, as before.
+  emailThreadMessageId  String?
+  emailThreadSubject    String?
+  emailThreadFrom       String?
+  emailThreadFromName   String?
+  /// The guest's email's own References header, kept so the reply names the whole conversation.
+  emailThreadReferences String?
+  emailThreadReceivedAt DateTime?
+  emailThreadLinkedAt   DateTime?
+  emailThreadLinkedBy   String?
+  /// Our latest email in that conversation, added to the next one's References.
+  emailThreadLastSentId String?
   agentProfileId             String?
   sourceChannel              String           @default("DIRECT")
   /// How the guest came in, as the desk records it (2026-09-18). `sourceChannel` holds only the
@@ -1029,6 +1045,7 @@ model Inquiry {
   @@index([travelAgentId])
   @@index([corporateAccountId])
   @@index([ratePackageId])
+  @@index([emailThreadMessageId])
   @@map("inquiries")
 }
 
