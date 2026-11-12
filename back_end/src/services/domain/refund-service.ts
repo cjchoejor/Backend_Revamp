@@ -1,4 +1,5 @@
 import { paperNumber, printedProformaNumber, printedQuotationNumber, proformaNumberOf } from "../../lib/document-numbers.js";
+import { cleanPaymentBank } from "../../lib/payment-bank.js";
 import type { PrismaClient } from "@prisma/client";
 import { InvoiceState, InvoiceType, PaymentDirection, Prisma } from "@prisma/client";
 import { NotFoundError, PolicyGateBlockedError, ValidationError } from "../../lib/errors.js";
@@ -330,6 +331,8 @@ export async function recordRefund(
     const missing = [!bankName ? "the bank's name" : null, !accountNumber ? "the account number" : null, !journalNumber ? "the journal number" : null].filter(Boolean);
     if (missing.length) throw new ValidationError(`A refund that is not in cash needs ${missing.join(", ").replace(/, ([^,]*)$/, " and $1")}.`);
   }
+  // The bank from the hotel's list (2026-11-12), the same list every payment picks from.
+  const bank = await cleanPaymentBank(prisma, { method, bankName, journalNumber }, "refund");
   const now = new Date();
   return prisma.$transaction(async (tx) => {
     const request = await tx.refundRequest.findUnique({
@@ -352,6 +355,8 @@ export async function recordRefund(
         amount,
         paymentDirection: PaymentDirection.OUT,
         paymentMethod: method,
+        bankName: bank.bankName,
+        journalNumber: bank.journalNumber,
         receivedAt: now,
         recordedBy: actor.actorId,
         stage: request.entry.currentStage,
@@ -365,7 +370,7 @@ export async function recordRefund(
         status: "REFUNDED",
         refundedAmount: amount,
         refundMethod: method,
-        bankName: method === "CASH" ? null : bankName,
+        bankName: method === "CASH" ? null : bank.bankName,
         accountNumber: method === "CASH" ? null : accountNumber,
         journalNumber: method === "CASH" ? null : journalNumber,
         paymentRecordId: paymentId,
@@ -397,7 +402,7 @@ export async function recordRefund(
           amount: Number(amount.toFixed(2)),
           stayedOnBill: Number(left.toFixed(2)),
           method,
-          bankName: method === "CASH" ? null : bankName,
+          bankName: method === "CASH" ? null : bank.bankName,
           accountEnding: method === "CASH" ? null : accountEnding(accountNumber),
           journalNumber: method === "CASH" ? null : journalNumber,
           note: input.note?.trim() || null,

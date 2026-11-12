@@ -125,7 +125,7 @@ export function previewTripPayment(session: Session, tripPaperId: string, body: 
 export function recordTripPayment(
   session: Session,
   tripPaperId: string,
-  body: { amount: number; paymentMethod?: string; notes?: string; shares?: TripPaymentShare[] | null },
+  body: { amount: number; paymentMethod?: string; bankName?: string; journalNumber?: string; notes?: string; shares?: TripPaymentShare[] | null },
 ) {
   return apiRequest<{
     amount: string;
@@ -173,7 +173,7 @@ export function previewTripPaymentForEntry(session: Session, entryId: string, bo
 export function recordTripPaymentForEntry(
   session: Session,
   entryId: string,
-  body: { amount: number; paymentMethod?: string; notes?: string; shares?: TripPaymentShare[] | null },
+  body: { amount: number; paymentMethod?: string; bankName?: string; journalNumber?: string; notes?: string; shares?: TripPaymentShare[] | null },
 ) {
   return apiRequest<Awaited<ReturnType<typeof recordTripPayment>>>(`/api/entries/${entryId}/trip-payment`, { method: "POST", session, body });
 }

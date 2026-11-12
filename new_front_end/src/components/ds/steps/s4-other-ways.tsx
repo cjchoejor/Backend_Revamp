@@ -207,7 +207,7 @@ function CancelAtSetupDialog({ entry, onClose }: { entry: EntryDetail; onClose: 
   const after = useAfterTerminal(entry.id);
   const gm = atLeast(session?.actorLevel, "L3");
   const [waive, setWaive] = useState(false);
-  const refund = useRefundHow();
+  const refund = useRefundHow({ entryId: entry.id, waive: gm && waive });
   const run = useMutation({
     mutationFn: (reason: string) =>
       cancelEntryAtS3(session!, entry.id, { reason, penaltyWaiverRequested: gm && waive ? true : undefined, ...refund.body }),
@@ -234,6 +234,8 @@ function CancelAtSetupDialog({ entry, onClose }: { entry: EntryDetail; onClose: 
       confirmLabel="Cancel the booking"
       placeholder="what the guest or the booker said"
       onConfirm={(r) => run.mutate(r)}
+      extraValid={!refund.missing}
+      extraReason={refund.missing ?? undefined}
     >
       <CancellationFiguresLine entryId={entry.id} waive={gm && waive} />
       <WaiverTick checked={waive} onChange={setWaive} gm={gm} />
@@ -252,7 +254,7 @@ export function CancelAtArrivalDialog({ entry, onClose }: { entry: EntryDetail; 
   const after = useAfterTerminal(entry.id);
   const gm = atLeast(session?.actorLevel, "L3");
   const [waive, setWaive] = useState(false);
-  const refund = useRefundHow();
+  const refund = useRefundHow({ entryId: entry.id, waive: gm && waive });
   // The reason is recorded on the cancellation, as at Set up (2026-09-18) — the Arrival cancel
   // used to take none, so a reserved booking could be cancelled with no why on record.
   const run = useMutation({
@@ -289,6 +291,8 @@ export function CancelAtArrivalDialog({ entry, onClose }: { entry: EntryDetail; 
       confirmLabel="Cancel the booking"
       placeholder="what the guest or the booker said"
       onConfirm={(r) => run.mutate(r)}
+      extraValid={!refund.missing}
+      extraReason={refund.missing ?? undefined}
     >
       <CancellationFiguresLine entryId={entry.id} waive={gm && waive} />
       <WaiverTick checked={waive} onChange={setWaive} gm={gm} />

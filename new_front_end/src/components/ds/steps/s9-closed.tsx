@@ -13,6 +13,7 @@
  *
  * Figures are the backend's: the billing summary, the folio's balance, payment-status.
  */
+import { BankFields, useBankEntry } from "@/components/ds/bank-fields";
 import { StayDates } from "@/components/ds/stay-dates";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
@@ -1095,6 +1096,7 @@ function RecordPayment({
   const [amount, setAmount] = useState("");
   const [ref, setRef] = useState("");
   const [method, setMethod] = useState<(typeof POST_STAY_METHODS)[number][0]>("BANK_TRANSFER");
+  const bank = useBankEntry();
   // The amount starts at what is still owed (the common case — the rest arriving); edit it down
   // for a part-payment. Latched on the first keystroke so a refetch never overwrites it.
   const touched = useRef(false);
@@ -1124,7 +1126,8 @@ function RecordPayment({
       const body: Parameters<typeof recordInvoicePaymentEvent>[2] = {
         nextState: "PAYMENT_TRACKED",
         paymentMethod: method,
-        referenceNumber: ref.trim() || undefined,
+        referenceNumber: bank.needs(method) ? bank.journal.trim() || undefined : ref.trim() || undefined,
+        ...bank.body(method),
       };
       if (Number.isFinite(n) && n > 0) body.amount = n;
       return recordInvoicePaymentEvent(session!, target, body);
@@ -1173,8 +1176,8 @@ function RecordPayment({
             Mark it reconciled
           </Button>
           <Button
-            state={tracked.isPending ? "working" : busy || !target || answerPending ? "inert" : "default"}
-            title={answerPending ? "record their answer to the tax invoice first" : undefined}
+            state={tracked.isPending ? "working" : busy || !target || answerPending || !!bank.missing(method) ? "inert" : "default"}
+            title={answerPending ? "record their answer to the tax invoice first" : (bank.missing(method) ?? undefined)}
             workingLabel="Recording…"
             onClick={() => tracked.mutate()}
           >
@@ -1236,11 +1239,14 @@ function RecordPayment({
             ))}
           </select>
         </div>
-        <div className="field">
-          <label>Reference</label>
-          <input className="input" value={ref} disabled={answerPending} placeholder="the transaction reference" onChange={(e) => setRef(e.target.value)} />
-        </div>
+        {bank.needs(method) ? null : (
+          <div className="field">
+            <label>Reference</label>
+            <input className="input" value={ref} disabled={answerPending} placeholder="the transaction reference" onChange={(e) => setRef(e.target.value)} />
+          </div>
+        )}
       </div>
+      <BankFields entry={bank} method={method} />
     </DsDialog>
   );
 }

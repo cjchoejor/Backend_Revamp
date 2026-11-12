@@ -1,4 +1,5 @@
 import type { PrismaClient } from "@prisma/client";
+import { cleanPaymentBank } from "../../lib/payment-bank.js";
 import { InvoiceState, InvoiceType, PaymentDirection, Prisma, Stage } from "@prisma/client";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { allocateReadableId } from "../../lib/readable-id.js";
@@ -624,7 +625,7 @@ export async function recordInterimPayment(
   prisma: PrismaClient,
   actor: Actor,
   requestId: string,
-  input: { amount: number; paymentMethod?: string | null; notes?: string | null },
+  input: { amount: number; paymentMethod?: string | null; bankName?: string | null; journalNumber?: string | null; notes?: string | null },
 ) {
   if (!Number.isFinite(input.amount) || input.amount <= 0) throw new ValidationError("Payment amount must be a positive number");
   const out = await prisma.$transaction(async (tx) => {
@@ -651,6 +652,7 @@ export async function recordInterimPayment(
     });
 
     const now = new Date();
+    const bank = await cleanPaymentBank(tx, { method: input.paymentMethod?.trim() || "CASH", bankName: input.bankName, journalNumber: input.journalNumber });
     const paymentId = await allocateReadableId(tx, "PAYMENT" as const, now);
     const payment = await tx.paymentRecord.create({
       data: {
@@ -662,6 +664,8 @@ export async function recordInterimPayment(
         amount: new Prisma.Decimal(input.amount.toFixed(2)),
         currency: "BTN",
         paymentMethod: input.paymentMethod?.trim() || "CASH",
+        bankName: bank.bankName,
+        journalNumber: bank.journalNumber,
         paymentDirection: PaymentDirection.IN,
         receivedAt: now,
         recordedBy: actor.actorId,

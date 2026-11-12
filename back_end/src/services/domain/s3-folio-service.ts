@@ -1,4 +1,5 @@
 import { nextProformaNumberTx } from "../../lib/document-numbers.js";
+import { cleanPaymentBank } from "../../lib/payment-bank.js";
 import { afterProformaMadeTx, stopProformaValidityTx } from "./proforma-validity-service.js";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { FolioState, InvoiceState, InvoiceType, PaymentDirection, Stage } from "@prisma/client";
@@ -140,7 +141,7 @@ export async function recordPayment(
   prisma: PrismaClient,
   folioId: string,
   actorId: string,
-  input: { entryId: string; amount: number; notes?: string | null; paymentMethod?: string | null },
+  input: { entryId: string; amount: number; notes?: string | null; paymentMethod?: string | null; bankName?: string | null; journalNumber?: string | null },
   actorLevel?: "L1" | "L2" | "L3" | "L4",
 ) {
   const txResult = await prisma.$transaction((tx) => recordPaymentTx(prisma, tx, folioId, actorId, input));
@@ -198,7 +199,15 @@ export async function recordPaymentTx(
   tx: Prisma.TransactionClient,
   folioId: string,
   actorId: string,
-  input: { entryId: string; amount: number; notes?: string | null; paymentMethod?: string | null; paidForTrip?: boolean },
+  input: {
+    entryId: string;
+    amount: number;
+    notes?: string | null;
+    paymentMethod?: string | null;
+    paidForTrip?: boolean;
+    bankName?: string | null;
+    journalNumber?: string | null;
+  },
 ) {
   const amountNum = input.amount;
   {
@@ -237,6 +246,8 @@ export async function recordPaymentTx(
       enforceProformaGuestAnswerRecordedBeforeAdvancePayment({ latestDispatchedProformaComm: latestProformaComm });
     }
 
+    // The bank and journal number of money through a bank (2026-11-12).
+    const bank = await cleanPaymentBank(tx, { method: input.paymentMethod?.trim() || "CASH", bankName: input.bankName, journalNumber: input.journalNumber });
     const paymentId = await allocateReadableId(tx, "PAYMENT" as const);
     const created = await tx.paymentRecord.create({
       data: {
@@ -245,6 +256,8 @@ export async function recordPaymentTx(
         entryId: input.entryId,
         amount: amountNum,
         paymentDirection: PaymentDirection.IN,
+        bankName: bank.bankName,
+        journalNumber: bank.journalNumber,
         currency: "BTN",
         receivedAt: new Date(),
         recordedBy: actorId,

@@ -10,6 +10,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useSession } from "@/hooks/use-session";
 import { previewCancellation } from "@/lib/api/reservation-setup";
+import { BankFields, useBankEntry } from "@/components/ds/bank-fields";
 import { money } from "@/lib/ds/format";
 
 export function CancellationFiguresLine({ entryId, waive = false, currency }: { entryId: string; waive?: boolean; currency?: string }) {
@@ -66,32 +67,66 @@ const REFUND_HOW = [
   ["BANK_TRANSFER", "Bank transfer"],
 ] as const;
 
-export function useRefundHow() {
+const WAY_WORD: Record<string, string> = {
+  CASH: "cash",
+  CARD: "the card (POS)",
+  MOBILE_PAYMENT: "a QR payment",
+  BANK_TRANSFER: "a bank transfer",
+  INWARD_REMITTANCE: "a remittance",
+};
+
+/**
+ * How a cancellation's refund goes back, and — when it goes through a bank — its bank and journal
+ * number (2026-11-12). "The way it came in" is read off the preview (the server resolves it), so the
+ * bank is asked whenever the refund will go through one. A single booking reads its own preview
+ * (`entryId`, shared with the figures line); a trip passes what its own preview says.
+ */
+export function useRefundHow(source: { entryId?: string; waive?: boolean; trip?: { refundDue: boolean; ways: string[] } } = {}) {
+  const { session } = useSession();
   const [method, setMethod] = useState("");
   const [reference, setReference] = useState("");
+  const bank = useBankEntry();
+  const q = useQuery({
+    queryKey: ["cancellation-preview", source.entryId, !!source.waive],
+    queryFn: () => previewCancellation(session!, source.entryId!, !!source.waive),
+    enabled: !!session && !!source.entryId,
+    staleTime: 0,
+  });
+  const refundDue = source.trip ? source.trip.refundDue : (q.data?.refund ?? 0) > 0;
+  const ways = method ? [method] : source.trip ? source.trip.ways : q.data?.refundWayItCame ? [q.data.refundWayItCame] : [];
+  const bankWay = ways.find((w) => bank.needs(w)) ?? null;
+  const asksBank = refundDue && !!bankWay;
+  const missing = asksBank ? bank.missing(bankWay) : null;
   const body = {
     ...(method ? { refundMethod: method } : {}),
-    ...(reference.trim() ? { refundReference: reference.trim() } : {}),
+    ...(!asksBank && reference.trim() ? { refundReference: reference.trim() } : {}),
+    ...(asksBank ? { refundBank: bank.bank, refundJournal: bank.journal.trim() } : {}),
   };
   const fields = (
-    <div className="form2" style={{ marginTop: 8 }}>
-      <div className="field">
-        <label>How any refund goes back</label>
-        <select className="input" value={method} onChange={(e) => setMethod(e.target.value)}>
-          {REFUND_HOW.map(([v, l]) => (
-            <option key={v} value={v}>
-              {l}
-            </option>
-          ))}
-        </select>
+    <>
+      <div className="form2" style={{ marginTop: 8 }}>
+        <div className="field">
+          <label>How any refund goes back</label>
+          <select className="input" value={method} onChange={(e) => setMethod(e.target.value)}>
+            {REFUND_HOW.map(([v, l]) => (
+              <option key={v} value={v}>
+                {l}
+              </option>
+            ))}
+          </select>
+          {!method && refundDue && ways.length === 1 ? <span className="hint">By {WAY_WORD[ways[0]] ?? ways[0].toLowerCase()}, the way it came in</span> : null}
+        </div>
+        {asksBank ? null : (
+          <div className="field">
+            <label>Refund reference · optional</label>
+            <input className="input" value={reference} onChange={(e) => setReference(e.target.value)} placeholder="the slip number" />
+          </div>
+        )}
       </div>
-      <div className="field">
-        <label>Refund reference · optional</label>
-        <input className="input" value={reference} onChange={(e) => setReference(e.target.value)} placeholder="transfer or slip number" />
-      </div>
-    </div>
+      {asksBank ? <BankFields entry={bank} method={bankWay} what="refund" /> : null}
+    </>
   );
-  return { body, fields };
+  return { body, fields, missing };
 }
 
 export function WaiverTick({ checked, onChange, gm }: { checked: boolean; onChange: (v: boolean) => void; gm: boolean }) {

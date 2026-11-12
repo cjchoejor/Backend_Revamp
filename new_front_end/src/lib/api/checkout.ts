@@ -76,6 +76,8 @@ export async function initiateSettlement(
     settlementMethod: string;
     billingModelConfirmation: string;
     paymentVerificationRef?: string;
+    bankName?: string;
+    journalNumber?: string;
     partialAmount?: number;
     fomAcknowledgementRef?: string;
     nightAuditFomAcknowledgementRef?: string;
@@ -97,7 +99,7 @@ export async function initiateSettlement(
 export async function recordFolioRefund(
   session: Session,
   folioId: string,
-  body: { amount: number; paymentMethod: string; reference?: string; reason: string },
+  body: { amount: number; paymentMethod: string; reference?: string; reason: string; bankName?: string; journalNumber?: string },
 ) {
   return apiRequest<unknown>(`/api/folios/${folioId}/refunds`, { method: "POST", session, body });
 }

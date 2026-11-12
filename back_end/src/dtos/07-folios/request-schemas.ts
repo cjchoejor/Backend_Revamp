@@ -6,6 +6,9 @@ export const recordFolioPaymentRequestSchema = z.object({
   notes: z.string().optional(),
   /** How the money came — cash, QR, a transfer (2026-09-18). Omitted keeps the column's CASH default. */
   paymentMethod: z.string().trim().min(1).max(40).optional(),
+  /** The bank and its journal number, for a card, QR, transfer or remittance (2026-11-12). */
+  bankName: z.string().trim().max(80).optional(),
+  journalNumber: z.string().trim().max(60).optional(),
 });
 export type RecordFolioPaymentRequestDto = z.infer<typeof recordFolioPaymentRequestSchema>;
 
@@ -180,6 +183,8 @@ export const recordTargetPaymentRequestSchema = z
     amount: z.coerce.number().refine((n) => Number.isFinite(n) && n >= 0, "amount cannot be negative"),
     paymentMethod: z.string().min(1).max(40).optional(),
     paymentVerificationRef: z.string().min(1).max(120).optional(),
+    bankName: z.string().trim().max(80).optional(),
+    journalNumber: z.string().trim().max(60).optional(),
     notes: z.string().max(500).optional(),
     /** Is this room's guest still here? Only meaningful with roomId; see the service. */
     roomStatus: z.enum(["STILL_STAYING", "LEFT"]).optional(),
@@ -246,6 +251,9 @@ export const initiateSettlementRequestSchema = z.object({
    */
   billingModel: z.string().optional(),
   paymentVerificationRef: z.string().optional(),
+  /** The bank and its journal number, for a card, QR, transfer or remittance (2026-11-12). */
+  bankName: z.string().trim().max(80).optional(),
+  journalNumber: z.string().trim().max(60).optional(),
   partialAmount: z.coerce.number().optional(),
   fomAcknowledgementRef: z.string().optional(),
   nightAuditFomAcknowledgementRef: z.string().optional(),
@@ -286,6 +294,9 @@ export type InterimPaymentPromiseRequestDto = z.infer<typeof interimPaymentPromi
 export const recordInterimPaymentRequestSchema = z.object({
   amount: z.coerce.number().refine((n) => Number.isFinite(n) && n > 0, "amount must be positive"),
   paymentMethod: z.string().trim().max(40).optional(),
+  /** The bank and its journal number, for a card, QR, transfer or remittance (2026-11-12). */
+  bankName: z.string().trim().max(80).optional(),
+  journalNumber: z.string().trim().max(60).optional(),
   notes: z.string().trim().max(500).optional(),
 });
 export type RecordInterimPaymentRequestDto = z.infer<typeof recordInterimPaymentRequestSchema>;
@@ -295,6 +306,9 @@ export const recordFolioRefundRequestSchema = z.object({
   amount: z.coerce.number().refine((n) => Number.isFinite(n) && n > 0, "amount must be positive"),
   paymentMethod: z.string().trim().min(1).max(40),
   reference: z.string().trim().max(120).optional(),
+  /** The bank and its journal number, for a card, QR, transfer or remittance (2026-11-12). */
+  bankName: z.string().trim().max(80).optional(),
+  journalNumber: z.string().trim().max(60).optional(),
   reason: z.string().trim().min(1).max(500),
 });
 export type RecordFolioRefundRequestDto = z.infer<typeof recordFolioRefundRequestSchema>;
@@ -338,6 +352,9 @@ export const recordInvoicePaymentEventRequestSchema = z.object({
   receivedAt: z.string().optional(),
   referenceNumber: z.string().optional(),
   proofAttachmentId: z.string().optional(),
+  /** The bank and its journal number, for a card, QR, transfer or remittance (2026-11-12). */
+  bankName: z.string().trim().max(80).optional(),
+  journalNumber: z.string().trim().max(60).optional(),
 });
 export type RecordInvoicePaymentEventRequestDto = z.infer<typeof recordInvoicePaymentEventRequestSchema>;
 

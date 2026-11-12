@@ -13,6 +13,7 @@
  * balance, the payment-status position. The desk compares a typed amount with the balance only
  * to say, before the click, the rule the backend will apply (partial settlement needs the FOM).
  */
+import { BankFields, useBankEntry } from "@/components/ds/bank-fields";
 import { payerChoiceWord, payerPartyOf } from "@/lib/ds/payer-words";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
@@ -868,6 +869,7 @@ function HowSettled({
     balanceNum > ceilingNum &&
     !entry.creditCeilingTier2AcknowledgedAt;
 
+  const bank = useBankEntry();
   const voucherTyped = voucherCovers.trim() === "" ? Number.NaN : Number.parseFloat(voucherCovers);
   const voucherValid = Number.isFinite(voucherTyped) && voucherTyped >= 0;
   const invoicesParty = method === "DIRECT_BILL" || method === "VOUCHER";
@@ -877,7 +879,8 @@ function HowSettled({
     mutationFn: () => {
       if (!folio?.id || !folio.billingModel) throw new Error("The bill or its billing model is missing");
       const body: Parameters<typeof initiateSettlement>[2] = { settlementMethod: method, billingModelConfirmation: folio.billingModel };
-      if (ref.trim() && method !== "DIRECT_BILL") body.paymentVerificationRef = ref.trim();
+      if (ref.trim() && method !== "DIRECT_BILL" && !bank.needs(method)) body.paymentVerificationRef = ref.trim();
+      if (takesMoney) Object.assign(body, bank.body(method));
       if (method === "VOUCHER") {
         // The backend requires what the voucher covers; anything it leaves is invoiced to the agency.
         if (voucherValid) body.voucherAmount = voucherTyped;
@@ -943,8 +946,10 @@ function HowSettled({
           ? "put in what the voucher covers"
           : !methods.some(([v]) => v === method)
             ? "this billing model does not settle that way"
-            : (method === "CASH" || method === "MOBILE_PAYMENT") && takesMoney && !ref.trim()
-              ? "cash and QR need a payment reference"
+            : method === "CASH" && takesMoney && !ref.trim()
+              ? "cash needs its payment reference"
+              : takesMoney && bank.missing(method)
+                ? bank.missing(method)!
               : overCeiling && !fom
                 ? "the balance is above the credit the FOM allowed — the FOM settles this one"
                 : overCeiling && !fomAck.trim()
@@ -1086,7 +1091,7 @@ function HowSettled({
               </div>
               {method === "DIRECT_BILL" ? (
                 <SendToField entry={entry} value={invoiceTo} onChange={setInvoiceTo} label="Send the invoice to" />
-              ) : (
+              ) : bank.needs(method) ? null : (
                 <ReferenceField method={method} value={ref} onChange={setRef} takesMoney={takesMoney} />
               )}
               {method === "VOUCHER" ? (

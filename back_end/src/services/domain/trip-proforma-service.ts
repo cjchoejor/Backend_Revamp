@@ -644,7 +644,7 @@ async function recordForInquiry(
   prisma: PrismaClient,
   inquiryId: string,
   actor: Actor,
-  input: { amount: number; paymentMethod?: string | null; notes?: string | null; shares?: TripPaymentShareInput[] | null },
+  input: RecordInput,
 ) {
   const paper = await liveTripProformaNumber(prisma, inquiryId);
   const named = paper?.number ?? inquiryId;
@@ -668,6 +668,8 @@ async function recordForInquiry(
             amount: Number(row.share.toFixed(2)),
             notes: note,
             paymentMethod: input.paymentMethod ?? null,
+            bankName: input.bankName ?? null,
+            journalNumber: input.journalNumber ?? null,
             paidForTrip: true,
           });
           out.push({ stayNo: row.stayNo, entryId: row.entryId, amount: row.share.toFixed(2), paymentId: created.id, stage: stageAtPayment });
@@ -724,6 +726,8 @@ async function recordForInquiry(
               amount: whole,
               mode: r.mode,
               paymentMethod: input.paymentMethod ?? null,
+              bankName: input.bankName ?? null,
+              journalNumber: input.journalNumber ?? null,
               shares: out.map((x) => ({ stayNo: x.stayNo, entryId: x.entryId, amount: x.amount, paymentId: x.paymentId })),
             },
             createdBy: actor.actorId,
@@ -738,7 +742,14 @@ async function recordForInquiry(
   return { amount: written.whole, mode: written.mode, shares: written.out.map(({ stage: _s, ...x }) => x) };
 }
 
-type RecordInput = { amount: number; paymentMethod?: string | null; notes?: string | null; shares?: TripPaymentShareInput[] | null };
+type RecordInput = {
+  amount: number;
+  paymentMethod?: string | null;
+  bankName?: string | null;
+  journalNumber?: string | null;
+  notes?: string | null;
+  shares?: TripPaymentShareInput[] | null;
+};
 
 export async function recordTripPaymentForEntry(prisma: PrismaClient, entryId: string, actor: Actor, input: RecordInput) {
   return recordForInquiry(prisma, await tripOfEntry(prisma, entryId), actor, input);

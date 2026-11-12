@@ -41,7 +41,6 @@ function TripCancelForm({
   const gm = atLeast(session?.actorLevel, "L3");
   const [picked, setPicked] = useState<string[]>([]);
   const [waive, setWaive] = useState(false);
-  const refund = useRefundHow();
   const ordered = [...stays].sort((a, b) => stayNoOf(a.id) - stayNoOf(b.id));
   const chosen = ordered.filter((s) => picked.includes(s.id)).map((s) => s.id);
   const stage = entry.currentStage;
@@ -54,6 +53,14 @@ function TripCancelForm({
     enabled: !!session && priced && chosen.length > 0,
     staleTime: 0,
     retry: false,
+  });
+
+  // How any refund goes back; the bank is asked when a stay's refund goes through one (2026-11-12).
+  const refund = useRefundHow({
+    trip: {
+      refundDue: (preview.data?.totalRefund ?? 0) > 0,
+      ways: (preview.data?.stays ?? []).filter((s) => s.refund > 0).map((s) => s.refundWayItCame ?? "").filter(Boolean),
+    },
   });
 
   const run = useMutation({
@@ -114,8 +121,8 @@ function TripCancelForm({
       confirmLabel={chosen.length > 1 ? `Cancel ${plural(chosen.length, "stay")}` : `Cancel the ${chosen.length ? "stay" : label}`}
       placeholder="what the guest or the booker said"
       onConfirm={(r) => run.mutate(r)}
-      extraValid={chosen.length > 0 && !waiting && !refused}
-      extraReason={chosen.length === 0 ? "pick at least one stay" : (refused ?? "reading the figures")}
+      extraValid={chosen.length > 0 && !waiting && !refused && !refund.missing}
+      extraReason={chosen.length === 0 ? "pick at least one stay" : refused ? refused : waiting ? "reading the figures" : (refund.missing ?? "reading the figures")}
     >
       <div className="arrival-pick">
         {ordered.map((st) => {

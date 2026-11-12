@@ -269,6 +269,16 @@ const FINANCIAL = page("/admin/financial", "Payments and bills", [
     },
   },
   {
+    key: "payment.banks",
+    title: "Banks",
+    about:
+      "The banks the desk picks from when money comes in or goes back by card, QR, bank transfer or remittance. The desk then asks for the journal number too. Cash, vouchers and direct bills ask for neither.",
+    form: { kind: "tags", label: "Banks", placeholder: "Type a bank and press Enter" },
+    fresh: ["Bank of Bhutan", "Bhutan National Bank", "BDBL", "Punjab National Bank", "DK Bank", "UPI"],
+    check: (v) => (Array.isArray(v) && v.length ? null : "Keep at least one bank"),
+    summary: (v) => (Array.isArray(v) && v.length ? (v as string[]).join(" · ") : "None"),
+  },
+  {
     key: "advancePayment.followUpWindowSeconds",
     title: "First reminder about an advance",
     about: "How long after the bill goes out the desk gets the first reminder, if the advance has not come in.",

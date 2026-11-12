@@ -59,12 +59,12 @@ export const foliosRouter = Router();
 
 foliosRouter.post("/folios/:id/payments", requireActorLevel("L1"), validateBody(recordFolioPaymentRequestSchema), async (req, res, next) => {
   try {
-    const { entryId, amount, notes, paymentMethod } = req.body;
+    const { entryId, amount, notes, paymentMethod, bankName, journalNumber } = req.body;
     const rec = await s3FolioService.recordPayment(
       prisma,
       req.params.id,
       req.actor!.actorId,
-      { entryId, amount, notes: notes ?? null, paymentMethod: paymentMethod ?? null },
+      { entryId, amount, notes: notes ?? null, paymentMethod: paymentMethod ?? null, bankName: bankName ?? null, journalNumber: journalNumber ?? null },
       req.actor!.level,
     );
     res.status(201).json(rec);
@@ -451,12 +451,14 @@ foliosRouter.get("/folios/:id/settlement-buckets", requireActorLevel("L1"), asyn
  */
 foliosRouter.post("/folios/:id/refunds", requireActorLevel("L2"), validateBody(recordFolioRefundRequestSchema), async (req, res, next) => {
   try {
-    const { amount, paymentMethod, reference, reason } = req.body;
+    const { amount, paymentMethod, reference, reason, bankName, journalNumber } = req.body;
     const created = await recordFolioRefund(prisma, req.params.id, { actorId: req.actor!.actorId, actorLevel: req.actor!.level }, {
       amount,
       paymentMethod,
       reference: reference ?? null,
       reason,
+      bankName: bankName ?? null,
+      journalNumber: journalNumber ?? null,
     });
     res.status(201).json(created);
   } catch (e) {

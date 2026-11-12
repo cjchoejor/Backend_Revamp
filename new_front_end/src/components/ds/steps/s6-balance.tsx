@@ -10,6 +10,7 @@
  * comes at check-in. The figures are the server's (`GET /checkin-payment`); check-in waits for the
  * payment or the FOM's word (the backend refuses otherwise).
  */
+import { BankFields, useBankEntry } from "@/components/ds/bank-fields";
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -43,6 +44,7 @@ export function CheckInBalance({ entry, onChanged, tz }: { entry: EntryDetail; o
   const [amount, setAmount] = useState("");
   const touched = useRef(false);
   const [mode, setMode] = useState<AdvancePaymentMode | "">("");
+  const bank = useBankEntry();
   const [notes, setNotes] = useState("");
   const [askOpen, setAskOpen] = useState(false);
   const [decideOpen, setDecideOpen] = useState<null | "APPROVE" | "REJECT">(null);
@@ -70,12 +72,14 @@ export function CheckInBalance({ entry, onChanged, tz }: { entry: EntryDetail; o
         amount: Number(amount),
         notes: notes.trim() || "The rest of the bill, at check-in",
         paymentMethod: mode || undefined,
+        ...bank.body(mode),
       }),
     onSuccess: () => {
       toast.success(`${money(Number(amount))} taken`);
       touched.current = false;
       setNotes("");
       setMode("");
+      bank.reset();
       refresh();
       onChanged?.();
     },
@@ -121,7 +125,7 @@ export function CheckInBalance({ entry, onChanged, tz }: { entry: EntryDetail; o
     );
   }
 
-  const ready = Number(amount) > 0 && !!mode;
+  const ready = Number(amount) > 0 && !!mode && !bank.missing(mode);
   return (
     <div className="answer-due balance-due" role="status">
       <span className="due-head">
@@ -190,7 +194,10 @@ export function CheckInBalance({ entry, onChanged, tz }: { entry: EntryDetail; o
         </div>
         <div className="field">
           <label>Notes</label>
-          <input className="input" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="e.g. the slip's reference" />
+          <input className="input" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="anything worth knowing" />
+        </div>
+        <div className="wide">
+          <BankFields entry={bank} method={mode} />
         </div>
       </div>
       <div className="actbar">
@@ -198,7 +205,7 @@ export function CheckInBalance({ entry, onChanged, tz }: { entry: EntryDetail; o
           className={ready ? "go" : undefined}
           state={pay.isPending ? "working" : ready ? "default" : "inert"}
           workingLabel="Recording…"
-          title={ready ? undefined : !mode ? "choose how it was paid" : "type the amount"}
+          title={ready ? undefined : !mode ? "choose how it was paid" : (bank.missing(mode) ?? "type the amount")}
           onClick={() => pay.mutate()}
         >
           Take the payment

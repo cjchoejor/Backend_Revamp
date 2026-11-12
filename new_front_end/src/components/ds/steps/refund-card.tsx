@@ -9,6 +9,7 @@
  * FOM's, never more than was overpaid. Refunds are not made automatically — the desk records one
  * it has made.
  */
+import { BankFields, useBankEntry } from "@/components/ds/bank-fields";
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -39,14 +40,16 @@ export function OverpaidCard({ entry, live }: { entry: EntryDetail; live: boolea
   const [method, setMethod] = useState<(typeof REFUND_METHODS)[number][0]>("BANK_TRANSFER");
   const [reference, setReference] = useState("");
   const [why, setWhy] = useState("");
+  const bank = useBankEntry();
 
   const run = useMutation({
     mutationFn: () =>
       recordFolioRefund(session!, entry.folio!.id, {
         amount: Number(amount),
         paymentMethod: method,
-        reference: reference.trim() || undefined,
+        reference: bank.needs(method) ? undefined : reference.trim() || undefined,
         reason: why.trim(),
+        ...bank.body(method),
       }),
     onSuccess: () => {
       toast.success(`${money(Number(amount), cur)} refunded — recorded against the bill`);
@@ -59,7 +62,7 @@ export function OverpaidCard({ entry, live }: { entry: EntryDetail; live: boolea
   if (!entry.folio || overpaid == null || overpaid <= 0) return null;
   const n = Number.parseFloat(amount);
   const amountOk = amount.trim() !== "" && Number.isFinite(n) && n > 0 && n <= overpaid;
-  const lock = !amountOk ? `put in up to ${money(overpaid, cur)}` : !why.trim() ? "say why the money goes back" : undefined;
+  const lock = !amountOk ? `put in up to ${money(overpaid, cur)}` : !why.trim() ? "say why the money goes back" : (bank.missing(method) ?? undefined);
 
   return (
     <StepCard title="Paid above the bill" icon="alert" meta="The balance cannot go below zero, so this is the only place it shows.">
@@ -116,9 +119,14 @@ export function OverpaidCard({ entry, live }: { entry: EntryDetail; live: boolea
               ))}
             </select>
           </div>
-          <div className="field">
-            <label>Reference · optional</label>
-            <input className="input" value={reference} placeholder="the transfer or slip reference" onChange={(e) => setReference(e.target.value)} />
+          {bank.needs(method) ? null : (
+            <div className="field">
+              <label>Reference · optional</label>
+              <input className="input" value={reference} placeholder="the slip reference" onChange={(e) => setReference(e.target.value)} />
+            </div>
+          )}
+          <div className="wide">
+            <BankFields entry={bank} method={method} what="refund" />
           </div>
           <div className="wide field">
             <label>Why</label>

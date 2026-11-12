@@ -1,4 +1,5 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
+import { cleanPaymentBank } from "../../lib/payment-bank.js";
 import { guestDisplayName } from "../../lib/guest-display-name.js";
 import { effectiveCheckOutDate } from "../../lib/stay-dates.js";
 import { FolioState, InvoiceState, InvoiceType, PaymentDirection, Stage } from "@prisma/client";
@@ -186,6 +187,8 @@ export async function initiateSettlement(
     /** Target bucket for split-billing settlement. Omit for whole-folio (legacy). */
     billingModel?: string;
     paymentVerificationRef?: string;
+    bankName?: string;
+    journalNumber?: string;
     partialAmount?: number;
     fomAcknowledgementRef?: string;
     nightAuditFomAcknowledgementRef?: string;
@@ -411,8 +414,11 @@ export async function initiateSettlement(
 
   // The verification ref documents money actually taken now — a zero-pay partial (whole
   // balance sanctioned onto credit) has no transaction to reference.
-  if ((method === "CASH" || method === "MOBILE_PAYMENT") && settleAmount > 0 && !input.paymentVerificationRef?.trim()) {
-    throw new ValidationError("paymentVerificationRef is required for CASH and MOBILE_PAYMENT");
+  // Cash keeps its receipt reference; money through a bank gives its bank and journal number
+  // instead (2026-11-12) — a QR payment's journal number is its proof.
+  const bank = settleAmount > 0 ? await cleanPaymentBank(prisma, { method, bankName: input.bankName, journalNumber: input.journalNumber }) : { bankName: null, journalNumber: null };
+  if (method === "CASH" && settleAmount > 0 && !input.paymentVerificationRef?.trim()) {
+    throw new ValidationError("Type the reference of the cash payment");
   }
 
   // Partial settlement authority (2026-08-24, operator ruling — mirrors the S3 advance rule):
@@ -490,10 +496,12 @@ export async function initiateSettlement(
             amount: settleAmount,
             paymentDirection: PaymentDirection.IN,
             paymentMethod: method,
+            bankName: bank.bankName,
+            journalNumber: bank.journalNumber,
             receivedAt: new Date(),
             recordedBy: actorId,
             stage: Stage.S8,
-            notes: `${method}${input.paymentVerificationRef ? `:${input.paymentVerificationRef}` : ""}`,
+            notes: `${method}${(input.paymentVerificationRef || bank.journalNumber) ? `:${input.paymentVerificationRef || bank.journalNumber}` : ""}`,
             billingModel: bucketTag,
           },
         });

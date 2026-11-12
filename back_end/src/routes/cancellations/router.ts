@@ -74,6 +74,8 @@ cancellationsRouter.post(
         actorLevel: req.actor!.level,
         refundMethod: req.body.refundMethod,
         refundReference: req.body.refundReference,
+        refundBank: req.body.refundBank,
+        refundJournal: req.body.refundJournal,
       });
       res.json(updated);
     } catch (e) {
@@ -94,6 +96,8 @@ cancellationsRouter.post(
         actorLevel: req.actor!.level,
         refundMethod: req.body.refundMethod,
         refundReference: req.body.refundReference,
+        refundBank: req.body.refundBank,
+        refundJournal: req.body.refundJournal,
       });
       res.json(updated);
     } catch (e) {

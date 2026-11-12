@@ -136,6 +136,14 @@ export const CONFIG_KEY_REGISTRY: Record<string, ConfigKeyMeta> = {
   "advancePayment.reconciliation.alsoAllowed": own("FinancialConfigurationService", (value) =>
     Array.isArray(value) && value.every((v) => v === "L1" || v === "L2") ? null : "must be a list of L1 and L2",
   ),
+  // The banks a card, QR, transfer or remittance can go through (2026-11-12; lib/payment-bank.ts).
+  "payment.banks": own("FinancialConfigurationService", (value) =>
+    Array.isArray(value) && value.length > 0 && value.every((v) => typeof v === "string" && v.trim().length > 0 && v.trim().length <= 80)
+      ? new Set(value.map((v: string) => v.trim().toLowerCase())).size === value.length
+        ? null
+        : "a bank is on the list twice"
+      : "must be a list of bank names, at least one",
+  ),
   "proformaInvoice.templates": own("FinancialConfigurationService", isObject),
   "damage.rateList": own("FinancialConfigurationService"),
   "payment.followUpIntervalDays": own("FinancialConfigurationService", positiveInt),

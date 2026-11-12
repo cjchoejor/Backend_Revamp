@@ -13,6 +13,7 @@ import { resolveHouseHoldWindow } from "../../services/domain/s3-hold-service.js
 import { requireActorLevel } from "../../middleware/auth.js";
 import { ANY_CODE_DIGITS, DIAL_CODES } from "../../lib/phone-numbers.js";
 import { PERSON_TITLES } from "../../lib/person-name.js";
+import { BANK_METHODS, readPaymentBanks } from "../../lib/payment-bank.js";
 import { validateBody } from "../../middleware/validate-body.js";
 import * as travelAgentSvc from "../../services/admin/travel-agent-admin-service.js";
 import * as corporateSvc from "../../services/admin/corporate-account-admin-service.js";
@@ -49,6 +50,18 @@ const L1 = requireActorLevel("L1");
  */
 lookupsRouter.get("/lookups/phone-rules", L1, (_req, res) => {
   res.json({ codes: DIAL_CODES, anyCode: ANY_CODE_DIGITS, titles: PERSON_TITLES });
+});
+
+/**
+ * The banks the desk picks from, and the methods that ask for one (2026-11-12). The admin edits the
+ * list (Payments and bills); the desk never keeps its own.
+ */
+lookupsRouter.get("/lookups/payment-banks", L1, async (_req, res, next) => {
+  try {
+    res.set("Cache-Control", "no-store").json({ banks: await readPaymentBanks(prisma), methods: [...BANK_METHODS] });
+  } catch (e) {
+    next(e);
+  }
 });
 
 lookupsRouter.get("/lookups/hotel-day", L1, (_req, res) => {

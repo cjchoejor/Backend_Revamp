@@ -1,5 +1,6 @@
 "use client";
 
+import { BankFields, useBankEntry } from "@/components/ds/bank-fields";
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -270,6 +271,7 @@ export function TripPaymentDialog({ entryId, onClose, onDone }: { entryId: strin
     if (Number(st.dueNow) > 0 && Number(st.received) === 0) setAmount(st.dueNow);
   }, [st, prefilled]);
   const [mode, setMode] = useState<AdvancePaymentMode | null>(null);
+  const bank = useBankEntry();
   const [how, setHow] = useState<"FIRST" | "TYPED">("FIRST");
   const [typed, setTyped] = useState<Record<string, string>>({});
   const [notes, setNotes] = useState("");
@@ -292,7 +294,7 @@ export function TripPaymentDialog({ entryId, onClose, onDone }: { entryId: strin
   const p = preview.data;
   const fresh = settled === ask && !preview.isFetching;
   const pay = useMutation({
-    mutationFn: () => recordTripPaymentForEntry(session!, entryId, { amount: Number(amount), paymentMethod: mode ?? undefined, notes: notes.trim() || undefined, shares }),
+    mutationFn: () => recordTripPaymentForEntry(session!, entryId, { amount: Number(amount), paymentMethod: mode ?? undefined, ...bank.body(mode), notes: notes.trim() || undefined, shares }),
     onSuccess: (r) => {
       toast.success(`${money(r.amount)} recorded for the trip`, {
         description: r.shares.map((s) => `${money(s.amount)} to stay ${s.stayNo}`).join(" · "),
@@ -308,6 +310,8 @@ export function TripPaymentDialog({ entryId, onClose, onDone }: { entryId: strin
       ? "put in the amount received"
       : !mode
         ? "choose how it was paid"
+        : bank.missing(mode)
+          ? bank.missing(mode)
         : !fresh
           ? "working out how it is shared"
           : p?.problem
@@ -343,6 +347,7 @@ export function TripPaymentDialog({ entryId, onClose, onDone }: { entryId: strin
         <label>How it was paid</label>
         <Choice options={ADVANCE_PAYMENT_MODES} value={mode} onChange={setMode} />
       </div>
+      <BankFields entry={bank} method={mode} />
       <div className="field">
         <label>
           How it is shared between the stays

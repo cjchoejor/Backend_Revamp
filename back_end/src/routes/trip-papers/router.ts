@@ -223,6 +223,8 @@ tripPapersRouter.post(
     z.object({
       amount,
       paymentMethod: z.string().trim().min(1).max(40).optional(),
+      bankName: z.string().trim().max(80).optional(),
+      journalNumber: z.string().trim().max(60).optional(),
       notes: z.string().trim().max(500).optional(),
       shares: shares.nullable().optional(),
     }),
@@ -257,6 +259,8 @@ tripPapersRouter.post(
     z.object({
       amount,
       paymentMethod: z.string().trim().min(1).max(40).optional(),
+      bankName: z.string().trim().max(80).optional(),
+      journalNumber: z.string().trim().max(60).optional(),
       notes: z.string().trim().max(500).optional(),
       shares: shares.nullable().optional(),
     }),

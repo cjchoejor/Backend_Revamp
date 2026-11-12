@@ -1,5 +1,6 @@
 "use client";
 
+import { BankFields, useBankEntry } from "@/components/ds/bank-fields";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlarmClock, CalendarPlus, Check, Eye, EyeOff, Receipt } from "lucide-react";
@@ -283,6 +284,7 @@ function InterimRequestPanel({
   };
   const [amount, setAmount] = useState("");
   const [method, setMethod] = useState("CASH");
+  const bank = useBankEntry();
   const [amountTouched, setAmountTouched] = useState(false);
   const dueNow = request.dueNow ?? 0;
   const remaining = Math.max(0, Number((dueNow - request.receivedAgainstAsk).toFixed(2)));
@@ -378,7 +380,7 @@ function InterimRequestPanel({
     onError: (e) => toast.error(e instanceof ApiError ? e.message : "Could not send the interim invoice"),
   });
   const payM = useMutation({
-    mutationFn: () => recordInterimPayment(session!, request.id, { amount: Number(amount), paymentMethod: method }),
+    mutationFn: () => recordInterimPayment(session!, request.id, { amount: Number(amount), paymentMethod: method, ...bank.body(method) }),
     onSuccess: (out) => {
       toast.success(
         out.paidInFull
@@ -691,7 +693,14 @@ function InterimRequestPanel({
                   <option value="BANK_TRANSFER">Bank transfer</option>
                 </select>
               </div>
-              <button type="button" className="btn btn-primary btn-sm" disabled={payM.isPending || !(Number(amount) > 0)} onClick={() => payM.mutate()}>
+              <BankFields entry={bank} method={method} />
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                disabled={payM.isPending || !(Number(amount) > 0) || !!bank.missing(method)}
+                title={bank.missing(method) ?? undefined}
+                onClick={() => payM.mutate()}
+              >
                 {payM.isPending ? "Recording…" : "Log payment received"}
               </button>
             </div>

@@ -42,6 +42,8 @@ export async function listRefundsMade(prisma: PrismaClient, opts: { entryId?: st
       amount: true,
       currency: true,
       paymentMethod: true,
+      bankName: true,
+      journalNumber: true,
       stage: true,
       notes: true,
       recordedBy: true,
@@ -106,6 +108,15 @@ export async function listRefundsMade(prisma: PrismaClient, opts: { entryId?: st
   const person = (id: string | null) => (!id ? null : id === "SYSTEM" ? "The system" : (nameOf.get(id) ?? null));
 
   const describe = (r: (typeof refunds)[number], e: (typeof entries)[number] | undefined) => {
+    const d = describeKind(r, e);
+    // The row's own bank and journal number (2026-11-12) win over what the kind could piece together.
+    return {
+      ...d,
+      bank: d.bank ?? r.bankName ?? null,
+      reference: r.journalNumber ? `Journal ${r.journalNumber}` : d.reference,
+    };
+  };
+  const describeKind = (r: (typeof refunds)[number], e: (typeof entries)[number] | undefined) => {
     const notes = r.notes ?? "";
     const req = requestOf.get(r.id);
     if (req) {

@@ -14,6 +14,9 @@ export const cancelS5EntryRequestSchema = z.object({
   /** How the money owed back leaves the hotel; omitted = the way it came (2026-09-19). */
   refundMethod: z.string().trim().min(1).max(40).optional(),
   refundReference: z.string().trim().max(200).optional(),
+  /** The bank and journal number of a refund through a bank (2026-11-12). */
+  refundBank: z.string().trim().max(80).optional(),
+  refundJournal: z.string().trim().max(60).optional(),
 });
 export type CancelS5EntryRequestDto = z.infer<typeof cancelS5EntryRequestSchema>;
 
@@ -40,5 +43,8 @@ export const cancelS3EntryRequestSchema = z.object({
   /** How the money owed back leaves the hotel; omitted = the way it came (2026-09-19). */
   refundMethod: z.string().trim().min(1).max(40).optional(),
   refundReference: z.string().trim().max(200).optional(),
+  /** The bank and journal number of a refund through a bank (2026-11-12). */
+  refundBank: z.string().trim().max(80).optional(),
+  refundJournal: z.string().trim().max(60).optional(),
 });
 export type CancelS3EntryRequestDto = z.infer<typeof cancelS3EntryRequestSchema>;

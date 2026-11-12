@@ -11,6 +11,7 @@
  * the backend's bucket-scoped settlement — and the rooms are released when the last share at the
  * desk is settled. Every figure is the backend's (`GET /folios/:id/settlement-buckets`).
  */
+import { BankFields, useBankEntry } from "@/components/ds/bank-fields";
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -39,11 +40,11 @@ export const SETTLE_METHODS = [
 export type SettleMethod = (typeof SETTLE_METHODS)[number][0];
 
 /**
- * Cash and QR take a payment reference whenever money is taken — the backend refuses them without
- * one (s8-settlement-service, "paymentVerificationRef is required for CASH and MOBILE_PAYMENT").
- * Keep the two in step.
+ * Cash takes a payment reference whenever money is taken — the backend refuses it without one
+ * (s8-settlement-service). A card, QR or transfer gives its bank and journal number instead
+ * (2026-11-12, `BankFields`). Keep the two in step.
  */
-export const referenceNeeded = (method: SettleMethod) => method === "CASH" || method === "MOBILE_PAYMENT";
+export const referenceNeeded = (method: SettleMethod) => method === "CASH";
 
 /**
  * The payment reference (or the agency's voucher number) — said to be needed on its label, and red
@@ -78,10 +79,10 @@ export function ReferenceField({
     <div className="field">
       <label>
         {voucher ? "Voucher number" : "Payment reference"}
-        {needed ? <ReqMark title={`needed for ${method === "CASH" ? "cash" : "a QR payment"}`} /> : <span className="meta"> · optional</span>}
+        {needed ? <ReqMark title="needed for cash" /> : <span className="meta"> · optional</span>}
       </label>
       <input className={`input${missing ? " missing" : ""}`} value={value} placeholder={placeholder} aria-invalid={missing || undefined} onChange={(e) => onChange(e.target.value)} />
-      {missing ? <span className="hint stop-ink">Needed for {method === "CASH" ? "cash" : "a QR payment"} — fill it in to settle</span> : null}
+      {missing ? <span className="hint stop-ink">Needed for cash — fill it in to settle</span> : null}
     </div>
   );
 }
@@ -227,7 +228,9 @@ function ShareRow({
   const voucherTyped = voucherCovers.trim() === "" ? Number.NaN : Number.parseFloat(voucherCovers);
   const voucherValid = Number.isFinite(voucherTyped) && voucherTyped >= 0;
   const takesMoney = guestPays && (!Number.isFinite(typed) || typed > 0);
-  const needsRef = (method === "CASH" || method === "MOBILE_PAYMENT") && takesMoney && !ref.trim();
+  const needsRef = method === "CASH" && takesMoney && !ref.trim();
+  const bank = useBankEntry();
+  const bankWait = takesMoney ? bank.missing(method) : null;
   const damage = useUnansweredDamage(entry);
 
   const reason = !live
@@ -239,8 +242,10 @@ function ShareRow({
       : method === "VOUCHER" && !voucherValid
         ? "put in what the voucher covers"
         : needsRef
-          ? "cash and QR need a payment reference"
-          : undefined;
+          ? "cash needs its payment reference"
+          : bankWait
+            ? bankWait
+            : undefined;
 
   const settle = useMutation({
     mutationFn: () => {
@@ -250,7 +255,8 @@ function ShareRow({
         billingModelConfirmation: share.billingModel,
         billingModel: share.billingModel,
       };
-      if (ref.trim() && method !== "DIRECT_BILL") body.paymentVerificationRef = ref.trim();
+      if (ref.trim() && method !== "DIRECT_BILL" && !bank.needs(method)) body.paymentVerificationRef = ref.trim();
+      if (takesMoney) Object.assign(body, bank.body(method));
       if (method === "VOUCHER") {
         if (voucherValid) body.voucherAmount = voucherTyped;
       } else if (guestPays && paidNow.trim() !== "" && Number.isFinite(typed) && typed >= 0) {
@@ -310,7 +316,7 @@ function ShareRow({
                 ))}
               </select>
             </div>
-            {method === "DIRECT_BILL" ? null : <ReferenceField method={method} value={ref} onChange={setRef} takesMoney={takesMoney} />}
+            {method === "DIRECT_BILL" ? null : bank.needs(method) ? null : <ReferenceField method={method} value={ref} onChange={setRef} takesMoney={takesMoney} />}
             {method === "VOUCHER" ? (
               <div className="field">
                 <label>
@@ -349,6 +355,7 @@ function ShareRow({
               <SendToField entry={entry} value={invoiceTo} onChange={setInvoiceTo} label="Send the invoice to" />
             ) : null}
           </div>
+          {takesMoney ? <BankFields entry={bank} method={method} /> : null}
           {partialLocked ? (
             <div style={{ marginTop: 10 }}>
               <Refusal

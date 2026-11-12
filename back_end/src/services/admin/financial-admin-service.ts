@@ -10,6 +10,7 @@ export const FINANCIAL_CONFIG_KEYS = [
   "advancePayment.followUpWindowSeconds",
   "advancePayment.escalationWindowSeconds",
   "advancePayment.reconciliation.alsoAllowed",
+  "payment.banks",
   "payment.followUp.intervals",
   "payment.followUp.ttlDays",
   "invoice.templates",

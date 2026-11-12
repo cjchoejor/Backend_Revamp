@@ -69,12 +69,14 @@ export type CancellationPreview = {
   waived: boolean;
   /** Money moved between a trip's stays' bills first, when money paid for the trip is involved. */
   tripMoves?: TripMoneyMove[];
+  /** How a refund goes back when left to the way the money came in (2026-11-12). */
+  refundWayItCame?: string;
 };
 
 export type TripMoneyMove = { fromEntryId: string; toEntryId: string; fromStayNo: number; toStayNo: number; amount: number };
 
 export type TripCancellationPreview = {
-  stays: Array<{ entryId: string; advanceReceived: number; charge: number; chargeBeforeCap: number; chargeCapped: number; refund: number; rule?: string }>;
+  stays: Array<{ entryId: string; advanceReceived: number; charge: number; chargeBeforeCap: number; chargeCapped: number; refund: number; rule?: string; refundWayItCame?: string }>;
   moves: TripMoneyMove[];
   totalCharge: number;
   totalRefund: number;
@@ -112,7 +114,7 @@ export async function declineEntry(session: Session, entryId: string, reason: st
 export async function cancelEntryAtS3(
   session: Session,
   entryId: string,
-  body: { reason?: string; penaltyWaiverRequested?: boolean; refundMethod?: string; refundReference?: string },
+  body: { reason?: string; penaltyWaiverRequested?: boolean; refundMethod?: string; refundReference?: string; refundBank?: string; refundJournal?: string },
 ) {
   return apiRequest<unknown>(`/api/entries/${entryId}/cancel-at-s3`, {
     method: "POST",
@@ -126,7 +128,7 @@ export async function cancelEntryAtS3(
 export async function cancelEntryAtS5(
   session: Session,
   entryId: string,
-  body?: { penaltyWaiverRequested?: boolean; reason?: string; refundMethod?: string; refundReference?: string },
+  body?: { penaltyWaiverRequested?: boolean; reason?: string; refundMethod?: string; refundReference?: string; refundBank?: string; refundJournal?: string },
 ) {
   return apiRequest<unknown>(`/api/entries/${entryId}/cancel`, { method: "POST", session, body: body ?? {} });
 }
@@ -166,7 +168,7 @@ export type AdvancePaymentMode = (typeof ADVANCE_PAYMENT_MODES)[number][0];
 export async function recordFolioPayment(
   session: Session,
   folioId: string,
-  body: { entryId: string; amount: number; notes?: string; paymentMethod?: string },
+  body: { entryId: string; amount: number; notes?: string; paymentMethod?: string; bankName?: string; journalNumber?: string },
 ) {
   return apiRequest<{ id: string }>(`/api/folios/${folioId}/payments`, {
     method: "POST",

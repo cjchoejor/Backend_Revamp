@@ -178,6 +178,8 @@ export async function recordInvoicePaymentEvent(
     paymentMethod?: string;
     receivedAt?: string;
     referenceNumber?: string;
+    bankName?: string;
+    journalNumber?: string;
   },
 ) {
   return apiRequest<InvoiceSummary>(`/api/invoices/${invoiceId}/record-payment-event`, {
