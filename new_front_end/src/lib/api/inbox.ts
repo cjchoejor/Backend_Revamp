@@ -34,6 +34,19 @@ export function listInboxEmails(session: Session, opts: { q?: string; days?: num
   return apiRequest<{ mailbox: string | null; emails: InboxEmail[] }>(`/api/inbox/emails?${p.toString()}`, { session });
 }
 
+/** One email in full: who it went to, its words, its attachments' names (2026-11-12). */
+export type InboxEmailRead = InboxEmail & {
+  to: string[];
+  cc: string[];
+  text: string;
+  cut: boolean;
+  attachments: Array<{ name: string; type: string; size: number | null }>;
+};
+
+export function readInboxEmail(session: Session, messageId: string) {
+  return apiRequest<{ email: InboxEmailRead }>(`/api/inbox/email?id=${encodeURIComponent(messageId)}`, { session });
+}
+
 export function linkInquiryEmail(session: Session, inquiryId: string, messageId: string) {
   return apiRequest<{ emailThread: EmailThread }>(`/api/inquiries/${encodeURIComponent(inquiryId)}/email-thread`, {
     method: "POST",

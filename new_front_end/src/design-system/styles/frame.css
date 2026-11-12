@@ -2628,3 +2628,10 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .details-email { margin-top: var(--s3); }
 .ds .notice.stop:not(.desk-root *) { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s2); border: 1px solid var(--danger-line); border-left: 5px solid var(--danger); background: var(--danger-soft); color: var(--danger); padding: var(--s2) var(--s3); border-radius: var(--r-control); font-weight: 600; }
 .ds .email-pick-from { display: flex; align-items: center; justify-content: space-between; gap: var(--s2); }
+.ds .email-read { display: grid; gap: var(--s3); }
+.ds .email-read-head { display: grid; grid-template-columns: max-content 1fr; gap: 4px var(--s3); margin: 0; font-size: var(--t-sm); }
+.ds .email-read-head dt { color: var(--ink-2); }
+.ds .email-read-head dd { margin: 0; overflow-wrap: break-word; min-width: 0; }
+.ds .email-read-file { display: inline-flex; align-items: center; gap: 4px; margin-right: var(--s3); }
+.ds .email-read-text { white-space: pre-wrap; overflow-wrap: break-word; border: 1px solid var(--line-2); border-radius: var(--r-control); background: var(--surface); padding: var(--s3) var(--s4); max-height: min(56vh, 520px); overflow: auto; line-height: 1.5; }
+.ds .email-read-text:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }

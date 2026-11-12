@@ -25,6 +25,7 @@ import {
   emailThreadOf,
   linkInquiryEmail,
   listInboxEmails,
+  readInboxEmail,
   type EmailThread,
   type InboxEmail,
 } from "@/lib/api/inbox";
@@ -42,6 +43,7 @@ export function GuestEmailField({
   disabled,
   busy,
   suggest,
+  inquiryId = null,
 }: {
   thread: EmailThread | null;
   onPick: (email: InboxEmail) => void | Promise<unknown>;
@@ -50,8 +52,11 @@ export function GuestEmailField({
   busy?: boolean;
   /** What to search for when the list opens: the caller's email or name, typed so far. */
   suggest?: string;
+  /** The enquiry the field belongs to, left out of "already the conversation of". */
+  inquiryId?: string | null;
 }) {
   const [open, setOpen] = useState(false);
+  const [reading, setReading] = useState(false);
   return (
     <div className="field guest-email" data-guest-email>
       <label>
@@ -73,8 +78,12 @@ export function GuestEmailField({
               {thread.receivedAt ? <> · {fmtDateTime(thread.receivedAt)}</> : null}
             </span>
           </span>
-          {!disabled ? (
-            <span className="email-line-acts">
+          <span className="email-line-acts">
+            <Button kind="quiet" compact onClick={() => setReading(true)} data-read-email>
+              Read
+            </Button>
+            {!disabled ? (
+              <>
               <Button kind="quiet" compact state={busy ? "working" : "default"} onClick={() => setOpen(true)}>
                 Change
               </Button>
@@ -89,8 +98,9 @@ export function GuestEmailField({
               >
                 <Icon name="x" />
               </Button>
-            </span>
-          ) : null}
+              </>
+            ) : null}
+          </span>
         </div>
       ) : (
         <div className="email-line none">
@@ -103,10 +113,14 @@ export function GuestEmailField({
           )}
         </div>
       )}
+      {reading && thread ? (
+        <EmailReadDialog messageId={thread.messageId} currentId={thread.messageId} inquiryId={inquiryId} onClose={() => setReading(false)} />
+      ) : null}
       {open ? (
         <EmailPickDialog
           suggest={suggest}
           currentId={thread?.messageId ?? null}
+          inquiryId={inquiryId}
           onClose={() => setOpen(false)}
           onPick={async (email) => {
             await onPick(email);
@@ -121,11 +135,13 @@ export function GuestEmailField({
 function EmailPickDialog({
   suggest,
   currentId,
+  inquiryId,
   onClose,
   onPick,
 }: {
   suggest?: string;
   currentId: string | null;
+  inquiryId: string | null;
   onClose: () => void;
   onPick: (email: InboxEmail) => Promise<void>;
 }) {
@@ -136,6 +152,7 @@ function EmailPickDialog({
   const [all, setAll] = useState(false);
   const [picked, setPicked] = useState<InboxEmail | null>(null);
   const [saving, setSaving] = useState(false);
+  const [reading, setReading] = useState<InboxEmail | null>(null);
   // The first look reads the mailbox afresh; typing in the search reads the list kept a moment.
   const freshNext = useRef(true);
   useEffect(() => {
@@ -220,7 +237,9 @@ function EmailPickDialog({
           </label>
         </div>
         <div className="email-pick-from sm muted">
-          {list.data?.mailbox ? <>Reading {list.data.mailbox}</> : null}
+          <span>
+            {list.data?.mailbox ? <>Reading {list.data.mailbox} · </> : null}double-click an email to read it in full
+          </span>
           <Button
             kind="quiet"
             compact
@@ -258,7 +277,7 @@ function EmailPickDialog({
             {emails.map((e) => {
               const on = picked?.messageId === e.messageId;
               const current = e.messageId === currentId;
-              const others = e.linkedTo.filter(() => !current);
+              const others = e.linkedTo.filter((o) => o.inquiryId !== inquiryId);
               return (
                 <li key={e.messageId}>
                   <button
@@ -269,7 +288,7 @@ function EmailPickDialog({
                     onClick={() => setPicked(e)}
                     onDoubleClick={() => {
                       setPicked(e);
-                      if (e.messageId !== currentId) onPick(e).catch(() => undefined);
+                      setReading(e);
                     }}
                     data-email-row
                   >
@@ -293,6 +312,153 @@ function EmailPickDialog({
           </ul>
         )}
       </div>
+      {reading ? (
+        <EmailReadDialog
+          messageId={reading.messageId}
+          currentId={currentId}
+          inquiryId={inquiryId}
+          onClose={() => setReading(null)}
+          onPick={async (email) => {
+            await onPick(email);
+          }}
+        />
+      ) : null}
+    </DsDialog>
+  );
+}
+
+/**
+ * One email in full (2026-11-12, operator: "when double clicked can we show the whole detail of the
+ * mail content"): who wrote, who it went to, when, its words as written and its attachments' names.
+ * Over the list it was opened from, with Reply in this email; on its own, to read again.
+ */
+function EmailReadDialog({
+  messageId,
+  currentId = null,
+  inquiryId = null,
+  onClose,
+  onPick,
+}: {
+  messageId: string;
+  currentId?: string | null;
+  inquiryId?: string | null;
+  onClose: () => void;
+  /** Given when it was opened from the list: Reply in this email picks it. */
+  onPick?: (email: InboxEmail) => Promise<void>;
+}) {
+  const { session } = useSession();
+  const [saving, setSaving] = useState(false);
+  // This pop-up may sit on the list that opened it, so Escape closes only this one.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      if (!saving) onClose();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [onClose, saving]);
+  const read = useQuery({
+    queryKey: ["inbox-email", messageId],
+    queryFn: () => readInboxEmail(session!, messageId),
+    enabled: !!session,
+    staleTime: 60_000,
+    retry: false,
+  });
+  const m = read.data?.email ?? null;
+  const err = read.error instanceof ApiError ? read.error.message : read.error ? "The email could not be read" : null;
+  const isCurrent = messageId === currentId;
+  return (
+    <DsDialog
+      open
+      closeX
+      width={760}
+      register="report"
+      onClose={onClose}
+      busy={saving}
+      title={m?.subject ?? "The email"}
+      footer={
+        <>
+          <Button kind="quiet" onClick={onClose}>
+            {onPick ? "Back to the list" : "Close"}
+          </Button>
+          {onPick ? (
+            <Button
+              className={m && !isCurrent ? "go" : undefined}
+              state={saving ? "working" : m && !isCurrent ? "default" : "inert"}
+              reason={isCurrent ? "this is the email already picked" : "the email is still being read"}
+              onClick={async () => {
+                if (!m) return;
+                setSaving(true);
+                try {
+                  await onPick(m);
+                } catch {
+                  /* the refusal is already said in a toast */
+                } finally {
+                  setSaving(false);
+                }
+              }}
+            >
+              Reply in this email
+            </Button>
+          ) : null}
+        </>
+      }
+    >
+      {err ? (
+        <div className="notice stop" role="alert">
+          <Icon name="alert" /> {err}
+        </div>
+      ) : !m ? (
+        <div className="muted">Reading the email…</div>
+      ) : (
+        <div className="email-read" data-email-read>
+          <dl className="email-read-head">
+            <dt>From</dt>
+            <dd>{who(m.fromName, m.fromAddress)}</dd>
+            {m.to.length ? (
+              <>
+                <dt>To</dt>
+                <dd>{m.to.join(", ")}</dd>
+              </>
+            ) : null}
+            {m.cc.length ? (
+              <>
+                <dt>Cc</dt>
+                <dd>{m.cc.join(", ")}</dd>
+              </>
+            ) : null}
+            <dt>When</dt>
+            <dd>{m.receivedAt ? fmtDateTime(m.receivedAt) : "—"}</dd>
+            {m.attachments.length ? (
+              <>
+                <dt>Attached</dt>
+                <dd>
+                  {m.attachments.map((a, i) => (
+                    <span key={`${a.name}-${i}`} className="email-read-file">
+                      <Icon name="file" /> {a.name}
+                    </span>
+                  ))}
+                </dd>
+              </>
+            ) : null}
+          </dl>
+          {isCurrent ? <div className="sm ok-ink">The papers reply in this email</div> : null}
+          {m.linkedTo.some((o) => o.inquiryId !== inquiryId) ? (
+            <div className="sm warn-ink">
+              Already the conversation of{" "}
+              {m.linkedTo
+                .filter((o) => o.inquiryId !== inquiryId)
+                .map((o) => o.referenceNumber)
+                .join(", ")}
+            </div>
+          ) : null}
+          <div className="email-read-text" tabIndex={0}>
+            {m.text || <span className="muted">No words in this email — only what is attached.</span>}
+          </div>
+          {m.cut ? <div className="sm muted">The email is longer than the desk shows — the rest is in the mailbox.</div> : null}
+        </div>
+      )}
     </DsDialog>
   );
 }
@@ -325,6 +491,7 @@ export function BookingEmailField({ entry, editable, suggest }: { entry: EntryDe
       disabled={!editable || !inquiryId}
       busy={link.isPending || clear.isPending}
       suggest={suggest}
+      inquiryId={inquiryId || null}
       onPick={(email) => link.mutateAsync(email)}
       onClear={() => clear.mutateAsync()}
     />
