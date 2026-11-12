@@ -2589,3 +2589,14 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 }
 .ds .list-band.done-band td { background: var(--success-soft); color: var(--success); border-bottom-color: var(--line); }
 .ds .today-page [data-today-tab] { min-height: calc(100vh - 40px); align-content: start; }
+
+/* Refunds made (2026-11-12): a booking's row opens its refunds in place, one line each. */
+.ds .refund-table tbody tr.refund-row { cursor: pointer; }
+.ds .refund-table tbody tr.refund-row.open td { background: var(--accent-soft); }
+.ds .refund-table td.num, .ds .refund-table th.num, .ds .refund-lines td.num, .ds .refund-lines th.num { text-align: right; }
+.ds .refund-table td.refund-chev { width: 1%; white-space: nowrap; text-align: right; }
+.ds .refund-table tr.refund-detail > td { padding: 0 12px 12px 28px; background: var(--accent-soft); border-left: 3px solid var(--accent); }
+.ds .refund-lines { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; }
+.ds .refund-lines thead th { position: static; box-shadow: none; }
+.ds .refund-moved { margin: 6px 0 0; }
+.ds .tab .tab-n + .tab-n { margin-left: 4px; }

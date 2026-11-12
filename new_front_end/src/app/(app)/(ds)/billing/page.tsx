@@ -17,7 +17,7 @@ import { useDeskBookings, useDeskMoney } from "@/hooks/use-desk-data";
 import { useHotelDay } from "@/hooks/use-hotel-day";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
 import { useSession } from "@/hooks/use-session";
-import { useRefunds } from "@/hooks/use-refunds";
+import { useRefunds, useRefundsMade } from "@/hooks/use-refunds";
 import { RefundsTab } from "@/components/ds/refunds-tab";
 import type { DeskListRow, DeskMoneyRow } from "@/lib/api/desk";
 import { money, plural } from "@/lib/ds/format";
@@ -198,6 +198,7 @@ function BillingScreen() {
   const fom = !!session && session.actorLevel !== "L1";
   const clock = useHotelClock(60_000);
   const refundsWaiting = useRefunds("waiting").data?.items.length ?? 0;
+  const bookingsRefunded = useRefundsMade().data?.totals.bookings ?? 0;
   const tabParam = params.get("tab");
   const tab: TabId =
     tabParam === "owed" || tabParam === "closed" || tabParam === "accounts" ? tabParam : tabParam === "refunds" && fom ? "refunds" : "open";
@@ -333,7 +334,7 @@ function BillingScreen() {
             { id: "owed", label: <>Still owed after the stay<span className={`tab-n${owing.length ? " warn" : ""}`}>{owing.length}</span></> },
             { id: "closed", label: <>Closed bills<span className="tab-n">{closedAll.length}</span></> },
             { id: "accounts", label: "Outstanding by account" },
-            ...(fom ? [{ id: "refunds", label: <>Refunds<span className={`tab-n${refundsWaiting ? " warn" : ""}`}>{refundsWaiting}</span></> }] : []),
+            ...(fom ? [{ id: "refunds", label: <>Refunds<span className="tab-n">{bookingsRefunded}</span>{refundsWaiting ? <span className="tab-n warn" data-refunds-to-make>{refundsWaiting} to make</span> : null}</> }] : []),
           ]}
           selected={tab}
           onSelect={(id) => go({ tab: id, sort: "", refund: "" })}

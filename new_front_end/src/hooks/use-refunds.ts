@@ -2,7 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { useSession } from "@/hooks/use-session";
-import { listRefunds } from "@/lib/api/refunds";
+import { listRefunds, listRefundsMade } from "@/lib/api/refunds";
 
 const FOM_UP = new Set(["L2", "L3", "L4"]);
 
@@ -16,5 +16,17 @@ export function useRefunds(view: "waiting" | "done") {
     enabled: allowed,
     staleTime: 20_000,
     refetchInterval: view === "waiting" ? 60_000 : false,
+  });
+}
+
+/** Refunds made, booking by booking. Under the "refunds" key, so recording one re-reads it too. */
+export function useRefundsMade() {
+  const { session } = useSession();
+  const allowed = !!session && FOM_UP.has(session.actorLevel);
+  return useQuery({
+    queryKey: ["refunds", "made"],
+    queryFn: () => listRefundsMade(session!),
+    enabled: allowed,
+    staleTime: 20_000,
   });
 }

@@ -39,6 +39,51 @@ export type RefundRow = {
   closedByName: string | null;
 };
 
+/** Refunds made, booking by booking (2026-11-12). Every figure is the server's, summed there. */
+export type RefundMade = {
+  id: string;
+  amount: number;
+  currency: string;
+  at: string;
+  stage: string | null;
+  method: string | null;
+  by: string | null;
+  kind: "CANCELLED" | "NO_SHOW" | "PAID_OVER" | "REQUEST" | "OTHER";
+  why: string;
+  reason: string | null;
+  reference: string | null;
+  bank: string | null;
+  requestId: string | null;
+};
+
+export type BookingRefunds = {
+  entryId: string;
+  inquiryId: string | null;
+  guestName: string | null;
+  party: string | null;
+  status: string | null;
+  stage: string | null;
+  closedAs: string | null;
+  checkInDate: string | null;
+  checkOutDate: string | null;
+  currency: string;
+  total: number;
+  count: number;
+  lastAt: string;
+  /** Moved to another stay of the trip — still the hotel's, not a refund. */
+  movedToTrip: number | null;
+  refunds: RefundMade[];
+};
+
+export type RefundsMade = {
+  bookings: BookingRefunds[];
+  totals: { bookings: number; refunds: number; amount: number; currency: string };
+};
+
+export async function listRefundsMade(session: Session) {
+  return apiRequest<RefundsMade>("/api/refunds/made", { method: "GET", session });
+}
+
 export async function listRefunds(session: Session, view: "waiting" | "done") {
   return apiRequest<{ items: RefundRow[] }>(`/api/refunds?view=${view}`, { method: "GET", session });
 }
