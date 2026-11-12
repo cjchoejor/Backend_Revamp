@@ -13,10 +13,12 @@
  *
  * Testing redirect: when EMAIL_REDIRECT_ALL_TO is set, every send is rerouted to that address
  * with `[→original@email]` prepended to the subject. Lets you fully test without spamming guests.
+ * An email meant for the redirect's own address goes as it is, with no mark.
  */
 
 import nodemailer, { type Transporter } from "nodemailer";
 import type { PrismaClient } from "@prisma/client";
+import { formatPhone, parsePhone } from "../../lib/phone-numbers.js";
 
 let cachedTransporter: Transporter | null = null;
 
@@ -92,13 +94,82 @@ type SendResult =
   | { status: "skipped"; reason: "EMAIL_DISABLE" }
   | { status: "error"; message: string };
 
-const FOOTER_TEXT = "—\nLegphel Hotel · Thimphu, Bhutan\nThis is an automated message from the hotel's property management system. Reply to this email to reach the front desk directly.";
-const FOOTER_HTML = `<hr style="border:none;border-top:1px solid #ddd;margin:24px 0 12px"/>
+/**
+ * The hotel's signature under every email (2026-11-12), from the hotel profile: its name, where it
+ * is, and its front-desk number when one is on file that reads as a number. It said "Thimphu" and
+ * "This is an automated message from the hotel's property management system" — the wrong town,
+ * and words that make a paper read as machine mail rather than the hotel writing to its guest.
+ */
+type Signature = { text: string; html: string };
+let signatureCache: { at: number; sig: Signature } | null = null;
+const SIGNATURE_TTL_MS = 60_000;
+
+function escapeHtml(v: string): string {
+  return v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+/** The first number on the profile that reads as a phone number, with its label. */
+export function signaturePhone(contactNumbers: unknown): { label: string; number: string } | null {
+  const entries: Array<{ label: string | null; value: string }> = [];
+  const add = (label: unknown, value: unknown) => {
+    if (typeof value === "string" && value.trim()) entries.push({ label: typeof label === "string" ? label : null, value });
+  };
+  if (typeof contactNumbers === "string") add(null, contactNumbers);
+  else if (Array.isArray(contactNumbers)) {
+    for (const v of contactNumbers) {
+      if (typeof v === "string") add(null, v);
+      else if (v && typeof v === "object") {
+        const o = v as Record<string, unknown>;
+        add(o.label, o.value ?? o.number ?? o.phone);
+      }
+    }
+  } else if (contactNumbers && typeof contactNumbers === "object") {
+    for (const [k, v] of Object.entries(contactNumbers as Record<string, unknown>)) add(k, v);
+  }
+  for (const e of entries) {
+    const parsed = parsePhone(e.value);
+    // "+0000000000" is a placeholder, not a number: it is left off rather than printed.
+    if (!parsed || parsed.sure === "UNCLEAR" || !/[1-9]/.test(parsed.number)) continue;
+    const label = e.label && !/^(primary|phone|main)$/i.test(e.label) ? e.label : "Front desk";
+    return { label, number: formatPhone(parsed.code, parsed.number) };
+  }
+  return null;
+}
+
+export function buildSignature(profile: {
+  hotelName?: string | null;
+  tradingAddress?: string | null;
+  registeredAddress?: string | null;
+  contactNumbers?: unknown;
+} | null): Signature {
+  const name = profile?.hotelName?.trim() || "Legphel Hotel";
+  const place = profile?.tradingAddress?.trim() || profile?.registeredAddress?.trim() || null;
+  const phone = signaturePhone(profile?.contactNumbers);
+  const lines = [name, place, phone ? `${phone.label}: ${phone.number}` : null].filter((l): l is string => !!l);
+  const text = `—\n${lines.join("\n")}\nReply to this email to reach the front desk.`;
+  const html = `<hr style="border:none;border-top:1px solid #ddd;margin:24px 0 12px"/>
 <p style="color:#666;font-size:12px;line-height:1.5;margin:0">
-  <strong>Legphel Hotel</strong> · Thimphu, Bhutan<br/>
-  This is an automated message from the hotel's property management system. Reply to this email
-  to reach the front desk directly.
+  <strong>${escapeHtml(name)}</strong>${place ? ` · ${escapeHtml(place)}` : ""}<br/>
+  ${phone ? `${escapeHtml(phone.label)}: ${escapeHtml(phone.number)}<br/>` : ""}Reply to this email to reach the front desk.
 </p>`;
+  return { text, html };
+}
+
+async function loadSignature(prisma: PrismaClient): Promise<Signature> {
+  if (signatureCache && Date.now() - signatureCache.at < SIGNATURE_TTL_MS) return signatureCache.sig;
+  let profile: Parameters<typeof buildSignature>[0] = null;
+  try {
+    profile = await prisma.hotelProfile.findFirst({
+      orderBy: { updatedAt: "desc" },
+      select: { hotelName: true, tradingAddress: true, registeredAddress: true, contactNumbers: true },
+    });
+  } catch {
+    profile = null;
+  }
+  const sig = buildSignature(profile);
+  signatureCache = { at: Date.now(), sig };
+  return sig;
+}
 
 /** "Re: <their subject>", as a person replying would write it — never "Re: Re:". */
 export function replySubject(subject: string | null | undefined): string {
@@ -123,24 +194,28 @@ export function bareAddress(value: string | null | undefined): string | null {
 
 /**
  * Headers that tell mail servers what this email is (2026-11-12):
- *  - List-Unsubscribe: an address the recipient can write to, the bare address only. It held
- *    the whole "Name <address>" until 2026-11-12, which no mail server could read.
+ *  - List-Unsubscribe only on the feedback request. Every other email is a paper or a notice
+ *    about the guest's own booking — mail a guest cannot unsubscribe from, and which Google counts
+ *    as transactional. The header marks an email as mass mail; it was on every paper, and the
+ *    proforma went to Spam. When it is sent it carries the bare address only: until 2026-11-12 it
+ *    held the whole "Name <address>", which no mail server could read.
  *  - No List-Unsubscribe-Post: that says one click unsubscribes (RFC 8058), which needs a web
  *    address to post to. There is none, so the header claimed something untrue.
- *  - Auto-Submitted: auto-generated (RFC 3834): machine mail, not to be answered by an
- *    out-of-office reply.
+ *  - Auto-Submitted: auto-generated (RFC 3834): not to be answered by an out-of-office reply.
  *  - X-Auto-Response-Suppress: the same, for Outlook.
  */
 export function deliverabilityHeaders(opts: {
   from: string | null | undefined;
   replyTo: string | null | undefined;
   recipient: string;
+  /** The feedback request: the one email a guest may ask not to get again. */
+  listUnsubscribe?: boolean;
 }): Record<string, string> {
   const headers: Record<string, string> = {
     "Auto-Submitted": "auto-generated",
     "X-Auto-Response-Suppress": "OOF, AutoReply",
   };
-  const address = bareAddress(opts.replyTo) ?? bareAddress(opts.from);
+  const address = opts.listUnsubscribe ? bareAddress(opts.replyTo) ?? bareAddress(opts.from) : null;
   if (address) headers["List-Unsubscribe"] = `<mailto:${address}?subject=unsubscribe>`;
   return headers;
 }
@@ -156,10 +231,14 @@ function applyRedirectPrefix(subject: string, intendedRecipient: string): string
   return `[→${intendedRecipient}] ${subject}`;
 }
 
-function appendFooter(text: string | undefined, html: string | undefined): { text?: string; html?: string } {
+function appendSignature(
+  text: string | undefined,
+  html: string | undefined,
+  sig: Signature,
+): { text?: string; html?: string } {
   return {
-    text: text != null ? `${text}\n\n${FOOTER_TEXT}` : undefined,
-    html: html != null ? `${html}${FOOTER_HTML}` : undefined,
+    text: text != null ? `${text}\n\n${sig.text}` : undefined,
+    html: html != null ? `${html}${sig.html}` : undefined,
   };
 }
 
@@ -228,21 +307,31 @@ export async function sendEmail(prisma: PrismaClient, args: SendArgs): Promise<S
 
   // 2. Build subject (thread prefix + optional redirect prefix).
   const intendedRecipient = args.to;
-  const redirectTo = process.env.EMAIL_REDIRECT_ALL_TO?.trim();
+  // The test redirect sending to the very address it was meant for redirects nothing: the email
+  // goes as it would without it — no "[→address]" in the subject (an address in a subject is a
+  // spam sign, and it changed the guest's own subject), and it counts as reaching the guest.
+  const redirectEnv = process.env.EMAIL_REDIRECT_ALL_TO?.trim();
+  const redirectTo =
+    redirectEnv && redirectEnv.toLowerCase() !== intendedRecipient.trim().toLowerCase() ? redirectEnv : undefined;
   const actualRecipient = redirectTo || intendedRecipient;
   // A reply keeps the guest's subject exactly: a changed subject splits the conversation.
   let subject = guestThread ? guestThread.subject : applySubjectPrefix(args.subject, args.threadReadableId);
   if (redirectTo) subject = applyRedirectPrefix(subject, intendedRecipient);
 
-  // 3. Append footer to body.
-  const body = appendFooter(args.text, args.html);
+  // 3. The hotel's signature under the body.
+  const body = appendSignature(args.text, args.html, await loadSignature(prisma));
 
   // 4. Send.
   const transporter = getTransporter();
   const from = process.env.EMAIL_FROM?.trim() ?? process.env.SMTP_USER?.trim();
   const replyTo = process.env.EMAIL_REPLY_TO?.trim() || undefined;
 
-  const extraHeaders = deliverabilityHeaders({ from, replyTo, recipient: actualRecipient });
+  const extraHeaders = deliverabilityHeaders({
+    from,
+    replyTo,
+    recipient: actualRecipient,
+    listUnsubscribe: args.paperKind === "FEEDBACK",
+  });
 
   let info: { messageId: string };
   // When it was sent, as its Date header says: the conversation lists it at this time.

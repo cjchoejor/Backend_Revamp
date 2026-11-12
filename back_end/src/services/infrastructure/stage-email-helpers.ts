@@ -68,7 +68,10 @@ export async function dispatchStageEmailBestEffort(ctx: StageEmailContext, conte
   // then runs right after the answer. With email switched off there is nothing to wait for.
   const disabled = (process.env.EMAIL_DISABLE ?? "").toLowerCase() === "true";
   if (!emailsGoAfterAnswer() || disabled) return send();
-  const redirect = process.env.EMAIL_REDIRECT_ALL_TO?.trim() || null;
+  // The same rule as the send: a redirect to the guest's own address redirects nothing.
+  const redirectEnv = process.env.EMAIL_REDIRECT_ALL_TO?.trim() || null;
+  const redirect =
+    redirectEnv && redirectEnv.toLowerCase() !== guestEmail.trim().toLowerCase() ? redirectEnv : null;
   await writeStageEmailTrace(traceCtx, `${eventTypePrefix}.QUEUED`, {
     intendedRecipient: guestEmail,
     actualRecipient: redirect ?? guestEmail,
