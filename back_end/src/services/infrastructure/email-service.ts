@@ -112,6 +112,39 @@ function referencesFor(prior: string | null, theirs: string, ours: string | null
   return [...new Set(ids)].slice(-20).join(" ");
 }
 
+/** "Legphel Hotel Reservations <x@y.com>" → "x@y.com"; a bare address as it is. */
+export function bareAddress(value: string | null | undefined): string | null {
+  const v = value?.trim();
+  if (!v) return null;
+  const inBrackets = v.match(/<\s*([^<>\s]+@[^<>\s]+)\s*>/);
+  if (inBrackets) return inBrackets[1];
+  return /^[^\s<>@]+@[^\s<>@]+$/.test(v) ? v : null;
+}
+
+/**
+ * Headers that tell mail servers what this email is (2026-11-12):
+ *  - List-Unsubscribe: an address the recipient can write to, the bare address only. It held
+ *    the whole "Name <address>" until 2026-11-12, which no mail server could read.
+ *  - No List-Unsubscribe-Post: that says one click unsubscribes (RFC 8058), which needs a web
+ *    address to post to. There is none, so the header claimed something untrue.
+ *  - Auto-Submitted: auto-generated (RFC 3834): machine mail, not to be answered by an
+ *    out-of-office reply.
+ *  - X-Auto-Response-Suppress: the same, for Outlook.
+ */
+export function deliverabilityHeaders(opts: {
+  from: string | null | undefined;
+  replyTo: string | null | undefined;
+  recipient: string;
+}): Record<string, string> {
+  const headers: Record<string, string> = {
+    "Auto-Submitted": "auto-generated",
+    "X-Auto-Response-Suppress": "OOF, AutoReply",
+  };
+  const address = bareAddress(opts.replyTo) ?? bareAddress(opts.from);
+  if (address) headers["List-Unsubscribe"] = `<mailto:${address}?subject=unsubscribe>`;
+  return headers;
+}
+
 function applySubjectPrefix(subject: string, threadReadableId: string | undefined): string {
   if (!threadReadableId) return subject;
   // If already prefixed, don't double-prefix (idempotent for retries).
@@ -209,19 +242,7 @@ export async function sendEmail(prisma: PrismaClient, args: SendArgs): Promise<S
   const from = process.env.EMAIL_FROM?.trim() ?? process.env.SMTP_USER?.trim();
   const replyTo = process.env.EMAIL_REPLY_TO?.trim() || undefined;
 
-  // Headers that improve deliverability scoring without changing visible content:
-  //  - List-Unsubscribe + List-Unsubscribe-Post: RFC 8058 one-click unsubscribe. Many spam
-  //    filters significantly de-weight messages that lack this on transactional/bulk mail.
-  //  - Auto-Submitted: auto-generated marks the message as machine-originated transactional
-  //    mail (RFC 3834), which is what it is — guests should NOT auto-reply to confirmations.
-  //  - X-Auto-Response-Suppress: avoids out-of-office bounces back to the sender.
-  const unsubscribeMailto = replyTo || from || actualRecipient;
-  const extraHeaders: Record<string, string> = {
-    "List-Unsubscribe": `<mailto:${unsubscribeMailto}?subject=unsubscribe>`,
-    "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
-    "Auto-Submitted": "auto-generated",
-    "X-Auto-Response-Suppress": "OOF, AutoReply",
-  };
+  const extraHeaders = deliverabilityHeaders({ from, replyTo, recipient: actualRecipient });
 
   let info: { messageId: string };
   // When it was sent, as its Date header says: the conversation lists it at this time.
