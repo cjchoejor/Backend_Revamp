@@ -24,6 +24,7 @@ import { useRoomsList } from "@/hooks/use-desk-data";
 import { useBookingRooms } from "@/hooks/use-booking-rooms";
 import { roomsHeldWord } from "@/components/ds/steps/s2-shared";
 import { Fact, FactBox, Facts, StepCard } from "@/components/ds/steps/kit";
+import { BookingEmailField } from "@/components/ds/guest-email";
 import { TripCard } from "@/components/ds/workspace/return-stay";
 import { GuestBookingsCard } from "@/components/ds/workspace/guest-bookings";
 import type { EntryDetail } from "@/types/api";
@@ -137,6 +138,9 @@ export function DetailsView({
             <Fact k="Custodian">{custodian}</Fact>
             {g?.vipTier ? <Fact k="VIP">{g.vipTier}</Fact> : null}
           </Facts>
+          <div className="details-email">
+            <BookingEmailField entry={entry} editable={!["CANCELLED", "EXPIRED", "CLOSED"].includes(entry.status)} />
+          </div>
         </StepCard>
 
         <StepCard title="The stay">

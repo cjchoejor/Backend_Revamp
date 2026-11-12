@@ -2600,3 +2600,31 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .refund-page-table tfoot td { padding: 10px 12px; border-top: 2px solid var(--line-2); background: var(--surface-2); }
 .ds .refund-moved { margin: 6px 0 0; }
 .ds .tab .tab-n + .tab-n { margin-left: 4px; }
+
+/* Their email — the guest's own email the papers reply inside (2026-11-12). */
+.ds .email-line:not(.desk-root *) { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); border: 1px solid var(--line-2); border-radius: var(--r-control); padding: var(--s2) var(--s3); background: var(--surface); min-height: 38px; }
+.ds .email-line.none:not(.desk-root *) { border: none; background: none; padding: 0; min-height: 0; }
+.ds .email-line > .icon { color: var(--accent); flex: none; }
+.ds .email-line-main { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; min-width: 0; flex: 1 1 240px; }
+.ds .email-line-lead { color: var(--ink-2); font-size: var(--t-sm); }
+.ds .email-line-subject { font-weight: 600; overflow-wrap: break-word; }
+.ds .email-line-from { color: var(--ink-2); font-size: var(--t-sm); overflow-wrap: break-word; min-width: 0; }
+.ds .email-line-acts { display: flex; gap: 4px; flex: none; margin-left: auto; }
+.ds .email-pick { display: grid; gap: var(--s3); }
+.ds .email-pick-tools { display: flex; gap: var(--s3); align-items: flex-end; flex-wrap: wrap; }
+.ds .email-pick-tools .grow { flex: 1 1 220px; }
+.ds .email-pick-all { display: flex; gap: 6px; align-items: center; font-size: var(--t-sm); padding-bottom: 9px; white-space: nowrap; }
+.ds .email-pick-list { list-style: none; margin: 0; padding: 0 2px 0 0; display: grid; gap: 6px; max-height: min(52vh, 460px); overflow: auto; }
+.ds .email-row { display: grid; gap: 2px; width: 100%; text-align: left; border: 1px solid var(--line-2); border-radius: var(--r-control); padding: var(--s2) var(--s3); background: var(--surface); color: var(--ink); font: inherit; cursor: pointer; }
+.ds .email-row:hover { background: var(--row-hover); }
+.ds .email-row.on { border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+.ds .email-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ds .email-row-top { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
+.ds .email-row-addr { color: var(--ink-2); font-size: var(--t-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.ds .email-row-when { margin-left: auto; color: var(--ink-2); font-size: var(--t-sm); white-space: nowrap; }
+.ds .email-row-subject { font-weight: 600; overflow-wrap: anywhere; }
+.ds .email-row-snippet { color: var(--ink-2); font-size: var(--t-sm); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.ds .email-row-note { font-size: var(--t-sm); font-weight: 600; }
+.ds .details-email { margin-top: var(--s3); }
+.ds .notice.stop:not(.desk-root *) { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s2); border: 1px solid var(--danger-line); border-left: 5px solid var(--danger); background: var(--danger-soft); color: var(--danger); padding: var(--s2) var(--s3); border-radius: var(--r-control); font-weight: 600; }
+.ds .email-pick-from { display: flex; align-items: center; justify-content: space-between; gap: var(--s2); }

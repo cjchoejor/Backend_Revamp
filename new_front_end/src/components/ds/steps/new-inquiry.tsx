@@ -76,6 +76,8 @@ import {
   type UseTypeKey,
 } from "./new-inquiry-parts";
 import { Help } from "@/components/ds/help";
+import { GuestEmailField } from "@/components/ds/guest-email";
+import { linkInquiryEmail, type InboxEmail } from "@/lib/api/inbox";
 import { DateInput } from "@/components/ds/date-input";
 import { PhoneField } from "@/components/ds/phone-field";
 import { PersonName } from "@/components/ds/person-name";
@@ -151,6 +153,8 @@ export function NewInquiryCanvas() {
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
+  // Their own email in the hotel's mailbox (2026-11-12): linked once the lead is kept.
+  const [pickedEmail, setPickedEmail] = useState<InboxEmail | null>(null);
   // The caller (2026-10-12): who rang, which is not always the guest. Title and name can wait for
   // Wrap up; a phone or an email cannot (an OTA booking needs neither).
   const [callerTitle, setCallerTitle] = useState("");
@@ -623,6 +627,12 @@ export function NewInquiryCanvas() {
         inquiryId = inquiry.id;
         madeInquiry.current = { key, id: inquiryId };
       }
+      if (pickedEmail) {
+        // Best effort: the lead is kept either way, and the email can be picked on the booking.
+        await linkInquiryEmail(session, inquiryId, pickedEmail.messageId).catch((e) =>
+          toastRefusal(e, "The lead is kept, but their email could not be linked — pick it on the booking"),
+        );
+      }
       if (needsCorp) {
         await captureCorporateContext(session, inquiryId, {
           corporateClientRef: corpRef.trim(),
@@ -768,6 +778,7 @@ export function NewInquiryCanvas() {
                         </>
                       )}
                       <> · {channel.label}</>
+                      {pickedEmail ? <> · replying in their email</> : null}
                       {chosenPackage ? <> · {chosenPackage.name}</> : party ? null : <> · published rates</>}
                       {useType ? <> · {USE_TYPES.find(([k]) => k === useType)?.[1] ?? useType}</> : null}
                       {needsCorp && corpRef.trim() ? <> · {corpRef.trim()}</> : null}
@@ -777,6 +788,18 @@ export function NewInquiryCanvas() {
                   <div className="form2">
                     <div className="wide">
                       <CameInTicks value={channelKey} onChange={pickChannel} />
+                    </div>
+                    <div className="wide">
+                      <GuestEmailField
+                        thread={pickedEmail}
+                        suggest={email.trim() || party?.displayName || undefined}
+                        onPick={(m) => {
+                          setPickedEmail(m);
+                          // A direct caller with no email typed yet: theirs is the one they wrote from.
+                          if (!partyKind && !email.trim() && m.fromAddress) setEmail(m.fromAddress);
+                        }}
+                        onClear={() => setPickedEmail(null)}
+                      />
                     </div>
 
                     {selectedCaller && partyKind ? (

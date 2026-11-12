@@ -748,6 +748,12 @@ export type EntryDetail = EntryListItem & {
     travelAgent?: BookingPartySummary | null;
     corporateAccount?: BookingPartySummary | null;
     agentProfile?: AgentProfileSummary | null;
+    /** The guest's own email the papers reply inside (2026-11-12); null when none was linked. */
+    emailThreadMessageId?: string | null;
+    emailThreadSubject?: string | null;
+    emailThreadFrom?: string | null;
+    emailThreadFromName?: string | null;
+    emailThreadReceivedAt?: string | null;
   } | null;
   closedAt?: string | null;
   closedBy?: string | null;
