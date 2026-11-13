@@ -65,6 +65,8 @@ type RowState = {
   sc: boolean;
   gst: boolean;
   foc: boolean;
+  /** The package this room is priced on, when not its type's (2026-11-13); "" = as its type. */
+  pkg: string;
 };
 
 const EMPTY_ROW: RowState = {
@@ -88,9 +90,10 @@ const EMPTY_ROW: RowState = {
   sc: true,
   gst: true,
   foc: false,
+  pkg: "",
 };
 
-export type NumCol = Exclude<keyof RowState, "sc" | "gst" | "foc">;
+export type NumCol = Exclude<keyof RowState, "sc" | "gst" | "foc" | "pkg">;
 export const MEAL_COLS: NumCol[] = ["cp", "ml", "md", "ap", "ot"];
 export const MEAL_META: Record<string, { chip: string; th: string; title: string }> = {
   cp: { chip: "CP", th: "CP", title: "Breakfast only" },
@@ -388,7 +391,57 @@ function rowFromComposition(c: RoomCompositionInput): RowState {
     sc: c.serviceChargeApplies ?? true,
     gst: c.gstApplies ?? true,
     foc: c.isFoc ?? false,
+    pkg: c.ratePackageId ?? "",
   };
+}
+
+/**
+ * Which package prices one room (2026-11-13, operator: two rooms of one type on different
+ * packages). It starts on its room type's package; picking another prices this room alone on that
+ * package's room rate, extra bed, meals and meal plans. Shown only when the booking chose more than
+ * one package.
+ */
+function PackageCell({
+  typePkg,
+  packages,
+  value,
+  locked,
+  onChange,
+}: {
+  typePkg: { id: string; name: string } | null;
+  packages: Array<{ id: string; name: string }>;
+  value: string;
+  locked: boolean;
+  onChange: (pkg: string) => void;
+}) {
+  const shown = value || typePkg?.id || "";
+  const own = !!value && value !== typePkg?.id;
+  const nameOf = (id: string) => packages.find((p) => p.id === id)?.name ?? "—";
+  return (
+    <td
+      className={`pkgcol${own ? " pkg-own" : ""}`}
+      title={
+        own
+          ? `Priced on ${nameOf(value)}, not its room type's package (${typePkg?.name ?? "—"})`
+          : `Priced on its room type's package — ${typePkg?.name ?? "—"}`
+      }
+    >
+      <select
+        className="rct-in"
+        value={shown}
+        disabled={locked}
+        aria-label="This room's rate package"
+        onChange={(e) => onChange(e.target.value === typePkg?.id ? "" : e.target.value)}
+      >
+        {!shown && <option value="">—</option>}
+        {packages.map((p) => (
+          <option key={p.id} value={p.id}>
+            {p.name}
+          </option>
+        ))}
+      </select>
+    </td>
+  );
 }
 
 /** One room's line of the booking's bed plan — `entry-bed-plan-service` on the backend. */
@@ -535,8 +588,8 @@ function BedCell({
  * configuration in the same table"). The stay keeps everything that is its own — its party, its
  * rates, its live price, its discount, its faults — and the table above it owns the columns.
  */
-export type GroupedColumns = { kids: boolean; meals: NumCol[]; others: boolean; rateCols: RateCol[]; beds: boolean; ratesOpen: boolean; justOn: NumCol | null };
-export type SectionFacts = { pax: NumCol[]; kids: boolean; beds: boolean; rows: number };
+export type GroupedColumns = { kids: boolean; meals: NumCol[]; others: boolean; rateCols: RateCol[]; beds: boolean; pkgs?: boolean; ratesOpen: boolean; justOn: NumCol | null };
+export type SectionFacts = { pax: NumCol[]; kids: boolean; beds: boolean; pkgs?: boolean; rows: number };
 export type CopySource = { vals: Record<string, string>; row: Record<string, unknown>; roomLevel: boolean };
 export type SectionApi = {
   distribute: () => void;
@@ -563,6 +616,7 @@ export function CompositionsHead({
   others,
   rateCols,
   beds,
+  pkgs,
   ratesOpen,
   justOn,
   readOnly,
@@ -574,6 +628,8 @@ export function CompositionsHead({
   others: boolean;
   rateCols: RateCol[];
   beds: boolean;
+  /** The Package column, when the booking chose more than one package (2026-11-13). */
+  pkgs?: boolean;
   ratesOpen: boolean;
   justOn: NumCol | null;
   readOnly?: boolean;
@@ -585,6 +641,7 @@ export function CompositionsHead({
       <tr className="grp">
         <th className="room" />
         {beds && <th />}
+        {pkgs && <th />}
         <th />
         <th colSpan={kids ? 4 : 2}>Guests</th>
         {meals.length > 0 && <th className="mealcol" colSpan={meals.length}>Meal-plan pax</th>}
@@ -615,6 +672,11 @@ export function CompositionsHead({
         {beds && (
           <th className="bedcol" title="How the room is made up for this stay">
             Bed type
+          </th>
+        )}
+        {pkgs && (
+          <th className="pkgcol" title="The rate package each room is priced on — its room type's, unless picked here">
+            Package
           </th>
         )}
         <th title="Occupants — derived: adults + children">Occ</th>
@@ -903,7 +965,11 @@ export function RoomCompositionsTable({
   /** The reference figure a given rate cell would fall back to — null when nothing is on file. */
   const refFor = (roomId: string, col: NumCol): number | null => {
     const typeId = roomById.get(roomId)?.roomType?.id;
-    const t = typeId ? refByRoomType.get(typeId) : undefined;
+    const tt = typeId ? refByRoomType.get(typeId) : undefined;
+    // A room on a package of its own anchors on that package's rates (2026-11-13).
+    const ownPkg = rows[roomId]?.pkg;
+    const own = ownPkg ? tt?.packageRates?.find((p) => p.ratePackageId === ownPkg) : undefined;
+    const t = tt && own ? { ...tt, ...own } : tt;
     if (!t) return null;
     switch (col) {
       case "rRoom":
@@ -1553,6 +1619,7 @@ export function RoomCompositionsTable({
           sc: srcRow.sc,
           gst: srcRow.gst,
           foc: srcRow.foc,
+          pkg: srcRow.pkg ?? "",
         });
       }
     }
@@ -1647,6 +1714,7 @@ export function RoomCompositionsTable({
           // GST is statutory — always applied regardless of any historic seed value.
           gstApplies: true,
           isFoc: r.foc,
+          ...(r.pkg ? { ratePackageId: r.pkg } : {}),
           // Per-night meal overrides are a guest-board concept — this grid has no column for
           // them. Carry the seed's through untouched so a board → table → board round trip
           // doesn't quietly delete the operator's per-date plans. The board re-derives them
@@ -1761,6 +1829,14 @@ export function RoomCompositionsTable({
   const datesShown = !!roomDates && sealedRoomIds.some((id) => roomDates[id]);
   const bedsOwn = !!bedPlan && sealedRoomIds.some((id) => bedPlan[id]);
   const bedsShown = grouped ? grouped.columns.beds : bedsOwn;
+  /** The booking's chosen packages, when there are several to put a room on (2026-11-13). */
+  const bookingPackages = rateRef?.packages ?? [];
+  const pkgsOwn = bookingPackages.length > 1;
+  const pkgsShown = grouped ? !!grouped.columns.pkgs : pkgsOwn;
+  const typePkgOf = (roomId: string): { id: string; name: string } | null => {
+    const t = refByRoomType.get(roomById.get(roomId)?.roomType?.id ?? "");
+    return t?.ratePackageId ? { id: t.ratePackageId, name: t.packageName ?? "" } : null;
+  };
   /** The stay's own night count — a room that differs from it is the interesting case. */
   const ciIso = dayToIso(entryCheckIn);
   const coIso = dayToIso(entryCheckOut);
@@ -1998,7 +2074,7 @@ export function RoomCompositionsTable({
   const paxCols = (["cp", "ml", "md", "ap", "ot", "obf", "olu", "odi"] as NumCol[]).filter((c) => paxAnywhere(c));
   const factsKey = JSON.stringify([paxCols, childColsOwn, bedsOwn, displayRowCount]);
   useEffect(() => {
-    grouped?.onFacts({ pax: paxCols, kids: childColsOwn, beds: bedsOwn, rows: displayRowCount });
+    grouped?.onFacts({ pax: paxCols, kids: childColsOwn, beds: bedsOwn, pkgs: pkgsOwn, rows: displayRowCount });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [factsKey]);
   const sectionApi: SectionApi = {
@@ -2163,7 +2239,7 @@ export function RoomCompositionsTable({
   };
   /** Every column of a row, so a band spans the table whatever is open. */
   const colCount =
-    1 + (bedsShown ? 1 : 0) + 2 + (childColsVisible ? 2 : 0) + 1 + visibleMeals.length + (othersVisible ? 3 : 0) +
+    1 + (bedsShown ? 1 : 0) + (pkgsShown ? 1 : 0) + 2 + (childColsVisible ? 2 : 0) + 1 + visibleMeals.length + (othersVisible ? 3 : 0) +
     (ratesOpen ? rateCols.length : 0) + 3 + 1;
   /** A night's band — where the date changes, so it reads as a break ("UIappeal"): the date at
    *  the table's largest size, and the night's own guest tally, green when the rooms that night
@@ -2361,6 +2437,18 @@ export function RoomCompositionsTable({
                         )}
                       </td>
                       {bedsShown && <BedCell roomId={id} cell={bedPlan?.[id]} onChange={onBedChange} />}
+                      {pkgsShown &&
+                        (bookingPackages.length > 1 ? (
+                          <PackageCell
+                            typePkg={typePkgOf(id)}
+                            packages={bookingPackages}
+                            value={rows[id]?.pkg ?? ""}
+                            locked={!!readOnly || !!lockCommercial}
+                            onChange={(pkg) => setCell(id, { pkg })}
+                          />
+                        ) : (
+                          <td className="pkgcol" />
+                        ))}
                       {/* Occ is the row's own reconciliation: over the room's capacity it reads RED,
                           not a quiet amber — the figure the operator must not miss (2026-09-29). */}
                       <td
@@ -2504,6 +2592,7 @@ export function RoomCompositionsTable({
                 Σ
               </td>
               {bedsShown && <td className="bedcol" />}
+              {pkgsShown && <td className="pkgcol" />}
               <td className={`occ${partySize > 0 && footGuests !== partySize ? " off" : ""}`}>{footGuests}</td>
               <td>{footSum("ad")}</td>
               {childColsVisible && (
@@ -2824,6 +2913,7 @@ export function RoomCompositionsTable({
             others={othersVisible}
             rateCols={rateCols}
             beds={bedsShown}
+            pkgs={pkgsShown}
             ratesOpen={ratesOpen}
             justOn={justOn}
             readOnly={readOnly}

@@ -562,6 +562,7 @@ export type RoomAssignmentSummary = {
   negotiatedBreakfastRate?: string | number | null;
   negotiatedLunchRate?: string | number | null;
   negotiatedDinnerRate?: string | number | null;
+  ratePackageId?: string | null;
   serviceChargeApplies?: boolean;
   gstApplies?: boolean;
   isFoc?: boolean;

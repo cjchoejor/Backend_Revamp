@@ -66,6 +66,7 @@ export function canonComps(list: readonly RoomCompositionInput[] | undefined): s
         n(c.negotiatedBreakfastRate),
         n(c.negotiatedLunchRate),
         n(c.negotiatedDinnerRate),
+        c.ratePackageId ?? "",
         c.serviceChargeApplies === false ? "0" : "1",
         c.gstApplies === false ? "0" : "1",
         c.isFoc === true ? "1" : "0",

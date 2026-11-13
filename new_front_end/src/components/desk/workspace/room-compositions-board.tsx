@@ -123,6 +123,8 @@ type RoomExtras = {
   rateLu: string;
   rateDi: string;
   ratesOpen: boolean;
+  /** The room's own package (2026-11-13), carried across a switch of view; the board has no column for it. */
+  pkg?: string;
 };
 
 const EMPTY_EXTRAS: RoomExtras = {
@@ -160,6 +162,7 @@ function extrasFromComposition(c: RoomCompositionInput): RoomExtras {
     rateLu: s(c.negotiatedLunchRate),
     rateDi: s(c.negotiatedDinnerRate),
     ratesOpen: anyRate,
+    pkg: c.ratePackageId ?? "",
   };
 }
 
@@ -499,6 +502,7 @@ export function RoomCompositionsBoard({
         negotiatedBreakfastRate: num(x.rateBf),
         negotiatedLunchRate: num(x.rateLu),
         negotiatedDinnerRate: num(x.rateDi),
+        ...(x.pkg ? { ratePackageId: x.pkg } : {}),
         serviceChargeApplies: x.sc,
         // GST is statutory — always applied regardless of any historic seed value.
         gstApplies: true,

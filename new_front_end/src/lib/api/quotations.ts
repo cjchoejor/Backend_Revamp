@@ -29,6 +29,8 @@ export type RoomCompositionInput = {
   negotiatedBreakfastRate?: number;
   negotiatedLunchRate?: number;
   negotiatedDinnerRate?: number;
+  /** This room's own package, when not its room type's (2026-11-13). */
+  ratePackageId?: string | null;
   serviceChargeApplies?: boolean;
   gstApplies?: boolean;
   isFoc?: boolean;

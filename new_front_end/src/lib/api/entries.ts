@@ -910,6 +910,16 @@ export type RoomTypeRateReference = {
   breakfastRate: number | null;
   lunchRate: number | null;
   dinnerRate: number | null;
+  /** This type's rates on each chosen package, when the booking chose several (2026-11-13). */
+  packageRates?: Array<{
+    ratePackageId: string;
+    packageName: string;
+    roomRate: number;
+    extraBedRate: number | null;
+    breakfastRate: number | null;
+    lunchRate: number | null;
+    dinnerRate: number | null;
+  }>;
 };
 
 export type EntryRateReference = {

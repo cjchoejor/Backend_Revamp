@@ -73,7 +73,8 @@ export function TripCompositionsTable({
   const rateCols: RateCol[] = ["rRoom", "rBed", ...(bf ? (["rBf"] as const) : []), ...(lu ? (["rLu"] as const) : []), ...(di ? (["rDi"] as const) : [])];
   const kids = all.some((f) => f.kids);
   const beds = all.some((f) => f.beds);
-  const columns: GroupedColumns = { kids, meals, others, rateCols, beds, ratesOpen, justOn };
+  const pkgs = all.some((f) => f.pkgs);
+  const columns: GroupedColumns = { kids, meals, others, rateCols, beds, pkgs, ratesOpen, justOn };
   const totalRows = stays.reduce((s, x) => s + (facts[x.key]?.rows ?? 0), 0);
 
   const each = (f: (a: SectionApi) => void) => {
@@ -250,6 +251,7 @@ export function TripCompositionsTable({
             others={others}
             rateCols={rateCols}
             beds={beds}
+            pkgs={pkgs}
             ratesOpen={ratesOpen}
             justOn={justOn}
             readOnly={allReadOnly}

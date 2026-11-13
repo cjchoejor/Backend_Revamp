@@ -2609,6 +2609,27 @@
     padding: 2px 4px;
     text-align: center;
   }
+  /* The rate package a room is priced on (2026-11-13), beside its bed. A room on a package other
+     than its type's reads in the accent with a firm edge, so two rooms of one type on different
+     packages are told apart at a glance. */
+  & .rct-t .pkgcol {
+    width: 118px;
+    min-width: 104px;
+    text-align: center;
+    padding: 3px 6px;
+  }
+  & .rct-t td.pkgcol select {
+    width: 100%;
+    font-size: 11.5px;
+    padding: 2px 4px;
+    text-align: center;
+  }
+  & .rct-t td.pkgcol.pkg-own select {
+    border-color: var(--accent, #1d4f91);
+    color: var(--accent, #1d4f91);
+    font-weight: 700;
+    background: var(--accent-soft, #e7eef8);
+  }
 
   & .rct-t .room {
     position: sticky;
