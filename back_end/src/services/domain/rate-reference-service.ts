@@ -33,6 +33,10 @@ export type RoomTypeRateReference = {
   roomRateSource: "AGENT_RATE_PACKAGE" | "STANDARD_RATE_PLAN" | null;
   /** Which named package supplied the rate — "Season", "Premium". Null when standard. */
   packageName: string | null;
+  /** That package's id (2026-11-13). Null when standard. */
+  ratePackageId?: string | null;
+  /** True when the stay gave this type a package of its own; false when it takes the primary one. */
+  packageChosenForType?: boolean;
   /** Standard rate-plan resolution, kept as reference even when a card applies. */
   standardRate: number | null;
   /** Minimum sellable rate from the standard plan — the discount floor. Null for card rates (negotiated, not MSR-bound). */
@@ -62,8 +66,15 @@ export type EntryRateReference = {
   /** The linked agent/corporate whose rate card supplies the rates, when any. */
   party: { type: "TRAVEL_AGENT" | "CORPORATE"; id: string; name: string } | null;
   roomTypes: RoomTypeRateReference[];
-  /** Meal plans charged at a figure of their own, not what their meals add up to (2026-11-04). */
-  plansOff: Array<{ key: PlanRateKey; rate: string | null; meals: string | null }>;
+  /**
+   * Meal plans charged at a figure of their own, not what their meals add up to (2026-11-04). With
+   * room types on different packages (2026-11-13), each names its package.
+   */
+  plansOff: Array<{ key: PlanRateKey; rate: string | null; meals: string | null; packageName?: string | null }>;
+  /** The packages chosen on the enquiry, the primary first (2026-11-13). Empty for a walk-in. */
+  packages: Array<{ id: string; name: string }>;
+  /** Whether the stay's package per room type may still be changed (Inquiry and Negotiation). */
+  packagesEditable: boolean;
 };
 
 export async function buildEntryRateReference(
@@ -92,6 +103,7 @@ export async function buildEntryRateReference(
           // The chosen package rides along so the reference strip anchors on the package the
           // booking is actually quoted on, not just the party's default.
           ratePackageId: true,
+          ratePackageIds: true,
           travelAgent: { select: { id: true, displayName: true } },
           corporateAccount: { select: { id: true, displayName: true } },
         },
@@ -166,6 +178,8 @@ export async function buildEntryRateReference(
     if (party) {
       agentRate = await resolveRatePackageForBooking(prisma, {
         ratePackageId: entry.inquiry?.ratePackageId ?? null,
+        ratePackageIds: entry.inquiry?.ratePackageIds ?? [],
+        ratePackageByRoomType: entry.ratePackageByRoomType,
         travelAgentId: party.type === "TRAVEL_AGENT" ? party.id : null,
         corporateAccountId: party.type === "CORPORATE" ? party.id : null,
         roomTypeId,
@@ -183,6 +197,8 @@ export async function buildEntryRateReference(
       roomRate: agentRate ? agentRate.roomRate : standardRate,
       roomRateSource: agentRate ? "AGENT_RATE_PACKAGE" : standardRate != null ? "STANDARD_RATE_PLAN" : null,
       packageName: agentRate?.packageName ?? null,
+      ratePackageId: agentRate?.ratePackageId ?? null,
+      packageChosenForType: agentRate?.resolvedVia === "ROOM_TYPE_SELECTION",
       standardRate,
       // Agent rates are negotiated and not MSR-bound (same rule as the quotation pipeline).
       msrValue: agentRate ? null : msrValue,
@@ -201,20 +217,35 @@ export async function buildEntryRateReference(
     });
   }
 
-  // The meal rates are the booking's, the same on every room type.
-  const first = roomTypes[0];
-  const plansOff = first
-    ? plansAgainstMeals({
-        breakfastRate: first.breakfastRate,
-        lunchRate: first.lunchRate,
-        dinnerRate: first.dinnerRate,
-        cpRate: first.cpRate,
-        mapLunchRate: first.mapLunchRate,
-        mapDinnerRate: first.mapDinnerRate,
-        apRate: first.apRate,
-      })
-        .filter((p) => p.differs)
-        .map(({ key, rate, meals }) => ({ key, rate, meals }))
+  // The meal rates are each package's: once per package the room types are on (2026-11-13).
+  const byPackage = new Map<string, RoomTypeRateReference>();
+  for (const t of roomTypes) if (!byPackage.has(t.ratePackageId ?? "")) byPackage.set(t.ratePackageId ?? "", t);
+  const several = byPackage.size > 1;
+  const plansOff = [...byPackage.values()].flatMap((first) =>
+    plansAgainstMeals({
+      breakfastRate: first.breakfastRate,
+      lunchRate: first.lunchRate,
+      dinnerRate: first.dinnerRate,
+      cpRate: first.cpRate,
+      mapLunchRate: first.mapLunchRate,
+      mapDinnerRate: first.mapDinnerRate,
+      apRate: first.apRate,
+    })
+      .filter((p) => p.differs)
+      .map(({ key, rate, meals }) => ({ key, rate, meals, ...(several ? { packageName: first.packageName } : {}) })),
+  );
+
+  // The packages chosen on the enquiry, by name, in the order chosen.
+  const chosenIds = entry.inquiry?.ratePackageIds?.length
+    ? entry.inquiry.ratePackageIds
+    : entry.inquiry?.ratePackageId
+      ? [entry.inquiry.ratePackageId]
+      : [];
+  const named = chosenIds.length
+    ? await prisma.ratePackage.findMany({ where: { id: { in: chosenIds } }, select: { id: true, name: true } })
     : [];
-  return { entryId: entry.id, currency, nights, gstRate, serviceChargeRate, party, roomTypes, plansOff };
+  const packages = chosenIds.map((id) => named.find((p) => p.id === id)).filter((p): p is { id: string; name: string } => !!p);
+  const packagesEditable =
+    (entry.currentStage === "S1" || entry.currentStage === "S2") && (entry.status === "ACTIVE" || entry.status === "PARKED");
+  return { entryId: entry.id, currency, nights, gstRate, serviceChargeRate, party, roomTypes, plansOff, packages, packagesEditable };
 }

@@ -67,16 +67,25 @@ import { retireSupersededReplyWaitsBestEffort } from "../../lib/reply-waits.js";
  */
 async function resolveAgentRateForEntryQuotation(
   prisma: PrismaClient,
-  args: { inquiryId: string; roomTypeId: string; asOf?: Date; mealPlan?: MealPlanType | null },
+  args: {
+    inquiryId: string;
+    roomTypeId: string;
+    asOf?: Date;
+    mealPlan?: MealPlanType | null;
+    /** The stay's package per room type (2026-11-13). */
+    ratePackageByRoomType?: unknown;
+  },
 ): Promise<(AgentRateBreakdown & { ratePackageId: string; packageName: string; resolvedVia: string }) | null> {
   const inq = await prisma.inquiry.findUnique({
     where: { id: args.inquiryId },
-    select: { travelAgentId: true, corporateAccountId: true, ratePackageId: true },
+    select: { travelAgentId: true, corporateAccountId: true, ratePackageId: true, ratePackageIds: true },
   });
   if (!inq) return null;
 
   const pkg = await resolveRatePackageForBooking(prisma, {
     ratePackageId: inq.ratePackageId,
+    ratePackageIds: inq.ratePackageIds,
+    ratePackageByRoomType: args.ratePackageByRoomType,
     travelAgentId: inq.travelAgentId,
     corporateAccountId: inq.corporateAccountId,
     roomTypeId: args.roomTypeId,
@@ -374,8 +383,19 @@ async function prepareQuotationDraft(
   const mealPlan = input.mealPlan ?? null;
   const extraBedCount = Math.max(0, Math.trunc(input.extraBedCount ?? 0));
   const agentRate = entry.inquiryId
-    ? await resolveAgentRateForEntryQuotation(prisma, { inquiryId: entry.inquiryId, roomTypeId: roomTypeId!, mealPlan })
+    ? await resolveAgentRateForEntryQuotation(prisma, {
+        inquiryId: entry.inquiryId,
+        roomTypeId: roomTypeId!,
+        mealPlan,
+        ratePackageByRoomType: entry.ratePackageByRoomType,
+      })
     : null;
+  /**
+   * Which package priced each room type (2026-11-13) — kept on the quotation, so the desk can say a
+   * type's package changed since it was quoted, and the record says what each room was priced on.
+   */
+  const ratePackagesByType: Record<string, { ratePackageId: string; packageName: string }> = {};
+  if (agentRate && roomTypeId) ratePackagesByType[roomTypeId] = { ratePackageId: agentRate.ratePackageId, packageName: agentRate.packageName };
   // effectiveRate stays the ROOM rate — MSR, discount and S4 freeze semantics depend on it.
   const effectiveRate = agentRate ? agentRate.roomRate : pricing.effectiveRate;
   const resolvedNightlyRate = agentRate ? agentRate.roomRate : pricing.resolvedNightlyRate;
@@ -596,6 +616,15 @@ async function prepareQuotationDraft(
       breakfast: Prisma.Decimal;
       lunch: Prisma.Decimal;
       dinner: Prisma.Decimal;
+      /**
+       * The meal-PLAN rates (2026-11-13): a room type on its own package takes that package's
+       * plans, as it takes its meals and extra bed. With one package on the booking they are the
+       * booking's, the same as before.
+       */
+      cp: Prisma.Decimal | null;
+      mapLunch: Prisma.Decimal | null;
+      mapDinner: Prisma.Decimal | null;
+      ap: Prisma.Decimal | null;
     };
     const bookingTypeRates: TypeRates = {
       room: defaultRoomRate,
@@ -604,7 +633,12 @@ async function prepareQuotationDraft(
       breakfast: defaultBreakfast,
       lunch: defaultLunch,
       dinner: defaultDinner,
+      cp: defaultCp,
+      mapLunch: defaultMapLunch,
+      mapDinner: defaultMapDinner,
+      ap: defaultAp,
     };
+    const planOf = (v: number | null | undefined) => (v != null ? new Prisma.Decimal(v) : null);
     const ratesByType = new Map<string, TypeRates>();
     for (const tid of new Set(roomRows.map((r) => r.roomTypeId).filter((t): t is string => !!t))) {
       // The preferred type is already resolved above — reuse it rather than querying twice.
@@ -614,7 +648,12 @@ async function prepareQuotationDraft(
       }
       try {
         const typeAgentRate = entry.inquiryId
-          ? await resolveAgentRateForEntryQuotation(prisma, { inquiryId: entry.inquiryId, roomTypeId: tid, mealPlan })
+          ? await resolveAgentRateForEntryQuotation(prisma, {
+              inquiryId: entry.inquiryId,
+              roomTypeId: tid,
+              mealPlan,
+              ratePackageByRoomType: entry.ratePackageByRoomType,
+            })
           : null;
         if (typeAgentRate) {
           // Card rates are negotiated, so no discount is folded in — the same rule the
@@ -627,7 +666,13 @@ async function prepareQuotationDraft(
             breakfast: toDecimal(typeAgentRate.addOns?.breakfast ?? 0),
             lunch: toDecimal(typeAgentRate.addOns?.lunch ?? 0),
             dinner: toDecimal(typeAgentRate.addOns?.dinner ?? 0),
+            // Its own package's plans: a blank plan is summed from that package's meals.
+            cp: planOf(typeAgentRate.mealPlanRates?.cp),
+            mapLunch: planOf(typeAgentRate.mealPlanRates?.mapLunch),
+            mapDinner: planOf(typeAgentRate.mealPlanRates?.mapDinner),
+            ap: planOf(typeAgentRate.mealPlanRates?.ap),
           });
+          ratePackagesByType[tid] = { ratePackageId: typeAgentRate.ratePackageId, packageName: typeAgentRate.packageName };
           continue;
         }
         // No discount here: under the composition model it comes off the net value once the
@@ -656,6 +701,10 @@ async function prepareQuotationDraft(
           breakfast: bookingTypeRates.breakfast,
           lunch: bookingTypeRates.lunch,
           dinner: bookingTypeRates.dinner,
+          cp: bookingTypeRates.cp,
+          mapLunch: bookingTypeRates.mapLunch,
+          mapDinner: bookingTypeRates.mapDinner,
+          ap: bookingTypeRates.ap,
         });
       } catch (e) {
         if (e instanceof PolicyGateBlockedError) throw e;
@@ -737,10 +786,10 @@ async function prepareQuotationDraft(
         defaultBreakfastRate: tr.breakfast,
         defaultLunchRate: tr.lunch,
         defaultDinnerRate: tr.dinner,
-        defaultCpRate: defaultCp,
-        defaultMapLunchRate: defaultMapLunch,
-        defaultMapDinnerRate: defaultMapDinner,
-        defaultApRate: defaultAp,
+        defaultCpRate: tr.cp,
+        defaultMapLunchRate: tr.mapLunch,
+        defaultMapDinnerRate: tr.mapDinner,
+        defaultApRate: tr.ap,
         serviceChargeRate,
         gstRate,
         // Age-band meal shares (under-6 free, 6–10 at 70% of the adult rate) — the composition
@@ -989,6 +1038,8 @@ async function prepareQuotationDraft(
           ...(compositionDiscount ? { compositionDiscount } : {}),
         }
       : {}),
+    // Which package priced each room type (2026-11-13), when a party's packages priced the rooms.
+    ...(Object.keys(ratePackagesByType).length ? { ratePackagesByType } : {}),
     // Phase C — agent / corporate negotiated rate, when applicable.
     ...(agentRate
       ? {

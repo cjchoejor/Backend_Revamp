@@ -731,6 +731,7 @@ export async function createSplitInquiry(
     travelAgentId: inq.travelAgentId ?? null,
     corporateAccountId: inq.corporateAccountId ?? null,
     ratePackageId: inq.ratePackageId ?? null,
+    ratePackageIds: inq.ratePackageIds ?? null,
     proposedCheckIn: opts.proposedCheckIn,
     proposedCheckOut: opts.proposedCheckOut,
     ...(opts.duplicateReason ? { duplicateResolution: { resolution: "ACKNOWLEDGE" as const, reason: opts.duplicateReason } } : {}),
@@ -760,6 +761,10 @@ export async function createPieceEntry(prisma: PrismaClient, actor: Actor, entry
     contactPersonPhone: entry.contactPersonPhone ?? undefined,
     contactPersonEmail: entry.contactPersonEmail ?? undefined,
   });
+  // Its rooms keep the packages their types were priced on (2026-11-13).
+  if (entry.ratePackageByRoomType) {
+    await prisma.entry.update({ where: { id: made.id }, data: { ratePackageByRoomType: entry.ratePackageByRoomType as never } });
+  }
   return made.id;
 }
 

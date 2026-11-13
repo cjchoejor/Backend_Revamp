@@ -87,9 +87,11 @@ export async function priceRoomPick(prisma: PrismaClient, entryId: string, input
       id: true,
       checkInDate: true,
       checkOutDate: true,
+      ratePackageByRoomType: true,
       inquiry: {
         select: {
           ratePackageId: true,
+          ratePackageIds: true,
           travelAgent: { select: { id: true, displayName: true } },
           corporateAccount: { select: { id: true, displayName: true } },
         },
@@ -153,6 +155,8 @@ export async function priceRoomPick(prisma: PrismaClient, entryId: string, input
     const pkg = party
       ? await resolveRatePackageForBooking(prisma, {
           ratePackageId: entry.inquiry?.ratePackageId ?? null,
+          ratePackageIds: entry.inquiry?.ratePackageIds ?? [],
+          ratePackageByRoomType: entry.ratePackageByRoomType,
           travelAgentId: party.type === "TRAVEL_AGENT" ? party.id : null,
           corporateAccountId: party.type === "CORPORATE" ? party.id : null,
           roomTypeId: t.id,

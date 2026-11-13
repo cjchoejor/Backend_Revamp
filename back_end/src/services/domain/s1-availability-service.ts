@@ -46,17 +46,17 @@ type IndicativeChip = {
 async function resolvePartyForEntryInquiry(
   prisma: PrismaClient,
   inquiryId?: string | null,
-): Promise<{ partyType: PartyType; partyId: string; ratePackageId: string | null; travelAgentId: string | null; corporateAccountId: string | null } | null> {
+): Promise<{ partyType: PartyType; partyId: string; ratePackageId: string | null; ratePackageIds: string[]; travelAgentId: string | null; corporateAccountId: string | null } | null> {
   if (!inquiryId) return null;
   const inq = await prisma.inquiry.findUnique({
     where: { id: inquiryId },
-    select: { travelAgentId: true, corporateAccountId: true, ratePackageId: true },
+    select: { travelAgentId: true, corporateAccountId: true, ratePackageId: true, ratePackageIds: true },
   });
   if (!inq) return null;
   // The chosen package rides along so the indicative chip prices on the package the operator
   // actually picked, not merely the party default.
-  if (inq.travelAgentId) return { partyType: PartyType.TRAVEL_AGENT, partyId: inq.travelAgentId, ratePackageId: inq.ratePackageId, travelAgentId: inq.travelAgentId, corporateAccountId: null };
-  if (inq.corporateAccountId) return { partyType: PartyType.CORPORATE, partyId: inq.corporateAccountId, ratePackageId: inq.ratePackageId, travelAgentId: null, corporateAccountId: inq.corporateAccountId };
+  if (inq.travelAgentId) return { partyType: PartyType.TRAVEL_AGENT, partyId: inq.travelAgentId, ratePackageId: inq.ratePackageId, ratePackageIds: inq.ratePackageIds, travelAgentId: inq.travelAgentId, corporateAccountId: null };
+  if (inq.corporateAccountId) return { partyType: PartyType.CORPORATE, partyId: inq.corporateAccountId, ratePackageId: inq.ratePackageId, ratePackageIds: inq.ratePackageIds, travelAgentId: null, corporateAccountId: inq.corporateAccountId };
   return null;
 }
 
@@ -448,6 +448,8 @@ export async function runAvailabilityEngineForEntry(
     for (const roomTypeId of distinctTypes) {
       const br = await resolveRatePackageForBooking(prisma, {
         ratePackageId: party.ratePackageId,
+        ratePackageIds: party.ratePackageIds,
+        ratePackageByRoomType: (entry as { ratePackageByRoomType?: unknown }).ratePackageByRoomType,
         travelAgentId: party.travelAgentId,
         corporateAccountId: party.corporateAccountId,
         roomTypeId,

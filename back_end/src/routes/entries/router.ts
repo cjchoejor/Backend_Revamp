@@ -58,6 +58,7 @@ import {
   stopFollowing,
 } from "../../services/domain/trip-follow-service.js";
 import { setEntryGuest, updateEntryCaller, updateEntrySource } from "../../services/domain/inquiry-caller-service.js";
+import { setRoomTypePackage } from "../../services/domain/rate-package-choice-service.js";
 import { moveTripToNegotiation, nameGuestOnTripStays, moveTripToSetUp, renegotiateTrip, reserveTrip, staysTogether } from "../../services/domain/trip-inquiry-service.js";
 import { CAME_IN_AS_VALUES } from "../../lib/inquiry-came-in-as.js";
 import { callerRequestSchema } from "../../dtos/02-inquiries/request-schemas.js";
@@ -129,6 +130,7 @@ const sourceSchema = z
     travelAgentId: z.string().min(1).nullable().optional(),
     corporateAccountId: z.string().min(1).nullable().optional(),
     ratePackageId: z.string().min(1).nullable().optional(),
+    ratePackageIds: z.array(z.string().min(1)).max(20).nullable().optional(),
     corporateClientRef: z.string().trim().max(200).nullable().optional(),
     corporateCoordinator: z.string().trim().max(200).nullable().optional(),
     /** One section since 2026-11-05: the caller and the contact persons save with it. */
@@ -137,6 +139,26 @@ const sourceSchema = z
   })
   .refine((v) => !!(v.cameInAs || v.sourceChannel), { message: "Say how the booking came in", path: ["cameInAs"] })
   .refine((v) => !(v.travelAgentId && v.corporateAccountId), { message: "A travel agent OR a company, not both", path: ["travelAgentId"] });
+
+/**
+ * Which of the booking's chosen packages prices one room type of this stay (2026-11-13). **L1**, at
+ * Inquiry and Negotiation: the desk that picks the rooms picks the rates they are on.
+ */
+entriesRouter.post(
+  "/:id/rate-packages/by-type",
+  requireActorLevel("L1"),
+  validateBody(z.object({ roomTypeId: z.string().min(1), ratePackageId: z.string().min(1).nullable() })),
+  async (req, res, next) => {
+    try {
+      const out = await setRoomTypePackage(prisma, { actorId: req.actor!.actorId, level: req.actor!.level }, req.params.id, req.body);
+      // A stay set up the same as this one takes the choice too.
+      if (out.changed) await afterStayChanged(prisma, { actorId: req.actor!.actorId, actorLevel: req.actor!.level }, req.params.id, "BEDS");
+      res.json(out);
+    } catch (e) {
+      next(e);
+    }
+  },
+);
 
 entriesRouter.post("/:id/source", requireActorLevel("L1"), validateBody(sourceSchema), async (req, res, next) => {
   try {

@@ -6,7 +6,11 @@
  * and "Premium" side by side, and the operator says which applies.
  *
  * RESOLUTION ORDER
- *   1. The package chosen on the inquiry (`Inquiry.ratePackageId`) — the operator's explicit answer.
+ *   0. The package the stay gave this ROOM TYPE (`Entry.ratePackageByRoomType`, 2026-11-13) — one of
+ *      the packages chosen on the enquiry (`Inquiry.ratePackageIds`). A type given none, or one
+ *      naming a package the enquiry no longer has, goes on to 1.
+ *   1. The package chosen on the inquiry (`Inquiry.ratePackageId`) — the operator's explicit answer,
+ *      and with several chosen, the first of them.
  *   2. The party's own default package, then any active package of theirs. Covers bookings taken
  *      before package selection existed, and parties with exactly one package.
  *   3. The COMMON package — the house fallback, so an agency that has just signed up can be
@@ -51,7 +55,7 @@ export type RatePackageBreakdown = {
   roomRate: number;
   roomRateSource: "ROOM_TYPE_OVERRIDE" | "BASE_RATE";
   /** How we arrived at this package — surfaced in commercialTerms so pricing stays explainable. */
-  resolvedVia: "INQUIRY_SELECTION" | "PARTY_DEFAULT" | "COMMON_FALLBACK";
+  resolvedVia: "ROOM_TYPE_SELECTION" | "INQUIRY_SELECTION" | "PARTY_DEFAULT" | "COMMON_FALLBACK";
   addOns: {
     extraBed: number | null;
     breakfast: number | null;
@@ -83,6 +87,30 @@ function numOrNull(v: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+/**
+ * The package a stay gave one room type, when it is still one of the enquiry's chosen packages
+ * (2026-11-13). Null otherwise — the type is priced on the primary package.
+ */
+export function packageChosenForRoomType(
+  byRoomType: unknown,
+  roomTypeId: string,
+  chosenIds: readonly string[] | null | undefined,
+): string | null {
+  if (!byRoomType || typeof byRoomType !== "object") return null;
+  const id = (byRoomType as Record<string, unknown>)[roomTypeId];
+  if (typeof id !== "string" || !id) return null;
+  return (chosenIds ?? []).includes(id) ? id : null;
+}
+
+/** What every price reader passes: the enquiry's choice and the stay's choice per room type. */
+export type BookingPackageChoice = {
+  ratePackageId?: string | null;
+  ratePackageIds?: readonly string[] | null;
+  ratePackageByRoomType?: unknown;
+  travelAgentId?: string | null;
+  corporateAccountId?: string | null;
+};
+
 /** Active at `asOf`: started, and either never closed or closed later. */
 function activeWindow(asOf: Date) {
   return { effectiveFrom: { lte: asOf }, OR: [{ effectiveTo: null }, { effectiveTo: { gt: asOf } }] };
@@ -93,6 +121,10 @@ export async function resolveRatePackageForBooking(
   input: {
     /** The operator's explicit choice, when the booking has one. */
     ratePackageId?: string | null;
+    /** Every package chosen on the enquiry, the primary first (2026-11-13). */
+    ratePackageIds?: readonly string[] | null;
+    /** The stay's package per room type, `{ roomTypeId: ratePackageId }`. */
+    ratePackageByRoomType?: unknown;
     travelAgentId?: string | null;
     corporateAccountId?: string | null;
     roomTypeId: string;
@@ -106,9 +138,16 @@ export async function resolveRatePackageForBooking(
   let pkg = null as Awaited<ReturnType<typeof prisma.ratePackage.findFirst>> | null;
   let resolvedVia: RatePackageBreakdown["resolvedVia"] = "INQUIRY_SELECTION";
 
+  // 0. The package the stay gave this room type — one of the enquiry's chosen packages.
+  const forType = packageChosenForRoomType(input.ratePackageByRoomType, input.roomTypeId, input.ratePackageIds);
+  if (forType) {
+    pkg = await prisma.ratePackage.findUnique({ where: { id: forType }, include });
+    if (pkg) resolvedVia = "ROOM_TYPE_SELECTION";
+  }
+
   // 1. Explicit selection. Not date-filtered: a booking quoted on a package that has since been
   // superseded must still resolve to the package it was actually quoted on.
-  if (input.ratePackageId) {
+  if (!pkg && input.ratePackageId) {
     pkg = await prisma.ratePackage.findUnique({ where: { id: input.ratePackageId }, include });
   }
 

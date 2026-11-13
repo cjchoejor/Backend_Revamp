@@ -63,6 +63,8 @@ export const createInquiryRequestSchema = z
      * package from another agency would price the wrong rate.
      */
     ratePackageId: z.string().min(1).nullable().optional(),
+    /** Every package chosen, the primary first (2026-11-13). */
+    ratePackageIds: z.array(z.string().min(1)).max(20).nullable().optional(),
   })
   .refine((v) => !!(v.sourceChannel || v.cameInAs), {
     message: "Say how the guest came in: cameInAs, or sourceChannel",

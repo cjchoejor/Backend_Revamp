@@ -67,6 +67,7 @@ const stayFields = {
   numberOfRooms: true,
   bedTypeRequest: true,
   bedPlan: true,
+  ratePackageByRoomType: true,
   useType: true,
   contactPersonName: true,
   contactPersonPhone: true,
@@ -89,6 +90,8 @@ export type FollowShortfall = {
 
 type FollowState = {
   roomsCanon?: string;
+  /** The package per room type last copied (2026-11-13) — a choice made on this stay stands until the other changes. */
+  packagesCanon?: string;
   tableCanon?: string;
   shortfall?: FollowShortfall | null;
   notes?: string[];
@@ -320,6 +323,20 @@ export async function syncFollower(prisma: PrismaClient, actor: Actor, stayId: s
     } catch (e) {
       notes.push(`The guest staying could not be copied: ${e instanceof Error ? e.message : "refused"}`);
     }
+  }
+
+  // ---- the package each room type is on (2026-11-13) ------------------------------------------------
+  // Copied when the stay it follows changes it; one chosen on this stay stands until then.
+  const packagesCanon = JSON.stringify(source.ratePackageByRoomType ?? null);
+  if (state.packagesCanon !== packagesCanon) {
+    if (JSON.stringify(stay.ratePackageByRoomType ?? null) !== packagesCanon) {
+      await prisma.entry.update({
+        where: { id: stay.id },
+        data: { ratePackageByRoomType: (source.ratePackageByRoomType ?? Prisma.DbNull) as Prisma.InputJsonValue },
+      });
+      changed.push("packages");
+    }
+    next.packagesCanon = packagesCanon;
   }
 
   // ---- the rooms by type ---------------------------------------------------------------------------

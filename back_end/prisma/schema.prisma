@@ -1029,6 +1029,10 @@ model Inquiry {
   /// pointing at the agency no longer says whether the guest got season,
   /// off-season or premium.
   ratePackageId              String?
+  /// EVERY package chosen for this booking (2026-11-13, operator: "select multiple package"), the
+  /// primary first — `ratePackageId` is always the first of these, and prices any room type no
+  /// stay has given a package of its own (`Entry.ratePackageByRoomType`). Empty = none chosen.
+  ratePackageIds             String[]         @default([])
   createdAt                  DateTime         @default(now())
   updatedAt                  DateTime         @updatedAt
   createdBy                  String           @default("actor-seed-system")
@@ -1116,6 +1120,11 @@ model Entry {
   /// keys validated against ROOM_BED_TYPES, counts against the registry's achievable
   /// stock (bed conversion groups) and numberOfRooms. Null = no bed preference stated.
   bedTypeRequest                 Json?
+  /// Which of the enquiry's chosen packages prices each ROOM TYPE of this stay (2026-11-13,
+  /// operator: "suite seasonal, standard also seasonal, premium non season") — { roomTypeId:
+  /// ratePackageId }. Per stay, since a trip's stays can fall in different seasons. A type not
+  /// named here, or naming a package the enquiry no longer has, is priced on the primary package.
+  ratePackageByRoomType          Json?
   /// Which room is made up as what FOR THIS STAY — { roomId: bedType }. The ask above is a
   /// tally with no rooms in it; this is the desk's answer to it, settled on the rooms table.
   /// It is a PLAN, not the room's state: `Room.bedType` is how a room is made up now, and a

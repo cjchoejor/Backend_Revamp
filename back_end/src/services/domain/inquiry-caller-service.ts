@@ -1,4 +1,4 @@
-import type { ActorLevel, PrismaClient } from "@prisma/client";
+import { Prisma, type ActorLevel, type PrismaClient } from "@prisma/client";
 import { guestDisplayName } from "../../lib/guest-display-name.js";
 import { NotFoundError, PolicyGateBlockedError, ValidationError } from "../../lib/errors.js";
 import { findGuestsOnFile, sameGuestName } from "./guest-profile-service.js";
@@ -378,6 +378,8 @@ export type SourceInput = {
   travelAgentId?: string | null;
   corporateAccountId?: string | null;
   ratePackageId?: string | null;
+  /** Every package chosen, the primary first (2026-11-13). */
+  ratePackageIds?: string[] | null;
   corporateClientRef?: string | null;
   corporateCoordinator?: string | null;
   /** A direct booking's caller, saved with the rest of the section (2026-11-05). */
@@ -453,6 +455,7 @@ export async function updateEntrySource(prisma: PrismaClient, actor: Actor, entr
         travelAgentId: party.travelAgentId,
         corporateAccountId: party.corporateAccountId,
         ratePackageId: party.ratePackageId,
+        ratePackageIds: party.ratePackageIds,
         // A company's reference belongs to a company booking; it goes when the company does.
         corporateClientRef: corporate ? t(input.corporateClientRef) : null,
         corporateCoordinator: corporate ? t(input.corporateCoordinator) : null,
@@ -464,6 +467,18 @@ export async function updateEntrySource(prisma: PrismaClient, actor: Actor, entr
       data: { otaSource: channel.sourceChannel === "OTA" },
     });
     if (arriving) await tx.entry.update({ where: { id: entry.id }, data: arriving });
+    // A room type given a package that is no longer chosen — or another party's — goes back to the
+    // primary (2026-11-13): the stays' choices are pruned to the packages now chosen.
+    const stays = await tx.entry.findMany({ where: { inquiryId: inq.id, ratePackageByRoomType: { not: Prisma.DbNull } }, select: { id: true, ratePackageByRoomType: true } });
+    for (const s of stays) {
+      const map = (s.ratePackageByRoomType ?? {}) as Record<string, unknown>;
+      const kept = Object.fromEntries(Object.entries(map).filter(([, v]) => typeof v === "string" && party.ratePackageIds.includes(v)));
+      if (Object.keys(kept).length === Object.keys(map).length) continue;
+      await tx.entry.update({
+        where: { id: s.id },
+        data: { ratePackageByRoomType: Object.keys(kept).length ? (kept as Prisma.InputJsonValue) : Prisma.DbNull },
+      });
+    }
     await auditService.emit(tx as any, { actorId: actor.actorId, actorLevel: actor.level }, {
       eventType: "INQUIRY.SOURCE_CHANGED",
       entityType: "Inquiry",
@@ -474,11 +489,11 @@ export async function updateEntrySource(prisma: PrismaClient, actor: Actor, entr
       entryId: entry.id,
       payload: {
         from: { sourceChannel: inq.sourceChannel },
-        to: { sourceChannel: updated.sourceChannel, cameInAs: updated.cameInAs, travelAgentId: updated.travelAgentId, corporateAccountId: updated.corporateAccountId, ratePackageId: updated.ratePackageId },
+        to: { sourceChannel: updated.sourceChannel, cameInAs: updated.cameInAs, travelAgentId: updated.travelAgentId, corporateAccountId: updated.corporateAccountId, ratePackageId: updated.ratePackageId, ratePackageIds: updated.ratePackageIds },
         contactPersons: contacts.length,
         arrivingFollowed: !!arriving,
       },
     });
-    return { sourceChannel: updated.sourceChannel, cameInAs: updated.cameInAs, travelAgentId: updated.travelAgentId, corporateAccountId: updated.corporateAccountId, ratePackageId: updated.ratePackageId };
+    return { sourceChannel: updated.sourceChannel, cameInAs: updated.cameInAs, travelAgentId: updated.travelAgentId, corporateAccountId: updated.corporateAccountId, ratePackageId: updated.ratePackageId, ratePackageIds: updated.ratePackageIds };
   });
 }
