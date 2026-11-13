@@ -24,6 +24,7 @@ import {
 } from "../../policies/08-pricing-rate-plan/p07-quotation-lifecycle-state-guards.js";
 import { enforceEntryNotSealedForWorkingAction } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
 import { assertEntryWorkable } from "../../lib/assert-entry-workable.js";
+import { resolveRoomTypesFace } from "../../lib/paper-room-types.js";
 import {
   enforceEntryAtS2ForQuotationCreation,
   enforceRoomTypeResolvedForS2Quotation,
@@ -2128,6 +2129,13 @@ async function sendQuotationInner(
     /** Name every night on the copy sent (2026-10-30) — the stored PDF writes runs short. */
     nightsEach?: boolean;
     /**
+     * Send it WITH the room types on an agency's or a company's booking (2026-11-13); left out, the
+     * booking's own default — no room types for an agency or a company (lib/paper-room-types.ts).
+     */
+    showRoomTypes?: boolean;
+    /** Who is sending, from the verified session — the setting names the roles that may show room types. */
+    actorLevel?: string | null;
+    /**
      * Sent as part of the trip's combined paper (2026-11-07): recorded as sent like any other, but
      * not emailed on its own — the trip's paper is the one email. Internal; never on an HTTP body.
      */
@@ -2138,6 +2146,8 @@ async function sendQuotationInner(
   if (!q) throw new NotFoundError("Quotation");
   await assertEntryWorkable(prisma, q.entryId);
   enforceQuotationInDraftToSend({ state: q.state });
+  // Without room types on an agency's or a company's booking, unless the desk may and asked (2026-11-13).
+  const hideRoomTypes = await resolveRoomTypesFace(prisma, q.entryId, input.showRoomTypes, input.actorLevel);
 
   await enforceQuotationSendTimeGovernanceConfig(prisma);
 
@@ -2300,6 +2310,7 @@ async function sendQuotationInner(
           // What the guest actually received — the record keeps the priced document either way.
           pricesShown: input.hidePrices !== true,
           nightsShown: input.nightsEach === true ? "EACH" : "SHORT",
+          roomTypesShown: !hideRoomTypes,
         },
         createdBy: actorId,
       },
@@ -2321,6 +2332,7 @@ async function sendQuotationInner(
       /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(typed) ? typed : null,
       input.hidePrices === true,
       input.nightsEach === true,
+      hideRoomTypes,
     );
   }
 
@@ -2333,6 +2345,7 @@ async function sendQuotationEmailBestEffort(
   toAddress: string | null = null,
   hidePrices = false,
   nightsEach = false,
+  hideRoomTypes = false,
 ) {
   const q = await prisma.quotation.findUnique({
     where: { id: quotationId },
@@ -2381,9 +2394,10 @@ async function sendQuotationEmailBestEffort(
     // The priced PDF is rendered and stored either way — it is the record of what was offered.
     // When the desk asked for a copy without prices, THAT is what the guest receives.
     const artifact = await generateOrLoadQuotationPdf(prisma, q.id, q.createdBy ?? "SYSTEM");
+    // An agency's or a company's copy names no room type (2026-11-13): drawn fresh, never stored.
     const attached =
-      hidePrices || nightsEach
-        ? await renderQuotationPdfFace(prisma, q.id, { hidePrices, nightsMode: nightsEach ? "EACH" : "SHORT" })
+      hidePrices || nightsEach || hideRoomTypes
+        ? await renderQuotationPdfFace(prisma, q.id, { hidePrices, nightsMode: nightsEach ? "EACH" : "SHORT", hideRoomTypes })
         : { bytes: artifact.bytes, referenceNumber: artifact.invoiceNumber };
     content.attachments = [
       {

@@ -4,6 +4,7 @@ import { prisma } from "../../db.js";
 import { requireActorLevel } from "../../middleware/auth.js";
 import { validateBody } from "../../middleware/validate-body.js";
 import { readNightsMode } from "../../lib/room-nights-for-entry.js";
+import { readRoomTypesQuery, roomTypesHiddenFor } from "../../lib/paper-room-types.js";
 import {
   answerTripQuotation,
   describeTripQuotation,
@@ -102,9 +103,21 @@ tripPapersRouter.get("/entries/:id/trip-voucher", requireActorLevel("L1"), async
   }
 });
 
+/** A trip paper's face: `?roomTypes=hidden|shown`, else the booking's own (none for an agency or a company, 2026-11-13). */
+async function tripFace(id: string, q: Record<string, unknown>) {
+  const paper = await prisma.tripPaper.findUnique({ where: { id }, select: { members: true } });
+  const entryId = (paper?.members as Array<{ entryId?: string }> | null)?.[0]?.entryId ?? null;
+  const asked = readRoomTypesQuery(q.roomTypes);
+  return {
+    hidePrices: q.prices === "none",
+    nightsMode: readNightsMode(q.nights),
+    hideRoomTypes: entryId ? await roomTypesHiddenFor(prisma, entryId, asked) : asked === true,
+  };
+}
+
 tripPapersRouter.get("/trip-papers/:id/preview-html", requireActorLevel("L1"), async (req, res, next) => {
   try {
-    const opts = { hidePrices: req.query.prices === "none", nightsMode: readNightsMode(req.query.nights) };
+    const opts = await tripFace(req.params.id, req.query as Record<string, unknown>);
     const kind = await kindOf(req.params.id);
     const { html } =
       kind === "VOUCHER"
@@ -121,7 +134,7 @@ tripPapersRouter.get("/trip-papers/:id/preview-html", requireActorLevel("L1"), a
 
 tripPapersRouter.get("/trip-papers/:id/pdf", requireActorLevel("L1"), async (req, res, next) => {
   try {
-    const opts = { hidePrices: req.query.prices === "none", nightsMode: readNightsMode(req.query.nights) };
+    const opts = await tripFace(req.params.id, req.query as Record<string, unknown>);
     const kind = await kindOf(req.params.id);
     const { bytes, filename } =
       kind === "VOUCHER"
@@ -141,6 +154,8 @@ const sendSchema = z.object({
   channel: z.enum(["EMAIL", "WHATSAPP"]),
   to: z.string().trim().max(200).nullable().optional(),
   nightsEach: z.boolean().optional(),
+  /** With the room types on an agency's or a company's booking, when allowed (2026-11-13). */
+  showRoomTypes: z.boolean().optional(),
 });
 
 tripPapersRouter.post("/trip-papers/:id/send", requireActorLevel("L1"), validateBody(sendSchema), async (req, res, next) => {

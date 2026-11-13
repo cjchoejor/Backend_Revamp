@@ -9,6 +9,7 @@ import { formatDocDate, formatDocDateLocal } from "../infrastructure/pdf-templat
 import type { LegphelQuotationLine } from "../infrastructure/pdf-templates/legphel-quotation-template.js";
 import { loadHotelProfileForRender } from "../../lib/pdf-render-context.js";
 import type { NightsMode } from "../../lib/room-nights-for-entry.js";
+import { resolveRoomTypesFace } from "../../lib/paper-room-types.js";
 import { renderHtmlToPdf } from "../infrastructure/pdf-render-service.js";
 import { mastheadFromHotelProfile } from "../infrastructure/pdf-templates/legphel-document-shell.js";
 import { renderLegphelTripVoucherHtml } from "../infrastructure/pdf-templates/legphel-trip-voucher-template.js";
@@ -196,7 +197,7 @@ async function liveAndCurrent(prisma: PrismaClient, tripPaperId: string) {
 }
 
 /** The trip's voucher as HTML — each stay's rooms, no prices, then the stays together. Pure read. */
-export async function renderTripVoucherHtml(prisma: PrismaClient, tripPaperId: string, opts?: { nightsMode?: NightsMode }) {
+export async function renderTripVoucherHtml(prisma: PrismaClient, tripPaperId: string, opts?: { nightsMode?: NightsMode; hideRoomTypes?: boolean }) {
   const paper = await loadPaper(prisma, tripPaperId);
   const members = paper.members as unknown as TripVoucherMember[];
   const inquiry = await prisma.inquiry.findUnique({
@@ -218,8 +219,8 @@ export async function renderTripVoucherHtml(prisma: PrismaClient, tripPaperId: s
       select: { id: true, segmentId: true, state: true, versionNumber: true, createdAt: true },
     });
     const q = res ? resolveBillQuotation(quotes, res.segmentId) : null;
-    const prices = q ? await quotationPaperPrices(prisma, q.id, { nightsMode: opts?.nightsMode }).catch(() => null) : null;
-    stays.push(tripStayDates(m.stayNo, m.checkIn ? new Date(`${m.checkIn}T00:00:00Z`) : null, m.checkOut ? new Date(`${m.checkOut}T00:00:00Z`) : null, formatDocDate));
+    const prices = q ? await quotationPaperPrices(prisma, q.id, { nightsMode: opts?.nightsMode, hideRoomTypes: opts?.hideRoomTypes }).catch(() => null) : null;
+    stays.push(tripStayDates(m.stayNo, m.checkIn ? new Date(`${m.checkIn}T00:00:00Z`) : null, m.checkOut ? new Date(`${m.checkOut}T00:00:00Z`) : null, formatDocDate, prices?.roomsWord ?? null));
     lines.push(...(prices?.priceBlock.lines ?? []));
     datesShown = datesShown || !!prices?.priceBlock.datesShown;
   }
@@ -239,7 +240,7 @@ export async function renderTripVoucherHtml(prisma: PrismaClient, tripPaperId: s
   return { html, number, paper };
 }
 
-export async function renderTripVoucherPdf(prisma: PrismaClient, tripPaperId: string, opts?: { nightsMode?: NightsMode }) {
+export async function renderTripVoucherPdf(prisma: PrismaClient, tripPaperId: string, opts?: { nightsMode?: NightsMode; hideRoomTypes?: boolean }) {
   const { html, number } = await renderTripVoucherHtml(prisma, tripPaperId, opts);
   return { bytes: await renderHtmlToPdf(html, { fitToPage: true }), filename: `${number.replace(" · ", "-")}-trip-confirmation-voucher.pdf` };
 }
@@ -252,11 +253,13 @@ export async function sendTripVoucher(
   prisma: PrismaClient,
   tripPaperId: string,
   actor: Actor,
-  input: { channel: "EMAIL" | "WHATSAPP"; to?: string | null; nightsEach?: boolean },
+  input: { channel: "EMAIL" | "WHATSAPP"; to?: string | null; nightsEach?: boolean; showRoomTypes?: boolean },
 ) {
   const { paper, stays, members } = await liveAndCurrent(prisma, tripPaperId);
   const reason = standing(stays);
   if (reason) throw new ValidationError(reason);
+  // Without room types to an agency or a company, unless the desk may and asked (2026-11-13).
+  const hideRoomTypes = await resolveRoomTypesFace(prisma, members[0].entryId, input.showRoomTypes, actor.actorLevel);
   const number = paperNumber(paper.documentNumber, paper.versionNumber);
   const sendTo = await resolveSendTo(prisma, members[0].entryId);
   let to = input.to?.trim() || (input.channel === "EMAIL" ? sendTo.email : sendTo.phone) || null;
@@ -290,16 +293,16 @@ export async function sendTripVoucher(
         timestamp: now,
         inquiryId: paper.inquiryId,
         entryId: m.entryId,
-        payload: { tripPaperId: paper.id, kind: "VOUCHER", number, channel: input.channel, to },
+        payload: { tripPaperId: paper.id, kind: "VOUCHER", number, channel: input.channel, to, roomTypesShown: !hideRoomTypes },
         createdBy: actor.actorId,
       },
     });
   }
-  if (input.channel === "EMAIL" && to) await emailTripVoucher(prisma, paper.id, members, to, number, input.nightsEach === true);
+  if (input.channel === "EMAIL" && to) await emailTripVoucher(prisma, paper.id, members, to, number, input.nightsEach === true, hideRoomTypes);
   return { sentTo: to, channel: input.channel, number };
 }
 
-async function emailTripVoucher(prisma: PrismaClient, tripPaperId: string, members: TripVoucherMember[], to: string, number: string, nightsEach: boolean) {
+async function emailTripVoucher(prisma: PrismaClient, tripPaperId: string, members: TripVoucherMember[], to: string, number: string, nightsEach: boolean, hideRoomTypes: boolean) {
   const entries = await prisma.entry.findMany({
     where: { id: { in: members.map((m) => m.entryId) } },
     select: { id: true, inquiryId: true, guestCount: true, guestProfile: { select: { title: true, firstName: true, lastName: true } }, reservation: { select: { frozenCancellationTerms: true } } },
@@ -315,6 +318,8 @@ async function emailTripVoucher(prisma: PrismaClient, tripPaperId: string, membe
     checkInDate: new Date(`${ins[0]}T00:00:00Z`),
     checkOutDate: new Date(`${outs[outs.length - 1]}T00:00:00Z`),
     guestCount: Math.max(1, ...entries.map((e) => e.guestCount ?? 1)),
+    // Each stay with its own nights, then the nights together (2026-11-13).
+    stays: members.map((m) => ({ label: `Stay ${m.stayNo}`, checkIn: new Date(`${m.checkIn}T00:00:00Z`), checkOut: new Date(`${m.checkOut}T00:00:00Z`) })),
     // Each stay's own cancellation policy; one list when they read the same (2026-11-10).
     cancellationPolicy: await cancellationWordsForStays(
       prisma,
@@ -322,7 +327,7 @@ async function emailTripVoucher(prisma: PrismaClient, tripPaperId: string, membe
     ),
   });
   try {
-    const pdf = await renderTripVoucherPdf(prisma, tripPaperId, { nightsMode: nightsEach ? "EACH" : "SHORT" });
+    const pdf = await renderTripVoucherPdf(prisma, tripPaperId, { nightsMode: nightsEach ? "EACH" : "SHORT", hideRoomTypes });
     content.attachments = [{ filename: pdf.filename, content: pdf.bytes, contentType: "application/pdf" }];
   } catch {
     // The email still goes with its words; the desk can send the paper again.

@@ -59,10 +59,11 @@ export function combineTripPriceBlocks(parts: TripPricePart[], opts?: { hidePric
 /** The dates at the top of a trip's paper: a line for each stay. */
 export type TripStayDates = { label: string; dates: string };
 
-export function tripStayDates(stayNo: number, ci: Date | null, co: Date | null, words: (d: Date) => string): TripStayDates {
+/** `rooms` — "3 rooms", on a paper that names no room type (2026-11-13). */
+export function tripStayDates(stayNo: number, ci: Date | null, co: Date | null, words: (d: Date) => string, rooms?: string | null): TripStayDates {
   const nights = ci && co ? Math.round((co.getTime() - ci.getTime()) / 86_400_000) : null;
   return {
     label: `Stay ${stayNo}`,
-    dates: `Check-in ${ci ? words(ci) : "—"} · Check-out ${co ? words(co) : "—"}${nights != null ? ` · ${nights} night${nights === 1 ? "" : "s"}` : ""}`,
+    dates: `Check-in ${ci ? words(ci) : "—"} · Check-out ${co ? words(co) : "—"}${nights != null ? ` · ${nights} night${nights === 1 ? "" : "s"}` : ""}${rooms ? ` · ${rooms}` : ""}`,
   };
 }

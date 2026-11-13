@@ -145,6 +145,9 @@ reservationsRouter.post("/reservations/:id/confirmation-voucher/send", requireAc
     const out = await reservationService.resendConfirmationVoucher(prisma, req.params.id, req.actor!.actorId, {
       dispatchedTo,
       nightsEach: req.body?.nightsEach === true,
+      // With the room types on an agency's or a company's booking, when allowed (2026-11-13).
+      showRoomTypes: req.body?.showRoomTypes === true,
+      actorLevel: req.actor?.level ?? null,
     });
     res.json(out);
   } catch (e) {

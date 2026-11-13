@@ -578,7 +578,7 @@ foliosRouter.post("/interim-payments/:id/promise", requireActorLevel("L1"), vali
 
 foliosRouter.post("/invoices/:id/dispatch", requireActorLevel("L1"), validateBody(dispatchInvoiceRequestSchema), async (req, res, next) => {
   try {
-    const updated = await s9Service.dispatchInvoice(prisma, req.params.id, req.actor!.actorId, req.body);
+    const updated = await s9Service.dispatchInvoice(prisma, req.params.id, req.actor!.actorId, { ...req.body, actorLevel: req.actor?.level });
     res.json(updated);
   } catch (e) {
     next(e);

@@ -77,10 +77,16 @@ export async function generateOrLoadConfirmationVoucherPdf(
      * instead of a run as its first and last. The stored voucher writes runs short.
      */
     nightsMode?: NightsMode;
+    /**
+     * The face an agency or a company receives (2026-11-13, lib/paper-room-types.ts): the rooms with
+     * no room type. Rendered fresh and never stored, like every other face.
+     */
+    hideRoomTypes?: boolean;
   },
 ): Promise<ConfirmationVoucherArtifact> {
   const nightsMode: NightsMode = opts?.nightsMode ?? "SHORT";
-  const freshFace = nightsMode !== "SHORT";
+  const hideTypes = opts?.hideRoomTypes === true;
+  const freshFace = nightsMode !== "SHORT" || hideTypes;
   const reservation = await prisma.reservation.findUnique({
     where: { id: reservationId },
     include: {
@@ -294,7 +300,12 @@ export async function generateOrLoadConfirmationVoucherPdf(
   // Each room with its nights (2026-10-30, operator — on every paper): "2 × Deluxe Double
   // (10–19 Mar) · Room 204 (10–14 Mar)", a room the system chose by its type, rooms of one name on
   // the same nights counted together, the nights written short or each one named.
-  const roomsWords = roomsWithNightsLine([...roomNightItems.values()], nightsMode);
+  // With no room types (2026-11-13) the line says how many rooms, never which type.
+  const roomsWords = hideTypes
+    ? roomNightItems.size
+      ? `${roomNightItems.size} room${roomNightItems.size === 1 ? "" : "s"}`
+      : ""
+    : roomsWithNightsLine([...roomNightItems.values()], nightsMode);
   const plans = [...new Set(bookingRows.map((r) => r.mealPlan).filter(Boolean))];
   const roomsSummary = bookingRows.length
     ? [
@@ -331,7 +342,7 @@ export async function generateOrLoadConfirmationVoucherPdf(
     select: { id: true, segmentId: true, state: true, versionNumber: true, createdAt: true },
   });
   const passQuote = resolveBillQuotation(passQuotes, reservation.segmentId);
-  const paper = passQuote ? await quotationPaperPrices(prisma, passQuote.id, { nightsMode }).catch(() => null) : null;
+  const paper = passQuote ? await quotationPaperPrices(prisma, passQuote.id, { nightsMode, hideRoomTypes: hideTypes }).catch(() => null) : null;
 
   const html = renderLegphelConfirmationVoucherHtml({
     masthead: mastheadFromHotelProfile(hotel),
@@ -359,7 +370,12 @@ export async function generateOrLoadConfirmationVoucherPdf(
   let bytes = await renderHtmlToPdf(html, { fitToPage: true });
   // Another face is handed back as it is — never stored, never the record.
   if (freshFace) {
-    return { storageKey: "", checksum: hashSha256(bytes), bytes, filename: `${voucherNumber}-confirmation-voucher-each-night.pdf` };
+    return {
+      storageKey: "",
+      checksum: hashSha256(bytes),
+      bytes,
+      filename: `${voucherNumber}-confirmation-voucher${nightsMode === "EACH" ? "-each-night" : ""}.pdf`,
+    };
   }
   // Named by the voucher's own number (2026-10-13). It was `<enquiry>-v1`, the same for every
   // voucher of a booking and of every stay on its enquiry — so the first file was found and

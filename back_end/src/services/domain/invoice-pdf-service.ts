@@ -248,8 +248,13 @@ export async function proformaEmailFigures(prisma: PrismaClient, invoiceId: stri
  *     no advance read "Advance due now" for the full amount).
  *   - "Balance at checkout" = total − received − advance due now (floor 0).
  */
-async function buildProformaDocRender(prisma: PrismaClient, inv: LoadedInvoice, opts?: { nightsMode?: NightsMode }) {
+/**
+ * `hideRoomTypes` is the face an agency or a company receives (2026-11-13, lib/paper-room-types.ts):
+ * the quotation's rows with no room type, and how many rooms on the stay's line.
+ */
+async function buildProformaDocRender(prisma: PrismaClient, inv: LoadedInvoice, opts?: { nightsMode?: NightsMode; hideRoomTypes?: boolean }) {
   const nightsMode: NightsMode = opts?.nightsMode ?? "SHORT";
+  const hideTypes = opts?.hideRoomTypes === true;
   const hotel = await loadHotelProfileForRender(prisma);
   const p = invoicePrelude(inv);
 
@@ -318,8 +323,10 @@ async function buildProformaDocRender(prisma: PrismaClient, inv: LoadedInvoice, 
   // The stay, set out as the quotation is (2026-11-05, operator: "make proforma layout like
   // quotation"): the rows and totals of the very quotation this bill is priced on, by the code that
   // prints them there. Only a booking with no quotation at all, which has nothing priced, has one line.
-  const paper = p.quotation ? await quotationPaperPrices(prisma, p.quotation.id, { nightsMode }) : null;
+  const paper = p.quotation ? await quotationPaperPrices(prisma, p.quotation.id, { nightsMode, hideRoomTypes: hideTypes }) : null;
   if (paper) totalAmount = paper.total;
+  // How many rooms, on the stay's line of a paper with no room types.
+  const roomsWordHere = hideTypes ? (paper?.roomsWord ?? `${p.roomCount} room${p.roomCount === 1 ? "" : "s"}`) : null;
   const prices: LegphelPriceBlock = paper?.priceBlock ?? {
     datesShown: false,
     lines: [
@@ -390,7 +397,10 @@ async function buildProformaDocRender(prisma: PrismaClient, inv: LoadedInvoice, 
     validUntil: inv.validUntil ? formatDocDateTimeLocal(inv.validUntil) : null,
     to: billedParty ?? (p.guest?.email ? `${p.guestName} · ${p.guest.email}` : p.guestName),
     forGuest: p.guestName,
-    stay: formatStayLines(p.checkIn, p.checkOut, p.nights),
+    stay: (() => {
+      const st = formatStayLines(p.checkIn, p.checkOut, p.nights);
+      return st && roomsWordHere ? { ...st, checkOut: `${st.checkOut} · ${roomsWordHere}` } : st;
+    })(),
     prices,
     advancePlanLabel,
     advanceReceived: advanceReceived > 0 ? formatMoney(advanceReceived) : null,
@@ -434,6 +444,7 @@ async function buildProformaDocRender(prisma: PrismaClient, inv: LoadedInvoice, 
     invoiceRef,
     hotel,
     prelude: p,
+    roomsWord: roomsWordHere,
   };
 }
 
@@ -441,7 +452,7 @@ async function buildProformaDocRender(prisma: PrismaClient, inv: LoadedInvoice, 
  * A proforma's own rows and figures, exactly as its paper prints them — read by the trip's proforma
  * (2026-11-07), which sets each stay out as that stay's own proforma does and adds them up.
  */
-export async function proformaPaperFigures(prisma: PrismaClient, invoiceId: string, opts?: { nightsMode?: NightsMode }) {
+export async function proformaPaperFigures(prisma: PrismaClient, invoiceId: string, opts?: { nightsMode?: NightsMode; hideRoomTypes?: boolean }) {
   const inv = await loadInvoiceForRender(prisma, invoiceId);
   if (inv.invoiceType !== "PROFORMA") throw new ValidationError("Not a proforma");
   const r = await buildProformaDocRender(prisma, inv, opts);
@@ -461,6 +472,7 @@ export async function proformaPaperFigures(prisma: PrismaClient, invoiceId: stri
     advanceDeadline: r.advanceDeadline,
     validUntil: inv.validUntil ?? null,
     guestName: r.prelude.guestName,
+    roomsWord: r.roomsWord,
   };
 }
 
@@ -533,7 +545,7 @@ export async function buildInterimDocRender(prisma: PrismaClient, inv: LoadedInv
 export async function renderInvoicePreviewHtml(
   prisma: PrismaClient,
   invoiceId: string,
-  opts?: { nightsMode?: NightsMode },
+  opts?: { nightsMode?: NightsMode; hideRoomTypes?: boolean },
 ): Promise<{ html: string; invoiceRef: string }> {
   const inv = await loadInvoiceForRender(prisma, invoiceId);
   if (inv.invoiceType === InvoiceType.INTERIM) {
@@ -554,10 +566,10 @@ export async function renderInvoicePreviewHtml(
 export async function renderProformaPdfFace(
   prisma: PrismaClient,
   invoiceId: string,
-  face: { nightsMode: NightsMode },
+  face: { nightsMode: NightsMode; hideRoomTypes?: boolean },
 ): Promise<{ bytes: Buffer; filename: string }> {
   const inv = await loadInvoiceForRender(prisma, invoiceId);
-  if (inv.invoiceType !== InvoiceType.PROFORMA) throw new ValidationError("Only a proforma has a copy with every night named");
+  if (inv.invoiceType !== InvoiceType.PROFORMA) throw new ValidationError("Only a proforma has another face");
   const m = await buildProformaDocRender(prisma, inv, face);
   const base = filenameFor(inv.invoiceType, fileRefOf(inv)).replace(/\.pdf$/, "");
   return { bytes: await renderHtmlToPdf(m.html, { fitToPage: true }), filename: `${base}${face.nightsMode === "EACH" ? "-each-night" : ""}.pdf` };

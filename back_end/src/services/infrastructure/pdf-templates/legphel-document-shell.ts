@@ -281,6 +281,9 @@ export function bankStrip(pairs: Array<{ label: string; value: string }>): strin
 /** `table.mini` — the compact line-item table. `align: "r"` puts a column in right-aligned mono. */
 export type MiniColumn = { header: string; align?: "l" | "r" };
 
+/** A cell with a word in bold in front of it — the package a room is priced on (2026-11-13). */
+export type MiniCell = { lead: string; text: string };
+
 /**
  * `rowClasses[i]` is applied to row `i` — used for the quotation's `sub` (indented sub-line of
  * the room above) and `grp-end` (last row of a room's group, so the hairline lands there).
@@ -288,7 +291,7 @@ export type MiniColumn = { header: string; align?: "l" | "r" };
  */
 export function miniTable(
   columns: MiniColumn[],
-  rows: Array<Array<string | null>>,
+  rows: Array<Array<string | MiniCell | null>>,
   rowClasses?: Array<string | null | undefined>,
   tableClass?: string | null,
 ): string {
@@ -299,7 +302,10 @@ export function miniTable(
     .map((r, ri) => {
       const cls = rowClasses?.[ri];
       return `<tr${cls ? ` class="${htmlEscape(cls)}"` : ""}>${r
-        .map((cell, i) => `<td${columns[i]?.align === "r" ? ' class="r"' : ""}>${htmlEscape(cell ?? "")}</td>`)
+        .map((cell, i) => {
+          const body = cell && typeof cell === "object" ? `<b>${htmlEscape(cell.lead)}</b> ${htmlEscape(cell.text)}` : htmlEscape(cell ?? "");
+          return `<td${columns[i]?.align === "r" ? ' class="r"' : ""}>${body}</td>`;
+        })
         .join("")}</tr>`;
     })
     .join("");

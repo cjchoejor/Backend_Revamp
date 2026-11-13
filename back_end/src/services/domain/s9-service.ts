@@ -8,6 +8,7 @@ import { CommissionDueStatus, EntryStatus, FolioLineType, FolioState, InvoiceSta
 import { allocateReadableId, READABLE_ID_PREFIXES, allocateFolioLineId } from "../../lib/readable-id.js";
 import { cleanPhone } from "../../lib/phone-numbers.js";
 import { AppError, MissingConfigurationError, NotFoundError, PolicyGateBlockedError, ValidationError } from "../../lib/errors.js";
+import { resolveRoomTypesFace } from "../../lib/paper-room-types.js";
 import { describeBookingInspections, readBookingInspectionStanding } from "../../lib/room-inspection-standing.js";
 import { readBookingDamages, undecidedDamageRooms } from "../../lib/damage-standing.js";
 import { enforceDamageDecidedForS9Closure } from "../../policies/36-damage-assessment/p81-damage-assessment-gates.js";
@@ -185,6 +186,10 @@ async function dispatchInvoiceInner(
   input?: {
     dispatchedTo?: string;
     nightsEach?: boolean;
+    /** A proforma WITH the room types on an agency's or a company's booking (2026-11-13); left out, the booking's default. */
+    showRoomTypes?: boolean;
+    /** Who is sending, from the verified session (lib/paper-room-types.ts). */
+    actorLevel?: string | null;
     /** Sent with the trip's proforma (2026-11-07): its email is the trip's, so none goes from here. */
     viaTripPaper?: { id: string; number: string; channel: "EMAIL" | "WHATSAPP" };
     /** WHATSAPP (2026-11-10): the desk sends it on WhatsApp itself; this records the send and the
@@ -198,6 +203,9 @@ async function dispatchInvoiceInner(
   // A proforma prints the advance, so it does not go out before the desk says what happens to the
   // money paid before this booking was sent back (2026-11-05).
   if (invoice.invoiceType === "PROFORMA") await enforceEarlierAdvanceAnswered(prisma, invoice.entryId, invoice.folioId);
+  // A proforma to an agency or a company names no room type unless the desk may and asked (2026-11-13).
+  const hideRoomTypes =
+    invoice.invoiceType === "PROFORMA" ? await resolveRoomTypesFace(prisma, invoice.entryId, input?.showRoomTypes, input?.actorLevel) : false;
   if (invoice.invoiceType === "PROFORMA" && invoice.lapsedAt) {
     throw new PolicyGateBlockedError("PROFORMA_LAPSED", "This proforma has run out. Make it again on its card, then send that one.");
   }
@@ -256,7 +264,7 @@ async function dispatchInvoiceInner(
               : onWhatsApp
                 ? `Proforma invoice sent on WhatsApp to ${whatsAppTo}`
                 : "Proforma invoice dispatched",
-            payload: { invoiceId: updated.id, dispatchedTo: updated.dispatchedTo ?? null, ...(via ? { tripPaperId: via.id } : {}) },
+            payload: { invoiceId: updated.id, dispatchedTo: updated.dispatchedTo ?? null, roomTypesShown: !hideRoomTypes, ...(via ? { tripPaperId: via.id } : {}) },
             createdBy: actorId,
           },
         });
@@ -396,7 +404,7 @@ async function dispatchInvoiceInner(
 
   // Phase 3 — outbound invoice email (best-effort, post-tx).
   // PROFORMA → S3 PI email; final invoices (RECEIPT_BASED / FOLIO / etc.) → S8/S9 final invoice email.
-  if (!via && !onWhatsApp) await sendInvoiceEmailBestEffort(prisma, actorId, result.id, recipient, { nightsEach: input?.nightsEach === true });
+  if (!via && !onWhatsApp) await sendInvoiceEmailBestEffort(prisma, actorId, result.id, recipient, { nightsEach: input?.nightsEach === true, hideRoomTypes });
 
   return result;
 }
@@ -406,7 +414,7 @@ async function sendInvoiceEmailBestEffort(
   actorId: string,
   invoiceId: string,
   recipient: InvoiceRecipient,
-  face?: { nightsEach?: boolean },
+  face?: { nightsEach?: boolean; hideRoomTypes?: boolean },
 ) {
   const inv = await prisma.invoice.findUnique({
     where: { id: invoiceId },
@@ -547,9 +555,10 @@ async function sendInvoiceEmailBestEffort(
     // The stored PDF is rendered either way — the record. A proforma the desk asked to send with
     // every night named goes out as that copy (2026-10-30).
     const artifact = await generateOrLoadInvoicePdf(prisma, inv.id, actorId);
+    // An agency's or a company's proforma names no room type (2026-11-13): drawn fresh, never stored.
     const attached =
-      isPI && face?.nightsEach
-        ? await renderProformaPdfFace(prisma, inv.id, { nightsMode: "EACH" })
+      isPI && (face?.nightsEach || face?.hideRoomTypes)
+        ? await renderProformaPdfFace(prisma, inv.id, { nightsMode: face?.nightsEach ? "EACH" : "SHORT", hideRoomTypes: face?.hideRoomTypes === true })
         : { filename: artifact.filename, bytes: artifact.bytes };
     content.attachments = [
       {

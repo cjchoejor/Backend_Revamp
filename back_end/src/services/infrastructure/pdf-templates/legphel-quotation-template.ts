@@ -53,6 +53,11 @@ export type LegphelQuotationLine = {
   indent?: boolean;
   /** Says something, charges nothing — printed grey ("Room only · no meals"). */
   muted?: boolean;
+  /**
+   * In bold in front of the description: the package a room is priced on, on a paper that names no
+   * room type — "**Season** Room 1 · 2 adults" (2026-11-13, operator).
+   */
+  lead?: string | null;
 };
 
 /**
@@ -149,7 +154,7 @@ export function renderPriceBlock(input: LegphelPriceBlock): string[] {
       ],
       input.lines.map((l) => [
         ...(input.datesShown ? [l.dates ?? ""] : []),
-        l.description,
+        l.lead ? { lead: l.lead, text: l.description } : l.description,
         l.qty,
         ...(input.hidePrices ? [] : [l.rate, l.amount]),
       ]),

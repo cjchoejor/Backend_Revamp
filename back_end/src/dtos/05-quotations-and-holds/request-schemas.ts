@@ -160,6 +160,11 @@ export const sendQuotationRequestSchema = z.object({
   hidePrices: z.boolean().optional(),
   /** Name every night on the copy sent, instead of writing a run as its first and last (2026-10-30). */
   nightsEach: z.boolean().optional(),
+  /**
+   * Send it WITH the room types on a booking through an agency or a company (2026-11-13) — only when
+   * the admin console allows it and for the roles it names (lib/paper-room-types.ts).
+   */
+  showRoomTypes: z.boolean().optional(),
 });
 export type SendQuotationRequestDto = z.infer<typeof sendQuotationRequestSchema>;
 

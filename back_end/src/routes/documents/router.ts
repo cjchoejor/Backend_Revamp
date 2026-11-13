@@ -15,6 +15,7 @@ import { NotFoundError } from "../../lib/errors.js";
 import { readDocument } from "../../lib/document-storage.js";
 import { generateOrLoadQuotationPdf, quotationPriceLines, renderQuotationPdfFace, renderQuotationPreviewHtml } from "../../services/domain/quotation-pdf-service.js";
 import { entryNightsShorten, readNightsMode } from "../../lib/room-nights-for-entry.js";
+import { describePaperRoomTypes, readRoomTypesQuery, roomTypesHiddenFor } from "../../lib/paper-room-types.js";
 import { generateOrLoadInvoicePdf, renderInvoicePreviewHtml, renderProformaPdfFace } from "../../services/domain/invoice-pdf-service.js";
 import { generateOrLoadConfirmationVoucherPdf } from "../../services/domain/confirmation-voucher-pdf-service.js";
 import { generateCancellationConfirmationPdf } from "../../services/domain/cancellation-confirmation-pdf-service.js";
@@ -55,11 +56,13 @@ documentsRouter.get("/quotations/:id/pdf", requireActorLevel("L1"), async (req, 
     let filename = `${q.referenceNumber}-quotation.pdf`;
     // The price-free copy and the copy with every night named are rendered fresh and never
     // stored: the stored artifact is the priced quotation with the nights written short, the
-    // commercial record (2026-10-06, 2026-10-30).
+    // commercial record (2026-10-06, 2026-10-30). So is the copy with no room types an agency or a
+    // company receives (`?roomTypes=hidden`, 2026-11-13).
     const hidePrices = String(req.query.prices ?? "") === "none";
     const nightsMode = readNightsMode(req.query.nights);
-    if (hidePrices || nightsMode === "EACH") {
-      const out = await renderQuotationPdfFace(prisma, q.id, { hidePrices, nightsMode });
+    const hideRoomTypes = readRoomTypesQuery(req.query.roomTypes) === true;
+    if (hidePrices || nightsMode === "EACH" || hideRoomTypes) {
+      const out = await renderQuotationPdfFace(prisma, q.id, { hidePrices, nightsMode, hideRoomTypes });
       bytes = out.bytes;
       filename = `${out.referenceNumber}-quotation${hidePrices ? "-no-prices" : ""}${nightsMode === "EACH" ? "-each-night" : ""}.pdf`;
     } else if (q.pdfStorageKey) {
@@ -95,9 +98,13 @@ documentsRouter.get("/quotations/:id/preview-html", requireActorLevel("L1"), asy
     // `?prices=none` is the same document with the money taken off — what a guest who asked for
     // a quotation without prices receives (2026-10-06). Nothing about the offer changes.
     // `?nights=each` names every night instead of writing a run as its first and last (2026-10-30).
+    // `?roomTypes=hidden|shown` (2026-11-13); left out, the booking's own: none for an agency or a company.
+    const quote = await prisma.quotation.findUnique({ where: { id: req.params.id }, select: { entryId: true } });
+    if (!quote) throw new NotFoundError("Quotation");
     const { html } = await renderQuotationPreviewHtml(prisma, req.params.id, {
       hidePrices: String(req.query.prices ?? "") === "none",
       nightsMode: readNightsMode(req.query.nights),
+      hideRoomTypes: await roomTypesHiddenFor(prisma, quote.entryId, readRoomTypesQuery(req.query.roomTypes)),
     });
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.setHeader("X-Content-Type-Options", "nosniff");
@@ -154,6 +161,30 @@ documentsRouter.get("/papers/nights-shorten", requireActorLevel("L1"), async (re
 });
 
 /**
+ * GET /api/papers/room-types?quotationId=|invoiceId=|reservationId=|tripPaperId=|entryId= — whether
+ * this booking's papers go without room types, and whether this person may send them with (2026-11-13,
+ * lib/paper-room-types.ts). The desk draws the preview's Room types choice and the send boxes from it.
+ */
+documentsRouter.get("/papers/room-types", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const q = req.query as Record<string, string | undefined>;
+    let entryId = q.entryId ?? null;
+    if (!entryId && q.quotationId) entryId = (await prisma.quotation.findUnique({ where: { id: q.quotationId }, select: { entryId: true } }))?.entryId ?? null;
+    if (!entryId && q.invoiceId) entryId = (await prisma.invoice.findUnique({ where: { id: q.invoiceId }, select: { entryId: true } }))?.entryId ?? null;
+    if (!entryId && q.reservationId) entryId = (await prisma.reservation.findUnique({ where: { id: q.reservationId }, select: { entryId: true } }))?.entryId ?? null;
+    if (!entryId && q.tripPaperId) {
+      const tp = await prisma.tripPaper.findUnique({ where: { id: q.tripPaperId }, select: { members: true } });
+      entryId = (tp?.members as Array<{ entryId?: string }> | null)?.[0]?.entryId ?? null;
+    }
+    if (!entryId) throw new NotFoundError("Paper");
+    res.setHeader("Cache-Control", "no-store");
+    res.json(await describePaperRoomTypes(prisma, entryId, req.actor?.level ?? null));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
  * GET /api/quotations/:id/price-lines — the quotation's rows and the figures under them, as data
  * (2026-10-27): the booking file's Charges tab sets the price out the way the quotation does.
  * Same build as the document; nothing written. Staff-only (L1+).
@@ -190,9 +221,12 @@ documentsRouter.get(
 
       let bytes: Buffer;
       let filename = `${r.entry.inquiryId ?? r.id}-confirmation-voucher.pdf`;
-      // The voucher with every night named is rendered fresh and never stored (2026-10-30).
-      if (readNightsMode(req.query.nights) === "EACH") {
-        const out = await generateOrLoadConfirmationVoucherPdf(prisma, r.id, req.actor?.actorId ?? "SYSTEM", { nightsMode: "EACH" });
+      // The voucher with every night named, or with no room types (an agency's or a company's copy,
+      // 2026-11-13), is rendered fresh and never stored (2026-10-30).
+      const nightsMode = readNightsMode(req.query.nights);
+      const hideRoomTypes = readRoomTypesQuery(req.query.roomTypes) === true;
+      if (nightsMode === "EACH" || hideRoomTypes) {
+        const out = await generateOrLoadConfirmationVoucherPdf(prisma, r.id, req.actor?.actorId ?? "SYSTEM", { nightsMode, hideRoomTypes });
         bytes = out.bytes;
         filename = out.filename;
       } else if (r.confirmationVoucherStorageKey) {
@@ -223,8 +257,14 @@ documentsRouter.get(
  */
 documentsRouter.get("/invoices/:id/preview-html", requireActorLevel("L1"), async (req, res, next) => {
   try {
-    // `?nights=each` names every night on the proforma's Rooms line (2026-10-30).
-    const { html } = await renderInvoicePreviewHtml(prisma, req.params.id, { nightsMode: readNightsMode(req.query.nights) });
+    // `?nights=each` names every night on the proforma's Rooms line (2026-10-30); `?roomTypes=hidden|shown`
+    // its rooms with or without their types, the booking's own when left out (2026-11-13).
+    const invRow = await prisma.invoice.findUnique({ where: { id: req.params.id }, select: { entryId: true } });
+    if (!invRow) throw new NotFoundError("Invoice");
+    const { html } = await renderInvoicePreviewHtml(prisma, req.params.id, {
+      nightsMode: readNightsMode(req.query.nights),
+      hideRoomTypes: await roomTypesHiddenFor(prisma, invRow.entryId, readRoomTypesQuery(req.query.roomTypes)),
+    });
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.setHeader("X-Content-Type-Options", "nosniff");
     // Never cache — the preview must track payments and requirement changes live.
@@ -249,9 +289,11 @@ documentsRouter.get("/invoices/:id/pdf", requireActorLevel("L1"), async (req, re
 
     let bytes: Buffer;
     let filename = `${inv.invoiceNumber ?? inv.id}.pdf`;
-    // A proforma with every night named is rendered fresh and never stored (2026-10-30).
-    if (inv.invoiceType === "PROFORMA" && readNightsMode(req.query.nights) === "EACH") {
-      const out = await renderProformaPdfFace(prisma, inv.id, { nightsMode: "EACH" });
+    // A proforma with every night named, or with no room types (2026-11-13), is rendered fresh and never stored (2026-10-30).
+    const invNights = readNightsMode(req.query.nights);
+    const invHideTypes = readRoomTypesQuery(req.query.roomTypes) === true;
+    if (inv.invoiceType === "PROFORMA" && (invNights === "EACH" || invHideTypes)) {
+      const out = await renderProformaPdfFace(prisma, inv.id, { nightsMode: invNights, hideRoomTypes: invHideTypes });
       bytes = out.bytes;
       filename = out.filename;
     } else if (inv.pdfStorageKey) {

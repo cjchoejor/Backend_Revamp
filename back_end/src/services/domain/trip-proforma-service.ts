@@ -7,6 +7,7 @@ import { maxZeroSub, sumMoney, toDecimal } from "../../lib/money.js";
 import { enforceEarlierAdvanceAnswered } from "../../lib/refund-money.js";
 import { formatMoney, loadHotelProfileForRender } from "../../lib/pdf-render-context.js";
 import type { NightsMode } from "../../lib/room-nights-for-entry.js";
+import { resolveRoomTypesFace } from "../../lib/paper-room-types.js";
 import { renderHtmlToPdf } from "../infrastructure/pdf-render-service.js";
 import { mastheadFromHotelProfile, primaryContactNumber } from "../infrastructure/pdf-templates/legphel-document-shell.js";
 import { formatDocDate, formatDocDateLocal, formatDocDateTimeLocal } from "../infrastructure/pdf-templates/legphel-document-format.js";
@@ -246,7 +247,7 @@ async function liveAndCurrent(prisma: PrismaClient, tripPaperId: string) {
 }
 
 /** The trip's proforma as HTML — each stay as its own proforma prints it, then the trip's sums. Pure read. */
-export async function renderTripProformaHtml(prisma: PrismaClient, tripPaperId: string, opts?: { nightsMode?: NightsMode }) {
+export async function renderTripProformaHtml(prisma: PrismaClient, tripPaperId: string, opts?: { nightsMode?: NightsMode; hideRoomTypes?: boolean }) {
   const paper = await loadPaper(prisma, tripPaperId);
   const members = paper.members as unknown as TripProformaMember[];
   const inquiry = await prisma.inquiry.findUnique({
@@ -269,10 +270,10 @@ export async function renderTripProformaHtml(prisma: PrismaClient, tripPaperId: 
   let anyAsked = false;
   let rowsAreNet = true;
   for (const m of members) {
-    const f = await proformaPaperFigures(prisma, m.paperId, { nightsMode: opts?.nightsMode });
+    const f = await proformaPaperFigures(prisma, m.paperId, { nightsMode: opts?.nightsMode, hideRoomTypes: opts?.hideRoomTypes });
     parts.push({ stayNo: m.stayNo, block: f.prices, figures: f.priceFigures });
     rowsAreNet = rowsAreNet && f.rowsAreNet;
-    stays.push(tripStayDates(m.stayNo, m.checkIn ? new Date(`${m.checkIn}T00:00:00Z`) : null, m.checkOut ? new Date(`${m.checkOut}T00:00:00Z`) : null, formatDocDate));
+    stays.push(tripStayDates(m.stayNo, m.checkIn ? new Date(`${m.checkIn}T00:00:00Z`) : null, m.checkOut ? new Date(`${m.checkOut}T00:00:00Z`) : null, formatDocDate, f.roomsWord));
     plans.push({ stayNo: m.stayNo, label: f.advancePlanLabel ?? null });
     if (f.requiredAdvance != null) {
       anyAsked = true;
@@ -320,7 +321,7 @@ export async function renderTripProformaHtml(prisma: PrismaClient, tripPaperId: 
   return { html, number, paper };
 }
 
-export async function renderTripProformaPdf(prisma: PrismaClient, tripPaperId: string, opts?: { nightsMode?: NightsMode }) {
+export async function renderTripProformaPdf(prisma: PrismaClient, tripPaperId: string, opts?: { nightsMode?: NightsMode; hideRoomTypes?: boolean }) {
   const { html, number } = await renderTripProformaHtml(prisma, tripPaperId, opts);
   return { bytes: await renderHtmlToPdf(html, { fitToPage: true }), filename: `${number.replace(" · ", "-")}-trip-proforma.pdf` };
 }
@@ -333,11 +334,13 @@ export async function sendTripProforma(
   prisma: PrismaClient,
   tripPaperId: string,
   actor: Actor,
-  input: { channel: "EMAIL" | "WHATSAPP"; to?: string | null; nightsEach?: boolean },
+  input: { channel: "EMAIL" | "WHATSAPP"; to?: string | null; nightsEach?: boolean; showRoomTypes?: boolean },
 ) {
   const { paper, stays, members } = await liveAndCurrent(prisma, tripPaperId);
   const reason = standing(stays);
   if (reason) throw new ValidationError(reason);
+  // Without room types to an agency or a company, unless the desk may and asked (2026-11-13).
+  const hideRoomTypes = await resolveRoomTypesFace(prisma, members[0].entryId, input.showRoomTypes, actor.actorLevel);
   const number = paperNumber(paper.documentNumber, paper.versionNumber);
   const sendTo = await resolveSendTo(prisma, members[0].entryId);
   const to = input.to?.trim() || (input.channel === "EMAIL" ? sendTo.email : sendTo.phone);
@@ -348,6 +351,8 @@ export async function sendTripProforma(
     if (s.invoice?.state === "DRAFT") {
       await dispatchInvoice(prisma, s.invoice.id, actor.actorId, {
         dispatchedTo: to ?? undefined,
+        showRoomTypes: !hideRoomTypes,
+        actorLevel: actor.actorLevel,
         viaTripPaper: { id: paper.id, number, channel: input.channel },
       });
     }
@@ -366,16 +371,16 @@ export async function sendTripProforma(
         timestamp: now,
         inquiryId: paper.inquiryId,
         entryId: m.entryId,
-        payload: { tripPaperId: paper.id, kind: "PROFORMA", number, channel: input.channel, to },
+        payload: { tripPaperId: paper.id, kind: "PROFORMA", number, channel: input.channel, to, roomTypesShown: !hideRoomTypes },
         createdBy: actor.actorId,
       },
     });
   }
-  if (input.channel === "EMAIL" && to) await emailTripProforma(prisma, paper.id, members, to, number, input.nightsEach === true);
+  if (input.channel === "EMAIL" && to) await emailTripProforma(prisma, paper.id, members, to, number, input.nightsEach === true, hideRoomTypes);
   return { sentTo: to, channel: input.channel, number };
 }
 
-async function emailTripProforma(prisma: PrismaClient, tripPaperId: string, members: TripProformaMember[], to: string, number: string, nightsEach: boolean) {
+async function emailTripProforma(prisma: PrismaClient, tripPaperId: string, members: TripProformaMember[], to: string, number: string, nightsEach: boolean, hideRoomTypes: boolean) {
   const first = await prisma.entry.findUnique({ where: { id: members[0].entryId }, select: { id: true, inquiryId: true, guestCount: true } });
   if (!first) return;
   const figs = await Promise.all(members.map((m) => proformaEmailFigures(prisma, m.paperId)));
@@ -412,9 +417,11 @@ async function emailTripProforma(prisma: PrismaClient, tripPaperId: string, memb
     advanceDueBy: deadlines.map((d) => d.checkInDate).filter((d): d is Date => !!d).sort((a, b) => a.getTime() - b.getTime())[0] ?? null,
     validUntil: paper?.validUntil ?? null,
     paymentPlan: null,
+    // Each stay with its own nights, then the nights together (2026-11-13).
+    stays: members.map((m) => ({ label: `Stay ${m.stayNo}`, checkIn: new Date(`${m.checkIn}T00:00:00Z`), checkOut: new Date(`${m.checkOut}T00:00:00Z`) })),
   });
   try {
-    const pdf = await renderTripProformaPdf(prisma, tripPaperId, { nightsMode: nightsEach ? "EACH" : "SHORT" });
+    const pdf = await renderTripProformaPdf(prisma, tripPaperId, { nightsMode: nightsEach ? "EACH" : "SHORT", hideRoomTypes });
     content.attachments = [{ filename: pdf.filename, content: pdf.bytes, contentType: "application/pdf" }];
   } catch {
     // The email still goes with its words; the desk can send the paper again.

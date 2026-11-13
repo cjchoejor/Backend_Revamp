@@ -8,6 +8,7 @@ import { resolveSendTo } from "../../lib/send-to.js";
 import { sumMoney, toDecimal } from "../../lib/money.js";
 import { loadHotelProfileForRender } from "../../lib/pdf-render-context.js";
 import type { NightsMode } from "../../lib/room-nights-for-entry.js";
+import { resolveRoomTypesFace } from "../../lib/paper-room-types.js";
 import { renderHtmlToPdf } from "../infrastructure/pdf-render-service.js";
 import { mastheadFromHotelProfile } from "../infrastructure/pdf-templates/legphel-document-shell.js";
 import { formatDocDate, formatDocDateLocal } from "../infrastructure/pdf-templates/legphel-document-format.js";
@@ -303,7 +304,8 @@ export async function saveTripPaperVersion(
 export async function renderTripQuotationHtml(
   prisma: PrismaClient,
   tripPaperId: string,
-  opts?: { hidePrices?: boolean; nightsMode?: NightsMode },
+  /** `hideRoomTypes`: the face an agency or a company receives (2026-11-13, lib/paper-room-types.ts). */
+  opts?: { hidePrices?: boolean; nightsMode?: NightsMode; hideRoomTypes?: boolean },
 ) {
   const paper = await prisma.tripPaper.findUnique({ where: { id: tripPaperId } });
   if (!paper || paper.kind !== "QUOTATION") throw new NotFoundError("Trip quotation");
@@ -322,10 +324,10 @@ export async function renderTripQuotationHtml(
   const stays: TripStayDates[] = [];
   let rowsAreNet = true;
   for (const m of members) {
-    const prices = await quotationPaperPrices(prisma, m.paperId, { nightsMode: opts?.nightsMode });
+    const prices = await quotationPaperPrices(prisma, m.paperId, { nightsMode: opts?.nightsMode, hideRoomTypes: opts?.hideRoomTypes });
     parts.push({ stayNo: m.stayNo, block: prices.priceBlock, figures: prices.figures });
     rowsAreNet = rowsAreNet && prices.rowsAreNet;
-    stays.push(tripStayDates(m.stayNo, m.checkIn ? new Date(`${m.checkIn}T00:00:00Z`) : null, m.checkOut ? new Date(`${m.checkOut}T00:00:00Z`) : null, formatDocDate));
+    stays.push(tripStayDates(m.stayNo, m.checkIn ? new Date(`${m.checkIn}T00:00:00Z`) : null, m.checkOut ? new Date(`${m.checkOut}T00:00:00Z`) : null, formatDocDate, prices.roomsWord));
   }
   const to =
     inquiry?.travelAgent?.displayName ?? inquiry?.corporateAccount?.displayName ?? (guestDisplayName(inquiry?.guestProfile) || "Guest");
@@ -347,7 +349,7 @@ export async function renderTripQuotationHtml(
   return { html, number: paperNumber(paper.documentNumber, paper.versionNumber), paper };
 }
 
-export async function renderTripQuotationPdf(prisma: PrismaClient, tripPaperId: string, opts?: { hidePrices?: boolean; nightsMode?: NightsMode }) {
+export async function renderTripQuotationPdf(prisma: PrismaClient, tripPaperId: string, opts?: { hidePrices?: boolean; nightsMode?: NightsMode; hideRoomTypes?: boolean }) {
   const { html, number } = await renderTripQuotationHtml(prisma, tripPaperId, opts);
   return { bytes: await renderHtmlToPdf(html, { fitToPage: true }), filename: `${number.replace(" · ", "-")}-trip-quotation.pdf` };
 }
@@ -372,9 +374,11 @@ export async function sendTripQuotation(
   prisma: PrismaClient,
   tripPaperId: string,
   actor: Actor,
-  input: { channel: "EMAIL" | "WHATSAPP"; to?: string | null; nightsEach?: boolean },
+  input: { channel: "EMAIL" | "WHATSAPP"; to?: string | null; nightsEach?: boolean; showRoomTypes?: boolean },
 ) {
   const { paper, members } = await liveAndCurrent(prisma, tripPaperId);
+  // Without room types to an agency or a company, unless the desk may and asked (2026-11-13).
+  const hideRoomTypes = await resolveRoomTypesFace(prisma, members[0].entryId, input.showRoomTypes, actor.actorLevel);
   const number = paperNumber(paper.documentNumber, paper.versionNumber);
   const typed = input.to?.trim() || null;
   const sendTo = await resolveSendTo(prisma, members[0].entryId);
@@ -387,6 +391,8 @@ export async function sendTripQuotation(
         channel: input.channel,
         sentTo: to ?? undefined,
         recipientAddress: to ?? undefined,
+        showRoomTypes: !hideRoomTypes,
+        actorLevel: actor.actorLevel,
         viaTripPaper: { id: paper.id, number },
       });
     }
@@ -405,16 +411,16 @@ export async function sendTripQuotation(
         timestamp: now,
         inquiryId: paper.inquiryId,
         entryId: m.entryId,
-        payload: { tripPaperId: paper.id, number, channel: input.channel, to },
+        payload: { tripPaperId: paper.id, number, channel: input.channel, to, roomTypesShown: !hideRoomTypes },
         createdBy: actor.actorId,
       },
     });
   }
-  if (input.channel === "EMAIL" && to) await emailTripQuotation(prisma, paper.id, members, to, number, input.nightsEach === true);
+  if (input.channel === "EMAIL" && to) await emailTripQuotation(prisma, paper.id, members, to, number, input.nightsEach === true, hideRoomTypes);
   return { sentTo: to, channel: input.channel, number };
 }
 
-async function emailTripQuotation(prisma: PrismaClient, tripPaperId: string, members: TripMember[], to: string, number: string, nightsEach: boolean) {
+async function emailTripQuotation(prisma: PrismaClient, tripPaperId: string, members: TripMember[], to: string, number: string, nightsEach: boolean, hideRoomTypes: boolean) {
   const first = await prisma.entry.findUnique({ where: { id: members[0].entryId }, select: { id: true, inquiryId: true, guestCount: true } });
   if (!first) return;
   const quotes = await prisma.quotation.findMany({ where: { id: { in: members.map((m) => m.paperId) } }, select: { commercialTerms: true, validUntil: true, currency: true } });
@@ -444,9 +450,11 @@ async function emailTripQuotation(prisma: PrismaClient, tripPaperId: string, mem
     breakdown,
     validUntil: validUntils.length ? new Date(Math.min(...validUntils.map((d) => d.getTime()))) : new Date(),
     ratePlanName: null,
+    // Each stay with its own nights, then the nights together (2026-11-13).
+    stays: members.map((m) => ({ label: `Stay ${m.stayNo}`, checkIn: new Date(`${m.checkIn}T00:00:00Z`), checkOut: new Date(`${m.checkOut}T00:00:00Z`) })),
   });
   try {
-    const pdf = await renderTripQuotationPdf(prisma, tripPaperId, { nightsMode: nightsEach ? "EACH" : "SHORT" });
+    const pdf = await renderTripQuotationPdf(prisma, tripPaperId, { nightsMode: nightsEach ? "EACH" : "SHORT", hideRoomTypes });
     content.attachments = [{ filename: pdf.filename, content: pdf.bytes, contentType: "application/pdf" }];
   } catch {
     // The email still goes with its words; the desk can send the paper again.

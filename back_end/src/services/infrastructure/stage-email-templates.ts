@@ -36,6 +36,27 @@ function nightsBetween(checkIn: Date, checkOut: Date): number {
   return Math.max(1, Math.round(ms / 86400_000));
 }
 
+/**
+ * A trip's stays, each with its own dates and nights (2026-11-13, operator: "night count should be
+ * stay wise count and then combined stay nights"). The trip's emails took the first stay's check-in
+ * and the last stay's check-out and called it one stay: "13 Nov to 1 Dec, 18 nights" for two stays
+ * of 5 nights each.
+ */
+export type EmailStay = { label: string; checkIn: Date; checkOut: Date };
+
+function tripStays(stays: readonly EmailStay[] | null | undefined): { rows: Array<{ label: string; value: string }>; nights: number } | null {
+  if (!stays || stays.length < 2) return null;
+  const rows = stays.map((st) => ({
+    label: st.label,
+    value: `Check-in ${formatDate(st.checkIn)} · Check-out ${formatDate(st.checkOut)} · ${nightsOf(nightsBetween(st.checkIn, st.checkOut))}`,
+  }));
+  return { rows, nights: stays.reduce((t, st) => t + nightsBetween(st.checkIn, st.checkOut), 0) };
+}
+
+function nightsOf(n: number): string {
+  return `${n} ${n === 1 ? "night" : "nights"}`;
+}
+
 function tableRow(label: string, value: string, bg = false, strong = false): string {
   const bgStyle = bg ? "background:#fafafa;" : "";
   const v = strong ? `<strong>${escapeHtml(value)}</strong>` : escapeHtml(value);
@@ -88,10 +109,13 @@ export type QuotationEmailData = {
   breakdown: StayChargeBreakdown;
   validUntil: Date;
   ratePlanName?: string | null;
+  /** A trip's stays, each with its own nights (2026-11-13); two or more replace the one check-in and check-out. */
+  stays?: EmailStay[] | null;
 };
 
 export function renderQuotationEmail(d: QuotationEmailData): StageEmailContent {
-  const nights = nightsBetween(d.checkInDate, d.checkOutDate);
+  const trip = tripStays(d.stays);
+  const nights = trip ? trip.nights : nightsBetween(d.checkInDate, d.checkOutDate);
   const guests = d.guestCount === 1 ? "1 guest" : `${d.guestCount} guests`;
   const subject = COMMON_SUBJECT;
 
@@ -103,9 +127,9 @@ export function renderQuotationEmail(d: QuotationEmailData): StageEmailContent {
     "Thank you for considering Legphel Hotel. Please find your quotation below.",
     "",
     `Quotation: ${d.quotationRef}`,
-    `Check-in: ${formatDate(d.checkInDate)}`,
-    `Check-out: ${formatDate(d.checkOutDate)}`,
-    `Stay: ${nights} ${nights === 1 ? "night" : "nights"} · ${guests}`,
+    ...(trip
+      ? [...trip.rows.map((r) => `${r.label}: ${r.value}`), `In all: ${nightsOf(nights)} · ${guests}`]
+      : [`Check-in: ${formatDate(d.checkInDate)}`, `Check-out: ${formatDate(d.checkOutDate)}`, `Stay: ${nightsOf(nights)} · ${guests}`]),
     d.ratePlanName ? `Rate plan: ${d.ratePlanName}` : null,
     d.nightlyRate != null ? `Nightly rate: ${formatMoney(d.nightlyRate, d.currency)}` : null,
     "",
@@ -126,9 +150,13 @@ ${emailHeading("Quotation")}
 <p>Thank you for considering Legphel Hotel. Please find your quotation below.</p>
 ${detailsTable([
   tableRow("Quotation", d.quotationRef),
-  tableRow("Check-in", formatDate(d.checkInDate), true),
-  tableRow("Check-out", formatDate(d.checkOutDate)),
-  tableRow("Stay", `${nights} ${nights === 1 ? "night" : "nights"} · ${guests}`, true),
+  ...(trip
+    ? [...trip.rows.map((r, i) => tableRow(r.label, r.value, i % 2 === 0)), tableRow("In all", `${nightsOf(nights)} · ${guests}`, trip.rows.length % 2 === 0, true)]
+    : [
+        tableRow("Check-in", formatDate(d.checkInDate), true),
+        tableRow("Check-out", formatDate(d.checkOutDate)),
+        tableRow("Stay", `${nightsOf(nights)} · ${guests}`, true),
+      ]),
   d.ratePlanName ? tableRow("Rate plan", d.ratePlanName) : "",
   d.nightlyRate != null ? tableRow("Nightly rate", formatMoney(d.nightlyRate, d.currency), !d.ratePlanName) : "",
   ...breakdownRows(d.breakdown, d.currency),
@@ -171,9 +199,12 @@ export type ProformaInvoiceEmailData = {
   /** The guest's recorded payment plan, already worded ("Part now — remainder by 12 Aug 2026").
    *  Null = no plan recorded, no line printed. */
   paymentPlan?: string | null;
+  /** A trip's stays, each with its own nights (2026-11-13). */
+  stays?: EmailStay[] | null;
 };
 
 export function renderProformaInvoiceEmail(d: ProformaInvoiceEmailData): StageEmailContent {
+  const trip = tripStays(d.stays);
   const owing = d.advanceAsked && d.advanceDueNow > 0;
   const showDueBy = owing && d.advanceDueBy != null;
   const dueLabel = `Advance due now${d.advanceDueQualifier ? ` ${d.advanceDueQualifier}` : ""}`;
@@ -193,8 +224,9 @@ export function renderProformaInvoiceEmail(d: ProformaInvoiceEmailData): StageEm
     "Please find your proforma invoice for the upcoming stay.",
     "",
     `Invoice: ${d.invoiceRef}`,
-    `Check-in: ${formatDate(d.checkInDate)}`,
-    `Check-out: ${formatDate(d.checkOutDate)}`,
+    ...(trip
+      ? [...trip.rows.map((r) => `${r.label}: ${r.value}`), `In all: ${nightsOf(trip.nights)}`]
+      : [`Check-in: ${formatDate(d.checkInDate)}`, `Check-out: ${formatDate(d.checkOutDate)}`]),
     `Guests: ${d.guestCount}`,
     "",
     ...breakdownLines(d.breakdown, d.currency),
@@ -220,8 +252,9 @@ ${emailHeading("Proforma invoice")}
 <p>Please find your proforma invoice for the upcoming stay.</p>
 ${detailsTable([
   tableRow("Invoice", d.invoiceRef),
-  tableRow("Check-in", formatDate(d.checkInDate), true),
-  tableRow("Check-out", formatDate(d.checkOutDate)),
+  ...(trip
+    ? [...trip.rows.map((r, i) => tableRow(r.label, r.value, i % 2 === 0)), tableRow("In all", nightsOf(trip.nights), trip.rows.length % 2 === 0, true)]
+    : [tableRow("Check-in", formatDate(d.checkInDate), true), tableRow("Check-out", formatDate(d.checkOutDate))]),
   tableRow("Guests", String(d.guestCount), true),
   ...breakdownRows(d.breakdown, d.currency),
   d.paymentPlan ? tableRow("Payment plan", d.paymentPlan, false, true) : "",
@@ -355,12 +388,15 @@ export type ReservationConfirmationEmailData = {
   cancellationPolicy: string[];
   /** The hotel's name, town, numbers and email (hotel-email-identity.ts); the reservation team's when left out. */
   contact?: HotelEmailContact;
+  /** A trip's stays, each with its own nights (2026-11-13). */
+  stays?: EmailStay[] | null;
 };
 
 export function renderReservationConfirmationEmail(d: ReservationConfirmationEmailData): StageEmailContent {
   const contact = d.contact ?? emailContactFrom(null);
   const phones = contact.phones.map(phoneOnEmail);
-  const nights = nightsBetween(d.checkInDate, d.checkOutDate);
+  const trip = tripStays(d.stays);
+  const nights = trip ? trip.nights : nightsBetween(d.checkInDate, d.checkOutDate);
   const guests = d.guestCount === 1 ? "1 guest" : `${d.guestCount} guests`;
   const subject = COMMON_SUBJECT;
 
@@ -389,9 +425,9 @@ export function renderReservationConfirmationEmail(d: ReservationConfirmationEma
     "",
     `Reservation: ${d.reservationReadableId}`,
     ...groupLines,
-    `Check-in: ${formatDate(d.checkInDate)}`,
-    `Check-out: ${formatDate(d.checkOutDate)}`,
-    `Stay: ${nights} ${nights === 1 ? "night" : "nights"} · ${guests}`,
+    ...(trip
+      ? [...trip.rows.map((r) => `${r.label}: ${r.value}`), `In all: ${nightsOf(nights)} · ${guests}`]
+      : [`Check-in: ${formatDate(d.checkInDate)}`, `Check-out: ${formatDate(d.checkOutDate)}`, `Stay: ${nightsOf(nights)} · ${guests}`]),
     d.roomTypeName ? `Room type: ${d.roomTypeName}` : null,
     d.ratePlanName ? `Rate plan: ${d.ratePlanName}` : null,
     "",
@@ -446,10 +482,14 @@ export function renderReservationConfirmationEmail(d: ReservationConfirmationEma
       <div style="font-size:13px;line-height:1.7;">
         <div><strong>Reservation ID:</strong> ${escapeHtml(d.reservationReadableId)}</div>
         <div><strong>Primary Guest:</strong> ${escapeHtml(d.guestDisplayName)}</div>
-        <div><strong>Check In:</strong> ${escapeHtml(formatDate(d.checkInDate))}</div>
+        ${
+          trip
+            ? trip.rows.map((r) => `<div><strong>${escapeHtml(r.label)}:</strong> ${escapeHtml(r.value)}</div>`).join("")
+            : `<div><strong>Check In:</strong> ${escapeHtml(formatDate(d.checkInDate))}</div>
         <div><strong>Check out:</strong> ${escapeHtml(formatDate(d.checkOutDate))}</div>
-        <div><strong>Rooms:</strong> ${d.roomCount ?? 1}</div>
-        <div><strong>Stay:</strong> ${escapeHtml(nightsLabel)} · ${escapeHtml(guests)}</div>
+        <div><strong>Rooms:</strong> ${d.roomCount ?? 1}</div>`
+        }
+        <div><strong>${trip ? "In all" : "Stay"}:</strong> ${escapeHtml(nightsLabel)} · ${escapeHtml(guests)}</div>
       </div>
       <div style="margin-top:12px;padding-top:10px;border-top:1px dashed #e2e5ec;font-size:12px;color:#555;">
         📎 Kindly find the attachment below for detailed reservation information.

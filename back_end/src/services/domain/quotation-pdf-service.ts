@@ -28,6 +28,7 @@ import { labelRoomNights, roomNightsForEntry, stayNightDates, type NightsMode } 
 import {
   buildPaperPriceLines,
   buildDeskPriceLines,
+  buildRoomPriceLines,
   mealPlanParts,
   priceLinesToCents,
   roomOccupantsLabel,
@@ -40,7 +41,7 @@ import { formatMoney, loadHotelProfileForRender } from "../../lib/pdf-render-con
 import { renderHtmlToPdf } from "../infrastructure/pdf-render-service.js";
 import { priceRowsNote, renderLegphelQuotationHtml, type LegphelPriceBlock } from "../infrastructure/pdf-templates/legphel-quotation-template.js";
 import { mastheadFromHotelProfile } from "../infrastructure/pdf-templates/legphel-document-shell.js";
-import { formatDocDate, formatStayLines, formatDocDateLocal } from "../infrastructure/pdf-templates/legphel-document-format.js";
+import { formatDocDate, formatStayLines, formatDocDateLocal, type StayLines } from "../infrastructure/pdf-templates/legphel-document-format.js";
 import { guestDisplayName } from "../../lib/guest-display-name.js";
 import { computeStayCharges } from "../infrastructure/compute-stay-charges.js";
 
@@ -161,6 +162,8 @@ export type QuotationPriceFigures = {
 type QuotationDocRender = {
   html: string;
   figures: QuotationPriceFigures;
+  /** "3 rooms" — on a paper with no room types, for the stay's line on a trip's paper; else null. */
+  roomsWord: string | null;
   /** The rows and totals as the paper prints them; the proforma prints the same block. */
   priceBlock: LegphelPriceBlock;
   linesForTemplate: PrintLine[];
@@ -185,6 +188,57 @@ type QuotationDocRender = {
   hotel: Awaited<ReturnType<typeof loadHotelProfileForRender>>;
 };
 
+export const roomsWord = (n: number) => `${n} room${n === 1 ? "" : "s"}`;
+
+/** The stay's check-out line with how many rooms, on a paper that names no room type (2026-11-13). */
+function withRooms(stay: StayLines | null, rooms: number | null): StayLines | null {
+  if (!stay || rooms == null) return stay;
+  return { ...stay, checkOut: `${stay.checkOut} · ${roomsWord(rooms)}` };
+}
+
+/**
+ * The rows an agency or a company receives (2026-11-13, operator): no room type. Each room is
+ * "Room 1 · 2 adults", numbered in the paper's order, with the package it is priced on in bold in
+ * front; a room the desk gave by number keeps its number ("Room 305 · 2 adults" — "if room number is
+ * specified then showing it is okay"). Every room has its own rows, so none is merged with another.
+ * The figures are the very rows the paper prints with the types, so they add up the same.
+ */
+async function linesWithoutRoomTypes(
+  prisma: PrismaClient,
+  q: LoadedQuotation,
+  terms: unknown,
+  rooms: readonly PriceLineRoom[],
+  typeIdByRoomId: Map<string, string | null>,
+): Promise<PriceLine[]> {
+  const { quietRoomLabels } = await import("./quiet-rooms-service.js");
+  // The rooms the system chose and may still move; any other room was given by number.
+  const quiet = await quietRoomLabels(prisma, q.entryId).catch(() => new Map<string, string>());
+  const t = (terms ?? {}) as {
+    ratePackagesByRoom?: Record<string, { packageName?: string }>;
+    ratePackagesByType?: Record<string, { packageName?: string }>;
+  };
+  // A quotation priced before the package was recorded on it (before 2026-11-13) names the booking's own.
+  let primary: string | null | undefined;
+  const primaryPackage = async (): Promise<string | null> => {
+    if (primary !== undefined) return primary;
+    const inq = await prisma.inquiry.findUnique({ where: { id: q.entry.inquiryId }, select: { ratePackage: { select: { name: true } } } });
+    primary = inq?.ratePackage?.name?.trim() || null;
+    return primary;
+  };
+  const lines: PriceLine[] = [];
+  let n = 0;
+  for (const r of rooms) {
+    const typeId = typeIdByRoomId.get(r.roomId) ?? null;
+    const lead =
+      t.ratePackagesByRoom?.[r.roomId]?.packageName?.trim() ||
+      (typeId ? t.ratePackagesByType?.[typeId]?.packageName?.trim() : null) ||
+      (await primaryPackage());
+    const label = !quiet.has(r.roomId) && r.roomNumber ? `Room ${r.roomNumber}` : `Room ${++n}`;
+    lines.push(...buildRoomPriceLines({ ...r, roomTypeName: null, roomLabel: label, roomCount: 1, lead: lead || null }));
+  }
+  return lines;
+}
+
 /**
  * Compose the A1 house-format quotation document from the quotation's CURRENT commercialTerms.
  * Pure read — no writes, no storage. Both the stored-PDF path and the desk's live preview run
@@ -200,13 +254,18 @@ type QuotationDocRender = {
  * by their type alone and sets identical rooms out once (2026-10-28, `buildPaperPriceLines`).
  * `roomLabels` names a room the system chose and may still move ("Deluxe Double · room 1") on the
  * desk's numbered rows, in place of its number.
+ *
+ * `hideRoomTypes` is the face an agency or a company receives (2026-11-13, lib/paper-room-types.ts):
+ * each room "Room 1 · 2 adults" with its package in bold in front, a room the desk gave by number by
+ * its number, every room its own rows, and how many rooms on the stay's line. Nothing else changes.
  */
 async function buildQuotationDocRender(
   prisma: PrismaClient,
   q: LoadedQuotation,
-  opts?: { hidePrices?: boolean; roomNumbers?: boolean; roomLabels?: Map<string, string>; nightsMode?: NightsMode },
+  opts?: { hidePrices?: boolean; roomNumbers?: boolean; roomLabels?: Map<string, string>; nightsMode?: NightsMode; hideRoomTypes?: boolean },
 ): Promise<QuotationDocRender> {
   const hidePrices = opts?.hidePrices === true;
+  const hideTypes = opts?.hideRoomTypes === true && opts?.roomNumbers !== true;
   // How the nights are written — the first and last of a run, or each one (2026-10-30).
   const nightsMode: NightsMode = opts?.nightsMode ?? "SHORT";
   const roomNumbers = opts?.roomNumbers === true;
@@ -345,6 +404,8 @@ async function buildQuotationDocRender(
 
   const linesForTemplate: PrintLine[] = [];
   const snapshotLines: SnapshotLine[] = [];
+  // How many rooms the stay holds — printed on the stay's line on a paper with no room types.
+  let roomsOnStay = roomCount;
   let totalAmount = 0;
   // Sum of the amounts actually PRINTED in the table (pre-discount when originals are shown).
   let printedRowsTotal = 0;
@@ -359,9 +420,10 @@ async function buildQuotationDocRender(
   if (Array.isArray(compositionPerRoom) && compositionPerRoom.length > 0) {
     const roomRows = await prisma.room.findMany({
       where: { id: { in: compositionPerRoom.map((r) => r.roomId) } },
-      select: { id: true, roomType: { select: { name: true } } },
+      select: { id: true, roomTypeId: true, roomType: { select: { name: true } } },
     });
     const typeNameByRoomId = new Map(roomRows.map((r) => [r.id, r.roomType?.name ?? null]));
+    const typeIdByRoomId = new Map(roomRows.map((r) => [r.id, r.roomTypeId]));
     const inputsByRoomId = new Map(
       ((terms as any).roomCompositions ?? []).map((r: any) => [r.roomId, r]),
     );
@@ -428,11 +490,21 @@ async function buildQuotationDocRender(
       totalAmount += Number(r.total);
     }
     // The paper: each room by its type, identical rooms set out once. The desk: a room given by
-    // number by its number, the system's rooms by their type, counted.
-    for (const line of roomNumbers ? buildDeskPriceLines(paperRooms) : buildPaperPriceLines(paperRooms)) {
+    // number by its number, the system's rooms by their type, counted. An agency's or a company's
+    // paper (2026-11-13): no room type — "Room 1 · 2 adults" with its package in front.
+    const paperLines = hideTypes
+      ? await linesWithoutRoomTypes(prisma, q, terms, paperRooms, typeIdByRoomId)
+      : roomNumbers
+        ? buildDeskPriceLines(paperRooms)
+        : buildPaperPriceLines(paperRooms);
+    for (const line of paperLines) {
       linesForTemplate.push(line);
       printedRowsTotal += line.amount;
     }
+    // How many rooms the stay holds — on its busiest night, for a stay that changes rooms.
+    const perNight = new Map<string, number>();
+    for (const r of compositionPerRoom) for (const d of nightsOf(r.roomId)) perNight.set(d, (perNight.get(d) ?? 0) + 1);
+    roomsOnStay = Math.max(1, ...perNight.values());
   } else {
     // Legacy: one row per stay night. Kept for backward compat.
     let legacyTypeName: string | null = null;
@@ -452,7 +524,7 @@ async function buildQuotationDocRender(
       const date = new Date(checkIn.getTime() + i * 86_400_000);
       linesForTemplate.push({
         dates: labelRoomNights([date.toISOString().slice(0, 10)], nightsMode),
-        description: [legacyTypeName, occupantsString, mealPlanDisplay || null, extraBeds !== "None" ? extraBeds : null]
+        description: [hideTypes ? null : legacyTypeName, occupantsString, mealPlanDisplay || null, extraBeds !== "None" ? extraBeds : null]
           .filter(Boolean)
           .join(" · "),
         qty: "1 night",
@@ -578,6 +650,7 @@ async function buildQuotationDocRender(
     lines: linesForTemplate.map((l) => ({
       dates: l.dates ?? null,
       description: l.description,
+      lead: l.lead ?? null,
       qty: l.qty,
       rate: l.muted ? "" : l.rate == null ? "—" : formatMoney(l.rate),
       amount: l.muted ? "—" : formatMoney(l.amount),
@@ -608,7 +681,7 @@ async function buildQuotationDocRender(
       : "Not a booking confirmation",
     to: toEmail ? `${guestName} · ${toEmail}` : guestName,
     attn: null,
-    stay: formatStayLines(checkIn, checkOut, nights),
+    stay: withRooms(formatStayLines(checkIn, checkOut, nights), hideTypes ? roomsOnStay : null),
     closingNote: hidePrices
       ? "Prices are not shown on this copy — the rates, taxes and total for this stay are on the " +
         "priced quotation under the same number. Subject to availability at confirmation."
@@ -622,6 +695,7 @@ async function buildQuotationDocRender(
     html,
     figures,
     priceBlock,
+    roomsWord: hideTypes ? roomsWord(roomsOnStay) : null,
     linesForTemplate,
     snapshotLines,
     nights,
@@ -652,11 +726,11 @@ async function buildQuotationDocRender(
 export async function quotationPaperPrices(
   prisma: PrismaClient,
   quotationId: string,
-  opts?: { nightsMode?: NightsMode },
-): Promise<{ priceBlock: LegphelPriceBlock; figures: QuotationPriceFigures; rowsAreNet: boolean; total: number }> {
+  opts?: { nightsMode?: NightsMode; hideRoomTypes?: boolean },
+): Promise<{ priceBlock: LegphelPriceBlock; figures: QuotationPriceFigures; rowsAreNet: boolean; total: number; roomsWord: string | null }> {
   const q = await loadQuotationForRender(prisma, quotationId);
-  const model = await buildQuotationDocRender(prisma, q, { nightsMode: opts?.nightsMode });
-  return { priceBlock: model.priceBlock, figures: model.figures, rowsAreNet: model.figures.rowsAreNet, total: model.totalAmount };
+  const model = await buildQuotationDocRender(prisma, q, { nightsMode: opts?.nightsMode, hideRoomTypes: opts?.hideRoomTypes });
+  return { priceBlock: model.priceBlock, figures: model.figures, rowsAreNet: model.figures.rowsAreNet, total: model.totalAmount, roomsWord: model.roomsWord };
 }
 
 /**
@@ -668,7 +742,7 @@ export async function quotationPaperPrices(
 export async function renderQuotationPreviewHtml(
   prisma: PrismaClient,
   quotationId: string,
-  opts?: { hidePrices?: boolean; nightsMode?: NightsMode },
+  opts?: { hidePrices?: boolean; nightsMode?: NightsMode; hideRoomTypes?: boolean },
 ): Promise<{ html: string; referenceNumber: string }> {
   const q = await loadQuotationForRender(prisma, quotationId);
   const model = await buildQuotationDocRender(prisma, q, opts);
@@ -722,7 +796,7 @@ export async function renderQuotationPdfWithoutPrices(
 export async function renderQuotationPdfFace(
   prisma: PrismaClient,
   quotationId: string,
-  face: { hidePrices?: boolean; nightsMode?: NightsMode },
+  face: { hidePrices?: boolean; nightsMode?: NightsMode; hideRoomTypes?: boolean },
 ): Promise<{ bytes: Buffer; referenceNumber: string }> {
   const q = await loadQuotationForRender(prisma, quotationId);
   const m = await buildQuotationDocRender(prisma, q, face);

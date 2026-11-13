@@ -286,6 +286,7 @@ roomMovesRouter.post(
       sentTo: z.string().trim().max(320).nullable().optional(),
       note: z.string().trim().max(1000).nullable().optional(),
       nightsEach: z.boolean().optional(),
+      showRoomTypes: z.boolean().optional(),
     }),
   ),
   async (req, res, next) => {

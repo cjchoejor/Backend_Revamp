@@ -340,6 +340,8 @@ export const dispatchInvoiceRequestSchema = z.object({
   channel: z.enum(["EMAIL", "WHATSAPP"]).optional(),
   /** A proforma sent with every night named, instead of a run as its first and last (2026-10-30). */
   nightsEach: z.boolean().optional(),
+  /** A proforma sent WITH the room types on an agency's or a company's booking (2026-11-13, lib/paper-room-types.ts). */
+  showRoomTypes: z.boolean().optional(),
 });
 export type DispatchInvoiceRequestDto = z.infer<typeof dispatchInvoiceRequestSchema>;
 
