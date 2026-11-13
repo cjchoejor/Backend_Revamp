@@ -291,6 +291,7 @@ async function buildQuotationDocRender(
   // reference proforma exactly (each row shows Date | Occupants | Meal Plan | Extra Beds |
   // per-row tax-INCLUSIVE amount). If no dates are set, we emit at least one summary row.
   const guest = q.entry.guestProfile;
+  const billedParty = q.entry.inquiry?.travelAgent?.displayName ?? q.entry.inquiry?.corporateAccount?.displayName ?? null;
   // With the title the desk took at Inquiry — "Ms pema lhaden wangchuk" (2026-10-28).
   const guestName = guestDisplayName(guest) || "Guest";
   const adultCount = q.entry.adultCount ?? Number(q.entry.guestCount ?? 1) ?? 1;
@@ -679,7 +680,11 @@ async function buildQuotationDocRender(
     validityStrip: q.validUntil
       ? `Valid until ${formatDocDateLocal(q.validUntil)} · Not a booking confirmation`
       : "Not a booking confirmation",
-    to: toEmail ? `${guestName} · ${toEmail}` : guestName,
+    // Made out to the agency or the company when one booked, the guest on its own line, as the
+    // proforma is (2026-11-13, operator: "even stay one goes to travel agent and corporate"); a
+    // walk-in's or a direct guest's to the guest, as before.
+    to: billedParty ?? (toEmail ? `${guestName} · ${toEmail}` : guestName),
+    forGuest: billedParty ? guestName : null,
     attn: null,
     stay: withRooms(formatStayLines(checkIn, checkOut, nights), hideTypes ? roomsOnStay : null),
     closingNote: hidePrices

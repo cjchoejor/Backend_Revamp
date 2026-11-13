@@ -27,6 +27,8 @@ export type LegphelTripQuotationInput = {
   date: string;
   validityStrip: string;
   to: string;
+  /** The guest staying, when the paper is made out to an agency or a company (2026-11-13). */
+  forGuest?: string | null;
   stays: TripDatesRow[];
   prices: LegphelPriceBlock;
   closingNote: string;
@@ -41,6 +43,7 @@ export function renderLegphelTripQuotationHtml(input: LegphelTripQuotationInput)
     row("Date", input.date),
     section,
     row("To", input.to, { boldValue: true }),
+    input.forGuest ? row("For guest", input.forGuest) : "",
     section,
     ...tripDatesRows(input.stays),
     ...renderPriceBlock(input.prices),

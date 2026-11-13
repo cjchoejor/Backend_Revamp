@@ -119,6 +119,11 @@ export type LegphelQuotationInput = LegphelPriceBlock & {
   validityStrip: string;
   /** "Nandi Travels & Tours, Jaigaon" */
   to: string;
+  /**
+   * The guest staying, when the quotation is made out to a travel agent or a company (2026-11-13,
+   * operator: "even stay one goes to travel agent and corporate") — the proforma's "For guest" line.
+   */
+  forGuest?: string | null;
   /** "Mr Rajesh Nandi" — the reference's Attn line. Omitted when absent. */
   attn?: string | null;
   /** Check-in "20 Oct 2026" · Check-out "22 Oct 2026 · 2 nights" (2026-10-28). */
@@ -197,6 +202,7 @@ export function renderLegphelQuotationHtml(input: LegphelQuotationInput): string
     row("Date", input.date),
     section,
     row("To", input.to, { boldValue: true }),
+    input.forGuest ? row("For guest", input.forGuest) : "",
     input.attn ? row("Attn", input.attn) : "",
     section,
     stayRows(input.stay),

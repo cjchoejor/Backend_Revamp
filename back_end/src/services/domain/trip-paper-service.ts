@@ -331,6 +331,8 @@ export async function renderTripQuotationHtml(
   }
   const to =
     inquiry?.travelAgent?.displayName ?? inquiry?.corporateAccount?.displayName ?? (guestDisplayName(inquiry?.guestProfile) || "Guest");
+  // The guest on a line of their own when the paper is made out to the agency or the company (2026-11-13).
+  const forGuest = inquiry?.travelAgent || inquiry?.corporateAccount ? guestDisplayName(inquiry?.guestProfile) || null : null;
   const html = renderLegphelTripQuotationHtml({
     masthead: mastheadFromHotelProfile(hotel),
     quotationNo: paperNumber(paper.documentNumber, paper.versionNumber),
@@ -340,6 +342,7 @@ export async function renderTripQuotationHtml(
       ? `Valid until ${formatDocDateLocal(paper.validUntil)} · Not a booking confirmation`
       : "Not a booking confirmation",
     to,
+    forGuest,
     stays,
     prices: combineTripPriceBlocks(parts, { hidePrices: opts?.hidePrices }),
     closingNote: opts?.hidePrices

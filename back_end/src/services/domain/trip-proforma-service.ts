@@ -287,6 +287,8 @@ export async function renderTripProformaHtml(prisma: PrismaClient, tripPaperId: 
   const receivedTotal = sumMoney(received);
   const firstDeadline = deadlines.length ? new Date(Math.min(...deadlines.map((d) => d.getTime()))) : null;
   const to = inquiry?.travelAgent?.displayName ?? inquiry?.corporateAccount?.displayName ?? (guestDisplayName(inquiry?.guestProfile) || "Guest");
+  // The guest on a line of their own when the paper is made out to the agency or the company (2026-11-13).
+  const forGuest = inquiry?.travelAgent || inquiry?.corporateAccount ? guestDisplayName(inquiry?.guestProfile) || null : null;
   const number = paperNumber(paper.documentNumber, paper.versionNumber);
   // One payment plan row when the stays share it; a row for each stay when they do not.
   const planned = plans.filter((p) => p.label);
@@ -303,6 +305,7 @@ export async function renderTripProformaHtml(prisma: PrismaClient, tripPaperId: 
     advanceDueBy: firstDeadline ? formatDocDate(firstDeadline) : null,
     validUntil: paper.validUntil ? formatDocDateTimeLocal(paper.validUntil) : null,
     to,
+    forGuest,
     stays,
     prices: combineTripPriceBlocks(parts),
     planRows,
