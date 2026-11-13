@@ -144,6 +144,8 @@ export function RoomsByType({
    */
   combined?: {
     caption: ReactNode;
+    /** The stay's second line, beside its switch: "5 nights · 1 room". */
+    meta?: ReactNode;
     typeOrder: Array<{ roomTypeId: string; name: string }>;
     showTypeColumn: boolean;
     onState: (s: TypeGridState) => void;
@@ -489,19 +491,32 @@ export function RoomsByType({
           night opens by itself when the nights already differ, and Same every night waits until
           they agree again. */}
       {combined ? (
+        // A trip's stay, kept short (2026-11-13, operator: "too much space above the type, and the top
+        // columns looks too bulky"): the stay and its dates on one line; on the next, a small Same every
+        // night | Night by night switch where it always stood, at the left under the stay (operator: "night
+        // by night should be where it was first" — at the right end it slid off a long stay), then its
+        // nights and rooms.
         <div className="bt-cap">
           <div className="bt-cap-who">{combined.caption}</div>
-          {oneNight ? null : (
-            <Choice
-              options={[
-                ["same", "Same every night"],
-                ["night", "Night by night"],
-              ] as const}
-              value={byNight ? "night" : "same"}
-              disabled={varies}
-              onChange={(v) => setByNightAsked(v === "night")}
-            />
-          )}
+          <div className="bt-cap-row">
+            {oneNight ? null : (
+              <div className="bt-seg" role="group" aria-label="How the rooms are picked">
+                <button
+                  type="button"
+                  aria-pressed={!byNight}
+                  disabled={varies}
+                  title={varies ? "The nights differ — set them alike night by night first" : undefined}
+                  onClick={() => setByNightAsked(false)}
+                >
+                  Same every night
+                </button>
+                <button type="button" aria-pressed={byNight} onClick={() => setByNightAsked(true)}>
+                  Night by night
+                </button>
+              </div>
+            )}
+            {combined.meta ? <span className="bt-cap-meta">{combined.meta}</span> : null}
+          </div>
         </div>
       ) : oneNight ? null : (
         <div className="bt-modebar">
@@ -545,7 +560,7 @@ export function RoomsByType({
             ) : null}
             {oneNight ? null : (
               <th className="every">
-                <span className="bt-day">{showNights ? "Every night" : `Every night · ${plural(nights.length, "night")}`}</span>
+                <span className="bt-day">{showNights || combined ? "Every night" : `Every night · ${plural(nights.length, "night")}`}</span>
                 {showNights ? null : tallyOf(nights[0])}
               </th>
             )}
@@ -714,16 +729,16 @@ export function typeOrderOf(catalog: Catalog) {
 
 function StayCaption({ entry, stayNo }: { entry: EntryDetail; stayNo: number }) {
   return (
-    <>
-      <span className="bt-cap-line">
-        <b>Stay {stayNo}</b>
-        <span className="meta">
-          {entry.id} · {plural(entry.numberOfRooms ?? 1, "room")}
-        </span>
-      </span>
-      <StayDates checkIn={entry.checkInDate} checkOut={entry.checkOutDate} />
-    </>
+    <span className="bt-cap-line">
+      <b title={entry.id}>Stay {stayNo}</b>
+      <StayDates checkIn={entry.checkInDate} checkOut={entry.checkOutDate} compact />
+    </span>
   );
+}
+
+/** "5 nights · 1 room" — the second line of a trip's stay, beside its switch. */
+function stayMeta(entry: EntryDetail): string {
+  return `${plural(enumerateNights(entry.checkInDate, entry.checkOutDate).length, "night")} · ${plural(entry.numberOfRooms ?? 1, "room")}`;
 }
 
 /**
@@ -776,6 +791,7 @@ export function TripHouse({
   // over every stay's nights (2026-11-13, operator: "the types column should be fixed when scrolling").
   const combinedFor = (e: EntryDetail, _first: boolean): CombinedProps => ({
     caption: <StayCaption entry={e} stayNo={stayNoOf(e.id)} />,
+    meta: stayMeta(e),
     typeOrder,
     showTypeColumn: false,
     onState,
@@ -818,10 +834,9 @@ export function TripHouse({
     onError: (e) => toastRefusal(e, "The rooms could not be recorded"),
   });
 
-  // Captions of one height, so every stay's rows line up — taller when a stay offers Same every night.
-  const multi = stays.some((e) => enumerateNights(e.checkInDate, e.checkOutDate).length > 1);
+  // Captions of one height (frame.css .trip-house .bt-cap), so every stay's rows line up with the types.
   return (
-    <div className={`trip-house${multi ? " has-multi" : ""}`}>
+    <div className="trip-house">
       <div className="trip-house-body">
       <div className="trip-house-types">
         <div className="bt-cap" aria-hidden />
@@ -983,6 +998,11 @@ function OtherStayTypeColumn({
       <div className="by-type">
         <div className="bt-cap">
           <div className="bt-cap-who">{combined.caption}</div>
+          {combined.meta ? (
+            <div className="bt-cap-row">
+              <span className="bt-cap-meta">{combined.meta}</span>
+            </div>
+          ) : null}
         </div>
         <p className="meta">{ask.isError ? "The house could not be asked for this stay." : "Asking the house for this stay…"}</p>
         {ask.isError ? (

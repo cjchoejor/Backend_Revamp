@@ -1319,6 +1319,13 @@ function TheHouse({
   const [toolOpen, setToolOpen] = useState(false);
   /** The house on the whole screen: Escape or Close full screen leaves it; the page behind holds still. */
   const [houseFull, setHouseFull] = useState(false);
+  // Where the page was when Full screen was pressed: the house leaves the page while it is lifted, so the
+  // page is shorter and the browser loses its place; it is put back on leaving (the page never moves on its own).
+  const fullFromY = useRef(0);
+  const openFull = () => {
+    fullFromY.current = window.scrollY;
+    setHouseFull(true);
+  };
   useEffect(() => {
     if (!houseFull) return;
     const onKey = (e: KeyboardEvent) => {
@@ -1326,11 +1333,16 @@ function TheHouse({
     };
     const html = document.documentElement;
     const was = html.style.overflow;
+    const y = fullFromY.current;
     html.style.overflow = "hidden";
     window.addEventListener("keydown", onKey);
     return () => {
       window.removeEventListener("keydown", onKey);
       html.style.overflow = was;
+      window.scrollTo(0, y);
+      requestAnimationFrame(() => {
+        if (window.scrollY !== y) window.scrollTo(0, y);
+      });
     };
   }, [houseFull]);
   const openTool = () => setToolOpen(true);
@@ -1387,6 +1399,15 @@ function TheHouse({
         flowAfter="stay"
         flowAfterOnly
         revealAtTop
+        // Full screen beside the title, not on a row of its own over the grid (2026-11-13, operator: "too
+        // much space above the type").
+        right={
+          hasResults && !houseFull ? (
+            <Button kind="quiet" compact onClick={openFull}>
+              Full screen
+            </Button>
+          ) : undefined
+        }
         title={
           <>
             {trip.combined ? (
@@ -1479,13 +1500,7 @@ function TheHouse({
                   Close full screen
                 </Button>
               </div>
-            ) : (
-              <div className="house-fulltools">
-                <Button kind="quiet" compact onClick={() => setHouseFull(true)}>
-                  Full screen
-                </Button>
-              </div>
-            )}
+            ) : null}
             {chartNote ? (
               <p className={`chart-from${chartNote.ok ? "" : " warn"}`} role="status">
                 {chartNote.text}
