@@ -901,6 +901,9 @@ export type RoomTypeRateReference = {
   roomRateSource: "AGENT_RATE_PACKAGE" | "STANDARD_RATE_PLAN" | null;
   /** Which named package supplied the rate — "Season", "Premium". Null when standard. */
   packageName?: string | null;
+  /** That package's id, and whether the stay gave this type a package of its own (2026-11-13). */
+  ratePackageId?: string | null;
+  packageChosenForType?: boolean;
   standardRate: number | null;
   msrValue: number | null;
   extraBedRate: number | null;
@@ -918,8 +921,21 @@ export type EntryRateReference = {
   party: { type: "TRAVEL_AGENT" | "CORPORATE"; id: string; name: string } | null;
   roomTypes: RoomTypeRateReference[];
   /** Meal plans charged at a figure of their own, not what their meals add up to. */
-  plansOff?: Array<{ key: string; rate: string | null; meals: string | null }>;
+  plansOff?: Array<{ key: string; rate: string | null; meals: string | null; packageName?: string | null }>;
+  /** The packages chosen on the enquiry, the primary first (2026-11-13). */
+  packages?: Array<{ id: string; name: string }>;
+  /** Whether a room type's package may still be changed (Inquiry and Negotiation). */
+  packagesEditable?: boolean;
 };
+
+/** Which of the booking's chosen packages prices one room type of this stay (2026-11-13). Null = the primary. */
+export async function setRoomTypePackage(session: Session, entryId: string, body: { roomTypeId: string; ratePackageId: string | null }) {
+  return apiRequest<{ changed: boolean; ratePackageByRoomType: Record<string, string> }>(`/api/entries/${entryId}/rate-packages/by-type`, {
+    method: "POST",
+    session,
+    body,
+  });
+}
 
 export async function getRateReference(session: Session, entryId: string, roomIds?: string[]) {
   const q = roomIds?.length ? `?rooms=${encodeURIComponent(roomIds.join(","))}` : "";

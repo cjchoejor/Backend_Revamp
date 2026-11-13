@@ -33,6 +33,7 @@ import { queryAvailabilityByEntry } from "@/lib/api/availability";
 import { StayDates } from "@/components/ds/stay-dates";
 import { enumerateNights } from "./use-room-selection";
 import { STAY_SAVED_EVENT, type StaySaved } from "./s1-trip-shared";
+import { TypePackagePick, packageOfType, useBookingPackages } from "@/components/ds/type-package-pick";
 
 const WEEKDAY = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -352,6 +353,8 @@ export function RoomsByType({
     return () => saveRef?.(null);
   }, [saveRef, save.mutateAsync]);
 
+  // The booking's packages (2026-11-13): with more than one, each type says which it is priced on.
+  const bookingPackages = useBookingPackages(entry.id);
   if (!configId) return null;
   if (house.isLoading) return <p className="meta">Asking the house for each type…</p>;
 
@@ -390,6 +393,8 @@ export function RoomsByType({
     : types.filter((t) => inUse(t.roomTypeId) || nights.some((d) => freeOn(t.roomTypeId, d) > 0));
   const full = combined ? [] : types.filter((t) => !shown.includes(t));
   const typeCol = !combined || combined.showTypeColumn;
+  const pkgs = bookingPackages.packages;
+  const pkgCol = pkgs.length > 1;
   // Most stays take the same rooms every night: one dropdown per type, and the nights show only
   // what is free. Night by night opens a dropdown per night — by itself when the nights differ.
   const oneNight = nights.length <= 1;
@@ -501,6 +506,15 @@ export function RoomsByType({
               </Help>
             </th>
             ) : null}
+            {pkgCol ? (
+              <th className="bt-pkg">
+                Package
+                <Help label="About the package of each type">
+                  Which of the booking&rsquo;s packages prices each room type: its room rate, extra bed, meals and meal plans. A type left alone is
+                  priced on the first package. It can be changed until Set up.
+                </Help>
+              </th>
+            ) : null}
             {oneNight ? null : <th className="every">Every night</th>}
             {nights.map((d) => {
               const tot = totalOn(d);
@@ -532,6 +546,18 @@ export function RoomsByType({
             return (
               <tr key={t.roomTypeId}>
                 {typeCol ? <td className="bt-type">{t.name}</td> : null}
+                {pkgCol ? (
+                  <td className="bt-pkg">
+                    <TypePackagePick
+                      entryId={entry.id}
+                      roomTypeId={t.roomTypeId}
+                      typeName={t.name}
+                      packages={pkgs}
+                      value={packageOfType(entry, pkgs, t.roomTypeId)}
+                      editable={bookingPackages.editable && editable}
+                    />
+                  </td>
+                ) : null}
                 {oneNight ? null : (
                 <td className="every">
                   {pickCell({

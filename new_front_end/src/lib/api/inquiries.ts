@@ -31,6 +31,8 @@ export function updateEntrySource(
     travelAgentId?: string | null;
     corporateAccountId?: string | null;
     ratePackageId?: string | null;
+    /** Every package chosen, the primary first (2026-11-13). */
+    ratePackageIds?: string[] | null;
     corporateClientRef?: string | null;
     corporateCoordinator?: string | null;
     /** A direct booking's caller, saved with the rest (2026-11-05). */
@@ -109,6 +111,8 @@ export async function createInquiry(
      * default package, then the hotel's common one.
      */
     ratePackageId?: string | null;
+    /** Every package chosen, the primary first (2026-11-13). */
+    ratePackageIds?: string[] | null;
     /** The FOM's answer to a confirmed duplicate — go ahead with a reason (2026-09-18). */
     duplicateResolution?: { resolution: "ACKNOWLEDGE" | "DISMISS"; reason: string };
   },

@@ -903,48 +903,77 @@ export function PartyContacts({
  * agency like Bhutan INC carries Season · Off season · Premium). The figures are in the booking file's
  * Package tab. With nothing chosen, pricing takes the party's default, else its newest.
  */
+/**
+ * The rate packages chosen for the booking (2026-11-13, operator: "is there a way we can select
+ * multiple package"). One or several of the party's packages; they are kept in the party's own order
+ * (its default first), and the first ticked prices any room type not given a package of its own in
+ * The house. None ticked: pricing takes the party's default, as before.
+ */
+export function packageWord(items: LookupRatePackage[], ids: readonly string[], none: string): string {
+  if (ids.length === 0) return none;
+  const names = ids.map((id) => items.find((p) => p.id === id)?.name ?? "a package no longer listed");
+  return names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}` : names[0];
+}
+
 export function RatePackageField({
   packages,
   loading,
-  value,
+  values,
   onChange,
   readOnly,
   word,
 }: {
   packages: LookupRatePackage[] | null;
   loading?: boolean;
-  value: string | null;
-  onChange: (id: string | null) => void;
+  values: readonly string[];
+  onChange: (ids: string[]) => void;
   readOnly?: boolean;
   /** What to show when there is nothing to choose from, or it may not be changed. */
   word: string;
 }) {
   const items = packages ?? [];
   const usual = items.find((p) => p.isDefault) ?? null;
-  const notListed = !!value && !items.some((p) => p.id === value);
+  const notListed = values.filter((id) => !items.some((p) => p.id === id));
+  const toggle = (id: string) => {
+    const on = values.includes(id);
+    const next = on ? values.filter((x) => x !== id) : [...values, id];
+    // The party's own order, its default first; one no longer listed (on record) stays in front.
+    onChange([...next.filter((x) => !items.some((p) => p.id === x)), ...items.filter((p) => next.includes(p.id)).map((p) => p.id)]);
+  };
+  const primary = values.length > 1 ? (items.find((p) => p.id === values[0])?.name ?? null) : null;
   return (
     <div className="field">
       <label>
-        Rate package
-        <Help label="About the rate package">
-          {items.length > 1 ? `${items.length} packages on file: the rates differ, so pick the one agreed. ` : ""}
-          Their rates are set out in the booking file, under Charges › Package.
+        Rate packages
+        <Help label="About the rate packages">
+          Tick every package agreed for this booking. With more than one, each room type is put on its package in The house; a room type left alone is
+          priced on the first ticked. Their rates are set out in the booking file, under Charges › Package.
         </Help>
       </label>
       {readOnly || loading || items.length === 0 ? (
         <input className="input" readOnly value={loading ? "Reading their packages…" : word} />
       ) : (
-        <select className="input" value={value ?? ""} onChange={(e) => onChange(e.target.value || null)}>
-          {notListed ? <option value={value ?? ""}>a package no longer listed (on record)</option> : null}
-          {value == null || !usual ? <option value="">not chosen · pricing takes {usual ? usual.name : "their newest"}</option> : null}
-          {items.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-              {p.isDefault ? " · their default" : ""}
-            </option>
+        <div className="filters choice multi" role="group" aria-label="Rate packages">
+          {notListed.map((id) => (
+            <Button key={id} kind="secondary" compact aria-pressed onClick={() => toggle(id)}>
+              a package no longer listed
+            </Button>
           ))}
-        </select>
+          {items.map((p) => {
+            const on = values.includes(p.id);
+            return (
+              <Button key={p.id} kind={on ? "secondary" : "quiet"} compact aria-pressed={on} onClick={() => toggle(p.id)}>
+                {p.name}
+                {p.isDefault ? " · default" : ""}
+              </Button>
+            );
+          })}
+        </div>
       )}
+      {!readOnly && !loading && items.length > 0 && values.length === 0 ? (
+        <span className="hint">none ticked · pricing takes {usual ? usual.name : "their newest"}</span>
+      ) : null}
+      {primary ? <span className="hint">{primary} prices any room type not given its own in The house</span> : null}
     </div>
   );
 }

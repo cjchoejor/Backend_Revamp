@@ -5,6 +5,7 @@ import { useSession } from "@/hooks/use-session";
 import { getRateReference, type EntryRateReference } from "@/lib/api/entries";
 import { moneyOrDash } from "@/lib/desk/workspace";
 import { Help } from "@/components/ds/help";
+import { TypePackagePick } from "@/components/ds/type-package-pick";
 
 /**
  * Reference rates under the S2 composition editors (2026-08-01, operator request): typing a
@@ -78,7 +79,7 @@ export function RateReferenceStrip({
 
   const ref = query.data;
   if (!ref || ref.roomTypes.length === 0) return null;
-  return <RateReferenceView ref_={ref} compact={compact} quietNumbers={quietNumbers} />;
+  return <RateReferenceView ref_={ref} compact={compact} quietNumbers={quietNumbers} entryId={entryId} />;
 }
 
 /**
@@ -124,10 +125,13 @@ function RateReferenceView({
   compact,
   quietNumbers,
   noteOf,
+  entryId,
 }: {
   ref_: EntryRateReference;
   compact?: boolean;
   quietNumbers?: Set<string>;
+  /** One booking's strip: with several packages, each type's package can be changed here (2026-11-13). */
+  entryId?: string;
   /** In place of the rooms beside a type's name. */
   noteOf?: (t: EntryRateReference["roomTypes"][number]) => string;
 }) {
@@ -197,7 +201,19 @@ function RateReferenceView({
             </span>
           ))}
           {/* The basis only when it is not the house's own rates — a package's name, or no rate at all. */}
-          {t.roomRateSource === "AGENT_RATE_PACKAGE" ? (
+          {t.roomRateSource === "AGENT_RATE_PACKAGE" && entryId && (ref.packages?.length ?? 0) > 1 ? (
+            <span className="rref-pkg">
+              <TypePackagePick
+                entryId={entryId}
+                roomTypeId={t.roomTypeId}
+                typeName={t.name}
+                packages={ref.packages!}
+                value={t.ratePackageId ?? null}
+                editable={!!ref.packagesEditable}
+              />
+              {t.standardRate != null && <> · standard {moneyOrDash(t.standardRate, ref.currency)}</>}
+            </span>
+          ) : t.roomRateSource === "AGENT_RATE_PACKAGE" ? (
             <span>
               {t.packageName ?? "rate package"}
               {t.standardRate != null && <> · standard {moneyOrDash(t.standardRate, ref.currency)}</>}
@@ -220,7 +236,9 @@ function RateReferenceView({
       {ref.plansOff?.length ? (
         <div style={{ padding: "4px 0", borderTop: "1px dashed var(--line, #e3d9c8)", color: "var(--warning, #8f5300)", fontWeight: 600 }}>
           Charged in place of their meals:{" "}
-          {ref.plansOff.map((p) => `${PLAN_LABEL[p.key] ?? p.key} ${moneyOrDash(p.rate, ref.currency)} (the meals come to ${moneyOrDash(p.meals, ref.currency)})`).join(" · ")}
+          {ref.plansOff
+            .map((p) => `${PLAN_LABEL[p.key] ?? p.key} ${moneyOrDash(p.rate, ref.currency)}${p.packageName ? ` on ${p.packageName}` : ""} (the meals come to ${moneyOrDash(p.meals, ref.currency)})`)
+            .join(" · ")}
         </div>
       ) : null}
     </div>

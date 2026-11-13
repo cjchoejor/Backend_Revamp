@@ -2687,3 +2687,15 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .btn.btn-quiet.email-unlink:not(.desk-root *):hover { background: var(--danger-soft); border-color: var(--danger); }
 .ds .quote-replied { display: grid; gap: 4px; border-left: 3px solid var(--accent); background: var(--accent-soft); padding: var(--s2) var(--s3); border-radius: var(--r-control); }
 .ds .quote-replied-words { font-style: italic; color: var(--ink); overflow-wrap: break-word; }
+
+/* Several rate packages on a booking (2026-11-13): a multi-pick with square ticks, and the package of each room type. */
+.ds .filters.choice.multi .btn:not(.desk-root *)::before { border-radius: 3px; }
+.ds .filters.choice.multi .btn[aria-pressed="true"]:not(.desk-root *)::before { box-shadow: inset 0 0 0 3px var(--surface); }
+.ds .by-type-grid th.bt-pkg, .ds .by-type-grid td.bt-pkg { width: 150px; min-width: 130px; }
+.ds .type-pkg.input { height: 30px; padding: 0 6px; font-size: var(--t-sm); font-weight: 600; max-width: 170px; }
+.ds .type-pkg.ro { font-size: var(--t-sm); font-weight: 600; color: var(--ink-2); }
+.ds .rref-pkg { display: inline-flex; align-items: center; gap: 6px; }
+.ds .rref-pkg .type-pkg.input { height: 26px; }
+.ds .rate-sheet-on { color: var(--ink-2); font-weight: 600; }
+.ds .type-pkg-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin-top: 10px; }
+.ds .type-pkg-item { display: inline-flex; align-items: center; gap: 6px; font-size: var(--t-sm); font-weight: 600; white-space: nowrap; }

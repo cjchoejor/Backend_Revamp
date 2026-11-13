@@ -74,6 +74,7 @@ import {
   anchorFor,
   revealCard,
 } from "./kit";
+import { TypePackagesLine } from "@/components/ds/type-package-pick";
 import { AddReturnStay, TripStays } from "@/components/ds/workspace/return-stay";
 import { enumerateNights, useRoomSelection } from "./use-room-selection";
 import { STAY_SAVED_EVENT, useTripAtInquiry, type StaySaved } from "./s1-trip-shared";
@@ -1652,6 +1653,20 @@ function TheHouse({
                 </Help>
               </div>
             )}
+            {!byTypeMode && savedIds.length ? (
+              <TypePackagesLine
+                entry={entry}
+                editable={editable}
+                types={[
+                  ...new Map(
+                    savedIds
+                      .map((id) => catalog.find((r) => r.id === id))
+                      .filter((r): r is NonNullable<typeof r> => !!r?.roomTypeId)
+                      .map((r) => [r.roomTypeId!, { roomTypeId: r.roomTypeId!, name: r.roomType?.name ?? "Room" }] as const),
+                  ).values(),
+                ]}
+              />
+            ) : null}
             {duplicates > 0 ? (
               <div className="sm warn-ink" style={{ marginTop: 8 }}>
                 <Icon name="alert" /> A possible duplicate of another inquiry is

@@ -36,6 +36,8 @@ export type EntryListItem = {
   numberOfRooms?: number | null;
   /** Bed-setup breakdown of the room request ("5 King + 2 Twin"), map bedType → count (2026-08-13). */
   bedTypeRequest?: Record<string, number> | null;
+  /** Which of the enquiry's packages prices each room type of this stay — { roomTypeId: ratePackageId } (2026-11-13). */
+  ratePackageByRoomType?: Record<string, string> | null;
   /** Set at S1 by Policy 64. GROUP_MASTER = auto-classified as group; NULL = individual. */
   groupBillingMode?: "GROUP_MASTER" | "INDIVIDUAL_FOLIO" | null;
   useType?: string | null;
@@ -734,6 +736,8 @@ export type EntryDetail = EntryListItem & {
     partyContactPhone?: string | null;
     partyContactEmail?: string | null;
     ratePackageId?: string | null;
+    /** Every package chosen, the primary first (2026-11-13). */
+    ratePackageIds?: string[] | null;
     corporateClientRef?: string | null;
     /** Every contact person on the enquiry, first one first (2026-11-05). Null on one from before. */
     partyContacts?: Array<{ title?: string | null; name: string; phone?: string | null; email?: string | null }> | null;

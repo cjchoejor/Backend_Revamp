@@ -11,6 +11,7 @@ import { useSession } from "@/hooks/use-session";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
 import { useBookingRooms } from "@/hooks/use-booking-rooms";
 import { createQuotation, getQuoteValidityWindow, supersedeQuotation, type RoomCompositionInput } from "@/lib/api/quotations";
+import { getRateReference } from "@/lib/api/entries";
 import { nightOverridesCanon } from "@/components/desk/workspace/room-compositions-table";
 import { Help } from "@/components/ds/help";
 import { Button } from "@/design-system";
@@ -217,7 +218,24 @@ export function useStayTable(entry: EntryDetail, opts: { past: boolean; allowPar
   const discountMoved =
     (discountValue.trim() === "" ? null : Number(discountValue)) !== (recordedDiscount?.value ?? null) ||
     (recordedDiscount != null && discountUnit !== recordedDiscount.unit);
-  const tableUnsaved = !working || canonComps(roomCompositions) !== canonComps(pricedCompositions) || discountMoved;
+  /**
+   * A room type put on another package since the quotation was priced (2026-11-13): the table's rates
+   * are not the quotation's any more, so it reads as changed and is saved and quoted again.
+   */
+  const packageRef = useQuery({
+    queryKey: ["rate-reference", entry.id],
+    queryFn: () => getRateReference(session!, entry.id),
+    enabled: !!session,
+    staleTime: 30_000,
+  }).data;
+  const packagesMoved = (() => {
+    if (!working || !packageRef || (packageRef.packages?.length ?? 0) < 2) return false;
+    const priced = ((working.commercialTerms ?? {}) as { ratePackagesByType?: Record<string, { ratePackageId: string }> }).ratePackagesByType;
+    return packageRef.roomTypes.some((t) =>
+      priced ? !!priced[t.roomTypeId] && priced[t.roomTypeId].ratePackageId !== t.ratePackageId : !!t.packageChosenForType,
+    );
+  })();
+  const tableUnsaved = !working || canonComps(roomCompositions) !== canonComps(pricedCompositions) || discountMoved || packagesMoved;
 
   /** A blank or zero figure is "no discount"; clearing a recorded one must be said as `null`. */
   const discountPayload = (() => {
