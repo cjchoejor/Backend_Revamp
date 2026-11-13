@@ -2699,3 +2699,14 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .rate-sheet-on { color: var(--ink-2); font-weight: 600; }
 .ds .type-pkg-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin-top: 10px; }
 .ds .type-pkg-item { display: inline-flex; align-items: center; gap: 6px; font-size: var(--t-sm); font-weight: 600; white-space: nowrap; }
+.ds .pkg-multi.input { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; cursor: pointer; font-weight: 600; }
+.ds .pkg-multi.input.none { font-weight: 400; color: var(--ink-2); }
+.ds .pkg-multi-words { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ds .pkg-multi-caret { flex: none; color: var(--ink-2); }
+.ds .pkg-multi-list { display: grid; gap: 2px; }
+.ds .pkg-multi-row { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: 4px; cursor: pointer; font-weight: 500; }
+.ds .pkg-multi-row:hover { background: var(--surface-3); }
+.ds .pkg-multi-row.on { background: var(--accent-soft); color: var(--accent-ink); font-weight: 700; }
+.ds .pkg-multi-row input { width: 16px; height: 16px; accent-color: var(--accent); }
+.ds .rref-pkg.trip { gap: 12px; flex-wrap: wrap; }
+.ds .rref-pkg-stay { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; color: var(--ink-2); }

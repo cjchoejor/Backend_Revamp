@@ -156,6 +156,10 @@ export function RoomsByType({
     queryFn: () => getHouseByType(session!, entry.id, stay ? { checkInDate: stay.checkIn, checkOutDate: stay.checkOut } : undefined),
     enabled: !!session && !!configId,
     staleTime: 15_000,
+    // The key moves with every change on the booking (a package picked, a guest named); the grid stays
+    // on screen while it is asked again, so the page holds still (2026-11-13, operator: "whenever the
+    // user selects a package in the house section, it takes the page up").
+    placeholderData: (prev) => prev,
   });
   const types = house.data?.types ?? [];
   const typeName = (id: string) => types.find((t) => t.roomTypeId === id)?.name ?? catalog.find((r) => r.roomTypeId === id)?.roomType?.name ?? "Room";
@@ -548,14 +552,18 @@ export function RoomsByType({
                 {typeCol ? <td className="bt-type">{t.name}</td> : null}
                 {pkgCol ? (
                   <td className="bt-pkg">
-                    <TypePackagePick
-                      entryId={entry.id}
-                      roomTypeId={t.roomTypeId}
-                      typeName={t.name}
-                      packages={pkgs}
-                      value={packageOfType(entry, pkgs, t.roomTypeId)}
-                      editable={bookingPackages.editable && editable}
-                    />
+                    {/* Only on the types being taken (2026-11-13, operator: "need a more efficient way to do
+                        these selects") — and on one put on another package, so the choice stays in sight. */}
+                    {inUse(t.roomTypeId) || packageOfType(entry, pkgs, t.roomTypeId) !== pkgs[0]?.id ? (
+                      <TypePackagePick
+                        entryId={entry.id}
+                        roomTypeId={t.roomTypeId}
+                        typeName={t.name}
+                        packages={pkgs}
+                        value={packageOfType(entry, pkgs, t.roomTypeId)}
+                        editable={bookingPackages.editable && editable}
+                      />
+                    ) : null}
                   </td>
                 ) : null}
                 {oneNight ? null : (

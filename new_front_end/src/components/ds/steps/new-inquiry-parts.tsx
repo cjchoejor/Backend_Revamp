@@ -30,6 +30,7 @@ import { toastRefusal } from "./kit";
 import { Help, HelpHere } from "@/components/ds/help";
 import { PhoneField } from "@/components/ds/phone-field";
 import { TitleSelect } from "@/components/ds/person-name";
+import { PickFooter, PickPopover } from "@/components/ds/pick-popover";
 import { usePhoneRules } from "@/hooks/use-phone-rules";
 import { problemOfPhone, type PhoneRules } from "@/lib/ds/phone";
 import { titled } from "@/lib/ds/person";
@@ -933,14 +934,20 @@ export function RatePackageField({
 }) {
   const items = packages ?? [];
   const usual = items.find((p) => p.isDefault) ?? null;
-  const notListed = values.filter((id) => !items.some((p) => p.id === id));
-  const toggle = (id: string) => {
-    const on = values.includes(id);
-    const next = on ? values.filter((x) => x !== id) : [...values, id];
+  /**
+   * One line, a dropdown of ticks (2026-11-13, operator: "need a more efficient way to do these
+   * selects"): the buttons wrapped over two or three lines in the narrow column. OK keeps the ticks;
+   * Cancel, Escape or a press outside leaves them as they were, like the date pickers.
+   */
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState<string[]>([]);
+  const anchor = useRef<HTMLButtonElement | null>(null);
+  const ordered = (ids: readonly string[]) =>
     // The party's own order, its default first; one no longer listed (on record) stays in front.
-    onChange([...next.filter((x) => !items.some((p) => p.id === x)), ...items.filter((p) => next.includes(p.id)).map((p) => p.id)]);
-  };
+    [...ids.filter((x) => !items.some((p) => p.id === x)), ...items.filter((p) => ids.includes(p.id)).map((p) => p.id)];
+  const toggle = (id: string) => setDraft((d) => ordered(d.includes(id) ? d.filter((x) => x !== id) : [...d, id]));
   const primary = values.length > 1 ? (items.find((p) => p.id === values[0])?.name ?? null) : null;
+  const shownWord = values.length ? packageWord(items, values, "") : `none ticked · pricing takes ${usual ? usual.name : "their newest"}`;
   return (
     <div className="field">
       <label>
@@ -953,26 +960,52 @@ export function RatePackageField({
       {readOnly || loading || items.length === 0 ? (
         <input className="input" readOnly value={loading ? "Reading their packages…" : word} />
       ) : (
-        <div className="filters choice multi" role="group" aria-label="Rate packages">
-          {notListed.map((id) => (
-            <Button key={id} kind="secondary" compact aria-pressed onClick={() => toggle(id)}>
-              a package no longer listed
-            </Button>
-          ))}
-          {items.map((p) => {
-            const on = values.includes(p.id);
-            return (
-              <Button key={p.id} kind={on ? "secondary" : "quiet"} compact aria-pressed={on} onClick={() => toggle(p.id)}>
-                {p.name}
-                {p.isDefault ? " · default" : ""}
-              </Button>
-            );
-          })}
-        </div>
+        <>
+          <button
+            ref={anchor}
+            type="button"
+            className={`input pkg-multi${values.length ? "" : " none"}`}
+            aria-haspopup="dialog"
+            aria-expanded={open}
+            aria-label="Rate packages"
+            title={shownWord}
+            onClick={() => {
+              setDraft([...values]);
+              setOpen((o) => !o);
+            }}
+          >
+            <span className="pkg-multi-words">{shownWord}</span>
+            <span aria-hidden className="pkg-multi-caret">
+              ▾
+            </span>
+          </button>
+          <PickPopover anchor={anchor} open={open} onCancel={() => setOpen(false)} label="Rate packages" width={280}>
+            <div className="pkg-multi-list" role="group" aria-label="Rate packages to tick">
+              {[...draft.filter((x) => !items.some((p) => p.id === x)).map((id) => ({ id, name: "a package no longer listed", isDefault: false })), ...items].map((p) => {
+                const on = draft.includes(p.id);
+                return (
+                  <label key={p.id} className={`pkg-multi-row${on ? " on" : ""}`}>
+                    <input type="checkbox" checked={on} onChange={() => toggle(p.id)} />
+                    <span>
+                      {p.name}
+                      {p.isDefault ? <span className="meta"> · default</span> : null}
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+            <PickFooter
+              picked={draft.length === 0 ? "none ticked" : draft.length === 1 ? "1 ticked" : `${draft.length} ticked`}
+              canOk
+              onOk={() => {
+                onChange(ordered(draft));
+                setOpen(false);
+              }}
+              onCancel={() => setOpen(false)}
+            />
+          </PickPopover>
+        </>
       )}
-      {!readOnly && !loading && items.length > 0 && values.length === 0 ? (
-        <span className="hint">none ticked · pricing takes {usual ? usual.name : "their newest"}</span>
-      ) : null}
       {primary ? <span className="hint">{primary} prices any room type not given its own in The house</span> : null}
     </div>
   );

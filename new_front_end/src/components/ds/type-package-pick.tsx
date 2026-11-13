@@ -53,7 +53,7 @@ export function TypePackagePick({
     mutationFn: (ratePackageId: string) => setRoomTypePackage(session!, entryId, { roomTypeId, ratePackageId }),
     onSuccess: (r, ratePackageId) => {
       if (r.changed) toast.success(`${typeName} is now priced on ${packages.find((p) => p.id === ratePackageId)?.name ?? "that package"}`);
-      for (const k of [["entry", entryId], ["rate-reference", entryId], ["price-pick", entryId], ["price-pick-trip"], ["quotation-preview"], ["quotation-live-preview"], ["rate-sheet"], ["billing-summary", entryId]]) {
+      for (const k of [["entry", entryId], ["rate-reference", entryId], ["price-pick", entryId], ["price-pick-trip"], ["quotation-preview"], ["quotation-live-preview"], ["trip-live-preview"], ["rate-sheet"], ["billing-summary", entryId]]) {
         void qc.invalidateQueries({ queryKey: k });
       }
     },
