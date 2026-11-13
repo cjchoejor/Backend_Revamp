@@ -2706,7 +2706,7 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 /* The Package column as wide as its longest package name, no wider (2026-11-13, operator: "the packages
    column is a little too wide"). */
 .ds .table.compact.by-type-grid th.bt-pkg, .ds .table.compact.by-type-grid td.bt-pkg { width: 1%; white-space: nowrap; padding-left: 8px; padding-right: 8px; }
-.ds .by-type-grid td.bt-pkg .type-pkg.input { width: auto; min-width: 0; max-width: 132px; height: 28px; padding: 0 4px; }
+.ds .by-type-grid td.bt-pkg .type-pkg.input { width: auto; min-width: 0; max-width: 150px; height: 28px; padding: 0 26px 0 8px; background-position: right 8px center; text-overflow: ellipsis; }
 .ds .type-pkg.input { height: 30px; padding: 0 6px; font-size: var(--t-sm); font-weight: 600; max-width: 170px; }
 .ds .type-pkg.ro { font-size: var(--t-sm); font-weight: 600; color: var(--ink-2); }
 .ds .rref-pkg { display: inline-flex; align-items: center; gap: 6px; }
