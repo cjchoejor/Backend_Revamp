@@ -29,6 +29,8 @@ export type RoomCompositionInput = {
   negotiatedBreakfastRate?: number;
   negotiatedLunchRate?: number;
   negotiatedDinnerRate?: number;
+  /** This room's own package, when not its room type's (2026-11-13). */
+  ratePackageId?: string | null;
   serviceChargeApplies?: boolean;
   gstApplies?: boolean;
   isFoc?: boolean;
@@ -310,6 +312,8 @@ export async function sendQuotation(
     hidePrices?: boolean;
     /** Attach the copy with every night named (2026-10-30). */
     nightsEach?: boolean;
+    /** With the room types, on an agency's or a company's booking, when allowed (2026-11-13). */
+    showRoomTypes?: boolean;
   },
 ) {
   return apiRequest<QuotationSummary>(`/api/quotations/${quotationId}/send`, {

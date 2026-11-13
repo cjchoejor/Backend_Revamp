@@ -1,10 +1,12 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { useSession } from "@/hooks/use-session";
 import { getRateReference, type EntryRateReference } from "@/lib/api/entries";
 import { moneyOrDash } from "@/lib/desk/workspace";
 import { Help } from "@/components/ds/help";
+import { TypePackagePick } from "@/components/ds/type-package-pick";
 
 /**
  * Reference rates under the S2 composition editors (2026-08-01, operator request): typing a
@@ -78,7 +80,7 @@ export function RateReferenceStrip({
 
   const ref = query.data;
   if (!ref || ref.roomTypes.length === 0) return null;
-  return <RateReferenceView ref_={ref} compact={compact} quietNumbers={quietNumbers} />;
+  return <RateReferenceView ref_={ref} compact={compact} quietNumbers={quietNumbers} entryId={entryId} />;
 }
 
 /**
@@ -109,6 +111,41 @@ export function TripRateReferenceStrip({ stays }: { stays: Array<{ entryId: stri
     }
   });
   const list = [...groups.values()];
+  /**
+   * The package of each type, stay by stay (2026-11-13, operator: "a trip viewed together at
+   * Negotiation: do this"). A line is shared only while the stays are on the same package, so a
+   * change splits it into a line per stay.
+   */
+  const picker = new Map<Row, ReactNode>();
+  for (const g of list) {
+    if (g.t.roomRateSource !== "AGENT_RATE_PACKAGE") continue;
+    const on = g.stayNos
+      .map((no) => ({ no, i: stays.findIndex((s) => s.stayNo === no) }))
+      .filter(({ i }) => i >= 0 && (refs[i]!.packages?.length ?? 0) > 1);
+    if (!on.length) continue;
+    picker.set(
+      g.t,
+      <span className="rref-pkg trip">
+        {on.map(({ no, i }) => {
+          const r = refs[i]!;
+          const mine = r.roomTypes.find((x) => x.roomTypeId === g.t.roomTypeId);
+          return (
+            <span key={no} className="rref-pkg-stay">
+              Stay {no}
+              <TypePackagePick
+                entryId={stays[i].entryId}
+                roomTypeId={g.t.roomTypeId}
+                typeName={`Stay ${no}'s ${g.t.name}`}
+                packages={r.packages!}
+                value={mine?.ratePackageId ?? null}
+                editable={!!r.packagesEditable}
+              />
+            </span>
+          );
+        })}
+      </span>,
+    );
+  }
   const note = new Map<Row, string>();
   for (const g of list) {
     const everyStay = g.stayNos.length === stays.length;
@@ -116,7 +153,9 @@ export function TripRateReferenceStrip({ stays }: { stays: Array<{ entryId: stri
   }
   const first = refs[0]!;
   const plansOff = [...new Map(refs.flatMap((r) => r!.plansOff ?? []).map((p) => [JSON.stringify(p), p])).values()];
-  return <RateReferenceView ref_={{ ...first, roomTypes: list.map((g) => g.t), plansOff }} compact noteOf={(t) => note.get(t) ?? ""} />;
+  return (
+    <RateReferenceView ref_={{ ...first, roomTypes: list.map((g) => g.t), plansOff }} compact noteOf={(t) => note.get(t) ?? ""} pickerOf={(t) => picker.get(t) ?? null} />
+  );
 }
 
 function RateReferenceView({
@@ -124,10 +163,16 @@ function RateReferenceView({
   compact,
   quietNumbers,
   noteOf,
+  entryId,
+  pickerOf,
 }: {
   ref_: EntryRateReference;
   compact?: boolean;
   quietNumbers?: Set<string>;
+  /** One booking's strip: with several packages, each type's package can be changed here (2026-11-13). */
+  entryId?: string;
+  /** The stays' strip: a picker per stay in place of the package's name. */
+  pickerOf?: (t: EntryRateReference["roomTypes"][number]) => ReactNode;
   /** In place of the rooms beside a type's name. */
   noteOf?: (t: EntryRateReference["roomTypes"][number]) => string;
 }) {
@@ -197,7 +242,24 @@ function RateReferenceView({
             </span>
           ))}
           {/* The basis only when it is not the house's own rates — a package's name, or no rate at all. */}
-          {t.roomRateSource === "AGENT_RATE_PACKAGE" ? (
+          {t.roomRateSource === "AGENT_RATE_PACKAGE" && pickerOf?.(t) ? (
+            <span className="rref-pkg">
+              {pickerOf(t)}
+              {t.standardRate != null && <> · standard {moneyOrDash(t.standardRate, ref.currency)}</>}
+            </span>
+          ) : t.roomRateSource === "AGENT_RATE_PACKAGE" && entryId && (ref.packages?.length ?? 0) > 1 ? (
+            <span className="rref-pkg">
+              <TypePackagePick
+                entryId={entryId}
+                roomTypeId={t.roomTypeId}
+                typeName={t.name}
+                packages={ref.packages!}
+                value={t.ratePackageId ?? null}
+                editable={!!ref.packagesEditable}
+              />
+              {t.standardRate != null && <> · standard {moneyOrDash(t.standardRate, ref.currency)}</>}
+            </span>
+          ) : t.roomRateSource === "AGENT_RATE_PACKAGE" ? (
             <span>
               {t.packageName ?? "rate package"}
               {t.standardRate != null && <> · standard {moneyOrDash(t.standardRate, ref.currency)}</>}
@@ -220,7 +282,9 @@ function RateReferenceView({
       {ref.plansOff?.length ? (
         <div style={{ padding: "4px 0", borderTop: "1px dashed var(--line, #e3d9c8)", color: "var(--warning, #8f5300)", fontWeight: 600 }}>
           Charged in place of their meals:{" "}
-          {ref.plansOff.map((p) => `${PLAN_LABEL[p.key] ?? p.key} ${moneyOrDash(p.rate, ref.currency)} (the meals come to ${moneyOrDash(p.meals, ref.currency)})`).join(" · ")}
+          {ref.plansOff
+            .map((p) => `${PLAN_LABEL[p.key] ?? p.key} ${moneyOrDash(p.rate, ref.currency)}${p.packageName ? ` on ${p.packageName}` : ""} (the meals come to ${moneyOrDash(p.meals, ref.currency)})`)
+            .join(" · ")}
         </div>
       ) : null}
     </div>

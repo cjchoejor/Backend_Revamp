@@ -30,6 +30,7 @@ import { toastRefusal } from "./kit";
 import { Help, HelpHere } from "@/components/ds/help";
 import { PhoneField } from "@/components/ds/phone-field";
 import { TitleSelect } from "@/components/ds/person-name";
+import { PickFooter, PickPopover } from "@/components/ds/pick-popover";
 import { usePhoneRules } from "@/hooks/use-phone-rules";
 import { problemOfPhone, type PhoneRules } from "@/lib/ds/phone";
 import { titled } from "@/lib/ds/person";
@@ -903,48 +904,109 @@ export function PartyContacts({
  * agency like Bhutan INC carries Season · Off season · Premium). The figures are in the booking file's
  * Package tab. With nothing chosen, pricing takes the party's default, else its newest.
  */
+/**
+ * The rate packages chosen for the booking (2026-11-13, operator: "is there a way we can select
+ * multiple package"). One or several of the party's packages; they are kept in the party's own order
+ * (its default first), and the first ticked prices any room type not given a package of its own in
+ * The house. None ticked: pricing takes the party's default, as before.
+ */
+export function packageWord(items: LookupRatePackage[], ids: readonly string[], none: string): string {
+  if (ids.length === 0) return none;
+  const names = ids.map((id) => items.find((p) => p.id === id)?.name ?? "a package no longer listed");
+  return names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}` : names[0];
+}
+
 export function RatePackageField({
   packages,
   loading,
-  value,
+  values,
   onChange,
   readOnly,
   word,
 }: {
   packages: LookupRatePackage[] | null;
   loading?: boolean;
-  value: string | null;
-  onChange: (id: string | null) => void;
+  values: readonly string[];
+  onChange: (ids: string[]) => void;
   readOnly?: boolean;
   /** What to show when there is nothing to choose from, or it may not be changed. */
   word: string;
 }) {
   const items = packages ?? [];
   const usual = items.find((p) => p.isDefault) ?? null;
-  const notListed = !!value && !items.some((p) => p.id === value);
+  /**
+   * One line, a dropdown of ticks (2026-11-13, operator: "need a more efficient way to do these
+   * selects"): the buttons wrapped over two or three lines in the narrow column. OK keeps the ticks;
+   * Cancel, Escape or a press outside leaves them as they were, like the date pickers.
+   */
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState<string[]>([]);
+  const anchor = useRef<HTMLButtonElement | null>(null);
+  const ordered = (ids: readonly string[]) =>
+    // The party's own order, its default first; one no longer listed (on record) stays in front.
+    [...ids.filter((x) => !items.some((p) => p.id === x)), ...items.filter((p) => ids.includes(p.id)).map((p) => p.id)];
+  const toggle = (id: string) => setDraft((d) => ordered(d.includes(id) ? d.filter((x) => x !== id) : [...d, id]));
+  const primary = values.length > 1 ? (items.find((p) => p.id === values[0])?.name ?? null) : null;
+  const shownWord = values.length ? packageWord(items, values, "") : `none ticked · pricing takes ${usual ? usual.name : "their newest"}`;
   return (
     <div className="field">
       <label>
-        Rate package
-        <Help label="About the rate package">
-          {items.length > 1 ? `${items.length} packages on file: the rates differ, so pick the one agreed. ` : ""}
-          Their rates are set out in the booking file, under Charges › Package.
+        Rate packages
+        <Help label="About the rate packages">
+          Tick every package agreed for this booking. With more than one, each room type is put on its package in The house; a room type left alone is
+          priced on the first ticked. Their rates are set out in the booking file, under Charges › Package.
         </Help>
       </label>
       {readOnly || loading || items.length === 0 ? (
         <input className="input" readOnly value={loading ? "Reading their packages…" : word} />
       ) : (
-        <select className="input" value={value ?? ""} onChange={(e) => onChange(e.target.value || null)}>
-          {notListed ? <option value={value ?? ""}>a package no longer listed (on record)</option> : null}
-          {value == null || !usual ? <option value="">not chosen · pricing takes {usual ? usual.name : "their newest"}</option> : null}
-          {items.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-              {p.isDefault ? " · their default" : ""}
-            </option>
-          ))}
-        </select>
+        <>
+          <button
+            ref={anchor}
+            type="button"
+            className={`input pkg-multi${values.length ? "" : " none"}`}
+            aria-haspopup="dialog"
+            aria-expanded={open}
+            aria-label="Rate packages"
+            title={shownWord}
+            onClick={() => {
+              setDraft([...values]);
+              setOpen((o) => !o);
+            }}
+          >
+            <span className="pkg-multi-words">{shownWord}</span>
+            <span aria-hidden className="pkg-multi-caret">
+              ▾
+            </span>
+          </button>
+          <PickPopover anchor={anchor} open={open} onCancel={() => setOpen(false)} label="Rate packages" width={280}>
+            <div className="pkg-multi-list" role="group" aria-label="Rate packages to tick">
+              {[...draft.filter((x) => !items.some((p) => p.id === x)).map((id) => ({ id, name: "a package no longer listed", isDefault: false })), ...items].map((p) => {
+                const on = draft.includes(p.id);
+                return (
+                  <label key={p.id} className={`pkg-multi-row${on ? " on" : ""}`}>
+                    <input type="checkbox" checked={on} onChange={() => toggle(p.id)} />
+                    <span>
+                      {p.name}
+                      {p.isDefault ? <span className="meta"> · default</span> : null}
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+            <PickFooter
+              picked={draft.length === 0 ? "none ticked" : draft.length === 1 ? "1 ticked" : `${draft.length} ticked`}
+              canOk
+              onOk={() => {
+                onChange(ordered(draft));
+                setOpen(false);
+              }}
+              onCancel={() => setOpen(false)}
+            />
+          </PickPopover>
+        </>
       )}
+      {primary ? <span className="hint">{primary} prices any room type not given its own in The house</span> : null}
     </div>
   );
 }

@@ -81,6 +81,7 @@ async function loadBooking(prisma: PrismaClient, entryId: string) {
           travelAgentId: true,
           corporateAccountId: true,
           ratePackageId: true,
+          ratePackageIds: true,
           travelAgent: { select: { displayName: true } },
           corporateAccount: { select: { displayName: true } },
         },
@@ -383,7 +384,7 @@ async function planCombine(prisma: PrismaClient, actor: Actor, keptId: string, o
         ? ["This booking's provisional block moves onto every room, keeping its deadline"]
         : [`${other.id}'s provisional block is lifted — mark the rooms again on this booking if they should stay held`]
       : []),
-    ...(kept.inquiry?.ratePackageId !== other.inquiry?.ratePackageId ? ["This booking's rate package prices every room"] : []),
+    ...(kept.inquiry?.ratePackageId !== other.inquiry?.ratePackageId || (kept.inquiry?.ratePackageIds ?? []).join() !== (other.inquiry?.ratePackageIds ?? []).join() ? ["This booking's rate packages price every room"] : []),
     ...(other._count.bookingNotes > 0 || other.openRequests > 0
       ? [
           `${other.id}'s ${[

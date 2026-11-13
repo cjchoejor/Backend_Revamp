@@ -159,6 +159,8 @@ export const changeStayInPlaceRequestSchema = z.object({
     childCount: z.coerce.number().int().min(0),
     childAges: z.array(z.coerce.number().int().min(0).max(150)),
     numberOfRooms: z.coerce.number().int().min(1).max(50),
+    /** The beds asked for (2026-11-13). Absent = unchanged; null clears it. */
+    bedTypeRequest: z.record(z.string(), z.coerce.number().int().min(0).max(50)).nullish(),
   }),
   rooms: z.object({
     configurationId: z.string().min(1),

@@ -2008,6 +2008,8 @@ async function changeRoomToNewSegmentInner(
         if (money(c[k]) !== money(prior?.[k])) commercialChanged = true;
       }
       if ((c.isFoc ?? false) !== (prior?.isFoc ?? false)) commercialChanged = true;
+      // A room put on another package is a change of its rates (2026-11-13).
+      if ((c.ratePackageId ?? null) !== (prior?.ratePackageId ?? null)) commercialChanged = true;
       if ((c.serviceChargeApplies ?? true) !== (prior?.serviceChargeApplies ?? true)) commercialChanged = true;
       if ((c.gstApplies ?? true) !== (prior?.gstApplies ?? true)) commercialChanged = true;
     }

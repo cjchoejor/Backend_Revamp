@@ -53,11 +53,20 @@ export async function openPdf(session: Session, path: string): Promise<void> {
  * `nights=each` names every night instead of writing a run as its first and last (2026-10-30).
  * Either is rendered fresh and never stored — the stored PDF is the priced one, nights short.
  */
-export type PaperFace = { hidePrices?: boolean; nightsEach?: boolean };
+export type PaperFace = {
+  hidePrices?: boolean;
+  nightsEach?: boolean;
+  /**
+   * The rooms with or without their types (2026-11-13): an agency's or a company's papers go without
+   * them. Left out, the booking's own default on a preview, and the stored paper on a PDF.
+   */
+  roomTypes?: "hidden" | "shown";
+};
 function faceQuery(f?: PaperFace): string {
   const q = new URLSearchParams();
   if (f?.hidePrices) q.set("prices", "none");
   if (f?.nightsEach) q.set("nights", "each");
+  if (f?.roomTypes) q.set("roomTypes", f.roomTypes);
   const s = q.toString();
   return s ? `?${s}` : "";
 }
@@ -87,7 +96,7 @@ export async function fetchQuotationPreviewHtml(
  * requirement live, without generating a PDF.
  */
 export async function fetchInvoicePreviewHtml(session: Session, invoiceId: string, opts?: PaperFace): Promise<string> {
-  return fetchPreviewHtml(session, `/api/invoices/${invoiceId}/preview-html${faceQuery({ nightsEach: opts?.nightsEach })}`, "proforma");
+  return fetchPreviewHtml(session, `/api/invoices/${invoiceId}/preview-html${faceQuery({ nightsEach: opts?.nightsEach, roomTypes: opts?.roomTypes })}`, "proforma");
 }
 
 /**
@@ -136,12 +145,12 @@ async function fetchPreviewHtml(session: Session, path: string, label: string): 
 
 /** S3 proforma / S8·S9 final — invoice PDF. `GET /api/invoices/:id/pdf`. */
 export function openInvoicePdf(session: Session, invoiceId: string, opts?: PaperFace): Promise<void> {
-  return openPdf(session, `/api/invoices/${invoiceId}/pdf${faceQuery({ nightsEach: opts?.nightsEach })}`);
+  return openPdf(session, `/api/invoices/${invoiceId}/pdf${faceQuery({ nightsEach: opts?.nightsEach, roomTypes: opts?.roomTypes })}`);
 }
 
 /** S4 — confirmation voucher PDF. `GET /api/reservations/:id/confirmation-voucher-pdf`. */
 export function openConfirmationVoucherPdf(session: Session, reservationId: string, opts?: PaperFace): Promise<void> {
-  return openPdf(session, `/api/reservations/${reservationId}/confirmation-voucher-pdf${faceQuery({ nightsEach: opts?.nightsEach })}`);
+  return openPdf(session, `/api/reservations/${reservationId}/confirmation-voucher-pdf${faceQuery({ nightsEach: opts?.nightsEach, roomTypes: opts?.roomTypes })}`);
 }
 
 /** A5 — cancellation confirmation PDF. `GET /api/entries/:id/cancellation-confirmation-pdf`. */
@@ -232,7 +241,20 @@ export function sendFolioDocument(
 }
 
 /** Which paper — any one id finds its booking. */
-export type PaperOf = { quotationId?: string; invoiceId?: string; reservationId?: string; entryId?: string };
+export type PaperOf = { quotationId?: string; invoiceId?: string; reservationId?: string; entryId?: string; tripPaperId?: string };
+
+/**
+ * Whether a booking's papers go without room types — an agency's or a company's do (2026-11-13) —
+ * and whether this person may send them WITH the types: the admin console's setting and its roles.
+ * `GET /api/papers/room-types`.
+ */
+export type PaperRoomTypes = { entryId: string; party: string | null; hiddenByDefault: boolean; mayShow: boolean; why: string | null };
+export async function getPaperRoomTypes(session: Session, of: PaperOf): Promise<PaperRoomTypes> {
+  const q = new URLSearchParams(Object.entries(of).filter(([, v]) => !!v) as Array<[string, string]>);
+  const res = await fetch(`/api/papers/room-types?${q.toString()}`, { headers: authHeaders(session), credentials: "same-origin" });
+  if (!res.ok) throw new Error(`Could not read how the paper names its rooms (HTTP ${res.status})`);
+  return res.json();
+}
 
 /**
  * Whether the paper reads differently with its nights shortened and with every night named

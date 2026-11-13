@@ -74,7 +74,9 @@ export function usePickPricing(entryId: string, picks: BillNight[], enabled = tr
 }
 
 function basisWords(p: PickPricing) {
-  const pkg = p.byType.find((t) => t.packageName)?.packageName ?? null;
+  // Room types may be on different packages (2026-11-13): each named once.
+  const pkgs = [...new Set(p.byType.map((t) => t.packageName).filter((n): n is string => !!n))];
+  const pkg = pkgs.length ? pkgs.join(" and ") : null;
   if (p.party) return `${p.party.name}${pkg ? ` · ${pkg}` : ""}`;
   return "published rates";
 }
@@ -119,7 +121,12 @@ export function PickBill({
         <tbody>
           {pricing.byType.map((ty) => (
             <tr key={ty.roomTypeId}>
-              <td>{ty.name}</td>
+              <td>
+                {ty.name}
+                {new Set(pricing.byType.map((x) => x.packageName).filter(Boolean)).size > 1 && ty.packageName ? (
+                  <span className="meta"> · {ty.packageName}</span>
+                ) : null}
+              </td>
               <td className="num meta">
                 {plural(ty.roomNights, "room-night")} × {ty.rate == null ? "no rate on file" : money(ty.rate, c)}
               </td>

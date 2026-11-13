@@ -36,6 +36,11 @@ export type PriceLine = {
   indent?: boolean;
   /** A line that says something and charges nothing — "Room only · no meals" (2026-10-30). */
   muted?: boolean;
+  /**
+   * Printed in bold in front of the description — the package a room is priced on, on a paper that
+   * names no room type ("**Season** Room 1 · 2 adults", 2026-11-13).
+   */
+  lead?: string | null;
 };
 
 /** A room's counts as the quotation stores them (`commercialTerms.roomCompositions[]`). */
@@ -109,6 +114,8 @@ export type PriceLineRoom = {
   roomLabel?: string | null;
   /** How many identical rooms these rows stand for (default 1) — see `buildPaperPriceLines`. */
   roomCount?: number;
+  /** Printed in bold in front of the room's row: its package, on a paper with no room types (2026-11-13). */
+  lead?: string | null;
 };
 
 /** The rows as figures to the cent, for a JSON answer (the document rounds as it prints). */
@@ -177,6 +184,7 @@ export function buildRoomPriceLines(r: PriceLineRoom): PriceLine[] {
     qty: roomsTimes(nightsWord(nightsN)),
     rate: r.printedRoomRate,
     amount: r.printedRoomRate * nightsN * k,
+    ...(r.lead ? { lead: r.lead } : {}),
   });
 
   // ── Extra beds ──────────────────────────────────────────────────────────────

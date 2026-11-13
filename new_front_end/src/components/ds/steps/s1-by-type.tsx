@@ -33,6 +33,7 @@ import { queryAvailabilityByEntry } from "@/lib/api/availability";
 import { StayDates } from "@/components/ds/stay-dates";
 import { enumerateNights } from "./use-room-selection";
 import { STAY_SAVED_EVENT, type StaySaved } from "./s1-trip-shared";
+import { TypePackagePick, packageOfType, useBookingPackages } from "@/components/ds/type-package-pick";
 
 const WEEKDAY = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -155,6 +156,10 @@ export function RoomsByType({
     queryFn: () => getHouseByType(session!, entry.id, stay ? { checkInDate: stay.checkIn, checkOutDate: stay.checkOut } : undefined),
     enabled: !!session && !!configId,
     staleTime: 15_000,
+    // The key moves with every change on the booking (a package picked, a guest named); the grid stays
+    // on screen while it is asked again, so the page holds still (2026-11-13, operator: "whenever the
+    // user selects a package in the house section, it takes the page up").
+    placeholderData: (prev) => prev,
   });
   const types = house.data?.types ?? [];
   const typeName = (id: string) => types.find((t) => t.roomTypeId === id)?.name ?? catalog.find((r) => r.roomTypeId === id)?.roomType?.name ?? "Room";
@@ -352,6 +357,8 @@ export function RoomsByType({
     return () => saveRef?.(null);
   }, [saveRef, save.mutateAsync]);
 
+  // The booking's packages (2026-11-13): with more than one, each type says which it is priced on.
+  const bookingPackages = useBookingPackages(entry.id);
   if (!configId) return null;
   if (house.isLoading) return <p className="meta">Asking the house for each type…</p>;
 
@@ -390,11 +397,37 @@ export function RoomsByType({
     : types.filter((t) => inUse(t.roomTypeId) || nights.some((d) => freeOn(t.roomTypeId, d) > 0));
   const full = combined ? [] : types.filter((t) => !shown.includes(t));
   const typeCol = !combined || combined.showTypeColumn;
+  const pkgs = bookingPackages.packages;
+  const pkgCol = pkgs.length > 1;
   // Most stays take the same rooms every night: one dropdown per type, and the nights show only
   // what is free. Night by night opens a dropdown per night — by itself when the nights differ.
   const oneNight = nights.length <= 1;
   const varies = shown.some((t) => everyNight(t.roomTypeId) == null);
   const byNight = oneNight || byNightAsked || varies;
+  /**
+   * Same every night shows no night columns (2026-11-13, operator: "if you have a better efficient way
+   * to view the house section when many nights are there"): they only repeated how many are free, and
+   * a long stay pushed the grid off the screen. What is free each night is on the free count's hover.
+   */
+  const showNights = oneNight || byNight;
+  const nightsShown = showNights ? nights : [];
+  const tallyOf = (d: string) => {
+    const tot = totalOn(d);
+    const left = numberOfRooms - tot;
+    return (
+      <span
+        className={`bt-tally ${tot === numberOfRooms ? "done" : "short"}`}
+        title={left === 0 ? "Every room is picked" : left > 0 ? `${plural(left, "room")} still to pick` : `${-left} too many`}
+      >
+        {/* The tick keeps its place when it is not shown, so a night turning done never widens the grid. */}
+        <span className={`bt-tick${tot === numberOfRooms ? "" : " off"}`} aria-hidden>
+          ✓
+        </span>
+        {tot} of {numberOfRooms} picked
+      </span>
+    );
+  };
+  const freeByNight = (t: string) => nights.map((d) => `${fmtDay(d)} ${freeOn(t, d)}`).join(" · ");
 
   /** One box: what is free (coloured), then how many are taken — a dropdown of what can stand. */
   const pickCell = (o: {
@@ -489,7 +522,7 @@ export function RoomsByType({
         <thead>
           <tr>
             {typeCol ? (
-            <th>
+            <th className="bt-typeh">
               Type
               <Help label="About the counts">
                 Pick how many rooms of each type the guests need — for every night at once, or night by night. Beside each type is how
@@ -501,28 +534,29 @@ export function RoomsByType({
               </Help>
             </th>
             ) : null}
-            {oneNight ? null : <th className="every">Every night</th>}
-            {nights.map((d) => {
-              const tot = totalOn(d);
-              const left = numberOfRooms - tot;
-              return (
-                <th key={d} className="hn">
-                  <span className="bt-day">
-                    {WEEKDAY[new Date(`${d}T00:00:00Z`).getUTCDay()]} {fmtDay(d)}
-                  </span>
-                  <span
-                    className={`bt-tally ${tot === numberOfRooms ? "done" : "short"}`}
-                    title={left === 0 ? "Every room this night is picked" : left > 0 ? `${plural(left, "room")} still to pick` : `${-left} too many`}
-                  >
-                    {/* The tick keeps its place when it is not shown, so a night turning done never widens the grid. */}
-                    <span className={`bt-tick${tot === numberOfRooms ? "" : " off"}`} aria-hidden>
-                      ✓
-                    </span>
-                    {tot} of {numberOfRooms} picked
-                  </span>
-                </th>
-              );
-            })}
+            {pkgCol ? (
+              <th className="bt-pkg">
+                Package
+                <Help label="About the package of each type">
+                  Which of the booking&rsquo;s packages prices each room type: its room rate, extra bed, meals and meal plans. A type left alone is
+                  priced on the first package. It can be changed until Set up.
+                </Help>
+              </th>
+            ) : null}
+            {oneNight ? null : (
+              <th className="every">
+                <span className="bt-day">{showNights ? "Every night" : `Every night · ${plural(nights.length, "night")}`}</span>
+                {showNights ? null : tallyOf(nights[0])}
+              </th>
+            )}
+            {nightsShown.map((d) => (
+              <th key={d} className="hn">
+                <span className="bt-day">
+                  {WEEKDAY[new Date(`${d}T00:00:00Z`).getUTCDay()]} {fmtDay(d)}
+                </span>
+                {tallyOf(d)}
+              </th>
+            ))}
           </tr>
         </thead>
         <tbody>
@@ -532,12 +566,28 @@ export function RoomsByType({
             return (
               <tr key={t.roomTypeId}>
                 {typeCol ? <td className="bt-type">{t.name}</td> : null}
+                {pkgCol ? (
+                  <td className="bt-pkg">
+                    {/* Only on the types being taken (2026-11-13, operator: "need a more efficient way to do
+                        these selects") — and on one put on another package, so the choice stays in sight. */}
+                    {inUse(t.roomTypeId) || packageOfType(entry, pkgs, t.roomTypeId) !== pkgs[0]?.id ? (
+                      <TypePackagePick
+                        entryId={entry.id}
+                        roomTypeId={t.roomTypeId}
+                        typeName={t.name}
+                        packages={pkgs}
+                        value={packageOfType(entry, pkgs, t.roomTypeId)}
+                        editable={bookingPackages.editable && editable}
+                      />
+                    ) : null}
+                  </td>
+                ) : null}
                 {oneNight ? null : (
                 <td className="every">
                   {pickCell({
                     label: `${t.name}, every night`,
                     free: t.wholeStay,
-                    freeTitle: `${t.wholeStay} ${t.name} free for the whole stay${t.wholeStayUncertain ? " — perhaps more" : ""}`,
+                    freeTitle: `${t.wholeStay} ${t.name} free for the whole stay${t.wholeStayUncertain ? " — perhaps more" : ""} · free each night: ${freeByNight(t.roomTypeId)}`,
                     value: ev,
                     lo,
                     hi: Math.max(lo, capEvery(t.roomTypeId)),
@@ -546,7 +596,7 @@ export function RoomsByType({
                   })}
                 </td>
                 )}
-                {nights.map((d) => {
+                {nightsShown.map((d) => {
                   const free = freeOn(t.roomTypeId, d);
                   return (
                     <td key={d} className="hn">
@@ -722,10 +772,12 @@ export function TripHouse({
     (saveRefs.current[id] ??= (fn) => {
       savers.current[id] = fn;
     });
-  const combinedFor = (e: EntryDetail, first: boolean): CombinedProps => ({
+  // The type names once, in a column of their own outside the sideways scroll, so they stay in sight
+  // over every stay's nights (2026-11-13, operator: "the types column should be fixed when scrolling").
+  const combinedFor = (e: EntryDetail, _first: boolean): CombinedProps => ({
     caption: <StayCaption entry={e} stayNo={stayNoOf(e.id)} />,
     typeOrder,
-    showTypeColumn: first,
+    showTypeColumn: false,
     onState,
     saveRef: saveRefFor(e.id),
   });
@@ -770,6 +822,30 @@ export function TripHouse({
   const multi = stays.some((e) => enumerateNights(e.checkInDate, e.checkOutDate).length > 1);
   return (
     <div className={`trip-house${multi ? " has-multi" : ""}`}>
+      <div className="trip-house-body">
+      <div className="trip-house-types">
+        <div className="bt-cap" aria-hidden />
+        <table className="table compact house-types by-type-grid trip-types">
+          <thead>
+            <tr>
+              <th className="bt-typeh">
+                Type
+                <Help label="About the counts">
+                  Each stay&rsquo;s rooms by type, side by side: how many of each type it needs, and beside each how many are free. The
+                  system chooses the rooms and keeps them until Arrival.
+                </Help>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {typeOrder.map((o) => (
+              <tr key={o.roomTypeId}>
+                <td className="bt-type">{o.name}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
       <div className="trip-house-cols">
         {stays.map((e, i) => (
           <div key={e.id} className={`trip-house-col${i === 0 ? " first" : ""}`}>
@@ -789,6 +865,7 @@ export function TripHouse({
             )}
           </div>
         ))}
+      </div>
       </div>
       {editable ? (
         <div className="row-acts rooms-saverow">

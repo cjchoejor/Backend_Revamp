@@ -60,6 +60,7 @@ import {
   PartySearch,
   PickList,
   RatePackageField,
+  packageWord,
   ReqMark,
   contactsProblem,
   partyPersonOf,
@@ -104,7 +105,7 @@ const INTAKE_FILE_TABS: ReadonlyArray<[IntakeFileTab, string, string]> = [
 const GUEST_CARD_ID = anchorFor("caller");
 
 /** What one kind of party holds while another tick is on: an accidental tick loses nothing. */
-type PartySets = Partial<Record<PartyKind, { party: LookupPartyMatch | null; contacts: CoordinatorContact[]; ratePackageId: string | null; corpRef: string }>>;
+type PartySets = Partial<Record<PartyKind, { party: LookupPartyMatch | null; contacts: CoordinatorContact[]; ratePackageIds: string[]; corpRef: string }>>;
 
 export function NewInquiryCanvas() {
   const router = useRouter();
@@ -144,7 +145,8 @@ export function NewInquiryCanvas() {
   const [contacts, setContacts] = useState<CoordinatorContact[]>([]);
   const partyContact = contacts[0] ?? null;
   // Which negotiated package; null resolves the party's default, then the hotel's common one.
-  const [ratePackageId, setRatePackageId] = useState<string | null>(null);
+  /** Every package ticked, the primary first (2026-11-13). */
+  const [ratePackageIds, setRatePackageIds] = useState<string[]>([]);
   // Policy 17 — a company booking records their reference and coordinator before it leaves Inquiry.
   const [corpRef, setCorpRef] = useState("");
 
@@ -171,7 +173,7 @@ export function NewInquiryCanvas() {
     channelKey: ChannelKey | null;
     party: LookupPartyMatch | null;
     contacts: CoordinatorContact[];
-    ratePackageId: string | null;
+    ratePackageIds: string[];
     corpRef: string;
     set: PartySets;
   } | null>(null);
@@ -223,11 +225,11 @@ export function NewInquiryCanvas() {
   const partySets = useRef<PartySets>({});
   const movePartyKind = (from: PartyKind | null, to: PartyKind | null) => {
     if (from === to) return;
-    if (from) partySets.current = { ...partySets.current, [from]: { party, contacts, ratePackageId, corpRef } };
+    if (from) partySets.current = { ...partySets.current, [from]: { party, contacts, ratePackageIds, corpRef } };
     const back = to ? partySets.current[to] : null;
     setPartyNow(back?.party ?? null);
     setContacts(back?.contacts ?? []);
-    setRatePackageId(back?.ratePackageId ?? null);
+    setRatePackageIds(back?.ratePackageIds ?? []);
     setCorpRef(back?.corpRef ?? "");
   };
   const pickChannel = (k: ChannelKey | null) => {
@@ -245,7 +247,7 @@ export function NewInquiryCanvas() {
     setPartyNow(p);
     if (p?.id === party?.id) return;
     setContacts(p ? [defaultContactFor(p)] : []);
-    setRatePackageId(null);
+    setRatePackageIds([]);
     setCorpRef(p?.contractRefs?.[0] ?? "");
     if (p) showPackage();
   };
@@ -261,17 +263,23 @@ export function NewInquiryCanvas() {
   useEffect(() => {
     // Nothing is carried over from another party's list; while this one loads, wait.
     if (!party?.id) {
-      setRatePackageId(null);
+      setRatePackageIds([]);
       return;
     }
     if (!packages) return;
     if (packages.length === 0) {
-      setRatePackageId(null);
+      setRatePackageIds([]);
       return;
     }
-    setRatePackageId((cur) => (cur && packages.some((p) => p.id === cur) ? cur : (packages.find((p) => p.isDefault)?.id ?? null)));
+    setRatePackageIds((cur) => {
+      const kept = cur.filter((id) => packages.some((p) => p.id === id));
+      if (kept.length) return kept;
+      const usual = packages.find((p) => p.isDefault)?.id;
+      return usual ? [usual] : [];
+    });
   }, [party?.id, packages]);
-  const chosenPackage = packages?.find((p) => p.id === ratePackageId) ?? null;
+  const chosenPackages = ratePackageIds.map((id) => packages?.find((p) => p.id === id)).filter((p): p is NonNullable<typeof p> => !!p);
+  const chosenPackage = chosenPackages[0] ?? null;
   // The rates the booking will be priced on, in words (the Rate package field's own reading).
   const ratesWord = !party
     ? "Published rates"
@@ -279,7 +287,9 @@ export function NewInquiryCanvas() {
       ? "Reading their packages…"
       : !packages || packages.length === 0
         ? "The hotel's common package"
-        : chosenPackage
+        : chosenPackages.length > 1
+          ? `${packageWord(packages, ratePackageIds, "")} · ${party.displayName}'s packages — ${chosenPackages[0].name} prices any room type not given its own`
+          : chosenPackage
           ? `${chosenPackage.name} · ${party.displayName}'s package — ${money(chosenPackage.roomBaseRate, chosenPackage.currency)} a night`
           : `Not chosen — pricing takes ${party.displayName}'s newest package`;
 
@@ -459,7 +469,7 @@ export function NewInquiryCanvas() {
   const callerMatches = callerLookupOn ? (callerQuery.data?.matches ?? []) : [];
 
   const adoptCaller = (m: CallerMatch) => {
-    beforePick.current = { callerTitle, name, phone, email, onWhatsApp, channelKey, party, contacts, ratePackageId, corpRef, set: partySets.current };
+    beforePick.current = { callerTitle, name, phone, email, onWhatsApp, channelKey, party, contacts, ratePackageIds, corpRef, set: partySets.current };
     setSelectedCaller(m);
     // An agency's or a company's caller is the party itself (2026-10-27, operator): nothing more is
     // asked of the caller, and the contact person is listed with the party.
@@ -478,7 +488,7 @@ export function NewInquiryCanvas() {
       setPartyNow(m.party);
       setContacts([person ?? defaultContactFor(m.party)]);
       if (partyKind !== m.party.kind || party?.id !== m.party.id) {
-        setRatePackageId(null);
+        setRatePackageIds([]);
         setCorpRef(m.party.contractRefs?.[0] ?? "");
       }
       showPackage();
@@ -501,7 +511,7 @@ export function NewInquiryCanvas() {
     setChannelKey(b.channelKey);
     setPartyNow(b.party);
     setContacts(b.contacts);
-    setRatePackageId(b.ratePackageId);
+    setRatePackageIds(b.ratePackageIds);
     setCorpRef(b.corpRef);
     partySets.current = b.set;
   };
@@ -617,7 +627,8 @@ export function NewInquiryCanvas() {
         proposedCheckOut: checkOut || undefined,
         travelAgentId: partyKind === "TRAVEL_AGENT" ? (party?.id ?? null) : null,
         corporateAccountId: partyKind === "CORPORATE" ? (party?.id ?? null) : null,
-        ratePackageId: party?.id ? ratePackageId : null,
+        ratePackageId: party?.id ? (ratePackageIds[0] ?? null) : null,
+        ratePackageIds: party?.id ? ratePackageIds : null,
         ...(dupeResolution.current ? { duplicateResolution: dupeResolution.current } : {}),
       };
       const key = JSON.stringify(inquiryBody);
@@ -830,9 +841,9 @@ export function NewInquiryCanvas() {
                             <RatePackageField
                               packages={packages}
                               loading={packagesQuery.isLoading}
-                              value={ratePackageId}
-                              onChange={(id) => {
-                                setRatePackageId(id);
+                              values={ratePackageIds}
+                              onChange={(ids) => {
+                                setRatePackageIds(ids);
                                 showPackage();
                               }}
                               word="The hotel's common package"
@@ -1365,7 +1376,8 @@ export function NewInquiryCanvas() {
                 rates={{
                   travelAgentId: partyKind === "TRAVEL_AGENT" ? (party?.id ?? null) : null,
                   corporateAccountId: partyKind === "CORPORATE" ? (party?.id ?? null) : null,
-                  ratePackageId: party ? ratePackageId : null,
+                  ratePackageId: party ? (ratePackageIds[0] ?? null) : null,
+                  ratePackageIds: party ? ratePackageIds : [],
                 }}
                 checkIn={checkIn}
                 checkOut={checkOut}

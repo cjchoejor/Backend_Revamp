@@ -277,6 +277,11 @@ async function main() {
     { configKey: "advancePayment.escalationWindowSeconds", configValue: 7200, notes: "W34 tier-2 escalation window" },
     { configKey: "advancePayment.reconciliation.alsoAllowed", configValue: [], notes: "Who else may mark the money reconciled; the GM and admins always can" },
     {
+      configKey: "papers.roomTypesForParties",
+      configValue: { enabled: false, levels: ["L2", "L3", "L4"] },
+      notes: "Whether papers to an agency or a company may go with room types, and who may send them so",
+    },
+    {
       configKey: "payment.banks",
       configValue: ["Bank of Bhutan", "Bhutan National Bank", "BDBL", "Punjab National Bank", "DK Bank", "UPI"],
       notes: "The banks a card, QR, transfer or remittance can go through",

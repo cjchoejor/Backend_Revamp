@@ -173,10 +173,33 @@ export async function savePackage(
     let bookingsFollowing = 0;
     let bookingsKept = 0;
     if (prior) {
-      const notQuoted = { ratePackageId: prior.id, entries: { none: { quotations: { some: {} } } } };
+      // A booking may hold several packages, and give one to a room type (2026-11-13): the version
+      // moves wherever it is named — the primary, the list, and each stay's choice per room type.
+      const onPrior = { OR: [{ ratePackageId: prior.id }, { ratePackageIds: { has: prior.id } }] };
+      const notQuoted = { ...onPrior, entries: { none: { quotations: { some: {} } } } };
       bookingsFollowing = await tx.entry.count({ where: { ...live, inquiry: notQuoted } });
-      await tx.inquiry.updateMany({ where: notQuoted, data: { ratePackageId: created.id } });
-      bookingsKept = await tx.entry.count({ where: { ...live, inquiry: { ratePackageId: prior.id } } });
+      const moving = await tx.inquiry.findMany({ where: notQuoted, select: { id: true, ratePackageId: true, ratePackageIds: true } });
+      const swap = (id: string) => (id === prior.id ? created.id : id);
+      for (const inq of moving) {
+        await tx.inquiry.update({
+          where: { id: inq.id },
+          data: {
+            ratePackageId: inq.ratePackageId ? swap(inq.ratePackageId) : null,
+            ratePackageIds: [...new Set(inq.ratePackageIds.map(swap))],
+          },
+        });
+        const stays = await tx.entry.findMany({
+          where: { inquiryId: inq.id, ratePackageByRoomType: { not: Prisma.DbNull } },
+          select: { id: true, ratePackageByRoomType: true },
+        });
+        for (const s of stays) {
+          const map = (s.ratePackageByRoomType ?? {}) as Record<string, string>;
+          if (!Object.values(map).includes(prior.id)) continue;
+          const next = Object.fromEntries(Object.entries(map).map(([t, id]) => [t, swap(id)]));
+          await tx.entry.update({ where: { id: s.id }, data: { ratePackageByRoomType: next } });
+        }
+      }
+      bookingsKept = await tx.entry.count({ where: { ...live, inquiry: onPrior } });
     }
 
     // Only one default per owner.

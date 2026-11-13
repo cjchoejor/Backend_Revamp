@@ -164,8 +164,8 @@ function partyShape(e: {
 
 /** "6 adults → 4 · 3 rooms → 1 (204, 305 dropped)" — the line the amendment record carries. */
 function describeChange(
-  before: { adults: number | null; children: number | null; rooms: number | null; roomIds: string[]; checkIn?: Date | null; checkOut?: Date | null },
-  after: { adults: number | null; children: number | null; rooms: number | null; roomIds: string[]; checkIn?: Date | null; checkOut?: Date | null },
+  before: { adults: number | null; children: number | null; rooms: number | null; roomIds: string[]; checkIn?: Date | null; checkOut?: Date | null; beds?: unknown },
+  after: { adults: number | null; children: number | null; rooms: number | null; roomIds: string[]; checkIn?: Date | null; checkOut?: Date | null; beds?: unknown },
   roomNo: (id: string) => string,
   /**
    * Rooms by type (2026-10-29): the system's rooms are not named — the change reads by type
@@ -181,6 +181,10 @@ function describeChange(
   if (before.adults !== after.adults) parts.push(`${before.adults ?? 0} adults → ${after.adults ?? 0}`);
   if (before.children !== after.children) parts.push(`${before.children ?? 0} children → ${after.children ?? 0}`);
   if (before.rooms !== after.rooms) parts.push(`${before.rooms ?? 0} rooms asked → ${after.rooms ?? 0}`);
+  // The beds asked for (2026-11-13): a change of them alone read "no change".
+  if (after.beds !== undefined && bedWords(before.beds) !== bedWords(after.beds)) {
+    parts.push(`beds asked ${bedWords(before.beds) || "none"} → ${bedWords(after.beds) || "none"}`);
+  }
   if (byType) {
     const words = (ids: string[]) => {
       const n = new Map<string, number>();
@@ -197,6 +201,18 @@ function describeChange(
   if (dropped.length > 0) parts.push(`dropped ${dropped.map(roomNo).join(", ")}`);
   if (added.length > 0) parts.push(`added ${added.map(roomNo).join(", ")}`);
   return parts.length > 0 ? parts.join(" · ") : "no change";
+}
+
+const BED_WORDS: Record<string, string> = { KING: "King", TWIN: "Twin", QUEEN: "Queen", SINGLE: "Single" };
+/** "2 King + 1 Twin" — the beds asked for, in one order. */
+function bedWords(raw: unknown): string {
+  if (!raw || typeof raw !== "object") return "";
+  return Object.entries(raw as Record<string, unknown>)
+    .map(([k, v]) => [k.toUpperCase(), Math.trunc(Number(v))] as const)
+    .filter(([, n]) => Number.isFinite(n) && n > 0)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([k, n]) => `${n} ${BED_WORDS[k] ?? k}`)
+    .join(" + ");
 }
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -428,6 +444,7 @@ async function amendNegotiationConfigurationInner(
     shape: partyShape(entry),
     checkIn: entry.checkInDate,
     checkOut: entry.checkOutDate,
+    beds: entry.bedTypeRequest,
   };
 
 
@@ -719,8 +736,9 @@ async function amendNegotiationConfigurationInner(
   // ---- the record ------------------------------------------------------------------
   const after = await prisma.entry.findUnique({ where: { id: entryId } });
   const summary = describeChange(
-    { adults: before.adults, children: before.children, rooms: before.rooms, roomIds: priorRoomIds, checkIn: before.checkIn, checkOut: before.checkOut },
+    { adults: before.adults, children: before.children, rooms: before.rooms, roomIds: priorRoomIds, checkIn: before.checkIn, checkOut: before.checkOut, beds: before.beds },
     {
+      beds: after ? after.bedTypeRequest : before.beds,
       adults: after?.adultCount ?? before.adults,
       children: after?.childCount ?? before.children,
       rooms: after?.numberOfRooms ?? before.rooms,
@@ -902,6 +920,7 @@ async function raiseNegotiationAmendmentRequest(
     numberOfRooms: number | null;
     checkInDate: Date | null;
     checkOutDate: Date | null;
+    bedTypeRequest?: unknown;
   },
   segmentId: string,
   actor: NegotiationAmendmentActor,
@@ -939,8 +958,10 @@ async function raiseNegotiationAmendmentRequest(
       roomIds: ctx.priorRoomIds,
       checkIn: entry.checkInDate,
       checkOut: entry.checkOutDate,
+      beds: entry.bedTypeRequest,
     },
     {
+      beds: input.party?.bedTypeRequest !== undefined ? input.party.bedTypeRequest : entry.bedTypeRequest,
       checkIn: ctx.newStay?.checkIn ?? entry.checkInDate,
       checkOut: ctx.newStay?.checkOut ?? entry.checkOutDate,
       adults: input.party?.adultCount ?? entry.adultCount,

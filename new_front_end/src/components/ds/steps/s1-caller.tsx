@@ -63,6 +63,7 @@ import {
   PickList,
   PresetOrCustom,
   RatePackageField,
+  packageWord,
   ReqMark,
   USE_TYPES,
   cameInAsOf,
@@ -117,7 +118,7 @@ export function TheCaller({ entry, editable }: { entry: EntryDetail; editable: b
   const old = legacy(inq);
   const came = cameInAsOf(inq.sourceChannel, inq.notes, entry.useType, inq.cameInAs);
   const recParty = (inq.travelAgent ?? inq.corporateAccount ?? null) as LookupPartyMatch | null;
-  const recPkg = inq.ratePackageId ?? null;
+  const recPkgs: string[] = inq.ratePackageIds?.length ? [...inq.ratePackageIds] : inq.ratePackageId ? [inq.ratePackageId] : [];
   const recRef = inq.corporateClientRef ?? "";
 
   // Booked through a party the caller on record IS the party, not someone who rang, so the caller's
@@ -125,7 +126,7 @@ export function TheCaller({ entry, editable }: { entry: EntryDetail; editable: b
   const seed = () => ({
     came: (came === "DIRECT_VOICE" ? null : came) as ChannelKey | null,
     party: recParty,
-    pkg: recPkg,
+    pkgs: recPkgs,
     ref: recRef,
     contacts: contactsOnRecord(entry),
     title: recParty ? "" : (inq.callerTitle ?? ""),
@@ -134,7 +135,7 @@ export function TheCaller({ entry, editable }: { entry: EntryDetail; editable: b
     email: recParty ? "" : ((old ? g?.email : inq.callerEmail) ?? ""),
     onWhatsApp: recParty ? null : (inq.callerOnWhatsApp ?? null),
     // What each kind of party holds while another tick is on (2026-11-05, operator).
-    stash: {} as Partial<Record<PartyKind, { party: LookupPartyMatch | null; pkg: string | null; ref: string; contacts: CoordinatorContact[] }>>,
+    stash: {} as Partial<Record<PartyKind, { party: LookupPartyMatch | null; pkgs: string[]; ref: string; contacts: CoordinatorContact[] }>>,
   });
   type Draft = ReturnType<typeof seed>;
   const [d, setD] = useState<Draft>(seed);
@@ -143,7 +144,7 @@ export function TheCaller({ entry, editable }: { entry: EntryDetail; editable: b
     JSON.stringify({
       came: x.came ?? "DIRECT_VOICE",
       party: x.party?.id ?? null,
-      pkg: x.party ? x.pkg : null,
+      pkgs: x.party ? x.pkgs.join(",") : "",
       ref: x.party ? x.ref.trim() : "",
       contacts: x.party ? x.contacts.map((c) => [c.title ?? "", c.name?.trim() ?? "", c.phone ?? "", c.email?.trim() ?? ""]) : [],
       caller: x.party ? null : [x.title, x.name.trim(), x.phone, x.email.trim(), x.phone ? x.onWhatsApp : null],
@@ -178,8 +179,9 @@ export function TheCaller({ entry, editable }: { entry: EntryDetail; editable: b
     if (d.party?.id === recParty?.id) return;
     const items = packages.data?.items;
     if (!items) return;
-    if (d.pkg && items.some((x) => x.id === d.pkg)) return;
-    set({ pkg: items.find((pp) => pp.isDefault)?.id ?? null });
+    if (d.pkgs.some((id) => items.some((x) => x.id === id))) return;
+    const usual = items.find((pp) => pp.isDefault)?.id;
+    set({ pkgs: usual ? [usual] : [] });
   }, [packages.data, owner?.travelAgentId, owner?.corporateAccountId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // The file follows a person's act, never a re-read: a tick, a party or a package picked opens
@@ -196,9 +198,9 @@ export function TheCaller({ entry, editable }: { entry: EntryDetail; editable: b
     setD((x) => {
       const fromKind = channelDef(x.came ?? "DIRECT_VOICE")?.party ?? null;
       if (nextKind === fromKind) return { ...x, came: k };
-      const stash = fromKind ? { ...x.stash, [fromKind]: { party: x.party, pkg: x.pkg, ref: x.ref, contacts: x.contacts } } : x.stash;
+      const stash = fromKind ? { ...x.stash, [fromKind]: { party: x.party, pkgs: x.pkgs, ref: x.ref, contacts: x.contacts } } : x.stash;
       const back = nextKind ? stash[nextKind] : null;
-      return { ...x, came: k, stash, party: back?.party ?? null, pkg: back?.pkg ?? null, ref: back?.ref ?? "", contacts: back?.contacts ?? [] };
+      return { ...x, came: k, stash, party: back?.party ?? null, pkgs: back?.pkgs ?? [], ref: back?.ref ?? "", contacts: back?.contacts ?? [] };
     });
     showPackage();
   };
@@ -206,7 +208,7 @@ export function TheCaller({ entry, editable }: { entry: EntryDetail; editable: b
     if (pp && pp.id !== d.party?.id) showPackage();
     setD((x) => {
       if (pp && pp.id === x.party?.id) return { ...x, party: pp };
-      const next = { ...x, party: pp, pkg: pp && pp.id === recParty?.id ? recPkg : null, contacts: pp ? (pp.id === recParty?.id ? contactsOnRecord(entry) : [defaultContactFor(pp)]) : [] };
+      const next = { ...x, party: pp, pkgs: pp && pp.id === recParty?.id ? recPkgs : [], contacts: pp ? (pp.id === recParty?.id ? contactsOnRecord(entry) : [defaultContactFor(pp)]) : [] };
       if (pp && partyKind === "CORPORATE" && !x.ref.trim()) next.ref = pp.contractRefs?.[0] ?? "";
       return next;
     });
@@ -218,7 +220,8 @@ export function TheCaller({ entry, editable }: { entry: EntryDetail; editable: b
       ? {
           travelAgentId: partyKind === "TRAVEL_AGENT" ? (d.party?.id ?? null) : null,
           corporateAccountId: partyKind === "CORPORATE" ? (d.party?.id ?? null) : null,
-          ratePackageId: d.party ? d.pkg : null,
+          ratePackageId: d.party ? (d.pkgs[0] ?? null) : null,
+          ratePackageIds: d.party ? d.pkgs : [],
         }
       : null,
   );
@@ -265,7 +268,8 @@ export function TheCaller({ entry, editable }: { entry: EntryDetail; editable: b
         sourceChannel: def.channel,
         travelAgentId: partyKind === "TRAVEL_AGENT" ? (d.party?.id ?? null) : null,
         corporateAccountId: partyKind === "CORPORATE" ? (d.party?.id ?? null) : null,
-        ratePackageId: d.party ? d.pkg : null,
+        ratePackageId: d.party ? (d.pkgs[0] ?? null) : null,
+        ratePackageIds: d.party ? d.pkgs : [],
         corporateClientRef: isCorp ? d.ref.trim() || null : null,
         // For a company the contact person IS the coordinator — named once, not twice.
         corporateCoordinator: isCorp ? d.contacts[0]?.name?.trim() || null : null,
@@ -274,14 +278,14 @@ export function TheCaller({ entry, editable }: { entry: EntryDetail; editable: b
       }),
     onSuccess: () => {
       toast.success("The caller is on record");
-      refresh([["inquiry", entry.inquiryId]]);
+      // The packages price every figure on the desk (2026-11-13): read them again with the caller.
+      refresh([["inquiry", entry.inquiryId], ["rate-reference", entry.id], ["rate-sheet"], ["price-pick", entry.id], ["price-pick-trip"], ["quotation-preview"]]);
     },
     onError: (e) => toastRefusal(e, "The caller could not be saved"),
   });
 
   const pkgItems = packages.data?.items ?? [];
-  const pkg = pkgItems.find((x) => x.id === d.pkg) ?? null;
-  const pkgWord = pkg ? pkg.name : d.pkg ? "a package no longer listed" : pkgItems.length ? "not chosen" : "The hotel's common package";
+  const pkgWord = packageWord(pkgItems, d.pkgs, pkgItems.length ? "not chosen" : "The hotel's common package");
   const hasRight = !!d.party || (isCorp && !!d.ref);
   const kindWord = USE_TYPES.find(([k]) => k === entry.useType)?.[1] ?? null;
   const recContacts = contactsOnRecord(entry);
@@ -346,11 +350,11 @@ export function TheCaller({ entry, editable }: { entry: EntryDetail; editable: b
                   <RatePackageField
                     packages={packages.data?.items ?? null}
                     loading={packages.isLoading}
-                    value={d.pkg}
+                    values={d.pkgs}
                     readOnly={!editable}
                     word={pkgWord}
-                    onChange={(id) => {
-                      set({ pkg: id });
+                    onChange={(ids) => {
+                      set({ pkgs: ids });
                       showPackage();
                     }}
                   />

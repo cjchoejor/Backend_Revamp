@@ -82,7 +82,7 @@ export function enforceRepriceAuthorityForStage(input: {
   throw new PolicyGateBlockedError(
     inHouse ? "AUTH_REQUIRED_L3" : "AUTH_REQUIRED_L2",
     inHouse
-      ? `Changing the rate, a waiver or the discount while the guest is in-house is a mid-stay rate revision — that is the GM's call (L3+); the acting user is ${input.actorLevel}. Occupancy, meals and extra beds can still be changed here.`
-      : `Changing the rate, a waiver or the discount on a confirmed booking is a rate revision — it needs FOM authority (L2+); the acting user is ${input.actorLevel}. Occupancy, meals and extra beds can still be changed here.`,
+      ? `Changing a rate, a room's package, a waiver or the discount while the guest is in-house is a mid-stay rate revision — that is the GM's call (L3+); the acting user is ${input.actorLevel}. Occupancy, meals and extra beds can still be changed here.`
+      : `Changing a rate, a room's package, a waiver or the discount on a confirmed booking is a rate revision — it needs FOM authority (L2+); the acting user is ${input.actorLevel}. Occupancy, meals and extra beds can still be changed here.`,
   );
 }

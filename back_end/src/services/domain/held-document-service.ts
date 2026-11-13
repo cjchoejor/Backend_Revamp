@@ -168,7 +168,8 @@ export async function decideHeldDocument(
   prisma: PrismaClient,
   heldDocumentId: string,
   actor: Actor,
-  input: { action: "EMAIL" | "WHATSAPP" | "NONE"; sentTo?: string | null; note?: string | null; nightsEach?: boolean },
+  /** `showRoomTypes`: with the room types on an agency's or a company's booking, when allowed (2026-11-13). */
+  input: { action: "EMAIL" | "WHATSAPP" | "NONE"; sentTo?: string | null; note?: string | null; nightsEach?: boolean; showRoomTypes?: boolean },
 ): Promise<HeldDocumentView> {
   const row = await prisma.heldDocument.findUnique({ where: { id: heldDocumentId } });
   if (!row) throw new NotFoundError("Held document");
@@ -187,12 +188,16 @@ export async function decideHeldDocument(
       const out = (await resendConfirmationVoucher(prisma, row.documentId, actor.actorId, {
         dispatchedTo: input.sentTo?.trim() || null,
         nightsEach: input.nightsEach === true,
+        showRoomTypes: input.showRoomTypes === true,
+        actorLevel: actor.actorLevel,
       })) as { dispatchedTo?: string | null; recipient?: string | null };
       sentTo = out?.dispatchedTo ?? out?.recipient ?? input.sentTo?.trim() ?? null;
     } else {
       const inv = await dispatchInvoice(prisma, row.documentId, actor.actorId, {
         ...(input.sentTo?.trim() ? { dispatchedTo: input.sentTo.trim() } : {}),
         nightsEach: input.nightsEach === true,
+        showRoomTypes: input.showRoomTypes === true,
+        actorLevel: actor.actorLevel,
       });
       sentTo = (inv as { dispatchedTo?: string | null }).dispatchedTo ?? input.sentTo?.trim() ?? null;
     }

@@ -66,6 +66,12 @@ export const roomCompositionInputSchema = z.object({
   negotiatedBreakfastRate: z.coerce.number().min(0).optional(),
   negotiatedLunchRate: z.coerce.number().min(0).optional(),
   negotiatedDinnerRate: z.coerce.number().min(0).optional(),
+  /**
+   * The package this one room is priced on, when it is not its room type's (2026-11-13, operator:
+   * two rooms of one type on different packages). Empty means "as its room type". It must be one of
+   * the booking's chosen packages.
+   */
+  ratePackageId: z.string().min(1).nullable().optional(),
   // room-level toggles
   serviceChargeApplies: z.boolean().optional(),
   gstApplies: z.boolean().optional(),
@@ -154,6 +160,11 @@ export const sendQuotationRequestSchema = z.object({
   hidePrices: z.boolean().optional(),
   /** Name every night on the copy sent, instead of writing a run as its first and last (2026-10-30). */
   nightsEach: z.boolean().optional(),
+  /**
+   * Send it WITH the room types on a booking through an agency or a company (2026-11-13) — only when
+   * the admin console allows it and for the roles it names (lib/paper-room-types.ts).
+   */
+  showRoomTypes: z.boolean().optional(),
 });
 export type SendQuotationRequestDto = z.infer<typeof sendQuotationRequestSchema>;
 

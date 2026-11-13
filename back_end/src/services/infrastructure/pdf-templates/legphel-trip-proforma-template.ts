@@ -25,6 +25,8 @@ export type LegphelTripProformaInput = {
   advanceDueBy: string | null;
   validUntil: string | null;
   to: string;
+  /** The guest staying, when the paper is made out to an agency or a company (2026-11-13). */
+  forGuest?: string | null;
   stays: TripDatesRow[];
   prices: LegphelPriceBlock;
   planRows: Array<{ label: string; value: string }>;
@@ -53,6 +55,7 @@ export function renderLegphelTripProformaHtml(input: LegphelTripProformaInput): 
     input.validUntil ? row("Valid until", input.validUntil, { boldKey: true }) : "",
     section,
     row("To", input.to, { boldValue: true }),
+    input.forGuest ? row("For guest", input.forGuest) : "",
     section,
     ...tripDatesRows(input.stays),
     ...renderPriceBlock(input.prices),

@@ -258,6 +258,7 @@ export function QuotationPreview({
   frozenPdf,
   hidePrices,
   nightsEach,
+  roomTypes,
 }: {
   quotationId: string;
   frozenPdf?: boolean;
@@ -265,6 +266,8 @@ export function QuotationPreview({
   hidePrices?: boolean;
   /** Every night named instead of a run as its first and last (2026-10-30). */
   nightsEach?: boolean;
+  /** The rooms with or without their types (2026-11-13); left out, the booking's own. */
+  roomTypes?: "hidden" | "shown";
 }) {
   const { session } = useSession();
   if (frozenPdf && !hidePrices && !nightsEach) {
@@ -272,8 +275,8 @@ export function QuotationPreview({
   }
   return (
     <DocumentPreviewFrame
-      queryKey={["quotation-preview", quotationId, hidePrices ? "no-prices" : "priced", nightsEach ? "each" : "short"] as const}
-      fetchHtml={() => fetchQuotationPreviewHtml(session!, quotationId, { hidePrices, nightsEach })}
+      queryKey={["quotation-preview", quotationId, hidePrices ? "no-prices" : "priced", nightsEach ? "each" : "short", roomTypes ?? "default"] as const}
+      fetchHtml={() => fetchQuotationPreviewHtml(session!, quotationId, { hidePrices, nightsEach, roomTypes })}
       title={hidePrices ? "Quotation · without prices" : "Quotation document"}
     />
   );
@@ -283,12 +286,12 @@ export function QuotationPreview({
  * The trip's quotation (2026-11-07): one paper made of the stays' own quotations, with its own
  * number and version. Always composed fresh — it is drawn from the stays' quotations as they stand.
  */
-export function TripQuotationPreview({ tripPaperId, hidePrices }: { tripPaperId: string; hidePrices?: boolean }) {
+export function TripQuotationPreview({ tripPaperId, hidePrices, roomTypes }: { tripPaperId: string; hidePrices?: boolean; roomTypes?: "hidden" | "shown" }) {
   const { session } = useSession();
   return (
     <DocumentPreviewFrame
-      queryKey={["trip-paper-preview", tripPaperId, hidePrices ? "no-prices" : "priced"] as const}
-      fetchHtml={() => fetchTripPaperPreviewHtml(session!, tripPaperId, { hidePrices })}
+      queryKey={["trip-paper-preview", tripPaperId, hidePrices ? "no-prices" : "priced", roomTypes ?? "default"] as const}
+      fetchHtml={() => fetchTripPaperPreviewHtml(session!, tripPaperId, { hidePrices, roomTypes })}
       title={hidePrices ? "The trip's quotation · without prices" : "The trip's quotation"}
     />
   );
@@ -299,10 +302,14 @@ export function TripQuotationPreview({ tripPaperId, hidePrices }: { tripPaperId:
  * "view like PI and quotation"). The voucher is write-once; the route lazily renders + stores
  * it on first view, so this works both before and after the artifact exists.
  */
-export function VoucherPreview({ reservationId, nightsEach }: { reservationId: string; nightsEach?: boolean }) {
+export function VoucherPreview({ reservationId, nightsEach, roomTypes }: { reservationId: string; nightsEach?: boolean; roomTypes?: "hidden" | "shown" }) {
+  const q = new URLSearchParams();
+  if (nightsEach) q.set("nights", "each");
+  if (roomTypes === "hidden") q.set("roomTypes", "hidden");
+  const qs = q.toString();
   return (
     <FrozenPdfFrame
-      path={`/api/reservations/${reservationId}/confirmation-voucher-pdf${nightsEach ? "?nights=each" : ""}`}
+      path={`/api/reservations/${reservationId}/confirmation-voucher-pdf${qs ? `?${qs}` : ""}`}
       title="Confirmation voucher"
     />
   );
@@ -328,12 +335,15 @@ export function ProformaPreview({
   notice,
   title,
   nightsEach,
+  roomTypes,
 }: {
   invoiceId: string;
   frozenPdf?: boolean;
   notice?: string;
   title?: string;
   nightsEach?: boolean;
+  /** The rooms with or without their types (2026-11-13); left out, the booking's own. */
+  roomTypes?: "hidden" | "shown";
 }) {
   const { session } = useSession();
   if (frozenPdf) {
@@ -341,8 +351,8 @@ export function ProformaPreview({
   }
   return (
     <DocumentPreviewFrame
-      queryKey={["invoice-preview", invoiceId, nightsEach ? "each" : "short"] as const}
-      fetchHtml={() => fetchInvoicePreviewHtml(session!, invoiceId, { nightsEach })}
+      queryKey={["invoice-preview", invoiceId, nightsEach ? "each" : "short", roomTypes ?? "default"] as const}
+      fetchHtml={() => fetchInvoicePreviewHtml(session!, invoiceId, { nightsEach, roomTypes })}
       title={title ?? "Proforma invoice document"}
       notice={notice}
     />

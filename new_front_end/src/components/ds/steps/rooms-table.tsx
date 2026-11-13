@@ -171,6 +171,8 @@ export function RoomsTable({
           n(c.mealPlanOthersCount ?? 0), n(c.othersBreakfastPax), n(c.othersLunchPax), n(c.othersDinnerPax),
           n(c.negotiatedRoomRate), n(c.negotiatedExtraBedRate),
           n(c.negotiatedBreakfastRate), n(c.negotiatedLunchRate), n(c.negotiatedDinnerRate),
+          // A room put on another package is a change of its rates (2026-11-13).
+          c.ratePackageId ?? "",
           // A meal or an extra bed changed on one night is a change too (2026-10-22).
           nightOverridesCanon(c.nightMealOverrides),
           c.serviceChargeApplies === false ? "0" : "1", c.gstApplies === false ? "0" : "1", c.isFoc === true ? "1" : "0",

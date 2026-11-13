@@ -99,7 +99,7 @@ quotationsAndHoldsRouter.post("/quotations/:id/send", requireActorLevel("L1"), v
       req.body.recipientAddress = number ?? undefined;
       req.body.sentTo = number ?? undefined;
     }
-    const updated = await quotationService.sendQuotation(prisma, req.params.id, req.actor!.actorId, req.body);
+    const updated = await quotationService.sendQuotation(prisma, req.params.id, req.actor!.actorId, { ...req.body, actorLevel: req.actor?.level });
     res.json(updated);
   } catch (e) {
     next(e);

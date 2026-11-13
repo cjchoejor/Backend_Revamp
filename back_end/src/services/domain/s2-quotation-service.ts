@@ -24,6 +24,7 @@ import {
 } from "../../policies/08-pricing-rate-plan/p07-quotation-lifecycle-state-guards.js";
 import { enforceEntryNotSealedForWorkingAction } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
 import { assertEntryWorkable } from "../../lib/assert-entry-workable.js";
+import { resolveRoomTypesFace } from "../../lib/paper-room-types.js";
 import {
   enforceEntryAtS2ForQuotationCreation,
   enforceRoomTypeResolvedForS2Quotation,
@@ -67,16 +68,25 @@ import { retireSupersededReplyWaitsBestEffort } from "../../lib/reply-waits.js";
  */
 async function resolveAgentRateForEntryQuotation(
   prisma: PrismaClient,
-  args: { inquiryId: string; roomTypeId: string; asOf?: Date; mealPlan?: MealPlanType | null },
+  args: {
+    inquiryId: string;
+    roomTypeId: string;
+    asOf?: Date;
+    mealPlan?: MealPlanType | null;
+    /** The stay's package per room type (2026-11-13). */
+    ratePackageByRoomType?: unknown;
+  },
 ): Promise<(AgentRateBreakdown & { ratePackageId: string; packageName: string; resolvedVia: string }) | null> {
   const inq = await prisma.inquiry.findUnique({
     where: { id: args.inquiryId },
-    select: { travelAgentId: true, corporateAccountId: true, ratePackageId: true },
+    select: { travelAgentId: true, corporateAccountId: true, ratePackageId: true, ratePackageIds: true },
   });
   if (!inq) return null;
 
   const pkg = await resolveRatePackageForBooking(prisma, {
     ratePackageId: inq.ratePackageId,
+    ratePackageIds: inq.ratePackageIds,
+    ratePackageByRoomType: args.ratePackageByRoomType,
     travelAgentId: inq.travelAgentId,
     corporateAccountId: inq.corporateAccountId,
     roomTypeId: args.roomTypeId,
@@ -141,6 +151,8 @@ export type RoomCompositionServiceInput = {
   negotiatedBreakfastRate?: number;
   negotiatedLunchRate?: number;
   negotiatedDinnerRate?: number;
+  /** This room's own package, when not its room type's (2026-11-13). */
+  ratePackageId?: string | null;
   serviceChargeApplies?: boolean;
   gstApplies?: boolean;
   isFoc?: boolean;
@@ -374,8 +386,21 @@ async function prepareQuotationDraft(
   const mealPlan = input.mealPlan ?? null;
   const extraBedCount = Math.max(0, Math.trunc(input.extraBedCount ?? 0));
   const agentRate = entry.inquiryId
-    ? await resolveAgentRateForEntryQuotation(prisma, { inquiryId: entry.inquiryId, roomTypeId: roomTypeId!, mealPlan })
+    ? await resolveAgentRateForEntryQuotation(prisma, {
+        inquiryId: entry.inquiryId,
+        roomTypeId: roomTypeId!,
+        mealPlan,
+        ratePackageByRoomType: entry.ratePackageByRoomType,
+      })
     : null;
+  /**
+   * Which package priced each room type (2026-11-13) — kept on the quotation, so the desk can say a
+   * type's package changed since it was quoted, and the record says what each room was priced on.
+   */
+  const ratePackagesByType: Record<string, { ratePackageId: string; packageName: string }> = {};
+  /** And each room priced on a package of its own, by room (2026-11-13). */
+  let ratePackagesByRoom: Record<string, { ratePackageId: string; packageName: string }> | null = null;
+  if (agentRate && roomTypeId) ratePackagesByType[roomTypeId] = { ratePackageId: agentRate.ratePackageId, packageName: agentRate.packageName };
   // effectiveRate stays the ROOM rate — MSR, discount and S4 freeze semantics depend on it.
   const effectiveRate = agentRate ? agentRate.roomRate : pricing.effectiveRate;
   const resolvedNightlyRate = agentRate ? agentRate.roomRate : pricing.resolvedNightlyRate;
@@ -596,6 +621,15 @@ async function prepareQuotationDraft(
       breakfast: Prisma.Decimal;
       lunch: Prisma.Decimal;
       dinner: Prisma.Decimal;
+      /**
+       * The meal-PLAN rates (2026-11-13): a room type on its own package takes that package's
+       * plans, as it takes its meals and extra bed. With one package on the booking they are the
+       * booking's, the same as before.
+       */
+      cp: Prisma.Decimal | null;
+      mapLunch: Prisma.Decimal | null;
+      mapDinner: Prisma.Decimal | null;
+      ap: Prisma.Decimal | null;
     };
     const bookingTypeRates: TypeRates = {
       room: defaultRoomRate,
@@ -604,7 +638,12 @@ async function prepareQuotationDraft(
       breakfast: defaultBreakfast,
       lunch: defaultLunch,
       dinner: defaultDinner,
+      cp: defaultCp,
+      mapLunch: defaultMapLunch,
+      mapDinner: defaultMapDinner,
+      ap: defaultAp,
     };
+    const planOf = (v: number | null | undefined) => (v != null ? new Prisma.Decimal(v) : null);
     const ratesByType = new Map<string, TypeRates>();
     for (const tid of new Set(roomRows.map((r) => r.roomTypeId).filter((t): t is string => !!t))) {
       // The preferred type is already resolved above — reuse it rather than querying twice.
@@ -614,7 +653,12 @@ async function prepareQuotationDraft(
       }
       try {
         const typeAgentRate = entry.inquiryId
-          ? await resolveAgentRateForEntryQuotation(prisma, { inquiryId: entry.inquiryId, roomTypeId: tid, mealPlan })
+          ? await resolveAgentRateForEntryQuotation(prisma, {
+              inquiryId: entry.inquiryId,
+              roomTypeId: tid,
+              mealPlan,
+              ratePackageByRoomType: entry.ratePackageByRoomType,
+            })
           : null;
         if (typeAgentRate) {
           // Card rates are negotiated, so no discount is folded in — the same rule the
@@ -627,7 +671,13 @@ async function prepareQuotationDraft(
             breakfast: toDecimal(typeAgentRate.addOns?.breakfast ?? 0),
             lunch: toDecimal(typeAgentRate.addOns?.lunch ?? 0),
             dinner: toDecimal(typeAgentRate.addOns?.dinner ?? 0),
+            // Its own package's plans: a blank plan is summed from that package's meals.
+            cp: planOf(typeAgentRate.mealPlanRates?.cp),
+            mapLunch: planOf(typeAgentRate.mealPlanRates?.mapLunch),
+            mapDinner: planOf(typeAgentRate.mealPlanRates?.mapDinner),
+            ap: planOf(typeAgentRate.mealPlanRates?.ap),
           });
+          ratePackagesByType[tid] = { ratePackageId: typeAgentRate.ratePackageId, packageName: typeAgentRate.packageName };
           continue;
         }
         // No discount here: under the composition model it comes off the net value once the
@@ -656,16 +706,83 @@ async function prepareQuotationDraft(
           breakfast: bookingTypeRates.breakfast,
           lunch: bookingTypeRates.lunch,
           dinner: bookingTypeRates.dinner,
+          cp: bookingTypeRates.cp,
+          mapLunch: bookingTypeRates.mapLunch,
+          mapDinner: bookingTypeRates.mapDinner,
+          ap: bookingTypeRates.ap,
         });
       } catch (e) {
         if (e instanceof PolicyGateBlockedError) throw e;
         ratesByType.set(tid, bookingTypeRates);
       }
     }
+    /**
+     * A room on a package of its own (2026-11-13, operator: two rooms of one type on different
+     * packages): priced on that package's rates for its type — room, extra bed, meals and meal
+     * plans — exactly as a type put on that package is. The package must be one the booking chose.
+     */
+    const ratesByRoomPackage = new Map<string, TypeRates>();
+    const roomPackagesUsed: Record<string, { ratePackageId: string; packageName: string }> = {};
+    const roomOwnPackages = input.roomCompositions.filter((c) => c.ratePackageId);
+    if (roomOwnPackages.length) {
+      const inq = entry.inquiryId
+        ? await prisma.inquiry.findUnique({ where: { id: entry.inquiryId }, select: { ratePackageId: true, ratePackageIds: true } })
+        : null;
+      const chosen = inq?.ratePackageIds?.length ? inq.ratePackageIds : inq?.ratePackageId ? [inq.ratePackageId] : [];
+      const baseMap =
+        entry.ratePackageByRoomType && typeof entry.ratePackageByRoomType === "object" && !Array.isArray(entry.ratePackageByRoomType)
+          ? (entry.ratePackageByRoomType as Record<string, unknown>)
+          : {};
+      for (const c of roomOwnPackages) {
+        const pkgId = String(c.ratePackageId);
+        const no = numberByRoomId.get(c.roomId) ?? "this room";
+        if (!chosen.includes(pkgId)) {
+          throw new ValidationError(
+            `Room ${no} is put on a package this booking does not have — choose that package with the caller first, or take the room back to its type's package.`,
+          );
+        }
+        const tid = roomRows.find((r) => r.id === c.roomId)?.roomTypeId;
+        if (!tid || !entry.inquiryId) continue;
+        const key = `${tid}|${pkgId}`;
+        if (!ratesByRoomPackage.has(key)) {
+          const own = await resolveAgentRateForEntryQuotation(prisma, {
+            inquiryId: entry.inquiryId,
+            roomTypeId: tid,
+            mealPlan,
+            ratePackageByRoomType: { ...baseMap, [tid]: pkgId },
+          });
+          if (!own || own.ratePackageId !== pkgId) {
+            throw new ValidationError(`Room ${no}'s package could not be read — choose it again, or take the room back to its type's package.`);
+          }
+          const r = toDecimal(own.roomRate);
+          ratesByRoomPackage.set(key, {
+            room: r,
+            roomPreDiscount: r,
+            extraBed: toDecimal(own.addOns?.extraBed ?? 0),
+            breakfast: toDecimal(own.addOns?.breakfast ?? 0),
+            lunch: toDecimal(own.addOns?.lunch ?? 0),
+            dinner: toDecimal(own.addOns?.dinner ?? 0),
+            cp: planOf(own.mealPlanRates?.cp),
+            mapLunch: planOf(own.mealPlanRates?.mapLunch),
+            mapDinner: planOf(own.mealPlanRates?.mapDinner),
+            ap: planOf(own.mealPlanRates?.ap),
+          });
+        }
+        const name = (await prisma.ratePackage.findUnique({ where: { id: pkgId }, select: { name: true } }))?.name ?? pkgId;
+        roomPackagesUsed[c.roomId] = { ratePackageId: pkgId, packageName: name };
+      }
+    }
+    const roomPackageOf = new Map(input.roomCompositions.map((c) => [c.roomId, c.ratePackageId ?? null]));
     const ratesForRoom = (roomId: string): TypeRates => {
       const tid = roomRows.find((r) => r.id === roomId)?.roomTypeId;
+      const own = roomPackageOf.get(roomId);
+      if (tid && own) {
+        const r = ratesByRoomPackage.get(`${tid}|${own}`);
+        if (r) return r;
+      }
       return (tid ? ratesByType.get(tid) : undefined) ?? bookingTypeRates;
     };
+    if (Object.keys(roomPackagesUsed).length) ratePackagesByRoom = roomPackagesUsed;
 
     /**
      * Nights PER ROOM (fixed 2026-08-12).
@@ -737,10 +854,10 @@ async function prepareQuotationDraft(
         defaultBreakfastRate: tr.breakfast,
         defaultLunchRate: tr.lunch,
         defaultDinnerRate: tr.dinner,
-        defaultCpRate: defaultCp,
-        defaultMapLunchRate: defaultMapLunch,
-        defaultMapDinnerRate: defaultMapDinner,
-        defaultApRate: defaultAp,
+        defaultCpRate: tr.cp,
+        defaultMapLunchRate: tr.mapLunch,
+        defaultMapDinnerRate: tr.mapDinner,
+        defaultApRate: tr.ap,
         serviceChargeRate,
         gstRate,
         // Age-band meal shares (under-6 free, 6–10 at 70% of the adult rate) — the composition
@@ -989,6 +1106,9 @@ async function prepareQuotationDraft(
           ...(compositionDiscount ? { compositionDiscount } : {}),
         }
       : {}),
+    // Which package priced each room type (2026-11-13), when a party's packages priced the rooms.
+    ...(Object.keys(ratePackagesByType).length ? { ratePackagesByType } : {}),
+    ...(ratePackagesByRoom ? { ratePackagesByRoom } : {}),
     // Phase C — agent / corporate negotiated rate, when applicable.
     ...(agentRate
       ? {
@@ -2009,6 +2129,13 @@ async function sendQuotationInner(
     /** Name every night on the copy sent (2026-10-30) — the stored PDF writes runs short. */
     nightsEach?: boolean;
     /**
+     * Send it WITH the room types on an agency's or a company's booking (2026-11-13); left out, the
+     * booking's own default — no room types for an agency or a company (lib/paper-room-types.ts).
+     */
+    showRoomTypes?: boolean;
+    /** Who is sending, from the verified session — the setting names the roles that may show room types. */
+    actorLevel?: string | null;
+    /**
      * Sent as part of the trip's combined paper (2026-11-07): recorded as sent like any other, but
      * not emailed on its own — the trip's paper is the one email. Internal; never on an HTTP body.
      */
@@ -2019,6 +2146,8 @@ async function sendQuotationInner(
   if (!q) throw new NotFoundError("Quotation");
   await assertEntryWorkable(prisma, q.entryId);
   enforceQuotationInDraftToSend({ state: q.state });
+  // Without room types on an agency's or a company's booking, unless the desk may and asked (2026-11-13).
+  const hideRoomTypes = await resolveRoomTypesFace(prisma, q.entryId, input.showRoomTypes, input.actorLevel);
 
   await enforceQuotationSendTimeGovernanceConfig(prisma);
 
@@ -2181,6 +2310,7 @@ async function sendQuotationInner(
           // What the guest actually received — the record keeps the priced document either way.
           pricesShown: input.hidePrices !== true,
           nightsShown: input.nightsEach === true ? "EACH" : "SHORT",
+          roomTypesShown: !hideRoomTypes,
         },
         createdBy: actorId,
       },
@@ -2202,6 +2332,7 @@ async function sendQuotationInner(
       /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(typed) ? typed : null,
       input.hidePrices === true,
       input.nightsEach === true,
+      hideRoomTypes,
     );
   }
 
@@ -2214,6 +2345,7 @@ async function sendQuotationEmailBestEffort(
   toAddress: string | null = null,
   hidePrices = false,
   nightsEach = false,
+  hideRoomTypes = false,
 ) {
   const q = await prisma.quotation.findUnique({
     where: { id: quotationId },
@@ -2262,9 +2394,10 @@ async function sendQuotationEmailBestEffort(
     // The priced PDF is rendered and stored either way — it is the record of what was offered.
     // When the desk asked for a copy without prices, THAT is what the guest receives.
     const artifact = await generateOrLoadQuotationPdf(prisma, q.id, q.createdBy ?? "SYSTEM");
+    // An agency's or a company's copy names no room type (2026-11-13): drawn fresh, never stored.
     const attached =
-      hidePrices || nightsEach
-        ? await renderQuotationPdfFace(prisma, q.id, { hidePrices, nightsMode: nightsEach ? "EACH" : "SHORT" })
+      hidePrices || nightsEach || hideRoomTypes
+        ? await renderQuotationPdfFace(prisma, q.id, { hidePrices, nightsMode: nightsEach ? "EACH" : "SHORT", hideRoomTypes })
         : { bytes: artifact.bytes, referenceNumber: artifact.invoiceNumber };
     content.attachments = [
       {

@@ -7,6 +7,7 @@ import { guestDisplayName } from "../../lib/guest-display-name.js";
 import { CommunicationType, InvoiceType, Stage } from "@prisma/client";
 import { toDecimal } from "../../lib/money.js";
 import { MissingConfigurationError, NotFoundError, PolicyGateBlockedError, ValidationError } from "../../lib/errors.js";
+import { resolveRoomTypesFace } from "../../lib/paper-room-types.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import { generateConfirmationVoucher } from "../infrastructure/document-generation-service.js";
@@ -558,10 +559,14 @@ async function confirmReservationInner(
   // non-fatal: the text email still goes out, and ops sees a trace.
   try {
     const artifact = await generateOrLoadConfirmationVoucherPdf(prisma, result.reservation.id, actorId);
+    // An agency's or a company's voucher names no room type (2026-11-13): drawn fresh, never stored.
+    const attached = (await resolveRoomTypesFace(prisma, entryId, undefined, null))
+      ? await generateOrLoadConfirmationVoucherPdf(prisma, result.reservation.id, actorId, { hideRoomTypes: true })
+      : artifact;
     content.attachments = [
       {
-        filename: artifact.filename,
-        content: artifact.bytes,
+        filename: attached.filename,
+        content: attached.bytes,
         contentType: "application/pdf",
       },
     ];
@@ -635,8 +640,12 @@ async function resendConfirmationVoucherInner(
   prisma: PrismaClient,
   reservationId: string,
   actorId: string,
-  /** `nightsEach` sends the copy with every night named (2026-10-30); the stored voucher stays as it is. */
-  input: { dispatchedTo?: string | null; nightsEach?: boolean },
+  /**
+   * `nightsEach` sends the copy with every night named (2026-10-30); `showRoomTypes` the copy with the
+   * room types on an agency's or a company's booking, when the admin console allows it for this
+   * person (2026-11-13). The stored voucher stays as it is.
+   */
+  input: { dispatchedTo?: string | null; nightsEach?: boolean; showRoomTypes?: boolean; actorLevel?: string | null },
 ) {
   const reservation = await prisma.reservation.findUnique({
     where: { id: reservationId },
@@ -654,6 +663,7 @@ async function resendConfirmationVoucherInner(
   if (!reservation) throw new NotFoundError("Reservation");
   if (!reservation.confirmedAt) throw new ValidationError("This reservation was never confirmed — nothing to send");
   const entry = reservation.entry;
+  const hideRoomTypes = await resolveRoomTypesFace(prisma, entry.id, input.showRoomTypes, input.actorLevel);
 
   // Typed, else whom the booking's papers go to (lib/send-to.ts, 2026-11-07): the contact person at
   // the agency or company, else the party; on a direct booking the guest.
@@ -752,7 +762,7 @@ async function resendConfirmationVoucherInner(
         stageContext: entry.currentStage,
         inquiryId: entry.inquiryId,
         entryId: entry.id,
-        payload: { reservationId: reservation.id, dispatchedTo: recipient, communicationRecordId: created.id },
+        payload: { reservationId: reservation.id, dispatchedTo: recipient, communicationRecordId: created.id, roomTypesShown: !hideRoomTypes },
         createdBy: actorId,
       },
     });
@@ -764,9 +774,10 @@ async function resendConfirmationVoucherInner(
   // either way; the copy with every night named is what goes out when the desk asked for it.
   try {
     const artifact = await generateOrLoadConfirmationVoucherPdf(prisma, reservation.id, actorId);
-    const attached = input.nightsEach
-      ? await generateOrLoadConfirmationVoucherPdf(prisma, reservation.id, actorId, { nightsMode: "EACH" })
-      : artifact;
+    const attached =
+      input.nightsEach || hideRoomTypes
+        ? await generateOrLoadConfirmationVoucherPdf(prisma, reservation.id, actorId, { nightsMode: input.nightsEach ? "EACH" : "SHORT", hideRoomTypes })
+        : artifact;
     content.attachments = [{ filename: attached.filename, content: attached.bytes, contentType: "application/pdf" }];
   } catch (e) {
     await prisma.traceEvent

@@ -13,7 +13,7 @@ import { Help } from "@/components/ds/help";
 import { fmtDateTime, fmtStamp, money } from "@/lib/ds/format";
 import { answerTripQuotation, getTripQuotation, sendTripQuotation } from "@/lib/api/trip-papers";
 import type { EntryDetail } from "@/types/api";
-import { Choice, DsDialog, NotSentChip, PaperDrawer, SendPaperPanel, StepCard, toastRefusal, useRefreshEntry, useReplyAsked, type PaperRef } from "./kit";
+import { Choice, DsDialog, NotSentChip, PaperDrawer, RoomTypesChoice, SendPaperPanel, StepCard, toastRefusal, useRefreshEntry, useReplyAsked, useSendRoomTypes, type PaperRef } from "./kit";
 import { tripStamp } from "@/components/ds/steps/s2-together";
 
 /**
@@ -139,14 +139,16 @@ export function TripSendDialog({
   const to = channel === "EMAIL" ? email.trim() : phone.trim();
   const emailBad = channel === "EMAIL" && !!to && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to);
   const phoneBad = channel === "WHATSAPP" ? problemOfPhone(phoneRules, to) : null;
+  // A trip's paper to an agency or a company names no room type (2026-11-13).
+  const rt = useSendRoomTypes({ tripPaperId: tripId });
   const send = useMutation({
-    mutationFn: () => sendTripQuotation(session!, tripId, { channel, to: to || null }),
+    mutationFn: () => sendTripQuotation(session!, tripId, { channel, to: to || null, ...rt.body }),
     onSuccess: (r) => {
       toast.success(
         r.channel === "WHATSAPP"
           ? `${r.number} recorded as sent on WhatsApp${r.sentTo ? ` to ${r.sentTo}` : ""} — each stay's ${word} with it`
           : r.sentTo
-            ? `${r.number} sent by email to ${r.sentTo} — each stay's ${word} with it`
+            ? `${r.number} sent by email to ${r.sentTo}${rt.words} — each stay's ${word} with it`
             : `${r.number} recorded as sent — nothing was emailed (no address); hand it over`,
       );
       onSent();
@@ -160,7 +162,7 @@ export function TripSendDialog({
       open
       onClose={onClose}
       busy={send.isPending}
-      beside={<SendPaperPanel paper={{ kind: "trip", id: tripId, label, tripKind: word === "proforma" ? "PROFORMA" : word === "voucher" ? "VOUCHER" : "QUOTATION" }} />}
+      beside={<SendPaperPanel paper={{ kind: "trip", id: tripId, label, tripKind: word === "proforma" ? "PROFORMA" : word === "voucher" ? "VOUCHER" : "QUOTATION" }} roomTypes={rt.face} />}
       title={`Send ${label.replace(`The trip's ${word} `, "")}`}
       help={`One email with the trip's paper; each stay's ${word} not sent yet is sent with it, with no email of its own.`}
       footer={
@@ -217,6 +219,11 @@ export function TripSendDialog({
           />
         </div>
       )}
+      {rt.info?.hiddenByDefault ? (
+        <div className="paper-faces in-dialog">
+          <RoomTypesChoice info={rt.info} shown={rt.shown} onChange={rt.setShown} forSend />
+        </div>
+      ) : null}
     </DsDialog>
   );
 }

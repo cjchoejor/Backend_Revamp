@@ -169,7 +169,7 @@ export async function listHeldDocuments(session: Session, entryId: string) {
 export async function decideHeldDocument(
   session: Session,
   heldDocumentId: string,
-  body: { action: "EMAIL" | "WHATSAPP" | "NONE"; sentTo?: string | null; note?: string | null; nightsEach?: boolean },
+  body: { action: "EMAIL" | "WHATSAPP" | "NONE"; sentTo?: string | null; note?: string | null; nightsEach?: boolean; showRoomTypes?: boolean },
 ) {
   return apiRequest<HeldDocument>(`/api/held-documents/${heldDocumentId}/decide`, { method: "POST", session, body });
 }

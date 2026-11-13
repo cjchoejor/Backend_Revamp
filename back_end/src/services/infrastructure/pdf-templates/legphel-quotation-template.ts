@@ -53,6 +53,11 @@ export type LegphelQuotationLine = {
   indent?: boolean;
   /** Says something, charges nothing — printed grey ("Room only · no meals"). */
   muted?: boolean;
+  /**
+   * In bold in front of the description: the package a room is priced on, on a paper that names no
+   * room type — "**Season** Room 1 · 2 adults" (2026-11-13, operator).
+   */
+  lead?: string | null;
 };
 
 /**
@@ -114,6 +119,11 @@ export type LegphelQuotationInput = LegphelPriceBlock & {
   validityStrip: string;
   /** "Nandi Travels & Tours, Jaigaon" */
   to: string;
+  /**
+   * The guest staying, when the quotation is made out to a travel agent or a company (2026-11-13,
+   * operator: "even stay one goes to travel agent and corporate") — the proforma's "For guest" line.
+   */
+  forGuest?: string | null;
   /** "Mr Rajesh Nandi" — the reference's Attn line. Omitted when absent. */
   attn?: string | null;
   /** Check-in "20 Oct 2026" · Check-out "22 Oct 2026 · 2 nights" (2026-10-28). */
@@ -149,7 +159,7 @@ export function renderPriceBlock(input: LegphelPriceBlock): string[] {
       ],
       input.lines.map((l) => [
         ...(input.datesShown ? [l.dates ?? ""] : []),
-        l.description,
+        l.lead ? { lead: l.lead, text: l.description } : l.description,
         l.qty,
         ...(input.hidePrices ? [] : [l.rate, l.amount]),
       ]),
@@ -192,6 +202,7 @@ export function renderLegphelQuotationHtml(input: LegphelQuotationInput): string
     row("Date", input.date),
     section,
     row("To", input.to, { boldValue: true }),
+    input.forGuest ? row("For guest", input.forGuest) : "",
     input.attn ? row("Attn", input.attn) : "",
     section,
     stayRows(input.stay),

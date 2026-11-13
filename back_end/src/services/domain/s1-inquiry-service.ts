@@ -47,6 +47,8 @@ export async function createInquiry(
      * above — a package from a different agency would price the wrong rate.
      */
     ratePackageId?: string | null;
+    /** Every package chosen, the primary first (2026-11-13). The primary prices any room type left alone. */
+    ratePackageIds?: string[] | null;
   },
 ) {
   // The channel and the finer came-in-as, validated together; an old-style caller sending only
@@ -60,7 +62,7 @@ export async function createInquiry(
   // The caller (2026-10-12): someone must be reachable from the first call — a phone or an
   // email — except on an OTA booking, which comes through the OTA. A booking with a known guest
   // and no caller block is the older API shape and stays accepted.
-  const { travelAgentId, corporateAccountId, ratePackageId } = await validateInquiryParty(prisma, input);
+  const { travelAgentId, corporateAccountId, ratePackageId, ratePackageIds } = await validateInquiryParty(prisma, input);
   const partyContacts = normalizeCoordinators(input.partyContacts);
   // Booked through an agency or a company, the party is the caller and the desk asks nothing more
   // (2026-11-05): reached on the first contact person who has a number or an email, else its own.
@@ -117,6 +119,7 @@ export async function createInquiry(
         travelAgentId,
         corporateAccountId,
         ratePackageId,
+        ratePackageIds,
         createdBy: actorId,
       },
     });
@@ -182,7 +185,7 @@ export async function createInquiry(
  */
 export async function validateInquiryParty(
   prisma: PrismaClient,
-  input: { travelAgentId?: string | null; corporateAccountId?: string | null; ratePackageId?: string | null },
+  input: { travelAgentId?: string | null; corporateAccountId?: string | null; ratePackageId?: string | null; ratePackageIds?: string[] | null },
 ) {
   const travelAgentId = input.travelAgentId?.trim() || null;
   const corporateAccountId = input.corporateAccountId?.trim() || null;
@@ -202,8 +205,30 @@ export async function validateInquiryParty(
 
   // A package must belong to the party it is being quoted for. Without this check a booking
   // could carry another agency's package and be priced on their negotiated rate.
-  let ratePackageId = input.ratePackageId?.trim() || null;
-  if (ratePackageId) {
+  //
+  // Several may be chosen (2026-11-13, operator: "select multiple package"): each is checked the same
+  // way, the primary first — the one given as `ratePackageId` when it is in the list, else the first.
+  const given = (input.ratePackageIds ?? []).map((id) => id?.trim()).filter((id): id is string => !!id);
+  const asked = input.ratePackageIds != null ? given : input.ratePackageId?.trim() ? [input.ratePackageId.trim()] : [];
+  const primaryAsked = input.ratePackageId?.trim() && asked.includes(input.ratePackageId.trim()) ? input.ratePackageId.trim() : asked[0] ?? null;
+  const ordered = primaryAsked ? [primaryAsked, ...asked.filter((id) => id !== primaryAsked)] : [];
+  const ratePackageIds: string[] = [];
+  for (const id of ordered) {
+    const current = await checkPartyPackage(prisma, id, { travelAgentId, corporateAccountId });
+    if (!ratePackageIds.includes(current)) ratePackageIds.push(current);
+  }
+  return { travelAgentId, corporateAccountId, ratePackageId: ratePackageIds[0] ?? null, ratePackageIds };
+}
+
+/** One package, checked: it exists, it is the party's, and a closed version reads as its current one. */
+async function checkPartyPackage(
+  prisma: PrismaClient,
+  id: string,
+  party: { travelAgentId: string | null; corporateAccountId: string | null },
+): Promise<string> {
+  const { travelAgentId, corporateAccountId } = party;
+  let ratePackageId = id;
+  {
     const pkg = await prisma.ratePackage.findUnique({
       where: { id: ratePackageId },
       select: { id: true, name: true, travelAgentId: true, corporateAccountId: true, scope: true, effectiveTo: true },
@@ -230,8 +255,7 @@ export async function validateInquiryParty(
       throw new ValidationError(`Rate package "${pkg.name}" does not belong to the selected party`);
     }
   }
-
-  return { travelAgentId, corporateAccountId, ratePackageId };
+  return ratePackageId;
 }
 
 /* ------------------------------------------------------------------ the caller */
