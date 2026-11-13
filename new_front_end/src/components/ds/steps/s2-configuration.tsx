@@ -117,6 +117,75 @@ export function Count({
   );
 }
 
+/** The beds asked for as a clean tally: setups in capitals, whole counts above nothing. */
+export function bedTally(raw: unknown): Record<string, number> {
+  const out: Record<string, number> = {};
+  if (!raw || typeof raw !== "object") return out;
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    const n = Math.trunc(Number(v));
+    if (Number.isFinite(n) && n > 0) out[k.toUpperCase()] = n;
+  }
+  return Object.fromEntries(Object.entries(out).sort(([a], [b]) => a.localeCompare(b)));
+}
+
+const BED_WORD: Record<string, string> = { KING: "King", TWIN: "Twin", QUEEN: "Queen", SINGLE: "Single" };
+
+/**
+ * The beds asked for, changed with the rooms (2026-11-13). A tally — which room is which is set on
+ * the table — so it must never ask for more rooms than the booking does; when it does, it says so
+ * in red and the change waits.
+ */
+export function BedsAsked({
+  c,
+  stayNo,
+  compact = false,
+}: {
+  c: Pick<ChangeConfig, "beds" | "setBeds" | "bedTypes" | "bedSum" | "bedsOver" | "roomCount">;
+  stayNo?: number;
+  compact?: boolean;
+}) {
+  const { beds, setBeds, bedTypes, bedSum, bedsOver, roomCount } = c;
+  if (!bedTypes.length) return null;
+  return (
+    <div className={`field cfg-beds${compact ? " cfg-stay-msg" : ""}`}>
+      <label>
+        {stayNo ? `Stay ${stayNo} · beds asked for` : "Beds asked for · optional"}
+        <Help label="About the beds asked for">
+          A tally of the rooms the guest wants made up a certain way. Which room is which is set on the table. It can never ask for more rooms
+          than the booking does.
+        </Help>
+      </label>
+      <div className="row-acts">
+        {bedTypes.map((t) => (
+          <span key={t} className="chip count-in">
+            {BED_WORD[t] ?? t}
+            <input
+              className="input"
+              inputMode="numeric"
+              placeholder="0"
+              aria-label={`${stayNo ? `Stay ${stayNo}, ` : ""}${BED_WORD[t] ?? t} rooms asked for`}
+              value={beds[t] ?? ""}
+              onChange={(e) => {
+                const v = e.target.value.replace(/\D/g, "").slice(0, 2);
+                setBeds((prev) => ({ ...prev, [t]: v }));
+              }}
+            />
+          </span>
+        ))}
+      </div>
+      {bedsOver ? (
+        <p className="cfg-stop" role="alert" style={{ marginTop: 6 }}>
+          <span className="mark" aria-hidden>
+            !
+          </span>{" "}
+          The beds asked for come to {plural(bedSum, "room")}, but the booking asks for {plural(roomCount, "room")}. Lower the beds asked
+          for, or ask for more rooms.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 /**
  * One stay's change: what is typed, what the house said, the rooms picked and the acts. The panel for
  * one stay and the panel for the stays worked together are both drawn from this (2026-11-09).
@@ -161,6 +230,18 @@ export function useChangeConfiguration({
   const [children, setChildren] = useState(String(entry.childCount ?? 0));
   const [ages, setAges] = useState<string[]>(() => (entry.childAges ?? []).map(String));
   const [rooms, setRooms] = useState(String(entry.numberOfRooms ?? 1));
+  /**
+   * The beds asked for (2026-11-13, operator: three rooms asked as 3 King, lowered to two rooms, and
+   * the change could not be saved because it still read 3 King). The ask is a tally the booking's
+   * room count must hold, so it is shown and changed here with the rooms.
+   */
+  const savedBedMap = useMemo(() => bedTally(entry.bedTypeRequest), [entry.bedTypeRequest]);
+  const [beds, setBeds] = useState<Record<string, string>>(() =>
+    Object.fromEntries(Object.entries(savedBedMap).map(([k, v]) => [k, String(v)])),
+  );
+  const bedMap = useMemo(() => bedTally(Object.fromEntries(Object.entries(beds).map(([k, v]) => [k, Number(v || "0")]))), [beds]);
+  const bedSum = Object.values(bedMap).reduce((a, b) => a + b, 0);
+  const bedsMoved = JSON.stringify(bedMap) !== JSON.stringify(savedBedMap);
   /**
    * The rooms by TYPE, the way the Inquiry step picks them (2026-10-29, operator: "it doesn't show
    * the availability chart like shown in S1 when I ask the house — adopt the same style for this
@@ -210,7 +291,7 @@ export function useChangeConfiguration({
       ageInputs.join(",") !== (entry.childAges ?? []).join(","),
     rooms: roomCount,
     savedRooms: entry.numberOfRooms ?? 1,
-    bedAsk: Object.values((entry.bedTypeRequest ?? {}) as Record<string, number>).reduce((a, b) => a + (Number(b) || 0), 0),
+    bedAsk: bedSum,
     apply: (n) => setRooms(String(n)),
   });
 
@@ -272,6 +353,15 @@ export function useChangeConfiguration({
       perDate: Array.isArray(src?.perDate) ? src.perDate : undefined,
     };
   }, [result]);
+
+  /** The setups the house's rooms can be made up in — the same list the Inquiry step offers. */
+  const bedTypes = useMemo(() => {
+    const s = new Set<string>();
+    for (const r of catalog) for (const t of r.allowedBedTypes?.length ? r.allowedBedTypes : r.bedType ? [r.bedType] : []) s.add(t);
+    return ["KING", "TWIN", "QUEEN", "SINGLE"].filter((t) => s.has(t) || (bedMap[t] ?? 0) > 0);
+  }, [catalog, bedMap]);
+  /** More rooms asked for as beds than the booking asks for: the change waits for it. */
+  const bedsOver = bedSum > roomCount;
 
   const extBeds = useMemo(
     () => new Map(catalog.filter((r) => typeof r.roomType?.maxExtraBeds === "number").map((r) => [r.id, r.roomType!.maxExtraBeds!])),
@@ -422,6 +512,7 @@ export function useChangeConfiguration({
           childCount,
           childAges: ageInputs.filter((a) => a !== "").map(Number),
           numberOfRooms: roomCount,
+          bedTypeRequest: bedSum > 0 ? bedMap : null,
         },
         rooms: typeMode && typePicks
           ? { configurationId: configId!, perNight: typePicks.perNight, byType: typePicks.byType }
@@ -455,12 +546,14 @@ export function useChangeConfiguration({
         expectedVersion: entry.version,
       };
       if (datesMoved) body.dates = { checkInDate: checkIn, checkOutDate: checkOut };
-      if (partyMoved) {
+      if (partyMoved || bedsMoved) {
         body.party = {
           adultCount,
           childCount,
           childAges: ageInputs.filter((a) => a !== "").map(Number),
           numberOfRooms: roomCount,
+          // Always with the party: the room count is checked against the ask on record otherwise.
+          bedTypeRequest: bedSum > 0 ? bedMap : null,
         };
       }
       if ((roomsMoved || datesMoved) && configId) {
@@ -526,9 +619,10 @@ export function useChangeConfiguration({
   const needsApproval = !inPlace && liveQuote && !atLeast(session?.actorLevel, "L2");
   const pending = save.isPending || change.isPending;
 
-  const nothingMoved = !partyMoved && !roomsMoved && !datesMoved;
+  const nothingMoved = !partyMoved && !roomsMoved && !datesMoved && !bedsMoved;
   const blocked =
     nothingMoved ||
+    bedsOver ||
     !checkIn ||
     startsBeforeToday ||
     overCapacity ||
@@ -546,6 +640,8 @@ export function useChangeConfiguration({
                 ? `Set ${plural(roomCount, "room")} for every night in the grid`
                 : nothingMoved
                 ? "Nothing has changed yet"
+                : bedsOver
+                  ? `The beds asked for come to ${plural(bedSum, "room")} — the booking asks for ${roomCount}. Lower the beds asked for`
                 : startsBeforeToday
                   ? "The stay can start today or later"
                   : needsNightPick
@@ -578,7 +674,7 @@ export function useChangeConfiguration({
                         ? "Ask the house before saving rooms"
                         : undefined;
 
-  return { entry, oldIn, oldOut, checkIn, setCheckIn, nights, setNights, nightsN, checkOut, datesMoved, startsBeforeToday, hotelDay, adults, setAdults, children, setChildren, ages, setAges, rooms, setRooms, byNumber, setByNumber, typeMode, typePicks, setTypePicks, childCount, adultCount, roomCount, agesReady, ageInputs, env, envMin, envMax, policy, answer, datesKey, result, answerOutdated, ask, catalog, configId, available, deficient, unavailable, perDate, rows, stayNights, displayNights, priorRoomIds, sel, roomNo, picked, dropped, added, roomsMoved, roomsReady, partyMoved, countMoved, pickComplete, needsRepick, needsNightPick, pickedRoomIds, pickedRoomDates, seedComps, comps, setComps, autoSeat, tableFaults, setTableFaults, tableReady, overCapacity, roomsOutOfRange, change, save, needsApproval, pending, nothingMoved, blocked, saveReason };
+  return { beds, setBeds, bedMap, bedSum, bedsMoved, bedsOver, bedTypes, entry, oldIn, oldOut, checkIn, setCheckIn, nights, setNights, nightsN, checkOut, datesMoved, startsBeforeToday, hotelDay, adults, setAdults, children, setChildren, ages, setAges, rooms, setRooms, byNumber, setByNumber, typeMode, typePicks, setTypePicks, childCount, adultCount, roomCount, agesReady, ageInputs, env, envMin, envMax, policy, answer, datesKey, result, answerOutdated, ask, catalog, configId, available, deficient, unavailable, perDate, rows, stayNights, displayNights, priorRoomIds, sel, roomNo, picked, dropped, added, roomsMoved, roomsReady, partyMoved, countMoved, pickComplete, needsRepick, needsNightPick, pickedRoomIds, pickedRoomDates, seedComps, comps, setComps, autoSeat, tableFaults, setTableFaults, tableReady, overCapacity, roomsOutOfRange, change, save, needsApproval, pending, nothingMoved, blocked, saveReason };
 }
 
 export type ChangeConfig = ReturnType<typeof useChangeConfiguration>;
@@ -759,6 +855,9 @@ export function ChangeConfiguration({
               </div>
             )}
           </div>
+        </div>
+        <div style={{ marginTop: 8 }}>
+          <BedsAsked c={c} />
         </div>
         {overCapacity && (
           <p className="cfg-stop" role="alert">

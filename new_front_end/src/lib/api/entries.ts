@@ -1378,7 +1378,7 @@ export async function changeStayInPlace(
   entryId: string,
   body: {
     dates: { checkInDate: string; checkOutDate: string };
-    party: { adultCount: number; childCount: number; childAges: number[]; numberOfRooms: number };
+    party: { adultCount: number; childCount: number; childAges: number[]; numberOfRooms: number; bedTypeRequest?: Record<string, number> | null };
     /** Picked by type (2026-10-29): `perNight` is the rooms the system chose for `byType`, as shown. */
     rooms: { configurationId: string; perNight: Array<{ date: string; roomIds: string[] }>; byType?: { perNight: Array<{ date: string; types: Array<{ roomTypeId: string; count: number }> }>; fixedRoomIds?: string[] }; };
     roomCompositions: RoomCompositionInput[];

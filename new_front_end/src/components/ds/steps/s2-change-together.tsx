@@ -17,7 +17,7 @@ import { fmtStay, plural } from "@/lib/ds/format";
 import type { EntryDetail } from "@/types/api";
 import { enumerateNights } from "./use-room-selection";
 import { RoomCountField } from "./new-inquiry-parts";
-import { Count, RoomsByNumberPick, useChangeConfiguration, type ChangeConfig } from "./s2-configuration";
+import { BedsAsked, Count, RoomsByNumberPick, bedTally, useChangeConfiguration, type ChangeConfig } from "./s2-configuration";
 import { RoomsByType, typeOrderOf } from "./s1-by-type";
 import { toastRefusal } from "./kit";
 import { AddReturnStay } from "@/components/ds/workspace/return-stay";
@@ -106,6 +106,7 @@ function StayLine({ c, stayNo, showAges }: { c: ChangeConfig; stayNo: number; sh
           )}
         </div>
       ) : null}
+      {c.bedSum > 0 || Object.keys(bedTally(c.entry.bedTypeRequest)).length > 0 ? <BedsAsked c={c} stayNo={stayNo} compact /> : null}
       {startsBeforeToday ? (
         <p className="cfg-stop cfg-stay-msg" role="alert">
           Stay {stayNo} can start today or later.
