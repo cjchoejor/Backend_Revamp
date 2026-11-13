@@ -65,6 +65,7 @@ export function TypePackagePick({
     <select
       className="input type-pkg"
       aria-label={`${typeName}: rate package`}
+      title={name}
       value={value ?? ""}
       disabled={m.isPending}
       onChange={(e) => m.mutate(e.target.value)}
