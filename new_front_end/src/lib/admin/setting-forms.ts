@@ -716,6 +716,38 @@ const COMMUNICATION = page("/admin/communication-config", "Channels and replies"
     "Once a tax invoice is sent, a payment against it after the stay cannot be logged until the reply is noted. Off lets the payment be logged.",
   ),
   {
+    key: "papers.roomTypesForParties",
+    title: "Papers to an agency or a company, with room types",
+    about:
+      "A travel agent's or a company's quotation, proforma and voucher say how many rooms and who sleeps in each (Room 1, Room 2), with the package each is priced on, never the room type: the rooms are given on arrival from those free that day. Turned on, the roles ticked may send them with the room types when an agency asks, and the send box offers it. A walk-in's or a direct guest's papers always name the room type.",
+    form: {
+      kind: "group",
+      label: "",
+      fields: [
+        { kind: "toggle", key: "enabled", label: "With room types", on: "May be sent", off: "Never" },
+        {
+          kind: "multi",
+          key: "levels",
+          label: "Who may send them so",
+          options: [
+            { value: "L2", label: "Front office manager" },
+            { value: "L3", label: "GM" },
+            { value: "L4", label: "Admin" },
+            { value: "L1", label: "Front desk" },
+          ],
+        },
+      ],
+    },
+    summary: (v) => {
+      const o = (v ?? {}) as { enabled?: boolean; levels?: string[] };
+      if (!o.enabled) return "Never";
+      const word: Record<string, string> = { L1: "front desk", L2: "FOM", L3: "GM", L4: "admin" };
+      const names = (o.levels ?? []).map((l) => word[l]).filter(Boolean);
+      return names.length ? `May be sent by the ${names.join(", ")}` : "On, but nobody is ticked";
+    },
+    fresh: { enabled: false, levels: ["L2", "L3", "L4"] },
+  },
+  {
     key: "acknowledgement.windowPerType",
     title: "How long to wait for an answer",
     about: "How long the desk waits for the guest's answer to each paper, or a department's answer to a handoff, before it is chased. A tax invoice and a mid-stay bill use the proforma's time unless they have their own.",

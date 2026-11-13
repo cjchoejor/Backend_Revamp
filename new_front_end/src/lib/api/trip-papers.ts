@@ -44,7 +44,11 @@ export function makeTripQuotation(session: Session, entryId: string) {
   return apiRequest<{ made: boolean; id: string }>(`/api/entries/${entryId}/trip-quotation`, { method: "POST", session, body: {} });
 }
 
-export function sendTripQuotation(session: Session, tripPaperId: string, body: { channel: "EMAIL" | "WHATSAPP"; to?: string | null; nightsEach?: boolean }) {
+export function sendTripQuotation(
+  session: Session,
+  tripPaperId: string,
+  body: { channel: "EMAIL" | "WHATSAPP"; to?: string | null; nightsEach?: boolean; showRoomTypes?: boolean },
+) {
   return apiRequest<{ sentTo: string | null; channel: string; number: string }>(`/api/trip-papers/${tripPaperId}/send`, { method: "POST", session, body });
 }
 
@@ -52,21 +56,23 @@ export function answerTripQuotation(session: Session, tripPaperId: string, body:
   return apiRequest<{ recorded: number }>(`/api/trip-papers/${tripPaperId}/answer`, { method: "POST", session, body });
 }
 
-function face(opts?: { hidePrices?: boolean; nightsEach?: boolean }) {
+type TripFace = { hidePrices?: boolean; nightsEach?: boolean; roomTypes?: "hidden" | "shown" };
+function face(opts?: TripFace) {
   const q = new URLSearchParams();
   if (opts?.hidePrices) q.set("prices", "none");
   if (opts?.nightsEach) q.set("nights", "each");
+  if (opts?.roomTypes) q.set("roomTypes", opts.roomTypes);
   const s = q.toString();
   return s ? `?${s}` : "";
 }
 
-export async function fetchTripPaperPreviewHtml(session: Session, id: string, opts?: { hidePrices?: boolean; nightsEach?: boolean }): Promise<string> {
+export async function fetchTripPaperPreviewHtml(session: Session, id: string, opts?: TripFace): Promise<string> {
   const res = await fetch(`/api/trip-papers/${id}/preview-html${face(opts)}`, { headers: authHeaders(session), credentials: "same-origin" });
   if (!res.ok) throw new Error(`Could not load the trip's quotation (HTTP ${res.status})`);
   return res.text();
 }
 
-export function openTripPaperPdf(session: Session, id: string, opts?: { hidePrices?: boolean; nightsEach?: boolean }): Promise<void> {
+export function openTripPaperPdf(session: Session, id: string, opts?: TripFace): Promise<void> {
   return openPdf(session, `/api/trip-papers/${id}/pdf${face(opts)}`);
 }
 

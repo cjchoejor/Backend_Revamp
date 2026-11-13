@@ -15,11 +15,11 @@
  * ask it where the desk is working. Nothing is decided here — the server sends.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/design-system";
 import { Help } from "@/components/ds/help";
-import { Choice as PickOne, DsDialog, NightsChoice, NotSentChip, PaperDrawer, SendPaperPanel, toastRefusal, type PaperRef } from "@/components/ds/steps/kit";
+import { Choice as PickOne, DsDialog, NightsChoice, NotSentChip, PaperDrawer, RoomTypesChoice, SendPaperPanel, roomTypesOf, toastRefusal, useSendRoomTypes, type PaperRef } from "@/components/ds/steps/kit";
 import { useSession } from "@/hooks/use-session";
 import { usePhoneRules } from "@/hooks/use-phone-rules";
 import { problemOfPhone } from "@/lib/ds/phone";
@@ -69,6 +69,7 @@ export function HeldPaperRow({
   onView,
   onDone,
   onNightsEach,
+  onRoomTypes,
 }: {
   h: HeldDocument;
   tz?: string;
@@ -77,6 +78,8 @@ export function HeldPaperRow({
   onDone?: () => void;
   /** The Nights choice, for a paper shown beside this form. */
   onNightsEach?: (each: boolean) => void;
+  /** The room types on the copy sent, for a paper shown beside this form (2026-11-13). */
+  onRoomTypes?: (face: "hidden" | "shown" | undefined) => void;
 }) {
   const { session } = useSession();
   const phoneRules = usePhoneRules();
@@ -92,6 +95,9 @@ export function HeldPaperRow({
   const [note, setNote] = useState("");
   // Every night named on the copy emailed (2026-10-30).
   const [nightsEach, setNightsEach] = useState(false);
+  // A paper to an agency or a company names no room type (2026-11-13); the paper beside the box follows.
+  const rt = useSendRoomTypes(roomTypesOf(paperOf(h)));
+  useEffect(() => onRoomTypes?.(rt.face), [rt.face, onRoomTypes]);
   const decide = useMutation({
     mutationFn: () =>
       decideHeldDocument(session!, h.id, {
@@ -99,10 +105,11 @@ export function HeldPaperRow({
         sentTo: to.trim() || null,
         note: note.trim() || null,
         nightsEach: choice === "EMAIL" && nightsEach,
+        ...(choice === "EMAIL" ? rt.body : {}),
       }),
     onSuccess: (r) => {
       toast.success(
-        choice === "EMAIL" ? `${KIND_WORD[h.kind]} sent by email${r.sentTo ? ` to ${r.sentTo}` : ""}` : `${KIND_WORD[h.kind]} recorded as sent on WhatsApp`,
+        choice === "EMAIL" ? `${KIND_WORD[h.kind]} sent by email${r.sentTo ? ` to ${r.sentTo}` : ""}${rt.words}` : `${KIND_WORD[h.kind]} recorded as sent on WhatsApp`,
       );
       for (const k of [["held-documents", h.entryId], ["entry-communications", h.entryId], ["entry-trace", h.entryId], ["entry", h.entryId]]) {
         void qc.invalidateQueries({ queryKey: k });
@@ -157,6 +164,7 @@ export function HeldPaperRow({
               }}
               of={{ entryId: h.entryId }}
             />
+            <RoomTypesChoice info={rt.info} shown={rt.shown} onChange={rt.setShown} forSend />
           </div>
         ) : null}
         {choice === "WHATSAPP" ? (
@@ -224,6 +232,7 @@ export function HeldPapersCard({
 export function HeldSendDialog({ h, tz, onClose }: { h: HeldDocument; tz?: string; onClose: () => void }) {
   const [paper, setPaper] = useState<PaperRef | null>(null);
   const [nightsEach, setNightsEach] = useState(false);
+  const [roomTypes, setRoomTypes] = useState<"hidden" | "shown" | undefined>(undefined);
   return (
     <>
       <DsDialog
@@ -231,14 +240,14 @@ export function HeldSendDialog({ h, tz, onClose }: { h: HeldDocument; tz?: strin
         closeX
         onClose={onClose}
         title={`Send the ${KIND_WORD[h.kind].toLowerCase()}`}
-        beside={<SendPaperPanel paper={paperOf(h)} nightsEach={nightsEach} />}
+        beside={<SendPaperPanel paper={paperOf(h)} nightsEach={nightsEach} roomTypes={roomTypes} />}
         footer={
           <Button kind="quiet" onClick={onClose}>
             Not now
           </Button>
         }
       >
-        <HeldPaperRow h={h} tz={tz} onView={() => setPaper(paperOf(h))} onDone={onClose} onNightsEach={setNightsEach} />
+        <HeldPaperRow h={h} tz={tz} onView={() => setPaper(paperOf(h))} onDone={onClose} onNightsEach={setNightsEach} onRoomTypes={setRoomTypes} />
       </DsDialog>
       <PaperDrawer paper={paper} onClose={() => setPaper(null)} />
     </>

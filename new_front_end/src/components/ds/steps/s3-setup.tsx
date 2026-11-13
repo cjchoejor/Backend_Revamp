@@ -47,7 +47,7 @@ import { blockWindowWords, fmtDateTime, fmtStamp, hotelFormParts, money, plural 
 import { optionSelectedRoomIds, type EntryDetail, type InvoiceSummary, type PaymentStatusSummary } from "@/types/api";
 import { renegotiateTrip, replySettled } from "@/lib/api/entries";
 import { EarlierAdvanceQuestion } from "./s3-earlier-advance";
-import { AnswerLine, useReplyAsked, Choice, DsDialog, Fact, Facts, Live, OnRecord, PaperDrawer, ReasonDialog, SeeRow, SendPaperPanel, StepCanvas, StepCard, atLeast, currentPassStart, toastRefusal, useCommunications, useRefreshEntry, useStepMode, words, type PaperRef, type ChangeBookingItem, ChangeBookingMenu, StageActs, useFlowUnsaved, useFinishWhenDone, useStepFlow, goToStepCard, revealCard, useOpenAlsoWay, useStepPane, OtherWaysTabs, InlineWay, ShutWay, parkTab, NightsChoice, NotSentChip } from "./kit";
+import { AnswerLine, useReplyAsked, Choice, DsDialog, Fact, Facts, Live, OnRecord, PaperDrawer, ReasonDialog, SeeRow, SendPaperPanel, StepCanvas, StepCard, atLeast, currentPassStart, toastRefusal, useCommunications, useRefreshEntry, useStepMode, words, type PaperRef, type ChangeBookingItem, ChangeBookingMenu, StageActs, useFlowUnsaved, useFinishWhenDone, useStepFlow, goToStepCard, revealCard, useOpenAlsoWay, useStepPane, OtherWaysTabs, InlineWay, ShutWay, parkTab, NightsChoice, NotSentChip, RoomTypesChoice, useSendRoomTypes } from "./kit";
 import { TripProformaCard, useTripProforma } from "./s3-trip-proforma";
 import { useStaysTogether } from "./s2-together";
 import { TripCancelWay } from "./s3-trip-cancel";
@@ -1631,13 +1631,15 @@ function ProformaCard({
 
   const draft = proformas.find((i) => i.state === "DRAFT") ?? null;
   const sendTarget = draft ?? proformas[0] ?? null;
+  // A proforma to an agency or a company names no room type (2026-11-13).
+  const rt = useSendRoomTypes(sendTarget ? { invoiceId: sendTarget.id } : null);
   const send = useMutation({
     mutationFn: () => {
       if (!sendTarget) throw new Error("There is no proforma to send");
-      return dispatchInvoice(session!, sendTarget.id, { dispatchedTo: to.trim() || undefined, nightsEach });
+      return dispatchInvoice(session!, sendTarget.id, { dispatchedTo: to.trim() || undefined, nightsEach, ...rt.body });
     },
     onSuccess: () => {
-      toast.success(replyAsked ? "The proforma is sent — record the guest's answer when it comes" : "The proforma is sent");
+      toast.success(replyAsked ? `The proforma is sent${rt.words} — record the guest's answer when it comes` : `The proforma is sent${rt.words}`);
       setSendOpen(false);
       setJustSent(true);
       onChanged();
@@ -1649,7 +1651,7 @@ function ProformaCard({
 
   const pdf = (id: string) => {
     if (!session) return;
-    openInvoicePdf(session, id).catch((e) => toastRefusal(e, "The PDF could not be opened"));
+    openInvoicePdf(session, id, { roomTypes: id === sendTarget?.id ? rt.face : undefined }).catch((e) => toastRefusal(e, "The PDF could not be opened"));
   };
 
   const sentLive = proformas.some((i) => i.state !== "SUPERSEDED" && i.dispatchedAt != null);
@@ -1930,7 +1932,7 @@ function ProformaCard({
           onClose={() => setSendOpen(false)}
           busy={send.isPending}
           width={720}
-          beside={<SendPaperPanel paper={docRef(sendTarget)} nightsEach={nightsEach} />}
+          beside={<SendPaperPanel paper={docRef(sendTarget)} nightsEach={nightsEach} roomTypes={rt.face} />}
           title={`Send proforma ${billNo(sendTarget)}`}
           caseLines={[
             asks ? `It ${asks}` : "The advance it asks for is being read",
@@ -1953,6 +1955,7 @@ function ProformaCard({
           <SendToField entry={entry} value={to} onChange={setTo} label="Email address" />
           <div className="paper-faces in-dialog">
             <NightsChoice each={nightsEach} onChange={setNightsEach} of={{ invoiceId: sendTarget.id }} />
+            <RoomTypesChoice info={rt.info} shown={rt.shown} onChange={rt.setShown} forSend />
           </div>
         </DsDialog>
       ) : null}

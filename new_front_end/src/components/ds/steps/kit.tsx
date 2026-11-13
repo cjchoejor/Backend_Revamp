@@ -18,7 +18,7 @@ import { Button, Chip, Dialog, Icon, type ButtonProps, type DialogRegister, type
 import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
 import { acknowledgeCommunication, listEntryCommunications, type EntryCommunication, type EntryCommunicationType } from "@/lib/api/entries";
-import { getFolioDocuments, openCancellationConfirmationPdf, openConfirmationVoucherPdf, openFolioDocumentPdf, openInvoicePdf, openQuotationPdf, type FolioDocumentKind, getNightsShorten, type PaperOf } from "@/lib/api/documents";
+import { getFolioDocuments, openCancellationConfirmationPdf, openConfirmationVoucherPdf, openFolioDocumentPdf, openInvoicePdf, openQuotationPdf, type FolioDocumentKind, getNightsShorten, getPaperRoomTypes, type PaperOf, type PaperRoomTypes } from "@/lib/api/documents";
 import {
   CancellationVoucherPreview,
   FolioDocumentPreview,
@@ -2530,34 +2530,135 @@ export function PricesChoice({ hidden, onChange, label = "Prices" }: { hidden: b
   );
 }
 
+/**
+ * How a booking's papers name their rooms (2026-11-13, operator): an agency's or a company's go
+ * without room types — "Room 1 · 2 adults" with the package in front — because the rooms are given
+ * on arrival from those free that day. `GET /papers/room-types`: the default, and whether this
+ * person may send them WITH the types (the admin console's setting and the roles it names).
+ */
+export function usePaperRoomTypes(of: PaperOf | null): PaperRoomTypes | null {
+  const { session } = useSession();
+  const key = of ? JSON.stringify(of) : null;
+  const q = useQuery({
+    queryKey: ["paper-room-types", key],
+    queryFn: () => getPaperRoomTypes(session!, of!),
+    enabled: !!session && !!of,
+    staleTime: 30_000,
+  });
+  return q.data ?? null;
+}
+
+/** Which paper a preview or a send names its rooms for — the quotation, a proforma in force, the voucher, a trip's paper. */
+export function roomTypesOf(paper: PaperRef | null): PaperOf | null {
+  if (!paper) return null;
+  if (paper.kind === "quotation") return paper.frozen ? null : { quotationId: paper.id };
+  if (paper.kind === "trip") return { tripPaperId: paper.id };
+  if (paper.kind === "invoice") return (paper.invoiceType ?? "PROFORMA") === "PROFORMA" && !paper.frozen && !paper.issued ? { invoiceId: paper.id } : null;
+  if (paper.kind === "voucher") return { reservationId: paper.reservationId };
+  return null;
+}
+
+/**
+ * A send box's room types (2026-11-13): on an agency's or a company's booking the paper goes without
+ * them; with them only when the admin console allows it for this person, and then only when chosen.
+ */
+export function useSendRoomTypes(of: PaperOf | null) {
+  const info = usePaperRoomTypes(of);
+  const [shown, setShown] = useState(false);
+  const key = of ? JSON.stringify(of) : "";
+  useEffect(() => setShown(false), [key]);
+  const applies = !!info?.hiddenByDefault;
+  const on = applies && !!info?.mayShow && shown;
+  return {
+    info,
+    shown: on,
+    setShown,
+    /** For the paper beside the box. */
+    face: applies ? ((on ? "shown" : "hidden") as "shown" | "hidden") : undefined,
+    /** For the send's body. */
+    body: applies ? { showRoomTypes: on } : {},
+    /** For the toast. */
+    words: applies ? (on ? " · with room types" : " · without room types") : "",
+  };
+}
+
+/**
+ * The room types on a paper, as a choice (2026-11-13). Only on a booking through an agency or a
+ * company. In the preview both are open — Shown is for the desk to read. Beside a send, Shown is
+ * offered only when the admin console allows it for this person; otherwise a line says it goes without.
+ */
+export function RoomTypesChoice({
+  info,
+  shown,
+  onChange,
+  forSend = false,
+}: {
+  info: PaperRoomTypes | null;
+  shown: boolean;
+  onChange: (shown: boolean) => void;
+  forSend?: boolean;
+}) {
+  if (!info?.hiddenByDefault) return null;
+  const party = info.party ?? "the agency";
+  return (
+    <div className="pf-item">
+      <span className="pf-k">
+        Room types
+        <Help label="About room types">
+          Papers to {party} say how many rooms and who sleeps in each (Room 1, Room 2) with the package each is priced on, never the room
+          type: the rooms are given on arrival from those free that day. A room given by number keeps its number. The figures are the
+          same either way.{info.mayShow ? "" : ` ${info.why ?? ""}`}
+        </Help>
+      </span>
+      {forSend && !info.mayShow ? (
+        <span className="pf-same" title={info.why ?? undefined}>
+          not shown
+        </span>
+      ) : (
+        <Choice
+          options={[
+            ["HIDDEN", "Not shown"],
+            ["SHOWN", "Shown"],
+          ]}
+          value={shown ? "SHOWN" : "HIDDEN"}
+          onChange={(v) => onChange(v === "SHOWN")}
+        />
+      )}
+    </div>
+  );
+}
+
 /** The paper itself, at the size of the panel it is in. */
 function PaperBody({
   paper,
   mode,
   noPrices = false,
   nightsEach = false,
+  roomTypes,
 }: {
   paper: PaperRef;
   /** A preview leaves the hotel's own heading off; beside a send it stays, as the guest will see it. */
   mode: "preview" | "send";
   noPrices?: boolean;
   nightsEach?: boolean;
+  /** The rooms with or without their types (2026-11-13). */
+  roomTypes?: "hidden" | "shown";
 }) {
   return (
     <div className="desk-root paper-scroll">
       <PaperFill.Provider value={mode}>
         {paper.kind === "quotation" ? (
-          <QuotationPreview quotationId={paper.id} frozenPdf={paper.frozen} hidePrices={noPrices} nightsEach={nightsEach} />
+          <QuotationPreview quotationId={paper.id} frozenPdf={paper.frozen} hidePrices={noPrices} nightsEach={nightsEach} roomTypes={roomTypes} />
         ) : paper.kind === "trip" ? (
-          <TripQuotationPreview tripPaperId={paper.id} hidePrices={noPrices} />
+          <TripQuotationPreview tripPaperId={paper.id} hidePrices={noPrices} roomTypes={roomTypes} />
         ) : paper.kind === "invoice" ? (
           paper.issued ? (
             <IssuedInvoicePreview invoiceId={paper.id} />
           ) : (
-            <ProformaPreview invoiceId={paper.id} frozenPdf={paper.frozen} notice={paper.notice} title={paper.label} nightsEach={nightsEach} />
+            <ProformaPreview invoiceId={paper.id} frozenPdf={paper.frozen} notice={paper.notice} title={paper.label} nightsEach={nightsEach} roomTypes={roomTypes} />
           )
         ) : paper.kind === "voucher" ? (
-          <VoucherPreview reservationId={paper.reservationId} nightsEach={nightsEach} />
+          <VoucherPreview reservationId={paper.reservationId} nightsEach={nightsEach} roomTypes={roomTypes} />
         ) : paper.kind === "cancellation" ? (
           <CancellationVoucherPreview entryId={paper.entryId} />
         ) : (
@@ -2574,7 +2675,7 @@ function PaperBody({
  * what is there in quotation while sending it"). Goes in `DsDialog`'s `beside`; it follows the
  * box's own Nights choice.
  */
-export function SendPaperPanel({ paper, nightsEach }: { paper: PaperRef; nightsEach?: boolean }) {
+export function SendPaperPanel({ paper, nightsEach, roomTypes }: { paper: PaperRef; nightsEach?: boolean; roomTypes?: "hidden" | "shown" }) {
   return (
     <aside className="paper-panel" aria-label={paper.label}>
       <div className="card-top" style={{ padding: "12px 16px", borderBottom: "1px solid var(--line)" }}>
@@ -2583,7 +2684,7 @@ export function SendPaperPanel({ paper, nightsEach }: { paper: PaperRef; nightsE
           {paper.label}
         </h4>
       </div>
-      <PaperBody paper={paper} mode="send" nightsEach={nightsEach} />
+      <PaperBody paper={paper} mode="send" nightsEach={nightsEach} roomTypes={roomTypes} />
     </aside>
   );
 }
@@ -2597,11 +2698,18 @@ export function PaperDrawer({ paper, onClose }: { paper: PaperRef | null; onClos
   // night named instead of a run written short.
   const [noPrices, setNoPrices] = useState(false);
   const [nightsEach, setNightsEach] = useState(false);
+  // An agency's or a company's papers go without room types (2026-11-13); Shown is for the desk to read.
+  const [typesShown, setTypesShown] = useState(false);
+  const rt = usePaperRoomTypes(roomTypesOf(paper));
   const paperKey = paper ? `${paper.kind}:${"id" in paper ? paper.id : "reservationId" in paper ? paper.reservationId : paper.entryId}:${paper.kind === "folio" ? paper.doc : ""}` : null;
   useEffect(() => {
     setNoPrices(false);
     setNightsEach(false);
+    setTypesShown(false);
   }, [paperKey]);
+  const roomTypes = rt?.hiddenByDefault ? (typesShown ? "shown" : "hidden") : undefined;
+  // A copy with the room types leaves the screen (a PDF, a print) only for those who may send it so.
+  const outShut = rt?.hiddenByDefault && typesShown && !rt.mayShow ? (rt.why ?? "Papers to this party go without room types") : null;
   // The paper, so the nights choice can say when it changes nothing.
   const nightsOf: PaperOf | null = !paper || paper.kind === "trip"
     ? null
@@ -2631,13 +2739,13 @@ export function PaperDrawer({ paper, onClose }: { paper: PaperRef | null; onClos
     const each = hasNights && nightsEach;
     const run =
       paper.kind === "quotation"
-        ? openQuotationPdf(session, paper.id, { hidePrices: noPrices, nightsEach: each })
+        ? openQuotationPdf(session, paper.id, { hidePrices: noPrices, nightsEach: each, roomTypes })
         : paper.kind === "trip"
-          ? openTripPaperPdf(session, paper.id, { hidePrices: noPrices })
+          ? openTripPaperPdf(session, paper.id, { hidePrices: noPrices, roomTypes })
         : paper.kind === "invoice"
-          ? openInvoicePdf(session, paper.id, { nightsEach: each })
+          ? openInvoicePdf(session, paper.id, { nightsEach: each, roomTypes })
           : paper.kind === "voucher"
-            ? openConfirmationVoucherPdf(session, paper.reservationId, { nightsEach: each })
+            ? openConfirmationVoucherPdf(session, paper.reservationId, { nightsEach: each, roomTypes })
             : paper.kind === "cancellation"
               ? openCancellationConfirmationPdf(session, paper.entryId)
               : openFolioDocumentPdf(session, paper.entryId, paper.doc, { nightsEach: each });
@@ -2653,10 +2761,10 @@ export function PaperDrawer({ paper, onClose }: { paper: PaperRef | null; onClos
               {paper.label}
             </h4>
             <div className="row-acts">
-              <Button kind="quiet" compact icon="file" onClick={pdf}>
+              <Button kind="quiet" compact icon="file" state={outShut ? "inert" : "default"} title={outShut ?? undefined} onClick={pdf}>
                 PDF
               </Button>
-              <Button kind="quiet" compact icon="print" onClick={pdf}>
+              <Button kind="quiet" compact icon="print" state={outShut ? "inert" : "default"} title={outShut ?? undefined} onClick={pdf}>
                 Print
               </Button>
               <Button kind="secondary" compact icon="x" onClick={onClose}>
@@ -2666,13 +2774,14 @@ export function PaperDrawer({ paper, onClose }: { paper: PaperRef | null; onClos
           </div>
           {/* The paper's faces, as choice buttons the eye finds (2026-10-30, operator: "even in
               preview it should have that option, and make those buttons prominent"). */}
-          {paper.kind === "quotation" || (paper.kind === "trip" && (paper.tripKind ?? "QUOTATION") === "QUOTATION") || hasNights ? (
+          {paper.kind === "quotation" || (paper.kind === "trip" && (paper.tripKind ?? "QUOTATION") === "QUOTATION") || hasNights || rt?.hiddenByDefault ? (
             <div className="paper-faces">
               {paper.kind === "quotation" || (paper.kind === "trip" && (paper.tripKind ?? "QUOTATION") === "QUOTATION") ? <PricesChoice hidden={noPrices} onChange={setNoPrices} /> : null}
               {hasNights ? <NightsChoice each={nightsEach} onChange={setNightsEach} of={nightsOf} /> : null}
+              <RoomTypesChoice info={rt} shown={typesShown} onChange={setTypesShown} />
             </div>
           ) : null}
-          <PaperBody paper={paper} mode="preview" noPrices={noPrices} nightsEach={hasNights && nightsEach} />
+          <PaperBody paper={paper} mode="preview" noPrices={noPrices} nightsEach={hasNights && nightsEach} roomTypes={roomTypes} />
         </div>
       </div>
     </Overlay>
@@ -2990,6 +3099,8 @@ export function QuotationSendDialog({
   // preview, to read and to print.
   // The copy sent names every night instead of a run as its first and last (2026-10-30).
   const [nightsEach, setNightsEach] = useState(false);
+  // An agency's or a company's copy names no room type (2026-11-13).
+  const rt = useSendRoomTypes(target ? { quotationId: target.id } : null);
   /**
    * The internal note goes with the send (2026-10-12, operator: "keep the internal note in the pop
    * up so that there is only one send button"). It is kept as a note on the booking, filed against
@@ -3013,9 +3124,10 @@ export function QuotationSendDialog({
         recipientAddress: typed,
         sentTo: typed,
         nightsEach,
+        ...rt.body,
       }),
     onSuccess: async () => {
-      const face = nightsEach ? " · every night named" : "";
+      const face = `${nightsEach ? " · every night named" : ""}${rt.words}`;
       const text = note.trim();
       if (text && target) {
         try {
@@ -3064,7 +3176,7 @@ export function QuotationSendDialog({
       open
       onClose={onClose}
       busy={send.isPending}
-      beside={<SendPaperPanel paper={{ kind: "quotation", id: target.id, label: `Quotation ${quoteNo(target)}` }} nightsEach={nightsEach} />}
+      beside={<SendPaperPanel paper={{ kind: "quotation", id: target.id, label: `Quotation ${quoteNo(target)}` }} nightsEach={nightsEach} roomTypes={rt.face} />}
       title={`Send quotation ${quoteNo(target)}`}
       caseLines={[
         `Version ${target.versionNumber}`,
@@ -3133,6 +3245,7 @@ export function QuotationSendDialog({
       </div>
       <div className="paper-faces in-dialog">
         <NightsChoice each={nightsEach} onChange={setNightsEach} of={{ quotationId: target.id }} />
+        <RoomTypesChoice info={rt.info} shown={rt.shown} onChange={rt.setShown} forSend />
       </div>
       <div className="field">
         <label>
@@ -3175,10 +3288,12 @@ export function InvoiceSendDialog({
   const typed = to.trim();
   const emailish = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(typed);
   const isProforma = target?.invoiceType === "PROFORMA";
+  // A proforma to an agency or a company names no room type (2026-11-13).
+  const rt = useSendRoomTypes(target && isProforma ? { invoiceId: target.id } : null);
   const send = useMutation({
-    mutationFn: () => dispatchInvoice(session!, target!.id, { dispatchedTo: typed || undefined, nightsEach: isProforma && nightsEach }),
+    mutationFn: () => dispatchInvoice(session!, target!.id, { dispatchedTo: typed || undefined, nightsEach: isProforma && nightsEach, ...rt.body }),
     onSuccess: () => {
-      toast.success(typed ? `${target ? billNo(target) : "The bill"} sent to ${typed}` : `${target ? billNo(target) : "The bill"} recorded as sent — nothing was emailed; hand it over`);
+      toast.success(typed ? `${target ? billNo(target) : "The bill"} sent to ${typed}${rt.words}` : `${target ? billNo(target) : "The bill"} recorded as sent — nothing was emailed; hand it over`);
       onSent();
     },
     onError: (e) => toastRefusal(e, "The bill could not be sent"),
@@ -3199,6 +3314,7 @@ export function InvoiceSendDialog({
             invoiceType: target.invoiceType,
           }}
           nightsEach={isProforma && nightsEach}
+          roomTypes={rt.face}
         />
       }
       title={`Send ${INVOICE_WORD[target.invoiceType] ?? "invoice"} ${billNo(target)}`}
@@ -3233,6 +3349,7 @@ export function InvoiceSendDialog({
       {isProforma ? (
         <div className="paper-faces in-dialog">
           <NightsChoice each={nightsEach} onChange={setNightsEach} of={{ invoiceId: target.id }} />
+          <RoomTypesChoice info={rt.info} shown={rt.shown} onChange={rt.setShown} forSend />
         </div>
       ) : null}
     </DsDialog>

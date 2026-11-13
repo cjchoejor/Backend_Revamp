@@ -43,7 +43,7 @@ import { useStaysTogether } from "./s2-together";
 import { TripVoucherCard, useTripVoucher } from "./s4-trip-voucher";
 import { useTripQuotation } from "./s2-trip-quotation";
 import { useTripProforma } from "./s3-trip-proforma";
-import { DsDialog, FactBox, FactLine, Facts, Fact, Live, OnRecord, PaperDrawer, SendPaperPanel, StepCanvas, StepCard, Tool, AnswerLine, useReplyAsked, atLeast, currentPassStart, goToStepCard, latestDispatched, toastRefusal, useCommunications, useFinishWhenDone, useRefreshEntry, useStepMode, useStepPane, words, type FactState, type PaperRef, NightsChoice, NotSentChip } from "./kit";
+import { DsDialog, FactBox, FactLine, Facts, Fact, Live, OnRecord, PaperDrawer, SendPaperPanel, StepCanvas, StepCard, Tool, AnswerLine, useReplyAsked, atLeast, currentPassStart, goToStepCard, latestDispatched, toastRefusal, useCommunications, useFinishWhenDone, useRefreshEntry, useStepMode, useStepPane, words, type FactState, type PaperRef, NightsChoice, NotSentChip, RoomTypesChoice, useSendRoomTypes } from "./kit";
 import { BookingOtherWays } from "./s4-other-ways";
 import { roomsHeldWord } from "./s2-shared";
 import { Help } from "@/components/ds/help";
@@ -1331,6 +1331,8 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
   const [sendOpen, setSendOpen] = useState(false);
   // Every night named on the copy sent (2026-10-30).
   const [nightsEach, setNightsEach] = useState(false);
+  // A voucher to an agency or a company names no room type (2026-11-13).
+  const rt = useSendRoomTypes({ reservationId: res.id });
   // Whom the voucher goes to (2026-11-07): the contact person at the agency or company, else the
   // party; on a direct booking the guest — the server's own rule (lib/send-to.ts).
   const recipient = useInvoiceRecipient(entry);
@@ -1401,9 +1403,9 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
   }, [loading, past, afterReserve, decideFirst, answerDue, otherDue]);
 
   const send = useMutation({
-    mutationFn: () => resendConfirmationVoucher(session!, res.id, { dispatchedTo: sendTo.trim() || undefined, nightsEach }),
+    mutationFn: () => resendConfirmationVoucher(session!, res.id, { dispatchedTo: sendTo.trim() || undefined, nightsEach, ...rt.body }),
     onSuccess: (out) => {
-      toast.success(`Voucher sent to ${out.dispatchedTo}${replyAsked ? " — a fresh reply window is open" : ""}`);
+      toast.success(`Voucher sent to ${out.dispatchedTo}${rt.words}${replyAsked ? " — a fresh reply window is open" : ""}`);
       setSendOpen(false);
       refresh();
     },
@@ -1572,7 +1574,7 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
         open={sendOpen}
         onClose={() => setSendOpen(false)}
         busy={send.isPending}
-        beside={<SendPaperPanel paper={{ kind: "voucher", reservationId: res.id, label: `Confirmation voucher · ${res.confirmationVoucherNumber ?? res.id}` }} nightsEach={nightsEach} />}
+        beside={<SendPaperPanel paper={{ kind: "voucher", reservationId: res.id, label: `Confirmation voucher · ${res.confirmationVoucherNumber ?? res.id}` }} nightsEach={nightsEach} roomTypes={rt.face} />}
         title="Send the confirmation voucher"
         caseLines={[res.id]}
         help={`The same email and PDF Reserve sent, recorded as a new send${replyAsked ? " with a fresh reply window" : ""}.`} 
@@ -1600,6 +1602,7 @@ function VoucherCard({ entry }: { entry: EntryDetail }) {
         </div>
         <div className="paper-faces in-dialog">
           <NightsChoice each={nightsEach} onChange={setNightsEach} of={{ reservationId: res.id }} />
+          <RoomTypesChoice info={rt.info} shown={rt.shown} onChange={rt.setShown} forSend />
         </div>
       </DsDialog>
     </StepCard>
