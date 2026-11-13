@@ -520,55 +520,26 @@ function OtherStayRow({
   stayNo,
   editable,
   catalog,
-  onDirty,
+  onForm,
 }: {
   entry: EntryDetail;
   stayNo: number;
   editable: boolean;
   catalog: Catalog;
-  onDirty: (entryId: string, dirty: boolean) => void;
+  /** Its form, handed to The stay, whose one Done saves every stay changed (2026-11-13). */
+  onForm: (entryId: string, form: StayForm | null) => void;
 }) {
   const form = useStayForm(entry, catalog);
-  const refresh = useRefreshEntry(entry.id);
   useEffect(() => {
-    onDirty(entry.id, editable && form.dirty);
-    return () => onDirty(entry.id, false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [entry.id, editable, form.dirty]);
-  const save = useMutation({
-    mutationFn: form.writeStay,
-    onSuccess: () => {
-      toast.success(`Stay ${stayNo} is updated — the house is asked again for its dates`);
-      refresh();
-      form.announceSaved();
-    },
-    onError: (e) => toastRefusal(e, `Stay ${stayNo} could not be updated`),
+    onForm(entry.id, form);
   });
+  useEffect(() => () => onForm(entry.id, null), [entry.id, onForm]);
   return (
     <div className="trip-stay-row" data-stay={entry.id}>
       <div className="trip-stay-head">
         <b>Stay {stayNo}</b>
         <span className="meta">{entry.id}</span>
-        {editable && form.dirty ? (
-          <>
-            <span className="warn-ink" style={{ marginLeft: "auto" }}>
-              Changed — save it
-            </span>
-            <Button kind="quiet" compact state={save.isPending ? "inert" : "default"} onClick={form.reset}>
-              Undo
-            </Button>
-            <Button
-              className="go"
-              compact
-              state={save.isPending ? "working" : form.invalid ? "inert" : "default"}
-              title={form.invalid ?? undefined}
-              workingLabel="Saving…"
-              onClick={() => save.mutate()}
-            >
-              Save stay {stayNo}
-            </Button>
-          </>
-        ) : null}
+        {editable && form.dirty ? <span className="warn-ink trip-stay-changed">changed</span> : null}
       </div>
       <StayFields form={form} ro={!editable} />
     </div>
@@ -585,17 +556,27 @@ function TheStay({
   catalog: Catalog;
 }) {
   const refresh = useRefreshEntry(entry.id);
+  const qc = useQueryClient();
   const form = useStayForm(entry, catalog);
   const { checkOut, saved, savedBedMap, dirty, writeStay, invalid } = form;
   // A trip at Inquiry: each other stay as its own row here (2026-11-07, operator ruling).
   const trip = useTripAtInquiry(entry);
+  /**
+   * One Done for every stay (2026-11-13, operator: "there is a button showing save stay 2, for both
+   * stay 1 and 2, it should be done with the done button"): each other stay's row hands its form up,
+   * and Done saves every stay changed, then asks the house again for each.
+   */
+  const otherForms = useRef<Record<string, StayForm>>({});
   const [otherDirty, setOtherDirty] = useState<Record<string, boolean>>({});
-  const onOtherDirty = useCallback(
-    (id: string, d: boolean) => setOtherDirty((p) => (p[id] === d ? p : { ...p, [id]: d })),
-    [],
-  );
+  const onOtherForm = useCallback((id: string, f: StayForm | null) => {
+    if (f) otherForms.current[id] = f;
+    else delete otherForms.current[id];
+    const d = !!f?.dirty;
+    setOtherDirty((p) => (p[id] === d ? p : { ...p, [id]: d }));
+  }, []);
   const anyOtherDirty = Object.values(otherDirty).some(Boolean);
   useFlowUnsaved("stay", editable && (dirty || anyOtherDirty), dirty ? "Changes to the stay saved" : "Changes to the other stay saved");
+  const otherInvalid = Object.entries(otherForms.current).find(([id, f]) => otherDirty[id] && f.invalid);
 
   // The house is asked again by itself (2026-10-27, operator: "when I make edits to the stay
   // and click Done, can it ask the house directly, so we can remove the Ask again button").
@@ -613,10 +594,36 @@ function TheStay({
     onError: (e) => toastRefusal(e, "The stay could not be saved"),
   });
   const save = useMutation({
-    mutationFn: writeStay,
-    onSuccess: () => {
-      toast.success("The stay is updated — the house is asked again for these dates");
-      stayWasSaved();
+    mutationFn: async () => {
+      const saved: string[] = [];
+      if (dirty) {
+        await writeStay();
+        saved.push("this");
+      }
+      for (const [id, f] of Object.entries(otherForms.current)) {
+        if (!f.dirty) continue;
+        try {
+          await f.writeStay();
+        } catch (e) {
+          throw new Error(`Stay ${trip.stayNoOf(id)}: ${e instanceof Error ? e.message : String(e)}`);
+        }
+        saved.push(id);
+      }
+      return saved;
+    },
+    onSuccess: (saved) => {
+      toast.success(
+        saved.length > 1
+          ? `${plural(saved.length, "stay")} updated — the house is asked again for their dates`
+          : "The stay is updated — the house is asked again for these dates",
+      );
+      for (const id of saved) {
+        if (id === "this") continue;
+        otherForms.current[id]?.announceSaved();
+        void qc.invalidateQueries({ queryKey: ["entry", id] });
+      }
+      if (saved.includes("this")) stayWasSaved();
+      else refresh();
       // Done saved it; the work moves on to the house, which is being asked again for the stay as
       // it is now (2026-10-27, operator: "it took me to Wrap up, when it should ask the house again
       // and take me to the house section").
@@ -657,22 +664,37 @@ function TheStay({
       // One Done (2026-10-27, operator: "remove Save the stay and merge it with Done, and bring
       // Undo beside Done"): with a change on the stay, Done saves it and moves on; Undo puts the
       // fields back. Without a change, the card's own Done simply folds it.
+      // Shut while nothing changed (2026-11-13, operator: "if there are no changes done button should be
+      // disabled"); Hide closes the section then.
       doneAction={
-        editable && dirty
-          ? {
-              label: "Done",
-              state: save.isPending ? "working" : invalid ? "inert" : "default",
-              title: invalid ?? undefined,
-              workingLabel: "Saving…",
-              note: <span className="warn-ink">Changed — Done saves it</span>,
-              extra: (
-                <Button kind="quiet" state={save.isPending ? "inert" : "default"} onClick={form.reset}>
-                  Undo
-                </Button>
-              ),
-              onClick: () => save.mutate(),
-            }
-          : undefined
+        !editable
+          ? undefined
+          : dirty || anyOtherDirty
+            ? {
+                label: "Done",
+                state: save.isPending
+                  ? "working"
+                  : (dirty && invalid) || otherInvalid
+                    ? "inert"
+                    : "default",
+                title: dirty && invalid ? invalid : otherInvalid ? `stay ${trip.stayNoOf(otherInvalid[0])}: ${otherInvalid[1].invalid}` : undefined,
+                workingLabel: "Saving…",
+                note: <span className="warn-ink">Changed — Done saves {trip.others.length && anyOtherDirty && dirty ? "every stay changed" : anyOtherDirty && !dirty ? `stay ${trip.others.filter((o) => otherDirty[o.id]).map((o) => trip.stayNoOf(o.id)).join(" and ")}` : "it"}</span>,
+                extra: (
+                  <Button
+                    kind="quiet"
+                    state={save.isPending ? "inert" : "default"}
+                    onClick={() => {
+                      form.reset();
+                      for (const f of Object.values(otherForms.current)) f.reset();
+                    }}
+                  >
+                    Undo
+                  </Button>
+                ),
+                onClick: () => save.mutate(),
+              }
+            : { label: "Done", state: "inert", idle: true, title: "Nothing has changed", onClick: () => {} }
       }
       summary={
         <>
@@ -712,7 +734,7 @@ function TheStay({
           stayNo={trip.stayNoOf(o.id)}
           editable={editable}
           catalog={catalog}
-          onDirty={onOtherDirty}
+          onForm={onOtherForm}
         />
       ))}
       {(entry.inquiry?.entries ?? []).length > 1 ? (
@@ -1295,6 +1317,22 @@ function TheHouse({
   // (2026-10-28, operator: "a pop up which blurs the screen on the left and not the right side, show
   // the page there") — a room picked by hand opens its bill in the file beside it.
   const [toolOpen, setToolOpen] = useState(false);
+  /** The house on the whole screen: Escape or Close full screen leaves it; the page behind holds still. */
+  const [houseFull, setHouseFull] = useState(false);
+  useEffect(() => {
+    if (!houseFull) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setHouseFull(false);
+    };
+    const html = document.documentElement;
+    const was = html.style.overflow;
+    html.style.overflow = "hidden";
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      html.style.overflow = was;
+    };
+  }, [houseFull]);
   const openTool = () => setToolOpen(true);
   // The by-type grid is off the page while rooms are picked by number; what it held unsaved is
   // kept here and given back when it returns.
@@ -1426,7 +1464,28 @@ function TheHouse({
         {!hasResults ? (
           entry.checkInDate ? null : <span className="meta">Put in the dates and the rooms first.</span>
         ) : (
-          <>
+          <div className={`house-fullwrap${houseFull ? " on" : ""}`} role={houseFull ? "dialog" : undefined} aria-label={houseFull ? "The house, full screen" : undefined}>
+            {/* The house on the whole screen (2026-11-13, operator: "i think we need a full screen option for
+                that section as well"). The same grid, lifted: nothing is drawn again, nothing typed is lost. */}
+            {houseFull ? (
+              <div className="house-fullbar">
+                <b>The house</b>
+                {entry.checkInDate ? <StayDates checkIn={entry.checkInDate} checkOut={entry.checkOutDate} /> : null}
+                {trip.combined ? <span className="meta">· {plural(trip.others.length + 1, "stay")}</span> : null}
+                <span className="meta" style={{ marginLeft: "auto" }}>
+                  Esc to leave
+                </span>
+                <Button kind="secondary" compact onClick={() => setHouseFull(false)}>
+                  Close full screen
+                </Button>
+              </div>
+            ) : (
+              <div className="house-fulltools">
+                <Button kind="quiet" compact onClick={() => setHouseFull(true)}>
+                  Full screen
+                </Button>
+              </div>
+            )}
             {chartNote ? (
               <p className={`chart-from${chartNote.ok ? "" : " warn"}`} role="status">
                 {chartNote.text}
@@ -1694,7 +1753,7 @@ function TheHouse({
                 )}
               </div>
             ) : null}
-          </>
+          </div>
         )}
       </StepCard>
 

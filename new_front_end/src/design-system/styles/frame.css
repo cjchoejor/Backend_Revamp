@@ -2710,3 +2710,25 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .pkg-multi-row input { width: 16px; height: 16px; accent-color: var(--accent); }
 .ds .rref-pkg.trip { gap: 12px; flex-wrap: wrap; }
 .ds .rref-pkg-stay { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; color: var(--ink-2); }
+/* The house with many nights (2026-11-13): the grid never widens the page, the Type column stays in sight, the Save row stays put. */
+.ds .bt-scroll:not(.desk-root *) { contain: inline-size; }
+.ds .bt-scroll .by-type-grid th.bt-typeh, .ds .bt-scroll .by-type-grid td.bt-type { position: sticky; left: 0; z-index: 2; background: var(--surface); box-shadow: 1px 0 0 var(--line-2); }
+.ds .bt-scroll .by-type-grid thead th.bt-typeh { background: var(--surface-2, var(--surface)); z-index: 3; }
+/* The table's own rounded-corner clip would hold the sticky Type cell to the table, not the scroll box. */
+.ds .bt-scroll .table.by-type-grid:not(.desk-root *) { overflow: visible; }
+.ds .by-type-grid th.every .bt-tally { display: block; width: max-content; margin: 2px auto 0; }
+.ds .trip-house { min-width: 0; }
+.ds .trip-house-body { display: flex; align-items: flex-start; min-width: 0; }
+.ds .trip-house-types { flex: none; padding-right: 10px; border-right: 2px solid var(--line-2); }
+.ds .trip-house-body .trip-house-cols { flex: 1 1 auto; min-width: 0; contain: inline-size; }
+.ds .trip-house-col .bt-scroll { contain: none; }
+.ds .trip-house-body .trip-house-col.first { margin-left: 10px; }
+.ds .trip-house .by-type-grid thead tr { height: 58px; }
+.ds .trip-house .by-type-grid tbody tr { height: 42px; }
+.ds .trip-house .trip-types td.bt-type { padding-right: 6px; }
+/* The house on the whole screen. */
+.ds .house-fulltools { display: flex; justify-content: flex-end; margin: -4px 0 6px; }
+.ds .house-fullwrap.on { position: fixed; inset: 0; z-index: 85; background: var(--paper, #f2f3f0); overflow: auto; padding: 10px 16px 14px; }
+.ds .house-fullwrap.on .house-fullbar { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--line-2); }
+.ds .house-fullwrap.on .house-fullbar b { font-size: 16px; }
+.ds .house-fullwrap.on .house-fulltools { display: none; }

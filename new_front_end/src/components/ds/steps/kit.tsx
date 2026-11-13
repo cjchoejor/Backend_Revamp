@@ -857,6 +857,8 @@ export function StepCard({
    * flow). Shown whenever the section is open; inert, with its reason, until it can be pressed.
    */
   doneAction?: {
+    /** Shut because nothing changed: its words are quiet, and Hide closes the section. */
+    idle?: boolean;
     label: string;
     onClick: () => void;
     state?: "default" | "inert" | "working";
@@ -912,7 +914,9 @@ export function StepCard({
   // A finished, unfolded section offers Done: fold it and go on to the next one.
   const canDone = !!flow && !!summary && !!met && !waiting && !folded && !!ctx.fold && !noDoneBar && ctx.doneBar;
   // Opened with its Edit and no Done to fold it: Hide closes it again.
-  const canHide = isOpened && !!summary && !waiting && !canDone && (!!done || restsFolded);
+  // A Done shut because nothing changed leaves Hide to close the section (2026-11-13).
+  const doneIdle = !!doneAction?.idle;
+  const canHide = isOpened && !!summary && !waiting && (!canDone || doneIdle) && (!!done || restsFolded);
   const body = (
     <>
       {status ? <div className="meta" style={{ marginBottom: 8 }}>{status}</div> : null}
@@ -1007,7 +1011,7 @@ export function StepCard({
           {doneAction ? (
             <div className={`flow-closebar${doneAction.state === "inert" ? "" : " ready"}`}>
               {doneAction.state === "inert" && doneAction.title ? (
-                <span className="meta warn-ink" style={{ alignSelf: "center", marginRight: 10 }}>
+                <span className={`meta${doneAction.idle ? "" : " warn-ink"}`} style={{ alignSelf: "center", marginRight: 10 }}>
                   {doneAction.title}
                 </span>
               ) : doneAction.note ? (
