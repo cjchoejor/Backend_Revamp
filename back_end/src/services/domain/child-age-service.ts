@@ -133,6 +133,7 @@ function asServiceRow(r: Record<string, unknown>): RoomCompositionServiceInput {
     negotiatedBreakfastRate: num("negotiatedBreakfastRate"),
     negotiatedLunchRate: num("negotiatedLunchRate"),
     negotiatedDinnerRate: num("negotiatedDinnerRate"),
+    ...(typeof r.ratePackageId === "string" && r.ratePackageId ? { ratePackageId: r.ratePackageId } : {}),
     ...(typeof r.serviceChargeApplies === "boolean" ? { serviceChargeApplies: r.serviceChargeApplies } : {}),
     ...(typeof r.gstApplies === "boolean" ? { gstApplies: r.gstApplies } : {}),
     ...(typeof r.isFoc === "boolean" ? { isFoc: r.isFoc } : {}),

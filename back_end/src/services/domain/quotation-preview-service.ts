@@ -54,6 +54,8 @@ export type PreviewRoomComposition = {
   negotiatedBreakfastRate?: number;
   negotiatedLunchRate?: number;
   negotiatedDinnerRate?: number;
+  /** This room's own package, when not its room type's (2026-11-13). */
+  ratePackageId?: string | null;
   serviceChargeApplies?: boolean;
   gstApplies?: boolean;
   isFoc?: boolean;
@@ -412,7 +414,19 @@ export async function buildQuotationPreview(
 
   const priced = input.roomCompositions.map((c) => {
     const room = roomById.get(c.roomId);
-    const ref = (room?.roomTypeId ? refByType.get(room.roomTypeId) : undefined) ?? fallbackRef;
+    const typeRef = (room?.roomTypeId ? refByType.get(room.roomTypeId) : undefined) ?? fallbackRef;
+    // A room on a package of its own (2026-11-13) takes that package's rates for its type, as the
+    // draft does; a package the booking did not choose is refused as the draft refuses it.
+    let ref: Omit<NonNullable<typeof typeRef>, "packageRates"> | undefined = typeRef;
+    if (c.ratePackageId) {
+      if (!reference.packages.some((p) => p.id === c.ratePackageId)) {
+        throw new ValidationError(
+          `Room ${room?.roomNumber ?? ""} is put on a package this booking does not have — choose that package with the caller first, or take the room back to its type's package.`,
+        );
+      }
+      const own = typeRef?.packageRates?.find((p) => p.ratePackageId === c.ratePackageId);
+      if (own && typeRef) ref = { ...typeRef, ...own };
+    }
     const compositionInput: RoomCompositionInput = {
       nightMealOverrides: (c.nightMealOverrides ?? []).map((o) => ({ ...o, date: new Date(o.date) })),
       nightDates: perRoomNightDates.get(c.roomId) ?? null,

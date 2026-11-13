@@ -150,6 +150,8 @@ export type RoomCompositionServiceInput = {
   negotiatedBreakfastRate?: number;
   negotiatedLunchRate?: number;
   negotiatedDinnerRate?: number;
+  /** This room's own package, when not its room type's (2026-11-13). */
+  ratePackageId?: string | null;
   serviceChargeApplies?: boolean;
   gstApplies?: boolean;
   isFoc?: boolean;
@@ -395,6 +397,8 @@ async function prepareQuotationDraft(
    * type's package changed since it was quoted, and the record says what each room was priced on.
    */
   const ratePackagesByType: Record<string, { ratePackageId: string; packageName: string }> = {};
+  /** And each room priced on a package of its own, by room (2026-11-13). */
+  let ratePackagesByRoom: Record<string, { ratePackageId: string; packageName: string }> | null = null;
   if (agentRate && roomTypeId) ratePackagesByType[roomTypeId] = { ratePackageId: agentRate.ratePackageId, packageName: agentRate.packageName };
   // effectiveRate stays the ROOM rate — MSR, discount and S4 freeze semantics depend on it.
   const effectiveRate = agentRate ? agentRate.roomRate : pricing.effectiveRate;
@@ -711,10 +715,73 @@ async function prepareQuotationDraft(
         ratesByType.set(tid, bookingTypeRates);
       }
     }
+    /**
+     * A room on a package of its own (2026-11-13, operator: two rooms of one type on different
+     * packages): priced on that package's rates for its type — room, extra bed, meals and meal
+     * plans — exactly as a type put on that package is. The package must be one the booking chose.
+     */
+    const ratesByRoomPackage = new Map<string, TypeRates>();
+    const roomPackagesUsed: Record<string, { ratePackageId: string; packageName: string }> = {};
+    const roomOwnPackages = input.roomCompositions.filter((c) => c.ratePackageId);
+    if (roomOwnPackages.length) {
+      const inq = entry.inquiryId
+        ? await prisma.inquiry.findUnique({ where: { id: entry.inquiryId }, select: { ratePackageId: true, ratePackageIds: true } })
+        : null;
+      const chosen = inq?.ratePackageIds?.length ? inq.ratePackageIds : inq?.ratePackageId ? [inq.ratePackageId] : [];
+      const baseMap =
+        entry.ratePackageByRoomType && typeof entry.ratePackageByRoomType === "object" && !Array.isArray(entry.ratePackageByRoomType)
+          ? (entry.ratePackageByRoomType as Record<string, unknown>)
+          : {};
+      for (const c of roomOwnPackages) {
+        const pkgId = String(c.ratePackageId);
+        const no = numberByRoomId.get(c.roomId) ?? "this room";
+        if (!chosen.includes(pkgId)) {
+          throw new ValidationError(
+            `Room ${no} is put on a package this booking does not have — choose that package with the caller first, or take the room back to its type's package.`,
+          );
+        }
+        const tid = roomRows.find((r) => r.id === c.roomId)?.roomTypeId;
+        if (!tid || !entry.inquiryId) continue;
+        const key = `${tid}|${pkgId}`;
+        if (!ratesByRoomPackage.has(key)) {
+          const own = await resolveAgentRateForEntryQuotation(prisma, {
+            inquiryId: entry.inquiryId,
+            roomTypeId: tid,
+            mealPlan,
+            ratePackageByRoomType: { ...baseMap, [tid]: pkgId },
+          });
+          if (!own || own.ratePackageId !== pkgId) {
+            throw new ValidationError(`Room ${no}'s package could not be read — choose it again, or take the room back to its type's package.`);
+          }
+          const r = toDecimal(own.roomRate);
+          ratesByRoomPackage.set(key, {
+            room: r,
+            roomPreDiscount: r,
+            extraBed: toDecimal(own.addOns?.extraBed ?? 0),
+            breakfast: toDecimal(own.addOns?.breakfast ?? 0),
+            lunch: toDecimal(own.addOns?.lunch ?? 0),
+            dinner: toDecimal(own.addOns?.dinner ?? 0),
+            cp: planOf(own.mealPlanRates?.cp),
+            mapLunch: planOf(own.mealPlanRates?.mapLunch),
+            mapDinner: planOf(own.mealPlanRates?.mapDinner),
+            ap: planOf(own.mealPlanRates?.ap),
+          });
+        }
+        const name = (await prisma.ratePackage.findUnique({ where: { id: pkgId }, select: { name: true } }))?.name ?? pkgId;
+        roomPackagesUsed[c.roomId] = { ratePackageId: pkgId, packageName: name };
+      }
+    }
+    const roomPackageOf = new Map(input.roomCompositions.map((c) => [c.roomId, c.ratePackageId ?? null]));
     const ratesForRoom = (roomId: string): TypeRates => {
       const tid = roomRows.find((r) => r.id === roomId)?.roomTypeId;
+      const own = roomPackageOf.get(roomId);
+      if (tid && own) {
+        const r = ratesByRoomPackage.get(`${tid}|${own}`);
+        if (r) return r;
+      }
       return (tid ? ratesByType.get(tid) : undefined) ?? bookingTypeRates;
     };
+    if (Object.keys(roomPackagesUsed).length) ratePackagesByRoom = roomPackagesUsed;
 
     /**
      * Nights PER ROOM (fixed 2026-08-12).
@@ -1040,6 +1107,7 @@ async function prepareQuotationDraft(
       : {}),
     // Which package priced each room type (2026-11-13), when a party's packages priced the rooms.
     ...(Object.keys(ratePackagesByType).length ? { ratePackagesByType } : {}),
+    ...(ratePackagesByRoom ? { ratePackagesByRoom } : {}),
     // Phase C — agent / corporate negotiated rate, when applicable.
     ...(agentRate
       ? {

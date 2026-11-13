@@ -66,6 +66,12 @@ export const roomCompositionInputSchema = z.object({
   negotiatedBreakfastRate: z.coerce.number().min(0).optional(),
   negotiatedLunchRate: z.coerce.number().min(0).optional(),
   negotiatedDinnerRate: z.coerce.number().min(0).optional(),
+  /**
+   * The package this one room is priced on, when it is not its room type's (2026-11-13, operator:
+   * two rooms of one type on different packages). Empty means "as its room type". It must be one of
+   * the booking's chosen packages.
+   */
+  ratePackageId: z.string().min(1).nullable().optional(),
   // room-level toggles
   serviceChargeApplies: z.boolean().optional(),
   gstApplies: z.boolean().optional(),

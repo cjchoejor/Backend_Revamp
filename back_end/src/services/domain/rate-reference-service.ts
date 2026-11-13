@@ -54,6 +54,25 @@ export type RoomTypeRateReference = {
   addOnSource?: "RATE_PACKAGE" | "HOUSE_TARIFF" | null;
   lunchRate: number | null;
   dinnerRate: number | null;
+  /**
+   * This type's rates on each package the booking chose, when it chose more than one (2026-11-13):
+   * a room put on a package of its own is priced from these.
+   */
+  packageRates?: PackageRatesForType[];
+};
+
+export type PackageRatesForType = {
+  ratePackageId: string;
+  packageName: string;
+  roomRate: number;
+  extraBedRate: number | null;
+  breakfastRate: number | null;
+  lunchRate: number | null;
+  dinnerRate: number | null;
+  cpRate: number | null;
+  mapLunchRate: number | null;
+  mapDinnerRate: number | null;
+  apRate: number | null;
 };
 
 export type EntryRateReference = {
@@ -159,6 +178,15 @@ export async function buildEntryRateReference(
 
   let currency = "BTN";
   const roomTypes: RoomTypeRateReference[] = [];
+  const chosenPackageIds = entry.inquiry?.ratePackageIds?.length
+    ? entry.inquiry.ratePackageIds
+    : entry.inquiry?.ratePackageId
+      ? [entry.inquiry.ratePackageId]
+      : [];
+  const baseTypeMap =
+    entry.ratePackageByRoomType && typeof entry.ratePackageByRoomType === "object" && !Array.isArray(entry.ratePackageByRoomType)
+      ? (entry.ratePackageByRoomType as Record<string, unknown>)
+      : {};
   for (const [roomTypeId, g] of byType) {
     // Standard plan resolution — same call the S2 draft makes. A hotel with no eligible rate
     // plans throws MissingConfigurationError; here that's a display gap, not a hard failure.
@@ -189,6 +217,35 @@ export async function buildEntryRateReference(
     if (agentRate?.currency) currency = agentRate.currency;
     else if (standardCurrency) currency = standardCurrency;
 
+    // Every chosen package's rates for this type, when there are several to choose between.
+    const packageRates: PackageRatesForType[] = [];
+    if (party && chosenPackageIds.length > 1) {
+      for (const pkgId of chosenPackageIds) {
+        const p = await resolveRatePackageForBooking(prisma, {
+          ratePackageId: entry.inquiry?.ratePackageId ?? null,
+          ratePackageIds: chosenPackageIds,
+          ratePackageByRoomType: { ...baseTypeMap, [roomTypeId]: pkgId },
+          travelAgentId: party.type === "TRAVEL_AGENT" ? party.id : null,
+          corporateAccountId: party.type === "CORPORATE" ? party.id : null,
+          roomTypeId,
+        });
+        if (!p || p.ratePackageId !== pkgId) continue;
+        packageRates.push({
+          ratePackageId: p.ratePackageId,
+          packageName: p.packageName,
+          roomRate: p.roomRate,
+          extraBedRate: p.addOns.extraBed ?? null,
+          breakfastRate: p.addOns.breakfast ?? null,
+          lunchRate: p.addOns.lunch ?? null,
+          dinnerRate: p.addOns.dinner ?? null,
+          cpRate: p.mealPlanRates?.cp ?? null,
+          mapLunchRate: p.mealPlanRates?.mapLunch ?? null,
+          mapDinnerRate: p.mealPlanRates?.mapDinner ?? null,
+          apRate: p.mealPlanRates?.ap ?? null,
+        });
+      }
+    }
+
     roomTypes.push({
       roomTypeId,
       code: g.code,
@@ -214,6 +271,7 @@ export async function buildEntryRateReference(
       mapDinnerRate: agentRate?.mealPlanRates?.mapDinner ?? num(houseTariff?.mapDinnerRate) ?? null,
       apRate: agentRate?.mealPlanRates?.ap ?? num(houseTariff?.apRate) ?? null,
       addOnSource: agentRate ? "RATE_PACKAGE" : houseTariff ? "HOUSE_TARIFF" : null,
+      ...(packageRates.length ? { packageRates } : {}),
     });
   }
 
