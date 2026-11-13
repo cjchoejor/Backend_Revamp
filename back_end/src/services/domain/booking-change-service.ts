@@ -15,6 +15,7 @@ import { progressS2ToS3 } from "../../state-machines/s2-s3-state-machine.js";
 import { runPreArrivalWindowActivationWorker } from "../../workers/w4-pre-arrival-window-activation-worker.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import { validateCapacity } from "./capacity-validation-service.js";
+import { normalizeAndValidateBedTypeRequest } from "./s1-entry-service.js";
 import { queryAvailability, selectOption } from "./s1-availability-service.js";
 import { amendNegotiationConfiguration, checkNewDates } from "./negotiation-amendment-service.js";
 import { createQuotation, type RoomCompositionServiceInput } from "./s2-quotation-service.js";
@@ -55,7 +56,17 @@ type Actor = { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" };
 
 export type BookingChangeInput = {
   dates: { checkInDate: string; checkOutDate: string };
-  party: { adultCount: number; childCount: number; childAges: number[]; numberOfRooms: number };
+  party: {
+    adultCount: number;
+    childCount: number;
+    childAges: number[];
+    numberOfRooms: number;
+    /**
+     * The beds asked for (2026-11-13, operator: three rooms asked as 3 King, lowered to two rooms,
+     * and the change could not be saved). Absent = the one on record; null clears it.
+     */
+    bedTypeRequest?: Record<string, number> | null;
+  };
   /**
    * The house's answer the rooms were picked from, for exactly the new dates, and the picks. Picked
    * by type (2026-10-29): `byType` the counts, `perNight` the rooms the system chose for them as the
@@ -154,6 +165,12 @@ export async function changeBookingInPlace(
   const capacity = await validateCapacity(prisma, { adults: party.adultCount, childAges: party.childAges });
   const block = capacity.issues.find((i) => i.severity === "BLOCK");
   if (block) throw new ValidationError(block.message);
+  // The beds asked for, against the rooms asked for — checked HERE, before the booking goes back a
+  // step: at Negotiation the same check would refuse the change after the walk had already begun,
+  // and leave the booking there. The one on record is checked too when the desk did not send one.
+  const bedAsk =
+    party.bedTypeRequest !== undefined ? party.bedTypeRequest : ((entry.bedTypeRequest ?? null) as Record<string, number> | null);
+  await normalizeAndValidateBedTypeRequest(prisma, bedAsk, party.numberOfRooms);
 
   // The rooms: picked from the house's answer for exactly the new dates, every night holding the
   // rooms asked for — the same `selectOption` the save runs, with nothing written.
@@ -326,7 +343,13 @@ export async function changeBookingInPlace(
     const out = await amendNegotiationConfiguration(prisma, entryId, actor, {
       reason: `Changed at ${stage === Stage.S3 ? "Set up" : stage === Stage.S4 ? "Reserve" : "Arrival"}${reason ? `: ${reason}` : ""}`,
       ...(newStay ? { dates: { checkInDate: ymd(checkIn), checkOutDate: ymd(checkOut) } } : {}),
-      party: { adultCount: party.adultCount, childCount: party.childCount, childAges: party.childAges, numberOfRooms: party.numberOfRooms },
+      party: {
+        adultCount: party.adultCount,
+        childCount: party.childCount,
+        childAges: party.childAges,
+        numberOfRooms: party.numberOfRooms,
+        ...(party.bedTypeRequest !== undefined ? { bedTypeRequest: party.bedTypeRequest } : {}),
+      },
       rooms: { configurationId: search.configuration.id, perNight, ...(byTypePlan ? { bookingRooms: byTypePlan.bookingRooms } : {}) },
     });
     if (!out.applied) throw new ValidationError("The change could not be applied at Negotiation.");

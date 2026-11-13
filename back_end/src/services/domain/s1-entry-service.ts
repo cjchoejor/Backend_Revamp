@@ -53,7 +53,7 @@ function describeBedTypeRequest(req: Record<string, number>): string {
  *    check the desk's `POST /api/lookups/bed-request-check` runs. A request the hotel cannot
  *    set up is refused at intake rather than discovered at arrival.
  */
-async function normalizeAndValidateBedTypeRequest(
+export async function normalizeAndValidateBedTypeRequest(
   prisma: PrismaClient,
   raw: Record<string, number> | null | undefined,
   numberOfRooms: number | null | undefined,
