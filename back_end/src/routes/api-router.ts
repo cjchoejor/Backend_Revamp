@@ -1,4 +1,5 @@
 import { refundsRouter } from "./refunds/router.js";
+import { vouchersRouter } from "./vouchers/router.js";
 import { tripPapersRouter } from "./trip-papers/router.js";
 import { Router } from "express";
 import { parseActorHeaders } from "../middleware/auth.js";
@@ -90,6 +91,7 @@ apiRouter.use(disputesRouter);
 apiRouter.use(nightAuditRouter);
 apiRouter.use(foliosRouter);
 apiRouter.use(refundsRouter);
+apiRouter.use(vouchersRouter);
 apiRouter.use(amendmentsRouter);
 apiRouter.use(cancellationsRouter);
 apiRouter.use(noShowRouter);

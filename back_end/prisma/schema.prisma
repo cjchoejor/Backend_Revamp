@@ -2266,11 +2266,48 @@ model PaymentRecord {
   interimPaymentRequest InterimPaymentRequest? @relation(fields: [interimPaymentRequestId], references: [id])
   room                  Room?                  @relation(fields: [roomId], references: [id], onUpdate: Cascade)
   space                 Space?                 @relation(fields: [spaceId], references: [id], onUpdate: Cascade)
+  /// When this is an agency's voucher: the agency's money for it, once received (2026-11-24).
+  voucherCollection     VoucherCollection?
 
   @@index([roomId])
   @@index([spaceId])
   @@index([tripTransferRef])
   @@map("payment_records")
+}
+
+/// The agency's money for a voucher taken at check-out (2026-11-24, operator: "a flag which shows that
+/// the transaction has been recorded or not — the agent has done the payment with card, QR and all,
+/// and recorded the journal number"). A voucher is already counted as paid on the guest's bill, so this
+/// is NOT a payment on the bill and never moves its balance: it records that the agency paid the hotel
+/// what the voucher promised. One row per voucher; vouchers recorded together share `batchId` (an agency
+/// often pays several with one transfer). Taken back by the FOM with a reason, the row is deleted and
+/// the trace keeps it (as a deleted payment is, 2026-11-05).
+model VoucherCollection {
+  id              String   @id @default(uuid())
+  /// The VOUCHER payment taken at check-out.
+  paymentRecordId String   @unique
+  folioId         String
+  entryId         String?
+  /// The voucher's own amount (DB check: above zero).
+  amount          Decimal  @db.Decimal(15, 2)
+  /// The day the agency's money came in, on the hotel's calendar.
+  receivedOn      DateTime @db.Date
+  /// How the agency paid: CASH · CARD · MOBILE_PAYMENT · BANK_TRANSFER · INWARD_REMITTANCE.
+  paymentMethod   String
+  bankName        String?
+  journalNumber   String?
+  /// A cash receipt's number.
+  reference       String?
+  notes           String?
+  batchId         String
+  recordedBy      String
+  recordedAt      DateTime @default(now())
+
+  paymentRecord PaymentRecord @relation(fields: [paymentRecordId], references: [id], onUpdate: Cascade)
+
+  @@index([batchId])
+  @@index([folioId])
+  @@map("voucher_collections")
 }
 
 model CreditExtensionCeilingRecord {

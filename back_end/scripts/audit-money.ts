@@ -629,6 +629,20 @@ async function main() {
     }
   }
 
+  // A18 (2026-11-24): the agency's money recorded for a voucher is the voucher's own amount, on a
+  // voucher. It is never a payment on the guest's bill — the voucher already counted there.
+  const collections = await prisma.voucherCollection.findMany({
+    select: { id: true, amount: true, paymentRecord: { select: { id: true, amount: true, paymentMethod: true, paymentDirection: true } } },
+  });
+  for (const c of collections) {
+    const p = c.paymentRecord;
+    if (p.paymentMethod !== "VOUCHER" || p.paymentDirection !== "IN") {
+      add("CRITICAL", "A18_VOUCHER_MONEY", p.id, `voucher money recorded against a ${p.paymentDirection} ${p.paymentMethod ?? "?"} payment, not a voucher`);
+    } else if (!D(c.amount).eq(D(p.amount))) {
+      add("CRITICAL", "A18_VOUCHER_MONEY", p.id, `voucher ${money(D(p.amount))} but ${money(D(c.amount))} recorded as received for it`);
+    }
+  }
+
   const bySeverity: Record<Severity, Finding[]> = { CRITICAL: [], WARN: [], INFO: [] };
   for (const f of findings) bySeverity[f.severity].push(f);
   console.log(`\n════ MONEY AUDIT — ${new Date().toISOString().slice(0, 16)} ════`);

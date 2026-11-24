@@ -72,6 +72,7 @@ async function clean() {
   ]);
   console.log(`removing ${ids.length} test entries and their rows`);
   if (!COMMIT) return;
+  await prisma.voucherCollection.deleteMany({ where: { folioId: { in: folioIds } } });
   await prisma.earlyDepartureRecord.deleteMany({ where: { entryId: { in: ids } } });
   await prisma.timerRecord.deleteMany({ where: { entryId: { in: ids } } });
   await prisma.handoffRecord.deleteMany({ where: { entryId: { in: ids } } });
