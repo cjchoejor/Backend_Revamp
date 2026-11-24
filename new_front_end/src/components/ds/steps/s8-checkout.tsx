@@ -45,6 +45,7 @@ import { SplitSettlementBlock } from "@/components/desk/workspace/split-settleme
 import type { EntryDetail } from "@/types/api";
 import { sentWords } from "@/hooks/use-invoice-recipient";
 import { OverpaidCard } from "./refund-card";
+import { TaxInvoiceSendDialog, type TaxInvoiceTarget } from "./tax-invoice-send";
 import {
   AnswerLine,
   ChangeBookingMenu,
@@ -88,10 +89,6 @@ import {
   useBilling,
   useBookedBy,
   useFolioIndex,
-  SendToField,
-  useIssueAndSend,
-  useSendInvoice,
-  useSendTo,
 } from "./s8-parts";
 import {
   PayerShares,
@@ -825,7 +822,6 @@ function HowSettled({
     if (voucherTouched.current) return;
     if (balance != null && balance > 0) setVoucherCovers(String(balance));
   }, [balance]);
-  const [invoiceTo, setInvoiceTo] = useSendTo(entry);
   const [fomAck, setFomAck] = useState("");
   const [confirmOpen, setConfirmOpen] = useState(false);
   // The amount starts at the whole balance (the common case); typing a smaller figure makes the
@@ -883,7 +879,8 @@ function HowSettled({
     mutationFn: () => {
       if (!folio?.id || !folio.billingModel) throw new Error("The bill or its billing model is missing");
       const body: Parameters<typeof initiateSettlement>[2] = { settlementMethod: method, billingModelConfirmation: folio.billingModel };
-      if (ref.trim() && method !== "DIRECT_BILL" && !bank.needs(method)) body.paymentVerificationRef = ref.trim();
+      // A voucher takes no reference (2026-11-24: its number was kept nowhere anyone reads).
+      if (ref.trim() && method !== "DIRECT_BILL" && method !== "VOUCHER" && !bank.needs(method)) body.paymentVerificationRef = ref.trim();
       if (takesMoney) Object.assign(body, bank.body(method));
       if (method === "VOUCHER") {
         // The backend requires what the voucher covers; anything it leaves is invoiced to the agency.
@@ -894,7 +891,9 @@ function HowSettled({
         // the desk, and a bill paid in full takes none (2026-11-12).
         body.partialAmount = typed;
       }
-      if (invoicesParty && invoiceTo.trim()) body.invoiceDispatchedTo = invoiceTo.trim();
+      // The invoice this issues is read and sent from the tax invoice below, as every paper is
+      // (2026-11-24, operator): nothing is emailed by the settlement itself.
+      if (invoicesParty) body.holdInvoicesForDesk = true;
       if (fomAck.trim()) body.fomAcknowledgementRef = fomAck.trim();
       return initiateSettlement(session!, folio.id, body);
     },
@@ -906,9 +905,11 @@ function HowSettled({
           : partial
           ? "Settled in part — the rest stays owed and is collected after the stay; the rooms are released"
           : method === "DIRECT_BILL"
-            ? `Settled — the balance is invoiced to ${booked.payer}; the tax invoice is below`
+            ? `Settled — the balance is invoiced to ${booked.payer}. Read the invoice and send it from the tax invoice below`
             : method === "VOUCHER"
-              ? `Settled — the voucher is recorded; anything it leaves is invoiced to ${booked.payer}`
+              ? voucherValid && balance != null && voucherTyped >= balance
+                ? "Settled — the voucher covers the bill; the rooms go to housekeeping"
+                : `Settled — the voucher is recorded; what it leaves is invoiced to ${booked.payer}. Send the invoice from the tax invoice below`
               : "Settled — the bill is closed and the rooms go to housekeeping",
       );
       refresh([["settlement-targets"]]);
@@ -1122,9 +1123,7 @@ function HowSettled({
                   ))}
                 </select>
               </div>
-              {method === "DIRECT_BILL" ? (
-                <SendToField entry={entry} value={invoiceTo} onChange={setInvoiceTo} label="Send the invoice to" />
-              ) : bank.needs(method) ? null : (
+              {method === "DIRECT_BILL" || method === "VOUCHER" || bank.needs(method) ? null : (
                 <ReferenceField method={method} value={ref} onChange={setRef} takesMoney={takesMoney} />
               )}
               {method === "VOUCHER" ? (
@@ -1163,9 +1162,8 @@ function HowSettled({
               )}
             </div>
             {takesMoney ? <BankFields entry={bank} method={method} /> : null}
-            {method === "VOUCHER" || (overCeiling && fom) ? (
+            {overCeiling && fom ? (
             <div className="form2 settle-row" style={{ marginTop: 10 }}>
-              {method === "VOUCHER" ? <SendToField entry={entry} value={invoiceTo} onChange={setInvoiceTo} label="Send the invoice to" /> : null}
               {overCeiling && fom ? (
                 <div className="field">
                   <label>
@@ -1294,21 +1292,15 @@ function HowSettled({
             ) : method === "VOUCHER" ? (
               <>
                 The agency&rsquo;s voucher covers <b className="money">{money(voucherValid ? voucherTyped : null, cur)}</b> of the{" "}
-                <b className="money">{money(balance, cur)}</b> balance — anything it leaves is invoiced to {booked.payer}
-                {invoiceTo.trim() ? `, sent to ${invoiceTo.trim()}` : " and handed over (no email)"}.
+                <b className="money">{money(balance, cur)}</b> balance
+                {voucherValid && balance != null && voucherTyped >= balance
+                  ? " — nothing is left to invoice."
+                  : ` — what it leaves is invoiced to ${booked.payer}. Nothing is sent yet: you read the invoice and send it from the tax invoice below.`}
               </>
             ) : method === "DIRECT_BILL" ? (
               <>
-                The balance of <b className="money">{money(balance, cur)}</b> is invoiced to {booked.payer}
-                {invoiceTo.trim() ? (
-                  <>
-                    {" "}
-                    and the invoice is emailed to <b>{invoiceTo.trim()}</b>
-                  </>
-                ) : (
-                  " — no email address, so the invoice is handed over"
-                )}
-                .
+                The balance of <b className="money">{money(balance, cur)}</b> is invoiced to {booked.payer}. Nothing is sent yet: you read the
+                invoice and send it from the tax invoice below.
               </>
             ) : (
               <>
@@ -1331,9 +1323,9 @@ function Invoices({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz: 
   const billing = useBilling(entry);
   const index = useFolioIndex(entry);
   const booked = useBookedBy(entry);
-  const issueSend = useIssueAndSend(entry);
-  const send = useSendInvoice(entry);
-  const [sendTo, setSendTo] = useSendTo(entry);
+  // Read, then send — the box with the paper beside it, by email or WhatsApp (2026-11-24, operator).
+  // `null` target: the draft, issued on the press; an invoice: sent as it is.
+  const [sending, setSending] = useState<{ target: TaxInvoiceTarget | null } | null>(null);
   const [paper, setPaper] = useState<PaperRef | null>(null);
   if (!entry.folio) return null;
   const tax = index.data?.documents.find((d) => d.kind === "tax-invoice") ?? null;
@@ -1366,7 +1358,7 @@ function Invoices({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz: 
     <StepCard
       title={`Tax invoice · ${booked.payer}`}
       right={stateChip}
-      meta={`${tax?.purpose ?? "A draft until the bill is settled — its particulars become the one original."}${issued ? "" : ` Issuing it sends it to ${booked.payer} in the same act — no invoice exists unsent.`}`}
+      meta={`${tax?.purpose ?? "A draft until the bill is settled — its particulars become the one original."}${issued ? "" : " Issuing it sends it in the same act, by email or WhatsApp — read it first with Preview."}`}
       acts={
         <>
           {issued ? (
@@ -1384,8 +1376,8 @@ function Invoices({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz: 
               </Button>
               {issued.state === "DRAFT" ? (
                 <Live>
-                  <Button icon="send" compact state={send.isPending ? "working" : "default"} workingLabel="Sending…" onClick={() => send.mutate({ invoiceId: issued.id, to: sendTo })}>
-                    Send it
+                  <Button className="go" icon="send" compact onClick={() => setSending({ target: issued })}>
+                    Send
                   </Button>
                 </Live>
               ) : null}
@@ -1403,7 +1395,7 @@ function Invoices({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz: 
                 Preview draft
               </Button>
               <Live>
-                <Button state={issueSend.isPending ? "working" : issueReason ? "inert" : "default"} reason={issueReason} workingLabel="Issuing…" onClick={() => issueSend.mutate(sendTo)}>
+                <Button className={issueReason ? undefined : "go"} state={issueReason ? "inert" : "default"} reason={issueReason} onClick={() => setSending({ target: null })}>
                   Issue and send
                 </Button>
               </Live>
@@ -1452,24 +1444,13 @@ function Invoices({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz: 
           <AnswerLine entryId={entry.id} type="FINAL_INVOICE" what="the tax invoice" tz={tz} />
         </div>
       ) : issued ? (
-        <>
-          <p className="sm warn-ink" style={{ marginTop: 8 }}>
-            Issued {issued.issuedAt ? fmtStamp(issued.issuedAt, tz) : ""} and not sent — no invoice may stay undispatched.
-          </p>
-          <Live>
-            <div className="form2" style={{ marginTop: 8 }}>
-              <SendToField entry={entry} value={sendTo} onChange={setSendTo} />
-            </div>
-          </Live>
-        </>
-      ) : (
-        <Live>
-          <div className="form2" style={{ marginTop: 8 }}>
-            <SendToField entry={entry} value={sendTo} onChange={setSendTo} />
-          </div>
-        </Live>
-      )}
+        <p className="sm warn-ink" style={{ marginTop: 8 }}>
+          Issued {issued.issuedAt ? fmtStamp(issued.issuedAt, tz) : ""} and not sent yet — read it with Preview, then Send. The record can&rsquo;t be
+          sealed until it has gone out.
+        </p>
+      ) : null}
       <PaperDrawer paper={paper} onClose={() => setPaper(null)} />
+      {sending ? <TaxInvoiceSendDialog entry={entry} target={sending.target} onClose={() => setSending(null)} onSent={() => setSending(null)} /> : null}
     </StepCard>
   );
 

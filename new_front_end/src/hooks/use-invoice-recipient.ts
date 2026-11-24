@@ -70,7 +70,8 @@ export function recipientHint(r: InvoiceRecipient, typed: string): string {
 
 /** Where a dispatched invoice went, in words — from the invoice's own recorded address. */
 export function sentWords(dispatchedTo: string | null | undefined, entry: EntryDetail, party: string | null): string {
-  if (dispatchedTo) return `emailed to ${dispatchedTo}`;
+  // A number is a send recorded on WhatsApp (2026-11-10); only an address was emailed.
+  if (dispatchedTo) return dispatchedTo.includes("@") ? `emailed to ${dispatchedTo}` : `sent on WhatsApp to ${dispatchedTo}`;
   const who = party ?? guestName(entry.guestProfile ?? entry.inquiry?.guestProfile ?? null);
   return `not emailed — no address for ${who === "Guest" ? "the guest" : who}; hand it over`;
 }

@@ -21,8 +21,9 @@ import { usePaymentStatus } from "@/hooks/use-payment-status";
 import { initiateSettlement, listSettlementBuckets, type SettlementBucket } from "@/lib/api/checkout";
 import { money } from "@/lib/ds/format";
 import type { EntryDetail } from "@/types/api";
-import { DsDialog, Live, atLeast, toastRefusal, useRefreshEntry, words } from "./kit";
-import { SendToField, useBookedBy, useSendTo } from "./s8-parts";
+import { DsDialog, Live, NotSentChip, atLeast, toastRefusal, useRefreshEntry, words } from "./kit";
+import { useBookedBy } from "./s8-parts";
+import { TaxInvoiceSendDialog } from "./tax-invoice-send";
 import { useUnansweredDamage } from "./damage-card";
 import { Help } from "@/components/ds/help";
 import { ReqMark } from "./new-inquiry-parts";
@@ -215,7 +216,9 @@ function ShareRow({
     if (!paidTouched.current) setPaidNow(String(owes));
     if (!voucherTouched.current) setVoucherCovers(String(owes));
   }, [owes]);
-  const [invoiceTo, setInvoiceTo] = useSendTo(entry);
+  // An invoice this share issued and not yet sent — read and sent in the box beside its paper (2026-11-24).
+  const shareInvoice = share.invoiceId ? (entry.folio?.invoices ?? []).find((i) => i.id === share.invoiceId) ?? null : null;
+  const [sending, setSending] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
 
   // The backend's rules, said before the click (it enforces them regardless). Comparisons with
@@ -265,23 +268,24 @@ function ShareRow({
         billingModelConfirmation: share.billingModel,
         billingModel: share.billingModel,
       };
-      if (ref.trim() && method !== "DIRECT_BILL" && !bank.needs(method)) body.paymentVerificationRef = ref.trim();
+      if (ref.trim() && method !== "DIRECT_BILL" && method !== "VOUCHER" && !bank.needs(method)) body.paymentVerificationRef = ref.trim();
       if (takesMoney) Object.assign(body, bank.body(method));
       if (method === "VOUCHER") {
         if (voucherValid) body.voucherAmount = voucherTyped;
       } else if (guestPays && Number.isFinite(typed) && typed >= 0) {
         body.partialAmount = typed;
       }
-      if ((method === "DIRECT_BILL" || method === "VOUCHER") && invoiceTo.trim()) body.invoiceDispatchedTo = invoiceTo.trim();
+      // Nothing is emailed by the settlement: the invoice is read and sent from this share's row.
+      if (method === "DIRECT_BILL" || method === "VOUCHER") body.holdInvoicesForDesk = true;
       return initiateSettlement(session!, folio.id, body);
     },
     onSuccess: () => {
       setConfirmOpen(false);
       toast.success(
         method === "DIRECT_BILL"
-          ? `${title} — invoiced to ${payer}`
+          ? `${title} — invoiced to ${payer}. Read the invoice and send it from this share`
           : method === "VOUCHER"
-            ? `${title} — the voucher is recorded; anything it leaves is invoiced to ${payer}`
+            ? `${title} — the voucher is recorded; anything it leaves is invoiced to ${payer} and sent from this share`
             : partial
               ? `${title} — settled in part; the rest stays owed`
               : `${title} — settled`,
@@ -298,9 +302,21 @@ function ShareRow({
       <div className="row-acts" style={{ justifyContent: "space-between" }}>
         <b className="sm">{title}</b>
         {share.invoiceId ? (
-          <Chip tone={owes > 0 ? "warning" : "success"}>
-            {owes > 0 ? `invoiced · ${money(owes, currency)} owed` : "invoiced · paid"} · {share.invoiceId}
-          </Chip>
+          <span className="row-acts">
+            <Chip tone={owes > 0 ? "warning" : "success"}>
+              {owes > 0 ? `invoiced · ${money(owes, currency)} owed` : "invoiced · paid"} · {shareInvoice?.invoiceNumber ?? share.invoiceId}
+            </Chip>
+            {shareInvoice?.state === "DRAFT" ? (
+              <>
+                <NotSentChip made="issued" />
+                <Live>
+                  <Button className="go" compact icon="send" onClick={() => setSending(true)}>
+                    Send
+                  </Button>
+                </Live>
+              </>
+            ) : null}
+          </span>
         ) : owes <= 0 ? (
           <Chip tone="success" icon="check">
             settled
@@ -326,7 +342,7 @@ function ShareRow({
                 ))}
               </select>
             </div>
-            {method === "DIRECT_BILL" ? null : bank.needs(method) ? null : <ReferenceField method={method} value={ref} onChange={setRef} takesMoney={takesMoney} />}
+            {method === "DIRECT_BILL" || method === "VOUCHER" || bank.needs(method) ? null : <ReferenceField method={method} value={ref} onChange={setRef} takesMoney={takesMoney} />}
             {method === "VOUCHER" ? (
               <div className="field">
                 <label>
@@ -361,9 +377,6 @@ function ShareRow({
                 ) : null}
               </div>
             )}
-            {method === "DIRECT_BILL" || method === "VOUCHER" ? (
-              <SendToField entry={entry} value={invoiceTo} onChange={setInvoiceTo} label="Send the invoice to" />
-            ) : null}
           </div>
           {takesMoney ? <BankFields entry={bank} method={method} /> : null}
           {partialLocked ? (
@@ -405,13 +418,13 @@ function ShareRow({
           <li>
             {method === "DIRECT_BILL" ? (
               <>
-                The <b className="money">{money(owes, currency)}</b> share is invoiced to {payer}
-                {invoiceTo.trim() ? `, emailed to ${invoiceTo.trim()}` : " — no email address, so the invoice is handed over"}.
+                The <b className="money">{money(owes, currency)}</b> share is invoiced to {payer}. Nothing is sent yet: you read the invoice and send it
+                from this share.
               </>
             ) : method === "VOUCHER" ? (
               <>
                 The voucher covers <b className="money">{money(voucherValid ? voucherTyped : null, currency)}</b> of the{" "}
-                <b className="money">{money(owes, currency)}</b> share — anything it leaves is invoiced to {payer}.
+                <b className="money">{money(owes, currency)}</b> share — anything it leaves is invoiced to {payer}, and sent from this share.
               </>
             ) : partial ? (
               <>
@@ -426,6 +439,9 @@ function ShareRow({
           <li>When this is the last share still open, the rooms are released to housekeeping.</li>
         </ul>
       </DsDialog>
+      {sending && shareInvoice ? (
+        <TaxInvoiceSendDialog entry={entry} target={shareInvoice} onClose={() => setSending(false)} onSent={() => setSending(false)} />
+      ) : null}
     </div>
   );
 }

@@ -91,6 +91,11 @@ export type DeskListRow = {
   parkReason: string | null;
   parkFollowUpAt: string | null;
   roomNumbers: string[];
+  /**
+   * The rooms held before Arrival hands them out (2026-11-24): by number at Arrival (the system's
+   * proposal) and for a room given by number; by type for a room the system may still move.
+   */
+  roomsHeld: { numbers: string[]; byType: Array<{ name: string; count: number }> } | null;
   /** Which stay of its enquiry this booking is, when there are several (2026-11-10). */
   stay: { no: number; of: number } | null;
 };

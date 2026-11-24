@@ -47,6 +47,7 @@ import {
   type Fold,
 } from "@/lib/ds/attention";
 import { fmtDay, fmtInstantDay, fmtLongDate, fmtRange, fmtTime, money, plural, span } from "@/lib/ds/format";
+import { roomsWordOfRow } from "@/lib/ds/status";
 import { stepNoOfStage } from "@/lib/ds/steps";
 
 const BANDS_OVER = 15;
@@ -57,10 +58,18 @@ const TAB_IDS: TabId[] = ["attention", "arriving", "leaving", "inhouse", "clean"
 type Tone = "stop" | "warn" | "ok" | null;
 
 function roomsWord(r: DeskListRow): string {
-  if (r.roomNumbers.length) return r.roomNumbers.join(", ");
-  if (r.numberOfRooms) return plural(r.numberOfRooms, "room");
-  return "—";
+  return roomsWordOfRow(r);
 }
+
+/**
+ * How many rooms a booking takes a night — what the front desk counts (2026-11-24, client: "instead
+ * of 6 groups of booking, total number of room arrival is given"). The rooms asked for, else the rooms
+ * handed out (an import may have no count); a booking always takes at least one.
+ */
+function roomsANight(r: DeskListRow): number {
+  return r.numberOfRooms || r.roomNumbers.length || 1;
+}
+const roomsOf = (rows: DeskListRow[]) => rows.reduce((n, r) => n + roomsANight(r), 0);
 
 const ymd = (iso: string | null | undefined) => iso?.slice(0, 10) ?? null;
 
@@ -70,6 +79,8 @@ type Tile = {
   id: TabId;
   label: string;
   n: number;
+  /** What `n` counts, said beside it when it is not obvious ("rooms"). */
+  unit?: string;
   /** One line on what is in it; its colour says how it stands. */
   sub: ReactNode;
   tone: Tone;
@@ -91,7 +102,10 @@ function Glance({ tiles, selected, onSelect }: { tiles: Tile[]; selected: TabId;
           onClick={() => onSelect(t.id)}
         >
           <span className="gt-label">{t.label}</span>
-          <span className="gt-n">{t.n}</span>
+          <span className="gt-n">
+            {t.n}
+            {t.unit ? <span className="gt-unit"> {t.unit}</span> : null}
+          </span>
           {t.progress && t.progress.total > 0 ? (
             <span className="gt-bar" aria-hidden>
               <i style={{ width: `${Math.round((t.progress.done / t.progress.total) * 100)}%` }} />
@@ -331,7 +345,7 @@ function TodayPageInner() {
   const tidyCount = lists.noOutcome.length + lists.noDate.length;
   const followUpDue = lists.parked.filter((r) => r.parkFollowUpAt && Date.parse(r.parkFollowUpAt) <= clock.now).length;
   const guestsIn = lists.inHouse.reduce((n, r) => n + (r.guestCount ?? (r.adultCount ?? 0) + (r.childCount ?? 0)), 0);
-  const roomsIn = lists.inHouse.reduce((n, r) => n + (r.roomNumbers.length || r.numberOfRooms || 0), 0);
+  const roomsIn = roomsOf(lists.inHouse);
 
   const asked = params.get("tab") as TabId | null;
   const tab: TabId = asked && TAB_IDS.includes(asked) ? asked : "attention";
@@ -343,6 +357,10 @@ function TodayPageInner() {
   };
 
   const arrivalsTotal = lists.arriving.length + arrivedToday.length;
+  // The arrivals counted in rooms, the bookings said under them (2026-11-24, client).
+  const roomsToCome = roomsOf(lists.arriving);
+  const roomsArrived = roomsOf(arrivedToday);
+  const roomsArriving = roomsToCome + roomsArrived;
   const departuresTotal = lists.leaving.length + leftToday.length;
 
   const tiles: Tile[] = [
@@ -364,16 +382,17 @@ function TodayPageInner() {
     {
       id: "arriving",
       label: "Arriving today",
-      n: lists.arriving.length,
+      n: roomsToCome,
+      unit: roomsToCome === 1 ? "room" : "rooms",
       tone: arrivalsTotal && !lists.arriving.length ? "ok" : null,
-      progress: { done: arrivedToday.length, total: arrivalsTotal },
+      progress: { done: roomsArrived, total: roomsArriving },
       sub: arrivalsTotal ? (
         lists.arriving.length ? (
           <>
-            still to come · <b>{arrivedToday.length}</b> of {arrivalsTotal} checked in
+            still to come in {plural(lists.arriving.length, "booking")} · <b>{roomsArrived}</b> of {roomsArriving} checked in
           </>
         ) : (
-          <span className="ok-ink">all {arrivalsTotal} checked in</span>
+          <span className="ok-ink">all {plural(roomsArriving, "room")} checked in</span>
         )
       ) : (
         "no arrivals today"
@@ -451,7 +470,10 @@ function TodayPageInner() {
   const loading = bookings.isLoading || !today;
   const titles: Record<TabId, [string, string | null]> = {
     attention: ["Needs attention", null],
-    arriving: ["Arriving today", today ? `/bookings?from=${today}&to=${today}` : null],
+    arriving: [
+      lists.arriving.length ? `Arriving today · ${plural(roomsToCome, "room")} in ${plural(lists.arriving.length, "booking")}` : "Arriving today",
+      today ? `/bookings?from=${today}&to=${today}` : null,
+    ],
     leaving: ["Leaving today", "/bookings?group=In-house"],
     inhouse: ["In-house", "/bookings?group=In-house"],
     clean: ["Rooms to clean", "/housekeeping"],

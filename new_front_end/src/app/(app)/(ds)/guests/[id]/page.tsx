@@ -17,7 +17,7 @@ import { useDeskMoney } from "@/hooks/use-desk-data";
 import { getGuestProfile, guestFullName } from "@/lib/api/guest-profiles";
 import { listDeskBookings } from "@/lib/api/desk";
 import { fmtDate, money } from "@/lib/ds/format";
-import { bookerOfRow, channelWord } from "@/lib/ds/status";
+import { bookerOfRow, channelWord, roomsWordOfRow } from "@/lib/ds/status";
 import { stepNoOfStage } from "@/lib/ds/steps";
 
 function Fact({ k, v }: { k: string; v: ReactNode }) {
@@ -171,7 +171,7 @@ export default function GuestRecordPage({ params }: { params: Promise<{ id: stri
                       </div>
                     </td>
                     <td className="nowrap"><StayDates stacked checkIn={r.checkInDate} checkOut={r.actualCheckOutDate ?? r.checkOutDate} /></td>
-                    <td>{r.roomNumbers.length ? r.roomNumbers.join(", ") : (r.numberOfRooms ?? "—")}</td>
+                    <td>{roomsWordOfRow(r)}</td>
                     <td>
                       <RowStanding row={r} hotelToday={today} balance={x?.folio?.outstandingBalance ?? null} />
                     </td>

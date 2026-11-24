@@ -93,8 +93,8 @@ const BED_LETTER: Record<string, string> = { KING: "K", TWIN: "T", QUEEN: "Q", S
 const WEEKDAY = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MONTH = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const WINDOWS = [7, 14, 21, 28];
-/** The window's length when the address names none. */
-const DEFAULT_NIGHTS = 14;
+/** The window's length when the address names none — a week (2026-11-24, client: "make it 7 nights by default"). */
+const DEFAULT_NIGHTS = 7;
 /** Where the desk was in the chart, kept for this browser tab (see `RoomChartView`). */
 const PLACE_KEY = "desk:chart-place";
 type ChartPlace = { key: string; left: number; top: number; pageY: number; full: boolean };

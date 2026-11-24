@@ -2591,6 +2591,7 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .glance-tile .gt-label { font-size: 13px; font-weight: 600; color: var(--ink-2); }
 .ds .glance-tile[aria-selected="true"] .gt-label { color: var(--accent); }
 .ds .glance-tile .gt-n { font-size: 30px; font-weight: 700; line-height: 1.05; font-variant-numeric: tabular-nums; }
+.ds .glance-tile .gt-n .gt-unit { font-size: 14px; font-weight: 600; color: var(--ink-2); }
 .ds .glance-tile .gt-sub { font-size: 12px; line-height: 1.35; color: var(--ink-2); }
 .ds .glance-tile .gt-sub .stop-ink, .ds .glance-tile .gt-sub .warn-ink { font-weight: 700; }
 .ds .glance-tile.stop { border-left: 4px solid var(--danger); }
