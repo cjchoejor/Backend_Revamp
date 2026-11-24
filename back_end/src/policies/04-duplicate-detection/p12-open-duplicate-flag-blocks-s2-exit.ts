@@ -8,5 +8,5 @@ export function enforceNoOpenDuplicateFlagsForS2Exit(input: { duplicateFlags: Ar
   const flags = input.duplicateFlags ?? [];
   const hasOpen = flags.some((f) => String(f.status ?? "") === "OPEN");
   if (!hasOpen) return;
-  throw new PolicyGateBlockedError("DUPLICATE_UNRESOLVED", "Unresolved duplicate flag blocks exit");
+  throw new PolicyGateBlockedError("DUPLICATE_UNRESOLVED", "This booking may be the same as another one on these nights — on the Inquiry step, say whether both bookings are meant or it was entered twice");
 }

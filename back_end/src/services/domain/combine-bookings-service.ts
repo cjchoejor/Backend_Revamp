@@ -271,6 +271,9 @@ export async function listSameGuestBookings(prisma: PrismaClient, entryId: strin
         entryId: overlap.entryId,
         checkInDate: iso(overlap.frozenCheckInDate),
         checkOutDate: iso(overlap.frozenCheckOutDate),
+        // The same guest record, or (2026-11-24) the same name through the same agency or company.
+        why: overlap.why,
+        partyName: overlap.partyName,
         acknowledged: await isMultiBookingAcknowledged(prisma, entryId),
       }
     : null;
