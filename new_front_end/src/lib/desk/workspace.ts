@@ -416,7 +416,14 @@ export function s1Readiness(entry: EntryDetail): Precondition[] {
     { label: "Preferred room selected", met: !!preferred && !pickFitsStay(preferred.optionSelected, entry, preferred.searchCriteria), card: "house" },
     { label: "The guest staying, named", met: !!entry.guestProfile, card: "wrap" },
     { label: "A contact on file", met: hasAnyContact(entry), card: "wrap" },
+    // Only while one is open (2026-11-24): the move waits for the desk's answer (Policy 12).
+    ...(openDuplicateQuestions(entry) ? [{ label: "Not the same booking entered twice", met: false, card: "wrap" }] : []),
   ];
+}
+
+/** How many "the same booking twice?" questions this booking's enquiry still has open (Policy 12). */
+export function openDuplicateQuestions(entry: EntryDetail): number {
+  return entry.inquiry?.duplicateFlags?.length ?? 0;
 }
 
 export function canProgressS1(entry: EntryDetail): boolean {
@@ -460,6 +467,7 @@ export function s2Readiness(entry: EntryDetail, now: number = Date.now()): Preco
     { label: "Quote generated", met: live.length > 0, card: "table" },
     { label: "Quote still valid", met: !!operative && validOk, card: "quotation" },
     { label: "Any holds still healthy", met: holdsOk },
+    ...(openDuplicateQuestions(entry) ? [{ label: "Not the same booking entered twice", met: false, card: "table" }] : []),
   ];
 }
 

@@ -191,6 +191,8 @@ export function RatePackagesEditor({ owner, ownerLabel }: { owner: PackageOwner;
     setDraft(BLANK);
     setEditing(null);
   };
+  /** The name the package had when it was opened — a rename shows against it. */
+  const editingName = editing ? (packages.find((p) => p.id === editing)?.name ?? null) : null;
 
   useEffect(() => {
     if (!session) return;
@@ -300,6 +302,8 @@ export function RatePackagesEditor({ owner, ownerLabel }: { owner: PackageOwner;
 
   const refresh = () => {
     void queryClient.invalidateQueries({ queryKey });
+    // The rate history below reads every version: a save, and a rename above all, changes it.
+    void queryClient.invalidateQueries({ queryKey: ["admin", "rate-packages", "history"] });
     refreshDesk();
   };
 
@@ -321,6 +325,7 @@ export function RatePackagesEditor({ owner, ownerLabel }: { owner: PackageOwner;
       saveRatePackage(session!, {
         ...owner,
         name: draft.name.trim(),
+        packageId: editing,
         roomBaseRate: numOrNull(draft.roomBaseRate) ?? 0,
         extraBedRate: numOrNull(draft.extraBedRate),
         breakfastRate: numOrNull(draft.breakfastRate),
@@ -336,7 +341,13 @@ export function RatePackagesEditor({ owner, ownerLabel }: { owner: PackageOwner;
         notes: draft.notes.trim() || null,
       }),
     onSuccess: (saved) => {
-      toast.success(editing ? `"${draft.name}" saved as a new version` : `Package "${draft.name}" created`);
+      toast.success(
+        saved.renamedFrom
+          ? `"${saved.renamedFrom}" is now called "${saved.name}" — saved as a new version`
+          : editing
+            ? `"${draft.name}" saved as a new version`
+            : `Package "${draft.name}" created`,
+      );
       const n = saved.bookingsFollowing ?? 0;
       const kept = saved.bookingsKept ?? 0;
       if (n > 0) toast.info(`${n} booking${n === 1 ? "" : "s"} with no quotation yet now use${n === 1 ? "s" : ""} these rates.`, { duration: 9000 });
@@ -533,7 +544,7 @@ export function RatePackagesEditor({ owner, ownerLabel }: { owner: PackageOwner;
 
       <div className="admin-panel space-y-4 p-5" data-edit-form>
         <div className="flex items-center justify-between">
-          <h3 className="admin-display text-base">{editing ? `Edit "${draft.name}" — saves as a new version` : "Add a package"}</h3>
+          <h3 className="admin-display text-base">{editing ? `Edit "${editingName ?? draft.name}" — saves as a new version` : "Add a package"}</h3>
           {editing && (
             <button type="button" className="admin-btn text-[10px]" onClick={resetForm}>
               Cancel
@@ -612,9 +623,16 @@ export function RatePackagesEditor({ owner, ownerLabel }: { owner: PackageOwner;
               placeholder={isCommon ? "Common agent rate" : "Season / Off season / Premium"}
               value={draft.name}
               onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-              disabled={!!editing}
             />
-            {editing && <span className="mt-1 block text-[10px] opacity-70">Name is fixed — it identifies the version chain.</span>}
+            {editing && editingName && draft.name.trim() && draft.name.trim() !== editingName ? (
+              <span className="mt-1 flex items-center gap-1 text-[11px]">
+                Renamed from &ldquo;{editingName}&rdquo;
+                <Help label="Renaming a package">
+                  The new name is used from this version on: on the desk, on new papers, and for bookings that move to these rates.
+                  Quotations already made keep the name they were made with.
+                </Help>
+              </span>
+            ) : null}
           </label>
           <Field label="Room rate" hint="per night, before tax" value={draft.roomBaseRate} onChange={(v) => setDraft({ ...draft, roomBaseRate: v })} />
           <Field label="Extra bed" value={draft.extraBedRate} onChange={(v) => setDraft({ ...draft, extraBedRate: v })} />

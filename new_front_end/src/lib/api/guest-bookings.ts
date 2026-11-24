@@ -32,8 +32,47 @@ export type SameGuestBookings = {
    * The guest's other RESERVED booking over these nights — what Reserve asks the FOM to
    * acknowledge (Policy 13), read the gate's own way; null when there is none (2026-10-29).
    */
-  reserveOverlap: { entryId: string; checkInDate: string; checkOutDate: string; acknowledged: boolean } | null;
+  reserveOverlap: {
+    entryId: string;
+    checkInDate: string;
+    checkOutDate: string;
+    /** SAME_GUEST — the same guest record; SAME_NAME — the same name through the same agency or company (2026-11-24). */
+    why?: "SAME_GUEST" | "SAME_NAME";
+    partyName?: string | null;
+    acknowledged: boolean;
+  } | null;
 };
+
+/** "Is this the same booking entered twice?" — an open question and the other booking (2026-11-24). */
+export type DuplicateQuestion = {
+  flagId: string;
+  raisedAt: string;
+  other: {
+    entryId: string;
+    inquiryId: string;
+    guestName: string;
+    checkInDate: string;
+    checkOutDate: string;
+    stageWord: string;
+    parked: boolean;
+    /** SAME_GUEST — the same guest record; SAME_NAME — the same name through the same agency or company. */
+    why: "SAME_GUEST" | "SAME_NAME";
+    partyName: string | null;
+  } | null;
+};
+
+export async function getDuplicateCheck(session: Session, entryId: string) {
+  return apiRequest<{ questions: DuplicateQuestion[] }>(`/api/entries/${entryId}/duplicate-check`, { session });
+}
+
+/** "Both are meant" — not the same booking twice; the booking may move on. */
+export async function answerBothMeant(session: Session, entryId: string, flagId: string, note?: string | null) {
+  return apiRequest<{ flagId: string; status: string; reason: string }>(`/api/entries/${entryId}/duplicate-check/${flagId}/both-meant`, {
+    method: "POST",
+    session,
+    body: { note: note ?? null },
+  });
+}
 
 export type CombinePreview = {
   ok: boolean;

@@ -66,14 +66,14 @@ import { Button } from "@/design-system";
  * that vouches a human compared the documents to the guests.
  */
 
-type PartySlot = { key: string; label: string; placeholder: string; sub?: string };
+export type PartySlot = { key: string; label: string; placeholder: string; sub?: string };
 
 /** One slot per person in the party — guest-board key scheme so the two surfaces agree.
  *  Labels are GENERIC ("Adult 1", never the profile's name): the booking's guest profile is
  *  the CONTACT PERSON, not necessarily anyone sleeping in the rooms (operator ruling
  *  2026-08-11), so no row is pre-named after them — typed names are the only names shown.
  *  Entries without a party breakdown fall back to `guestCount` anonymous slots. */
-function partySlots(entry: EntryDetail): PartySlot[] {
+export function partySlots(entry: EntryDetail): PartySlot[] {
   const adults = Math.max(0, entry.adultCount ?? 0);
   const childAges = entry.childAges ?? [];
   const slots: PartySlot[] = [];
@@ -99,7 +99,7 @@ const EMPTY_DRAFT: DetailDraft = { docType: "", num: "", name: "", dob: "", gend
 
 /** Backend placeholders a row carries when no document type was picked (the DB column is
  *  non-nullable) — rendered as "unselected" in the dropdown, never as a real choice. */
-const UNTYPED_DOC_TYPES = new Set(["PASSPORT_OR_PERMIT", "PHOTO_PROOF"]);
+export const UNTYPED_DOC_TYPES = new Set(["PASSPORT_OR_PERMIT", "PHOTO_PROOF"]);
 
 function draftFromRow(row: IdentityProofSummary | undefined): DetailDraft {
   const docType = row?.documentType && !UNTYPED_DOC_TYPES.has(row.documentType) ? row.documentType : "";
@@ -133,7 +133,7 @@ function sameDraft(a: DetailDraft, b: DetailDraft): boolean {
 }
 
 /** Thumbnail that fetches the image through the authenticated endpoint (blob object-URL). */
-function ProofThumb({ proof, size = 40, name }: { proof: IdentityProofSummary; size?: number; /** The guest's name as the table has it now — the viewer's title. */ name?: string }) {
+export function ProofThumb({ proof, size = 40, name }: { proof: IdentityProofSummary; size?: number; /** The guest's name as the table has it now — the viewer's title. */ name?: string }) {
   const { session } = useSession();
   const [url, setUrl] = useState<string | null>(null);
   const isImage = (proof.mimeType ?? "").startsWith("image/");

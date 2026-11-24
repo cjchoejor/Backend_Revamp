@@ -56,19 +56,30 @@ export function RatePackageHistory({ owner, ownerLabel }: { owner: PackageOwner;
     enabled: !!session,
   });
 
-  // Newest first within each name, so the top row of a group is what applies today.
+  // One group per package: the versions that replaced one another (`supersededById`, 2026-11-24),
+  // so a renamed package stays one story.
+  // Newest first within each, so the top row of a group is what applies today.
   const groups = useMemo(() => {
     const items = q.data?.items ?? [];
-    const byName = new Map<string, RatePackageAdmin[]>();
+    const byId = new Map(items.map((p) => [p.id, p]));
+    const newestOf = (p: RatePackageAdmin): RatePackageAdmin => {
+      let at = p;
+      for (let i = 0; i < 200 && at.supersededById && byId.has(at.supersededById); i++) at = byId.get(at.supersededById)!;
+      return at;
+    };
+    const byKey = new Map<string, RatePackageAdmin[]>();
     for (const p of items) {
-      const list = byName.get(p.name) ?? [];
+      // Under the name its newest version carries: a renamed package moves whole, and a version
+      // retired and made again by hand (no link) still sits with its name, as before.
+      const key = newestOf(p).name;
+      const list = byKey.get(key) ?? [];
       list.push(p);
-      byName.set(p.name, list);
+      byKey.set(key, list);
     }
-    for (const list of byName.values()) {
-      list.sort((a, b) => (a.effectiveFrom < b.effectiveFrom ? 1 : -1));
-    }
-    return [...byName.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+    for (const list of byKey.values()) list.sort((a, b) => (a.effectiveFrom < b.effectiveFrom ? 1 : -1));
+    return [...byKey.entries()]
+      .map(([key, list]) => [key, list, key] as const)
+      .sort((a, b) => a[2].localeCompare(b[2]));
   }, [q.data]);
 
   if (q.isLoading) return <p className="admin-muted text-xs">Loading package history…</p>;
@@ -91,11 +102,12 @@ export function RatePackageHistory({ owner, ownerLabel }: { owner: PackageOwner;
         </Help>
       </p>
 
-      {groups.map(([name, versions]) => {
+      {groups.map(([key, versions, name]) => {
         const current = versions.find((v) => !v.effectiveTo) ?? null;
-        const isOpen = !!open[name];
+        const isOpen = !!open[key];
+        const formerNames = [...new Set(versions.map((v) => v.name))].filter((n) => n !== name);
         return (
-          <div key={name} className="admin-panel p-4">
+          <div key={key} className="admin-panel p-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
                 <span className="admin-display text-sm">{name}</span>
@@ -106,12 +118,13 @@ export function RatePackageHistory({ owner, ownerLabel }: { owner: PackageOwner;
                 )}
                 <span className="admin-muted ml-2 text-[11px]">
                   {versions.length} version{versions.length === 1 ? "" : "s"}
+                  {formerNames.length ? ` · earlier called ${formerNames.map((n) => `"${n}"`).join(", ")}` : ""}
                 </span>
               </div>
               <button
                 type="button"
                 className="admin-btn admin-btn-ghost admin-btn-sm"
-                onClick={() => setOpen((m) => ({ ...m, [name]: !isOpen }))}
+                onClick={() => setOpen((m) => ({ ...m, [key]: !isOpen }))}
               >
                 {isOpen ? "Hide" : "View"}
               </button>

@@ -98,6 +98,7 @@ import { ActiveRoomMoves } from "@/components/ds/rooms/room-move-dialog";
 import { HistoryView } from "@/components/ds/workspace/history-view";
 import { DetailsView } from "@/components/ds/workspace/details-view";
 import { BOOKING_TABS, ChargesView, DocumentsView, NotesView, RequestsView, type BookingTab } from "@/components/ds/workspace/booking-tabs";
+import { GuestsView, useGuestsRecorded } from "@/components/ds/workspace/guests-view";
 import { listBookingNotes, listGuestRequests } from "@/lib/api/booking-notes";
 import { useStayPrice } from "@/lib/ds/stay-price";
 import { HeaderClock, SideTimer, StepDwell } from "@/components/ds/workspace/side-timer";
@@ -128,7 +129,9 @@ const atLeastFom = (level?: string | null) => atLeast(level, "L2");
 
 const NOOP = () => {};
 
-type View = "step" | "other" | "details" | BookingTab;
+type View = "step" | "other" | "details" | "guests" | BookingTab;
+/** A tab of the booking file: Booking, the five booking tabs, and Guests at Arrival and Check-in (2026-11-24). */
+type FileTabKey = "details" | "guests" | BookingTab;
 
 /**
  * A section's changes not saved, as an open item of the checklist (2026-10-27) — only for a section
@@ -265,11 +268,17 @@ const STEP_DERIVED: Partial<Record<number, Record<string, string>>> = { 1: { hou
 /** The booking file's tabs on the right in the stage-template layout — Booking first. */
 // The Stage 1 header's Re-enter and Under the hood buttons, hidden for now (2026-10-27).
 const HEAD_TOOLS = false;
-const FILE_TABS: ReadonlyArray<readonly ["details" | BookingTab, string]> = [["details", "Booking"], ...BOOKING_TABS];
+const FILE_TABS: ReadonlyArray<readonly [FileTabKey, string]> = [["details", "Booking"], ...BOOKING_TABS];
+/**
+ * At Arrival and Check-in the file has a Guests tab after Booking (2026-11-24, operator: "in stage 5 and
+ * stage 6 … in the right panel can you add another tab where … the user can see those guest infos").
+ */
+const FILE_TABS_WITH_GUESTS: ReadonlyArray<readonly [FileTabKey, string]> = [["details", "Booking"], ["guests", "Guests"], ...BOOKING_TABS];
 // What each tab reads as when the file is narrow (2026-10-27, operator: on a smaller screen the
 // tabs ran onto two rows). The full name stays on hover.
-const FILE_TAB_SHORT: Record<"details" | BookingTab, string> = {
+const FILE_TAB_SHORT: Record<FileTabKey, string> = {
   details: "Booking",
+  guests: "Guests",
   money: "Charges",
   requests: "Requests",
   notes: "Notes",
@@ -431,7 +440,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   // step that needs attention and Back returns to it.
   const stepParam = Number(params.get("step"));
   const viewParam = params.get("view");
-  const VIEWS: readonly View[] = ["other", "details", "money", "requests", "notes", "docs", "history"];
+  const VIEWS: readonly View[] = ["other", "details", "guests", "money", "requests", "notes", "docs", "history"];
   const view: View = VIEWS.includes(viewParam as View) ? (viewParam as View) : "step";
   // History opens on a lens when another tab sends the desk there (Charges & payments → its log).
   const lensParam = params.get("lens");
@@ -913,6 +922,9 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   // A step the booking cannot reach yet, asked for in the address, shows the step it is at — the Reserve
   // review a finished Set up used to open (`?step=4`) is gone (2026-10-29).
   const viewing = selected != null && selected > maxReach ? currentOrder : (selected ?? currentOrder);
+  // The Guests tab of the booking file, at Arrival and Check-in (2026-11-24), and its count — the server's.
+  const guestsTab = viewing === 5 || viewing === 6;
+  const guestsRecorded = useGuestsRecorded(entry ?? null, guestsTab);
   // A pane or a way left in the address belongs to the step it was opened on: when the step changes —
   // a re-entry sending the booking back, the booking moving on — it goes (2026-10-28: Set up's way
   // left in the address opened Park on Inquiry by itself).
@@ -2128,7 +2140,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     const headerClocks = runningClocks(entry, timersQuery.data?.items ?? [], (paymentStatusQuery.data?.paymentPlan?.plan ?? "FULL") !== "FULL", clock.now);
     // The booking file opens on Charges & payments (2026-10-28, operator: "always make the charges tab
     // be shown in default in all stages"); Booking is a click away.
-    const fileTab: "details" | BookingTab = view === "step" || view === "other" ? "money" : view;
+    const fileTab: FileTabKey = view === "step" || view === "other" || (view === "guests" && !guestsTab) ? "money" : view;
     // Every section done and still no move: what holds it belongs to no section, so nothing on the page
     // would say why. Said where the move would be (2026-11-05, when "Before you move on" went).
     const heldBy = moveReady === false && !viewingPast && !sealed && !inPage && flowItems.every((i) => i.met) ? inherited.filter((p) => !p.met) : [];
@@ -2345,16 +2357,26 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                 </div>
               </div>
               <div className="ftabs" role="tablist">
-                {FILE_TABS.map(([k, label]) => (
+                {(guestsTab ? FILE_TABS_WITH_GUESTS : FILE_TABS).map(([k, label]) => (
                   <button key={k} type="button" role="tab" className="ftab" title={label} aria-selected={fileTab === k} onClick={() => setView(k, viewing)}>
                     <span className="ft-long">{label}</span>
                     <span className="ft-short">{FILE_TAB_SHORT[k]}</span>
-                    {k === "details" ? null : tabCount(k)}
+                    {k === "details" ? null : k === "guests" ? (
+                      guestsRecorded ? (
+                        <span className={`tab-n${guestsRecorded.done ? "" : " warn"}`}>
+                          {guestsRecorded.filled}/{guestsRecorded.total}
+                        </span>
+                      ) : null
+                    ) : (
+                      tabCount(k)
+                    )}
                   </button>
                 ))}
               </div>
               <div className="fbody">
-                {fileTab === "details" ? (
+                {fileTab === "guests" ? (
+                  <GuestsView entry={entry} />
+                ) : fileTab === "details" ? (
                   <DetailsView
                     entry={entry}
                     booker={booker}

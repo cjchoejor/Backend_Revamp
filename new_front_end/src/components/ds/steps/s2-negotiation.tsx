@@ -51,6 +51,7 @@ import { CompetingClaimsCard, LEVEL_WORD, passesOf, roomsHeldWord, useCompetingC
 import { useInvoiceRecipient } from "@/hooks/use-invoice-recipient";
 import { billNo, proformaBaseNo, quoteNo } from "@/lib/ds/papers";
 import { TripQuotationCard, useTripQuotation } from "./s2-trip-quotation";
+import { DuplicateQuestions } from "./duplicate-question";
 
 /* ------------------------------------------------------------------ vocabulary */
 
@@ -588,6 +589,7 @@ export function S2Negotiation({
         title={together.active ? `Who sleeps where, and their meals · ${together.label.toLowerCase()} together` : "Who sleeps where, and their meals"}
         meta="One row per room: the guests by age, their meal plans, extra beds, any negotiated rate and the booking's discount. Saving the table prices it — that is the quotation."
       >
+        <DuplicateQuestions entry={entry} editable={editable && !past} cancelWord="cancel this booking" />
         {changing && together.active ? (
           <ChangeStaysTogether stays={groupStays} stayNoOf={together.stayNoOf} onClose={() => setChanging(false)} onChanged={refreshGroup} />
         ) : changing ? (

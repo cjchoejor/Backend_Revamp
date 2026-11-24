@@ -29,7 +29,6 @@ import { getAllowedRoomCounts, getChildPolicy } from "@/lib/api/child-policy";
 import { useRoomsFollowParty } from "@/hooks/use-rooms-follow-party";
 import { updateEntryIntake } from "@/lib/api/entries";
 import {
-  getInquiry,
   listRatePackagesLookup,
   updateEntrySource,
   type LookupPartyMatch,
@@ -116,10 +115,6 @@ function readPricing(p: unknown): IndicativePricing | null {
     : null;
 }
 
-type InquiryRecord = {
-  duplicateFlags?: unknown[];
-};
-
 /* ------------------------------------------------------------------ the step */
 
 export function S1Inquiry({
@@ -146,13 +141,6 @@ export function S1Inquiry({
   const editable =
     !past && entry.currentStage === "S1" && entry.status === "ACTIVE";
 
-  const inquiryQuery = useQuery({
-    queryKey: ["inquiry", entry.inquiryId],
-    queryFn: () => getInquiry(session!, entry.inquiryId),
-    enabled: !!session && !!entry.inquiryId,
-  });
-  const inquiryRec = (inquiryQuery.data ?? null) as InquiryRecord | null;
-
   const rooms = useQuery({
     queryKey: ["rooms"],
     queryFn: () => listRooms(session!),
@@ -174,7 +162,6 @@ export function S1Inquiry({
           entry={entry}
           past={past}
           editable={editable}
-          duplicates={(inquiryRec?.duplicateFlags ?? []).length}
           catalog={rooms.data?.items ?? []}
         />
         <WrapUp
@@ -801,13 +788,11 @@ function TheHouse({
   entry,
   past,
   editable,
-  duplicates,
   catalog,
 }: {
   entry: EntryDetail;
   past: boolean;
   editable: boolean;
-  duplicates: number;
   catalog: Catalog;
 }) {
   const { session } = useSession();
@@ -1740,12 +1725,6 @@ function TheHouse({
                   ).values(),
                 ]}
               />
-            ) : null}
-            {duplicates > 0 ? (
-              <div className="sm warn-ink" style={{ marginTop: 8 }}>
-                <Icon name="alert" /> A possible duplicate of another inquiry is
-                open
-              </div>
             ) : null}
             {editable ? (
               <div className="row-acts" style={{ marginTop: 10 }}>

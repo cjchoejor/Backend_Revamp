@@ -1243,6 +1243,10 @@ export type RatePackageAdmin = {
   /** On a save: the live bookings with no quotation that moved to this version, and those that keep the earlier one. */
   bookingsFollowing?: number;
   bookingsKept?: number;
+  /** The version that replaced this one (2026-11-24) — how a renamed package still reads as one. */
+  supersededById?: string | null;
+  /** On a save that renamed it: the name it had. */
+  renamedFrom?: string | null;
 };
 
 /** Owner: exactly one id, or neither for the COMMON house package. */
@@ -1250,6 +1254,8 @@ export type PackageOwner = { travelAgentId?: string | null; corporateAccountId?:
 
 export type RatePackageInput = PackageOwner & {
   name: string;
+  /** The live version being edited — its name may change on this save (2026-11-24). */
+  packageId?: string | null;
   roomBaseRate: number | string;
   extraBedRate?: number | string | null;
   cnbPercent?: number | null;

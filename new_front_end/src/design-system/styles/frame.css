@@ -2767,3 +2767,46 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .house-fullwrap.on { position: fixed; inset: 0; z-index: 85; background: var(--paper, #f2f3f0); overflow: auto; padding: 10px 16px 14px; }
 .ds .house-fullwrap.on .house-fullbar { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--line-2); }
 .ds .house-fullwrap.on .house-fullbar b { font-size: 16px; }
+
+/* "The same booking twice?" (2026-11-24) — the question Wrap up raises; amber, with its answers. */
+.ds .notice.dup-q:not(.desk-root *) { display: flex; align-items: flex-start; gap: var(--s3); border: 1px solid var(--warning-line); border-left: 5px solid var(--warning); background: var(--warning-soft); color: var(--ink); padding: var(--s3) var(--s4); border-radius: var(--r-control); margin-bottom: var(--s3); font-size: var(--t-base); }
+.ds .notice.dup-q .dup-mark { flex: none; width: 26px; height: 26px; border-radius: 50%; background: var(--warning); color: #fff; display: grid; place-items: center; font-weight: 800; font-size: 15px; }
+.ds .notice.dup-q .dup-body { display: grid; gap: 8px; min-width: 0; flex: 1; }
+.ds .notice.dup-q .dup-body > b { font-size: var(--t-lead); font-weight: 700; }
+.ds .notice.dup-q .dup-body p { margin: 0; }
+.ds .notice.dup-q .dup-other { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s3); }
+.ds .notice.dup-q .dup-link { font-weight: 700; }
+.ds .notice.dup-q .dup-note { display: grid; gap: 4px; max-width: 520px; }
+.ds .notice.dup-q .dup-acts { display: flex; flex-wrap: wrap; gap: var(--s2); }
+.ds .notice.dup-q .dup-cancel:not(.desk-root *) { color: var(--danger); border-color: var(--danger); }
+.ds .notice.dup-q .dup-cancel:hover:not(.desk-root *) { background: var(--danger-soft); }
+
+/* The booking file's Guests tab at Arrival and Check-in (2026-11-24): each guest as recorded, by room. */
+.ds .guests-view { display: grid; gap: var(--s3); }
+.ds .guests-view .gv-count { padding: var(--s2) var(--s3); border-radius: var(--r-control); border: 1px solid var(--line-2); font-size: var(--t-base); }
+.ds .guests-view .gv-count b { font-size: var(--t-lead); font-weight: 700; }
+.ds .guests-view .gv-count.ok { border-color: var(--success-line); background: var(--success-soft); }
+.ds .guests-view .gv-count.ok b { color: var(--success); }
+.ds .guests-view .gv-count.short { border-color: var(--warning-line); background: var(--warning-soft); }
+.ds .guests-view .gv-count.short b { color: var(--warning); }
+.ds .guests-view .gv-room { border: 1px solid var(--line-2); border-radius: var(--r-card); background: var(--surface, #fff); overflow: hidden; }
+.ds .guests-view .gv-band { padding: 6px var(--s3); background: var(--paper); border-bottom: 1px solid var(--line-2); font-size: var(--t-sm); }
+.ds .guests-view .gv-guest { display: flex; gap: var(--s3); align-items: flex-start; padding: var(--s3); }
+.ds .guests-view .gv-guest + .gv-guest { border-top: 1px solid var(--line); }
+.ds .guests-view .gv-photo { flex: none; }
+.ds .guests-view .gv-nophoto { display: grid; place-items: center; width: 80px; height: 60px; border: 1px dashed var(--line-2); border-radius: var(--r-sm); color: var(--ink-3); font-size: 11px; text-align: center; line-height: 1.2; }
+.ds .guests-view .gv-facts { display: grid; gap: 4px; min-width: 0; flex: 1; }
+.ds .guests-view .gv-name { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.ds .guests-view .gv-name b { font-size: var(--t-base); }
+.ds .guests-view .gv-lead { font-size: 11px; font-weight: 600; color: var(--accent); border: 1px solid var(--accent); border-radius: 3px; padding: 0 5px; }
+.ds .guests-view .gv-locked { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; color: var(--ink-2); }
+.ds .guests-view .gv-dl { display: grid; grid-template-columns: 74px 1fr; gap: 2px var(--s2); margin: 0; font-size: var(--t-sm); }
+.ds .guests-view .gv-dl dt { color: var(--ink-3); }
+.ds .guests-view .gv-dl dd { margin: 0; overflow-wrap: anywhere; }
+.ds .guests-view .gv-none { margin: 0; }
+.ds .guests-view .gv-foot { margin: 0; }
+/* Seven tabs with Guests at Arrival and Check-in (2026-11-24): tighter, so they keep to one row. */
+@media (min-width: 1101px) and (max-width: 2240px) {
+  .ds .ws-top .file .ftabs:has(> .ftab:nth-child(7)) .ftab { padding: 6px 5px; font-size: var(--t-meta); }
+  .ds .ws-top .file .ftabs:has(> .ftab:nth-child(7)) .ftab .tab-n { margin-left: 0; }
+}
