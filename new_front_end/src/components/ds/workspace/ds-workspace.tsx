@@ -39,6 +39,7 @@ import { getBillingSummary, getEntry, getEntryTimers, getEntryTrace, listEntryCo
 import { closeEntryAtS9 } from "@/lib/api/post-stay";
 import { useClosureReadiness } from "@/hooks/use-closure-readiness";
 import { useRoomInspections } from "@/hooks/use-room-inspections";
+import { useRoomsReleased } from "@/hooks/use-rooms-released";
 import { useUnansweredDamage } from "@/components/ds/steps/damage-card";
 import { activatePreArrival } from "@/lib/api/pre-arrival";
 import { completeCheckInToS7 } from "@/lib/api/check-in";
@@ -420,6 +421,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   // Each room's inspection at Check-out (2026-10-26 — one inspection per room).
   const inspections = useRoomInspections(entry, entry?.currentStage === "S8").data ?? null;
   const damage = useUnansweredDamage(entry, entry?.currentStage === "S8");
+  // Has the guest left every room — the booking's own record, the rule the move to Closed uses (2026-11-24).
+  const roomsReleased = useRoomsReleased(entry, entry?.currentStage === "S8").data ?? null;
 
   const parked = entry?.status === "PARKED";
   const parkTimer = findParkTimer(timersQuery.data?.items);
@@ -1250,7 +1253,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                     ];
                   })()
                 : checkOutStepActive
-                  ? s8Readiness(entry, { inspections, damage })
+                  ? s8Readiness(entry, { inspections, damage, roomsReleased })
                   : closedStepActive
                     ? closure
                       ? (() => {
@@ -1587,7 +1590,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   } else if (checkOutStepActive) {
     // Green once it can be pressed and floating in, and the move is said in the middle of the
     // screen, as from Inquiry to Stay (2026-10-30).
-    const ok = canProgressS8(entry, { inspections, damage });
+    const ok = canProgressS8(entry, { inspections, damage, roomsReleased });
     moveReady = ok;
     forward = (
       <Button

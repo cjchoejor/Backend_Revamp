@@ -81,6 +81,8 @@ type Tile = {
   n: number;
   /** What `n` counts, said beside it when it is not obvious ("rooms"). */
   unit?: string;
+  /** Two figures side by side in place of `n` — the arrivals in bookings and in rooms (2026-11-24, client's choice). */
+  pair?: Array<{ n: number; unit: string }>;
   /** One line on what is in it; its colour says how it stands. */
   sub: ReactNode;
   tone: Tone;
@@ -102,10 +104,21 @@ function Glance({ tiles, selected, onSelect }: { tiles: Tile[]; selected: TabId;
           onClick={() => onSelect(t.id)}
         >
           <span className="gt-label">{t.label}</span>
-          <span className="gt-n">
-            {t.n}
-            {t.unit ? <span className="gt-unit"> {t.unit}</span> : null}
-          </span>
+          {t.pair ? (
+            <span className="gt-n gt-pair">
+              {t.pair.map((p) => (
+                <span key={p.unit} className="gt-fig" data-fig={p.unit}>
+                  {p.n}
+                  <span className="gt-unit"> {p.unit}</span>
+                </span>
+              ))}
+            </span>
+          ) : (
+            <span className="gt-n">
+              {t.n}
+              {t.unit ? <span className="gt-unit"> {t.unit}</span> : null}
+            </span>
+          )}
           {t.progress && t.progress.total > 0 ? (
             <span className="gt-bar" aria-hidden>
               <i style={{ width: `${Math.round((t.progress.done / t.progress.total) * 100)}%` }} />
@@ -357,7 +370,7 @@ function TodayPageInner() {
   };
 
   const arrivalsTotal = lists.arriving.length + arrivedToday.length;
-  // The arrivals counted in rooms, the bookings said under them (2026-11-24, client).
+  // The arrivals in bookings AND in rooms, side by side (2026-11-24, client's choice C); the bar counts rooms.
   const roomsToCome = roomsOf(lists.arriving);
   const roomsArrived = roomsOf(arrivedToday);
   const roomsArriving = roomsToCome + roomsArrived;
@@ -382,17 +395,28 @@ function TodayPageInner() {
     {
       id: "arriving",
       label: "Arriving today",
-      n: roomsToCome,
-      unit: roomsToCome === 1 ? "room" : "rooms",
+      n: lists.arriving.length,
+      pair: arrivalsTotal
+        ? [
+            { n: lists.arriving.length, unit: lists.arriving.length === 1 ? "booking" : "bookings" },
+            { n: roomsToCome, unit: roomsToCome === 1 ? "room" : "rooms" },
+          ]
+        : undefined,
       tone: arrivalsTotal && !lists.arriving.length ? "ok" : null,
       progress: { done: roomsArrived, total: roomsArriving },
       sub: arrivalsTotal ? (
         lists.arriving.length ? (
-          <>
-            still to come in {plural(lists.arriving.length, "booking")} · <b>{roomsArrived}</b> of {roomsArriving} checked in
-          </>
+          arrivedToday.length ? (
+            <>
+              still to come · already in: <b>{plural(arrivedToday.length, "booking")}</b>, <b>{plural(roomsArrived, "room")}</b>
+            </>
+          ) : (
+            "still to come · none checked in yet"
+          )
         ) : (
-          <span className="ok-ink">all {plural(roomsArriving, "room")} checked in</span>
+          <span className="ok-ink">
+            all {plural(arrivalsTotal, "booking")}, {plural(roomsArriving, "room")} checked in
+          </span>
         )
       ) : (
         "no arrivals today"
@@ -471,7 +495,7 @@ function TodayPageInner() {
   const titles: Record<TabId, [string, string | null]> = {
     attention: ["Needs attention", null],
     arriving: [
-      lists.arriving.length ? `Arriving today · ${plural(roomsToCome, "room")} in ${plural(lists.arriving.length, "booking")}` : "Arriving today",
+      lists.arriving.length ? `Arriving today · ${plural(lists.arriving.length, "booking")} · ${plural(roomsToCome, "room")}` : "Arriving today",
       today ? `/bookings?from=${today}&to=${today}` : null,
     ],
     leaving: ["Leaving today", "/bookings?group=In-house"],

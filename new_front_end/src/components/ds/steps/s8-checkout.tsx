@@ -23,6 +23,7 @@ import { useSession } from "@/hooks/use-session";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
 import { usePaymentStatus } from "@/hooks/use-payment-status";
 import { useRoomInspections } from "@/hooks/use-room-inspections";
+import { useRoomsReleased } from "@/hooks/use-rooms-released";
 import { RoomInspectionGrid } from "./room-inspections";
 import { DamageCard, useUnansweredDamage } from "./damage-card";
 import {
@@ -1569,7 +1570,12 @@ function Departure({ entry, live }: { entry: EntryDetail; live: boolean }) {
   });
 
 
-  const released = rooms.length > 0 && rooms.every((r) => r.room?.currentClaimState === "DEPARTED_DIRTY" || r.room?.currentClaimState === "DEPARTED_CLEAN");
+  // The backend reads it off the booking's own record (2026-11-24) — a room cleaned or taken by the next guest
+  // after this booking settled stays released. The flags stand in only until it answers.
+  const releasedRead = useRoomsReleased(entry).data;
+  const released = releasedRead
+    ? releasedRead.allReleased
+    : rooms.length > 0 && rooms.every((r) => r.room?.currentClaimState === "DEPARTED_DIRTY" || r.room?.currentClaimState === "DEPARTED_CLEAN");
   const onAccount = !!entry.folio?.billingModel && ON_ACCOUNT_MODELS.has(entry.folio.billingModel);
 
   // Each section folds once its own presses finish it; the rooms open after the keys (2026-10-30).

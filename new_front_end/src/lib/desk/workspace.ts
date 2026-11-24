@@ -705,6 +705,8 @@ export function s8Readiness(
     inspections?: { allRecorded: boolean; inspectedCount: number; rooms: unknown[] } | null;
     /** The damage the inspections found (2026-10-26): listed only when there is some. */
     damage?: { any: boolean; unanswered: string[] } | null;
+    /** The backend's answer to "has the guest left every room" (2026-11-24) — wins over the flags below. */
+    roomsReleased?: { allReleased: boolean } | null;
   } = {},
 ): Precondition[] {
   const folio = entry.folio;
@@ -729,11 +731,15 @@ export function s8Readiness(
   const distinctRooms = Array.from(
     new Map((entry.roomAssignments ?? []).map((a) => [a.roomId, a.room])).values(),
   );
-  const roomsReleased =
-    distinctRooms.length > 0 &&
-    distinctRooms.every(
-      (r) => r?.currentClaimState === "DEPARTED_DIRTY" || r?.currentClaimState === "DEPARTED_CLEAN",
-    );
+  // The backend's answer reads the booking's own record (2026-11-24): a room cleaned, or taken by the
+  // next guest, after this booking settled stays released. The flags are only the stand-in until it
+  // answers.
+  const roomsReleased = opts.roomsReleased
+    ? opts.roomsReleased.allReleased
+    : distinctRooms.length > 0 &&
+      distinctRooms.every(
+        (r) => r?.currentClaimState === "DEPARTED_DIRTY" || r?.currentClaimState === "DEPARTED_CLEAN",
+      );
   // In the order the desk works them (2026-10-30): the keys back and each room inspected first — a
   // damage found is answered before the bill is settled (Policy 81) — then the bill, which releases
   // the rooms, then the departure handed over.
