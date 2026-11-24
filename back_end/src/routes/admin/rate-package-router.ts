@@ -18,6 +18,8 @@ const savePackageSchema = z.object({
   travelAgentId: z.string().trim().min(1).optional().nullable(),
   corporateAccountId: z.string().trim().min(1).optional().nullable(),
   name: z.string().trim().min(1).max(120),
+  /** The live version being edited (2026-11-24) — its name may change. Absent: a new package, or a new version of the one with this name. */
+  packageId: z.string().trim().min(1).max(64).optional().nullable(),
   roomBaseRate: decimal,
   extraBedRate: rate,
   cnbPercent: z.number().int().min(0).max(100).optional().nullable(),

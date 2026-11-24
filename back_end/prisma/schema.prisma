@@ -3635,6 +3635,9 @@ model RatePackage {
 
   effectiveFrom DateTime  @default(now())
   effectiveTo   DateTime? // null = currently active
+  /// The version that replaced this one (2026-11-24). Versions were found by name; this lets a
+  /// package be renamed and still read as one package. Null on the live version and a retired one.
+  supersededById String?
   notes         String?
   createdAt     DateTime  @default(now())
   createdBy     String
@@ -3647,6 +3650,7 @@ model RatePackage {
   @@index([scope, effectiveTo])
   @@index([travelAgentId, effectiveTo])
   @@index([corporateAccountId, effectiveTo])
+  @@index([supersededById])
   @@map("rate_packages")
 }
 
