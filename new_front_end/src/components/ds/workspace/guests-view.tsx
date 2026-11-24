@@ -7,12 +7,14 @@
  *
  * A reading of what the guest table on the step holds — the same list (`GET …/identity-proofs`, the
  * same query, so the two never disagree), each guest as recorded with their newest ID photo, grouped
- * by the room they sleep in. Nothing is changed here; the guest table at Arrival, Check-in and Stay is where
+ * by the room they sleep in. Each guest is one line until opened (same day, operator: "can it be shown
+ * in a collapsed way so that user can expand it"); a date of birth that does not fit stays on the line.
+ * Nothing is changed here; the guest table at Arrival, Check-in and Stay is where
  * it is typed. At Check-out and Closed it is the record of who stayed.
  */
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Lock } from "lucide-react";
+import { ChevronDown, ChevronRight, Lock } from "lucide-react";
 import { useSession } from "@/hooks/use-session";
 import { listIdentityProofs, type IdentityProofSummary } from "@/lib/api/identity-proofs";
 import { getChildPolicy } from "@/lib/api/child-policy";
@@ -51,6 +53,8 @@ export function GuestsView({ entry }: { entry: EntryDetail }) {
   const policy = useQuery({ queryKey: ["lookup", "child-policy"], queryFn: () => getChildPolicy(session!), enabled: !!session, staleTime: 10 * 60_000 });
   const rooms = useQuery({ queryKey: ["rooms-catalog"], queryFn: () => listRooms(session!), enabled: !!session, staleTime: 5 * 60_000 });
 
+  /** The guests opened — each is one line until opened. */
+  const [open, setOpen] = useState<Set<string>>(() => new Set());
   const docName = useMemo(() => new Map((list.data?.documentTypes ?? []).map((d) => [d.code, d.name])), [list.data]);
   const roomInfo = useMemo(() => {
     const m = new Map<string, { roomNumber: string; typeName: string | null }>();
@@ -90,6 +94,15 @@ export function GuestsView({ entry }: { entry: EntryDetail }) {
   const coverage = list.data?.coverage;
   const lead = list.data?.leadSubjectKey ?? "A0";
   const several = groups.length > 1 || (groups[0] && groups[0][0] !== "");
+  const allKeys = groups.flatMap(([, rows]) => rows.map((r) => r.slot.key));
+  const allOpen = allKeys.length > 0 && allKeys.every((k) => open.has(k));
+  const toggle = (k: string) =>
+    setOpen((cur) => {
+      const next = new Set(cur);
+      if (next.has(k)) next.delete(k);
+      else next.add(k);
+      return next;
+    });
 
   return (
     <div className="guests-view">
@@ -100,6 +113,11 @@ export function GuestsView({ entry }: { entry: EntryDetail }) {
           </b>{" "}
           {coverage.totalSlots === 1 ? "guest" : "guests"} recorded
           {coverage.vipExempt ? <span className="sm"> · a VIP booking — not required</span> : null}
+          {allKeys.length > 1 ? (
+            <button type="button" className="gv-all" onClick={() => setOpen(allOpen ? new Set() : new Set(allKeys))}>
+              {allOpen ? "Close all" : "Open all"}
+            </button>
+          ) : null}
         </div>
       ) : null}
       {groups.map(([roomId, rows]) => (
@@ -121,22 +139,36 @@ export function GuestsView({ entry }: { entry: EntryDetail }) {
             const docType = detail?.documentType && !UNTYPED_DOC_TYPES.has(detail.documentType) ? (docName.get(detail.documentType) ?? detail.documentType) : null;
             const age = detail?.ageCheck?.ageAtCheckIn;
             const recorded = !!(name || docType || detail?.documentNumber || detail?.dateOfBirth || photo);
+            const isOpen = open.has(slot.key);
+            const dobOff = !!(detail?.ageCheck && !detail.ageCheck.ok && detail.ageCheck.message);
+            // What is on file, in a few words, for the closed line.
+            const onFile = recorded ? [docType ?? (detail?.documentNumber ? "document" : null), photo ? "photo" : "no photo"].filter(Boolean).join(" · ") : "nothing recorded";
             return (
-              <div key={slot.key} className="gv-guest" data-guest={slot.key}>
+              <div key={slot.key} className={`gv-item${isOpen ? " open" : ""}`} data-guest={slot.key}>
+                <button type="button" className="gv-line" aria-expanded={isOpen} onClick={() => toggle(slot.key)}>
+                  {isOpen ? <ChevronDown size={14} aria-hidden /> : <ChevronRight size={14} aria-hidden />}
+                  <b className="gv-who">{name ?? slot.label}</b>
+                  {name ? <span className="meta">{slot.label}</span> : null}
+                  {slot.key === lead ? <span className="gv-lead">Lead</span> : null}
+                  {detail?.detailsConfirmedAt ? <Lock size={12} aria-label="confirmed" className="gv-lockmark" /> : null}
+                  <span className={`gv-onfile${recorded ? "" : " none"}`}>{onFile}</span>
+                  {dobOff ? (
+                    <span className="gv-dobflag" role="alert" title={detail!.ageCheck!.message!}>
+                      ! date of birth
+                    </span>
+                  ) : null}
+                </button>
+                {isOpen ? (
+              <div className="gv-guest">
                 <div className="gv-photo">
                   {photo ? <ProofThumb proof={photo} size={60} name={name ?? slot.label} /> : <span className="gv-nophoto">No ID photo</span>}
                 </div>
                 <div className="gv-facts">
-                  <div className="gv-name">
-                    <b>{name ?? slot.label}</b>
-                    {name ? <span className="meta"> · {slot.label}</span> : null}
-                    {slot.key === lead ? <span className="gv-lead">Lead</span> : null}
-                    {detail?.detailsConfirmedAt ? (
-                      <span className="gv-locked" title="Confirmed — the table is locked">
-                        <Lock size={12} aria-hidden /> confirmed
-                      </span>
-                    ) : null}
-                  </div>
+                  {detail?.detailsConfirmedAt ? (
+                    <span className="gv-locked" title="Confirmed — the table is locked">
+                      <Lock size={12} aria-hidden /> confirmed
+                    </span>
+                  ) : null}
                   {recorded ? (
                     <dl className="gv-dl">
                       <dt>Document</dt>
@@ -167,6 +199,8 @@ export function GuestsView({ entry }: { entry: EntryDetail }) {
                     </p>
                   ) : null}
                 </div>
+              </div>
+                ) : null}
               </div>
             );
           })}
