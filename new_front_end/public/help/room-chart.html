@@ -117,7 +117,9 @@ section.group { scroll-margin-top: 64px; }
 .rm-grid > .hd b { font-size: 14px; color: var(--ink); }
 .rm-grid > .hd.today { background: var(--ink); color: #fff; }
 .rm-grid > .hd.today b { color: #fff; }
-.rm-grid > .fr { font-weight: 800; }
+.rm-grid > .fr { font-weight: 800; flex-direction: column; line-height: 1.15; min-height: 38px; }
+.rm-grid > .fr small, .rm-grid > .lc small { display: block; font-size: 10px; font-weight: 600; color: var(--ink-2); }
+.rm-grid > .lc span { display: block; }
 .rm-grid > .fr.ok { background: #E6F2EC; color: var(--ok); }
 .rm-grid > .fr.short { background: #FBF1DE; color: #8A5A00; }
 .rm-grid > .fr.none { background: #F8E3E0; color: #B4473B; }
@@ -252,17 +254,15 @@ body.embed .page { padding-top: 12px; }
         <div class="rm-tb"><span>&larr; 7 nights</span><span>Today</span><span>7 nights &rarr;</span><span>From 24/11/2026</span><span>To 30/11/2026</span><span>Switch rooms</span><span>Hide picks</span><span>Colour by guest</span><span>Name by guest</span><span>Full screen</span><i class="cn">1</i></div>
         <div class="rm-grid">
           <div class="lc">Rooms</div><div class="hd today"><span>Today</span><b>24</b></div><div class="hd"><span>Wed</span><b>25</b></div><div class="hd"><span>Thu</span><b>26</b></div><div class="hd"><span>Fri</span><b>27</b></div><div class="hd"><span>Sat</span><b>28</b></div><div class="hd tk">Taken</div>
-          <div class="lc">Free that night<i class="cn">2</i></div><div class="fr short">2</div><div class="fr none">0</div><div class="fr ok">6</div><div class="fr ok">7</div><div class="fr short">3</div><div class="tk"></div>
-          <div class="lc">House booked<i class="cn">3</i></div><div class="hb">5/7</div><div class="hb">7/7</div><div class="hb">1/7</div><div class="hb">0/7</div><div class="hb">4/7</div><div class="tk"></div>
-          <div class="room"><span class="no">202</span><span class="cd">STDD</span><span class="bd">T</span><span class="dt"></span><i class="cn">4</i></div><div class="rbar s-in" style="grid-column: span 2">Karma &middot; Stay<i class="cn">5</i></div><div><i class="cn">6</i></div><div></div><div class="rbar s-res">Sonam</div><div class="tk">3/5<i class="cn">7</i></div>
+          <div class="lc"><span>Free that night<small>and rooms booked</small></span><i class="cn">2</i></div><div class="fr short">2 free<small>5/7 booked</small></div><div class="fr none">0 free<small>7/7 booked</small></div><div class="fr ok">6 free<small>1/7 booked</small></div><div class="fr ok">7 free<small>0/7 booked</small></div><div class="fr short">3 free<small>4/7 booked</small></div><div class="tk"></div>
+          <div class="room"><span class="no">202</span><span class="cd">STDD</span><span class="bd">T</span><span class="dt"></span><i class="cn">3</i></div><div class="rbar s-in" style="grid-column: span 2">Karma &middot; Stay<i class="cn">4</i></div><div><i class="cn">5</i></div><div></div><div class="rbar s-res">Sonam</div><div class="tk">3/5<i class="cn">6</i></div>
           <div class="room"><span class="no">203</span><span class="cd">STDD</span><span class="bd">K</span><span class="dt dirty"></span></div><div></div><div class="rbar s-held" style="grid-column: span 2">Pema &middot; Set up</div><div></div><div></div><div class="tk">2/5</div>
           <div class="room tfirst"><span class="no">204</span><span class="cd">DLXD</span><span class="bd">T</span><span class="dt"></span></div><div class="tfirst rbar s-res" style="grid-column: span 2">Tashi &middot; Reserve</div><div class="tfirst"></div><div class="tfirst"></div><div class="tfirst"></div><div class="tk tfirst">2/5</div>
         </div>
       </div>
       <ol class="rkey">
         <li><span><b>The toolbar.</b> <b>&larr; 7 nights</b> and <b>7 nights &rarr;</b> move a week back or on; <b>Today</b> comes back to tonight. <b>From</b> and <b>To</b> choose the nights shown (up to 62), and the list sets how many. <b>Switch rooms</b> moves rooms by clicking instead of dragging. <b>Hide picks</b> hides rooms only picked, not held. <b>Colour by guest</b> gives each booking its own colour; <b>Name by guest</b> or <b>Name by caller</b> changes the name on the bars. <b>Full screen</b> fills the window; <kbd>Esc</kbd> leaves it.</span></li>
-        <li><span><b>Free that night.</b> The rooms nobody holds that night: green for 5 or more, amber for 1 to 4, red for none. <b>Click the figure</b> to see each room type that night: free, occupied (a guest in the room) and reserved.</span></li>
-        <li><span><b>House booked.</b> The rooms taken that night, out of all rooms. Click it for the same list by room type.</span></li>
+        <li><span><b>Free that night, and rooms booked.</b> The large figure is the rooms nobody holds that night: green for 5 or more, amber for 1 to 4, red for none. Under it, the rooms booked out of all rooms. <b>Click it</b> to see each room type that night: free, occupied (a guest in the room) and reserved.</span></li>
         <li><span><b>The room.</b> Its number, its room type's code (<b>STDD</b> is Standard Double; rest the pointer on the code for the name), its bed (<b>K</b> King, <b>T</b> Twin, <b>Q</b> Queen, <b>S</b> Single) and a dot: green when clean, amber when it is to be cleaned. A heavier line starts the next room type. Click the number to report or read a fault.</span></li>
         <li><span><b>A booking's bar.</b> The guest's name and the step it is at. Rest the pointer on it for a second for its details. Click once to see all its rooms; click twice to open the booking.</span></li>
         <li><span><b>A free night.</b> Click a free night ahead of today to start an inquiry for that room from that night.</span></li>
@@ -316,7 +316,7 @@ body.embed .page { padding-top: 12px; }
       <li>While a guest is in the house, use <b>Extend the stay</b> or <b>Leaving early</b> to change the dates.</li>
       <li>If the system chose a booking's room, dropping it on another room of the same type asks whether to give it that room.</li>
       <li>Click a free night, with Switch rooms off, to start an inquiry for that room from that night.</li>
-      <li>Click a night's <b>Free that night</b> or <b>House booked</b> figure to see each room type that night: free, occupied and reserved. <kbd>Esc</kbd> or a click elsewhere closes it.</li>
+      <li>Click a night's <b>Free that night</b> figure to see each room type that night: free, occupied and reserved. <kbd>Esc</kbd> or a click elsewhere closes it.</li>
       <li>The chart opens on 7 nights from today. <b>From</b> and <b>To</b> show other nights, up to 62 at a time. The chart keeps the nights you chose when you open a booking and come back.</li>
       <li>Rest the pointer on a bar for a second to see the booking's details. Click a room number to report or review a fault.</li>
       <li>The examples use made-up bookings, Karma and Sonam, in two colours so you can follow them. <b>Colour by guest</b> on the real chart does the same.</li>

@@ -2015,37 +2015,31 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
               })}
               <th className="tc">Taken</th>
             </tr>
+            {/* One row for the night (2026-11-24, operator: "free that night and house booked somehow shows the
+                same info can you somehow show the both in one"): the rooms free, large and coloured, and the
+                rooms booked of all under it. A click opens the night's room types. */}
             <tr className="h2">
-              <th className="rc">Free that night</th>
+              <th className="rc">
+                <span className="fig-head">Free that night</span>
+                <span className="fig-head-sub">and rooms booked</span>
+              </th>
               {chart.perNight.map((n, i) => (
                 <td key={n.date} className={`need ${n.free >= 5 ? "ok" : n.free > 0 ? "short" : "none"}${nightBox?.i === i ? " on" : ""}`}>
                   <button
                     type="button"
                     className="fig-btn"
                     data-night-figure
-                    aria-label={`${longDay(n.date)}: ${n.free} free — see each room type`}
+                    aria-label={`${longDay(n.date)}: ${n.free} free, ${n.booked} of ${n.total} booked — see each room type`}
                     aria-expanded={nightBox?.i === i}
                     onClick={(e) => setNightBox(nightBox?.i === i ? null : { i, rect: (e.currentTarget as HTMLElement).getBoundingClientRect() })}
                   >
-                    {n.free}
-                  </button>
-                </td>
-              ))}
-              <td className="tc" />
-            </tr>
-            <tr className="h3">
-              <th className="rc">House booked</th>
-              {chart.perNight.map((n, i) => (
-                <td key={n.date} className={`hb${nightBox?.i === i ? " on" : ""}`}>
-                  <button
-                    type="button"
-                    className="fig-btn"
-                    data-night-figure
-                    aria-label={`${longDay(n.date)}: ${n.booked} of ${n.total} taken — see each room type`}
-                    aria-expanded={nightBox?.i === i}
-                    onClick={(e) => setNightBox(nightBox?.i === i ? null : { i, rect: (e.currentTarget as HTMLElement).getBoundingClientRect() })}
-                  >
-                    {n.booked}/{n.total}
+                    <b className="fig-free">
+                      {n.free}
+                      <span> free</span>
+                    </b>
+                    <span className="fig-booked">
+                      {n.booked}/{n.total} booked
+                    </span>
                   </button>
                 </td>
               ))}

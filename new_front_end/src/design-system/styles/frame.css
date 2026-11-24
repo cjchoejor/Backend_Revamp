@@ -685,7 +685,7 @@
 .ds .rchart .tape thead tr > * { position: sticky; background: var(--rs-head); z-index: 4; }
 .ds .rchart .tape thead .rc { z-index: 6; left: 0; }
 .ds .rchart .tape thead tr.h1 > * { top: 0; height: 56px; }
-.ds .rchart .tape thead tr.h2 > * { top: 56px; height: 26px; }
+.ds .rchart .tape thead tr.h2 > * { top: 56px; height: 44px; }
 .ds .rchart .tape thead tr.h3 > * { top: 82px; height: 26px; }
 .ds .rchart .tape thead tr.h1 th { color: var(--ink-2); font-weight: 400; text-align: center; line-height: 1.05; font-size: 12px; vertical-align: middle; }
 .ds .rchart .tape thead tr.h1 th .wd { display: block; font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); }
@@ -2859,3 +2859,10 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .guide-head b { font: 500 16px/1.2 var(--font-head, "Poppins", sans-serif); flex: 1; }
 .ds .guide-head .guide-tab { font-size: var(--t-sm); }
 .ds .guide-frame { flex: 1; width: 100%; border: 0; background: var(--paper); }
+
+/* Free that night and rooms booked in one row (2026-11-24): the free figure large, booked of all under it. */
+.ds .rchart .tape thead tr.h2 .fig-head { display: block; font-weight: 700; color: var(--ink-2); }
+.ds .rchart .tape thead tr.h2 .fig-head-sub { display: block; font-size: 11px; font-weight: 400; color: var(--ink-3); }
+.ds .rchart .tape .fig-btn .fig-free { display: block; font-size: 15px; font-weight: 800; line-height: 1.1; }
+.ds .rchart .tape .fig-btn .fig-free span { font-size: 11px; font-weight: 700; }
+.ds .rchart .tape .fig-btn .fig-booked { display: block; font-size: 11px; font-weight: 600; color: var(--ink-2); line-height: 1.2; }
