@@ -12,6 +12,14 @@
  * booking that cannot be moved (chosen by number, already handed out). Before the rooms are handed
  * out the act is the quiet choice (the room becomes fixed, nothing priced again); after, it is the
  * room change — a new pass, the papers made again and held — with the other booking moved first.
+ *
+ * A room held for another booking — chosen by number, already handed out, or with nowhere else to go —
+ * can be SWAPPED (2026-11-24, operator: "a swap feature of rooms there … make sure nothing breaks and
+ * everything is well audited and properly allocated with money taken properly"): this booking takes it
+ * and that booking takes the room this one leaves. It is the house chart's governed room move
+ * (`RoomMoveDialog`, `POST /room-moves`): each booking walks its own new pass and comes back to its
+ * step, the agreed price kept (a change of type asks which), the papers made again and held, every
+ * step traced on both bookings, the FOM's call.
  */
 import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
@@ -23,6 +31,8 @@ import { changeBookingRoom } from "@/lib/api/entries";
 import type { EntryDetail } from "@/types/api";
 import { fmtDay } from "@/lib/ds/format";
 import { DsDialog, toastRefusal } from "./kit";
+import { RoomMoveDialog } from "@/components/ds/rooms/room-move-dialog";
+import type { RoomMoveLegInput } from "@/lib/api/room-moves";
 
 const first = (s: string) => s.replace(/ \(ENT-[^)]+\)$/, "");
 
@@ -53,16 +63,20 @@ export function ArrivalRoomDialog({
 }) {
   const { session } = useSession();
   const open = !!roomId;
+  /** The swap, open in the room-move box (2026-11-24). */
+  const [swapLegs, setSwapLegs] = useState<RoomMoveLegInput[] | null>(null);
   const q = useQuery({
     queryKey: ["arrival-room-choices", entry.id, roomId, night, entry.updatedAt],
     queryFn: () => getArrivalRoomChoices(session!, entry.id, roomId!, night ? [night] : null),
-    enabled: !!session && open,
+    // Not while a swap runs: the room may be the other booking's a moment later (2026-11-24).
+    enabled: !!session && open && !swapLegs,
     staleTime: 5_000,
   });
   const data = q.data ?? null;
   const [toRoom, setToRoom] = useState<string | null>(null);
   useEffect(() => {
     setToRoom(null);
+    setSwapLegs(null);
   }, [roomId]);
   const chosen: ArrivalRoomChoice | null = data?.choices.find((c) => c.roomId === toRoom) ?? null;
   const handedOut = data?.mode === "ROOM_CHANGE";
@@ -97,9 +111,12 @@ export function ArrivalRoomDialog({
     onError: (e) => toastRefusal(e, "The room could not be given"),
   });
 
-  const why = !chosen ? "pick a room first" : !chosen.available ? "that room cannot be given" : null;
+  // A held room is swapped, not given; a swap trades whole rooms, so it is not offered for one night.
+  const swap = !!chosen && !chosen.available;
+  const why = !chosen ? "pick a room first" : swap && oneNight ? "a swap trades the whole room — pick All nights in the table" : null;
 
   return (
+    <>
     <DsDialog
       open={open}
       onClose={onClose}
@@ -120,6 +137,11 @@ export function ArrivalRoomDialog({
             </p>
           ) : null}
           {handedOut ? <p>This is a room change: the booking is priced again (the same rate), its papers are made again and held for you, and it comes back here.</p> : null}
+          <p>
+            A room held for another booking can be swapped: this booking takes it, and theirs takes the room this one leaves. Each is
+            priced again at the rate it agreed, its papers made again and held, and both come back to their step. It is the FOM&rsquo;s
+            call, and both bookings&rsquo; history says it.
+          </p>
         </>
       }
       footer={
@@ -132,9 +154,13 @@ export function ArrivalRoomDialog({
             state={give.isPending ? "working" : why ? "inert" : "default"}
             reason={why ?? undefined}
             workingLabel="Giving the room…"
-            onClick={() => !why && give.mutate()}
+            onClick={() => {
+              if (why || !chosen) return;
+              if (swap) setSwapLegs([{ entryId: entry.id, fromRoomId: roomId!, toRoomId: chosen.roomId }]);
+              else give.mutate();
+            }}
           >
-            {chosen ? `Give it Room ${chosen.roomNumber}` : "Give it the room"}
+            {chosen ? (swap ? `Swap rooms with them` : `Give it Room ${chosen.roomNumber}`) : "Give it the room"}
           </Button>
         </>
       }
@@ -157,8 +183,8 @@ export function ArrivalRoomDialog({
                 type="button"
                 role="radio"
                 aria-checked={on}
-                className={`rt-opt${on ? " on" : ""}${shut ? " shut" : ""}`}
-                disabled={shut || give.isPending}
+                className={`rt-opt${on ? " on" : ""}${shut ? " swap" : ""}`}
+                disabled={give.isPending}
                 onClick={() => setToRoom(c.roomId)}
               >
                 <span className="rt-dot" aria-hidden />
@@ -167,22 +193,38 @@ export function ArrivalRoomDialog({
                   {takes ? (
                     <small> · {c.moves.map((m) => `${first(m.booking)}'s — they move to Room ${m.toRoomNumber}`).join(", ")}</small>
                   ) : shut ? (
-                    <small> · {c.words}</small>
+                    <small> · {c.words} · pick it to swap rooms with them</small>
                   ) : null}
                   {c.fault ? <small className="warn-ink"> · a fault is reported on it</small> : null}
                 </span>
-                <span className={`rt-free ${shut ? "none" : takes ? "few" : "plenty"}`}>{shut ? "held" : takes ? "taken from them" : "free"}</span>
+                <span className={`rt-free ${shut ? "none" : takes ? "few" : "plenty"}`}>{shut ? "held · swap" : takes ? "taken from them" : "free"}</span>
                 <span />
               </button>
             );
           })}
         </div>
       )}
+      {swap && !oneNight ? (
+        <p className="sm" style={{ marginTop: 10 }}>
+          <b>A swap</b> — Room {chosen!.roomNumber} is held for another booking. This booking takes it, and that booking takes this room. The
+          next box shows both bookings, what each is priced at, and asks why.
+        </p>
+      ) : null}
       {oneNight ? (
         <p className="sm" style={{ marginTop: 10 }}>
           <b>{fmtDay(night!)} only</b> — the other {roomNights.length - 1 === 1 ? "night stays" : `${roomNights.length - 1} nights stay`} in this room.
         </p>
       ) : null}
     </DsDialog>
+      <RoomMoveDialog
+        legs={swapLegs}
+        onClose={() => {
+          // Whether it ran or not, read the booking again; the room double-clicked may be the other booking's now.
+          setSwapLegs(null);
+          onChanged();
+          onClose();
+        }}
+      />
+    </>
   );
 }

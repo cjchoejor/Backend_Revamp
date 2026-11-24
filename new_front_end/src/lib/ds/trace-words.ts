@@ -24,6 +24,7 @@ const WORDS: Record<string, string> = {
   "QUOTATION.SENT": "Quotation sent",
   "QUOTATION.ACCEPTED": "Quotation accepted",
   "QUOTATION.SUPERSEDED": "Quotation replaced by a new one",
+  "QUOTATION.MSR_GM_WAIVED": "Sold below the house's minimum rate",
   "QUOTATION.EXPIRED": "Quotation ran out",
   "QUOTATION.ACKNOWLEDGEMENT_RECORDED": "The guest's answer to the quotation recorded",
   "PROFORMA_INVOICE.ACKNOWLEDGEMENT_RECORDED": "The guest's answer to the proforma recorded",
@@ -402,6 +403,13 @@ export function traceDetail(ev: TraceEvent, names?: Partial<HistoryNames>): stri
   // Older lines name rooms and reservations by id; History passes the names to read them by.
   const roomNo = (id: unknown) => (typeof id === "string" ? names?.roomNo?.(id) ?? null : null);
   const voucherNo = (id: unknown) => (typeof id === "string" ? names?.voucherNo?.(id) ?? null : null);
+  // Below the house's minimum (2026-11-24): which rooms, at what, and on whose authority.
+  if (ev.eventType === "QUOTATION.MSR_GM_WAIVED") {
+    const w = (p.msrGmWaiver ?? {}) as { rooms?: Array<{ roomNumber?: string; rate?: number; floor?: number }>; level?: string; carriedFrom?: string; rationale?: string };
+    const rooms = (w.rooms ?? []).map((r) => `Room ${r.roomNumber} at ${r.rate} (minimum ${r.floor})`);
+    const who = w.carriedFrom ? `the price already agreed on ${w.carriedFrom}` : w.level === "L4" ? "the admin's waiver" : "the GM's waiver";
+    return [rooms.join(" · ") || w.rationale || null, who].filter(Boolean).join(" · ");
+  }
   // The steps of a room change name what they made or let go (2026-10-13).
   if (ev.eventType === "COMMITTED_HOLD.RELEASED_ON_ROOM_CHANGE" && Array.isArray(p.releasedRoomIds)) {
     const nos = (p.releasedRoomIds as unknown[]).map(roomNo).filter((x): x is string => !!x);

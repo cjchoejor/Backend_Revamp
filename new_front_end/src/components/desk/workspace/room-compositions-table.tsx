@@ -955,6 +955,12 @@ export function RoomCompositionsTable({
     const t = refByRoomType.get(roomById.get(roomId)?.roomType?.id ?? "");
     return t?.roomRateSource === "STANDARD_RATE_PLAN" ? (t.msrValue ?? null) : null;
   };
+  /**
+   * Who may sell below the floor (2026-11-24, operator: "GM and admin can sell the rooms below the
+   * msr"): the server's rule — for them a rate under it is a note (amber), the save goes and the
+   * waiver is recorded in their name; for anyone else it is a fault the save waits on.
+   */
+  const mayWaiveFloor = session?.actorLevel === "L3" || session?.actorLevel === "L4";
   /** A typed room rate under that floor — a breach the operator must see, so the cell reads red. */
   const belowFloor = (roomId: string, col: NumCol): boolean => {
     if (col !== "rRoom") return false;
@@ -962,6 +968,17 @@ export function RoomCompositionsTable({
     const typed = parseFloat(rows[roomId]?.rRoom ?? "");
     return floor != null && Number.isFinite(typed) && typed > 0 && typed < floor;
   };
+  /**
+   * Under the floor but at or above a price already agreed on this booking (2026-11-24, the server's
+   * `agreedRate`): anyone may keep it — a GM's waiver, or a rate quoted while it stood.
+   */
+  const agreedBelowFloor = (roomId: string): boolean => {
+    const agreed = refByRoomType.get(roomById.get(roomId)?.roomType?.id ?? "")?.agreedRate;
+    const typed = parseFloat(rows[roomId]?.rRoom ?? "");
+    return agreed != null && Number.isFinite(typed) && typed >= agreed;
+  };
+  /** Under the floor and not the person's to give — the fault the save waits on. */
+  const floorRefused = (roomId: string): boolean => belowFloor(roomId, "rRoom") && !mayWaiveFloor && !agreedBelowFloor(roomId);
   /** The reference figure a given rate cell would fall back to — null when nothing is on file. */
   const refFor = (roomId: string, col: NumCol): number | null => {
     const typeId = roomById.get(roomId)?.roomType?.id;
@@ -2038,8 +2055,8 @@ export function RoomCompositionsTable({
       if (mealNights.length) {
         out.push(`${nameOf(id)} — more meal-plan pax than guests in the room${onNights(mealNights)}`);
       }
-      if (belowFloor(id, "rRoom")) {
-        out.push(`${nameOf(id)} — priced below the house floor of ${floorOf(id)}, which needs the GM's waiver`);
+      if (floorRefused(id)) {
+        out.push(`${nameOf(id)} — priced below the house's minimum of ${floorOf(id)}; only the GM or an admin may sell below it`);
       }
     }
     if (partySize > 0) {
@@ -2541,11 +2558,16 @@ export function RoomCompositionsTable({
                             decimal: true,
                             wide: true,
                             readOnly: lockCommercial,
-                            stop: belowFloor(id, col),
+                            stop: belowFloor(id, col) && floorRefused(id),
+                            warn: belowFloor(id, col) && !floorRefused(id),
                             placeholder: ref != null ? String(ref) : "—",
                             sub,
                             title: belowFloor(id, col)
-                              ? `Below the floor for this room type — ${floorOf(id)} ${rateRef?.currency ?? ""} is the house's minimum sellable rate. A booking priced under it needs the GM's waiver.`
+                              ? !floorRefused(id) && !mayWaiveFloor
+                                ? `Below the house's minimum of ${floorOf(id)} ${rateRef?.currency ?? ""} for this room type — the price already agreed on this booking, so it may stay.`
+                                : mayWaiveFloor
+                                ? `Below the house's minimum of ${floorOf(id)} ${rateRef?.currency ?? ""} for this room type — sold below it on your authority; saving records the waiver in your name.`
+                                : `Below the house's minimum of ${floorOf(id)} ${rateRef?.currency ?? ""} for this room type — only the GM or an admin may sell below it.`
                               : lockCommercial
                               ? "The guest is in-house — a rate change mid-stay is a GM re-price, not a desk edit. The figures here are what the booking is priced at."
                               : (ref != null
@@ -2951,18 +2973,21 @@ export function RoomCompositionsTable({
 
       {/* Rates under the house floor, named — the grid's red cells say WHICH, this says what it
           means for the quote ("UIappeal", 2026-09-29). */}
-      {!onSave && sealedRoomIds.some((id) => belowFloor(id, "rRoom")) && (
-        <p className="rct-refusal" role="alert" aria-live="polite" style={{ marginTop: 8, marginBottom: 0 }}>
-          <span className="ic" aria-hidden="true">
-            !
-          </span>
+      {(!onSave || mayWaiveFloor) && sealedRoomIds.some((id) => belowFloor(id, "rRoom")) && (
+        <p className={mayWaiveFloor ? "rce-warns" : "rct-refusal"} role={mayWaiveFloor ? undefined : "alert"} aria-live="polite" style={{ marginTop: 8, marginBottom: 0 }}>
+          {mayWaiveFloor ? null : (
+            <span className="ic" aria-hidden="true">
+              !
+            </span>
+          )}
           <span>
             {sealedRoomIds
               .filter((id) => belowFloor(id, "rRoom"))
               .map((id) => `${nameOf(id)} (floor ${floorOf(id)})`)
               .join(" · ")}{" "}
-            — priced below the house&rsquo;s minimum sellable rate. A booking under the floor needs the GM&rsquo;s waiver
-            before the quote can be generated.
+            {mayWaiveFloor
+              ? "— priced below the house's minimum sellable rate. Sold below it on your authority: saving records the waiver in your name."
+              : "— priced below the house's minimum sellable rate. Only the GM or an admin may sell below it."}
           </span>
         </p>
       )}

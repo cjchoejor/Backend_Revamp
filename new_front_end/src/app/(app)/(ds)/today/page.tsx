@@ -591,8 +591,14 @@ function TodayPageInner() {
       lists.arriving.length ? `Arriving today · ${plural(lists.arriving.length, "booking")} · ${plural(roomsToCome, "room")}` : "Arriving today",
       today ? `/bookings?from=${today}&to=${today}` : null,
     ],
-    leaving: ["Leaving today", "/bookings?group=In-house"],
-    inhouse: ["In-house", "/bookings?group=In-house"],
+    leaving: [
+      lists.leaving.length ? `Leaving today · ${plural(lists.leaving.length, "booking")} · ${plural(roomsLeaving, "room")}` : "Leaving today",
+      "/bookings?group=In-house",
+    ],
+    inhouse: [
+      lists.inHouse.length ? `In-house · ${plural(lists.inHouse.length, "booking")} · ${plural(roomsIn, "room")}` : "In-house",
+      "/bookings?group=In-house",
+    ],
     clean: ["Rooms to clean", "/housekeeping"],
     week: [`Arriving ${tomorrow && endOfWeek ? fmtRange(tomorrow, endOfWeek) : "the next 7 days"}`, tomorrow ? `/bookings?group=Upcoming&from=${tomorrow}&to=${endOfWeek}` : null],
     inquiries: ["New inquiries today", "/bookings?group=Inquiry"],
