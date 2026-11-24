@@ -15,6 +15,12 @@
  *          · --rooms N (how many rooms, default 1 — a MULTI-room booking, added 2026-09-09 for
  *            PMS-237's one-room-leaves-early path, which by definition cannot be exercised on a
  *            single-room stay).
+ *          · --stage S7|S5|S4 (2026-11-24, default S7): S5 is a booking at Arrival (its rooms handed
+ *            out, no keys), S4 one at Reserve (its rooms on its pick and hold only); both start
+ *            `--arrive-in D` days from the hotel's today (default 0) for `--nights N` (default 1).
+ *          · --room-list 202,302 (the rooms by number, in place of picking free ones)
+ *          · --agent "Bhutan INC" (booked through that travel agent).
+ *          Every room sleeps two adults, so the party is two a room.
  *
  * Shape (mirrors what the real S1→S7 walk leaves behind, minimally): guest profile, inquiry,
  * entry at S7/ACTIVE with check-in `slept` days ago and checkout `ahead` days ahead, one segment,
@@ -44,7 +50,13 @@ const GUEST_FIRST = GUEST[0] || "Early";
 const GUEST_LAST = GUEST.slice(1).join(" ") || "Leaver";
 const RATE = Number(arg("--rate", "2000"));
 const ROOM = arg("--room", "");
-const ROOM_COUNT = Math.max(1, Number(arg("--rooms", "1")));
+const ROOM_LIST = arg("--room-list", "").split(",").map((x) => x.trim()).filter(Boolean);
+const ROOM_COUNT = ROOM_LIST.length || Math.max(1, Number(arg("--rooms", "1")));
+const STAGE = (["S7", "S5", "S4"].includes(arg("--stage", "S7")) ? arg("--stage", "S7") : "S7") as "S7" | "S5" | "S4";
+const IN_HOUSE = STAGE === "S7";
+const ARRIVE_IN = Math.max(0, Number(arg("--arrive-in", "0")));
+const NIGHTS_AHEAD = Math.max(1, Number(arg("--nights", "1")));
+const AGENT = arg("--agent", "").trim();
 // --tag X seeds a SECOND fixture beside the first (ids `TEST-ED-X-…`), e.g. two in-house guests
 // for a room switch (2026-10-12). Without a tag the script seeds / cleans every `TEST-ED-` row.
 const TAG = arg("--tag", "").replace(/[^A-Za-z0-9]/g, "").toUpperCase();
@@ -72,6 +84,7 @@ async function clean() {
   ]);
   console.log(`removing ${ids.length} test entries and their rows`);
   if (!COMMIT) return;
+  await prisma.voucherCollection.deleteMany({ where: { folioId: { in: folioIds } } });
   await prisma.earlyDepartureRecord.deleteMany({ where: { entryId: { in: ids } } });
   await prisma.timerRecord.deleteMany({ where: { entryId: { in: ids } } });
   await prisma.handoffRecord.deleteMany({ where: { entryId: { in: ids } } });
@@ -132,9 +145,14 @@ async function main() {
   const ratePlan = await prisma.ratePlanRegistry.findFirst({ select: { id: true } });
   if (!staff) throw new Error("no L4 staff user to own the test data");
 
-  const checkIn = dayStart(-SLEPT);
-  const checkOut = dayStart(AHEAD);
-  const nights = SLEPT + AHEAD;
+  // In house: slept nights behind, nights ahead. Before Arrival: from the day it arrives.
+  const checkIn = IN_HOUSE ? dayStart(-SLEPT) : dayStart(ARRIVE_IN);
+  const checkOut = IN_HOUSE ? dayStart(AHEAD) : dayStart(ARRIVE_IN + NIGHTS_AHEAD);
+  const nights = IN_HOUSE ? SLEPT + AHEAD : NIGHTS_AHEAD;
+  const nightDates = Array.from({ length: nights }, (_, i) => iso(new Date(checkIn.getTime() + i * 86_400_000)));
+  const party = 2 * ROOM_COUNT;
+  const agent = AGENT ? await prisma.travelAgent.findFirst({ where: { displayName: AGENT, isActive: true }, select: { id: true, displayName: true } }) : null;
+  if (AGENT && !agent) throw new Error(`no active travel agent named ${AGENT}`);
 
   // A room free across the whole window (reservations + live holds), or the one asked for.
   const busy = new Set<string>();
@@ -147,7 +165,11 @@ async function main() {
   }
   for (const h of await prisma.committedHold.findMany({ where: { roomId: { not: null }, state: { in: ["PLACED", "CONFIRMED"] }, expiresAt: { gt: new Date() } }, select: { roomId: true } }))
     if (h.roomId) busy.add(h.roomId);
-  const picked = ROOM
+  const picked = ROOM_LIST.length
+    ? (await prisma.room.findMany({ where: { roomNumber: { in: ROOM_LIST } }, select: { id: true, roomNumber: true, roomTypeId: true, currentClaimState: true } })).sort(
+        (a, b) => ROOM_LIST.indexOf(a.roomNumber) - ROOM_LIST.indexOf(b.roomNumber),
+      )
+    : ROOM
     ? await prisma.room.findMany({ where: { roomNumber: ROOM }, select: { id: true, roomNumber: true, roomTypeId: true, currentClaimState: true }, take: 1 })
     : await prisma.room.findMany({
         where: { id: { notIn: [...busy] }, isBlocked: false, currentClaimState: "FREE", isShadowInventory: false },
@@ -170,13 +192,21 @@ async function main() {
   const gstAmount = total.sub(subtotal).sub(scAmount);
 
   console.log(
-    `in-house test booking: room${rooms.length > 1 ? "s" : ""} ${rooms.map((r) => r.roomNumber).join(", ")} · stay ${iso(checkIn)} → ${iso(checkOut)} (${nights} nights, ${SLEPT} slept) · rate ${RATE}/night net · frozen subtotal ${subtotal} / total ${total} PER ROOM`,
+    `${STAGE} test booking${agent ? ` through ${agent.displayName}` : ""}: room${rooms.length > 1 ? "s" : ""} ${rooms.map((r) => r.roomNumber).join(", ")} · stay ${iso(checkIn)} → ${iso(checkOut)} (${nights} nights${IN_HOUSE ? `, ${SLEPT} slept` : ""}) · rate ${RATE}/night net · frozen subtotal ${subtotal} / total ${total} PER ROOM`,
   );
   if (!COMMIT) return console.log("(dry run — pass --commit to write)");
 
   const gp = await prisma.guestProfile.create({ data: { id: `${P}GP`, firstName: GUEST_FIRST, lastName: GUEST_LAST, phone: "+97517000099", email: null } });
   const inq = await prisma.inquiry.create({
-    data: { id: `${P}INQ`, referenceNumber: `${P}INQ`, guestProfileId: gp.id, defaultCustodianId: staff.id, sourceChannel: "DIRECT", notes: "Seeded in-house test booking (early departure)" },
+    data: {
+      id: `${P}INQ`,
+      referenceNumber: `${P}INQ`,
+      guestProfileId: gp.id,
+      defaultCustodianId: staff.id,
+      sourceChannel: agent ? "AGENT" : "DIRECT",
+      ...(agent ? { travelAgentId: agent.id, cameInAs: "TRAVEL_AGENT" } : {}),
+      notes: "Seeded test booking",
+    } as Prisma.InquiryUncheckedCreateInput,
   });
   const entry = await prisma.entry.create({
     data: {
@@ -185,28 +215,38 @@ async function main() {
       guestProfileId: gp.id,
       useType: "LEISURE",
       status: "ACTIVE",
-      currentStage: "S7",
+      currentStage: STAGE,
       checkInDate: checkIn,
       checkOutDate: checkOut,
-      guestCount: 2,
-      adultCount: 2,
+      guestCount: party,
+      adultCount: party,
       numberOfRooms: rooms.length,
       contactPersonName: `${GUEST_FIRST} ${GUEST_LAST}`,
       contactPersonPhone: "+97517000099",
       createdBy: staff.id,
-      keysIssuedAt: checkIn,
-      keysIssuedCount: rooms.length,
-      keysIssuedBy: staff.id,
-      registrationCompletedAt: checkIn,
-      registrationCompletedBy: staff.id,
+      ...(IN_HOUSE
+        ? { keysIssuedAt: checkIn, keysIssuedCount: rooms.length, keysIssuedBy: staff.id, registrationCompletedAt: checkIn, registrationCompletedBy: staff.id }
+        : {}),
     },
   });
-  const seg = await prisma.segment.create({ data: { id: `${P}SEG`, entryId: entry.id, segmentNumber: 1, stage: "S7", createdBy: staff.id } });
+  const seg = await prisma.segment.create({ data: { id: `${P}SEG`, entryId: entry.id, segmentNumber: 1, stage: STAGE, createdBy: staff.id } });
+  // The rooms picked, sealed — the pick every booking carries from Inquiry (by number, the older shape).
+  await prisma.availabilityConfiguration.create({
+    data: {
+      entryId: entry.id,
+      segmentId: seg.id,
+      searchCriteria: { checkInDate: iso(checkIn), checkOutDate: iso(checkOut), numberOfRooms: rooms.length } as Prisma.InputJsonValue,
+      resultSet: {} as Prisma.InputJsonValue,
+      optionSelected: { perNight: nightDates.map((date) => ({ date, roomIds: rooms.map((r) => ({ roomId: r.id, isDeficient: false })) })), isDeficient: false } as Prisma.InputJsonValue,
+      sealedAt: checkIn < new Date() ? checkIn : new Date(),
+      createdBy: staff.id,
+    },
+  });
   await prisma.committedHold.create({
     data: {
       id: `${P}CH`, entryId: entry.id, segmentId: seg.id, roomId: room.id, roomTypeId: room.roomTypeId, state: "CONFIRMED",
       placedBy: staff.id, ttlSeconds: 86_400, expiresAt: checkOut,
-      perNightBreakdown: [{ date: iso(checkIn), roomIds: rooms.map((r) => ({ roomId: r.id })) }] as Prisma.InputJsonValue,
+      perNightBreakdown: nightDates.map((date) => ({ date, roomIds: rooms.map((r) => ({ roomId: r.id })) })) as Prisma.InputJsonValue,
     },
   });
   await prisma.reservation.create({
@@ -214,12 +254,14 @@ async function main() {
       id: `${P}RES`, entryId: entry.id, segmentId: seg.id,
       frozenRate: new Prisma.Decimal(RATE), frozenRatePlanId: ratePlan?.id ?? `${P}PLAN`,
       frozenBillingModel: "GUEST_PAY", frozenCheckInDate: checkIn, frozenCheckOutDate: checkOut,
-      frozenGuestCount: 2, confirmedAt: checkIn, confirmedBy: staff.id,
+      frozenGuestCount: party, confirmedAt: IN_HOUSE ? checkIn : new Date(), confirmedBy: staff.id,
     },
   });
   await prisma.entry.update({ where: { id: entry.id }, data: { currentReservationId: `${P}RES` } });
   await prisma.folio.create({
-    data: { id: `${P}FOL`, entryId: entry.id, state: "LIVE", billingModel: "GUEST_PAY", createdBy: staff.id, convertedToLiveAt: checkIn, convertedBy: staff.id, outstandingBalance: new Prisma.Decimal(0) },
+    data: IN_HOUSE
+      ? { id: `${P}FOL`, entryId: entry.id, state: "LIVE", billingModel: "GUEST_PAY", createdBy: staff.id, convertedToLiveAt: checkIn, convertedBy: staff.id, outstandingBalance: new Prisma.Decimal(0) }
+      : { id: `${P}FOL`, entryId: entry.id, state: "PROVISIONAL", billingModel: "GUEST_PAY", createdBy: staff.id, outstandingBalance: new Prisma.Decimal(0) },
   });
   // The FIXATION record, not just the folio column (2026-10-06). The S4 re-freeze reads the latest
   // BillingModelTransitionRecord — `folio.billingModel` is not what Policy 33 consults — so without
@@ -256,7 +298,7 @@ async function main() {
       referenceNumber: `${P}QUO`,
       createdBy: staff.id,
       state: "ACCEPTED",
-      acceptedAt: checkIn,
+      acceptedAt: IN_HOUSE ? checkIn : new Date(),
       totalAmount: total.mul(rooms.length),
       commercialTerms: {
         roomCompositions: rooms.map((r) => ({ roomId: r.id, occupantCount: 2, adultCount: 2, extraBedCount: 0, negotiatedRoomRate: RATE })),
@@ -282,19 +324,25 @@ async function main() {
     } as Prisma.QuotationUncheckedCreateInput,
   });
   for (const [i, r] of rooms.entries()) {
-    await prisma.roomAssignment.create({
-      data: {
-        id: `${P}RA${i === 0 ? "" : i + 1}`, entryId: entry.id, roomId: r.id, assignedBy: staff.id, startDate: checkIn, endDate: checkOut,
-        occupantCount: 2, adultCount: 2, frozenSubtotal: subtotal, frozenTotal: total, keyIssuedAt: checkIn, keyIssuedBy: staff.id,
-      } as Prisma.RoomAssignmentUncheckedCreateInput,
-    });
-    await prisma.room.update({ where: { id: r.id }, data: { currentClaimState: "OCCUPIED" } });
+    // At Reserve the rooms are on the pick and the hold only; from Arrival they are handed out.
+    if (STAGE !== "S4") {
+      await prisma.roomAssignment.create({
+        data: {
+          id: `${P}RA${i === 0 ? "" : i + 1}`, entryId: entry.id, roomId: r.id, assignedBy: staff.id, startDate: checkIn, endDate: checkOut,
+          occupantCount: 2, adultCount: 2, frozenSubtotal: subtotal, frozenTotal: total,
+          ...(IN_HOUSE ? { keyIssuedAt: checkIn, keyIssuedBy: staff.id } : {}),
+        } as Prisma.RoomAssignmentUncheckedCreateInput,
+      });
+    }
+    // In house the room is occupied; before that it reads confirmed — but never over another guest.
+    if (IN_HOUSE) await prisma.room.update({ where: { id: r.id }, data: { currentClaimState: "OCCUPIED" } });
+    else if (r.currentClaimState === "FREE") await prisma.room.update({ where: { id: r.id }, data: { currentClaimState: "CONFIRMED" } });
   }
   // In-house from NOW as far as the hotel's audits know (2026-09-18): the fixture did not exist
   // when any earlier night was audited, so those nights are exactly a late check-in's — running
   // the night again catches them up. Stamped with the check-in date, an already-audited night
   // could never be charged and settlement refused the stay.
-  await prisma.stageDwellRecord.create({ data: { entryId: entry.id, stage: "S7", enteredAt: new Date() } });
+  await prisma.stageDwellRecord.create({ data: { entryId: entry.id, stage: STAGE, enteredAt: new Date() } });
   console.log(`created ${entry.id} in room${rooms.length > 1 ? "s" : ""} ${rooms.map((r) => r.roomNumber).join(", ")} — now run the night audit for ${SLEPT > 0 ? `${iso(checkIn)} … ${iso(dayStart(-1))}` : "(no slept nights)"}`);
 }
 

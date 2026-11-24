@@ -185,6 +185,14 @@ export interface EntryBillingSummary {
   } | null;
   /** The stay as priced plus what was added to it (2026-11-10). Null without a priced stay or a bill. */
   stayWithAdded: number | null;
+  /**
+   * What the guest still owes on the whole stay (2026-11-24, for Today's lists): the bill's balance
+   * plus the part of the priced stay not billed yet — a guest arriving or in house has not had every
+   * night posted, so the bill alone reads too low (or below zero after an advance). From Check-out on,
+   * and for a booking that ended without its stay, it is the bill's balance. `amount` never below zero; what was paid
+   * beyond the stay is `paidAhead`. Null without a bill.
+   */
+  stillToPay: { amount: number; paidAhead: number; notBilledYet: number } | null;
 }
 
 function money(d: Prisma.Decimal | null): number | null {
@@ -407,6 +415,9 @@ export async function buildEntryBillingSummary(prisma: Db, entryId: string): Pro
   let folioBlock: EntryBillingSummary["folio"] = null;
   // What was added to the stay as priced, for `stayWithAdded` (2026-11-10).
   let addedTotalDec: Prisma.Decimal | null = null;
+  // The ledger read raw for `stillToPay` (2026-11-24): what is billed, and lines − in + out − write-offs.
+  let billedSoFarDec: Prisma.Decimal | null = null;
+  let ledgerBalanceDec: Prisma.Decimal | null = null;
   if (entry.folio) {
     // Only the RATES are needed to split a legacy combined tax back into its parts — the ratio
     // svc : gst(1+svc) does not depend on what it was charged on. See `splitCombinedTax`.
@@ -541,6 +552,13 @@ export async function buildEntryBillingSummary(prisma: Db, entryId: string): Pro
     const stayExtras = splitStayAndExtras(lines);
     const placeOf = (l: (typeof lines)[number]) => (l.room?.roomNumber ? `Room ${l.room.roomNumber}` : l.space ? l.space.name ?? l.space.code ?? null : null);
     addedTotalDec = stayExtras.extras.length ? stayExtras.extrasTotal : null;
+    billedSoFarDec = sumMoneyBy(lines, "amount");
+    {
+      // The stored balance (what Check-out settles; an imported bill keeps its pinned figure), less
+      // money paid over — for an ordinary bill exactly lines − in + out − write-offs.
+      const raw = billedSoFarDec.sub(toDecimal(inAgg._sum.amount)).add(refundedDec).sub(writtenOffDec);
+      ledgerBalanceDec = toDecimal(entry.folio.outstandingBalance).sub(raw.lt(0) ? raw.neg() : toDecimal(0));
+    }
     folioBlock = {
       state: entry.folio.state,
       billedSoFar: lines.length > 0 ? money(sumMoneyBy(lines, "amount")) : null,
@@ -656,5 +674,23 @@ export async function buildEntryBillingSummary(prisma: Db, entryId: string): Pro
     rooms,
     folio: folioBlock,
     stayWithAdded: stayTotalDec != null && folioBlock ? money(stayTotalDec.add(addedTotalDec ?? 0)) : null,
+    stillToPay: ledgerBalanceDec == null
+      ? null
+      : (() => {
+          // The priced stay not billed yet: the stay with what was added, less what is billed — only
+          // while nights can still be posted (before Check-out, not cancelled or closed).
+          // A booking that ended without its stay (lapsed, a no-show) will never have them posted.
+          const nightsToCome = !stayOver && entry.status !== "EXPIRED" && entry.currentStage !== "TERMINAL";
+          const notBilled =
+            nightsToCome && stayTotalDec != null
+              ? Prisma.Decimal.max(toDecimal(0), stayTotalDec.add(addedTotalDec ?? 0).sub(billedSoFarDec ?? toDecimal(0)))
+              : toDecimal(0);
+          const owed = notBilled.add(ledgerBalanceDec);
+          return {
+            amount: money(Prisma.Decimal.max(toDecimal(0), owed)) ?? 0,
+            paidAhead: money(Prisma.Decimal.max(toDecimal(0), owed.neg())) ?? 0,
+            notBilledYet: money(notBilled) ?? 0,
+          };
+        })(),
   };
 }

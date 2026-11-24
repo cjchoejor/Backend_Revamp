@@ -4,6 +4,7 @@ import { NotFoundError, PolicyGateBlockedError, ValidationError } from "../../li
 import { findGuestsOnFile, sameGuestName } from "./guest-profile-service.js";
 import { enforceEntryNotSealedForWorkingAction } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
 import { recordDuplicateDetectionFlagIfPresent } from "../../policies/04-duplicate-detection/p12-duplicate-flag-create-on-inquiry.js";
+import { findSameGuestStays } from "../../lib/same-guest-stays.js";
 import * as auditService from "../infrastructure/audit-service.js";
 import { assertCallerReachable, callerColumns, normaliseCaller, partyCaller, partyContactColumns, validateInquiryParty, type CallerInput } from "./s1-inquiry-service.js";
 import { normalizeCoordinators, type CoordinatorContact } from "../../lib/admin/contact-list.js";
@@ -146,7 +147,9 @@ export type SetGuestInput =
  *
  * The duplicate check (Policy 12) runs here, since this is when the guest becomes known: an
  * overlapping stay for the same guest on another enquiry is FLAGGED on this one, and the exit
- * gate then treats it as it treats a flag raised at intake.
+ * gate then treats it as it treats a flag raised at intake. Since 2026-11-24 "the same guest" is
+ * also the same name booked through the same agency or company (`findSameGuestStays`), and the
+ * desk answers the flag on the Inquiry step.
  *
  * A guest record is never made twice for one person (2026-10-28, operator: "if the name is
  * different than the last entered name of the same phone number (case insensitive) ask if the user
@@ -322,25 +325,40 @@ export async function setEntryGuest(prisma: PrismaClient, actor: Actor, entryId:
     const followInquiry = !inq.guestProfileId || inq.guestProfileId === entry.guestProfileId || inq._count.entries === 1;
     if (followInquiry) await tx.inquiry.update({ where: { id: inq.id }, data: { guestProfileId } });
 
-    let duplicate: { conflictingInquiryId: string; conflictingEntryId: string } | null = null;
-    if (entry.checkInDate && entry.checkOutDate) {
-      const clash = await tx.entry.findFirst({
-        where: {
-          guestProfileId,
-          id: { not: entry.id },
-          inquiryId: { not: inq.id },
-          status: { in: ["ACTIVE", "PARKED"] },
-          checkInDate: { lt: entry.checkOutDate },
-          checkOutDate: { gt: entry.checkInDate },
-        },
-        select: { id: true, inquiryId: true },
-      });
-      if (clash) {
-        duplicate = { conflictingInquiryId: clash.inquiryId, conflictingEntryId: clash.id };
+    let duplicate: { conflictingInquiryId: string; conflictingEntryId: string; why: string } | null = null;
+    const clashes = await findSameGuestStays(tx, entry.id);
+    const open = await tx.duplicateDetectionFlag.findMany({ where: { inquiryId: inq.id, status: "OPEN" }, select: { id: true, mergedIntoInquiryId: true } });
+    const clash = clashes[0] ?? null;
+    if (clash) {
+      duplicate = { conflictingInquiryId: clash.inquiryId, conflictingEntryId: clash.entryId, why: clash.why };
+      // One question per other booking — naming the guest again does not ask it twice.
+      if (!open.some((f) => f.mergedIntoInquiryId === clash.inquiryId)) {
         await recordDuplicateDetectionFlagIfPresent(tx as any, {
           inquiryId: inq.id,
           actorId: actor.actorId,
           conflictingInquiryId: clash.inquiryId,
+        });
+      }
+    }
+    // A guest named again who no longer matches the other booking: its question no longer stands.
+    // Only on an enquiry of one stay — a trip's other stays may still be what the flag was about.
+    if (inq._count.entries === 1) {
+      const still = new Set(clashes.map((c) => c.inquiryId));
+      for (const f of open) {
+        if (f.mergedIntoInquiryId && still.has(f.mergedIntoInquiryId)) continue;
+        await tx.duplicateDetectionFlag.update({
+          where: { id: f.id },
+          data: { status: "RESOLVED", resolutionType: "DISMISS", resolutionReason: "The guest was named again — no longer the same as the other booking", resolvedAt: now, resolvedBy: actor.actorId },
+        });
+        await auditService.emit(tx as any, { actorId: actor.actorId, actorLevel: actor.level }, {
+          eventType: "INQUIRY.DUPLICATE_RESOLVED",
+          entityType: "DuplicateDetectionFlag",
+          entityId: f.id,
+          operation: "UPDATE",
+          timestamp: now,
+          entryId: entry.id,
+          inquiryId: inq.id,
+          payload: { resolutionType: "DISMISS", resolutionReason: "The guest was named again", conflictingInquiryId: f.mergedIntoInquiryId },
         });
       }
     }

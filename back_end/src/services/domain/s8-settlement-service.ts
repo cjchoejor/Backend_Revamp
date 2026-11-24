@@ -200,6 +200,14 @@ export async function initiateSettlement(
      * with none, the invoice is dispatched without an email (the desk hands it over).
      */
     invoiceDispatchedTo?: string;
+    /**
+     * Keep the invoice this settlement issues for the desk to send (2026-11-24, operator: "make this
+     * sending invoice like how it has been done for the other papers like quotation, where there is
+     * preview and then send"). It stays issued and not sent; the desk previews it and sends it by
+     * email or WhatsApp from the tax invoice's card. The seal at Closed still waits for it to go out.
+     * Left out, it is sent at once as before (`invoiceDispatchedTo`, else the party's email).
+     */
+    holdInvoicesForDesk?: boolean;
   },
   /**
    * Verified session context (2026-08-24) — NEVER read from the request body (spoofable).
@@ -696,7 +704,26 @@ export async function initiateSettlement(
   // Dispatch what the settlement issued — the real act: PDF, email to the party, answer window.
   // Best-effort after the commit: the settlement stands either way, and an invoice whose dispatch
   // failed stays DRAFT, which the desk offers to send again (and S9 closure refuses to pass).
-  if (issuedToParty.length > 0) {
+  if (issuedToParty.length > 0 && input.holdInvoicesForDesk === true) {
+    await prisma.traceEvent
+      .createMany({
+        data: issuedToParty.map((invoiceId) => ({
+          eventType: "INVOICE.HELD_FOR_DESK",
+          actorId,
+          actorLevel,
+          entityType: "Invoice",
+          entityId: invoiceId,
+          operation: "UPDATE" as const,
+          timestamp: new Date(),
+          stageContext: Stage.S8,
+          inquiryId: entry.inquiryId,
+          entryId: folio.entryId,
+          payload: { invoiceId, cause: "SETTLEMENT", settlementMethod: method },
+          createdBy: actorId,
+        })),
+      })
+      .catch(() => undefined);
+  } else if (issuedToParty.length > 0) {
     const { dispatchInvoice } = await import("./s9-service.js");
     for (const invoiceId of issuedToParty) {
       try {

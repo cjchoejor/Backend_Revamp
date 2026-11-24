@@ -1,13 +1,12 @@
 import type { Prisma } from "@prisma/client";
 import { HandoffType, Stage } from "@prisma/client";
 import type { PrismaClient } from "@prisma/client";
-import { InventoryClaimState } from "@prisma/client";
 import type { StageGateFailureItem } from "./errors.js";
 import * as disputeGateEngine from "../engines/dispute-gate-engine.js";
 import { listStayChargeGapsForCompleteAuditStayNightsS8ToS9 } from "../policies/24-night-audit/p62-room-charge-present-for-complete-audit-s8-to-s9.js";
 import { peekH4S8ExitFailure } from "../policies/25-handoff/p63-handoff-lifecycle-gates.js";
-import { getEntryWithRoom } from "../services/domain/s8-checkout-service.js";
 import { readBookingInspectionStanding, roomListWords } from "./room-inspection-standing.js";
+import { readRoomsReleasedByBooking } from "./rooms-released-by-booking.js";
 import { readBookingDamages, unansweredDamageRooms } from "./damage-standing.js";
 import { damageNotAnsweredForS8Exit } from "../policies/36-damage-assessment/p81-damage-assessment-gates.js";
 
@@ -57,18 +56,20 @@ export async function collectS8ToS9ReadOnlyFailures(
     failures.push({ blockingCondition: "KEY_RETURN_NOT_RECORDED", message: "Key return not recorded" });
   }
 
-  try {
-    const { room } = await getEntryWithRoom(prisma, entryId);
-    if (room.currentClaimState !== InventoryClaimState.DEPARTED_DIRTY) {
-      failures.push({
-        blockingCondition: "ROOM_NOT_DEPARTED_DIRTY",
-        message: "Room must be DEPARTED_DIRTY before S9",
-      });
-    }
-  } catch {
+  // Every room the guest held is released — read off this booking's own record, never the room's
+  // flag as it is now (2026-11-24: housekeeping's clean or the next guest's check-in changes the
+  // flag, and a booking still at Check-out then could never close).
+  const released = await readRoomsReleasedByBooking(prisma, entryId);
+  if (!released.rooms.length) {
     failures.push({
       blockingCondition: "ROOM_ASSIGNMENT_OR_ROOM_MISSING",
-      message: "Entry has no room assignment or room record for checkout gate",
+      message: "This booking has no room on record to check out of",
+    });
+  } else if (!released.allReleased) {
+    const still = released.rooms.filter((r) => !r.released).map((r) => r.roomNumber);
+    failures.push({
+      blockingCondition: "ROOM_NOT_DEPARTED_DIRTY",
+      message: `${roomListWords(still)} ${still.length > 1 ? "are" : "is"} not released yet — settling the bill releases the rooms`,
     });
   }
 

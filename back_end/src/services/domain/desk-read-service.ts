@@ -17,6 +17,9 @@ import { stayIsOnTripBill } from "./bill-view-service.js";
 import { sumMoney, toDecimal } from "../../lib/money.js";
 import { resolveNoShowGraceMinutes, timerShowsFrom } from "../../lib/expected-arrival.js";
 import { withoutClocksOfRepliesOff } from "../../lib/reply-waits.js";
+import { readBookingRooms, roomUnitsOf, sealHasBookingRooms } from "../../lib/booking-rooms.js";
+import { currentPassSeal } from "./room-placement-service.js";
+import { utcDateOnly } from "../../lib/stay-dates.js";
 
 type Db = PrismaClient;
 
@@ -133,6 +136,14 @@ export type DeskListRow = Prisma.EntryGetPayload<{ select: typeof listSelect }> 
   /** Distinct room numbers the booking holds, in number order. */
   roomNumbers: string[];
   /**
+   * The rooms a booking holds before they are handed out at Arrival (2026-11-24, client: "for walk
+   * in for 1 week stay, the room no is not showing"): read off the booking's own pick. At Arrival the
+   * system's rooms are the proposal, named by number; before it a room the system chose and may still
+   * move is counted by its type ("1 Executive Apartment"), a room given by number is named. Null when
+   * the rooms are handed out (`roomNumbers`), or the booking holds none.
+   */
+  roomsHeld: { numbers: string[]; byType: Array<{ name: string; count: number }> } | null;
+  /**
    * Which stay of its enquiry this booking is, when the enquiry has more than one (2026-11-10,
    * operator: "show stay 1 of 2"). Numbered as the booking's own head numbers them: every stay on
    * the enquiry, by check-in. Null for a booking on its own.
@@ -188,6 +199,8 @@ export async function listDeskBookings(
   const staysOf = new Map<string, string[]>();
   for (const s of siblings) staysOf.set(s.inquiryId, [...(staysOf.get(s.inquiryId) ?? []), s.id]);
 
+  const heldOf = await roomsHeldBeforeHandOut(prisma, rows);
+
   const reasonOf = new Map<string, string>();
   for (const t of parkTraces) {
     if (!t.entryId || reasonOf.has(t.entryId)) continue;
@@ -211,12 +224,88 @@ export async function listDeskBookings(
       parkReason: reasonOf.get(r.id) ?? null,
       parkFollowUpAt: r.status === "PARKED" && follow ? follow.firesAt.toISOString() : null,
       roomNumbers: [...numbers].sort((a, b) => a.localeCompare(b, "en", { numeric: true })),
+      roomsHeld: numbers.size ? null : heldOf.get(r.id) ?? null,
       stay: (() => {
         const all = staysOf.get(r.inquiryId) ?? [];
         return all.length > 1 ? { no: all.indexOf(r.id) + 1, of: all.length } : null;
       })(),
     };
   });
+}
+
+/** Steps where a booking holds rooms that are not handed out yet: Set up, Reserve, Arrival. */
+const HOLDING_STAGES = new Set<string>(["S3", "S4", "S5"]);
+
+/**
+ * The rooms each booking holds before Arrival hands them out — the rule `describeBookingRooms` names
+ * them by (docs/room-types-until-arrival.md): from Arrival the system's rooms are proposed by number;
+ * before it a room the system may still move is named by its type. Two queries for the whole list.
+ */
+async function roomsHeldBeforeHandOut(
+  prisma: Db,
+  rows: Array<{ id: string; status: EntryStatus; currentStage: Stage; checkInDate: Date | null; checkOutDate: Date | null; roomAssignments: unknown[] }>,
+): Promise<Map<string, { numbers: string[]; byType: Array<{ name: string; count: number }> }>> {
+  const out = new Map<string, { numbers: string[]; byType: Array<{ name: string; count: number }> }>();
+  const need = rows.filter(
+    (r) =>
+      r.roomAssignments.length === 0 &&
+      HOLDING_STAGES.has(r.currentStage) &&
+      (r.status === "ACTIVE" || r.status === "PARKED") &&
+      !!r.checkInDate &&
+      !!r.checkOutDate,
+  );
+  if (!need.length) return out;
+  const ids = need.map((r) => r.id);
+  const [segments, seals, rooms] = await Promise.all([
+    prisma.segment.findMany({ where: { entryId: { in: ids } }, orderBy: { segmentNumber: "desc" }, select: { id: true, entryId: true } }),
+    prisma.availabilityConfiguration.findMany({
+      where: { entryId: { in: ids }, sealedAt: { not: null } },
+      orderBy: { sealedAt: "desc" },
+      select: { entryId: true, segmentId: true, optionSelected: true },
+    }),
+    prisma.room.findMany({ select: { id: true, roomNumber: true, roomTypeId: true, roomType: { select: { name: true } } } }),
+  ]);
+  const info = new Map(rooms.map((r) => [r.id, r] as const));
+  const segOf = new Map<string, { id: string }>();
+  for (const s of segments) if (!segOf.has(s.entryId)) segOf.set(s.entryId, { id: s.id });
+  const sealsOf = new Map<string, Array<{ segmentId: string | null; optionSelected: unknown }>>();
+  for (const c of seals) sealsOf.set(c.entryId, [...(sealsOf.get(c.entryId) ?? []), c]);
+  const byNumber = (a: string, b: string) => a.localeCompare(b, "en", { numeric: true });
+
+  for (const r of need) {
+    const seg = segOf.get(r.id);
+    const seal = currentPassSeal({ segments: seg ? [seg] : [], availabilityConfigs: sealsOf.get(r.id) ?? [] });
+    if (!seal) continue;
+    const bookingRooms = readBookingRooms(seal, { checkIn: utcDateOnly(r.checkInDate!), checkOut: utcDateOnly(r.checkOutDate!) }, (id) => info.get(id)?.roomTypeId);
+    const units = roomUnitsOf(bookingRooms);
+    if (!units.length) continue;
+    const atArrival = r.currentStage === "S5";
+    const byType = sealHasBookingRooms(seal);
+    const numbers = new Set<string>();
+    // A quiet room counted by its type, night by night, so a room the system moved part-way is one room.
+    const quietPerNight = new Map<string, Map<string, number>>();
+    for (const u of units) {
+      const no = info.get(u.roomId)?.roomNumber;
+      if (atArrival || !(byType && u.quiet)) {
+        if (no) numbers.add(no);
+        continue;
+      }
+      for (const night of u.nights) {
+        const m = quietPerNight.get(u.roomTypeId) ?? new Map<string, number>();
+        m.set(night, (m.get(night) ?? 0) + 1);
+        quietPerNight.set(u.roomTypeId, m);
+      }
+    }
+    const typeRows = [...quietPerNight.entries()]
+      .map(([typeId, m]) => ({
+        name: rooms.find((x) => x.roomTypeId === typeId)?.roomType?.name ?? "Room",
+        count: Math.max(...m.values()),
+      }))
+      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+    if (!numbers.size && !typeRows.length) continue;
+    out.set(r.id, { numbers: [...numbers].sort(byNumber), byType: typeRows });
+  }
+  return out;
 }
 
 export type DeskMoneyRow = {
@@ -235,6 +324,9 @@ export type DeskMoneyRow = {
   /** What the whole stay comes to (2026-11-10): the stay as priced plus what was added to it — the
    *  billing summary's `stayWithAdded`. Null when the booking has no priced stay total. */
   totalAmount: number | null;
+  /** What the guest still owes on the whole stay, nights not billed yet included (2026-11-24) — the
+   *  billing summary's `stillToPay`; Today's lists show it as the balance due. */
+  stillToPay: { amount: number; paidAhead: number; notBilledYet: number } | null;
   shortened: boolean;
   /**
    * The whole trip, when the booking is one stay of several on its enquiry (2026-11-10, operator:
@@ -346,6 +438,7 @@ export async function deskMoneyFor(prisma: Db, entryIds: string[]): Promise<Desk
             }
           : null,
         totalAmount: s.stayWithAdded,
+        stillToPay: s.stillToPay,
         shortened: !!s.stayTotal.earlyDeparture,
         trip: null,
       });

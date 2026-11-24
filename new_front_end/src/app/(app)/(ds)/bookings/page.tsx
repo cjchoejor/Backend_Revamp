@@ -17,7 +17,7 @@ import { RowTimer, RowTimerList } from "@/components/ds/row-timer";
 import { useHotelDay } from "@/hooks/use-hotel-day";
 import type { DeskListRow, DeskMoneyRow, DeskTimerRow } from "@/lib/api/desk";
 import { fmtDate, fmtRange, fmtStamp, money, nightsOf, plural, weekdayOf } from "@/lib/ds/format";
-import { bookerOfRow, channelWord, factsFromRow, guestNameOf, isNamed, rowNameOf, standingOf } from "@/lib/ds/status";
+import { bookerOfRow, channelWord, factsFromRow, guestNameOf, isNamed, roomsWordOfRow, rowNameOf, standingOf } from "@/lib/ds/status";
 import { STEP_NAMES, stepNoOfStage } from "@/lib/ds/steps";
 import { DateInput } from "@/components/ds/date-input";
 import { Overlay } from "@/components/ds/steps/kit";
@@ -180,6 +180,7 @@ function haystack(r: DeskListRow, statusWord: string, statusQualifier = ""): str
     // the ending's qualifier too, so "no answer" and "the offer was not taken up" are searchable
     statusQualifier,
     ...r.roomNumbers,
+    ...(r.roomsHeld?.numbers ?? []),
     ...r.quotations.map((q) => q.referenceNumber),
   ]
     .filter(Boolean)
@@ -705,7 +706,7 @@ function Preview({
         <dt>Nights</dt>
         <dd>{nights ?? <span className="dash">—</span>}</dd>
         <dt>Rooms</dt>
-        <dd>{row.roomNumbers.length ? row.roomNumbers.join(", ") : row.numberOfRooms ? plural(row.numberOfRooms, "room") : "—"}</dd>
+        <dd>{roomsWordOfRow(row)}</dd>
         <dt>Guests</dt>
         <dd>{party || (row.guestCount ? plural(row.guestCount, "guest") : "—")}</dd>
         <dt>Came in as</dt>

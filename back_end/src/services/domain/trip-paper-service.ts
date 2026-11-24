@@ -442,7 +442,7 @@ async function emailTripQuotation(prisma: PrismaClient, tripPaperId: string, mem
   const validUntils = quotes.map((q) => q.validUntil).filter((d): d is Date => !!d);
   const recipient = await resolveSendTo(prisma, first.id);
   const content = renderQuotationEmail({
-    guestDisplayName: recipient.party ?? "Guest",
+    guestDisplayName: recipient.greet ?? recipient.party ?? "Guest",
     inquiryReadableId: first.inquiryId,
     quotationRef: number,
     checkInDate: new Date(`${ins[0]}T00:00:00Z`),

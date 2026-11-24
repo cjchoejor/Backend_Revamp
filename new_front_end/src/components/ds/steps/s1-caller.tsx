@@ -53,6 +53,7 @@ import { hasAnyContact } from "@/lib/desk/workspace";
 import type { EntryDetail } from "@/types/api";
 import { Choice, DsDialog, StepCard, toastRefusal, useFlowUnsaved, useOpenFileTab, useRefreshEntry } from "./kit";
 import { useTripAtInquiry } from "./s1-trip-shared";
+import { DuplicateQuestions } from "./duplicate-question";
 import { usePublishRateChoice } from "@/components/ds/rate-sheet";
 import {
   CameInTicks,
@@ -763,6 +764,9 @@ export function WrapUp({ entry, editable, onSaved }: { entry: EntryDetail; edita
       meta="The rooms are chosen — now who is staying, and what was not taken at the start."
       status={trip.combined ? `The guest named here is named on every stay of the trip (${plural(trip.otherIds.length + 1, "stay")})` : undefined}
     >
+      {/* "The same booking twice?" — asked once the guest is named (2026-11-24) */}
+      <DuplicateQuestions entry={entry} editable={editable} cancelWord="cancel this inquiry" />
+
       {/* the caller's name, when it was not taken at the start */}
       {!callerHasName && editable ? (
         <div className="form2" style={{ marginBottom: 12 }}>

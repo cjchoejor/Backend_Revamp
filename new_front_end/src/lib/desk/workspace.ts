@@ -416,7 +416,14 @@ export function s1Readiness(entry: EntryDetail): Precondition[] {
     { label: "Preferred room selected", met: !!preferred && !pickFitsStay(preferred.optionSelected, entry, preferred.searchCriteria), card: "house" },
     { label: "The guest staying, named", met: !!entry.guestProfile, card: "wrap" },
     { label: "A contact on file", met: hasAnyContact(entry), card: "wrap" },
+    // Only while one is open (2026-11-24): the move waits for the desk's answer (Policy 12).
+    ...(openDuplicateQuestions(entry) ? [{ label: "Not the same booking entered twice", met: false, card: "wrap" }] : []),
   ];
+}
+
+/** How many "the same booking twice?" questions this booking's enquiry still has open (Policy 12). */
+export function openDuplicateQuestions(entry: EntryDetail): number {
+  return entry.inquiry?.duplicateFlags?.length ?? 0;
 }
 
 export function canProgressS1(entry: EntryDetail): boolean {
@@ -460,6 +467,7 @@ export function s2Readiness(entry: EntryDetail, now: number = Date.now()): Preco
     { label: "Quote generated", met: live.length > 0, card: "table" },
     { label: "Quote still valid", met: !!operative && validOk, card: "quotation" },
     { label: "Any holds still healthy", met: holdsOk },
+    ...(openDuplicateQuestions(entry) ? [{ label: "Not the same booking entered twice", met: false, card: "table" }] : []),
   ];
 }
 
@@ -705,6 +713,8 @@ export function s8Readiness(
     inspections?: { allRecorded: boolean; inspectedCount: number; rooms: unknown[] } | null;
     /** The damage the inspections found (2026-10-26): listed only when there is some. */
     damage?: { any: boolean; unanswered: string[] } | null;
+    /** The backend's answer to "has the guest left every room" (2026-11-24) — wins over the flags below. */
+    roomsReleased?: { allReleased: boolean } | null;
   } = {},
 ): Precondition[] {
   const folio = entry.folio;
@@ -729,11 +739,15 @@ export function s8Readiness(
   const distinctRooms = Array.from(
     new Map((entry.roomAssignments ?? []).map((a) => [a.roomId, a.room])).values(),
   );
-  const roomsReleased =
-    distinctRooms.length > 0 &&
-    distinctRooms.every(
-      (r) => r?.currentClaimState === "DEPARTED_DIRTY" || r?.currentClaimState === "DEPARTED_CLEAN",
-    );
+  // The backend's answer reads the booking's own record (2026-11-24): a room cleaned, or taken by the
+  // next guest, after this booking settled stays released. The flags are only the stand-in until it
+  // answers.
+  const roomsReleased = opts.roomsReleased
+    ? opts.roomsReleased.allReleased
+    : distinctRooms.length > 0 &&
+      distinctRooms.every(
+        (r) => r?.currentClaimState === "DEPARTED_DIRTY" || r?.currentClaimState === "DEPARTED_CLEAN",
+      );
   // In the order the desk works them (2026-10-30): the keys back and each room inspected first — a
   // damage found is answered before the bill is settled (Policy 81) — then the bill, which releases
   // the rooms, then the departure handed over.

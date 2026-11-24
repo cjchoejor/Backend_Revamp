@@ -34,6 +34,15 @@ export type SendTo = {
   /** The party's own email on file, and the guest's — for the words under a send box. */
   partyEmail: string | null;
   guestEmail: string | null;
+  /**
+   * Whom an email greets — "Dear …" (2026-11-24, client: a voucher to an agency greeted the guest;
+   * "the name that will be written would be the person who contacted from the travel agent's name or
+   * corporate's name"). Through a party: the person who wrote the email the papers reply in, else
+   * the booking's contact person there, else the party. On a direct booking: the person who wrote
+   * the email, when the desk linked one and it carries a name; else null, and the caller greets the
+   * guest as before.
+   */
+  greet: string | null;
 };
 
 const clean = (v: string | null | undefined) => (v ?? "").trim() || null;
@@ -70,6 +79,8 @@ export async function resolveSendTo(db: DbClient, entryId: string): Promise<Send
   const guestPhone = clean(entry?.guestProfile?.phone);
   const wrote = clean(inquiry?.emailThreadFrom);
   const wroteWords = wrote ? `${clean(inquiry?.emailThreadFromName) ?? wrote} · wrote the email` : null;
+  // A name to greet, never an address.
+  const wroteName = wrote ? clean(inquiry?.emailThreadFromName) : null;
 
   if (party) {
     const person = clean(inquiry?.partyContactName);
@@ -84,6 +95,7 @@ export async function resolveSendTo(db: DbClient, entryId: string): Promise<Send
       phoneWhose: personPhone ? personWords : partyPhone ? `${party}'s number on file` : null,
       partyEmail,
       guestEmail,
+      greet: wroteName ?? person ?? party,
     };
   }
 
@@ -108,5 +120,5 @@ export async function resolveSendTo(db: DbClient, entryId: string): Promise<Send
     [clean(entry?.contactPersonPhone), arrivingWords],
     [clean(inquiry?.callerPhone), "the caller"],
   ]);
-  return { party: null, email, emailWhose, phone, phoneWhose, partyEmail: null, guestEmail };
+  return { party: null, email, emailWhose, phone, phoneWhose, partyEmail: null, guestEmail, greet: wroteName };
 }

@@ -3514,6 +3514,8 @@ export function useRefreshEntry(entryId: string) {
       ["entry-trace", entryId],
       ["entry-communications", entryId],
       ["billing-summary", entryId],
+      // Who owes what at Check-out (2026-11-24): a charge posted there moves the shares too.
+      ["settlement-buckets"],
       ["payment-status", entryId],
       ["folio-documents", entryId],
       ["journey-summary", entryId],

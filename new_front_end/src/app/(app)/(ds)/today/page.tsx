@@ -15,7 +15,7 @@
 import { StayDates } from "@/components/ds/stay-dates";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useMemo, type ReactNode } from "react";
+import { Suspense, useMemo, useState, type ReactNode } from "react";
 import { Button, EmptyState } from "@/design-system";
 import { Help } from "@/components/ds/help";
 import {
@@ -34,7 +34,7 @@ import { useDeskBookings, useDeskMoney, useRoomsList } from "@/hooks/use-desk-da
 import { useHotelClock } from "@/hooks/use-hotel-clock";
 import { useHousekeepingBoard } from "@/hooks/use-housekeeping";
 import { useHotelDay } from "@/hooks/use-hotel-day";
-import type { DeskListRow } from "@/lib/api/desk";
+import type { DeskListRow, DeskMoneyRow } from "@/lib/api/desk";
 import type { HousekeepingRoom } from "@/lib/api/housekeeping";
 import {
   attentionItems,
@@ -47,6 +47,7 @@ import {
   type Fold,
 } from "@/lib/ds/attention";
 import { fmtDay, fmtInstantDay, fmtLongDate, fmtRange, fmtTime, money, plural, span } from "@/lib/ds/format";
+import { bookerOfRow, channelWord, rowNameOf } from "@/lib/ds/status";
 import { stepNoOfStage } from "@/lib/ds/steps";
 
 const BANDS_OVER = 15;
@@ -56,11 +57,15 @@ const TAB_IDS: TabId[] = ["attention", "arriving", "leaving", "inhouse", "clean"
 
 type Tone = "stop" | "warn" | "ok" | null;
 
-function roomsWord(r: DeskListRow): string {
-  if (r.roomNumbers.length) return r.roomNumbers.join(", ");
-  if (r.numberOfRooms) return plural(r.numberOfRooms, "room");
-  return "—";
+/**
+ * How many rooms a booking takes a night — what the front desk counts (2026-11-24, client: "instead
+ * of 6 groups of booking, total number of room arrival is given"). The rooms asked for, else the rooms
+ * handed out (an import may have no count); a booking always takes at least one.
+ */
+function roomsANight(r: DeskListRow): number {
+  return r.numberOfRooms || r.roomNumbers.length || 1;
 }
+const roomsOf = (rows: DeskListRow[]) => rows.reduce((n, r) => n + roomsANight(r), 0);
 
 const ymd = (iso: string | null | undefined) => iso?.slice(0, 10) ?? null;
 
@@ -70,6 +75,10 @@ type Tile = {
   id: TabId;
   label: string;
   n: number;
+  /** What `n` counts, said beside it when it is not obvious ("rooms"). */
+  unit?: string;
+  /** A second, smaller figure after `n` — the rooms beside the bookings (2026-11-24, the client's choice C). */
+  extra?: { n: number; unit: string };
   /** One line on what is in it; its colour says how it stands. */
   sub: ReactNode;
   tone: Tone;
@@ -91,7 +100,17 @@ function Glance({ tiles, selected, onSelect }: { tiles: Tile[]; selected: TabId;
           onClick={() => onSelect(t.id)}
         >
           <span className="gt-label">{t.label}</span>
-          <span className="gt-n">{t.n}</span>
+          <span className={`gt-n${t.extra ? " gt-two" : ""}`}>
+            <span className="gt-main">
+              {t.n}
+              {t.unit ? <span className="gt-unit"> {t.unit}</span> : null}
+            </span>
+            {t.extra ? (
+              <span className="gt-extra" data-fig={t.extra.unit}>
+                <b>{t.extra.n}</b> {t.extra.unit}
+              </span>
+            ) : null}
+          </span>
           {t.progress && t.progress.total > 0 ? (
             <span className="gt-bar" aria-hidden>
               <i style={{ width: `${Math.round((t.progress.done / t.progress.total) * 100)}%` }} />
@@ -259,6 +278,104 @@ const stay = (r: DeskListRow) => (
   </span>
 );
 
+/* ------------------------------------------------------------------ the day's columns */
+
+/**
+ * Arriving today, Leaving today and In-house share their columns (2026-11-24, the client): how it was
+ * booked, the guest, who booked it, how many rooms and which, the stay, where it stands, the balance.
+ */
+const DAY_HEADS: ReactNode[] = [
+  "Booking type",
+  "Guest",
+  "Booked by",
+  <span key="n" className="num-head">No. of rooms</span>,
+  "Rooms",
+  "Stay",
+  "Where it stands",
+  <span key="b" className="num-head">
+    Balance due
+    <Help label="About the balance due">
+      What the guest still owes on the whole stay, after the money received — nights not on the bill yet included. Whoever pays it.
+    </Help>
+  </span>,
+];
+
+/** "Walk-in", "Travel agent", "Corporate" — how the booking came in. */
+const bookingTypeOf = (r: DeskListRow) => channelWord(r.inquiry?.sourceChannel, r.inquiry?.cameInAs);
+
+/** The agency or company that booked it, else the guest themselves. */
+function bookedByOf(r: DeskListRow): string {
+  const b = bookerOfRow(r);
+  return b && (b.kind === "agent" || b.kind === "company") ? b.name : rowNameOf(r);
+}
+
+const guestCell = (r: DeskListRow) => (
+  <>
+    <GuestLink row={r} />
+    <div className="meta">{r.id}</div>
+  </>
+);
+
+function dayCells(r: DeskListRow, stayCell: ReactNode, today: string | null, m: DeskMoneyRow | undefined): ReactNode[] {
+  return [
+    <span key="t" className="ink-2">{bookingTypeOf(r)}</span>,
+    guestCell(r),
+    <span key="by">{bookedByOf(r)}</span>,
+    <span key="n" className="num-cell">{roomsANight(r)}</span>,
+    <RoomNumbers key="r" row={r} />,
+    stayCell,
+    <RowStanding key="s" row={r} hotelToday={today} roomsApart />,
+    <BalanceDue key="b" m={m} />,
+  ];
+}
+
+/** The rooms by number — the first five, then "Show N more" in place (2026-11-24, the client). */
+function RoomNumbers({ row }: { row: DeskListRow }) {
+  const [all, setAll] = useState(false);
+  const handedOut = row.roomNumbers.length > 0;
+  const numbers = handedOut ? row.roomNumbers : row.roomsHeld?.numbers ?? [];
+  const types = handedOut ? [] : row.roomsHeld?.byType ?? [];
+  if (!numbers.length && !types.length) return <span className="ink-2">not chosen yet</span>;
+  const shown = all ? numbers : numbers.slice(0, 5);
+  return (
+    <span className="room-nos">
+      {shown.map((n) => (
+        <span key={n} className="room-no">
+          {n}
+        </span>
+      ))}
+      {types.map((t) => (
+        <span key={t.name} className="ink-2 room-type-count">
+          {t.count} {t.name}
+        </span>
+      ))}
+      {numbers.length > 5 ? (
+        <button
+          type="button"
+          className="room-more"
+          aria-expanded={all}
+          onClick={(e) => {
+            e.stopPropagation();
+            setAll((v) => !v);
+          }}
+        >
+          {all ? "Show fewer" : `Show ${numbers.length - 5} more`}
+        </button>
+      ) : null}
+    </span>
+  );
+}
+
+/** What the guest still owes on the stay — the server's figure, read and shown. */
+function BalanceDue({ m }: { m: DeskMoneyRow | undefined }) {
+  const t = m?.stillToPay;
+  const cur = m?.currency ?? "BTN";
+  if (!t) return <span className="num-cell dash">—</span>;
+  if (t.amount > 0) return <b className="num-cell money warn-ink">{money(t.amount, cur)}</b>;
+  if (t.paidAhead > 0) return <span className="num-cell ok-ink">paid ahead {money(t.paidAhead, cur)}</span>;
+  return <span className="num-cell money ink-2">{money(0, cur)}</span>;
+}
+
 /* ------------------------------------------------------------------ the page */
 
 function TodayPageInner() {
@@ -308,12 +425,14 @@ function TodayPageInner() {
       .sort((a, b) => (a.checkInDate ?? "").localeCompare(b.checkInDate ?? ""));
   }, [rows, today]);
 
-  const moneyIds = useMemo(() => [...lists.leaving, ...leftToday].map((r) => r.id), [lists.leaving, leftToday]);
-  const leavingMoney = useDeskMoney(moneyIds);
-  const owes = (r: DeskListRow) => {
-    const bal = leavingMoney.byId.get(r.id)?.folio?.outstandingBalance;
-    return bal != null && Number(bal) > 0;
-  };
+  // The balance due on the arrivals, departures and in-house lists (2026-11-24): the server's
+  // still-to-pay — the bill's balance plus any night not posted yet. Nothing is added up here.
+  const moneyIds = useMemo(
+    () => [...lists.arriving, ...arrivedToday, ...lists.leaving, ...leftToday, ...lists.inHouse].map((r) => r.id),
+    [lists.arriving, arrivedToday, lists.leaving, leftToday, lists.inHouse],
+  );
+  const dayMoney = useDeskMoney(moneyIds);
+  const owes = (r: DeskListRow) => (dayMoney.byId.get(r.id)?.stillToPay?.amount ?? 0) > 0;
   const owing = lists.leaving.filter(owes).length;
 
   const roomItems = rooms.data?.items ?? [];
@@ -331,7 +450,7 @@ function TodayPageInner() {
   const tidyCount = lists.noOutcome.length + lists.noDate.length;
   const followUpDue = lists.parked.filter((r) => r.parkFollowUpAt && Date.parse(r.parkFollowUpAt) <= clock.now).length;
   const guestsIn = lists.inHouse.reduce((n, r) => n + (r.guestCount ?? (r.adultCount ?? 0) + (r.childCount ?? 0)), 0);
-  const roomsIn = lists.inHouse.reduce((n, r) => n + (r.roomNumbers.length || r.numberOfRooms || 0), 0);
+  const roomsIn = roomsOf(lists.inHouse);
 
   const asked = params.get("tab") as TabId | null;
   const tab: TabId = asked && TAB_IDS.includes(asked) ? asked : "attention";
@@ -343,7 +462,12 @@ function TodayPageInner() {
   };
 
   const arrivalsTotal = lists.arriving.length + arrivedToday.length;
+  // Arriving, Leaving and In-house count bookings, the rooms beside them smaller (2026-11-24, the client's choice C).
+  const roomsToCome = roomsOf(lists.arriving);
+  const roomsArrived = roomsOf(arrivedToday);
+  const roomsArriving = roomsToCome + roomsArrived;
   const departuresTotal = lists.leaving.length + leftToday.length;
+  const roomsLeaving = roomsOf(lists.leaving);
 
   const tiles: Tile[] = [
     {
@@ -365,15 +489,23 @@ function TodayPageInner() {
       id: "arriving",
       label: "Arriving today",
       n: lists.arriving.length,
+      unit: lists.arriving.length === 1 ? "booking" : "bookings",
+      extra: { n: roomsToCome, unit: roomsToCome === 1 ? "room" : "rooms" },
       tone: arrivalsTotal && !lists.arriving.length ? "ok" : null,
-      progress: { done: arrivedToday.length, total: arrivalsTotal },
+      progress: { done: roomsArrived, total: roomsArriving },
       sub: arrivalsTotal ? (
         lists.arriving.length ? (
-          <>
-            still to come · <b>{arrivedToday.length}</b> of {arrivalsTotal} checked in
-          </>
+          arrivedToday.length ? (
+            <>
+              still to come · already in: <b>{plural(arrivedToday.length, "booking")}</b>, <b>{plural(roomsArrived, "room")}</b>
+            </>
+          ) : (
+            "still to come · none checked in yet"
+          )
         ) : (
-          <span className="ok-ink">all {arrivalsTotal} checked in</span>
+          <span className="ok-ink">
+            all {plural(arrivalsTotal, "booking")}, {plural(roomsArriving, "room")} checked in
+          </span>
         )
       ) : (
         "no arrivals today"
@@ -383,6 +515,8 @@ function TodayPageInner() {
       id: "leaving",
       label: "Leaving today",
       n: lists.leaving.length,
+      unit: lists.leaving.length === 1 ? "booking" : "bookings",
+      extra: { n: roomsLeaving, unit: roomsLeaving === 1 ? "room" : "rooms" },
       tone: owing ? "warn" : departuresTotal && !lists.leaving.length ? "ok" : null,
       progress: { done: leftToday.length, total: departuresTotal },
       sub: departuresTotal ? (
@@ -402,8 +536,10 @@ function TodayPageInner() {
       id: "inhouse",
       label: "In-house",
       n: lists.inHouse.length,
+      unit: lists.inHouse.length === 1 ? "booking" : "bookings",
+      extra: { n: roomsIn, unit: roomsIn === 1 ? "room" : "rooms" },
       tone: null,
-      sub: lists.inHouse.length ? `${plural(guestsIn, "guest")} · ${plural(roomsIn, "room")}` : "nobody in-house",
+      sub: lists.inHouse.length ? plural(guestsIn, "guest") : "nobody in-house",
     },
     {
       id: "clean",
@@ -451,9 +587,18 @@ function TodayPageInner() {
   const loading = bookings.isLoading || !today;
   const titles: Record<TabId, [string, string | null]> = {
     attention: ["Needs attention", null],
-    arriving: ["Arriving today", today ? `/bookings?from=${today}&to=${today}` : null],
-    leaving: ["Leaving today", "/bookings?group=In-house"],
-    inhouse: ["In-house", "/bookings?group=In-house"],
+    arriving: [
+      lists.arriving.length ? `Arriving today · ${plural(lists.arriving.length, "booking")} · ${plural(roomsToCome, "room")}` : "Arriving today",
+      today ? `/bookings?from=${today}&to=${today}` : null,
+    ],
+    leaving: [
+      lists.leaving.length ? `Leaving today · ${plural(lists.leaving.length, "booking")} · ${plural(roomsLeaving, "room")}` : "Leaving today",
+      "/bookings?group=In-house",
+    ],
+    inhouse: [
+      lists.inHouse.length ? `In-house · ${plural(lists.inHouse.length, "booking")} · ${plural(roomsIn, "room")}` : "In-house",
+      "/bookings?group=In-house",
+    ],
     clean: ["Rooms to clean", "/housekeeping"],
     week: [`Arriving ${tomorrow && endOfWeek ? fmtRange(tomorrow, endOfWeek) : "the next 7 days"}`, tomorrow ? `/bookings?group=Upcoming&from=${tomorrow}&to=${endOfWeek}` : null],
     inquiries: ["New inquiries today", "/bookings?group=Inquiry"],
@@ -538,8 +683,8 @@ function TodayPageInner() {
                 rows={lists.arriving}
                 done={arrivedToday}
                 doneWord="Checked in today"
-                heads={["Booking", "Stay", "Rooms", "Where it stands"]}
-                cells={(r) => [who(r), stay(r), roomsWord(r), <RowStanding key="s" row={r} hotelToday={today} />]}
+                heads={DAY_HEADS}
+                cells={(r) => dayCells(r, stay(r), today, dayMoney.byId.get(r.id))}
                 href={titles.arriving[1] ?? "/bookings"}
                 empty={["No arrivals today"]}
               />
@@ -548,37 +693,26 @@ function TodayPageInner() {
                 rows={lists.leaving}
                 done={leftToday}
                 doneWord="Checked out today"
-                heads={[
-                  "Booking",
-                  "Stay",
-                  "Rooms",
-                  "Where it stands",
-                  <span key="b" className="num">
-                    Balance due
-                    <Help label="About the balance">What is still owed on the bill, after the advance and any credits.</Help>
-                  </span>,
-                ]}
-                cells={(r) => {
-                  const m = leavingMoney.byId.get(r.id);
-                  const bal = m?.folio?.outstandingBalance;
-                  return [
-                    who(r),
-                    stay(r),
-                    roomsWord(r),
-                    <RowStanding key="s" row={r} hotelToday={today} />,
-                    <span key="b" className={`num ${bal != null ? "money" : "dash"}${owes(r) ? " warn-ink" : ""}`} style={{ display: "block", textAlign: "right", fontWeight: owes(r) ? 700 : undefined }}>
-                      {bal != null ? money(bal, m?.currency ?? "BTN") : "—"}
-                    </span>,
-                  ];
-                }}
+                heads={DAY_HEADS}
+                cells={(r) => dayCells(r, stay(r), today, dayMoney.byId.get(r.id))}
                 href="/bookings?group=In-house"
                 empty={["No departures today"]}
               />
             ) : tab === "inhouse" ? (
               <DayTable
                 rows={lists.inHouse}
-                heads={["Booking", "Stay", "Rooms", "Leaves"]}
-                cells={(r) => [who(r), stay(r), roomsWord(r), <span key="l" className="ink-2">{nightsLeft(r, today)}</span>]}
+                heads={DAY_HEADS}
+                cells={(r) =>
+                  dayCells(
+                    r,
+                    <>
+                      {stay(r)}
+                      <div className="meta">{nightsLeft(r, today)}</div>
+                    </>,
+                    today,
+                    dayMoney.byId.get(r.id),
+                  )
+                }
                 href="/bookings?group=In-house"
                 empty={["Nobody in-house"]}
               />
@@ -674,6 +808,9 @@ function WeekTable({ rows, today, href }: { rows: DeskListRow[]; today: string |
       <thead>
         <tr>
           <th>Booking</th>
+          <th>Booking type</th>
+          <th>Guest</th>
+          <th>Booked by</th>
           <th>Stay</th>
           <th>Rooms</th>
           <th>Status</th>
@@ -682,10 +819,12 @@ function WeekTable({ rows, today, href }: { rows: DeskListRow[]; today: string |
       <tbody>
         {paged.shown.map((r, i) => (
           <OpenRow key={r.id} entryId={r.id} alt={i % 2 === 1}>
+            <td className="ink-2">{r.id}</td>
+            <td className="ink-2">{bookingTypeOf(r)}</td>
             <td>
               <GuestLink row={r} />
-              <div className="meta">{bookingMeta(r)}</div>
             </td>
+            <td>{bookedByOf(r)}</td>
             <td>
               <span className="stay-range">
                 <StayDates stacked checkIn={r.checkInDate} checkOut={r.checkOutDate} />
@@ -697,7 +836,7 @@ function WeekTable({ rows, today, href }: { rows: DeskListRow[]; today: string |
             </td>
           </OpenRow>
         ))}
-        <MoreRow more={paged.more} onMore={paged.showMore} href={href} />
+        <MoreRow more={paged.more} onMore={paged.showMore} href={href} colSpan={7} />
       </tbody>
     </table>
   );

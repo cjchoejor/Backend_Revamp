@@ -20,6 +20,8 @@ type DecimalInput = number | string;
 
 export type RatePackageInput = {
   name: string;
+  /** The live version being edited (2026-11-24); its name may change on this save. */
+  packageId?: string | null;
   roomBaseRate: DecimalInput;
   extraBedRate?: DecimalInput | null;
   cnbPercent?: number | null;
@@ -96,6 +98,12 @@ export async function listPackageHistory(prisma: PrismaClient, owner: PackageOwn
  * Create a package, or a new VERSION of an existing one when the name already exists for this
  * owner. Superseding closes the prior row rather than editing it, so historical quotes stay
  * re-derivable, and carries its room-type overrides forward.
+ *
+ * Renaming (2026-11-24, operator: "make the name of the package in admin console editable"): with
+ * `packageId` the save is a new version of THAT package whatever it is now called — the new name is
+ * used from this version on, earlier versions and the quotations made on them keep theirs. A name
+ * another live package of this owner already has is refused. The old version names its successor
+ * (`supersededById`), which is how a renamed package still reads as one.
  */
 export async function savePackage(
   prisma: PrismaClient,
@@ -123,11 +131,25 @@ export async function savePackage(
 
   return prisma.$transaction(async (tx) => {
     const now = new Date();
-    const prior = await tx.ratePackage.findFirst({
-      where: { ...ownerWhere(owner), name, effectiveTo: null },
-      include: { overrides: true },
-      orderBy: { effectiveFrom: "desc" },
-    });
+    const prior = input.packageId
+      ? await tx.ratePackage.findFirst({ where: { ...ownerWhere(owner), id: input.packageId }, include: { overrides: true } })
+      : await tx.ratePackage.findFirst({
+          where: { ...ownerWhere(owner), name, effectiveTo: null },
+          include: { overrides: true },
+          orderBy: { effectiveFrom: "desc" },
+        });
+    if (input.packageId && !prior) throw new NotFoundError("RatePackage");
+    if (input.packageId && prior?.effectiveTo) {
+      throw new ValidationError(`"${prior.name}" was saved again or retired after this page was opened — open it again`);
+    }
+    const renamedFrom = prior && prior.name !== name ? prior.name : null;
+    if (renamedFrom) {
+      const taken = await tx.ratePackage.findFirst({
+        where: { ...ownerWhere(owner), effectiveTo: null, id: { not: prior!.id }, name: { equals: name, mode: "insensitive" } },
+        select: { name: true },
+      });
+      if (taken) throw new ValidationError(`There is already a package named "${taken.name}" here — pick another name`);
+    }
     if (prior) await tx.ratePackage.update({ where: { id: prior.id }, data: { effectiveTo: now } });
 
     const created = await tx.ratePackage.create({
@@ -154,6 +176,8 @@ export async function savePackage(
         createdBy: actorId,
       },
     });
+
+    if (prior) await tx.ratePackage.update({ where: { id: prior.id }, data: { supersededById: created.id } });
 
     // Carry the prior version's per-room-type overrides forward — an admin editing the base rate
     // should not silently lose them.
@@ -222,6 +246,7 @@ export async function savePackage(
         travelAgentId: created.travelAgentId,
         corporateAccountId: created.corporateAccountId,
         priorPackageId: prior?.id ?? null,
+        renamedFrom,
         changedFields: changed,
         overridesCarriedForward: prior?.overrides.length ?? 0,
         bookingsFollowing,
@@ -230,7 +255,7 @@ export async function savePackage(
     });
 
     const saved = await tx.ratePackage.findUniqueOrThrow({ where: { id: created.id }, include: { overrides: true } });
-    return { ...saved, planCheck: plansAgainstMeals(saved), bookingsFollowing, bookingsKept };
+    return { ...saved, planCheck: plansAgainstMeals(saved), bookingsFollowing, bookingsKept, renamedFrom };
   });
 }
 

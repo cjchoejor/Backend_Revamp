@@ -84,6 +84,8 @@ export async function initiateSettlement(
     voucherAmount?: number;
     /** Where the invoice a direct bill or a voucher shortfall issues is emailed. */
     invoiceDispatchedTo?: string;
+    /** Keep the invoice it issues for the desk to read and send (2026-11-24). */
+    holdInvoicesForDesk?: boolean;
     /** Settle ONE payer's share — the guest's own extras, the agency's package (2026-09-18). */
     billingModel?: string;
   },

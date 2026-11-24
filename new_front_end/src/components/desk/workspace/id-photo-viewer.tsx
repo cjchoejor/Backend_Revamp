@@ -56,8 +56,37 @@ function useArea(open: boolean) {
   return box;
 }
 
-/** Mounted once by the guest table — draws the photo that `showIdPhoto` names. */
+/**
+ * Drawn once however many places mount it (2026-11-24 — the guest table on the step and the
+ * booking file's Guests tab both do): the first host mounted draws, the others stand by.
+ */
+let hostSeq = 0;
+const hosts: number[] = [];
+const hostSubs = new Set<() => void>();
+const firstHost = () => hosts[0] ?? null;
+const subscribeHosts = (f: () => void) => {
+  hostSubs.add(f);
+  return () => {
+    hostSubs.delete(f);
+  };
+};
+
+/** Mounted by the guest table and the Guests tab — draws the photo that `showIdPhoto` names. */
 export function IdPhotoViewerHost() {
+  const [me] = useState(() => ++hostSeq);
+  useEffect(() => {
+    hosts.push(me);
+    hostSubs.forEach((f) => f());
+    return () => {
+      hosts.splice(hosts.indexOf(me), 1);
+      hostSubs.forEach((f) => f());
+    };
+  }, [me]);
+  const drawing = useSyncExternalStore(subscribeHosts, firstHost, () => null) === me;
+  return drawing ? <ViewerBody /> : null;
+}
+
+function ViewerBody() {
   const s = useSyncExternalStore(subscribe, () => shown, () => null);
   const [zoom, setZoom] = useState(1);
   const [turn, setTurn] = useState(0);

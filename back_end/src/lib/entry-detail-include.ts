@@ -97,6 +97,11 @@ export const entryDetailInclude = {
         },
         orderBy: { checkInDate: "asc" as const },
       },
+      /**
+       * "The same booking twice?" still to answer (2026-11-24) — the step's list shows the item only
+       * while one is open; the desk reads the other booking from `GET …/duplicate-check`.
+       */
+      duplicateFlags: { where: { status: "OPEN" as const }, select: { id: true } },
     },
   },
 } satisfies Prisma.EntryInclude;

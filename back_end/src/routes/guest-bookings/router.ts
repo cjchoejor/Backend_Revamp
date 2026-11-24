@@ -8,6 +8,7 @@ import {
   listSameGuestBookings,
   previewCombineBookings,
 } from "../../services/domain/combine-bookings-service.js";
+import { answerBothMeant, describeOpenDuplicates } from "../../services/domain/duplicate-check-service.js";
 
 /**
  * The same guest's other bookings, and combining two of them while both are still at Inquiry or
@@ -29,6 +30,30 @@ guestBookingsRouter.get("/entries/:id/guest-bookings", requireActorLevel("L1"), 
     next(e);
   }
 });
+
+/** The open "same booking twice?" questions, each with the other booking (2026-11-24). */
+guestBookingsRouter.get("/entries/:id/duplicate-check", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.set("Cache-Control", "no-store");
+    res.json(await describeOpenDuplicates(prisma, req.params.id));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** "Both are meant" — the desk's answer; the booking may then move on. */
+guestBookingsRouter.post(
+  "/entries/:id/duplicate-check/:flagId/both-meant",
+  requireActorLevel("L1"),
+  validateBody(z.object({ note: z.string().trim().max(500).optional().nullable() })),
+  async (req, res, next) => {
+    try {
+      res.json(await answerBothMeant(prisma, actorOf(req), req.params.id, req.params.flagId, req.body.note));
+    } catch (e) {
+      next(e);
+    }
+  },
+);
 
 guestBookingsRouter.post(
   "/entries/:id/combine/preview",

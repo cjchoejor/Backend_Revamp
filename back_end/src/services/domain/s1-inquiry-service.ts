@@ -237,11 +237,23 @@ async function checkPartyPackage(
     if (pkg.effectiveTo && pkg.effectiveTo <= new Date()) {
       // A screen opened before the package was saved again names its old version: the booking takes
       // the package as it stands now (2026-11-04). Retired with nothing after it is a refusal.
-      const current = await prisma.ratePackage.findFirst({
-        where: { scope: pkg.scope, travelAgentId: pkg.travelAgentId, corporateAccountId: pkg.corporateAccountId, name: pkg.name, effectiveTo: null },
-        orderBy: { effectiveFrom: "desc" },
-        select: { id: true },
-      });
+      // Follow the versions that replaced it (2026-11-24 — a package can be renamed), then, for a
+      // version retired and made again by hand, its name.
+      let last = { id: pkg.id, name: pkg.name, effectiveTo: pkg.effectiveTo as Date | null };
+      for (let i = 0; i < 100 && last.effectiveTo; i++) {
+        const link = await prisma.ratePackage.findUnique({ where: { id: last.id }, select: { supersededById: true } });
+        if (!link?.supersededById) break;
+        const next = await prisma.ratePackage.findUnique({ where: { id: link.supersededById }, select: { id: true, name: true, effectiveTo: true } });
+        if (!next) break;
+        last = next;
+      }
+      const current = !last.effectiveTo
+        ? { id: last.id }
+        : await prisma.ratePackage.findFirst({
+            where: { scope: pkg.scope, travelAgentId: pkg.travelAgentId, corporateAccountId: pkg.corporateAccountId, name: last.name, effectiveTo: null },
+            orderBy: { effectiveFrom: "desc" },
+            select: { id: true },
+          });
       if (!current) throw new ValidationError(`Rate package "${pkg.name}" is no longer active`);
       ratePackageId = current.id;
     }

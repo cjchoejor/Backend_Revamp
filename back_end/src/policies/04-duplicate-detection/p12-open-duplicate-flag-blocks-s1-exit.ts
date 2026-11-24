@@ -18,5 +18,5 @@ export async function enforceNoOpenDuplicateFlagsForS1Exit(
   const flags = input.duplicateFlags ?? [];
   const hasOpen = flags.some((f) => String(f.status ?? "") === "OPEN");
   if (!hasOpen) return;
-  throw new StageGateBlockedError("Unresolved duplicate flag blocks S1 exit", "DUPLICATE_UNRESOLVED");
+  throw new StageGateBlockedError("This booking may be the same as another one on these nights — on the Inquiry step, say whether both bookings are meant or it was entered twice", "DUPLICATE_UNRESOLVED");
 }

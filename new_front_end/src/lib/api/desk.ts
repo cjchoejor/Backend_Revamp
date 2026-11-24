@@ -91,6 +91,11 @@ export type DeskListRow = {
   parkReason: string | null;
   parkFollowUpAt: string | null;
   roomNumbers: string[];
+  /**
+   * The rooms held before Arrival hands them out (2026-11-24): by number at Arrival (the system's
+   * proposal) and for a room given by number; by type for a room the system may still move.
+   */
+  roomsHeld: { numbers: string[]; byType: Array<{ name: string; count: number }> } | null;
   /** Which stay of its enquiry this booking is, when there are several (2026-11-10). */
   stay: { no: number; of: number } | null;
 };
@@ -121,6 +126,8 @@ export type DeskMoneyRow = {
   } | null;
   /** The stay as priced plus what was added to it; null with no priced stay total (2026-11-10). */
   totalAmount: number | null;
+  /** What the guest still owes on the whole stay, nights not posted yet included (2026-11-24) — the server's. */
+  stillToPay: { amount: number; paidAhead: number; notBilledYet: number } | null;
   shortened: boolean;
   /** The whole trip when the booking is one stay of several — the stays' own figures added up by the server. */
   trip: {

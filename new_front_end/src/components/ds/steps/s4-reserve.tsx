@@ -526,7 +526,7 @@ function stayFacts(
   if (overlap) {
     lines.push({
       key: "overlap",
-      label: "The guest's other booking",
+      label: overlap.why === "SAME_NAME" && overlap.partyName ? `${overlap.partyName}'s booking for the same name` : "The guest's other booking",
       value: overlap.acknowledged
         ? `${overlap.entryId} (${fmtStay(overlap.checkInDate, overlap.checkOutDate)}) — both bookings are meant`
         : `${overlap.entryId} is reserved over these nights (${fmtStay(overlap.checkInDate, overlap.checkOutDate)})`,

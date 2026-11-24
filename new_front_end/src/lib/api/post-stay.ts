@@ -81,6 +81,16 @@ export async function getRoomInspections(session: Session, entryId: string) {
   return apiRequest<BookingInspections>(`/api/entries/${entryId}/room-inspections`, { session });
 }
 
+/** Has the guest left every room this booking held — the booking's own record, the rule the move to Closed uses. */
+export type RoomsReleased = {
+  rooms: Array<{ roomId: string; roomNumber: string; released: boolean; readFrom: "BOOKING" | "FLAG"; releasedAt: string | null }>;
+  allReleased: boolean;
+};
+
+export async function getRoomsReleased(session: Session, entryId: string) {
+  return apiRequest<RoomsReleased>(`/api/entries/${entryId}/rooms-released`, { session });
+}
+
 /**
  * What still stands between the booking and "Close & seal" — the backend's own seal checks,
  * read without sealing, and where the room inspection stands.

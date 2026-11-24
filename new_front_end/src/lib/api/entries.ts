@@ -906,6 +906,8 @@ export type RoomTypeRateReference = {
   packageChosenForType?: boolean;
   standardRate: number | null;
   msrValue: number | null;
+  /** The lowest room rate already agreed on this booking for this type (2026-11-24) — at or above it is a price already agreed. */
+  agreedRate?: number | null;
   extraBedRate: number | null;
   breakfastRate: number | null;
   lunchRate: number | null;

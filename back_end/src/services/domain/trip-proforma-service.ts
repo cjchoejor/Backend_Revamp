@@ -404,7 +404,7 @@ async function emailTripProforma(prisma: PrismaClient, tripPaperId: string, memb
   const paper = await prisma.tripPaper.findUnique({ where: { id: tripPaperId }, select: { validUntil: true } });
   const recipient = await resolveSendTo(prisma, first.id);
   const content = renderProformaInvoiceEmail({
-    guestDisplayName: recipient.party ?? "Guest",
+    guestDisplayName: recipient.greet ?? recipient.party ?? "Guest",
     invoiceRef: number,
     checkInDate: new Date(`${ins[0]}T00:00:00Z`),
     checkOutDate: new Date(`${outs[outs.length - 1]}T00:00:00Z`),

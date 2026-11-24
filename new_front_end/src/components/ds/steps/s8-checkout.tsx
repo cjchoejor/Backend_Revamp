@@ -23,6 +23,7 @@ import { useSession } from "@/hooks/use-session";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
 import { usePaymentStatus } from "@/hooks/use-payment-status";
 import { useRoomInspections } from "@/hooks/use-room-inspections";
+import { useRoomsReleased } from "@/hooks/use-rooms-released";
 import { RoomInspectionGrid } from "./room-inspections";
 import { DamageCard, useUnansweredDamage } from "./damage-card";
 import {
@@ -45,6 +46,7 @@ import { SplitSettlementBlock } from "@/components/desk/workspace/split-settleme
 import type { EntryDetail } from "@/types/api";
 import { sentWords } from "@/hooks/use-invoice-recipient";
 import { OverpaidCard } from "./refund-card";
+import { TaxInvoiceSendDialog, type TaxInvoiceTarget } from "./tax-invoice-send";
 import {
   AnswerLine,
   ChangeBookingMenu,
@@ -88,10 +90,6 @@ import {
   useBilling,
   useBookedBy,
   useFolioIndex,
-  SendToField,
-  useIssueAndSend,
-  useSendInvoice,
-  useSendTo,
 } from "./s8-parts";
 import {
   PayerShares,
@@ -817,15 +815,6 @@ function HowSettled({
   };
   const [ref, setRef] = useState("");
   const [paidNow, setPaidNow] = useState("");
-  // What the agency's voucher covers — starts at the whole balance (the voucher usually covers
-  // the stay); what it leaves is invoiced to the agency.
-  const [voucherCovers, setVoucherCovers] = useState("");
-  const voucherTouched = useRef(false);
-  useEffect(() => {
-    if (voucherTouched.current) return;
-    if (balance != null && balance > 0) setVoucherCovers(String(balance));
-  }, [balance]);
-  const [invoiceTo, setInvoiceTo] = useSendTo(entry);
   const [fomAck, setFomAck] = useState("");
   const [confirmOpen, setConfirmOpen] = useState(false);
   // The amount starts at the whole balance (the common case); typing a smaller figure makes the
@@ -874,8 +863,11 @@ function HowSettled({
     !entry.creditCeilingTier2AcknowledgedAt;
 
   const bank = useBankEntry();
-  const voucherTyped = voucherCovers.trim() === "" ? Number.NaN : Number.parseFloat(voucherCovers);
-  const voucherValid = Number.isFinite(voucherTyped) && voucherTyped >= 0;
+  // The voucher covers what is owed — on one payer's bill, the agency's share — and is not typed
+  // (2026-11-24, operator: "it should only pull the voucher amount covered … and not editable").
+  // A bill with the guest's own charges on it splits into shares above, so this is only the package.
+  const voucherTyped = balanceNum;
+  const voucherValid = balanceNum > 0;
   const invoicesParty = method === "DIRECT_BILL" || method === "VOUCHER";
 
   const finish = useFinishWhenDone("settle");
@@ -883,7 +875,8 @@ function HowSettled({
     mutationFn: () => {
       if (!folio?.id || !folio.billingModel) throw new Error("The bill or its billing model is missing");
       const body: Parameters<typeof initiateSettlement>[2] = { settlementMethod: method, billingModelConfirmation: folio.billingModel };
-      if (ref.trim() && method !== "DIRECT_BILL" && !bank.needs(method)) body.paymentVerificationRef = ref.trim();
+      // A voucher takes no reference (2026-11-24: its number was kept nowhere anyone reads).
+      if (ref.trim() && method !== "DIRECT_BILL" && method !== "VOUCHER" && !bank.needs(method)) body.paymentVerificationRef = ref.trim();
       if (takesMoney) Object.assign(body, bank.body(method));
       if (method === "VOUCHER") {
         // The backend requires what the voucher covers; anything it leaves is invoiced to the agency.
@@ -894,7 +887,9 @@ function HowSettled({
         // the desk, and a bill paid in full takes none (2026-11-12).
         body.partialAmount = typed;
       }
-      if (invoicesParty && invoiceTo.trim()) body.invoiceDispatchedTo = invoiceTo.trim();
+      // The invoice this issues is read and sent from the tax invoice below, as every paper is
+      // (2026-11-24, operator): nothing is emailed by the settlement itself.
+      if (invoicesParty) body.holdInvoicesForDesk = true;
       if (fomAck.trim()) body.fomAcknowledgementRef = fomAck.trim();
       return initiateSettlement(session!, folio.id, body);
     },
@@ -906,9 +901,9 @@ function HowSettled({
           : partial
           ? "Settled in part — the rest stays owed and is collected after the stay; the rooms are released"
           : method === "DIRECT_BILL"
-            ? `Settled — the balance is invoiced to ${booked.payer}; the tax invoice is below`
+            ? `Settled — the balance is invoiced to ${booked.payer}. Read the invoice and send it from the tax invoice below`
             : method === "VOUCHER"
-              ? `Settled — the voucher is recorded; anything it leaves is invoiced to ${booked.payer}`
+              ? `Settled — the voucher covers the bill; Billing › Vouchers keeps it until ${booked.payer} pays`
               : "Settled — the bill is closed and the rooms go to housekeeping",
       );
       refresh([["settlement-targets"]]);
@@ -990,7 +985,7 @@ function HowSettled({
       <div className="row-acts">
         <Chip tone="accent">who pays · {model ? payerChoiceWord(model, payerPartyOf(entry)) : "not set"}</Chip>
         {entry.groupBillingMode === "GROUP_MASTER" ? <Chip tone="quiet">one bill for the party</Chip> : null}
-        {folio && !paidInFull ? (
+        {folio && !paidInFull && !shares ? (
           <SeeRow
             label="Settle part by part"
             note="each room or space pays its own part — the money is filed against it; the bill stays one"
@@ -1122,26 +1117,20 @@ function HowSettled({
                   ))}
                 </select>
               </div>
-              {method === "DIRECT_BILL" ? (
-                <SendToField entry={entry} value={invoiceTo} onChange={setInvoiceTo} label="Send the invoice to" />
-              ) : bank.needs(method) ? null : (
+              {method === "DIRECT_BILL" || method === "VOUCHER" || bank.needs(method) ? null : (
                 <ReferenceField method={method} value={ref} onChange={setRef} takesMoney={takesMoney} />
               )}
               {method === "VOUCHER" ? (
                 <div className="field">
                   <label>
-                    The voucher covers · Nu.
-                    <Help label="About the voucher">Anything it leaves of the {money(balance, cur)} balance is invoiced to {booked.payer}.</Help>
+                    The voucher covers
+                    <Help label="About the voucher">
+                      What {booked.payer} pays for — the package. It counts as paid here; Billing › Vouchers keeps it until their money comes in.
+                    </Help>
                   </label>
-                  <input
-                    className="input money"
-                    inputMode="decimal"
-                    value={voucherCovers}
-                    onChange={(e) => {
-                      voucherTouched.current = true;
-                      setVoucherCovers(e.target.value);
-                    }}
-                  />
+                  <span className="settle-fixed money" data-voucher-covers>
+                    {money(balance, cur)}
+                  </span>
                 </div>
               ) : method === "DIRECT_BILL" ? null : (
                 <div className="field">
@@ -1163,9 +1152,8 @@ function HowSettled({
               )}
             </div>
             {takesMoney ? <BankFields entry={bank} method={method} /> : null}
-            {method === "VOUCHER" || (overCeiling && fom) ? (
+            {overCeiling && fom ? (
             <div className="form2 settle-row" style={{ marginTop: 10 }}>
-              {method === "VOUCHER" ? <SendToField entry={entry} value={invoiceTo} onChange={setInvoiceTo} label="Send the invoice to" /> : null}
               {overCeiling && fom ? (
                 <div className="field">
                   <label>
@@ -1293,22 +1281,13 @@ function HowSettled({
               </>
             ) : method === "VOUCHER" ? (
               <>
-                The agency&rsquo;s voucher covers <b className="money">{money(voucherValid ? voucherTyped : null, cur)}</b> of the{" "}
-                <b className="money">{money(balance, cur)}</b> balance — anything it leaves is invoiced to {booked.payer}
-                {invoiceTo.trim() ? `, sent to ${invoiceTo.trim()}` : " and handed over (no email)"}.
+                The agency&rsquo;s voucher covers the <b className="money">{money(balance, cur)}</b> balance. It counts as paid on this bill, and
+                Billing › Vouchers keeps it until {booked.payer}&rsquo;s money comes in.
               </>
             ) : method === "DIRECT_BILL" ? (
               <>
-                The balance of <b className="money">{money(balance, cur)}</b> is invoiced to {booked.payer}
-                {invoiceTo.trim() ? (
-                  <>
-                    {" "}
-                    and the invoice is emailed to <b>{invoiceTo.trim()}</b>
-                  </>
-                ) : (
-                  " — no email address, so the invoice is handed over"
-                )}
-                .
+                The balance of <b className="money">{money(balance, cur)}</b> is invoiced to {booked.payer}. Nothing is sent yet: you read the
+                invoice and send it from the tax invoice below.
               </>
             ) : (
               <>
@@ -1331,9 +1310,9 @@ function Invoices({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz: 
   const billing = useBilling(entry);
   const index = useFolioIndex(entry);
   const booked = useBookedBy(entry);
-  const issueSend = useIssueAndSend(entry);
-  const send = useSendInvoice(entry);
-  const [sendTo, setSendTo] = useSendTo(entry);
+  // Read, then send — the box with the paper beside it, by email or WhatsApp (2026-11-24, operator).
+  // `null` target: the draft, issued on the press; an invoice: sent as it is.
+  const [sending, setSending] = useState<{ target: TaxInvoiceTarget | null } | null>(null);
   const [paper, setPaper] = useState<PaperRef | null>(null);
   if (!entry.folio) return null;
   const tax = index.data?.documents.find((d) => d.kind === "tax-invoice") ?? null;
@@ -1366,7 +1345,7 @@ function Invoices({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz: 
     <StepCard
       title={`Tax invoice · ${booked.payer}`}
       right={stateChip}
-      meta={`${tax?.purpose ?? "A draft until the bill is settled — its particulars become the one original."}${issued ? "" : ` Issuing it sends it to ${booked.payer} in the same act — no invoice exists unsent.`}`}
+      meta={`${tax?.purpose ?? "A draft until the bill is settled — its particulars become the one original."}${issued ? "" : " Issuing it sends it in the same act, by email or WhatsApp — read it first with Preview."}`}
       acts={
         <>
           {issued ? (
@@ -1384,8 +1363,8 @@ function Invoices({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz: 
               </Button>
               {issued.state === "DRAFT" ? (
                 <Live>
-                  <Button icon="send" compact state={send.isPending ? "working" : "default"} workingLabel="Sending…" onClick={() => send.mutate({ invoiceId: issued.id, to: sendTo })}>
-                    Send it
+                  <Button className="go" icon="send" compact onClick={() => setSending({ target: issued })}>
+                    Send
                   </Button>
                 </Live>
               ) : null}
@@ -1403,7 +1382,7 @@ function Invoices({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz: 
                 Preview draft
               </Button>
               <Live>
-                <Button state={issueSend.isPending ? "working" : issueReason ? "inert" : "default"} reason={issueReason} workingLabel="Issuing…" onClick={() => issueSend.mutate(sendTo)}>
+                <Button className={issueReason ? undefined : "go"} state={issueReason ? "inert" : "default"} reason={issueReason} onClick={() => setSending({ target: null })}>
                   Issue and send
                 </Button>
               </Live>
@@ -1452,24 +1431,13 @@ function Invoices({ entry, live, tz }: { entry: EntryDetail; live: boolean; tz: 
           <AnswerLine entryId={entry.id} type="FINAL_INVOICE" what="the tax invoice" tz={tz} />
         </div>
       ) : issued ? (
-        <>
-          <p className="sm warn-ink" style={{ marginTop: 8 }}>
-            Issued {issued.issuedAt ? fmtStamp(issued.issuedAt, tz) : ""} and not sent — no invoice may stay undispatched.
-          </p>
-          <Live>
-            <div className="form2" style={{ marginTop: 8 }}>
-              <SendToField entry={entry} value={sendTo} onChange={setSendTo} />
-            </div>
-          </Live>
-        </>
-      ) : (
-        <Live>
-          <div className="form2" style={{ marginTop: 8 }}>
-            <SendToField entry={entry} value={sendTo} onChange={setSendTo} />
-          </div>
-        </Live>
-      )}
+        <p className="sm warn-ink" style={{ marginTop: 8 }}>
+          Issued {issued.issuedAt ? fmtStamp(issued.issuedAt, tz) : ""} and not sent yet — read it with Preview, then Send. The record can&rsquo;t be
+          sealed until it has gone out.
+        </p>
+      ) : null}
       <PaperDrawer paper={paper} onClose={() => setPaper(null)} />
+      {sending ? <TaxInvoiceSendDialog entry={entry} target={sending.target} onClose={() => setSending(null)} onSent={() => setSending(null)} /> : null}
     </StepCard>
   );
 
@@ -1602,7 +1570,12 @@ function Departure({ entry, live }: { entry: EntryDetail; live: boolean }) {
   });
 
 
-  const released = rooms.length > 0 && rooms.every((r) => r.room?.currentClaimState === "DEPARTED_DIRTY" || r.room?.currentClaimState === "DEPARTED_CLEAN");
+  // The backend reads it off the booking's own record (2026-11-24) — a room cleaned or taken by the next guest
+  // after this booking settled stays released. The flags stand in only until it answers.
+  const releasedRead = useRoomsReleased(entry).data;
+  const released = releasedRead
+    ? releasedRead.allReleased
+    : rooms.length > 0 && rooms.every((r) => r.room?.currentClaimState === "DEPARTED_DIRTY" || r.room?.currentClaimState === "DEPARTED_CLEAN");
   const onAccount = !!entry.folio?.billingModel && ON_ACCOUNT_MODELS.has(entry.folio.billingModel);
 
   // Each section folds once its own presses finish it; the rooms open after the keys (2026-10-30).

@@ -328,3 +328,19 @@ export function rowNamed(r: { guestProfile?: { firstName?: string | null; lastNa
 export function isNamed(g?: { firstName?: string | null; lastName?: string | null; displayName?: string | null } | null): boolean {
   return guestNameOf(g) !== "to come from the agent";
 }
+
+/**
+ * The rooms a list row names (2026-11-24, client: "for walk in for 1 week stay, the room no is not
+ * showing"): the rooms handed out; else the rooms it holds — by number from Arrival, where the
+ * system's rooms are its proposal, and for a room given by number; by type for a room the system
+ * may still move before Arrival ("1 Executive Apartment"); else how many rooms it asks for.
+ */
+export function roomsWordOfRow(r: Pick<DeskListRow, "roomNumbers" | "roomsHeld" | "numberOfRooms">): string {
+  if (r.roomNumbers.length) return r.roomNumbers.join(", ");
+  const held = r.roomsHeld;
+  if (held && (held.numbers.length || held.byType.length)) {
+    return [...held.numbers, ...held.byType.map((t) => `${t.count} ${t.name}`)].join(", ");
+  }
+  if (r.numberOfRooms) return `${r.numberOfRooms} room${r.numberOfRooms === 1 ? "" : "s"}`;
+  return "—";
+}

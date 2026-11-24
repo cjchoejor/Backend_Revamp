@@ -753,6 +753,8 @@ export type EntryDetail = EntryListItem & {
     travelAgent?: BookingPartySummary | null;
     corporateAccount?: BookingPartySummary | null;
     agentProfile?: AgentProfileSummary | null;
+    /** "The same booking twice?" still to answer (2026-11-24); empty when none. */
+    duplicateFlags?: Array<{ id: string }>;
     /** The guest's own email the papers reply inside (2026-11-12); null when none was linked. */
     emailThreadMessageId?: string | null;
     emailThreadSubject?: string | null;

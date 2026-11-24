@@ -33,7 +33,13 @@ import {
 import { resolveRatePlanPricingForS2Quotation } from "../../policies/08-pricing-rate-plan/p19-rate-plan-resolution-for-s2-quotation.js";
 import { enforceQuotationSendTimeGovernanceConfig } from "../../policies/08-pricing-rate-plan/p07-quotation-validity-and-ack-config-s2.js";
 import { enforceGroupRateContextForS2Quotation } from "../../policies/26-group-foc-billing/p65-group-rate-context-for-s2-quotation.js";
-import { resolveBelowMsrGmWaiverForS2 } from "../../policies/08-pricing-rate-plan/p19-msr-gm-waiver-below-msr-s2.js";
+import {
+  mayPriceBelowMsr,
+  resolveBelowMsrGmWaiverForS2,
+  type BelowFloorRoom,
+  type MsrGmWaiverRecord,
+} from "../../policies/08-pricing-rate-plan/p19-msr-gm-waiver-below-msr-s2.js";
+import { carriedFloorWaiver } from "../../lib/msr-floor.js";
 import { enforceFocEntitlementForS2GroupQuotation } from "../../policies/15-foc/p37-foc-entitlement-for-s2-group-quotation.js";
 import * as communicationService from "./communication-service.js";
 import { allocateReadableId, READABLE_ID_PREFIXES } from "../../lib/readable-id.js";
@@ -400,6 +406,12 @@ async function prepareQuotationDraft(
   const ratePackagesByType: Record<string, { ratePackageId: string; packageName: string }> = {};
   /** And each room priced on a package of its own, by room (2026-11-13). */
   let ratePackagesByRoom: Record<string, { ratePackageId: string; packageName: string }> | null = null;
+  /**
+   * Rooms whose typed rate is under their type's floor (2026-11-24). The floor is the standard
+   * plan's MSR; a party's package (booking-wide, a type's or a room's own) is negotiated and has
+   * none — the pipeline's own exemption. A complimentary room is the FOC's call, not this.
+   */
+  let belowFloorRooms: BelowFloorRoom[] = [];
   if (agentRate && roomTypeId) ratePackagesByType[roomTypeId] = { ratePackageId: agentRate.ratePackageId, packageName: agentRate.packageName };
   // effectiveRate stays the ROOM rate — MSR, discount and S4 freeze semantics depend on it.
   const effectiveRate = agentRate ? agentRate.roomRate : pricing.effectiveRate;
@@ -440,11 +452,12 @@ async function prepareQuotationDraft(
   // Per-night total the guest is quoted = room + meal component + extra beds.
   const perNightTotal = effectiveRate + mealTotal + extraBedTotal;
 
-  const msrWaiver = await resolveBelowMsrGmWaiverForS2(prisma, {
+  let msrWaiver: MsrGmWaiverRecord | null = await resolveBelowMsrGmWaiverForS2(prisma, {
     // Agent rates are negotiated and not subject to MSR — only flag below-MSR when standard pricing applies.
     belowMsr: agentRate ? false : pricing.belowMsr,
     actorId,
     waiver: input.belowMsrGmWaiver ?? null,
+    actorLevel: input.actorLevel,
   });
 
   const last = await prisma.quotation.findFirst({ where: { entryId, segmentId }, orderBy: { versionNumber: "desc" } });
@@ -645,12 +658,16 @@ async function prepareQuotationDraft(
     };
     const planOf = (v: number | null | undefined) => (v != null ? new Prisma.Decimal(v) : null);
     const ratesByType = new Map<string, TypeRates>();
+    /** Each type's floor: the standard plan's MSR, none on a party's package. */
+    const msrByType = new Map<string, number | null>();
     for (const tid of new Set(roomRows.map((r) => r.roomTypeId).filter((t): t is string => !!t))) {
       // The preferred type is already resolved above — reuse it rather than querying twice.
       if (tid === roomTypeId) {
         ratesByType.set(tid, bookingTypeRates);
+        msrByType.set(tid, agentRate ? null : (pricing.msrValue ?? null));
         continue;
       }
+      msrByType.set(tid, null);
       try {
         const typeAgentRate = entry.inquiryId
           ? await resolveAgentRateForEntryQuotation(prisma, {
@@ -688,6 +705,7 @@ async function prepareQuotationDraft(
           stay,
           groupSize,
         });
+        msrByType.set(tid, typePricing.msrValue ?? null);
         ratesByType.set(tid, {
           room: toDecimal(typePricing.effectiveRate ?? typePricing.resolvedNightlyRate ?? 0),
           roomPreDiscount: toDecimal(typePricing.resolvedNightlyRate ?? 0),
@@ -783,6 +801,17 @@ async function prepareQuotationDraft(
       return (tid ? ratesByType.get(tid) : undefined) ?? bookingTypeRates;
     };
     if (Object.keys(roomPackagesUsed).length) ratePackagesByRoom = roomPackagesUsed;
+
+    // A rate typed under the room type's floor (2026-11-24) — the server's own check; it had been
+    // the desk's alone. A room on a package of its own, or complimentary, has no floor here.
+    belowFloorRooms = input.roomCompositions.flatMap((c): BelowFloorRoom[] => {
+      if (c.negotiatedRoomRate == null || c.ratePackageId || c.isFoc === true) return [];
+      const tid = roomRows.find((r) => r.id === c.roomId)?.roomTypeId;
+      const floor = tid ? msrByType.get(tid) : null;
+      if (!tid || floor == null || !(floor > 0)) return [];
+      if (!toDecimal(c.negotiatedRoomRate).lt(toDecimal(floor))) return [];
+      return [{ roomId: c.roomId, roomNumber: numberByRoomId.get(c.roomId) ?? c.roomId, roomTypeId: tid, rate: Number(c.negotiatedRoomRate), floor: Number(floor) }];
+    });
 
     /**
      * Nights PER ROOM (fixed 2026-08-12).
@@ -963,6 +992,25 @@ async function prepareQuotationDraft(
     }
   }
 
+  // Rates under the floor: the GM's or an admin's call, recorded as the waiver — or carried
+  // unchanged from an earlier quotation on this booking that one of them already waived (a room
+  // swap by the front desk re-prices the same rates; refusing it there would strand the walk).
+  if (belowFloorRooms.length > 0 && !msrWaiver) {
+    // The GM's or admin's own price is their waiver; below them, a price already agreed carries.
+    const carried = mayPriceBelowMsr(input.actorLevel) ? null : await carriedFloorWaiver(prisma, entryId, belowFloorRooms);
+    msrWaiver = carried
+      ? carried
+      : await resolveBelowMsrGmWaiverForS2(prisma, {
+          belowMsr: true,
+          actorId,
+          waiver: input.belowMsrGmWaiver ?? null,
+          actorLevel: input.actorLevel,
+          rooms: belowFloorRooms,
+        });
+  } else if (belowFloorRooms.length > 0 && msrWaiver) {
+    msrWaiver = { ...msrWaiver, rooms: belowFloorRooms };
+  }
+
   // A group's complimentary rooms are held to its FOC entitlement, as on the group path.
   const focRooms = usingCompositions ? input.roomCompositions!.filter((c) => c.isFoc === true).length : 0;
   if (isGroup && focRooms > 0) {
@@ -979,7 +1027,8 @@ async function prepareQuotationDraft(
     resolvedNightlyRate,
     effectiveRate,
     msrValue: pricing.msrValue,
-    belowMsr: agentRate ? false : pricing.belowMsr,
+    belowMsr: (agentRate ? false : pricing.belowMsr) || belowFloorRooms.length > 0,
+    ...(belowFloorRooms.length ? { belowFloorRooms } : {}),
     isDeterrentRateApplied: pricing.isDeterrentRateApplied,
     resolutionPath,
     currency,
@@ -1327,7 +1376,7 @@ async function createQuotationInner(
         data: {
           eventType: "QUOTATION.MSR_GM_WAIVED",
           actorId,
-          actorLevel: ActorLevel.L3,
+          actorLevel: (msrWaiver.level as ActorLevel | undefined) ?? ActorLevel.L3,
           entityType: "Quotation",
           entityId: created.id,
           operation: "APPROVE",
@@ -1335,7 +1384,7 @@ async function createQuotationInner(
           stageContext: Stage.S2,
           inquiryId: null,
           entryId,
-          payload: { quotationId: created.id, msrGmWaiver: msrWaiver },
+          payload: { quotationId: created.id, msrGmWaiver: msrWaiver as any },
           createdBy: actorId,
         },
       });
@@ -1790,6 +1839,24 @@ async function supersedeQuotationWithNewDraftInner(
         createdBy: actorId,
       },
     });
+    // Priced below the house's minimum (2026-11-24): the waiver, as on a first quotation.
+    if (prep.msrWaiver) {
+      await tx.traceEvent.create({
+        data: {
+          eventType: "QUOTATION.MSR_GM_WAIVED",
+          actorId,
+          actorLevel: (prep.msrWaiver.level as ActorLevel | undefined) ?? (input.actorLevel as ActorLevel | undefined) ?? ActorLevel.L3,
+          entityType: "Quotation",
+          entityId: created.id,
+          operation: "APPROVE",
+          timestamp: now,
+          stageContext: Stage.S2,
+          entryId: prior.entryId,
+          payload: { quotationId: created.id, msrGmWaiver: prep.msrWaiver as any, path: "SUPERSEDE" },
+          createdBy: actorId,
+        },
+      });
+    }
 
     return created;
   });
@@ -2599,3 +2666,4 @@ export async function sendQuotation(...args: Parameters<typeof sendQuotationInne
   if (entryId) await retireSupersededReplyWaitsBestEffort(args[0], entryId, args[2]);
   return out;
 }
+
