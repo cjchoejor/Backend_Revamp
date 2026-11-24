@@ -11,6 +11,7 @@ import { enforceMultiBookingAcknowledgedForNewDates } from "../../policies/04-du
 import { enforceDateMoveAuthority } from "../../policies/23-room-change/p58-room-change-mode-trigger.js";
 import { enforceEntryActiveForStageTransition } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
 import { backflowRoomChangeToS2 } from "../../state-machines/backflows-state-machine.js";
+import { enforceFloorBeforeWalk } from "../../lib/msr-floor.js";
 import { progressS2ToS3 } from "../../state-machines/s2-s3-state-machine.js";
 import { runPreArrivalWindowActivationWorker } from "../../workers/w4-pre-arrival-window-activation-worker.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
@@ -220,6 +221,10 @@ export async function changeBookingInPlace(
         : `Who sleeps where names ${stray.map((id) => `Room ${numbers.get(id) ?? "?"}`).join(", ")}, which the stay no longer holds.`,
     );
   }
+
+  // A rate under the house's minimum is the GM's or an admin's (2026-11-24), asked before the walk:
+  // the re-quote runs after the booking has gone back a step.
+  await enforceFloorBeforeWalk(prisma, entryId, comps, actor.actorLevel);
 
   // Would the new plan overbook a room, or give the guest two bookings over the same nights?
   // Asked here, so a refusal changes nothing (both are asked again at the re-freeze).

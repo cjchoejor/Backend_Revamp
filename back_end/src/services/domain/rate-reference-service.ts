@@ -1,4 +1,5 @@
 import type { PrismaClient } from "@prisma/client";
+import { agreedRatesByType } from "../../lib/msr-floor.js";
 import { NotFoundError } from "../../lib/errors.js";
 import { readOptionSelected } from "../../lib/option-selected-reader.js";
 import { resolveRatePackageForBooking, type RatePackageBreakdown } from "../../lib/rate-package-resolution.js";
@@ -41,6 +42,12 @@ export type RoomTypeRateReference = {
   standardRate: number | null;
   /** Minimum sellable rate from the standard plan — the discount floor. Null for card rates (negotiated, not MSR-bound). */
   msrValue: number | null;
+  /**
+   * The lowest room rate already agreed on this booking for this type (2026-11-24) — a GM's or
+   * admin's waiver, or a rate quoted while it stood. A typed rate at or above it is a price already
+   * agreed, which anyone may keep; the desk's floor check reads it. Null when nothing was agreed.
+   */
+  agreedRate?: number | null;
   /** Add-on per-unit rates from the rate card. Null when the party has no card (no house price list yet — Track B). */
   extraBedRate: number | null;
   breakfastRate: number | null;
@@ -305,5 +312,8 @@ export async function buildEntryRateReference(
   const packages = chosenIds.map((id) => named.find((p) => p.id === id)).filter((p): p is { id: string; name: string } => !!p);
   const packagesEditable =
     (entry.currentStage === "S1" || entry.currentStage === "S2") && (entry.status === "ACTIVE" || entry.status === "PARKED");
+  // The prices already agreed on this booking, for the floor (2026-11-24, lib/msr-floor.ts).
+  const agreed = await agreedRatesByType(prisma, entry.id);
+  for (const t of roomTypes) t.agreedRate = agreed.get(t.roomTypeId)?.rate ?? null;
   return { entryId: entry.id, currency, nights, gstRate, serviceChargeRate, party, roomTypes, plansOff, packages, packagesEditable };
 }

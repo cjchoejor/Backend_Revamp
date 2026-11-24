@@ -34,6 +34,7 @@ import {
   enforceRepriceAuthorityForStage,
   enforceRoomChangeAuthorityForStage,
 } from "../../policies/23-room-change/p58-room-change-mode-trigger.js";
+import { enforceFloorBeforeWalk } from "../../lib/msr-floor.js";
 import { enforceEntryActiveForStageTransition } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
 import { enforceRoomPhysicallyAssignableForS5 } from "../../policies/01-availability/p01-s5-room-assignment-eligibility-gates.js";
 import { backflowRoomChangeToS2 } from "../../state-machines/backflows-state-machine.js";
@@ -2025,6 +2026,9 @@ async function changeRoomToNewSegmentInner(
       actorLevel: actor.actorLevel,
       touchesCommercialTerms: commercialChanged,
     });
+    // A rate under the house's minimum is the GM's or an admin's (2026-11-24) — asked here, before
+    // the walk starts, since the silent re-quote runs after the booking has gone back a step.
+    if (commercialChanged) await enforceFloorBeforeWalk(prisma, input.entryId, supplied, actor.actorLevel);
 
     // The same three guards the quote runs — failing here leaves the booking untouched.
     enforceRoomCompositionsPriceable(supplied, {
