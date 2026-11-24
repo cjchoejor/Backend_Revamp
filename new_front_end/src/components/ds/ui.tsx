@@ -31,8 +31,13 @@ export function StandingChip({ standing }: { standing: Standing }) {
   );
 }
 
-export function RowStanding({ row, hotelToday, balance }: { row: DeskListRow; hotelToday: string | null; balance?: number | null }) {
-  return <StandingChip standing={standingOf(factsFromRow(row, balance), hotelToday)} />;
+/**
+ * The booking's standing chip. `roomsApart` leaves the room numbers out of its words, for a table
+ * with a Rooms column of its own (Today's lists, 2026-11-24).
+ */
+export function RowStanding({ row, hotelToday, balance, roomsApart }: { row: DeskListRow; hotelToday: string | null; balance?: number | null; roomsApart?: boolean }) {
+  const facts = factsFromRow(row, balance);
+  return <StandingChip standing={standingOf(roomsApart ? { ...facts, roomNumbers: [], roomsCount: null } : facts, hotelToday)} />;
 }
 
 /** The guest's name as the row's link; italic when the agent has not named them yet. */

@@ -126,6 +126,8 @@ export type DeskMoneyRow = {
   } | null;
   /** The stay as priced plus what was added to it; null with no priced stay total (2026-11-10). */
   totalAmount: number | null;
+  /** What the guest still owes on the whole stay, nights not posted yet included (2026-11-24) — the server's. */
+  stillToPay: { amount: number; paidAhead: number; notBilledYet: number } | null;
   shortened: boolean;
   /** The whole trip when the booking is one stay of several — the stays' own figures added up by the server. */
   trip: {
