@@ -98,6 +98,7 @@ import { changeChildAge, previewChildAgeChange } from "../../services/domain/chi
 import { getExpectedArrival, setExpectedArrival } from "../../services/domain/expected-arrival-service.js";
 import { resolveNoShowGraceMinutes, timerShowsFrom } from "../../lib/expected-arrival.js";
 import { buildEntryBedPlan, setEntryBedPlanRoom } from "../../services/domain/entry-bed-plan-service.js";
+import { readRoomsReleasedByBooking } from "../../lib/rooms-released-by-booking.js";
 
 export const entriesRouter = Router();
 
@@ -1235,6 +1236,17 @@ entriesRouter.get("/:id/room-inspections", requireActorLevel("L1"), async (req, 
   try {
     res.setHeader("Cache-Control", "no-store");
     res.json(await describeBookingInspections(prisma, req.params.id));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** Has the guest left every room this booking held — read off the booking's own record, the rule
+ *  the move to Closed uses (2026-11-24), never the room's flag as it is now. */
+entriesRouter.get("/:id/rooms-released", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    res.json(await readRoomsReleasedByBooking(prisma, req.params.id));
   } catch (e) {
     next(e);
   }
