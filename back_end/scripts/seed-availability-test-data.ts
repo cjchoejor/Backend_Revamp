@@ -36,8 +36,11 @@ const dayStart = (offsetDays: number): Date => {
 const iso = (d: Date) => d.toISOString().slice(0, 10);
 
 async function clean() {
-  // Children first, then the entries, then the scaffolding.
-  const entries = await prisma.entry.findMany({ where: { id: { startsWith: P } }, select: { id: true } });
+  // Children first, then the entries, then the scaffolding. ONLY this script's own rows — its
+  // entries are `TEST-ENT-n`, its enquiries `TEST-INQ-n`, its guests `TEST-GP-n` (2026-11-24: the
+  // prefix alone, "TEST-", also matched every other fixture — TEST-ED-…, TEST-TRIP-… — and this
+  // cleanup deleted their reservations, rooms and history before failing on their quotations).
+  const entries = await prisma.entry.findMany({ where: { id: { startsWith: `${P}ENT-` } }, select: { id: true } });
   const ids = entries.map((e) => e.id);
   console.log(`removing ${ids.length} test entries and their rows`);
   if (!COMMIT) return;
@@ -50,16 +53,16 @@ async function clean() {
   await prisma.stageDwellRecord.deleteMany({ where: { entryId: { in: ids } } });
   await prisma.traceEvent.deleteMany({ where: { entryId: { in: ids } } });
   await prisma.segment.deleteMany({ where: { entryId: { in: ids } } });
-  await prisma.entry.deleteMany({ where: { id: { startsWith: P } } });
-  await prisma.inquiry.deleteMany({ where: { id: { startsWith: P } } });
-  await prisma.guestProfile.deleteMany({ where: { id: { startsWith: P } } });
+  await prisma.entry.deleteMany({ where: { id: { in: ids } } });
+  await prisma.inquiry.deleteMany({ where: { id: { startsWith: `${P}INQ-` } } });
+  await prisma.guestProfile.deleteMany({ where: { id: { startsWith: `${P}GP-` } } });
 
   const blocked = await prisma.room.findMany({
-    where: { blockedReason: { startsWith: P } },
+    where: { blockedReason: { startsWith: `${P}out of service` } },
     select: { id: true, roomNumber: true },
   });
   await prisma.room.updateMany({
-    where: { blockedReason: { startsWith: P } },
+    where: { blockedReason: { startsWith: `${P}out of service` } },
     data: { isBlocked: false, blockedReason: null, currentClaimState: "FREE" },
   });
   await prisma.room.updateMany({
