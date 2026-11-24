@@ -143,7 +143,7 @@ export async function issueInvoiceAtS9(
 export type InvoiceRecipient = {
   /** The address the email goes to — null when there is none to use (nothing is emailed). */
   to: string | null;
-  /** Who the document is made out to, for the email's greeting. */
+  /** Whom the email greets: the contact person at the agency or company, else the party; else the guest. */
   greetName: string;
   /** Why nothing is emailed, when `to` is null. */
   skipReason: string | null;
@@ -172,7 +172,8 @@ export async function resolveInvoiceRecipient(
   });
   const guestName = guestDisplayName(entry?.guestProfile) || entry?.contactPersonName?.trim() || "Guest";
   const sendTo = await resolveSendTo(db, entryId);
-  const greetName = sendTo.party ?? guestName;
+  // The contact person at the agency or company, else the party; on a direct booking the guest (2026-11-24).
+  const greetName = sendTo.greet ?? guestName;
   const typedTo = typed?.trim();
   if (typedTo) return { to: typedTo, greetName, skipReason: null };
   if (sendTo.email) return { to: sendTo.email, greetName, skipReason: null };

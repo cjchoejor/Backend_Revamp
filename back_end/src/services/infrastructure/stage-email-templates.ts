@@ -372,7 +372,14 @@ ${d.holdExpiresAt ? `<p style="font-size:13px;color:#555">The extra nights are h
 
 /** No figures, like the voucher it carries (2026-11-09, operator): the price is the quotation's and the proforma's. */
 export type ReservationConfirmationEmailData = {
+  /** The guest staying — "Primary Guest". */
   guestDisplayName: string;
+  /**
+   * Whom the email greets — "Dear …" (2026-11-24, client): through a travel agent or a company the
+   * person there it goes to (lib/send-to.ts `greet`), never the guest. Left out, the guest (or a
+   * group's leader) as before.
+   */
+  greetName?: string | null;
   reservationReadableId: string;
   checkInDate: Date;
   checkOutDate: Date;
@@ -404,7 +411,7 @@ export function renderReservationConfirmationEmail(d: ReservationConfirmationEma
   // or corporate contact rather than the guest, and the important facts are room count,
   // billing arrangement, and who the group leader is. Fall back to the standard template
   // when isGroup is not set.
-  const greetingName = d.isGroup && d.groupLeaderName ? d.groupLeaderName : d.guestDisplayName;
+  const greetingName = d.greetName?.trim() || (d.isGroup && d.groupLeaderName ? d.groupLeaderName : d.guestDisplayName);
   const openingLine = d.isGroup
     ? "Thank you for choosing Legphel Hotel for your group booking. All rooms are confirmed."
     : "Thank you for choosing Legphel Hotel. Your reservation is confirmed.";

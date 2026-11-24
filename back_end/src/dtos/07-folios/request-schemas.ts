@@ -260,6 +260,7 @@ export const initiateSettlementRequestSchema = z.object({
   voucherAmount: z.coerce.number().optional(),
   /** Where the invoice a direct bill / voucher shortfall issues is emailed (2026-09-18). */
   invoiceDispatchedTo: z.string().trim().max(320).optional(),
+  holdInvoicesForDesk: z.boolean().optional(),
 });
 export type InitiateSettlementRequestDto = z.infer<typeof initiateSettlementRequestSchema>;
 

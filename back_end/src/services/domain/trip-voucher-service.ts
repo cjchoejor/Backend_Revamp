@@ -314,6 +314,7 @@ async function emailTripVoucher(prisma: PrismaClient, tripPaperId: string, membe
   const content = renderReservationConfirmationEmail({
     contact: await loadEmailContact(prisma),
     guestDisplayName: guestDisplayName(first.guestProfile) || "Guest",
+    greetName: (await resolveSendTo(prisma, first.id)).greet,
     reservationReadableId: number,
     checkInDate: new Date(`${ins[0]}T00:00:00Z`),
     checkOutDate: new Date(`${outs[outs.length - 1]}T00:00:00Z`),

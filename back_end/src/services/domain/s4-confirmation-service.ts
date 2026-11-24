@@ -543,6 +543,8 @@ async function confirmReservationInner(
   const content = renderReservationConfirmationEmail({
     contact: await loadEmailContact(prisma),
     guestDisplayName: displayName,
+    // Through an agency or a company, the person there it goes to (2026-11-24).
+    greetName: (await resolveSendTo(prisma, entryId)).greet,
     reservationReadableId: result.reservation.id,
     checkInDate: ciDate,
     checkOutDate: coDate,
@@ -667,7 +669,8 @@ async function resendConfirmationVoucherInner(
 
   // Typed, else whom the booking's papers go to (lib/send-to.ts, 2026-11-07): the contact person at
   // the agency or company, else the party; on a direct booking the guest.
-  const recipient = input.dispatchedTo?.trim() || (await resolveSendTo(prisma, entry.id)).email || null;
+  const sendTo = await resolveSendTo(prisma, entry.id);
+  const recipient = input.dispatchedTo?.trim() || sendTo.email || null;
   if (!recipient) {
     throw new ValidationError("No email address — type the address it goes to");
   }
@@ -685,6 +688,7 @@ async function resendConfirmationVoucherInner(
   const content = renderReservationConfirmationEmail({
     contact: await loadEmailContact(prisma),
     guestDisplayName: displayName,
+    greetName: sendTo.greet,
     reservationReadableId: reservation.id,
     checkInDate: ciDate,
     checkOutDate: coDate,
