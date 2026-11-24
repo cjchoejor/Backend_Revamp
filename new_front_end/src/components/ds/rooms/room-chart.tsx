@@ -716,6 +716,92 @@ function Floating({ children }: { children: ReactNode }) {
   return host ? createPortal(children, host) : null;
 }
 
+/**
+ * A night's rooms by type (2026-11-24, operator: "when you click on one of the dates column say I clicked on
+ * thu 26th free that night, it can show a small pop up showing the room types and how many are free and
+ * occupied"). Every figure is the server's count (`roomTypes[].byNight`, the same reading as the row above).
+ * Occupied is a guest in the room; reserved and held are rooms promised but not slept in yet.
+ */
+function NightByType({
+  chart,
+  i,
+  rect,
+  boxRef,
+  onClose,
+}: {
+  chart: RoomChart;
+  i: number;
+  rect: DOMRect;
+  boxRef: React.MutableRefObject<HTMLDivElement | null>;
+  onClose: () => void;
+}) {
+  const n = chart.perNight[i];
+  if (!n) return null;
+  const any = (k: "held" | "outOfOrder") => n[k] > 0;
+  const cell = (v: number) => (v ? v : <span className="nt-zero">–</span>);
+  return (
+    <div className="rchart-pick e-k-free night-types" ref={boxRef} style={placeBeside(rect, 440)} role="dialog" aria-label={`Rooms on ${longDay(n.date)}`}>
+      <div className="hc-head k-free">
+        <span className="hc-kind">
+          {longDay(n.date)}
+          {n.date === chart.today ? " · tonight" : ""}
+        </span>
+        <span className="hc-room">
+          {n.free} free of {n.total}
+        </span>
+      </div>
+      <div className="hc-body">
+        <table className="nt-table">
+          <thead>
+            <tr>
+              <th>Room type</th>
+              <th>Free</th>
+              <th>Occupied</th>
+              <th>Reserved</th>
+              {any("held") ? <th>Held</th> : null}
+              {any("outOfOrder") ? <th>Out of order</th> : null}
+            </tr>
+          </thead>
+          <tbody>
+            {chart.roomTypes.map((t) => {
+              const c = t.byNight[i];
+              if (!c) return null;
+              return (
+                <tr key={t.id}>
+                  <td className="nt-type">
+                    <span className="tcode">{t.code}</span>
+                    <span className="nt-name">{t.name}</span>
+                  </td>
+                  <td className={`nt-free ${c.free === 0 ? "none" : "ok"}`}>{c.free === 0 ? "none" : c.free}</td>
+                  <td>{cell(c.inHouse)}</td>
+                  <td>{cell(c.reserved)}</td>
+                  {any("held") ? <td>{cell(c.held)}</td> : null}
+                  {any("outOfOrder") ? <td>{cell(c.outOfOrder)}</td> : null}
+                </tr>
+              );
+            })}
+          </tbody>
+          <tfoot>
+            <tr>
+              <td>All {n.total} rooms</td>
+              <td className={`nt-free ${n.free === 0 ? "none" : "ok"}`}>{n.free}</td>
+              <td>{n.inHouse}</td>
+              <td>{n.reserved}</td>
+              {any("held") ? <td>{n.held}</td> : null}
+              {any("outOfOrder") ? <td>{n.outOfOrder}</td> : null}
+            </tr>
+          </tfoot>
+        </table>
+        <div className="pick-acts">
+          <Button kind="quiet" compact onClick={onClose}>
+            Close
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string; roomNumber: string }) => void }) {
   const { session, isLoading } = useSession();
   const router = useRouter();
@@ -760,6 +846,9 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
   const [pickList, setPickList] = useState<PickList | null>(null);
   const pickListRef = useRef<HTMLDivElement | null>(null);
   const [clash, setClash] = useState<ClashList | null>(null);
+  /** A night's rooms by type (2026-11-24): opened from that night's "Free that night" or "House booked". */
+  const [nightBox, setNightBox] = useState<{ i: number; rect: DOMRect } | null>(null);
+  const nightBoxRef = useRef<HTMLDivElement | null>(null);
   const clashRef = useRef<HTMLDivElement | null>(null);
   // Rooms chosen and not held, drawn faintly (2026-10-16) — shown unless this desk has hidden them.
   const [showPicks, setShowPicks] = useState(true);
@@ -971,6 +1060,24 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
       window.removeEventListener("scroll", onScroll, true);
     };
   }, [pickList]);
+  // …and so does a night's rooms by type.
+  useEffect(() => {
+    if (!nightBox) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setNightBox(null);
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (nightBoxRef.current && !nightBoxRef.current.contains(t) && !(t as Element).closest?.("[data-night-figure]")) setNightBox(null);
+    };
+    const onScroll = () => setNightBox(null);
+    document.addEventListener("keydown", onKey);
+    document.addEventListener("mousedown", onDown);
+    window.addEventListener("scroll", onScroll, true);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("mousedown", onDown);
+      window.removeEventListener("scroll", onScroll, true);
+    };
+  }, [nightBox]);
   // …and so does the list of two bookings on one night.
   useEffect(() => {
     if (!clash) return;
@@ -1910,38 +2017,46 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
             </tr>
             <tr className="h2">
               <th className="rc">Free that night</th>
-              {chart.perNight.map((n) => (
-                <td key={n.date} className={`need ${n.free >= 5 ? "ok" : n.free > 0 ? "short" : "none"}`}>
-                  {n.free}
+              {chart.perNight.map((n, i) => (
+                <td key={n.date} className={`need ${n.free >= 5 ? "ok" : n.free > 0 ? "short" : "none"}${nightBox?.i === i ? " on" : ""}`}>
+                  <button
+                    type="button"
+                    className="fig-btn"
+                    data-night-figure
+                    aria-label={`${longDay(n.date)}: ${n.free} free — see each room type`}
+                    aria-expanded={nightBox?.i === i}
+                    onClick={(e) => setNightBox(nightBox?.i === i ? null : { i, rect: (e.currentTarget as HTMLElement).getBoundingClientRect() })}
+                  >
+                    {n.free}
+                  </button>
                 </td>
               ))}
               <td className="tc" />
             </tr>
             <tr className="h3">
               <th className="rc">House booked</th>
-              {chart.perNight.map((n) => (
-                <td key={n.date} className="hb">
-                  {n.booked}/{n.total}
+              {chart.perNight.map((n, i) => (
+                <td key={n.date} className={`hb${nightBox?.i === i ? " on" : ""}`}>
+                  <button
+                    type="button"
+                    className="fig-btn"
+                    data-night-figure
+                    aria-label={`${longDay(n.date)}: ${n.booked} of ${n.total} taken — see each room type`}
+                    aria-expanded={nightBox?.i === i}
+                    onClick={(e) => setNightBox(nightBox?.i === i ? null : { i, rect: (e.currentTarget as HTMLElement).getBoundingClientRect() })}
+                  >
+                    {n.booked}/{n.total}
+                  </button>
                 </td>
               ))}
               <td className="tc" />
             </tr>
           </thead>
           <tbody>
-            {chart.roomTypes.map((t) => (
+            {/* No row per room type (2026-11-24, operator: "the black rows … can you delete those rows, instead
+                beside each room show the room type code"); a night's figure above opens the types. */}
+            {chart.roomTypes.map((t, ti) => (
               <Fragment key={t.id}>
-                <tr className="trow">
-                  <th className="rc">
-                    <span className="tname">{t.name}</span>
-                    <span className="tcount">{plural(t.roomIds.length, "room")}</span>
-                  </th>
-                  {t.freePerNight.map((f, i) => (
-                    <td key={chart.nights[i]} className={`fc ${f === 0 ? "none" : ""}`}>
-                      {f === 0 ? "none" : `${f} free`}
-                    </td>
-                  ))}
-                  <td className="tc" />
-                </tr>
                 {t.roomIds.map((rid, ri) => {
                   const room = chart.rooms.find((r) => r.id === rid);
                   if (!room) return null;
@@ -1954,6 +2069,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
                       className={[
                         "rrow",
                         ri === t.roomIds.length - 1 ? "last" : "",
+                        ri === 0 && ti > 0 ? "tfirst" : "",
                         dropTo.has(rid) ? "drop-to" : "",
                         drag?.over === rid && ((dropPlan && !dropPlan.ok && dropPlan.why) || dateWhy || nightWhy) ? "drop-bad" : "",
                       ]
@@ -1961,8 +2077,11 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
                         .join(" ")}
                     >
                       <th className="rc rno">
-                        <button type="button" className="rno-btn" onClick={() => onOpenRoom(room)} aria-label={`Room ${room.roomNumber} — ${hk.word}${room.faultOpen ? ", fault reported" : ""}`}>
+                        <button type="button" className="rno-btn" onClick={() => onOpenRoom(room)} aria-label={`Room ${room.roomNumber}, ${t.name} — ${hk.word}${room.faultOpen ? ", fault reported" : ""}`}>
                           <span className="rnum">{room.roomNumber}</span>
+                          <span className="tcode" title={t.name}>
+                            {t.code}
+                          </span>
                           {room.bedType ? <span className="bed">{BED_LETTER[room.bedType] ?? room.bedType}</span> : null}
                           <i className={`hkdot ${hk.cls}`} />
                           {room.faultOpen ? <span className="fault">fault</span> : null}
@@ -2393,6 +2512,12 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
               </div>
             </div>
           </div>
+        </Floating>
+      ) : null}
+
+      {nightBox ? (
+        <Floating>
+          <NightByType chart={chart} i={nightBox.i} rect={nightBox.rect} boxRef={nightBoxRef} onClose={() => setNightBox(null)} />
         </Floating>
       ) : null}
 

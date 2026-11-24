@@ -2826,3 +2826,36 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .guests-view .gv-dobflag { font-size: 11px; font-weight: 700; color: var(--danger); border: 1px solid var(--danger); border-radius: 3px; padding: 0 5px; background: var(--danger-soft); }
 .ds .guests-view .gv-item .gv-guest { border-top: 1px solid var(--line); }
 .ds .guests-view .gv-guest + .gv-guest { border-top: 0; }
+
+/* The chart without a row per room type (2026-11-24): each room carries its type's code, a heavier
+   line closes each type's rooms, and a night's two figures open its rooms by type. */
+.ds .rchart .tape tr.rrow .rno { box-shadow: none; padding-left: 8px; }
+.ds .rchart .tape tr.rrow.tfirst > * { border-top: 2px solid var(--line-2); }
+.ds .rchart .rno-btn .tcode, .ds .rchart-pick .tcode { display: inline-block; min-width: 42px; text-align: center; font-size: 11px; font-weight: 700; letter-spacing: .03em; color: var(--ink-2); background: var(--paper); border: 1px solid var(--line-2); border-radius: 3px; padding: 0 4px; }
+.ds .rchart .tape td.need, .ds .rchart .tape td.hb { padding: 0; }
+.ds .rchart .tape .fig-btn { display: block; width: 100%; height: 100%; min-height: 34px; border: 0; background: none; font: inherit; color: inherit; cursor: pointer; padding: 6px 2px; }
+.ds .rchart .tape .fig-btn:hover { box-shadow: inset 0 0 0 1px currentColor; }
+.ds .rchart .tape .fig-btn:focus-visible { outline: none; box-shadow: var(--focus); }
+.ds .rchart .tape td.need.on, .ds .rchart .tape td.hb.on { box-shadow: inset 0 0 0 2px var(--accent); }
+.ds .night-types .nt-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.ds .night-types .nt-table th { text-align: right; font-size: 11.5px; font-weight: 700; color: var(--ink-3); padding: 4px 6px; border-bottom: 1px solid var(--line-2); white-space: nowrap; }
+.ds .night-types .nt-table th:first-child { text-align: left; }
+.ds .night-types .nt-table td { text-align: right; padding: 5px 6px; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+.ds .night-types .nt-table td.nt-type { text-align: left; display: flex; align-items: center; gap: 6px; min-width: 0; }
+.ds .night-types .nt-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ds .night-types .nt-free { font-weight: 800; }
+.ds .night-types .nt-free.ok { color: var(--success); }
+.ds .night-types .nt-free.none { color: var(--danger); }
+.ds .night-types .nt-zero { color: var(--ink-4, #9aa19b); }
+.ds .night-types .nt-table tfoot td { font-weight: 700; border-bottom: 0; border-top: 2px solid var(--line-2); }
+.ds .night-types .nt-table tfoot td:first-child { text-align: left; }
+/* The Rooms page with the chart open: the toolbar closer to the title (2026-11-24, "be efficient"). */
+.ds .page.rooms-chart:not(.desk-root *) { gap: var(--s3); padding-top: var(--s4); }
+/* How to use the chart (2026-11-24): the button at the page's top right, and the guide in a pop-up. */
+.ds .page-head.lead-tabs .guide-acts:not(.desk-root *) { margin-left: auto; align-self: center; }
+.ds .guide-scrim { position: fixed; inset: 0; z-index: 85; background: rgba(27, 30, 28, .45); display: grid; place-items: center; padding: 2vh 2vw; }
+.ds .guide-box { width: min(1240px, 96vw); height: 94vh; display: flex; flex-direction: column; background: var(--surface); border-radius: 8px; box-shadow: 0 16px 48px rgba(0, 0, 0, .3); overflow: hidden; }
+.ds .guide-head { display: flex; align-items: center; gap: var(--s3); padding: 10px var(--s4); border-bottom: 1px solid var(--line-2); }
+.ds .guide-head b { font: 500 16px/1.2 var(--font-head, "Poppins", sans-serif); flex: 1; }
+.ds .guide-head .guide-tab { font-size: var(--t-sm); }
+.ds .guide-frame { flex: 1; width: 100%; border: 0; background: var(--paper); }

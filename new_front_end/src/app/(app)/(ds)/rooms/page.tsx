@@ -15,6 +15,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { Button, Dialog, EmptyState, RoomTile, Tabs, type RoomPhysical, type RoomStanding } from "@/design-system";
 import { RoomChartView } from "@/components/ds/rooms/room-chart";
+import { ChartGuideButton } from "@/components/ds/rooms/chart-guide";
 import { LoadFailed, LoadingBlock } from "@/components/ds/ui";
 import { DeficiencyPanel } from "@/components/deficiency/deficiency-panel";
 import { useDeskBookings, useRoomsList } from "@/hooks/use-desk-data";
@@ -222,7 +223,7 @@ function RoomsPageBody() {
   const spaceItems = spaces.data?.items ?? [];
 
   return (
-    <div className="page">
+    <div className={`page${view === "chart" ? " rooms-chart" : ""}`}>
       {/* The two sections sit beside the title, so the chart has the height below (2026-10-22). */}
       <div className="page-head lead-tabs">
         <div>
@@ -239,6 +240,12 @@ function RoomsPageBody() {
           selected={view}
           onSelect={pickView}
         />
+        {/* How to use the chart, at the top right (2026-11-24). */}
+        {view === "chart" ? (
+          <div className="acts guide-acts">
+            <ChartGuideButton />
+          </div>
+        ) : null}
       </div>
 
       {view === "chart" ? (

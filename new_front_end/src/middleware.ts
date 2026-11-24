@@ -45,5 +45,5 @@ export function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|brand/|tessdata/|tesseract|.*\\.(?:png|jpg|jpeg|svg|mp4|woff2?|wasm|js|traineddata)$).*)"],
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|brand/|help/|tessdata/|tesseract|.*\\.(?:png|jpg|jpeg|svg|mp4|woff2?|wasm|js|traineddata)$).*)"],
 };

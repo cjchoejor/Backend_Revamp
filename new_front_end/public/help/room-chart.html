@@ -3,11 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Room Chart Shortcuts</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Carlito:wght@400;700&family=Poppins:wght@500;600&display=swap">
+<title>How to Use the Room Chart</title>
 <style>
+@font-face { font-family: "Carlito"; font-weight: 400; font-style: normal; font-display: swap; src: url("fonts/carlito-regular.woff") format("woff"); }
+@font-face { font-family: "Carlito"; font-weight: 700; font-style: normal; font-display: swap; src: url("fonts/carlito-bold.woff") format("woff"); }
+@font-face { font-family: "Poppins"; font-weight: 500 600; font-style: normal; font-display: swap; src: url("fonts/poppins-medium.woff") format("woff"); }
 :root {
   color-scheme: light;
   --paper: #F2F3F0;
@@ -21,7 +21,7 @@
   --ok: #1E7A4F;
   --a-bg: #DBE6F1; --a-tx: #24506F;
   --b-bg: #DCEFE6; --b-tx: #1E5B49;
-  --rw: 66px;
+  --rw: 104px;
   --f-ui: "Carlito", "Calibri", "Segoe UI", system-ui, sans-serif;
   --f-head: "Poppins", "Carlito", "Calibri", sans-serif;
 }
@@ -92,7 +92,71 @@ kbd.held { background: var(--accent); border-color: var(--accent); color: #fff; 
 .rno { padding: 1px 7px; border: 1px solid var(--line-2); border-radius: 4px; background: var(--surface); font-weight: 700; color: var(--ink); font-size: 13px; }
 .cell { border-left: 1px solid var(--line); }
 .mrow.lit { background: var(--accent-soft); box-shadow: inset 0 2px 0 var(--accent), inset 0 -2px 0 var(--accent); }
-.band { height: 24px; padding: 0 8px; background: var(--ink); color: #fff; font-size: 12px; font-weight: 700; line-height: 24px; white-space: nowrap; overflow: hidden; }
+.mrow .rn { display: flex; align-items: center; justify-content: center; gap: 0; }
+.rn .tcd { margin-left: 4px; padding: 0 3px; border: 1px solid var(--line-2); border-radius: 3px; background: var(--paper); font-size: 10.5px; font-weight: 700; letter-spacing: .03em; color: var(--ink-2); }
+.mrow.tfirst { border-top: 2px solid var(--line-2); }
+
+/* The contents bar */
+.toc { position: sticky; top: 0; z-index: 30; display: flex; flex-wrap: wrap; gap: 4px; align-items: center; padding: 8px 0; background: var(--paper); border-bottom: 1px solid var(--line-2); }
+.toc b { font: 600 13px/1 var(--f-head); margin-right: 6px; color: var(--ink-2); }
+.toc a { padding: 6px 12px; border: 1px solid var(--line-2); border-radius: 4px; background: var(--surface); color: var(--ink); font-weight: 700; font-size: 14px; text-decoration: none; }
+.toc a:hover { background: var(--accent-soft); }
+.toc a.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.toc a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+section.group { scroll-margin-top: 64px; }
+
+/* Reading the chart */
+.read { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 20px; align-items: start; padding: 18px; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; }
+.rmock { display: grid; gap: 8px; font-size: 12px; }
+.rm-tb { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.rm-tb span { padding: 3px 7px; border: 1px solid var(--line-2); border-radius: 4px; background: var(--surface); font-size: 11.5px; white-space: nowrap; }
+.rm-grid { display: grid; grid-template-columns: 116px repeat(5, minmax(0, 1fr)) 40px; border: 1px solid var(--line-2); border-radius: 4px; overflow: hidden; background: var(--surface); }
+.rm-grid > div { min-height: 32px; display: flex; align-items: center; justify-content: center; border-top: 1px solid var(--line); border-left: 1px solid var(--line); padding: 2px 4px; }
+.rm-grid > .lc { justify-content: flex-start; border-left: 0; color: var(--ink-2); font-weight: 700; }
+.rm-grid > .hd { flex-direction: column; border-top: 0; background: #F7F8F5; font-size: 11px; color: var(--ink-2); line-height: 1.1; }
+.rm-grid > .hd b { font-size: 14px; color: var(--ink); }
+.rm-grid > .hd.today { background: var(--ink); color: #fff; }
+.rm-grid > .hd.today b { color: #fff; }
+.rm-grid > .fr { font-weight: 800; }
+.rm-grid > .fr.ok { background: #E6F2EC; color: var(--ok); }
+.rm-grid > .fr.short { background: #FBF1DE; color: #8A5A00; }
+.rm-grid > .fr.none { background: #F8E3E0; color: #B4473B; }
+.rm-grid > .hb { font-weight: 800; background: #F7F8F5; }
+.rm-grid > .room { justify-content: flex-start; gap: 4px; border-left: 0; }
+.rm-grid > .room .no { padding: 0 5px; border: 1.5px solid #7A817B; border-radius: 4px; font-weight: 800; font-size: 12.5px; }
+.rm-grid > .room .cd { padding: 0 3px; border: 1px solid var(--line-2); border-radius: 3px; background: var(--paper); font-size: 10px; font-weight: 700; }
+.rm-grid > .room .bd { padding: 0 3px; border: 1px solid var(--line-2); border-radius: 3px; font-size: 10px; font-weight: 700; color: var(--ink-2); }
+.rm-grid > .room .dt { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); }
+.rm-grid > .room .dt.dirty { background: #D49A2A; }
+.rm-grid > .rbar { justify-content: flex-start; padding: 0 6px; font-weight: 700; white-space: nowrap; overflow: hidden; border-radius: 3px; margin: 3px 2px; min-height: 26px; }
+.rm-grid > .tk { color: var(--ink-2); font-size: 11px; }
+.rm-grid > .tfirst { border-top: 2px solid var(--line-2); }
+.rmock .cn { display: inline-grid; place-items: center; flex: none; width: 20px; height: 20px; margin-left: 4px; border-radius: 50%; background: var(--accent); color: #fff; font: 700 11px/1 var(--f-ui); font-style: normal; }
+.rkey { margin: 0; padding: 0; list-style: none; display: grid; gap: 10px; counter-reset: k; }
+.rkey li { counter-increment: k; display: grid; grid-template-columns: 26px 1fr; gap: 8px; align-items: start; }
+.rkey li::before { content: counter(k); display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: var(--accent); color: #fff; font-weight: 700; font-size: 12px; margin-top: 1px; }
+.rkey b { font-weight: 700; }
+.colours { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px 18px; padding: 18px; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; }
+.sw { display: grid; grid-template-columns: 72px 1fr; gap: 10px; align-items: center; font-size: 14px; }
+.sw i { display: flex; align-items: center; justify-content: center; height: 24px; border-radius: 3px; font-style: normal; font-size: 11px; font-weight: 800; }
+.sw span b { display: block; }
+.sw span em { font-style: normal; color: var(--ink-2); font-size: 13px; }
+.s-free { background: #fff; border: 1px solid var(--line-2); }
+.s-prov { background: #fffaf0; border: 1.5px dotted #d9b45f; }
+.s-held { background: #fdf3dc; border: 1.5px dashed #c98a1a; color: #7a4f0e; }
+.s-move { background: #fff; border: 2px dashed var(--accent); }
+.s-res { background: #dbe6f1; color: #24506f; }
+.s-short { background: #dbe6f1; box-shadow: inset 4px 0 0 #c98a1a; }
+.s-in { background: #3f6f99; color: #fff; }
+.s-over { background: #8d3a33; color: #fff; }
+.s-out { background: #ebe7e1; }
+.s-park { background: repeating-linear-gradient(135deg, #dbe6f1 0 6px, #f1f4f8 6px 12px); }
+.s-ooo { background: repeating-linear-gradient(135deg, #f1eeea 0 6px, #e0dad1 6px 12px); }
+.s-two { background: #fff; border: 2px solid #b4473b; color: #b4473b; }
+.s-pick { background: #fff; border: 1px dashed #a99f90; }
+body.embed .open-real { display: none; }
+body.embed .page { padding-top: 12px; }
+@media (max-width: 980px) { .read { grid-template-columns: minmax(0, 1fr); } }
 .layer { position: absolute; inset: 0; pointer-events: none; }
 .bar, .ghost, .nm { position: absolute; left: calc(var(--rw) + (100% - var(--rw)) * var(--f) / 6 + 2px); width: calc((100% - var(--rw)) * var(--n) / 6 - 4px); height: 28px; border-radius: 4px; }
 .bar { display: flex; align-items: center; padding: 0 7px; font-size: 13px; font-weight: 700; white-space: nowrap; overflow: hidden; transition: left .5s ease, top .5s ease, width .5s ease, opacity .3s; }
@@ -147,7 +211,7 @@ kbd.held { background: var(--accent); border-color: var(--accent); color: #fff; 
 .know { display: grid; gap: 8px; padding: 16px 18px 16px 34px; margin: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; }
 
 @media (max-width: 880px) {
-  :root { --rw: 52px; }
+  :root { --rw: 92px; }
   h1 { font-size: 24px; }
   .quick { grid-template-columns: 1fr; }
   .ex { grid-template-columns: minmax(0, 1fr); padding: 14px; }
@@ -163,29 +227,85 @@ kbd.held { background: var(--accent); border-color: var(--accent); color: #fff; 
 <body>
 <main class="page">
   <header>
-    <h1>Room chart: pick, move and swap</h1>
+    <h1>How to use the room chart</h1>
     <div class="lead">
-      <p>A <b>bar</b> is a booking's coloured strip on a room's row. To use these, open <b>Rooms</b>, then <b>Chart</b>, and hold the key while you click or drag a bar.</p>
-      <p>Each example below plays by itself when you reach it. Press <b>Play again</b> to watch it again.</p>
+      <p>The chart shows every room down the side and the nights across. Each booking is a coloured <b>bar</b> on its room's row, over the nights it holds the room.</p>
+      <p>Start with <b>Reading the chart</b>. Then pick a part from the bar below: <b>Select</b>, <b>Move</b> or <b>Swap</b>. Each example plays by itself when you reach it; press <b>Play again</b> to watch it again.</p>
     </div>
   </header>
 
+  <nav class="toc" aria-label="Parts of this guide">
+    <b>Go to</b>
+    <a href="#read">Reading the chart</a>
+    <a href="#colours">Colours</a>
+    <a href="#quick">Quick list</a>
+    <a href="#select">Select</a>
+    <a href="#move">Move</a>
+    <a href="#swap">Swap</a>
+    <a href="#know">Good to know</a>
+  </nav>
+
+  <section class="group" id="read" aria-labelledby="read-h">
+    <h2 id="read-h">Reading the chart</h2>
+    <div class="read">
+      <div class="rmock" aria-hidden="true">
+        <div class="rm-tb"><span>&larr; 7 nights</span><span>Today</span><span>7 nights &rarr;</span><span>From 24/11/2026</span><span>To 30/11/2026</span><span>Switch rooms</span><span>Hide picks</span><span>Colour by guest</span><span>Name by guest</span><span>Full screen</span><i class="cn">1</i></div>
+        <div class="rm-grid">
+          <div class="lc">Rooms</div><div class="hd today"><span>Today</span><b>24</b></div><div class="hd"><span>Wed</span><b>25</b></div><div class="hd"><span>Thu</span><b>26</b></div><div class="hd"><span>Fri</span><b>27</b></div><div class="hd"><span>Sat</span><b>28</b></div><div class="hd tk">Taken</div>
+          <div class="lc">Free that night<i class="cn">2</i></div><div class="fr short">2</div><div class="fr none">0</div><div class="fr ok">6</div><div class="fr ok">7</div><div class="fr short">3</div><div class="tk"></div>
+          <div class="lc">House booked<i class="cn">3</i></div><div class="hb">5/7</div><div class="hb">7/7</div><div class="hb">1/7</div><div class="hb">0/7</div><div class="hb">4/7</div><div class="tk"></div>
+          <div class="room"><span class="no">202</span><span class="cd">STDD</span><span class="bd">T</span><span class="dt"></span><i class="cn">4</i></div><div class="rbar s-in" style="grid-column: span 2">Karma &middot; Stay<i class="cn">5</i></div><div><i class="cn">6</i></div><div></div><div class="rbar s-res">Sonam</div><div class="tk">3/5<i class="cn">7</i></div>
+          <div class="room"><span class="no">203</span><span class="cd">STDD</span><span class="bd">K</span><span class="dt dirty"></span></div><div></div><div class="rbar s-held" style="grid-column: span 2">Pema &middot; Set up</div><div></div><div></div><div class="tk">2/5</div>
+          <div class="room tfirst"><span class="no">204</span><span class="cd">DLXD</span><span class="bd">T</span><span class="dt"></span></div><div class="tfirst rbar s-res" style="grid-column: span 2">Tashi &middot; Reserve</div><div class="tfirst"></div><div class="tfirst"></div><div class="tfirst"></div><div class="tk tfirst">2/5</div>
+        </div>
+      </div>
+      <ol class="rkey">
+        <li><span><b>The toolbar.</b> <b>&larr; 7 nights</b> and <b>7 nights &rarr;</b> move a week back or on; <b>Today</b> comes back to tonight. <b>From</b> and <b>To</b> choose the nights shown (up to 62), and the list sets how many. <b>Switch rooms</b> moves rooms by clicking instead of dragging. <b>Hide picks</b> hides rooms only picked, not held. <b>Colour by guest</b> gives each booking its own colour; <b>Name by guest</b> or <b>Name by caller</b> changes the name on the bars. <b>Full screen</b> fills the window; <kbd>Esc</kbd> leaves it.</span></li>
+        <li><span><b>Free that night.</b> The rooms nobody holds that night: green for 5 or more, amber for 1 to 4, red for none. <b>Click the figure</b> to see each room type that night: free, occupied (a guest in the room) and reserved.</span></li>
+        <li><span><b>House booked.</b> The rooms taken that night, out of all rooms. Click it for the same list by room type.</span></li>
+        <li><span><b>The room.</b> Its number, its room type's code (<b>STDD</b> is Standard Double; rest the pointer on the code for the name), its bed (<b>K</b> King, <b>T</b> Twin, <b>Q</b> Queen, <b>S</b> Single) and a dot: green when clean, amber when it is to be cleaned. A heavier line starts the next room type. Click the number to report or read a fault.</span></li>
+        <li><span><b>A booking's bar.</b> The guest's name and the step it is at. Rest the pointer on it for a second for its details. Click once to see all its rooms; click twice to open the booking.</span></li>
+        <li><span><b>A free night.</b> Click a free night ahead of today to start an inquiry for that room from that night.</span></li>
+        <li><span><b>Taken.</b> How many of the nights shown the room is taken.</span></li>
+      </ol>
+    </div>
+  </section>
+
+  <section class="group" id="colours" aria-labelledby="col-h">
+    <h2 id="col-h">What the colours mean</h2>
+    <div class="colours">
+      <div class="sw"><i class="s-free"></i><span><b>Free</b><em>Nobody holds the room that night.</em></span></div>
+      <div class="sw"><i class="s-pick"></i><span><b>Picked &middot; not held</b><em>Chosen at Inquiry or Negotiation. Holds nothing yet: whoever reserves first takes the room.</em></span></div>
+      <div class="sw"><i class="s-prov"></i><span><b>Provisional block</b><em>Marked at Negotiation while the guest thinks about the quote.</em></span></div>
+      <div class="sw"><i class="s-held"></i><span><b>Held &middot; not confirmed</b><em>Blocked at Set up, not reserved yet.</em></span></div>
+      <div class="sw"><i class="s-res"></i><span><b>Reserved</b><em>A confirmed booking.</em></span></div>
+      <div class="sw"><i class="s-short"></i><span><b>Reserved &middot; advance short</b><em>Reserved, but the advance is not all in.</em></span></div>
+      <div class="sw"><i class="s-in"></i><span><b>In house</b><em>The guest is in the room.</em></span></div>
+      <div class="sw"><i class="s-over"></i><span><b>Due out &middot; still in</b><em>Past their check-out and still in the room.</em></span></div>
+      <div class="sw"><i class="s-out"></i><span><b>Checked out</b><em>Nights already stayed.</em></span></div>
+      <div class="sw"><i class="s-move"></i><span><b>Moving in</b><em>The room a booking is moving into while a room move runs.</em></span></div>
+      <div class="sw"><i class="s-park"></i><span><b>Parked</b><em>A booking paused; it still keeps its rooms.</em></span></div>
+      <div class="sw"><i class="s-ooo"></i><span><b>Out of order</b><em>Off sale for repairs or a fault.</em></span></div>
+      <div class="sw"><i class="s-two">2&times;</i><span><b>Two bookings</b><em>Two bookings hold the room on one night. Click it to open either.</em></span></div>
+    </div>
+  </section>
+
   <div class="notice">
     <p><b>Letting go of a bar changes nothing.</b> It opens a window showing what would happen. Nothing moves until you confirm there.</p>
-    <a class="open-real" href="http://localhost:3002/rooms?view=chart" target="_blank" rel="noopener">Open the real chart</a>
+    <a class="open-real" href="/rooms?view=chart" target="_blank" rel="noopener">Open the real chart</a>
   </div>
 
-  <section class="group" aria-labelledby="quick-h">
+  <section class="group" id="quick" aria-labelledby="quick-h">
     <h2 id="quick-h">The quick list</h2>
-    <div class="quick" id="quick"></div>
+    <div class="quick" id="quick-list"></div>
     <p>Click a line to jump to its example. On a Mac, use <kbd>Cmd</kbd> for <kbd>Ctrl</kbd> and <kbd>Option</kbd> for <kbd>Alt</kbd>.</p>
   </section>
 
-  <section class="group" aria-labelledby="sel-h"><h2 id="sel-h">Select</h2><div class="group" id="g-select"></div></section>
-  <section class="group" aria-labelledby="mov-h"><h2 id="mov-h">Move</h2><div class="group" id="g-move"></div></section>
-  <section class="group" aria-labelledby="swp-h"><h2 id="swp-h">Swap</h2><div class="group" id="g-swap"></div></section>
+  <section class="group" id="select" aria-labelledby="sel-h"><h2 id="sel-h">Select</h2><div class="group" id="g-select"></div></section>
+  <section class="group" id="move" aria-labelledby="mov-h"><h2 id="mov-h">Move</h2><div class="group" id="g-move"></div></section>
+  <section class="group" id="swap" aria-labelledby="swp-h"><h2 id="swp-h">Swap</h2><div class="group" id="g-swap"></div></section>
 
-  <section class="group" aria-labelledby="know-h">
+  <section class="group" id="know" aria-labelledby="know-h">
     <h2 id="know-h">Good to know</h2>
     <ul class="know">
       <li><b>How many rooms at once.</b> Ctrl and Shift pick up to 8 rooms. The 9th Ctrl pick is refused with a message, and a Shift pick of more than 8 picks nothing. To take more, click the booking once, tick its rooms in the box, and choose <b>Drag them on the chart</b>.</li>
@@ -196,6 +316,8 @@ kbd.held { background: var(--accent); border-color: var(--accent); color: #fff; 
       <li>While a guest is in the house, use <b>Extend the stay</b> or <b>Leaving early</b> to change the dates.</li>
       <li>If the system chose a booking's room, dropping it on another room of the same type asks whether to give it that room.</li>
       <li>Click a free night, with Switch rooms off, to start an inquiry for that room from that night.</li>
+      <li>Click a night's <b>Free that night</b> or <b>House booked</b> figure to see each room type that night: free, occupied and reserved. <kbd>Esc</kbd> or a click elsewhere closes it.</li>
+      <li>The chart opens on 7 nights from today. <b>From</b> and <b>To</b> show other nights, up to 62 at a time. The chart keeps the nights you chose when you open a booking and come back.</li>
       <li>Rest the pointer on a bar for a second to see the booking's details. Click a room number to report or review a fault.</li>
       <li>The examples use made-up bookings, Karma and Sonam, in two colours so you can follow them. <b>Colour by guest</b> on the real chart does the same.</li>
     </ul>
@@ -209,8 +331,8 @@ kbd.held { background: var(--accent); border-color: var(--accent); color: #fff; 
   /* ---------- The chart every example draws ---------- */
   var NIGHTS = [["Mon", 9], ["Tue", 10], ["Wed", 11], ["Thu", 12], ["Fri", 13], ["Sat", 14]];
   var LAYOUT = [
-    { type: "Standard Double", rooms: [202, 203] },
-    { type: "Deluxe Double", rooms: [204, 205, 206] }
+    { type: "Standard Double", code: "STDD", rooms: [202, 203] },
+    { type: "Deluxe Double", code: "DLXD", rooms: [204, 205, 206] }
   ];
   var KEYS = { Ctrl: 1, Shift: 1, Alt: 1, Esc: 1 };
 
@@ -523,10 +645,9 @@ kbd.held { background: var(--accent); border-color: var(--accent); color: #fff; 
   var chartHtml = function () {
     var h = '<div class="mc"><div class="mrow head"><div class="rn">Rooms</div>' +
       NIGHTS.map(function (d, i) { return '<div class="hc" data-n="' + i + '"><span>' + d[0] + "</span><b>" + d[1] + "</b></div>"; }).join("") + "</div>";
-    LAYOUT.forEach(function (t) {
-      h += '<div class="band">' + t.type + "</div>";
-      t.rooms.forEach(function (r) {
-        h += '<div class="mrow" data-r="' + r + '"><div class="rn"><span class="rno">' + r + "</span></div>" +
+    LAYOUT.forEach(function (t, ti) {
+      t.rooms.forEach(function (r, ri) {
+        h += '<div class="mrow' + (ti > 0 && ri === 0 ? " tfirst" : "") + '" data-r="' + r + '"><div class="rn"><span class="rno">' + r + '</span><span class="tcd" title="' + t.type + '">' + t.code + "</span></div>" +
           NIGHTS.map(function (_, i) { return '<div class="cell" data-c="' + r + ":" + i + '"></div>'; }).join("") + "</div>";
       });
     });
@@ -838,9 +959,31 @@ kbd.held { background: var(--accent); border-color: var(--accent); color: #fff; 
       return '<a class="qrow" href="#ex-' + s.id + '"><span>' + keysHtml(s.keys) + "</span><span>" + s.what + "</span></a>";
     }).join("") + "</div>";
   };
-  document.getElementById("quick").innerHTML =
+  document.getElementById("quick-list").innerHTML =
     '<div class="qcol">' + qbox("Select", SCENES.select) + "</div>" +
     '<div class="qcol">' + qbox("Move", SCENES.move) + qbox("Swap", SCENES.swap) + "</div>";
+
+  /* ---------- In the desk's pop-up, and the contents bar ---------- */
+  var embedded = /[?&]embed=1/.test(location.search) || window.self !== window.top;
+  if (embedded) {
+    document.body.classList.add("embed");
+    // Esc inside the guide closes it: the key never reaches the desk around it otherwise.
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape") window.parent.postMessage({ type: "chart-guide-close" }, "*");
+    });
+  }
+
+  var tocLinks = [].slice.call(document.querySelectorAll(".toc a"));
+  var markToc = function () {
+    var at = null;
+    tocLinks.forEach(function (a) {
+      var sec = document.querySelector(a.getAttribute("href"));
+      if (sec && sec.getBoundingClientRect().top <= 90) at = a;
+    });
+    tocLinks.forEach(function (a) { a.classList.toggle("on", a === (at || tocLinks[0])); });
+  };
+  window.addEventListener("scroll", markToc, { passive: true });
+  markToc();
 
   if ("IntersectionObserver" in window) {
     var io = new IntersectionObserver(function (entries) {

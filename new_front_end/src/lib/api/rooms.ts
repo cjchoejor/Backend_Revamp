@@ -103,7 +103,15 @@ export type RoomChart = {
   to: string;
   today: string;
   nights: string[];
-  roomTypes: Array<{ id: string; code: string; name: string; roomIds: string[]; freePerNight: number[] }>;
+  /** `byNight` (2026-11-24): the type's own count each night — free, taken by kind, out of order (the server's). */
+  roomTypes: Array<{
+    id: string;
+    code: string;
+    name: string;
+    roomIds: string[];
+    freePerNight: number[];
+    byNight: Array<{ total: number; booked: number; inHouse: number; reserved: number; held: number; outOfOrder: number; free: number }>;
+  }>;
   rooms: Array<{
     id: string;
     roomNumber: string;
