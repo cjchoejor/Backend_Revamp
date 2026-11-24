@@ -1,13 +1,14 @@
 "use client";
 
 /**
- * The booking file's Guests tab at Arrival and Check-in (2026-11-24, operator: "whenever the user
+ * The booking file's Guests tab from Arrival on, between Papers and History (2026-11-24, operator: "whenever the user
  * submits the details of their info, their name, identity card document type and dob and pictures,
  * in the right panel can you add another tab where when clicked the user can see those guest infos").
  *
  * A reading of what the guest table on the step holds — the same list (`GET …/identity-proofs`, the
  * same query, so the two never disagree), each guest as recorded with their newest ID photo, grouped
- * by the room they sleep in. Nothing is changed here; the table on the step is where it is typed.
+ * by the room they sleep in. Nothing is changed here; the guest table at Arrival, Check-in and Stay is where
+ * it is typed. At Check-out and Closed it is the record of who stayed.
  */
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -171,7 +172,7 @@ export function GuestsView({ entry }: { entry: EntryDetail }) {
           })}
         </section>
       ))}
-      <p className="meta sm gv-foot">The details are typed in the guest table on the step.</p>
+      <p className="meta sm gv-foot">The details are typed in the guest table at Arrival, Check-in and Stay.</p>
       <IdPhotoViewerHost />
     </div>
   );

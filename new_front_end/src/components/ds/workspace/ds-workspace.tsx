@@ -270,10 +270,16 @@ const STEP_DERIVED: Partial<Record<number, Record<string, string>>> = { 1: { hou
 const HEAD_TOOLS = false;
 const FILE_TABS: ReadonlyArray<readonly [FileTabKey, string]> = [["details", "Booking"], ...BOOKING_TABS];
 /**
- * At Arrival and Check-in the file has a Guests tab after Booking (2026-11-24, operator: "in stage 5 and
- * stage 6 … in the right panel can you add another tab where … the user can see those guest infos").
+ * From Arrival on the file has a Guests tab, between Papers and History (2026-11-24, operator: "in stage 5
+ * and stage 6 … in the right panel can you add another tab where … the user can see those guest infos";
+ * then "to be … between papers and history", and for a booking already in house or later).
  */
-const FILE_TABS_WITH_GUESTS: ReadonlyArray<readonly [FileTabKey, string]> = [["details", "Booking"], ["guests", "Guests"], ...BOOKING_TABS];
+const FILE_TABS_WITH_GUESTS: ReadonlyArray<readonly [FileTabKey, string]> = [
+  ["details", "Booking"],
+  ...BOOKING_TABS.filter(([k]) => k !== "history"),
+  ["guests", "Guests"],
+  ...BOOKING_TABS.filter(([k]) => k === "history"),
+];
 // What each tab reads as when the file is narrow (2026-10-27, operator: on a smaller screen the
 // tabs ran onto two rows). The full name stays on hover.
 const FILE_TAB_SHORT: Record<FileTabKey, string> = {
@@ -922,8 +928,9 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   // A step the booking cannot reach yet, asked for in the address, shows the step it is at — the Reserve
   // review a finished Set up used to open (`?step=4`) is gone (2026-10-29).
   const viewing = selected != null && selected > maxReach ? currentOrder : (selected ?? currentOrder);
-  // The Guests tab of the booking file, at Arrival and Check-in (2026-11-24), and its count — the server's.
-  const guestsTab = viewing === 5 || viewing === 6;
+  // The Guests tab of the booking file once the booking has reached Arrival, whatever step is on screen
+  // (2026-11-24 — at Stay, Check-out and Closed the guests recorded are still the booking's), and its count.
+  const guestsTab = ["S5", "S6", "S7", "S8", "S9"].includes(entry?.currentStage ?? "");
   const guestsRecorded = useGuestsRecorded(entry ?? null, guestsTab);
   // A pane or a way left in the address belongs to the step it was opened on: when the step changes —
   // a re-entry sending the booking back, the booking moving on — it goes (2026-10-28: Set up's way
