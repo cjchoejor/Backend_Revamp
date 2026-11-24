@@ -324,6 +324,9 @@ export type DeskMoneyRow = {
   /** What the whole stay comes to (2026-11-10): the stay as priced plus what was added to it — the
    *  billing summary's `stayWithAdded`. Null when the booking has no priced stay total. */
   totalAmount: number | null;
+  /** What the guest still owes on the whole stay, nights not billed yet included (2026-11-24) — the
+   *  billing summary's `stillToPay`; Today's lists show it as the balance due. */
+  stillToPay: { amount: number; paidAhead: number; notBilledYet: number } | null;
   shortened: boolean;
   /**
    * The whole trip, when the booking is one stay of several on its enquiry (2026-11-10, operator:
@@ -435,6 +438,7 @@ export async function deskMoneyFor(prisma: Db, entryIds: string[]): Promise<Desk
             }
           : null,
         totalAmount: s.stayWithAdded,
+        stillToPay: s.stillToPay,
         shortened: !!s.stayTotal.earlyDeparture,
         trip: null,
       });
