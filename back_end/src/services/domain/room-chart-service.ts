@@ -147,7 +147,12 @@ export type RoomChart = {
   to: string;
   today: string;
   nights: string[];
-  roomTypes: Array<{ id: string; code: string; name: string; roomIds: string[]; freePerNight: number[] }>;
+  /**
+   * Each room type and its rooms. `byNight` (2026-11-24) is the type's own count for each night — free,
+   * taken by kind, out of order — the same reading as `perNight` over the whole house, so the desk's
+   * pop-up on a night's "Free that night" figure adds up to it.
+   */
+  roomTypes: Array<{ id: string; code: string; name: string; roomIds: string[]; freePerNight: number[]; byNight: Array<Omit<RoomChartNight, "date">> }>;
   rooms: Array<{
     id: string;
     roomNumber: string;
@@ -472,13 +477,14 @@ export async function buildRoomChart(
     return addDays(from, i).getTime() < r.maintenanceDeadline.getTime();
   };
 
-  const perNight: RoomChartNight[] = nights.map((date, i) => {
+  /** One night of a set of rooms: taken (by its strongest claim), out of order, free. */
+  const countNight = (list: typeof rooms, i: number): Omit<RoomChartNight, "date"> => {
     let booked = 0;
     let inHouse = 0;
     let reserved = 0;
     let held = 0;
     let outOfOrder = 0;
-    for (const r of rooms) {
+    for (const r of list) {
       const taken = [...(owner.get(r.id)?.get(i)?.values() ?? [])];
       if (taken.length === 0) {
         if (outOfOrderOn(r, i)) outOfOrder++;
@@ -490,8 +496,9 @@ export async function buildRoomChart(
       else if (top.kind === "RESERVED") reserved++;
       else held++;
     }
-    return { date, total: rooms.length, booked, inHouse, reserved, held, outOfOrder, free: rooms.length - booked - outOfOrder };
-  });
+    return { total: list.length, booked, inHouse, reserved, held, outOfOrder, free: list.length - booked - outOfOrder };
+  };
+  const perNight: RoomChartNight[] = nights.map((date, i) => ({ date, ...countNight(rooms, i) }));
 
   const types = new Map<string, { id: string; code: string; name: string; roomIds: string[] }>();
   for (const r of rooms) {
@@ -499,15 +506,11 @@ export async function buildRoomChart(
     t.roomIds.push(r.id);
     types.set(r.roomTypeId, t);
   }
-  const roomTypes = [...types.values()].map((t) => ({
-    ...t,
-    freePerNight: nights.map((_, i) =>
-      t.roomIds.filter((id) => {
-        const r = rooms.find((x) => x.id === id)!;
-        return (owner.get(id)?.get(i)?.size ?? 0) === 0 && !outOfOrderOn(r, i);
-      }).length,
-    ),
-  }));
+  const roomTypes = [...types.values()].map((t) => {
+    const list = rooms.filter((r) => t.roomIds.includes(r.id));
+    const byNight = nights.map((_, i) => countNight(list, i));
+    return { ...t, freePerNight: byNight.map((n) => n.free), byNight };
+  });
 
   // ---- picks: chosen at Inquiry or Negotiation, held by nothing ------------------------------
   const pickRows = await prisma.entry.findMany({
