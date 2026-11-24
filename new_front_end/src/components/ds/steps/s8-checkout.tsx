@@ -814,14 +814,6 @@ function HowSettled({
   };
   const [ref, setRef] = useState("");
   const [paidNow, setPaidNow] = useState("");
-  // What the agency's voucher covers — starts at the whole balance (the voucher usually covers
-  // the stay); what it leaves is invoiced to the agency.
-  const [voucherCovers, setVoucherCovers] = useState("");
-  const voucherTouched = useRef(false);
-  useEffect(() => {
-    if (voucherTouched.current) return;
-    if (balance != null && balance > 0) setVoucherCovers(String(balance));
-  }, [balance]);
   const [fomAck, setFomAck] = useState("");
   const [confirmOpen, setConfirmOpen] = useState(false);
   // The amount starts at the whole balance (the common case); typing a smaller figure makes the
@@ -870,8 +862,11 @@ function HowSettled({
     !entry.creditCeilingTier2AcknowledgedAt;
 
   const bank = useBankEntry();
-  const voucherTyped = voucherCovers.trim() === "" ? Number.NaN : Number.parseFloat(voucherCovers);
-  const voucherValid = Number.isFinite(voucherTyped) && voucherTyped >= 0;
+  // The voucher covers what is owed — on one payer's bill, the agency's share — and is not typed
+  // (2026-11-24, operator: "it should only pull the voucher amount covered … and not editable").
+  // A bill with the guest's own charges on it splits into shares above, so this is only the package.
+  const voucherTyped = balanceNum;
+  const voucherValid = balanceNum > 0;
   const invoicesParty = method === "DIRECT_BILL" || method === "VOUCHER";
 
   const finish = useFinishWhenDone("settle");
@@ -907,9 +902,7 @@ function HowSettled({
           : method === "DIRECT_BILL"
             ? `Settled — the balance is invoiced to ${booked.payer}. Read the invoice and send it from the tax invoice below`
             : method === "VOUCHER"
-              ? voucherValid && balance != null && voucherTyped >= balance
-                ? "Settled — the voucher covers the bill; the rooms go to housekeeping"
-                : `Settled — the voucher is recorded; what it leaves is invoiced to ${booked.payer}. Send the invoice from the tax invoice below`
+              ? `Settled — the voucher covers the bill; Billing › Vouchers keeps it until ${booked.payer} pays`
               : "Settled — the bill is closed and the rooms go to housekeeping",
       );
       refresh([["settlement-targets"]]);
@@ -991,7 +984,7 @@ function HowSettled({
       <div className="row-acts">
         <Chip tone="accent">who pays · {model ? payerChoiceWord(model, payerPartyOf(entry)) : "not set"}</Chip>
         {entry.groupBillingMode === "GROUP_MASTER" ? <Chip tone="quiet">one bill for the party</Chip> : null}
-        {folio && !paidInFull ? (
+        {folio && !paidInFull && !shares ? (
           <SeeRow
             label="Settle part by part"
             note="each room or space pays its own part — the money is filed against it; the bill stays one"
@@ -1129,18 +1122,14 @@ function HowSettled({
               {method === "VOUCHER" ? (
                 <div className="field">
                   <label>
-                    The voucher covers · Nu.
-                    <Help label="About the voucher">Anything it leaves of the {money(balance, cur)} balance is invoiced to {booked.payer}.</Help>
+                    The voucher covers
+                    <Help label="About the voucher">
+                      What {booked.payer} pays for — the package. It counts as paid here; Billing › Vouchers keeps it until their money comes in.
+                    </Help>
                   </label>
-                  <input
-                    className="input money"
-                    inputMode="decimal"
-                    value={voucherCovers}
-                    onChange={(e) => {
-                      voucherTouched.current = true;
-                      setVoucherCovers(e.target.value);
-                    }}
-                  />
+                  <span className="settle-fixed money" data-voucher-covers>
+                    {money(balance, cur)}
+                  </span>
                 </div>
               ) : method === "DIRECT_BILL" ? null : (
                 <div className="field">
@@ -1291,11 +1280,8 @@ function HowSettled({
               </>
             ) : method === "VOUCHER" ? (
               <>
-                The agency&rsquo;s voucher covers <b className="money">{money(voucherValid ? voucherTyped : null, cur)}</b> of the{" "}
-                <b className="money">{money(balance, cur)}</b> balance
-                {voucherValid && balance != null && voucherTyped >= balance
-                  ? " — nothing is left to invoice."
-                  : ` — what it leaves is invoiced to ${booked.payer}. Nothing is sent yet: you read the invoice and send it from the tax invoice below.`}
+                The agency&rsquo;s voucher covers the <b className="money">{money(balance, cur)}</b> balance. It counts as paid on this bill, and
+                Billing › Vouchers keeps it until {booked.payer}&rsquo;s money comes in.
               </>
             ) : method === "DIRECT_BILL" ? (
               <>

@@ -22,7 +22,7 @@ import { initiateSettlement, listSettlementBuckets, type SettlementBucket } from
 import { money } from "@/lib/ds/format";
 import type { EntryDetail } from "@/types/api";
 import { DsDialog, Live, NotSentChip, atLeast, toastRefusal, useRefreshEntry, words } from "./kit";
-import { useBookedBy } from "./s8-parts";
+import { ledgerKey, useBookedBy } from "./s8-parts";
 import { TaxInvoiceSendDialog } from "./tax-invoice-send";
 import { useUnansweredDamage } from "./damage-card";
 import { Help } from "@/components/ds/help";
@@ -120,7 +120,9 @@ export function useSettlementShares(entry: EntryDetail, enabled: boolean) {
   const { session } = useSession();
   const folioId = entry.folio?.id ?? null;
   return useQuery({
-    queryKey: ["settlement-buckets", folioId, entry.updatedAt],
+    // Keyed on the ledger as well as the booking: a charge posted at Check-out moves the shares
+    // without touching the booking (2026-11-24 — the card showed one payer over a bill of two).
+    queryKey: ["settlement-buckets", folioId, entry.updatedAt, ledgerKey(entry)],
     queryFn: () => listSettlementBuckets(session!, folioId!),
     enabled: !!session && !!folioId && enabled,
   });
@@ -209,12 +211,9 @@ function ShareRow({
   const [ref, setRef] = useState("");
   const [paidNow, setPaidNow] = useState("");
   const paidTouched = useRef(false);
-  const [voucherCovers, setVoucherCovers] = useState("");
-  const voucherTouched = useRef(false);
   useEffect(() => {
     if (owes <= 0) return;
     if (!paidTouched.current) setPaidNow(String(owes));
-    if (!voucherTouched.current) setVoucherCovers(String(owes));
   }, [owes]);
   // An invoice this share issued and not yet sent — read and sent in the box beside its paper (2026-11-24).
   const shareInvoice = share.invoiceId ? (entry.folio?.invoices ?? []).find((i) => i.id === share.invoiceId) ?? null : null;
@@ -228,8 +227,10 @@ function ShareRow({
   const partial = guestPays && Number.isFinite(typed) && typed >= 0 && typed < owes;
   const creditCovers = partial && !!ps?.creditExtensionActive && ps?.ceilingAmount != null && ps.ceilingAmount >= owes - typed;
   const partialLocked = partial && !fom && !creditCovers;
-  const voucherTyped = voucherCovers.trim() === "" ? Number.NaN : Number.parseFloat(voucherCovers);
-  const voucherValid = Number.isFinite(voucherTyped) && voucherTyped >= 0;
+  // The voucher covers this share — what the agency pays for, the package — and is not typed
+  // (2026-11-24, operator: "it should only pull the voucher amount covered … and not editable").
+  const voucherTyped = owes;
+  const voucherValid = owes > 0;
   // Paid now is always typed (it starts at the share), never more than the share (2026-11-12).
   const takesMoney = guestPays && Number.isFinite(typed) && typed > 0;
   const paidWait = !guestPays
@@ -285,7 +286,7 @@ function ShareRow({
         method === "DIRECT_BILL"
           ? `${title} — invoiced to ${payer}. Read the invoice and send it from this share`
           : method === "VOUCHER"
-            ? `${title} — the voucher is recorded; anything it leaves is invoiced to ${payer} and sent from this share`
+            ? `${title} — the voucher covers it; Billing › Vouchers keeps it until ${payer}'s money comes in`
             : partial
               ? `${title} — settled in part; the rest stays owed`
               : `${title} — settled`,
@@ -346,18 +347,14 @@ function ShareRow({
             {method === "VOUCHER" ? (
               <div className="field">
                 <label>
-                  The voucher covers · Nu.
-                  <Help label="About the voucher">Anything it leaves of this share is invoiced to {payer}.</Help>
+                  The voucher covers
+                  <Help label="About the voucher">
+                    The agency&rsquo;s share of the bill — the package. It counts as paid here; Billing › Vouchers keeps it until the agency&rsquo;s money comes in.
+                  </Help>
                 </label>
-                <input
-                  className="input money"
-                  inputMode="decimal"
-                  value={voucherCovers}
-                  onChange={(e) => {
-                    voucherTouched.current = true;
-                    setVoucherCovers(e.target.value);
-                  }}
-                />
+                <span className="settle-fixed money" data-voucher-covers>
+                  {money(owes, currency)}
+                </span>
               </div>
             ) : method === "DIRECT_BILL" ? null : (
               <div className="field">
@@ -423,8 +420,8 @@ function ShareRow({
               </>
             ) : method === "VOUCHER" ? (
               <>
-                The voucher covers <b className="money">{money(voucherValid ? voucherTyped : null, currency)}</b> of the{" "}
-                <b className="money">{money(owes, currency)}</b> share — anything it leaves is invoiced to {payer}, and sent from this share.
+                The agency&rsquo;s voucher covers the <b className="money">{money(owes, currency)}</b> share. It counts as paid on this bill, and
+                Billing › Vouchers keeps it until {payer}&rsquo;s money comes in.
               </>
             ) : partial ? (
               <>

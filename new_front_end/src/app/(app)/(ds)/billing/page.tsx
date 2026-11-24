@@ -19,6 +19,7 @@ import { useHotelClock } from "@/hooks/use-hotel-clock";
 import { useSession } from "@/hooks/use-session";
 import { useRefunds, useRefundsMade } from "@/hooks/use-refunds";
 import { RefundsTab } from "@/components/ds/refunds-tab";
+import { VouchersTab, useVouchers } from "@/components/ds/vouchers-tab";
 import type { DeskListRow, DeskMoneyRow } from "@/lib/api/desk";
 import { money, plural } from "@/lib/ds/format";
 import { bookerOfRow, rowNameOf } from "@/lib/ds/status";
@@ -74,7 +75,7 @@ function accountOf(r: DeskListRow): string {
 const checkOutOf = (r: DeskListRow) => r.actualCheckOutDate ?? r.checkOutDate;
 const billHref = (id: string) => `/billing/${encodeURIComponent(id)}`;
 
-type TabId = "open" | "owed" | "closed" | "accounts" | "refunds";
+type TabId = "open" | "owed" | "closed" | "vouchers" | "accounts" | "refunds";
 type SortKey = "checkout" | "checkin" | "name" | "account" | "balance" | "billed" | "paid" | "total";
 type Sort = { id: string; key: SortKey; dir: 1 | -1; label: string };
 
@@ -199,9 +200,11 @@ function BillingScreen() {
   const clock = useHotelClock(60_000);
   const refundsWaiting = useRefunds("waiting").data?.items.length ?? 0;
   const bookingsRefunded = useRefundsMade().data?.totals.bookings ?? 0;
+  // Agency vouchers whose money has not come in yet (2026-11-24).
+  const vouchersOpen = useVouchers("open").data?.totals.open.count ?? 0;
   const tabParam = params.get("tab");
   const tab: TabId =
-    tabParam === "owed" || tabParam === "closed" || tabParam === "accounts" ? tabParam : tabParam === "refunds" && fom ? "refunds" : "open";
+    tabParam === "owed" || tabParam === "closed" || tabParam === "vouchers" || tabParam === "accounts" ? tabParam : tabParam === "refunds" && fom ? "refunds" : "open";
   const q = params.get("q") ?? "";
   const go = (next: Partial<Record<"tab" | "q" | "sort" | "refund", string>>) => {
     const p = new URLSearchParams(params.toString());
@@ -333,6 +336,7 @@ function BillingScreen() {
             { id: "open", label: <>Open bills<span className="tab-n">{open.length}</span></> },
             { id: "owed", label: <>Still owed after the stay<span className={`tab-n${owing.length ? " warn" : ""}`}>{owing.length}</span></> },
             { id: "closed", label: <>Closed bills<span className="tab-n">{closedAll.length}</span></> },
+            { id: "vouchers", label: <>Vouchers{vouchersOpen ? <span className="tab-n warn" data-vouchers-open>{vouchersOpen} not received</span> : null}</> },
             { id: "accounts", label: "Outstanding by account" },
             ...(fom ? [{ id: "refunds", label: <>Refunds<span className="tab-n">{bookingsRefunded}</span>{refundsWaiting ? <span className="tab-n warn" data-refunds-to-make>{refundsWaiting} to make</span> : null}</> }] : []),
           ]}
@@ -347,6 +351,8 @@ function BillingScreen() {
         <LoadingBlock />
       ) : tab === "refunds" ? (
         <RefundsTab tz={clock.tz} focusId={params.get("refund")} />
+      ) : tab === "vouchers" ? (
+        <VouchersTab tz={clock.tz} />
       ) : tab === "accounts" ? (
         <NotAvailableYet what="Each agent's and company's total owed, with their statement of account," />
       ) : (
