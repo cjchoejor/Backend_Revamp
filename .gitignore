@@ -21,3 +21,9 @@ new_front_end/public/tesseract-core/
 
 # macOS archive metadata that came with the design handover
 __MACOSX/
+
+# The Windows services on the hosting computer (ops/README.md): node-windows writes each service's
+# wrapper and logs into a daemon\ folder beside its runner, and ops/ installs its own packages.
+back_end/scripts/daemon/
+new_front_end/scripts/daemon/
+ops/node_modules/
