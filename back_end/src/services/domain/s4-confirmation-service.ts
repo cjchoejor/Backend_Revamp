@@ -540,11 +540,14 @@ async function confirmReservationInner(
   const isGroup = entry.groupBillingMode === "GROUP_MASTER";
   const roomCount = isGroup ? bookingRoomCount : undefined;
   const groupLeaderName = isGroup ? entry.contactPersonName ?? displayName : undefined;
+  const sendToForEmail = await resolveSendTo(prisma, entryId);
   const content = renderReservationConfirmationEmail({
     contact: await loadEmailContact(prisma),
     guestDisplayName: displayName,
     // Through an agency or a company, the person there it goes to (2026-11-24).
-    greetName: (await resolveSendTo(prisma, entryId)).greet,
+    greetName: sendToForEmail.greet,
+    // Who booked it: the agency or company, else the guest (2026-11-24, client).
+    bookedBy: sendToForEmail.party ?? displayName,
     reservationReadableId: result.reservation.id,
     checkInDate: ciDate,
     checkOutDate: coDate,
@@ -689,6 +692,7 @@ async function resendConfirmationVoucherInner(
     contact: await loadEmailContact(prisma),
     guestDisplayName: displayName,
     greetName: sendTo.greet,
+    bookedBy: sendTo.party ?? displayName,
     reservationReadableId: reservation.id,
     checkInDate: ciDate,
     checkOutDate: coDate,
