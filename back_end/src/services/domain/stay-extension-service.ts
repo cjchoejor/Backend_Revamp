@@ -20,6 +20,7 @@ import {
   closeInterimForExtensionTx,
   computeInterimFigures,
   createInterimPaymentRequestTx,
+  recordInterimPayment,
   loadInterimReminderPolicy,
   resolveInterimDueBy,
   type InterimAsk,
@@ -37,6 +38,7 @@ import type { RoomCompositionServiceInput } from "./s2-quotation-service.js";
 import { buildEntryRateReference } from "./rate-reference-service.js";
 import { agreedRatesByType, belowFloorRoomsOf } from "../../lib/msr-floor.js";
 import { belowMsrRefusalWords, mayPriceBelowMsr } from "../../policies/08-pricing-rate-plan/p19-msr-gm-waiver-below-msr-s2.js";
+import { cleanPaymentBank } from "../../lib/payment-bank.js";
 
 type Actor = { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" };
 const RANK: Record<string, number> = { L1: 1, L2: 2, L3: 3, L4: 4 };
@@ -608,13 +610,21 @@ export async function requestStayExtension(
     requestedDiscount?: { discountPercent?: number; discountAmount?: number; discountBasis: string } | null;
     /** Optional since 2026-11-25 (the desk asks no reason for a change to a booking, as for a room change). */
     reason?: string | null;
-    ask: InterimAsk;
+    ask: InterimAsk | null;
     note?: string | null;
     /** When the extension's payment is expected (ISO). Omitted = before the held nights lapse (policy). */
     dueBy?: string | null;
+    /**
+     * When the guest pays (2026-11-25): BILL — a mid-stay bill, sent, then paid (the default); NOW — at
+     * the desk (`extendStayNow`); CHECKOUT — nothing now: no bill, the extra nights go on the bill for
+     * check-out.
+     */
+    payAt?: "BILL" | "NOW" | "CHECKOUT";
   },
 ) {
   requireFom(actor, "extend a stay");
+  const noBill = input.payAt === "CHECKOUT";
+  if (!noBill && !input.ask) throw new ValidationError("Say what the guest pays now");
   const reason = input.reason?.trim() || "";
   const open = await prisma.stayExtensionRequest.findFirst({
     where: { entryId, state: { in: ["REQUESTED", "BILLED", "PAID"] } },
@@ -625,20 +635,20 @@ export async function requestStayExtension(
       `An extension to ${isoDay(open.newCheckOutDate)} is already ${open.state.toLowerCase()} — commit or withdraw it before requesting another`,
     );
   }
-  const preview = await previewStayExtension(prisma, entryId, { ...input, ask: input.ask });
+  const preview = await previewStayExtension(prisma, entryId, { ...input, ask: noBill ? null : input.ask });
   if (preview.blockedReason) throw new ValidationError(preview.blockedReason);
   // A room new to the booking under its type's minimum rate is the GM's or an admin's — asked now,
   // before a night is held or a bill goes out, so it can never stop the extension after the guest paid.
   await enforceNewRoomsFloor(prisma, entryId, preview.compositions, new Set(preview.moves.map((m) => m.toRoomId)), actor.actorLevel);
-  if (preview.figures.dueNow == null || preview.figures.dueNow <= 0) {
-    throw new ValidationError("The interim ask comes to nothing after what the guest has already paid — raise it, or commit the extension without a payment is not allowed");
+  if (!noBill && (preview.figures.dueNow == null || preview.figures.dueNow <= 0)) {
+    throw new ValidationError("What the guest has already paid covers this ask — ask for more, or let them pay at check-out");
   }
   const ttl = preview.holdTtlSeconds;
   const now = new Date();
   const holdExpiresAt = new Date(now.getTime() + ttl * 1000);
   // Mid-stay payment reminder: the extension's bill is due before its held nights lapse.
   const reminderPolicy = await loadInterimReminderPolicy(prisma);
-  const dueBy = resolveInterimDueBy(reminderPolicy, { kind: "EXTENSION", now, holdExpiresAt, requested: input.dueBy ?? null });
+  const dueBy = noBill ? null : resolveInterimDueBy(reminderPolicy, { kind: "EXTENSION", now, holdExpiresAt, requested: input.dueBy ?? null });
   const entryRow = await prisma.entry.findUniqueOrThrow({
     where: { id: entryId },
     select: { inquiryId: true, segments: { orderBy: { segmentNumber: "desc" }, take: 1, select: { id: true } } },
@@ -655,17 +665,19 @@ export async function requestStayExtension(
         extraNights: preview.plan.map((p) => ({ date: p.date, roomId: p.roomId })) as Prisma.InputJsonValue,
         roomCompositions: preview.compositions as unknown as Prisma.InputJsonValue,
         requestedDiscount: (input.requestedDiscount ?? null) as Prisma.InputJsonValue,
-        pricingPreview: { pricing: preview.pricing, figures: preview.figures, moves: preview.moves } as Prisma.InputJsonValue,
+        pricingPreview: { pricing: preview.pricing, figures: preview.figures, moves: preview.moves, payAt: input.payAt ?? "BILL" } as Prisma.InputJsonValue,
         reason,
         holdExpiresAt,
         requestedBy: actor.actorId,
         requestedAt: now,
       },
     });
-    const interim = await createInterimPaymentRequestTx(tx, actor, {
+    const interim = noBill
+      ? null
+      : await createInterimPaymentRequestTx(tx, actor, {
       entryId,
       kind: "EXTENSION",
-      ask: input.ask,
+      ask: input.ask!,
       figures: preview.figures,
       note: input.note ?? `Stay extension to ${preview.newCheckOut}${reason ? `: ${reason}` : ""}`,
       stayExtensionRequestId: request.id,
@@ -690,10 +702,11 @@ export async function requestStayExtension(
           extraNights: preview.plan,
           moves: preview.moves,
           projectedStayTotal: preview.pricing.projectedStayTotal,
-          dueNow: preview.figures.dueNow,
+          dueNow: noBill ? 0 : preview.figures.dueNow,
           holdExpiresAt: holdExpiresAt.toISOString(),
-          interimPaymentRequestId: interim.request.id,
-          invoiceId: interim.invoice.id,
+          interimPaymentRequestId: interim?.request.id ?? null,
+          invoiceId: interim?.invoice.id ?? null,
+          payAt: input.payAt ?? "BILL",
           reason,
         } as Prisma.InputJsonValue,
         createdBy: actor.actorId,
@@ -731,9 +744,9 @@ export async function requestStayExtension(
     /* the claim still expires by `holdExpiresAt` (the claim predicate reads it) — only the lapse bookkeeping waits */
   }
   // Reminder clock (W41): chase the extension's payment before the held nights lapse.
-  if (dueBy) await armInterimPaymentReminder(prisma, { requestId: created.interim.request.id, actorId: actor.actorId }).catch(() => {});
+  if (dueBy && created.interim) await armInterimPaymentReminder(prisma, { requestId: created.interim.request.id, actorId: actor.actorId }).catch(() => {});
 
-  return { request: created.request, interim: created.interim.request, invoice: created.interim.invoice, preview };
+  return { request: created.request, interim: created.interim?.request ?? null, invoice: created.interim?.invoice ?? null, preview };
 }
 
 async function cancelHoldTimer(prisma: PrismaClient, entryId: string, actorId: string, reason: string) {
@@ -836,7 +849,11 @@ export async function commitStayExtension(
     include: { interimPayment: true, entry: { select: { id: true, inquiryId: true, currentStage: true, status: true } } },
   });
   if (!req) throw new NotFoundError("StayExtensionRequest");
-  enforceExtensionPaidBeforeCommit({ extensionState: req.state, interimState: req.interimPayment?.state ?? null });
+  enforceExtensionPaidBeforeCommit({
+    extensionState: req.state,
+    interimState: req.interimPayment?.state ?? null,
+    paymentAsked: !!req.interimPayment || (req.pricingPreview as { payAt?: string } | null)?.payAt !== "CHECKOUT",
+  });
   if (req.entry.currentStage !== Stage.S7 || req.entry.status !== "ACTIVE") {
     throw new ValidationError(`The booking is at ${req.entry.currentStage} (${req.entry.status.toLowerCase()}) — an extension commits from the Stay step`);
   }
@@ -997,4 +1014,69 @@ async function enforceNewRoomsFloor(
     "MSR_BREACH",
     `${belowMsrRefusalWords(uncovered).replace(/\.\s*$/, "")} — charge the room's own rate, or ask the GM to keep the guest's rate`,
   );
+}
+
+/**
+ * Extend the stay in one press (2026-11-25, operator: "need option to not pay and pay during the last
+ * check out as well, but if paying, we need the proper payment fields"):
+ *   NOW — the guest pays at the desk: the nights are held, the bill for them is made and recorded as
+ *         handed over (nothing emailed), the payment recorded with its method, bank and journal
+ *         number, and the stay extended;
+ *   CHECKOUT — nothing now: the nights are held with no bill and the stay extended at once; the
+ *         extra nights go on the bill for check-out.
+ * Each step is the ordinary one with every check it has. The payment's bank and journal number are
+ * checked before anything is held. A step refused after the hold leaves the extension where it
+ * stopped (held, or paid) for the desk to finish, and says so.
+ */
+export async function extendStayNow(
+  prisma: PrismaClient,
+  actor: Actor,
+  entryId: string,
+  input: Omit<Parameters<typeof requestStayExtension>[3], "payAt" | "ask"> & {
+    payAt: "NOW" | "CHECKOUT";
+    ask?: InterimAsk | null;
+    payment?: { paymentMethod: string; bankName?: string | null; journalNumber?: string | null; notes?: string | null } | null;
+  },
+): Promise<{
+  request: unknown;
+  outcome: RoomChangeOutcome | null;
+  paid: number | null;
+  stoppedAt: "PAYMENT" | "EXTEND" | null;
+  message: string | null;
+}> {
+  requireFom(actor, "extend a stay");
+  if (input.payAt === "NOW") {
+    if (!input.ask) throw new ValidationError("Say what the guest pays now");
+    if (!input.payment?.paymentMethod?.trim()) throw new ValidationError("Say how the guest paid");
+    await cleanPaymentBank(prisma, { method: input.payment.paymentMethod, bankName: input.payment.bankName, journalNumber: input.payment.journalNumber });
+  }
+  const held = await requestStayExtension(prisma, actor, entryId, { ...input, ask: input.payAt === "NOW" ? input.ask! : null, payAt: input.payAt });
+  let paid: number | null = null;
+  if (input.payAt === "NOW" && held.interim) {
+    const amount = Number(held.interim.dueNow ?? 0);
+    try {
+      await recordInterimPayment(
+        prisma,
+        actor,
+        held.interim.id,
+        {
+          amount,
+          paymentMethod: input.payment!.paymentMethod,
+          bankName: input.payment!.bankName ?? null,
+          journalNumber: input.payment!.journalNumber ?? null,
+          notes: input.payment!.notes?.trim() || `Paid at the desk for the stay to ${isoDay(held.request.newCheckOutDate)}`,
+        },
+        { atDesk: true },
+      );
+      paid = amount;
+    } catch (e) {
+      return { request: held.request, outcome: null, paid: null, stoppedAt: "PAYMENT", message: e instanceof Error ? e.message : "The payment could not be recorded" };
+    }
+  }
+  try {
+    const done = await commitStayExtension(prisma, actor, held.request.id, input.reason ?? null);
+    return { request: done.request, outcome: done.outcome, paid, stoppedAt: null, message: null };
+  } catch (e) {
+    return { request: held.request, outcome: null, paid, stoppedAt: "EXTEND", message: e instanceof Error ? e.message : "The stay could not be extended" };
+  }
 }

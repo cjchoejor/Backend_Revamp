@@ -626,6 +626,12 @@ export async function recordInterimPayment(
   actor: Actor,
   requestId: string,
   input: { amount: number; paymentMethod?: string | null; bankName?: string | null; journalNumber?: string | null; notes?: string | null },
+  /**
+   * Paid at the desk (2026-11-25, operator: on Extend the stay, "if paying, we need the proper payment
+   * fields"): the guest is in front of the desk, so a bill not sent yet is recorded as handed over
+   * there — nothing is emailed, and no answer is asked, since paying is the answer. Internal only.
+   */
+  opts?: { atDesk?: boolean },
 ) {
   if (!Number.isFinite(input.amount) || input.amount <= 0) throw new ValidationError("Payment amount must be a positive number");
   const out = await prisma.$transaction(async (tx) => {
@@ -638,18 +644,54 @@ export async function recordInterimPayment(
     if (req.state === "WITHDRAWN" || req.state === "LAPSED") throw new ValidationError(`This interim request was ${req.state.toLowerCase()}`);
     if (req.state === "SUGGESTED") throw new ValidationError("Put a figure on the interim payment first — no bill has been generated yet");
     enforceInterimPaymentStage({ currentStage: req.entry.currentStage, folioState: req.folio.state });
-    enforceInterimInvoiceDispatchedBeforePayment({ invoice: req.invoice ? { state: req.invoice.state, dispatchedAt: req.invoice.dispatchedAt } : null });
-    // The interim bill in force — a replaced one's answer is never demanded (2026-10-13).
-    const latestComm = await latestDispatchedInForce(tx, {
-      entryId: req.entryId,
-      commType: "INTERIM_INVOICE",
-      since: req.requestedAt,
+    let handedOverAtDesk = false;
+    if (opts?.atDesk && req.invoice && req.invoice.state === InvoiceState.DRAFT) {
+      const at = new Date();
+      await tx.invoice.update({
+        where: { id: req.invoice.id },
+        data: {
+          state: InvoiceState.DISPATCHED,
+          dispatchedAt: at,
+          dispatchedBy: actor.actorId,
+          dispatchedTo: null,
+          metadata: { ...((req.invoice.metadata as object | null) ?? {}), handedOverAtDesk: true, dispatchedBy: actor.actorId, dispatchedAt: at.toISOString() } as Prisma.InputJsonValue,
+        },
+      });
+      await markInterimInvoiceDispatchedTx(tx, req.invoice.id, at);
+      await tx.traceEvent.create({
+        data: {
+          eventType: "INTERIM_PAYMENT.BILL_HANDED_OVER_AT_DESK",
+          actorId: actor.actorId,
+          actorLevel: actor.actorLevel,
+          entityType: "Invoice",
+          entityId: req.invoice.id,
+          operation: "UPDATE",
+          timestamp: at,
+          stageContext: Stage.S7,
+          inquiryId: req.entry.inquiryId,
+          entryId: req.entryId,
+          payload: { invoiceId: req.invoice.id, interimPaymentRequestId: req.id, stayExtensionRequestId: req.stayExtensionRequestId, emailed: false } as Prisma.InputJsonValue,
+          createdBy: actor.actorId,
+        },
+      });
+      handedOverAtDesk = true;
+    }
+    enforceInterimInvoiceDispatchedBeforePayment({
+      invoice: handedOverAtDesk ? { state: InvoiceState.DISPATCHED, dispatchedAt: new Date() } : req.invoice ? { state: req.invoice.state, dispatchedAt: req.invoice.dispatchedAt } : null,
     });
-    // The interim invoice is always dispatched through `dispatchInvoice`, which mints the
-    // communication — a missing one means the bill never went out (caught above).
-    enforceInterimGuestAnswerRecordedBeforePayment({
-      latestDispatchedInterimComm: latestComm ?? { acknowledgementStatus: "PENDING" },
-    });
+    if (!handedOverAtDesk) {
+      // The interim bill in force — a replaced one's answer is never demanded (2026-10-13).
+      const latestComm = await latestDispatchedInForce(tx, {
+        entryId: req.entryId,
+        commType: "INTERIM_INVOICE",
+        since: req.requestedAt,
+      });
+      // The interim invoice is always dispatched through `dispatchInvoice`, which mints the
+      // communication — a missing one means the bill never went out (caught above).
+      enforceInterimGuestAnswerRecordedBeforePayment({
+        latestDispatchedInterimComm: latestComm ?? { acknowledgementStatus: "PENDING" },
+      });
+    }
 
     const now = new Date();
     const bank = await cleanPaymentBank(tx, { method: input.paymentMethod?.trim() || "CASH", bankName: input.bankName, journalNumber: input.journalNumber });

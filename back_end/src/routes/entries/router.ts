@@ -83,6 +83,7 @@ import {
   stayExtensionCommitRequestSchema,
   stayExtensionPreviewRequestSchema,
   stayExtensionRequestSchema,
+  stayExtensionNowRequestSchema,
   earlyDeparturePreviewRequestSchema,
   earlyDepartureRequestSchema,
 } from "../../dtos/06-reservations/request-schemas.js";
@@ -91,6 +92,7 @@ import {
   listStayExtensions,
   previewStayExtension,
   requestStayExtension,
+  extendStayNow,
   withdrawStayExtension,
 } from "../../services/domain/stay-extension-service.js";
 import { buildPartySeatingStatus, repairPartySeatingForEntry } from "../../services/domain/party-seating-service.js";
@@ -455,6 +457,30 @@ entriesRouter.post("/:id/stay-extension", requireActorLevel("L2"), validateBody(
         ask: { mode: req.body.askMode, value: Number(req.body.askValue) },
         dueBy: req.body.dueBy ?? null,
         note: req.body.note,
+      }),
+    );
+  } catch (e) {
+    next(e);
+  }
+});
+
+entriesRouter.post("/:id/stay-extension/now", requireActorLevel("L2"), validateBody(stayExtensionNowRequestSchema), async (req, res, next) => {
+  try {
+    const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
+    res.json(
+      await extendStayNow(prisma, actor, req.params.id, {
+        newCheckOutDate: req.body.newCheckOutDate,
+        perNight: req.body.perNight,
+        replaceRoomId: req.body.replaceRoomId,
+        moves: req.body.moves,
+        roomCompositions: req.body.roomCompositions,
+        ...("requestedDiscount" in (req.body ?? {}) ? { requestedDiscount: req.body.requestedDiscount } : {}),
+        reason: req.body.reason,
+        payAt: req.body.payAt,
+        ask: req.body.askMode && req.body.askValue != null ? { mode: req.body.askMode, value: Number(req.body.askValue) } : null,
+        payment: req.body.paymentMethod
+          ? { paymentMethod: req.body.paymentMethod, bankName: req.body.bankName ?? null, journalNumber: req.body.journalNumber ?? null, notes: req.body.notes ?? null }
+          : null,
       }),
     );
   } catch (e) {

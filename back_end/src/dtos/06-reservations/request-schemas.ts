@@ -234,6 +234,21 @@ export const stayExtensionRequestSchema = z
   .refine((v) => v.askMode !== "PERCENT" || v.askValue <= 100, { message: "A percentage ask is at most 100" });
 export type StayExtensionRequestDto = z.infer<typeof stayExtensionRequestSchema>;
 
+/** Extend the stay in one press: paid at the desk now, or nothing now and paid at check-out (2026-11-25). */
+export const stayExtensionNowRequestSchema = z
+  .object({
+    ...stayExtensionShape,
+    payAt: z.enum(["NOW", "CHECKOUT"]),
+    askMode: z.enum(["PERCENT", "AMOUNT"]).optional(),
+    askValue: z.coerce.number().refine((n) => Number.isFinite(n) && n > 0, "askValue must be positive").optional(),
+    paymentMethod: z.string().trim().max(40).optional(),
+    bankName: z.string().trim().max(80).optional(),
+    journalNumber: z.string().trim().max(60).optional(),
+    notes: z.string().trim().max(500).optional(),
+    reason: z.string().trim().max(500).optional(),
+  })
+  .refine((v) => v.askMode !== "PERCENT" || v.askValue == null || v.askValue <= 100, { message: "A percentage ask is at most 100" });
+
 export const stayExtensionCommitRequestSchema = z.object({
   reason: z.string().trim().max(300).optional(),
 });
