@@ -113,12 +113,35 @@ export function PickBill({
           <span className="money">{money(t.total, c)}</span>
         </span>
         <span className="pb-sub">
-          {plural(t.roomNights, "room-night")} · {plural(pricing.nights.length, "night")} · incl. {pct(pricing.serviceChargeRate)} service charge +{" "}
-          {pct(pricing.gstRate)} GST · room only · {basisWords(pricing)}
+          {pricing.rent?.length
+            ? `let ${pricing.rent[0].plan === "MONTHLY" ? "monthly" : "weekly"} · ${plural(pricing.stayNights, "night")} · incl. ${pct(pricing.serviceChargeRate)} service charge + ${pct(pricing.gstRate)} GST · room only`
+            : `${plural(t.roomNights, "room-night")} · ${plural(pricing.nights.length, "night")} · incl. ${pct(pricing.serviceChargeRate)} service charge + ${pct(pricing.gstRate)} GST · room only · ${basisWords(pricing)}`}
         </span>
       </div>
       <table className="table compact pb-ladder">
         <tbody>
+          {/* An apartment let by the month or the week (2026-11-25): its rent, a line per period — the server's figures. */}
+          {(pricing.rent ?? []).map((a) => (
+            <Fragment key={a.unitLabel}>
+              <tr>
+                <td colSpan={3}>
+                  <b>
+                    Apartment {a.unitLabel} · {a.packageName}
+                  </b>
+                  {a.roomNumbers.length > 1 ? <span className="meta"> · Rooms {a.roomNumbers.join(" + ")}</span> : null}
+                  <span className="meta"> · let {a.plan === "MONTHLY" ? "monthly" : "weekly"}</span>
+                </td>
+              </tr>
+              {a.periods.map((p) => (
+                <tr key={p.from}>
+                  <td colSpan={2} className="meta">
+                    {p.words}
+                  </td>
+                  <td className="num money">{money(p.net, c)}</td>
+                </tr>
+              ))}
+            </Fragment>
+          ))}
           {pricing.byType.map((ty) => (
             <tr key={ty.roomTypeId}>
               <td>
@@ -151,7 +174,8 @@ export function PickBill({
           </tr>
         </tbody>
       </table>
-      {/* Each night with its rooms, under the totals (2026-10-30, operator). */}
+      {/* Each night with its rooms, under the totals (2026-10-30, operator). An apartment's rent is not by the night. */}
+      {pricing.nights.length ? (
       <table className="table compact pb-nights">
         <thead>
           <tr>
@@ -164,6 +188,7 @@ export function PickBill({
           <NightRows pricing={pricing} roomLabels={roomLabels} />
         </tbody>
       </table>
+      ) : null}
       {pricing.unpricedTypes.length ? (
         <div className="sm warn-ink" style={{ marginTop: 6 }}>
           No rate on file for {pricing.unpricedTypes.map((x) => x.name).join(", ")} — those nights are left out of the total.
