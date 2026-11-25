@@ -117,10 +117,12 @@ export function NewInquiryCanvas() {
     const ci = params.get("checkIn") ?? "";
     const n = parseInt(params.get("nights") ?? "", 10);
     const room = params.get("room")?.trim() || null;
+    const by: "type" | "number" = params.get("by") === "number" ? "number" : "type";
     return {
       checkIn: /^\d{4}-\d{2}-\d{2}$/.test(ci) ? ci : null,
       nights: Number.isFinite(n) && n >= 1 && n <= 60 ? String(n) : null,
       room,
+      by,
     };
   }, [params]);
   const queryClient = useQueryClient();
@@ -686,7 +688,7 @@ export function NewInquiryCanvas() {
       setNavigating(true);
       if (returnStayNext.current) openReturnStayOnArrival(id);
       // The house is asked as the booking opens — no second press of Ask the house.
-      router.push(fromChart.room ? `${bookingHref(id, 1)}&room=${encodeURIComponent(fromChart.room)}` : `${bookingHref(id, 1)}&ask=1`);
+      router.push(fromChart.room ? `${bookingHref(id, 1)}&room=${encodeURIComponent(fromChart.room)}&by=${fromChart.by}` : `${bookingHref(id, 1)}&ask=1`);
     },
     onError: (e) => {
       const body = e instanceof ApiError ? e.body : undefined;
@@ -769,7 +771,7 @@ export function NewInquiryCanvas() {
                 {fromChart.room || fromChart.checkIn ? (
                   <p className="chart-from">
                     <b>From the house chart</b>
-                    {fromChart.room ? <> · Room {fromChart.room}</> : null}
+                    {fromChart.room ? <> · Room {fromChart.room}{fromChart.by === "number" ? " itself, by number" : " · by its room type"}</> : null}
                     {fromChart.checkIn ? <> · <StayDates checkIn={fromChart.checkIn} checkOut={addNightsIso(fromChart.checkIn, Math.max(1, parseInt(fromChart.nights ?? "1", 10)))} /></> : null}
                     <span> — fill in the caller; the room is picked on the booking, once the house is asked</span>
                   </p>
@@ -1450,7 +1452,7 @@ export function NewInquiryCanvas() {
               {fromChart.room ? (
                 <>
                   <dt>From the chart</dt>
-                  <dd>Room {fromChart.room}</dd>
+                  <dd>Room {fromChart.room}{fromChart.by === "number" ? " itself, by number" : " · by its room type"}</dd>
                 </>
               ) : null}
             </dl>

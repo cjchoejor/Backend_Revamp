@@ -1009,7 +1009,11 @@ function TheHouse({
   const pathname = usePathname();
   const router = useRouter();
   const chartRoom = searchParams.get("room")?.trim() || null;
+  // By its room type, or that very room (2026-11-25, the chart's "Book by" boxes); by type when not said.
+  const chartBy: "type" | "number" = searchParams.get("by") === "number" ? "number" : "type";
   const [chartPick, setChartPick] = useState<string | null>(null);
+  /** What the by-type grid starts with, once the house has said the chart's room (or its type) is free. */
+  const [chartStart, setChartStart] = useState<{ roomTypeId: string; fixedRoomId?: string | null } | null>(null);
   const [chartNote, setChartNote] = useState<{ ok: boolean; text: string } | null>(null);
   const chartAsked = useRef(false);
   const chartRead = useRef(false);
@@ -1178,6 +1182,7 @@ function TheHouse({
     const clearAddress = () => {
       const p = new URLSearchParams(searchParams.toString());
       p.delete("room");
+      p.delete("by");
       const qs = p.toString();
       router.replace(`${pathname}${qs ? `?${qs}` : ""}`, { scroll: false });
     };
@@ -1200,9 +1205,22 @@ function TheHouse({
     }
     chartRead.current = true;
     const row = rows.find((r) => r.roomNumber === chartRoom);
-    if (row && row.bucket === "available") {
-      // Named, not picked: the desk picks it (or another) itself. Take it puts it first when its
-      // type is the one marked.
+    const typeId = catalog.find((c) => c.roomNumber === chartRoom)?.roomTypeId ?? null;
+    // Picked for the desk as the chart said (2026-11-25, operator), not saved: by type, one room of the
+    // type every night, the system's to place; by number, this room as the guest's own.
+    const typeFree = !!typeId && rows.some((r) => r.bucket === "available" && catalog.find((c) => c.id === r.roomId)?.roomTypeId === typeId);
+    if (chartBy === "number" && row && row.bucket === "available" && typeId) {
+      setChartPick(row.roomId);
+      setChartStart({ roomTypeId: typeId, fixedRoomId: row.roomId });
+      setChartNote({ ok: true, text: `Room ${chartRoom} (${row.roomTypeName}) from the house chart is picked for every night, by its number — press Save the rooms to keep it.` });
+    } else if (chartBy === "type" && typeFree) {
+      setChartPick(row?.bucket === "available" ? row.roomId : null);
+      setChartStart({ roomTypeId: typeId! });
+      setChartNote({
+        ok: true,
+        text: `1 ${row?.roomTypeName ?? "room of Room " + chartRoom + "'s type"} from the house chart is picked for every night, by room type — the system keeps a room of this type. Press Save the rooms to keep it.`,
+      });
+    } else if (row && row.bucket === "available") {
       setChartPick(row.roomId);
       setChartNote({
         ok: true,
@@ -1218,7 +1236,7 @@ function TheHouse({
     }
     clearAddress();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chartRoom, editable, past, session, savedOption, hasResults, rows]);
+  }, [chartRoom, editable, past, session, savedOption, hasResults, rows, catalog]);
 
   // Started from the intake (2026-10-27, operator: "ask the house directly as soon as I click
   // Start the inquiry"): the new booking opens with `?ask=1` and the house is asked once on
@@ -1556,6 +1574,7 @@ function TheHouse({
                 onDraft={(d) => {
                   typeDraft.current = d;
                 }}
+                startWith={chartStart}
               />
             ) : (
             <table className="table compact house-types">

@@ -827,6 +827,18 @@
 .ds .rchart-hc .hc-head .hc-kind, .ds .rchart-pick .hc-head .hc-kind { flex: 1; }
 .ds .rchart-hc .hc-head .hc-tag { font-size: 10.5px; letter-spacing: .03em; background: rgba(0, 0, 0, .14); border-radius: 3px; padding: 1px 5px; }
 .ds .rchart-pick .hc-head .hc-room { font-size: 12px; }
+/* "Book by" in the chart's start box (2026-11-25, operator: "add small boxes to choose room type or room no"). */
+.ds .rchart-pick .pick-by { display: flex; align-items: center; justify-content: flex-end; gap: 6px; padding: 6px 12px 0; }
+.ds .rchart-pick .pick-by-label { margin-right: auto; font-size: 11.5px; font-weight: 600; color: var(--ink-2); }
+.ds .rchart-pick .pick-by-opt { display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; border: 1px solid var(--line-2); border-radius: 4px; background: var(--surface); font: inherit; font-size: 12px; font-weight: 600; color: var(--ink-2); cursor: pointer; }
+.ds .rchart-pick .pick-by-opt:hover { background: var(--surface-2); color: var(--ink); }
+.ds .rchart-pick .pick-by-opt.on { border-color: var(--accent); background: var(--accent-soft, #E7EEF8); color: var(--accent-ink, var(--accent)); }
+.ds .rchart-pick .pick-by-opt:focus-visible { outline: none; box-shadow: var(--focus); }
+.ds .rchart-pick .pick-by-box { width: 12px; height: 12px; border: 1.5px solid var(--ink-3, #8a8f8a); border-radius: 3px; background: var(--surface); flex: none; position: relative; }
+.ds .rchart-pick .pick-by-opt.on .pick-by-box { border-color: var(--accent); background: var(--accent); }
+.ds .rchart-pick .pick-by-opt.on .pick-by-box::after { content: ""; position: absolute; left: 3px; top: 0px; width: 3px; height: 7px; border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(45deg); }
+.ds .rchart-pick .pick-by-says { margin: 6px 0 2px; font-size: 12.5px; line-height: 1.4; color: var(--ink-2); }
+.ds .rchart-pick .pick-by-says b { color: var(--ink); }
 .ds .rchart-hc .hc-head.k-prov { background: var(--rs-prov-bg); color: var(--rs-prov-tx); border-bottom: 2px dotted var(--rs-prov-line); }
 .ds .rchart-hc .hc-head.k-held { background: var(--rs-held-bg); color: var(--rs-held-tx); border-bottom: 2px dashed var(--rs-held-line); }
 .ds .rchart-hc .hc-head.k-res { background: var(--rs-res-bg); color: var(--rs-res-tx); border-bottom: 2px solid #9fb7cf; }

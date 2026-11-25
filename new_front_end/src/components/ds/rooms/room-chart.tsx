@@ -906,6 +906,10 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
     });
   const [full, setFull] = useState(false);
   const [pickNights, setPickNights] = useState(1);
+  // How the inquiry books the room clicked (2026-11-25, operator: "add small boxes to choose room type or
+  // room no, that way the user will have the option to do the booking by room type or room number"): by
+  // type the house section starts with one room of its type, the system's to place; by number, this room.
+  const [pickBy, setPickBy] = useState<"type" | "number">("type");
   const pickRef = useRef<HTMLDivElement | null>(null);
   /** Switch rooms: pick a booking's room, then click another booking (a swap) or a free night (a move). */
   const [switching, setSwitching] = useState(false);
@@ -1814,7 +1818,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
   })();
   const startInquiry = () => {
     if (!pick) return;
-    const p = new URLSearchParams({ checkIn: pick.night, nights: String(pickNights), room: pick.room.roomNumber });
+    const p = new URLSearchParams({ checkIn: pick.night, nights: String(pickNights), room: pick.room.roomNumber, by: pickBy });
     setPick(null);
     router.push(`/bookings/new?${p.toString()}`);
   };
@@ -2579,6 +2583,20 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
               <span className="hc-kind">Free</span>
               <span className="hc-room">Room {pick.room.roomNumber}</span>
             </div>
+            <div className="pick-by" role="radiogroup" aria-label="Book it by">
+              <span className="pick-by-label">Book by</span>
+              {(
+                [
+                  ["type", "Room type"],
+                  ["number", "Room no."],
+                ] as const
+              ).map(([v, label]) => (
+                <button key={v} type="button" role="radio" aria-checked={pickBy === v} className={`pick-by-opt${pickBy === v ? " on" : ""}`} onClick={() => setPickBy(v)}>
+                  <span className="pick-by-box" aria-hidden />
+                  {label}
+                </button>
+              ))}
+            </div>
             <div className="hc-body">
               <div className="hc-name">Start an inquiry</div>
               <div className="hc-sub">
@@ -2602,6 +2620,17 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
                 </span>
                 <span className="pick-out">out {longDay(shiftDay(pick.night, pickNights))}</span>
               </div>
+              <p className="pick-by-says">
+                {pickBy === "type" ? (
+                  <>
+                    <b>1 {typeOf.get(pick.room.roomTypeId)?.name ?? "room"}</b> — the system keeps a room of this type and may change it until Arrival. Papers to an agency read &ldquo;Room 1&rdquo;.
+                  </>
+                ) : (
+                  <>
+                    <b>Room {pick.room.roomNumber} itself</b> — kept for the guest by its number, and named on the papers.
+                  </>
+                )}
+              </p>
               {pickNights > pick.freeRun ? (
                 <p className="pick-note">Past the chart — the house is asked for those nights on the booking.</p>
               ) : !pick.reachesEnd && pickNights === pick.freeRun ? (
