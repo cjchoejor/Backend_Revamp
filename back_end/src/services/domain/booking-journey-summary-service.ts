@@ -164,7 +164,7 @@ export interface BookingJourneySummary {
       creditExtensionActive: boolean;
       ceilingAmount: number | null;
       /** Where the amount came from: set for this booking, the party's own percentage, or nothing asked. */
-      requirementSource: "OPERATOR" | "PARTY" | "NONE" | null;
+      requirementSource: "OPERATOR" | "PARTY" | "RENT" | "NONE" | null;
       requirementBasis: unknown | null;
       creditExtensionExpiresAt: string | null;
       creditExtensionExpired: boolean;

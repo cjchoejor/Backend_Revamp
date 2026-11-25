@@ -142,3 +142,58 @@ export function periodWords(p: Pick<RentPeriod, "from" | "to" | "nights" | "ofNi
   const span = `${fmt(p.from, p.from.slice(0, 4) !== p.to.slice(0, 4))} – ${fmt(p.to, true)}`;
   return p.whole ? `${span} · a ${plan === "MONTHLY" ? "month" : "week"}` : `${span} · ${p.nights} of ${p.ofNights} nights`;
 }
+
+/** One period of what the rent asks, over every apartment a booking lets (they share the plan and dates). */
+export type RentAskPeriod = {
+  plan: ApartmentPlan;
+  from: string;
+  to: string;
+  nights: number;
+  ofNights: number;
+  whole: boolean;
+  /** The period's rent with its service charge and GST, as the booking was priced. */
+  total: Prisma.Decimal;
+  units: string[];
+  words: string;
+};
+
+/**
+ * What the rent asks, period by period (2026-11-25, operator: "the money is asked like rent, at the
+ * start of each period"). Read from the booking's own priced terms — the reservation's frozen terms,
+ * else the quotation's — so the ask is exactly what the bill will post. Each period's own total is
+ * used as stored (its service charge and GST worked out as one line); nothing is priced again here.
+ * Empty when the booking is not let by the month or the week.
+ */
+export function rentScheduleFromTerms(terms: unknown): RentAskPeriod[] {
+  const rows = (terms as { compositionTotals?: { perRoom?: unknown } } | null | undefined)?.compositionTotals?.perRoom;
+  if (!Array.isArray(rows)) return [];
+  const byFrom = new Map<string, RentAskPeriod>();
+  for (const r of rows as Array<{ rent?: unknown }>) {
+    const rent = r?.rent as { plan?: unknown; unitLabel?: unknown; periods?: unknown } | null | undefined;
+    if (!rent || (rent.plan !== "MONTHLY" && rent.plan !== "WEEKLY") || !Array.isArray(rent.periods)) continue;
+    for (const p of rent.periods as Array<Record<string, unknown>>) {
+      if (!p || typeof p.from !== "string" || typeof p.to !== "string") continue;
+      const from = p.from.slice(0, 10);
+      const to = p.to.slice(0, 10);
+      const total =
+        p.total != null
+          ? toDecimal(p.total as MoneyLike)
+          : toDecimal((p.net ?? 0) as MoneyLike).add(toDecimal((p.serviceCharge ?? 0) as MoneyLike)).add(toDecimal((p.gst ?? 0) as MoneyLike));
+      const seen = byFrom.get(from);
+      if (seen) {
+        seen.total = round2(seen.total.add(total));
+        if (rent.unitLabel) seen.units.push(String(rent.unitLabel));
+        continue;
+      }
+      const period = { from, to, nights: Number(p.nights) || 0, ofNights: Number(p.ofNights) || 0, whole: p.whole === true };
+      byFrom.set(from, {
+        plan: rent.plan,
+        ...period,
+        total: round2(total),
+        units: rent.unitLabel ? [String(rent.unitLabel)] : [],
+        words: periodWords(period, rent.plan),
+      });
+    }
+  }
+  return [...byFrom.values()].sort((a, b) => (a.from < b.from ? -1 : a.from > b.from ? 1 : 0));
+}
