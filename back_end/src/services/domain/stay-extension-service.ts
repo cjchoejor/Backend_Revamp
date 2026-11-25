@@ -34,6 +34,9 @@ import {
   type RoomStanding,
 } from "./room-change-service.js";
 import type { RoomCompositionServiceInput } from "./s2-quotation-service.js";
+import { buildEntryRateReference } from "./rate-reference-service.js";
+import { agreedRatesByType, belowFloorRoomsOf } from "../../lib/msr-floor.js";
+import { belowMsrRefusalWords, mayPriceBelowMsr } from "../../policies/08-pricing-rate-plan/p19-msr-gm-waiver-below-msr-s2.js";
 
 type Actor = { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" };
 const RANK: Record<string, number> = { L1: 1, L2: 2, L3: 3, L4: 4 };
@@ -69,7 +72,24 @@ export type StayExtensionPreview = {
   /** The resolved plan for the extra nights: [{ date, roomId }] (one per room per night). */
   plan: Array<{ date: string; roomId: string; roomNumber: string | null }>;
   /** Rooms in the plan that differ from the current rooms — a scheduled move on the old checkout day. */
-  moves: Array<{ fromRoomId: string; fromRoomNumber: string | null; toRoomId: string; toRoomNumber: string | null; crossType: boolean }>;
+  moves: Array<{
+    fromRoomId: string;
+    fromRoomNumber: string | null;
+    toRoomId: string;
+    toRoomNumber: string | null;
+    crossType: boolean;
+    /**
+     * A move to another room type (2026-11-25, operator: "the option to choose to charge with the same
+     * rate as before or new rate of the new room type for each room"): keeps the rate the guest has in
+     * the room they leave (`fromRate`, a night, net), or takes the new room's own rate (`toRate`).
+     * `keepFloor` is the new type's minimum when keeping goes under it and no price for that type is
+     * already agreed on this booking — then only the GM or an admin may keep it.
+     */
+    keepRate: boolean;
+    fromRate: number | null;
+    toRate: number | null;
+    keepFloor: number | null;
+  }>;
   /** The composition rows the projection priced — the seed for the desk's negotiation table. */
   compositions: RoomCompositionServiceInput[];
   pricing: {
@@ -274,7 +294,7 @@ export async function previewStayExtension(
     /** The current room `perNight` replaces (multi-room bookings); defaults to the taken one. */
     replaceRoomId?: string | null;
     /** Several of our guest's rooms moving on the old checkout day (2026-11-25) — in place of perNight. */
-    moves?: Array<{ fromRoomId: string; toRoomId: string }>;
+    moves?: Array<{ fromRoomId: string; toRoomId: string; keepRate?: boolean }>;
     roomCompositions?: RoomCompositionServiceInput[];
     requestedDiscount?: { discountPercent?: number; discountAmount?: number; discountBasis: string } | null;
     ask?: InterimAsk | null;
@@ -331,10 +351,11 @@ export async function previewStayExtension(
   // Several moves (2026-11-25): each named current room moves to its own free room on the old checkout
   // day, for every extra night. Checked here, before anything is held: a room moves once, a free room
   // takes one moving room, and a room of this booking is never a destination.
-  const moveList = (input.moves ?? []).map((m) => ({ fromRoomId: m.fromRoomId.trim(), toRoomId: m.toRoomId.trim() }));
+  const moveList = (input.moves ?? []).map((m) => ({ fromRoomId: m.fromRoomId.trim(), toRoomId: m.toRoomId.trim(), keepRate: m.keepRate === true }));
   if (moveList.length > 0 && overrides.size > 0) throw new ValidationError("Say the moves either as a list of moves or as one room per night — not both");
   const roomNo = (id: string) => byRoom.get(id)?.roomNumber ?? id.slice(0, 6);
   const moveTo = new Map<string, string>();
+  const keepRateOf = new Map(moveList.map((m) => [m.fromRoomId, m.keepRate]));
   for (const m of moveList) {
     if (!lastNightRoomIds.includes(m.fromRoomId)) {
       throw new ValidationError(`Room ${roomNo(m.fromRoomId)} is not one of the rooms the guest is in on the last night (${lastNightRoomIds.map(roomNo).join(", ")})`);
@@ -362,12 +383,17 @@ export async function previewStayExtension(
   const pushMove = (fromRoomId: string, toRoomId: string) => {
     const from = byRoom.get(fromRoomId);
     const to = byRoom.get(toRoomId);
+    const crossType = (from?.roomTypeId ?? null) !== (to?.roomTypeId ?? null);
     moves.push({
       fromRoomId,
       fromRoomNumber: from?.roomNumber ?? null,
       toRoomId,
       toRoomNumber: to?.roomNumber ?? null,
-      crossType: (from?.roomTypeId ?? null) !== (to?.roomTypeId ?? null),
+      crossType,
+      keepRate: crossType && keepRateOf.get(fromRoomId) === true,
+      fromRate: null,
+      toRate: null,
+      keepFloor: null,
     });
   };
   for (const [fromRoomId, toRoomId] of moveTo) pushMove(fromRoomId, toRoomId);
@@ -409,6 +435,32 @@ export async function previewStayExtension(
   const basis = resolveCompositionBasis<RoomCompositionServiceInput>(entry);
   const carried = (basis.compositions ?? []).map((c) => ({ ...c }));
   const extensionRoomIds = Array.from(new Set(plan.map((p) => p.roomId)));
+  // Each move to another type: the rate the guest has in the room they leave — the room's negotiated
+  // rate, else the rate it was priced at — and the new room's own rate, read off the rate reference
+  // the quotation itself resolves from (2026-11-25).
+  const crossMoves = moves.filter((m) => m.crossType);
+  if (crossMoves.length > 0) {
+    const num = (v: unknown) => (v == null || v === "" || !Number.isFinite(Number(v)) ? null : Number(v));
+    const pricedPerRoom = ((basis.terms as { compositionTotals?: { perRoom?: Array<{ roomId?: string; roomRate?: unknown }> } } | null)?.compositionTotals?.perRoom ?? []);
+    const ref = await buildEntryRateReference(prisma, entryId, {
+      planRoomIds: crossMoves.flatMap((m) => [m.fromRoomId, m.toRoomId]),
+      stay: { checkIn, checkOut: newCheckOut },
+    });
+    for (const m of crossMoves) {
+      const fromRef = ref.roomTypes.find((t) => t.roomTypeId === byRoom.get(m.fromRoomId)?.roomTypeId);
+      const toRef = ref.roomTypes.find((t) => t.roomTypeId === byRoom.get(m.toRoomId)?.roomTypeId);
+      m.fromRate =
+        num(carried.find((c) => c.roomId === m.fromRoomId)?.negotiatedRoomRate) ??
+        num(pricedPerRoom.find((r) => r.roomId === m.fromRoomId)?.roomRate) ??
+        num(fromRef?.roomRate);
+      m.toRate = num(toRef?.roomRate);
+      const floor = toRef?.roomRateSource === "STANDARD_RATE_PLAN" ? num(toRef.msrValue) : null;
+      const agreed = num(toRef?.agreedRate);
+      m.keepFloor =
+        m.fromRate != null && floor != null && floor > 0 && m.fromRate < floor && !(agreed != null && m.fromRate >= agreed) ? floor : null;
+      if (m.fromRate == null) m.keepRate = false;
+    }
+  }
   const rows: RoomCompositionServiceInput[] = carried.filter((c) => currentPlanRoomIds.includes(c.roomId));
   for (const roomId of extensionRoomIds) {
     if (rows.some((r) => r.roomId === roomId)) continue;
@@ -416,7 +468,9 @@ export async function previewStayExtension(
     const source = carried.find((c) => c.roomId === (move?.fromRoomId ?? lastNightRoomIds[0])) ?? carried[0];
     if (!source) continue;
     const { negotiatedRoomRate, nightMealOverrides, ...rest } = source;
-    rows.push({ ...rest, roomId, ...(move?.crossType ? {} : negotiatedRoomRate != null ? { negotiatedRoomRate } : {}) });
+    // Another type keeps the guest's rate only when the desk chose it; else it is priced at its own rate.
+    const rate = move?.crossType ? (move.keepRate && move.fromRate != null ? move.fromRate : null) : negotiatedRoomRate ?? null;
+    rows.push({ ...rest, roomId, ...(rate != null ? { negotiatedRoomRate: rate } : {}) });
   }
   if (input.roomCompositions?.length) {
     for (const supplied of input.roomCompositions) {
@@ -549,7 +603,7 @@ export async function requestStayExtension(
     /** The current room `perNight` replaces (multi-room bookings); defaults to the taken one. */
     replaceRoomId?: string | null;
     /** Several of our guest's rooms moving on the old checkout day (2026-11-25) — in place of perNight. */
-    moves?: Array<{ fromRoomId: string; toRoomId: string }>;
+    moves?: Array<{ fromRoomId: string; toRoomId: string; keepRate?: boolean }>;
     roomCompositions?: RoomCompositionServiceInput[];
     requestedDiscount?: { discountPercent?: number; discountAmount?: number; discountBasis: string } | null;
     /** Optional since 2026-11-25 (the desk asks no reason for a change to a booking, as for a room change). */
@@ -573,6 +627,9 @@ export async function requestStayExtension(
   }
   const preview = await previewStayExtension(prisma, entryId, { ...input, ask: input.ask });
   if (preview.blockedReason) throw new ValidationError(preview.blockedReason);
+  // A room new to the booking under its type's minimum rate is the GM's or an admin's — asked now,
+  // before a night is held or a bill goes out, so it can never stop the extension after the guest paid.
+  await enforceNewRoomsFloor(prisma, entryId, preview.compositions, new Set(preview.moves.map((m) => m.toRoomId)), actor.actorLevel);
   if (preview.figures.dueNow == null || preview.figures.dueNow <= 0) {
     throw new ValidationError("The interim ask comes to nothing after what the guest has already paid — raise it, or commit the extension without a payment is not allowed");
   }
@@ -814,6 +871,11 @@ export async function commitStayExtension(
   const fromRoomId = extMoves[0]?.fromRoomId ?? replaced ?? lastNightRoomIds[0];
   const toRoomId = extMoves[0]?.toRoomId ?? newRoomIds[0] ?? null;
   if (!fromRoomId) throw new ValidationError("This booking has no room on its last night to extend");
+  // The extension's own quotation refuses a rate under the minimum unless the GM or an admin makes it;
+  // asked before the walk starts, which then cannot stop half way (2026-11-25).
+  if (Array.isArray(req.roomCompositions)) {
+    await enforceNewRoomsFloor(prisma, req.entryId, req.roomCompositions as unknown as RoomCompositionServiceInput[], new Set(newRoomIds), actor.actorLevel);
+  }
 
   const outcome = await changeRoomToNewSegment(prisma, actor, {
     entryId: req.entryId,
@@ -902,4 +964,37 @@ export async function listStayExtensions(prisma: PrismaClient, entryId: string) 
         }
       : null,
   }));
+}
+
+/**
+ * The rooms an extension brings into the booking, under their type's minimum rate (2026-11-25): only
+ * the GM or an admin may sell below it, unless this booking already agreed that price for the type.
+ * The rooms already in the booking are left out — their rates were agreed when they were booked.
+ */
+async function enforceNewRoomsFloor(
+  prisma: PrismaClient,
+  entryId: string,
+  compositions: RoomCompositionServiceInput[],
+  newRoomIds: Set<string>,
+  actorLevel: string | null | undefined,
+): Promise<void> {
+  if (mayPriceBelowMsr(actorLevel)) return;
+  const rows = compositions.filter((c) => newRoomIds.has(c.roomId));
+  if (rows.length === 0) return;
+  const below = await belowFloorRoomsOf(
+    prisma,
+    entryId,
+    rows.map((c) => ({ roomId: c.roomId, negotiatedRoomRate: c.negotiatedRoomRate != null ? Number(c.negotiatedRoomRate) : null, ratePackageId: c.ratePackageId ?? null, isFoc: c.isFoc ?? null })),
+  );
+  if (below.length === 0) return;
+  const agreed = await agreedRatesByType(prisma, entryId);
+  const uncovered = below.filter((r) => {
+    const a = agreed.get(r.roomTypeId);
+    return !(a && r.rate >= a.rate);
+  });
+  if (uncovered.length === 0) return;
+  throw new PolicyGateBlockedError(
+    "MSR_BREACH",
+    `${belowMsrRefusalWords(uncovered).replace(/\.\s*$/, "")} — charge the room's own rate, or ask the GM to keep the guest's rate`,
+  );
 }
