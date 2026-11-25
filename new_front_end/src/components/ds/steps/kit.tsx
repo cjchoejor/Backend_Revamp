@@ -647,6 +647,15 @@ function listenForInput() {
 }
 
 /**
+ * Whether the desk pressed or typed anywhere in the last `ms` (2026-11-25): the file follows a
+ * person's act, never a load or a re-read. Call it once at mount so the listener is on before the act.
+ */
+export function deskActedWithin(ms: number): boolean {
+  listenForInput();
+  return lastInput.at > 0 && Date.now() - lastInput.at <= ms;
+}
+
+/**
  * A section finished by an act inside it that the step cannot hear from (2026-10-29 — Check-in's
  * guest table, its registration tick, its keys): once the section turns done, it folds and the
  * next section still to do opens, as `useFinishWhenDone` does for an act that calls it. Only when
@@ -680,9 +689,10 @@ export function NotSentChip({ made = "generated" }: { made?: "generated" | "issu
 }
 
 export function useStepFlow() {
-  const { on, done, open, opened } = useContext(FlowCtx);
+  const { on, done, open, opened, current } = useContext(FlowCtx);
   // `opened`: the sections opened again with their Edit — a card can show its tools at once then.
-  return { on, done, open, opened };
+  // `current`: the section being worked (2026-11-25 — the apartments open the packages on reaching it).
+  return { on, done, open, opened, current };
 }
 
 export function anchorFor(card: string) {

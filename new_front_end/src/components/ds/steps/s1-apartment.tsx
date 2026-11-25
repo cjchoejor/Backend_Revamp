@@ -14,8 +14,9 @@
  * - `ApartmentRatesCard` — every package's weekly and monthly rate (what the guest pays), and what it
  *   comes to for this stay under each plan. Every figure is the server's.
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import { Button } from "@/design-system";
 import { Help } from "@/components/ds/help";
@@ -23,17 +24,20 @@ import { StayDates } from "@/components/ds/stay-dates";
 import { useSession } from "@/hooks/use-session";
 import {
   PLAN_WORD,
+  getApartmentCounts,
   getApartmentPackagesForDates,
   getApartmentPlans,
   getEntryApartments,
   pickApartments,
+  type ApartmentCounts,
   type ApartmentPackageForStay,
   type ApartmentPlan,
   type RentForStay,
 } from "@/lib/api/apartments";
 import { fmtDate, money, plural } from "@/lib/ds/format";
 import type { EntryDetail } from "@/types/api";
-import { StepCard, toastRefusal, useOpenFileTab, useRefreshEntry, useStepFlow } from "./kit";
+import { StepCard, deskActedWithin, toastRefusal, useFlowUnsaved, useOpenFileTab, useRefreshEntry, useStepFlow } from "./kit";
+import { ReqMark } from "./new-inquiry-parts";
 import { MakeRoomDialog } from "./s1-apartment-make-room";
 
 const BED: Record<string, string> = { KING: "King", TWIN: "Twin", QUEEN: "Queen", SINGLE: "Single" };
@@ -59,6 +63,85 @@ export function apartmentPlanProblem(
   if (plan === "MONTHLY" && !plans.monthly) return `under a month — monthly needs the stay to run to ${fmtDate(plans.firstMonthEnds)}`;
   if (plan === "WEEKLY" && !plans.weekly) return "under a week — it is charged by the night";
   return null;
+}
+
+/** How many apartments a party may ask for — the server's (2026-11-25). */
+export function useApartmentCounts(guests: number) {
+  const { session } = useSession();
+  return useQuery({
+    queryKey: ["lookup", "apartment-counts", guests],
+    queryFn: () => getApartmentCounts(session!, guests),
+    enabled: !!session,
+    staleTime: 60_000,
+    placeholderData: (prev) => prev,
+  });
+}
+
+/** Why the stay cannot be saved with this number of apartments, in words; null when it can. */
+export function apartmentCountProblem(count: string, counts: ApartmentCounts | null | undefined): string | null {
+  if (!counts) return null;
+  if (counts.offered === 0) return "no apartment is offered — add them under Rates and limits › Apartments";
+  if (!count) return "say how many apartments";
+  const c = counts.choices.find((x) => x.count === Number(count));
+  if (!c) return `the hotel lets ${plural(counts.offered, "apartment")}`;
+  if (!c.fits) return `${plural(c.count, "apartment")} sleep${c.count === 1 ? "s" : ""} at most ${plural(c.sleeps, "guest")}`;
+  return null;
+}
+
+/**
+ * How many apartments the guest wants (2026-11-25, operator: "in the stay it didn't ask how many rooms
+ * the guest wants"). A 2 BHK is one apartment. A number the party will not fit in is shut, saying how
+ * many it sleeps at most. With `follow`, none chosen or one the party no longer fits in becomes the
+ * fewest that do — the party changed by hand, or a new inquiry.
+ */
+export function ApartmentCountField({
+  count,
+  guests,
+  onCount,
+  follow,
+  ro,
+}: {
+  count: string;
+  guests: number;
+  onCount: (n: string) => void;
+  follow: boolean;
+  ro?: boolean;
+}) {
+  const q = useApartmentCounts(guests);
+  const d = q.data ?? null;
+  const problem = apartmentCountProblem(count, d);
+  useEffect(() => {
+    if (!follow || ro || !d || d.guests !== guests || !d.fewest) return;
+    const cur = d.choices.find((c) => c.count === Number(count));
+    if (!count || !cur || !cur.fits) onCount(String(d.fewest));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [follow, d?.guests, d?.fewest, guests]);
+  const listed = !!count && !!d?.choices.some((c) => c.count === Number(count));
+  return (
+    <div className="field">
+      <label>
+        Apartments{!count ? <ReqMark /> : null}
+        <Help label="About the number of apartments">
+          How many apartments the guest wants. A 2 BHK is one apartment, its two rooms let together. The house then takes exactly this many. A number
+          the party will not fit in is shut, with how many it sleeps at most.
+        </Help>
+      </label>
+      <select className="input" value={count} disabled={ro || !d || d.offered === 0} onChange={(e) => onCount(e.target.value)}>
+        {listed ? null : (
+          <option value={count} hidden={!!d && d.choices.length > 0}>
+            —
+          </option>
+        )}
+        {(d?.choices ?? []).map((c) => (
+          <option key={c.count} value={String(c.count)} disabled={!c.fits}>
+            {plural(c.count, "apartment")}
+            {c.fits ? "" : ` · sleeps ${c.sleeps} at most`}
+          </option>
+        ))}
+      </select>
+      {problem && (count || d?.offered === 0) ? <span className="hint stop-ink">{problem}</span> : null}
+    </div>
+  );
 }
 
 /** Monthly · Weekly, each shut with its reason when the dates cannot take it. */
@@ -263,13 +346,61 @@ export function ApartmentHouse({ entry, editable }: { entry: EntryDetail; editab
   const units = (d?.packages ?? []).flatMap((p) => p.units.map((u) => ({ ...u, packageName: p.name })));
   const room = units.filter((u) => ticked.has(u.id)).reduce((n, u) => n + u.maxOccupants, 0);
   const guests = d?.guests ?? 0;
-  const why = !ticked.size
-    ? "Tick the apartments"
-    : guests > room
-      ? `${plural(ticked.size, "apartment")} take at most ${plural(room, "guest")}; this booking has ${guests}`
-      : !changed
-        ? "Saved"
-        : null;
+  // As many as the guest asked for in The stay (2026-11-25, operator): no more can be ticked, and the
+  // save waits for exactly that many.
+  const asked = d?.asked ?? null;
+  const full = asked != null && ticked.size >= asked;
+  const why =
+    asked == null
+      ? "Say how many apartments in The stay first"
+      : !ticked.size
+        ? `Tick ${plural(asked, "apartment")}`
+        : ticked.size < asked
+          ? `Tick ${plural(asked - ticked.size, "more apartment")} — the guest asked for ${asked}`
+          : ticked.size > asked
+            ? `Untick ${ticked.size - asked} — the guest asked for ${plural(asked, "apartment")}`
+            : guests > room
+              ? `${plural(ticked.size, "apartment")} take at most ${plural(room, "guest")}; this booking has ${guests}`
+              : !changed
+                ? "Saved"
+                : null;
+  const savedShort = asked != null && savedIds.size > 0 && savedIds.size !== asked;
+  // The step's list waits for the apartments as asked, saved (the section is not done meanwhile).
+  useFlowUnsaved(
+    "house",
+    editable && !!d && (changed || savedShort),
+    changed ? "Changes to the apartments saved" : `${plural(asked ?? 0, "apartment")} chosen, as asked`,
+  );
+  // Reaching this section opens the packages on the right (2026-11-25, operator: "when the user reaches
+  // the third section it should automatically show packages tab on the right panel"). Only when the desk
+  // moved here by its own act (a Done, a save) — while the page loads the section being worked passes
+  // through here on its own, and a reload or a re-read leaves the file alone.
+  const lastCurrent = useRef(flow.current);
+  useEffect(() => {
+    deskActedWithin(0);
+  }, []);
+  useEffect(() => {
+    const was = lastCurrent.current;
+    lastCurrent.current = flow.current;
+    if (editable && flow.current === "house" && was && was !== "house" && deskActedWithin(15_000)) openFile("money", "package");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flow.current]);
+  // A new inquiry opens its booking here (`?ask=1`, the act of starting it): the packages open the
+  // same way, once, and the flag leaves the address.
+  const params = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  useEffect(() => {
+    if (params.get("ask") !== "1") return;
+    const p = new URLSearchParams(params.toString());
+    p.delete("ask");
+    if (editable) {
+      p.set("view", "money");
+      p.set("sub", "package");
+    }
+    router.replace(`${pathname}?${p.toString()}`, { scroll: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params]);
 
   const save = useMutation({
     mutationFn: () => pickApartments(session!, entry.id, [...ticked]),
@@ -328,7 +459,21 @@ export function ApartmentHouse({ entry, editable }: { entry: EntryDetail; editab
                       whole. What the stay comes to is the rent with service charge and GST, for how the apartment is let.
                     </Help>
                   </th>
-                  <th>Apartment</th>
+                  <th>
+                    <span className="bt-day">Apartment</span>
+                    {asked != null ? (
+                      <span className={`bt-tally ${ticked.size === asked ? "done" : "short"}`} title="Apartments ticked, of the apartments the guest asked for">
+                        <span className={`bt-tick${ticked.size === asked ? "" : " off"}`} aria-hidden>
+                          ✓
+                        </span>
+                        {ticked.size} of {asked}
+                      </span>
+                    ) : (
+                      <span className="bt-tally short" title="How many apartments the guest wants is asked in The stay">
+                        how many?
+                      </span>
+                    )}
+                  </th>
                   <th>Rooms</th>
                   <th className="num">
                     <span className="bt-day">Up to</span>
@@ -393,7 +538,14 @@ export function ApartmentHouse({ entry, editable }: { entry: EntryDetail; editab
                                 <input
                                   type="checkbox"
                                   checked={on}
-                                  disabled={!editable || shut}
+                                  disabled={!editable || shut || (!on && (full || asked == null))}
+                                  title={
+                                    !on && asked == null
+                                      ? "Say how many apartments in The stay first"
+                                      : !on && full
+                                        ? `${ticked.size} of ${asked} ticked — untick one to take another`
+                                        : undefined
+                                  }
                                   aria-label={`Take apartment ${u.label}`}
                                   onChange={(e) =>
                                     setTicked((s) => {
@@ -452,9 +604,6 @@ export function ApartmentHouse({ entry, editable }: { entry: EntryDetail; editab
                 onClick={() => save.mutate()}
               >
                 {why === "Saved" ? "Saved" : "Save the apartments"}
-              </Button>
-              <Button kind="quiet" compact onClick={() => openFile("money", "package")}>
-                Their rates
               </Button>
             </div>
           ) : null}

@@ -48,11 +48,27 @@ export type EntryApartments = {
   entryId: string;
   useType: string;
   plan: ApartmentPlan | null;
+  /** How many apartments the guest asked for in The stay; null when not said (2026-11-25). */
+  asked: number | null;
   stay: { checkInDate: string; checkOutDate: string; nights: number } | null;
   plans: Omit<ApartmentPlans, "nights"> | null;
   guests: number;
   packages: Array<ApartmentPackageForStay & { units: ApartmentUnitForStay[] }>;
 };
+
+/** How many apartments a party may ask for — the server's (lib/apartment-count.ts, 2026-11-25). */
+export type ApartmentCounts = {
+  guests: number;
+  /** The apartments the hotel offers. */
+  offered: number;
+  /** The fewest that sleep the party; null when even all of them cannot. */
+  fewest: number | null;
+  choices: Array<{ count: number; sleeps: number; fits: boolean }>;
+};
+
+export async function getApartmentCounts(session: Session, guests: number) {
+  return apiRequest<ApartmentCounts>(`/api/lookups/apartment-counts?guests=${Math.max(0, Math.floor(guests))}`, { session });
+}
 
 export async function getApartmentPlans(session: Session, checkIn: string, checkOut: string) {
   return apiRequest<ApartmentPlans>(`/api/lookups/apartment-plans?checkIn=${checkIn}&checkOut=${checkOut}`, { session });

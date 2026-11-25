@@ -46,7 +46,15 @@ import { bookingHref } from "@/components/ds/ui";
 import { fmtStay, money, plural } from "@/lib/ds/format";
 import { StayDates } from "@/components/ds/stay-dates";
 import { RateSheetCard, type RateChoice } from "@/components/ds/rate-sheet";
-import { ApartmentPlanField, IntakeApartmentRates, apartmentPlanProblem, useApartmentPlans } from "./s1-apartment";
+import {
+  ApartmentCountField,
+  ApartmentPlanField,
+  IntakeApartmentRates,
+  apartmentCountProblem,
+  apartmentPlanProblem,
+  useApartmentCounts,
+  useApartmentPlans,
+} from "./s1-apartment";
 import type { ApartmentPlan } from "@/lib/api/apartments";
 import { STEP_NAMES, STEP_NEEDS } from "@/lib/ds/steps";
 import type { EntryDetail } from "@/types/api";
@@ -205,6 +213,8 @@ export function NewInquiryCanvas() {
   const [notes, setNotes] = useState("");
   // How an apartment is let (2026-11-25): monthly or weekly, beside the dates.
   const [aptPlan, setAptPlan] = useState<ApartmentPlan | "">("");
+  // How many apartments the guest wants (2026-11-25, operator): asked in place of the rooms.
+  const [aptCount, setAptCount] = useState("");
   // The booking file's open tab — Booking until the desk picks another. A tick, a party or a package
   // picked brings it to Charges › Package (2026-11-05, operator).
   const [fileTab, setFileTab] = useState<IntakeFileTab>("details");
@@ -577,8 +587,10 @@ export function NewInquiryCanvas() {
   const isApartment = useType === "APARTMENT";
   const aptPlans = useApartmentPlans(isApartment ? checkIn : null, isApartment ? checkOut : null);
   const aptProblem = isApartment ? apartmentPlanProblem(aptPlan, aptPlans.data ?? null) : null;
-  // An apartment's rooms are its apartments', picked on the booking (2026-11-25).
-  const roomsGuestsSet = partyOk && (isApartment ? !aptProblem : roomsN >= 1);
+  const aptCounts = useApartmentCounts(isApartment ? adultsN + childN : 0);
+  const aptCountProblem = isApartment && adultsN > 0 ? apartmentCountProblem(aptCount, aptCounts.data ?? null) : null;
+  // An apartment's rooms are its apartments', picked on the booking (2026-11-25); how many is asked here.
+  const roomsGuestsSet = partyOk && (isApartment ? !aptProblem && !!aptCount && !aptCountProblem : roomsN >= 1);
 
   const saveBlockers: string[] = [];
   // "What kind of stay" opens unanswered, and the backend refuses a booking without one — so the
@@ -595,6 +607,7 @@ export function NewInquiryCanvas() {
   if (!corpComplete) saveBlockers.push("the company's reference and a contact person");
   if (!partyOk && partyHow) saveBlockers.push(partyHow);
   if (dateProblem) saveBlockers.push(dateProblem);
+  if (aptCountProblem) saveBlockers.push(aptCountProblem);
   if (aptProblem) saveBlockers.push(aptProblem);
 
   /* ---------------------------------------------------------------- the save */
@@ -683,6 +696,7 @@ export function NewInquiryCanvas() {
         numberOfRooms: isApartment ? 1 : Math.max(1, roomsN),
         bedTypeRequest: !isApartment && bedSum > 0 ? bedRequest : undefined,
         apartmentPlan: isApartment ? aptPlan || null : undefined,
+        apartmentCount: isApartment && aptCount ? Number(aptCount) : undefined,
         otaSource: channel.channel === "OTA",
         contactPersonName: (titled(arrivingTitle, arrivingName) || arrivingFallbackName) || undefined,
         contactPersonPhone: (arrivingPhone || arrivingFallbackPhone) || undefined,
@@ -732,7 +746,7 @@ export function NewInquiryCanvas() {
     { label: "Use type", met: !!useType, card: "caller" },
     ...(needsCorp ? [{ label: "The company's reference", met: corpComplete, card: "caller" }] : []),
     { label: "Dates set", met: datesSet && !dateProblem, card: "stay" },
-    { label: isApartment ? "Guests set, and how the apartment is let" : "Rooms and guests set", met: roomsGuestsSet, card: "stay" },
+    { label: isApartment ? "Guests, how many apartments, and how they are let" : "Rooms and guests set", met: roomsGuestsSet, card: "stay" },
   ], { bySection: true });
   const nextUp = flowItems.find((i) => !i.met) ?? null;
   const goToCard = (card?: string) => {
@@ -1014,7 +1028,7 @@ export function NewInquiryCanvas() {
                       {datesSet ? <StayDates checkIn={checkIn} checkOut={checkOut} /> : <b>no dates</b>}
                       {datesSet ? <> · {plural(stayNights, "night")}</> : null} · {plural(adultsN, "adult")}
                       {childN > 0 ? <>, {plural(childN, "child", "children")}{agesComplete ? ` (${ages.join(", ")})` : ""}</> : null} ·{" "}
-                      {plural(roomsN, "room")}
+                      {isApartment ? (aptCount ? plural(Number(aptCount), "apartment") : "apartments not said") : plural(roomsN, "room")}
                       {bedSum > 0 ? <> · {Object.entries(bedRequest).map(([t, n]) => `${n} ${bedWord(t)}`).join(" + ")} asked</> : null}
                     </>
                   }
@@ -1088,19 +1102,22 @@ export function NewInquiryCanvas() {
                       />
                     </div>
                     {isApartment ? (
-                      <ApartmentPlanField
-                        checkIn={checkIn}
-                        checkOut={checkOut}
-                        plan={aptPlan}
-                        onPlan={(p) => {
-                          setAptPlan(p);
-                          // The packages' weekly and monthly rates on the right (2026-11-25, operator).
-                          if (p) {
-                            setFileTab("money");
-                            setFileSub("package");
-                          }
-                        }}
-                      />
+                      <>
+                        <ApartmentCountField count={aptCount} guests={adultsN + childN} follow={adultsN > 0} onCount={setAptCount} />
+                        <ApartmentPlanField
+                          checkIn={checkIn}
+                          checkOut={checkOut}
+                          plan={aptPlan}
+                          onPlan={(p) => {
+                            setAptPlan(p);
+                            // The packages' weekly and monthly rates on the right (2026-11-25, operator).
+                            if (p) {
+                              setFileTab("money");
+                              setFileSub("package");
+                            }
+                          }}
+                        />
+                      </>
                     ) : (
                     <div className="field">
                       <label>
@@ -1390,7 +1407,15 @@ export function NewInquiryCanvas() {
                   </span>
                 ) : null}
                 <span>
-                  <b>{roomsN ? plural(roomsN, "room") : "Rooms not set"}</b>
+                  <b>
+                    {isApartment
+                      ? aptCount
+                        ? plural(Number(aptCount), "apartment")
+                        : "Apartments not set"
+                      : roomsN
+                        ? plural(roomsN, "room")
+                        : "Rooms not set"}
+                  </b>
                 </span>
                 <span className="camein">
                   {channel.label}

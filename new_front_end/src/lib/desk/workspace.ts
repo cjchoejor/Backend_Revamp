@@ -415,7 +415,11 @@ export function s1Readiness(entry: EntryDetail): Precondition[] {
     // An apartment stay (2026-11-25): how it is let, unless the stay is under a week (charged by the
     // night). Which plan the dates may take is the server's to refuse, in words.
     ...(entry.useType === "APARTMENT"
-      ? [{ label: "How the apartment is let", met: !!entry.apartmentPlan || (nightsBetween(entry.checkInDate, entry.checkOutDate) ?? 0) < 7, card: "stay" }]
+      ? [
+          // How many apartments the guest wants (2026-11-25, operator).
+          { label: "How many apartments", met: entry.apartmentCount != null, card: "stay" },
+          { label: "How the apartment is let", met: !!entry.apartmentPlan || (nightsBetween(entry.checkInDate, entry.checkOutDate) ?? 0) < 7, card: "stay" },
+        ]
       : []),
     { label: entry.useType === "APARTMENT" ? "The apartments searched" : "Availability searched", met: configs.length > 0, card: "house" },
     { label: entry.useType === "APARTMENT" ? "The apartments chosen" : "Preferred room selected", met: !!preferred && !pickFitsStay(preferred.optionSelected, entry, preferred.searchCriteria), card: "house" },

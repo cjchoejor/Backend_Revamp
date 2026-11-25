@@ -43,6 +43,8 @@ export type EntryListItem = {
   useType?: string | null;
   /** How an apartment is let (2026-11-25): MONTHLY or WEEKLY; null under a week or not an apartment. */
   apartmentPlan?: string | null;
+  /** How many apartments the guest asked for (2026-11-25); an apartment stay only. */
+  apartmentCount?: number | null;
   segmentNumber?: number;
   createdAt: string;
   updatedAt: string;

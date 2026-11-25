@@ -82,7 +82,15 @@ import { RoomCountField } from "./new-inquiry-parts";
 import { TheCaller, WrapUp } from "./s1-caller";
 import { TripPickLine, cleanPicks, usePickPricing, useTripPickPricing, type BillNight } from "./s1-bill";
 import { RoomsByType, TripHouse, savedBookingRooms, type TypeDraft } from "./s1-by-type";
-import { ApartmentHouse, ApartmentPlanField, apartmentPlanProblem, useApartmentPlans } from "./s1-apartment";
+import {
+  ApartmentCountField,
+  ApartmentHouse,
+  ApartmentPlanField,
+  apartmentCountProblem,
+  apartmentPlanProblem,
+  useApartmentCounts,
+  useApartmentPlans,
+} from "./s1-apartment";
 import { PLAN_WORD, type ApartmentPlan } from "@/lib/api/apartments";
 import { useBookingRooms } from "@/hooks/use-booking-rooms";
 import { savedPickNights, usePublishPriceDraft } from "@/lib/ds/stay-price";
@@ -229,6 +237,8 @@ function useStayForm(entry: EntryDetail, catalog: Catalog) {
       ).map(([k, v]) => [k, String(v)]),
     ) as Record<string, string>,
     plan: ((entry.apartmentPlan as ApartmentPlan | null) ?? "") as ApartmentPlan | "",
+    /** How many apartments the guest asked for (2026-11-25); "" when not said. */
+    apts: entry.apartmentCount != null ? String(entry.apartmentCount) : "",
   });
   const [f, setF] = useState(seed);
   const stamp = `${entry.version}`;
@@ -301,11 +311,14 @@ function useStayForm(entry: EntryDetail, catalog: Catalog) {
   const isApartment = entry.useType === "APARTMENT";
   const aptPlans = useApartmentPlans(isApartment ? f.checkIn : null, isApartment ? checkOut : null);
   const planProblem = isApartment ? apartmentPlanProblem(f.plan, aptPlans.data ?? null) : null;
+  const aptCounts = useApartmentCounts(isApartment ? adultsN + childN : 0);
+  const countProblem = isApartment ? apartmentCountProblem(f.apts, aptCounts.data ?? null) : null;
   const dirty =
     f.checkIn !== saved.checkIn ||
     f.nights !== saved.nights ||
     (!isApartment && f.rooms !== saved.rooms) ||
     (isApartment && f.plan !== saved.plan) ||
+    (isApartment && f.apts !== saved.apts) ||
     f.adults !== saved.adults ||
     String(childN) !== saved.children ||
     ages.join(",") !== saved.ages.join(",") ||
@@ -319,13 +332,21 @@ function useStayForm(entry: EntryDetail, catalog: Catalog) {
       childCount: childN,
       childAges: childN > 0 ? agesNum : [],
       guestCount: adultsN + childN,
-      ...(isApartment ? { apartmentPlan: f.plan || null } : { numberOfRooms: roomsN }),
+      ...(isApartment ? { apartmentPlan: f.plan || null, apartmentCount: f.apts ? Number(f.apts) : null } : { numberOfRooms: roomsN }),
       bedTypeRequest: !isApartment && Object.keys(bedMap).length
         ? (bedMap as Record<string, number>)
         : null,
       expectedVersion: entry.version,
     });
-  const invalid = !f.checkIn ? "put in the check-in date" : childN > 0 && !agesOk ? "put in every child's age" : planProblem && f.plan ? planProblem : null;
+  const invalid = !f.checkIn
+    ? "put in the check-in date"
+    : childN > 0 && !agesOk
+      ? "put in every child's age"
+      : countProblem
+        ? countProblem
+        : planProblem && f.plan
+          ? planProblem
+          : null;
   /** The house is asked again by itself for the figures just saved — the entry on screen is still the old one. */
   const announceSaved = () => {
     if (f.checkIn && checkOut)
@@ -355,6 +376,7 @@ function useStayForm(entry: EntryDetail, catalog: Catalog) {
     invalid,
     isApartment,
     planProblem,
+    partyEdited,
     cp: policy.data ?? null,
   };
 }
@@ -362,7 +384,7 @@ type StayForm = ReturnType<typeof useStayForm>;
 
 /** The stay's fields: Check-in | Nights | Check-out, Adults | Children | Rooms, ages, beds asked. */
 function StayFields({ form, ro }: { form: StayForm; ro: boolean }) {
-  const { f, set, checkOut, childN, ages, agesNum, env, roomsN, bedTypes, cp, isApartment } = form;
+  const { f, set, checkOut, childN, ages, agesNum, env, roomsN, bedTypes, cp, isApartment, adultsN, partyEdited } = form;
   const openFile = useOpenFileTab();
   const young = cp?.ageBands.youngChildMaxAge ?? 5;
   const childMax = cp?.ageBands.childMaxAge ?? 10;
@@ -426,17 +448,20 @@ function StayFields({ form, ro }: { form: StayForm; ro: boolean }) {
         />
       </div>
       {isApartment ? (
-        <ApartmentPlanField
-          checkIn={f.checkIn}
-          checkOut={checkOut}
-          plan={f.plan}
-          ro={ro}
-          onPlan={(p) => {
-            set({ plan: p });
-            // The packages' weekly and monthly rates on the right (2026-11-25, operator).
-            if (p) openFile("money", "package");
-          }}
-        />
+        <>
+          <ApartmentCountField count={f.apts} guests={adultsN + childN} follow={partyEdited} ro={ro} onCount={(n) => set({ apts: n })} />
+          <ApartmentPlanField
+            checkIn={f.checkIn}
+            checkOut={checkOut}
+            plan={f.plan}
+            ro={ro}
+            onPlan={(p) => {
+              set({ plan: p });
+              // The packages' weekly and monthly rates on the right (2026-11-25, operator).
+              if (p) openFile("money", "package");
+            }}
+          />
+        </>
       ) : (
       <RoomCountField
         env={env}
@@ -722,7 +747,9 @@ function TheStay({
           {(parseInt(saved.children, 10) || 0) > 0
             ? <>, {plural(parseInt(saved.children, 10) || 0, "child", "children")}{saved.ages.length ? ` (${saved.ages.join(", ")})` : ""}</>
             : null}{" "}
-          · {form.isApartment ? (saved.plan ? `let ${PLAN_WORD[saved.plan as ApartmentPlan].toLowerCase()}` : "an apartment") : plural(parseInt(saved.rooms, 10) || 1, "room")}
+          · {form.isApartment
+            ? `${saved.apts ? plural(Number(saved.apts), "apartment") : "apartments not said"}${saved.plan ? ` · let ${PLAN_WORD[saved.plan as ApartmentPlan].toLowerCase()}` : ""}`
+            : plural(parseInt(saved.rooms, 10) || 1, "room")}
           {Object.keys(savedBedMap).length
             ? <> · {Object.entries(savedBedMap).map(([t, n]) => `${n} ${BED_WORD[t] ?? words(t)}`).join(" + ")} asked</>
             : null}

@@ -2386,7 +2386,14 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                               <b>Stay {together.active ? together.stayNoOf(e.id) : tripAtInquiry.stayNoOf(e.id)}</b>
                               <StayDates checkIn={e.checkInDate} checkOut={e.checkOutDate} />
                               <span className="fstay-n">
-                                {n ? plural(n, "night") : "No dates yet"} · {e.numberOfRooms ? plural(e.numberOfRooms, "room") : "Rooms not set"}
+                                {n ? plural(n, "night") : "No dates yet"} ·{" "}
+                                {e.useType === "APARTMENT"
+                                  ? e.apartmentCount
+                                    ? plural(e.apartmentCount, "apartment")
+                                    : "Apartments not set"
+                                  : e.numberOfRooms
+                                    ? plural(e.numberOfRooms, "room")
+                                    : "Rooms not set"}
                               </span>
                             </div>
                           );
@@ -2404,7 +2411,16 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                           <b>{nights ? plural(nights, "night") : "No dates yet"}</b>
                         </span>
                         <span>
-                          <b>{roomsCount ? plural(roomsCount, "room") : "Rooms not set"}</b>
+                          {/* An apartment stay counts its apartments, a 2 BHK one (2026-11-25). */}
+                          <b>
+                            {entry.useType === "APARTMENT"
+                              ? entry.apartmentCount
+                                ? plural(entry.apartmentCount, "apartment")
+                                : "Apartments not set"
+                              : roomsCount
+                                ? plural(roomsCount, "room")
+                                : "Rooms not set"}
+                          </b>
                         </span>
                         <span className="camein">{cameInAs}</span>
                         {/* The desk's own tag, on every tab of the file (2026-11-25). */}
