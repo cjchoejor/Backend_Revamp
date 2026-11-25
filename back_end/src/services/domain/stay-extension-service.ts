@@ -273,6 +273,8 @@ export async function previewStayExtension(
     perNight?: Array<{ date: string; roomId: string }>;
     /** The current room `perNight` replaces (multi-room bookings); defaults to the taken one. */
     replaceRoomId?: string | null;
+    /** Several of our guest's rooms moving on the old checkout day (2026-11-25) — in place of perNight. */
+    moves?: Array<{ fromRoomId: string; toRoomId: string }>;
     roomCompositions?: RoomCompositionServiceInput[];
     requestedDiscount?: { discountPercent?: number; discountAmount?: number; discountBasis: string } | null;
     ask?: InterimAsk | null;
@@ -326,13 +328,30 @@ export async function previewStayExtension(
     throw new ValidationError(`replaceRoomId must be one of the rooms the guest is in on the last night (${lastNightRoomIds.map((id) => byRoom.get(id)?.roomNumber ?? id.slice(0, 6)).join(", ")})`);
   }
   const takenCurrent = lastNightRoomIds.filter((id) => (byRoom.get(id)?.perNight ?? []).some((n) => n.status !== "FREE"));
+  // Several moves (2026-11-25): each named current room moves to its own free room on the old checkout
+  // day, for every extra night. Checked here, before anything is held: a room moves once, a free room
+  // takes one moving room, and a room of this booking is never a destination.
+  const moveList = (input.moves ?? []).map((m) => ({ fromRoomId: m.fromRoomId.trim(), toRoomId: m.toRoomId.trim() }));
+  if (moveList.length > 0 && overrides.size > 0) throw new ValidationError("Say the moves either as a list of moves or as one room per night — not both");
+  const roomNo = (id: string) => byRoom.get(id)?.roomNumber ?? id.slice(0, 6);
+  const moveTo = new Map<string, string>();
+  for (const m of moveList) {
+    if (!lastNightRoomIds.includes(m.fromRoomId)) {
+      throw new ValidationError(`Room ${roomNo(m.fromRoomId)} is not one of the rooms the guest is in on the last night (${lastNightRoomIds.map(roomNo).join(", ")})`);
+    }
+    if (moveTo.has(m.fromRoomId)) throw new ValidationError(`Room ${roomNo(m.fromRoomId)} is named twice — a room moves once`);
+    if (!byRoom.has(m.toRoomId)) throw new ValidationError(`Unknown room in the extension plan (${m.toRoomId.slice(0, 8)}…)`);
+    if (currentPlanRoomIds.includes(m.toRoomId)) throw new ValidationError(`Room ${roomNo(m.toRoomId)} is already part of this booking — pick a room outside it`);
+    if ([...moveTo.values()].includes(m.toRoomId)) throw new ValidationError(`Room ${roomNo(m.toRoomId)} is picked for two rooms — each moves to a room of its own`);
+    moveTo.set(m.fromRoomId, m.toRoomId);
+  }
   const replacedRoomId =
     overrides.size > 0
       ? (input.replaceRoomId ?? takenCurrent.find((id) => !overrideRooms.has(id)) ?? lastNightRoomIds.find((id) => !overrideRooms.has(id)) ?? lastNightRoomIds[0])
       : null;
   for (const date of extraNights) {
     for (const roomId of lastNightRoomIds) {
-      const target = roomId === replacedRoomId ? overrides.get(date) ?? roomId : roomId;
+      const target = moveTo.get(roomId) ?? (roomId === replacedRoomId ? overrides.get(date) ?? roomId : roomId);
       plan.push({ date, roomId: target, roomNumber: byRoom.get(target)?.roomNumber ?? null });
     }
   }
@@ -340,17 +359,21 @@ export async function previewStayExtension(
     if (!byRoom.has(p.roomId)) throw new ValidationError(`Unknown room in the extension plan (${p.roomId.slice(0, 8)}…)`);
   }
   const moves: StayExtensionPreview["moves"] = [];
+  const pushMove = (fromRoomId: string, toRoomId: string) => {
+    const from = byRoom.get(fromRoomId);
+    const to = byRoom.get(toRoomId);
+    moves.push({
+      fromRoomId,
+      fromRoomNumber: from?.roomNumber ?? null,
+      toRoomId,
+      toRoomNumber: to?.roomNumber ?? null,
+      crossType: (from?.roomTypeId ?? null) !== (to?.roomTypeId ?? null),
+    });
+  };
+  for (const [fromRoomId, toRoomId] of moveTo) pushMove(fromRoomId, toRoomId);
   if (replacedRoomId) {
     for (const toRoomId of new Set(plan.filter((p) => p.roomId !== replacedRoomId && !lastNightRoomIds.includes(p.roomId)).map((p) => p.roomId))) {
-      const from = byRoom.get(replacedRoomId);
-      const to = byRoom.get(toRoomId);
-      moves.push({
-        fromRoomId: replacedRoomId,
-        fromRoomNumber: from?.roomNumber ?? null,
-        toRoomId,
-        toRoomNumber: to?.roomNumber ?? null,
-        crossType: (from?.roomTypeId ?? null) !== (to?.roomTypeId ?? null),
-      });
+      pushMove(replacedRoomId, toRoomId);
     }
   }
 
@@ -419,7 +442,11 @@ export async function previewStayExtension(
         roomCompositions: rows.map((c) => ({ ...c, nightMealOverrides: c.nightMealOverrides ?? [] })),
         discount: discountIn ? { percent: discountIn.discountPercent ?? null, amount: discountIn.discountAmount ?? null } : null,
       },
-      { stayOverride: { checkIn, checkOut: newCheckOut, perRoomNightCounts } },
+      // A room new to the booking is priced at its OWN type's rate (2026-11-25, a money finding:
+      // without it the preview priced a Suite our guest moves into at the booking's first room's
+      // Standard Single rate, so the amount asked was worked out on a smaller total than the
+      // extension's own quotation then charged).
+      { stayOverride: { checkIn, checkOut: newCheckOut, perRoomNightCounts }, planRoomIds: extensionRoomIds },
     );
     projected = {
       payable: preview.payable,
@@ -521,6 +548,8 @@ export async function requestStayExtension(
     perNight?: Array<{ date: string; roomId: string }>;
     /** The current room `perNight` replaces (multi-room bookings); defaults to the taken one. */
     replaceRoomId?: string | null;
+    /** Several of our guest's rooms moving on the old checkout day (2026-11-25) — in place of perNight. */
+    moves?: Array<{ fromRoomId: string; toRoomId: string }>;
     roomCompositions?: RoomCompositionServiceInput[];
     requestedDiscount?: { discountPercent?: number; discountAmount?: number; discountBasis: string } | null;
     /** Optional since 2026-11-25 (the desk asks no reason for a change to a booking, as for a room change). */
@@ -774,9 +803,16 @@ export async function commitStayExtension(
   const lastNightRoomIds = picture[picture.length - 1]?.roomIds ?? [];
   const extraRoomIds = Array.from(new Set(extraNights.map((n) => n.roomId)));
   const newRoomIds = extraRoomIds.filter((id) => !lastNightRoomIds.includes(id));
+  // The moves the request was priced with (2026-11-25: several rooms may move); an older request read
+  // as before — the one room left, into the one room new to the booking.
+  const storedMoves = ((req.pricingPreview as { moves?: Array<{ fromRoomId?: unknown; toRoomId?: unknown }> } | null)?.moves ?? [])
+    .filter((m): m is { fromRoomId: string; toRoomId: string } => typeof m?.fromRoomId === "string" && typeof m?.toRoomId === "string")
+    .filter((m) => lastNightRoomIds.includes(m.fromRoomId) && newRoomIds.includes(m.toRoomId));
   const replaced = lastNightRoomIds.find((id) => !extraRoomIds.includes(id)) ?? null;
-  const fromRoomId = replaced ?? lastNightRoomIds[0];
-  const toRoomId = newRoomIds[0] ?? null;
+  const extMoves =
+    storedMoves.length > 0 ? storedMoves : replaced && newRoomIds[0] ? [{ fromRoomId: replaced, toRoomId: newRoomIds[0] }] : [];
+  const fromRoomId = extMoves[0]?.fromRoomId ?? replaced ?? lastNightRoomIds[0];
+  const toRoomId = extMoves[0]?.toRoomId ?? newRoomIds[0] ?? null;
   if (!fromRoomId) throw new ValidationError("This booking has no room on its last night to extend");
 
   const outcome = await changeRoomToNewSegment(prisma, actor, {
@@ -793,6 +829,7 @@ export async function commitStayExtension(
       priorCheckOutDate: req.priorCheckOutDate,
       newCheckOutDate: req.newCheckOutDate,
       extraNights,
+      moves: extMoves,
     },
   });
 

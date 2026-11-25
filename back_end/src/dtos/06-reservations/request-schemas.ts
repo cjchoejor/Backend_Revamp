@@ -193,6 +193,12 @@ const stayExtensionShape = {
    * names it so a pick can never be paired with the wrong room.
    */
   replaceRoomId: z.string().min(1).optional(),
+  /**
+   * Our guest moving out of SEVERAL rooms on the old checkout day (2026-11-25, operator: a group whose
+   * rooms are taken on the extra nights): each current room that moves, and the free room it moves to.
+   * Takes the place of `perNight` + `replaceRoomId`, which say one move.
+   */
+  moves: z.array(z.object({ fromRoomId: z.string().min(1), toRoomId: z.string().min(1) })).max(60).optional(),
   /** The S2 table for the rooms carrying the extension (full basis for those rooms). */
   roomCompositions: z.array(roomCompositionInputSchema).max(60).optional(),
   requestedDiscount: discountShape.nullable().optional(),
