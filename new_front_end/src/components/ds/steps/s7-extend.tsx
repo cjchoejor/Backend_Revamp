@@ -152,15 +152,19 @@ function NewExtension({ entry, checkOut, onChanged }: { entry: EntryDetail; chec
   const currentOut = checkOut;
   const [newOut, setNewOut] = useState(currentOut ? addDays(currentOut, 1) : "");
   // What happens to each room another booking holds on the extra nights (2026-11-25, operator: "we need
-  // the swap feature here as well"): our guest moves out of it (one room per extension), or their booking
-  // is given another room so our guest keeps it.
+  // the swap feature here as well"): our guest moves out of it, or their booking is given another room so
+  // our guest keeps it.
   const [choice, setChoice] = useState<Record<string, TakenChoice>>({});
-  // The move kept for our guest (2026-11-25, operator: "we need a button to move our guest field"): picking
-  // a room is a draft; Move our guest keeps it, and only then is the house asked with it. One room per
-  // extension (the server moves one), so a second room says which room already moves rather than undoing it.
-  const [ourMove, setOurMove] = useState<{ fromRoomId: string; toRoomId: string } | null>(null);
-  const moveRoom = ourMove?.fromRoomId ?? "";
-  const moveTo = ourMove?.toRoomId ?? "";
+  // The moves kept for our guest (2026-11-25, operator: "we need a button to move our guest field"; then
+  // "it is not working as intended" — a group's several rooms can be taken): each taken room our guest
+  // leaves, and the free room picked for it. Picking a room is a draft; Move our guest keeps it, and only
+  // then is the house asked with it.
+  const [ourMoves, setOurMoves] = useState<Record<string, string>>({});
+  const moves = useMemo(
+    () => Object.entries(ourMoves).map(([fromRoomId, toRoomId]) => ({ fromRoomId, toRoomId })).sort((a, b) => a.fromRoomId.localeCompare(b.fromRoomId)),
+    [ourMoves],
+  );
+  const movesKey = JSON.stringify(moves);
   const [swapLegs, setSwapLegs] = useState<RoomMoveLegInput[] | null>(null);
   // After a swap the house is asked again; the taken rooms wait meanwhile.
   const [rechecking, setRechecking] = useState(false);
@@ -180,7 +184,7 @@ function NewExtension({ entry, checkOut, onChanged }: { entry: EntryDetail; chec
   // After an extension the check-out moves on; the new date starts again a night after it.
   useEffect(() => {
     if (currentOut) setNewOut(addDays(currentOut, 1));
-    setOurMove(null);
+    setOurMoves({});
     setChoice({});
     setCheckedOut(null);
   }, [currentOut]);
@@ -190,8 +194,9 @@ function NewExtension({ entry, checkOut, onChanged }: { entry: EntryDetail; chec
 
   // What is asked of the house is debounced, so typing a figure asks once.
   const params = useMemo(
-    () => ({ newOut: checkedOut ?? "", moveRoom, moveTo, askMode: ask.mode, askValue: askOk ? ask.value : undefined, comps: ratesOpen ? tableComps : [] }),
-    [checkedOut, moveRoom, moveTo, ask.mode, ask.value, askOk, ratesOpen, tableComps],
+    () => ({ newOut: checkedOut ?? "", moves, askMode: ask.mode, askValue: askOk ? ask.value : undefined, comps: ratesOpen ? tableComps : [] }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the moves are read by their contents
+    [checkedOut, movesKey, ask.mode, ask.value, askOk, ratesOpen, tableComps],
   );
   const [asked, setAsked] = useState(params);
   useEffect(() => {
@@ -209,8 +214,7 @@ function NewExtension({ entry, checkOut, onChanged }: { entry: EntryDetail; chec
     queryFn: () =>
       previewStayExtension(session!, entry.id, {
         newCheckOutDate: asked.newOut,
-        perNight: asked.moveTo && kept ? kept.extraNights.map((date) => ({ date, roomId: asked.moveTo })) : undefined,
-        replaceRoomId: asked.moveTo ? asked.moveRoom || undefined : undefined,
+        moves: asked.moves.length ? asked.moves : undefined,
         roomCompositions: asked.comps.length ? asked.comps : undefined,
         askMode: asked.askMode,
         askValue: asked.askValue,
@@ -220,7 +224,7 @@ function NewExtension({ entry, checkOut, onChanged }: { entry: EntryDetail; chec
   const p = !stale && preview.data && ymd(preview.data.newCheckOut) === newOut ? preview.data : null;
   const checking = !stale && preview.isFetching && !p;
   const check = () => {
-    setOurMove(null);
+    setOurMoves({});
     setChoice({});
     // Pressed again on the same date, the house is asked afresh.
     if (checkedOut === newOut) void preview.refetch();
@@ -249,8 +253,7 @@ function NewExtension({ entry, checkOut, onChanged }: { entry: EntryDetail; chec
     mutationFn: () =>
       requestStayExtension(session!, entry.id, {
         newCheckOutDate: newOut,
-        perNight: moveRoom && moveTo && p ? p.extraNights.map((date) => ({ date, roomId: moveTo })) : undefined,
-        replaceRoomId: moveRoom && moveTo ? moveRoom : undefined,
+        moves: moves.length ? moves : undefined,
         roomCompositions: ratesOpen && tableComps.length ? tableComps : undefined,
         askMode: ask.mode,
         askValue: ask.value,
@@ -298,7 +301,7 @@ function NewExtension({ entry, checkOut, onChanged }: { entry: EntryDetail; chec
     if (!roomsOk && at > 1) setAt(1);
   }, [roomsOk, at]);
   const part1Ready = roomsOk && !preview.isFetching;
-  const stillTaken = takenRooms.filter((r) => ourMove?.fromRoomId !== r.roomId).length;
+  const stillTaken = takenRooms.filter((r) => !ourMoves[r.roomId]).length;
   const part1Why = extra < 1 ? "Pick a check-out after the current one" : stale ? "Check the rooms first" : !p ? (preview.isError ? "The house could not be asked" : "Asking the house…") : p.blockedReason ? (takenRooms.length ? (stillTaken > 0 ? `Say what happens to ${stillTaken === 1 ? "the taken room" : `the ${stillTaken} taken rooms`} — move our guest, or move their booking` : p.blockedReason) : "A room is not free") : overlapOpen ? "Say whether both bookings are meant" : preview.isFetching ? "Asking the house…" : null;
   const roomsLine = !p
     ? ""
@@ -393,10 +396,23 @@ function NewExtension({ entry, checkOut, onChanged }: { entry: EntryDetail; chec
                   onChoice={(roomId, v) => {
                     setChoice((cur) => ({ ...cur, [roomId]: v }));
                     // Moving their booking instead lets go of a move kept for our guest out of this room.
-                    if (v === "THEIRS" && ourMove?.fromRoomId === roomId) setOurMove(null);
+                    if (v === "THEIRS" && ourMoves[roomId]) {
+                      setOurMoves((cur) => {
+                        const next = { ...cur };
+                        delete next[roomId];
+                        return next;
+                      });
+                    }
                   }}
-                  ourMove={ourMove}
-                  onKeepOurs={(fromRoomId, toRoomId) => setOurMove(toRoomId ? { fromRoomId, toRoomId } : null)}
+                  ourMoves={ourMoves}
+                  onKeepOurs={(fromRoomId, toRoomId) =>
+                    setOurMoves((cur) => {
+                      const next = { ...cur };
+                      if (toRoomId) next[fromRoomId] = toRoomId;
+                      else delete next[fromRoomId];
+                      return next;
+                    })
+                  }
                   onSwap={setSwapLegs}
                 />
               ) : null}
@@ -541,7 +557,7 @@ function NewExtension({ entry, checkOut, onChanged }: { entry: EntryDetail; chec
           // Whether it ran or not, ask the house again: the room may be free for our guest now.
           setSwapLegs(null);
           setChoice({});
-          setOurMove(null);
+          setOurMoves({});
           swapClosedAt.current = Date.now();
           setRechecking(true);
           // Every answer read before the swap is old now, the one about to be asked included.
@@ -721,7 +737,7 @@ function TakenRooms({
   rooms,
   choice,
   onChoice,
-  ourMove,
+  ourMoves,
   onKeepOurs,
   onSwap,
 }: {
@@ -731,8 +747,8 @@ function TakenRooms({
   rooms: StayExtensionTakenRoom[];
   choice: Record<string, TakenChoice>;
   onChoice: (roomId: string, v: TakenChoice) => void;
-  /** The move kept for our guest, if any — one room per extension. */
-  ourMove: { fromRoomId: string; toRoomId: string } | null;
+  /** The moves kept for our guest: the taken room → the free room it moves to. */
+  ourMoves: Record<string, string>;
   /** Keep our guest's move out of a room (or, with null, let it go). */
   onKeepOurs: (fromRoomId: string, toRoomId: string | null) => void;
   onSwap: (legs: RoomMoveLegInput[]) => void;
@@ -750,13 +766,13 @@ function TakenRooms({
     <div className={`ext-taken${busy ? " busy" : ""}`} aria-busy={busy || undefined}>
       {rooms.length > 1 ? (
         <p className="meta ext-taken-lead">
-          Our guest can move out of one room per extension. For the others, move their booking instead: they take another room and our guest stays.
+          For each room: move our guest to a free room, or move their booking instead so our guest stays.
         </p>
       ) : null}
       {rooms.map((r) => {
         const v = choice[r.roomId];
         return (
-          <div key={r.roomId} className={`ext-taken-room${v ? " chosen" : ""}${ourMove?.fromRoomId === r.roomId ? " decided" : ""}`}>
+          <div key={r.roomId} className={`ext-taken-room${v ? " chosen" : ""}${ourMoves[r.roomId] ? " decided" : ""}`}>
             <div className="etr-head">
               <b>Room {r.roomNumber}</b>
               <span className="meta">{r.roomTypeName}</span>
@@ -776,24 +792,13 @@ function TakenRooms({
             <Choice options={TAKEN_CHOICES} value={v ?? null} onChange={(w) => onChoice(r.roomId, w)} />
             {v === "OURS"
               ? (() => {
-                  const kept = ourMove?.fromRoomId === r.roomId;
-                  const elsewhere = ourMove && !kept ? rooms.find((x) => x.roomId === ourMove.fromRoomId) ?? null : null;
-                  if (elsewhere) {
-                    return (
-                      <div className="etr-blocked" role="alert">
-                        <span>
-                          <b>Our guest already moves out of Room {elsewhere.roomNumber}.</b> One room can move per extension — move their booking instead, or undo that move first.
-                        </span>
-                        <Button kind="secondary" compact onClick={() => onKeepOurs(elsewhere.roomId, null)}>
-                          Undo the move out of Room {elsewhere.roomNumber}
-                        </Button>
-                      </div>
-                    );
-                  }
+                  const kept = !!ourMoves[r.roomId];
+                  // A room already kept for another of our guest's rooms is not offered again.
+                  const open = free.filter((c) => !Object.entries(ourMoves).some(([fromId, toId]) => toId === c.roomId && fromId !== r.roomId));
                   const typeId = p.currentRooms.find((x) => x.roomId === r.roomId)?.roomTypeId ?? null;
-                  const same = free.filter((c) => c.roomTypeId === typeId);
-                  const other = free.filter((c) => c.roomTypeId !== typeId);
-                  const draft = kept ? ourMove!.toRoomId : (oursTo[r.roomId] ?? "");
+                  const same = open.filter((c) => c.roomTypeId === typeId);
+                  const other = open.filter((c) => c.roomTypeId !== typeId);
+                  const draft = kept ? ourMoves[r.roomId]! : (oursTo[r.roomId] ?? "");
                   const to = free.find((c) => c.roomId === draft) ?? null;
                   return (
                     <>
@@ -855,7 +860,11 @@ function TakenRooms({
                           </Help>
                         </div>
                       )}
-                      {free.length === 0 ? <p className="stop-ink sm">No room is free for those nights. Move their booking instead, or try another check-out.</p> : null}
+                      {open.length === 0 && !kept ? (
+                        <p className="stop-ink sm">
+                          {free.length === 0 ? "No room is free for those nights." : "Every free room is already kept for another of our guest's rooms."} Move their booking instead, or try another check-out.
+                        </p>
+                      ) : null}
                     </>
                   );
                 })()

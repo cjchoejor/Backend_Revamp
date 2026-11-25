@@ -199,6 +199,8 @@ export type StayExtensionInput = {
   perNight?: Array<{ date: string; roomId: string }>;
   /** Which current room `perNight` replaces (multi-room bookings) — the desk always names it. */
   replaceRoomId?: string;
+  /** Several of our guest's rooms moving on the old check-out day, each to its own free room (2026-11-25). */
+  moves?: Array<{ fromRoomId: string; toRoomId: string }>;
   roomCompositions?: RoomCompositionInput[];
   requestedDiscount?: { discountPercent?: number; discountAmount?: number; discountBasis: string } | null;
   askMode?: "PERCENT" | "AMOUNT";
