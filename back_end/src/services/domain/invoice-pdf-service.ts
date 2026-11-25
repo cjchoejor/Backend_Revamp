@@ -149,7 +149,13 @@ function invoicePrelude(inv: LoadedInvoice) {
   const dateNights = rawCheckOut
     ? Math.max(1, Math.round((rawCheckOut.getTime() - checkIn.getTime()) / 86_400_000))
     : NaN;
-  const nights = Math.max(1, Number.isFinite(termNights) ? termNights : Number.isFinite(dateNights) ? dateNights : 1);
+  // A stay that ended early (2026-11-25): the quotation's nights are the booked ones, so the
+  // stay row read "Check-out 25 Nov · 3 nights" for a guest who slept one. The dates win then.
+  const endedEarly = inv.entry.actualCheckOutDate != null && Number.isFinite(dateNights);
+  const nights = Math.max(
+    1,
+    endedEarly ? dateNights : Number.isFinite(termNights) ? termNights : Number.isFinite(dateNights) ? dateNights : 1,
+  );
   const checkOut = rawCheckOut ?? new Date(checkIn.getTime() + nights * 86_400_000);
 
   const roomCount = Math.max(
