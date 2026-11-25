@@ -167,11 +167,15 @@ function rentHeadLines(r: PriceLineRoom, rent: RoomRent, k: number): PriceLine[]
   const word = rent.plan === "MONTHLY" ? "month" : "week";
   const many = k > 1;
   if (!rent.periods.length) {
+    // Nobody sleeping in it is said by saying nothing — "0 adults" read as a fault (2026-11-25).
+    const c = r.composition ?? undefined;
+    const someone = (c?.adultCount ?? 0) + (c?.cnb6To10Count ?? 0) + (c?.cnbUnder6Count ?? 0) > 0;
+    const who = someone ? ` · ${roomOccupantsLabel(c)}` : "";
     return [
       {
         description: r.hideRoomNumber
-          ? `Part of the apartment · ${roomOccupantsLabel(r.composition ?? undefined)}`
-          : `Room ${r.roomNumber ?? r.roomId.slice(0, 6)} · part of apartment ${rent.unitLabel} · ${roomOccupantsLabel(r.composition ?? undefined)}`,
+          ? `Part of the apartment${who}`
+          : `Room ${r.roomNumber ?? r.roomId.slice(0, 6)} · part of apartment ${rent.unitLabel}${who}`,
         qty: "",
         rate: null,
         amount: 0,
