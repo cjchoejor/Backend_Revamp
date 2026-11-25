@@ -26,6 +26,7 @@ import { Button, Chip, Dialog, EmptyState, Icon } from "@/design-system";
 import { StandingChip, bookingHref } from "@/components/ds/ui";
 import { FollowNotice, StayPicker, TripFollowPrompt, tripOf } from "@/components/ds/workspace/return-stay";
 import { HeaderDeskTag } from "./header-desk-tag";
+import { DeskTagText } from "@/components/ds/desk-tag";
 import { useSession } from "@/hooks/use-session";
 import { useHotelDay } from "@/hooks/use-hotel-day";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
@@ -2392,6 +2393,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                         })}
                       <div className="ffacts-line">
                         <span className="camein">{cameInAs}</span>
+                        {entry.inquiry?.deskTag ? <DeskTagText tag={entry.inquiry.deskTag} className="ffacts-tag" /> : null}
                       </div>
                     </>
                   ) : (
@@ -2405,6 +2407,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                           <b>{roomsCount ? plural(roomsCount, "room") : "Rooms not set"}</b>
                         </span>
                         <span className="camein">{cameInAs}</span>
+                        {/* The desk's own tag, on every tab of the file (2026-11-25). */}
+                        {entry.inquiry?.deskTag ? <DeskTagText tag={entry.inquiry.deskTag} className="ffacts-tag" /> : null}
                       </div>
                     </>
                   )}

@@ -29,6 +29,8 @@ import { TripCard } from "@/components/ds/workspace/return-stay";
 import { GuestBookingsCard } from "@/components/ds/workspace/guest-bookings";
 import type { EntryDetail } from "@/types/api";
 import { HelpHere } from "@/components/ds/help";
+import { DeskTagText } from "@/components/ds/desk-tag";
+import { GuestDetailsDialog } from "./guest-details-dialog";
 
 type Scalars = { corporateClientRef?: string | null };
 type Contact = { contactPersonName?: string | null; contactPersonPhone?: string | null };
@@ -46,6 +48,8 @@ export function DetailsView({
   onEdit: (() => void) | null;
 }) {
   const [journey, setJourney] = useState(false);
+  const [editGuest, setEditGuest] = useState(false);
+  const sealed = ["CANCELLED", "EXPIRED", "CLOSED"].includes(entry.status);
   const g = entry.guestProfile ?? entry.inquiry?.guestProfile ?? null;
   const inq = (entry.inquiry ?? {}) as Scalars;
   const contact = entry as EntryDetail & Contact;
@@ -105,8 +109,27 @@ export function DetailsView({
         >
           <div className="grid3">
             <FactBox
-              k="Guest"
-              v={g?.id ? <Link href={`/guests/${g.id}`}>{guestName(g)}</Link> : <span className="name-i">to come from the agent</span>}
+              k={
+                <>
+                  Guest
+                  {/* Change the guest's name, phone and email, and the tag (2026-11-25). */}
+                  {entry.guestProfile?.id && !sealed ? (
+                    <button type="button" className="linklike fact-act" onClick={() => setEditGuest(true)}>
+                      Change
+                    </button>
+                  ) : null}
+                </>
+              }
+              v={
+                g?.id ? (
+                  <>
+                    <Link href={`/guests/${g.id}`}>{guestName(g)}</Link>
+                    <DeskTagText tag={entry.inquiry?.deskTag} />
+                  </>
+                ) : (
+                  <span className="name-i">to come from the agent</span>
+                )
+              }
               meta={[g?.phone, g?.email].filter(Boolean).join(" · ") || "no contact of their own on file"}
             />
             <FactBox
@@ -138,6 +161,7 @@ export function DetailsView({
             <Fact k="Custodian">{custodian}</Fact>
             {g?.vipTier ? <Fact k="VIP">{g.vipTier}</Fact> : null}
           </Facts>
+          {editGuest ? <GuestDetailsDialog entry={entry} open onClose={() => setEditGuest(false)} /> : null}
           <div className="details-email">
             <BookingEmailField entry={entry} editable={!["CANCELLED", "EXPIRED", "CLOSED"].includes(entry.status)} />
           </div>

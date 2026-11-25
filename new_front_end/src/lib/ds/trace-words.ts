@@ -147,6 +147,7 @@ const WORDS: Record<string, string> = {
   "GUEST.IDENTITY_DETAIL_RECORDED": "Guest details recorded",
   "GUEST.IDENTITY_DETAILS_CONFIRMED": "Guest details confirmed",
   "GUEST.ROWS_SWAPPED": "Two guests' rows swapped",
+  "GUEST_PROFILE.DETAILS_CORRECTED": "Guest's details changed",
   "CHECK_IN.AGE_MISMATCH_ACCEPTED": "Checked in with dates of birth that do not fit their rows",
   "INQUIRY.DESK_TAG_SET": "Tag changed",
   "INQUIRY.SPECIAL_PREFERENCE_UPDATED": "Preference changed",
@@ -425,6 +426,15 @@ export function traceDetail(ev: TraceEvent, names?: Partial<HistoryNames>): stri
   if (ev.eventType === "CHECK_IN.AGE_MISMATCH_ACCEPTED") {
     const rows = Array.isArray(p.rows) ? (p.rows as Array<{ label?: string }>).map((r) => r.label).filter(Boolean) : [];
     return [rows.join(", "), str("note") ? `"${str("note")}"` : null].filter(Boolean).join(" · ");
+  }
+  // The guest's details changed (2026-11-25): each field, old → new, and where it was changed.
+  if (ev.eventType === "GUEST_PROFILE.DETAILS_CORRECTED") {
+    const ch = (p.changes ?? {}) as Record<string, { from?: string | null; to?: string | null }>;
+    const word: Record<string, string> = { name: "name", phone: "phone", email: "email" };
+    const parts = Object.entries(ch).map(([k, v]) => `${word[k] ?? k} ${v.from ?? "none"} → ${v.to ?? "none"}`);
+    if (p.via === "ANOTHER_BOOKING" && str("changedOn")) parts.push(`changed on ${str("changedOn")}`);
+    if (Array.isArray(p.arrivingUpdated) && (p.arrivingUpdated as unknown[]).length) parts.push("who is arriving followed");
+    return parts.join(" · ") || null;
   }
   if (ev.eventType === "INQUIRY.DESK_TAG_SET") {
     const from = str("from");

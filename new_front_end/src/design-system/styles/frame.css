@@ -2228,6 +2228,14 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds h2 + .desk-tag, .ds .who .desk-tag { font-size: 13px; line-height: 22px; }
 .ds button.desk-tag, .ds .ws-head button.desk-tag, .ds .who button.desk-tag { cursor: pointer; font-family: inherit; color: var(--ink-3); background: var(--surface-2); font-weight: 500; }
 .ds .gv-swap { justify-self: start; margin-top: 6px; }
+.ds .fact-act { margin-left: 8px; font-size: 12px; text-transform: none; letter-spacing: 0; }
+/* The guest's details box (2026-11-25). */
+.ds .guest-edit { display: grid; gap: var(--s3); }
+.ds .guest-edit .form2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--s3); }
+@media (max-width: 640px) { .ds .guest-edit .form2 { grid-template-columns: minmax(0, 1fr); } }
+.ds .guest-edit-changes, .ds .guest-edit-sharing { display: grid; gap: 3px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface-2); font-size: 13px; }
+.ds .guest-edit-note { margin: 0; }
+.ds .ffacts-line .desk-tag.ffacts-tag { margin-left: 0; }
 .ds button.desk-tag:hover { border-color: var(--ink-3); color: var(--ink-2); }
 .ds button.desk-tag.add { border-style: dashed; background: transparent; color: var(--ink-3); opacity: .7; }
 .ds button.desk-tag.add:hover { opacity: 1; }
