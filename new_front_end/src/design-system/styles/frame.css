@@ -2952,3 +2952,17 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .etr-field { max-width: 460px; margin: 0; }
 .ds .etr-swap { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 10px; }
 .ds .etr-swap .etr-field { flex: 1 1 280px; }
+/* Who moves (2026-11-25, operator: "show prominently which guest is being moved"): the name large, the
+   edge in the mover's colour — blue for our guest, amber for another guest's booking — and who stays in green. */
+.ds .etr-theirs { display: grid; gap: 8px; }
+.ds .etr-mover { display: grid; gap: 2px; padding: 10px 14px; border: 1px solid var(--line-2); border-left: 5px solid var(--accent); border-radius: 6px; background: var(--accent-soft, #E7EEF8); animation: house-short-in .6s ease-out 1; }
+.ds .etr-mover.theirs { border-left-color: var(--warning); background: var(--warning-soft); }
+.ds .etr-mover-tag { font-size: 11.5px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: var(--accent-ink, var(--accent)); }
+.ds .etr-mover.theirs .etr-mover-tag { color: var(--warning); }
+.ds .etr-mover-name { font-size: 19px; font-weight: 800; line-height: 1.25; color: var(--ink); }
+.ds .etr-mover-who { font-size: var(--t-sm); color: var(--ink-2); }
+.ds .etr-mover-what { font-size: 14px; color: var(--ink); }
+.ds .etr-mover-what b { font-size: 15px; }
+.ds .etr-mover-pick { color: var(--ink-2); font-style: italic; }
+.ds .etr-mover-stays { display: inline-flex; align-items: center; gap: 4px; margin-top: 2px; font-size: var(--t-sm); font-weight: 600; color: var(--success, #1E7A4F); }
+@media (prefers-reduced-motion: reduce) { .ds .etr-mover { animation: none; } }

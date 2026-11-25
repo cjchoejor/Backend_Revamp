@@ -53,6 +53,7 @@ import { RoomCompositionPlanner } from "@/components/desk/workspace/room-composi
 import { RoomMoveDialog } from "@/components/ds/rooms/room-move-dialog";
 import type { RoomMoveLegInput } from "@/lib/api/room-moves";
 import { STEP_NAMES } from "@/lib/ds/steps";
+import { guestNameOf } from "@/lib/ds/status";
 import {
   AnswerLine,
   Choice,
@@ -298,7 +299,7 @@ function NewExtension({ entry, checkOut, onChanged }: { entry: EntryDetail; chec
   }, [roomsOk, at]);
   const part1Ready = roomsOk && !preview.isFetching;
   const stillTaken = takenRooms.filter((r) => !(choice[r.roomId] === "OURS" && moveTo)).length;
-  const part1Why = extra < 1 ? "Pick a check-out after the current one" : stale ? "Check the rooms first" : !p ? (preview.isError ? "The house could not be asked" : "Asking the house…") : p.blockedReason ? (takenRooms.length ? (moveRoom && !moveTo ? "Pick the room our guest moves to" : `Say what happens to ${stillTaken === 1 ? "the taken room" : `the ${stillTaken} taken rooms`} — move our guest, or swap`) : "A room is not free") : overlapOpen ? "Say whether both bookings are meant" : preview.isFetching ? "Asking the house…" : null;
+  const part1Why = extra < 1 ? "Pick a check-out after the current one" : stale ? "Check the rooms first" : !p ? (preview.isError ? "The house could not be asked" : "Asking the house…") : p.blockedReason ? (takenRooms.length ? (moveRoom && !moveTo ? "Pick the room our guest moves to" : `Say what happens to ${stillTaken === 1 ? "the taken room" : `the ${stillTaken} taken rooms`} — move our guest, or move their booking`) : "A room is not free") : overlapOpen ? "Say whether both bookings are meant" : preview.isFetching ? "Asking the house…" : null;
   const roomsLine = !p
     ? ""
     : p.moves.length
@@ -388,6 +389,7 @@ function NewExtension({ entry, checkOut, onChanged }: { entry: EntryDetail; chec
               {p && takenRooms.length > 0 ? (
                 <TakenRooms
                   busy={rechecking}
+                  ourGuest={guestNameOf(entry.guestProfile ?? entry.inquiry?.guestProfile ?? null)}
                   p={p}
                   rooms={takenRooms}
                   choice={choice}
@@ -399,7 +401,7 @@ function NewExtension({ entry, checkOut, onChanged }: { entry: EntryDetail; chec
                       for (const [k, w] of Object.entries(cur)) if (!(v === "OURS" && w === "OURS")) next[k] = w;
                       next[roomId] = v;
                       if (v === "OURS" && cur[roomId] !== "OURS") setMoveTo("");
-                      if (v === "SWAP" && cur[roomId] === "OURS") setMoveTo("");
+                      if (v === "THEIRS" && cur[roomId] === "OURS") setMoveTo("");
                       return next;
                     });
                   }}
@@ -711,10 +713,10 @@ function RoomsAnswer({ p }: { p: StayExtensionPreview }) {
   );
 }
 
-type TakenChoice = "OURS" | "SWAP";
+type TakenChoice = "OURS" | "THEIRS";
 const TAKEN_CHOICES: ReadonlyArray<readonly [TakenChoice, string]> = [
   ["OURS", "Move our guest"],
-  ["SWAP", "Swap with their booking"],
+  ["THEIRS", "Move their booking instead"],
 ];
 type FreeRoom = StayExtensionPreview["candidates"][number];
 
@@ -726,6 +728,7 @@ type FreeRoom = StayExtensionPreview["candidates"][number];
  */
 function TakenRooms({
   busy,
+  ourGuest,
   p,
   rooms,
   choice,
@@ -737,6 +740,7 @@ function TakenRooms({
   onSwap,
 }: {
   busy?: boolean;
+  ourGuest: string;
   p: StayExtensionPreview;
   rooms: StayExtensionTakenRoom[];
   choice: Record<string, TakenChoice>;
@@ -755,7 +759,7 @@ function TakenRooms({
     <div className={`ext-taken${busy ? " busy" : ""}`} aria-busy={busy || undefined}>
       {rooms.length > 1 ? (
         <p className="meta ext-taken-lead">
-          Our guest can move out of one room per extension. For the others, swap: their booking takes another room and our guest stays.
+          Our guest can move out of one room per extension. For the others, move their booking instead: they take another room and our guest stays.
         </p>
       ) : null}
       {rooms.map((r) => {
@@ -780,6 +784,16 @@ function TakenRooms({
             ))}
             <Choice options={TAKEN_CHOICES} value={v ?? null} onChange={(w) => onChoice(r.roomId, w)} />
             {v === "OURS" ? (
+              <Mover
+                tone="ours"
+                name={ourGuest}
+                who="our guest, in house"
+                what={`moves out of Room ${r.roomNumber} on ${fmtDay(p.currentCheckOut)}, and sleeps ${nightsWords(p.extraNights)} in`}
+                to={[...sameType, ...otherType].find((c) => c.roomId === moveTo) ?? null}
+                stays={r.heldBy.map((h) => `${h.guestName ?? h.entryId} keeps Room ${r.roomNumber} from ${fmtDay(h.nightsInRoom[0] ?? r.nights[0] ?? "")}, as booked`)}
+              />
+            ) : null}
+            {v === "OURS" ? (
               <div className="field etr-field">
                 <label>Our guest moves from Room {r.roomNumber} to, from {fmtDay(p.currentCheckOut)}</label>
                 <select className="input" value={moveTo} onChange={(e) => setMoveTo(e.target.value)}>
@@ -803,10 +817,10 @@ function TakenRooms({
                     </optgroup>
                   ) : null}
                 </select>
-                {sameType.length + otherType.length === 0 ? <p className="stop-ink sm">No room is free for those nights. Swap instead, or try another check-out.</p> : null}
+                {sameType.length + otherType.length === 0 ? <p className="stop-ink sm">No room is free for those nights. Move their booking instead, or try another check-out.</p> : null}
               </div>
             ) : null}
-            {v === "SWAP"
+            {v === "THEIRS"
               ? r.heldBy.map((h) => {
                   const key = `${r.roomId}|${h.entryId}`;
                   const to = swapTo[key] ?? "";
@@ -817,7 +831,16 @@ function TakenRooms({
                       {h.guestName ?? h.entryId}: {h.why}
                     </p>
                   ) : (
-                    <div key={key} className="etr-swap">
+                    <div key={key} className="etr-theirs">
+                      <Mover
+                        tone="theirs"
+                        name={h.guestName ?? h.entryId}
+                        who={`another guest · ${[h.partyName, h.entryId, `at ${stepWord(h.stage)}`].filter(Boolean).join(" · ")}`}
+                        what={`moves out of Room ${r.roomNumber}${h.nightsInRoom.length ? ` for ${nightsWords(h.nightsInRoom)}` : ""} into`}
+                        to={h.rooms.find((x) => x.roomId === to) ?? null}
+                        stays={[`${ourGuest} (our guest) keeps Room ${r.roomNumber} for ${nightsWords(p.extraNights)}`]}
+                      />
+                    <div className="etr-swap">
                       <div className="field etr-field">
                         <label>
                           {h.guestName ?? h.entryId}&rsquo;s booking moves out of Room {r.roomNumber}
@@ -851,11 +874,12 @@ function TakenRooms({
                         title={to ? undefined : "Pick a room for them first"}
                         onClick={() => onSwap([{ entryId: h.entryId, fromRoomId: r.roomId, toRoomId: to }])}
                       >
-                        Swap now
+                        Move their booking
                       </Button>
-                      <Help label="About the swap">
+                      <Help label="About moving their booking">
                         Their booking is moved now, through the usual room move: it keeps its step, its price is kept for the same type (another type asks), and its papers are made again and held for you to send. It stays moved even if this stay is not extended.
                       </Help>
+                    </div>
                     </div>
                   );
                 })
@@ -863,6 +887,47 @@ function TakenRooms({
           </div>
         );
       })}
+    </div>
+  );
+}
+
+/** Who moves, in large type with a coloured edge: our guest (blue) or another guest's booking (amber). */
+function Mover({
+  tone,
+  name,
+  who,
+  what,
+  to,
+  stays,
+}: {
+  tone: "ours" | "theirs";
+  name: string;
+  who: string;
+  what: string;
+  to: { roomNumber: string; roomTypeName: string | null } | null;
+  stays: string[];
+}) {
+  return (
+    <div className={`etr-mover ${tone}`} role="status">
+      <span className="etr-mover-tag">{tone === "ours" ? "Our guest moves" : "Their booking moves"}</span>
+      <span className="etr-mover-name">{name}</span>
+      <span className="etr-mover-who">{who}</span>
+      <span className="etr-mover-what">
+        {what}{" "}
+        {to ? (
+          <b>
+            Room {to.roomNumber}
+            {to.roomTypeName ? ` · ${to.roomTypeName}` : ""}
+          </b>
+        ) : (
+          <span className="etr-mover-pick">the room you pick below</span>
+        )}
+      </span>
+      {stays.map((x) => (
+        <span key={x} className="etr-mover-stays">
+          <Icon name="check" /> {x}
+        </span>
+      ))}
     </div>
   );
 }
