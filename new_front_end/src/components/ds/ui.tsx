@@ -5,6 +5,7 @@
  * its step chip, its status phrase, its name cell, a waiting timer, and the row that opens it.
  */
 import Link from "next/link";
+import { DeskTagText } from "@/components/ds/desk-tag";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { Button, Chip, Icon } from "@/design-system";
@@ -44,9 +45,13 @@ export function RowStanding({ row, hotelToday, balance, roomsApart }: { row: Des
 export function GuestLink({ row, step, href }: { row: DeskListRow; step?: number; href?: string }) {
   const name = rowNameOf(row);
   return (
-    <Link className={`row-link${isNamed(row.guestProfile) ? "" : " name-i"}`} href={href ?? bookingHref(row.id, step)} aria-label={`Open ${row.id}`} onClick={(e) => e.stopPropagation()}>
-      {name}
-    </Link>
+    <>
+      <Link className={`row-link${isNamed(row.guestProfile) ? "" : " name-i"}`} href={href ?? bookingHref(row.id, step)} aria-label={`Open ${row.id}`} onClick={(e) => e.stopPropagation()}>
+        {name}
+      </Link>
+      {/* The desk's own note to tell same-named guests apart, greyed (2026-11-25). */}
+      <DeskTagText tag={row.inquiry?.deskTag} />
+    </>
   );
 }
 

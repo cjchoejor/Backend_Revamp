@@ -111,6 +111,7 @@ export function RoomsByType({
   noSave = false,
   flowKey = "house",
   combined,
+  startWith,
 }: {
   entry: EntryDetail;
   configId: string | null;
@@ -151,6 +152,13 @@ export function RoomsByType({
     onState: (s: TypeGridState) => void;
     saveRef: (fn: (() => Promise<unknown>) | null) => void;
   };
+  /**
+   * The room an inquiry was started with from the house chart (2026-11-25, operator: "in the house section
+   * it should already pick the room type chose or room number chosen from the chart"): one room of its type
+   * every night, and with `fixedRoomId` that very room as the guest's own. Put in once, only while nothing
+   * is saved or typed; the desk saves it like any pick.
+   */
+  startWith?: { roomTypeId: string; fixedRoomId?: string | null } | null;
 }) {
   const { session } = useSession();
   const house = useQuery({
@@ -228,6 +236,19 @@ export function RoomsByType({
       setFixed(saved!.fixed);
     }
   }, [savedKey, saved]);
+  // The chart's room, put in once while nothing is saved or typed.
+  const started = useRef(false);
+  useEffect(() => {
+    if (started.current || !startWith || saved || !editable || nights.length === 0) return;
+    if (Object.values(counts).some((byType) => Object.values(byType).some((n) => n > 0)) || fixed.length > 0) {
+      started.current = true;
+      return;
+    }
+    started.current = true;
+    setCounts(Object.fromEntries(nights.map((d) => [d, { [startWith.roomTypeId]: 1 }])));
+    if (startWith.fixedRoomId) setFixed([startWith.fixedRoomId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [startWith, saved, editable, nights.join(",")]);
   const key = canon(counts, fixed, nights);
   // In the change panel "not saved" means other rooms than the booking holds, however they were first
   // picked: a pick by number carries over as its counts and is no change until the desk changes them.

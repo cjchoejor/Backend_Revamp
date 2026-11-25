@@ -18,6 +18,7 @@ import { hotelCalendarYmd, hotelDayEndUtc } from "../../lib/stay-dates.js";
 import { retireSupersededReplyWaitsBestEffort } from "../../lib/reply-waits.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { enforceMayReconcile } from "../../lib/reconcile-permission.js";
+import { rentScheduleFromTerms } from "../../lib/apartment-rent.js";
 
 /**
  * The advance asked of THIS booking, scoped to the CURRENT segment (2026-08-02 operator ruling).
@@ -310,7 +311,9 @@ async function computeAdvancePaymentEvaluation(
         ? ("NONE" as const)
         : (folio.advanceRequiredBasis as { source?: unknown } | null)?.source === "PARTY"
           ? ("PARTY" as const)
-          : ("OPERATOR" as const),
+          : (folio.advanceRequiredBasis as { source?: unknown } | null)?.source === "APARTMENT_RENT"
+            ? ("RENT" as const)
+            : ("OPERATOR" as const),
     requirementBasis: pinned != null ? (folio.advanceRequiredBasis ?? null) : null,
     // The payment window: opens at proforma dispatch (p27 blocks money before it), closes at
     // the check-in date. Deadline facts only — the desk renders the countdown from these.
@@ -357,6 +360,8 @@ export async function applyPartyAdvanceRuleTx(
   input: { entryId: string; folioId: string; segmentId: string; actorId: string; now: Date },
 ): Promise<{ applied: boolean; amount: number | null; percent: number | null }> {
   const none = { applied: false, amount: null, percent: null };
+  const rent = await applyApartmentRentAdvanceTx(tx, input);
+  if (rent.apartment) return { applied: rent.applied, amount: rent.amount, percent: null };
   const entry = await tx.entry.findUnique({
     where: { id: input.entryId },
     select: {
@@ -423,6 +428,78 @@ export async function applyPartyAdvanceRuleTx(
     },
   });
   return { applied: true, amount: Number(amount.toFixed(2)), percent };
+}
+
+/**
+ * An apartment let by the month or the week asks its first period's rent as the advance (2026-11-25,
+ * operator: "the money is asked like rent, at the start of each period"). The rent of the first month
+ * or week with its service charge and GST, read from this pass's quotation exactly as the bill will
+ * post it; each later period is asked when it starts (the night audit's prompt). It replaces a
+ * travel agent's or company's percentage on such a booking, and stands aside on the same terms as
+ * that rule: an amount in force, the desk's "no advance", a booking already reserved on another rule.
+ * `apartment: false` means this is not such a booking and the party rule decides.
+ */
+async function applyApartmentRentAdvanceTx(
+  tx: Prisma.TransactionClient,
+  input: { entryId: string; folioId: string; segmentId: string; actorId: string; now: Date },
+): Promise<{ apartment: boolean; applied: boolean; amount: number | null }> {
+  const entry = await tx.entry.findUnique({
+    where: { id: input.entryId },
+    select: { useType: true, apartmentPlan: true, currentReservationId: true, inquiryId: true },
+  });
+  if (!entry || String(entry.useType) !== "APARTMENT" || !entry.apartmentPlan) return { apartment: false, applied: false, amount: null };
+  const quotations = await tx.quotation.findMany({ where: { entryId: input.entryId, segmentId: input.segmentId }, orderBy: { createdAt: "desc" } });
+  const quote = resolveOperativeQuotation(quotations, input.segmentId) ?? quotations.find((q) => q.state !== "SUPERSEDED") ?? null;
+  const schedule = rentScheduleFromTerms(quote?.commercialTerms ?? null);
+  if (!quote || schedule.length === 0) return { apartment: false, applied: false, amount: null };
+  const skip = { apartment: true, applied: false, amount: null };
+
+  const [folio, pass] = await Promise.all([
+    tx.folio.findUnique({ where: { id: input.folioId }, select: { advanceRequiredAmount: true, advanceRequiredBasis: true } }),
+    tx.segment.findUnique({ where: { id: input.segmentId }, select: { startedAt: true } }),
+  ]);
+  if (!folio) return skip;
+  if (resolveOperatorAdvanceRequirement(folio, pass?.startedAt ?? null) != null) return skip;
+  const lastBasis = (folio.advanceRequiredBasis ?? null) as { mode?: unknown; source?: unknown } | null;
+  if (lastBasis?.mode === "NONE") return skip;
+  if (entry.currentReservationId && lastBasis?.source !== "APARTMENT_RENT") return skip;
+
+  const first = schedule[0];
+  const amount = round2(first.total);
+  const basis = {
+    mode: "AMOUNT",
+    source: "APARTMENT_RENT",
+    plan: first.plan,
+    periodFrom: first.from,
+    periodTo: first.to,
+    periodWords: first.words,
+    periods: schedule.length,
+    amount: Number(amount.toFixed(2)),
+    quotationId: quote.id,
+    setBy: "SYSTEM",
+    setAt: input.now.toISOString(),
+  };
+  await tx.folio.update({
+    where: { id: input.folioId },
+    data: { advanceRequiredAmount: amount, advanceRequiredBasis: basis as Prisma.InputJsonValue },
+  });
+  await tx.traceEvent.create({
+    data: {
+      eventType: "ADVANCE_PAYMENT.RENT_RULE_APPLIED",
+      actorId: input.actorId,
+      actorLevel: "SYSTEM",
+      entityType: "Folio",
+      entityId: input.folioId,
+      operation: "UPDATE",
+      timestamp: input.now,
+      stageContext: Stage.S3,
+      inquiryId: entry.inquiryId,
+      entryId: input.entryId,
+      payload: { entryId: input.entryId, folioId: input.folioId, requiredAmount: basis.amount, basis } as Prisma.InputJsonValue,
+      createdBy: input.actorId,
+    },
+  });
+  return { apartment: true, applied: true, amount: basis.amount };
 }
 
 function quotationStayTotal(

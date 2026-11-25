@@ -82,6 +82,16 @@ import { RoomCountField } from "./new-inquiry-parts";
 import { TheCaller, WrapUp } from "./s1-caller";
 import { TripPickLine, cleanPicks, usePickPricing, useTripPickPricing, type BillNight } from "./s1-bill";
 import { RoomsByType, TripHouse, savedBookingRooms, type TypeDraft } from "./s1-by-type";
+import {
+  ApartmentCountField,
+  ApartmentHouse,
+  ApartmentPlanField,
+  apartmentCountProblem,
+  apartmentPlanProblem,
+  useApartmentCounts,
+  useApartmentPlans,
+} from "./s1-apartment";
+import { PLAN_WORD, type ApartmentPlan } from "@/lib/api/apartments";
 import { useBookingRooms } from "@/hooks/use-booking-rooms";
 import { savedPickNights, usePublishPriceDraft } from "@/lib/ds/stay-price";
 import { Help, HelpHere } from "@/components/ds/help";
@@ -158,12 +168,16 @@ export function S1Inquiry({
           editable={editable}
           catalog={rooms.data?.items ?? []}
         />
-        <TheHouse
-          entry={entry}
-          past={past}
-          editable={editable}
-          catalog={rooms.data?.items ?? []}
-        />
+        {entry.useType === "APARTMENT" ? (
+          <ApartmentHouse entry={entry} editable={editable} />
+        ) : (
+          <TheHouse
+            entry={entry}
+            past={past}
+            editable={editable}
+            catalog={rooms.data?.items ?? []}
+          />
+        )}
         <WrapUp
           entry={entry}
           editable={editable}
@@ -222,6 +236,9 @@ function useStayForm(entry: EntryDetail, catalog: Catalog) {
         (entry.bedTypeRequest as Record<string, number> | null) ?? {},
       ).map(([k, v]) => [k, String(v)]),
     ) as Record<string, string>,
+    plan: ((entry.apartmentPlan as ApartmentPlan | null) ?? "") as ApartmentPlan | "",
+    /** How many apartments the guest asked for (2026-11-25); "" when not said. */
+    apts: entry.apartmentCount != null ? String(entry.apartmentCount) : "",
   });
   const [f, setF] = useState(seed);
   const stamp = `${entry.version}`;
@@ -289,10 +306,19 @@ function useStayForm(entry: EntryDetail, catalog: Catalog) {
     bedAsk: Object.values(bedMap).reduce<number>((a, b) => a + (b as number), 0),
     apply: (n) => set({ rooms: String(n) }),
   });
+  // An apartment stay (2026-11-25): its rooms are its apartments', picked in The house; it is let by
+  // the month or the week, which the dates decide between (the server's rule).
+  const isApartment = entry.useType === "APARTMENT";
+  const aptPlans = useApartmentPlans(isApartment ? f.checkIn : null, isApartment ? checkOut : null);
+  const planProblem = isApartment ? apartmentPlanProblem(f.plan, aptPlans.data ?? null) : null;
+  const aptCounts = useApartmentCounts(isApartment ? adultsN + childN : 0);
+  const countProblem = isApartment ? apartmentCountProblem(f.apts, aptCounts.data ?? null) : null;
   const dirty =
     f.checkIn !== saved.checkIn ||
     f.nights !== saved.nights ||
-    f.rooms !== saved.rooms ||
+    (!isApartment && f.rooms !== saved.rooms) ||
+    (isApartment && f.plan !== saved.plan) ||
+    (isApartment && f.apts !== saved.apts) ||
     f.adults !== saved.adults ||
     String(childN) !== saved.children ||
     ages.join(",") !== saved.ages.join(",") ||
@@ -306,13 +332,21 @@ function useStayForm(entry: EntryDetail, catalog: Catalog) {
       childCount: childN,
       childAges: childN > 0 ? agesNum : [],
       guestCount: adultsN + childN,
-      numberOfRooms: roomsN,
-      bedTypeRequest: Object.keys(bedMap).length
+      ...(isApartment ? { apartmentPlan: f.plan || null, apartmentCount: f.apts ? Number(f.apts) : null } : { numberOfRooms: roomsN }),
+      bedTypeRequest: !isApartment && Object.keys(bedMap).length
         ? (bedMap as Record<string, number>)
         : null,
       expectedVersion: entry.version,
     });
-  const invalid = !f.checkIn ? "put in the check-in date" : childN > 0 && !agesOk ? "put in every child's age" : null;
+  const invalid = !f.checkIn
+    ? "put in the check-in date"
+    : childN > 0 && !agesOk
+      ? "put in every child's age"
+      : countProblem
+        ? countProblem
+        : planProblem && f.plan
+          ? planProblem
+          : null;
   /** The house is asked again by itself for the figures just saved — the entry on screen is still the old one. */
   const announceSaved = () => {
     if (f.checkIn && checkOut)
@@ -340,6 +374,9 @@ function useStayForm(entry: EntryDetail, catalog: Catalog) {
     writeStay,
     announceSaved,
     invalid,
+    isApartment,
+    planProblem,
+    partyEdited,
     cp: policy.data ?? null,
   };
 }
@@ -347,7 +384,8 @@ type StayForm = ReturnType<typeof useStayForm>;
 
 /** The stay's fields: Check-in | Nights | Check-out, Adults | Children | Rooms, ages, beds asked. */
 function StayFields({ form, ro }: { form: StayForm; ro: boolean }) {
-  const { f, set, checkOut, childN, ages, agesNum, env, roomsN, bedTypes, cp } = form;
+  const { f, set, checkOut, childN, ages, agesNum, env, roomsN, bedTypes, cp, isApartment, adultsN, partyEdited } = form;
+  const openFile = useOpenFileTab();
   const young = cp?.ageBands.youngChildMaxAge ?? 5;
   const childMax = cp?.ageBands.childMaxAge ?? 10;
   const minAdult = cp?.unaccompaniedMinor.minimumAge ?? 18;
@@ -409,6 +447,22 @@ function StayFields({ form, ro }: { form: StayForm; ro: boolean }) {
           }
         />
       </div>
+      {isApartment ? (
+        <>
+          <ApartmentCountField count={f.apts} guests={adultsN + childN} follow={partyEdited} ro={ro} onCount={(n) => set({ apts: n })} />
+          <ApartmentPlanField
+            checkIn={f.checkIn}
+            checkOut={checkOut}
+            plan={f.plan}
+            ro={ro}
+            onPlan={(p) => {
+              set({ plan: p });
+              // The packages' weekly and monthly rates on the right (2026-11-25, operator).
+              if (p) openFile("money", "package");
+            }}
+          />
+        </>
+      ) : (
       <RoomCountField
         env={env}
         rooms={roomsN}
@@ -424,6 +478,7 @@ function StayFields({ form, ro }: { form: StayForm; ro: boolean }) {
           </span>
         ) : null}
       </RoomCountField>
+      )}
       {childN > 0 ? (
         <div className="wide field">
           <label>
@@ -461,7 +516,7 @@ function StayFields({ form, ro }: { form: StayForm; ro: boolean }) {
           ) : null}
         </div>
       ) : null}
-      {bedTypes.length ? (
+      {bedTypes.length && !isApartment ? (
         <div className="wide field">
           <label>
             Beds asked for · optional
@@ -692,7 +747,9 @@ function TheStay({
           {(parseInt(saved.children, 10) || 0) > 0
             ? <>, {plural(parseInt(saved.children, 10) || 0, "child", "children")}{saved.ages.length ? ` (${saved.ages.join(", ")})` : ""}</>
             : null}{" "}
-          · {plural(parseInt(saved.rooms, 10) || 1, "room")}
+          · {form.isApartment
+            ? `${saved.apts ? plural(Number(saved.apts), "apartment") : "apartments not said"}${saved.plan ? ` · let ${PLAN_WORD[saved.plan as ApartmentPlan].toLowerCase()}` : ""}`
+            : plural(parseInt(saved.rooms, 10) || 1, "room")}
           {Object.keys(savedBedMap).length
             ? <> · {Object.entries(savedBedMap).map(([t, n]) => `${n} ${BED_WORD[t] ?? words(t)}`).join(" + ")} asked</>
             : null}
@@ -1009,7 +1066,11 @@ function TheHouse({
   const pathname = usePathname();
   const router = useRouter();
   const chartRoom = searchParams.get("room")?.trim() || null;
+  // By its room type, or that very room (2026-11-25, the chart's "Book by" boxes); by type when not said.
+  const chartBy: "type" | "number" = searchParams.get("by") === "number" ? "number" : "type";
   const [chartPick, setChartPick] = useState<string | null>(null);
+  /** What the by-type grid starts with, once the house has said the chart's room (or its type) is free. */
+  const [chartStart, setChartStart] = useState<{ roomTypeId: string; fixedRoomId?: string | null } | null>(null);
   const [chartNote, setChartNote] = useState<{ ok: boolean; text: string } | null>(null);
   const chartAsked = useRef(false);
   const chartRead = useRef(false);
@@ -1178,6 +1239,7 @@ function TheHouse({
     const clearAddress = () => {
       const p = new URLSearchParams(searchParams.toString());
       p.delete("room");
+      p.delete("by");
       const qs = p.toString();
       router.replace(`${pathname}${qs ? `?${qs}` : ""}`, { scroll: false });
     };
@@ -1200,9 +1262,22 @@ function TheHouse({
     }
     chartRead.current = true;
     const row = rows.find((r) => r.roomNumber === chartRoom);
-    if (row && row.bucket === "available") {
-      // Named, not picked: the desk picks it (or another) itself. Take it puts it first when its
-      // type is the one marked.
+    const typeId = catalog.find((c) => c.roomNumber === chartRoom)?.roomTypeId ?? null;
+    // Picked for the desk as the chart said (2026-11-25, operator), not saved: by type, one room of the
+    // type every night, the system's to place; by number, this room as the guest's own.
+    const typeFree = !!typeId && rows.some((r) => r.bucket === "available" && catalog.find((c) => c.id === r.roomId)?.roomTypeId === typeId);
+    if (chartBy === "number" && row && row.bucket === "available" && typeId) {
+      setChartPick(row.roomId);
+      setChartStart({ roomTypeId: typeId, fixedRoomId: row.roomId });
+      setChartNote({ ok: true, text: `Room ${chartRoom} (${row.roomTypeName}) from the house chart is picked for every night, by its number — press Save the rooms to keep it.` });
+    } else if (chartBy === "type" && typeFree) {
+      setChartPick(row?.bucket === "available" ? row.roomId : null);
+      setChartStart({ roomTypeId: typeId! });
+      setChartNote({
+        ok: true,
+        text: `1 ${row?.roomTypeName ?? "room of Room " + chartRoom + "'s type"} from the house chart is picked for every night, by room type — the system keeps a room of this type. Press Save the rooms to keep it.`,
+      });
+    } else if (row && row.bucket === "available") {
       setChartPick(row.roomId);
       setChartNote({
         ok: true,
@@ -1218,7 +1293,7 @@ function TheHouse({
     }
     clearAddress();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chartRoom, editable, past, session, savedOption, hasResults, rows]);
+  }, [chartRoom, editable, past, session, savedOption, hasResults, rows, catalog]);
 
   // Started from the intake (2026-10-27, operator: "ask the house directly as soon as I click
   // Start the inquiry"): the new booking opens with `?ask=1` and the house is asked once on
@@ -1556,6 +1631,7 @@ function TheHouse({
                 onDraft={(d) => {
                   typeDraft.current = d;
                 }}
+                startWith={chartStart}
               />
             ) : (
             <table className="table compact house-types">

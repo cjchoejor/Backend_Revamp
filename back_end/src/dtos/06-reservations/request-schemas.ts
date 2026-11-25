@@ -11,6 +11,8 @@ const transitionDataSchema = z
     // the per-room key trace recorded null since the feature landed). Arrival-night rooms
     // only; the service refuses ids for rooms the guest moves into later.
     issuedKeyRoomIds: z.array(z.string().min(1)).max(60).optional(),
+    // The FOM's words for checking guests in whose dates of birth do not fit their rows (2026-11-25).
+    ageMismatchNote: z.string().trim().max(500).optional(),
     reEntryReason: z.string().optional(),
   })
   .optional();
@@ -193,6 +195,22 @@ const stayExtensionShape = {
    * names it so a pick can never be paired with the wrong room.
    */
   replaceRoomId: z.string().min(1).optional(),
+  /**
+   * Our guest moving out of SEVERAL rooms on the old checkout day (2026-11-25, operator: a group whose
+   * rooms are taken on the extra nights): each current room that moves, and the free room it moves to.
+   * Takes the place of `perNight` + `replaceRoomId`, which say one move.
+   */
+  moves: z
+    .array(
+      z.object({
+        fromRoomId: z.string().min(1),
+        toRoomId: z.string().min(1),
+        /** A move to another room type keeps the rate the guest has (true) or takes the new room's own rate. */
+        keepRate: z.boolean().optional(),
+      }),
+    )
+    .max(60)
+    .optional(),
   /** The S2 table for the rooms carrying the extension (full basis for those rooms). */
   roomCompositions: z.array(roomCompositionInputSchema).max(60).optional(),
   requestedDiscount: discountShape.nullable().optional(),
@@ -208,7 +226,7 @@ export type StayExtensionPreviewRequestDto = z.infer<typeof stayExtensionPreview
 export const stayExtensionRequestSchema = z
   .object({
     ...stayExtensionShape,
-    reason: z.string().trim().min(1, "A reason for the extension is required"),
+    reason: z.string().trim().max(500).optional(),
     askMode: z.enum(["PERCENT", "AMOUNT"]),
     askValue: z.coerce.number().refine((n) => Number.isFinite(n) && n > 0, "askValue must be positive"),
     note: z.string().trim().max(500).optional(),
@@ -217,6 +235,21 @@ export const stayExtensionRequestSchema = z
   })
   .refine((v) => v.askMode !== "PERCENT" || v.askValue <= 100, { message: "A percentage ask is at most 100" });
 export type StayExtensionRequestDto = z.infer<typeof stayExtensionRequestSchema>;
+
+/** Extend the stay in one press: paid at the desk now, or nothing now and paid at check-out (2026-11-25). */
+export const stayExtensionNowRequestSchema = z
+  .object({
+    ...stayExtensionShape,
+    payAt: z.enum(["NOW", "CHECKOUT"]),
+    askMode: z.enum(["PERCENT", "AMOUNT"]).optional(),
+    askValue: z.coerce.number().refine((n) => Number.isFinite(n) && n > 0, "askValue must be positive").optional(),
+    paymentMethod: z.string().trim().max(40).optional(),
+    bankName: z.string().trim().max(80).optional(),
+    journalNumber: z.string().trim().max(60).optional(),
+    notes: z.string().trim().max(500).optional(),
+    reason: z.string().trim().max(500).optional(),
+  })
+  .refine((v) => v.askMode !== "PERCENT" || v.askValue == null || v.askValue <= 100, { message: "A percentage ask is at most 100" });
 
 export const stayExtensionCommitRequestSchema = z.object({
   reason: z.string().trim().max(300).optional(),

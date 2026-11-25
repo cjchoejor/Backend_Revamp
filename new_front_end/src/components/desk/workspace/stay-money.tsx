@@ -1,44 +1,33 @@
 "use client";
 
 import { BankFields, useBankEntry } from "@/components/ds/bank-fields";
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlarmClock, CalendarPlus, Check, Eye, EyeOff, Receipt } from "lucide-react";
+import { AlarmClock, Check, Eye, EyeOff, Receipt } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
 import { recipientHint, useInvoiceRecipient, type InvoiceRecipient } from "@/hooks/use-invoice-recipient";
 import { ApiError } from "@/lib/api/client";
-import { acknowledgeMultiBooking } from "@/lib/api/confirmation";
 import { dispatchInvoice } from "@/lib/api/reservation-setup";
 import { openInvoicePdf } from "@/lib/api/documents";
 import {
-  commitStayExtension,
   createInterimPayment,
   listInterimPayments,
-  listStayExtensions,
-  previewStayExtension,
   recordInterimPayment,
-  requestStayExtension,
   recordInterimPromise,
   setInterimDueBy,
   withdrawInterimPayment,
-  withdrawStayExtension,
   type InterimPaymentRow,
-  type StayExtensionPreview,
 } from "@/lib/api/stay-money";
 import { listEntryCommunications, replySettled } from "@/lib/api/entries";
 import { money } from "@/lib/desk/workspace";
 import { countdownTo } from "@/lib/desk/timers";
-import type { RoomCompositionInput } from "@/lib/api/quotations";
 import type { EntryDetail } from "@/types/api";
 import { CommunicationAcceptanceBlock } from "./communication-acceptance";
-import { DeskConfirmModal } from "./confirm-modal";
 import { PdfButton } from "./pdf-button";
 import { ProformaPreview } from "./quotation-preview";
-import { RoomCompositionPlanner } from "./room-compositions-board";
 import { Help } from "@/components/ds/help";
-import { useReplyAsked } from "@/components/ds/steps/kit";
-import { DateInput, DateTimeInput } from "@/components/ds/date-input";
+import { DateTimeInput } from "@/components/ds/date-input";
 
 /**
  * Mid-stay money on the Stay step (2026-08-21, operator ruling):
@@ -75,21 +64,7 @@ const fmtWhen = (iso: string | null | undefined) => {
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 };
-const addDaysIso = (iso: string, n: number) => {
-  const d = new Date(`${iso.slice(0, 10)}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + n);
-  return d.toISOString().slice(0, 10);
-};
-/** Calendar nights between two YYYY-MM-DD dates (date arithmetic, not money). */
-const nightsBetween = (from: string, to: string) => {
-  const a = new Date(`${from.slice(0, 10)}T00:00:00Z`).getTime();
-  const b = new Date(`${to.slice(0, 10)}T00:00:00Z`).getTime();
-  if (Number.isNaN(a) || Number.isNaN(b)) return 0;
-  return Math.round((b - a) / 86_400_000);
-};
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
-/** "in 23h 59m" → "23h 59m left"; the engine's "due now" → "expiring". */
-const heldLeft = (cd: { text: string }) => (cd.text === "due now" ? "expiring" : `${cd.text.replace(/^in /, "")} left`);
 /** datetime-local ⇄ ISO: the input speaks local wall-clock, the API speaks ISO. */
 const toLocalInput = (iso: string | null | undefined) => {
   if (!iso) return "";
@@ -132,16 +107,6 @@ const STATE_TAG: Record<string, { label: string; cls: string }> = {
   WITHDRAWN: { label: "Withdrawn", cls: "tag" },
   LAPSED: { label: "Lapsed", cls: "tag" },
 };
-/** Extension states — "Paid" alone would read as finished, but the commit is still ahead. */
-const EXT_TAG: Record<string, { label: string; cls: string }> = {
-  REQUESTED: { label: "Nights held — bill generated · not sent", cls: "tag warn" },
-  BILLED: { label: "Bill sent — awaiting payment", cls: "tag warn" },
-  PAID: { label: "Paid — ready to commit", cls: "tag ok" },
-  COMMITTED: { label: "Extended", cls: "tag ok" },
-  WITHDRAWN: { label: "Withdrawn", cls: "tag" },
-  LAPSED: { label: "Lapsed — unpaid", cls: "tag" },
-};
-
 // ── Step list + ledger primitives ─────────────────────────────────────────────────────────────
 
 type StepItem = {
@@ -770,6 +735,17 @@ export function InterimPaymentBlock({
   });
 
   const suggested = open?.state === "SUGGESTED";
+  // A rent prompt (an apartment let by the month or the week, 2026-11-25) arrives with its figure —
+  // the rent through the new period, the server's — and its words; the form starts on them.
+  const rentPrompt = suggested && open?.askMode === "AMOUNT" && open.askValue != null && /^The rent for /.test(open.note ?? "") ? open : null;
+  const seededFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!rentPrompt || seededFor.current === rentPrompt.id) return;
+    seededFor.current = rentPrompt.id;
+    setMode("AMOUNT");
+    setValue(String(Number(rentPrompt.askValue)));
+    setNote(rentPrompt.note ?? "");
+  }, [rentPrompt]);
   const showAskForm = !open || suggested;
   const inHouse = entry.currentStage === "S7" && entry.folio?.state === "LIVE";
 
@@ -809,7 +785,15 @@ export function InterimPaymentBlock({
           ]}
         />
       )}
-      {suggested && open && (
+      {suggested && open && rentPrompt && (
+        <div className="fact" role="status" style={{ padding: "7px 11px", fontSize: 13, width: "100%", marginTop: 8, border: "1px solid var(--warn)", background: "var(--warn-t)" }}>
+          <span>
+            <b>Rent due</b> — {rentPrompt.note?.replace(/^The rent for /, "for ")}. The rent through this period comes to{" "}
+            <b>{money(Number(rentPrompt.askValue), currency)}</b>; what is already paid comes off when the bill is made.
+          </span>
+        </div>
+      )}
+      {suggested && open && !rentPrompt && (
         <div className="fact" style={{ padding: "7px 11px", fontSize: 12, width: "100%", marginTop: 8, border: "1px solid var(--warn)", background: "var(--warn-t)" }}>
           <b>Interim payment due</b> — raised by the night audit after {plural(open.nightsSleptAtPrompt ?? 2, "night")}. Put a figure on it below to generate the bill.
         </div>
@@ -871,555 +855,6 @@ export function InterimPaymentBlock({
                 {r.state === "PAID" ? ` · received ${money(r.receivedAgainstAsk, currency)}` : ""}
               </span>
               <span style={{ color: "var(--ink-3)", marginLeft: "auto" }}>{r.requestedAt.slice(0, 10)}</span>
-            </div>
-          ))}
-        </div>
-      )}
-      </>
-      )}
-    </div>
-  );
-}
-
-// ── Extend the stay ─────────────────────────────────────────────────────────────────────────
-
-export function StayExtensionBlock({ entry, onChanged }: { entry: EntryDetail; onChanged?: () => void }) {
-  const billReplyAsked = useReplyAsked(entry.id, "INTERIM_INVOICE");
-  const voucherReplyAsked = useReplyAsked(entry.id, "CONFIRMATION_VOUCHER");
-  const { session } = useSession();
-  const queryClient = useQueryClient();
-  const entryId = entry.id;
-  const recipient = useInvoiceRecipient(entry);
-  const isFom = (LEVEL_RANK[session?.actorLevel ?? "L1"] ?? 0) >= 2;
-  const currentCheckOut = (entry.reservation?.frozenCheckOutDate ?? entry.checkOutDate ?? "").slice(0, 10);
-
-  const q = useQuery({
-    queryKey: ["stay-extensions", entryId],
-    queryFn: () => listStayExtensions(session!, entryId),
-    enabled: !!session,
-  });
-  const requests = q.data?.requests ?? [];
-  const active = requests.find((r) => r.state === "REQUESTED" || r.state === "BILLED" || r.state === "PAID") ?? null;
-  const history = requests.filter((r) => r !== active);
-
-  // ── New request form ──
-  const [newDate, setNewDate] = useState(currentCheckOut ? addDaysIso(currentCheckOut, 1) : "");
-  const [mode, setMode] = useState<"PERCENT" | "AMOUNT">("PERCENT");
-  const [value, setValue] = useState("50");
-  const [reason, setReason] = useState("");
-  const [moveTo, setMoveTo] = useState<string>("");
-  const [negotiate, setNegotiate] = useState(false);
-  const [tableComps, setTableComps] = useState<RoomCompositionInput[]>([]);
-  const [preview, setPreview] = useState<StayExtensionPreview | null>(null);
-  const [confirmOpen, setConfirmOpen] = useState(false);
-  const [commitOpen, setCommitOpen] = useState(false);
-  // Collapsed until opened (2026-08-24, operator request) — the header tags carry the live state.
-  const [expanded, setExpanded] = useState(false);
-
-  // A move-to pick applies one room to every extra night, and names WHICH current room it
-  // replaces — on a multi-room booking the backend must not guess that from the room list.
-  const perNightFor = (to: string) => (preview && to ? preview.extraNights.map((date) => ({ date, roomId: to })) : undefined);
-  const replaceRoomIdFor = (to: string) => (preview && to ? (preview.currentRooms.find((r) => !r.extendableInPlace)?.roomId ?? undefined) : undefined);
-  const previewM = useMutation({
-    mutationFn: (args: { to?: string; comps?: RoomCompositionInput[] }) =>
-      previewStayExtension(session!, entryId, {
-        newCheckOutDate: newDate,
-        perNight: perNightFor(args.to ?? moveTo),
-        replaceRoomId: replaceRoomIdFor(args.to ?? moveTo),
-        roomCompositions: args.comps?.length ? args.comps : undefined,
-        askMode: mode,
-        askValue: Number(value) > 0 ? Number(value) : undefined,
-      }),
-    onSuccess: (p) => setPreview(p),
-    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Could not check the extension"),
-  });
-  // The guest holds another booking over the longer stay (Policy 13, 2026-09-19): the FOM says it
-  // is meant — the same acknowledgement the Reserve step records — and the check runs again.
-  const overlapAckM = useMutation({
-    mutationFn: () =>
-      acknowledgeMultiBooking(session!, entryId, `Stay extension to ${newDate} overlaps ${preview?.guestOverlap?.entryId ?? "another booking"} — both meant`),
-    onSuccess: () => {
-      toast.success("Overlap acknowledged — both bookings stand");
-      previewM.mutate({ comps: negotiate ? tableComps : undefined });
-    },
-    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Could not record the acknowledgement"),
-  });
-  // Re-project when the ask or the rate table changes (debounced), once a preview exists.
-  useEffect(() => {
-    if (!preview) return;
-    const t = setTimeout(() => previewM.mutate({ comps: negotiate ? tableComps : undefined }), 450);
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, value, tableComps, negotiate]);
-
-  const invalidateAll = () => {
-    for (const key of ["stay-extensions", "interim-payments", "entry", "entry-communications", "billing-summary", "entry-timers", "entry-trace", "room-plan-history", "room-change-candidates"]) {
-      void queryClient.invalidateQueries({ queryKey: [key, entryId] });
-    }
-    onChanged?.();
-  };
-  const requestM = useMutation({
-    mutationFn: () =>
-      requestStayExtension(session!, entryId, {
-        newCheckOutDate: newDate,
-        perNight: perNightFor(moveTo),
-        replaceRoomId: replaceRoomIdFor(moveTo),
-        roomCompositions: negotiate && tableComps.length ? tableComps : undefined,
-        reason: reason.trim(),
-        askMode: mode,
-        askValue: Number(value),
-      }),
-    onSuccess: (out) => {
-      toast.success(
-        `Extension to ${fmtDay(out.request.newCheckOutDate)} requested — the extra nights are held until ${fmtWhen(out.request.holdExpiresAt)}. Next: send the bill for ${money(out.interim.dueNow ?? 0, out.preview.currency)}.`,
-        { duration: 12000 },
-      );
-      setConfirmOpen(false);
-      setPreview(null);
-      setReason("");
-      setMoveTo("");
-      setNegotiate(false);
-      invalidateAll();
-    },
-    onError: (e) => toast.error(e instanceof ApiError ? e.message : "The extension was refused"),
-  });
-  const commitM = useMutation({
-    mutationFn: () => commitStayExtension(session!, entryId, active!.id),
-    onSuccess: (out) => {
-      setCommitOpen(false);
-      const o = out.outcome;
-      if (o.walk.blocked) {
-        toast.warning(`Extension recorded but the booking is at ${o.walk.reachedStage}, not back at the Stay step yet: ${o.walk.blocked.message}`, { duration: 14000 });
-      } else {
-        const delta =
-          o.pricing.delta != null && Math.abs(o.pricing.delta) >= 0.01
-            ? ` · stay total now ${money(o.pricing.newTotal, o.pricing.currency ?? "BTN")} (${o.pricing.delta > 0 ? "+" : "−"}${money(Math.abs(o.pricing.delta), o.pricing.currency ?? "BTN")})`
-            : "";
-        toast.success(`Stay extended to ${fmtDay(o.extension?.newCheckOutDate)}${delta}. Nothing was sent to the guest — the re-issued voucher carries the new dates.`, { duration: 14000 });
-      }
-      invalidateAll();
-    },
-    onError: (e) => toast.error(e instanceof ApiError ? e.message : "The extension could not be committed"),
-  });
-  const withdrawM = useMutation({
-    mutationFn: () => withdrawStayExtension(session!, entryId, active!.id),
-    onSuccess: () => {
-      toast.info("Extension withdrawn — the extra nights are released");
-      invalidateAll();
-    },
-    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Could not withdraw the extension"),
-  });
-
-  const replacedRoom = preview?.currentRooms.find((r) => !r.extendableInPlace) ?? null;
-  const alternatives = useMemo(
-    () => (preview ? preview.candidates.filter((c) => c.selectable && !preview.currentRooms.some((r) => r.roomId === c.roomId)) : []),
-    [preview],
-  );
-  const extensionRoomIds = useMemo(() => Array.from(new Set((preview?.plan ?? []).map((p) => p.roomId))), [preview]);
-  const currency = preview?.currency ?? active?.pricingPreview?.figures?.currency ?? "BTN";
-  const dueNow = preview?.figures.dueNow ?? null;
-  const canRequest = !!preview && !preview.blockedReason && reason.trim().length > 0 && Number(value) > 0 && (dueNow ?? 0) > 0;
-
-  // ── The four setup steps ──
-  const previewFresh = !!preview && preview.newCheckOut.slice(0, 10) === newDate;
-  const extraNights = previewFresh ? preview!.extraNights.length : currentCheckOut && newDate ? Math.max(0, nightsBetween(currentCheckOut, newDate)) : 0;
-  const roomsSettled = previewFresh && !preview!.blockedReason;
-  const moneySettled = roomsSettled && (dueNow ?? 0) > 0;
-  const movesText = (moves: StayExtensionPreview["moves"] | undefined, from: string) =>
-    moves && moves.length > 0
-      ? `From ${fmtDay(from)}: ${moves.map((m) => `Room ${m.fromRoomNumber} → ${m.toRoomNumber}${m.crossType ? " (different type)" : ""}`).join(", ")}`
-      : null;
-
-  const dateStep: StepItem = {
-    key: "date",
-    label: "New checkout",
-    state: previewFresh ? "done" : "cur",
-    summary: previewFresh ? `Check-out ${fmtDay(currentCheckOut)} → ${fmtDay(newDate)} · ${plural(extraNights, "more night")}` : `currently ${fmtDay(currentCheckOut)}`,
-    body: (
-      <div style={{ ...row, gap: 10 }}>
-        <div className="field" style={fieldTight}>
-          <label>New checkout date</label>
-          <DateInput className="dinput"
-            value={newDate}
-            min={currentCheckOut ? addDaysIso(currentCheckOut, 1) : undefined}
-            onChange={(e) => {
-              setNewDate(e.target.value);
-              setPreview(null);
-              setMoveTo("");
-            }}
-          />
-        </div>
-        <span style={{ fontSize: 12.5, color: "var(--ink-2)", paddingBottom: 9 }}>
-          = <b>{plural(extraNights, "more night")}</b>
-        </span>
-        <button
-          type="button"
-          className={`btn btn-sm ${previewFresh ? "btn-ghost" : "btn-primary"}`}
-          disabled={!newDate || extraNights < 1 || previewM.isPending}
-          onClick={() => previewM.mutate({})}
-        >
-          {previewM.isPending && !preview ? "Checking…" : previewFresh ? "Check again" : "Check availability & price"}
-        </button>
-      </div>
-    ),
-  };
-
-  const roomsStep: StepItem = !previewFresh
-    ? { key: "rooms", label: "Rooms for the extra nights", state: "todo", summary: "after the check — each room is looked up night by night" }
-    : {
-        key: "rooms",
-        label: "Rooms for the extra nights",
-        state: roomsSettled ? "done" : "cur",
-        summary: roomsSettled
-          ? (movesText(preview!.moves, preview!.currentCheckOut) ??
-            `${preview!.currentRooms.map((r) => `Room ${r.roomNumber}`).join(", ")} ${preview!.currentRooms.length === 1 ? "stays" : "stay"} on`)
-          : preview!.guestOverlap && !preview!.guestOverlap.acknowledged && (!replacedRoom || preview!.moves.length > 0)
-            ? "the guest holds another booking over these nights — see below"
-            : "a room is taken — pick where the guest moves",
-        body: (
-          <>
-            <div style={{ display: "grid", gap: 4 }}>
-              {preview!.currentRooms.map((r) => (
-                <div key={r.roomId} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", fontSize: 12 }}>
-                  <b style={{ minWidth: 70 }}>Room {r.roomNumber}</b>
-                  <span style={{ color: "var(--ink-3)", minWidth: 110 }}>{r.roomTypeName}</span>
-                  {r.perNight.map((n) => (
-                    <span key={n.date} className={`tag ${n.status === "FREE" ? "" : "warn"}`} title={n.claimedBy?.guestName ?? n.claimedBy?.bookingRef ?? undefined}>
-                      {fmtDay(n.date)} · {n.status === "FREE" ? "free" : n.status.toLowerCase()}
-                      {n.claimedBy?.guestName ? ` (${n.claimedBy.guestName})` : ""}
-                    </span>
-                  ))}
-                  {r.extendableInPlace ? (
-                    <span style={{ color: "var(--ok)", display: "inline-flex", alignItems: "center", gap: 4 }}>
-                      <Check style={{ width: 12, height: 12 }} /> stays on
-                    </span>
-                  ) : (
-                    <span style={{ color: "var(--warn)" }}>taken — the guest moves out of it on {fmtDay(preview!.currentCheckOut)}</span>
-                  )}
-                </div>
-              ))}
-            </div>
-            {replacedRoom && (
-              <div style={row}>
-                <div className="field" style={{ ...fieldTight, minWidth: 300 }}>
-                  <label>
-                    Move Room {replacedRoom.roomNumber} to, from {fmtDay(preview!.currentCheckOut)}
-                  </label>
-                  <select
-                    value={moveTo}
-                    onChange={(e) => {
-                      setMoveTo(e.target.value);
-                      previewM.mutate({ to: e.target.value });
-                    }}
-                  >
-                    <option value="">— pick a free room —</option>
-                    {alternatives.map((c) => (
-                      <option key={c.roomId} value={c.roomId}>
-                        {c.roomNumber} · {c.roomTypeName}
-                        {c.sameType ? " (same type — rate carries)" : " (different type — published rate)"}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                {preview!.moves.length > 0 && (
-                  <span style={{ fontSize: 12, color: "var(--ink-2)", paddingBottom: 9 }}>
-                    {preview!.moves.some((m) => m.crossType)
-                      ? "Different type — the extra nights start at its published rate; adjust it in step 3 if needed."
-                      : "Same type — the negotiated rate carries to the extra nights."}
-                  </span>
-                )}
-              </div>
-            )}
-            {preview!.blockedReason && <p style={{ ...hint, color: "var(--warn)" }}>{preview!.blockedReason}</p>}
-            {preview!.guestOverlap && !preview!.guestOverlap.acknowledged && (
-              <div style={{ ...row, alignItems: "center" }}>
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-sm"
-                  disabled={!isFom || overlapAckM.isPending}
-                  title={isFom ? undefined : "The FOM acknowledges an overlap"}
-                  onClick={() => overlapAckM.mutate()}
-                >
-                  {overlapAckM.isPending ? "Recording…" : `Acknowledge the overlap with ${preview!.guestOverlap.entryId}`}
-                </button>
-                <Help label="About the overlap">Only when both bookings are meant — a duplicate should be cancelled instead.</Help>
-              </div>
-            )}
-          </>
-        ),
-      };
-
-  const pf = preview?.figures ?? null;
-  const moneyStep: StepItem = !roomsSettled
-    ? { key: "money", label: "Price & the payment to take now", state: "todo", summary: previewFresh ? "once the rooms are settled" : "after the check" }
-    : {
-        key: "money",
-        label: "Price & the payment to take now",
-        state: moneySettled ? "done" : "cur",
-        summary: moneySettled ? `due now ${money(dueNow ?? 0, currency)}` : "nothing would be due now — ask for a larger share",
-        body: (
-          <>
-            <Ledger
-              rows={[
-                {
-                  key: "stay",
-                  label: (
-                    <>
-                      Stay total <span style={{ color: "var(--ink-3)" }}>(room nights · {plural(extraNights, "night")} added)</span>
-                    </>
-                  ),
-                  value: (
-                    <>
-                      {preview!.pricing.priorStayTotal != null ? money(preview!.pricing.priorStayTotal, currency) : "—"} → <b>{money(preview!.pricing.projectedStayTotal, currency)}</b>
-                      {preview!.pricing.delta != null && (
-                        <span style={{ color: "var(--ink-3)" }}>
-                          {" "}
-                          ({preview!.pricing.delta >= 0 ? "+" : "−"}
-                          {money(Math.abs(preview!.pricing.delta), currency)})
-                        </span>
-                      )}
-                    </>
-                  ),
-                },
-                pf && pf.otherChargesSoFar > 0 && { key: "other", label: "Other charges on the folio so far", value: money(pf.otherChargesSoFar, currency) },
-                pf && { key: "proj", label: "Projected total at checkout", value: money(pf.projectedTotal, currency), kind: "total" as const },
-                {
-                  key: "ask",
-                  kind: "ask" as const,
-                  label: (
-                    <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                      Ask the guest now for
-                      <AskInline
-                        mode={mode}
-                        value={value}
-                        onChange={(p) => {
-                          if (p.mode) setMode(p.mode);
-                          if (p.value !== undefined) setValue(p.value);
-                        }}
-                      />
-                      {mode === "PERCENT" ? "of the projected total" : ""}
-                    </span>
-                  ),
-                  value: pf?.askAmount != null ? money(pf.askAmount, currency) : "—",
-                },
-                pf && pf.receivedSoFar > 0 && { key: "recv", label: "Already received", value: money(pf.receivedSoFar, currency), kind: "minus" as const },
-                { key: "due", label: "Due now", value: money(dueNow ?? 0, currency), kind: "total" as const },
-                pf && pf.balanceAtCheckout != null && { key: "bal", label: "Left to pay at checkout", value: money(pf.balanceAtCheckout, currency), kind: "muted" as const },
-              ]}
-            />
-            {(dueNow ?? 0) <= 0 && Number(value) > 0 && (
-              <p style={{ ...hint, color: "var(--warn)" }}>What the guest already paid covers this share — raise the ask to bill anything now.</p>
-            )}
-            {preview!.pricing.discount && <p style={hint}>The booking&rsquo;s {preview!.pricing.discount.effectivePercent}% discount is carried onto the extra nights.</p>}
-            <div style={{ ...row, alignItems: "center" }}>
-              <button type="button" className={`btn btn-ghost btn-sm${negotiate ? " on" : ""}`} onClick={() => setNegotiate((v) => !v)}>
-                {negotiate ? "Hide the rate table" : "Negotiate the extra nights' rates"}
-              </button>
-              <Help label="About the rates">Optional. The same room keeps its negotiated rate; a different room type starts at its published rate.</Help>
-            </div>
-            {negotiate && extensionRoomIds.length > 0 && (
-              <RoomCompositionPlanner
-                tableOnly
-                sealedRoomIds={extensionRoomIds}
-                entryCheckIn={entry.checkInDate ?? null}
-                entryCheckOut={preview!.newCheckOut}
-                entryAdults={entry.adultCount ?? entry.guestCount ?? null}
-                entryChildAges={entry.childAges ?? null}
-                entryId={entry.id}
-                lockCommercial={false}
-                initialCompositions={preview!.compositions.filter((c) => extensionRoomIds.includes(c.roomId))}
-                onChange={setTableComps}
-              />
-            )}
-          </>
-        ),
-      };
-
-  const holdHours = preview ? Math.round(preview.holdTtlSeconds / 3600) : null;
-  const requestStep: StepItem = {
-    key: "request",
-    label: "Hold the nights & generate the bill",
-    state: moneySettled ? "cur" : "todo",
-    summary: moneySettled ? undefined : "after the steps above",
-    body: moneySettled ? (
-      <>
-        <div style={row}>
-          <div className="field" style={{ ...fieldTight, flex: 1, minWidth: 240 }}>
-            <label>Reason (goes on the audit trail)</label>
-            <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. guest's flight moved to the 28th" />
-          </div>
-          <button type="button" className="btn btn-primary btn-sm" disabled={!canRequest || requestM.isPending} onClick={() => setConfirmOpen(true)}>
-            Hold the nights &amp; generate the bill
-          </button>
-        </div>
-        <p style={hint}>
-          {reason.trim().length === 0 ? "Type the reason to continue." : null}
-          <Help label="About holding the nights">
-            Holds the extra nights for the guest{holdHours ? ` for ${holdHours} h` : ""} and generates the interim bill. Nothing on the booking
-            changes until the bill is paid and you commit the extension.
-          </Help>
-        </p>
-      </>
-    ) : undefined,
-  };
-
-  // ── The open request's checklist ──
-  const cd = active && active.state !== "PAID" ? countdownTo(active.holdExpiresAt) : null;
-  const activeDueBy = active?.interimPayment?.dueBy ?? null;
-  const activeOverdue = !!active && active.state !== "PAID" && !!activeDueBy && new Date(activeDueBy).getTime() < Date.now();
-  const heldStep: StepItem | null = active
-    ? {
-        key: "held",
-        label: "Extra nights held for the guest",
-        state: "done",
-        summary: active.state === "PAID" ? "held until the extension commits" : `until ${fmtWhen(active.holdExpiresAt)} (${cd ? heldLeft(cd) : ""}) — released if unpaid by then`,
-      }
-    : null;
-  const commitStep: StepItem | null = active
-    ? active.state === "PAID"
-      ? {
-          key: "commit",
-          label: "Commit the extension",
-          state: "cur",
-          body: (
-            <div style={{ ...row, alignItems: "center" }}>
-              <button
-                type="button"
-                className="btn btn-primary btn-sm"
-                disabled={!isFom || commitM.isPending}
-                onClick={() => setCommitOpen(true)}
-                title="New pass, re-freeze with the new checkout, back here"
-              >
-                {commitM.isPending ? "Committing…" : "Commit extension"}
-              </button>
-              {isFom ? (
-                <Help label="About committing">
-                  Re-freezes the booking with the new checkout and brings it back to the Stay step. Nothing is sent to the guest.
-                </Help>
-              ) : (
-                <span style={hint}>Needs the FOM.</span>
-              )}
-            </div>
-          ),
-        }
-      : { key: "commit", label: "Commit the extension", state: "todo", summary: "after the payment is in — the booking keeps its current checkout until then" }
-    : null;
-
-  return (
-    <div className="block">
-      <BlockH expanded={expanded} onToggle={() => setExpanded((v) => !v)}>
-        <CalendarPlus style={{ width: 13, height: 13 }} />
-        Extend the stay
-        <Help label="About extending">
-          More nights for an in-house guest. Check the rooms, bill the guest for a share of the stay, take that payment, then commit — the
-          checkout moves only at the commit. The FOM&rsquo;s act.
-        </Help>
-        {active && <span className={EXT_TAG[active.state]?.cls ?? "tag"}>{EXT_TAG[active.state]?.label ?? active.state}</span>}
-        {activeOverdue && <span className="tag stop">Payment overdue</span>}
-      </BlockH>
-      {expanded && (
-      <>
-
-      {active ? (
-        <div style={{ display: "grid", gap: 8 }}>
-          <div className="fact b-transit" style={{ padding: "7px 11px", fontSize: 12.5, width: "100%", display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
-            <span>
-              Check-out <b>{fmtDay(active.priorCheckOutDate)}</b> → <b>{fmtDay(active.newCheckOutDate)}</b> ({plural(new Set(active.extraNights.map((n) => n.date)).size, "more night")})
-            </span>
-            <span>{movesText(active.pricingPreview?.moves, active.priorCheckOutDate) ?? `Same room${new Set(active.extraNights.map((n) => n.roomId)).size > 1 ? "s" : ""} — the guest stays put`}</span>
-            {active.pricingPreview?.pricing && (
-              <span>
-                Stay total {money(active.pricingPreview.pricing.priorStayTotal ?? 0, currency)} → <b>{money(active.pricingPreview.pricing.projectedStayTotal, currency)}</b>
-              </span>
-            )}
-            {cd && (
-              <span className={`tag ${cd.level}`} title="The extra nights are held for the guest until this runs out unpaid">
-                Held · {heldLeft(cd)}
-              </span>
-            )}
-            <span style={{ color: "var(--ink-3)" }}>Reason: {active.reason}</span>
-          </div>
-          {active.interimPayment ? (
-            <InterimRequestPanel
-              entryId={entryId}
-              request={{ ...(active.interimPayment as unknown as InterimPaymentRow), payments: [] }}
-              recipient={recipient}
-              onChanged={() => onChanged?.()}
-              canWithdraw={false}
-              leadSteps={heldStep ? [heldStep] : []}
-              tailSteps={commitStep ? [commitStep] : []}
-            />
-          ) : (
-            <StepList steps={[heldStep!, commitStep!]} />
-          )}
-          <div style={{ display: "flex", justifyContent: "flex-end" }}>
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              disabled={!isFom || withdrawM.isPending}
-              onClick={() => withdrawM.mutate()}
-              title={isFom ? "Drops the request: the extra nights are released and the bill is superseded" : "Needs FOM (L2+)"}
-            >
-              Withdraw extension
-            </button>
-          </div>
-          <DeskConfirmModal
-            open={commitOpen}
-            title="Commit the stay extension"
-            subtitle={`Check-out ${fmtDay(active.priorCheckOutDate)} → ${fmtDay(active.newCheckOutDate)}`}
-            why="The payment is in. Committing makes the booking's papers again for the longer stay — a new quotation and a new reservation with the new check-out date — and brings the booking back to the Stay step."
-            consequences={[
-              "A new reservation is made with the new check-out date; the earlier one is kept as it was. The extra nights are added to the night audit.",
-              active.pricingPreview?.moves?.length
-                ? `On ${fmtDay(active.priorCheckOutDate)} the guest moves room — execute it that day from the Rooms block (key swap).`
-                : "Nobody moves rooms; the current room runs on to the new checkout.",
-              voucherReplyAsked
-                ? "Nothing is sent to the guest — the re-issued voucher states the new dates; the request itself is the guest's answer."
-                : "Nothing is sent to the guest — the re-issued voucher states the new dates.",
-            ]}
-            confirmLabel="Commit extension"
-            pending={commitM.isPending}
-            onConfirm={() => commitM.mutate()}
-            onClose={() => setCommitOpen(false)}
-          />
-        </div>
-      ) : !isFom ? (
-        <p style={hint}>Extending a stay needs FOM (L2+).</p>
-      ) : entry.currentStage !== "S7" ? (
-        <p style={hint}>A stay is extended from the Stay step.</p>
-      ) : (
-        <>
-          <StepList steps={[dateStep, roomsStep, moneyStep, requestStep]} />
-          {preview && (
-            <DeskConfirmModal
-              open={confirmOpen}
-              title="Hold the nights & generate the bill"
-              subtitle={`Check-out ${fmtDay(preview.currentCheckOut)} → ${fmtDay(preview.newCheckOut)}`}
-              why="The extra nights are held for the guest while the bill goes out and the payment comes in. Nothing about the booking changes until you commit — after the money."
-              consequences={[
-                `The extra nights are claimed for this guest for ${Math.round(preview.holdTtlSeconds / 3600)} hours — other bookings see them as held; they release if unpaid by then.`,
-                `An interim invoice for ${money(preview.figures.dueNow ?? 0, currency)} (${preview.figures.askLabel}) is generated — send it, ${billReplyAsked ? "record the answer, " : ""}log the payment.`,
-                "Commit the extension once paid; the booking re-freezes with the new checkout and comes back here.",
-              ]}
-              confirmLabel="Hold the nights & generate the bill"
-              pending={requestM.isPending}
-              onConfirm={() => requestM.mutate()}
-              onClose={() => setConfirmOpen(false)}
-            />
-          )}
-        </>
-      )}
-
-      {history.length > 0 && (
-        <div style={{ marginTop: 10, display: "grid", gap: 2 }}>
-          <div style={miniHeading}>Earlier extensions</div>
-          {history.map((r) => (
-            <div key={r.id} style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12, padding: "4px 0", borderTop: "1px dashed var(--line)" }}>
-              <span className={EXT_TAG[r.state]?.cls ?? "tag"}>{EXT_TAG[r.state]?.label ?? r.state}</span>
-              <span>
-                Check-out {fmtDay(r.priorCheckOutDate)} → {fmtDay(r.newCheckOutDate)} · {r.reason}
-              </span>
-              <span style={{ color: "var(--ink-3)", marginLeft: "auto" }}>{(r.committedAt ?? r.closedAt ?? r.requestedAt).slice(0, 10)}</span>
             </div>
           ))}
         </div>

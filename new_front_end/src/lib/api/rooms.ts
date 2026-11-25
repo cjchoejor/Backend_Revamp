@@ -94,6 +94,7 @@ export type RoomChartBooking = {
     callerLastName: string | null;
     callerPhone: string | null;
     callerEmail: string | null;
+    deskTag?: string | null;
   } | null;
   partyName: string | null;
 };

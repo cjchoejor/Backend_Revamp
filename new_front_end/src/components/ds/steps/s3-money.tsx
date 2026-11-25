@@ -297,16 +297,20 @@ export function PaymentPlanCard({
               meta={
                 status.requirementSource === "PARTY"
                   ? `${basis?.partyName ?? "their"} rule`
-                  : status.requirementSource === "OPERATOR"
-                    ? "set for this booking"
-                    : undefined
+                  : status.requirementSource === "RENT"
+                    ? "paid like rent"
+                    : status.requirementSource === "OPERATOR"
+                      ? "set for this booking"
+                      : undefined
               }
             >
               {status.requirementSource === "NONE"
                 ? "no advance asked"
-                : basis?.mode === "PERCENT"
-                  ? `advance ${basis.percent}% of the quotation`
-                  : "a flat advance"}
+                : status.requirementSource === "RENT"
+                  ? `the first ${basis?.plan === "WEEKLY" ? "week" : "month"}'s rent${basis?.periodWords ? ` · ${basis.periodWords}` : ""}`
+                  : basis?.mode === "PERCENT"
+                    ? `advance ${basis.percent}% of the quotation`
+                    : "a flat advance"}
             </Fact>
             <Fact
               k="Amount"
@@ -453,7 +457,7 @@ export function PaymentPlanCard({
             <ol className="money-steps">
               <MoneyStep n={1} state={stepState(0)}>
             <ActionRow
-              label={status?.requirementSource === "OPERATOR" || status?.requirementSource === "PARTY" || plan ? "Change the advance" : "Set the advance"}
+              label={status?.requirementSource === "OPERATOR" || status?.requirementSource === "PARTY" || status?.requirementSource === "RENT" || plan ? "Change the advance" : "Set the advance"}
               caption="How much the guest pays, and how and when. The proforma prints both, so a change issues it again."
               onClick={() => setOpen("advance")}
             />
@@ -518,7 +522,8 @@ type MoneyStepState = "done" | "now" | "later";
 
 /** A stay the advance box or the credit box is for. */
 type AdvanceStay = { entry: EntryDetail; stayNo: number; status: PaymentStatusSummary | undefined };
-const pinnedOf = (st: PaymentStatusSummary | undefined) => (st?.requirementSource === "OPERATOR" || st?.requirementSource === "PARTY" ? st.requirementBasis : null);
+const pinnedOf = (st: PaymentStatusSummary | undefined) =>
+  st?.requirementSource === "OPERATOR" || st?.requirementSource === "PARTY" || st?.requirementSource === "RENT" ? st.requirementBasis : null;
 const pinnedModeOf = (st: PaymentStatusSummary | undefined): AmountMode | null => {
   const pin = pinnedOf(st);
   return pin ? (pin.mode === "AMOUNT" ? "AMOUNT" : "PERCENT") : null;
@@ -742,7 +747,7 @@ function AdvanceDialog({
         many
           ? `Asked now: ${list.map((x) => `stay ${x.stayNo} ${money(x.status?.requiredAmount ?? 0)}`).join(" · ")}`
           : status
-            ? `Asked now: ${money(status.requiredAmount)} · ${status.requirementSource === "OPERATOR" ? "set for this booking" : status.requirementSource === "PARTY" ? `${status.requirementBasis?.partyName ?? "the party"}'s rule` : "nothing asked"}`
+            ? `Asked now: ${money(status.requiredAmount)} · ${status.requirementSource === "OPERATOR" ? "set for this booking" : status.requirementSource === "PARTY" ? `${status.requirementBasis?.partyName ?? "the party"}'s rule` : status.requirementSource === "RENT" ? `the first ${status.requirementBasis?.plan === "WEEKLY" ? "week" : "month"}'s rent` : "nothing asked"}`
             : "Nothing read yet",
       ]}
       help="The proforma prints the amount and how the guest will pay, so a change issues it again — to send again."

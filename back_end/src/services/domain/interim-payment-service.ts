@@ -626,6 +626,12 @@ export async function recordInterimPayment(
   actor: Actor,
   requestId: string,
   input: { amount: number; paymentMethod?: string | null; bankName?: string | null; journalNumber?: string | null; notes?: string | null },
+  /**
+   * Paid at the desk (2026-11-25, operator: on Extend the stay, "if paying, we need the proper payment
+   * fields"): the guest is in front of the desk, so a bill not sent yet is recorded as handed over
+   * there — nothing is emailed, and no answer is asked, since paying is the answer. Internal only.
+   */
+  opts?: { atDesk?: boolean },
 ) {
   if (!Number.isFinite(input.amount) || input.amount <= 0) throw new ValidationError("Payment amount must be a positive number");
   const out = await prisma.$transaction(async (tx) => {
@@ -638,18 +644,54 @@ export async function recordInterimPayment(
     if (req.state === "WITHDRAWN" || req.state === "LAPSED") throw new ValidationError(`This interim request was ${req.state.toLowerCase()}`);
     if (req.state === "SUGGESTED") throw new ValidationError("Put a figure on the interim payment first — no bill has been generated yet");
     enforceInterimPaymentStage({ currentStage: req.entry.currentStage, folioState: req.folio.state });
-    enforceInterimInvoiceDispatchedBeforePayment({ invoice: req.invoice ? { state: req.invoice.state, dispatchedAt: req.invoice.dispatchedAt } : null });
-    // The interim bill in force — a replaced one's answer is never demanded (2026-10-13).
-    const latestComm = await latestDispatchedInForce(tx, {
-      entryId: req.entryId,
-      commType: "INTERIM_INVOICE",
-      since: req.requestedAt,
+    let handedOverAtDesk = false;
+    if (opts?.atDesk && req.invoice && req.invoice.state === InvoiceState.DRAFT) {
+      const at = new Date();
+      await tx.invoice.update({
+        where: { id: req.invoice.id },
+        data: {
+          state: InvoiceState.DISPATCHED,
+          dispatchedAt: at,
+          dispatchedBy: actor.actorId,
+          dispatchedTo: null,
+          metadata: { ...((req.invoice.metadata as object | null) ?? {}), handedOverAtDesk: true, dispatchedBy: actor.actorId, dispatchedAt: at.toISOString() } as Prisma.InputJsonValue,
+        },
+      });
+      await markInterimInvoiceDispatchedTx(tx, req.invoice.id, at);
+      await tx.traceEvent.create({
+        data: {
+          eventType: "INTERIM_PAYMENT.BILL_HANDED_OVER_AT_DESK",
+          actorId: actor.actorId,
+          actorLevel: actor.actorLevel,
+          entityType: "Invoice",
+          entityId: req.invoice.id,
+          operation: "UPDATE",
+          timestamp: at,
+          stageContext: Stage.S7,
+          inquiryId: req.entry.inquiryId,
+          entryId: req.entryId,
+          payload: { invoiceId: req.invoice.id, interimPaymentRequestId: req.id, stayExtensionRequestId: req.stayExtensionRequestId, emailed: false } as Prisma.InputJsonValue,
+          createdBy: actor.actorId,
+        },
+      });
+      handedOverAtDesk = true;
+    }
+    enforceInterimInvoiceDispatchedBeforePayment({
+      invoice: handedOverAtDesk ? { state: InvoiceState.DISPATCHED, dispatchedAt: new Date() } : req.invoice ? { state: req.invoice.state, dispatchedAt: req.invoice.dispatchedAt } : null,
     });
-    // The interim invoice is always dispatched through `dispatchInvoice`, which mints the
-    // communication — a missing one means the bill never went out (caught above).
-    enforceInterimGuestAnswerRecordedBeforePayment({
-      latestDispatchedInterimComm: latestComm ?? { acknowledgementStatus: "PENDING" },
-    });
+    if (!handedOverAtDesk) {
+      // The interim bill in force — a replaced one's answer is never demanded (2026-10-13).
+      const latestComm = await latestDispatchedInForce(tx, {
+        entryId: req.entryId,
+        commType: "INTERIM_INVOICE",
+        since: req.requestedAt,
+      });
+      // The interim invoice is always dispatched through `dispatchInvoice`, which mints the
+      // communication — a missing one means the bill never went out (caught above).
+      enforceInterimGuestAnswerRecordedBeforePayment({
+        latestDispatchedInterimComm: latestComm ?? { acknowledgementStatus: "PENDING" },
+      });
+    }
 
     const now = new Date();
     const bank = await cleanPaymentBank(tx, { method: input.paymentMethod?.trim() || "CASH", bankName: input.bankName, journalNumber: input.journalNumber });
@@ -799,6 +841,10 @@ export async function maybePromptInterimPaymentTx(
   tx: Tx,
   input: { entryId: string; folioId: string; operatingDate: Date; actorId: string },
 ) {
+  // An apartment let by the month or the week asks its rent at the start of each period instead
+  // (2026-11-25) — never on the every-few-nights rule as well.
+  const rent = await maybePromptRentTx(tx, input);
+  if (rent.apartment) return rent.created;
   type Schedule = { enabled?: boolean; everyNights?: number; minimumOutstanding?: number };
   let schedule: Schedule = { enabled: true, everyNights: 7, minimumOutstanding: 0 };
   try {
@@ -885,6 +931,113 @@ export async function maybePromptInterimPaymentTx(
     },
   });
   return created;
+}
+
+/**
+ * The rent of an apartment, asked like rent (2026-11-25, operator: "the money is asked like rent, at
+ * the start of each period"). The first month or week is the advance at Set up; each later one is
+ * raised here, by the audit of the night before it starts, so it is on the Stay step the morning the
+ * period begins. The ask is the rent THROUGH that period with its service charge and GST, exactly as
+ * the booking was priced (the reservation's frozen terms): when the bill is made, what was already
+ * received comes off it, so a period left unpaid is caught up and an advance paid ahead is counted.
+ * Raised once per period; an open ask already on the desk is replaced by it when its bill is made.
+ * `apartment: false` → not such a booking, and the every-few-nights rule decides.
+ */
+async function maybePromptRentTx(
+  tx: Tx,
+  input: { entryId: string; folioId: string; operatingDate: Date; actorId: string },
+): Promise<{ apartment: boolean; created: Awaited<ReturnType<Tx["interimPaymentRequest"]["create"]>> | null }> {
+  const entry = await tx.entry.findUnique({
+    where: { id: input.entryId },
+    select: {
+      inquiryId: true,
+      status: true,
+      currentStage: true,
+      useType: true,
+      apartmentPlan: true,
+      checkInDate: true,
+      reservation: { select: { frozenCheckInDate: true, frozenCommercialTerms: true } },
+      segments: { orderBy: { segmentNumber: "desc" }, take: 1, select: { id: true } },
+    },
+  });
+  if (!entry || String(entry.useType) !== "APARTMENT" || !entry.apartmentPlan) return { apartment: false, created: null };
+  const { rentScheduleFromTerms } = await import("../../lib/apartment-rent.js");
+  const schedule = rentScheduleFromTerms(entry.reservation?.frozenCommercialTerms ?? null);
+  if (schedule.length === 0) return { apartment: false, created: null };
+  const none = { apartment: true, created: null };
+  if (entry.status !== "ACTIVE" || entry.currentStage !== Stage.S7) return none;
+
+  const next = new Date(input.operatingDate.getTime() + DAY_MS).toISOString().slice(0, 10);
+  const index = schedule.findIndex((x) => x.from === next);
+  if (index < 1) return none;
+  const period = schedule[index];
+  const checkIn = entry.reservation?.frozenCheckInDate ?? entry.checkInDate;
+  const nightsSlept = checkIn ? Math.round((input.operatingDate.getTime() - checkIn.getTime()) / DAY_MS) + 1 : 0;
+  // Once a period: the prompt for this night is never raised twice (a night posted again, a catch-up).
+  const already = await tx.interimPaymentRequest.findFirst({
+    where: { entryId: input.entryId, kind: "LONG_STAY", nightsSleptAtPrompt: nightsSlept },
+    select: { id: true },
+  });
+  if (already) return none;
+
+  const through = round2(schedule.slice(0, index + 1).reduce((t, x) => t.add(x.total), ZERO));
+  const words = `The rent for ${period.words}`;
+  const now = new Date();
+  // An older night-audit prompt still waiting for a figure is this one, now with its figure.
+  const waiting = await tx.interimPaymentRequest.findFirst({
+    where: { entryId: input.entryId, kind: "LONG_STAY", state: "SUGGESTED" },
+    orderBy: { createdAt: "desc" },
+    select: { id: true },
+  });
+  const data = {
+    askMode: "AMOUNT",
+    askValue: new Prisma.Decimal(through.toFixed(2)),
+    note: words,
+    nightsSleptAtPrompt: nightsSlept,
+    requestedAt: now,
+  };
+  const created = waiting
+    ? await tx.interimPaymentRequest.update({ where: { id: waiting.id }, data })
+    : await tx.interimPaymentRequest.create({
+        data: {
+          ...data,
+          entryId: input.entryId,
+          folioId: input.folioId,
+          segmentId: entry.segments[0]?.id ?? null,
+          kind: "LONG_STAY",
+          state: "SUGGESTED",
+          promptedBy: "NIGHT_AUDIT",
+          requestedBy: null,
+        },
+      });
+  await tx.traceEvent.create({
+    data: {
+      eventType: "INTERIM_PAYMENT.RENT_DUE",
+      actorId: "SYSTEM",
+      actorLevel: "SYSTEM",
+      entityType: "InterimPaymentRequest",
+      entityId: created.id,
+      operation: waiting ? "UPDATE" : "CREATE",
+      timestamp: now,
+      stageContext: Stage.S7,
+      inquiryId: entry.inquiryId,
+      entryId: input.entryId,
+      payload: {
+        entryId: input.entryId,
+        plan: period.plan,
+        periodFrom: period.from,
+        periodTo: period.to,
+        periodWords: period.words,
+        periodRent: Number(period.total.toFixed(2)),
+        rentThroughPeriod: Number(through.toFixed(2)),
+        period: index + 1,
+        periods: schedule.length,
+        operatingDate: input.operatingDate.toISOString().slice(0, 10),
+      } as Prisma.InputJsonValue,
+      createdBy: "SYSTEM",
+    },
+  });
+  return { apartment: true, created };
 }
 
 /** The Stay step's view: every request (newest first) + today's figures with no ask. */

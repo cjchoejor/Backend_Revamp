@@ -11,6 +11,7 @@
 
 import { cleanPhone, loosePhone } from "../phone-numbers.js";
 import { splitTitle } from "../person-name.js";
+import { ValidationError } from "../errors.js";
 
 export type CoordinatorContact = { title?: string | null; name: string; phone?: string | null; email?: string | null };
 
@@ -56,13 +57,39 @@ export function normalizeCoordinators(v: unknown): CoordinatorContact[] {
   return out;
 }
 
+/** What an email has to look like: something, an @, something with a dot in it. The desk checks the same. */
+export const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/**
+ * An email a person typed for a contact: empty is none; one that does not read as an email is refused in
+ * words naming whose it is (2026-11-25, found on the hotel's KNG Reservation: a contact saved with
+ * "17551410" in the email box stopped every new inquiry through that agency, with nothing on screen
+ * saying why). A number typed there is said to be one, since that is the usual slip.
+ */
+export function cleanContactEmail(raw: string | null | undefined, whose: string): string | null {
+  const email = typeof raw === "string" ? raw.trim() : "";
+  if (!email) return null;
+  if (EMAIL_SHAPE.test(email)) return email;
+  const looksLikeNumber = /^[+\d][\d\s()-]{5,}$/.test(email);
+  throw new ValidationError(
+    looksLikeNumber
+      ? `${whose} email "${email}" is a phone number, not an email — put it under Phone and leave Email empty`
+      : `${whose} email "${email}" does not read as an email — it needs an @ and a name after it, like name@agency.com`,
+  );
+}
+
 /**
  * The same, for a list a person is saving: a phone that cannot be read is refused in words, naming
- * whose it is, rather than kept (2026-11-05). A number that can be read is stored the one way.
+ * whose it is, rather than kept (2026-11-05). A number that can be read is stored the one way. An email
+ * that does not read as one is refused the same way (2026-11-25).
  */
 export function cleanCoordinators(v: unknown): CoordinatorContact[] {
   const list = normalizeCoordinators(v);
-  return list.map((c) => ({ ...c, phone: cleanPhone(c.phone, `${c.name}'s phone`) }));
+  return list.map((c) => ({
+    ...c,
+    phone: cleanPhone(c.phone, `${c.name}'s phone`),
+    email: cleanContactEmail(c.email, `${c.name}'s`),
+  }));
 }
 
 export type AppendContactResult = {

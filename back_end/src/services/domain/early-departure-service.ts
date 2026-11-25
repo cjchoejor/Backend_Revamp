@@ -9,10 +9,13 @@ import { transitionRoomClaimState } from "../../lib/room-claim-state.js";
 import { loadEntryDetail } from "../../lib/entry-detail-include.js";
 import { round2, toDecimal } from "../../lib/money.js";
 import { frozenCompositionByRoom, splitFrozenRow } from "../../lib/frozen-room-composition.js";
+import { periodWords, rentPeriods } from "../../lib/apartment-rent.js";
+import { lineTax } from "../../lib/stay-posting.js";
+import { NIGHT_AUDIT_ROOM_CHARGE_DESCRIPTION_PREFIX } from "../../lib/folio-tax-lines.js";
 import { effectiveCheckInDate, hotelTodayUtc, listNightYmdsUtc, nightsBetweenUtc, utcDateOnly, ymdUtc } from "../../lib/stay-dates.js";
 import { resolveChargeRates } from "../infrastructure/compute-stay-charges.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
-import { postCharge } from "./s7-folio-lines-service.js";
+import { correctCharge, postCharge } from "./s7-folio-lines-service.js";
 import { resolveBillingModelForNewLine } from "../../lib/billing-model-defaults.js";
 import { progressStageS7ToS8 } from "../../state-machines/entry-lifecycle-state-machine.js";
 import {
@@ -96,6 +99,11 @@ export interface EarlyDepartureRoomFigure {
   forgoneSubtotal: number;
   /** Tax-inclusive counterpart. */
   forgoneTotal: number;
+  /**
+   * An apartment's rent periods already posted that the stay cut short no longer owes in full
+   * (2026-11-25): each put right to the rent of the nights stayed, by the rent rule.
+   */
+  rentCorrections: Array<{ periodFrom: string; periodTo: string; postedNet: number; owedNet: number; owedWords: string | null }>;
   /** The row's frozen figures after the shortening (null on legacy flat rows, which carry none). */
   newFrozenSubtotal: number | null;
   newFrozenTotal: number | null;
@@ -286,7 +294,45 @@ export async function computeEarlyDepartureFigures(
     let newFrozenTotal: Prisma.Decimal | null = null;
     let rowForgoneSub: Prisma.Decimal;
     let rowForgoneTot: Prisma.Decimal;
-    if (!legacyFlatRate && totalNights > 0) {
+    const rent = composition.get(a.roomId)?.rent ?? null;
+    let rentFix: EarlyDepartureRoomFigure["rentCorrections"] = [];
+    if (!legacyFlatRate && totalNights > 0 && rent) {
+      // An apartment (2026-11-25, operator: "leaving early then do it as above"): the nights stayed
+      // are priced again by the rent rule — whole months or weeks, the rest as their share of the
+      // period they fall in — and the period already posted is put right to that. The existing fee
+      // is charged on top, as for any stay. ⚠️ Money: the rent rule's own figures, each a line.
+      const sub = toDecimal(a.frozenSubtotal);
+      const tot = a.frozenTotal != null ? toDecimal(a.frozenTotal) : round2(sub.mul(taxFactor));
+      const rule = { serviceChargeApplies: a.isFoc ? false : a.serviceChargeApplies !== false, gstApplies: a.isFoc ? false : a.gstApplies !== false, serviceChargeRate, gstRate };
+      const oldRentNet = rent.periods.reduce((t, p) => t.plus(p.net), new Prisma.Decimal(0));
+      const oldRentTotal = rent.periods.reduce((t, p) => {
+        const x = lineTax(p.net, rule);
+        return t.plus(p.net).plus(x.serviceCharge).plus(x.gst);
+      }, new Prisma.Decimal(0));
+      const keptPeriods = rent.periods.length && sleptNights > 0 && rent.rate ? rentPeriods(rent.plan, rowStart, sleptEnd, rent.rate) : [];
+      const newRentNet = keptPeriods.reduce((t, p) => t.plus(p.net), new Prisma.Decimal(0));
+      const newRentTotal = keptPeriods.reduce((t, p) => {
+        const x = lineTax(p.net, rule);
+        return t.plus(p.net).plus(x.serviceCharge).plus(x.gst);
+      }, new Prisma.Decimal(0));
+      const scale = new Prisma.Decimal(sleptNights).div(totalNights);
+      const mealsSub = sub.minus(oldRentNet);
+      const mealsTot = tot.minus(oldRentTotal);
+      perNightSubtotal = sub.div(totalNights);
+      perNightRoomSubtotal = oldRentNet.div(totalNights);
+      newFrozenSubtotal = round2(newRentNet.plus(round2(mealsSub.mul(scale))));
+      newFrozenTotal = round2(newRentTotal.plus(round2(mealsTot.mul(scale))));
+      rowForgoneSub = round2(sub.minus(newFrozenSubtotal));
+      rowForgoneTot = round2(tot.minus(newFrozenTotal));
+      // Every period whose rent changes — the one the guest leaves in, and any posted ahead of a
+      // night not slept (tonight's, posted at check-in), which comes to nothing.
+      rentFix = rent.periods
+        .map((p) => {
+          const kept = keptPeriods.find((k) => k.from === p.from);
+          return { periodFrom: p.from, periodTo: p.to, postedNet: Number(p.net), owedNet: kept ? Number(kept.net) : 0, owedWords: kept ? periodWords(kept, rent.plan) : null };
+        })
+        .filter((x) => x.owedNet !== x.postedNet);
+    } else if (!legacyFlatRate && totalNights > 0) {
       const sub = toDecimal(a.frozenSubtotal);
       const tot = a.frozenTotal != null ? toDecimal(a.frozenTotal) : round2(sub.mul(taxFactor));
       perNightSubtotal = sub.div(totalNights);
@@ -326,6 +372,7 @@ export async function computeEarlyDepartureFigures(
       newFrozenTotal: shortened && newFrozenTotal ? money(newFrozenTotal) : null,
       legacyFlatRate,
       shortened,
+      rentCorrections: shortened ? rentFix : [],
     });
   }
 
@@ -445,6 +492,9 @@ export interface EarlyDepartureOutcome {
   feePosted: boolean;
   feeLineId: string | null;
   feeError: string | null;
+  /** An apartment's rent periods put right to the nights stayed (2026-11-25), and any that could not be. */
+  rentCorrected: Array<{ roomNumber: string | null; periodFrom: string; from: number; to: number; lineId: string | null }>;
+  rentErrors: string[];
   movedToCheckout: boolean;
   checkoutBlocked: { code: string; message: string } | null;
   entry: Awaited<ReturnType<typeof loadEntryDetail>>;
@@ -623,6 +673,45 @@ export async function recordEarlyDeparture(
     });
   }
 
+  // --- An apartment's rent, put right to the nights stayed (2026-11-25) -------------------------
+  // The period the guest leaves in was posted whole on its first night; it is corrected to the rent
+  // of the nights stayed, with its service charge and GST moving with it. ⚠️ Money.
+  const rentCorrected: Array<{ roomNumber: string | null; periodFrom: string; from: number; to: number; lineId: string | null }> = [];
+  const rentErrors: string[] = [];
+  for (const r of figures.rooms) {
+    for (const c of r.rentCorrections ?? []) {
+      try {
+        const line = await prisma.folioLine.findFirst({
+          where: {
+            folioId,
+            roomId: r.roomId,
+            lineType: FolioLineType.ROOM_CHARGE,
+            chargeDate: new Date(`${c.periodFrom}T00:00:00.000Z`),
+            description: { startsWith: NIGHT_AUDIT_ROOM_CHARGE_DESCRIPTION_PREFIX },
+          },
+          orderBy: { postedAt: "asc" },
+          select: { id: true },
+        });
+        if (!line) {
+          // Not posted yet, and nothing owed for it: nothing to put right.
+          if (c.owedNet === 0) continue;
+          rentErrors.push(`Room ${r.roomNumber ?? ""}: the rent from ${c.periodFrom} is not on the bill to put right`);
+          continue;
+        }
+        const out = await correctCharge(prisma, folioId, actor.actorId, {
+          entryId,
+          originalFolioLineId: line.id,
+          reason: `Left early — the rent for the nights stayed${c.owedWords ? `: ${c.owedWords}` : ""}`,
+          correctToAmount: c.owedNet,
+          correctionDate: figures.departureDate,
+        });
+        rentCorrected.push({ roomNumber: r.roomNumber, periodFrom: c.periodFrom, from: c.postedNet, to: c.owedNet, lineId: (out as { id?: string } | null)?.id ?? null });
+      } catch (e) {
+        rentErrors.push(e instanceof Error ? e.message : String(e));
+      }
+    }
+  }
+
   // --- The fee, on the live folio (still S7 here) ---------------------------------------------
   let feePosted = false;
   let feeLineId: string | null = null;
@@ -710,6 +799,8 @@ export async function recordEarlyDeparture(
     feePosted,
     feeLineId,
     feeError,
+    rentCorrected,
+    rentErrors,
     movedToCheckout,
     checkoutBlocked,
     entry: await loadEntryDetail(prisma, entryId),

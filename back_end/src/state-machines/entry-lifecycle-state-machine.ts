@@ -316,6 +316,7 @@ export async function progressStageS6ToS7(
   keyCount: number | undefined,
   registrationConfirmed: boolean | undefined,
   issuedKeyRoomIds?: string[],
+  opts?: { actorLevel?: string | null; ageMismatchNote?: string | null },
 ) {
   return checkInService.completeCheckInToS7(
     prisma,
@@ -325,6 +326,7 @@ export async function progressStageS6ToS7(
     keyCount,
     registrationConfirmed,
     issuedKeyRoomIds,
+    opts,
   );
 }
 

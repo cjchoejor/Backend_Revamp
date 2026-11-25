@@ -10,6 +10,7 @@ import {
   findOverlappingBookingOfSameGuest,
   isMultiBookingAcknowledged,
 } from "../../policies/04-duplicate-detection/p13-multi-booking-ack-required.js";
+import { findRoomBookingConflicts } from "../../lib/room-booking-conflicts.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import { buildQuotationPreview } from "./quotation-preview-service.js";
 import { registerNightAuditTimers } from "./pre-arrival-service.js";
@@ -19,6 +20,7 @@ import {
   closeInterimForExtensionTx,
   computeInterimFigures,
   createInterimPaymentRequestTx,
+  recordInterimPayment,
   loadInterimReminderPolicy,
   resolveInterimDueBy,
   type InterimAsk,
@@ -27,11 +29,17 @@ import {
 } from "./interim-payment-service.js";
 import {
   changeRoomToNewSegment,
+  listRoomChangeCandidates,
   listRoomStandingForNights,
   type RoomChangeOutcome,
   type RoomStanding,
 } from "./room-change-service.js";
 import type { RoomCompositionServiceInput } from "./s2-quotation-service.js";
+import { buildEntryRateReference } from "./rate-reference-service.js";
+import { describeRoomHolders, type RoomHolder } from "./room-holders-service.js";
+import { agreedRatesByType, belowFloorRoomsOf } from "../../lib/msr-floor.js";
+import { belowMsrRefusalWords, mayPriceBelowMsr } from "../../policies/08-pricing-rate-plan/p19-msr-gm-waiver-below-msr-s2.js";
+import { cleanPaymentBank } from "../../lib/payment-bank.js";
 
 type Actor = { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" };
 const RANK: Record<string, number> = { L1: 1, L2: 2, L3: 3, L4: 4 };
@@ -67,7 +75,24 @@ export type StayExtensionPreview = {
   /** The resolved plan for the extra nights: [{ date, roomId }] (one per room per night). */
   plan: Array<{ date: string; roomId: string; roomNumber: string | null }>;
   /** Rooms in the plan that differ from the current rooms — a scheduled move on the old checkout day. */
-  moves: Array<{ fromRoomId: string; fromRoomNumber: string | null; toRoomId: string; toRoomNumber: string | null; crossType: boolean }>;
+  moves: Array<{
+    fromRoomId: string;
+    fromRoomNumber: string | null;
+    toRoomId: string;
+    toRoomNumber: string | null;
+    crossType: boolean;
+    /**
+     * A move to another room type (2026-11-25, operator: "the option to choose to charge with the same
+     * rate as before or new rate of the new room type for each room"): keeps the rate the guest has in
+     * the room they leave (`fromRate`, a night, net), or takes the new room's own rate (`toRate`).
+     * `keepFloor` is the new type's minimum when keeping goes under it and no price for that type is
+     * already agreed on this booking — then only the GM or an admin may keep it.
+     */
+    keepRate: boolean;
+    fromRate: number | null;
+    toRate: number | null;
+    keepFloor: number | null;
+  }>;
   /** The composition rows the projection priced — the seed for the desk's negotiation table. */
   compositions: RoomCompositionServiceInput[];
   pricing: {
@@ -87,6 +112,25 @@ export type StayExtensionPreview = {
    * refuses the extension unless an FOM has acknowledged the overlap on this booking.
    */
   guestOverlap: { entryId: string; checkIn: string; checkOut: string; acknowledged: boolean } | null;
+  /**
+   * Each of the guest's rooms that another booking holds on the extra nights, with who holds it and
+   * what the desk can do (2026-11-25, operator: "we need the swap feature here as well"). Either OUR
+   * guest moves to a free room from the old check-out (one room per extension — the `moves` above),
+   * or THEIR booking is given another room through the governed room move, so our guest keeps it.
+   */
+  takenRooms: TakenRoom[];
+};
+
+/** Who holds a room the extension needs — the shared reading (room-holders-service). */
+export type TakenRoomHolder = RoomHolder;
+
+export type TakenRoom = {
+  roomId: string;
+  roomNumber: string;
+  roomTypeName: string | null;
+  /** The extra nights it is taken on. */
+  nights: string[];
+  heldBy: TakenRoomHolder[];
 };
 
 function isoDay(d: Date): string {
@@ -136,6 +180,38 @@ async function loadExtensionEntry(prisma: PrismaClient, entryId: string) {
 }
 
 /**
+ * Who holds each of the guest's taken rooms on the extra nights, and where their booking could go
+ * instead (2026-11-25, the swap at Extend the stay). Read only: the move itself is the governed room
+ * move (`POST /room-moves`), which checks everything again. `ourRoomIds` are left out of the rooms
+ * offered — our guest needs them on the extra nights.
+ */
+async function describeTakenRooms(
+  prisma: PrismaClient,
+  input: { entryId: string; extraNights: string[]; newCheckOut: Date; taken: RoomStanding[]; ourRoomIds: Set<string> },
+): Promise<TakenRoom[]> {
+  if (input.taken.length === 0 || input.extraNights.length === 0) return [];
+  const holders = await describeRoomHolders(prisma, {
+    roomIds: input.taken.map((t) => t.roomId),
+    checkIn: utcMidnight(input.extraNights[0]!),
+    checkOut: input.newCheckOut,
+    excludeEntryId: input.entryId,
+    avoidRoomIds: input.ourRoomIds,
+  });
+  const out: TakenRoom[] = [];
+  for (const room of input.taken) {
+    const heldBy = holders.get(room.roomId) ?? [];
+    out.push({
+      roomId: room.roomId,
+      roomNumber: room.roomNumber,
+      roomTypeName: room.roomTypeName,
+      nights: room.perNight.filter((n) => n.status !== "FREE").map((n) => n.date),
+      heldBy,
+    });
+  }
+  return out;
+}
+
+/**
  * Preview — no writes. Availability of the current rooms over the extra nights (own claims
  * excluded), alternatives when taken, the projected price of the extended stay, and the
  * interim figures for the ask. Also the validation the request runs, so a refusal is named
@@ -149,6 +225,8 @@ export async function previewStayExtension(
     perNight?: Array<{ date: string; roomId: string }>;
     /** The current room `perNight` replaces (multi-room bookings); defaults to the taken one. */
     replaceRoomId?: string | null;
+    /** Several of our guest's rooms moving on the old checkout day (2026-11-25) — in place of perNight. */
+    moves?: Array<{ fromRoomId: string; toRoomId: string; keepRate?: boolean }>;
     roomCompositions?: RoomCompositionServiceInput[];
     requestedDiscount?: { discountPercent?: number; discountAmount?: number; discountBasis: string } | null;
     ask?: InterimAsk | null;
@@ -157,6 +235,10 @@ export async function previewStayExtension(
   const entry = await loadExtensionEntry(prisma, entryId);
   if (entry.currentStage !== Stage.S7) throw new ValidationError(`A stay is extended from the Stay step (S7) — this booking is at ${entry.currentStage}`);
   if (entry.status !== "ACTIVE") throw new ValidationError(`The booking is ${entry.status.toLowerCase()} — its record is read-only`);
+  {
+    const { refuseInHouseApartmentChange } = await import("./apartment-booking-service.js");
+    await refuseInHouseApartmentChange(prisma, entryId, "Extending the stay");
+  }
   const checkIn = entry.reservation?.frozenCheckInDate ?? entry.checkInDate;
   const currentCheckOut = entry.reservation?.frozenCheckOutDate ?? entry.checkOutDate;
   if (!checkIn || !currentCheckOut) throw new ValidationError("This booking has no stay dates");
@@ -202,13 +284,31 @@ export async function previewStayExtension(
     throw new ValidationError(`replaceRoomId must be one of the rooms the guest is in on the last night (${lastNightRoomIds.map((id) => byRoom.get(id)?.roomNumber ?? id.slice(0, 6)).join(", ")})`);
   }
   const takenCurrent = lastNightRoomIds.filter((id) => (byRoom.get(id)?.perNight ?? []).some((n) => n.status !== "FREE"));
+  // Several moves (2026-11-25): each named current room moves to its own free room on the old checkout
+  // day, for every extra night. Checked here, before anything is held: a room moves once, a free room
+  // takes one moving room, and a room of this booking is never a destination.
+  const moveList = (input.moves ?? []).map((m) => ({ fromRoomId: m.fromRoomId.trim(), toRoomId: m.toRoomId.trim(), keepRate: m.keepRate === true }));
+  if (moveList.length > 0 && overrides.size > 0) throw new ValidationError("Say the moves either as a list of moves or as one room per night — not both");
+  const roomNo = (id: string) => byRoom.get(id)?.roomNumber ?? id.slice(0, 6);
+  const moveTo = new Map<string, string>();
+  const keepRateOf = new Map(moveList.map((m) => [m.fromRoomId, m.keepRate]));
+  for (const m of moveList) {
+    if (!lastNightRoomIds.includes(m.fromRoomId)) {
+      throw new ValidationError(`Room ${roomNo(m.fromRoomId)} is not one of the rooms the guest is in on the last night (${lastNightRoomIds.map(roomNo).join(", ")})`);
+    }
+    if (moveTo.has(m.fromRoomId)) throw new ValidationError(`Room ${roomNo(m.fromRoomId)} is named twice — a room moves once`);
+    if (!byRoom.has(m.toRoomId)) throw new ValidationError(`Unknown room in the extension plan (${m.toRoomId.slice(0, 8)}…)`);
+    if (currentPlanRoomIds.includes(m.toRoomId)) throw new ValidationError(`Room ${roomNo(m.toRoomId)} is already part of this booking — pick a room outside it`);
+    if ([...moveTo.values()].includes(m.toRoomId)) throw new ValidationError(`Room ${roomNo(m.toRoomId)} is picked for two rooms — each moves to a room of its own`);
+    moveTo.set(m.fromRoomId, m.toRoomId);
+  }
   const replacedRoomId =
     overrides.size > 0
       ? (input.replaceRoomId ?? takenCurrent.find((id) => !overrideRooms.has(id)) ?? lastNightRoomIds.find((id) => !overrideRooms.has(id)) ?? lastNightRoomIds[0])
       : null;
   for (const date of extraNights) {
     for (const roomId of lastNightRoomIds) {
-      const target = roomId === replacedRoomId ? overrides.get(date) ?? roomId : roomId;
+      const target = moveTo.get(roomId) ?? (roomId === replacedRoomId ? overrides.get(date) ?? roomId : roomId);
       plan.push({ date, roomId: target, roomNumber: byRoom.get(target)?.roomNumber ?? null });
     }
   }
@@ -216,17 +316,26 @@ export async function previewStayExtension(
     if (!byRoom.has(p.roomId)) throw new ValidationError(`Unknown room in the extension plan (${p.roomId.slice(0, 8)}…)`);
   }
   const moves: StayExtensionPreview["moves"] = [];
+  const pushMove = (fromRoomId: string, toRoomId: string) => {
+    const from = byRoom.get(fromRoomId);
+    const to = byRoom.get(toRoomId);
+    const crossType = (from?.roomTypeId ?? null) !== (to?.roomTypeId ?? null);
+    moves.push({
+      fromRoomId,
+      fromRoomNumber: from?.roomNumber ?? null,
+      toRoomId,
+      toRoomNumber: to?.roomNumber ?? null,
+      crossType,
+      keepRate: crossType && keepRateOf.get(fromRoomId) === true,
+      fromRate: null,
+      toRate: null,
+      keepFloor: null,
+    });
+  };
+  for (const [fromRoomId, toRoomId] of moveTo) pushMove(fromRoomId, toRoomId);
   if (replacedRoomId) {
     for (const toRoomId of new Set(plan.filter((p) => p.roomId !== replacedRoomId && !lastNightRoomIds.includes(p.roomId)).map((p) => p.roomId))) {
-      const from = byRoom.get(replacedRoomId);
-      const to = byRoom.get(toRoomId);
-      moves.push({
-        fromRoomId: replacedRoomId,
-        fromRoomNumber: from?.roomNumber ?? null,
-        toRoomId,
-        toRoomNumber: to?.roomNumber ?? null,
-        crossType: (from?.roomTypeId ?? null) !== (to?.roomTypeId ?? null),
-      });
+      pushMove(replacedRoomId, toRoomId);
     }
   }
 
@@ -262,6 +371,32 @@ export async function previewStayExtension(
   const basis = resolveCompositionBasis<RoomCompositionServiceInput>(entry);
   const carried = (basis.compositions ?? []).map((c) => ({ ...c }));
   const extensionRoomIds = Array.from(new Set(plan.map((p) => p.roomId)));
+  // Each move to another type: the rate the guest has in the room they leave — the room's negotiated
+  // rate, else the rate it was priced at — and the new room's own rate, read off the rate reference
+  // the quotation itself resolves from (2026-11-25).
+  const crossMoves = moves.filter((m) => m.crossType);
+  if (crossMoves.length > 0) {
+    const num = (v: unknown) => (v == null || v === "" || !Number.isFinite(Number(v)) ? null : Number(v));
+    const pricedPerRoom = ((basis.terms as { compositionTotals?: { perRoom?: Array<{ roomId?: string; roomRate?: unknown }> } } | null)?.compositionTotals?.perRoom ?? []);
+    const ref = await buildEntryRateReference(prisma, entryId, {
+      planRoomIds: crossMoves.flatMap((m) => [m.fromRoomId, m.toRoomId]),
+      stay: { checkIn, checkOut: newCheckOut },
+    });
+    for (const m of crossMoves) {
+      const fromRef = ref.roomTypes.find((t) => t.roomTypeId === byRoom.get(m.fromRoomId)?.roomTypeId);
+      const toRef = ref.roomTypes.find((t) => t.roomTypeId === byRoom.get(m.toRoomId)?.roomTypeId);
+      m.fromRate =
+        num(carried.find((c) => c.roomId === m.fromRoomId)?.negotiatedRoomRate) ??
+        num(pricedPerRoom.find((r) => r.roomId === m.fromRoomId)?.roomRate) ??
+        num(fromRef?.roomRate);
+      m.toRate = num(toRef?.roomRate);
+      const floor = toRef?.roomRateSource === "STANDARD_RATE_PLAN" ? num(toRef.msrValue) : null;
+      const agreed = num(toRef?.agreedRate);
+      m.keepFloor =
+        m.fromRate != null && floor != null && floor > 0 && m.fromRate < floor && !(agreed != null && m.fromRate >= agreed) ? floor : null;
+      if (m.fromRate == null) m.keepRate = false;
+    }
+  }
   const rows: RoomCompositionServiceInput[] = carried.filter((c) => currentPlanRoomIds.includes(c.roomId));
   for (const roomId of extensionRoomIds) {
     if (rows.some((r) => r.roomId === roomId)) continue;
@@ -269,7 +404,9 @@ export async function previewStayExtension(
     const source = carried.find((c) => c.roomId === (move?.fromRoomId ?? lastNightRoomIds[0])) ?? carried[0];
     if (!source) continue;
     const { negotiatedRoomRate, nightMealOverrides, ...rest } = source;
-    rows.push({ ...rest, roomId, ...(move?.crossType ? {} : negotiatedRoomRate != null ? { negotiatedRoomRate } : {}) });
+    // Another type keeps the guest's rate only when the desk chose it; else it is priced at its own rate.
+    const rate = move?.crossType ? (move.keepRate && move.fromRate != null ? move.fromRate : null) : negotiatedRoomRate ?? null;
+    rows.push({ ...rest, roomId, ...(rate != null ? { negotiatedRoomRate: rate } : {}) });
   }
   if (input.roomCompositions?.length) {
     for (const supplied of input.roomCompositions) {
@@ -295,7 +432,11 @@ export async function previewStayExtension(
         roomCompositions: rows.map((c) => ({ ...c, nightMealOverrides: c.nightMealOverrides ?? [] })),
         discount: discountIn ? { percent: discountIn.discountPercent ?? null, amount: discountIn.discountAmount ?? null } : null,
       },
-      { stayOverride: { checkIn, checkOut: newCheckOut, perRoomNightCounts } },
+      // A room new to the booking is priced at its OWN type's rate (2026-11-25, a money finding:
+      // without it the preview priced a Suite our guest moves into at the booking's first room's
+      // Standard Single rate, so the amount asked was worked out on a smaller total than the
+      // extension's own quotation then charged).
+      { stayOverride: { checkIn, checkOut: newCheckOut, perRoomNightCounts }, planRoomIds: extensionRoomIds },
     );
     projected = {
       payable: preview.payable,
@@ -334,6 +475,15 @@ export async function previewStayExtension(
     blockedReason = `This guest already holds ${describeGuestOverlap(overlapRow)} over these nights — if both bookings are meant, the FOM acknowledges the overlap before the extension is held`;
   }
 
+  // Who holds the guest's taken rooms, and where their booking could go instead (the swap).
+  const takenRooms = await describeTakenRooms(prisma, {
+    entryId,
+    extraNights,
+    newCheckOut,
+    taken: lastNightRoomIds.map((id) => byRoom.get(id)).filter((s): s is RoomStanding => !!s && s.perNight.some((n) => n.status === "RESERVED" || n.status === "HELD")),
+    ourRoomIds: new Set([...currentPlanRoomIds, ...plan.map((p) => p.roomId)]),
+  });
+
   const ttlForPreview = await holdTtlSeconds(prisma);
   const reminderPolicy = await loadInterimReminderPolicy(prisma);
   const previewNow = new Date();
@@ -368,6 +518,7 @@ export async function previewStayExtension(
     reminder: { policy: reminderPolicy, defaultDueBy: defaultDueBy?.toISOString() ?? null },
     blockedReason,
     guestOverlap,
+    takenRooms,
   };
 }
 
@@ -387,18 +538,28 @@ export async function requestStayExtension(
     perNight?: Array<{ date: string; roomId: string }>;
     /** The current room `perNight` replaces (multi-room bookings); defaults to the taken one. */
     replaceRoomId?: string | null;
+    /** Several of our guest's rooms moving on the old checkout day (2026-11-25) — in place of perNight. */
+    moves?: Array<{ fromRoomId: string; toRoomId: string; keepRate?: boolean }>;
     roomCompositions?: RoomCompositionServiceInput[];
     requestedDiscount?: { discountPercent?: number; discountAmount?: number; discountBasis: string } | null;
-    reason: string;
-    ask: InterimAsk;
+    /** Optional since 2026-11-25 (the desk asks no reason for a change to a booking, as for a room change). */
+    reason?: string | null;
+    ask: InterimAsk | null;
     note?: string | null;
     /** When the extension's payment is expected (ISO). Omitted = before the held nights lapse (policy). */
     dueBy?: string | null;
+    /**
+     * When the guest pays (2026-11-25): BILL — a mid-stay bill, sent, then paid (the default); NOW — at
+     * the desk (`extendStayNow`); CHECKOUT — nothing now: no bill, the extra nights go on the bill for
+     * check-out.
+     */
+    payAt?: "BILL" | "NOW" | "CHECKOUT";
   },
 ) {
   requireFom(actor, "extend a stay");
-  const reason = input.reason?.trim();
-  if (!reason) throw new ValidationError("A reason for the extension is required");
+  const noBill = input.payAt === "CHECKOUT";
+  if (!noBill && !input.ask) throw new ValidationError("Say what the guest pays now");
+  const reason = input.reason?.trim() || "";
   const open = await prisma.stayExtensionRequest.findFirst({
     where: { entryId, state: { in: ["REQUESTED", "BILLED", "PAID"] } },
     select: { id: true, state: true, newCheckOutDate: true },
@@ -408,17 +569,20 @@ export async function requestStayExtension(
       `An extension to ${isoDay(open.newCheckOutDate)} is already ${open.state.toLowerCase()} — commit or withdraw it before requesting another`,
     );
   }
-  const preview = await previewStayExtension(prisma, entryId, { ...input, ask: input.ask });
+  const preview = await previewStayExtension(prisma, entryId, { ...input, ask: noBill ? null : input.ask });
   if (preview.blockedReason) throw new ValidationError(preview.blockedReason);
-  if (preview.figures.dueNow == null || preview.figures.dueNow <= 0) {
-    throw new ValidationError("The interim ask comes to nothing after what the guest has already paid — raise it, or commit the extension without a payment is not allowed");
+  // A room new to the booking under its type's minimum rate is the GM's or an admin's — asked now,
+  // before a night is held or a bill goes out, so it can never stop the extension after the guest paid.
+  await enforceNewRoomsFloor(prisma, entryId, preview.compositions, new Set(preview.moves.map((m) => m.toRoomId)), actor.actorLevel);
+  if (!noBill && (preview.figures.dueNow == null || preview.figures.dueNow <= 0)) {
+    throw new ValidationError("What the guest has already paid covers this ask — ask for more, or let them pay at check-out");
   }
   const ttl = preview.holdTtlSeconds;
   const now = new Date();
   const holdExpiresAt = new Date(now.getTime() + ttl * 1000);
   // Mid-stay payment reminder: the extension's bill is due before its held nights lapse.
   const reminderPolicy = await loadInterimReminderPolicy(prisma);
-  const dueBy = resolveInterimDueBy(reminderPolicy, { kind: "EXTENSION", now, holdExpiresAt, requested: input.dueBy ?? null });
+  const dueBy = noBill ? null : resolveInterimDueBy(reminderPolicy, { kind: "EXTENSION", now, holdExpiresAt, requested: input.dueBy ?? null });
   const entryRow = await prisma.entry.findUniqueOrThrow({
     where: { id: entryId },
     select: { inquiryId: true, segments: { orderBy: { segmentNumber: "desc" }, take: 1, select: { id: true } } },
@@ -435,19 +599,21 @@ export async function requestStayExtension(
         extraNights: preview.plan.map((p) => ({ date: p.date, roomId: p.roomId })) as Prisma.InputJsonValue,
         roomCompositions: preview.compositions as unknown as Prisma.InputJsonValue,
         requestedDiscount: (input.requestedDiscount ?? null) as Prisma.InputJsonValue,
-        pricingPreview: { pricing: preview.pricing, figures: preview.figures, moves: preview.moves } as Prisma.InputJsonValue,
+        pricingPreview: { pricing: preview.pricing, figures: preview.figures, moves: preview.moves, payAt: input.payAt ?? "BILL" } as Prisma.InputJsonValue,
         reason,
         holdExpiresAt,
         requestedBy: actor.actorId,
         requestedAt: now,
       },
     });
-    const interim = await createInterimPaymentRequestTx(tx, actor, {
+    const interim = noBill
+      ? null
+      : await createInterimPaymentRequestTx(tx, actor, {
       entryId,
       kind: "EXTENSION",
-      ask: input.ask,
+      ask: input.ask!,
       figures: preview.figures,
-      note: input.note ?? `Stay extension to ${preview.newCheckOut}: ${reason}`,
+      note: input.note ?? `Stay extension to ${preview.newCheckOut}${reason ? `: ${reason}` : ""}`,
       stayExtensionRequestId: request.id,
       dueBy,
     });
@@ -470,10 +636,11 @@ export async function requestStayExtension(
           extraNights: preview.plan,
           moves: preview.moves,
           projectedStayTotal: preview.pricing.projectedStayTotal,
-          dueNow: preview.figures.dueNow,
+          dueNow: noBill ? 0 : preview.figures.dueNow,
           holdExpiresAt: holdExpiresAt.toISOString(),
-          interimPaymentRequestId: interim.request.id,
-          invoiceId: interim.invoice.id,
+          interimPaymentRequestId: interim?.request.id ?? null,
+          invoiceId: interim?.invoice.id ?? null,
+          payAt: input.payAt ?? "BILL",
           reason,
         } as Prisma.InputJsonValue,
         createdBy: actor.actorId,
@@ -511,9 +678,9 @@ export async function requestStayExtension(
     /* the claim still expires by `holdExpiresAt` (the claim predicate reads it) — only the lapse bookkeeping waits */
   }
   // Reminder clock (W41): chase the extension's payment before the held nights lapse.
-  if (dueBy) await armInterimPaymentReminder(prisma, { requestId: created.interim.request.id, actorId: actor.actorId }).catch(() => {});
+  if (dueBy && created.interim) await armInterimPaymentReminder(prisma, { requestId: created.interim.request.id, actorId: actor.actorId }).catch(() => {});
 
-  return { request: created.request, interim: created.interim.request, invoice: created.interim.invoice, preview };
+  return { request: created.request, interim: created.interim?.request ?? null, invoice: created.interim?.invoice ?? null, preview };
 }
 
 async function cancelHoldTimer(prisma: PrismaClient, entryId: string, actorId: string, reason: string) {
@@ -616,7 +783,11 @@ export async function commitStayExtension(
     include: { interimPayment: true, entry: { select: { id: true, inquiryId: true, currentStage: true, status: true } } },
   });
   if (!req) throw new NotFoundError("StayExtensionRequest");
-  enforceExtensionPaidBeforeCommit({ extensionState: req.state, interimState: req.interimPayment?.state ?? null });
+  enforceExtensionPaidBeforeCommit({
+    extensionState: req.state,
+    interimState: req.interimPayment?.state ?? null,
+    paymentAsked: !!req.interimPayment || (req.pricingPreview as { payAt?: string } | null)?.payAt !== "CHECKOUT",
+  });
   if (req.entry.currentStage !== Stage.S7 || req.entry.status !== "ACTIVE") {
     throw new ValidationError(`The booking is at ${req.entry.currentStage} (${req.entry.status.toLowerCase()}) — an extension commits from the Stay step`);
   }
@@ -640,16 +811,28 @@ export async function commitStayExtension(
   const lastNightRoomIds = picture[picture.length - 1]?.roomIds ?? [];
   const extraRoomIds = Array.from(new Set(extraNights.map((n) => n.roomId)));
   const newRoomIds = extraRoomIds.filter((id) => !lastNightRoomIds.includes(id));
+  // The moves the request was priced with (2026-11-25: several rooms may move); an older request read
+  // as before — the one room left, into the one room new to the booking.
+  const storedMoves = ((req.pricingPreview as { moves?: Array<{ fromRoomId?: unknown; toRoomId?: unknown }> } | null)?.moves ?? [])
+    .filter((m): m is { fromRoomId: string; toRoomId: string } => typeof m?.fromRoomId === "string" && typeof m?.toRoomId === "string")
+    .filter((m) => lastNightRoomIds.includes(m.fromRoomId) && newRoomIds.includes(m.toRoomId));
   const replaced = lastNightRoomIds.find((id) => !extraRoomIds.includes(id)) ?? null;
-  const fromRoomId = replaced ?? lastNightRoomIds[0];
-  const toRoomId = newRoomIds[0] ?? null;
+  const extMoves =
+    storedMoves.length > 0 ? storedMoves : replaced && newRoomIds[0] ? [{ fromRoomId: replaced, toRoomId: newRoomIds[0] }] : [];
+  const fromRoomId = extMoves[0]?.fromRoomId ?? replaced ?? lastNightRoomIds[0];
+  const toRoomId = extMoves[0]?.toRoomId ?? newRoomIds[0] ?? null;
   if (!fromRoomId) throw new ValidationError("This booking has no room on its last night to extend");
+  // The extension's own quotation refuses a rate under the minimum unless the GM or an admin makes it;
+  // asked before the walk starts, which then cannot stop half way (2026-11-25).
+  if (Array.isArray(req.roomCompositions)) {
+    await enforceNewRoomsFloor(prisma, req.entryId, req.roomCompositions as unknown as RoomCompositionServiceInput[], new Set(newRoomIds), actor.actorLevel);
+  }
 
   const outcome = await changeRoomToNewSegment(prisma, actor, {
     entryId: req.entryId,
     fromRoomId,
     ...(toRoomId ? { toRoomId } : {}),
-    reason: reason?.trim() || req.reason,
+    reason: reason?.trim() || req.reason || undefined,
     roomCompositions: Array.isArray(req.roomCompositions) ? (req.roomCompositions as unknown as RoomCompositionServiceInput[]) : undefined,
     ...(req.requestedDiscount !== null && req.requestedDiscount !== undefined
       ? { requestedDiscount: req.requestedDiscount as { discountPercent?: number; discountAmount?: number; discountBasis: string } }
@@ -659,6 +842,7 @@ export async function commitStayExtension(
       priorCheckOutDate: req.priorCheckOutDate,
       newCheckOutDate: req.newCheckOutDate,
       extraNights,
+      moves: extMoves,
     },
   });
 
@@ -731,4 +915,102 @@ export async function listStayExtensions(prisma: PrismaClient, entryId: string) 
         }
       : null,
   }));
+}
+
+/**
+ * The rooms an extension brings into the booking, under their type's minimum rate (2026-11-25): only
+ * the GM or an admin may sell below it, unless this booking already agreed that price for the type.
+ * The rooms already in the booking are left out — their rates were agreed when they were booked.
+ */
+async function enforceNewRoomsFloor(
+  prisma: PrismaClient,
+  entryId: string,
+  compositions: RoomCompositionServiceInput[],
+  newRoomIds: Set<string>,
+  actorLevel: string | null | undefined,
+): Promise<void> {
+  if (mayPriceBelowMsr(actorLevel)) return;
+  const rows = compositions.filter((c) => newRoomIds.has(c.roomId));
+  if (rows.length === 0) return;
+  const below = await belowFloorRoomsOf(
+    prisma,
+    entryId,
+    rows.map((c) => ({ roomId: c.roomId, negotiatedRoomRate: c.negotiatedRoomRate != null ? Number(c.negotiatedRoomRate) : null, ratePackageId: c.ratePackageId ?? null, isFoc: c.isFoc ?? null })),
+  );
+  if (below.length === 0) return;
+  const agreed = await agreedRatesByType(prisma, entryId);
+  const uncovered = below.filter((r) => {
+    const a = agreed.get(r.roomTypeId);
+    return !(a && r.rate >= a.rate);
+  });
+  if (uncovered.length === 0) return;
+  throw new PolicyGateBlockedError(
+    "MSR_BREACH",
+    `${belowMsrRefusalWords(uncovered).replace(/\.\s*$/, "")} — charge the room's own rate, or ask the GM to keep the guest's rate`,
+  );
+}
+
+/**
+ * Extend the stay in one press (2026-11-25, operator: "need option to not pay and pay during the last
+ * check out as well, but if paying, we need the proper payment fields"):
+ *   NOW — the guest pays at the desk: the nights are held, the bill for them is made and recorded as
+ *         handed over (nothing emailed), the payment recorded with its method, bank and journal
+ *         number, and the stay extended;
+ *   CHECKOUT — nothing now: the nights are held with no bill and the stay extended at once; the
+ *         extra nights go on the bill for check-out.
+ * Each step is the ordinary one with every check it has. The payment's bank and journal number are
+ * checked before anything is held. A step refused after the hold leaves the extension where it
+ * stopped (held, or paid) for the desk to finish, and says so.
+ */
+export async function extendStayNow(
+  prisma: PrismaClient,
+  actor: Actor,
+  entryId: string,
+  input: Omit<Parameters<typeof requestStayExtension>[3], "payAt" | "ask"> & {
+    payAt: "NOW" | "CHECKOUT";
+    ask?: InterimAsk | null;
+    payment?: { paymentMethod: string; bankName?: string | null; journalNumber?: string | null; notes?: string | null } | null;
+  },
+): Promise<{
+  request: unknown;
+  outcome: RoomChangeOutcome | null;
+  paid: number | null;
+  stoppedAt: "PAYMENT" | "EXTEND" | null;
+  message: string | null;
+}> {
+  requireFom(actor, "extend a stay");
+  if (input.payAt === "NOW") {
+    if (!input.ask) throw new ValidationError("Say what the guest pays now");
+    if (!input.payment?.paymentMethod?.trim()) throw new ValidationError("Say how the guest paid");
+    await cleanPaymentBank(prisma, { method: input.payment.paymentMethod, bankName: input.payment.bankName, journalNumber: input.payment.journalNumber });
+  }
+  const held = await requestStayExtension(prisma, actor, entryId, { ...input, ask: input.payAt === "NOW" ? input.ask! : null, payAt: input.payAt });
+  let paid: number | null = null;
+  if (input.payAt === "NOW" && held.interim) {
+    const amount = Number(held.interim.dueNow ?? 0);
+    try {
+      await recordInterimPayment(
+        prisma,
+        actor,
+        held.interim.id,
+        {
+          amount,
+          paymentMethod: input.payment!.paymentMethod,
+          bankName: input.payment!.bankName ?? null,
+          journalNumber: input.payment!.journalNumber ?? null,
+          notes: input.payment!.notes?.trim() || `Paid at the desk for the stay to ${isoDay(held.request.newCheckOutDate)}`,
+        },
+        { atDesk: true },
+      );
+      paid = amount;
+    } catch (e) {
+      return { request: held.request, outcome: null, paid: null, stoppedAt: "PAYMENT", message: e instanceof Error ? e.message : "The payment could not be recorded" };
+    }
+  }
+  try {
+    const done = await commitStayExtension(prisma, actor, held.request.id, input.reason ?? null);
+    return { request: done.request, outcome: done.outcome, paid, stoppedAt: null, message: null };
+  } catch (e) {
+    return { request: held.request, outcome: null, paid, stoppedAt: "EXTEND", message: e instanceof Error ? e.message : "The stay could not be extended" };
+  }
 }

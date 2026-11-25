@@ -784,6 +784,43 @@ export async function quietRoomLabels(prisma: PrismaClient, entryId: string): Pr
   return out;
 }
 
+/**
+ * Which rooms a paper to an agency or a company may name by number (2026-11-25, operator: "if chosen
+ * room by room no from inquiry itself then if that room was changed by moving or swapping then yes, you
+ * can generate the papers with room numbers, but if it was done using roomtype then even if it was
+ * swapped or moved dont show the room numbers").
+ *
+ * Read off the pick the booking was made with at Inquiry — the last seal made while it stood at Inquiry,
+ * else its first seal (a booking made by a split or a script has no Inquiry of its own). Never off the
+ * rooms as they are now: a room move or a swap fixes the room it lands in, which said nothing about how
+ * the guest booked.
+ *   - A pick by number (no booking rooms, or every one fixed): every room is named by its number, a room
+ *     the hotel moved or swapped included.
+ *   - A pick by type: no room is named by number, except a room the guest asked for by number at
+ *     Inquiry that the booking still sits in.
+ */
+export async function paperRoomNumbers(prisma: PrismaClient, entryId: string): Promise<{ all: boolean; rooms: Set<string> }> {
+  const [configs, inquiryStays] = await Promise.all([
+    prisma.availabilityConfiguration.findMany({
+      where: { entryId, sealedAt: { not: null }, optionSelected: { not: Prisma.DbNull } },
+      orderBy: { sealedAt: "asc" },
+      select: { sealedAt: true, optionSelected: true },
+    }),
+    prisma.stageDwellRecord.findMany({ where: { entryId, stage: "S1" }, select: { enteredAt: true, exitedAt: true } }),
+  ]);
+  if (configs.length === 0) return { all: true, rooms: new Set() };
+  const now = Date.now();
+  const atInquiry = configs.filter((c) =>
+    inquiryStays.some((s) => c.sealedAt!.getTime() >= s.enteredAt.getTime() && c.sealedAt!.getTime() <= (s.exitedAt?.getTime() ?? now)),
+  );
+  const pick = (atInquiry.length ? atInquiry[atInquiry.length - 1] : configs[0])!.optionSelected;
+  if (!sealHasBookingRooms(pick)) return { all: true, rooms: new Set() };
+  const rooms = readBookingRooms(pick, { checkIn: null, checkOut: null }, () => null);
+  const nights = rooms.flatMap((r) => r.nights);
+  if (nights.length > 0 && nights.every((n) => n.fixed)) return { all: true, rooms: new Set() };
+  return { all: false, rooms: new Set(nights.filter((n) => n.fixed && n.roomId).map((n) => n.roomId!)) };
+}
+
 function dayWords(ymd: string): string {
   return new Date(`${ymd}T00:00:00.000Z`).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
 }

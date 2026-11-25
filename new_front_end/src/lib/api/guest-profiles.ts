@@ -52,6 +52,26 @@ export function guestFullName(g: Pick<GuestProfileSummary, "firstName" | "lastNa
 }
 
 /** A guest already on file with a phone or an email — which of the two matched. */
+/** Correct the guest's name, phone and email from a booking (2026-11-25) — the shared record, said on
+ *  every booking it reaches. A field left out is kept. */
+export async function correctGuestDetails(
+  session: Session,
+  entryId: string,
+  body: { title?: string | null; name?: string; phone?: string | null; email?: string | null },
+) {
+  return apiRequest<{
+    guestProfileId: string;
+    name: string;
+    phone: string | null;
+    email: string | null;
+    changes: Record<string, { from: string | null; to: string | null }>;
+    sharedWith: Array<{ entryId: string; live: boolean }>;
+    arrivingUpdated: string[];
+    callerUpdated: string[];
+    alsoOnFile: Array<{ id: string; name: string; matchedBy: Array<"PHONE" | "EMAIL"> }>;
+  }>(`/api/entries/${entryId}/guest/details`, { method: "POST", session, body });
+}
+
 export type GuestOnFile = {
   id: string;
   title: string | null;
@@ -68,10 +88,11 @@ export type GuestOnFile = {
  * (3 characters or more, anywhere in the address) — the Wrap up dropdown while the desk types
  * (2026-10-28). `GET /api/guest-profiles/on-file`, L1, no-store.
  */
-export function findGuestsOnFile(session: Session, q: { phone?: string; email?: string }) {
+export function findGuestsOnFile(session: Session, q: { phone?: string; email?: string; exact?: boolean }) {
   const params = new URLSearchParams();
   if (q.phone) params.set("phone", q.phone);
   if (q.email) params.set("email", q.email);
+  if (q.exact) params.set("partial", "false");
   return apiRequest<{ guests: GuestOnFile[] }>(`/api/guest-profiles/on-file?${params}`, { session });
 }
 

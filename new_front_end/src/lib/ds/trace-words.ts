@@ -146,6 +146,10 @@ const WORDS: Record<string, string> = {
   "GUEST.IDENTITY_PROOF_CAPTURED": "ID photo stored",
   "GUEST.IDENTITY_DETAIL_RECORDED": "Guest details recorded",
   "GUEST.IDENTITY_DETAILS_CONFIRMED": "Guest details confirmed",
+  "GUEST.ROWS_SWAPPED": "Two guests' rows swapped",
+  "GUEST_PROFILE.DETAILS_CORRECTED": "Guest's details changed",
+  "CHECK_IN.AGE_MISMATCH_ACCEPTED": "Checked in with dates of birth that do not fit their rows",
+  "INQUIRY.DESK_TAG_SET": "Tag changed",
   "INQUIRY.SPECIAL_PREFERENCE_UPDATED": "Preference changed",
   "PRE_ARRIVAL_TASK.COMPLETED": "Arrival task done",
   "EARLY_DEPARTURE.RECORDED": "Left early",
@@ -409,6 +413,33 @@ export function traceDetail(ev: TraceEvent, names?: Partial<HistoryNames>): stri
     const rooms = (w.rooms ?? []).map((r) => `Room ${r.roomNumber} at ${r.rate} (minimum ${r.floor})`);
     const who = w.carriedFrom ? `the price already agreed on ${w.carriedFrom}` : w.level === "L4" ? "the admin's waiver" : "the GM's waiver";
     return [rooms.join(" · ") || w.rationale || null, who].filter(Boolean).join(" · ");
+  }
+  // Two guests' rows swapped (2026-11-25): who moved where.
+  if (ev.eventType === "GUEST.ROWS_SWAPPED") {
+    const a = (p.a ?? {}) as { person?: string | null; row?: string; movedTo?: string };
+    const b = (p.b ?? {}) as { person?: string | null; row?: string; movedTo?: string };
+    return [
+      `${a.person ?? a.row ?? "a guest"} → ${a.movedTo ?? "the other row"}`,
+      `${b.person ?? b.row ?? "a guest"} → ${b.movedTo ?? "the other row"}`,
+    ].join(" · ");
+  }
+  if (ev.eventType === "CHECK_IN.AGE_MISMATCH_ACCEPTED") {
+    const rows = Array.isArray(p.rows) ? (p.rows as Array<{ label?: string }>).map((r) => r.label).filter(Boolean) : [];
+    return [rows.join(", "), str("note") ? `"${str("note")}"` : null].filter(Boolean).join(" · ");
+  }
+  // The guest's details changed (2026-11-25): each field, old → new, and where it was changed.
+  if (ev.eventType === "GUEST_PROFILE.DETAILS_CORRECTED") {
+    const ch = (p.changes ?? {}) as Record<string, { from?: string | null; to?: string | null }>;
+    const word: Record<string, string> = { name: "name", phone: "phone", email: "email" };
+    const parts = Object.entries(ch).map(([k, v]) => `${word[k] ?? k} ${v.from ?? "none"} → ${v.to ?? "none"}`);
+    if (p.via === "ANOTHER_BOOKING" && str("changedOn")) parts.push(`changed on ${str("changedOn")}`);
+    if (Array.isArray(p.arrivingUpdated) && (p.arrivingUpdated as unknown[]).length) parts.push("who is arriving followed");
+    return parts.join(" · ") || null;
+  }
+  if (ev.eventType === "INQUIRY.DESK_TAG_SET") {
+    const from = str("from");
+    const to = str("to");
+    return to ? (from ? `${from} → ${to}` : to) : from ? `${from} taken off` : null;
   }
   // The steps of a room change name what they made or let go (2026-10-13).
   if (ev.eventType === "COMMITTED_HOLD.RELEASED_ON_ROOM_CHANGE" && Array.isArray(p.releasedRoomIds)) {

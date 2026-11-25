@@ -35,6 +35,8 @@ export async function completeCheckInToS7(
     /** Per-room key tracking (2026-08-11): the rooms whose key was handed over — recorded on
      *  the backend's KEYS trace alongside the count. */
     issuedKeyRoomIds?: string[];
+    /** The FOM's words for checking guests in whose dates of birth do not fit their rows (2026-11-25). */
+    ageMismatchNote?: string;
   },
 ) {
   return progressStage(session, entryId, {
@@ -44,6 +46,7 @@ export async function completeCheckInToS7(
       keyCount: body.keyCount,
       registrationConfirmed: body.registrationConfirmed,
       ...(body.issuedKeyRoomIds ? { issuedKeyRoomIds: body.issuedKeyRoomIds } : {}),
+      ...(body.ageMismatchNote ? { ageMismatchNote: body.ageMismatchNote } : {}),
     },
   }) as Promise<EntryDetail>;
 }

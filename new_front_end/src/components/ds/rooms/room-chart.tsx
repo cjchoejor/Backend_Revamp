@@ -45,7 +45,7 @@
  * spacing. A booking already in a room one of them lands on is swapped into the room left behind
  * (the server adds that leg). Each room is its own governed walk.
  */
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
@@ -701,12 +701,20 @@ function segmentsFor(room: ChartRoom, chart: RoomChart, bars: RoomChartBar[], pi
 }
 
 /** Positions a floating box beside the cell it belongs to, inside the window. */
+/**
+ * A box beside what was clicked, kept on the screen (2026-11-25, operator: the two-bookings box opened
+ * below the bottom of the screen): on the side with more room — below unless there is more above — and
+ * never taller than that room, scrolling inside itself when its contents are taller.
+ */
 function placeBeside(rect: DOMRect, width: number): React.CSSProperties {
   const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
-  const below = window.innerHeight - rect.bottom > 260 || rect.top < 260;
+  const spaceBelow = window.innerHeight - rect.bottom - 14;
+  const spaceAbove = rect.top - 14;
+  const below = spaceBelow >= spaceAbove || spaceBelow >= 560;
+  const maxHeight = Math.max(160, below ? spaceBelow : spaceAbove);
   return below
-    ? { position: "fixed", top: rect.bottom + 6, left, width }
-    : { position: "fixed", top: rect.top - 6, left, width, transform: "translateY(-100%)" };
+    ? { position: "fixed", top: rect.bottom + 6, left, width, maxHeight, overflowY: "auto" }
+    : { position: "fixed", top: rect.top - 6, left, width, maxHeight, overflowY: "auto", transform: "translateY(-100%)" };
 }
 
 /** Rendered at the desk's root, so the scrolling table never clips it. */
@@ -829,15 +837,30 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
   };
   const setFrom = (v: string | undefined) => setWindow({ from: v ?? null });
   const setNightsAsked = (n: number) => setWindow({ nights: n });
+  const chartKey = ["room-chart", from ?? "today", nightsAsked] as const;
+  const qc = useQueryClient();
   const q = useQuery({
-    queryKey: ["room-chart", from ?? "today", nightsAsked],
+    queryKey: chartKey,
     queryFn: () => getRoomChart(session!, { from, nights: nightsAsked }),
     enabled: !!session && !isLoading,
     staleTime: 30_000,
     refetchInterval: 60_000,
+    // A chart left open in another tab is read again the moment the tab is back in front
+    // (2026-11-25): the minute's re-read does not run while the tab is hidden.
+    refetchOnWindowFocus: true,
     placeholderData: (prev) => prev,
   });
   const chart = q.data;
+  /**
+   * The picture on screen is known to be old while a fresh one is on its way (2026-11-25, operator:
+   * a booking already at Closed still drew in the in-house colour, then went away). The chart keeps
+   * its last answer and draws it at once; after a booking was moved on another page that answer is
+   * out of date until the new one arrives. Said, and the table dimmed, rather than shown as current.
+   */
+  const oldPicture =
+    !!chart &&
+    q.isFetching &&
+    (q.isPlaceholderData || !!qc.getQueryState(chartKey)?.isInvalidated || Date.now() - q.dataUpdatedAt > 75_000);
   /** A range longer than the chart draws — said, not silently cut. */
   const [rangeNote, setRangeNote] = useState<string | null>(null);
   const [hover, setHover] = useState<Hover | null>(null);
@@ -906,6 +929,10 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
     });
   const [full, setFull] = useState(false);
   const [pickNights, setPickNights] = useState(1);
+  // How the inquiry books the room clicked (2026-11-25, operator: "add small boxes to choose room type or
+  // room no, that way the user will have the option to do the booking by room type or room number"): by
+  // type the house section starts with one room of its type, the system's to place; by number, this room.
+  const [pickBy, setPickBy] = useState<"type" | "number">("type");
   const pickRef = useRef<HTMLDivElement | null>(null);
   /** Switch rooms: pick a booking's room, then click another booking (a swap) or a free night (a move). */
   const [switching, setSwitching] = useState(false);
@@ -1050,7 +1077,10 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
     const onDown = (e: MouseEvent) => {
       if (pickListRef.current && !pickListRef.current.contains(e.target as Node)) setPickList(null);
     };
-    const onScroll = () => setPickList(null);
+    // Scrolling inside the box keeps it open; the page or the chart scrolling closes it.
+    const onScroll = (e: Event) => {
+      if (!pickListRef.current?.contains(e.target as Node)) setPickList(null);
+    };
     document.addEventListener("keydown", onKey);
     document.addEventListener("mousedown", onDown);
     window.addEventListener("scroll", onScroll, true);
@@ -1068,7 +1098,10 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
       const t = e.target as Node;
       if (nightBoxRef.current && !nightBoxRef.current.contains(t) && !(t as Element).closest?.("[data-night-figure]")) setNightBox(null);
     };
-    const onScroll = () => setNightBox(null);
+    // Scrolling inside the box keeps it open; the page or the chart scrolling closes it.
+    const onScroll = (e: Event) => {
+      if (!nightBoxRef.current?.contains(e.target as Node)) setNightBox(null);
+    };
     document.addEventListener("keydown", onKey);
     document.addEventListener("mousedown", onDown);
     window.addEventListener("scroll", onScroll, true);
@@ -1085,7 +1118,10 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
     const onDown = (e: MouseEvent) => {
       if (clashRef.current && !clashRef.current.contains(e.target as Node)) setClash(null);
     };
-    const onScroll = () => setClash(null);
+    // Scrolling inside the box keeps it open; the page or the chart scrolling closes it.
+    const onScroll = (e: Event) => {
+      if (!clashRef.current?.contains(e.target as Node)) setClash(null);
+    };
     document.addEventListener("keydown", onKey);
     document.addEventListener("mousedown", onDown);
     window.addEventListener("scroll", onScroll, true);
@@ -1102,7 +1138,10 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
     const onDown = (e: MouseEvent) => {
       if (pickRef.current && !pickRef.current.contains(e.target as Node)) setPick(null);
     };
-    const onScroll = () => setPick(null);
+    // Scrolling inside the box keeps it open; the page or the chart scrolling closes it.
+    const onScroll = (e: Event) => {
+      if (!pickRef.current?.contains(e.target as Node)) setPick(null);
+    };
     document.addEventListener("keydown", onKey);
     document.addEventListener("mousedown", onDown);
     window.addEventListener("scroll", onScroll, true);
@@ -1814,7 +1853,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
   })();
   const startInquiry = () => {
     if (!pick) return;
-    const p = new URLSearchParams({ checkIn: pick.night, nights: String(pickNights), room: pick.room.roomNumber });
+    const p = new URLSearchParams({ checkIn: pick.night, nights: String(pickNights), room: pick.room.roomNumber, by: pickBy });
     setPick(null);
     router.push(`/bookings/new?${p.toString()}`);
   };
@@ -1973,8 +2012,17 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
         <Legend byGuest={byGuest} />
       </div>
 
+      {oldPicture ? (
+        <Floating>
+          <div className="rchart-updating" role="status">
+            <span className="spin" aria-hidden />
+            Updating the chart — what you see may be out of date
+          </div>
+        </Floating>
+      ) : null}
       <div
-        className="rchart-wrap"
+        className={`rchart-wrap${oldPicture ? " is-old" : ""}`}
+        aria-busy={oldPicture || undefined}
         ref={attachWrap}
         onScroll={(e) => {
           leave();
@@ -2579,6 +2627,20 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
               <span className="hc-kind">Free</span>
               <span className="hc-room">Room {pick.room.roomNumber}</span>
             </div>
+            <div className="pick-by" role="radiogroup" aria-label="Book it by">
+              <span className="pick-by-label">Book by</span>
+              {(
+                [
+                  ["type", "Room type"],
+                  ["number", "Room no."],
+                ] as const
+              ).map(([v, label]) => (
+                <button key={v} type="button" role="radio" aria-checked={pickBy === v} className={`pick-by-opt${pickBy === v ? " on" : ""}`} onClick={() => setPickBy(v)}>
+                  <span className="pick-by-box" aria-hidden />
+                  {label}
+                </button>
+              ))}
+            </div>
             <div className="hc-body">
               <div className="hc-name">Start an inquiry</div>
               <div className="hc-sub">
@@ -2602,6 +2664,17 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
                 </span>
                 <span className="pick-out">out {longDay(shiftDay(pick.night, pickNights))}</span>
               </div>
+              <p className="pick-by-says">
+                {pickBy === "type" ? (
+                  <>
+                    <b>1 {typeOf.get(pick.room.roomTypeId)?.name ?? "room"}</b> — the system keeps a room of this type and may change it until Arrival. Papers to an agency read &ldquo;Room 1&rdquo;.
+                  </>
+                ) : (
+                  <>
+                    <b>Room {pick.room.roomNumber} itself</b> — kept for the guest by its number, and named on the papers.
+                  </>
+                )}
+              </p>
               {pickNights > pick.freeRun ? (
                 <p className="pick-note">Past the chart — the house is asked for those nights on the booking.</p>
               ) : !pick.reachesEnd && pickNights === pick.freeRun ? (
@@ -2677,6 +2750,8 @@ function HoverCard({
           {b?.partyName ? <div className="hc-sub">Booked by {b.partyName}</div> : null}
           <div className="hc-facts">
             {b ? (byCaller ? fact("Guest", rowNameOf(b)) : fact("Caller", callerOfBooking(b))) : null}
+            {/* The desk's own note to tell same-named guests apart (2026-11-25). */}
+            {b?.inquiry?.deskTag ? fact("Tag", b.inquiry.deskTag) : null}
             {fact("Room", roomLine(room))}
             {fact("In this room", `${fmtRange(bar.from, bar.to)} · ${plural(nightsBetween(bar.from, bar.to), "night")} on the chart`)}
             {b?.checkInDate ? fact("Stay", `${fmtStay(b.checkInDate, b.checkOutDate)}${stay ? ` · ${plural(stay, "night")}` : ""}`) : null}

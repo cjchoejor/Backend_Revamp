@@ -41,6 +41,10 @@ export const TRACKED_ENTITY_TYPES = [
   // Phase B additions (Travel agents + Corporate) — added pre-emptively per user request.
   "TravelAgent",
   "CorporateAccount",
+  // A guest's record corrected from a booking (2026-11-25) — the record before it, kept whole.
+  "GuestProfile",
+  // The hotel's service apartments (2026-11-25) — the package row before an edit.
+  "ApartmentPackage",
 ] as const;
 
 export type TrackedEntityType = (typeof TRACKED_ENTITY_TYPES)[number];
@@ -64,6 +68,8 @@ const ENTITY_DELEGATE: Record<TrackedEntityType, string> = {
   VipNotificationRoutingConfig: "vipNotificationRoutingConfig",
   TravelAgent: "travelAgent",
   CorporateAccount: "corporateAccount",
+  GuestProfile: "guestProfile",
+  ApartmentPackage: "apartmentPackage",
 };
 
 export function isTrackedEntityType(s: string): s is TrackedEntityType {

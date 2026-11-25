@@ -12,6 +12,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Fragment, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Chip, EmptyState, Icon, Input } from "@/design-system";
 import { GuestLink, LoadFailed, LoadingBlock, OpenRow, RowStanding, StandingChip, StayOf, StepChip, bookingHref } from "@/components/ds/ui";
+import { DeskTagText } from "@/components/ds/desk-tag";
 import { useDeskBookings, useDeskMoney, useDeskTimers } from "@/hooks/use-desk-data";
 import { RowTimer, RowTimerList } from "@/components/ds/row-timer";
 import { useHotelDay } from "@/hooks/use-hotel-day";
@@ -165,6 +166,7 @@ function haystack(r: DeskListRow, statusWord: string, statusQualifier = ""): str
   const booker = bookerOfRow(r);
   return [
     rowNameOf(r),
+    r.inquiry?.deskTag,
     g?.phone,
     g?.email,
     r.inquiry?.callerPhone,
@@ -661,7 +663,10 @@ function Preview({
     <aside className="preview preview-over" aria-label="Booking preview" style={{ top }}>
       <div className="pv-head">
         <div>
-          <h3 className={isNamed(g) ? "" : "name-i"}>{rowNameOf(row)}</h3>
+          <h3 className={isNamed(g) ? "" : "name-i"}>
+            {rowNameOf(row)}
+            <DeskTagText tag={row.inquiry?.deskTag} />
+          </h3>
           <div className="meta">
             {row.id} · Enquiry <b>{row.inquiryId}</b>
           </div>

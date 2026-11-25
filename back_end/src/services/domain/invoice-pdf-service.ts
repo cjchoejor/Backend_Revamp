@@ -27,6 +27,7 @@ import { paperNumber, printedProformaNumber, printedQuotationNumber, proformaNum
 import { paymentsStillHeld, waitingRefundTotal } from "../../lib/refund-money.js";
 import { InvoiceType, Prisma, type PrismaClient } from "@prisma/client";
 import { effectiveCheckOutDate } from "../../lib/stay-dates.js";
+import { stayOutcomeRows, type StayInfoRow } from "../../lib/stay-outcome-words.js";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { buildStorageKey, hashSha256, readDocument, writeDocument } from "../../lib/document-storage.js";
 import {
@@ -35,7 +36,7 @@ import {
   loadHotelProfileForRender,
   type HotelProfileForRender,
 } from "../../lib/pdf-render-context.js";
-import { maxZeroSub, sumMoney, sumMoneyBy, toDecimal, ZERO } from "../../lib/money.js";
+import { maxZeroSub, sumMoney, sumMoneyBy, toDecimal, ZERO, type MoneyLike } from "../../lib/money.js";
 import {
   LEDGER_COMPONENTS,
   buildFolioLedgerView,
@@ -51,6 +52,7 @@ import { mastheadFromHotelProfile, primaryContactNumber } from "../infrastructur
 import { formatDocDate, formatDocDateTimeLocal, formatStayLines, formatDocDateLocal } from "../infrastructure/pdf-templates/legphel-document-format.js";
 import { guestDisplayName } from "../../lib/guest-display-name.js";
 import { renderLegphelTaxInvoiceHtml } from "../infrastructure/pdf-templates/legphel-tax-invoice-template.js";
+import { amountInWords, paymentWords, type PaperBillRow, type PaperPaymentRow } from "../infrastructure/pdf-templates/legphel-bill-parts.js";
 import { computeStayCharges, resolveChargeRates, stayBreakdownFromTerms } from "../infrastructure/compute-stay-charges.js";
 import {
   describeAdvancePaymentPlan,
@@ -59,6 +61,7 @@ import {
 } from "./s3-payment-service.js";
 import { resolveBillQuotation } from "../../lib/operative-quotation.js";
 import { assignedRoomNights, roomsWithNightsLine, type NightsMode } from "../../lib/room-nights-for-entry.js";
+import { billRowsOf, type BillRow } from "../../lib/bill-rows.js";
 import { quotationPaperPrices } from "./quotation-pdf-service.js";
 import type { TripPaperFigures } from "./trip-paper-prices.js";
 import { priceRowsNote, type LegphelPriceBlock } from "../infrastructure/pdf-templates/legphel-quotation-template.js";
@@ -147,7 +150,13 @@ function invoicePrelude(inv: LoadedInvoice) {
   const dateNights = rawCheckOut
     ? Math.max(1, Math.round((rawCheckOut.getTime() - checkIn.getTime()) / 86_400_000))
     : NaN;
-  const nights = Math.max(1, Number.isFinite(termNights) ? termNights : Number.isFinite(dateNights) ? dateNights : 1);
+  // A stay that ended early (2026-11-25): the quotation's nights are the booked ones, so the
+  // stay row read "Check-out 25 Nov · 3 nights" for a guest who slept one. The dates win then.
+  const endedEarly = inv.entry.actualCheckOutDate != null && Number.isFinite(dateNights);
+  const nights = Math.max(
+    1,
+    endedEarly ? dateNights : Number.isFinite(termNights) ? termNights : Number.isFinite(dateNights) ? dateNights : 1,
+  );
   const checkOut = rawCheckOut ?? new Date(checkIn.getTime() + nights * 86_400_000);
 
   const roomCount = Math.max(
@@ -665,7 +674,24 @@ export type FinalInvoiceFigures = {
   /** The downward ladder, additive from the ledger: net → service → taxable → GST → total. */
   ladder: { net: number; serviceCharge: number; taxable: number; gst: number; total: number };
   /** The payment records the figures net (bucket-filtered), oldest first. */
-  payments: Array<{ id: string; amount: number; direction: string; method: string | null; receivedAt: Date | null }>;
+  payments: Array<{
+    id: string;
+    amount: number;
+    direction: string;
+    method: string | null;
+    receivedAt: Date | null;
+    bankName: string | null;
+    journalNumber: string | null;
+    reference: string | null;
+    /** Money moved to or from another stay of the same trip. */
+    tripMove: boolean;
+  }>;
+  /**
+   * The charges as the bills set them out (2026-11-25): a room’s nights at one figure on one row,
+   * every other charge on its own (lib/bill-rows.ts, shared with the bill page). Net of service charge
+   * and GST; they add up to `ladder.net` exactly.
+   */
+  rows: BillRow[];
 };
 
 /**
@@ -675,7 +701,7 @@ export type FinalInvoiceFigures = {
  */
 export function buildFinalInvoiceFigures(
   inv: FinalInvoiceFiguresSource,
-  opts: { gstRate: number; svcRate: number; nights: number; nightlyRate: number },
+  opts: { gstRate: number; svcRate: number; nights: number; nightlyRate: number; nightsMode?: NightsMode },
 ): FinalInvoiceFigures {
   const { gstRate, svcRate, nights, nightlyRate } = opts;
   // Which folio lines this invoice covers (2026-08-18 — the invoice is a VIEW OF THE LEDGER):
@@ -803,8 +829,26 @@ export function buildFinalInvoiceFigures(
         amount: Number(toDecimal(p.amount).toFixed(2)),
         direction: p.paymentDirection,
         method: p.paymentMethod ?? null,
-        receivedAt: p.receivedAt ?? null,
+        receivedAt: p.receivedAt ?? p.createdAt ?? null,
+        bankName: p.bankName ?? null,
+        journalNumber: p.journalNumber ?? null,
+        reference: p.paymentVerificationRef ?? null,
+        tripMove: !!p.tripTransferRef,
       })),
+    rows: synthesised
+      ? [
+          {
+            key: "stay",
+            when: "",
+            place: null,
+            description: "Room charge",
+            qty: nights,
+            rate: nightlyRate,
+            amount: subtotal,
+            repeats: true,
+          },
+        ]
+      : billRowsOf(view.charges, opts.nightsMode ?? "SHORT"),
   };
 }
 
@@ -858,19 +902,27 @@ export type TaxInvoiceRenderInput = {
   figures: FinalInvoiceFigures;
   parties: TaxInvoiceParties;
   bookingRef: string;
+  /** The folio the invoice reads (2026-11-25) — printed in the invoice block. */
+  folioId?: string | null;
+  /** "12 adults" / "2 adults · 1 child". */
+  guests?: string | null;
   stay: { checkIn: Date | null; checkOut: Date | null; nights: number | null };
+  /** How a stay that ended early ended (2026-11-25): rows printed after Check-in in place of the
+   *  plain Check-out — checked out, booked to, nights stayed, the fee. `lib/stay-outcome-words`. */
+  stayOutcome?: StayInfoRow[] | null;
   /** Room numbers to print (falls back to the ledger's attribution when empty). */
   roomNumbers?: string[];
-  /** The Rooms line with each room's nights — "Room 201 (10–19 Mar) · Room 202 (10–14 Mar)" (2026-10-30). Wins over `roomNumbers`. */
+  /** Superseded on the face by the lines table (each room's nights are on its row); kept for callers. */
   roomsLine?: string | null;
   /** The issued original's reference + date. Null renders the DRAFT. */
-  issued: { invoiceRef: string; issuedAt: Date } | null;
+  issued: { invoiceRef: string; issuedAt: Date; issuedBy?: string | null } | null;
   /** The instant the figures were read — the draft's "Position as at". */
   asAt: Date;
   /** Configured rates — used for the labels only when the ledger carries no tax to derive them from. */
   gstRate: number;
   svcRate: number;
   copy?: boolean;
+  currency?: string;
 };
 
 /**
@@ -880,7 +932,7 @@ export type TaxInvoiceRenderInput = {
  * figure snaps to the configured rate when it is within rounding of it; a genuinely different
  * rate (a folio taxed while GST was 0, a rate change mid-history) prints as itself, 1dp.
  */
-function ratePercentLabel(part: number, base: number, fallbackRate: number): string {
+export function ratePercentLabel(part: number, base: number, fallbackRate: number): string {
   const configured = fallbackRate * 100;
   if (!(base > 0)) return String(Math.round(configured * 100) / 100);
   const pct = (part / base) * 100;
@@ -889,18 +941,65 @@ function ratePercentLabel(part: number, base: number, fallbackRate: number): str
   return String(Math.round(pct * 10) / 10);
 }
 
-function describeComponent(c: FinalInvoiceComponent): string {
-  if (c.key === "ROOM") return `Accommodation · ${c.roomNights} room-night${c.roomNights === 1 ? "" : "s"}`;
-  const digest = c.descriptions
-    .slice(0, 3)
-    .map((d) => (d.length > 28 ? `${d.slice(0, 27)}…` : d))
-    .join(" · ");
-  const more = c.descriptions.length > 3 ? ` +${c.descriptions.length - 3} more` : "";
-  return digest ? `${c.label} · ${digest}${more}` : `${c.label} · ${c.chargeCount} item${c.chargeCount === 1 ? "" : "s"}`;
+// ---------------------------------------------------------------------------------------------
+// What the three folio bills print, from the ledger's own figures (2026-11-25). The Master Bill,
+// the Tentative invoice and the Tax Invoice share these so they set a stay out the same way.
+// ---------------------------------------------------------------------------------------------
+
+const placeWords = (place: string | null) => (!place ? null : /^\d/.test(place) ? `Room ${place}` : place);
+
+/** The charges, one row each, a room's nights on one row — every figure the server's. */
+export function paperBillRows(f: FinalInvoiceFigures): PaperBillRow[] {
+  return f.rows.map((r) => {
+    const where = placeWords(r.place);
+    return {
+      when: r.when,
+      description: where ? `${r.description} · ${where}` : r.description,
+      qty: r.repeats ? `${r.qty} night${r.qty === 1 ? "" : "s"}` : "",
+      rate: r.repeats ? formatMoney(r.rate) : "",
+      amount: formatMoney(r.amount),
+      negative: r.amount < 0,
+    };
+  });
+}
+
+/** The payments as rows: received money minus, money returned plus, each with how it came. */
+export function paperPaymentRows(f: FinalInvoiceFigures, writeOffs: ReadonlyArray<{ id: string; writtenOffAmount: MoneyLike; createdAt: Date }> = []): PaperPaymentRow[] {
+  const rows: PaperPaymentRow[] = f.payments.map((p) => {
+    const w = paymentWords(p);
+    return {
+      when: formatDocDateLocal(p.receivedAt),
+      receipt: p.id,
+      how: w.how,
+      detail: w.detail,
+      amount: `${p.direction === "OUT" ? "+" : "−"}${formatMoney(p.amount)}`,
+    };
+  });
+  for (const w of writeOffs) {
+    rows.push({ when: formatDocDateLocal(w.createdAt), receipt: w.id, how: "Written off", detail: null, amount: `−${formatMoney(toDecimal(w.writtenOffAmount).toFixed(2))}` });
+  }
+  return rows;
+}
+
+/** "12 adults" / "2 adults · 1 child" — null when the booking says nothing. */
+export function guestsWords(e: { adultCount?: number | null; childCount?: number | null; guestCount?: number | null }): string | null {
+  const adults = e.adultCount ?? null;
+  const children = e.childCount ?? 0;
+  if (adults == null) return e.guestCount ? `${e.guestCount} guest${e.guestCount === 1 ? "" : "s"}` : null;
+  const a = `${adults} adult${adults === 1 ? "" : "s"}`;
+  return children > 0 ? `${a} · ${children} ${children === 1 ? "child" : "children"}` : a;
+}
+
+/** "202, 307, 503 · 3 rooms" — the rooms in number order. */
+export function roomsWords(rooms: readonly string[]): string | null {
+  if (rooms.length === 0) return null;
+  const sorted = [...rooms].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  return rooms.length === 1 ? sorted[0]! : `${sorted.join(", ")} · ${rooms.length} rooms`;
 }
 
 export function composeTaxInvoiceHtml(input: TaxInvoiceRenderInput): string {
   const { figures: f, hotel } = input;
+  const currency = input.currency ?? "BTN";
   const draft = input.issued == null;
   const roomNumbers =
     input.roomNumbers && input.roomNumbers.length > 0
@@ -909,26 +1008,21 @@ export function composeTaxInvoiceHtml(input: TaxInvoiceRenderInput): string {
   const scPct = ratePercentLabel(f.ladder.serviceCharge, f.ladder.net, input.svcRate);
   const gstPct = ratePercentLabel(f.ladder.gst, f.ladder.taxable, input.gstRate);
 
-  const settlementLines: Array<{ label: string; value: string }> = [];
-  const ins = f.payments.filter((p) => p.direction === "IN");
-  const outs = f.payments.filter((p) => p.direction === "OUT");
-  if (ins.length > 4) {
-    settlementLines.push({
-      label: `Advance / payments applied (${ins.length} receipts)`,
-      value: `−${formatMoney(ins.reduce((s, p) => s + p.amount, 0))}`,
-    });
-  } else {
-    for (const p of ins) settlementLines.push({ label: `Advance / payment applied · ${p.id}`, value: `−${formatMoney(p.amount)}` });
-  }
-  for (const p of outs) settlementLines.push({ label: `Refunded · ${p.id}`, value: `+${formatMoney(p.amount)}` });
-
   const balance = f.totalPayable;
   // A negative figure on the ISSUED original is money to return; on an in-stay DRAFT it is the
   // guest paid ahead of nights the audit has not posted yet (an interim or extension payment),
   // which is not a refund and must not read as one.
   const balanceLabel =
-    balance > 0 ? "Balance due" : balance < 0 ? (draft ? "Paid ahead of charges still to post" : "Refund due to guest") : "Paid in full";
+    balance > 0
+      ? "Balance due · Nu."
+      : balance < 0
+        ? draft
+          ? "Paid ahead of charges still to post · Nu."
+          : "Refund due to guest · Nu."
+        : "Balance due · Nu.";
   const reference = input.issued?.invoiceRef ?? input.bookingRef;
+  const stay = input.stay.checkIn && input.stay.checkOut ? formatStayLines(input.stay.checkIn, input.stay.checkOut, input.stay.nights) : null;
+  const total = formatMoney(f.ladder.total);
 
   return renderLegphelTaxInvoiceHtml({
     masthead: mastheadFromHotelProfile(hotel),
@@ -936,26 +1030,44 @@ export function composeTaxInvoiceHtml(input: TaxInvoiceRenderInput): string {
     draft,
     draftStrip: draft ? `Draft — not issued · indicative position as at ${formatDocDateTimeLocal(input.asAt)}` : null,
     bookingRef: input.bookingRef,
-    issued: draft ? formatDocDateTimeLocal(input.asAt) : formatDocDateLocal(input.issued!.issuedAt),
-    billedTo: input.parties.billedTo,
-    forGuest: input.parties.forGuest,
-    customerTpn: input.parties.customerTpn,
-    yourRef: input.parties.yourRef,
-    stay: input.stay.checkIn && input.stay.checkOut ? formatStayLines(input.stay.checkIn, input.stay.checkOut, input.stay.nights) : null,
-    rooms: input.roomsLine || (roomNumbers.length > 0 ? `Room${roomNumbers.length === 1 ? "" : "s"} ${roomNumbers.join(", ")}` : null),
-    lines: f.components.map((c) => ({ description: describeComponent(c), amount: formatMoney(c.total) })),
-    detailNote: "Itemised detail on the Master Bill.",
+    billedTo: {
+      heading: "Billed to",
+      rows: [
+        { k: "Name", v: input.parties.billedTo, strong: true },
+        input.parties.customerTpn ? { k: "Customer TPN", v: input.parties.customerTpn, mono: true } : null,
+        input.parties.yourRef ? { k: "Your ref", v: input.parties.yourRef } : null,
+        input.parties.forGuest ? { k: "For guest", v: input.parties.forGuest } : null,
+        input.guests ? { k: "Guests", v: input.guests } : null,
+      ],
+    },
+    invoice: {
+      heading: "Invoice",
+      rows: [
+        { k: "Invoice no", v: input.issued?.invoiceRef ?? "Allocated at issue", strong: !!input.issued, mono: !!input.issued },
+        draft ? { k: "Position as at", v: formatDocDateTimeLocal(input.asAt) } : { k: "Date of issue", v: formatDocDateLocal(input.issued!.issuedAt) },
+        { k: "Booking", v: input.bookingRef, red: true },
+        input.folioId ? { k: "Folio", v: input.folioId, mono: true } : null,
+        stay ? { k: "Check-in", v: stay.checkIn, strong: true } : null,
+        ...(input.stayOutcome?.length ? input.stayOutcome : [stay ? { k: "Check-out", v: stay.checkOut } : null]),
+        input.issued?.issuedBy ? { k: "Issued by", v: input.issued.issuedBy } : null,
+      ],
+    },
+    rooms: roomsWords(roomNumbers),
+    lines: paperBillRows(f),
     netValue: formatMoney(f.ladder.net),
     serviceChargeLabel: `Service charge ${scPct}%`,
     serviceCharge: formatMoney(f.ladder.serviceCharge),
     taxableValue: formatMoney(f.ladder.taxable),
     gstLabel: `GST @ ${gstPct}%`,
     gst: formatMoney(f.ladder.gst),
-    total: formatMoney(f.ladder.total),
-    settlementLines,
+    total,
+    totalInWords: amountInWords(f.ladder.total.toFixed(2), currency),
+    byKind: f.components.map((c) => ({ label: c.key === "ROOM" ? `Accommodation · ${c.roomNights} room-night${c.roomNights === 1 ? "" : "s"}` : c.label, amount: formatMoney(c.total) })),
+    payments: paperPaymentRows(f),
     balanceLabel,
     balanceDue: formatMoney(Math.abs(balance)),
-    gstSentence: `GST of Nu. ${formatMoney(f.ladder.gst)} is included in the total consideration of Nu. ${formatMoney(f.ladder.total)}.`,
+    owed: balance > 0,
+    gstSentence: `GST of Nu. ${formatMoney(f.ladder.gst)} is included in the total consideration of Nu. ${total}.`,
     bank:
       balance > 0
         ? {
@@ -966,10 +1078,10 @@ export function composeTaxInvoiceHtml(input: TaxInvoiceRenderInput): string {
           }
         : null,
     closingNote: draft
-      ? "Draft for checking the particulars before issue — the tax invoice is issued at checkout settlement and carries its serial from then. Not a demand for payment: the interim folio statement is the in-stay handout."
-      : "Please raise any discrepancy within 7 days. No surcharge applies on any payment mode; remitter bears transfer charges — the full invoice value must be received.",
+      ? "Draft for checking the particulars before issue — the tax invoice is issued at checkout settlement and carries its serial from then. Not a demand for payment: the tentative invoice is the in-stay handout."
+      : "Line amounts are before service charge and GST, which are added beneath them. Please raise any discrepancy within 7 days. No surcharge applies on any payment mode; remitter bears transfer charges — the full invoice value must be received.",
     tariffVersion: "T1.0",
-    pageLabel: draft ? "Page 1 of 1 · draft" : input.copy ? "Page 1 of 1 · COPY" : "Page 1 of 1 · original",
+    pageLabel: draft ? "draft" : input.copy ? "COPY" : "original",
     copy: input.copy,
   });
 }
@@ -1186,10 +1298,14 @@ export async function generateOrLoadInvoicePdf(
     figures: fig,
     parties,
     bookingRef: inv.entryId,
+    folioId: inv.folioId,
+    guests: guestsWords(inv.entry),
     stay: { checkIn, checkOut, nights },
+    stayOutcome: await stayOutcomeRows(prisma, inv.entryId).catch(() => null),
     roomsLine: assigned.length ? roomsWithNightsLine(assigned) : null,
-    issued: { invoiceRef, issuedAt: inv.issuedAt ?? inv.dispatchedAt ?? now },
+    issued: { invoiceRef, issuedAt: inv.issuedAt ?? inv.dispatchedAt ?? now, issuedBy: preparedByName || null },
     asAt: now,
+    currency: inv.folio?.lines?.[0]?.currency ?? "BTN",
     gstRate,
     svcRate,
   });

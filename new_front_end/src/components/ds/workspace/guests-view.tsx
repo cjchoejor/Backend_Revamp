@@ -9,8 +9,9 @@
  * same query, so the two never disagree), each guest as recorded with their newest ID photo, grouped
  * by the room they sleep in. Each guest is one line until opened (same day, operator: "can it be shown
  * in a collapsed way so that user can expand it"); a date of birth that does not fit stays on the line.
- * Nothing is changed here; the guest table at Arrival, Check-in and Stay is where
- * it is typed. At Check-out and Closed it is the record of who stayed.
+ * Nothing is typed here; the guest table at Arrival, Check-in and Stay is where it is typed. At
+ * Check-out and Closed it is the record of who stayed. One thing can be done here (2026-11-25): a
+ * guest filed on another guest's row is swapped back (`SwapGuestsDialog`).
  */
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -24,6 +25,8 @@ import { fmtDmy } from "@/lib/ds/format";
 import { IdPhotoViewerHost } from "@/components/desk/workspace/id-photo-viewer";
 import { partySlots, ProofThumb, UNTYPED_DOC_TYPES, type PartySlot } from "@/components/desk/workspace/identity-proof";
 import type { EntryDetail } from "@/types/api";
+import { Button } from "@/design-system";
+import { SwapGuestsDialog, type SwapCandidate } from "./guests-swap";
 
 const GENDER_WORDS: Record<string, string> = { MALE: "Male", FEMALE: "Female", OTHER: "Other" };
 
@@ -55,6 +58,8 @@ export function GuestsView({ entry }: { entry: EntryDetail }) {
 
   /** The guests opened — each is one line until opened. */
   const [open, setOpen] = useState<Set<string>>(() => new Set());
+  /** The row being swapped with another (2026-11-25). */
+  const [swapFrom, setSwapFrom] = useState<string | null>(null);
   const docName = useMemo(() => new Map((list.data?.documentTypes ?? []).map((d) => [d.code, d.name])), [list.data]);
   const roomInfo = useMemo(() => {
     const m = new Map<string, { roomNumber: string; typeName: string | null }>();
@@ -93,6 +98,24 @@ export function GuestsView({ entry }: { entry: EntryDetail }) {
 
   const coverage = list.data?.coverage;
   const lead = list.data?.leadSubjectKey ?? "A0";
+  // Rows can be swapped from Arrival on while the booking is not closed.
+  const canSwap = (entry.status === "ACTIVE" || entry.status === "PARKED") && ["S5", "S6", "S7", "S8", "S9"].includes(entry.currentStage ?? "");
+  const candidates: SwapCandidate[] = groups.flatMap(([roomId, rows]) =>
+    rows.map(({ slot, detail, photo }) => {
+      const name = detail?.subjectLabel?.trim() && detail.subjectLabel !== slot.label ? detail.subjectLabel.trim() : null;
+      const info = roomId ? roomInfo.get(roomId) : null;
+      const age = detail?.ageCheck?.ageAtCheckIn;
+      return {
+        key: slot.key,
+        row: slot.label,
+        person: name,
+        where: info ? `Room ${info.roomNumber}${info.typeName ? ` · ${info.typeName}` : ""}` : null,
+        born: detail?.dateOfBirth ? `born ${fmtDmy(detail.dateOfBirth.slice(0, 10))}${age != null ? ` · ${age} at check-in` : ""}` : null,
+        holdsSomeone: !!(name || detail?.documentNumber || detail?.dateOfBirth || detail?.documentType || photo),
+      };
+    }),
+  );
+  const swapSource = swapFrom ? candidates.find((c) => c.key === swapFrom) ?? null : null;
   const several = groups.length > 1 || (groups[0] && groups[0][0] !== "");
   const allKeys = groups.flatMap(([, rows]) => rows.map((r) => r.slot.key));
   const allOpen = allKeys.length > 0 && allKeys.every((k) => open.has(k));
@@ -198,6 +221,13 @@ export function GuestsView({ entry }: { entry: EntryDetail }) {
                       {detail.ageCheck.message}
                     </p>
                   ) : null}
+                  {canSwap && recorded ? (
+                    <div className="gv-swap">
+                      <Button kind={dobOff ? "primary" : "secondary"} compact className={dobOff ? "go" : undefined} onClick={() => setSwapFrom(slot.key)}>
+                        Swap with another guest
+                      </Button>
+                    </div>
+                  ) : null}
                 </div>
               </div>
                 ) : null}
@@ -206,7 +236,16 @@ export function GuestsView({ entry }: { entry: EntryDetail }) {
           })}
         </section>
       ))}
-      <p className="meta sm gv-foot">The details are typed in the guest table at Arrival, Check-in and Stay.</p>
+      <p className="meta sm gv-foot">The details are typed in the guest table at Arrival, Check-in and Stay. A guest on the wrong row is swapped from here.</p>
+      {swapSource ? (
+        <SwapGuestsDialog
+          entryId={entry.id}
+          from={swapSource}
+          others={candidates.filter((c) => c.key !== swapSource.key)}
+          open
+          onClose={() => setSwapFrom(null)}
+        />
+      ) : null}
       <IdPhotoViewerHost />
     </div>
   );

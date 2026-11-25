@@ -27,3 +27,29 @@ export function enforceGuestDetailsCapturedForCheckIn(input: {
   );
 }
 
+
+/**
+ * S6 check-in gate (2026-11-25, operator: an adult's passport on a child's row and a child's on an
+ * adult's row went through Check-in to Stay — "how did the system allow the user to move forward").
+ * A date of birth that puts a guest in another price band than their row (`AgeCheck.blocks`) is
+ * put right before the guest is checked in: the date fixed, the two rows swapped, or the child's
+ * age changed. The FOM (or above) may check in with the rows as they are, saying why — for a party
+ * booked wrong that can no longer be changed at Check-in (the guests change at Arrival).
+ */
+export function enforceGuestAgesFitRowsForCheckIn(input: {
+  mismatches: { label: string; message: string }[];
+  acceptedNote?: string | null;
+  actorLevel?: string | null;
+}) {
+  if (input.mismatches.length === 0) return;
+  const level = input.actorLevel ?? "L1";
+  const mayAccept = level === "L2" || level === "L3" || level === "L4";
+  if (mayAccept && input.acceptedNote && input.acceptedNote.trim().length > 0) return;
+  const rows = input.mismatches.map((m) => m.label).join(", ");
+  throw new PolicyGateBlockedError(
+    "GUEST_AGE_MISMATCH",
+    `A date of birth does not fit its guest's row — ${rows}. Put the date right, swap the two guests' rows, or change the child's age; ` +
+      (mayAccept ? "or check in with them as they are and say why." : "or ask the FOM to check in with them as they are."),
+    { mismatches: input.mismatches },
+  );
+}

@@ -41,6 +41,10 @@ export type EntryListItem = {
   /** Set at S1 by Policy 64. GROUP_MASTER = auto-classified as group; NULL = individual. */
   groupBillingMode?: "GROUP_MASTER" | "INDIVIDUAL_FOLIO" | null;
   useType?: string | null;
+  /** How an apartment is let (2026-11-25): MONTHLY or WEEKLY; null under a week or not an apartment. */
+  apartmentPlan?: string | null;
+  /** How many apartments the guest asked for (2026-11-25); an apartment stay only. */
+  apartmentCount?: number | null;
   segmentNumber?: number;
   createdAt: string;
   updatedAt: string;
@@ -388,9 +392,21 @@ export type PaymentStatusSummary = {
   /** True when an extension exists but its clock ran out — it no longer satisfies the condition. */
   creditExtensionExpired?: boolean;
   /** Where requiredAmount came from: set for this booking, the party's own percentage, or nothing asked. */
-  requirementSource?: "OPERATOR" | "PARTY" | "NONE";
-  /** { mode: "AMOUNT" } or { mode: "PERCENT", percent, baseTotal, quotationId }; from a party, also its name. */
-  requirementBasis?: { mode?: string; percent?: number; baseTotal?: number; quotationId?: string; source?: string; partyName?: string } | null;
+  requirementSource?: "OPERATOR" | "PARTY" | "RENT" | "NONE";
+  /**
+   * { mode: "AMOUNT" } or { mode: "PERCENT", percent, baseTotal, quotationId }; from a party, also its name;
+   * an apartment's first period of rent (source APARTMENT_RENT, 2026-11-25) carries its plan and the period in words.
+   */
+  requirementBasis?: {
+    mode?: string;
+    percent?: number;
+    baseTotal?: number;
+    quotationId?: string;
+    source?: string;
+    partyName?: string;
+    plan?: "MONTHLY" | "WEEKLY";
+    periodWords?: string;
+  } | null;
   /**
    * The advance-payment window (2026-08-01): due between proforma dispatch (`opensAt`) and the
    * check-in date (`deadline`). `active` = clock running; `overdue` = check-in passed unpaid.
@@ -732,6 +748,8 @@ export type EntryDetail = EntryListItem & {
     callerPhone?: string | null;
     callerEmail?: string | null;
     callerOnWhatsApp?: boolean | null;
+    /** The desk's own note to tell same-named guests apart — "BOLD/MOA" (2026-11-25). Never on a paper. */
+    deskTag?: string | null;
     /** The agency's or company's own person, kept here once a guest is named (2026-11-03). */
     partyContactName?: string | null;
     partyContactPhone?: string | null;

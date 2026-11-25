@@ -262,6 +262,8 @@ reservationsRouter.post("/entries/:id/progress-stage", requireActorLevel("L1"), 
         Array.isArray(td.issuedKeyRoomIds)
           ? td.issuedKeyRoomIds.filter((x: unknown): x is string => typeof x === "string")
           : undefined,
+        // Dates of birth that do not fit their rows (2026-11-25): the FOM's words, the level from the session.
+        { actorLevel: req.actor!.level, ageMismatchNote: typeof td.ageMismatchNote === "string" ? td.ageMismatchNote : null },
       );
       res.json(updated);
       return;

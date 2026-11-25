@@ -83,6 +83,7 @@ import {
   stayExtensionCommitRequestSchema,
   stayExtensionPreviewRequestSchema,
   stayExtensionRequestSchema,
+  stayExtensionNowRequestSchema,
   earlyDeparturePreviewRequestSchema,
   earlyDepartureRequestSchema,
 } from "../../dtos/06-reservations/request-schemas.js";
@@ -91,6 +92,7 @@ import {
   listStayExtensions,
   previewStayExtension,
   requestStayExtension,
+  extendStayNow,
   withdrawStayExtension,
 } from "../../services/domain/stay-extension-service.js";
 import { buildPartySeatingStatus, repairPartySeatingForEntry } from "../../services/domain/party-seating-service.js";
@@ -99,6 +101,7 @@ import { getExpectedArrival, setExpectedArrival } from "../../services/domain/ex
 import { resolveNoShowGraceMinutes, timerShowsFrom } from "../../lib/expected-arrival.js";
 import { buildEntryBedPlan, setEntryBedPlanRoom } from "../../services/domain/entry-bed-plan-service.js";
 import { readRoomsReleasedByBooking } from "../../lib/rooms-released-by-booking.js";
+import { describeApartmentsForEntry, pickApartmentsForEntry } from "../../services/domain/apartment-booking-service.js";
 
 export const entriesRouter = Router();
 
@@ -278,6 +281,48 @@ entriesRouter.get("/:id/bed-plan", requireActorLevel("L1"), async (req, res, nex
 });
 
 /**
+ * The apartments for this booking's stay (2026-11-25): every apartment offered, free or not, picked
+ * or not, and what each package comes to under monthly and weekly. `checkInDate` / `checkOutDate`
+ * ask about dates not saved yet. Read-only.
+ */
+entriesRouter.get("/:id/apartments", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    const ymd = (v: unknown) => (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
+    res.json(await describeApartmentsForEntry(prisma, req.params.id, { checkInDate: ymd(req.query.checkInDate), checkOutDate: ymd(req.query.checkOutDate) }));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
+ * Who holds an apartment over this booking's stay, and where each could go — so the desk can move
+ * them out of the way through the room move (2026-11-25). Read-only; L1.
+ */
+entriesRouter.get("/:id/apartments/:unitId/holders", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    const { describeApartmentHolders } = await import("../../services/domain/apartment-booking-service.js");
+    res.json(await describeApartmentHolders(prisma, req.params.id, req.params.unitId));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** Save the apartments picked for an apartment stay — whole apartments, every night. Inquiry; L1. */
+entriesRouter.post("/:id/apartments/pick", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const unitIds = Array.isArray(req.body?.unitIds) ? req.body.unitIds.map(String).slice(0, 50) : [];
+    const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
+    const out = await pickApartmentsForEntry(prisma, req.params.id, actor, { unitIds });
+    await afterStayChanged(prisma, actor, req.params.id, "ROOMS");
+    res.json(out);
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
  * Say what one room is to be made up as. L1: a bed setup is desk work, priced nowhere — the
  * EXTRA bed is the charged one and lives on the composition. `bedType: null` hands the room back
  * to the guest's ask, or to its usual setup when there was none.
@@ -429,6 +474,7 @@ entriesRouter.post("/:id/stay-extension/preview", requireActorLevel("L1"), valid
         newCheckOutDate: req.body.newCheckOutDate,
         perNight: req.body.perNight,
         replaceRoomId: req.body.replaceRoomId,
+        moves: req.body.moves,
         roomCompositions: req.body.roomCompositions,
         ...("requestedDiscount" in (req.body ?? {}) ? { requestedDiscount: req.body.requestedDiscount } : {}),
         ask,
@@ -447,12 +493,37 @@ entriesRouter.post("/:id/stay-extension", requireActorLevel("L2"), validateBody(
         newCheckOutDate: req.body.newCheckOutDate,
         perNight: req.body.perNight,
         replaceRoomId: req.body.replaceRoomId,
+        moves: req.body.moves,
         roomCompositions: req.body.roomCompositions,
         ...("requestedDiscount" in (req.body ?? {}) ? { requestedDiscount: req.body.requestedDiscount } : {}),
         reason: req.body.reason,
         ask: { mode: req.body.askMode, value: Number(req.body.askValue) },
         dueBy: req.body.dueBy ?? null,
         note: req.body.note,
+      }),
+    );
+  } catch (e) {
+    next(e);
+  }
+});
+
+entriesRouter.post("/:id/stay-extension/now", requireActorLevel("L2"), validateBody(stayExtensionNowRequestSchema), async (req, res, next) => {
+  try {
+    const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
+    res.json(
+      await extendStayNow(prisma, actor, req.params.id, {
+        newCheckOutDate: req.body.newCheckOutDate,
+        perNight: req.body.perNight,
+        replaceRoomId: req.body.replaceRoomId,
+        moves: req.body.moves,
+        roomCompositions: req.body.roomCompositions,
+        ...("requestedDiscount" in (req.body ?? {}) ? { requestedDiscount: req.body.requestedDiscount } : {}),
+        reason: req.body.reason,
+        payAt: req.body.payAt,
+        ask: req.body.askMode && req.body.askValue != null ? { mode: req.body.askMode, value: Number(req.body.askValue) } : null,
+        payment: req.body.paymentMethod
+          ? { paymentMethod: req.body.paymentMethod, bankName: req.body.bankName ?? null, journalNumber: req.body.journalNumber ?? null, notes: req.body.notes ?? null }
+          : null,
       }),
     );
   } catch (e) {

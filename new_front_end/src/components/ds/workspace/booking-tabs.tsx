@@ -50,6 +50,7 @@ import type { TraceEvent } from "@/lib/trace/humanize";
 import { StayBand, TripPapersShelf, useTripStays } from "./trip-papers-shelf";
 import { useStaysTogether } from "@/components/ds/steps/s2-together";
 import { TripMoneyReceived } from "@/components/ds/steps/s3-money";
+import { EntryApartmentRates } from "@/components/ds/steps/s1-apartment";
 import { Choice, DsDialog, Fact, Facts, PapersCard, ReasonDialog, StepCard, SubTabs, Tool, atLeast, toastRefusal, useRefreshEntry, NotSentChip } from "@/components/ds/steps/kit";
 import { FolioPapersCard } from "@/components/ds/workspace/folio-papers";
 import { HeldSendDialog, useHeldDocuments } from "@/components/ds/workspace/held-papers";
@@ -482,7 +483,10 @@ export function ChargesView({
             {
               key: "package",
               label: "Package",
-              content: <BookingRateSheet entry={entry} />,
+              // An apartment stay's packages are the apartment packages — every one's weekly and monthly
+              // rate and this stay's (2026-11-25, operator: "show in packages only … instead show the
+              // apartment packages there"); any other stay, its rate sheet.
+              content: entry.useType === "APARTMENT" ? <EntryApartmentRates entry={entry} /> : <BookingRateSheet entry={entry} />,
             },
           ]}
         />
@@ -881,7 +885,14 @@ export function RequestsView({ entry, sealed, tz }: { entry: EntryDetail; sealed
             <div className="form2">
               <div className="wide field">
                 <label>What kind</label>
-                <Choice options={(data?.kinds ?? []).map((k) => [k, k] as const)} value={kind} onChange={setKind} />
+                <select className="input req-kind" value={kind ?? ""} onChange={(e) => setKind(e.target.value || null)}>
+                  <option value="">Pick what kind…</option>
+                  {(data?.kinds ?? []).map((k) => (
+                    <option key={k} value={k}>
+                      {k}
+                    </option>
+                  ))}
+                </select>
               </div>
               <div className="wide field">
                 <label>What exactly</label>

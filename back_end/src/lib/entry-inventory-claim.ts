@@ -294,13 +294,22 @@ export function reservedEntrySpans(
   const rows = (entry?.roomAssignments ?? []).filter((a) => !!a.roomId);
   if (rows.length > 0) {
     const wholeStay = (roomId: string): ClaimSpan => ({ roomId, startDate: stay.checkIn, endDate: stay.checkOut });
-    return rows.map((a) => {
+    return rows.flatMap((a): ClaimSpan[] => {
+      // A room left before any night was slept in it holds nothing (2026-11-25, found on the hotel's
+      // server): a guest moved out of a room the evening they arrived has it end-dated at that same
+      // night, both dates set and equal. Read as the blunt rule below, the room stayed theirs for the
+      // whole stay — drawn as two bookings on one night and kept off sale.
+      if (a.startDate && a.endDate && a.startDate.getTime() === a.endDate.getTime()) return [];
       const start = a.startDate ?? stay.checkIn;
       const rawEnd = a.endDate ?? stay.checkOut;
       // Clamp to the booking's own end — an early departure shortens every room with it.
       const end = rawEnd.getTime() < stay.checkOut.getTime() ? rawEnd : stay.checkOut;
-      if (!(start.getTime() < end.getTime())) return wholeStay(a.roomId);
-      return { roomId: a.roomId, startDate: start, endDate: end };
+      if (!(start.getTime() < end.getTime())) {
+        // A room whose nights all fall after the booking ended early holds nothing.
+        if (start.getTime() < rawEnd.getTime()) return [];
+        return [wholeStay(a.roomId)];
+      }
+      return [{ roomId: a.roomId, startDate: start, endDate: end }];
     });
   }
   // No rows yet — the committed hold is the only record of what was committed.

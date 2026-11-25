@@ -13,6 +13,7 @@
  * generated quote cannot disagree. Nothing is written: no Quotation, no QuotationLine, no trace,
  * no PDF. Re-running it has no effect on the booking.
  */
+import { rentForBookingRooms } from "./apartment-booking-service.js";
 import { resolveBillQuotation } from "../../lib/operative-quotation.js";
 import type { PrismaClient } from "@prisma/client";
 import { Prisma } from "@prisma/client";
@@ -91,6 +92,8 @@ export type PreviewRoomLine = {
   roomId: string;
   roomNumber: string | null;
   nights: number;
+  /** An apartment's rent, period by period (2026-11-25); null for a room priced by the night. */
+  rent: ReturnType<typeof computeQuotationCompositionTotals>["perRoom"][number]["rent"];
   /** Rates actually used — the negotiated one where set, else the resolved default. */
   roomRate: number;
   extraBedRate: number;
@@ -325,6 +328,8 @@ export async function buildQuotationPreview(
       id: true,
       checkInDate: true,
       checkOutDate: true,
+      useType: true,
+      apartmentPlan: true,
       availabilityConfigs: { orderBy: { createdAt: "desc" }, take: 25 },
     },
   });
@@ -371,14 +376,23 @@ export async function buildQuotationPreview(
   // bed prices WITH one — the preview's whole value is being the figure the quote will
   // actually produce. Order/length are preserved, so the by-index reads below stay valid;
   // the per-room `extraBedAutoAdded` flag tells the desk to show the correction.
+  const stayCheckIn = opts?.stayOverride?.checkIn ?? entry.checkInDate;
+  const stayCheckOut = opts?.stayOverride?.checkOut ?? entry.checkOutDate;
+  // An apartment let monthly or weekly is priced by its rent (2026-11-25), as the draft prices it — for
+  // the dates being priced (a stay extension's projection prices its own). Its rooms take no extra bed.
+  const rentByRoom = await rentForBookingRooms(
+    prisma,
+    { useType: String(entry.useType), apartmentPlan: entry.apartmentPlan, checkInDate: stayCheckIn ?? null, checkOutDate: stayCheckOut ?? null },
+    input.roomCompositions.map((c) => c.roomId),
+  );
+  if (rentByRoom.size) {
+    input = { ...input, roomCompositions: input.roomCompositions.map((c) => (rentByRoom.has(c.roomId) ? { ...c, extraBedCount: 0 } : c)) };
+  }
   const bedNorm = autoAddRequiredExtraBeds(input.roomCompositions, {
-    maxExtraBedsForRoom: (c) => roomById.get(c.roomId)?.roomType?.maxExtraBeds ?? null,
+    maxExtraBedsForRoom: (c) => (rentByRoom.has(c.roomId) ? 0 : (roomById.get(c.roomId)?.roomType?.maxExtraBeds ?? null)),
   });
   input = { ...input, roomCompositions: bedNorm.compositions };
   const autoAddedIndexes = new Set(bedNorm.autoAddedIndexes);
-
-  const stayCheckIn = opts?.stayOverride?.checkIn ?? entry.checkInDate;
-  const stayCheckOut = opts?.stayOverride?.checkOut ?? entry.checkOutDate;
   const stayNights =
     stayCheckIn && stayCheckOut
       ? Math.max(1, Math.round((stayCheckOut.getTime() - stayCheckIn.getTime()) / 86_400_000))
@@ -428,6 +442,7 @@ export async function buildQuotationPreview(
       if (own && typeRef) ref = { ...typeRef, ...own };
     }
     const compositionInput: RoomCompositionInput = {
+      rent: rentByRoom.get(c.roomId) ?? null,
       nightMealOverrides: (c.nightMealOverrides ?? []).map((o) => ({ ...o, date: new Date(o.date) })),
       nightDates: perRoomNightDates.get(c.roomId) ?? null,
       occupantCount: c.occupantCount,
@@ -482,7 +497,8 @@ export async function buildQuotationPreview(
   let colLunch = ZERO;
   let colDinner = ZERO;
   const roomsOut: PreviewRoomLine[] = totals.perRoom.map((r, i) => {
-    const roomSubtotal = r.perNightRoom.mul(r.nights);
+    // An apartment's room money is its rent; a room let with it carries none (2026-11-25).
+    const roomSubtotal = r.rent ? r.accommodationNet : r.perNightRoom.mul(r.nights);
     // Night-by-night when a night overrides the bed count (2026-08-19); `rate × count × nights` otherwise.
     const extraBedSubtotal = r.extraBedSubtotal;
     colRoom = colRoom.add(roomSubtotal);
@@ -516,6 +532,7 @@ export async function buildQuotationPreview(
       total: n2(r.total),
       isFoc: input.roomCompositions[i]?.isFoc === true,
       hasNightMealOverrides: r.perNightMealBreakdown.some((b) => b.overridden),
+      rent: r.rent,
     };
   });
 
@@ -558,6 +575,7 @@ export async function buildQuotationPreview(
       nightDates: ds ?? null,
       nightBreakdown: r.perNightMealBreakdown.map((b) => ({ date: b.date, meals: n2(b.meals), extraBeds: b.extraBeds })),
       roomLabel: roomLabels.get(r.roomId) ?? null,
+      rent: r.rent ?? null,
     });
   });
   // The system's rooms by their type, counted; a room given by number by its number (2026-10-30).

@@ -960,51 +960,57 @@ model VIPArrivalNotificationEvent {
 // --- Inquiry & Entry ----------------------------------------------------
 
 model Inquiry {
-  id                         String           @id @default(uuid())
-  referenceNumber            String           @unique
+  id               String   @id @default(uuid())
+  referenceNumber  String   @unique
   /// The guest who is STAYING. Optional since 2026-10-12: an enquiry starts with the CALLER
   /// (below), who may be an agent, an assistant or the guest; the guest staying is named at
   /// Wrap up, and a booking cannot leave Inquiry without one (Policy 16).
-  guestProfileId             String?
+  guestProfileId   String?
   /// Who called (2026-10-12, operator, after the journey mockup). Kept on the enquiry, not on a
   /// guest record: an agency's person or a VIP's assistant is not a guest of the hotel. A phone or
   /// an email is needed to start (not on an OTA booking); "on WhatsApp?" is asked with a phone;
   /// the name can wait for Wrap up.
-  callerTitle                String?
-  callerFirstName            String?
-  callerLastName             String?
-  callerPhone                String?
-  callerEmail                String?
-  callerOnWhatsApp           Boolean?
+  callerTitle      String?
+  callerFirstName  String?
+  callerLastName   String?
+  callerPhone      String?
+  callerEmail      String?
+  callerOnWhatsApp Boolean?
+
+  /// A short note the desk keeps to tell this booking apart from others of the same name — the
+  /// guest's company, group or code, "BOLD/MOA" (2026-11-25, operator: the front desk typed it into
+  /// the name, where it became a last name and would reach the papers and emails). The desk's own:
+  /// shown greyed beside the name on the desk, never printed on a paper or in an email. Optional.
+  deskTag String?
 
   /// The agency's or company's own person on this enquiry (2026-11-03). Who is arriving becomes the
   /// guest once one is named, on every booking, so this person is kept here rather than lost: the
   /// voucher prints them as who booked it.
-  partyContactName  String?
-  partyContactPhone String?
-  partyContactEmail String?
+  partyContactName           String?
+  partyContactPhone          String?
+  partyContactEmail          String?
   /// Every contact person on this enquiry, first one first (2026-11-05, operator: "we are adding
   /// another contact person in case that person doesn't respond"): [{ title?, name, phone?, email? }].
   /// partyContactName / Phone / Email hold the first. Null on an enquiry from before this.
-  partyContacts     Json?
+  partyContacts              Json?
   /// The guest's own email this enquiry came in by (2026-11-12, operator: "when we send an email like
   /// quotation and other papers, how can we send it in that same thread of the first email guest
   /// sent"). Picked by the desk from the hotel's mailbox; every paper of every stay on the enquiry
   /// then goes out as a reply inside that conversation (In-Reply-To / References, "Re: <subject>").
   /// Null when nobody linked one: the papers start the system's own conversation, as before.
-  emailThreadMessageId  String?
-  emailThreadSubject    String?
-  emailThreadFrom       String?
-  emailThreadFromName   String?
+  emailThreadMessageId       String?
+  emailThreadSubject         String?
+  emailThreadFrom            String?
+  emailThreadFromName        String?
   /// The guest's email's own References header, kept so the reply names the whole conversation.
-  emailThreadReferences String?
-  emailThreadReceivedAt DateTime?
-  emailThreadLinkedAt   DateTime?
-  emailThreadLinkedBy   String?
+  emailThreadReferences      String?
+  emailThreadReceivedAt      DateTime?
+  emailThreadLinkedAt        DateTime?
+  emailThreadLinkedBy        String?
   /// Our latest email in that conversation, added to the next one's References.
-  emailThreadLastSentId String?
+  emailThreadLastSentId      String?
   /// The conversation, email by email (2026-11-12): their first email, what we sent, their replies.
-  emails                InquiryEmail[]
+  emails                     InquiryEmail[]
   agentProfileId             String?
   sourceChannel              String           @default("DIRECT")
   /// How the guest came in, as the desk records it (2026-09-18). `sourceChannel` holds only the
@@ -1216,9 +1222,15 @@ model Entry {
   registrationCompletedAt DateTime?
   registrationCompletedBy String?
 
-  /// SIG-S1 apartment context (required for APARTMENT at S1→S2 exit)
+  /// SIG-S1 apartment context. No longer asked for (2026-11-25): the nights come from the dates
+  /// and the rate from the apartment package. Kept for the rows that carry them.
   apartmentDurationNights Int?
   apartmentRateTierCode   String?
+  /// How an apartment is let (2026-11-25): MONTHLY or WEEKLY; null for a stay under a week, which
+  /// is charged by the night, and for any booking that is not an apartment. lib/apartment-rent.ts.
+  apartmentPlan           String?
+  /// How many apartments the guest asked for (2026-11-25); an apartment stay only. A 2 BHK is one.
+  apartmentCount          Int?
 
   /// A booking split off another (2026-10-14, operator: "move one room to other dates ... as a
   /// different entry under the same inquiry, or a new inquiry"): the booking its rooms came from.
@@ -1233,14 +1245,14 @@ model Entry {
   /// A return stay set up "the same as" another stay of its enquiry (2026-11-03, operator: "they
   /// will have the same info till s2"): the stay it copies its guests, rooms by type and table
   /// from, until it is priced or changed by hand. A soft link, like `splitFromEntryId`.
-  followsEntryId   String?
+  followsEntryId String?
   /// What was last copied, so a save that changes nothing copies nothing, and any room type that
   /// could not be copied, for the desk to ask about.
-  followState      Json?
+  followState    Json?
   /// The desk's answer "Same as this stay" (2026-11-09, operator): the stays set up the same are
   /// worked in ONE table at Negotiation. It outlives the copying above, which ends at Inquiry; only
   /// "Set its own" takes it off. A soft link, like `splitFromEntryId`.
-  sameSetupAs      String?
+  sameSetupAs    String?
 
   inquiry                      Inquiry                       @relation(fields: [inquiryId], references: [id])
   guestProfile                 GuestProfile?                 @relation(fields: [guestProfileId], references: [id])
@@ -1649,6 +1661,7 @@ model Room {
   advanceApplications       AdvanceApplication[]
   roomMoveLegsFrom          RoomMoveLeg[]              @relation("RoomMoveLegFrom")
   roomMoveLegsTo            RoomMoveLeg[]              @relation("RoomMoveLegTo")
+  apartmentUnitRoom         ApartmentUnitRoom?
 
   @@map("rooms")
 }
@@ -1847,17 +1860,17 @@ model CommittedHold {
 // --- Reservation, Folios ------------------------------------------------
 
 model Reservation {
-  id                      String    @id @default(uuid())
-  entryId                 String
-  segmentId               String    @unique
-  frozenRate              Decimal   @db.Decimal(15, 2)
-  frozenRatePlanId        String
-  frozenInclusions        Json      @default("{}")
-  frozenCancellationTerms Json      @default("{}")
-  frozenBillingModel      String
-  frozenCheckInDate       DateTime
-  frozenCheckOutDate      DateTime
-  frozenGuestCount        Int
+  id                        String    @id @default(uuid())
+  entryId                   String
+  segmentId                 String    @unique
+  frozenRate                Decimal   @db.Decimal(15, 2)
+  frozenRatePlanId          String
+  frozenInclusions          Json      @default("{}")
+  frozenCancellationTerms   Json      @default("{}")
+  frozenBillingModel        String
+  frozenCheckInDate         DateTime
+  frozenCheckOutDate        DateTime
+  frozenGuestCount          Int
   /// Snapshot of the accepted quotation's full `commercialTerms` (Phase C, 2026-07-27).
   /// Includes `roomCompositions` array + `compositionTotals` when per-room composition was
   /// supplied at S2, otherwise the flat pricingBreakdown. Legal record — never mutated after
@@ -1865,17 +1878,17 @@ model Reservation {
   ///   - room-assignment-service to hydrate per-room composition into RoomAssignment at S5
   ///   - PDF renderers (voucher, invoice) to show per-room breakdown
   ///   - Reports / audit trails
-  frozenCommercialTerms   Json?
-  creditCeilingIfExtended Decimal?  @db.Decimal(15, 2)
-  confirmedAt             DateTime
-  confirmedBy             String
-  confirmationVoucherSent Boolean   @default(false)
+  frozenCommercialTerms     Json?
+  creditCeilingIfExtended   Decimal?  @db.Decimal(15, 2)
+  confirmedAt               DateTime
+  confirmedBy               String
+  confirmationVoucherSent   Boolean   @default(false)
   /// The voucher's own number, VOU-YYYYMMDD-NNNN (2026-10-13). Each confirmation — a re-entry's,
   /// a room move's, a return stay's — is a new voucher with its own number, and its stored file is
   /// named by it. (Files were named by the enquiry, so every later voucher reused the first one's.)
-  confirmationVoucherNumber String? @unique
-  sealedAt                DateTime?
-  createdAt               DateTime  @default(now())
+  confirmationVoucherNumber String?   @unique
+  sealedAt                  DateTime?
+  createdAt                 DateTime  @default(now())
 
   // === Confirmation voucher PDF (write-once, checksum-verified) ===
   // Same append-only pattern as Invoice.pdfStorageKey. The stored file is the exact PDF the
@@ -1985,14 +1998,14 @@ model Folio {
   /// the S5/S6 gates still run on money received + credit extension; this records WHAT the
   /// guest said and WHEN the remainder is coming, drives the promise timer (W38) and the
   /// settlement surfaces at S4–S8. Segment-scoped by `setAt` like the requirement pin.
-  advancePaymentPlan Json?
+  advancePaymentPlan   Json?
   /// What the desk answered about money paid in an earlier pass (2026-11-05): kept on this
   /// pass's proforma, or refunded. `{ segmentId, answer: CARRY | REFUND, cause?, answeredAt, answeredBy }`.
   /// Only the pass it names counts, so a booking sent back again is asked again.
   earlierAdvanceAnswer Json?
 
   entry                   Entry                          @relation(fields: [entryId], references: [id])
-  refundRequests RefundRequest[]
+  refundRequests          RefundRequest[]
   payments                PaymentRecord[]
   lines                   FolioLine[]
   disputes                DisputeRecord[]
@@ -2000,9 +2013,9 @@ model Folio {
   writeOffRecords         WriteOffRecord[]
   billingModelTransitions BillingModelTransitionRecord[]
 
-  interimPaymentRequests InterimPaymentRequest[]
+  interimPaymentRequests  InterimPaymentRequest[]
   checkInPaymentDeferrals CheckInPaymentDeferral[]
-  advanceApplications    AdvanceApplication[]
+  advanceApplications     AdvanceApplication[]
 
   @@map("folios")
 }
@@ -2562,17 +2575,17 @@ model NoShowDeterminationRecord {
 }
 
 model RoomInspectionRecord {
-  id                   String   @id // readable PREFIX-YYYYMMDD-NNNN — allocated by allocateReadableId("ROOM_INSPECTION", ...)
+  id                   String    @id // readable PREFIX-YYYYMMDD-NNNN — allocated by allocateReadableId("ROOM_INSPECTION", ...)
   entryId              String
   roomId               String
   segmentId            String
   inspectedBy          String
   inspectedAt          DateTime
-  isDeferred           Boolean  @default(false)
+  isDeferred           Boolean   @default(false)
   deficientFlagStatus  String
   deficientConditionId String?
   inspectorAssessment  String?
-  damageFound          Boolean  @default(false)
+  damageFound          Boolean   @default(false)
   damageNotes          String?
   /// How a damage found here was answered (2026-10-26, SIG-S8 §253 "damage assessment complete or
   /// governed-deferred"): CHARGED · WAIVED · LATER (decide after departure). NULL = not answered.
@@ -2585,7 +2598,7 @@ model RoomInspectionRecord {
   damageFolioLineId    String?
   /// The fault report raised when the damage stops the room being sold.
   damageFaultId        String?
-  createdAt            DateTime @default(now())
+  createdAt            DateTime  @default(now())
 
   entry Entry @relation(fields: [entryId], references: [id])
   room  Room  @relation(fields: [roomId], references: [id])
@@ -3633,14 +3646,14 @@ model RatePackage {
   currency           String   @default("BTN")
   rateIsTaxInclusive Boolean  @default(false)
 
-  effectiveFrom DateTime  @default(now())
-  effectiveTo   DateTime? // null = currently active
+  effectiveFrom  DateTime  @default(now())
+  effectiveTo    DateTime? // null = currently active
   /// The version that replaced this one (2026-11-24). Versions were found by name; this lets a
   /// package be renamed and still read as one package. Null on the live version and a retired one.
   supersededById String?
-  notes         String?
-  createdAt     DateTime  @default(now())
-  createdBy     String
+  notes          String?
+  createdAt      DateTime  @default(now())
+  createdBy      String
 
   travelAgent      TravelAgent?              @relation(fields: [travelAgentId], references: [id], onUpdate: Cascade)
   corporateAccount CorporateAccount?         @relation(fields: [corporateAccountId], references: [id], onUpdate: Cascade)
@@ -3703,6 +3716,70 @@ model HouseTariff {
   @@index([effectiveFrom])
   @@index([effectiveTo])
   @@map("house_tariffs")
+}
+
+/// The hotel's service apartments, let by the week or the month (2026-11-25, operator, from
+/// "Service Apartment Rates - 2026"). A package is a kind of apartment ("Premium Suite"); its units
+/// are the apartments the hotel lets ("503", "504"), each one room or several rooms let together
+/// (the 2 BHK "505" is rooms 5051 + 5052), with the most guests it takes.
+///
+/// The rates are WITHOUT service charge and GST, to the chhertum, as every rate is; the hotel's
+/// sheet has them with both in, so the figure typed is kept beside (`*Typed`). The bill taxes the
+/// rate line by line, so a rate typed as Nu 48,000 bills Nu 47,999.99 (operator's choice, the same
+/// day: strict 5%).
+model ApartmentPackage {
+  id                String   @id @default(uuid())
+  name              String   @unique
+  carpetAreaSqft    Int?
+  amenities         String?
+  /// Seven nights, without service charge and GST.
+  weeklyRate        Decimal  @db.Decimal(12, 2)
+  /// From a check-in date to the same date the month after, without service charge and GST.
+  monthlyRate       Decimal  @db.Decimal(12, 2)
+  /// The rates were typed with service charge and GST in them; the figures as typed.
+  ratesTypedWithTax Boolean  @default(false)
+  weeklyRateTyped   Decimal? @db.Decimal(12, 2)
+  monthlyRateTyped  Decimal? @db.Decimal(12, 2)
+  sortOrder         Int      @default(0)
+  isActive          Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  createdBy         String
+  updatedAt         DateTime @updatedAt
+  updatedBy         String?
+
+  units ApartmentUnit[]
+
+  @@map("apartment_packages")
+}
+
+/// One apartment the hotel lets: one room, or several rooms always let together.
+model ApartmentUnit {
+  id           String   @id @default(uuid())
+  packageId    String
+  /// The apartment's own number, as the hotel names it ("503", "505").
+  label        String   @unique
+  maxOccupants Int
+  sortOrder    Int      @default(0)
+  createdAt    DateTime @default(now())
+
+  package ApartmentPackage    @relation(fields: [packageId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  rooms   ApartmentUnitRoom[]
+
+  @@index([packageId])
+  @@map("apartment_units")
+}
+
+/// A room of an apartment. A room belongs to one apartment at most.
+model ApartmentUnitRoom {
+  id     String @id @default(uuid())
+  unitId String
+  roomId String @unique
+
+  unit ApartmentUnit @relation(fields: [unitId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  room Room          @relation(fields: [roomId], references: [id], onUpdate: Cascade)
+
+  @@index([unitId])
+  @@map("apartment_unit_rooms")
 }
 
 /// Part of the advance, put against ONE room or space (2026-09-11, operator request).
@@ -3833,32 +3910,32 @@ model TripPaper {
 /// that answers one of these, found by its In-Reply-To / References. The words stay in the mailbox:
 /// only who, when, the subject and the first lines are kept, to list it.
 model InquiryEmail {
-  id              String    @id @default(uuid())
-  inquiryId       String
-  inquiry         Inquiry   @relation(fields: [inquiryId], references: [id])
+  id                      String    @id @default(uuid())
+  inquiryId               String
+  inquiry                 Inquiry   @relation(fields: [inquiryId], references: [id])
   /// The stay it was sent for (SENT), or the stay whose paper it answers (REPLY). Soft.
-  entryId         String?
-  kind            String
-  messageId       String
-  fromAddress     String?
-  fromName        String?
-  toAddresses     String[]  @default([])
-  subject         String
-  snippet         String    @default("")
-  at              DateTime
+  entryId                 String?
+  kind                    String
+  messageId               String
+  fromAddress             String?
+  fromName                String?
+  toAddresses             String[]  @default([])
+  subject                 String
+  snippet                 String    @default("")
+  at                      DateTime
   /// SENT: which paper it carried (QUOTATION, PROFORMA_INVOICE, CONFIRMATION_VOUCHER, …).
-  paperKind       String?
-  attachmentNames String[]  @default([])
-  inReplyTo       String?
+  paperKind               String?
+  attachmentNames         String[]  @default([])
+  inReplyTo               String?
   /// REPLY: the kind of paper the email it answers carried.
-  answersKind     String?
-  seenAt          DateTime?
-  seenBy          String?
+  answersKind             String?
+  seenAt                  DateTime?
+  seenBy                  String?
   /// REPLY recorded as the guest's answer to a paper (a CommunicationRecord).
   answeredCommunicationId String?
-  answeredAt      DateTime?
-  answeredBy      String?
-  createdAt       DateTime  @default(now())
+  answeredAt              DateTime?
+  answeredBy              String?
+  createdAt               DateTime  @default(now())
 
   @@unique([inquiryId, messageId])
   @@index([inquiryId, at])

@@ -412,8 +412,17 @@ export function s1Readiness(entry: EntryDetail): Precondition[] {
     { label: "What kind of stay", met: !!entry.useType, card: "caller" },
     { label: "Stay dates set", met: !!(entry.checkInDate && entry.checkOutDate), card: "stay" },
     { label: "Guest count set", met: (entry.guestCount ?? 0) >= 1, card: "stay" },
-    { label: "Availability searched", met: configs.length > 0, card: "house" },
-    { label: "Preferred room selected", met: !!preferred && !pickFitsStay(preferred.optionSelected, entry, preferred.searchCriteria), card: "house" },
+    // An apartment stay (2026-11-25): how it is let, unless the stay is under a week (charged by the
+    // night). Which plan the dates may take is the server's to refuse, in words.
+    ...(entry.useType === "APARTMENT"
+      ? [
+          // How many apartments the guest wants (2026-11-25, operator).
+          { label: "How many apartments", met: entry.apartmentCount != null, card: "stay" },
+          { label: "How the apartment is let", met: !!entry.apartmentPlan || (nightsBetween(entry.checkInDate, entry.checkOutDate) ?? 0) < 7, card: "stay" },
+        ]
+      : []),
+    { label: entry.useType === "APARTMENT" ? "The apartments searched" : "Availability searched", met: configs.length > 0, card: "house" },
+    { label: entry.useType === "APARTMENT" ? "The apartments chosen" : "Preferred room selected", met: !!preferred && !pickFitsStay(preferred.optionSelected, entry, preferred.searchCriteria), card: "house" },
     { label: "The guest staying, named", met: !!entry.guestProfile, card: "wrap" },
     { label: "A contact on file", met: hasAnyContact(entry), card: "wrap" },
     // Only while one is open (2026-11-24): the move waits for the desk's answer (Policy 12).
@@ -558,6 +567,9 @@ export function s6Readiness(
     keys?: { label: string; met: boolean } | null;
     /** The rest of the bill promised at check-in (2026-10-29) — the server's `GET /checkin-payment`. */
     balance?: { promisedAtCheckIn: boolean; gateMet: boolean } | null;
+    /** Rows whose date of birth puts the guest in another price band (2026-11-25) — the server's
+     *  `ageCheck.blocks`. The FOM may check in with them as they are and say why. */
+    ageMismatches?: { rows: string[]; fomMay: boolean } | null;
   },
 ): Precondition[] {
   const g = entry.guestProfile;
@@ -585,6 +597,17 @@ export function s6Readiness(
     { label: "Identity verified", met: opts?.identityVerified ?? false, card: "identity" },
     ...(gd && !gd.vipExempt
       ? [{ label: `Guest details recorded (${gd.filledSlots}/${gd.totalSlots})`, met: gd.satisfied, card: "identity" }]
+      : []),
+    ...(opts?.ageMismatches && opts.ageMismatches.rows.length
+      ? [
+          {
+            label: opts.ageMismatches.fomMay
+              ? `Dates of birth that do not fit their rows (${opts.ageMismatches.rows.join(", ")}) — put right, or say why at check-in`
+              : `Dates of birth fit their rows — ${opts.ageMismatches.rows.join(", ")}`,
+            met: opts.ageMismatches.fomMay,
+            card: "identity",
+          },
+        ]
       : []),
     ...(opts && "registrationConfirmed" in opts
       ? [{ label: "Registration confirmed", met: !!opts.registrationConfirmed, card: "registration" }]

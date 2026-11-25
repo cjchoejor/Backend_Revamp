@@ -78,6 +78,12 @@ export type LedgerPaymentLike = {
   createdAt: Date;
   stage?: string | null;
   interimPaymentRequestId?: string | null;
+  /** How the money came — the bills print it (2026-11-25). */
+  bankName?: string | null;
+  journalNumber?: string | null;
+  paymentVerificationRef?: string | null;
+  tripTransferRef?: string | null;
+  paidForTrip?: boolean | null;
 };
 
 export type LedgerCharge<L extends LedgerLineLike = LedgerLineLike> = {

@@ -42,8 +42,9 @@ export type IdentityProofSummary = {
 };
 
 /** The server's check of a date of birth against the guest's row — a child of the age the booking
- *  states, an adult of the legal age — said as a warning, never a refusal. */
-export type AgeCheck = { ageAtCheckIn: number; ok: boolean; message: string | null };
+ *  states, an adult of the legal age. `blocks` (2026-11-25): another price band than the row — put
+ *  right before Check-in completes and before the table is confirmed. */
+export type AgeCheck = { ageAtCheckIn: number; ok: boolean; message: string | null; blocks?: boolean };
 
 /** Config-driven document-type vocabulary (`identity.documentTypes`) — the guest-detail
  *  table's dropdown AND the S6 verification select read this, never a hardcoded list. */
@@ -140,6 +141,28 @@ export async function setLeadGuest(session: Session, entryId: string, subjectKey
     `/api/entries/${entryId}/identity-details/lead`,
     { method: "POST", session, body: { subjectKey } },
   );
+}
+
+export type GuestRowSwapSide = {
+  subjectKey: string;
+  row: string;
+  person: string | null;
+  holdsSomeone: boolean;
+  fitsAfter: { ok: boolean; blocks: boolean; message: string | null } | null;
+};
+export type GuestRowSwapOutcome = {
+  entryId: string;
+  a: GuestRowSwapSide;
+  b: GuestRowSwapSide;
+  leadMovesTo: string | null;
+  refusal: string | null;
+  swapped: boolean;
+  verificationReset: boolean;
+};
+
+/** Swap two guests' rows (2026-11-25): everything recorded on each moves to the other. `dryRun` writes nothing. */
+export async function swapGuestRows(session: Session, entryId: string, body: { a: string; b: string; dryRun?: boolean }) {
+  return apiRequest<GuestRowSwapOutcome>(`/api/entries/${entryId}/identity-details/swap`, { method: "POST", session, body });
 }
 
 /** Clear one guest's row (2026-10-23): the typed details, the ID photo, or both. A cleared

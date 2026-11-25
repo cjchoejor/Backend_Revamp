@@ -16,7 +16,8 @@ import * as preArrivalService from "./pre-arrival-service.js";
 import { enforceRoomAssignmentPresentForCheckInCompletion, enforceRoomPhysicalReadyForS6CheckInCompletion } from "../../policies/01-availability/p01-room-assignment-and-physical-ready-s6-checkin.js";
 import { enforceH1EligibleForS6CheckInCompletion } from "../../policies/02-ownership-custodian-assignment/p05-h1-eligible-for-s6-checkin-completion.js";
 import { enforceIdentityVerifiedBeforeCheckInCompletion } from "../../policies/06-guest-identity/p16-identity-verified-before-checkin-completion.js";
-import { enforceGuestDetailsCapturedForCheckIn } from "../../policies/06-guest-identity/p15-guest-identity-capture.js";
+import { enforceGuestAgesFitRowsForCheckIn, enforceGuestDetailsCapturedForCheckIn } from "../../policies/06-guest-identity/p15-guest-identity-capture.js";
+import { findAgeMismatches } from "../../lib/party-age-check.js";
 import { guestDetailsCoverageForEntry } from "./guest-identity-proof-service.js";
 import { enforceKeyCountIssuedForCheckInCompletion, enforceRegistrationConfirmedForCheckInCompletion } from "../../policies/06-guest-identity/p16-checkin-completion-ceremony-gates.js";
 import { enforceAdvancePaymentReconciledBeforeCheckInCompletion, enforceCheckInBalancePaidOrDeferred } from "../../policies/12-advance-payment/p29-advance-payment-reconciled-before-checkin-completion.js";
@@ -46,6 +47,9 @@ export async function completeCheckInToS7(
    *  handed over — stamped on the KEYS trace so the hotel can track each key, not just the
    *  count. Optional; count-only callers behave exactly as before. */
   issuedKeyRoomIds?: string[],
+  /** Who is checking in and, for the FOM, why the guests go in with dates that do not fit their
+   *  rows (2026-11-25) — read from the verified session, never the body's word for the level. */
+  opts?: { actorLevel?: string | null; ageMismatchNote?: string | null },
 ) {
   if (clientVersion == null) {
     throw new ValidationError("version is required for check-in completion");
@@ -90,6 +94,10 @@ export async function completeCheckInToS7(
   if (!detailsCoverage.vipExempt) {
     enforceGuestDetailsCapturedForCheckIn({ missing: detailsCoverage.missing });
   }
+  // Each date of birth fits its row (2026-11-25): a guest filed on another guest's row is put
+  // right before they are checked in, or the FOM checks them in as they are and says why.
+  const ageMismatches = (await findAgeMismatches(prisma, entryId)).filter((m) => m.blocks);
+  enforceGuestAgesFitRowsForCheckIn({ mismatches: ageMismatches, acceptedNote: opts?.ageMismatchNote, actorLevel: opts?.actorLevel });
 
   enforceFolioProvisionalBeforeCheckInCompletion({ folio: entry.folio });
   enforceAdvancePaymentReconciledBeforeCheckInCompletion({
@@ -576,6 +584,26 @@ export async function completeCheckInToS7(
 
   // A request to pay later that nobody answered is moot once the guest is in.
   await closeMootCheckInPaymentRequests(prisma, entryId, "CHECKED_IN").catch(() => {});
+
+  // The FOM's words for dates that do not fit, kept once the guests are in (2026-11-25).
+  if (ageMismatches.length) {
+    await prisma.traceEvent.create({
+      data: {
+        eventType: "CHECK_IN.AGE_MISMATCH_ACCEPTED",
+        actorId,
+        actorLevel: (opts?.actorLevel as any) ?? "L2",
+        entityType: "Entry",
+        entityId: entryId,
+        operation: "UPDATE",
+        timestamp: new Date(),
+        stageContext: entry.currentStage,
+        inquiryId: entry.inquiryId,
+        entryId,
+        payload: { entryId, note: opts?.ageMismatchNote?.trim() ?? null, rows: ageMismatches },
+        createdBy: actorId,
+      },
+    });
+  }
 
   // Tonight on the bill at once (2026-10-29) — the hotel's run later finds it there and posts nothing more.
   const checkedInBy = await prisma.staffUser.findUnique({ where: { id: actorId }, select: { actorLevel: true } }).catch(() => null);

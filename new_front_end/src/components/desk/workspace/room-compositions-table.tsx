@@ -152,7 +152,8 @@ export function FixedDiscount({
   discountUnit,
   onDiscountChange,
   lockCommercial,
-}: DiscountEdit & { lockCommercial?: boolean }) {
+  notPossible,
+}: DiscountEdit & { lockCommercial?: boolean; notPossible?: string | null }) {
   const [open, setOpen] = useState(false);
   const [unit, setUnit] = useState<DiscountUnit | null>(null);
   const [value, setValue] = useState("");
@@ -163,6 +164,17 @@ export function FixedDiscount({
   const words = !live ? null : setUnitNow === "percent" ? `${set}% off` : `Nu ${set.toLocaleString("en-US")} off`;
   // Locked and nothing set: nothing to show. Locked with a discount: the fact still reads.
   if (lockCommercial && !live) return null;
+  // Not possible on this booking (an apartment's rent, 2026-11-25): shown shut, saying why.
+  if (notPossible && !live) {
+    return (
+      <div className="rct-disc">
+        <button type="button" className="glass-btn" disabled title={notPossible}>
+          Fixed discount
+        </button>
+        <Help label="Why the discount is shut">{notPossible}</Help>
+      </div>
+    );
+  }
 
   const figure = Number(value);
   const ok = !!unit && value.trim() !== "" && Number.isFinite(figure) && figure > 0 && (unit !== "percent" || figure <= 100);
@@ -923,6 +935,12 @@ export function RoomCompositionsTable({
     staleTime: 30_000,
   });
   const rateRef = rateRefQuery.data ?? null;
+  /** The apartment a room belongs to, on a booking let by the month or the week (2026-11-25). */
+  const apartmentOf = useMemo(() => {
+    const m = new Map<string, NonNullable<NonNullable<typeof rateRef>["apartments"]>[number]>();
+    for (const a of rateRef?.apartments ?? []) for (const id of a.roomIds) m.set(id, a);
+    return m;
+  }, [rateRef]);
   const refByRoomType = useMemo(
     () => new Map((rateRef?.roomTypes ?? []).map((t) => [t.roomTypeId, t])),
     [rateRef],
@@ -941,8 +959,15 @@ export function RoomCompositionsTable({
     const r = rows[roomId];
     if (!r) return null;
     const adults = cnt(r.ad);
-    if (adults + cnt(r.c6) + cnt(r.u6) === 0)
+    const apartment = apartmentOf.get(roomId);
+    if (adults + cnt(r.c6) + cnt(r.u6) === 0) {
+      // An apartment is let whole (2026-11-25): one of its rooms may stand empty while another holds the guests.
+      if (apartment) {
+        const anyone = apartment.roomIds.some((id) => rows[id] && cnt(rows[id].ad) + cnt(rows[id].c6) + cnt(rows[id].u6) > 0);
+        return anyone ? null : `nobody is in apartment ${apartment.label} — put the guests in its rooms`;
+      }
       return "nobody is in this room — put someone in it, or drop the room back at Inquiry";
+    }
     if (adults === 0) return "no adult in this room — children cannot be booked in on their own";
     return null;
   };
@@ -1224,7 +1249,8 @@ export function RoomCompositionsTable({
     const rt = roomById.get(id)?.roomType;
     return rt?.maxCapacity ?? rt?.standardCapacity ?? null;
   };
-  const bedMaxOf = (id: string): number => roomById.get(id)?.roomType?.maxExtraBeds ?? 0;
+  // An apartment's rooms take no extra bed (2026-11-25): it is let for its guests, up to its own most.
+  const bedMaxOf = (id: string): number => (apartmentOf.has(id) ? 0 : (roomById.get(id)?.roomType?.maxExtraBeds ?? 0));
   /** Extra beds a room NEEDS for its adults: everyone past base capacity gets one (children
    *  under 11 share bedding — they never need a bed), AND — p78, mirrored from the backend —
    *  a non-FOC room with 3+ adult-rate guests always needs at least one, even when its base
@@ -2452,6 +2478,14 @@ export function RoomCompositionsTable({
                             {chip.text}
                           </span>
                         )}
+                        {apartmentOf.has(id) && (
+                          <span
+                            className="nn"
+                            title={`Let ${apartmentOf.get(id)!.plan === "MONTHLY" ? "monthly" : "weekly"} as apartment ${apartmentOf.get(id)!.label} (${apartmentOf.get(id)!.packageName}) — its rooms are let together and priced by the rent, with no extra bed`}
+                          >
+                            {apartmentOf.get(id)!.roomIds.length > 1 ? `apartment ${apartmentOf.get(id)!.label}` : `apartment · ${apartmentOf.get(id)!.plan === "MONTHLY" ? "monthly" : "weekly"}`}
+                          </span>
+                        )}
                       </td>
                       {bedsShown && <BedCell roomId={id} cell={bedPlan?.[id]} onChange={onBedChange} />}
                       {pkgsShown &&
@@ -2517,6 +2551,31 @@ export function RoomCompositionsTable({
                       {ratesOpen &&
                         rateCols.map((col) => {
                           const consumes = roomConsumes(id);
+                          const apartment = apartmentOf.get(id);
+                          if (apartment && col === "rRoom") {
+                            const l = pvByRoom.get(id);
+                            const lead = apartment.leadRoomId === id;
+                            return (
+                              <td
+                                key={col}
+                                className="mut"
+                                title={
+                                  lead
+                                    ? `The rent of apartment ${apartment.label}, ${apartment.plan === "MONTHLY" ? "by the month" : "by the week"} — set on the admin console, not typed here`
+                                    : `Part of apartment ${apartment.label} — its rent is on ${nameOf(apartment.leadRoomId)}`
+                                }
+                              >
+                                {lead ? (
+                                  <>
+                                    rent
+                                    {l && <span className="rct-sub">{fmtNu(l.roomSubtotal)}</span>}
+                                  </>
+                                ) : (
+                                  "—"
+                                )}
+                              </td>
+                            );
+                          }
                           const active =
                             col === "rRoom" ? true : col === "rBed" ? cnt(r.bed) > 0 : consumes[col];
                           if (!active) {
@@ -2721,7 +2780,13 @@ export function RoomCompositionsTable({
               )}
               <span className="st-right">
                 {nightPicker}
-                <FixedDiscount discountValue={discountValue} discountUnit={discountUnit} onDiscountChange={onDiscountChange} lockCommercial={lockCommercial || readOnly} />
+                <FixedDiscount
+                  discountValue={discountValue}
+                  discountUnit={discountUnit}
+                  onDiscountChange={onDiscountChange}
+                  lockCommercial={lockCommercial || readOnly}
+                  notPossible={(rateRef?.apartments?.length ?? 0) > 0 ? "A discount on an apartment's rent is not possible yet — the rent is set on the admin console." : null}
+                />
                 {grouped.foot}
                 <b
                   className="st-total"
@@ -2878,6 +2943,9 @@ export function RoomCompositionsTable({
           </span>
         )}
         {nightPicker}
+        {/* Expand and the table's "?" stay together, so the "?" never wraps onto a line of its own
+            (2026-11-25, operator: "this part is very messy"). */}
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
         {!expanded && (
           <button
             type="button"
@@ -2906,6 +2974,7 @@ export function RoomCompositionsTable({
             <p>Every figure is priced by the hotel&rsquo;s server, the same way the quotation will be.</p>
           </Help>
         )}
+        </span>
       </div>
       {/* A refusal of what was just typed — the loudest thing on the table while it shows
           (2026-09-29, "UIappeal"): it appears with a flash, reads at the table's own size in the
@@ -2947,7 +3016,13 @@ export function RoomCompositionsTable({
         </table>
       </div>
 
-      <FixedDiscount discountValue={discountValue} discountUnit={discountUnit} onDiscountChange={onDiscountChange} lockCommercial={lockCommercial || readOnly} />
+      <FixedDiscount
+                  discountValue={discountValue}
+                  discountUnit={discountUnit}
+                  onDiscountChange={onDiscountChange}
+                  lockCommercial={lockCommercial || readOnly}
+                  notPossible={(rateRef?.apartments?.length ?? 0) > 0 ? "A discount on an apartment's rent is not possible yet — the rent is set on the admin console." : null}
+                />
 
       {/* Running total, backend-priced (2026-08-07): the same figures the generated quote will
           carry — net, taxes, grand total, and the discount's effect when one is set. */}

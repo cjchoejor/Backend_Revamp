@@ -678,6 +678,11 @@
 .ds .rchart-date { display: inline-flex; align-items: center; gap: 6px; font-size: var(--t-sm); color: var(--ink-2); }
 .ds .rchart-date input.input:not(.desk-root *) { width: 150px; height: var(--control-h-compact); padding: 0 8px; }
 .ds .rchart-wrap { overflow: auto; max-height: 70vh; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--surface); }
+/* An old picture while a fresh one is read (2026-11-25): dimmed, with a line saying so at the top. */
+.ds .rchart-wrap.is-old { opacity: .5; transition: opacity .12s; }
+.ds .rchart-updating { position: fixed; z-index: 93; left: 50%; top: 64px; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; padding: 7px 14px; border-radius: 6px; background: var(--ink); color: #fff; font-size: 13px; font-weight: 600; box-shadow: 0 6px 18px rgba(0, 0, 0, .22); pointer-events: none; }
+.ds .rchart-updating .spin { width: 14px; height: 14px; border-color: color-mix(in srgb, #fff 30%, transparent); border-top-color: #fff; }
+@media (prefers-reduced-motion: reduce) { .ds .rchart-wrap.is-old { transition: none; } }
 /* fixed layout: every night the same width, the room column and the total column their own */
 .ds .rchart .tape { border-collapse: separate; border-spacing: 0; font-size: 13px; width: 100%; table-layout: fixed; }
 .ds .rchart .tape th, .ds .rchart .tape td { border-right: 1px solid #eee8df; border-bottom: 1px solid #eee8df; padding: 0; }
@@ -827,6 +832,18 @@
 .ds .rchart-hc .hc-head .hc-kind, .ds .rchart-pick .hc-head .hc-kind { flex: 1; }
 .ds .rchart-hc .hc-head .hc-tag { font-size: 10.5px; letter-spacing: .03em; background: rgba(0, 0, 0, .14); border-radius: 3px; padding: 1px 5px; }
 .ds .rchart-pick .hc-head .hc-room { font-size: 12px; }
+/* "Book by" in the chart's start box (2026-11-25, operator: "add small boxes to choose room type or room no"). */
+.ds .rchart-pick .pick-by { display: flex; align-items: center; justify-content: flex-end; gap: 6px; padding: 6px 12px 0; }
+.ds .rchart-pick .pick-by-label { margin-right: auto; font-size: 11.5px; font-weight: 600; color: var(--ink-2); }
+.ds .rchart-pick .pick-by-opt { display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; border: 1px solid var(--line-2); border-radius: 4px; background: var(--surface); font: inherit; font-size: 12px; font-weight: 600; color: var(--ink-2); cursor: pointer; }
+.ds .rchart-pick .pick-by-opt:hover { background: var(--surface-2); color: var(--ink); }
+.ds .rchart-pick .pick-by-opt.on { border-color: var(--accent); background: var(--accent-soft, #E7EEF8); color: var(--accent-ink, var(--accent)); }
+.ds .rchart-pick .pick-by-opt:focus-visible { outline: none; box-shadow: var(--focus); }
+.ds .rchart-pick .pick-by-box { width: 12px; height: 12px; border: 1.5px solid var(--ink-3, #8a8f8a); border-radius: 3px; background: var(--surface); flex: none; position: relative; }
+.ds .rchart-pick .pick-by-opt.on .pick-by-box { border-color: var(--accent); background: var(--accent); }
+.ds .rchart-pick .pick-by-opt.on .pick-by-box::after { content: ""; position: absolute; left: 3px; top: 0px; width: 3px; height: 7px; border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(45deg); }
+.ds .rchart-pick .pick-by-says { margin: 6px 0 2px; font-size: 12.5px; line-height: 1.4; color: var(--ink-2); }
+.ds .rchart-pick .pick-by-says b { color: var(--ink); }
 .ds .rchart-hc .hc-head.k-prov { background: var(--rs-prov-bg); color: var(--rs-prov-tx); border-bottom: 2px dotted var(--rs-prov-line); }
 .ds .rchart-hc .hc-head.k-held { background: var(--rs-held-bg); color: var(--rs-held-tx); border-bottom: 2px dashed var(--rs-held-line); }
 .ds .rchart-hc .hc-head.k-res { background: var(--rs-res-bg); color: var(--rs-res-tx); border-bottom: 2px solid #9fb7cf; }
@@ -1669,6 +1686,19 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .ws-top .file .ftab:hover { color: var(--ink); background: var(--surface-2); }
 .ds .ws-top .file .ftab[aria-selected="true"] { color: var(--accent-ink); font-weight: 700; border-bottom-color: var(--accent); }
 .ds .ws-top .file .ftab:focus-visible { outline: none; box-shadow: var(--focus); }
+/* The counts on the booking file's tabs (2026-11-25, operator: "when there are notes or requests it shows the
+   number right, can you highlight the number or make it prominent so the user knows this guest has some
+   request or notes"). A badge, as Atlassian draws one: requests still to arrange solid amber, notes solid blue,
+   a late to-do red; papers a quiet grey count; guests outlined amber until everyone is recorded. */
+.ds .file .ftab .tab-n { display: inline-block; min-width: 20px; padding: 0 6px; border-radius: 10px; border: 1px solid var(--line-2); background: var(--surface-2); color: var(--ink-2); font-size: 11.5px; font-weight: 700; line-height: 18px; text-align: center; font-variant-numeric: tabular-nums; }
+.ds .file .ftab .tab-n.req { background: var(--warning); border-color: var(--warning); color: #fff; }
+.ds .file .ftab .tab-n.note { background: var(--accent); border-color: var(--accent); color: #fff; }
+.ds .file .ftab .tab-n.stop { background: var(--danger); border-color: var(--danger); color: #fff; }
+.ds .file .ftab .tab-n.warn { background: var(--warning); border-color: var(--warning); color: #fff; }
+.ds .file .ftab .tab-n.soft-warn { background: var(--warning-soft); border-color: var(--warning-line); color: var(--warning); }
+.ds .file .ftab .tab-n.ok { background: var(--success-soft, #E3F2EA); border-color: var(--success-line, #A9D4BC); color: var(--success, #1E7A4F); }
+.ds .file .ftab .tab-n + .tab-n { margin-left: 2px; }
+.ds .file .field select.req-kind { max-width: 340px; }
 .ds .ws-top .file .fbody { flex: 1 1 auto; min-height: 0; padding: var(--s3) var(--s4); overflow: auto; min-width: 0; display: grid; gap: var(--s3); align-content: start; }
 
 /* what the move checks */
@@ -2189,6 +2219,44 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .phone-list-row { display: flex; gap: 8px; align-items: flex-start; }
 .ds .phone-list-row .phone-wrap { flex: 1 1 auto; }
 .ds .person-name { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: var(--s3) var(--s3); min-width: 0; }
+/* The desk tag (2026-11-25): at the right of the name, its own; greyed wherever it is shown. */
+.ds .person-name.with-tag { grid-template-columns: 96px minmax(0, 1fr) minmax(140px, 220px); }
+@media (max-width: 760px) { .ds .person-name.with-tag { grid-template-columns: 96px minmax(0, 1fr); } .ds .person-name.with-tag .desk-tag-field { grid-column: 1 / -1; } }
+.ds .desk-tag-field label .hint-inline { margin-left: 6px; font-weight: 400; font-size: 12px; color: var(--ink-3); }
+.ds .desk-tag-field .input { color: var(--ink-2); }
+.ds .desk-tag { display: inline-block; margin-left: 6px; padding: 0 6px; border: 1px solid var(--line-2); border-radius: 3px; background: var(--surface-2); color: var(--ink-3); font-size: 12px; font-weight: 500; line-height: 18px; vertical-align: middle; white-space: nowrap; }
+.ds h2 + .desk-tag, .ds .who .desk-tag { font-size: 13px; line-height: 22px; }
+.ds button.desk-tag, .ds .ws-head button.desk-tag, .ds .who button.desk-tag { cursor: pointer; font-family: inherit; color: var(--ink-3); background: var(--surface-2); font-weight: 500; }
+.ds .gv-swap { justify-self: start; margin-top: 6px; }
+.ds .fact-act { margin-left: 8px; font-size: 12px; text-transform: none; letter-spacing: 0; }
+/* The guest's Change, a button beside its label (2026-11-25). */
+.ds .fact-change { margin-left: 8px; text-transform: none; letter-spacing: 0; vertical-align: middle; }
+/* The guest's details box (2026-11-25). */
+.ds .guest-edit { display: grid; gap: var(--s3); }
+.ds .guest-edit .form2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--s3); }
+@media (max-width: 640px) { .ds .guest-edit .form2 { grid-template-columns: minmax(0, 1fr); } }
+.ds .guest-edit-changes, .ds .guest-edit-sharing { display: grid; gap: 3px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface-2); font-size: 13px; }
+.ds .guest-edit-note { margin: 0; }
+.ds .ffacts-line .desk-tag.ffacts-tag { margin-left: 0; }
+.ds button.desk-tag:hover { border-color: var(--ink-3); color: var(--ink-2); }
+.ds button.desk-tag.add { border-style: dashed; background: transparent; color: var(--ink-3); opacity: .7; }
+.ds button.desk-tag.add:hover { opacity: 1; }
+.ds .name-note { display: block; margin-top: 4px; }
+.ds .caller-tag-row { max-width: 320px; }
+/* Swap two guests' rows (2026-11-25). */
+.ds .swap-list { display: grid; gap: 6px; max-height: 46vh; overflow-y: auto; }
+.ds .swap-row { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border: 1px solid var(--line-2); border-radius: 4px; background: var(--surface); text-align: left; font: inherit; cursor: pointer; }
+.ds .swap-row:hover { border-color: var(--ink-3); background: var(--surface-2); }
+.ds .swap-row.on { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); background: var(--accent-soft); }
+.ds .swap-row.fits { border-color: var(--success-line, #7bb08f); }
+.ds .swap-radio { width: 14px; height: 14px; border: 2px solid var(--line-2); border-radius: 50%; }
+.ds .swap-row.on .swap-radio { border-color: var(--accent); background: var(--accent); box-shadow: inset 0 0 0 2px var(--surface); }
+.ds .swap-who { display: grid; gap: 2px; min-width: 0; }
+.ds .swap-who .meta { font-size: 12px; }
+.ds .swap-fit { display: grid; gap: 2px; justify-items: end; font-size: 12px; text-align: right; max-width: 220px; }
+.ds .swap-fit .ok-ink { font-weight: 700; }
+.ds .swap-after { display: grid; gap: 3px; margin-top: 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface-2); font-size: 13px; }
+.ds .linklike { padding: 0; border: 0; background: none; color: var(--accent); font: inherit; font-weight: 600; text-decoration: underline; cursor: pointer; }
 
 /* ---- How they came in, ticked (2026-11-05): none ticked is Direct voice. One at a time. */
 .ds .camein-ticks { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
@@ -2219,7 +2287,10 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .contact-mail { color: var(--ink-2); font-size: 12px; overflow-wrap: anywhere; }
 .ds button.contact-x { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border: 1px solid transparent; border-radius: 3px; background: none; color: var(--danger); font-size: 16px; font-weight: 700; line-height: 1; cursor: pointer; }
 .ds button.contact-x:hover { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); }
-.ds .contact-bad { grid-column: 1 / -1; font-size: 12px; font-weight: 700; color: var(--danger); }
+.ds .contact-bad { grid-column: 1 / -1; display: flex; align-items: flex-start; gap: 6px; margin: 2px 0 4px; padding: 5px 8px; border-radius: 4px; background: var(--danger-soft, #FCE7E4); font-size: 12.5px; font-weight: 700; color: var(--danger); animation: house-short-in .6s ease-out 1; }
+.ds .contact-bad-mark { display: inline-grid; place-items: center; width: 17px; height: 17px; flex: none; border-radius: 50%; background: var(--danger); color: #fff; font-size: 11px; font-weight: 800; }
+.ds .contact-mail.bad { color: var(--danger); font-weight: 700; text-decoration: underline wavy var(--danger); text-underline-offset: 3px; }
+@media (prefers-reduced-motion: reduce) { .ds .contact-bad { animation: none; } }
 .ds .contact-add { display: grid; gap: 8px; padding: 10px 12px; border: 1px dashed var(--line-2); border-radius: 6px; }
 .ds .contact-add-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 8px 10px; align-items: start; }
 
@@ -2866,3 +2937,173 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .rchart .tape .fig-btn .fig-free { display: block; font-size: 15px; font-weight: 800; line-height: 1.1; }
 .ds .rchart .tape .fig-btn .fig-free span { font-size: 11px; font-weight: 700; }
 .ds .rchart .tape .fig-btn .fig-booked { display: block; font-size: 11px; font-weight: 600; color: var(--ink-2); line-height: 1.2; }
+
+/* ------------------------------------------------------------------ Extend the stay (2026-11-25)
+   Rebuilt in the desk's own look: three parts before anything is held, then a line of steps with
+   only the thing to do now beneath it. */
+.ds .ext { display: grid; gap: var(--s4); }
+.ds .ext-part { padding: var(--s3) 0 var(--s4); border-bottom: 1px solid var(--line); display: grid; gap: var(--s3); }
+.ds .ext-part:last-of-type { border-bottom: 0; }
+.ds .ext-h { display: flex; align-items: center; gap: var(--s2); font-size: var(--t-lead); font-weight: 700; color: var(--ink); }
+.ds .ext-n { display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 12px; font-weight: 700; }
+.ds .ext-dates { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--s3) var(--s4); }
+.ds .ext-dates .field { margin: 0; }
+.ds .ext-now { display: inline-flex; align-items: center; min-height: var(--control-h, 38px); padding: 0 var(--s3); border: 1px solid var(--line-2); border-radius: var(--r-control); background: var(--surface-2, #f4f5f2); font-weight: 600; }
+.ds .ext-arrow { padding-bottom: 9px; font-size: 18px; color: var(--ink-3); }
+.ds .ext-stepper { display: inline-flex; align-items: center; gap: var(--s2); min-height: var(--control-h, 38px); }
+.ds .ext-stepper b { min-width: 28px; text-align: center; font-size: var(--t-lead); }
+.ds .ext-rooms { display: grid; gap: var(--s2); justify-items: start; }
+.ds .ext-rooms > .notice { width: 100%; }
+.ds .ext-moves { margin: 0; font-weight: 600; }
+.ds .ext-roomtable td { vertical-align: middle; }
+.ds .ext-roomtable .chip { margin-right: 4px; }
+.ds .ext-move .field { max-width: 460px; margin: 0; }
+.ds .ext-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s3); }
+.ds .ext-figure { width: 120px; }
+.ds .ext-ledger { display: grid; gap: 2px; max-width: 520px; padding: var(--s3) var(--s4); border: 1px solid var(--line-2); border-radius: var(--r-control); background: var(--surface); }
+.ds .ext-ledger > div { display: flex; justify-content: space-between; gap: var(--s4); padding: 3px 0; }
+.ds .ext-ledger .money { font-variant-numeric: tabular-nums; }
+.ds .ext-ledger .ext-due { margin-top: 4px; padding-top: 8px; border-top: 1px solid var(--ink); font-weight: 700; font-size: var(--t-lead); }
+.ds .ext-ledger .ext-due .money { color: var(--accent); font-size: 20px; font-weight: 800; }
+.ds .ext-ledger .ext-rest { color: var(--ink-2); }
+/* What opens under the chosen way of paying: set in, on its own tint, with a heading naming the way it
+   belongs to, its buttons a size smaller — so it reads as part of that choice, not more of the same list. */
+.ds .ext-sub { display: grid; gap: var(--s3); margin: calc(-1 * var(--s1)) 0 0 14px; padding: var(--s3) var(--s4) var(--s4); border-left: 3px solid var(--accent); background: var(--surface-2); border-radius: 0 var(--r-control) var(--r-control) 0; }
+.ds .ext-sub-h { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px var(--s2); font-weight: 700; color: var(--ink); }
+.ds .ext-sub-of { font-size: var(--t-sm); font-weight: 600; color: var(--accent-ink); }
+.ds .ext-sub-of::after { content: "›"; margin-left: var(--s2); color: var(--ink-3); }
+.ds .ext-sub .filters.choice .btn:not(.desk-root *) { min-height: 32px; padding: 0 12px 0 10px; font-size: var(--t-sm); gap: 6px; }
+.ds .ext-sub .filters.choice .btn:not(.desk-root *)::before { width: 14px; height: 14px; }
+.ds .ext-sub .filters.choice:not(.desk-root *) { margin: 0; }
+.ds .ext-go { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: var(--s3); padding-top: var(--s3); }
+.ds .ext-list { margin: 0; padding-left: 18px; display: grid; gap: var(--s2); }
+.ds .ext-facts { display: flex; flex-wrap: wrap; gap: var(--s2) var(--s5, 24px); padding-bottom: var(--s3); border-bottom: 1px solid var(--line); }
+.ds .ext-steps { margin: var(--s4) 0 var(--s3); }
+.ds .ext-step-label { display: block; font-weight: 600; font-size: var(--t-sm); }
+.ds .money-step.now .ext-step-label { color: var(--accent); }
+.ds .money-step.done .ext-step-label { color: var(--ink); }
+.ds .money-step:not(.now):not(.done) .ext-step-label { color: var(--ink-3); }
+.ds .ext-now-box { display: grid; gap: var(--s2); padding: var(--s3) 0; }
+.ds .ext-billrow { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--s2) var(--s3); padding: var(--s3) var(--s4); border: 1px solid var(--line-2); border-radius: var(--r-control); background: var(--surface); }
+.ds .ext-sentline { margin: 0; display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; }
+.ds .ext-cancel { display: flex; justify-content: flex-end; padding-top: var(--s2); border-top: 1px solid var(--line); margin-top: var(--s2); }
+.ds .ext-cancel .btn { color: var(--danger); }
+/* One part at a time (2026-11-25): a done part folds to its line with Edit, a waiting one is its heading. */
+.ds .ext-h .ext-t { flex: none; }
+.ds .ext-h.done .ext-n { background: var(--success); }
+.ds .ext-h.done .ext-n svg { width: 13px; height: 13px; }
+.ds .ext-h.waiting { color: var(--ink-3); }
+.ds .ext-h.waiting .ext-n { background: var(--surface); color: var(--ink-3); border: 2px dashed var(--line-2); width: 24px; height: 24px; }
+.ds .ext-sum { flex: 1 1 auto; min-width: 0; font-size: var(--t-base); font-weight: 500; color: var(--ink-2); }
+.ds .ext-wait { font-size: var(--t-sm); font-weight: 500; color: var(--ink-3); }
+.ds .ext-h .ext-edit { margin-left: auto; }
+.ds .ext-part.folded, .ds .ext-part.waiting { padding: var(--s3) 0; }
+.ds .ext-h { flex-wrap: wrap; }
+/* Check the rooms sits at the end of the date row (2026-11-25). */
+.ds .ext-check { align-self: flex-end; }
+.ds .ext-hint { margin: 0; }
+/* The rooms another booking holds on the extra nights, each with its two ways (2026-11-25, the swap). */
+.ds .ext-taken { display: grid; gap: var(--s2); }
+.ds .ext-taken.busy { opacity: .55; pointer-events: none; transition: opacity .15s; }
+.ds .ext-taken-lead { margin: 0; }
+.ds .ext-taken-room { display: grid; gap: 6px; padding: 10px 12px; border: 1px solid var(--danger-line); border-left: 4px solid var(--danger); border-radius: 6px; background: var(--surface); }
+.ds .ext-taken-room.chosen { border-color: var(--line-2); border-left-color: var(--accent); }
+.ds .etr-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.ds .etr-head b { font-size: 15px; }
+.ds .etr-taken { color: var(--danger); font-weight: 700; font-size: var(--t-sm); }
+.ds .ext-taken-room.chosen .etr-taken { color: var(--ink-2); font-weight: 600; }
+.ds .etr-who { font-size: var(--t-sm); }
+.ds .etr-field { max-width: 460px; margin: 0; }
+.ds .etr-swap { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 10px; }
+.ds .etr-swap .etr-field { flex: 1 1 280px; }
+/* Who moves (2026-11-25, operator: "show prominently which guest is being moved"): the name large, the
+   edge in the mover's colour — blue for our guest, amber for another guest's booking — and who stays in green. */
+.ds .etr-theirs { display: grid; gap: 8px; }
+/* Our guest's move kept (2026-11-25): the card turns green-edged, the move said once, with Change. */
+.ds .ext-taken-room.decided { border-color: var(--line-2); border-left-color: var(--success, #1E7A4F); }
+.ds .ext-taken-room.decided .etr-taken { color: var(--ink-2); font-weight: 600; }
+.ds .etr-kept { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; padding: 8px 12px; border: 1px solid var(--success-line, #A9D4BC); border-radius: 6px; background: var(--success-soft, #E3F2EA); color: var(--success, #1E7A4F); font-size: 14px; }
+.ds .etr-kept b { color: var(--success, #1E7A4F); }
+.ds .etr-blocked { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; padding: 8px 12px; border: 1px solid var(--warning-line); border-radius: 6px; background: var(--warning-soft); color: var(--ink); font-size: 14px; }
+.ds .etr-mover { display: grid; gap: 2px; padding: 10px 14px; border: 1px solid var(--line-2); border-left: 5px solid var(--accent); border-radius: 6px; background: var(--accent-soft, #E7EEF8); animation: house-short-in .6s ease-out 1; }
+.ds .etr-mover.theirs { border-left-color: var(--warning); background: var(--warning-soft); }
+.ds .etr-mover-tag { font-size: 11.5px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: var(--accent-ink, var(--accent)); }
+.ds .etr-mover.theirs .etr-mover-tag { color: var(--warning); }
+.ds .etr-mover-name { font-size: 19px; font-weight: 800; line-height: 1.25; color: var(--ink); }
+.ds .etr-mover-who { font-size: var(--t-sm); color: var(--ink-2); }
+.ds .etr-mover-what { font-size: 14px; color: var(--ink); }
+.ds .etr-mover-what b { font-size: 15px; }
+.ds .etr-mover-pick { color: var(--ink-2); font-style: italic; }
+.ds .etr-mover-stays { display: inline-flex; align-items: center; gap: 4px; margin-top: 2px; font-size: var(--t-sm); font-weight: 600; color: var(--success, #1E7A4F); }
+@media (prefers-reduced-motion: reduce) { .ds .etr-mover { animation: none; } }
+
+/* Extend the stay: the rate of each room our guest moves into that is another type (2026-11-25) —
+   two choices a room, drawn as the desk's choice buttons with the figure large. */
+.ds .rate-choices { display: grid; gap: var(--s3); margin-top: var(--s3); }
+.ds .rate-choice { border: 1px solid var(--line-2); border-radius: 6px; padding: var(--s3); background: var(--surface); }
+.ds .rate-choice .rc-head { font-size: var(--t-base); color: var(--ink); margin-bottom: var(--s2); }
+.ds .rate-choice .rc-options { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s2); }
+.ds .rate-choice .rc-option { display: flex; align-items: flex-start; gap: 10px; text-align: left; padding: 8px 12px; border: 1px solid var(--ink-3); border-bottom-width: 2px; border-radius: var(--r-control); background: var(--surface); color: var(--ink); cursor: pointer; font: inherit; transition: background-color .12s ease, border-color .12s ease; }
+.ds .rate-choice .rc-option:not(:disabled):not(.on):hover { background: var(--surface-3); border-color: var(--ink); }
+.ds .rate-choice .rc-option:not(:disabled):active { transform: translateY(1px); }
+.ds .rate-choice .rc-option.on { border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 -3px 0 var(--accent); }
+.ds .rate-choice .rc-option:disabled { border-style: dashed; color: var(--ink-3); cursor: not-allowed; }
+.ds .rate-choice .rc-option:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ds .rate-choice .rc-dot { flex: none; width: 16px; height: 16px; margin-top: 3px; box-sizing: border-box; border-radius: 50%; border: 2px solid var(--ink-3); background: var(--surface); }
+.ds .rate-choice .rc-option.on .rc-dot { border-color: var(--accent); background: var(--accent); box-shadow: inset 0 0 0 3px var(--surface); }
+.ds .rate-choice .rc-words { display: grid; gap: 2px; }
+.ds .rate-choice .rc-words b { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.ds .rate-choice .rc-words span { font-size: var(--t-sm); color: var(--ink-3); }
+.ds .rate-choice .rc-option.on .rc-words span { color: var(--ink-2); }
+.ds .rate-choice p { margin-top: var(--s2); }
+@media (max-width: 520px) { .ds .rate-choice .rc-options { grid-template-columns: 1fr; } }
+
+/* Extend the stay, paid now at the desk (2026-11-25): how it was paid, and the bank and journal number. */
+.ds .ext-pay { display: grid; gap: var(--s2); margin-top: var(--s3); padding: var(--s3); border: 1px solid var(--line-2); border-radius: 6px; background: var(--surface); max-width: 640px; }
+.ds .ext-pay .form3 { grid-template-columns: 1fr 1fr; }
+
+/* ---- An apartment stay at Inquiry (2026-11-25) ------------------------------------------------ */
+.ds .apt-plan .filters.choice { margin-top: 2px; }
+.ds .apt-house { display: flex; flex-direction: column; gap: var(--s3); }
+/* The apartments in the normal house's table (2026-11-25). */
+.ds .by-type-grid.apt-grid:not(.desk-root *) { width: 100%; }
+.ds .apt-grid td.apt-pkg { vertical-align: top; }
+.ds .by-type-grid.apt-grid td.apt-pkg:not(.desk-root *) { white-space: normal; max-width: 150px; }
+.ds .apt-grid td.apt-pkg small { display: block; font-weight: 500; font-size: 12px; color: var(--ink-3); }
+.ds .apt-grid tr.apt-first:not(:first-child) td { border-top: 2px solid var(--line-2); }
+.ds .apt-grid td.apt-no { font-weight: 700; font-size: 15px; font-variant-numeric: tabular-nums; }
+.ds .apt-grid td.apt-rent { vertical-align: top; white-space: nowrap; }
+.ds .apt-grid th.num, .ds .apt-grid td.num { text-align: right; white-space: nowrap; }
+.ds .apt-grid .apt-grid-sub { display: block; font-size: 11.5px; font-weight: 500; color: var(--ink-3); }
+.ds .apt-grid tr.apt-on td:not(.apt-pkg):not(.apt-rent) { background: var(--accent-soft); }
+.ds .apt-grid .apt-take { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.ds .apt-grid .apt-take input { width: 16px; height: 16px; cursor: pointer; }
+.ds .apt-grid .apt-held { font-size: 12.5px; color: var(--ink-3); white-space: nowrap; }
+.ds .apt-grid td.apt-rooms { white-space: nowrap; }
+.ds .apt-grid .apt-state { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px; min-width: 210px; }
+.ds .apt-grid .apt-state .bt-free { min-width: 62px; }
+.ds .apt-grid .apt-held { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ds .apt-grid .apt-act { display: flex; justify-content: flex-end; justify-self: end; }
+.ds .apt-grid .apt-make-room { height: 26px; padding: 0 10px; border: 1px solid var(--line-2); border-radius: var(--r-control); background: #fff; font: inherit; font-size: 13px; font-weight: 600; color: var(--ink); white-space: nowrap; cursor: pointer; }
+.ds .apt-grid .apt-make-room:hover { background: var(--surface-2); border-color: var(--ink-3); }
+.ds .apt-grid .apt-make-room:active { background: var(--line); }
+.ds .apt-grid .apt-make-room:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* Make room in an apartment (2026-11-25). */
+.ds .make-room { display: flex; flex-direction: column; gap: var(--s3); }
+.ds .make-room-room { display: flex; flex-direction: column; gap: var(--s2); padding: var(--s2) var(--s3); border: 1px solid var(--line-2); border-radius: 6px; background: var(--surface); }
+.ds .make-room-head { display: flex; align-items: baseline; gap: var(--s2); font-size: 15px; }
+.ds .make-room-who { display: flex; flex-direction: column; gap: 6px; padding-top: var(--s2); border-top: 1px solid var(--line); }
+.ds .make-room-to { max-width: 360px; margin: 0; }
+.ds .make-room-why { margin: 0; font-weight: 600; }
+.ds .apt-house-save { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: var(--s3); padding-top: var(--s2); }
+.ds .apt-rates-list { display: flex; flex-direction: column; gap: var(--s3); }
+.ds .apt-rate { display: flex; flex-direction: column; gap: 4px; padding-bottom: var(--s3); border-bottom: 1px solid var(--line); }
+.ds .apt-rate:last-child { border-bottom: 0; }
+.ds .apt-rate-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s2); }
+.ds .apt-rate-table { width: 100%; border-collapse: collapse; font-size: var(--t-sm); }
+.ds .apt-rate-table td { padding: 3px 6px; border-top: 1px solid var(--line); }
+.ds .apt-rate-table td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ds .apt-rate-table tr.on td { background: var(--accent-soft); font-weight: 700; }
+.ds .apt-rate-table tr.on td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+.ds .apt-periods { margin: 4px 0 0; padding: 0; list-style: none; font-size: var(--t-sm); }
+.ds .apt-periods li { display: flex; justify-content: space-between; align-items: center; gap: var(--s2); padding: 3px 0; border-top: 1px dashed var(--line); }

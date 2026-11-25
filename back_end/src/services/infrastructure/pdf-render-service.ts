@@ -83,6 +83,9 @@ export async function renderHtmlToPdf(html: string, opts: RenderPdfOptions = {})
     // the right scale depends on the content height AT that layout width. Chromium caps scale at
     // 2; the lower clamp of 1 lets an over-long document paginate naturally instead of shrinking.
     let scale = 1;
+    // A bill that runs past one page (a long stay, itemised since 2026-11-25) gets "Page n of N" in
+    // the bottom margin; one that fits keeps the clean page it always had.
+    let pages = 1;
     if (opts.fitToPage) {
       await page.emulateMediaType("print"); // measure under the print rules (sheet padding off)
       const hasDoc = await page.evaluate(() => !!document.querySelector(".doc"));
@@ -98,6 +101,7 @@ export async function renderHtmlToPdf(html: string, opts: RenderPdfOptions = {})
             return el.getBoundingClientRect().height;
           });
           scale = Math.min(2, Math.max(1, PRINTABLE_H_PX / Math.max(1, h)));
+          pages = Math.max(1, Math.ceil((h * scale) / PRINTABLE_H_PX - 0.01));
         }
         // Stretch the frame to the bottom edge for content shorter than the page (the shell's
         // print rules pin .dfoot there via margin-top:auto). -2 keeps rounding from spilling a
@@ -115,6 +119,14 @@ export async function renderHtmlToPdf(html: string, opts: RenderPdfOptions = {})
       printBackground: true,
       scale,
       margin: { top: "12mm", bottom: "14mm", left: "12mm", right: "12mm" },
+      ...(pages > 1
+        ? {
+            displayHeaderFooter: true,
+            headerTemplate: "<span></span>",
+            footerTemplate:
+              '<div style="width:100%;font-family:monospace;font-size:7px;color:#8A8F96;text-align:right;padding:0 12mm">Page <span class="pageNumber"></span> of <span class="totalPages"></span></div>',
+          }
+        : {}),
     });
     return Buffer.isBuffer(pdf) ? pdf : Buffer.from(pdf);
   } finally {

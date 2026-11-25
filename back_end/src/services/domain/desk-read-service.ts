@@ -70,6 +70,8 @@ const listSelect = {
       callerLastName: true,
       callerPhone: true,
       callerEmail: true,
+      // The desk's own note to tell same-named guests apart (2026-11-25).
+      deskTag: true,
       travelAgent: { select: { id: true, displayName: true } },
       corporateAccount: { select: { id: true, displayName: true } },
     },

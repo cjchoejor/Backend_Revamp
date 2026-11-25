@@ -261,6 +261,12 @@
 }
 .ds .admin-console .admin-tag-ok { background: var(--success-soft); border-color: var(--success-line); color: var(--success); }
 .ds .admin-console .admin-tag-warn { background: var(--warning-soft); border-color: var(--warning-line); color: var(--warning); }
+/* A contact's email that does not read as one (2026-11-25): red on its record, its box and a line under it. */
+.ds .admin-console .admin-tag-bad { background: var(--danger); border-color: var(--danger); color: #fff; }
+.ds .admin-console .admin-bad-text { color: var(--danger); font-weight: 700; }
+.ds .admin-console .admin-input.admin-input-bad { border-color: var(--danger); box-shadow: 0 0 0 1px var(--danger) inset; background: var(--danger-soft); }
+.ds .admin-console .admin-bad-line { display: flex; align-items: center; gap: 8px; margin: 2px 0 0; padding: 6px 10px; border: 1px solid var(--danger-line); border-radius: 4px; background: var(--danger-soft); color: var(--danger); font-size: var(--t-sm); font-weight: 600; }
+.ds .admin-console .admin-bad-mark { display: inline-grid; place-items: center; width: 18px; height: 18px; flex: none; border-radius: 50%; background: var(--danger); color: #fff; font-size: 12px; font-weight: 800; }
 
 /* ---- controls -------------------------------------------------------------------------------- */
 .ds .admin-console .admin-input,
@@ -594,3 +600,40 @@
 /* Danger keeps its own colour, whatever colour the page's group has. */
 .ds .admin-console .admin-btn.text-destructive:not(.desk-root *) { border-color: var(--danger); background: var(--surface); color: var(--danger); }
 .ds .admin-console .admin-btn.text-destructive:hover:not(.desk-root *) { border-color: var(--danger); background: var(--danger-soft); color: var(--danger); }
+
+/* ---- Apartments (2026-11-25) ----------------------------------------------------------------- */
+.ds .admin-console .apt-card,
+.ds .admin-console .apt-form { display: flex; flex-direction: column; gap: var(--s4); padding: var(--s5); }
+.ds .admin-console .apt-card.apt-off { opacity: 0.72; }
+.ds .admin-console .apt-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: var(--s3); }
+.ds .admin-console .apt-acts { display: flex; flex-wrap: wrap; gap: var(--s2); }
+.ds .admin-console .apt-acts .apt-del:not(.desk-root *) { color: var(--danger); border-color: var(--danger-line); }
+.ds .admin-console .apt-units { display: flex; flex-wrap: wrap; gap: var(--s2); }
+.ds .admin-console .apt-unit {
+  display: inline-flex; align-items: baseline; gap: var(--s2);
+  padding: 3px var(--s3); border: 1px solid var(--line-2); border-radius: var(--r-control);
+  background: var(--surface); font-size: var(--t-sm);
+}
+.ds .admin-console .apt-unit b { font-weight: 700; }
+.ds .admin-console .apt-unit span { color: var(--ink-3); }
+.ds .admin-console table.apt-rates { max-width: 720px; }
+.ds .admin-console table.apt-rates td,
+.ds .admin-console table.apt-rates th { white-space: nowrap; }
+.ds .admin-console .apt-typed { margin-left: var(--s2); color: var(--ink-3); font-size: var(--t-meta); font-weight: 400; }
+.ds .admin-console .apt-amenities summary { cursor: pointer; font-weight: 600; font-size: var(--t-sm); width: fit-content; }
+.ds .admin-console .apt-amenities ul { margin: var(--s2) 0 0; padding-left: var(--s5); list-style: disc; font-size: var(--t-sm); color: var(--ink-2); }
+.ds .admin-console .apt-section { display: flex; flex-direction: column; gap: var(--s3); padding-top: var(--s3); border-top: 1px solid var(--line); }
+.ds .admin-console .apt-tick { display: inline-flex; align-items: center; gap: var(--s2); width: fit-content; font-size: var(--t-sm); font-weight: 500; cursor: pointer; }
+.ds .admin-console table.apt-unit-table td { vertical-align: top; }
+.ds .admin-console .apt-label { width: 96px; }
+.ds .admin-console .apt-max { width: 64px; }
+.ds .admin-console .apt-rooms { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); }
+.ds .admin-console .apt-room {
+  display: inline-flex; align-items: center; gap: var(--s1);
+  padding: 2px 4px 2px var(--s2); border: 1px solid var(--line-2); border-radius: var(--r-control);
+  background: var(--surface-2); font-size: var(--t-sm); white-space: nowrap;
+}
+.ds .admin-console .apt-room button { width: 20px; height: 20px; border: 0; border-radius: 3px; background: transparent; color: var(--ink-3); font-size: 15px; line-height: 1; cursor: pointer; }
+.ds .admin-console .apt-room button:hover { background: var(--danger-soft); color: var(--danger); }
+.ds .admin-console .apt-add-room { width: auto; min-width: 200px; max-width: 320px; }
+.ds .admin-console .apt-save { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: var(--s3); padding-top: var(--s3); border-top: 1px solid var(--line); }

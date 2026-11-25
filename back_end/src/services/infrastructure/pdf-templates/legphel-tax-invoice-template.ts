@@ -3,36 +3,45 @@
  * Series `LH/TI/NNNNNN` in the reference; here the readable `INV-…` id until a series allocator
  * exists (DFG-001 §08 is a separate build item).
  *
- * Row-for-row from the reference card in `docs/bills/legphel-document-formats-complete-30 (1).html`
- * (B1) and the annotated worked example in `DFG-001-Developer-Handbook-v0_2.html` §03:
- *   - "TAX INVOICE" prominent, crimson (r.185(1)); supplier + TPN in the masthead (r.185(3));
- *   - Billed to + Customer TPN / Your ref — the corporate preset (r.185(9)–(10), D-13);
- *   - category-level rows, GST-INCLUSIVE, then the ladder that derives the figures
- *     (Net value of supply → Service charge → Taxable value → GST → Total);
- *   - the GST SENTENCE, stated not merely derivable (r.185(6));
- *   - advance applied with its receipt reference; balance due; Remittance Block; 7-day query line;
- *   - footline with "original" — no version number on the face (r.188).
+ * From the reference card in `docs/bills/legphel-document-formats-complete-30 (1).html` (B1) and the
+ * handbook's worked example (§03): "TAX INVOICE" prominent, crimson (r.185(1)); supplier + TPN in the
+ * masthead (r.185(3)); billed to + customer TPN / your ref (r.185(9)–(10)); the ladder that derives the
+ * figures (Net value of supply → Service charge → Taxable value → GST → Total); the GST SENTENCE,
+ * stated not merely derivable (r.185(6)); payments applied with their receipts; balance; remittance
+ * block while due; footline with "original" — no version number on the face (r.188).
+ *
+ * Laid out like a well-known hotel's invoice since 2026-11-25 (operator): the billed-to and invoice
+ * blocks side by side, the rooms on their own line, every charge on its own row (a room's nights at
+ * one figure on one row) — the category-level rows it printed before are now the "by kind" summary —
+ * the amount in words, and the payments as a table. See legphel-bill-parts.ts.
  *
  * DRAFT (2026-08-22): the same composition rendered for an in-stay booking — no serial, a DRAFT
- * watermark and a loud "not issued" strip — so the desk can check the fiscal particulars BEFORE
- * the one original is issued at checkout. The handbook's lifecycle sanctions exactly this render
- * ("DRAFT renders a watermark and no serial"); what it must never be is handed to the guest as
- * the invoice — the Interim Folio Statement is the in-stay handout.
+ * watermark and a loud "not issued" strip — so the desk can check the fiscal particulars BEFORE the
+ * one original is issued at checkout. It is never handed to the guest as the invoice.
  */
-import { htmlEscape } from "../../../lib/pdf-render-context.js";
 import {
   bankStrip,
   footer,
+  miniTable,
   note,
   renderDocumentPage,
   renderMasthead,
   renderTitle,
   row,
-  section,
-  stayRows,
+  subheading,
   type DocumentMasthead,
 } from "./legphel-document-shell.js";
-import type { StayLines } from "./legphel-document-format.js";
+import {
+  amountInWordsLine,
+  balanceRow,
+  billLinesTable,
+  infoBlocks,
+  paymentsTable,
+  roomsLine,
+  type InfoBlock,
+  type PaperBillRow,
+  type PaperPaymentRow,
+} from "./legphel-bill-parts.js";
 
 export type LegphelTaxInvoiceInput = {
   masthead: DocumentMasthead;
@@ -41,23 +50,11 @@ export type LegphelTaxInvoiceInput = {
   draft: boolean;
   /** Loud strip under the title on a DRAFT: "Draft — not issued · indicative position as at …". */
   draftStrip?: string | null;
-  /** "LH/26/E/04211" — crimson. */
   bookingRef: string;
-  /** "15 Oct 2026" (issue date) — or the as-at on a draft. */
-  issued: string;
-  issuedLabel?: string;
-  billedTo: string;
-  forGuest?: string | null;
-  customerTpn?: string | null;
-  yourRef?: string | null;
-  /** Check-in · Check-out (2026-10-28). */
-  stay?: StayLines | null;
-  /** "Rooms 201, 202" */
-  rooms?: string | null;
-  /** Category-level rows, GST-inclusive amounts: "Accommodation · 12 room-nights" → "41,400.00". */
-  lines: Array<{ description: string; amount: string }>;
-  /** "Itemised detail on the Master Bill, attached" — the progressive-disclosure pointer. */
-  detailNote?: string | null;
+  billedTo: InfoBlock;
+  invoice: InfoBlock;
+  rooms: string | null;
+  lines: PaperBillRow[];
   netValue: string;
   serviceChargeLabel: string;
   serviceCharge: string;
@@ -65,10 +62,14 @@ export type LegphelTaxInvoiceInput = {
   gstLabel: string;
   gst: string;
   total: string;
-  /** "Advance applied · PMT-20260812-0001" → "−40,000.00"; refunds as positive lines. */
-  settlementLines: Array<{ label: string; value: string }>;
+  /** "Ngultrum Thirteen Thousand Eight Hundred Sixty Only". */
+  totalInWords: string;
+  /** Each kind's all-in figure — printed when the bill has more than one kind. */
+  byKind: Array<{ label: string; amount: string }>;
+  payments: PaperPaymentRow[];
   balanceLabel: string;
   balanceDue: string;
+  owed: boolean;
   /** "GST of Nu. 3,219.05 is included in the total consideration of Nu. 67,600.00." */
   gstSentence: string;
   /** Remittance Block — shown while something is due. */
@@ -76,7 +77,7 @@ export type LegphelTaxInvoiceInput = {
   closingNote: string;
   tariffVersion: string;
   issuanceRef?: string | null;
-  /** "Page 1 of 1 · original" / "… · draft" / "… · COPY". */
+  /** "original" / "draft" / "COPY". */
   pageLabel: string;
   copy?: boolean;
   currencyLabel?: string;
@@ -91,39 +92,31 @@ export function renderLegphelTaxInvoiceHtml(input: LegphelTaxInvoiceInput): stri
     bankPairs.push({ label: "Ref", value: input.bank.reference });
     if (input.bank.accountsPhone) bankPairs.push({ label: "Accounts", value: input.bank.accountsPhone });
   }
-  const identity = [
-    input.customerTpn ? `Customer TPN ${input.customerTpn}` : null,
-    input.yourRef ? `Your ref ${input.yourRef}` : null,
-  ].filter(Boolean);
 
   const body = [
     renderMasthead(input.masthead),
     // The strip is LOUD on a draft (it is the statement that this is not yet the invoice) and
     // absent on the issued original — the reference's B1 carries no strip.
     renderTitle("Tax Invoice", input.draft ? input.draftStrip ?? "Draft — not issued" : null, false),
-    row("Invoice No", input.invoiceNo ?? "Allocated at issue", { boldValue: !!input.invoiceNo }),
-    row("Booking Ref", input.bookingRef, { redValue: true }),
-    row(input.issuedLabel ?? (input.draft ? "Position as at" : "Issued"), input.issued, { boldValue: input.draft }),
-    section,
-    row("Billed to", input.billedTo, { boldValue: true }),
-    input.forGuest ? row("For guest", input.forGuest) : "",
-    identity.length > 0 ? row(identity.join(" · "), "") : "",
-    stayRows(input.stay),
-    input.rooms ? row("Rooms", input.rooms) : "",
-    section,
-    ...input.lines.map((l) => row(l.description, l.amount)),
-    input.detailNote
-      ? row(`<i style="font-style:normal;color:var(--mute)">${htmlEscape(input.detailNote)}</i>`, "", { rawKey: true })
-      : "",
-    section,
+    infoBlocks(input.billedTo, input.invoice),
+    roomsLine("Rooms", input.rooms),
+    subheading("Charges"),
+    billLinesTable(input.lines),
     row("Net value of supply", input.netValue),
     row(input.serviceChargeLabel, input.serviceCharge),
     row("Taxable value", input.taxableValue),
     row(input.gstLabel, input.gst),
     row(`Total · ${currency}`, input.total, { total: true }),
-    ...input.settlementLines.map((l) => row(l.label, l.value)),
-    row(input.balanceLabel, input.balanceDue, { boldValue: true }),
+    amountInWordsLine(input.totalInWords),
     note(input.gstSentence, "loud"),
+    input.byKind.length > 1
+      ? [subheading("By kind · service charge and GST included"), miniTable([{ header: "Kind" }, { header: "Amount", align: "r" }], input.byKind.map((k) => [k.label, k.amount]))].join(
+          "\n",
+        )
+      : "",
+    subheading("Payments applied"),
+    paymentsTable(input.payments, "No payment received yet."),
+    balanceRow(input.balanceLabel, input.balanceDue, input.owed),
     bankPairs.length > 0 ? bankStrip(bankPairs) : "",
     note(input.closingNote, "quiet"),
     footer([input.invoiceNo, input.bookingRef, input.issuanceRef ?? null, "E&OE", input.tariffVersion], input.pageLabel),

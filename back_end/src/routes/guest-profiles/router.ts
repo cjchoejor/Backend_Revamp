@@ -8,6 +8,8 @@ import {
   confirmGuestIdentityDetailsRequestSchema,
   clearGuestIdentitySlotRequestSchema,
   setLeadGuestRequestSchema,
+  swapGuestRowsRequestSchema,
+  correctGuestDetailsRequestSchema,
   saveGuestIdentityDetailRequestSchema,
   applyIdentityOcrSuggestionRequestSchema,
   searchGuestProfilesQuerySchema,
@@ -21,6 +23,7 @@ import { enforceEntryNotSealedForWorkingAction } from "../../policies/01-availab
 import * as guestProfileService from "../../services/domain/guest-profile-service.js";
 import * as identityProofService from "../../services/domain/guest-identity-proof-service.js";
 import * as identityOcrService from "../../services/domain/identity-ocr-service.js";
+import { correctGuestDetails } from "../../services/domain/guest-details-correction-service.js";
 
 export const guestProfilesRouter = Router();
 
@@ -227,6 +230,36 @@ guestProfilesRouter.post(
   async (req, res, next) => {
     try {
       res.json(await identityProofService.setLeadGuest(prisma, req.params.id, req.actor!.actorId, req.body));
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+/** Correct the guest's name, phone and email — the shared record, said on every booking it reaches (2026-11-25). */
+guestProfilesRouter.post(
+  "/entries/:id/guest/details",
+  requireActorLevel("L1"),
+  validateBody(correctGuestDetailsRequestSchema),
+  async (req, res, next) => {
+    try {
+      res.json(
+        await correctGuestDetails(prisma, req.params.id, { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" }, req.body),
+      );
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+/** Swap two guests' rows — everything recorded on each moves to the other (2026-11-25). */
+guestProfilesRouter.post(
+  "/entries/:id/identity-details/swap",
+  requireActorLevel("L1"),
+  validateBody(swapGuestRowsRequestSchema),
+  async (req, res, next) => {
+    try {
+      res.json(await identityProofService.swapGuestRows(prisma, req.params.id, req.actor!.actorId, req.body, req.actor!.level));
     } catch (e) {
       next(e);
     }

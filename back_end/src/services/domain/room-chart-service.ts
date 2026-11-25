@@ -123,6 +123,8 @@ export type RoomChartBooking = {
     callerLastName: string | null;
     callerPhone: string | null;
     callerEmail: string | null;
+    /** The desk's own note to tell same-named guests apart (2026-11-25). */
+    deskTag?: string | null;
   } | null;
   partyName: string | null;
 };
@@ -209,6 +211,7 @@ const entrySelect = {
       callerLastName: true,
       callerPhone: true,
       callerEmail: true,
+      deskTag: true,
       travelAgent: { select: { displayName: true } },
       corporateAccount: { select: { displayName: true } },
     },
@@ -311,6 +314,7 @@ export async function buildRoomChart(
       callerLastName: string | null;
       callerPhone: string | null;
       callerEmail: string | null;
+      deskTag?: string | null;
       travelAgent: { displayName: string } | null;
       corporateAccount: { displayName: string } | null;
     } | null;
@@ -408,8 +412,12 @@ export async function buildRoomChart(
       const due = reservedClaimEndDate(e.checkOutDate, e);
       if (due.getTime() > today.getTime()) continue;
       remember(e as unknown as EntryRow);
+      // Only a room the guest is in at the end of the stay — a room they left mid-stay may read
+      // OCCUPIED for whoever is in it now (2026-11-25).
       const occupied = new Set(
-        e.roomAssignments.filter((a) => a.room?.currentClaimState === "OCCUPIED").map((a) => a.roomId),
+        e.roomAssignments
+          .filter((a) => a.room?.currentClaimState === "OCCUPIED" && (a.endDate == null || a.endDate.getTime() >= due.getTime()))
+          .map((a) => a.roomId),
       );
       for (const roomId of occupied) {
         claims.push({ roomId, start: due, end: addDays(today, 1), entryId: e.id, kind: "OVERSTAY", holdExpiresAt: null });
@@ -613,6 +621,7 @@ export async function buildRoomChart(
             callerLastName: e.inquiry.callerLastName,
             callerPhone: e.inquiry.callerPhone,
             callerEmail: e.inquiry.callerEmail,
+            deskTag: e.inquiry.deskTag ?? null,
           }
         : null,
       partyName: e.inquiry?.travelAgent?.displayName ?? e.inquiry?.corporateAccount?.displayName ?? null,

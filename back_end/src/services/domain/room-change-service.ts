@@ -10,6 +10,7 @@ import {
   currentPerNightPicture,
   derivePartySlots,
   describeSeatingRepair,
+  apartmentGroupsFromTerms,
   repairPartySeating,
   repointStrayRows,
   resolveCompositionBasis,
@@ -251,6 +252,12 @@ export type StayExtensionWalkInput = {
   newCheckOutDate: Date;
   /** The extra nights and the room each is held in — every room of the plan that continues. */
   extraNights: Array<{ date: string; roomId: string }>;
+  /**
+   * The rooms our guest moves out of on the old checkout day, each to its own free room (2026-11-25,
+   * operator: several of a group's rooms taken on the extra nights). The first is the change's own
+   * from → to room. Absent: the old single move (toRoomId), or none (extended in place).
+   */
+  moves?: Array<{ fromRoomId: string; toRoomId: string }>;
 };
 
 /**
@@ -1257,12 +1264,42 @@ async function changeRoomToNewSegmentInner(
       .sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
   }
 
+  // An extension's moves (2026-11-25): each room our guest leaves on the old checkout day, and the
+  // free room that takes its extra nights. The first is the change's own from → to room.
+  const extMoves: Array<{ fromRoomId: string; toRoomId: string }> = isExtension
+    ? input.extension!.moves?.length
+      ? input.extension!.moves.map((m) => ({ fromRoomId: m.fromRoomId.trim(), toRoomId: m.toRoomId.trim() }))
+      : hasSingle
+        ? [{ fromRoomId: input.fromRoomId.trim(), toRoomId: input.toRoomId!.trim() }]
+        : []
+    : [];
+  if (extMoves.length > 0) {
+    if (extMoves[0].fromRoomId !== input.fromRoomId.trim() || (hasSingle && extMoves[0].toRoomId !== input.toRoomId!.trim())) {
+      throw new ValidationError("The extension's first move must be the room the change names");
+    }
+    const froms = new Set(extMoves.map((m) => m.fromRoomId));
+    const tos = new Set(extMoves.map((m) => m.toRoomId));
+    if (froms.size !== extMoves.length) throw new ValidationError("A room moves once — the extension names one room twice");
+    if (tos.size !== extMoves.length) throw new ValidationError("Each room moves to a room of its own — the extension picks one room for two");
+    for (const m of extMoves) {
+      if (!ctx.currentPlanRoomIds.has(m.fromRoomId)) throw new ValidationError("A room the extension moves out of is not part of this booking's room plan");
+      if (tos.has(m.fromRoomId) || froms.has(m.toRoomId)) throw new ValidationError("A room cannot both move and take another room's nights in one extension");
+      for (const d of ctx.substitutionNights) {
+        const held = input.extension!.extraNights.filter((n) => String(n.date).slice(0, 10) === d).map((n) => n.roomId);
+        if (!held.includes(m.toRoomId) || held.includes(m.fromRoomId)) {
+          throw new ValidationError("The extension's nights do not match its moves — request the extension again");
+        }
+      }
+    }
+  }
+
   // ── The night → room map the change asks for ───────────────────────────────────────────────
   const targetsByNight = new Map<string, string>();
   if (isExtension) {
-    // The extra nights go to the from-room (extension in place) or to the one replacement room
-    // (a move on the old checkout day); the other rooms of the plan continue by construction.
-    const target = hasSingle ? input.toRoomId!.trim() : input.fromRoomId;
+    // The extra nights go to the from-room (extension in place) or to its replacement room (a move
+    // on the old checkout day); the other rooms of the plan continue by construction. Several moves
+    // (2026-11-25) are read off `extMoves` below — this map holds the change's own room.
+    const target = extMoves[0]?.toRoomId ?? input.fromRoomId;
     for (const d of ctx.substitutionNights) targetsByNight.set(d, target);
   } else if (isDateShift) {
     // The stay moves; the room moved keeps its place in the pattern, or lands in another room.
@@ -1288,7 +1325,9 @@ async function changeRoomToNewSegmentInner(
   }
 
   // Distinct NEW rooms (the from-room may appear per-night: those nights the guest KEEPS).
-  const distinctTargets = Array.from(new Set(targetsByNight.values())).filter((id) => id !== input.fromRoomId);
+  const distinctTargets = isExtension
+    ? Array.from(new Set(extMoves.map((m) => m.toRoomId)))
+    : Array.from(new Set(targetsByNight.values())).filter((id) => id !== input.fromRoomId);
   const keptFromNights = [...targetsByNight.entries()].filter(([, id]) => id === input.fromRoomId).map(([d]) => d).sort();
   if (!setupOnly && !isExtension && !isDateShift && !isSplitOff && distinctTargets.length === 0) {
     throw new ValidationError("Every night keeps the current room — nothing changes");
@@ -1306,6 +1345,16 @@ async function changeRoomToNewSegmentInner(
   // A setup-only change's "target" is the from-room itself — the setup validation below reads
   // the room's type (max extra beds) and bed stock off this map.
   if (setupOnly || isExtension || isDateShift || isSplitOff) targetById.set(ctx.fromRoom.id, ctx.fromRoom);
+  // An extension's rooms our guest leaves (2026-11-25): their types decide each move's price and
+  // authority, their guests each new room's row.
+  const extFromById = new Map<string, (typeof targetRooms)[number]>([[ctx.fromRoom.id, ctx.fromRoom]]);
+  if (extMoves.length > 1) {
+    for (const r of await prisma.room.findMany({ where: { id: { in: extMoves.map((m) => m.fromRoomId) } }, include: { roomType: true } })) {
+      extFromById.set(r.id, r);
+    }
+  }
+  /** The room an extension's new room takes its extra nights from. */
+  const extFromOf = (toId: string) => extMoves.find((m) => m.toRoomId === toId)?.fromRoomId ?? input.fromRoomId;
   // A date move's block: every room landing somewhere new, and the plan's own rooms (their types
   // decide what each row carries).
   const planRoomById = new Map<string, (typeof targetRooms)[number]>();
@@ -1342,6 +1391,11 @@ async function changeRoomToNewSegmentInner(
     nightsByTarget.set(roomId, [...(nightsByTarget.get(roomId) ?? []), date]);
   }
   for (const nights of nightsByTarget.values()) nights.sort();
+  // An extension: each new room takes every extra night from the room it replaces.
+  if (isExtension) {
+    nightsByTarget.clear();
+    for (const m of extMoves) nightsByTarget.set(m.toRoomId, [...ctx.substitutionNights]);
+  }
 
   /**
    * Rooms of the booking the nights go back into (2026-10-15, operator: "305 on the 23rd was in 206
@@ -1404,7 +1458,9 @@ async function changeRoomToNewSegmentInner(
   // as a same-type change.
   const sameType = isDateShift
     ? [...dateRoomMap].every(([f, t]) => targetById.get(t)?.roomTypeId === planRoomById.get(f)?.roomTypeId)
-    : distinctTargets.every((id) => targetById.get(id)!.roomTypeId === ctx.fromRoom.roomTypeId);
+    : isExtension
+      ? distinctTargets.every((id) => targetById.get(id)!.roomTypeId === extFromById.get(extFromOf(id))?.roomTypeId)
+      : distinctTargets.every((id) => targetById.get(id)!.roomTypeId === ctx.fromRoom.roomTypeId);
   enforceRoomChangeAuthorityForStage({ currentStage: String(stage), actorLevel: actor.actorLevel, sameType });
   if (isDateShift) enforceDateMoveAuthority({ actorLevel: actor.actorLevel });
 
@@ -1599,9 +1655,13 @@ async function changeRoomToNewSegmentInner(
   for (const id of distinctTargets) {
     const room = targetById.get(id)!;
     const maxCapacity = (room.roomType as { maxCapacity?: number } | null)?.maxCapacity ?? null;
-    if (movingChargeable != null && maxCapacity != null && movingChargeable > maxCapacity) {
+    // An extension's new room holds the guests of the room it replaces (2026-11-25: several moves).
+    const fromId = isExtension ? extFromOf(id) : input.fromRoomId;
+    const comp = fromId === input.fromRoomId ? movingComposition : priorCompositions?.find((c) => c.roomId === fromId) ?? null;
+    const chargeable = comp?.adultCount ?? comp?.occupantCount ?? null;
+    if (chargeable != null && maxCapacity != null && chargeable > maxCapacity) {
       throw new ValidationError(
-        `Room ${room.roomNumber} (${room.roomType?.name ?? "its type"}) sleeps at most ${maxCapacity} chargeable guests — the ${movingChargeable} in Room ${ctx.fromRoom.roomNumber} do not fit`,
+        `Room ${room.roomNumber} (${room.roomType?.name ?? "its type"}) sleeps at most ${maxCapacity} chargeable guests — the ${chargeable} in Room ${extFromById.get(fromId)?.roomNumber ?? ctx.fromRoom.roomNumber} do not fit`,
       );
     }
   }
@@ -1683,7 +1743,7 @@ async function changeRoomToNewSegmentInner(
             toRoomIds: Array.from(new Set(dateRoomMap.values())),
             pairs: [...dateRoomMap].map(([fromRoomId, toRoomId]) => ({ fromRoomId, toRoomId })),
           }
-        : { fromRoomId: input.fromRoomId, toRoomId, toRoomIds: distinctTargets };
+        : { fromRoomId: input.fromRoomId, toRoomId, toRoomIds: distinctTargets, ...(extMoves.length > 1 ? { pairs: extMoves } : {}) };
   // Extension marker (2026-08-21): the sealed config says the stay was extended — and from where.
   const extensionMarker = input.extension
     ? {
@@ -1725,6 +1785,7 @@ async function changeRoomToNewSegmentInner(
   );
   if (roomChangeMarker) {
     if (isDateShift) for (const [f, t] of dateRoomMap) successorOf.set(f, [t]);
+    else if (extMoves.length > 1) for (const m of extMoves) successorOf.set(m.fromRoomId, [m.toRoomId]);
     else successorOf.set(input.fromRoomId, distinctTargets);
   }
   const seatingActions: SeatingRepairAction[] = [];
@@ -1744,9 +1805,10 @@ async function changeRoomToNewSegmentInner(
       newCompositions = priorCompositions.map((c) => ({ ...c, nightMealOverrides: [...(c.nightMealOverrides ?? [])] }));
       for (const roomId of distinctTargets) {
         if (newCompositions.some((c) => c.roomId === roomId)) continue;
-        const src = movingComposition ?? priorCompositions[0];
+        const fromId = extFromOf(roomId);
+        const src = priorCompositions.find((c) => c.roomId === fromId) ?? movingComposition ?? priorCompositions[0];
         const room = targetById.get(roomId);
-        const crossType = room != null && room.roomTypeId !== ctx.fromRoom.roomTypeId;
+        const crossType = room != null && room.roomTypeId !== (extFromById.get(fromId) ?? ctx.fromRoom).roomTypeId;
         newCompositions.push({ ...src, roomId, nightMealOverrides: [], ...(crossType ? { negotiatedRoomRate: undefined } : {}) });
       }
     } else if (isDateShift) {
@@ -1926,7 +1988,14 @@ async function changeRoomToNewSegmentInner(
   // outer binding to `null` for good.
   const seatingState: { report: { changed: boolean; actions: SeatingRepairAction[]; unresolved: string[]; lines: string[] } | null } = { report: null };
   const seatEveryone = (rows: RoomCompositionServiceInput[]): RoomCompositionServiceInput[] => {
-    const repair = repairPartySeating({ slots: partySlots, rows, picture: substitutedPicture, facts: seatingFacts });
+    const repair = repairPartySeating({
+      slots: partySlots,
+      rows,
+      picture: substitutedPicture,
+      facts: seatingFacts,
+      // An apartment's rooms are let together (2026-11-25): one may stand empty, and no extra bed is added there.
+      apartmentGroups: apartmentGroupsFromTerms(priorTerms),
+    });
     const actions = [...seatingActions, ...repair.actions];
     const lines = describeSeatingRepair(
       { actions, unresolved: repair.unresolved },
@@ -2036,6 +2105,11 @@ async function changeRoomToNewSegmentInner(
       stayCheckIn: ctx.checkIn,
       stayCheckOut: ctx.checkOut,
       nights: ctx.nightsIso.length,
+      apartmentRoomIds: await (await import("./apartment-booking-service.js")).apartmentRoomIdsOfEntry(
+        prisma,
+        input.entryId,
+        supplied.map((c) => c.roomId),
+      ),
     });
 
     // A pure re-price that changes nothing must not roll a segment (the operator opened the
@@ -2302,6 +2376,8 @@ async function changeRoomToNewSegmentInner(
   const stayCheckOut = ctx.checkOut;
   const now = new Date();
   let newAssignmentIdForS7: string | null = null;
+  /** An extension's new rooms (2026-11-25: several moves) → the bare row each gets from the old checkout. */
+  const extNewAssignmentIds = new Map<string, string>();
 
   // ── 0. Would the new plan overbook a room? (2026-09-19) ─────────────────────────────────────
   // The re-freeze at the end asks the overbooking gate (Policy 41). Asked only there, a refusal
@@ -2440,19 +2516,20 @@ async function changeRoomToNewSegmentInner(
             if (aEnd.getTime() !== ext.priorCheckOutDate.getTime()) continue;
             await tx.roomAssignment.update({ where: { id: a.id }, data: { endDate: ctx.checkOut } });
           }
-          if (toRoomId !== input.fromRoomId) {
+          for (const m of extMoves) {
             const newAssignmentId = await allocateReadableId(tx, "ROOM_ASSIGNMENT" as const, now);
-            newAssignmentIdForS7 = newAssignmentId;
+            if (m.toRoomId === toRoomId) newAssignmentIdForS7 = newAssignmentId;
+            extNewAssignmentIds.set(m.toRoomId, newAssignmentId);
             await tx.roomAssignment.create({
               data: {
                 id: newAssignmentId,
                 entryId: input.entryId,
-                roomId: toRoomId,
+                roomId: m.toRoomId,
                 assignedBy: actor.actorId,
-                deficientAtAssignment: toRoom.isDeficient === true,
+                deficientAtAssignment: targetById.get(m.toRoomId)?.isDeficient === true,
                 startDate: ext.priorCheckOutDate,
                 endDate: ctx.checkOut,
-                notes: `Stay extension: moves from Room ${ctx.fromRoom.roomNumber} on ${ext.priorCheckOutDate.toISOString().slice(0, 10)}${whyColon}`,
+                notes: `Stay extension: moves from Room ${(extFromById.get(m.fromRoomId) ?? ctx.fromRoom).roomNumber} on ${ext.priorCheckOutDate.toISOString().slice(0, 10)}${whyColon}`,
               },
             });
           }
@@ -2922,6 +2999,22 @@ async function changeRoomToNewSegmentInner(
       }
     } catch {
       // Non-fatal — night audit falls back to reservation.frozenRate for this room.
+    }
+  }
+
+  // An extension's other new rooms (2026-11-25: several moves) — each row covers the extra nights.
+  if (stage === Stage.S7 && isExtension) {
+    for (const [roomId, rowId] of extNewAssignmentIds) {
+      if (rowId === newAssignmentIdForS7) continue; // hydrated above
+      try {
+        const fields = await hydrateRoomAssignmentComposition(prisma, input.entryId, roomId, {
+          nights: ctx.substitutionNights.length,
+          startDate: input.extension!.priorCheckOutDate,
+        });
+        if (fields) await prisma.roomAssignment.update({ where: { id: rowId }, data: fields as Prisma.RoomAssignmentUpdateInput });
+      } catch {
+        // Non-fatal — night audit falls back to reservation.frozenRate for this room.
+      }
     }
   }
 
@@ -3498,6 +3591,10 @@ export async function changeRoomToNewSegment(
   ...args: Parameters<typeof changeRoomToNewSegmentInner>
 ): ReturnType<typeof changeRoomToNewSegmentInner> {
   const input = args[2];
+  {
+    const { refuseInHouseApartmentChange } = await import("./apartment-booking-service.js");
+    await refuseInHouseApartmentChange(args[0], input.entryId, input.extension ? "Extending the stay" : "Changing the room or its setup");
+  }
   const { readBedsBefore, carryBedsToNewRooms } = await import("./entry-bed-plan-service.js");
   const bedsBefore = input.dryRun ? null : await readBedsBefore(args[0], input.entryId);
   const out = await changeRoomToNewSegmentInner(...args);
@@ -3508,6 +3605,7 @@ export async function changeRoomToNewSegment(
     if (input.toRoomId) pairs.push([input.fromRoomId, input.toRoomId]);
     for (const n of input.perNight ?? []) if (n.roomId !== input.fromRoomId) pairs.push([input.fromRoomId, n.roomId]);
     for (const [from, to] of Object.entries(input.dateShift?.roomMap ?? {})) pairs.push([from, to]);
+    for (const m of input.extension?.moves ?? []) if (!pairs.some(([, to]) => to === m.toRoomId)) pairs.push([m.fromRoomId, m.toRoomId]);
     await carryBedsToNewRooms(args[0], input.entryId, bedsBefore, pairs);
   }
   // A change made from tonight while the guest is in house: tonight's lines already on the bill are

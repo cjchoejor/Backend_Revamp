@@ -12,7 +12,7 @@
 
 import { Prisma } from "@prisma/client";
 import { round2, toDecimal } from "./money.js";
-import { roomStayTax, type PostingTaxRule } from "./stay-posting.js";
+import { lineTax, roomStayTax, type PostingTaxRule } from "./stay-posting.js";
 
 const ZERO = new Prisma.Decimal(0);
 
@@ -90,6 +90,28 @@ export type RoomCompositionInput = {
   // date range — for nights calc
   startDate?: Date | null;
   endDate?: Date | null;
+  /**
+   * An apartment's rent (2026-11-25, lib/apartment-rent.ts). Set by the pricing callers on the
+   * server from the booking's dates, plan and apartment — never taken from the desk. When present
+   * the room is not priced by the night: its accommodation is the periods' rent, each period taxed
+   * as ONE line, as the bill posts it; an extra bed is part of the apartment (no charge). The other
+   * rooms of an apartment let together carry `periods: []` — the rent sits on the apartment's
+   * first room.
+   */
+  rent?: RoomRent | null;
+};
+
+export type RoomRent = {
+  plan: "MONTHLY" | "WEEKLY";
+  unitLabel: string;
+  packageName: string;
+  /** The apartment's first room, which carries the rent. */
+  leadRoomId: string;
+  /** The apartment's rooms, by number — "Rooms 5051 + 5052" on the papers. */
+  roomNumbers?: string[];
+  /** The plan's rate WITHOUT service charge and GST — what a stay cut short is priced again on. */
+  rate?: string;
+  periods: Array<{ from: string; to: string; nights: number; ofNights: number; whole: boolean; net: string }>;
 };
 
 /** Rates + tax percentages fetched from rate card + config at pricing time. Callers assemble
@@ -346,6 +368,8 @@ export function computeRoomComposition(
   serviceCharge: Prisma.Decimal;
   gst: Prisma.Decimal;
   total: Prisma.Decimal;
+  /** An apartment's rent, each period with its service charge and GST as one line (2026-11-25). */
+  rent: (Omit<RoomRent, "periods"> & { periods: Array<RoomRent["periods"][number] & { serviceCharge: string; gst: string; total: string }> }) | null;
 } {
   if (input.isFoc === true) {
     // Full waiver — every money value zero. Still return the pax counts + rates for display.
@@ -377,6 +401,7 @@ export function computeRoomComposition(
       serviceCharge: ZERO,
       gst: ZERO,
       total: ZERO,
+      rent: null,
     };
   }
 
@@ -561,14 +586,32 @@ export function computeRoomComposition(
   // rounding the meals covers a plan price shared across its meals in proportions that do not
   // divide evenly.
   const mealsNet = round2(mealsSubtotal);
-  const subtotal = round2(perNightRoom.mul(nights).add(extraBedSubtotal)).add(mealsNet);
+  const rule = taxRuleFor(input, ctx);
+  // An apartment: the rent, period by period, each one line (2026-11-25); no charge for a bed.
+  const rent = input.rent
+    ? {
+        ...input.rent,
+        periods: input.rent.periods.map((p) => {
+          const t = lineTax(p.net, rule);
+          return { ...p, serviceCharge: t.serviceCharge.toFixed(2), gst: t.gst.toFixed(2), total: toDecimal(p.net).add(t.serviceCharge).add(t.gst).toFixed(2) };
+        }),
+      }
+    : null;
+  if (rent) extraBedSubtotal = ZERO;
+  const accommodationRaw = rent
+    ? rent.periods.reduce<Prisma.Decimal>((a, p) => a.add(p.net), ZERO)
+    : round2(perNightRoom.mul(nights).add(extraBedSubtotal));
+  const subtotal = accommodationRaw.add(mealsNet);
   const accommodationNet = subtotal.sub(mealsNet);
-  const { serviceCharge, gst } = roomStayTax({
-    accommodation: accommodationNet,
-    meals: mealsNet,
-    nights,
-    rule: taxRuleFor(input, ctx),
-  });
+  let serviceCharge: Prisma.Decimal;
+  let gst: Prisma.Decimal;
+  if (rent) {
+    const meals = roomStayTax({ accommodation: ZERO, meals: mealsNet, nights, rule });
+    serviceCharge = rent.periods.reduce<Prisma.Decimal>((a, p) => a.add(p.serviceCharge), meals.serviceCharge);
+    gst = rent.periods.reduce<Prisma.Decimal>((a, p) => a.add(p.gst), meals.gst);
+  } else {
+    ({ serviceCharge, gst } = roomStayTax({ accommodation: accommodationNet, meals: mealsNet, nights, rule }));
+  }
   const total = subtotal.add(serviceCharge).add(gst);
 
   return {
@@ -577,12 +620,13 @@ export function computeRoomComposition(
     effectiveLunchPax: lunchPax,
     effectiveDinnerPax: dinnerPax,
     roomRate: toDecimal(roomRate),
-    extraBedRate: toDecimal(extraBedRate),
+    // An apartment's bed is part of the apartment — no rate is charged for it (2026-11-25).
+    extraBedRate: rent ? ZERO : toDecimal(extraBedRate),
     breakfastRate: toDecimal(breakfastRate),
     lunchRate: toDecimal(lunchRate),
     dinnerRate: toDecimal(dinnerRate),
     perNightRoom,
-    perNightExtraBed,
+    perNightExtraBed: rent ? ZERO : perNightExtraBed,
     perNightMeals,
     perNightSubtotal,
     mealsSubtotal,
@@ -598,6 +642,7 @@ export function computeRoomComposition(
     serviceCharge,
     gst,
     total,
+    rent,
   };
 }
 

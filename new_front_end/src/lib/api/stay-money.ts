@@ -154,7 +154,19 @@ export type StayExtensionPreview = {
   currentRooms: Array<RoomStanding & { extendableInPlace: boolean }>;
   candidates: RoomStanding[];
   plan: Array<{ date: string; roomId: string; roomNumber: string | null }>;
-  moves: Array<{ fromRoomId: string; fromRoomNumber: string | null; toRoomId: string; toRoomNumber: string | null; crossType: boolean }>;
+  moves: Array<{
+    fromRoomId: string;
+    fromRoomNumber: string | null;
+    toRoomId: string;
+    toRoomNumber: string | null;
+    crossType: boolean;
+    /** Another type: keeps the guest's rate (fromRate, a night) or takes its own (toRate). */
+    keepRate?: boolean;
+    fromRate?: number | null;
+    toRate?: number | null;
+    /** The new type's minimum when keeping goes under it with no price agreed — the GM's or an admin's. */
+    keepFloor?: number | null;
+  }>;
   compositions: RoomCompositionInput[];
   pricing: {
     priorStayTotal: number | null;
@@ -169,6 +181,29 @@ export type StayExtensionPreview = {
   blockedReason: string | null;
   /** The guest's other booking over the extended nights (Policy 13) — the FOM acknowledges it first. */
   guestOverlap?: { entryId: string; checkIn: string; checkOut: string; acknowledged: boolean } | null;
+  /** Each of the guest's rooms another booking holds on the extra nights, and who (2026-11-25, the swap). */
+  takenRooms?: StayExtensionTakenRoom[];
+};
+
+export type StayExtensionTakenRoom = {
+  roomId: string;
+  roomNumber: string;
+  roomTypeName: string | null;
+  nights: string[];
+  heldBy: Array<{
+    entryId: string;
+    bookingRef: string | null;
+    guestName: string | null;
+    partyName: string | null;
+    stage: string;
+    status: string;
+    checkIn: string | null;
+    checkOut: string | null;
+    nightsInRoom: string[];
+    swappable: boolean;
+    why: string | null;
+    rooms: Array<{ roomId: string; roomNumber: string; roomTypeName: string | null; sameType: boolean }>;
+  }>;
 };
 
 export type StayExtensionInput = {
@@ -176,6 +211,8 @@ export type StayExtensionInput = {
   perNight?: Array<{ date: string; roomId: string }>;
   /** Which current room `perNight` replaces (multi-room bookings) — the desk always names it. */
   replaceRoomId?: string;
+  /** Several of our guest's rooms moving on the old check-out day, each to its own free room (2026-11-25). */
+  moves?: Array<{ fromRoomId: string; toRoomId: string; keepRate?: boolean }>;
   roomCompositions?: RoomCompositionInput[];
   requestedDiscount?: { discountPercent?: number; discountAmount?: number; discountBasis: string } | null;
   askMode?: "PERCENT" | "AMOUNT";
@@ -190,7 +227,7 @@ export type StayExtensionRow = {
   newCheckOutDate: string;
   extraNights: Array<{ date: string; roomId: string }>;
   roomCompositions: RoomCompositionInput[] | null;
-  pricingPreview: { pricing?: StayExtensionPreview["pricing"]; figures?: InterimFigures; moves?: StayExtensionPreview["moves"] } | null;
+  pricingPreview: { pricing?: StayExtensionPreview["pricing"]; figures?: InterimFigures; moves?: StayExtensionPreview["moves"]; payAt?: "BILL" | "NOW" | "CHECKOUT" } | null;
   reason: string;
   holdExpiresAt: string;
   requestedAt: string;
@@ -208,12 +245,39 @@ export async function previewStayExtension(session: Session, entryId: string, bo
 export async function requestStayExtension(
   session: Session,
   entryId: string,
-  body: StayExtensionInput & { reason: string; askMode: "PERCENT" | "AMOUNT"; askValue: number; note?: string; dueBy?: string },
+  body: StayExtensionInput & { reason?: string; askMode: "PERCENT" | "AMOUNT"; askValue: number; note?: string; dueBy?: string },
 ) {
-  return apiRequest<{ request: StayExtensionRow; interim: InterimPaymentRow; invoice: { id: string }; preview: StayExtensionPreview }>(
+  return apiRequest<{ request: StayExtensionRow; interim: InterimPaymentRow | null; invoice: { id: string } | null; preview: StayExtensionPreview }>(
     `/api/entries/${entryId}/stay-extension`,
     { method: "POST", session, body },
   );
+}
+
+/**
+ * Extend the stay in one press (2026-11-25): NOW — paid at the desk (the bill handed over, the payment
+ * recorded with its method, bank and journal number, the stay extended); CHECKOUT — nothing now, the
+ * extra nights paid at check-out. `stoppedAt` says where it stopped when a step was refused.
+ */
+export async function extendStayNow(
+  session: Session,
+  entryId: string,
+  body: StayExtensionInput & {
+    payAt: "NOW" | "CHECKOUT";
+    askMode?: "PERCENT" | "AMOUNT";
+    askValue?: number;
+    paymentMethod?: string;
+    bankName?: string;
+    journalNumber?: string;
+    notes?: string;
+  },
+) {
+  return apiRequest<{
+    request: StayExtensionRow;
+    outcome: { walk: { blocked: { message: string } | null; reachedStage: string }; extension?: { newCheckOutDate: string } | null } | null;
+    paid: number | null;
+    stoppedAt: "PAYMENT" | "EXTEND" | null;
+    message: string | null;
+  }>(`/api/entries/${entryId}/stay-extension/now`, { method: "POST", session, body });
 }
 
 export async function listStayExtensions(session: Session, entryId: string) {

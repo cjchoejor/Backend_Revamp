@@ -46,6 +46,16 @@ import { bookingHref } from "@/components/ds/ui";
 import { fmtStay, money, plural } from "@/lib/ds/format";
 import { StayDates } from "@/components/ds/stay-dates";
 import { RateSheetCard, type RateChoice } from "@/components/ds/rate-sheet";
+import {
+  ApartmentCountField,
+  ApartmentPlanField,
+  IntakeApartmentRates,
+  apartmentCountProblem,
+  apartmentPlanProblem,
+  useApartmentCounts,
+  useApartmentPlans,
+} from "./s1-apartment";
+import type { ApartmentPlan } from "@/lib/api/apartments";
 import { STEP_NAMES, STEP_NEEDS } from "@/lib/ds/steps";
 import type { EntryDetail } from "@/types/api";
 import { Choice, Fact, Facts, FlowProgress, StepCanvas, StepCard, StepFlow, SubTabs, anchorFor, atLeast, numberFlow, revealCard, toastRefusal } from "./kit";
@@ -63,6 +73,7 @@ import {
   packageWord,
   ReqMark,
   contactsProblem,
+  contactsProblemShort,
   partyPersonOf,
   USE_TYPES,
   addNightsIso,
@@ -82,6 +93,7 @@ import { linkInquiryEmail, type InboxEmail } from "@/lib/api/inbox";
 import { DateInput } from "@/components/ds/date-input";
 import { PhoneField } from "@/components/ds/phone-field";
 import { PersonName } from "@/components/ds/person-name";
+import { DeskTagInput, tidyDeskTag } from "@/components/ds/desk-tag";
 import { usePhoneRules } from "@/hooks/use-phone-rules";
 import { nationalDigits, problemOfPhone } from "@/lib/ds/phone";
 import { fullNameOf, titled } from "@/lib/ds/person";
@@ -116,10 +128,12 @@ export function NewInquiryCanvas() {
     const ci = params.get("checkIn") ?? "";
     const n = parseInt(params.get("nights") ?? "", 10);
     const room = params.get("room")?.trim() || null;
+    const by: "type" | "number" = params.get("by") === "number" ? "number" : "type";
     return {
       checkIn: /^\d{4}-\d{2}-\d{2}$/.test(ci) ? ci : null,
       nights: Number.isFinite(n) && n >= 1 && n <= 60 ? String(n) : null,
       room,
+      by,
     };
   }, [params]);
   const queryClient = useQueryClient();
@@ -160,6 +174,8 @@ export function NewInquiryCanvas() {
   // The caller (2026-10-12): who rang, which is not always the guest. Title and name can wait for
   // Wrap up; a phone or an email cannot (an OTA booking needs neither).
   const [callerTitle, setCallerTitle] = useState("");
+  // The desk's own note to tell same-named guests apart (2026-11-25) — rides on the start.
+  const [deskTag, setDeskTag] = useState("");
   const [onWhatsApp, setOnWhatsApp] = useState<boolean | null>(null);
   // A caller found in the caller list (2026-10-27) — never a guest: the guest staying is named at
   // Wrap up. `beforePick` is the form as it stood, so "Not this caller" puts it back.
@@ -195,6 +211,10 @@ export function NewInquiryCanvas() {
   // "5 King + 2 Twin" — optional, may be partial.
   const [beds, setBeds] = useState<Record<string, string>>({});
   const [notes, setNotes] = useState("");
+  // How an apartment is let (2026-11-25): monthly or weekly, beside the dates.
+  const [aptPlan, setAptPlan] = useState<ApartmentPlan | "">("");
+  // How many apartments the guest wants (2026-11-25, operator): asked in place of the rooms.
+  const [aptCount, setAptCount] = useState("");
   // The booking file's open tab — Booking until the desk picks another. A tick, a party or a package
   // picked brings it to Charges › Package (2026-11-05, operator).
   const [fileTab, setFileTab] = useState<IntakeFileTab>("details");
@@ -564,7 +584,13 @@ export function NewInquiryCanvas() {
                 : allowedRooms.length > 0 && !allowedRooms.includes(roomsN)
                   ? "a room count the party allows"
                   : undefined;
-  const roomsGuestsSet = partyOk && roomsN >= 1;
+  const isApartment = useType === "APARTMENT";
+  const aptPlans = useApartmentPlans(isApartment ? checkIn : null, isApartment ? checkOut : null);
+  const aptProblem = isApartment ? apartmentPlanProblem(aptPlan, aptPlans.data ?? null) : null;
+  const aptCounts = useApartmentCounts(isApartment ? adultsN + childN : 0);
+  const aptCountProblem = isApartment && adultsN > 0 ? apartmentCountProblem(aptCount, aptCounts.data ?? null) : null;
+  // An apartment's rooms are its apartments', picked on the booking (2026-11-25); how many is asked here.
+  const roomsGuestsSet = partyOk && (isApartment ? !aptProblem && !!aptCount && !aptCountProblem : roomsN >= 1);
 
   const saveBlockers: string[] = [];
   // "What kind of stay" opens unanswered, and the backend refuses a booking without one — so the
@@ -581,6 +607,8 @@ export function NewInquiryCanvas() {
   if (!corpComplete) saveBlockers.push("the company's reference and a contact person");
   if (!partyOk && partyHow) saveBlockers.push(partyHow);
   if (dateProblem) saveBlockers.push(dateProblem);
+  if (aptCountProblem) saveBlockers.push(aptCountProblem);
+  if (aptProblem) saveBlockers.push(aptProblem);
 
   /* ---------------------------------------------------------------- the save */
   const [navigating, setNavigating] = useState(false);
@@ -623,6 +651,7 @@ export function NewInquiryCanvas() {
         sourceChannel: channel.channel,
         cameInAs: channel.cameInAs,
         notes: notes.trim() || undefined,
+        deskTag: tidyDeskTag(deskTag) || null,
         proposedCheckIn: checkIn || undefined,
         proposedCheckOut: checkOut || undefined,
         travelAgentId: partyKind === "TRAVEL_AGENT" ? (party?.id ?? null) : null,
@@ -664,8 +693,10 @@ export function NewInquiryCanvas() {
         adultCount: a,
         childCount: c,
         childAges: agesOut,
-        numberOfRooms: Math.max(1, roomsN),
-        bedTypeRequest: bedSum > 0 ? bedRequest : undefined,
+        numberOfRooms: isApartment ? 1 : Math.max(1, roomsN),
+        bedTypeRequest: !isApartment && bedSum > 0 ? bedRequest : undefined,
+        apartmentPlan: isApartment ? aptPlan || null : undefined,
+        apartmentCount: isApartment && aptCount ? Number(aptCount) : undefined,
         otaSource: channel.channel === "OTA",
         contactPersonName: (titled(arrivingTitle, arrivingName) || arrivingFallbackName) || undefined,
         contactPersonPhone: (arrivingPhone || arrivingFallbackPhone) || undefined,
@@ -685,7 +716,7 @@ export function NewInquiryCanvas() {
       setNavigating(true);
       if (returnStayNext.current) openReturnStayOnArrival(id);
       // The house is asked as the booking opens — no second press of Ask the house.
-      router.push(fromChart.room ? `${bookingHref(id, 1)}&room=${encodeURIComponent(fromChart.room)}` : `${bookingHref(id, 1)}&ask=1`);
+      router.push(fromChart.room ? `${bookingHref(id, 1)}&room=${encodeURIComponent(fromChart.room)}&by=${fromChart.by}` : `${bookingHref(id, 1)}&ask=1`);
     },
     onError: (e) => {
       const body = e instanceof ApiError ? e.body : undefined;
@@ -700,7 +731,11 @@ export function NewInquiryCanvas() {
   });
   const busy = run.isPending || navigating;
 
-  const guestLineLabel = partyKind ? `${partyWord === "the company" ? "The company" : "The travel agent"}, and who to ring` : "The caller · a phone or an email";
+  // A contact whose phone or email does not read as one names itself on the list too (2026-11-25).
+  const contactsShort = partyKind ? contactsProblemShort(contacts, phoneRules) : null;
+  const guestLineLabel = partyKind
+    ? (contactsShort ?? `${partyWord === "the company" ? "The company" : "The travel agent"}, and who to ring`)
+    : "The caller · a phone or an email";
   // The checklist, in the order the page is worked; the side panel numbers it onto the cards
   // (2026-09-25 — it sat at the foot of the page as a bare list). The house is asked on the
   // booking, once the lead is kept, so that item belongs to the booking's own list.
@@ -711,7 +746,7 @@ export function NewInquiryCanvas() {
     { label: "Use type", met: !!useType, card: "caller" },
     ...(needsCorp ? [{ label: "The company's reference", met: corpComplete, card: "caller" }] : []),
     { label: "Dates set", met: datesSet && !dateProblem, card: "stay" },
-    { label: "Rooms and guests set", met: roomsGuestsSet, card: "stay" },
+    { label: isApartment ? "Guests, how many apartments, and how they are let" : "Rooms and guests set", met: roomsGuestsSet, card: "stay" },
   ], { bySection: true });
   const nextUp = flowItems.find((i) => !i.met) ?? null;
   const goToCard = (card?: string) => {
@@ -764,7 +799,7 @@ export function NewInquiryCanvas() {
                 {fromChart.room || fromChart.checkIn ? (
                   <p className="chart-from">
                     <b>From the house chart</b>
-                    {fromChart.room ? <> · Room {fromChart.room}</> : null}
+                    {fromChart.room ? <> · Room {fromChart.room}{fromChart.by === "number" ? " itself, by number" : " · by its room type"}</> : null}
                     {fromChart.checkIn ? <> · <StayDates checkIn={fromChart.checkIn} checkOut={addNightsIso(fromChart.checkIn, Math.max(1, parseInt(fromChart.nights ?? "1", 10)))} /></> : null}
                     <span> — fill in the caller; the room is picked on the booking, once the house is asked</span>
                   </p>
@@ -939,11 +974,23 @@ export function NewInquiryCanvas() {
                           </div>
                         ) : null}
                         <div className="wide">
-                          <PersonName title={callerTitle} name={name} onTitle={setCallerTitle} onName={setName} namePlaceholder="can wait for Wrap up" />
+                          <PersonName
+                            title={callerTitle}
+                            name={name}
+                            onTitle={setCallerTitle}
+                            onName={setName}
+                            namePlaceholder="can wait for Wrap up"
+                            tag={{ value: deskTag, onChange: setDeskTag }}
+                          />
                         </div>
                       </>
                     )}
 
+                    {partyKind ? (
+                      <div className="wide caller-tag-row">
+                        <DeskTagInput value={deskTag} onChange={setDeskTag} />
+                      </div>
+                    ) : null}
                     <div className="wide field">
                       <label>What kind of stay</label>
                       <Choice
@@ -952,7 +999,7 @@ export function NewInquiryCanvas() {
                         onChange={(v) => setUseType(v)}
                       />
                       {useType === "APARTMENT" ? (
-                        <span className="hint warn-ink">an apartment needs its nights and rate tier before Negotiation — those are not on the desk yet</span>
+                        <Help label="About an apartment stay">Let by the month or the week, asked with the dates. The apartments themselves are chosen in The house, on the booking.</Help>
                       ) : useType === "CONFERENCE" ? (
                         <Help label="About a conference">The hall and its seating are added on the booking.</Help>
                       ) : null}
@@ -981,7 +1028,7 @@ export function NewInquiryCanvas() {
                       {datesSet ? <StayDates checkIn={checkIn} checkOut={checkOut} /> : <b>no dates</b>}
                       {datesSet ? <> · {plural(stayNights, "night")}</> : null} · {plural(adultsN, "adult")}
                       {childN > 0 ? <>, {plural(childN, "child", "children")}{agesComplete ? ` (${ages.join(", ")})` : ""}</> : null} ·{" "}
-                      {plural(roomsN, "room")}
+                      {isApartment ? (aptCount ? plural(Number(aptCount), "apartment") : "apartments not said") : plural(roomsN, "room")}
                       {bedSum > 0 ? <> · {Object.entries(bedRequest).map(([t, n]) => `${n} ${bedWord(t)}`).join(" + ")} asked</> : null}
                     </>
                   }
@@ -1054,6 +1101,24 @@ export function NewInquiryCanvas() {
                         onChange={(e) => setChildren(digits(e.target.value, 2).replace(/^0+(?=\d)/, ""))}
                       />
                     </div>
+                    {isApartment ? (
+                      <>
+                        <ApartmentCountField count={aptCount} guests={adultsN + childN} follow={adultsN > 0} onCount={setAptCount} />
+                        <ApartmentPlanField
+                          checkIn={checkIn}
+                          checkOut={checkOut}
+                          plan={aptPlan}
+                          onPlan={(p) => {
+                            setAptPlan(p);
+                            // The packages' weekly and monthly rates on the right (2026-11-25, operator).
+                            if (p) {
+                              setFileTab("money");
+                              setFileSub("package");
+                            }
+                          }}
+                        />
+                      </>
+                    ) : (
                     <div className="field">
                       <label>
                         Rooms{roomsN < 1 ? <ReqMark /> : null}
@@ -1099,6 +1164,7 @@ export function NewInquiryCanvas() {
                         ) : null
                       )}
                     </div>
+                    )}
                     {childN > 0 ? (
                       <div className="wide field">
                         <label>Their age{childN === 1 ? "" : "s"}</label>
@@ -1147,7 +1213,7 @@ export function NewInquiryCanvas() {
                         childMealPercent={policy?.mealPricing.childPercent ?? null}
                       />
                     </div>
-                    {bedOptions.length ? (
+                    {bedOptions.length && !isApartment ? (
                       <div className="wide field">
                         <label>
                           Beds asked for · optional
@@ -1341,7 +1407,15 @@ export function NewInquiryCanvas() {
                   </span>
                 ) : null}
                 <span>
-                  <b>{roomsN ? plural(roomsN, "room") : "Rooms not set"}</b>
+                  <b>
+                    {isApartment
+                      ? aptCount
+                        ? plural(Number(aptCount), "apartment")
+                        : "Apartments not set"
+                      : roomsN
+                        ? plural(roomsN, "room")
+                        : "Rooms not set"}
+                  </b>
                 </span>
                 <span className="camein">
                   {channel.label}
@@ -1381,6 +1455,7 @@ export function NewInquiryCanvas() {
                 }}
                 checkIn={checkIn}
                 checkOut={checkOut}
+                apartmentPlan={isApartment ? aptPlan : null}
                 notes={notes}
                 setNotes={setNotes}
               />
@@ -1445,7 +1520,7 @@ export function NewInquiryCanvas() {
               {fromChart.room ? (
                 <>
                   <dt>From the chart</dt>
-                  <dd>Room {fromChart.room}</dd>
+                  <dd>Room {fromChart.room}{fromChart.by === "number" ? " itself, by number" : " · by its room type"}</dd>
                 </>
               ) : null}
             </dl>
@@ -1470,6 +1545,7 @@ function IntakeFilePanel({
   rates,
   checkIn,
   checkOut,
+  apartmentPlan,
   notes,
   setNotes,
 }: {
@@ -1480,6 +1556,8 @@ function IntakeFilePanel({
   rates: RateChoice;
   checkIn: string;
   checkOut: string;
+  /** An apartment stay: how it is let (or "" not said yet); null when the stay is not an apartment. */
+  apartmentPlan: ApartmentPlan | "" | null;
   notes: string;
   setNotes: (v: string) => void;
 }) {
@@ -1510,7 +1588,17 @@ function IntakeFilePanel({
             label: "Money received",
             content: <StepCard title="Money received" status={<b>Nothing received</b>} meta="An advance is asked for at Set up." />,
           },
-          { key: "package", label: "Package", content: <RateSheetCard choice={rates} checkIn={checkIn} checkOut={checkOut} /> },
+          {
+            key: "package",
+            label: "Package",
+            // An apartment stay's packages are the apartment packages (2026-11-25, operator).
+            content:
+              apartmentPlan !== null ? (
+                <IntakeApartmentRates checkIn={checkIn} checkOut={checkOut} plan={apartmentPlan} />
+              ) : (
+                <RateSheetCard choice={rates} checkIn={checkIn} checkOut={checkOut} />
+              ),
+          },
         ]}
       />
     );

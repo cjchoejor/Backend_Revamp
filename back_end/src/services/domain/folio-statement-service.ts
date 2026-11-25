@@ -3,6 +3,7 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 import { effectiveCheckOutDate } from "../../lib/stay-dates.js";
 import { NotFoundError, PolicyGateBlockedError, ValidationError } from "../../lib/errors.js";
 import { formatMoney, loadHotelProfileForRender } from "../../lib/pdf-render-context.js";
+import { stayOutcomeRows, type StayInfoRow } from "../../lib/stay-outcome-words.js";
 import { toDecimal } from "../../lib/money.js";
 import { mastheadFromHotelProfile } from "../infrastructure/pdf-templates/legphel-document-shell.js";
 import {
@@ -13,6 +14,7 @@ import {
 import {
   renderLegphelInterimStatementHtml,
   renderLegphelMasterBillHtml,
+  type FolioBillBody,
 } from "../infrastructure/pdf-templates/legphel-folio-statement-templates.js";
 import { resolveChargeRates } from "../infrastructure/compute-stay-charges.js";
 import { renderHtmlToPdf } from "../infrastructure/pdf-render-service.js";
@@ -24,6 +26,11 @@ import { resolveInvoiceRecipient } from "./s9-service.js";
 import {
   buildFinalInvoiceFigures,
   composeTaxInvoiceHtml,
+  guestsWords,
+  paperBillRows,
+  paperPaymentRows,
+  ratePercentLabel,
+  roomsWords,
   taxInvoicePartiesFromEntry,
   type FinalInvoiceFigures,
 } from "./invoice-pdf-service.js";
@@ -268,6 +275,8 @@ type Composed = {
   account: string;
   forGuest: string | null;
   stay: ReturnType<typeof stayFrame>;
+  /** How a stay that ended early ended (2026-11-25) — `lib/stay-outcome-words`. */
+  stayOutcome: StayInfoRow[] | null;
   rooms: string[];
   /** "Room 201 (10–19 Mar) · Room 202 (10–14 Mar)" — each room with its nights (2026-10-30). */
   roomsLine: string | null;
@@ -282,11 +291,13 @@ async function compose(prisma: PrismaClient, entryId: string, opts?: { nightsMod
   const stay = stayFrame(entry);
   const figures = buildFinalInvoiceFigures(
     { billingModel: null, folio: entry.folio },
-    { gstRate, svcRate, nights: Math.max(1, stay.nights ?? 1), nightlyRate: 0 },
+    { gstRate, svcRate, nights: Math.max(1, stay.nights ?? 1), nightlyRate: 0, nightsMode: opts?.nightsMode ?? "SHORT" },
   );
   const parties = taxInvoicePartiesFromEntry(entry);
   const assigned = await assignedRoomNights(prisma, entryId, stay).catch(() => []);
+  const stayOutcome = await stayOutcomeRows(prisma, entryId).catch(() => null);
   return {
+    stayOutcome,
     roomsLine: assigned.length ? roomsWithNightsLine(assigned, opts?.nightsMode ?? "SHORT") : null,
     entry,
     figures,
@@ -311,98 +322,95 @@ function nightsLine(stay: ReturnType<typeof stayFrame>, now: Date): string | nul
   return `${slept} slept · ${stay.nights - slept} to come`;
 }
 
-function componentContents(c: FinalInvoiceFigures["components"][number]): string {
-  if (c.key === "ROOM") {
-    const nights = `${c.roomNights} room-night${c.roomNights === 1 ? "" : "s"}`;
-    return c.roomNumbers.length > 0 ? `${nights} · Room${c.roomNumbers.length === 1 ? "" : "s"} ${c.roomNumbers.join(", ")}` : nights;
-  }
-  const digest = c.descriptions
-    .slice(0, 3)
-    .map((d) => (d.length > 30 ? `${d.slice(0, 29)}…` : d))
-    .join(" · ");
-  const more = c.descriptions.length > 3 ? ` +${c.descriptions.length - 3} more` : "";
-  return digest ? `${digest}${more}` : `${c.chargeCount} item${c.chargeCount === 1 ? "" : "s"}`;
-}
-
-/** The money lines under a total: receipts in, refunds out, write-offs — each with its reference. */
-function moneyLines(c: Composed): Array<{ label: string; value: string }> {
-  const out: Array<{ label: string; value: string }> = [];
-  const ins = c.figures.payments.filter((p) => p.direction === "IN");
-  const outs = c.figures.payments.filter((p) => p.direction === "OUT");
-  if (ins.length > 4) {
-    out.push({ label: `Advance / payments received (${ins.length} receipts)`, value: `−${formatMoney(ins.reduce((s, p) => s + p.amount, 0))}` });
-  } else {
-    for (const p of ins) out.push({ label: `Advance / payment received · ${p.id}`, value: `−${formatMoney(p.amount)}` });
-  }
-  for (const p of outs) out.push({ label: `Refunded · ${p.id}`, value: `+${formatMoney(p.amount)}` });
-  for (const w of c.entry.folio?.writeOffRecords ?? []) out.push({ label: `Written off · ${w.id}`, value: `−${formatMoney(toDecimal(w.writtenOffAmount).toFixed(2))}` });
-  return out;
+/**
+ * The middle of the Master Bill and the Tentative invoice (2026-11-25): who the bill is to and the
+ * stay side by side, the rooms, every charge on its own row, the ladder, the payments, the balance.
+ * Every figure is the ledger's own (`buildFinalInvoiceFigures`); the balance is the folio's stored
+ * outstanding balance, as before.
+ */
+function billBody(c: Composed, stayExtra: Array<{ k: string; v: string; strong?: boolean } | null>): FolioBillBody {
+  const f = c.figures;
+  const folio = c.entry.folio!;
+  const stay = c.stay.checkIn && c.stay.checkOut ? formatStayLines(c.stay.checkIn, c.stay.checkOut, c.stay.nights) : null;
+  const scPct = ratePercentLabel(f.ladder.serviceCharge, f.ladder.net, c.rates.svcRate);
+  const gstPct = ratePercentLabel(f.ladder.gst, f.ladder.taxable, c.rates.gstRate);
+  const balance = toDecimal(folio.outstandingBalance);
+  const owed = balance.gt(0);
+  return {
+    billTo: {
+      heading: "Bill to",
+      rows: [
+        { k: "Name", v: c.account, strong: true },
+        c.forGuest ? { k: "For guest", v: c.forGuest } : null,
+        (() => {
+          const g = guestsWords(c.entry);
+          return g ? { k: "Guests", v: g } : null;
+        })(),
+      ],
+    },
+    stay: {
+      heading: "Stay",
+      rows: [
+        { k: "Booking", v: c.entry.id, red: true },
+        { k: "Folio", v: folio.id, mono: true },
+        stay ? { k: "Check-in", v: stay.checkIn, strong: true } : null,
+        ...(c.stayOutcome?.length ? c.stayOutcome : [stay ? { k: "Check-out", v: stay.checkOut } : null]),
+        ...stayExtra,
+      ],
+    },
+    rooms: roomsWords(c.rooms),
+    lines: paperBillRows(f),
+    ladder: [
+      { label: "Net value", value: formatMoney(f.ladder.net) },
+      { label: `Service charge ${scPct}%`, value: formatMoney(f.ladder.serviceCharge) },
+      { label: `GST @ ${gstPct}% on net value and service charge`, value: formatMoney(f.ladder.gst) },
+    ],
+    totalLabel: "Total · Nu.",
+    total: formatMoney(f.ladder.total),
+    byKind: f.components.map((k) => ({ label: k.key === "ROOM" ? `Accommodation · ${k.roomNights} room-night${k.roomNights === 1 ? "" : "s"}` : k.label, amount: formatMoney(k.total) })),
+    payments: paperPaymentRows(f, folio.writeOffRecords ?? []),
+    balanceLabel: balance.lt(0) ? "Paid over the bill · Nu." : "Balance due · Nu.",
+    balance: formatMoney(balance.abs().toFixed(2)),
+    owed,
+  };
 }
 
 function renderInterimStatement(c: Composed): string {
   if (c.entry.folio?.state !== "LIVE" || c.entry.currentStage !== "S7") {
     throw new ValidationError("The interim folio statement is issued during the stay only (S7, folio live) — at check-out the Master Bill is the bill.");
   }
+  const nights = nightsLine(c.stay, c.asAt);
   return renderLegphelInterimStatementHtml({
     masthead: mastheadFromHotelProfile(c.hotel),
     statementNo: null,
     bookingRef: c.entry.id,
     strip: "Position to date — not a bill for settlement",
-    asAt: formatDocDateTimeLocal(c.asAt),
-    account: c.account,
-    forGuest: c.forGuest,
-    stay: c.stay.checkIn && c.stay.checkOut ? formatStayLines(c.stay.checkIn, c.stay.checkOut, c.stay.nights) : null,
-    nightsLine: nightsLine(c.stay, c.asAt),
-    rooms: c.roomsLine || (c.rooms.length > 0 ? `Room${c.rooms.length === 1 ? "" : "s"} ${c.rooms.join(", ")}` : null),
-    rows: c.figures.components.map((comp) => ({
-      label: comp.key === "ROOM" ? "Room charges to date" : `${comp.label} to date`,
-      value: formatMoney(comp.total),
-    })),
-    chargesToDate: formatMoney(c.figures.ladder.total),
-    moneyLines: moneyLines(c),
-    position: formatMoney(toDecimal(c.entry.folio.outstandingBalance).toFixed(2)),
+    ...billBody(c, [nights ? { k: "Nights", v: nights } : null, { k: "As at", v: formatDocDateTimeLocal(c.asAt), strong: true }]),
+    totalLabel: "Charges to date · Nu.",
     note:
-      "All amounts include service charge and GST. Charges continue to post until checkout; final amounts on the Master Bill and the tax invoice.",
+      "Line amounts are before service charge and GST, which are added beneath them. Charges continue to post until check-out; the final amounts are on the master bill and the tax invoice.",
     tariffVersion: "T1.0",
-    pageLabel: "Page 1 of 1 · snapshot",
+    pageLabel: "snapshot",
   });
 }
 
+const LIABILITY =
+  "I agree that my liability for this bill is not waived, and that I am responsible for paying it if the person, company or agency named above does not pay any part or all of it.";
+
 function renderMasterBill(c: Composed, opts: { reprintOrdinal: number | null }): string {
-  const folio = c.entry.folio!;
   const sealed = c.sealedAt != null;
   const atCheckout = sealed || c.entry.currentStage === "S8";
-  const ladder = c.figures.ladder;
-  const position: Array<{ label: string; value: string; bold?: boolean }> = [
-    { label: `Payable by ${c.account}`, value: formatMoney(ladder.total) },
-    ...moneyLines(c),
-    { label: "Balance due", value: formatMoney(toDecimal(folio.outstandingBalance).toFixed(2)), bold: true },
-  ];
-  const pageLabel = sealed
-    ? `Page 1 of 1 · reprint ${opts.reprintOrdinal == null ? "preview" : opts.reprintOrdinal}`
-    : "Page 1 of 1 · indicative";
+  const pageLabel = sealed ? `reprint ${opts.reprintOrdinal == null ? "preview" : opts.reprintOrdinal}` : "indicative";
   return renderLegphelMasterBillHtml({
     masthead: mastheadFromHotelProfile(c.hotel),
     billNo: null,
     bookingRef: c.entry.id,
     strip: sealed ? "Statement — not a tax invoice" : "Statement — not a tax invoice · indicative, charges still posting",
-    account: c.account,
-    forGuest: c.forGuest,
-    stay: c.stay.checkIn && c.stay.checkOut ? formatStayLines(c.stay.checkIn, c.stay.checkOut, c.stay.nights) : null,
-    rooms: c.roomsLine || (c.rooms.length > 0 ? `Room${c.rooms.length === 1 ? "" : "s"} ${c.rooms.join(", ")}` : null),
-    asAtLabel: sealed ? "Content frozen at folio seal" : "As at",
-    asAt: formatDocDateTimeLocal(sealed ? c.sealedAt! : c.asAt),
-    rows: c.figures.components.map((comp) => ({
-      component: comp.label,
-      contents: componentContents(comp),
-      amount: formatMoney(comp.total),
-    })),
-    total: formatMoney(ladder.total),
-    ladderLine: `Net ${formatMoney(ladder.net)} · Service ${formatMoney(ladder.serviceCharge)} · Taxable ${formatMoney(ladder.taxable)} · GST ${formatMoney(ladder.gst)}`,
-    position,
+    ...billBody(c, [sealed ? { k: "Bill closed", v: formatDocDateTimeLocal(c.sealedAt!) } : { k: "As at", v: formatDocDateTimeLocal(c.asAt), strong: true }]),
     note: sealed
-      ? `All amounts include service charge and GST. Content frozen at folio seal, ${formatDocDateTimeLocal(c.sealedAt!)}. Itemised detail on the folio. The tax invoice is the fiscal document; please raise any query within 7 days.`
-      : `All amounts include service charge and GST. Position as at printing, ${formatDocDateTimeLocal(c.asAt)}. Charges continue to post until checkout. Please raise queries before settlement; the tax invoice issues at settlement.`,
+      ? `Line amounts are before service charge and GST, which are added beneath them. This bill was closed on ${formatDocDateTimeLocal(c.sealedAt!)}. The tax invoice is the fiscal document; please raise any query within 7 days.`
+      : `Line amounts are before service charge and GST, which are added beneath them. The bill as it stands at ${formatDocDateTimeLocal(c.asAt)}; charges continue to post until check-out. Please raise queries before settlement — the tax invoice is issued at settlement.`,
+    liability: atCheckout ? LIABILITY : null,
     signatures: atCheckout ? ["Guest / account signature", "Front office"] : null,
     tariffVersion: "T1.0",
     pageLabel,
@@ -423,13 +431,17 @@ function renderTaxInvoiceDraft(c: Composed): string {
     figures: c.figures,
     parties: taxInvoicePartiesFromEntry(c.entry),
     bookingRef: c.entry.id,
+    folioId: c.entry.folio?.id ?? null,
+    guests: guestsWords(c.entry),
     stay: c.stay,
+    stayOutcome: c.stayOutcome,
     roomNumbers: c.rooms,
     roomsLine: c.roomsLine,
     issued: null,
     asAt: c.asAt,
     gstRate: c.rates.gstRate,
     svcRate: c.rates.svcRate,
+    currency: c.entry.folio?.lines?.[0]?.currency ?? "BTN",
   });
 }
 

@@ -25,6 +25,8 @@ import { toast } from "sonner";
 import { Button, Chip, Dialog, EmptyState, Icon } from "@/design-system";
 import { StandingChip, bookingHref } from "@/components/ds/ui";
 import { FollowNotice, StayPicker, TripFollowPrompt, tripOf } from "@/components/ds/workspace/return-stay";
+import { HeaderDeskTag } from "./header-desk-tag";
+import { DeskTagText } from "@/components/ds/desk-tag";
 import { useSession } from "@/hooks/use-session";
 import { useHotelDay } from "@/hooks/use-hotel-day";
 import { useHotelClock } from "@/hooks/use-hotel-clock";
@@ -399,6 +401,17 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const guestDetailsCoverage = identityProofsQuery.data?.coverage ?? null;
   // Verified at THIS stay — the check-in gate's own reading (2026-09-18).
   const stayIdentityVerified = !!identityProofsQuery.data?.verification;
+  // Rows whose date of birth puts the guest in another price band (2026-11-25): check-in waits for
+  // them, or for the FOM's words — the server's own check (`ageCheck.blocks`).
+  const ageMismatchRows = (identityProofsQuery.data?.items ?? [])
+    .filter((i) => i.entryId === entry?.id && !i.hasFile && i.ageCheck?.blocks && i.subjectKey)
+    .map((i) => {
+      const k = i.subjectKey!;
+      const slot = /^K(\d+)$/.exec(k) ? `Child ${Number(k.slice(1)) + 1}` : /^A(\d+)$/.exec(k) ? `Adult ${Number(k.slice(1)) + 1}` : k;
+      return i.subjectLabel?.trim() && !/^(Adult|Child|Guest) \d+/.test(i.subjectLabel.trim()) ? `${i.subjectLabel.trim()} on ${slot}` : slot;
+    });
+  const ageMismatches = ageMismatchRows.length ? { rows: ageMismatchRows, fomMay: atLeastFom(session?.actorLevel) } : null;
+  const [ageMismatchNote, setAgeMismatchNote] = useState("");
   // The rest of the bill promised at check-in (2026-10-29) — the gate's own reading.
   const checkInBalance = useCheckInPayment(entryId, entry?.updatedAt, { enabled: entry?.currentStage === "S6" && !!entry?.folio }).data ?? null;
 
@@ -840,7 +853,12 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     mutationFn: () => {
       const dayOne = arrivalNightRoomIds(entry!);
       const issued = Array.from(new Set((entry!.roomAssignments ?? []).map((a) => a.roomId))).filter((id) => dayOne.has(id) && issuedKeyRooms[id]);
-      return completeCheckInToS7(session!, entry!.id, entry!.version, { keyCount: Math.max(1, issued.length), registrationConfirmed: true, issuedKeyRoomIds: issued });
+      return completeCheckInToS7(session!, entry!.id, entry!.version, {
+        keyCount: Math.max(1, issued.length),
+        registrationConfirmed: true,
+        issuedKeyRoomIds: issued,
+        ageMismatchNote: ageMismatches ? ageMismatchNote.trim() || undefined : undefined,
+      });
     },
     onSuccess: (updated) => {
       afterMove(updated);
@@ -1141,7 +1159,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const issuedKeyCount = checkInRoomIds.filter((id) => issuedKeyRooms[id]).length;
   const keysValid = checkInRoomIds.length > 0 && issuedKeyCount === checkInRoomIds.length;
   const canCheckIn =
-    s6Readiness(entry, { guestDetails: guestDetailsCoverage, identityVerified: stayIdentityVerified, balance: checkInBalance, refundWaiting: paymentStatusQuery.data?.refundWaiting }).every((c) => c.met) &&
+    s6Readiness(entry, { guestDetails: guestDetailsCoverage, identityVerified: stayIdentityVerified, balance: checkInBalance, refundWaiting: paymentStatusQuery.data?.refundWaiting, ageMismatches }).every((c) => c.met) &&
     registrationConfirmed &&
     keysValid;
 
@@ -1249,6 +1267,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
             : checkInStepActive
               ? s6Readiness(entry, {
                   refundWaiting: paymentStatusQuery.data?.refundWaiting,
+                  ageMismatches,
                   guestDetails: guestDetailsCoverage,
                   identityVerified: stayIdentityVerified,
                   balance: checkInBalance,
@@ -1759,7 +1778,11 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const tabCount = (k: BookingTab): ReactNode => {
     if (k === "requests") {
       const open = requestsQuery.data?.counts.open ?? 0;
-      return open ? <span className="tab-n warn">{open}</span> : null;
+      return open ? (
+        <span className="tab-n req" title={`${open} ${open === 1 ? "request" : "requests"} still to arrange`}>
+          {open}
+        </span>
+      ) : null;
     }
     if (k === "notes") {
       const c = notesQuery.data?.counts;
@@ -1767,7 +1790,11 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
       const n = c.notes + c.openTodos;
       return (
         <>
-          {n ? <span className="tab-n">{n}</span> : null}
+          {n ? (
+            <span className="tab-n note" title={`${c.notes} ${c.notes === 1 ? "note" : "notes"}${c.openTodos ? ` · ${c.openTodos} to-do still open` : ""}`}>
+              {n}
+            </span>
+          ) : null}
           {c.overdueTodos ? <span className="tab-n stop">{c.overdueTodos} late</span> : null}
         </>
       );
@@ -1855,6 +1882,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
             </a>
             <div className="who">
               <h2 className={nameIsGuest ? undefined : "name-i"}>{name}</h2>
+              <HeaderDeskTag entry={entry} />
               <StandingChip standing={standing} />
               {entry.guestProfile?.vipTier ? (
                 <Chip tone="accent" tier>
@@ -2010,7 +2038,25 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
           pending={checkInMutation.isPending}
           onConfirm={() => checkInMutation.mutate()}
           onClose={() => setCheckInOpen(false)}
-        />
+          waitFor={ageMismatches && !ageMismatchNote.trim() ? "Say why first" : null}
+        >
+          {ageMismatches ? (
+            <div className="field" style={{ marginTop: 10 }}>
+              <p className="stop-ink sm" role="alert" style={{ margin: "0 0 6px" }}>
+                A date of birth does not fit its guest's row: {ageMismatches.rows.join(", ")}. The best way is to put it right first — the date, a swap of
+                the two guests' rows, or the child's age.
+              </p>
+              <label>Why check them in as they are</label>
+              <textarea
+                className="input"
+                rows={2}
+                value={ageMismatchNote}
+                placeholder="e.g. booked as six adults, one is a child of four — the party cannot be changed now"
+                onChange={(e) => setAgeMismatchNote(e.target.value)}
+              />
+            </div>
+          ) : null}
+        </CommitDialog>
         <InquirySummaryDialog
           entry={entry}
           open={summaryOpen && inquiryStepActive}
@@ -2175,6 +2221,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                       other stays are on the Booking tab. */}
                   <div className="who">
                     <h2 className={nameIsGuest ? undefined : "name-i"}>{name}</h2>
+                    {/* The desk's own note to tell same-named guests apart, greyed (2026-11-25). */}
+                    <HeaderDeskTag entry={entry} />
                     <span className="refno" title="The enquiry's number">
                       <b>{entry.inquiry?.id ?? "—"}</b>
                     </span>
@@ -2338,13 +2386,21 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                               <b>Stay {together.active ? together.stayNoOf(e.id) : tripAtInquiry.stayNoOf(e.id)}</b>
                               <StayDates checkIn={e.checkInDate} checkOut={e.checkOutDate} />
                               <span className="fstay-n">
-                                {n ? plural(n, "night") : "No dates yet"} · {e.numberOfRooms ? plural(e.numberOfRooms, "room") : "Rooms not set"}
+                                {n ? plural(n, "night") : "No dates yet"} ·{" "}
+                                {e.useType === "APARTMENT"
+                                  ? e.apartmentCount
+                                    ? plural(e.apartmentCount, "apartment")
+                                    : "Apartments not set"
+                                  : e.numberOfRooms
+                                    ? plural(e.numberOfRooms, "room")
+                                    : "Rooms not set"}
                               </span>
                             </div>
                           );
                         })}
                       <div className="ffacts-line">
                         <span className="camein">{cameInAs}</span>
+                        {entry.inquiry?.deskTag ? <DeskTagText tag={entry.inquiry.deskTag} className="ffacts-tag" /> : null}
                       </div>
                     </>
                   ) : (
@@ -2355,9 +2411,20 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                           <b>{nights ? plural(nights, "night") : "No dates yet"}</b>
                         </span>
                         <span>
-                          <b>{roomsCount ? plural(roomsCount, "room") : "Rooms not set"}</b>
+                          {/* An apartment stay counts its apartments, a 2 BHK one (2026-11-25). */}
+                          <b>
+                            {entry.useType === "APARTMENT"
+                              ? entry.apartmentCount
+                                ? plural(entry.apartmentCount, "apartment")
+                                : "Apartments not set"
+                              : roomsCount
+                                ? plural(roomsCount, "room")
+                                : "Rooms not set"}
+                          </b>
                         </span>
                         <span className="camein">{cameInAs}</span>
+                        {/* The desk's own tag, on every tab of the file (2026-11-25). */}
+                        {entry.inquiry?.deskTag ? <DeskTagText tag={entry.inquiry.deskTag} className="ffacts-tag" /> : null}
                       </div>
                     </>
                   )}
@@ -2370,7 +2437,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                     <span className="ft-short">{FILE_TAB_SHORT[k]}</span>
                     {k === "details" ? null : k === "guests" ? (
                       guestsRecorded ? (
-                        <span className={`tab-n${guestsRecorded.done ? "" : " warn"}`}>
+                        <span className={`tab-n${guestsRecorded.done ? " ok" : " soft-warn"}`}>
                           {guestsRecorded.filled}/{guestsRecorded.total}
                         </span>
                       ) : null
@@ -2388,7 +2455,6 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                     entry={entry}
                     booker={booker}
                     custodian={listRow?.custodianName ?? null}
-                    onEdit={entry.currentStage === "S1" && !sealed ? () => setSelected(1) : null}
                   />
                 ) : fileTab === "money" ? (
                   <ChargesView entry={entry} billing={billing ?? null} tz={clock.tz} onPaymentHistory={() => setView("history", viewing, "money")} />
@@ -2561,7 +2627,6 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                 entry={entry}
                 booker={booker}
                 custodian={listRow?.custodianName ?? null}
-                onEdit={entry.currentStage === "S1" && !sealed ? () => setSelected(1) : null}
               />
             ) : view === "money" ? (
               <ChargesView entry={entry} billing={billing ?? null} tz={clock.tz} onPaymentHistory={() => setView("history", viewing, "money")} />
@@ -2671,6 +2736,8 @@ function CommitDialog({
   pending,
   onConfirm,
   onClose,
+  children,
+  waitFor,
 }: {
   open: boolean;
   title: string;
@@ -2680,6 +2747,10 @@ function CommitDialog({
   pending: boolean;
   onConfirm: () => void;
   onClose: () => void;
+  /** More the act needs, under its lines (2026-11-25: the FOM's words for dates that do not fit). */
+  children?: ReactNode;
+  /** Why the act waits, when it does. */
+  waitFor?: string | null;
 }) {
   if (!open) return null;
   return (
@@ -2694,7 +2765,14 @@ function CommitDialog({
               <Button kind="quiet" state={pending ? "inert" : "default"} onClick={onClose}>
                 Not yet
               </Button>
-              <Button className="go" icon="lock" state={pending ? "working" : "default"} workingLabel="Working…" onClick={onConfirm}>
+              <Button
+                className={waitFor ? undefined : "go"}
+                icon="lock"
+                state={pending ? "working" : waitFor ? "inert" : "default"}
+                reason={waitFor ?? undefined}
+                workingLabel="Working…"
+                onClick={onConfirm}
+              >
                 {confirmLabel}
               </Button>
             </>
@@ -2706,6 +2784,7 @@ function CommitDialog({
               <li key={l}>{l}</li>
             ))}
           </ul>
+          {children}
         </Dialog>
       </div>
     </Overlay>

@@ -86,6 +86,7 @@ export const adminNavGroups: AdminNavGroup[] = [
       { title: "Corporate accounts", href: "/admin/corporate-accounts", icon: Building2, description: "Companies and their rate packages" },
       { title: "Common rate package", href: "/admin/common-rate-package", icon: Banknote, description: "For an agency or company with no package of its own" },
       { title: "House tariff", href: "/admin/house-tariff", icon: Banknote, description: "Extra bed, meals and meal plans for guests with no package" },
+      { title: "Apartments", href: "/admin/apartments", icon: Building2, description: "Service apartments let by the week or the month" },
       { title: "Limits", href: "/admin/commercial", icon: Receipt, description: "Discounts, credit, free stays, overbooking, write-offs" },
     ],
   },

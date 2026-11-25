@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { Fragment, type ReactNode } from "react";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { useSession } from "@/hooks/use-session";
 import { getRateReference, type EntryRateReference } from "@/lib/api/entries";
@@ -30,14 +30,16 @@ const RATE: React.CSSProperties = { fontSize: 13.5, fontWeight: 700, color: "var
  */
 const FLOOR: React.CSSProperties = {
   display: "inline-block",
-  padding: "1px 7px",
-  borderRadius: 999,
+  padding: "1px 6px",
+  borderRadius: 4,
   border: "1px solid var(--stop, #b3261e)",
   background: "var(--stop-t, #fbecea)",
   color: "var(--stop, #b3261e)",
   fontWeight: 700,
   fontSize: 12,
 };
+/** A quiet word beside a figure: the rooms of a type, where a rate comes from. */
+const MUTED: React.CSSProperties = { color: "var(--ink-3, #7a6a52)", fontWeight: 400, fontSize: 12 };
 
 /** The add-on rate columns. Rendered only when at least one type carries a value — without a
  *  rate card they are ALL null, and four columns of dashes were most of the strip's noise. */
@@ -45,7 +47,7 @@ const PLAN_LABEL: Record<string, string> = { cpRate: "CP", mapLunchRate: "MAP+L"
 
 const ADD_ON_COLS = [
   ["extraBedRate", "Extra bed"],
-  ["breakfastRate", "B'fast"],
+  ["breakfastRate", "Breakfast"],
   ["lunchRate", "Lunch"],
   ["dinnerRate", "Dinner"],
 ] as const;
@@ -188,6 +190,77 @@ function RateReferenceView({
     return parts.join(" · ") || "not on the booking";
   };
 
+  /**
+   * A table, one row per room type (2026-11-25, operator, on a strip whose lines wrapped wherever they
+   * ran out of room: "this part is very messy"): the labels once, in a header, and each rate in its own
+   * column, so the figures line up down the page and nothing drops onto the next line. A wide table
+   * scrolls inside its own box rather than wrapping.
+   */
+  // A room type whose rooms here are an apartment let by the month or the week (2026-11-25): its room
+  // is priced by the rent, not a nightly rate, takes no extra bed, and no floor applies.
+  const apartmentNumbers = new Set((ref.apartments ?? []).flatMap((a) => a.roomNumbers));
+  const isApartment = (t: EntryRateReference["roomTypes"][number]) =>
+    t.roomNumbers.length > 0 && t.roomNumbers.every((n) => apartmentNumbers.has(n));
+  const hasBasis = ref.roomTypes.some((t) => t.roomRateSource !== "STANDARD_RATE_PLAN" && !isApartment(t));
+  const hasMsr = ref.roomTypes.some((t) => t.roomRateSource === "STANDARD_RATE_PLAN" && t.msrValue != null && !isApartment(t));
+  const columns = [
+    "max-content",
+    "max-content",
+    ...visibleAddOns.map(() => "max-content"),
+    ...(hasBasis ? ["max-content"] : []),
+    ...(hasMsr ? ["max-content"] : []),
+    // The rest of the box, so each row's line runs to its edge.
+    "minmax(0, 1fr)",
+  ].join(" ");
+  const cell = (opts: { head?: boolean; first?: boolean; right?: boolean }): React.CSSProperties => ({
+    padding: opts.head ? "2px 10px 5px" : "6px 10px",
+    paddingLeft: opts.first ? 0 : 10,
+    borderTop: opts.head ? undefined : "1px solid var(--line, #e3d9c8)",
+    textAlign: opts.right ? "right" : "left",
+    whiteSpace: "nowrap",
+    alignSelf: "stretch",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: opts.right ? "flex-end" : "flex-start",
+    gap: 6,
+  });
+  const basisOf = (t: EntryRateReference["roomTypes"][number]): ReactNode => {
+    const standard = t.standardRate != null ? <span style={MUTED}>standard {moneyOrDash(t.standardRate, ref.currency)}</span> : null;
+    if (t.roomRateSource === "AGENT_RATE_PACKAGE" && pickerOf?.(t)) {
+      return (
+        <span className="rref-pkg">
+          {pickerOf(t)}
+          {standard}
+        </span>
+      );
+    }
+    if (t.roomRateSource === "AGENT_RATE_PACKAGE" && entryId && (ref.packages?.length ?? 0) > 1) {
+      return (
+        <span className="rref-pkg">
+          <TypePackagePick
+            entryId={entryId}
+            roomTypeId={t.roomTypeId}
+            typeName={t.name}
+            packages={ref.packages!}
+            value={t.ratePackageId ?? null}
+            editable={!!ref.packagesEditable}
+          />
+          {standard}
+        </span>
+      );
+    }
+    if (t.roomRateSource === "AGENT_RATE_PACKAGE") {
+      return (
+        <>
+          <span style={{ color: "var(--ink, #1e1c19)", fontWeight: 600 }}>{t.packageName ?? "rate package"}</span>
+          {standard}
+        </>
+      );
+    }
+    if (t.roomRateSource !== "STANDARD_RATE_PLAN") return <span>no rate on file</span>;
+    return <span style={MUTED}>published</span>;
+  };
+
   return (
     <div
       style={{
@@ -197,96 +270,129 @@ function RateReferenceView({
         border: "1px solid var(--line-2, #d9cdb8)",
         borderRadius: "var(--r-md, 10px)",
         background: "var(--cream, #faf6ee)",
-        padding: "6px 12px",
+        padding: "8px 12px 4px",
+        overflowX: "auto",
       }}
     >
-      {ref.roomTypes.map((t, i) => (
-        <div
-          key={`${t.roomTypeId}${i}`}
-          style={{
-            display: "flex",
-            flexWrap: "wrap",
-            alignItems: "baseline",
-            gap: "2px 12px",
-            padding: "4px 0",
-            borderTop: i ? "1px dashed var(--line, #e3d9c8)" : undefined,
-          }}
-        >
-          {i === 0 ? (
-            <span style={{ display: "inline-flex", alignItems: "baseline", gap: 4, minWidth: 92 }}>
-              <span className="rce-lbl">Rates a night</span>
-              <Help label="About the reference rates">
-                <p>What each room type sells at per night when no rate is negotiated — the figure a rate typed in the table is set against.</p>
-                <p>
-                  Service charge ({pct(ref.serviceChargeRate)}) and GST ({pct(ref.gstRate)}) are added on top.
-                  {ref.party ? ` The rates are ${ref.party.name}'s ${ref.party.type === "TRAVEL_AGENT" ? "agency" : "company"} rates.` : ""}
-                </p>
-                <p>The rates are the house&rsquo;s published rates unless a rate package is named beside them.</p>
-                <p>MSR is the lowest rate the house sells at — a room priced below it needs the GM&rsquo;s waiver.</p>
-                {visibleAddOns.length === 0 ? <p>No extra-bed or meal rates are on file — those price at nothing unless negotiated in the table.</p> : null}
-              </Help>
-            </span>
-          ) : (
-            <span style={{ minWidth: 92 }} />
-          )}
-          <span style={{ minWidth: 150 }}>
-            <b style={{ color: "var(--ink, #1e1c19)", fontSize: 13 }}>{t.name}</b>
-            {noteOf ? (noteOf(t) ? <span> · {noteOf(t)}</span> : null) : <span> · {roomsWord(t.roomNumbers)}</span>}
-          </span>
-          <span>
-            Room <b className="mono" style={RATE}>{moneyOrDash(t.roomRate, ref.currency)}</b>
-          </span>
-          {visibleAddOns.map(([key, label]) => (
-            <span key={key}>
-              {label} <b className="mono" style={RATE}>{moneyOrDash(t[key], ref.currency)}</b>
-            </span>
-          ))}
-          {/* The basis only when it is not the house's own rates — a package's name, or no rate at all. */}
-          {t.roomRateSource === "AGENT_RATE_PACKAGE" && pickerOf?.(t) ? (
-            <span className="rref-pkg">
-              {pickerOf(t)}
-              {t.standardRate != null && <> · standard {moneyOrDash(t.standardRate, ref.currency)}</>}
-            </span>
-          ) : t.roomRateSource === "AGENT_RATE_PACKAGE" && entryId && (ref.packages?.length ?? 0) > 1 ? (
-            <span className="rref-pkg">
-              <TypePackagePick
-                entryId={entryId}
-                roomTypeId={t.roomTypeId}
-                typeName={t.name}
-                packages={ref.packages!}
-                value={t.ratePackageId ?? null}
-                editable={!!ref.packagesEditable}
-              />
-              {t.standardRate != null && <> · standard {moneyOrDash(t.standardRate, ref.currency)}</>}
-            </span>
-          ) : t.roomRateSource === "AGENT_RATE_PACKAGE" ? (
-            <span>
-              {t.packageName ?? "rate package"}
-              {t.standardRate != null && <> · standard {moneyOrDash(t.standardRate, ref.currency)}</>}
-            </span>
-          ) : t.roomRateSource !== "STANDARD_RATE_PLAN" ? (
-            <span>no rate on file</span>
-          ) : null}
-          {t.roomRateSource === "STANDARD_RATE_PLAN" && t.msrValue != null ? (
-            <span
-              className="mono"
-              style={FLOOR}
-              title="Minimum sellable rate — the house's floor for this room type. A booking priced below it needs the GM's waiver."
-            >
-              MSR {moneyOrDash(t.msrValue, ref.currency)}
-            </span>
-          ) : null}
+      <div style={{ display: "grid", gridTemplateColumns: columns, width: "100%" }}>
+        <div style={cell({ head: true, first: true })}>
+          <span className="rce-lbl">Rates a night</span>
+          <Help label="About the reference rates">
+            <p>What each room type sells at per night when no rate is negotiated — the figure a rate typed in the table is set against.</p>
+            <p>
+              Service charge ({pct(ref.serviceChargeRate)}) and GST ({pct(ref.gstRate)}) are added on top.
+              {ref.party ? ` The rates are ${ref.party.name}'s ${ref.party.type === "TRAVEL_AGENT" ? "agency" : "company"} rates.` : ""}
+            </p>
+            <p>The rates are the house&rsquo;s published rates unless a rate package is named beside them.</p>
+            <p>MSR is the lowest rate the house sells at — a room priced below it needs the GM&rsquo;s waiver.</p>
+            {visibleAddOns.length === 0 ? <p>No extra-bed or meal rates are on file — those price at nothing unless negotiated in the table.</p> : null}
+          </Help>
         </div>
-      ))}
-      {/* A plan at a figure of its own is charged in place of the meals above, so the meals alone would not explain the bill (2026-11-04). */}
-      {ref.plansOff?.length ? (
-        <div style={{ padding: "4px 0", borderTop: "1px dashed var(--line, #e3d9c8)", color: "var(--warning, #8f5300)", fontWeight: 600 }}>
-          Charged in place of their meals:{" "}
-          {ref.plansOff
-            .map((p) => `${PLAN_LABEL[p.key] ?? p.key} ${moneyOrDash(p.rate, ref.currency)}${p.packageName ? ` on ${p.packageName}` : ""} (the meals come to ${moneyOrDash(p.meals, ref.currency)})`)
-            .join(" · ")}
+        <div style={cell({ head: true, right: true })}>
+          <span className="rce-lbl">Room</span>
         </div>
-      ) : null}
+        {visibleAddOns.map(([key, label]) => (
+          <div key={key} style={cell({ head: true, right: true })}>
+            <span className="rce-lbl">{label}</span>
+          </div>
+        ))}
+        {hasBasis ? (
+          <div style={cell({ head: true })}>
+            <span className="rce-lbl">Rate from</span>
+          </div>
+        ) : null}
+        {hasMsr ? (
+          <div style={cell({ head: true })}>
+            <span className="rce-lbl">MSR floor</span>
+          </div>
+        ) : null}
+        <div style={cell({ head: true })} />
+
+        {ref.roomTypes.map((t, i) => {
+          const note = noteOf ? noteOf(t) : roomsWord(t.roomNumbers);
+          return (
+            <Fragment key={`${t.roomTypeId}${i}`}>
+              <div style={cell({ first: true })}>
+                <b style={{ color: "var(--ink, #1e1c19)", fontSize: 13 }}>{t.name}</b>
+                {note ? <span style={MUTED}>{note}</span> : null}
+              </div>
+              <div style={cell({ right: true })}>
+                {isApartment(t) ? (
+                  <b style={RATE} title="Let as an apartment — priced by its rent, below">
+                    rent
+                  </b>
+                ) : (
+                  <b className="mono" style={RATE}>{moneyOrDash(t.roomRate, ref.currency)}</b>
+                )}
+              </div>
+              {visibleAddOns.map(([key]) => (
+                <div key={key} style={cell({ right: true })}>
+                  {isApartment(t) && key === "extraBedRate" ? (
+                    <span style={MUTED} title="An apartment's rooms take no extra bed">
+                      —
+                    </span>
+                  ) : (
+                    <b className="mono" style={RATE}>{moneyOrDash(t[key], ref.currency)}</b>
+                  )}
+                </div>
+              ))}
+              {hasBasis ? <div style={cell({})}>{isApartment(t) ? null : basisOf(t)}</div> : null}
+              {hasMsr ? (
+                <div style={cell({})}>
+                  {t.roomRateSource === "STANDARD_RATE_PLAN" && t.msrValue != null && !isApartment(t) ? (
+                    <span
+                      className="mono"
+                      style={FLOOR}
+                      title="Minimum sellable rate — the house's floor for this room type. A booking priced below it needs the GM's waiver."
+                    >
+                      {moneyOrDash(t.msrValue, ref.currency)}
+                    </span>
+                  ) : (
+                    <span style={MUTED} title="A rate package's rate is agreed with the party — no floor applies.">
+                      —
+                    </span>
+                  )}
+                </div>
+              ) : null}
+              <div style={cell({})} />
+            </Fragment>
+          );
+        })}
+
+        {/* The rent of each apartment, the server's figures (2026-11-25). */}
+        {(ref.apartments ?? []).map((a) => (
+          <div
+            key={a.label}
+            style={{ gridColumn: "1 / -1", padding: "6px 0", borderTop: "1px solid var(--line, #e3d9c8)", color: "var(--ink, #1e1c19)", whiteSpace: "normal" }}
+          >
+            <b>
+              Apartment {a.label} · {a.packageName}
+            </b>
+            {a.roomNumbers.length > 1 ? ` · Rooms ${a.roomNumbers.join(" + ")}` : ""} · let {a.plan === "MONTHLY" ? "monthly" : "weekly"} at{" "}
+            <b className="mono">{moneyOrDash(a.rent.total, ref.currency)}</b> a {a.plan === "MONTHLY" ? "month" : "week"} with service charge and GST{" "}
+            <span style={MUTED}>({moneyOrDash(a.rent.rate, ref.currency)} without)</span> — no extra bed.
+          </div>
+        ))}
+
+        {/* A plan at a figure of its own is charged in place of the meals above, so the meals alone would not explain the bill (2026-11-04). */}
+        {ref.plansOff?.length ? (
+          <div
+            style={{
+              gridColumn: "1 / -1",
+              padding: "6px 0",
+              borderTop: "1px solid var(--line, #e3d9c8)",
+              color: "var(--warning, #8f5300)",
+              fontWeight: 600,
+              whiteSpace: "normal",
+            }}
+          >
+            Charged in place of their meals:{" "}
+            {ref.plansOff
+              .map((p) => `${PLAN_LABEL[p.key] ?? p.key} ${moneyOrDash(p.rate, ref.currency)}${p.packageName ? ` on ${p.packageName}` : ""} (the meals come to ${moneyOrDash(p.meals, ref.currency)})`)
+              .join(" · ")}
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }

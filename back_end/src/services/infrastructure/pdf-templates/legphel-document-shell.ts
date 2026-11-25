@@ -22,6 +22,7 @@
  */
 import { htmlEscape } from "../../../lib/pdf-render-context.js";
 import type { StayLines } from "./legphel-document-format.js";
+import { BILL_PARTS_CSS } from "./legphel-bill-parts.js";
 
 export type DocumentFamily = "fiscal" | "commercial" | "informational" | "internal";
 
@@ -127,6 +128,8 @@ export const LEGPHEL_DOCUMENT_CSS = `
   .doc.draftw::after { content:"DRAFT";position:absolute;inset:0;display:flex;align-items:center;
     justify-content:center;font-family:var(--serif);font-size:46px;font-weight:700;
     color:rgba(138,101,50,.14);letter-spacing:.22em;pointer-events:none }
+
+${BILL_PARTS_CSS}
 
   /* ---- Print: the card fills the A4 page ------------------------------------------------
      In the reference gallery the card column is minmax(320px,430px), so the card lays out

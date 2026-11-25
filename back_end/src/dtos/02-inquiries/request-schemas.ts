@@ -33,6 +33,8 @@ export const createInquiryRequestSchema = z
     /** How the guest came in (2026-09-18): WALK_IN · DIRECT_VOICE · DIRECT_ONLINE · OTA · TRAVEL_AGENT · CORPORATE · GROUP_MICE. */
     cameInAs: z.enum(CAME_IN_AS_VALUES).optional(),
     notes: z.string().optional(),
+    /** The desk's own note to tell same-named guests apart — "BOLD/MOA" (2026-11-25). Never on a paper. */
+    deskTag: z.string().max(200).nullable().optional(),
     /** When both set, Policy 12 runs server-side overlap detection against other inquiries for the same guest profile. */
     proposedCheckIn: z.string().optional(),
     proposedCheckOut: z.string().optional(),
@@ -97,6 +99,8 @@ export type CaptureCorporateContextRequestDto = z.infer<typeof captureCorporateC
 export const updateInquiryNotesRequestSchema = z.object({
   notes: z.string().max(2000),
 });
+export const setInquiryDeskTagRequestSchema = z.object({ deskTag: z.string().max(200).nullable() });
+
 export type UpdateInquiryNotesRequestDto = z.infer<typeof updateInquiryNotesRequestSchema>;
 
 export const resolveDuplicateFlagRequestSchema = z.object({

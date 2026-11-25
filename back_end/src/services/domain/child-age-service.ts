@@ -152,11 +152,11 @@ function bedsNeeded(adults: number, foc: boolean, rt: RoomTypeFacts): number {
   return Math.max(capacityBeds, p78);
 }
 
-/** Whether a room can hold this row, in words when it cannot. */
-function roomRefusal(row: RoomCompositionServiceInput, rt: RoomTypeFacts, roomNo: string): string | null {
+/** Whether a room can hold this row, in words when it cannot. An apartment's room takes no extra bed. */
+function roomRefusal(row: RoomCompositionServiceInput, rt: RoomTypeFacts, roomNo: string, apartment = false): string | null {
   const adults = n(row.adultCount);
   const kids = n(row.cnb6To10Count) + n(row.cnbUnder6Count);
-  const need = bedsNeeded(adults, row.isFoc === true, rt);
+  const need = apartment ? 0 : bedsNeeded(adults, row.isFoc === true, rt);
   if (need > rt.maxExtraBeds) {
     return rt.maxExtraBeds === 0
       ? `Room ${roomNo} cannot take an extra bed, so it cannot sleep ${adults} guests charged as adults`
@@ -247,10 +247,15 @@ async function plan(prisma: PrismaClient, entryId: string, childIndex: number, n
   };
   const refuse = (why: string): Plan => ({ preview: { ...base, refusal: why }, rowsFor: new Map(), anchorRoomId: null });
   if (entry.status !== "ACTIVE") return refuse("The booking is not active — its record cannot be changed");
+  // In house or at Check-out an age inside the same band may still be put right (2026-11-25): it
+  // prices nothing, and a guest's document read at Check-in can show a child a year off.
+  const lateSameBand =
+    ([Stage.S7, Stage.S8] as Stage[]).includes(entry.currentStage) && oldBand === newBand && newAge !== oldAge;
+  if (lateSameBand) return { preview: base, rowsFor: new Map(), anchorRoomId: null };
   if (!([Stage.S5, Stage.S6] as Stage[]).includes(entry.currentStage)) {
     return refuse(
       entry.currentStage === Stage.S7 || entry.currentStage === Stage.S8 || entry.currentStage === Stage.S9
-        ? "A child's age is put right at Arrival or Check-in — once the guest has stayed, the nights are already priced"
+        ? "Once the guest has stayed, a child's age is put right only inside the same band (under 6, 6 to 10, 11 and over) — the nights are already priced"
         : "Before Arrival the guests are changed with Change booking › Change the dates, rooms or guests",
     );
   }
@@ -290,6 +295,9 @@ async function plan(prisma: PrismaClient, entryId: string, childIndex: number, n
     select: { id: true, roomNumber: true, roomType: { select: { maxCapacity: true, maxExtraBeds: true, maxChildren: true, requiredAccompanyingAdults: true } } },
   });
   const noOf = new Map(roomFacts.map((r) => [r.id, r.roomNumber]));
+  // An apartment's rooms take no extra bed (2026-11-25): it is let for its guests, up to its own most.
+  const { apartmentRoomIdsOfEntry } = await import("./apartment-booking-service.js");
+  const apartmentRooms = await apartmentRoomIdsOfEntry(prisma, entryId, roomIds);
   const rtOf = new Map(
     roomFacts.map((r) => [
       r.id,
@@ -335,6 +343,7 @@ async function plan(prisma: PrismaClient, entryId: string, childIndex: number, n
         stayCheckOut: checkOut ?? null,
         nights: nights.length || 1,
         nightDatesByRoom: nightsOf,
+        apartmentRoomIds: apartmentRooms,
       });
       return null;
     } catch (e) {
@@ -347,11 +356,11 @@ async function plan(prisma: PrismaClient, entryId: string, childIndex: number, n
     const r = { ...fromRow };
     r[bandField(oldBand)] = Math.max(0, n(r[bandField(oldBand)]) - 1);
     r[bandField(newBand)] = n(r[bandField(newBand)]) + 1;
-    const need = bedsNeeded(n(r.adultCount), r.isFoc === true, rtOf.get(fromId)!);
+    const need = apartmentRooms.has(fromId) ? 0 : bedsNeeded(n(r.adultCount), r.isFoc === true, rtOf.get(fromId)!);
     const adds = need > n(r.extraBedCount);
     if (adds) r.extraBedCount = need;
     const next = rows.map((x) => (x.roomId === fromId ? r : x));
-    const why = roomRefusal(r, rtOf.get(fromId)!, roomNo(fromId)) ?? priceable(next);
+    const why = roomRefusal(r, rtOf.get(fromId)!, roomNo(fromId), apartmentRooms.has(fromId)) ?? priceable(next);
     rowsFor.set("STAY", next);
     choices.push({
       kind: "STAY",
@@ -387,7 +396,7 @@ async function plan(prisma: PrismaClient, entryId: string, childIndex: number, n
       src[f] = Math.max(0, n(src[f]) - 1) as never;
       dst[f] = (n(dst[f]) + 1) as never;
     }
-    const need = bedsNeeded(n(dst.adultCount), dst.isFoc === true, rtOf.get(to.roomId)!);
+    const need = apartmentRooms.has(to.roomId) ? 0 : bedsNeeded(n(dst.adultCount), dst.isFoc === true, rtOf.get(to.roomId)!);
     const adds = need > n(dst.extraBedCount);
     if (adds) dst.extraBedCount = need;
     const next = rows.map((x) => (x.roomId === fromId ? src : x.roomId === to.roomId ? dst : x));
@@ -397,7 +406,7 @@ async function plan(prisma: PrismaClient, entryId: string, childIndex: number, n
         ? `Room ${roomNo(fromId)} would be left empty`
         : (fromRow.nightMealOverrides?.length || to.nightMealOverrides?.length)
           ? `The meals in Room ${roomNo(fromId)} or Room ${toNo} differ by night — move the guest from Change booking › Change extra beds or meals`
-          : (roomRefusal(dst, rtOf.get(to.roomId)!, toNo) ?? roomRefusal(src, rtOf.get(fromId)!, roomNo(fromId)) ?? priceable(next));
+          : (roomRefusal(dst, rtOf.get(to.roomId)!, toNo, apartmentRooms.has(to.roomId)) ?? roomRefusal(src, rtOf.get(fromId)!, roomNo(fromId), apartmentRooms.has(fromId)) ?? priceable(next));
     rowsFor.set(`MOVE:${to.roomId}`, next);
     choices.push({
       kind: "MOVE",

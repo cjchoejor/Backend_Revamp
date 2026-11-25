@@ -199,8 +199,9 @@ function withRooms(stay: StayLines | null, rooms: number | null): StayLines | nu
 /**
  * The rows an agency or a company receives (2026-11-13, operator): no room type. Each room is
  * "Room 1 · 2 adults", numbered in the paper's order, with the package it is priced on in bold in
- * front; a room the desk gave by number keeps its number ("Room 305 · 2 adults" — "if room number is
- * specified then showing it is okay"). Every room has its own rows, so none is merged with another.
+ * front. A booking made by room number at Inquiry keeps its numbers ("Room 305 · 2 adults" — "if room
+ * number is specified then showing it is okay"), after a move or a swap too; a booking made by type
+ * never shows one (2026-11-25, `paperRoomNumbers`). Every room has its own rows, so none is merged with another.
  * The figures are the very rows the paper prints with the types, so they add up the same.
  */
 async function linesWithoutRoomTypes(
@@ -210,9 +211,10 @@ async function linesWithoutRoomTypes(
   rooms: readonly PriceLineRoom[],
   typeIdByRoomId: Map<string, string | null>,
 ): Promise<PriceLine[]> {
-  const { quietRoomLabels } = await import("./quiet-rooms-service.js");
-  // The rooms the system chose and may still move; any other room was given by number.
-  const quiet = await quietRoomLabels(prisma, q.entryId).catch(() => new Map<string, string>());
+  const { paperRoomNumbers } = await import("./quiet-rooms-service.js");
+  // Named by number only when the guest booked by number at Inquiry (2026-11-25): a booking made by
+  // type reads "Room 1" even after a room move, a swap or Arrival.
+  const shown = await paperRoomNumbers(prisma, q.entryId).catch(() => ({ all: false, rooms: new Set<string>() }));
   const t = (terms ?? {}) as {
     ratePackagesByRoom?: Record<string, { packageName?: string }>;
     ratePackagesByType?: Record<string, { packageName?: string }>;
@@ -233,7 +235,7 @@ async function linesWithoutRoomTypes(
       t.ratePackagesByRoom?.[r.roomId]?.packageName?.trim() ||
       (typeId ? t.ratePackagesByType?.[typeId]?.packageName?.trim() : null) ||
       (await primaryPackage());
-    const label = !quiet.has(r.roomId) && r.roomNumber ? `Room ${r.roomNumber}` : `Room ${++n}`;
+    const label = (shown.all || shown.rooms.has(r.roomId)) && r.roomNumber ? `Room ${r.roomNumber}` : `Room ${++n}`;
     lines.push(...buildRoomPriceLines({ ...r, roomTypeName: null, roomLabel: label, roomCount: 1, lead: lead || null }));
   }
   return lines;
@@ -477,6 +479,8 @@ async function buildQuotationDocRender(
           .filter((n) => n.date)
           .map((n) => ({ date: String(n.date).slice(0, 10), meals: Number(n.meals ?? 0), extraBeds: n.extraBeds ?? null })),
         roomLabel: opts?.roomLabels?.get(r.roomId) ?? null,
+        // An apartment's rent, period by period (2026-11-25).
+        rent: (r as unknown as { rent?: PriceLineRoom["rent"] }).rent ?? null,
       };
       paperRooms.push(priceRoom);
 

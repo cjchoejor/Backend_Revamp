@@ -100,6 +100,8 @@ export async function createInquiry(
     /** How the guest came in; the backend checks it belongs to `sourceChannel`. */
     cameInAs?: string;
     notes?: string;
+    /** The desk's own note to tell same-named guests apart — "BOLD/MOA" (2026-11-25). */
+    deskTag?: string | null;
     proposedCheckIn?: string;
     proposedCheckOut?: string;
     /** Phase C — optional link to a Phase-B TravelAgent (mutually exclusive with corporateAccountId). */
@@ -147,6 +149,15 @@ export async function captureCorporateContext(
  * (L1+); an empty string clears it. Overwrites in place so the preference is never duplicated.
  * `PATCH /api/inquiries/:id/notes`.
  */
+/** The desk tag (2026-11-25): the desk's own note to tell same-named guests apart, at any step. */
+export async function setInquiryDeskTag(session: Session, inquiryId: string, deskTag: string | null) {
+  return apiRequest<{ inquiryId: string; deskTag: string | null; changed: boolean }>(`/api/inquiries/${inquiryId}/desk-tag`, {
+    method: "PATCH",
+    session,
+    body: { deskTag },
+  });
+}
+
 export async function updateInquiryNotes(session: Session, inquiryId: string, notes: string) {
   return apiRequest<InquiryListItem>(`/api/inquiries/${inquiryId}/notes`, {
     method: "PATCH",

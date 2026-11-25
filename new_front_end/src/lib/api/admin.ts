@@ -1389,3 +1389,77 @@ export type TimerFailureAdmin = {
 export async function getTimerFailures(session: Session) {
   return apiRequest<{ lookbackDays: number; failures: TimerFailureAdmin[] }>("/api/admin/timer-failures", { session });
 }
+
+// ── Apartments: the hotel's service apartments, let by the week or the month (2026-11-25) ──
+
+/** A rate as the bill reads it: without service charge and GST, both as a line, and the total. */
+export type ApartmentRateFigures = { typed: string | null; rate: string; serviceCharge: string; gst: string; total: string };
+export type ApartmentRoomRef = {
+  roomId: string;
+  roomNumber: string;
+  bedType: string | null;
+  roomTypeId: string;
+  roomTypeName: string;
+  roomTypeCode: string;
+  roomTypeMaxCapacity: number;
+};
+export type ApartmentUnitView = { id: string; label: string; maxOccupants: number; rooms: ApartmentRoomRef[] };
+export type ApartmentPackageView = {
+  id: string;
+  name: string;
+  carpetAreaSqft: number | null;
+  amenities: string | null;
+  isActive: boolean;
+  sortOrder: number;
+  ratesTypedWithTax: boolean;
+  weekly: ApartmentRateFigures;
+  monthly: ApartmentRateFigures;
+  units: ApartmentUnitView[];
+  updatedAt: string;
+  updatedBy: string | null;
+};
+export type ApartmentRoomOption = {
+  id: string;
+  roomNumber: string;
+  bedType: string | null;
+  roomTypeId: string;
+  roomTypeName: string;
+  roomTypeCode: string;
+  roomTypeMaxCapacity: number;
+  apartment: { unitId: string; label: string; packageId: string; packageName: string } | null;
+};
+export type ApartmentPackageInput = {
+  name: string;
+  carpetAreaSqft: number | null;
+  amenities: string | null;
+  ratesWithTaxes: boolean;
+  weeklyRate: string;
+  monthlyRate: string;
+  sortOrder: number | null;
+  units: Array<{ label: string; maxOccupants: number; roomIds: string[] }>;
+};
+
+export async function listApartmentPackagesAdmin(session: Session) {
+  return apiRequest<{ serviceChargeRate: number; gstRate: number; packages: ApartmentPackageView[]; rooms: ApartmentRoomOption[] }>(
+    "/api/admin/apartment-packages",
+    { session },
+  );
+}
+export async function workOutApartmentRates(session: Session, body: { weekly: string; monthly: string; withTaxes: boolean }) {
+  return apiRequest<{ serviceChargeRate: number; gstRate: number; weekly: ApartmentRateFigures | null; monthly: ApartmentRateFigures | null }>(
+    "/api/admin/apartment-packages/work-out",
+    { method: "POST", session, body },
+  );
+}
+export async function createApartmentPackage(session: Session, body: ApartmentPackageInput) {
+  return apiRequest<ApartmentPackageView>("/api/admin/apartment-packages", { method: "POST", session, body });
+}
+export async function updateApartmentPackage(session: Session, id: string, body: ApartmentPackageInput) {
+  return apiRequest<ApartmentPackageView>(`/api/admin/apartment-packages/${encodeURIComponent(id)}`, { method: "PUT", session, body });
+}
+export async function setApartmentPackageActive(session: Session, id: string, isActive: boolean) {
+  return apiRequest<ApartmentPackageView>(`/api/admin/apartment-packages/${encodeURIComponent(id)}/active`, { method: "POST", session, body: { isActive } });
+}
+export async function deleteApartmentPackage(session: Session, id: string) {
+  return apiRequest<{ deleted: true }>(`/api/admin/apartment-packages/${encodeURIComponent(id)}`, { method: "DELETE", session });
+}

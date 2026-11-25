@@ -355,7 +355,9 @@ export function JourneySummaryPanel({ entryId }: { entryId: string }) {
                 ? " · set by the desk for this booking"
                 : s3.advancePayment.requirementSource === "PARTY"
                   ? " · the travel agent's or company's own percentage"
-                  : ""}
+                  : s3.advancePayment.requirementSource === "RENT"
+                    ? " · the apartment's first period of rent"
+                    : ""}
             </span>
           ) : (
             "—"

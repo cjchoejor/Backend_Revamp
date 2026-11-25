@@ -57,6 +57,7 @@ import {
   type RoomCompositionRateContext,
 } from "../../lib/room-composition.js";
 import { resolveChargeRates } from "../infrastructure/compute-stay-charges.js";
+import { rentForBookingRooms } from "./apartment-booking-service.js";
 import { Prisma } from "@prisma/client";
 import { enforceExtraBedForThirdAdult } from "../../policies/34-room-composition/p78-extra-bed-required-for-third-adult.js";
 import {
@@ -226,18 +227,22 @@ export function enforceRoomCompositionsPriceable(
     nights: number;
     /** Each room's own nights on a stay that changes rooms between nights (2026-10-22). */
     nightDatesByRoom?: Map<string, string[]>;
+    /** An apartment's rooms (2026-11-25): no extra bed is asked for a third adult there. */
+    apartmentRoomIds?: Set<string>;
   },
 ): void {
   for (const c of compositions) {
     const roomNumber = ctx.numberByRoomId.get(c.roomId) ?? null;
     const ownNights = ctx.nightDatesByRoom?.get(c.roomId) ?? null;
     const nightOverrides = (c.nightMealOverrides ?? []).map((o) => ({ ...o, date: new Date(o.date) }));
-    enforceExtraBedForThirdAdult({
-      roomNumber,
-      adultCount: c.adultCount,
-      extraBedCount: c.extraBedCount,
-      isFoc: c.isFoc,
-    });
+    if (!ctx.apartmentRoomIds?.has(c.roomId)) {
+      enforceExtraBedForThirdAdult({
+        roomNumber,
+        adultCount: c.adultCount,
+        extraBedCount: c.extraBedCount,
+        isFoc: c.isFoc,
+      });
+    }
     enforceCompositionCountsConsistent({
       roomNumber,
       occupantCount: c.occupantCount,
@@ -555,8 +560,14 @@ async function prepareQuotationDraft(
     // it stays as belt-and-braces), pricing and the stored commercialTerms all see the same
     // counts, and a supersede carries the bed forward. The correction is recorded on
     // `commercialTerms.extraBedsAutoAdded` so the desk and the document trail can say so.
+    // An apartment's rooms take no extra bed (2026-11-25): it is let for its guests, up to its own
+    // most, and priced by its rent; a bed typed on one is dropped rather than charged at nothing.
+    const apartmentRent = await rentForBookingRooms(prisma, entry, roomIds);
+    if (apartmentRent.size) {
+      input.roomCompositions = input.roomCompositions.map((c) => (apartmentRent.has(c.roomId) ? { ...c, extraBedCount: 0 } : c));
+    }
     const bedNorm = autoAddRequiredExtraBeds(input.roomCompositions, {
-      maxExtraBedsForRoom: (c) => maxExtraBedsByRoomId.get(c.roomId),
+      maxExtraBedsForRoom: (c) => (apartmentRent.has(c.roomId) ? 0 : maxExtraBedsByRoomId.get(c.roomId)),
     });
     input.roomCompositions = bedNorm.compositions;
     if (bedNorm.autoAddedIndexes.length > 0) {
@@ -845,10 +856,18 @@ async function prepareQuotationDraft(
       stayCheckOut: stay?.checkOut ?? null,
       nights: nightsForPricing,
       nightDatesByRoom: perRoomNightDates,
+      apartmentRoomIds: new Set(apartmentRent.keys()),
     });
 
+    // An apartment let monthly or weekly is priced by its rent, not by the night (2026-11-25); the rent
+    // is the server's, from the booking's dates, plan and apartments — never from the desk.
+    const rentByRoom = apartmentRent;
+    if (rentByRoom.size && requested && ((requested.discountPercent ?? 0) > 0 || (requested.discountAmount ?? 0) > 0)) {
+      throw new ValidationError("A discount on an apartment's rent is not possible yet — take the discount off, or agree the rent on the admin console");
+    }
     const rooms = input.roomCompositions.map((c) => {
       const compositionInput: RoomCompositionInput = {
+        rent: rentByRoom.get(c.roomId) ?? null,
         nightMealOverrides: (c.nightMealOverrides ?? []).map((o) => ({ ...o, date: new Date(o.date) })),
         nightDates: perRoomNightDates.get(c.roomId) ?? null,
         occupantCount: c.occupantCount,
@@ -1128,6 +1147,9 @@ async function prepareQuotationDraft(
                     overridden: n.overridden,
                     extraBeds: n.extraBeds,
                   })),
+                  // An apartment's rent, period by period (2026-11-25): what the papers print and
+                  // what the night audit posts, each period as one line on its first night.
+                  ...(r.rent ? { rent: r.rent } : {}),
                 })),
               }
             : null,

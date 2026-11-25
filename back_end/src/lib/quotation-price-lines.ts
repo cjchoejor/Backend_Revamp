@@ -10,6 +10,7 @@
  */
 
 import { labelRoomNights, type NightsMode } from "./room-nights-for-entry.js";
+import type { RoomRent } from "./room-composition.js";
 
 /**
  * Two money figures are the same to the chhertum (2026-11-10). The checks below compared
@@ -116,6 +117,8 @@ export type PriceLineRoom = {
   roomCount?: number;
   /** Printed in bold in front of the room's row: its package, on a paper with no room types (2026-11-13). */
   lead?: string | null;
+  /** An apartment's rent (2026-11-25): printed in place of the room's nightly row. */
+  rent?: RoomRent | null;
 };
 
 /** The rows as figures to the cent, for a JSON answer (the document rounds as it prints). */
@@ -145,7 +148,82 @@ export function mealPlanParts(c: PriceLineComposition | null | undefined): strin
 }
 
 /** One room's rows: the room, then its extra beds and its meals as sub-lines. */
+/** The nights from one date to the morning of another, `YYYY-MM-DD`. */
+function nightsFromTo(from: string, to: string): string[] {
+  const out: string[] = [];
+  for (let t = Date.parse(`${from}T00:00:00Z`), end = Date.parse(`${to}T00:00:00Z`); t < end; t += 86_400_000) out.push(new Date(t).toISOString().slice(0, 10));
+  return out;
+}
+
+/**
+ * An apartment's rent in place of the room's nightly row (2026-11-25): the whole months (or weeks) as
+ * one line — "Apartment 505 · Family Apartment (2 BHK) · let monthly | 2 months | 41,558.44" — and
+ * the nights left over as a line of their own, "30 of the next month's 31 nights". The amounts are
+ * the periods' own, so the rows still add up to the net value. A room let with its apartment prints
+ * one quiet line and charges nothing; the rent is on the apartment's first room.
+ */
+function rentHeadLines(r: PriceLineRoom, rent: RoomRent, k: number): PriceLine[] {
+  const mode: NightsMode = r.nightsMode ?? "SHORT";
+  const word = rent.plan === "MONTHLY" ? "month" : "week";
+  const many = k > 1;
+  if (!rent.periods.length) {
+    // Nobody sleeping in it is said by saying nothing — "0 adults" read as a fault (2026-11-25).
+    const c = r.composition ?? undefined;
+    const someone = (c?.adultCount ?? 0) + (c?.cnb6To10Count ?? 0) + (c?.cnbUnder6Count ?? 0) > 0;
+    const who = someone ? ` · ${roomOccupantsLabel(c)}` : "";
+    return [
+      {
+        description: r.hideRoomNumber
+          ? `Part of the apartment${who}`
+          : `Room ${r.roomNumber ?? r.roomId.slice(0, 6)} · part of apartment ${rent.unitLabel}${who}`,
+        qty: "",
+        rate: null,
+        amount: 0,
+        muted: true,
+      },
+    ];
+  }
+  const rooms = (rent.roomNumbers?.length ?? 0) > 1 ? `Rooms ${rent.roomNumbers!.join(" + ")}` : null;
+  const name = r.hideRoomNumber
+    ? [rent.packageName, many ? `${k} apartments` : null].filter(Boolean).join(" · ")
+    : [`Apartment ${rent.unitLabel}`, rent.packageName, rooms].filter(Boolean).join(" · ");
+  const whole = rent.periods.filter((p) => p.whole);
+  const part = rent.periods.filter((p) => !p.whole);
+  const cents = (v: string) => Math.round(Number(v) * 100);
+  const lines: PriceLine[] = [];
+  if (whole.length) {
+    const amount = whole.reduce((t, p) => t + cents(p.net), 0) / 100;
+    lines.push({
+      dates: labelRoomNights(nightsFromTo(whole[0].from, whole[whole.length - 1].to), mode),
+      description: `${name} · let ${rent.plan === "MONTHLY" ? "monthly" : "weekly"}`,
+      qty: `${many ? `${k} × ` : ""}${whole.length} ${word}${whole.length === 1 ? "" : "s"}`,
+      rate: Number(whole[0].net),
+      amount: amount * k,
+      ...(r.lead ? { lead: r.lead } : {}),
+    });
+  }
+  for (const p of part) {
+    lines.push({
+      dates: labelRoomNights(nightsFromTo(p.from, p.to), mode),
+      description: whole.length
+        ? `${p.nights} of the next ${word}'s ${p.ofNights} nights`
+        : `${name} · ${p.nights} of a ${word}'s ${p.ofNights} nights`,
+      qty: `${many ? `${k} × ` : ""}${p.nights} night${p.nights === 1 ? "" : "s"}`,
+      rate: null,
+      amount: (cents(p.net) / 100) * k,
+      ...(whole.length ? { indent: true } : r.lead ? { lead: r.lead } : {}),
+    });
+  }
+  return lines;
+}
+
 export function buildRoomPriceLines(r: PriceLineRoom): PriceLine[] {
+  if (r.rent) {
+    // The rent in place of the nightly row; the room's meals as any room's (no bed is charged).
+    const k = Math.max(1, Math.floor(r.roomCount ?? 1));
+    const rest = buildRoomPriceLines({ ...r, rent: null, printedRoomRate: 0 }).slice(1);
+    return [...rentHeadLines(r, r.rent, k), ...rest];
+  }
   const raw = r.composition ?? undefined;
   const nightsN = r.nights;
   const planParts = mealPlanParts(raw);

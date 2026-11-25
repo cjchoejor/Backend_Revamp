@@ -22,7 +22,8 @@ import { useHotelDay } from "@/hooks/use-hotel-day";
 import { EarlyDepartureBlock, EarlyDepartureFacts } from "@/components/desk/workspace/early-departure";
 import { IdentityProofBlock } from "@/components/desk/workspace/identity-proof";
 import { SplitSettlementBlock } from "@/components/desk/workspace/split-settlement";
-import { InterimPaymentBlock, StayExtensionBlock } from "@/components/desk/workspace/stay-money";
+import { InterimPaymentBlock } from "@/components/desk/workspace/stay-money";
+import { ExtendStay } from "./s7-extend";
 import type { EntryDetail } from "@/types/api";
 import {
   ChangeBookingMenu,
@@ -229,9 +230,7 @@ export function S7Stay({
 
       <div className="pane" hidden={at("extend")}>
         <div id={ID.extend}>
-          <Tool>
-            <StayExtensionBlock entry={entry} onChanged={onMoney} />
-          </Tool>
+          <ExtendStay entry={entry} onChanged={onMoney} />
         </div>
       </div>
 

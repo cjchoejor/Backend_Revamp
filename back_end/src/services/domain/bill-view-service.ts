@@ -1,10 +1,9 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { NotFoundError } from "../../lib/errors.js";
-import { NIGHT_AUDIT_MEAL_PLAN_DESCRIPTION_PREFIX, NIGHT_AUDIT_ROOM_CHARGE_DESCRIPTION_PREFIX } from "../../lib/folio-tax-lines.js";
+import { billRowsOf, type BillRow } from "../../lib/bill-rows.js";
 import { buildFolioLedgerView } from "../../lib/folio-ledger-view.js";
 import { sumMoney, toDecimal, ZERO, type MoneyLike } from "../../lib/money.js";
 import { loadHotelProfileForRender } from "../../lib/pdf-render-context.js";
-import { labelRoomNights } from "../../lib/room-nights-for-entry.js";
 import { effectiveCheckOutDate } from "../../lib/stay-dates.js";
 import { resolveChargeRates } from "../infrastructure/compute-stay-charges.js";
 import { buildEntryBillingSummary } from "./entry-billing-summary-service.js";
@@ -37,18 +36,7 @@ const BILL_ENTRY_INCLUDE = {
 
 type BillEntry = Prisma.EntryGetPayload<{ include: typeof BILL_ENTRY_INCLUDE }>;
 
-export type BillRow = {
-  key: string;
-  /** "09 Nov", or "10–12 Apr" for nights set out on one row. */
-  when: string;
-  /** A room number or a hall's name. */
-  place: string | null;
-  description: string;
-  /** Nights on this row and the figure of each, when there is more than one. */
-  qty: number;
-  rate: number;
-  amount: number;
-};
+export type { BillRow } from "../../lib/bill-rows.js";
 
 export type BillPayment = {
   id: string;
@@ -127,44 +115,9 @@ function phoneOf(contactNumbers: unknown): string | null {
   return null;
 }
 
-/** Plain words for a line: the desk's working names never reach a bill. */
-function wordsFor(description: string): { words: string; repeats: boolean } {
-  if (description.startsWith(NIGHT_AUDIT_ROOM_CHARGE_DESCRIPTION_PREFIX)) return { words: "Room charge", repeats: true };
-  if (description.startsWith(NIGHT_AUDIT_MEAL_PLAN_DESCRIPTION_PREFIX)) return { words: "Meal plan", repeats: true };
-  return { words: description.replace(/^Correction for \S+: /, "Correction: "), repeats: false };
-}
-
-/**
- * The bill's rows. A room's nights at one figure are one row ("3 nights × 3,000.00"), so a long stay
- * stays readable; everything else keeps its own line and date. Rooms first, in number order.
- */
+/** The bill page and the papers set the charges out by one rule (lib/bill-rows.ts). */
 function rowsOf(view: ReturnType<typeof buildFolioLedgerView<BillLine, BillPaymentRow>>): BillRow[] {
-  const grouped = new Map<string, { place: string | null; words: string; isRoom: boolean; amount: Prisma.Decimal; lines: BillLine[] }>();
-  const single: BillRow[] = [];
-  for (const c of view.charges) {
-    const { words, repeats } = wordsFor(c.line.description);
-    const place = c.line.room?.roomNumber ?? c.line.space?.name ?? null;
-    if (!c.isCorrection && (repeats || c.isRoom)) {
-      const key = `${place ?? ""}|${c.isRoom ? words || "Room" : words}|${toDecimal(c.line.amount).toFixed(2)}`;
-      const g = grouped.get(key) ?? { place, words, isRoom: c.isRoom, amount: toDecimal(c.line.amount), lines: [] };
-      g.lines.push(c.line);
-      grouped.set(key, g);
-    } else {
-      single.push({ key: c.line.id, when: labelRoomNights([ymd(c.line.chargeDate)!]), place, description: words, qty: 1, rate: n(c.line.amount), amount: n(c.line.amount) });
-    }
-  }
-  const rows = [...grouped.values()]
-    .sort((a, b) => byNumber(a.place ?? "", b.place ?? "") || Number(b.isRoom) - Number(a.isRoom) || a.lines[0]!.chargeDate.getTime() - b.lines[0]!.chargeDate.getTime())
-    .map((g) => ({
-      key: g.lines[0]!.id,
-      when: labelRoomNights(g.lines.map((l) => ymd(l.chargeDate)!)),
-      place: g.place,
-      description: g.words,
-      qty: g.lines.length,
-      rate: n(g.amount),
-      amount: n(sumMoney(g.lines.map((l) => l.amount))),
-    }));
-  return [...rows, ...single];
+  return billRowsOf(view.charges);
 }
 
 type BillLine = NonNullable<BillEntry["folio"]>["lines"][number];

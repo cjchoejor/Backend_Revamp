@@ -206,6 +206,21 @@ export type PickPricing = {
   byRoom: Array<{ roomId: string; roomNumber: string; roomTypeName: string | null; dates: string[] }>;
   totals: { roomNights: number; net: number; serviceCharge: number; gst: number; total: number };
   unpricedTypes: Array<{ roomTypeId: string; name: string }>;
+  /**
+   * An apartment let by the month or the week (2026-11-25): each apartment priced by its rent, a line
+   * per period with its taxes, and `totals` include it. Null on any other booking.
+   */
+  rent?: Array<{
+    unitLabel: string;
+    packageName: string;
+    plan: "MONTHLY" | "WEEKLY";
+    roomNumbers: string[];
+    periods: Array<{ from: string; to: string; nights: number; ofNights: number; whole: boolean; words: string; net: number; serviceCharge: number; gst: number; total: number }>;
+    net: number;
+    serviceCharge: number;
+    gst: number;
+    total: number;
+  }> | null;
 };
 
 export function pricePick(session: Session, entryId: string, body: { perNight: Array<{ date: string; roomIds: string[] }> }) {

@@ -51,12 +51,22 @@ export function enforceInterimGuestAnswerRecordedBeforePayment(input: {
 export function enforceExtensionPaidBeforeCommit(input: {
   extensionState: string;
   interimState: string | null;
+  /**
+   * False when the extension asked nothing now (2026-11-25, operator: "need option to not pay and pay
+   * during the last check out"): it has no mid-stay bill, and the extra nights go on the bill for
+   * check-out. Older requests always carry one.
+   */
+  paymentAsked?: boolean;
 }) {
   if (input.extensionState === "COMMITTED") {
     throw new ValidationError("This extension has already been committed");
   }
   if (input.extensionState === "LAPSED" || input.extensionState === "WITHDRAWN") {
     throw new ValidationError(`This extension was ${input.extensionState.toLowerCase()} — request it again`);
+  }
+  if (input.paymentAsked === false) {
+    if (input.extensionState !== "REQUESTED") throw new ValidationError(`This extension is ${input.extensionState.toLowerCase()}`);
+    return;
   }
   if (input.extensionState !== "PAID" || input.interimState !== "PAID") {
     throw new PolicyGateBlockedError(
