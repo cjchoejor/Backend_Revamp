@@ -95,6 +95,12 @@ const PAY_AT: ReadonlyArray<readonly [PayAt, string]> = [
   ["BILL", "Send them a bill"],
   ["CHECKOUT", "At check-out"],
 ];
+/** The heading of what opens under the chosen way (2026-11-25, operator: the shares read as more of the same list). */
+const PAY_AT_SUB: Record<PayAt, string> = {
+  NOW: "How much they pay now",
+  BILL: "How much the bill asks for",
+  CHECKOUT: "Nothing is taken now",
+};
 type Share = "HALF" | "WHOLE" | "OTHER";
 const SHARES: ReadonlyArray<readonly [Share, string]> = [
   ["HALF", "Half the stay"],
@@ -617,6 +623,12 @@ function NewExtension({ entry, checkOut, onChanged }: { entry: EntryDetail; chec
           {at === 3 && p ? (
             <>
               <Choice options={PAY_AT} value={payAt} onChange={setPayAt} />
+              {payAt ? (
+              <div className="ext-sub" role="group" aria-label={PAY_AT_SUB[payAt]}>
+              <div className="ext-sub-h">
+                <span className="ext-sub-of">{PAY_AT.find(([v]) => v === payAt)?.[1]}</span>
+                <span>{PAY_AT_SUB[payAt]}</span>
+              </div>
               {payAt === "CHECKOUT" ? (
                 <div className="ext-ledger" aria-live="polite">
                   <div>
@@ -706,6 +718,8 @@ function NewExtension({ entry, checkOut, onChanged }: { entry: EntryDetail; chec
                 </div>
               ) : null}
               </>
+              ) : null}
+              </div>
               ) : null}
               <div className="ext-go">
                 {notReady ? <span className="meta">{notReady}</span> : null}

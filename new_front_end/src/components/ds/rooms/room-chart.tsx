@@ -701,12 +701,20 @@ function segmentsFor(room: ChartRoom, chart: RoomChart, bars: RoomChartBar[], pi
 }
 
 /** Positions a floating box beside the cell it belongs to, inside the window. */
+/**
+ * A box beside what was clicked, kept on the screen (2026-11-25, operator: the two-bookings box opened
+ * below the bottom of the screen): on the side with more room — below unless there is more above — and
+ * never taller than that room, scrolling inside itself when its contents are taller.
+ */
 function placeBeside(rect: DOMRect, width: number): React.CSSProperties {
   const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
-  const below = window.innerHeight - rect.bottom > 260 || rect.top < 260;
+  const spaceBelow = window.innerHeight - rect.bottom - 14;
+  const spaceAbove = rect.top - 14;
+  const below = spaceBelow >= spaceAbove || spaceBelow >= 560;
+  const maxHeight = Math.max(160, below ? spaceBelow : spaceAbove);
   return below
-    ? { position: "fixed", top: rect.bottom + 6, left, width }
-    : { position: "fixed", top: rect.top - 6, left, width, transform: "translateY(-100%)" };
+    ? { position: "fixed", top: rect.bottom + 6, left, width, maxHeight, overflowY: "auto" }
+    : { position: "fixed", top: rect.top - 6, left, width, maxHeight, overflowY: "auto", transform: "translateY(-100%)" };
 }
 
 /** Rendered at the desk's root, so the scrolling table never clips it. */
@@ -1054,7 +1062,10 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
     const onDown = (e: MouseEvent) => {
       if (pickListRef.current && !pickListRef.current.contains(e.target as Node)) setPickList(null);
     };
-    const onScroll = () => setPickList(null);
+    // Scrolling inside the box keeps it open; the page or the chart scrolling closes it.
+    const onScroll = (e: Event) => {
+      if (!pickListRef.current?.contains(e.target as Node)) setPickList(null);
+    };
     document.addEventListener("keydown", onKey);
     document.addEventListener("mousedown", onDown);
     window.addEventListener("scroll", onScroll, true);
@@ -1072,7 +1083,10 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
       const t = e.target as Node;
       if (nightBoxRef.current && !nightBoxRef.current.contains(t) && !(t as Element).closest?.("[data-night-figure]")) setNightBox(null);
     };
-    const onScroll = () => setNightBox(null);
+    // Scrolling inside the box keeps it open; the page or the chart scrolling closes it.
+    const onScroll = (e: Event) => {
+      if (!nightBoxRef.current?.contains(e.target as Node)) setNightBox(null);
+    };
     document.addEventListener("keydown", onKey);
     document.addEventListener("mousedown", onDown);
     window.addEventListener("scroll", onScroll, true);
@@ -1089,7 +1103,10 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
     const onDown = (e: MouseEvent) => {
       if (clashRef.current && !clashRef.current.contains(e.target as Node)) setClash(null);
     };
-    const onScroll = () => setClash(null);
+    // Scrolling inside the box keeps it open; the page or the chart scrolling closes it.
+    const onScroll = (e: Event) => {
+      if (!clashRef.current?.contains(e.target as Node)) setClash(null);
+    };
     document.addEventListener("keydown", onKey);
     document.addEventListener("mousedown", onDown);
     window.addEventListener("scroll", onScroll, true);
@@ -1106,7 +1123,10 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
     const onDown = (e: MouseEvent) => {
       if (pickRef.current && !pickRef.current.contains(e.target as Node)) setPick(null);
     };
-    const onScroll = () => setPick(null);
+    // Scrolling inside the box keeps it open; the page or the chart scrolling closes it.
+    const onScroll = (e: Event) => {
+      if (!pickRef.current?.contains(e.target as Node)) setPick(null);
+    };
     document.addEventListener("keydown", onKey);
     document.addEventListener("mousedown", onDown);
     window.addEventListener("scroll", onScroll, true);

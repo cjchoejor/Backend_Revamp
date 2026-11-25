@@ -2923,6 +2923,15 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .ext-ledger .ext-due { margin-top: 4px; padding-top: 8px; border-top: 1px solid var(--ink); font-weight: 700; font-size: var(--t-lead); }
 .ds .ext-ledger .ext-due .money { color: var(--accent); font-size: 20px; font-weight: 800; }
 .ds .ext-ledger .ext-rest { color: var(--ink-2); }
+/* What opens under the chosen way of paying: set in, on its own tint, with a heading naming the way it
+   belongs to, its buttons a size smaller — so it reads as part of that choice, not more of the same list. */
+.ds .ext-sub { display: grid; gap: var(--s3); margin: calc(-1 * var(--s1)) 0 0 14px; padding: var(--s3) var(--s4) var(--s4); border-left: 3px solid var(--accent); background: var(--surface-2); border-radius: 0 var(--r-control) var(--r-control) 0; }
+.ds .ext-sub-h { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px var(--s2); font-weight: 700; color: var(--ink); }
+.ds .ext-sub-of { font-size: var(--t-sm); font-weight: 600; color: var(--accent-ink); }
+.ds .ext-sub-of::after { content: "›"; margin-left: var(--s2); color: var(--ink-3); }
+.ds .ext-sub .filters.choice .btn:not(.desk-root *) { min-height: 32px; padding: 0 12px 0 10px; font-size: var(--t-sm); gap: 6px; }
+.ds .ext-sub .filters.choice .btn:not(.desk-root *)::before { width: 14px; height: 14px; }
+.ds .ext-sub .filters.choice:not(.desk-root *) { margin: 0; }
 .ds .ext-go { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: var(--s3); padding-top: var(--s3); }
 .ds .ext-list { margin: 0; padding-left: 18px; display: grid; gap: var(--s2); }
 .ds .ext-facts { display: flex; flex-wrap: wrap; gap: var(--s2) var(--s5, 24px); padding-bottom: var(--s3); border-bottom: 1px solid var(--line); }
