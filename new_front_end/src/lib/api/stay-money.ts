@@ -227,7 +227,7 @@ export type StayExtensionRow = {
   newCheckOutDate: string;
   extraNights: Array<{ date: string; roomId: string }>;
   roomCompositions: RoomCompositionInput[] | null;
-  pricingPreview: { pricing?: StayExtensionPreview["pricing"]; figures?: InterimFigures; moves?: StayExtensionPreview["moves"] } | null;
+  pricingPreview: { pricing?: StayExtensionPreview["pricing"]; figures?: InterimFigures; moves?: StayExtensionPreview["moves"]; payAt?: "BILL" | "NOW" | "CHECKOUT" } | null;
   reason: string;
   holdExpiresAt: string;
   requestedAt: string;
@@ -247,10 +247,37 @@ export async function requestStayExtension(
   entryId: string,
   body: StayExtensionInput & { reason?: string; askMode: "PERCENT" | "AMOUNT"; askValue: number; note?: string; dueBy?: string },
 ) {
-  return apiRequest<{ request: StayExtensionRow; interim: InterimPaymentRow; invoice: { id: string }; preview: StayExtensionPreview }>(
+  return apiRequest<{ request: StayExtensionRow; interim: InterimPaymentRow | null; invoice: { id: string } | null; preview: StayExtensionPreview }>(
     `/api/entries/${entryId}/stay-extension`,
     { method: "POST", session, body },
   );
+}
+
+/**
+ * Extend the stay in one press (2026-11-25): NOW — paid at the desk (the bill handed over, the payment
+ * recorded with its method, bank and journal number, the stay extended); CHECKOUT — nothing now, the
+ * extra nights paid at check-out. `stoppedAt` says where it stopped when a step was refused.
+ */
+export async function extendStayNow(
+  session: Session,
+  entryId: string,
+  body: StayExtensionInput & {
+    payAt: "NOW" | "CHECKOUT";
+    askMode?: "PERCENT" | "AMOUNT";
+    askValue?: number;
+    paymentMethod?: string;
+    bankName?: string;
+    journalNumber?: string;
+    notes?: string;
+  },
+) {
+  return apiRequest<{
+    request: StayExtensionRow;
+    outcome: { walk: { blocked: { message: string } | null; reachedStage: string }; extension?: { newCheckOutDate: string } | null } | null;
+    paid: number | null;
+    stoppedAt: "PAYMENT" | "EXTEND" | null;
+    message: string | null;
+  }>(`/api/entries/${entryId}/stay-extension/now`, { method: "POST", session, body });
 }
 
 export async function listStayExtensions(session: Session, entryId: string) {

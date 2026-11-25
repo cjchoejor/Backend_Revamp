@@ -34,6 +34,7 @@ import type { RoomCompositionInput } from "@/lib/api/quotations";
 import { ADVANCE_PAYMENT_MODES, type AdvancePaymentMode } from "@/lib/api/reservation-setup";
 import {
   commitStayExtension,
+  extendStayNow,
   listStayExtensions,
   previewStayExtension,
   recordInterimPayment,
@@ -83,6 +84,17 @@ const nightsBetween = (from: string, to: string) => {
   return Number.isNaN(a) || Number.isNaN(b) ? 0 : Math.round((b - a) / 86_400_000);
 };
 
+/**
+ * When the guest pays for the extra nights (2026-11-25, operator: "need option to not pay and pay during
+ * the last check out as well, but if paying, we need the proper payment fields"): now at the desk, on a
+ * bill sent to them, or at check-out with the rest of the bill.
+ */
+type PayAt = "NOW" | "BILL" | "CHECKOUT";
+const PAY_AT: ReadonlyArray<readonly [PayAt, string]> = [
+  ["NOW", "Now, at the desk"],
+  ["BILL", "Send them a bill"],
+  ["CHECKOUT", "At check-out"],
+];
 type Share = "HALF" | "WHOLE" | "OTHER";
 const SHARES: ReadonlyArray<readonly [Share, string]> = [
   ["HALF", "Half the stay"],
@@ -96,8 +108,9 @@ const UNITS: ReadonlyArray<readonly ["PERCENT" | "AMOUNT", string]> = [
 
 function useInvalidate(entryId: string, onChanged?: () => void) {
   const qc = useQueryClient();
-  return () => {
+  return (opts?: { keepPreview?: boolean }) => {
     for (const key of ["stay-extensions", "interim-payments", "entry", "entry-communications", "billing-summary", "entry-timers", "entry-trace", "room-plan-history", "stay-extension-preview"]) {
+      if (opts?.keepPreview && key === "stay-extension-preview") continue;
       void qc.invalidateQueries({ queryKey: [key, entryId] });
     }
     onChanged?.();
@@ -186,6 +199,9 @@ function NewExtension({ entry, checkOut, onChanged }: { entry: EntryDetail; chec
   const [rechecking, setRechecking] = useState(false);
   const swapClosedAt = useRef(0);
   const qc = useQueryClient();
+  const [payAt, setPayAt] = useState<PayAt | null>(null);
+  const [payMode, setPayMode] = useState<AdvancePaymentMode | "">("");
+  const payBank = useBankEntry();
   const [share, setShare] = useState<Share>("HALF");
   const [unit, setUnit] = useState<"PERCENT" | "AMOUNT">("PERCENT");
   const [figure, setFigure] = useState("");
@@ -211,9 +227,15 @@ function NewExtension({ entry, checkOut, onChanged }: { entry: EntryDetail; chec
 
   // What is asked of the house is debounced, so typing a figure asks once.
   const params = useMemo(
-    () => ({ newOut: checkedOut ?? "", moves, askMode: ask.mode, askValue: askOk ? ask.value : undefined, comps: ratesOpen ? tableComps : [] }),
+    () => ({
+      newOut: checkedOut ?? "",
+      moves,
+      askMode: ask.mode,
+      askValue: askOk && payAt !== "CHECKOUT" ? ask.value : undefined,
+      comps: ratesOpen ? tableComps : [],
+    }),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the moves are read by their contents
-    [checkedOut, movesKey, ask.mode, ask.value, askOk, ratesOpen, tableComps],
+    [checkedOut, movesKey, ask.mode, ask.value, askOk, payAt, ratesOpen, tableComps],
   );
   // The rates table describes the rooms it was opened with. When a move or a rate choice changes the
   // rooms, its rows would name rooms no longer in the extension and the house would refuse them
@@ -288,17 +310,55 @@ function NewExtension({ entry, checkOut, onChanged }: { entry: EntryDetail; chec
       }),
     onSuccess: (out) => {
       setConfirmOpen(false);
-      toast.success(`The extra ${out.request.extraNights.length === 1 ? "night is" : "nights are"} held until ${fmtDateTime(out.request.holdExpiresAt)}. Next: send the bill for ${money(out.interim.dueNow ?? 0)}.`, { duration: 9000 });
+      toast.success(`The extra ${out.request.extraNights.length === 1 ? "night is" : "nights are"} held until ${fmtDateTime(out.request.holdExpiresAt)}. Next: send the bill for ${money(out.interim?.dueNow ?? 0)}.`, { duration: 9000 });
       invalidate();
     },
     onError: (e) => toast.error(e instanceof ApiError ? e.message : "The extension was refused"),
+  });
+
+  const now = useMutation({
+    mutationFn: () =>
+      extendStayNow(session!, entry.id, {
+        newCheckOutDate: newOut,
+        moves: moves.length ? moves : undefined,
+        roomCompositions: ratesOpen && tableComps.length ? tableComps : undefined,
+        payAt: payAt === "NOW" ? "NOW" : "CHECKOUT",
+        ...(payAt === "NOW" ? { askMode: ask.mode, askValue: ask.value, paymentMethod: payMode || undefined, ...payBank.body(payMode) } : {}),
+      }),
+    onSuccess: (out) => {
+      setConfirmOpen(false);
+      if (out.stoppedAt) {
+        toast.warning(
+          out.stoppedAt === "PAYMENT"
+            ? `The nights are held and the bill is made, but the payment was not recorded: ${out.message}`
+            : `${out.paid ? `${money(out.paid, p?.currency)} is recorded, but ` : ""}the stay was not extended: ${out.message}`,
+          { duration: 14000 },
+        );
+      } else if (out.outcome?.walk.blocked) {
+        toast.warning(`The extension is recorded, but the booking stopped at ${out.outcome.walk.reachedStage}: ${out.outcome.walk.blocked.message}`, { duration: 14000 });
+      } else {
+        const ends = fmtDate(out.outcome?.extension?.newCheckOutDate ?? newOut);
+        toast.success(
+          out.paid
+            ? `${money(out.paid, p?.currency)} received. The stay now ends on ${ends}.`
+            : `The stay now ends on ${ends}. The extra nights are paid at check-out.`,
+          { duration: 10000 },
+        );
+      }
+      // The check-out may have moved: the form starts afresh rather than ask the house again about a
+      // date that is now the check-out itself.
+      setCheckedOut(null);
+      setAsked((a) => ({ ...a, newOut: "" }));
+      invalidate({ keepPreview: true });
+    },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "The stay could not be extended"),
   });
 
   const takenRooms = p?.takenRooms ?? [];
   const overlapOpen = !!p?.guestOverlap && !p.guestOverlap.acknowledged;
   const roomsOk = !!p && !p.blockedReason && !overlapOpen;
   const due = p?.figures.dueNow ?? null;
-  const ready = roomsOk && askOk && (due ?? 0) > 0 && !preview.isFetching && !refused;
+  const payMissing = payAt === "NOW" ? (!payMode ? "Choose how it was paid" : payBank.missing(payMode)) : null;
   const notReady = !p
     ? extra < 1
       ? "Pick a check-out after the current one"
@@ -307,13 +367,21 @@ function NewExtension({ entry, checkOut, onChanged }: { entry: EntryDetail; chec
       ? "A room is not free — see above"
       : overlapOpen
         ? "Say whether both bookings are meant"
-        : !askOk
-          ? "Say what the guest pays now"
-          : (due ?? 0) <= 0
-            ? "Nothing would be due now — ask for more"
-            : preview.isFetching
-              ? "Working out the figures…"
-              : null;
+        : !payAt
+          ? "Say when the guest pays"
+          : payAt !== "CHECKOUT" && !askOk
+            ? "Say what the guest pays now"
+            : payAt !== "CHECKOUT" && (due ?? 0) <= 0
+              ? "Nothing would be due now — ask for more"
+              : payMissing
+                ? payMissing
+                : preview.isFetching
+                  ? "Working out the figures…"
+                  : refused
+                    ? "The house refused — see above"
+                    : null;
+  const ready = !notReady;
+  const goLabel = payAt === "NOW" ? `Take ${due != null ? money(due, p?.currency) : "the payment"} and extend the stay` : payAt === "CHECKOUT" ? "Extend the stay" : "Hold the nights and make the bill";
   const extensionRoomIds = useMemo(() => Array.from(new Set((p?.plan ?? []).map((x) => x.roomId))), [p]);
   const nightsWord = (n: number) => plural(n, "more night");
 
@@ -535,13 +603,43 @@ function NewExtension({ entry, checkOut, onChanged }: { entry: EntryDetail; chec
         <div className={`ext-part${at === 3 ? " open" : " waiting"}`} id="ext-part-3">
           <PartHead
             n={3}
-            title="What the guest pays now"
+            title="When the guest pays"
             state={at === 3 ? "open" : "waiting"}
             waitsFor="The price"
-            help={<Help label="About paying first">The stay is extended once this payment is in. The rest is paid at check-out.</Help>}
+            help={
+              <Help label="About paying for the extra nights">
+                <p>Now, at the desk: the payment is recorded with how it was paid, and the stay is extended at once. The bill is kept as handed over; nothing is emailed.</p>
+                <p>Send them a bill: the nights are held while the bill goes to the guest; the stay is extended once it is paid.</p>
+                <p>At check-out: nothing is taken now. The extra nights go on the bill and are paid with the rest at check-out.</p>
+              </Help>
+            }
           />
           {at === 3 && p ? (
             <>
+              <Choice options={PAY_AT} value={payAt} onChange={setPayAt} />
+              {payAt === "CHECKOUT" ? (
+                <div className="ext-ledger" aria-live="polite">
+                  <div>
+                    <span>The stay with the extra nights</span>
+                    <span className="money">{money(p.figures.projectedTotal, p.currency)}</span>
+                  </div>
+                  {p.figures.receivedSoFar > 0 ? (
+                    <div>
+                      <span>Already paid</span>
+                      <span className="money">{money(p.figures.receivedSoFar, p.currency)}</span>
+                    </div>
+                  ) : null}
+                  <div className="ext-due">
+                    <span>To pay now</span>
+                    <span className="money">Nothing</span>
+                  </div>
+                  <div className="ext-rest">
+                    <span>The extra nights are paid at check-out, with the rest of the bill</span>
+                  </div>
+                </div>
+              ) : null}
+              {payAt === "NOW" || payAt === "BILL" ? (
+              <>
               <Choice options={SHARES} value={share} onChange={setShare} />
               {share === "OTHER" ? (
                 <div className="ext-row">
@@ -580,13 +678,39 @@ function NewExtension({ entry, checkOut, onChanged }: { entry: EntryDetail; chec
               </div>
               {askOk && due != null && due <= 0 ? (
                 <p className="stop-ink sm" role="alert">
-                  What the guest has already paid covers this share. Ask for a larger share — the stay is extended only once a payment for it comes in.
+                  What the guest has already paid covers this share. Ask for a larger share, or let them pay at check-out.
                 </p>
+              ) : null}
+              {payAt === "NOW" ? (
+                <div className="ext-pay">
+                  <div className="form3">
+                    <div className="field">
+                      <label>
+                        How it was paid {!payMode ? <span className="stop-ink" aria-hidden style={{ fontWeight: 700, marginLeft: 2 }}>*</span> : null}
+                      </label>
+                      <select className="input" value={payMode} onChange={(e) => setPayMode(e.target.value as AdvancePaymentMode | "")}>
+                        <option value="">choose…</option>
+                        {ADVANCE_PAYMENT_MODES.map(([v, l]) => (
+                          <option key={v} value={v}>
+                            {l}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="field">
+                      <label>Amount received</label>
+                      <span className="ext-now">{due != null ? money(due, p.currency) : "—"}</span>
+                    </div>
+                  </div>
+                  <BankFields entry={payBank} method={payMode} />
+                </div>
+              ) : null}
+              </>
               ) : null}
               <div className="ext-go">
                 {notReady ? <span className="meta">{notReady}</span> : null}
                 <Button className={ready ? "go" : undefined} state={ready ? "default" : "inert"} title={notReady ?? undefined} onClick={() => setConfirmOpen(true)}>
-                  Hold the nights and make the bill
+                  {goLabel}
                 </Button>
               </div>
             </>
@@ -628,20 +752,42 @@ function NewExtension({ entry, checkOut, onChanged }: { entry: EntryDetail; chec
           open
           closeX
           onClose={() => setConfirmOpen(false)}
-          busy={hold.isPending}
-          title="Hold the nights and make the bill"
+          busy={hold.isPending || now.isPending}
+          title={goLabel}
           caseLines={[`Check-out ${fmtDate(p.currentCheckOut)} → ${fmtDate(p.newCheckOut)} · ${nightsWord(p.extraNights.length)}`]}
           footer={
             <>
-              <Button kind="quiet" state={hold.isPending ? "inert" : "default"} onClick={() => setConfirmOpen(false)}>
+              <Button kind="quiet" state={hold.isPending || now.isPending ? "inert" : "default"} onClick={() => setConfirmOpen(false)}>
                 Not now
               </Button>
-              <Button className="go" state={hold.isPending ? "working" : "default"} workingLabel="Holding…" onClick={() => hold.mutate()}>
-                Hold the nights and make the bill
-              </Button>
+              {payAt === "BILL" ? (
+                <Button className="go" state={hold.isPending ? "working" : "default"} workingLabel="Holding…" onClick={() => hold.mutate()}>
+                  Hold the nights and make the bill
+                </Button>
+              ) : (
+                <Button className="go" state={now.isPending ? "working" : "default"} workingLabel="Extending…" onClick={() => now.mutate()}>
+                  {goLabel}
+                </Button>
+              )}
             </>
           }
         >
+          {payAt === "NOW" ? (
+            <ul className="ext-list">
+              <li>
+                <b>{money(due ?? 0, p.currency)}</b> is recorded as paid{payMode ? ` by ${ADVANCE_PAYMENT_MODES.find(([v]) => v === payMode)?.[1].toLowerCase() ?? payMode}` : ""}
+                {payBank.needs(payMode) && payBank.bank ? ` · ${payBank.bank}` : ""}
+                {payBank.needs(payMode) && payBank.journal ? ` · journal ${payBank.journal}` : ""}.
+              </li>
+              <li>The bill for it is kept as handed over at the desk. Nothing is emailed.</li>
+              <li>The stay then ends on {fmtDate(p.newCheckOut)}, and the night audit charges the extra {p.extraNights.length === 1 ? "night" : "nights"}.</li>
+            </ul>
+          ) : payAt === "CHECKOUT" ? (
+            <ul className="ext-list">
+              <li>Nothing is taken now and no bill is made.</li>
+              <li>The stay ends on {fmtDate(p.newCheckOut)}. The night audit charges the extra {p.extraNights.length === 1 ? "night" : "nights"}, and they are paid at check-out with the rest of the bill.</li>
+            </ul>
+          ) : (
           <ul className="ext-list">
             <li>
               The extra {p.extraNights.length === 1 ? "night is" : "nights are"} kept for this guest for {Math.round(p.holdTtlSeconds / 3600)} hours. Unpaid by then, {p.extraNights.length === 1 ? "it goes" : "they go"} back on sale.
@@ -651,6 +797,7 @@ function NewExtension({ entry, checkOut, onChanged }: { entry: EntryDetail; chec
             </li>
             <li>The check-out moves only when the payment is in and you press Extend the stay.</li>
           </ul>
+          )}
         </DsDialog>
       ) : null}
     </>
@@ -1070,7 +1217,9 @@ function OpenExtension({ entry, req, fom, onChanged }: { entry: EntryDetail; req
 
   const invoice = ip?.invoice ?? null;
   const sent = !!invoice?.dispatchedAt && invoice.state !== "SUPERSEDED";
-  const paid = req.state === "PAID";
+  // Nothing asked now (2026-11-25): no bill, the extra nights paid at check-out.
+  const atCheckout = !ip && req.pricingPreview?.payAt === "CHECKOUT";
+  const paid = req.state === "PAID" || atCheckout;
   const replyAsked = useReplyAsked(entry.id, "INTERIM_INVOICE");
   const comms = useCommunications(entry.id);
   const comm = latestDispatched(comms.data?.items, "INTERIM_INVOICE", req.requestedAt);
@@ -1110,7 +1259,12 @@ function OpenExtension({ entry, req, fom, onChanged }: { entry: EntryDetail; req
     onError: (e) => toast.error(e instanceof ApiError ? e.message : "Couldn't cancel the extension"),
   });
 
-  const steps = [
+  const steps = atCheckout
+    ? [
+        { key: "held", label: "Nights held", state: "done" as StepState },
+        { key: "extend", label: "Stay extended", state: "now" as StepState },
+      ]
+    : [
     { key: "bill", label: "Bill made", state: "done" as StepState },
     { key: "sent", label: "Sent to the guest", state: (sent ? "done" : "now") as StepState },
     ...(replyAsked ? [{ key: "answer", label: "Their answer", state: (answered || paid ? "done" : sent ? "now" : "later") as StepState }] : []),
@@ -1136,7 +1290,7 @@ function OpenExtension({ entry, req, fom, onChanged }: { entry: EntryDetail; req
       <StepCard
         title={`Extending to ${fmtDate(req.newCheckOutDate)}`}
        
-        status={paid ? "Paid — ready to extend" : sent ? "Bill sent — waiting for the payment" : "Bill made — not sent yet"}
+        status={atCheckout ? "Paid at check-out — ready to extend" : paid ? "Paid — ready to extend" : sent ? "Bill sent — waiting for the payment" : "Bill made — not sent yet"}
         right={
           cd ? (
             <Chip tone={holdTone} title="The extra nights are kept for this guest until then; unpaid, they go back on sale">
@@ -1197,13 +1351,22 @@ function OpenExtension({ entry, req, fom, onChanged }: { entry: EntryDetail; req
 
         {paid ? (
           <div className="ext-now-box">
-            <div className="notice paid" role="status">
-              <span className="paid-mark">✓</span>
-              <span>
-                <b>{money(ip?.receivedAgainstAsk ?? 0, currency)} received</b>
-                <span className="rest"> — the extra nights are paid. Extend the stay to move the check-out.</span>
-              </span>
-            </div>
+            {atCheckout ? (
+              <div className="notice" role="status">
+                <span>
+                  <b>Nothing is taken now</b>
+                  <span className="rest"> — the extra nights are paid at check-out. Extend the stay to move the check-out.</span>
+                </span>
+              </div>
+            ) : (
+              <div className="notice paid" role="status">
+                <span className="paid-mark">✓</span>
+                <span>
+                  <b>{money(ip?.receivedAgainstAsk ?? 0, currency)} received</b>
+                  <span className="rest"> — the extra nights are paid. Extend the stay to move the check-out.</span>
+                </span>
+              </div>
+            )}
             <div className="actbar ext-go">
               {!fom ? <span className="meta">The FOM extends the stay</span> : null}
               <Button className={fom ? "go" : undefined} state={fom ? "default" : "inert"} onClick={() => setExtendOpen(true)}>

@@ -3005,3 +3005,7 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .rate-choice .rc-option.on .rc-words span { color: var(--ink-2); }
 .ds .rate-choice p { margin-top: var(--s2); }
 @media (max-width: 520px) { .ds .rate-choice .rc-options { grid-template-columns: 1fr; } }
+
+/* Extend the stay, paid now at the desk (2026-11-25): how it was paid, and the bank and journal number. */
+.ds .ext-pay { display: grid; gap: var(--s2); margin-top: var(--s3); padding: var(--s3); border: 1px solid var(--line-2); border-radius: 6px; background: var(--surface); max-width: 640px; }
+.ds .ext-pay .form3 { grid-template-columns: 1fr 1fr; }
