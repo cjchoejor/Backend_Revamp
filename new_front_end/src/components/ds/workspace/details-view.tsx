@@ -39,13 +39,10 @@ export function DetailsView({
   entry,
   booker,
   custodian,
-  onEdit,
 }: {
   entry: EntryDetail;
   booker: string | null;
   custodian: string | null;
-  /** At Inquiry: open the Inquiry step, where the caller, who is asking and the stay edit in place. */
-  onEdit: (() => void) | null;
 }) {
   const [journey, setJourney] = useState(false);
   const [editGuest, setEditGuest] = useState(false);
@@ -92,21 +89,7 @@ export function DetailsView({
         Booking details <span className="need">what the booking is</span>
       </h3>
       <div className="steps-canvas">
-        <StepCard
-          title="The three parties"
-          right={
-            <Button
-              kind="secondary"
-              compact
-              icon="pen"
-              state={onEdit ? "default" : "inert"}
-              title={onEdit ? "the Inquiry step edits the caller, who is asking and the stay in place" : "after the inquiry, dates and party change through a re-entry"}
-              onClick={onEdit ?? undefined}
-            >
-              Edit at the Inquiry step
-            </Button>
-          }
-        >
+        <StepCard title="The three parties">
           <div className="grid3">
             <FactBox
               k={
@@ -114,9 +97,9 @@ export function DetailsView({
                   Guest
                   {/* Change the guest's name, phone and email, and the tag (2026-11-25). */}
                   {entry.guestProfile?.id && !sealed ? (
-                    <button type="button" className="linklike fact-act" onClick={() => setEditGuest(true)}>
+                    <Button kind="secondary" compact icon="pen" className="fact-change" onClick={() => setEditGuest(true)}>
                       Change
-                    </button>
+                    </Button>
                   ) : null}
                 </>
               }

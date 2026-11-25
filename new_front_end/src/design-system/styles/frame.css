@@ -2229,6 +2229,8 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds button.desk-tag, .ds .ws-head button.desk-tag, .ds .who button.desk-tag { cursor: pointer; font-family: inherit; color: var(--ink-3); background: var(--surface-2); font-weight: 500; }
 .ds .gv-swap { justify-self: start; margin-top: 6px; }
 .ds .fact-act { margin-left: 8px; font-size: 12px; text-transform: none; letter-spacing: 0; }
+/* The guest's Change, a button beside its label (2026-11-25). */
+.ds .fact-change { margin-left: 8px; text-transform: none; letter-spacing: 0; vertical-align: middle; }
 /* The guest's details box (2026-11-25). */
 .ds .guest-edit { display: grid; gap: var(--s3); }
 .ds .guest-edit .form2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--s3); }

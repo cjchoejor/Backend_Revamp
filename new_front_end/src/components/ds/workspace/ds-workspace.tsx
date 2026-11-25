@@ -2455,7 +2455,6 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                     entry={entry}
                     booker={booker}
                     custodian={listRow?.custodianName ?? null}
-                    onEdit={entry.currentStage === "S1" && !sealed ? () => setSelected(1) : null}
                   />
                 ) : fileTab === "money" ? (
                   <ChargesView entry={entry} billing={billing ?? null} tz={clock.tz} onPaymentHistory={() => setView("history", viewing, "money")} />
@@ -2628,7 +2627,6 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                 entry={entry}
                 booker={booker}
                 custodian={listRow?.custodianName ?? null}
-                onEdit={entry.currentStage === "S1" && !sealed ? () => setSelected(1) : null}
               />
             ) : view === "money" ? (
               <ChargesView entry={entry} billing={billing ?? null} tz={clock.tz} onPaymentHistory={() => setView("history", viewing, "money")} />
