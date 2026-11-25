@@ -2878,6 +2878,9 @@ export function RoomCompositionsTable({
           </span>
         )}
         {nightPicker}
+        {/* Expand and the table's "?" stay together, so the "?" never wraps onto a line of its own
+            (2026-11-25, operator: "this part is very messy"). */}
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
         {!expanded && (
           <button
             type="button"
@@ -2906,6 +2909,7 @@ export function RoomCompositionsTable({
             <p>Every figure is priced by the hotel&rsquo;s server, the same way the quotation will be.</p>
           </Help>
         )}
+        </span>
       </div>
       {/* A refusal of what was just typed — the loudest thing on the table while it shows
           (2026-09-29, "UIappeal"): it appears with a flash, reads at the table's own size in the
