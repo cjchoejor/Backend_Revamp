@@ -10,6 +10,7 @@ import {
   findOverlappingBookingOfSameGuest,
   isMultiBookingAcknowledged,
 } from "../../policies/04-duplicate-detection/p13-multi-booking-ack-required.js";
+import { findRoomBookingConflicts } from "../../lib/room-booking-conflicts.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import { buildQuotationPreview } from "./quotation-preview-service.js";
 import { registerNightAuditTimers } from "./pre-arrival-service.js";
@@ -27,6 +28,7 @@ import {
 } from "./interim-payment-service.js";
 import {
   changeRoomToNewSegment,
+  listRoomChangeCandidates,
   listRoomStandingForNights,
   type RoomChangeOutcome,
   type RoomStanding,
@@ -87,6 +89,40 @@ export type StayExtensionPreview = {
    * refuses the extension unless an FOM has acknowledged the overlap on this booking.
    */
   guestOverlap: { entryId: string; checkIn: string; checkOut: string; acknowledged: boolean } | null;
+  /**
+   * Each of the guest's rooms that another booking holds on the extra nights, with who holds it and
+   * what the desk can do (2026-11-25, operator: "we need the swap feature here as well"). Either OUR
+   * guest moves to a free room from the old check-out (one room per extension — the `moves` above),
+   * or THEIR booking is given another room through the governed room move, so our guest keeps it.
+   */
+  takenRooms: TakenRoom[];
+};
+
+export type TakenRoomHolder = {
+  entryId: string;
+  bookingRef: string | null;
+  guestName: string | null;
+  partyName: string | null;
+  stage: string;
+  status: string;
+  checkIn: string | null;
+  checkOut: string | null;
+  /** The nights their booking holds this room (the nights a room move for them would cover). */
+  nightsInRoom: string[];
+  /** Whether their room can be moved from the desk now, and why not. */
+  swappable: boolean;
+  why: string | null;
+  /** Rooms free for their nights in this room — none of ours, none of theirs; same type first. */
+  rooms: Array<{ roomId: string; roomNumber: string; roomTypeName: string | null; sameType: boolean }>;
+};
+
+export type TakenRoom = {
+  roomId: string;
+  roomNumber: string;
+  roomTypeName: string | null;
+  /** The extra nights it is taken on. */
+  nights: string[];
+  heldBy: TakenRoomHolder[];
 };
 
 function isoDay(d: Date): string {
@@ -133,6 +169,94 @@ async function loadExtensionEntry(prisma: PrismaClient, entryId: string) {
   });
   if (!entry) throw new NotFoundError("Entry");
   return entry;
+}
+
+/**
+ * Who holds each of the guest's taken rooms on the extra nights, and where their booking could go
+ * instead (2026-11-25, the swap at Extend the stay). Read only: the move itself is the governed room
+ * move (`POST /room-moves`), which checks everything again. `ourRoomIds` are left out of the rooms
+ * offered — our guest needs them on the extra nights.
+ */
+async function describeTakenRooms(
+  prisma: PrismaClient,
+  input: { entryId: string; extraNights: string[]; newCheckOut: Date; taken: RoomStanding[]; ourRoomIds: Set<string> },
+): Promise<TakenRoom[]> {
+  if (input.taken.length === 0 || input.extraNights.length === 0) return [];
+  const conflicts = await findRoomBookingConflicts(prisma, {
+    roomIds: input.taken.map((t) => t.roomId),
+    checkIn: utcMidnight(input.extraNights[0]!),
+    checkOut: input.newCheckOut,
+    excludeEntryId: input.entryId,
+  });
+  const holderIds = Array.from(new Set(conflicts.map((c) => c.entryId)));
+  const holders = holderIds.length
+    ? await prisma.entry.findMany({
+        where: { id: { in: holderIds } },
+        select: {
+          id: true,
+          currentStage: true,
+          status: true,
+          checkInDate: true,
+          checkOutDate: true,
+          inquiry: { select: { travelAgent: { select: { displayName: true } }, corporateAccount: { select: { displayName: true } } } },
+        },
+      })
+    : [];
+  const holderById = new Map(holders.map((h) => [h.id, h]));
+  const day = (d: Date | null | undefined) => (d ? isoDay(d) : null);
+  const out: TakenRoom[] = [];
+  for (const room of input.taken) {
+    const heldBy: TakenRoomHolder[] = [];
+    for (const holderId of Array.from(new Set(conflicts.filter((c) => c.roomId === room.roomId).map((c) => c.entryId)))) {
+      const c = conflicts.find((x) => x.roomId === room.roomId && x.entryId === holderId)!;
+      const h = holderById.get(holderId);
+      const stage = String(h?.currentStage ?? "");
+      const status = String(h?.status ?? "");
+      let why: string | null = null;
+      if (!h) why = "That booking could not be read";
+      else if (status === "PARKED") why = "Their booking is parked — resume it first";
+      else if (status !== "ACTIVE") why = "Their booking has ended";
+      else if (stage === "S1" || stage === "S2") why = "Their booking is still at Inquiry or Negotiation — change its rooms on that booking";
+      else if (stage === "S8" || stage === "S9") why = "Their booking is checking out";
+      let nightsInRoom: string[] = [];
+      let rooms: TakenRoomHolder["rooms"] = [];
+      if (!why) {
+        try {
+          const cand = await listRoomChangeCandidates(prisma, holderId, room.roomId);
+          nightsInRoom = cand.substitutionNights;
+          rooms = cand.candidates
+            .filter((x) => x.selectable && !input.ourRoomIds.has(x.roomId))
+            .sort((a, b) => Number(b.sameType) - Number(a.sameType) || String(a.roomNumber).localeCompare(String(b.roomNumber), undefined, { numeric: true }))
+            .map((x) => ({ roomId: x.roomId, roomNumber: x.roomNumber, roomTypeName: x.roomTypeName, sameType: x.sameType }));
+          if (rooms.length === 0) why = "No other room is free for their nights";
+        } catch (e) {
+          why = e instanceof Error ? e.message : "Their room cannot be moved";
+        }
+      }
+      heldBy.push({
+        entryId: holderId,
+        bookingRef: c.entryReferenceNumber ?? null,
+        guestName: c.guestName ?? null,
+        partyName: h?.inquiry?.travelAgent?.displayName ?? h?.inquiry?.corporateAccount?.displayName ?? null,
+        stage,
+        status,
+        checkIn: day(h?.checkInDate),
+        checkOut: day(h?.checkOutDate),
+        nightsInRoom,
+        swappable: !why,
+        why,
+        rooms,
+      });
+    }
+    out.push({
+      roomId: room.roomId,
+      roomNumber: room.roomNumber,
+      roomTypeName: room.roomTypeName,
+      nights: room.perNight.filter((n) => n.status !== "FREE").map((n) => n.date),
+      heldBy,
+    });
+  }
+  return out;
 }
 
 /**
@@ -334,6 +458,15 @@ export async function previewStayExtension(
     blockedReason = `This guest already holds ${describeGuestOverlap(overlapRow)} over these nights — if both bookings are meant, the FOM acknowledges the overlap before the extension is held`;
   }
 
+  // Who holds the guest's taken rooms, and where their booking could go instead (the swap).
+  const takenRooms = await describeTakenRooms(prisma, {
+    entryId,
+    extraNights,
+    newCheckOut,
+    taken: lastNightRoomIds.map((id) => byRoom.get(id)).filter((s): s is RoomStanding => !!s && s.perNight.some((n) => n.status === "RESERVED" || n.status === "HELD")),
+    ourRoomIds: new Set([...currentPlanRoomIds, ...plan.map((p) => p.roomId)]),
+  });
+
   const ttlForPreview = await holdTtlSeconds(prisma);
   const reminderPolicy = await loadInterimReminderPolicy(prisma);
   const previewNow = new Date();
@@ -368,6 +501,7 @@ export async function previewStayExtension(
     reminder: { policy: reminderPolicy, defaultDueBy: defaultDueBy?.toISOString() ?? null },
     blockedReason,
     guestOverlap,
+    takenRooms,
   };
 }
 
