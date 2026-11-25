@@ -8,6 +8,7 @@
  * Every rule here was carried over from the old intake form (components/desk/inquiry/
  * new-inquiry-form.tsx) — only the dress changed.
  */
+import { contactEmailProblem } from "@/lib/ds/contact-email";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -678,15 +679,24 @@ function sameContact(a: CoordinatorContact, b: CoordinatorContact) {
   return key(a) && key(b) ? key(a) === key(b) : sameName(a.name, b.name);
 }
 
-const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
 /** What stops the contact persons being saved, in words, or null. Every one needs a name. */
 export function contactsProblem(contacts: CoordinatorContact[], rules: PhoneRules): string | null {
   for (const c of contacts) {
     if (!c.name?.trim()) return "a name on every contact person";
     const bad = problemOfPhone(rules, c.phone);
     if (bad) return `${c.name.trim()}'s phone: ${bad}`;
-    if (c.email?.trim() && !EMAIL_SHAPE.test(c.email.trim())) return `${c.name.trim()}'s email does not read as one`;
+    const mail = contactEmailProblem(c.email);
+    if (mail) return `${c.name.trim()}'s email ${mail}`;
+  }
+  return null;
+}
+
+/** The same, short, for the step's list: "Put right Tara Gurung's email". */
+export function contactsProblemShort(contacts: CoordinatorContact[], rules: PhoneRules): string | null {
+  for (const c of contacts) {
+    if (!c.name?.trim()) return "A name on every contact person";
+    if (problemOfPhone(rules, c.phone)) return `Put right ${c.name.trim()}'s phone`;
+    if (contactEmailProblem(c.email)) return `Put right ${c.name.trim()}'s email`;
   }
   return null;
 }
@@ -729,7 +739,7 @@ export function PartyContacts({
   const [n, setN] = useState(NO_CONTACT);
   // Picked from the list and not touched since: already on file, so nothing to file.
   const [picked, setPicked] = useState<CoordinatorContact | null>(null);
-  const newBad = !n.name.trim() ? "write their name first" : problemOfPhone(rules, n.phone) ?? (n.email.trim() && !EMAIL_SHAPE.test(n.email.trim()) ? "the email does not read as one" : null);
+  const newBad = !n.name.trim() ? "write their name first" : problemOfPhone(rules, n.phone) ?? (contactEmailProblem(n.email) ? `the email ${contactEmailProblem(n.email)}` : null);
 
   const close = () => {
     setOpen(null);
@@ -802,15 +812,19 @@ export function PartyContacts({
         <ul className="contact-lines">
           {contacts.map((c, i) => {
             const bad = problemOfPhone(rules, c.phone);
+            // An email that does not read as one is said on the line, in red (2026-11-25, operator: the
+            // hotel's KNG Reservation had "17551410" in a contact's email box, and the caller section
+            // simply never finished, with nothing on screen saying why).
+            const badMail = contactEmailProblem(c.email);
             const words = (
               <>
                 <b>{titled(c.title, c.name) || "no name"}</b>
                 {c.phone ? <span className="contact-num">{c.phone}</span> : null}
-                {c.email ? <span className="contact-mail">{c.email}</span> : null}
+                {c.email ? <span className={`contact-mail${badMail ? " bad" : ""}`}>{c.email}</span> : null}
               </>
             );
             return (
-              <li key={i} className={`contact-line${bad ? " bad" : ""}${open === i ? " open" : ""}`}>
+              <li key={i} className={`contact-line${bad || badMail ? " bad" : ""}${open === i ? " open" : ""}`}>
                 {readOnly ? (
                   <span className="contact-words">{words}</span>
                 ) : (
@@ -823,7 +837,21 @@ export function PartyContacts({
                     ×
                   </button>
                 )}
-                {bad ? <span className="contact-bad">the number: {bad}. Click it to put it right</span> : null}
+                {bad ? (
+                  <span className="contact-bad" role="alert">
+                    <span className="contact-bad-mark" aria-hidden>
+                      !
+                    </span>
+                    The number: {bad}. {readOnly ? "" : "Click it to put it right."}
+                  </span>
+                ) : badMail ? (
+                  <span className="contact-bad" role="alert">
+                    <span className="contact-bad-mark" aria-hidden>
+                      !
+                    </span>
+                    The email {badMail}. {readOnly ? "" : "Click the line to put it right, or × to leave them off this booking."}
+                  </span>
+                ) : null}
               </li>
             );
           })}

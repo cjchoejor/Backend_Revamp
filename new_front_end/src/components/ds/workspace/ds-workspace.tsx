@@ -1759,7 +1759,11 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const tabCount = (k: BookingTab): ReactNode => {
     if (k === "requests") {
       const open = requestsQuery.data?.counts.open ?? 0;
-      return open ? <span className="tab-n warn">{open}</span> : null;
+      return open ? (
+        <span className="tab-n req" title={`${open} ${open === 1 ? "request" : "requests"} still to arrange`}>
+          {open}
+        </span>
+      ) : null;
     }
     if (k === "notes") {
       const c = notesQuery.data?.counts;
@@ -1767,7 +1771,11 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
       const n = c.notes + c.openTodos;
       return (
         <>
-          {n ? <span className="tab-n">{n}</span> : null}
+          {n ? (
+            <span className="tab-n note" title={`${c.notes} ${c.notes === 1 ? "note" : "notes"}${c.openTodos ? ` · ${c.openTodos} to-do still open` : ""}`}>
+              {n}
+            </span>
+          ) : null}
           {c.overdueTodos ? <span className="tab-n stop">{c.overdueTodos} late</span> : null}
         </>
       );
@@ -2370,7 +2378,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                     <span className="ft-short">{FILE_TAB_SHORT[k]}</span>
                     {k === "details" ? null : k === "guests" ? (
                       guestsRecorded ? (
-                        <span className={`tab-n${guestsRecorded.done ? "" : " warn"}`}>
+                        <span className={`tab-n${guestsRecorded.done ? " ok" : " soft-warn"}`}>
                           {guestsRecorded.filled}/{guestsRecorded.total}
                         </span>
                       ) : null

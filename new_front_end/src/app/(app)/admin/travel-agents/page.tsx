@@ -28,6 +28,7 @@ import { VersionsTab } from "@/components/admin/versions-tab";
 import { useSelectionParam } from "@/hooks/use-selection-param";
 import { PartyList } from "@/components/admin/party-list";
 import { AdvancePercentField } from "@/components/admin/advance-percent-field";
+import { contactEmailProblem, firstContactEmailProblem } from "@/lib/ds/contact-email";
 
 const CONTACT_MODES: ContactMode[] = ["PHONE", "EMAIL", "WHATSAPP", "IN_PERSON", "OTHER"];
 const EMPTY: TravelAgentInput = { displayName: "", modeOfContact: "PHONE" };
@@ -218,8 +219,14 @@ export default function AdminTravelAgentsPage() {
                           <div key={i} className="flex flex-wrap items-center gap-2 rounded border border-black/10 bg-black/[0.02] px-3 py-2">
                             <span className="text-sm">{[c.title, c.name].filter(Boolean).join(" ")}</span>
                             {c.phone && <span className="admin-muted font-mono text-xs">{c.phone}</span>}
-                            {c.email && <span className="admin-muted text-xs">{c.email}</span>}
-                            <span className="admin-tag admin-tag-ok text-[10px]">saved</span>
+                            {c.email && <span className={contactEmailProblem(c.email) ? "admin-bad-text text-xs" : "admin-muted text-xs"}>{c.email}</span>}
+                            {contactEmailProblem(c.email) ? (
+                              <span className="admin-tag admin-tag-bad text-[10px]" role="alert" title={`Email ${contactEmailProblem(c.email)}`}>
+                                email to put right
+                              </span>
+                            ) : (
+                              <span className="admin-tag admin-tag-ok text-[10px]">saved</span>
+                            )}
                             <span className="flex-1" />
                             <button
                               type="button"
@@ -246,11 +253,24 @@ export default function AdminTravelAgentsPage() {
                             <PhoneField inputClass="admin-input" value={c.phone} onChange={(phone) => update({ phone: phone || null })} />
                           </AdmField>
                           <AdmField label="Email" style={{ flex: "1 1 20%" }}>
-                            <input className="admin-input" value={c.email ?? ""} onChange={(e) => update({ email: e.target.value })} />
+                            <input
+                              className={`admin-input${contactEmailProblem(c.email) ? " admin-input-bad" : ""}`}
+                              value={c.email ?? ""}
+                              aria-invalid={!!contactEmailProblem(c.email)}
+                              onChange={(e) => update({ email: e.target.value })}
+                            />
                           </AdmField>
                           <button type="button" className="admin-btn admin-btn-ghost admin-btn-sm" onClick={remove}>
                             Remove
                           </button>
+                          {contactEmailProblem(c.email) ? (
+                            <p className="admin-bad-line w-full" role="alert">
+                              <span className="admin-bad-mark" aria-hidden>
+                                !
+                              </span>
+                              Email {contactEmailProblem(c.email)}
+                            </p>
+                          ) : null}
                         </div>
                       );
                     })}
@@ -308,10 +328,16 @@ export default function AdminTravelAgentsPage() {
                       Delete
                     </button>
                   )}
+                  {firstContactEmailProblem(draft.coordinators) ? (
+                    <span className="admin-bad-text ml-auto text-xs" role="alert">
+                      Put right {firstContactEmailProblem(draft.coordinators)?.split("'s email")[0]}&rsquo;s email to save
+                    </span>
+                  ) : null}
                   <button
                     type="button"
-                    className="admin-btn ml-auto"
-                    disabled={!draft.displayName?.trim() || createMutation.isPending || updateMutation.isPending}
+                    className={firstContactEmailProblem(draft.coordinators) ? "admin-btn" : "admin-btn ml-auto"}
+                    disabled={!draft.displayName?.trim() || !!firstContactEmailProblem(draft.coordinators) || createMutation.isPending || updateMutation.isPending}
+                    title={firstContactEmailProblem(draft.coordinators) ?? undefined}
                     onClick={() => (isNewMode ? createMutation.mutate() : updateMutation.mutate())}
                   >
                     {isNewMode ? "Create" : "Save"}

@@ -63,6 +63,7 @@ import {
   packageWord,
   ReqMark,
   contactsProblem,
+  contactsProblemShort,
   partyPersonOf,
   USE_TYPES,
   addNightsIso,
@@ -700,7 +701,11 @@ export function NewInquiryCanvas() {
   });
   const busy = run.isPending || navigating;
 
-  const guestLineLabel = partyKind ? `${partyWord === "the company" ? "The company" : "The travel agent"}, and who to ring` : "The caller · a phone or an email";
+  // A contact whose phone or email does not read as one names itself on the list too (2026-11-25).
+  const contactsShort = partyKind ? contactsProblemShort(contacts, phoneRules) : null;
+  const guestLineLabel = partyKind
+    ? (contactsShort ?? `${partyWord === "the company" ? "The company" : "The travel agent"}, and who to ring`)
+    : "The caller · a phone or an email";
   // The checklist, in the order the page is worked; the side panel numbers it onto the cards
   // (2026-09-25 — it sat at the foot of the page as a bare list). The house is asked on the
   // booking, once the lead is kept, so that item belongs to the booking's own list.

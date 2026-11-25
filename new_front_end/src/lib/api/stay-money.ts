@@ -169,6 +169,29 @@ export type StayExtensionPreview = {
   blockedReason: string | null;
   /** The guest's other booking over the extended nights (Policy 13) — the FOM acknowledges it first. */
   guestOverlap?: { entryId: string; checkIn: string; checkOut: string; acknowledged: boolean } | null;
+  /** Each of the guest's rooms another booking holds on the extra nights, and who (2026-11-25, the swap). */
+  takenRooms?: StayExtensionTakenRoom[];
+};
+
+export type StayExtensionTakenRoom = {
+  roomId: string;
+  roomNumber: string;
+  roomTypeName: string | null;
+  nights: string[];
+  heldBy: Array<{
+    entryId: string;
+    bookingRef: string | null;
+    guestName: string | null;
+    partyName: string | null;
+    stage: string;
+    status: string;
+    checkIn: string | null;
+    checkOut: string | null;
+    nightsInRoom: string[];
+    swappable: boolean;
+    why: string | null;
+    rooms: Array<{ roomId: string; roomNumber: string; roomTypeName: string | null; sameType: boolean }>;
+  }>;
 };
 
 export type StayExtensionInput = {

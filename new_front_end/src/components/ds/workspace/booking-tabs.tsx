@@ -881,7 +881,14 @@ export function RequestsView({ entry, sealed, tz }: { entry: EntryDetail; sealed
             <div className="form2">
               <div className="wide field">
                 <label>What kind</label>
-                <Choice options={(data?.kinds ?? []).map((k) => [k, k] as const)} value={kind} onChange={setKind} />
+                <select className="input req-kind" value={kind ?? ""} onChange={(e) => setKind(e.target.value || null)}>
+                  <option value="">Pick what kind…</option>
+                  {(data?.kinds ?? []).map((k) => (
+                    <option key={k} value={k}>
+                      {k}
+                    </option>
+                  ))}
+                </select>
               </div>
               <div className="wide field">
                 <label>What exactly</label>

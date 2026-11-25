@@ -1669,6 +1669,19 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .ws-top .file .ftab:hover { color: var(--ink); background: var(--surface-2); }
 .ds .ws-top .file .ftab[aria-selected="true"] { color: var(--accent-ink); font-weight: 700; border-bottom-color: var(--accent); }
 .ds .ws-top .file .ftab:focus-visible { outline: none; box-shadow: var(--focus); }
+/* The counts on the booking file's tabs (2026-11-25, operator: "when there are notes or requests it shows the
+   number right, can you highlight the number or make it prominent so the user knows this guest has some
+   request or notes"). A badge, as Atlassian draws one: requests still to arrange solid amber, notes solid blue,
+   a late to-do red; papers a quiet grey count; guests outlined amber until everyone is recorded. */
+.ds .file .ftab .tab-n { display: inline-block; min-width: 20px; padding: 0 6px; border-radius: 10px; border: 1px solid var(--line-2); background: var(--surface-2); color: var(--ink-2); font-size: 11.5px; font-weight: 700; line-height: 18px; text-align: center; font-variant-numeric: tabular-nums; }
+.ds .file .ftab .tab-n.req { background: var(--warning); border-color: var(--warning); color: #fff; }
+.ds .file .ftab .tab-n.note { background: var(--accent); border-color: var(--accent); color: #fff; }
+.ds .file .ftab .tab-n.stop { background: var(--danger); border-color: var(--danger); color: #fff; }
+.ds .file .ftab .tab-n.warn { background: var(--warning); border-color: var(--warning); color: #fff; }
+.ds .file .ftab .tab-n.soft-warn { background: var(--warning-soft); border-color: var(--warning-line); color: var(--warning); }
+.ds .file .ftab .tab-n.ok { background: var(--success-soft, #E3F2EA); border-color: var(--success-line, #A9D4BC); color: var(--success, #1E7A4F); }
+.ds .file .ftab .tab-n + .tab-n { margin-left: 2px; }
+.ds .file .field select.req-kind { max-width: 340px; }
 .ds .ws-top .file .fbody { flex: 1 1 auto; min-height: 0; padding: var(--s3) var(--s4); overflow: auto; min-width: 0; display: grid; gap: var(--s3); align-content: start; }
 
 /* what the move checks */
@@ -2219,7 +2232,10 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .contact-mail { color: var(--ink-2); font-size: 12px; overflow-wrap: anywhere; }
 .ds button.contact-x { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border: 1px solid transparent; border-radius: 3px; background: none; color: var(--danger); font-size: 16px; font-weight: 700; line-height: 1; cursor: pointer; }
 .ds button.contact-x:hover { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); }
-.ds .contact-bad { grid-column: 1 / -1; font-size: 12px; font-weight: 700; color: var(--danger); }
+.ds .contact-bad { grid-column: 1 / -1; display: flex; align-items: flex-start; gap: 6px; margin: 2px 0 4px; padding: 5px 8px; border-radius: 4px; background: var(--danger-soft, #FCE7E4); font-size: 12.5px; font-weight: 700; color: var(--danger); animation: house-short-in .6s ease-out 1; }
+.ds .contact-bad-mark { display: inline-grid; place-items: center; width: 17px; height: 17px; flex: none; border-radius: 50%; background: var(--danger); color: #fff; font-size: 11px; font-weight: 800; }
+.ds .contact-mail.bad { color: var(--danger); font-weight: 700; text-decoration: underline wavy var(--danger); text-underline-offset: 3px; }
+@media (prefers-reduced-motion: reduce) { .ds .contact-bad { animation: none; } }
 .ds .contact-add { display: grid; gap: 8px; padding: 10px 12px; border: 1px dashed var(--line-2); border-radius: 6px; }
 .ds .contact-add-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 8px 10px; align-items: start; }
 
@@ -2922,3 +2938,17 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 /* Check the rooms sits at the end of the date row (2026-11-25). */
 .ds .ext-check { align-self: flex-end; }
 .ds .ext-hint { margin: 0; }
+/* The rooms another booking holds on the extra nights, each with its two ways (2026-11-25, the swap). */
+.ds .ext-taken { display: grid; gap: var(--s2); }
+.ds .ext-taken.busy { opacity: .55; pointer-events: none; transition: opacity .15s; }
+.ds .ext-taken-lead { margin: 0; }
+.ds .ext-taken-room { display: grid; gap: 6px; padding: 10px 12px; border: 1px solid var(--danger-line); border-left: 4px solid var(--danger); border-radius: 6px; background: var(--surface); }
+.ds .ext-taken-room.chosen { border-color: var(--line-2); border-left-color: var(--accent); }
+.ds .etr-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.ds .etr-head b { font-size: 15px; }
+.ds .etr-taken { color: var(--danger); font-weight: 700; font-size: var(--t-sm); }
+.ds .ext-taken-room.chosen .etr-taken { color: var(--ink-2); font-weight: 600; }
+.ds .etr-who { font-size: var(--t-sm); }
+.ds .etr-field { max-width: 460px; margin: 0; }
+.ds .etr-swap { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 10px; }
+.ds .etr-swap .etr-field { flex: 1 1 280px; }
