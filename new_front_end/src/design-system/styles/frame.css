@@ -678,6 +678,11 @@
 .ds .rchart-date { display: inline-flex; align-items: center; gap: 6px; font-size: var(--t-sm); color: var(--ink-2); }
 .ds .rchart-date input.input:not(.desk-root *) { width: 150px; height: var(--control-h-compact); padding: 0 8px; }
 .ds .rchart-wrap { overflow: auto; max-height: 70vh; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--surface); }
+/* An old picture while a fresh one is read (2026-11-25): dimmed, with a line saying so at the top. */
+.ds .rchart-wrap.is-old { opacity: .5; transition: opacity .12s; }
+.ds .rchart-updating { position: fixed; z-index: 93; left: 50%; top: 64px; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; padding: 7px 14px; border-radius: 6px; background: var(--ink); color: #fff; font-size: 13px; font-weight: 600; box-shadow: 0 6px 18px rgba(0, 0, 0, .22); pointer-events: none; }
+.ds .rchart-updating .spin { width: 14px; height: 14px; border-color: color-mix(in srgb, #fff 30%, transparent); border-top-color: #fff; }
+@media (prefers-reduced-motion: reduce) { .ds .rchart-wrap.is-old { transition: none; } }
 /* fixed layout: every night the same width, the room column and the total column their own */
 .ds .rchart .tape { border-collapse: separate; border-spacing: 0; font-size: 13px; width: 100%; table-layout: fixed; }
 .ds .rchart .tape th, .ds .rchart .tape td { border-right: 1px solid #eee8df; border-bottom: 1px solid #eee8df; padding: 0; }

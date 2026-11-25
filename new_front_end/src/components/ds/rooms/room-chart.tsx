@@ -45,7 +45,7 @@
  * spacing. A booking already in a room one of them lands on is swapped into the room left behind
  * (the server adds that leg). Each room is its own governed walk.
  */
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
@@ -837,15 +837,30 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
   };
   const setFrom = (v: string | undefined) => setWindow({ from: v ?? null });
   const setNightsAsked = (n: number) => setWindow({ nights: n });
+  const chartKey = ["room-chart", from ?? "today", nightsAsked] as const;
+  const qc = useQueryClient();
   const q = useQuery({
-    queryKey: ["room-chart", from ?? "today", nightsAsked],
+    queryKey: chartKey,
     queryFn: () => getRoomChart(session!, { from, nights: nightsAsked }),
     enabled: !!session && !isLoading,
     staleTime: 30_000,
     refetchInterval: 60_000,
+    // A chart left open in another tab is read again the moment the tab is back in front
+    // (2026-11-25): the minute's re-read does not run while the tab is hidden.
+    refetchOnWindowFocus: true,
     placeholderData: (prev) => prev,
   });
   const chart = q.data;
+  /**
+   * The picture on screen is known to be old while a fresh one is on its way (2026-11-25, operator:
+   * a booking already at Closed still drew in the in-house colour, then went away). The chart keeps
+   * its last answer and draws it at once; after a booking was moved on another page that answer is
+   * out of date until the new one arrives. Said, and the table dimmed, rather than shown as current.
+   */
+  const oldPicture =
+    !!chart &&
+    q.isFetching &&
+    (q.isPlaceholderData || !!qc.getQueryState(chartKey)?.isInvalidated || Date.now() - q.dataUpdatedAt > 75_000);
   /** A range longer than the chart draws — said, not silently cut. */
   const [rangeNote, setRangeNote] = useState<string | null>(null);
   const [hover, setHover] = useState<Hover | null>(null);
@@ -1997,8 +2012,17 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
         <Legend byGuest={byGuest} />
       </div>
 
+      {oldPicture ? (
+        <Floating>
+          <div className="rchart-updating" role="status">
+            <span className="spin" aria-hidden />
+            Updating the chart — what you see may be out of date
+          </div>
+        </Floating>
+      ) : null}
       <div
-        className="rchart-wrap"
+        className={`rchart-wrap${oldPicture ? " is-old" : ""}`}
+        aria-busy={oldPicture || undefined}
         ref={attachWrap}
         onScroll={(e) => {
           leave();
