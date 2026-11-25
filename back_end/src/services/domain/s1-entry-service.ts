@@ -6,6 +6,7 @@ import { getActiveConfigEntry } from "../../lib/config-store.js";
 import { getRegistryPolicy } from "../../lib/policy-registry-runtime.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import { validateCapacity } from "./capacity-validation-service.js";
+import { planRefusal } from "../../lib/apartment-rent.js";
 import { classifyAge, loadChildPolicyBundle } from "./child-policy-service.js";
 export { autoFulfilS2ToS3, progressS1ToS2 } from "../../state-machines/s1-state-machine.js";
 import * as auditService from "../infrastructure/audit-service.js";
@@ -87,6 +88,28 @@ export async function normalizeAndValidateBedTypeRequest(
   return clean;
 }
 
+/**
+ * How an apartment is let, as the intake may write it (2026-11-25). Only an Apartment booking has a
+ * plan (another kind of stay takes it off); a stay under a week has none, being charged by the
+ * night; a plan the dates cannot take is refused in words — also when only the dates moved under
+ * a plan already set. Returns the value to write, or undefined to leave the stored one.
+ */
+function resolveApartmentPlanForIntake(input: {
+  useType: string | null | undefined;
+  plan: string | null | undefined;
+  stored: string | null | undefined;
+  checkIn: Date | null | undefined;
+  checkOut: Date | null | undefined;
+}): string | null | undefined {
+  if (input.useType !== "APARTMENT") return input.stored ? null : undefined;
+  const next = input.plan !== undefined ? (input.plan ?? null) : (input.stored ?? null);
+  if (input.checkIn && input.checkOut) {
+    const refusal = planRefusal(next, input.checkIn, input.checkOut);
+    if (refusal) throw new ValidationError(input.plan === undefined ? `${refusal} — say again how the apartment is let` : refusal);
+  }
+  return input.plan !== undefined ? next : undefined;
+}
+
 export async function createEntry(
   prisma: PrismaClient,
   actorId: string,
@@ -103,6 +126,7 @@ export async function createEntry(
     childAges?: number[];
     numberOfRooms?: number;
     bedTypeRequest?: Record<string, number> | null;
+    apartmentPlan?: string | null;
     otaSource?: boolean;
     walkInCompressed?: boolean;
     contactPersonName?: string;
@@ -167,6 +191,13 @@ export async function createEntry(
 
   const checkInDate = input.checkInDate ? new Date(input.checkInDate) : null;
   const checkOutDate = input.checkOutDate ? new Date(input.checkOutDate) : null;
+  const apartmentPlan = resolveApartmentPlanForIntake({
+    useType: input.useType,
+    plan: input.apartmentPlan,
+    stored: null,
+    checkIn: checkInDate,
+    checkOut: checkOutDate,
+  });
 
   // Bed-setup breakdown ("5 King + 2 Twin", 2026-08-13) — normalized + checked against the
   // room count and the registry's achievable bed stock before anything is written.
@@ -190,7 +221,9 @@ export async function createEntry(
     const { issues } = await validateCapacity(prisma, {
       adults: input.adultCount ?? 0,
       childAges: input.childAges ?? [],
-      numberOfRooms: input.numberOfRooms,
+      // An apartment's rooms are its apartments' (2026-11-25): the pick sets them, and a 2 BHK's
+      // two rooms can sleep one guest.
+      numberOfRooms: input.useType === "APARTMENT" ? undefined : input.numberOfRooms,
       fallbackMaxCapacity,
     });
     const blocking = issues.filter((i) => i.severity === "BLOCK");
@@ -218,6 +251,7 @@ export async function createEntry(
         childAges: input.childAges ?? [],
         numberOfRooms: input.numberOfRooms ?? null,
         ...(bedTypeRequest ? { bedTypeRequest } : {}),
+        ...(apartmentPlan ? { apartmentPlan } : {}),
         contactPersonName: input.contactPersonName?.trim() || null,
         contactPersonPhone: input.contactPersonPhone?.trim() || null,
         contactPersonEmail: input.contactPersonEmail?.trim() || null,
@@ -511,6 +545,7 @@ export async function updateEntryIntakeFields(
     /** Bed-setup breakdown ("5 King + 2 Twin"). Explicit null clears the stored request. */
     bedTypeRequest?: Record<string, number> | null;
     useType?: string;
+    apartmentPlan?: string | null;
     contactPersonName?: string;
     contactPersonPhone?: string;
     contactPersonEmail?: string;
@@ -552,7 +587,7 @@ export async function updateEntryIntakeFields(
     const { issues } = await validateCapacity(prisma, {
       adults: input.adultCount ?? entry.adultCount ?? 0,
       childAges: input.childAges ?? entry.childAges ?? [],
-      numberOfRooms: input.numberOfRooms ?? entry.numberOfRooms ?? undefined,
+      numberOfRooms: (input.useType ?? String(entry.useType)) === "APARTMENT" ? undefined : (input.numberOfRooms ?? entry.numberOfRooms ?? undefined),
       fallbackMaxCapacity,
     });
     const blocking = issues.filter((i) => i.severity === "BLOCK");
@@ -562,6 +597,13 @@ export async function updateEntryIntakeFields(
   }
   const checkInDate = input.checkInDate ? new Date(input.checkInDate) : undefined;
   const checkOutDate = input.checkOutDate ? new Date(input.checkOutDate) : undefined;
+  const nextApartmentPlan = resolveApartmentPlanForIntake({
+    useType: input.useType ?? String(entry.useType),
+    plan: input.apartmentPlan,
+    stored: (entry as { apartmentPlan?: string | null }).apartmentPlan ?? null,
+    checkIn: checkInDate ?? entry.checkInDate,
+    checkOut: checkOutDate ?? entry.checkOutDate,
+  });
 
   // Bed-setup request: validate the incoming breakdown against the EFFECTIVE room count —
   // and when only the room count moves, re-check the STORED breakdown against it, so
@@ -642,6 +684,7 @@ export async function updateEntryIntakeFields(
         ...(input.numberOfRooms !== undefined ? { numberOfRooms: input.numberOfRooms > 0 ? input.numberOfRooms : null } : {}),
         ...(nextBedTypeRequest !== undefined ? { bedTypeRequest: nextBedTypeRequest ?? Prisma.DbNull } : {}),
         ...(input.useType ? { useType: input.useType as any } : {}),
+        ...(nextApartmentPlan !== undefined ? { apartmentPlan: nextApartmentPlan } : {}),
         ...(input.contactPersonName !== undefined ? { contactPersonName: input.contactPersonName.trim() || null } : {}),
         ...(input.contactPersonPhone !== undefined ? { contactPersonPhone: input.contactPersonPhone.trim() || null } : {}),
         ...(input.contactPersonEmail !== undefined ? { contactPersonEmail: input.contactPersonEmail.trim() || null } : {}),

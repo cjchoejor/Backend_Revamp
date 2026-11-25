@@ -46,6 +46,8 @@ export const createEntryRequestSchema = z.object({
    * registry's achievable bed stock — shape-level we only require whole counts.
    */
   bedTypeRequest: z.record(z.string(), z.coerce.number().int().min(0).max(50)).nullish(),
+  /** How an apartment is let (2026-11-25): MONTHLY or WEEKLY; null for under a week. */
+  apartmentPlan: z.enum(["MONTHLY", "WEEKLY"]).nullish(),
   otaSource: z.boolean().optional(),
   walkInCompressed: z.boolean().optional(),
   // Contact person — the on-site individual travelling or leading the group. Distinct from
@@ -76,6 +78,8 @@ export const updateEntryRequestSchema = z.object({
   /** Bed-setup breakdown ("5 King + 2 Twin"). Explicit null clears the stored request. */
   bedTypeRequest: z.record(z.string(), z.coerce.number().int().min(0).max(50)).nullish(),
   useType: z.string().optional(),
+  /** How an apartment is let; explicit null takes it off. */
+  apartmentPlan: z.enum(["MONTHLY", "WEEKLY"]).nullish(),
   contactPersonName: z.string().trim().max(200).optional(),
   contactPersonPhone: z.string().trim().max(50).optional(),
   contactPersonEmail: z.string().trim().max(200).optional(),

@@ -1222,9 +1222,13 @@ model Entry {
   registrationCompletedAt DateTime?
   registrationCompletedBy String?
 
-  /// SIG-S1 apartment context (required for APARTMENT at S1→S2 exit)
+  /// SIG-S1 apartment context. No longer asked for (2026-11-25): the nights come from the dates
+  /// and the rate from the apartment package. Kept for the rows that carry them.
   apartmentDurationNights Int?
   apartmentRateTierCode   String?
+  /// How an apartment is let (2026-11-25): MONTHLY or WEEKLY; null for a stay under a week, which
+  /// is charged by the night, and for any booking that is not an apartment. lib/apartment-rent.ts.
+  apartmentPlan           String?
 
   /// A booking split off another (2026-10-14, operator: "move one room to other dates ... as a
   /// different entry under the same inquiry, or a new inquiry"): the booking its rooms came from.

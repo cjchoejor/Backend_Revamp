@@ -22,6 +22,8 @@ import { loadChildPolicyBundle } from "../../services/domain/child-policy-servic
 import { computeChargeableOccupants, computeAllowedRoomCounts, loadHotelInventorySnapshot, suggestRoomCount } from "../../services/domain/capacity-validation-service.js";
 import { listPackagesForParty } from "../../lib/rate-package-resolution.js";
 import { listApartmentPackages } from "../../services/admin/apartment-admin-service.js";
+import { plansForStay } from "../../lib/apartment-rent.js";
+const YMD_APT = /^\d{4}-\d{2}-\d{2}$/;
 import { addUtcDays, hotelTodayUtc, ymdUtc } from "../../lib/stay-dates.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { DeficientConditionCategory } from "@prisma/client";
@@ -387,6 +389,19 @@ lookupsRouter.get("/lookups/rate-packages", L1, async (req, res, next) => {
     const corporateAccountId = typeof req.query.corporateAccountId === "string" && req.query.corporateAccountId ? req.query.corporateAccountId : null;
     const items = await listPackagesForParty(prisma, { travelAgentId, corporateAccountId });
     res.json({ items, count: items.length });
+  } catch (e) { next(e); }
+});
+
+/**
+ * Which ways an apartment stay of these dates may be let (2026-11-25): monthly for at least a whole
+ * month (to the same date the month after), weekly for at least seven nights, else by the night.
+ */
+lookupsRouter.get("/lookups/apartment-plans", L1, async (req, res, next) => {
+  try {
+    const ci = typeof req.query.checkIn === "string" && YMD_APT.test(req.query.checkIn) ? req.query.checkIn : null;
+    const co = typeof req.query.checkOut === "string" && YMD_APT.test(req.query.checkOut) ? req.query.checkOut : null;
+    if (!ci || !co) { res.status(400).json({ message: "Give the check-in and check-out as YYYY-MM-DD" }); return; }
+    res.json(plansForStay(ci, co));
   } catch (e) { next(e); }
 });
 

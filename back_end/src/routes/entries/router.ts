@@ -101,6 +101,7 @@ import { getExpectedArrival, setExpectedArrival } from "../../services/domain/ex
 import { resolveNoShowGraceMinutes, timerShowsFrom } from "../../lib/expected-arrival.js";
 import { buildEntryBedPlan, setEntryBedPlanRoom } from "../../services/domain/entry-bed-plan-service.js";
 import { readRoomsReleasedByBooking } from "../../lib/rooms-released-by-booking.js";
+import { describeApartmentsForEntry, pickApartmentsForEntry } from "../../services/domain/apartment-booking-service.js";
 
 export const entriesRouter = Router();
 
@@ -274,6 +275,34 @@ entriesRouter.post("/:id/trip/reserve", requireActorLevel("L1"), async (req, res
 entriesRouter.get("/:id/bed-plan", requireActorLevel("L1"), async (req, res, next) => {
   try {
     res.json(await buildEntryBedPlan(prisma, req.params.id));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
+ * The apartments for this booking's stay (2026-11-25): every apartment offered, free or not, picked
+ * or not, and what each package comes to under monthly and weekly. `checkInDate` / `checkOutDate`
+ * ask about dates not saved yet. Read-only.
+ */
+entriesRouter.get("/:id/apartments", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    const ymd = (v: unknown) => (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
+    res.json(await describeApartmentsForEntry(prisma, req.params.id, { checkInDate: ymd(req.query.checkInDate), checkOutDate: ymd(req.query.checkOutDate) }));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** Save the apartments picked for an apartment stay — whole apartments, every night. Inquiry; L1. */
+entriesRouter.post("/:id/apartments/pick", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const unitIds = Array.isArray(req.body?.unitIds) ? req.body.unitIds.map(String).slice(0, 50) : [];
+    const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
+    const out = await pickApartmentsForEntry(prisma, req.params.id, actor, { unitIds });
+    await afterStayChanged(prisma, actor, req.params.id, "ROOMS");
+    res.json(out);
   } catch (e) {
     next(e);
   }
