@@ -406,10 +406,33 @@ export type PartySeatingAssessment = {
   ok: boolean;
 };
 
+/**
+ * The rooms let together as one apartment (2026-11-25), read from a booking's priced terms: each
+ * room of an apartment carries its rent with the apartment's first room (`leadRoomId`). One group
+ * per apartment of two rooms or more. Empty on any other booking.
+ */
+export function apartmentGroupsFromTerms(...termsList: unknown[]): string[][] {
+  for (const terms of termsList) {
+    const rows = (terms as { compositionTotals?: { perRoom?: unknown } } | null | undefined)?.compositionTotals?.perRoom;
+    if (!Array.isArray(rows)) continue;
+    const byLead = new Map<string, string[]>();
+    for (const r of rows as Array<{ roomId?: unknown; rent?: { leadRoomId?: unknown } | null }>) {
+      const lead = r?.rent?.leadRoomId;
+      if (typeof r?.roomId !== "string" || typeof lead !== "string" || !lead) continue;
+      byLead.set(lead, [...(byLead.get(lead) ?? []), r.roomId]);
+    }
+    const groups = [...byLead.values()].filter((g) => g.length > 1);
+    if (byLead.size) return groups;
+  }
+  return [];
+}
+
 export function assessPartySeating(input: {
   slots: PartySlot[];
   rows: SeatingRow[];
   picture: NightPicture;
+  /** Rooms let together as one apartment: one of them may stand empty while another holds the guests. */
+  apartmentGroups?: string[][];
 }): PartySeatingAssessment {
   const picture = [...input.picture].sort((a, b) => a.date.localeCompare(b.date));
   const order = planRoomOrder(picture);
@@ -419,7 +442,13 @@ export function assessPartySeating(input: {
   const seating = seatPartyRooms({ slots: input.slots, rows: input.rows, order, nightsByRoom });
   const unseated = input.slots.filter((s) => !(seating.get(s.key)?.length ?? 0));
   const roomsWithoutRow = order.filter((id) => !rowFor(id));
-  const emptyRooms = order.filter((id) => rowOccupants(rowFor(id)) === 0);
+  const groupOf = (id: string) => input.apartmentGroups?.find((g) => g.includes(id)) ?? null;
+  const emptyRooms = order.filter((id) => {
+    if (rowOccupants(rowFor(id)) !== 0) return false;
+    const group = groupOf(id);
+    // An apartment's room standing empty is no fault while another of its rooms holds the guests.
+    return !group || !group.some((other) => rowOccupants(rowFor(other)) > 0);
+  });
   const perNight = picture.map((n) => {
     const shortfall: Record<PartyBand, number> = { ADULT: 0, C6TO10: 0, UNDER6: 0 };
     const overflow: Record<PartyBand, number> = { ADULT: 0, C6TO10: 0, UNDER6: 0 };
@@ -475,12 +504,14 @@ export function repairPartySeating<T extends SeatingRow>(input: {
   facts?: Map<string, RoomSeatingFacts>;
   /** How a freshly minted row looks beyond the counts (the caller's row type may need more). */
   mintRow?: (roomId: string) => T;
+  /** Rooms let together as one apartment (2026-11-25) — no extra bed is added there. */
+  apartmentGroups?: string[][];
 }): PartySeatingRepair<T> {
   const picture = [...input.picture].sort((a, b) => a.date.localeCompare(b.date));
   const order = planRoomOrder(picture);
   const nightsByRoom = nightsByRoomFromPicture(picture);
   const party = partySize(input.slots);
-  const before = assessPartySeating({ slots: input.slots, rows: input.rows, picture });
+  const before = assessPartySeating({ slots: input.slots, rows: input.rows, picture, apartmentGroups: input.apartmentGroups });
   const actions: SeatingRepairAction[] = [];
   const unresolved: string[] = [];
   let rows: T[] = input.rows.map(cloneRow);
@@ -561,8 +592,9 @@ export function repairPartySeating<T extends SeatingRow>(input: {
   // 3. The third adult's mandatory extra bed, exactly as the quote auto-adds it (p78).
   const touched = new Set(actions.flatMap((a) => ("roomId" in a ? [a.roomId] : [])));
   if (touched.size > 0) {
+    const apartmentRoom = new Set((input.apartmentGroups ?? []).flat());
     const bedded = autoAddRequiredExtraBeds(rows, {
-      maxExtraBedsForRoom: (c) => input.facts?.get(c.roomId)?.maxExtraBeds,
+      maxExtraBedsForRoom: (c) => (apartmentRoom.has(c.roomId) ? 0 : input.facts?.get(c.roomId)?.maxExtraBeds),
     });
     for (const i of bedded.autoAddedIndexes) {
       if (!touched.has(rows[i].roomId)) continue;
@@ -573,7 +605,7 @@ export function repairPartySeating<T extends SeatingRow>(input: {
     rows = rows.map((r, i) => (bedded.autoAddedIndexes.includes(i) && touched.has(r.roomId) ? bedded.compositions[i] : r));
   }
 
-  const after = assessPartySeating({ slots: input.slots, rows, picture });
+  const after = assessPartySeating({ slots: input.slots, rows, picture, apartmentGroups: input.apartmentGroups });
   return { rows, actions, unresolved, changed: actions.length > 0, before, after };
 }
 

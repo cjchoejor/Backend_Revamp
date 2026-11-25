@@ -10,6 +10,7 @@ import {
   currentPerNightPicture,
   derivePartySlots,
   describeSeatingRepair,
+  apartmentGroupsFromTerms,
   repairPartySeating,
   repointStrayRows,
   resolveCompositionBasis,
@@ -1987,7 +1988,14 @@ async function changeRoomToNewSegmentInner(
   // outer binding to `null` for good.
   const seatingState: { report: { changed: boolean; actions: SeatingRepairAction[]; unresolved: string[]; lines: string[] } | null } = { report: null };
   const seatEveryone = (rows: RoomCompositionServiceInput[]): RoomCompositionServiceInput[] => {
-    const repair = repairPartySeating({ slots: partySlots, rows, picture: substitutedPicture, facts: seatingFacts });
+    const repair = repairPartySeating({
+      slots: partySlots,
+      rows,
+      picture: substitutedPicture,
+      facts: seatingFacts,
+      // An apartment's rooms are let together (2026-11-25): one may stand empty, and no extra bed is added there.
+      apartmentGroups: apartmentGroupsFromTerms(priorTerms),
+    });
     const actions = [...seatingActions, ...repair.actions];
     const lines = describeSeatingRepair(
       { actions, unresolved: repair.unresolved },

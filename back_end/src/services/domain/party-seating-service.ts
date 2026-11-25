@@ -6,6 +6,7 @@ import {
   currentPerNightPicture,
   derivePartySlots,
   repairPartySeating,
+  apartmentGroupsFromTerms,
   repointStrayRows,
   resolveCompositionBasis,
   successorChainFromConfigs,
@@ -135,7 +136,9 @@ export async function buildPartySeatingStatus(prisma: PrismaClient, entryId: str
 
   const rows = basis.compositions ?? [];
   const strayRooms = rows.map((r) => r.roomId).filter((id) => !planRoomIds.includes(id));
-  const assessment = assessPartySeating({ slots, rows, picture });
+  // An apartment's rooms are let together (2026-11-25): one may stand empty while another holds the guests.
+  const apartmentGroups = apartmentGroupsFromTerms(entry.reservation?.frozenCommercialTerms, ...entry.quotations.map((q) => q.commercialTerms));
+  const assessment = assessPartySeating({ slots, rows, picture, apartmentGroups });
 
   const roomRows = await prisma.room.findMany({
     where: { id: { in: Array.from(new Set([...planRoomIds, ...strayRooms])) } },
@@ -158,7 +161,7 @@ export async function buildPartySeatingStatus(prisma: PrismaClient, entryId: str
   else {
     const successorOf = successorChainFromConfigs(entry.availabilityConfigs);
     const repointed = repointStrayRows(rows, planRoomIds, successorOf);
-    const dry = repairPartySeating({ slots, rows: repointed.rows, picture });
+    const dry = repairPartySeating({ slots, rows: repointed.rows, picture, apartmentGroups });
     const touched = new Set<string>([
       ...repointed.actions.flatMap((a) => (a.type === "ROW_REPOINTED" ? [a.toRoomId] : [])),
       ...dry.actions.flatMap((a) => ("roomId" in a ? [a.roomId] : [])),
