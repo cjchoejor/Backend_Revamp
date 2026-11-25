@@ -295,6 +295,20 @@ entriesRouter.get("/:id/apartments", requireActorLevel("L1"), async (req, res, n
   }
 });
 
+/**
+ * Who holds an apartment over this booking's stay, and where each could go — so the desk can move
+ * them out of the way through the room move (2026-11-25). Read-only; L1.
+ */
+entriesRouter.get("/:id/apartments/:unitId/holders", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    const { describeApartmentHolders } = await import("../../services/domain/apartment-booking-service.js");
+    res.json(await describeApartmentHolders(prisma, req.params.id, req.params.unitId));
+  } catch (e) {
+    next(e);
+  }
+});
+
 /** Save the apartments picked for an apartment stay — whole apartments, every night. Inquiry; L1. */
 entriesRouter.post("/:id/apartments/pick", requireActorLevel("L1"), async (req, res, next) => {
   try {

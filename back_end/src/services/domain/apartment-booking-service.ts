@@ -329,3 +329,48 @@ export async function apartmentRoomIdsOfEntry(prisma: PrismaClient, entryId: str
   if (!e) return new Set();
   return new Set((await rentForBookingRooms(prisma, { ...e, useType: String(e.useType) }, roomIds)).keys());
 }
+
+/**
+ * Who holds an apartment over this booking's stay, and where each could go instead (2026-11-25,
+ * operator: "when rooms are taken … can I have the option to move the booking in the room already
+ * staying inside this so I can accommodate the new guest here"). For each of the apartment's rooms
+ * taken on any night of the stay: the booking holding it, whether the desk can move it now (in words
+ * when not), and the rooms free for their nights — never a room of this apartment or one this booking
+ * has picked. The move is the governed room move; this only reads. Out-of-service rooms are named.
+ */
+export async function describeApartmentHolders(prisma: PrismaClient, entryId: string, unitId: string) {
+  const entry = await prisma.entry.findUnique({ where: { id: entryId }, select: { id: true, checkInDate: true, checkOutDate: true } });
+  if (!entry) throw new NotFoundError("Entry");
+  if (!entry.checkInDate || !entry.checkOutDate) throw new ValidationError("Put in the stay's dates first");
+  const unit = await prisma.apartmentUnit.findUnique({
+    where: { id: unitId },
+    include: {
+      package: { select: { name: true } },
+      rooms: { include: { room: { select: { id: true, roomNumber: true, isBlocked: true, blockedReason: true, isUnderMaintenance: true } } } },
+    },
+  });
+  if (!unit) throw new NotFoundError("Apartment");
+  const roomIds = unit.rooms.map((r) => r.roomId);
+  const picked = await currentPick(prisma, entryId);
+  const { describeRoomHolders } = await import("./room-holders-service.js");
+  const holders = await describeRoomHolders(prisma, {
+    roomIds,
+    checkIn: entry.checkInDate,
+    checkOut: entry.checkOutDate,
+    excludeEntryId: entryId,
+    avoidRoomIds: new Set([...roomIds, ...picked]),
+  });
+  return {
+    entryId,
+    stay: { checkInDate: ymdOf(entry.checkInDate), checkOutDate: ymdOf(entry.checkOutDate) },
+    unit: { id: unit.id, label: unit.label, packageName: unit.package.name, maxOccupants: unit.maxOccupants },
+    rooms: unit.rooms
+      .map((r) => ({
+        roomId: r.roomId,
+        roomNumber: r.room.roomNumber,
+        outOfService: r.room.isBlocked ? r.room.blockedReason || "blocked" : r.room.isUnderMaintenance ? "under maintenance" : null,
+        heldBy: holders.get(r.roomId) ?? [],
+      }))
+      .sort((a, b) => a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true })),
+  };
+}
