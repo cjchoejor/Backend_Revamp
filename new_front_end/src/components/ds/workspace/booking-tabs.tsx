@@ -483,12 +483,11 @@ export function ChargesView({
             {
               key: "package",
               label: "Package",
-              content: <BookingRateSheet entry={entry} />,
+              // An apartment stay's packages are the apartment packages — every one's weekly and monthly
+              // rate and this stay's (2026-11-25, operator: "show in packages only … instead show the
+              // apartment packages there"); any other stay, its rate sheet.
+              content: entry.useType === "APARTMENT" ? <EntryApartmentRates entry={entry} /> : <BookingRateSheet entry={entry} />,
             },
-            // An apartment stay (2026-11-25): every package's weekly and monthly rate, and this stay's.
-            ...(entry.useType === "APARTMENT"
-              ? [{ key: "apartments", label: "Apartments", content: <EntryApartmentRates entry={entry} /> }]
-              : []),
           ]}
         />
       </div>

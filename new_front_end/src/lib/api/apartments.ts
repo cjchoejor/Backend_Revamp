@@ -70,6 +70,34 @@ export async function getEntryApartments(session: Session, entryId: string, stay
   return apiRequest<EntryApartments>(`/api/entries/${encodeURIComponent(entryId)}/apartments${q}`, { session });
 }
 
+/** Who holds a room over the stay, and the rooms free for their nights — the server's (2026-11-25). */
+export type ApartmentHolder = {
+  entryId: string;
+  bookingRef: string | null;
+  guestName: string | null;
+  partyName: string | null;
+  stage: string;
+  status: string;
+  checkIn: string | null;
+  checkOut: string | null;
+  nightsInRoom: string[];
+  swappable: boolean;
+  why: string | null;
+  rooms: Array<{ roomId: string; roomNumber: string; roomTypeName: string | null; sameType: boolean }>;
+};
+
+export type ApartmentHolders = {
+  entryId: string;
+  stay: { checkInDate: string; checkOutDate: string };
+  unit: { id: string; label: string; packageName: string; maxOccupants: number };
+  rooms: Array<{ roomId: string; roomNumber: string; outOfService: string | null; heldBy: ApartmentHolder[] }>;
+};
+
+/** Who holds an apartment over this booking's stay, and where each could go — for "Make room". */
+export async function getApartmentHolders(session: Session, entryId: string, unitId: string) {
+  return apiRequest<ApartmentHolders>(`/api/entries/${encodeURIComponent(entryId)}/apartments/${encodeURIComponent(unitId)}/holders`, { session });
+}
+
 export async function pickApartments(session: Session, entryId: string, unitIds: string[]) {
   return apiRequest<{ apartments: string[]; rooms: string[]; numberOfRooms: number }>(`/api/entries/${encodeURIComponent(entryId)}/apartments/pick`, {
     method: "POST",

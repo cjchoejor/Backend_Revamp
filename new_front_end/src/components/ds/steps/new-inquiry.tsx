@@ -1097,7 +1097,7 @@ export function NewInquiryCanvas() {
                           // The packages' weekly and monthly rates on the right (2026-11-25, operator).
                           if (p) {
                             setFileTab("money");
-                            setFileSub("apartments");
+                            setFileSub("package");
                           }
                         }}
                       />
@@ -1563,10 +1563,17 @@ function IntakeFilePanel({
             label: "Money received",
             content: <StepCard title="Money received" status={<b>Nothing received</b>} meta="An advance is asked for at Set up." />,
           },
-          { key: "package", label: "Package", content: <RateSheetCard choice={rates} checkIn={checkIn} checkOut={checkOut} /> },
-          ...(apartmentPlan !== null
-            ? [{ key: "apartments", label: "Apartments", content: <IntakeApartmentRates checkIn={checkIn} checkOut={checkOut} plan={apartmentPlan} /> }]
-            : []),
+          {
+            key: "package",
+            label: "Package",
+            // An apartment stay's packages are the apartment packages (2026-11-25, operator).
+            content:
+              apartmentPlan !== null ? (
+                <IntakeApartmentRates checkIn={checkIn} checkOut={checkOut} plan={apartmentPlan} />
+              ) : (
+                <RateSheetCard choice={rates} checkIn={checkIn} checkOut={checkOut} />
+              ),
+          },
         ]}
       />
     );

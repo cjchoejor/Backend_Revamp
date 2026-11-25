@@ -34,6 +34,7 @@ import {
 import { fmtDate, money, plural } from "@/lib/ds/format";
 import type { EntryDetail } from "@/types/api";
 import { StepCard, toastRefusal, useOpenFileTab, useRefreshEntry, useStepFlow } from "./kit";
+import { MakeRoomDialog } from "./s1-apartment-make-room";
 
 const BED: Record<string, string> = { KING: "King", TWIN: "Twin", QUEEN: "Queen", SINGLE: "Single" };
 
@@ -254,6 +255,8 @@ export function ApartmentHouse({ entry, editable }: { entry: EntryDetail; editab
   const d = q.data;
   const savedIds = useMemo(() => new Set((d?.packages ?? []).flatMap((p) => p.units.filter((u) => u.picked).map((u) => u.id))), [d]);
   const [ticked, setTicked] = useState<Set<string>>(new Set());
+  /** The taken apartment the desk is making room in (2026-11-25). */
+  const [makeRoom, setMakeRoom] = useState<{ unitId: string; label: string } | null>(null);
   const savedKey = [...savedIds].sort().join(",");
   useEffect(() => setTicked(new Set(savedIds)), [savedKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const changed = [...ticked].sort().join(",") !== savedKey;
@@ -327,7 +330,10 @@ export function ApartmentHouse({ entry, editable }: { entry: EntryDetail; editab
                   </th>
                   <th>Apartment</th>
                   <th>Rooms</th>
-                  <th className="num">Up to</th>
+                  <th className="num">
+                    <span className="bt-day">Up to</span>
+                    <small className="apt-grid-sub">guests</small>
+                  </th>
                   <th className="num">
                     <span className="bt-day">This stay</span>
                     {d.plan ? <small className="apt-grid-sub">{PLAN_WORD[d.plan].toLowerCase()} · with taxes</small> : null}
@@ -359,18 +365,23 @@ export function ApartmentHouse({ entry, editable }: { entry: EntryDetail; editab
                           </td>
                         ) : null}
                         <td className="apt-no">{u.label}</td>
-                        <td>
-                          {u.rooms.length > 1 ? `Rooms ${u.rooms.map((r) => r.roomNumber).join(" + ")} · ` : ""}
+                        <td className="apt-rooms">
+                          {u.rooms.length > 1 ? `${u.rooms.map((r) => r.roomNumber).join(" + ")} · ` : ""}
                           {u.rooms.map((r) => BED[r.bedType ?? ""] ?? r.roomTypeName).join(" + ")}
                         </td>
-                        <td className="num">{plural(u.maxOccupants, "guest")}</td>
+                        <td className="num" title={`Up to ${plural(u.maxOccupants, "guest")}`}>
+                          {u.maxOccupants}
+                        </td>
                         {i === 0 ? (
                           <td className="num apt-rent" rowSpan={p.units.length}>
                             {rent ? <b>{money(rent.total)}</b> : <span className="meta" title="Under a week the apartment is charged by the night">by the night</span>}
                           </td>
                         ) : null}
                         <td>
-                          <div className={`bt-cell${on ? " picked" : ""}`}>
+                          {/* Three fixed slots (2026-11-25, operator: "make room button to be properly aligned
+                              always"): the chip, the words (cut with … when long, whole on hover), and the act
+                              at the right end, so every row's button lines up. */}
+                          <div className={`apt-state${on ? " picked" : ""}`}>
                             {u.free ? (
                               <span className="bt-free plenty">free</span>
                             ) : (
@@ -395,7 +406,16 @@ export function ApartmentHouse({ entry, editable }: { entry: EntryDetail; editab
                                 />
                               </label>
                             ) : (
-                              <span className="apt-held" title={holder ? `${holder.guestName ?? holder.entryId} · ${holder.entryId}` : undefined}>
+                              <span
+                                className="apt-held"
+                                title={
+                                  u.outOfService.length
+                                    ? u.outOfService[0]
+                                    : holder
+                                      ? `${holder.guestName ?? holder.entryId} · ${holder.entryId} · ${fmtDate(holder.from)} – ${fmtDate(holder.to)}`
+                                      : undefined
+                                }
+                              >
                                 {u.outOfService.length
                                   ? u.outOfService[0]
                                   : holder
@@ -403,6 +423,13 @@ export function ApartmentHouse({ entry, editable }: { entry: EntryDetail; editab
                                     : null}
                               </span>
                             )}
+                            <span className="apt-act">
+                              {!u.free && !on && editable && !u.outOfService.length ? (
+                                <button type="button" className="apt-make-room" onClick={() => setMakeRoom({ unitId: u.id, label: u.label })}>
+                                  Make room
+                                </button>
+                              ) : null}
+                            </span>
                           </div>
                         </td>
                       </tr>
@@ -412,6 +439,7 @@ export function ApartmentHouse({ entry, editable }: { entry: EntryDetail; editab
               </tbody>
             </table>
           </div>
+          {makeRoom ? <MakeRoomDialog entryId={entry.id} unitId={makeRoom.unitId} label={makeRoom.label} onClose={() => setMakeRoom(null)} /> : null}
           {editable ? (
             <div className="apt-house-save">
               {why && why !== "Saved" ? <span className={guests > room && ticked.size ? "stop-ink" : "meta"}>{why}</span> : null}
@@ -425,7 +453,7 @@ export function ApartmentHouse({ entry, editable }: { entry: EntryDetail; editab
               >
                 {why === "Saved" ? "Saved" : "Save the apartments"}
               </Button>
-              <Button kind="quiet" compact onClick={() => openFile("money", "apartments")}>
+              <Button kind="quiet" compact onClick={() => openFile("money", "package")}>
                 Their rates
               </Button>
             </div>

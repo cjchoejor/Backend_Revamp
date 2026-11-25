@@ -434,7 +434,7 @@ function StayFields({ form, ro }: { form: StayForm; ro: boolean }) {
           onPlan={(p) => {
             set({ plan: p });
             // The packages' weekly and monthly rates on the right (2026-11-25, operator).
-            if (p) openFile("money", "apartments");
+            if (p) openFile("money", "package");
           }}
         />
       ) : (
