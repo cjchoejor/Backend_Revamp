@@ -420,9 +420,15 @@ async function loadRooms(prisma: PrismaClient, ids: string[]) {
 function shapeRefusals(legs: PlannedLeg[], rooms: Map<string, RoomRow>, nightsOf: Map<string, LegNights>): string[] {
   const no = (id: string) => rooms.get(id)?.roomNumber ?? "?";
   const out: string[] = [];
-  const seenFrom = new Map<string, string>();
-  const seenTo = new Map<string, string>();
+  // Each room left and each room landed in, with the nights (2026-11-25, operator on the hotel's
+  // server: a booking dropped on a room two other bookings hold on different nights — "the other
+  // bookings should've actually moved … under their respective dates"). Two bookings out of, or into,
+  // one room clash only when their nights do; nights not known are taken as clashing.
+  const seenFrom = new Map<string, Array<{ entryId: string; nights: string[] }>>();
+  const seenTo = new Map<string, Array<{ entryId: string; nights: string[] }>>();
   const seenKey = new Set<string>();
+  const nightsOfLeg = (l: PlannedLeg) => nightsOf.get(legKey(l))?.from ?? [];
+  const clash = (a: string[], b: string[]) => a.length === 0 || b.length === 0 || a.some((n) => b.includes(n));
   const datedOf = (l: PlannedLeg) => nightsOf.get(legKey(l))?.dated === true;
   // Trading stays (2026-10-19): one picked room, with the booking in its way.
   const dated = legs.filter(datedOf);
@@ -450,13 +456,15 @@ function shapeRefusals(legs: PlannedLeg[], rooms: Map<string, RoomRow>, nightsOf
     if (seenKey.has(legKey(l))) out.push(`${l.entryId}'s Room ${no(l.fromRoomId)} is picked twice`);
     seenKey.add(legKey(l));
     if (isDated) continue; // a dated leg leaves and lands on its own nights — checked above and by its walk
-    const fromOwner = seenFrom.get(l.fromRoomId);
-    if (fromOwner && fromOwner !== l.entryId) {
-      out.push(`Two bookings are moving out of Room ${no(l.fromRoomId)} — move them one at a time`);
+    const mine = nightsOfLeg(l);
+    if ((seenFrom.get(l.fromRoomId) ?? []).some((o) => o.entryId !== l.entryId && clash(o.nights, mine))) {
+      out.push(`Two bookings are moving out of Room ${no(l.fromRoomId)} on the same nights — move them one at a time`);
     }
-    seenFrom.set(l.fromRoomId, l.entryId);
-    if (seenTo.has(l.toRoomId)) out.push(`Two of the picked rooms would land in Room ${no(l.toRoomId)} — drop them where each has its own room`);
-    seenTo.set(l.toRoomId, l.entryId);
+    seenFrom.set(l.fromRoomId, [...(seenFrom.get(l.fromRoomId) ?? []), { entryId: l.entryId, nights: mine }]);
+    if ((seenTo.get(l.toRoomId) ?? []).some((o) => clash(o.nights, mine))) {
+      out.push(`Two of the picked rooms would land in Room ${no(l.toRoomId)} on the same nights — drop them where each has its own room`);
+    }
+    seenTo.set(l.toRoomId, [...(seenTo.get(l.toRoomId) ?? []), { entryId: l.entryId, nights: mine }]);
   }
   for (const l of legs) {
     const own = legs.find((o) => o !== l && o.entryId === l.entryId && o.fromRoomId === l.toRoomId);
@@ -485,6 +493,15 @@ async function withSwapPartners(
   let truncated = false;
   const refusals: string[] = [];
   const leavingRoom = (entryId: string, roomId: string) => legs.some((l) => l.entryId === entryId && l.fromRoomId === roomId);
+  // The nights each leg lands on, read once. A room another leg lands in is in a holder's way only
+  // on those nights (2026-11-25): two bookings that held one room on different nights each go back
+  // into the room the first leg left, on their own nights.
+  const landing = new Map<string, string[]>();
+  const landsOn = async (l: { entryId: string; fromRoomId: string; newCheckInDate?: string | null }) => {
+    const k = legKey(l);
+    if (!landing.has(k)) landing.set(k, (await legNightsOf(prisma, l)).to);
+    return landing.get(k)!;
+  };
   for (const leg of asked) {
     const plan = await legNightsOf(prisma, leg);
     if (plan.from.length === 0) continue; // the walk refuses this leg itself, in its own words
@@ -530,11 +547,22 @@ async function withSwapPartners(
     }
     for (const holder of holders) {
       if (leavingRoom(holder, leg.toRoomId)) continue;
-      // The room the chain started from.
+      // Their nights in the room this leg takes.
+      const theirs = new Set(await landsOn({ entryId: holder, fromRoomId: leg.toRoomId }));
+      // The room the chain started from — passing on only when another leg lands there on one of
+      // their nights.
       let back = leg.fromRoomId;
       const seen = new Set<string>([back]);
       for (;;) {
-        const into = legs.find((l) => l.toRoomId === back && !(l.entryId === holder && l.fromRoomId === leg.toRoomId));
+        let into: PlannedLeg | undefined;
+        for (const l of legs) {
+          if (l.toRoomId !== back || (l.entryId === holder && l.fromRoomId === leg.toRoomId)) continue;
+          const its = await landsOn(l);
+          if (theirs.size === 0 || its.length === 0 || its.some((n) => theirs.has(n))) {
+            into = l;
+            break;
+          }
+        }
         if (!into || seen.has(into.fromRoomId)) break;
         back = into.fromRoomId;
         seen.add(back);
