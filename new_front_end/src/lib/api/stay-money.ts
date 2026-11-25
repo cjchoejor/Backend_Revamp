@@ -208,7 +208,7 @@ export async function previewStayExtension(session: Session, entryId: string, bo
 export async function requestStayExtension(
   session: Session,
   entryId: string,
-  body: StayExtensionInput & { reason: string; askMode: "PERCENT" | "AMOUNT"; askValue: number; note?: string; dueBy?: string },
+  body: StayExtensionInput & { reason?: string; askMode: "PERCENT" | "AMOUNT"; askValue: number; note?: string; dueBy?: string },
 ) {
   return apiRequest<{ request: StayExtensionRow; interim: InterimPaymentRow; invoice: { id: string }; preview: StayExtensionPreview }>(
     `/api/entries/${entryId}/stay-extension`,

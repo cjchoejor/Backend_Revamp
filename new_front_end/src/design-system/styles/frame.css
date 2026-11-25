@@ -2866,3 +2866,56 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .rchart .tape .fig-btn .fig-free { display: block; font-size: 15px; font-weight: 800; line-height: 1.1; }
 .ds .rchart .tape .fig-btn .fig-free span { font-size: 11px; font-weight: 700; }
 .ds .rchart .tape .fig-btn .fig-booked { display: block; font-size: 11px; font-weight: 600; color: var(--ink-2); line-height: 1.2; }
+
+/* ------------------------------------------------------------------ Extend the stay (2026-11-25)
+   Rebuilt in the desk's own look: three parts before anything is held, then a line of steps with
+   only the thing to do now beneath it. */
+.ds .ext { display: grid; gap: var(--s4); }
+.ds .ext-part { padding: var(--s3) 0 var(--s4); border-bottom: 1px solid var(--line); display: grid; gap: var(--s3); }
+.ds .ext-part:last-of-type { border-bottom: 0; }
+.ds .ext-h { display: flex; align-items: center; gap: var(--s2); font-size: var(--t-lead); font-weight: 700; color: var(--ink); }
+.ds .ext-n { display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 12px; font-weight: 700; }
+.ds .ext-dates { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--s3) var(--s4); }
+.ds .ext-dates .field { margin: 0; }
+.ds .ext-now { display: inline-flex; align-items: center; min-height: var(--control-h, 38px); padding: 0 var(--s3); border: 1px solid var(--line-2); border-radius: var(--r-control); background: var(--surface-2, #f4f5f2); font-weight: 600; }
+.ds .ext-arrow { padding-bottom: 9px; font-size: 18px; color: var(--ink-3); }
+.ds .ext-stepper { display: inline-flex; align-items: center; gap: var(--s2); min-height: var(--control-h, 38px); }
+.ds .ext-stepper b { min-width: 28px; text-align: center; font-size: var(--t-lead); }
+.ds .ext-rooms { display: grid; gap: var(--s2); justify-items: start; }
+.ds .ext-rooms > .notice { width: 100%; }
+.ds .ext-moves { margin: 0; font-weight: 600; }
+.ds .ext-roomtable td { vertical-align: middle; }
+.ds .ext-roomtable .chip { margin-right: 4px; }
+.ds .ext-move .field { max-width: 460px; margin: 0; }
+.ds .ext-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s3); }
+.ds .ext-figure { width: 120px; }
+.ds .ext-ledger { display: grid; gap: 2px; max-width: 520px; padding: var(--s3) var(--s4); border: 1px solid var(--line-2); border-radius: var(--r-control); background: var(--surface); }
+.ds .ext-ledger > div { display: flex; justify-content: space-between; gap: var(--s4); padding: 3px 0; }
+.ds .ext-ledger .money { font-variant-numeric: tabular-nums; }
+.ds .ext-ledger .ext-due { margin-top: 4px; padding-top: 8px; border-top: 1px solid var(--ink); font-weight: 700; font-size: var(--t-lead); }
+.ds .ext-ledger .ext-due .money { color: var(--accent); font-size: 20px; font-weight: 800; }
+.ds .ext-ledger .ext-rest { color: var(--ink-2); }
+.ds .ext-go { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: var(--s3); padding-top: var(--s3); }
+.ds .ext-list { margin: 0; padding-left: 18px; display: grid; gap: var(--s2); }
+.ds .ext-facts { display: flex; flex-wrap: wrap; gap: var(--s2) var(--s5, 24px); padding-bottom: var(--s3); border-bottom: 1px solid var(--line); }
+.ds .ext-steps { margin: var(--s4) 0 var(--s3); }
+.ds .ext-step-label { display: block; font-weight: 600; font-size: var(--t-sm); }
+.ds .money-step.now .ext-step-label { color: var(--accent); }
+.ds .money-step.done .ext-step-label { color: var(--ink); }
+.ds .money-step:not(.now):not(.done) .ext-step-label { color: var(--ink-3); }
+.ds .ext-now-box { display: grid; gap: var(--s2); padding: var(--s3) 0; }
+.ds .ext-billrow { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--s2) var(--s3); padding: var(--s3) var(--s4); border: 1px solid var(--line-2); border-radius: var(--r-control); background: var(--surface); }
+.ds .ext-sentline { margin: 0; display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; }
+.ds .ext-cancel { display: flex; justify-content: flex-end; padding-top: var(--s2); border-top: 1px solid var(--line); margin-top: var(--s2); }
+.ds .ext-cancel .btn { color: var(--danger); }
+/* One part at a time (2026-11-25): a done part folds to its line with Edit, a waiting one is its heading. */
+.ds .ext-h .ext-t { flex: none; }
+.ds .ext-h.done .ext-n { background: var(--success); }
+.ds .ext-h.done .ext-n svg { width: 13px; height: 13px; }
+.ds .ext-h.waiting { color: var(--ink-3); }
+.ds .ext-h.waiting .ext-n { background: var(--surface); color: var(--ink-3); border: 2px dashed var(--line-2); width: 24px; height: 24px; }
+.ds .ext-sum { flex: 1 1 auto; min-width: 0; font-size: var(--t-base); font-weight: 500; color: var(--ink-2); }
+.ds .ext-wait { font-size: var(--t-sm); font-weight: 500; color: var(--ink-3); }
+.ds .ext-h .ext-edit { margin-left: auto; }
+.ds .ext-part.folded, .ds .ext-part.waiting { padding: var(--s3) 0; }
+.ds .ext-h { flex-wrap: wrap; }
