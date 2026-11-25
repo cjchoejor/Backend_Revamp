@@ -11,6 +11,8 @@ const transitionDataSchema = z
     // the per-room key trace recorded null since the feature landed). Arrival-night rooms
     // only; the service refuses ids for rooms the guest moves into later.
     issuedKeyRoomIds: z.array(z.string().min(1)).max(60).optional(),
+    // The FOM's words for checking guests in whose dates of birth do not fit their rows (2026-11-25).
+    ageMismatchNote: z.string().trim().max(500).optional(),
     reEntryReason: z.string().optional(),
   })
   .optional();

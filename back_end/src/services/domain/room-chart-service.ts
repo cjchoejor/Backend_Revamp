@@ -123,6 +123,8 @@ export type RoomChartBooking = {
     callerLastName: string | null;
     callerPhone: string | null;
     callerEmail: string | null;
+    /** The desk's own note to tell same-named guests apart (2026-11-25). */
+    deskTag?: string | null;
   } | null;
   partyName: string | null;
 };
@@ -209,6 +211,7 @@ const entrySelect = {
       callerLastName: true,
       callerPhone: true,
       callerEmail: true,
+      deskTag: true,
       travelAgent: { select: { displayName: true } },
       corporateAccount: { select: { displayName: true } },
     },
@@ -311,6 +314,7 @@ export async function buildRoomChart(
       callerLastName: string | null;
       callerPhone: string | null;
       callerEmail: string | null;
+      deskTag?: string | null;
       travelAgent: { displayName: string } | null;
       corporateAccount: { displayName: string } | null;
     } | null;
@@ -617,6 +621,7 @@ export async function buildRoomChart(
             callerLastName: e.inquiry.callerLastName,
             callerPhone: e.inquiry.callerPhone,
             callerEmail: e.inquiry.callerEmail,
+            deskTag: e.inquiry.deskTag ?? null,
           }
         : null,
       partyName: e.inquiry?.travelAgent?.displayName ?? e.inquiry?.corporateAccount?.displayName ?? null,

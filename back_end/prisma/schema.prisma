@@ -977,6 +977,12 @@ model Inquiry {
   callerEmail                String?
   callerOnWhatsApp           Boolean?
 
+  /// A short note the desk keeps to tell this booking apart from others of the same name — the
+  /// guest's company, group or code, "BOLD/MOA" (2026-11-25, operator: the front desk typed it into
+  /// the name, where it became a last name and would reach the papers and emails). The desk's own:
+  /// shown greyed beside the name on the desk, never printed on a paper or in an email. Optional.
+  deskTag                    String?
+
   /// The agency's or company's own person on this enquiry (2026-11-03). Who is arriving becomes the
   /// guest once one is named, on every booking, so this person is kept here rather than lost: the
   /// voucher prints them as who booked it.

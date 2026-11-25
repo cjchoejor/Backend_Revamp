@@ -3,6 +3,7 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 import { effectiveCheckOutDate } from "../../lib/stay-dates.js";
 import { NotFoundError, PolicyGateBlockedError, ValidationError } from "../../lib/errors.js";
 import { formatMoney, loadHotelProfileForRender } from "../../lib/pdf-render-context.js";
+import { stayOutcomeRows, type StayInfoRow } from "../../lib/stay-outcome-words.js";
 import { toDecimal } from "../../lib/money.js";
 import { mastheadFromHotelProfile } from "../infrastructure/pdf-templates/legphel-document-shell.js";
 import {
@@ -274,6 +275,8 @@ type Composed = {
   account: string;
   forGuest: string | null;
   stay: ReturnType<typeof stayFrame>;
+  /** How a stay that ended early ended (2026-11-25) — `lib/stay-outcome-words`. */
+  stayOutcome: StayInfoRow[] | null;
   rooms: string[];
   /** "Room 201 (10–19 Mar) · Room 202 (10–14 Mar)" — each room with its nights (2026-10-30). */
   roomsLine: string | null;
@@ -292,7 +295,9 @@ async function compose(prisma: PrismaClient, entryId: string, opts?: { nightsMod
   );
   const parties = taxInvoicePartiesFromEntry(entry);
   const assigned = await assignedRoomNights(prisma, entryId, stay).catch(() => []);
+  const stayOutcome = await stayOutcomeRows(prisma, entryId).catch(() => null);
   return {
+    stayOutcome,
     roomsLine: assigned.length ? roomsWithNightsLine(assigned, opts?.nightsMode ?? "SHORT") : null,
     entry,
     figures,
@@ -349,7 +354,7 @@ function billBody(c: Composed, stayExtra: Array<{ k: string; v: string; strong?:
         { k: "Booking", v: c.entry.id, red: true },
         { k: "Folio", v: folio.id, mono: true },
         stay ? { k: "Check-in", v: stay.checkIn, strong: true } : null,
-        stay ? { k: "Check-out", v: stay.checkOut } : null,
+        ...(c.stayOutcome?.length ? c.stayOutcome : [stay ? { k: "Check-out", v: stay.checkOut } : null]),
         ...stayExtra,
       ],
     },
@@ -429,6 +434,7 @@ function renderTaxInvoiceDraft(c: Composed): string {
     folioId: c.entry.folio?.id ?? null,
     guests: guestsWords(c.entry),
     stay: c.stay,
+    stayOutcome: c.stayOutcome,
     roomNumbers: c.rooms,
     roomsLine: c.roomsLine,
     issued: null,

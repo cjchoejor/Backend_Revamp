@@ -133,6 +133,9 @@ async function clean() {
   await prisma.roomMove.deleteMany({ where: { id: { in: moveIds }, legs: { none: {} } } });
   await prisma.entry.deleteMany({ where: { id: { in: ids } } });
   await prisma.inquiry.deleteMany({ where: { id: { startsWith: P } } });
+  // An identity check or a guest row typed on the fixture outlives the booking (its entry is set to
+  // null), so the guest's own rows go before the guest (2026-11-25).
+  await prisma.guestIdentityDocument.deleteMany({ where: { guestProfileId: { startsWith: P } } });
   await prisma.guestProfile.deleteMany({ where: { id: { startsWith: P } } });
   // Each touched room's flag back to what the remaining bookings say (`room-flag-repair`).
   const { today, plan } = await planRoomFlagRepairs(prisma, { roomIds: [...touched] });

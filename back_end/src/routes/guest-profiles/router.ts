@@ -8,6 +8,7 @@ import {
   confirmGuestIdentityDetailsRequestSchema,
   clearGuestIdentitySlotRequestSchema,
   setLeadGuestRequestSchema,
+  swapGuestRowsRequestSchema,
   saveGuestIdentityDetailRequestSchema,
   applyIdentityOcrSuggestionRequestSchema,
   searchGuestProfilesQuerySchema,
@@ -227,6 +228,20 @@ guestProfilesRouter.post(
   async (req, res, next) => {
     try {
       res.json(await identityProofService.setLeadGuest(prisma, req.params.id, req.actor!.actorId, req.body));
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+/** Swap two guests' rows — everything recorded on each moves to the other (2026-11-25). */
+guestProfilesRouter.post(
+  "/entries/:id/identity-details/swap",
+  requireActorLevel("L1"),
+  validateBody(swapGuestRowsRequestSchema),
+  async (req, res, next) => {
+    try {
+      res.json(await identityProofService.swapGuestRows(prisma, req.params.id, req.actor!.actorId, req.body, req.actor!.level));
     } catch (e) {
       next(e);
     }

@@ -27,6 +27,7 @@ import { paperNumber, printedProformaNumber, printedQuotationNumber, proformaNum
 import { paymentsStillHeld, waitingRefundTotal } from "../../lib/refund-money.js";
 import { InvoiceType, Prisma, type PrismaClient } from "@prisma/client";
 import { effectiveCheckOutDate } from "../../lib/stay-dates.js";
+import { stayOutcomeRows, type StayInfoRow } from "../../lib/stay-outcome-words.js";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { buildStorageKey, hashSha256, readDocument, writeDocument } from "../../lib/document-storage.js";
 import {
@@ -906,6 +907,9 @@ export type TaxInvoiceRenderInput = {
   /** "12 adults" / "2 adults · 1 child". */
   guests?: string | null;
   stay: { checkIn: Date | null; checkOut: Date | null; nights: number | null };
+  /** How a stay that ended early ended (2026-11-25): rows printed after Check-in in place of the
+   *  plain Check-out — checked out, booked to, nights stayed, the fee. `lib/stay-outcome-words`. */
+  stayOutcome?: StayInfoRow[] | null;
   /** Room numbers to print (falls back to the ledger's attribution when empty). */
   roomNumbers?: string[];
   /** Superseded on the face by the lines table (each room's nights are on its row); kept for callers. */
@@ -1044,7 +1048,7 @@ export function composeTaxInvoiceHtml(input: TaxInvoiceRenderInput): string {
         { k: "Booking", v: input.bookingRef, red: true },
         input.folioId ? { k: "Folio", v: input.folioId, mono: true } : null,
         stay ? { k: "Check-in", v: stay.checkIn, strong: true } : null,
-        stay ? { k: "Check-out", v: stay.checkOut } : null,
+        ...(input.stayOutcome?.length ? input.stayOutcome : [stay ? { k: "Check-out", v: stay.checkOut } : null]),
         input.issued?.issuedBy ? { k: "Issued by", v: input.issued.issuedBy } : null,
       ],
     },
@@ -1297,6 +1301,7 @@ export async function generateOrLoadInvoicePdf(
     folioId: inv.folioId,
     guests: guestsWords(inv.entry),
     stay: { checkIn, checkOut, nights },
+    stayOutcome: await stayOutcomeRows(prisma, inv.entryId).catch(() => null),
     roomsLine: assigned.length ? roomsWithNightsLine(assigned) : null,
     issued: { invoiceRef, issuedAt: inv.issuedAt ?? inv.dispatchedAt ?? now, issuedBy: preparedByName || null },
     asAt: now,

@@ -3,6 +3,7 @@ import { personFromName, titledName } from "../../lib/person-name.js";
 import { loosePhone } from "../../lib/phone-numbers.js";
 import { Prisma, type ActorLevel, type PrismaClient } from "@prisma/client";
 import { AppError, AuthorizationError, NotFoundError, ValidationError } from "../../lib/errors.js";
+import { cleanDeskTag } from "../../lib/desk-tag.js";
 import { enforceCustodianReassignmentAuthority } from "../../policies/02-ownership-custodian-assignment/p04-custodian-reassignment.js";
 import { resolveInitialCustodianActorId } from "../../policies/02-ownership-custodian-assignment/p03-initial-custodian-assignment.js";
 import * as duplicateDetectionService from "./duplicate-detection-service.js";
@@ -49,8 +50,11 @@ export async function createInquiry(
     ratePackageId?: string | null;
     /** Every package chosen, the primary first (2026-11-13). The primary prices any room type left alone. */
     ratePackageIds?: string[] | null;
+    /** The desk's own note to tell same-named guests apart — "BOLD/MOA" (2026-11-25). */
+    deskTag?: string | null;
   },
 ) {
+  const deskTag = cleanDeskTag(input.deskTag);
   // The channel and the finer came-in-as, validated together; an old-style caller sending only
   // the channel (+ the notes marker) still gets the column filled.
   const channel = resolveInquiryChannel({ cameInAs: input.cameInAs, sourceChannel: input.sourceChannel, notes: input.notes });
@@ -120,6 +124,7 @@ export async function createInquiry(
         corporateAccountId,
         ratePackageId,
         ratePackageIds,
+        deskTag,
         createdBy: actorId,
       },
     });
@@ -479,6 +484,29 @@ export async function updateInquiryNotes(prisma: PrismaClient, inquiryId: string
     createdBy: actorId,
   });
   return updated;
+}
+
+/**
+ * The desk tag (2026-11-25): set, changed or taken off at any step — a closed booking too, since it is
+ * the desk's own note and nothing reads it but the desk (like the booking's notes). Traced.
+ */
+export async function setInquiryDeskTag(prisma: PrismaClient, inquiryId: string, actorId: string, actorLevel: ActorLevel, raw: string | null) {
+  const existing = await prisma.inquiry.findUnique({ where: { id: inquiryId }, select: { id: true, deskTag: true } });
+  if (!existing) throw new NotFoundError("Inquiry");
+  const deskTag = cleanDeskTag(raw);
+  if (deskTag === (existing.deskTag ?? null)) return { inquiryId, deskTag, changed: false };
+  await prisma.inquiry.update({ where: { id: inquiryId }, data: { deskTag } });
+  await auditService.emit(prisma, { actorId, actorLevel }, {
+    eventType: "INQUIRY.DESK_TAG_SET",
+    entityType: "Inquiry",
+    entityId: inquiryId,
+    operation: "UPDATE",
+    timestamp: new Date(),
+    inquiryId,
+    payload: { from: existing.deskTag ?? null, to: deskTag },
+    createdBy: actorId,
+  });
+  return { inquiryId, deskTag, changed: true };
 }
 
 export async function resolveDuplicateFlag(

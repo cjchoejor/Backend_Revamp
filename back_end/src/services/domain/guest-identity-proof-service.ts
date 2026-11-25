@@ -16,7 +16,7 @@ import { enforceEntryNotSealedForWorkingAction } from "../../policies/01-availab
 import { enforceAcceptedIdentityDocumentType } from "../../policies/06-guest-identity/p16-accepted-document-types.js";
 import { loadChildPolicyBundle } from "./child-policy-service.js";
 import { findEntryIdentityVerification, resolveVerificationPaths } from "../../lib/identity-verification-path.js";
-import { partyAgeChecker } from "../../lib/party-age-check.js";
+import { findAgeMismatches, partyAgeChecker } from "../../lib/party-age-check.js";
 import { adultSubjectKeys, isLeadDocumentRow, LEAD_ROW_ENTRY_SELECT, resolveLeadSubjectKey } from "../../lib/lead-guest.js";
 
 /**
@@ -477,6 +477,19 @@ export async function setGuestIdentityDetailConfirmation(
       detailsConfirmedAt: true,
     },
   });
+
+  // A date of birth in another price band than its row is put right before the table is
+  // confirmed (2026-11-25) — the date fixed, the two rows swapped, or the child's age changed.
+  if (input.confirmed) {
+    const wrong = (await findAgeMismatches(prisma, entry.id)).filter((m) => m.blocks && keys.includes(m.subjectKey));
+    if (wrong.length) {
+      throw new PolicyGateBlockedError(
+        "GUEST_AGE_MISMATCH",
+        `A date of birth does not fit its guest's row — ${wrong.map((m) => m.label).join(", ")}. Put the date right, swap the two guests' rows, or change the child's age, then confirm.`,
+        { mismatches: wrong },
+      );
+    }
+  }
 
   const now = new Date();
   const changed: { subjectKey: string; label: string }[] = [];
@@ -1137,6 +1150,168 @@ export async function setLeadGuest(prisma: PrismaClient, entryId: string, actorI
   });
   const after = before ? await findEntryIdentityVerification(prisma, { entryId: entry.id, guestProfileId: entry.guestProfileId }) : null;
   return { subjectKey: key, label: nameOf(key), previous, changed: true, verificationReset: !!before && !after };
+}
+
+/** A row's label that is only its slot's own words ("Adult 5", "Child 1 (5y)") — it moves with the slot. */
+const GENERIC_ROW_LABEL = /^(Adult|Child|Guest) \d+( \(\d+y\))?$/i;
+
+export type GuestRowSwapSide = {
+  subjectKey: string;
+  /** The row's own words: "Adult 5", "Child 1 (5y)". */
+  row: string;
+  /** Who is on the row now — the name typed on it, or null when nothing names them. */
+  person: string | null;
+  /** Anything recorded on the row: details or a photo. */
+  holdsSomeone: boolean;
+  /** How the person on this row fits the OTHER row once swapped (null: no date of birth). */
+  fitsAfter: { ok: boolean; blocks: boolean; message: string | null } | null;
+};
+
+export type GuestRowSwapOutcome = {
+  entryId: string;
+  a: GuestRowSwapSide;
+  b: GuestRowSwapSide;
+  /** The lead follows the person: the row it moves to, or null when it stays. */
+  leadMovesTo: string | null;
+  refusal: string | null;
+  swapped: boolean;
+  verificationReset: boolean;
+};
+
+/**
+ * Swap two guests' rows (2026-11-25, operator: "the user accidentally uploaded and posted the adult to
+ * the child section and child to adult section — keep a swap guest feature among the rooms"). Everything
+ * this booking holds for each row — the typed details, every ID photo (cleared ones too, so the record
+ * stays whole), their confirmation — moves to the other row, in one transaction. Nothing is typed again
+ * and nothing is lost; a row with nothing on it may be one side (a move).
+ *
+ * - From Arrival on, while the booking is not sealed — the guest table exists from Arrival.
+ * - Confirmed rows may be swapped: the records do not change, only the row they are filed under. It is
+ *   its own act with its own question, and History says what moved.
+ * - **The lead follows the person**: when the lead's row holds someone, the lead moves with them, and is
+ *   refused onto a child's row ("mark another adult as the lead first"). A verification recorded for the
+ *   lead's row stops counting when the lead's key changes, as `setLeadGuest` says (`verificationReset`).
+ * - A label that is only the slot's words ("Adult 5") is rewritten for the new slot; a name stays.
+ * - `dryRun` answers what would happen — how each person fits their new row — and writes nothing.
+ */
+export async function swapGuestRows(
+  prisma: PrismaClient,
+  entryId: string,
+  actorId: string,
+  input: { a: string; b: string; dryRun?: boolean },
+  actorLevel: string = "L1",
+): Promise<GuestRowSwapOutcome> {
+  const entry = await prisma.entry.findUnique({
+    where: { id: entryId },
+    select: {
+      id: true,
+      status: true,
+      currentStage: true,
+      inquiryId: true,
+      guestProfileId: true,
+      leadGuestSubjectKey: true,
+      adultCount: true,
+      childAges: true,
+      guestCount: true,
+    },
+  });
+  if (!entry) throw new NotFoundError("Entry");
+  enforceEntryNotSealedForWorkingAction({ status: entry.status });
+  const slots = derivePartySlots(entry);
+  const aKey = input.a.trim();
+  const bKey = input.b.trim();
+  const aSlot = slots.find((x) => x.key === aKey);
+  const bSlot = slots.find((x) => x.key === bKey);
+  if (!aSlot || !bSlot) throw new ValidationError(`Not part of this booking's party: ${[aSlot ? null : aKey, bSlot ? null : bKey].filter(Boolean).join(", ")}`);
+  if (aKey === bKey) throw new ValidationError("Pick two different guests' rows to swap");
+
+  const rows = await prisma.guestIdentityDocument.findMany({
+    where: { entryId: entry.id, subjectKey: { in: [aKey, bKey] } },
+    select: { id: true, subjectKey: true, subjectLabel: true, storageKey: true, clearedAt: true, dateOfBirth: true },
+  });
+  const live = (k: string) => rows.filter((r) => r.subjectKey === k && !r.clearedAt);
+  const detailOf = (k: string) => live(k).find((r) => !r.storageKey) ?? null;
+  const personOf = (k: string) => {
+    const named = live(k).find((r) => r.subjectLabel?.trim() && !GENERIC_ROW_LABEL.test(r.subjectLabel.trim()));
+    return named?.subjectLabel?.trim() ?? null;
+  };
+  const check = await partyAgeChecker(prisma, entry.id);
+  const fitsAfter = (from: string, to: string) => {
+    const c = check(to, detailOf(from)?.dateOfBirth ?? null);
+    return c ? { ok: c.ok, blocks: c.blocks, message: c.message } : null;
+  };
+  const side = (k: string, row: string, other: string): GuestRowSwapSide => ({
+    subjectKey: k,
+    row,
+    person: personOf(k),
+    holdsSomeone: live(k).length > 0,
+    fitsAfter: fitsAfter(k, other),
+  });
+  const a = side(aKey, aSlot.label, bKey);
+  const b = side(bKey, bSlot.label, aKey);
+
+  // The lead follows the person on its row.
+  const lead = resolveLeadSubjectKey(entry);
+  let leadMovesTo: string | null = null;
+  let refusal: string | null = null;
+  if (lead === aKey || lead === bKey) {
+    const leadSide = lead === aKey ? a : b;
+    const otherKey = lead === aKey ? bKey : aKey;
+    if (leadSide.holdsSomeone) {
+      if (!adultSubjectKeys(entry).includes(otherKey)) {
+        refusal = `${leadSide.person ?? leadSide.row} is the lead, and the lead is an adult — mark another adult as the lead first, then swap`;
+      } else {
+        leadMovesTo = otherKey;
+      }
+    }
+  }
+  if (!refusal && !a.holdsSomeone && !b.holdsSomeone) refusal = `Nothing is recorded on ${a.row} or ${b.row} to swap`;
+  if (!refusal && entry.currentStage !== null && ["S1", "S2", "S3", "S4"].includes(entry.currentStage)) {
+    refusal = "Guests are filed on their rows from Arrival on";
+  }
+  const preview: GuestRowSwapOutcome = { entryId: entry.id, a, b, leadMovesTo, refusal, swapped: false, verificationReset: false };
+  if (input.dryRun) return preview;
+  if (refusal) throw new ValidationError(refusal);
+
+  const before = leadMovesTo ? await findEntryIdentityVerification(prisma, { entryId: entry.id, guestProfileId: entry.guestProfileId }) : null;
+  const now = new Date();
+  const relabel = (label: string | null, toLabel: string) => (label && GENERIC_ROW_LABEL.test(label.trim()) ? toLabel : label);
+  await prisma.$transaction(async (tx) => {
+    for (const r of rows) {
+      const toKey = r.subjectKey === aKey ? bKey : aKey;
+      const toLabel = toKey === aKey ? aSlot.label : bSlot.label;
+      await tx.guestIdentityDocument.update({
+        where: { id: r.id },
+        data: { subjectKey: toKey, subjectLabel: relabel(r.subjectLabel, toLabel) },
+      });
+    }
+    if (leadMovesTo) await tx.entry.update({ where: { id: entry.id }, data: { leadGuestSubjectKey: leadMovesTo } });
+    await tx.traceEvent.create({
+      data: {
+        eventType: "GUEST.ROWS_SWAPPED",
+        actorId,
+        actorLevel: actorLevel as any,
+        entityType: "Entry",
+        entityId: entry.id,
+        operation: "UPDATE",
+        timestamp: now,
+        stageContext: entry.currentStage,
+        inquiryId: entry.inquiryId,
+        entryId: entry.id,
+        payload: {
+          entryId: entry.id,
+          a: { subjectKey: aKey, row: aSlot.label, person: a.person, movedTo: bSlot.label },
+          b: { subjectKey: bKey, row: bSlot.label, person: b.person, movedTo: aSlot.label },
+          records: rows.length,
+          leadFrom: leadMovesTo ? lead : null,
+          leadTo: leadMovesTo,
+        },
+        createdBy: actorId,
+      },
+    });
+  });
+  const after = before ? await findEntryIdentityVerification(prisma, { entryId: entry.id, guestProfileId: entry.guestProfileId }) : null;
+  return { ...preview, swapped: true, verificationReset: !!before && !after };
 }
 
 /** Stream-ready bytes for one stored proof, integrity-checked against the recorded SHA-256. */

@@ -79,6 +79,13 @@ export type ClearGuestIdentitySlotRequestDto = z.infer<typeof clearGuestIdentity
 
 /** Mark one adult of the party as the lead (2026-10-23). */
 export const setLeadGuestRequestSchema = z.object({ subjectKey: z.string().trim().min(1).max(16) });
+
+/** Swap two guests' rows (2026-11-25); `dryRun` says what would happen and writes nothing. */
+export const swapGuestRowsRequestSchema = z.object({
+  a: z.string().trim().min(1).max(16),
+  b: z.string().trim().min(1).max(16),
+  dryRun: z.boolean().optional(),
+});
 export type SetLeadGuestRequestDto = z.infer<typeof setLeadGuestRequestSchema>;
 
 /** Mint a phone identity-capture token (2026-08-12): one party slot, or the WHOLE party

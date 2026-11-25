@@ -247,10 +247,15 @@ async function plan(prisma: PrismaClient, entryId: string, childIndex: number, n
   };
   const refuse = (why: string): Plan => ({ preview: { ...base, refusal: why }, rowsFor: new Map(), anchorRoomId: null });
   if (entry.status !== "ACTIVE") return refuse("The booking is not active — its record cannot be changed");
+  // In house or at Check-out an age inside the same band may still be put right (2026-11-25): it
+  // prices nothing, and a guest's document read at Check-in can show a child a year off.
+  const lateSameBand =
+    ([Stage.S7, Stage.S8] as Stage[]).includes(entry.currentStage) && oldBand === newBand && newAge !== oldAge;
+  if (lateSameBand) return { preview: base, rowsFor: new Map(), anchorRoomId: null };
   if (!([Stage.S5, Stage.S6] as Stage[]).includes(entry.currentStage)) {
     return refuse(
       entry.currentStage === Stage.S7 || entry.currentStage === Stage.S8 || entry.currentStage === Stage.S9
-        ? "A child's age is put right at Arrival or Check-in — once the guest has stayed, the nights are already priced"
+        ? "Once the guest has stayed, a child's age is put right only inside the same band (under 6, 6 to 10, 11 and over) — the nights are already priced"
         : "Before Arrival the guests are changed with Change booking › Change the dates, rooms or guests",
     );
   }

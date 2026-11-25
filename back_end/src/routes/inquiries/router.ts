@@ -7,6 +7,7 @@ import {
   listInquiriesQuerySchema,
   parkInquiryRequestSchema,
   updateInquiryNotesRequestSchema,
+  setInquiryDeskTagRequestSchema,
 } from "../../dtos/02-inquiries/request-schemas.js";
 import { requireActorLevel } from "../../middleware/auth.js";
 import { cleanPhone } from "../../lib/phone-numbers.js";
@@ -102,6 +103,15 @@ inquiriesRouter.patch("/:id/notes", requireActorLevel("L1"), validateBody(update
   try {
     const updated = await s1InquiryService.updateInquiryNotes(prisma, req.params.id, req.actor!.actorId, req.body.notes);
     res.json(updated);
+  } catch (e) {
+    next(e);
+  }
+});
+
+// The desk tag (2026-11-25): the desk's own note to tell same-named guests apart, at any step.
+inquiriesRouter.patch("/:id/desk-tag", requireActorLevel("L1"), validateBody(setInquiryDeskTagRequestSchema), async (req, res, next) => {
+  try {
+    res.json(await s1InquiryService.setInquiryDeskTag(prisma, req.params.id, req.actor!.actorId, req.actor!.level, req.body.deskTag));
   } catch (e) {
     next(e);
   }
