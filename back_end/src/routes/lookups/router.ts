@@ -21,6 +21,7 @@ import { PARTY_LOOKUP_LIMIT } from "../../lib/admin/party-lookup.js";
 import { loadChildPolicyBundle } from "../../services/domain/child-policy-service.js";
 import { computeChargeableOccupants, computeAllowedRoomCounts, loadHotelInventorySnapshot, suggestRoomCount } from "../../services/domain/capacity-validation-service.js";
 import { listPackagesForParty } from "../../lib/rate-package-resolution.js";
+import { listApartmentPackages } from "../../services/admin/apartment-admin-service.js";
 import { addUtcDays, hotelTodayUtc, ymdUtc } from "../../lib/stay-dates.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { DeficientConditionCategory } from "@prisma/client";
@@ -386,6 +387,16 @@ lookupsRouter.get("/lookups/rate-packages", L1, async (req, res, next) => {
     const corporateAccountId = typeof req.query.corporateAccountId === "string" && req.query.corporateAccountId ? req.query.corporateAccountId : null;
     const items = await listPackagesForParty(prisma, { travelAgentId, corporateAccountId });
     res.json({ items, count: items.length });
+  } catch (e) { next(e); }
+});
+
+/**
+ * The hotel's apartments offered by the week or the month (2026-11-25), with their rates as the bill
+ * reads them. L1: the desk shows them while a stay is taken.
+ */
+lookupsRouter.get("/lookups/apartment-packages", L1, async (_req, res, next) => {
+  try {
+    res.set("Cache-Control", "no-store").json(await listApartmentPackages(prisma, { activeOnly: true }));
   } catch (e) { next(e); }
 });
 
