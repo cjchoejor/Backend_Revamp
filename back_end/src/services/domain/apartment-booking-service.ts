@@ -101,7 +101,7 @@ export async function describeApartmentsForEntry(
 ) {
   const entry = await prisma.entry.findUnique({
     where: { id: entryId },
-    select: { id: true, useType: true, apartmentPlan: true, checkInDate: true, checkOutDate: true, adultCount: true, childCount: true, guestCount: true },
+    select: { id: true, useType: true, apartmentPlan: true, apartmentCount: true, checkInDate: true, checkOutDate: true, adultCount: true, childCount: true, guestCount: true },
   });
   if (!entry) throw new NotFoundError("Entry");
   const ci = stay?.checkInDate ? new Date(`${stay.checkInDate.slice(0, 10)}T00:00:00Z`) : entry.checkInDate;
@@ -130,6 +130,8 @@ export async function describeApartmentsForEntry(
     entryId,
     useType: String(entry.useType),
     plan: (entry.apartmentPlan as ApartmentPlan | null) ?? null,
+    /** How many apartments the guest asked for in The stay (2026-11-25); null when not said. */
+    asked: entry.apartmentCount ?? null,
     stay: dated ? { checkInDate: ymdOf(ci!), checkOutDate: ymdOf(co!), nights: plans!.nights } : null,
     plans: plans ? { monthly: plans.monthly, weekly: plans.weekly, firstMonthEnds: plans.firstMonthEnds, firstWeekEnds: plans.firstWeekEnds } : null,
     guests,
@@ -193,7 +195,7 @@ export async function pickApartmentsForEntry(
 ) {
   const entry = await prisma.entry.findUnique({
     where: { id: entryId },
-    select: { id: true, status: true, currentStage: true, useType: true, inquiryId: true, checkInDate: true, checkOutDate: true, adultCount: true, childCount: true, guestCount: true, numberOfRooms: true },
+    select: { id: true, status: true, currentStage: true, useType: true, inquiryId: true, checkInDate: true, checkOutDate: true, adultCount: true, childCount: true, guestCount: true, numberOfRooms: true, apartmentCount: true },
   });
   if (!entry) throw new NotFoundError("Entry");
   enforceEntryNotSealedForWorkingAction({ status: entry.status });
@@ -202,6 +204,15 @@ export async function pickApartmentsForEntry(
   if (!entry.checkInDate || !entry.checkOutDate) throw new ValidationError("Set the stay's dates first");
   const unitIds = [...new Set((input.unitIds ?? []).map(String))];
   if (!unitIds.length) throw new ValidationError("Pick at least one apartment");
+  // As many as the guest asked for in The stay (2026-11-25, operator: "due to that in the third section
+  // of inquiry, i can choose any numbers of rooms"). A booking from before the count was asked takes
+  // the number picked as its count.
+  if (entry.apartmentCount != null && unitIds.length !== entry.apartmentCount) {
+    const n = entry.apartmentCount;
+    throw new ValidationError(
+      `The guest asked for ${n} apartment${n === 1 ? "" : "s"} — tick ${n}, not ${unitIds.length}, or change the number in The stay`,
+    );
+  }
 
   const units = await prisma.apartmentUnit.findMany({
     where: { id: { in: unitIds } },
@@ -244,8 +255,11 @@ export async function pickApartmentsForEntry(
     validateOnly: true,
     stay: { checkInDate: entry.checkInDate, checkOutDate: entry.checkOutDate, numberOfRooms: roomIds.length },
   });
-  if (entry.numberOfRooms !== roomIds.length) {
-    await prisma.entry.update({ where: { id: entryId }, data: { numberOfRooms: roomIds.length, version: { increment: 1 } } });
+  if (entry.numberOfRooms !== roomIds.length || entry.apartmentCount == null) {
+    await prisma.entry.update({
+      where: { id: entryId },
+      data: { numberOfRooms: roomIds.length, ...(entry.apartmentCount == null ? { apartmentCount: units.length } : {}), version: { increment: 1 } },
+    });
   }
   await selectOption(prisma, configId, actor.actorId, { perNight, deficientAcknowledgements: acks });
 

@@ -406,6 +406,18 @@ lookupsRouter.get("/lookups/apartment-plans", L1, async (req, res, next) => {
 });
 
 /**
+ * How many apartments a party may ask for (2026-11-25): each count up to the apartments offered, what
+ * that many sleep at most and whether the party fits, and the fewest that do (lib/apartment-count.ts).
+ */
+lookupsRouter.get("/lookups/apartment-counts", L1, async (req, res, next) => {
+  try {
+    const guests = Math.max(0, Math.floor(Number(req.query.guests ?? 0)) || 0);
+    const { apartmentCountChoices, offeredApartmentSizes } = await import("../../lib/apartment-count.js");
+    res.set("Cache-Control", "no-store").json({ guests, ...apartmentCountChoices(await offeredApartmentSizes(prisma), guests) });
+  } catch (e) { next(e); }
+});
+
+/**
  * The hotel's apartments offered by the week or the month (2026-11-25), with their rates as the bill
  * reads them. L1: the desk shows them while a stay is taken.
  */

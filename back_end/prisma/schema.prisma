@@ -1229,6 +1229,8 @@ model Entry {
   /// How an apartment is let (2026-11-25): MONTHLY or WEEKLY; null for a stay under a week, which
   /// is charged by the night, and for any booking that is not an apartment. lib/apartment-rent.ts.
   apartmentPlan           String?
+  /// How many apartments the guest asked for (2026-11-25); an apartment stay only. A 2 BHK is one.
+  apartmentCount          Int?
 
   /// A booking split off another (2026-10-14, operator: "move one room to other dates ... as a
   /// different entry under the same inquiry, or a new inquiry"): the booking its rooms came from.

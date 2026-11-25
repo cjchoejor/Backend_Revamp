@@ -10,13 +10,17 @@ import { planRefusal, plansForStay } from "../../lib/apartment-rent.js";
  *   - the nights are the stay's own dates;
  *   - the rate is the apartment package's, so what is asked is HOW the apartment is let: monthly or
  *     weekly for a stay of a week or more, by the night under a week (lib/apartment-rent.ts);
- *   - the rooms picked are whole apartments (a 2 BHK's rooms together), chosen in The house.
+ *   - the rooms picked are whole apartments (a 2 BHK's rooms together), chosen in The house;
+ *   - as many apartments as the guest asked for in The stay (2026-11-25, operator: "in the stay it
+ *     didn't ask how many rooms the guest wants").
  */
 export type ApartmentOfRoom = { label: string; roomIds: string[]; roomNumbers: string[] };
 
 export function enforceApartmentCommercialFieldsForS1Exit(input: {
   useType: string;
   apartmentPlan: string | null | undefined;
+  /** How many apartments the guest asked for (Entry.apartmentCount). */
+  apartmentCount: number | null | undefined;
   checkInDate: Date | null | undefined;
   checkOutDate: Date | null | undefined;
   /** The rooms the pick holds, with their numbers. */
@@ -42,6 +46,10 @@ export function enforceApartmentCommercialFieldsForS1Exit(input: {
   const refusal = planRefusal(input.apartmentPlan, input.checkInDate, input.checkOutDate);
   if (refusal) throw new StageGateBlockedError(refusal, "APARTMENT_PLAN_NOT_FOR_STAY");
 
+  const n = input.apartmentCount ?? null;
+  if (n == null) {
+    throw new StageGateBlockedError("Say how many apartments the guest wants, in The stay", "MISSING_APARTMENT_COUNT");
+  }
   const picked = new Set(input.pickedRooms.map((r) => r.roomId));
   for (const r of input.pickedRooms) {
     const a = input.apartmentOf.get(r.roomId);
@@ -58,5 +66,12 @@ export function enforceApartmentCommercialFieldsForS1Exit(input: {
         "APARTMENT_NOT_WHOLE",
       );
     }
+  }
+  const apartments = new Set(input.pickedRooms.map((r) => input.apartmentOf.get(r.roomId)?.label).filter(Boolean));
+  if (apartments.size !== n) {
+    throw new StageGateBlockedError(
+      `The guest asked for ${n} apartment${n === 1 ? "" : "s"}; ${apartments.size} ${apartments.size === 1 ? "is" : "are"} chosen — choose ${n} in The house, or change the number in The stay`,
+      "APARTMENT_COUNT_NOT_MET",
+    );
   }
 }

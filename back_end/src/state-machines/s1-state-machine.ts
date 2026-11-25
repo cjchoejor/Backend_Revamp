@@ -51,6 +51,25 @@ async function currentPassPreferredConfig<C extends { optionSelected: unknown; s
   return configs.find((c) => c.optionSelected != null && (c.segmentId === current || (c.segmentId == null && segments.length <= 1)));
 }
 
+/** Policy 33 for an apartment stay, on either way out of Inquiry: how it is let, whole apartments, as many as asked. */
+async function enforceApartmentForS1Exit(
+  prisma: PrismaClient,
+  entry: { useType: unknown; checkInDate: Date | null; checkOutDate: Date | null },
+  optionSelected: unknown,
+) {
+  if (String(entry.useType) !== "APARTMENT") return;
+  const picked = await apartmentRoomsOfPick(prisma, optionSelected);
+  enforceApartmentCommercialFieldsForS1Exit({
+    useType: String(entry.useType),
+    apartmentPlan: (entry as { apartmentPlan?: string | null }).apartmentPlan ?? null,
+    apartmentCount: (entry as { apartmentCount?: number | null }).apartmentCount ?? null,
+    checkInDate: entry.checkInDate,
+    checkOutDate: entry.checkOutDate,
+    pickedRooms: picked.pickedRooms,
+    apartmentOf: picked.apartmentOf,
+  });
+}
+
 export async function progressS1ToS2(prisma: PrismaClient, entryId: string, actorId: string, clientVersion: number | undefined) {
   const entry = await prisma.entry.findUnique({
     where: { id: entryId },
@@ -113,17 +132,7 @@ export async function progressS1ToS2(prisma: PrismaClient, entryId: string, acto
   const rs: any = preferred.resultSet ?? {};
   enforceSelectedRoomNotMaintenanceOrBlockedForS1Exit({ selectedRoomId: selected?.roomId, resultSet: rs });
 
-  if (String(entry.useType) === "APARTMENT") {
-    const picked = await apartmentRoomsOfPick(prisma, preferred.optionSelected);
-    enforceApartmentCommercialFieldsForS1Exit({
-      useType: String(entry.useType),
-      apartmentPlan: (entry as { apartmentPlan?: string | null }).apartmentPlan ?? null,
-      checkInDate: entry.checkInDate,
-      checkOutDate: entry.checkOutDate,
-      pickedRooms: picked.pickedRooms,
-      apartmentOf: picked.apartmentOf,
-    });
-  }
+  await enforceApartmentForS1Exit(prisma, entry, preferred.optionSelected);
 
   enforceConferenceSpaceAllocationForS1Exit({
     useType: String(entry.useType),
@@ -216,6 +225,8 @@ export async function autoFulfilS2ToS3(prisma: PrismaClient, entryId: string, ac
     checkOutDate: entry.checkOutDate,
     numberOfRooms: entry.numberOfRooms,
   });
+  // An apartment stay asks the same of this way out (2026-11-25 — it asked nothing before).
+  await enforceApartmentForS1Exit(prisma, entry, preferred.optionSelected);
 
   const now = new Date();
   return prisma.$transaction(async (tx) => {

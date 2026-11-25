@@ -7,6 +7,7 @@ import { getRegistryPolicy } from "../../lib/policy-registry-runtime.js";
 import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import { validateCapacity } from "./capacity-validation-service.js";
 import { planRefusal } from "../../lib/apartment-rent.js";
+import { apartmentCountRefusal, offeredApartmentSizes } from "../../lib/apartment-count.js";
 import { classifyAge, loadChildPolicyBundle } from "./child-policy-service.js";
 export { autoFulfilS2ToS3, progressS1ToS2 } from "../../state-machines/s1-state-machine.js";
 import * as auditService from "../infrastructure/audit-service.js";
@@ -110,6 +111,24 @@ function resolveApartmentPlanForIntake(input: {
   return input.plan !== undefined ? next : undefined;
 }
 
+/**
+ * How many apartments the guest asked for (2026-11-25, operator): checked against the apartments the
+ * hotel offers and the party, in words (lib/apartment-count.ts). Taken off a booking that is no longer
+ * an apartment stay. Checked again when the party changes under a count already on record.
+ */
+async function resolveApartmentCountForIntake(
+  prisma: PrismaClient,
+  input: { useType: string | null | undefined; count: number | null | undefined; stored: number | null | undefined; guests: number; partyChanged: boolean },
+): Promise<number | null | undefined> {
+  if (input.useType !== "APARTMENT") return input.stored != null ? null : undefined;
+  const next = input.count !== undefined ? input.count : (input.stored ?? null);
+  if (next != null && (input.count !== undefined || input.partyChanged)) {
+    const refusal = apartmentCountRefusal(next, await offeredApartmentSizes(prisma), input.guests);
+    if (refusal) throw new ValidationError(refusal);
+  }
+  return input.count !== undefined ? (input.count ?? null) : undefined;
+}
+
 export async function createEntry(
   prisma: PrismaClient,
   actorId: string,
@@ -127,6 +146,7 @@ export async function createEntry(
     numberOfRooms?: number;
     bedTypeRequest?: Record<string, number> | null;
     apartmentPlan?: string | null;
+    apartmentCount?: number | null;
     otaSource?: boolean;
     walkInCompressed?: boolean;
     contactPersonName?: string;
@@ -198,6 +218,13 @@ export async function createEntry(
     checkIn: checkInDate,
     checkOut: checkOutDate,
   });
+  const apartmentCount = await resolveApartmentCountForIntake(prisma, {
+    useType: input.useType,
+    count: input.apartmentCount,
+    stored: null,
+    guests: input.guestCount ?? (input.adultCount ?? 0) + (input.childCount ?? 0),
+    partyChanged: false,
+  });
 
   // Bed-setup breakdown ("5 King + 2 Twin", 2026-08-13) — normalized + checked against the
   // room count and the registry's achievable bed stock before anything is written.
@@ -252,6 +279,7 @@ export async function createEntry(
         numberOfRooms: input.numberOfRooms ?? null,
         ...(bedTypeRequest ? { bedTypeRequest } : {}),
         ...(apartmentPlan ? { apartmentPlan } : {}),
+        ...(apartmentCount ? { apartmentCount } : {}),
         contactPersonName: input.contactPersonName?.trim() || null,
         contactPersonPhone: input.contactPersonPhone?.trim() || null,
         contactPersonEmail: input.contactPersonEmail?.trim() || null,
@@ -546,6 +574,7 @@ export async function updateEntryIntakeFields(
     bedTypeRequest?: Record<string, number> | null;
     useType?: string;
     apartmentPlan?: string | null;
+    apartmentCount?: number | null;
     contactPersonName?: string;
     contactPersonPhone?: string;
     contactPersonEmail?: string;
@@ -603,6 +632,18 @@ export async function updateEntryIntakeFields(
     stored: (entry as { apartmentPlan?: string | null }).apartmentPlan ?? null,
     checkIn: checkInDate ?? entry.checkInDate,
     checkOut: checkOutDate ?? entry.checkOutDate,
+  });
+  const nextAdults = input.adultCount ?? entry.adultCount ?? 0;
+  const nextChildren = input.childCount ?? entry.childCount ?? 0;
+  const nextApartmentCount = await resolveApartmentCountForIntake(prisma, {
+    useType: input.useType ?? String(entry.useType),
+    count: input.apartmentCount,
+    stored: (entry as { apartmentCount?: number | null }).apartmentCount ?? null,
+    guests: input.guestCount ?? (input.adultCount != null || input.childCount != null ? nextAdults + nextChildren : (entry.guestCount ?? nextAdults + nextChildren)),
+    partyChanged:
+      (input.guestCount != null && input.guestCount !== entry.guestCount) ||
+      (input.adultCount != null && input.adultCount !== entry.adultCount) ||
+      (input.childCount != null && input.childCount !== entry.childCount),
   });
 
   // Bed-setup request: validate the incoming breakdown against the EFFECTIVE room count —
@@ -685,6 +726,7 @@ export async function updateEntryIntakeFields(
         ...(nextBedTypeRequest !== undefined ? { bedTypeRequest: nextBedTypeRequest ?? Prisma.DbNull } : {}),
         ...(input.useType ? { useType: input.useType as any } : {}),
         ...(nextApartmentPlan !== undefined ? { apartmentPlan: nextApartmentPlan } : {}),
+        ...(nextApartmentCount !== undefined ? { apartmentCount: nextApartmentCount } : {}),
         ...(input.contactPersonName !== undefined ? { contactPersonName: input.contactPersonName.trim() || null } : {}),
         ...(input.contactPersonPhone !== undefined ? { contactPersonPhone: input.contactPersonPhone.trim() || null } : {}),
         ...(input.contactPersonEmail !== undefined ? { contactPersonEmail: input.contactPersonEmail.trim() || null } : {}),
